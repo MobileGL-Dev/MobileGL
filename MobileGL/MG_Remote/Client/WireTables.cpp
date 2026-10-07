@@ -1249,7 +1249,8 @@ namespace MobileGL::MG_Remote::Client {
     }
 
     namespace {
-        void WireStateObjectDestroyed(MG_Pipe::MGPipeKind kind, Uint64 lifetimeId) {
+        void WireStateObjectDestroyed(MG_Pipe::MGPipeKind kind, Uint64 lifetimeId,
+                                      MG_Pipe::MGPipeHandle /*handle*/) {
             (void)EmitObjectDeathRecord(kind, lifetimeId);
         }
 

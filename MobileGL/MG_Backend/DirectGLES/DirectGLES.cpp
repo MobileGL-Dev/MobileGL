@@ -568,52 +568,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
         }
 
-        void SyncBufferBindingPoints(BufferTarget target, GLenum glTarget) {
-#ifdef TRACY_ENABLE
-            ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
-#endif
-            // Only sync up to the high-water mark of app-touched points; the fixed array is 84
-            // deep but apps bind a handful, so the never-touched tail is already at GL default 0.
-            auto bindingPointCnt = MG_Pipe::gPipeInputs.GetTouchedBufferBindingPointCount(target);
-            // ...and never past what the ES driver itself can hold. MobileGL advertises the GL 4.5
-            // minimum of 84 uniform binding points while the ES 3.2 minimum is 72, so a frontend
-            // index in that gap would reach glBindBufferBase as GL_INVALID_VALUE. Nothing is lost
-            // by stopping: this frontend-indexed pass exists for the compute path, and the
-            // per-program rebind in BindCurrentProgramWithResources - which is what actually feeds
-            // a shader - remaps every block a program declares onto a compacted ES point, so a
-            // block bound at GL point 83 still reaches its shader.
-            if (target == BufferTarget::Uniform && g_GLESCapabilities.MaxUniformBufferBindings > 0) {
-                bindingPointCnt = std::min(bindingPointCnt,
-                                           static_cast<SizeT>(g_GLESCapabilities.MaxUniformBufferBindings));
-            }
-            for (SizeT i = 0; i < bindingPointCnt; ++i) {
-                auto& point = MG_Pipe::gPipeInputs.GetBufferBindingPoint(target, i);
-                auto& obj = point.GetBoundObject();
-                if (!obj) {
-                    BindBufferBaseCached(glTarget, static_cast<GLuint>(i), 0);
-                    continue;
-                }
-
-                auto* backendResource = EnsureBufferResource(obj);
-                if (!backendResource || backendResource->id == 0) {
-                    MGLOG_E_ONCE("No backend buffer found for %s binding point %zu.",
-                            MG_Util::ConvertGLEnumToString(glTarget).c_str(), i);
-                    continue;
-                }
-
-                const auto& range = point.GetRange();
-                auto backendBufferId = backendResource->id;
-                if (range.start == 0 && range.end >= obj->GetSize()) {
-                    BindBufferBaseCached(glTarget, static_cast<GLuint>(i), backendBufferId);
-                } else {
-                    const auto start = std::min(range.start, obj->GetSize());
-                    const auto end = std::min(range.end, obj->GetSize());
-                    BindBufferRangeCached(glTarget, static_cast<GLuint>(i), backendBufferId,
-                                          static_cast<GLintptr>(start), static_cast<GLsizeiptr>(end - start));
-                }
-            }
-        }
-
         void SyncAtomicCounterBuffers(const Vector<Int>& glBindings, Int esslBindingTop) {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
@@ -623,207 +577,63 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // program declares - and only the points themselves move sides. The bound is the
             // applier's window instead of GetBufferBindingPointCount's sticky forward, which is
             // the row this site was the Espryt reader of.
-            if (BindingPointsComeFromRecords()) {
-                const MG_Pipe::MGPipeApplierState& st = MG_Pipe::MGPipeApplier();
-                const Uint32 windowStart = st.ShaderBufferStart[MG_Pipe::kMGPipeShaderBufferClassAtomicCounter];
-                const SizeT windowEnd = static_cast<SizeT>(windowStart) +
-                                        st.ShaderBufferCount[MG_Pipe::kMGPipeShaderBufferClassAtomicCounter];
-                for (const Int glBinding : glBindings) {
-                    if (glBinding < 0) continue;
-                    const Int esslBinding = esslBindingTop - glBinding;
-                    // Already diagnosed once when the block was transpiled; nothing was bound to
-                    // it there either, so there is nothing to unbind here.
-                    if (esslBinding < 0) continue;
-                    // OUTSIDE THE WINDOW IS "NOTHING BOUND", which is what the frontend array's
-                    // default says too - so it takes the unbind arm rather than being skipped.
-                    // Skipping would leave whatever the driver last had at that ESSL point,
-                    // which is the hole the frontend walk's `continue` never had because its
-                    // bound was the whole 84-point array.
-                    const MG_Pipe::MGPBufferRange* entry = nullptr;
-                    if (static_cast<SizeT>(glBinding) >= windowStart &&
-                        static_cast<SizeT>(glBinding) < windowEnd) {
-                        entry = &st.BoundShaderBuffers[MG_Pipe::kMGPipeShaderBufferClassAtomicCounter]
-                                                      [static_cast<SizeT>(glBinding)];
-                    }
-                    if (entry == nullptr || MG_Pipe::MGPipeHandleIsNull(entry->Res)) {
-                        BindBufferBaseCached(GL_SHADER_STORAGE_BUFFER, static_cast<Uint>(esslBinding), 0);
-                        continue;
-                    }
-                    auto* backendResource = EnsureBufferResourceForHandle(nullptr, entry->Res);
-                    if (!backendResource || backendResource->id == 0) {
-                        MGLOG_E_ONCE("No backend buffer found for atomic counter binding point %d "
-                                     "(handle {%u, %u}).",
-                                     glBinding, entry->Res.Slot, entry->Res.Gen);
-                        continue;
-                    }
-                    if (entry->Offset == 0 && entry->Size == MG_Pipe::kMGPipeWholeBuffer) {
-                        BindBufferBaseCached(GL_SHADER_STORAGE_BUFFER, static_cast<Uint>(esslBinding),
-                                             backendResource->id);
-                    } else {
-                        const SizeT storage = backendResource->storageSize;
-                        const SizeT rangeStart = std::min<SizeT>(static_cast<SizeT>(entry->Offset), storage);
-                        const SizeT rangeEnd =
-                            std::min<SizeT>(static_cast<SizeT>(entry->Offset + entry->Size), storage);
-                        BindBufferRangeCached(GL_SHADER_STORAGE_BUFFER, static_cast<Uint>(esslBinding),
-                                              backendResource->id, static_cast<GLintptr>(rangeStart),
-                                              static_cast<GLsizeiptr>(rangeEnd - rangeStart));
-                    }
-                    // AND NO MarkBufferGpuWritten HERE. It was the second of the three backend
-                    // GPU-write sites and it reached into a client object; the client's
-                    // MarkAtomicCounterBindings (GpuWritePending.cpp) already marks the same set
-                    // from MarkGpuWritesForDraw, WIDER on purpose - it marks every touched
-                    // counter point rather than only the ones this program declares, which is
-                    // the safe direction for an over-approximate set.
-                    //
-                    // P8-C: the server's own twin is marked instead, for the server's own CPU
-                    // readers (SplitHostBytesForCpuRead) - a counter buffer later bound as a
-                    // parameter or element buffer is read on this side.
-                    backendResource->serverGpuWritten = true;
-                }
-                return;
-            }
-            const SizeT pointCount = MG_Pipe::gPipeInputs.GetBufferBindingPointCount(BufferTarget::AtomicCounter);
+            const MG_Pipe::MGPipeApplierState& st = MG_Pipe::MGPipeApplier();
+            const Uint32 windowStart = st.ShaderBufferStart[MG_Pipe::kMGPipeShaderBufferClassAtomicCounter];
+            const SizeT windowEnd = static_cast<SizeT>(windowStart) +
+                                    st.ShaderBufferCount[MG_Pipe::kMGPipeShaderBufferClassAtomicCounter];
             for (const Int glBinding : glBindings) {
-                if (glBinding < 0 || static_cast<SizeT>(glBinding) >= pointCount) continue;
+                if (glBinding < 0) continue;
                 const Int esslBinding = esslBindingTop - glBinding;
-                // Already diagnosed once when the block was transpiled; nothing was bound to it
-                // there either, so there is nothing to unbind here.
+                // Already diagnosed once when the block was transpiled; nothing was bound to
+                // it there either, so there is nothing to unbind here.
                 if (esslBinding < 0) continue;
-                auto& point = MG_Pipe::gPipeInputs.GetBufferBindingPoint(BufferTarget::AtomicCounter,
-                                                                          static_cast<Uint>(glBinding));
-                auto& obj = point.GetBoundObject();
-                if (!obj) {
+                // OUTSIDE THE WINDOW IS "NOTHING BOUND", which is what the frontend array's
+                // default says too - so it takes the unbind arm rather than being skipped.
+                // Skipping would leave whatever the driver last had at that ESSL point,
+                // which is the hole the frontend walk's `continue` never had because its
+                // bound was the whole 84-point array.
+                const MG_Pipe::MGPBufferRange* entry = nullptr;
+                if (static_cast<SizeT>(glBinding) >= windowStart &&
+                    static_cast<SizeT>(glBinding) < windowEnd) {
+                    entry = &st.BoundShaderBuffers[MG_Pipe::kMGPipeShaderBufferClassAtomicCounter]
+                                                  [static_cast<SizeT>(glBinding)];
+                }
+                if (entry == nullptr || MG_Pipe::MGPipeHandleIsNull(entry->Res)) {
                     BindBufferBaseCached(GL_SHADER_STORAGE_BUFFER, static_cast<Uint>(esslBinding), 0);
                     continue;
                 }
-
-                auto* backendResource = EnsureBufferResource(obj);
+                auto* backendResource = EnsureBufferResourceForHandle(nullptr, entry->Res);
                 if (!backendResource || backendResource->id == 0) {
-                    MGLOG_E_ONCE("No backend buffer found for atomic counter binding point %d.", glBinding);
+                    MGLOG_E_ONCE("No backend buffer found for atomic counter binding point %d "
+                                 "(handle {%u, %u}).",
+                                 glBinding, entry->Res.Slot, entry->Res.Gen);
                     continue;
                 }
-
-                const auto& range = point.GetRange();
-                if (range.start == 0 && range.end >= obj->GetSize()) {
+                if (entry->Offset == 0 && entry->Size == MG_Pipe::kMGPipeWholeBuffer) {
                     BindBufferBaseCached(GL_SHADER_STORAGE_BUFFER, static_cast<Uint>(esslBinding),
                                          backendResource->id);
                 } else {
-                    const auto start = std::min(range.start, obj->GetSize());
-                    const auto end = std::min(range.end, obj->GetSize());
+                    const SizeT storage = backendResource->storageSize;
+                    const SizeT rangeStart = std::min<SizeT>(static_cast<SizeT>(entry->Offset), storage);
+                    const SizeT rangeEnd =
+                        std::min<SizeT>(static_cast<SizeT>(entry->Offset + entry->Size), storage);
                     BindBufferRangeCached(GL_SHADER_STORAGE_BUFFER, static_cast<Uint>(esslBinding),
-                                          backendResource->id, static_cast<GLintptr>(start),
-                                          static_cast<GLsizeiptr>(end - start));
+                                          backendResource->id, static_cast<GLintptr>(rangeStart),
+                                          static_cast<GLsizeiptr>(rangeEnd - rangeStart));
                 }
-                // The whole point of a counter is that the shader INCREMENTS it, and every
-                // conformance case reads the result back with glMapBufferRange or
-                // glGetBufferSubData - which serve the frontend's CPU shadow until the buffer is
-                // flagged (BufferObject::SyncGpuWrites), exactly as for a storage buffer.
-                MarkBufferGpuWritten(obj);
+                // AND NO MarkBufferGpuWritten HERE. It was the second of the three backend
+                // GPU-write sites and it reached into a client object; the client's
+                // MarkAtomicCounterBindings (GpuWritePending.cpp) already marks the same set
+                // from MarkGpuWritesForDraw, WIDER on purpose - it marks every touched
+                // counter point rather than only the ones this program declares, which is
+                // the safe direction for an over-approximate set.
+                //
+                // P8-C: the server's own twin is marked instead, for the server's own CPU
+                // readers (SplitHostBytesForCpuRead) - a counter buffer later bound as a
+                // parameter or element buffer is read on this side.
+                backendResource->serverGpuWritten = true;
             }
-        }
-
-        // The handle arm of the resolved-draw-buffers memo (D-G4). Two substitutions and
-        // nothing else:
-        //
-        //   validity  the frontend VAO's wrapping configuration version is replaced by the
-        //             bound vertex-elements CSO ({slot, gen} AND its server-owned content
-        //             serial) plus the vertex-buffer set's own serial - so an emission the
-        //             suppressor let through is what re-opens the memo, not a counter the
-        //             backend reads out of the frontend;
-        //   identity  an entry names its resource by handle and the clean probe compares that,
-        //             instead of a raw frontend address that a successor object can reproduce.
-        //
-        // The WALK itself still reads the frontend VAO's attributes, and deliberately: the
-        // buffers a draw needs ensured is a pull site P3a does not migrate (dirty bits 15-17
-        // are P4b's and the resolution move is P8's), and EnsureBufferResource still owes
-        // BufferObject::SyncPersistentMappedRange one call (D-N).
-        void SyncVaoAttributeBuffersByHandle(const SharedPtr<MG_State::GLState::VertexArrayObject>& currentVAOObject,
-                                             VertexArrayImpl::BackendVertexArrayObject::ResolvedDrawBuffers* memo,
-                                             Uint64 bufferEpoch) {
-            const auto& st = MG_Pipe::MGPipeApplier();
-            const MG_Pipe::MGPipeHandle elements = st.BoundVertexElements;
-            Uint64 elementsSerial = 0;
-            Bool haveElementsRecord = false;
-            if (!MG_Pipe::MGPipeHandleIsNull(elements) && elements.Slot < st.VertexElementsCsos.size()) {
-                const auto& record = st.VertexElementsCsos[elements.Slot];
-                if (record.Live && record.Gen == elements.Gen) {
-                    elementsSerial = record.ContentSerial;
-                    haveElementsRecord = true;
-                }
-            }
-            const Uint64 buffersSerial = st.VertexBuffersSerial;
-
-            // NO LIVE ELEMENTS RECORD IS A MISS, NEVER A HIT. With none, the key above is
-            // {null, 0, buffersSerial} - a key that describes no configuration at all and that
-            // NEVER CHANGES while the state stays that way, so a memo stamped with it would hit
-            // on every later draw of a VAO whose attributes have moved. That state is reachable:
-            // MGPipeApplierReset() empties VertexElementsCsos and BoundVertexElements at every
-            // change of the current context, and the client re-emits only at its next
-            // create/bind. The legacy arm's configuration version caught exactly this by moving.
-            const Bool memoKeyIsMeaningful = haveElementsRecord;
-
-            if (memo && memo->valid && memoKeyIsMeaningful && memo->elementsHandle == elements &&
-                memo->elementsSerial == elementsSerial && memo->buffersSerial == buffersSerial) {
-                if (memo->vboCleanEpoch != bufferEpoch) {
-                    Bool allClean = true;
-                    for (Uint i = 0; i < memo->count; ++i) {
-                        auto& entry = memo->entries[i];
-                        // entry.frontend is the same object the legacy arm probes and is kept
-                        // alive by the VAO attribute's SharedPtr for as long as this memo is
-                        // valid; it answers the live-map question no record carries in P3a.
-                        if (IsBufferDrawCleanByHandle(entry.handle, entry.resource, entry.frontend)) continue;
-                        allClean = false;
-                        entry.resource =
-                            EnsureBufferResource(currentVAOObject->GetAttribute(entry.attribIndex).Buffer);
-                    }
-                    memo->vboCleanEpoch = allClean ? bufferEpoch : 0;
-                }
-                return;
-            }
-
-            // Full walk, once per distinct buffer, rebuilding the memo as it goes.
-            MG_State::GLState::BufferObject* syncedBuffers[MG_State::GLState::VertexArrayObject::MAX_VERTEX_ATTRIBS];
-            Uint syncedBufferCount = 0;
-            const auto& allAttributes = currentVAOObject->GetAllAttributes();
-            for (Uint attribIndex = 0; attribIndex < allAttributes.size(); ++attribIndex) {
-                const auto& attrib = allAttributes[attribIndex];
-                if (!attrib.Enabled) continue;
-                const auto& bufferObject = attrib.Buffer;
-                if (!bufferObject) continue;
-
-                auto* const bufferKey = bufferObject.get();
-                Bool alreadySynced = false;
-                for (Uint i = 0; i < syncedBufferCount; ++i) {
-                    if (syncedBuffers[i] == bufferKey) {
-                        alreadySynced = true;
-                        break;
-                    }
-                }
-                if (alreadySynced) continue;
-
-                auto* resource = EnsureBufferResource(bufferObject);
-                if (memo) {
-                    auto& entry = memo->entries[syncedBufferCount];
-                    entry.frontend = bufferKey;
-                    entry.attribIndex = static_cast<Uint8>(attribIndex);
-                    entry.resource = resource;
-                    entry.handle = HandleOfBuffer(bufferKey);
-                }
-                syncedBuffers[syncedBufferCount++] = bufferKey;
-            }
-            if (memo) {
-                memo->count = syncedBufferCount;
-                memo->elementsHandle = elements;
-                memo->elementsSerial = elementsSerial;
-                memo->buffersSerial = buffersSerial;
-                // Only a key that describes a real configuration is worth remembering; see
-                // memoKeyIsMeaningful above. The walk still ran and the buffers are ensured -
-                // this only refuses to let the NEXT draw skip it.
-                memo->valid = memoKeyIsMeaningful;
-                // Rebuilt via EnsureBufferResource, not probed clean: the next probe pass
-                // stamps the epoch.
-                memo->vboCleanEpoch = 0;
-            }
+            return;
         }
 
         // P5e (vi), CONTRACT-P5E §5.1: THE SAME MEMO, THE SAME THREE-VALUE KEY, AND A WALK THAT
@@ -1033,13 +843,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // binder (e.g. Flywheel's indirect vertex shaders pull instance data from storage buffers).
             // P5e (sb, §5.6): the record arm, selected by transport + bit 13. Same `if (…) else`
             // shape the indirect buffer above already uses.
-            if (BindingPointsComeFromRecords()) {
-                SyncBufferBindingPointsByRecord(MG_Pipe::kMGPipeShaderBufferClassShaderStorage,
-                                                GL_SHADER_STORAGE_BUFFER);
-            } else
-            {
-                SyncBufferBindingPoints(BufferTarget::ShaderStorage, GL_SHADER_STORAGE_BUFFER);
-            }
+            SyncBufferBindingPointsByRecord(MG_Pipe::kMGPipeShaderBufferClassShaderStorage,
+                                            GL_SHADER_STORAGE_BUFFER);
         }
 
         void SyncComputeBuffers(Bool includeDispatchIndirectBuffer) {
@@ -1054,16 +859,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // is why the uniform class is emitted at all: compute does NOT go through the
             // per-program block remap in BindCurrentProgramWithResources, so these are the
             // points a compute shader actually reads.
-            if (BindingPointsComeFromRecords()) {
-                SyncBufferBindingPointsByRecord(MG_Pipe::kMGPipeShaderBufferClassUniform,
-                                                GL_UNIFORM_BUFFER);
-                SyncBufferBindingPointsByRecord(MG_Pipe::kMGPipeShaderBufferClassShaderStorage,
-                                                GL_SHADER_STORAGE_BUFFER);
-            } else
-            {
-                SyncBufferBindingPoints(BufferTarget::Uniform, GL_UNIFORM_BUFFER);
-                SyncBufferBindingPoints(BufferTarget::ShaderStorage, GL_SHADER_STORAGE_BUFFER);
-            }
+            SyncBufferBindingPointsByRecord(MG_Pipe::kMGPipeShaderBufferClassUniform,
+                                            GL_UNIFORM_BUFFER);
+            SyncBufferBindingPointsByRecord(MG_Pipe::kMGPipeShaderBufferClassShaderStorage,
+                                            GL_SHADER_STORAGE_BUFFER);
             if (includeDispatchIndirectBuffer) {
                 // P5c (hd, CONTRACT-P5C §3.5): see the draw-indirect twin above - the verb
                 // record's handle, never the frontend binding slot or the client allocator.
@@ -1805,41 +1604,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
     } // namespace XfbImpl
 
     namespace VertexArrayImpl {
-        // Resolve-or-create the VAO's backend twin, once per draw: PrepareForDraw passes
-        // the result to the buffer sync (resolved-buffers memo host), the VAO sync and
-        // the draw-time bind, which each used to run their own registry Find. The raw
-        // pointer stays valid for the whole draw: the frontend VAO is pinned by the
-        // context binding, and a live object's twin is never erased nor replaced - on the
-        // legacy arm that is TwinLookupMemo's contract, and on the {slot, gen} arm it is
-        // simply that nothing but the sweep frees a slot and the sweep only takes slots
-        // whose frontend object is already gone.
-        // MONOLITH GLUE AS OF P5e (vi), CONTRACT-P5E §4.1 / §5.8, AND THE SCOPE IS GONE WITH THE
-        // DEBT IT NAMED. This overload is reached only when there IS a frontend VAO to resolve
-        // from, i.e. from the push-monolith and legacy arms of PrepareForDraw; a live transport
-        // takes ResolveVaoTwin(st.BoundVertexElements) instead (Managers.cpp, id's body). The
-        // MGPipeFrontendKeyedRegistryScope that used to wrap this - one of the three scope sites
-        // this family owned - is DELETED rather than narrowed, and that deletion is what makes
-        // the revert loud: putting `Find(vao.get())` back on the transport arm now aborts
-        // Fatal{RoleViolation, "MGPipeSlots"} from HandleOf instead of being quietly exempted.
-        BackendVertexArrayObject* ResolveVaoTwin(const SharedPtr<MG_State::GLState::VertexArrayObject>& vao) {
-#ifdef TRACY_ENABLE
-            ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
-#endif
-            if (EsprytSlotTablesEnabled()) {
-                // No memo on this arm. The memo existed to turn the registry's hash probe into
-                // an array index; the slot table's Find already IS the array index, and the
-                // memo's whole safety argument - owner-equality against a recycled heap address
-                // - is answered by {slot, gen} instead of re-derived per lookup.
-                auto* slot = g_backendVertexArrayObjects.Find(vao.get());
-                auto& backendObj = slot ? *slot : g_backendVertexArrayObjects.GetOrCreate(vao);
-                if (!backendObj) {
-                    backendObj = MakeShared<BackendVertexArrayObject>();
-                }
-                return backendObj.get();
-            }
-            return nullptr;
-        }
-
         // P5e (vi): the record arm's entry, and it takes NO frontend object - CONTRACT-P5E §4.1
         // ("the object parameter is deleted from the transport overload, not defaulted to
         // null"). A null twin here is the null BoundVertexElements, i.e. "no VAO bound", which
@@ -1850,9 +1614,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
-            // Kept for symmetry with the overload above and free on this arm: the slot table's
-            // sweep is a no-op (Managers.h's CollectGarbageIfNeeded on the handle registry).
-            g_backendVertexArrayObjects.CollectGarbageIfNeeded();
             if (!vaoTwin) return;
             vaoTwin->SyncToBackendFromApplier();
         }
@@ -1943,12 +1704,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         static void SyncClientSideVertexArraysForDrawArrays(GLint first, GLsizei count) {
             if (!BufferImpl::AnyClientSideVertexArrayInRecord()) return;
-            if (MG_Pipe::MGPipeApplierIsUnbarrieredApply()) {
-                MGLOG_F("MGPipe: Fatal{RoleViolation, \"MGPipeSlots\"} - a draw carrying a "
-                        "client-memory vertex array is being applied UNBARRIERED. Both the "
-                        "client's refusal (Fatal{UnmigratedVerb, \"DrawArrays+CLIENT_ARRAYS\"}) "
-                        "and escalation (ii) of CONTRACT-P5E §2.1 exist to make this "
-                        "unreachable; the bytes below are the application's and are moving");
+            // P13: client-memory arrays are monolith-only - under a transport the client refuses
+            // them (Fatal{UnmigratedVerb, "DrawArrays+CLIENT_ARRAYS"}) before any record goes out,
+            // so a record naming one here means the bytes below belong to another process.
+            if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
+                MGLOG_F("MGPipe: Fatal{RoleViolation, \"ClientArrays\"} - a draw carrying a "
+                        "client-memory vertex array reached the backend under a transport; the "
+                        "client's refusal exists to make this unreachable");
                 std::abort();
             }
             auto* twin = ResolveVaoTwin(MG_Pipe::MGPipeApplier().BoundVertexElements);
@@ -2220,87 +1982,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
     } // namespace VertexArrayImpl
 
     namespace TextureImpl {
-        SharedPtr<BackendTextureObject>& SyncTextureObjectToBackend(
-            const SharedPtr<MG_State::GLState::ITextureObject>& textureObject,
-            Bool imageBindableStorageRequired) {
-#ifdef TRACY_ENABLE
-            ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
-#endif
-            // P5c (G6, CONTRACT-P5C §5.4): this sync still arrives holding the FRONTEND object
-            // (the object-class rows) and resolves its twin by frontend identity - the
-            // frontend-keyed registry P3b/P4b rekeys onto handles. The probe (and the mint on
-            // a first sync) is named debt inside the scope, not an unwrapped violation.
-            const MG_Pipe::MGPipeFrontendKeyedRegistryScope frontendKeyedRegistry;
-            auto* backendTextureSlot = g_backendTextureObjects.Find(textureObject.get());
-            auto& backendSlot = backendTextureSlot ? *backendTextureSlot
-                                                   : g_backendTextureObjects.GetOrCreate(textureObject);
-            if (!backendSlot) {
-                backendSlot = MakeShared<BackendTextureObject>();
-            }
-
-            // A by-VALUE copy of the twin for the duration of the syncs below. `backendSlot` is a
-            // reference INTO the open-addressed registry, and syncing can RE-ENTER this function:
-            // a texture created by glTextureView has to sync the texture whose storage it views
-            // first (SyncTextureViewToBackend), and that nested call may insert, grow the map and
-            // relocate every entry - leaving the reference dangling. Holding the object itself
-            // keeps the calls below working on the right twin regardless; the slot is re-resolved
-            // at the end for the reference this function returns.
-            //
-            // The slot-table arm has no such hazard - an entry is an array element and a nested
-            // insert can only reallocate the vector, which the re-resolve at the tail already
-            // handles - so the copy is a refcount it does not need to pay. It keeps the copy for
-            // exactly one thing: holding the twin alive across the nested sync.
-            const SharedPtr<BackendTextureObject> backendObj = backendSlot;
-
-            if (imageBindableStorageRequired) {
-                backendObj->RequireImageBindableStorage(textureObject);
-            }
-            backendObj->SyncTextureParamsToBackend(textureObject);
-            backendObj->SyncBuiltinSamplerToBackend(textureObject);
-            backendObj->SyncMipmapsToBackend(textureObject);
-            // The storage sync may RE-MINT the driver texture - a fresh glTexStorage after a
-            // shape change, an image-bindable widening, or the glTextureView that an
-            // ARB_texture_view view is created on - which discards every parameter the two calls
-            // above just pushed. Re-push them here rather than leaving it to the next sync: the
-            // very next thing that happens is usually the draw this sync was run for, and until
-            // the filters land the new texture is at the ES defaults, which for a single-level or
-            // integer texture is not merely mis-filtered but INCOMPLETE, i.e. it samples zero.
-            if (backendObj->NeedsParameterResync()) {
-                backendObj->SyncTextureParamsToBackend(textureObject);
-                backendObj->SyncBuiltinSamplerToBackend(textureObject);
-            }
-
-            if (EsprytSlotTablesEnabled()) {
-                // One re-resolve, and only because a nested GetOrCreate may have GROWN the
-                // vector and moved the element; the entry itself cannot have been erased, since
-                // nothing on this arm erases a live slot. No second Find-or-create, no
-                // put-the-twin-back repair.
-                auto* slot = g_backendTextureObjects.Find(textureObject.get());
-                MOBILEGL_ASSERT(slot != nullptr && *slot != nullptr,
-                                "the texture twin resolved at entry is gone after its own sync");
-                if (slot != nullptr && *slot != nullptr) {
-                    return *slot;
-                }
-                // Cannot happen - the caller holds the frontend object, so its slot cannot be
-                // reclaimed underneath this call - but the return is a reference, and a null
-                // deref in a release build is a worse way to learn that than a re-created twin.
-                auto& repaired = g_backendTextureObjects.GetOrCreate(textureObject);
-                if (!repaired) {
-                    repaired = backendObj;
-                }
-                return repaired;
-            }
-            auto* refreshedSlot = g_backendTextureObjects.Find(textureObject.get());
-            auto& refreshedBackendObj = refreshedSlot ? *refreshedSlot
-                                                      : g_backendTextureObjects.GetOrCreate(textureObject);
-            if (!refreshedBackendObj) {
-                // A collection ran during the nested sync and took this slot with it; put the
-                // twin the caller is about to use back, rather than handing back an empty one.
-                refreshedBackendObj = backendObj;
-            }
-            return refreshedBackendObj;
-        }
-
         // Identity snapshot of what one texture unit has bound: the object in every binding
         // slot plus the unit's sampler object. This - not the context's texture bind
         // generation - is what the per-draw texture memos key on: the generation also bumps
@@ -2846,7 +2527,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
-            g_backendTextureObjects.CollectGarbageIfNeeded();
 
             // All textures we need are:
             //   1. textures bound to texture units (TODO: only sync ones that are used in current program)
@@ -3710,9 +3390,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
-            g_backendFramebufferObjects.CollectGarbageIfNeeded();
-            TextureImpl::g_backendTextureObjects.CollectGarbageIfNeeded();
-            RenderbufferImpl::g_backendRenderbufferObjects.CollectGarbageIfNeeded();
 
             // The handle arm first, and it declines rather than half-running: with no record
             // yet it hands the walk straight back to the pre-handle arm below, unchanged.
@@ -4826,8 +4503,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
-            g_backendProgramObjects.CollectGarbageIfNeeded();
-            SamplerImpl::g_backendSamplerObjects.CollectGarbageIfNeeded();
 
             g_currentDrawFrontendProgram = nullptr;
             g_currentDrawBackendProgram = nullptr;
@@ -5245,48 +4920,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
     static Array<UnitSamplerLookupMemo, MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS>
         g_unitSamplerLookupMemos;
 
-    static SamplerImpl::BackendSamplerObject* ResolveUnitSamplerBackend(
-        Int unit, const SharedPtr<MG_State::GLState::SamplerObject>& samplerObject) {
-        // P5e (tx2), CONTRACT-P5E §4.2's last paragraph: THE IDENTITY SAMPLER FAMILY IS DELETED
-        // UNDER A TRANSPORT AND BECOMES A NAMED REFUSAL.
-        //
-        // This function is the apply-thread MINT for a unit the record set does not cover: it
-        // probes the client allocator with HandleOf(samplerObject), keeps a WeakPtr to a frontend
-        // sampler in a per-unit memo, and its caller in the program pass creates a twin off the
-        // frontend object when the lookup misses. Every one of those is a rule-F violation, and
-        // the window rule (§5.3) makes the case it exists for UNREPRESENTABLE: a unit whose
-        // BoundSamplerStates[u] is null while the frontend held a sampler is a MISSING RECORD,
-        // not a unit to be served from the client's object.
-        MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"BindSamplerStates.Count\"} - unit %d holds a "
-                "frontend sampler object that the applied bind_sampler_states window does not "
-                "describe. Minting a twin for it would probe the client's allocator from the "
-                "apply thread; CONTRACT-P5E.md §4.2 deletes the identity sampler family under a "
-                "transport and §5.3 makes the missing entry unrepresentable",
-                static_cast<int>(unit));
-        std::abort();
-        // P5c (G6, CONTRACT-P5C §5.4): frontend-keyed twin resolution, named debt inside the
-        // scope - the refusal above is what retires it under a transport.
-        const MG_Pipe::MGPipeFrontendKeyedRegistryScope frontendKeyedRegistry;
-        auto& memo = g_unitSamplerLookupMemos[static_cast<SizeT>(unit)];
-        if (EsprytSlotTablesEnabled()) {
-            const MG_Pipe::MGPipeHandle handle =
-                SamplerImpl::g_backendSamplerObjects.HandleOf(samplerObject.get());
-            if (memo.backend && !MG_Pipe::MGPipeHandleIsNull(handle) && memo.frontendHandle == handle) {
-                return memo.backend;
-            }
-            auto* slot = SamplerImpl::g_backendSamplerObjects.FindByHandle(handle);
-            if (slot && *slot) {
-                // A MISS is still never cached: the twin may not exist yet when the unit pass
-                // runs, because the program pass creates it later in the same draw.
-                memo.frontendHandle = handle;
-                memo.backend = slot->get();
-                return memo.backend;
-            }
-            return nullptr;
-        }
-        return nullptr;
-    }
-
     // Puts each touched unit's frontend sampler object on the backend unit. Not part
     // of the texture memo below (BindCurrentProgramWithResources may rewrite sampled
     // units' samplers right after this runs - raw-depth-fetch substitution,
@@ -5419,21 +5052,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
             walkedFromRecords = true;
         }
-        if (!walkedFromRecords)
-        {
-            for (Int unit = 0; unit <= maxTouchedUnit; ++unit) {
-                const auto& samplerObject = MG_Pipe::gPipeInputs.GetTextureUnitObject(unit).GetSamplerObject();
-                if (samplerObject) {
-                    if (auto* backendSampler = ResolveUnitSamplerBackend(unit, samplerObject)) {
-                        backendSampler->Bind(unit);
-                    }
-                } else {
-                    // Symmetric with the bind above: a sampler object left on the unit by an
-                    // earlier draw keeps being applied, and on a multisample texture - which
-                    // takes no sampler object at all - the draw is rejected outright.
-                    SamplerImpl::UnbindSampler(unit);
-                }
-            }
+        if (!walkedFromRecords) {
+            // P13: no bind_sampler_states window applied, i.e. no unit holds a sampler object -
+            // the record arm emits one for every unit that does. Unbind, so a sampler object
+            // left on a unit by an earlier draw is not applied to this one.
+            for (Int unit = 0; unit <= maxTouchedUnit; ++unit) SamplerImpl::UnbindSampler(unit);
         }
         g_unitSamplerWalkContextId = keys.contextId;
         g_unitSamplerWalkEpoch = keys.unitBindingsEpoch;
@@ -5863,92 +5486,58 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         // same one - Start is 0 by contract - so `binding` addresses the
                         // applier's window directly, and a binding at or above Count means
                         // "nothing bound", which is what the frontend array's default said too.
-                        if (BufferImpl::BindingPointsComeFromRecords()) {
-                            const MG_Pipe::MGPipeApplierState& st = MG_Pipe::MGPipeApplier();
-                            const Uint32 windowStart =
-                                st.ShaderBufferStart[MG_Pipe::kMGPipeShaderBufferClassUniform];
-                            const SizeT windowEnd =
-                                static_cast<SizeT>(windowStart) +
-                                st.ShaderBufferCount[MG_Pipe::kMGPipeShaderBufferClassUniform];
-                            if (static_cast<SizeT>(binding) < windowStart ||
-                                static_cast<SizeT>(binding) >= windowEnd) {
-                                continue; // nothing bound there - the frontend arm's `if (bufferObj)`
-                            }
-                            const MG_Pipe::MGPBufferRange& entry =
-                                st.BoundShaderBuffers[MG_Pipe::kMGPipeShaderBufferClassUniform]
-                                                     [static_cast<SizeT>(binding)];
-                            if (MG_Pipe::MGPipeHandleIsNull(entry.Res)) continue;
-                            // The clean probe is the SAME five questions IsBufferDrawClean asks
-                            // the frontend object, asked by handle: the twin's identity, the
-                            // resource record's Serial against the twin's synced one, and the
-                            // pending-work sets - all server-owned (D-A4). The drawCleanEpoch
-                            // short-circuit is unchanged; it was never the point read.
-                            auto* backendResource = BufferImpl::FindBufferResourceForHandle(entry.Res);
-                            if (!backendResource || backendResource->drawCleanEpoch != bufferEpoch) {
-                                if (backendResource && BufferImpl::IsBufferDrawCleanByHandle(
-                                                           entry.Res, backendResource, nullptr)) {
-                                    backendResource->drawCleanEpoch = bufferEpoch;
-                                } else {
-                                    backendResource =
-                                        BufferImpl::EnsureBufferResourceForHandle(nullptr, entry.Res);
-                                }
-                            }
-                            if (backendResource && backendResource->id != 0) {
-                                // WHOLE-VS-RANGE IS THE RECORD's TEST, not `range.end == 0`: a
-                                // base binding travels as kMGPipeWholeBuffer precisely so the
-                                // extent is re-resolved HERE, against the storage this server
-                                // holds, rather than frozen at the client's emission.
-                                if (entry.Offset == 0 && entry.Size == MG_Pipe::kMGPipeWholeBuffer) {
-                                    BufferImpl::BindBufferBaseCached(GL_UNIFORM_BUFFER, lastUBOBinding,
-                                                                     backendResource->id);
-                                } else {
-                                    const SizeT storage = backendResource->storageSize;
-                                    const SizeT rangeStart =
-                                        std::min<SizeT>(static_cast<SizeT>(entry.Offset), storage);
-                                    const SizeT rangeEnd = std::min<SizeT>(
-                                        static_cast<SizeT>(entry.Offset + entry.Size), storage);
-                                    BufferImpl::BindBufferRangeCached(
-                                        GL_UNIFORM_BUFFER, lastUBOBinding, backendResource->id,
-                                        static_cast<GLintptr>(rangeStart),
-                                        static_cast<GLsizeiptr>(rangeEnd - rangeStart));
-                                }
-                            } else {
-                                MGLOG_E_ONCE("No backend buffer found for UBO binding, cannot bind UBO.");
-                            }
-                            continue;
+                        const MG_Pipe::MGPipeApplierState& st = MG_Pipe::MGPipeApplier();
+                        const Uint32 windowStart =
+                            st.ShaderBufferStart[MG_Pipe::kMGPipeShaderBufferClassUniform];
+                        const SizeT windowEnd =
+                            static_cast<SizeT>(windowStart) +
+                            st.ShaderBufferCount[MG_Pipe::kMGPipeShaderBufferClassUniform];
+                        if (static_cast<SizeT>(binding) < windowStart ||
+                            static_cast<SizeT>(binding) >= windowEnd) {
+                            continue; // nothing bound there - the frontend arm's `if (bufferObj)`
                         }
-                        auto& point = MG_Pipe::gPipeInputs.GetBufferBindingPoint(BufferTarget::Uniform, binding);
-                        auto& bufferObj = point.GetBoundObject();
-                        auto range = point.GetRange();
-
-                        if (bufferObj) {
-                            // Clean-probe (or epoch-stamped) fast path before the full
-                            // EnsureBufferResource: an unchanged static UBO needs no
-                            // storage work, only its binding re-established below.
-                            auto* backendResource = BufferImpl::GetBufferResource(bufferObj.get());
-                            if (!backendResource || backendResource->drawCleanEpoch != bufferEpoch) {
-                                if (backendResource &&
-                                    BufferImpl::IsBufferDrawClean(bufferObj.get(), backendResource)) {
-                                    backendResource->drawCleanEpoch = bufferEpoch;
-                                } else {
-                                    backendResource = BufferImpl::EnsureBufferResource(bufferObj);
-                                }
-                            }
-                            if (backendResource && backendResource->id != 0) {
-                                // glBindBufferBase/Range set the generic GL_UNIFORM_BUFFER binding
-                                // as a side effect, so no separate BindBufferId is needed here.
-                                if (range.end == 0) {
-                                    BufferImpl::BindBufferBaseCached(GL_UNIFORM_BUFFER, lastUBOBinding,
-                                                                     backendResource->id);
-                                } else {
-                                    BufferImpl::BindBufferRangeCached(
-                                        GL_UNIFORM_BUFFER, lastUBOBinding, backendResource->id,
-                                        (GLintptr)range.start, (GLintptr)(range.end - range.start));
-                                }
+                        const MG_Pipe::MGPBufferRange& entry =
+                            st.BoundShaderBuffers[MG_Pipe::kMGPipeShaderBufferClassUniform]
+                                                 [static_cast<SizeT>(binding)];
+                        if (MG_Pipe::MGPipeHandleIsNull(entry.Res)) continue;
+                        // The clean probe is the SAME five questions IsBufferDrawClean asks
+                        // the frontend object, asked by handle: the twin's identity, the
+                        // resource record's Serial against the twin's synced one, and the
+                        // pending-work sets - all server-owned (D-A4). The drawCleanEpoch
+                        // short-circuit is unchanged; it was never the point read.
+                        auto* backendResource = BufferImpl::FindBufferResourceForHandle(entry.Res);
+                        if (!backendResource || backendResource->drawCleanEpoch != bufferEpoch) {
+                            if (backendResource && BufferImpl::IsBufferDrawCleanByHandle(
+                                                       entry.Res, backendResource, nullptr)) {
+                                backendResource->drawCleanEpoch = bufferEpoch;
                             } else {
-                                MGLOG_E_ONCE("No backend buffer found for UBO binding, cannot bind UBO.");
+                                backendResource =
+                                    BufferImpl::EnsureBufferResourceForHandle(nullptr, entry.Res);
                             }
                         }
+                        if (backendResource && backendResource->id != 0) {
+                            // WHOLE-VS-RANGE IS THE RECORD's TEST, not `range.end == 0`: a
+                            // base binding travels as kMGPipeWholeBuffer precisely so the
+                            // extent is re-resolved HERE, against the storage this server
+                            // holds, rather than frozen at the client's emission.
+                            if (entry.Offset == 0 && entry.Size == MG_Pipe::kMGPipeWholeBuffer) {
+                                BufferImpl::BindBufferBaseCached(GL_UNIFORM_BUFFER, lastUBOBinding,
+                                                                 backendResource->id);
+                            } else {
+                                const SizeT storage = backendResource->storageSize;
+                                const SizeT rangeStart =
+                                    std::min<SizeT>(static_cast<SizeT>(entry.Offset), storage);
+                                const SizeT rangeEnd = std::min<SizeT>(
+                                    static_cast<SizeT>(entry.Offset + entry.Size), storage);
+                                BufferImpl::BindBufferRangeCached(
+                                    GL_UNIFORM_BUFFER, lastUBOBinding, backendResource->id,
+                                    static_cast<GLintptr>(rangeStart),
+                                    static_cast<GLsizeiptr>(rangeEnd - rangeStart));
+                            }
+                        } else {
+                            MGLOG_E_ONCE("No backend buffer found for UBO binding, cannot bind UBO.");
+                        }
+                        continue;
                     }
                 }
 
@@ -6906,42 +6495,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return true;
         }
 
-        // MONOLITH GLUE, AND LOUD ABOUT IT AS OF P5e (vi). CONTRACT-P5E §5.1 makes the restart
-        // substitution read st.IndexBuffer.Res, and the constructor above already does: its
-        // transport arm resolves the element buffer and the bytes from the applier and its own
-        // staged shadow (P5c hd), and it sets serverElementBinding >= 0 BEFORE the null test,
-        // so the tail at BoundElementArrayBufferId() is unreachable with a live transport.
-        // These two are therefore only called from the monolith branch - and the refusal below
-        // is what keeps that a fact rather than a reading: a future caller that reaches them
-        // from the apply thread aborts by name instead of pulling GetBoundVertexArray behind
-        // the family's back.
-        void RefuseElementArrayBufferFromTheFrontend(const char* entry) {
-            MGLOG_F("MGPipe: Fatal{RoleViolation, \"MGPipeSlots\"} - %s read the frontend VAO's "
-                    "element-array slot with a live transport. The index buffer of this family is "
-                    "MGPipeApplier().IndexBuffer.Res (CONTRACT-P5E §5.1); the frontend slot is "
-                    "monolith glue and answers for whatever the CLIENT has bound now, not for the "
-                    "record this draw is being applied from",
-                    entry);
-            std::abort();
-        }
-
-        const SharedPtr<MG_State::GLState::BufferObject>& BoundElementArrayBuffer() {
-            static const SharedPtr<MG_State::GLState::BufferObject> none;
-            RefuseElementArrayBufferFromTheFrontend("BoundElementArrayBuffer");
-            const auto& vao = MG_Pipe::gPipeInputs.GetBoundVertexArray();
-            if (!vao) return none;
-            return vao->GetIndexBufferBindingSlot().GetBoundObject();
-        }
-
-        // The GL name PrepareForDraw left on GL_ELEMENT_ARRAY_BUFFER, i.e. what the
-        // substitution has to put back.
-        Uint BoundElementArrayBufferId() {
-            RefuseElementArrayBufferFromTheFrontend("BoundElementArrayBufferId");
-            const auto& ibo = BoundElementArrayBuffer();
-            if (!ibo) return 0;
-            const auto* resource = BufferImpl::EnsureBufferResource(ibo);
-            return resource ? resource->id : 0;
-        }
     } // namespace
 
     RestartSubstitutionKind ResolveRestartSubstitution(GLenum indexType) {
@@ -7124,12 +6677,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return;
         }
         m_previousBinding = 0;
-        if (serverElementBinding >= 0) {
-            m_previousBinding = static_cast<Uint>(serverElementBinding);
-        } else
-        {
-            m_previousBinding = BoundElementArrayBufferId();
-        }
+        if (serverElementBinding >= 0) m_previousBinding = static_cast<Uint>(serverElementBinding);
         BufferImpl::BindBufferId(GL_ELEMENT_ARRAY_BUFFER, g_restartIndices.id);
         m_substituted = true;
         m_indexType = destinationType;
@@ -10257,9 +9805,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // dereference. The frontend validator is what keeps this unreachable and what reports
         // the error the application is owed; declining is only how a future gap up there stops
         // being a crash. See the level guard in VulkanRenderer::CopyImageSubData.
-        if (!dstEndpoint.IsRenderbuffer() && dstEndpoint.Texture) {
-            TextureImpl::NoteDriverSideTextureWrite(dstEndpoint.Texture);
-        }
         // The handle arm's endpoint names its texture by handle, and the server has no frontend
         // object to note. The staged store's half of the note waits for the copy (P8-E, below).
         const Bool handleArmDestination =
@@ -12036,19 +11581,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
             SplitReadbackPackBuffer();
         Bool usePBO = false;
         GLuint packBufferId = 0;
-        if (pixelPackBufferObject) {
-            auto* backendResource = BufferImpl::EnsureBufferResource(pixelPackBufferObject);
-            MGLOG_D("ReadPixels: Using PBO %u", pixelPackBufferObject->GetExternalIndex());
-            if (!backendResource || backendResource->id == 0) {
-                MGLOG_E_ONCE("ReadPixels: No backend buffer found for PBO %u.",
-                        pixelPackBufferObject ? pixelPackBufferObject->GetExternalIndex() : 0);
-                return;
-            }
-            usePBO = true;
-            packBufferId = backendResource->id;
-        } else {
-            MGLOG_D("ReadPixels: Not using PBO");
-        }
+        // P13: SplitReadbackPackBuffer() is always null - a pack buffer reaches the readback
+        // by handle on the verb path - so this entry never packs into a buffer.
+        MGLOG_D("ReadPixels: Not using PBO");
         ScopedPixelPackBuffer packBufferBinding(packBufferId);
 
         MGLOG_D("ReadPixels: glReadPixels()");

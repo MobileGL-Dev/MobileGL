@@ -14,6 +14,7 @@
 #include <MG_State/GLState/Core.h>
 #include <MG_Backend/DirectGLES/Managers.h>
 #include <MG_Backend/DirectGLES/DirectGLES.h>
+#include <MG_Impl/Pipe/SlotAllocator.h>
 #define MGITEST_P4A_SEAM_PEEK_LIVE 1
 #endif
 
@@ -89,7 +90,11 @@ namespace MGITest {
         const auto& object = MobileGL::MG_State::pGLContext->GetSamplerObject(
             static_cast<MobileGL::Uint>(glSamplerName));
         if (object) {
-            if (auto* const slot = MGB::SamplerImpl::g_backendSamplerObjects.Find(object.get()); slot && *slot) {
+            // Resolved the client's way (the harness is the client): the object's identity handle,
+            // if one was ever minted, then the twin at it.
+            const MGP::MGPipeHandle identity =
+                MGP::MGPipeSlots().FindByLifetimeId(MGP::MGPipeKind::SamplerCso, object->GetLifetimeId());
+            if (auto* const slot = MGB::SamplerImpl::g_backendSamplerObjects.FindByHandle(identity); slot && *slot) {
                 out->IdentityTwinSamplerId = static_cast<unsigned>((*slot)->GetBackendSamplerId());
             }
         }

@@ -21,12 +21,6 @@
 
 namespace MobileGL::MG_Pipe {
 #if MOBILEGL_BUILD_DISAGGREGATED
-    Bool MGPipeApplierIsUnbarrieredApply() {
-        if (MG_Config::Transport == MG_Config::TransportMode::Monolith) return false;
-        if (!MG_Remote::Server::ServerLoop::OnApplyThread()) return false;
-        return !MGPipeApplierCurrentRecordIsBarriered();
-    }
-
     void MGPipeRefuseAllocatorFromApplyThread(const char* entry) {
         if (MG_Config::Transport == MG_Config::TransportMode::Monolith) return;
         // D10: OR'd with the PROCESS-ROLE fact, not replaced by it. OnApplyThread() answers
@@ -46,25 +40,6 @@ namespace MobileGL::MG_Pipe {
                 "its side of a real split. No scope or backend exempts a barriered record "
                 "(barriered=%d)",
                 entry, MGPipeApplierCurrentRecordIsBarriered() ? 1 : 0);
-        std::abort();
-    }
-
-    // P5f (fr): all frontend-identity registry surfaces are monolith glue, including
-    // the ones that do not touch the allocator. Neither a wait nor a named scope can
-    // make a frontend SharedPtr exist in a separate server process.
-    void MGPipeRefuseFrontendKeyedRegistryFromApplyThread(const char* entry) {
-        if (MG_Config::Transport == MG_Config::TransportMode::Monolith) return;
-        // D10: OR'd with the PROCESS-ROLE fact, not replaced by it. OnApplyThread() answers
-        // about the INPROC applier thread and is the only fact a ServerLoop fixture with no
-        // client session has; MGPipeServerArm() adds the spawn case, where EVERY thread is a
-        // server thread. Replacing the first with the second disarmed the refusal in every unit
-        // test that drives the apply thread directly - measured, 14 RemoteGuards cases went
-        // green-by-omission before this was put back as a disjunction.
-        if (!MG_Remote::Server::ServerLoop::OnApplyThread() && !MG_Pipe::MGPipeServerArm()) return;
-        MGLOG_F("MGPipe: Fatal{RoleViolation, \"MGPipeSlots\"} - the apply thread reached "
-                "BackendSlotTable::%s. Frontend-identity registry operations are monolith-only, "
-                "including barriered records; resolve the twin from the record's handle instead",
-                entry);
         std::abort();
     }
 

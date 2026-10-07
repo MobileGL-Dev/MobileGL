@@ -16,9 +16,9 @@
 #include <MG_Util/Converters/MGToGL/TextureEnumConverter.h>
 #include <MG_Backend/DirectGLES/Managers.h>
 #include <MG_Backend/DirectGLES/DirectGLES.h>
+#include <MG_Impl/Pipe/SlotAllocator.h>
 #if MOBILEGL_BUILD_DISAGGREGATED
 #include <Config.h>
-#include <MG_Impl/Pipe/SlotAllocator.h>
 #include <MG_Remote/Client/ClientSession.h>
 #include <MG_Remote/Server/ServerLoop.h>
 #endif
@@ -49,7 +49,11 @@ namespace MGITest {
         MGB::TextureImpl::BackendTextureObject* EsprytTwin(unsigned glTextureName) {
             MobileGL::MG_State::GLState::ITextureObject* const object = FrontendTexture(glTextureName);
             if (object == nullptr) return nullptr;
-            auto* const found = MGB::TextureImpl::g_backendTextureObjects.Find(object);
+            // The harness is the client: it resolves the handle in the client's allocator and asks
+            // Espryt's table by handle, as the record does (P13 retired the object-keyed lookup).
+            const MGP::MGPipeHandle handle =
+                MGP::MGPipeSlots().FindByLifetimeId(MGP::MGPipeKind::Texture, object->GetLifetimeId());
+            auto* const found = MGB::TextureImpl::g_backendTextureObjects.FindByHandle(handle);
             if (found == nullptr || !*found) return nullptr;
             return found->get();
         }
@@ -229,12 +233,12 @@ namespace MGITest {
         // Espryt must be the backend running, or "no view" would be true of every texture on
         // every other backend and the assertion would be vacuous where it is loudest.
         if (EsprytTwin(glTextureName) == nullptr) return false;
-        // HandleOfSamplerViewForTexture is the monolith glue that derives the view's handle from
-        // the TEXTURE's lifetime id (D-F2: one view per ITextureObject), so this asks Espryt's
-        // own table the same way Espryt asks it - it does not consult the applier record's
-        // ViewCso, which is the client's statement about the same fact and would make one side
-        // of the seam vouch for the other.
-        const MGP::MGPipeHandle view = MGB::SamplerViewImpl::HandleOfSamplerViewForTexture(object);
+        // The view's handle is minted off the TEXTURE's lifetime id (D-F2: one view per
+        // ITextureObject); the harness resolves it in the client's allocator and asks Espryt's own
+        // table by it - it does not consult the applier record's ViewCso, which is the client's
+        // statement about the same fact and would make one side of the seam vouch for the other.
+        const MGP::MGPipeHandle view =
+            MGP::MGPipeSlots().FindByLifetimeId(MGP::MGPipeKind::SamplerViewCso, object->GetLifetimeId());
         if (MGP::MGPipeHandleIsNull(view)) {
             *outExists = false;
             return true;

@@ -17,7 +17,6 @@
 // translation units that include it without copying Managers.h's include order.
 #include "DirectGLES.h"
 
-#include <MG_Impl/Pipe/SlotAllocator.h>
 #if MOBILEGL_BUILD_DISAGGREGATED
 #include <MG_Pipe/PipeSessionFail.h>
 #endif
@@ -43,63 +42,32 @@
 // Death is ANNOUNCED, and that is what lets this table have no garbage collector - the
 // deliverable ROADMAP.md:18 spells "GC" in and the one D13 makes a precondition of the switch-
 // over. All six re-keyed object classes raise MG_State::GLState::NotifyStateObjectDestroyed()
-// from their destructor (BufferBackendOps' shape, one entry point for six kinds), the backend
-// consumes it in Managers.cpp, and OnFrontendObjectDestroyed() below drops the twin in EVERY
-// table of the kind and returns the slot, at the moment the frontend object's last SharedPtr
-// goes. So:
-//   * there is NO draw-path tick, NO creation tick and NO sweep of any kind on this arm. The
-//     seven CollectGarbageIfNeeded call sites in DirectGLES.cpp drive the LEGACY registry only;
+// from their destructor carrying {kind, lifetimeId, handle}; the backend consumes it in
+// Managers.cpp and releases the twin BY THAT HANDLE in every holder of the kind
+// (ReleaseTwinByHandle below - the same release the wire's object_death runs on a server), and
+// the CLIENT returns the slot after the notice (PipeFill.cpp's NotifyAndFree). So:
+//   * there is NO draw-path tick, NO creation tick and NO sweep of any kind;
 //   * a twin, and the driver storage it owns, is freed when the application lets go of the
 //     object rather than up to 64 creations or 1024 draw ticks later. That is what
 //     Managers.h's "dead gigabytes" note asked for.
 //
 // EVERY HOLDER OF THE KIND, not one. Two live tables of one kind is a real configuration - the
 // ScopedDirectGLESTextureBindings fixture keeps a by-value copy of the Texture registry for the
-// length of a test, and a context reset does the same in reverse - and the slot allocator
-// erases its lifetimeId -> slot mapping on Free, so a notice delivered to one holder and
-// resolved again by the next would find nothing to resolve. Every table therefore links itself
-// into a per-table-type list at construction and out at destruction, and one notice resolves
-// the handle ONCE, drops the twin in each holder BY HANDLE, and frees the slot once, last. No
-// holder can be left naming a live entry for a dead object, and there is nothing a sweep could
-// still find. (The list is per table TYPE; the kind is the type's template parameter, and each
-// of the six kinds has exactly one table type in this backend. Magma's subsystem-4 table mints
-// out of its own per-renderer allocator, not MGPipeSlots(), so it is not a holder here.)
+// length of a test, and a context reset does the same in reverse. Every table therefore links
+// itself into a per-table-type list at construction and out at destruction, and one release
+// drops the twin in each holder by handle. (The list is per table TYPE; the kind is the type's
+// template parameter, and each of the six kinds has exactly one table type in this backend.)
 //
-// The weak_ptr per entry survives as the MONOLITH-GLUE half of the table's identity: the
-// minting GetOrCreate stores it, NoteStateForHandle/StateForHandle read it, and the legacy
-// death notice walks it. It is never an identity test - that is what Gen is for - and it is
-// never read to decide whether an entry is dead: a destructor that runs after exit() has begun
-// has its notice dropped by InProcessTeardown(), and that twin is then a DELIBERATE leak (the
-// process is exiting, the driver reclaims the object, and a twin destructor must not call into
-// a driver that may already be unloaded), not something to be collected later.
+// A destructor that runs after exit() has begun has its notice dropped by InProcessTeardown(),
+// and that twin is then a DELIBERATE leak (the process is exiting, the driver reclaims the
+// object, and a twin destructor must not call into a driver that may already be unloaded).
 //
-// P5e (id, CONTRACT-P5E §4.1): ForEachLive() NO LONGER HANDS IT OUT. It answers
-// fn(MGPipeHandle, const BackendPtr&), because a walk that produced a frontend SharedPtr out
-// of server memory was the last place the server could hold one across records - and a caller
-// that still needs the object (the detach walk) asks StateForHandle for it BY HANDLE, inside
-// the scope that names the debt, so the read is one greppable site rather than a property of
-// the iteration.
-//
-// P3+ DEBT, recorded rather than hidden: this header is under MG_Backend/ and it MINTS
-// handles (MGPipeSlots().Acquire below) off a frontend SharedPtr's GetLifetimeId().
-// MGPipeHandles.h:13-16 says a handle is minted by the CLIENT and never by the server, and
-// under a real split neither the frontend object nor its lifetime id exists on this side of
-// the wire. This is monolith glue: the minting and the lifetimeId -> handle resolution both
-// belong on the client, and the backend should receive the handle in the verb payload. It is
-// NOT part of "Track H done" and check_include_closure.py does not probe MG_Backend headers,
-// so nothing catches it automatically.
-//
-// P5c (hd, CONTRACT-P5C §3.1) is what gives the debt teeth: with an active transport the
-// minting GetOrCreate, HandleOf and OnFrontendObjectDestroyed raise
-// Fatal{RoleViolation, "MGPipeSlots"} when reached from the apply thread (the same check the
-// allocator's own three entries carry, repeated here so the refusal names this surface), and
-// the split paths resolve through GetOrCreate(handle) / ReleaseByHandle instead.
-//
-// P5f (fr): the frontend-keyed half survives only as MONOLITH GLUE. HandleOf,
-// GetOrCreate(StatePtr), NoteStateForHandle and StateForHandle refuse EVERY transport
-// apply before touching a frontend object, with or without a barrier or named scope.
-// Find(StateObject*) delegates to HandleOf; handle-only iteration never reads stateRef.
-// The registry guard is independent of Magma's legacy allocator debt scope.
+// P13: THE TABLE IS HANDLE-ONLY. The frontend-keyed half - a GetOrCreate that minted handles
+// off a frontend object's lifetime id from inside MG_Backend, the object-keyed Find / HandleOf
+// with their lifetime-id memo, the weak per-entry state note and the lifetime-id death walk -
+// was monolith glue, unreachable once every family ran the record arm, and is deleted. A handle
+// is minted by the CLIENT and arrives in the record; nothing on this side touches the client's
+// slot allocator (the link ratchet's P13 exit gate pins that).
 namespace MobileGL::MG_Backend::DirectGLES {
 
 
@@ -148,7 +116,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // True when this process runs the {slot, gen} arm. Fixed for the life of the process: the
     // two arms hold their twins in different containers, so flipping mid-run would strand them.
     //
-    // INLINE on purpose. Every Find / GetOrCreate / HandleOf / ForEachLive on the twin tables
+    // INLINE on purpose. Every FindByHandle / GetOrCreate / ForEachLive on the twin tables
     // consults it, i.e. it is on the per-draw path several times per draw. As an out-of-line
     // function in Managers.cpp (no LTO in any shipped configuration) that was a call through
     // the PLT per lookup; here the caller sees a guard-variable load and a perfectly-predicted
@@ -181,7 +149,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // are two clients, and nothing may be shared with either from the other.
     //
     // THE HOLDER LIST STAYS PROCESS-WIDE AND THAT IS NOT A COMPROMISE. A notice is about an
-    // OBJECT, not about a bucket: OnFrontendObjectDestroyed and ReleaseTwinByHandle must reach
+    // OBJECT, not about a bucket: ReleaseTwinByHandle must reach
     // the by-value copies a fixture or a context reset is holding, whichever bucket they sit in,
     // and "which bucket holds it" is exactly the question that produced the two-holder leak the
     // list exists to fix. Each SHARED holder of the list is ONE bucket; the walk therefore covers
@@ -328,15 +296,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return Shared(key)->GetOrCreate(handle);
         }
         Uint32 LiveGenAt(Uint32 slot) const { return ForCallingThread().LiveGenAt(slot); }
-        MG_Pipe::MGPipeHandle HandleOf(const StateObject* stateObj) const {
-            return ForCallingThread().HandleOf(stateObj);
-        }
-        void NoteStateForHandle(MG_Pipe::MGPipeHandle handle, const StatePtr& stateObj) {
-            ForCallingThread().NoteStateForHandle(handle, stateObj);
-        }
-        StatePtr StateForHandle(MG_Pipe::MGPipeHandle handle) const {
-            return ForCallingThread().StateForHandle(handle);
-        }
         template <typename Fn>
         void ForEachLive(Fn&& fn) const {
             // THE CALLING THREAD'S BUCKET, not every bucket, and that is the semantic answer
@@ -360,9 +319,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // statics, which walk the holder list - each SHARED holder of it is one bucket.
         static Bool ReleaseTwinByHandle(MG_Pipe::MGPipeHandle handle) {
             return Table::ReleaseTwinByHandle(handle);
-        }
-        static Bool OnFrontendObjectDestroyed(Uint64 lifetimeId) {
-            return Table::OnFrontendObjectDestroyed(lifetimeId);
         }
         // The instance spelling, and it HANDS THE TWIN OUT rather than answering a Bool: the two
         // tables that ARE a bucket registry (buffers, sampler views) have always been called as
@@ -405,8 +361,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
     template <typename StateObject, typename BackendObject, MG_Pipe::MGPipeKind kKind>
     class BackendSlotTable {
     public:
-        using StatePtr = SharedPtr<StateObject>;
-        using StateWeakPtr = std::weak_ptr<StateObject>;
         using BackendPtr = SharedPtr<BackendObject>;
 
         // The largest slot index this table will grow to for a handle that ARRIVED in a call's
@@ -436,14 +390,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         struct Entry {
             BackendPtr backend;
-            // THE MONOLITH-GLUE HALF of the entry (P5e, CONTRACT-P5E §4.1): written by the
-            // minting GetOrCreate and by NoteStateForHandle, read only by StateForHandle and
-            // the legacy death notice. Never compared against another object to decide identity
-            // - that is what Gen is for - never dereferenced for its address, and never read to
-            // decide whether the slot is dead: death is announced, not discovered. ForEachLive
-            // stopped reading it at P5e: a walk that handed a frontend SharedPtr out of server
-            // memory on every step was the last place the server could hold one across records.
-            StateWeakPtr stateRef;
             // The generation this entry's twin was built for. An entry whose Gen no longer
             // matches the allocator's is a twin of the slot's PREVIOUS owner.
             Uint32 Gen = 0;
@@ -453,27 +399,22 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // Every constructor links the table into the per-type holder list and the destructor
         // unlinks it, so a by-value copy (the ScopedDirectGLESTextureBindings fixture's saved
         // registry) is a holder for exactly as long as it exists. Copy and move carry the
-        // ENTRIES and the memo; the links are the table's own and are never copied.
+        // ENTRIES; the links are the table's own and are never copied.
         BackendSlotTable() { LinkHolder(); }
         BackendSlotTable(const BackendSlotTable& other):
             m_ownerSession(other.m_ownerSession),
             m_slots(other.m_slots),
             m_band(other.m_band),
-            m_nullTwin(other.m_nullTwin),
-            m_memoLifetimeId(other.m_memoLifetimeId),
-            m_memoHandle(other.m_memoHandle) {
+            m_nullTwin(other.m_nullTwin) {
             LinkHolder();
         }
         BackendSlotTable(BackendSlotTable&& other) noexcept:
             m_ownerSession(other.m_ownerSession),
             m_slots(std::move(other.m_slots)),
             m_band(std::move(other.m_band)),
-            m_nullTwin(std::move(other.m_nullTwin)),
-            m_memoLifetimeId(other.m_memoLifetimeId),
-            m_memoHandle(other.m_memoHandle) {
+            m_nullTwin(std::move(other.m_nullTwin)) {
             other.m_slots.clear();
             other.m_band.clear();
-            other.ForgetHandle();
             LinkHolder();
         }
         BackendSlotTable& operator=(const BackendSlotTable& other) {
@@ -481,8 +422,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 m_slots = other.m_slots;
                 m_band = other.m_band;
                 m_nullTwin = other.m_nullTwin;
-                m_memoLifetimeId = other.m_memoLifetimeId;
-                m_memoHandle = other.m_memoHandle;
             }
             return *this;
         }
@@ -491,11 +430,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 m_slots = std::move(other.m_slots);
                 m_band = std::move(other.m_band);
                 m_nullTwin = std::move(other.m_nullTwin);
-                m_memoLifetimeId = other.m_memoLifetimeId;
-                m_memoHandle = other.m_memoHandle;
                 other.m_slots.clear();
                 other.m_band.clear();
-                other.ForgetHandle();
             }
             return *this;
         }
@@ -507,88 +443,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
         void SetOwnerSession(Uint64 session) { m_ownerSession = session; }
         Uint64 OwnerSession() const { return m_ownerSession; }
 
-        // Resolve-or-create. The handle comes from the client allocator keyed on the frontend
-        // object's lifetime id, so two calls for the same live object always land on the same
-        // slot, and a successor object at the same heap address never does.
-        BackendPtr& GetOrCreate(const StatePtr& stateObj) {
-            // No assert on null here, unlike the map arm: null is TOLERATED, so a DEBUG build
-            // must not trap where the release build quietly does the documented thing.
-            if (stateObj == nullptr) {
-                // The registry this replaces inserted a null KEY and handed back that entry's
-                // twin (DirectGLES.cpp's SyncTextureObjectToBackend documents relying on
-                // exactly that tolerance), so a release build never dereferenced null here.
-                // Keep the shape exactly, INCLUDING across calls: the map kept its null-keyed
-                // entry, so a second null call was handed the same twin the first one got.
-                // Resetting here instead would have destroyed it - an arm difference in the one
-                // path that documents relying on this. One per-table parking slot, never live,
-                // never handed a handle, because a null object has no identity and
-                // therefore cannot have a {slot, gen}.
-                return m_nullTwin;
-            }
-
-            // D13: the teardown sentinel is armed by the slot table's first insertion. Twin
-            // creation is the moment a driver-owned id starts needing a guarded destructor;
-            // this is the cold path, so the once-guard costs nothing per draw. On the legacy
-            // arm StateBackendObjectRegistry::GetOrCreate arms it itself.
-            EnsureProcessTeardownSentinel();
-
-#if MOBILEGL_BUILD_DISAGGREGATED
-            // This overload mints from frontend identity and is monolith-only. Refuse
-            // before either the client object or allocator is touched, even when a
-            // legacy named scope is open and the current record is barriered.
-            MG_Pipe::MGPipeRefuseFrontendKeyedRegistryFromApplyThread("GetOrCreate(StatePtr)");
-#endif
-
-            const MG_Pipe::MGPipeHandle handle =
-                MG_Pipe::MGPipeSlots().Acquire(kKind, stateObj->GetLifetimeId());
-            MOBILEGL_ASSERT(!MG_Pipe::MGPipeHandleIsNull(handle),
-                            "MGPipe slot space of kind %u is exhausted",
-                            static_cast<Uint32>(kKind));
-            Entry& entry = EntryAt(handle.Slot);
-            if (entry.Live && entry.Gen != handle.Gen) {
-                // The slot was reclaimed and handed to a new object: the twin at it describes
-                // driver ids the new state object never made.
-                entry.backend.reset();
-            }
-            entry.Gen = handle.Gen;
-            entry.Live = true;
-            entry.stateRef = stateObj;
-            // No creation tick and no sweep here. The registry this replaces needed both,
-            // because nothing told it a texture or a renderbuffer had been DELETED and object
-            // CHURN rather than draw count is what made that urgent. Every one of the six kinds
-            // now announces its own death from its destructor, so a dead twin's slot is already
-            // back before the next creation asks for one.
-            RememberHandle(stateObj->GetLifetimeId(), handle);
-            return entry.backend;
-        }
-
-        // P3a: resolve-or-create BY HANDLE, and it is the shape that discharges the debt this
-        // header records against itself at the top of the file.
+        // P3a: resolve-or-create BY HANDLE - since P13 the only resolve-or-create there is. The
+        // handle ARRIVED, in the call's payload, already minted by the client; this never
+        // touches the allocator. It indexes the slot, notices a generation that no longer
+        // matches (the slot was recycled, so the twin at it describes driver ids the new
+        // resource never made) and hands back the twin pointer.
         //
-        // The overload above mints - it calls MGPipeSlots().Acquire off a frontend object's
-        // lifetime id, from inside MG_Backend - which is monolith glue: a handle is minted by
-        // the CLIENT, and under a real split neither the object nor its lifetime id exists on
-        // this side. This overload never touches the allocator at all. The handle ARRIVED, in
-        // the call's payload, already minted by the side that owns minting; all this does is
-        // index the slot, notice a generation that no longer matches (the slot was recycled,
-        // so the twin at it describes driver ids the new resource never made) and hand back
-        // the twin pointer. FindByHandle beside it is the same shape and already existed.
+        // Death stays ANNOUNCED: the family's own destroy call or the shared death notice
+        // releases the twin by handle, and the slot is freed by the CLIENT after that returns.
         //
-        // No StatePtr, therefore no Entry::stateRef unless a caller that holds the object notes
-        // it (NoteStateForHandle): a handle-keyed entry has no frontend object to weakly hold
-        // by itself. P5e (§4.1) makes that stop mattering for the iteration - ForEachLive keys
-        // on Live && backend, so such an entry is VISIBLE to the walk and it is StateForHandle,
-        // asked by the one caller that needs the object, that answers null for it. Which is the
-        // same set the old stateRef-locking walk produced, decided at one site instead of in
-        // the loop.
-        //
-        // Death stays ANNOUNCED, as it is on the other overload: for a handle-keyed kind the
-        // announcement is the family's own destroy call, not the shared death notice, and the
-        // slot is freed by the CLIENT after that call returns.
-        //
-        // UNUSED AT THE CONTRACT COMMIT, deliberately: it is a member of a class template, so
-        // an uninstantiated one costs nothing anywhere, and the backend package is what gives
-        // it its first caller.
         BackendPtr& GetOrCreate(MG_Pipe::MGPipeHandle handle) {
             MOBILEGL_ASSERT(!MG_Pipe::MGPipeHandleIsNull(handle),
                             "GetOrCreate(handle) named the reserved null handle");
@@ -618,15 +481,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #endif
             }
 
-            // Same arming as the minting overload, and for the same reason: twin creation is
-            // the moment a driver-owned id starts needing a guarded destructor.
+            // Twin creation is the moment a driver-owned id starts needing a guarded destructor.
             EnsureProcessTeardownSentinel();
 
-            // THE TWO DIRECTIONS ARE NOT SYMMETRIC HERE, where they are on the minting overload.
-            // There the handle comes straight out of MGPipeSlots().Acquire and can never be
-            // BEHIND the entry, so a bare `!=` only ever means "the slot was recycled forward".
-            // Here the handle arrived in a payload, so `handle.Gen < entry.Gen` is a reachable
-            // input, and adopting it would destroy the INCUMBENT LIVE twin - a driver buffer id,
+            // THE TWO DIRECTIONS ARE NOT SYMMETRIC. The handle arrived in a payload, so
+            // `handle.Gen < entry.Gen` is a reachable input, and adopting it would destroy the INCUMBENT LIVE twin - a driver buffer id,
             // a persistent map, a pooled store, released by a defaulted destructor that issues
             // no glDeleteBuffers and no pool enrolment - and then stamp the slot back to the
             // dead resource's generation, after which the incumbent's own FindByHandle refuses
@@ -668,31 +527,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return entry->Live ? entry->Gen : 0;
         }
 
-        // Remember/read the frontend object last used by the monolith sync path.
-        // Handles supplied to the server never need this weak state. Neither method
-        // touches the allocator, so each carries its own unconditional apply guard.
-        void NoteStateForHandle(MG_Pipe::MGPipeHandle handle, const StatePtr& stateObj) {
-#if MOBILEGL_BUILD_DISAGGREGATED
-            MG_Pipe::MGPipeRefuseFrontendKeyedRegistryFromApplyThread("NoteStateForHandle");
-#endif
-            if (MG_Pipe::MGPipeHandleIsNull(handle)) return;
-            Entry* const entry = EntryOrNull(handle.Slot);
-            if (entry == nullptr || !entry->Live || entry->Gen != handle.Gen) return;
-            entry->stateRef = stateObj;
-        }
-
-        // The frontend object noted for this handle, or null. The handle answers identity;
-        // this answers only "which object was this twin last synced from".
-        StatePtr StateForHandle(MG_Pipe::MGPipeHandle handle) const {
-#if MOBILEGL_BUILD_DISAGGREGATED
-            MG_Pipe::MGPipeRefuseFrontendKeyedRegistryFromApplyThread("StateForHandle");
-#endif
-            if (MG_Pipe::MGPipeHandleIsNull(handle)) return nullptr;
-            const Entry* const entry = EntryOrNull(handle.Slot);
-            if (entry == nullptr || !entry->Live || entry->Gen != handle.Gen) return nullptr;
-            return entry->stateRef.lock();
-        }
-
         // P3a: the death half of the overload above, for a kind whose announcement is its own
         // destroy CALL rather than the shared death notice (D-L). Hands the twin OUT rather
         // than destroying it in place, because the caller may still have to decide what
@@ -708,27 +542,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // left alone: the successor's own GetOrCreate resets it.
         BackendPtr ReleaseByHandle(MG_Pipe::MGPipeHandle handle) {
             if (MG_Pipe::MGPipeHandleIsNull(handle)) return BackendPtr{};
-            if (m_memoHandle.Slot == handle.Slot) ForgetHandle();
             Entry* const entry = EntryOrNull(handle.Slot);
             if (entry == nullptr || !entry->Live || entry->Gen != handle.Gen) return BackendPtr{};
             BackendPtr dead = std::move(entry->backend);
             entry->backend.reset();
-            entry->stateRef.reset();
             entry->Live = false;
             return dead;
-        }
-
-        // Null when no live twin of this object exists. Unlike the registry's Find this NEVER
-        // mutates the table, so the returned pointer survives any later Find on it; only a
-        // GetOrCreate that grows the vector can move it, and callers that hold one across a
-        // possible insertion still copy the BackendPtr out.
-        BackendPtr* Find(StateObject* stateObj) {
-            if (stateObj == nullptr) return nullptr;
-            return FindByHandle(HandleOf(stateObj));
-        }
-
-        const BackendPtr* Find(StateObject* stateObj) const {
-            return const_cast<BackendSlotTable*>(this)->Find(stateObj);
         }
 
         BackendPtr* FindByHandle(MG_Pipe::MGPipeHandle handle) {
@@ -736,65 +555,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Entry* const entry = EntryOrNull(handle.Slot);
             if (entry == nullptr || !entry->Live || entry->Gen != handle.Gen) return nullptr;
             return &entry->backend;
-        }
-
-        // The handle this object's twin is keyed on, or the null handle. This is what a backend
-        // memo stores instead of a raw pointer, a GL name or a bare lifetime id.
-        //
-        // A NULL answer is never memoised. The memo is per table and the allocator is per
-        // kind, so with two holders of one kind the OTHER table can be the one that acquires;
-        // a cached "no handle" here would then outlive the twin's creation over there, and
-        // nothing on this table's own acquire path would ever refresh it. A miss costs the
-        // allocator probe it always cost; a hit is refreshed the moment anyone acquires.
-        MG_Pipe::MGPipeHandle HandleOf(const StateObject* stateObj) const {
-            if (stateObj == nullptr) return MG_Pipe::kMGPipeNullHandle;
-#if MOBILEGL_BUILD_DISAGGREGATED
-            // Resolve frontend identity only in the monolith path. A cache hit is
-            // subject to the same guard as a fresh allocator lookup.
-            MG_Pipe::MGPipeRefuseFrontendKeyedRegistryFromApplyThread("HandleOf");
-#endif
-            const Uint64 lifetimeId = stateObj->GetLifetimeId();
-            if (lifetimeId == m_memoLifetimeId) return m_memoHandle;
-            const MG_Pipe::MGPipeHandle handle =
-                MG_Pipe::MGPipeSlots().FindByLifetimeId(kKind, lifetimeId);
-            if (!MG_Pipe::MGPipeHandleIsNull(handle)) RememberHandle(lifetimeId, handle);
-            return handle;
-        }
-
-        // P2 step e2's backend half. The frontend object with this lifetime id has just been
-        // DESTROYED: resolve its handle ONCE, drop its twin in EVERY table of this type, and
-        // return the slot to the allocator - in that order, because the allocator forgets the
-        // lifetime id on Free and a holder told second could no longer resolve it.
-        //
-        // The slot is returned whether or not any holder still had a twin at it: the lifetime
-        // id is dead and MG_State never hands one out twice, so nothing can acquire it again,
-        // and a slot minted for it that no table holds (a table reset with `= {}` drops its
-        // entries without freeing) would otherwise stay allocated for the life of the process.
-        //
-        // STATIC, and deliberately so: a notice is about an object, not about a table, and
-        // "which table holds it" is exactly the question that produced the two-holder leak.
-        // Returns whether the object had a slot of this kind, i.e. whether anything was freed;
-        // a second call for the same id answers false because the allocator no longer maps it.
-        static Bool OnFrontendObjectDestroyed(Uint64 lifetimeId) {
-#if MOBILEGL_BUILD_DISAGGREGATED
-            // P5c (hd): the Find/Free pair below is monolith-only with an active transport -
-            // a frontend death is announced to the server by the object_death record (ct),
-            // and a direct call from the apply thread is Fatal{RoleViolation, "MGPipeSlots"}.
-            MG_Pipe::MGPipeRefuseAllocatorFromApplyThread("OnFrontendObjectDestroyed");
-#endif
-            const MG_Pipe::MGPipeHandle handle =
-                MG_Pipe::MGPipeSlots().FindByLifetimeId(kKind, lifetimeId);
-            if (MG_Pipe::MGPipeHandleIsNull(handle)) return false;
-            for (BackendSlotTable* holder = s_firstHolder; holder != nullptr;) {
-                // The successor is read BEFORE the release: ReleaseTwinAt runs the twin's
-                // destructor, which is a driver call, and nothing that outlives it may be a
-                // reference into this holder.
-                BackendSlotTable* const next = holder->m_nextHolder;
-                holder->ReleaseTwinAt(handle);
-                holder = next;
-            }
-            MG_Pipe::MGPipeSlots().Free(kKind, handle);
-            return true;
         }
 
         // P5c (ct), CONTRACT-P5C.md §5.2: the handle-keyed half of the above, for a death that
@@ -848,14 +608,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // it must not have - and replaces P3a's own fn(StatePtr, BackendPtr), which handed a
         // frontend SharedPtr OUT OF SERVER MEMORY on every step.
         //
-        // WHAT THE CALLER LOST AND HOW IT GETS IT BACK, because the two are not the same thing.
-        // The walk no longer locks Entry::stateRef, so a caller that needs the frontend object
-        // asks StateForHandle(handle) for it - which is the same weak reference, read at one
-        // named site inside the scope that owns the debt, instead of at every step of an
-        // iteration. Coverage is UNCHANGED by construction: an entry ForEachLive used to skip
-        // because its stateRef did not lock is one whose StateForHandle answers null, and the
-        // caller skips it there instead.
-        //
         // The handle is the entry's own {slot, gen}, band-aware: a composite ShaderCso's slot
         // is reported as kMGPipeShaderCsoCompositeSlotBase + its band index, i.e. the slot the
         // client minted, never the index into m_band.
@@ -895,7 +647,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Vector<Entry> slots = std::move(m_slots);
             Vector<Entry> band = std::move(m_band);
             BackendPtr nullTwin = std::move(m_nullTwin);
-            ForgetHandle();
             slots.clear();
             band.clear();
             nullTwin.reset();
@@ -931,13 +682,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
     private:
         // Drop the twin at `handle` if THIS table holds it. Frees nothing: the slot belongs to
-        // the kind, not to the table, and OnFrontendObjectDestroyed returns it once, after
-        // every holder has let go.
+        // the kind, not to the table, and the client returns it once, after the release.
         Bool ReleaseTwinAt(MG_Pipe::MGPipeHandle handle) {
-            // Forget the memo whenever it names this slot, even if this table has no entry
-            // there: a memo can be a handle learned from the allocator for an object another
-            // holder twinned, and it must not survive the slot's next handout.
-            if (m_memoHandle.Slot == handle.Slot) ForgetHandle();
             // The twin's destructor is a driver call and could, in principle, re-enter
             // GetOrCreate on this table and resize m_slots. So NOTHING that outlives the
             // destructor may be a reference into m_slots: the twin is moved out into a local,
@@ -948,7 +694,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 if (entry == nullptr || !entry->Live || entry->Gen != handle.Gen) return false;
                 dead = std::move(entry->backend);
                 entry->backend.reset();
-                entry->stateRef.reset();
                 entry->Live = false;
             }
             dead.reset();
@@ -983,8 +728,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return const_cast<BackendSlotTable*>(this)->EntryOrNull(slot);
         }
 
-        // Grows the right space to hold `slot`. Every caller bounds `slot` first - the minting
-        // overload because the allocator produced it, the handle overload against
+        // Grows the right space to hold `slot`. Every caller bounds `slot` first - against
         // kMaxHandleSlot - because this is the one place a client-supplied number decides an
         // allocation size. A composite slot grows m_band by (slot - base) + 1, so the ordinary
         // table never learns the band exists.
@@ -993,15 +737,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
             const SizeT index = IndexOfSlot(slot);
             if (index >= table.size()) table.resize(index + 1);
             return table[index];
-        }
-
-        void RememberHandle(Uint64 lifetimeId, MG_Pipe::MGPipeHandle handle) const {
-            m_memoLifetimeId = lifetimeId;
-            m_memoHandle = handle;
-        }
-        void ForgetHandle() const {
-            m_memoLifetimeId = 0;
-            m_memoHandle = MG_Pipe::kMGPipeNullHandle;
         }
 
         // The holder list: intrusive and doubly linked, so registering and unregistering are
@@ -1041,30 +776,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // Handed back by GetOrCreate for a null state object. Never live, never handed a handle.
         BackendPtr m_nullTwin;
 
-        // ONE-entry resolution memo, lifetimeId -> handle. It exists because without it every
-        // resolution goes through the allocator's ByLifetimeId hash, which the deleted
-        // TwinLookupMemos existed to avoid and which D13 promises to replace with "direct slot
-        // indexing".
-        //
-        // It is one entry and therefore only helps a caller that asks for the SAME object twice
-        // running - ResolveVaoTwin and SyncCurrentProgram do, once per draw each. Two callers
-        // it does NOT help, recorded rather than claimed away: BindCurrentFBO resolves BOTH
-        // targets in a frame, and ResolveUnitSamplerBackend asks for a different sampler per
-        // texture unit, so both thrash a single-entry memo and pay the probe P1 did not (P1 had
-        // a per-unit memo and a direct-mapped 6-slot array there). Making the memo per-unit /
-        // per-target is the fix, and G11 - the device-side gate that would price it - is owed.
-        //
-        // It cannot serve a stale answer, by three independent arguments:
-        //   * the key is a lifetime id, which MG_State never hands out twice, so a recycled
-        //     heap address cannot hit this memo the way it could hit an address-keyed one;
-        //   * a null answer is never stored, so another holder's acquire cannot be hidden by
-        //     a "no handle" this table remembered earlier; and
-        //   * even a hit for a slot that has since been freed and re-handed is caught, because
-        //     the caller resolves the handle through FindByHandle, which compares Gen.
-        // Cleared anyway when a death notice names the memoised slot. 0 is never a live
-        // lifetime id (MG_State's counters start at 1), so a zeroed memo is a guaranteed miss.
-        mutable Uint64 m_memoLifetimeId = 0;
-        mutable MG_Pipe::MGPipeHandle m_memoHandle = MG_Pipe::kMGPipeNullHandle;
     };
 
 } // namespace MobileGL::MG_Backend::DirectGLES

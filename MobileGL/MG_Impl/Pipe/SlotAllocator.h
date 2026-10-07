@@ -173,57 +173,8 @@ namespace MobileGL::MG_Pipe {
     // pull build's bytes do not move (G1).
     void MGPipeRefuseAllocatorFromApplyThread(const char* entry);
 
-    // Shared predicate for remaining field/verb guards. Registry and allocator
-    // guards below refuse both barriered and unbarriered transport apply.
-    Bool MGPipeApplierIsUnbarrieredApply();
-
-    // P5f (fr): frontend-object twin lookup, minting and weak-state access are refused
-    // on EVERY transport apply, including barriered records and both named scopes.
-    // The handle overloads remain server-local; the frontend overloads remain monolith
-    // glue. The registry guard is independent of the allocator guard.
-    void MGPipeRefuseFrontendKeyedRegistryFromApplyThread(const char* entry);
-
-    // P5f (fr): these historical scope names remain greppable markers around
-    // monolith glue until P3b/P4b remove those bodies. They hold no state and grant
-    // no exemption: allocator and frontend-registry access always refuse apply.
-    //
-    // P7 wave 2-B2: MagmaP7AllocatorDebtScope has NO BACKEND USES LEFT. P5e ruling 12 named
-    // four Magma apply-thread allocator debts (VulkanRenderer.cpp x3, ResourceTracker.h x1);
-    // P5f fv and P5f fm retired two of them, and this package retires the surviving pair -
-    // ShutdownBlitResources and ShutdownDepthMipmapResources, where the objects the debt was
-    // about are simply never created off the monolith arm. The class stays because
-    // MG_Test/Wire/RemoteClientTest uses it as a NEGATIVE CONTROL: two RemoteGuards cases
-    // construct it on the apply thread and assert the allocator refuses anyway, which is the
-    // property P5f (fr) established and the only thing this name now asserts.
-    class MagmaP7AllocatorDebtScope {
-    public:
-        MagmaP7AllocatorDebtScope() = default;
-        ~MagmaP7AllocatorDebtScope() = default;
-        MagmaP7AllocatorDebtScope(const MagmaP7AllocatorDebtScope&) = delete;
-        MagmaP7AllocatorDebtScope& operator=(const MagmaP7AllocatorDebtScope&) = delete;
-    };
-
-    class MGPipeFrontendKeyedRegistryScope {
-    public:
-        MGPipeFrontendKeyedRegistryScope() = default;
-        ~MGPipeFrontendKeyedRegistryScope() = default;
-        MGPipeFrontendKeyedRegistryScope(const MGPipeFrontendKeyedRegistryScope&) = delete;
-        MGPipeFrontendKeyedRegistryScope& operator=(const MGPipeFrontendKeyedRegistryScope&) = delete;
-    };
-
 #else
-    // P13 W5: no transport, no apply thread - the role guards have nothing to refuse, and the two
-    // scopes nothing to mark (the record arm calls all of them in every build).
+    // P13 W5: no transport, no apply thread - the allocator's role guard has nothing to refuse.
     inline void MGPipeRefuseAllocatorFromApplyThread(const char*) {}
-    inline Bool MGPipeApplierIsUnbarrieredApply() { return false; }
-    inline void MGPipeRefuseFrontendKeyedRegistryFromApplyThread(const char*) {}
-    class MagmaP7AllocatorDebtScope {
-    public:
-        MagmaP7AllocatorDebtScope() = default;
-    };
-    class MGPipeFrontendKeyedRegistryScope {
-    public:
-        MGPipeFrontendKeyedRegistryScope() = default;
-    };
 #endif
 } // namespace MobileGL::MG_Pipe

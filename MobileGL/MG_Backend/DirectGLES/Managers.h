@@ -287,19 +287,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
         EndViewportRoutingPasses(passCount);
     }
 
-    // The backend twin table. Two arms live behind this one interface (ARCHITECTURE.md 9.6 -
-    // after Track H the MOBILEGL_PIPE_PUSH bitmap alone is not a valid A/B, because with a bit
-    // clear the backend would still be running the re-keyed code):
-    //
-    //   legacy  (MOBILEGL_PIPE_LEGACY_MEMOS): UnorderedMap<StateObject*, Entry> keyed on the
-    //           frontend heap ADDRESS, with a weak_ptr per entry as the ABA defence, an erase
-    //           inside Find, and a garbage sweep as the only death signal. Pre-P2 code verbatim.
-    //   handles (MOBILEGL_PIPE_PUSH and kMGPipeSubsystemEsprytSlots): BackendSlotTable, keyed
-    //           on MGPipeHandle{Slot, Gen}. See SlotTables.h for what that buys.
-    //
-    // Which arm runs is fixed once per process (EsprytSlotTablesEnabled()): the two arms hold
-    // their twins in different containers, so a mid-run flip would strand every twin already
-    // built. Every call site below this class is arm-agnostic and unchanged.
+    // The backend twin table: BackendSlotTable buckets keyed on MGPipeHandle{Slot, Gen} (see
+    // SlotTables.h for what that buys). P13 deleted the legacy arm - an UnorderedMap keyed on
+    // the frontend heap ADDRESS with a garbage sweep as its only death signal - together with
+    // every frontend-keyed entry (GetOrCreate(object), Find(object), HandleOf, the per-handle
+    // state note, the lifetime-id death walk): a twin is resolved only by the handle a record
+    // carried.
     //
     // The kind is a template parameter ONLY in the push build. G1 requires the pull build's
     // symbol set to be byte-for-byte the pre-P2 one, and a third template argument changes
@@ -315,138 +308,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
     class StateBackendObjectRegistry {
     public:
 
-        using StatePtr = SharedPtr<StateObject>;
-        using StateWeakPtr = std::weak_ptr<StateObject>;
         using BackendPtr = SharedPtr<BackendObject>;
-
-        // The backend twin and the weak reference that decides whether the raw key still
-        // names the state object the twin was built for. Both live in one entry: a
-        // separate liveness map answered nothing the backend probe had not already found
-        // and cost a second hash lookup on every Find, which the draw path runs ~10 times.
-        struct Entry {
-            BackendPtr backend;
-            StateWeakPtr stateRef;
-        };
-        using BackendMap = UnorderedMap<StateObject*, Entry>;
-        using iterator = typename BackendMap::iterator;
-        using const_iterator = typename BackendMap::const_iterator;
         using SlotTable = BackendSlotTable<StateObject, BackendObject, kKind>;
         // P14 S6: the ONE bucket of this kind the calling thread is in. Every handle-keyed entry
         // below resolves through it, so the six twin registries answer per {session, share
         // group} without a single call site naming a bucket.
         using SlotTables = SlotTableRegistry<StateObject, BackendObject, kKind>;
         using TwinKey = DirectGLES::TwinKey;
-
-        BackendPtr& GetOrCreate(const StatePtr& stateObj) {
-#if MOBILEGL_BUILD_DISAGGREGATED
-            // Check before arm selection: disabling slot tables must not expose the
-            // legacy raw-pointer registry on a transport apply thread.
-            MG_Pipe::MGPipeRefuseFrontendKeyedRegistryFromApplyThread("Registry.GetOrCreate(StatePtr)");
-#endif
-            MOBILEGL_ASSERT(stateObj != nullptr, "State object must not be null");
-
-            if (EsprytSlotTablesEnabled()) {
-                // The slot table arms the teardown sentinel itself, at its own first
-                // insertion (D13; SlotTables.h) - so a table used outside a registry arms
-                // it too, which is right: it is the twin, not the registry, that owns the
-                // driver id a guarded destructor exists for.
-                return m_slotTables.ForCallingThread().GetOrCreate(stateObj);
-            }
-            // Twin creation is the moment a driver-owned id starts needing a guarded
-            // destructor; cold path, so the once-guard costs nothing per draw. It is armed
-            // here, at the first insertion - a destructor hook on the table itself is wrong
-            // for the reason spelled out above InProcessTeardown().
-            EnsureProcessTeardownSentinel();
-            // Sweep BEFORE the entry reference below exists: the map is open-addressed and an
-            // erase relocates the rest of the probe cluster, so collecting once that reference
-            // is taken would invalidate it. The sweep is therefore owed from an earlier call
-            // rather than triggered by this one.
-            if (m_creationTick >= kCreationGCInterval) {
-                m_creationTick = 0;
-                CollectGarbage();
-            }
-            const SizeT entryCountBeforeInsert = m_entries.size();
-            auto& entry = m_entries[stateObj.get()];
-            if (m_entries.size() != entryCountBeforeInsert) {
-                // A key the registry has never held. Nothing tells the backend that a texture or
-                // renderbuffer was DELETED - the twin, and the driver storage it owns, lives
-                // until a collection - and CollectGarbageIfNeeded is ticked only from the
-                // per-draw sync paths, which a CTS-shaped workload runs about ten times per
-                // case. 1024 of those ticks then span ~100 cases, so ~100 cases' worth of dead
-                // (and, for this suite, gigabyte-sized) objects stay allocated at once. Object
-                // CHURN rather than draw count is what makes the sweep urgent, so a twin the
-                // registry has never seen ticks it too - and it does so on the path that is
-                // about to allocate, which is exactly when the memory is needed.
-                ++m_creationTick;
-            }
-            if (entry.stateRef.expired()) {
-                // The previous owner of this address is gone and the allocator handed it
-                // to a new object: its twin describes ids the new state object never made.
-                entry.backend.reset();
-            }
-            entry.stateRef = stateObj;
-            return entry.backend;
-        }
-
-        // Null when no live state object owns this key.
-        //
-        // On the HANDLE arm the result is a stable array element: only a GetOrCreate that grows
-        // the table can move it, and nothing else on the table invalidates it.
-        //
-        // On the LEGACY arm the result points into the map, so it stays valid only until the
-        // next GetOrCreate/Find/CollectGarbage on this registry. Take that literally, including
-        // for Find: the map is open-addressed and erases by shifting the rest of the probe
-        // cluster into the hole, so an erase relocates entries OTHER than the erased one - and
-        // Find erases, whenever it lands on a key whose state object has expired. Callers that
-        // need the twin across another registry call must copy the BackendPtr out (or keep only
-        // the pointee, which is heap-allocated and never moves).
-        BackendPtr* Find(StateObject* stateObj) {
-#if MOBILEGL_BUILD_DISAGGREGATED
-            // Check before arm selection: disabling slot tables must not expose the
-            // legacy raw-pointer registry on a transport apply thread.
-            MG_Pipe::MGPipeRefuseFrontendKeyedRegistryFromApplyThread("Registry.Find(StateObject*)");
-#endif
-            if (EsprytSlotTablesEnabled()) {
-                return m_slotTables.ForCallingThread().Find(stateObj);
-            }
-            const auto entryIt = m_entries.find(stateObj);
-            if (entryIt == m_entries.end()) {
-                return nullptr;
-            }
-            if (entryIt->second.stateRef.expired()) {
-                m_entries.erase(entryIt);
-                return nullptr;
-            }
-            return &entryIt->second.backend;
-        }
-
-        const BackendPtr* Find(StateObject* stateObj) const {
-            return const_cast<StateBackendObjectRegistry*>(this)->Find(stateObj);
-        }
-
-        iterator begin() {
-#if MOBILEGL_BUILD_DISAGGREGATED
-            MG_Pipe::MGPipeRefuseFrontendKeyedRegistryFromApplyThread("Registry.begin");
-#endif
-            return m_entries.begin();
-        }
-        const_iterator begin() const {
-#if MOBILEGL_BUILD_DISAGGREGATED
-            MG_Pipe::MGPipeRefuseFrontendKeyedRegistryFromApplyThread("Registry.begin");
-#endif
-            return m_entries.begin();
-        }
-        iterator end() { return m_entries.end(); }
-        const_iterator end() const { return m_entries.end(); }
-
-        // The {slot, gen} this object's twin is keyed on, or the null handle. This is what a
-        // backend memo stores instead of a raw pointer, a GL name or a bare lifetime id.
-        MG_Pipe::MGPipeHandle HandleOf(const StateObject* stateObj) const {
-            if (EsprytSlotTablesEnabled()) {
-                return m_slotTables.HandleOf(stateObj);
-            }
-            return MG_Pipe::kMGPipeNullHandle;
-        }
 
         // The twin at a handle, or null when the slot is free or its Gen has moved on. This is
         // the lookup a backend memo that already holds a handle wants: no lifetime-id probe.
@@ -503,27 +371,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return m_slotTables.LiveGenAt(slot);
         }
 
-        // P5c (hd): the two halves of SlotTables.h's state note, forwarded. A caller holding
-        // both the record's handle and the frontend object (the record-driven sync) notes the
-        // object so a later handle-only resolution can reach it without the client allocator.
-        //
-        // P5e (id): under MOBILEGL_PIPE_PUSH rather than MOBILEGL_BUILD_DISAGGREGATED, because
-        // the re-typed ForEachLive's caller resolves its object through StateForHandle in the
-        // push-monolith build too. Each half is a named Fatal from an unbarriered apply
-        // (SlotTables.h); on the legacy arm there is no note and StateForHandle answers null,
-        // which is the answer the legacy walk's own weak_ptr test already gives.
-        void NoteStateForHandle(MG_Pipe::MGPipeHandle handle, const StatePtr& stateObj) {
-            if (EsprytSlotTablesEnabled()) {
-                m_slotTables.NoteStateForHandle(handle, stateObj);
-            }
-        }
-        StatePtr StateForHandle(MG_Pipe::MGPipeHandle handle) const {
-            if (EsprytSlotTablesEnabled()) {
-                return m_slotTables.StateForHandle(handle);
-            }
-            return nullptr;
-        }
-
         // NO ReleaseByHandle HERE THROUGH P5, AND THAT WAS A DECISION (review M-4). The death
         // half of GetOrCreateByHandle existed only for a kind whose announcement is its own
         // destroy CALL rather than the shared death notice - which was the BUFFER family
@@ -545,24 +392,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
         static Bool ReleaseByHandle(MG_Pipe::MGPipeHandle handle) {
             if (EsprytSlotTablesEnabled()) {
                 return SlotTable::ReleaseTwinByHandle(handle);
-            }
-            return false;
-        }
-
-        // P2 step e2. STATIC, because a death notice is about an object and not about a
-        // registry instance: it is answered by EVERY table of this kind that exists - this
-        // registry's own, and any by-value copy of it a fixture or a context reset is holding
-        // (SlotTables.h explains the holder list and why one holder was a leak).
-        //
-        // The legacy arm cannot answer this at all - its key is the frontend heap ADDRESS and
-        // the object is already gone by the time the notice arrives - so there it is a no-op
-        // and the garbage sweep stays its only death signal. That asymmetry is not an
-        // oversight: it is the A/B the compile-time arm exists to make measurable
-        // (ARCHITECTURE.md 9.6), and announced-versus-discovered death is one of the things
-        // being measured.
-        static Bool DestroyByLifetimeId(Uint64 lifetimeId) {
-            if (EsprytSlotTablesEnabled()) {
-                return SlotTable::OnFrontendObjectDestroyed(lifetimeId);
             }
             return false;
         }
@@ -628,61 +457,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (EsprytSlotTablesEnabled()) m_slotTables.ForEachBucket(fn);
         }
 
-        // The seven DirectGLES.cpp call sites drive the LEGACY arm and nothing else. On the
-        // handle arm death is announced by the frontend object's destructor
-        // (MG_State/GLState/StateObjectDeathNotice.h), so there is no garbage to collect on a
-        // tick, the slot table has no collector to forward to, and this is the predicted
-        // branch plus a return - which is how ROADMAP.md:18's "delete the GC" is delivered
-        // without deleting the legacy arm's own collector while that arm is still compiled
-        // beside it.
-        void CollectGarbageIfNeeded() {
-            if (EsprytSlotTablesEnabled()) {
-                return;
-            }
-        }
-
-        // Pre-P2 API, kept for the legacy arm. On the handle arm there is nothing it could
-        // collect: a twin leaves with its object's death notice, and a notice dropped during
-        // process teardown is a deliberate leak (SlotTables.h), not garbage awaiting a call.
-        void CollectGarbageNow() {
-            if (EsprytSlotTablesEnabled()) {
-                return;
-            }
-            CollectGarbage();
-        }
-
     private:
-        void CollectGarbage() {
-            if (m_isCollecting) {
-                return;
-            }
-
-            m_isCollecting = true;
-
-            Vector<StateObject*> staleKeys;
-            staleKeys.reserve(m_entries.size());
-            for (const auto& [stateKey, entry] : m_entries) {
-                if (entry.stateRef.expired()) {
-                    staleKeys.push_back(stateKey);
-                }
-            }
-
-            for (auto* stateKey : staleKeys) {
-                m_entries.erase(stateKey);
-            }
-
-            m_isCollecting = false;
-        }
-
-    private:
-        static constexpr Uint32 kGCInterval = 1024;
-        // Creations are far rarer than draws, so this counts in a much smaller unit than
-        // kGCInterval does.
-        static constexpr Uint32 kCreationGCInterval = 64;
-        BackendMap m_entries;
-        Uint32 m_gcTick = 0;
-        Uint32 m_creationTick = 0;
-        Bool m_isCollecting = false;
         // P14 S6: the ONE bucket per {session, share group}, hidden behind the same member names
         // the single table had, so every handle-keyed call site above and every caller below is
         // unchanged. See SlotTables.h's SlotTableRegistry for the resolution chain.
@@ -1194,15 +969,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // to answer it differently.
         Bool ResourceContentIsDeclared(MG_Pipe::MGPipeHandle res);
 
-        // MONOLITH GLUE, and named as such: the handle of a resource this backend is looking
-        // at through a frontend object, resolved through the client allocator's lifetime-id
-        // index. Every caller is a site P3a deliberately does NOT migrate - the SSBO / UBO /
-        // indirect / pack-PBO binding walks are dirty bits 15-17 and P4b's, and the index
-        // host mirror is P8's - so they still arrive holding the object. Under a real split
-        // neither the object nor its lifetime id exists on this side and every one of them
-        // has to receive the handle in a payload instead.
-        MG_Pipe::MGPipeHandle HandleOfBuffer(const MG_State::GLState::BufferObject* bufferObject);
-
         // TIER 1 OF THE THREE-TIER FLUSH LADDER, AS A PURE FUNCTION (P5 b1).
         //
         // `GL_MAP_INVALIDATE_RANGE_BIT` is not a hint, it is an ASSERTION THAT THE OLD BYTES
@@ -1267,18 +1033,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
         GLESBufferResource* EnsureBufferResourceForHandle(
             const SharedPtr<MG_State::GLState::BufferObject>& bufferObject, MG_Pipe::MGPipeHandle res);
 
-        // P3a (D-D): "the GPU wrote through this resource", announced on the reverse channel
-        // instead of poked into the frontend object. ARCHITECTURE.md calls OnGpuWritten a
-        // NARROWING channel - the client builds its pending set conservatively at each
-        // draw/dispatch emission point and this callback only ever takes entries out of it -
-        // so in P3a, where the client's conservative set is exactly what the three
-        // MarkGpuWritten sites marked, the announced set is the whole resource and the
-        // observable behaviour is identical. P8/P9 narrow it; the channel is what they need.
-        //
-        // The legacy arm keeps calling BufferObject::MarkGpuWritten directly, and the pull
-        // build never sees this function at all (G1).
-        void MarkBufferGpuWritten(const SharedPtr<MG_State::GLState::BufferObject>& bufferObject);
-
         // The applier's stored extent for this resource, 0 when it has no record. The one
         // thing outside BufferImpl that needs it is the fp64 narrowing, whose source extent
         // used to be BufferObject::GetSize().
@@ -1305,25 +1059,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         void OnServerSessionEndedWithOthersLive();
         void OnBackendContextDestroyed();
 
-        // Get-or-create the backend resource and bring its storage up to date
-        // (creates the GL buffer, replays pending ops, pushes persistent-mapped
-        // ranges). Requires the ES context to be current. Returns nullptr only
-        // for null input.
-        GLESBufferResource* EnsureBufferResource(const SharedPtr<MG_State::GLState::BufferObject>& bufferObject);
         // Existing resource or nullptr; performs no GL calls.
         GLESBufferResource* GetBufferResource(MG_State::GLState::BufferObject* bufferObject);
-        // True when EnsureBufferResource(frontend) would provably fall straight through
-        // every branch and do no work — i.e. `resource` is still the frontend's own
-        // resource, its id belongs to the live ES context, and either it is the
-        // zero-copy coherent persistent store (draw-time sync is a no-op by design) or
-        // the storage is initialized at the right size with no pending ops and a synced
-        // change serial while the buffer is not mapped (an active map may owe a
-        // per-draw persistent-range push, so it always takes the full path).
-        // `frontend` must be non-null and alive; the caller guarantees that by holding
-        // (or shadowing something that holds) a SharedPtr to it. Enables the per-VAO
-        // resolved-buffers memo to skip EnsureBufferResource on clean static buffers.
-        Bool IsBufferDrawClean(const MG_State::GLState::BufferObject* frontend, const GLESBufferResource* resource);
-
         // Deletes GL buffers whose owning frontend objects died (possibly on a
         // thread without a current ES context). Called from draw-time sync.
         void ProcessDeferredBufferReleases();
@@ -1888,7 +1625,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // attachment sync and the image sweep both call it, which is why it is declared
             // once here rather than twice in two packages' worktrees.
             void SyncMipmapsToBackendByHandle(MG_Pipe::MGPipeHandle texture);
-            void SyncTextureViewToBackend(const SharedPtr<MG_State::GLState::ITextureObject>& stateTextureObject);
             void StampViewSyncKeys(const SharedPtr<MG_State::GLState::ITextureObject>& stateTextureObject);
             // P5e (tx2). THE VIEW ARM UNDER A TRANSPORT, and what it can and cannot answer.
             //
@@ -1911,12 +1647,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // parameter and sampler halves are unchanged and run on this name as on any other.
             void SyncBuiltinSamplerToBackend(const SharedPtr<MG_State::GLState::ITextureObject>& stateTextureObject);
             void SyncTextureParamsToBackend(const SharedPtr<MG_State::GLState::ITextureObject>& stateTextureObject);
-            // Marks the texture as one whose ES storage has to be image-bindable, which for a
-            // non-core image format means re-minting it in the widening's carrier. Takes the state
-            // object because the levels already uploaded have to be marked dirty again: the
-            // re-mint allocates fresh storage and only replays what the shadow still calls dirty.
-            void RequireImageBindableStorage(
-                const SharedPtr<MG_State::GLState::ITextureObject>& stateTextureObject);
             // Server-owned promotion: preserve an already image-bindable native
             // allocation, or capture the old native contents, merge pending
             // upload regions and re-arm the server's whole-level replay set.
@@ -2252,14 +1982,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // table's answer is an array element and only a GetOrCreate that GROWS the table moves
         // it, which this function has already done by the time it returns.
         BackendTextureObject* ResolveTextureTwin(MG_Pipe::MGPipeHandle res);
-        SharedPtr<BackendTextureObject>& SyncTextureObjectToBackend(
-            const SharedPtr<MG_State::GLState::ITextureObject>& textureObject,
-            Bool imageBindableStorageRequired = false);
-        // Every path that lets the DRIVER write a texture's texels calls this (see
-        // BackendTextureObject::m_driverMayHoldGpuWrites): an application framebuffer attachment,
-        // a writable image binding, a copy, blit or mipmap generation into it. A view writes its
-        // storage texture's image, so the storage texture is the one marked.
-        void NoteDriverSideTextureWrite(const SharedPtr<MG_State::GLState::ITextureObject>& textureObject);
         // ---- P5e SEAM (MG_Remote/CONTRACT-P5E.md §4.2, §5.2; declared by c0e, bodied by
         // id/tx2) --------------------------------------------------------------------------
         //
@@ -3490,14 +3212,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         BackendSamplerViewObject* FindSamplerViewForHandle(MG_Pipe::MGPipeHandle view);
 
-        // MONOLITH GLUE, and named as such, the HandleOfBuffer shape: the SamplerViewCso handle
-        // of a texture this backend is looking at through a frontend object. Legal only because
-        // the view is minted off the texture's own lifetime id; under a real split neither the
-        // object nor its lifetime id exists on this side and the handle has to arrive in the
-        // payload (which, for every path P4a switches over, it does - this is for the paths
-        // P3b/P4b still owns).
-        MG_Pipe::MGPipeHandle HandleOfSamplerViewForTexture(
-            const MG_State::GLState::ITextureObject* textureObject);
     } // namespace SamplerViewImpl
 
     namespace RenderbufferImpl {
@@ -3509,7 +3223,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
             ~BackendRenderbufferObject();
             BackendRenderbufferObject(const BackendRenderbufferObject&) = delete;
             BackendRenderbufferObject& operator=(const BackendRenderbufferObject&) = delete;
-            void SyncToBackend(const SharedPtr<MG_State::GLState::RenderbufferObject>& stateRBOObject);
             // P5e SEAM (declared by c0e, bodied by fb): the renderbuffer twin of the
             // framebuffer overload above. MGPSurface::Res names the renderbuffer and the
             // resource record already carries its format, extent and sample count (P4a), so the

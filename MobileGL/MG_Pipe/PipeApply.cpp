@@ -781,6 +781,18 @@ namespace MobileGL::MG_Pipe {
         return (appliers.fetch_add(1, std::memory_order_relaxed) + 1) << 40;
     }
 
+    namespace {
+        std::atomic<MGPipeCompileEnvChangedHook> g_compileEnvChangedHook{nullptr};
+    }
+
+    void MGPipeSetCompileEnvChangedHook(MGPipeCompileEnvChangedHook hook) {
+        g_compileEnvChangedHook.store(hook, std::memory_order_release);
+    }
+
+    void MGPipeNotifyCompileEnvChanged() {
+        if (const auto hook = g_compileEnvChangedHook.load(std::memory_order_acquire)) hook();
+    }
+
     MGPipeApplierState& MGPipeApplier() {
         const MGPipeApplierKeyResolver resolve = g_applierKeyResolver;
         if (resolve == nullptr) return g_defaultApplier;

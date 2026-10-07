@@ -1440,7 +1440,7 @@ namespace MobileGL::MG_Pipe {
         //     are the same call on the same handle and the second is a no-op, because Free
         //     bumps no generation (the bump rides the next handout) and refuses a slot that is
         //     no longer live at this generation.
-        MG_State::GLState::NotifyStateObjectDestroyed(MGPipeKind::VertexElementsCso, lifetimeId);
+        MG_State::GLState::NotifyStateObjectDestroyed(MGPipeKind::VertexElementsCso, lifetimeId, handle);
         if (!MGPipeHandleIsNull(handle)) MGPipeSlots().Free(MGPipeKind::VertexElementsCso, handle);
         return published;
     }
@@ -1979,7 +1979,7 @@ namespace MobileGL::MG_Pipe {
         // P4a: whether a slot exists is this client's business, and a consumer that records
         // notices must not stop seeing a class announce itself.
         void NotifyAndFree(MGPipeKind kind, Uint64 lifetimeId, MGPipeHandle handle) {
-            MG_State::GLState::NotifyStateObjectDestroyed(kind, lifetimeId);
+            MG_State::GLState::NotifyStateObjectDestroyed(kind, lifetimeId, handle);
             if (!MGPipeHandleIsNull(handle)) MGPipeSlots().Free(kind, handle);
         }
 
@@ -2263,6 +2263,17 @@ namespace MobileGL::MG_Pipe {
 
     Bool PipeInputs::HasOpenTransformFeedbackSpan(Uint64 lifetimeId) const {
         return lifetimeId != 0 && MGPipeApplier().StreamOutputSpans.count(lifetimeId) != 0;
+    }
+
+    namespace {
+        // The frontend half of MGPipeNotifyCompileEnvChanged (PipeApply.h): registered once, at
+        // static initialisation, by the translation unit that owns the forward.
+        const Bool kCompileEnvHookRegistered = [] {
+            MGPipeSetCompileEnvChangedHook([] {
+                if (gPipeInputs.IsLive()) gPipeInputs.InvalidateCompileEnv();
+            });
+            return true;
+        }();
     }
 
     void PipeInputs::InvalidateCompileEnv() {

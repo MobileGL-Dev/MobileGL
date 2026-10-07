@@ -3321,39 +3321,45 @@ namespace {
 
 } // namespace
 
+namespace {
+    // The CLIENT's half of every case below, played by the case itself: the handle a record would
+    // carry, minted in the client's allocator. Since P13 the table never mints (it has no entry that
+    // could); it only receives handles, exactly as here.
+    MobileGL::MG_Pipe::MGPipeHandle MintFor(MobileGL::MG_Pipe::MGPipeKind kind, MobileGL::Uint64 lifetimeId) {
+        return MobileGL::MG_Pipe::MGPipeSlots().Acquire(kind, lifetimeId);
+    }
+} // namespace
+
 // The property the whole slice exists for. The pre-P2 registry keyed twins on the frontend heap
 // ADDRESS and defended the recycle with a weak_ptr; here the key is {slot, gen}, so a successor
-// object landing on a slot its predecessor owned is a DIFFERENT handle, and the predecessor's
-// handle resolves to nothing rather than to the successor's twin.
+// landing on a slot its predecessor owned is a DIFFERENT handle, it is handed an EMPTY twin, and
+// the predecessor's handle resolves to nothing rather than to the successor's twin.
 TEST(DirectGLESSlotTable, ARecycledSlotIsANewHandleAndTheStaleOneResolvesToNothing) {
     using namespace MobileGL;
+    constexpr MG_Pipe::MGPipeKind kKind = MG_Pipe::MGPipeKind::Query;
 
     FakeSlotTable table;
-    auto first = MakeShared<FakeStateObject>(0xA1u);
-    table.GetOrCreate(first) = MakeShared<FakeBackendObject>();
-    (*table.Find(first.get()))->marker = 1;
-
-    const MG_Pipe::MGPipeHandle firstHandle = table.HandleOf(first.get());
+    const MG_Pipe::MGPipeHandle firstHandle = MintFor(kKind, 0xA1u);
     ASSERT_FALSE(MG_Pipe::MGPipeHandleIsNull(firstHandle));
+    table.GetOrCreate(firstHandle) = MakeShared<FakeBackendObject>();
+    (*table.FindByHandle(firstHandle))->marker = 1;
     EXPECT_EQ(table.LiveCount(), 1u);
 
-    // The frontend object dies and announces it (FakeStateObject is not one of the six re-keyed
-    // classes, so the notice its destructor would raise is raised by hand), and the slot is
-    // reclaimed - which is the only moment Gen moves.
-    first.reset();
-    EXPECT_TRUE(FakeSlotTable::OnFrontendObjectDestroyed(0xA1u));
+    // The object dies: the twin is released by its handle (the death notice's release), then the
+    // client returns the slot - which is the only moment Gen can move, on the next handout.
+    EXPECT_TRUE(FakeSlotTable::ReleaseTwinByHandle(firstHandle));
+    MG_Pipe::MGPipeSlots().Free(kKind, firstHandle);
     EXPECT_EQ(table.LiveCount(), 0u);
     EXPECT_EQ(table.FindByHandle(firstHandle), nullptr)
         << "a handle whose object is gone still resolved to a twin";
 
-    auto second = MakeShared<FakeStateObject>(0xA2u);
-    table.GetOrCreate(second) = MakeShared<FakeBackendObject>();
-    (*table.Find(second.get()))->marker = 2;
-
-    const MG_Pipe::MGPipeHandle secondHandle = table.HandleOf(second.get());
+    const MG_Pipe::MGPipeHandle secondHandle = MintFor(kKind, 0xA2u);
     EXPECT_EQ(secondHandle.Slot, firstHandle.Slot) << "the free list did not hand the slot back";
     EXPECT_NE(secondHandle.Gen, firstHandle.Gen) << "the generation did not move on slot reuse";
-    EXPECT_FALSE(firstHandle == secondHandle);
+    EXPECT_EQ(table.GetOrCreate(secondHandle), nullptr)
+        << "the successor at a recycled slot inherited its predecessor's twin";
+    table.GetOrCreate(secondHandle) = MakeShared<FakeBackendObject>();
+    (*table.FindByHandle(secondHandle))->marker = 2;
 
     // The stale handle must not resolve to its successor's twin. This is the ABA the address key
     // could only paper over.
@@ -3361,113 +3367,82 @@ TEST(DirectGLESSlotTable, ARecycledSlotIsANewHandleAndTheStaleOneResolvesToNothi
     ASSERT_NE(table.FindByHandle(secondHandle), nullptr);
     EXPECT_EQ((*table.FindByHandle(secondHandle))->marker, 2);
 
-    second.reset();
-    EXPECT_TRUE(FakeSlotTable::OnFrontendObjectDestroyed(0xA2u));
+    EXPECT_TRUE(FakeSlotTable::ReleaseTwinByHandle(secondHandle));
+    MG_Pipe::MGPipeSlots().Free(kKind, secondHandle);
 }
 
-// Gen moves on reuse and ONLY on reuse: a live object that is looked up again, or respecified,
-// keeps the handle it was minted with (MGPipeHandles.h).
+// Gen moves on reuse and ONLY on reuse: a live entry that is resolved again - by GetOrCreate or by
+// FindByHandle, any number of times - keeps the one twin it was built with (MGPipeHandles.h).
 TEST(DirectGLESSlotTable, RepeatedLookupsOfALiveObjectKeepOneHandle) {
     using namespace MobileGL;
+    constexpr MG_Pipe::MGPipeKind kKind = MG_Pipe::MGPipeKind::Query;
 
     FakeSlotTable table;
-    auto object = MakeShared<FakeStateObject>(0xB1u);
-    // An object that is bound but never synced has no twin and no handle; asking is a miss.
-    EXPECT_TRUE(MG_Pipe::MGPipeHandleIsNull(table.HandleOf(object.get())));
-    table.GetOrCreate(object) = MakeShared<FakeBackendObject>();
-    const MG_Pipe::MGPipeHandle handle = table.HandleOf(object.get());
-    ASSERT_FALSE(MG_Pipe::MGPipeHandleIsNull(handle))
-        << "the memo went on answering a null handle after the twin was created";
+    const MG_Pipe::MGPipeHandle handle = MintFor(kKind, 0xB1u);
+    // A handle no record has resolved yet has no twin; asking is a miss, not a mint.
+    EXPECT_EQ(table.FindByHandle(handle), nullptr);
+    EXPECT_EQ(table.LiveCount(), 0u);
+    table.GetOrCreate(handle) = MakeShared<FakeBackendObject>();
+    const FakeBackendObject* const twin = table.FindByHandle(handle)->get();
 
     for (int i = 0; i < 8; ++i) {
-        auto* slot = table.GetOrCreate(object) ? table.Find(object.get()) : nullptr;
-        ASSERT_NE(slot, nullptr);
-        EXPECT_TRUE(table.HandleOf(object.get()) == handle) << "handle moved on lookup " << i;
+        EXPECT_EQ(table.GetOrCreate(handle).get(), twin) << "the twin was re-made on lookup " << i;
+        ASSERT_NE(table.FindByHandle(handle), nullptr);
+        EXPECT_EQ(table.FindByHandle(handle)->get(), twin);
     }
     EXPECT_EQ(table.LiveCount(), 1u);
 
-    object.reset();
-    EXPECT_TRUE(FakeSlotTable::OnFrontendObjectDestroyed(0xB1u));
+    EXPECT_TRUE(FakeSlotTable::ReleaseTwinByHandle(handle));
+    MG_Pipe::MGPipeSlots().Free(kKind, handle);
 }
 
-// The round-4 review's minor 8: HandleOf used to memoise a NULL answer, on the argument that
-// GetOrCreate refreshes the memo. That holds for ONE table. The allocator is per kind and the
-// memo is per table, so once a second holder of the kind can be the one that acquires, the first
-// table's cached "no handle" outlives the twin's creation and nothing on its own acquire path
-// ever corrects it - every Find through it is a miss for a twin that exists. This is that
-// configuration, and it must resolve.
-TEST(DirectGLESSlotTable, ANegativeLookupIsNotCachedAcrossAnotherHoldersAcquire) {
-    using namespace MobileGL;
-
-    FakeSharedKindSlotTable first;
-    FakeSharedKindSlotTable second;
-    auto object = MakeShared<FakeStateObject>(0xB2u);
-
-    // `first` asks before anyone has acquired: a miss, which must NOT be remembered.
-    EXPECT_TRUE(MG_Pipe::MGPipeHandleIsNull(first.HandleOf(object.get())));
-
-    // `second` is the holder that acquires.
-    second.GetOrCreate(object) = MakeShared<FakeBackendObject>();
-    const MG_Pipe::MGPipeHandle handle = second.HandleOf(object.get());
-    ASSERT_FALSE(MG_Pipe::MGPipeHandleIsNull(handle));
-
-    // `first` never acquired, so nothing on its own path refreshed its memo; it must still
-    // answer the handle the kind now has for this object.
-    EXPECT_TRUE(first.HandleOf(object.get()) == handle)
-        << "the first holder kept answering the null handle it cached before the second holder "
-           "acquired, so every lookup through it misses a twin that exists";
-
-    object.reset();
-    EXPECT_TRUE(FakeSharedKindSlotTable::OnFrontendObjectDestroyed(0xB2u));
-}
-
-// The lookup does not mutate the table, which is what lets SyncTextureObjectToBackend stop paying
-// a by-value copy plus a second Find to survive the registry's erase-inside-Find. An entry whose
-// object has gone stays put until the death notice arrives, and a live entry's pointer is
-// unaffected by looking up anything else.
+// The lookup does not mutate the table: a returned pointer is an array element, so it survives any
+// later lookup - including one for a handle whose twin is gone - and only a release takes an entry.
 TEST(DirectGLESSlotTable, FindNeverMutatesTheTable) {
     using namespace MobileGL;
+    constexpr MG_Pipe::MGPipeKind kKind = MG_Pipe::MGPipeKind::Query;
 
     FakeSlotTable table;
-    auto kept = MakeShared<FakeStateObject>(0xC1u);
-    auto doomed = MakeShared<FakeStateObject>(0xC2u);
+    const MG_Pipe::MGPipeHandle kept = MintFor(kKind, 0xC1u);
+    const MG_Pipe::MGPipeHandle doomed = MintFor(kKind, 0xC2u);
     table.GetOrCreate(kept) = MakeShared<FakeBackendObject>();
     table.GetOrCreate(doomed) = MakeShared<FakeBackendObject>();
 
-    auto* keptSlot = table.Find(kept.get());
+    auto* keptSlot = table.FindByHandle(kept);
     ASSERT_NE(keptSlot, nullptr);
     const FakeBackendObject* keptTwin = keptSlot->get();
 
-    // The object goes but its notice is deliberately withheld for a moment, so that whatever
-    // changes between here and the notice is Find's doing. The registry's Find would have
-    // erased the expired entry here and relocated the rest of the probe cluster, invalidating
-    // keptSlot. This one answers what it answers and touches nothing.
-    doomed.reset();
-    EXPECT_EQ(table.Find(kept.get()), keptSlot);
-    EXPECT_EQ(table.LiveCount(), 2u) << "Find reclaimed a slot; only a death notice may do that";
+    // Lookups of the other entry, of a stale generation of it and of the null handle change
+    // nothing.
+    (void)table.FindByHandle(doomed);
+    (void)table.FindByHandle(MG_Pipe::MGPipeHandle{doomed.Slot, doomed.Gen + 1u});
+    (void)table.FindByHandle(MG_Pipe::kMGPipeNullHandle);
+    EXPECT_EQ(table.FindByHandle(kept), keptSlot);
+    EXPECT_EQ(table.LiveCount(), 2u) << "a lookup reclaimed a slot; only a release may do that";
     EXPECT_EQ(keptSlot->get(), keptTwin);
 
-    EXPECT_TRUE(FakeSlotTable::OnFrontendObjectDestroyed(0xC2u));
+    EXPECT_TRUE(FakeSlotTable::ReleaseTwinByHandle(doomed));
+    MG_Pipe::MGPipeSlots().Free(kKind, doomed);
     EXPECT_EQ(table.LiveCount(), 1u);
-    EXPECT_EQ(table.Find(kept.get())->get(), keptTwin);
+    EXPECT_EQ(table.FindByHandle(kept)->get(), keptTwin);
 
-    kept.reset();
-    EXPECT_TRUE(FakeSlotTable::OnFrontendObjectDestroyed(0xC1u));
+    EXPECT_TRUE(FakeSlotTable::ReleaseTwinByHandle(kept));
+    MG_Pipe::MGPipeSlots().Free(kKind, kept);
 }
 
 // ScopedDirectGLESTextureBindings saves a whole twin table by value, resets it with `= {}` and
 // restores it. The slot table has to keep that shape or the fixture stops isolating anything -
-// and the saved copy is a HOLDER for as long as it exists, so a death announced while it is
-// held reaches it too (the round-4 review's minor 2, in the fixture's own shape).
+// and the saved copy is a HOLDER for as long as it exists, so a release while it is held reaches
+// it too (the round-4 review's minor 2, in the fixture's own shape).
 TEST(DirectGLESSlotTable, AWholeTableSavesResetsAndRestores) {
     using namespace MobileGL;
+    constexpr MG_Pipe::MGPipeKind kKind = MG_Pipe::MGPipeKind::Query;
 
     const Uint32 holdersBefore = FakeSlotTable::HolderCount();
     FakeSlotTable table;
-    auto object = MakeShared<FakeStateObject>(0xD1u);
-    table.GetOrCreate(object) = MakeShared<FakeBackendObject>();
-    (*table.Find(object.get()))->marker = 7;
-    const MG_Pipe::MGPipeHandle handle = table.HandleOf(object.get());
+    const MG_Pipe::MGPipeHandle handle = MintFor(kKind, 0xD1u);
+    table.GetOrCreate(handle) = MakeShared<FakeBackendObject>();
+    (*table.FindByHandle(handle))->marker = 7;
 
     const FakeSlotTable saved = table;
     EXPECT_EQ(FakeSlotTable::HolderCount(), holdersBefore + 2u)
@@ -3476,79 +3451,59 @@ TEST(DirectGLESSlotTable, AWholeTableSavesResetsAndRestores) {
     EXPECT_EQ(FakeSlotTable::HolderCount(), holdersBefore + 2u)
         << "the reset changed the holder count - a temporary's registration leaked or the "
            "table's own was lost";
-    EXPECT_EQ(table.Find(object.get()), nullptr) << "the reset left the twin reachable";
+    EXPECT_EQ(table.FindByHandle(handle), nullptr) << "the reset left the twin reachable";
 
     table = saved;
-    ASSERT_NE(table.Find(object.get()), nullptr);
-    EXPECT_EQ((*table.Find(object.get()))->marker, 7);
+    ASSERT_NE(table.FindByHandle(handle), nullptr);
+    EXPECT_EQ((*table.FindByHandle(handle))->marker, 7);
 
     // The object dies while BOTH the working table and the saved copy hold its twin. One
-    // notice, and neither may keep a live entry.
-    object.reset();
-    EXPECT_TRUE(FakeSlotTable::OnFrontendObjectDestroyed(0xD1u));
+    // release, and neither may keep a live entry.
+    EXPECT_TRUE(FakeSlotTable::ReleaseTwinByHandle(handle));
+    MG_Pipe::MGPipeSlots().Free(kKind, handle);
     EXPECT_EQ(table.FindByHandle(handle), nullptr);
     EXPECT_EQ(table.LiveCount(), 0u);
     EXPECT_EQ(saved.LiveCount(), 0u)
-        << "the saved copy kept the dead object's twin - the notice reached one holder only";
+        << "the saved copy kept the dead object's twin - the release reached one holder only";
 }
 
-// The whole point of routing every twin through the client allocator: a table that keeps its own
-// dense array still shares ONE identity per frontend object with every other holder of it.
-//
-// Comparing a.HandleOf(o) with b.HandleOf(o) alone would prove nothing - HandleOf never reads the
-// table, so any two tables agree for any implementation. What is actually load-bearing, and what
-// is asserted here, is that ONE slot of the kind is consumed for the object no matter how many
-// tables hold a twin of it (a per-table allocator would pass the pure compare and fail this), and
-// that the shared handle still addresses each table's OWN twin.
+// One handle, two holders of the kind: the shared handle addresses each table's OWN twin, and
+// neither table's twin is the other's.
 TEST(DirectGLESSlotTable, TwoTablesOfTheSameKindShareOneSlotAndKeepTheirOwnTwin) {
     using namespace MobileGL;
-
     constexpr MG_Pipe::MGPipeKind kKind = MG_Pipe::MGPipeKind::Fence;
     auto& slots = MG_Pipe::MGPipeSlots();
     const Uint32 liveBefore = slots.LiveCount(kKind);
 
     FakeSharedKindSlotTable a;
     FakeSharedKindSlotTable b;
-    auto object = MakeShared<FakeStateObject>(0xE1u);
-    a.GetOrCreate(object) = MakeShared<FakeBackendObject>();
-    (*a.Find(object.get()))->marker = 1;
-    b.GetOrCreate(object) = MakeShared<FakeBackendObject>();
-    (*b.Find(object.get()))->marker = 2;
+    const MG_Pipe::MGPipeHandle handle = MintFor(kKind, 0xE1u);
+    ASSERT_FALSE(MG_Pipe::MGPipeHandleIsNull(handle));
+    a.GetOrCreate(handle) = MakeShared<FakeBackendObject>();
+    (*a.FindByHandle(handle))->marker = 1;
+    b.GetOrCreate(handle) = MakeShared<FakeBackendObject>();
+    (*b.FindByHandle(handle))->marker = 2;
 
     EXPECT_EQ(slots.LiveCount(kKind), liveBefore + 1u)
-        << "the two tables minted a slot each; Magma's table would then resolve a different "
-           "handle for the same object than Espryt's";
-
-    const MG_Pipe::MGPipeHandle handle = a.HandleOf(object.get());
-    ASSERT_FALSE(MG_Pipe::MGPipeHandleIsNull(handle));
-    EXPECT_TRUE(b.HandleOf(object.get()) == handle);
-
+        << "twinning one handle in two tables consumed more than the client's one slot";
     ASSERT_NE(a.FindByHandle(handle), nullptr);
     ASSERT_NE(b.FindByHandle(handle), nullptr);
     EXPECT_EQ((*a.FindByHandle(handle))->marker, 1);
     EXPECT_EQ((*b.FindByHandle(handle))->marker, 2);
 
-    // TWO HOLDERS OF ONE SLOT is a real configuration, not a test artefact (the
-    // ScopedDirectGLESTextureBindings fixture above holds a second live table of kind Texture
-    // for the length of a test), and the death of the object is what makes it sharp: the
-    // allocator forgets the lifetime id on Free, so a notice delivered to ONE holder leaves
-    // the other with a live entry - and its twin's driver storage - that nothing can resolve
-    // and nothing sweeps. OneDeathNoticeDropsTheTwinInEveryHolderOfTheKind below is the case
-    // for that; here the cleanup only has to leave the kind's LiveCount where it was.
-    object.reset();
-    EXPECT_TRUE(FakeSharedKindSlotTable::OnFrontendObjectDestroyed(0xE1u));
-    EXPECT_EQ(slots.LiveCount(kKind), liveBefore)
-        << "the shared slot outlived both holders and the object";
+    // TWO HOLDERS OF ONE SLOT is a real configuration (the ScopedDirectGLESTextureBindings fixture
+    // holds a second live table of kind Texture for the length of a test);
+    // OneDeathNoticeDropsTheTwinInEveryHolderOfTheKind below is the case for its death.
+    EXPECT_TRUE(FakeSharedKindSlotTable::ReleaseTwinByHandle(handle));
+    slots.Free(kKind, handle);
+    EXPECT_EQ(slots.LiveCount(kKind), liveBefore) << "the shared slot outlived both holders";
 }
 
-// The round-4 review's minor 2, closed: one notice, EVERY holder. Before this the dispatcher
-// told one table per kind and DestroyByLifetimeId freed only a slot THIS table held, so with
-// the sweep retired the second holder kept a live entry, and the twin, for the life of the
-// process. Three holders here - two independent tables and a by-value copy, which is exactly
-// what the fixture makes - and a fourth that never twinned the object and must be untouched.
+// The round-4 review's minor 2, closed: one release, EVERY holder. Three holders here - two
+// independent tables and a by-value copy, which is exactly what the fixture makes - and a fourth
+// that never twinned the handle and must be untouched.
 TEST(DirectGLESSlotTable, OneDeathNoticeDropsTheTwinInEveryHolderOfTheKind) {
     using namespace MobileGL;
-
     constexpr MG_Pipe::MGPipeKind kKind = MG_Pipe::MGPipeKind::Fence;
     auto& slots = MG_Pipe::MGPipeSlots();
     const Uint32 liveBefore = slots.LiveCount(kKind);
@@ -3557,24 +3512,21 @@ TEST(DirectGLESSlotTable, OneDeathNoticeDropsTheTwinInEveryHolderOfTheKind) {
     FakeSharedKindSlotTable a;
     FakeSharedKindSlotTable b;
     FakeSharedKindSlotTable bystander;
-    auto object = MakeShared<FakeStateObject>(0xE2u);
-    auto uninvolved = MakeShared<FakeStateObject>(0xE3u);
+    const MG_Pipe::MGPipeHandle handle = MintFor(kKind, 0xE2u);
+    const MG_Pipe::MGPipeHandle uninvolved = MintFor(kKind, 0xE3u);
 
-    a.GetOrCreate(object) = MakeShared<FakeBackendObject>();
-    b.GetOrCreate(object) = MakeShared<FakeBackendObject>();
+    a.GetOrCreate(handle) = MakeShared<FakeBackendObject>();
+    b.GetOrCreate(handle) = MakeShared<FakeBackendObject>();
     bystander.GetOrCreate(uninvolved) = MakeShared<FakeBackendObject>();
     const FakeSharedKindSlotTable copyOfA = a; // the fixture's saved registry
     EXPECT_EQ(FakeSharedKindSlotTable::HolderCount(), holdersBefore + 4u);
 
-    const MG_Pipe::MGPipeHandle handle = a.HandleOf(object.get());
-    ASSERT_FALSE(MG_Pipe::MGPipeHandleIsNull(handle));
     // Observers on the twins, so "dropped" means destroyed and not merely unreachable.
     const std::weak_ptr<FakeBackendObject> twinA = *a.FindByHandle(handle);
     const std::weak_ptr<FakeBackendObject> twinB = *b.FindByHandle(handle);
-    EXPECT_EQ(slots.LiveCount(kKind), liveBefore + 2u);
 
-    // ONE notice. The object is still alive so that nothing but the notice can be at work.
-    EXPECT_TRUE(FakeSharedKindSlotTable::OnFrontendObjectDestroyed(object->GetLifetimeId()));
+    // ONE release.
+    EXPECT_TRUE(FakeSharedKindSlotTable::ReleaseTwinByHandle(handle));
 
     EXPECT_EQ(a.FindByHandle(handle), nullptr) << "holder a kept the twin";
     EXPECT_EQ(b.FindByHandle(handle), nullptr) << "holder b kept the twin";
@@ -3583,135 +3535,88 @@ TEST(DirectGLESSlotTable, OneDeathNoticeDropsTheTwinInEveryHolderOfTheKind) {
     EXPECT_EQ(b.LiveCount(), 0u);
     EXPECT_TRUE(twinA.expired()) << "a's twin is unreachable but still allocated";
     EXPECT_TRUE(twinB.expired()) << "b's twin is unreachable but still allocated";
-    EXPECT_EQ(slots.LiveCount(kKind), liveBefore + 1u) << "the slot was not returned exactly once";
-    EXPECT_FALSE(FakeSharedKindSlotTable::OnFrontendObjectDestroyed(object->GetLifetimeId()))
-        << "a second notice for the same object found a slot to free";
+    EXPECT_FALSE(FakeSharedKindSlotTable::ReleaseTwinByHandle(handle))
+        << "a second release for the same handle found a twin to drop";
 
-    // The holder that never twinned the object is exactly as it was.
+    // The holder that never twinned the handle is exactly as it was.
     EXPECT_EQ(bystander.LiveCount(), 1u);
-    ASSERT_NE(bystander.Find(uninvolved.get()), nullptr);
+    ASSERT_NE(bystander.FindByHandle(uninvolved), nullptr);
 
-    object.reset();
-    uninvolved.reset();
-    EXPECT_TRUE(FakeSharedKindSlotTable::OnFrontendObjectDestroyed(0xE3u));
+    slots.Free(kKind, handle);
+    EXPECT_TRUE(FakeSharedKindSlotTable::ReleaseTwinByHandle(uninvolved));
+    slots.Free(kKind, uninvolved);
     EXPECT_EQ(bystander.LiveCount(), 0u);
     EXPECT_EQ(slots.LiveCount(kKind), liveBefore);
 }
 
-// The sweep and both of its drivers are RETIRED on this arm (ROADMAP.md:18's "delete the GC"),
-// and this is the property that replaces them. The registry this table replaces learned of a
-// death only by finding an expired weak_ptr, so it needed a 1024-call draw tick AND a
-// 64-creation tick and still held up to 64 dead, gigabyte-sized twins at once. An announced
-// death returns the slot before the next creation asks for one, so NOTHING accumulates -
-// nothing below calls CollectGarbageIfNeeded() or CollectGarbageNow(), and on this arm the
-// former does nothing at all.
+// The sweep and both of its drivers are RETIRED (ROADMAP.md:18's "delete the GC"), and this is
+// the property that replaces them: an announced death releases the twin before the next creation
+// asks for a slot, so NOTHING accumulates under object churn.
 TEST(DirectGLESSlotTable, AnnouncedDeathKeepsObjectChurnFromAccumulatingWithoutASweep) {
     using namespace MobileGL;
+    constexpr MG_Pipe::MGPipeKind kKind = MG_Pipe::MGPipeKind::Query;
 
     auto& slots = MG_Pipe::MGPipeSlots();
     constexpr Uint32 kChurn = 256u;
-    const Uint32 highWaterBefore = slots.HighWater(MG_Pipe::MGPipeKind::Query);
-    const Uint32 liveBefore = slots.LiveCount(MG_Pipe::MGPipeKind::Query);
+    const Uint32 highWaterBefore = slots.HighWater(kKind);
+    const Uint32 liveBefore = slots.LiveCount(kKind);
 
     FakeSlotTable table;
     Uint32 peakLive = 0;
     for (Uint32 i = 0; i < kChurn; ++i) {
-        auto object = MakeShared<FakeStateObject>(0xF0000000ull + i);
-        table.GetOrCreate(object) = MakeShared<FakeBackendObject>();
+        const MG_Pipe::MGPipeHandle handle = MintFor(kKind, 0xF0000000ull + i);
+        table.GetOrCreate(handle) = MakeShared<FakeBackendObject>();
         peakLive = std::max(peakLive, table.LiveCount());
-        // What a real object's destructor raises. FakeStateObject is not one of the six
-        // re-keyed frontend classes, so the firing half is driven by hand here; that those six
-        // classes really do fire it is EveryReKeyedObjectClassAnnouncesItsOwnDeath below, and
-        // that the registries answer it per kind is
-        // EverySwitchedOverKindResolvesItsTwinThroughTheHandleArm.
-        EXPECT_TRUE(FakeSlotTable::OnFrontendObjectDestroyed(object->GetLifetimeId()));
+        // What a real object's death delivers (Espryt's notice consumer releases by the handle
+        // the notice carries; the client frees after it). That the six real classes do raise it
+        // is EveryReKeyedObjectClassAnnouncesItsOwnDeath below.
+        EXPECT_TRUE(FakeSlotTable::ReleaseTwinByHandle(handle));
+        slots.Free(kKind, handle);
     }
 
     EXPECT_EQ(peakLive, 1u)
         << peakLive << " twins were live at once with " << kChurn
-        << " objects churned and every death announced - the notice stopped freeing the twin";
+        << " objects churned and every death announced - the release stopped dropping the twin";
     EXPECT_EQ(table.LiveCount(), 0u);
-    EXPECT_EQ(slots.LiveCount(MG_Pipe::MGPipeKind::Query), liveBefore)
-        << "the churn leaked slots the announced deaths should have returned";
+    EXPECT_EQ(slots.LiveCount(kKind), liveBefore) << "the churn leaked slots";
     // 2 and not 1: on a cold allocator the high-water mark counts the RESERVED slot 0
-    // (kMGPipeFirstAllocatableSlot is 1) as well as the one slot this loop recycles, and ctest
-    // runs every case in its own process, so this case sees a cold allocator. What the bound
-    // rules out is the thing that matters - 256 churned objects growing the space by 256.
-    EXPECT_LE(slots.HighWater(MG_Pipe::MGPipeKind::Query) - highWaterBefore, 2u)
+    // (kMGPipeFirstAllocatableSlot is 1) as well as the one slot this loop recycles.
+    EXPECT_LE(slots.HighWater(kKind) - highWaterBefore, 2u)
         << "the slot space grew with the churn instead of being recycled";
 }
 
-// The map arm inserted a null key and handed back that entry's twin, and
-// SyncTextureObjectToBackend documents relying on it. Release builds compile the assert out, so
-// on the handle arm this has to be a defined answer rather than a dereference of null.
-TEST(DirectGLESSlotTable, GetOrCreateToleratesANullStateObject) {
-    using namespace MobileGL;
-
-    FakeSlotTable table;
-    const SharedPtr<FakeStateObject> none;
-    auto& twin = table.GetOrCreate(none);
-    EXPECT_EQ(twin, nullptr);
-    EXPECT_EQ(table.LiveCount(), 0u) << "a null object took a slot";
-    EXPECT_EQ(table.Find(nullptr), nullptr);
-    EXPECT_TRUE(MG_Pipe::MGPipeHandleIsNull(table.HandleOf(nullptr)));
-
-    // ...and a SECOND null call is handed the same parking slot rather than destroying what the
-    // first one was given. The map arm kept its null-keyed entry until a sweep, so a table that
-    // reset here would answer differently on the two arms in the one path that documents
-    // relying on this tolerance.
-    twin = MakeShared<FakeBackendObject>();
-    twin->marker = 5;
-    auto& again = table.GetOrCreate(none);
-    ASSERT_NE(again, nullptr) << "the second null call destroyed the first one's parked twin";
-    EXPECT_EQ(again->marker, 5);
-    EXPECT_EQ(&again, &twin);
-    EXPECT_EQ(table.LiveCount(), 0u);
-}
-// P2 step e2, the backend half. A sweep is a stand-in for a death notice; this is the notice.
-// Nothing below calls CollectGarbage*: the slot comes back, and the twin goes, at the moment
-// the frontend says the object is gone - which for a texture atlas or a renderbuffer is the
-// difference between freeing a driver allocation now and freeing it 64 creations from now.
+// P2 step e2, the backend half. A sweep is a stand-in for a death notice; this is the release the
+// notice drives. It is idempotent, and it is GENERATION-EXACT: a late release for a dead handle
+// must not drop the twin of the slot's next owner.
 TEST(DirectGLESSlotTable, AnAnnouncedDeathReturnsTheSlotWithoutASweep) {
     using namespace MobileGL;
+    constexpr MG_Pipe::MGPipeKind kKind = MG_Pipe::MGPipeKind::Query;
 
     auto& slots = MG_Pipe::MGPipeSlots();
-    const Uint32 liveBefore = slots.LiveCount(MG_Pipe::MGPipeKind::Query);
+    const Uint32 liveBefore = slots.LiveCount(kKind);
 
     FakeSlotTable table;
-    auto object = MakeShared<FakeStateObject>(0x1E2A0001ull);
-    table.GetOrCreate(object) = MakeShared<FakeBackendObject>();
-    const MG_Pipe::MGPipeHandle handle = table.HandleOf(object.get());
-    ASSERT_FALSE(MG_Pipe::MGPipeHandleIsNull(handle));
-    EXPECT_EQ(slots.LiveCount(MG_Pipe::MGPipeKind::Query), liveBefore + 1u);
+    const MG_Pipe::MGPipeHandle handle = MintFor(kKind, 0x1E2A0001ull);
+    table.GetOrCreate(handle) = MakeShared<FakeBackendObject>();
+    EXPECT_EQ(slots.LiveCount(kKind), liveBefore + 1u);
 
-    // The object is STILL ALIVE here, which is the point: there is no weak_ptr test anywhere
-    // that could fire, so anything that changes is the notice's doing and nothing else's.
-    EXPECT_TRUE(FakeSlotTable::OnFrontendObjectDestroyed(object->GetLifetimeId()));
-    EXPECT_EQ(table.LiveCount(), 0u) << "the twin survived its own destroy notice";
+    EXPECT_TRUE(FakeSlotTable::ReleaseTwinByHandle(handle));
+    EXPECT_EQ(table.LiveCount(), 0u) << "the twin survived its own release";
     EXPECT_EQ(table.FindByHandle(handle), nullptr);
-    EXPECT_EQ(table.Find(object.get()), nullptr);
-    EXPECT_EQ(slots.LiveCount(MG_Pipe::MGPipeKind::Query), liveBefore)
-        << "the slot was not returned to the allocator";
+    // Idempotent: a repeated release finds nothing and says so.
+    EXPECT_FALSE(FakeSlotTable::ReleaseTwinByHandle(handle));
+    slots.Free(kKind, handle);
+    EXPECT_EQ(slots.LiveCount(kKind), liveBefore) << "the slot was not returned to the allocator";
 
-    // Idempotent: the allocator no longer maps the id, so a repeated notice frees nothing and
-    // says so - and it says so for every holder, since the notice is about the object and not
-    // about a table.
-    EXPECT_FALSE(FakeSlotTable::OnFrontendObjectDestroyed(object->GetLifetimeId()));
-
-    // A slot minted for an object that NO table holds any more - the fixture's `table = {}`
-    // drops entries without freeing - still goes back when the object dies: the id is dead and
-    // cannot be acquired again, so keeping the slot would be the process-lifetime leak the
-    // review named.
-    auto orphaned = MakeShared<FakeStateObject>(0x1E2A0002ull);
-    {
-        FakeSlotTable transient;
-        transient.GetOrCreate(orphaned) = MakeShared<FakeBackendObject>();
-    }
-    EXPECT_EQ(slots.LiveCount(MG_Pipe::MGPipeKind::Query), liveBefore + 1u);
-    orphaned.reset();
-    EXPECT_TRUE(FakeSlotTable::OnFrontendObjectDestroyed(0x1E2A0002ull))
-        << "a slot no holder had an entry for was left allocated";
-    EXPECT_EQ(slots.LiveCount(MG_Pipe::MGPipeKind::Query), liveBefore);
+    // The successor at the recycled slot, and then a LATE release naming the dead generation.
+    const MG_Pipe::MGPipeHandle successor = MintFor(kKind, 0x1E2A0002ull);
+    ASSERT_EQ(successor.Slot, handle.Slot);
+    table.GetOrCreate(successor) = MakeShared<FakeBackendObject>();
+    EXPECT_FALSE(FakeSlotTable::ReleaseTwinByHandle(handle))
+        << "a release for a dead generation dropped the slot's next owner's twin";
+    EXPECT_NE(table.FindByHandle(successor), nullptr);
+    EXPECT_TRUE(FakeSlotTable::ReleaseTwinByHandle(successor));
+    slots.Free(kKind, successor);
 }
 
 // The firing side of e2, on ALL SIX re-keyed object classes - the round-3 review's MAJOR 3.
@@ -3726,7 +3631,7 @@ TEST(DirectGLESSlotTable, EveryReKeyedObjectClassAnnouncesItsOwnDeath) {
     static Vector<std::pair<MG_Pipe::MGPipeKind, Uint64>> notices;
     notices.clear();
     const MG_State::GLState::StateObjectDeathOps recording = {
-        .OnDestroyed = [](MG_Pipe::MGPipeKind kind, Uint64 lifetimeId) {
+        .OnDestroyed = [](MG_Pipe::MGPipeKind kind, Uint64 lifetimeId, MG_Pipe::MGPipeHandle) {
             notices.emplace_back(kind, lifetimeId);
         },
     };
@@ -3837,48 +3742,50 @@ namespace {
     // and that a successor object landing on the freed slot gets a different Gen while the
     // predecessor's handle resolves to nothing.
     template <typename Registry, typename MakeObject>
-    void ExpectTheHandleArmDrivesThisKind(const char* kindName, Registry& registry, MakeObject make) {
+    void ExpectTheHandleArmDrivesThisKind(const char* kindName, MobileGL::MG_Pipe::MGPipeKind kind,
+                                          Registry& registry, MakeObject make) {
         using namespace MobileGL;
 
         auto first = make();
         ASSERT_NE(first, nullptr) << kindName;
-        auto& firstTwin = registry.GetOrCreate(first);
-        ASSERT_NE(MG_State::GLState::GetStateObjectDeathOps(), nullptr)
-            << kindName << ": twinning an object did not install the death-notice consumer";
-
-        const MG_Pipe::MGPipeHandle firstHandle = registry.HandleOf(first.get());
-        ASSERT_FALSE(MG_Pipe::MGPipeHandleIsNull(firstHandle))
-            << kindName << ": GetOrCreate on the real registry minted no handle, so this kind is "
-                           "not running on the {slot, gen} arm at all";
-        EXPECT_EQ(registry.Find(first.get()), &firstTwin)
-            << kindName << ": Find resolved a different twin slot than GetOrCreate handed back";
-        EXPECT_EQ(registry.FindByHandle(firstHandle), &firstTwin)
-            << kindName << ": the handle does not address the twin GetOrCreate handed back";
-
-        // The frontend object dies. NOTHING below sweeps - the destructor's own notice is the
-        // only thing that can free the slot, which is what makes this the e2/e3 pair end to end.
+        // The client's mint (the record would carry this handle), then the backend's adoption.
         const Uint64 firstLifetimeId = first->GetLifetimeId();
+        const MG_Pipe::MGPipeHandle firstHandle = MG_Pipe::MGPipeSlots().Acquire(kind, firstLifetimeId);
+        ASSERT_FALSE(MG_Pipe::MGPipeHandleIsNull(firstHandle)) << kindName;
+        auto* const firstTwin = registry.GetOrCreateByHandle(firstHandle);
+        ASSERT_NE(firstTwin, nullptr)
+            << kindName << ": the real registry refused a handle the client minted, so this kind is "
+                           "not running on the {slot, gen} arm at all";
+        ASSERT_NE(MG_State::GLState::GetStateObjectDeathOps(), nullptr)
+            << kindName << ": no death-notice consumer is installed";
+        EXPECT_EQ(registry.FindByHandle(firstHandle), firstTwin)
+            << kindName << ": the handle does not address the twin GetOrCreateByHandle handed back";
+
+        // The frontend object dies. NOTHING below sweeps - the destructor's own notice (which
+        // carries the handle) releases the twin and the client frees the slot after it, which is
+        // what makes this the e2/e3 pair end to end.
         first.reset();
         EXPECT_EQ(registry.FindByHandle(firstHandle), nullptr)
             << kindName << ": the twin outlived the announced death of its object";
-        EXPECT_FALSE(registry.DestroyByLifetimeId(firstLifetimeId))
+        EXPECT_TRUE(MG_Pipe::MGPipeHandleIsNull(MG_Pipe::MGPipeSlots().FindByLifetimeId(kind, firstLifetimeId)))
             << kindName << ": the slot was still held after its object announced its death";
 
         auto second = make();
         ASSERT_NE(second, nullptr) << kindName;
-        auto& secondTwin = registry.GetOrCreate(second);
-        const MG_Pipe::MGPipeHandle secondHandle = registry.HandleOf(second.get());
+        const MG_Pipe::MGPipeHandle secondHandle =
+            MG_Pipe::MGPipeSlots().Acquire(kind, second->GetLifetimeId());
         ASSERT_FALSE(MG_Pipe::MGPipeHandleIsNull(secondHandle)) << kindName;
         EXPECT_EQ(secondHandle.Slot, firstHandle.Slot)
             << kindName << ": the freed slot was not handed back, so this walk did not exercise "
                            "the recycle it exists to test";
         EXPECT_NE(secondHandle.Gen, firstHandle.Gen)
             << kindName << ": Gen did not move on slot reuse - the predecessor's handle would "
-                           "resolve to the successor's twin, which is the ABA the address key "
-                           "could only paper over";
+                           "resolve to the successor's twin";
+        auto* const secondTwin = registry.GetOrCreateByHandle(secondHandle);
+        ASSERT_NE(secondTwin, nullptr) << kindName;
         EXPECT_EQ(registry.FindByHandle(firstHandle), nullptr)
             << kindName << ": the STALE handle resolved to a twin";
-        EXPECT_EQ(registry.FindByHandle(secondHandle), &secondTwin) << kindName;
+        EXPECT_EQ(registry.FindByHandle(secondHandle), secondTwin) << kindName;
 
         second.reset();
         EXPECT_EQ(registry.FindByHandle(secondHandle), nullptr) << kindName;
@@ -3897,18 +3804,18 @@ TEST(DirectGLESSlotTable, EverySwitchedOverKindResolvesItsTwinThroughTheHandleAr
                         "null handle, so there is no {slot, gen} walk to drive";
     }
 
-    ExpectTheHandleArmDrivesThisKind("Texture", TextureImpl::g_backendTextureObjects, [] {
+    ExpectTheHandleArmDrivesThisKind("Texture", MG_Pipe::MGPipeKind::Texture, TextureImpl::g_backendTextureObjects, [] {
         return SharedPtr<ITextureObject>(MakeShared<TextureObject2D>(0u));
     });
-    ExpectTheHandleArmDrivesThisKind("Framebuffer", FramebufferImpl::g_backendFramebufferObjects,
+    ExpectTheHandleArmDrivesThisKind("Framebuffer", MG_Pipe::MGPipeKind::Framebuffer, FramebufferImpl::g_backendFramebufferObjects,
                                      [] { return MakeShared<FramebufferObject>(1u); });
-    ExpectTheHandleArmDrivesThisKind("Renderbuffer", RenderbufferImpl::g_backendRenderbufferObjects,
+    ExpectTheHandleArmDrivesThisKind("Renderbuffer", MG_Pipe::MGPipeKind::Renderbuffer, RenderbufferImpl::g_backendRenderbufferObjects,
                                      [] { return MakeShared<RenderbufferObject>(0u); });
-    ExpectTheHandleArmDrivesThisKind("SamplerCso", SamplerImpl::g_backendSamplerObjects,
+    ExpectTheHandleArmDrivesThisKind("SamplerCso", MG_Pipe::MGPipeKind::SamplerCso, SamplerImpl::g_backendSamplerObjects,
                                      [] { return MakeShared<SamplerObject>(0u); });
-    ExpectTheHandleArmDrivesThisKind("ShaderCso", PrgramImpl::g_backendProgramObjects,
+    ExpectTheHandleArmDrivesThisKind("ShaderCso", MG_Pipe::MGPipeKind::ShaderCso, PrgramImpl::g_backendProgramObjects,
                                      [] { return MakeShared<ProgramObject>(0u); });
-    ExpectTheHandleArmDrivesThisKind("VertexElementsCso", VertexArrayImpl::g_backendVertexArrayObjects,
+    ExpectTheHandleArmDrivesThisKind("VertexElementsCso", MG_Pipe::MGPipeKind::VertexElementsCso, VertexArrayImpl::g_backendVertexArrayObjects,
                                      [] { return MakeShared<VertexArrayObject>(0u); });
 
     // P3a: the SEVENTH table, and the only one the helper above cannot drive - which is the
@@ -4004,10 +3911,6 @@ TEST(DirectGLESSlotTable, EverySwitchedOverKindResolvesItsTwinThroughTheHandleAr
         const BackendSamplerViewObject* const firstRaw = firstTwin.get();
         EXPECT_EQ(table.FindByHandle(first), &firstTwin)
             << "SamplerViewCso: the handle does not address the twin GetOrCreate handed back";
-        EXPECT_EQ(table.HandleOf(owner.get()), first)
-            << "SamplerViewCso: HandleOf did not resolve the view minted off this texture's "
-               "lifetime id, so a backend path that still arrives holding the object cannot find "
-               "its view";
 
         const SharedPtr<BackendSamplerViewObject> released = table.ReleaseByHandle(first);
         EXPECT_NE(released, nullptr) << "SamplerViewCso: delete_sampler_view found no twin to retire";
@@ -4106,21 +4009,21 @@ TEST(DirectGLESSlotTable, ADeathNoticeForEveryP4aKindIsIdempotent) {
         g_backendSamplerViews.GetOrCreate(view) = MakeShared<BackendSamplerViewObject>();
         ASSERT_NE(g_backendSamplerViews.FindByHandle(view), nullptr);
 
-        ops->OnDestroyed(MG_Pipe::MGPipeKind::SamplerViewCso, lifetimeId);
+        ops->OnDestroyed(MG_Pipe::MGPipeKind::SamplerViewCso, lifetimeId, view);
         EXPECT_EQ(g_backendSamplerViews.FindByHandle(view), nullptr)
             << "the sampler-view notice left the twin behind, so the slot's next owner would "
                "inherit a dead texture's resolved view";
+
+        // The second path, in the order the client's helper runs it: the notice, then the Free
+        // (since P13 the notice releases by handle and never frees - the slot is the client's).
+        // A redundant notice before and after the Free finds nothing to release.
+        ops->OnDestroyed(MG_Pipe::MGPipeKind::SamplerViewCso, lifetimeId, view);
+        MG_Pipe::MGPipeSlots().Free(MG_Pipe::MGPipeKind::SamplerViewCso, view);
+        ops->OnDestroyed(MG_Pipe::MGPipeKind::SamplerViewCso, lifetimeId, view);
+        EXPECT_EQ(g_backendSamplerViews.FindByHandle(view), nullptr);
         EXPECT_TRUE(MG_Pipe::MGPipeHandleIsNull(
             MG_Pipe::MGPipeSlots().FindByLifetimeId(MG_Pipe::MGPipeKind::SamplerViewCso, lifetimeId)))
-            << "the notice did not return the slot";
-
-        // The second path. The client's helper calls Free right after raising the notice, and a
-        // Free on a slot that is no longer live at that generation is a proven no-op
-        // (SlotAllocator.cpp:117-119) - so this is the shape that actually ships, twice over.
-        ops->OnDestroyed(MG_Pipe::MGPipeKind::SamplerViewCso, lifetimeId);
-        MG_Pipe::MGPipeSlots().Free(MG_Pipe::MGPipeKind::SamplerViewCso, view);
-        ops->OnDestroyed(MG_Pipe::MGPipeKind::SamplerViewCso, lifetimeId);
-        EXPECT_EQ(g_backendSamplerViews.FindByHandle(view), nullptr);
+            << "the Free did not return the slot";
 
         // And the slot really is back: a successor gets it with a moved generation, which is
         // the property a double free would break by skipping one.
@@ -4154,15 +4057,20 @@ TEST(DirectGLESSlotTable, ADeathNoticeForEveryP4aKindIsIdempotent) {
         auto sampler = MakeShared<SamplerObject>(0u);
         auto program = MakeShared<ProgramObject>(0u);
 
-        TextureImpl::g_backendTextureObjects.GetOrCreate(SharedPtr<ITextureObject>(texture));
-        RenderbufferImpl::g_backendRenderbufferObjects.GetOrCreate(renderbuffer);
-        FramebufferImpl::g_backendFramebufferObjects.GetOrCreate(framebuffer);
-        SamplerImpl::g_backendSamplerObjects.GetOrCreate(sampler);
-        PrgramImpl::g_backendProgramObjects.GetOrCreate(program);
-
+        // The client's mint, then the backend's adoption by that handle.
         const auto handleFor = [](MG_Pipe::MGPipeKind kind, Uint64 lifetimeId) {
-            return MG_Pipe::MGPipeSlots().FindByLifetimeId(kind, lifetimeId);
+            return MG_Pipe::MGPipeSlots().Acquire(kind, lifetimeId);
         };
+        (void)TextureImpl::g_backendTextureObjects.GetOrCreateByHandle(
+            handleFor(MG_Pipe::MGPipeKind::Texture, texture->GetLifetimeId()));
+        (void)RenderbufferImpl::g_backendRenderbufferObjects.GetOrCreateByHandle(
+            handleFor(MG_Pipe::MGPipeKind::Renderbuffer, renderbuffer->GetLifetimeId()));
+        (void)FramebufferImpl::g_backendFramebufferObjects.GetOrCreateByHandle(
+            handleFor(MG_Pipe::MGPipeKind::Framebuffer, framebuffer->GetLifetimeId()));
+        (void)SamplerImpl::g_backendSamplerObjects.GetOrCreateByHandle(
+            handleFor(MG_Pipe::MGPipeKind::SamplerCso, sampler->GetLifetimeId()));
+        (void)PrgramImpl::g_backendProgramObjects.GetOrCreateByHandle(
+            handleFor(MG_Pipe::MGPipeKind::ShaderCso, program->GetLifetimeId()));
         cases.push_back({"Texture", MG_Pipe::MGPipeKind::Texture, texture->GetLifetimeId(),
                          handleFor(MG_Pipe::MGPipeKind::Texture, texture->GetLifetimeId())});
         cases.push_back({"Renderbuffer", MG_Pipe::MGPipeKind::Renderbuffer, renderbuffer->GetLifetimeId(),
@@ -4186,9 +4094,9 @@ TEST(DirectGLESSlotTable, ADeathNoticeForEveryP4aKindIsIdempotent) {
         EXPECT_TRUE(MG_Pipe::MGPipeHandleIsNull(
             MG_Pipe::MGPipeSlots().FindByLifetimeId(one.kind, one.lifetimeId)))
             << one.name << ": the object's own death did not return its slot";
-        // Second and third deliveries: nothing to resolve, nothing to free, no abort.
-        ops->OnDestroyed(one.kind, one.lifetimeId);
-        ops->OnDestroyed(one.kind, one.lifetimeId);
+        // Second and third deliveries of the dead handle: nothing to release, no abort.
+        ops->OnDestroyed(one.kind, one.lifetimeId, one.handle);
+        ops->OnDestroyed(one.kind, one.lifetimeId, one.handle);
         EXPECT_TRUE(MG_Pipe::MGPipeHandleIsNull(
             MG_Pipe::MGPipeSlots().FindByLifetimeId(one.kind, one.lifetimeId)))
             << one.name << ": a redundant notice resurrected a mapping";
@@ -4227,10 +4135,10 @@ TEST(DirectGLESSlotTable, ASavedCopyOfARealRegistryDropsTheTwinOnTheSameNotice) 
 
     auto& registry = TextureImpl::g_backendTextureObjects;
     SharedPtr<ITextureObject> texture = MakeShared<TextureObject2D>(0u);
-    auto& twin = registry.GetOrCreate(texture);
-    (void)twin;
-    const MG_Pipe::MGPipeHandle handle = registry.HandleOf(texture.get());
+    const MG_Pipe::MGPipeHandle handle =
+        MG_Pipe::MGPipeSlots().Acquire(MG_Pipe::MGPipeKind::Texture, texture->GetLifetimeId());
     ASSERT_FALSE(MG_Pipe::MGPipeHandleIsNull(handle));
+    ASSERT_NE(registry.GetOrCreateByHandle(handle), nullptr);
 
     // The fixture's shape: copy the registry while the twin is live.
     auto saved = registry;
@@ -4241,7 +4149,6 @@ TEST(DirectGLESSlotTable, ASavedCopyOfARealRegistryDropsTheTwinOnTheSameNotice) 
     EXPECT_EQ(registry.FindByHandle(handle), nullptr) << "the registry global kept the twin";
     EXPECT_EQ(saved.FindByHandle(handle), nullptr)
         << "the saved copy kept the dead texture's twin - the dispatcher told one holder only";
-    EXPECT_FALSE(registry.DestroyByLifetimeId(0)) << "sanity: a null id frees nothing";
 }
 
 

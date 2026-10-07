@@ -37,8 +37,11 @@ namespace MobileGL::MG_State::GLState {
 
     struct StateObjectDeathOps {
         // The last SharedPtr to the frontend object with this lifetime id has dropped.
-        // Called from the object's destructor, so the object must NOT be touched.
-        void (*OnDestroyed)(MG_Pipe::MGPipeKind kind, Uint64 lifetimeId) = nullptr;
+        // Called from the object's destructor, so the object must NOT be touched. `handle` is
+        // the object's {slot, gen} of this kind, resolved by the caller while it still
+        // resolves (null when the object never had one); P13 keys the backend's twin release
+        // on it, so no consumer probes the allocator by lifetime id.
+        void (*OnDestroyed)(MG_Pipe::MGPipeKind kind, Uint64 lifetimeId, MG_Pipe::MGPipeHandle handle) = nullptr;
     };
 
     inline const StateObjectDeathOps* g_stateObjectDeathOps = nullptr;
@@ -51,10 +54,11 @@ namespace MobileGL::MG_State::GLState {
         return g_stateObjectDeathOps;
     }
 
-    inline void NotifyStateObjectDestroyed(MG_Pipe::MGPipeKind kind, Uint64 lifetimeId) {
+    inline void NotifyStateObjectDestroyed(MG_Pipe::MGPipeKind kind, Uint64 lifetimeId,
+                                           MG_Pipe::MGPipeHandle handle) {
         const StateObjectDeathOps* ops = g_stateObjectDeathOps;
         if (ops == nullptr || ops->OnDestroyed == nullptr) return;
-        ops->OnDestroyed(kind, lifetimeId);
+        ops->OnDestroyed(kind, lifetimeId, handle);
     }
 
 } // namespace MobileGL::MG_State::GLState

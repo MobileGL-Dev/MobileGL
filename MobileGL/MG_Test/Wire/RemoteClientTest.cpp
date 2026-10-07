@@ -2343,36 +2343,6 @@ namespace {
                                                  MGPipeKind::Texture>;
 } // namespace
 
-TEST(RemoteGuards, SlotTableHandleOfFromTheApplyThreadIsFatalByName) {
-    const auto child = RunInChild([] {
-        StartControlSession();
-        Srv::ServerLoopInstance().RunProbeOnApplyThreadForTesting([](void*) {
-            MG_State::pGLContext = MakeUnique<MG_State::GLState::GLContext>();
-            TestTextureTable table;
-            MG_State::GLState::TextureObject2D tex(44);
-            table.HandleOf(&tex);
-            return MOBILEGL_OK;
-        }, nullptr);
-        ClientSessionInstance().Stop();
-    });
-    ExpectNamedAbort(child, "Fatal{RoleViolation, \"MGPipeSlots\"}");
-}
-
-TEST(RemoteGuards, SlotTableMintingGetOrCreateFromTheApplyThreadIsFatalByName) {
-    const auto child = RunInChild([] {
-        StartControlSession();
-        Srv::ServerLoopInstance().RunProbeOnApplyThreadForTesting([](void*) {
-            MG_State::pGLContext = MakeUnique<MG_State::GLState::GLContext>();
-            TestTextureTable table;
-            auto tex = MakeShared<MG_State::GLState::TextureObject2D>(45);
-            table.GetOrCreate(tex);
-            return MOBILEGL_OK;
-        }, nullptr);
-        ClientSessionInstance().Stop();
-    });
-    ExpectNamedAbort(child, "Fatal{RoleViolation, \"MGPipeSlots\"}");
-}
-
 // The four accessor drives share one shape: the BufferObject is constructed on the CLIENT
 // thread (its own resource_create publication is a legal client-side emit), and only the
 // accessor runs on the apply thread, where it must die at the accessor's own guard.
@@ -2385,9 +2355,8 @@ MGL_BUFFER_GUARD_TEST(BufferSyncPersistentMappedRangeFromTheApplyThreadIsFatalBy
 MGL_BUFFER_GUARD_TEST(BufferHasDefinedContentFromTheApplyThreadIsFatalByName, 707, (void)buffer.HasDefinedContent())
 #undef MGL_BUFFER_GUARD_TEST
 
-// Historical P5d/P5e probes remain named for compatibility. P5f retires both
-// scope exemptions, including barriered records; all allocator access on apply is
-// client-memory access regardless of whether that memory happens to be stable.
+// All allocator access on apply is client-memory access regardless of whether that memory
+// happens to be stable (P5f), so the allocator refuses it by name.
 TEST(RemoteGuards, AnAllocatorProbeFromTheApplyThreadOutsideEveryScopeIsFatalByName) {
     const auto child = RunInChild([] {
         StartControlSession();
@@ -2402,38 +2371,8 @@ TEST(RemoteGuards, AnAllocatorProbeFromTheApplyThreadOutsideEveryScopeIsFatalByN
     ExpectNamedAbort(child, "Fatal{RoleViolation, \"MGPipeSlots\"}");
 }
 
-// Construct on the client and run only HandleOf on apply. The false barrier stamp
-// keeps the original P5e scenario; the tests below add the old barriered loophole.
-TEST(RemoteGuards, AnAllocatorProbeInsideAnExemptionScopeFromTheApplyThreadIsFatalEvenAtTheOldDebtSites) {
-    struct Probe {
-        TestTextureTable* table;
-        MG_State::GLState::TextureObject2D* texture;
-    };
-    const auto child = RunInChild([] {
-        StartControlSession();
-        MG_State::GLState::TextureObject2D texture(46);
-        TestTextureTable table;
-        Probe probe{&table, &texture};
-        Srv::ServerLoopInstance().RunProbeOnApplyThreadForTesting(
-            +[](void* self) -> MobileGLResult {
-                auto& probe = *static_cast<Probe*>(self);
-                // The record being applied is one the client did NOT park behind. The stamp is
-                // the thread_local the sink writes (ID-103), so setting it here puts this
-                // thread in exactly the state an unbarriered apply is in.
-                MG_Pipe::MGPipeApplierSetCurrentRecordBarriered(false);
-                const MG_Pipe::MGPipeFrontendKeyedRegistryScope frontendKeyedRegistry;
-                probe.table->HandleOf(probe.texture);
-                return MOBILEGL_OK;
-            },
-            &probe);
-        ClientSessionInstance().Stop();
-    });
-    ExpectNamedAbort(child, "Fatal{RoleViolation, \"MGPipeSlots\"}");
-}
-
-// P5f (fr): barriers and old named scopes no longer admit frontend identity.
-// Construct the object and table on the client so each death comes from the exact
-// probed member, not a constructor's resource_create or a missing record.
+// P5f (fr): a barriered record does not admit the client allocator either (the named scopes
+// that once exempted it were deleted at P13, with the last frontend-keyed backend entry).
 TEST(RemoteGuards, BarrieredLegacyScopesCannotExemptAllocator) {
     for (const auto backend : {BackendType::DirectGLES, BackendType::DirectVulkan}) {
         const auto child = RunInChild([backend] {
@@ -2442,8 +2381,6 @@ TEST(RemoteGuards, BarrieredLegacyScopesCannotExemptAllocator) {
             Srv::ServerLoopInstance().RunProbeOnApplyThreadForTesting(+[](void* self) -> MobileGLResult {
                 MG_Pipe::MGPipeApplierSetCurrentRecordBarriered(true);
                 MG_Config::ActiveBackendType = *static_cast<BackendType*>(self);
-                const MG_Pipe::MGPipeFrontendKeyedRegistryScope registryScope;
-                const MG_Pipe::MagmaP7AllocatorDebtScope magmaScope;
                 // HighWater had no per-method guard in the old implementation.
                 (void)MGPipeSlots().HighWater(MGPipeKind::Texture);
                 return MOBILEGL_OK;
@@ -2451,71 +2388,6 @@ TEST(RemoteGuards, BarrieredLegacyScopesCannotExemptAllocator) {
             ClientSessionInstance().Stop();
         });
         ExpectNamedAbort(child, "Fatal{RoleViolation, \"MGPipeSlots\"}");
-    }
-}
-
-TEST(RemoteGuards, BarrieredFrontendRegistryMembersRefuseBothLegacyScopes) {
-    struct Probe {
-        TestTextureTable* table;
-        SharedPtr<MG_State::GLState::TextureObject2D>* texture;
-        MGPipeHandle handle;
-        int operation;
-    };
-    const char* members[] = {"HandleOf", "GetOrCreate(StatePtr)", "NoteStateForHandle", "StateForHandle"};
-    for (int operation = 0; operation != 4; ++operation) {
-        SCOPED_TRACE(members[operation]);
-        const auto child = RunInChild([operation] {
-            StartControlSession();
-            auto texture = MakeShared<MG_State::GLState::TextureObject2D>(47);
-            TestTextureTable table;
-            table.GetOrCreate(texture) = MakeShared<FakeTwin>();
-            Probe probe{&table, &texture, table.HandleOf(texture.get()), operation};
-            Srv::ServerLoopInstance().RunProbeOnApplyThreadForTesting(+[](void* self) -> MobileGLResult {
-                auto& probe = *static_cast<Probe*>(self);
-                MG_Pipe::MGPipeApplierSetCurrentRecordBarriered(true);
-                MG_Config::ActiveBackendType = BackendType::DirectVulkan;
-                const MG_Pipe::MGPipeFrontendKeyedRegistryScope registryScope;
-                const MG_Pipe::MagmaP7AllocatorDebtScope magmaScope;
-                switch (probe.operation) {
-                case 0: probe.table->HandleOf(probe.texture->get()); break;
-                case 1: probe.table->GetOrCreate(*probe.texture); break;
-                case 2: probe.table->NoteStateForHandle(probe.handle, *probe.texture); break;
-                case 3: probe.table->StateForHandle(probe.handle); break;
-                }
-                return MOBILEGL_OK;
-            }, &probe);
-            ClientSessionInstance().Stop();
-        });
-        ExpectNamedAbort(child, "Fatal{RoleViolation, \"MGPipeSlots\"}");
-        EXPECT_NE(child.Log.find(std::string{"BackendSlotTable::"} + members[operation]), std::string::npos);
-    }
-}
-
-TEST(RemoteGuards, LegacyRegistryWrapperCannotExposeFrontendKeysOnApply) {
-    using Registry = MG_Backend::DirectGLES::StateBackendObjectRegistry<
-        MG_State::GLState::TextureObject2D, FakeTwin, MGPipeKind::Texture>;
-    struct Probe { Registry* registry; SharedPtr<MG_State::GLState::TextureObject2D>* texture; int operation; };
-    for (int operation = 0; operation != 3; ++operation) {
-        const auto child = RunInChild([operation] {
-            StartControlSession();
-            auto texture = MakeShared<MG_State::GLState::TextureObject2D>(48);
-            Registry registry;
-            Probe probe{&registry, &texture, operation};
-            Srv::ServerLoopInstance().RunProbeOnApplyThreadForTesting(+[](void* self) -> MobileGLResult {
-                auto& probe = *static_cast<Probe*>(self);
-                MG_Pipe::MGPipeApplierSetCurrentRecordBarriered(true);
-                const MG_Pipe::MGPipeFrontendKeyedRegistryScope scope;
-                switch (probe.operation) {
-                case 0: probe.registry->Find(probe.texture->get()); break;
-                case 1: probe.registry->GetOrCreate(*probe.texture); break;
-                case 2: (void)probe.registry->begin(); break;
-                }
-                return MOBILEGL_OK;
-            }, &probe);
-            ClientSessionInstance().Stop();
-        });
-        ExpectNamedAbort(child, "Fatal{RoleViolation, \"MGPipeSlots\"}");
-        EXPECT_NE(child.Log.find("BackendSlotTable::Registry."), std::string::npos);
     }
 }
 
@@ -2545,22 +2417,6 @@ TEST(RemoteGuards, HandleRegistryMembersWorkOnBarrieredAndUnbarrieredApply) {
     });
     ASSERT_TRUE(WIFEXITED(child.Status)) << child.Log;
     EXPECT_EQ(WEXITSTATUS(child.Status), 0) << child.Log;
-}
-
-// A marker held by the GL thread never affects the apply guard either.
-TEST(RemoteGuards, AnExemptionScopeHeldOnTheGLThreadDoesNotExemptTheApplyThread) {
-    const auto child = RunInChild([] {
-        StartControlSession();
-        const MG_Pipe::MGPipeFrontendKeyedRegistryScope frontendKeyedRegistry;
-        Srv::ServerLoopInstance().RunProbeOnApplyThreadForTesting(
-            +[](void*) -> MobileGLResult {
-                MG_Pipe::MGPipeRefuseAllocatorFromApplyThread("FindByLifetimeId");
-                return MOBILEGL_OK;
-            },
-            nullptr);
-        ClientSessionInstance().Stop();
-    });
-    ExpectNamedAbort(child, "Fatal{RoleViolation, \"MGPipeSlots\"}");
 }
 
 TEST(RemoteGuards, CapsMirrorFallbackWithNoServerBackendIsFatalByName) {

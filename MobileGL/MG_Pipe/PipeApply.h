@@ -1019,6 +1019,16 @@ namespace MobileGL::MG_Pipe {
     // is byte-for-byte the old behaviour.
     MGPipeApplierState& MGPipeApplier();
 
+    // P13 W6: the backend's "my capabilities changed" notice, without naming the frontend. A
+    // backend whose advertised limits / extensions move after a context exists (Magma's caps
+    // re-query) calls MGPipeNotifyCompileEnvChanged(); the frontend registers the hook that
+    // invalidates its shader compile environment (PipeFill.cpp, static registration). Under a
+    // transport no hook is registered on the server side and the client invalidates on the caps
+    // re-publication instead (CONTRACT-P5C §4.2), so the notice is a no-op there.
+    using MGPipeCompileEnvChangedHook = void (*)();
+    void MGPipeSetCompileEnvChangedHook(MGPipeCompileEnvChangedHook hook);
+    void MGPipeNotifyCompileEnvChanged();
+
     // =====================================================================================
     // P14 S5 (docs/Disaggregated/design/11-state-ownership.md): WHOSE APPLIER IS IT?
     // =====================================================================================

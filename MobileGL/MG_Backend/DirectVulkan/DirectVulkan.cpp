@@ -87,7 +87,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // What leaked was the SERVER's twin: a framebuffer has NO wire delete opcode at all
         // (BRIEF-P4A D-I2), so `object_death` is its only death delivery, and without a
         // consumer here the server's record stayed Live for the life of the session.
-        void OnMagmaFrontendStateObjectDestroyed(MG_Pipe::MGPipeKind kind, Uint64 lifetimeId) {
+        void OnMagmaFrontendStateObjectDestroyed(MG_Pipe::MGPipeKind kind, Uint64 lifetimeId,
+                                                 MG_Pipe::MGPipeHandle /*handle*/) {
             // Monolith has no record to emit and no server twin to tell.
             if (MG_Config::Transport == MG_Config::TransportMode::Monolith) return;
             // Raised ON the apply thread: the server role destroying a frontend object it

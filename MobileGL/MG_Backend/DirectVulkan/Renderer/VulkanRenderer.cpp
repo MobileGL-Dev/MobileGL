@@ -47,8 +47,6 @@
 #include <MG_Pipe/PipeSessionFail.h>
 // P5c (T5 / tx): the server's staged-texture shadow GenerateMipmap defines its chain on.
 #include <MG_Backend/Record/StagedTextureStore.h>
-// P5c (G6): the named-blit arm's endpoint resolution runs inside the frontend-keyed scope.
-#include <MG_Impl/Pipe/SlotAllocator.h>
 // P7 wave 2 package B3: rule I's tally for WireDraw.inc's silent draw drops.
 #include "WireDeclineTally.h"
 #include "WireColorBlitFilter.h"
@@ -4919,7 +4917,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Uint32 slot = freeSlot;
         if (slot == kNoSlot) {
             for (Uint32 candidate = 0; candidate < kNoSlot; ++candidate) {
-                if (MG_Pipe::gPipeInputs.HasOpenTransformFeedbackSpan(m_xfbCounterSlotOwner[candidate])) {
+                if (m_xfbCounterSlotOwner[candidate] != 0 &&
+                    MG_Pipe::MGPipeApplier().StreamOutputSpans.count(m_xfbCounterSlotOwner[candidate]) != 0) {
                     continue;
                 }
                 if (slot == kNoSlot || m_xfbCounterSlotLastUse[candidate] < m_xfbCounterSlotLastUse[slot]) {

@@ -40,6 +40,11 @@ regression this gate exists to catch: new backend code reaching into a frontend 
 symbols that disappeared, with an instruction to re-baseline in the same commit. Progress is
 never a red build; new reach always is.
 
+THE P13 EXIT GATE. A baseline line annotated `# P13` named a debt that only P13's module work
+could clear. P13 cleared every one, so --assert-monotone now also fails on ANY `# P13`
+annotation left in (or put back into) the baseline: that class of debt has no later phase to
+wait for.
+
 GUARD RAILS. The build must be a disaggregated one
 (-DMOBILEGL_BUILD_DISAGGREGATED=ON -DMOBILEGL_BUILD_DISAGGREGATED_INPROC=ON; every build pushes
 since P13 W3a, so MOBILEGL_PIPE_PUSH is no longer an option to check): with the option OFF, MG_Remote is not compiled at all, the SERVER set
@@ -176,10 +181,15 @@ A6_TOTAL = 184
 # known object path rather than by splitting the whole line.
 NM_BODY_RE = re.compile(r"^\s*([0-9a-fA-F]*)\s+([A-Za-z?])\s(.+)$")
 
-# A baseline line may carry a trailing ` # note` annotation (ID-P7-7 asks for `# P13` on the
-# symbols that cannot fall before P13). No demangled C++ name contains " #", so splitting on
+# A baseline line may carry a trailing ` # note` annotation (ID-P7-7 asked for `# P13` on the
+# symbols that could not fall before P13). No demangled C++ name contains " #", so splitting on
 # the first occurrence is unambiguous.
 BASELINE_ANNOTATION = " #"
+
+
+def p13_debts(notes):
+    """The baseline symbols still annotated `# P13` - none may remain after P13 (exit gate)."""
+    return sorted(symbol for symbol, note in notes.items() if note.split()[:1] == ["P13"])
 
 REQUIRED_FLAGS = (
     ("MOBILEGL_BUILD_DISAGGREGATED", "ON"),
@@ -628,6 +638,11 @@ def self_test():
             problems.append("baseline annotation not read: {}".format(notes))
         if len(notes) != 2:
             problems.append("baseline annotations: {}".format(notes))
+        if p13_debts(notes) != ["MobileGL::MG_Pipe::MGPipeSlots()",
+                                "MobileGL::Vec4<int>::Vec4(int, int, int, int)"]:
+            problems.append("P13 exit gate did not name both `# P13` lines: {}".format(p13_debts(notes)))
+        if p13_debts({"x": "P13x", "y": "kept for P14"}):
+            problems.append("P13 exit gate matched a note that is not a `# P13` annotation")
     finally:
         os.unlink(tmp)
 
@@ -808,6 +823,14 @@ def main():
                 say("       referred by: " + ", ".join(result["referrers"][symbol]))
         if args.assert_monotone and new:
             exit_code = 1
+        p13 = p13_debts(baseline_notes)
+        if p13:
+            say("{} baseline symbol(s) still carry a `# P13` annotation; P13 closed that class of "
+                "debt, so none may remain:".format(len(p13)))
+            for symbol in p13:
+                say("  P13: " + symbol)
+            if args.assert_monotone:
+                exit_code = 1
         if not new and not gone:
             say("ratchet: unchanged at {} symbol(s)".format(len(result["symbols"])))
 
@@ -850,7 +873,8 @@ def main():
         say("json written to " + args.json)
 
     if exit_code:
-        say("FAIL --assert-monotone: {} new frontend symbol(s) (named above)".format(len(new)))
+        say("FAIL --assert-monotone: {} new frontend symbol(s), {} `# P13` annotation(s) (named "
+            "above)".format(len(new), len(p13_debts(baseline_notes))))
     return exit_code
 
 
@@ -871,8 +895,8 @@ def write_baseline(path, symbols, notes, cache_values, build_dir):
             "# count       : {}\n"
             "#\n"
             "# One demangled symbol per line. A trailing ` # note` is an annotation the parser\n"
-            "# ignores; `# P13` marks a symbol that cannot fall before P13 establishes module\n"
-            "# target boundaries. The LIST is the baseline, not the count: a ratchet that\n"
+            "# ignores. `# P13` (debts only P13's module work could clear) is refused since\n"
+            "# P13 closed them. The LIST is the baseline, not the count: a ratchet that\n"
             "# stored only a number would go green on the day one symbol is cleared and another\n"
             "# added (ID-P7-7).\n".format(
                 head, flags, (cache_values or {}).get("CMAKE_BUILD_TYPE", "?"), build_dir,

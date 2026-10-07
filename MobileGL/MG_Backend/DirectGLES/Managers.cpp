@@ -211,22 +211,17 @@ namespace MobileGL::MG_Backend::DirectGLES {
     }
 
     namespace {
-        // P2 step e2's dispatcher: the frontend told us an object died, so free its slot and
-        // drop its twin NOW. One entry point for all six kinds, because the answer is the same
-        // for all six - which is why the notice carries the kind rather than there being six
-        // ops tables.
-        //
-        // Each arm below names the registry GLOBAL of its kind, but DestroyByLifetimeId is
-        // static: it is answered by every table of that kind that exists at the moment - the
-        // global's own and any by-value copy a fixture or a context reset is holding - and
-        // the slot goes back once, after all of them have let go (SlotTables.h, the holder
-        // list). Naming one instance here is a spelling, not a choice of holder.
+        // P2 step e2's dispatcher: the frontend told us an object died, so drop its twin NOW.
+        // One entry point for all six kinds, because the answer is the same for all six - which
+        // is why the notice carries the kind rather than there being six ops tables. The release
+        // is by the handle the notice carries and reaches every holder of the kind (SlotTables.h,
+        // the holder list); the client frees the slot afterwards.
         //
         // A notice that arrives after exit() has begun is dropped: past that point the twin's
         // destructor must not call into the driver (see InProcessTeardown()), and the process
-        // is about to hand every GPU object back anyway. That twin is a deliberate leak, not
-        // garbage for a later collection - there is none on this arm.
-        void OnFrontendStateObjectDestroyed(MG_Pipe::MGPipeKind kind, Uint64 lifetimeId) {
+        // is about to hand every GPU object back anyway. That twin is a deliberate leak.
+        void OnFrontendStateObjectDestroyed(MG_Pipe::MGPipeKind kind, Uint64 lifetimeId,
+                                            MG_Pipe::MGPipeHandle handle) {
             if (InProcessTeardown()) return;
 #if MOBILEGL_BUILD_DISAGGREGATED
             // P5c (ct), CONTRACT-P5C.md §5.2: with an active transport the death crosses AS A
@@ -241,109 +236,22 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // nor the client's allocator is touched from there any more.
             if (MG_Config::Transport != MG_Config::TransportMode::Monolith &&
                 !MG_Remote::Server::ServerLoop::OnApplyThread()) {
-                // P5e (id), CONTRACT-P5E §4.4: THE RECORD IS THE ONLY DELIVERY NOW. What used
-                // to sit here was a mailbox hop for the ONE shape the record cannot carry - a
-                // transport configured with no client session at all, i.e. a ServerLoop
-                // fixture driving a server role with no client, never a real split (there a
-                // session exists whenever the server does). It posted a stack struct to the
-                // apply thread, which re-entered this function and ran the switch below; that
-                // switch's DestroyByLifetimeId probes and FREES in the CLIENT'S allocator from
-                // the apply thread, which is precisely the read P5e is retiring - and it is
-                // not a read a barrier could ever make safe, because under run-ahead there is
-                // no wait behind which the allocator stands still.
-                //
-                // WHAT REPLACES IT: nothing, and that is the answer rather than an omission. A
-                // fixture with no client session has no client allocator worth the name and no
-                // handle ever crossed, so there is no twin the server built from a record; its
-                // twins die with the backend at Stop (InProcessTeardown / the registry's own
-                // destruction), which is what already happened for every death raised past
-                // `Running() == false`. ID-96 enumerates the fixtures this changed and what
-                // each one drives instead; every one of them now drives `object_death` by
-                // handle through the applier, which is the delivery a real split uses.
-                // ID-96, ANSWERED BY MEASUREMENT: the set of fixtures that lose death delivery
-                // here is EMPTY. A probe that aborted in exactly this branch (NoSession with a
-                // RUNNING server loop, i.e. the only shape the deleted hop ever fired for) was
-                // run over the whole unit lane (2204 entries) and the whole integration-split
-                // lane (111) and never fired once. The one fixture family that could reach it -
-                // ServerLoopTest.cpp's ServerFixture / EglServerFixture, the only server role in
-                // the tree with no client session - has exactly one case that lets a re-keyed
-                // frontend object die off the apply thread
-                // (ServerLoopEglTest.FrontendFramebufferDeathDeletesOnTheContextOwner), and that
-                // case is already refused at its FIRST step by P5c's allocator guard, so its
-                // `framebuffer.reset()` was unreachable at 2fde7034 too.
+                // P5e (id), CONTRACT-P5E §4.4: THE RECORD IS THE ONLY DELIVERY. A server role
+                // with no client session (a ServerLoop fixture) has no twin built from a record,
+                // so it has nothing to release here; its twins die with the backend at Stop.
                 (void)MG_Remote::Client::EmitObjectDeathRecord(kind, lifetimeId);
                 return;
             }
             // Falling through HERE under a transport means the death was raised ON the apply
-            // thread - the server backend destroying a frontend object it created itself
-            // (Magma's hidden blit/depth-mipmap resources). Those sites carry their own named
-            // scope (MagmaP7AllocatorDebtScope), so the allocator probe below is admitted
-            // there and refused everywhere else; this function no longer opens a scope of its
-            // own, because the one arm that needed it is the mailbox hop that just went.
+            // thread - the server backend destroying a frontend object it created itself.
 #endif
-            switch (kind) {
-            case MG_Pipe::MGPipeKind::Texture:
-                TextureImpl::g_backendTextureObjects.DestroyByLifetimeId(lifetimeId);
-                break;
-            case MG_Pipe::MGPipeKind::Framebuffer:
-                FramebufferImpl::g_backendFramebufferObjects.DestroyByLifetimeId(lifetimeId);
-                break;
-            case MG_Pipe::MGPipeKind::Renderbuffer:
-                RenderbufferImpl::g_backendRenderbufferObjects.DestroyByLifetimeId(lifetimeId);
-                break;
-            case MG_Pipe::MGPipeKind::SamplerCso:
-                SamplerImpl::g_backendSamplerObjects.DestroyByLifetimeId(lifetimeId);
-                break;
-            case MG_Pipe::MGPipeKind::ShaderCso:
-                PrgramImpl::g_backendProgramObjects.DestroyByLifetimeId(lifetimeId);
-                break;
-            case MG_Pipe::MGPipeKind::SamplerViewCso:
-                // P4a (D-I1, D5): the sixth kind, and the only one whose notice names a
-                // lifetime id that belongs to ANOTHER object - a sampler view is minted off its
-                // texture's id, one per ITextureObject, so ~TextureObjectBase raises this arm
-                // and the texture arm above from the same id. That is legal precisely because
-                // the two kinds have separate slot spaces, and it is why the two arms are
-                // written out separately rather than folded: the allocator resolves
-                // (kind, lifetimeId), so each finds its own slot or nothing.
-                //
-                // IDEMPOTENT, like every arm here. This is the REDUNDANT SECOND PATH: the
-                // client's MGPipeEmitSamplerViewCsoDestroyAndFree emits delete_sampler_view,
-                // raises this notice and frees the slot, in that order. Whichever of the two
-                // frees first wins; the other resolves nothing, because the allocator erases
-                // its lifetimeId -> slot mapping on Free and OnFrontendObjectDestroyed answers
-                // false for a handle it cannot resolve. This twin owns no driver id at all, so
-                // even a double release is a pointer reset.
-                SamplerViewImpl::BackendSamplerViewTable::OnFrontendObjectDestroyed(lifetimeId);
-                break;
-            case MG_Pipe::MGPipeKind::VertexElementsCso:
-                // P3a C-1: this is now the SECOND path, not the only one. The client speaks the
-                // whole death itself (MGPipeEmitVertexElementsDestroyAndFree: delete the
-                // applier record, raise this notice, free the slot), because the slot is minted
-                // client-side on every backend and a backend that installs no death ops - which
-                // Magma did not until P7 wave 2 package C, and whose table even now only EMITS
-                // the wire record - otherwise leaked the slot and the record per VAO for the
-                // life of the process. What is left here is the one thing only this
-                // side can do: drop the driver VAO the twin owns. It is raised while the handle
-                // still resolves, so OnFrontendObjectDestroyed's shared free (which the other
-                // five kinds still depend on) is simply the one that gets there first; the
-                // client's own Free right after it is then a no-op, because Free refuses a slot
-                // that is no longer live at that generation and the Gen bump rides the next
-                // handout rather than the free. Double release, no corruption, no abort.
-                VertexArrayImpl::g_backendVertexArrayObjects.DestroyByLifetimeId(lifetimeId);
-                break;
-            default:
-                // Buffer death crosses as ResourceDestroy (P3a): the catalogue has a call for
-                // it, so no seventh NotifyStateObjectDestroyed raiser is added. The notice
-                // exists for kinds that have NO such call - it carries {kind, lifetimeId} and
-                // not the object, and one entry point serves all of them because the answer is
-                // the same. The order at the buffer's death is fixed and not negotiable:
-                // resource_destroy first (the applier clears Live, the backend retires the
-                // twin), then MGPipeSlots().Free - the allocator erases its lifetimeId -> slot
-                // mapping on Free, so a notice resolved twice finds nothing the second time.
-                // On the legacy arm the signal is still BufferBackendOps::OnDestroy. Every
-                // other kind has no backend twin table here.
-                break;
-            }
+            // P13: the twin is released BY HANDLE, the one the notice carries - the same
+            // per-kind release the wire's object_death runs on the server
+            // (ReleaseTwinsForWireObjectDeath below), so no arm resolves a lifetime id in the
+            // allocator any more. The slot itself goes back in the caller (PipeFill.cpp's
+            // NotifyAndFree), after this returns. A null handle is an object that never had a
+            // slot of this kind, hence no twin.
+            if (!MG_Pipe::MGPipeHandleIsNull(handle)) (void)ReleaseTwinsForWireObjectDeath(handle, kind);
         }
 
         const MG_State::GLState::StateObjectDeathOps g_glesStateObjectDeathOps = {
@@ -351,7 +259,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
         };
     } // namespace
 
-#if MOBILEGL_BUILD_DISAGGREGATED
     // P5e (id), CONTRACT-P5E §4.2 / §4.3: THE TWIN DEATH MOMENT, AND THE ABA ANSWER.
     //
     // The moment: the apply of `object_death` / the kind's own delete opcode / `resource_destroy`
@@ -410,6 +317,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
     }
 
+#if MOBILEGL_BUILD_DISAGGREGATED
     // P12: see Managers.h. Every table is replaced by an empty one, holders first (views before
     // the textures they view, framebuffers before their attachments, VAOs before the buffers they
     // fetch from), so the last reference to each twin goes here and its destructor - answered
@@ -3627,66 +3535,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
             resource.hostBytes = MGL_SERVER_STAGED_ADOPT(resource, ResourceWidthOf(res), bytes, offset, size);
         }
 
-        MG_Pipe::MGPipeHandle HandleOfBuffer(const MG_State::GLState::BufferObject* bufferObject) {
-            if (bufferObject == nullptr) return MG_Pipe::kMGPipeNullHandle;
-            // Through the table's own single-entry front memo rather than straight into
-            // MGPipeSlots().FindByLifetimeId, which is a hash lookup: this runs inside
-            // EnsureBufferResource (every SSBO / UBO / atomic / XFB / PBO / IBO bind), inside
-            // IsBufferDrawClean, and once per SSBO per draw through MarkBufferGpuWritten, where
-            // the legacy arm paid a pointer compare. HandleOf answers identically - the same
-            // allocator probe on a miss - and remembers the answer, which the minting overload
-            // was previously the only writer of. A null answer is deliberately never memoised
-            // (see the comment at HandleOf).
-            // P5c merge coordination (CONTRACT-P5C §3.1's named exemption): every caller of
-            // this function is a site whose handle-carrying records (set_shader_buffers /
-            // set_stream_output_targets) the client does not emit until sb, so the probe
-            // below runs inside the scoped exemption. The scope, not a silent guard removal,
-            // is what keeps the debt named and greppable.
-            //
-            // P5e (id), ruling 12: THE SCOPE CHANGED UNDER THIS SITE AND THE SITE HAD TO MOVE.
-            // The exemption it used to name is now MagmaP7AllocatorDebtScope and is keyed on a
-            // DirectVulkan server (Magma's four P7 debts); this is Espryt's, and it belongs to
-            // the frontend-keyed registry family with the rest of the Espryt debt. Which scope
-            // it names is not cosmetic: the Magma one would not exempt it here at all. It
-            // retires when vi/sb carry the handle into EnsureBufferResourceForHandle /
-            // IsBufferDrawCleanByHandle / MarkBufferGpuWrittenByHandle, which is the last
-            // caller set this function has.
-            const MG_Pipe::MGPipeFrontendKeyedRegistryScope frontendKeyedRegistry;
-            return g_backendBufferResources.HandleOf(bufferObject);
-        }
-
         SizeT ResourceWidthForHandle(MG_Pipe::MGPipeHandle res) { return ResourceWidthOf(res); }
         Uint64 ResourceSerialForHandle(MG_Pipe::MGPipeHandle res) { return ResourceSerialOf(res); }
         Uint CurrentBufferContextGeneration() { return g_bufferContextGeneration; }
-
-        void MarkBufferGpuWritten(const SharedPtr<MG_State::GLState::BufferObject>& bufferObject) {
-            if (!bufferObject) return;
-            const MG_Pipe::MGPipeHandle res = HandleOfBuffer(bufferObject.get());
-            if (MG_Pipe::MGPipeHandleIsNull(res) || MG_Pipe::gMGPipeCallbacks.OnGpuWritten == nullptr) {
-                // Deliberately NOT a fall-back to MarkGpuWritten: on this arm the resource
-                // family is switched over, and quietly reaching into the frontend object again
-                // would hide a missing handle or a missing reverse channel behind a picture
-                // that still looks right - which is what the subsystem A/B exists to expose.
-                MGLOG_E_ONCE("MGPipe: no reverse channel for the GPU-write announcement of buffer %u "
-                             "(handle %s, OnGpuWritten %s)",
-                             bufferObject->GetExternalIndex(),
-                             MG_Pipe::MGPipeHandleIsNull(res) ? "missing" : "present",
-                             MG_Pipe::gMGPipeCallbacks.OnGpuWritten == nullptr ? "unset" : "set");
-                return;
-            }
-            // WHOLE RESOURCE, stated rather than implied: the extent is spelled as one range of
-            // kMGPipeWholeBuffer rather than as "zero ranges", because a zero count is the
-            // shape a fully NARROWED announcement will legitimately have once P8/P9 build the
-            // client's conservative set, and the two must not be the same record.
-            //
-            // THE OTHER HALF OF THE CONTRACT, which the range shape alone does not say: what
-            // this replaces, BufferObject::MarkGpuWritten, sets BOTH m_hasDefinedContent and
-            // m_gpuWritePending. The client's OnGpuWritten must set both too, or the next
-            // ResourceRespecify carries HasDefinedContent = 0, Ops_H_Respecify orphans instead
-            // of uploading, and the shader-written contents are dropped with nothing saying so.
-            const MG_Pipe::MGPRange whole{0, MG_Pipe::kMGPipeWholeBuffer};
-            MG_Pipe::gMGPipeCallbacks.OnGpuWritten(res, 1, &whole);
-        }
 
         // See the declaration: re-mints of a live resource's driver id. Written only on
         // the context thread (all re-mint sites run there), read only by the VAO sync.
@@ -3891,10 +3742,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (!resource->pendingRanges.empty()) return false;
             if (resource->storageSize != static_cast<SizeT>(record->Desc.Width)) return false;
             return resource->syncedChangeSerial.load(std::memory_order_acquire) == record->Serial;
-        }
-
-        Bool IsBufferDrawClean(const MG_State::GLState::BufferObject* frontend, const GLESBufferResource* resource) {
-            return IsBufferDrawCleanByHandle(HandleOfBuffer(frontend), resource, frontend);
         }
 
         // The handle arm of the ensure path. Same shape, same order, same branches; the four
@@ -4144,26 +3991,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 RespecifyStorageWith(*resource, size, usage, initialData, serial);
             }
             return resource;
-        }
-
-        GLESBufferResource* EnsureBufferResource(const SharedPtr<MG_State::GLState::BufferObject>& bufferObject) {
-#ifdef TRACY_ENABLE
-            ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
-#endif
-            if (!bufferObject) return nullptr;
-
-            const MG_Pipe::MGPipeHandle res = HandleOfBuffer(bufferObject.get());
-            if (MG_Pipe::MGPipeHandleIsNull(res)) {
-                // The client never created this resource on the wire. There is deliberately
-                // no fall-back to the legacy arm: silently twinning it off the frontend
-                // object would hide a missing emission behind a working picture, which is
-                // exactly what the subsystem A/B exists to make visible.
-                MGLOG_E_ONCE("MGPipe: buffer %u has no resource handle - the resource family is switched "
-                             "over but nothing emitted resource_create for it",
-                             bufferObject->GetExternalIndex());
-                return nullptr;
-            }
-            return EnsureBufferResourceForHandle(bufferObject, res);
         }
 
         void BindBufferId(GLenum target, Uint id) {
@@ -5224,17 +5051,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return twin ? twin->get() : nullptr;
         }
 
-        MG_Pipe::MGPipeHandle HandleOfSamplerViewForTexture(
-            const MG_State::GLState::ITextureObject* textureObject) {
-            // Through the table's own single-entry front memo rather than straight into
-            // MGPipeSlots().FindByLifetimeId, which is a hash lookup. HandleOf answers
-            // identically - the same allocator probe on a miss - and remembers the answer; a
-            // null answer is deliberately never memoised (SlotTables.h, at HandleOf).
-            // P5c (G6, CONTRACT-P5C §5.4): frontend-keyed twin resolution, named debt inside
-            // the scope - P3b/P4b rekeys the sampler-view registry onto handles.
-            const MG_Pipe::MGPipeFrontendKeyedRegistryScope frontendKeyedRegistry;
-            return g_backendSamplerViews.HandleOf(textureObject);
-        }
     } // namespace SamplerViewImpl
 
     namespace VertexArrayImpl {
@@ -5361,23 +5177,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
             BindBackendVAOId(m_backendVAOId);
         }
 
-        inline Bool BindAttributeBuffer(const MG_State::GLState::VertexAttribute& attrib) {
-            const auto& bufferObject = attrib.Buffer;
-            if (!bufferObject) {
-                MGLOG_W_ONCE("Attribute has no bound buffer, skipping.");
-                return false;
-            }
-
-            auto* backendResource = BufferImpl::EnsureBufferResource(bufferObject);
-            if (!backendResource || backendResource->id == 0) {
-                MGLOG_E_ONCE("No backend buffer found for attribute's buffer, cannot bind attribute.");
-                return false;
-            }
-
-            BufferImpl::BindBufferId(GL_ARRAY_BUFFER, backendResource->id);
-            return true;
-        }
-
         // ES 3.1 core. Queried through the loader rather than the version, because the whole
         // point of using it is to express something the pointer API cannot, and falling back
         // silently on a driver that lacks it is better than crashing on a null entry point.
@@ -5404,41 +5203,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 return 0;
             }
             return static_cast<SizeT>(baseInstance) * static_cast<SizeT>(attrib.Stride);
-        }
-
-        // Declares one attribute through the ES binding-point API, the only spelling that can
-        // carry a stride of zero. Returns false when the attribute has no usable buffer, in
-        // which case nothing was emitted.
-        inline Bool SyncZeroStrideAttribute(Uint attribIndex, const MG_State::GLState::VertexAttribute& attrib) {
-            const auto& bufferObject = attrib.Buffer;
-            if (!bufferObject) {
-                MGLOG_W_ONCE("Zero-stride attribute %u has no bound buffer, skipping.", attribIndex);
-                return false;
-            }
-            auto* backendResource = BufferImpl::EnsureBufferResource(bufferObject);
-            if (!backendResource || backendResource->id == 0) {
-                MGLOG_E_ONCE("No backend buffer for zero-stride attribute %u, cannot bind it.", attribIndex);
-                return false;
-            }
-
-            if (!attrib.IsInteger) {
-                const GLint glSize = attrib.IsBgra ? static_cast<GLint>(GL_BGRA) : attrib.Size;
-                g_GLESFuncs.glVertexAttribFormat(attribIndex, glSize,
-                                                 MG_Util::ConvertDataTypeToGLEnum(attrib.Type),
-                                                 attrib.Normalized ? GL_TRUE : GL_FALSE, 0);
-            } else {
-                g_GLESFuncs.glVertexAttribIFormat(attribIndex, attrib.Size,
-                                                  MG_Util::ConvertDataTypeToGLEnum(attrib.Type), 0);
-            }
-            g_GLESFuncs.glVertexAttribBinding(attribIndex, attribIndex);
-            // The resolved offset goes on the binding point, not into a relative offset: the
-            // relative offset is capped by GL_MAX_VERTEX_ATTRIB_RELATIVE_OFFSET (2047 at
-            // minimum) while a buffer offset is not, so anything else would break on a large
-            // one. BindBufferId is bypassed deliberately - glBindVertexBuffer binds into the
-            // VAO's binding point, not the GL_ARRAY_BUFFER target that cache tracks.
-            g_GLESFuncs.glBindVertexBuffer(attribIndex, backendResource->id,
-                                           static_cast<GLintptr>(attrib.Offset), 0);
-            return true;
         }
 
         // ---- the handle arm's small helpers -------------------------------------------
@@ -6465,162 +6229,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
             Memcpy(shadow, snapshot.data(), shadowBytes);
             return true;
-        }
-
-        void BackendTextureObject::RequireImageBindableStorage(
-            const SharedPtr<MG_State::GLState::ITextureObject>& stateTextureObject) {
-            if (m_imageBindableStorageRequired) {
-                return;
-            }
-            // Read before the two flags below schedule the re-mint: whether the driver texture
-            // already holds this object's levels, and so may hold texels the shadow never saw.
-            // Also what `trp=` counts on the push builds: a transition that re-mints storage that
-            // ALREADY EXISTED on the backend. A texture reaching here uninitialised is allocated
-            // image-bindable up front and replays nothing.
-            const Bool hadBackendStorage = m_isInitialized && m_backendTextureId != 0 &&
-                                           m_contextGeneration == g_backendContextGeneration;
-            m_imageBindableStorageRequired = true;
-            // ES only needs the storage to be immutable, so an immutable allocation that needs no
-            // channel widening is already the one a re-mint would produce: keep it, and with it
-            // every texel the GPU wrote. Pending uploads and real redefinitions still go through
-            // the normal shape and dirty checks of the next sync.
-            if (hadBackendStorage && m_backendStorageImmutable && !stateTextureObject->IsTextureView() &&
-                !IsMultisampleTextureTarget(stateTextureObject->GetTarget()) &&
-                !GetImageBindableStorageWidening(stateTextureObject->GetFormat())) {
-                m_forceTextureParamsResync = true;
-                return;
-            }
-            m_isInitialized = false;
-            // A view owns no levels. Its sync hands the requirement to the storage texture
-            // (SyncTextureViewToBackend), whose own transition below re-mints and replays them; a
-            // re-dirty issued here, through the view, would reach that texture first and claim
-            // every level for the shadow before the driver's copy could be read back.
-            if (stateTextureObject->IsTextureView()) {
-                m_forceTextureParamsResync = true;
-                return;
-            }
-            // Every level this object has ALREADY uploaded has to be replayed, because the
-            // regeneration this transition schedules re-mints the storage in the image carrier and
-            // only uploads levels the shadow still calls dirty - which, for a texture that was
-            // synced before its first glBindImageTexture, is none of them. The new storage would
-            // come out ALLOCATED AND EMPTY, and every texel the application defined before that
-            // bind would be gone: the shader reads zeroes and the shadow still holds the data, so
-            // glGetTexImage (which falls back to the shadow) keeps answering correctly and only
-            // the image loads are wrong. Reached whenever anything syncs the texture first - a
-            // glGetTexImage, a draw that samples it, an FBO attach - which is why it survived so
-            // long: the scenario that binds the image immediately after uploading never sees it.
-            //
-            // And the shadow is only the CLIENT's copy. Whatever the GPU wrote into a level - a
-            // render or clear into it, a copy, a glGenerateMipmap - lives in the driver texture
-            // alone, so replaying the shadow as it stands put the pre-render bytes (or the zeroes
-            // of a null-data definition) into the new storage. The driver's levels are therefore
-            // read back into the shadow first, with the client writes still pending merged over
-            // them, while the old storage still exists; a level the driver cannot hand back keeps
-            // the shadow, which is all this used to replay. (This was the known monolith defect of
-            // W2-REMINT.md §6, the half of ID-P9-8 left to dev; dev's 568090f0 fixed it and P11 M
-            // merged it.)
-            //
-            // THIS IS THE MONOLITH ARM ONLY. Under a transport the re-mint is the server's own
-            // (RequireImageBindableStorageByHandle: the GPU level read back, the staged store for
-            // what the client uploaded), and nothing selects this function there - the image
-            // units sync from the record, the metadata respecify calls the by-handle overload, and
-            // a frontend object reaching the loop below would meet the layer-1 guard
-            // (Fatal{RoleViolation, "texture-legacy-arm"}) first. P9 W2 retired the
-            // `texture-remint-pull` marker this comment used to describe: no pull protocol exists
-            // because no byte of a re-mint has to come from the client (notes/p9/W2-REMINT.md).
-            // The two arms now answer the same way: both read the GPU's level back first.
-            //
-            // THE COUNT IS TAKEN WHERE A LEVEL IS ACTUALLY REPLAYED, not on entry (review N-4): a
-            // glBindImageTexture on a texture whose storage is not yet defined reaches here, finds
-            // no defined level and replays nothing.
-            // P4a (review M-1): ON THE HANDLE ARM THE RE-DIRTY HAS TO REACH THE APPLIER'S SET,
-            // not only the frontend's model. The client cleared its own flags when it emitted
-            // those levels, so MarkStorageDirty below re-arms a model the handle arm does not
-            // read: the pending set would stay empty, MGB_LEVEL_NEEDS_UPLOAD would answer false
-            // for every level, and the widened image carrier this transition schedules would be
-            // allocated EMPTY - the very bug the paragraph above says "survived so long",
-            // re-introduced one arm over. The dispatch that triggered the bind would read zeroes.
-            //
-            // Both models are written, not one: the frontend's because the legacy arm reads it
-            // and because the client's own NoteLevelDirty hook rides on it, the applier's
-            // because that is what this arm consumes.
-            Bool countedRemint = false;
-            const MG_Pipe::MGPipeHandle rearmRes =
-                [&]() {
-                          // P5c (G6, CONTRACT-P5C §5.4): frontend-keyed resolution, named
-                          // debt inside the scope - P3b/P4b rekeys the registry.
-                          const MG_Pipe::MGPipeFrontendKeyedRegistryScope frontendKeyedRegistry;
-                          return g_backendTextureObjects.HandleOf(stateTextureObject.get());
-                      }();
-            const Uint32 rearmResourceTarget =
-                MG_Pipe::MGPipeResourceTargetForTextureTarget(stateTextureObject->GetTarget());
-            if (MG_Pipe::MGPipeHandleIsNull(rearmRes)) {
-                MGLOG_E_ONCE("MGPipe: texture %u needs image-bindable storage but has no handle on the "
-                             "handle arm, so the levels it owes cannot be re-armed in the applier's "
-                             "pending set - they would be allocated empty",
-                             stateTextureObject->GetExternalIndex());
-            }
-            if (auto* mipmapObject = MG_State::GLState::AsMipmapTexture(stateTextureObject.get())) {
-                const auto levelCount = mipmapObject->GetMipmapLevelCount();
-                for (const auto& uploadTarget : stateTextureObject->GetUploadTargets()) {
-                    for (Uint level = 0; level < levelCount; ++level) {
-                        const auto levelTexelSize = mipmapObject->GetMipmapTexelSize(uploadTarget, level);
-                        if (levelTexelSize.x() <= 0 || levelTexelSize.y() <= 0) continue;
-                        if (mipmapObject->GetMipmapByteSize(uploadTarget, level) == 0) continue;
-                        // This level's entry in the applier's pending set, read BEFORE the re-arm
-                        // below turns it into a whole-level box: the client writes it still owes
-                        // (see AdoptDriverLevelIntoShadow). Resolved per level - the re-arm may grow
-                        // the record's set and move what an earlier pointer named.
-                        const MG_Pipe::MGPipeResourceRecord* rearmRecord =
-                            MG_Pipe::MGPipeHandleIsNull(rearmRes) ? nullptr : PipeTextureRecordForHandle(rearmRes);
-                        const MG_Pipe::MGPipeResourceRecord::PendingUpload* rearmPending =
-                            rearmRecord != nullptr ? FindPipeTextureUpload(*rearmRecord, static_cast<Uint16>(uploadTarget),
-                                                                           static_cast<Uint16>(level))
-                                                   : nullptr;
-                        if (hadBackendStorage &&
-                            !AdoptDriverLevelIntoShadow(m_backendTextureId, *this, *stateTextureObject,
-                                                        *mipmapObject, uploadTarget, level
-                                                        ,
-                                                        rearmPending
-                                                        )) {
-                            MGLOG_D("Texture %u level %u: re-minting from the shadow, the driver's copy is not "
-                                    "readable here",
-                                    stateTextureObject->GetExternalIndex(), level);
-                        }
-                        mipmapObject->MarkStorageDirty(uploadTarget, level, true);
-                        // THE COUNTER BEHIND ROADMAP OPEN QUESTION 2 (final review M-A): once per
-                        // transition that replays a level of storage the backend already held,
-                        // not once per level.
-                        if (!countedRemint) {
-                            countedRemint = true;
-                            if (hadBackendStorage && MG_Util::PipeStats::Enabled()) {
-                                MG_Util::PipeStats::AddCalls(MG_Util::PipeStats::CallClass::TextureRemintPulls, 1);
-                            }
-                        }
-                        if (!MG_Pipe::MGPipeHandleIsNull(rearmRes)) {
-                            const MG_Pipe::MGPBox wholeLevel{0,
-                                                             0,
-                                                             0,
-                                                             static_cast<Uint32>(levelTexelSize.x()),
-                                                             static_cast<Uint32>(levelTexelSize.y()),
-                                                             static_cast<Uint32>(std::max(levelTexelSize.z(), 1))};
-                            RearmPipeTextureLevelUpload(
-                                rearmRes,
-                                MG_Pipe::MGPipePackSubDataTarget(rearmResourceTarget,
-                                                                 static_cast<Uint32>(uploadTarget)),
-                                static_cast<Uint16>(level), wholeLevel);
-                        }
-                    }
-                }
-            }
-            // The storage this re-mints may also be CHANNEL WIDENED (a GL_RG32F image is not
-            // bindable on this driver at all, so it becomes a GL_RGBA32F carrying two channels),
-            // and a widened texture's sampled view has to answer the channels the logical format
-            // does not have with 0 and 1 - which is a swizzle. The parameter sync is gated on the
-            // frontend's params version, which this transition does not move, so without the
-            // override an application that never touched GL_TEXTURE_SWIZZLE_* would keep the
-            // driver at its defaults and sample the carrier's surplus channels raw.
-            m_forceTextureParamsResync = true;
         }
 
         void BackendTextureObject::RecreateBackendTexture() {
@@ -7891,99 +7499,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
             m_syncedContentVersion = stateTextureObject->GetContentVersion();
         }
 
-        void BackendTextureObject::SyncTextureViewToBackend(
-            const SharedPtr<MG_State::GLState::ITextureObject>& stateTextureObject) {
-            const auto& storageObject = stateTextureObject->GetViewStorageOwner();
-            if (!storageObject) {
-                MGLOG_E_ONCE("Texture %u claims to be a view but names no storage owner.",
-                             stateTextureObject->GetExternalIndex());
-                return;
-            }
-            if (!g_GLESCapabilities.SupportsTextureView) {
-                // Unreachable through the API: the frontend refuses glTextureView with
-                // GL_INVALID_OPERATION when the backend does not advertise GL_ARB_texture_view,
-                // and DirectGLES only advertises it when this capability is set.
-                MGLOG_E_ONCE("Texture view %u reached the backend on a driver without "
-                             "EXT/OES_texture_view.",
-                             stateTextureObject->GetExternalIndex());
-                return;
-            }
-
-            // Deliberately a by-VALUE copy of the SharedPtr: SyncTextureObjectToBackend hands back
-            // a reference INTO the open-addressed registry map, and the params/sampler syncs below
-            // (plus any nested growth) can rehash it out from under a reference.
-            const SharedPtr<BackendTextureObject> storageBackendObject =
-                SyncTextureObjectToBackend(storageObject, m_imageBindableStorageRequired);
-            if (!storageBackendObject) {
-                MGLOG_E_ONCE("Failed to sync the storage texture of view %u.",
-                             stateTextureObject->GetExternalIndex());
-                return;
-            }
-            const Uint storageBackendTextureId = storageBackendObject->GetBackendTextureId();
-            if (storageBackendTextureId == 0) {
-                MGLOG_D("Storage texture of view %u has no ES name yet.",
-                        stateTextureObject->GetExternalIndex());
-                return;
-            }
-            if (m_isInitialized && m_viewSourceBackendTextureId == storageBackendTextureId) {
-                StampViewSyncKeys(stateTextureObject);
-                return;
-            }
-            // Either the first sync, or the storage was re-minted underneath us. A name that has
-            // already been through glTextureView cannot be viewed again, so start from a fresh
-            // one (this also scrubs the binding caches and bumps the FBO attachment generation).
-            RecreateBackendTexture();
-
-            GLenum glInternalFormat = 0;
-            GLenum glFormat = 0;
-            GLenum glType = 0;
-            TextureImpl::GenerateTextureFormatInfo(stateTextureObject->GetFormat(), &glInternalFormat, &glFormat,
-                                                   &glType, stateTextureObject->GetTarget());
-            const GLenum target = ConvertTextureTargetToBackendGLEnum(stateTextureObject->GetTarget());
-
-            DebugImpl::ErrorLopper::Clear();
-            ResolveTextureViewEntryPoint()(m_backendTextureId, target, storageBackendTextureId, glInternalFormat,
-                                           stateTextureObject->GetViewMinLevel(),
-                                           stateTextureObject->GetViewNumLevels(),
-                                           stateTextureObject->GetViewMinLayer(),
-                                           stateTextureObject->GetViewNumLayers());
-            const GLenum error = g_GLESFuncs.glGetError();
-            if (error != GL_NO_ERROR) {
-                MGLOG_E_ONCE("glTextureView(view=%u target=%s origtexture=%u internalformat=%s levels=[%u,%u) "
-                             "layers=[%u,%u)) failed: %s",
-                             m_backendTextureId, MG_Util::ConvertGLEnumToString(target).c_str(),
-                             storageBackendTextureId, MG_Util::ConvertGLEnumToString(glInternalFormat).c_str(),
-                             stateTextureObject->GetViewMinLevel(),
-                             stateTextureObject->GetViewMinLevel() + stateTextureObject->GetViewNumLevels(),
-                             stateTextureObject->GetViewMinLayer(),
-                             stateTextureObject->GetViewMinLayer() + stateTextureObject->GetViewNumLayers(),
-                             MG_Util::ConvertGLEnumToString(error).c_str());
-                return;
-            }
-
-            m_viewSourceBackendTextureId = storageBackendTextureId;
-            m_isInitialized = true;
-            // A view's storage is immutable by construction (its origtexture had to be), which is
-            // what keeps the respecify paths away from this name.
-            m_backendStorageImmutable = true;
-            const auto baseSize = stateTextureObject->GetBaseSize();
-            m_prevTextureInfo = {stateTextureObject->GetFormat(),
-                                 static_cast<SizeT>(baseSize.x()),
-                                 static_cast<SizeT>(baseSize.y()),
-                                 static_cast<SizeT>(baseSize.z()),
-                                 static_cast<SizeT>(stateTextureObject->GetViewNumLevels()),
-                                 0,
-                                 stateTextureObject->GetSamples(),
-                                 stateTextureObject->HasFixedSampleLocations()};
-            MGLOG_D("Texture view %u (ES %u) now views storage texture %u (ES %u), levels [%u,%u) layers [%u,%u)",
-                    stateTextureObject->GetExternalIndex(), m_backendTextureId, storageObject->GetExternalIndex(),
-                    storageBackendTextureId, stateTextureObject->GetViewMinLevel(),
-                    stateTextureObject->GetViewMinLevel() + stateTextureObject->GetViewNumLevels(),
-                    stateTextureObject->GetViewMinLayer(),
-                    stateTextureObject->GetViewMinLayer() + stateTextureObject->GetViewNumLayers());
-            StampViewSyncKeys(stateTextureObject);
-        }
-
         void BackendTextureObject::SyncMipmapsToBackend(
             const SharedPtr<MG_State::GLState::ITextureObject>& stateTextureObject) {
             // P5e (tx2): null IS the by-handle arm once a handle has been noted on this twin;
@@ -8050,17 +7565,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (pushedStorage != nullptr &&
                 !MG_Pipe::MGPipeHandleIsNull(pushedStorage->Desc.ViewOf)) {
                 SyncTextureViewToBackendByRecord(pushedRes, *pushedStorage, stateTextureObject);
-                return;
-            }
-            if (pushedStorage != nullptr) {
-                // Not a view: fall through to the storage body with the frontend test skipped.
-            } else
-            // A texture created by glTextureView owns no storage: the levels, the format and
-            // every texel belong to the texture it views, and this name only has to be made to
-            // ALIAS them. Everything below - storage allocation, respecification, per-level
-            // uploads - would be re-doing the storage texture's work on the wrong name.
-            if (stateTextureObject->IsTextureView()) {
-                SyncTextureViewToBackend(stateTextureObject);
                 return;
             }
 
@@ -9377,8 +8881,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
                 // Need to sync texture buffer if not synced yet
                 auto* backendBufferResource =
-                    pushedStorage != nullptr ? BufferImpl::EnsureBufferResourceForHandle(buffer, pushedTexBuffer)
-                                             : BufferImpl::EnsureBufferResource(buffer);
+                    BufferImpl::EnsureBufferResourceForHandle(buffer, pushedTexBuffer);
                 if (!backendBufferResource || backendBufferResource->id == 0) {
                     MGLOG_E_ONCE("Failed to sync backing buffer for texture buffer with ID: %u",
                             MGB_TEXTURE_DIAG_NAME(pushedStorage, stateTextureObject));
@@ -9579,22 +9082,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #undef MGB_LEVEL_TEXELS
 #undef MGB_STAGED_TEXTURE_LIVE
 
-        // P5e (tx2), CONTRACT-P5E §5.2: THIS TWIN'S OWN RECORD. On the by-handle arm the handle
-        // is already known - the caller resolved the record before it resolved this twin and
-        // noted the handle on the twin itself - so the client allocator is not probed at all.
-        // What is left below is the MONOLITH GLUE half (HandleOfBuffer's shape): a twin minted
-        // from a frontend object and never adopted by handle still re-derives one.
+        // P5e (tx2), CONTRACT-P5E §5.2: THIS TWIN'S OWN RECORD, by the handle the caller noted on
+        // the twin before it resolved it; the client allocator is never probed.
         const MG_Pipe::MGPipeResourceRecord* BackendTextureObject::ResolveOwnRecord(
             const SharedPtr<MG_State::GLState::ITextureObject>& stateTextureObject) const {
-            MG_Pipe::MGPipeHandle res = m_pushedSyncHandle;
-            if (MG_Pipe::MGPipeHandleIsNull(res)) {
-                if (!stateTextureObject) return nullptr;
-                // P5c (G6, CONTRACT-P5C §5.4): frontend-keyed resolution, named debt inside the
-                // scope - the by-handle arm above is what retires it.
-                const MG_Pipe::MGPipeFrontendKeyedRegistryScope frontendKeyedRegistry;
-                res = g_backendTextureObjects.HandleOf(stateTextureObject.get());
-            }
-            return PipeTextureRecordForHandle(res);
+            (void)stateTextureObject;
+            // P13: a twin is only ever reached by handle, and the handle is noted on it first.
+            if (MG_Pipe::MGPipeHandleIsNull(m_pushedSyncHandle)) return nullptr;
+            return PipeTextureRecordForHandle(m_pushedSyncHandle);
         }
 
         const SamplerParameters* BackendTextureObject::ResolvePushedBuiltinSampler(
@@ -10142,21 +9637,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
         }
 #endif
-
-        void NoteDriverSideTextureWrite(const SharedPtr<MG_State::GLState::ITextureObject>& textureObject) {
-            SharedPtr<MG_State::GLState::ITextureObject> storage = textureObject;
-            // Bounded: GL resolves a view of a view to the original storage, so this takes one step.
-            for (Uint hop = 0; storage && storage->IsTextureView() && hop < 4; ++hop) {
-                storage = storage->GetViewStorageOwner();
-            }
-            if (!storage) return;
-            auto* slot = g_backendTextureObjects.Find(storage.get());
-            auto& backendObj = slot ? *slot : g_backendTextureObjects.GetOrCreate(storage);
-            if (!backendObj) {
-                backendObj = MakeShared<BackendTextureObject>();
-            }
-            backendObj->NoteDriverSideWrite();
-        }
 
         // P5e (id), CONTRACT-P5E §4.1. See Managers.h for the contract.
         BackendTextureObject* ResolveTextureTwin(MG_Pipe::MGPipeHandle res) {
@@ -14236,40 +13716,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 m_syncedSamplerSerial = record->Serial;
                 pushedParams = &record->Params;
             } else {
-                // NO HANDLE CARRIED. Two shapes, and they are told apart by whether this
-                // object is in the twin registry at all:
-                //
-                //   * not registered -> a sampler this BACKEND minted for its own use (the
-                //     raw-depth-fetch sampler, DirectGLES.cpp:207-218). The client has never
-                //     seen it, no record can exist for it now or after any package lands,
-                //     and the object IS the authority for server-owned state. Not a seam.
-                //   * registered -> an application sampler whose caller did not carry the
-                //     unit's handle. That is the E-side call-site gap; it is named once and
-                //     the values are taken from the object, which in monolith are the very
-                //     values the client content-addressed, so the picture stays right while
-                //     the gap is visible rather than silent.
-                // P5c (G6, CONTRACT-P5C §5.4): the registration probe below resolves the
-                // sampler's handle by frontend identity - frontend-keyed twin resolution,
-                // named debt inside the scope - P3b/P4b rekeys the registry onto handles.
-                const MG_Pipe::MGPipeFrontendKeyedRegistryScope frontendKeyedRegistry;
-                if (!MG_Pipe::MGPipeHandleIsNull(
-                        g_backendSamplerObjects.HandleOf(stateSamplerObject.get()))) {
-                    MGLOG_E_ONCE("MGPipe: sampler %u was synced without its unit's SamplerCso handle, so "
-                                 "the content-addressed record cannot be named and the object's own "
-                                 "parameters are used - the caller must pass "
-                                 "MGPipeApplier().BoundSamplerStates[unit]",
-                                 stateSamplerObject->GetExternalIndex());
-                }
-                // Spelled exactly as the pre-handle arm below spells it (compare widened,
-                // assign narrowed) so the two cannot drift on a version past 65535.
-                const Uint currentSamplerVersion = stateSamplerObject->GetVersion();
-                if (m_isInitialized && m_syncedSamplerVersion == currentSamplerVersion) {
-                    MGLOG_D("Sampler parameters have not changed for sampler ID: %u, skipping sync.",
-                            stateSamplerObject->GetExternalIndex());
-                    return;
-                }
-                m_syncedSamplerVersion = currentSamplerVersion;
-                pushedParams = &stateSamplerObject->GetAllSamplerParameters();
+                // P13: every sampler twin is a CSO twin, synced with its handle
+                // (ResolveSamplerCsoTwin); a sampler with no record has nothing to push.
+                MGLOG_E_ONCE("MGPipe: sampler %u was synced without a SamplerCso handle", samplerName);
+                return;
             }
 
             MGLOG_D("Syncing sampler with backend ID %u to backend for state ID %u", m_backendSamplerId, samplerName);
@@ -14474,122 +13924,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #define MGB_RBO_SAMPLES                                                                                                \
     (pushedRecord != nullptr ? static_cast<Int>(pushedRecord->Desc.Samples) : static_cast<Int>(stateRBOObject->GetSamples()))
 
-        void BackendRenderbufferObject::SyncToBackend(
-            const SharedPtr<MG_State::GLState::RenderbufferObject>& stateRBOObject) {
-#ifdef TRACY_ENABLE
-            ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
-#endif
-            if (!stateRBOObject) {
-                MGLOG_E_ONCE("State RBO object is null, cannot sync to backend.");
-                return;
-            }
-
-            MGLOG_D("Syncing RBO with backend ID %u to backend for state ID %u", m_backendRBOId,
-                    stateRBOObject->GetExternalIndex());
-
-            const MG_Pipe::MGPipeResourceRecord* pushedRecord = nullptr;
-            if (TextureResourceSubsystemEnabled()) {
-                // P5c (G6, CONTRACT-P5C §5.4): the renderbuffer's handle is resolved by
-                // frontend identity below - frontend-keyed twin resolution, named debt inside
-                // the scope - P3b/P4b rekeys the registry onto handles.
-                const MG_Pipe::MGPipeFrontendKeyedRegistryScope frontendKeyedRegistry;
-                // MONOLITH GLUE, named as such: the Renderbuffer handle of an object this
-                // backend still arrives holding. Under a real split it rides in the payload.
-                const MG_Pipe::MGPipeHandle res = g_backendRenderbufferObjects.HandleOf(stateRBOObject.get());
-                pushedRecord = PipeRenderbufferRecordForHandle(res);
-                if (pushedRecord == nullptr) {
-                    MGLOG_E_ONCE("MGPipe: renderbuffer %u has no applier record on the handle arm, so "
-                                 "its storage cannot be allocated from the pushed descriptor "
-                                 "(handle {%u, %u})",
-                                 stateRBOObject->GetExternalIndex(), res.Slot, res.Gen);
-                    return;
-                }
-                if (m_isInitialized && m_syncedResourceSerial != 0 &&
-                    m_syncedResourceSerial == pushedRecord->Serial) {
-                    MGLOG_D("RBO %u already initialized with matching parameters, skipping re-allocation.",
-                            stateRBOObject->GetExternalIndex());
-                    return;
-                }
-            } else {
-                // UNREACHABLE: ResolveTextureResourceSubsystemArm stops at its first call when
-                // the bit is clear and the pre-handle arm is not compiled. Kept, and kept loud.
-                MGLOG_E_ONCE("MGPipe: the texture-resource subsystem bit is clear and "
-                             "MOBILEGL_PIPE_LEGACY_MEMOS=0 removed the pre-handle renderbuffer "
-                             "four-field cache, so this configuration has no arm at all");
-                return;
-            }
-
-            // A RE-STORAGE IS A REDEFINITION ON THE SAME DRIVER ID (P4a fable seam F-3, the
-            // pre-handle half): glRenderbufferStorage below re-allocates behind the name the
-            // framebuffer twins already attached, the frontend's renderbuffer setters bump no
-            // version and no framebuffer version sees them, so without this the FBO memo kept
-            // the widening masks of the storage the renderbuffer was attached with. Same
-            // generation a texture re-mint takes, for the same reason; the first allocation is
-            // not a redefinition.
-            // PUSH BUILDS ONLY, for the texture twin's reason (G1: the pull library stays
-            // byte-identical to the P4a baseline).
-            if (m_isInitialized) {
-                ++FramebufferImpl::g_attachmentBackendIdGeneration;
-            }
-
-            Bind();
-
-            // Allocate storage
-            TextureInternalFormat internalFormat = MGB_RBO_FORMAT;
-            Int width = MGB_RBO_WIDTH;
-            Int height = MGB_RBO_HEIGHT;
-            Int samples = MGB_RBO_SAMPLES;
-            GLenum glInternalFormat, glType, glFormat;
-            TextureImpl::GenerateRenderbufferFormatInfo(internalFormat, &glInternalFormat, &glFormat, &glType);
-
-            // The allocation is deferred to here, so an ES driver that refuses it (a
-            // multi-gigabyte renderbuffer is refused routinely) used to leave m_isInitialized
-            // true over a renderbuffer with no storage and say nothing at all: the attachment
-            // then rendered nowhere. Drain first so the check cannot pick up an unrelated stale
-            // flag, and report GL_OUT_OF_MEMORY to the application. The error lands on whatever
-            // entry point triggered the sync rather than on glRenderbufferStorage itself, which
-            // is where the deferred model puts it - still far better than silence.
-            DebugImpl::ErrorLopper::Clear();
-            if (samples > 0) {
-                // Same clamp as the multisample texture path: the frontend accepts the count it
-                // advertised, the driver only takes the count it supports for this format, and
-                // the state object keeps reporting the requested one.
-                const auto backendSamples = static_cast<GLsizei>(ClampSamplesToBackendSupport(
-                    GetRenderbufferFormatCapabilityTargetIndex(), internalFormat, glFormat, samples));
-                g_GLESFuncs.glRenderbufferStorageMultisample(GL_RENDERBUFFER, backendSamples, glInternalFormat,
-                                                             static_cast<GLsizei>(width),
-                                                             static_cast<GLsizei>(height));
-            } else {
-                g_GLESFuncs.glRenderbufferStorage(GL_RENDERBUFFER, glInternalFormat, static_cast<GLsizei>(width),
-                                                  static_cast<GLsizei>(height));
-            }
-            if (g_GLESFuncs.glGetError() == GL_OUT_OF_MEMORY) {
-                MGLOG_E_ONCE("Renderbuffer %u storage allocation ran out of memory: %dx%d, samples=%d, format=%s",
-                             stateRBOObject->GetExternalIndex(), width, height, samples,
-                             MG_Util::ConvertGLEnumToString(glInternalFormat).c_str());
-                if (MG_Pipe::gPipeInputs.IsLive()) {
-                    MG_Pipe::gPipeInputs.RecordError(
-                        ErrorCode::OutOfMemory,
-                        MakeUnique<GenericErrorInfo>("DirectGLES", "BackendRenderbufferObject::SyncToBackend",
-                                                     "The ES driver could not allocate the renderbuffer storage."));
-                }
-            }
-            DebugImpl::ErrorLopper::Clear();
-
-            m_cacheInternalFormat = internalFormat;
-            m_cacheWidth = width;
-            m_cacheHeight = height;
-            m_cacheSamples = samples;
-            // Stamped in the same breath as the four cache members and AFTER the allocation, so
-            // an allocation the driver refused with GL_OUT_OF_MEMORY above leaves the twin
-            // describing what it actually holds. The deferred OOM report and its RecordError are
-            // untouched: the error still lands on whatever entry point triggered the sync, which
-            // is where the deferred model puts it.
-            if (pushedRecord != nullptr) m_syncedResourceSerial = pushedRecord->Serial;
-
-            m_isInitialized = true;
-            MGLOG_D("RBO %u sync completed. backend ID %u", stateRBOObject->GetExternalIndex(), m_backendRBOId);
-        }
 #undef MGB_RBO_FORMAT
 #undef MGB_RBO_WIDTH
 #undef MGB_RBO_HEIGHT
