@@ -31,6 +31,7 @@
 | W6c | 本地完成 | `dc1e95b4` | Magma 前端臂：前端 `MagmaProgramSource` 构造与 `IsWire()` 折掉，前端采样集遍历、占位纹理、VAO draw memo、`MagmaPipeIdentityTables` 与 ABA 旋钮、`TrySetupDrawFastPath` 与快照、前端 fallback 纹理删（约 7100 行） |
 | W6d | 本地完成 | `8abae647` `8bc39c79` | Espryt 各族臂谓词（framebuffer / texture / sampler / program / buffer / vertex input 及其别名）折为记录臂，`g_fboTextureSyncList` 等前端遍历删；启动时只查色彩附件上限（`ResolveRecordArmFamilies`）；未迁移仿真名单清空（审计保留，守 0） |
 | W6e–f | 本地完成 | `dab827d5` `737ef5e9` `922507f8` | 后端表里 verb port 在各模式都覆盖的前端对象入口（`ClearNamedFramebuffer*`、`BlitNamedFramebuffer`、`GetTex(ture)Image`、`MultiDrawElements`）及其实现删；Magma 前端 render pass、pending clear、renderbuffer 半边删。Magma 管线构建只读 draw framebuffer 记录，其后的前端纹理同步删。link ratchet 171 → 49，`# P13` 95 → 9（余下见 HANDOFF §3d，转 W7） |
+| W7 | 本地完成 | `9fa61b84` | D12：`SOURCE_FILES` 按 link ratchet 的 PARTITION 拆成 7 个 OBJECT 库（`mg_util` / `mg_pipe` / `mg_backend` / `mg_frontend` / `mg_remote_transport` / `mg_remote_client` / `mg_remote_server`），`MobileGL` 与 `MobileGL_s` 链同一批对象（每个文件只编一次），编译侧使用要求集中在接口目标 `mgl_build_iface`。新目标 `MobileGL_server_linkcheck`（split、Linux）：只链 server 与 shared 模块、`--no-undefined`，基线里每条前端引用经 `scripts/ci/server_link_check.py` 生成的 `--defsym` 具名豁免到一个 abort 桩；基线没列的 server→前端引用在链接前按名拒绝（两个阴性对照已验：少一条基线、少一条豁免都红）。当前 65 条豁免：49 条来自 server 对象（即基线），16 条来自 shared 的入口胶水（`Init` / 全局对象）。`link_ratchet.py` 改为同时扫 `mg_*.dir` |
 
 ### G1 退役读数（ID-P13-4，2026-10-06）
 
