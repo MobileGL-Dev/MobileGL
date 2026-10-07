@@ -2325,6 +2325,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                                  Vector<FboAttachmentSyncEntry>& list, Bool listValid) {
             if (listValid) {
                 for (const auto& entry : list) {
+                    // P14: the unit list's aggregate clean gate first (SyncNeccessaryTextures): an
+                    // attachment whose storage, parameters and sampler are already the driver's
+                    // costs two record reads instead of three nested syncs and their SharedPtr
+                    // traffic. Same borrow rule as there - the list's key proves the twin alive.
+                    const auto* record = PipeTextureRecordForHandle(entry.Res);
+                    if (record != nullptr && entry.backend != nullptr &&
+                        entry.backend->IsDrawSyncCleanByRecord(entry.Res, *record))
+                        continue;
                     TextureImpl::SyncTextureToBackendByHandle(entry.Res, /*imageBindableStorageRequired=*/false);
                 }
                 return;
