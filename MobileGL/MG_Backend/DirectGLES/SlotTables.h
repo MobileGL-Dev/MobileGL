@@ -207,6 +207,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
         Table& ForCallingThread() const {
             Key key;
             CurrentTwinKey(&key);
+            // The memo hit without the SharedPtr copy Shared() hands out: two atomic reference
+            // count operations per twin lookup, several lookups per draw (P14). The map keeps the
+            // table alive; only Drop/DropSession/Reset release it, and they clear the memo.
+            if (m_memoTable != nullptr && m_memoKey == key) return *m_memoTable;
             return *Shared(key);
         }
 
