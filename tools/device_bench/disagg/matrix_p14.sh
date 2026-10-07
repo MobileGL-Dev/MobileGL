@@ -33,7 +33,16 @@ SAMPLER=/data/local/tmp/cpusampler
 
 shq() { adb -s "$SER" shell "$1"; }
 log() { local line; line="[$(date '+%F %T')] $*"; mkdir -p "$ROOT"; echo "$line" >>"$LOG"; echo "$line"; }
-pkg_of() { [ "$1" = dev ] && echo "$PKG_DEV" || echo "$PKG_FEAT"; }
+# An arm is <kind>[@<tag>]: the tag picks another installed build of the trace APK
+# (top.mobilegl.plugin.<tag>.trace), so two builds can be interleaved in one matrix.
+arm_kind() { echo "${1%@*}"; }
+pkg_of() {
+  case "$1" in
+    *@*) echo "top.mobilegl.plugin.${1#*@}.trace" ;;
+    dev) echo "$PKG_DEV" ;;
+    *) echo "$PKG_FEAT" ;;
+  esac
+}
 app_of() { echo "/data/user/0/$1/files/trace-replay"; }
 
 wl_args() { # trace golden w h target crop
@@ -44,7 +53,7 @@ wl_args() { # trace golden w h target crop
 }
 
 arm_env() {
-  case "$1" in
+  case "$(arm_kind "$1")" in
     dev|monolith) echo "" ;;
     inproc) echo "MOBILEGL_TRANSPORT=inproc;MOBILEGL_IPC_RUN_AHEAD=1" ;;
     shm) echo "MOBILEGL_TRANSPORT=spawn;MOBILEGL_IPC_CONTROL=fork;MOBILEGL_IPC_DATA=auto;MOBILEGL_IPC_RUN_AHEAD=1" ;;
@@ -93,13 +102,13 @@ verify_run() {
   {
     echo "arm=$arm backend=$backend"
     grep -aq "Active backend type set to $backend" "$all" && echo "BACKEND=OK" || echo "BACKEND=MISSING"
-    case "$arm" in
+    case "$(arm_kind "$arm")" in
       dev|monolith) grep -aqE "Config: MOBILEGL_TRANSPORT=(inproc|spawn)" "$all" && echo "ARM=UNEXPECTED_SPLIT" || echo "ARM=OK(monolith)" ;;
       inproc) grep -aq "Config: MOBILEGL_TRANSPORT=inproc - the MGPipe record stream" "$all" && echo "ARM=OK(inproc)" || echo "ARM=MISSING" ;;
       shm) grep -aq "spawn ARMED - the server role runs in pid" "$all" && echo "ARM=OK(spawn)" || echo "ARM=MISSING" ;;
       tcp) grep -aq "control=tcp data=stream server=" "$all" && echo "ARM=OK(tcp)" || echo "ARM=MISSING" ;;
     esac
-    case "$arm" in inproc|shm|tcp) grep -aq "run-ahead ARMED" "$all" && echo "RUN_AHEAD=OK" || echo "RUN_AHEAD=MISSING" ;; esac
+    case "$(arm_kind "$arm")" in inproc|shm|tcp) grep -aq "run-ahead ARMED" "$all" && echo "RUN_AHEAD=OK" || echo "RUN_AHEAD=MISSING" ;; esac
     grep -aq "running lockstep" "$all" && echo "LOCKSTEP=PRESENT"
     echo "FATAL_LINES=$(grep -ac 'Fatal{' "$all")"
   } >"$v"
@@ -114,11 +123,11 @@ run_one() {
   cool_down
   local t0 epoch0 status=""; t0=$(temp_dc); epoch0=$(date +%s)
   log "BEGIN $TAG $wl/$backend/$arm r$rep $mode temp=$t0"
-  shq "am force-stop $PKG_FEAT; am force-stop $PKG_DEV" >/dev/null 2>&1
+  shq "am force-stop $PKG_FEAT; am force-stop $PKG_DEV; am force-stop $pkg" >/dev/null 2>&1
   shq "run-as $pkg sh -c 'rm -f $app/output/*.json $app/output/*.log $app/output/*.png /data/user/0/$pkg/files/mgl.*.log'" >/dev/null 2>&1
   shq "su -c 'pkill -f cpusampler; rm -f /data/local/tmp/p14cpu.csv'" >/dev/null 2>&1
   adb -s "$SER" logcat -c >/dev/null 2>&1
-  if [ "$arm" = tcp ]; then
+  if [ "$(arm_kind "$arm")" = tcp ]; then
     python "$(cygpath -w "$REPO_ROOT/tools/trace_replay/tcp_device_server.py")" start --serial "$SER" --package "$pkg" \
       --backend "$backend" --listen tcp://127.0.0.1:40613 >"$dir/server-start.log" 2>&1 || { echo server_start_failed >"$dir/STATUS"; log "FAIL tcp server"; return 1; }
     local waited=0
@@ -148,7 +157,7 @@ run_one() {
     adb -s "$SER" exec-out "run-as $pkg cat $app/output/$f" >"$dir/$f" 2>/dev/null
     { [ -s "$dir/$f" ] && ! head -c 200 "$dir/$f" | grep -q "No such file"; } || rm -f "$dir/$f"
   done
-  if [ "$arm" = tcp ]; then
+  if [ "$(arm_kind "$arm")" = tcp ]; then
     for f in mgl.client.log mgl.server.log; do adb -s "$SER" exec-out "run-as $pkg cat /data/user/0/$pkg/files/$f" >"$dir/$f" 2>/dev/null; done
     python "$(cygpath -w "$REPO_ROOT/tools/trace_replay/tcp_device_server.py")" stop --serial "$SER" --package "$pkg" >/dev/null 2>&1
   fi
@@ -170,7 +179,7 @@ main() {
   log "=== matrix_p14 $1 tag=$TAG arms=${ARMS[*]} backends=${BACKENDS[*]} wls=${WLS[*]} reps=$REPS ==="
   shq "input keyevent KEYCODE_WAKEUP; svc power stayon usb" >/dev/null 2>&1
   case "$1" in
-    prep) prep_pkg "$PKG_FEAT"; prep_pkg "$PKG_DEV" ;;
+    prep) for p in ${PREP_PKGS:-$PKG_FEAT $PKG_DEV}; do prep_pkg "$p"; done ;;
     run)
       for wl in "${WLS[@]}"; do
         for ((r = 1; r <= REPS; r++)); do

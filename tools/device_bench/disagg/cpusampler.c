@@ -5,7 +5,7 @@
 //
 // Every interval it reads /proc/<pid>/task/<tid>/schedstat (on-CPU ns, not the 10 ms tick
 // counters of stat) for every thread of every process whose cmdline starts with <package>
-// (the replay process and, for spawn/tcp, the render-server process), and keeps the last
+// (the replay process) and of every libMobileGLServer.so process (spawn/tcp), and keeps the last
 // kRingSeconds of samples in memory. When <watch_file> (benchmark.json) appears it dumps the
 // ring to <out.csv> and exits; the host cuts the benchmark's tail window out of it with the
 // file's mtime as the window end (make_report.py / cpu_window.py). Timestamps are
@@ -20,7 +20,7 @@
 #include <time.h>
 #include <unistd.h>
 
-#define MAXP 8
+#define MAXP 16
 #define MAXT 512
 #define RING 4096
 
@@ -94,7 +94,11 @@ static int ScanPids(const char* pkg, int* pids) {
         if (e->d_name[0] < '0' || e->d_name[0] > '9') continue;
         snprintf(path, sizeof path, "/proc/%s/cmdline", e->d_name);
         if (ReadSmall(path, buf, sizeof buf) <= 0) continue;
-        if (strncmp(buf, pkg, len) == 0 && (buf[len] == 0 || buf[len] == ':')) pids[n++] = atoi(e->d_name);
+        // The replay process (and its :services), plus the render-server processes the spawn and
+        // tcp arms exec (their cmdline is the server library's name, not the package's).
+        if ((strncmp(buf, pkg, len) == 0 && (buf[len] == 0 || buf[len] == ':')) ||
+            strncmp(buf, "libMobileGLServer.so", 20) == 0)
+            pids[n++] = atoi(e->d_name);
     }
     closedir(d);
     return n;
@@ -148,20 +152,20 @@ int main(int argc, char** argv) {
             }
             closedir(d);
         }
-        if (iteration % 10 == 0) {
-            // gpu_clock_stats: cumulative busy time per power level; its sum is busy-since-boot.
-            // (gpubusy is a sliding ~1 s window, not a counter.)
-            if (ReadSmall("/sys/class/kgsl/kgsl-3d0/gpu_clock_stats", buf, sizeof buf) > 0) {
-                long long sum = 0;
-                for (char* q = buf; *q;) {
-                    char* end = q;
-                    const long long v = strtoll(q, &end, 10);
-                    if (end == q) break;
-                    sum += v;
-                    q = end;
-                }
-                Push(now, Pseudo("gpubusy_us"), sum);
+        // gpu_clock_stats: cumulative busy time per power level; its sum is busy-since-boot.
+        // (gpubusy is a sliding ~1 s window, not a counter.)
+        if (ReadSmall("/sys/class/kgsl/kgsl-3d0/gpu_clock_stats", buf, sizeof buf) > 0) {
+            long long sum = 0;
+            for (char* q = buf; *q;) {
+                char* end = q;
+                const long long v = strtoll(q, &end, 10);
+                if (end == q) break;
+                sum += v;
+                q = end;
             }
+            Push(now, Pseudo("gpubusy_us"), sum);
+        }
+        if (iteration % 10 == 0) {
             if (ReadSmall("/sys/class/kgsl/kgsl-3d0/devfreq/cur_freq", buf, sizeof buf) > 0)
                 Push(now, Pseudo("gpufreq"), atoll(buf));
             if (ReadSmall("/sys/devices/system/cpu/cpufreq/policy7/scaling_cur_freq", buf, sizeof buf) > 0)
