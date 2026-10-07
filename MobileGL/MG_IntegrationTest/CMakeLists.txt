@@ -4981,6 +4981,61 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
             ENVIRONMENT "${MGL_ITEST_MAGMA_SV_ENVIRONMENT}\;VK_INSTANCE_LAYERS=VK_LAYER_KHRONOS_validation\;MGITEST_REQUIRE_VK_VALIDATION_LAYER=1\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/magma-sv-mip3d-validation.log")
 endif()
 
+# P14: texture texels uploaded BETWEEN two draws of one frame that sample the texture, with no wait in
+# between (Scenarios/TextureUploadBetweenDrawsScenario.cpp): the first draw sees the old texels, the
+# second the new, with and without a chain growth (re-mint + preserve) in between. Magma orders its
+# upload batch behind the earlier draws with queue order and the batch's first barrier, not a CPU
+# drain. Public GL: the ambient `DirectGLES.` / `DirectVulkan.` monolith discovery runs it, the GLES
+# split arms through the macro, Magma's three transports by hand, and two `.SyncValidation.` entries
+# (monolith and inproc, where the server's Vulkan instance is this process) under the Khronos
+# synchronization validator, red on any SYNC-HAZARD line whatever the device's timing. Submit-time
+# validation is OFF by default in the layer, and without it a hazard across two queue submissions -
+# the only kind this case can have - is never reported (measured: the src-scope red-once stayed
+# green until it was set).
+target_sources(MobileGLIntegrationTest PRIVATE Scenarios/TextureUploadBetweenDrawsScenario.cpp)
+if (MOBILEGL_BUILD_DISAGGREGATED)
+    mgl_itest_register_split_arms("TextureUploadBetweenDrawsScenario.*" "")
+    foreach(mglItestArm IN LISTS MGL_ITEST_MAGMA_ARMS)
+        mgl_itest_magma_arm_shape(${mglItestArm})
+        mgl_itest_join_environment(MGL_ITEST_MAGMA_UPLOAD_ENVIRONMENT
+            ${MGL_ITEST_MAGMA_SV_FLAVOUR_ENV} ${mglItestArmTransportEnv})
+        gtest_discover_tests(MobileGLIntegrationTest
+            TEST_PREFIX "DirectVulkan.${mglItestArm}.UploadBetweenDraws."
+            TEST_FILTER "TextureUploadBetweenDrawsScenario.*"
+            DISCOVERY_TIMEOUT 30
+            PROPERTIES LABELS "${mglItestMagmaLabels}"
+                TIMEOUT ${MGL_ITEST_TIMEOUT}
+                ${mglItestArmProperties}
+                ENVIRONMENT "${MGL_ITEST_MAGMA_UPLOAD_ENVIRONMENT}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/magma-upload-between-draws${mglItestArmLogTag}.log")
+    endforeach()
+    mgl_itest_magma_arm_shape(Split)
+    mgl_itest_join_environment(MGL_ITEST_MAGMA_UPLOAD_ENVIRONMENT
+        ${MGL_ITEST_MAGMA_SV_FLAVOUR_ENV} ${mglItestArmTransportEnv})
+    set(MGL_ITEST_SYNC_VALIDATION_ENV
+        "VK_INSTANCE_LAYERS=VK_LAYER_KHRONOS_validation"
+        "VK_KHRONOS_VALIDATION_VALIDATE_SYNC=true"
+        "VK_KHRONOS_VALIDATION_SYNCVAL_SUBMIT_TIME_VALIDATION=true"
+        "VK_KHRONOS_VALIDATION_SYNCVAL_SHADER_ACCESSES_HEURISTIC=true"
+        "MGITEST_REQUIRE_VK_VALIDATION_LAYER=1")
+    mgl_itest_join_environment(MGL_ITEST_SYNC_VALIDATION_ENVIRONMENT ${MGL_ITEST_SYNC_VALIDATION_ENV})
+    gtest_discover_tests(MobileGLIntegrationTest
+        TEST_PREFIX "DirectVulkan.Split.SyncValidation."
+        TEST_FILTER "TextureUploadBetweenDrawsScenario.*"
+        DISCOVERY_TIMEOUT 30
+        PROPERTIES LABELS "${mglItestMagmaLabels}"
+            TIMEOUT ${MGL_ITEST_TIMEOUT}
+            FAIL_REGULAR_EXPRESSION "SYNC-HAZARD"
+            ENVIRONMENT "${MGL_ITEST_MAGMA_UPLOAD_ENVIRONMENT}\;${MGL_ITEST_SYNC_VALIDATION_ENVIRONMENT}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/magma-upload-between-draws-syncval.log")
+    gtest_discover_tests(MobileGLIntegrationTest
+        TEST_PREFIX "DirectVulkan.SyncValidation."
+        TEST_FILTER "TextureUploadBetweenDrawsScenario.*"
+        DISCOVERY_TIMEOUT 30
+        PROPERTIES LABELS "${mglItestMagmaLabels}"
+            TIMEOUT ${MGL_ITEST_TIMEOUT}
+            FAIL_REGULAR_EXPRESSION "SYNC-HAZARD"
+            ENVIRONMENT "${MGL_ITEST_VULKAN_ENVIRONMENT}\;${MGL_ITEST_SYNC_VALIDATION_ENVIRONMENT}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/magma-upload-between-draws-syncval-monolith.log")
+endif()
+
 # =====================================================================================
 # P7 PACKAGE L: THE INFORMATIONAL MAGMA CENSUS - TIER 2 OF TWO
 # =====================================================================================
