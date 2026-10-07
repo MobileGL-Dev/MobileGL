@@ -10,8 +10,11 @@
 
 namespace MobileGL::MG_State::GLState {
     BufferState::BufferState() {
+        m_bindingSlotIndex.fill(-1);
         for (SizeT i = 0; i < m_bindingSlots.size(); ++i) {
             m_bindingSlots[i] = BindingSlot<BufferObject>(GlobalBufferTargets[i]);
+            const auto target = static_cast<SizeT>(GlobalBufferTargets[i]);
+            if (target < m_bindingSlotIndex.size()) m_bindingSlotIndex[target] = static_cast<Int16>(i);
         }
         for (SizeT i = 0; i < m_touchedBindPointCount.size(); ++i) {
             m_touchedBindPointCount[i] = 0;
@@ -19,6 +22,10 @@ namespace MobileGL::MG_State::GLState {
     }
 
     BindingSlot<BufferObject>& BufferState::GetBindingSlot(BufferTarget target) {
+        // O(1) through the index the constructor built (every draw asks for several targets).
+        const auto index = static_cast<SizeT>(target);
+        if (index < m_bindingSlotIndex.size() && m_bindingSlotIndex[index] >= 0)
+            return m_bindingSlots[static_cast<SizeT>(m_bindingSlotIndex[index])];
         for (auto& bindingSlot : m_bindingSlots) {
             if (bindingSlot.GetTarget() == target) {
                 return bindingSlot;

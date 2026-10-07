@@ -144,6 +144,17 @@ namespace MobileGL::MG_Pipe {
             Vector<SlotState> BandSlots;
             Vector<Uint32> BandFreeList;
             UnorderedMap<Uint64, Uint32> ByLifetimeId;
+            // P14: a direct-mapped front for ByLifetimeId. Every draw resolves its VAO, its
+            // vertex buffers and its textures by lifetime id, and the hash map was ~2-3% of a
+            // Minecraft frame. Keyed on the lifetime id (monotonic, never reused) and confirmed
+            // against the slot's own LifetimeId and Live bit on every hit, so a stale entry can
+            // only miss. Mutable: FindByLifetimeId is const and fills it.
+            struct RecentEntry {
+                Uint64 LifetimeId = 0;
+                Uint32 Slot = 0;
+            };
+            static constexpr SizeT kRecentEntries = 1024;
+            mutable Array<RecentEntry, kRecentEntries> Recent{};
             Uint32 LiveCount = 0;
             // The band's share of LiveCount above, so the two spaces can be reported apart
             // without walking either table. Always 0 for every kind but ShaderCso.

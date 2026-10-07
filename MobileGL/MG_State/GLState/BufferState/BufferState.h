@@ -106,6 +106,8 @@ namespace MobileGL::MG_State::GLState {
     Uint64 m_anyBufferChangeGeneration = 0;
     Array<Uint64, BufferBindPointTargets.size()> m_bindPointGeneration{};
         Array<BindingSlot<BufferObject>, GlobalBufferTargets.size()> m_bindingSlots;
+        // BufferTarget -> index into m_bindingSlots, -1 for a target with no global slot.
+        Array<Int16, static_cast<SizeT>(BufferTarget::BufferTargetCount)> m_bindingSlotIndex{};
         // TODO: query the count somewhere globally?
         // For glBindBufferBase / glBindBufferRange
         Array<Array<BindingSlotRange1D<BufferObject>, BufferBindingPointCount>, BufferBindPointTargets.size()>

@@ -206,10 +206,20 @@ namespace MobileGL::MG_Pipe {
 #endif
         if (lifetimeId == 0) return kMGPipeNullHandle;
         const KindState& state = StateOf(kind);
+        // The direct-mapped front (SlotAllocator.h): a hit is only believed when the slot it
+        // names is live AND still owned by this very lifetime id.
+        auto& recent = state.Recent[lifetimeId % KindState::kRecentEntries];
+        if (recent.LifetimeId == lifetimeId) {
+            const SlotState* entry = EntryOf(state, kind, recent.Slot);
+            if (entry != nullptr && entry->Live && entry->LifetimeId == lifetimeId)
+                return MGPipeHandle{recent.Slot, entry->Gen};
+        }
         const auto it = state.ByLifetimeId.find(lifetimeId);
         if (it == state.ByLifetimeId.end()) return kMGPipeNullHandle;
         const SlotState* entry = EntryOf(state, kind, it->second);
         if (entry == nullptr || !entry->Live) return kMGPipeNullHandle;
+        recent.LifetimeId = lifetimeId;
+        recent.Slot = it->second;
         return MGPipeHandle{it->second, entry->Gen};
     }
 
@@ -304,6 +314,7 @@ namespace MobileGL::MG_Pipe {
             state.BandSlots.clear();
             state.BandFreeList.clear();
             state.ByLifetimeId.clear();
+            state.Recent.fill({});
             state.LiveCount = 0;
             state.BandLiveCount = 0;
         }
