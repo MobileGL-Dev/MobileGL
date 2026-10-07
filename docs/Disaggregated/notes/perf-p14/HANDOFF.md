@@ -93,3 +93,5 @@ HA27Q3LQ: CPU/GPU clocks PINNED (`bash pin_clocks.sh restore` to undo). FCL lib/
 
 No run has completed since f8a9466b (each push cancelled the previous). workflow_dispatch runs on
 the checkpoint head: see the milestone message / below.
+
+Dispatched on ff53ba3b: Test run 37674322398, MobileGL APK run 37674328683 (workflow_dispatch, not cancelled by later pushes).
