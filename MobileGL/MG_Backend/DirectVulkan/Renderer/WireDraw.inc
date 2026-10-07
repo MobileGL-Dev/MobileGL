@@ -311,7 +311,6 @@
         if (vaoHandle.Slot >= state.VertexElementsCsos.size()) MagmaWireFatal("vertex-elements-record");
         const auto& vao = state.VertexElementsCsos[vaoHandle.Slot];
         if (!vao.Live || vao.Gen != vaoHandle.Gen) MagmaWireFatal("vertex-elements-generation");
-        auto& input = scratch.input;
         // P7 wave 2 package C, CONTRACT-P7 §3.2: THE `vertex-layout` ROW IS RETIRED AND SPLIT.
         //
         // A false is now ONE reason and only one - `buffer-window`, an enabled attribute the
@@ -324,9 +323,18 @@
         // protocol error, not a shape the split path has yet to migrate, so it must not keep
         // counting against the census of unmigrated refusals (scripts/ci/fatal_census.py
         // counts the marker literally, which is also why no comment in this package spells it).
-        if (!m_vertexInputStateFactory->BuildWireVertexInput(vao, state,
-                programObj.activeVertexInputLocationMask, input))
-            MagmaWireFatal("vertex-layout-buffer-window");
+        // P14: resolved through the record's own memo (ResolveWireVertexInput), except in a nested
+        // preparation, which builds into its own scratch rather than under the outer draw's feet.
+        const VertexInputStateFactory::BackendVertexInputState* resolvedInput = nullptr;
+        if (&scratch == &m_wireDrawScratch) {
+            resolvedInput = m_vertexInputStateFactory->ResolveWireVertexInput(vao, state,
+                programObj.activeVertexInputLocationMask);
+        } else if (m_vertexInputStateFactory->BuildWireVertexInput(vao, state,
+                       programObj.activeVertexInputLocationMask, scratch.input)) {
+            resolvedInput = &scratch.input;
+        }
+        if (resolvedInput == nullptr) MagmaWireFatal("vertex-layout-buffer-window");
+        const auto& input = *resolvedInput;
         // The seven device/format reasons are now MASKED OUT of the vertex input state, and
         // this is the monolith arm's pre-flight for them, statement for statement
         // (VulkanRenderer.cpp's SetupDraw: "Fail loudly rather than render wrong pixels"). An

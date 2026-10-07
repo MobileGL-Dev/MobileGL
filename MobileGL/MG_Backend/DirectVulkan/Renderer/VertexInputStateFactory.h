@@ -119,6 +119,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Bool BuildWireVertexInput(const MG_Pipe::MGPipeVertexElementsRecord& elements,
                                   const MG_Pipe::MGPipeApplierState& state, Uint32 activeMask,
                                   BackendVertexInputState& out) const;
+        // The same layout, kept on the record (MGPipeVertexElementsRecord::BackendMemo) and rebuilt
+        // only when the record's configuration, the program's active mask, the buffer window or an
+        // active attribute's buffer offset/stride/divisor moved - everything the build reads that
+        // can change. Null where BuildWireVertexInput would return false.
+        const BackendVertexInputState* ResolveWireVertexInput(const MG_Pipe::MGPipeVertexElementsRecord& elements,
+                                                              const MG_Pipe::MGPipeApplierState& state,
+                                                              Uint32 activeMask) const;
 
     private:
         static VkFormat ToVkVertexFormat(DataType type, Int size, Bool normalized, Bool isInteger, Bool isBgra = false,

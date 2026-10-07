@@ -292,18 +292,21 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         IBufferCopyCommandProvider* m_copyProvider = nullptr;
         Vector<Vector<VkBufferObject>> m_deferredBufferReleases;
         std::unordered_map<Uint64, WireBufferResource> m_wireBuffers;
-        // P14: a direct-mapped front for m_wireBuffers (every draw resolves each vertex, index and
-        // uniform buffer). Keyed on WireBufferKey ({slot, gen}, never reused) and believed only at
-        // the erase count it was taken at: a node never moves until erased, and every erase moves
-        // the count.
+        // P14: a slot-indexed front for m_wireBuffers (every draw resolves each vertex, index and
+        // uniform buffer). An entry is believed only for the generation it was taken at ({slot,
+        // gen} is never reused), and the erase of that node clears it: a node never moves until
+        // erased. Slot-indexed rather than direct-mapped because a Minecraft frame draws from a
+        // few thousand live buffers, which a small hashed table mostly missed.
         struct WireBufferLookup {
-            Uint64 key = 0;
-            Uint64 eraseCount = 0;
+            Uint32 gen = 0;
             WireBufferResource* resource = nullptr;
         };
-        static constexpr SizeT kWireBufferLookupEntries = 256;
-        Array<WireBufferLookup, kWireBufferLookupEntries> m_wireBufferLookup{};
-        Uint64 m_wireBufferEraseCount = 0;
+        static constexpr SizeT kWireBufferLookupMaxSlots = SizeT{1} << 20;
+        Vector<WireBufferLookup> m_wireBufferLookup;
+        void ForgetWireBufferLookup(Uint64 key) {
+            const SizeT slot = static_cast<SizeT>(key & 0xffffffffu);
+            if (slot < m_wireBufferLookup.size()) m_wireBufferLookup[slot] = {};
+        }
         // See DeferredWireRelease. ONE FLAT LIST rather than the per-frame-slot buckets above:
         // the whole point is that these entries do not wait for a frame slot to come round.
         Vector<DeferredWireRelease> m_deferredWireReleases;

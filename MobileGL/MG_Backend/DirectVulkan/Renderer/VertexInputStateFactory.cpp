@@ -18,6 +18,64 @@
 #include <utility>
 
 namespace MobileGL::MG_Backend::DirectVulkan {
+    namespace {
+        struct WireVertexInputMemo {
+            struct Key {
+                Uint64 Offset;
+                Uint32 Stride;
+                Uint32 Divisor;
+            };
+            Bool Valid = false;
+            Uint64 ContentSerial = 0;
+            Uint32 ActiveMask = 0;
+            Uint32 Start = 0;
+            Uint32 Count = 0;
+            Uint32 KeyCount = 0;
+            Array<Key, MG_Pipe::kMGPipeMaxVertexAttribs> Keys{};
+            VertexInputStateFactory::BackendVertexInputState State;
+        };
+    } // namespace
+
+    const VertexInputStateFactory::BackendVertexInputState* VertexInputStateFactory::ResolveWireVertexInput(
+            const MG_Pipe::MGPipeVertexElementsRecord& elements, const MG_Pipe::MGPipeApplierState& state,
+            Uint32 activeMask) const {
+        auto* memo = static_cast<WireVertexInputMemo*>(elements.BackendMemo.get());
+        if (memo == nullptr) {
+            auto created = std::make_shared<WireVertexInputMemo>();
+            memo = created.get();
+            elements.BackendMemo = Move(created);
+        }
+        // The window first: a location outside it is BuildWireVertexInput's refusal, and the
+        // keys below index the window.
+        Bool hit = memo->Valid && memo->ContentSerial == elements.ContentSerial && memo->ActiveMask == activeMask &&
+                   memo->Start == state.VertexBufferStart && memo->Count == state.VertexBufferCount;
+        if (hit) {
+            Uint32 n = 0;
+            for (Uint32 location = 0; location < elements.AttributeCount && hit; ++location) {
+                if (!elements.Attributes[location].Enabled || !(activeMask & (1u << location))) continue;
+                const auto& buffer = state.VertexBuffers[location];
+                const auto& key = memo->Keys[n++];
+                hit = key.Offset == buffer.Offset && key.Stride == buffer.Stride && key.Divisor == buffer.Divisor;
+            }
+            if (hit) return &memo->State;
+        }
+        memo->Valid = false;
+        if (!BuildWireVertexInput(elements, state, activeMask, memo->State)) return nullptr;
+        Uint32 n = 0;
+        for (Uint32 location = 0; location < elements.AttributeCount; ++location) {
+            if (!elements.Attributes[location].Enabled || !(activeMask & (1u << location))) continue;
+            const auto& buffer = state.VertexBuffers[location];
+            memo->Keys[n++] = {buffer.Offset, buffer.Stride, buffer.Divisor};
+        }
+        memo->KeyCount = n;
+        memo->ContentSerial = elements.ContentSerial;
+        memo->ActiveMask = activeMask;
+        memo->Start = state.VertexBufferStart;
+        memo->Count = state.VertexBufferCount;
+        memo->Valid = true;
+        return &memo->State;
+    }
+
     Bool VertexInputStateFactory::BuildWireVertexInput(const MG_Pipe::MGPipeVertexElementsRecord& elements,
             const MG_Pipe::MGPipeApplierState& state, Uint32 activeMask, BackendVertexInputState& out) const {
         // The caller's state is a per-draw scratch (WireDraw.inc): reset it without freeing.
