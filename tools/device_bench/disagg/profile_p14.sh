@@ -25,6 +25,7 @@ case "$ARM" in
   dev|monolith) env="" ;;
   inproc) env="MOBILEGL_TRANSPORT=inproc;MOBILEGL_IPC_RUN_AHEAD=1" ;;
   shm) env="MOBILEGL_TRANSPORT=spawn;MOBILEGL_IPC_CONTROL=fork;MOBILEGL_IPC_DATA=auto;MOBILEGL_IPC_RUN_AHEAD=1" ;;
+  tcp) env="MOBILEGL_TRANSPORT=spawn;MOBILEGL_IPC_CONTROL=tcp://127.0.0.1:40613;MOBILEGL_IPC_DATA=stream;MOBILEGL_IPC_RUN_AHEAD=1" ;;
 esac
 [ -n "${EXTRA_ENV:-}" ] && env="${env:+$env;}$EXTRA_ENV"
 case "$WL" in
