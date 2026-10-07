@@ -169,7 +169,7 @@ endif()
 foreach(pipeTest ResourceEmitTest VertexInputEmitTest
                  FramebufferEmitTest TextureEmitTest SamplerEmitTest ImageEmitTest
                  ProgramEmitTest CompositeResolverTest
-                 ShaderBufferEmitTest)
+                 ShaderBufferEmitTest RecorderGoldenTest)
         add_executable(${pipeTest} ${pipeTest}.cpp)
 
         target_include_directories(${pipeTest} PRIVATE
@@ -190,6 +190,11 @@ foreach(pipeTest ResourceEmitTest VertexInputEmitTest
                 target_compile_options(${pipeTest} PRIVATE /Zc:preprocessor)
         endif()
 endforeach()
+
+# P13 W8: the recorder goldens live beside the source, so a regeneration
+# (MOBILEGL_RECORDER_GOLDEN_WRITE=1) writes the checked-in files.
+target_compile_definitions(RecorderGoldenTest PRIVATE
+        MGL_RECORDER_GOLDEN_DIR="${CMAKE_CURRENT_SOURCE_DIR}/goldens/recorder")
 
 # P5 package p1: table 2 (PipeInputs field ownership) at runtime. Registered in EVERY
 # configuration rather than behind `if (MOBILEGL_BUILD_DISAGGREGATED)` like the Wire suite,
@@ -243,7 +248,7 @@ gtest_discover_tests(FieldOwnershipTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS u
 foreach(pipeTest ResourceEmitTest VertexInputEmitTest
                  FramebufferEmitTest TextureEmitTest SamplerEmitTest ImageEmitTest
                  ProgramEmitTest CompositeResolverTest
-                 ShaderBufferEmitTest)
+                 ShaderBufferEmitTest RecorderGoldenTest)
         gtest_discover_tests(${pipeTest} DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
 endforeach()
 gtest_discover_tests(MagmaPipeIdentityTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)

@@ -1794,6 +1794,12 @@ namespace MobileGL::MG_Record {
 
     Bool MonolithVerbPortInstalled() { return g_monolithVerbPort; }
 
+    Bool SetMonolithVerbPortRoutingForTesting(Bool viaPort) {
+        const Bool previous = g_monolithVerbPort;
+        g_monolithVerbPort = viaPort;
+        return previous;
+    }
+
     void SetDropClearEmissionForNegativeControl(Bool drop) { g_dropClearEmission = drop; }
     Uint64 DroppedClearEmissions() { return g_droppedClearEmissions; }
 

@@ -76,6 +76,10 @@ namespace MobileGL::MG_Record {
     // by the library's bring-up when MG_Config::RecordArmAliasesFrontend() holds.
     void InstallMonolithVerbPort(MG_Backend::GlobalBackendFunctionsTable& table);
     Bool MonolithVerbPortInstalled();
+    // Tests only (MG_Test/Pipe/RecorderGoldenTest.cpp): send the ported slots to the verb session
+    // resolver instead of the in-process sink, so a recorder sees the records the port would apply.
+    // Returns the previous routing.
+    Bool SetMonolithVerbPortRoutingForTesting(Bool viaPort);
 
     // THE E2 NEGATIVE CONTROLS (t1's debt against c1, BRIEF §7). When set, the named emitter
     // SKIPS its record - it still runs the pre-verb hooks and still returns - so a replay that
