@@ -289,6 +289,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         VkDeviceSize indexOffset = 0;
         VkIndexType indexType = VK_INDEX_TYPE_MAX_ENUM;
         static constexpr Uint32 kMaxShadowedVertexBindings = 8;
+        // The wire buffer manager's store-destroy epoch the vertex/index halves were stamped at:
+        // a wire store can be destroyed mid-recording and its VkBuffer handle value re-minted, so
+        // an equal handle is only the same buffer while this epoch has not moved.
+        Uint64 bindStoreEpoch = 0;
         Bool vertexBindValid = false;
         Uint32 vertexBindingCount = 0;
         VkBuffer vertexBuffers[kMaxShadowedVertexBindings] = {};

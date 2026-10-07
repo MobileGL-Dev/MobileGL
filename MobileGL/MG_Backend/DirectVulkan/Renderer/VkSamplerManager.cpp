@@ -274,6 +274,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     void VkSamplerManager::Shutdown() {
+        ++m_destroyEpoch;
         for (auto& [_, sampler] : m_samplers) {
             if (m_device != VK_NULL_HANDLE && sampler.handle != VK_NULL_HANDLE) {
                 vkDestroySampler(m_device, sampler.handle, nullptr);
@@ -309,6 +310,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 if (m_device != VK_NULL_HANDLE && entry.handle != VK_NULL_HANDLE) {
                     vkDestroySampler(m_device, entry.handle, nullptr);
                 }
+                ++m_destroyEpoch;
                 if (entry.usesCustomBorderColor && m_customBorderColorSamplerCount > 0) {
                     --m_customBorderColorSamplerCount;
                 }

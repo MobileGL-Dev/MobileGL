@@ -645,8 +645,41 @@
             MGL_WIRE_DECLINE_AT(PipelineUnavailable, "no graphics pipeline could be created for this draw");
             return false;
         }
-        for (Uint32 i = 0; i < vertexSlices.size(); ++i)
-            vkCmdBindVertexBuffers(frame.commandBuffer, i, 1, &vertexSlices[i].buffer, &vertexSlices[i].offset);
+        // One call for the whole run of bindings 0..n-1 rather than one per binding, and none when
+        // the command buffer already holds exactly these (DynamicStateShadow: reset at every
+        // recording begin and by every auxiliary pipeline; the current-attribute binds below only
+        // ever touch bindings past n).
+        auto& bindShadow = *g_dynamicStateShadow;
+        const Uint64 storeEpoch = m_bufferManager.GetWireStoreDestroyEpoch();
+        if (bindShadow.bindStoreEpoch != storeEpoch) {
+            bindShadow.vertexBindValid = false;
+            bindShadow.indexBindValid = false;
+            bindShadow.bindStoreEpoch = storeEpoch;
+        }
+        if (!vertexSlices.empty()) {
+            VkBuffer buffers[kMaxVertexAttribs];
+            VkDeviceSize offsets[kMaxVertexAttribs];
+            const Uint32 count = static_cast<Uint32>(std::min<SizeT>(vertexSlices.size(), kMaxVertexAttribs));
+            for (Uint32 i = 0; i < count; ++i) {
+                buffers[i] = vertexSlices[i].buffer;
+                offsets[i] = vertexSlices[i].offset;
+            }
+            constexpr Uint32 kShadowed = DynamicStateShadow::kMaxShadowedVertexBindings;
+            Bool same = bindShadow.vertexBindValid && bindShadow.vertexBindingCount == count && count <= kShadowed;
+            for (Uint32 i = 0; same && i < count; ++i)
+                same = bindShadow.vertexBuffers[i] == buffers[i] && bindShadow.vertexOffsets[i] == offsets[i];
+            if (!same) {
+                vkCmdBindVertexBuffers(frame.commandBuffer, 0, count, buffers, offsets);
+                bindShadow.vertexBindValid = count <= kShadowed;
+                bindShadow.vertexBindingCount = count;
+                for (Uint32 i = 0; i < count && i < kShadowed; ++i) {
+                    bindShadow.vertexBuffers[i] = buffers[i];
+                    bindShadow.vertexOffsets[i] = offsets[i];
+                }
+            }
+            for (Uint32 i = count; i < vertexSlices.size(); ++i)
+                vkCmdBindVertexBuffers(frame.commandBuffer, i, 1, &vertexSlices[i].buffer, &vertexSlices[i].offset);
+        }
         Uint32 binding = static_cast<Uint32>(vertexSlices.size());
         for (Uint32 location = 0; location < kMaxVertexAttribs; ++location) {
             if (!(programObj.activeVertexInputLocationMask & (1u << location)) ||
@@ -667,7 +700,15 @@
             }
             vkCmdBindVertexBuffers(frame.commandBuffer, binding++, 1, &slice.buffer, &slice.offset);
         }
-        if (indexSlice.IsValid()) vkCmdBindIndexBuffer(frame.commandBuffer, indexSlice.buffer, indexSlice.offset, indexType);
+        if (indexSlice.IsValid() &&
+            !(bindShadow.indexBindValid && bindShadow.indexBuffer == indexSlice.buffer &&
+              bindShadow.indexOffset == indexSlice.offset && bindShadow.indexType == indexType)) {
+            vkCmdBindIndexBuffer(frame.commandBuffer, indexSlice.buffer, indexSlice.offset, indexType);
+            bindShadow.indexBindValid = true;
+            bindShadow.indexBuffer = indexSlice.buffer;
+            bindShadow.indexOffset = indexSlice.offset;
+            bindShadow.indexType = indexType;
+        }
         // Still open from the previous draw (nothing closed it, same command buffer): continue.
         const auto* active = VkRenderPassManager::GetActiveRenderPass();
         const Bool open = continuing && active != nullptr && active->commandBuffer == frame.commandBuffer &&
@@ -677,7 +718,11 @@
             MGL_WIRE_DECLINE_AT(BeginRenderPass, "the render pass for this draw could not be begun");
             return false;
         }
-        vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+        if (!bindShadow.graphicsPipelineValid || bindShadow.graphicsPipeline != pipeline) {
+            vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+            bindShadow.graphicsPipelineValid = true;
+            bindShadow.graphicsPipeline = pipeline;
+        }
         ApplyDynamicDrawStateTail(frame, pass.extent, fbo->IsDefault,
                                  ResolveDrawViewportCount(programObj.writesViewportIndexBuiltin));
         // Storage images this draw writes are what the next sampled-image barrier must cover.

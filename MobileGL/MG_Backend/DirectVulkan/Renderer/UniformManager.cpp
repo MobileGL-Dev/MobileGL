@@ -312,10 +312,38 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 MGLOG_E_ONCE("Magma wire: sampler CSO {%u, %u} named by texture unit %u is missing or no longer "
                              "live; sampling with default parameters", samplerHandle.Slot, samplerHandle.Gen, unit);
             }
-            out.sampler = m_samplerManager->GetOrCreateSamplerFromParameters(stale ? kDefaultSamplerParams : sampler->Params,
-                static_cast<TextureInternalFormat>(record.Desc.InternalFormat),
-                domain == SamplerNumericDomain::SignedInteger || domain == SamplerNumericDomain::UnsignedInteger,
-                levels);
+            const Bool forceNearest =
+                domain == SamplerNumericDomain::SignedInteger || domain == SamplerNumericDomain::UnsignedInteger;
+            static_assert(kWireSamplerMemoUnits == MG_Pipe::kMGPipeMaxTextureUnits,
+                          "the wire sampler memo has one entry per texture unit");
+            auto& memo = m_wireSamplerMemo[static_cast<SizeT>(unit)];
+            const Bool memoHit = !stale && memo.valid && memo.slot == samplerHandle.Slot &&
+                                 memo.gen == samplerHandle.Gen && memo.serial == sampler->Serial &&
+                                 memo.contextSerial == state.ContextSerial &&
+                                 memo.format == record.Desc.InternalFormat && memo.viewLevelCount == levels &&
+                                 memo.forceNearest == forceNearest &&
+                                 memo.frameBoundary == m_samplerManager->FrameBoundaryCount() &&
+                                 memo.destroyEpoch == m_samplerManager->DestroyEpoch();
+            if (memoHit) {
+                out.sampler = memo.sampler;
+            } else {
+                out.sampler = m_samplerManager->GetOrCreateSamplerFromParameters(
+                    stale ? kDefaultSamplerParams : sampler->Params,
+                    static_cast<TextureInternalFormat>(record.Desc.InternalFormat), forceNearest, levels);
+                memo.valid = !stale && out.sampler != VK_NULL_HANDLE;
+                if (memo.valid) {
+                    memo.slot = samplerHandle.Slot;
+                    memo.gen = samplerHandle.Gen;
+                    memo.serial = sampler->Serial;
+                    memo.contextSerial = state.ContextSerial;
+                    memo.format = record.Desc.InternalFormat;
+                    memo.viewLevelCount = levels;
+                    memo.forceNearest = forceNearest;
+                    memo.frameBoundary = m_samplerManager->FrameBoundaryCount();
+                    memo.destroyEpoch = m_samplerManager->DestroyEpoch();
+                    memo.sampler = out.sampler;
+                }
+            }
             if (!out.sampler) return false;
         }
         return true;

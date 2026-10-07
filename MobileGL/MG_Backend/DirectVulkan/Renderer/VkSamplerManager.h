@@ -56,6 +56,12 @@ public:
     // fence wait. Self-gated: one counter bump and compare except on sweep
     // boundaries.
     void OnFrameBoundary();
+    // For a caller that memoises a returned VkSampler (UniformManager's wire sampler memo): the
+    // frame-boundary count a GetOrCreate call stamps, and a counter that moves whenever any cached
+    // sampler is destroyed. A memo may reuse a handle only while the destroy epoch is unchanged,
+    // and must still call GetOrCreate once per frame boundary so the entry stays stamped as used.
+    Uint64 FrameBoundaryCount() const { return m_frameBoundaryCounter; }
+    Uint64 DestroyEpoch() const { return m_destroyEpoch; }
 
     // What GL_TEXTURE_BORDER_COLOR resolves to for one (sampler, texture) pair. `color` is always a
     // legal VkBorderColor; when `isCustom` it is one of the *_CUSTOM_EXT values and `customValue`
@@ -117,6 +123,8 @@ private:
     UnorderedMap<Uint64, SamplerCacheEntry> m_samplers;
     // Monotonic frame-boundary counter (bumped in OnFrameBoundary) for cache aging.
     Uint64 m_frameBoundaryCounter = 0;
+    // Moves on every vkDestroySampler of a cached entry (sweep and Shutdown).
+    Uint64 m_destroyEpoch = 0;
     static inline thread_local XXH64_state_t* m_hashState = XXH64_createState();
 };
 } // namespace MobileGL::MG_Backend::DirectVulkan

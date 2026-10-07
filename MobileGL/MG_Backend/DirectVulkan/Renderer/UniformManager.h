@@ -500,5 +500,23 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
         // WireImageWriteEpoch() when ResolveWireImageDescriptor last made image writes visible.
         mutable Uint64 m_wireImageBarrierEpoch = 0;
+        // P14: the wire arm's sampler memo, one entry per texture unit. The sampler a unit resolves
+        // to is a function of the sampler CSO it names (immutable for a {slot, gen, Serial} within
+        // one applier - ContextSerial tells appliers apart), the texture's format, the numeric
+        // domain and the view's level count. A hit skips the parameter hash and the cache map; it
+        // is taken only while the sampler manager has destroyed nothing (DestroyEpoch) and only
+        // within the frame boundary of the last real lookup, so every used entry is still stamped
+        // once per frame and the idle sweep can never retire a sampler this memo hands out.
+        struct WireSamplerMemo {
+            Bool valid = false;
+            Uint32 slot = 0, gen = 0;
+            Uint64 serial = 0, contextSerial = 0;
+            Uint32 format = 0, viewLevelCount = 0;
+            Bool forceNearest = false;
+            Uint64 frameBoundary = 0, destroyEpoch = 0;
+            VkSampler sampler = VK_NULL_HANDLE;
+        };
+        static constexpr SizeT kWireSamplerMemoUnits = 192; // MG_Pipe::kMGPipeMaxTextureUnits
+        mutable Array<WireSamplerMemo, kWireSamplerMemoUnits> m_wireSamplerMemo{};
     };
 } // namespace MobileGL::MG_Backend::DirectVulkan
