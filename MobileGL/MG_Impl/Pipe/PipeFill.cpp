@@ -133,8 +133,11 @@ namespace MobileGL::MG_Pipe {
             case F::GetBoundTransformFeedbackName:
                 dst.m_boundTransformFeedbackName = ctx.GetBoundTransformFeedbackName();
                 break;
+            // The four object pins: assigned only when the object moved, so the residual fill of
+            // every draw does not pay a reference-count increment and decrement for a pointer it
+            // already holds (P14: one of these moves per Minecraft draw, the other three rarely).
             case F::GetBoundVertexArray:
-                dst.m_boundVertexArray = ctx.GetBoundVertexArray();
+                if (dst.m_boundVertexArray != ctx.GetBoundVertexArray()) dst.m_boundVertexArray = ctx.GetBoundVertexArray();
                 break;
             case F::GetBufferBindingSlot:
                 // Every global target has a slot; Index stays null - GLContext resolves it
@@ -247,10 +250,11 @@ namespace MobileGL::MG_Pipe {
                 dst.m_primitiveRestartIndex = ctx.GetPrimitiveRestartIndex();
                 break;
             case F::GetProgramForDispatch:
-                dst.m_programForDispatch = ctx.GetProgramForDispatch();
+                if (dst.m_programForDispatch != ctx.GetProgramForDispatch())
+                    dst.m_programForDispatch = ctx.GetProgramForDispatch();
                 break;
             case F::GetProgramForDraw:
-                dst.m_programForDraw = ctx.GetProgramForDraw();
+                if (dst.m_programForDraw != ctx.GetProgramForDraw()) dst.m_programForDraw = ctx.GetProgramForDraw();
                 break;
             case F::GetProvokingVertexMode:
                 dst.m_provokingVertexMode = ctx.GetProvokingVertexMode();
@@ -291,7 +295,8 @@ namespace MobileGL::MG_Pipe {
                 dst.m_transformFeedbackPausedPrimitiveCounter = ctx.GetTransformFeedbackPausedPrimitiveCounter();
                 break;
             case F::GetTransformFeedbackProgram:
-                dst.m_transformFeedbackProgram = ctx.GetTransformFeedbackProgram();
+                if (dst.m_transformFeedbackProgram != ctx.GetTransformFeedbackProgram())
+                    dst.m_transformFeedbackProgram = ctx.GetTransformFeedbackProgram();
                 break;
             case F::GetViewport:
                 dst.m_viewport = ctx.GetViewport();

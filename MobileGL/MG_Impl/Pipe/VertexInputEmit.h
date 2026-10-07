@@ -211,7 +211,9 @@ namespace MobileGL::MG_Pipe {
             // a Minecraft frame binds hundreds of chunk VAOs. Not for client-memory arrays, whose
             // entries the draw itself supplies.
             VaoMemo* memo = vao && ownedClientBuffers == nullptr ? &MemoFor(*vao) : nullptr;
+            Bool memoHit = false;
             if (memo != nullptr && memo->BuffersValid && memo->ConfigVersion == vao->GetConfigVersion()) {
+                memoHit = true;
                 count = memo->BufferCount;
                 for (SizeT i = 0; i < count; ++i) {
                     m_entries[i] = memo->Buffers[i];
@@ -251,6 +253,7 @@ namespace MobileGL::MG_Pipe {
                     if (attrib.Enabled && !attrib.Buffer) memoizable = false;
                 }
                 if (memo != nullptr) {
+                    memo->HashValid = false;
                     memo->BuffersValid = memoizable && count <= kVaoMemoBuffers;
                     memo->ConfigVersion = vao->GetConfigVersion();
                     memo->BufferCount = count;
@@ -258,7 +261,19 @@ namespace MobileGL::MG_Pipe {
                 }
             }
 
-            const Uint64 hash = MGPipeVertexBufferSetContentHash(m_entries.data(), 0, count, baseInstance);
+            // The set's hash is a function of the entries and the base instance, so a memoised set
+            // keeps the one it was hashed with for as long as the base instance is the same.
+            Uint64 hash = 0;
+            if (memoHit && memo->HashValid && memo->HashBaseInstance == baseInstance) {
+                hash = memo->Hash;
+            } else {
+                hash = MGPipeVertexBufferSetContentHash(m_entries.data(), 0, count, baseInstance);
+                if (memo != nullptr && memo->BuffersValid) {
+                    memo->Hash = hash;
+                    memo->HashBaseInstance = baseInstance;
+                    memo->HashValid = true;
+                }
+            }
             if (!MGPipeSetHashSuppressorInstance().ShouldEmit(MGPipeSuppressorSlot::SetVertexBuffers, hash)) {
                 return 0;
             }
@@ -399,6 +414,9 @@ namespace MobileGL::MG_Pipe {
             Bool BuffersValid = false;
             Uint32 ConfigVersion = 0;
             Uint32 BufferCount = 0;
+            Bool HashValid = false;
+            Uint32 HashBaseInstance = 0;
+            Uint64 Hash = 0;
             Array<MGPVertexBuffer, kVaoMemoBuffers> Buffers{};
         };
         VaoMemo& MemoFor(const VertexArrayObject& vao) {
