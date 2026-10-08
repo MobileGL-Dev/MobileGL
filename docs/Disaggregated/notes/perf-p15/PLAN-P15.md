@@ -80,13 +80,35 @@ CPU there is ~1.7 ms/frame (~248 fps) at interval 0 and ~1.9 ms/frame at interva
 
 Espryt has to go below dev here.
 
-**Success criterion has two parts (user, 2026-10-08):**
-- CPU-bound scenes: within ~5 % of MobileGlues presenting-thread CPU ms/frame.
-- GPU-bound shaderpack scenes (Iris + BSL): within ~5 % of the better of MobileGlues and dev fps.
+**Success criterion, revised by the user after the S0 milestone (2026-10-08): two levels on CPU,
+MobileGlues on GPU.**
+- **Floor (must meet): match dev** - the CPU bullet below.
+- **Goal (design intent):**
+  - **Monolith:** presenting-thread CPU on par with or below MobileGlues. MobileGL's own overhead
+    is paid back by driver work it removes: the frontend tracks state, so the host driver
+    receives fewer calls, none of them redundant. Measure host-driver calls per frame and the
+    redundant share (same value re-set, already-bound object re-bound, unchanged uniform data) on
+    both backends, against MobileGlues' pass-through.
+  - **Inproc:** clearly faster than MobileGlues, because the GL thread only records and the apply
+    thread drives the backend and driver. Measure FCL inproc on both backends against MobileGlues,
+    with the time of both threads. If inproc is not faster, find out whether the cause is the GL
+    thread's own cost, the handoff/wake-up, or the apply thread being the bottleneck.
+- **CPU-bound scenes:** at or below dev's monolith presenting-thread CPU in FCL MC 1.21.5 vanilla
+  (Magma <= 1.79, Espryt <= 2.14 ms/frame at interval 0), with dev measured in the same session and
+  ~5 % noise tolerance.
+- **GPU-bound shaderpack scenes (Iris + BSL):** within ~5 % of MobileGlues fps.
+- **Why the CPU bar moved:** the S0 profiles show MobileGlues is a near pass-through, with 13 us/frame
+  of its own code against libMobileGL's 0.82 (Espryt) / ~1.0 ms (Magma). MobileGL's frontend state
+  machine and its record/validate/apply layers cost more than S1-S3 can recover, and even dev
+  monolith was 2.14 ms on Espryt (HANDOFF, S0 milestone).
+- **Kept in scope:** MC's own code costs +0.17 ms/frame on MobileGL. MobileGlues advertises GL 4.0
+  and MobileGL 3.3 core; if MC takes a call-heavier path because of what we advertise, that
+  matters for both targets. Check extension strings and per-frame call counts.
 
-**Stopping rule:** P15 ends when FCL presenting-thread CPU on both backends is within noise (~5 %)
-of MobileGlues at the same interval, and the BSL scene meets its fps bar. It also ends if a remaining gap is shown to be irreducible,
-with the reason written down.
+**Stopping rule:** P15 ends when FCL presenting-thread CPU on both backends is at or below dev's
+(within ~5 % noise, same session, same interval) and the BSL scene is within ~5 % of MobileGlues
+fps on both backends. It also ends if a remaining gap is shown to be irreducible, with the reason
+written down.
 
 **Reference rows in every FCL milestone,** measured in the same session:
 - MobileGlues (primary);
@@ -135,6 +157,57 @@ MobileGlues also runs on the trace fixtures where the harness can load it.
   - Every probe needs proof it engaged: a marker line, a counter, or a knob that visibly changes
     behaviour.
   - Every optimisation needs a negative control that can go red.
+- **Clocks and validity (user, 2026-10-08; supersedes "pinned clocks" above):**
+  - **Pin:** CPU 2035.2 MHz on policies 2/5/7 and 1574.4 MHz on policy0; GPU 680 MHz
+    (`pin_clocks.sh` defaults). The device maxima (3.3 GHz, 903 MHz GPU) are not sustainable. The
+    point is kept only after a soak: about 10 min BSL plus 10 min FCL vanilla with the sampler, no
+    cap, temperatures well below the trip point. Otherwise step down one OPP (GPU 629/578, CPU 1920)
+    and soak again.
+  - **Profiles (user, 2026-10-08):** pick one per job (`PROFILE=<name>`, read by `pin_clocks.sh`) and
+    compare numbers only within one profile.
+
+    | profile | CPU big/prime | CPU little | GPU | use |
+    |---|---|---|---|---|
+    | `sustained` (default) | 2035.2 MHz | 1574.4 MHz | 680 MHz | all milestone and reference numbers |
+    | `gpumax` | 2035.2 | 1574.4 | 903 | show whether a scene is GPU-bound (not sustainable) |
+    | `gpulow` | 2035.2 | 1574.4 | 422 | amplify GPU cost |
+    | `cpulow` | 1286.4 | 1017.6 | 680 | amplify CPU differences |
+    | `cpuhunt` | <=1.5 GHz OPP | <=1.25 GHz OPP | 903 | CPU-overhead hunting (vanilla/rd12 gap, driver-call redundancy, S1-S3): cleanly CPU-bound |
+    | `gpuhunt` | <=2.4 GHz OPP | <=1.8 GHz OPP | 578 | GPU-side hunting (Espryt BSL gap, pass structure, load/store): cleanly GPU-bound |
+
+    Choose per question (user, 2026-10-08): CPU questions on a slow CPU with a fast GPU, GPU
+    questions on a fast CPU with a slow GPU. Show the binding evidence for each run (GPU busy %,
+    main-thread on-CPU share). A high profile only has to hold for one short, cool-started run, and
+    the validity check proves it did.
+
+  - **Every reported number carries its device state.** `devstate.sh` writes one line per run
+    (`state.txt`), and `fclsum.py` prints it under the results:
+    `STATE profile=<name>(cpu/little/gpu MHz) VALID|INVALID <observed min/max freq, peak temperatures>
+    daemons=<stopped(n)|running> mc=<version> swap=<enableVsync> anland=<on|off>`.
+    Invalid runs never enter a number.
+  - **Session (`bench_session.sh`, run by `devjob.sh` around every device job):**
+    - It records, then stops, the services that move frequency caps: `thermal-engine`,
+      `perf2-hal-1-0`, `vendor.perfservice`, `performance` and `hyperschedule_hal_service`.
+    - It releases their leftover requests in `/sys/kernel/msm_performance/parameters/cpu_{max,min}_freq`
+      and re-pins.
+    - On exit it starts every service that was running and verifies it is running again. The exit
+      runs on interrupt too (trap). Kernel trip points stay armed; if one engages (frequency
+      collapse or shutdown), benchmarking stops and it is reported.
+    - Why the requests matter: measured 2026-10-08, the perf stack's game-mode levels left caps of
+      787 / 1286 / 1075 / 1248 MHz in `msm_performance` that clamped `scaling_max_freq` under the
+      pin for about 50 min, while `pin_clocks.sh show` looked pinned.
+  - **Sampler:** `freq_sampler.sh` runs on the device every 2 s for the whole measurement window of
+    every probe. It records per-policy cur/max frequency, GPU devfreq cur and gpuclk, kgsl
+    `thermal_pwrlevel` / `throttling`, GPU busy, and the hottest CPU, GPU and skin zones.
+  - **Validity:** `freqcheck.py` decides. A run is valid only if every sample shows each policy at
+    the INTENDED pin (one OPP step of tolerance), no `scaling_max` cap, the GPU at its pin whenever
+    busy, and no kgsl thermal power level. Invalid runs are discarded and re-run after cool-down.
+    Every reported number carries its run's min/max frequency and peak temperatures
+    (`valid.txt`).
+  - **Before this rule:** P15 numbers up to the S0 milestone had no sampler. They ran at the
+    2035 MHz CPU / 903 MHz GPU pin as far as `time_in_state` shows, but that is not proof per run.
+    The references (dev, MobileGlues, current feat; vanilla and BSL; both backends; monolith and
+    inproc) are re-measured at the new clocks under this rule before any decision relies on them.
 - **Device hygiene:**
   - One device job at a time, under the `devjob.sh` lock.
   - Restore FCL's library, config and properties afterwards, md5-checked (`fcl_p14.sh restore`).

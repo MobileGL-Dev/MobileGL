@@ -3,9 +3,10 @@
 The plan and its measurements are in [PLAN-P15.md](PLAN-P15.md); the audit is in
 [PARITY-AUDIT.md](PARITY-AUDIT.md).
 
-**Target** (PLAN §0.1):
-- CPU scenes: FCL presenting-thread CPU on both backends within ~5 % of the MobileGlues plugin.
-- GPU scene (Iris + BSL): fps within ~5 % of the better of MobileGlues and dev.
+**Target** (PLAN §0.1, revised by the user 2026-10-08):
+- CPU scenes: FCL presenting-thread CPU at or below dev monolith (Magma <= 1.79, Espryt <= 2.14
+  ms/frame), dev measured in the same session, ~5 % noise.
+- GPU scene (Iris + BSL): fps within ~5 % of MobileGlues on both backends.
 
 ## Status (2026-10-08)
 
@@ -120,7 +121,16 @@ but built from its old text. This happened once and gave a `bad_alloc` in every 
 edit sources during a build; `touch` the edited headers if in doubt.
 
 **Device facts:**
-- Clocks are pinned.
+- Clocks: CPU 2035.2 MHz on policies 2/5/7 and 1574.4 MHz on policy0, GPU 680 MHz (new default since
+  2026-10-08, pending the soak). Pinned per session by `bench_session.sh`, which every `devjob.sh`
+  job runs.
+- Frequency daemons are stopped only inside a bench session: `thermal-engine`, `perf2-hal-1-0`,
+  `vendor.perfservice`, `performance` and `hyperschedule_hal_service`. Their prior state is in
+  `/data/local/tmp/p15-bench-session` while a session is open, and they are restarted and verified
+  on exit. If that file exists with no job running, a session was left open: run
+  `bench_session.sh stop`.
+- The perf stack's game-mode caps in `/sys/kernel/msm_performance/parameters/cpu_max_freq` survive
+  its services and silently override the pin. The session releases them.
 - FCL's original lib md5 is `00c09f0a…`.
 - MC 1.21.5 options md5 is `93b3f708…`; it is backed up at `/data/local/tmp/p15-options.txt`.
 - Iris properties are backed up at `/data/local/tmp/p15-iris.properties`.
