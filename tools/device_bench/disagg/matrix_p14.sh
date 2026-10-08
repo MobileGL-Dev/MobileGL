@@ -49,6 +49,8 @@ wl_args() { # trace golden w h target crop
   case "$1" in
     openra) echo "openra openra.0000031249.png 640 480 31249 1 1 638 478" ;;
     rd12) echo "rd12 minecraft-1.21.4-rd12-odinlite-in-world.0004660351.png 854 480 4660351 0 0 0 0" ;;
+    # P15: GPU-bound shaderpack scene (a single-frame trim: ssim only, not a benchmark).
+    bsl) echo "bsl minecraft-1.21.4-fabric-iris-bsl-in-world.0000110725.png 854 480 110725 0 0 0 0" ;;
   esac
 }
 
@@ -74,8 +76,13 @@ cool_down() {
 prep_pkg() {
   local pkg="$1" app; app=$(app_of "$pkg")
   local tmp="$ROOT/fixtures"; mkdir -p "$tmp"
-  for wl in openra rd12; do
-    local tgz="$FIXTURES/$( [ $wl = openra ] && echo openra.tgz || echo minecraft-1.21.4-rd12-odinlite-in-world.tgz)"
+  for wl in ${PREP_WLS:-openra rd12}; do
+    local tgz
+    case $wl in
+      openra) tgz="$FIXTURES/openra.tgz" ;;
+      rd12) tgz="$FIXTURES/minecraft-1.21.4-rd12-odinlite-in-world.tgz" ;;
+      bsl) tgz="$FIXTURES/minecraft-1.21.4-fabric-iris-bsl-in-world.tgz" ;;
+    esac
     set -- $(wl_args $wl)
     local golden="$FIXTURES/$2"
     if [ ! -f "$tmp/$wl.trace" ]; then

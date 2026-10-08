@@ -49,11 +49,12 @@ This is the plan, plus the measurements it rests on (section 2). Nothing here is
 Stage order:
 - 0: parity audit + wire non-draw fast path;
 - 0b: an FCL 1.21.5 trace fixture;
-- P: swap-interval-correct presentation. It is independent of 1-4 and can run in parallel after 0;
 - 1: client draw-delta prototype;
 - 2: per-VAO / per-program slices;
 - 3: applier + backend draw-delta;
-- 4: split arms, verify, default-on.
+- 4: split arms, verify, default-on;
+- P (swap-interval-correct presentation): **not needed for the target; dropped unless the user asks**
+  (2026-10-08). MobileGlues pays the same ~2 ms present wait, so matching it does not need P.
 
 Decisions taken with the user (2026-10-08):
 - Presenting-thread CPU ms/frame is the primary FCL metric, with fps beside it.
@@ -61,6 +62,36 @@ Decisions taken with the user (2026-10-08):
 - minSdk / native TLS is the user's own change; P15 does not touch it.
 - The probe tools are committed under `tools/device_bench/disagg/`.
 - No Espryt deferred-clear port: its clear and blit costs match dev's.
+
+## 0.1 Target and stopping rule (user, 2026-10-08)
+
+**Target:** "We only need to match MobileGlues' performance."
+
+**Success criterion:** both backends reach the MobileGlues plugin (`com.fcl.plugin.mobileglues`)
+in FCL MC 1.21.5, on the same pinned device, same world, same swap interval. Its presenting-thread
+CPU there is ~1.7 ms/frame (~248 fps) at interval 0 and ~1.9 ms/frame at interval 1.
+
+| build | interval 0 CPU ms/frame | needed |
+|---|---|---|
+| feat Magma | 3.12 | −1.4 |
+| feat Espryt | 2.73 | −1.0 |
+| dev Magma | 1.76 | (reference) |
+| dev Espryt | 2.14 | (reference) |
+
+Espryt has to go below dev here.
+
+**Success criterion has two parts (user, 2026-10-08):**
+- CPU-bound scenes: within ~5 % of MobileGlues presenting-thread CPU ms/frame.
+- GPU-bound shaderpack scenes (Iris + BSL): within ~5 % of the better of MobileGlues and dev fps.
+
+**Stopping rule:** P15 ends when FCL presenting-thread CPU on both backends is within noise (~5 %)
+of MobileGlues at the same interval, and the BSL scene meets its fps bar. It also ends if a remaining gap is shown to be irreducible,
+with the reason written down.
+
+**Reference rows in every FCL milestone,** measured in the same session:
+- MobileGlues (primary);
+- dev (second).
+MobileGlues also runs on the trace fixtures where the harness can load it.
 
 ## 1. Measurement rules for P15
 
@@ -77,6 +108,23 @@ Decisions taken with the user (2026-10-08):
     thread idles between frames. Compare CPU only within one interval setting.
   - Take readings only from in-world steady windows. The probe waits for MC's `Time elapsed:`
     line and then four fps-log windows of more than 150 frames each.
+- **GPU-bound scene (user, 2026-10-08):**
+  - FCL `1.21.4-Fabric` with Iris and `BSL_v10.1.3`, at the same world and interval, measured live
+    with `fcl_scene.sh bsl` and restored afterwards.
+  - The BSL fixture `minecraft-1.21.4-fabric-iris-bsl-in-world` joins the SSIM gate. It is a
+    single-frame trim, so it is a correctness check, not a benchmark.
+  - Show the scene is GPU-bound, with evidence:
+    - kgsl busy near 100 % (`gpu_clock_stats`, kgsl cmdbatch union from ftrace);
+    - the presenting thread waiting in fences or present;
+    - the `gsl_syncobj_wait` share.
+  - On GPU-bound runs, fps is the metric.
+  - A GPU regression on BSL blocks a change even if CPU improved.
+- **GPU metrics in every milestone:**
+  - kgsl GPU busy % for every FCL run (`fclsum.py`);
+  - for GPU-bound runs, fps against dev and MobileGlues.
+- **Load and store ops:** check every pass change in GPU terms. Prefer LOAD_OP_CLEAR or DONT_CARE
+  over loading and clearing on the tiler, and use DONT_CARE stores for depth/stencil that nothing
+  reads after the pass.
 - **Trace (rd12, openra, and the FCL 1.21.5 fixture from stage 0b):**
   - fps, best of 3.
   - Per-layer CPU in ms/frame from `profile_p14.sh` / `layers.py`. Remember that rd12 carries
@@ -351,6 +399,9 @@ Espryt's deleted mechanisms. Port only those that show in profiles.
 - **Order:** best done before stage 0.2 lands, so stage 0 can be A/B'd on a trace as well as on FCL.
 
 ### Stage P: swap-interval-correct presentation (both backends)
+
+**Status: not needed for the target; dropped unless the user asks (2026-10-08).** MobileGlues
+pays the same ~2 ms present wait, so the target (section 0.1) does not need this stage.
 
 **Goal:**
 - With interval 0, presentation never paces the app: FCL fps becomes 1 / presenting-thread CPU.
