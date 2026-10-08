@@ -76,6 +76,14 @@
       "ci": false
     },
     {
+      "name": "minecraft-1.21.5-vanilla-fcl-in-world",
+      "trace_archive": "minecraft-1.21.5-vanilla-fcl-in-world.tgz",
+      "golden": "minecraft-1.21.5-vanilla-fcl-in-world.0005998912.png",
+      "target_call": 5998912,
+      "timeout_seconds": 1800,
+      "ci": false
+    },
+    {
       "name": "minecraft-1.21.4-fabric-sodium-in-world",
       "verify": true,
       "trace_archive": "minecraft-1.21.4-fabric-sodium-in-world.tgz",

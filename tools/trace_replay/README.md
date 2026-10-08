@@ -23,6 +23,14 @@ The bundled fixtures cover:
   campaign's benchmark scene: benchmark mode replays the whole window and the tail frames measure steady-state
   in-world frame time. The golden is still the final frame, so it works as an ordinary correctness case too.
   ![Minecraft 1.21.4 render distance 12 in-world golden](fixtures/minecraft-1.21.4-rd12-odinlite-in-world.0004660351.png)
+- minecraft-1.21.5-vanilla-fcl-in-world: captured on an Android device through FCL (MobileGL Magma, 854x480) from
+  vanilla Minecraft 1.21.5 in the world and view distance of the FCL performance bench (a night-time forest), so the
+  trace matrix covers the per-frame clear, blit and sub-data pattern FCL's MC 1.21.5 runs, which the 1.21.4 traces do
+  not. A 252-frame window (gltrim `-f 6701-6951`) for benchmarking, golden on the final frame. FCL captures bind
+  `EGL_OPENGL_ES_API`, so a desktop glretrace cannot make the golden; it is a DirectGLES replay of dev, matched exactly
+  by DirectVulkan within 8 pixels. The archive is 22.7 MB, over the 20 MiB budget: the floor is the setup state
+  (textures and chunk buffers), and a 151-frame window measured the same size. `ci: false` like rd12.
+  ![Minecraft 1.21.5 FCL vanilla in-world golden](fixtures/minecraft-1.21.5-vanilla-fcl-in-world.0005998912.png)
 - minecraft-1.21.4-fabric-sodium-in-world: captured from Minecraft 1.21.4 Fabric with Sodium after entering a
   singleplayer world with Fancy graphics.
   ![Minecraft 1.21.4 Fabric Sodium in-world golden](fixtures/minecraft-1.21.4-fabric-sodium-in-world.0000923340.png)
