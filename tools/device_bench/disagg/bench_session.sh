@@ -41,8 +41,14 @@ case "${1:-status}" in
     # memory and a surface): every MobileGL plugin package is force-stopped at session end.
     su_sh "for p in \$(pm list packages top.mobilegl.plugin | sed s/package://); do am force-stop \$p; done"
     su_sh "if [ -f $MARK ]; then grep \"^svc \" $MARK | while read k s st; do [ \"\$st\" = running ] && setprop ctl.start \$s; done; else for s in $SERVICES; do setprop ctl.start \$s; done; fi"
-    sleep 3
-    bad=$(su_sh "if [ -f $MARK ]; then grep \"^svc \" $MARK | while read k s st; do [ \"\$st\" = running ] && [ \"\$(getprop init.svc.\$s)\" != running ] && echo \$s; done; fi" | tr -d '\r')
+    # A HAL can take several seconds to come back (2026-10-08: perf2-hal-1-0 was still down at
+    # 3 s and the session read NOT RESTORED); re-start and re-check for up to ~30 s.
+    for attempt in 1 2 3 4 5 6 7 8 9 10; do
+      sleep 3
+      bad=$(su_sh "if [ -f $MARK ]; then grep \"^svc \" $MARK | while read k s st; do [ \"\$st\" = running ] && [ \"\$(getprop init.svc.\$s)\" != running ] && echo \$s; done; fi" | tr -d '\r')
+      [ -z "$bad" ] && break
+      for s in $bad; do su_sh "setprop ctl.start $s"; done
+    done
     if [ -n "$bad" ]; then echo "bench_session: NOT RESTORED: $bad" >&2; exit 1; fi
     su_sh "if grep -q \"^anland running\" $MARK 2>/dev/null; then monkey -p $ANLAND -c android.intent.category.LAUNCHER 1 >/dev/null 2>&1; fi"
     su_sh "rm -f $MARK"
