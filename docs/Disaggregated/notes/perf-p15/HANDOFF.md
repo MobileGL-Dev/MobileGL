@@ -88,9 +88,16 @@ CPU about 1.5/1.25 GHz, GPU 903 MHz (cleanly CPU-bound); interval 0, anland off,
     324.4 -> 338.1 (+4.2 %).
   - Wait census (`MOBILEGL_IPC_WAIT_STATS=1`, 7acf3ea8): FCL vanilla inproc waits only on the
     present credit (1.00/frame). BSL waits 7 times per frame on three kWaitApplied rows plus 22
-    follow-on quiesces; see [WAIT-AUDIT.md](WAIT-AUDIT.md) (awaiting the user's review).
+    follow-on quiesces; see [WAIT-AUDIT.md](WAIT-AUDIT.md). User decision applied in 2fbcc224:
+    fire-and-forget rows async, inproc creates and PBO readbacks no longer wait, and the dual block
+    (`MOBILEGL_IPC_ROLE_SPLIT_STATE`, now default on) lets a barriered verb cost one wait. BSL
+    census after it still owed (gpuhunt only; FCL's 1.21.4-Fabric profile exited with signal 34 at
+    JVM start on both backends in the last attempt).
   - db915f76: a client parked on the present credit is rung only by the credit (apply-thread
     futex wakes 0.056 ms/frame before).
+  - Frames in flight (0b96a3ef): `MOBILEGL_FRAMES_IN_FLIGHT` (default 3) drives Magma's frame
+    contexts, Espryt's post-present fence wait and the split present credit max(1, N-2); the Magma
+    name is an alias. Default latency unchanged; the FIF A/B is the user's input for the default.
   - Present credit 2 (cens, cpuhunt, all VALID): Magma 309.0 -> 319.9, Espryt 299.1 -> 319.1 fps
     vs MobileGlues 321.9 in the same session; apply CPU 1.40-1.43 vs MobileGlues' GL thread 1.57.
     Credit 2 costs a frame of latency: user decision. The remaining inproc gap is the queueBuffer
