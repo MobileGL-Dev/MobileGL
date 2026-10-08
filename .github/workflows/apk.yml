@@ -76,12 +76,25 @@ jobs:
             ${{ runner.os }}-apk-${{ github.job }}-ccache-
 
       - name: Install ccache
+        timeout-minutes: 15
         run: |
           sudo apt-get update
           sudo apt-get install -y ccache
           ccache --version
 
       - name: Setup Android SDK
+        id: netsetup84
+        continue-on-error: true
+        timeout-minutes: 15
+        uses: android-actions/setup-android@v4
+        with:
+          accept-android-sdk-licenses: false
+          packages: platform-tools
+          cmdline-tools-version: 13114758
+
+      - name: Setup Android SDK (retry)
+        timeout-minutes: 15
+        if: ${{ steps.netsetup84.outcome == 'failure' }}
         uses: android-actions/setup-android@v4
         with:
           accept-android-sdk-licenses: false
@@ -92,8 +105,13 @@ jobs:
         run: yes | sdkmanager --licenses >/dev/null
 
       - name: Install Android NDK
+        timeout-minutes: 30
         run: |
-          sdkmanager "ndk;27.3.13750724"
+          for attempt in 1 2 3; do
+            sdkmanager "ndk;27.3.13750724" && break
+            [ "$attempt" = 3 ] && exit 1
+            echo "sdkmanager attempt $attempt failed; retrying"; sleep 20
+          done
           echo "ndk.dir=$ANDROID_HOME/ndk/27.3.13750724" >> android-plugin/local.properties
 
       - name: Update glslang external sources
@@ -334,6 +352,18 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Setup Android SDK
+        id: netsetup336
+        continue-on-error: true
+        timeout-minutes: 15
+        uses: android-actions/setup-android@v4
+        with:
+          accept-android-sdk-licenses: false
+          packages: platform-tools
+          cmdline-tools-version: 13114758
+
+      - name: Setup Android SDK (retry)
+        timeout-minutes: 15
+        if: ${{ steps.netsetup336.outcome == 'failure' }}
         uses: android-actions/setup-android@v4
         with:
           accept-android-sdk-licenses: false
@@ -413,6 +443,18 @@ jobs:
           echo "EMULATOR_PID_FILE=${RUNNER_TEMP}/mobilegl-emulator.pid" >> "$GITHUB_ENV"
 
       - name: Setup Android SDK
+        id: netsetup415
+        continue-on-error: true
+        timeout-minutes: 15
+        uses: android-actions/setup-android@v4
+        with:
+          accept-android-sdk-licenses: false
+          packages: platform-tools
+          cmdline-tools-version: 13114758
+
+      - name: Setup Android SDK (retry)
+        timeout-minutes: 15
+        if: ${{ steps.netsetup415.outcome == 'failure' }}
         uses: android-actions/setup-android@v4
         with:
           accept-android-sdk-licenses: false

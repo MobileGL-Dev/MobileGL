@@ -62,6 +62,7 @@ jobs:
         uses: ./.github/actions/setup-test-runner
 
       - name: Get CMake
+        timeout-minutes: 15
         uses: lukka/get-cmake@v4.3.3
         with:
           cmakeVersion: 3.31.10
@@ -75,7 +76,19 @@ jobs:
             ${{ runner.os }}-ubuntu24-cpu-test-${{ github.job }}-ccache-
 
       - name: Prepare Vulkan SDK
+        id: netsetup77
+        continue-on-error: true
+        timeout-minutes: 15
         if: env.MOBILEGL_CI_NATIVE_GPU != '1'
+        uses: humbletim/setup-vulkan-sdk@v1.2.1
+        with:
+          vulkan-query-version: 1.4.304.1
+          vulkan-components: Vulkan-Headers, Vulkan-Loader
+          vulkan-use-cache: true
+
+      - name: Prepare Vulkan SDK (retry)
+        timeout-minutes: 15
+        if: ${{ (env.MOBILEGL_CI_NATIVE_GPU != '1') && steps.netsetup77.outcome == 'failure' }}
         uses: humbletim/setup-vulkan-sdk@v1.2.1
         with:
           vulkan-query-version: 1.4.304.1
@@ -87,6 +100,7 @@ jobs:
         run: python3 update_glslang_sources.py
 
       - name: Install build dependencies
+        timeout-minutes: 15
         if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         run: |
           sudo apt-get update
@@ -219,6 +233,7 @@ jobs:
         uses: ./.github/actions/setup-test-runner
 
       - name: Get CMake
+        timeout-minutes: 15
         uses: lukka/get-cmake@v4.3.3
         with:
           cmakeVersion: 3.31.10
@@ -228,7 +243,19 @@ jobs:
           path: .ccache
           key: ${{ runner.os }}-ubuntu24-cpu-test-build-linux-ccache-v1
       - name: Prepare Vulkan SDK
+        id: netsetup230
+        continue-on-error: true
+        timeout-minutes: 15
         if: env.MOBILEGL_CI_NATIVE_GPU != '1'
+        uses: humbletim/setup-vulkan-sdk@v1.2.1
+        with:
+          vulkan-query-version: 1.4.304.1
+          vulkan-components: Vulkan-Headers, Vulkan-Loader
+          vulkan-use-cache: true
+
+      - name: Prepare Vulkan SDK (retry)
+        timeout-minutes: 15
+        if: ${{ (env.MOBILEGL_CI_NATIVE_GPU != '1') && steps.netsetup230.outcome == 'failure' }}
         uses: humbletim/setup-vulkan-sdk@v1.2.1
         with:
           vulkan-query-version: 1.4.304.1
@@ -238,6 +265,7 @@ jobs:
         working-directory: 3rdparty/glslang
         run: python3 update_glslang_sources.py
       - name: Install build dependencies
+        timeout-minutes: 15
         if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         run: |
           sudo apt-get update
@@ -289,11 +317,13 @@ jobs:
         uses: ./.github/actions/setup-test-runner
 
       - name: Get CMake
+        timeout-minutes: 15
         uses: lukka/get-cmake@v4.3.3
         with:
           cmakeVersion: 3.31.10
 
       - name: Install runtime dependencies
+        timeout-minutes: 15
         if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         run: |
           sudo apt-get update
@@ -366,11 +396,13 @@ jobs:
           gpu: "true"
 
       - name: Get CMake
+        timeout-minutes: 15
         uses: lukka/get-cmake@v4.3.3
         with:
           cmakeVersion: 3.31.10
 
       - name: Install runtime dependencies
+        timeout-minutes: 15
         if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         # Same set as the benchmark job, for the same reason: the scenarios bring
         # up real headless EGL (llvmpipe) and Vulkan (lavapipe) contexts, and
@@ -515,6 +547,7 @@ jobs:
         uses: ./.github/actions/setup-test-runner
 
       - name: Get CMake
+        timeout-minutes: 15
         uses: lukka/get-cmake@v4.3.3
         with:
           cmakeVersion: 3.31.10
@@ -528,7 +561,19 @@ jobs:
             ${{ runner.os }}-ubuntu24-cpu-test-${{ github.job }}-ccache-
 
       - name: Prepare Vulkan SDK
+        id: netsetup530
+        continue-on-error: true
+        timeout-minutes: 15
         if: env.MOBILEGL_CI_NATIVE_GPU != '1'
+        uses: humbletim/setup-vulkan-sdk@v1.2.1
+        with:
+          vulkan-query-version: 1.4.304.1
+          vulkan-components: Vulkan-Headers, Vulkan-Loader
+          vulkan-use-cache: true
+
+      - name: Prepare Vulkan SDK (retry)
+        timeout-minutes: 15
+        if: ${{ (env.MOBILEGL_CI_NATIVE_GPU != '1') && steps.netsetup530.outcome == 'failure' }}
         uses: humbletim/setup-vulkan-sdk@v1.2.1
         with:
           vulkan-query-version: 1.4.304.1
@@ -540,6 +585,7 @@ jobs:
         run: python3 update_glslang_sources.py
 
       - name: Install build dependencies
+        timeout-minutes: 15
         if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         run: |
           sudo apt-get update
@@ -680,11 +726,13 @@ jobs:
           gpu: "true"
 
       - name: Get CMake
+        timeout-minutes: 15
         uses: lukka/get-cmake@v4.3.3
         with:
           cmakeVersion: 3.31.10
 
       - name: Install runtime dependencies
+        timeout-minutes: 15
         if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         run: |
           sudo apt-get update
@@ -983,10 +1031,12 @@ jobs:
         with:
           gpu: "true"
       - name: Get CMake
+        timeout-minutes: 15
         uses: lukka/get-cmake@v4.3.3
         with:
           cmakeVersion: 3.31.10
       - name: Install runtime dependencies
+        timeout-minutes: 15
         if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         run: |
           sudo apt-get update
@@ -1259,6 +1309,7 @@ jobs:
         uses: ./.github/actions/setup-test-runner
 
       - name: Get CMake
+        timeout-minutes: 15
         uses: lukka/get-cmake@v4.3.3
         with:
           cmakeVersion: 3.31.10
@@ -1272,7 +1323,19 @@ jobs:
             ${{ runner.os }}-ubuntu24-cpu-test-${{ github.job }}-ccache-
 
       - name: Prepare Vulkan SDK
+        id: netsetup1274
+        continue-on-error: true
+        timeout-minutes: 15
         if: env.MOBILEGL_CI_NATIVE_GPU != '1'
+        uses: humbletim/setup-vulkan-sdk@v1.2.1
+        with:
+          vulkan-query-version: 1.4.304.1
+          vulkan-components: Vulkan-Headers, Vulkan-Loader
+          vulkan-use-cache: true
+
+      - name: Prepare Vulkan SDK (retry)
+        timeout-minutes: 15
+        if: ${{ (env.MOBILEGL_CI_NATIVE_GPU != '1') && steps.netsetup1274.outcome == 'failure' }}
         uses: humbletim/setup-vulkan-sdk@v1.2.1
         with:
           vulkan-query-version: 1.4.304.1
@@ -1284,6 +1347,7 @@ jobs:
         run: python3 update_glslang_sources.py
 
       - name: Install build dependencies
+        timeout-minutes: 15
         if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         run: |
           sudo apt-get update
@@ -1454,11 +1518,13 @@ jobs:
           gpu: "true"
 
       - name: Get CMake
+        timeout-minutes: 15
         uses: lukka/get-cmake@v4.3.3
         with:
           cmakeVersion: 3.31.10
 
       - name: Install runtime dependencies
+        timeout-minutes: 15
         if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         run: |
           sudo apt-get update
@@ -1726,11 +1792,13 @@ jobs:
           gpu: "true"
 
       - name: Get CMake
+        timeout-minutes: 15
         uses: lukka/get-cmake@v4.3.3
         with:
           cmakeVersion: 3.31.10
 
       - name: Install runtime dependencies
+        timeout-minutes: 15
         if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         run: |
           sudo apt-get update
@@ -2332,6 +2400,7 @@ jobs:
         uses: ./.github/actions/setup-test-runner
 
       - name: Get CMake
+        timeout-minutes: 15
         uses: lukka/get-cmake@v4.3.3
         with:
           cmakeVersion: 3.31.10
@@ -2381,6 +2450,7 @@ jobs:
         run: git submodule update --init include/ska 3rdparty/xxHash 3rdparty/Vulkan-Headers
 
       - name: Install clang and X11 headers
+        timeout-minutes: 15
         if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         # Includes.h defines VK_USE_PLATFORM_XLIB_KHR before <vulkan/vulkan.h>, which then
         # includes <X11/Xlib.h>; without libx11-dev every clang-mode probe dies in the
@@ -2410,11 +2480,13 @@ jobs:
           gpu: "true"
 
       - name: Get CMake
+        timeout-minutes: 15
         uses: lukka/get-cmake@v4.3.3
         with:
           cmakeVersion: 3.31.10
 
       - name: Install runtime dependencies
+        timeout-minutes: 15
         if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         # libegl-mesa0 is the EGL vendor library itself: DriverBench brings up a
         # real GL context, and libegl1 is only glvnd's dispatch. It normally
@@ -2485,6 +2557,7 @@ jobs:
         uses: ./.github/actions/setup-test-runner
 
       - name: Get CMake
+        timeout-minutes: 15
         uses: lukka/get-cmake@v4.3.3
         with:
           cmakeVersion: 3.31.10
@@ -2498,7 +2571,19 @@ jobs:
             ${{ runner.os }}-ubuntu24-cpu-test-${{ github.job }}-ccache-
 
       - name: Prepare Vulkan SDK
+        id: netsetup2500
+        continue-on-error: true
+        timeout-minutes: 15
         if: env.MOBILEGL_CI_NATIVE_GPU != '1'
+        uses: humbletim/setup-vulkan-sdk@v1.2.1
+        with:
+          vulkan-query-version: 1.4.304.1
+          vulkan-components: Vulkan-Headers, Vulkan-Loader
+          vulkan-use-cache: true
+
+      - name: Prepare Vulkan SDK (retry)
+        timeout-minutes: 15
+        if: ${{ (env.MOBILEGL_CI_NATIVE_GPU != '1') && steps.netsetup2500.outcome == 'failure' }}
         uses: humbletim/setup-vulkan-sdk@v1.2.1
         with:
           vulkan-query-version: 1.4.304.1
@@ -2510,6 +2595,7 @@ jobs:
         run: python3 update_glslang_sources.py
 
       - name: Install dependencies
+        timeout-minutes: 15
         if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         run: |
           sudo apt-get update
@@ -2778,11 +2864,13 @@ jobs:
           find trace-fixture-download -type f -exec cp {} tools/trace_replay/fixtures/ \;
 
       - name: Get CMake
+        timeout-minutes: 15
         uses: lukka/get-cmake@v4.3.3
         with:
           cmakeVersion: 3.31.10
 
       - name: Install runtime dependencies
+        timeout-minutes: 15
         if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         run: |
           sudo apt-get update
@@ -2982,11 +3070,13 @@ jobs:
           find trace-fixture-download -type f -exec cp {} tools/trace_replay/fixtures/ \;
 
       - name: Get CMake
+        timeout-minutes: 15
         uses: lukka/get-cmake@v4.3.3
         with:
           cmakeVersion: 3.31.10
 
       - name: Install runtime dependencies
+        timeout-minutes: 15
         if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         run: |
           sudo apt-get update
@@ -3181,11 +3271,13 @@ jobs:
           find trace-fixture-download -type f -exec cp {} tools/trace_replay/fixtures/ \;
 
       - name: Get CMake
+        timeout-minutes: 15
         uses: lukka/get-cmake@v4.3.3
         with:
           cmakeVersion: 3.31.10
 
       - name: Install runtime dependencies
+        timeout-minutes: 15
         if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         run: |
           sudo apt-get update
@@ -3534,6 +3626,7 @@ jobs:
         uses: ./.github/actions/setup-test-runner
 
       - name: Get CMake
+        timeout-minutes: 15
         uses: lukka/get-cmake@v4.3.3
         with:
           cmakeVersion: 3.31.10
@@ -3711,6 +3804,7 @@ jobs:
         uses: ./.github/actions/setup-test-runner
 
       - name: Get CMake
+        timeout-minutes: 15
         uses: lukka/get-cmake@v4.3.3
         with:
           cmakeVersion: 3.31.10
@@ -3724,7 +3818,19 @@ jobs:
             ${{ runner.os }}-ubuntu24-cpu-test-${{ github.job }}-ccache-
 
       - name: Prepare Vulkan SDK
+        id: netsetup3726
+        continue-on-error: true
+        timeout-minutes: 15
         if: env.MOBILEGL_CI_NATIVE_GPU != '1'
+        uses: humbletim/setup-vulkan-sdk@v1.2.1
+        with:
+          vulkan-query-version: 1.4.304.1
+          vulkan-components: Vulkan-Headers, Vulkan-Loader
+          vulkan-use-cache: true
+
+      - name: Prepare Vulkan SDK (retry)
+        timeout-minutes: 15
+        if: ${{ (env.MOBILEGL_CI_NATIVE_GPU != '1') && steps.netsetup3726.outcome == 'failure' }}
         uses: humbletim/setup-vulkan-sdk@v1.2.1
         with:
           vulkan-query-version: 1.4.304.1
@@ -3736,6 +3842,7 @@ jobs:
         run: python3 update_glslang_sources.py
 
       - name: Install build and runtime dependencies
+        timeout-minutes: 15
         if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         run: |
           sudo apt-get update
