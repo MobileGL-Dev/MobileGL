@@ -68,8 +68,12 @@ FIXTURE_ENTRIES = {"TcpServer.Start", "TcpServer.Stop"}
 #                          layer, red on a vkCmdBlitImage VUID in the entry's own output and proving the
 #                          layer loaded from /proc/self/maps - both need the server's Vulkan instance
 #                          in this process. The knob-free `.Mip3D.` entries keep all three arms.
+#   `.SyncValidation.` (P14, a TAIL): TextureUploadBetweenDrawsScenario under the Khronos synchronization
+#                          validator, red on a SYNC-HAZARD line in the entry's own output and proving the
+#                          layer loaded from /proc/self/maps - the `.Mip3DValidation.` reason exactly. The
+#                          knob-free `.UploadBetweenDraws.` entries keep all three arms.
 MAGMA_INPROC_ONLY = ("MagmaRunAheadScenario.", "MagmaWireCacheScenario.", "DescriptorPoolGrowthScenario.",
-                     ".Mip3DValidation.")
+                     ".Mip3DValidation.", ".SyncValidation.")
 
 # P7 wave 2-B2: THE SANCTIONED ASYMMETRY THAT IS NOT INPROC-ONLY - these exist on split AND
 # spawn and cannot exist on tcp. Every MGITEST_MAGMA_FORCE_* knob is read BY THE SERVER
