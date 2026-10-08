@@ -239,6 +239,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         resource->indirectReadBarrierPending = false;
         resource->stagedCoverage.clear();
         DropWireShadow(*resource);
+        ReleaseRenameSpares(*resource);
         if (resource->size == 0) return;
 
         if (!CreateWireStoreBuffer(*resource)) {
@@ -279,6 +280,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                resource.buffer.Map() != nullptr;
     }
 
+    void VkBufferManager::ReleaseRenameSpares(WireBufferResource& resource) {
+        for (auto& spare : resource.renameSpares)
+            DeferWireRelease(std::move(spare.buffer), spare.lastUseSerial != 0 ? spare.lastUseSerial : m_frameSerial);
+        resource.renameSpares.clear();
+    }
+
     void VkBufferManager::DropWireShadow(WireBufferResource& resource) {
         if (resource.shadow.empty()) return;
         m_wireShadowBytes -= resource.shadow.size();
@@ -300,19 +307,45 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             MG_Config::Features.MagmaWriteRename == MG_Config::QuirkOverride::ForceOff)
             return false;
         VkBufferObject old = std::move(resource.buffer);
-        if (!CreateWireStoreBuffer(resource) ||
-            !resource.buffer.Upload(resource.shadow.data(), static_cast<VkDeviceSize>(resource.size), 0)) {
-            resource.buffer.Destroy();
+        Bool reused = false;
+        for (SizeT i = 0; pVulkanRenderer != nullptr && i < resource.renameSpares.size(); ++i) {
+            if (!pVulkanRenderer->IsSubmitIndexComplete(resource.renameSpares[i].submitIndex)) continue;
+            resource.buffer = std::move(resource.renameSpares[i].buffer);
+            resource.renameSpares.erase(resource.renameSpares.begin() + static_cast<std::ptrdiff_t>(i));
+            reused = true;
+            break;
+        }
+        if (!reused) {
+            if (!CreateWireStoreBuffer(resource)) {
+                resource.buffer.Destroy();
+                resource.buffer = std::move(old);
+                return false;
+            }
+            ++m_wireStoreCount;
+        }
+        if (!resource.buffer.Upload(resource.shadow.data(), static_cast<VkDeviceSize>(resource.size), 0)) {
+            // Keep the store on its old buffer; the new one goes the deferred way (it is idle).
+            DeferWireRelease(std::move(resource.buffer), 0);
             resource.buffer = std::move(old);
             return false;
         }
-        // Busy means a GPU command recorded so far may name the old buffer: release it behind
-        // this frame's serial and the current sync point, whatever its own stamps said.
-        DeferWireRelease(std::move(old), m_frameSerial);
+        // Busy means a GPU command recorded so far may name the old buffer: it waits behind this
+        // frame's serial and the current sync point, whatever its own stamps said - as a spare
+        // for the next rename, or (past the bound) through DeferWireRelease.
+        constexpr SizeT kRenameSpares = 4;
+        if (resource.renameSpares.size() >= kRenameSpares) {
+            auto& oldest = resource.renameSpares.front();
+            DeferWireRelease(std::move(oldest.buffer), oldest.lastUseSerial);
+            resource.renameSpares.erase(resource.renameSpares.begin());
+        }
+        WireBufferResource::RenameSpare spare;
+        spare.buffer = std::move(old);
+        spare.submitIndex = pVulkanRenderer != nullptr ? pVulkanRenderer->GetSyncPointSubmitIndex() : 0;
+        spare.lastUseSerial = m_frameSerial;
+        resource.renameSpares.push_back(std::move(spare));
         resource.lastUseSerial = 0;
         resource.lastUseSubmitIndex = 0;
         resource.gpuWritesPending = false;
-        ++m_wireStoreCount;
         ++m_wireRenames;
         NoteWireStorePeaks();
         PublishWireReclaimGauges();
@@ -1154,6 +1187,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         const auto found = m_wireBuffers.find(WireBufferKey(res));
         if (found == m_wireBuffers.end()) return;
         DropWireShadow(found->second);
+        ReleaseRenameSpares(found->second);
         DeferWireRelease(std::move(found->second.buffer),
                          found->second.imported ? T0ReleaseSerial(found->second.lastUseSerial)
                                                 : found->second.lastUseSerial); // P11 B2, as Respecify

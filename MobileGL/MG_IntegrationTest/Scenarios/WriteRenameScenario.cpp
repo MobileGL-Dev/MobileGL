@@ -220,6 +220,32 @@ void main() { o0 = vColor * uTint; }
         Destroy(s);
     }
 
+    // Two renames of ONE store inside one frame: the second must not reuse the buffer the first
+    // draw still reads (nothing is submitted yet, so a reused spare would be overwritten under it).
+    TEST_F(WriteRenameScenario, ThreeDrawsAroundTwoRenamesInOneFrameEachReadTheirOwnBytes) {
+        if (!Ready()) return;
+        std::vector<Vertex> v(4);
+        PutQuad(v, 0, 0.0f, 0.0f, 0.33f, 1.0f, 255, 0, 0); // left third, red
+        std::string error;
+        Scene s = MakeScene(v, &error);
+        ASSERT_NE(s.program, 0u) << error;
+
+        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+        std::vector<Vertex> middle(4), right(4);
+        PutQuad(middle, 0, 0.33f, 0.0f, 0.66f, 1.0f, 0, 255, 0);
+        glBufferSubData(GL_ARRAY_BUFFER, 0, static_cast<GLsizeiptr>(middle.size() * sizeof(Vertex)), middle.data());
+        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+        PutQuad(right, 0, 0.66f, 0.0f, 1.0f, 1.0f, 0, 0, 255);
+        glBufferSubData(GL_ARRAY_BUFFER, 0, static_cast<GLsizeiptr>(right.size() * sizeof(Vertex)), right.data());
+        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+        EXPECT_EQ(FirstGLError(), 0u);
+
+        EXPECT_TRUE(Near(At(kSize / 6, kSize / 2), 255, 0, 0)) << "left: the first draw's bytes";
+        EXPECT_TRUE(Near(At(kSize / 2, kSize / 2), 0, 255, 0)) << "middle: after the first rename";
+        EXPECT_TRUE(Near(At(kSize * 5 / 6, kSize / 2), 0, 0, 255)) << "right: after the second rename";
+        Destroy(s);
+    }
+
     TEST_F(WriteRenameScenario, ARenamedStoreKeepsDrawingRightInLaterFrames) {
         if (!Ready()) return;
         std::vector<Vertex> v(4);

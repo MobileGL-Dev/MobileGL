@@ -31,6 +31,9 @@ case "${1:-status}" in
     SER=$SER bash "$HERE/pin_clocks.sh" pin
     "$0" status ;;
   stop)
+    # Trace-replay packages a job started must not idle on the device after it (they hold GPU
+    # memory and a surface): every MobileGL plugin package is force-stopped at session end.
+    su_sh "for p in \$(pm list packages top.mobilegl.plugin | sed s/package://); do am force-stop \$p; done"
     su_sh "if [ -f $MARK ]; then grep \"^svc \" $MARK | while read k s st; do [ \"\$st\" = running ] && setprop ctl.start \$s; done; else for s in $SERVICES; do setprop ctl.start \$s; done; fi"
     sleep 3
     bad=$(su_sh "if [ -f $MARK ]; then grep \"^svc \" $MARK | while read k s st; do [ \"\$st\" = running ] && [ \"\$(getprop init.svc.\$s)\" != running ] && echo \$s; done; fi" | tr -d '\r')

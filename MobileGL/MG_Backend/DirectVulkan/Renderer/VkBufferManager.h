@@ -204,6 +204,17 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // WriteWireBuffer). Empty: no shadow (a large store, the budget was spent, or a GPU
             // write, shader-writable bind or client mapping made the host copy unknowable).
             Vector<Uint8> shadow;
+            // P15: buffers this store was renamed away from, kept for the next rename instead of
+            // allocating one (a UI store is renamed several times a frame). A spare is reused only
+            // once the submission that can name it has completed - DeferWireRelease's own rule -
+            // and its handle never died, so no handle-keyed memo can mistake it for another
+            // buffer. Bounded; the rest go through DeferWireRelease.
+            struct RenameSpare {
+                VkBufferObject buffer;
+                Uint64 submitIndex = 0;
+                Uint64 lastUseSerial = 0;
+            };
+            Vector<RenameSpare> renameSpares;
             Bool gpuWritesPending = false;
             // Only ranges actually submitted by resource_subdata are covered. No
             // shadow is retained: flush cannot replay stale bytes over GPU writes.
@@ -220,6 +231,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Uint64 m_wireRenames = 0;
         SizeT m_wireShadowBytes = 0;
         void DropWireShadow(WireBufferResource& resource);
+        void ReleaseRenameSpares(WireBufferResource& resource);
         Bool CreateWireStoreBuffer(WireBufferResource& resource);
         Bool RenameBusyWireStore(WireBufferResource& resource);
         static Uint64 WireBufferKey(MG_Pipe::MGPipeHandle res) {
