@@ -100,7 +100,7 @@ jobs:
         run: python3 update_glslang_sources.py
 
       - name: Install build dependencies
-        timeout-minutes: 15
+        timeout-minutes: 45
         if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         run: |
           sudo apt-get update
@@ -265,7 +265,7 @@ jobs:
         working-directory: 3rdparty/glslang
         run: python3 update_glslang_sources.py
       - name: Install build dependencies
-        timeout-minutes: 15
+        timeout-minutes: 45
         if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         run: |
           sudo apt-get update
@@ -323,7 +323,7 @@ jobs:
           cmakeVersion: 3.31.10
 
       - name: Install runtime dependencies
-        timeout-minutes: 15
+        timeout-minutes: 45
         if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         run: |
           sudo apt-get update
@@ -402,7 +402,7 @@ jobs:
           cmakeVersion: 3.31.10
 
       - name: Install runtime dependencies
-        timeout-minutes: 15
+        timeout-minutes: 45
         if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         # Same set as the benchmark job, for the same reason: the scenarios bring
         # up real headless EGL (llvmpipe) and Vulkan (lavapipe) contexts, and
@@ -585,7 +585,7 @@ jobs:
         run: python3 update_glslang_sources.py
 
       - name: Install build dependencies
-        timeout-minutes: 15
+        timeout-minutes: 45
         if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         run: |
           sudo apt-get update
@@ -732,7 +732,7 @@ jobs:
           cmakeVersion: 3.31.10
 
       - name: Install runtime dependencies
-        timeout-minutes: 15
+        timeout-minutes: 45
         if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         run: |
           sudo apt-get update
@@ -1036,7 +1036,7 @@ jobs:
         with:
           cmakeVersion: 3.31.10
       - name: Install runtime dependencies
-        timeout-minutes: 15
+        timeout-minutes: 45
         if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         run: |
           sudo apt-get update
@@ -1347,7 +1347,7 @@ jobs:
         run: python3 update_glslang_sources.py
 
       - name: Install build dependencies
-        timeout-minutes: 15
+        timeout-minutes: 45
         if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         run: |
           sudo apt-get update
@@ -1524,7 +1524,7 @@ jobs:
           cmakeVersion: 3.31.10
 
       - name: Install runtime dependencies
-        timeout-minutes: 15
+        timeout-minutes: 45
         if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         run: |
           sudo apt-get update
@@ -1798,7 +1798,7 @@ jobs:
           cmakeVersion: 3.31.10
 
       - name: Install runtime dependencies
-        timeout-minutes: 15
+        timeout-minutes: 45
         if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         run: |
           sudo apt-get update
@@ -2450,7 +2450,7 @@ jobs:
         run: git submodule update --init include/ska 3rdparty/xxHash 3rdparty/Vulkan-Headers
 
       - name: Install clang and X11 headers
-        timeout-minutes: 15
+        timeout-minutes: 45
         if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         # Includes.h defines VK_USE_PLATFORM_XLIB_KHR before <vulkan/vulkan.h>, which then
         # includes <X11/Xlib.h>; without libx11-dev every clang-mode probe dies in the
@@ -2486,7 +2486,7 @@ jobs:
           cmakeVersion: 3.31.10
 
       - name: Install runtime dependencies
-        timeout-minutes: 15
+        timeout-minutes: 45
         if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         # libegl-mesa0 is the EGL vendor library itself: DriverBench brings up a
         # real GL context, and libegl1 is only glvnd's dispatch. It normally
@@ -2595,7 +2595,7 @@ jobs:
         run: python3 update_glslang_sources.py
 
       - name: Install dependencies
-        timeout-minutes: 15
+        timeout-minutes: 45
         if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         run: |
           sudo apt-get update
@@ -2870,7 +2870,7 @@ jobs:
           cmakeVersion: 3.31.10
 
       - name: Install runtime dependencies
-        timeout-minutes: 15
+        timeout-minutes: 45
         if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         run: |
           sudo apt-get update
@@ -3076,7 +3076,7 @@ jobs:
           cmakeVersion: 3.31.10
 
       - name: Install runtime dependencies
-        timeout-minutes: 15
+        timeout-minutes: 45
         if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         run: |
           sudo apt-get update
@@ -3277,7 +3277,7 @@ jobs:
           cmakeVersion: 3.31.10
 
       - name: Install runtime dependencies
-        timeout-minutes: 15
+        timeout-minutes: 45
         if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         run: |
           sudo apt-get update
@@ -3842,7 +3842,7 @@ jobs:
         run: python3 update_glslang_sources.py
 
       - name: Install build and runtime dependencies
-        timeout-minutes: 15
+        timeout-minutes: 45
         if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         run: |
           sudo apt-get update

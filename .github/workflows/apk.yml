@@ -76,7 +76,7 @@ jobs:
             ${{ runner.os }}-apk-${{ github.job }}-ccache-
 
       - name: Install ccache
-        timeout-minutes: 15
+        timeout-minutes: 45
         run: |
           sudo apt-get update
           sudo apt-get install -y ccache
