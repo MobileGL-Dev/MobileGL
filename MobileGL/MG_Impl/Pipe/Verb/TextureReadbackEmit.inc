@@ -133,6 +133,9 @@
                                         sizeof(record), nullptr, 0, nullptr, 0, nullptr);
                     return;
                 }
+                // P15: the validate point answered "pack buffer, fire-and-forget" and the reply
+                // form is taken after all, so the barriered fill that form needs runs now.
+                MG_Pipe::MGPipeValidateForVerbBarriered(MG_Pipe::MGPipeVerb::GetTextureImage);
             }
             Vector<Uint8> bytes(static_cast<SizeT>(tight));
             const Uint64 capacity = session.MaxReplyBytes();

@@ -643,6 +643,28 @@ namespace MobileGL::MG_Remote::Client {
             // (PipeApply.h:298-304), so nobody re-sends those texels. So it takes the blocking
             // path instead, which is the pre-window shape exactly.
             const Uint32 window = session.LinkRetainsReplies() ? CreateWindowEffective() : 1u;
+            // P15: UNDER RUN-AHEAD A CREATE IS FIRE-AND-FORGET. The handle is the client's own
+            // allocation, and the server's accept is derivable: it declines only a reserved or
+            // out-of-table slot or a target with no table (all protocol corruption, trip-wired on
+            // the server) or a texture family with no consumer, which the client already knows
+            // and never emits for (P4aFamilyHasItsConsumer). Waiting for that answer was a
+            // blocking round trip per new object (FCL + BSL: 2-3 per frame).
+            // A link that retains answers (the stream arm) keeps its create window, which already
+            // defers the answer and reads it later; this is the arm without one (the shared pool).
+            if (window <= 1 && session.RunAheadArmed() && !CreateIsSuspect(payload->Resource)) {
+                Int32 status = Wire::ReplySink::kStatusError;
+                const Uint64 seq = session.EmitAndWaitTails(
+                    MGPWireOp::ResourceCreate, payload, sizeof(*payload), nullptr, 0, nullptr, 0,
+                    &status, nullptr, /*wantReply=*/false, /*willReadReply=*/false);
+                if (seq != Wire::kInvalidSeq) reply->Id = seq;
+                MG_Pipe::MGPipePostReply(*reply,
+                                         seq == Wire::kInvalidSeq ? Wire::ReplySink::kStatusDeclined
+                                                                  : Wire::ReplySink::kStatusOk,
+                                         seq == Wire::kInvalidSeq ? 0u : 1u);
+                ++g_emitted;
+                if (seq == Wire::kInvalidSeq) ++g_declined;
+                return;
+            }
             // THE WINDOW OFF RESTORES THE OLD SHAPE EXACTLY, and is the negative control for it.
             // THE WINDOW OFF, THE SUSPECT LIST FULL, OR AN OBJECT THAT HAS ALREADY BEEN REFUSED:
             // all four take the blocking branch, which is the pre-window shape - and on the device

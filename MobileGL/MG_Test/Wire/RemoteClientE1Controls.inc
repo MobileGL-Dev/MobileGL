@@ -16,7 +16,7 @@ struct E1BoundaryPeer : Codec::WireVerbSink {
         while (!bell.entered.load() && !clientReturned.load()) std::this_thread::yield();
         return true;
     }
-    Bool OnGenerateMipmap(const MGPMipPlan&) override { return Apply(MGPWireOp::GenerateMipmap); }
+    Bool OnApplierReset(const MGPApplierReset&) override { return Apply(MGPWireOp::ApplierReset); }
     Bool OnClear(const MGPClear&) override { return Apply(MGPWireOp::Clear); }
     void Install() {
         if (Srv::ServerLoopInstance().RunProbeOnApplyThreadForTesting([](void* self) {
@@ -49,10 +49,11 @@ void CheckE1Boundary(Bool serverCap, MGPWireOp op, Bool expectWait, const char* 
         peer.Install();
         const Uint64 before = session.Control()->submittedSeq.load();
         producer.*PeerMember(ProducerBellTag{}) = &bell;
-        const MGPMipPlan mip{};
+        const MGPApplierReset reset{};
         const MGPClear clear{};
-        const Uint64 seq = op == MGPWireOp::GenerateMipmap
-            ? session.EmitAndWait(op, &mip, sizeof(mip), nullptr, 0, nullptr, 0, nullptr)
+        // P15: applier_reset is the one kWaitApplied row left (generate_mipmap went async).
+        const Uint64 seq = op == MGPWireOp::ApplierReset
+            ? session.EmitAndWait(op, &reset, sizeof(reset), nullptr, 0, nullptr, 0, nullptr)
             : session.EmitAndWait(op, &clear, sizeof(clear), nullptr, 0, nullptr, 0, nullptr);
         // Observe BEFORE allowing the peer to complete a non-waiting emission.
         const Bool parked = bell.entered.load();
@@ -63,7 +64,7 @@ void CheckE1Boundary(Bool serverCap, MGPWireOp op, Bool expectWait, const char* 
         if (seq <= before || peer.seen.load() != 1 || session.Control()->Progress.appliedSeq.load() < seq) ::_exit(86);
         const Bool correct = expectWait ? parked && appliedBeforeReturn : !parked && !appliedBeforeReturn;
         std::printf("E1 observation: op=%s cap=%u barrier=%u parked=%u applied_before_return=%u emitted=1 peer_seen=1\n",
-                    op == MGPWireOp::GenerateMipmap ? "GenerateMipmap" : "Clear",
+                    op == MGPWireOp::ApplierReset ? "ApplierReset" : "Clear",
                     static_cast<unsigned>(serverCap), MG_Config::Ipc.VerbBarrier,
                     static_cast<unsigned>(parked), static_cast<unsigned>(appliedBeforeReturn));
         std::fflush(stdout);
@@ -80,9 +81,9 @@ void CheckE1Boundary(Bool serverCap, MGPWireOp op, Bool expectWait, const char* 
 
 TEST(RemoteWaitBoundaryControl, AppliedClassWaitsWithRunAheadCap) {
 #if MGTEST_HAVE_FORK
-    ASSERT_EQ(MGPipeWaitClassFor(MGPWireOp::GenerateMipmap), kWaitApplied);
-    CheckE1Boundary(true, MGPWireOp::GenerateMipmap, true,
-                    "E1 wait boundary: GenerateMipmap returned before apply");
+    ASSERT_EQ(MGPipeWaitClassFor(MGPWireOp::ApplierReset), kWaitApplied);
+    CheckE1Boundary(true, MGPWireOp::ApplierReset, true,
+                    "E1 wait boundary: ApplierReset returned before apply");
 #else
     GTEST_SKIP() << "E1 requires POSIX child isolation";
 #endif

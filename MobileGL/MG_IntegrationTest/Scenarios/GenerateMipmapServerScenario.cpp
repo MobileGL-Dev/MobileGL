@@ -292,6 +292,9 @@ void main() { o_color = gl_FragCoord.y < u_split ? u_bottom : u_top; }
                 glBindTexture(GL_TEXTURE_2D, m_texture);
                 glGenerateMipmap(GL_TEXTURE_2D);
                 ASSERT_EQ(FirstGLError(), 0u) << "glGenerateMipmap";
+                // generate_mipmap is fire-and-forget (P15): the server applies it after this
+                // returns, so the server log this case reads is complete only after a finish.
+                glFinish();
             }
 
             // Under the knob the SERVER must say it filtered on the CPU; without that line the entry

@@ -2587,6 +2587,9 @@ void StartRunAheadSession() {
     ::alarm(15);
     MG_Config::Transport = MG_Config::TransportMode::InProcess;
     MG_Config::Ipc.RunAhead = 1;
+    // The run-ahead guards below are the SHARED-block rules; the dual block (the default since
+    // P15) makes a barriered fill the client's own and is covered by DualBlockScenario.
+    MG_Config::Ipc.RoleSplitState = false;
     Srv::ServerSessionInstance().SetCapabilityBits(
         static_cast<Uint64>(MG_Pipe::kCapRunAheadApply));
     Srv::ServerSessionInstance().SetConsumedSubsystems(kMGPipeSubsystemsMigratedAtP4a);
@@ -2824,6 +2827,91 @@ TEST(RemoteRunAhead, AnIndexedDrawVerbIsUnbarrieredAndTouchesPipeInputsNotAtAll)
         ClientSession::NoteApplyThreadLeftApplier();
         MGPipeLeaveVerb();
         ClientSessionInstance().Stop();
+    });
+    ExpectChildSuccess(child);
+}
+
+// P15: FIRE-AND-FORGET IS THE DEFAULT. The texture-op copies, mip generation and the transform
+// feedback span calls owe the client no answer, so under run-ahead each publishes and returns.
+// The wait classes are pinned at compile time (the red: put any of them back to kWaitApplied and
+// this file stops compiling); the case below proves the client really does not wait on them.
+static_assert(MGPipeWaitClassFor(MGPWireOp::GenerateMipmap) == kWaitNone);
+static_assert(MGPipeWaitClassFor(MGPWireOp::ResourceCopyRegion) == kWaitNone);
+static_assert(MGPipeWaitClassFor(MGPWireOp::CopyFramebufferToTexture) == kWaitNone);
+static_assert(MGPipeWaitClassFor(MGPWireOp::BeginStreamOutput) == kWaitNone);
+static_assert(MGPipeWaitClassFor(MGPWireOp::EndStreamOutput) == kWaitNone);
+static_assert(MGPipeWaitClassFor(MGPWireOp::PauseStreamOutput) == kWaitNone);
+static_assert(MGPipeWaitClassFor(MGPWireOp::ResumeStreamOutput) == kWaitNone);
+static_assert(MGPipeWaitClassFor(MGPWireOp::BindStreamOutput) == kWaitNone);
+static_assert(MGPipeWaitClassFor(MGPWireOp::SetStorageBlockBinding) == kWaitNone);
+
+struct AcceptAllPeer : Codec::WireVerbSink {
+    Bool OnGenerateMipmap(const MGPMipPlan&) override { return true; }
+    Bool OnResourceCopyRegion(const MGPCopyRegion&) override { return true; }
+    Bool OnCopyFramebufferToTexture(const MGPCopyFromFramebuffer&) override { return true; }
+    Bool OnBeginStreamOutput(const MGPStreamOutputBegin&) override { return true; }
+    Bool OnEndStreamOutput(const MGPXfbAccounting&) override { return true; }
+    Bool OnPauseStreamOutput(const MGPStreamOutputControl&) override { return true; }
+    Bool OnResumeStreamOutput(const MGPStreamOutputControl&) override { return true; }
+    Bool OnBindStreamOutput(const MGPStreamOutputBind&) override { return true; }
+    void Install() {
+        if (Srv::ServerLoopInstance().RunProbeOnApplyThreadForTesting(
+                [](void* self) {
+                    auto& decoder = Srv::ServerSessionInstance().Applier().*PeerMember(DecoderTag{});
+                    decoder.SetVerbSink(static_cast<AcceptAllPeer*>(self));
+                    return MOBILEGL_OK;
+                },
+                this) != MOBILEGL_OK) {
+            ::_exit(82);
+        }
+    }
+};
+
+TEST(RemoteRunAhead, FireAndForgetRowsDoNotWaitForTheirApply) {
+    const auto child = RunInChild([] {
+        StartRunAheadSession();
+        AcceptAllPeer peer;
+        peer.Install();
+        ClientSession& session = ClientSessionInstance();
+        const Uint64 before = session.RecordWaits();
+        const auto emit = [&](MGPWireOp op, const auto& payload) {
+            session.EmitAndWait(op, &payload, sizeof(payload), nullptr, 0, nullptr, 0, nullptr);
+        };
+        emit(MGPWireOp::GenerateMipmap, MGPMipPlan{});
+        emit(MGPWireOp::ResourceCopyRegion, MGPCopyRegion{});
+        emit(MGPWireOp::CopyFramebufferToTexture, MGPCopyFromFramebuffer{});
+        emit(MGPWireOp::BindStreamOutput, MGPStreamOutputBind{});
+        emit(MGPWireOp::BeginStreamOutput, MGPStreamOutputBegin{});
+        emit(MGPWireOp::PauseStreamOutput, MGPStreamOutputControl{});
+        emit(MGPWireOp::ResumeStreamOutput, MGPStreamOutputControl{});
+        emit(MGPWireOp::EndStreamOutput, MGPXfbAccounting{});
+        if (session.RecordWaits() != before) ::_exit(121);
+        session.Stop();
+    });
+    ExpectChildSuccess(child);
+}
+
+// P15: a create is fire-and-forget under run-ahead. The handle is the client's own allocation
+// and the server's accept is derivable (it declines only protocol corruption or a family with no
+// consumer, which the client never emits for), so the call publishes and returns with a
+// provisional accept instead of waiting for the answer.
+//
+// THE RED (done once while writing it): drop Wire_ResourceCreate's run-ahead fast path and the
+// call takes the blocking path, so RecordWaits() moves and the child exits 112.
+TEST(RemoteRunAhead, AResourceCreateDoesNotWaitForItsAnswer) {
+    const auto child = RunInChild([] {
+        StartRunAheadSession();
+        ClientSession& session = ClientSessionInstance();
+        const Uint64 before = session.RecordWaits();
+        MG_Pipe::MGPResourceDesc desc{};
+        desc.Resource = MG_Pipe::MGPipeHandle{MG_Pipe::kMGPipeFirstAllocatableSlot, 1};
+        desc.Target = MG_Pipe::kMGPipeResourceTargetBuffer;
+        desc.Width = 64;
+        MG_Pipe::MGPReplySlot reply = MG_Pipe::MGPipeMintReplySlot();
+        MG_Pipe::gMGPipeScreen.ResourceCreate(&desc, &reply);
+        if (!MG_Pipe::MGPipeTakeReplyBool(reply, "resource_create")) ::_exit(111);
+        if (session.RecordWaits() != before) ::_exit(112);
+        session.Stop();
     });
     ExpectChildSuccess(child);
 }

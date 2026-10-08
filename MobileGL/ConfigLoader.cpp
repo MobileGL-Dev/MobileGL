@@ -624,7 +624,11 @@ namespace MobileGL::MG_ConfigLoader {
         // verify harness: the comparator's entry compare and compare-at-read hook are built on
         // there being ONE filled block (the hook pins itself to &gPipeInputs,
         // PipeFill.cpp's MGPipeVerifyReadHook), which is exactly what the rehearsal splits.
-        ipc.RoleSplitState = QueryEnvFlag("MOBILEGL_IPC_ROLE_SPLIT_STATE");
+        // P15: ON BY DEFAULT. Every split lane and the on-device retrace gate already ran with it,
+        // and the dual-block census is empty (no apply reads a client-filled field), so the
+        // shipped arm now matches what is tested - and with two blocks the client's fill is its
+        // own and needs no applier quiesce. 0 still turns it off (the negative control does).
+        ipc.RoleSplitState = QueryEnvQuirkOverride("MOBILEGL_IPC_ROLE_SPLIT_STATE") != MG_Config::QuirkOverride::ForceOff;
         if (MG_Config::Features.PipeVerify && ipc.RoleSplitState) {
             MGLOG_W("Config: MOBILEGL_IPC_ROLE_SPLIT_STATE=1 is incompatible with "
                     "MOBILEGL_PIPE_VERIFY (the comparator owns the single fill block); "

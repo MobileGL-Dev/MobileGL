@@ -1199,6 +1199,9 @@ namespace MobileGL::MG_Record {
                     });
                     return;
                 }
+                // P15: the validate point answered "pack buffer, fire-and-forget" and the reply
+                // form is taken after all, so the barriered fill that form needs runs now.
+                MG_Pipe::MGPipeValidateForVerbBarriered(MG_Pipe::MGPipeVerb::ReadPixels);
             }
 
             // THE COMMON CASE KEEPS THE ZERO-COPY. A neutral pack state means the destination

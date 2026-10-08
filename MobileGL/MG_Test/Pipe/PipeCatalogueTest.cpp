@@ -769,28 +769,16 @@ TEST(PipeCatalogue, EveryRowCarriesTheWaitClassTheContractGivesIt) {
             << WireOpNameForDiag(op);
     }
 
-    // kWaitApplied: the rows whose apply STILL reads a BARRIER_PULLED row or probes the client
-    // allocator, so the client parks in its own wait and CONTRACT-P5C's semantics hold for them
-    // unchanged - their pulls count into rsp and their probes are legal inside a scope. Two of
-    // them are trailing items and are expected to leave this list in a later package:
-    // generate_mipmap the moment tx2 resolves the texture from VerbMipRes instead of the active
-    // unit, and set_storage_block_binding the moment pg resolves it through
-    // MGPStorageBlockBinding::ShaderCso. When they do, THIS list is what has to be edited.
+    // kWaitApplied: only applier_reset is left. P15 (user decision: everything fire-and-forget
+    // is async) moved generate_mipmap, resource_copy_region, copy_framebuffer_to_texture,
+    // set_storage_block_binding and the five stream-output rows to kWaitNone: their applies
+    // resolve everything from the record's own handles (VerbMipRes, VerbCopyTexDst, the copy's
+    // endpoints, the storage-block program CSO, the P5f server-side span), and the dual-block
+    // census - where any client-filled read is a named Fatal - is empty. applier_reset keeps its
+    // wait: it is once per make-current and its apply probes the client allocator, which is only
+    // legal inside a parked scope.
     const MGPWireOp appliedRows[] = {
-        MGPWireOp::ApplierReset,      MGPWireOp::GenerateMipmap,
-        MGPWireOp::SetStorageBlockBinding, MGPWireOp::BeginStreamOutput,
-        MGPWireOp::EndStreamOutput,   MGPWireOp::PauseStreamOutput,
-        MGPWireOp::ResumeStreamOutput, MGPWireOp::BindStreamOutput,
-        MGPWireOp::CopyFramebufferToTexture,
-        // P5e (gl), ID-118. resource_copy_region JOINED THIS SET, and it is the retiring phase
-        // of a field that put it here: its verb is CopyImageSubData, whose apply reads
-        // GetTextureObject, and that row retires in P7. An unbarriered record reading client
-        // memory is an unconditional Fatal, so leaving it kWaitNone would have meant a real
-        // defect standing for two phases - or an exception hand-written into a DERIVED
-        // allowlist, which is the same thing with a comment on it. It sits beside
-        // copy_framebuffer_to_texture here for the reason it took that class: same verb class,
-        // no reply slot, and zero calls per frame in the measured scene.
-        MGPWireOp::ResourceCopyRegion,
+        MGPWireOp::ApplierReset,
     };
     for (const MGPWireOp op : appliedRows) {
         EXPECT_EQ(MGPipeWaitClassFor(op), kWaitApplied) << WireOpNameForDiag(op);
@@ -812,12 +800,17 @@ TEST(PipeCatalogue, EveryRowCarriesTheWaitClassTheContractGivesIt) {
         MGPWireOp::CreateShaderState, MGPWireOp::SetDrawProgram,
         // P9: the pack-buffer readbacks - the point of the two rows is that nothing waits.
         MGPWireOp::ReadPixelsToBuffer, MGPWireOp::GetTextureImageToBuffer,
+        // P15: fire-and-forget.
+        MGPWireOp::GenerateMipmap, MGPWireOp::ResourceCopyRegion, MGPWireOp::CopyFramebufferToTexture,
+        MGPWireOp::SetStorageBlockBinding, MGPWireOp::BeginStreamOutput, MGPWireOp::EndStreamOutput,
+        MGPWireOp::PauseStreamOutput, MGPWireOp::ResumeStreamOutput, MGPWireOp::BindStreamOutput,
     };
     for (const MGPWireOp op : noneRows) {
         EXPECT_EQ(MGPipeWaitClassFor(op), kWaitNone) << WireOpNameForDiag(op);
     }
 
-    // The partition, by count. 15 + 1 + 10 = 26 rows wait (shared_image made the reply rows 15); every other row of the catalogue does
+    // The partition, by count. 15 + 1 + 1 = 17 rows wait (shared_image made the reply rows 15; P15
+    // left one kWaitApplied row); every other row of the catalogue does
     // not. A row that changed class moves two of these numbers at once - which is why the
     // kWaitApplied count went 9 -> 10 and the kWaitNone offset 24 -> 25 in the SAME commit that
     // moved resource_copy_region (P5e gl, ID-118).
@@ -832,9 +825,9 @@ TEST(PipeCatalogue, EveryRowCarriesTheWaitClassTheContractGivesIt) {
         }
     }
     EXPECT_EQ(reply, 15u);
-    EXPECT_EQ(applied, 10u);
+    EXPECT_EQ(applied, 1u);
     EXPECT_EQ(present, 1u);
-    EXPECT_EQ(none, static_cast<SizeT>(kMGPipeCallCount) - 26u);
+    EXPECT_EQ(none, static_cast<SizeT>(kMGPipeCallCount) - 17u);
     EXPECT_EQ(other, 0u) << "a row carries the kWaitClassCount terminator as its class";
 
     // And the reply half of the partition BOTH WAYS, over the whole catalogue: exactly the rows

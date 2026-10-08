@@ -400,6 +400,8 @@ namespace MobileGL::MG_Remote::Client {
         // is never the frame's critical path; a number close to the frame count means the
         // credit is what paces this workload, which is what the device exit measures.
         Uint64 PresentCreditWaits() const;
+        // P15: how many records this session waited on (applied or reply) after publishing.
+        Uint64 RecordWaits() const { return m_recordWaits; }
 
         // §2.4, called by EmitPresent immediately before it encodes: pay the credit (parking
         // if this client already has `MOBILEGL_IPC_PRESENT_CREDIT` presents in flight), then
@@ -630,6 +632,7 @@ namespace MobileGL::MG_Remote::Client {
         Uint32 m_pendingDamageCount = 0;
         Int32 m_pendingDamage[MG_Pipe::kMGPMaxDamageRects * 4] = {};
         Uint64 m_presentCreditWaits = 0;
+        Uint64 m_recordWaits = 0;
 
         // sm: the spawn client owns ONE end and two bells. Held here rather
         // than in the transport because which bell is "mine" is the session's

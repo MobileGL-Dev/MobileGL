@@ -43,6 +43,7 @@
 #include <Config.h>
 #if MOBILEGL_PIPE_VERIFY
 #include <MG_Impl/Pipe/Verb/VerbPort.h>
+#include <MG_Impl/Pipe/Verb/GpuWriteSet.h>
 #endif
 
 #if MOBILEGL_BUILD_DISAGGREGATED
@@ -400,8 +401,31 @@ namespace MobileGL::MG_Pipe {
         // `ctx` MAY BE NULL: the validate point asks this question BEFORE it has decided
         // whether there is anything to fill. A null context has no open transform-feedback
         // span, so clause 2 is false for it - and the verb is a no-op below either way.
+        // MGPipeValidateForVerbBarriered's switch: the next ClientVerbIsBarriered answers true.
+        Bool g_forceBarrieredFill = false;
+
+        // P15: A PACK-BUFFER READBACK IS FIRE-AND-FORGET, decided per call. With a pack buffer
+        // bound the readback emitters publish read_pixels_to_buffer / get_texture_image_to_buffer
+        // (kWaitNone) instead of the reply form, and nothing is owed to the client at the call;
+        // the predicate mirrors PackBufferReadbackTarget's conditions. The one condition it
+        // cannot see (the byte range past 2 GiB) sends the emitter to the reply form, which then
+        // re-validates barriered (MGPipeValidateForVerbBarriered) before it publishes.
+        Bool PackReadbackGoesToBuffer(GLContext* ctx) {
+            if (ctx == nullptr) return false;
+            const auto& pbo = ctx->GetBufferBindingSlot(::MobileGL::BufferTarget::PixelPack).GetBoundObject();
+            if (!pbo) return false;
+#if MOBILEGL_BUILD_DISAGGREGATED
+            if (MG_Config::Ipc.PboReadbackSync != 0) return false;
+#endif
+            if (pbo->IsMapped() || !MG_Record::BufferWritebackIsReachable(*pbo)) return false;
+            return !MGPipeHandleIsNull(MGPipeSlots().FindByLifetimeId(MGPipeKind::Buffer, pbo->GetLifetimeId()));
+        }
+
         Bool ClientVerbIsBarriered(MGPipeVerb verb, GLContext* ctx) {
-            const MGPWireOp op = MGPipeRecordOpForVerb(verb);
+            if (g_forceBarrieredFill) return true;
+            MGPWireOp op = MGPipeRecordOpForVerb(verb);
+            if (op == MGPWireOp::ReadPixels && PackReadbackGoesToBuffer(ctx)) op = MGPWireOp::ReadPixelsToBuffer;
+            if (op == MGPWireOp::GetTextureImage && PackReadbackGoesToBuffer(ctx)) op = MGPWireOp::GetTextureImageToBuffer;
             // No record (answered from the caps mirror): no apply can read a fill for it.
             if (op == kMGPipeNoRecord) return false;
             if (MGPipeWaitClassFor(op) != kWaitNone) return true;
@@ -441,6 +465,12 @@ namespace MobileGL::MG_Pipe {
         // call that returns, and the lockstep client's behaviour is unchanged byte for byte
         // (G1) - under lockstep appliedSeq is already at LastPublishedSeq by construction.
         void QuiesceApplierBeforeFill(const char* surface) {
+            // P15: WITH TWO BLOCKS THE FILL IS THE CLIENT'S OWN. The applier reads the server
+            // block, so a GL-thread write to the client block races nothing and needs no wait -
+            // which is what makes one barriered verb cost one wait (its record's) instead of a
+            // quiesce before the fill, another before the residual half and one per frontend
+            // mutation after it (FCL BSL: 22 of them per frame).
+            if (MGPipeBlocksAreDistinct()) return;
             MG_Remote::Client::ClientSession* session = MG_Remote::Client::ClientSession::Active();
             if (session == nullptr) return; // no session: this process has no applier to outrun
             session->WaitForApplyToCatchUp(surface);
@@ -3395,6 +3425,12 @@ namespace MobileGL::MG_Pipe {
                                          Bool contextValuesWireLive) {
         return MGPipeFieldMaskHas(SuppliedFieldMask(pushMask, applierDerives, contextValuesWireLive),
                                   field);
+    }
+
+    void MGPipeValidateForVerbBarriered(MGPipeVerb verb) {
+        g_forceBarrieredFill = true;
+        MGPipeValidateForVerb(verb);
+        g_forceBarrieredFill = false;
     }
 
     // ---- the validate point (P2 brief D1) ----

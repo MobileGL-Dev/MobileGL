@@ -265,8 +265,8 @@
     /* (kBlitOrCopy), same shape, a wait that is already carried in this lane. THE COST IS     */  \
     /* MEASURED, NOT ASSUMED: glCopyImageSubData is zero per frame in the Minecraft 26.3-rc-3  */  \
     /* scene (~849 draws/frame), so the wait is not on any per-frame path.                     */  \
-    X(ResourceCopyRegion,       MGPCopyRegion,              kCtxObject, kNone,                      kWaitApplied)     \
-    X(GenerateMipmap,           MGPMipPlan,                 kCtxObject, kNone,                      kWaitApplied)     \
+    X(ResourceCopyRegion,       MGPCopyRegion,              kCtxObject, kNone,                      kWaitNone)        \
+    X(GenerateMipmap,           MGPMipPlan,                 kCtxObject, kNone,                      kWaitNone)        \
     X(GetTextureImage,          MGPReadbackInfo,            kCtxObject, kReplySlot,                 kWaitReply)       \
     /* ---- context: transfer calls that read whole-context state, and the commands ---- */         \
     X(Blit,                     MGPBlit,                    kCtxVerb,   kNone,                      kWaitNone)        \
@@ -275,10 +275,10 @@
     X(DrawVbo,                  MGPDrawInfo,                kCtxVerb,   kHostSpan|kVarTail,         kWaitNone)        \
     X(LaunchGrid,               MGPGridInfo,                kCtxVerb,   kNone,                      kWaitNone)        \
     X(MemoryBarrier,            MGPMemoryBarrier,           kCtxVerb,   kNone,                      kWaitNone)        \
-    X(BeginStreamOutput,        MGPStreamOutputBegin,       kCtxVerb,   kNone,                      kWaitApplied)     \
-    X(EndStreamOutput,          MGPXfbAccounting,           kCtxVerb,   kNone,                      kWaitApplied)     \
-    X(PauseStreamOutput,        MGPStreamOutputControl,     kCtxVerb,   kNone,                      kWaitApplied)     \
-    X(ResumeStreamOutput,       MGPStreamOutputControl,     kCtxVerb,   kNone,                      kWaitApplied)     \
+    X(BeginStreamOutput,        MGPStreamOutputBegin,       kCtxVerb,   kNone,                      kWaitNone)        \
+    X(EndStreamOutput,          MGPXfbAccounting,           kCtxVerb,   kNone,                      kWaitNone)        \
+    X(PauseStreamOutput,        MGPStreamOutputControl,     kCtxVerb,   kNone,                      kWaitNone)        \
+    X(ResumeStreamOutput,       MGPStreamOutputControl,     kCtxVerb,   kNone,                      kWaitNone)        \
     X(Flush,                    MGPFlush,                   kCtxVerb,   kNone,                      kWaitNone)        \
     X(Present,                  MGPPresent,                 kCtxVerb,   kNone,                      kWaitPresent)     \
     X(SetSwapInterval,          MGPSwapInterval,            kCtxVerb,   kOptional,                  kWaitNone)        \
@@ -305,13 +305,13 @@
     X(PatchParameter,           MGPPatchParameter,          kCtxVerb,   kNone,                      kWaitNone)        \
     /* glBindTransformFeedback - the driver object rebind and the capture-binding shadow       */    \
     /* invalidation happen at the call; the XFB namespace has no wire lifetime.                 */    \
-    X(BindStreamOutput,         MGPStreamOutputBind,        kCtxVerb,   kNone,                      kWaitApplied)     \
+    X(BindStreamOutput,         MGPStreamOutputBind,        kCtxVerb,   kNone,                      kWaitNone)        \
     /* glShaderStorageBlockBinding - the block NAME is the coordinate all three sides share    */    \
     /* (BackendObject.h), and a name is bytes: kHasBlob, staged whole in SEG_STAGE, NUL included. */  \
-    X(SetStorageBlockBinding,   MGPStorageBlockBinding,     kCtxVerb,   kHasBlob,                   kWaitApplied)     \
+    X(SetStorageBlockBinding,   MGPStorageBlockBinding,     kCtxVerb,   kHasBlob,                   kWaitNone)        \
     /* glCopyTexImage2D / glCopyTexSubImage2D - a copy whose SOURCE is the read framebuffer,   */    \
     /* which resource_copy_region (resource -> resource) cannot express.                        */    \
-    X(CopyFramebufferToTexture, MGPCopyFromFramebuffer,     kCtxVerb,   kNone,                      kWaitApplied)     \
+    X(CopyFramebufferToTexture, MGPCopyFromFramebuffer,     kCtxVerb,   kNone,                      kWaitNone)        \
     /* ---- APPENDED BY P5c (MG_Remote/CONTRACT-P5C.md §5): the two control records. Opcodes ---- */ \
     /* ---- 77..78. Neither has an MGPipeApply* entry point and neither gains one: both reach  ---- */ \
     /* ---- WireVerbSink, and under monolith neither has a producer - the reset is a direct    ---- */ \

@@ -2408,6 +2408,7 @@ namespace MobileGL::MG_Remote::Client {
             return seq;
         }
 
+        ++m_recordWaits;
         if (MG_Config::Ipc.WaitStats && RunAheadArmed()) ++g_waitCensus.recordWaits[static_cast<SizeT>(op)];
         const BarrierWaitScope waiting;
         const Uint64 waitBudgetMs = AppliedWaitBudgetMs(op, payload);
@@ -2793,6 +2794,9 @@ namespace MobileGL::MG_Remote::Client {
             // is exactly "no record is being applied" and not merely "not decoding".
             if (isBarrieredFill && !ApplyThreadIsInsideApplier()) return;
             if (Server::ServerLoop::OnApplyThread()) return; // the applier owns the block
+            // P15: with two blocks the GL thread's fill writes the client block, which the
+            // applier never reads (the dual-block census is empty), so there is nothing to race.
+            if (isBarrieredFill && MG_Pipe::MGPipeBlocksAreDistinct()) return;
             SessionFail(MGFatalFamily::RoleViolation, "MGPipe: Fatal{RoleViolation, \"gPipeInputs\"} - the GL thread touched "
                     "gPipeInputs (%s) on a RUN-AHEAD session %s. With the client running ahead "
                     "the block is the server's to read for as long as ANY record is in flight "

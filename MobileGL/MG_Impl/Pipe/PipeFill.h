@@ -33,6 +33,11 @@ namespace MobileGL::MG_Pipe {
     // entry points with one call site per verb instead of nine.
     void MGPipeValidateForVerb(MGPipeVerb verb);
 
+    // P15: the validate point again for a verb whose first validate answered UNBARRIERED for a
+    // per-call reason that did not hold at emission (a pack-buffer readback that falls back to
+    // the reply form). Runs the barriered fill: quiesce, then fill, exactly as a barriered verb.
+    void MGPipeValidateForVerbBarriered(MGPipeVerb verb);
+
     // Ends the verb in flight without starting another: bumps the serial, so every field the
     // verb stamped goes stale, and puts the current verb back to "none", so a read made after
     // it aborts as Fatal{UnmigratedPipeInput, "<Field>@<none>"} - which is what such a read

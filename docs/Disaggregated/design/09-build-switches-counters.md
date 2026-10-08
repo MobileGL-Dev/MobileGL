@@ -60,7 +60,7 @@ CMake：`MOBILEGL_BUILD_DISAGGREGATED`（OFF）、`MOBILEGL_BUILD_DISAGGREGATED_
 | `MOBILEGL_IPC_PERSISTENT_BLOCK_KB` / `_PERSISTENT_HASH_SUPPRESS` | 64 / 1 | persistent-map 推送粒度 / 只推变化的块；`0` 是对照 |
 | `MOBILEGL_IPC_ADOPT_TIER` | 未设 = T0 | 未设（用户 2026-09-29 定为缺省）= 能用就 T0，不能用（stream、无 AHB、POST 失败、server 不允许）安静回退 T2：只 MGLOG_D、照样计数；`0` = 点名要 T0，回退有具名行（A1 的 `Refuse{AdoptTierOnStream}` 等）；`1` = T1 已关，具名拒绝后 T2；`2` = T2（P11 前的缺省）。`CONTRACT-P11.md` B2 |
 | `MOBILEGL_IPC_ALLOW_ADOPT_T0` | 1 | server 自有：`0` = 永不批准 T0（会话走 T2），经 `ServerSpawn` 保留 |
-| `MOBILEGL_IPC_STRICT_ERRORS` / `MOBILEGL_IPC_AUDIT` / `MOBILEGL_IPC_ROLE_SPLIT_STATE` | 0 / 0 / 0 | 残余输入读升级为 Fatal / 退休 staging 填 `0xDD` / 双块演练（P5f） |
+| `MOBILEGL_IPC_STRICT_ERRORS` / `MOBILEGL_IPC_AUDIT` / `MOBILEGL_IPC_ROLE_SPLIT_STATE` | 0 / 0 / 1 | 残余输入读升级为 Fatal / 退休 staging 填 `0xDD` / 双块（P5f；P15 起默认开，`0` 关闭，阴性对照显式设 0；双块下 barriered fill 写 client 块，不再 quiesce applier） |
 | `MOBILEGL_IPC_SPIN_US` / `MOBILEGL_IPC_SERVER_AFFINITY` | 50 / `auto` | park 前自旋预算 / apply 线程亲和（Redmi 内核忽略） |
 | `MOBILEGL_IPC_RECOVER` | 1 | session 因 device loss 结束后，应用下一次 `eglCreateContext` / `eglCreate*Surface` / `eglInitialize` 重新拨号得到新 session（旧 context 保持丢失，surface 在新 session 重建）；`0` = 丢失对整个进程永久 |
 | `MOBILEGL_IPC_RESPAWN` | — | 具名拒绝：没有阶段实现 server 重启后的全量重推 |

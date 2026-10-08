@@ -740,8 +740,9 @@ namespace MobileGL::MG_Config {
         // selection folds to the single shared block) and forced off by MOBILEGL_PIPE_VERIFY
         // (the comparator owns the one fill block it compares against). 0 is not merely the
         // default, it is the negative control: the lane's distinctness case must go red
-        // without it (P5F §6).
-        Bool RoleSplitState = false;
+        // without it (P5F §6). P15: the default is ON (unset = on, 0 = off); the negative control
+        // sets 0 explicitly.
+        Bool RoleSplitState = true;
         // MOBILEGL_IPC_AUDIT: after a record retires, the server fills the SEG_STAGE bytes
         // it referenced with 0xDD (R-2.5). This is the ONLY mechanical control that an
         // inproc implementation did not quietly keep using a pointer past its lifetime.

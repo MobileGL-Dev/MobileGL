@@ -466,6 +466,10 @@ void main() { oColor = vec4(vColor, 1.0); }
         }
 
         Gl().EndFrame(); // close the setup window; SetUp's own store and map go in it
+        // The window is emitted where the SERVER applies that present, and the client runs ahead
+        // of it (a buffer create no longer waits since P15): without this the counted window's
+        // map can be tallied before the setup window closes and land in it.
+        glFinish();
         unsigned long long acquisitionsBefore = 0, pushedBefore = 0;
         const bool separateClientStats = PeekSeparateClientMapStats(&acquisitionsBefore, &pushedBefore);
 
