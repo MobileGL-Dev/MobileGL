@@ -142,6 +142,28 @@ namespace MobileGL::MG_ConfigLoader {
             if (IsServerProcess()) return;
             ReadBackendFile(FilePathSetting("MOBILEGL_BACKEND_FILE", kDefaultBackendFile), out);
             ReadConfigFile(FilePathSetting("MOBILEGL_CONFIG_FILE", kDefaultConfigFile), out, log);
+#if defined(__ANDROID__)
+            // An app that hosts the library (FCL) owns its process environment, so a developer
+            // has no way to set a MOBILEGL_* knob in it. `adb shell setprop debug.mobilegl.env
+            // "MOBILEGL_A=1;MOBILEGL_B=0"` does it, below the environment like the Linux config
+            // file (PROP_VALUE_MAX bounds it to a few keys).
+            char property[PROP_VALUE_MAX] = {};
+            if (__system_property_get("debug.mobilegl.env", property) > 0) {
+                String all(property);
+                SizeT start = 0;
+                while (start < all.size()) {
+                    SizeT end = all.find(';', start);
+                    if (end == String::npos) end = all.size();
+                    const String item = all.substr(start, end - start);
+                    const SizeT eq = item.find('=');
+                    if (eq != String::npos && eq > 0) {
+                        out.emplace(item.substr(0, eq), item.substr(eq + 1));
+                        if (log) MGLOG_I("Config: debug.mobilegl.env sets %s", item.c_str());
+                    }
+                    start = end + 1;
+                }
+            }
+#endif
         }
     } // namespace
 

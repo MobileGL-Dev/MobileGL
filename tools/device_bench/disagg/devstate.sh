@@ -17,5 +17,5 @@ anland=$(adb -s "$SER" shell pidof com.anland.consumer.mobilegl | tr -dc '0-9' |
 p=$(cat "$out/profile.txt")
 pn=$(echo "$p" | sed -n 's/.*profile=\([^ ]*\).*/\1/p'); pc=$(echo "$p" | sed -n 's/.*cpu=\([0-9]*\).*/\1/p'); pl=$(echo "$p" | sed -n 's/.*little=\([0-9]*\).*/\1/p'); pg=$(echo "$p" | sed -n 's/.*gpu=\([0-9]*\).*/\1/p')
 [ "$kind" = trace ] && { ver=-; swap=pbuffer; }
-line="STATE profile=${pn:-unpinned}(${pc:+$((pc/1000))/$((pl/1000))/$((pg/1000000))MHz}) $(head -1 "$out/valid.txt") daemons=$daemons mc=$ver swap=${swap:-?} anland=$([ -n "$anland" ] && echo on || echo off)"
+line="STATE profile=${pn:-unpinned}(${pc:+$((pc/1000))/$((pl/1000))/$((pg/1000000))MHz}) $(head -1 "$out/valid.txt") daemons=$daemons mc=$ver swap=${swap:-?} anland=$([ -n "$anland" ] && echo on || echo off) $(cat "$out/env.txt" 2>/dev/null)"
 echo "$line" > "$out/state.txt"; echo "$line"
