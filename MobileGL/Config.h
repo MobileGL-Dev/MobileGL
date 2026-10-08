@@ -144,6 +144,10 @@ namespace MobileGL::MG_Config {
         // pointer to the driver VAO only when they differ from what that VAO already holds (a
         // shadow on the VAO twin). Auto is ON; ForceOff re-emits the whole configuration per walk.
         QuirkOverride EsprytVaoShadow = QuirkOverride::Auto;
+        // MOBILEGL_PIPE_VERTEX_ELEMENTS_DEDUP: a VAO configuration change whose vertex-elements
+        // record is byte-identical to the one its handle last published (a glBindVertexBuffer
+        // that only changed the buffer) re-publishes nothing. Auto is ON; ForceOff re-creates.
+        QuirkOverride PipeVertexElementsDedup = QuirkOverride::Auto;
         // MOBILEGL_ADVERTISE_FP64: add GL_ARB_gpu_shader_fp64 to the advertised extension
         // string. `double` in a shader always WORKS - it is narrowed to 32 bits before any
         // module reaches a backend (ShaderTranspiler::DemoteFloat64Pass) - but the extension

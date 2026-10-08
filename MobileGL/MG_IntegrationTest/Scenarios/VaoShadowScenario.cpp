@@ -237,4 +237,58 @@ void main() { o0 = vColor; }
         Destroy(s);
     }
 
+    // The binding-point API, as a chunk renderer uses it: one format, glBindVertexBuffer per draw.
+    // A buffer-only switch leaves the vertex-elements record byte-identical, so the client does
+    // not re-publish it (MOBILEGL_PIPE_VERTEX_ELEMENTS_DEDUP); the draw must still read the new
+    // buffer. An offset change does change the record and must reach the server.
+    TEST_F(VaoShadowScenario, BindVertexBufferSwitchesAndOffsetsAreReadByEachDraw) {
+        if (!Ready()) return;
+        std::string error;
+        Scene s = MakeScene(&error);
+        ASSERT_NE(s.program, 0u) << error;
+        // Interleaved {x, y, r, g, b, a}: buffer A a red left quad, buffer B a green right quad,
+        // buffer C two quads - the first blue on the left, the second (offset 4 vertices) a
+        // white right quad.
+        const auto interleave = [](const std::vector<float>& pos, const std::vector<float>& col) {
+            std::vector<float> v;
+            for (int i = 0; i < 4; ++i) {
+                v.insert(v.end(), {pos[i * 2], pos[i * 2 + 1]});
+                v.insert(v.end(), col.begin() + i * 4, col.begin() + i * 4 + 4);
+            }
+            return v;
+        };
+        const GLuint a = Buffer(interleave(Quad(0.0f, 0.5f), Colors(1.0f, 0.0f, 0.0f)));
+        const GLuint b = Buffer(interleave(Quad(0.5f, 1.0f), Colors(0.0f, 1.0f, 0.0f)));
+        std::vector<float> two = interleave(Quad(0.0f, 0.5f), Colors(0.0f, 0.0f, 1.0f));
+        const std::vector<float> second = interleave(Quad(0.5f, 1.0f), Colors(1.0f, 1.0f, 1.0f));
+        two.insert(two.end(), second.begin(), second.end());
+        const GLuint c = Buffer(two);
+        constexpr GLsizei kStride = 6 * sizeof(float);
+        glVertexAttribFormat(0, 2, GL_FLOAT, GL_FALSE, 0);
+        glVertexAttribFormat(1, 4, GL_FLOAT, GL_FALSE, 2 * sizeof(float));
+        glVertexAttribBinding(0, 0);
+        glVertexAttribBinding(1, 0);
+        glEnableVertexAttribArray(0);
+        glEnableVertexAttribArray(1);
+
+        glBindVertexBuffer(0, a, 0, kStride);
+        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4); // red left
+        glBindVertexBuffer(0, b, 0, kStride);
+        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4); // green right
+        EXPECT_TRUE(Near(At(kSize / 4, kSize / 2), 255, 0, 0)) << "buffer A";
+        EXPECT_TRUE(Near(At(kSize * 3 / 4, kSize / 2), 0, 255, 0)) << "buffer B, same format";
+
+        glClear(GL_COLOR_BUFFER_BIT);
+        glBindVertexBuffer(0, c, 0, kStride);
+        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4); // blue left (offset 0)
+        glBindVertexBuffer(0, c, 4 * kStride, kStride);
+        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4); // white right (offset 4 vertices)
+        EXPECT_EQ(FirstGLError(), 0u);
+        EXPECT_TRUE(Near(At(kSize / 4, kSize / 2), 0, 0, 255)) << "buffer C at offset 0";
+        EXPECT_TRUE(Near(At(kSize * 3 / 4, kSize / 2), 255, 255, 255)) << "buffer C at offset 4 vertices";
+        GLuint bufs[] = {a, b, c};
+        glDeleteBuffers(3, bufs);
+        Destroy(s);
+    }
+
 } // namespace MGITest

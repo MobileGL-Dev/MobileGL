@@ -8,6 +8,7 @@
 
 #pragma once
 #include <Includes.h>
+#include <Config.h>
 
 // The CLIENT side of P3a's vertex-input family (brief D-G, D-H, D-I): the bound VAO's
 // format as create/bind_vertex_elements, its buffers as set_vertex_buffers with an explicit
@@ -182,10 +183,25 @@ namespace MobileGL::MG_Pipe {
             const Bool configMoved = !latch.Published || latch.ConfigVersion != configVersion ||
                                      latch.Gen != handle.Gen;
             if (configMoved) {
-                bytes += EmitCreate(*vao, handle, latch, configVersion);
-                // The applier drops the record's kept bindings at the same create.
-                memo.StoredBuffersValid = false;
-                memo.StoredIndexValid = false;
+                BuildBlob(*vao);
+                // P15: the version moves on every glBindVertexBuffer, but the record only names
+                // formats and offsets. An identical record for the same handle and generation is
+                // already the server's: re-creating it moved its content serial for nothing, which
+                // sent the backend through a whole attribute walk per draw (FCL MC 1.21.5: one per
+                // chunk draw). Kill switch MOBILEGL_PIPE_VERTEX_ELEMENTS_DEDUP=0.
+                const Bool unchanged = MG_Config::Features.PipeVertexElementsDedup != MG_Config::QuirkOverride::ForceOff &&
+                                       latch.Published && latch.Gen == handle.Gen &&
+                                       latch.PublishedBlob.size() == kBlobBytes &&
+                                       std::memcmp(latch.PublishedBlob.data(), m_blob.data(), kBlobBytes) == 0;
+                if (unchanged) {
+                    latch.ConfigVersion = configVersion;
+                    ++m_createsDeduped;
+                } else {
+                    bytes += EmitCreate(handle, latch, configVersion);
+                    // The applier drops the record's kept bindings at the same create.
+                    memo.StoredBuffersValid = false;
+                    memo.StoredIndexValid = false;
+                }
             }
             if (lifetimeId != m_boundLifetimeId || m_boundHandle != handle) {
                 MGPipeRouteBindVertexElements(HandleOnly(handle));
@@ -385,6 +401,7 @@ namespace MobileGL::MG_Pipe {
         const MGPIndexBuffer& LastIndexBuffer() const { return m_lastIndex; }
         MGPipeHandle BoundHandle() const { return m_boundHandle; }
         Uint64 CreateCount() const { return m_creates; }
+        Uint64 DedupedCreateCount() const { return m_createsDeduped; }
         Uint64 BindCount() const { return m_binds; }
         Uint64 VertexBufferSetCount() const { return m_bufferSets; }
         Uint64 IndexBufferSetCount() const { return m_indexSets; }
@@ -449,7 +466,7 @@ namespace MobileGL::MG_Pipe {
             m_serverIndexKnown = false;
         }
 
-        void ResetCounters() { m_creates = m_binds = m_bufferSets = m_indexSets = 0; }
+        void ResetCounters() { m_creates = m_createsDeduped = m_binds = m_bufferSets = m_indexSets = 0; }
 
     private:
         // P14: what EmitVertexElements / EmitVertexBuffers / EmitIndexBuffer resolve from a VAO,
@@ -568,6 +585,11 @@ namespace MobileGL::MG_Pipe {
             // RecordIsPublished.
             Bool RecordLive = false;
             Uint32 RecordGen = 0;
+            // P15: the blob this handle last published, so a configuration version that moved
+            // without moving the record (a glBindVertexBuffer that only changed the buffer,
+            // whose identity rides set_vertex_buffers) re-publishes nothing. A full copy, not a
+            // hash: the compare decides what the server holds.
+            Vector<Uint8> PublishedBlob;
         };
 
         static MGPHandleOnly HandleOnly(MGPipeHandle handle) {
@@ -577,12 +599,15 @@ namespace MobileGL::MG_Pipe {
             return only;
         }
 
-        Uint64 EmitCreate(const VertexArrayObject& vao, MGPipeHandle handle, Latch& latch, Uint32 configVersion) {
-            // ALL 32 OF EACH, deliberately. The record DECLARES both counts and the applier
-            // refuses one whose counts do not describe its own blob, so a self-describing
-            // record is the cheap shape - and G6 is stated over all 32 slots, which a
-            // truncated set could not answer. It rides create_vertex_elements only, i.e.
-            // once per configuration change, never per draw.
+        static constexpr SizeT kAttribBytes = kAttribs * sizeof(MGPVertexAttribWire);
+        static constexpr SizeT kBindingBytes = kBindings * sizeof(MGPVertexBindingPointWire);
+        static constexpr SizeT kBlobBytes = kAttribBytes + kBindingBytes;
+
+        // The record's blob for this configuration, into m_attributes / m_bindingPoints / m_blob.
+        // ALL 32 OF EACH, deliberately. The record DECLARES both counts and the applier refuses
+        // one whose counts do not describe its own blob, so a self-describing record is the cheap
+        // shape - and G6 is stated over all 32 slots, which a truncated set could not answer.
+        void BuildBlob(const VertexArrayObject& vao) {
             for (SizeT i = 0; i < kAttribs; ++i) {
                 m_attributes[i] = MGPipeBuildVertexAttribWire(vao.GetAttribute(static_cast<Uint>(i)),
                                                               vao.GetAttributeBindingIndex(static_cast<Uint>(i)));
@@ -595,11 +620,13 @@ namespace MobileGL::MG_Pipe {
                 if (!vao.GetBindingPoint(static_cast<Uint>(i)).Buffer) m_bindingPoints[i].Offset = 0;
             }
             // Attributes first, then binding points, both ascending and contiguous.
-            constexpr SizeT kAttribBytes = kAttribs * sizeof(MGPVertexAttribWire);
-            constexpr SizeT kBindingBytes = kBindings * sizeof(MGPVertexBindingPointWire);
             std::memcpy(m_blob.data(), m_attributes.data(), kAttribBytes);
             std::memcpy(m_blob.data() + kAttribBytes, m_bindingPoints.data(), kBindingBytes);
+        }
 
+        // create_vertex_elements for the blob BuildBlob just made. It rides only a configuration
+        // change whose record differs from the one this handle published, never per draw.
+        Uint64 EmitCreate(MGPipeHandle handle, Latch& latch, Uint32 configVersion) {
             m_lastElements = MGPVertexElements{};
             m_lastElements.Cso = handle;
             m_lastElements.AttributeCount = static_cast<Uint32>(kAttribs);
@@ -616,6 +643,7 @@ namespace MobileGL::MG_Pipe {
             // only thing that makes delete_vertex_elements a legal call for this handle.
             latch.RecordLive = true;
             latch.RecordGen = handle.Gen;
+            latch.PublishedBlob.assign(m_blob.begin(), m_blob.begin() + kBlobBytes);
             return sizeof(MGPVertexElements) + kAttribBytes + kBindingBytes;
         }
 
@@ -634,6 +662,7 @@ namespace MobileGL::MG_Pipe {
         Uint64 m_boundLifetimeId = 0;
 
         Uint64 m_creates = 0;
+        Uint64 m_createsDeduped = 0;
         Uint64 m_binds = 0;
         Uint64 m_bufferSets = 0;
         Uint64 m_indexSets = 0;
