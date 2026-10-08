@@ -101,6 +101,7 @@ add_executable(MobileGLIntegrationTest
     # P15 S0: a CPU-converted vertex stream reused and re-written within a frame (DirectVulkan caches it).
     Scenarios/ConvertedVertexStreamScenario.cpp
     Scenarios/WriteRenameScenario.cpp
+    Scenarios/VaoShadowScenario.cpp
     Scenarios/SampleVariablesScenario.cpp
     Scenarios/DepthStencilReadbackScenario.cpp
     Scenarios/DepthStencilReadbackMatrixScenario.cpp
@@ -2460,6 +2461,7 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     mgl_itest_register_split_arms("InPassClearScenario.*" "")
     mgl_itest_register_split_arms("ConvertedVertexStreamScenario.*" "")
     mgl_itest_register_split_arms("WriteRenameScenario.*" "")
+    mgl_itest_register_split_arms("VaoShadowScenario.*" "")
     # GL_ARB_shader_objects (P13): ARB-created shader / program objects travel the record arm like
     # core-created ones, so the scenario runs on every split arm as well as both monoliths.
     mgl_itest_register_split_arms("ArbShaderObjectsScenario.*" "")

@@ -4770,6 +4770,36 @@ namespace MobileGL::MG_Backend::DirectGLES {
             BindBackendVAOId(m_backendVAOId);
         }
 
+        // P15: the driver-VAO shadow (Managers.h). Callers have bound this twin's VAO.
+        namespace {
+            inline Bool VaoShadowOn() {
+                return MG_Config::Features.EsprytVaoShadow != MG_Config::QuirkOverride::ForceOff;
+            }
+        } // namespace
+
+        void BackendVertexArrayObject::HostSetEnabled(Uint index, Bool enabled) {
+            const Uint32 bit = 1u << index;
+            if (VaoShadowOn() && (m_hostEnabledKnownMask & bit) && ((m_hostEnabledMask & bit) != 0) == enabled) return;
+            if (enabled) g_GLESFuncs.glEnableVertexAttribArray(index);
+            else g_GLESFuncs.glDisableVertexAttribArray(index);
+            m_hostEnabledKnownMask |= bit;
+            m_hostEnabledMask = enabled ? (m_hostEnabledMask | bit) : (m_hostEnabledMask & ~bit);
+        }
+
+        void BackendVertexArrayObject::HostSetDivisor(Uint index, Uint32 divisor) {
+            const Uint32 bit = 1u << index;
+            if (VaoShadowOn() && (m_hostDivisorKnownMask & bit) && m_hostDivisor[index] == divisor) return;
+            g_GLESFuncs.glVertexAttribDivisor(index, divisor);
+            m_hostDivisorKnownMask |= bit;
+            m_hostDivisor[index] = divisor;
+        }
+
+        void BackendVertexArrayObject::HostForgetAll() {
+            m_hostEnabledKnownMask = 0;
+            m_hostDivisorKnownMask = 0;
+            for (auto& pointer : m_hostPointer) pointer.valid = false;
+        }
+
         // ES 3.1 core. Queried through the loader rather than the version, because the whole
         // point of using it is to express something the pointer API cannot, and falling back
         // silently on a driver that lacks it is better than crashing on a null entry point.
@@ -4845,23 +4875,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return static_cast<SizeT>(baseInstance) * static_cast<SizeT>(stride);
         }
 
-        // BindAttributeBuffer, resolving the driver id from the slot table instead of from the
-        // attribute's SharedPtr. It does NOT ensure storage: on this arm the draw's buffers
-        // were ensured by SyncNeccessaryBuffers earlier in the same PrepareForDraw, which is
-        // the one place that still holds the frontend objects (a pull site P4b/P8 own).
-        inline Bool BindAttributeBufferByHandle(MG_Pipe::MGPipeHandle res) {
-            if (MG_Pipe::MGPipeHandleIsNull(res)) {
-                MGLOG_W_ONCE("Attribute has no bound buffer, skipping.");
-                return false;
-            }
-            auto* backendResource = BufferImpl::FindBufferResourceForHandle(res);
-            if (!backendResource || backendResource->id == 0) {
-                MGLOG_E_ONCE("No backend buffer found for attribute's buffer, cannot bind attribute.");
-                return false;
-            }
-            BufferImpl::BindBufferId(GL_ARRAY_BUFFER, backendResource->id);
-            return true;
-        }
+        // (The attribute-buffer bind lives in SyncToBackendFromApplier's pointer path now: it
+        // resolves the driver id from the slot table and skips the bind and the pointer when the
+        // driver VAO already holds them. It does NOT ensure storage: on this arm the draw's
+        // buffers were ensured by SyncNeccessaryBuffers earlier in the same PrepareForDraw.)
 
         // SyncZeroStrideAttribute on the wire views: the one spelling that can carry a resolved
         // stride of zero, which glVertexAttribPointer's zero means the opposite of.
@@ -5010,6 +5027,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
             m_hasConvertedFloat64Attribute = false;
 
             Bind();
+            if (m_hostPointerBufferGeneration != currentBufferIdGeneration) {
+                for (auto& pointer : m_hostPointer) pointer.valid = false;
+                m_hostPointerBufferGeneration = currentBufferIdGeneration;
+            }
 
             // ALL 32 SLOTS, not rec->AttributeCount, and the difference is the disable arm.
             // The legacy walk ran over the frontend's whole 32-slot attribute array and reached
@@ -5035,13 +5056,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // compare: the applier's Attributes[] IS what was last pushed, so a moved
                 // ContentSerial means re-emit and an unchanged one means the early-out above
                 // already returned. A buffers-only walk leaves the flags as they are (above).
-                if (!buffersOnly) {
-                    if (attrib.Enabled) {
-                        g_GLESFuncs.glEnableVertexAttribArray(attribIndex);
-                    } else {
-                        g_GLESFuncs.glDisableVertexAttribArray(attribIndex);
-                    }
-                }
+                if (!buffersOnly) HostSetEnabled(attribIndex, attrib.Enabled != 0);
 
                 // The fp64 narrowing, verbatim in behaviour including the Adreno workaround:
                 // when no float32 stream can be built the array is DISABLED rather than left
@@ -5055,10 +5070,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         binding != nullptr &&
                         SyncFloat64AttributeAsFloat32ByHandle(attribIndex, attrib, *binding, fetchBaseInstance)) {
                         m_hasConvertedFloat64Attribute = true;
-                        // Explicit, not redundant: an earlier walk that could not build the
-                        // stream disabled this array.
-                        g_GLESFuncs.glEnableVertexAttribArray(attribIndex);
-                        g_GLESFuncs.glVertexAttribDivisor(attribIndex, divisor);
+                        // The narrowing pointed the attribute at its own stream (and may have
+                        // used the binding API), so the pointer and divisor shadow are stale.
+                        // An earlier walk that could not build the stream disabled this array.
+                        m_hostPointer[attribIndex].valid = false;
+                        m_hostDivisorKnownMask &= ~(1u << attribIndex);
+                        HostSetEnabled(attribIndex, true);
+                        HostSetDivisor(attribIndex, divisor);
                         continue;
                     }
                     if (attrib.Enabled) {
@@ -5066,7 +5084,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                      "stream could not be narrowed to float32 - disabling the array",
                                      attribIndex);
                     }
-                    g_GLESFuncs.glDisableVertexAttribArray(attribIndex);
+                    HostSetEnabled(attribIndex, false);
                     continue;
                 }
 
@@ -5081,15 +5099,28 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // the opposite. ES 3.1's binding-point API can.
                 if (attrib.Stride == 0 && HasVertexBindingApi()) {
                     walkWasPlain = false;
+                    // The binding API rewrote this attribute's format and binding: whatever the
+                    // shadow said about its pointer no longer holds.
+                    m_hostPointer[attribIndex].valid = false;
                     if (!SyncZeroStrideAttributeByHandle(attribIndex, attrib, *binding)) {
                         continue;
                     }
-                    // No shift here on purpose: a zero stride never advances.
+                    // No shift here on purpose: a zero stride never advances. Binding index ==
+                    // attribute index here, so this IS the attribute's divisor for the shadow.
                     g_GLESFuncs.glVertexBindingDivisor(attribIndex, divisor);
+                    m_hostDivisorKnownMask |= 1u << attribIndex;
+                    m_hostDivisor[attribIndex] = divisor;
                     continue;
                 }
 
-                if (!BindAttributeBufferByHandle(binding->Res)) {
+                if (MG_Pipe::MGPipeHandleIsNull(binding->Res)) {
+                    MGLOG_W_ONCE("Attribute has no bound buffer, skipping.");
+                    walkWasPlain = false;
+                    continue;
+                }
+                const auto* attribBuffer = BufferImpl::FindBufferResourceForHandle(binding->Res);
+                if (!attribBuffer || attribBuffer->id == 0) {
+                    MGLOG_E_ONCE("No backend buffer found for attribute's buffer, cannot bind attribute.");
                     walkWasPlain = false;
                     continue;
                 }
@@ -5110,15 +5141,33 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 const SizeT fetchOffset = static_cast<SizeT>(attrib.Offset) +
                                           BaseInstanceByteShiftWire(attrib.Stride, divisor, fetchBaseInstance);
                 const GLenum glType = MG_Util::ConvertDataTypeToGLEnum(static_cast<DataType>(attrib.Type));
+                const GLint glSize = (!attrib.IsInteger && attrib.IsBgra) ? static_cast<GLint>(GL_BGRA)
+                                                                          : static_cast<GLint>(attrib.Size);
 
-                if (!attrib.IsInteger) {
-                    const GLint glSize = attrib.IsBgra ? static_cast<GLint>(GL_BGRA) : static_cast<GLint>(attrib.Size);
-                    g_GLESFuncs.glVertexAttribPointer(attribIndex, glSize, glType,
-                                                      attrib.Normalized ? GL_TRUE : GL_FALSE, attrib.Stride,
-                                                      (const void*)fetchOffset);
-                } else {
-                    g_GLESFuncs.glVertexAttribIPointer(attribIndex, static_cast<GLint>(attrib.Size), glType,
-                                                       attrib.Stride, (const void*)fetchOffset);
+                // The pointer the driver VAO already holds for this attribute - the buffer it
+                // captured included - needs no glBindBuffer + pointer call. A format that may be
+                // refused always goes to the driver, since its glGetError is the point.
+                auto& shadowPointer = m_hostPointer[attribIndex];
+                const Bool pointerHeld = VaoShadowOn() && !formatMayBeRefused && shadowPointer.valid &&
+                                         shadowPointer.bufferId == attribBuffer->id && shadowPointer.size == glSize &&
+                                         shadowPointer.type == static_cast<Uint32>(glType) &&
+                                         shadowPointer.stride == static_cast<Int32>(attrib.Stride) &&
+                                         shadowPointer.offset == fetchOffset &&
+                                         shadowPointer.normalized == (attrib.Normalized != 0) &&
+                                         shadowPointer.integer == (attrib.IsInteger != 0);
+                if (!pointerHeld) {
+                    BufferImpl::BindBufferId(GL_ARRAY_BUFFER, attribBuffer->id);
+                    if (!attrib.IsInteger) {
+                        g_GLESFuncs.glVertexAttribPointer(attribIndex, glSize, glType,
+                                                          attrib.Normalized ? GL_TRUE : GL_FALSE, attrib.Stride,
+                                                          (const void*)fetchOffset);
+                    } else {
+                        g_GLESFuncs.glVertexAttribIPointer(attribIndex, glSize, glType, attrib.Stride,
+                                                           (const void*)fetchOffset);
+                    }
+                    shadowPointer = {attribBuffer->id, glSize, static_cast<Uint32>(glType),
+                                     static_cast<Int32>(attrib.Stride), fetchOffset, attrib.Normalized != 0,
+                                     attrib.IsInteger != 0, true};
                 }
 
                 if (formatMayBeRefused && g_GLESFuncs.glGetError() != GL_NO_ERROR) {
@@ -5127,11 +5176,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                  "fetch through a pointer the driver never accepted",
                                  attribIndex, static_cast<int>(attrib.Size), attrib.IsBgra ? 1 : 0,
                                  MG_Util::ConvertGLEnumToString(glType).c_str());
-                    g_GLESFuncs.glDisableVertexAttribArray(attribIndex);
+                    shadowPointer.valid = false;
+                    HostSetEnabled(attribIndex, false);
                     continue;
                 }
 
-                g_GLESFuncs.glVertexAttribDivisor(attribIndex, divisor);
+                HostSetDivisor(attribIndex, divisor);
             }
 
             if (indexBufferDirty) {
@@ -5224,6 +5274,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // the next sync must not take its buffers-only walk, nor adopt an equal buffer set.
             m_lastWalkWasPlain = false;
             m_syncedBuffersValid = false;
+            HostForgetAll(); // the uploads below set enables, pointers and divisors directly
 
             Bind();
 

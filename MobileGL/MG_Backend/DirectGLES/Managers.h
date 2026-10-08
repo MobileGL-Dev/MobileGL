@@ -1417,6 +1417,32 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Array<MG_Pipe::MGPVertexBuffer, MG_Pipe::kMGPipeMaxVertexAttribs> m_syncedBuffers{};
             Uint32 m_syncedBufferStart = 0, m_syncedBufferCount = 0, m_syncedBufferBaseInstance = 0;
             Bool m_syncedBuffersValid = false;
+            // P15: WHAT THIS TWIN'S DRIVER VAO HOLDS, as the walk last set it. The walk re-emits
+            // a whole configuration whenever its record moves, and most of it equals what the
+            // driver VAO already has: on FCL MC 1.21.5, about 2870 of 3700 host calls a frame were
+            // enable/disable/divisor re-sets. The shadow lets the walk emit only differences. It
+            // is valid from creation (a new VAO is all-disabled with divisor 0). Anything that
+            // writes the VAO behind the walk (client-memory uploads, the fp64 narrowing, the
+            // binding-API zero stride, a refused BGRA format) forgets the affected part. Pointer
+            // entries name driver buffer ids, so they also go when g_bufferBackendIdGeneration
+            // moves: an id can be re-minted.
+            struct HostAttribPointer {
+                Uint bufferId = 0;
+                Int32 size = 0;
+                Uint32 type = 0;
+                Int32 stride = 0;
+                SizeT offset = 0;
+                Bool normalized = false, integer = false, valid = false;
+            };
+            Uint32 m_hostEnabledMask = 0;
+            Uint32 m_hostEnabledKnownMask = ~0u;
+            Array<Uint32, MG_Pipe::kMGPipeMaxVertexAttribs> m_hostDivisor{};
+            Uint32 m_hostDivisorKnownMask = ~0u;
+            Array<HostAttribPointer, MG_Pipe::kMGPipeMaxVertexAttribs> m_hostPointer{};
+            Uint64 m_hostPointerBufferGeneration = 0;
+            void HostSetEnabled(Uint index, Bool enabled);
+            void HostSetDivisor(Uint index, Uint32 divisor);
+            void HostForgetAll();
             MG_Pipe::MGPipeHandle m_syncedIndexRes = MG_Pipe::kMGPipeNullHandle;
             Bool m_syncedIndexValid = false;
             Uint64 m_syncedContextSerial = 0;

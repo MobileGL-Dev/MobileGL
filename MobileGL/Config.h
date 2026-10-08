@@ -140,6 +140,10 @@ namespace MobileGL::MG_Config {
         // be reading gives the store a fresh buffer filled from a host shadow, instead of a staged
         // copy that ends the render pass. Auto is ON; ForceOff keeps the staged copy.
         QuirkOverride MagmaWriteRename = QuirkOverride::Auto;
+        // MOBILEGL_ESPRYT_VAO_SHADOW: DirectGLES emits a vertex attribute's enable flag, divisor and
+        // pointer to the driver VAO only when they differ from what that VAO already holds (a
+        // shadow on the VAO twin). Auto is ON; ForceOff re-emits the whole configuration per walk.
+        QuirkOverride EsprytVaoShadow = QuirkOverride::Auto;
         // MOBILEGL_ADVERTISE_FP64: add GL_ARB_gpu_shader_fp64 to the advertised extension
         // string. `double` in a shader always WORKS - it is narrowed to 32 bits before any
         // module reaches a backend (ShaderTranspiler::DemoteFloat64Pass) - but the extension
