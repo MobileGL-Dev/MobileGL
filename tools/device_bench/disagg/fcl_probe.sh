@@ -36,6 +36,11 @@ echo "waited=$t ok=$ok attempt=$attempt" >> "$out/wait.txt"
 pid=$(adb -s $SER shell pidof $FCL | tr -d '\r' | awk '{print $NF}')
 echo "pid=$pid" >> "$out/wait.txt"
 snap() { adb -s $SER shell "su -c 'cat /proc/uptime; cat /sys/class/kgsl/kgsl-3d0/gpu_clock_stats; for t in /proc/$pid/task/*; do echo T \${t##*/} \$(cut -d\" \" -f1-3 \$t/schedstat) \$(cat \$t/comm); done'" > "$1"; }
+# P15 validity rule: frequency/thermal sampler for the whole measurement window (devstate.sh judges it)
+BENCH="$(cd "$(dirname "$0")" && pwd)"
+SER=$SER bash $BENCH/pin_clocks.sh show > "$out/pin.txt" 2>&1
+adb -s $SER push "$(cygpath -w $BENCH/freq_sampler.sh)" /data/local/tmp/p15-freq_sampler.sh >/dev/null
+su_sh "chmod 755 /data/local/tmp/p15-freq_sampler.sh; rm -f /data/local/tmp/p15freq.txt; (nohup sh /data/local/tmp/p15-freq_sampler.sh /data/local/tmp/p15freq.txt 2 >/dev/null 2>&1 &)"
 # A: ftrace
 EV=/sys/kernel/tracing/events
 su_sh "atrace --async_start -c -b 65536 -a $FCL gfx view sched freq >/dev/null 2>&1; for e in adreno_cmdbatch_submitted adreno_cmdbatch_retired kgsl_waittimestamp_entry kgsl_waittimestamp_exit adreno_syncobj_submitted adreno_syncobj_retired adreno_drawctxt_wait_start adreno_drawctxt_wait_done kgsl_timeline_wait; do echo 1 > $EV/kgsl/\$e/enable; done; echo 1 > $EV/sched/sched_waking/enable"
@@ -52,6 +57,9 @@ if [ "$sp" = 1 ]; then
   su_sh "chmod 644 /data/local/tmp/p15perf.data"
   adb -s $SER pull /data/local/tmp/p15perf.data "$(cygpath -w "$out/perf.data")" >/dev/null
 fi
+su_sh "pkill -f p15-freq_sampler.sh; chmod 644 /data/local/tmp/p15freq.txt"
+adb -s $SER pull /data/local/tmp/p15freq.txt "$(cygpath -w "$out/freq.txt")" >/dev/null
+SER=$SER bash $BENCH/devstate.sh "$out"
 adb -s $SER logcat -d > "$out/logcat.txt"
 su_sh "am force-stop $FCL"
 grep -a "MobileGL fps:" "$out/logcat.txt" | tail -8 | sed 's/.*MobileGL fps: //' > "$out/fps.txt"

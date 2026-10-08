@@ -51,6 +51,8 @@ wl_args() { # trace golden w h target crop
     rd12) echo "rd12 minecraft-1.21.4-rd12-odinlite-in-world.0004660351.png 854 480 4660351 0 0 0 0" ;;
     # P15: GPU-bound shaderpack scene (a single-frame trim: ssim only, not a benchmark).
     bsl) echo "bsl minecraft-1.21.4-fabric-iris-bsl-in-world.0000110725.png 854 480 110725 0 0 0 0" ;;
+    # P15 S0b: FCL's MC 1.21.5 vanilla scene, a 252-frame window (benchmark + ssim on the final frame).
+    fcl) echo "fcl minecraft-1.21.5-vanilla-fcl-in-world.0005998912.png 854 480 5998912 0 0 0 0" ;;
   esac
 }
 
@@ -82,9 +84,10 @@ prep_pkg() {
       openra) tgz="$FIXTURES/openra.tgz" ;;
       rd12) tgz="$FIXTURES/minecraft-1.21.4-rd12-odinlite-in-world.tgz" ;;
       bsl) tgz="$FIXTURES/minecraft-1.21.4-fabric-iris-bsl-in-world.tgz" ;;
+      fcl) tgz="${FCL_FIXTURES:-$FIXTURES}/minecraft-1.21.5-vanilla-fcl-in-world.tgz" ;;
     esac
     set -- $(wl_args $wl)
-    local golden="$FIXTURES/$2"
+    local golden="$FIXTURES/$2"; [ "$wl" = fcl ] && golden="${FCL_FIXTURES:-$FIXTURES}/$2"
     if [ ! -f "$tmp/$wl.trace" ]; then
       rm -rf "$tmp/x"; mkdir -p "$tmp/x"; tar xzf "$tgz" -C "$tmp/x" || exit 1
       mv "$(find "$tmp/x" -name '*.trace' | head -1)" "$tmp/$wl.trace"; rm -rf "$tmp/x"
@@ -146,6 +149,9 @@ run_one() {
   [ "$mode" = benchmark ] && passflag="--ez benchmark true --ez benchmark_finish ${FINISH:-false} --es benchmark_result_path $app/output/benchmark.json"
   local env; env="$(arm_env "$arm")"; [ -n "$EXTRA_ENV" ] && env="${env:+$env;}$EXTRA_ENV"
   if [ "$mode" = benchmark ]; then
+    # P15 validity rule: frequency/thermal sampler for the whole run (devstate.sh judges it).
+    adb -s "$SER" push "$(cygpath -w "$SCRIPT_DIR/freq_sampler.sh")" /data/local/tmp/p15-freq_sampler.sh >/dev/null 2>&1
+    shq "su -c 'chmod 755 /data/local/tmp/p15-freq_sampler.sh; pkill -f p15-freq_sampler.sh; rm -f /data/local/tmp/p15freq.txt; (nohup sh /data/local/tmp/p15-freq_sampler.sh /data/local/tmp/p15freq.txt 2 >/dev/null 2>&1 &)'" >/dev/null 2>&1
     shq "su -c 'nohup taskset 01 $SAMPLER $pkg 10 $app/output/benchmark.json /data/local/tmp/p14cpu.csv $TIMEOUT >/dev/null 2>&1 &'" >/dev/null 2>&1
   fi
   local am_out
@@ -172,6 +178,10 @@ run_one() {
     sleep 1
     adb -s "$SER" exec-out "su -c 'cat /data/local/tmp/p14cpu.csv'" >"$dir/cpu.csv" 2>/dev/null
     shq "su -c 'pkill -f cpusampler'" >/dev/null 2>&1
+    shq "su -c 'pkill -f p15-freq_sampler.sh'" >/dev/null 2>&1
+    adb -s "$SER" exec-out "su -c 'cat /data/local/tmp/p15freq.txt'" >"$dir/freq.txt" 2>/dev/null
+    SER=$SER bash "$SCRIPT_DIR/pin_clocks.sh" show >"$dir/pin.txt" 2>&1
+    SER=$SER bash "$SCRIPT_DIR/devstate.sh" "$dir" trace >/dev/null 2>&1
   fi
   shq "am force-stop $pkg" >/dev/null 2>&1
   local passed="none"; [ -f "$dir/result.json" ] && passed=$(sed -n 's/.*"passed": *\([a-z]*\).*/\1/p' "$dir/result.json" | head -1)
@@ -179,7 +189,7 @@ run_one() {
   echo "tag=$TAG wl=$wl backend=$backend arm=$arm rep=$rep mode=$mode status=$status passed=$passed dur=$(( $(date +%s) - epoch0 )) temp0=$t0 temp1=$t1" >"$dir/meta.txt"
   verify_run "$dir" "$arm" "$backend"
   local fps="-"; [ -f "$dir/benchmark.json" ] && fps=$(sed -n 's/.*"fps": *\([0-9.]*\).*/\1/p' "$dir/benchmark.json" | head -1)
-  log "END   $TAG $wl/$backend/$arm r$rep $mode status=$status passed=$passed fps=$fps temp=$t1 :: $(tr '\n' ' ' <"$dir/verify.txt")"
+  log "END   $TAG $wl/$backend/$arm r$rep $mode status=$status passed=$passed fps=$fps temp=$t1 :: $(tr '\n' ' ' <"$dir/verify.txt") $(cat "$dir/state.txt" 2>/dev/null)"
 }
 
 main() {

@@ -134,3 +134,24 @@ Reducers, all reading a probe directory:
 
 The simpleperf reducers need `SIMPLEPERF_DIR` and a `binary_cache` from `binary_cache_builder.py`.
 Findings: `docs/Disaggregated/notes/perf-p15/PLAN-P15.md` section 2.
+
+## Clocks, bench sessions and run validity (P15)
+
+Every performance number carries the device state it was measured under.
+
+- **`pin_clocks.sh`** pins CPU and GPU to a named profile (`PROFILE=sustained|gpumax|gpulow|cpulow|cpuhunt|gpuhunt`,
+  see the script header; `sustained` is the default) and records it on the device.
+- **`bench_session.sh start|stop`**:
+  - `start` records, then stops, the services that move frequency caps (`thermal-engine`, the QTI perf HAL,
+    `vendor.perfservice`, Lenovo's `performance` and `hyperschedule_hal_service`). It releases their leftover
+    requests in `/sys/kernel/msm_performance/parameters/cpu_{max,min}_freq`, which otherwise clamp
+    `scaling_max_freq` under any pin, and then pins.
+  - `stop` restarts every service that was running and verifies it is running again.
+  - Wrap every device job so `stop` always runs (trap on EXIT/INT/TERM).
+- **`freq_sampler.sh`** runs on the device for each measurement window and samples every 2 s: CPU cur/max per
+  policy, GPU cur, kgsl thermal level, busy and temperatures.
+- **`freqcheck.py`** decides VALID/INVALID against the intended pin (one OPP of tolerance, GPU checked while
+  busy). Invalid runs are discarded and re-run after cool-down.
+- **`devstate.sh <outdir> [trace]`** writes the per-run `state.txt` line: profile and clocks, validity with the
+  observed min/max frequencies and peak temperatures, daemons, MC version, swap interval and anland on/off.
+  `fcl_probe.sh` and `matrix_p14.sh` (benchmark mode) call it.
