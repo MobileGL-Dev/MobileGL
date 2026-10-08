@@ -683,6 +683,43 @@ TEST(SessionTest, DrainingAFullEventRingClearsTheLatchAndRingsTheServer) {
     EXPECT_EQ(serverBell.rings.load(), 1u);
 }
 
+// P15: a client parked for the present credit is rung by the credit (or a full event ring) and
+// by nothing else. Every drain batch the server retires while the GL thread waits for the
+// previous present used to ring it: a futile wake-up of the GL thread and a futex syscall on the
+// apply thread per batch (FCL inproc: 0.056 ms/frame).
+//
+// Red-once: drop the ScopedWakeTarget from WaitForPresentAckOrEventBacklog and the retire below
+// rings (rings == 1 before the credit).
+TEST(SessionTest, AClientParkedOnThePresentCreditIsRungOnlyByTheCreditOrABacklog) {
+    auto session = std::make_shared<SessionFixture>();
+    ASSERT_TRUE(session->Build(TestSizes()));
+    CountingBell clientBell;
+    RingControl* serverControl = session->serverSegments.CmdControl();
+    session->consumer.Attach(serverControl, &session->cmdConsumer, &clientBell,
+                             &session->serverTransport->SelfDoorbell(), kDefaultSpinUs);
+
+    std::atomic<bool> released{false};
+    std::thread parked([session, &released] {
+        (void)session->producer.WaitForPresentAckOrEventBacklog(2, 5000);
+        released.store(true, std::memory_order_release);
+    });
+    while (session->Control().producerParked.load() == 0 && !released.load()) {
+        std::this_thread::yield();
+    }
+
+    session->consumer.RetireThrough(0);
+    session->consumer.CompleteFrame(1);
+    EXPECT_EQ(clientBell.rings.load(), 0u) << "progress the parked client does not wait for rang it";
+
+    session->consumer.ReturnPresentCredit(2);
+    EXPECT_EQ(clientBell.rings.load(), 1u);
+
+    // The counting bell wakes nobody; release the waiter through the real one.
+    session->serverTransport->PeerDoorbell().Notify();
+    parked.join();
+    EXPECT_TRUE(released.load());
+}
+
 // ---------------------------------------------------------------------------
 // kRecPad (R-9's last sentence, and the one with no other detector)
 // ---------------------------------------------------------------------------

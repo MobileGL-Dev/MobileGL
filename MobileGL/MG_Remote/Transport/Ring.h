@@ -168,7 +168,8 @@ namespace MobileGL::MG_Remote::Transport {
         // ---- the parked producer's wake target -------------------------------
         //
         // What a parked client is waiting for, so the server rings only when it is there: 0 =
-        // any progress (present credit, ring space, events), otherwise the appliedSeq it needs.
+        // any progress (present credit, ring space, events), otherwise the appliedSeq it needs -
+        // or, with bit 63 set, the present-ack serial a present-credit wait needs (Ring.cpp).
         // Without it every record the server applied while the client waited for a later one
         // was a socket write and a futile wake-up. Written by the client before it parks (and
         // reset to 0 after), read by the server only after it saw producerParked set; on a link

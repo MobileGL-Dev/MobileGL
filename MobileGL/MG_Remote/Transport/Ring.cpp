@@ -500,6 +500,10 @@ namespace MobileGL::MG_Remote::Transport {
     // The wake target for the duration of one wait; 0 again afterwards, so a later wait that
     // needs any progress (or one outside this class on the same flag) is rung as before.
     namespace {
+        // A wake target with this bit names a present-ack serial rather than an appliedSeq.
+        // Neither counter comes near 2^63, so the tag cannot collide with a real sequence.
+        constexpr std::uint64_t kWakeTargetPresentAck = 1ull << 63;
+
         struct ScopedWakeTarget {
             std::atomic<std::uint64_t>& target;
             ScopedWakeTarget(std::atomic<std::uint64_t>& t, std::uint64_t seq) : target(t) {
@@ -555,6 +559,10 @@ namespace MobileGL::MG_Remote::Transport {
             return SessionWait::TimedOut;
         }
         RingControl* control = m_control;
+        // P15: a present-credit wait is rung only by the credit (or a full event ring), not by
+        // every drain batch the server retires meanwhile - those were futile wake-ups of the
+        // GL thread and a futex syscall per batch on the apply thread (FCL inproc: 0.056 ms/frame).
+        const ScopedWakeTarget wake(control->producerWakeSeq, kWakeTargetPresentAck | serial);
         return Park(
             [control, serial] {
                 return Watermark::Reached(control->Progress.presentAckSerial, serial) ||
@@ -690,9 +698,14 @@ namespace MobileGL::MG_Remote::Transport {
             std::atomic_thread_fence(std::memory_order_seq_cst);
             if (m_control->producerParked.load(std::memory_order_acquire) == 0) return;
             const std::uint64_t target = m_control->producerWakeSeq.load(std::memory_order_seq_cst);
-            if (target != 0 && !Watermark::Reached(m_control->Progress.appliedSeq, target) &&
-                m_control->eventRingFull.load(std::memory_order_acquire) == 0)
+            const bool eventRingFull = m_control->eventRingFull.load(std::memory_order_acquire) != 0;
+            if ((target & kWakeTargetPresentAck) != 0) {
+                if (!Watermark::Reached(m_control->Progress.presentAckSerial, target & ~kWakeTargetPresentAck) &&
+                    !eventRingFull)
+                    return;
+            } else if (target != 0 && !Watermark::Reached(m_control->Progress.appliedSeq, target) && !eventRingFull) {
                 return;
+            }
             m_peerBell->Notify();
         }
     }
