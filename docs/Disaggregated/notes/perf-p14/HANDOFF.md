@@ -1,74 +1,50 @@
-# P14 perf pass: handoff (checkpoint 2026-10-07)
+# P14 perf pass: handoff (closed 2026-10-07)
 
-Worktree `.claude/worktrees/perf` (branch `perf`, pushed to `origin/feat/disaggregated`). Estimate:
-[ESTIMATE.md](ESTIMATE.md). BENCH.md / README.md are not written yet (see "Next").
+The pass is closed at `781a7446`, plus this docs commit. Results are in [BENCH.md](BENCH.md) and
+[README.md](README.md). The next phase is the per-(VAO, program) draw-packet cache
+([NEXT-draw-packet-cache.md](NEXT-draw-packet-cache.md)). Its first item is an off-CPU profile of
+FCL Magma monolith (README "Headline numbers").
 
-## Head and running totals
+## Where things stand (rd12, pinned, FINISH=false, best of 3)
 
-Head: `94705adc` (plus this handoff commit). rd12, Lenovo Y700 (Adreno 750), clocks pinned, no
-per-frame glFinish (`FINISH=false`, the primary mode; finish=true serialises the split arms on one
-FenceWait round trip per frame), best of 3:
-
-| arm | Espryt start -> now | Magma start -> now | dev (pull) Espryt / Magma |
+| arm | Espryt | Magma | dev Espryt / Magma |
 |---|---|---|---|
-| monolith | 69.8 -> 88.6 | 45.4 -> 69.5 | 115.1 / 86.1 |
-| inproc | 71.1 -> ~107 | 63.2 -> ~99 | |
-| shm | 62.8 -> ~82 | 58.6 -> ~85 | |
-| tcp | 50.0 -> ~64 | 45.6 -> ~61 | |
+| monolith | 91.1 | 83.8 | 115.2 / 87.0 |
+| inproc | 111.9 | 110.0 | |
+| shm | 87.8 | 95.6 | |
+| tcp | 68.7 | 69.9 | |
 
-(split-arm "now" values are from the p14p A/B, before the last two monolith commits; re-measure.)
-GPU busy 22-33 % everywhere: every arm is CPU-bound on one thread.
+FCL MC in world:
+- dev: Espryt 228.6, Magma 231.8;
+- feat monolith: Espryt 198.3, Magma 171.4;
+- feat inproc: Espryt 241.5, Magma 194.8.
 
-## Latest layer split (rd12 monolith, render thread ms/frame, simpleperf, head `94705adc` = p14r)
+All arms are CPU-bound (GPU 19-39 %).
 
-| layer | Espryt feat | Espryt dev | Magma feat | Magma dev |
-|---|---|---|---|---|
-| driver | 1.56 | 1.40 | 2.15 | 1.98 |
-| backend | 1.21 | 0.59 | 1.95 | 2.12 |
-| applier | 0.07 | 0 | 0.13 | 0 |
-| client half | 1.96 | 0.36 | 2.01 | 0.69 |
-| harness | 6.46 | 6.27 | 6.50 | 6.25 |
-| total CPU | 11.27 | 8.62 | 12.77 | 11.05 |
+## Open items (DEBTS.md has the rows)
 
-Client half top: validate self 0.22-0.26, verb port (MG_Record) 0.15-0.18, Tracker::Update 0.14-0.17,
-CopyField 0.07-0.09, VAO memo probe 0.07-0.09. Espryt backend top: PrepareForDraw 0.10,
-AdoptUnchangedBufferSets 0.10, PerNativeContext<...>::Current 0.084, SyncTextureToBackendByHandle
-0.066, IsBufferDrawCleanByHandle 0.058. Magma backend top: SetupWireDraw self 0.35,
-BindDescriptorSetDeduped 0.23 (dynamic UBO offset moves every chunk draw), AcquireWireSlice 0.19.
-
-Per-draw counts (instrumented build, `p14count2.patch` in the scratchpad, not committed): rd12 1471
-draws/frame, 3.3 GL calls/draw; after the protocol change 66.8 B/validate (bind 16 B + uniform span
-~47 B), VertexBuffers/IndexBuffer 100 % no-op.
-
-## Commits this pass (newest first)
-
-94705adc inline applier / fill plan / word-wise spans / memo-answered draw bindings (+6 % Espryt, +3.7 % Magma);
-81bdfb1f Espryt twin lookups w/o SharedPtr copy + one TLS block (+3.8 %);
-032dcd24 Magma vertex-input layout kept on its record + slot-indexed buffer front;
-c1497bb8 VAO-kept bindings, uniform spans, context-values gate (split arms +5-10 %; stream span merge fixes a tcp regression);
-0158a115 Magma pass-continuation memo; 8883e496 fill pins + VAO hash memo; 80dc9d45 VAO memo;
-5788a602 Magma descriptor rebind; afcf8d96 Espryt AdoptUnchangedBufferSets; e6281b26, 4ef9705e Magma
-lookups/sampler memo; b556ec31, a9108e1a Espryt; 549a34bb server fault latch; 8346d809 slot allocator
-front; 267211e8 Magma hash memo + scratch.
-
-## In flight / next
-
-1. Espryt backend lookups: `PerNativeContext<T>::Current` (TLS cache per T + non-inline serial/epoch
-   calls), `IsBufferDrawCleanByHandle`, `AdoptUnchangedBufferSets` (compares the window every draw
-   because the bind re-apply bumps VertexBuffersSerial), `SyncTextureToBackendByHandle`.
-2. Tracker::Update: 18 shutters evaluated per draw, 4 fire. Needs a cheap "nothing but the VAO and
-   the uniform moved" signal; no central frontend mutation epoch exists yet.
-3. Residual fill: now a precomputed walk, but still ~11 CopyField per draw.
-4. Magma: SetupWireDraw self, per-draw dynamic-offset descriptor bind.
-5. Final full matrix (dev + 4 arms x 2 backends x openra/rd12, REPS=3), then BENCH.md, README.md,
-   DEBTS.md rows (Magma 16 %, W9: closed with readings - render-state CSO cache mints 0/frame, Magma
-   pipeline memo 99.0 % hit on rd12, 92.7 % on openra), FCL re-run on the final lib.
+1. FCL Magma monolith waits about 3 ms/frame. The trace does not show it. Profile it off-CPU
+   first. Both close-out attempts caught no game frames, because FCL start-up ran past the
+   60 s warm-up.
+2. The draw-packet cache (design sketch). Prototype the client half on Espryt monolith first.
+3. The Espryt driver +0.33 ms is a cache-pressure inference. Check it with L1D refills
+   before and after (2).
+4. Native TLS, minSdk 29 vs 26, is the user's call: +1.7 % Espryt, noise on Magma.
 
 ## Harness
 
-Scratchpad scripts (session-local): `build_trace.sh W:/perf .p14X` (trace APK, suffix = package
-`top.mobilegl.plugin.p14X.trace`), `sign_install.sh <apk> <name>`. W: is `subst` of
-`.claude/worktrees` (MAX_PATH). Then:
+Session scratchpad scripts:
+- `build_trace.sh W:/perf .p14X`: trace APK, package `top.mobilegl.plugin.p14X.trace`.
+- `sign_install.sh <apk> <name>`.
+- `devjob.sh <log> <cmd>`: runs a device job under a mkdir lock. Always use it; two concurrent
+  device jobs contaminate each other, and killing a job leaves its children running.
+- `incl.py` / `children.py` / `lines.py` / `layers2.py` / `drvcall.py` / `offcpu.py`:
+  simpleperf analyses. The tail window comes from the render thread's `retraceCall` samples.
+- `profile_offcpu.sh`: `--trace-offcpu` variant of `profile_p14.sh`.
+- `stat_p14.sh`: `simpleperf stat` counters.
+- `fcl_offcpu.sh`: FCL profile plus restore.
+
+Then:
 
 ```
 cd tools/device_bench/disagg
@@ -77,21 +53,44 @@ ARMS="monolith@p14a monolith@p14b" BACKENDS="DirectGLES DirectVulkan" WLS=rd12 R
 python p14_report.py ../../../.trace-work/perf-p14/ab
 ARMS="monolith@p14X inproc@p14X shm@p14X tcp@p14X" REPS=1 TAG=ssim bash matrix_p14.sh ssim   # SSIM gate
 ARM=monolith BACKEND=DirectGLES WL=rd12 TAG=prof PKG_FEAT=... SYMDIR=<unstripped libs> bash profile_p14.sh
-python layers.py <perf.data> <binary_cache> MobileGLTraceRe <cpu ms/frame> --tail-ms=N [--detail=backend]
 ```
 
-FIXTURES must point at a checkout with real LFS goldens (worktrees have pointer files). Host tests:
-WSL archlinux `~/mgl-perf-bld` (clang, split+inproc, tests on); ServerSpawnTest / FuzzArm2 /
-PeerLatchTest fail there with Refuse{BuildFingerprint} (no build stamp in that tree), environmental.
+The FCL library comes from `:app:assemblePluginRelease`. Unzip `lib/arm64-v8a/libMobileGL.so` from
+`app/build/outputs/apk/plugin/release/`; the unstripped copy is under
+`intermediates/merged_native_libs/pluginRelease`. Run `fcl_p14.sh run`, then `restore`
+(md5-checked).
+
+Gradle's `packageTraceRelease` sometimes fails on the first try with
+`IncrementalSplitterRunnable`; a rerun succeeds.
+
+Host:
+- Unit tests: WSL archlinux `~/mgl-perf-bld` (clang, split + inproc).
+  - ServerSpawnTest, FuzzArm2 and PeerLatchTest fail there with `Refuse{BuildFingerprint}`;
+    that is environmental.
+  - The google-benchmark targets don't build with clang 22; also environmental.
+- CI-shaped integration tree: `~/mgl-perf-ci31`, configured with CMake 3.31.10 from the
+  `~/mgl-perf-tools` venv.
+  - The system CMake 4.x joins `gtest_discover_tests` ENVIRONMENT lists into one variable, and
+    every entry then skips. Use 3.31.10.
+  - lavapipe ICD; spawn/tcp lanes are environmental there.
+  - To run the syncval gates: `scripts/ci/magma_runahead_checks.py validation --build-dir ~/mgl-perf-ci31 --execute`,
+    with `GIT_DIR=.../.git/modules/MobileGL/worktrees/perf` set for the cache script.
+- `~/mgl-perf-ci` is a CMake 4 tree. Use it only through the scratchpad's `runentry.sh`, which
+  splits the joined environment.
 
 ## Device state
 
-HA27Q3LQ: CPU/GPU clocks PINNED (`bash pin_clocks.sh restore` to undo). FCL lib/config/props restored
-(md5 checked; `debug.mobilegl.*` props unset). Trace APKs `top.mobilegl.plugin.p14*.trace` installed.
+- HA27Q3LQ CPU/GPU clocks are still PINNED: the next phase wants them pinned.
+  `bash pin_clocks.sh restore` undoes it; ask before unpinning.
+- FCL is restored: lib md5 matches `/data/local/tmp/p14-fcl-orig.so`, config.json matches its
+  saved copy, and the `debug.mobilegl.*` properties are deleted.
+- Trace APKs `top.mobilegl.plugin.p14*.trace` are installed; `p14fin` is the close-out build.
 
 ## CI
 
-No run has completed since f8a9466b (each push cancelled the previous). workflow_dispatch runs on
-the checkpoint head: see the milestone message / below.
+Dispatched runs (workflow_dispatch, not cancelled by later pushes):
+- 86ab2835: Test 37702990844, APK 37702995519.
+- 781a7446: Test 37707221661.
+- The close-out docs head: see the final report.
 
-Dispatched on ff53ba3b: Test run 37674322398, MobileGL APK run 37674328683 (workflow_dispatch, not cancelled by later pushes).
+There is only one self-hosted GPU runner (`minipc-8845-arch-wsl-gpu`), so GPU jobs queue behind it.
