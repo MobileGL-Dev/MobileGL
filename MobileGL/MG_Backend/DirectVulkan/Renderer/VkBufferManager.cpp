@@ -238,18 +238,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         resource->gpuWritesPending = false;
         resource->indirectReadBarrierPending = false;
         resource->stagedCoverage.clear();
+        DropWireShadow(*resource);
         if (resource->size == 0) return;
 
-        VkBufferUsageFlags usage = kPersistentBackedUsage | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-        if (m_initInfo.transformFeedbackUsageEnabled) usage |= VK_BUFFER_USAGE_TRANSFORM_FEEDBACK_BUFFER_BIT_EXT;
-        if (!resource->buffer.Create({
-                .allocator = m_initInfo.allocator,
-                .size = resource->size,
-                .usage = usage,
-                .memoryUsage = VMA_MEMORY_USAGE_AUTO,
-                .allocationFlags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT,
-                .requiredFlags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-            }) || resource->buffer.Map() == nullptr) {
+        if (!CreateWireStoreBuffer(*resource)) {
             MGLOG_F("Magma: Fatal{ResourceUnavailable, \"buffer-storage\"} {slot=%u, gen=%u, size=%llu}",
                     res.Slot, res.Gen, static_cast<unsigned long long>(resource->size));
             std::abort();
@@ -257,11 +249,74 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         ++m_wireStoreCount;
         NoteWireStorePeaks();
         PublishWireReclaimGauges();
+        // P15 S0 (M4): a small store starts a host shadow. Its bytes are undefined until written
+        // (glBufferData without data), so zeros are as good a starting copy as the new memory's.
+        constexpr SizeT kWireShadowMaxStore = 64u << 10;
+        constexpr SizeT kWireShadowBudget = 64u << 20;
+        if (MG_Config::Features.MagmaWriteRename != MG_Config::QuirkOverride::ForceOff &&
+            resource->size <= kWireShadowMaxStore && m_wireShadowBytes + resource->size <= kWireShadowBudget) {
+            resource->shadow.assign(static_cast<SizeT>(resource->size), 0);
+            m_wireShadowBytes += resource->shadow.size();
+        }
         // Under transport, defined bytes follow as resource_subdata records. An
         // undefined store has no shadow to upload and no implicit zero snapshot.
         if (initialBytes != nullptr && desc.HasDefinedContent) {
             WriteWireBuffer(res, 0, resource->size, initialBytes);
         }
+    }
+
+    Bool VkBufferManager::CreateWireStoreBuffer(WireBufferResource& resource) {
+        VkBufferUsageFlags usage = kPersistentBackedUsage | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+        if (m_initInfo.transformFeedbackUsageEnabled) usage |= VK_BUFFER_USAGE_TRANSFORM_FEEDBACK_BUFFER_BIT_EXT;
+        return resource.buffer.Create({
+                   .allocator = m_initInfo.allocator,
+                   .size = resource.size,
+                   .usage = usage,
+                   .memoryUsage = VMA_MEMORY_USAGE_AUTO,
+                   .allocationFlags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT,
+                   .requiredFlags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+               }) &&
+               resource.buffer.Map() != nullptr;
+    }
+
+    void VkBufferManager::DropWireShadow(WireBufferResource& resource) {
+        if (resource.shadow.empty()) return;
+        m_wireShadowBytes -= resource.shadow.size();
+        resource.shadow.clear();
+        resource.shadow.shrink_to_fit();
+    }
+
+    // P15 S0 (M4): WRITE RENAMING. A busy store (the GPU may still read it: an earlier draw of
+    // this frame, or one in flight) gets a fresh VkBuffer holding the shadow - which already has
+    // this write in it - and the old one is released once everything that can name it completes,
+    // exactly as a glBufferData orphan is. Draws recorded before keep the old buffer and its old
+    // bytes; draws after bind the new one (every bind site compares VkBuffer handles, and the
+    // release goes through the destroy epoch the handle-keyed memos fold in). No copy is recorded,
+    // so the render pass stays open and no barrier is needed.
+    Bool VkBufferManager::RenameBusyWireStore(WireBufferResource& resource) {
+        // A shadow outlives only GPU writes whose bytes it has (this manager's own staged copies):
+        // every other GPU write drops it. So a pending GPU write does not bar the rename.
+        if (resource.shadow.size() != resource.size || resource.imported ||
+            MG_Config::Features.MagmaWriteRename == MG_Config::QuirkOverride::ForceOff)
+            return false;
+        VkBufferObject old = std::move(resource.buffer);
+        if (!CreateWireStoreBuffer(resource) ||
+            !resource.buffer.Upload(resource.shadow.data(), static_cast<VkDeviceSize>(resource.size), 0)) {
+            resource.buffer.Destroy();
+            resource.buffer = std::move(old);
+            return false;
+        }
+        // Busy means a GPU command recorded so far may name the old buffer: release it behind
+        // this frame's serial and the current sync point, whatever its own stamps said.
+        DeferWireRelease(std::move(old), m_frameSerial);
+        resource.lastUseSerial = 0;
+        resource.lastUseSubmitIndex = 0;
+        resource.gpuWritesPending = false;
+        ++m_wireStoreCount;
+        ++m_wireRenames;
+        NoteWireStorePeaks();
+        PublishWireReclaimGauges();
+        return true;
     }
 
     Bool VkBufferManager::WaitForWireBufferHostAccess(WireBufferResource& resource) {
@@ -314,6 +369,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
         if (size == 0) return;
         resource->contentSerial = ++m_wireContentSerial;
+        if (!resource->shadow.empty())
+            Memcpy(resource->shadow.data() + offset, bytes, static_cast<SizeT>(size));
         Bool uploaded = false;
         const Uint64 probeLastUse = resource->lastUseSerial;
         const Uint64 probeCompleted = GetCompletedSerial();
@@ -360,7 +417,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
         const Bool busyBySubmission =
             pVulkanRenderer != nullptr && !pVulkanRenderer->IsSubmitIndexComplete(resource->lastUseSubmitIndex);
-        if (busyBySerial || busyBySubmission) {
+        if ((busyBySerial || busyBySubmission) && !resource->shadow.empty() && RenameBusyWireStore(*resource)) {
+            uploaded = true; // the new buffer was filled from the shadow, this write included
+        } else if (busyBySerial || busyBySubmission) {
             // Vulkan buffer copies require four-byte aligned ranges. An odd GL
             // byte update waits, then writes only the exact range; rounding it
             // from a CPU shadow could overwrite neighbouring GPU-written bytes.
@@ -502,8 +561,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (!resource || !resource->buffer.IsValid() || resource->size == 0) return false;
         resource->lastUseSerial = m_frameSerial;
         // A slice a shader may write through: whatever it writes is a new content state.
-        if (kind == BufferKind::ShaderStorage || kind == BufferKind::TextureBuffer)
+        if (kind == BufferKind::ShaderStorage || kind == BufferKind::TextureBuffer) {
             resource->contentSerial = ++m_wireContentSerial;
+            DropWireShadow(*resource);
+        }
         // B3: the draw this slice is being acquired for is normally recorded into the NEXT
         // submission - normally, not always: a mid-draw flush (SyncWireTextureShape's preserve
         // path) can submit this index without the draw. This stamp is the defence term's input
@@ -524,6 +585,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         auto* resource = FindWireBuffer(res);
         if (!resource || offset > resource->size || size > resource->size - offset || (size && !dst)) return false;
         if (size == 0) return true;
+        // A shadowed store's host copy is current, staged copies included (see RenameBusyWireStore).
+        if (resource->shadow.size() == resource->size) {
+            Memcpy(dst, resource->shadow.data() + offset, static_cast<SizeT>(size));
+            return true;
+        }
         // Concurrent GPU reads do not prevent a CPU read. Only staged copies or
         // shader writes need a host visibility barrier and a submission wait;
         // ordinary index/vertex inspection must not stall once per draw.
@@ -663,6 +729,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (size == MG_Pipe::kMGPipeWholeBuffer) size = resource->size - offset;
         if (size == 0 || size > resource->size - offset) return;
         resource->contentSerial = ++m_wireContentSerial;
+        DropWireShadow(*resource);
         resource->lastUseSerial = m_frameSerial;
         resource->stagedCoverage.clear();
         resource->gpuWritesPending = true;
@@ -804,6 +871,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (mapped == nullptr) return nullptr;
         if (resource->imported) return mapped; // already donated: the same pointer
         resource->contentSerial = ++m_wireContentSerial;
+        DropWireShadow(*resource);
         if (!WaitForWireBufferHostAccess(*resource)) return nullptr;
         if (seedBytes != nullptr) std::memcpy(mapped, seedBytes, static_cast<SizeT>(size));
         resource->imported = true;
@@ -838,6 +906,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         resource->buffer.AdoptExternal(ctx.device, imported.buffer, imported.memory, size, imported.mapped,
                                        imported.coherent, ahb);
         resource->imported = true;
+        DropWireShadow(*resource);
         resource->lastUseSerial = 0;
         resource->lastUseSubmitIndex = 0;
         resource->gpuWritesPending = false;
@@ -1084,6 +1153,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
         const auto found = m_wireBuffers.find(WireBufferKey(res));
         if (found == m_wireBuffers.end()) return;
+        DropWireShadow(found->second);
         DeferWireRelease(std::move(found->second.buffer),
                          found->second.imported ? T0ReleaseSerial(found->second.lastUseSerial)
                                                 : found->second.lastUseSerial); // P11 B2, as Respecify
@@ -1261,6 +1331,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (!m_wireBuffers.empty()) ++m_wireStoreDestroyEpoch;
         m_wireBufferLookup.clear();
         m_wireBuffers.clear();
+        m_wireShadowBytes = 0;
         m_wireStoreCount = 0;
         m_wireStoreCountPeak = 0;
         m_deferredWireBytesPeak = 0;

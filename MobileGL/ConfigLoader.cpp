@@ -349,6 +349,7 @@ namespace MobileGL::MG_ConfigLoader {
         features.MagmaInPassClearDefault = QueryEnvQuirkOverride("MOBILEGL_MAGMA_INPASS_CLEAR_DEFAULT");
         features.MagmaPassCache = QueryEnvQuirkOverride("MOBILEGL_MAGMA_PASS_CACHE");
         features.MagmaVertexConversionCache = QueryEnvQuirkOverride("MOBILEGL_MAGMA_VERTEX_CONVERSION_CACHE");
+        features.MagmaWriteRename = QueryEnvQuirkOverride("MOBILEGL_MAGMA_WRITE_RENAME");
         features.AdvertiseFp64 = QueryEnvFlag("MOBILEGL_ADVERTISE_FP64");
         features.MagmaR11G11B10FFallback = QueryEnvFlag("MOBILEGL_MAGMA_R11G11B10F_FALLBACK");
         features.MagmaAllowInvalidSpirv = QueryEnvFlag("MOBILEGL_MAGMA_ALLOW_INVALID_SPIRV");

@@ -136,6 +136,10 @@ namespace MobileGL::MG_Config {
         // conversion is converted once per frame slot per (buffer content, layout) and reused by
         // every draw that names it, instead of once per draw. Auto is ON; ForceOff converts per draw.
         QuirkOverride MagmaVertexConversionCache = QuirkOverride::Auto;
+        // MOBILEGL_MAGMA_WRITE_RENAME: a glBufferSubData into a small wire store the GPU may still
+        // be reading gives the store a fresh buffer filled from a host shadow, instead of a staged
+        // copy that ends the render pass. Auto is ON; ForceOff keeps the staged copy.
+        QuirkOverride MagmaWriteRename = QuirkOverride::Auto;
         // MOBILEGL_ADVERTISE_FP64: add GL_ARB_gpu_shader_fp64 to the advertised extension
         // string. `double` in a shader always WORKS - it is narrowed to 32 bits before any
         // module reaches a backend (ShaderTranspiler::DemoteFloat64Pass) - but the extension

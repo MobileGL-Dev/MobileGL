@@ -84,6 +84,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // P8-D: every WaitForWireBufferHostAccess that actually waited, over this manager's life -
         // the attribution base a caller reads before and after its own ReadWireBuffer.
         Uint64 GetWireHostWaitCount() const { return m_wireHostWaits; }
+        // P15 S0 (M4): busy writes that renamed their store instead of taking a staged copy.
+        Uint64 GetWireRenameCount() const { return m_wireRenames; }
 
         // Resource-op entry points. All run on the server apply owner.
         void CreateWireBuffer(MG_Pipe::MGPipeHandle res, const MG_Pipe::MGPResourceDesc& desc);
@@ -197,6 +199,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             Uint64 lastUseSubmitIndex = 0;
             // P15 S0: see GetWireBufferContentSerial.
             Uint64 contentSerial = 0;
+            // P15 S0 (M4): the store's bytes on the host, for a small store whose content only
+            // host writes have made since it was specified - what a busy write renames from (see
+            // WriteWireBuffer). Empty: no shadow (a large store, the budget was spent, or a GPU
+            // write, shader-writable bind or client mapping made the host copy unknowable).
+            Vector<Uint8> shadow;
             Bool gpuWritesPending = false;
             // Only ranges actually submitted by resource_subdata are covered. No
             // shadow is retained: flush cannot replay stale bytes over GPU writes.
@@ -210,6 +217,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         };
         // P8-D: see GetWireHostWaitCount.
         Uint64 m_wireHostWaits = 0;
+        Uint64 m_wireRenames = 0;
+        SizeT m_wireShadowBytes = 0;
+        void DropWireShadow(WireBufferResource& resource);
+        Bool CreateWireStoreBuffer(WireBufferResource& resource);
+        Bool RenameBusyWireStore(WireBufferResource& resource);
         static Uint64 WireBufferKey(MG_Pipe::MGPipeHandle res) {
             return (static_cast<Uint64>(res.Gen) << 32) | res.Slot;
         }
