@@ -377,7 +377,14 @@ namespace MobileGL::MG_ConfigLoader {
         features.AdvertiseFp64 = QueryEnvFlag("MOBILEGL_ADVERTISE_FP64");
         features.MagmaR11G11B10FFallback = QueryEnvFlag("MOBILEGL_MAGMA_R11G11B10F_FALLBACK");
         features.MagmaAllowInvalidSpirv = QueryEnvFlag("MOBILEGL_MAGMA_ALLOW_INVALID_SPIRV");
-        features.MagmaFramesInFlight = QueryEnvUint32("MOBILEGL_MAGMA_FRAMESINFLIGHT", 3, 1, 64);
+        // P15: one backend-neutral knob; the Magma-only spelling stays as a deprecated alias.
+        if (acceptedEnvVariablesMap->count("MOBILEGL_FRAMES_IN_FLIGHT") != 0) {
+            features.FramesInFlight = QueryEnvUint32("MOBILEGL_FRAMES_IN_FLIGHT", 3, 1, 64);
+        } else {
+            features.FramesInFlight = QueryEnvUint32("MOBILEGL_MAGMA_FRAMESINFLIGHT", 3, 1, 64);
+            if (acceptedEnvVariablesMap->count("MOBILEGL_MAGMA_FRAMESINFLIGHT") != 0)
+                MGLOG_W("Config: MOBILEGL_MAGMA_FRAMESINFLIGHT is deprecated; use MOBILEGL_FRAMES_IN_FLIGHT");
+        }
         features.MagmaMaxDrawsPerCommandBuffer =
             QueryEnvUint32("MOBILEGL_MAGMA_MAX_DRAWS_PER_COMMAND_BUFFER", 16384, 0, 1u << 24);
         features.MagmaDescriptorTrimFrames = QueryEnvUint32("MOBILEGL_MAGMA_DESCRIPTOR_TRIM_FRAMES", 120, 0, 1u << 20);
@@ -611,7 +618,14 @@ namespace MobileGL::MG_ConfigLoader {
         // The present credit (ruling 4). 1 is one frame of overlap; 8 is the ceiling because a
         // deeper queue buys nothing on a CPU-bound client and pays for it in latency. 0 is NOT
         // admitted: a credit of zero would mean "publish no present at all".
-        ipc.PresentCredit = QueryEnvUint32("MOBILEGL_IPC_PRESENT_CREDIT", 1, 1, 8);
+        // P15: derived from MOBILEGL_FRAMES_IN_FLIGHT (Config.h states the mapping); the explicit
+        // knob stays as an override for experiments.
+        {
+            const Uint32 derived = std::max<Uint32>(1u, std::min<Uint32>(8u, MG_Config::Features.FramesInFlight > 2
+                                                                                 ? MG_Config::Features.FramesInFlight - 2
+                                                                                 : 1u));
+            ipc.PresentCredit = QueryEnvUint32("MOBILEGL_IPC_PRESENT_CREDIT", derived, 1, 8);
+        }
         // CONTRACT-P6 D5b's reply bound and P7's cold-start budget (Config.h has the semantics).
         // Both are floored at 100 ms: a zero bound would declare every live server silent.
         ipc.ControlTimeoutMs = QueryEnvUint32("MOBILEGL_IPC_CONTROL_TIMEOUT_MS", 5000, 100, 600000);

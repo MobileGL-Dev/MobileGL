@@ -102,8 +102,8 @@
             android:name="mobilegl_magma_r11g11b10f_fallback_title"
             android:resource="@string/mobilegl_magma_r11g11b10f_fallback_title" />
         <meta-data
-            android:name="mobilegl_magma_frames_inflight_title"
-            android:resource="@string/mobilegl_magma_frames_inflight_title" />
+            android:name="mobilegl_frames_inflight_title"
+            android:resource="@string/mobilegl_frames_inflight_title" />
         <meta-data
             android:name="mobilegl_avoid_sampler_mipmap_min_filter_title"
             android:resource="@string/mobilegl_avoid_sampler_mipmap_min_filter_title" />

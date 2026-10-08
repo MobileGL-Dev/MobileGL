@@ -36,6 +36,7 @@ namespace {
         "MOBILEGL_CONFIG_FILE",       "MOBILEGL_BACKEND_FILE", "MOBILEGL_BACKEND_TYPE",
         "MOBILEGL_MAGMA_FRAMESINFLIGHT", "MOBILEGL_TRANSPORT",   "MOBILEGL_IPC_CONTROL",
         "MOBILEGL_IPC_DATA",          "MOBILEGL_IPC_ROLE",     "MOBILEGL_TEST_ONLY_KEY",
+        "MOBILEGL_FRAMES_IN_FLIGHT",  "MOBILEGL_IPC_PRESENT_CREDIT",
     };
 
     class ConfigFileTest : public ::testing::Test {
@@ -84,12 +85,36 @@ namespace {
     TEST_F(ConfigFileTest, WithoutFilesOrEnvironmentTheBuiltInDefaultsHold) {
         Loader::Init();
         EXPECT_EQ(Config::ActiveBackendType, BackendType::DirectGLES);
-        EXPECT_EQ(Config::Features.MagmaFramesInFlight, 3u);
+        EXPECT_EQ(Config::Features.FramesInFlight, 3u);
         EXPECT_EQ(Lookup("MOBILEGL_TRANSPORT"), "<unset>");
 #if MOBILEGL_BUILD_DISAGGREGATED
         EXPECT_EQ(Config::Transport, Config::TransportMode::Monolith);
         EXPECT_EQ(Config::Ipc.Control, "fork");
 #endif
+    }
+
+    // P15: one frames-in-flight knob for both backends, the Magma spelling as its alias, and the
+    // split arms' present credit derived from it (max(1, N - 2), so the default keeps credit 1).
+    TEST_F(ConfigFileTest, FramesInFlightIsBackendNeutralAndDerivesThePresentCredit) {
+        Loader::Init();
+        EXPECT_EQ(Config::Features.FramesInFlight, 3u);
+#if MOBILEGL_BUILD_DISAGGREGATED
+        EXPECT_EQ(Config::Ipc.PresentCredit, 1u);
+#endif
+        ::setenv("MOBILEGL_FRAMES_IN_FLIGHT", "4", 1);
+        ::setenv("MOBILEGL_MAGMA_FRAMESINFLIGHT", "6", 1); // the new name wins over the alias
+        Loader::Init();
+        EXPECT_EQ(Config::Features.FramesInFlight, 4u);
+#if MOBILEGL_BUILD_DISAGGREGATED
+        EXPECT_EQ(Config::Ipc.PresentCredit, 2u);
+        ::setenv("MOBILEGL_IPC_PRESENT_CREDIT", "1", 1); // the explicit override stays
+        Loader::Init();
+        EXPECT_EQ(Config::Ipc.PresentCredit, 1u);
+        ::unsetenv("MOBILEGL_IPC_PRESENT_CREDIT");
+#endif
+        ::unsetenv("MOBILEGL_FRAMES_IN_FLIGHT");
+        Loader::Init();
+        EXPECT_EQ(Config::Features.FramesInFlight, 6u); // the alias alone still works
     }
 
     TEST_F(ConfigFileTest, TheFileFillsWhatTheEnvironmentLeavesUnset) {
@@ -103,7 +128,7 @@ namespace {
                      "garbage line without equals\n"
                      "MOBILEGL_TEST_ONLY_KEY=a=b\n");
         Loader::Init();
-        EXPECT_EQ(Config::Features.MagmaFramesInFlight, 5u);
+        EXPECT_EQ(Config::Features.FramesInFlight, 5u);
         EXPECT_EQ(Lookup("MOBILEGL_TRANSPORT"), "spawn");
         EXPECT_EQ(Lookup("MOBILEGL_IPC_CONTROL"), "unix:@test-endpoint");
         EXPECT_EQ(Lookup("MOBILEGL_IPC_DATA"), "shm");
@@ -121,7 +146,7 @@ namespace {
         ::setenv("MOBILEGL_MAGMA_FRAMESINFLIGHT", "7", 1);
         ::setenv("MOBILEGL_IPC_CONTROL", "unix:@from-env", 1);
         Loader::Init();
-        EXPECT_EQ(Config::Features.MagmaFramesInFlight, 7u);
+        EXPECT_EQ(Config::Features.FramesInFlight, 7u);
         EXPECT_EQ(Lookup("MOBILEGL_IPC_CONTROL"), "unix:@from-env");
 #if MOBILEGL_BUILD_DISAGGREGATED
         EXPECT_EQ(Config::Ipc.Control, "unix:@from-env");
@@ -156,12 +181,12 @@ namespace {
         ::setenv("MOBILEGL_CONFIG_FILE", "", 1);
         ::setenv("MOBILEGL_BACKEND_FILE", "", 1);
         Loader::Init();
-        EXPECT_EQ(Config::Features.MagmaFramesInFlight, 3u);
+        EXPECT_EQ(Config::Features.FramesInFlight, 3u);
         EXPECT_EQ(Config::ActiveBackendType, BackendType::DirectGLES);
 
         ::setenv("MOBILEGL_CONFIG_FILE", (dir_ / "absent.conf").string().c_str(), 1);
         Loader::Init();
-        EXPECT_EQ(Config::Features.MagmaFramesInFlight, 3u);
+        EXPECT_EQ(Config::Features.FramesInFlight, 3u);
     }
 
     TEST_F(ConfigFileTest, AServerProcessNeverReadsTheClientsFile) {
@@ -169,7 +194,7 @@ namespace {
         Write(backend_, "DirectVulkan\n");
         ::setenv("MOBILEGL_IPC_ROLE", "server", 1);
         Loader::Init();
-        EXPECT_EQ(Config::Features.MagmaFramesInFlight, 3u);
+        EXPECT_EQ(Config::Features.FramesInFlight, 3u);
         EXPECT_EQ(Config::ActiveBackendType, BackendType::DirectGLES);
         EXPECT_EQ(Lookup("MOBILEGL_MAGMA_FRAMESINFLIGHT"), "<unset>");
     }

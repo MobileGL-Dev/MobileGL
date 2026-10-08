@@ -13713,8 +13713,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // makes it reachable), then non-blocking-poll prior frames' fences AFTER to
         // advance the completed-frame watermark that gates buffer-pool recycling.
         const Bool canFence = IsBackendContextCurrentOnThisThread() && g_GLESFuncs.glFenceSync;
+        Uint64 presentedSerial = 0;
         if (canFence) {
             const Uint64 serial = g_currentFrameSerial.fetch_add(1, std::memory_order_relaxed) + 1;
+            presentedSerial = serial;
             FrameFence& slot = g_frameFenceRing[serial % kFrameFenceRingDepth];
             if (slot.sync && slot.contextGeneration == g_syncContextGeneration) {
                 // The slot's fence is a ring-depth of serials old and may be another context's:
@@ -13771,6 +13773,23 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
         // A frame boundary: the next frame's age is asked anew.
         t_ageAskedSurface = EGL_NO_SURFACE;
+
+        // P15: MOBILEGL_FRAMES_IN_FLIGHT, Espryt's half. Magma bounds the frames the GPU has
+        // queued with its frame contexts (frame S+1 reuses the context of frame S+1-N); this is
+        // the same bound on the ES driver: after presenting S, wait for S+1-N to complete. The
+        // platform's own queueBuffer throttle already waits for S-1, so only N = 1 is stricter
+        // than what Android does by itself; larger N is the same contract stated, not a change.
+        const Uint32 framesInFlight = MG_Config::Features.FramesInFlight;
+        if (presentedSerial != 0 && framesInFlight != 0 &&
+            framesInFlight < static_cast<Uint32>(kFrameFenceRingDepth) && g_GLESFuncs.glClientWaitSync &&
+            presentedSerial + 1 > framesInFlight) {
+            const Uint64 target = presentedSerial + 1 - framesInFlight;
+            const FrameFence& oldest = g_frameFenceRing[target % kFrameFenceRingDepth];
+            if (oldest.sync && oldest.serial == target && oldest.contextGeneration == g_syncContextGeneration) {
+                constexpr Uint64 kFramesInFlightWaitNs = 1000ull * 1000 * 1000;
+                (void)g_GLESFuncs.glClientWaitSync(oldest.sync, GL_SYNC_FLUSH_COMMANDS_BIT, kFramesInFlightWaitNs);
+            }
+        }
 
         if (canFence) PollFrameFences();
 

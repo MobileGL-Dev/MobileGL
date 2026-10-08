@@ -5,7 +5,7 @@
     <string name="mobilegl_disable_timerquery_title">Disable GPU timer queries</string>
     <string name="mobilegl_disable_subgroup_title">Disable Vulkan shader subgroups</string>
     <string name="mobilegl_magma_r11g11b10f_fallback_title">Use Magma R11G11B10F fallback</string>
-    <string name="mobilegl_magma_frames_inflight_title">Magma frames in flight (1-64)</string>
+    <string name="mobilegl_frames_inflight_title">Frames in flight (1-64)</string>
     <string name="mobilegl_avoid_sampler_mipmap_min_filter_title">Avoid sampler mipmap minification filters</string>
     <string name="mobilegl_coherent_as_flush_title">Treat explicit-flush persistent maps as coherent</string>
     <string name="mobilegl_use_angle_title">Use ANGLE GLES libraries</string>

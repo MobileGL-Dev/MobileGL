@@ -2156,7 +2156,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         {
             // Desired depth comes from MOBILEGL_MAGMA_FRAMESINFLIGHT, parsed once by ConfigLoader
             // with a default of 3 when the variable is unset or invalid.
-            Uint32 requestedFramesInFlight = MG_Config::Features.MagmaFramesInFlight;
+            Uint32 requestedFramesInFlight = MG_Config::Features.FramesInFlight;
             MGLOG_I("MaxFramesInFlight: configured request=%u", requestedFramesInFlight);
 
             VkSurfaceCapabilitiesKHR surfaceCaps{};

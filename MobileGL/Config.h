@@ -163,8 +163,15 @@ namespace MobileGL::MG_Config {
         // draws refused by name), because a driver that accepts invalid SPIR-V may fault the GPU
         // into device loss. For diagnosing a driver that copes with a specific module only.
         Bool MagmaAllowInvalidSpirv = false;
-        // MOBILEGL_MAGMA_FRAMESINFLIGHT: requested Magma frames in flight, defaulting to 3.
-        Uint32 MagmaFramesInFlight = 3;
+        // MOBILEGL_FRAMES_IN_FLIGHT (P15; MOBILEGL_MAGMA_FRAMESINFLIGHT is its deprecated alias):
+        // how many frames may be queued ahead of the GPU, default 3, both backends.
+        //   - Magma: its frame contexts (frame S+1 reuses S+1-N's), clamped to the surface.
+        //   - Espryt: after presenting S the backend waits for S+1-N to complete (N = 1 is a full
+        //     CPU/GPU sync; N >= 2 is what Android's own queueBuffer throttle already gives).
+        //   - inproc / spawn / TCP: the present credit, how many presents the GL thread may run
+        //     ahead of the server, is derived from it: max(1, N - 2), so the default 3 keeps the
+        //     shipped credit of 1 and N = 4 is credit 2 (one more frame of latency).
+        Uint32 FramesInFlight = 3;
         // MOBILEGL_MAGMA_MAX_DRAWS_PER_COMMAND_BUFFER: GL draws and dispatches Magma records into
         // one command buffer before it submits it and continues on a fresh one. 0 = unbounded.
         // Drivers back a command buffer with GPU memory that is only returned when the buffer is
@@ -700,13 +707,14 @@ namespace MobileGL::MG_Config {
         // client-filled gPipeInputs block for every verb, and run-ahead is precisely the
         // arm that stops filling it.
         Uint32 RunAhead = 1;
-        // MOBILEGL_IPC_PRESENT_CREDIT (P5e, ruling 4 / ID-92): how many presents the client may
-        // have in flight before it waits for a swap to come back. 1 = the client publishes
-        // frame N+1's records while the server applies and swaps frame N - one frame of
-        // overlap, at most one frame of added latency - and the CREDIT, never the ring's bytes,
-        // is what paces a run-ahead client. 2 is a device MEASUREMENT arm: it buys no CPU on a
-        // client that is already CPU-bound and costs a frame of latency, which is why the
-        // default is 1 and not "as deep as the ring".
+        // The present credit (P5e, ruling 4 / ID-92): how many presents the client may have in
+        // flight before it waits for a swap to come back. 1 = the client publishes frame N+1's
+        // records while the server applies and swaps frame N - one frame of overlap, at most one
+        // frame of added latency - and the CREDIT, never the ring's bytes, is what paces a
+        // run-ahead client. Derived from MOBILEGL_FRAMES_IN_FLIGHT (max(1, N - 2)); the
+        // MOBILEGL_IPC_PRESENT_CREDIT override stays for experiments. Credit 2 is a real trade,
+        // not a measurement arm: on FCL inproc (cpuhunt, 2026-10-08) it brought Magma 309 -> 320
+        // and Espryt 299 -> 319 fps, at one frame of added latency.
         Uint32 PresentCredit = 1;
         // MOBILEGL_IPC_WAIT_STATS (P15, diagnostic): every 600 presents, log how many times per
         // frame the run-ahead client waited, by record op (applied/reply), by quiesce reason and

@@ -52,7 +52,8 @@ CMake：`MOBILEGL_BUILD_DISAGGREGATED`（OFF）、`MOBILEGL_BUILD_DISAGGREGATED_
 | `MOBILEGL_IPC_RING_MB` / `MOBILEGL_IPC_STAGE_MB` | 8 / 32 | `SEG_CMD` / `SEG_STAGE`；stage 的 1/4 是内容分块预算 |
 | `MOBILEGL_IPC_RUN_AHEAD` | 1 | P5e run-ahead；只是合取式的一半（server 须发布 `kCapRunAheadApply`）；`0` 是 A/B 对照 |
 | `MOBILEGL_IPC_VERB_BARRIER` | 1 | `0` 只作阴性对照，且同时关掉 run-ahead |
-| `MOBILEGL_IPC_PRESENT_CREDIT` | 1 | 1..8，§14 |
+| `MOBILEGL_FRAMES_IN_FLIGHT` | 3 | 1..64，两个后端共用（旧名 `MOBILEGL_MAGMA_FRAMESINFLIGHT` 为弃用别名）：Magma 的帧上下文数；Espryt 在 present S 后等待帧 S+1-N 完成；split 的 present credit 由它导出为 max(1, N-2)（P15） |
+| `MOBILEGL_IPC_PRESENT_CREDIT` | 由 `MOBILEGL_FRAMES_IN_FLIGHT` 导出（默认 1） | 1..8，§14；显式设置覆盖导出值，仅供实验 |
 | `MOBILEGL_IPC_POLL_ESCALATE` | 64 | 未报告 fence 的零超时轮询本地答"未完成"，同一 fence 连续第 N 次才往返（P10，`CONTRACT-P10.md` §1）；`0` = 每次轮询都往返，是 A/B 对照 |
 | `MOBILEGL_IPC_BATCH_WAITS` | 1 | lockstep 下值类记录发布即返回；verify 强制 0 |
 | `MOBILEGL_IPC_EVENT_WAIT_MS` | 2000 | 反向事件遇满环时 server 等 client 排空的整笔预算（§11.7） |
