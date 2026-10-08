@@ -150,7 +150,7 @@ run_one() {
   local env; env="$(arm_env "$arm")"; [ -n "$EXTRA_ENV" ] && env="${env:+$env;}$EXTRA_ENV"
   if [ "$mode" = benchmark ]; then
     # P15 validity rule: frequency/thermal sampler for the whole run (devstate.sh judges it).
-    adb -s "$SER" push "$(cygpath -w "$SCRIPT_DIR/freq_sampler.sh")" /data/local/tmp/p15-freq_sampler.sh >/dev/null 2>&1
+    tr -d '\r' < "$SCRIPT_DIR/freq_sampler.sh" > "$dir/freq_sampler.lf.sh"; adb -s "$SER" push "$(cygpath -w "$dir/freq_sampler.lf.sh")" /data/local/tmp/p15-freq_sampler.sh >/dev/null 2>&1
     shq "su -c 'chmod 755 /data/local/tmp/p15-freq_sampler.sh; pkill -f p15-freq_sampler.sh; rm -f /data/local/tmp/p15freq.txt; (nohup sh /data/local/tmp/p15-freq_sampler.sh /data/local/tmp/p15freq.txt 2 >/dev/null 2>&1 &)'" >/dev/null 2>&1
     shq "su -c 'nohup taskset 01 $SAMPLER $pkg 10 $app/output/benchmark.json /data/local/tmp/p14cpu.csv $TIMEOUT >/dev/null 2>&1 &'" >/dev/null 2>&1
   fi

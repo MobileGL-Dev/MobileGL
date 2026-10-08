@@ -39,7 +39,7 @@ snap() { adb -s $SER shell "su -c 'cat /proc/uptime; cat /sys/class/kgsl/kgsl-3d
 # P15 validity rule: frequency/thermal sampler for the whole measurement window (devstate.sh judges it)
 BENCH="$(cd "$(dirname "$0")" && pwd)"
 SER=$SER bash $BENCH/pin_clocks.sh show > "$out/pin.txt" 2>&1
-adb -s $SER push "$(cygpath -w $BENCH/freq_sampler.sh)" /data/local/tmp/p15-freq_sampler.sh >/dev/null
+tr -d '\r' < $BENCH/freq_sampler.sh > "$out/freq_sampler.lf.sh"; adb -s $SER push "$(cygpath -w "$out/freq_sampler.lf.sh")" /data/local/tmp/p15-freq_sampler.sh >/dev/null
 su_sh "chmod 755 /data/local/tmp/p15-freq_sampler.sh; rm -f /data/local/tmp/p15freq.txt; (nohup sh /data/local/tmp/p15-freq_sampler.sh /data/local/tmp/p15freq.txt 2 >/dev/null 2>&1 &)"
 # A: ftrace
 EV=/sys/kernel/tracing/events
