@@ -191,7 +191,11 @@ TEST(UnixSupervisor, ConcurrentSharedMemoryClientsHaveSeparateWorkersAndAnExited
 
     const PeerReport excess = RunPeer(server.endpoint, ApplyOneRecord, true, 15000);
     EXPECT_EQ(excess.started, 0) << "the configured live-session limit was ignored";
-    EXPECT_NE(server.Log().find("Refuse{Busy} the session limit is reached"), std::string::npos) << server.Log();
+    // The refusal line reaches the supervisor's log asynchronously; the client can see the refusal
+    // first (one CI run read the log before the line landed), so the log is waited for.
+    EXPECT_TRUE(WaitFor([&] { return server.Log().find("Refuse{Busy} the session limit is reached") != std::string::npos; },
+                        5000))
+        << server.Log();
 
     // The second worker must not hold the first peer's connection open after its EOF. This also
     // proves CloseLocalCopy and CloseInForkedChild cover descriptors inherited by each worker.

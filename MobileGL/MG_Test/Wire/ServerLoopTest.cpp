@@ -2026,10 +2026,15 @@ namespace {
     // drain, without passing the apply loop's per-wake fault poll. That used to happen only under
     // CPU load (one CI failure in this case); the between-records hook makes it happen every time:
     // armed, it holds the drain after the record it follows until the GUILTY record is in the ring.
+    // The client does not wait for anything while the drain is held (the applied notification may
+    // only reach a parked client after the hook): it waits for the hold to be ENTERED, which says the
+    // healthy record has been applied, publishes the GUILTY record, and only then waits.
     std::atomic<int> g_holdDrainForGuilty{0};
+    std::atomic<bool> g_holdEntered{false};
     std::atomic<bool> g_guiltyPublished{false};
     void HoldDrainUntilTheGuiltyRecordIsPublished() {
         if (g_holdDrainForGuilty.exchange(0) != 1) return;
+        g_holdEntered.store(true, std::memory_order_release);
         const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(2);
         while (!g_guiltyPublished.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < until)
             std::this_thread::yield();
@@ -2055,27 +2060,36 @@ namespace {
         gles.glGetGraphicsResetStatus = &FakeGetGraphicsResetStatus;
         MG_Backend::DirectGLES::SetGLESFuncsTable(gles);
         int failed = 0;
-        const auto applyOne = [&](std::atomic<bool>* publishedFlag) {
+        const auto publish = [&] {
             MG_Pipe::MGPMemoryBarrier barrier{};
             barrier.Bits = 0x2000u;
             const Uint64 seq = fixture.encoder.EncodeRecord(MG_Pipe::MGPWireOp::MemoryBarrier, &barrier, sizeof(barrier));
             fixture.encoder.Publish();
             fixture.producer.PublishAndNotify(seq);
-            if (publishedFlag != nullptr) publishedFlag->store(true, std::memory_order_release);
+            return seq;
+        };
+        const auto applied = [&](Uint64 seq) {
             return fixture.producer.WaitForApplied(seq, 2000) == Transport::SessionWait::Reached;
         };
         // Another context hung the GPU; this one only waited behind it.
         g_fakeResetStatus = GL_INNOCENT_CONTEXT_RESET;
-        if (!applyOne(nullptr)) failed |= kResetHealthyNotApplied;
-        if (!applyOne(nullptr) || MG_Remote::SessionLatched()) failed |= kResetInnocentEnded;
+        if (!applied(publish())) failed |= kResetHealthyNotApplied;
+        if (!applied(publish()) || MG_Remote::SessionLatched()) failed |= kResetInnocentEnded;
         // The drain that applies this healthy record is held, after acknowledging it, until the
         // GUILTY record below is published, so that drain pops the GUILTY record itself.
         Server::ServerLoopInstance().SetBetweenRecordsHookForTesting(&HoldDrainUntilTheGuiltyRecordIsPublished);
         g_holdDrainForGuilty = 1;
-        if (!applyOne(nullptr)) failed |= kResetHealthyNotApplied;
+        const Uint64 healthy = publish();
+        const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+        while (!g_holdEntered.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < until)
+            std::this_thread::yield();
+        if (!g_holdEntered.load(std::memory_order_acquire)) failed |= kResetHealthyNotApplied;
         // This context's own work hung the GPU.
         g_fakeResetStatus = GL_GUILTY_CONTEXT_RESET;
-        if (applyOne(&g_guiltyPublished)) failed |= kResetGuiltyApplied;
+        const Uint64 guilty = publish();
+        g_guiltyPublished.store(true, std::memory_order_release);
+        if (!applied(healthy)) failed |= kResetHealthyNotApplied;
+        if (applied(guilty)) failed |= kResetGuiltyApplied;
         Server::ServerLoopInstance().SetBetweenRecordsHookForTesting(nullptr);
         if (!MG_Remote::SessionLatched() || MG_Remote::SessionLatchedFamily() != MG_Remote::MGFatalFamily::BackendDeviceLost ||
             std::strstr(MG_Remote::SessionLatchedLine(), "Espryt:apply") == nullptr)
