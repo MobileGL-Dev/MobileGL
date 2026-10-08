@@ -106,3 +106,31 @@ exits on EOF and RSTs the connection, and `pkill` must be anchored
 
 Attaches the device `/system/bin/strace` to the server's session child as the
 app uid via `run-as` (shell-uid ptrace is blocked).
+
+## P15 FCL probes: fcl_probe.sh, fcl_count.sh and their reducers
+
+`fcl_probe.sh <name> <lib> <backend> <transport> <outdir> [simpleperf=1]` swaps a library into
+FCL (rooted device), launches it, waits for steady in-world frames (MC's `Time elapsed:` line,
+then four fps-log windows of more than 150 frames each, relaunching on the known start-up death),
+then records:
+- 4 s of ftrace: sched, kgsl cmdbatch/waittimestamp, and atrace gfx for the app;
+- schedstat and `gpu_clock_stats` bracketing that window;
+- with the last argument at 1, 6 s of `simpleperf --trace-offcpu -p <game pid>`.
+
+The caller restores FCL with `fcl_p14.sh restore`. `fcl_count.sh` does the same launch for a
+`p15count.patch` build (per-draw (VAO, program) pair and between-draw entry statistics, armed by
+`debug.mobilegl.p15count=1` or `MOBILEGL_P15_COUNT=1`, window `MOBILEGL_P15_COUNT_WINDOW`).
+
+Reducers, all reading a probe directory:
+- `snapdiff.py`: per-thread CPU and runqueue wait;
+- `offwait.py <trace> <tid> <present-slice-regex>`: sleep and runnable time per frame, keyed by the
+  atrace slices open at switch-out and the waker, plus GPU busy;
+- `sfalign.py`: SurfaceFlinger `setTransactionState` duration and phase against `flushTransactions`;
+- `slices.py`: atrace slice totals per thread;
+- `fcl_split.py`: layer split, on- vs off-CPU;
+- `fcl_incl.py`: inclusive libMobileGL functions;
+- `fcl_drvcaller.py`: driver time by entry and MobileGL caller;
+- `fcl_stacks.py`: top stacks.
+
+The simpleperf reducers need `SIMPLEPERF_DIR` and a `binary_cache` from `binary_cache_builder.py`.
+Findings: `docs/Disaggregated/notes/perf-p15/PLAN-P15.md` section 2.
