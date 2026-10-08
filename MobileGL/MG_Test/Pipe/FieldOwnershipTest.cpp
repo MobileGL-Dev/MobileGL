@@ -38,6 +38,7 @@
 #include <string>
 
 #include "Includes.h"
+#include <MG_Pipe/VerbRecordOps.h>
 #include <MG_Pipe/MGPipe.h>
 
 #include <Config.h>
@@ -250,6 +251,33 @@ TEST_F(FieldOwnershipTest, TheSevenStickyForwardsAgreeWithTheirFieldRows) {
         EXPECT_EQ(kMGPipeFieldOwnershipForward[i], MGPipeFieldOwnershipOf(field));
         EXPECT_STRNE(kMGPipeFieldOwnershipForwardMechanism[i], "");
     }
+}
+
+// P15: the verb -> record table (MG_Pipe/VerbRecordOps.h) is the client's whole barrier
+// answer, so every row has to agree with what the server will do with the record: the server
+// stamps the op as MGPipeVerbForWireOp(op), and that verb must be of the SAME fill class as the
+// verb that published it - otherwise an unbarriered record would be applied under another class's
+// field mask. A row whose op is not a stamp point at all would apply under the previous verb's
+// serial. (Completeness - one row per verb - is a static_assert in the header.)
+TEST_F(FieldOwnershipTest, EveryVerbsRecordOpIsStampedAsAVerbOfTheSameFillClass) {
+    Uint32 noRecord = 0;
+    for (SizeT i = 0; i < static_cast<SizeT>(MGPipeVerb::kVerbCount); ++i) {
+        const auto verb = static_cast<MGPipeVerb>(i);
+        const MGPWireOp op = MGPipeRecordOpForVerb(verb);
+        if (op == kMGPipeNoRecord) {
+            ++noRecord;
+            continue;
+        }
+        const MGPipeVerb stamped = MGPipeVerbForWireOp(op);
+        ASSERT_NE(stamped, MGPipeVerb::kVerbCount) << kMGPipeVerbNames[i] << ": its record op stamps no verb";
+        EXPECT_EQ(kMGPipeVerbClass[static_cast<SizeT>(stamped)], kMGPipeVerbClass[i])
+            << kMGPipeVerbNames[i] << " publishes a record stamped as " << kMGPipeVerbNames[static_cast<SizeT>(stamped)];
+    }
+    // GetIntegeri_v and IsTimerQuerySupported, answered from the caps mirror.
+    EXPECT_EQ(noRecord, 2u);
+    EXPECT_EQ(MGPipeRecordOpForVerb(MGPipeVerb::BlitNamedFramebuffer), MGPWireOp::Blit);
+    EXPECT_EQ(MGPipeRecordOpForVerb(MGPipeVerb::DrawElements), MGPWireOp::DrawVbo);
+    EXPECT_EQ(MGPipeRecordOpForVerb(MGPipeVerb::ClearBufferfv), MGPWireOp::Clear);
 }
 
 // Pin every boundary's representative verb, the complete count, and the three

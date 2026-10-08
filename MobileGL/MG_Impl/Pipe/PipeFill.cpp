@@ -39,6 +39,7 @@
 #include <MG_Pipe/PipeApply.h>
 #include <MG_Pipe/PipeRoute.h>
 #include <MG_Pipe/PipeMutation.h>
+#include <MG_Pipe/VerbRecordOps.h>
 #include <Config.h>
 #if MOBILEGL_PIPE_VERIFY
 #include <MG_Impl/Pipe/Verb/VerbPort.h>
@@ -375,85 +376,34 @@ namespace MobileGL::MG_Pipe {
             return session != nullptr && session->RunAheadArmed();
         }
 
-        // THE WIRE OP A VERB BOUNDARY BECOMES, which is the join MGPipeVerbForWireOp draws in
-        // the other direction. Built by walking the op space once at compile time rather than
-        // written out, because a second hand-written table is a second thing to forget a row
-        // in - and the generator already refuses a verb-shaped op with no row.
-        constexpr MGPWireOp WireOpForVerb(MGPipeVerb verb) {
-            for (SizeT i = 0; i < static_cast<SizeT>(MGPWireOp::kOpCount); ++i) {
-                const auto op = static_cast<MGPWireOp>(i);
-                if (MGPipeVerbForWireOp(op) == verb) return op;
-            }
-            return MGPWireOp::kOpCount;
-        }
-
         // CONTRACT-P5E §2.1's predicate, ASKED AT THE VALIDATE POINT - which is before the
         // record exists, so it is asked of the verb and the live context rather than of the
         // payload. The two halves must agree with MGPipeBarriered(op, payload, applierState),
         // which is what the server computes, so each clause is the same clause:
         //
-        //   1. the static WaitClass column          - the same generated table, same op;
+        //   1. the static WaitClass column          - of the op the verb's emitter publishes,
+        //      named by MGP_VERB_RECORD_OP_LIST (MG_Pipe/VerbRecordOps.h);
         //   2. kCtxVerb inside an open XFB span     - ctx.IsTransformFeedbackActive() here,
         //      the applied MGPContextValues mirror there, and set_context_values precedes the
         //      verb on the ring, so the two read the same value (§2.1);
         //   3. a draw carrying kDrawClientArrays    - NOT asked here, because under run-ahead
         //      such a draw never reaches a record at all: vi refuses it on this very thread in
-        //      EmitDrawRecord's array arm (§5.1, ruling 2). Asking it here would be a second
-        //      spelling of vi's "does any enabled attribute lack a buffer" walk, and two
-        //      spellings of an escalation is precisely what ruling 3 replaced.
+        //      EmitDrawRecord's array arm (§5.1, ruling 2).
         //
-        // AN OP WITH NO VERB ROW ANSWERS BARRIERED. A verb the join does not know is one this
-        // file cannot reason about, and the safe answer - fill it, wait for it - is also the
-        // pre-P5e answer.
-        // `ctx` MAY BE NULL, and that is not a convenience: the validate point asks this
-        // question BEFORE it has decided whether there is anything to fill, so that the answer
-        // is about the RECORD and not about the state of the block. A null context has no open
-        // transform-feedback span, so clause 2 is false for it - and the verb is a no-op below
-        // either way.
+        // P15: THERE IS NO FALLBACK. The answer used to come from inverting MGP_VERB_OP_LIST
+        // (op -> verb, many-to-one), and a verb the inverse missed answered BARRIERED - which
+        // the draw family and then the blit family each paid for until a special case named
+        // them (the blit: one applier quiesce per frame on FCL). The verb -> record table has a
+        // row for every verb by static_assert, so async is the default and a verb syncs only
+        // because the record it publishes says so.
+        //
+        // `ctx` MAY BE NULL: the validate point asks this question BEFORE it has decided
+        // whether there is anything to fill. A null context has no open transform-feedback
+        // span, so clause 2 is false for it - and the verb is a no-op below either way.
         Bool ClientVerbIsBarriered(MGPipeVerb verb, GLContext* ctx) {
-            MGPWireOp op = WireOpForVerb(verb);
-            // ---- P5e (ra2): THE JOIN IS MANY-TO-ONE ON THE DRAW FAMILY, SO THE INVERSE IS NOT
-            // A FUNCTION, AND THE DEFAULT BELOW WAS ANSWERING FOR NINETEEN VERBS -----------------
-            //
-            // MGP_VERB_OP_LIST carries ONE row for the whole draw family - `DrawVbo ->
-            // DrawArrays` - because that is the direction the SERVER needs: a draw_vbo record
-            // stamps a verb boundary and DrawArrays is the name it prints. Inverting it
-            // verb-first therefore answers kOpCount for DrawElements, DrawElementsBaseVertex,
-            // DrawElementsIndirect, MultiDrawElementsBaseVertex and every other indexed /
-            // instanced / multi / indirect verb - all of which emit exactly that same draw_vbo.
-            //
-            // The conservative default below reads "a verb the join does not know answers
-            // BARRIERED: fill it, wait for it". THE FILL HAPPENS AND THE WAIT DOES NOT. The wait
-            // is not decided here - it is decided per RECORD, by MGPipeBarriered(op, payload,
-            // st) at the publish (§2.1) - and the record is a draw_vbo, whose wait class is
-            // kWaitNone. So every indexed draw filled gPipeInputs while telling
-            // RefusePipeInputsTouchWhileApplierOwnsIt, through isBarrieredFill, that this thread
-            // was about to park behind it, and then ran on without parking. The apply thread was
-            // measured inside a record at that instant, and the abort it produced named the
-            // CLIENT's verb - a verb the applier cannot stamp, which is what identifies the
-            // writer (report §2).
-            //
-            // So the family's one row is applied to the family. Every other unknown verb keeps
-            // the conservative answer, which is now honest rather than hoped for: the fill site
-            // establishes quiescence before it writes (MGPipeValidateForVerb below), so a
-            // barriered fill no longer rests on a park that may never come.
-            static_assert(MGPipeVerbForWireOp(MGPWireOp::DrawVbo) == MGPipeVerb::DrawArrays,
-                          "the draw family's representative row moved; the fallback below names "
-                          "draw_vbo because that is the record every kDraw verb emits");
-            // P5e (ra2): THE CLIENT'S HALF OF ESCALATION (iii) WAS HERE AND WENT WITH IT
-            // (ID-133, withdrawn by ID-136). It named MultiDrawArrays / MultiDrawElements /
-            // MultiDrawElementsBaseVertex so the client would FILL for the records the server
-            // was escalating - a fill the server then read as a barriered pull. Retiring that
-            // pull outright (MultiDraw.cpp's BoundDrawIndirectBufferId takes a handle arm) left
-            // nothing for the fill to serve, so a plain multi-draw is an ordinary kDraw verb
-            // again and takes the draw_vbo answer below. The pair is the phase's own lesson
-            // written twice: a wait added to make a lane green is paid by an arm, and here the
-            // arm was the default tier the phone ships.
-            if (op == MGPWireOp::kOpCount &&
-                kMGPipeVerbClass[static_cast<SizeT>(verb)] == MGPipeVerbClass::kDraw) {
-                op = MGPWireOp::DrawVbo;
-            }
-            if (op == MGPWireOp::kOpCount) return true;
+            const MGPWireOp op = MGPipeRecordOpForVerb(verb);
+            // No record (answered from the caps mirror): no apply can read a fill for it.
+            if (op == kMGPipeNoRecord) return false;
             if (MGPipeWaitClassFor(op) != kWaitNone) return true;
             if (MGPipeCallClassFor(op) == kCtxVerb && ctx != nullptr &&
                 ctx->IsTransformFeedbackActive()) {

@@ -2828,6 +2828,25 @@ TEST(RemoteRunAhead, AnIndexedDrawVerbIsUnbarrieredAndTouchesPipeInputsNotAtAll)
     ExpectChildSuccess(child);
 }
 
+// P15: the blit family. Every blit reaches the validate point as BlitNamedFramebuffer and
+// publishes one `blit` record (kWaitNone, stamped as BlitFramebuffer), so it is unbarriered: no
+// fill and no applier quiesce. A barriered answer here was a forced wait once per frame on FCL
+// (MC blits its main target to the window every frame).
+//
+// THE RED (done once while writing it): take the blit rows out of MGP_VERB_RECORD_OP_LIST's
+// answer and this case aborts with Fatal{RoleViolation, "gPipeInputs"}.
+TEST(RemoteRunAhead, ABlitNamedVerbIsUnbarrieredAndTouchesPipeInputsNotAtAll) {
+    const auto child = RunInChild([] {
+        StartRunAheadSession();
+        ClientSession::NoteApplyThreadEnteredApplier();
+        MGPipeValidateForVerb(MGPipeVerb::BlitNamedFramebuffer);
+        ClientSession::NoteApplyThreadLeftApplier();
+        MGPipeLeaveVerb();
+        ClientSessionInstance().Stop();
+    });
+    ExpectChildSuccess(child);
+}
+
 // §3.3's RED-ONCE, and the one that turns the strict lane into a gate. The probe is the
 // sticky forward itself, run on the apply thread inside a server-stamped verb with the
 // current record marked UNBARRIERED - which is the state the sink puts that thread in for
