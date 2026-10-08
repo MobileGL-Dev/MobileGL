@@ -81,8 +81,22 @@ CPU about 1.5/1.25 GHz, GPU 903 MHz (cleanly CPU-bound); interval 0, anland off,
   client as `BlitNamedFramebuffer`, a verb with no `MGP_VERB_OP_LIST` row, so
   `ClientVerbIsBarriered` answered barriered and the GL thread quiesced the applier once per frame
   (1.65 ms/frame parked in `WaitForApplyToCatchUp`, plus 0.11 from the following `glBindTexture`).
-  The apply thread then idled 0.24 ms parked plus 0.2 ms spinning in `Doorbell::Wait`. c07b8c40
-  maps the verb to its `blit` row (kill switch `MOBILEGL_PIPE_BLIT_RUN_AHEAD=0`).
+  The apply thread then idled 0.24 ms parked plus 0.2 ms spinning in `Doorbell::Wait`. e00db8e6
+  replaces the inverse and its barriered fallback with a verb -> record-op table
+  (`MG_Pipe/VerbRecordOps.h`, one row per verb by static_assert; no knob, user decision).
+  - Same-session blab (cpuhunt): Magma inproc 319.6 -> 334.9 fps (+4.8 %), Espryt inproc
+    324.4 -> 338.1 (+4.2 %).
+  - Wait census (`MOBILEGL_IPC_WAIT_STATS=1`, 7acf3ea8): FCL vanilla inproc waits only on the
+    present credit (1.00/frame). BSL waits 7 times per frame on three kWaitApplied rows plus 22
+    follow-on quiesces; see [WAIT-AUDIT.md](WAIT-AUDIT.md) (awaiting the user's review).
+  - db915f76: a client parked on the present credit is rung only by the credit (apply-thread
+    futex wakes 0.056 ms/frame before).
+  - Present credit 2 (cens, cpuhunt, all VALID): Magma 309.0 -> 319.9, Espryt 299.1 -> 319.1 fps
+    vs MobileGlues 321.9 in the same session; apply CPU 1.40-1.43 vs MobileGlues' GL thread 1.57.
+    Credit 2 costs a frame of latency: user decision. The remaining inproc gap is the queueBuffer
+    fence wait (GPU-side), not CPU.
+  - BSL at cpuhunt (GPU 903 MHz) reaches GPU 95 C and kgsl thermal_pwrlevel 1 (834 MHz cap): the
+    census run was INVALID twice and the job was stopped. Run BSL only at gpuhunt.
   - Apply-thread frame (Magma inproc): on-CPU 1.75 (0.2 of it spin), queueBuffer fence wait 1.45,
     parked 0.24 ms.
   - Magma apply on-CPU by verb: draws 0.55 (SetupWireDraw 0.40, of it descriptor binding 0.13),
