@@ -361,6 +361,47 @@ TEST_F(VertexArrayTest, DefaultAttributeBindingIsIdentityAcrossFullCapacity) {
     EXPECT_EQ(vao->GetAttribute(0).Buffer, nullptr);
 }
 
+// P15: the elements version (what keys the vertex-elements record) moves on everything that
+// record carries and on nothing else. A glBindVertexBuffer that only swaps the buffer moves the
+// config version but not the elements version; offset, stride, presence and enables move both.
+TEST_F(VertexArrayTest, ElementsVersionIgnoresABufferOnlySwapAndTracksEverythingTheRecordCarries) {
+    Vector<Uint> vaoNames;
+    MG_State::pGLContext->GenVertexArrayNames(1, vaoNames);
+    auto vao = MG_State::pGLContext->CreateVertexArrayObject(vaoNames[0]);
+    MG_State::pGLContext->BindVertexArray(vaoNames[0]);
+    auto vboA = CreateTestVBO();
+    auto vboB = CreateTestVBO();
+
+    vao->SetAttributeFormatSeparate(0, 3, DataType::Float32, false, false, 0);
+    vao->SetBindingBuffer(0, vboA, 0, 12);
+    vao->EnableAttribute(0);
+
+    Uint32 config = vao->GetConfigVersion(), elements = vao->GetElementsVersion();
+    const auto expectMoved = [&](Bool configMoves, Bool elementsMove, const char* what) {
+        EXPECT_EQ(vao->GetConfigVersion() != config, configMoves) << what;
+        EXPECT_EQ(vao->GetElementsVersion() != elements, elementsMove) << what;
+        config = vao->GetConfigVersion();
+        elements = vao->GetElementsVersion();
+    };
+
+    vao->SetBindingBuffer(0, vboB, 0, 12);
+    expectMoved(true, false, "buffer-only swap");
+    vao->SetBindingBuffer(0, vboB, 0, 12);
+    expectMoved(false, false, "identical rebind");
+    vao->SetBindingBuffer(0, vboA, 16, 12);
+    expectMoved(true, true, "offset change");
+    vao->SetBindingBuffer(0, vboA, 16, 24);
+    expectMoved(true, true, "stride change");
+    vao->SetBindingBuffer(0, nullptr, 16, 24);
+    expectMoved(true, true, "buffer -> none");
+    vao->SetBindingBuffer(0, vboB, 16, 24);
+    expectMoved(true, true, "none -> buffer");
+    vao->DisableAttribute(0);
+    expectMoved(true, true, "disable");
+    vao->SetBindingDivisor(0, 1);
+    expectMoved(true, true, "divisor");
+}
+
 using namespace MobileGL::MG_Impl::GLImpl;
 
 class GeneralVertexArrayTest : public ::testing::Test {

@@ -168,7 +168,11 @@ namespace MobileGL::MG_Pipe {
             }
 
             const Uint64 lifetimeId = vao->GetLifetimeId();
-            const Uint32 configVersion = vao->GetConfigVersion();
+            // P15: keyed on the elements version, which a buffer-only glBindVertexBuffer does not
+            // move (FCL MC 1.21.5 does one per chunk draw), so such a draw skips the blob build
+            // and compare below entirely. The dedup's kill switch also restores the old key.
+            const Bool dedup = MG_Config::Features.PipeVertexElementsDedup != MG_Config::QuirkOverride::ForceOff;
+            const Uint32 configVersion = dedup ? vao->GetElementsVersion() : vao->GetConfigVersion();
             // The VAO's handle is the allocator's for the object's whole life (only an allocator
             // reset forgets it), so it is resolved once per VAO rather than per draw (VaoMemo).
             VaoMemo& memo = MemoFor(*vao);
@@ -189,8 +193,7 @@ namespace MobileGL::MG_Pipe {
                 // already the server's: re-creating it moved its content serial for nothing, which
                 // sent the backend through a whole attribute walk per draw (FCL MC 1.21.5: one per
                 // chunk draw). Kill switch MOBILEGL_PIPE_VERTEX_ELEMENTS_DEDUP=0.
-                const Bool unchanged = MG_Config::Features.PipeVertexElementsDedup != MG_Config::QuirkOverride::ForceOff &&
-                                       latch.Published && latch.Gen == handle.Gen &&
+                const Bool unchanged = dedup && latch.Published && latch.Gen == handle.Gen &&
                                        latch.PublishedBlob.size() == kBlobBytes &&
                                        std::memcmp(latch.PublishedBlob.data(), m_blob.data(), kBlobBytes) == 0;
                 if (unchanged) {

@@ -103,11 +103,16 @@ namespace MobileGL {
                 // Aggregate of every per-attribute version bump; lets backends detect
                 // "any vertex-input state changed" with one compare.
                 Uint32 GetConfigVersion() const { return m_configVersion; }
+                // P15: moves with every bump EXCEPT a buffer change that keeps the attribute's
+                // buffer present (or absent) - a glBindVertexBuffer that only swaps the buffer.
+                // That is everything a vertex-elements record (formats, offsets, strides,
+                // enables, divisors) can see, so the record's emitter keys on it.
+                Uint32 GetElementsVersion() const { return m_elementsVersion; }
 
 
             private:
                 void BumpAttributeFormatVersion(Uint index);
-                void BumpAttributeBufferVersion(Uint index);
+                void BumpAttributeBufferVersion(Uint index, Bool presenceChanged);
                 void BumpAttributeSwitchVersion(Uint index);
                 void ResolveAttributeFromBinding(Uint attribIndex);
                 // Re-resolve every attribute currently pointed at `bindingIndex`. `adopt` turns
@@ -143,6 +148,7 @@ namespace MobileGL {
                 Array<Bool, MAX_VERTEX_ATTRIBS> m_attributeUsesBindingModel = {};
 
                 Uint32 m_configVersion = 0;
+                Uint32 m_elementsVersion = 0;
             };
         } // namespace GLState
     } // namespace MG_State

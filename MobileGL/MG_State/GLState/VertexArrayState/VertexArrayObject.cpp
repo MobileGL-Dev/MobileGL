@@ -160,8 +160,9 @@ namespace MobileGL::MG_State::GLState {
 
         if (m_attributes[index].Buffer == buffer) return;
 
+        const Bool presenceChanged = static_cast<Bool>(m_attributes[index].Buffer) != static_cast<Bool>(buffer);
         m_attributes[index].Buffer = buffer;
-        BumpAttributeBufferVersion(index);
+        BumpAttributeBufferVersion(index, presenceChanged);
     }
 
     BindingSlot<BufferObject>& VertexArrayObject::GetIndexBufferBindingSlot() {
@@ -249,8 +250,9 @@ namespace MobileGL::MG_State::GLState {
         }
 
         if (attr.Buffer != binding.Buffer) {
+            const Bool presenceChanged = static_cast<Bool>(attr.Buffer) != static_cast<Bool>(binding.Buffer);
             attr.Buffer = binding.Buffer;
-            BumpAttributeBufferVersion(attribIndex);
+            BumpAttributeBufferVersion(attribIndex, presenceChanged);
         }
     }
 
@@ -322,13 +324,17 @@ namespace MobileGL::MG_State::GLState {
         if (index >= MAX_VERTEX_ATTRIBS) return;
         ++m_attributeVersions[index].FormatVersion;
         ++m_configVersion;
+        ++m_elementsVersion;
         MGP_NOTE_AGGREGATE(VaoAttribute);
     }
 
-    void VertexArrayObject::BumpAttributeBufferVersion(Uint index) {
+    void VertexArrayObject::BumpAttributeBufferVersion(Uint index, Bool presenceChanged) {
         if (index >= MAX_VERTEX_ATTRIBS) return;
         ++m_attributeVersions[index].BufferVersion;
         ++m_configVersion;
+        // The record zeroes an attribute's offset when it has no buffer, so presence is part
+        // of what it says; which buffer is not.
+        if (presenceChanged) ++m_elementsVersion;
         MGP_NOTE_AGGREGATE(VaoAttribute);
     }
 
@@ -336,6 +342,7 @@ namespace MobileGL::MG_State::GLState {
         if (index >= MAX_VERTEX_ATTRIBS) return;
         ++m_attributeVersions[index].SwitchVersion;
         ++m_configVersion;
+        ++m_elementsVersion;
         MGP_NOTE_AGGREGATE(VaoAttribute);
     }
 
