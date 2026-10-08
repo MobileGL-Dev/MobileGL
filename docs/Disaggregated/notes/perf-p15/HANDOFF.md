@@ -77,6 +77,22 @@ CPU about 1.5/1.25 GHz, GPU 903 MHz (cleanly CPU-bound); interval 0, anland off,
   - ONE_TIME_SUBMIT: no effect (A/B'd, knob dropped).
   - Magma's driver work is about 2x dev's: vkResetCommandBuffer 0.09 + vkEndCommandBuffer 0.11
     ms/frame.
+- **Inproc serialization found (2026-10-08, p15l cpuhunt profiles):** every blit reached the
+  client as `BlitNamedFramebuffer`, a verb with no `MGP_VERB_OP_LIST` row, so
+  `ClientVerbIsBarriered` answered barriered and the GL thread quiesced the applier once per frame
+  (1.65 ms/frame parked in `WaitForApplyToCatchUp`, plus 0.11 from the following `glBindTexture`).
+  The apply thread then idled 0.24 ms parked plus 0.2 ms spinning in `Doorbell::Wait`. c07b8c40
+  maps the verb to its `blit` row (kill switch `MOBILEGL_PIPE_BLIT_RUN_AHEAD=0`).
+  - Apply-thread frame (Magma inproc): on-CPU 1.75 (0.2 of it spin), queueBuffer fence wait 1.45,
+    parked 0.24 ms.
+  - Magma apply on-CPU by verb: draws 0.55 (SetupWireDraw 0.40, of it descriptor binding 0.13),
+    present 0.37 (End CB 0.10, queueBuffer CPU 0.08, submit 0.07, wire-store sweep 0.035),
+    clear 0.19 (the frame's recording begin 0.09 + pass begin 0.05), buffer writes 0.09, blit
+    0.06 (two image views and a VkFramebuffer created and retired per blit).
+- **Device contention, root cause (2026-10-08):** the anland app was relaunched by `fclab.sh`'s own
+  end-of-run `monkey` (launchedFromUid=0); its activity takes the foreground back whenever paused,
+  so FCL launched over it never reaches the world (RenderDoc job: 0 of 4 worlds). c41dfdda:
+  `bench_session.sh start` force-stops it and `stop` relaunches it only if it ran before.
 - **Open user decision:** Espryt's apply thread spends 0.06 ms/frame in `LatchIfGuiltyBeforeApply`
   (glGetGraphicsResetStatus is a kgsl ioctl, queried on every wake). Rate-limiting it to 2 ms
   breaks `ServerLoopEglLatchTest.AGuiltyResetEndsTheSessionBeforeItsNextRecord...`, the designed
