@@ -1,4 +1,4 @@
-# P15 wait-class audit (draft for the user's review)
+# P15 wait-class audit
 
 Commands are recorded and replayed asynchronously by default. A record makes the client wait only
 because its row in `MG_Pipe/PipeCalls.def` has a wait class other than `kWaitNone`. Since e00db8e6
@@ -36,7 +36,35 @@ Waits per frame in steady state, 600-frame windows:
   unbarriered verb (`g_lastFillWasBarriered`). Making the three `kWaitApplied` verbs async removes
   all of these at once.
 
-## Rows that wait
+## Final verdicts (user decision 2026-10-08)
+
+The principle, in the user's words: everything that is fire-and-forget is async and non-blocking;
+only what must block (client-memory readback, glFinish, ClientWaitSync, ...) blocks. A reply the
+client can derive or pre-allocate (handles the client mints) is not a reason to block.
+
+| row | was | now | why |
+|---|---|---|---|
+| `Present` | kWaitPresent | keep | present pacing (the credit, now derived from `MOBILEGL_FRAMES_IN_FLIGHT`) |
+| `GetCaps` | kWaitReply | keep | the caps snapshot the app reads (startup only) |
+| `MapPersistent` | kWaitReply | keep | the map pointer the app writes through |
+| `FenceStatus`, `FenceWait` | kWaitReply | keep | glGetSync / glClientWaitSync answers |
+| `QueryAvailable`, `QueryResult`, `QueryTimestamp` | kWaitReply | keep | query results; an XFB primitives-written count blocks at the query read, never at End |
+| `ResourceReadback` | kWaitReply | keep | bytes for client memory |
+| `ReadPixels`, `GetTextureImage` | kWaitReply | keep for client memory; **async per call with a pack buffer bound** | the PBO path publishes the kWaitNone `*ToBuffer` record; the validate point now answers per call (`PackReadbackGoesToBuffer`), and the rare reply-form fallback re-validates barriered |
+| `SharedImage` | kWaitReply | keep | the server allocates the dma-buf: its fd, modifier and stride cannot be derived (anland only; a per-op relaxation for attach/present/release is a follow-up) |
+| `ResourceCreate` | kWaitReply | **async** on the shared-pool arm (inproc); the stream arm keeps its deferred create window | the handle is the client's own and the accept is derivable (the server declines only protocol corruption or a family with no consumer, which the client never emits for) |
+| `ResourceRespecify`, `SetTextureParams`, `ResourceSubData` | kWaitReply | already async per call once the object is published | with the create async the object is published at create, so the first-use wait is gone too |
+| `GenerateMipmap`, `ResourceCopyRegion`, `CopyFramebufferToTexture` | kWaitApplied | **kWaitNone** | applies resolve everything from the record's handles (P13 W4b/W4c); the dual-block census is empty |
+| `SetStorageBlockBinding` | kWaitApplied | **kWaitNone** | resolved through the record's program CSO (P5f) |
+| `Begin/End/Pause/ResumeStreamOutput`, `BindStreamOutput` | kWaitApplied | **kWaitNone** | the span lives server-side (P5f); a draw inside an open span is still barriered by the XFB clause, and the primitive count is answered at the query read |
+| `ApplierReset` | kWaitApplied | keep | once per make-current, and its apply probes the client allocator, which is only legal inside a parked scope; not on any per-frame path |
+
+And the cascade: with two `PipeInputs` blocks (`MOBILEGL_IPC_ROLE_SPLIT_STATE`, on by default since
+P15 - every split lane and the on-device gate already ran with it, and its census is empty) a
+barriered verb's fill writes the client's own block, so `QuiesceApplierBeforeFill` and the guard
+skip the applier quiesce. One barriered verb now costs one wait: its record's.
+
+## Rows that waited (the audit as reviewed)
 
 | row | class | why it waits today | FCL hits/frame | verdict |
 |---|---|---|---|---|
