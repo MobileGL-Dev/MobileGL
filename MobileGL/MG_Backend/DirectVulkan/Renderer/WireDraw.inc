@@ -127,28 +127,25 @@
         auto& frame = m_frameContext.GetCurrent();
         if (frame.isCommandRecording && VkRenderPassManager::GetActiveRenderPass())
             VkRenderPassManager::EndRenderPass(frame.commandBuffer);
-        const Uint32 frameIndex = m_frameContext.GetCurrentFrameIndex();
-        if (m_wireDrawPassCaches.size() < m_frameContext.GetFrameCount())
-            m_wireDrawPassCaches.resize(m_frameContext.GetFrameCount());
-        auto& cache = m_wireDrawPassCaches[frameIndex];
-        // Bound a present-less stream of distinct framebuffer configurations.
-        // Overflow retains the original submit-index retirement path.
-        constexpr SizeT kMaxCachedWirePassesPerFrame = 32;
-        if (cache.size() < kMaxCachedWirePassesPerFrame) {
-            cache.push_back({Move(m_wireDrawPassKey), Move(m_wireDrawPass), Move(m_wireDrawViews)});
-            return;
-        }
-        WireRetiredObjects retired{};
-        retired.drawPass = Move(m_wireDrawPass);
-        retired.imageViews = Move(m_wireDrawViews);
-        RetireWireObjects(Move(retired));
+        // The pass was recorded into the current recording: its last use is the next submission.
+        m_wireDrawPassCache.push_back(
+            {Move(m_wireDrawPassKey), Move(m_wireDrawPass), Move(m_wireDrawViews), GetWireNextSubmitIndex()});
         m_wireDrawPassKey = {};
+        // Bound a stream of distinct framebuffer configurations: the oldest entry goes through the
+        // submit-indexed retirement, which waits for its last use like every retired object.
+        constexpr SizeT kMaxCachedWirePasses = 64;
+        if (m_wireDrawPassCache.size() > kMaxCachedWirePasses) {
+            auto& oldest = m_wireDrawPassCache.front();
+            WireRetiredObjects retired{};
+            retired.drawPass = Move(oldest.pass);
+            retired.imageViews = Move(oldest.views);
+            RetireWireObjects(Move(retired));
+            m_wireDrawPassCache.erase(m_wireDrawPassCache.begin());
+        }
     }
 
     Bool VulkanRenderer::AcquireCachedWireDrawPass(const WireDrawPassKey& key) {
-        const Uint32 frameIndex = m_frameContext.GetCurrentFrameIndex();
-        if (frameIndex >= m_wireDrawPassCaches.size()) return false;
-        auto& cache = m_wireDrawPassCaches[frameIndex];
+        auto& cache = m_wireDrawPassCache;
         for (auto it = cache.begin(); it != cache.end(); ++it) {
             // Exact values, not a compatibility hash: two FBOs with the same
             // formats can name different images, windows or draw-buffer slots.
@@ -162,19 +159,47 @@
         return false;
     }
 
-    void VulkanRenderer::ClearWireDrawPassCache(Uint32 frameIndex) {
-        if (frameIndex >= m_wireDrawPassCaches.size()) return;
-        auto& cache = m_wireDrawPassCaches[frameIndex];
-        for (auto& entry : cache) {
-            entry.pass.reset();
-            for (const auto view : entry.views) vkDestroyImageView(m_device, view, nullptr);
-        }
-        cache.clear();
+    void VulkanRenderer::DestroyWireDrawPassCacheEntry(WireDrawPassCacheEntry& entry) {
+        entry.pass.reset();
+        for (const auto view : entry.views) vkDestroyImageView(m_device, view, nullptr);
+        entry.views.clear();
     }
 
+    // At a frame slot's begin, after its fence (Present): the slot's blit sets are free, and every
+    // cached pass whose image epochs moved - it can never hit again - is dropped before the texture
+    // manager may release retired images: destroyed now when its last use completed, else retired
+    // behind that use (which also keeps any image it names alive until then).
+    void VulkanRenderer::ClearWireDrawPassCache(Uint32 frameIndex) {
+        if (m_wireColorBlitResources) ResetWireColorBlitFramePool(frameIndex);
+        const Uint64 imageEpoch = m_textureManager->GetTextureImageEpoch();
+        const Uint64 eraseEpoch = m_textureManager->GetResourceEraseEpoch();
+        SizeT kept = 0;
+        for (SizeT i = 0; i < m_wireDrawPassCache.size(); ++i) {
+            auto& entry = m_wireDrawPassCache[i];
+            if (entry.key.textureImageEpoch == imageEpoch && entry.key.resourceEraseEpoch == eraseEpoch) {
+                if (kept != i) m_wireDrawPassCache[kept] = Move(entry);
+                ++kept;
+                continue;
+            }
+            if (entry.lastUseSubmit <= m_completedSubmitCounter) {
+                DestroyWireDrawPassCacheEntry(entry);
+            } else {
+                WireRetiredObjects retired{};
+                retired.drawPass = Move(entry.pass);
+                retired.imageViews = Move(entry.views);
+                RetireWireObjects(Move(retired));
+            }
+        }
+        m_wireDrawPassCache.resize(kept);
+    }
+
+    // Idle points only (shutdown, swapchain replacement, the device-idle drain): nothing in flight.
     void VulkanRenderer::ClearAllWireDrawPassCaches() {
-        for (Uint32 frameIndex = 0; frameIndex < m_wireDrawPassCaches.size(); ++frameIndex)
-            ClearWireDrawPassCache(frameIndex);
+        for (auto& entry : m_wireDrawPassCache) DestroyWireDrawPassCacheEntry(entry);
+        m_wireDrawPassCache.clear();
+        if (m_wireColorBlitResources)
+            for (Uint32 frameIndex = 0; frameIndex < m_frameContext.GetFrameCount(); ++frameIndex)
+                ResetWireColorBlitFramePool(frameIndex);
     }
 
     void VulkanRenderer::CollectWireObjects(Uint64 completedSubmit, Bool all) {
@@ -234,6 +259,217 @@
         }
         return true;
     }
+
+    // P15: the draw pass for `fbo`, continued (passContinues: the WirePassMemo holds) or
+    // looked up / built from a full attachment walk. Shared by SetupWireDraw and the in-pass
+    // clear (WireFramebuffer.inc): a clear into the attachments of the open pass is recorded
+    // inside it instead of closing it and building a pass of its own. Leaves m_wireDrawPass and
+    // m_wireDrawPassKey describing the pass, `continuing` true when it is the open one.
+    Bool VulkanRenderer::PrepareWireDrawPass(FrameContext::FrameData& frame,
+            const MG_Pipe::MGPFramebufferState& fbo, WireDrawScratch& scratch, Bool passContinues,
+            Bool& continuing) {
+        continuing = true;
+        if (passContinues) {
+            auto& store = MG_Record::ServerStagedTexture();
+            if (!m_wirePassMarksValid || m_wirePassMarksClearGeneration != store.GpuDirtyClearGeneration()) {
+                for (const auto& mark : m_wirePassMemo.marks)
+                    m_textureManager->MarkWireTextureGpuWritten(mark.storage, mark.level, mark.layer, mark.layers);
+                m_wirePassMarksValid = true;
+                m_wirePassMarksClearGeneration = store.GpuDirtyClearGeneration();
+            }
+        } else {
+        m_wirePassMemo.valid = false;
+        auto& attachments = scratch.attachments;
+        auto& viewInfos = scratch.viewInfos;
+        auto& colors = scratch.colors;
+        attachments.clear();
+        viewInfos.clear();
+        colors.clear();
+        VkAttachmentReference depth{VK_ATTACHMENT_UNUSED, VK_IMAGE_LAYOUT_GENERAL};
+        VkExtent2D extent{~0u, ~0u};
+        Uint32 layers = ~0u;
+        VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;
+        Uint64 passHash = 0;
+        auto& passKey = scratch.passKey;
+        passKey.ResetKeepingCapacity();
+        passKey.isDefault = fbo.IsDefault;
+        passKey.framebufferSrgb = MG_Pipe::gPipeInputs.IsCapabilityEnabled(CapabilityInput::FramebufferSrgb);
+        if (fbo.IsDefault) {
+            passKey.swapchain = m_swapchainObject.GetHandle();
+            // A drawing pass on the default framebuffer is what makes the freshly acquired
+            // swapchain image the one GL addresses (see m_defaultFramebufferImageIndex); the
+            // attachments below resolve the same index, so this key has to be taken after it.
+            passKey.swapchainImageIndex = DefaultFramebufferWriteIndex(true);
+        }
+        auto& sameLayoutAttachments = scratch.sameLayoutAttachments;
+        sameLayoutAttachments.clear();
+        scratch.gpuWriteMarks.clear();
+        m_wirePassMemo.attachments.clear();
+        const auto add = [&](const MG_Pipe::MGPSurface& surface, VkImageAspectFlags aspect) -> Uint32 {
+            WireImage image = ResolveWireImage(fbo, surface, aspect, /*isWriteTarget=*/true);
+            if (!image.image) return VK_ATTACHMENT_UNUSED;
+            m_textureManager->FlushPendingUploads();
+            m_wirePassMemo.attachments.push_back(
+                {image.resource, image.storage, surface.Kind == MG_Pipe::kMGPipeSurfaceKindRenderbuffer});
+            if (aspect == VK_IMAGE_ASPECT_COLOR_BIT)
+                image.format = ResolveSrgbAttachmentWriteFormat(image.format,
+                    MG_Pipe::gPipeInputs.IsCapabilityEnabled(CapabilityInput::FramebufferSrgb));
+            const VkImageLayout layout = aspect == VK_IMAGE_ASPECT_COLOR_BIT ?
+                VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_GENERAL;
+            // Already in its attachment layout: its barrier (which closes any open pass) waits until
+            // it is known whether the open pass continues with this very attachment.
+            if (image.layout == layout) sameLayoutAttachments.push_back(image);
+            else TransitionWireImage(image, layout);
+            VkImageViewCreateInfo info{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+            info.image = image.image;
+            info.viewType = image.viewType;
+            info.format = image.format;
+            info.subresourceRange = {aspect, image.level, 1, image.layer, image.layers};
+            if (image.format == VK_FORMAT_D24_UNORM_S8_UINT || image.format == VK_FORMAT_D32_SFLOAT_S8_UINT)
+                info.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
+            viewInfos.push_back(info);
+            passKey.attachments.push_back({image.storage, static_cast<Uint32>(surface.Kind), image.image,
+                image.viewType, image.format, info.subresourceRange.aspectMask, aspect,
+                image.level, image.layer, image.layers, image.levels, image.extent.width, image.extent.height,
+                image.samples});
+            VkAttachmentDescription description{};
+            description.format = image.format;
+            description.samples = image.samples;
+            description.loadOp = description.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+            description.storeOp = description.stencilStoreOp = VK_ATTACHMENT_STORE_OP_STORE;
+            description.initialLayout = description.finalLayout = layout;
+            attachments.push_back(description);
+            extent.width = std::min(extent.width, image.extent.width);
+            extent.height = std::min(extent.height, image.extent.height);
+            layers = std::min(layers, image.layers);
+            samples = image.samples;
+            passHash = XXH64(&description, sizeof(description), passHash);
+            // Marked below, once the pass is known: a continued pass repeats the same marks.
+            if (!image.isDefault && surface.Kind == MG_Pipe::kMGPipeSurfaceKindTexture)
+                scratch.gpuWriteMarks.push_back({image.storage, image.level, image.layer, image.layers});
+            if (image.isDefault) {
+                if (aspect == VK_IMAGE_ASPECT_COLOR_BIT) m_swapchainObject.SetImageContentDefined(image.swapchainImageIndex, true);
+                else m_swapchainObject.SetDepthStencilContentDefined(image.swapchainImageIndex, true);
+            }
+            return static_cast<Uint32>(attachments.size() - 1);
+        };
+        for (Uint32 i = 0; i < MG_Pipe::kMGPipeMaxColorAttachments; ++i) {
+            const Int32 slot = fbo.DrawBuffers[i];
+            const Uint32 index = slot < 0 ? VK_ATTACHMENT_UNUSED : add(fbo.Color[slot], VK_IMAGE_ASPECT_COLOR_BIT);
+            colors.push_back({index, VK_IMAGE_LAYOUT_GENERAL});
+        }
+        while (!colors.empty() && colors.back().attachment == VK_ATTACHMENT_UNUSED) colors.pop_back();
+        if (fbo.IsDefault || fbo.Depth.Kind != MG_Pipe::kMGPipeSurfaceKindNone)
+            depth.attachment = add(fbo.Depth, VK_IMAGE_ASPECT_DEPTH_BIT);
+        else if (fbo.Stencil.Kind != MG_Pipe::kMGPipeSurfaceKindNone)
+            depth.attachment = add(fbo.Stencil, VK_IMAGE_ASPECT_STENCIL_BIT);
+        if (attachments.empty()) {
+            MGL_WIRE_DECLINE_AT(NoAttachments, "the draw framebuffer resolved to no attachments");
+            return false;
+        }
+        passKey.width = extent.width;
+        passKey.height = extent.height;
+        passKey.layers = layers;
+        passKey.depthReference = depth.attachment;
+        for (const auto& color : colors) passKey.colorReferences.push_back(color.attachment);
+        // A native handle can be recycled after image replacement or death.
+        // Sample epochs after every lazy resolve, then compare them with the key.
+        passKey.textureImageEpoch = m_textureManager->GetTextureImageEpoch();
+        passKey.resourceEraseEpoch = m_textureManager->GetResourceEraseEpoch();
+        VkSubpassDescription subpass{};
+        subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+        subpass.colorAttachmentCount = static_cast<Uint32>(colors.size());
+        subpass.pColorAttachments = colors.data();
+        subpass.pDepthStencilAttachment = depth.attachment != VK_ATTACHMENT_UNUSED ? &depth : nullptr;
+        VkRenderPassCreateInfo passInfo{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};
+        passInfo.attachmentCount = static_cast<Uint32>(attachments.size());
+        passInfo.pAttachments = attachments.data();
+        passInfo.subpassCount = 1;
+        passInfo.pSubpasses = &subpass;
+        continuing = m_wireDrawPass && m_wireDrawPassKey == passKey;
+        {
+            const auto* active = VkRenderPassManager::GetActiveRenderPass();
+            const Bool stillOpen = continuing && active != nullptr && active->commandBuffer == frame.commandBuffer;
+            // A new pass orders itself after earlier writes to its attachments; a continued one
+            // is the same pass, whose attachment writes are ordered by rasterization.
+            if (!stillOpen)
+                for (auto& image : sameLayoutAttachments) TransitionWireImage(image, VK_IMAGE_LAYOUT_GENERAL);
+        }
+        if (!continuing) {
+            RetireWireDrawPass();
+            m_wireDrawPassCompatibilityId = 0;
+        }
+        if (!continuing && !AcquireCachedWireDrawPass(passKey)) {
+            // A copy, not a move: passKey is the scratch's, and a new pass is the rare case.
+            m_wireDrawPassKey = passKey;
+            Vector<VkImageView> views;
+            views.reserve(viewInfos.size());
+            for (const auto& info : viewInfos) {
+                VkImageView view = VK_NULL_HANDLE;
+                VK_VERIFY(vkCreateImageView(m_device, &info, nullptr, &view));
+                m_wireDrawViews.push_back(view);
+                views.push_back(view);
+            }
+            m_wireDrawPass = MakeUnique<RenderPassEntry>();
+            auto& created = *m_wireDrawPass;
+            VK_VERIFY(vkCreateRenderPass(m_device, &passInfo, nullptr, &created.renderPass));
+            VkFramebufferCreateInfo fbInfo{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
+            fbInfo.renderPass = created.renderPass;
+            fbInfo.attachmentCount = static_cast<Uint32>(views.size());
+            fbInfo.pAttachments = views.data();
+            fbInfo.width = extent.width; fbInfo.height = extent.height; fbInfo.layers = layers;
+            VK_VERIFY(vkCreateFramebuffer(m_device, &fbInfo, nullptr, &created.framebuffer));
+            created.attachmentCount = static_cast<Uint32>(attachments.size());
+            created.colorAttachmentCount = static_cast<Uint32>(colors.size());
+            created.hasDepthStencilAttachment = depth.attachment != VK_ATTACHMENT_UNUSED;
+            created.sampleCount = samples;
+            created.extent = {static_cast<Int>(extent.width), static_cast<Int>(extent.height)};
+            created.layers = layers;
+            created.hash = created.compatibilityHash = XXH64(colors.data(), colors.size() * sizeof(colors[0]), passHash);
+        }
+        // The attachments' GPU-write marks (MarkWireTextureGpuWritten): idempotent while nothing
+        // clears a GPU-dirty mark, so a draw that continues a pass whose draws already marked the
+        // same attachments - the pass key compared equal - repeats them only after a clear.
+        {
+            auto& store = MG_Record::ServerStagedTexture();
+            if (!continuing || !m_wirePassMarksValid ||
+                m_wirePassMarksClearGeneration != store.GpuDirtyClearGeneration()) {
+                for (const auto& mark : scratch.gpuWriteMarks)
+                    m_textureManager->MarkWireTextureGpuWritten(mark.storage, mark.level, mark.layer, mark.layers);
+                m_wirePassMarksValid = true;
+                m_wirePassMarksClearGeneration = store.GpuDirtyClearGeneration();
+            }
+        }
+        {
+            // What this walk proved, for WirePassMemoHolds on the next draw.
+            const auto& st = MG_Pipe::MGPipeApplier();
+            auto& memo = m_wirePassMemo;
+            memo.valid = !fbo.IsDefault;
+            memo.framebufferSerial = st.FramebufferSerial;
+            memo.contextSerial = st.ContextSerial;
+            memo.drawFramebuffer = st.BoundFramebuffer[SizeT(MG_Pipe::MGPipeFramebufferTarget::Draw)];
+            memo.textureImageEpoch = m_textureManager->GetTextureImageEpoch();
+            memo.resourceEraseEpoch = m_textureManager->GetResourceEraseEpoch();
+            memo.framebufferSrgb = MG_Pipe::gPipeInputs.IsCapabilityEnabled(CapabilityInput::FramebufferSrgb);
+            memo.passHash = m_wireDrawPass->hash;
+            memo.marks.assign(scratch.gpuWriteMarks.begin(), scratch.gpuWriteMarks.end());
+        }
+        // The compatibility key is built from this walk's attachments only when the pass is new.
+        if (m_wireDrawPassCompatibilityId == 0) {
+            auto& pipelinePassKey = scratch.compatibilityKey;
+            pipelinePassKey.attachmentFormatsAndSamples.clear();
+            pipelinePassKey.colorReferences.clear();
+            for (const auto& attachment : attachments)
+                pipelinePassKey.attachmentFormatsAndSamples.push_back(
+                    (static_cast<Uint64>(attachment.format) << 32) | static_cast<Uint32>(attachment.samples));
+            for (const auto& color : colors) pipelinePassKey.colorReferences.push_back(color.attachment);
+            pipelinePassKey.depthReference = depth.attachment;
+            m_wireDrawPassCompatibilityId = m_wireRenderPassCompatibility.Intern(pipelinePassKey);
+        }
+        } // !passContinues
+        return true;
+    }
+
 
     Bool VulkanRenderer::SetupWireDraw(FrameContext::FrameData& frame, GLenum mode,
             Flags<DrawSetupAspect> aspects, const DrawCmdParam& drawParams, const IndexBufferView* indices) {
@@ -533,204 +769,7 @@
         if (passContinues) passContinues = WirePassMemoHolds(*fbo, frame);
         // A memo that holds is the open pass itself (WirePassMemoHolds compared the active pass).
         Bool continuing = true;
-        if (passContinues) {
-            auto& store = MG_Record::ServerStagedTexture();
-            if (!m_wirePassMarksValid || m_wirePassMarksClearGeneration != store.GpuDirtyClearGeneration()) {
-                for (const auto& mark : m_wirePassMemo.marks)
-                    m_textureManager->MarkWireTextureGpuWritten(mark.storage, mark.level, mark.layer, mark.layers);
-                m_wirePassMarksValid = true;
-                m_wirePassMarksClearGeneration = store.GpuDirtyClearGeneration();
-            }
-        } else {
-        m_wirePassMemo.valid = false;
-        auto& attachments = scratch.attachments;
-        auto& viewInfos = scratch.viewInfos;
-        auto& colors = scratch.colors;
-        attachments.clear();
-        viewInfos.clear();
-        colors.clear();
-        VkAttachmentReference depth{VK_ATTACHMENT_UNUSED, VK_IMAGE_LAYOUT_GENERAL};
-        VkExtent2D extent{~0u, ~0u};
-        Uint32 layers = ~0u;
-        VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;
-        Uint64 passHash = 0;
-        auto& passKey = scratch.passKey;
-        passKey.ResetKeepingCapacity();
-        passKey.isDefault = fbo->IsDefault;
-        passKey.framebufferSrgb = MG_Pipe::gPipeInputs.IsCapabilityEnabled(CapabilityInput::FramebufferSrgb);
-        if (fbo->IsDefault) {
-            passKey.swapchain = m_swapchainObject.GetHandle();
-            // A drawing pass on the default framebuffer is what makes the freshly acquired
-            // swapchain image the one GL addresses (see m_defaultFramebufferImageIndex); the
-            // attachments below resolve the same index, so this key has to be taken after it.
-            passKey.swapchainImageIndex = DefaultFramebufferWriteIndex(true);
-        }
-        auto& sameLayoutAttachments = scratch.sameLayoutAttachments;
-        sameLayoutAttachments.clear();
-        scratch.gpuWriteMarks.clear();
-        m_wirePassMemo.attachments.clear();
-        const auto add = [&](const MG_Pipe::MGPSurface& surface, VkImageAspectFlags aspect) -> Uint32 {
-            WireImage image = ResolveWireImage(*fbo, surface, aspect, /*isWriteTarget=*/true);
-            if (!image.image) return VK_ATTACHMENT_UNUSED;
-            m_textureManager->FlushPendingUploads();
-            m_wirePassMemo.attachments.push_back(
-                {image.resource, image.storage, surface.Kind == MG_Pipe::kMGPipeSurfaceKindRenderbuffer});
-            if (aspect == VK_IMAGE_ASPECT_COLOR_BIT)
-                image.format = ResolveSrgbAttachmentWriteFormat(image.format,
-                    MG_Pipe::gPipeInputs.IsCapabilityEnabled(CapabilityInput::FramebufferSrgb));
-            const VkImageLayout layout = aspect == VK_IMAGE_ASPECT_COLOR_BIT ?
-                VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_GENERAL;
-            // Already in its attachment layout: its barrier (which closes any open pass) waits until
-            // it is known whether the open pass continues with this very attachment.
-            if (image.layout == layout) sameLayoutAttachments.push_back(image);
-            else TransitionWireImage(image, layout);
-            VkImageViewCreateInfo info{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
-            info.image = image.image;
-            info.viewType = image.viewType;
-            info.format = image.format;
-            info.subresourceRange = {aspect, image.level, 1, image.layer, image.layers};
-            if (image.format == VK_FORMAT_D24_UNORM_S8_UINT || image.format == VK_FORMAT_D32_SFLOAT_S8_UINT)
-                info.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
-            viewInfos.push_back(info);
-            passKey.attachments.push_back({image.storage, static_cast<Uint32>(surface.Kind), image.image,
-                image.viewType, image.format, info.subresourceRange.aspectMask, aspect,
-                image.level, image.layer, image.layers, image.levels, image.extent.width, image.extent.height,
-                image.samples});
-            VkAttachmentDescription description{};
-            description.format = image.format;
-            description.samples = image.samples;
-            description.loadOp = description.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
-            description.storeOp = description.stencilStoreOp = VK_ATTACHMENT_STORE_OP_STORE;
-            description.initialLayout = description.finalLayout = layout;
-            attachments.push_back(description);
-            extent.width = std::min(extent.width, image.extent.width);
-            extent.height = std::min(extent.height, image.extent.height);
-            layers = std::min(layers, image.layers);
-            samples = image.samples;
-            passHash = XXH64(&description, sizeof(description), passHash);
-            // Marked below, once the pass is known: a continued pass repeats the same marks.
-            if (!image.isDefault && surface.Kind == MG_Pipe::kMGPipeSurfaceKindTexture)
-                scratch.gpuWriteMarks.push_back({image.storage, image.level, image.layer, image.layers});
-            if (image.isDefault) {
-                if (aspect == VK_IMAGE_ASPECT_COLOR_BIT) m_swapchainObject.SetImageContentDefined(image.swapchainImageIndex, true);
-                else m_swapchainObject.SetDepthStencilContentDefined(image.swapchainImageIndex, true);
-            }
-            return static_cast<Uint32>(attachments.size() - 1);
-        };
-        for (Uint32 i = 0; i < MG_Pipe::kMGPipeMaxColorAttachments; ++i) {
-            const Int32 slot = fbo->DrawBuffers[i];
-            const Uint32 index = slot < 0 ? VK_ATTACHMENT_UNUSED : add(fbo->Color[slot], VK_IMAGE_ASPECT_COLOR_BIT);
-            colors.push_back({index, VK_IMAGE_LAYOUT_GENERAL});
-        }
-        while (!colors.empty() && colors.back().attachment == VK_ATTACHMENT_UNUSED) colors.pop_back();
-        if (fbo->IsDefault || fbo->Depth.Kind != MG_Pipe::kMGPipeSurfaceKindNone)
-            depth.attachment = add(fbo->Depth, VK_IMAGE_ASPECT_DEPTH_BIT);
-        else if (fbo->Stencil.Kind != MG_Pipe::kMGPipeSurfaceKindNone)
-            depth.attachment = add(fbo->Stencil, VK_IMAGE_ASPECT_STENCIL_BIT);
-        if (attachments.empty()) {
-            MGL_WIRE_DECLINE_AT(NoAttachments, "the draw framebuffer resolved to no attachments");
-            return false;
-        }
-        passKey.width = extent.width;
-        passKey.height = extent.height;
-        passKey.layers = layers;
-        passKey.depthReference = depth.attachment;
-        for (const auto& color : colors) passKey.colorReferences.push_back(color.attachment);
-        // A native handle can be recycled after image replacement or death.
-        // Sample epochs after every lazy resolve, then compare them with the key.
-        passKey.textureImageEpoch = m_textureManager->GetTextureImageEpoch();
-        passKey.resourceEraseEpoch = m_textureManager->GetResourceEraseEpoch();
-        VkSubpassDescription subpass{};
-        subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-        subpass.colorAttachmentCount = static_cast<Uint32>(colors.size());
-        subpass.pColorAttachments = colors.data();
-        subpass.pDepthStencilAttachment = depth.attachment != VK_ATTACHMENT_UNUSED ? &depth : nullptr;
-        VkRenderPassCreateInfo passInfo{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};
-        passInfo.attachmentCount = static_cast<Uint32>(attachments.size());
-        passInfo.pAttachments = attachments.data();
-        passInfo.subpassCount = 1;
-        passInfo.pSubpasses = &subpass;
-        continuing = m_wireDrawPass && m_wireDrawPassKey == passKey;
-        {
-            const auto* active = VkRenderPassManager::GetActiveRenderPass();
-            const Bool stillOpen = continuing && active != nullptr && active->commandBuffer == frame.commandBuffer;
-            // A new pass orders itself after earlier writes to its attachments; a continued one
-            // is the same pass, whose attachment writes are ordered by rasterization.
-            if (!stillOpen)
-                for (auto& image : sameLayoutAttachments) TransitionWireImage(image, VK_IMAGE_LAYOUT_GENERAL);
-        }
-        if (!continuing) {
-            RetireWireDrawPass();
-            m_wireDrawPassCompatibilityId = 0;
-        }
-        if (!continuing && !AcquireCachedWireDrawPass(passKey)) {
-            // A copy, not a move: passKey is the scratch's, and a new pass is the rare case.
-            m_wireDrawPassKey = passKey;
-            Vector<VkImageView> views;
-            views.reserve(viewInfos.size());
-            for (const auto& info : viewInfos) {
-                VkImageView view = VK_NULL_HANDLE;
-                VK_VERIFY(vkCreateImageView(m_device, &info, nullptr, &view));
-                m_wireDrawViews.push_back(view);
-                views.push_back(view);
-            }
-            m_wireDrawPass = MakeUnique<RenderPassEntry>();
-            auto& created = *m_wireDrawPass;
-            VK_VERIFY(vkCreateRenderPass(m_device, &passInfo, nullptr, &created.renderPass));
-            VkFramebufferCreateInfo fbInfo{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
-            fbInfo.renderPass = created.renderPass;
-            fbInfo.attachmentCount = static_cast<Uint32>(views.size());
-            fbInfo.pAttachments = views.data();
-            fbInfo.width = extent.width; fbInfo.height = extent.height; fbInfo.layers = layers;
-            VK_VERIFY(vkCreateFramebuffer(m_device, &fbInfo, nullptr, &created.framebuffer));
-            created.attachmentCount = static_cast<Uint32>(attachments.size());
-            created.colorAttachmentCount = static_cast<Uint32>(colors.size());
-            created.hasDepthStencilAttachment = depth.attachment != VK_ATTACHMENT_UNUSED;
-            created.sampleCount = samples;
-            created.extent = {static_cast<Int>(extent.width), static_cast<Int>(extent.height)};
-            created.layers = layers;
-            created.hash = created.compatibilityHash = XXH64(colors.data(), colors.size() * sizeof(colors[0]), passHash);
-        }
-        // The attachments' GPU-write marks (MarkWireTextureGpuWritten): idempotent while nothing
-        // clears a GPU-dirty mark, so a draw that continues a pass whose draws already marked the
-        // same attachments - the pass key compared equal - repeats them only after a clear.
-        {
-            auto& store = MG_Record::ServerStagedTexture();
-            if (!continuing || !m_wirePassMarksValid ||
-                m_wirePassMarksClearGeneration != store.GpuDirtyClearGeneration()) {
-                for (const auto& mark : scratch.gpuWriteMarks)
-                    m_textureManager->MarkWireTextureGpuWritten(mark.storage, mark.level, mark.layer, mark.layers);
-                m_wirePassMarksValid = true;
-                m_wirePassMarksClearGeneration = store.GpuDirtyClearGeneration();
-            }
-        }
-        {
-            // What this walk proved, for WirePassMemoHolds on the next draw.
-            const auto& st = MG_Pipe::MGPipeApplier();
-            auto& memo = m_wirePassMemo;
-            memo.valid = !fbo->IsDefault;
-            memo.framebufferSerial = st.FramebufferSerial;
-            memo.contextSerial = st.ContextSerial;
-            memo.drawFramebuffer = st.BoundFramebuffer[SizeT(MG_Pipe::MGPipeFramebufferTarget::Draw)];
-            memo.textureImageEpoch = m_textureManager->GetTextureImageEpoch();
-            memo.resourceEraseEpoch = m_textureManager->GetResourceEraseEpoch();
-            memo.framebufferSrgb = MG_Pipe::gPipeInputs.IsCapabilityEnabled(CapabilityInput::FramebufferSrgb);
-            memo.passHash = m_wireDrawPass->hash;
-            memo.marks.assign(scratch.gpuWriteMarks.begin(), scratch.gpuWriteMarks.end());
-        }
-        // The compatibility key is built from this walk's attachments only when the pass is new.
-        if (m_wireDrawPassCompatibilityId == 0) {
-            auto& pipelinePassKey = scratch.compatibilityKey;
-            pipelinePassKey.attachmentFormatsAndSamples.clear();
-            pipelinePassKey.colorReferences.clear();
-            for (const auto& attachment : attachments)
-                pipelinePassKey.attachmentFormatsAndSamples.push_back(
-                    (static_cast<Uint64>(attachment.format) << 32) | static_cast<Uint32>(attachment.samples));
-            for (const auto& color : colors) pipelinePassKey.colorReferences.push_back(color.attachment);
-            pipelinePassKey.depthReference = depth.attachment;
-            m_wireDrawPassCompatibilityId = m_wireRenderPassCompatibility.Intern(pipelinePassKey);
-        }
-        } // !passContinues
+        if (!PrepareWireDrawPass(frame, *fbo, scratch, passContinues, continuing)) return false;
         auto& pass = *m_wireDrawPass;
         // Interned once per pass (above): a continued pass has the same compatibility.
         const Uint64 compatibilityId = m_wireDrawPassCompatibilityId;
@@ -824,6 +863,150 @@
         if (programObj.hasStorageImages) BumpWireImageWriteEpoch();
         if (MG_Util::PipeStats::Enabled()) MG_Util::PipeStats::AddCalls(MG_Util::PipeStats::CallClass::Draws, 1);
         return true;
+    }
+
+    // P15 S0: A CLEAR INTO THE OPEN PASS'S ATTACHMENTS IS RECORDED INSIDE THE PASS.
+    //
+    // The standalone path (ClearWireFramebuffer's per-surface lambda) closes the draw pass, then
+    // builds an image view, a render pass and a framebuffer for every cleared surface, runs a pass
+    // of its own and retires all three: about 70 us a clear on Adreno 750, and every following draw
+    // to the same framebuffer opens a new pass (FCL MC 1.21.5: 6 clears a frame, 0.42 ms). Here the
+    // clear takes the pass a draw to this framebuffer would use (PrepareWireDrawPass: the open one,
+    // a cached one, or a new one through the same walk) and becomes a vkCmdClearAttachments in it,
+    // so the draws after it continue the same pass.
+    //
+    // vkCmdClearAttachments inside the subpass is ordered with the pass's draws as a draw is, writes
+    // through the same attachment views (the UNORM twin of an sRGB image while GL_FRAMEBUFFER_SRGB
+    // is off, which is exactly GL's raw clear - no pre-compensation), and needs no layout change:
+    // wire attachments live in GENERAL. What it cannot express goes back to the standalone path,
+    // per GL buffer bit: a partial colour or stencil write mask (that path warns and skips, as
+    // before), an attachment whose extent or layer count differs from the pass's (the pass covers the
+    // common area only), and a stencil clear the pass's depth attachment does not carry.
+    GLbitfield VulkanRenderer::ClearWireFramebufferInPass(const MG_Pipe::MGPFramebufferState& fbo,
+            const ClearAttachmentPayload& payload, GLint drawbuffer) {
+        GLbitfield remaining = payload.mask & (GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+        if (!remaining || MG_Config::Features.MagmaInPassClear == MG_Config::QuirkOverride::ForceOff) return remaining;
+        // Nested inside a draw's preparation the scratch and the pass belong to that draw.
+        if (m_wirePreparationDepth != 0) return remaining;
+        auto& frame = m_frameContext.GetCurrent();
+        WirePreparationScope preparing(m_wirePreparationDepth);
+        // As SetupWireDraw: resolve every attachment (a lazy upload or promotion may submit the
+        // recording) before the pass is chosen, unless the open pass provably holds them.
+        Bool passContinues = WirePassMemoHolds(fbo, frame);
+        if (!passContinues) {
+            for (Uint32 i = 0; i < MG_Pipe::kMGPipeMaxColorAttachments; ++i) {
+                const Int32 slot = fbo.DrawBuffers[i];
+                if (slot >= 0) (void)ResolveWireImage(fbo, fbo.Color[slot], VK_IMAGE_ASPECT_COLOR_BIT);
+            }
+            if (fbo.IsDefault || fbo.Depth.Kind != MG_Pipe::kMGPipeSurfaceKindNone)
+                (void)ResolveWireImage(fbo, fbo.Depth, VK_IMAGE_ASPECT_DEPTH_BIT);
+            else if (fbo.Stencil.Kind != MG_Pipe::kMGPipeSurfaceKindNone)
+                (void)ResolveWireImage(fbo, fbo.Stencil, VK_IMAGE_ASPECT_STENCIL_BIT);
+        }
+        m_textureManager->FlushPendingUploads();
+        if (!frame.isCommandRecording) m_frameContext.BeginCommandRecording();
+        if (passContinues) passContinues = WirePassMemoHolds(fbo, frame);
+        Bool continuing = true;
+        if (!PrepareWireDrawPass(frame, fbo, m_wireDrawScratch, passContinues, continuing)) return remaining;
+        const auto& key = m_wireDrawPassKey;
+        auto& pass = *m_wireDrawPass;
+        const auto fits = [&](Uint32 attachment) {
+            if (attachment >= key.attachments.size()) return false;
+            const auto& a = key.attachments[attachment];
+            return a.width == key.width && a.height == key.height && a.layers == key.layers;
+        };
+
+        VkClearAttachment clears[MG_Pipe::kMGPipeMaxColorAttachments + 1]{};
+        Uint32 count = 0;
+        GLbitfield handled = 0;
+        if (remaining & GL_COLOR_BUFFER_BIT) {
+            Bool all = true;
+            Uint32 colorCount = 0;
+            VkClearAttachment colorClears[MG_Pipe::kMGPipeMaxColorAttachments]{};
+            for (Uint32 i = 0; i < MG_Pipe::kMGPipeMaxColorAttachments && all; ++i) {
+                if (drawbuffer >= 0 && static_cast<Uint32>(drawbuffer) != i) continue;
+                const Int32 attachment = fbo.DrawBuffers[i];
+                if (attachment < 0 || attachment >= static_cast<Int32>(MG_Pipe::kMGPipeMaxColorAttachments)) continue;
+                if (!fbo.IsDefault && fbo.Color[attachment].Kind == MG_Pipe::kMGPipeSurfaceKindNone) continue;
+                const auto mask = MG_Pipe::gPipeInputs.GetColorMaskIndexed(i);
+                if (!mask.r() && !mask.g() && !mask.b() && !mask.a()) continue;
+                if (!mask.r() || !mask.g() || !mask.b() || !mask.a()) { all = false; break; }
+                if (i >= key.colorReferences.size() || key.colorReferences[i] == VK_ATTACHMENT_UNUSED ||
+                    !fits(key.colorReferences[i])) { all = false; break; }
+                auto& clear = colorClears[colorCount++];
+                clear.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                clear.colorAttachment = i;
+                clear.clearValue.color = MakeVkClearColorValue(payload, false);
+            }
+            if (all) {
+                for (Uint32 c = 0; c < colorCount; ++c) clears[count++] = colorClears[c];
+                handled |= GL_COLOR_BUFFER_BIT;
+            }
+        }
+        const WireDrawAttachmentKey* depthKey =
+            key.depthReference != VK_ATTACHMENT_UNUSED && fits(key.depthReference) ? &key.attachments[key.depthReference]
+                                                                                    : nullptr;
+        VkImageAspectFlags depthStencilAspects = 0;
+        if (remaining & GL_DEPTH_BUFFER_BIT) {
+            if (!MG_Pipe::gPipeInputs.GetDepthMask()) {
+                handled |= GL_DEPTH_BUFFER_BIT; // nothing to write, as on the standalone path
+            } else if (!fbo.IsDefault && fbo.Depth.Kind == MG_Pipe::kMGPipeSurfaceKindNone) {
+                handled |= GL_DEPTH_BUFFER_BIT; // no depth surface: nothing to clear
+            } else if (depthKey && depthKey->requestedAspect == VK_IMAGE_ASPECT_DEPTH_BIT &&
+                       (depthKey->aspect & VK_IMAGE_ASPECT_DEPTH_BIT)) {
+                depthStencilAspects |= VK_IMAGE_ASPECT_DEPTH_BIT;
+                handled |= GL_DEPTH_BUFFER_BIT;
+            }
+        }
+        if (remaining & GL_STENCIL_BUFFER_BIT) {
+            const Uint32 mask = MG_Pipe::gPipeInputs.GetStencilState(StencilFace::Front).WriteMask & 255u;
+            if (mask == 0) {
+                handled |= GL_STENCIL_BUFFER_BIT;
+            } else if (!fbo.IsDefault && fbo.Stencil.Kind == MG_Pipe::kMGPipeSurfaceKindNone) {
+                handled |= GL_STENCIL_BUFFER_BIT;
+            } else if (mask == 255u && depthKey && (depthKey->aspect & VK_IMAGE_ASPECT_STENCIL_BIT)) {
+                // The pass's depth/stencil attachment is the stencil surface itself: a stencil-only
+                // framebuffer, the default framebuffer, or a depth surface that is the same image
+                // subresource (a DEPTH_STENCIL attachment point).
+                const auto& depth = fbo.Depth;
+                const auto& stencil = fbo.Stencil;
+                const Bool same = fbo.IsDefault || depthKey->requestedAspect == VK_IMAGE_ASPECT_STENCIL_BIT ||
+                    (depth.Kind == stencil.Kind && depth.Res == stencil.Res &&
+                     depth.Level == stencil.Level && depth.Layer == stencil.Layer && depth.Layered == stencil.Layered);
+                if (same) {
+                    depthStencilAspects |= VK_IMAGE_ASPECT_STENCIL_BIT;
+                    handled |= GL_STENCIL_BUFFER_BIT;
+                }
+            }
+        }
+        if (depthStencilAspects) {
+            auto& clear = clears[count++];
+            clear.aspectMask = depthStencilAspects;
+            clear.clearValue.depthStencil = {payload.depth, payload.stencil};
+        }
+        if (count == 0) return remaining & ~handled;
+
+        VkRect2D area{{0, 0}, {key.width, key.height}};
+        if (MG_Pipe::gPipeInputs.IsCapabilityEnabled(CapabilityInput::ScissorTest)) {
+            const auto& box = MG_Pipe::gPipeInputs.GetScissorBox();
+            const Int32 x0 = std::max(box.x(), 0), y0 = std::max(box.y(), 0);
+            const Int32 x1 = std::min(box.x() + box.z(), static_cast<Int32>(key.width));
+            const Int32 y1 = std::min(box.y() + box.w(), static_cast<Int32>(key.height));
+            if (x0 >= x1 || y0 >= y1) return remaining & ~(handled | GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT |
+                                                           GL_STENCIL_BUFFER_BIT); // an empty box clears nothing
+            area = {{x0, y0}, {static_cast<Uint32>(x1 - x0), static_cast<Uint32>(y1 - y0)}};
+            if (fbo.IsDefault && !MapDefaultFramebufferReadbackRect(x0, y0, x1 - x0, y1 - y0, VkExtent2D{key.width, key.height},
+                    m_swapchainObject.GetPreTransform(), &area.offset, &area.extent))
+                MagmaWireFatal("clear-surface-transform");
+        }
+        const auto* active = VkRenderPassManager::GetActiveRenderPass();
+        const Bool open = continuing && active != nullptr && active->commandBuffer == frame.commandBuffer &&
+                          active->hash == pass.hash;
+        if (!open && active != nullptr) VkRenderPassManager::EndRenderPass(frame.commandBuffer);
+        if (!open && !VkRenderPassManager::BeginRenderPass(frame.commandBuffer, pass)) return remaining;
+        const VkClearRect rect{area, 0, key.layers};
+        vkCmdClearAttachments(frame.commandBuffer, count, clears, 1, &rect);
+        return remaining & ~handled;
     }
 
     // ---- P8-D: THE WIRE ARM'S INDIRECT DRAWS READ THEIR WORDS ON THE GPU ----------------------

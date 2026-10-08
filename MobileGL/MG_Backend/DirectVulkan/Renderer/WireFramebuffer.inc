@@ -231,7 +231,13 @@
     }
 
     void VulkanRenderer::ClearWireFramebuffer(const MG_Pipe::MGPFramebufferState& fbo,
-                                              const ClearAttachmentPayload& payload, GLint drawbuffer) {
+                                              const ClearAttachmentPayload& clearRequest, GLint drawbuffer) {
+        if (MG_Pipe::gPipeInputs.IsCapabilityEnabled(CapabilityInput::RasterizerDiscard)) return;
+        // P15 S0: what the draw pass can take is cleared inside it (ClearWireFramebufferInPass,
+        // WireDraw.inc); only the buffers it hands back take the standalone pass below.
+        ClearAttachmentPayload payload = clearRequest;
+        payload.mask = ClearWireFramebufferInPass(fbo, clearRequest, drawbuffer);
+        if (!payload.mask) return;
         RetireWireDrawPass();
         // A stream that neither presents nor finishes (an off-screen loop) never submits, so its
         // recording and the per-clear objects retired below would grow until host memory runs

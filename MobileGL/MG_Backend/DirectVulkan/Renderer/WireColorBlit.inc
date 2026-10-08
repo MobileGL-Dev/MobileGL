@@ -14,7 +14,18 @@
         VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
         VkSampler nearest = VK_NULL_HANDLE, linear = VK_NULL_HANDLE;
         Vector<Target> targets;
+        // P15 S0: one descriptor pool per frame slot for the blit's set, reset when the slot's
+        // previous recording is known complete (ClearWireDrawPassCache). A pool created and
+        // destroyed per blit was ~0.16 ms a blit on Adreno 750. A full pool falls back to that.
+        static constexpr Uint32 kFramePoolSets = 64;
+        Vector<VkDescriptorPool> framePools;
     };
+
+    void VulkanRenderer::ResetWireColorBlitFramePool(Uint32 frameIndex) {
+        auto& pools = m_wireColorBlitResources->framePools;
+        if (frameIndex < pools.size() && pools[frameIndex] != VK_NULL_HANDLE)
+            vkResetDescriptorPool(m_device, pools[frameIndex], 0);
+    }
 
     void VulkanRenderer::DestroyWireColorBlitResources() {
         if (!m_wireColorBlitResources) return;
@@ -25,6 +36,8 @@
             vkDestroyPipeline(m_device, target.pipeline, nullptr);
             vkDestroyRenderPass(m_device, target.renderPass, nullptr);
         }
+        for (const auto pool : cache.framePools)
+            if (pool != VK_NULL_HANDLE) vkDestroyDescriptorPool(m_device, pool, nullptr);
         vkDestroySampler(m_device, cache.nearest, nullptr);
         vkDestroySampler(m_device, cache.linear, nullptr);
         vkDestroyPipelineLayout(m_device, cache.pipelineLayout, nullptr);
@@ -328,17 +341,36 @@
         // would rewrite the source view of an older queued blit.
         VkDescriptorPool descriptorPool = VK_NULL_HANDLE;
         VkDescriptorSet descriptorSet = VK_NULL_HANDLE;
-        const VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1};
-        VkDescriptorPoolCreateInfo pool{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-        pool.maxSets = 1;
-        pool.poolSizeCount = 1;
-        pool.pPoolSizes = &poolSize;
-        VK_VERIFY(vkCreateDescriptorPool(m_device, &pool, nullptr, &descriptorPool));
         VkDescriptorSetAllocateInfo alloc{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
-        alloc.descriptorPool = descriptorPool;
         alloc.descriptorSetCount = 1;
         alloc.pSetLayouts = &cache.descriptorLayout;
-        VK_VERIFY(vkAllocateDescriptorSets(m_device, &alloc, &descriptorSet));
+        {
+            // The frame slot's pool (P15 S0): its sets live until the slot's next frame begins,
+            // which is after this recording completed.
+            const Uint32 frameIndex = m_frameContext.GetCurrentFrameIndex();
+            if (cache.framePools.size() <= frameIndex) cache.framePools.resize(frameIndex + 1, VK_NULL_HANDLE);
+            if (cache.framePools[frameIndex] == VK_NULL_HANDLE) {
+                const VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                                                    WireColorBlitResources::kFramePoolSets};
+                VkDescriptorPoolCreateInfo pool{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+                pool.maxSets = WireColorBlitResources::kFramePoolSets;
+                pool.poolSizeCount = 1;
+                pool.pPoolSizes = &poolSize;
+                VK_VERIFY(vkCreateDescriptorPool(m_device, &pool, nullptr, &cache.framePools[frameIndex]));
+            }
+            alloc.descriptorPool = cache.framePools[frameIndex];
+            if (vkAllocateDescriptorSets(m_device, &alloc, &descriptorSet) != VK_SUCCESS) descriptorSet = VK_NULL_HANDLE;
+        }
+        if (descriptorSet == VK_NULL_HANDLE) {
+            const VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1};
+            VkDescriptorPoolCreateInfo pool{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+            pool.maxSets = 1;
+            pool.poolSizeCount = 1;
+            pool.pPoolSizes = &poolSize;
+            VK_VERIFY(vkCreateDescriptorPool(m_device, &pool, nullptr, &descriptorPool));
+            alloc.descriptorPool = descriptorPool;
+            VK_VERIFY(vkAllocateDescriptorSets(m_device, &alloc, &descriptorSet));
+        }
         // GL_LINEAR filters only a STRETCHED blit; an unscaled one (mirrored or not, on any of the
         // four transforms) is a copy and samples NEAREST, which is exact where linear filtering
         // at a quantised coordinate is not (WireColorBlitFilter.h). The format check above still
@@ -399,7 +431,7 @@
         WireRetiredObjects retired{};
         retired.framebuffers.push_back(framebuffer);
         retired.imageViews = {sourceView, destinationView};
-        retired.descriptorPools.push_back(descriptorPool);
+        if (descriptorPool != VK_NULL_HANDLE) retired.descriptorPools.push_back(descriptorPool);
         RetireWireObjects(Move(retired));
         if (destination.isDefault) m_swapchainObject.SetImageContentDefined(destination.swapchainImageIndex, true);
         return true;

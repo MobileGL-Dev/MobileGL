@@ -757,6 +757,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         struct WireColorBlitResources;
         WireColorBlitResources* m_wireColorBlitResources = nullptr;
         void DestroyWireColorBlitResources();
+        void ResetWireColorBlitFramePool(Uint32 frameIndex);
         // P7 wave 2-B, CONTRACT-P7 §5.1 (A): the baked depth-mip program (WireDepthMipmap.inc).
         // One level of a depth chain, source and destination being two depth subresources of
         // the same image; the caller loops. It owns no frontend object, which is what the
@@ -812,13 +813,20 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             WireDrawPassKey key;
             UniquePtr<RenderPassEntry> pass;
             Vector<VkImageView> views;
+            // The last submission that recorded this pass (P15 S0): it may be destroyed only once
+            // that submission completed.
+            Uint64 lastUseSubmit = 0;
         };
         // Objects only: every draw still ends/begins its pass and records the
-        // existing memory dependencies. Each slot is cleared after its fence.
+        // existing memory dependencies. P15 S0: ONE cache across frame slots, so a framebuffer
+        // drawn every frame keeps its render pass, framebuffer and views instead of rebuilding them
+        // each frame. An entry whose key's image epochs moved can never hit again (the key holds
+        // them) and is destroyed once its last use completed (ClearWireDrawPassCache).
         Bool AcquireCachedWireDrawPass(const WireDrawPassKey& key);
         void ClearWireDrawPassCache(Uint32 frameIndex);
         void ClearAllWireDrawPassCaches();
-        Vector<Vector<WireDrawPassCacheEntry>> m_wireDrawPassCaches;
+        void DestroyWireDrawPassCacheEntry(WireDrawPassCacheEntry& entry);
+        Vector<WireDrawPassCacheEntry> m_wireDrawPassCache;
         WireDrawPassKey m_wireDrawPassKey;
         WireRenderPassCompatibilityTable m_wireRenderPassCompatibility;
         // The interned compatibility id of m_wireDrawPass's attachments, or 0 when not known yet.
@@ -872,6 +880,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Bool WirePassMemoHolds(const MG_Pipe::MGPFramebufferState& fbo, const FrameContext::FrameData& frame) const;
         Uint64 m_wirePassMarksClearGeneration = 0;
         WireDrawScratch m_wireDrawScratch;
+        Bool PrepareWireDrawPass(FrameContext::FrameData& frame, const MG_Pipe::MGPFramebufferState& fbo,
+                                 WireDrawScratch& scratch, Bool passContinues, Bool& continuing);
+        // P15: glClear / glClearBuffer* into the attachments of the wire draw pass, recorded inside it
+        // (vkCmdClearAttachments). Returns the GL clear-mask bits it could not take; those go through
+        // the standalone path.
+        GLbitfield ClearWireFramebufferInPass(const MG_Pipe::MGPFramebufferState& fbo,
+                                              const ClearAttachmentPayload& payload, GLint drawbuffer);
         struct WireRetiredObjects {
             Uint64 submitIndex = 0;
             UniquePtr<RenderPassEntry> drawPass;

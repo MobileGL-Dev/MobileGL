@@ -120,6 +120,11 @@ namespace MobileGL::MG_Config {
         // does whenever local_size_x is a multiple of the native width). ForceOff returns
         // to the raw driver builtin.
         QuirkOverride MagmaDeriveNumSubgroups = QuirkOverride::Auto;
+        // MOBILEGL_MAGMA_INPASS_CLEAR: a wire-arm glClear / glClearBuffer* whose targets are the
+        // attachments of the draw pass for the bound framebuffer is recorded inside that pass
+        // (vkCmdClearAttachments) rather than in a render pass of its own built for the clear.
+        // Auto is ON; ForceOff restores the standalone clear for every surface.
+        QuirkOverride MagmaInPassClear = QuirkOverride::Auto;
         // MOBILEGL_ADVERTISE_FP64: add GL_ARB_gpu_shader_fp64 to the advertised extension
         // string. `double` in a shader always WORKS - it is narrowed to 32 bits before any
         // module reaches a backend (ShaderTranspiler::DemoteFloat64Pass) - but the extension
