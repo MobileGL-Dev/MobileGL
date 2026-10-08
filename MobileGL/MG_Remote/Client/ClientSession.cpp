@@ -24,6 +24,7 @@
 #include "../Transport/FdPassing.h"
 #include "../Transport/InProcessTransport.h"
 #include "WireTables.h"
+#include "../Wire/PipeWireCodec.h"
 #include "EmitTables.h"
 #include <MG_State/GLState/BufferState/PersistentMapTracker.h>
 #include "ServerProbe.h"
@@ -269,6 +270,53 @@ namespace MobileGL::MG_Remote::Client {
             BarrierWaitScope(const BarrierWaitScope&) = delete;
             BarrierWaitScope& operator=(const BarrierWaitScope&) = delete;
         };
+
+        // P15: THE WAIT CENSUS (MOBILEGL_IPC_WAIT_STATS=1). Run-ahead records and replays
+        // asynchronously by default, so in steady state the only per-frame wait should be the
+        // present credit; this counts every other one so a sync point cannot hide. GL-thread
+        // only (the client's waits all happen there), so plain counters.
+        struct WaitCensus {
+            static constexpr SizeT kReasons = 32;
+            Array<Uint32, static_cast<SizeT>(MG_Pipe::MGPWireOp::kOpCount)> recordWaits{};
+            Array<const char*, kReasons> reasonNames{};
+            Array<Uint32, kReasons> reasonCounts{};
+            Uint32 ringSpace = 0;
+            Uint32 presentCredit = 0;
+            Uint32 frames = 0;
+
+            void Reason(const char* why) {
+                for (SizeT i = 0; i < kReasons; ++i) {
+                    if (reasonNames[i] == nullptr) reasonNames[i] = why;
+                    if (reasonNames[i] == why || std::strcmp(reasonNames[i], why) == 0) {
+                        ++reasonCounts[i];
+                        return;
+                    }
+                }
+            }
+            void FrameEnd() {
+                if (++frames < 600) return;
+                String line;
+                char item[160];
+                const double f = static_cast<double>(frames);
+                for (SizeT i = 0; i < recordWaits.size(); ++i) {
+                    if (recordWaits[i] == 0) continue;
+                    std::snprintf(item, sizeof(item), " wait[%s]=%.2f",
+                                  Wire::WireOpName(static_cast<MG_Pipe::MGPWireOp>(i)), recordWaits[i] / f);
+                    line += item;
+                }
+                for (SizeT i = 0; i < kReasons && reasonNames[i] != nullptr; ++i) {
+                    if (reasonCounts[i] == 0) continue;
+                    std::snprintf(item, sizeof(item), " quiesce[%s]=%.2f", reasonNames[i], reasonCounts[i] / f);
+                    line += item;
+                }
+                MGLOG_I("MGPIPE-WAITS frames=%u per-frame:%s ringSpace=%.2f presentCredit=%.2f", frames,
+                        line.empty() ? " (none)" : line.c_str(), ringSpace / f, presentCredit / f);
+                recordWaits.fill(0);
+                reasonCounts.fill(0);
+                ringSpace = presentCredit = frames = 0;
+            }
+        };
+        WaitCensus g_waitCensus;
 
         // A DEADLOCK DETECTOR, NOT A PERFORMANCE GATE. The barrier exists so that a record the
         // applier never retires is reported instead of hanging: a lost record never completes at
@@ -2187,6 +2235,7 @@ namespace MobileGL::MG_Remote::Client {
             Wire::MGPipeWireRecordLayout(op, payload, layout);
             const Uint64 toEnd = m_cmd->Capacity() - m_cmd->LocalHead() % m_cmd->Capacity();
             const Uint64 needed = layout.TotalBytes + (toEnd < layout.TotalBytes ? toEnd : 0);
+            if (MG_Config::Ipc.WaitStats) ++g_waitCensus.ringSpace;
             const BarrierWaitScope waiting;
             const auto wait = m_producer.WaitForCmdSpace(needed, kBarrierTimeoutMs);
             if (wait == Transport::SessionWait::ShutDown) {
@@ -2359,6 +2408,7 @@ namespace MobileGL::MG_Remote::Client {
             return seq;
         }
 
+        if (MG_Config::Ipc.WaitStats && RunAheadArmed()) ++g_waitCensus.recordWaits[static_cast<SizeT>(op)];
         const BarrierWaitScope waiting;
         const Uint64 waitBudgetMs = AppliedWaitBudgetMs(op, payload);
         const Transport::SessionWait wait =
@@ -2509,6 +2559,10 @@ namespace MobileGL::MG_Remote::Client {
 #endif
     }
 
+    void ClientSession::NoteBarrieredVerbForStats(const char* verb) {
+        if (MG_Config::Ipc.WaitStats) g_waitCensus.Reason(verb);
+    }
+
     void ClientSession::WaitForApplyToCatchUp(const char* why) {
 #if MOBILEGL_BUILD_DISAGGREGATED
         // A NO-OP WITHOUT RUN-AHEAD, and that is not an optimisation: under lockstep the
@@ -2517,6 +2571,7 @@ namespace MobileGL::MG_Remote::Client {
         // watermark that is already reached.
         if (!m_runAheadArmed || !m_started) return;
         if (m_producer.LastPublishedSeq() == 0) return;
+        if (MG_Config::Ipc.WaitStats) g_waitCensus.Reason(why);
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(kBarrierTimeoutMs);
         const BarrierWaitScope waiting;
         for (;;) {
@@ -2612,6 +2667,7 @@ namespace MobileGL::MG_Remote::Client {
             // overlap and at most one frame of added latency (ruling 4 / ID-92).
             const Uint64 awaited = serial - credit;
             ++m_presentCreditWaits;
+            if (MG_Config::Ipc.WaitStats) ++g_waitCensus.presentCredit;
             // P65CLIENTPACE: WHERE THE CLIENT'S FRAME GOES, ONE LINE PER FRAME.
             //
             // The frame is a lockstep ping-pong and every stage measured so far is IDLE: the client
@@ -2652,7 +2708,9 @@ namespace MobileGL::MG_Remote::Client {
                 static_cast<double>(std::chrono::duration_cast<std::chrono::nanoseconds>(
                     std::chrono::steady_clock::now() - paceStarted).count()) / 1e6;
             const auto io = Transport::LinkMetricsTakeSendStats();
-            MGLOG_I("P65ClientPace present=%llu credit_wait_ms=%.1f | io: %llu B in %llu sendmsg "
+            // P15: MGLOG_D - an INFO line per frame on the GL thread cost a format and a
+            // logd write every present on the shipped build.
+            MGLOG_D("P65ClientPace present=%llu credit_wait_ms=%.1f | io: %llu B in %llu sendmsg "
                     "send_ms=%.1f total_ms=%.1f",
                     static_cast<unsigned long long>(serial), creditMs,
                     static_cast<unsigned long long>(io.bytes),
@@ -2661,6 +2719,7 @@ namespace MobileGL::MG_Remote::Client {
                     static_cast<double>(io.nsTotal) / 1e6);
         }
         m_presentsSent = serial;
+        if (MG_Config::Ipc.WaitStats) g_waitCensus.FrameEnd();
         return serial;
 #else
         return ++m_presentsSent;

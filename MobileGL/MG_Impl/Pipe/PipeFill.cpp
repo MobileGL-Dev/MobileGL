@@ -3463,6 +3463,7 @@ namespace MobileGL::MG_Pipe {
             // delete it and the guard below aborts with Fatal{RoleViolation, "gPipeInputs"}
             // naming MGPipeValidateForVerb, because the guard now tests the fact rather than
             // taking the claim.
+            if (runAhead) MG_Remote::Client::ClientSession::NoteBarrieredVerbForStats(kMGPipeVerbNames[static_cast<SizeT>(verb)]);
             QuiesceApplierBeforeFill("MGPipeValidateForVerb");
             MG_Remote::Client::ClientSession::RefusePipeInputsTouchWhileApplierOwnsIt(
                 "MGPipeValidateForVerb", /*isBarrieredFill=*/barriered);

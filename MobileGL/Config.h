@@ -708,6 +708,10 @@ namespace MobileGL::MG_Config {
         // client that is already CPU-bound and costs a frame of latency, which is why the
         // default is 1 and not "as deep as the ring".
         Uint32 PresentCredit = 1;
+        // MOBILEGL_IPC_WAIT_STATS (P15, diagnostic): every 600 presents, log how many times per
+        // frame the run-ahead client waited, by record op (applied/reply), by quiesce reason and
+        // barriered verb, for ring space and for the present credit. Off by default.
+        Bool WaitStats = false;
         // MOBILEGL_IPC_CONTROL_TIMEOUT_MS (CONTRACT-P6 §5.4 D5b): how long a spawn/tcp client
         // waits for the SurfaceReply to one surface-control op (eglCreate*Surface, MakeCurrent,
         // ...) once the server's backend is up. Its expiry is NOT fatal: the doorbell's death

@@ -617,6 +617,7 @@ namespace MobileGL::MG_ConfigLoader {
         ipc.ControlTimeoutMs = QueryEnvUint32("MOBILEGL_IPC_CONTROL_TIMEOUT_MS", 5000, 100, 600000);
         ipc.ColdStartMs = QueryEnvUint32("MOBILEGL_IPC_COLD_START_MS", 20000, 100, 600000);
         ipc.StrictErrors = QueryEnvFlag("MOBILEGL_IPC_STRICT_ERRORS");
+        ipc.WaitStats = QueryEnvFlag("MOBILEGL_IPC_WAIT_STATS");
         ipc.Audit = QueryEnvFlag("MOBILEGL_IPC_AUDIT");
         QueryEnvVariable("MOBILEGL_IPC_SERVER_AFFINITY", ipc.ServerAffinity, "auto");
         // P5f f1: the dual-block rehearsal (P5F-WIRE-COMPLETENESS.md §4). Forced OFF by the

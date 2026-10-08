@@ -372,6 +372,9 @@ namespace MobileGL::MG_Remote::Client {
         // in the timeout Fatal, because "which forced wait wedged" is the whole diagnostic.
         // A no-op when run-ahead is not armed (the client is already in step by construction).
         void WaitForApplyToCatchUp(const char* why);
+        // P15 wait census (MOBILEGL_IPC_WAIT_STATS): the validate point names the verb whose
+        // barriered fill is about to quiesce the applier.
+        static void NoteBarrieredVerbForStats(const char* verb);
 
         // glFinish. Flush and Finish stay no-ops ON THE WIRE (ARCHITECTURE §11, :415) - there
         // is no record to emit - but "the GL commands issued so far have completed" cannot be
