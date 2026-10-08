@@ -108,7 +108,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         VkCommandBufferBeginInfo beginInfo{};
         beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-        beginInfo.flags = flags;
+        // P15: a frame recording is submitted once and then reset, so the driver may skip whatever
+        // it keeps for re-submission.
+        beginInfo.flags = flags | VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
         beginInfo.pInheritanceInfo = pInheritanceInfo;
         VK_VERIFY(vkBeginCommandBuffer(frame.commandBuffer, &beginInfo), "BeginCommandRecording, vkBeginCommandBuffer");
 
@@ -137,6 +139,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         VK_VERIFY(vkResetCommandBuffer(frame.preCommandBuffer, 0), "BeginPreCommandRecording, vkResetCommandBuffer");
         VkCommandBufferBeginInfo beginInfo{};
         beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
         VK_VERIFY(vkBeginCommandBuffer(frame.preCommandBuffer, &beginInfo),
                   "BeginPreCommandRecording, vkBeginCommandBuffer");
         frame.isPreCommandRecording = true;

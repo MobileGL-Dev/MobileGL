@@ -2371,6 +2371,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         WireDeclineTally::Dump("shutdown");
         // The SPIR-V screen's engagement proof: a decline-free session above reads as "screened
         // and valid" only with this count beside it (distinct modules, process-wide).
+        MGLOG_I("MGWIRE-VCONV[shutdown] converted=%llu reused=%llu", static_cast<unsigned long long>(m_wireStreamsConverted),
+                static_cast<unsigned long long>(m_wireStreamsReused));
         MGLOG_I("MGWIRE-SPIRV-SCREEN[shutdown] modulesValidated=%llu",
                 static_cast<unsigned long long>(ProgramFactory::DriverModuleValidatorRuns()));
         DestroyWireDrawPass();

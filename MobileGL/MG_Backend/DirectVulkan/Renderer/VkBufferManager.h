@@ -158,6 +158,28 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // that memo names can have been freed and re-minted in between, which is the one
         // fact a handle-keyed memo of wire descriptors needs and cannot read off the handle.
         Uint64 GetWireStoreDestroyEpoch() const { return m_wireStoreDestroyEpoch; }
+        // P15 S0: the store's content state, as a process-wide monotonic serial: it moves on every
+        // host write, respecify and GPU-write mark, and on every bind a shader may write through
+        // (storage / texture-buffer slices). False for a store whose bytes the client writes
+        // directly (an imported or donated store), which no cache may key on.
+        Bool GetWireBufferContentSerial(MG_Pipe::MGPipeHandle res, Uint64& serial);
+        // P15 S0: CONVERTED WIRE VERTEX STREAMS, KEPT ACROSS FRAMES (the frontend arm's
+        // ConvertedVertexStream cache, lost with it, and longer-lived than it: that one was per
+        // frame). Key: the source store's content serial - process-wide monotonic, so no store or
+        // handle identity can alias - and the layout. Each entry owns a vertex buffer holding the
+        // converted elements; a newer conversion of the same store and layout replaces it, and the
+        // whole set is bounded by bytes (least recently used first). A replaced or evicted buffer
+        // is released when the frame slot that last used it comes round again.
+        struct ConvertedStreamKey {
+            Uint64 contentSerial = 0;
+            Uint64 baseOffset = 0;
+            Uint32 stride = 0, type = 0, size = 0, conversion = 0;
+            Bool normalized = false, isInteger = false, isBgra = false;
+            Bool operator==(const ConvertedStreamKey&) const = default;
+        };
+        Bool LookupConvertedStream(const ConvertedStreamKey& key, SizeT elementCount, BufferSlice& outSlice);
+        Bool StoreConvertedStream(const ConvertedStreamKey& key, MG_Pipe::MGPipeHandle source, SizeT elementCount,
+                                  const void* bytes, SizeT size, BufferSlice& outSlice);
         // Highest frame serial whose GPU work is known complete; serials at or
         // below it may be considered signaled. Drives IsResourceBusy and the
         // backend GL fence objects.
@@ -173,6 +195,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // unsubmitted index as incomplete, but the stamp is taken before the draw is
             // recorded and a mid-draw flush can submit it without the draw.
             Uint64 lastUseSubmitIndex = 0;
+            // P15 S0: see GetWireBufferContentSerial.
+            Uint64 contentSerial = 0;
             Bool gpuWritesPending = false;
             // Only ranges actually submitted by resource_subdata are covered. No
             // shadow is retained: flush cannot replay stale bytes over GPU writes.
@@ -329,6 +353,17 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // so that a memo taken before a re-initialize must not match
         // a handle minted after it.
         Uint64 m_wireStoreDestroyEpoch = 0;
+        Uint64 m_wireContentSerial = 0;
+        struct ConvertedStream {
+            ConvertedStreamKey key;
+            MG_Pipe::MGPipeHandle source = MG_Pipe::kMGPipeNullHandle;
+            SizeT elementCount = 0;
+            VkBufferObject buffer;
+            Uint64 lastUseFrameSerial = 0;
+        };
+        Vector<ConvertedStream> m_convertedStreams;
+        SizeT m_convertedStreamBytes = 0;
+        void RetireConvertedStream(SizeT index);
         Uint32 m_currentFrameIndex = 0;
         Uint64 m_frameSerial = 1;
         Uint64 m_completedSerialFloor = 0;

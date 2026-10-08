@@ -225,6 +225,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // to wait for a submission (DeferredWireRelease), and three lines from now the record
         // no longer carries it.
         const Uint64 orphanedUseSerial = resource->lastUseSerial;
+        resource->contentSerial = ++m_wireContentSerial;
         // P11 B2: a T0 store is ALWAYS released through the serial-gated list (never "at once"),
         // so the client's AHardwareBuffer outlives every submission that can still name it however
         // the client's own release (at this respecify) raced the frames in flight.
@@ -312,6 +313,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             std::abort();
         }
         if (size == 0) return;
+        resource->contentSerial = ++m_wireContentSerial;
         Bool uploaded = false;
         const Uint64 probeLastUse = resource->lastUseSerial;
         const Uint64 probeCompleted = GetCompletedSerial();
@@ -417,12 +419,91 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // ordered after earlier uses. There is no stale shadow to replay here.
     }
 
+    Bool VkBufferManager::LookupConvertedStream(const ConvertedStreamKey& key, SizeT elementCount,
+                                                BufferSlice& outSlice) {
+        for (auto& entry : m_convertedStreams) {
+            if (!(entry.key == key) || entry.elementCount < elementCount) continue;
+            entry.lastUseFrameSerial = m_frameSerial;
+            outSlice = entry.buffer.GetSlice();
+            outSlice.mapped = nullptr;
+            return true;
+        }
+        return false;
+    }
+
+    void VkBufferManager::RetireConvertedStream(SizeT index) {
+        auto& entry = m_convertedStreams[index];
+        m_convertedStreamBytes -= static_cast<SizeT>(entry.buffer.GetSize());
+        // Its last use may be this frame: the slot's next BeginFrame is after this frame completed.
+        if (m_currentFrameIndex < m_deferredBufferReleases.size())
+            m_deferredBufferReleases[m_currentFrameIndex].push_back(std::move(entry.buffer));
+        m_convertedStreams.erase(m_convertedStreams.begin() + static_cast<std::ptrdiff_t>(index));
+    }
+
+    Bool VkBufferManager::StoreConvertedStream(const ConvertedStreamKey& key, MG_Pipe::MGPipeHandle source,
+                                               SizeT elementCount, const void* bytes, SizeT size,
+                                               BufferSlice& outSlice) {
+        constexpr SizeT kConvertedStreamBudget = 192ull << 20;
+        if (size == 0 || size > kConvertedStreamBudget / 2 || m_initInfo.allocator == nullptr ||
+            m_deferredBufferReleases.empty())
+            return false;
+        // A newer conversion of the same store and layout supersedes the old one (its content
+        // serial can never come back); an entry unused for many frames (a deleted store's, a
+        // layout no longer drawn) goes too.
+        constexpr Uint64 kConvertedStreamIdleFrames = 256;
+        for (SizeT i = m_convertedStreams.size(); i-- > 0;) {
+            const auto& entry = m_convertedStreams[i];
+            if (entry.lastUseFrameSerial + kConvertedStreamIdleFrames < m_frameSerial) {
+                RetireConvertedStream(i);
+                continue;
+            }
+            if (entry.source == source && entry.key.baseOffset == key.baseOffset && entry.key.stride == key.stride &&
+                entry.key.type == key.type && entry.key.size == key.size && entry.key.conversion == key.conversion)
+                RetireConvertedStream(i);
+        }
+        while (!m_convertedStreams.empty() && m_convertedStreamBytes + size > kConvertedStreamBudget) {
+            SizeT oldest = 0;
+            for (SizeT i = 1; i < m_convertedStreams.size(); ++i)
+                if (m_convertedStreams[i].lastUseFrameSerial < m_convertedStreams[oldest].lastUseFrameSerial) oldest = i;
+            RetireConvertedStream(oldest);
+        }
+        ConvertedStream entry;
+        entry.key = key;
+        entry.source = source;
+        entry.elementCount = elementCount;
+        entry.lastUseFrameSerial = m_frameSerial;
+        if (!entry.buffer.Create({
+                .allocator = m_initInfo.allocator,
+                .size = static_cast<VkDeviceSize>(size),
+                .usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                .memoryUsage = VMA_MEMORY_USAGE_AUTO,
+                .allocationFlags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
+                .requiredFlags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+            }) || entry.buffer.Map() == nullptr || !entry.buffer.Upload(bytes, static_cast<VkDeviceSize>(size), 0))
+            return false;
+        m_convertedStreamBytes += size;
+        outSlice = entry.buffer.GetSlice();
+        outSlice.mapped = nullptr;
+        m_convertedStreams.push_back(std::move(entry));
+        return true;
+    }
+
+    Bool VkBufferManager::GetWireBufferContentSerial(MG_Pipe::MGPipeHandle res, Uint64& serial) {
+        auto* resource = FindWireBuffer(res);
+        if (!resource || resource->imported || !resource->buffer.IsValid()) return false;
+        serial = resource->contentSerial;
+        return true;
+    }
+
     Bool VkBufferManager::AcquireWireSlice(BufferKind kind, MG_Pipe::MGPipeHandle res, BufferSlice& outSlice) {
-        (void)kind; // The store carries every buffer usage, so changing roles never orphans it.
+        // The store carries every buffer usage, so changing roles never orphans it.
         outSlice = {};
         auto* resource = FindWireBuffer(res);
         if (!resource || !resource->buffer.IsValid() || resource->size == 0) return false;
         resource->lastUseSerial = m_frameSerial;
+        // A slice a shader may write through: whatever it writes is a new content state.
+        if (kind == BufferKind::ShaderStorage || kind == BufferKind::TextureBuffer)
+            resource->contentSerial = ++m_wireContentSerial;
         // B3: the draw this slice is being acquired for is normally recorded into the NEXT
         // submission - normally, not always: a mid-draw flush (SyncWireTextureShape's preserve
         // path) can submit this index without the draw. This stamp is the defence term's input
@@ -581,6 +662,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (!resource || offset > resource->size) return;
         if (size == MG_Pipe::kMGPipeWholeBuffer) size = resource->size - offset;
         if (size == 0 || size > resource->size - offset) return;
+        resource->contentSerial = ++m_wireContentSerial;
         resource->lastUseSerial = m_frameSerial;
         resource->stagedCoverage.clear();
         resource->gpuWritesPending = true;
@@ -721,6 +803,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         void* mapped = resource->buffer.GetMappedData();
         if (mapped == nullptr) return nullptr;
         if (resource->imported) return mapped; // already donated: the same pointer
+        resource->contentSerial = ++m_wireContentSerial;
         if (!WaitForWireBufferHostAccess(*resource)) return nullptr;
         if (seedBytes != nullptr) std::memcpy(mapped, seedBytes, static_cast<SizeT>(size));
         resource->imported = true;
@@ -1448,6 +1531,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     void VkBufferManager::DestroyAllDeferredReleases() {
         // Both callers (Shutdown, RecreateTransientArenas) have proven the device idle.
         DestroyAllDeferredWireReleases();
+        for (auto& stream : m_convertedStreams) stream.buffer.Destroy();
+        m_convertedStreams.clear();
+        m_convertedStreamBytes = 0;
         for (auto& releases : m_deferredBufferReleases) {
             for (auto& buffer : releases) {
                 buffer.Destroy();

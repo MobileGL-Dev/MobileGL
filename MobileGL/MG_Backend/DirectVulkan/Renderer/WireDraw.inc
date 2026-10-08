@@ -173,10 +173,14 @@
         if (m_wireColorBlitResources) ResetWireColorBlitFramePool(frameIndex);
         const Uint64 imageEpoch = m_textureManager->GetTextureImageEpoch();
         const Uint64 eraseEpoch = m_textureManager->GetResourceEraseEpoch();
+        const Bool keepAcrossFrames = MG_Config::Features.MagmaPassCache != MG_Config::QuirkOverride::ForceOff;
         SizeT kept = 0;
         for (SizeT i = 0; i < m_wireDrawPassCache.size(); ++i) {
             auto& entry = m_wireDrawPassCache[i];
-            if (entry.key.textureImageEpoch == imageEpoch && entry.key.resourceEraseEpoch == eraseEpoch) {
+            const Bool live = keepAcrossFrames ? entry.key.textureImageEpoch == imageEpoch &&
+                                                     entry.key.resourceEraseEpoch == eraseEpoch
+                                               : entry.lastUseSubmit > m_completedSubmitCounter;
+            if (live) {
                 if (kept != i) m_wireDrawPassCache[kept] = Move(entry);
                 ++kept;
                 continue;
@@ -426,6 +430,9 @@
             created.extent = {static_cast<Int>(extent.width), static_cast<Int>(extent.height)};
             created.layers = layers;
             created.hash = created.compatibilityHash = XXH64(colors.data(), colors.size() * sizeof(colors[0]), passHash);
+            created.wireAttachments.assign(attachments.begin(), attachments.end());
+            created.wireColors.assign(colors.begin(), colors.end());
+            created.wireDepth = depth;
         }
         // The attachments' GPU-write marks (MarkWireTextureGpuWritten): idempotent while nothing
         // clears a GPU-dirty mark, so a draw that continues a pass whose draws already marked the
@@ -641,6 +648,19 @@
                     MGL_WIRE_DECLINE_AT(VertexStreamCountZero, "the converted vertex stream would hold no elements");
                     return false;
                 }
+                // One conversion per (source content, layout), kept across frames until the source
+                // changes (VkBufferManager's converted-stream cache): a multi-draw over a chunk arena
+                // names the same stream for every chunk, frame after frame.
+                Uint64 contentSerial = 0;
+                const Bool cacheable = MG_Config::Features.MagmaVertexConversionCache != MG_Config::QuirkOverride::ForceOff &&
+                                       m_bufferManager.GetWireBufferContentSerial(resource.Res, contentSerial);
+                const VkBufferManager::ConvertedStreamKey cacheKey{contentSerial, offset, static_cast<Uint32>(stride),
+                    static_cast<Uint32>(attr.Type), static_cast<Uint32>(attr.Size), static_cast<Uint32>(conversion),
+                    attr.Normalized != 0, attr.IsInteger != 0, attr.IsBgra != 0};
+                if (cacheable && m_bufferManager.LookupConvertedStream(cacheKey, count, vertexSlices[binding])) {
+                    ++m_wireStreamsReused;
+                    continue;
+                }
                 Vector<Uint8> source((count - 1) * stride + elementSize);
                 if (!m_bufferManager.ReadWireBuffer(resource.Res, offset, source.size(), source.data())) {
                     MGL_WIRE_DECLINE_AT(VertexStreamRead, "the vertex bytes to convert could not be read back");
@@ -664,7 +684,10 @@
                     WireDeclineTally::Count(WireDeclineSite::VertexStreamConverter);
                     return false;
                 }
-                if (!m_bufferManager.UploadTransient(BufferKind::Vertex, m_frameContext.GetCurrentFrameIndex(),
+                ++m_wireStreamsConverted;
+                if (!(cacheable && m_bufferManager.StoreConvertedStream(cacheKey, resource.Res, count, converted.data(),
+                                                                         converted.size(), vertexSlices[binding])) &&
+                    !m_bufferManager.UploadTransient(BufferKind::Vertex, m_frameContext.GetCurrentFrameIndex(),
                         converted.data(), converted.size(), 16, vertexSlices[binding])) {
                     MGL_WIRE_DECLINE_AT(VertexTransientUpload, "the converted vertex stream did not fit the transient arena");
                     return false;
@@ -865,29 +888,40 @@
         return true;
     }
 
-    // P15 S0: A CLEAR INTO THE OPEN PASS'S ATTACHMENTS IS RECORDED INSIDE THE PASS.
+    // P15 S0: A CLEAR INTO THE ATTACHMENTS OF THE DRAW PASS BECOMES PART OF THAT PASS.
     //
     // The standalone path (ClearWireFramebuffer's per-surface lambda) closes the draw pass, then
     // builds an image view, a render pass and a framebuffer for every cleared surface, runs a pass
     // of its own and retires all three: about 70 us a clear on Adreno 750, and every following draw
     // to the same framebuffer opens a new pass (FCL MC 1.21.5: 6 clears a frame, 0.42 ms). Here the
     // clear takes the pass a draw to this framebuffer would use (PrepareWireDrawPass: the open one,
-    // a cached one, or a new one through the same walk) and becomes a vkCmdClearAttachments in it,
-    // so the draws after it continue the same pass.
+    // a cached one, or a new one through the same walk), so the draws after it continue that pass:
     //
-    // vkCmdClearAttachments inside the subpass is ordered with the pass's draws as a draw is, writes
-    // through the same attachment views (the UNORM twin of an sRGB image while GL_FRAMEBUFFER_SRGB
-    // is off, which is exactly GL's raw clear - no pre-compensation), and needs no layout change:
-    // wire attachments live in GENERAL. What it cannot express goes back to the standalone path,
-    // per GL buffer bit: a partial colour or stencil write mask (that path warns and skips, as
-    // before), an attachment whose extent or layer count differs from the pass's (the pass covers the
-    // common area only), and a stencil clear the pass's depth attachment does not carry.
+    //   * A clear of the whole render area that would BEGIN the pass begins it with LOAD_OP_CLEAR for
+    //     the cleared attachments (a clear-load variant of the pass's render pass). Nothing is loaded
+    //     from memory into the tile for them, which is also the cheapest form on a tiler.
+    //   * Any other clear - into the open pass, or scissored - is vkCmdClearAttachments in the pass:
+    //     ordered with the pass's draws as a draw is.
+    //
+    // Every write goes through the pass's attachment views (the UNORM twin of an sRGB image while
+    // GL_FRAMEBUFFER_SRGB is off, exactly GL's raw clear - no pre-compensation), and wire attachments
+    // live in GENERAL. What none of this expresses goes back to the standalone path, per GL buffer
+    // bit: a partial colour or stencil write mask (that path warns and skips, as before), an
+    // attachment whose extent or layer count differs from the pass's (the pass covers the common area
+    // only), and a stencil clear the pass's depth attachment does not carry.
     GLbitfield VulkanRenderer::ClearWireFramebufferInPass(const MG_Pipe::MGPFramebufferState& fbo,
             const ClearAttachmentPayload& payload, GLint drawbuffer) {
         GLbitfield remaining = payload.mask & (GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
         if (!remaining || MG_Config::Features.MagmaInPassClear == MG_Config::QuirkOverride::ForceOff) return remaining;
         // Nested inside a draw's preparation the scratch and the pass belong to that draw.
         if (m_wirePreparationDepth != 0) return remaining;
+        // NOT THE DEFAULT FRAMEBUFFER (measured, not understood): on Adreno 750 the openra retrace
+        // loses its palette-sampled sprites (SSIM 0.956) when a colour+depth clear of the default
+        // framebuffer becomes part of its draw pass - with LOAD_OP_CLEAR as well as with
+        // vkCmdClearAttachments - while the same clear split across the two paths, or left
+        // standalone, renders correctly. Default-framebuffer clears keep the standalone path until
+        // that is explained (perf-p15/HANDOFF.md).
+        if (fbo.IsDefault && MG_Config::Features.MagmaInPassClearDefault != MG_Config::QuirkOverride::ForceOn) return remaining;
         auto& frame = m_frameContext.GetCurrent();
         WirePreparationScope preparing(m_wirePreparationDepth);
         // As SetupWireDraw: resolve every attachment (a lazy upload or promotion may submit the
@@ -992,16 +1026,66 @@
             const Int32 x0 = std::max(box.x(), 0), y0 = std::max(box.y(), 0);
             const Int32 x1 = std::min(box.x() + box.z(), static_cast<Int32>(key.width));
             const Int32 y1 = std::min(box.y() + box.w(), static_cast<Int32>(key.height));
-            if (x0 >= x1 || y0 >= y1) return remaining & ~(handled | GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT |
-                                                           GL_STENCIL_BUFFER_BIT); // an empty box clears nothing
+            // An empty box clears nothing, on either path.
+            if (x0 >= x1 || y0 >= y1) return 0;
             area = {{x0, y0}, {static_cast<Uint32>(x1 - x0), static_cast<Uint32>(y1 - y0)}};
             if (fbo.IsDefault && !MapDefaultFramebufferReadbackRect(x0, y0, x1 - x0, y1 - y0, VkExtent2D{key.width, key.height},
                     m_swapchainObject.GetPreTransform(), &area.offset, &area.extent))
                 MagmaWireFatal("clear-surface-transform");
         }
+        const Bool wholeArea = area.offset.x == 0 && area.offset.y == 0 && area.extent.width == key.width &&
+                               area.extent.height == key.height;
         const auto* active = VkRenderPassManager::GetActiveRenderPass();
-        const Bool open = continuing && active != nullptr && active->commandBuffer == frame.commandBuffer &&
-                          active->hash == pass.hash;
+        Bool open = continuing && active != nullptr && active->commandBuffer == frame.commandBuffer &&
+                    active->hash == pass.hash;
+        if (wholeArea && !open) {
+            if (active != nullptr) VkRenderPassManager::EndRenderPass(frame.commandBuffer);
+            auto& begun = *m_wireDrawPass;
+            Uint64 variantKey = 0;
+            VkClearValue values[MG_Pipe::kMGPipeMaxColorAttachments + 1]{};
+            const Uint32 attachmentCount = static_cast<Uint32>(begun.wireAttachments.size());
+            if (attachmentCount == 0 || attachmentCount > MG_Pipe::kMGPipeMaxColorAttachments + 1)
+                return remaining; // not a wire-built pass: cannot happen, but never guess
+            for (Uint32 c = 0; c < count; ++c) {
+                const auto& clear = clears[c];
+                if (clear.aspectMask & VK_IMAGE_ASPECT_COLOR_BIT) {
+                    const Uint32 a = begun.wireColors[clear.colorAttachment].attachment;
+                    variantKey |= 1ull << (2 * a);
+                    values[a].color = clear.clearValue.color;
+                } else {
+                    const Uint32 a = begun.wireDepth.attachment;
+                    if (clear.aspectMask & VK_IMAGE_ASPECT_DEPTH_BIT) variantKey |= 1ull << (2 * a);
+                    if (clear.aspectMask & VK_IMAGE_ASPECT_STENCIL_BIT) variantKey |= 1ull << (2 * a + 1);
+                    values[a].depthStencil = clear.clearValue.depthStencil;
+                }
+            }
+            VkRenderPass variant = VK_NULL_HANDLE;
+            for (const auto& entry : begun.clearVariants)
+                if (entry.first == variantKey) variant = entry.second;
+            if (variant == VK_NULL_HANDLE) {
+                auto descriptions = begun.wireAttachments;
+                for (Uint32 a = 0; a < attachmentCount; ++a) {
+                    if (variantKey >> (2 * a) & 1) descriptions[a].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+                    if (variantKey >> (2 * a + 1) & 1) descriptions[a].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+                }
+                VkSubpassDescription subpass{};
+                subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+                subpass.colorAttachmentCount = static_cast<Uint32>(begun.wireColors.size());
+                subpass.pColorAttachments = begun.wireColors.data();
+                subpass.pDepthStencilAttachment =
+                    begun.wireDepth.attachment != VK_ATTACHMENT_UNUSED ? &begun.wireDepth : nullptr;
+                VkRenderPassCreateInfo info{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};
+                info.attachmentCount = attachmentCount;
+                info.pAttachments = descriptions.data();
+                info.subpassCount = 1;
+                info.pSubpasses = &subpass;
+                VK_VERIFY(vkCreateRenderPass(m_device, &info, nullptr, &variant));
+                begun.clearVariants.push_back({variantKey, variant});
+            }
+            if (!VkRenderPassManager::BeginRenderPass(frame.commandBuffer, begun, variant, values, attachmentCount))
+                return remaining;
+            return remaining & ~handled;
+        }
         if (!open && active != nullptr) VkRenderPassManager::EndRenderPass(frame.commandBuffer);
         if (!open && !VkRenderPassManager::BeginRenderPass(frame.commandBuffer, pass)) return remaining;
         const VkClearRect rect{area, 0, key.layers};

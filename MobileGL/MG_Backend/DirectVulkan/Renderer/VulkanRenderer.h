@@ -880,6 +880,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Bool WirePassMemoHolds(const MG_Pipe::MGPFramebufferState& fbo, const FrameContext::FrameData& frame) const;
         Uint64 m_wirePassMarksClearGeneration = 0;
         WireDrawScratch m_wireDrawScratch;
+        Uint64 m_wireStreamsConverted = 0, m_wireStreamsReused = 0;
         Bool PrepareWireDrawPass(FrameContext::FrameData& frame, const MG_Pipe::MGPFramebufferState& fbo,
                                  WireDrawScratch& scratch, Bool passContinues, Bool& continuing);
         // P15: glClear / glClearBuffer* into the attachments of the wire draw pass, recorded inside it

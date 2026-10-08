@@ -47,6 +47,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Uint32 layers = 1;
         // Frame counter value of the last GetOrCreateRenderPass hit; drives cache eviction.
         Uint64 lastUsedFrame = 0;
+        // P15 S0 (wire passes only): what the render pass was created from, and the render
+        // passes that differ from it only in loading some attachments with LOAD_OP_CLEAR. Load ops
+        // are not part of render-pass compatibility, so a variant begins with this entry's own
+        // framebuffer and runs every pipeline created against `renderPass`.
+        Vector<VkAttachmentDescription> wireAttachments;
+        Vector<VkAttachmentReference> wireColors;
+        VkAttachmentReference wireDepth{VK_ATTACHMENT_UNUSED, VK_IMAGE_LAYOUT_GENERAL};
+        Vector<std::pair<Uint64, VkRenderPass>> clearVariants;
 
         RenderPassEntry() = default;
         RenderPassEntry(const RenderPassEntry&) = delete;
@@ -62,6 +70,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             std::swap(extent, that.extent);
             std::swap(layers, that.layers);
             std::swap(lastUsedFrame, that.lastUsedFrame);
+            std::swap(wireAttachments, that.wireAttachments);
+            std::swap(wireColors, that.wireColors);
+            std::swap(wireDepth, that.wireDepth);
+            std::swap(clearVariants, that.clearVariants);
         }
         // Move ASSIGNMENT, not just construction. The move constructor above and the
         // destructor below each independently suppress the implicit one, which left the
@@ -94,10 +106,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 std::swap(extent, that.extent);
                 std::swap(layers, that.layers);
                 std::swap(lastUsedFrame, that.lastUsedFrame);
+                std::swap(wireAttachments, that.wireAttachments);
+                std::swap(wireColors, that.wireColors);
+                std::swap(wireDepth, that.wireDepth);
+                std::swap(clearVariants, that.clearVariants);
             }
             return *this;
         }
         ~RenderPassEntry() {
+            for (const auto& variant : clearVariants)
+                if (variant.second != VK_NULL_HANDLE) vkDestroyRenderPass(s_device.Get(), variant.second, nullptr);
             if (renderPass != VK_NULL_HANDLE) {
                 vkDestroyRenderPass(s_device.Get(), renderPass, nullptr);
             }
@@ -147,6 +165,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             m_defaultFramebufferTarget = serial;
         }
         static Bool BeginRenderPass(VkCommandBuffer commandBuffer, RenderPassEntry& renderPassEntry);
+        // P15 S0: begins `renderPassEntry` through `renderPass` (one of its clear-load variants)
+        // with these clear values; it is active as the entry itself, so a draw continues it.
+        static Bool BeginRenderPass(VkCommandBuffer commandBuffer, RenderPassEntry& renderPassEntry,
+                                    VkRenderPass renderPass, const VkClearValue* clearValues, Uint32 clearValueCount);
         static Bool EndRenderPass(VkCommandBuffer commandBuffer);
         static ActiveRenderPassInfo* GetActiveRenderPass();
     private:

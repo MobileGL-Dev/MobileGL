@@ -292,4 +292,68 @@ void main() { o0 = uColor; o1 = uColor; }
         glDeleteTextures(1, &color);
     }
 
+    // The openra shape on the DEFAULT framebuffer (P15 S0's open item, perf-p15/HANDOFF.md): every
+    // frame starts with glClear(COLOR | DEPTH), then re-specifies a palette texture
+    // (glTexImage2D - a recording flush on Magma) before the first draw samples it, and the
+    // sprites are depth-tested. Two frames, so the clear lands on a freshly acquired image.
+    TEST_F(InPassClearScenario, ADefaultFramebufferClearThenAPaletteUploadKeepsTheDepthTestedDraw) {
+        if (!Ready()) return;
+        HeadlessGL& gl = Gl();
+        const int width = gl.Width(), height = gl.Height();
+        constexpr const char* kPaletteVS = R"(#version 330 core
+in vec2 aPos;
+uniform float uDepth;
+void main() { gl_Position = vec4(aPos, uDepth, 1.0); }
+)";
+        constexpr const char* kPaletteFS = R"(#version 330 core
+uniform sampler2D uPalette;
+out vec4 o0;
+void main() { o0 = texture(uPalette, vec2(0.5, 0.5)); }
+)";
+        std::string error;
+        const unsigned int paletteProgram = CompileProgram(kPaletteVS, kPaletteFS, &error);
+        ASSERT_NE(paletteProgram, 0u) << error;
+        Build();
+        GLuint palette = 0;
+        glGenTextures(1, &palette);
+        for (int frame = 0; frame < 3; ++frame) {
+            BindDefaultFramebuffer();
+            glViewport(0, 0, width, height);
+            glDisable(GL_SCISSOR_TEST);
+            glDisable(GL_BLEND);
+            glDepthMask(GL_TRUE);
+            glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+            glClearDepth(1.0);
+            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+            // The palette changes every frame; this frame's colour is what the sprite must show.
+            const unsigned char texel[4] = {static_cast<unsigned char>(frame == 2 ? 0 : 255), 255, 0, 255};
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, palette);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, texel);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+            // Terrain: no depth test, red.
+            glDisable(GL_DEPTH_TEST);
+            Quad(1.0f, 0.0f, 0.0f, 1.0f, 0.5f);
+            // Sprites: depth-tested against the cleared depth, palette-coloured.
+            glEnable(GL_DEPTH_TEST);
+            glDepthFunc(GL_LEQUAL);
+            glUseProgram(paletteProgram);
+            glUniform1i(glGetUniformLocation(paletteProgram, "uPalette"), 0);
+            glUniform1f(glGetUniformLocation(paletteProgram, "uDepth"), 0.0f);
+            glBindVertexArray(vao);
+            glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+            glDisable(GL_DEPTH_TEST);
+            EXPECT_EQ(FirstGLError(), 0u);
+            if (frame == 2) {
+                const Image image = ReadPixels(width, height);
+                EXPECT_TRUE(Near(image.At(width / 2, height / 2), 0, 255, 0, 255))
+                    << "frame 2: the depth-tested sprite shows this frame's palette (green)";
+            }
+            gl.EndFrame();
+        }
+        glDeleteTextures(1, &palette);
+        glDeleteProgram(paletteProgram);
+    }
+
 } // namespace MGITest

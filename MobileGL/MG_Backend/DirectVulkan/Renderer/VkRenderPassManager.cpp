@@ -105,6 +105,25 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return true;
     }
 
+    Bool VkRenderPassManager::BeginRenderPass(VkCommandBuffer commandBuffer, RenderPassEntry& renderPassEntry,
+                                              VkRenderPass renderPass, const VkClearValue* clearValues,
+                                              Uint32 clearValueCount) {
+        VkRenderPassBeginInfo begin{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
+        begin.renderPass = renderPass;
+        begin.framebuffer = renderPassEntry.framebuffer;
+        begin.renderArea = {{0, 0}, {static_cast<Uint32>(renderPassEntry.extent.x()),
+                                     static_cast<Uint32>(renderPassEntry.extent.y())}};
+        begin.clearValueCount = clearValueCount;
+        begin.pClearValues = clearValues;
+        vkCmdBeginRenderPass(commandBuffer, &begin, VK_SUBPASS_CONTENTS_INLINE);
+        s_activeRenderPass.Get().commandBuffer = commandBuffer;
+        s_activeRenderPass.Get().hash = renderPassEntry.hash;
+        s_activeRenderPass.Get().compatibilityHash = renderPassEntry.compatibilityHash;
+        s_activeRenderPass.Get().extent = renderPassEntry.extent;
+        s_hasActiveRenderPass.Get() = true;
+        return true;
+    }
+
     Bool VkRenderPassManager::EndRenderPass(VkCommandBuffer commandBuffer) {
         BumpWireImageWriteEpoch();
         vkCmdEndRenderPass(commandBuffer);

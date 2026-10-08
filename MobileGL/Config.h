@@ -125,6 +125,17 @@ namespace MobileGL::MG_Config {
         // (vkCmdClearAttachments) rather than in a render pass of its own built for the clear.
         // Auto is ON; ForceOff restores the standalone clear for every surface.
         QuirkOverride MagmaInPassClear = QuirkOverride::Auto;
+        // MOBILEGL_MAGMA_INPASS_CLEAR_DEFAULT: the same for the default framebuffer. Auto is OFF
+        // (an unexplained openra regression on Adreno 750, perf-p15/HANDOFF.md); ForceOn enables it.
+        QuirkOverride MagmaInPassClearDefault = QuirkOverride::Auto;
+        // MOBILEGL_MAGMA_PASS_CACHE: wire draw passes (render pass, framebuffer, views) are kept
+        // across frames while their key's image epochs hold. Auto is ON; ForceOff drops every
+        // cached pass whose last use completed at each frame begin, as before P15.
+        QuirkOverride MagmaPassCache = QuirkOverride::Auto;
+        // MOBILEGL_MAGMA_VERTEX_CONVERSION_CACHE: a wire vertex stream that needs a CPU format
+        // conversion is converted once per frame slot per (buffer content, layout) and reused by
+        // every draw that names it, instead of once per draw. Auto is ON; ForceOff converts per draw.
+        QuirkOverride MagmaVertexConversionCache = QuirkOverride::Auto;
         // MOBILEGL_ADVERTISE_FP64: add GL_ARB_gpu_shader_fp64 to the advertised extension
         // string. `double` in a shader always WORKS - it is narrowed to 32 bits before any
         // module reaches a backend (ShaderTranspiler::DemoteFloat64Pass) - but the extension
