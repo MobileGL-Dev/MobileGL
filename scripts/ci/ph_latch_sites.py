@@ -99,7 +99,7 @@ MECHANICS = [
     # pattern may not leave DrainRing's body (`\n    }\n` closes a member function in ServerLoop.cpp).
     (REMOTE / "Server" / "ServerLoop.cpp",
      "DrainRing: no record is popped once the session latched (checked immediately before every pop)",
-     r"Uint64 ServerLoop::DrainRing\(\) \{(?:(?!\n    \}\n).)*?for \(;;\) \{\s*if \(SessionLatched\(\)\) break;",
+     r"Uint64 ServerLoop::DrainRing\([^)]*\) \{(?:(?!\n    \}\n).)*?for \(;;\) \{\s*if \(SessionLatched\(\)\) break;",
      [("ServerLoopTest.cpp", "ALatchedRecordEndsItsBatchAndTheApplyThreadLeavesWithoutAStop"),
       ("PeerLatchTest.cpp", "ALatchedRecordIsTheLastRecordItsBatchApplies"),
       ("ServerLoopTest.cpp", "ALatchFromAnotherThreadBetweenTwoRecordsStopsTheNextPop")]),

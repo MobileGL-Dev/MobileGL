@@ -93,4 +93,8 @@ Dispatched runs (workflow_dispatch, not cancelled by later pushes):
 - 781a7446: Test 37707221661.
 - The close-out docs head: see the final report.
 
-There is only one self-hosted GPU runner (`minipc-8845-arch-wsl-gpu`), so GPU jobs queue behind it.
+Every `runs-on` in test.yml is GitHub-hosted `ubuntu-latest`, so long queueing is GitHub capacity /
+max-parallel, not a runner of ours. `PeerLatch.SiteMap` (`scripts/ci/ph_latch_sites.py`) greps
+ServerLoop.cpp's text: keep its patterns in step when DrainRing's shape changes (it caught the
+`DrainRing(polledHead)` signature at a0f4aa83). Locally, filter environmental failures by exact
+name - a `grep -v PeerLatch` hid it.
