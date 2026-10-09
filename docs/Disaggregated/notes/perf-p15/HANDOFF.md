@@ -124,7 +124,7 @@ The plan and its measurements are in [PLAN-P15.md](PLAN-P15.md); the audit is in
    the next lead is the GPU side (render-stage trace of Espryt vs MobileGlues passes), not driver calls.
 4. Small CPU batch: ValidateForVerb residue, Tracker::Update (0.018, mostly inherent),
    EmitGlobalConstants (0.026). Expected ≤0.03 ms in total.
-   - DONE on host, branch `cpubatch` (2026-10-09). **Device measurement pending.** Line-level
+   - DONE on host, branch `cpubatch` (2026-10-09). Measured on device 2026-10-09 (SCOREBOARD egc): EmitGlobalConstants 0.022 -> 0.014 ms/frame on both backends, consistent over 3 reps; whole-frame fps inside noise. Line-level
      profile of fbm2 h-r1..r3 (both backends, p15h syms) and m2ab e-DirectVulkan r1..r3 (LTO).
    - EmitGlobalConstants, cut: the (ShaderCso, Version) key is per handle (the applier keeps one
      block per record), so switching back to a program whose uniforms did not move sends nothing,
@@ -138,7 +138,14 @@ The plan and its measurements are in [PLAN-P15.md](PLAN-P15.md); the audit is in
      MOBILEGL_PIPE_POISON stamp walk, armed by MOBILEGL_BUILD_DISAGGREGATED. The bench libraries
      are the plugin build (split ON); the FCL-embedded build (split OFF, INFO) compiles it out.
      The rest (prologue, singleton guards, gates) is spread below 0.002 each.
-5. API 29 build plus its A/B (`wip/api29-switch`).
+5. DONE 2026-10-09: API 29 build plus its A/B (`wip/api29-switch`, 42922d21). Result in SCOREBOARD (api29):
+   - cpuhunt vanilla, 3 interleaved reps, 27 of 27 VALID. fps api29/api26: Magma monolith 1.041, Magma inproc 1.044,
+     Espryt monolith 1.008, Espryt inproc 1.015; GL-thread CPU -3 % / -7 % / -0.6 % / -3.4 %.
+   - The gain is not TLS: simpleperf puts `tlsdesc_resolver_dynamic` (api29) at the same 0.05 ms/frame, about 2 % of the
+     render thread, as `__emutls_get_address` (api26), because a dlopen'ed library takes the dynamic resolver.
+   - Open: whether a static TLS model (initial-exec) on the hot variables can remove the 0.05 ms in a dlopen'ed lib on
+     bionic; and what actually makes the api29 Magma build faster (not isolated).
+   - The shipped build stays API 26. The FCL-embedded 29 copy still needs FCL's own minSdk switch.
 6. Smaller follow-ups:
    - DONE 2026-10-09: `bench_session.sh stop` now runs `pin_clocks.sh restore` first (verified over a
      17-session run: max clocks back to stock after every session, daemons running, no session file).
