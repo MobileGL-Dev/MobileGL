@@ -74,8 +74,8 @@ barrier = int(os.environ['MOBILEGL_IPC_VERB_BARRIER'])
 negative = barrier == 0
 prefix = 'RemoteWaitBoundaryControl.'
 specs = [
- ('AppliedClassWaitsWithRunAheadCap', 'GenerateMipmap', 1, True,
-  'E1 wait boundary: GenerateMipmap returned before apply'),
+ ('AppliedClassWaitsWithRunAheadCap', 'ApplierReset', 1, True,
+  'E1 wait boundary: ApplierReset returned before apply'),
  ('MissingServerCapKeepsClearLockstep', 'Clear', 0, True,
   'E1 wait boundary: Clear without server cap returned before apply'),
  ('ServerCapAllowsClearToRunAhead', 'Clear', 1, False, ''),
