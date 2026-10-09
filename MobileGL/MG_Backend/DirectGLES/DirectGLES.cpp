@@ -11683,6 +11683,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // Bumped on every registry mutation. The per-thread active-tuple cache below is keyed on it, so
     // a destroyed tuple can never be handed out from a stale cache entry.
     static std::atomic<Uint64> g_nativeRegistryEpoch{1};
+    // P15: moves whenever the size QueryCurrentSurfaceSize would answer may have moved - after every
+    // swap (a window surface takes a new size at its next swap) and at every change of a session's
+    // draw surface (NoteDrawSurfaceMoved at each `session.Draw =`). Surface creation and destruction
+    // also move g_nativeRegistryEpoch, which the size memo keys on as well.
+    static std::atomic<Uint64> g_surfaceSizeEpoch{1};
+    static void NoteDrawSurfaceMoved() { g_surfaceSizeEpoch.fetch_add(1, std::memory_order_acq_rel); }
     // Never erased while the process lives: a context teardown marks its tuple dead (Context =
     // EGL_NO_CONTEXT) instead of freeing it, so a cached pointer is never dangling between the
     // epoch bump and the next resolution.
@@ -11716,6 +11722,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
         EGLContext boundContext = EGL_NO_CONTEXT;
         EGLSurface boundDraw = EGL_NO_SURFACE;
         Uint64 boundSerial = 0;
+        // QueryCurrentSurfaceSize's memo (P15): the last answer, good while the session, the
+        // registry epoch and the surface-size epoch all hold.
+        Bool sizeMemoValid = false;
+        Uint64 sizeMemoSession = 0, sizeMemoToken = 0, sizeMemoRegistryEpoch = 0, sizeMemoSizeEpoch = 0;
+        Int sizeMemoWidth = 0, sizeMemoHeight = 0;
     };
     thread_local NativeThreadState t_native;
 
@@ -11940,6 +11951,20 @@ namespace MobileGL::MG_Backend::DirectGLES {
     static Bool QueryCurrentSurfaceSize(Int& outWidth, Int& outHeight) {
         outWidth = 0;
         outHeight = 0;
+        // P15: ANSWERED FROM A MEMO while nothing that moves the size moved. Two eglQuerySurface
+        // calls behind the registry lock on every dirty render-state sync (draws and clears whose
+        // scissor box the app never wrote) cost 0.065 ms/frame on FCL Espryt.
+        Uint64 memoSession = 0, memoToken = 0;
+        ResolveNativeKey(memoSession, memoToken);
+        const Uint64 registryEpoch = g_nativeRegistryEpoch.load(std::memory_order_acquire);
+        const Uint64 sizeEpoch = g_surfaceSizeEpoch.load(std::memory_order_acquire);
+        NativeThreadState& memo = t_native;
+        if (memo.sizeMemoValid && memo.sizeMemoSession == memoSession && memo.sizeMemoToken == memoToken &&
+            memo.sizeMemoRegistryEpoch == registryEpoch && memo.sizeMemoSizeEpoch == sizeEpoch) {
+            outWidth = memo.sizeMemoWidth;
+            outHeight = memo.sizeMemoHeight;
+            return true;
+        }
         // P14 S4: the surface is the SESSION's, not the process's - the tuple that draws to it is
         // one of the session's contexts.
         const EGLSurface surface = ActiveNativeSession().Draw;
@@ -11957,6 +11982,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         outWidth = static_cast<Int>(width);
         outHeight = static_cast<Int>(height);
+        memo.sizeMemoValid = true;
+        memo.sizeMemoSession = memoSession;
+        memo.sizeMemoToken = memoToken;
+        memo.sizeMemoRegistryEpoch = registryEpoch;
+        memo.sizeMemoSizeEpoch = sizeEpoch;
+        memo.sizeMemoWidth = outWidth;
+        memo.sizeMemoHeight = outHeight;
         return true;
     }
 
@@ -12575,6 +12607,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         if (tuple.Draw == EGL_NO_SURFACE) return true;
         if (tuple.Draw != session.Draw && SessionOwnsSurface(session, tuple.Draw)) {
             session.Draw = tuple.Draw;
+            NoteDrawSurfaceMoved();
             session.Read = SessionOwnsSurface(session, tuple.Read) ? tuple.Read : tuple.Draw;
         }
         if (t_native.boundContext == tuple.Context && t_native.boundDraw == session.Draw) return true;
@@ -12717,6 +12750,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         NativeSessionState& session = ActiveNativeSession();
         if (!SessionOwnsSurface(session, surface)) return false;
         session.Draw = surface;
+        NoteDrawSurfaceMoved();
         session.Read = surface;
         return true;
     }
@@ -12725,6 +12759,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         NativeSessionState& session = ActiveNativeSession();
         if (!SessionOwnsSurface(session, surface)) return false;
         session.Draw = surface;
+        NoteDrawSurfaceMoved();
         session.Read = surface;
         if (ActiveNativeContext().Context == EGL_NO_CONTEXT) return true;
         if (t_native.boundContext == ActiveNativeContext().Context && t_native.boundDraw == surface) return true;
@@ -12762,7 +12797,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                           entries.end());
             g_nativeRegistryEpoch.fetch_add(1, std::memory_order_acq_rel);
         }
-        if (session.Draw == previous) session.Draw = replacement;
+        if (session.Draw == previous) {
+            session.Draw = replacement;
+            NoteDrawSurfaceMoved();
+        }
         if (session.Read == previous) session.Read = replacement;
         // The calling thread drew to the old one: draw to the new one from here (the old is then
         // no longer current, and its destruction below is immediate).
@@ -12791,6 +12829,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // Fall back onto a surface the session still has, so the next bind has somewhere to go.
             const EGLSurface fallback = session.Surfaces.empty() ? EGL_NO_SURFACE : session.Surfaces.front().Surface;
             session.Draw = fallback;
+            NoteDrawSurfaceMoved();
             session.Read = fallback;
             if (t_native.boundDraw == surface && fallback != EGL_NO_SURFACE &&
                 ActiveNativeContext().Context != EGL_NO_CONTEXT) {
@@ -12952,6 +12991,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         NativeSessionState& session = ActiveNativeSession();
         session.Surfaces.push_back({window, surface});
         session.Draw = surface;
+        NoteDrawSurfaceMoved();
         session.Read = surface;
         tuple.Draw = surface;
         tuple.Read = surface;
@@ -12980,6 +13020,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         NativeSessionState& session = ActiveNativeSession();
         session.Surfaces.push_back({static_cast<NativeWindowType>(0), surface});
         session.Draw = surface;
+        NoteDrawSurfaceMoved();
         session.Read = surface;
         tuple.Draw = surface;
         tuple.Read = surface;
@@ -13767,6 +13808,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         } else {
             g_EGLFuncs.eglSwapBuffers(g_Display, drawSurface);
         }
+        NoteDrawSurfaceMoved(); // a window surface takes a new size at its swap
         if (drawSurface != EGL_NO_SURFACE) {
             const std::lock_guard<std::mutex> lock(g_nativeRegistryMutex);
             if (auto* entry = FindSessionSurfaceLocked(session, drawSurface)) ++entry->Presents;

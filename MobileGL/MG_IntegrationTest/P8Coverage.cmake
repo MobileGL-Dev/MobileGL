@@ -36,6 +36,7 @@ set(MGL_P8A_AMBIENT_CASES
     CopyImagePacked16Scenario.*
     CrossFrameBufferScenario.*
     DefaultFramebufferAcrossSwapScenario.*
+    DefaultScissorFollowsSurfaceScenario.*
     DepthStencilReadbackAttachmentShapeScenario.DepthOfALayeredCubeAttachmentReadsBack
     DepthStencilReadbackAttachmentShapeScenario.DepthOfAPlainTexture2DAttachmentReadsBack
     DepthStencilReadbackAttachmentShapeScenario.DepthOfAnArrayLayerAttachmentReadsBack

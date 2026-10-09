@@ -195,6 +195,7 @@ add_executable(MobileGLIntegrationTest
     Scenarios/DefaultFramebufferAcrossSwapScenario.cpp
     Scenarios/ScenarioIsolationScenario.cpp
     Scenarios/UploadOrderScenario.cpp
+    Scenarios/DefaultScissorFollowsSurfaceScenario.cpp
 )
 
 target_include_directories(MobileGLIntegrationTest PRIVATE
