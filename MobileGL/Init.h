@@ -33,10 +33,11 @@ namespace MobileGL {
     } // namespace MG_ConfigLoader
 
     // Whether this process can be served right now. False when MobileGL is configured to reach a
-    // server that is not there (or a split session already failed to come up), or when the process
-    // asked for software rendering (LIBGL_ALWAYS_SOFTWARE, desktop Linux), so a
+    // server that is not there (or a split session already failed to come up), so a
     // caller that can choose another implementation - the system's EGL/GLX/GBM loaders - should
-    // decline rather than hand out something that cannot draw. Cheap: once true it stays true
+    // decline rather than hand out something that cannot draw. LIBGL_ALWAYS_SOFTWARE does NOT
+    // make it false: that variable selects the system GL's software renderer and is not a reason
+    // to disable MobileGL's entry points. Cheap: once true it stays true
     // until the library is torn down, and a probe is one non-blocking connect with a short bound.
     Bool ImplementationAvailable();
 

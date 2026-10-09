@@ -105,7 +105,7 @@ MSYS2_ARG_CONV_EXCL='*' wsl -d archlinux -- bash -lc 'cd ~/mgl-anl-bld && ctest 
 
 优先级：环境变量 > `/etc/mobilegl/backend`（只管后端）> client.conf > 内置默认；`MOBILEGL_CONFIG_FILE` / `MOBILEGL_BACKEND_FILE` 可指向别的文件（设为空即关闭）；server 进程不读这些文件。
 
-**回退**：真正拉起之前 client 先探一次配置的 endpoint（一次非阻塞 connect，`MOBILEGL_IPC_PROBE_TIMEOUT_MS` 默认 250，0 关闭；被拒的抽象 socket 约 0.2 ms 就有结果）。没有 server 时：EGL vendor 返回 `EGL_NO_DISPLAY`、设备数 0（glvnd 换下一个 vendor），GLX vendor 的 `__glx_Main` 失败（libGLX 回退到 Xwayland 报的 vendor），`mobilegl_gbm` 的 `create_device` 失败（libgbm 回退到设备自己的后端）。客户端查询（`eglQueryString(EGL_NO_DISPLAY)`、`eglGetProcAddress`）从不拉起会话。对别的后端创建的 GBM 设备和 `LIBGL_ALWAYS_SOFTWARE=1` 的进程，MobileGL 同样让开——Xwayland（KWin 补丁给它设了这个）因此继续走软件栈。不停真 server 的演示：
+**回退**：真正拉起之前 client 先探一次配置的 endpoint（一次非阻塞 connect，`MOBILEGL_IPC_PROBE_TIMEOUT_MS` 默认 250，0 关闭；被拒的抽象 socket 约 0.2 ms 就有结果）。没有 server 时：EGL vendor 返回 `EGL_NO_DISPLAY`、设备数 0（glvnd 换下一个 vendor），GLX vendor 的 `__glx_Main` 失败（libGLX 回退到 Xwayland 报的 vendor），`mobilegl_gbm` 的 `create_device` 失败（libgbm 回退到设备自己的后端）。客户端查询（`eglQueryString(EGL_NO_DISPLAY)`、`eglGetProcAddress`）从不拉起会话。对别的后端创建的 GBM 设备，MobileGL 同样让开。`LIBGL_ALWAYS_SOFTWARE=1` 不再让它让开（918d40dd）：那只是 Mesa 的软件渲染器选择，不是关掉 MobileGL 入口的理由；只要有 server，带这个变量的进程（包括被 KWin 补丁设了它的 Xwayland）照样由 MobileGL 服务。不停真 server 的演示：
 ```sh
 sed 's|^MOBILEGL_IPC_CONTROL=.*|MOBILEGL_IPC_CONTROL=unix:@nobody|' /etc/mobilegl/client.conf > /tmp/down.conf
 sudo -u swung0x48 env -i HOME=/home/swung0x48 PATH=/usr/bin XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-0 \
