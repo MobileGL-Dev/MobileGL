@@ -112,6 +112,7 @@ set(MGL_P8A_AMBIENT_CASES
     UnwrittenPositionOutputScenario.AShaderWithNoPositionBlockStillDraws
     UnwrittenPositionOutputScenario.AWrittenRedeclaredPositionStillDraws
     UnwrittenPositionOutputScenario.CapturingAWrittenPositionStillDraws
+    UploadOrderScenario.*
     VertexArrayEnableDisableScenario.*
     VertexAttribBindingScenario.*
     ViewportArrayScenario.*

@@ -194,6 +194,7 @@ add_executable(MobileGLIntegrationTest
     Scenarios/PersistentCoherentMapScenario.cpp
     Scenarios/DefaultFramebufferAcrossSwapScenario.cpp
     Scenarios/ScenarioIsolationScenario.cpp
+    Scenarios/UploadOrderScenario.cpp
 )
 
 target_include_directories(MobileGLIntegrationTest PRIVATE
