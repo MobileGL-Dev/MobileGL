@@ -13,7 +13,9 @@
 // keeps the surface size in a memo that a swap, a change of draw surface, or a surface's creation
 // or destruction invalidates. This case makes a second, larger surface current on the same
 // context and clears it with the scissor test on: the clear must reach the larger surface's far
-// corner, which a size remembered from the first surface would cut off.
+// corner, which a size remembered from the first surface would cut off. DirectVulkan resolves a
+// never-written box to the whole framebuffer it draws into, so the same clear reaches the corner
+// there too (it used to read the all-zero box as an empty one and clear nothing).
 
 #include <array>
 
@@ -36,7 +38,6 @@ class DefaultScissorFollowsSurfaceScenario : public ScenarioTest {};
 
 TEST_F(DefaultScissorFollowsSurfaceScenario, AClearOnALargerSurfaceMadeCurrentReachesItsFarCorner) {
     if (!Ready() || IsSkipped()) return;
-    if (Gl().BackendName() != "DirectGLES") GTEST_SKIP() << "the substituted scissor box is DirectGLES's";
     const EGLDisplay display = eglGetCurrentDisplay();
     const EGLSurface first = eglGetCurrentSurface(EGL_DRAW);
     const EGLContext context = eglGetCurrentContext();

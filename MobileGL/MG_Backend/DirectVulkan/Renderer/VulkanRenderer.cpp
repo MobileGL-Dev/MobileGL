@@ -670,6 +670,18 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         vkCmdSetLineWidth(commandBuffer, lineWidth);
     }
 
+    // Whether the GL scissor test clips viewport index `index`. The scissor rectangles start
+    // all-zero, and all-zero there means "never written" (RenderState's constructor), not an
+    // empty box: GL's initial box is the whole window, so until the application's first
+    // glScissor an enabled test clips nothing. Read as a box it would clip EVERYTHING, so every
+    // reader of the box asks this first. The resolution matches the viewport's (ComputeGLViewport
+    // resolves a never-written viewport to the current framebuffer's extent).
+    static Bool GLScissorTestClips(Uint32 index = 0) {
+        const RenderStateParameters& parameters = MG_Pipe::gPipeInputs.GetRenderStateParameters();
+        const Uint32 bit = 1u << index;
+        return (parameters.ScissorTestEnabledMask & bit) != 0 && (parameters.ScissorBoxWrittenMask & bit) != 0;
+    }
+
     static VkRect2D MakeClampedScissorRect(const IntVec4& scissorBox, const IntVec2& framebufferExtent) {
         const Int x0 = std::max<Int>(0, scissorBox.x());
         const Int y0 = std::max<Int>(0, scissorBox.y());
@@ -3393,7 +3405,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                                   VkSurfaceTransformFlagBitsKHR preTransform,
                                                   Bool isDefaultFbo) const {
         const auto& parameters = MG_Pipe::gPipeInputs.GetRenderStateParameters();
-        if ((parameters.ScissorTestEnabledMask & (1u << index)) == 0) {
+        if (!GLScissorTestClips(index)) {
             VkRect2D full{};
             full.offset = {0, 0};
             full.extent = {static_cast<Uint32>(extent.x()), static_cast<Uint32>(extent.y())};
@@ -3515,7 +3527,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 key.stencilWriteMask[face] = p.StencilStates[face].WriteMask;
                 key.stencilRef[face] = p.StencilStates[face].Ref;
             }
-            key.scissorEnabled = (p.ScissorTestEnabledMask & 1u) != 0;
+            key.scissorEnabled = GLScissorTestClips(0);
             key.scissorBox[0] = p.ScissorBoxes[0].x();
             key.scissorBox[1] = p.ScissorBoxes[0].y();
             key.scissorBox[2] = p.ScissorBoxes[0].z();

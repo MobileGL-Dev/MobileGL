@@ -1046,7 +1046,7 @@
         if (count == 0) return remaining & ~handled;
 
         VkRect2D area{{0, 0}, {key.width, key.height}};
-        if (MG_Pipe::gPipeInputs.IsCapabilityEnabled(CapabilityInput::ScissorTest)) {
+        if (GLScissorTestClips()) {
             const auto& box = MG_Pipe::gPipeInputs.GetScissorBox();
             const Int32 x0 = std::max(box.x(), 0), y0 = std::max(box.y(), 0);
             const Int32 x1 = std::min(box.x() + box.z(), static_cast<Int32>(key.width));

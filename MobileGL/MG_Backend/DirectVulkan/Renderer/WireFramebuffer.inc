@@ -369,7 +369,7 @@
         const VkCommandBuffer passBuffer = active->commandBuffer;
         const Uint64 passHash = active->hash;
         VkRect2D area{{0, 0}, {key.width, key.height}};
-        if (MG_Pipe::gPipeInputs.IsCapabilityEnabled(CapabilityInput::ScissorTest)) {
+        if (GLScissorTestClips()) {
             const auto& box = MG_Pipe::gPipeInputs.GetScissorBox();
             const Int32 x0 = std::max(box.x(), 0), y0 = std::max(box.y(), 0);
             const Int32 x1 = std::min(box.x() + box.z(), static_cast<Int32>(key.width));
@@ -469,7 +469,7 @@
             const ClearAttachmentPayload& payload, GLint drawbuffer) {
         GLbitfield remaining = payload.mask & (GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
         if (!remaining || fbo.IsDefault || drawbuffer >= 0 || m_wirePreparationDepth != 0) return remaining;
-        const Bool scissor = MG_Pipe::gPipeInputs.IsCapabilityEnabled(CapabilityInput::ScissorTest);
+        const Bool scissor = GLScissorTestClips();
         const auto wholeImage = [&](const WireImage& image) {
             if (!scissor) return true;
             const auto& box = MG_Pipe::gPipeInputs.GetScissorBox();
@@ -614,7 +614,7 @@
             if (!image.image) return;
             m_textureManager->FlushPendingUploads();
             VkRect2D area{{0, 0}, image.extent};
-            if (MG_Pipe::gPipeInputs.IsCapabilityEnabled(CapabilityInput::ScissorTest)) {
+            if (GLScissorTestClips()) {
                 const auto& box = MG_Pipe::gPipeInputs.GetScissorBox();
                 const Int32 x0 = std::max(box.x(), 0), y0 = std::max(box.y(), 0);
                 const Int32 x1 = std::min(box.x() + box.z(), static_cast<Int32>(image.extent.width));
@@ -1263,7 +1263,7 @@
         RetireWireDrawPass();
         // The scissor test clips blit writes: intersect the destination rectangle with
         // the scissor box and shrink the source proportionally.
-        if (MG_Pipe::gPipeInputs.IsCapabilityEnabled(CapabilityInput::ScissorTest)) {
+        if (GLScissorTestClips()) {
             const IntVec4& scissor = MG_Pipe::gPipeInputs.GetScissorBox();
             const auto clipAxis = [](GLint& d0, GLint& d1, GLint& s0, GLint& s1, GLint clipLo, GLint clipHi) -> Bool {
                 const Bool dstFlipped = d1 < d0;
