@@ -523,7 +523,7 @@ namespace MobileGL::MG_ConfigLoader {
                     "ring to an apply thread");
             return;
         }
-        // The three P6 forms. Recognised precisely, so the diagnostic can say "not yet"
+        // The three P6 forms. Recognised precisely, so the diagnostic can say "rejected"
         // rather than "unknown", which are different bugs on the operator's side.
         // P6 `sm`/`cp`: spawn is IMPLEMENTED. It launches a server process on a
         // rendezvous of its own and connects to it - the two processes are
@@ -547,9 +547,10 @@ namespace MobileGL::MG_ConfigLoader {
             return;
         }
         if (lowered.compare(0, 5, "unix:") == 0 || lowered.compare(0, 5, "pipe:") == 0) {
-            // unix: and pipe: remain P6+ - connecting to an endpoint SOMEBODY
-            // ELSE is listening on needs the server lifecycle to be somebody
-            // else's too, which is P12's. Named, never a silent degrade.
+            // unix: and pipe: are NOT MOBILEGL_TRANSPORT values and are rejected here. Connecting
+            // to a server somebody else is listening on is `spawn` plus
+            // MOBILEGL_IPC_CONTROL=unix:<path>|unix:@<name>|tcp://host:port (InitIpc); there is
+            // no pipe: form. Named, never a silent degrade.
             MGLOG_E("Config: MOBILEGL_TRANSPORT='%s' names a transport P6 does not implement yet; "
                     "staying on monolith. This run is NOT a split run.",
                     value.c_str());
