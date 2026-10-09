@@ -81,6 +81,7 @@ H2 sessions:
 | c4 ~02:55 (10-09) | v (as c1b); w = v + cut 4 (Espryt surface-size memo, 66e3b2c1) | 321.6 (1.70) | v 0.757 / 0.85 dev (3.18); w 0.762 / 0.86 dev (3.05) | - | - | - |
 | c1c2 ~03:30 (10-09) | t = p15t; y = p15t + 1b + 1c (deferred clears) + cut 4 | 321.3 (1.70) | - | t 0.795 / 0.83 dev (2.83); y 0.785 / 0.82 dev (2.74)⁴ | - | t 1.025 (1.35 / 1.41)⁵; y 1.076 (1.33 / 1.24) |
 | fbm ~05:20 (10-09) | y (as c1c2); z = y + FB-state build memo, one entry per target | 321.7 (1.70) | y 0.770 / 0.87 dev (3.04); z 0.775 / 0.87 dev (3.04) | y 0.818 / 0.86 dev (2.65); z 0.831 / 0.87 dev (2.65) | - | - |
+| fbm2 ~11:00 (10-09) | y; z (as fbm); h = y + batch h (485dff14 + c85c9439) | 319.7 (1.68) | y 0.763 / 0.86 dev (3.03); h 0.768 / 0.87 dev (3.00) | y 0.805 / 0.85 dev (2.68); z 0.798 / 0.84 dev (2.69); h 0.812 / 0.85 dev (2.62) | - | - |
 
 - **pt:** the blit view cache gives Magma inproc +1.2 % fps, with apply −0.03 ms/frame.
 - **c1:** cut 1 is within noise (−1.7 % fps, +0.06 ms). It engaged (the mid-frame submit is gone) but saves ≤0.04 ms; see MONOLITH-DIFF.md.
@@ -98,6 +99,18 @@ H2 sessions:
 
   ⁴ y has 2 valid reps: r2 never reached the world after 3 startup deaths (signal 34 during bootstrap, a harness flake also seen on MobileGlues and other builds).
   ⁵ t inproc r2 is discarded: a host-side `binary_cache_builder` pulled libraries over adb inside its measurement window.
+- **fbm2:** batch h moves GL CPU by -0.06 ms (Magma) and -0.03 ms (Espryt).
+  - Batch h: per-framebuffer FB-state memo, handle hints, per-buffer handle reuse, the cached per-verb
+    gate, and the Magma hash TLS hoist.
+  - The Magma before/after profile (render thread, ms/frame, c1c2 y-r1 -> fbm2 h-r1):
+    - MGPipeValidateForVerb 0.328 -> 0.282, BuildFramebufferState 0.058 -> 0.023;
+    - FindByLifetimeId + Acquire 0.047 -> 0.003, __emutls_get_address 0.079 -> 0.054;
+    - GetOrCreatePipeline 0.026 -> 0.013, MGPipeGetResourceOps 0.007 -> 0.002.
+  - The H2 effect is about half of the profile sum. Each piece is below the session noise (+-0.05 ms),
+    so the batch is measured as one.
+- **c1cbsl (gpuhunt, Iris + BSL, after a cooldown):** 1c does not cost GPU time.
+  - t 53.8 fps (18.5 GPU ms/frame) vs y 55.7 (17.9), both at 100 % GPU busy.
+  - One VALID pair. The MobileGlues run (56.2) is INVALID: the GPU idled at 231 MHz in two warmup samples.
 - **fbm:** the first memo is within noise on both backends (CPU 2.65 / 2.65 Magma, 3.04 / 3.04 Espryt).
   - It engaged only partly: Magma BuildFramebufferState 0.058 -> 0.032 ms/frame, and Espryt kept missing.
   - The build only runs on a binding switch, so one entry per target misses on every A/B/A switch.

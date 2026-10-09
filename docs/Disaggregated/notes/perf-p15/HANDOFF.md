@@ -15,9 +15,15 @@ The plan and its measurements are in [PLAN-P15.md](PLAN-P15.md); the audit is in
   - 533a2564: Magma deferred clears (1c) plus coalesced pass-begin barriers (1b).
     - Per frame: passes 11.5 -> 4.3 (dev 4.1), barriers 15.5 -> 9.0 (dev 3.4).
     - Inproc +5.0 % fps, apply thread -0.17 ms; monolith GL CPU -0.09 ms.
-- **In the worktree, not committed yet:**
-  - BuildFramebufferState memo (MOBILEGL_PIPE_FRAMEBUFFER_STATE_MEMO). A/B queued as session `fbm`.
-  - EmitVertexBuffers per-buffer handle reuse.
+- **Landed 2026-10-09 afternoon:**
+  - 485dff14: pipe client batch, i.e. the per-framebuffer FB-state memo (MOBILEGL_PIPE_FRAMEBUFFER_STATE_MEMO),
+    handle hints, per-buffer handle reuse and the per-verb gate cache.
+  - c85c9439: Magma hash TLS hoist.
+  - Effect: H2 GL CPU Magma 2.68 -> 2.62, Espryt 3.03 -> 3.00. The profile is in SCOREBOARD (fbm2).
+  - 9eed5a27 / 9ff97c2e: CI branch fixes. The E1 control follows ApplierReset, and ScenarioIsolation is
+    listed as unarmed in verify-split.
+- **Small-cut policy:** pieces below about 0.03 ms are verified by their own before/after function profile
+  plus a red-once, and get one H2 A/B per batch.
 - **Order (coordinator, 2026-10-09):** FB-state memo, then handle cache on objects, vertex input,
   program, samplers, accessor/TLS hoist, the ValidateForVerb dirty walk, Tracker.
   - No record-bypass design change until the user decides.
