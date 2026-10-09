@@ -8,7 +8,99 @@ The plan and its measurements are in [PLAN-P15.md](PLAN-P15.md); the audit is in
   ms/frame), dev measured in the same session, ~5 % noise.
 - GPU scene (Iris + BSL): fps within ~5 % of MobileGlues on both backends.
 
-## Latest (2026-10-09): cuts 1b + 1c, cut 4, pipe-record pieces
+## RESUME HERE (2026-10-09 evening, end of the long P15 run)
+
+**Rules from the user (2026-10-09):**
+- A fresh agent per clear task boundary.
+- Mechanical jobs (bench A/Bs that follow the existing scripts, builds, log/profile parsing, CI watching)
+  go to sonnet/haiku subagents. Design and implementation stay on opus.
+- No minSdk raise for the shipped build: API 29 is a SEPARATE artifact (its own library, plugin APK and
+  FCL-embedded copy).
+- No record bypass: monolith = record arm.
+- No emulated-TLS work below 29: b-i/b-ii/b-iii are dropped; native TLS at 29 is the TLS answer.
+- No new Android API usage. Keep MobileGL platform-agnostic unless a platform path is measured and has
+  no portable alternative.
+- ASurfaceControl, frame-rate hints and ADPF are deferred.
+
+**Where the code is (worktree `.claude/worktrees/p15`, branch `p15impl`):**
+- `origin/feat/disaggregated` = db346f28 plus the pushes listed in SCOREBOARD.
+- Local on `p15impl`, not pushed:
+  - 14d63881, docs.
+  - 8d548d5b, window-scoped freqcheck.
+  - ca0a3b74, a cherry-pick of the coordinator's LTO commit 190580f2 on `build-opt`. The coordinator
+    pushes 190580f2, so drop ca0a3b74 when rebasing.
+  - a0015bad, Magma 2a + 2b. Its message carries the m2ab result, or says it is pending.
+- `wip/espryt-depthcopy` (eb7572ff, on p15impl): the two Espryt BSL GPU items.
+  - (1) Depth glCopyImageSubData goes to the driver (ES 3.2 / EXT/OES_copy_image), with the
+    scratch-FBO depth blit as fallback. Knob MOBILEGL_ESPRYT_NATIVE_DEPTH_COPY.
+  - (2) A per-point attachment shadow on the Espryt FBO twin skips an attach call for a point that already
+    holds the same surface. It is keyed on the surface handle {slot, gen} plus driver id, level, layer,
+    call and re-mint generation; texture-side syncs still run. Knob MOBILEGL_ESPRYT_ATTACHMENT_SHADOW.
+  - Tests: DepthCopyImageScenario (2 cases) and AttachmentReattachScenario (4 cases), both registered on
+    the split arms. Red-once: a shifted native copy fails all DepthCopyImage cases on DirectGLES; dropping
+    Level from the shadow key fails the level case; keying on the driver id alone fails the
+    recycled-name case.
+  - Host suites are at baseline. **Not measured on device.**
+  - Next step: run `scratchpad/p15/espg_job.sh.next` (Espryt BSL, one arm per cooldown, e/b
+    interleaved). Target: Espryt BSL ≥ 0.95 of MobileGlues (now about 0.92).
+- `wip/api29-switch` (42922d21, on p15impl): `-Pmobilegl.androidApi=29` in build.gradle and the plugin's
+  build.gradle.kts.
+  - It sets minSdk 29 and therefore ANDROID_PLATFORM android-29; the plugin gets the `.api29` id suffix
+    and `-api29` version suffix. The CMake API-guard comment is updated. Default stays 26.
+  - Verified: the API 29 lib has 95 R_AARCH64_TLSDESC relocs and a TLS segment. __emutls remains only for
+    3 libc++abi variables.
+  - No A/B yet. The next agent runs the H2 A/B: API 26 vs 29, monolith + inproc, both backends,
+    MobileGlues control.
+  - Nothing in the tree needs a compile-time API gate yet, so none was added.
+  - The FCL-embedded 29 copy needs a matching FCL-side switch (FCL's own minSdk).
+
+**Open items, in order:**
+1. Espryt BSL GPU items (`wip/espryt-depthcopy`): device A/B, then commit to p15impl with numbers.
+2. Small CPU batch: ValidateForVerb residue, Tracker::Update (0.018, mostly inherent),
+   EmitGlobalConstants (0.026). Expected ≤0.03 ms in total.
+3. API 29 build plus its A/B (`wip/api29-switch`).
+4. Coordinator ask: a spawn-transport smoke with the LTO-ON plugin APK. It needs the plugin APK installed,
+   because FCL mgdebug has no libMobileGLServer.so. The LTO-ON APK does contain the server exe, whose
+   only libMobileGL import (mobilegl_server_main) is exported.
+
+**Harness rules (all in scratchpad `p15/`; the tools live in `tools/device_bench/disagg/`):**
+- H2 = `fcl_bench.sh`, driven by `fclab2.sh` for interleaved arms; summaries come from `fclsum.py`.
+- Every session goes through `devjob2.sh` (device lock, bench session, restore on exit). Profiles:
+  - `PROFILE=cpuhunt` for CPU work (CPU 1.5/1.25 GHz, GPU 903);
+  - `PROFILE=gpuhunt` for BSL (CPU 2.4/1.8, GPU 578).
+- BSL: **one arm per cooldown** (battery ≤ 33.0 °C between runs), arms interleaved across cooldowns. At
+  gpuhunt the scene hits thermal limits by the second back-to-back rep.
+- Validity: `freqcheck.py` judges clocks over the measurement windows only (measure_raw.txt spans) and
+  thermal over the whole run.
+- Stop a session on thr>0, a thermal_pwrlevel below the pin, or "max capped". Discard INVALID runs and go
+  on. Never stop on tpl alone: it is 6 by construction at gpuhunt.
+- Build simpleperf binary caches only after a session, or offline with `prof_prep_offline.sh`
+  (donor cache plus the build-id entry in build_id_list). Never adb-pull during a session.
+- Never edit a bash script that a running job will still read (bash reads scripts incrementally).
+- TaskStop does not reliably kill child bash processes on this host: kill the PIDs, and only the inner
+  session processes, so devjob's cleanup runs.
+- Libraries live in `scratchpad/p15/libs/<tag>/lib/arm64-v8a/libMobileGL.so`, with symbols in
+  `syms/<tag>/` and runs in `runs/<session>/`. Tags:
+
+  | tag | contents |
+  |---|---|
+  | p15e | LTO + 2a/2b + Espryt items |
+  | p15en | p15e without 2a/2b |
+  | p15lto / p15off | LTO ON / OFF, both with 2a/2b |
+  | p15a29 | API 29 |
+  | p15h | the pipe batch |
+  | p15y | 1c |
+  | p15t | before 1c |
+
+- Profile tools: `topinc.py`, `callers.py`, `callees.py`, `layerfns.py`, `layerdiff.py`, `diffprof.py`,
+  `appside.py`, `pftstate.py` (Perfetto SQL), `threadstate.py`.
+
+**Device state at hand-off:**
+- FCL is restored (vanilla scene restored, fcl_p14 restore run) and the bench session is stopped.
+- The device lock is free.
+- The plugin installs `top.mobilegl.plugin.*.trace` from earlier phases are still on the device.
+
+## Earlier (2026-10-09): cuts 1b + 1c, cut 4, pipe-record pieces
 
 - **Landed locally (pushed after the BSL gpuhunt check):**
   - 66e3b2c1 (rebased as 65d4b808): Espryt surface-size memo, GL CPU 3.18 -> 3.05.

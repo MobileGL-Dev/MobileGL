@@ -82,6 +82,7 @@ H2 sessions:
 | c1c2 ~03:30 (10-09) | t = p15t; y = p15t + 1b + 1c (deferred clears) + cut 4 | 321.3 (1.70) | - | t 0.795 / 0.83 dev (2.83); y 0.785 / 0.82 dev (2.74)⁴ | - | t 1.025 (1.35 / 1.41)⁵; y 1.076 (1.33 / 1.24) |
 | fbm ~05:20 (10-09) | y (as c1c2); z = y + FB-state build memo, one entry per target | 321.7 (1.70) | y 0.770 / 0.87 dev (3.04); z 0.775 / 0.87 dev (3.04) | y 0.818 / 0.86 dev (2.65); z 0.831 / 0.87 dev (2.65) | - | - |
 | fbm2 ~11:00 (10-09) | y; z (as fbm); h = y + batch h (485dff14 + c85c9439) | 319.7 (1.68) | y 0.763 / 0.86 dev (3.03); h 0.768 / 0.87 dev (3.00) | y 0.805 / 0.85 dev (2.68); z 0.798 / 0.84 dev (2.69); h 0.812 / 0.85 dev (2.62) | - | - |
+| lto ~17:30 (10-09) | o = ca0a3b74 + 2a/2b, -Pmobilegl.enableLto=OFF; l = the same, LTO ON (default) | 314.1 (1.71) | o 0.794 (2.99); l 0.800 (2.90) | o 0.850 (2.52); l 0.907 (2.36) | - | - |
 
 - **pt:** the blit view cache gives Magma inproc +1.2 % fps, with apply −0.03 ms/frame.
 - **c1:** cut 1 is within noise (−1.7 % fps, +0.06 ms). It engaged (the mid-frame submit is gone) but saves ≤0.04 ms; see MONOLITH-DIFF.md.
@@ -108,6 +109,13 @@ H2 sessions:
     - GetOrCreatePipeline 0.026 -> 0.013, MGPipeGetResourceOps 0.007 -> 0.002.
   - The H2 effect is about half of the profile sum. Each piece is below the session noise (+-0.05 ms),
     so the batch is measured as one.
+- **lto:** ThinLTO + -O3 + ICF/gc/no-semantic-interposition (190580f2) takes GL CPU from 2.52 to 2.36 ms on
+  Magma (fps 267 -> 285) and from 2.99 to 2.90 on Espryt. All runs VALID.
+  - Both backends load and render in FCL (one screenshot each, runs/lto-shot).
+  - Exported GL/EGL/JNI/vk symbols are identical (2973). LTO drops 3323 internal 3rdparty C++ exports.
+  - libMobileGLServer.so links and its only libMobileGL import (mobilegl_server_main) is exported.
+- **bsl3 (gpuhunt, stopped on a CPU max cap in rep 2):** r1 Magma 55.6, Espryt 52.8, MobileGlues 57.2 fps.
+  That is Magma 0.97 and Espryt 0.92 of MobileGlues.
 - **c1cbsl (gpuhunt, Iris + BSL, after a cooldown, 3 reps):** 1c does not cost GPU time.
   - VALID runs: t 53.8 / 53.9 fps vs y 55.7 / 55.5 (+3.4 %), all at 100 % GPU busy (18.5 -> 17.9 GPU ms/frame).
   - MobileGlues read 56.2 / 55.7 / 56.1, which puts Magma y at about 0.99 of it. All three MobileGlues

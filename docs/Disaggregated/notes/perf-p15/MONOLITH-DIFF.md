@@ -100,6 +100,22 @@ Host call counts per frame (diagnostic counting builds; FCL vanilla; 600-frame w
   - In both, most of the repeats are glVertexAttribPointer 302 + glVertexAttribIPointer 75: the
     same layout re-pointed at a new VBO on every draw.
 
+## Levers beyond the local cuts (evaluated 2026-10-09)
+
+Estimates are ms/frame of FCL GL-thread CPU. "Measured" rows come from H2 A/Bs (SCOREBOARD).
+
+| lever | result | status |
+|---|---|---|
+| Pipe batch (FB memo, handle hints, buffer reuse, gate cache, Magma hash TLS) | measured: Magma -0.06, Espryt -0.03 | landed 485dff14, c85c9439 |
+| ThinLTO + -O3 + ICF/gc (gradle default ON) | measured: Magma -0.16 (2.52 -> 2.36), Espryt -0.09 | 190580f2 (coordinator pushes) |
+| Magma rename spares 4 -> 12 + fence-poll quiet window | profile ceiling ~0.05-0.06 (Create 0.031, Destroy 0.014, vkGetFenceStatus 0.020) | a0015bad; m2ab A/B |
+| API 29 separate artifact (native ELF TLS) | estimate 0.08-0.1 (emutls 0.054 + pGLContext TLS init 0.024 on Magma) | wip/api29-switch, A/B open |
+| AutoFDO/PGO | estimate 0.1-0.25 | with the user |
+| Emulated-TLS work below 29 (mirror, owner-thread path, dual lib) | estimate 0.024-0.08 | dropped by the user |
+| App-side JIT delta | +0.065 vs dev (0.708 -> 0.773 app-only), cause unknown | needs a GL entry-count A/B |
+| shared_ptr refcount avoidance in bind paths | 0.005-0.01 | not started |
+| Espryt VertexAttribPointer split | <=0.04 | parked |
+
 ## Cuts, biggest first
 
 **Revised order:**
