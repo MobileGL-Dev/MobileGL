@@ -141,3 +141,13 @@ DirectGLES.VerifySplit.ThreeChannelAttachmentScenario.ThreeChannelColorAttachmen
 # --------------------------------------------------------------------------------------------
 DirectGLES.VerifySplit.PoisonOmissionScenario.WithoutOmissionCompletes
 DirectVulkan.VerifySplit.PoisonOmissionScenario.WithoutOmissionCompletes
+# --------------------------------------------------------------------------------------------
+# FIXTURE HYGIENE WITHOUT A VERB (4)
+# ScenarioIsolationScenario's two cases create, use and delete a program and leave a GL error
+# pending (or check that none is). glUseProgram, glDeleteProgram and glGetError reach no fill
+# point, so the arming line is honestly absent.
+# --------------------------------------------------------------------------------------------
+DirectGLES.VerifySplit.ScenarioIsolationScenario.ACaseLeavesItsDeletedProgramCurrentAndAnErrorUnread
+DirectGLES.VerifySplit.ScenarioIsolationScenario.TheNextCaseStartsWithNoProgramCurrentAndNoErrorPending
+DirectVulkan.VerifySplit.ScenarioIsolationScenario.ACaseLeavesItsDeletedProgramCurrentAndAnErrorUnread
+DirectVulkan.VerifySplit.ScenarioIsolationScenario.TheNextCaseStartsWithNoProgramCurrentAndNoErrorPending
