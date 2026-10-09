@@ -30,7 +30,19 @@ The plan and its measurements are in [PLAN-P15.md](PLAN-P15.md); the audit is in
   - ca0a3b74, a cherry-pick of the coordinator's LTO commit 190580f2 on `build-opt`. The coordinator
     pushes 190580f2, so drop ca0a3b74 when rebasing.
   - a0015bad, Magma 2a + 2b. Its message carries the m2ab result, or says it is pending.
-- `wip/espryt-depthcopy` (eb7572ff, on p15impl): the two Espryt BSL GPU items.
+- `wip/espryt-depthcopy-measured` (the two Espryt BSL GPU items rebased onto origin 9f610167, with the
+  device numbers in its message; the old `wip/espryt-depthcopy` eb7572ff is the unmeasured original).
+  **Measured 2026-10-09 on device, NOT landed: no gain on BSL.** x = with both items, b = without, both
+  LTO builds of origin 9f610167; gpuhunt, 3 VALID reps each, one arm per cooldown:
+  - BSL: x 51.4 fps (0.921 of MobileGlues 55.8), b 51.9 (0.930); GPU 100 % busy in all runs, GPU
+    19.45 vs 19.29 ms/frame (MobileGlues 17.88). The target of 0.95 is not reached; the items are neutral.
+  - Vanilla cpuhunt check (Espryt monolith): x 248.5 fps / 2.87 ms GL CPU, b 254.0 / 2.83 (-2.2 % fps,
+    within noise; no CPU regression worth the name, but no gain).
+  - Engaged: the simpleperf profile of the BSL render thread shows `BlitDepthTexture2D` 0.100 ms/frame in
+    b and gone in x; `FramebufferImpl::SyncToBackendByHandle` 0.178 -> 0.162. The saved CPU is hidden by the
+    GPU-bound frame, and the GPU time per frame did not move, so the Espryt BSL gap is not in these
+    items. See SCOREBOARD (ebbsl).
+  Original description:
   - (1) Depth glCopyImageSubData goes to the driver (ES 3.2 / EXT/OES_copy_image), with the
     scratch-FBO depth blit as fallback. Knob MOBILEGL_ESPRYT_NATIVE_DEPTH_COPY.
   - (2) A per-point attachment shadow on the Espryt FBO twin skips an attach call for a point that already
@@ -40,9 +52,8 @@ The plan and its measurements are in [PLAN-P15.md](PLAN-P15.md); the audit is in
     the split arms. Red-once: a shifted native copy fails all DepthCopyImage cases on DirectGLES; dropping
     Level from the shadow key fails the level case; keying on the driver id alone fails the
     recycled-name case.
-  - Host suites are at baseline. **Not measured on device.**
-  - Next step: run `scratchpad/p15/espg_job.sh.next` (Espryt BSL, one arm per cooldown, e/b
-    interleaved). Target: Espryt BSL ≥ 0.95 of MobileGlues (now about 0.92).
+  - Host suites: 1672 DirectGLES ctest entries (monolith + Split) pass serially in WSL (362 skipped by
+    design), including DepthCopyImage, AttachmentReattach, PassOrder and every blit case.
 - `wip/api29-switch` (42922d21, on p15impl): `-Pmobilegl.androidApi=29` in build.gradle and the plugin's
   build.gradle.kts.
   - It sets minSdk 29 and therefore ANDROID_PLATFORM android-29; the plugin gets the `.api29` id suffix
@@ -108,13 +119,17 @@ The plan and its measurements are in [PLAN-P15.md](PLAN-P15.md); the audit is in
    - Linux/anland;
    - the Windows WGL drop-in;
    - build options, user-facing knobs and troubleshooting.
-3. Espryt BSL GPU items (`wip/espryt-depthcopy`): device A/B, then commit to p15impl with numbers.
+3. DONE 2026-10-09: Espryt BSL GPU items (`wip/espryt-depthcopy-measured`): device A/B measured, no gain,
+   not landed (see above and SCOREBOARD ebbsl). The Espryt BSL gap to MobileGlues (0.92) is still open;
+   the next lead is the GPU side (render-stage trace of Espryt vs MobileGlues passes), not driver calls.
 4. Small CPU batch: ValidateForVerb residue, Tracker::Update (0.018, mostly inherent),
    EmitGlobalConstants (0.026). Expected ≤0.03 ms in total.
 5. API 29 build plus its A/B (`wip/api29-switch`).
 6. Smaller follow-ups:
-   - `bench_session.sh stop` (via devjob2) restores the services and caps but leaves the clocks
-     pinned. It should also run `pin_clocks.sh restore`.
+   - DONE 2026-10-09: `bench_session.sh stop` now runs `pin_clocks.sh restore` first (verified over a
+     17-session run: max clocks back to stock after every session, daemons running, no session file).
+     The scratchpad `devjob2.sh` / `fcl_bench.sh` hard-code the p15 worktree's copy of the harness;
+     point them at a tree that has this commit.
    - The `Fatal{UnmigratedSurface, "AndroidNativeWindow@P12"}` text and the tests asserting on it still
      point at P12. The rule is permanent: a client window cannot cross processes, so windowed spawn uses
      `MOBILEGL_IPC_SURFACE=server`. Reword the message to say that.

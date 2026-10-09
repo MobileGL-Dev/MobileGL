@@ -124,6 +124,20 @@ H2 sessions:
     the 578 MHz pin.
   - A window-scoped validity check (freqcheck over the measure_raw.txt span) would admit them. That
     is a harness change, not yet made.
+- **ebbsl (gpuhunt, Iris + BSL, Espryt monolith, 3 reps, one arm per cooldown, all VALID):** the two parked
+  Espryt GPU items (native depth glCopyImageSubData, attachment shadow) do not help. Builds: x = origin
+  9f610167 + the items, b = origin 9f610167, both LTO; MobileGlues is the plugin.
+  - fps r1 / r2 / r3: x 51.4 / 51.3 / 51.5 (mean 51.4), b 52.7 / 51.8 / 51.0 (51.9), MobileGlues 56.5 / 55.6 / 55.3 (55.8).
+    Ratio to MobileGlues: x 0.921, b 0.930 (x vs b -1.0 %, noise). Target 0.95 not reached.
+  - GPU: busy 100 % in every run; union of kgsl cmdbatch intervals per frame (x / b / MobileGlues)
+    19.45 / 19.29 / 17.88 ms, 1.04 cmdbatches per frame in all three.
+  - Device state: gpuhunt (CPU 2380/1689 MHz, GPU 578 MHz; in-window min = max for every policy), tpl=6
+    thr=0, peak CPU 75.5-79.4 C, GPU 63.2-65.9 C, skin 42.4-44.5 C, daemons stopped(5), swap=false, anland off.
+  - Engagement (one simpleperf run each, render thread): `BlitDepthTexture2D` 0.100 ms/frame in b, gone in x;
+    Espryt `CopyImageSubData` 0.115 -> 0.072; `SyncToBackendByHandle` 0.178 -> 0.162.
+  - Vanilla cpuhunt (1500/1250/903 MHz, 3 reps, all VALID, peak CPU 58 C): Espryt monolith GL CPU x 2.87,
+    b 2.83 ms/frame; fps x 249.9 / 251.4 / 244.2 (248.5), b 250.1 / 256.5 / 255.2 (254.0), GPU busy 17 %.
+  - Not landed: wip/espryt-depthcopy-measured. The BSL frame is GPU-bound and its GPU time did not move.
 - **fbm:** the first memo is within noise on both backends (CPU 2.65 / 2.65 Magma, 3.04 / 3.04 Espryt).
   - It engaged only partly: Magma BuildFramebufferState 0.058 -> 0.032 ms/frame, and Espryt kept missing.
   - The build only runs on a binding switch, so one entry per target misses on every A/B/A switch.
