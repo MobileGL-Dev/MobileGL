@@ -54,6 +54,48 @@ The plan and its measurements are in [PLAN-P15.md](PLAN-P15.md); the audit is in
   - Nothing in the tree needs a compile-time API gate yet, so none was added.
   - The FCL-embedded 29 copy needs a matching FCL-side switch (FCL's own minSdk).
 
+**The m2ab device job was still running at hand-off. Do not interrupt it.**
+- What it is:
+  - Started as a background chain: `bash p15/m2ab_job.sh > p15/runs/m2ab_job.out; bash p15/espg_job.sh`.
+  - `espg_job.sh` is parked: it only echoes "espg parked". The real Espryt BSL job is `espg_job.sh.next`.
+  - m2ab_job waits for the device lock, cools to battery ≤ 33.0 °C, then runs
+    `PROFILE=cpuhunt devjob2.sh p15/runs/m2ab.log bash p15/m2ab_session.sh`.
+- Arms: cpuhunt H2, 3 interleaved reps, PF=1. Both libs are LTO builds of the same tree:
+  - `n` = `libs/p15en`, without 2a/2b; monolith with sp=1, plus inproc;
+  - `e` = `libs/p15e`, with 2a/2b (it also carries the Espryt items, which do nothing on Magma); monolith
+    with sp=1, plus inproc;
+  - MobileGlues.
+- Results:
+  - per run in `p15/runs/m2ab/<arm>-r<N>/` (fps.txt, valid.txt, perf.data on sp=1 runs);
+  - the summary is appended to `p15/runs/m2ab.log` (look for the `n=` lines).
+- Device restore: the session script runs `fcl_scene.sh restore` and `fcl_p14.sh restore`, and devjob2's
+  exit trap stops the bench session and releases the lock.
+- Interim at hand-off (GL CPU ms/frame):
+
+  | arm | n (without 2a/2b) | e (with 2a/2b) |
+  |---|---|---|
+  | monolith r1 / r2 | 2.39 / 2.48 | 2.29 / 2.45 |
+  | inproc GL thread | 1.20 / 1.20 | 1.17 |
+  | inproc fps | 343.5 / 371.6 | 363.8 |
+
+- When it ends:
+  1. Summarize with `fclsum.py runs/m2ab`. Judge 2a/2b on monolith GL CPU and on the inproc apply thread
+     (threads.txt `mgl-srv-apply`).
+  2. Build the profile caches offline: `prof_prep_offline.sh <run> p15e|p15en runs/c1c2/x-DirectVulkan-r1`.
+     Compare RenameBusyWireStore, VkBufferObject::Create, SweepDeferredWireReleases and
+     IsSubmitIndexComplete.
+  3. If neutral-or-better: amend a0015bad's message with the numbers. Push the p15impl commits WITHOUT
+     ca0a3b74, i.e. cherry-pick onto origin after the coordinator pushes 190580f2. Then CI.
+- Host suites for 2a/2b: done and at baseline (92 environment unit failures, 2 ColdStart).
+  - The one extra unit failure seen once, CompositorRecovery.ACompositorOnTheServerWindowRecovers..., is a
+    pre-existing load flake: under full CPU load it fails 6/20 without the change and 2/20 with it.
+
+**LTO and the server check (coordinator):**
+- libMobileGLServer.so is built and packaged by the LTO-ON assemblePluginRelease. Its only libMobileGL
+  import, `mobilegl_server_main`, is exported by the LTO lib.
+- The spawn-transport smoke was **NOT run**. It needs the LTO-ON plugin APK (`libs/p15lto/plugin.apk`)
+  installed, because the FCL mgdebug install has no libMobileGLServer.so.
+
 **Open items, in order:**
 1. Espryt BSL GPU items (`wip/espryt-depthcopy`): device A/B, then commit to p15impl with numbers.
 2. Small CPU batch: ValidateForVerb residue, Tracker::Update (0.018, mostly inherent),
@@ -96,8 +138,8 @@ The plan and its measurements are in [PLAN-P15.md](PLAN-P15.md); the audit is in
   `appside.py`, `pftstate.py` (Perfetto SQL), `threadstate.py`.
 
 **Device state at hand-off:**
-- FCL is restored (vanilla scene restored, fcl_p14 restore run) and the bench session is stopped.
-- The device lock is free.
+- At hand-off the m2ab session was still running; it restores FCL, the scene and the bench session itself.
+- The device lock is released by devjob2 when m2ab ends.
 - The plugin installs `top.mobilegl.plugin.*.trace` from earlier phases are still on the device.
 
 ## Earlier (2026-10-09): cuts 1b + 1c, cut 4, pipe-record pieces
