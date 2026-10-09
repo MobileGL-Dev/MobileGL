@@ -51,6 +51,13 @@ def mobileGlBuildDisaggregated = {
 def mobileGlEnableLto = {
     (rootProject.findProperty('mobilegl.enableLto') ?: System.getenv('MOBILEGL_ENABLE_LTO') ?: 'ON') as String
 }
+// The Android API level the library is built for: minSdk, and with it the NDK's ANDROID_PLATFORM.
+// 26 is the shipped build. 29 is a SEPARATE artifact (its own library, plugin APK and FCL-embedded
+// copy, never selected at load time): at 29 the NDK uses native ELF TLS instead of emulated TLS.
+// -Pmobilegl.androidApi=29 (or MOBILEGL_ANDROID_API=29) selects it; the source is the same.
+def mobileGlAndroidApi = {
+    (rootProject.findProperty('mobilegl.androidApi') ?: System.getenv('MOBILEGL_ANDROID_API') ?: '26') as String
+}
 def mobileGlBuildDisaggregatedInproc = {
     (rootProject.findProperty('mobilegl.buildDisaggregatedInproc') ?: System.getenv('MOBILEGL_BUILD_DISAGGREGATED_INPROC') ?: mobileGlBuildDisaggregated()) as String
 }
@@ -60,7 +67,7 @@ android {
     compileSdk 34
 
     defaultConfig {
-        minSdk 26
+        minSdk Integer.parseInt(mobileGlAndroidApi())
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
 

@@ -52,6 +52,12 @@ fun Project.mobileGlDisaggregatedEnabled(): Boolean {
 fun Project.mobileGlApplicationIdSuffix(): String =
     (findProperty("mobilegl.applicationIdSuffix") ?: "").toString().trim()
 
+// The Android API level of the build (the library's build.gradle reads the same property). Above
+// the shipped 26 the APK is a separate artifact: it gets an ".apiNN" id suffix and "-apiNN" version
+// suffix unless an explicit application-id suffix is given, so both installs can coexist.
+fun Project.mobileGlAndroidApi(): Int =
+    (findProperty("mobilegl.androidApi") ?: System.getenv("MOBILEGL_ANDROID_API") ?: "26").toString().trim().toInt()
+
 fun Project.runGit(vararg arguments: String): String? = runCatching {
     ProcessBuilder("git", *arguments)
         .directory(rootDir)
@@ -123,8 +129,11 @@ android {
 
     defaultConfig {
         applicationId = "top.mobilegl.plugin"
-        mobileGlApplicationIdSuffix().takeIf { it.isNotEmpty() }?.let { applicationIdSuffix = it }
-        minSdk = 26
+        val androidApi = mobileGlAndroidApi()
+        val idSuffix = mobileGlApplicationIdSuffix().ifEmpty { if (androidApi > 26) ".api$androidApi" else "" }
+        idSuffix.takeIf { it.isNotEmpty() }?.let { applicationIdSuffix = it }
+        if (androidApi > 26) versionNameSuffix = "-api$androidApi"
+        minSdk = androidApi
         targetSdk = 34
         versionCode = mobileGlVersionMajor * 1_000_000 + mobileGlVersionMinor * 10_000 + mobileGlMonthlyRevision
         versionName = "%d.%02d.%s".format(mobileGlVersionMajor, mobileGlVersionMinor, mobileGlGitShortHash)

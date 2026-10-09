@@ -118,12 +118,15 @@ if (ANDROID)
             "(gradle builds get this from minSdk ${MOBILEGL_ANDROID_API_LEVEL}, so "
             "check that minSdk instead of adding an override).")
     elseif (_mobilegl_android_api GREATER MOBILEGL_ANDROID_API_LEVEL)
+        # A higher level is a separate artifact of the SAME source (gradle -Pmobilegl.androidApi=29:
+        # native ELF TLS instead of emulated TLS). Any post-${MOBILEGL_ANDROID_API_LEVEL} API use must
+        # sit behind a compile-time __ANDROID_API__ gate and never replace the API
+        # ${MOBILEGL_ANDROID_API_LEVEL} path; the minSdk-${MOBILEGL_ANDROID_API_LEVEL} build stays the
+        # enforcing compile.
         message(STATUS
             "MobileGL: configuring at Android API ${_mobilegl_android_api} "
-            "(> shipping minimum ${MOBILEGL_ANDROID_API_LEVEL}). Allowed, but the "
-            "tree must not use post-${MOBILEGL_ANDROID_API_LEVEL} APIs - the "
-            "minSdk-${MOBILEGL_ANDROID_API_LEVEL} gradle build is the enforcing "
-            "compile.")
+            "(> shipping minimum ${MOBILEGL_ANDROID_API_LEVEL}): a separate artifact; "
+            "post-${MOBILEGL_ANDROID_API_LEVEL} APIs only behind a compile-time __ANDROID_API__ gate.")
     endif()
 
     message(STATUS "MobileGL: Android API level ${_mobilegl_android_api}")
