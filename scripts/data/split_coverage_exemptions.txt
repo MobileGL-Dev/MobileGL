@@ -26,6 +26,7 @@ PipeVerifyArmingScenario.* mechanism same-address-space verify comparator; its s
 PoisonOmissionScenario.* mechanism withheld-stamp oracle; its split arm is build-verify's VerifySplitPoisonOmitted entries
 StorageBufferRegrowScenario.NStorageDefinitionsCostNMapPersistentRoundtripsNotOnePerDraw mechanism counts synchronous stats-slot roundtrips of direct persistent adoption
 DirectGLES:MonolithAttachmentClearScenario.* mechanism pins the push-monolith arm (DirectGLES.PushMonolithArm., ID-107); the split clear-attachment path is F1WireScenario's
+ScenarioIsolationScenario.* mechanism the fixture's between-case reset inside one process: its pair only means something run back to back (CasesInOneProcess)
 DirectVulkan:DualBlockScenario.* mechanism needs MOBILEGL_IPC_ROLE_SPLIT_STATE=1; its lane is integration-dualblock-split (Espryt) and the Magma census filters it out
 
 # ---- single-backend: Magma's cases, skipping on Espryt ----------------------------------------
