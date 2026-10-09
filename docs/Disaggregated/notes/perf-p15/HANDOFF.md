@@ -97,13 +97,31 @@ The plan and its measurements are in [PLAN-P15.md](PLAN-P15.md); the audit is in
   installed, because the FCL mgdebug install has no libMobileGLServer.so.
 
 **Open items, in order:**
-1. Espryt BSL GPU items (`wip/espryt-depthcopy`): device A/B, then commit to p15impl with numbers.
-2. Small CPU batch: ValidateForVerb residue, Tracker::Update (0.018, mostly inherent),
+1. CI fix: the reds of Test run 37925410578 on db346f28 (integration-split-strict, the two DirectVulkan
+   retrace reds, skip census). Then push the LTO commit (190580f2 on `build-opt`) and the local p15impl
+   commits (without ca0a3b74), and confirm CI is green.
+2. `userguide/` at the repo root, an end-user guide for every setup: which setup to use, how to build,
+   integrate and run it. Covers:
+   - Android FCL-embedded;
+   - the plugin APK (inproc, spawn with `MOBILEGL_IPC_SURFACE=server`, TCP);
+   - the API 26 and API 29 artifacts;
+   - Linux/anland;
+   - the Windows WGL drop-in;
+   - build options, user-facing knobs and troubleshooting.
+3. Espryt BSL GPU items (`wip/espryt-depthcopy`): device A/B, then commit to p15impl with numbers.
+4. Small CPU batch: ValidateForVerb residue, Tracker::Update (0.018, mostly inherent),
    EmitGlobalConstants (0.026). Expected ≤0.03 ms in total.
-3. API 29 build plus its A/B (`wip/api29-switch`).
-4. Coordinator ask: a spawn-transport smoke with the LTO-ON plugin APK. It needs the plugin APK installed,
-   because FCL mgdebug has no libMobileGLServer.so. The LTO-ON APK does contain the server exe, whose
-   only libMobileGL import (mobilegl_server_main) is exported.
+5. API 29 build plus its A/B (`wip/api29-switch`).
+6. Smaller follow-ups:
+   - `bench_session.sh stop` (via devjob2) restores the services and caps but leaves the clocks
+     pinned. It should also run `pin_clocks.sh restore`.
+   - The `Fatal{UnmigratedSurface, "AndroidNativeWindow@P12"}` text and the tests asserting on it still
+     point at P12. The rule is permanent: a client window cannot cross processes, so windowed spawn uses
+     `MOBILEGL_IPC_SURFACE=server`. Reword the message to say that.
+   - A windowed spawn smoke of the LTO plugin APK with `MOBILEGL_IPC_SURFACE=server`. The LTO server
+     executable has already been seen to launch and initialise both backends. This needs the plugin APK
+     installed with its release signature, or the user's OK to replace the installed plugin. Spawn with
+     the default `offscreen` surface in FCL is unsupported by design (`UnmigratedSurface`).
 
 **Harness rules (all in scratchpad `p15/`; the tools live in `tools/device_bench/disagg/`):**
 - H2 = `fcl_bench.sh`, driven by `fclab2.sh` for interleaved arms; summaries come from `fclsum.py`.
