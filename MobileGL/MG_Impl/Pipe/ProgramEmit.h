@@ -210,34 +210,33 @@ namespace MobileGL::MG_Pipe {
 
             Uint64 bytes = 0;
             const MGPipeHandle cso = AcquireShaderCso(*program, bytes);
-            // (ShaderCso, Version) IS the key, so the latch is the key: an unchanged pair means
-            // the server already holds these bytes and re-sending them would move the record's
-            // serial for nothing.
-            if (cso == m_constantsCso && version == m_constantsVersion) return bytes;
+            // THE KEY IS PER HANDLE, because the block is: the applier keeps one image per shader
+            // CSO record, so a program drawn again after another one ran in between still holds
+            // what it was last sent. An unchanged (ShaderCso, Version) pair means the server
+            // already holds these bytes and re-sending them would move the record's serial for
+            // nothing. The latch lives beside the record latch, so a recycled slot or a death
+            // retires it with that one; a re-issued create and Reset() retire it explicitly.
+            Latch* latch = MGPipeHandleIsNull(cso) ? nullptr : &LatchFor(cso);
+            const Bool held = latch != nullptr && latch->ConstantsLive && latch->ConstantsEpoch == m_constantsEpoch;
+            if (held && latch->ConstantsVersion == version) return bytes;
+            // Taken on every send, span or whole, so the range always describes the bytes
+            // written since the image the server holds for this program.
+            const auto dirty = program->TakeUBODirtyRange();
 
             m_lastConstants = MGPGlobalConstants{};
             m_lastConstants.ShaderCso = cso;
             m_lastConstants.Version = version;
-            // P14: the server holds this program's previous image while the latch names it (every
-            // path that could drop or replace the applier's block clears the latch), so only the
-            // span that moved goes out - when it is small enough to be worth it.
+            m_constantsCso = cso;
+            m_constantsVersion = version;
+            // P14: the server holds this program's previous image while its latch is held (every
+            // path that could drop or replace the applier's block retires the latch), so only the
+            // span the frontend wrote since then goes out - when it is small enough to be worth it.
             const Uint8* image = static_cast<const Uint8*>(program->GetUBOData());
-            if (cso == m_constantsCso && m_constantsShadow.size() == size && size <= 0xffffu) {
-                // Word-wise from both ends, then byte-wise inside the first differing word.
-                const Uint8* shadow = m_constantsShadow.data();
-                const auto word = [](const Uint8* at) {
-                    Uint64 value;
-                    std::memcpy(&value, at, sizeof(value));
-                    return value;
-                };
-                Uint32 first = 0;
-                while (first + 8 <= size && word(image + first) == word(shadow + first)) first += 8;
-                while (first < size && image[first] == shadow[first]) ++first;
-                Uint32 last = size;
-                while (last >= first + 8 && word(image + last - 8) == word(shadow + last - 8)) last -= 8;
-                while (last > first && image[last - 1] == shadow[last - 1]) --last;
-                // Nothing moved but the version: one byte carries the new version.
-                if (first == size) {
+            if (held && latch->ConstantsSize == size && size <= 0xffffu) {
+                Uint32 first = std::min<Uint32>(dirty.Begin, size);
+                Uint32 last = std::min<Uint32>(dirty.End, size);
+                // Nothing written but the version moved: one byte carries the new version.
+                if (first >= last) {
                     first = 0;
                     last = 1;
                 }
@@ -248,8 +247,7 @@ namespace MobileGL::MG_Pipe {
                     m_lastConstants.Blob.Offset = reinterpret_cast<Uint64>(image + first);
                     m_lastConstants.Blob.Size = 0;
                     MGPipeRouteSetGlobalConstants(m_lastConstants, image + first, static_cast<Uint64>(length));
-                    std::memcpy(m_constantsShadow.data() + first, image + first, length);
-                    m_constantsVersion = version;
+                    latch->ConstantsVersion = version;
                     ++m_constantSets;
                     ++m_constantSpans;
                     if (MG_Util::PipeStats::Enabled()) {
@@ -263,17 +261,19 @@ namespace MobileGL::MG_Pipe {
             // pointer. Offset carries the staging address for diagnostics only; nothing reads
             // it as a length.
             m_lastConstants.Blob.Seg = kMGHostSpanSegNone;
-            m_lastConstants.Blob.Offset = reinterpret_cast<Uint64>(program->GetUBOData());
+            m_lastConstants.Blob.Offset = reinterpret_cast<Uint64>(image);
             m_lastConstants.Blob.Size = 0;
             // `size` is GetUBOSize(), and it is passed because the record declares 0 - the
             // monolith convention (the bytes ride beside the record) that CONTRACT-P5 table 1
             // rule A cannot keep under split. It is the row's largest and least bounded blob,
             // per program per frame, so it is also the one R-10's max-record counter watches.
-            MGPipeRouteSetGlobalConstants(m_lastConstants, program->GetUBOData(),
-                                          static_cast<Uint64>(size));
-            m_constantsCso = cso;
-            m_constantsVersion = version;
-            m_constantsShadow.assign(image, image + size);
+            MGPipeRouteSetGlobalConstants(m_lastConstants, image, static_cast<Uint64>(size));
+            if (latch != nullptr) {
+                latch->ConstantsLive = true;
+                latch->ConstantsEpoch = m_constantsEpoch;
+                latch->ConstantsVersion = version;
+                latch->ConstantsSize = size;
+            }
             ++m_constantSets;
             if (MG_Util::PipeStats::Enabled()) {
                 MG_Util::PipeStats::AddBytes(MG_Util::PipeStats::ByteClass::CsoBlobBytes, size);
@@ -508,7 +508,8 @@ namespace MobileGL::MG_Pipe {
             // not happen to move the content version, of which a recycled slot is one.
             // Invalidated rather than re-emitted here, because this function has no business
             // deciding when the constants go out: the next EmitGlobalConstants sees an
-            // unlatched key and sends them.
+            // unlatched key and sends them whole.
+            latch.ConstantsLive = false;
             if (m_constantsCso == handle) {
                 m_constantsCso = kMGPipeNullHandle;
                 m_constantsVersion = kMGPipeGlobalConstantsNeverUploaded;
@@ -606,12 +607,13 @@ namespace MobileGL::MG_Pipe {
         // The RECORD half stays, and that is the rule rather than an oversight: the applier
         // keeps its shader-CSO records across a make-current because a program lives in a share
         // group, and re-publishing one would move its Serial for nothing. The global-constants
-        // key goes with the working state because its record's bytes are per (Cso, Version) and
-        // a fresh server has not been told them.
+        // keys go with the working state because its record's bytes are per (Cso, Version) and
+        // a fresh server has not been told them: every per-handle key retires at once by epoch.
         void Reset() {
             m_boundCso = kMGPipeNullHandle;
             m_drawCso = kMGPipeNullHandle;
             m_dispatchCso = kMGPipeNullHandle;
+            ++m_constantsEpoch;
             m_constantsCso = kMGPipeNullHandle;
             m_constantsVersion = kMGPipeGlobalConstantsNeverUploaded;
             // The composite memo's freshness goes with them - and only its freshness. Its
@@ -629,9 +631,10 @@ namespace MobileGL::MG_Pipe {
         // ---- what a unit case reads ----
         const MGPProgramDesc& LastProgramDesc() const { return m_lastDesc; }
         const MGPGlobalConstants& LastGlobalConstants() const { return m_lastConstants; }
-        // THE (Cso, Version) KEY set_global_constants is suppressed against. Exposed so a case
-        // can pin that a re-issued create_shader_state invalidates it - the applier clears the
-        // block on the re-issue (wire W6), so a latch that survived it would never re-send.
+        // THE LAST (Cso, Version) set_global_constants sent. Exposed so a case can pin that a
+        // re-issued create_shader_state invalidates it - the applier clears the block on the
+        // re-issue (wire W6), so a latch that survived it would never re-send. The per-handle
+        // key the suppression reads retires at the same three places.
         MGPipeHandle GlobalConstantsCso() const { return m_constantsCso; }
         Uint32 GlobalConstantsVersion() const { return m_constantsVersion; }
         // D-J3's counted refusal: programs whose linked snapshot carried more modules than
@@ -645,6 +648,7 @@ namespace MobileGL::MG_Pipe {
         Uint64 DrawProgramSetCount() const { return m_drawSets; }
         Uint64 DispatchProgramSetCount() const { return m_dispatchSets; }
         Uint64 GlobalConstantsSetCount() const { return m_constantSets; }
+        Uint64 GlobalConstantsSpanCount() const { return m_constantSpans; }
         // P5e (pg). The record a case reads back, and the two counters D-J3's rule asks for:
         // how many set_program_bindings went out, and how many programs were REFUSED because
         // one of their three sets is larger than the record can name. A refusal leaves the
@@ -691,6 +695,13 @@ namespace MobileGL::MG_Pipe {
             Uint32 BindingsGen = 0;
             Uint32 BindingsBackendStateVersion = 0;
             Uint32 BindingsBlockBindingVersion = 0;
+            // set_global_constants' key, here for the bindings' reason: what the applier's record
+            // at this handle holds, as (Version, Size), valid only while ConstantsLive and the
+            // epoch is the emitter's current one.
+            Bool ConstantsLive = false;
+            Uint32 ConstantsVersion = 0;
+            Uint32 ConstantsSize = 0;
+            Uint64 ConstantsEpoch = 0;
         };
 
         // TWO TABLES, NOT A WIDER ONE, and it is the allocator's own reason repeated where it
@@ -745,11 +756,12 @@ namespace MobileGL::MG_Pipe {
         MGPipeHandle m_boundCso = kMGPipeNullHandle;
         MGPipeHandle m_drawCso = kMGPipeNullHandle;
         MGPipeHandle m_dispatchCso = kMGPipeNullHandle;
+        // The last (Cso, Version) set_global_constants sent, for the unit cases; the suppression
+        // itself reads the per-handle Latch keys.
         MGPipeHandle m_constantsCso = kMGPipeNullHandle;
         Uint32 m_constantsVersion = kMGPipeGlobalConstantsNeverUploaded;
-        // The image last sent for m_constantsCso (whole or patched by spans): what the server
-        // holds while the latch names it.
-        Vector<Uint8> m_constantsShadow;
+        // Moved by Reset(): a Latch's constants key holds only at the epoch it was taken in.
+        Uint64 m_constantsEpoch = 1;
         Uint64 m_constantSpans = 0;
 
         Uint64 m_creates = 0;

@@ -1572,7 +1572,8 @@ namespace MobileGL::MG_Impl::GLImpl {
             // version.
             if (std::memcmp(pUBO + offset + byteOffsetInsideUniform, value, writeSize) == 0) return;
             Memcpy(pUBO + offset + byteOffsetInsideUniform, value, writeSize);
-            programObject.MarkUBOContentDirty();
+            programObject.MarkUBOContentDirtyRange(static_cast<Uint>(offset + byteOffsetInsideUniform),
+                                                   static_cast<Uint>(writeSize));
         } else {
             const auto& ttype = programObject.GetUniformTypeFacts(location);
             if (!ttype.isTexture && !ttype.isImage) return;

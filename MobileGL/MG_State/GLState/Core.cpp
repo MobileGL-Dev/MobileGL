@@ -611,7 +611,7 @@ namespace MobileGL::MG_State {
                         continue;
                     }
                     Memcpy(destinationUbo + destinationOffset, sourceUbo + sourceOffset, span);
-                    destination.MarkUBOContentDirty();
+                    destination.MarkUBOContentDirtyRange(destinationOffset, static_cast<Uint>(span));
                 }
             }
         }

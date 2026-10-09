@@ -124,6 +124,20 @@ The plan and its measurements are in [PLAN-P15.md](PLAN-P15.md); the audit is in
    the next lead is the GPU side (render-stage trace of Espryt vs MobileGlues passes), not driver calls.
 4. Small CPU batch: ValidateForVerb residue, Tracker::Update (0.018, mostly inherent),
    EmitGlobalConstants (0.026). Expected ≤0.03 ms in total.
+   - DONE on host, branch `cpubatch` (2026-10-09). **Device measurement pending.** Line-level
+     profile of fbm2 h-r1..r3 (both backends, p15h syms) and m2ab e-DirectVulkan r1..r3 (LTO).
+   - EmitGlobalConstants, cut: the (ShaderCso, Version) key is per handle (the applier keeps one
+     block per record), so switching back to a program whose uniforms did not move sends nothing,
+     and a moved one sends a span against its own held image instead of the whole block. The span
+     is the range the frontend wrote (ProgramObject::MarkUBOContentDirtyRange / TakeUBODirtyRange),
+     so the client shadow and its two-ended diff scan are gone. The scan plus shadow copies were
+     ~0.0065 ms/frame; with the skipped switch-back sends, expect ~0.007-0.010 ms/frame.
+   - Tracker::Update: inherent, skipped. ~30 ns per verb over ~25 frontend counters; the only real
+     cut is the epoch skip (PLAN stage 1), which is not a small item.
+   - ValidateForVerb residue: skipped. The largest named piece (~0.008 ms/frame) is the
+     MOBILEGL_PIPE_POISON stamp walk, armed by MOBILEGL_BUILD_DISAGGREGATED. The bench libraries
+     are the plugin build (split ON); the FCL-embedded build (split OFF, INFO) compiles it out.
+     The rest (prologue, singleton guards, gates) is spread below 0.002 each.
 5. API 29 build plus its A/B (`wip/api29-switch`).
 6. Smaller follow-ups:
    - DONE 2026-10-09: `bench_session.sh stop` now runs `pin_clocks.sh restore` first (verified over a

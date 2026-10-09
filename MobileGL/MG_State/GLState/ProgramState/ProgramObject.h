@@ -744,8 +744,31 @@ namespace MobileGL::MG_State::GLState {
         // can skip re-uploading an unchanged UBO on every draw. ~0u is reserved as the
         // backends' "never uploaded" sentinel, so skip over it on wrap.
         Uint32 GetUBOContentVersion() const { return m_uboContentVersion; }
+        // A write whose extent is not known marks the whole shadow.
         void MarkUBOContentDirty() const {
             if (++m_uboContentVersion == ~0u) m_uboContentVersion = 0;
+            m_uboDirtyBegin = 0;
+            m_uboDirtyEnd = ~Uint32{0};
+        }
+        void MarkUBOContentDirtyRange(Uint offset, Uint size) const {
+            if (++m_uboContentVersion == ~0u) m_uboContentVersion = 0;
+            m_uboDirtyBegin = std::min<Uint32>(m_uboDirtyBegin, offset);
+            m_uboDirtyEnd = std::max<Uint32>(m_uboDirtyEnd, offset + size);
+        }
+        // The byte range of the shadow written since the last take, cleared by taking it. The
+        // pipe's program emitter is its one taker: it sends this range as a span to a server
+        // that already holds the image as of its previous take. End is NOT clamped (a whole-
+        // shadow mark reads ~0u), and Begin >= End means nothing was written. A new object
+        // starts as wholly written.
+        struct UBODirtyRange {
+            Uint32 Begin;
+            Uint32 End;
+        };
+        UBODirtyRange TakeUBODirtyRange() const {
+            const UBODirtyRange range{m_uboDirtyBegin, m_uboDirtyEnd};
+            m_uboDirtyBegin = ~Uint32{0};
+            m_uboDirtyEnd = 0;
+            return range;
         }
 
         // ---- the reserved gl_NumSamples stand-in (ShaderTranspiler::NUM_SAMPLES_UNIFORM_NAME) ----
@@ -771,7 +794,7 @@ namespace MobileGL::MG_State::GLState {
             Memcpy(&current, slot, sizeof(Int));
             if (current == samples) return true;
             Memcpy(slot, &samples, sizeof(Int));
-            MarkUBOContentDirty();
+            MarkUBOContentDirtyRange(offset, static_cast<Uint>(sizeof(Int)));
             return true;
         }
         // ---- glUniform* inside the phase-A -> phase-B window ----
@@ -1440,6 +1463,8 @@ namespace MobileGL::MG_State::GLState {
         mutable SizeT m_backendHashMemoNextSlot = 0;
         mutable Uint32 m_backendHashMemoVersion = ~0u;
         mutable Uint32 m_uboContentVersion = 0;
+        mutable Uint32 m_uboDirtyBegin = 0;
+        mutable Uint32 m_uboDirtyEnd = ~Uint32{0};
         mutable Uint32 m_linkVersion = 0;
 
         // ---- Link OUTPUT ----

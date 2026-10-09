@@ -735,6 +735,116 @@ void main() { gl_Position = vec4(0.0); EmitVertex(); }
         }
         EXPECT_GT(Emitter().GlobalConstantsSetCount(), setsBefore);
     }
+    // A default uniform block wide enough that one vec4 is less than half of it, so a write to
+    // one uniform crosses as a span rather than as the whole block.
+    const char* kVsWide = R"(#version 430 core
+uniform vec4 u_a;
+uniform vec4 u_b;
+uniform vec4 u_c;
+uniform vec4 u_d;
+void main() { gl_Position = u_a + u_b + u_c + u_d; }
+)";
+
+    GLuint MakeWideProgram() {
+        const GLuint program = GL::CreateProgram();
+        GL::AttachShader(program, MakeShader(GL_VERTEX_SHADER, kVsWide));
+        GL::AttachShader(program, MakeShader(GL_FRAGMENT_SHADER, kFs));
+        GL::LinkProgram(program);
+        GLint linked = GL_FALSE;
+        GL::GetProgramiv(program, GL_LINK_STATUS, &linked);
+        EXPECT_EQ(linked, GL_TRUE) << "the wide program did not link";
+        return program;
+    }
+
+    // Binds `name` and drives both program emissions to their fixed point (the first
+    // EmitGlobalConstants reads the version before GetUBOSize() joins phase B, which bumps it).
+    void DrawWith(GLuint name) {
+        GL::UseProgram(name);
+        Emitter().EmitShaderState(Ctx());
+        for (int i = 0; i < 8 && Emitter().EmitGlobalConstants(Ctx()) > 0u; ++i) {
+        }
+    }
+
+    // THE set_global_constants KEY IS PER HANDLE, because the applier keeps one block per shader
+    // CSO record: a program drawn again after another one ran in between, with no uniform of its
+    // own written, still holds on the server what it was last sent. A single last-sent key re-sent
+    // the whole block on every such switch back.
+    TEST(ProgramEmit, ASwitchBackToAnUnchangedProgramSendsNoGlobalConstants) {
+        EmitterScope scope;
+        const GLuint a = MakeWideProgram();
+        const GLuint b = MakeWideProgram();
+        DrawWith(a);
+        DrawWith(b);
+        const Uint64 setsBefore = Emitter().GlobalConstantsSetCount();
+        ASSERT_GT(setsBefore, 0u) << "both programs declare uniforms, so blocks must have gone out";
+
+        GL::UseProgram(a);
+        Emitter().EmitShaderState(Ctx());
+        EXPECT_EQ(Emitter().EmitGlobalConstants(Ctx()), 0u);
+        EXPECT_EQ(Emitter().GlobalConstantsSetCount(), setsBefore)
+            << "the server already holds program a's block at this version";
+    }
+
+    // The span is the range the frontend WROTE since the image the server holds for that program,
+    // and it survives a switch to another program and back.
+    TEST(ProgramEmit, AUniformWriteAfterASwitchCrossesAsTheSpanItWrote) {
+        EmitterScope scope;
+        const GLuint a = MakeWideProgram();
+        const GLuint b = MakeWideProgram();
+        const SharedPtr<ProgramObject>& program = Ctx().GetProgramObject(a);
+        ASSERT_TRUE(program);
+        DrawWith(a);
+        DrawWith(b);
+
+        GL::UseProgram(a);
+        const GLint location = GL::GetUniformLocation(a, "u_c");
+        ASSERT_GE(location, 0);
+        GL::Uniform4f(location, 1.0f, 2.0f, 3.0f, 4.0f);
+        const Uint offset = program->GetUniformOffset(static_cast<Uint>(location));
+        ASSERT_NE(offset, ProgramObject::kInvalidUniformOffset);
+        ASSERT_GE(program->GetUBOSize(), 32u) << "the block must be wide enough for a span";
+
+        const Uint64 spansBefore = Emitter().GlobalConstantsSpanCount();
+        Emitter().EmitShaderState(Ctx());
+        EXPECT_GT(Emitter().EmitGlobalConstants(Ctx()), 0u);
+        EXPECT_EQ(Emitter().GlobalConstantsSpanCount(), spansBefore + 1u);
+        EXPECT_EQ(Emitter().LastGlobalConstants().Range, (static_cast<Uint32>(offset) << 16) | 16u)
+            << "the record must carry exactly the vec4 that was written";
+        EXPECT_EQ(Emitter().LastGlobalConstants().Blob.Offset,
+                  reinterpret_cast<Uint64>(static_cast<const Uint8*>(program->GetUBOData()) + offset));
+        EXPECT_EQ(Emitter().LastGlobalConstants().Version, program->GetUBOContentVersion());
+    }
+
+    // A write whose extent the frontend does not know marks the whole block, and the next send is
+    // then the whole block rather than a span.
+    TEST(ProgramEmit, AnUnrangedContentMarkSendsTheWholeBlock) {
+        EmitterScope scope;
+        const GLuint a = MakeWideProgram();
+        const SharedPtr<ProgramObject>& program = Ctx().GetProgramObject(a);
+        ASSERT_TRUE(program);
+        DrawWith(a);
+
+        program->MarkUBOContentDirty();
+        EXPECT_GT(Emitter().EmitGlobalConstants(Ctx()), 0u);
+        EXPECT_EQ(Emitter().LastGlobalConstants().Range, 0u);
+        EXPECT_EQ(Emitter().LastGlobalConstants().Version, program->GetUBOContentVersion());
+    }
+
+    // Reset() is a fresh server: every program's key retires at once, so the next send of an
+    // UNCHANGED program is its whole block.
+    TEST(ProgramEmit, AResetRetiresEveryProgramsGlobalConstantsKey) {
+        EmitterScope scope;
+        const GLuint a = MakeWideProgram();
+        DrawWith(a);
+        const Uint64 setsBefore = Emitter().GlobalConstantsSetCount();
+
+        Emitter().Reset();
+        Emitter().EmitShaderState(Ctx());
+        EXPECT_GT(Emitter().EmitGlobalConstants(Ctx()), 0u);
+        EXPECT_EQ(Emitter().GlobalConstantsSetCount(), setsBefore + 1u);
+        EXPECT_EQ(Emitter().LastGlobalConstants().Range, 0u);
+    }
+
     // FINAL REVIEW C-2: the death helper forwards to this emitter before the slot is freed, so
     // a dead program's handle no longer reads as published in the record memo between the death
     // and the recycle (the memo's own Gen test covers only the recycle).
