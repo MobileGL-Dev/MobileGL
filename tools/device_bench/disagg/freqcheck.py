@@ -9,6 +9,13 @@ One OPP step of tolerance is allowed: the next available frequency below the pin
 
 Prints one line: VALID|INVALID, per-policy min/max cur freq, GPU min/max (busy samples), peak
 temperatures, and the reasons when invalid. Exit code 0 = valid, 1 = invalid, 2 = no samples.
+
+CLOCKS ARE JUDGED OVER THE MEASUREMENT WINDOWS, THERMAL SIGNALS OVER THE WHOLE RUN (P15). When a
+measure_raw.txt sits beside freq.txt (one window per line: <frame0> <frame1> <t_start> <t_end>, in
+the sampler's uptime clock), the clock checks (CPU cur / max, GPU) only read the samples taken inside
+a window, because the rule is "clocks pinned while benchmarking". The sampler starts during warmup,
+and its first sample can catch an idle GPU parked at its lowest OPP. kgsl thermal_pwrlevel and
+throttling are still checked over every sample. The line says which span each check covered.
 """
 import re
 import sys
@@ -55,14 +62,32 @@ def pins(path):
     return cpu, gpu, steps
 
 
+def windows(freq_path):
+    import os
+    path = os.path.join(os.path.dirname(os.path.abspath(freq_path)), "measure_raw.txt")
+    spans = []
+    if os.path.exists(path):
+        for line in open(path, encoding="utf-8", errors="replace"):
+            parts = line.split()
+            if len(parts) >= 4:
+                try:
+                    spans.append((float(parts[2]), float(parts[3])))
+                except ValueError:
+                    pass
+    return spans
+
+
 def main():
-    rows = parse(sys.argv[1])
+    all_rows = parse(sys.argv[1])
     cpu_pin, gpu_pin, steps = pins(sys.argv[2] if len(sys.argv) > 2 else None)
-    if not rows:
+    if not all_rows:
         print("NO-SAMPLES")
         sys.exit(2)
+    spans = windows(sys.argv[1])
+    in_window = [r for r in all_rows if any(a <= float(r["t"]) <= b for a, b in spans)]
+    rows = in_window if in_window else all_rows
     reasons = []
-    out = []
+    out = [f"clocks over {'window' if in_window else 'all'} samples n={len(rows)}/{len(all_rows)}"]
     pols = sorted({k[1:] for k in rows[0] if re.fullmatch(r"c\d+", k)}, key=int)
     for p in pols:
         cur = [int(r["c" + p].split("/")[0]) for r in rows]
@@ -81,8 +106,11 @@ def main():
     out.append(f"gpu={min(gpus) // 1000000}-{max(gpus) // 1000000}MHz(busy samples {len(busy)}/{len(rows)})")
     if gpu_pin and busy and min(gpus) < gpu_pin * 0.85:
         reasons.append(f"gpu {min(gpus) // 1000000} < pin {gpu_pin // 1000000}")
-    tpl = max(int(r.get("tpl", 0)) for r in rows)
-    thr = max(int(r.get("thr", 0)) for r in rows)
+    # Thermal signals over EVERY sample, windows or not.
+    tpl = max(int(r.get("tpl", 0)) for r in all_rows)
+    thr = max(int(r.get("thr", 0)) for r in all_rows)
+    if thr:
+        reasons.append(f"kgsl throttling {thr}")
     # A devfreq max_freq write (the pin itself) shows up as kgsl's thermal_pwrlevel; only a level
     # whose frequency is below the pin is a cap.
     table = steps.get("gpu", [])
@@ -92,8 +120,8 @@ def main():
     elif tpl and not table:
         reasons.append(f"thermal_pwrlevel {tpl} (no OPP table to map it)")
     out.append(f"tpl={tpl} thr={thr}")
-    peak = lambda k: max(int(r.get(k, 0)) for r in rows) / 1000.0
-    out.append(f"peak cpu {peak('cpuT'):.1f}C gpu {peak('gpuT'):.1f}C skin {peak('skinT'):.1f}C n={len(rows)}")
+    peak = lambda k: max(int(r.get(k, 0)) for r in all_rows) / 1000.0
+    out.append(f"peak cpu {peak('cpuT'):.1f}C gpu {peak('gpuT'):.1f}C skin {peak('skinT'):.1f}C n={len(all_rows)}")
     verdict = "VALID" if not reasons else "INVALID"
     print(verdict, " ".join(out), ("| " + "; ".join(reasons)) if reasons else "")
     sys.exit(0 if not reasons else 1)
