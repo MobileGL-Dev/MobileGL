@@ -1018,6 +1018,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Vector<VkFence> m_freeSubmitFences;
         Uint64 m_submitCounter = 0;
         Uint64 m_completedSubmitCounter = 0;
+        // IsSubmitIndexComplete's quiet window: the in-flight front last seen unsignaled, and when.
+        Uint64 m_unsignaledPollFront = 0;
+        Uint64 m_unsignaledPollNs = 0;
         // Drains since the last Present, gating the drain's frame-boundary-equivalent
         // work (arena rewind + cache aging): a presenting app's mid-frame
         // readbacks/waits must neither churn the transient caches nor accelerate the

@@ -308,12 +308,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return false;
         VkBufferObject old = std::move(resource.buffer);
         Bool reused = false;
-        for (SizeT i = 0; pVulkanRenderer != nullptr && i < resource.renameSpares.size(); ++i) {
-            if (!pVulkanRenderer->IsSubmitIndexComplete(resource.renameSpares[i].submitIndex)) continue;
-            resource.buffer = std::move(resource.renameSpares[i].buffer);
-            resource.renameSpares.erase(resource.renameSpares.begin() + static_cast<std::ptrdiff_t>(i));
+        // Spares are queued in rename order, so their sync points only grow: when the oldest is not
+        // complete, no later one is (one fence question instead of one per spare).
+        if (pVulkanRenderer != nullptr && !resource.renameSpares.empty() &&
+            pVulkanRenderer->IsSubmitIndexComplete(resource.renameSpares.front().submitIndex)) {
+            resource.buffer = std::move(resource.renameSpares.front().buffer);
+            resource.renameSpares.erase(resource.renameSpares.begin());
             reused = true;
-            break;
         }
         if (!reused) {
             if (!CreateWireStoreBuffer(resource)) {
@@ -332,7 +333,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // Busy means a GPU command recorded so far may name the old buffer: it waits behind this
         // frame's serial and the current sync point, whatever its own stamps said - as a spare
         // for the next rename, or (past the bound) through DeferWireRelease.
-        constexpr SizeT kRenameSpares = 4;
+        // P15: 4 spares recycled too few for frames in flight x renames per frame (FCL MC 1.21.5:
+        // VkBufferObject::Create 0.031 + the retired stores' Destroy 0.014 ms/frame). Only shadowed
+        // stores rename, and those are at most kWireShadowMaxStore (64 KiB), so 12 spares bound a
+        // resource's extra memory at 768 KiB.
+        constexpr SizeT kRenameSpares = 12;
         if (resource.renameSpares.size() >= kRenameSpares) {
             auto& oldest = resource.renameSpares.front();
             DeferWireRelease(std::move(oldest.buffer), oldest.lastUseSerial);

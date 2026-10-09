@@ -5837,8 +5837,24 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (submitIndex > m_submitCounter) {
             return false; // not even submitted; no point polling fences
         }
+        // P15: a fence just seen unsignaled is not polled again for a short while. Callers ask per
+        // buffer write (FCL MC 1.21.5: vkGetFenceStatus was 0.020 ms/frame), and every one of them
+        // treats "not yet" as "still busy" - rename, defer, report unsignaled - so a late "yes" costs
+        // at most kUnsignaledPollQuietNs of extra caution, never correctness.
+        constexpr Uint64 kUnsignaledPollQuietNs = 50000;
+        const Uint64 now = static_cast<Uint64>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count());
+        if (!m_inFlightSubmits.empty() && m_unsignaledPollFront == m_inFlightSubmits.front().submitIndex &&
+            now - m_unsignaledPollNs < kUnsignaledPollQuietNs) {
+            return false;
+        }
         RefreshCompletedSubmits();
-        return submitIndex <= m_completedSubmitCounter;
+        if (submitIndex <= m_completedSubmitCounter) return true;
+        if (!m_inFlightSubmits.empty()) {
+            m_unsignaledPollFront = m_inFlightSubmits.front().submitIndex;
+            m_unsignaledPollNs = now;
+        }
+        return false;
     }
 
     void VulkanRenderer::RegisterSubmit(VkFence fence, Bool pooledFence) {
