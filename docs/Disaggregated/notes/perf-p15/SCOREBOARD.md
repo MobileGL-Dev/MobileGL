@@ -108,9 +108,14 @@ H2 sessions:
     - GetOrCreatePipeline 0.026 -> 0.013, MGPipeGetResourceOps 0.007 -> 0.002.
   - The H2 effect is about half of the profile sum. Each piece is below the session noise (+-0.05 ms),
     so the batch is measured as one.
-- **c1cbsl (gpuhunt, Iris + BSL, after a cooldown):** 1c does not cost GPU time.
-  - t 53.8 fps (18.5 GPU ms/frame) vs y 55.7 (17.9), both at 100 % GPU busy.
-  - One VALID pair. The MobileGlues run (56.2) is INVALID: the GPU idled at 231 MHz in two warmup samples.
+- **c1cbsl (gpuhunt, Iris + BSL, after a cooldown, 3 reps):** 1c does not cost GPU time.
+  - VALID runs: t 53.8 / 53.9 fps vs y 55.7 / 55.5 (+3.4 %), all at 100 % GPU busy (18.5 -> 17.9 GPU ms/frame).
+  - MobileGlues read 56.2 / 55.7 / 56.1, which puts Magma y at about 0.99 of it. All three MobileGlues
+    runs (and t r2, y r2) are INVALID for one reason: the freq sampler's first sample, about 40 s
+    before the windows, catches the idle GPU at 231 MHz. Every in-window sample of every run is at
+    the 578 MHz pin.
+  - A window-scoped validity check (freqcheck over the measure_raw.txt span) would admit them. That
+    is a harness change, not yet made.
 - **fbm:** the first memo is within noise on both backends (CPU 2.65 / 2.65 Magma, 3.04 / 3.04 Espryt).
   - It engaged only partly: Magma BuildFramebufferState 0.058 -> 0.032 ms/frame, and Espryt kept missing.
   - The build only runs on a binding switch, so one entry per target misses on every A/B/A switch.
