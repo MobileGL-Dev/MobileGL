@@ -51,7 +51,7 @@ The renderer string does not mention Espryt or Magma.
 - `Config: MOBILEGL_TRANSPORT='unix:...' names a transport ... staying on monolith`: put the endpoint
   in `MOBILEGL_IPC_CONTROL` and set `MOBILEGL_TRANSPORT=spawn`.
 - The plugin runs monolith in the launcher although you expected `inproc`: the APK was built without
-  an explicit `-Pmobilegl.buildDisaggregated=ON`, so its launcher environment has no
+  an explicit `-Pmobilegl.buildDisaggregated=ON` (or `MOBILEGL_BUILD_DISAGGREGATED=ON` in the environment), so its launcher environment has no
   `MOBILEGL_TRANSPORT`. Rebuild, or add `MOBILEGL_TRANSPORT=inproc` in the launcher's environment
   editor.
 

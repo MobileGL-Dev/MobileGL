@@ -168,8 +168,8 @@ Pass with `-P<name>=<value>`. Some can also come from an environment variable.
 | `mobilegl.apkSuffix` | `MOBILEGL_APK_SUFFIX` | git short hash | Suffix in the APK file name |
 | `mobilegl.debuggableRelease` | | `false` | Make the release build debuggable |
 
-Prefer the `-P` form for `mobilegl.buildDisaggregated`: the plugin's two Gradle scripts read the
-environment fallback differently.
+A `-P` property wins over its environment variable. The plugin's Gradle scripts and the library's script
+all read the `MOBILEGL_BUILD_DISAGGREGATED` and `MOBILEGL_BUILD_DISAGGREGATED_INPROC` fallbacks.
 
 ## CMake options
 

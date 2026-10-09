@@ -74,7 +74,8 @@ latency.
 
 The plugin's launcher environment includes `MOBILEGL_TRANSPORT=inproc` **only if** the APK was built
 with `-Pmobilegl.buildDisaggregated=ON` or `-Pmobilegl.buildDisaggregatedInproc=ON` passed explicitly
-(the CI build of `feat/disaggregated` does this). A plain `gradle :app:assemblePluginRelease`
+(or the matching `MOBILEGL_BUILD_DISAGGREGATED` / `MOBILEGL_BUILD_DISAGGREGATED_INPROC` environment
+variable set to `ON`; the CI build of `feat/disaggregated` does this). A plain `gradle :app:assemblePluginRelease`
 still builds the split layer into the library, but the launcher environment then omits the transport
 and the plugin runs monolith. Either rebuild with the property, or add
 `MOBILEGL_TRANSPORT=inproc` in the launcher's environment editor.
