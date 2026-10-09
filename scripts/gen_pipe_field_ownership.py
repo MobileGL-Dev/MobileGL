@@ -328,8 +328,9 @@ def build_admitted(accessors, ownership, phase, verbs, verb_ops, waits, verb_cla
 
     Disjunct (1) survives as its own term because it is a stronger claim about the same pair: it
     says the client waits for the record STATICALLY, which is what lets a row whose phase IS this
-    one (GetTextureUnitObject@CopyTexImage2D) still be admitted. Without (1) it would fail the
-    lane; without (2) GetTransformFeedbackProgram@DrawArrays would fail it, and CONTRACT-P5E §5.7
+    one still be admitted (GetTextureUnitObject@CopyTexImage2D was, until P15 made
+    copy_framebuffer_to_texture fire-and-forget; the self-test barriers that op again to show it).
+    Without (1) such a row would fail the lane; without (2) GetTransformFeedbackProgram@DrawArrays would fail it, and CONTRACT-P5E §5.7
     rules transform feedback out of this phase entirely - so the lane would be red on a row no
     package here is allowed to touch.
 
@@ -1040,8 +1041,12 @@ def self_test():
     expect("GetFramebufferBindingSlot@ReadPixels is REJECTED since P9 (read_pixels_to_buffer "
            "stamps ReadPixels without a wait)",
            "GetFramebufferBindingSlot@ReadPixels" not in derived)
-    expect("GetTextureUnitObject@CopyTexImage2D is admitted by disjunct 1",
-           "GetTextureUnitObject@CopyTexImage2D" in derived)
+    # P15 moved the second: copy_framebuffer_to_texture is fire-and-forget (kWaitNone), so
+    # CopyTexImage2D is no longer statically barriered and its P5e-owed pair leaves too. The
+    # control below barriers that op again and the pair must come back by disjunct 1.
+    expect("GetTextureUnitObject@CopyTexImage2D is REJECTED since P15 (copy_framebuffer_to_texture "
+           "waits for nothing)",
+           "GetTextureUnitObject@CopyTexImage2D" not in derived)
     # Disjunct 2's three. Each is a debt some LATER phase owes, on a verb this phase does not
     # barrier - and CONTRACT-P5E §5.7 rules transform feedback out of P5e entirely, so the
     # static rule alone would have failed the lane on a row no package here may touch.
@@ -1089,6 +1094,11 @@ def self_test():
            "(GetFramebufferBindingSlot@ReadPixels) and keeps the later phases' pairs",
            "GetFramebufferBindingSlot@ReadPixels" not in admitted_pairs_for(wire_text=unwaited)
            and "GetTextureObject@ReadPixels" in admitted_pairs_for(wire_text=unwaited))
+
+    recopied = set_wait("CopyFramebufferToTexture", "kWaitApplied")
+    expect("barriering copy_framebuffer_to_texture brings GetTextureUnitObject@CopyTexImage2D back "
+           "(disjunct 1)",
+           "GetTextureUnitObject@CopyTexImage2D" in admitted_pairs_for(wire_text=recopied))
 
     # The same disjunct from the other side. ID-118 moved ResourceCopyRegion to a barriered wait
     # class; unbarrier it again and its P5e-owed pairs go, while GetTextureObject stays admitted

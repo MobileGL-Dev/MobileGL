@@ -3428,9 +3428,14 @@ namespace MobileGL::MG_Pipe {
     }
 
     void MGPipeValidateForVerbBarriered(MGPipeVerb verb) {
+#if MOBILEGL_BUILD_DISAGGREGATED
         g_forceBarrieredFill = true;
         MGPipeValidateForVerb(verb);
         g_forceBarrieredFill = false;
+#else
+        // Without a transport every fill is barriered already (fillOwed is constant true).
+        MGPipeValidateForVerb(verb);
+#endif
     }
 
     // ---- the validate point (P2 brief D1) ----
