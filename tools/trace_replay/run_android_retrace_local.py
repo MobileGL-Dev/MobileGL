@@ -605,9 +605,9 @@ def parse_args():
         "--use-pbuffer",
         action="store_true",
         help="Render into a pbuffer instead of the Activity's window surface. REQUIRED with "
-             "--transport spawn until P12: an ANativeWindow* is a pointer into the CLIENT's "
+             "--transport spawn (a windowed client uses MOBILEGL_IPC_SURFACE=server instead): an ANativeWindow* is a pointer into the CLIENT's "
              "process and means nothing in the server's, so SetWindowHandle is refused by name "
-             "with Fatal{UnmigratedSurface, \"AndroidNativeWindow@P12\"} (Rule H). The desktop "
+             "with Fatal{UnmigratedSurface, \"AndroidNativeWindow:use-MOBILEGL_IPC_SURFACE=server\"} (Rule H). The desktop "
              "retrace has always run pbuffer and matches the same goldens.",
     )
     parser.add_argument(

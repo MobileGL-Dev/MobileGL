@@ -121,7 +121,7 @@ a window the **server** owns: the plugin's on-screen display server.
 
 Without that, a `spawn` client that creates a window surface fails. With the default
 `MOBILEGL_IPC_SURFACE=offscreen`, the server rejects the window with
-`Fatal{UnmigratedSurface, "AndroidNativeWindow@P12"}`. With `MOBILEGL_IPC_SURFACE=server` and an
+`Fatal{UnmigratedSurface, "AndroidNativeWindow:use-MOBILEGL_IPC_SURFACE=server"}`. With `MOBILEGL_IPC_SURFACE=server` and an
 offscreen server, the client logs `Refuse ServerOwned (NoServerDisplay)`.
 
 Steps (client in FCL, server in the plugin, same device):

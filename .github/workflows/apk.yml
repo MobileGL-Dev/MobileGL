@@ -532,10 +532,11 @@ jobs:
             # MOBILEGL_IPC_SERVER_PATH IS DELIBERATELY ABSENT. nativeLibraryDir carries an
             # install-time hash, so nothing off the device can spell it; TraceReplayActivity
             # resolves it from getApplicationInfo() when the env asks for spawn, and an explicit
-            # value would override that. --use-pbuffer is NOT optional here: until P12 a spawned
-            # server cannot be handed a window at all, because an ANativeWindow* is a pointer
+            # value would override that. --use-pbuffer is NOT optional here: a spawned
+            # server cannot be handed the client's window, because an ANativeWindow* is a pointer
             # into the CLIENT's process and SetWindowHandle is refused on the way across with
-            # Fatal{UnmigratedSurface, "AndroidNativeWindow@P12"} (Rule H).
+            # Fatal{UnmigratedSurface, "AndroidNativeWindow:use-MOBILEGL_IPC_SURFACE=server"} (Rule H, permanent;
+            # a windowed client uses MOBILEGL_IPC_SURFACE=server instead).
             extra_retrace_args+=(
               --env "MOBILEGL_TRANSPORT=spawn;MOBILEGL_IPC_ROLE_SPLIT_STATE=1;MOBILEGL_IPC_STRICT_ERRORS=1;MOBILEGL_IPC_RUN_AHEAD=1;MOBILEGL_GPU_HANG_BUDGET_MS=${MOBILEGL_GPU_HANG_BUDGET_MS}"
               --use-pbuffer

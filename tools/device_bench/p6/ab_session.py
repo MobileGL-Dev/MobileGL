@@ -491,7 +491,7 @@ class Arm:
 
         That is fatal on the spawn arm and only there: an ANativeWindow* is a pointer into the
         CLIENT's process and the wire refuses it by name (Rule H). Measured on this tree - the spawn
-        arm died with `Fatal{UnmigratedSurface, "AndroidNativeWindow@P12"}` published as a
+        arm died with `Fatal{UnmigratedSurface, "AndroidNativeWindow:use-MOBILEGL_IPC_SURFACE=server"}` published as a
         SessionFault, and the same run passes as soon as the variable is in the script's environment.
         """
         return {"MOBILEGL_RETRACE_USE_PBUFFER": "1"}

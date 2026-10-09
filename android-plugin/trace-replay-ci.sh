@@ -451,9 +451,10 @@ run_retrace() {
   fi
   # PBUFFER IS A SURFACE SHAPE, NOT A BACKEND PROPERTY, and the DirectGLES condition that used to
   # guard this line made it one. It was harmless while the only caller was the ANGLE lane; P6 needs
-  # it on BOTH backends, because until P12 the spawn arm can only use pbuffer/surfaceless - an
+  # it on BOTH backends, because the spawn arm can only use pbuffer/surfaceless (a windowed client
+  # uses MOBILEGL_IPC_SURFACE=server) - an
   # ANativeWindow* is a pointer into the CLIENT's process and SetWindowHandle is refused by name
-  # with Fatal{UnmigratedSurface, "AndroidNativeWindow@P12"} on the way across. Magma creates an
+  # with Fatal{UnmigratedSurface, "AndroidNativeWindow:use-MOBILEGL_IPC_SURFACE=server"} on the way across. Magma creates an
   # EGL pbuffer exactly as Espryt does.
   if [ "${use_pbuffer}" -eq 1 ]; then
     set -- "$@" --ez use_pbuffer true

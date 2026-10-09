@@ -73,7 +73,7 @@
 #define MGL_FATAL_FAMILY_LIST(X) \
     X(ProtocolCorruption,            ProtocolCorruption, "a record's bounds or self-describing length was violated") \
     X(UnmigratedVerb,                ProtocolCorruption, "a wire verb slot P5/P6 does not implement was reached") \
-    X(UnmigratedSurface,             ProtocolCorruption, "a surface op named a client-process handle that means nothing here (P12)") \
+    X(UnmigratedSurface,             ProtocolCorruption, "a surface op named a client-process handle that means nothing here (a windowed client uses MOBILEGL_IPC_SURFACE=server)") \
     X(UnmigratedPipeInput,           ProtocolCorruption, "a PipeInputs field with no field-ownership row was read across the boundary") \
     X(UnmigratedEmulation,           ProtocolCorruption, "an emulation path the applier has no migrated arm for was reached") \
     X(RoleViolation,                 ProtocolCorruption, "a call ran on the wrong role/thread - an invariant the two roles must hold") \

@@ -1298,14 +1298,14 @@ namespace {
                           [](Transport::RingRecordHeader& h) { h.size = 12; });
          }},
         // ===== SurfaceOpCodec.cpp: the three wire refusals
-        {"SurfaceOpAndroidNativeWindow", "SurfaceOpCodec.cpp", "AndroidNativeWindow@P12", Outcome::Latched,
-         "Fatal{UnmigratedSurface, \"AndroidNativeWindow@P12\"}", false,
+        {"SurfaceOpAndroidNativeWindow", "SurfaceOpCodec.cpp", "AndroidNativeWindow:use-MOBILEGL_IPC_SURFACE=server", Outcome::Latched,
+         "Fatal{UnmigratedSurface, \"AndroidNativeWindow:use-MOBILEGL_IPC_SURFACE=server\"}", false,
          [](Client::ClientSession& c, PeerReport& r) {
              return SendSurfaceOp(c, r, kCreateWindowSurface,
                                   static_cast<Uint8>(::MobileGL::Wire::WindowKind::AndroidNativeWindow));
          }},
-        {"SurfaceOpMetalLayer", "SurfaceOpCodec.cpp", "MetalLayer@P12", Outcome::Latched,
-         "Fatal{UnmigratedSurface, \"MetalLayer@P12\"}", false,
+        {"SurfaceOpMetalLayer", "SurfaceOpCodec.cpp", "MetalLayer:use-MOBILEGL_IPC_SURFACE=server", Outcome::Latched,
+         "Fatal{UnmigratedSurface, \"MetalLayer:use-MOBILEGL_IPC_SURFACE=server\"}", false,
          [](Client::ClientSession& c, PeerReport& r) {
              return SendSurfaceOp(c, r, kCreateWindowSurface,
                                   static_cast<Uint8>(::MobileGL::Wire::WindowKind::MetalLayer));

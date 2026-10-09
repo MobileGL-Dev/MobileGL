@@ -16,7 +16,7 @@
 //     agreement with the schema is pinned, not assumed;
 //   * every framed op round-trips through a REAL CtrlEnvelope{SurfaceOp} buffer byte-for-byte;
 //   * the wire entry refuses by NAME: an ANativeWindow* arriving over the wire dies
-//     Fatal{UnmigratedSurface, "AndroidNativeWindow@P12"} (real windows are P12), and a kind the
+//     Fatal{UnmigratedSurface, "AndroidNativeWindow:use-MOBILEGL_IPC_SURFACE=server"} (a client window never crosses), and a kind the
 //     schema does not define dies Fatal{ProtocolCorruption, "SurfaceOp"}.
 //
 // The inproc blocking path itself - posting, parking, the reply half coming back - is gated by
@@ -446,7 +446,7 @@ TEST(SurfaceControlFrameTest, AnAndroidNativeWindowOnTheWireIsRefusedByName) {
 
     EXPECT_EXIT(ServerApplyWireSurfaceOp(*wireOp, nullptr), ::testing::KilledBySignal(SIGABRT), ".*");
     const std::string log = ReadLog();
-    EXPECT_NE(log.find("Fatal{UnmigratedSurface, \"AndroidNativeWindow@P12\"}"), std::string::npos)
+    EXPECT_NE(log.find("Fatal{UnmigratedSurface, \"AndroidNativeWindow:use-MOBILEGL_IPC_SURFACE=server\"}"), std::string::npos)
         << "the abort happened but not for this rule's reason; the log says: " << log;
 }
 
@@ -468,7 +468,7 @@ TEST(SurfaceControlFrameTest, AMetalLayerOnTheWireIsRefusedByName) {
         SurfaceControlFrame frame;
         EXPECT_EQ(DecodeWireSurfaceOp(*wireOp, &frame), SurfaceWireError::MetalLayerArrived);
         EXPECT_EXIT(ServerApplyWireSurfaceOp(*wireOp, nullptr), ::testing::KilledBySignal(SIGABRT), ".*");
-        EXPECT_NE(ReadLog().find("Fatal{UnmigratedSurface, \"MetalLayer@P12\"}"), std::string::npos);
+        EXPECT_NE(ReadLog().find("Fatal{UnmigratedSurface, \"MetalLayer:use-MOBILEGL_IPC_SURFACE=server\"}"), std::string::npos);
     }
 }
 

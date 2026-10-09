@@ -116,7 +116,7 @@ indistinguishable from a run that produced none.
   as an explicit `--env MOBILEGL_TRANSPORT=…` and verifies it from the library's log.
 - **`MOBILEGL_RETRACE_USE_PBUFFER` must be in the CI script's environment**, not passed as `--env` —
   `trace-replay-ci.sh` reads it itself to decide the surface shape. Without it the `spawn` arm dies
-  with `Fatal{UnmigratedSurface, "AndroidNativeWindow@P12"}`, because an `ANativeWindow*` means
+  with `Fatal{UnmigratedSurface, "AndroidNativeWindow:use-MOBILEGL_IPC_SURFACE=server"}`, because an `ANativeWindow*` means
   nothing in the server's process (Rule H).
 - **`MOBILEGL_TRACE_SKIP_INSTALL=1`** keeps the script's own `adb install` out of the window. The
   session installs once itself and waits for `dex2oat` to exit first: an `am_kill … due to

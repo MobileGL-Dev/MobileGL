@@ -228,8 +228,9 @@ namespace MobileGL::MG_Remote {
             }
             if (op.windowKind() == ::MobileGL::Wire::WindowKind::AndroidNativeWindow) {
                 // The one refusal that is not corruption: the window kind is LEGAL and the token
-                // is an ANativeWindow*, which names memory in the CLIENT's process. Real window
-                // arrival is P12; until then this is refused by name at ServerApplyWireSurfaceOp.
+                // is an ANativeWindow*, which names memory in the CLIENT's process. This is a
+                // permanent rule (Rule H): such a handle can never cross, so it is refused by name
+                // at ServerApplyWireSurfaceOp. A windowed client uses MOBILEGL_IPC_SURFACE=server.
                 return SurfaceWireError::AndroidNativeWindowArrived;
             }
             if (op.windowKind() == ::MobileGL::Wire::WindowKind::MetalLayer) {
@@ -315,16 +316,19 @@ namespace MobileGL::MG_Remote {
                         static_cast<unsigned long long>(op.nativeToken()));
             } else if (error == SurfaceWireError::AndroidNativeWindowArrived) {
                 (void)SessionLatch(MGFatalFamily::UnmigratedSurface,
-                        "MGPipe: Fatal{UnmigratedSurface, \"AndroidNativeWindow@P12\"} - a wire "
+                        "MGPipe: Fatal{UnmigratedSurface, \"AndroidNativeWindow:use-MOBILEGL_IPC_SURFACE=server\"} - a wire "
                         "SurfaceOp (%s) named an ANativeWindow*, which is a pointer into the "
-                        "CLIENT's process and means nothing here. Real window arrival is P12; "
-                        "until then the spawn surface path is pbuffer/surfaceless only",
+                        "CLIENT's process and means nothing here. A client-process window "
+                        "handle can never cross processes: a windowed out-of-process client must "
+                        "use MOBILEGL_IPC_SURFACE=server (the server owns the window); "
+                        "otherwise it is pbuffer/surfaceless only",
                         ::MobileGL::Wire::EnumNameSurfaceOpKind(op.kind()));
             } else if (error == SurfaceWireError::MetalLayerArrived) {
                 (void)SessionLatch(MGFatalFamily::UnmigratedSurface,
-                        "MGPipe: Fatal{UnmigratedSurface, \"MetalLayer@P12\"} - a wire "
+                        "MGPipe: Fatal{UnmigratedSurface, \"MetalLayer:use-MOBILEGL_IPC_SURFACE=server\"} - a wire "
                         "SurfaceOp named a CAMetalLayer* in the CLIENT's process. "
-                        "Real window arrival is P12");
+                        "A client-process window handle can never cross processes: use "
+                        "MOBILEGL_IPC_SURFACE=server (the server owns the window)");
             } else {
                 (void)SessionLatch(MGFatalFamily::ProtocolCorruption,
                         "MGPipe: Fatal{ProtocolCorruption, \"SurfaceOp\"} - a wire surface op "

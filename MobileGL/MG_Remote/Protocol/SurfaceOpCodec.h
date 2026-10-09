@@ -25,11 +25,11 @@
 // ERROR SEMANTICS. Decode is pure: it answers a SurfaceWireError. The FATALS live at the server
 // entry point, ServerApplyWireSurfaceOp, because "a wire op the server cannot honour" is a
 // contract violation, not a data problem: AndroidNativeWindowArrived dies
-// Fatal{UnmigratedSurface, "AndroidNativeWindow@P12"} (the ANativeWindow* means nothing in the
-// server's process; real window arrival is P12) and everything else dies
+// Fatal{UnmigratedSurface, "AndroidNativeWindow:use-MOBILEGL_IPC_SURFACE=server"} (the ANativeWindow* means nothing in the
+// server's process, permanently - a windowed client uses MOBILEGL_IPC_SURFACE=server) and everything else dies
 // Fatal{ProtocolCorruption, "SurfaceOp"}. P6's control pump is the intended caller; P5f's unit
 // tests drive it directly. MetalLayerArrived likewise dies
-// Fatal{UnmigratedSurface, "MetalLayer@P12"}: CAMetalLayer* is also process-local.
+// Fatal{UnmigratedSurface, "MetalLayer:use-MOBILEGL_IPC_SURFACE=server"}: CAMetalLayer* is also process-local.
 //
 // P12 (on-screen server window). WindowKind::ServerOwned is the one window kind whose window is
 // NOT the client's: the server substitutes its own (ServerLoop.cpp's ServerOwned arm). The codec
@@ -62,8 +62,8 @@ namespace MobileGL::MG_Remote {
         InprocOnlyOpOnTheWire,   // a kind that may ride the inproc channel but never the wire
         WindowKindNamesNoBackend,// Surfaceless/Pbuffer where a window backend is required
         UnknownWindowKind,       // a WindowKind the mapping table does not know
-        MetalLayerArrived,       // -> Fatal{UnmigratedSurface, "MetalLayer@P12"}
-        AndroidNativeWindowArrived, // -> Fatal{UnmigratedSurface, "AndroidNativeWindow@P12"}
+        MetalLayerArrived,       // -> Fatal{UnmigratedSurface, "MetalLayer:use-MOBILEGL_IPC_SURFACE=server"}
+        AndroidNativeWindowArrived, // -> Fatal{UnmigratedSurface, "AndroidNativeWindow:use-MOBILEGL_IPC_SURFACE=server"}
         // P12 (on-screen server window), D2. WindowKind::ServerOwned is legal on
         // CreateWindowSurface only, and only with nativeToken 0:
         ServerOwnedTokenNotZero,      // -> Fatal{ProtocolCorruption, "SurfaceOp.nativeToken"}, latched

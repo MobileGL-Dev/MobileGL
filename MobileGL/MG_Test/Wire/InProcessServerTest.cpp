@@ -126,7 +126,7 @@ namespace {
     }
 
     void LatchTheSession(Remote::Client::ClientSession& client, PeerReport& r) {
-        // A CAMetalLayer* on the wire: Fatal{UnmigratedSurface, "MetalLayer@P12"}, latched.
+        // A CAMetalLayer* on the wire: Fatal{UnmigratedSurface, "MetalLayer:use-MOBILEGL_IPC_SURFACE=server"}, latched.
         (void)SendSurfaceOp(client, r, static_cast<Uint8>(::MobileGL::Wire::SurfaceOpKind::CreateWindowSurface),
                             static_cast<Uint8>(::MobileGL::Wire::WindowKind::MetalLayer), 0x1234);
     }

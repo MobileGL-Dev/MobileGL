@@ -30,8 +30,9 @@
 //
 // PROCESS-LOCAL WINDOW OBJECTS ARE REFUSED BY NAME on the wire: ANativeWindow* and
 // CAMetalLayer* mean nothing in the server process. SurfaceOpCodec names their refusals
-// AndroidNativeWindow@P12 and MetalLayer@P12, and they stay (Rule H): P12 does not carry a
-// client's window across, it gives the SERVER a window of its own (kServerOwnedWindowBackend
+// AndroidNativeWindow:use-MOBILEGL_IPC_SURFACE=server and MetalLayer:use-MOBILEGL_IPC_SURFACE=server,
+// and they are permanent (Rule H): a client's window never crosses, a windowed client uses
+// MOBILEGL_IPC_SURFACE=server, which gives the SERVER a window of its own (kServerOwnedWindowBackend
 // below, WindowKind::ServerOwned on the wire).
 
 #pragma once

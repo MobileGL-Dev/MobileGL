@@ -176,10 +176,10 @@ Java_top_mobilegl_plugin_trace_TraceReplayActivity_nativeRunTraceReplay(JNIEnv* 
     // (apitrace_glws_android.cpp's createSurface), so handing Magma a window was the same as
     // asking for one.
     //
-    // P6 needs the pbuffer path on BOTH backends. Until P12 a spawned server cannot be given a
-    // window at all - an ANativeWindow* is a pointer into the CLIENT's process, and
+    // P6 needs the pbuffer path on BOTH backends. A spawned server cannot be given the client's
+    // window - an ANativeWindow* is a pointer into the CLIENT's process, and
     // SetWindowHandle is refused on the way across with Fatal{UnmigratedSurface,
-    // "AndroidNativeWindow@P12"} (Rule H). Measured: the DirectVulkan spawn arm died on exactly
+    // "AndroidNativeWindow:use-MOBILEGL_IPC_SURFACE=server"} (Rule H, permanent; a windowed client uses MOBILEGL_IPC_SURFACE=server). Measured: the DirectVulkan spawn arm died on exactly
     // that, one op after the server had come up green, while DirectGLES with the same flag passed.
     //
     // Every existing caller is unaffected: nobody asks for a Vulkan pbuffer today, and
