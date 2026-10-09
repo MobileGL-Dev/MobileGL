@@ -202,6 +202,9 @@ namespace MobileGL {
             // glGenBuffers) and never the heap address (recycled by the allocator): both
             // let a deleted-and-recreated buffer answer to a dead one's cache entry.
             Uint64 GetLifetimeId() const { return m_lifetimeId; }
+            // P15: the pipe client's last Buffer handle for this object (MGPipeSlotAllocator::
+            // AcquireHinted). Only a hint: it is checked against the allocator on every use.
+            Uint64& PipeHandleHint() const { return m_pipeHandleHint; }
             // Monotonic counter bumped on every shadow mutation; backends use it to
             // validate cached transient slices.
             Uint64 GetChangeSerial() const;
@@ -238,6 +241,7 @@ namespace MobileGL {
 
             const Uint m_externalIndex = 0;
             const Uint64 m_lifetimeId = AllocateLifetimeId();
+            mutable Uint64 m_pipeHandleHint = 0;
             SizeT m_size = 0;
             BufferUsage m_usage = BufferUsage::StaticDraw;
             // Owns the buffer's bytes (CPU shadow or backend persistent GPU map) and

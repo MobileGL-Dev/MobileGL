@@ -590,7 +590,11 @@ namespace MobileGL::MG_Pipe {
         // gating the mint would make the other subsystems emit null handles in exactly the
         // A/B arm that exists to isolate them. Only the CALLS are gated.
         MGPipeHandle AcquireTexture(Uint64 lifetimeId, ITextureObject* object) {
-            const MGPipeHandle handle = MGPipeSlots().Acquire(MGPipeKind::Texture, lifetimeId);
+            const MGPipeHandle handle =
+                object != nullptr
+                    ? MGPipeSlots().AcquireHinted(MGPipeKind::Texture, lifetimeId,
+                                                  object->PipeHandleHint(ITextureObject::PipeHintKind::Texture))
+                    : MGPipeSlots().Acquire(MGPipeKind::Texture, lifetimeId);
             Entry& entry = EntryFor(m_textures, handle);
             RetireIfRecycled(entry, handle);
             entry.Texture = object;
@@ -1287,7 +1291,12 @@ namespace MobileGL::MG_Pipe {
         // MGPipeResourceTracker::ResetForTest for the rule this restates: a texture handle and
         // the applier record it names are SHARE-GROUP OBJECT STATE, so nothing here is
         // per-context and no re-publication path exists or may exist.
+        // Moves whenever the handle table below is dropped (ResetForTest), so a memo that skipped
+        // NoteTextureBoundAs / AcquireTexture for handles it already noted knows to note again.
+        Uint64 TableEpoch() const { return m_tableEpoch; }
+
         void ResetForTest() {
+            ++m_tableEpoch;
             // EVERY REFERENCE THIS EMITTER OWES IS GIVEN BACK FIRST. A case that dropped the
             // table without releasing would pin cache entries for the rest of the process and
             // the next case's LRU would mint over capacity for reasons it cannot see.
@@ -1689,6 +1698,7 @@ namespace MobileGL::MG_Pipe {
         MGPTextureParams m_lastParams{};
         MGPSubData m_lastSubData{};
 
+        Uint64 m_tableEpoch = 0;
         Uint64 m_creates = 0;
         Uint64 m_respecifies = 0;
         Uint64 m_paramSets = 0;

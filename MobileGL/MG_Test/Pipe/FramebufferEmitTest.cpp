@@ -1264,6 +1264,111 @@ TEST(FramebufferEmit, AFramebufferRecordThatNamesNoUsableHandleIsRefusedRatherTh
         << "an out-of-range slot resized the table instead of being refused";
 }
 
+// ============================ P15: the bound-target build memo ============================
+//
+// EmitFramebufferState reuses the record it built for the same framebuffer and target while
+// nothing the build reads has moved (MGPipeFramebufferEmitter::BuildBoundFramebufferState). Each
+// case first proves the memo ENGAGED (an unchanged second emission is a hit), then moves one input
+// the framebuffer's own version does not see and expects the record to follow it, by field name.
+namespace {
+    MGPipeHandle HandleOfTexture(const SharedPtr<TextureObject2D>& texture) {
+        return MGPipeSlots().FindByLifetimeId(MGPipeKind::Texture, texture->GetLifetimeId());
+    }
+} // namespace
+
+TEST(FramebufferEmit, TheBuildMemoEngagesAndFollowsAnAttachedTexturesRespecify) {
+    FramebufferScope scope;
+    const auto color = MakeColorTexture(80, 32);
+    const auto fbo = MakeShared<FramebufferObject>(20);
+    fbo->AttachTexture(FramebufferAttachmentType::Color0, color, TextureUploadTarget::Texture2D);
+    BindDrawAndRead(fbo, fbo);
+    Framebuffers().EmitFramebufferState(Ctx());
+    const Uint64 hits = Framebuffers().MemoHitCount();
+    EXPECT_EQ(Framebuffers().EmitFramebufferState(Ctx()), 0u);
+    ASSERT_EQ(Framebuffers().MemoHitCount(), hits + 1) << "an unchanged framebuffer did not reuse its built record";
+
+    // The texture's level 0 grows; the framebuffer's object version does not move.
+    color->AllocateStorage(TextureUploadTarget::Texture2D, 0, MipmapInput{IntVec3{64, 64, 1}, 64u * 64u * 4u});
+    EXPECT_EQ(Framebuffers().EmitFramebufferState(Ctx()), sizeof(MGPFramebufferState));
+    EXPECT_EQ(Framebuffers().LastDraw().Width, 64u) << "MGPFramebufferState::Width";
+    EXPECT_EQ(Framebuffers().LastDraw().Height, 64u) << "MGPFramebufferState::Height";
+}
+
+// The build runs when the bound framebuffer changes, so the memo has to hold more than the last
+// framebuffer: an A/B/A switch must find A's record again.
+TEST(FramebufferEmit, TheBuildMemoKeepsEachFramebufferAcrossABindingSwitch) {
+    FramebufferScope scope;
+    const auto colorA = MakeColorTexture(83, 32);
+    const auto colorB = MakeColorTexture(84, 16);
+    const auto a = MakeShared<FramebufferObject>(24);
+    const auto b = MakeShared<FramebufferObject>(25);
+    a->AttachTexture(FramebufferAttachmentType::Color0, colorA, TextureUploadTarget::Texture2D);
+    b->AttachTexture(FramebufferAttachmentType::Color0, colorB, TextureUploadTarget::Texture2D);
+    BindDrawAndRead(a, a);
+    Framebuffers().EmitFramebufferState(Ctx());
+    BindDrawAndRead(b, b);
+    Framebuffers().EmitFramebufferState(Ctx());
+    const Uint64 hits = Framebuffers().MemoHitCount();
+    BindDrawAndRead(a, a);
+    Framebuffers().EmitFramebufferState(Ctx());
+    EXPECT_EQ(Framebuffers().MemoHitCount(), hits + 1) << "switching back to a framebuffer rebuilt its record";
+    EXPECT_EQ(Framebuffers().LastDraw().Width, 32u) << "MGPFramebufferState::Width";
+}
+
+TEST(FramebufferEmit, TheBuildMemoFollowsARestoragedAttachedRenderbuffer) {
+    FramebufferScope scope;
+    const auto renderbuffer = MakeShared<RenderbufferObject>(4);
+    renderbuffer->SetInternalFormat(TextureInternalFormat::RGBA8);
+    renderbuffer->AllocateStorage(IntVec2{32, 32});
+    const auto fbo = MakeShared<FramebufferObject>(21);
+    fbo->AttachRenderbuffer(FramebufferAttachmentType::Color0, renderbuffer);
+    BindDrawAndRead(fbo, fbo);
+    Framebuffers().EmitFramebufferState(Ctx());
+    const Uint64 hits = Framebuffers().MemoHitCount();
+    Framebuffers().EmitFramebufferState(Ctx());
+    ASSERT_EQ(Framebuffers().MemoHitCount(), hits + 1) << "an unchanged framebuffer did not reuse its built record";
+
+    renderbuffer->AllocateStorage(IntVec2{48, 40});
+    Framebuffers().EmitFramebufferState(Ctx());
+    EXPECT_EQ(Framebuffers().LastDraw().Width, 48u) << "MGPFramebufferState::Width";
+    EXPECT_EQ(Framebuffers().LastDraw().Height, 40u) << "MGPFramebufferState::Height";
+}
+
+TEST(FramebufferEmit, TheBuildMemoFollowsAnAttachedTexturesSampleCount) {
+    FramebufferScope scope;
+    const auto color = MakeColorTexture(81, 32);
+    const auto fbo = MakeShared<FramebufferObject>(22);
+    fbo->AttachTexture(FramebufferAttachmentType::Color0, color, TextureUploadTarget::Texture2D);
+    BindDrawAndRead(fbo, fbo);
+    Framebuffers().EmitFramebufferState(Ctx());
+    Framebuffers().EmitFramebufferState(Ctx());
+
+    // Samples move the params version, not the shape.
+    color->SetSamples(4);
+    Framebuffers().EmitFramebufferState(Ctx());
+    EXPECT_EQ(Framebuffers().LastDraw().Samples, 4u) << "MGPFramebufferState::Samples";
+}
+
+TEST(FramebufferEmit, TheBuildMemoReNotesBindBitsAfterTheTextureTableIsDropped) {
+    FramebufferScope scope;
+    const auto color = MakeColorTexture(82, 32);
+    const auto fbo = MakeShared<FramebufferObject>(23);
+    fbo->AttachTexture(FramebufferAttachmentType::Color0, color, TextureUploadTarget::Texture2D);
+    BindDrawAndRead(fbo, fbo);
+    Framebuffers().EmitFramebufferState(Ctx());
+    const MGPipeHandle handle = HandleOfTexture(color);
+    ASSERT_FALSE(MGPipeHandleIsNull(handle));
+    ASSERT_NE(MGPipeTextureEmitterInstance().TextureBindMask(handle) & kMGPipeBindRenderTarget, 0)
+        << "the attachment's RENDER_TARGET bit was never noted";
+
+    // A dropped table (a replaced session) forgets the sticky bits; the next build must note them again.
+    MGPipeTextureEmitterInstance().ResetForTest();
+    MGPipeSetHashSuppressorInstance().InvalidateAll();
+    Framebuffers().EmitFramebufferState(Ctx());
+    EXPECT_NE(MGPipeTextureEmitterInstance().TextureBindMask(handle) & kMGPipeBindRenderTarget, 0)
+        << "MGPResourceDesc::BindMask lost RENDER_TARGET after the texture table was dropped";
+}
+
 int main(int argc, char** argv) {
     // Before anything logs: the logger reads this variable once, on its first write, and
     // caches the handle. The name carries this process's pid, and the file is removed on the

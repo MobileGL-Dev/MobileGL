@@ -663,7 +663,8 @@ namespace MobileGL::MG_Pipe {
         // composite.
         MGPipeHandle AcquireShaderCsoHandle(const ProgramObject& program) {
             const Uint64 lifetimeId = program.GetLifetimeId();
-            const MGPipeHandle existing = MGPipeSlots().FindByLifetimeId(MGPipeKind::ShaderCso, lifetimeId);
+            const MGPipeHandle existing =
+                MGPipeSlots().FindByLifetimeIdHinted(MGPipeKind::ShaderCso, lifetimeId, program.PipeHandleHint());
             if (!MGPipeHandleIsNull(existing)) return existing;
             // A composite is minted off ITS OWN lifetime id, out of the reserved band, and is
             // an ordinary ShaderCso handle in every other respect - the same kind, the same

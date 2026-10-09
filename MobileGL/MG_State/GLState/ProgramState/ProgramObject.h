@@ -1281,6 +1281,9 @@ namespace MobileGL::MG_State::GLState {
         // the next glCreateProgram, this distinguishes a deleted-and-recreated program from the
         // original, so an identity cache can't false-hit on name recycling.
         Uint64 GetLifetimeId() const { return m_lifetimeId; }
+        // P15: the pipe client's last ShaderCso handle for this program (MGPipeSlotAllocator::
+        // FindByLifetimeIdHinted). Only a hint: it is checked against the allocator on every use.
+        Uint64& PipeHandleHint() const { return m_pipeHandleHint; }
 
     private:
         // ---- The one and only join gate for link output (P1 invariant I5) ----
@@ -1372,6 +1375,7 @@ namespace MobileGL::MG_State::GLState {
         // writes them.
         const Uint m_externalIndex = 0;
         const Uint64 m_lifetimeId = 0;
+        mutable Uint64 m_pipeHandleHint = 0;
         // The attach lists are mutated only in Link()'s GL-thread prologue, which is why
         // glGetAttachedShaders / GL_ATTACHED_SHADERS / the orphan-shader sweep need no join.
         Vector<SharedPtr<ShaderObject>> m_shaders;

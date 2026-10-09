@@ -281,7 +281,8 @@ namespace MobileGL::MG_Pipe {
         // gating it would make the vertex-input subsystem emit null handles whenever the
         // resource subsystem is off. Only the CALLS are gated (D-A1).
         MGPipeHandle Acquire(BufferObject& buffer) {
-            const MGPipeHandle handle = MGPipeSlots().Acquire(MGPipeKind::Buffer, buffer.GetLifetimeId());
+            const MGPipeHandle handle =
+                MGPipeSlots().AcquireHinted(MGPipeKind::Buffer, buffer.GetLifetimeId(), buffer.PipeHandleHint());
             const SizeT slot = handle.Slot;
             if (slot >= m_bySlot.size()) m_bySlot.resize(slot + 1);
             m_bySlot[slot].Object = &buffer;
@@ -292,7 +293,8 @@ namespace MobileGL::MG_Pipe {
         // The handle a buffer already has, or the null handle. Never mints - the emission
         // path calls Acquire, the query paths call this.
         MGPipeHandle Find(const BufferObject& buffer) const {
-            return MGPipeSlots().FindByLifetimeId(MGPipeKind::Buffer, buffer.GetLifetimeId());
+            return MGPipeSlots().FindByLifetimeIdHinted(MGPipeKind::Buffer, buffer.GetLifetimeId(),
+                                                        buffer.PipeHandleHint());
         }
 
         // D-D's inverse, and a RAW pointer is exact here: the entry exists only between the

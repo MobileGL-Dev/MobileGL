@@ -256,13 +256,29 @@ namespace MobileGL::MG_Pipe {
                 for (SizeT i = 0; i < kAttribs; ++i) {
                     if (vao->GetAttribute(static_cast<Uint>(i)).Enabled) count = static_cast<Uint32>(i) + 1;
                 }
+                // P15: interleaved attributes share one buffer (FCL MC 1.21.5: every chunk draw
+                // re-points ~4 attributes at the next chunk's buffer), so the previous attribute's
+                // answer is reused for the same object - one lookup and one sticky-bit note per
+                // buffer instead of per attribute. Scoped to this loop: same object, same handle.
+                const MG_State::GLState::BufferObject* lastBuffer = nullptr;
+                MGPipeHandle lastHandle = kMGPipeNullHandle;
                 for (SizeT i = 0; i < count; ++i) {
                     const auto& attrib = vao->GetAttribute(static_cast<Uint>(i));
                     MGPVertexBuffer& entry = m_entries[i];
                     entry = MGPVertexBuffer{};
-                    entry.Res = attrib.Buffer ? MGPipeSlots().Acquire(MGPipeKind::Buffer,
-                                                                     attrib.Buffer->GetLifetimeId())
-                                              : kMGPipeNullHandle;
+                    const Bool sameBuffer = attrib.Buffer && attrib.Buffer.get() == lastBuffer;
+                    if (sameBuffer) {
+                        entry.Res = lastHandle;
+                    } else {
+                        entry.Res = attrib.Buffer ? MGPipeSlots().AcquireHinted(MGPipeKind::Buffer,
+                                                                               attrib.Buffer->GetLifetimeId(),
+                                                                               attrib.Buffer->PipeHandleHint())
+                                                  : kMGPipeNullHandle;
+                        if (attrib.Buffer) {
+                            lastBuffer = attrib.Buffer.get();
+                            lastHandle = entry.Res;
+                        }
+                    }
                     if (ownedClientBuffers != nullptr && attrib.Enabled && !attrib.Buffer) {
                         entry.Res = (*ownedClientBuffers)[i];
                     }
@@ -271,7 +287,7 @@ namespace MobileGL::MG_Pipe {
                     // glNamedBuffer* may never be bound at any resource emission, but a draw
                     // that fetches from it resolves it right here, on the GL thread, at every
                     // draw. Sticky, so one draw is enough for the rest of its life.
-                    MGPipeResourceTrackerInstance().NoteBoundAs(entry.Res, BufferTarget::Vertex);
+                    if (!sameBuffer) MGPipeResourceTrackerInstance().NoteBoundAs(entry.Res, BufferTarget::Vertex);
                     // The attribute's own byte offset lives in MGPVertexAttribWire::Offset,
                     // so the entry's is the BINDING's, which the frontend already folded in.
                     entry.Offset = 0;

@@ -275,13 +275,13 @@ namespace MobileGL::MG_Pipe {
             Bool drawOk = false;
             Bool readOk = false;
             if (shared) {
-                drawOk = BuildFramebufferState(*drawFbo, MGPipeFramebufferTarget::Both, drawState);
+                drawOk = BuildBoundFramebufferState(*drawFbo, MGPipeFramebufferTarget::Both, drawState);
             } else {
                 if (drawFbo) {
-                    drawOk = BuildFramebufferState(*drawFbo, MGPipeFramebufferTarget::Draw, drawState);
+                    drawOk = BuildBoundFramebufferState(*drawFbo, MGPipeFramebufferTarget::Draw, drawState);
                 }
                 if (readFbo) {
-                    readOk = BuildFramebufferState(*readFbo, MGPipeFramebufferTarget::Read, readState);
+                    readOk = BuildBoundFramebufferState(*readFbo, MGPipeFramebufferTarget::Read, readState);
                 }
             }
             if (!drawOk && !readOk) return 0;
@@ -414,6 +414,8 @@ namespace MobileGL::MG_Pipe {
         const MGPFramebufferState& LastNamed() const { return m_lastNamed; }
         Uint64 EmissionCount() const { return m_emissions; }
         Uint64 RefusedCount() const { return m_refusals; }
+        // P15: bound-target builds answered from the memo (BuildBoundFramebufferState).
+        Uint64 MemoHitCount() const { return m_memoHits; }
 
         // A fresh context: what the server has is no longer what this emitter last sent. Only
         // LATCHES reset here - MGPipeApplierReset clears the applier's DrawFramebuffer and
@@ -438,6 +440,7 @@ namespace MobileGL::MG_Pipe {
         void ResetForTest() {
             Reset();
             ResetCounters();
+            for (auto& memo : m_buildMemo) memo.Valid = false;
             m_lastDraw = MGPFramebufferState{};
             m_lastRead = MGPFramebufferState{};
             m_lastNamed = MGPFramebufferState{};
@@ -563,6 +566,40 @@ namespace MobileGL::MG_Pipe {
             return true;
         }
 
+        // BuildFramebufferState for a BOUND target, reusing the last record built for the same
+        // framebuffer and target while nothing the build reads has moved. The build runs per draw
+        // and its answer is a function of:
+        //   - the framebuffer: lifetime id (identity) and object version (attachments, draw and
+        //     read buffers, no-attachment defaults all move it);
+        //   - each attached texture: lifetime id, shape version (sizes, level set, internal
+        //     format: completeness and geometry) and its samples / fixed-locations pair, which
+        //     move the params version rather than the shape;
+        //   - each attached renderbuffer: lifetime id plus its size, format and samples, read
+        //     directly (its storage has no version);
+        //   - the handles it minted: the slot allocator's reset epoch, and the texture emitter's
+        //     table epoch for the sticky bind bits SurfaceOf notes (a dropped table must be
+        //     re-noted).
+        // Not for the default framebuffer, whose geometry follows the current surface.
+        // Kill switch MOBILEGL_PIPE_FRAMEBUFFER_STATE_MEMO=0.
+        Bool BuildBoundFramebufferState(const FramebufferObject& fbo, MGPipeFramebufferTarget target,
+                                        MGPFramebufferState& out) {
+            const Bool memoOn = MG_Config::Features.PipeFramebufferStateMemo != MG_Config::QuirkOverride::ForceOff &&
+                                !fbo.IsDefaultFramebuffer();
+            // Direct-mapped on (framebuffer, target): the build only runs when the bound framebuffer
+            // changed, so a per-target single entry would miss on every A/B/A switch between targets.
+            const Uint64 key = fbo.GetLifetimeId() * 4u + static_cast<Uint64>(target);
+            BuildMemo& memo = m_buildMemo[static_cast<SizeT>((key * 0x9E3779B97F4A7C15ull) >> 60) % m_buildMemo.size()];
+            if (memoOn && memo.Valid && MemoHolds(memo, fbo, target)) {
+                out = memo.State;
+                ++m_memoHits;
+                return true;
+            }
+            memo.Valid = false;
+            if (!BuildFramebufferState(fbo, target, out)) return false;
+            if (memoOn) FillMemo(memo, fbo, target, out);
+            return true;
+        }
+
         static Bool IsBoundTo(const FramebufferObject& fbo, MobileGL::FramebufferTarget target) {
             if (MG_State::pGLContext == nullptr) return false;
             const auto& bound = MG_State::pGLContext->GetFramebufferBindingSlot(target).GetBoundObject();
@@ -642,6 +679,96 @@ namespace MobileGL::MG_Pipe {
             out.FixedSampleLocations = fbo.GetDefaultFixedSampleLocations() ? 1 : 0;
         }
 
+        struct MemoAttachment {
+            Uint32 Point = 0;
+            Bool IsTexture = false;
+            Uint64 LifetimeId = 0;
+            Uint64 ShapeVersion = 0;
+            Int Width = 0, Height = 0, Samples = 0;
+            Uint32 Format = 0;
+            Bool FixedSampleLocations = false;
+        };
+        struct BuildMemo {
+            Bool Valid = false;
+            Uint8 Target = 0;
+            Uint16 ObjectVersion = 0;
+            Uint64 FboLifetimeId = 0;
+            Uint64 AllocatorEpoch = 0;
+            Uint64 TextureTableEpoch = 0;
+            Uint32 AttachmentCount = 0;
+            Array<MemoAttachment, static_cast<SizeT>(FramebufferAttachmentType::FramebufferAttachmentTypeCount)>
+                Attachments{};
+            MGPFramebufferState State{};
+        };
+
+        static Bool AttachmentMatches(const MemoAttachment& entry,
+                                      const MG_State::GLState::FramebufferAttachmentObject& attachment) {
+            if (attachment.IsEmpty() || attachment.IsTexture() != entry.IsTexture) return false;
+            if (entry.IsTexture) {
+                const auto& texture = attachment.GetTexture();
+                return texture->GetLifetimeId() == entry.LifetimeId &&
+                       texture->GetShapeVersion() == entry.ShapeVersion &&
+                       texture->GetSamples() == entry.Samples &&
+                       texture->HasFixedSampleLocations() == entry.FixedSampleLocations;
+            }
+            const auto& renderbuffer = attachment.GetRenderbuffer();
+            return renderbuffer->GetLifetimeId() == entry.LifetimeId && renderbuffer->GetWidth() == entry.Width &&
+                   renderbuffer->GetHeight() == entry.Height && renderbuffer->GetSamples() == entry.Samples &&
+                   static_cast<Uint32>(renderbuffer->GetInternalFormat()) == entry.Format;
+        }
+
+        Bool MemoHolds(const BuildMemo& memo, const FramebufferObject& fbo, MGPipeFramebufferTarget target) const {
+            if (memo.Target != static_cast<Uint8>(target) || memo.FboLifetimeId != fbo.GetLifetimeId() ||
+                memo.ObjectVersion != fbo.GetObjectVersion() || memo.AllocatorEpoch != MGPipeSlots().ResetEpoch() ||
+                memo.TextureTableEpoch != MGPipeTextureEmitterInstance().TableEpoch()) {
+                return false;
+            }
+            const auto& all = fbo.GetAllAttachmentObjects();
+            for (Uint32 i = 0; i < memo.AttachmentCount; ++i) {
+                const MemoAttachment& entry = memo.Attachments[i];
+                if (!AttachmentMatches(entry, all[entry.Point])) return false;
+            }
+            return true;
+        }
+
+        void FillMemo(BuildMemo& memo, const FramebufferObject& fbo, MGPipeFramebufferTarget target,
+                      const MGPFramebufferState& state) {
+            memo.Target = static_cast<Uint8>(target);
+            memo.FboLifetimeId = fbo.GetLifetimeId();
+            memo.ObjectVersion = fbo.GetObjectVersion();
+            memo.AllocatorEpoch = MGPipeSlots().ResetEpoch();
+            memo.TextureTableEpoch = MGPipeTextureEmitterInstance().TableEpoch();
+            memo.AttachmentCount = 0;
+            const auto& all = fbo.GetAllAttachmentObjects();
+            for (SizeT point = 0; point < all.size(); ++point) {
+                const auto& attachment = all[point];
+                if (attachment.IsEmpty()) continue;
+                MemoAttachment& entry = memo.Attachments[memo.AttachmentCount++];
+                entry = MemoAttachment{};
+                entry.Point = static_cast<Uint32>(point);
+                entry.IsTexture = attachment.IsTexture();
+                if (entry.IsTexture) {
+                    const auto& texture = attachment.GetTexture();
+                    entry.LifetimeId = texture->GetLifetimeId();
+                    entry.ShapeVersion = texture->GetShapeVersion();
+                    entry.Samples = texture->GetSamples();
+                    entry.FixedSampleLocations = texture->HasFixedSampleLocations();
+                } else {
+                    const auto& renderbuffer = attachment.GetRenderbuffer();
+                    entry.LifetimeId = renderbuffer->GetLifetimeId();
+                    entry.Width = renderbuffer->GetWidth();
+                    entry.Height = renderbuffer->GetHeight();
+                    entry.Samples = renderbuffer->GetSamples();
+                    entry.Format = static_cast<Uint32>(renderbuffer->GetInternalFormat());
+                }
+            }
+            memo.State = state;
+            memo.Valid = true;
+        }
+
+        // Direct-mapped on (framebuffer lifetime id, target); Named never reaches it.
+        Array<BuildMemo, 16> m_buildMemo{};
+        Uint64 m_memoHits = 0;
         Array<Uint64, 2> m_lastEmitted{};
         // The per-FRAMEBUFFER suppressor for Named records, slot-indexed with the generation
         // checked, exactly as the applier's own table is. A framebuffer has no wire lifetime

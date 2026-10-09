@@ -72,6 +72,12 @@ namespace MobileGL::MG_Pipe {
         MGPipeHandle FindByLifetimeId(MGPipeKind kind, Uint64 lifetimeId) const;
         // FindByLifetimeId, then AllocateFor when it misses. The ordinary client path.
         MGPipeHandle Acquire(MGPipeKind kind, Uint64 lifetimeId);
+        // P15: the same two answers, first trying `hint` - the handle this object was last given,
+        // kept on the frontend object itself (MGPipePackHandleHint). The hint is believed only when
+        // the slot it names is live, at that generation, and owned by this very lifetime id, so a
+        // reset, a free or a recycle can only make it miss; the hint is refreshed on every miss.
+        MGPipeHandle FindByLifetimeIdHinted(MGPipeKind kind, Uint64 lifetimeId, Uint64& hint) const;
+        MGPipeHandle AcquireHinted(MGPipeKind kind, Uint64 lifetimeId, Uint64& hint);
 
         // Returns the slot to the free list. The Gen bump happens on the NEXT handout of that
         // slot, not here, so a handle that is freed twice cannot skip a generation and the
@@ -178,6 +184,12 @@ namespace MobileGL::MG_Pipe {
 
     // The monolith's one client allocator. Under split there is one per client context.
     MGPipeSlotAllocator& MGPipeSlots();
+
+    // A handle packed into the Uint64 a frontend object keeps as its hint (0 = none; slot 0 is
+    // never handed out).
+    inline Uint64 MGPipePackHandleHint(MGPipeHandle handle) {
+        return static_cast<Uint64>(handle.Slot) | (static_cast<Uint64>(handle.Gen) << 32);
+    }
 
 #if MOBILEGL_BUILD_DISAGGREGATED
     // P5c (hd, CONTRACT-P5C §3.1 / §6 layer 1): with an active transport this allocator is a

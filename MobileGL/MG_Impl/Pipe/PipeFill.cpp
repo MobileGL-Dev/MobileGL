@@ -2640,6 +2640,44 @@ namespace MobileGL::MG_Pipe {
                                                   // consumer mask gains bit 13 in the same
                                                   // commit, or R-8 withholds the whole family.
                                                   kMGPipeWiredBufferBindingSubsystem;
+
+        // P15: the dirty bits whose family this build, push mask and consumer emit - every
+        // condition of the per-bit gate in MGPipeValidateForVerb except the dirty bit itself.
+        Uint32 ComputeLiveDirtyBits(Uint64 pushMask) {
+            Uint32 live = 0;
+            for (Uint32 b = 0; b < kMGPipeDirtyCount; ++b) {
+                const Uint64 subsystem = MGPipeSubsystemForDirty(static_cast<MGPipeDirty>(b));
+                if (subsystem != 0 && (pushMask & subsystem) != 0 && (kMGPipeWiredSubsystems & subsystem) != 0 &&
+                    P4aFamilyHasItsConsumer(subsystem) && P4aFamilyDependenciesAreSet(subsystem, pushMask) &&
+                    P5eFamilyIsLive(subsystem, pushMask)) {
+                    live |= MGPipeDirtyBit(static_cast<MGPipeDirty>(b));
+                }
+            }
+            return live;
+        }
+
+        // Per verb, these conditions used to be re-asked for every bit (~15 consumer-registration
+        // and dependency-table walks per draw). In monolith their only inputs are the push mask and
+        // the registered consumer, so the answer is kept until either moves. Under a transport the
+        // caps mirror answers and can move with a new session, so it is recomputed every verb.
+        Uint32 LiveDirtyBits(Uint64 pushMask) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+            if (MG_Config::Transport != MG_Config::TransportMode::Monolith) return ComputeLiveDirtyBits(pushMask);
+#endif
+            static Bool valid = false;
+            static Uint64 cachedPushMask = 0;
+            static const MGPipeResourceOps* cachedConsumer = nullptr;
+            static Uint32 cachedLive = 0;
+            const MGPipeResourceOps* consumer = MGPipeGetResourceOps();
+            if (!valid || cachedPushMask != pushMask || cachedConsumer != consumer) {
+                cachedLive = ComputeLiveDirtyBits(pushMask);
+                cachedPushMask = pushMask;
+                cachedConsumer = consumer;
+                valid = true;
+            }
+            return cachedLive;
+        }
+
         // Each family constant is either 0 or its own subsystem bit and nothing else. Without
         // this a header that set the wrong constant - the sampler bit in the program header,
         // say - would switch the wrong family on and every gate would still pass.
@@ -3621,15 +3659,8 @@ namespace MobileGL::MG_Pipe {
         // binding-point family and asks bit 13's OWN consumer bit rather than the resource
         // family's. It answers true for every subsystem but bit 13, so nothing that emitted
         // before P5e changes.
-        const auto wants = [&](MGPipeDirty bit) {
-            const Uint64 subsystem = MGPipeSubsystemForDirty(bit);
-            return subsystem != 0 && (pushMask & subsystem) != 0 &&
-                   (kMGPipeWiredSubsystems & subsystem) != 0 &&
-                   P4aFamilyHasItsConsumer(subsystem) &&
-                   P4aFamilyDependenciesAreSet(subsystem, pushMask) &&
-                   P5eFamilyIsLive(subsystem, pushMask) &&
-                   (dirty & MGPipeDirtyBit(bit)) != 0;
-        };
+        const Uint32 liveDirty = LiveDirtyBits(pushMask) & dirty;
+        const auto wants = [&](MGPipeDirty bit) { return (liveDirty & MGPipeDirtyBit(bit)) != 0; };
         Uint64 payloadBytes = 0;
 
         // A fresh context is a fresh server, and that is true of EVERY subsystem, so it is

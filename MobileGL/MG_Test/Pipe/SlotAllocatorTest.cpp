@@ -97,6 +97,38 @@ namespace {
         EXPECT_TRUE(allocator.IsLive(MGPipeKind::Buffer, reused));
     }
 
+    // P15: a hint (the handle a frontend object was last given, kept on the object) is a shortcut
+    // and never an answer of its own. It must give the live handle back, and it must miss - never
+    // name another object's handle - after a free, a recycle of its slot, or a reset.
+    TEST(SlotAllocator, AHandleHintIsOnlyBelievedWhileItsSlotStillBelongsToTheObject) {
+        MGPipeSlotAllocator allocator;
+        constexpr Uint64 kFirst = 1001, kSecond = 1002;
+
+        Uint64 hint = 0;
+        const MGPipeHandle minted = allocator.AcquireHinted(MGPipeKind::Buffer, kFirst, hint);
+        ASSERT_FALSE(MGPipeHandleIsNull(minted));
+        EXPECT_EQ(hint, MGPipePackHandleHint(minted)) << "a mint must leave the hint naming the new handle";
+        EXPECT_TRUE(allocator.FindByLifetimeIdHinted(MGPipeKind::Buffer, kFirst, hint) == minted);
+
+        // The slot is freed and handed to another object. The dead object's hint must miss, even
+        // when it is forged to carry the successor's exact slot and generation: the owner moved.
+        allocator.Free(MGPipeKind::Buffer, minted);
+        EXPECT_TRUE(MGPipeHandleIsNull(allocator.FindByLifetimeIdHinted(MGPipeKind::Buffer, kFirst, hint)))
+            << "a freed object's hint still answered";
+        Uint64 staleHint = MGPipePackHandleHint(minted);
+        const MGPipeHandle successor = allocator.AcquireHinted(MGPipeKind::Buffer, kSecond, staleHint);
+        EXPECT_EQ(successor.Slot, minted.Slot) << "the free list did not hand the slot back";
+        Uint64 forged = MGPipePackHandleHint(successor);  // the successor's exact slot and generation
+        EXPECT_TRUE(MGPipeHandleIsNull(allocator.FindByLifetimeIdHinted(MGPipeKind::Buffer, kFirst, forged)))
+            << "a hint naming another object's live slot answered for the dead object";
+
+        // A reset forgets every handle; a hint from before it can only miss.
+        Uint64 beforeReset = MGPipePackHandleHint(successor);
+        allocator.Reset();
+        EXPECT_TRUE(MGPipeHandleIsNull(allocator.FindByLifetimeIdHinted(MGPipeKind::Buffer, kSecond, beforeReset)))
+            << "a hint survived the allocator's reset";
+    }
+
     TEST(SlotAllocator, FreedSlotComesBackBeforeHighWaterGrows) {
         MGPipeSlotAllocator allocator;
 

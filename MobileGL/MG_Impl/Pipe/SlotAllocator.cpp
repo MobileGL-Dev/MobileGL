@@ -223,6 +223,31 @@ namespace MobileGL::MG_Pipe {
         return MGPipeHandle{it->second, entry->Gen};
     }
 
+    MGPipeHandle MGPipeSlotAllocator::FindByLifetimeIdHinted(MGPipeKind kind, Uint64 lifetimeId,
+                                                             Uint64& hint) const {
+        if (hint != 0 && lifetimeId != 0) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+            MGPipeRefuseAllocatorFromApplyThread("FindByLifetimeIdHinted");
+#endif
+            const Uint32 slot = static_cast<Uint32>(hint);
+            const Uint32 gen = static_cast<Uint32>(hint >> 32);
+            const SlotState* entry = EntryOf(StateOf(kind), kind, slot);
+            if (entry != nullptr && entry->Live && entry->Gen == gen && entry->LifetimeId == lifetimeId)
+                return MGPipeHandle{slot, gen};
+        }
+        const MGPipeHandle found = FindByLifetimeId(kind, lifetimeId);
+        hint = MGPipeHandleIsNull(found) ? 0 : MGPipePackHandleHint(found);
+        return found;
+    }
+
+    MGPipeHandle MGPipeSlotAllocator::AcquireHinted(MGPipeKind kind, Uint64 lifetimeId, Uint64& hint) {
+        const MGPipeHandle existing = FindByLifetimeIdHinted(kind, lifetimeId, hint);
+        if (!MGPipeHandleIsNull(existing)) return existing;
+        const MGPipeHandle minted = Acquire(kind, lifetimeId);
+        hint = MGPipeHandleIsNull(minted) ? 0 : MGPipePackHandleHint(minted);
+        return minted;
+    }
+
     MGPipeHandle MGPipeSlotAllocator::Acquire(MGPipeKind kind, Uint64 lifetimeId) {
 #if MOBILEGL_BUILD_DISAGGREGATED
         MGPipeRefuseAllocatorFromApplyThread("Acquire");

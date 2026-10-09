@@ -859,7 +859,9 @@ namespace MobileGL::MG_Pipe {
                     unitSampler ? unitSampler.get() : texture->GetSamplerObject().get();
                 if (MG_State::GLState::SamplesAsIncompleteTexture(texture.get(), effective)) continue;
 
-                entry.Texture = MGPipeSlots().Acquire(MGPipeKind::Texture, texture->GetLifetimeId());
+                entry.Texture = MGPipeSlots().AcquireHinted(
+                    MGPipeKind::Texture, texture->GetLifetimeId(),
+                    texture->PipeHandleHint(ITextureObject::PipeHintKind::Texture));
                 // D-A4: a texture the sampler-view resolution names in an emitted MGPBoundView
                 // is SAMPLER-bound from then on (sticky; the texture emitter's contract door,
                 // since this header is included BY TextureEmit.h). One early-out per unit per
@@ -976,7 +978,8 @@ namespace MobileGL::MG_Pipe {
         MGPipeHandle AcquireSamplerView(const ITextureObject& texture, MGPipeHandle textureHandle,
                                         Uint64& payloadBytes) {
             const MGPipeHandle handle =
-                MGPipeSlots().Acquire(MGPipeKind::SamplerViewCso, texture.GetLifetimeId());
+                MGPipeSlots().AcquireHinted(MGPipeKind::SamplerViewCso, texture.GetLifetimeId(),
+                                            texture.PipeHandleHint(ITextureObject::PipeHintKind::SamplerView));
             const SizeT slot = handle.Slot;
             if (slot >= m_viewLatch.size()) m_viewLatch.resize(slot + 1);
             ViewLatch& latch = m_viewLatch[slot];

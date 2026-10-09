@@ -277,6 +277,34 @@ namespace {
         }
     }
 
+    // P15: the rebuild reuses the previous attribute's handle when it names the SAME buffer object
+    // (interleaved attributes), and only then. Two buffers interleaved A, A, B, A: every entry must
+    // carry its own buffer's handle, including the A after the B.
+    TEST(VertexInputEmit, InterleavedAttributesOnTwoBuffersEachCarryTheirOwnBuffersHandle) {
+        EmitterScope scope;
+        const SharedPtr<VertexArrayObject> vao = MakeVao(1);
+        const SharedPtr<BufferObject> a = Ctx().CreateBufferObject(1);
+        const SharedPtr<BufferObject> b = Ctx().CreateBufferObject(2);
+        a->Respecify(256, nullptr);
+        b->Respecify(256, nullptr);
+        const SharedPtr<BufferObject>* owners[] = {&a, &a, &b, &a};
+        for (Uint i = 0; i < 4; ++i) {
+            vao->SetAttributeFormat(i, 4, DataType::Float32, false, 16, static_cast<SizeT>(4 * i), false, false, 16);
+            vao->MirrorPointerIntoBinding(i, *owners[i], static_cast<SizeT>(4 * i), 16);
+            vao->BindAttributeBuffer(i, *owners[i]);
+            vao->EnableAttribute(i);
+        }
+        Emitter().EmitVertexBuffers(Ctx(), 0);
+        ASSERT_EQ(Emitter().LastVertexBuffers().Count, 4u);
+        for (Uint i = 0; i < 4; ++i) {
+            const MGPipeHandle expected =
+                MGPipeSlots().FindByLifetimeId(MGPipeKind::Buffer, (*owners[i])->GetLifetimeId());
+            ASSERT_FALSE(MGPipeHandleIsNull(expected));
+            EXPECT_TRUE(Emitter().LastEntries()[i].Res == expected)
+                << "MGPVertexBuffer::Res of entry " << i << " is not its own buffer's handle";
+        }
+    }
+
     // KHR-GL43.vertex_attrib_binding.basic-input-case7/8: a pointer call's stride 0 means
     // "tightly packed" and the frontend already resolved it to the element size, so a zero
     // that reaches the wire can only have come from the binding model - where it means every

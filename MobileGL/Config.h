@@ -148,6 +148,9 @@ namespace MobileGL::MG_Config {
         // record is byte-identical to the one its handle last published (a glBindVertexBuffer
         // that only changed the buffer) re-publishes nothing. Auto is ON; ForceOff re-creates.
         QuirkOverride PipeVertexElementsDedup = QuirkOverride::Auto;
+        // P15: the client reuses a bound framebuffer's built set_framebuffer_state while nothing it
+        // reads has moved (MGPipeFramebufferEmitter::BuildBoundFramebufferState).
+        QuirkOverride PipeFramebufferStateMemo = QuirkOverride::Auto;
         // MOBILEGL_ADVERTISE_FP64: add GL_ARB_gpu_shader_fp64 to the advertised extension
         // string. `double` in a shader always WORKS - it is narrowed to 32 bits before any
         // module reaches a backend (ShaderTranspiler::DemoteFloat64Pass) - but the extension

@@ -82,6 +82,10 @@ namespace MobileGL::MG_State::GLState {
         virtual Bool HasFixedSampleLocations() const = 0;
         virtual void SetFixedSampleLocations(Bool fixedSampleLocations) = 0;
         virtual Uint64 GetLifetimeId() const = 0;
+        // P15: the pipe client's last handles for this texture, one per kind it is looked up under
+        // (MGPipeSlotAllocator::AcquireHinted). Only hints: checked against the allocator on use.
+        enum class PipeHintKind : Uint8 { Texture = 0, SamplerView = 1, Count = 2 };
+        virtual Uint64& PipeHandleHint(PipeHintKind kind) const = 0;
         // Which aspect of a packed depth/stencil texture a sampler reads (GL 4.6 core 8.10).
         // DEPTH_COMPONENT until set, and meaningless for every other format.
         virtual GLenum GetDepthStencilTextureMode() const = 0;
@@ -164,6 +168,7 @@ namespace MobileGL::MG_State::GLState {
         Bool HasFixedSampleLocations() const override;
         void SetFixedSampleLocations(Bool fixedSampleLocations) override;
         Uint64 GetLifetimeId() const override;
+        Uint64& PipeHandleHint(PipeHintKind kind) const override { return m_pipeHandleHints[static_cast<SizeT>(kind)]; }
         // A plain texture owns its storage; TextureObjectView overrides this.
         const SharedPtr<ITextureObject>& GetViewStorageOwner() const override;
         Uint GetViewMinLevel() const override { return m_viewMinLevel; }
@@ -241,6 +246,7 @@ namespace MobileGL::MG_State::GLState {
 
         const Uint m_externalIndex;
         const Uint64 m_lifetimeId;
+        mutable Uint64 m_pipeHandleHints[static_cast<SizeT>(PipeHintKind::Count)] = {};
         const TextureTarget m_target = TextureTarget::Unknown;
         TextureInternalFormat m_internalFormat = TextureInternalFormat::Unknown;
         SharedPtr<SamplerObject> m_sampler = nullptr;
