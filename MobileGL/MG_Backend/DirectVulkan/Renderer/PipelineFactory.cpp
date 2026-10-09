@@ -194,67 +194,69 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     PipelineFactory::HashType PipelineFactory::ComputeHash(const PipelineCreatePayload& payload) const {
-        XXHASH_VERIFY(XXH64_reset(m_hashState, m_config.CacheVersion));
-        XXHASH_VERIFY(XXH64_update(m_hashState, &payload.programHash, sizeof(payload.programHash)));
-        XXHASH_VERIFY(XXH64_update(m_hashState, &payload.vertexInputHash, sizeof(payload.vertexInputHash)));
-        XXHASH_VERIFY(XXH64_update(m_hashState, &payload.pipelineLayout, sizeof(payload.pipelineLayout)));
+        // P15: one read of the thread_local per hash (emulated TLS: every read is a call).
+        XXH64_state_t* const hashState = m_hashState;
+        XXHASH_VERIFY(XXH64_reset(hashState, m_config.CacheVersion));
+        XXHASH_VERIFY(XXH64_update(hashState, &payload.programHash, sizeof(payload.programHash)));
+        XXHASH_VERIFY(XXH64_update(hashState, &payload.vertexInputHash, sizeof(payload.vertexInputHash)));
+        XXHASH_VERIFY(XXH64_update(hashState, &payload.pipelineLayout, sizeof(payload.pipelineLayout)));
         if (payload.wireRenderPassCompatibilityId != 0) {
             constexpr Uint64 wireDomain = 0x5749524552504b59ull;
-            XXHASH_VERIFY(XXH64_update(m_hashState, &wireDomain, sizeof(wireDomain)));
-            XXHASH_VERIFY(XXH64_update(m_hashState, &payload.wireRenderPassCompatibilityId,
+            XXHASH_VERIFY(XXH64_update(hashState, &wireDomain, sizeof(wireDomain)));
+            XXHASH_VERIFY(XXH64_update(hashState, &payload.wireRenderPassCompatibilityId,
                                       sizeof(payload.wireRenderPassCompatibilityId)));
         } else
         {
-            XXHASH_VERIFY(XXH64_update(m_hashState, &payload.renderPass, sizeof(payload.renderPass)));
+            XXHASH_VERIFY(XXH64_update(hashState, &payload.renderPass, sizeof(payload.renderPass)));
         }
-        XXHASH_VERIFY(XXH64_update(m_hashState, &payload.colorAttachmentCount, sizeof(payload.colorAttachmentCount)));
-        XXHASH_VERIFY(XXH64_update(m_hashState, &payload.rasterizationSamples, sizeof(payload.rasterizationSamples)));
-        XXHASH_VERIFY(XXH64_update(m_hashState, &payload.sampleShadingEnable, sizeof(payload.sampleShadingEnable)));
-        XXHASH_VERIFY(XXH64_update(m_hashState, &payload.minSampleShading, sizeof(payload.minSampleShading)));
-        XXHASH_VERIFY(XXH64_update(m_hashState, &payload.sampleMask, sizeof(payload.sampleMask)));
-        XXHASH_VERIFY(XXH64_update(m_hashState, &payload.subpass, sizeof(payload.subpass)));
-        XXHASH_VERIFY(XXH64_update(m_hashState, &payload.topology, sizeof(payload.topology)));
+        XXHASH_VERIFY(XXH64_update(hashState, &payload.colorAttachmentCount, sizeof(payload.colorAttachmentCount)));
+        XXHASH_VERIFY(XXH64_update(hashState, &payload.rasterizationSamples, sizeof(payload.rasterizationSamples)));
+        XXHASH_VERIFY(XXH64_update(hashState, &payload.sampleShadingEnable, sizeof(payload.sampleShadingEnable)));
+        XXHASH_VERIFY(XXH64_update(hashState, &payload.minSampleShading, sizeof(payload.minSampleShading)));
+        XXHASH_VERIFY(XXH64_update(hashState, &payload.sampleMask, sizeof(payload.sampleMask)));
+        XXHASH_VERIFY(XXH64_update(hashState, &payload.subpass, sizeof(payload.subpass)));
+        XXHASH_VERIFY(XXH64_update(hashState, &payload.topology, sizeof(payload.topology)));
         XXHASH_VERIFY(
-            XXH64_update(m_hashState, &payload.primitiveRestartEnable, sizeof(payload.primitiveRestartEnable)));
-        XXHASH_VERIFY(XXH64_update(m_hashState, &payload.patchControlPoints, sizeof(payload.patchControlPoints)));
-        XXHASH_VERIFY(XXH64_update(m_hashState, &payload.passthroughTessControlKey,
+            XXH64_update(hashState, &payload.primitiveRestartEnable, sizeof(payload.primitiveRestartEnable)));
+        XXHASH_VERIFY(XXH64_update(hashState, &payload.patchControlPoints, sizeof(payload.patchControlPoints)));
+        XXHASH_VERIFY(XXH64_update(hashState, &payload.passthroughTessControlKey,
                                    sizeof(payload.passthroughTessControlKey)));
-        XXHASH_VERIFY(XXH64_update(m_hashState, &payload.viewportCount, sizeof(payload.viewportCount)));
-        XXHASH_VERIFY(XXH64_update(m_hashState, &payload.polygonMode, sizeof(payload.polygonMode)));
-        XXHASH_VERIFY(XXH64_update(m_hashState, &payload.cullMode, sizeof(payload.cullMode)));
-        XXHASH_VERIFY(XXH64_update(m_hashState, &payload.frontFace, sizeof(payload.frontFace)));
+        XXHASH_VERIFY(XXH64_update(hashState, &payload.viewportCount, sizeof(payload.viewportCount)));
+        XXHASH_VERIFY(XXH64_update(hashState, &payload.polygonMode, sizeof(payload.polygonMode)));
+        XXHASH_VERIFY(XXH64_update(hashState, &payload.cullMode, sizeof(payload.cullMode)));
+        XXHASH_VERIFY(XXH64_update(hashState, &payload.frontFace, sizeof(payload.frontFace)));
         XXHASH_VERIFY(
-            XXH64_update(m_hashState, &payload.provokingVertexMode, sizeof(payload.provokingVertexMode)));
-        XXHASH_VERIFY(XXH64_update(m_hashState, &payload.depthTestEnable, sizeof(payload.depthTestEnable)));
-        XXHASH_VERIFY(XXH64_update(m_hashState, &payload.depthWriteEnable, sizeof(payload.depthWriteEnable)));
-        XXHASH_VERIFY(XXH64_update(m_hashState, &payload.depthBiasEnable, sizeof(payload.depthBiasEnable)));
+            XXH64_update(hashState, &payload.provokingVertexMode, sizeof(payload.provokingVertexMode)));
+        XXHASH_VERIFY(XXH64_update(hashState, &payload.depthTestEnable, sizeof(payload.depthTestEnable)));
+        XXHASH_VERIFY(XXH64_update(hashState, &payload.depthWriteEnable, sizeof(payload.depthWriteEnable)));
+        XXHASH_VERIFY(XXH64_update(hashState, &payload.depthBiasEnable, sizeof(payload.depthBiasEnable)));
         XXHASH_VERIFY(
-            XXH64_update(m_hashState, &payload.rasterizerDiscardEnable, sizeof(payload.rasterizerDiscardEnable)));
-        XXHASH_VERIFY(XXH64_update(m_hashState, &payload.logicOpEnable, sizeof(payload.logicOpEnable)));
-        XXHASH_VERIFY(XXH64_update(m_hashState, &payload.stencilTestEnable, sizeof(payload.stencilTestEnable)));
-        XXHASH_VERIFY(XXH64_update(m_hashState, &payload.depthCompareOp, sizeof(payload.depthCompareOp)));
-        XXHASH_VERIFY(XXH64_update(m_hashState, &payload.logicOp, sizeof(payload.logicOp)));
-        XXHASH_VERIFY(XXH64_update(m_hashState, &payload.frontStencilFailOp, sizeof(payload.frontStencilFailOp)));
-        XXHASH_VERIFY(XXH64_update(m_hashState, &payload.frontStencilPassOp, sizeof(payload.frontStencilPassOp)));
+            XXH64_update(hashState, &payload.rasterizerDiscardEnable, sizeof(payload.rasterizerDiscardEnable)));
+        XXHASH_VERIFY(XXH64_update(hashState, &payload.logicOpEnable, sizeof(payload.logicOpEnable)));
+        XXHASH_VERIFY(XXH64_update(hashState, &payload.stencilTestEnable, sizeof(payload.stencilTestEnable)));
+        XXHASH_VERIFY(XXH64_update(hashState, &payload.depthCompareOp, sizeof(payload.depthCompareOp)));
+        XXHASH_VERIFY(XXH64_update(hashState, &payload.logicOp, sizeof(payload.logicOp)));
+        XXHASH_VERIFY(XXH64_update(hashState, &payload.frontStencilFailOp, sizeof(payload.frontStencilFailOp)));
+        XXHASH_VERIFY(XXH64_update(hashState, &payload.frontStencilPassOp, sizeof(payload.frontStencilPassOp)));
         XXHASH_VERIFY(
-            XXH64_update(m_hashState, &payload.frontStencilDepthFailOp, sizeof(payload.frontStencilDepthFailOp)));
+            XXH64_update(hashState, &payload.frontStencilDepthFailOp, sizeof(payload.frontStencilDepthFailOp)));
         XXHASH_VERIFY(
-            XXH64_update(m_hashState, &payload.frontStencilCompareOp, sizeof(payload.frontStencilCompareOp)));
-        XXHASH_VERIFY(XXH64_update(m_hashState, &payload.backStencilFailOp, sizeof(payload.backStencilFailOp)));
-        XXHASH_VERIFY(XXH64_update(m_hashState, &payload.backStencilPassOp, sizeof(payload.backStencilPassOp)));
+            XXH64_update(hashState, &payload.frontStencilCompareOp, sizeof(payload.frontStencilCompareOp)));
+        XXHASH_VERIFY(XXH64_update(hashState, &payload.backStencilFailOp, sizeof(payload.backStencilFailOp)));
+        XXHASH_VERIFY(XXH64_update(hashState, &payload.backStencilPassOp, sizeof(payload.backStencilPassOp)));
         XXHASH_VERIFY(
-            XXH64_update(m_hashState, &payload.backStencilDepthFailOp, sizeof(payload.backStencilDepthFailOp)));
+            XXH64_update(hashState, &payload.backStencilDepthFailOp, sizeof(payload.backStencilDepthFailOp)));
         XXHASH_VERIFY(
-            XXH64_update(m_hashState, &payload.backStencilCompareOp, sizeof(payload.backStencilCompareOp)));
+            XXH64_update(hashState, &payload.backStencilCompareOp, sizeof(payload.backStencilCompareOp)));
         XXHASH_VERIFY(
-            XXH64_update(m_hashState, &payload.fragmentReplacesDepth, sizeof(payload.fragmentReplacesDepth)));
+            XXH64_update(hashState, &payload.fragmentReplacesDepth, sizeof(payload.fragmentReplacesDepth)));
         if (payload.colorAttachmentCount > 0) {
             XXHASH_VERIFY(XXH64_update(
-                m_hashState,
+                hashState,
                 payload.colorBlendAttachments.data(),
                 sizeof(payload.colorBlendAttachments[0]) * payload.colorAttachmentCount));
         }
-        return XXH64_digest(m_hashState);
+        return XXH64_digest(hashState);
     }
 
     VkPipeline PipelineFactory::GetOrCreatePipeline(const PipelineCreatePayload& payload) {

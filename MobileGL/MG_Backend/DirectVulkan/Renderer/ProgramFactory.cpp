@@ -2575,26 +2575,28 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     ProgramFactory::HashType ProgramFactory::ComputeHash(const MagmaProgramSource& program,
                                                          CompileOptionFlags flags) const {
-        XXHASH_VERIFY(XXH64_reset(m_hashState, m_config.CacheVersion));
+        // P15: one read of the thread_local per hash (emulated TLS: every read is a call).
+        XXH64_state_t* const hashState = m_hashState;
+        XXHASH_VERIFY(XXH64_reset(hashState, m_config.CacheVersion));
         // We expect shader stages in program object are sorted
         const auto& spirvs = program.GetGeneratedSpirv();
         for (const auto& spv : spirvs) {
-            XXHASH_VERIFY(XXH64_update(m_hashState, spv.data(), spv.size() * sizeof(Uint)));
+            XXHASH_VERIFY(XXH64_update(hashState, spv.data(), spv.size() * sizeof(Uint)));
         }
-        XXHASH_VERIFY(XXH64_update(m_hashState, &flags, sizeof(CompileOptionFlags)));
+        XXHASH_VERIFY(XXH64_update(hashState, &flags, sizeof(CompileOptionFlags)));
         // Only FragCoordYFlip variants bake the height in, so mixing it unconditionally would
         // re-key every program in the cache on a resize for no reason.
         if (flags & CompileOptionBit::FragCoordYFlip) {
-            XXHASH_VERIFY(XXH64_update(m_hashState, &m_defaultFramebufferHeight,
+            XXHASH_VERIFY(XXH64_update(hashState, &m_defaultFramebufferHeight,
                                         sizeof(m_defaultFramebufferHeight)));
         }
 
         // Include UBO block bindings in hash so different binding configurations produce different entries
         const Uint32 blockCount = static_cast<Uint32>(program.GetActiveUniformBlocksCount());
-        XXHASH_VERIFY(XXH64_update(m_hashState, &blockCount, sizeof(blockCount)));
+        XXHASH_VERIFY(XXH64_update(hashState, &blockCount, sizeof(blockCount)));
         for (Uint32 i = 0; i < blockCount; ++i) {
             const Uint32 binding = program.GetUniformBlockBinding(i);
-            XXHASH_VERIFY(XXH64_update(m_hashState, &binding, sizeof(binding)));
+            XXHASH_VERIFY(XXH64_update(hashState, &binding, sizeof(binding)));
         }
 
         // The transform feedback capture layout is baked into the modules by
@@ -2605,18 +2607,18 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // hashed for a capturing compile, so nothing else changes key.
         if (flags & CompileOptionBit::XfbCapture) {
             for (const auto& varying : program.GetTransformFeedbackVaryings()) {
-                XXHASH_VERIFY(XXH64_update(m_hashState, varying.name.data(), varying.name.size()));
-                XXHASH_VERIFY(XXH64_update(m_hashState, &varying.bufferIndex, sizeof(varying.bufferIndex)));
-                XXHASH_VERIFY(XXH64_update(m_hashState, &varying.offsetBytes, sizeof(varying.offsetBytes)));
+                XXHASH_VERIFY(XXH64_update(hashState, varying.name.data(), varying.name.size()));
+                XXHASH_VERIFY(XXH64_update(hashState, &varying.bufferIndex, sizeof(varying.bufferIndex)));
+                XXHASH_VERIFY(XXH64_update(hashState, &varying.offsetBytes, sizeof(varying.offsetBytes)));
             }
             const SizeT bufferCount = program.GetTransformFeedbackBufferCount();
             for (SizeT i = 0; i < bufferCount; ++i) {
                 const Uint32 stride = program.GetTransformFeedbackStride(static_cast<Uint32>(i));
-                XXHASH_VERIFY(XXH64_update(m_hashState, &stride, sizeof(stride)));
+                XXHASH_VERIFY(XXH64_update(hashState, &stride, sizeof(stride)));
             }
         }
 
-        HashType hash = XXH64_digest(m_hashState);
+        HashType hash = XXH64_digest(hashState);
         return hash;
     }
 

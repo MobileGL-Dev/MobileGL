@@ -326,46 +326,48 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                              Bool forceNearestFiltering, Bool singleLevelView,
                                              const ResolvedBorderColor& borderColor) const {
         MOBILEGL_ASSERT(m_config != nullptr, "VkSamplerManager::BuildSamplerKey: m_config is null");
-        XXHASH_VERIFY(XXH64_reset(m_hashState, m_config->CacheVersion));
+        // P15: one read of the thread_local per hash (emulated TLS: every read is a call).
+        XXH64_state_t* const hashState = m_hashState;
+        XXHASH_VERIFY(XXH64_reset(hashState, m_config->CacheVersion));
 
-        XXHASH_VERIFY(XXH64_update(m_hashState, &forceNearestFiltering, sizeof(forceNearestFiltering)));
-        XXHASH_VERIFY(XXH64_update(m_hashState, &singleLevelView, sizeof(singleLevelView)));
+        XXHASH_VERIFY(XXH64_update(hashState, &forceNearestFiltering, sizeof(forceNearestFiltering)));
+        XXHASH_VERIFY(XXH64_update(hashState, &singleLevelView, sizeof(singleLevelView)));
 
         const auto minFilter = sampler.GetMinFilter();
-        XXHASH_VERIFY(XXH64_update(m_hashState, &minFilter, sizeof(minFilter)));
+        XXHASH_VERIFY(XXH64_update(hashState, &minFilter, sizeof(minFilter)));
         const auto magFilter = sampler.GetMagFilter();
-        XXHASH_VERIFY(XXH64_update(m_hashState, &magFilter, sizeof(magFilter)));
+        XXHASH_VERIFY(XXH64_update(hashState, &magFilter, sizeof(magFilter)));
         const auto mipmapMode = sampler.GetMipmapMode();
-        XXHASH_VERIFY(XXH64_update(m_hashState, &mipmapMode, sizeof(mipmapMode)));
+        XXHASH_VERIFY(XXH64_update(hashState, &mipmapMode, sizeof(mipmapMode)));
         const auto wrapS = sampler.GetWrapS();
-        XXHASH_VERIFY(XXH64_update(m_hashState, &wrapS, sizeof(wrapS)));
+        XXHASH_VERIFY(XXH64_update(hashState, &wrapS, sizeof(wrapS)));
         const auto wrapT = sampler.GetWrapT();
-        XXHASH_VERIFY(XXH64_update(m_hashState, &wrapT, sizeof(wrapT)));
+        XXHASH_VERIFY(XXH64_update(hashState, &wrapT, sizeof(wrapT)));
         const auto wrapR = sampler.GetWrapR();
-        XXHASH_VERIFY(XXH64_update(m_hashState, &wrapR, sizeof(wrapR)));
+        XXHASH_VERIFY(XXH64_update(hashState, &wrapR, sizeof(wrapR)));
         const auto maxLod = ResolveSingleLevelMaxLod(sampler, singleLevelView);
         const auto minLod = ResolveEffectiveMinLod(sampler, maxLod);
-        XXHASH_VERIFY(XXH64_update(m_hashState, &minLod, sizeof(minLod)));
-        XXHASH_VERIFY(XXH64_update(m_hashState, &maxLod, sizeof(maxLod)));
+        XXHASH_VERIFY(XXH64_update(hashState, &minLod, sizeof(minLod)));
+        XXHASH_VERIFY(XXH64_update(hashState, &maxLod, sizeof(maxLod)));
         const auto lodBias = sampler.GetLodBias();
-        XXHASH_VERIFY(XXH64_update(m_hashState, &lodBias, sizeof(lodBias)));
+        XXHASH_VERIFY(XXH64_update(hashState, &lodBias, sizeof(lodBias)));
         // The RESOLVED value, not the GL request: samplers that only differ in an anisotropy Vulkan
         // will not apply (NEAREST filtering, or requests past the device limit) must still share one
         // VkSampler, while two samplers that really do differ must not collide onto the first one's.
         const auto maxAnisotropy = ResolveEffectiveMaxAnisotropy(sampler, forceNearestFiltering);
-        XXHASH_VERIFY(XXH64_update(m_hashState, &maxAnisotropy, sizeof(maxAnisotropy)));
+        XXHASH_VERIFY(XXH64_update(hashState, &maxAnisotropy, sizeof(maxAnisotropy)));
         const auto compareMode = sampler.GetCompareMode();
-        XXHASH_VERIFY(XXH64_update(m_hashState, &compareMode, sizeof(compareMode)));
+        XXHASH_VERIFY(XXH64_update(hashState, &compareMode, sizeof(compareMode)));
         const auto compareFunc = sampler.GetSamplerCompareFunc();
-        XXHASH_VERIFY(XXH64_update(m_hashState, &compareFunc, sizeof(compareFunc)));
+        XXHASH_VERIFY(XXH64_update(hashState, &compareFunc, sizeof(compareFunc)));
         // The resolved enum AND, when it is one of the *_CUSTOM_EXT values, the sixteen bytes of the
         // colour itself: two samplers that differ only in a custom border colour carry the same enum
         // and would otherwise collide onto whichever one was created first.
-        XXHASH_VERIFY(XXH64_update(m_hashState, &borderColor.color, sizeof(borderColor.color)));
+        XXHASH_VERIFY(XXH64_update(hashState, &borderColor.color, sizeof(borderColor.color)));
         if (borderColor.isCustom) {
-            XXHASH_VERIFY(XXH64_update(m_hashState, &borderColor.customValue, sizeof(borderColor.customValue)));
+            XXHASH_VERIFY(XXH64_update(hashState, &borderColor.customValue, sizeof(borderColor.customValue)));
         }
-        return XXH64_digest(m_hashState);
+        return XXH64_digest(hashState);
     }
 
     template <class SamplerSource>
