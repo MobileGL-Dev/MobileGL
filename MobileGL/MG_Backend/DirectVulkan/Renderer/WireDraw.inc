@@ -201,9 +201,11 @@
     void VulkanRenderer::ClearAllWireDrawPassCaches() {
         for (auto& entry : m_wireDrawPassCache) DestroyWireDrawPassCacheEntry(entry);
         m_wireDrawPassCache.clear();
-        if (m_wireColorBlitResources)
+        if (m_wireColorBlitResources) {
             for (Uint32 frameIndex = 0; frameIndex < m_frameContext.GetFrameCount(); ++frameIndex)
                 ResetWireColorBlitFramePool(frameIndex);
+            RetireWireColorBlitTargets(/*all=*/true);
+        }
     }
 
     void VulkanRenderer::CollectWireObjects(Uint64 completedSubmit, Bool all) {

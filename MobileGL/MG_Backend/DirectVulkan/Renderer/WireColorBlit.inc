@@ -19,7 +19,50 @@
         // destroyed per blit was ~0.16 ms a blit on Adreno 750. A full pool falls back to that.
         static constexpr Uint32 kFramePoolSets = 64;
         Vector<VkDescriptorPool> framePools;
+        // P15: the blit's two views and its framebuffer, kept across frames. MC blits its main
+        // target to the window every frame, and creating and retiring two VkImageViews and a
+        // VkFramebuffer per blit was ~0.03 ms/frame on the apply thread. The key carries the
+        // image epochs (any texture image recreated or resource erased invalidates every entry,
+        // the same rule as the draw-pass cache) and the swapchain image for the default
+        // framebuffer; ClearAllWireDrawPassCaches drops the lot at the idle points.
+        struct CachedTarget {
+            VkImage srcImage = VK_NULL_HANDLE, dstImage = VK_NULL_HANDLE;
+            Uint32 srcLevel = 0, srcLayer = 0, dstLevel = 0, dstLayer = 0;
+            VkFormat srcFormat = VK_FORMAT_UNDEFINED, dstFormat = VK_FORMAT_UNDEFINED;
+            VkExtent2D dstExtent{};
+            VkRenderPass renderPass = VK_NULL_HANDLE;
+            Uint64 textureImageEpoch = 0, resourceEraseEpoch = 0;
+            VkSwapchainKHR swapchain = VK_NULL_HANDLE;
+            Bool dstIsDefault = false;
+            VkImageView srcView = VK_NULL_HANDLE, dstView = VK_NULL_HANDLE;
+            VkFramebuffer framebuffer = VK_NULL_HANDLE;
+        };
+        static constexpr SizeT kCachedTargets = 8;
+        Vector<CachedTarget> cachedTargets;
     };
+
+    // Retires cached blit targets through the wire's deferred destruction (they may still be
+    // named by an in-flight submission). `all` false keeps the entries whose epochs still hold.
+    void VulkanRenderer::RetireWireColorBlitTargets(Bool all) {
+        if (!m_wireColorBlitResources) return;
+        auto& cached = m_wireColorBlitResources->cachedTargets;
+        const Uint64 imageEpoch = m_textureManager ? m_textureManager->GetTextureImageEpoch() : 0;
+        const Uint64 eraseEpoch = m_textureManager ? m_textureManager->GetResourceEraseEpoch() : 0;
+        WireRetiredObjects retired{};
+        SizeT kept = 0;
+        for (SizeT i = 0; i < cached.size(); ++i) {
+            auto& entry = cached[i];
+            if (!all && entry.textureImageEpoch == imageEpoch && entry.resourceEraseEpoch == eraseEpoch) {
+                cached[kept++] = entry;
+                continue;
+            }
+            retired.framebuffers.push_back(entry.framebuffer);
+            retired.imageViews.push_back(entry.srcView);
+            retired.imageViews.push_back(entry.dstView);
+        }
+        cached.resize(kept);
+        if (!retired.framebuffers.empty()) RetireWireObjects(Move(retired));
+    }
 
     void VulkanRenderer::ResetWireColorBlitFramePool(Uint32 frameIndex) {
         auto& pools = m_wireColorBlitResources->framePools;
@@ -32,6 +75,13 @@
         // Shutdown calls this after vkDeviceWaitIdle and after all per-submit
         // descriptor pools/framebuffers/views have been collected.
         auto& cache = *m_wireColorBlitResources;
+        // Device idle here: cached blit targets no submission names any more.
+        for (const auto& entry : cache.cachedTargets) {
+            vkDestroyFramebuffer(m_device, entry.framebuffer, nullptr);
+            vkDestroyImageView(m_device, entry.srcView, nullptr);
+            vkDestroyImageView(m_device, entry.dstView, nullptr);
+        }
+        cache.cachedTargets.clear();
         for (const auto& target : cache.targets) {
             vkDestroyPipeline(m_device, target.pipeline, nullptr);
             vkDestroyRenderPass(m_device, target.renderPass, nullptr);
@@ -327,16 +377,62 @@
             VK_VERIFY(vkCreateImageView(m_device, &view, nullptr, &handle));
             return handle;
         };
-        const VkImageView sourceView = makeView(source), destinationView = makeView(destination);
-        VkFramebufferCreateInfo framebufferInfo{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
-        framebufferInfo.renderPass = target->renderPass;
-        framebufferInfo.attachmentCount = 1;
-        framebufferInfo.pAttachments = &destinationView;
-        framebufferInfo.width = destination.extent.width;
-        framebufferInfo.height = destination.extent.height;
-        framebufferInfo.layers = 1;
-        VkFramebuffer framebuffer = VK_NULL_HANDLE;
-        VK_VERIFY(vkCreateFramebuffer(m_device, &framebufferInfo, nullptr, &framebuffer));
+        // P15: the views and framebuffer come from the cross-frame cache (see CachedTarget).
+        RetireWireColorBlitTargets(/*all=*/false);
+        WireColorBlitResources::CachedTarget wanted{};
+        wanted.srcImage = source.image;
+        wanted.srcLevel = source.level;
+        wanted.srcLayer = source.layer;
+        wanted.srcFormat = source.format;
+        wanted.dstImage = destination.image;
+        wanted.dstLevel = destination.level;
+        wanted.dstLayer = destination.layer;
+        wanted.dstFormat = destination.format;
+        wanted.dstExtent = destination.extent;
+        wanted.renderPass = target->renderPass;
+        wanted.textureImageEpoch = m_textureManager ? m_textureManager->GetTextureImageEpoch() : 0;
+        wanted.resourceEraseEpoch = m_textureManager ? m_textureManager->GetResourceEraseEpoch() : 0;
+        wanted.dstIsDefault = destination.isDefault;
+        wanted.swapchain = destination.isDefault ? m_swapchainObject.GetHandle() : VK_NULL_HANDLE;
+        const auto sameTarget = [&](const WireColorBlitResources::CachedTarget& entry) {
+            return entry.srcImage == wanted.srcImage && entry.srcLevel == wanted.srcLevel &&
+                   entry.srcLayer == wanted.srcLayer && entry.srcFormat == wanted.srcFormat &&
+                   entry.dstImage == wanted.dstImage && entry.dstLevel == wanted.dstLevel &&
+                   entry.dstLayer == wanted.dstLayer && entry.dstFormat == wanted.dstFormat &&
+                   entry.dstExtent.width == wanted.dstExtent.width &&
+                   entry.dstExtent.height == wanted.dstExtent.height && entry.renderPass == wanted.renderPass &&
+                   entry.textureImageEpoch == wanted.textureImageEpoch &&
+                   entry.resourceEraseEpoch == wanted.resourceEraseEpoch && entry.swapchain == wanted.swapchain &&
+                   entry.dstIsDefault == wanted.dstIsDefault;
+        };
+        auto& cachedTargets = cache.cachedTargets;
+        WireColorBlitResources::CachedTarget* hit = nullptr;
+        for (auto& entry : cachedTargets)
+            if (sameTarget(entry)) { hit = &entry; break; }
+        if (hit == nullptr) {
+            if (cachedTargets.size() >= WireColorBlitResources::kCachedTargets) {
+                WireRetiredObjects evicted{};
+                evicted.framebuffers.push_back(cachedTargets.front().framebuffer);
+                evicted.imageViews.push_back(cachedTargets.front().srcView);
+                evicted.imageViews.push_back(cachedTargets.front().dstView);
+                RetireWireObjects(Move(evicted));
+                cachedTargets.erase(cachedTargets.begin());
+            }
+            wanted.srcView = makeView(source);
+            wanted.dstView = makeView(destination);
+            VkFramebufferCreateInfo framebufferInfo{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
+            framebufferInfo.renderPass = target->renderPass;
+            framebufferInfo.attachmentCount = 1;
+            framebufferInfo.pAttachments = &wanted.dstView;
+            framebufferInfo.width = destination.extent.width;
+            framebufferInfo.height = destination.extent.height;
+            framebufferInfo.layers = 1;
+            VK_VERIFY(vkCreateFramebuffer(m_device, &framebufferInfo, nullptr, &wanted.framebuffer));
+            cachedTargets.push_back(wanted);
+            hit = &cachedTargets.back();
+        }
+        const VkImageView sourceView = hit->srcView;
+        const VkFramebuffer framebuffer = hit->framebuffer;
         // Each in-flight blit owns its descriptor set. Updating a cached set
         // would rewrite the source view of an older queued blit.
         VkDescriptorPool descriptorPool = VK_NULL_HANDLE;
@@ -428,11 +524,11 @@
         // This native pass binds its own set/layout without going through the
         // application's descriptor binder. Its next fast path must rebind.
         if (m_uniformManager) m_uniformManager->OnCommandBufferBoundary();
-        WireRetiredObjects retired{};
-        retired.framebuffers.push_back(framebuffer);
-        retired.imageViews = {sourceView, destinationView};
-        if (descriptorPool != VK_NULL_HANDLE) retired.descriptorPools.push_back(descriptorPool);
-        RetireWireObjects(Move(retired));
+        if (descriptorPool != VK_NULL_HANDLE) {
+            WireRetiredObjects retired{};
+            retired.descriptorPools.push_back(descriptorPool);
+            RetireWireObjects(Move(retired));
+        }
         if (destination.isDefault) m_swapchainObject.SetImageContentDefined(destination.swapchainImageIndex, true);
         return true;
     }

@@ -758,6 +758,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         WireColorBlitResources* m_wireColorBlitResources = nullptr;
         void DestroyWireColorBlitResources();
         void ResetWireColorBlitFramePool(Uint32 frameIndex);
+        void RetireWireColorBlitTargets(Bool all);
         // P7 wave 2-B, CONTRACT-P7 §5.1 (A): the baked depth-mip program (WireDepthMipmap.inc).
         // One level of a depth chain, source and destination being two depth subresources of
         // the same image; the caller loops. It owns no frontend object, which is what the
