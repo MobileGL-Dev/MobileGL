@@ -133,13 +133,14 @@ if (ANDROID)
     unset(_mobilegl_api_triple)
 endif()
 
-option(MOBILEGL_ENABLE_LTO "Build with ThinLTO/IPO" OFF)
+option(MOBILEGL_ENABLE_LTO "Build with ThinLTO/IPO and the release optimization flags" OFF)
 
 if ((NOT CMAKE_BUILD_TYPE STREQUAL "Debug" OR MOBILEGL_FORCE_RELEASE_OPT) AND MOBILEGL_ENABLE_LTO)
     # Check if ThinLTO or LTO is suppported
     include(CheckIPOSupported)
     include(CheckCCompilerFlag)
     include(CheckCXXCompilerFlag)
+    include(CheckLinkerFlag)
 
     check_ipo_supported(RESULT LTOSupported OUTPUT LTOError)
 
@@ -164,11 +165,49 @@ if ((NOT CMAKE_BUILD_TYPE STREQUAL "Debug" OR MOBILEGL_FORCE_RELEASE_OPT) AND MO
         message(STATUS "IPO not supported: ${LTOError}")
     endif()
 
-    if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang" AND NOT MATCHES "AppleClang")
-        add_compile_options(-O3 -ffunction-sections -fdata-sections)
-        add_link_options(-Wl,--gc-sections)
-    elseif (CMAKE_CXX_COMPILER_ID MATCHES "MSVC")
-#        add_compile_options(/O2)
+    # Every flag below is probed first, so a compiler or linker without it simply goes without.
+    # add_compile_options/add_link_options set directory properties, so they act from a function.
+    function(mobilegl_add_compile_flag_if_supported flag)
+        string(MAKE_C_IDENTIFIER "MGL_HAS_C${flag}" c_var)
+        string(MAKE_C_IDENTIFIER "MGL_HAS_CXX${flag}" cxx_var)
+        check_c_compiler_flag("${flag}" ${c_var})
+        check_cxx_compiler_flag("${flag}" ${cxx_var})
+        if (${c_var} AND ${cxx_var})
+            add_compile_options("${flag}")
+        endif()
+    endfunction()
+    function(mobilegl_add_link_flag_if_supported flag)
+        string(MAKE_C_IDENTIFIER "MGL_HAS_LINK${flag}" link_var)
+        check_linker_flag(CXX "${flag}" ${link_var})
+        if (${link_var})
+            add_link_options("${flag}")
+        endif()
+    endfunction()
+
+    if (MSVC)
+        # One COMDAT per function (/Gy) and per datum (/Gw), so /OPT:REF can drop the unreferenced
+        # ones and /OPT:ICF fold the identical ones - the sections/gc/icf trio below, MSVC-spelled.
+        add_compile_options(/Gy /Gw)
+        add_link_options(/OPT:REF /OPT:ICF)
+    elseif (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        add_compile_options(-O3)
+        mobilegl_add_compile_flag_if_supported(-ffunction-sections)
+        mobilegl_add_compile_flag_if_supported(-fdata-sections)
+        # Hidden visibility and -Bsymbolic-functions already keep the library's calls inside it;
+        # this lets the optimizer rely on that and inline across what it would otherwise have to
+        # treat as interposable definitions.
+        mobilegl_add_compile_flag_if_supported(-fno-semantic-interposition)
+        if (APPLE)
+            mobilegl_add_link_flag_if_supported(LINKER:-dead_strip)
+        elseif (NOT WIN32)
+            mobilegl_add_link_flag_if_supported(LINKER:--gc-sections)
+            # Calls into libc and the GPU driver load their target from the GOT instead of going
+            # through a PLT stub. Bionic binds everything at load time anyway.
+            mobilegl_add_compile_flag_if_supported(-fno-plt)
+            # Identical code folding (lld, gold). Safe mode never folds a function whose address
+            # is taken, so function-pointer identity holds.
+            mobilegl_add_link_flag_if_supported(LINKER:--icf=safe)
+        endif()
     else ()
         add_compile_options(-O2)
     endif()

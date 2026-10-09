@@ -45,6 +45,12 @@ def mobileGlExtmemProbeAsServer = {
 def mobileGlBuildDisaggregated = {
     (rootProject.findProperty('mobilegl.buildDisaggregated') ?: System.getenv('MOBILEGL_BUILD_DISAGGREGATED') ?: (standalonePluginBuild ? 'ON' : 'OFF')) as String
 }
+// ThinLTO plus the release optimization flags (CMakeLists.txt, MOBILEGL_ENABLE_LTO). Passed
+// explicitly so an existing .cxx tree that cached the old OFF default picks it up too;
+// -Pmobilegl.enableLto=OFF builds without it.
+def mobileGlEnableLto = {
+    (rootProject.findProperty('mobilegl.enableLto') ?: System.getenv('MOBILEGL_ENABLE_LTO') ?: 'ON') as String
+}
 def mobileGlBuildDisaggregatedInproc = {
     (rootProject.findProperty('mobilegl.buildDisaggregatedInproc') ?: System.getenv('MOBILEGL_BUILD_DISAGGREGATED_INPROC') ?: mobileGlBuildDisaggregated()) as String
 }
@@ -75,6 +81,7 @@ android {
                 arguments '-DCMAKE_EXPORT_COMPILE_COMMANDS=ON'
                 arguments "-DMOBILEGL_BUILD_DISAGGREGATED=${mobileGlBuildDisaggregated()}"
                 arguments "-DMOBILEGL_BUILD_DISAGGREGATED_INPROC=${mobileGlBuildDisaggregatedInproc()}"
+                arguments "-DMOBILEGL_ENABLE_LTO=${mobileGlEnableLto()}"
             }
         }
     }
