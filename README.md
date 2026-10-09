@@ -16,6 +16,8 @@ MobileGL is a *free* and *open-source* project that implements a desktop **OpenG
 >
 > **Status:** In development. Both backends expose **OpenGL 4.6 (Core Profile)**; a small number of 4.6 features are still incomplete.
 
+For end-user setup (building, installing, configuring and troubleshooting on Android, Linux and Windows), see the [user guide](userguide/README.md) in `userguide/`.
+
 ## Project positioning
 
 MobileGL is an implementation of a desktop OpenGL library. It aims to provide:
@@ -143,7 +145,8 @@ Also make sure the JVM arguments include:
 |------------------------------| ----------------------------------------------------- | ------- |
 | `MOBILEGL_BUILD_TEST`        | Build MobileGL tests (requires Clang)                 | ON      |
 | `MOBILEGL_BUILD_BENCHMARK`   | Build MobileGL benchmarks (requires Clang)            | ON      |
-| `MOBILEGL_FORCE_RELEASE_OPT` | Enable O3 and LTO in Debug build                      | ON      |
+| `MOBILEGL_ENABLE_LTO`        | ThinLTO (or the compiler's IPO) plus `-O3` and the release optimization flags. The Gradle (Android) build turns it on by default; pass `-Pmobilegl.enableLto=OFF` to disable it | OFF     |
+| `MOBILEGL_FORCE_RELEASE_OPT` | Also apply the `MOBILEGL_ENABLE_LTO` flags in Debug builds. Has no effect unless `MOBILEGL_ENABLE_LTO=ON` | ON      |
 | `MOBILEGL_ENABLE_TRACY`      | Enable Tracy profiler for performance analysis        | OFF     |
 
    **Notes:**
@@ -167,7 +170,7 @@ MobileGL supports runtime configuration via environment variables.
 | `MOBILEGL_ADVERTISE_FP64` | Advertise `GL_ARB_gpu_shader_fp64`. GLSL `double`/`dvec`/`dmat` compile and run either way - they are narrowed to 32 bits - so this only changes whether an application is told it has 64-bit precision, which it does not. | `0`, `1` | `0` |
 | `MOBILEGL_MAGMA_R11G11B10F_FALLBACK` | Use Magma's R11G11B10F format fallback. | `0`, `1` | `0` |
 | `MOBILEGL_MAGMA_ALLOW_INVALID_SPIRV` | Hand a shader module that fails SPIR-V validation to the driver anyway. By default Magma declines such a program (no shader module is created, its draws and dispatches are refused and logged by name), because a driver that accepts invalid SPIR-V can fault the GPU into device loss. Diagnostic use only. | `0`, `1` | `0` |
-| `MOBILEGL_MAGMA_FRAMESINFLIGHT` | Set Magma frames in flight. | Integer `1`–`64` | `3` |
+| `MOBILEGL_FRAMES_IN_FLIGHT` | How many frames may be queued ahead of the GPU (Magma: its frame contexts; Espryt: how far presents may run ahead). The old name `MOBILEGL_MAGMA_FRAMESINFLIGHT` still works but is deprecated. | Integer `1`–`64` | `3` |
 | `MOBILEGL_MAGMA_MAX_DRAWS_PER_COMMAND_BUFFER` | Draws and dispatches Magma records into one command buffer before it submits the buffer mid-frame and continues on a fresh one. `0` never splits. | Integer `0`–`16777216` | `16384` |
 | `MOBILEGL_MAGMA_DESCRIPTOR_TRIM_FRAMES` | Frames a frame slot's descriptor pools must stay under a quarter full before Magma frees the slot's cached descriptor sets and grown pools. `0` never trims. | Integer `0`–`1048576` | `120` |
 | `MOBILEGL_ESPRYT_AVOID_SAMPLER_MIPMAP_MIN_FILTER` | Avoid sampler mipmap minification filters. | `0`, `1` | `0` |
