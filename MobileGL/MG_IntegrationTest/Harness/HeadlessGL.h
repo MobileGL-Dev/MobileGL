@@ -200,6 +200,10 @@ namespace MGITest {
     unsigned int FirstGLError();
     const char* GLErrorName(unsigned int error);
 
+    // What one case may leave behind in the shared context that the next case cannot be expected
+    // to clean up: no program current, no error pending. ScenarioTest::SetUp calls it.
+    void ResetStateBetweenScenarios();
+
     // ---- whole-region readback predicates ----------------------------------
     // The scenarios used to assert on two or three individual pixels, which is
     // provably too weak: a draw in which 3 of a quad's 4 vertices carry stale

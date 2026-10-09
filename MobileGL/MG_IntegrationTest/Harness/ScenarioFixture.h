@@ -127,6 +127,10 @@ namespace MGITest {
                 FAIL() << "MOBILEGL_ITEST_REQUIRE_HARDWARE_GPU is set but the context landed on a software "
                        << "rasterizer: " << gl.RendererString();
             }
+            // One context per process: a case run after another in the same process inherits
+            // whatever that one left bound (ScenarioIsolationScenario). Before the split lane's
+            // baseline below, so these calls are not counted as the case's own records.
+            ResetStateBetweenScenarios();
             // P5's DirectGLES.Split. lanes, in ONE place rather than in each scenario they point
             // at - the Split family also points at ClearThenReadPixelsScenario, which is target A
             // of the reduced path and predates P5, and any later Split lane gets the same
