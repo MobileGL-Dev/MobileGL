@@ -77,11 +77,51 @@ H2 sessions:
 | safter ~22:00 | p15s = 0b96a3ef | 321.5 (1.70) | 0.746 / 0.84 dev (3.18) | 0.768 / 0.81 dev (2.91) | - | - |
 | pt ~23:00 | p15t = 3def5cb2 (p15s + Magma blit cache); inproc Magma also p15s | 319.0 (1.69) | 0.755 / 0.85 dev (3.17) | 0.787 / 0.83 dev (2.83) | - | p15s 1.019 (1.36 / 1.42); p15t 1.032 (1.37 / 1.39) |
 | c1 ~00:30 (10-09) | t = p15t; u = p15t + cut 1 (in-frame uploads, local) | 324.8 (1.69) | - | t 0.782 / 0.82 dev (2.80); u 0.769 / 0.81 dev (2.86) | u 0.997 (1.38 / 1.63) | u 1.011 (1.37 / 1.39) |
+| c1b ~02:10 (10-09) | t = p15t; v = p15t + 1b (coalesced pass barriers, local) | 320.9 (1.69) | - | t 0.783 / 0.82 dev (2.85); v 0.789 / 0.83 dev (2.85) | - | v 1.048 (1.34 / 1.345) |
+| c4 ~02:55 (10-09) | v (as c1b); w = v + cut 4 (Espryt surface-size memo, 66e3b2c1) | 321.6 (1.70) | v 0.757 / 0.85 dev (3.18); w 0.762 / 0.86 dev (3.05) | - | - | - |
+| c1c2 ~03:30 (10-09) | t = p15t; y = p15t + 1b + 1c (deferred clears) + cut 4 | 321.3 (1.70) | - | t 0.795 / 0.83 dev (2.83); y 0.785 / 0.82 dev (2.74)⁴ | - | t 1.025 (1.35 / 1.41)⁵; y 1.076 (1.33 / 1.24) |
 
 - **pt:** the blit view cache gives Magma inproc +1.2 % fps, with apply −0.03 ms/frame.
 - **c1:** cut 1 is within noise (−1.7 % fps, +0.06 ms). It engaged (the mid-frame submit is gone) but saves ≤0.04 ms; see MONOLITH-DIFF.md.
+- **c1b:** neutral in monolith on CPU and on GPU (busy 29 % in both). Barriers fell from 27.5 to 15.5 per frame, but passes only from 12.6 to 11.5.
+- **c1c2:** Magma per frame, from the counting build:
+  - passes 11.5 -> 4.3 (dev 4.1);
+  - barriers 15.5 -> 9.0 (dev 3.4);
+  - Vulkan calls 343.5 (dev 331.6).
 
-**Thread state** (c1, H2, ftrace window after the measurement; means of 3 reps; ms/frame):
+  Effect:
+  - Monolith GL-thread CPU −0.09 ms/frame (2.83 -> 2.74); fps within noise.
+  - Inproc apply thread −0.17 ms/frame (1.41 -> 1.24) and fps +5.0 % (329.5 -> 345.7).
+  - GPU busy: monolith 30 -> 27 % (≈1.18 -> 1.07 GPU ms/frame); inproc 35 -> 33 % (≈1.06 -> 0.96).
+  - Profile: the `glClear` entry fell 0.286 -> 0.098 ms/frame. Part of that pass begin moved into draws (DrawArrays +0.07).
+
+  ⁴ y has 2 valid reps: r2 never reached the world after 3 startup deaths (signal 34 during bootstrap, a harness flake also seen on MobileGlues and other builds).
+  ⁵ t inproc r2 is discarded: a host-side `binary_cache_builder` pulled libraries over adb inside its measurement window.
+- **c4:** Espryt GL-thread CPU fell 0.13 ms/frame (3.18 -> 3.05 in all three reps); fps moved by less than the noise.
+  The profile confirms it: QueryCurrentSurfaceSize 0.070 -> 0.012 and SyncRenderState 0.092 -> 0.028 ms/frame.
+
+**Thread state, Perfetto SQL** (c1, H2; `pftstate.py` over `trace_processor_shell` v58.2 on the
+`.pftrace` taken after the windows; means of 3 reps; ms/frame):
+
+| arm | fps | GL run | GL woken-wait | GL preempted | GL sleep | apply run | apply sleep | both on-CPU / neither |
+|---|---|---|---|---|---|---|---|---|
+| MobileGlues monolith | 324.8 | 1.91 | 0.036 | 0.030 | 1.05 | - | - | - |
+| Magma monolith (t) | 254.1 | 3.09 | 0.042 | 0.027 | 0.71 | - | - | - |
+| Magma monolith (u) | 249.8 | 3.05 | 0.045 | 0.045 | 0.79 | - | - | - |
+| Magma inproc (u) | 328.3 | 1.43 | 0.047 | 0.073 | 1.45 | 1.61 | 1.31 | 41 % / 41 % |
+| Espryt inproc (u) | 323.8 | 1.39 | 0.057 | 0.088 | 1.51 | 1.95 | 1.02 | 42 % / 34 % |
+| c1c2: MobileGlues monolith | 321.3 | 1.95 | 0.039 | 0.019 | 1.05 | - | - | - |
+| c1c2: Magma monolith (t) | 255.3 | 3.11 | 0.039 | 0.038 | 0.66 | - | - | - |
+| c1c2: Magma monolith (y, 1c) | 252.3 | 3.07 | 0.047 | 0.029 | 0.75 | - | - | - |
+| c1c2: Magma inproc (t) | 329.5 | 1.38 | 0.050 | 0.073 | 1.48 | 1.58 | 1.32 | 40 % / 42 % |
+| c1c2: Magma inproc (y, 1c) | 345.7 | 1.39 | 0.043 | 0.079 | 1.33 | 1.43 | 1.31 | 39 % / 42 % |
+
+The sleeps break down as:
+- Monolith (both stacks): the app's `waitForever` slice inside queueBuffer, woken by `kgsl-events`, i.e. the GPU fence of the previous frame.
+- Inproc GL thread: woken by `mgl-srv-apply`.
+- Inproc apply thread: `waitForever` (the GPU fence), as in monolith.
+
+The table below is the same window from the ftrace text (`threadstate.py`). It carries GPU busy, because this Perfetto config does not record the kgsl events.
 
 | arm | GL thread on-CPU | preempted | sleeping (main reason) | apply thread on-CPU | apply sleeping | both on-CPU / neither | GPU busy |
 |---|---|---|---|---|---|---|---|

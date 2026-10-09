@@ -109,6 +109,23 @@ Host call counts per frame (diagnostic counting builds; FCL vanilla; 600-frame w
    pass-begin cost with them.
 2. **Cut 1 stays local** (no measurable gain).
 
+**Order from 2026-10-09:**
+1. 1c deferred clears (PARITY-AUDIT M1).
+2. The remaining Magma barriers.
+3. The pipe-record pieces.
+4. The TLS hoist.
+
+**Measured and parked: Espryt `glVertexAttribPointer` -> `glBindVertexBuffer` + `glVertexAttribFormat`.**
+- Ceiling: `SyncToBackendFromApplier` costs 0.060 ms/frame inclusive, driver calls included
+  (0.015 self). Source: the c4 p15w Espryt profile, cpuhunt.
+- The repeats are MC's per-draw re-point: the same layout with a new buffer at offset 0, about
+  4 attributes per buffer. The split would turn 1 `glBindBuffer` + ~4 pointer calls into 1
+  `glBindVertexBuffer`.
+- Expected saving: ~0.02-0.04 ms/frame. That is below H2 resolution (1.2-2.9% spread).
+- Cost: a second VAO shadow (format + binding). ES `glVertexAttribPointer` and
+  `glVertexAttribDivisor` silently rebind attribute -> binding, so the change is
+  correctness-sensitive.
+
 The original list follows.
 
 
