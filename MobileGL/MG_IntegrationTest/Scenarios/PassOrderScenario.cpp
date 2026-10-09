@@ -217,9 +217,7 @@ TEST_F(PassOrderScenario, ATextureCopiedIntoIsSampledByTheNextDraw) {
 TEST_F(PassOrderScenario, ATextureBlittedWithinItselfIsSampledByTheNextDraw) {
     if (!Ready() || IsSkipped()) return;
     // GL allows a blit between non-overlapping regions of one image; ES 3.x makes identical read
-    // and draw buffers GL_INVALID_OPERATION, and DirectGLES forwards the blit to the driver as is,
-    // so the blit is dropped there (a DirectGLES conformance gap of its own, not this case's subject).
-    if (Gl().BackendName() == "DirectGLES") GTEST_SKIP() << "DirectGLES does not emulate a same-image blit";
+    // and draw buffers GL_INVALID_OPERATION, so DirectGLES stages the source through a scratch copy.
     const GLuint texture = NewTexture(kSize, kSize, red);
     const GLuint fbo = NewFramebuffer(texture);
     glFinish();

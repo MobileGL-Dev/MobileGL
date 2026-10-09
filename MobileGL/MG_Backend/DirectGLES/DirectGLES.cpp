@@ -7917,6 +7917,314 @@ namespace MobileGL::MG_Backend::DirectGLES {
         return replicated;
     }
 
+    // ---- glBlitFramebuffer within one image ------------------------------------------------
+    //
+    // GL 4.6 lets a blit read and write the same image as long as the two rectangles do not
+    // overlap (only the overlap is undefined). ES 3.x makes identical read and draw buffers
+    // GL_INVALID_OPERATION outright, so the driver refuses a blit from one half of a texture
+    // into the other and nothing is written. Emulate it in two steps: copy the source rectangle
+    // into a scratch framebuffer of the source's own native format, then run the caller's blit
+    // - same mask, same filter, same orientation - from the scratch into the real destination.
+    // Overlapping rectangles stay undefined, as GL leaves them. A LINEAR blit that scales reads
+    // clamped texels at the rectangle's edge where GL would read the neighbouring ones.
+
+    // What a framebuffer attachment point resolves to on the DRIVER side: the native object and,
+    // for a texture, the level, layer and cube face. A null name means the point is empty.
+    struct DriverAttachmentImage {
+        GLint Type = GL_NONE;
+        GLint Name = 0;
+        GLint Level = 0;
+        GLint Layer = 0;
+        GLint Face = 0;
+    };
+
+    static DriverAttachmentImage QueryDriverAttachmentImage(GLenum framebufferTarget, GLenum attachment) {
+        DriverAttachmentImage image;
+        g_GLESFuncs.glGetFramebufferAttachmentParameteriv(framebufferTarget, attachment,
+                                                          GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE, &image.Type);
+        if (image.Type != GL_TEXTURE && image.Type != GL_RENDERBUFFER) return {};
+        g_GLESFuncs.glGetFramebufferAttachmentParameteriv(framebufferTarget, attachment,
+                                                          GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME, &image.Name);
+        if (image.Type == GL_TEXTURE) {
+            g_GLESFuncs.glGetFramebufferAttachmentParameteriv(framebufferTarget, attachment,
+                                                              GL_FRAMEBUFFER_ATTACHMENT_TEXTURE_LEVEL, &image.Level);
+            g_GLESFuncs.glGetFramebufferAttachmentParameteriv(
+                framebufferTarget, attachment, GL_FRAMEBUFFER_ATTACHMENT_TEXTURE_CUBE_MAP_FACE, &image.Face);
+            g_GLESFuncs.glGetFramebufferAttachmentParameteriv(framebufferTarget, attachment,
+                                                              GL_FRAMEBUFFER_ATTACHMENT_TEXTURE_LAYER, &image.Layer);
+        }
+        return image;
+    }
+
+    static Bool IsSameDriverImage(const DriverAttachmentImage& a, const DriverAttachmentImage& b) {
+        return a.Name != 0 && a.Type == b.Type && a.Name == b.Name && a.Level == b.Level && a.Layer == b.Layer &&
+               a.Face == b.Face;
+    }
+
+    // The colour attachment point the bound READ framebuffer reads from, GL_NONE when it reads
+    // nothing.
+    static GLenum DriverReadColorAttachment() {
+        GLint readBuffer = GL_NONE;
+        g_GLESFuncs.glGetIntegerv(GL_READ_BUFFER, &readBuffer);
+        if (readBuffer < GL_COLOR_ATTACHMENT0 || readBuffer > GL_COLOR_ATTACHMENT31) return GL_NONE;
+        return static_cast<GLenum>(readBuffer);
+    }
+
+    // The aspects of `mask` whose read and draw buffers are one image on the driver side - the
+    // aspects ES refuses to blit. The window-system framebuffer (driver name 0) has no attachment
+    // to compare or take a format from and is not considered.
+    static GLbitfield DriverBlitAspectsSharingAnImage(GLbitfield mask) {
+        GLint readFramebuffer = 0;
+        GLint drawFramebuffer = 0;
+        g_GLESFuncs.glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &readFramebuffer);
+        g_GLESFuncs.glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &drawFramebuffer);
+        if (readFramebuffer == 0 || drawFramebuffer == 0) return 0;
+
+        GLbitfield shared = 0;
+        if ((mask & GL_COLOR_BUFFER_BIT) != 0) {
+            const GLenum readAttachment = DriverReadColorAttachment();
+            if (readAttachment != GL_NONE) {
+                const DriverAttachmentImage source = QueryDriverAttachmentImage(GL_READ_FRAMEBUFFER, readAttachment);
+                GLint maxDrawBuffers = 0;
+                g_GLESFuncs.glGetIntegerv(GL_MAX_DRAW_BUFFERS, &maxDrawBuffers);
+                for (GLint i = 0; i < maxDrawBuffers && source.Name != 0; ++i) {
+                    GLint drawBuffer = GL_NONE;
+                    g_GLESFuncs.glGetIntegerv(GL_DRAW_BUFFER0 + i, &drawBuffer);
+                    if (drawBuffer < GL_COLOR_ATTACHMENT0 || drawBuffer > GL_COLOR_ATTACHMENT31) continue;
+                    if (IsSameDriverImage(source, QueryDriverAttachmentImage(GL_DRAW_FRAMEBUFFER,
+                                                                             static_cast<GLenum>(drawBuffer)))) {
+                        shared |= GL_COLOR_BUFFER_BIT;
+                        break;
+                    }
+                }
+            }
+        }
+        const struct {
+            GLbitfield bit;
+            GLenum attachment;
+        } depthStencil[] = {{GL_DEPTH_BUFFER_BIT, GL_DEPTH_ATTACHMENT}, {GL_STENCIL_BUFFER_BIT, GL_STENCIL_ATTACHMENT}};
+        for (const auto& aspect : depthStencil) {
+            if ((mask & aspect.bit) == 0) continue;
+            if (IsSameDriverImage(QueryDriverAttachmentImage(GL_READ_FRAMEBUFFER, aspect.attachment),
+                                  QueryDriverAttachmentImage(GL_DRAW_FRAMEBUFFER, aspect.attachment))) {
+                shared |= aspect.bit;
+            }
+        }
+        return shared;
+    }
+
+    // The native sized internal format of what a READ framebuffer attachment point holds, 0 when
+    // it cannot be determined. ES has no "which target is this texture" query, so a texture is
+    // found by binding it to each candidate target in turn: glBindTexture refuses a name created
+    // for another target and leaves the binding alone.
+    static GLenum QueryDriverReadAttachmentInternalFormat(GLenum attachment) {
+        const DriverAttachmentImage image = QueryDriverAttachmentImage(GL_READ_FRAMEBUFFER, attachment);
+        if (image.Name == 0) return 0;
+        GLint internalFormat = 0;
+        if (image.Type == GL_RENDERBUFFER) {
+            if (!g_GLESFuncs.glGetRenderbufferParameteriv) return 0;
+            GLint previous = 0;
+            g_GLESFuncs.glGetIntegerv(GL_RENDERBUFFER_BINDING, &previous);
+            g_GLESFuncs.glBindRenderbuffer(GL_RENDERBUFFER, static_cast<GLuint>(image.Name));
+            g_GLESFuncs.glGetRenderbufferParameteriv(GL_RENDERBUFFER, GL_RENDERBUFFER_INTERNAL_FORMAT,
+                                                     &internalFormat);
+            g_GLESFuncs.glBindRenderbuffer(GL_RENDERBUFFER, static_cast<GLuint>(previous));
+        } else {
+            if (!g_GLESFuncs.glGetTexLevelParameteriv) return 0;
+            struct Candidate {
+                GLenum target;
+                GLenum binding;
+            };
+            const Candidate cube[] = {{GL_TEXTURE_CUBE_MAP, GL_TEXTURE_BINDING_CUBE_MAP}};
+            const Candidate others[] = {{GL_TEXTURE_2D, GL_TEXTURE_BINDING_2D},
+                                        {GL_TEXTURE_2D_ARRAY, GL_TEXTURE_BINDING_2D_ARRAY},
+                                        {GL_TEXTURE_3D, GL_TEXTURE_BINDING_3D},
+                                        {GL_TEXTURE_CUBE_MAP_ARRAY, GL_TEXTURE_BINDING_CUBE_MAP_ARRAY}};
+            const Bool isCubeFace = image.Face != 0 && image.Face != GL_NONE;
+            const Candidate* candidates = isCubeFace ? cube : others;
+            const SizeT candidateCount = isCubeFace ? std::size(cube) : std::size(others);
+            for (SizeT i = 0; i < candidateCount && internalFormat == 0; ++i) {
+                const Candidate& candidate = candidates[i];
+                DrainBlitErrors();
+                GLint previous = 0;
+                g_GLESFuncs.glGetIntegerv(candidate.binding, &previous);
+                g_GLESFuncs.glBindTexture(candidate.target, static_cast<GLuint>(image.Name));
+                if (g_GLESFuncs.glGetError() != GL_NO_ERROR) continue;
+                const GLenum levelTarget = isCubeFace ? static_cast<GLenum>(image.Face) : candidate.target;
+                g_GLESFuncs.glGetTexLevelParameteriv(levelTarget, image.Level, GL_TEXTURE_INTERNAL_FORMAT,
+                                                     &internalFormat);
+                g_GLESFuncs.glBindTexture(candidate.target, static_cast<GLuint>(previous));
+            }
+            DrainBlitErrors();
+        }
+        // A texture specified with an unsized format reports it back; renderbuffer storage
+        // takes only sized ones.
+        switch (internalFormat) {
+            case GL_RGBA: return GL_RGBA8;
+            case GL_RGB: return GL_RGB8;
+            case GL_DEPTH_STENCIL: return GL_DEPTH24_STENCIL8;
+            case GL_DEPTH_COMPONENT: return GL_DEPTH_COMPONENT24;
+            default: return static_cast<GLenum>(internalFormat);
+        }
+    }
+
+    static Bool IsPackedDepthStencilFormat(GLenum format) {
+        return format == GL_DEPTH24_STENCIL8 || format == GL_DEPTH32F_STENCIL8;
+    }
+
+    // The two-step copy itself. Both framebuffers are single-sample (ES cannot blit into a
+    // multisample one at all). Returns false, having written nothing to the destination, when
+    // the scratch cannot hold the source.
+    static Bool BlitWithinOneImage(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1, GLint dstX0, GLint dstY0,
+                                   GLint dstX1, GLint dstY1, GLbitfield mask, GLenum filter) {
+        static NativeContextName s_scratchFramebuffer; // per context: a framebuffer is never shared
+        static Uint s_colorRenderbuffer = 0;
+        static Uint s_depthStencilRenderbuffer = 0;
+        static GLenum s_colorFormat = 0;
+        static GLenum s_depthStencilFormat = 0;
+        static GLsizei s_colorWidth = 0, s_colorHeight = 0;
+        static GLsizei s_depthStencilWidth = 0, s_depthStencilHeight = 0;
+        static Uint s_scratchContextGeneration = ~0u;
+
+        if (!g_GLESFuncs.glGenFramebuffers || !g_GLESFuncs.glGenRenderbuffers ||
+            !g_GLESFuncs.glRenderbufferStorage || !g_GLESFuncs.glFramebufferRenderbuffer) {
+            return false;
+        }
+        const GLint left = std::min(srcX0, srcX1);
+        const GLint right = std::max(srcX0, srcX1);
+        const GLint bottom = std::min(srcY0, srcY1);
+        const GLint top = std::max(srcY0, srcY1);
+        const GLsizei width = static_cast<GLsizei>(right - left);
+        const GLsizei height = static_cast<GLsizei>(top - bottom);
+        if (width <= 0 || height <= 0) return false;
+
+        // The scratch takes each aspect the READ framebuffer has: one it lacks is silently
+        // skipped by the blit either way, and leaving it off the scratch keeps it skipped.
+        GLenum colorFormat = 0;
+        if ((mask & GL_COLOR_BUFFER_BIT) != 0) {
+            const GLenum readAttachment = DriverReadColorAttachment();
+            if (readAttachment != GL_NONE) {
+                colorFormat = QueryDriverReadAttachmentInternalFormat(readAttachment);
+                if (colorFormat == 0) return false;
+            }
+        }
+        GLenum depthStencilFormat = 0;
+        GLenum depthStencilAttachment = GL_NONE;
+        if ((mask & (GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT)) != 0) {
+            const GLenum depthFormat = (mask & GL_DEPTH_BUFFER_BIT) != 0
+                                           ? QueryDriverReadAttachmentInternalFormat(GL_DEPTH_ATTACHMENT)
+                                           : 0;
+            const GLenum stencilFormat = (mask & GL_STENCIL_BUFFER_BIT) != 0
+                                             ? QueryDriverReadAttachmentInternalFormat(GL_STENCIL_ATTACHMENT)
+                                             : 0;
+            // ES blits depth/stencil only between identical formats, which a scratch renderbuffer
+            // of the source's own format is. Separate depth and stencil images would need two
+            // scratch buffers; that shape is declined.
+            if (depthFormat != 0 && stencilFormat != 0 && depthFormat != stencilFormat) return false;
+            depthStencilFormat = depthFormat != 0 ? depthFormat : stencilFormat;
+            if (depthStencilFormat != 0) {
+                depthStencilAttachment = IsPackedDepthStencilFormat(depthStencilFormat) ? GL_DEPTH_STENCIL_ATTACHMENT
+                                         : depthFormat != 0                             ? GL_DEPTH_ATTACHMENT
+                                                                                        : GL_STENCIL_ATTACHMENT;
+            }
+        }
+        if (colorFormat == 0 && depthStencilFormat == 0) return false;
+
+        if (s_scratchContextGeneration != g_backendContextGeneration) {
+            // The ids belonged to a dead context; the context reclaimed them with it.
+            s_scratchFramebuffer = 0;
+            s_colorRenderbuffer = 0;
+            s_depthStencilRenderbuffer = 0;
+            s_colorFormat = 0;
+            s_depthStencilFormat = 0;
+            s_scratchContextGeneration = g_backendContextGeneration;
+        }
+        if (s_scratchFramebuffer == 0) {
+            g_GLESFuncs.glGenFramebuffers(1, &s_scratchFramebuffer);
+            if (s_scratchFramebuffer == 0) return false;
+        }
+
+        GLint previousRenderbuffer = 0;
+        g_GLESFuncs.glGetIntegerv(GL_RENDERBUFFER_BINDING, &previousRenderbuffer);
+        const auto ensureStorage = [](Uint& renderbuffer, GLenum& currentFormat, GLsizei& currentWidth,
+                                      GLsizei& currentHeight, GLenum format, GLsizei w, GLsizei h) {
+            if (renderbuffer == 0) {
+                g_GLESFuncs.glGenRenderbuffers(1, &renderbuffer);
+                currentFormat = 0;
+            }
+            if (renderbuffer == 0) return;
+            if (currentFormat != format || currentWidth < w || currentHeight < h) {
+                currentWidth = std::max(currentWidth, w);
+                currentHeight = std::max(currentHeight, h);
+                g_GLESFuncs.glBindRenderbuffer(GL_RENDERBUFFER, renderbuffer);
+                g_GLESFuncs.glRenderbufferStorage(GL_RENDERBUFFER, format, currentWidth, currentHeight);
+                currentFormat = format;
+            }
+        };
+        if (colorFormat != 0) {
+            ensureStorage(s_colorRenderbuffer, s_colorFormat, s_colorWidth, s_colorHeight, colorFormat, width,
+                          height);
+        }
+        if (depthStencilFormat != 0) {
+            ensureStorage(s_depthStencilRenderbuffer, s_depthStencilFormat, s_depthStencilWidth,
+                          s_depthStencilHeight, depthStencilFormat, width, height);
+        }
+        g_GLESFuncs.glBindRenderbuffer(GL_RENDERBUFFER, static_cast<GLuint>(previousRenderbuffer));
+
+        GLint previousDraw = 0;
+        GLint previousRead = 0;
+        g_GLESFuncs.glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &previousDraw);
+        g_GLESFuncs.glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &previousRead);
+
+        // Every point is (re)attached on every call: the scratch is shared between colour and
+        // depth/stencil shapes, and a stale attachment would make it incomplete or blit an
+        // aspect the source does not have.
+        g_GLESFuncs.glBindFramebuffer(GL_DRAW_FRAMEBUFFER, s_scratchFramebuffer);
+        g_GLESFuncs.glFramebufferRenderbuffer(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER,
+                                              colorFormat != 0 ? s_colorRenderbuffer : 0);
+        g_GLESFuncs.glFramebufferRenderbuffer(GL_DRAW_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, 0);
+        if (depthStencilAttachment != GL_NONE) {
+            g_GLESFuncs.glFramebufferRenderbuffer(GL_DRAW_FRAMEBUFFER, depthStencilAttachment, GL_RENDERBUFFER,
+                                                  s_depthStencilRenderbuffer);
+        }
+        const GLbitfield stagedMask =
+            (colorFormat != 0 ? static_cast<GLbitfield>(GL_COLOR_BUFFER_BIT) : 0) |
+            (depthStencilFormat != 0 ? mask & static_cast<GLbitfield>(GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT)
+                                     : 0);
+        Bool copied = g_GLESFuncs.glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
+        if (copied) {
+            // The staging copy is not the application's blit: its scissor box would clip the
+            // copy and leave never-written scratch texels for the second blit to carry over. The
+            // second blit keeps the scissor, which is the application's semantics.
+            DrainBlitErrors();
+            const Bool scissorWasEnabled = RenderStateImpl::DriverScissorTestEnabled();
+            if (scissorWasEnabled) g_GLESFuncs.glDisable(GL_SCISSOR_TEST);
+            g_GLESFuncs.glBlitFramebuffer(left, bottom, right, top, 0, 0, width, height, stagedMask, GL_NEAREST);
+            if (scissorWasEnabled) g_GLESFuncs.glEnable(GL_SCISSOR_TEST);
+            copied = g_GLESFuncs.glGetError() == GL_NO_ERROR;
+        }
+        if (copied) {
+            // Mirror the caller's orientation into the scratch-relative source rectangle so a
+            // flipped blit stays flipped.
+            const GLint blitX0 = srcX0 <= srcX1 ? 0 : width;
+            const GLint blitX1 = srcX0 <= srcX1 ? width : 0;
+            const GLint blitY0 = srcY0 <= srcY1 ? 0 : height;
+            const GLint blitY1 = srcY0 <= srcY1 ? height : 0;
+            g_GLESFuncs.glBindFramebuffer(GL_READ_FRAMEBUFFER, s_scratchFramebuffer);
+            g_GLESFuncs.glBindFramebuffer(GL_DRAW_FRAMEBUFFER, static_cast<GLuint>(previousDraw));
+            DrainBlitErrors();
+            g_GLESFuncs.glBlitFramebuffer(blitX0, blitY0, blitX1, blitY1, dstX0, dstY0, dstX1, dstY1, stagedMask,
+                                          filter);
+            copied = g_GLESFuncs.glGetError() == GL_NO_ERROR;
+        }
+
+        g_GLESFuncs.glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(previousRead));
+        g_GLESFuncs.glBindFramebuffer(GL_DRAW_FRAMEBUFFER, static_cast<GLuint>(previousDraw));
+        FramebufferImpl::InvalidateFramebufferBindingCache();
+        FramebufferImpl::InvalidateFramebufferHandleArmMemos();
+        return copied;
+    }
+
     static void IssueBlitWithResolveFallback(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1, GLint dstX0,
                                              GLint dstY0, GLint dstX1, GLint dstY1, GLbitfield mask, GLenum filter) {
         DrainBlitErrors();
@@ -7942,6 +8250,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
             g_GLESFuncs.glBindFramebuffer(GL_DRAW_FRAMEBUFFER, static_cast<GLuint>(previousDraw));
             FramebufferImpl::InvalidateFramebufferBindingCache();
             FramebufferImpl::InvalidateFramebufferHandleArmMemos();
+        }
+        if (readSamples <= 0 && drawSamples <= 0 && DriverBlitAspectsSharingAnImage(mask) != 0) {
+            // ES refused it because one image is both ends; GL only refuses an overlap, which it
+            // leaves undefined. When the scratch cannot take the source, the per-aspect retries
+            // below still deliver every aspect that is not shared.
+            if (BlitWithinOneImage(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask, filter)) {
+                DrainBlitErrors();
+                return;
+            }
+            MGLOG_E_ONCE("BlitFramebuffer: a blit within one image could not be staged through a scratch copy");
         }
         if (readSamples <= 0 && drawSamples > 0) {
             // Single-sample source into a multisample destination: ES rejects the call
