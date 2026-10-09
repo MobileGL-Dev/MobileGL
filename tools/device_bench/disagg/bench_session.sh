@@ -13,7 +13,9 @@
 #   4. force-stops the anland desktop app, recording whether it ran. Its activity takes the
 #      foreground back whenever it is paused, so FCL launched over it never reaches the world
 #      (2026-10-08: a job's own end-of-run relaunch left it up and the next job got 0 of 4 worlds).
-# stop: starts every service that was running before start, and verifies each is running again;
+# stop: unpins the clocks (pin_clocks.sh restore: scaling min/max and the GPU devfreq window go back to
+#   their saved pre-pin values; before 2026-10-09 stop left them pinned), then starts every service
+#   that was running before start, and verifies each is running again;
 #   relaunches the anland app if it ran before start (keeps anland usable).
 #   ALWAYS run it - callers trap it on EXIT/INT/TERM, so an interrupted session restores too.
 # Kernel-level protection (LMh, BCL, kernel thermal trip points) is never touched; the run's sampler
@@ -37,6 +39,8 @@ case "${1:-status}" in
     SER=$SER bash "$HERE/pin_clocks.sh" pin
     "$0" status ;;
   stop)
+    # Clocks first: a failed service check below must not leave the device pinned.
+    SER=$SER bash "$HERE/pin_clocks.sh" restore >/dev/null 2>&1 || echo "bench_session: clock restore failed" >&2
     # Trace-replay packages a job started must not idle on the device after it (they hold GPU
     # memory and a surface): every MobileGL plugin package is force-stopped at session end.
     su_sh "for p in \$(pm list packages top.mobilegl.plugin | sed s/package://); do am force-stop \$p; done"
