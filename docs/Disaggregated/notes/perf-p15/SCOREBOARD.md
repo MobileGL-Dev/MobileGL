@@ -75,6 +75,29 @@ H2 sessions:
 | session (2026-10-08) | build | MG fps (cpu) | mono Espryt | mono Magma | inproc Espryt | inproc Magma |
 |---|---|---|---|---|---|---|
 | safter ~22:00 | p15s = 0b96a3ef | 321.5 (1.70) | 0.746 / 0.84 dev (3.18) | 0.768 / 0.81 dev (2.91) | - | - |
+| pt ~23:00 | p15t = 3def5cb2 (p15s + Magma blit cache); inproc Magma also p15s | 319.0 (1.69) | 0.755 / 0.85 dev (3.17) | 0.787 / 0.83 dev (2.83) | - | p15s 1.019 (1.36 / 1.42); p15t 1.032 (1.37 / 1.39) |
+| c1 ~00:30 (10-09) | t = p15t; u = p15t + cut 1 (in-frame uploads, local) | 324.8 (1.69) | - | t 0.782 / 0.82 dev (2.80); u 0.769 / 0.81 dev (2.86) | u 0.997 (1.38 / 1.63) | u 1.011 (1.37 / 1.39) |
+
+- **pt:** the blit view cache gives Magma inproc +1.2 % fps, with apply −0.03 ms/frame.
+- **c1:** cut 1 is within noise (−1.7 % fps, +0.06 ms). It engaged (the mid-frame submit is gone) but saves ≤0.04 ms; see MONOLITH-DIFF.md.
+
+**Thread state** (c1, H2, ftrace window after the measurement; means of 3 reps; ms/frame):
+
+| arm | GL thread on-CPU | preempted | sleeping (main reason) | apply thread on-CPU | apply sleeping | both on-CPU / neither | GPU busy |
+|---|---|---|---|---|---|---|---|
+| MobileGlues monolith | 61 % (1.88) | 0.03 | 37 %: present fence `waitForever` 1.13 | - | - | - | 30 % |
+| Magma monolith (p15t) | 78 % (3.08) | 0.03 | 20 %: present fence 0.78 | - | - | - | 29 % |
+| Magma inproc (u) | 47 % (1.42) | 0.11 | 48 %: woken by the apply thread 1.45 | 52 % (1.59) | present fence 1.30 | 40 % / 41 % | 36 % |
+| Espryt inproc (u) | 47 % (1.45) | 0.10 | 48 %: woken by the apply thread 1.47 | 63 % (1.95) | present fence 1.07 | 44 % / 34 % | 30 % |
+
+What the table shows:
+- Monolith Magma is CPU-bound: the GL thread is on-CPU 78 % and preemption is negligible.
+- MobileGlues finishes its CPU work sooner, then waits on the present fence.
+- Inproc is bounded by present-fence latency at credit 1, not by CPU: the apply thread waits on the fence while the GL thread waits on the apply thread, and for 34-41 % of the time neither runs. The GPU is only 30-36 % busy.
+
+Sources:
+- `.pftrace` captures for the Perfetto UI are in `runs/c1/*/p15.pftrace`.
+- The numbers come from the same window's ftrace text via `threadstate.py`: no trace processor is installed.
 
 H2 spread, measured as (max - min) / mean over the 3 interleaved reps of each arm:
 - **sbefore (H1 probe, same day, 3 reps):** Espryt 288.6 / 287.7 / 315.2 (9.3 %), Magma 298.0 / 295.0 / 312.0 (5.6 %), MobileGlues 370.2 / 374.7 / 375.1 (1.3 %).
