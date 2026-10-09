@@ -760,6 +760,14 @@ namespace MGITest {
         return first;
     }
 
+    void ResetStateBetweenScenarios() {
+        // A program deleted while current stays current, flagged (GL 4.6 core 7.3); the next
+        // case would read its name back from GL_CURRENT_PROGRAM and restore a dead one.
+        // Unbinding it here is what finally deletes it.
+        glUseProgram(0);
+        FirstGLError();
+    }
+
     const char* GLErrorName(unsigned int error) {
         switch (error) {
         case GL_NO_ERROR:

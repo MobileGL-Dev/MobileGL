@@ -193,6 +193,7 @@ add_executable(MobileGLIntegrationTest
     Scenarios/TriangleScenario.cpp
     Scenarios/PersistentCoherentMapScenario.cpp
     Scenarios/DefaultFramebufferAcrossSwapScenario.cpp
+    Scenarios/ScenarioIsolationScenario.cpp
 )
 
 target_include_directories(MobileGLIntegrationTest PRIVATE
@@ -825,6 +826,25 @@ gtest_discover_tests(MobileGLIntegrationTest
         TIMEOUT ${MGL_ITEST_TIMEOUT}
         ENVIRONMENT "${MGL_ITEST_VULKAN_ENVIRONMENT}"
 )
+
+# ScenarioIsolationScenario's two cases in ONE process: the first leaves a deleted program current
+# and an error unread, the second asserts ScenarioTest::SetUp cleared both. The entries above run
+# one case per process, where both cases are green either way. add_test because
+# gtest_discover_tests registers cases one at a time; a PLAIN list (see the arena pair below).
+foreach(backend DirectGLES DirectVulkan)
+    if (backend STREQUAL "DirectGLES")
+        string(REPLACE "\\;" ";" mglItestIsolationEnv "${MGL_ITEST_GLES_ENVIRONMENT}")
+    else()
+        string(REPLACE "\\;" ";" mglItestIsolationEnv "${MGL_ITEST_VULKAN_ENVIRONMENT}")
+    endif()
+    add_test(NAME "${backend}.ScenarioIsolationScenario.CasesInOneProcess"
+        COMMAND MobileGLIntegrationTest "--gtest_filter=ScenarioIsolationScenario.*"
+        WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR})
+    set_tests_properties("${backend}.ScenarioIsolationScenario.CasesInOneProcess" PROPERTIES
+        LABELS integration-gpu
+        TIMEOUT ${MGL_ITEST_TIMEOUT}
+        ENVIRONMENT "${mglItestIsolationEnv}")
+endforeach()
 
 foreach(backend DirectGLES DirectVulkan)
     if (backend STREQUAL "DirectGLES")
