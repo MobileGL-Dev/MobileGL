@@ -118,10 +118,18 @@ The plan and its measurements are in [PLAN-P15.md](PLAN-P15.md); the audit is in
    - The `Fatal{UnmigratedSurface, "AndroidNativeWindow@P12"}` text and the tests asserting on it still
      point at P12. The rule is permanent: a client window cannot cross processes, so windowed spawn uses
      `MOBILEGL_IPC_SURFACE=server`. Reword the message to say that.
-   - A windowed spawn smoke of the LTO plugin APK with `MOBILEGL_IPC_SURFACE=server`. The LTO server
-     executable has already been seen to launch and initialise both backends. This needs the plugin APK
-     installed with its release signature, or the user's OK to replace the installed plugin. Spawn with
-     the default `offscreen` surface in FCL is unsupported by design (`UnmigratedSurface`).
+   - DONE 2026-10-09: the windowed out-of-process smoke of the LTO plugin APK passes on both backends.
+     The plugin is debug-signed and replaced the installed one, with the user's OK. Setup:
+     - server: the plugin's `MobileGLDisplayActivity`, i.e. the `:mglwin` in-process server on
+       `tcp://127.0.0.1:40613`;
+     - client: FCL with `MOBILEGL_TRANSPORT=spawn`, `MOBILEGL_IPC_CONTROL=tcp://127.0.0.1:40613` and
+       `MOBILEGL_IPC_SURFACE=server`. ServerOwned 1280x800 window, Espryt and Magma both in-world.
+
+     A plain spawned child has no display (`NoServerDisplay`). Evidence is in the coordinator scratchpad,
+     `p15/runs/spawn_smoke2/`.
+   - Open from that run: every run logs `MG_Remote server: shared image 1 could not be sent on the aux
+     socket (rc=3)`. Rendering continues, apparently on the non-zero-copy fallback. Find out why the
+     loopback-TCP aux-socket send fails.
 
 **Harness rules (all in scratchpad `p15/`; the tools live in `tools/device_bench/disagg/`):**
 - H2 = `fcl_bench.sh`, driven by `fclab2.sh` for interleaved arms; summaries come from `fclsum.py`.
