@@ -80,6 +80,7 @@ H2 sessions:
 | c1b ~02:10 (10-09) | t = p15t; v = p15t + 1b (coalesced pass barriers, local) | 320.9 (1.69) | - | t 0.783 / 0.82 dev (2.85); v 0.789 / 0.83 dev (2.85) | - | v 1.048 (1.34 / 1.345) |
 | c4 ~02:55 (10-09) | v (as c1b); w = v + cut 4 (Espryt surface-size memo, 66e3b2c1) | 321.6 (1.70) | v 0.757 / 0.85 dev (3.18); w 0.762 / 0.86 dev (3.05) | - | - | - |
 | c1c2 ~03:30 (10-09) | t = p15t; y = p15t + 1b + 1c (deferred clears) + cut 4 | 321.3 (1.70) | - | t 0.795 / 0.83 dev (2.83); y 0.785 / 0.82 dev (2.74)⁴ | - | t 1.025 (1.35 / 1.41)⁵; y 1.076 (1.33 / 1.24) |
+| fbm ~05:20 (10-09) | y (as c1c2); z = y + FB-state build memo, one entry per target | 321.7 (1.70) | y 0.770 / 0.87 dev (3.04); z 0.775 / 0.87 dev (3.04) | y 0.818 / 0.86 dev (2.65); z 0.831 / 0.87 dev (2.65) | - | - |
 
 - **pt:** the blit view cache gives Magma inproc +1.2 % fps, with apply −0.03 ms/frame.
 - **c1:** cut 1 is within noise (−1.7 % fps, +0.06 ms). It engaged (the mid-frame submit is gone) but saves ≤0.04 ms; see MONOLITH-DIFF.md.
@@ -97,6 +98,11 @@ H2 sessions:
 
   ⁴ y has 2 valid reps: r2 never reached the world after 3 startup deaths (signal 34 during bootstrap, a harness flake also seen on MobileGlues and other builds).
   ⁵ t inproc r2 is discarded: a host-side `binary_cache_builder` pulled libraries over adb inside its measurement window.
+- **fbm:** the first memo is within noise on both backends (CPU 2.65 / 2.65 Magma, 3.04 / 3.04 Espryt).
+  - It engaged only partly: Magma BuildFramebufferState 0.058 -> 0.032 ms/frame, and Espryt kept missing.
+  - The build only runs on a binding switch, so one entry per target misses on every A/B/A switch.
+    Batch h makes it per framebuffer.
+  - Session noise: y Magma r3 read 2.54 against 2.70-2.72 in r1/r2, with nothing in its state to explain it.
 - **c4:** Espryt GL-thread CPU fell 0.13 ms/frame (3.18 -> 3.05 in all three reps); fps moved by less than the noise.
   The profile confirms it: QueryCurrentSurfaceSize 0.070 -> 0.012 and SyncRenderState 0.092 -> 0.028 ms/frame.
 

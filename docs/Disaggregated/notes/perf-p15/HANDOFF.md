@@ -8,7 +8,34 @@ The plan and its measurements are in [PLAN-P15.md](PLAN-P15.md); the audit is in
   ms/frame), dev measured in the same session, ~5 % noise.
 - GPU scene (Iris + BSL): fps within ~5 % of MobileGlues on both backends.
 
-## Latest (2026-10-08 late): harness H2, dev reference, scoreboard
+## Latest (2026-10-09): cuts 1b + 1c, cut 4, pipe-record pieces
+
+- **Landed locally (pushed after the BSL gpuhunt check):**
+  - 66e3b2c1 (rebased as 65d4b808): Espryt surface-size memo, GL CPU 3.18 -> 3.05.
+  - 533a2564: Magma deferred clears (1c) plus coalesced pass-begin barriers (1b).
+    - Per frame: passes 11.5 -> 4.3 (dev 4.1), barriers 15.5 -> 9.0 (dev 3.4).
+    - Inproc +5.0 % fps, apply thread -0.17 ms; monolith GL CPU -0.09 ms.
+- **In the worktree, not committed yet:**
+  - BuildFramebufferState memo (MOBILEGL_PIPE_FRAMEBUFFER_STATE_MEMO). A/B queued as session `fbm`.
+  - EmitVertexBuffers per-buffer handle reuse.
+- **Order (coordinator, 2026-10-09):** FB-state memo, then handle cache on objects, vertex input,
+  program, samplers, accessor/TLS hoist, the ValidateForVerb dirty walk, Tracker.
+  - No record-bypass design change until the user decides.
+- **Parked: the Espryt attrib-format split** (MONOLITH-DIFF.md).
+- **Remaining Magma barriers:** CPU ceiling ≤0.02 ms. Revisit only if BSL shows a Magma GPU gap.
+- **Harness gotchas found today:**
+  - `tpl` in the freq sampler is kgsl `thermal_pwrlevel`. Under gpuhunt it is 6 by construction
+    (the 578 MHz pin); freqcheck already maps it. Stop a session on INVALID or `thr > 0`, never on
+    `tpl > 0`.
+  - Never run `binary_cache_builder` (adb pulls) while a session is measuring. Build binary caches
+    after the session ends.
+  - FCL sometimes dies at bootstrap with signal 34 (seen on every build including MobileGlues);
+    fclab2 retries, and a run that never reaches the world is lost.
+- **Monolith floor estimate (MONOLITH-DIFF.md, structural):**
+  - Pipe record: 0.35 -> about 0.10-0.13 if every local piece lands.
+  - Whole Magma GL thread: about 2.35-2.40 ms (native TLS: about 2.30), against dev 2.00.
+
+## Earlier (2026-10-08 late): harness H2, dev reference, scoreboard
 
 - **Every FCL vanilla number now goes in [SCOREBOARD.md](SCOREBOARD.md).** It has one row per
   session, as fps ratio to MobileGlues plus CPU ms/frame. It also holds the fixed dev reference, so
