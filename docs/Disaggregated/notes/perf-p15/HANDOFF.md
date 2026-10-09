@@ -8,7 +8,43 @@ The plan and its measurements are in [PLAN-P15.md](PLAN-P15.md); the audit is in
   ms/frame), dev measured in the same session, ~5 % noise.
 - GPU scene (Iris + BSL): fps within ~5 % of MobileGlues on both backends.
 
-## Latest (2026-10-08, after S0)
+## Latest (2026-10-08 late): harness H2, dev reference, scoreboard
+
+- **Every FCL vanilla number now goes in [SCOREBOARD.md](SCOREBOARD.md).** It has one row per
+  session, as fps ratio to MobileGlues plus CPU ms/frame. It also holds the fixed dev reference, so
+  "vs dev" no longer needs dev in every session. The per-function dev baseline is in
+  [MONOLITH-DIFF.md](MONOLITH-DIFF.md).
+- **The old probe's variance was core placement.** The scheduler gave MobileGL's monolith render
+  thread the X4 core 72-90 % of the time and MobileGlues' 47-60 %. MobileGlues' fps tracked its X4
+  share (fifi: 60 % -> 378, 47 % -> 344).
+- **Harness H2 (scratchpad `p15/fcl_bench.sh`, `fclab2.sh`, `benchwin.py`):** the same for every
+  arm.
+  - After world entry, `taskset -a -p 7c` pins FCL to cpu2-6 (A720).
+  - fps comes from the SurfaceView BLAST layer `frame=` in `dumpsys SurfaceFlinger`. It agrees
+    with the MobileGL fps log over the same span (252.1 vs ~253).
+  - Warmup: 20 s, then 5 s windows until two consecutive ones agree within 3 %.
+  - Measurement: two 5 s windows with no tracer; CPU from schedstat.
+  - atrace, then the optional simpleperf (`sp=1`), run only after the windows.
+- **Frozen bench saves** (1.21.5 and 1.21.4-Fabric, scratchpad `p15/freeze_world.py`):
+  - Rules: no daylight, weather or mob-spawn cycle, randomTickSpeed 0, no fire tick.
+  - DayTime 6000, clear weather.
+  - Before this, the vanilla save's day cycle was running.
+  - The originals are on the device as `level.dat.p15-orig`.
+- **Spread over 3 interleaved reps, (max - min) / mean:**
+  - Old probe: Espryt 9.3 %, Magma 5.6 %, MobileGlues 1.3 %; MobileGlues spanned 322-376 across
+    sessions.
+  - H2: Espryt 1.2 %, Magma 2.9 %, MobileGlues 2.0 %, dev 6-7 %.
+- **Dev reference (H2, safter, all VALID):** MobileGlues 321.5 fps / 1.70 ms. dev Magma is 0.950
+  of that (2.01 ms) and dev Espryt 0.887 (2.38 ms).
+- **On A720 the monolith gap is larger than the X4 hid:** p15s Magma is 0.768 of MobileGlues (0.81
+  of dev, 2.91 ms) and Espryt 0.746 (0.84 of dev, 3.18 ms). That is +0.90 / +0.80 ms/frame of CPU
+  over dev.
+- **Inproc p15s Magma on H2:** 327.7 fps against MobileGlues ~321.
+- **Emulated TLS:** `__emutls_get_address` costs ~0.06 ms/frame of self time on the p15 monolith
+  render thread, spread over many callers. dev shows almost none. The structural fix is native TLS
+  (minSdk), which is the user's call.
+
+## Earlier (2026-10-08, after S0)
 
 Every number below carries its profile and passed the validity check (`state.txt`). `cpuhunt` =
 CPU about 1.5/1.25 GHz, GPU 903 MHz (cleanly CPU-bound); interval 0, anland off, daemons stopped.
@@ -228,6 +264,7 @@ CPU about 1.5/1.25 GHz, GPU 903 MHz (cleanly CPU-bound); interval 0, anland off,
 | purpose | where |
 |---|---|
 | FCL probes and reducers | `tools/device_bench/disagg/` (README "P15 FCL probes") |
+| FCL vanilla A/B, H2 (pinned, SF frame source, stability warmup, `sp=1` profiles after the windows) | scratchpad `p15/fclab2.sh "<name>:<lib>:<backend>[:sp[:transport[:K=V,...]]] ..." <reps>` -> `fcl_bench.sh`; `fclsum.py`, `residency.py`, `diffprof.py`, `prof_prep.sh` |
 | FCL milestone (CPU + BSL scenes, fin / new / dev / MobileGlues) | scratchpad `p15/fcl_milestone.sh`, `fcl_scene.sh`, `fclab.sh`, `fclsum.py` |
 | SSIM gate (openra, rd12, bsl × 4 arms × 2 backends) | scratchpad `p15/ssim_gate.sh`; `matrix_p14.sh` now takes `PREP_WLS` and a `bsl` workload |
 | host CI-shaped build (WSL archlinux) | `~/mgl-p15-ci31`, scratchpad `p15/wsl_ci.sh`, `w_suite.sh`, `w_syncval.sh`, `w_sv_one.sh`, `w_one.sh` |
