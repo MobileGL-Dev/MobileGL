@@ -114,6 +114,26 @@ public:
     // manager keys its per-draw fast path on this so an attachment's image recreation
     // invalidates the cached render pass (dirty-flag tracking; portable to Vulkan 1.1).
     Uint64 GetTextureImageEpoch() const { return m_textureImageEpoch; }
+    // P15 (wire deferred clears): while one of these lives, SyncTextureResourceByHandle leaves an
+    // image's pending clears pending - its caller is resolving the image as an ATTACHMENT, and
+    // either folds the clears into the pass it begins (LOAD_OP_CLEAR) or replaces them with a
+    // newer clear. Every other caller (sampling, blits, copies, readbacks, uploads, mip
+    // generation) materializes them first, so a use that forgets the hold is merely slower.
+    class PendingClearHold {
+    public:
+        explicit PendingClearHold(VkTextureManager& manager) : m_manager(manager) { ++m_manager.m_pendingClearHold; }
+        ~PendingClearHold() { --m_manager.m_pendingClearHold; }
+        PendingClearHold(const PendingClearHold&) = delete;
+        PendingClearHold& operator=(const PendingClearHold&) = delete;
+    private:
+        VkTextureManager& m_manager;
+    };
+    // A whole-subresource clear that was recorded but has not run yet (VulkanRenderer::DeferWireClear).
+    struct WirePendingClear {
+        Uint32 level = 0, layer = 0, layers = 1;
+        VkImageAspectFlags aspects = 0;
+        VkClearValue value{};
+    };
     // Bumped whenever any tracked texture resource is erased; cached
     // TextureResource pointers are valid only while this is unchanged.
     Uint64 GetResourceEraseEpoch() const { return m_resourceEraseEpoch; }
@@ -338,6 +358,9 @@ public:
         SharedPtr<const void> yuvOwner;
         SharedPtr<void> yuvSource;
         Uint64 yuvConvertedFrame = 0;
+        // P15: clears of this image still to run (WirePendingClear). Part of the image, so a
+        // respecify (which moves a new image in, below) drops them with the old one.
+        Vector<WirePendingClear> pendingClears;
 
         TextureResource() = default;
         TextureResource(const TextureResource&) = delete;
@@ -383,6 +406,7 @@ public:
             std::swap(this->yuvOwner, that.yuvOwner);
             std::swap(this->yuvSource, that.yuvSource);
             std::swap(this->yuvConvertedFrame, that.yuvConvertedFrame);
+            std::swap(this->pendingClears, that.pendingClears);
         }
 
         void Reset() {
@@ -638,6 +662,7 @@ public:
 private:
     // Bumped in SyncTextureResource right after vmaCreateImage(texture). See GetTextureImageEpoch().
     Uint64 m_textureImageEpoch = 1;
+    Uint32 m_pendingClearHold = 0; // PendingClearHold's depth
     // See AdvanceRecordingGeneration. Starts above every resource's default
     // stamp of 0 so a fresh resource counts as untouched.
     Uint64 m_recordingGeneration = 1;

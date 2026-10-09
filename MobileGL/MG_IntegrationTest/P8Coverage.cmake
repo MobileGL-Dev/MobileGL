@@ -31,6 +31,7 @@ set(MGL_P8A_AMBIENT_CASES
     AdvertisedLimitsScenario.IndexedBufferBindingsAreReportedVerbatimOnBothWidths
     BufferTextureScenario.*
     ClearTexImageUndefinedLevelZeroScenario.*
+    ClearOrderScenario.*
     ClipDistanceScenario.*
     CopyImageLevelRangeScenario.*
     CopyImagePacked16Scenario.*
@@ -84,6 +85,7 @@ set(MGL_P8A_AMBIENT_CASES
     OrientationScenario.*
     P4aFinalFixScenario.*
     P4aSeamAuditScenario.*
+    PassOrderScenario.*
     PipelineFailureScenario.*
     PointSizeDemotionScenario.*
     ProgramPipelineScenario.ASamplerUnitRewrittenBetweenDrawsKeepsPaintingTheRightTexture

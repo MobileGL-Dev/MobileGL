@@ -9,6 +9,7 @@
 #pragma once
 
 #include "ProgramFactory.h"
+#include "RenderPassGuard.h"
 #include "MagmaProgramSource.h"
 #include "VkBufferManager.h"
 #include "VkSamplerManager.h"
@@ -66,6 +67,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // A command buffer (re)began recording: descriptor bindings recorded into
         // the previous buffer do not carry over, so drop the bind-dedup shadow.
         void OnCommandBufferBoundary() { m_lastBindValid = false; }
+        // The image-write epoch the last full memory barrier made visible (see m_wireImageBarrierEpoch),
+        // and the note a caller that just recorded that same barrier makes.
+        Uint64 WireImageBarrierEpoch() const { return m_wireImageBarrierEpoch; }
+        void NoteWireImageBarrier() const { m_wireImageBarrierEpoch = WireImageWriteEpoch(); }
         // A ProgramFactory eviction just destroyed this layout: purge every frame
         // slot's cached descriptor sets for it, so a recycled handle value can never
         // stale-hit sets written for the dead layout's bindings. The sets are
@@ -532,7 +537,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 m_samplerResolveMemoHighWater = binding + 1;
             }
         }
-        // WireImageWriteEpoch() when ResolveWireImageDescriptor last made image writes visible.
+        // WireImageWriteEpoch() when ResolveWireImageDescriptor, or a new draw pass's attachment
+        // barrier (VulkanRenderer::TransitionWireImage), last made image writes visible.
         mutable Uint64 m_wireImageBarrierEpoch = 0;
         // P14: the wire arm's sampler memo, one entry per texture unit. The sampler a unit resolves
         // to is a function of the sampler CSO it names (immutable for a {slot, gen, Serial} within

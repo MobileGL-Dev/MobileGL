@@ -1881,6 +1881,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             lookup = {key, m_resourceEraseEpoch, &it->second};
         }
         TextureResource& resource = *lookup.resource;
+        // P15: an image with deferred clears runs them before any use that is not an attachment
+        // resolve (PendingClearHold), and before a shape or texel change of its own even then:
+        // a mip-chain growth copies the content, and an upload lands after the clear it followed.
+        if (!resource.pendingClears.empty() && pVulkanRenderer != nullptr) {
+            const Bool current = resource.image != VK_NULL_HANDLE && resource.syncedWireSerial == record.Serial &&
+                                 record.PendingUploads.empty() &&
+                                 (!requireStorage || (resource.usageFlags & VK_IMAGE_USAGE_STORAGE_BIT) != 0);
+            if (m_pendingClearHold == 0 || !current) pVulkanRenderer->MaterializeWirePendingClears(resource);
+        }
         if (resource.image != VK_NULL_HANDLE && resource.syncedWireSerial == record.Serial &&
             record.PendingUploads.empty() && (!requireStorage || (resource.usageFlags & VK_IMAGE_USAGE_STORAGE_BIT) != 0)) {
             return &resource;

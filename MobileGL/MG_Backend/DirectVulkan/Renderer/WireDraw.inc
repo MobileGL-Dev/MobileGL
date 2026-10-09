@@ -275,6 +275,7 @@
             const MG_Pipe::MGPFramebufferState& fbo, WireDrawScratch& scratch, Bool passContinues,
             Bool& continuing) {
         continuing = true;
+        m_wireFoldClears.clear();
         if (passContinues) {
             auto& store = MG_Record::ServerStagedTexture();
             if (!m_wirePassMarksValid || m_wirePassMarksClearGeneration != store.GpuDirtyClearGeneration()) {
@@ -312,7 +313,13 @@
         scratch.gpuWriteMarks.clear();
         m_wirePassMemo.attachments.clear();
         const auto add = [&](const MG_Pipe::MGPSurface& surface, VkImageAspectFlags aspect) -> Uint32 {
-            WireImage image = ResolveWireImage(fbo, surface, aspect, /*isWriteTarget=*/true);
+            // An attachment resolve: its deferred clears stay pending, to become this pass's load
+            // op (BeginWireDrawPassFolding) - WireFramebuffer.inc's deferred-clear section.
+            WireImage image;
+            {
+                VkTextureManager::PendingClearHold hold(*m_textureManager);
+                image = ResolveWireImage(fbo, surface, aspect, /*isWriteTarget=*/true);
+            }
             if (!image.image) return VK_ATTACHMENT_UNUSED;
             m_textureManager->FlushPendingUploads();
             m_wirePassMemo.attachments.push_back(
@@ -345,6 +352,9 @@
             description.storeOp = description.stencilStoreOp = VK_ATTACHMENT_STORE_OP_STORE;
             description.initialLayout = description.finalLayout = layout;
             attachments.push_back(description);
+            if (image.resource != nullptr && !image.resource->pendingClears.empty())
+                m_wireFoldClears.push_back({static_cast<Uint32>(attachments.size() - 1), info.subresourceRange.aspectMask,
+                                            image.resource, image.level, image.layer, image.layers});
             extent.width = std::min(extent.width, image.extent.width);
             extent.height = std::min(extent.height, image.extent.height);
             layers = std::min(layers, image.layers);
@@ -399,7 +409,8 @@
             // A new pass orders itself after earlier writes to its attachments; a continued one
             // is the same pass, whose attachment writes are ordered by rasterization.
             if (!stillOpen)
-                for (auto& image : sameLayoutAttachments) TransitionWireImage(image, VK_IMAGE_LAYOUT_GENERAL);
+                for (auto& image : sameLayoutAttachments)
+                    TransitionWireImage(image, VK_IMAGE_LAYOUT_GENERAL, /*coalesceWithLastFullBarrier=*/true);
         }
         if (!continuing) {
             RetireWireDrawPass();
@@ -541,6 +552,8 @@
         // pass's attachments are provably the ones this draw would resolve (WirePassMemo).
         Bool passContinues = WirePassMemoHolds(*fbo, frame);
         if (!passContinues) {
+            // Attachment resolves: deferred clears stay pending for the pass (PendingClearHold).
+            VkTextureManager::PendingClearHold hold(*m_textureManager);
             for (Uint32 i = 0; i < MG_Pipe::kMGPipeMaxColorAttachments; ++i) {
                 const Int32 slot = fbo->DrawBuffers[i];
                 if (slot >= 0) (void)ResolveWireImage(*fbo, fbo->Color[slot], VK_IMAGE_ASPECT_COLOR_BIT);
@@ -794,6 +807,11 @@
         if (passContinues) passContinues = WirePassMemoHolds(*fbo, frame);
         // A memo that holds is the open pass itself (WirePassMemoHolds compared the active pass).
         Bool continuing = true;
+        // FROM HERE TO THE PASS BEGIN, EVERY IMAGE RESOLVE IS AN ATTACHMENT'S (the pass key walk,
+        // the pipeline's attachment formats): their deferred clears must reach the pass as its
+        // load op. Run anywhere in between, a clear would land after the walk's barriers and right
+        // before the pass that loads the image (a read-after-write hazard).
+        VkTextureManager::PendingClearHold passHold(*m_textureManager);
         if (!PrepareWireDrawPass(frame, *fbo, scratch, passContinues, continuing)) return false;
         auto& pass = *m_wireDrawPass;
         // Interned once per pass (above): a continued pass has the same compatibility.
@@ -873,7 +891,8 @@
         const Bool open = continuing && active != nullptr && active->commandBuffer == frame.commandBuffer &&
                           active->hash == pass.hash;
         if (!open && active != nullptr) VkRenderPassManager::EndRenderPass(frame.commandBuffer);
-        if (!open && !VkRenderPassManager::BeginRenderPass(frame.commandBuffer, pass)) {
+        if (open && !m_wireFoldClears.empty()) ApplyWireFoldClearsInPass(frame, pass);
+        if (!open && !BeginWireDrawPassFolding(frame, pass, 0, nullptr)) {
             MGL_WIRE_DECLINE_AT(BeginRenderPass, "the render pass for this draw could not be begun");
             return false;
         }
@@ -930,6 +949,8 @@
         // recording) before the pass is chosen, unless the open pass provably holds them.
         Bool passContinues = WirePassMemoHolds(fbo, frame);
         if (!passContinues) {
+            // Attachment resolves: deferred clears stay pending for the pass (PendingClearHold).
+            VkTextureManager::PendingClearHold hold(*m_textureManager);
             for (Uint32 i = 0; i < MG_Pipe::kMGPipeMaxColorAttachments; ++i) {
                 const Int32 slot = fbo.DrawBuffers[i];
                 if (slot >= 0) (void)ResolveWireImage(fbo, fbo.Color[slot], VK_IMAGE_ASPECT_COLOR_BIT);
@@ -943,6 +964,8 @@
         if (!frame.isCommandRecording) m_frameContext.BeginCommandRecording();
         if (passContinues) passContinues = WirePassMemoHolds(fbo, frame);
         Bool continuing = true;
+        // As in SetupWireDraw: attachment resolves only, from the walk to the pass begin.
+        VkTextureManager::PendingClearHold passHold(*m_textureManager);
         if (!PrepareWireDrawPass(frame, fbo, m_wireDrawScratch, passContinues, continuing)) return remaining;
         const auto& key = m_wireDrawPassKey;
         auto& pass = *m_wireDrawPass;
@@ -1061,38 +1084,134 @@
                     values[a].depthStencil = clear.clearValue.depthStencil;
                 }
             }
-            VkRenderPass variant = VK_NULL_HANDLE;
-            for (const auto& entry : begun.clearVariants)
-                if (entry.first == variantKey) variant = entry.second;
-            if (variant == VK_NULL_HANDLE) {
-                auto descriptions = begun.wireAttachments;
-                for (Uint32 a = 0; a < attachmentCount; ++a) {
-                    if (variantKey >> (2 * a) & 1) descriptions[a].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-                    if (variantKey >> (2 * a + 1) & 1) descriptions[a].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-                }
-                VkSubpassDescription subpass{};
-                subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-                subpass.colorAttachmentCount = static_cast<Uint32>(begun.wireColors.size());
-                subpass.pColorAttachments = begun.wireColors.data();
-                subpass.pDepthStencilAttachment =
-                    begun.wireDepth.attachment != VK_ATTACHMENT_UNUSED ? &begun.wireDepth : nullptr;
-                VkRenderPassCreateInfo info{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};
-                info.attachmentCount = attachmentCount;
-                info.pAttachments = descriptions.data();
-                info.subpassCount = 1;
-                info.pSubpasses = &subpass;
-                VK_VERIFY(vkCreateRenderPass(m_device, &info, nullptr, &variant));
-                begun.clearVariants.push_back({variantKey, variant});
-            }
-            if (!VkRenderPassManager::BeginRenderPass(frame.commandBuffer, begun, variant, values, attachmentCount))
-                return remaining;
+            if (!BeginWireDrawPassFolding(frame, begun, variantKey, values)) return remaining;
             return remaining & ~handled;
         }
         if (!open && active != nullptr) VkRenderPassManager::EndRenderPass(frame.commandBuffer);
-        if (!open && !VkRenderPassManager::BeginRenderPass(frame.commandBuffer, pass)) return remaining;
+        if (open && !m_wireFoldClears.empty()) ApplyWireFoldClearsInPass(frame, pass);
+        if (!open && !BeginWireDrawPassFolding(frame, pass, 0, nullptr)) return remaining;
         const VkClearRect rect{area, 0, key.layers};
         vkCmdClearAttachments(frame.commandBuffer, count, clears, 1, &rect);
         return remaining & ~handled;
+    }
+
+    // The draw pass `begun` with LOAD_OP_CLEAR for the attachments `variantKey` names (bit 2a:
+    // attachment a's colour or depth, bit 2a+1: its stencil). Built once per key and kept on the
+    // pass, like the pass itself.
+    VkRenderPass VulkanRenderer::WireClearVariant(RenderPassEntry& begun, Uint64 variantKey) {
+        for (const auto& entry : begun.clearVariants)
+            if (entry.first == variantKey) return entry.second;
+        const Uint32 attachmentCount = static_cast<Uint32>(begun.wireAttachments.size());
+        auto descriptions = begun.wireAttachments;
+        for (Uint32 a = 0; a < attachmentCount; ++a) {
+            if (variantKey >> (2 * a) & 1) descriptions[a].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+            if (variantKey >> (2 * a + 1) & 1) descriptions[a].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        }
+        VkSubpassDescription subpass{};
+        subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+        subpass.colorAttachmentCount = static_cast<Uint32>(begun.wireColors.size());
+        subpass.pColorAttachments = begun.wireColors.data();
+        subpass.pDepthStencilAttachment =
+            begun.wireDepth.attachment != VK_ATTACHMENT_UNUSED ? &begun.wireDepth : nullptr;
+        VkRenderPassCreateInfo info{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};
+        info.attachmentCount = attachmentCount;
+        info.pAttachments = descriptions.data();
+        info.subpassCount = 1;
+        info.pSubpasses = &subpass;
+        VkRenderPass variant = VK_NULL_HANDLE;
+        VK_VERIFY(vkCreateRenderPass(m_device, &info, nullptr, &variant));
+        begun.clearVariants.push_back({variantKey, variant});
+        return variant;
+    }
+
+    // P15: EVERY DRAW PASS BEGINS HERE. The pending clears of its attachments
+    // (m_wireFoldClears, gathered by PrepareWireDrawPass) become their load op and leave the
+    // images; a clear the caller already put in `variantKey` (its own glClear, newer than any
+    // pending one) wins over a pending clear of the same attachment, which is then simply gone.
+    Bool VulkanRenderer::BeginWireDrawPassFolding(FrameContext::FrameData& frame, RenderPassEntry& begun,
+                                                  Uint64 variantKey, const VkClearValue* values) {
+        const Uint32 attachmentCount = static_cast<Uint32>(begun.wireAttachments.size());
+        constexpr Uint32 kMaxAttachments = MG_Pipe::kMGPipeMaxColorAttachments + 1;
+        VkClearValue merged[kMaxAttachments]{};
+        if (values != nullptr)
+            for (Uint32 a = 0; a < attachmentCount && a < kMaxAttachments; ++a) merged[a] = values[a];
+        for (const auto& fold : m_wireFoldClears) {
+            if (fold.attachment >= attachmentCount || fold.attachment >= kMaxAttachments || fold.resource == nullptr)
+                continue;
+            const Uint32 a = fold.attachment;
+            auto& pending = fold.resource->pendingClears;
+            for (SizeT i = 0; i < pending.size();) {
+                auto& entry = pending[i];
+                if (entry.level != fold.level || entry.layer != fold.layer || entry.layers != fold.layers) {
+                    ++i;
+                    continue;
+                }
+                const VkImageAspectFlags taken = entry.aspects & fold.aspects;
+                if ((taken & VK_IMAGE_ASPECT_COLOR_BIT) && !(variantKey >> (2 * a) & 1)) {
+                    variantKey |= 1ull << (2 * a);
+                    merged[a].color = entry.value.color;
+                }
+                if ((taken & VK_IMAGE_ASPECT_DEPTH_BIT) && !(variantKey >> (2 * a) & 1)) {
+                    variantKey |= 1ull << (2 * a);
+                    merged[a].depthStencil.depth = entry.value.depthStencil.depth;
+                }
+                if ((taken & VK_IMAGE_ASPECT_STENCIL_BIT) && !(variantKey >> (2 * a + 1) & 1)) {
+                    variantKey |= 1ull << (2 * a + 1);
+                    merged[a].depthStencil.stencil = entry.value.depthStencil.stencil;
+                }
+                entry.aspects &= ~taken;
+                if (entry.aspects == 0) pending.erase(pending.begin() + static_cast<std::ptrdiff_t>(i));
+                else ++i;
+            }
+        }
+        m_wireFoldClears.clear();
+        if (variantKey == 0) return VkRenderPassManager::BeginRenderPass(frame.commandBuffer, begun);
+        return VkRenderPassManager::BeginRenderPass(frame.commandBuffer, begun, WireClearVariant(begun, variantKey),
+                                                    merged, attachmentCount);
+    }
+
+    // The same pending clears when the pass is already open (a continued pass whose attachments
+    // gained a pending clear since it began - the pass-key walk found them): recorded inside it.
+    void VulkanRenderer::ApplyWireFoldClearsInPass(FrameContext::FrameData& frame, RenderPassEntry& pass) {
+        VkClearAttachment clears[MG_Pipe::kMGPipeMaxColorAttachments + 1]{};
+        Uint32 count = 0;
+        for (const auto& fold : m_wireFoldClears) {
+            if (fold.resource == nullptr) continue;
+            auto& pending = fold.resource->pendingClears;
+            for (SizeT i = 0; i < pending.size();) {
+                auto& entry = pending[i];
+                if (entry.level != fold.level || entry.layer != fold.layer || entry.layers != fold.layers) {
+                    ++i;
+                    continue;
+                }
+                const VkImageAspectFlags taken = entry.aspects & fold.aspects;
+                if ((taken & VK_IMAGE_ASPECT_COLOR_BIT) && count < MG_Pipe::kMGPipeMaxColorAttachments + 1) {
+                    for (Uint32 c = 0; c < pass.wireColors.size(); ++c) {
+                        if (pass.wireColors[c].attachment != fold.attachment) continue;
+                        auto& clear = clears[count++];
+                        clear.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                        clear.colorAttachment = c;
+                        clear.clearValue.color = entry.value.color;
+                        break;
+                    }
+                }
+                const VkImageAspectFlags depthStencil = taken & (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT);
+                if (depthStencil && pass.wireDepth.attachment == fold.attachment &&
+                    count < MG_Pipe::kMGPipeMaxColorAttachments + 1) {
+                    auto& clear = clears[count++];
+                    clear.aspectMask = depthStencil;
+                    clear.clearValue.depthStencil = entry.value.depthStencil;
+                }
+                entry.aspects &= ~taken;
+                if (entry.aspects == 0) pending.erase(pending.begin() + static_cast<std::ptrdiff_t>(i));
+                else ++i;
+            }
+        }
+        m_wireFoldClears.clear();
+        if (count == 0) return;
+        const VkClearRect rect{{{0, 0}, {static_cast<Uint32>(pass.extent.x()), static_cast<Uint32>(pass.extent.y())}},
+                               0, pass.layers};
+        vkCmdClearAttachments(frame.commandBuffer, count, clears, 1, &rect);
     }
 
     // ---- P8-D: THE WIRE ARM'S INDIRECT DRAWS READ THEIR WORDS ON THE GPU ----------------------

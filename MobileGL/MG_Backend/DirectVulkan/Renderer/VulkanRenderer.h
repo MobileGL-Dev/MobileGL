@@ -162,6 +162,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // queue submission order already puts every earlier draw's access to the old texels
         // ahead of the copy. The preserve arm keeps the wait: it retires the old image.
         // (rd12 Magma: the wait was ~1.8 ms/frame of fence stall, one per lightmap update.)
+        // P15 (WireFramebuffer.inc): runs an image's deferred clears now, outside any pass.
+        void MaterializeWirePendingClears(VkTextureManager::TextureResource& resource);
         Bool FlushWirePendingCommandsForTextureUpload() {
             return !HasPendingRecordedWork() || FlushPendingCommands();
         }
@@ -587,7 +589,30 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         WireImage ResolveWireImage(const MG_Pipe::MGPFramebufferState& fbo,
                                    const MG_Pipe::MGPSurface& surface, VkImageAspectFlags aspect,
                                    Bool isWriteTarget = false);
-        void TransitionWireImage(WireImage& image, VkImageLayout layout);
+        void TransitionWireImage(WireImage& image, VkImageLayout layout, Bool coalesceWithLastFullBarrier = false);
+        // P15: WIRE DEFERRED CLEARS (WireFramebuffer.inc). A clear of images the open pass
+        // holds is recorded inside it; a whole-image clear of others waits on the image
+        // (WirePendingClear) for the next pass that draws into it (LOAD_OP_CLEAR) or the first
+        // other use (MaterializeWirePendingClears).
+        GLbitfield ClearWireAttachmentsOfOpenPass(const MG_Pipe::MGPFramebufferState& fbo,
+                                                  const ClearAttachmentPayload& payload, GLint drawbuffer);
+        GLbitfield DeferWireClear(const MG_Pipe::MGPFramebufferState& fbo, const ClearAttachmentPayload& payload,
+                                  GLint drawbuffer);
+        // An attachment of the pass being prepared whose image carries pending clears; taken
+        // when the pass begins (BeginWireDrawPassFolding) or applied inside it if it is open.
+        struct WireFoldClear {
+            Uint32 attachment = 0;
+            VkImageAspectFlags aspects = 0;
+            VkTextureManager::TextureResource* resource = nullptr;
+            Uint32 level = 0, layer = 0, layers = 1;
+        };
+        Vector<WireFoldClear> m_wireFoldClears;
+        static Bool WireImageCanDeferClear(const WireImage& image);
+        static void NoteWirePendingClear(const WireImage& image, VkImageAspectFlags aspects, const VkClearValue& value);
+        VkRenderPass WireClearVariant(RenderPassEntry& begun, Uint64 variantKey);
+        Bool BeginWireDrawPassFolding(FrameContext::FrameData& frame, RenderPassEntry& begun, Uint64 variantKey,
+                                      const VkClearValue* values);
+        void ApplyWireFoldClearsInPass(FrameContext::FrameData& frame, RenderPassEntry& pass);
         void ClearWireFramebuffer(const MG_Pipe::MGPFramebufferState& fbo,
                                   const ClearAttachmentPayload& payload, GLint drawbuffer = -1);
         void BlitWireFramebuffers(GLint sx0, GLint sy0, GLint sx1, GLint sy1,
@@ -829,6 +854,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         void DestroyWireDrawPassCacheEntry(WireDrawPassCacheEntry& entry);
         Vector<WireDrawPassCacheEntry> m_wireDrawPassCache;
         WireDrawPassKey m_wireDrawPassKey;
+        // P15: the open pass's attachment that is `image` (WireFramebuffer.inc's deferred clears).
+        static Uint32 OpenPassAttachmentOf(const WireImage& image, const Vector<WireDrawAttachmentKey>& attachments);
         WireRenderPassCompatibilityTable m_wireRenderPassCompatibility;
         // The interned compatibility id of m_wireDrawPass's attachments, or 0 when not known yet.
         // A draw that continues the pass (its WireDrawPassKey compares equal, which covers every

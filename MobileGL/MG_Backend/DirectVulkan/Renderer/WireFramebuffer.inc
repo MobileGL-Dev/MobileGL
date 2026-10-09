@@ -194,7 +194,7 @@
         return out;
     }
 
-    void VulkanRenderer::TransitionWireImage(WireImage& image, VkImageLayout layout) {
+    void VulkanRenderer::TransitionWireImage(WireImage& image, VkImageLayout layout, Bool coalesceWithLastFullBarrier) {
         auto& frame = m_frameContext.GetCurrent();
         if (!frame.isCommandRecording) m_frameContext.BeginCommandRecording();
         if (VkRenderPassManager::GetActiveRenderPass()) VkRenderPassManager::EndRenderPass(frame.commandBuffer);
@@ -208,15 +208,31 @@
         // tracked layout - and CopyWireDepthStencilBlit moves the two aspects in two legs.
         if (WireFormatIsPackedDepthStencil(image.format))
             barrierAspect = VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
+        // P15: A DRAW PASS'S ATTACHMENTS SHARE ONE FULL BARRIER, and the sampled-image
+        // barrier shares it too. The memory barrier below is global (ALL_COMMANDS, every write
+        // made visible), the same one ResolveWireImageDescriptor records, so a second one with no
+        // image written since the last (WireImageWriteEpoch unchanged) orders nothing. Only the
+        // new-pass caller (PrepareWireDrawPass) opts in: its attachments are written inside the
+        // pass it is about to begin, and that pass's end moves the epoch. A transfer caller
+        // writes right after this call with the epoch already moved, so it must neither skip nor
+        // note - noting there would let a later barrier be skipped past its write.
+        // FCL Magma: 27.5 barriers and 12.6 render passes per frame against dev's 3.4 and 4.1,
+        // most of them a second barrier per attachment and a pass closed and reopened at the
+        // first sampled texture after every pass begin.
         if (image.layout == layout) {
             // GENERAL->GENERAL is not a layout transition, but the next load,
             // sample or blit still depends on earlier attachment/shader writes.
             // The old per-verb queue idle must not be its only ordering edge.
-            VkMemoryBarrier memory{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
-            memory.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
-            memory.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
-            vkCmdPipelineBarrier(frame.commandBuffer, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-                VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 1, &memory, 0, nullptr, 0, nullptr);
+            const Bool covered = coalesceWithLastFullBarrier && m_uniformManager &&
+                                 WireImageWriteEpoch() == m_uniformManager->WireImageBarrierEpoch();
+            if (!covered) {
+                VkMemoryBarrier memory{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+                memory.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
+                memory.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+                vkCmdPipelineBarrier(frame.commandBuffer, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                    VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 1, &memory, 0, nullptr, 0, nullptr);
+                if (coalesceWithLastFullBarrier && m_uniformManager) m_uniformManager->NoteWireImageBarrier();
+            }
         }
         if (!VkTextureManager::TransitionImageLayout(frame.commandBuffer, image.image, image.layout, layout,
             stage, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, access,
@@ -230,13 +246,337 @@
         }
     }
 
+    // ---- P15: WIRE DEFERRED CLEARS -------------------------------------------------------------
+    //
+    // Minecraft (1.21.5) clears its targets through framebuffers of their own - a depth-only one
+    // for the shared depth texture, a colour+depth one per target - and then draws through the
+    // main framebuffer. A clear that begins a LOAD_OP_CLEAR pass of its own made every such clear a
+    // pass that did nothing but clear, closed by the very next draw: 11.5 passes a frame against
+    // dev's 4.1 (whose clear manager folded the same clears into the next pass's load op), each
+    // one an extra full load/store of the attachments on a tiler.
+    //
+    // So a clear of an image the open pass holds is recorded inside that pass, and a whole-image
+    // clear of any other image WAITS ON THE IMAGE (WirePendingClear, kept on the image's own
+    // resource with its level and layers - never keyed by a GL name). The next draw pass that has
+    // it as an attachment begins with LOAD_OP_CLEAR for it (PrepareWireDrawPass /
+    // BeginWireDrawPassFolding); any other use reaches the image through
+    // SyncTextureResourceByHandle, which runs it first (MaterializeWirePendingClears). The default
+    // framebuffer never defers: its in-pass clear is a known Adreno problem (see
+    // ClearWireFramebufferInPass), and it is presented, not sampled.
+
+    // Whether `image` can carry a deferred clear: a plain single-sample 2D(-array) image of this
+    // session with a float colour or a depth/stencil format, clearable by a transfer command.
+    Bool VulkanRenderer::WireImageCanDeferClear(const WireImage& image) {
+        const auto* resource = image.resource;
+        if (resource == nullptr || image.isDefault || image.is3D || image.samples != VK_SAMPLE_COUNT_1_BIT) return false;
+        if (resource->sharedImageId != 0 || resource->yuvImageId != 0) return false;
+        if ((resource->usageFlags & VK_IMAGE_USAGE_TRANSFER_DST_BIT) == 0) return false;
+        if (image.aspect == VK_IMAGE_ASPECT_COLOR_BIT &&
+            (vkuFormatIsSRGB(image.format) || vkuFormatIsSINT(image.format) || vkuFormatIsUINT(image.format) ||
+             vkuFormatIsCompressed(image.format)))
+            return false;
+        return true;
+    }
+
+    void VulkanRenderer::MaterializeWirePendingClears(VkTextureManager::TextureResource& resource) {
+        if (resource.pendingClears.empty()) return;
+        if (resource.image == VK_NULL_HANDLE) {
+            resource.pendingClears.clear();
+            return;
+        }
+        auto& frame = m_frameContext.GetCurrent();
+        if (!frame.isCommandRecording) m_frameContext.BeginCommandRecording();
+        EndActiveRenderPassOn(frame.commandBuffer);
+        // After every earlier access to the image (the clears were issued after them).
+        if (resource.layout != VK_IMAGE_LAYOUT_GENERAL) {
+            if (!VkTextureManager::TransitionImageLayout(frame.commandBuffer, resource.image, resource.layout,
+                    VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                    resource.layout == VK_IMAGE_LAYOUT_UNDEFINED ? 0 : VK_ACCESS_MEMORY_WRITE_BIT,
+                    VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT, resource.aspect, 0, resource.mipLevels))
+                MagmaWireFatal("pending-clear-transition");
+        } else {
+            VkMemoryBarrier memory{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+            memory.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
+            memory.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+            vkCmdPipelineBarrier(frame.commandBuffer, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 1, &memory, 0, nullptr, 0, nullptr);
+        }
+        for (const auto& pending : resource.pendingClears) {
+            const VkImageSubresourceRange range{pending.aspects, pending.level, 1, pending.layer, pending.layers};
+            if (pending.aspects & VK_IMAGE_ASPECT_COLOR_BIT)
+                vkCmdClearColorImage(frame.commandBuffer, resource.image, VK_IMAGE_LAYOUT_GENERAL,
+                                     &pending.value.color, 1, &range);
+            else
+                vkCmdClearDepthStencilImage(frame.commandBuffer, resource.image, VK_IMAGE_LAYOUT_GENERAL,
+                                            &pending.value.depthStencil, 1, &range);
+        }
+        resource.pendingClears.clear();
+        // Recorded writes: the next sampled-image or attachment barrier must cover them.
+        BumpWireImageWriteEpoch();
+    }
+
+    // Records `aspects` of `image` cleared to `value` as pending, replacing whatever an earlier
+    // pending clear of the same subresource said for those aspects.
+    void VulkanRenderer::NoteWirePendingClear(const WireImage& image, VkImageAspectFlags aspects,
+                                              const VkClearValue& value) {
+        auto& pending = image.resource->pendingClears;
+        for (SizeT i = 0; i < pending.size();) {
+            auto& entry = pending[i];
+            if (entry.level == image.level && entry.layer == image.layer && entry.layers == image.layers) {
+                entry.aspects &= ~aspects;
+                if (entry.aspects == 0) {
+                    pending.erase(pending.begin() + static_cast<std::ptrdiff_t>(i));
+                    continue;
+                }
+            }
+            ++i;
+        }
+        VkTextureManager::WirePendingClear entry{};
+        entry.level = image.level;
+        entry.layer = image.layer;
+        entry.layers = image.layers;
+        entry.aspects = aspects;
+        entry.value = value;
+        pending.push_back(entry);
+    }
+
+    // The open wire draw pass's attachment that IS `image` (same image, level and layers), or
+    // VK_ATTACHMENT_UNUSED.
+    Uint32 VulkanRenderer::OpenPassAttachmentOf(const WireImage& image,
+                                                const Vector<WireDrawAttachmentKey>& attachments) {
+        for (Uint32 a = 0; a < attachments.size(); ++a) {
+            const auto& key = attachments[a];
+            if (key.image == image.image && key.level == image.level && key.layer == image.layer &&
+                key.layers == image.layers)
+                return a;
+        }
+        return VK_ATTACHMENT_UNUSED;
+    }
+
+    // A clear whose images the OPEN draw pass holds - through another framebuffer than the
+    // pass's own (the depth-only clear framebuffer) - is recorded inside that pass. Returns the
+    // buffers it did not take.
+    GLbitfield VulkanRenderer::ClearWireAttachmentsOfOpenPass(const MG_Pipe::MGPFramebufferState& fbo,
+            const ClearAttachmentPayload& payload, GLint drawbuffer) {
+        GLbitfield remaining = payload.mask & (GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+        if (!remaining || fbo.IsDefault || m_wirePreparationDepth != 0 || !m_wireDrawPass) return remaining;
+        auto& frame = m_frameContext.GetCurrent();
+        const auto* active = VkRenderPassManager::GetActiveRenderPass();
+        if (active == nullptr || active->commandBuffer != frame.commandBuffer || active->hash != m_wireDrawPass->hash)
+            return remaining;
+        const auto& key = m_wireDrawPassKey;
+        const RenderPassEntry* pass = m_wireDrawPass.get();
+        const VkCommandBuffer passBuffer = active->commandBuffer;
+        const Uint64 passHash = active->hash;
+        VkRect2D area{{0, 0}, {key.width, key.height}};
+        if (MG_Pipe::gPipeInputs.IsCapabilityEnabled(CapabilityInput::ScissorTest)) {
+            const auto& box = MG_Pipe::gPipeInputs.GetScissorBox();
+            const Int32 x0 = std::max(box.x(), 0), y0 = std::max(box.y(), 0);
+            const Int32 x1 = std::min(box.x() + box.z(), static_cast<Int32>(key.width));
+            const Int32 y1 = std::min(box.y() + box.w(), static_cast<Int32>(key.height));
+            if (x0 >= x1 || y0 >= y1) return remaining; // the standalone path answers an empty box
+            area = {{x0, y0}, {static_cast<Uint32>(x1 - x0), static_cast<Uint32>(y1 - y0)}};
+        }
+        // The image must be exactly the pass's extent, or the pass's render area is not its area.
+        const auto fits = [&](const WireImage& image) {
+            return image.extent.width == key.width && image.extent.height == key.height;
+        };
+        VkClearAttachment clears[MG_Pipe::kMGPipeMaxColorAttachments + 1]{};
+        Uint32 count = 0;
+        GLbitfield handled = 0;
+        VkTextureManager::PendingClearHold hold(*m_textureManager);
+        if (remaining & GL_COLOR_BUFFER_BIT) {
+            Bool all = true;
+            Uint32 colorCount = 0;
+            VkClearAttachment colorClears[MG_Pipe::kMGPipeMaxColorAttachments]{};
+            for (Uint32 i = 0; i < MG_Pipe::kMGPipeMaxColorAttachments && all; ++i) {
+                if (drawbuffer >= 0 && static_cast<Uint32>(drawbuffer) != i) continue;
+                const Int32 slot = fbo.DrawBuffers[i];
+                if (slot < 0 || slot >= static_cast<Int32>(MG_Pipe::kMGPipeMaxColorAttachments)) continue;
+                if (fbo.Color[slot].Kind == MG_Pipe::kMGPipeSurfaceKindNone) continue;
+                const auto mask = MG_Pipe::gPipeInputs.GetColorMaskIndexed(i);
+                if (!mask.r() && !mask.g() && !mask.b() && !mask.a()) continue;
+                if (!mask.r() || !mask.g() || !mask.b() || !mask.a() || payload.colorEncoding != ClearColorEncoding::Float) {
+                    all = false;
+                    break;
+                }
+                const WireImage image = ResolveWireImage(fbo, fbo.Color[slot], VK_IMAGE_ASPECT_COLOR_BIT, true);
+                const Uint32 a = image.image ? OpenPassAttachmentOf(image, key.attachments) : VK_ATTACHMENT_UNUSED;
+                Uint32 reference = VK_ATTACHMENT_UNUSED;
+                for (Uint32 c = 0; a != VK_ATTACHMENT_UNUSED && c < key.colorReferences.size(); ++c)
+                    if (key.colorReferences[c] == a) reference = c;
+                if (reference == VK_ATTACHMENT_UNUSED || !fits(image) || vkuFormatIsSRGB(image.format) ||
+                    vkuFormatIsSRGB(key.attachments[a].format) || vkuFormatIsSINT(image.format) ||
+                    vkuFormatIsUINT(image.format)) {
+                    all = false;
+                    break;
+                }
+                auto& clear = colorClears[colorCount++];
+                clear.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                clear.colorAttachment = reference;
+                clear.clearValue.color = MakeVkClearColorValue(payload, false);
+            }
+            if (all) {
+                for (Uint32 c = 0; c < colorCount; ++c) clears[count++] = colorClears[c];
+                handled |= GL_COLOR_BUFFER_BIT;
+            }
+        }
+        VkImageAspectFlags depthStencilAspects = 0;
+        const auto depthStencilHeld = [&](const MG_Pipe::MGPSurface& surface, VkImageAspectFlags aspect) {
+            const WireImage image = ResolveWireImage(fbo, surface, aspect, true);
+            return image.image && fits(image) && key.depthReference != VK_ATTACHMENT_UNUSED &&
+                   OpenPassAttachmentOf(image, key.attachments) == key.depthReference &&
+                   (key.attachments[key.depthReference].aspect & aspect) != 0;
+        };
+        if (remaining & GL_DEPTH_BUFFER_BIT) {
+            if (!MG_Pipe::gPipeInputs.GetDepthMask() || fbo.Depth.Kind == MG_Pipe::kMGPipeSurfaceKindNone) {
+                handled |= GL_DEPTH_BUFFER_BIT;
+            } else if (depthStencilHeld(fbo.Depth, VK_IMAGE_ASPECT_DEPTH_BIT)) {
+                depthStencilAspects |= VK_IMAGE_ASPECT_DEPTH_BIT;
+                handled |= GL_DEPTH_BUFFER_BIT;
+            }
+        }
+        if (remaining & GL_STENCIL_BUFFER_BIT) {
+            const Uint32 mask = MG_Pipe::gPipeInputs.GetStencilState(StencilFace::Front).WriteMask & 255u;
+            if (mask == 0 || fbo.Stencil.Kind == MG_Pipe::kMGPipeSurfaceKindNone) {
+                handled |= GL_STENCIL_BUFFER_BIT;
+            } else if (mask == 255u && depthStencilHeld(fbo.Stencil, VK_IMAGE_ASPECT_STENCIL_BIT)) {
+                depthStencilAspects |= VK_IMAGE_ASPECT_STENCIL_BIT;
+                handled |= GL_STENCIL_BUFFER_BIT;
+            }
+        }
+        if (depthStencilAspects) {
+            auto& clear = clears[count++];
+            clear.aspectMask = depthStencilAspects;
+            clear.clearValue.depthStencil = {payload.depth, payload.stencil};
+        }
+        // A resolve above may have submitted (a lazy upload) or run another image's deferred clear,
+        // closing the pass: then nothing is recorded and nothing is taken.
+        active = VkRenderPassManager::GetActiveRenderPass();
+        if (active == nullptr || active->commandBuffer != passBuffer || active->hash != passHash ||
+            m_wireDrawPass.get() != pass)
+            return remaining;
+        if (count > 0) {
+            const VkClearRect rect{area, 0, key.layers};
+            vkCmdClearAttachments(frame.commandBuffer, count, clears, 1, &rect);
+        }
+        return remaining & ~handled;
+    }
+
+    // A whole-image clear of images the open pass does not hold waits on the images (see the
+    // section comment). Returns the buffers it did not take.
+    GLbitfield VulkanRenderer::DeferWireClear(const MG_Pipe::MGPFramebufferState& fbo,
+            const ClearAttachmentPayload& payload, GLint drawbuffer) {
+        GLbitfield remaining = payload.mask & (GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+        if (!remaining || fbo.IsDefault || drawbuffer >= 0 || m_wirePreparationDepth != 0) return remaining;
+        const Bool scissor = MG_Pipe::gPipeInputs.IsCapabilityEnabled(CapabilityInput::ScissorTest);
+        const auto wholeImage = [&](const WireImage& image) {
+            if (!scissor) return true;
+            const auto& box = MG_Pipe::gPipeInputs.GetScissorBox();
+            return box.x() <= 0 && box.y() <= 0 && box.x() + box.z() >= static_cast<Int32>(image.extent.width) &&
+                   box.y() + box.w() >= static_cast<Int32>(image.extent.height);
+        };
+        const Bool passOpen = VkRenderPassManager::GetActiveRenderPass() != nullptr && m_wireDrawPass;
+        const auto heldByOpenPass = [&](const WireImage& image) {
+            return passOpen && OpenPassAttachmentOf(image, m_wireDrawPassKey.attachments) != VK_ATTACHMENT_UNUSED;
+        };
+        struct Target {
+            WireImage image;
+            VkImageAspectFlags aspects;
+            VkClearValue value;
+            Bool texture;
+        };
+        Target targets[MG_Pipe::kMGPipeMaxColorAttachments + 2]{};
+        Uint32 targetCount = 0;
+        GLbitfield handled = 0;
+        VkTextureManager::PendingClearHold hold(*m_textureManager);
+        if ((remaining & GL_COLOR_BUFFER_BIT) && payload.colorEncoding == ClearColorEncoding::Float) {
+            Bool all = true;
+            const Uint32 first = targetCount;
+            for (Uint32 i = 0; i < MG_Pipe::kMGPipeMaxColorAttachments && all; ++i) {
+                const Int32 slot = fbo.DrawBuffers[i];
+                if (slot < 0 || slot >= static_cast<Int32>(MG_Pipe::kMGPipeMaxColorAttachments)) continue;
+                const auto& surface = fbo.Color[slot];
+                if (surface.Kind == MG_Pipe::kMGPipeSurfaceKindNone) continue;
+                const auto mask = MG_Pipe::gPipeInputs.GetColorMaskIndexed(i);
+                if (!mask.r() && !mask.g() && !mask.b() && !mask.a()) continue;
+                if (!mask.r() || !mask.g() || !mask.b() || !mask.a()) {
+                    all = false;
+                    break;
+                }
+                const WireImage image = ResolveWireImage(fbo, surface, VK_IMAGE_ASPECT_COLOR_BIT, true);
+                if (!image.image || !WireImageCanDeferClear(image) || !wholeImage(image) || heldByOpenPass(image)) {
+                    all = false;
+                    break;
+                }
+                auto& target = targets[targetCount++];
+                target.image = image;
+                target.aspects = VK_IMAGE_ASPECT_COLOR_BIT;
+                target.value.color = MakeVkClearColorValue(payload, false);
+                target.texture = surface.Kind == MG_Pipe::kMGPipeSurfaceKindTexture;
+            }
+            if (all) handled |= GL_COLOR_BUFFER_BIT;
+            else targetCount = first;
+        }
+        const auto depthStencil = [&](const MG_Pipe::MGPSurface& surface, VkImageAspectFlags aspect) -> Bool {
+            const WireImage image = ResolveWireImage(fbo, surface, aspect, true);
+            if (!image.image || !WireImageCanDeferClear(image) || !wholeImage(image) || heldByOpenPass(image)) return false;
+            for (Uint32 t = 0; t < targetCount; ++t) {
+                auto& target = targets[t];
+                if (target.image.image == image.image && target.image.level == image.level &&
+                    target.image.layer == image.layer && target.image.layers == image.layers &&
+                    !(target.aspects & VK_IMAGE_ASPECT_COLOR_BIT)) {
+                    target.aspects |= aspect; // a combined depth/stencil image: one entry, both aspects
+                    return true;
+                }
+            }
+            auto& target = targets[targetCount++];
+            target.image = image;
+            target.aspects = aspect;
+            target.value.depthStencil = {payload.depth, payload.stencil};
+            target.texture = surface.Kind == MG_Pipe::kMGPipeSurfaceKindTexture;
+            return true;
+        };
+        if (remaining & GL_DEPTH_BUFFER_BIT) {
+            if (!MG_Pipe::gPipeInputs.GetDepthMask() || fbo.Depth.Kind == MG_Pipe::kMGPipeSurfaceKindNone)
+                handled |= GL_DEPTH_BUFFER_BIT;
+            else if (depthStencil(fbo.Depth, VK_IMAGE_ASPECT_DEPTH_BIT))
+                handled |= GL_DEPTH_BUFFER_BIT;
+        }
+        if (remaining & GL_STENCIL_BUFFER_BIT) {
+            const Uint32 mask = MG_Pipe::gPipeInputs.GetStencilState(StencilFace::Front).WriteMask & 255u;
+            if (mask == 0 || fbo.Stencil.Kind == MG_Pipe::kMGPipeSurfaceKindNone)
+                handled |= GL_STENCIL_BUFFER_BIT;
+            else if (mask == 255u && depthStencil(fbo.Stencil, VK_IMAGE_ASPECT_STENCIL_BIT))
+                handled |= GL_STENCIL_BUFFER_BIT;
+        }
+        m_textureManager->FlushPendingUploads();
+        for (Uint32 t = 0; t < targetCount; ++t) {
+            const auto& target = targets[t];
+            NoteWirePendingClear(target.image, target.aspects, target.value);
+            // A GPU write as far as the CPU shadow is concerned, as a recorded clear is.
+            if (target.texture)
+                m_textureManager->MarkWireTextureGpuWritten(target.image.storage, target.image.level,
+                                                            target.image.layer, target.image.layers);
+        }
+        return remaining & ~handled;
+    }
+
     void VulkanRenderer::ClearWireFramebuffer(const MG_Pipe::MGPFramebufferState& fbo,
                                               const ClearAttachmentPayload& clearRequest, GLint drawbuffer) {
         if (MG_Pipe::gPipeInputs.IsCapabilityEnabled(CapabilityInput::RasterizerDiscard)) return;
         // P15 S0: what the draw pass can take is cleared inside it (ClearWireFramebufferInPass,
         // WireDraw.inc); only the buffers it hands back take the standalone pass below.
+        // P15: in the open pass when it is this framebuffer's (the in-pass clear) or merely holds
+        // its images (another framebuffer's), deferred on the images when it covers them whole,
+        // and only then a pass of its own (the in-pass clear again, which begins one) or the
+        // standalone path.
         ClearAttachmentPayload payload = clearRequest;
-        payload.mask = ClearWireFramebufferInPass(fbo, clearRequest, drawbuffer);
+        if (m_wirePreparationDepth == 0 && WirePassMemoHolds(fbo, m_frameContext.GetCurrent()))
+            payload.mask = ClearWireFramebufferInPass(fbo, payload, drawbuffer);
+        if (payload.mask) payload.mask = ClearWireAttachmentsOfOpenPass(fbo, payload, drawbuffer);
+        if (payload.mask) payload.mask = DeferWireClear(fbo, payload, drawbuffer);
+        if (payload.mask) payload.mask = ClearWireFramebufferInPass(fbo, payload, drawbuffer);
         if (!payload.mask) return;
         RetireWireDrawPass();
         // A stream that neither presents nor finishes (an off-screen loop) never submits, so its
