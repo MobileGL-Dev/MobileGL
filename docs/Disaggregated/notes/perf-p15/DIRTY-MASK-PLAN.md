@@ -1,4 +1,8 @@
-# Per-context pipe dirty mask: plan (2026-10-09, not started)
+# Per-context pipe dirty mask: plan (2026-10-09, PARKED)
+
+**Status:** parked by the user on 2026-10-09 after the revised estimate (FCL ~0.012-0.03 ms/frame).
+The persistent-map flush goes first; revisit this for draw-heavy content. C8, the cross-context
+gap below, is approved as its own fix.
 
 Replaces `MGPipeTracker::Update`'s per-verb polling of ~25 frontend counters with a per-context
 mark word. Mutations OR in the subsystem bits they affect; the validate point visits only the
