@@ -4517,6 +4517,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
     } // namespace PrgramImpl
 
+    // Defined with the surface registry, below.
+    static void FlushAheadOfWindowBufferUse();
+
     void BindCurrentFBO(FramebufferTarget target) {
 #ifdef TRACY_ENABLE
         ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
@@ -4560,6 +4563,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 } else {
                     MGLOG_D("Binding default framebuffer as %s FBO",
                             (target == FramebufferTarget::Read ? "READ" : "DRAW"));
+                    if (FramebufferImpl::CurrentFramebufferBinding(target) != 0) FlushAheadOfWindowBufferUse();
                     // Through the shadow: a raw bind here would leave the shadow claiming
                     // the previous user FBO, false-skipping its next re-bind.
                     FramebufferImpl::BindFramebufferId(
@@ -4596,6 +4600,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 FramebufferImpl::g_alphaWidenedDrawBufferMask = 0;
                 FramebufferImpl::g_integerColorDrawBufferMask = 0;
             }
+            if (FramebufferImpl::CurrentFramebufferBinding(target) != 0) FlushAheadOfWindowBufferUse();
             FramebufferImpl::BindFramebufferId(
                 target == FramebufferTarget::Draw ? GL_DRAW_FRAMEBUFFER : GL_READ_FRAMEBUFFER, 0);
             return;
@@ -12985,6 +12990,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // session's apply) thread; the present ends the frame.
         thread_local EGLSurface t_ageAskedSurface = EGL_NO_SURFACE;
 
+        // Whether the frame being drawn on this thread has had its flush ahead of the window
+        // buffer (FlushAheadOfWindowBufferUse); the present ends the frame.
+        thread_local Bool t_windowBufferFlushIssued = false;
+
         // A WINDOW SURFACE'S BUFFER AGE, on unless MOBILEGL_ESPRYT_WINDOW_AGE=0 (or, on Android, the
         // property debug.mobilegl.espryt_window_age=0); off, a window answers 0 and its client
         // repaints whole frames. It was opt-in while a window repainted by age sometimes showed a
@@ -13014,6 +13023,28 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return nullptr;
         }
     } // namespace
+
+    // THE OFF-SCREEN PART OF A FRAME DOES NOT WAIT FOR THE WINDOW BUFFER. A window surface takes
+    // its next buffer when the frame first uses the default framebuffer, and about every other
+    // frame that is the buffer the display has only just released: its release fence is still
+    // pending. Whatever the driver has not yet submitted then goes out at the swap, in one batch
+    // behind that fence - the frame's off-screen passes included - so the GPU starts the whole
+    // frame only after the display's next commit. A flush just before the first use lets the
+    // off-screen work start now; only the window pass waits. Once per frame, on window surfaces
+    // only (a pbuffer has no buffer to wait for), and a flush is not a wait.
+    static void FlushAheadOfWindowBufferUse() {
+        if (t_windowBufferFlushIssued) return;
+        t_windowBufferFlushIssued = true;
+        NativeSessionState& session = ActiveNativeSession();
+        const EGLSurface surface = session.Draw;
+        if (surface == EGL_NO_SURFACE) return;
+        {
+            const std::lock_guard<std::mutex> lock(g_nativeRegistryMutex);
+            const auto* entry = FindSessionSurfaceLocked(session, surface);
+            if (entry == nullptr || entry->Window == static_cast<NativeWindowType>(0)) return;
+        }
+        if (g_GLESFuncs.glFlush) g_GLESFuncs.glFlush();
+    }
 
     Int32 CurrentDrawBufferAge(Bool damageRegionFollows) {
         NativeSessionState& session = ActiveNativeSession();
@@ -14136,8 +14167,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
             const std::lock_guard<std::mutex> lock(g_nativeRegistryMutex);
             if (auto* entry = FindSessionSurfaceLocked(session, drawSurface)) ++entry->Presents;
         }
-        // A frame boundary: the next frame's age is asked anew.
+        // A frame boundary: the next frame's age is asked anew, and its window buffer use flushed.
         t_ageAskedSurface = EGL_NO_SURFACE;
+        t_windowBufferFlushIssued = false;
 
         // P15: MOBILEGL_FRAMES_IN_FLIGHT, Espryt's half. Magma bounds the frames the GPU has
         // queued with its frame contexts (frame S+1 reuses the context of frame S+1-N); this is
