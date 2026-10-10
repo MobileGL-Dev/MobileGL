@@ -1314,7 +1314,7 @@ namespace {
     class TrackerShareGroup : public ::testing::Test {
     protected:
         void SetUp() override {
-            m_previous = Move(MG_State::pGLContext);
+            m_previous = MG_State::pGLContext.Take();
             const auto group = MakeShared<MG_State::GLState::ShareGroupState>();
             m_a = MakeShared<GLContext>(group);
             m_b = MakeShared<GLContext>(group);
