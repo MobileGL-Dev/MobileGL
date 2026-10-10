@@ -55,7 +55,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (payload.colorEncoding != ClearColorEncoding::Float) return;
         // With GL_FRAMEBUFFER_SRGB enabled GL performs the encoding itself, so the driver doing it
         // is exactly right and there is nothing to undo.
-        if (MG_Pipe::gPipeInputs.IsCapabilityEnabled(MobileGL::CapabilityInput::FramebufferSrgb)) return;
+        if (MG_Pipe::gPipeInputs->IsCapabilityEnabled(MobileGL::CapabilityInput::FramebufferSrgb)) return;
         if (ResolveSrgbAttachmentWriteFormat(destinationFormat, false) == destinationFormat) return;
 
         // sRGB -> linear (GL 4.6 core 8.24), applied to the colour channels only: alpha is stored

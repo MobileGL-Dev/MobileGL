@@ -58,7 +58,7 @@ namespace {
     class TrackerAggregates : public ::testing::Test {
     protected:
         void SetUp() override {
-            m_previous = Move(MG_State::pGLContext);
+            m_previous = MG_State::pGLContext.Take();
             MG_State::pGLContext = MakeUnique<GLContext>();
         }
         void TearDown() override { MG_State::pGLContext = Move(m_previous); }
@@ -174,7 +174,7 @@ namespace {
     }
 
     TEST_F(TrackerAggregates, ANoteWithoutALiveContextIsANoOp) {
-        SharedPtr<GLContext> held = Move(MG_State::pGLContext);
+        SharedPtr<GLContext> held = MG_State::pGLContext.Take();
         MGP_NOTE_AGGREGATE(BufferChange); // must not dereference a null context
         MG_State::pGLContext = Move(held);
         SUCCEED();
@@ -246,7 +246,7 @@ namespace {
     class TrackerWalk : public ::testing::Test {
     protected:
         void SetUp() override {
-            m_previous = Move(MG_State::pGLContext);
+            m_previous = MG_State::pGLContext.Take();
             MG_State::pGLContext = MakeUnique<GLContext>();
             m_savedPush = MG_Config::Features.PipePush;
             ResetTheServerSideSingletons();
@@ -904,7 +904,7 @@ namespace {
     class TrackerAttribPayload : public ::testing::Test {
     protected:
         void SetUp() override {
-            m_previous = Move(MG_State::pGLContext);
+            m_previous = MG_State::pGLContext.Take();
             MG_State::pGLContext = MakeUnique<GLContext>();
         }
         void TearDown() override { MG_State::pGLContext = Move(m_previous); }
@@ -993,7 +993,7 @@ namespace {
     class TrackerShippedEmitter : public ::testing::Test {
     protected:
         void SetUp() override {
-            m_previous = Move(MG_State::pGLContext);
+            m_previous = MG_State::pGLContext.Take();
             MG_State::pGLContext = MakeUnique<GLContext>();
             m_savedPush = MG_Config::Features.PipePush;
             MG_Config::Features.PipePush = kMGPipeSubsystemsMigratedAtP2;
@@ -1166,7 +1166,7 @@ namespace {
     // that the capability itself reaches the applier's assembled block on the next draw.
     TEST_F(TrackerShippedEmitter, AClipDistanceEnableReArmsTheResidualBlock) {
         Draw();
-        ASSERT_FALSE(MobileGL::MG_Pipe::gPipeInputs.IsCapabilityEnabled(CapabilityInput::ClipDistance0))
+        ASSERT_FALSE(MobileGL::MG_Pipe::gPipeInputs->IsCapabilityEnabled(CapabilityInput::ClipDistance0))
             << "the premise is gone: a fresh context already has clip distance 0 enabled";
 
         Ctx().SetCapability(CapabilityInput::ClipDistance0, true);
@@ -1177,7 +1177,7 @@ namespace {
             << "the premise is gone: a clip-distance enable now moves the pipeline version";
         EXPECT_EQ(static_cast<Uint16>(Ctx().GetPipelineStateVersion()), pipelineBefore);
 
-        EXPECT_TRUE(MobileGL::MG_Pipe::gPipeInputs.IsCapabilityEnabled(CapabilityInput::ClipDistance0))
+        EXPECT_TRUE(MobileGL::MG_Pipe::gPipeInputs->IsCapabilityEnabled(CapabilityInput::ClipDistance0))
             << "a capability change that moves only m_version never reached the applier's block";
     }
 
@@ -1295,7 +1295,7 @@ namespace {
         // stand into the next verb. A draw with no context is a no-op; its argument must not
         // outlive it.
         MGPipeSetPendingBaseInstance(11);
-        SharedPtr<GLContext> parked = Move(MG_State::pGLContext);
+        SharedPtr<GLContext> parked = MG_State::pGLContext.Take();
         Draw();
         EXPECT_EQ(MGPipePendingBaseInstance(), 0u)
             << "the no-live-context exit left the draw's base instance standing for the next verb";

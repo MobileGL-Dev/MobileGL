@@ -132,7 +132,7 @@ namespace {
     // case out of the gate's reach.
     struct EmitterScope {
         EmitterScope() {
-            m_previousContext = Move(MG_State::pGLContext);
+            m_previousContext = MG_State::pGLContext.Take();
             MG_State::pGLContext = MakeUnique<GLContext>();
             MGPipeVertexInputEmitterInstance().Reset();
             MGPipeVertexInputEmitterInstance().ResetCounters();

@@ -375,7 +375,7 @@ namespace {
             m_savedResourceOps = MGPipeGetResourceOps();
             static const MGPipeResourceOps kEmpty{};
             MGPipeSetResourceOps(&kEmpty);
-            m_savedContext = Move(MG_State::pGLContext);
+            m_savedContext = MG_State::pGLContext.Take();
             MG_State::pGLContext = MakeUnique<MG_State::GLState::GLContext>();
 
             m_savedTable = MG_Backend::gBackendFunctionsTable;

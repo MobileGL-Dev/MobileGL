@@ -115,7 +115,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // addresses again - the cached pointers cannot go stale. Invalidation is
     // exactly the pointer compare below.
     using FbBindingSlot =
-        std::remove_reference_t<decltype(MG_Pipe::gPipeInputs.GetFramebufferBindingSlot(FramebufferTarget::Draw))>;
+        std::remove_reference_t<decltype(MG_Pipe::gPipeInputs->GetFramebufferBindingSlot(FramebufferTarget::Draw))>;
     // P2 step e4. On the {slot, gen} arm this is an ORDINARY read of pushed state and the cache
     // above is not consulted, which closes the P1 accessor bypass: the cached raw pointer ran
     // the checked accessor once per context change and then handed out the pointee forever, so
@@ -132,10 +132,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // frontend getter still linear-scans, so the cache is exactly the code it was.
     static inline FbBindingSlot& GetFramebufferBindingSlotChecked(FramebufferTarget target) {
         if (EsprytSlotTablesEnabled()) {
-            return MG_Pipe::gPipeInputs.GetFramebufferBindingSlot(target);
+            return MG_Pipe::gPipeInputs->GetFramebufferBindingSlot(target);
         }
         // No legacy arm compiled: EsprytSlotTablesEnabled() is unconditionally true above.
-        return MG_Pipe::gPipeInputs.GetFramebufferBindingSlot(target);
+        return MG_Pipe::gPipeInputs->GetFramebufferBindingSlot(target);
     }
 
     // A4, TAKEN AT THE VERIFICATION ROUND, AND THE FOUR TEMPORARY LATCHES ARE GONE WITH IT.
@@ -181,7 +181,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
     [[noreturn]] static void RefuseFramebufferBindingSlotRead() {
         MG_Pipe::MGPipeInputPoisonFatalForVerb(MG_Pipe::MGPipeInputField::GetFramebufferBindingSlot,
-                                               MG_Pipe::gPipeInputs.CurrentVerb());
+                                               MG_Pipe::gPipeInputs->CurrentVerb());
     }
 
     static Bool IsDualSourceBlendFactor(BlendFactor v) {
@@ -1146,7 +1146,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
                 const SizeT packedStride = program->GetTransformFeedbackPackedStride();
                 const SizeT modelledVertices =
-                    static_cast<SizeT>(MG_Pipe::gPipeInputs.GetTransformFeedbackCapturedVertices());
+                    static_cast<SizeT>(MG_Pipe::gPipeInputs->GetTransformFeedbackCapturedVertices());
                 const SizeT vertices = std::min<SizeT>(modelledVertices, xfb.scatterCapacityVertices);
                 if (packedStride == 0 || vertices == 0) {
                     // The scatter path redirected the DRIVER's capture into the scratch buffer,
@@ -1669,7 +1669,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
             auto* twin = ResolveVaoTwin(MG_Pipe::MGPipeApplier().BoundVertexElements);
             if (twin == nullptr) return;
-            const auto& currentVAO = MG_Pipe::gPipeInputs.GetBoundVertexArray();
+            const auto& currentVAO = MG_Pipe::gPipeInputs->GetBoundVertexArray();
             if (!currentVAO) return;
             twin->SyncClientSideAttributesForDrawArrays(currentVAO, first, count);
             return;
@@ -1766,7 +1766,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             for (Uint32 remaining = memo.pendingMask; remaining != 0; remaining &= remaining - 1) {
                 const Uint32 location = static_cast<Uint32>(std::countr_zero(remaining));
 
-                const auto& currentValue = MG_Pipe::gPipeInputs.GetCurrentVertexAttribute(location);
+                const auto& currentValue = MG_Pipe::gPipeInputs->GetCurrentVertexAttribute(location);
                 const auto typeInfo = MG_State::GLState::ClassifyVertexAttribType(program->GetAttribType(location));
                 switch (typeInfo.baseType) {
                 case MG_State::GLState::VertexAttribBaseType::Float:
@@ -1909,7 +1909,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // below rather than reading past the end.
                 const GLenum attribType =
                     location < link.attribTypes.size() ? link.attribTypes[location] : 0;
-                const auto& currentValue = MG_Pipe::gPipeInputs.GetCurrentVertexAttribute(location);
+                const auto& currentValue = MG_Pipe::gPipeInputs->GetCurrentVertexAttribute(location);
                 const auto typeInfo = MG_State::GLState::ClassifyVertexAttribType(attribType);
                 switch (typeInfo.baseType) {
                 case MG_State::GLState::VertexAttribBaseType::Float:
@@ -1986,7 +1986,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         static void CaptureUnitBindings(Int maxTouchedUnit, Vector<UnitBindingsSnapshot>& out) {
             out.resize(static_cast<SizeT>(maxTouchedUnit + 1));
             for (Int unit = 0; unit <= maxTouchedUnit; ++unit) {
-                auto& textureUnit = MG_Pipe::gPipeInputs.GetTextureUnitObject(unit);
+                auto& textureUnit = MG_Pipe::gPipeInputs->GetTextureUnitObject(unit);
                 auto& snapshot = out[static_cast<SizeT>(unit)];
                 const auto& slots = textureUnit.GetAllBindingSlots();
                 for (SizeT i = 0; i < slots.size(); ++i) {
@@ -1999,7 +1999,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         static Bool UnitBindingsUnchanged(Int maxTouchedUnit, const Vector<UnitBindingsSnapshot>& snapshots) {
             if (snapshots.size() != static_cast<SizeT>(maxTouchedUnit + 1)) return false;
             for (Int unit = 0; unit <= maxTouchedUnit; ++unit) {
-                auto& textureUnit = MG_Pipe::gPipeInputs.GetTextureUnitObject(unit);
+                auto& textureUnit = MG_Pipe::gPipeInputs->GetTextureUnitObject(unit);
                 const auto& snapshot = snapshots[static_cast<SizeT>(unit)];
                 const auto& slots = textureUnit.GetAllBindingSlots();
                 for (SizeT i = 0; i < slots.size(); ++i) {
@@ -2146,8 +2146,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 MG_Util::PipeStats::CountGate(MG_Util::PipeStats::Gate::EsprytUnitBindingsEpoch,
                                               /*hit=*/false);
             }
-            const Uint64 contextId = MG_Pipe::gPipeInputs.GetTextureContextId();
-            const Uint64 bindGeneration = MG_Pipe::gPipeInputs.GetTextureBindGeneration();
+            const Uint64 contextId = MG_Pipe::gPipeInputs->GetTextureContextId();
+            const Uint64 bindGeneration = MG_Pipe::gPipeInputs->GetTextureBindGeneration();
             if (MG_Util::PipeStats::Enabled()) {
                 // Two accessor calls whichever way the shutter goes; only the unit WALK is
                 // gated, and that walk reads no GLContext accessor of its own.
@@ -2366,7 +2366,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         DrawTextureSyncKeys CaptureDrawTextureSyncKeys() {
             DrawTextureSyncKeys keys;
-            keys.contextId = MG_Pipe::gPipeInputs.GetTextureContextId();
+            keys.contextId = MG_Pipe::gPipeInputs->GetTextureContextId();
             // Units past the frontend's high-water mark have provably-empty slots.
             //
             // P4a e2 DELIBERATELY DOES NOT take this off the sampler-view window's Count, and
@@ -2379,8 +2379,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // CLIENT as the count argument and says nothing about re-deriving it server-side.
             // It is one accessor read per draw; the integrator can move it in one line once a
             // tree exists where the two can be compared.
-            keys.maxTouchedUnit = MG_Pipe::gPipeInputs.GetMaxTouchedTextureUnit();
-            keys.samplingGeneration = MG_Pipe::gPipeInputs.GetSamplingResolutionGeneration();
+            keys.maxTouchedUnit = MG_Pipe::gPipeInputs->GetMaxTouchedTextureUnit();
+            keys.samplingGeneration = MG_Pipe::gPipeInputs->GetSamplingResolutionGeneration();
             keys.unitBindingsEpoch = CurrentUnitBindingsEpoch(keys.maxTouchedUnit);
             if (MG_Util::PipeStats::Enabled()) {
                 // The three reads above; CurrentUnitBindingsEpoch counts its own two when it
@@ -3455,7 +3455,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
-            Uint16 currentRenderStateVersion = MG_Pipe::gPipeInputs.GetRenderStateParametersVersion();
+            Uint16 currentRenderStateVersion = MG_Pipe::gPipeInputs->GetRenderStateParametersVersion();
             const Bool forceFullPush = g_forceFullRenderStateResync;
             g_forceFullRenderStateResync = false;
             // The alpha discipline for widened colour attachments (see the header comment on
@@ -3483,7 +3483,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 MG_Util::PipeStats::AddCalls(MG_Util::PipeStats::CallClass::AccessorCalls, 3);
             }
 
-            const auto& parameters = MG_Pipe::gPipeInputs.GetRenderStateParameters();
+            const auto& parameters = MG_Pipe::gPipeInputs->GetRenderStateParameters();
 
             // The frontend has ONE version for the whole parameter block, so a per-draw blend
             // toggle used to re-diff all ~40 pieces of state field by field on every draw
@@ -3512,7 +3512,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 !g_hasSyncedRenderState || std::memcmp(currentBytes + kBlendSpanEnd, syncedBytes + kBlendSpanEnd,
                                                        sizeof(RenderStateParameters) - kBlendSpanEnd) != 0;
 
-            IntVec4 backendViewport = MG_Pipe::gPipeInputs.GetViewport();
+            IntVec4 backendViewport = MG_Pipe::gPipeInputs->GetViewport();
             if (backendViewport.z() <= 0 || backendViewport.w() <= 0) {
                 Int surfaceWidth = 0;
                 Int surfaceHeight = 0;
@@ -3595,7 +3595,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
               // never turns it on, so the driver has to be told to write raw. Without this a render
               // into an sRGB colour buffer comes back encoded once too often (the shader's own
               // decode on the next fetch then leaves the value one conversion short).
-                const Bool srgbWrites = MG_Pipe::gPipeInputs.IsCapabilityEnabled(CapabilityInput::FramebufferSrgb);
+                const Bool srgbWrites = MG_Pipe::gPipeInputs->IsCapabilityEnabled(CapabilityInput::FramebufferSrgb);
                 if (g_GLESCapabilities.SupportsSrgbWriteControl &&
                     (forceFullPush || srgbWrites != g_syncedSrgbFramebufferWrites)) {
                     srgbWrites ? g_GLESFuncs.glEnable(GL_FRAMEBUFFER_SRGB)
@@ -4505,11 +4505,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 !twin->ImageUnitFormatsStillMatch() ||
                 (twin->GetPassthroughTessControlPatchVertices() >= 0 &&
                  (twin->GetPassthroughTessControlPatchVertices() !=
-                      static_cast<Int>(MG_Pipe::gPipeInputs.GetPatchVertices()) ||
+                      static_cast<Int>(MG_Pipe::gPipeInputs->GetPatchVertices()) ||
                   !BitwiseEqual(twin->GetPassthroughTessControlOuterLevel(),
-                                MG_Pipe::gPipeInputs.GetPatchDefaultOuterLevel()) ||
+                                MG_Pipe::gPipeInputs->GetPatchDefaultOuterLevel()) ||
                   !BitwiseEqual(twin->GetPassthroughTessControlInnerLevel(),
-                                MG_Pipe::gPipeInputs.GetPatchDefaultInnerLevel())))) {
+                                MG_Pipe::gPipeInputs->GetPatchDefaultInnerLevel())))) {
                 twin->SyncToBackendByHandle(cso);
             }
             g_currentDrawProgramHandle = cso;
@@ -5846,12 +5846,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // times; rasterizer discard means there are no fragments to gate at all, so replaying
         // would be pure cost with nothing to show for it. Both fall back to a single pass with an
         // open gate, i.e. to the pre-emulation behaviour, rather than to wrong data.
-        if (MG_Pipe::gPipeInputs.IsTransformFeedbackActive() ||
-            MG_Pipe::gPipeInputs.IsCapabilityEnabled(CapabilityInput::RasterizerDiscard)) {
+        if (MG_Pipe::gPipeInputs->IsTransformFeedbackActive() ||
+            MG_Pipe::gPipeInputs->IsCapabilityEnabled(CapabilityInput::RasterizerDiscard)) {
             return 1;
         }
 
-        const auto& parameters = MG_Pipe::gPipeInputs.GetRenderStateParameters();
+        const auto& parameters = MG_Pipe::gPipeInputs->GetRenderStateParameters();
         Int surfaceWidth = 0;
         Int surfaceHeight = 0;
         if (!QueryCurrentSurfaceSize(surfaceWidth, surfaceHeight)) {
@@ -6228,7 +6228,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // color must go through glClearBufferfv, which GLES does not clamp.
         GLbitfield remainingMask = mask;
         if ((mask & GL_COLOR_BUFFER_BIT) != 0) {
-            const FloatVec4& cc = MG_Pipe::gPipeInputs.GetRenderStateParameters().ClearColor;
+            const FloatVec4& cc = MG_Pipe::gPipeInputs->GetRenderStateParameters().ClearColor;
             const Bool outOfRange = cc.x() < 0.f || cc.x() > 1.f || cc.y() < 0.f || cc.y() > 1.f || cc.z() < 0.f ||
                                     cc.z() > 1.f || cc.w() < 0.f || cc.w() > 1.f;
             // A widened attachment's stored alpha has to end up 1.0, and glClear applies ONE
@@ -6456,13 +6456,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
     } // namespace
 
     RestartSubstitutionKind ResolveRestartSubstitution(GLenum indexType) {
-        if (!MG_Pipe::gPipeInputs.IsCapabilityEnabled(CapabilityInput::PrimitiveRestart) ||
-            MG_Pipe::gPipeInputs.IsCapabilityEnabled(CapabilityInput::PrimitiveRestartFixedIndex)) {
+        if (!MG_Pipe::gPipeInputs->IsCapabilityEnabled(CapabilityInput::PrimitiveRestart) ||
+            MG_Pipe::gPipeInputs->IsCapabilityEnabled(CapabilityInput::PrimitiveRestartFixedIndex)) {
             return RestartSubstitutionKind::None;
         }
         const Uint32 fixedMax = MG_Util::FixedRestartIndexForGLType(indexType);
         if (fixedMax == 0) return RestartSubstitutionKind::None;
-        const Uint32 restartIndex = MG_Pipe::gPipeInputs.GetPrimitiveRestartIndex();
+        const Uint32 restartIndex = MG_Pipe::gPipeInputs->GetPrimitiveRestartIndex();
         if (restartIndex == fixedMax) return RestartSubstitutionKind::None;
         // Strictly greater, never truncated. GL 4.6 core 10.3.6 compares the fetched index
         // zero-extended against the full 32-bit state, so an index this type cannot hold matches
@@ -6502,7 +6502,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
         const SizeT sourceIndexSize = MG_Util::GetGLTypeSize(indexType);
         const Uint32 fixedMax = MG_Util::FixedRestartIndexForGLType(indexType);
-        const Uint32 applicationRestartIndex = MG_Pipe::gPipeInputs.GetPrimitiveRestartIndex();
+        const Uint32 applicationRestartIndex = MG_Pipe::gPipeInputs->GetPrimitiveRestartIndex();
 
         const Uint8* source = nullptr;
         SizeT indexCount = 0;
@@ -7395,8 +7395,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // restore. Drop the flag so it is not misattributed to the emulation's own work.
             DrainBlitErrors();
 
-            if (MG_Pipe::gPipeInputs.IsTransformFeedbackActive() &&
-                !MG_Pipe::gPipeInputs.IsTransformFeedbackPaused() && g_GLESFuncs.glPauseTransformFeedback) {
+            if (MG_Pipe::gPipeInputs->IsTransformFeedbackActive() &&
+                !MG_Pipe::gPipeInputs->IsTransformFeedbackPaused() && g_GLESFuncs.glPauseTransformFeedback) {
                 g_GLESFuncs.glPauseTransformFeedback();
                 m_pausedTransformFeedback = true;
                 DrainBlitErrors();
@@ -8618,7 +8618,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #ifdef TRACY_ENABLE
         ZoneScopedNC(__func__, TRACY_ZONECOLOR_BACKEND);
 #endif
-        auto unit = MG_Pipe::gPipeInputs.GetActiveTextureUnit();
+        auto unit = MG_Pipe::gPipeInputs->GetActiveTextureUnit();
 
         auto textureTarget = MG_Util::ConvertGLEnumToTextureTarget(target);
         if (!TextureImpl::IsSupportedTextureTarget(textureTarget)) {
@@ -8695,7 +8695,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // The frontend's current PACK parameters, for readbacks the ES driver serves
     // directly with the client's layout.
     static PixelStoreImpl::PackState PackStateFromContext() {
-        const auto packParams = MG_Pipe::gPipeInputs.GetPixelStoreParameters(false);
+        const auto packParams = MG_Pipe::gPipeInputs->GetPixelStoreParameters(false);
         return {static_cast<GLint>(packParams.Alignment), static_cast<GLint>(packParams.RowLength),
                 static_cast<GLint>(packParams.SkipRows), static_cast<GLint>(packParams.SkipPixels)};
     }
@@ -8891,7 +8891,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 MG_Util::ConvertGLEnumToString(err).c_str(),
                 MG_Util::ConvertGLEnumToString(target).c_str(),
                 MG_Util::ConvertTextureInternalFormatToString(format).c_str());
-        MG_Pipe::gPipeInputs.RecordError(
+        MG_Pipe::gPipeInputs->RecordError(
             ConvertGLESErrorToErrorCode(err),
             MakeUnique<GenericErrorInfo>("DirectGLES", operation,
                                          MG_Util::ConvertGLEnumToString(err)));
@@ -9407,7 +9407,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         // Bind necessary FBO and texture
         BindCurrentFBO(FramebufferTarget::Read);
-        Uint activeTextureUnit = MG_Pipe::gPipeInputs.GetActiveTextureUnit();
+        Uint activeTextureUnit = MG_Pipe::gPipeInputs->GetActiveTextureUnit();
         TextureImpl::BackendTextureObject* dstBackendTexture = nullptr;
         TextureInternalFormat mgInternalFormat{};
         // P5c (hd, CONTRACT-P5C §3.4): with an active transport the destination resolves from
@@ -9516,7 +9516,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         // Bind necessary FBO and texture
         BindCurrentFBO(FramebufferTarget::Read);
-        auto activeTextureUnit = MG_Pipe::gPipeInputs.GetActiveTextureUnit();
+        auto activeTextureUnit = MG_Pipe::gPipeInputs->GetActiveTextureUnit();
         TextureImpl::BackendTextureObject* dstBackendTexture = nullptr;
         // P5c (hd, CONTRACT-P5C §3.4): see CopyTexImage2D - the record's Dst handle, never the
         // client's unit binding slot or the client allocator (T2/T4).
@@ -10347,7 +10347,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     template <typename FillRow>
     static Bool StoreReadbackRowsToClient(GLsizei width, GLsizei height, SizeT dstPixelBytes, void* pixels,
                                           const char* what, FillRow&& fillRow) {
-        const auto packParams = MG_Pipe::gPipeInputs.GetPixelStoreParameters(false);
+        const auto packParams = MG_Pipe::gPipeInputs->GetPixelStoreParameters(false);
         const SizeT rowPixels = static_cast<SizeT>(packParams.RowLength > 0 ? packParams.RowLength : width);
         const SizeT dstRowStride = AlignPixelRow(rowPixels * dstPixelBytes, packParams.Alignment);
         const SizeT dstOffset = static_cast<SizeT>(std::max(packParams.SkipRows, 0)) * dstRowStride +
@@ -11811,7 +11811,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // and legacy GL_RED reads) goes through the wide-format conversion, which picks a wide type
         // the driver accepts for the current attachment. GL_PACK_SWAP_BYTES has no ES equivalent, so
         // it always takes the conversion path (which swaps on the CPU).
-        const Bool packSwapBytes = MG_Pipe::gPipeInputs.GetPixelStoreParameters(false).SwapBytes;
+        const Bool packSwapBytes = MG_Pipe::gPipeInputs->GetPixelStoreParameters(false).SwapBytes;
         // The read buffer is what glReadPixels reads, so the frontend's READ binding is exactly
         // the right thing to ask here.
         const Bool forceOpaqueAlpha = FramebufferImpl::IsAlphaWidenedFallbackReadAttachment();

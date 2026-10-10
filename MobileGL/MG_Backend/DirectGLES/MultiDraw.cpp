@@ -44,14 +44,14 @@ namespace MobileGL::MG_Backend::DirectGLES::MultiDrawImpl {
         // verbatim is already "this batch restarts nowhere".
         Uint32 RestartSentinelFor(GLenum type) {
             if (ResolveRestartSubstitution(type) != RestartSubstitutionKind::None) {
-                return MG_Pipe::gPipeInputs.GetPrimitiveRestartIndex();
+                return MG_Pipe::gPipeInputs->GetPrimitiveRestartIndex();
             }
             return MG_Util::FixedRestartIndexForGLType(type);
         }
 
         Bool RestartActive() {
-            return MG_Pipe::gPipeInputs.IsCapabilityEnabled(CapabilityInput::PrimitiveRestart) ||
-                   MG_Pipe::gPipeInputs.IsCapabilityEnabled(CapabilityInput::PrimitiveRestartFixedIndex);
+            return MG_Pipe::gPipeInputs->IsCapabilityEnabled(CapabilityInput::PrimitiveRestart) ||
+                   MG_Pipe::gPipeInputs->IsCapabilityEnabled(CapabilityInput::PrimitiveRestartFixedIndex);
         }
 
         // Vertices per primitive for the modes whose sub-draws may be concatenated into a

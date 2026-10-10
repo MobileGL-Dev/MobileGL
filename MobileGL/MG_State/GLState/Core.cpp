@@ -1655,8 +1655,40 @@ namespace MobileGL::MG_State {
     } // namespace GLState
 
     // Leak-at-exit storage; see GlobalObjects.cpp.
-    thread_local SharedPtr<GLState::GLContext> pGLContext;
+    constinit thread_local CurrentGLContextSlot pGLContext;
+
+    // The reference that keeps the calling thread's pGLContext alive (Core.h). Registered for
+    // destruction on the thread's first assignment; at thread exit it clears the slot first, so
+    // whatever the context's destructor reaches sees no current context rather than one that is
+    // being destroyed.
+    struct CurrentGLContextOwner {
+        SharedPtr<GLState::GLContext> context;
+        ~CurrentGLContextOwner() { pGLContext.m_context = nullptr; }
+    };
+    namespace {
+        thread_local CurrentGLContextOwner tCurrentGLContextOwner;
+    }
+
+    const SharedPtr<GLState::GLContext>& CurrentGLContextSlot::Shared() const {
+        return tCurrentGLContextOwner.context;
+    }
+
+    SharedPtr<GLState::GLContext> CurrentGLContextSlot::Take() {
+        m_context = nullptr;
+        return Move(tCurrentGLContextOwner.context);
+    }
+
+    CurrentGLContextSlot& CurrentGLContextSlot::operator=(SharedPtr<GLState::GLContext> context) {
+        auto& owner = tCurrentGLContextOwner;
+        m_context = context.get();
+        // The old context's last reference may run destructors that read pGLContext: the slot
+        // already names the new one, as it did when this was a SharedPtr assignment.
+        SharedPtr<GLState::GLContext> previous = Move(owner.context);
+        owner.context = Move(context);
+        return *this;
+    }
+
 #if MOBILEGL_BUILD_DISAGGREGATED
-    thread_local Bool tThreadReleasedLostContext = false;
+    constinit thread_local Bool tThreadReleasedLostContext = false;
 #endif
 } // namespace MobileGL::MG_State

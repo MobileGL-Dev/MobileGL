@@ -238,7 +238,7 @@
         // Mip generation samples and writes the texture's own color space;
         // GL_FRAMEBUFFER_SRGB only controls framebuffer operations.
         if (!mipmap) destination.format = ResolveSrgbAttachmentWriteFormat(destination.format,
-            MG_Pipe::gPipeInputs.IsCapabilityEnabled(CapabilityInput::FramebufferSrgb));
+            MG_Pipe::gPipeInputs->IsCapabilityEnabled(CapabilityInput::FramebufferSrgb));
         VkFormatProperties destinationProperties{};
         vkGetPhysicalDeviceFormatProperties(m_physicalDevice.handle, destination.format, &destinationProperties);
         if (!(destinationProperties.optimalTilingFeatures & VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT)) return false;

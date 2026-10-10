@@ -87,7 +87,7 @@ namespace {
     class FieldOwnershipTest : public ::testing::Test {
     protected:
         void SetUp() override {
-            m_previous = Move(MG_State::pGLContext);
+            m_previous = MG_State::pGLContext.Take();
             MG_State::pGLContext = MakeUnique<GLContext>();
 #if MOBILEGL_BUILD_DISAGGREGATED
             MG_Config::Ipc.StrictErrors = false;
@@ -486,14 +486,14 @@ TEST_F(FieldOwnershipTest, TheResidualFillsSuppliedMemoReKeysOnEveryInputThatMov
 
 TEST_F(FieldOwnershipTest, AServerStampMakesRecordSuppliedFieldsFreshAndWithdrawsTheRest) {
     MGPipeServerStampVerbBoundary(MGPipeVerb::Clear);
-    EXPECT_TRUE(gPipeInputs.ServerStampedVerb());
-    EXPECT_EQ(gPipeInputs.CurrentVerb(), MGPipeVerb::Clear);
+    EXPECT_TRUE(gPipeInputs->ServerStampedVerb());
+    EXPECT_EQ(gPipeInputs->CurrentVerb(), MGPipeVerb::Clear);
     const MGPipeFieldMask& mask = kMGPipeClassFieldMask[static_cast<SizeT>(
         kMGPipeVerbClass[static_cast<SizeT>(MGPipeVerb::Clear)])];
     SizeT stamped = 0;
     for (SizeT i = 0; i < kMGPipeInputFieldCount; ++i) {
         const auto field = static_cast<MGPipeInputField>(i);
-        const Bool fresh = MGPipeInputFieldIsFresh(gPipeInputs.FilledState(), field);
+        const Bool fresh = MGPipeInputFieldIsFresh(gPipeInputs->FilledState(), field);
         // The stamp respects the verb's own may-read table for the client fill's reason: a
         // field outside the class was never copied for this verb, so answering it would hand
         // the server the previous verb's value.
@@ -512,7 +512,7 @@ TEST_F(FieldOwnershipTest, AServerStampMakesRecordSuppliedFieldsFreshAndWithdraw
     // `answerable` out of kMGPipeFieldOwnership, so it can only catch a stamp that disagrees
     // with the table - never a table that is wrong. These four say what the stamp must do for
     // four fields whose class is an argument of this package rather than a lookup.
-    const MGPipeFilledState& filled = gPipeInputs.FilledState();
+    const MGPipeFilledState& filled = gPipeInputs->FilledState();
     EXPECT_TRUE(MGPipeInputFieldIsFresh(filled, MGPipeInputField::GetClearColor));         // supplied
     EXPECT_TRUE(MGPipeInputFieldIsFresh(filled, MGPipeInputField::GetRenderStateParameters));
     EXPECT_FALSE(MGPipeInputFieldIsFresh(filled, MGPipeInputField::GetFramebufferBindingSlot)); // pulled
@@ -525,14 +525,14 @@ TEST_F(FieldOwnershipTest, AServerStampMakesRecordSuppliedFieldsFreshAndWithdraw
 // changing. Before this, the seven most dangerous fields were exempt by construction.
 TEST_F(FieldOwnershipTest, TheStickyExemptionIsCancelledByTheServerStamp) {
     MGPipeValidateForVerb(MGPipeVerb::Clear); // the CLIENT fills and stamps all 63, sticky included
-    EXPECT_TRUE(MGPipeInputFieldIsFresh(gPipeInputs.FilledState(), MGPipeInputField::RecordError));
+    EXPECT_TRUE(MGPipeInputFieldIsFresh(gPipeInputs->FilledState(), MGPipeInputField::RecordError));
     MGPipeServerStampVerbBoundary(MGPipeVerb::Clear);
     for (SizeT i = 0; i < kMGPipeFieldOwnershipForwardCount; ++i) {
         const MGPipeInputField field = kMGPipeFieldOwnershipForwardField[i];
         // P5f fe retired the scalar forwards to server-owned answers. Their freshness
         // comes from that ownership; the remaining client forwards lose the exemption.
         const Bool serverOwned = MGPipeFieldOwnershipOf(field) == MGPipeFieldOwnership::kApplierDerived;
-        EXPECT_EQ(MGPipeInputFieldIsFresh(gPipeInputs.FilledState(), field), serverOwned)
+        EXPECT_EQ(MGPipeInputFieldIsFresh(gPipeInputs->FilledState(), field), serverOwned)
             << kMGPipeInputFieldNames[Index(field)] << " has the wrong server-stamp freshness";
     }
 }
@@ -543,21 +543,21 @@ TEST_F(FieldOwnershipTest, ARecordSuppliedFieldIsReadableAfterAServerStamp) {
     ASSERT_EQ(MGPipeFieldOwnershipOf(MGPipeInputField::GetClearColor),
               MGPipeFieldOwnership::kRecordSupplied);
     MGPipeServerStampVerbBoundary(MGPipeVerb::Clear);
-    (void)gPipeInputs.GetClearColor();
-    (void)gPipeInputs.GetRenderStateParameters();
+    (void)gPipeInputs->GetClearColor();
+    (void)gPipeInputs->GetRenderStateParameters();
     EXPECT_EQ(MGPipeResidualPullCount(), Uint64{0});
     // The pixel store is in kReadback's class, not kClear's, so its readable half is exercised
     // under the verb that actually reads it. And P5c rv's record-supplied rows join it there:
     // GetActiveTextureUnit is exactly the read that used to count into `rsp`.
     MGPipeServerStampVerbBoundary(MGPipeVerb::ReadPixels);
-    (void)gPipeInputs.GetPixelStoreParameters(false); // the half that has a carrier
-    (void)gPipeInputs.GetActiveTextureUnit();         // P5c rv: set_context_values carries it
-    (void)gPipeInputs.GetMaxTouchedTextureUnit();
+    (void)gPipeInputs->GetPixelStoreParameters(false); // the half that has a carrier
+    (void)gPipeInputs->GetActiveTextureUnit();         // P5c rv: set_context_values carries it
+    (void)gPipeInputs->GetMaxTouchedTextureUnit();
     EXPECT_EQ(MGPipeResidualPullCount(), Uint64{0});
     // And a shutter answers the applier's own Serial under a server stamp (APPLIER-DERIVED),
     // not the client's residual-fill copy: still zero pulls, and the answer MOVES when the
     // applier's texture state does.
-    (void)gPipeInputs.GetTextureBindGeneration();
+    (void)gPipeInputs->GetTextureBindGeneration();
     EXPECT_EQ(MGPipeResidualPullCount(), Uint64{0});
 }
 
@@ -578,16 +578,16 @@ TEST_F(FieldOwnershipTest, SetContextValuesLandsInPipeInputsAndTheShuttersAnswer
     MGPipeApplySetContextValues(values);
 
     MGPipeServerStampVerbBoundary(MGPipeVerb::ReadPixels);
-    EXPECT_EQ(gPipeInputs.GetActiveTextureUnit(), 5);
-    EXPECT_EQ(gPipeInputs.GetMaxTouchedTextureUnit(), 23);
+    EXPECT_EQ(gPipeInputs->GetActiveTextureUnit(), 5);
+    EXPECT_EQ(gPipeInputs->GetMaxTouchedTextureUnit(), 23);
     MGPipeServerStampVerbBoundary(MGPipeVerb::DrawArrays);
-    EXPECT_EQ(gPipeInputs.GetTouchedBufferBindingPointCount(BufferTarget::Uniform), SizeT{7});
-    EXPECT_EQ(gPipeInputs.GetTouchedBufferBindingPointCount(BufferTarget::Vertex), SizeT{0});
-    EXPECT_TRUE(gPipeInputs.IsTransformFeedbackActive());
-    EXPECT_FALSE(gPipeInputs.IsTransformFeedbackPaused());
-    EXPECT_EQ(gPipeInputs.GetTransformFeedbackGeneration(), 0x1112131415161718ull);
-    EXPECT_EQ(gPipeInputs.GetBoundTransformFeedbackLifetimeId(), 0x2122232425262728ull);
-    EXPECT_EQ(gPipeInputs.GetTransformFeedbackCapturedVertices(), 0x3132333435363738ull);
+    EXPECT_EQ(gPipeInputs->GetTouchedBufferBindingPointCount(BufferTarget::Uniform), SizeT{7});
+    EXPECT_EQ(gPipeInputs->GetTouchedBufferBindingPointCount(BufferTarget::Vertex), SizeT{0});
+    EXPECT_TRUE(gPipeInputs->IsTransformFeedbackActive());
+    EXPECT_FALSE(gPipeInputs->IsTransformFeedbackPaused());
+    EXPECT_EQ(gPipeInputs->GetTransformFeedbackGeneration(), 0x1112131415161718ull);
+    EXPECT_EQ(gPipeInputs->GetBoundTransformFeedbackLifetimeId(), 0x2122232425262728ull);
+    EXPECT_EQ(gPipeInputs->GetTransformFeedbackCapturedVertices(), 0x3132333435363738ull);
     // Eight record-supplied reads and not one residual pull.
     EXPECT_EQ(MGPipeResidualPullCount(), Uint64{0});
 
@@ -595,12 +595,12 @@ TEST_F(FieldOwnershipTest, SetContextValuesLandsInPipeInputsAndTheShuttersAnswer
     // SHUTTERS - the value matters only in that it MOVES when the server's texture state does
     // and never walks backwards - so the pin is the identity with the applier's counters, not
     // any particular number.
-    EXPECT_EQ(gPipeInputs.GetTextureBindGeneration(), MGPipeApplierTextureShutterSerial());
-    EXPECT_EQ(gPipeInputs.GetSamplingResolutionGeneration(), MGPipeApplierTextureShutterSerial());
-    EXPECT_EQ(gPipeInputs.GetTextureContextId(), MGPipeApplierContextSerial());
+    EXPECT_EQ(gPipeInputs->GetTextureBindGeneration(), MGPipeApplierTextureShutterSerial());
+    EXPECT_EQ(gPipeInputs->GetSamplingResolutionGeneration(), MGPipeApplierTextureShutterSerial());
+    EXPECT_EQ(gPipeInputs->GetTextureContextId(), MGPipeApplierContextSerial());
     const Uint64 before = MGPipeApplierTextureShutterSerial();
     MGPipeApplierNoteTextureStateMoved();
-    EXPECT_EQ(gPipeInputs.GetTextureBindGeneration(), before + 1)
+    EXPECT_EQ(gPipeInputs->GetTextureBindGeneration(), before + 1)
         << "a texture-state apply moved the serial but the shutter did not answer with it";
     EXPECT_EQ(MGPipeResidualPullCount(), Uint64{0});
 }
@@ -612,7 +612,7 @@ TEST_F(FieldOwnershipTest, ABarrierPulledReadAfterAServerStampIsCountedNotFatal)
     const ChildResult r = RunInChild([] {
 
         MGPipeServerStampVerbBoundary(MGPipeVerb::DrawArrays);
-        (void)gPipeInputs.GetBoundVertexArray();
+        (void)gPipeInputs->GetBoundVertexArray();
     });
     ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
     EXPECT_NE(r.Log.find("Fatal{UnmigratedPipeInput, \"GetBoundVertexArray@DrawArrays\"}"), std::string::npos) << r.Log;
@@ -629,7 +629,7 @@ TEST_F(FieldOwnershipTest, AStickyForwardIsCountedAsAResidualPull) {
     const ChildResult r = RunInChild([] {
 
         MGPipeServerStampVerbBoundary(MGPipeVerb::Clear);
-        (void)gPipeInputs.ValidateProgramName(1u);
+        (void)gPipeInputs->ValidateProgramName(1u);
     });
     ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
     EXPECT_NE(r.Log.find("Fatal{UnmigratedPipeInput, \"ValidateProgramName@Clear\"}"), std::string::npos) << r.Log;
@@ -644,11 +644,11 @@ TEST_F(FieldOwnershipTest, AStickyForwardIsCountedAsAResidualPull) {
 // for - and what keeps build-split's monolith lanes behaving as a verify build's do.
 TEST_F(FieldOwnershipTest, NothingIsCountedOutsideAServerStampedVerb) {
     MGPipeValidateForVerb(MGPipeVerb::ReadPixels);
-    (void)gPipeInputs.ValidateProgramName(1u);
-    gPipeInputs.InvalidateCompileEnv();
-    (void)gPipeInputs.GetActiveTextureUnit();
+    (void)gPipeInputs->ValidateProgramName(1u);
+    gPipeInputs->InvalidateCompileEnv();
+    (void)gPipeInputs->GetActiveTextureUnit();
     EXPECT_EQ(MGPipeResidualPullCount(), Uint64{0});
-    EXPECT_FALSE(gPipeInputs.ServerStampedVerb());
+    EXPECT_FALSE(gPipeInputs->ServerStampedVerb());
 }
 
 // THE APPLIER'S OWN CLEAR, reached directly rather than through the client's fill. In a spawned
@@ -658,13 +658,13 @@ TEST_F(FieldOwnershipTest, NothingIsCountedOutsideAServerStampedVerb) {
 // InvalidateCompileEnv is reached from backend initialisation under - is gone for good.
 TEST_F(FieldOwnershipTest, TheAppliersOwnClearDisarmsTheStampWithoutTheClientsFill) {
     MGPipeServerStampVerbBoundary(MGPipeVerb::ReadPixels);
-    ASSERT_TRUE(gPipeInputs.ServerStampedVerb());
-    (void)gPipeInputs.GetActiveTextureUnit();
+    ASSERT_TRUE(gPipeInputs->ServerStampedVerb());
+    (void)gPipeInputs->GetActiveTextureUnit();
     ASSERT_EQ(MGPipeResidualPullCount(), Uint64{0});
     MGPipeServerClearVerbBoundary();
-    EXPECT_FALSE(gPipeInputs.ServerStampedVerb());
-    (void)gPipeInputs.ValidateProgramName(1u);
-    gPipeInputs.InvalidateCompileEnv();
+    EXPECT_FALSE(gPipeInputs->ServerStampedVerb());
+    (void)gPipeInputs->ValidateProgramName(1u);
+    gPipeInputs->InvalidateCompileEnv();
     EXPECT_EQ(MGPipeResidualPullCount(), Uint64{0});
 }
 
@@ -677,7 +677,7 @@ TEST_F(FieldOwnershipTest, ABarrierPulledFieldOutsideTheVerbsClassIsStillFatal) 
 #if MGTEST_HAVE_FORK
     const ChildResult r = RunInChild([] {
         MGPipeServerStampVerbBoundary(MGPipeVerb::Clear);
-        (void)gPipeInputs.GetProgramForDraw(); // retired accessor, outside kClear too
+        (void)gPipeInputs->GetProgramForDraw(); // retired accessor, outside kClear too
     });
     ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
     EXPECT_NE(r.Log.find("Fatal{UnmigratedPipeInput, \"GetProgramForDraw@Clear\"}"), std::string::npos)
@@ -693,7 +693,7 @@ TEST_F(FieldOwnershipTest, ResidualPullsReachThePublishedPerFrameCounter) {
     PS::SetEnabledForTesting(true);
     PS::ResetForTesting();
     MGPipeServerStampVerbBoundary(MGPipeVerb::DrawArrays);
-    (void)gPipeInputs.GetCurrentVertexAttribute(0);
+    (void)gPipeInputs->GetCurrentVertexAttribute(0);
     EXPECT_EQ(PS::FrameCalls(PS::CallClass::ResidualPulls), Uint64{0});
     EXPECT_NE(PS::FormatWindowLine().find(" rsp=0"), std::string::npos) << PS::FormatWindowLine();
     // Prove the reporting channel did not merely become a constant zero after retirement.
@@ -742,9 +742,9 @@ TEST_F(FieldOwnershipTest, SplitBindingPointCapacityNeverConsultsTheFrontend) {
     RoleSplitArm guard;
     guard.Arm(true);
     MGPipeServerStampVerbBoundary(MGPipeVerb::DrawArrays);
-    EXPECT_EQ(gPipeInputs.GetBufferBindingPointCount(BufferTarget::Uniform), 84u);
-    EXPECT_EQ(gPipeInputs.GetBufferBindingPointCount(BufferTarget::TransformFeedback), 84u);
-    EXPECT_EQ(gPipeInputs.GetBufferBindingPointCount(BufferTarget::PixelPack), 0u);
+    EXPECT_EQ(gPipeInputs->GetBufferBindingPointCount(BufferTarget::Uniform), 84u);
+    EXPECT_EQ(gPipeInputs->GetBufferBindingPointCount(BufferTarget::TransformFeedback), 84u);
+    EXPECT_EQ(gPipeInputs->GetBufferBindingPointCount(BufferTarget::PixelPack), 0u);
     EXPECT_EQ(MGPipeFieldOwnershipOf(MGPipeInputField::GetBufferBindingPointCount),
               MGPipeFieldOwnership::kApplierDerived);
     MGPipeServerClearVerbBoundary();
@@ -756,16 +756,16 @@ TEST_F(FieldOwnershipTest, SplitOpenSpansAreOwnedByTheApplierAndSurviveOtherBind
     auto& state = MGPipeApplier();
     state.StreamOutputSpans.clear();
     MGPipeServerStampVerbBoundary(MGPipeVerb::DrawArrays);
-    EXPECT_FALSE(gPipeInputs.HasOpenTransformFeedbackSpan(0));
-    EXPECT_FALSE(gPipeInputs.HasOpenTransformFeedbackSpan(11));
+    EXPECT_FALSE(gPipeInputs->HasOpenTransformFeedbackSpan(0));
+    EXPECT_FALSE(gPipeInputs->HasOpenTransformFeedbackSpan(11));
     state.StreamOutputSpans[11] = {};
     state.StreamOutputSpans[12] = {};
     state.BoundStreamOutputLifetimeId = 12;
-    EXPECT_TRUE(gPipeInputs.HasOpenTransformFeedbackSpan(11));
-    EXPECT_TRUE(gPipeInputs.HasOpenTransformFeedbackSpan(12));
+    EXPECT_TRUE(gPipeInputs->HasOpenTransformFeedbackSpan(11));
+    EXPECT_TRUE(gPipeInputs->HasOpenTransformFeedbackSpan(12));
     state.StreamOutputSpans.erase(12);
-    EXPECT_TRUE(gPipeInputs.HasOpenTransformFeedbackSpan(11));
-    EXPECT_FALSE(gPipeInputs.HasOpenTransformFeedbackSpan(12));
+    EXPECT_TRUE(gPipeInputs->HasOpenTransformFeedbackSpan(11));
+    EXPECT_FALSE(gPipeInputs->HasOpenTransformFeedbackSpan(12));
     EXPECT_EQ(MGPipeFieldOwnershipOf(MGPipeInputField::HasOpenTransformFeedbackSpan),
               MGPipeFieldOwnership::kApplierDerived);
     state.StreamOutputSpans.clear();
@@ -793,7 +793,7 @@ TEST_F(FieldOwnershipTest, SplitCaptureSnapshotSurvivesMakeCurrentUntilObjectRel
     returning.IsTransformFeedbackActive = 1;
     MGPipeApplySetContextValues(returning);
     EXPECT_EQ(state.BoundStreamOutputLifetimeId, begin.LifetimeId);
-    EXPECT_TRUE(gPipeInputs.HasOpenTransformFeedbackSpan(begin.LifetimeId));
+    EXPECT_TRUE(gPipeInputs->HasOpenTransformFeedbackSpan(begin.LifetimeId));
     const auto found = state.StreamOutputSpans.find(begin.LifetimeId);
     EXPECT_NE(found, state.StreamOutputSpans.end());
     if (found != state.StreamOutputSpans.end()) {
@@ -803,13 +803,13 @@ TEST_F(FieldOwnershipTest, SplitCaptureSnapshotSurvivesMakeCurrentUntilObjectRel
         EXPECT_EQ(found->second.Targets[3].Size, 64u);
     }
     MGPipeApplierReleaseObjectRecords();
-    EXPECT_FALSE(gPipeInputs.HasOpenTransformFeedbackSpan(begin.LifetimeId));
+    EXPECT_FALSE(gPipeInputs->HasOpenTransformFeedbackSpan(begin.LifetimeId));
     EXPECT_EQ(state.BoundStreamOutputLifetimeId, 0u);
 }
 
 TEST_F(FieldOwnershipTest, RoleSplitOffFoldsTheFillSideOntoTheSharedBlock) {
     EXPECT_FALSE(MGPipeRoleSplitRehearsalActive());
-    EXPECT_EQ(&MGPipeClientInputs(), &gPipeInputs);
+    EXPECT_EQ(&MGPipeClientInputs(), &*gPipeInputs);
 }
 
 // The knob alone is not the arm: under monolith transport the two roles are one thread and
@@ -820,7 +820,7 @@ TEST_F(FieldOwnershipTest, RoleSplitUnderMonolithTransportIsStillOneBlock) {
     MG_Config::Ipc.RoleSplitState = true;
     MG_Config::Transport = MG_Config::TransportMode::Monolith;
     EXPECT_FALSE(MGPipeRoleSplitRehearsalActive());
-    EXPECT_EQ(&MGPipeClientInputs(), &gPipeInputs);
+    EXPECT_EQ(&MGPipeClientInputs(), &*gPipeInputs);
 }
 
 // D1c/D10 (CONTRACT-P6 3.2, 3.4). THE PREDICATE THAT IS TRUE WITHOUT THE KNOB, and the reason
@@ -850,38 +850,38 @@ TEST_F(FieldOwnershipTest, MonolithKeepsOneBlockAndTheWiderPredicateSaysSo) {
     MG_Config::Ipc.RoleSplitState = false;
     MG_Config::Transport = MG_Config::TransportMode::Monolith;
     EXPECT_FALSE(MGPipeBlocksAreDistinct());
-    EXPECT_EQ(&MGPipeClientInputs(), &gPipeInputs);
+    EXPECT_EQ(&MGPipeClientInputs(), &*gPipeInputs);
 }
 
 TEST_F(FieldOwnershipTest, RoleSplitGivesTheFillSideADistinctBlockTheStampNeverTouches) {
     RoleSplitArm guard;
     guard.Arm(true);
     ASSERT_TRUE(MGPipeRoleSplitRehearsalActive());
-    ASSERT_NE(&MGPipeClientInputs(), &gPipeInputs);
+    ASSERT_NE(&MGPipeClientInputs(), &*gPipeInputs);
 
-    const Uint64 serverSerialBefore = gPipeInputs.FilledState().CurrentVerbSerial;
+    const Uint64 serverSerialBefore = gPipeInputs->FilledState().CurrentVerbSerial;
     const Uint64 clientSerialBefore = MGPipeClientInputs().FilledState().CurrentVerbSerial;
     MGPipeServerStampVerbBoundary(MGPipeVerb::DrawArrays);
-    EXPECT_EQ(gPipeInputs.FilledState().CurrentVerbSerial, serverSerialBefore + 1);
+    EXPECT_EQ(gPipeInputs->FilledState().CurrentVerbSerial, serverSerialBefore + 1);
     EXPECT_EQ(MGPipeClientInputs().FilledState().CurrentVerbSerial, clientSerialBefore)
         << "the server's verb stamp reached into the client block";
-    EXPECT_TRUE(gPipeInputs.ServerStampedVerb());
+    EXPECT_TRUE(gPipeInputs->ServerStampedVerb());
     EXPECT_FALSE(MGPipeClientInputs().ServerStampedVerb());
 
     // The fill side's clear is the client block's own: it must not disarm the server's stamp,
     // which is CONTRACT-P5E §3.2's "the server's stamp is server-private" as a fact rather
     // than as a comment.
     MGPipeClientClearVerbBoundary();
-    EXPECT_TRUE(gPipeInputs.ServerStampedVerb())
+    EXPECT_TRUE(gPipeInputs->ServerStampedVerb())
         << "the client-role clear withdrew the SERVER's stamp";
     MGPipeServerClearVerbBoundary();
-    EXPECT_FALSE(gPipeInputs.ServerStampedVerb());
+    EXPECT_FALSE(gPipeInputs->ServerStampedVerb());
 
     // And the server block's identity is server-owned under the rehearsal (§3.2's other half):
     // the stamp set it, and it is non-null - a null identity reads as a hit against
     // DirectGLES' zero-initialised fb-slot memo cache, which is the unnamed crash this line
     // exists to preclude.
-    EXPECT_NE(gPipeInputs.ContextIdentity(), nullptr);
+    EXPECT_NE(gPipeInputs->ContextIdentity(), nullptr);
 }
 
 // The fill side's writers land in the client block alone. MGPipeLeaveVerb rather than
@@ -891,12 +891,12 @@ TEST_F(FieldOwnershipTest, RoleSplitGivesTheFillSideADistinctBlockTheStampNeverT
 TEST_F(FieldOwnershipTest, TheClientVerbLeaveWritesTheClientBlockAlone) {
     RoleSplitArm guard;
     guard.Arm(true);
-    ASSERT_NE(&MGPipeClientInputs(), &gPipeInputs);
-    const Uint64 serverSerialBefore = gPipeInputs.FilledState().CurrentVerbSerial;
+    ASSERT_NE(&MGPipeClientInputs(), &*gPipeInputs);
+    const Uint64 serverSerialBefore = gPipeInputs->FilledState().CurrentVerbSerial;
     const Uint64 clientSerialBefore = MGPipeClientInputs().FilledState().CurrentVerbSerial;
     MGPipeLeaveVerb();
     EXPECT_EQ(MGPipeClientInputs().FilledState().CurrentVerbSerial, clientSerialBefore + 1);
-    EXPECT_EQ(gPipeInputs.FilledState().CurrentVerbSerial, serverSerialBefore)
+    EXPECT_EQ(gPipeInputs->FilledState().CurrentVerbSerial, serverSerialBefore)
         << "a fill-side write reached the server block";
     EXPECT_EQ(MGPipeClientInputs().CurrentVerb(), MGPipeVerb::kVerbCount);
 }
@@ -909,9 +909,9 @@ TEST_F(FieldOwnershipTest, AClientFreshStampCannotReviveARetiredServerGetter) {
         MGPipeServerStampVerbBoundary(MGPipeVerb::DrawArrays);
         // Simulate a regressed writer stamping the old mirror as fresh. FATAL is a
         // representation verdict, not a freshness verdict, and must still reject it.
-        auto& filled = const_cast<MGPipeFilledState&>(gPipeInputs.FilledState());
+        auto& filled = const_cast<MGPipeFilledState&>(gPipeInputs->FilledState());
         filled.FilledGen[Index(MGPipeInputField::GetBoundVertexArray)] = filled.CurrentVerbSerial;
-        (void)gPipeInputs.GetBoundVertexArray();
+        (void)gPipeInputs->GetBoundVertexArray();
     });
     ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
     EXPECT_NE(r.Log.find("Fatal{UnmigratedPipeInput, \"GetBoundVertexArray@DrawArrays\"}"),
@@ -923,7 +923,7 @@ TEST_F(FieldOwnershipTest, StrictErrorsTurnsABarrierPulledReadIntoANamedAbort) {
     const ChildResult r = RunInChild([] {
         MG_Config::Ipc.StrictErrors = true;
         MGPipeServerStampVerbBoundary(MGPipeVerb::DrawArrays);
-        (void)gPipeInputs.GetBoundVertexArray();
+        (void)gPipeInputs->GetBoundVertexArray();
     });
     ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
     EXPECT_NE(r.Log.find("Fatal{UnmigratedPipeInput, \"GetBoundVertexArray@DrawArrays\"}"), std::string::npos) << r.Log;
@@ -936,7 +936,7 @@ TEST_F(FieldOwnershipTest, TheSameReadWithoutStrictErrorsSurvivesAndIsCounted) {
     const ChildResult r = RunInChild([] {
         MG_Config::Ipc.StrictErrors = false;
         MGPipeServerStampVerbBoundary(MGPipeVerb::DrawArrays);
-        (void)gPipeInputs.GetBoundVertexArray();
+        (void)gPipeInputs->GetBoundVertexArray();
     });
     ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
     EXPECT_NE(r.Log.find("Fatal{UnmigratedPipeInput, \"GetBoundVertexArray@DrawArrays\"}"), std::string::npos) << r.Log;
@@ -950,7 +950,7 @@ TEST_F(FieldOwnershipTest, AnEscalatedRecordsPullIsAdmittedAndSaysWhy) {
         MG_Config::Ipc.StrictErrors = true;
         MGPipeApplierSetCurrentRecordBarrieredByEscalation(true);
         MGPipeServerStampVerbBoundary(MGPipeVerb::DrawArrays);
-        (void)gPipeInputs.GetBoundVertexArray();
+        (void)gPipeInputs->GetBoundVertexArray();
     });
     ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
     EXPECT_NE(r.Log.find("Fatal{UnmigratedPipeInput, \"GetBoundVertexArray@DrawArrays\"}"), std::string::npos) << r.Log;
@@ -963,7 +963,7 @@ TEST_F(FieldOwnershipTest, StrictErrorsReachTheStickyForwardsAndNameThemByField)
     const ChildResult r = RunInChild([] {
         MG_Config::Ipc.StrictErrors = true;
         MGPipeServerStampVerbBoundary(MGPipeVerb::DrawArrays);
-        (void)gPipeInputs.ValidateProgramName(1u);
+        (void)gPipeInputs->ValidateProgramName(1u);
     });
     ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
     EXPECT_NE(r.Log.find("Fatal{UnmigratedPipeInput, \"ValidateProgramName@DrawArrays\"}"), std::string::npos) << r.Log;
@@ -976,7 +976,7 @@ TEST_F(FieldOwnershipTest, AnAdmittedBarrierPullIsLoudOnceAndNotFatal) {
     const ChildResult r = RunInChild([] {
         MG_Config::Ipc.StrictErrors = true;
         MGPipeServerStampVerbBoundary(MGPipeVerb::ReadPixels);
-        (void)gPipeInputs.ValidateProgramName(1u);
+        (void)gPipeInputs->ValidateProgramName(1u);
     });
     ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
     EXPECT_NE(r.Log.find("Fatal{UnmigratedPipeInput, \"ValidateProgramName@ReadPixels\"}"), std::string::npos) << r.Log;
@@ -987,7 +987,7 @@ TEST_F(FieldOwnershipTest, AnAdmittedBarrierPullIsLoudOnceAndNotFatal) {
 TEST_F(FieldOwnershipTest, AFatalClassReadAbortsEvenWithoutStrictErrors) {
     const ChildResult r = RunInChild([] {
         MGPipeServerStampVerbBoundary(MGPipeVerb::DrawArrays);
-        (void)gPipeInputs.GetTransformFeedbackPausedPrimitiveCounter();
+        (void)gPipeInputs->GetTransformFeedbackPausedPrimitiveCounter();
     });
     ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
     EXPECT_NE(r.Log.find("Fatal{UnmigratedPipeInput, "
@@ -1002,7 +1002,7 @@ TEST_F(FieldOwnershipTest, TheComputeProgramIsServedUnderADispatchStampFromP5bOn
     const ChildResult r = RunInChild([] {
 
         MGPipeServerStampVerbBoundary(MGPipeVerb::DispatchCompute);
-        (void)gPipeInputs.GetProgramForDispatch();
+        (void)gPipeInputs->GetProgramForDispatch();
     });
     ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
     EXPECT_NE(r.Log.find("Fatal{UnmigratedPipeInput, \"GetProgramForDispatch@DispatchCompute\"}"), std::string::npos) << r.Log;
@@ -1016,7 +1016,7 @@ TEST_F(FieldOwnershipTest, TheComputeProgramIsServedUnderADispatchStampFromP5bOn
 TEST_F(FieldOwnershipTest, TheUnpackHalfOfThePixelStoreAbortsWhileThePackHalfDoesNot) {
     const ChildResult fatal = RunInChild([] {
         MGPipeServerStampVerbBoundary(MGPipeVerb::ReadPixels);
-        (void)gPipeInputs.GetPixelStoreParameters(true);
+        (void)gPipeInputs->GetPixelStoreParameters(true);
     });
     ASSERT_TRUE(DiedOfAbort(fatal)) << DescribeStatus(fatal) << "\n" << fatal.Log;
     EXPECT_NE(fatal.Log.find("Fatal{UnmigratedPipeInput, \"GetPixelStoreParameters@ReadPixels\"}"),
@@ -1032,7 +1032,7 @@ TEST_F(FieldOwnershipTest, TheUnpackHalfOfThePixelStoreAbortsWhileThePackHalfDoe
 
     const ChildResult ok = RunInChild([] {
         MGPipeServerStampVerbBoundary(MGPipeVerb::ReadPixels);
-        (void)gPipeInputs.GetPixelStoreParameters(false);
+        (void)gPipeInputs->GetPixelStoreParameters(false);
         if (MGPipeResidualPullCount() != 0) ::_exit(7);
     });
     ASSERT_TRUE(ExitedWith(ok, 0)) << DescribeStatus(ok) << "\n" << ok.Log;
@@ -1067,7 +1067,7 @@ TEST_F(FieldOwnershipTest, DualBlockMakesABarrierPulledReadANamedAbortWithoutStr
         MG_Config::Ipc.RoleSplitState = true;
         MG_Config::Ipc.StrictErrors = false;
         MGPipeServerStampVerbBoundary(MGPipeVerb::DrawArrays);
-        (void)gPipeInputs.GetBoundVertexArray();
+        (void)gPipeInputs->GetBoundVertexArray();
     });
     ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
     EXPECT_NE(r.Log.find("Fatal{UnmigratedPipeInput, \"GetBoundVertexArray@DrawArrays\"}"), std::string::npos) << r.Log;
@@ -1081,7 +1081,7 @@ TEST_F(FieldOwnershipTest, DualBlockDoesNotArmUnderMonolithTransport) {
         MG_Config::Ipc.RoleSplitState = true;
         // A real monolith fill, not a manufactured server stamp on a monolith process.
         MGPipeValidateForVerb(MGPipeVerb::DrawArrays);
-        (void)gPipeInputs.GetBoundVertexArray();
+        (void)gPipeInputs->GetBoundVertexArray();
         if (MGPipeRoleSplitRehearsalActive() || MGPipeResidualPullCount() != 0) ::_exit(7);
     });
     ASSERT_TRUE(ExitedWith(r, 0)) << DescribeStatus(r) << "\n" << r.Log;

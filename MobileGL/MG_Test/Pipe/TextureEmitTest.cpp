@@ -231,7 +231,7 @@ namespace {
             MG_Config::Features.PipePush |= kMGPipeSubsystemResources |
                                             kMGPipeSubsystemTextureResources |
                                             kMGPipeSubsystemSamplers;
-            m_previousContext = Move(MG_State::pGLContext);
+            m_previousContext = MG_State::pGLContext.Take();
             MG_State::pGLContext = MakeUnique<GLContext>();
             MGPipeTextureEmitterInstance().ResetForTest();
             // AND THE APPLIER IS A PROCESS SINGLETON, so its object records outlive a case. With

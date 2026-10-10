@@ -147,17 +147,17 @@ TEST(ContextEpochTest, SameXfbNameInTwoServedContextsDoesNotAliasThePausedSpan) 
 TEST(ContextEpochTest, ServerLivenessDoesNotFollowTheClientContextOrAVerbStamp) {
 #if MOBILEGL_BUILD_DISAGGREGATED
     DriverScope scope;
-    auto context = Move(MG_State::pGLContext);
+    auto context = MG_State::pGLContext.Take();
     const Bool previous = MG_Pipe::MGPipeServerContextIsLive();
     MG_Pipe::MGPipeServerSetContextLive(false);
     MG_State::pGLContext = MakeUnique<MG_State::GLState::GLContext>();
-    EXPECT_FALSE(MG_Pipe::gPipeInputs.IsLive());
+    EXPECT_FALSE(MG_Pipe::gPipeInputs->IsLive());
     MG_Pipe::MGPipeServerSetContextLive(true);
     MG_State::pGLContext.reset();
-    EXPECT_TRUE(MG_Pipe::gPipeInputs.IsLive());
+    EXPECT_TRUE(MG_Pipe::gPipeInputs->IsLive());
     MG_Pipe::MGPipeServerSetContextLive(false);
     MG_Pipe::MGPipeServerStampVerbBoundary(MG_Pipe::MGPipeVerb::DrawArrays);
-    EXPECT_FALSE(MG_Pipe::gPipeInputs.IsLive()) << "a stale command resurrected a destroyed server context";
+    EXPECT_FALSE(MG_Pipe::gPipeInputs->IsLive()) << "a stale command resurrected a destroyed server context";
     MG_Pipe::MGPipeServerClearVerbBoundary();
     MG_State::pGLContext = Move(context);
     MG_Pipe::MGPipeServerSetContextLive(previous);

@@ -782,7 +782,53 @@ namespace MobileGL {
         // thread that never crossed an eglMakeCurrent keeps the process default MG_State::Init()
         // gave it. NULL on a thread for which neither has happened, the same answer a process
         // that never reached MG_State::Init() (the spawn server image) has always given.
-        extern thread_local SharedPtr<GLState::GLContext> pGLContext;
+        //
+        // P15: A PLAIN POINTER IN TLS, WITH THE OWNING REFERENCE KEPT BESIDE IT. Every GL entry
+        // point reads this, often several times. A thread_local with a destructor (the SharedPtr
+        // it used to be) is reached through its TLS init function, which tests a second
+        // thread_local guard first: two TLS address calls per read in a dlopen'ed library, at
+        // every API level. This object is trivially destructible and constant-initialized, so a
+        // read is one TLS address computation and a load. The SharedPtr that keeps the context
+        // alive lives in a separate thread_local in Core.cpp, written only by the assignments
+        // below (eglMakeCurrent and the release edge, MG_State::Init(), tests); its destructor
+        // clears this pointer before it drops the reference, so a thread's exit leaves no
+        // dangling pointer behind.
+        //
+        // Assignment, reset() and the SharedPtr conversions touch the owner and belong to the
+        // CALLING THREAD only: never assign through a reference to another thread's slot.
+        class CurrentGLContextSlot {
+        public:
+            constexpr CurrentGLContextSlot() = default;
+            CurrentGLContextSlot(const CurrentGLContextSlot&) = delete;
+            CurrentGLContextSlot& operator=(const CurrentGLContextSlot&) = delete;
+
+            GLState::GLContext* get() const { return m_context; }
+            GLState::GLContext* operator->() const { return m_context; }
+            GLState::GLContext& operator*() const { return *m_context; }
+            explicit operator bool() const { return m_context != nullptr; }
+
+            // The owning reference (cold: a second TLS read).
+            const SharedPtr<GLState::GLContext>& Shared() const;
+            operator const SharedPtr<GLState::GLContext>&() const& { return Shared(); }
+            // A move out of the slot is spelled Take(): std::move of the slot does not compile.
+            operator const SharedPtr<GLState::GLContext>&() const&& = delete;
+            SharedPtr<GLState::GLContext> Take();
+
+            CurrentGLContextSlot& operator=(SharedPtr<GLState::GLContext> context);
+            void reset() { *this = nullptr; }
+
+            friend Bool operator==(const CurrentGLContextSlot& slot, std::nullptr_t) {
+                return slot.m_context == nullptr;
+            }
+            friend Bool operator==(const CurrentGLContextSlot& slot, const SharedPtr<GLState::GLContext>& other) {
+                return slot.m_context == other.get();
+            }
+
+        private:
+            friend struct CurrentGLContextOwner;
+            GLState::GLContext* m_context = nullptr;
+        };
+        extern constinit thread_local CurrentGLContextSlot pGLContext;
 #if MOBILEGL_BUILD_DISAGGREGATED
         // True on a thread whose last EGL release let go of a context lost with an ended server
         // session, until it makes a context current again. The release hands such a thread the
@@ -790,7 +836,7 @@ namespace MobileGL {
         // TLS that state's last owner), so this is what keeps the thread answering as lost: an
         // application that releases its context before asking glGetGraphicsResetStatus - Qt's
         // render threads do - still learns that the context is gone and rebuilds it.
-        extern thread_local Bool tThreadReleasedLostContext;
+        extern constinit thread_local Bool tThreadReleasedLostContext;
 #endif
 
         // The fallback pGLContext starts at and an EGL release edge restores to: the process's

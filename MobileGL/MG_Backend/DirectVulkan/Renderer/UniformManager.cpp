@@ -858,7 +858,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                                         VkDescriptorBufferInfo& outBufferInfo) const {
         outBufferInfo = {};
         MOBILEGL_ASSERT(m_bufferManager != nullptr, "ResolveStorageBufferDescriptor: buffer manager is null");
-        MOBILEGL_ASSERT(MG_Pipe::gPipeInputs.IsLive(), "ResolveStorageBufferDescriptor: GL context is null");
+        MOBILEGL_ASSERT(MG_Pipe::gPipeInputs->IsLive(), "ResolveStorageBufferDescriptor: GL context is null");
         MOBILEGL_ASSERT(binding < programObj.storageBlockIndexByBinding.size(),
                         "ResolveStorageBufferDescriptor: binding %u out of range", binding);
         if ((binding >= programObj.storageBlockIndexByBinding.size() ||
@@ -1155,7 +1155,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         const void* outData = nullptr;
         VkDeviceSize outSize = 0;
 
-        MOBILEGL_ASSERT(MG_Pipe::gPipeInputs.IsLive(), "ResolveUniformBufferPayload: GL context is null");
+        MOBILEGL_ASSERT(MG_Pipe::gPipeInputs->IsLive(), "ResolveUniformBufferPayload: GL context is null");
         MOBILEGL_ASSERT(binding < programObj.bindingKinds.size(),
                         "ResolveUniformBufferPayload: binding %u out of range", binding);
         MOBILEGL_ASSERT(programObj.bindingKinds[binding] == ProgramFactory::DescriptorBindingKind::UniformBufferDynamic,

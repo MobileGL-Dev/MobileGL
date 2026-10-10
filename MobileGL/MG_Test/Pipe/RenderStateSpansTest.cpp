@@ -146,60 +146,60 @@ namespace {
     // ---------------------------------------------------------------------------------
     void ExpectDerivedDrawFieldsMatch(GLContext& ctx, const char* tag) {
         SCOPED_TRACE(tag);
-        EXPECT_EQ(gPipeInputs.GetBlendColor(), ctx.GetBlendColor());
+        EXPECT_EQ(gPipeInputs->GetBlendColor(), ctx.GetBlendColor());
         for (Uint i = 0; i < kMGMaxDrawBuffers; ++i) {
             BlendEquation gotColor{}, gotAlpha{}, wantColor{}, wantAlpha{};
-            gPipeInputs.GetBlendEquationIndexed(i, gotColor, gotAlpha);
+            gPipeInputs->GetBlendEquationIndexed(i, gotColor, gotAlpha);
             ctx.GetBlendEquationIndexed(i, wantColor, wantAlpha);
             EXPECT_EQ(gotColor, wantColor) << "blend equation " << i;
             EXPECT_EQ(gotAlpha, wantAlpha) << "blend equation " << i;
 
             BlendFactor gotSrcRGB{}, gotDstRGB{}, gotSrcA{}, gotDstA{};
             BlendFactor wantSrcRGB{}, wantDstRGB{}, wantSrcA{}, wantDstA{};
-            gPipeInputs.GetBlendFuncIndexed(i, gotSrcRGB, gotDstRGB, gotSrcA, gotDstA);
+            gPipeInputs->GetBlendFuncIndexed(i, gotSrcRGB, gotDstRGB, gotSrcA, gotDstA);
             ctx.GetBlendFuncIndexed(i, wantSrcRGB, wantDstRGB, wantSrcA, wantDstA);
             EXPECT_EQ(gotSrcRGB, wantSrcRGB) << "blend func " << i;
             EXPECT_EQ(gotDstRGB, wantDstRGB) << "blend func " << i;
             EXPECT_EQ(gotSrcA, wantSrcA) << "blend func " << i;
             EXPECT_EQ(gotDstA, wantDstA) << "blend func " << i;
 
-            EXPECT_EQ(gPipeInputs.GetColorMaskIndexed(i), ctx.GetColorMaskIndexed(i)) << "colour mask " << i;
-            EXPECT_EQ(gPipeInputs.IsCapabilityEnabledIndexed(CapabilityInput::Blend, i),
+            EXPECT_EQ(gPipeInputs->GetColorMaskIndexed(i), ctx.GetColorMaskIndexed(i)) << "colour mask " << i;
+            EXPECT_EQ(gPipeInputs->IsCapabilityEnabledIndexed(CapabilityInput::Blend, i),
                       ctx.IsCapabilityEnabledIndexed(CapabilityInput::Blend, i))
                 << "indexed blend enable " << i;
         }
-        EXPECT_EQ(gPipeInputs.GetCullFaceMode(), ctx.GetCullFaceMode());
-        EXPECT_EQ(gPipeInputs.GetDepthFunc(), ctx.GetDepthFunc());
-        EXPECT_EQ(gPipeInputs.GetDepthMask(), ctx.GetDepthMask());
+        EXPECT_EQ(gPipeInputs->GetCullFaceMode(), ctx.GetCullFaceMode());
+        EXPECT_EQ(gPipeInputs->GetDepthFunc(), ctx.GetDepthFunc());
+        EXPECT_EQ(gPipeInputs->GetDepthMask(), ctx.GetDepthMask());
         for (Uint i = 0; i < RenderStateParameters::MAX_VIEWPORTS; ++i) {
-            EXPECT_EQ(gPipeInputs.GetDepthRangeIndexed(i), ctx.GetDepthRangeIndexed(i)) << "depth range " << i;
-            EXPECT_EQ(gPipeInputs.GetViewportIndexed(i), ctx.GetViewportIndexed(i)) << "viewport " << i;
-            EXPECT_EQ(gPipeInputs.IsCapabilityEnabledIndexed(CapabilityInput::ScissorTest, i),
+            EXPECT_EQ(gPipeInputs->GetDepthRangeIndexed(i), ctx.GetDepthRangeIndexed(i)) << "depth range " << i;
+            EXPECT_EQ(gPipeInputs->GetViewportIndexed(i), ctx.GetViewportIndexed(i)) << "viewport " << i;
+            EXPECT_EQ(gPipeInputs->IsCapabilityEnabledIndexed(CapabilityInput::ScissorTest, i),
                       ctx.IsCapabilityEnabledIndexed(CapabilityInput::ScissorTest, i))
                 << "indexed scissor enable " << i;
         }
-        EXPECT_EQ(gPipeInputs.GetLineWidth(), ctx.GetLineWidth());
-        EXPECT_EQ(gPipeInputs.GetLogicOp(), ctx.GetLogicOp());
-        EXPECT_EQ(gPipeInputs.GetMinSampleShadingValue(), ctx.GetMinSampleShadingValue());
-        EXPECT_EQ(gPipeInputs.GetPatchDefaultInnerLevel(), ctx.GetPatchDefaultInnerLevel());
-        EXPECT_EQ(gPipeInputs.GetPatchDefaultOuterLevel(), ctx.GetPatchDefaultOuterLevel());
-        EXPECT_EQ(gPipeInputs.GetPatchVertices(), ctx.GetPatchVertices());
-        EXPECT_EQ(gPipeInputs.GetPolygonModeFront(), ctx.GetPolygonModeFront());
-        EXPECT_EQ(gPipeInputs.GetPolygonOffsetFactor(), ctx.GetPolygonOffsetFactor());
-        EXPECT_EQ(gPipeInputs.GetPolygonOffsetUnits(), ctx.GetPolygonOffsetUnits());
-        EXPECT_EQ(gPipeInputs.GetPrimitiveRestartIndex(), ctx.GetPrimitiveRestartIndex());
-        EXPECT_EQ(gPipeInputs.GetProvokingVertexMode(), ctx.GetProvokingVertexMode());
-        EXPECT_EQ(gPipeInputs.GetScissorBox(), ctx.GetScissorBox());
-        EXPECT_EQ(gPipeInputs.GetViewport(), ctx.GetViewport());
+        EXPECT_EQ(gPipeInputs->GetLineWidth(), ctx.GetLineWidth());
+        EXPECT_EQ(gPipeInputs->GetLogicOp(), ctx.GetLogicOp());
+        EXPECT_EQ(gPipeInputs->GetMinSampleShadingValue(), ctx.GetMinSampleShadingValue());
+        EXPECT_EQ(gPipeInputs->GetPatchDefaultInnerLevel(), ctx.GetPatchDefaultInnerLevel());
+        EXPECT_EQ(gPipeInputs->GetPatchDefaultOuterLevel(), ctx.GetPatchDefaultOuterLevel());
+        EXPECT_EQ(gPipeInputs->GetPatchVertices(), ctx.GetPatchVertices());
+        EXPECT_EQ(gPipeInputs->GetPolygonModeFront(), ctx.GetPolygonModeFront());
+        EXPECT_EQ(gPipeInputs->GetPolygonOffsetFactor(), ctx.GetPolygonOffsetFactor());
+        EXPECT_EQ(gPipeInputs->GetPolygonOffsetUnits(), ctx.GetPolygonOffsetUnits());
+        EXPECT_EQ(gPipeInputs->GetPrimitiveRestartIndex(), ctx.GetPrimitiveRestartIndex());
+        EXPECT_EQ(gPipeInputs->GetProvokingVertexMode(), ctx.GetProvokingVertexMode());
+        EXPECT_EQ(gPipeInputs->GetScissorBox(), ctx.GetScissorBox());
+        EXPECT_EQ(gPipeInputs->GetViewport(), ctx.GetViewport());
         for (const StencilFace face : {StencilFace::Front, StencilFace::Back}) {
-            const StencilFaceState& got = gPipeInputs.GetStencilState(face);
+            const StencilFaceState& got = gPipeInputs->GetStencilState(face);
             const StencilFaceState& want = ctx.GetStencilState(face);
             EXPECT_EQ(std::memcmp(&got, &want, sizeof(StencilFaceState)), 0)
                 << "stencil face " << static_cast<int>(face);
         }
         for (SizeT i = 0; i < static_cast<SizeT>(CapabilityInput::CapabilityInputCount); ++i) {
             const CapabilityInput cap = static_cast<CapabilityInput>(i);
-            EXPECT_EQ(gPipeInputs.IsCapabilityEnabled(cap), ctx.IsCapabilityEnabled(cap)) << "capability " << i;
+            EXPECT_EQ(gPipeInputs->IsCapabilityEnabled(cap), ctx.IsCapabilityEnabled(cap)) << "capability " << i;
         }
     }
 
@@ -214,7 +214,7 @@ namespace {
     // the only thing in the suite that covers them.
     void ExpectAssembledBlockIsTheLiveBlock(GLContext& ctx, const char* tag) {
         SCOPED_TRACE(tag);
-        EXPECT_EQ(std::memcmp(&gPipeInputs.GetRenderStateParameters(), &ctx.GetRenderStateParameters(),
+        EXPECT_EQ(std::memcmp(&gPipeInputs->GetRenderStateParameters(), &ctx.GetRenderStateParameters(),
                               sizeof(RenderStateParameters)),
                   0)
             << "the assembled working block is not byte-identical to the live one - a chunk of "
@@ -554,7 +554,7 @@ namespace {
         // restored on the way out so the case stays independent (SanityTest's idiom).
         struct ContextGuard {
             SharedPtr<GLContext> Previous;
-            ContextGuard() : Previous(Move(MG_State::pGLContext)) {
+            ContextGuard() : Previous(MG_State::pGLContext.Take()) {
                 MG_State::pGLContext = MakeUnique<GLContext>();
                 MGPipeApplierReset();
             }
@@ -653,7 +653,7 @@ namespace {
         // The vacuity guard: the block still holds what the fill copied out of the DEFAULT
         // context, so it must currently DISAGREE with the live one. If this ever passes, the
         // comparisons below would be checking the filler against itself.
-        ASSERT_NE(gPipeInputs.GetLineWidth(), ctx.GetLineWidth());
+        ASSERT_NE(gPipeInputs->GetLineWidth(), ctx.GetLineWidth());
 
         applyWholeBlock();
 
@@ -667,7 +667,7 @@ namespace {
         // would hand the backends a 63-wide rectangle where 64 was asked for. The literal
         // is std::lround's answer - round half AWAY FROM ZERO, so 1.5 -> 2 and 2.5 -> 3,
         // not the banker's rounding a nearbyint() transcription would give.
-        EXPECT_EQ(gPipeInputs.GetViewport(), IntVec4(2, 3, 64, 32));
+        EXPECT_EQ(gPipeInputs->GetViewport(), IntVec4(2, 3, 64, 32));
         } // phase 1, kDraw
 
         // Phase 2, kClear: the three clear values. The verb's own fill runs FIRST and copies
@@ -678,13 +678,13 @@ namespace {
             ctx.SetClearColor(FloatVec4(0.9f, 0.8f, 0.7f, 0.6f));
             ctx.SetClearDepth(0.125f);
             ctx.SetClearStencil(21);
-            ASSERT_NE(gPipeInputs.GetClearDepth(), ctx.GetClearDepth());
+            ASSERT_NE(gPipeInputs->GetClearDepth(), ctx.GetClearDepth());
 
             applyWholeBlock();
 
-            EXPECT_EQ(gPipeInputs.GetClearColor(), ctx.GetClearColor());
-            EXPECT_EQ(gPipeInputs.GetClearDepth(), ctx.GetClearDepth());
-            EXPECT_EQ(gPipeInputs.GetClearStencil(), ctx.GetClearStencil());
+            EXPECT_EQ(gPipeInputs->GetClearColor(), ctx.GetClearColor());
+            EXPECT_EQ(gPipeInputs->GetClearDepth(), ctx.GetClearDepth());
+            EXPECT_EQ(gPipeInputs->GetClearStencil(), ctx.GetClearStencil());
         }
 
         // Phase 3, kReadback: GetClampReadColor, the one derived field no draw and no clear
@@ -692,12 +692,12 @@ namespace {
         {
             MG_Test::ScopedPipeVerb verb(MGPipeVerb::ReadPixels);
             ctx.SetClampReadColor(GL_FALSE);
-            ASSERT_NE(gPipeInputs.GetClampReadColor(), ctx.GetClampReadColor());
+            ASSERT_NE(gPipeInputs->GetClampReadColor(), ctx.GetClampReadColor());
 
             applyWholeBlock();
 
-            EXPECT_EQ(gPipeInputs.GetClampReadColor(), ctx.GetClampReadColor());
-            EXPECT_EQ(gPipeInputs.GetClampReadColor(), static_cast<GLenum>(GL_FALSE));
+            EXPECT_EQ(gPipeInputs->GetClampReadColor(), ctx.GetClampReadColor());
+            EXPECT_EQ(gPipeInputs->GetClampReadColor(), static_cast<GLenum>(GL_FALSE));
         }
     }
 
@@ -764,7 +764,7 @@ namespace {
     TEST(RenderStateSpans, IncrementalChunksKeepEveryDerivedFieldInStep) {
         struct ContextGuard {
             SharedPtr<GLContext> Previous;
-            ContextGuard() : Previous(Move(MG_State::pGLContext)) {
+            ContextGuard() : Previous(MG_State::pGLContext.Take()) {
                 MG_State::pGLContext = MakeUnique<GLContext>();
                 MGPipeApplierReset();
             }
@@ -926,7 +926,7 @@ namespace {
     // idiom, and the same guard cases 3 and 5 declare inline).
     struct ApplierContextGuard {
         SharedPtr<GLContext> Previous;
-        ApplierContextGuard() : Previous(Move(MG_State::pGLContext)) {
+        ApplierContextGuard() : Previous(MG_State::pGLContext.Take()) {
             MG_State::pGLContext = MakeUnique<GLContext>();
             MGPipeApplierReset();
         }
@@ -1122,7 +1122,7 @@ namespace {
             pack.Pack.SkipRows = 5;
             pack.Pack.SwapBytes = true;
             MGPipeApplySetPixelPackState(pack);
-            const PixelStoreParameters got = gPipeInputs.GetPixelStoreParameters(false);
+            const PixelStoreParameters got = gPipeInputs->GetPixelStoreParameters(false);
             EXPECT_EQ(got.Alignment, 8);
             EXPECT_EQ(got.RowLength, 37);
             EXPECT_EQ(got.SkipRows, 5);
@@ -1155,13 +1155,13 @@ namespace {
             std::memcpy(tail[1].IntView, secondInt, sizeof(secondInt));
             MGPipeApplySetVertexAttribDefaults(hdr, tail);
 
-            EXPECT_EQ(gPipeInputs.GetCurrentVertexAttribute(2).floatValue[0], 1.5f);
-            EXPECT_EQ(gPipeInputs.GetCurrentVertexAttribute(2).floatValue[3], 4.5f);
-            EXPECT_EQ(gPipeInputs.GetCurrentVertexAttribute(9).floatValue[2], 0.5f);
+            EXPECT_EQ(gPipeInputs->GetCurrentVertexAttribute(2).floatValue[0], 1.5f);
+            EXPECT_EQ(gPipeInputs->GetCurrentVertexAttribute(2).floatValue[3], 4.5f);
+            EXPECT_EQ(gPipeInputs->GetCurrentVertexAttribute(9).floatValue[2], 0.5f);
             // ... and the CONVERTED views are the record's, not a memcpy of the float bits:
             // 1.5f's bits are 0x3FC00000, and the frontend's int view of it is 1.
-            EXPECT_EQ(gPipeInputs.GetCurrentVertexAttribute(2).intValue[0], 1);
-            EXPECT_EQ(gPipeInputs.GetCurrentVertexAttribute(9).intValue[0], -1);
+            EXPECT_EQ(gPipeInputs->GetCurrentVertexAttribute(2).intValue[0], 1);
+            EXPECT_EQ(gPipeInputs->GetCurrentVertexAttribute(9).intValue[0], -1);
         }
 
         // delete_render_state: the record stops being live and a bound handle stops being

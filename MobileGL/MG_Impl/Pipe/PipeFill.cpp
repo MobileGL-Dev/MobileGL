@@ -671,7 +671,7 @@ namespace MobileGL::MG_Pipe {
     }
 
     void MGPipeVerifyReadHook(const PipeInputs& self, MGPipeInputField field, Uint index0, Uint index1) {
-        if (&self != &gPipeInputs || !g_verify.Enabled) return;
+        if (&self != &*gPipeInputs || !g_verify.Enabled) return;
         const auto index = static_cast<SizeT>(field);
         if (kMGPipeInputFieldSticky[index]) return;
         // P13 W5: the monolith verb port applies records without a server stamp, and its readback
@@ -2256,7 +2256,7 @@ namespace MobileGL::MG_Pipe {
         // static initialisation, by the translation unit that owns the forward.
         const Bool kCompileEnvHookRegistered = [] {
             MGPipeSetCompileEnvChangedHook([] {
-                if (gPipeInputs.IsLive()) gPipeInputs.InvalidateCompileEnv();
+                if (gPipeInputs->IsLive()) gPipeInputs->InvalidateCompileEnv();
             });
             return true;
         }();
@@ -3134,7 +3134,7 @@ namespace MobileGL::MG_Pipe {
             // GLContext's m_currentVertexAttributes hold exactly those, so the diff below is
             // EMPTY on the one walk that must publish everything. The server's mirror is not
             // default: MGPipeApplierReset() clears the CSO store and the residual block and
-            // leaves gPipeInputs.m_currentVertexAttribute holding the PREVIOUS context's
+            // leaves gPipeInputs->m_currentVertexAttribute holding the PREVIOUS context's
             // defaults. So the InvalidateAll() a fresh context does to the set-hash
             // suppressor would have been cancelled two lines later by this diff, and the one
             // call P2 fully owns would publish nothing across a context change - exactly the

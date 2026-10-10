@@ -87,7 +87,7 @@ namespace {
             m_blockKb = MG_Config::RecordArm.PersistentBlockKb;
             m_adoptTier = MG_Config::Ipc.AdoptTier;
             m_pipeStats = MG_Config::Features.PipeStats;
-            m_context = Move(MG_State::pGLContext);
+            m_context = MG_State::pGLContext.Take();
             MG_State::pGLContext = MakeUnique<MG_State::GLState::GLContext>();
             MG_Config::Transport = MG_Config::TransportMode::InProcess;
             MG_Config::RecordArm.PersistentBlockKb = 64;

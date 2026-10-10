@@ -2338,7 +2338,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
             // Destination layout is computed from the client-side PACK parameters; only the actual pixel
             // rows are written so skip regions of the destination stay untouched.
-            const auto packParams = MG_Pipe::gPipeInputs.GetPixelStoreParameters(false);
+            const auto packParams = MG_Pipe::gPipeInputs->GetPixelStoreParameters(false);
             const SizeT rowPixels = static_cast<SizeT>(packParams.RowLength > 0 ? packParams.RowLength : width);
             const SizeT dstRowStride = AlignReadbackRow(rowPixels * dstPixelBytes, packParams.Alignment);
             const SizeT imageRows =

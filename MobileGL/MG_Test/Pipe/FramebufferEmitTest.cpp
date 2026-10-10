@@ -246,7 +246,7 @@ namespace {
                                             kMGPipeSubsystemFramebuffer |
                                             kMGPipeSubsystemTextureResources |
                                             kMGPipeSubsystemSamplers;
-            m_previousContext = Move(MG_State::pGLContext);
+            m_previousContext = MG_State::pGLContext.Take();
             MG_State::pGLContext = MakeUnique<GLContext>();
             MGPipeFramebufferEmitterInstance().ResetForTest();
             MGPipeTextureEmitterInstance().ResetForTest();

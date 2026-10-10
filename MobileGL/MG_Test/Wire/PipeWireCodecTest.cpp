@@ -1469,19 +1469,19 @@ TEST_F(PipeWireCodecTest, SetContextValuesRoundTripsIntoPipeInputs) {
     // kReadback's class carries the two texture-unit counters, kDraw's the rest
     // (FillPoints.def) - the stamp is what publishes a RECORD-SUPPLIED field for the read.
     MGPipeServerStampVerbBoundary(MGPipeVerb::ReadPixels);
-    EXPECT_EQ(gPipeInputs.GetActiveTextureUnit(), 9);
-    EXPECT_EQ(gPipeInputs.GetMaxTouchedTextureUnit(), 41);
+    EXPECT_EQ(gPipeInputs->GetActiveTextureUnit(), 9);
+    EXPECT_EQ(gPipeInputs->GetMaxTouchedTextureUnit(), 41);
     MGPipeServerStampVerbBoundary(MGPipeVerb::DrawArrays);
     for (Uint32 t = 0; t < 15; ++t) {
-        EXPECT_EQ(gPipeInputs.GetTouchedBufferBindingPointCount(static_cast<BufferTarget>(t)),
+        EXPECT_EQ(gPipeInputs->GetTouchedBufferBindingPointCount(static_cast<BufferTarget>(t)),
                   SizeT{100 + t})
             << "target " << t;
     }
-    EXPECT_TRUE(gPipeInputs.IsTransformFeedbackActive());
-    EXPECT_TRUE(gPipeInputs.IsTransformFeedbackPaused());
-    EXPECT_EQ(gPipeInputs.GetTransformFeedbackGeneration(), 0xA1A2A3A4A5A6A7A8ull);
-    EXPECT_EQ(gPipeInputs.GetBoundTransformFeedbackLifetimeId(), 0xB1B2B3B4B5B6B7B8ull);
-    EXPECT_EQ(gPipeInputs.GetTransformFeedbackCapturedVertices(), 0xC1C2C3C4C5C6C7C8ull);
+    EXPECT_TRUE(gPipeInputs->IsTransformFeedbackActive());
+    EXPECT_TRUE(gPipeInputs->IsTransformFeedbackPaused());
+    EXPECT_EQ(gPipeInputs->GetTransformFeedbackGeneration(), 0xA1A2A3A4A5A6A7A8ull);
+    EXPECT_EQ(gPipeInputs->GetBoundTransformFeedbackLifetimeId(), 0xB1B2B3B4B5B6B7B8ull);
+    EXPECT_EQ(gPipeInputs->GetTransformFeedbackCapturedVertices(), 0xC1C2C3C4C5C6C7C8ull);
     MGPipeServerClearVerbBoundary();
 }
 

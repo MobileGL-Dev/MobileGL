@@ -816,21 +816,21 @@ TEST(ServerLoopTest, AClearRecordCrossesAndIsStampedAsAVerbBoundary) {
     ASSERT_TRUE(fixture.StartLoop());
 
     // The pre-state is the honest one: nothing has stamped yet in this process.
-    ASSERT_NE(MG_Pipe::gPipeInputs.CurrentVerb(), MG_Pipe::MGPipeVerb::Clear);
+    ASSERT_NE(MG_Pipe::gPipeInputs->CurrentVerb(), MG_Pipe::MGPipeVerb::Clear);
 
     const MG_Pipe::MGPClear clear = WholeFramebufferClear();
     ASSERT_TRUE(fixture.EmitAndWait(MG_Pipe::MGPWireOp::Clear, &clear, sizeof(clear)));
 
     Server::ServerLoop& loop = Server::ServerLoopInstance();
     EXPECT_EQ(loop.DrainedRecords(), 1u);
-    EXPECT_EQ(MG_Pipe::gPipeInputs.CurrentVerb(), MG_Pipe::MGPipeVerb::Clear)
+    EXPECT_EQ(MG_Pipe::gPipeInputs->CurrentVerb(), MG_Pipe::MGPipeVerb::Clear)
         << "PipeApplier::StampVerbBoundary did not run, so every server-side PipeInputs read "
            "would abort on the first field inside SyncRenderState";
 
     // MANDATORY on leaving the applier (p1's M-5): without it a SPAWNED server latches the flag
     // for its whole life, every later read is judged against the last verb's mask, and the
     // sticky forwards start aborting under strict on the very case their exemption exists for.
-    EXPECT_FALSE(MG_Pipe::gPipeInputs.ServerStampedVerb())
+    EXPECT_FALSE(MG_Pipe::gPipeInputs->ServerStampedVerb())
         << "MGPipeServerClearVerbBoundary was not called when the apply thread left the applier";
 
     // No backend object in this process, so the five class-B verbs DECLINE. Asserted rather
@@ -1629,7 +1629,7 @@ namespace {
         // Empty on success, else the step that failed - the harness's SkipReason shape.
         std::string BringUp() {
             PinHeadlessEglEnvironment();
-            savedContext = Move(MG_State::pGLContext);
+            savedContext = MG_State::pGLContext.Take();
             MG_State::pGLContext = MakeUnique<MG_State::GLState::GLContext>();
             Server::ServerLoop& loop = Server::ServerLoopInstance();
             // InitSplitRoles step 1: the server's private backend, no GL and no EGL yet; its
@@ -1944,13 +1944,13 @@ TEST(ServerLoopEglTest, ServerLivenessFollowsControlFramesAcrossReleaseAndRecrea
     MGL_EGL_BRING_UP_OR_BAIL(fixture);
     const auto live = [] {
         Bool answer = false;
-        EXPECT_EQ(OnApply([&] { answer = MG_Pipe::gPipeInputs.IsLive(); }), MOBILEGL_OK);
+        EXPECT_EQ(OnApply([&] { answer = MG_Pipe::gPipeInputs->IsLive(); }), MOBILEGL_OK);
         return answer;
     };
     EXPECT_FALSE(live()) << "surface creation alone is not a served current context";
     ASSERT_TRUE(fixture.MakeCurrent());
     EXPECT_TRUE(live());
-    auto client = Move(MG_State::pGLContext);
+    auto client = MG_State::pGLContext.Take();
     EXPECT_TRUE(live()) << "server liveness must not consult the client GLContext";
     MG_State::pGLContext = Move(client);
     ASSERT_TRUE(fixture.ReleaseCurrent());
@@ -2571,7 +2571,7 @@ TEST(ServerLoopTest, AnInstancedBaseVertexDrawRecordReachesTheSinkWithItsFieldsI
     EXPECT_EQ(seen.FirstRange.IndexBias, 5);
     EXPECT_FALSE(seen.HadUserIndices);
     EXPECT_FALSE(seen.HadIndirect);
-    EXPECT_FALSE(MG_Pipe::gPipeInputs.ServerStampedVerb());
+    EXPECT_FALSE(MG_Pipe::gPipeInputs->ServerStampedVerb());
 
     fixture.Stop();
 }
@@ -2714,7 +2714,7 @@ TEST(P5fReverseChannel, GlErrorsUseTheOwnedCallbackWithoutAResidualPull) {
     g_fvErrorCalls = 0;
     MG_Pipe::MGPipeResetResidualPullCountForTesting();
     MG_Pipe::MGPipeServerStampVerbBoundary(MG_Pipe::MGPipeVerb::Clear);
-    MG_Pipe::gPipeInputs.RecordError(ErrorCode::InvalidOperation,
+    MG_Pipe::gPipeInputs->RecordError(ErrorCode::InvalidOperation,
         MakeUnique<GenericErrorInfo>("fv", "draw", "driver message"));
     EXPECT_EQ(g_fvErrorCalls, 1u);
     EXPECT_EQ(g_fvErrorCode, static_cast<Uint32>(ErrorCode::InvalidOperation));
@@ -2780,7 +2780,7 @@ TEST(P5fReverseChannel, RecordErrorWithoutCallbackIsNamedFatal) {
         MG_Config::Ipc.StrictErrors = true;
         MG_Config::Ipc.RoleSplitState = true;
         MG_Pipe::gMGPipeCallbacks.OnGlError = nullptr;
-        MG_Pipe::gPipeInputs.RecordError(ErrorCode::InvalidOperation, nullptr);
+        MG_Pipe::gPipeInputs->RecordError(ErrorCode::InvalidOperation, nullptr);
         std::_Exit(9);
     }, ::testing::KilledBySignal(SIGABRT), "");
     EXPECT_NE(ReadLog().find("OnGlError.callback-missing"), std::string::npos);
@@ -2815,7 +2815,7 @@ TEST(P5fReverseChannel, GlErrorMessagesShareFifoWithOtherReverseEvents) {
     ASSERT_EQ(Server::ServerLoopInstance().RunProbeOnApplyThreadForTesting(
         +[](void*) -> MobileGLResult {
             MG_Pipe::MGPipeServerStampVerbBoundary(MG_Pipe::MGPipeVerb::Clear);
-            MG_Pipe::gPipeInputs.RecordError(ErrorCode::InvalidOperation,
+            MG_Pipe::gPipeInputs->RecordError(ErrorCode::InvalidOperation,
                 MakeUnique<GenericErrorInfo>("fv", "driver error"));
             const MG_Pipe::MGPRange whole{0, MG_Pipe::kMGPipeWholeBuffer};
             MG_Pipe::gMGPipeCallbacks.OnGpuWritten({17, 3}, 1, &whole);
@@ -3165,7 +3165,7 @@ namespace {
         const MG_Pipe::MGPDrawRange range{0, 3, 0};
         if (!fixture.EmitAndWaitWithTail(MG_Pipe::MGPWireOp::DrawVbo, &info, sizeof(info), &range, sizeof(range)))
             ::_exit(65);
-        if (MG_Pipe::gPipeInputs.CurrentVerb() == MG_Pipe::MGPipeVerb::Clear) ::_exit(66);
+        if (MG_Pipe::gPipeInputs->CurrentVerb() == MG_Pipe::MGPipeVerb::Clear) ::_exit(66);
         // A Clear encoded legally and then SHORTENED in the ring before it is published - the
         // raw-record peer driver's move, in process: its header says 8 bytes, a header and no
         // MGPClear at all.
@@ -3185,7 +3185,7 @@ namespace {
         Server::ServerLoop& loop = Server::ServerLoopInstance();
         (void)PollUntil([&] { return !loop.Running(); }, 3000);
         int failed = 0;
-        if (MG_Pipe::gPipeInputs.CurrentVerb() == MG_Pipe::MGPipeVerb::Clear) failed |= kShortStamped;
+        if (MG_Pipe::gPipeInputs->CurrentVerb() == MG_Pipe::MGPipeVerb::Clear) failed |= kShortStamped;
         if (!Remote::SessionLatched() || std::strstr(Remote::SessionLatchedLine(), "\"record.Minimum\"") == nullptr)
             failed |= kShortWrongFault;
         if (loop.DrainedRecords() != 2) failed |= kShortDrained;

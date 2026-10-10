@@ -894,7 +894,7 @@ TEST(DirectVulkanSanity, AdvertisesSubgroupOnlyWhenVulkanReportsUsableSupport) {
 TEST(DirectVulkanSanity, CapabilityRefreshInvalidatesTheCachedCompileEnvironment) {
     using namespace MobileGL;
 
-    auto previousContext = Move(MG_State::pGLContext);
+    auto previousContext = MG_State::pGLContext.Take();
     auto previousBackend = Move(MG_Backend::pActiveBackendObject);
     MG_State::pGLContext = MakeUnique<MG_State::GLState::GLContext>();
 
@@ -1006,7 +1006,7 @@ TEST(GetterSanity, ClampsMaxVertexAttribsToCurrentValueStorageCapacity) {
 TEST(GetterSanity, ReportsFragmentInterpolationLimitsForFloatAndIntegerQueries) {
     using namespace MobileGL;
 
-    auto previousContext = Move(MG_State::pGLContext);
+    auto previousContext = MG_State::pGLContext.Take();
     auto previousBackend = Move(MG_Backend::pActiveBackendObject);
     MG_State::pGLContext = MakeUnique<MG_State::GLState::GLContext>();
 
@@ -1056,7 +1056,7 @@ TEST(GetterSanity, ReportsFragmentInterpolationLimitsForFloatAndIntegerQueries) 
 TEST(GetterSanity, StorageAndUniformBufferOffsetAlignmentsAreSeparateLimits) {
     using namespace MobileGL;
 
-    auto previousContext = Move(MG_State::pGLContext);
+    auto previousContext = MG_State::pGLContext.Take();
     auto previousBackend = Move(MG_Backend::pActiveBackendObject);
     MG_State::pGLContext = MakeUnique<MG_State::GLState::GLContext>();
 
@@ -1145,7 +1145,7 @@ TEST(GetterSanity, AtomicCounterQueriesMatchShaderCompilerLimits) {
     using namespace MobileGL;
     namespace Transpiler = MG_Util::ShaderTranspiler;
 
-    auto previousContext = Move(MG_State::pGLContext);
+    auto previousContext = MG_State::pGLContext.Take();
     auto previousBackend = Move(MG_Backend::pActiveBackendObject);
     MG_State::pGLContext = MakeUnique<MG_State::GLState::GLContext>();
     MG_Backend::pActiveBackendObject = MakeUnique<DynamicParameterBackend>(MG_Backend::DynamicBackendParameters{});
@@ -1224,7 +1224,7 @@ void main() {
 TEST(GetterSanity, ComputeWorkGroupQueriesMatchShaderCompilerLimits) {
     using namespace MobileGL;
 
-    auto previousContext = Move(MG_State::pGLContext);
+    auto previousContext = MG_State::pGLContext.Take();
     auto previousBackend = Move(MG_Backend::pActiveBackendObject);
     MG_State::pGLContext = MakeUnique<MG_State::GLState::GLContext>();
     MG_Backend::pActiveBackendObject = MakeUnique<DynamicParameterBackend>(MG_Backend::DynamicBackendParameters{});
@@ -1305,7 +1305,7 @@ void main() {
 TEST(GetterSanity, EveryLimitWithABuiltinAgreesWithItsQuery) {
     using namespace MobileGL;
 
-    auto previousContext = Move(MG_State::pGLContext);
+    auto previousContext = MG_State::pGLContext.Take();
     auto previousBackend = Move(MG_Backend::pActiveBackendObject);
     MG_State::pGLContext = MakeUnique<MG_State::GLState::GLContext>();
     MG_Backend::pActiveBackendObject =
@@ -1404,7 +1404,7 @@ TEST(GetterSanity, EveryLimitWithABuiltinAgreesWithItsQuery) {
 TEST(GetterSanity, MaxElementIndexIsTheFull32BitIndexCeiling) {
     using namespace MobileGL;
 
-    auto previousContext = Move(MG_State::pGLContext);
+    auto previousContext = MG_State::pGLContext.Take();
     auto previousBackend = Move(MG_Backend::pActiveBackendObject);
     MG_State::pGLContext = MakeUnique<MG_State::GLState::GLContext>();
     MG_Backend::pActiveBackendObject = MakeUnique<DynamicParameterBackend>(MG_Backend::DynamicBackendParameters{});
@@ -1431,7 +1431,7 @@ TEST(GetterSanity, MaxElementIndexIsTheFull32BitIndexCeiling) {
 TEST(GetterSanity, PerCategoryMultisampleCeilingsAreProbedRatherThanFlooredAtFour) {
     using namespace MobileGL;
 
-    auto previousContext = Move(MG_State::pGLContext);
+    auto previousContext = MG_State::pGLContext.Take();
     auto previousBackend = Move(MG_Backend::pActiveBackendObject);
     MG_State::pGLContext = MakeUnique<MG_State::GLState::GLContext>();
 
@@ -1473,7 +1473,7 @@ TEST(GetterSanity, PerCategoryMultisampleCeilingsAreProbedRatherThanFlooredAtFou
 TEST(ShaderCompilerSanity, ArbCullDistanceIsUsableBelow450) {
     using namespace MobileGL;
 
-    auto previousContext = Move(MG_State::pGLContext);
+    auto previousContext = MG_State::pGLContext.Take();
     auto previousBackend = Move(MG_Backend::pActiveBackendObject);
     MG_State::pGLContext = MakeUnique<MG_State::GLState::GLContext>();
     MG_Backend::pActiveBackendObject = MakeUnique<DynamicParameterBackend>(MG_Backend::DynamicBackendParameters{});
@@ -4579,7 +4579,7 @@ TEST(DirectGLESVertexInputDraw, TheAttributeWalkTakesItsBuffersFromTheRecordNotT
     // this case exists to catch - gPipeInputs->GetBoundVertexArray()->GetAllAttributes() - has
     // anything to read at all; a free-standing object would make the revert crash instead of
     // disagree, which is a red for the wrong reason.
-    SharedPtr<GLContext> previousContext = Move(MG_State::pGLContext);
+    SharedPtr<GLContext> previousContext = MG_State::pGLContext.Take();
     MG_State::pGLContext = MakeUnique<GLContext>();
     MG_State::pGLContext->CreateVertexArrayObject(1);
     MG_State::pGLContext->BindVertexArray(1);
@@ -4650,7 +4650,7 @@ TEST(DirectGLESVertexInputDraw, TheIndexArmTakesItsBufferAndItsSerialFromTheReco
 
     // The frontend's element slot has moved to another buffer with nothing emitted, in a real
     // context for the reason the case above gives.
-    SharedPtr<GLContext> previousContext = Move(MG_State::pGLContext);
+    SharedPtr<GLContext> previousContext = MG_State::pGLContext.Take();
     MG_State::pGLContext = MakeUnique<GLContext>();
     MG_State::pGLContext->CreateVertexArrayObject(1);
     MG_State::pGLContext->BindVertexArray(1);

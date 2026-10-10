@@ -73,7 +73,7 @@ namespace {
     class PipeInputsTest : public ::testing::Test {
     protected:
         void SetUp() override {
-            m_previous = Move(MG_State::pGLContext);
+            m_previous = MG_State::pGLContext.Take();
             MG_State::pGLContext = MakeUnique<GLContext>();
             MGPipeSetPoisonOmission(nullptr, nullptr);
         }
@@ -85,7 +85,7 @@ namespace {
     };
 
 #if MOBILEGL_PIPE_POISON
-    Bool Fresh(MGPipeInputField field) { return MGPipeInputFieldIsFresh(gPipeInputs.FilledState(), field); }
+    Bool Fresh(MGPipeInputField field) { return MGPipeInputFieldIsFresh(gPipeInputs->FilledState(), field); }
 #endif
 
     [[maybe_unused]] constexpr const char* kOmittedFatal ="Fatal{UnmigratedPipeInput, \"GetActiveTextureUnit@GenerateMipmap\"}";
@@ -147,7 +147,7 @@ TEST_F(PipeInputsTest, OmittingOneFieldForOneVerbLeavesExactlyThatFieldStale) {
     EXPECT_TRUE(Fresh(MGPipeInputField::GetTextureUnitObject));
     EXPECT_FALSE(Fresh(MGPipeInputField::GetActiveTextureUnit));
     // The value was still copied: only the stamp is withheld.
-    EXPECT_EQ(gPipeInputs.CurrentVerb(), MGPipeVerb::GenerateMipmap);
+    EXPECT_EQ(gPipeInputs->CurrentVerb(), MGPipeVerb::GenerateMipmap);
     // Exactly that field: a field is fresh iff its bit is in kTextureOp's mask and it is not
     // the omitted one.
     {
@@ -174,7 +174,7 @@ TEST_F(PipeInputsTest, OmittingOneFieldForOneVerbLeavesExactlyThatFieldStale) {
 }
 
 // Negative control B, layer 2 (G5): the read itself. The child fills GenerateMipmap with the
-// omission and reads gPipeInputs.GetActiveTextureUnit(); the parent expects SIGABRT and the
+// omission and reads gPipeInputs->GetActiveTextureUnit(); the parent expects SIGABRT and the
 // exact Fatal line, and that nothing else was fatal.
 TEST_F(PipeInputsTest, ReadingAnOmittedFieldAbortsNamingTheVerb) {
 #if !MOBILEGL_PIPE_POISON
@@ -186,10 +186,10 @@ TEST_F(PipeInputsTest, ReadingAnOmittedFieldAbortsNamingTheVerb) {
     const ChildResult r = RunInChild([] {
         MGPipeSetPoisonOmission("GenerateMipmap", "GetActiveTextureUnit");
         MGPipeValidateForVerb(MGPipeVerb::DrawArrays);
-        (void)gPipeInputs.GetRenderStateParameters(); // a filled field of the preceding draw: must not abort
+        (void)gPipeInputs->GetRenderStateParameters(); // a filled field of the preceding draw: must not abort
         MGPipeValidateForVerb(MGPipeVerb::GenerateMipmap);
-        (void)gPipeInputs.GetTextureUnitObject(0); // the sibling field: filled, must not abort
-        (void)gPipeInputs.GetActiveTextureUnit();  // the omitted field: Fatal
+        (void)gPipeInputs->GetTextureUnitObject(0); // the sibling field: filled, must not abort
+        (void)gPipeInputs->GetActiveTextureUnit();  // the omitted field: Fatal
         ::_exit(3);                                // reached only if the poison failed
     });
     ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
@@ -207,10 +207,10 @@ TEST_F(PipeInputsTest, ReadingAFilledFieldCompletes) {
     ASSERT_FALSE(g_logPath.empty()) << "main() did not set MOBILEGL_LOG_FILE_PATH";
     const ChildResult r = RunInChild([] {
         MGPipeValidateForVerb(MGPipeVerb::DrawArrays);
-        (void)gPipeInputs.GetRenderStateParameters();
+        (void)gPipeInputs->GetRenderStateParameters();
         MGPipeValidateForVerb(MGPipeVerb::GenerateMipmap);
-        (void)gPipeInputs.GetTextureUnitObject(0);
-        (void)gPipeInputs.GetActiveTextureUnit();
+        (void)gPipeInputs->GetTextureUnitObject(0);
+        (void)gPipeInputs->GetActiveTextureUnit();
     });
     ASSERT_TRUE(ExitedWith(r, 0)) << DescribeStatus(r) << "\n" << r.Log;
     EXPECT_EQ(r.Log.find("Fatal{"), std::string::npos) << r.Log;
@@ -229,7 +229,7 @@ TEST_F(PipeInputsTest, ReadingBeforeAnyFillAbortsNamingNoVerb) {
     GTEST_SKIP() << "no fork() on this platform";
 #else
     ASSERT_FALSE(g_logPath.empty()) << "main() did not set MOBILEGL_LOG_FILE_PATH";
-    if (gPipeInputs.FilledState().CurrentVerbSerial != 0) {
+    if (gPipeInputs->FilledState().CurrentVerbSerial != 0) {
         GTEST_SKIP() << "another case already filled in this process; gtest_discover_tests runs each case alone";
     }
     MG_State::pGLContext->SetLineWidth(7.0f); // a live value the default storage (0) does not hold
@@ -237,7 +237,7 @@ TEST_F(PipeInputsTest, ReadingBeforeAnyFillAbortsNamingNoVerb) {
 #if MOBILEGL_PIPE_VERIFY
         MG_Config::Features.PipeVerify = true;
 #endif
-        (void)gPipeInputs.GetLineWidth(); // Fatal{UnmigratedPipeInput, "GetLineWidth@<none>"}
+        (void)gPipeInputs->GetLineWidth(); // Fatal{UnmigratedPipeInput, "GetLineWidth@<none>"}
         ::_exit(3);                        // reached only if the pre-fill window read as fresh
     });
     ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
@@ -261,8 +261,8 @@ TEST_F(PipeInputsTest, PoisonOmitKnobArmsTheOmission) {
     const ChildResult r = RunInChild([] {
         MG_Config::Features.PipePoisonOmit = kOmissionKnob;
         MGPipeValidateForVerb(MGPipeVerb::GenerateMipmap);
-        (void)gPipeInputs.GetTextureUnitObject(0); // the sibling field: filled, must not abort
-        (void)gPipeInputs.GetActiveTextureUnit();  // the omitted field: Fatal
+        (void)gPipeInputs->GetTextureUnitObject(0); // the sibling field: filled, must not abort
+        (void)gPipeInputs->GetActiveTextureUnit();  // the omitted field: Fatal
         ::_exit(3);
     });
     ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
@@ -301,9 +301,9 @@ TEST_F(PipeInputsTest, CorruptedSnapshotFieldIsNamedWithItsSerial) {
 #if !MOBILEGL_PIPE_VERIFY
     GTEST_SKIP() << "verify not compiled in (MOBILEGL_PIPE_VERIFY=OFF)";
 #else
-    const Uint64 serialBefore = gPipeInputs.FilledState().CurrentVerbSerial;
+    const Uint64 serialBefore = gPipeInputs->FilledState().CurrentVerbSerial;
     MGPipeValidateForVerb(MGPipeVerb::DrawArrays);
-    const Uint64 serial = gPipeInputs.FilledState().CurrentVerbSerial;
+    const Uint64 serial = gPipeInputs->FilledState().CurrentVerbSerial;
     EXPECT_EQ(serial, serialBefore + 1);
     const MGPipeFieldMask& mask = kMGPipeClassFieldMask[static_cast<SizeT>(MGPipeVerbClass::kDraw)];
 
@@ -318,7 +318,7 @@ TEST_F(PipeInputsTest, CorruptedSnapshotFieldIsNamedWithItsSerial) {
     EXPECT_EQ(field, MGPipeInputField::GetRenderStateParameters);
     EXPECT_STREQ(kMGPipeInputFieldNames[static_cast<SizeT>(field)], "GetRenderStateParameters");
     // The serial the report would print is the fill's, and it stamped that field.
-    EXPECT_EQ(gPipeInputs.FilledState().FilledGen[static_cast<SizeT>(field)], serial);
+    EXPECT_EQ(gPipeInputs->FilledState().FilledGen[static_cast<SizeT>(field)], serial);
 
     // A forwarded field has nothing to corrupt, and the corruption of a field outside the
     // mask is not seen by a compare over that mask.
@@ -341,15 +341,15 @@ TEST_F(PipeInputsTest, MutatedFieldIsNamedAtRead) {
 #else
     ASSERT_FALSE(g_logPath.empty()) << "main() did not set MOBILEGL_LOG_FILE_PATH";
     MGPipeValidateForVerb(MGPipeVerb::Clear); // the parent armed nothing: Features.PipeVerify is false here
-    const Uint64 serial = gPipeInputs.FilledState().CurrentVerbSerial + 1; // the child's DrawArrays fill
+    const Uint64 serial = gPipeInputs->FilledState().CurrentVerbSerial + 1; // the child's DrawArrays fill
     const ChildResult r = RunInChild([] {
         MG_Config::Features.PipeVerify = true;
         MGPipeValidateForVerb(MGPipeVerb::DrawArrays);
-        const Float boundary = gPipeInputs.GetLineWidth(); // boundary == live: completes
-        (void)gPipeInputs.GetRenderStateParameters();
+        const Float boundary = gPipeInputs->GetLineWidth(); // boundary == live: completes
+        (void)gPipeInputs->GetRenderStateParameters();
         MG_State::pGLContext->SetLineWidth(boundary + 1.0f);
         if (MG_State::pGLContext->GetLineWidth() == boundary) ::_exit(7); // the mutation did not take
-        (void)gPipeInputs.GetLineWidth(); // the stored value is stale against the live one: Fatal
+        (void)gPipeInputs->GetLineWidth(); // the stored value is stale against the live one: Fatal
         ::_exit(3);
     });
     ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
@@ -375,7 +375,7 @@ TEST_F(PipeInputsTest, VerifyCorruptKnobNamesTheFieldAtEntry) {
 #else
     ASSERT_FALSE(g_logPath.empty()) << "main() did not set MOBILEGL_LOG_FILE_PATH";
     MGPipeValidateForVerb(MGPipeVerb::Clear);
-    const Uint64 serial = gPipeInputs.FilledState().CurrentVerbSerial + 1;
+    const Uint64 serial = gPipeInputs->FilledState().CurrentVerbSerial + 1;
     const ChildResult r = RunInChild([] {
         MG_Config::Features.PipeVerify = true;
         MG_Config::Features.PipeVerifyCorrupt = "GetRenderStateParameters";
@@ -428,7 +428,7 @@ TEST_F(PipeInputsTest, VerifyFatalOffLogsTheDivergenceAndContinues) {
 #else
     ASSERT_FALSE(g_logPath.empty()) << "main() did not set MOBILEGL_LOG_FILE_PATH";
     MGPipeValidateForVerb(MGPipeVerb::Clear);
-    const Uint64 serial = gPipeInputs.FilledState().CurrentVerbSerial + 1;
+    const Uint64 serial = gPipeInputs->FilledState().CurrentVerbSerial + 1;
     const ChildResult r = RunInChild([] {
         MG_Config::Features.PipeVerify = true;
         MG_Config::Features.PipeVerifyFatal = false;
@@ -467,8 +467,8 @@ TEST_F(PipeInputsTest, EveryVerbFillsItsClassAndNothingElse) {
                 << kMGPipeInputFieldNames[f] << " after " << kMGPipeVerbNames[v];
         }
     }
-    EXPECT_EQ(gPipeInputs.ContextIdentity(), static_cast<const void*>(MG_State::pGLContext.get()));
-    EXPECT_TRUE(gPipeInputs.IsLive());
+    EXPECT_EQ(gPipeInputs->ContextIdentity(), static_cast<const void*>(MG_State::pGLContext.get()));
+    EXPECT_TRUE(gPipeInputs->IsLive());
 #endif
 }
 
@@ -481,9 +481,9 @@ TEST_F(PipeInputsTest, EveryVerbFillsItsClassAndNothingElse) {
 TEST_F(PipeInputsTest, AFrontendMutationInsideAVerbRefreshesThePushedField) {
     auto& ctx = *MG_State::pGLContext;
     MGPipeValidateForVerb(MGPipeVerb::DrawArrays);
-    ASSERT_EQ(gPipeInputs.GetSamplingResolutionGeneration(), ctx.GetSamplingResolutionGeneration());
-    ASSERT_EQ(gPipeInputs.GetTextureBindGeneration(), ctx.GetTextureBindGeneration());
-    ASSERT_EQ(gPipeInputs.GetMaxTouchedTextureUnit(), ctx.GetMaxTouchedTextureUnit());
+    ASSERT_EQ(gPipeInputs->GetSamplingResolutionGeneration(), ctx.GetSamplingResolutionGeneration());
+    ASSERT_EQ(gPipeInputs->GetTextureBindGeneration(), ctx.GetTextureBindGeneration());
+    ASSERT_EQ(gPipeInputs->GetMaxTouchedTextureUnit(), ctx.GetMaxTouchedTextureUnit());
 
     // What UniformManager's fallback path does mid-draw: change a sampler object's filter,
     // which bumps the context-wide sampling-resolution generation (SamplerObject.cpp).
@@ -492,7 +492,7 @@ TEST_F(PipeInputsTest, AFrontendMutationInsideAVerbRefreshesThePushedField) {
     sampler->SetMinFilter(sampler->GetMinFilter() == SamplerFilterMode::Nearest ? SamplerFilterMode::Linear
                                                                                : SamplerFilterMode::Nearest);
     ASSERT_NE(ctx.GetSamplingResolutionGeneration(), samplingBefore) << "the mutation did not move the counter";
-    EXPECT_EQ(gPipeInputs.GetSamplingResolutionGeneration(), ctx.GetSamplingResolutionGeneration());
+    EXPECT_EQ(gPipeInputs->GetSamplingResolutionGeneration(), ctx.GetSamplingResolutionGeneration());
 
     // And a bind reached from inside a verb moves both the bind generation and the
     // high-water mark of touched units (TextureState::NoteUnitTouched).
@@ -501,8 +501,8 @@ TEST_F(PipeInputsTest, AFrontendMutationInsideAVerbRefreshesThePushedField) {
     ctx.NoteTextureUnitTouched(unit);
     ASSERT_NE(ctx.GetTextureBindGeneration(), bindBefore) << "the bind did not move the counter";
     ASSERT_EQ(ctx.GetMaxTouchedTextureUnit(), unit);
-    EXPECT_EQ(gPipeInputs.GetTextureBindGeneration(), ctx.GetTextureBindGeneration());
-    EXPECT_EQ(gPipeInputs.GetMaxTouchedTextureUnit(), ctx.GetMaxTouchedTextureUnit());
+    EXPECT_EQ(gPipeInputs->GetTextureBindGeneration(), ctx.GetTextureBindGeneration());
+    EXPECT_EQ(gPipeInputs->GetMaxTouchedTextureUnit(), ctx.GetMaxTouchedTextureUnit());
 }
 
 // The notice refreshes the VALUE and never the stamp: a field this verb withheld the stamp
@@ -547,7 +547,7 @@ TEST_F(PipeInputsTest, AFrontendMutationInsideAVerbDoesNotDivergeAtRead) {
     const ChildResult r = RunInChild([] {
         MG_Config::Features.PipeVerify = true;
         MGPipeValidateForVerb(MGPipeVerb::DrawArrays);
-        (void)gPipeInputs.GetSamplingResolutionGeneration(); // boundary == live: completes
+        (void)gPipeInputs->GetSamplingResolutionGeneration(); // boundary == live: completes
         auto& ctx = *MG_State::pGLContext;
         const Uint64 before = ctx.GetSamplingResolutionGeneration();
         auto sampler = MakeShared<MG_State::GLState::SamplerObject>(0u);
@@ -556,10 +556,10 @@ TEST_F(PipeInputsTest, AFrontendMutationInsideAVerbDoesNotDivergeAtRead) {
         if (ctx.GetSamplingResolutionGeneration() == before) {
             ::_exit(7); // the mutation did not take: the case would pass for the wrong reason
         }
-        (void)gPipeInputs.GetSamplingResolutionGeneration(); // Fatal{PipeVerifyDiffer} without the notice
+        (void)gPipeInputs->GetSamplingResolutionGeneration(); // Fatal{PipeVerifyDiffer} without the notice
         ctx.NoteTextureUnitTouched(ctx.GetMaxTouchedTextureUnit() + 1);
-        (void)gPipeInputs.GetTextureBindGeneration();
-        (void)gPipeInputs.GetMaxTouchedTextureUnit();
+        (void)gPipeInputs->GetTextureBindGeneration();
+        (void)gPipeInputs->GetMaxTouchedTextureUnit();
     });
     ASSERT_TRUE(ExitedWith(r, 0)) << DescribeStatus(r) << "\n" << r.Log;
     EXPECT_NE(r.Log.find("MGPipe: verify armed"), std::string::npos) << r.Log;

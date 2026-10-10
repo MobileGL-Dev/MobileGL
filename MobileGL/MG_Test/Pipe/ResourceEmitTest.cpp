@@ -1807,7 +1807,7 @@ namespace {
             m_previousPush = MG_Config::Features.PipePush;
             MG_Config::Features.PipePush |= kMGPipeSubsystemResources;
             MGPipeSetResourceOps(&m_ops);
-            m_previousContext = Move(MG_State::pGLContext);
+            m_previousContext = MG_State::pGLContext.Take();
             MG_State::pGLContext = MakeUnique<GLContext>();
         }
         ~PushArm() {

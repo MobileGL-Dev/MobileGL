@@ -248,7 +248,7 @@
             !(memo.drawFramebuffer == st.BoundFramebuffer[SizeT(MG_Pipe::MGPipeFramebufferTarget::Draw)]) ||
             memo.textureImageEpoch != m_textureManager->GetTextureImageEpoch() ||
             memo.resourceEraseEpoch != m_textureManager->GetResourceEraseEpoch() ||
-            memo.framebufferSrgb != MG_Pipe::gPipeInputs.IsCapabilityEnabled(CapabilityInput::FramebufferSrgb))
+            memo.framebufferSrgb != MG_Pipe::gPipeInputs->IsCapabilityEnabled(CapabilityInput::FramebufferSrgb))
             return false;
         // The resources are good while the erase epoch holds. Each must still be what the walk
         // left: in GENERAL and synced to its record's serial with nothing pending.
@@ -300,7 +300,7 @@
         auto& passKey = scratch.passKey;
         passKey.ResetKeepingCapacity();
         passKey.isDefault = fbo.IsDefault;
-        passKey.framebufferSrgb = MG_Pipe::gPipeInputs.IsCapabilityEnabled(CapabilityInput::FramebufferSrgb);
+        passKey.framebufferSrgb = MG_Pipe::gPipeInputs->IsCapabilityEnabled(CapabilityInput::FramebufferSrgb);
         if (fbo.IsDefault) {
             passKey.swapchain = m_swapchainObject.GetHandle();
             // A drawing pass on the default framebuffer is what makes the freshly acquired
@@ -326,7 +326,7 @@
                 {image.resource, image.storage, surface.Kind == MG_Pipe::kMGPipeSurfaceKindRenderbuffer});
             if (aspect == VK_IMAGE_ASPECT_COLOR_BIT)
                 image.format = ResolveSrgbAttachmentWriteFormat(image.format,
-                    MG_Pipe::gPipeInputs.IsCapabilityEnabled(CapabilityInput::FramebufferSrgb));
+                    MG_Pipe::gPipeInputs->IsCapabilityEnabled(CapabilityInput::FramebufferSrgb));
             const VkImageLayout layout = aspect == VK_IMAGE_ASPECT_COLOR_BIT ?
                 VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_GENERAL;
             // Already in its attachment layout: its barrier (which closes any open pass) waits until
@@ -470,7 +470,7 @@
             memo.drawFramebuffer = st.BoundFramebuffer[SizeT(MG_Pipe::MGPipeFramebufferTarget::Draw)];
             memo.textureImageEpoch = m_textureManager->GetTextureImageEpoch();
             memo.resourceEraseEpoch = m_textureManager->GetResourceEraseEpoch();
-            memo.framebufferSrgb = MG_Pipe::gPipeInputs.IsCapabilityEnabled(CapabilityInput::FramebufferSrgb);
+            memo.framebufferSrgb = MG_Pipe::gPipeInputs->IsCapabilityEnabled(CapabilityInput::FramebufferSrgb);
             memo.passHash = m_wireDrawPass->hash;
             memo.marks.assign(scratch.gpuWriteMarks.begin(), scratch.gpuWriteMarks.end());
         }
@@ -522,7 +522,7 @@
 
         ProgramFactory::CompileOptionFlags flags =
             ProgramFactory::CompileOptionFlags(GetBaseTransformFlagsRaw(fbo->IsDefault));
-        if (m_transformFeedbackFeatureEnabled && MG_Pipe::gPipeInputs.IsTransformFeedbackActive() &&
+        if (m_transformFeedbackFeatureEnabled && MG_Pipe::gPipeInputs->IsTransformFeedbackActive() &&
             program.GetTransformFeedbackVaryingCount() > 0)
             flags |= ProgramFactory::CompileOptionBit::XfbCapture;
         const auto* programObject = &m_programFactory->GetOrCreateProgram(program, flags);
@@ -727,7 +727,7 @@
                 return false;
             }
             indexType = width == 4 ? VK_INDEX_TYPE_UINT32 : width == 2 ? VK_INDEX_TYPE_UINT16 : VK_INDEX_TYPE_UINT8;
-            const auto& restart = MG_Pipe::gPipeInputs.GetRenderStateParameters();
+            const auto& restart = MG_Pipe::gPipeInputs->GetRenderStateParameters();
             const Uint32 fixed = MG_Util::FixedRestartIndexForGLType(indices->indexType);
             const Bool replaceRestart = restart.PrimitiveRestartEnabled && !restart.PrimitiveRestartFixedIndexEnabled &&
                 restart.PrimitiveRestartIndex < fixed;
@@ -864,7 +864,7 @@
             VkFormat format = VK_FORMAT_UNDEFINED;
             const void* data = nullptr;
             VkDeviceSize size = 0;
-            if (!TryGetCurrentVertexAttributeUploadPayload(MG_Pipe::gPipeInputs.GetCurrentVertexAttribute(location),
+            if (!TryGetCurrentVertexAttributeUploadPayload(MG_Pipe::gPipeInputs->GetCurrentVertexAttribute(location),
                     programObj.vertexInputTypes[location], format, data, size)) {
                 MGL_WIRE_DECLINE_AT(CurrentAttributePayload, "a disabled array's current attribute value has no upload payload");
                 return false;
@@ -987,7 +987,7 @@
                 const Int32 attachment = fbo.DrawBuffers[i];
                 if (attachment < 0 || attachment >= static_cast<Int32>(MG_Pipe::kMGPipeMaxColorAttachments)) continue;
                 if (!fbo.IsDefault && fbo.Color[attachment].Kind == MG_Pipe::kMGPipeSurfaceKindNone) continue;
-                const auto mask = MG_Pipe::gPipeInputs.GetColorMaskIndexed(i);
+                const auto mask = MG_Pipe::gPipeInputs->GetColorMaskIndexed(i);
                 if (!mask.r() && !mask.g() && !mask.b() && !mask.a()) continue;
                 if (!mask.r() || !mask.g() || !mask.b() || !mask.a()) { all = false; break; }
                 if (i >= key.colorReferences.size() || key.colorReferences[i] == VK_ATTACHMENT_UNUSED ||
@@ -1007,7 +1007,7 @@
                                                                                     : nullptr;
         VkImageAspectFlags depthStencilAspects = 0;
         if (remaining & GL_DEPTH_BUFFER_BIT) {
-            if (!MG_Pipe::gPipeInputs.GetDepthMask()) {
+            if (!MG_Pipe::gPipeInputs->GetDepthMask()) {
                 handled |= GL_DEPTH_BUFFER_BIT; // nothing to write, as on the standalone path
             } else if (!fbo.IsDefault && fbo.Depth.Kind == MG_Pipe::kMGPipeSurfaceKindNone) {
                 handled |= GL_DEPTH_BUFFER_BIT; // no depth surface: nothing to clear
@@ -1018,7 +1018,7 @@
             }
         }
         if (remaining & GL_STENCIL_BUFFER_BIT) {
-            const Uint32 mask = MG_Pipe::gPipeInputs.GetStencilState(StencilFace::Front).WriteMask & 255u;
+            const Uint32 mask = MG_Pipe::gPipeInputs->GetStencilState(StencilFace::Front).WriteMask & 255u;
             if (mask == 0) {
                 handled |= GL_STENCIL_BUFFER_BIT;
             } else if (!fbo.IsDefault && fbo.Stencil.Kind == MG_Pipe::kMGPipeSurfaceKindNone) {
@@ -1047,7 +1047,7 @@
 
         VkRect2D area{{0, 0}, {key.width, key.height}};
         if (GLScissorTestClips()) {
-            const auto& box = MG_Pipe::gPipeInputs.GetScissorBox();
+            const auto& box = MG_Pipe::gPipeInputs->GetScissorBox();
             const Int32 x0 = std::max(box.x(), 0), y0 = std::max(box.y(), 0);
             const Int32 x1 = std::min(box.x() + box.z(), static_cast<Int32>(key.width));
             const Int32 y1 = std::min(box.y() + box.w(), static_cast<Int32>(key.height));

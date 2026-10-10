@@ -275,11 +275,11 @@ namespace MobileGL::MG_Record {
 
         // Save the server-visible pack state, force neutral for the read, restore. Both go through
         // the applier's own set_pixel_pack_state entry point (MGPipeApplySetPixelPackState writes
-        // gPipeInputs.m_pixelStore[0], which the backend's ReadPixels reads via
+        // gPipeInputs->m_pixelStore[0], which the backend's ReadPixels reads via
         // gPipeInputs->GetPixelStoreParameters); the read is synchronous on this thread, so the window
         // in which the pack state is neutral does not outlive the call.
         const MG_Pipe::PixelStoreParameters savedPack =
-            MG_Pipe::gPipeInputs.GetPixelStoreParameters(/*isUnpack=*/false);
+            MG_Pipe::gPipeInputs->GetPixelStoreParameters(/*isUnpack=*/false);
         // MG_Pipe owns the constant (MGPipeTypes.h): in a verify build the compare-at-read hook's
         // oracle for the pack half inside this window is the same value, and a second hand-typed
         // copy would drift without a build break.
@@ -566,7 +566,7 @@ namespace MobileGL::MG_Record {
         // session child (false = latched, the verb declines); unarmed they still die.
         Bool CheckUnitWindows(const MG_Pipe::MGPipeApplierState& st, const char* verb) {
             if (st.SamplerViewCount == 0 && st.SamplerStateCount == 0) return true;
-            const Int maxTouched = MG_Pipe::gPipeInputs.GetMaxTouchedTextureUnit();
+            const Int maxTouched = MG_Pipe::gPipeInputs->GetMaxTouchedTextureUnit();
             if (maxTouched < 0) return true;
             const Uint32 required = static_cast<Uint32>(maxTouched) + 1u;
             if (st.SamplerViewStart != 0 || st.SamplerViewCount < required) {

@@ -32,10 +32,10 @@ namespace MGITest {
         out->peekAvailable = true;
         out->roleSplitActive = MGP::MGPipeRoleSplitRehearsalActive();
         MGP::PipeInputs& client = MGP::MGPipeClientInputs();
-        out->blocksDistinct = &client != &MGP::gPipeInputs;
+        out->blocksDistinct = &client != &*MGP::gPipeInputs;
         out->clientSerial = client.FilledState().CurrentVerbSerial;
-        out->serverSerial = MGP::gPipeInputs.FilledState().CurrentVerbSerial;
-        out->serverIdentity = MGP::gPipeInputs.ContextIdentity();
+        out->serverSerial = MGP::gPipeInputs->FilledState().CurrentVerbSerial;
+        out->serverIdentity = MGP::gPipeInputs->ContextIdentity();
         return true;
     }
 

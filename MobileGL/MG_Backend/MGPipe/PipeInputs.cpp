@@ -442,7 +442,7 @@ namespace MobileGL::MG_Pipe {
         // D10: THE WIDER PREDICATE, and the narrow one was a latent crash rather than a missing
         // optimisation. Gated on the REHEARSAL, this early-returned for the whole life of a
         // spawn server - because that knob is off by default and nothing in the spawn shape
-        // turns it on - so the server's gPipeInputs.ContextIdentity() stayed nullptr forever.
+        // turns it on - so the server's gPipeInputs->ContextIdentity() stayed nullptr forever.
         // DirectGLES' fb-slot memo compares that identity FIRST and with no generation, so a
         // nullptr against its own nullptr initialiser reads as a CACHE HIT and hands out a slot
         // that was never filled. `st` lands the named Fatal at that site; this is the gate that
@@ -596,12 +596,12 @@ namespace MobileGL::MG_Pipe {
         // The seven carry no MGP_INPUT_CHECK at all (the declared exception argued at
         // PipeInputs.h's F-class block), so freshness can never reach them and neither can the
         // stamp's withdrawal. This is the only thing that puts them in `rsp`.
-        if (!gPipeInputs.ServerStampedVerb()) return;
+        if (!gPipeInputs->ServerStampedVerb()) return;
         const auto ownership = MGPipeFieldOwnershipOf(field);
         if (ownership == MGPipeFieldOwnership::kFatal)
-            MGPipeInputPoisonFatalForVerb(field, gPipeInputs.CurrentVerb());
+            MGPipeInputPoisonFatalForVerb(field, gPipeInputs->CurrentVerb());
         if (ownership == MGPipeFieldOwnership::kBarrierPulled)
-            CountBarrierPull(field, gPipeInputs.CurrentVerb());
+            CountBarrierPull(field, gPipeInputs->CurrentVerb());
     }
 #endif // MOBILEGL_BUILD_RECORD_ARM && MOBILEGL_PIPE_POISON
 

@@ -222,7 +222,7 @@ TEST_F(ContextStateOwnershipTest, DestroyingOneContextLeavesTheOtherAlone) {
 
 TEST_F(ContextStateOwnershipTest, ReleasingAnEglContextRestoresTheThreadsPreviousGLState) {
     const auto contextA = NewContext(EGL_NO_CONTEXT);
-    const auto before = MG_State::pGLContext;
+    const auto before = MG_State::pGLContext.Shared();
     ASSERT_NE(before, nullptr);
 
     MakeCurrent(contextA);
@@ -234,7 +234,7 @@ TEST_F(ContextStateOwnershipTest, ReleasingAnEglContextRestoresTheThreadsPreviou
 }
 
 TEST_F(ContextStateOwnershipTest, AThreadWithoutACurrentContextUsesTheProcessDefaultContext) {
-    const auto processDefault = MG_State::pGLContext;
+    const auto processDefault = MG_State::pGLContext.Shared();
     ASSERT_NE(processDefault, nullptr);
     EXPECT_EQ(processDefault, MG_State::ProcessDefaultGLContext());
 

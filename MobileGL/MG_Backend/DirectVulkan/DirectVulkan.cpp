@@ -291,25 +291,25 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     void ClearBufferfi(GLenum buffer, GLint drawbuffer, GLfloat depth, GLint stencil) {
         MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::ClearBufferfi called with null VulkanRenderer");
-        MOBILEGL_ASSERT(MG_Pipe::gPipeInputs.IsLive(), "DirectVulkan::ClearBufferfi called with null GL context");
+        MOBILEGL_ASSERT(MG_Pipe::gPipeInputs->IsLive(), "DirectVulkan::ClearBufferfi called with null GL context");
         pVulkanRenderer->ClearBufferfi(buffer, drawbuffer, depth, stencil);
     }
 
     void ClearBufferfv(GLenum buffer, GLint drawbuffer, const GLfloat* value) {
         MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::ClearBufferfv called with null VulkanRenderer");
-        MOBILEGL_ASSERT(MG_Pipe::gPipeInputs.IsLive(), "DirectVulkan::ClearBufferfv called with null GL context");
+        MOBILEGL_ASSERT(MG_Pipe::gPipeInputs->IsLive(), "DirectVulkan::ClearBufferfv called with null GL context");
         pVulkanRenderer->ClearBufferfv(buffer, drawbuffer, value);
     }
 
     void ClearBufferuiv(GLenum buffer, GLint drawbuffer, const GLuint* value) {
         MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::ClearBufferuiv called with null VulkanRenderer");
-        MOBILEGL_ASSERT(MG_Pipe::gPipeInputs.IsLive(), "DirectVulkan::ClearBufferuiv called with null GL context");
+        MOBILEGL_ASSERT(MG_Pipe::gPipeInputs->IsLive(), "DirectVulkan::ClearBufferuiv called with null GL context");
         pVulkanRenderer->ClearBufferuiv(buffer, drawbuffer, value);
     }
 
     void ClearBufferiv(GLenum buffer, GLint drawbuffer, const GLint* value) {
         MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::ClearBufferiv called with null VulkanRenderer");
-        MOBILEGL_ASSERT(MG_Pipe::gPipeInputs.IsLive(), "DirectVulkan::ClearBufferiv called with null GL context");
+        MOBILEGL_ASSERT(MG_Pipe::gPipeInputs->IsLive(), "DirectVulkan::ClearBufferiv called with null GL context");
         pVulkanRenderer->ClearBufferiv(buffer, drawbuffer, value);
     }
 
@@ -345,7 +345,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     void DrawElementsInstancedBaseVertexBaseInstance(GLenum mode, GLsizei count, GLenum type, const void* indices,
                                                      GLsizei instancecount, GLint basevertex, GLuint baseinstance) {
         MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::DrawElementsInstancedBaseVertexBaseInstance called with null VulkanRenderer");
-        MOBILEGL_ASSERT(MG_Pipe::gPipeInputs.IsLive(), "DirectVulkan::DrawElementsInstancedBaseVertexBaseInstance called with null GL context");
+        MOBILEGL_ASSERT(MG_Pipe::gPipeInputs->IsLive(), "DirectVulkan::DrawElementsInstancedBaseVertexBaseInstance called with null GL context");
 
         DrawIndexedCmd payload{};
         payload.mode = mode;
@@ -377,7 +377,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     void DrawArraysInstancedBaseInstance(GLenum mode, GLint first, GLsizei count, GLsizei instancecount,
                                          GLuint baseinstance) {
         MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::DrawArraysInstancedBaseInstance called with null VulkanRenderer");
-        MOBILEGL_ASSERT(MG_Pipe::gPipeInputs.IsLive(), "DirectVulkan::DrawArraysInstancedBaseInstance called with null GL context");
+        MOBILEGL_ASSERT(MG_Pipe::gPipeInputs->IsLive(), "DirectVulkan::DrawArraysInstancedBaseInstance called with null GL context");
 
         DrawCmd payload{};
         payload.mode = mode;
@@ -397,13 +397,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     void CopyTexImage2D(GLenum target, GLint level, GLenum internalformat, GLint x, GLint y, GLsizei width,
                         GLsizei height, GLint border) {
         MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::CopyTexImage2D called with null VulkanRenderer");
-        MOBILEGL_ASSERT(MG_Pipe::gPipeInputs.IsLive(), "DirectVulkan::CopyTexImage2D called with null GL context");
+        MOBILEGL_ASSERT(MG_Pipe::gPipeInputs->IsLive(), "DirectVulkan::CopyTexImage2D called with null GL context");
         pVulkanRenderer->CopyTexSubImage2D(target, level, 0, 0, x, y, width, height);
     }
     void CopyTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint x, GLint y, GLsizei width,
                            GLsizei height) {
         MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::CopyTexSubImage2D called with null VulkanRenderer");
-        MOBILEGL_ASSERT(MG_Pipe::gPipeInputs.IsLive(), "DirectVulkan::CopyTexSubImage2D called with null GL context");
+        MOBILEGL_ASSERT(MG_Pipe::gPipeInputs->IsLive(), "DirectVulkan::CopyTexSubImage2D called with null GL context");
         pVulkanRenderer->CopyTexSubImage2D(target, level, xoffset, yoffset, x, y, width, height);
     }
     void CopyImageSubData(const CopyImageEndpoint& src,
@@ -412,20 +412,20 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                           GLenum dstTarget, GLint dstLevel, GLint dstX, GLint dstY, GLint dstZ,
                           GLsizei srcWidth, GLsizei srcHeight, GLsizei srcDepth) {
         MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::CopyImageSubData called with null VulkanRenderer");
-        MOBILEGL_ASSERT(MG_Pipe::gPipeInputs.IsLive(), "DirectVulkan::CopyImageSubData called with null GL context");
+        MOBILEGL_ASSERT(MG_Pipe::gPipeInputs->IsLive(), "DirectVulkan::CopyImageSubData called with null GL context");
         pVulkanRenderer->CopyImageSubData(src, srcTarget, srcLevel, srcX, srcY, srcZ,
                                           dst, dstTarget, dstLevel, dstX, dstY, dstZ,
                                           srcWidth, srcHeight, srcDepth);
     }
     void GenerateMipmap(GLenum target) {
         MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::GenerateMipmap called with null VulkanRenderer");
-        MOBILEGL_ASSERT(MG_Pipe::gPipeInputs.IsLive(), "DirectVulkan::GenerateMipmap called with null GL context");
+        MOBILEGL_ASSERT(MG_Pipe::gPipeInputs->IsLive(), "DirectVulkan::GenerateMipmap called with null GL context");
         pVulkanRenderer->GenerateMipmap(target);
     }
 
     void DispatchCompute(GLuint numGroupsX, GLuint numGroupsY, GLuint numGroupsZ) {
         MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::DispatchCompute called with null VulkanRenderer");
-        MOBILEGL_ASSERT(MG_Pipe::gPipeInputs.IsLive(), "DirectVulkan::DispatchCompute called with null GL context");
+        MOBILEGL_ASSERT(MG_Pipe::gPipeInputs->IsLive(), "DirectVulkan::DispatchCompute called with null GL context");
         pVulkanRenderer->DispatchCompute(numGroupsX, numGroupsY, numGroupsZ);
     }
 
@@ -440,7 +440,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     void MemoryBarrier(GLbitfield barriers) {
         MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::MemoryBarrier called with null VulkanRenderer");
-        MOBILEGL_ASSERT(MG_Pipe::gPipeInputs.IsLive(), "DirectVulkan::MemoryBarrier called with null GL context");
+        MOBILEGL_ASSERT(MG_Pipe::gPipeInputs->IsLive(), "DirectVulkan::MemoryBarrier called with null GL context");
         pVulkanRenderer->MemoryBarrier(barriers);
     }
 
@@ -530,12 +530,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
     void ReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, void* pixels) {
         MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::ReadPixels called with null VulkanRenderer");
-        MOBILEGL_ASSERT(MG_Pipe::gPipeInputs.IsLive(), "DirectVulkan::ReadPixels called with null GL context");
+        MOBILEGL_ASSERT(MG_Pipe::gPipeInputs->IsLive(), "DirectVulkan::ReadPixels called with null GL context");
         pVulkanRenderer->ReadPixels(x, y, width, height, format, type, pixels);
     }
     void Clear(GLbitfield mask) {
         MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::Clear called with null VulkanRenderer");
-        MOBILEGL_ASSERT(MG_Pipe::gPipeInputs.IsLive(), "DirectVulkan::Clear called with null GL context");
+        MOBILEGL_ASSERT(MG_Pipe::gPipeInputs->IsLive(), "DirectVulkan::Clear called with null GL context");
         pVulkanRenderer->Clear(mask);
     }
 
@@ -582,7 +582,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     void DrawArrays(GLenum mode, GLint first, GLsizei count) {
         MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::DrawArrays called with null VulkanRenderer");
-        MOBILEGL_ASSERT(MG_Pipe::gPipeInputs.IsLive(), "DirectVulkan::DrawArrays called with null GL context");
+        MOBILEGL_ASSERT(MG_Pipe::gPipeInputs->IsLive(), "DirectVulkan::DrawArrays called with null GL context");
 
         if (mode == GL_LINE_LOOP) {
             if (count < 2) {
@@ -607,7 +607,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     void DrawElements(GLenum mode, GLsizei count, GLenum type, const void* indices) {
         MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::DrawElements called with null VulkanRenderer");
-        MOBILEGL_ASSERT(MG_Pipe::gPipeInputs.IsLive(), "DirectVulkan::DrawElements called with null GL context");
+        MOBILEGL_ASSERT(MG_Pipe::gPipeInputs->IsLive(), "DirectVulkan::DrawElements called with null GL context");
 
         if (mode == GL_LINE_LOOP) {
             Vector<Uint32> closedIndices;
@@ -637,7 +637,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     void MultiDrawArrays(GLenum mode, const GLint* first, const GLsizei* count, GLsizei drawcount) {
         MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::MultiDrawArrays called with null VulkanRenderer");
-        MOBILEGL_ASSERT(MG_Pipe::gPipeInputs.IsLive(), "DirectVulkan::MultiDrawArrays called with null GL context");
+        MOBILEGL_ASSERT(MG_Pipe::gPipeInputs->IsLive(), "DirectVulkan::MultiDrawArrays called with null GL context");
         if (drawcount <= 0) {
             return;
         }
@@ -743,7 +743,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     void DrawElementsBaseVertex(GLenum mode, GLsizei count, GLenum type, const GLvoid* indices, GLint basevertex) {
         MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::DrawElementsBaseVertex called with null VulkanRenderer");
-        MOBILEGL_ASSERT(MG_Pipe::gPipeInputs.IsLive(), "DirectVulkan::DrawElementsBaseVertex called with null GL context");
+        MOBILEGL_ASSERT(MG_Pipe::gPipeInputs->IsLive(), "DirectVulkan::DrawElementsBaseVertex called with null GL context");
         if (mode == GL_LINE_LOOP) {
             Vector<Uint32> closedIndices;
             if (BuildClosedLineLoopIndices(count, type, indices, closedIndices)) {
@@ -767,14 +767,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     void MultiDrawElementsBaseVertex(GLenum mode, const GLsizei* count, GLenum type, const GLvoid* const* indices,
                                      GLsizei drawcount, const GLint* basevertex) {
         MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::MultiDrawElementsBaseVertex called with null VulkanRenderer");
-        MOBILEGL_ASSERT(MG_Pipe::gPipeInputs.IsLive(), "DirectVulkan::MultiDrawElementsBaseVertex called with null GL context");
+        MOBILEGL_ASSERT(MG_Pipe::gPipeInputs->IsLive(), "DirectVulkan::MultiDrawElementsBaseVertex called with null GL context");
         MultiDrawElementsImpl(mode, count, type, indices, drawcount, basevertex);
     }
 
     void BlitFramebuffer(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1, GLint dstX0, GLint dstY0, GLint dstX1,
                          GLint dstY1, GLbitfield mask, GLenum filter) {
         MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::BlitFramebuffer called with null VulkanRenderer");
-        MOBILEGL_ASSERT(MG_Pipe::gPipeInputs.IsLive(), "DirectVulkan::BlitFramebuffer called with null GL context");
+        MOBILEGL_ASSERT(MG_Pipe::gPipeInputs->IsLive(), "DirectVulkan::BlitFramebuffer called with null GL context");
         pVulkanRenderer->BlitFramebuffer(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask, filter);
     }
 
@@ -1018,8 +1018,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 #if MOBILEGL_BUILD_DISAGGREGATED
                 MG_Config::Transport == MG_Config::TransportMode::Monolith &&
 #endif
-                MG_Pipe::gPipeInputs.IsLive()) {
-                primitives += MG_Pipe::gPipeInputs.GetTransformFeedbackPausedPrimitiveCounter() -
+                MG_Pipe::gPipeInputs->IsLive()) {
+                primitives += MG_Pipe::gPipeInputs->GetTransformFeedbackPausedPrimitiveCounter() -
                               query->pausedPrimitiveSnapshot;
             }
             *outNanoseconds = primitives;
@@ -1069,7 +1069,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 #if MOBILEGL_BUILD_DISAGGREGATED
             MG_Config::Transport == MG_Config::TransportMode::Monolith &&
 #endif
-            MG_Pipe::gPipeInputs.IsLive() ? MG_Pipe::gPipeInputs.GetTransformFeedbackPausedPrimitiveCounter() : 0;
+            MG_Pipe::gPipeInputs->IsLive() ? MG_Pipe::gPipeInputs->GetTransformFeedbackPausedPrimitiveCounter() : 0;
         // Read AFTER StartXfbQueryCapture, which is where a failed reroute-pool creation
         // disarms: the answer is then what this span will actually do for every draw.
         query->pausedPrimitivesCountedByGpu = generated && pVulkanRenderer->ArePausedDrawsGpuCounted();

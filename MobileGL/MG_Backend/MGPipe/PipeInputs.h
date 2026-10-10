@@ -832,12 +832,18 @@ namespace MobileGL::MG_Pipe {
     // have. Nothing about the block's contents changed; what changed is that the name resolves to
     // the SESSION'S block on a thread that belongs to one.
     //
-    // WHY A THREAD-LOCAL REFERENCE, AND NOT SOMETHING CLEVERER. gPipeInputs is spelled at ~380
-    // sites in MG_Backend/MG_Impl (they read `MG_Pipe::gPipeInputs.` directly since P13 retired the
-    // pull/push switch macro); a reference whose TARGET varies with the calling thread is the
-    // only shape that keeps all of them compiling and all of them correct. The cost is one TLS
-    // address computation per access site - not one per field, and with no guard: the reference is
-    // bound once per thread on its first use.
+    // WHY A THREAD-LOCAL SLOT, AND NOT SOMETHING CLEVERER. gPipeInputs is spelled at ~380
+    // sites in MG_Backend/MG_Impl (they read `MG_Pipe::gPipeInputs->` directly since P13 retired the
+    // pull/push switch macro); a name whose TARGET varies with the calling thread is the only
+    // shape that keeps all of them compiling and all of them correct.
+    //
+    // P15: A POINTER SLOT, NOT A REFERENCE. It used to be a `thread_local PipeInputs&` bound by a
+    // dynamic initializer, and a thread_local with a dynamic initializer is reached through its
+    // TLS init function, which tests two more thread_local guards on every read: three TLS
+    // address calls per access in a dlopen'ed library, at every API level. The slot below is
+    // constant-initialized and trivially destructible, so an access is one TLS address
+    // computation, a load and a null test; the binding itself is unchanged - once per thread, at
+    // its first use, through the same resolver.
     //
     // THE RESOLVER IS A HOOK because this header may not know about sessions (MG_Remote/Server
     // owns them and includes THIS header, not the other way round). It is installed once by the
@@ -860,7 +866,27 @@ namespace MobileGL::MG_Pipe {
         return gPipeInputsDefault;
     }
 
-    inline thread_local PipeInputs& gPipeInputs = MGPipeServerInputsForCallingThread();
+    class PipeInputsThreadSlot {
+    public:
+        constexpr PipeInputsThreadSlot() = default;
+        PipeInputsThreadSlot(const PipeInputsThreadSlot&) = delete;
+        PipeInputsThreadSlot& operator=(const PipeInputsThreadSlot&) = delete;
+        // The block's address is `&*gPipeInputs`; the slot's own address names nothing.
+        void operator&() const = delete;
+
+        PipeInputs& Get() {
+            PipeInputs* bound = m_bound;
+            if (bound == nullptr) [[unlikely]] bound = m_bound = &MGPipeServerInputsForCallingThread();
+            return *bound;
+        }
+        PipeInputs* operator->() { return &Get(); }
+        PipeInputs& operator*() { return Get(); }
+        operator PipeInputs&() { return Get(); }
+
+    private:
+        PipeInputs* m_bound = nullptr;
+    };
+    inline constinit thread_local PipeInputsThreadSlot gPipeInputs;
 
 #if MOBILEGL_BUILD_DISAGGREGATED
     // ============================================================================

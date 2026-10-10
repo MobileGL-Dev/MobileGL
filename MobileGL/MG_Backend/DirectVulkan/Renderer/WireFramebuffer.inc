@@ -370,7 +370,7 @@
         const Uint64 passHash = active->hash;
         VkRect2D area{{0, 0}, {key.width, key.height}};
         if (GLScissorTestClips()) {
-            const auto& box = MG_Pipe::gPipeInputs.GetScissorBox();
+            const auto& box = MG_Pipe::gPipeInputs->GetScissorBox();
             const Int32 x0 = std::max(box.x(), 0), y0 = std::max(box.y(), 0);
             const Int32 x1 = std::min(box.x() + box.z(), static_cast<Int32>(key.width));
             const Int32 y1 = std::min(box.y() + box.w(), static_cast<Int32>(key.height));
@@ -394,7 +394,7 @@
                 const Int32 slot = fbo.DrawBuffers[i];
                 if (slot < 0 || slot >= static_cast<Int32>(MG_Pipe::kMGPipeMaxColorAttachments)) continue;
                 if (fbo.Color[slot].Kind == MG_Pipe::kMGPipeSurfaceKindNone) continue;
-                const auto mask = MG_Pipe::gPipeInputs.GetColorMaskIndexed(i);
+                const auto mask = MG_Pipe::gPipeInputs->GetColorMaskIndexed(i);
                 if (!mask.r() && !mask.g() && !mask.b() && !mask.a()) continue;
                 if (!mask.r() || !mask.g() || !mask.b() || !mask.a() || payload.colorEncoding != ClearColorEncoding::Float) {
                     all = false;
@@ -429,7 +429,7 @@
                    (key.attachments[key.depthReference].aspect & aspect) != 0;
         };
         if (remaining & GL_DEPTH_BUFFER_BIT) {
-            if (!MG_Pipe::gPipeInputs.GetDepthMask() || fbo.Depth.Kind == MG_Pipe::kMGPipeSurfaceKindNone) {
+            if (!MG_Pipe::gPipeInputs->GetDepthMask() || fbo.Depth.Kind == MG_Pipe::kMGPipeSurfaceKindNone) {
                 handled |= GL_DEPTH_BUFFER_BIT;
             } else if (depthStencilHeld(fbo.Depth, VK_IMAGE_ASPECT_DEPTH_BIT)) {
                 depthStencilAspects |= VK_IMAGE_ASPECT_DEPTH_BIT;
@@ -437,7 +437,7 @@
             }
         }
         if (remaining & GL_STENCIL_BUFFER_BIT) {
-            const Uint32 mask = MG_Pipe::gPipeInputs.GetStencilState(StencilFace::Front).WriteMask & 255u;
+            const Uint32 mask = MG_Pipe::gPipeInputs->GetStencilState(StencilFace::Front).WriteMask & 255u;
             if (mask == 0 || fbo.Stencil.Kind == MG_Pipe::kMGPipeSurfaceKindNone) {
                 handled |= GL_STENCIL_BUFFER_BIT;
             } else if (mask == 255u && depthStencilHeld(fbo.Stencil, VK_IMAGE_ASPECT_STENCIL_BIT)) {
@@ -472,7 +472,7 @@
         const Bool scissor = GLScissorTestClips();
         const auto wholeImage = [&](const WireImage& image) {
             if (!scissor) return true;
-            const auto& box = MG_Pipe::gPipeInputs.GetScissorBox();
+            const auto& box = MG_Pipe::gPipeInputs->GetScissorBox();
             return box.x() <= 0 && box.y() <= 0 && box.x() + box.z() >= static_cast<Int32>(image.extent.width) &&
                    box.y() + box.w() >= static_cast<Int32>(image.extent.height);
         };
@@ -498,7 +498,7 @@
                 if (slot < 0 || slot >= static_cast<Int32>(MG_Pipe::kMGPipeMaxColorAttachments)) continue;
                 const auto& surface = fbo.Color[slot];
                 if (surface.Kind == MG_Pipe::kMGPipeSurfaceKindNone) continue;
-                const auto mask = MG_Pipe::gPipeInputs.GetColorMaskIndexed(i);
+                const auto mask = MG_Pipe::gPipeInputs->GetColorMaskIndexed(i);
                 if (!mask.r() && !mask.g() && !mask.b() && !mask.a()) continue;
                 if (!mask.r() || !mask.g() || !mask.b() || !mask.a()) {
                     all = false;
@@ -538,13 +538,13 @@
             return true;
         };
         if (remaining & GL_DEPTH_BUFFER_BIT) {
-            if (!MG_Pipe::gPipeInputs.GetDepthMask() || fbo.Depth.Kind == MG_Pipe::kMGPipeSurfaceKindNone)
+            if (!MG_Pipe::gPipeInputs->GetDepthMask() || fbo.Depth.Kind == MG_Pipe::kMGPipeSurfaceKindNone)
                 handled |= GL_DEPTH_BUFFER_BIT;
             else if (depthStencil(fbo.Depth, VK_IMAGE_ASPECT_DEPTH_BIT))
                 handled |= GL_DEPTH_BUFFER_BIT;
         }
         if (remaining & GL_STENCIL_BUFFER_BIT) {
-            const Uint32 mask = MG_Pipe::gPipeInputs.GetStencilState(StencilFace::Front).WriteMask & 255u;
+            const Uint32 mask = MG_Pipe::gPipeInputs->GetStencilState(StencilFace::Front).WriteMask & 255u;
             if (mask == 0 || fbo.Stencil.Kind == MG_Pipe::kMGPipeSurfaceKindNone)
                 handled |= GL_STENCIL_BUFFER_BIT;
             else if (mask == 255u && depthStencil(fbo.Stencil, VK_IMAGE_ASPECT_STENCIL_BIT))
@@ -564,7 +564,7 @@
 
     void VulkanRenderer::ClearWireFramebuffer(const MG_Pipe::MGPFramebufferState& fbo,
                                               const ClearAttachmentPayload& clearRequest, GLint drawbuffer) {
-        if (MG_Pipe::gPipeInputs.IsCapabilityEnabled(CapabilityInput::RasterizerDiscard)) return;
+        if (MG_Pipe::gPipeInputs->IsCapabilityEnabled(CapabilityInput::RasterizerDiscard)) return;
         // P15 S0: what the draw pass can take is cleared inside it (ClearWireFramebufferInPass,
         // WireDraw.inc); only the buffers it hands back take the standalone pass below.
         // P15: in the open pass when it is this framebuffer's (the in-pass clear) or merely holds
@@ -586,12 +586,12 @@
         if (m_wireRetiredObjects.size() >= kRetiredObjectsBeforeSubmit && m_wirePreparationDepth == 0 &&
             HasPendingRecordedWork())
             (void)FlushPendingCommands();
-        if (MG_Pipe::gPipeInputs.IsCapabilityEnabled(CapabilityInput::RasterizerDiscard)) return;
+        if (MG_Pipe::gPipeInputs->IsCapabilityEnabled(CapabilityInput::RasterizerDiscard)) return;
         const auto clearSurface = [&](const MG_Pipe::MGPSurface& surface, VkImageAspectFlags aspect,
                                       Uint32 colorIndex) {
             if (!fbo.IsDefault && surface.Kind == MG_Pipe::kMGPipeSurfaceKindNone) return;
             if (aspect == VK_IMAGE_ASPECT_COLOR_BIT) {
-                const auto mask = MG_Pipe::gPipeInputs.GetColorMaskIndexed(colorIndex);
+                const auto mask = MG_Pipe::gPipeInputs->GetColorMaskIndexed(colorIndex);
                 if (!mask.r() && !mask.g() && !mask.b() && !mask.a()) return;
                 if (!mask.r() || !mask.g() || !mask.b() || !mask.a()) {
                     MGLOG_W_ONCE("DirectVulkan: glClear with a partial color mask is not supported");
@@ -599,10 +599,10 @@
                 }
             }
             if (aspect & VK_IMAGE_ASPECT_DEPTH_BIT) {
-                if (!MG_Pipe::gPipeInputs.GetDepthMask()) aspect &= ~VK_IMAGE_ASPECT_DEPTH_BIT;
+                if (!MG_Pipe::gPipeInputs->GetDepthMask()) aspect &= ~VK_IMAGE_ASPECT_DEPTH_BIT;
             }
             if (aspect & VK_IMAGE_ASPECT_STENCIL_BIT) {
-                const Uint32 mask = MG_Pipe::gPipeInputs.GetStencilState(StencilFace::Front).WriteMask & 255u;
+                const Uint32 mask = MG_Pipe::gPipeInputs->GetStencilState(StencilFace::Front).WriteMask & 255u;
                 if (!mask) aspect &= ~VK_IMAGE_ASPECT_STENCIL_BIT;
                 else if (mask != 255u) {
                     MGLOG_W_ONCE("DirectVulkan: glClear with a partial stencil write mask is not supported");
@@ -615,7 +615,7 @@
             m_textureManager->FlushPendingUploads();
             VkRect2D area{{0, 0}, image.extent};
             if (GLScissorTestClips()) {
-                const auto& box = MG_Pipe::gPipeInputs.GetScissorBox();
+                const auto& box = MG_Pipe::gPipeInputs->GetScissorBox();
                 const Int32 x0 = std::max(box.x(), 0), y0 = std::max(box.y(), 0);
                 const Int32 x1 = std::min(box.x() + box.z(), static_cast<Int32>(image.extent.width));
                 const Int32 y1 = std::min(box.y() + box.w(), static_cast<Int32>(image.extent.height));
@@ -1264,7 +1264,7 @@
         // The scissor test clips blit writes: intersect the destination rectangle with
         // the scissor box and shrink the source proportionally.
         if (GLScissorTestClips()) {
-            const IntVec4& scissor = MG_Pipe::gPipeInputs.GetScissorBox();
+            const IntVec4& scissor = MG_Pipe::gPipeInputs->GetScissorBox();
             const auto clipAxis = [](GLint& d0, GLint& d1, GLint& s0, GLint& s1, GLint clipLo, GLint clipHi) -> Bool {
                 const Bool dstFlipped = d1 < d0;
                 GLint lo = dstFlipped ? d1 : d0;

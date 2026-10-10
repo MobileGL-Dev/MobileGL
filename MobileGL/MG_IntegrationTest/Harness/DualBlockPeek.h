@@ -39,7 +39,7 @@ namespace MGITest {
         // verb boundaries; the server block's moves only on a server verb stamp.
         unsigned long long clientSerial = 0;
         unsigned long long serverSerial = 0;
-        // gPipeInputs.ContextIdentity(): non-null once the server has stamped a verb boundary
+        // gPipeInputs->ContextIdentity(): non-null once the server has stamped a verb boundary
         // under the rehearsal (CONTRACT-P5E §3.2's server-owned identity).
         const void* serverIdentity = nullptr;
     };
