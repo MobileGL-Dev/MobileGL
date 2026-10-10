@@ -12039,7 +12039,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
         Uint64 activeToken = 0;
         EGLContext boundContext = EGL_NO_CONTEXT;
         EGLSurface boundDraw = EGL_NO_SURFACE;
-        Uint64 boundSerial = 0;
         // QueryCurrentSurfaceSize's memo (P15): the last answer, good while the session, the
         // registry epoch and the surface-size epoch all hold.
         Bool sizeMemoValid = false;
@@ -12105,7 +12104,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // surface (one client context drawing to several windows) is a real switch.
         // (t_native.boundDraw)
         // ...and that context's lifetime serial, the key of its container objects.
-        // (t_native.boundSerial)
+        // (t_nativeContextThread.BoundSerial, DirectGLES.h)
         std::atomic<Uint64> g_nativeContextSerials{0};
 
         std::mutex& PerNativeContextRegistryMutex() {
@@ -12118,7 +12117,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
     } // namespace
 
-    Uint64 CurrentNativeContextSerial() { return t_native.boundSerial; }
 
     namespace {
         std::atomic<Uint64> g_perNativeContextEpoch{1};
@@ -12126,12 +12124,19 @@ namespace MobileGL::MG_Backend::DirectGLES {
     Uint64 PerNativeContextEpoch() { return g_perNativeContextEpoch.load(std::memory_order_acquire); }
     void BumpPerNativeContextEpoch() { g_perNativeContextEpoch.fetch_add(1, std::memory_order_acq_rel); }
 
-    PerNativeContextBase::PerNativeContextBase() {
+    namespace {
+        std::atomic<Uint32> g_perNativeContextCacheSlots{0};
+    }
+
+    PerNativeContextBase::PerNativeContextBase()
+        : m_cacheSlot(g_perNativeContextCacheSlots.fetch_add(1, std::memory_order_relaxed) %
+                      NativeContextThreadState::kCacheEntries) {
         const std::lock_guard<std::mutex> lock(PerNativeContextRegistryMutex());
         PerNativeContextRegistry().push_back(this);
     }
 
     PerNativeContextBase::~PerNativeContextBase() {
+        BumpPerNativeContextEpoch();
         const std::lock_guard<std::mutex> lock(PerNativeContextRegistryMutex());
         auto& registry = PerNativeContextRegistry();
         registry.erase(std::remove(registry.begin(), registry.end(), this), registry.end());
@@ -12872,7 +12877,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         if (t_native.boundContext == tuple->Context) {
             t_native.boundContext = EGL_NO_CONTEXT;
             t_native.boundDraw = EGL_NO_SURFACE;
-            t_native.boundSerial = 0;
+            t_nativeContextThread.BoundSerial = 0;
         }
         ForgetNativeContextObjects(tuple->Serial);
         tuple->Serial = 0;
@@ -13476,7 +13481,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         InvalidateEglVerifiedStamp();
         t_native.boundContext = tuple.Context;
         t_native.boundDraw = session.Draw;
-        t_native.boundSerial = tuple.Serial;
+        t_nativeContextThread.BoundSerial = tuple.Serial;
         g_backendContextOwnerThread.store(std::this_thread::get_id(), std::memory_order_release);
         // The ops table may have been unregistered when a previous ES context was
         // destroyed (e.g. a probe context); re-register now that GL is usable.
@@ -13522,7 +13527,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         InvalidateEglVerifiedStamp();
         t_native.boundContext = EGL_NO_CONTEXT;
         t_native.boundDraw = EGL_NO_SURFACE;
-        t_native.boundSerial = 0;
+        t_nativeContextThread.BoundSerial = 0;
         g_backendContextOwnerThread.store(std::thread::id{}, std::memory_order_release);
         return true;
     }
@@ -14248,7 +14253,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
             t_native.boundContext = EGL_NO_CONTEXT;
             t_native.boundDraw = EGL_NO_SURFACE;
-            t_native.boundSerial = 0;
+            t_nativeContextThread.BoundSerial = 0;
             for (auto* tuple : NativeContexts()) {
                 if (tuple->SessionKey != sessionKey || tuple->Context == EGL_NO_CONTEXT) continue;
                 ForgetNativeContextObjects(tuple->Serial);

@@ -327,7 +327,24 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // The calling thread's current native context as a lifetime serial: assigned when the context
     // is created and never reused (a recycled EGLContext address is a new serial). 0 when none was
     // made current through MakeCurrent.
-    Uint64 CurrentNativeContextSerial();
+    //
+    // P15: it lives in one constant-initialized thread_local with the PerNativeContext lookup
+    // cache below, so the draw path's "this context's entry" question is one TLS address
+    // computation, not two calls each paying their own.
+    struct NativeContextThreadState {
+        struct CacheEntry {
+            const void* Owner = nullptr;
+            Uint64 Serial = 0;
+            Uint64 Epoch = 0;
+            void* Entry = nullptr;
+        };
+        static constexpr Uint32 kCacheEntries = 8;
+        Uint64 BoundSerial = 0;
+        // One entry per PerNativeContext instance slot (instances sharing a slot evict each other).
+        CacheEntry Cache[kCacheEntries]{};
+    };
+    inline constinit thread_local NativeContextThreadState t_nativeContextThread;
+    inline Uint64 CurrentNativeContextSerial() { return t_nativeContextThread.BoundSerial; }
 
     class PerNativeContextBase {
     public:
@@ -340,6 +357,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
     protected:
         ~PerNativeContextBase();
+        // This instance's entry in NativeContextThreadState::Cache.
+        const Uint32 m_cacheSlot;
     };
 
     // Called where a native context is destroyed.
@@ -354,12 +373,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
     class PerNativeContext final : public PerNativeContextBase {
     public:
         T& Current() {
-            const Uint64 serial = CurrentNativeContextSerial();
+            NativeContextThreadState& thread = t_nativeContextThread;
+            const Uint64 serial = thread.BoundSerial;
             // The draw path asks for the same entry over and over from one thread: a one-entry
-            // thread-local cache, invalidated by any drop anywhere (rare).
-            thread_local CurrentCache cache;
+            // thread-local cache per instance, invalidated by any drop anywhere (rare) and by an
+            // instance's destruction (so a later instance at the same address cannot hit).
+            NativeContextThreadState::CacheEntry& cache = thread.Cache[m_cacheSlot];
             const Uint64 epoch = PerNativeContextEpoch();
-            if (cache.Owner == this && cache.Serial == serial && cache.Epoch == epoch) return *cache.Entry;
+            if (cache.Owner == this && cache.Serial == serial && cache.Epoch == epoch) {
+                return *static_cast<T*>(cache.Entry);
+            }
             const std::lock_guard<std::mutex> lock(m_mutex);
             T& entry = m_bySerial[serial]; // node-based: the reference survives other contexts' inserts
             cache = {this, serial, epoch, &entry};
@@ -382,12 +405,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
 
     private:
-        struct CurrentCache {
-            const PerNativeContext* Owner = nullptr;
-            Uint64 Serial = 0;
-            Uint64 Epoch = 0;
-            T* Entry = nullptr;
-        };
         std::mutex m_mutex;
         std::unordered_map<Uint64, T> m_bySerial;
     };
