@@ -769,10 +769,14 @@ namespace MobileGL::MG_Pipe {
             return groups;
         }
 
-        thread_local MGPipeApplierState* t_applierCached = nullptr;
-        thread_local Uint64 t_applierCachedSession = 0;
-        thread_local Uint64 t_applierCachedContext = 0;
-        thread_local Uint64 t_applierCachedGeneration = 0;
+        // One block, so a hit is one TLS address computation rather than four (P15).
+        struct ApplierCache {
+            MGPipeApplierState* Applier = nullptr;
+            Uint64 Session = 0;
+            Uint64 Context = 0;
+            Uint64 Generation = 0;
+        };
+        constinit thread_local ApplierCache t_applierCache;
     } // namespace
 
     Uint64 MGPipeNextApplierSerialBase() {
@@ -804,19 +808,17 @@ namespace MobileGL::MG_Pipe {
         MGPipeApplierKey key;
         if (!resolve(&key)) return g_defaultApplier;
         // THE FAST PATH, and the reason this is a cache rather than a lookup: this function is
-        // called from the backend per state read. A hit is three TLS loads, one atomic load and
-        // two compares; a miss is the registry, which only moves when a context is created,
+        // called from the backend per state read. A hit is one TLS block, one atomic load and
+        // the compares; a miss is the registry, which only moves when a context is created,
         // destroyed or made current.
         const Uint64 generation = g_applierRegistryGeneration.load(std::memory_order_acquire);
-        if (t_applierCached != nullptr && t_applierCachedGeneration == generation &&
-            t_applierCachedSession == key.SessionKey && t_applierCachedContext == key.ContextToken) {
-            return *t_applierCached;
+        ApplierCache& cache = t_applierCache;
+        if (cache.Applier != nullptr && cache.Generation == generation && cache.Session == key.SessionKey &&
+            cache.Context == key.ContextToken) {
+            return *cache.Applier;
         }
         MGPipeApplierState* const applier = FindApplierForKey(key);
-        t_applierCached = applier;
-        t_applierCachedSession = key.SessionKey;
-        t_applierCachedContext = key.ContextToken;
-        t_applierCachedGeneration = generation;
+        cache = {applier, key.SessionKey, key.ContextToken, generation};
         return *applier;
     }
 
