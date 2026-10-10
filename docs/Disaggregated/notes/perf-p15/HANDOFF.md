@@ -149,7 +149,7 @@ The plan and its measurements are in [PLAN-P15.md](PLAN-P15.md); the audit is in
    - Open: whether a static TLS model (initial-exec) on the hot variables can remove the 0.05 ms in a dlopen'ed lib on
      bionic; and what actually makes the api29 Magma build faster (not isolated).
    - The shipped build stays API 26. The FCL-embedded 29 copy still needs FCL's own minSdk switch.
-5b. IN PROGRESS 2026-10-09, offline (no new capture): present-wait timeline from the existing P15 traces (fbm, c4, c1c2: sched, kgsl submit/retire, gfx atrace, SF frametimeline). Confirm against the TLS agent's base-vs-change Perfetto traces on e70925d3.
+5b. DONE 2026-10-09 (offline), see [PRESENT-WAIT.md](PRESENT-WAIT.md). Cause: the display buffer release (~every other frame renders into the buffer just handed back) gates the whole single-batch frame, then ~0.8 ms GPU start latency + 0.5 ms execution; the next queueBuffer throttles on it. MobileGL CPU is not on that path. Options: more Magma swapchain images, gate only the window pass, present off the GL thread. Original scope: present-wait timeline from the existing P15 traces (fbm, c4, c1c2: sched, kgsl submit/retire, gfx atrace, SF frametimeline). Confirm against the TLS agent's base-vs-change Perfetto traces on e70925d3.
    - Finding (egc profiles, e70925d3, cpuhunt, monolith): render-thread on-CPU + off-CPU = frame time.
      | | Espryt | Magma |
      |---|---|---|
