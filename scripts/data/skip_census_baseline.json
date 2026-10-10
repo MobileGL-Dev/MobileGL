@@ -6174,7 +6174,6 @@
    "DirectVulkan.Split.Band.BandedReadbackScenario.GetTexImageLargerThanAReplySlotIsWindowed",
    "DirectVulkan.Split.Band.BandedReadbackScenario.RenderbufferReadOfExactlyTwoMiBIsBandedNotRefused",
    "DirectVulkan.Split.Band.BandedReadbackScenario.TwoMiBPlusOneRowIsBanded",
-   "DirectVulkan.Split.Buffers.CrossFrameBufferScenario.APartialSubDataBetweenTwoDrawsOfOneFrameKeepsTheFirstDrawsBytes",
    "DirectVulkan.Split.Buffers.CrossFrameBufferScenario.IndexBufferSubData",
    "DirectVulkan.Split.Buffers.CrossFrameBufferScenario.IndexOrphanAndReupload",
    "DirectVulkan.Split.Buffers.CrossFrameBufferScenario.VertexBufferSubData",
@@ -6439,7 +6438,6 @@
  "junit-integration-split-strict/magma-buffers": {
   "skipped": [],
   "names": [
-   "DirectVulkan.Split.Buffers.CrossFrameBufferScenario.APartialSubDataBetweenTwoDrawsOfOneFrameKeepsTheFirstDrawsBytes",
    "DirectVulkan.Split.Buffers.CrossFrameBufferScenario.IndexBufferSubData",
    "DirectVulkan.Split.Buffers.CrossFrameBufferScenario.IndexOrphanAndReupload",
    "DirectVulkan.Split.Buffers.CrossFrameBufferScenario.VertexBufferSubData",
@@ -6472,7 +6470,6 @@
  "junit-integration-split-strict/magma-buffers-spawn": {
   "skipped": [],
   "names": [
-   "DirectVulkan.Spawn.Buffers.CrossFrameBufferScenario.APartialSubDataBetweenTwoDrawsOfOneFrameKeepsTheFirstDrawsBytes",
    "DirectVulkan.Spawn.Buffers.CrossFrameBufferScenario.IndexBufferSubData",
    "DirectVulkan.Spawn.Buffers.CrossFrameBufferScenario.IndexOrphanAndReupload",
    "DirectVulkan.Spawn.Buffers.CrossFrameBufferScenario.VertexBufferSubData",
@@ -6505,7 +6502,6 @@
  "junit-integration-split-strict/magma-buffers-tcp": {
   "skipped": [],
   "names": [
-   "DirectVulkan.Tcp.Buffers.CrossFrameBufferScenario.APartialSubDataBetweenTwoDrawsOfOneFrameKeepsTheFirstDrawsBytes",
    "DirectVulkan.Tcp.Buffers.CrossFrameBufferScenario.IndexBufferSubData",
    "DirectVulkan.Tcp.Buffers.CrossFrameBufferScenario.IndexOrphanAndReupload",
    "DirectVulkan.Tcp.Buffers.CrossFrameBufferScenario.VertexBufferSubData",
