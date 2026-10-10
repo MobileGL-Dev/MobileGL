@@ -146,6 +146,26 @@ The plan and its measurements are in [PLAN-P15.md](PLAN-P15.md); the audit is in
    - Open: whether a static TLS model (initial-exec) on the hot variables can remove the 0.05 ms in a dlopen'ed lib on
      bionic; and what actually makes the api29 Magma build faster (not isolated).
    - The shipped build stays API 26. The FCL-embedded 29 copy still needs FCL's own minSdk switch.
+5b. QUEUED 2026-10-09, after the TLS agent releases the device: Perfetto trace of the present wait.
+   - Finding (egc profiles, e70925d3, cpuhunt, monolith): render-thread on-CPU + off-CPU = frame time.
+     | | Espryt | Magma |
+     |---|---|---|
+     | on-CPU ms/frame | 3.08 | 2.63 |
+     | off-CPU ms/frame | 0.89 | 1.09 |
+     | of which in Present | 0.82 | 1.03 |
+   - The blocked stack is the same on both backends: `queueBuffer`'s producer throttle
+     (`Fence::waitForever`) on the previous frame's GPU-completion fence.
+   - So frame time = CPU + present wait. CPU cuts reach fps only if the wait does not absorb them.
+   - The GPU is only ~17 % busy at cpuhunt, so the fence signals late rather than the GPU running
+     long. Candidates:
+     - work submitted only at swap (~1 batch/frame);
+     - the GPU waiting on the compositor's buffer release.
+   - Trace (both backends, monolith + inproc, MobileGlues control):
+     - MobileGL submit/flush points;
+     - kgsl GPU busy spans and frequency;
+     - fence create/signal times;
+     - SurfaceFlinger latch/release.
+   - Decide whether earlier submission (or another portable change) shrinks the wait.
 6. Smaller follow-ups:
    - DONE 2026-10-09: `bench_session.sh stop` now runs `pin_clocks.sh restore` first (verified over a
      17-session run: max clocks back to stock after every session, daemons running, no session file).
