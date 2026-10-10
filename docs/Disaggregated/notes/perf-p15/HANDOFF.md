@@ -252,6 +252,74 @@ e70925d3, local, not pushed):**
 - The device lock is released by devjob2 when m2ab ends.
 - The plugin installs `top.mobilegl.plugin.*.trace` from earlier phases are still on the device.
 
+## Open: Espryt small-store write rename (branch `pmflush`, 2026-10-09, host-verified, needs device)
+
+**Not a p15 regression.** MONOLITH-DIFF's top Espryt row (`FlushPendingRangesFrom` driver 0.091 + libc
+0.025, "dev 0") is the rename the doc's own caveat lists: dev's `FlushPendingRangesNow` costs 0.086 + 0.019
+in the same profiles. Both are the same three-tier ladder, unchanged since dev f973008c. Inclusive:
+dev 0.066 / p15 0.078 (feat-esp-1), 0.106 on the newer api29ab e26 run. So the drain is real cost that
+dev pays too.
+
+**What the drain is.** Under it, 0.080 of 0.106 ms/frame is one Adreno driver routine reached from
+`glCopyBufferSubData` (dispatch slot 0x670 -> 0x3250c0 -> 0x2ee9d0, with heap allocations inside).
+So it is the upload-ring tier: one GPU copy job per queued partial range. The 1.21.5 in-world trace
+(5998912 calls, last 252 frames) shows the shape: 162 glBufferSubData a frame. 122 of them are partial
+writes from offset 0, mostly 96 or 192 bytes into 288-byte vertex stores, and ~3 KB into 6.7 KB ones.
+That is Minecraft's per-format immediate vertex buffer. Magma already renames these stores
+(`RenameBusyWireStore`, S0 M4); `WriteWireBuffer` costs 0.031 ms/frame there, so Magma needs nothing.
+
+**Change.** `RenameSmallStoreForDrain` (Managers.cpp) runs before the draw-time drain. For a store
+<= 64 KiB whose unwritten bytes are <= 8 KiB, it replaces the queue with [0, store). The pinned ladder
+then takes its tier 1, the whole-buffer orphan-map: no copy job, and recorded draws keep the old
+storage. It refuses when the store holds bytes the host copy does not have: `serverGpuWritten`,
+queued resident writes, persistent/immutable/imported stores, or split staged coverage short of the
+whole store. On the trace this renames 108 of 122 partial writes a frame, at +101 KiB of host memcpy a
+frame; a plain 64 KiB bound would cost +811 KiB, because of 128-byte writes into a 53 KiB index store.
+The ladder bodies and the G5 pins are untouched.
+
+**Tests.** EsprytFlushLadder has 3 new unit cases. There are 2 new scenarios, one per backend on every
+arm: AtomicCounterScenario.APartialSubDataBetweenDispatchesKeepsTheShaderWrittenNeighbour and
+CrossFrameBufferScenario.APartialSubDataBetweenTwoDrawsOfOneFrameKeepsTheFirstDrawsBytes. The skip
+census mirrors their siblings' skipped lanes. Red-once: dropping the `serverGpuWritten` refusal reds
+the atomic case on DirectGLES.Spawn, which reads back 16 instead of 32; monolith and inproc pass
+because the frontend reads GPU writes back before a partial CPU write.
+
+**Suite results.** WSL archlinux, clang Release, lavapipe, env MOBILEGL_ITEST_REQUIRE_GPU=1, suites run
+one at a time:
+- unit 2907/2907;
+- integration 5300/5300 on the labels gpu, split, magma-all-split, magma-full-split,
+  monolith-control, cold-start, cpu-mip-split, clientarrays-split and remint-fallback-split;
+- 354/354 spawn+TCP buffer, SSBO, atomic, persistent, XFB and index scenarios;
+- 18/18 Espryt retraces (OpenRA, 1.21.4-in-world, 1.21.11-main-menu, sodium, create-instancing, Iris
+  BSL; each monolith, SPLIT and SPAWN);
+- both Android arm64 shapes compile (disaggregated ON and OFF, android-26).
+
+A first run with the dozen ICD (REQUIRE_GPU=ON in the cache) failed 1488 DirectVulkan cases. That is
+the ICD, not this change: there were 0 DirectGLES failures.
+
+**Host blocker for retrace evidence (pre-existing).** Espryt on llvmpipe segfaults in the 1.21.5 fixture
+at call 75682 (a glDrawElements right after vertex buffer 8 is deleted and recreated). This happens on
+the base tree too. Magma completes (SSIM 0.985 on dozen). So Espryt cannot be checked for SSIM on this
+trace on the host.
+
+**Device ask (Perfetto first, per the 2026-10-09 rule).** FCL MC 1.21.5 vanilla bench scene, monolith,
+cpuhunt pinned, base = origin e70925d3 vs pmflush, same LTO settings. Run Espryt (the arm under test)
+and Magma (control, expected identical). Capture a Perfetto trace per arm with:
+- sched_switch/wakeup, cpu_frequency;
+- atrace gfx/view/hal;
+- kgsl gpu_frequency and GPU busy/slices;
+- dma-fence signals;
+- SurfaceFlinger frame timeline.
+
+Report one typical frame as a timeline: render thread runnable/running/blocked, queueBuffer/dequeueBuffer
+waits, the GPU slice and its end against the next frame's throttle wait. The question is whether
+removing ~100 copy jobs a frame shortens the GPU slice and with it the ~0.8-1.0 ms queueBuffer wait (a
+shorter frame), or only cuts CPU (a longer wait, the same frame). simpleperf zoom: `FlushPendingRangesFrom`
+inclusive and its callees, expected to drop from ~0.106 towards ~0.03 ms/frame (the orphan-map plus the
+extra memcpy). Also check the driver's map path (slot 0x550 -> 0x1db8a0) does not grow into new
+allocations per rename. Correctness: SSIM/golden on the device retrace of minecraft-1.21.5-vanilla-fcl
+plus the Iris/BSL cases, Espryt.
+
 ## Earlier (2026-10-09): cuts 1b + 1c, cut 4, pipe-record pieces
 
 - **Landed locally (pushed after the BSL gpuhunt check):**

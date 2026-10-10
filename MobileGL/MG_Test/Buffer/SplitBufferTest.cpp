@@ -902,3 +902,51 @@ TEST(EsprytFlushLadder, APartialRangeDoesNotOvertakeAQueuedRingCopy) {
               static_cast<GLbitfield>(GL_MAP_WRITE_BIT | GL_MAP_INVALIDATE_BUFFER_BIT))
         << "the whole-buffer orphan-map rewrites every byte from the shadow the copies were taken from";
 }
+
+// P15: the small-store write rename. A partial range of a small store is drained as the whole
+// store - tier 1's orphan-map - instead of one upload-ring copy job per range, but only while the
+// host bytes are the store byte for byte, and only while the bytes nobody asked for stay small.
+namespace {
+    using MobileGL::MG_Backend::DirectGLES::BufferImpl::kEsprytWholeStoreRenameMaxBytes;
+    using MobileGL::MG_Backend::DirectGLES::BufferImpl::kEsprytWholeStoreRenameMaxExtraBytes;
+    using MobileGL::MG_Backend::DirectGLES::BufferImpl::WholeStoreRenameApplies;
+} // namespace
+
+TEST(EsprytFlushLadder, ASmallStoreWhoseHostBytesAreTheStoreIsRenamedWhole) {
+    // Minecraft's immediate-mode shape: 96 of a 288-byte vertex store, from offset 0.
+    EXPECT_TRUE(WholeStoreRenameApplies(288, 288, 96, true, false, true));
+    EXPECT_TRUE(WholeStoreRenameApplies(kEsprytWholeStoreRenameMaxBytes, kEsprytWholeStoreRenameMaxBytes,
+                                        kEsprytWholeStoreRenameMaxBytes - kEsprytWholeStoreRenameMaxExtraBytes, true,
+                                        false, true));
+    // And the renamed range is one tier 1 takes as the whole-buffer orphan-map, with or without a
+    // ring copy still queued on the store.
+    EXPECT_EQ(InvalidateFlushAccessFor(0, 288, 0, 288, 288, 288, true),
+              static_cast<GLbitfield>(GL_MAP_WRITE_BIT | GL_MAP_INVALIDATE_BUFFER_BIT));
+}
+
+TEST(EsprytFlushLadder, ARenameThatWouldMoveTooManyUnaskedBytesKeepsItsQueuedRanges) {
+    EXPECT_FALSE(WholeStoreRenameApplies(kEsprytWholeStoreRenameMaxBytes + 1, kEsprytWholeStoreRenameMaxBytes + 1,
+                                         kEsprytWholeStoreRenameMaxBytes + 1, true, false, true))
+        << "above the store bound the queue is drained as it stands";
+    // The 1.21.5 trace's other shape: 128 bytes into a 53 KiB index store.
+    EXPECT_FALSE(WholeStoreRenameApplies(53824, 53824, 128, true, false, true))
+        << "rewriting 53 KiB for a 128-byte write moves more bytes than the copy job it saves";
+    EXPECT_FALSE(WholeStoreRenameApplies(16384, 16384, 16384 - kEsprytWholeStoreRenameMaxExtraBytes - 1, true,
+                                         false, true));
+    EXPECT_FALSE(WholeStoreRenameApplies(0, 0, 0, true, false, true));
+    EXPECT_FALSE(WholeStoreRenameApplies(288, 288, 0, true, false, true)) << "nothing queued, nothing to rename";
+}
+
+// The refusals are the widening rule: the rename rewrites bytes outside the queued ranges, which
+// is exact only when the host copy holds them.
+TEST(EsprytFlushLadder, AStoreHoldingBytesTheHostCopyDoesNotIsNeverRenamed) {
+    EXPECT_FALSE(WholeStoreRenameApplies(288, 288, 96, true, true, true))
+        << "a shader-written (or coherent, imported, resident-written) store would get the stale "
+           "host bytes back over what the GPU put there";
+    EXPECT_FALSE(WholeStoreRenameApplies(288, 288, 96, false, false, true))
+        << "under split a staged copy that does not cover the store has no bytes for the rest of it";
+    EXPECT_FALSE(WholeStoreRenameApplies(288, 576, 96, true, false, true))
+        << "a store the frontend has already resized is a respecify, not a rename";
+    EXPECT_FALSE(WholeStoreRenameApplies(288, 288, 96, true, false, false))
+        << "without tier 1's map the whole store would only be a bigger ring copy";
+}

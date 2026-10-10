@@ -497,6 +497,63 @@ void main() {
 
         // ---- a self-test of the assertions, not of MobileGL ------------------
         //
+        // Inside ONE frame: draw, overwrite PART of the vertex buffer, draw again. This is the
+        // immediate-mode streaming shape (Minecraft rewrites a small per-format vertex buffer from
+        // offset 0 before every batch), and the first draw is still queued when the write lands -
+        // it must keep the bytes it was issued with. DirectGLES drains this partial range of a
+        // small store by renaming the whole store rather than copying the range, so this pins that
+        // the rename is an orphan the first draw survives and that it carries the bytes OUTSIDE
+        // the written range (the right quad's vertices) into the new storage.
+        TEST_F(CrossFrameBufferScenario, APartialSubDataBetweenTwoDrawsOfOneFrameKeepsTheFirstDrawsBytes) {
+            ASSERT_NO_FATAL_FAILURE(BuildScene(/*immutable=*/false));
+            for (int frame = 0; frame < kWarmupFrames; ++frame) {
+                BeginFrame();
+                DrawScene();
+                Gl().EndFrame();
+            }
+
+            // The left quad's four vertices moved onto the right half and turned blue: 80 of the
+            // buffer's 160 bytes.
+            std::vector<Vertex> moved = SceneVertices(/*leftQuadIsGreen=*/false);
+            for (int i = 0; i < kLeftQuadVertexCount; ++i) {
+                moved[i].x += 1.0f;
+                moved[i].r = 0.0f;
+                moved[i].g = 0.0f;
+                moved[i].b = 1.0f;
+            }
+            const GLsizeiptr leftQuadBytes = GLsizeiptr(kLeftQuadVertexCount * sizeof(Vertex));
+            ASSERT_LT(leftQuadBytes, m_vertexBytes) << "the write must be a partial range of the store";
+
+            BeginFrame();
+            DrawScene();
+            glBindBuffer(GL_ARRAY_BUFFER, m_vbo);
+            glBufferSubData(GL_ARRAY_BUFFER, 0, leftQuadBytes, moved.data());
+            glBindBuffer(GL_ARRAY_BUFFER, 0);
+            ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << "the partial SubData raised a GL error";
+            DrawScene();
+            const Image frame = ReadFrame();
+            Gl().EndFrame();
+
+            ExpectHalves(frame, "red", "blue",
+                         "a draw queued before a partial SubData must keep its bytes, and the draw after it "
+                         "must see the new ones");
+
+            // The next frame draws only from the rewritten store: the right quad's vertices
+            // (outside the written range) must have come along with the rename, so the second
+            // index set still reaches them.
+            BeginFrame();
+            glBindVertexArray(m_vao);
+            glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m_ebo);
+            glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, 0, m_indexBytes, kIndicesRightQuad);
+            glBindVertexArray(0);
+            DrawScene();
+            const Image next = ReadFrame();
+            Gl().EndFrame();
+            ExpectHalves(next, "black", "green",
+                         "the bytes outside the partial write were lost when the store was rewritten");
+            EXPECT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
+        }
+
         // Every case above leans on ExpectHalves. ExpectHalves used to sample the
         // centre pixel of each half - two pixels for a 12288-pixel readback - and
         // that is measurably too weak to stand behind a claim about buffer

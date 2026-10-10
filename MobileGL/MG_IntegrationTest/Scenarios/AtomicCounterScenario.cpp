@@ -264,4 +264,38 @@ void main() {
             << "range untouched";
     }
 
+    // The same partial SubData, but drained by the NEXT DISPATCH rather than by a readback: the
+    // counter buffer is ensured as a binding, which is the draw-time drain. DirectGLES renames a
+    // small store there - the whole store is rewritten from the host copy instead of the queued
+    // range being copied - and a store a shader wrote is exactly the one whose host copy is stale
+    // outside the range: offset 4 still holds the seed on the CPU side and the first dispatch's
+    // increments on the GPU. Renaming it would put the seed back and the second dispatch would
+    // count from there.
+    TEST_F(AtomicCounterScenario, APartialSubDataBetweenDispatchesKeepsTheShaderWrittenNeighbour) {
+        if (!Ready() || IsSkipped()) return;
+
+        const GLuint zero = MakeCounterBuffer(0, {0u, 0u});
+        MakeCounterBuffer(1, {0u});
+        ASSERT_EQ(FirstGLError(), 0u);
+
+        Dispatch();
+
+        const unsigned int reseed = 4242u;
+        glBindBuffer(GL_ATOMIC_COUNTER_BUFFER, zero);
+        glBufferSubData(GL_ATOMIC_COUNTER_BUFFER, 0, sizeof(reseed), &reseed);
+        glBindBuffer(GL_ATOMIC_COUNTER_BUFFER, 0);
+        ASSERT_EQ(FirstGLError(), 0u) << "re-seeding offset 0 raised a GL error";
+
+        Dispatch();
+
+        const std::vector<unsigned int> values = ReadCounters(zero, 2);
+        EXPECT_EQ(FirstGLError(), 0u);
+        EXPECT_EQ(values[0], reseed + kInvocations)
+            << "offset 0 read back " << values[0] << "; the SubData did not reach the second dispatch";
+        EXPECT_EQ(values[1], 4 * kInvocations)
+            << "offset 4 read back " << values[1] << "; " << 2 * kInvocations
+            << " means the drain before the second dispatch rewrote the shader-written neighbour from the "
+            << "stale host copy";
+    }
+
 } // namespace MGITest

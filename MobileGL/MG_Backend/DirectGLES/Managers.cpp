@@ -1511,6 +1511,35 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // this one against a sha pinned at 3e298c9a. Neither ladder may drift, and neither
             // may drift AWAY FROM THE OTHER without the gate saying so.
 
+            // P15: the small-store write rename (WholeStoreRenameApplies, Managers.h), applied to the
+            // queue BEFORE the drain takes it. The ladder above is pinned and is not touched: it is
+            // handed one whole-store range, which its own tier 1 already answers with the
+            // whole-buffer orphan-map. Draw path only - the readback drains keep their exact ranges.
+            void RenameSmallStoreForDrain(GLESBufferResource& resource, const Uint8* hostBase, SizeT frontendSize) {
+                const SizeT store = resource.storageSize;
+                const Bool mapUsable = !MG_Config::Features.EsprytDisableInvalidateFlush &&
+                                       g_GLESFuncs.glMapBufferRange && g_GLESFuncs.glUnmapBuffer;
+                const Bool foreignBytes = resource.serverGpuWritten || resource.persistentMapped ||
+                                          resource.immutableStorage || resource.externalAhb != nullptr;
+                // The size gate first, with the whole store as the queue: it answers every refusal
+                // that does not depend on the queue before any lock is taken.
+                if (!WholeStoreRenameApplies(store, frontendSize, store, hostBase != nullptr, foreignBytes, mapUsable))
+                    return;
+                // Under split the host bytes are the server's staged copy, which only holds what the
+                // content records delivered; monolith's base is the frontend shadow, the whole store.
+                if (ServerStaged().CopiesIntoServerStorage() && !ServerStaged().IsCovered(&resource, 0, store)) return;
+                const std::lock_guard<std::mutex> lock(resource.pendingMutex);
+                if (resource.pendingRanges.empty() || !resource.pendingResidentWrites.empty()) return;
+                SizeT queuedBytes = 0;
+                for (const auto& range : resource.pendingRanges) {
+                    const SizeT end = std::min(range.end, store);
+                    queuedBytes += end - std::min(range.start, end);
+                }
+                if (!WholeStoreRenameApplies(store, frontendSize, queuedBytes, true, false, true)) return;
+                resource.pendingRanges.clear();
+                resource.pendingRanges.Add({0, store});
+            }
+
             // Land the app bytes queued for an ADOPTED store on the GPU timeline: staged
             // into the upload ring and delivered by glCopyBufferSubData. The destination
             // is the IMMUTABLE persistent store, which the driver can neither rename nor
@@ -3555,6 +3584,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             } else if (!resource->pendingRanges.empty()) {
                 // Same rule as Ops_H_Readback's, at the draw-time drain: with no frontend object
                 // `hostBase` is the server shadow and every queued range must be staged.
+                RenameSmallStoreForDrain(*resource, hostBase, size);
                 MGL_SERVER_STAGED_REQUIRE_PENDING(*resource, hostBase, size, "ensure_flush_pending");
                 FlushPendingRangesFrom(*resource, hostBase, size);
                 resource->syncedChangeSerial = serial;

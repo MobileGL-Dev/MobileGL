@@ -984,6 +984,46 @@ namespace MobileGL::MG_Backend::DirectGLES {
                    (wholeBuffer ? GL_MAP_INVALIDATE_BUFFER_BIT : GL_MAP_INVALIDATE_RANGE_BIT);
         }
 
+        // P15: WRITE RENAMING FOR A SMALL STORE. The draw-time drain sends a partial range below
+        // the tier-1 threshold through the upload ring, and every such range is one
+        // glCopyBufferSubData: a GPU copy job the driver builds on the render thread (FCL MC 1.21.5
+        // monolith on Adreno 830: 0.08 of the drain's 0.105 ms/frame) and then runs on the GPU
+        // timeline. Minecraft's immediate-mode batches rewrite a small per-format vertex buffer from
+        // offset 0 before each draw, so these ranges are partial writes of tiny stores (the
+        // 1.21.5 in-world trace: ~122 a frame, 81 of them into 288-byte stores). For such a store
+        // the drain rewrites the WHOLE store from the host bytes instead, which is tier 1's
+        // whole-buffer orphan-map: draws already recorded keep the old storage, draws after read the
+        // new one, and no copy job is recorded - the rename Magma's RenameBusyWireStore makes under
+        // the same 64 KiB bound.
+        //
+        // The bytes the rename moves that the queue did not ask for are bounded by
+        // kEsprytWholeStoreRenameMaxExtraBytes: a 128-byte write into a 53 KiB index store stays a
+        // ring copy rather than becoming a 53 KiB memcpy. On that trace the bound keeps 108 of the
+        // 122 renames for 101 KiB of extra host copying a frame; renaming every store up to 64 KiB
+        // would copy 811 KiB.
+        //
+        // Widening a map past the queued range is the edge that already drew blood (the note on
+        // InvalidateFlushAccessFor): it is only exact when the host bytes ARE the store, byte for
+        // byte, outside the queued ranges too. So every way the store can hold bytes the host
+        // copy does not is a refusal, and the caller passes them in as one flag: a shader write
+        // since the last whole readback (serverGpuWritten), queued resident writes, a coherent or
+        // imported store, immutable storage. `hostBytesCoverStore` is the host copy's own extent:
+        // the frontend shadow on monolith, the staged coverage under split. `mapUsable` is tier 1's
+        // own gate - without the map the whole range would just be a bigger ring copy.
+        //
+        // `queuedBytes` is the sum of the queued ranges clamped to the store (VecRange1D keeps them
+        // disjoint).
+        inline constexpr SizeT kEsprytWholeStoreRenameMaxBytes = 64u * 1024u;
+        inline constexpr SizeT kEsprytWholeStoreRenameMaxExtraBytes = 8u * 1024u;
+        constexpr Bool WholeStoreRenameApplies(SizeT storageSize, SizeT frontendSize, SizeT queuedBytes,
+                                               Bool hostBytesCoverStore, Bool storeHoldsBytesTheHostDoesNot,
+                                               Bool mapUsable) {
+            if (!mapUsable || !hostBytesCoverStore || storeHoldsBytesTheHostDoesNot) return false;
+            if (storageSize == 0 || storageSize > kEsprytWholeStoreRenameMaxBytes) return false;
+            if (frontendSize != storageSize || queuedBytes == 0 || queuedBytes > storageSize) return false;
+            return storageSize - queuedBytes <= kEsprytWholeStoreRenameMaxExtraBytes;
+        }
+
         // The handle arms of the two draw-path entry points below. IsBufferDrawCleanByHandle
         // asks the applier the same five questions IsBufferDrawClean asks the frontend object,
         // with identical semantics (D-A4); EnsureBufferResourceForHandle is the ensure path
