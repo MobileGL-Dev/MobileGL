@@ -302,7 +302,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         auto& frame = GetCurrent();
         const VkResult result = vkAcquireNextImageKHR(device, swapchain, UINT64_MAX, frame.imageAvailableSemaphore,
                                                       VK_NULL_HANDLE, &outImageIndex);
-        if (result == VK_SUCCESS || result == VK_SUBOPTIMAL_KHR) frame.imageAvailableSemaphoreConsumed = false;
+        if (result == VK_SUCCESS || result == VK_SUBOPTIMAL_KHR) {
+            frame.imageAvailableSemaphoreConsumed = false;
+            frame.acquiredImageReferenced = false;
+        }
         return result;
     }
 
@@ -333,6 +336,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
 
         frame.imageAvailableSemaphoreConsumed = false;
+        frame.acquiredImageReferenced = false;
         const VkResult resetResult = vkResetFences(device, 1, &frame.imageInFlightFence);
         // Hand the acquire's own code back so the caller can schedule a rebuild.
         return resetResult == VK_SUCCESS ? result : resetResult;
@@ -476,6 +480,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         frame.hasCommandBufferRecorded = false;
         frame.isCommandRecording = false;
         frame.imageAvailableSemaphoreConsumed = false;
+        frame.acquiredImageReferenced = false;
         return VK_SUCCESS;
     }
 
@@ -494,5 +499,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         frame.isCommandRecording = false;
         frame.hasCommandBufferRecorded = false;
         frame.imageAvailableSemaphoreConsumed = false;
+        frame.acquiredImageReferenced = false;
     }
 } // namespace MobileGL::MG_Backend::DirectVulkan

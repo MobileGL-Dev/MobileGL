@@ -3601,6 +3601,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // split server records every draw its client sends into the same frame command buffer, so
         // the same loading frame grows it the same way there.
         SplitOversizedRecording();
+        // A draw into the window: the frame's work so far goes out now, ahead of the acquire wait,
+        // while nothing of this draw is recorded yet (its descriptor binds must land in the
+        // recording the draw does). ResolveWireImage would split later, mid-setup.
+        if (const auto* fbo = MG_Pipe::MGPipeApplier().DrawFramebuffer(); fbo != nullptr && fbo->IsDefault)
+            SubmitAheadOfAcquiredImage();
         if (!RewindWireDescriptorSetsIfDue()) return false;
         // The wire route returns before the monolith branch's draw-gated
         // sweep. Dead wire texture/renderbuffer records otherwise live
@@ -6116,7 +6121,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         m_completedSubmitCounter = m_submitCounter;
     }
 
-    Bool VulkanRenderer::SubmitPendingCommandBuffer(FrameContext::FrameData& frame, VkFence fence, Bool pooledFence) {
+    Bool VulkanRenderer::SubmitPendingCommandBuffer(FrameContext::FrameData& frame, VkFence fence, Bool pooledFence,
+                                                    Bool waitAcquire) {
         RetireWireDrawPass();
         // Batched texture uploads must reach the queue before the frame's
         // commands: the recording being submitted may sample images whose
@@ -6124,10 +6130,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (m_textureManager) {
             m_textureManager->FlushPendingUploads();
         }
-        VkPipelineStageFlags waitDstStageMask = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+        VkPipelineStageFlags waitDstStageMask = FrameContext::kAcquireWaitStages;
         VkSemaphore waitSemaphore = frame.imageAvailableSemaphore;
         VkSubmitInfo submitInfo{VK_STRUCTURE_TYPE_SUBMIT_INFO};
-        if (!frame.imageAvailableSemaphoreConsumed) {
+        // A recording that never touched the acquired image does not wait for its release: on a
+        // queue that runs submissions in order, that wait would hold this work, and everything
+        // after it, until the display lets go of the image (SubmitAheadOfAcquiredImage).
+        const Bool waitsAcquire =
+            !frame.imageAvailableSemaphoreConsumed && (frame.acquiredImageReferenced || waitAcquire);
+        if (waitsAcquire) {
             submitInfo.waitSemaphoreCount = 1;
             submitInfo.pWaitSemaphores = &waitSemaphore;
             submitInfo.pWaitDstStageMask = &waitDstStageMask;
@@ -6161,7 +6172,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             MGLOG_E_ONCE("SubmitPendingCommandBuffer: vkQueueSubmit returned %d", result);
             return false;
         }
-        frame.imageAvailableSemaphoreConsumed = true;
+        if (waitsAcquire) frame.imageAvailableSemaphoreConsumed = true;
         frame.hasCommandBufferRecorded = false;
         frame.hasPreCommandBufferRecorded = false;
         RegisterSubmit(fence, pooledFence);
@@ -6237,6 +6248,25 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             }
         }
         return true;
+    }
+
+    void VulkanRenderer::SubmitAheadOfAcquiredImage() {
+        if (m_frameContext.GetFrameCount() == 0) return;
+        auto& frame = m_frameContext.GetCurrent();
+        if (frame.imageAvailableSemaphoreConsumed || frame.acquiredImageReferenced) return;
+        if (m_swapchainObject.GetHandle() == VK_NULL_HANDLE || m_presentSuspended) return;
+        // The frame's work so far renders off screen. Submitted together with the window pass it
+        // would wait behind the acquire semaphore, which signals only when the display releases
+        // the image - about every other frame that is the image it has just stopped scanning out,
+        // so the whole frame's GPU work started after the next display commit. Submitted now it
+        // runs while the display still holds the image. A failed flush leaves the work recorded,
+        // and it goes out later with the wait, as before. Inside a draw's preparation nothing is
+        // submitted (the draw may already hold state of the open recording); the image is only
+        // marked, so the submission that carries the use still waits.
+        if (m_wirePreparationDepth == 0 && HasPendingRecordedWork() && FlushPendingCommands())
+            MGLOG_I_ONCE("DirectVulkan: a frame's off-screen work goes to the queue ahead of its window pass; only "
+                         "the submission that uses the swapchain image waits for its acquire");
+        frame.acquiredImageReferenced = true;
     }
 
     void VulkanRenderer::NoteDeviceLoss(VkResult result, const char* where) {
@@ -6555,6 +6585,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
         MOBILEGL_ASSERT(m_imageIndexAcquired < m_swapchainObject.GetImageCount(),
                         "Present, acquired image index out of range");
+        // A frame that never drew into the window still presents its image: what it recorded
+        // goes out first, unwaited, and the present's own submission waits for the release.
+        SubmitAheadOfAcquiredImage();
         // A real presented frame is the canonical aging cadence; mid-frame drains
         // count against this and only age when presents stop coming.
         m_drainsSinceLastPresent = 0;
@@ -9020,7 +9053,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (m_swapchainObject.GetHandle() != VK_NULL_HANDLE && !m_presentSuspended &&
             !frame.imageAvailableSemaphoreConsumed) {
             const VkFence fence = AcquirePooledSubmitFence();
-            if (fence == VK_NULL_HANDLE || !SubmitPendingCommandBuffer(frame, fence, /*pooledFence=*/true)) {
+            if (fence == VK_NULL_HANDLE ||
+                !SubmitPendingCommandBuffer(frame, fence, /*pooledFence=*/true, /*waitAcquire=*/true)) {
                 MGLOG_E("DirectVulkan: a parked surface's pending acquire could not be waited out");
             }
         }

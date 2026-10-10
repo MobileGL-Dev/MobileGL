@@ -133,6 +133,9 @@
             out.swapchainImageIndex = isWriteTarget ? DefaultFramebufferWriteIndex(true)
                                                     : DefaultFramebufferReadIndex(true);
             if (aspect == VK_IMAGE_ASPECT_COLOR_BIT) {
+                // Every use of the acquired image is reached through here, ahead of its commands:
+                // the work recorded before it goes out without the acquire wait.
+                if (out.swapchainImageIndex == m_imageIndexAcquired) SubmitAheadOfAcquiredImage();
                 out.image = m_swapchainObject.GetImage(out.swapchainImageIndex);
                 out.format = m_swapchainObject.GetSurfaceFormat().format;
                 out.layout = m_swapchainObject.GetImageLayout(out.swapchainImageIndex);
@@ -201,6 +204,12 @@
         VkPipelineStageFlags stage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
         VkAccessFlags access = 0;
         GetImageTransitionSourceState(image.layout, stage, access);
+        // A swapchain image leaves PRESENT_SRC_KHR (or UNDEFINED, new) only after it was acquired:
+        // the transition is ordered after the presentation engine's release through the stages
+        // the acquire wait blocks, which an empty (TOP_OF_PIPE) source scope would not chain to.
+        if (image.isDefault && image.aspect == VK_IMAGE_ASPECT_COLOR_BIT &&
+            (image.layout == VK_IMAGE_LAYOUT_PRESENT_SRC_KHR || image.layout == VK_IMAGE_LAYOUT_UNDEFINED))
+            stage |= FrameContext::kAcquireWaitStages;
         // One tracked layout per image: move the complete mip chain, never just the surface.
         VkImageAspectFlags barrierAspect = image.aspect;
         // Every packed format, D16_UNORM_S8_UINT included (g5-msrbo review round): the layout is
@@ -565,6 +574,9 @@
     void VulkanRenderer::ClearWireFramebuffer(const MG_Pipe::MGPFramebufferState& fbo,
                                               const ClearAttachmentPayload& clearRequest, GLint drawbuffer) {
         if (MG_Pipe::gPipeInputs->IsCapabilityEnabled(CapabilityInput::RasterizerDiscard)) return;
+        // A clear of the window: the frame's work so far goes out ahead of the acquire wait, before
+        // any of the clear's paths (in-pass, deferred, standalone) records or resolves anything.
+        if (fbo.IsDefault) SubmitAheadOfAcquiredImage();
         // P15 S0: what the draw pass can take is cleared inside it (ClearWireFramebufferInPass,
         // WireDraw.inc); only the buffers it hands back take the standalone pass below.
         // P15: in the open pass when it is this framebuffer's (the in-pass clear) or merely holds

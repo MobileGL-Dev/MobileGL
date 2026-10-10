@@ -976,12 +976,18 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // vkWaitForFences inline before returning.
         void RegisterSubmit(VkFence fence, Bool pooledFence);
         // Builds the submit packet for the frame's pending command buffer
-        // (consuming the acquire semaphore on the slot's first submission),
+        // (consuming the acquire semaphore on the first submission that
+        // references the acquired image, or on any when `waitAcquire`),
         // submits it with `fence`, and registers the submission. On failure
         // the frame state is left untouched. Shared by the mid-frame flush
         // and the readback path so the semaphore-consumption invariant lives
         // in one place.
-        Bool SubmitPendingCommandBuffer(FrameContext::FrameData& frame, VkFence fence, Bool pooledFence);
+        Bool SubmitPendingCommandBuffer(FrameContext::FrameData& frame, VkFence fence, Bool pooledFence,
+                                        Bool waitAcquire = false);
+        // Called before the frame first references the acquired swapchain image: submits what is
+        // recorded so far WITHOUT the acquire wait, then marks the recording as referencing the
+        // image, so only the window pass waits for the presentation engine's release.
+        void SubmitAheadOfAcquiredImage();
         // Polls in-flight submission fences (prefix order) and advances the
         // completed counter past every fence observed signaled.
         void RefreshCompletedSubmits();

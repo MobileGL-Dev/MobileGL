@@ -25,8 +25,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             virtual void OnFrameCommandRecordingBegan(VkCommandBuffer commandBuffer) = 0;
         };
 
+        // The stages the acquire wait blocks. Every first access of an acquired swapchain image is
+        // a layout transition out of PRESENT_SRC_KHR or UNDEFINED whose source scope includes these
+        // stages (TransitionWireImage, TransitionToPresent), and that chain is what orders the
+        // access after the presentation engine's release. Work at other stages, in this and later
+        // submissions, does not wait for the release.
+        static constexpr VkPipelineStageFlags kAcquireWaitStages =
+            VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT;
+
         struct SubmitInfoPacket {
-            VkPipelineStageFlags waitDstStageMask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+            VkPipelineStageFlags waitDstStageMask = kAcquireWaitStages;
             VkSemaphore waitSemaphore = VK_NULL_HANDLE;
             VkSemaphore signalSemaphore = VK_NULL_HANDLE;
             // [0] = pre-pass command buffer (when recorded), then the frame
@@ -67,6 +75,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             Bool isPreCommandRecording = false;
             Bool hasPreCommandBufferRecorded = false;
             Bool imageAvailableSemaphoreConsumed = false;
+            // The open recording references the acquired swapchain image. Only a submission that
+            // does (or the present's) waits on imageAvailableSemaphore: the frame's work recorded
+            // before its first use of the image goes to the queue without the wait, so it never
+            // queues behind the release of an image the display still scans out.
+            Bool acquiredImageReferenced = false;
             // Command buffers submitted mid-frame (FlushPendingCommands),
             // appended in submit order; freed once their submission is known
             // complete (fence wait or completion poll).
