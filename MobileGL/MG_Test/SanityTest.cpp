@@ -234,7 +234,7 @@ namespace {
     // restores the process-wide state even when a gtest assertion unwinds the test body.
     struct ScopedDirectGLESTextureBindings {
         ScopedDirectGLESTextureBindings():
-            previousContext(MobileGL::Move(MobileGL::MG_State::pGLContext)),
+            previousContext(MobileGL::MG_State::pGLContext.Take()),
             previousFunctions(MobileGL::MG_Backend::DirectGLES::g_GLESFuncs),
             previousActiveUnit(MobileGL::MG_Backend::DirectGLES::TextureImpl::g_activeTextureUnit),
             previousCache(MobileGL::MG_Backend::DirectGLES::TextureImpl::g_boundTexturesCache),

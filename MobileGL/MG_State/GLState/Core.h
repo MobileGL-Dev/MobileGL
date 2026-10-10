@@ -790,9 +790,9 @@ namespace MobileGL {
         // every API level. This object is trivially destructible and constant-initialized, so a
         // read is one TLS address computation and a load. The SharedPtr that keeps the context
         // alive lives in a separate thread_local in Core.cpp, written only by the assignments
-        // below (eglMakeCurrent and the release edge, MG_State::Init(), tests); its destructor
-        // clears this pointer before it drops the reference, so a thread's exit leaves no
-        // dangling pointer behind.
+        // below (eglMakeCurrent and the release edge, MG_State::Init(), tests); at thread exit its
+        // destructor drops the reference and then clears this pointer, so no dangling pointer is
+        // left behind.
         //
         // Assignment, reset() and the SharedPtr conversions touch the owner and belong to the
         // CALLING THREAD only: never assign through a reference to another thread's slot.

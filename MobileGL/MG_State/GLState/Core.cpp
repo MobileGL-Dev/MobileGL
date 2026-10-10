@@ -1658,12 +1658,15 @@ namespace MobileGL::MG_State {
     constinit thread_local CurrentGLContextSlot pGLContext;
 
     // The reference that keeps the calling thread's pGLContext alive (Core.h). Registered for
-    // destruction on the thread's first assignment; at thread exit it clears the slot first, so
-    // whatever the context's destructor reaches sees no current context rather than one that is
-    // being destroyed.
+    // destruction on the thread's first assignment. At thread exit it drops the reference first,
+    // with the slot still naming the context - what destroying the SharedPtr this used to be did
+    // - and then clears the slot, so no pointer outlives the context.
     struct CurrentGLContextOwner {
         SharedPtr<GLState::GLContext> context;
-        ~CurrentGLContextOwner() { pGLContext.m_context = nullptr; }
+        ~CurrentGLContextOwner() {
+            context.reset();
+            pGLContext.m_context = nullptr;
+        }
     };
     namespace {
         thread_local CurrentGLContextOwner tCurrentGLContextOwner;
