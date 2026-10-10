@@ -173,7 +173,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     void SwapchainObject::Create(VkDevice device, VkPhysicalDevice physicalDevice, VkSurfaceKHR surface,
                                  Uint32 graphicsQueueFamily, Uint32 presentQueueFamily, Uint32 minImageCountHint,
-                                 VkExtent2D desiredExtent, Optional<Int> swapInterval) {
+                                 Uint32 extraImageCount, VkExtent2D desiredExtent, Optional<Int> swapInterval) {
         const auto swapchainCapabilities = GetSwapchainCapabilities(physicalDevice, surface);
         MOBILEGL_ASSERT(swapchainCapabilities.IsComplete(),
                         "SwapchainObject::Create failed: incomplete swapchain capabilities");
@@ -198,11 +198,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         m_supportedPresentModes = swapchainCapabilities.presentModes;
 
         const auto& swapchainCaps = swapchainCapabilities.capabilities;
-        Uint32 targetImageCount = std::max<Uint32>(minImageCountHint, swapchainCaps.minImageCount);
+        // The extra images count from the surface's own minimum: that is how many the platform
+        // keeps for itself and the application, so only images beyond it delay a buffer's reuse.
+        Uint32 targetImageCount =
+            std::max<Uint32>(minImageCountHint, swapchainCaps.minImageCount + extraImageCount);
         if (swapchainCaps.maxImageCount != 0) {
             targetImageCount = std::min(targetImageCount, swapchainCaps.maxImageCount);
         }
-        MGLOG_I("Set minImageCount = %u", targetImageCount);
+        MGLOG_I("Set minImageCount = %u (surface min %u, max %u, extra %u)", targetImageCount,
+                swapchainCaps.minImageCount, swapchainCaps.maxImageCount, extraImageCount);
         MGLOG_I("Swapchain currentTransform = %s",
                 string_VkSurfaceTransformFlagBitsKHR(swapchainCaps.currentTransform));
 

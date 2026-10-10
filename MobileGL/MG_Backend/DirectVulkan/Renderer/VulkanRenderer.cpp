@@ -8510,7 +8510,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         m_swapchainObject.Create(m_device, m_physicalDevice.handle, m_surface,
                                  static_cast<Uint32>(m_physicalDevice.queueFamilies.graphicsFamily),
                                  static_cast<Uint32>(m_physicalDevice.queueFamilies.presentFamily),
-                                 m_config.MaxFramesInFlight, desiredExtent, m_config.SwapInterval);
+                                 m_config.MaxFramesInFlight, MG_Config::Features.MagmaExtraSwapchainImages,
+                                 desiredExtent, m_config.SwapInterval);
         if (m_config.SwapInterval && m_config.SwapInterval != m_swapchainSwapInterval) {
             MGLOG_D("DirectVulkan: swap interval %d -> %s", *m_config.SwapInterval,
                     SwapchainObject::GetPresentModeName(m_swapchainObject.GetPresentMode()));

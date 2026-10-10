@@ -74,6 +74,7 @@ environment too. The backend itself is the exception: the client asks for it (se
 | `MOBILEGL_MAGMA_R11G11B10F_FALLBACK` | flag | off | Use a fallback format for `GL_R11F_G11F_B10F` |
 | `MOBILEGL_MAGMA_MAX_DRAWS_PER_COMMAND_BUFFER` | 0-16777216 | 16384 | Submit a command buffer mid-frame after this many draws/dispatches (0 = never). Bounds driver memory in huge loading frames. |
 | `MOBILEGL_MAGMA_DESCRIPTOR_TRIM_FRAMES` | 0-1048576 | 120 | Free grown descriptor pools after this many quiet frames (0 = never) |
+| `MOBILEGL_MAGMA_EXTRA_SWAPCHAIN_IMAGES` | 0-16 | 0 | Ask for this many swapchain images beyond the surface's minimum (capped at its maximum). The window buffer the display has just released is then reused later, when its release has usually signaled, so fewer frames wait for it. Each image costs a full-size colour buffer plus a depth/stencil buffer of the same size. |
 | `VK_ICD_FILENAMES` | path to an ICD JSON | loader default | Standard Vulkan loader variable: picks the Vulkan driver |
 
 ## Logging and diagnostics

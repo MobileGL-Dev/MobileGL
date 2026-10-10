@@ -36,8 +36,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         static const char* GetPresentModeName(VkPresentModeKHR presentMode);
 
         void Create(VkDevice device, VkPhysicalDevice physicalDevice, VkSurfaceKHR surface, Uint32 graphicsQueueFamily,
-                    Uint32 presentQueueFamily, Uint32 minImageCountHint, VkExtent2D desiredExtent,
-                    Optional<Int> swapInterval);
+                    Uint32 presentQueueFamily, Uint32 minImageCountHint, Uint32 extraImageCount,
+                    VkExtent2D desiredExtent, Optional<Int> swapInterval);
         void Shutdown(VkDevice device);
         // Tells the frontend (or, under a transport, the client) the default framebuffer's size
         // and formats. Create does this; a renderer switching between surfaces repeats it.

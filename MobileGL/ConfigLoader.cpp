@@ -386,6 +386,7 @@ namespace MobileGL::MG_ConfigLoader {
             if (acceptedEnvVariablesMap->count("MOBILEGL_MAGMA_FRAMESINFLIGHT") != 0)
                 MGLOG_W("Config: MOBILEGL_MAGMA_FRAMESINFLIGHT is deprecated; use MOBILEGL_FRAMES_IN_FLIGHT");
         }
+        features.MagmaExtraSwapchainImages = QueryEnvUint32("MOBILEGL_MAGMA_EXTRA_SWAPCHAIN_IMAGES", 0, 0, 16);
         features.MagmaMaxDrawsPerCommandBuffer =
             QueryEnvUint32("MOBILEGL_MAGMA_MAX_DRAWS_PER_COMMAND_BUFFER", 16384, 0, 1u << 24);
         features.MagmaDescriptorTrimFrames = QueryEnvUint32("MOBILEGL_MAGMA_DESCRIPTOR_TRIM_FRAMES", 120, 0, 1u << 20);

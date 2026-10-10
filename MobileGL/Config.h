@@ -175,6 +175,13 @@ namespace MobileGL::MG_Config {
         //     ahead of the server, is derived from it: max(1, N - 2), so the default 3 keeps the
         //     shipped credit of 1 and N = 4 is credit 2 (one more frame of latency).
         Uint32 FramesInFlight = 3;
+        // MOBILEGL_MAGMA_EXTRA_SWAPCHAIN_IMAGES: swapchain images Magma asks for beyond the
+        // surface's minimum (the frames-in-flight count still raises the request when it is
+        // larger), clamped to the surface's maximum. With more images, the one the display has
+        // just released is reused later, by when its release has usually signaled, so fewer
+        // frames start their window pass behind it. Each image costs a full-size colour buffer
+        // plus the default framebuffer's depth/stencil buffer of the same size.
+        Uint32 MagmaExtraSwapchainImages = 0;
         // MOBILEGL_MAGMA_MAX_DRAWS_PER_COMMAND_BUFFER: GL draws and dispatches Magma records into
         // one command buffer before it submits it and continues on a fresh one. 0 = unbounded.
         // Drivers back a command buffer with GPU memory that is only returned when the buffer is
