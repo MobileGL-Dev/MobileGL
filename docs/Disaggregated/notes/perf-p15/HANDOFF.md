@@ -320,6 +320,170 @@ extra memcpy). Also check the driver's map path (slot 0x550 -> 0x1db8a0) does no
 allocations per rename. Correctness: SSIM/golden on the device retrace of minecraft-1.21.5-vanilla-fcl
 plus the Iris/BSL cases, Espryt.
 
+## Present-wait levers A + B (branch `pwgate`, worktree `.claude/worktrees/pwgate`, 2026-10-09)
+
+Built on origin/feat/disaggregated a759b4b7. Host-only so far; the device plan is below. Mechanism:
+PRESENT-WAIT.md (p15/pwait): every other frame renders into the buffer the display just released,
+and the whole frame batch was gated behind that buffer's release fence.
+
+**Commits (local, not pushed):**
+- 168451bc Magma: submit a frame's off-screen work ahead of the swapchain acquire wait.
+- 66adc7aa Espryt: flush once per frame ahead of the window buffer's first use.
+- dd3e608a Tests: WindowPassGateScenario covers frames split around the window pass.
+- cdd2160f Magma: MOBILEGL_MAGMA_EXTRA_SWAPCHAIN_IMAGES asks for swapchain images beyond the
+  surface minimum.
+
+**Lever A, Magma (no knob).**
+- `FrameData::acquiredImageReferenced` means the open recording uses the acquired swapchain image.
+  It is reset at every acquire (`WaitAndAcquireNextImage`, `AcquireNextImageInCurrentSlot`).
+- `SubmitPendingCommandBuffer` waits on `imageAvailableSemaphore` only when the recording references
+  the image, or when the caller forces the wait (`ParkActiveTarget`'s wait-out). It marks the
+  semaphore consumed only when it waited. Present's own submission still waits whenever the
+  semaphore is unconsumed.
+- `SubmitAheadOfAcquiredImage()` runs before the frame's first use of the acquired image. It flushes
+  what is recorded so far without the wait, then marks the image referenced. It is called from:
+  - `SetupDraw` when the draw framebuffer is the default one, next to `SplitOversizedRecording`,
+    before anything of the draw is recorded. Splitting later in setup lands after the draw's
+    descriptor bind, because the attachment pre-resolve reads the default framebuffer's read index.
+    That was measured as VUID-vkCmdDraw-None-08600 plus an llvmpipe segfault.
+  - `ClearWireFramebuffer` for the default framebuffer.
+  - `ResolveWireImage` for the acquired colour image. This is the net under blits, copies, readbacks
+    and shared-image presents.
+  - `Present`. A frame that never touched the window submits its work unwaited, and the present's
+    own submission carries the wait, possibly with no command buffer.
+  - Inside a draw's preparation (`m_wirePreparationDepth != 0`) it only marks the image; it never
+    submits.
+- Wait stage: every acquire wait now uses `FrameContext::kAcquireWaitStages`
+  (COLOR_ATTACHMENT_OUTPUT | TRANSFER). Before, mid-frame flushes waited at ALL_COMMANDS and the
+  present submit at TOP_OF_PIPE, which waits for nothing.
+- `TransitionWireImage` adds those stages to the source scope when a default colour image leaves
+  PRESENT_SRC_KHR or UNDEFINED.
+- Engagement proof: one latched log line,
+  `DirectVulkan: a frame's off-screen work goes to the queue ahead of its window pass ...`.
+- Acquire timing is unchanged: the next image is still acquired at the end of Present.
+  - Acquiring later cannot move the gate. The buffer queue's free list is FIFO, so a later dequeue
+    gets the same buffer, or a more recently released one, with the same release time R.
+  - It would also break the buffer-age contract: `CurrentDrawBufferAge` answers for the image
+    acquired at the previous present.
+  - So no device A/B was spent on it.
+
+**Sync-correctness argument (Magma).**
+- One wait per signal. Each acquire signals imageAvailableSemaphore once. Exactly one submission
+  waits on it: the first whose recording references the image, or the present's, or the park
+  wait-out. All three check and set `imageAvailableSemaphoreConsumed`. The next acquire on the slot
+  comes after the slot's fence wait, so by then the semaphore is unsignaled with no pending wait.
+- Recordings that never reference the acquired image carry no wait. That is correct because none of
+  their commands access it.
+  - Reads of `m_defaultFramebufferImageIndex` that name the previously presented image touch a
+    different image.
+  - The old code did not order those reads against an acquire either.
+- Every first access of an acquired image is a layout transition out of PRESENT_SRC_KHR or UNDEFINED:
+  - `TransitionWireImage`, whose source scope includes kAcquireWaitStages;
+  - `TransitionToPresent`, whose source scope is ALL_COMMANDS.
+- The semaphore wait's second scope covers kAcquireWaitStages in its own batch and in every later
+  batch. So the transition is ordered after the presentation engine's release, even when the use is
+  in a later submission than the wait. Through the transition's ALL_COMMANDS destination, everything
+  after it is ordered too.
+- renderFinished is signaled by the present submission. That is last in submission order, so its
+  first scope covers the off-screen submissions too.
+- Unchanged by this work:
+  - Frames in flight: split submissions take pooled fences and advance `lastSubmitIndex`, and the
+    present's slot wait covers them.
+  - Wire render-pass guard: `FlushPendingCommands` ends the open pass.
+  - Pass-barrier coalescing: barriers order across submissions.
+  - Deferred clears: the default framebuffer never defers.
+- Not machine-checked. lavapipe syncval does not flag a broken acquire chain.
+  - Positive control: removing the source-stage fix while keeping the narrowed wait still gave
+    0 hazards.
+  - It never flagged the old present submit's TOP_OF_PIPE either.
+  - The argument above rests on the spec.
+
+**Lever A, Espryt (no knob).**
+- `FlushAheadOfWindowBufferUse()` issues one `glFlush` per frame, just before `BindCurrentFBO` or
+  `SyncAndBindFramebufferByHandle` moves the driver's binding to framebuffer 0. A thread-local flag
+  limits it to once per frame and is reset at the present's swap.
+- Window surfaces only: a pbuffer has no lazy dequeue.
+- Not issued on MobileGL's own scoped binding restores, or when the binding is already 0. A frame
+  that renders straight into framebuffer 0 has nothing to flush ahead.
+- No wait and no glFinish. Adreno dequeues lazily at the first default-framebuffer use.
+- Host coverage is pixels only, because the harness has no window surface.
+
+**Lever B (knob, default 0).**
+- `MOBILEGL_MAGMA_EXTRA_SWAPCHAIN_IMAGES` (0-16) requests
+  `max(frames-in-flight hint, surface minImageCount + extra)` images, clamped to maxImageCount.
+- Logged as `Set minImageCount = N (surface min M, max X, extra K)`.
+- Documented in userguide/configuration.md and the README knob table.
+- Cost per extra image at 2560x1600: one RGBA colour buffer (~16 MB) plus the default framebuffer's
+  same-size depth/stencil image.
+- Vulkan only. Espryt's EGL buffer count needs a platform API, so it is deferred.
+
+**Host verification.** Setup: WSL archlinux, clang, CMake 3.31.10, `~/mgl-pwgate-ci31`, lavapipe,
+suites run serially.
+
+| Check | Result | Baseline |
+|---|---|---|
+| Unit | 2904 tests, 92 failed (ServerSpawn / PeerLatch / FuzzArm2) | same 92, environmental |
+| Integration: `integration-gpu`, `-magma-all-split`, `-magma-full-split`, minus spawn and tcp, `MOBILEGL_ITEST_REQUIRE_GPU=1` | 3883 tests, 2 failed (both Spawn.ColdStart ClearThenReadPixels) | same 2 |
+| Syncval (submit-time, shader heuristic): WindowPassGate + CrossFrameBuffer + DefaultFramebufferAcrossSwap.ADraw*, monolith and inproc | 0 hazards, 0 VUIDs; also clean with EXTRA_SWAPCHAIN_IMAGES=2 and FRAMES_IN_FLIGHT=2 | — |
+| CI gates `magma_runahead_checks.py negative`, `validation`, `magma_cache_checks.py` | rc 0 | — |
+| EXTRA_SWAPCHAIN_IMAGES=2 | 85 present-shaped Magma entries pass; minImageCount 4+2 = 6 on the headless surface | — |
+| Android arm64 plugin release (`assemblePluginRelease`), API 26 and API 29 | both rc 0 | — |
+
+- The integration run includes WindowPassGateScenario on DirectGLES and DirectVulkan (monolith,
+  Split, Split.Full), plus the `DirectVulkan.WindowPassGate.` arming entry.
+- Verb tables are unchanged, so split_coverage was not needed.
+- The spawn and tcp lanes fail on this host for every scenario: TcpServer.Start fails, and spawn
+  bring-up aborts with CapsBeforeFirstSnapshot.
+- Pre-existing, not from this work: DefaultFramebufferAcrossSwap.AReadbackAfterASwap reads an image
+  already handed to presentation, which syncval reports as WRITE_AFTER_PRESENT. That is why the new
+  scenario reads back before its swaps.
+
+**Device plan (not run; another agent has the phone).**
+- Libs: both are API 26 default plugin builds.
+  - base: origin/feat/disaggregated a759b4b7.
+  - A: pwgate cdd2160f.
+- Setup: same FCL, MC 1.21.5 vanilla frozen world, cpuhunt clocks, FCL pinned to cpu2-6.
+- Validity rules: `fcl_bench.sh` VALID, freq and thermal sampled every 1-2 s, throttled runs dropped.
+- Perfetto (PF=1): `p15_perfetto.cfg` with every `kgsl/*` ftrace event removed (not on this kernel).
+  Keep:
+  - sched (switch, waking, wakeup, blocked_reason), cpu_frequency and cpu_idle;
+  - atrace `gfx` + `view` for the FCL package and surfaceflinger (gfx is what creates the
+    `GPU completion` / `HWC release` FenceMonitor threads);
+  - process_stats and `android.surfaceflinger.frametimeline`;
+  - 5 s duration.
+- Arms, 3 interleaved reps each:
+  1. Espryt monolith: base, A.
+  2. Espryt inproc: base, A.
+  3. Magma monolith: base, A, A+`MOBILEGL_MAGMA_EXTRA_SWAPCHAIN_IMAGES=1`, A+`=2`.
+  4. Magma inproc: base, A, A+1, A+2.
+- Engagement proof:
+  - Magma A: logcat has the latched "goes to the queue ahead of its window pass" line, and the trace
+    shows QueueSubmit per frame rising from ~1.33 to ~2.3 (one submit just before the blit's draw,
+    one at present).
+  - Extra images: logcat shows `Set minImageCount = 6/7 (surface min 5 ...)`.
+  - Espryt A has no marker. Take one extra `gpu.renderstages` capture per Espryt arm (it works on
+    this device); it should show A's off-screen stages running before R.
+- Analysis, with the scratchpad `p15/pwait/` scripts:
+  - `cycle.py <label> <runs...>`
+  - `pairs.py`
+  - `gexec.py`
+  - `sim.py <label> <start> <exec> <runs...>`
+- Report per-frame timelines, not ms tables.
+- Expected for lever A (PRESENT-WAIT, "What a fresh trace should confirm"):
+  - Gated frames stay at ~50 %.
+  - For gated frames, E - R falls from ~1.35 to ~0.9 ms: start latency plus the window pass only.
+  - Back-to-back execution is unchanged at ~0.5 ms.
+  - sim's throttle, ms/frame: Espryt mono 0.62 -> 0.49, Magma mono 0.72 -> 0.54,
+    Magma inproc 1.31 -> 1.09, Espryt inproc 1.09 -> 0.91.
+  - If E - R does not fall, either the driver gates the off-screen submission too, or the split is
+    not engaged. Check the submit count, and when the GPU work starts relative to R.
+- Expected for lever B:
+  - `HWC release fence N has signaled` at >= 85 % of AcquireNextImageKHR.
+  - Gated frames < 20 %.
+  - Throttle < 0.2 ms/frame on monolith.
+  - inproc may need +2 (sim: 23 % still gated at k=2).
+  - The user picks lever B's default from these curves.
+
 ## Earlier (2026-10-09): cuts 1b + 1c, cut 4, pipe-record pieces
 
 - **Landed locally (pushed after the BSL gpuhunt check):**
