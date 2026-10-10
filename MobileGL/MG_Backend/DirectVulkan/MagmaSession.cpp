@@ -26,11 +26,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         std::atomic<Uint64> g_nextSessionId{1};
 
-        thread_local MagmaSession* t_boundSession = nullptr;
-
         // Leak-at-exit, like the renderer it holds (GlobalObjects.cpp): nothing may tear the
         // monolith's renderer down from a static destructor after the driver is gone.
-        MagmaSession& ProcessSession() {
+        MagmaSession& ProcessSessionInstance() {
             static auto* session = new MagmaSession();
             return *session;
         }
@@ -42,12 +40,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return static_cast<Uint32>(registry.size() - 1);
     }
 
-    MagmaSession& Detail::CurrentMagmaSession() {
-        MagmaSession* bound = t_boundSession;
-        return bound != nullptr ? *bound : ProcessSession();
-    }
+    MagmaSession& Detail::ProcessMagmaSession() { return ProcessSessionInstance(); }
 
-    void* Detail::SessionLocalSlot(MagmaSession& session, Uint32 index) {
+    void* Detail::SessionLocalSlotSlow(MagmaSession& session, Uint32 index) {
         if (index >= session.m_slots.size()) session.m_slots.resize(Registry().size(), nullptr);
         void*& slot = session.m_slots[index];
         if (slot == nullptr) slot = Registry()[index].construct();
@@ -63,25 +58,25 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     MagmaSession::~MagmaSession() {
-        MagmaSession* const previous = t_boundSession;
-        t_boundSession = this;
+        MagmaSession* const previous = Detail::t_boundMagmaSession;
+        Detail::t_boundMagmaSession = this;
         const auto& registry = Registry();
         for (SizeT i = m_slots.size(); i-- > 0;) {
             if (m_slots[i] != nullptr) registry[i].destroy(m_slots[i]);
             m_slots[i] = nullptr;
         }
         // Never back to this session: it is gone.
-        t_boundSession = previous == this ? nullptr : previous;
+        Detail::t_boundMagmaSession = previous == this ? nullptr : previous;
     }
 
-    MagmaSessionScope::MagmaSessionScope(MagmaSession* session) : m_previous(t_boundSession) {
-        t_boundSession = session;
+    MagmaSessionScope::MagmaSessionScope(MagmaSession* session) : m_previous(Detail::t_boundMagmaSession) {
+        Detail::t_boundMagmaSession = session;
     }
 
-    MagmaSessionScope::~MagmaSessionScope() { t_boundSession = m_previous; }
+    MagmaSessionScope::~MagmaSessionScope() { Detail::t_boundMagmaSession = m_previous; }
 
-    void BindMagmaSessionToThisThread(MagmaSession* session) { t_boundSession = session; }
+    void BindMagmaSessionToThisThread(MagmaSession* session) { Detail::t_boundMagmaSession = session; }
 
-    MagmaSession* BoundMagmaSession() { return t_boundSession; }
+    MagmaSession* BoundMagmaSession() { return Detail::t_boundMagmaSession; }
 
 } // namespace MobileGL::MG_Backend::DirectVulkan

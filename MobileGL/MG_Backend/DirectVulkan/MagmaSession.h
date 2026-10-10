@@ -34,9 +34,19 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         using SessionLocalDestroy = void (*)(void*);
         // Registers one SessionLocal<T> and returns its slot. Called from static initialization.
         Uint32 RegisterSessionLocal(SessionLocalConstruct construct, SessionLocalDestroy destroy);
+        // The calling thread's bound session (MagmaSessionScope, BindMagmaSessionToThisThread), null
+        // when it has none. P15: visible here, and constant-initialized, so the read inlines into
+        // every SessionLocal access and one function's accesses can share a single TLS address
+        // computation instead of paying one out-of-line call each.
+        inline constinit thread_local MagmaSession* t_boundMagmaSession = nullptr;
+        MagmaSession& ProcessMagmaSession();
         // The calling thread's session, or the process-wide default.
-        MagmaSession& CurrentMagmaSession();
-        void* SessionLocalSlot(MagmaSession& session, Uint32 index);
+        inline MagmaSession& CurrentMagmaSession() {
+            MagmaSession* const bound = t_boundMagmaSession;
+            return bound != nullptr ? *bound : ProcessMagmaSession();
+        }
+        inline void* SessionLocalSlot(MagmaSession& session, Uint32 index);
+        void* SessionLocalSlotSlow(MagmaSession& session, Uint32 index);
     } // namespace Detail
 
     // One served session's copy of every SessionLocal. Slots are built lazily on first use and
@@ -55,12 +65,21 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     private:
         friend void* Detail::SessionLocalSlot(MagmaSession& session, Uint32 index);
+        friend void* Detail::SessionLocalSlotSlow(MagmaSession& session, Uint32 index);
         Vector<void*> m_slots;
         Uint64 m_id = 0;
     };
 
     // Makes `session` the calling thread's Magma session for the scope's lifetime, restoring the
     // previous binding (usually none) afterwards.
+    // A built slot is returned in line; a missing one is built out of line.
+    inline void* Detail::SessionLocalSlot(MagmaSession& session, Uint32 index) {
+        if (index < session.m_slots.size()) {
+            if (void* const slot = session.m_slots[index]) return slot;
+        }
+        return SessionLocalSlotSlow(session, index);
+    }
+
     class MagmaSessionScope {
     public:
         explicit MagmaSessionScope(MagmaSession* session);
