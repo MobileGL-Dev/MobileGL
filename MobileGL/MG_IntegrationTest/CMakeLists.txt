@@ -195,6 +195,8 @@ add_executable(MobileGLIntegrationTest
     Scenarios/TriangleScenario.cpp
     Scenarios/PersistentCoherentMapScenario.cpp
     Scenarios/DefaultFramebufferAcrossSwapScenario.cpp
+    # P15 present wait: a frame's off-screen work is submitted ahead of its window pass.
+    Scenarios/WindowPassGateScenario.cpp
     Scenarios/ScenarioIsolationScenario.cpp
     Scenarios/UploadOrderScenario.cpp
     Scenarios/PassOrderScenario.cpp
@@ -772,6 +774,10 @@ mgl_itest_join_environment(MGL_ITEST_VULKAN_PRIMGEN_REROUTE_ENVIRONMENT
     ${MGL_ITEST_VULKAN_ENV})
 # The command-buffer draw budget pinned far below one frame's draws, with the log path for the
 # split's latched MGLOG_I - the same arming reasoning as the two entries above.
+mgl_itest_join_environment(MGL_ITEST_VULKAN_WINDOW_PASS_GATE_ENVIRONMENT
+    "MOBILEGL_BACKEND_TYPE=DirectVulkan" "MGITEST_WINDOW_PASS_GATE_LANE=1"
+    "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/window-pass-gate.log"
+    ${MGL_ITEST_VULKAN_ENV})
 mgl_itest_join_environment(MGL_ITEST_VULKAN_SPLIT_RECORDING_ENVIRONMENT
     "MOBILEGL_BACKEND_TYPE=DirectVulkan" "MOBILEGL_MAGMA_MAX_DRAWS_PER_COMMAND_BUFFER=64"
     "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/oversized-recording-split.log"
@@ -1116,6 +1122,22 @@ gtest_discover_tests(MobileGLIntegrationTest
         TIMEOUT ${MGL_ITEST_TIMEOUT}
         RESOURCE_LOCK oversized-recording-split.log
         ENVIRONMENT "${MGL_ITEST_VULKAN_SPLIT_RECORDING_ENVIRONMENT}"
+)
+
+# P15 present wait: WindowPassGateScenario with its arming assertion on. The ambient entries run
+# its cases for the pixels; this one also reads the renderer's latched MGLOG_I back, which a
+# renderer that submits each frame as one batch behind the acquire wait never writes. DirectVulkan
+# only: Espryt's flush ahead of the window buffer needs a window surface, which this harness does
+# not have. RESOURCE_LOCK for SplitRecording's reason: every case reads the lane's one log back.
+gtest_discover_tests(MobileGLIntegrationTest
+    TEST_PREFIX "DirectVulkan.WindowPassGate."
+    TEST_FILTER "WindowPassGateScenario.*"
+    DISCOVERY_TIMEOUT 30
+    PROPERTIES
+        LABELS integration-gpu
+        TIMEOUT ${MGL_ITEST_TIMEOUT}
+        RESOURCE_LOCK window-pass-gate.log
+        ENVIRONMENT "${MGL_ITEST_VULKAN_WINDOW_PASS_GATE_ENVIRONMENT}"
 )
 
 # The packed16 copy scenarios again, with the 8-bit storage widening PINNED ON. The ambient
@@ -2996,6 +3018,9 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     # hand below (`DirectVulkan.<arm>.Oversized.`, `.SplitRecording64.`, `DirectVulkan.Split.DescPool.`),
     # where the gated flavour and the per-arm exceptions live.
     mgl_itest_register_split_arms("OversizedRecordingSplitScenario.*" "")
+    # P15 present wait: plain GL, pixel checks on every backend and arm (the frame shapes that
+    # split around the window pass); the arming assertion stays in DirectVulkan.WindowPassGate.
+    mgl_itest_register_split_arms("WindowPassGateScenario.*" "")
     mgl_itest_register_split_arms("DescriptorPoolGrowthScenario.*" "")
 
     # ---- P5b t2: the transform-feedback spans, the XFB object bind, the patch parameter -------
