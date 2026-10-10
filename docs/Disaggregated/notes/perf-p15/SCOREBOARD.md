@@ -232,3 +232,16 @@ Notes:
 H1 spread: two reps of the same arm differ by up to 10 % within a session (fifi MobileGlues 378.4
 / 343.8, apab p15m Magma monolith 289.3 / 266.6). MobileGlues ranged from 322 to 376 across
 sessions. H1 ratios therefore carry roughly ±5 %.
+
+## egc: global-constants key (e70925d3) vs 0650608d, monolith, cpuhunt, vanilla frozen world
+
+Baseline b = 0650608d, x = e70925d3 (both LTO-ON, API 26), FCL on cpu2-6, simpleperf on the render thread, 3 interleaved reps per arm, all 12 runs VALID (clocks pinned in the windows, tpl=0 thr=0, daemons stopped, swap off). EmitGlobalConstants is inlined under LTO, so its cost is every sample with an EmitGlobalConstants inline frame (llvm-symbolizer --inlines); ValidateForVerb is inclusive.
+
+| backend | arm | fps | GL CPU ms/frame | ValidateForVerb ms/frame | EmitGlobalConstants ms/frame |
+|---|---|---|---|---|---|
+| Magma | b | 279.4 | 2.39 | 0.190 | 0.0220 (0.021 / 0.025 / 0.020) |
+| Magma | x | 274.6 | 2.38 | 0.194 | 0.0142 (0.016 / 0.013 / 0.013) |
+| Espryt | b | 249.6 | 2.85 | 0.215 | 0.0214 (0.022 / 0.020 / 0.022) |
+| Espryt | x | 252.8 | 2.82 | 0.194 | 0.0136 (0.013 / 0.014 / 0.014) |
+
+EmitGlobalConstants drops by 0.0078 ms/frame on both backends (about 35 %), inside the expected 0.007-0.010. The whole frame (fps, GL CPU, ValidateForVerb) is within noise: ValidateForVerb varies 0.17-0.22 between reps of one arm.
