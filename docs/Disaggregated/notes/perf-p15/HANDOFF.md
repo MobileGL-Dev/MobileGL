@@ -21,6 +21,9 @@ The plan and its measurements are in [PLAN-P15.md](PLAN-P15.md); the audit is in
 - No new Android API usage. Keep MobileGL platform-agnostic unless a platform path is measured and has
   no portable alternative.
 - ASurfaceControl, frame-rate hints and ADPF are deferred.
+- Optimization is driven by Perfetto traces (2026-10-09). Results are reported as a per-frame
+  timeline: phases in order with offsets within a typical frame, the waits, and the critical path.
+  Do not report them as ms tables. simpleperf is for function-level zoom-in inside a phase.
 
 **Where the code is (worktree `.claude/worktrees/p15`, branch `p15impl`):**
 - `origin/feat/disaggregated` = db346f28 plus the pushes listed in SCOREBOARD.
