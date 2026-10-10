@@ -84,6 +84,7 @@ H2 sessions:
 | fbm2 ~11:00 (10-09) | y; z (as fbm); h = y + batch h (485dff14 + c85c9439) | 319.7 (1.68) | y 0.763 / 0.86 dev (3.03); h 0.768 / 0.87 dev (3.00) | y 0.805 / 0.85 dev (2.68); z 0.798 / 0.84 dev (2.69); h 0.812 / 0.85 dev (2.62) | - | - |
 | lto ~17:30 (10-09) | o = ca0a3b74 + 2a/2b, -Pmobilegl.enableLto=OFF; l = the same, LTO ON (default) | 314.1 (1.71) | o 0.794 (2.99); l 0.800 (2.90) | o 0.850 (2.52); l 0.907 (2.36) | - | - |
 | api29 ~19:00-21:30 (10-09) | a26 = 0650608d + e543e289 (default, API 26); a29 = the same tree, -Pmobilegl.androidApi=29 (42922d21); both LTO ON | 324.6 (1.67) | a26 0.771 (2.87); a29 0.777 (2.85) | a26 0.874 (2.33); a29 0.910 (2.26) | a26 0.998 (1.27 / 1.53); a29 1.013 (1.22 / 1.50) | a26 1.088 (1.23 / 1.16); a29 1.136 (1.15 / 1.09) |
+| tls ~22:00 (10-09) | b = origin e70925d3 (libs/egc); t = tlshoist d4a00835 (libs/tls1); both LTO, API 26 | 318.6 (1.67) | b 0.805 (2.84); t 0.812 (2.79) | b 0.878 (2.35); t 0.933 (2.21) | - | - |
 
 - **pt:** the blit view cache gives Magma inproc +1.2 % fps, with apply −0.03 ms/frame.
 - **c1:** cut 1 is within noise (−1.7 % fps, +0.06 ms). It engaged (the mid-frame submit is gone) but saves ≤0.04 ms; see MONOLITH-DIFF.md.
@@ -144,6 +145,19 @@ H2 sessions:
     - API 29 does not remove the TLS cost of the monolith render thread. MobileGL is dlopen'ed, so bionic resolves each TLSDESC through the linker's dynamic resolver (`tlsdesc_resolver_dynamic`), a call that costs about what `__emutls_get_address` did (0.05 ms/frame, about 2 % of the thread). The native-TLS switch is therefore not the source of the Magma gain; whatever it is (code layout and codegen of a different link, or the android-29 platform), this A/B does not isolate it.
     - Untested lead for a real TLS saving: a static TLS model (initial-exec) for the hot variables. Bionic's room for static TLS in a dlopen'ed library is limited, so it needs its own measurement.
     - The Espryt monolith profile run read 242.6 / 245.4 fps against 252.2 / 254.0 for api26, opposite to the 3-rep means; it is one run, the 3 interleaved reps decide.
+- **tls (cpuhunt, 3 interleaved reps, all 15 runs VALID, tpl=0 thr=0, peak CPU 57.7-61.3 C):** hot-path
+  TLS cut (tlshoist: constinit pointer slots for pGLContext and gPipeInputs, one-block thread_local caches,
+  inline Magma session read). Emulated-TLS calls per frame (counting build, run tlsdiag): Magma 9111 -> 4336,
+  Espryt 7585 -> 3149.
+  - fps r1 / r2 / r3: Magma b 285.6 / 275.4 / 277.8 (279.6), t 295.1 / 301.4 / 295.2 (297.2, +6.3 %);
+    Espryt b 269.5 / 251.9 / 248.4 (256.6), t 260.6 / 270.6 / 245.2 (258.8, +0.9 %); MobileGlues 318.6.
+  - GL CPU (schedstat): Magma 2.35 -> 2.21, Espryt 2.84 -> 2.79 ms/frame.
+  - `__emutls_get_address` on the render thread (simpleperf, mean of 3 reps): Magma 0.058 -> 0.034,
+    Espryt 0.049 -> 0.035 ms/frame. Magma's MobileGL-side total falls more than that (-0.04 to -0.20 per
+    rep): the callers lose the init-wrapper/guard calls and spills too.
+  - A second session (tlspf, Perfetto, no simpleperf, 12 runs VALID) read Magma 278.6 -> 284.4 fps
+    (CPU 2.40 -> 2.30) and Espryt 246.2 -> 254.5 (2.94 -> 2.83). Traces in `runs/tlspf/*/p15.pftrace`,
+    not analysed yet.
 - **bsl3 (gpuhunt, stopped on a CPU max cap in rep 2):** r1 Magma 55.6, Espryt 52.8, MobileGlues 57.2 fps.
   That is Magma 0.97 and Espryt 0.92 of MobileGlues.
 - **c1cbsl (gpuhunt, Iris + BSL, after a cooldown, 3 reps):** 1c does not cost GPU time.

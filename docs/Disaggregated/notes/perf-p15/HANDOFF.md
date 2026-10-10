@@ -17,7 +17,9 @@ The plan and its measurements are in [PLAN-P15.md](PLAN-P15.md); the audit is in
 - No minSdk raise for the shipped build: API 29 is a SEPARATE artifact (its own library, plugin APK and
   FCL-embedded copy).
 - No record bypass: monolith = record arm.
-- No emulated-TLS work below 29: b-i/b-ii/b-iii are dropped; native TLS at 29 is the TLS answer.
+- TLS (superseded 2026-10-09): API 29 did not remove the TLS cost (native TLSDESC in a dlopen'ed library
+  costs about the same as emulated TLS), so portable hot-path TLS elimination is approved for all API
+  levels. No TLS-model attributes or API-level gates as the mechanism.
 - No new Android API usage. Keep MobileGL platform-agnostic unless a platform path is measured and has
   no portable alternative.
 - ASurfaceControl, frame-rate hints and ADPF are deferred.
@@ -103,6 +105,22 @@ The plan and its measurements are in [PLAN-P15.md](PLAN-P15.md); the audit is in
 - Host suites for 2a/2b: done and at baseline (92 environment unit failures, 2 ColdStart).
   - The one extra unit failure seen once, CompositorRecovery.ACompositorOnTheServerWindowRecovers..., is a
     pre-existing load flake: under full CPU load it fails 6/20 without the change and 2/20 with it.
+
+**Hot-path TLS cut (2026-10-09 night, worktree `.claude/worktrees/tlshoist`, branch `tlshoist` on origin
+e70925d3, local, not pushed):**
+- c0a9b2cd pGLContext and gPipeInputs become constant-initialized pointer slots (no TLS init wrapper or
+  guard; the owning SharedPtr lives in a second thread_local, released before the slot is cleared at
+  thread exit). 36f55af8 the applier lookup cache is one block. 6191cbf2 Magma session read and built-slot
+  lookup inline. abb22eef Espryt bound serial and per-context cache share one block (epoch bump closes ABA).
+  d4a00835 owner release order + SanityTest fix.
+- Host: unit 92 failures, the same set as the baseline; integration 2 (Spawn.ColdStart.ClearThenReadPixels
+  on both backends), as the baseline. Split-OFF NDK arm64 and the plugin LTO build compile.
+- Device (SCOREBOARD tls): Magma +6.3 % fps, GL CPU -0.14 ms; Espryt +0.9 %, -0.05 ms. TLS resolver
+  0.058 -> 0.034 (Magma), 0.049 -> 0.035 (Espryt) ms/frame.
+- Remaining emutls per frame (~3-4k): pGLContext ~2.3k, gPipeInputs 0.6-1.1k, Magma session 0.6k
+  (GetActiveRenderPass), ResolveAttributeFromBinding note bumps, SetupWireDraw. Each further cut is
+  ~0.002 ms; not done.
+- Perfetto traces of a second A/B (tlspf) are in `runs/tlspf/*/p15.pftrace` for the present-wait work.
 
 **LTO and the server check (coordinator):**
 - libMobileGLServer.so is built and packaged by the LTO-ON assemblePluginRelease. Its only libMobileGL
