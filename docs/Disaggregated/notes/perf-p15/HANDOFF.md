@@ -799,3 +799,12 @@ edit sources during a build; `touch` the edited headers if in doubt.
 - Iris properties are backed up at `/data/local/tmp/p15-iris.properties`.
 - `fcl_scene.sh restore` restores Iris; `fcl_p14.sh restore` restores the lib and `config.json`.
 - The anland desktop is stopped during runs and restarted afterwards.
+
+
+## pwab: device A/B of the present-wait levers (2026-10-10)
+
+Result table, engagement evidence and the failed lever-B expectations are in [SCOREBOARD.md](SCOREBOARD.md) (section pwab). Summary: before a759b4b7, after pwgate cdd2160f + pmflush eec5e6e8 (+ `MOBILEGL_MAGMA_EXTRA_SWAPCHAIN_IMAGES=2` on Magma). fps after/before: Magma inproc 1.32 (1.495 of MobileGlues), Magma mono 1.34 (1.176), Espryt inproc 1.09 (1.102), Espryt mono 1.12 on reps 1+3 (0.896; before rep 2 NO WORLD, not re-run).
+- Libs: `p15/libs/{pwbase,pwA,pwF,pwAF}`, symbols in `p15/syms/`. Worktrees `.claude/worktrees/{pwbase,pwF,pwAF}` hold the builds (pwF/pwAF are detached HEADs with eec5e6e8 cherry-picked, not pushed). The 3rdparty copy also needs `include/ska` (a gitlink) copied into a fresh worktree.
+- Harness: `p15/pw/dev/` (chain.sh, session.sh, fcl_bench.sh with the post-Perfetto atrace stage made opt-in, devjob.sh), run data in `p15/runs/pwab`, Perfetto in `p15/runs/pwlat`.
+- Not done: the per-arm timeline analysis (cycle.py/pairs.py/gexec.py) and the separate lever A / F / extra=1 arms, both cut by the user. Next: derive the timelines from `runs/pwlat` and find why the Magma gain exceeds the lever-B model.
+- Harness note: a launch can fail with NO WORLD after four 240 s attempts (b-DirectGLES-r2); fclab2.sh only retries INVALID runs, not NO WORLD.

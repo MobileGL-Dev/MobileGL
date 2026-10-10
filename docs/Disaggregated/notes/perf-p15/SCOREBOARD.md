@@ -259,3 +259,29 @@ Baseline b = 0650608d, x = e70925d3 (both LTO-ON, API 26), FCL on cpu2-6, simple
 | Espryt | x | 252.8 | 2.82 | 0.194 | 0.0136 (0.013 / 0.014 / 0.014) |
 
 EmitGlobalConstants drops by 0.0078 ms/frame on both backends (about 35 %), inside the expected 0.007-0.010. The whole frame (fps, GL CPU, ValidateForVerb) is within noise: ValidateForVerb varies 0.17-0.22 between reps of one arm.
+
+
+## pwab: present-wait levers before/after, cpuhunt, vanilla frozen world (2026-10-10)
+
+Before = a759b4b7. After = pwgate cdd2160f (lever A) + pmflush eec5e6e8 (cherry-picked on cdd2160f); Magma "after" also has `MOBILEGL_MAGMA_EXTRA_SWAPCHAIN_IMAGES=2` (lever B). All libs LTO-ON, API 26 plugin release (`libs/pwbase`, `libs/pwAF`, `libs/pwA`, `libs/pwF`). Harness H2 (`fcl_bench.sh`), FCL on cpu2-6, 20 s warmup then 5 s windows until stable within 3 %, two 5 s measurement windows, no tracer. 3 interleaved reps in one bench session each (arm order rotated, battery <= 33.0 C before each session), thermal daemons stopped, swap interval 0, anland off. All 26 measured runs VALID (CPU pinned 1497/1248 MHz, GPU 903 MHz, tpl=0 thr=0). Espryt monolith "before" has reps 1 and 3 only: rep 2 was NO WORLD (FCL never reached the world in 4 launches) and was not re-run, by user decision.
+
+Inproc first (the wanted numbers). fps = mean of the two windows; ratio is to MobileGlues' mean in the same sessions (315.7 fps; 305.6 / 320.7 / 320.9; CPU 1.69 ms/frame).
+
+| arm | fps r1 / r2 / r3 | mean | after / before | ratio to MG | GL-thread CPU | apply-thread CPU |
+|---|---|---|---|---|---|---|
+| Magma inproc before | 334.1 / 359.6 / 378.8 | 357.5 | | 1.132 | 1.19 | 1.12 |
+| Magma inproc after (AF + extra 2) | 442.2 / 478.9 / 494.6 | 471.9 | **1.32** (1.32 / 1.33 / 1.31 per rep) | **1.495** | 1.13 | 1.12 |
+| Espryt inproc before | 302.1 / 332.9 / 325.8 | 320.3 | | 1.014 | 1.26 | 1.54 |
+| Espryt inproc after (AF) | 323.0 / 366.4 / 354.5 | 347.9 | **1.09** (1.07 / 1.10 / 1.09) | **1.102** | 1.27 | 1.49 |
+| Magma monolith before | 251.2 / 300.0 / 282.1 | 277.8 | | 0.880 | 2.39 | |
+| Magma monolith after (AF + extra 2) | 352.9 / 390.6 / 369.9 | 371.2 | **1.34** (1.41 / 1.30 / 1.31) | **1.176** | 2.22 | |
+| Espryt monolith before | 238.2 / NO WORLD / 252.9 | 245.6 (r1, r3) | | 0.778 | 2.89 | |
+| Espryt monolith after (AF) | 260.3 / 300.0 / 288.8 | 283.0 | **1.12** on r1+r3 (1.09 / 1.14), 1.15 on all reps | **0.896** | 2.70 | |
+
+- Reps drift upward with time (MobileGlues 305.6 -> 320.9 over the three sessions), so compare per rep. The after/before ratio is stable within a backend (Magma 1.30-1.41, Espryt 1.07-1.14).
+- Engagement, from logcat in every Magma after run (mono and inproc): `Set minImageCount = 7 (surface min 5, max 64, extra 2)` and the latched "off-screen work goes to the queue ahead of its window pass" line; neither appears in the before runs. From the single Perfetto runs (`runs/pwlat`): QueueSubmit per frame 1.30 -> 2.25 (mono) and 1.25 -> 2.20 (inproc), as expected for lever A.
+- Espryt has no log marker for lever A or pmflush (F). The CPU drop on the monolith (2.89 -> 2.70 ms/frame) fits the saved copy jobs, but A and F were not separated and no profile was taken (user scope cut), so their individual shares are unmeasured.
+- Expectations that failed (lever B): the HANDOFF predicted `HWC release fence ... has signaled` at >= 85 % of acquires and < 20 % gated frames. The single Perfetto runs show 58 % signaled / 37 % gated (Magma mono) and 66 % / 33 % (Magma inproc). The fps gain is larger than the sim's upper bound for lever B alone (Magma mono frame 3.60 -> about 2.9 ms, i.e. +24 %; measured 3.60 -> 2.70), so something beyond the modelled throttle moved. Not investigated: the timeline analysis was cut; the traces are for the follow-up.
+- Presenting-thread CPU barely moved on Magma (2.39 -> 2.22 mono, 1.19 -> 1.13 inproc): the gain is frame time, not CPU.
+- Single Perfetto runs, one per arm (not part of the fps table; fps of those runs: Espryt mono 250.1 -> 296.0, Espryt inproc 330.6 -> 357.1, Magma mono 302.2 -> 378.8, Magma inproc 369.6 -> 468.9): `p15/runs/pwlat/{b,AF}-DirectGLES{,-inproc}-r1/p15.pftrace` and `{b,AF2}-DirectVulkan{,-inproc}-r1/p15.pftrace`. All eight are non-empty (19-22 MB, 4.9 s), have the frametimeline (812-835 actual frames) and the FCL presenting thread (Thread-14 mono, mgl-srv-apply inproc). Config: p15_perfetto.cfg without kgsl/* events (`p15/pw/dev/perfetto.cfg`).
+- A partial first attempt with Perfetto in every run (Espryt mono b, A, F, AF) was cancelled by scope change: `runs/pwab0-pf-partial`.
