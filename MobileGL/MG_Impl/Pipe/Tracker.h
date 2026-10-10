@@ -554,6 +554,8 @@ namespace MobileGL::MG_Pipe {
             //                F-2
             //        shutter: content x params x bind generation x programImages
             //                (lifetime id x link version x image unit version)
+            // bits 11-14 ALSO fire on the share group's twins of the aggregates they read, for
+            //        a setter called through a sibling context (C8, after the dirty loop)
             // ===========================================================================
 
             // ---- the object-class bits 9..17 ----
@@ -752,6 +754,40 @@ namespace MobileGL::MG_Pipe {
             }
             m_lastMaxTextureUnit = maxTextureUnit;
 
+            // ---- bits 11..14 across contexts: the share clocks (C8) ----
+            // The aggregates bits 11-14 read are this context's, and a texture, renderbuffer or
+            // sampler changed through a SIBLING context bumps only the sibling's - so with nothing
+            // done here A's walk after B's glTexParameteri / glTexImage2D / glRenderbufferStorage
+            // fired none of the four and A recorded the stale framebuffer, view and sampler sets.
+            // The group keeps a twin of each aggregate, and each bit fires here on exactly the
+            // twins of what its own shutter reads above. An exact compare rather than one more
+            // MGPipeMixShutter for vaoChanged's reason: the four are small neighbouring counters.
+            // A single-context group skips the clocks behind one relaxed load; the first walk
+            // after a second context joins may fire the four once, which is the safe direction.
+            // The program bits need nothing of this: a program is a group object too, but its
+            // versions are read off the object itself, which every context sees move.
+            const auto& group = *ctx.GetShareGroup();
+            if (group.HasSeveralContexts()) {
+                using SharedClock = MG_State::GLState::ShareGroupState::SharedClock;
+                const SharedClocks clocks{group.ReadSharedClock(SharedClock::FramebufferAttachment),
+                                          group.ReadSharedClock(SharedClock::TextureContent),
+                                          group.ReadSharedClock(SharedClock::TextureParams),
+                                          group.ReadSharedClock(SharedClock::SamplingResolution)};
+                const Bool content = clocks.TextureContent != m_lastSharedClocks.TextureContent;
+                const Bool params = clocks.TextureParams != m_lastSharedClocks.TextureParams;
+                if (clocks.FramebufferAttachment != m_lastSharedClocks.FramebufferAttachment) {
+                    dirty |= MGPipeDirtyBit(MGPipeDirty::NewFramebuffer);
+                }
+                if (content || params) {
+                    dirty |= MGPipeDirtyBit(MGPipeDirty::NewSamplerViews) |
+                             MGPipeDirtyBit(MGPipeDirty::NewShaderImages);
+                }
+                if (params || clocks.SamplingResolution != m_lastSharedClocks.SamplingResolution) {
+                    dirty |= MGPipeDirtyBit(MGPipeDirty::NewSamplers);
+                }
+                m_lastSharedClocks = clocks;
+            }
+
             // ---- bit 2: the PACK half of the pixel store, BitwiseEqual ----
             const PixelStoreParameters pack = ctx.GetPixelStoreParameters(false);
             if (!m_primed || std::memcmp(&pack, &m_pack, sizeof(pack)) != 0) {
@@ -806,6 +842,7 @@ namespace MobileGL::MG_Pipe {
             m_lastVaoLifetime = 0;
             m_lastVaoConfig = 0;
             m_lastMaxTextureUnit = -1;
+            m_lastSharedClocks = SharedClocks{};
             m_renderStateVersion.Reset();
             m_pipelineStateVersion.Reset();
             m_framebufferBind.Reset();
@@ -893,11 +930,19 @@ namespace MobileGL::MG_Pipe {
             Float Outer[4];
             Float Inner[2];
         };
+        // The share group's four clocks as of this context's last walk (C8).
+        struct SharedClocks {
+            Uint64 FramebufferAttachment;
+            Uint64 TextureContent;
+            Uint64 TextureParams;
+            Uint64 SamplingResolution;
+        };
 
         Uint64 m_lastPushed[kMGPipeDirtyCount]{};
         Uint64 m_lastVaoLifetime = 0;
         Uint32 m_lastVaoConfig = 0;
         Int m_lastMaxTextureUnit = -1;
+        SharedClocks m_lastSharedClocks{};
         MGPipeWidenedCounter m_renderStateVersion;
         MGPipeWidenedCounter m_pipelineStateVersion;
         // The draw framebuffer BINDING slot version, widened for the same reason: a Uint16

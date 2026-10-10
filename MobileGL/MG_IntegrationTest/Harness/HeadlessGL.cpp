@@ -158,6 +158,7 @@ namespace MGITest {
             void* display = nullptr;
             void* surface = nullptr;
             void* context = nullptr;
+            void* config = nullptr;
             std::string renderer;
         };
 
@@ -301,6 +302,7 @@ namespace MGITest {
             out.display = display;
             out.surface = surface;
             out.context = context;
+            out.config = config;
             out.renderer = reinterpret_cast<const char*>(renderer);
             outReason.clear();
             return 0;
@@ -605,6 +607,7 @@ namespace MGITest {
         m_display = brought.display;
         m_surface = brought.surface;
         m_context = brought.context;
+        m_config = brought.config;
         m_width = kSurfaceWidth;
         m_height = kSurfaceHeight;
         m_renderer = std::move(brought.renderer);
@@ -615,6 +618,27 @@ namespace MGITest {
         if (!m_usable) return;
         eglSwapBuffers(static_cast<EGLDisplay>(m_display), static_cast<EGLSurface>(m_surface));
         ++m_frameIndex;
+    }
+
+    void* HeadlessGL::CreateSharingContext() {
+        if (!m_usable) return nullptr;
+        const EGLint contextAttribs[] = {EGL_CONTEXT_MAJOR_VERSION, 3, EGL_CONTEXT_MINOR_VERSION, 3, EGL_NONE};
+        EGLContext context = eglCreateContext(static_cast<EGLDisplay>(m_display), static_cast<EGLConfig>(m_config),
+                                              static_cast<EGLContext>(m_context), contextAttribs);
+        return context == EGL_NO_CONTEXT ? nullptr : context;
+    }
+
+    bool HeadlessGL::MakeContextCurrent(void* context) {
+        if (!m_usable) return false;
+        EGLSurface surface = static_cast<EGLSurface>(m_surface);
+        return eglMakeCurrent(static_cast<EGLDisplay>(m_display), surface, surface,
+                              static_cast<EGLContext>(context != nullptr ? context : m_context)) == EGL_TRUE;
+    }
+
+    void HeadlessGL::DestroySharingContext(void* context) {
+        if (!m_usable || context == nullptr) return;
+        MakeContextCurrent(nullptr);
+        eglDestroyContext(static_cast<EGLDisplay>(m_display), static_cast<EGLContext>(context));
     }
 
     void HeadlessGL::ShutDown() {

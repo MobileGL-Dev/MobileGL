@@ -202,7 +202,10 @@ namespace MobileGL {
                 Uint64 GetSamplingResolutionGeneration() const {
                     return m_textureState.GetSamplingResolutionGeneration();
                 }
-                void BumpSamplingResolutionGeneration() { m_textureState.BumpSamplingResolutionGeneration(); }
+                void BumpSamplingResolutionGeneration() {
+                    m_textureState.BumpSamplingResolutionGeneration();
+                    m_shareGroup->BumpSharedClock(ShareGroupState::SharedClock::SamplingResolution);
+                }
                 // Never-reused id of this context, for backend memos keyed on the two counters
                 // above: both restart at 0 in a new context, and a recreated context can land on
                 // the old heap address. See TextureState::GetContextId.
@@ -276,15 +279,28 @@ namespace MobileGL {
                 Uint64 GetAnyVaoAttributeGeneration() const {
                     return m_vertexArrayState.GetAnyAttributeGeneration();
                 }
-                void NoteFramebufferAttachmentChanged() { m_framebufferState.NoteAttachmentChanged(); }
+                // The framebuffer and the two texture aggregates (and the sampling resolution
+                // generation above) also bump the share group's twin: the objects behind them are
+                // the group's, and a sibling context's walk has to see the change too
+                // (ShareGroupState's share clocks, C8).
+                void NoteFramebufferAttachmentChanged() {
+                    m_framebufferState.NoteAttachmentChanged();
+                    m_shareGroup->BumpSharedClock(ShareGroupState::SharedClock::FramebufferAttachment);
+                }
                 Uint64 GetAnyFramebufferAttachmentGeneration() const {
                     return m_framebufferState.GetAnyAttachmentGeneration();
                 }
-                void NoteTextureContentChanged() { m_textureState.NoteTextureContentChanged(); }
+                void NoteTextureContentChanged() {
+                    m_textureState.NoteTextureContentChanged();
+                    m_shareGroup->BumpSharedClock(ShareGroupState::SharedClock::TextureContent);
+                }
                 Uint64 GetAnyTextureContentGeneration() const {
                     return m_textureState.GetAnyTextureContentGeneration();
                 }
-                void NoteTextureParamsChanged() { m_textureState.NoteTextureParamsChanged(); }
+                void NoteTextureParamsChanged() {
+                    m_textureState.NoteTextureParamsChanged();
+                    m_shareGroup->BumpSharedClock(ShareGroupState::SharedClock::TextureParams);
+                }
                 Uint64 GetAnyTextureParamsGeneration() const {
                     return m_textureState.GetAnyTextureParamsGeneration();
                 }

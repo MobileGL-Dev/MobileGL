@@ -1377,6 +1377,8 @@ namespace MobileGL::MG_State {
 
         GLContext::GLContext(SharedPtr<ShareGroupState> shareGroup)
             : m_shareGroup(shareGroup ? Move(shareGroup) : MakeShared<ShareGroupState>()) {
+            // A second context in the group makes the dirty walk read the share clocks.
+            m_shareGroup->NoteContextAttached();
             // The default transform feedback object (name 0) exists from the start of the context
             // (GL 4.6 core 13.2.1), but nothing binds it, so nothing else would materialise it.
             // Materialising it here is what lets GetBoundTransformFeedbackLifetimeId() be a plain

@@ -1302,4 +1302,165 @@ namespace {
         MG_State::pGLContext = Move(parked);
     }
 
+    // ===================================================================================
+    // Bits 11-14 across the contexts of one share group (C8)
+    // ===================================================================================
+    //
+    // Textures, renderbuffers and samplers belong to the share group, but the aggregates
+    // bits 11-14 read are bumped on the context a change is made THROUGH. These change an
+    // object through context B and then walk context A with B never walking in between -
+    // what a second thread drawing into its own context does, and on one thread the shape
+    // that leaves the monolith's one tracker latched on A (no context switch reaches it).
+    class TrackerShareGroup : public ::testing::Test {
+    protected:
+        void SetUp() override {
+            m_previous = Move(MG_State::pGLContext);
+            const auto group = MakeShared<MG_State::GLState::ShareGroupState>();
+            m_a = MakeShared<GLContext>(group);
+            m_b = MakeShared<GLContext>(group);
+            MakeLive(m_a);
+        }
+        void TearDown() override { MG_State::pGLContext = Move(m_previous); }
+
+        // The live context is the one MGP_NOTE_AGGREGATE lands on.
+        static void MakeLive(const SharedPtr<GLContext>& ctx) { MG_State::pGLContext = ctx; }
+
+        Uint32 WalkA() {
+            MakeLive(m_a);
+            return m_tracker.Update(*m_a, MGPipeVerbClass::kDraw);
+        }
+        // Prime A and prove the steady state, so whatever fires next is the change's.
+        void PrimeA() {
+            WalkA();
+            ASSERT_EQ(WalkA(), 0u) << "the fixture did not reach a steady state";
+        }
+
+        static void ExpectFired(Uint32 dirty, MGPipeDirty bit, const char* why) {
+            EXPECT_NE(dirty & MGPipeDirtyBit(bit), 0u)
+                << kMGPipeDirtyNames[static_cast<SizeT>(bit)] << " did not fire on A: " << why;
+        }
+
+        MGPipeTracker m_tracker;
+        SharedPtr<GLContext> m_a;
+        SharedPtr<GLContext> m_b;
+        SharedPtr<GLContext> m_previous;
+    };
+
+    TEST_F(TrackerShareGroup, OnlyASecondContextMakesTheWalkReadTheShareClocks) {
+        EXPECT_TRUE(m_a->GetShareGroup()->HasSeveralContexts());
+        const GLContext solo;
+        EXPECT_FALSE(solo.GetShareGroup()->HasSeveralContexts());
+    }
+
+    // glTexParameteri through B on a texture A samples: completeness (bit 12's null view),
+    // the effective sampler (bit 13) and the image window (bit 14) all moved.
+    TEST_F(TrackerShareGroup, ATextureParameterThroughASiblingFiresTheUnitSetBits) {
+        const auto& tex = m_a->CreateTextureObject(1, TextureTarget::Texture2D);
+        ASSERT_TRUE(tex != nullptr);
+        ASSERT_EQ(m_b->GetTextureObject(1), tex) << "the premise is ONE texture seen by both contexts";
+        PrimeA();
+
+        MakeLive(m_b);
+        tex->SetMaxLevel(4);
+        const Uint32 dirty = WalkA();
+        ExpectFired(dirty, MGPipeDirty::NewSamplerViews, "a sibling's glTexParameteri moved completeness");
+        ExpectFired(dirty, MGPipeDirty::NewSamplers, "a sibling's glTexParameteri moved the sampler state");
+        ExpectFired(dirty, MGPipeDirty::NewShaderImages, "a sibling's glTexParameteri moved the image window");
+        EXPECT_EQ(WalkA(), 0u) << "the share clocks fire forever";
+    }
+
+    TEST_F(TrackerShareGroup, ATextureUploadThroughASiblingFiresTheViewAndImageBits) {
+        const auto& tex = m_a->CreateTextureObject(1, TextureTarget::Texture2D);
+        ASSERT_TRUE(tex != nullptr);
+        PrimeA();
+
+        MakeLive(m_b);
+        static_cast<TextureObjectBase*>(tex.get())->BumpContentVersion();
+        const Uint32 dirty = WalkA();
+        ExpectFired(dirty, MGPipeDirty::NewSamplerViews, "a sibling's upload can define the level a view needs");
+        ExpectFired(dirty, MGPipeDirty::NewShaderImages, "a sibling's upload moved the image window's input");
+        EXPECT_EQ(WalkA(), 0u);
+    }
+
+    // F-3 across contexts: set_framebuffer_state inlines an attachment's format and extent, so
+    // B redefining the storage of a texture attached to A's framebuffer has to re-emit A's.
+    TEST_F(TrackerShareGroup, ATextureStorageDefinitionThroughASiblingFiresTheFramebufferBit) {
+        const auto& tex = m_a->CreateTextureObject(1, TextureTarget::Texture2D);
+        ASSERT_TRUE(tex != nullptr);
+        const auto& fbo = m_a->CreateFramebufferObject(1);
+        ASSERT_TRUE(fbo != nullptr);
+        fbo->AttachTexture(FramebufferAttachmentType::Color0, tex, TextureUploadTarget::Texture2D);
+        m_a->GetFramebufferBindingSlot(FramebufferTarget::Draw).Bind(fbo);
+        PrimeA();
+
+        MakeLive(m_b);
+        tex->SetInternalFormat(MobileGL::TextureInternalFormat::RGBA8);
+        const Uint32 dirty = WalkA();
+        ExpectFired(dirty, MGPipeDirty::NewFramebuffer, "A's attachment was redefined through B (F-3)");
+        ExpectFired(dirty, MGPipeDirty::NewSamplerViews, "the definition moved the params aggregate too");
+        EXPECT_EQ(WalkA(), 0u);
+    }
+
+    TEST_F(TrackerShareGroup, ARenderbufferStorageThroughASiblingFiresTheFramebufferBit) {
+        const auto& rbo = m_a->CreateRenderbufferObject(1);
+        ASSERT_TRUE(rbo != nullptr);
+        rbo->AllocateStorage(IntVec2{4, 4});
+        const auto& fbo = m_a->CreateFramebufferObject(1);
+        ASSERT_TRUE(fbo != nullptr);
+        fbo->AttachRenderbuffer(FramebufferAttachmentType::Color0, rbo);
+        m_a->GetFramebufferBindingSlot(FramebufferTarget::Draw).Bind(fbo);
+        PrimeA();
+
+        MakeLive(m_b);
+        rbo->AllocateStorage(IntVec2{8, 8});
+        const Uint32 dirty = WalkA();
+        ExpectFired(dirty, MGPipeDirty::NewFramebuffer, "A's attached renderbuffer was resized through B");
+        EXPECT_EQ(WalkA(), 0u);
+    }
+
+    TEST_F(TrackerShareGroup, ASamplerParameterThroughASiblingFiresTheSamplerBit) {
+        const auto& sampler = m_a->CreateSamplerObject(1);
+        ASSERT_TRUE(sampler != nullptr);
+        PrimeA();
+
+        MakeLive(m_b);
+        sampler->SetWrapS(MobileGL::SamplerWrapMode::ClampToEdge);
+        const Uint32 dirty = WalkA();
+        ExpectFired(dirty, MGPipeDirty::NewSamplers, "a sibling's glSamplerParameteri moved the CSO");
+        EXPECT_EQ(WalkA(), 0u);
+    }
+
+    // The split shape: one tracker per context, and B walks as well. B's own walk sees its own
+    // aggregate; A's sees the clock.
+    TEST_F(TrackerShareGroup, EachContextsOwnTrackerSeesTheSiblingsChange) {
+        const auto& tex = m_a->CreateTextureObject(1, TextureTarget::Texture2D);
+        ASSERT_TRUE(tex != nullptr);
+        MGPipeTracker trackerB;
+        PrimeA();
+        MakeLive(m_b);
+        trackerB.Update(*m_b, MGPipeVerbClass::kDraw);
+        ASSERT_EQ(trackerB.Update(*m_b, MGPipeVerbClass::kDraw), 0u);
+
+        tex->SetMaxLevel(4);
+        EXPECT_NE(trackerB.Update(*m_b, MGPipeVerbClass::kDraw) & MGPipeDirtyBit(MGPipeDirty::NewSamplers), 0u);
+        ExpectFired(WalkA(), MGPipeDirty::NewSamplers, "B's tracker saw the change and A's did not");
+        EXPECT_EQ(WalkA(), 0u);
+        MakeLive(m_b);
+        EXPECT_EQ(trackerB.Update(*m_b, MGPipeVerbClass::kDraw), 0u)
+            << "B fired again with nothing moved: its own change reached it twice";
+    }
+
+    // The claim the share clocks rest on for the program bits: a program is a group object too,
+    // but bits 6-8 read its versions off the object itself, so a change through B already
+    // reaches A's walk with no clock at all.
+    TEST_F(TrackerShareGroup, AProgramChangeThroughASiblingNeedsNoShareClock) {
+        const Uint program = m_a->CreateProgram();
+        m_a->UseProgram(program);
+        PrimeA();
+
+        MakeLive(m_b);
+        m_b->GetProgramObject(program)->MarkUBOContentDirty();
+        ExpectFired(WalkA(), MGPipeDirty::NewGlobalConstants, "a sibling's glUniform* on the program in use");
+    }
+
 } // namespace

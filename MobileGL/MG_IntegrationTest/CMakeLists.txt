@@ -183,6 +183,8 @@ add_executable(MobileGLIntegrationTest
     Scenarios/TextureParamsWithoutASamplerViewScenario.cpp
     # P13 W3b: the GL-level successor of the borrowed-slot unit-memo probe.
     Scenarios/DsaUpdateKeepsTheBoundUnitScenario.cpp
+    # C8: a shared object changed through a sibling context reaches the other's next draw.
+    Scenarios/SharedContextChangeScenario.cpp
     Scenarios/TextureUploadShapeScenario.cpp
     Scenarios/ObjectSubsystemControlScenario.cpp
     Scenarios/P4aSeamAuditScenario.cpp

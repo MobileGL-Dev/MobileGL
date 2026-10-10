@@ -8,6 +8,7 @@
 
 #pragma once
 #include <Includes.h>
+#include <atomic>
 #include <mutex>
 #include <MG_Util/Miscellany/IndexGenerator.h>
 #include "BufferState/BufferObject.h"
@@ -74,7 +75,42 @@ namespace MobileGL::MG_State::GLState {
         UniquePtr<BufferObject> TakeClientArrayBuffer();
         void ReturnClientArrayBuffer(UniquePtr<BufferObject> buffer);
 
+        // ---- the share clocks (C8) ----
+        //
+        // The dirty walk's framebuffer and texture shutters (bits 11-14) read per-CONTEXT
+        // aggregates, and a mutation bumps them on the context it is made through. Textures,
+        // renderbuffers and samplers live here, though, so a change made through context B moved
+        // nothing context A's walk reads and A went on recording the stale framebuffer, view and
+        // sampler sets. These are the same four aggregates kept once per group: the GLContext
+        // funnel that bumps a context's own counter bumps its twin here too, and the walk
+        // compares the twins beside its own.
+        //
+        // Release on the bump, which runs after the object write; acquire on the read, so a walk
+        // that sees the new value also sees the object it describes.
+        enum class SharedClock : Uint8 {
+            FramebufferAttachment,
+            TextureContent,
+            TextureParams,
+            SamplingResolution,
+            Count,
+        };
+        void BumpSharedClock(SharedClock clock) {
+            m_sharedClocks[static_cast<SizeT>(clock)].fetch_add(1, std::memory_order_release);
+        }
+        Uint64 ReadSharedClock(SharedClock clock) const {
+            return m_sharedClocks[static_cast<SizeT>(clock)].load(std::memory_order_acquire);
+        }
+        // One relaxed load is the single-context walk's whole cost: with one context there is no
+        // other reader, and the clocks are not read at all. Sticky, never decremented, so no walk
+        // has to reason about a sibling that is mid-teardown. The BUMP is not skipped while the
+        // group has one context: the mutating thread may read a stale count, and a skipped bump
+        // is lost for good, where an unread clock costs nothing.
+        void NoteContextAttached() { m_attachedContexts.fetch_add(1, std::memory_order_relaxed); }
+        Bool HasSeveralContexts() const { return m_attachedContexts.load(std::memory_order_relaxed) > 1; }
+
     private:
+        std::atomic<Uint64> m_sharedClocks[static_cast<SizeT>(SharedClock::Count)] = {};
+        std::atomic<Uint32> m_attachedContexts{0};
         Uint64 m_token = 0;
         UnorderedMap<Uint, SharedPtr<BufferObject>> m_bufferObjects;
         IndexGenerator<Uint> m_bufferNames{1024, 1};

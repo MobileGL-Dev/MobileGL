@@ -139,6 +139,15 @@ namespace MGITest {
         // destructor with no driver left underneath.
         void ShutDown();
 
+        // A second context in the harness context's share group, for the scenarios that change a
+        // shared object through one context and draw with it through the other. It is made current
+        // on the harness surface; nullptr where EGL refuses one.
+        void* CreateSharingContext();
+        // nullptr makes the harness context current again.
+        bool MakeContextCurrent(void* context);
+        // Makes the harness context current, then destroys `context`.
+        void DestroySharingContext(void* context);
+
     private:
         HeadlessGL();
         HeadlessGL(const HeadlessGL&) = delete;
@@ -156,6 +165,7 @@ namespace MGITest {
         void* m_display = nullptr;
         void* m_surface = nullptr;
         void* m_context = nullptr;
+        void* m_config = nullptr;
     };
 
     // ---- the scenario vocabulary -------------------------------------------

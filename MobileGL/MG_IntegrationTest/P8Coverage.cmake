@@ -100,6 +100,7 @@ set(MGL_P8A_AMBIENT_CASES
     ResidentIndexScenario.*
     SampleMaskScopeScenario.*
     SampleVariablesScenario.*
+    SharedContextChangeScenario.*
     SnormAttachmentScenario.*
     SpirvShaderBinaryScenario.SpecializedModulesLinkAndRenderWithTheirConstantsApplied
     SsboArrayDynamicIndexScenario.*
