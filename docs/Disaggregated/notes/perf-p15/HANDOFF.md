@@ -169,6 +169,13 @@ The plan and its measurements are in [PLAN-P15.md](PLAN-P15.md); the audit is in
      - fence create/signal times;
      - SurfaceFlinger latch/release.
    - Decide whether earlier submission (or another portable change) shrinks the wait.
+5c. QUEUED 2026-10-10, after the quick before/after fps run:
+   - Capture: one Perfetto run per arm (Espryt monolith base vs pwgate+pmflush; Magma monolith base vs
+     pwgate+pmflush+extra 2), traces in scratchpad p15/runs/pwlat.
+   - Derive offline: a rough per-frame timeline, and the input-to-present latency from the SF
+     frametimeline.
+   - Write it up in docs/Disaggregated/pwait/: what the levers do, the effect on fps and latency,
+     the knob, and the FIFO caveat (extra images add latency only with vsync on).
 6. Smaller follow-ups:
    - DONE 2026-10-09: `bench_session.sh stop` now runs `pin_clocks.sh restore` first (verified over a
      17-session run: max clocks back to stock after every session, daemons running, no session file).
