@@ -1634,7 +1634,7 @@ namespace MobileGL::MG_Pipe {
                             rectBoxes, rectCount, slab, pitch, m_regions.data(), m_regions.size());
                         m_regions.resize(pieceRegions);
                         fillRecord(slab.Box,
-                                   reinterpret_cast<Uint64>(reinterpret_cast<std::uintptr_t>(shadow)) +
+                                   static_cast<Uint64>(reinterpret_cast<std::uintptr_t>(shadow)) +
                                        slab.RunOffset);
                         const Bool pieceAccepted = emitRecord(
                             static_cast<const Uint8*>(shadow) + slab.RunOffset, slab.RunBytes);

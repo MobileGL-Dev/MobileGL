@@ -23,6 +23,7 @@
 #include <Config.h>
 
 #include <atomic>
+#include <bit>
 #include <cstdlib>
 #include <cstring>
 
@@ -1012,7 +1013,7 @@ namespace MobileGL::MG_Record {
                 for (SizeT wordIndex = 0; wordIndex < (tracked->pageCount + 63) / 64; ++wordIndex) {
                     Uint64 word = tracked->pageBits[wordIndex].load(std::memory_order_relaxed);
                     while (word != 0) {
-                        const SizeT bit = static_cast<SizeT>(__builtin_ctzll(word));
+                        const SizeT bit = static_cast<SizeT>(std::countr_zero(word));
                         word &= word - 1;
                         const SizeT pageIndex = (wordIndex << 6) + bit;
                         // Clear the bit FIRST, per the order the correctness argument
@@ -1026,7 +1027,7 @@ namespace MobileGL::MG_Record {
                                                                std::memory_order_relaxed);
                         SizeT runEnd = pageIndex + 1;
                         while (word != 0) {
-                            const SizeT nextBit = static_cast<SizeT>(__builtin_ctzll(word));
+                            const SizeT nextBit = static_cast<SizeT>(std::countr_zero(word));
                             if ((wordIndex << 6) + nextBit != runEnd) break;
                             word &= word - 1;
                             tracked->pageBits[wordIndex].fetch_and(~(1ull << nextBit),

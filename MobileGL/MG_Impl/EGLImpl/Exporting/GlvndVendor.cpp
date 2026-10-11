@@ -348,8 +348,16 @@ namespace {
     void* EGLAPIENTRY VendorGetDispatchAddress(const char* procName) { return LookupEntryPoint(procName); }
 }  // namespace
 
-extern "C" MOBILEGL_EGL_API EGLBoolean __egl_Main(uint32_t version, const __EGLapiExports* exports,
-                                                  __EGLvendorInfo* vendor, __EGLapiImports* imports) {
+// libeglabi.h has already declared this prototype without an export attribute, and MSVC refuses a
+// redeclaration that adds dllexport. Windows has no glvnd to look the symbol up, so it is a plain
+// external definition there.
+#ifdef _WIN32
+#define MOBILEGL_GLVND_EGL_MAIN extern "C"
+#else
+#define MOBILEGL_GLVND_EGL_MAIN MOBILEGL_EGL_API
+#endif
+MOBILEGL_GLVND_EGL_MAIN EGLBoolean __egl_Main(uint32_t version, const __EGLapiExports* exports,
+                                              __EGLvendorInfo* vendor, __EGLapiImports* imports) {
     (void)vendor;
     if (EGL_VENDOR_ABI_GET_MAJOR_VERSION(version) != EGL_VENDOR_ABI_MAJOR_VERSION) {
         // A vendor that does not know the ABI it is being handed must say so, not guess: the
