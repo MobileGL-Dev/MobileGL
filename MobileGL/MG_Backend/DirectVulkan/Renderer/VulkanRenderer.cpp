@@ -4421,6 +4421,27 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return true;
         }
 
+        // A SLOT THAT HAS NOT ACQUIRED STILL HOLDS ITS FENCE SIGNALED. The slot fences are created
+        // signaled and only WaitAndAcquireNextImage resets them, so while the first acquire is
+        // deferred (no swapchain yet: a zero-area or hidden window, which is what an offscreen
+        // context created through a helper window is) the current slot's fence is still signaled
+        // here. Submitting it in that state is invalid (VUID-vkQueueSubmit-fence-00063), and in
+        // practice the wait below then returns at once - before the copy has run - so the readback
+        // hands back the buffer's initial zeros. The late signal from that submission could also
+        // land after the reset below, leaving the NEXT readback to submit a signaled fence again.
+        //
+        // Such a fence is unsignaled before the submit, and handed back signaled afterwards: the
+        // deferred acquire (Present) waits on it with no submission of its own, and a fence this
+        // readback reset and left unsignaled would never signal for that wait.
+        const Bool slotFenceIdle = vkGetFenceStatus(m_device, frame.imageInFlightFence) == VK_SUCCESS;
+        if (slotFenceIdle) {
+            const VkResult resetResult = vkResetFences(m_device, 1, &frame.imageInFlightFence);
+            if (resetResult != VK_SUCCESS) {
+                MGLOG_E_ONCE("DirectVulkan readback: vkResetFences on the idle slot fence returned %d", resetResult);
+                return false;
+            }
+        }
+
         if (!SubmitPendingCommandBuffer(frame, frame.imageInFlightFence, /*pooledFence=*/false)) {
             return false;
         }
@@ -4468,10 +4489,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return false;
         }
         OnSubmitsCompletedUpTo(frame.lastSubmitIndex);
-        result = vkResetFences(m_device, 1, &frame.imageInFlightFence);
-        if (result != VK_SUCCESS) {
-            MGLOG_E_ONCE("DirectVulkan readback: vkResetFences returned %d", result);
-            return false;
+        if (!slotFenceIdle) {
+            result = vkResetFences(m_device, 1, &frame.imageInFlightFence);
+            if (result != VK_SUCCESS) {
+                MGLOG_E_ONCE("DirectVulkan readback: vkResetFences returned %d", result);
+                return false;
+            }
         }
 
         frame.hasCommandBufferRecorded = false;
