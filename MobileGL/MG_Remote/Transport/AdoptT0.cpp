@@ -184,6 +184,18 @@ namespace MobileGL::MG_Remote::Transport::AdoptT0 {
         return test != nullptr ? test->HasAhb() : RealHasAhb();
     }
 
+    namespace {
+        std::atomic<bool> g_peerInAnotherProcessForTest{false};
+    } // namespace
+
+    bool PeerIsThisProcess(bool inProcessTransport) {
+        return inProcessTransport && !g_peerInAnotherProcessForTest.load(std::memory_order_acquire);
+    }
+
+    void SetPeerInAnotherProcessForTest(bool asIfCrossProcess) {
+        g_peerInAnotherProcessForTest.store(asIfCrossProcess, std::memory_order_release);
+    }
+
     bool AllocateHeld(std::uint64_t size, const void* seed, HeldStore& out, std::string& why) {
         const PlatformForTest* test = g_testPlatform.load(std::memory_order_acquire);
         return test != nullptr ? test->AllocateHeld(size, seed, out, why) : RealAllocateHeld(size, seed, out, why);

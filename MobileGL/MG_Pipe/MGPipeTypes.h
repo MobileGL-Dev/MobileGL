@@ -157,6 +157,11 @@ namespace MobileGL::MG_Pipe {
         // CapsSnapshot Accept sends (no context exists yet); set in the one the first native
         // bind republishes. The client adopts through T0 only while it reads this bit.
         kCapAdoptT0 = 1ull << 11,
+        // T0 IN ONE PROCESS. Set with kCapAdoptT0 when the client is this process (inproc) and the
+        // backend can donate a store: map_persistent's OK answer carries the address of the
+        // server's own mapped store, and the client allocates no AHardwareBuffer - the store is
+        // the one memory both sides already share, as monolith's donation is.
+        kCapAdoptInProcess = 1ull << 12,
     };
 
     // Readiness is supplied independently by each backend's integration gate.

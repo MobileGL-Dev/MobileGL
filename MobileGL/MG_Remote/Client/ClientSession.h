@@ -293,6 +293,7 @@ namespace MobileGL::MG_Remote::Client {
         // server's inbox relies on), and wait for the answer. The held pointer on OK - the caller
         // adopts it as the store's mapping - or null on DECLINED (the store stays T2).
         void* AdoptPersistentT0(const MG_Pipe::MGPHandleOnly& handle, Uint64 size, const void* seed);
+        void* AdoptPersistentInProcess(const MG_Pipe::MGPHandleOnly& handle, Uint64 size, const void* seed);
         // shared_image (docs/Disaggregated/notes/anland/plan-ahb-dmabuf.md): emits `op` and waits
         // for its answer. `sendFd` >= 0 (an Import) is queued on the aux socket for the record's
         // seq BEFORE the record is published; `receivedFd` non-null (an Allocate) takes the

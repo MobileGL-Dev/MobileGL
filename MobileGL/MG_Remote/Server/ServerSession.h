@@ -320,7 +320,12 @@ namespace MobileGL::MG_Remote::Server {
         // hang), read the AHB off its hop, and import it as `handle`'s store. False = this session is
         // not T0 (the codec's T2 decline answers); true = handled and `status` is the answer (OK, or
         // DECLINED with a named line).
-        Bool AdoptStoreT0(const MG_Pipe::MGPHandleOnly& handle, Uint64 seq, Int32& status);
+        // A client in this process (inproc) takes no AHardwareBuffer: the backend donates the
+        // store's own mapping and `inProcessBase` carries its address in the OK answer.
+        Bool AdoptStoreT0(const MG_Pipe::MGPHandleOnly& handle, Uint64 seq, Int32& status,
+                          Uint64& inProcessBase);
+        // T0 granted for a client in this process: map_persistent donates (kCapAdoptInProcess).
+        Bool AdoptT0InProcess() const { return m_adoptT0InProcess; }
         // The arm's proof for this session (B2): stores imported and their bytes, declined.
         Uint64 T0StoresImported() const { return m_t0Stores; }
         Uint64 T0BytesImported() const { return m_t0Bytes; }
@@ -426,6 +431,7 @@ namespace MobileGL::MG_Remote::Server {
         Uint8 m_adoptAsk = 2;
         Bool m_adoptT0Settled = false;
         Bool m_adoptT0 = false;
+        Bool m_adoptT0InProcess = false;
         AdoptInbox m_adoptInbox;
         SharedImages::SessionHolder m_sharedImages;
         Uint64 m_t0Stores = 0;

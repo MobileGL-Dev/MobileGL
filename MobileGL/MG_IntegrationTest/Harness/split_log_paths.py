@@ -224,7 +224,9 @@ def specialized_required():
     }
     for backend in ("DirectGLES", "DirectVulkan"):
         names.add(f"{backend}.Tcp.AdoptTier0.LargeArenaAdoptionScenario.AStreamSessionRefusesTheAdoptTierOnceByName")
-        for arm in ("Split", "Spawn"):
+        # Magma's split arm is granted T0 in process (its tier case reads `adopted`), so only Espryt,
+        # which cannot hand an in-process client its stores, falls back there.
+        for arm in (("Split", "Spawn") if backend == "DirectGLES" else ("Spawn",)):
             names.add(f"{backend}.{arm}.AdoptTier0.LargeArenaAdoptionScenario.ASessionThatCannotRunT0FallsBackToT2OnceByName")
     for arm in ("Split", "Spawn"):
         for case in ("Rgb16fDrawnBaseWithARefusedReadbackDeclinesByName",

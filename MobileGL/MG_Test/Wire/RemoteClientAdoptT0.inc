@@ -38,7 +38,9 @@ void FakeDrop(FakeAhb* f) {
     }
 }
 bool FakeHasAhb() { return true; }
+Uint64 g_fakeAllocations = 0;
 bool FakeAllocate(std::uint64_t size, const void* seed, T0::HeldStore& out, std::string& why) {
+    ++g_fakeAllocations;
     auto* f = new FakeAhb;
     f->fd = static_cast<int>(::syscall(SYS_memfd_create, "t0-fake", 1u /*MFD_CLOEXEC*/));
     if (f->fd < 0 || ::ftruncate(f->fd, static_cast<off_t>(size)) != 0) {
@@ -144,6 +146,20 @@ MGPipeResourceOps MakeFakeOps() {
 }
 MGPipeResourceOps g_fakeOps = MakeFakeOps();
 
+// ---- the stand-in donor: a backend that hands an in-process client its store's own mapping ---
+alignas(64) Uint8 g_donatedStore[kT0Bytes];
+Uint64 g_donations = 0;
+void* FakeDonateInProcess(MGPipeHandle res, Uint64 size) {
+    ++g_donations;
+    return res.Slot == 5 && size == kT0Bytes ? g_donatedStore : nullptr;
+}
+MGPipeResourceOps MakeDonatingOps() {
+    MGPipeResourceOps ops = MakeFakeOps();
+    ops.DonateInProcess = &FakeDonateInProcess;
+    return ops;
+}
+MGPipeResourceOps g_donatingOps = MakeDonatingOps();
+
 // What the server's first native bind does for T0, on the apply thread like the real one: the
 // grant (and its POST), then the caps that bind republishes - which the client's make-current
 // adopts, as here.
@@ -184,6 +200,7 @@ size_t CountOf(const std::string& log, const std::string& needle) {
 // The grant with the stand-ins, the store, and the map_persistent: returns the adopted pointer.
 void* AdoptOneStore(Uint8 salt, std::vector<Uint8>& seed) {
     MG_Config::Ipc.AdoptTier = 0;
+    T0::SetPeerInAnotherProcessForTest(true);
     T0::SetPlatformForTest(&kFakePlatform);
     MG_Pipe::MGPipeSetResourceOps(&g_fakeOps);
     StartControlSession();
@@ -223,6 +240,7 @@ TEST(RemoteClientAdoptT0, KnobZeroOverSharedSegmentsAsksT0AndFallsBackToT2ByName
 TEST(RemoteClientAdoptT0, KnobTwoIsTodaysT2WithNoT0Line) {
     const auto child = RunInChild([] {
         MG_Config::Ipc.AdoptTier = 2;
+        T0::SetPeerInAnotherProcessForTest(true);
         T0::SetPlatformForTest(&kFakePlatform);
         MG_Pipe::MGPipeSetResourceOps(&g_fakeOps);
         StartControlSession();
@@ -251,6 +269,7 @@ TEST(RemoteClientAdoptT0, KnobTwoIsTodaysT2WithNoT0Line) {
 TEST(RemoteClientAdoptT0, AnUnsetKnobFallsBackToT2QuietlyAndCountsIt) {
     const auto child = RunInChild([] {
         MG_Config::Ipc.AdoptTier = MG_Config::kAdoptTierUnset;
+        T0::SetPeerInAnotherProcessForTest(true);
         MG_Pipe::MGPipeSetResourceOps(&g_fakeOps); // a backend WITH the members: the platform decides
         StartControlSession();
         if (!Srv::ServerSessionInstance().AdoptT0Asked()) ::_exit(210); // the Hello asked T0 by default
@@ -292,6 +311,7 @@ TEST(RemoteClientAdoptT0, KnobOneIsRefusedByNameAndAsksT2) {
 TEST(RemoteClientAdoptT0, NoAhardwareBufferOnThisPlatformIsT2AndTwoNamedLines) {
     const auto child = RunInChild([] {
         MG_Config::Ipc.AdoptTier = 0;
+        T0::SetPeerInAnotherProcessForTest(true);
         MG_Pipe::MGPipeSetResourceOps(&g_fakeOps); // a backend WITH the members: the platform decides
         StartControlSession();
         GrantAtFirstBind();
@@ -381,6 +401,62 @@ TEST(RemoteClientAdoptT0, AnOfferThatNeverArrivesIsANamedDeclineNotAHang) {
     });
     ExpectChildSuccess(child);
     EXPECT_EQ(CountOf(child.Log, "Refuse{AdoptT0NoStore, \"record"), 1u) << child.Log;
+    EXPECT_EQ(child.Log.find("Fatal{"), std::string::npos) << child.Log;
+}
+// T0 IN ONE PROCESS: the client is this process, so a backend that can donate hands it the store's
+// own mapping - no AHardwareBuffer is allocated, no Offer, no import, no POST - and the client's
+// pointer is the server's store, seeded with the shadow.
+// RED-ONCE (host): grant the AHardwareBuffer arm for an in-process client (drop the in-process
+// branch of ServerSession::SettleAdoptT0AtBind) -> the stand-in platform allocates, 223.
+TEST(RemoteClientAdoptT0, AnInProcessClientGetsTheServersStoreAndNoAhardwareBuffer) {
+    const auto child = RunInChild([] {
+        MG_Config::Ipc.AdoptTier = 0;
+        T0::SetPlatformForTest(&kFakePlatform);
+        MG_Pipe::MGPipeSetResourceOps(&g_donatingOps);
+        StartControlSession();
+        GrantAtFirstBind();
+        if (!Srv::ServerSessionInstance().AdoptT0InProcess()) ::_exit(220);
+        const auto seed = Pattern(kT0Bytes, 0x77);
+        const MGPHandleOnly handle = MakeBufferStore(5, kT0Bytes);
+        void* adopted = MGPipeRouteMapPersistent(handle, kT0Bytes, seed.data());
+        if (adopted != g_donatedStore) ::_exit(221);
+        if (std::memcmp(g_donatedStore, seed.data(), kT0Bytes) != 0) ::_exit(222);
+        if (g_fakeAllocations != 0 || g_fakeImports.count != 0) ::_exit(223);
+        if (g_donations != 1) ::_exit(224);
+        if (Srv::ServerSessionInstance().T0StoresImported() != 1 || ClientSessionInstance().T0StoresImported() != 1)
+            ::_exit(225);
+        ClientSessionInstance().Stop();
+    });
+    ExpectChildSuccess(child);
+    EXPECT_NE(child.Log.find("T0 granted in process"), std::string::npos) << child.Log;
+    EXPECT_EQ(child.Log.find("T0 POST"), std::string::npos) << child.Log;
+    EXPECT_EQ(child.Log.find("Fatal{"), std::string::npos) << child.Log;
+}
+// T0 IN ONE PROCESS NEVER TAKES THE AHardwareBuffer ARM: a backend that cannot hand an in-process
+// client its store leaves the session on T2 by name - no allocation, no Offer, no import, no POST -
+// even where the transfer arm would work (the stand-in platform and importer are installed).
+// RED-ONCE (host): let SettleAdoptT0AtBind fall through to the AHardwareBuffer arm for an in-process
+// client -> the stand-in POST passes and the session is granted T0, 230.
+TEST(RemoteClientAdoptT0, AnInProcessClientWhoseBackendCannotDonateRunsT2AndNeverTheTransferArm) {
+    const auto child = RunInChild([] {
+        MG_Config::Ipc.AdoptTier = 0;
+        T0::SetPlatformForTest(&kFakePlatform);
+        MG_Pipe::MGPipeSetResourceOps(&g_fakeOps); // the transfer arm's members, no DonateInProcess
+        StartControlSession();
+        GrantAtFirstBind();
+        if (Srv::ServerSessionInstance().AdoptT0()) ::_exit(230);
+        if (Srv::ServerSessionInstance().T0Refusals() != 1) ::_exit(231);
+        const auto seed = Pattern(kT0Bytes, 0x88);
+        const MGPHandleOnly handle = MakeBufferStore(5, kT0Bytes);
+        if (MGPipeRouteMapPersistent(handle, kT0Bytes, seed.data()) != nullptr) ::_exit(232);
+        if (g_fakeAllocations != 0 || g_fakeImports.count != 0) ::_exit(233);
+        if (ClientSessionInstance().AdoptT0()) ::_exit(234);
+        ClientSessionInstance().Stop();
+    });
+    ExpectChildSuccess(child);
+    EXPECT_EQ(CountOf(child.Log, "Refuse{AdoptT0Unavailable, \"in process\"}"), 1u) << child.Log;
+    EXPECT_EQ(child.Log.find("T0 POST"), std::string::npos) << child.Log;
+    EXPECT_EQ(child.Log.find("T0 granted"), std::string::npos) << child.Log;
     EXPECT_EQ(child.Log.find("Fatal{"), std::string::npos) << child.Log;
 }
 #endif

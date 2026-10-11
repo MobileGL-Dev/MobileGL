@@ -30,6 +30,7 @@
 #include <atomic>
 #include <string>
 #include <chrono>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <thread>
@@ -726,6 +727,7 @@ namespace MobileGL::MG_Remote::Server {
         m_adoptT0Quiet = m_adoptAsk == Transport::kAdoptAskT0Default;
         m_adoptT0Settled = false;
         m_adoptT0 = false;
+        m_adoptT0InProcess = false;
         m_t0Stores = m_t0Bytes = m_t0Declined = m_t0Refusals = 0;
         m_adoptInbox.Clear();
         m_adoptInbox.Attach(&transport);
@@ -966,6 +968,7 @@ namespace MobileGL::MG_Remote::Server {
         // P11 B2: this session's T0 grant, never part of the process-wide m_capBits - it is a
         // statement about THIS client's ask and this server's self-test.
         if (m_adoptT0) callMask |= static_cast<Uint64>(MG_Pipe::kCapAdoptT0);
+        if (m_adoptT0InProcess) callMask |= static_cast<Uint64>(MG_Pipe::kCapAdoptInProcess);
         const auto timerSupported = m_backend->GetBackendFunctions().GL.IsTimerQuerySupported;
         if ((callMask & MG_Pipe::kCapTimerQuery) && (!timerSupported || !timerSupported()))
             callMask &= ~static_cast<Uint64>(MG_Pipe::kCapTimerQuery);
@@ -1113,7 +1116,7 @@ namespace MobileGL::MG_Remote::Server {
         m_adoptInbox.Clear();
         m_adoptInbox.Attach(nullptr);
         m_sharedImages.Clear();
-        m_adoptT0Asked = m_adoptT0Settled = m_adoptT0 = m_adoptT0Quiet = false;
+        m_adoptT0Asked = m_adoptT0Settled = m_adoptT0 = m_adoptT0Quiet = m_adoptT0InProcess = false;
         m_adoptAsk = 2;
         m_consumer.Detach();
         *m_commands = Transport::RingConsumer();
@@ -1153,7 +1156,27 @@ namespace MobileGL::MG_Remote::Server {
         const char* backendName = m_backend == nullptr ? "server"
             : m_backend->GetBackendType() == BackendType::DirectVulkan ? "Magma" : "Espryt";
         std::string why;
-        if (MG_Config::Ipc.AllowAdoptT0 == 0) {
+        // A CLIENT IN THIS PROCESS SHARES THE SERVER'S MEMORY ALREADY: its persistent maps are the
+        // stores' own mappings, donated as monolith donates them, and no AHardwareBuffer, import
+        // or POST is involved. A backend that cannot donate leaves the session on T2 - an
+        // in-process session never takes the AHardwareBuffer arm below.
+        const Bool inProcess = m_transport != nullptr &&
+            Transport::AdoptT0::PeerIsThisProcess(m_transport->Role() == Transport::TransportRole::InProcess);
+        if (inProcess) {
+            const MG_Pipe::MGPipeResourceOps* ops = MG_Pipe::MGPipeGetResourceOps();
+            if (MG_Config::Ipc.AllowAdoptT0 == 0) {
+                why = "this server's MOBILEGL_IPC_ALLOW_ADOPT_T0=0 disallows it";
+            } else if (ops == nullptr || ops->DonateInProcess == nullptr) {
+                why = std::string("the ") + backendName + " backend cannot hand its stores to a client in this process";
+            } else {
+                m_adoptT0 = true;
+                m_adoptT0InProcess = true;
+                MGLOG_I("MG_Remote server: T0 granted in process - the client is this process, so each "
+                        "map_persistent hands it the %s store's own mapping (no AHardwareBuffer)",
+                        backendName);
+                return;
+            }
+        } else if (MG_Config::Ipc.AllowAdoptT0 == 0) {
             why = "this server's MOBILEGL_IPC_ALLOW_ADOPT_T0=0 disallows it";
         } else if (!Transport::AdoptT0::PlatformHasAhb()) {
             why = "no AHardwareBuffer on this platform";
@@ -1182,7 +1205,9 @@ namespace MobileGL::MG_Remote::Server {
         if (!why.empty()) {
             ++m_t0Refusals;
             const char* word = MG_Config::Ipc.AllowAdoptT0 == 0 ? "disallowed"
-                               : !Transport::AdoptT0::PlatformHasAhb() ? "no AHardwareBuffer" : "POST";
+                               : inProcess                             ? "in process"
+                               : !Transport::AdoptT0::PlatformHasAhb() ? "no AHardwareBuffer"
+                                                                       : "POST";
             if (m_adoptT0Quiet) {
                 // THE DEFAULT ASK (MOBILEGL_IPC_ADOPT_TIER unset) FALLS BACK QUIETLY: every host
                 // session would otherwise carry this line. Counted (T0Refusals, the totals line).
@@ -1202,9 +1227,29 @@ namespace MobileGL::MG_Remote::Server {
                 backendName);
     }
 
-    Bool ServerSession::AdoptStoreT0(const MG_Pipe::MGPHandleOnly& handle, Uint64 seq, Int32& status) {
+    Bool ServerSession::AdoptStoreT0(const MG_Pipe::MGPHandleOnly& handle, Uint64 seq, Int32& status,
+                                     Uint64& inProcessBase) {
         if (!m_adoptT0) return false;
         status = Wire::ReplySink::kStatusDeclined;
+        inProcessBase = 0;
+        if (m_adoptT0InProcess) {
+            void* base = MG_Pipe::MGPipeApplyDonateInProcess(handle);
+            if (base == nullptr) {
+                ++m_t0Declined;
+                MGLOG_W("MG_Remote server: T0 map_persistent {slot=%u, gen=%u} (record %llu) DECLINED - the "
+                        "backend did not donate the store (its log names why); the store runs T2",
+                        handle.Handle.Slot, handle.Handle.Gen, static_cast<unsigned long long>(seq));
+                return true;
+            }
+            inProcessBase = static_cast<Uint64>(reinterpret_cast<std::uintptr_t>(base));
+            ++m_t0Stores;
+            status = Wire::ReplySink::kStatusOk;
+            MGLOG_D("MG_Remote server: T0 donated store {slot=%u, gen=%u} in process (record %llu); session "
+                    "total %llu stores",
+                    handle.Handle.Slot, handle.Handle.Gen, static_cast<unsigned long long>(seq),
+                    static_cast<unsigned long long>(m_t0Stores));
+            return true;
+        }
         int hop = -1;
         Transport::AdoptT0::Offer offer{};
         std::string why;

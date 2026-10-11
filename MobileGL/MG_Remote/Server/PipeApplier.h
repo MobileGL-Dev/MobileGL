@@ -156,7 +156,8 @@ namespace MobileGL::MG_Remote::Server {
         // queries, present, the T0 map, the control records and shared images.
 
         // P11 B2: T0's map_persistent - ServerSession::AdoptStoreT0 (it owns the aux socket).
-        Bool OnMapPersistent(const MG_Pipe::MGPHandleOnly& handle, Uint64 seq, Int32& status) override;
+        Bool OnMapPersistent(const MG_Pipe::MGPHandleOnly& handle, Uint64 seq, Int32& status,
+                             Uint64& inProcessBase) override;
         Bool OnFenceCreate(const MG_Pipe::MGPHandleOnly&) override;
         Bool OnFenceDestroy(const MG_Pipe::MGPHandleOnly&) override;
         Bool OnFenceStatus(const MG_Pipe::MGPHandleOnly&, Uint32&) override;

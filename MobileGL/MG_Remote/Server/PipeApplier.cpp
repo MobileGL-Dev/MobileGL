@@ -116,9 +116,10 @@ namespace MobileGL::MG_Remote::Server {
         return it->second;
     }
 
-    Bool ServerVerbSink::OnMapPersistent(const MG_Pipe::MGPHandleOnly& handle, Uint64 seq, Int32& status) {
+    Bool ServerVerbSink::OnMapPersistent(const MG_Pipe::MGPHandleOnly& handle, Uint64 seq, Int32& status,
+                                         Uint64& inProcessBase) {
         ServerSession* session = ServerSession::Active();
-        return session != nullptr && session->AdoptStoreT0(handle, seq, status);
+        return session != nullptr && session->AdoptStoreT0(handle, seq, status, inProcessBase);
     }
 
     Bool ServerVerbSink::OnFenceCreate(const MG_Pipe::MGPHandleOnly& desc) {

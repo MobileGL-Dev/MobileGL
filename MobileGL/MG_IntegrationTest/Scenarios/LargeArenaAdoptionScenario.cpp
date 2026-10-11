@@ -100,7 +100,8 @@ void main() { word = 0xC0FFEEu; }
         // which also set MOBILEGL_IPC_ADOPT_TIER=0; a harness marker, never read by the library.
         constexpr const char* kAdoptTierRefusalMarker = "MGITEST_ADOPT_TIER_REFUSAL";
         // P11 B2: set by the shared-segment `.AdoptTier0.` / `.AdoptT0Disallowed.` entries to the reason word the
-        // server gives for not granting T0 ("no AHardwareBuffer" on a host, "disallowed" with its allow switch off).
+        // server gives for not granting T0 ("no AHardwareBuffer" on a host, "in process" where the backend cannot hand an
+        // in-process client its stores, "disallowed" with its allow switch off).
         constexpr const char* kAdoptT0FallbackMarker = "MGITEST_ADOPT_T0_FALLBACK";
         // Draws issued against the arena inside the counted window. One definition, many draws:
         // "one per definition" (1) and "one per draw" (kDrawsInTheWindow) have to be different

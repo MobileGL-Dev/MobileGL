@@ -164,6 +164,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 return VkBufferManager::SelfTestWireImport(why, whyBytes);
             },
 #endif
+            // T0 in one process: the client gets the store's own mapping, as monolith's
+            // donation does; the client seeds it from its shadow once this returns.
+            .DonateInProcess = [](MG_Pipe::MGPipeHandle res, Uint64 size) -> void* {
+                auto* m = WireManager("donate");
+                return m != nullptr ? m->DonateWireBuffer(res, size, nullptr) : nullptr;
+            },
         };
     } // namespace
 

@@ -2574,8 +2574,8 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     list(APPEND MGL_SPLIT_ARM_TEST_LISTS "MGL_SPLIT_ARM_TESTS_${MGL_SPLIT_ARM_INDEX}")
     math(EXPR MGL_SPLIT_ARM_INDEX "${MGL_SPLIT_ARM_INDEX} + 1")
     # P11 B2 (CONTRACT-P11 B2): THE SHARED-SEGMENT ARMS WITH MOBILEGL_IPC_ADOPT_TIER=0, which A1 made
-    # die at the handshake and B2 turned into an ASK. A host has no AHardwareBuffer, so the server
-    # refuses T0 by name at its first native bind, publishes no kCapAdoptT0, and the client falls
+    # die at the handshake and B2 turned into an ASK. A host has no AHardwareBuffer (and Espryt cannot
+    # hand an in-process client its stores), so the server refuses T0 by name at its first native bind, publishes no kCapAdoptT0, and the client falls
     # back to T2 with one named line at its first map_persistent: every case green, the arena
     # emulated (SplitLogPaths declares it), ASessionThatCannotRunT0FallsBackToT2OnceByName reading
     # the two lines. `.AdoptT0Disallowed.` is the same on the spawn arm with the server's allow switch
@@ -2583,6 +2583,13 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     foreach(mglT0Arm IN ITEMS Split Spawn)
         string(TOUPPER "${mglT0Arm}" mglT0ArmUpper)
         string(TOLOWER "${mglT0Arm}" mglT0ArmLower)
+        # Split is one process: Espryt cannot hand its client its stores, and an in-process session
+        # never takes the AHardwareBuffer arm, so the refusal names that rather than the platform.
+        if(mglT0Arm STREQUAL "Split")
+            set(mglT0Fallback "in process")
+        else()
+            set(mglT0Fallback "no AHardwareBuffer")
+        endif()
         gtest_discover_tests(MobileGLIntegrationTest
             TEST_PREFIX "DirectGLES.${mglT0Arm}.AdoptTier0."
             TEST_LIST "MGL_SPLIT_ARM_TESTS_${MGL_SPLIT_ARM_INDEX}"
@@ -2591,7 +2598,7 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
             PROPERTIES
                 LABELS "integration-gpu\;integration-${mglT0ArmLower}"
                 TIMEOUT ${MGL_ITEST_TIMEOUT}
-                ENVIRONMENT "${MGL_ITEST_GLES_${mglT0ArmUpper}_ENVIRONMENT}\;MOBILEGL_IPC_ADOPT_TIER=0\;MGITEST_ADOPT_T0_FALLBACK=no AHardwareBuffer"
+                ENVIRONMENT "${MGL_ITEST_GLES_${mglT0ArmUpper}_ENVIRONMENT}\;MOBILEGL_IPC_ADOPT_TIER=0\;MGITEST_ADOPT_T0_FALLBACK=${mglT0Fallback}"
         )
         list(APPEND MGL_SPLIT_ARM_TEST_LISTS "MGL_SPLIT_ARM_TESTS_${MGL_SPLIT_ARM_INDEX}")
         math(EXPR MGL_SPLIT_ARM_INDEX "${MGL_SPLIT_ARM_INDEX} + 1")
@@ -4090,6 +4097,14 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         mgl_itest_magma_arm_shape(${mglItestArm})
         mgl_itest_join_environment(mglItestMagmaBandEnvironment
             ${MGL_ITEST_MAGMA_BAND_FLAVOUR_ENV} ${mglItestArmTransportEnv})
+        # Where the >= 16 MiB arena lands on this arm (P11 A2). Split is one process: T0 (the default
+        # tier) is granted in process and the arena is the store Magma hands its client - adopted.
+        # Across processes a host has no shareable memory, so the session runs T2 - emulated.
+        if("${mglItestArm}" STREQUAL "Split")
+            set(mglItestArenaArm adopted)
+        else()
+            set(mglItestArenaArm emulated)
+        endif()
         foreach(bandCase RenderbufferReadOfExactlyTwoMiBIsBandedNotRefused
                          TwoMiBPlusOneRowIsBanded
                          AReadLargerThanTheWholeReplySegmentIsBanded
@@ -4137,9 +4152,8 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
                     ENVIRONMENT "${mglItestMagmaBandEnvironment}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p10-fence${mglItestArmLogTag}-${fenceCase}.log")
         endforeach()
         # P11 A2 (MG_Remote/CONTRACT-P11.md §2): the >= 16 MiB arena on Magma's three arms, in the
-        # same flavour. Declared emulated: every split acquisition declines (the wire resource
-        # table's MapPersistent returns null, VkBufferManager.cpp), so the tier case asserts T2
-        # on every arm; DirectVulkan.ArenaArm. is its monolith (adopted) half.
+        # same flavour, declared per arm (mglItestArenaArm above); DirectVulkan.ArenaArm. is its
+        # monolith (adopted) half.
         foreach(arenaCase IN LISTS MGL_ITEST_ARENA_CASES)
             gtest_discover_tests(MobileGLIntegrationTest
                 TEST_PREFIX "DirectVulkan.${mglItestArm}.Arena."
@@ -4147,7 +4161,7 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
                 DISCOVERY_TIMEOUT 30
                 PROPERTIES LABELS "${mglItestMagmaLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
                     ${mglItestArmProperties}
-                    ENVIRONMENT "${mglItestMagmaBandEnvironment}\;MGITEST_PERSISTENT_MAP_ARM=emulated\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p11-arena${mglItestArmLogTag}-${arenaCase}.log")
+                    ENVIRONMENT "${mglItestMagmaBandEnvironment}\;MGITEST_PERSISTENT_MAP_ARM=${mglItestArenaArm}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p11-arena${mglItestArmLogTag}-${arenaCase}.log")
         endforeach()
         # P11 B2 addendum: DeletedBoundBufferScenario on Magma's three arms, same flavour (the
         # Espryt arms come from mgl_itest_register_split_arms). Before the frontend fix Magma did
@@ -4167,7 +4181,7 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         endforeach()
         # ...and the one-process arena pair (the Espryt half is beside mgl_itest_register_split_arms).
         string(REPLACE "\\;" ";" mglItestPairEnv "${mglItestMagmaBandEnvironment}")
-        list(APPEND mglItestPairEnv "MGITEST_PERSISTENT_MAP_ARM=emulated"
+        list(APPEND mglItestPairEnv "MGITEST_PERSISTENT_MAP_ARM=${mglItestArenaArm}"
              "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p11-arena-pair${mglItestArmLogTag}.log")
         string(REPLACE "\\;" ";" mglItestPairLabels "${mglItestMagmaLabels}")
         set(mglItestPairName "DirectVulkan.${mglItestArm}.Arena.LargeArenaAdoptionScenario.GpuWriteThenTheTierCaseInOneProcess")
@@ -4181,13 +4195,17 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
             ${mglItestArmProperties})
         # P11 A1 + B2 (CONTRACT-P11 §1, B2): MOBILEGL_IPC_ADOPT_TIER=0 on every arm, one case set.
         # On tcp a stream refuses the tier by name at the client's handshake (A1, the stream case
-        # reads the line); over shared segments (split, spawn) the knob ASKS T0, a host has no
-        # AHardwareBuffer, and the session falls back to T2 by name (B2, the fallback case reads
-        # both lines). Register only the assertion applicable to each transport; the
-        # parity check names these two transport-specific exceptions explicitly.
+        # reads the line); on spawn the knob ASKS T0, a host has no AHardwareBuffer, and the session
+        # falls back to T2 by name (B2, the fallback case reads both lines); on split the client is
+        # the server's process and T0 is granted in process (the tier case reads `adopted`).
+        # Register only the assertion applicable to each transport; the parity check names these
+        # transport-specific exceptions explicitly.
         if(mglItestArm STREQUAL "Tcp")
             set(mglItestAdoptTier0Env "MGITEST_ADOPT_TIER_REFUSAL=T0")
             set(mglItestAdoptTier0Case AStreamSessionRefusesTheAdoptTierOnceByName)
+        elseif(mglItestArm STREQUAL "Split")
+            set(mglItestAdoptTier0Env "MOBILEGL_IPC_ALLOW_ADOPT_T0=1")
+            set(mglItestAdoptTier0Case)
         else()
             set(mglItestAdoptTier0Env "MGITEST_ADOPT_T0_FALLBACK=no AHardwareBuffer")
             set(mglItestAdoptTier0Case ASessionThatCannotRunT0FallsBackToT2OnceByName)
@@ -4199,7 +4217,7 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
                 DISCOVERY_TIMEOUT 30
                 PROPERTIES LABELS "${mglItestMagmaLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
                     ${mglItestArmProperties}
-                    ENVIRONMENT "${mglItestMagmaBandEnvironment}\;MOBILEGL_IPC_ADOPT_TIER=0\;${mglItestAdoptTier0Env}\;MGITEST_PERSISTENT_MAP_ARM=emulated\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p11-adopt-tier0${mglItestArmLogTag}-${arenaCase}.log")
+                    ENVIRONMENT "${mglItestMagmaBandEnvironment}\;MOBILEGL_IPC_ADOPT_TIER=0\;${mglItestAdoptTier0Env}\;MGITEST_PERSISTENT_MAP_ARM=${mglItestArenaArm}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p11-adopt-tier0${mglItestArmLogTag}-${arenaCase}.log")
         endforeach()
     endforeach()
 endif()

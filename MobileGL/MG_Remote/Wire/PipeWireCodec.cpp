@@ -1852,9 +1852,11 @@ namespace MobileGL::MG_Remote::Wire {
             // it (Server/AdoptInbox.h says why that wait cannot hang the apply thread); it answers
             // for itself or says "not T0", and everything below is the T2 arm, unchanged.
             Int32 t0Status = ReplySink::kStatusDeclined;
+            Uint64 inProcessBase = 0;
             if (m_verbs != nullptr &&
-                m_verbs->OnMapPersistent(*static_cast<const MGPHandleOnly*>(payload), seq, t0Status)) {
-                PostReply(op, seq, t0Status, nullptr, 0);
+                m_verbs->OnMapPersistent(*static_cast<const MGPHandleOnly*>(payload), seq, t0Status, inProcessBase)) {
+                if (inProcessBase != 0) PostReply(op, seq, t0Status, &inProcessBase, sizeof(inProcessBase));
+                else PostReply(op, seq, t0Status, nullptr, 0);
                 return true;
             }
         }

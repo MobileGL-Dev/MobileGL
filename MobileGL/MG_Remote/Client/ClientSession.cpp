@@ -44,6 +44,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
@@ -3011,11 +3012,26 @@ namespace MobileGL::MG_Remote::Client {
     Bool ClientSession::AdoptT0() {
         if (!m_adoptT0Asked) return false;
         if (m_adoptT0Decision >= 0) return m_adoptT0Decision == 1;
-        if (Caps().HasCap(MG_Pipe::kCapAdoptT0)) {
+        const Bool peerIsThisProcess = m_transport != nullptr &&
+            Transport::AdoptT0::PeerIsThisProcess(m_transport->Role() == Transport::TransportRole::InProcess);
+        if (Caps().HasCap(MG_Pipe::kCapAdoptT0) && peerIsThisProcess &&
+            !Caps().HasCap(MG_Pipe::kCapAdoptInProcess)) {
+            // A server in this process offered the AHardwareBuffer arm. The stores are this
+            // process's memory already; an in-process session never allocates one.
+            m_adoptT0Decision = 0;
+            ++m_t0Fallbacks;
+            MGLOG_W("MG_Remote client: Refuse{AdoptT0Unavailable, \"in process\"} - the server is this process "
+                    "and published kCapAdoptT0 without kCapAdoptInProcess; the session runs T2");
+        } else if (Caps().HasCap(MG_Pipe::kCapAdoptT0)) {
             m_adoptT0Decision = 1;
-            MGLOG_I("MG_Remote client: T0 - the server published kCapAdoptT0 (its POST self-test of the "
-                    "sustained-lock pattern passed), so this session adopts persistent stores as "
-                    "AHardwareBuffers the server imports");
+            if (Caps().HasCap(MG_Pipe::kCapAdoptInProcess)) {
+                MGLOG_I("MG_Remote client: T0 in process - the server is this process, so this session's "
+                        "persistent maps are the server's own store mappings (no AHardwareBuffer)");
+            } else {
+                MGLOG_I("MG_Remote client: T0 - the server published kCapAdoptT0 (its POST self-test of the "
+                        "sustained-lock pattern passed), so this session adopts persistent stores as "
+                        "AHardwareBuffers the server imports");
+            }
         } else {
             m_adoptT0Decision = 0;
             ++m_t0Fallbacks;
@@ -3036,6 +3052,7 @@ namespace MobileGL::MG_Remote::Client {
     void* ClientSession::AdoptPersistentT0(const MG_Pipe::MGPHandleOnly& handle, Uint64 size,
                                            const void* seed) {
         using namespace Transport::AdoptT0;
+        if (Caps().HasCap(MG_Pipe::kCapAdoptInProcess)) return AdoptPersistentInProcess(handle, size, seed);
         // Everything that can fail runs BEFORE the record is encoded, so the record never waits on
         // a step that has not happened: either the Offer carries the handle or it says it does not.
         HeldStore store;
@@ -3139,6 +3156,50 @@ namespace MobileGL::MG_Remote::Client {
         }
         ReleaseHeld(store);
         return nullptr;
+    }
+
+    // T0 IN ONE PROCESS (kCapAdoptInProcess): the OK answer carries the address of the server's own
+    // mapping of the store, which becomes this buffer's persistent map - the memory both sides
+    // already share, as monolith's donation is. The server has drained the GPU's use of the store
+    // before answering and applies nothing of this client's until this call returns, so the
+    // shadow is copied in here, by the side that owns it.
+    void* ClientSession::AdoptPersistentInProcess(const MG_Pipe::MGPHandleOnly& handle, Uint64 size,
+                                                  const void* seed) {
+        Uint64 base = 0;
+        Uint64 returned = 0;
+        Int32 status = Wire::ReplySink::kStatusError;
+        EmitAndWait(MG_Pipe::MGPWireOp::MapPersistent, &handle, sizeof(handle), nullptr, 0, &base, sizeof(base),
+                    &status, &returned);
+        if (status == Wire::ReplySink::kStatusError) {
+            SessionFail(MGFatalFamily::ReplyError,
+                        "MGPipe: Fatal{ReplyError, \"map_persistent\"} - the in-process T0 row answered ERROR, "
+                        "which is not an acceptance answer");
+        }
+        if (status != Wire::ReplySink::kStatusOk) {
+            ++m_t0Declined;
+            return nullptr;
+        }
+        if (returned != sizeof(base) || base == 0) {
+            SessionFail(MGFatalFamily::UnexpectedMapAccept,
+                        "MGPipe: Fatal{UnexpectedMapAccept, \"map_persistent\"} - the server accepted an "
+                        "in-process T0 store without the store's address");
+        }
+        void* ptr = reinterpret_cast<void*>(static_cast<std::uintptr_t>(base));
+        if (seed != nullptr) std::memcpy(ptr, seed, static_cast<SizeT>(size));
+        ++m_t0Imported;
+        m_t0Bytes += size;
+        // No AHardwareBuffer to hold: the entry only marks the handle T0 (its release is a no-op).
+        const Uint64 key = T0Key(handle.Handle);
+        if (auto it = m_t0Stores.find(key); it != m_t0Stores.end()) {
+            Transport::AdoptT0::ReleaseHeld(it->second);
+            ++m_t0Released;
+        }
+        m_t0Stores[key] = Transport::AdoptT0::HeldStore{nullptr, ptr, size};
+        MGLOG_D("MG_Remote client: T0 store {slot=%u, gen=%u} donated in process - %llu bytes; session total "
+                "%llu stores / %llu bytes",
+                handle.Handle.Slot, handle.Handle.Gen, static_cast<unsigned long long>(size),
+                static_cast<unsigned long long>(m_t0Imported), static_cast<unsigned long long>(m_t0Bytes));
+        return ptr;
     }
 
     Bool ClientSession::EmitSharedImage(const MG_Pipe::MGPSharedImageOp& op, int sendFd,

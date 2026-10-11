@@ -75,7 +75,10 @@ namespace MobileGL::MG_Pipe {
         // handled it and `status` is the answer (OK: the client's AHardwareBuffer is now the
         // store; DECLINED: the store runs T2); false = not a T0 session, and the codec gives
         // today's constant decline. `seq` is the record's, which is what the store's Offer names.
-        virtual Bool OnMapPersistent(const MGPHandleOnly&, Uint64 /*seq*/, Int32& /*status*/) {
+        // `inProcessBase`: a client in this process gets the donated store's address in the OK
+        // answer (kCapAdoptInProcess); 0 = the answer carries no bytes (the AHardwareBuffer arm).
+        virtual Bool OnMapPersistent(const MGPHandleOnly&, Uint64 /*seq*/, Int32& /*status*/,
+                                     Uint64& /*inProcessBase*/) {
             return false;
         }
         virtual Bool OnFenceCreate(const MGPHandleOnly&) { return false; }

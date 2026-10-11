@@ -142,6 +142,10 @@ namespace MobileGL::MG_Pipe {
         // pattern of its own, and read that back through the held pointer (and through the
         // backend's own host map of the import). False with the reason in `why`.
         Bool (*SelfTestExternal)(char* why, Uint64 whyBytes);
+        // T0 for a client in this process: the store's own host-visible coherent mapping (the
+        // pointer a monolith map_persistent donates), handed to the client as its persistent map.
+        // The store takes T0's semantics from here on. Null = not donated: the store runs T2.
+        void* (*DonateInProcess)(MGPipeHandle res, Uint64 size);
     };
 
     // Install / read the table. A null argument uninstalls, which is what a backend does at
@@ -1541,6 +1545,9 @@ namespace MobileGL::MG_Pipe {
     // without the member, declines (false); the codec answers DECLINED and the store runs T2.
     // MapPersistentRoundtrips is not moved: under split the server never counted map_persistent.
     Bool MGPipeApplyAdoptExternal(const MGPHandleOnly& handle, void* ahb, Uint64 size);
+    // T0 in one process: buffer `handle`'s store, donated through the backend's DonateInProcess.
+    // Null declines (not a live buffer, or a backend without the member); the store runs T2.
+    void* MGPipeApplyDonateInProcess(const MGPHandleOnly& handle);
 
     // ---------------------------------------------------------------------------------
     // P3a: the five vertex-input entry points (D-G, D-H, D-I)

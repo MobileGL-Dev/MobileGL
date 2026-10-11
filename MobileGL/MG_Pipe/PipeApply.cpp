@@ -2860,6 +2860,23 @@ namespace MobileGL::MG_Pipe {
         if (g_resourceOps == nullptr || g_resourceOps->ImportExternal == nullptr) return false;
         return g_resourceOps->ImportExternal(handle.Handle, ahb, size);
     }
+
+    void* MGPipeApplyDonateInProcess(const MGPHandleOnly& handle) {
+        if (static_cast<MGPipeKind>(handle.Kind) != MGPipeKind::Buffer) {
+            MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG("ProtocolCorruption")
+                                 " donate_in_process {slot=%u, gen=%u}: a T0 store is the buffer family's "
+                                 "and the handle names another kind (%u)",
+                                 handle.Handle.Slot, handle.Handle.Gen, handle.Kind);
+            return nullptr;
+        }
+        MGPipeResourceRecord* record = ResolveResource("donate_in_process", handle.Handle);
+        if (record == nullptr || record->Desc.Width == 0) return nullptr;
+        // adopt_external's pin, for adopt_external's reason: the client writes the donated store
+        // directly, as a monolith client writes its adopted map.
+        PinNoLiveHostWrites(*record, handle.Handle, "donate_in_process");
+        if (g_resourceOps == nullptr || g_resourceOps->DonateInProcess == nullptr) return nullptr;
+        return g_resourceOps->DonateInProcess(handle.Handle, record->Desc.Width);
+    }
 #endif
 
     // ================================================================================
