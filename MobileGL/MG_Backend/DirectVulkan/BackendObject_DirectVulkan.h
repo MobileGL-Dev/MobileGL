@@ -77,7 +77,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     Vector<GLExtension> BuildAdvertisedExtensions(Bool shaderSubgroupSupported, Bool timerQueriesSupported,
                                                   Bool anisotropicFilteringSupported,
                                                   Bool nonZeroIndirectBaseInstanceSupported,
-                                                  Bool cubeMapArraySupported);
+                                                  Bool cubeMapArraySupported,
+                                                  Bool nvMeshShader = true);
 
     // Format: <GPU Name>, Vulkan <Vulkan Version>, Driver <Driver Version> — the exact
     // string an initialized backend returns from GetBackendAPIVersionString (and that

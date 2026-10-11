@@ -1196,6 +1196,15 @@ namespace MobileGL::MG_Impl::GLImpl {
         DrawElements_Backend(mode, count, type, indices);
     }
 
+    void DrawMeshTasksNV(GLuint first, GLuint count) {}
+
+    void DrawMeshTasksIndirectNV(GLintptr indirect) {}
+
+    void MultiDrawMeshTasksIndirectNV(GLintptr indirect, GLsizei drawcount, GLsizei stride) {}
+
+    void MultiDrawMeshTasksIndirectCountNV(GLintptr indirect, GLintptr drawcount, GLsizei maxdrawcount,
+                                           GLsizei stride) {}
+
     void BeginTransformFeedback(GLenum primitiveMode) {
         if (primitiveMode != GL_POINTS && primitiveMode != GL_LINES && primitiveMode != GL_TRIANGLES) {
             MG_State::pGLContext->RecordError(

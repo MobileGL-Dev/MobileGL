@@ -18,6 +18,10 @@ namespace MobileGL {
                 return EShLanguage::EShLangFragment;
             case GL_COMPUTE_SHADER:
                 return EShLanguage::EShLangCompute;
+            case GL_TASK_SHADER_NV:
+                return EShLanguage::EShLangTaskNV;
+            case GL_MESH_SHADER_NV:
+                return EShLanguage::EShLangMeshNV;
             case GL_TESS_CONTROL_SHADER:
                 return EShLanguage::EShLangTessControl;
             case GL_TESS_EVALUATION_SHADER:

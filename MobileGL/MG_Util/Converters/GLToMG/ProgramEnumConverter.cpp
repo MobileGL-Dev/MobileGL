@@ -22,6 +22,10 @@ namespace MobileGL {
                 return ShaderStage::Geometry;
             case GL_FRAGMENT_SHADER:
                 return ShaderStage::Fragment;
+            case GL_TASK_SHADER_NV:
+                return ShaderStage::Task;
+            case GL_MESH_SHADER_NV:
+                return ShaderStage::Mesh;
             case GL_COMPUTE_SHADER:
                 return ShaderStage::Compute;
             default:

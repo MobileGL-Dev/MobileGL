@@ -66,4 +66,9 @@ namespace MobileGL::MG_Impl::GLImpl {
                                      GLsizei drawcount, const GLint* basevertex);
     void Clear(GLbitfield mask);
     void DrawElements(GLenum mode, GLsizei count, GLenum type, const void* indices);
+
+    void DrawMeshTasksNV(GLuint first, GLuint count);
+    void DrawMeshTasksIndirectNV(GLintptr indirect);
+    void MultiDrawMeshTasksIndirectNV(GLintptr indirect, GLsizei drawcount, GLsizei stride);
+    void MultiDrawMeshTasksIndirectCountNV(GLintptr indirect, GLintptr drawcount, GLsizei maxdrawcount, GLsizei stride);
 } // namespace MobileGL::MG_Impl::GLImpl

@@ -89,6 +89,7 @@ add_subdirectory(Swapchain)
 add_subdirectory(ShaderTranspiler)
 add_subdirectory(Util)
 add_subdirectory(SelfTest)
+add_subdirectory(MeshShader)
 # The DirectGLES post-transpile ESSL passes are pure String -> String, so unlike the
 # DirectVulkan suite below this one needs no device and always builds.
 add_subdirectory(Backend/DirectGLES)

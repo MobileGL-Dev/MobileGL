@@ -409,6 +409,8 @@ namespace MobileGL {
                 CASE(GL_MAX_TEXTURE_IMAGE_UNITS)
                 CASE(GL_FRAGMENT_SHADER)
                 CASE(GL_VERTEX_SHADER)
+                CASE(GL_TASK_SHADER_NV)
+                CASE(GL_MESH_SHADER_NV)
                 CASE(GL_MAX_FRAGMENT_UNIFORM_COMPONENTS)
                 CASE(GL_MAX_VERTEX_UNIFORM_COMPONENTS)
                 CASE(GL_MAX_VARYING_FLOATS)

@@ -18,6 +18,8 @@ namespace MobileGL {
         TessEval,
         Geometry,
         Fragment,
+        Task,
+        Mesh,
         Compute,
         ShaderStageCount,
         Unknown = -1

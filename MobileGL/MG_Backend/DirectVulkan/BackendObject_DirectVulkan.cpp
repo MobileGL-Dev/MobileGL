@@ -521,7 +521,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     Vector<GLExtension> BuildAdvertisedExtensions(Bool shaderSubgroupSupported, Bool timerQueriesSupported,
                                                   Bool anisotropicFilteringSupported,
                                                   Bool nonZeroIndirectBaseInstanceSupported,
-                                                  Bool cubeMapArraySupported) {
+                                                  Bool cubeMapArraySupported,
+                                                  Bool nvMeshShader) {
         Vector<GLExtension> extensions = {
             // The version tokens have to reach the version the backend actually claims:
             // TargetGLVersion is {4,6,0}, and a list that stopped at OpenGL40 told an
@@ -685,6 +686,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (cubeMapArraySupported) {
             extensions.push_back(E_GL_ARB_texture_cube_map_array);
         }
+
+        if (nvMeshShader) {
+            extensions.push_back(E_GL_NV_mesh_shader);
+        }
+
         return extensions;
     }
 

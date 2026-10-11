@@ -687,6 +687,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::GetIntegeri_v called with null VulkanRenderer");
         switch (target) {
         case GL_MAX_COMPUTE_WORK_GROUP_COUNT:
+            if (!pVulkanRenderer) {
+                *data = 0;
+                return;
+            }
             if (index >= 3) {
                 *data = 0;
                 return;
@@ -695,6 +699,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 pVulkanRenderer->GetPhysicalDevice().properties.limits.maxComputeWorkGroupCount[index]);
             return;
         case GL_MAX_COMPUTE_WORK_GROUP_SIZE:
+            if (!pVulkanRenderer) {
+                *data = 0;
+                return;
+            }
             if (index >= 3) {
                 *data = 0;
                 return;
