@@ -13,6 +13,7 @@
 
 #include <MG_Util/Debug/Log.h>
 
+#include <atomic>
 #include <cerrno>
 #include <chrono>
 #include <condition_variable>
@@ -289,5 +290,18 @@ namespace MobileGL::MG_Remote::Transport {
     Doorbell& InProcessTransport::PeerDoorbell() { return m_channel->Bell(1 - m_endpoint); }
 
     Doorbell& InProcessTransport::SelfDoorbell() { return m_channel->Bell(m_endpoint); }
+
+    namespace {
+        std::atomic<bool> g_peerInAnotherProcessForTest{false};
+    } // namespace
+
+    bool PeerIsThisProcess(const ITransport* transport) {
+        return transport != nullptr && transport->Role() == TransportRole::InProcess &&
+               !g_peerInAnotherProcessForTest.load(std::memory_order_acquire);
+    }
+
+    void SetPeerInAnotherProcessForTest(bool asIfCrossProcess) {
+        g_peerInAnotherProcessForTest.store(asIfCrossProcess, std::memory_order_release);
+    }
 
 } // namespace MobileGL::MG_Remote::Transport

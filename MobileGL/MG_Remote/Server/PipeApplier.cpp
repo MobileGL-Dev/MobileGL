@@ -390,6 +390,9 @@ namespace MobileGL::MG_Remote::Server {
         ServerSession* session = ServerSession::Active();
         if (session == nullptr) return false;
         SI::SessionHolder& holder = session->SharedImageHolder();
+        // Shared images carry memory between processes. A client in this process has none to
+        // carry, so it gets none - no platform buffer is ever allocated or imported for it.
+        const Bool peerIsThisProcess = Transport::PeerIsThisProcess(session->ControlTransport());
         const auto fill = [&reply](const SI::Image& image) {
             reply.ImageId = image.Id;
             reply.Modifier = image.Modifier;
@@ -403,6 +406,10 @@ namespace MobileGL::MG_Remote::Server {
         };
         switch (op.Op) {
         case MG_Pipe::kMGPSharedImageAllocate: {
+            if (peerIsThisProcess) {
+                MGLOG_W_ONCE("MG_Remote server: a shared-image allocation was refused: the client is this process");
+                return false;
+            }
             std::string why;
             SI::ImageRef image = SI::Allocate(op.Width, op.Height, op.Format, why);
             if (image == nullptr) {
@@ -434,6 +441,13 @@ namespace MobileGL::MG_Remote::Server {
                 AdoptInbox::Outcome::Taken) {
                 MGLOG_E("MG_Remote server: shared-image import (record %llu) has no descriptor: %s",
                         static_cast<unsigned long long>(seq), why.c_str());
+                return false;
+            }
+            if (peerIsThisProcess) {
+#if !defined(_WIN32)
+                ::close(fd);
+#endif
+                MGLOG_W_ONCE("MG_Remote server: a dma-buf import was refused: the client is this process");
                 return false;
             }
             SI::ImageRef image = SI::Identify(fd, why);

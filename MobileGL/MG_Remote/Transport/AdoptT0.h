@@ -56,13 +56,9 @@ namespace MobileGL::MG_Remote::Transport::AdoptT0 {
     // True where AHardwareBuffer exists (Android). Everywhere else T0 is never granted.
     bool PlatformHasAhb();
 
-    // True when a session's peer is this very process (an in-process transport). Such a session
-    // never takes this header's arm: its stores are this process's memory already, so T0 there is
-    // the backend handing over its own store (kCapAdoptInProcess) or nothing (T2).
-    bool PeerIsThisProcess(bool inProcessTransport);
-    // Test seam: the protocol tests run over an in-process transport and stand for a peer in
-    // another process while this is set.
-    void SetPeerInAnotherProcessForTest(bool asIfCrossProcess);
+    // A session whose peer is this very process (Transport::PeerIsThisProcess) never takes this
+    // header's arm: its stores are this process's memory already, so T0 there is the backend
+    // handing over its own store (kCapAdoptInProcess) or nothing (T2).
 
     // ---- client half ----------------------------------------------------------------------
 

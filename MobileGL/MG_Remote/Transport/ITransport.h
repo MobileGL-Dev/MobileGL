@@ -127,4 +127,12 @@ namespace MobileGL::MG_Remote::Transport {
         ITransport() = default;
     };
 
+    // True when the session on `transport` has this very process as its peer (an in-process
+    // transport). Its memory is the peer's already, so what exists only to carry memory between
+    // processes - T0's handle arm, shared images - is never offered on it.
+    bool PeerIsThisProcess(const ITransport* transport);
+    // Test seam: the protocol tests run over an in-process transport and stand for a peer in
+    // another process while this is set.
+    void SetPeerInAnotherProcessForTest(bool asIfCrossProcess);
+
 } // namespace MobileGL::MG_Remote::Transport

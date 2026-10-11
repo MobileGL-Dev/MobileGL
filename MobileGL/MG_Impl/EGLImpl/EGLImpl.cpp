@@ -1659,7 +1659,10 @@ namespace MobileGL::MG_Impl::EGLImpl {
 #if MOBILEGL_BUILD_DISAGGREGATED
         // A split client's backend is the remote one, which forwards the shared-image verbs to
         // the server; the server's own apply thread and a monolith have no allocator behind them.
-        return StreamGateActive() && MG_Backend::pActiveBackendObject != nullptr;
+        // Nor has inproc: shared images carry memory between processes, and an inproc server is
+        // this process (its server refuses them too - ServerVerbSink::OnSharedImage).
+        return StreamGateActive() && MG_Config::Transport != MG_Config::TransportMode::InProcess &&
+               MG_Backend::pActiveBackendObject != nullptr;
 #else
         return false;
 #endif

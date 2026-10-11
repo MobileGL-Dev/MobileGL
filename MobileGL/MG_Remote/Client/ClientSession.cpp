@@ -3012,8 +3012,7 @@ namespace MobileGL::MG_Remote::Client {
     Bool ClientSession::AdoptT0() {
         if (!m_adoptT0Asked) return false;
         if (m_adoptT0Decision >= 0) return m_adoptT0Decision == 1;
-        const Bool peerIsThisProcess = m_transport != nullptr &&
-            Transport::AdoptT0::PeerIsThisProcess(m_transport->Role() == Transport::TransportRole::InProcess);
+        const Bool peerIsThisProcess = Transport::PeerIsThisProcess(m_transport);
         if (Caps().HasCap(MG_Pipe::kCapAdoptT0) && peerIsThisProcess &&
             !Caps().HasCap(MG_Pipe::kCapAdoptInProcess)) {
             // A server in this process offered the AHardwareBuffer arm. The stores are this

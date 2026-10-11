@@ -200,7 +200,7 @@ size_t CountOf(const std::string& log, const std::string& needle) {
 // The grant with the stand-ins, the store, and the map_persistent: returns the adopted pointer.
 void* AdoptOneStore(Uint8 salt, std::vector<Uint8>& seed) {
     MG_Config::Ipc.AdoptTier = 0;
-    T0::SetPeerInAnotherProcessForTest(true);
+    MobileGL::MG_Remote::Transport::SetPeerInAnotherProcessForTest(true);
     T0::SetPlatformForTest(&kFakePlatform);
     MG_Pipe::MGPipeSetResourceOps(&g_fakeOps);
     StartControlSession();
@@ -240,7 +240,7 @@ TEST(RemoteClientAdoptT0, KnobZeroOverSharedSegmentsAsksT0AndFallsBackToT2ByName
 TEST(RemoteClientAdoptT0, KnobTwoIsTodaysT2WithNoT0Line) {
     const auto child = RunInChild([] {
         MG_Config::Ipc.AdoptTier = 2;
-        T0::SetPeerInAnotherProcessForTest(true);
+        MobileGL::MG_Remote::Transport::SetPeerInAnotherProcessForTest(true);
         T0::SetPlatformForTest(&kFakePlatform);
         MG_Pipe::MGPipeSetResourceOps(&g_fakeOps);
         StartControlSession();
@@ -269,7 +269,7 @@ TEST(RemoteClientAdoptT0, KnobTwoIsTodaysT2WithNoT0Line) {
 TEST(RemoteClientAdoptT0, AnUnsetKnobFallsBackToT2QuietlyAndCountsIt) {
     const auto child = RunInChild([] {
         MG_Config::Ipc.AdoptTier = MG_Config::kAdoptTierUnset;
-        T0::SetPeerInAnotherProcessForTest(true);
+        MobileGL::MG_Remote::Transport::SetPeerInAnotherProcessForTest(true);
         MG_Pipe::MGPipeSetResourceOps(&g_fakeOps); // a backend WITH the members: the platform decides
         StartControlSession();
         if (!Srv::ServerSessionInstance().AdoptT0Asked()) ::_exit(210); // the Hello asked T0 by default
@@ -311,7 +311,7 @@ TEST(RemoteClientAdoptT0, KnobOneIsRefusedByNameAndAsksT2) {
 TEST(RemoteClientAdoptT0, NoAhardwareBufferOnThisPlatformIsT2AndTwoNamedLines) {
     const auto child = RunInChild([] {
         MG_Config::Ipc.AdoptTier = 0;
-        T0::SetPeerInAnotherProcessForTest(true);
+        MobileGL::MG_Remote::Transport::SetPeerInAnotherProcessForTest(true);
         MG_Pipe::MGPipeSetResourceOps(&g_fakeOps); // a backend WITH the members: the platform decides
         StartControlSession();
         GrantAtFirstBind();

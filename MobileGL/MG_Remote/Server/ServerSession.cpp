@@ -1160,8 +1160,7 @@ namespace MobileGL::MG_Remote::Server {
         // stores' own mappings, donated as monolith donates them, and no AHardwareBuffer, import
         // or POST is involved. A backend that cannot donate leaves the session on T2 - an
         // in-process session never takes the AHardwareBuffer arm below.
-        const Bool inProcess = m_transport != nullptr &&
-            Transport::AdoptT0::PeerIsThisProcess(m_transport->Role() == Transport::TransportRole::InProcess);
+        const Bool inProcess = Transport::PeerIsThisProcess(m_transport);
         if (inProcess) {
             const MG_Pipe::MGPipeResourceOps* ops = MG_Pipe::MGPipeGetResourceOps();
             if (MG_Config::Ipc.AllowAdoptT0 == 0) {

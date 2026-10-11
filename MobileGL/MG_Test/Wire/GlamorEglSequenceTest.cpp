@@ -32,6 +32,9 @@
 #include <MG_Backend/BackendObjects.h>
 #include <MG_Impl/EGLImpl/EGLImpl.h>
 
+#include <fstream>
+#include <iterator>
+
 using namespace MobileGL;
 using namespace P12;
 
@@ -332,6 +335,52 @@ namespace {
         (void)EGL::Terminate(dpy);
     }
 
+    struct InprocReport {
+        Int32 initialized = 0;
+        Int32 current = 0;
+        Int32 dmabufImport = 0;
+        Int32 nativeFence = 0;
+        Int32 externalImage = 0;
+        Int32 allocated = 0;
+        Int32 eglError = 0;
+        char note[128] = {};
+    };
+
+    // An inproc client: its server is this process, so nothing that carries memory between
+    // processes is offered, asked for or allocated.
+    void RunInproc(InprocReport& r) {
+        static int fakeGbmDevice[16] = {};
+        const EGLDisplay dpy = EGL::GetPlatformDisplay(kPlatformGbm, fakeGbmDevice, nullptr);
+        EGLint major = 0, minor = 0;
+        r.initialized = dpy != EGL_NO_DISPLAY && EGL::Initialize(dpy, &major, &minor) == EGL_TRUE ? 1 : 0;
+        if (!r.initialized) return;
+        const char* exts = EGL::QueryString(dpy, EGL_EXTENSIONS);
+        r.dmabufImport = HasToken(exts, "EGL_EXT_image_dma_buf_import") ? 1 : 0;
+        r.nativeFence = HasToken(exts, "EGL_ANDROID_native_fence_sync") ? 1 : 0;
+        (void)EGL::BindAPI(EGL_OPENGL_API);
+        const EGLint core33[] = {EGL_CONTEXT_OPENGL_PROFILE_MASK, EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT,
+                                 EGL_CONTEXT_MAJOR_VERSION, 3, EGL_CONTEXT_MINOR_VERSION, 3, EGL_NONE};
+        const EGLContext ctx = EGL::CreateContext(dpy, EGL_NO_CONFIG_KHR, EGL_NO_CONTEXT, core33);
+        r.current = ctx != EGL_NO_CONTEXT && EGL::MakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, ctx) == EGL_TRUE;
+        if (!r.current) {
+            r.eglError = EGL::GetError();
+            return;
+        }
+        // The GL extension list is where a split client asks the server whether it holds YUV images.
+        r.externalImage = HasGlExtension("GL_OES_EGL_image_external") ? 1 : 0;
+        // Asked anyway (a C-ABI or GLX caller does not look at the extensions first): refused.
+        auto* backend = MG_Backend::pActiveBackendObject.get();
+        MG_Backend::SharedImageExport image;
+        if (backend != nullptr && backend->AllocateSharedImage(64, 32, kXrgb8888, &image)) {
+            r.allocated = 1;
+            if (image.Fd >= 0) ::close(image.Fd);
+            (void)backend->ReleaseSharedImage(image.Id);
+        }
+        (void)EGL::MakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+        (void)EGL::DestroyContext(dpy, ctx);
+        (void)EGL::Terminate(dpy);
+    }
+
     // The supervisor on an abstract unix socket, as the device's is: shared images travel as
     // descriptors on its aux socket, which a TCP endpoint does not have.
     bool LaunchUnixSupervisor(ServerProcess* server) {
@@ -350,8 +399,9 @@ namespace {
     }
 
     // One forked client running `run` against the server, its report back through a pipe.
+    // `server == nullptr` runs the client inproc, its server in its own process.
     template <class Report>
-    Report RunPeer(const ServerProcess& server, const std::string& clientLogBase, void (*run)(Report&)) {
+    Report RunPeer(const ServerProcess* server, const std::string& clientLogBase, void (*run)(Report&)) {
         Report report{};
         int fds[2] = {-1, -1};
         if (::pipe(fds) != 0) return report;
@@ -360,8 +410,8 @@ namespace {
         if (pid == 0) {
             ::close(fds[0]);
             ::setenv("MOBILEGL_LOG_FILE_PATH", clientLogBase.c_str(), 1);
-            ::setenv("MOBILEGL_TRANSPORT", "spawn", 1);
-            ::setenv("MOBILEGL_IPC_CONTROL", server.endpoint.c_str(), 1);
+            ::setenv("MOBILEGL_TRANSPORT", server != nullptr ? "spawn" : "inproc", 1);
+            if (server != nullptr) ::setenv("MOBILEGL_IPC_CONTROL", server->endpoint.c_str(), 1);
             ::setenv("MOBILEGL_BACKEND_TYPE", "DirectGLES", 1);
             ::setenv("MOBILEGL_IPC_SURFACE", "offscreen", 1);
             Report r{};
@@ -398,7 +448,7 @@ TEST(GlamorEglSequence, XwaylandFindsEverythingGlamorNeeds) {
     ASSERT_TRUE(LaunchUnixSupervisor(&server)) << server.Log();
     const std::string clientLog = "/tmp/mgl-glamor-client-" + std::to_string(::getpid()) + ".log";
     Debug::TruncateRoleLogs(clientLog.c_str());
-    const GlamorReport r = RunPeer<GlamorReport>(server, clientLog, RunGlamor);
+    const GlamorReport r = RunPeer<GlamorReport>(&server, clientLog, RunGlamor);
     ASSERT_EQ(r.display, 1) << r.note;
     EXPECT_EQ(r.platformGbmExtension, 1);
     ASSERT_EQ(r.initialized, 1);
@@ -430,7 +480,7 @@ TEST(GlamorEglSequence, ChromesGpuProcessGetsANativeFenceOfItsDmaBufWrites) {
     ASSERT_TRUE(LaunchUnixSupervisor(&server)) << server.Log();
     const std::string clientLog = "/tmp/mgl-chrome-fence-client-" + std::to_string(::getpid()) + ".log";
     Debug::TruncateRoleLogs(clientLog.c_str());
-    const ChromeFenceReport r = RunPeer<ChromeFenceReport>(server, clientLog, RunChromeGpuFence);
+    const ChromeFenceReport r = RunPeer<ChromeFenceReport>(&server, clientLog, RunChromeGpuFence);
     ASSERT_EQ(r.initialized, 1) << r.note;
     // ANGLE offers Chrome fences only with all three, and loads the KHR names.
     EXPECT_EQ(r.fenceSyncExtension, 1);
@@ -456,6 +506,33 @@ TEST(GlamorEglSequence, ChromesGpuProcessGetsANativeFenceOfItsDmaBufWrites) {
         // has no descriptor: the copy is refused by name, not answered with garbage.
         EXPECT_EQ(r.dupError, EGL_BAD_PARAMETER);
     }
+    std::error_code ec;
+    if (!::testing::Test::HasFailure()) {
+        std::filesystem::remove(Debug::RoleLogPath(clientLog.c_str(), Debug::LogRole::Client), ec);
+        std::filesystem::remove(Debug::RoleLogPath(clientLog.c_str(), Debug::LogRole::Server), ec);
+        std::filesystem::remove(clientLog, ec);
+    }
+}
+
+TEST(GlamorEglSequence, AnInprocClientIsOfferedNoSharedImagesAndAllocatesNone) {
+    PinHeadlessEgl();
+    const std::string clientLog = "/tmp/mgl-inproc-images-" + std::to_string(::getpid()) + ".log";
+    Debug::TruncateRoleLogs(clientLog.c_str());
+    const InprocReport r = RunPeer<InprocReport>(nullptr, clientLog, RunInproc);
+    ASSERT_EQ(r.initialized, 1) << r.note;
+    ASSERT_EQ(r.current, 1) << "error 0x" << std::hex << r.eglError;
+    EXPECT_EQ(r.dmabufImport, 0) << "an inproc display offered dma-buf import";
+    EXPECT_EQ(r.nativeFence, 0) << "an inproc display offered native fences";
+    EXPECT_EQ(r.externalImage, 0) << "an inproc context offered external (YUV) images";
+    EXPECT_EQ(r.allocated, 0) << "an inproc client was given a shared image";
+    std::string log;
+    for (const auto role : {Debug::LogRole::Client, Debug::LogRole::Server}) {
+        std::ifstream in(Debug::RoleLogPath(clientLog.c_str(), role));
+        log += std::string(std::istreambuf_iterator<char>(in), {});
+    }
+    EXPECT_EQ(log.find("Shared images: the server"), std::string::npos) << "the YUV probe allocated an image";
+    EXPECT_NE(log.find("shared-image allocation was refused: the client is this process"), std::string::npos)
+        << "the server did not refuse the allocation by name";
     std::error_code ec;
     if (!::testing::Test::HasFailure()) {
         std::filesystem::remove(Debug::RoleLogPath(clientLog.c_str(), Debug::LogRole::Client), ec);
