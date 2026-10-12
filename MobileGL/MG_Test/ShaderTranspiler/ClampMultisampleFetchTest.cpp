@@ -381,3 +381,67 @@ TEST_F(ClampMultisampleFetchTest, ClampsAColorSampleWithAMinimum) {
     ASSERT_EQ(constants.count(minimum->operandIds[1]), 1u) << dis;
     EXPECT_EQ(constants.at(minimum->operandIds[1]), 1u) << dis;
 }
+
+namespace {
+    // KHR-GL4x.texture_stencil8.multisample in miniature: a four-sample STENCIL_INDEX8 texture
+    // read through a usampler2DMS with literal sample indices. Beside it, the same sampler
+    // reached through a function parameter and a signed integer sampler - neither of which the
+    // runtime bound can name, so both must keep the static integer clamp.
+    const char* const kStencilMultisampleFetch = R"(#version 410 core
+uniform usampler2DMS stencilTex;
+uniform isampler2DMS signedMs;
+out vec4 fragColor;
+uint fetchThrough(usampler2DMS s, int i) { return texelFetch(s, ivec2(0), i).r; }
+void main() {
+    uint direct = texelFetch(stencilTex, ivec2(0), 3).r;
+    uint viaParameter = fetchThrough(stencilTex, 3);
+    int signedValue = texelFetch(signedMs, ivec2(0), 3).r;
+    fragColor = vec4(float(direct), float(viaParameter), float(signedValue), 1.0);
+}
+)";
+
+    // How many Sample operands of the module's multisample fetches are the constant `value`.
+    SizeT CountSampleOperandsEqualTo(const Vector<Uint32>& spirv, Uint32 value) {
+        const std::map<Uint32, Uint32> constants = CollectScalarConstants(spirv);
+        SizeT count = 0;
+        for (const ImageFetch& fetch : CollectImageFetches(spirv)) {
+            if ((fetch.mask & static_cast<Uint32>(spv::ImageOperandsMask::Sample)) == 0u) continue;
+            const auto constant = constants.find(fetch.maskOperandIds.back());
+            if (constant != constants.end() && constant->second == value) ++count;
+        }
+        return count;
+    }
+} // namespace
+
+// Integer colour squeezed to one sample but depth/stencil at four (Adreno): a usampler2DMS fetch
+// straight from its uniform is handed to the runtime bound and keeps sample 3 - a stencil texture
+// really has it - while the fetch through a parameter and the signed one still read sample 0.
+TEST_F(ClampMultisampleFetchTest, DefersADirectUnsignedFetchToTheRuntimeBound) {
+    const Vector<Uint32> input = CompileFragment(kStencilMultisampleFetch);
+    ASSERT_FALSE(input.empty());
+
+    Vector<Uint32> output;
+    ASSERT_TRUE(ShaderCompiler::ClampMultisampleFetchesForEssl(
+        input, output, /*maxColorSamples=*/4, /*maxIntegerSamples=*/1, /*maxDepthSamples=*/4,
+        kAdvertisedMaxSamples, true, /*deferDirectUnsignedFetches=*/true));
+    ASSERT_FALSE(output.empty());
+    const String dis = Disassemble(output);
+    ASSERT_TRUE(Validates(output)) << dis;
+    EXPECT_EQ(CountSampleOperandsEqualTo(output, 3u), 1u) << dis;
+    EXPECT_EQ(CountSampleOperandsEqualTo(output, 0u), 2u) << dis;
+}
+
+// Without the runtime bound nothing is deferred: the pre-existing static clamp, all three to 0.
+TEST_F(ClampMultisampleFetchTest, WithoutTheRuntimeBoundEveryIntegerFetchKeepsTheStaticClamp) {
+    const Vector<Uint32> input = CompileFragment(kStencilMultisampleFetch);
+    ASSERT_FALSE(input.empty());
+
+    Vector<Uint32> output;
+    ASSERT_TRUE(ShaderCompiler::ClampMultisampleFetchesForEssl(
+        input, output, /*maxColorSamples=*/4, /*maxIntegerSamples=*/1, /*maxDepthSamples=*/4,
+        kAdvertisedMaxSamples, true));
+    ASSERT_FALSE(output.empty());
+    const String dis = Disassemble(output);
+    EXPECT_EQ(CountSampleOperandsEqualTo(output, 3u), 0u) << dis;
+    EXPECT_EQ(CountSampleOperandsEqualTo(output, 0u), 3u) << dis;
+}

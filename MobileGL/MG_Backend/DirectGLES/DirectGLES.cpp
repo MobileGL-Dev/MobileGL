@@ -5757,6 +5757,19 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                 }
                             }
 
+                            // The last sample a usampler2DMS fetch may name, from the texture
+                            // actually bound: a stencil texture's real count is not an integer
+                            // colour texture's. Keyed like the bias above - a texture's storage or
+                            // a unit's binding moving is what invalidates this pass's memo.
+                            if (samplerBinding.msSampleMaxLocation >= 0) {
+                                const Int sampleMax =
+                                    std::max(PipeTextureBackendSampleCountForHandle(view.Texture), 1) - 1;
+                                if (sampleMax != samplerBinding.lastAssignedMsSampleMax) {
+                                    g_GLESFuncs.glUniform1i(samplerBinding.msSampleMaxLocation, sampleMax);
+                                    samplerBinding.lastAssignedMsSampleMax = sampleMax;
+                                }
+                            }
+
                             const auto* viewRecord = PipeSamplerViewRecordForHandle(view.View);
                             const Bool sampledIsTexture2D =
                                 viewRecord != nullptr &&

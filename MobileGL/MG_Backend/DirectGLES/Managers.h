@@ -644,6 +644,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // every caller treats as "decline", never as a default.
     MobileGL::TextureTarget PipeTextureTargetForHandle(MG_Pipe::MGPipeHandle res);
 
+    // The sample count the backend really allocates for the multisample texture this handle
+    // names - the requested count clamped by ClampSamplesToBackendSupport, exactly as the
+    // storage allocation clamps it - or 0 when the handle names no live multisample texture.
+    // What a usampler2DMS fetch's runtime bound (ClampUnsignedMultisampleFetches) is set from.
+    Int PipeTextureBackendSampleCountForHandle(MG_Pipe::MGPipeHandle res);
+
     // The pending-upload entry the applier accumulated for this (uploadTarget, level) of this
     // texture record, or null (D-D5). SERVER-SIDE STATE, and that is the whole point: the
     // client clears its own dirty flags at EMISSION for the levels the applier accepted, while
@@ -2774,6 +2780,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // so an unbiased shader issues no per-draw glUniform1f at all.
                 Int lodBiasLocation = -1;
                 Float lastAssignedLodBias = 0.0f;
+                // Location of this sampler's runtime sample-index bound
+                // (PrgramImpl::ClampUnsignedMultisampleFetches), -1 when the shader has none;
+                // lastAssignedMsSampleMax mirrors the value the program holds (0 after link).
+                Int msSampleMaxLocation = -1;
+                Int lastAssignedMsSampleMax = 0;
             };
 
             // Memo of the whole per-draw sampler-uniform pass (glUniform1i unit

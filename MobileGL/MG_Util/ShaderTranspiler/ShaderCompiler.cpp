@@ -1461,11 +1461,13 @@ namespace MobileGL {
                                                                 const Int32 maxIntegerSamples,
                                                                 const Int32 maxDepthSamples,
                                                                 const Int32 advertisedMaxSamples,
-                                                                const bool enableSpirvValidation) {
+                                                                const bool enableSpirvValidation,
+                                                                const bool deferDirectUnsignedFetches) {
                 using namespace spvtools;
                 Optimizer optimizer(SPV_ENV_VULKAN_1_1);
                 optimizer.RegisterPass(ClampMultisampleFetchPass::CreateClampMultisampleFetchPass(
-                    maxColorSamples, maxIntegerSamples, maxDepthSamples, advertisedMaxSamples));
+                    maxColorSamples, maxIntegerSamples, maxDepthSamples, advertisedMaxSamples,
+                    deferDirectUnsignedFetches));
 
                 return RunOptimizerChecked("ClampMultisampleFetchesForEssl", optimizer, inputBinary,
                                            outputBinary, true, enableSpirvValidation);

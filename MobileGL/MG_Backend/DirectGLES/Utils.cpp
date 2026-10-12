@@ -2057,6 +2057,74 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return result;
         }
 
+        String ClampUnsignedMultisampleFetches(const String& glslCode) {
+#ifdef TRACY_ENABLE
+            ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
+#endif
+            if (glslCode.find("usampler2DMS") == String::npos || glslCode.find("texelFetch") == String::npos) {
+                return glslCode;
+            }
+
+            // The non-arrayed unsigned multisample samplers - the ones ClampMultisampleFetchPass
+            // deferred, and the only ones a lookup can name directly as its first argument.
+            static const std::regex declRegex(
+                R"(uniform\s+(?:(?:highp|mediump|lowp)\s+)?usampler2DMS(?:Array)?\s+([A-Za-z_][A-Za-z0-9_]*)\s*;)");
+            UnorderedMap<String, String> clampNames; // sampler name -> sample-max uniform name
+            Vector<std::pair<SizeT, String>> declEnds; // where each declaration ends, and its uniform
+            for (std::sregex_iterator it(glslCode.begin(), glslCode.end(), declRegex), end; it != end; ++it) {
+                const String name = (*it)[1].str();
+                const String clampName = String(MS_SAMPLE_MAX_UNIFORM_PREFIX) + name;
+                if (clampNames.emplace(name, clampName).second) {
+                    declEnds.emplace_back(static_cast<SizeT>(it->position(0) + it->length(0)), clampName);
+                }
+            }
+            if (clampNames.empty()) {
+                return glslCode;
+            }
+
+            // Right-to-left, so an earlier call's offsets survive the insertions behind it.
+            constexpr const char* kFetch = "texelFetch";
+            const SizeT fetchLength = std::strlen(kFetch);
+            String result = glslCode;
+            Vector<String> usedClamps;
+            for (SizeT scan = result.rfind(kFetch); scan != String::npos;
+                 scan = scan == 0 ? String::npos : result.rfind(kFetch, scan - 1)) {
+                if (scan > 0 && IsIdentifierChar(result[scan - 1])) continue;
+                const SizeT openParen = result.find_first_not_of(" \t", scan + fetchLength);
+                if (openParen == String::npos || result[openParen] != '(') continue; // texelFetchOffset etc.
+                const Vector<SizeT> marks = SplitCallArguments(result, openParen);
+                if (marks.size() != 3) continue; // (sampler, coord, sample) is the multisample form
+                const SizeT firstStart = result.find_first_not_of(" \t", openParen + 1);
+                SizeT firstEnd = marks[0];
+                while (firstEnd > firstStart && (result[firstEnd - 1] == ' ' || result[firstEnd - 1] == '\t')) {
+                    --firstEnd;
+                }
+                if (firstStart == String::npos || firstEnd <= firstStart) continue;
+                const auto found = clampNames.find(result.substr(firstStart, firstEnd - firstStart));
+                if (found == clampNames.end()) continue;
+                const SizeT sampleStart = result.find_first_not_of(" \t\n", marks[1] + 1);
+                if (sampleStart == String::npos || sampleStart >= marks[2]) continue;
+                const SizeT sampleEnd = marks[2];
+                result.insert(sampleEnd, String(", ") + found->second + ")");
+                result.insert(sampleStart, "min(");
+                if (std::find(usedClamps.begin(), usedClamps.end(), found->second) == usedClamps.end()) {
+                    usedClamps.push_back(found->second);
+                }
+            }
+            if (usedClamps.empty()) {
+                return glslCode;
+            }
+
+            // Declared right after the sampler they bound, back to front so the recorded
+            // offsets (taken from the unedited text) stay valid: every fetch sits after the
+            // declarations in the emitted ESSL, so no insertion above has moved them.
+            for (auto it = declEnds.rbegin(); it != declEnds.rend(); ++it) {
+                if (std::find(usedClamps.begin(), usedClamps.end(), it->second) == usedClamps.end()) continue;
+                result.insert(it->first, String("\nuniform highp int ") + it->second + ";");
+            }
+            return result;
+        }
+
     } // namespace PrgramImpl
 
     namespace Utils {

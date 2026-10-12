@@ -21,6 +21,7 @@
 #include "source/util/make_unique.h"
 #include "source/util/string_utils.h"
 
+#include <algorithm>
 #include <memory>
 #include <vector>
 
@@ -118,6 +119,39 @@ namespace MobileGL {
                         return SampleCategory::Depth;
                     }
                     return SampleCategory::Color;
+                }
+
+                // An unsigned integer sampled type: the usampler* family, which is what reads the
+                // stencil aspect of a multisample texture as well as integer colour.
+                bool HasUnsignedIntegerSampledType(IRContext* context, const Instruction* imageType) {
+                    const Instruction* sampledType =
+                        context->get_def_use_mgr()->GetDef(imageType->GetSingleWordInOperand(kSampledTypeOperand));
+                    return sampledType != nullptr && sampledType->opcode() == spv::Op::OpTypeInt &&
+                           sampledType->NumInOperands() > 1 && sampledType->GetSingleWordInOperand(1) == 0u;
+                }
+
+                // Whether the image an operation reads is loaded straight from a non-arrayed
+                // UniformConstant global - through at most an OpImage of the loaded sampled image
+                // - i.e. whether the ESSL will name that global's uniform as the lookup's first
+                // argument.
+                bool ReadsDirectlyFromGlobal(IRContext* context, uint32_t imageId) {
+                    auto* defUseMgr = context->get_def_use_mgr();
+                    const Instruction* object = defUseMgr->GetDef(imageId);
+                    if (object != nullptr && object->opcode() == spv::Op::OpImage) {
+                        object = defUseMgr->GetDef(object->GetSingleWordInOperand(0));
+                    }
+                    if (object == nullptr || object->opcode() != spv::Op::OpLoad) return false;
+                    const Instruction* variable = defUseMgr->GetDef(object->GetSingleWordInOperand(0));
+                    if (variable == nullptr || variable->opcode() != spv::Op::OpVariable ||
+                        variable->GetSingleWordInOperand(0) !=
+                            static_cast<uint32_t>(spv::StorageClass::UniformConstant)) {
+                        return false;
+                    }
+                    const Instruction* pointerType = defUseMgr->GetDef(variable->type_id());
+                    if (pointerType == nullptr || pointerType->opcode() != spv::Op::OpTypePointer) return false;
+                    const Instruction* pointee = defUseMgr->GetDef(pointerType->GetSingleWordInOperand(1));
+                    return pointee != nullptr && (pointee->opcode() == spv::Op::OpTypeImage ||
+                                                  pointee->opcode() == spv::Op::OpTypeSampledImage);
                 }
 
                 // Where the Sample id sits among an image operation's in-operands, or false when
@@ -261,6 +295,15 @@ namespace MobileGL {
                             switch (CategoryOf(irContext, imageType)) {
                             case SampleCategory::Integer:
                                 categoryMaxSamples = m_maxIntegerSamples;
+                                // Taken over at runtime by the bound texture's real count (see
+                                // the class comment); here only the larger static ceiling, so a
+                                // stencil texture's samples above the integer one stay readable.
+                                if (m_deferDirectUnsignedFetches &&
+                                    HasUnsignedIntegerSampledType(irContext, imageType) &&
+                                    ReadsDirectlyFromGlobal(irContext,
+                                                            instruction.GetSingleWordInOperand(kImageOperand))) {
+                                    categoryMaxSamples = std::max(m_maxIntegerSamples, m_maxDepthSamples);
+                                }
                                 break;
                             case SampleCategory::Depth:
                                 categoryMaxSamples = m_maxDepthSamples;
@@ -369,9 +412,10 @@ namespace MobileGL {
 
             spvtools::Optimizer::PassToken ClampMultisampleFetchPass::CreateClampMultisampleFetchPass(
                 const Int32 maxColorSamples, const Int32 maxIntegerSamples, const Int32 maxDepthSamples,
-                const Int32 advertisedMaxSamples) {
+                const Int32 advertisedMaxSamples, const bool deferDirectUnsignedFetches) {
                 return spvtools::Optimizer::PassToken(spvtools::MakeUnique<ClampMultisampleFetchPass>(
-                    maxColorSamples, maxIntegerSamples, maxDepthSamples, advertisedMaxSamples));
+                    maxColorSamples, maxIntegerSamples, maxDepthSamples, advertisedMaxSamples,
+                    deferDirectUnsignedFetches));
             }
         } // namespace ShaderTranspiler
     } // namespace MG_Util

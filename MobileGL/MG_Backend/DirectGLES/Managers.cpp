@@ -146,6 +146,20 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // kFrontendMaxSamples, which is the source of truth - keep the two in step.
     constexpr Int kFrontendMaxSamples = 4;
 
+    // Whether a usampler2DMS fetch's sample index is bounded at RUNTIME by the bound texture's
+    // real sample count rather than at compile time by the integer ceiling: armed when that
+    // ceiling is squeezed below what MobileGL advertises AND the depth ceiling - which the
+    // stencil aspect of a multisample depth/stencil texture is allocated under, and which a
+    // usampler reads too - exceeds it, so no one static bound is right for both. Read on both
+    // sides of the translation-memo boundary (the SPIR-V pass defers, the ESSL pass takes
+    // over); it is a function of three values the memo key already carries, so the two halves
+    // cannot disagree about one program.
+    static Bool ClampsUnsignedMultisampleFetchesAtRuntime() {
+        const Int advertisedMaxSamples = std::max(g_GLESCapabilities.MaxSamples, kFrontendMaxSamples);
+        return g_GLESCapabilities.MaxIntegerSamples < advertisedMaxSamples &&
+               g_GLESCapabilities.MaxDepthTextureSamples > g_GLESCapabilities.MaxIntegerSamples;
+    }
+
     static Uint ResolveBackendEsslVersion() {
         const auto& version = g_GLESCapabilities.GLESVersion;
         if (version.Major > 3 || (version.Major == 3 && version.Minor >= 2)) {
@@ -4500,6 +4514,21 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
         }
         return MobileGL::TextureTarget::Unknown;
+    }
+
+    Int PipeTextureBackendSampleCountForHandle(MG_Pipe::MGPipeHandle res) {
+        const auto* record = PipeTextureRecordForHandle(res);
+        if (record == nullptr) return 0;
+        const MobileGL::TextureTarget target = PipeTextureTargetForHandle(res);
+        if (!TextureImpl::IsMultisampleTextureTarget(target)) return 0;
+        // The same three inputs the storage allocation clamps with (SyncToBackend's multisample
+        // arm): the record's format and requested count, and the format's ES transfer format,
+        // which only decides the integer-vs-colour fallback when the probe has no answer.
+        const auto internalFormat = static_cast<TextureInternalFormat>(record->Desc.InternalFormat);
+        GLenum glInternalFormat = 0, glFormat = 0, glType = 0;
+        TextureImpl::GenerateTextureFormatInfo(internalFormat, &glInternalFormat, &glFormat, &glType, target);
+        return ClampSamplesToBackendSupport(GetFormatCapabilityTargetIndex(target), internalFormat, glFormat,
+                                            static_cast<Int>(record->Desc.Samples));
     }
 
     const MG_Pipe::MGPipeSamplerCsoRecord* PipeSamplerCsoRecordForHandle(MG_Pipe::MGPipeHandle cso) {
@@ -11694,7 +11723,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     g_GLESCapabilities.MaxColorTextureSamples,
                     g_GLESCapabilities.MaxIntegerSamples,
                     g_GLESCapabilities.MaxDepthTextureSamples, advertisedMaxSamples,
-                    enableSpirvValidation) &&
+                    enableSpirvValidation, ClampsUnsignedMultisampleFetchesAtRuntime()) &&
                 !clampedSampleSpirv.empty()) {
                 effectiveSpirv = &clampedSampleSpirv;
             }
@@ -12915,6 +12944,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 source = ForceFlatIntegerVaryings(source, glShaderType);
                 source = BroadcastLegacyFragColor(std::move(source), glShaderType, m_fragColorBroadcastCount);
                 source = EmulateTextureLodBias(source, ShouldAvoidExplicitLodBiasOnAngleLlvmpipe());
+                if (ClampsUnsignedMultisampleFetchesAtRuntime()) {
+                    source = ClampUnsignedMultisampleFetches(source);
+                }
                 source = EmulateBaseInstanceInVertexShader(std::move(source), glShaderType);
                 source = PromoteDrawParameterGlobalsToUniforms(std::move(source), glShaderType);
                 // The two halves of the gl_ViewportIndex routing emulation, next to the draw-
@@ -13440,6 +13472,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 binding.lodBiasLocation = g_GLESFuncs.glGetUniformLocation(
                     m_backendProgramId, (String(LOD_BIAS_UNIFORM_PREFIX) + elementName).c_str());
                 binding.lastAssignedLodBias = 0.0f;
+                // Present only for the unsigned multisample samplers ClampUnsignedMultisampleFetches
+                // rewrote, named the same way.
+                if (uniformType == GL_UNSIGNED_INT_SAMPLER_2D_MULTISAMPLE ||
+                    uniformType == GL_UNSIGNED_INT_SAMPLER_2D_MULTISAMPLE_ARRAY) {
+                    binding.msSampleMaxLocation = g_GLESFuncs.glGetUniformLocation(
+                        m_backendProgramId, (String(MS_SAMPLE_MAX_UNIFORM_PREFIX) + elementName).c_str());
+                }
+                binding.lastAssignedMsSampleMax = 0;
                 m_samplerUniformBindings.push_back(binding);
             }
         }

@@ -78,14 +78,16 @@ namespace MobileGL {
                 // end of a one-sample allocation. Pass the backend-real per-category ceilings and
                 // the advertised maximum (GL_Getter's GetAdvertisedMaxSamples); a category that
                 // already reaches the advertised value is left alone. DirectGLES transpile path
-                // only. See ClampMultisampleFetchPass.
+                // only. See ClampMultisampleFetchPass, which also says what
+                // deferDirectUnsignedFetches hands over to the caller's runtime clamp.
                 static bool ClampMultisampleFetchesForEssl(const Vector<Uint32>& inputBinary,
                                                            Vector<uint32_t>& outputBinary,
                                                            Int32 maxColorSamples,
                                                            Int32 maxIntegerSamples,
                                                            Int32 maxDepthSamples,
                                                            Int32 advertisedMaxSamples,
-                                                           bool enableSpirvValidation = false);
+                                                           bool enableSpirvValidation = false,
+                                                           bool deferDirectUnsignedFetches = false);
                 // Whether the module declares any multisampled image type, i.e. whether the pass
                 // above has anything to do. The gate that keeps every other stage off an
                 // optimizer round trip it does not need.

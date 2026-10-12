@@ -25,6 +25,7 @@
 using namespace MobileGL;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::BakeImageFormatQualifiers;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::BuildPassthroughTessControlEssl;
+using MobileGL::MG_Backend::DirectGLES::PrgramImpl::ClampUnsignedMultisampleFetches;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::ExtractPerVertexBlockMembers;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::ForceFlatIntegerVaryings;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::IMAGE_ARRAY_ELEMENT_PREFIX;
@@ -1762,4 +1763,88 @@ void main() { gl_Position = gl_in[0].gl_Position; EmitVertex(); }
               readsPointSize);
     EXPECT_EQ(RedeclareClipCullDistanceInputsInPerVertexBlock(readsPointSize, GL_VERTEX_SHADER, producer),
               readsPointSize);
+}
+
+// The runtime half of the deferred usampler2DMS clamp: the sample argument of every fetch that
+// names an unsigned multisample uniform is bounded by that sampler's own uniform, declared right
+// after it. A float multisample sampler and a non-multisample one are none of its business.
+TEST(ClampUnsignedMultisampleFetchesTest, BoundsTheSampleOfEveryUnsignedMultisampleFetch) {
+    const String essl = "#version 320 es\n"
+                        "precision highp float;\n"
+                        "layout(binding = 0) uniform highp usampler2DMS stencilTex;\n"
+                        "uniform highp sampler2DMS colorMs;\n"
+                        "uniform highp usampler2D plain;\n"
+                        "layout(location = 0) out highp vec4 color;\n"
+                        "void main() {\n"
+                        "    uint a = texelFetch(stencilTex, ivec2(0), 3).x;\n"
+                        "    uint b = texelFetch(stencilTex, ivec2(0), int(gl_FragCoord.x)).x;\n"
+                        "    vec4 c = texelFetch(colorMs, ivec2(0), 3);\n"
+                        "    uint d = texelFetch(plain, ivec2(0), 0).x;\n"
+                        "    color = vec4(float(a), float(b), c.x, float(d));\n"
+                        "}\n";
+    const String out = ClampUnsignedMultisampleFetches(essl);
+    EXPECT_TRUE(Contains(out, "texelFetch(stencilTex, ivec2(0), min(3, mg_msSampleMax_stencilTex))")) << out;
+    EXPECT_TRUE(Contains(out, "texelFetch(stencilTex, ivec2(0), min(int(gl_FragCoord.x), mg_msSampleMax_stencilTex))"))
+        << out;
+    EXPECT_TRUE(Contains(out, "uniform highp usampler2DMS stencilTex;\nuniform highp int mg_msSampleMax_stencilTex;"))
+        << out;
+    EXPECT_EQ(CountOf(out, "uniform highp int mg_msSampleMax_"), 1u) << out;
+    EXPECT_EQ(CountOf(out, "min("), 2u) << out;
+
+    const String untouched = "#version 320 es\nuniform highp sampler2DMS colorMs;\n"
+                             "void main() { highp vec4 c = texelFetch(colorMs, ivec2(0), 3); }\n";
+    EXPECT_EQ(ClampUnsignedMultisampleFetches(untouched), untouched);
+}
+
+// End to end, the way the program build runs it: the SPIR-V pass defers the direct usampler2DMS
+// fetches of KHR-GL4x.texture_stencil8.multisample's checker, SPIRV-Cross prints them with their
+// literal samples intact, and the text pass bounds each one by the runtime uniform.
+TEST(ClampUnsignedMultisampleFetchesTest, BoundsTheStencilCheckerAfterTheDeferredSpirvClamp) {
+    using namespace MG_Util::ShaderTranspiler;
+    MobileGL::Initialize();
+    const char* vertexSource = R"(#version 330 core
+void main() { gl_Position = vec4(0.0, 0.0, 0.0, 1.0); }
+)";
+    const char* fragmentSource = R"(#version 330 core
+uniform usampler2DMS stencilTex;
+out vec4 color;
+void main() {
+    uint s0 = texelFetch(stencilTex, ivec2(0), 0).r;
+    uint s1 = texelFetch(stencilTex, ivec2(0), 1).r;
+    uint s2 = texelFetch(stencilTex, ivec2(0), 2).r;
+    uint s3 = texelFetch(stencilTex, ivec2(0), 3).r;
+    color = vec4(float(s0), float(s1), float(s2), float(s3)) / 255.0;
+}
+)";
+    Vector<SharedPtr<glslang::TShader>> shaders;
+    const Vector<Pair<GLenum, const char*>> stages{{GL_VERTEX_SHADER, vertexSource},
+                                                   {GL_FRAGMENT_SHADER, fragmentSource}};
+    for (const auto& [stage, text] : stages) {
+        ShaderAttrib attrib{.shaderType = stage, .sourceStr = text};
+        auto compiled = ShaderCompiler::CompileShader(attrib);
+        ASSERT_TRUE(compiled) << compiled.error().log;
+        shaders.push_back(compiled.value());
+    }
+    ProgramAttrib programAttrib{.shaders = shaders};
+    auto program = ShaderCompiler::LinkProgram(programAttrib);
+    ASSERT_TRUE(program) << program.error().log;
+    ProgramBinaryAttrib binaryAttrib{.shaderTypes = {GL_VERTEX_SHADER, GL_FRAGMENT_SHADER},
+                                     .program = *program.value()};
+    auto modules = ShaderCompiler::GetSpirvBinaryFromProgram(binaryAttrib);
+    ASSERT_TRUE(modules) << modules.error().log;
+    ASSERT_EQ(modules.value().size(), 2u);
+
+    Vector<uint32_t> deferred;
+    ASSERT_TRUE(ShaderCompiler::ClampMultisampleFetchesForEssl(modules.value()[1], deferred, 4, 1, 4, 4, true,
+                                                               /*deferDirectUnsignedFetches=*/true));
+    const Vector<uint32_t>& fragmentModule = deferred.empty() ? modules.value()[1] : deferred;
+    SpvcSession session(fragmentModule, SessionUsageBit::Transpile);
+    auto essl = ShaderCompiler::DecompileShader(session);
+    ASSERT_TRUE(essl) << essl.error().log;
+
+    const String out = ClampUnsignedMultisampleFetches(essl.value());
+    for (Int sample = 1; sample <= 3; ++sample) {
+        EXPECT_TRUE(Contains(out, "min(" + std::to_string(sample) + ", mg_msSampleMax_stencilTex)")) << out;
+    }
+    EXPECT_EQ(CountOf(out, "uniform highp int mg_msSampleMax_stencilTex;"), 1u) << out;
 }

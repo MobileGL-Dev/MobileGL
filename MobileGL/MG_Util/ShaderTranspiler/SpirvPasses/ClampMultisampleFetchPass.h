@@ -51,6 +51,20 @@ namespace MobileGL {
             // image and everything else falls to the colour limit - which is the one a
             // mis-classified image would want anyway.
             //
+            // An UNSIGNED integer image is the one category whose static ceiling can be wrong
+            // in both directions: a usampler2DMS reads integer colour formats AND the stencil
+            // aspect of a multisample STENCIL_INDEX8 / depth-stencil texture, and the backend
+            // allocates the latter under the DEPTH ceiling (Adreno: 4 samples where integer
+            // colour gets 1). Clamping such a fetch to the integer ceiling reads sample 0 for
+            // every index of a four-sample stencil texture. With deferDirectUnsignedFetches the
+            // caller takes those fetches over at runtime - a per-sampler uniform holding the
+            // bound texture's real last sample index (DirectGLES ClampUnsignedMultisampleFetches)
+            // - and this pass only bounds them by the larger of the two ceilings. "Direct" is a
+            // fetch whose image is loaded straight from a non-arrayed global, which is exactly
+            // what reaches the ESSL as `texelFetch(<uniform name>, ...)` for the text pass to
+            // find; a sampler reached through a function parameter or an array keeps the
+            // integer clamp.
+            //
             // DirectGLES transpile path only. DirectVulkan allocates the sample count it was
             // asked for and must see the module unchanged.
             class ClampMultisampleFetchPass : public spvtools::opt::Pass {
@@ -59,11 +73,13 @@ namespace MobileGL {
                 // advertises (GL_Getter's GetAdvertisedMaxSamples). A category whose real ceiling
                 // already reaches the advertised one is left completely alone.
                 ClampMultisampleFetchPass(Int32 maxColorSamples, Int32 maxIntegerSamples,
-                                          Int32 maxDepthSamples, Int32 advertisedMaxSamples)
+                                          Int32 maxDepthSamples, Int32 advertisedMaxSamples,
+                                          bool deferDirectUnsignedFetches = false)
                     : m_maxColorSamples(maxColorSamples),
                       m_maxIntegerSamples(maxIntegerSamples),
                       m_maxDepthSamples(maxDepthSamples),
-                      m_advertisedMaxSamples(advertisedMaxSamples) {}
+                      m_advertisedMaxSamples(advertisedMaxSamples),
+                      m_deferDirectUnsignedFetches(deferDirectUnsignedFetches) {}
 
                 const char* name() const override { return "clamp-multisample-fetch"; }
                 Status Process() override;
@@ -80,13 +96,14 @@ namespace MobileGL {
 
                 static spvtools::Optimizer::PassToken CreateClampMultisampleFetchPass(
                     Int32 maxColorSamples, Int32 maxIntegerSamples, Int32 maxDepthSamples,
-                    Int32 advertisedMaxSamples);
+                    Int32 advertisedMaxSamples, bool deferDirectUnsignedFetches = false);
 
             private:
                 Int32 m_maxColorSamples;
                 Int32 m_maxIntegerSamples;
                 Int32 m_maxDepthSamples;
                 Int32 m_advertisedMaxSamples;
+                bool m_deferDirectUnsignedFetches;
             };
         } // namespace ShaderTranspiler
     } // namespace MG_Util

@@ -576,6 +576,21 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // Off by default and only ever set on ANGLE + llvmpipe, where injecting the uniform
         // into a constant LOD crashes the driver (MOBILEGL_ESPRYT_AVOID_EXPLICIT_LOD_BIAS).
         String EmulateTextureLodBias(const String& glslCode, Bool avoidExplicitLodBias = false);
+        // Prefix of the per-sampler int uniform that carries the bound multisample texture's
+        // last real sample index into the shader (see ClampUnsignedMultisampleFetches); the
+        // suffix is the sampler's own name.
+        constexpr const char* MS_SAMPLE_MAX_UNIFORM_PREFIX = "mg_msSampleMax_";
+        // The runtime half of ClampMultisampleFetchPass's deferDirectUnsignedFetches. A
+        // usampler2DMS[Array] reads integer colour textures, which the backend may allocate with
+        // fewer samples than MobileGL advertises, AND the stencil aspect of multisample
+        // depth/stencil textures, which it allocates under the (larger) depth ceiling - so no
+        // single compile-time bound is right for both. Declares one
+        // `uniform highp int mg_msSampleMax_<sampler>;` per non-arrayed unsigned multisample
+        // sampler and wraps the sample argument of every texelFetch that names it in
+        // min(sample, that uniform). Draws push the bound texture's real sample count - 1 into
+        // it (0, the program's initial value, when nothing multisampled is bound). Returns the
+        // source unchanged when there is nothing to rewrite.
+        String ClampUnsignedMultisampleFetches(const String& glslCode);
     } // namespace PrgramImpl
 
     namespace Utils {
