@@ -593,64 +593,16 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     namespace {
-        // Extensions this library implements itself, appended after the backend's own list (the
-        // server's, under split), which cannot know about them:
-        //   * GL_OES_EGL_image binds the EGL side's dma-buf images, which only a backend with
-        //     shared images has (EGLImpl::SharedImagesAvailable);
-        //   * the robustness family - reset notification (glGetGraphicsResetStatus, the contexts'
-        //     EGL reset strategy, GL_CONTEXT_LOST) and the bounded queries (glReadnPixels,
-        //     glGetnUniform*) are this frontend's, whatever the backend. KHR for GL and ES, ARB for
-        //     GL applications that ask for that name, EXT for ES applications that ask for that one.
-        //     Robust buffer ACCESS is a separate promise (GL_CONTEXT_ROBUST_ACCESS) and is not
-        //     implied by any of them.
-        // One list for glGetString and glGetStringi, so the two forms always agree.
         Bool EsIdentityActive();
 
+        // One list for glGetString and glGetStringi, so the two forms always agree.
         const Vector<const char*>& ClientSideExtensions() {
-            // GL_OES_EGL_image_external(_essl3) only where the server samples YUV images: an
-            // external texture is a 2D texture holding the image converted to RGBA, which needs
-            // the server to hold the YUV image in the first place (EGLImpl::SharedImageYuvAvailable).
-            static const auto build = [](Bool images, Bool external, Bool es, Bool esApi) {
-                Vector<const char*> list;
-                if (images) list.push_back("GL_OES_EGL_image");
-                if (images && external) {
-                    list.push_back("GL_OES_EGL_image_external");
-                    list.push_back("GL_OES_EGL_image_external_essl3");
-                }
-                for (const char* name : {"GL_KHR_robustness", "GL_ARB_robustness", "GL_EXT_robustness"})
-                    list.push_back(name);
-                // Under the ES identity (EsIdentityActive) the ES names of what desktop GL has in core:
-                // BGRA textures, render targets and read-backs. GL_BGRA_EXT / GL_BGRA8_EXT as internal
-                // formats are taken as RGBA storage (TextureEnumConverter), the byte order being the
-                // pixel transfer format's, as on desktop GL.
-                if (es) {
-                    list.push_back("GL_EXT_texture_format_BGRA8888");
-                    list.push_back("GL_EXT_read_format_bgra");
-                }
-                // Any context created for the OpenGL ES API, whatever it calls itself: the ES 2.0
-                // names of what desktop GL has in core - RGB8/RGBA8 and DEPTH_COMPONENT24
-                // renderbuffers, and glMapBuffer (exported under its OES names as well).
-                if (esApi) {
-                    list.push_back("GL_OES_rgb8_rgba8");
-                    list.push_back("GL_OES_depth24");
-                    list.push_back("GL_OES_mapbuffer");
-                }
-                return list;
-            };
-            static const Vector<const char*> lists[16] = {
-                build(false, false, false, false), build(false, false, false, true),
-                build(false, false, true, false),  build(false, false, true, true),
-                build(false, true, false, false),  build(false, true, false, true),
-                build(false, true, true, false),   build(false, true, true, true),
-                build(true, false, false, false),  build(true, false, false, true),
-                build(true, false, true, false),   build(true, false, true, true),
-                build(true, true, false, false),   build(true, true, false, true),
-                build(true, true, true, false),    build(true, true, true, true)};
             const Bool images = MG_Impl::EGLImpl::SharedImagesAvailable();
-            const Bool external = images && MG_Impl::EGLImpl::SharedImageYuvAvailable();
             const Bool esApi = MG_State::pEGLContext &&
                                MG_State::pEGLContext->GetCurrentContextClientAPI() == EGL_OPENGL_ES_API;
-            return lists[(images ? 8 : 0) + (external ? 4 : 0) + (EsIdentityActive() ? 2 : 0) + (esApi ? 1 : 0)];
+            const Bool external =
+                images && ClientSideExternalImageExtensionsAllowed() && MG_Impl::EGLImpl::SharedImageYuvAvailable();
+            return ClientSideExtensionList(images, external, EsIdentityActive(), esApi);
         }
 
         // Robust buffer access as GL 4.5 / KHR_robust_buffer_access_behavior define it: the backend
@@ -705,6 +657,71 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
 #endif
     } // namespace
+
+    // Extensions this library implements itself, appended after the backend's own list (the
+    // server's, under split), which cannot know about them:
+    //   * GL_OES_EGL_image binds the EGL side's dma-buf images, which only a backend with
+    //     shared images has (EGLImpl::SharedImagesAvailable);
+    //   * the robustness family - reset notification (glGetGraphicsResetStatus, the contexts'
+    //     EGL reset strategy, GL_CONTEXT_LOST) and the bounded queries (glReadnPixels,
+    //     glGetnUniform*) are this frontend's, whatever the backend. KHR for GL and ES, ARB for
+    //     desktop GL applications that ask for that name, EXT for ES applications that ask for
+    //     that one. Robust buffer ACCESS is a separate promise (GL_CONTEXT_ROBUST_ACCESS) and is
+    //     not implied by any of them.
+    const Vector<const char*>& ClientSideExtensionList(Bool images, Bool external, Bool es, Bool esApi) {
+        // GL_OES_EGL_image_external(_essl3) only where the server samples YUV images: an
+        // external texture is a 2D texture holding the image converted to RGBA, which needs
+        // the server to hold the YUV image in the first place (EGLImpl::SharedImageYuvAvailable).
+        static const auto build = [](Bool images, Bool external, Bool es, Bool esApi) {
+            Vector<const char*> list;
+            if (images) list.push_back("GL_OES_EGL_image");
+            if (images && external) {
+                list.push_back("GL_OES_EGL_image_external");
+                list.push_back("GL_OES_EGL_image_external_essl3");
+            }
+            // An ES context lists no ARB names (KHR-GLES*.exposed_extensions).
+            list.push_back("GL_KHR_robustness");
+            if (!esApi) list.push_back("GL_ARB_robustness");
+            list.push_back("GL_EXT_robustness");
+            // Under the ES identity (EsIdentityActive) the ES names of what desktop GL has in core:
+            // BGRA textures, render targets and read-backs. GL_BGRA_EXT / GL_BGRA8_EXT as internal
+            // formats are taken as RGBA storage (TextureEnumConverter), the byte order being the
+            // pixel transfer format's, as on desktop GL.
+            if (es) {
+                list.push_back("GL_EXT_texture_format_BGRA8888");
+                list.push_back("GL_EXT_read_format_bgra");
+            }
+            // Any context created for the OpenGL ES API, whatever it calls itself: the ES 2.0
+            // names of what desktop GL has in core - RGB8/RGBA8 and DEPTH_COMPONENT24
+            // renderbuffers, and glMapBuffer (exported under its OES names as well).
+            if (esApi) {
+                list.push_back("GL_OES_rgb8_rgba8");
+                list.push_back("GL_OES_depth24");
+                list.push_back("GL_OES_mapbuffer");
+            }
+            return list;
+        };
+        static const Vector<const char*> lists[16] = {
+            build(false, false, false, false), build(false, false, false, true),
+            build(false, false, true, false),  build(false, false, true, true),
+            build(false, true, false, false),  build(false, true, false, true),
+            build(false, true, true, false),   build(false, true, true, true),
+            build(true, false, false, false),  build(true, false, false, true),
+            build(true, false, true, false),   build(true, false, true, true),
+            build(true, true, false, false),   build(true, true, false, true),
+            build(true, true, true, false),    build(true, true, true, true)};
+        return lists[(images ? 8 : 0) + (external ? 4 : 0) + (es ? 2 : 0) + (esApi ? 1 : 0)];
+    }
+
+    // The external-image names are ES extensions (GL_OES_EGL_image_external_essl3 extends ESSL
+    // only), and a desktop context lists no OES name but GL_OES_EGL_image
+    // (KHR-GL40.exposed_extensions). An explicit core-profile context therefore does not list
+    // them; samplerExternalOES itself stays accepted on every context, only the names are gated.
+    Bool ClientSideExternalImageExtensionsAllowed() {
+        const Bool esApi =
+            MG_State::pEGLContext && MG_State::pEGLContext->GetCurrentContextClientAPI() == EGL_OPENGL_ES_API;
+        return esApi || MG_State::IsRelaxedSemanticsActive();
+    }
 
     /* @INSERTION_POINT:FUNCTION_IMPLEMENTATION@ */
     const GLubyte* GetString(GLenum name) {
