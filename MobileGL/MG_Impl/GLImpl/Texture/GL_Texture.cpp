@@ -100,6 +100,26 @@ namespace MobileGL::MG_Impl::GLImpl {
             return true;
         }
 
+        // GL 4.6 core 8.10 gives the multisample-target sampler-state rejection a different error
+        // per entry point: glTexParameter* raises INVALID_ENUM, glTextureParameter* INVALID_OPERATION.
+        // The by-name setters share the bound-target code (directly or through
+        // WithTemporarilyBoundNamedTexture), so they mark the call for its duration instead of
+        // threading a flag through every TexParameter*_State signature.
+        thread_local Bool g_inNamedTextureParameterCall = false;
+
+        class ScopedNamedTextureParameterCall {
+        public:
+            ScopedNamedTextureParameterCall() : m_previous(g_inNamedTextureParameterCall) {
+                g_inNamedTextureParameterCall = true;
+            }
+            ~ScopedNamedTextureParameterCall() { g_inNamedTextureParameterCall = m_previous; }
+            ScopedNamedTextureParameterCall(const ScopedNamedTextureParameterCall&) = delete;
+            ScopedNamedTextureParameterCall& operator=(const ScopedNamedTextureParameterCall&) = delete;
+
+        private:
+            Bool m_previous;
+        };
+
         Bool ValidateMaxAnisotropy(Float maxAnisotropy, const char* caller) {
             if (maxAnisotropy >= 1.0f) return true;
 
@@ -1223,12 +1243,12 @@ namespace MobileGL::MG_Impl::GLImpl {
              pname == GL_TEXTURE_MAX_LOD || pname == GL_TEXTURE_LOD_BIAS || pname == GL_TEXTURE_COMPARE_MODE ||
              pname == GL_TEXTURE_COMPARE_FUNC || pname == GL_TEXTURE_BORDER_COLOR ||
              pname == GL_TEXTURE_MAX_ANISOTROPY_EXT)) {
-            // GL 4.6 core 8.10: a multisample target simply does not ACCEPT these pnames, which is
-            // an INVALID_ENUM - not the INVALID_OPERATION the two BASE_LEVEL gates above report.
-            // Those really are operation errors (the pname is accepted, the value is not), which is
-            // presumably how the wrong class got copied down here.
+            // GL 4.6 core 8.10: through glTexParameter* a multisample target simply does not ACCEPT
+            // these pnames, which is an INVALID_ENUM. The by-name glTextureParameter* spelling of
+            // the same rejection is an INVALID_OPERATION instead (the texture object, not the enum,
+            // is what is wrong there).
             MG_State::pGLContext->RecordError(
-                ErrorCode::InvalidEnum,
+                g_inNamedTextureParameterCall ? ErrorCode::InvalidOperation : ErrorCode::InvalidEnum,
                 MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
                                              "Multisample textures do not accept sampler-state pnames."));
             return false;
@@ -6376,12 +6396,14 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     void TextureParameteri(GLuint texture, GLenum pname, GLint param) {
+        ScopedNamedTextureParameterCall namedCall;
         auto textureObject = GetTextureObjectByName(texture, __func__);
         if (!ValidateNamedTextureParameterTarget(textureObject, __func__)) return;
         TextureParameterObject_State(textureObject, pname, param, __func__);
     }
 
     void TextureParameterf(GLuint texture, GLenum pname, GLfloat param) {
+        ScopedNamedTextureParameterCall namedCall;
         auto textureObject = GetTextureObjectByName(texture, __func__);
         if (!ValidateNamedTextureParameterTarget(textureObject, __func__)) return;
         TextureParameterObjectf_State(textureObject, pname, param, __func__);
@@ -6389,18 +6411,21 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     void TextureParameterfv(GLuint texture, GLenum pname, const GLfloat* params) {
         if (!params) return;
+        ScopedNamedTextureParameterCall namedCall;
         auto textureObject = GetTextureObjectByName(texture, __func__);
         WithTemporarilyBoundNamedTexture(textureObject, [&](GLenum target) { TexParameterfv_State(target, pname, params); });
     }
 
     void TextureParameteriv(GLuint texture, GLenum pname, const GLint* params) {
         if (!params) return;
+        ScopedNamedTextureParameterCall namedCall;
         auto textureObject = GetTextureObjectByName(texture, __func__);
         WithTemporarilyBoundNamedTexture(textureObject, [&](GLenum target) { TexParameteriv_State(target, pname, params); });
     }
 
     void TextureParameterIiv(GLuint texture, GLenum pname, const GLint* params) {
         if (!params) return;
+        ScopedNamedTextureParameterCall namedCall;
         auto textureObject = GetTextureObjectByName(texture, __func__);
         WithTemporarilyBoundNamedTexture(textureObject, [&](GLenum target) {
             TexParameterIiv_State(target, pname, params);
@@ -6409,6 +6434,7 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     void TextureParameterIuiv(GLuint texture, GLenum pname, const GLuint* params) {
         if (!params) return;
+        ScopedNamedTextureParameterCall namedCall;
         auto textureObject = GetTextureObjectByName(texture, __func__);
         WithTemporarilyBoundNamedTexture(textureObject, [&](GLenum target) {
             TexParameterIuiv_State(target, pname, params);

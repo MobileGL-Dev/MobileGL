@@ -945,6 +945,41 @@ TEST_F(TextureTest, MultisampleSamplerStateIsInvalidEnumWhileNonZeroBaseLevelIsI
     DrainPendingGlErrors();
 }
 
+// The by-name spelling of the same rejection is INVALID_OPERATION (GL 4.6 core 8.10), for every
+// glTextureParameter* form - including the vector ones that re-enter the bound-target code - while the
+// bound-target spelling right after it stays INVALID_ENUM.
+TEST_F(TextureTest, NamedMultisampleSamplerStateIsInvalidOperation) {
+    GLuint texture = 0;
+    MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_2D_MULTISAMPLE, 1, &texture);
+    ASSERT_NE(texture, 0u);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    MG_Impl::GLImpl::TextureParameterf(texture, GL_TEXTURE_LOD_BIAS, 1.0f);
+    ExpectSingleGlError(GL_INVALID_OPERATION);
+    MG_Impl::GLImpl::TextureParameteri(texture, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    ExpectSingleGlError(GL_INVALID_OPERATION);
+    const GLfloat lodBias = 1.0f;
+    MG_Impl::GLImpl::TextureParameterfv(texture, GL_TEXTURE_LOD_BIAS, &lodBias);
+    ExpectSingleGlError(GL_INVALID_OPERATION);
+    const GLint wrap = GL_REPEAT;
+    MG_Impl::GLImpl::TextureParameteriv(texture, GL_TEXTURE_WRAP_S, &wrap);
+    ExpectSingleGlError(GL_INVALID_OPERATION);
+    MG_Impl::GLImpl::TextureParameterIiv(texture, GL_TEXTURE_WRAP_T, &wrap);
+    ExpectSingleGlError(GL_INVALID_OPERATION);
+    const GLuint borderColor[4] = {0u, 0u, 0u, 0u};
+    MG_Impl::GLImpl::TextureParameterIuiv(texture, GL_TEXTURE_BORDER_COLOR, borderColor);
+    ExpectSingleGlError(GL_INVALID_OPERATION);
+
+    // The flag must not outlive the by-name call.
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D_MULTISAMPLE, texture);
+    MG_Impl::GLImpl::TexParameterf(GL_TEXTURE_2D_MULTISAMPLE, GL_TEXTURE_LOD_BIAS, 1.0f);
+    ExpectSingleGlError(GL_INVALID_ENUM);
+
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D_MULTISAMPLE, 0);
+    MG_Impl::GLImpl::DeleteTextures(1, &texture);
+    DrainPendingGlErrors();
+}
+
 // The whole (pname x entry-point) matrix, because the sampler getters funnel three spellings through
 // one void* function and used to write a FIXED destination type per pname regardless of which
 // spelling called. That returned the other type's bit pattern: 10497 punned into a GLfloat reads
