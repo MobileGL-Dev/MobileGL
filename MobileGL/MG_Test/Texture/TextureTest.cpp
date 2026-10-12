@@ -1772,6 +1772,43 @@ TEST_F(TextureTest, UnsizedRgbaInfersRgba8ForPacked8888Types) {
               TextureInternalFormat::RGBA8);
 }
 
+TEST_F(TextureTest, UnsizedDepthFormatsAlwaysResolveToSizedStorage) {
+    using MG_Util::ConvertInternalFormatToSized;
+    EXPECT_EQ(ConvertInternalFormatToSized(TextureInternalFormat::DepthComponent, TextureInputFormat::DepthComponent,
+                                           TexturePixelDataType::UnsignedByte),
+              TextureInternalFormat::DepthComponent24);
+    EXPECT_EQ(ConvertInternalFormatToSized(TextureInternalFormat::DepthComponent, TextureInputFormat::DepthStencil,
+                                           TexturePixelDataType::UnsignedInt248),
+              TextureInternalFormat::DepthComponent24);
+    EXPECT_EQ(ConvertInternalFormatToSized(TextureInternalFormat::DepthComponent, TextureInputFormat::DepthStencil,
+                                           TexturePixelDataType::Float32UnsignedInt248Rev),
+              TextureInternalFormat::DepthComponent32F);
+    EXPECT_EQ(ConvertInternalFormatToSized(TextureInternalFormat::DepthComponent, TextureInputFormat::DepthComponent,
+                                           TexturePixelDataType::UnsignedShort),
+              TextureInternalFormat::DepthComponent16);
+    EXPECT_EQ(ConvertInternalFormatToSized(TextureInternalFormat::DepthStencil, TextureInputFormat::DepthComponent,
+                                           TexturePixelDataType::UnsignedByte),
+              TextureInternalFormat::Depth24Stencil8);
+    EXPECT_EQ(ConvertInternalFormatToSized(TextureInternalFormat::DepthStencil, TextureInputFormat::DepthStencil,
+                                           TexturePixelDataType::Float32UnsignedInt248Rev),
+              TextureInternalFormat::Depth32FStencil8);
+
+    GLuint texture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &texture);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, texture);
+    const Uint8 pixels[4] = {0, 85, 170, 255};
+    MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT, 2, 2, 0, GL_DEPTH_COMPONENT, GL_UNSIGNED_BYTE,
+                                pixels);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    GLint internalFormat = 0;
+    GLint depthSize = 0;
+    MG_Impl::GLImpl::GetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_INTERNAL_FORMAT, &internalFormat);
+    MG_Impl::GLImpl::GetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_DEPTH_SIZE, &depthSize);
+    EXPECT_EQ(internalFormat, GL_DEPTH_COMPONENT24);
+    EXPECT_EQ(depthSize, 24);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
 TEST_F(TextureTest, BoundTexImageAndSubImage2DUseInferredRgba8ForPackedBgra8888Rev) {
     GLuint texture = 0;
     MG_Impl::GLImpl::GenTextures(1, &texture);
