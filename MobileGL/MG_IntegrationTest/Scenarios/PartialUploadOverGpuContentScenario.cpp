@@ -29,7 +29,9 @@
 // a write issued after a clear of (or a draw into) the level reached the image FIRST and the
 // earlier clear or draw landed over it: the box read back green. Each order is covered - the
 // clear already recorded, still queued, synced by a draw or by the readback, the reverse order
-// in which the clear must win, and a draw instead of a clear.
+// in which the clear must win, and a draw instead of a clear. One more order is Espryt's: an upload
+// into a texture bound only to an image unit, ahead of a draw that stores over it, has to land
+// before the draw and not at the next readback.
 //
 // The last part is about SCATTER: several boxes written between two syncs, with the GPU's clear in
 // the gaps between them. Everything a backend has to go on is the union box and the storage's
@@ -565,6 +567,51 @@ void main() {
             WriteRgba8BlueBox(t);
             SampleRgba8(t);
             ExpectRgba8(t, true);
+        }
+
+        // A texture bound ONLY to an image unit, rewritten by the client before every draw that
+        // imageStore()s over all of it. Nothing samples or attaches it between the upload and the
+        // draw, so only the draw's image-unit sync can land the upload ahead of the stores; a
+        // skipped one leaves it pending until the readback syncs it, over the stores - the level
+        // reads back red. The first pass is synced by the image bind itself, so it takes several.
+        TEST_F(PartialUploadOverGpuContentScenario, SubImageBeforeAnImageStoreDrawLandsUnderTheStores) {
+            if (!Ready()) return;
+            const GLuint t = NewTexture(GL_TEXTURE_2D);
+            glBindTexture(GL_TEXTURE_2D, t);
+            glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA8, kEdge, kEdge);
+            glBindTexture(GL_TEXTURE_2D, 0);
+            std::string error;
+            const GLuint program = CompileProgram(kVS,
+                                                  "#version 430 core\n"
+                                                  "layout(rgba8, binding = 0) writeonly uniform image2D u_img;\n"
+                                                  "void main() { imageStore(u_img, ivec2(gl_FragCoord.xy), "
+                                                  "vec4(0.0, 1.0, 0.0, 1.0)); }\n",
+                                                  &error);
+            ASSERT_NE(program, 0u) << error;
+            m_programs.push_back(program);
+            ColorFbo target = MakeColorFbo(kEdge, kEdge);
+            glBindImageTexture(0, t, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA8);
+            ASSERT_EQ(FirstGLError(), 0u) << "setup";
+            const auto red = Fill(Rgba8(), kEdge * kEdge, 1.0f, 0.0f, 0.0f);
+            for (int pass = 0; pass < 3; ++pass) {
+                SCOPED_TRACE(::testing::Message() << "pass " << pass);
+                glBindTexture(GL_TEXTURE_2D, t);
+                glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, kEdge, kEdge, GL_RGBA, GL_UNSIGNED_BYTE, red.data());
+                glBindTexture(GL_TEXTURE_2D, 0);
+                BindFbo(target);
+                glUseProgram(program);
+                glBindVertexArray(m_vao);
+                glDrawArrays(GL_TRIANGLES, 0, 3);
+                glBindVertexArray(0);
+                glUseProgram(0);
+                glMemoryBarrier(GL_ALL_BARRIER_BITS);
+                BindDefaultFramebuffer();
+                glViewport(0, 0, Gl().Width(), Gl().Height());
+                ASSERT_EQ(FirstGLError(), 0u) << "draw";
+                ExpectRgba8(t, false);
+            }
+            glBindImageTexture(0, 0, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA8);
+            DestroyColorFbo(target);
         }
 
         // Two boxes in opposite corners: their union box is 7x7, of which the writes are 8 texels.
