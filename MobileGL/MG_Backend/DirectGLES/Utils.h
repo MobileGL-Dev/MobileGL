@@ -386,6 +386,25 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // that redeclares a different shape than its neighbours is an ES link error against a
         // program that has no other problem.
         std::optional<String> ExtractPerVertexBlockMembers(const String& essl, Bool input);
+        // Moves the clip/cull distance OUTPUTS of a vertex, tessellation evaluation or geometry
+        // stage into a redeclared `out gl_PerVertex { ... };` block. SPIRV-Cross sizes the two
+        // arrays with a standalone `out float gl_ClipDistance[N];` - legal desktop GLSL, but an
+        // ES compiler may refuse it outright ("reserved built-in name"), and leaving the
+        // declaration out instead compiles but fails the link on an array-size mismatch against
+        // the fragment stage. A member of the redeclared block is the spelling ESSL accepts.
+        // gl_Position is always a member (every pre-rasterization stage has it), gl_PointSize
+        // only when the stage writes it, so the block never names a built-in the stage would
+        // otherwise not need. A stage-level `invariant gl_Position;` moves onto the member,
+        // because the bare re-qualification of a block member is not something ESSL allows.
+        // Fragment inputs and the control stage (whose block SPIRV-Cross already emits) are
+        // left alone; a stage without the standalone declarations comes back unchanged.
+        String RedeclareClipCullDistancesInPerVertexBlock(String glslCode, GLenum shaderType);
+        // Adds `#extension GL_EXT_clip_cull_distance : require` when `glslCode` names
+        // gl_ClipDistance or gl_CullDistance and does not request it yet. For the synthesized
+        // pass-through control stage, whose gl_in/gl_out member lists are mirrored from stages
+        // that may carry the clip/cull arrays: SPIRV-Cross requests the extension for the stages
+        // it emits, but nothing does for a stage built by hand.
+        String RequestClipCullDistanceExtension(String glslCode);
         // The pass-through tessellation control stage GL 4.6 core 11.2.2 describes: "the input
         // patch is passed through unmodified", the output patch has PATCH_VERTICES vertices, and
         // the levels come from the PATCH_DEFAULT_OUTER_LEVEL / PATCH_DEFAULT_INNER_LEVEL state.

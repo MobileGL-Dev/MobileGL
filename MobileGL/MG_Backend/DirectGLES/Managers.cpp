@@ -12079,6 +12079,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     ? PointSizeExtensionName(g_GLESCapabilities.TessellationPointSizeSupport, /*tessellation=*/true)
                     : nullptr;
             source = RequestPointSizeExtension(Move(source), passthroughPointSizeExtension);
+            // Same for gl_ClipDistance/gl_CullDistance mirrored out of a vertex stage that
+            // writes them: the neighbour could only compile with the extension, so it exists.
+            source = RequestClipCullDistanceExtension(Move(source));
 
             const GLuint backendShaderId = g_GLESFuncs.glCreateShader(GL_TESS_CONTROL_SHADER);
             if (backendShaderId == 0) {
@@ -12635,6 +12638,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 m_atomicCounterGlBindings.insert(m_atomicCounterGlBindings.end(),
                                                  stageAtomicCounterGlBindings.begin(),
                                                  stageAtomicCounterGlBindings.end());
+
+                // SPIRV-Cross sizes written clip/cull distances with a standalone
+                // `out float gl_ClipDistance[N];`, which an ES compiler may refuse as a reserved
+                // name and so lose the whole program. Redeclared as gl_PerVertex members instead.
+                // BEFORE the gl_PointSize extension probe below (the block can name it) and
+                // before vertexStageEssl is captured, so a synthesized pass-through control
+                // stage mirrors the block this produces.
+                source = RedeclareClipCullDistancesInPerVertexBlock(std::move(source), glShaderType);
 
                 // Position in the chain is arbitrary: this is the only header-level rewrite, it
                 // edits #extension directives and never the body, and the replacement is the

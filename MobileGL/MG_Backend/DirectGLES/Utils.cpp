@@ -956,6 +956,116 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return std::nullopt;
         }
 
+        String RedeclareClipCullDistancesInPerVertexBlock(String glslCode, const GLenum shaderType) {
+#ifdef TRACY_ENABLE
+            ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
+#endif
+            if (shaderType != GL_VERTEX_SHADER && shaderType != GL_TESS_EVALUATION_SHADER &&
+                shaderType != GL_GEOMETRY_SHADER) {
+                return glslCode;
+            }
+            if (glslCode.find("gl_ClipDistance[") == String::npos &&
+                glslCode.find("gl_CullDistance[") == String::npos) {
+                return glslCode;
+            }
+            // Whole lines only: the declarations SPIRV-Cross prints are one statement per line,
+            // and anchoring on the line keeps a use of the array in the body from ever matching.
+            static const std::regex standaloneRegex(
+                R"(^\s*out\s+(?:highp\s+)?float\s+(gl_ClipDistance|gl_CullDistance)\s*\[\s*([0-9]+)\s*\]\s*;\s*$)");
+            static const std::regex invariantPositionRegex(R"(^\s*invariant\s+gl_Position\s*;\s*$)");
+
+            Vector<String> lines;
+            SizeT lineStart = 0;
+            while (lineStart <= glslCode.size()) {
+                const SizeT lineEnd = glslCode.find('\n', lineStart);
+                if (lineEnd == String::npos) {
+                    lines.push_back(glslCode.substr(lineStart));
+                    break;
+                }
+                lines.push_back(glslCode.substr(lineStart, lineEnd - lineStart));
+                lineStart = lineEnd + 1;
+            }
+
+            String clipSize;
+            String cullSize;
+            SizeT insertAt = lines.size();
+            SizeT invariantLine = lines.size();
+            for (SizeT i = 0; i < lines.size(); ++i) {
+                std::smatch match;
+                if (std::regex_match(lines[i], match, standaloneRegex)) {
+                    (match[1] == "gl_ClipDistance" ? clipSize : cullSize) = match[2].str();
+                    if (insertAt == lines.size()) insertAt = i;
+                } else if (invariantLine == lines.size() && std::regex_match(lines[i], invariantPositionRegex)) {
+                    invariantLine = i;
+                }
+            }
+            if (insertAt == lines.size()) {
+                return glslCode;
+            }
+
+            // A WRITE of gl_PointSize is a bare identifier; a read of the previous stage's value
+            // is a member access on gl_in, which is not this block's business.
+            const auto isIdentifierChar = [](char c) {
+                return std::isalnum(static_cast<unsigned char>(c)) != 0 || c == '_';
+            };
+            Bool writesPointSize = false;
+            static constexpr const char* kPointSize = "gl_PointSize";
+            const SizeT pointSizeLength = std::strlen(kPointSize);
+            for (SizeT pos = glslCode.find(kPointSize); pos != String::npos && !writesPointSize;
+                 pos = glslCode.find(kPointSize, pos + 1)) {
+                if (pos + pointSizeLength < glslCode.size() && isIdentifierChar(glslCode[pos + pointSizeLength])) {
+                    continue;
+                }
+                SizeT before = pos;
+                while (before > 0 && std::isspace(static_cast<unsigned char>(glslCode[before - 1]))) --before;
+                if (before > 0 && (glslCode[before - 1] == '.' || isIdentifierChar(glslCode[before - 1]))) {
+                    continue;
+                }
+                writesPointSize = true;
+            }
+
+            const Bool invariantPosition = invariantLine != lines.size();
+            String block = "out gl_PerVertex\n{\n";
+            block += invariantPosition ? "    invariant highp vec4 gl_Position;\n" : "    highp vec4 gl_Position;\n";
+            if (writesPointSize) block += "    highp float gl_PointSize;\n";
+            if (!clipSize.empty()) block += "    highp float gl_ClipDistance[" + clipSize + "];\n";
+            if (!cullSize.empty()) block += "    highp float gl_CullDistance[" + cullSize + "];\n";
+            block += "};";
+
+            String result;
+            result.reserve(glslCode.size() + block.size());
+            for (SizeT i = 0; i < lines.size(); ++i) {
+                if (i == insertAt) {
+                    result += block;
+                } else if (i == invariantLine || std::regex_match(lines[i], standaloneRegex)) {
+                    continue;
+                } else {
+                    result += lines[i];
+                }
+                if (i + 1 < lines.size()) result += '\n';
+            }
+            return result;
+        }
+
+        String RequestClipCullDistanceExtension(String glslCode) {
+            static constexpr const char* kDirective = "#extension GL_EXT_clip_cull_distance : require\n";
+            if (glslCode.find("GL_EXT_clip_cull_distance") != String::npos ||
+                (glslCode.find("gl_ClipDistance") == String::npos && glslCode.find("gl_CullDistance") == String::npos)) {
+                return glslCode;
+            }
+            // Right after the #version line, like every other directive this backend adds.
+            const SizeT versionPos = glslCode.find("#version");
+            if (versionPos == String::npos) {
+                return kDirective + glslCode;
+            }
+            const SizeT lineEnd = glslCode.find('\n', versionPos);
+            if (lineEnd == String::npos) {
+                return glslCode + "\n" + kDirective;
+            }
+            glslCode.insert(lineEnd + 1, kDirective);
+            return glslCode;
+        }
+
         String BuildPassthroughTessControlEssl(const Uint esslVersion, const Uint patchVertices,
                                                const String& inPerVertexMembers,
                                                const String& outPerVertexMembers,

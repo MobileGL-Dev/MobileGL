@@ -14,6 +14,11 @@
 #include <gtest/gtest.h>
 
 #include <MG_Backend/DirectGLES/Utils.h>
+#include <MG_Util/ShaderTranspiler/ShaderCompiler.h>
+#include <MG_Util/ShaderTranspiler/SpvcSession.h>
+#include <MG_Util/ShaderTranspiler/Types.h>
+
+#include "Init.h"
 
 #include <limits>
 
@@ -28,10 +33,12 @@ using MobileGL::MG_Backend::DirectGLES::PrgramImpl::IMAGE_SPLIT_READ_ALIAS_PREFI
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::IMAGE_WRITE_ALIAS_PREFIX;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::IMAGE_WRITEONLY_ALIAS_PREFIX;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::ImageArrayUnitPlan;
+using MobileGL::MG_Backend::DirectGLES::PrgramImpl::RedeclareClipCullDistancesInPerVertexBlock;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::RemapImageArrayElementUnits;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::PointSizeExtensionName;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::RemoveLayoutBinding;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::RequestPointSizeExtension;
+using MobileGL::MG_Backend::DirectGLES::PrgramImpl::RequestClipCullDistanceExtension;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::RequestExtendedImageFormats;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::RequestViewportArrayExtension;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::SplitReadWriteImageUniforms;
@@ -1516,4 +1523,155 @@ struct fin gl_PerVertex { highp vec4 gl_Position; };
 void main() {}
 )";
     EXPECT_FALSE(ExtractPerVertexBlockMembers(essl, true).has_value()) << essl;
+}
+
+// The shape SPIRV-Cross prints for a vertex stage writing clip and cull distances: standalone,
+// sized, `out` redeclarations an ES compiler refuses as reserved names.
+TEST(RedeclareClipCullDistancesTest, MovesTheStandaloneArraysIntoTheOutputBlock) {
+    const String essl = R"(#version 320 es
+#extension GL_EXT_clip_cull_distance : require
+
+out float gl_ClipDistance[4];
+out float gl_CullDistance[1];
+
+void main()
+{
+    gl_Position = vec4(1.0);
+    gl_ClipDistance[0] = 1.0;
+    gl_CullDistance[0] = 1.0;
+}
+)";
+    const String out = RedeclareClipCullDistancesInPerVertexBlock(essl, GL_VERTEX_SHADER);
+    EXPECT_FALSE(Contains(out, "out float gl_ClipDistance")) << out;
+    EXPECT_FALSE(Contains(out, "out float gl_CullDistance")) << out;
+    EXPECT_TRUE(Contains(out, "out gl_PerVertex\n{\n    highp vec4 gl_Position;\n"
+                              "    highp float gl_ClipDistance[4];\n"
+                              "    highp float gl_CullDistance[1];\n};"))
+        << out;
+    EXPECT_FALSE(Contains(out, "gl_PointSize")) << out;
+    // The body is untouched.
+    EXPECT_TRUE(Contains(out, "gl_ClipDistance[0] = 1.0;")) << out;
+    EXPECT_EQ(CountOf(out, "gl_PerVertex"), 1u) << out;
+    // What a synthesized pass-through control stage would mirror from this stage.
+    const auto members = ExtractPerVertexBlockMembers(out, /*input=*/false);
+    ASSERT_TRUE(members.has_value()) << out;
+    EXPECT_TRUE(Contains(*members, "highp float gl_ClipDistance[4];")) << *members;
+}
+
+TEST(RedeclareClipCullDistancesTest, KeepsAWrittenPointSizeAndFoldsInvariance) {
+    const String essl = R"(#version 320 es
+#extension GL_EXT_clip_cull_distance : require
+layout(points) in;
+layout(points, max_vertices = 1) out;
+
+out float gl_ClipDistance[2];
+
+invariant gl_Position;
+
+void main()
+{
+    gl_Position = gl_in[0].gl_Position;
+    gl_PointSize = gl_in[0].gl_PointSize;
+    gl_ClipDistance[1] = 0.5;
+    EmitVertex();
+}
+)";
+    const String out = RedeclareClipCullDistancesInPerVertexBlock(essl, GL_GEOMETRY_SHADER);
+    EXPECT_TRUE(Contains(out, "    invariant highp vec4 gl_Position;\n    highp float gl_PointSize;\n"
+                              "    highp float gl_ClipDistance[2];\n};"))
+        << out;
+    EXPECT_FALSE(Contains(out, "invariant gl_Position;")) << out;
+    EXPECT_FALSE(Contains(out, "out float gl_ClipDistance")) << out;
+}
+
+// Only a READ of the previous stage's point size: not this stage's output, so not a member.
+TEST(RedeclareClipCullDistancesTest, AnInputPointSizeReadIsNotAMember) {
+    const String essl = R"(#version 320 es
+layout(triangles) in;
+out float gl_ClipDistance[1];
+void main()
+{
+    gl_Position = gl_in[0].gl_Position * gl_in[0].gl_PointSize;
+    gl_ClipDistance[0] = 1.0;
+}
+)";
+    const String out = RedeclareClipCullDistancesInPerVertexBlock(essl, GL_TESS_EVALUATION_SHADER);
+    EXPECT_TRUE(Contains(out, "out gl_PerVertex")) << out;
+    EXPECT_FALSE(Contains(out, "highp float gl_PointSize;")) << out;
+}
+
+TEST(RedeclareClipCullDistancesTest, LeavesFragmentInputsControlStagesAndPlainShadersAlone) {
+    const String fragment = R"(#version 320 es
+in float gl_ClipDistance[4];
+layout(location = 0) out highp vec4 c;
+void main() { c = vec4(gl_ClipDistance[0]); }
+)";
+    EXPECT_EQ(RedeclareClipCullDistancesInPerVertexBlock(fragment, GL_FRAGMENT_SHADER), fragment);
+    const String control = R"(#version 320 es
+layout(vertices = 3) out;
+out gl_PerVertex
+{
+    vec4 gl_Position;
+    float gl_ClipDistance[1];
+} gl_out[3];
+void main() { gl_out[gl_InvocationID].gl_ClipDistance[0] = 1.0; }
+)";
+    EXPECT_EQ(RedeclareClipCullDistancesInPerVertexBlock(control, GL_TESS_CONTROL_SHADER), control);
+    const String plain = "#version 320 es\nvoid main()\n{\n    gl_Position = vec4(0.0);\n}\n";
+    EXPECT_EQ(RedeclareClipCullDistancesInPerVertexBlock(plain, GL_VERTEX_SHADER), plain);
+}
+
+TEST(RequestClipCullDistanceExtensionTest, AddsTheDirectiveOnlyWhenTheArraysAreNamed) {
+    const String mirrored = "#version 320 es\nin gl_PerVertex { highp vec4 gl_Position; highp float "
+                            "gl_ClipDistance[2]; } gl_in[gl_MaxPatchVertices];\nvoid main() {}\n";
+    const String out = RequestClipCullDistanceExtension(mirrored);
+    EXPECT_EQ(out.find("#version 320 es\n#extension GL_EXT_clip_cull_distance : require\n"), 0u) << out;
+    EXPECT_EQ(RequestClipCullDistanceExtension(out), out);
+    const String plain = "#version 320 es\nvoid main() {}\n";
+    EXPECT_EQ(RequestClipCullDistanceExtension(plain), plain);
+}
+
+// End to end against what SPIRV-Cross really prints, so the fixtures above cannot drift from it.
+TEST(RedeclareClipCullDistancesTest, RewritesRealSpirvCrossOutput) {
+    using namespace MG_Util::ShaderTranspiler;
+    MobileGL::Initialize();
+    const char* vertexSource = R"(#version 330 core
+out float gl_ClipDistance[3];
+void main() {
+    gl_Position = vec4(float(gl_VertexID), 0.0, 0.0, 1.0);
+    for (int i = 0; i < 3; ++i) gl_ClipDistance[i] = float(i) - 1.0;
+}
+)";
+    const char* fragmentSource = R"(#version 330 core
+out vec4 color;
+void main() { color = vec4(1.0); }
+)";
+    Vector<SharedPtr<glslang::TShader>> shaders;
+    const Vector<Pair<GLenum, const char*>> stages{{GL_VERTEX_SHADER, vertexSource},
+                                                   {GL_FRAGMENT_SHADER, fragmentSource}};
+    for (const auto& [stage, text] : stages) {
+        ShaderAttrib attrib{.shaderType = stage, .sourceStr = text};
+        auto compiled = ShaderCompiler::CompileShader(attrib);
+        ASSERT_TRUE(compiled) << compiled.error().log;
+        shaders.push_back(compiled.value());
+    }
+    ProgramAttrib programAttrib{.shaders = shaders};
+    auto program = ShaderCompiler::LinkProgram(programAttrib);
+    ASSERT_TRUE(program) << program.error().log;
+    ProgramBinaryAttrib binaryAttrib{.shaderTypes = {GL_VERTEX_SHADER, GL_FRAGMENT_SHADER},
+                                     .program = *program.value()};
+    auto modules = ShaderCompiler::GetSpirvBinaryFromProgram(binaryAttrib);
+    ASSERT_TRUE(modules) << modules.error().log;
+    ASSERT_EQ(modules.value().size(), 2u);
+
+    SpvcSession session(modules.value()[0], SessionUsageBit::Transpile);
+    auto essl = ShaderCompiler::DecompileShader(session);
+    ASSERT_TRUE(essl) << essl.error().log;
+    // The shape the pass exists for really is what SPIRV-Cross prints.
+    ASSERT_TRUE(Contains(essl.value(), "out float gl_ClipDistance[3];")) << essl.value();
+
+    const String out = RedeclareClipCullDistancesInPerVertexBlock(essl.value(), GL_VERTEX_SHADER);
+    EXPECT_FALSE(Contains(out, "out float gl_ClipDistance")) << out;
+    EXPECT_TRUE(Contains(out, "    highp float gl_ClipDistance[3];\n};")) << out;
+    EXPECT_TRUE(Contains(out, "GL_EXT_clip_cull_distance")) << out;
 }
