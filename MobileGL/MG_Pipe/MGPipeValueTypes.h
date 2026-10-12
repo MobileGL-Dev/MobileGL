@@ -323,6 +323,17 @@ namespace MobileGL {
         Array<FloatVec2, MAX_VIEWPORTS> DepthRanges{};
         Float SampleCoverageValue = 1.0f;
         Bool SampleCoverageInvert = false;
+        // GL_EXT_fragment_shading_rate: the pipeline rate glShadingRateEXT sets and the two
+        // combiner operations of glShadingRateCombinerOpsEXT. Placed in the three alignment bytes
+        // between SampleCoverageInvert and SampleMaskValue, the way FramebufferSrgbEnabled and its
+        // two neighbours were, so sizeof and every existing offset stay put. All three are
+        // PIPELINE state (their setters call BumpVersions). The rate is stored in the packed form
+        // the extension defines for gl_ShadingRateEXT and the attachment texels -
+        // (log2(width) << 2) | log2(height), so 1x1 = 0 - and each op as its index in
+        // KEEP, REPLACE, MIN, MAX, MUL, which is also VkFragmentShadingRateCombinerOpKHR's order.
+        Uint8 ShadingRate = 0;
+        Uint8 ShadingRateCombinerOp0 = 0;
+        Uint8 ShadingRateCombinerOp1 = 0;
         Uint32 SampleMaskValue = 0xffffffffu;
         // glMinSampleShading (ARB_sample_shading / GL 4.0 core 14.3.1). The fraction of samples
         // that get their own independent shading when GL_SAMPLE_SHADING is enabled; the initial
@@ -405,6 +416,54 @@ namespace MobileGL {
         // DirectGLES' span memcmp picks a change up like any other capability.
         Uint32 ClipDistanceEnabledMask = 0;
     };
+
+    // GL_EXT_fragment_shading_rate's two encodings, shared by the entry points, the getters and
+    // both backends. A rate packs to (log2(width) << 2) | log2(height) - the value
+    // gl_ShadingRateEXT and an attachment texel carry - and a combiner op to its index in
+    // KEEP, REPLACE, MIN, MAX, MUL. kMGInvalidShadingRateEncoding is "not a value of the enum".
+    inline constexpr Uint8 kMGInvalidShadingRateEncoding = 0xffu;
+
+    constexpr Uint8 MGPackShadingRate(GLenum rate) {
+        switch (rate) {
+        case GL_SHADING_RATE_1X1_PIXELS_EXT: return 0x0u;
+        case GL_SHADING_RATE_1X2_PIXELS_EXT: return 0x1u;
+        case GL_SHADING_RATE_1X4_PIXELS_EXT: return 0x2u;
+        case GL_SHADING_RATE_2X1_PIXELS_EXT: return 0x4u;
+        case GL_SHADING_RATE_2X2_PIXELS_EXT: return 0x5u;
+        case GL_SHADING_RATE_2X4_PIXELS_EXT: return 0x6u;
+        case GL_SHADING_RATE_4X1_PIXELS_EXT: return 0x8u;
+        case GL_SHADING_RATE_4X2_PIXELS_EXT: return 0x9u;
+        case GL_SHADING_RATE_4X4_PIXELS_EXT: return 0xau;
+        default: return kMGInvalidShadingRateEncoding;
+        }
+    }
+
+    // The inverse; GL_NONE for an encoding no enum names (a 3 in either half, or > 0xa).
+    constexpr GLenum MGUnpackShadingRate(Uint8 packed) {
+        switch (packed) {
+        case 0x0u: return GL_SHADING_RATE_1X1_PIXELS_EXT;
+        case 0x1u: return GL_SHADING_RATE_1X2_PIXELS_EXT;
+        case 0x2u: return GL_SHADING_RATE_1X4_PIXELS_EXT;
+        case 0x4u: return GL_SHADING_RATE_2X1_PIXELS_EXT;
+        case 0x5u: return GL_SHADING_RATE_2X2_PIXELS_EXT;
+        case 0x6u: return GL_SHADING_RATE_2X4_PIXELS_EXT;
+        case 0x8u: return GL_SHADING_RATE_4X1_PIXELS_EXT;
+        case 0x9u: return GL_SHADING_RATE_4X2_PIXELS_EXT;
+        case 0xau: return GL_SHADING_RATE_4X4_PIXELS_EXT;
+        default: return GL_NONE;
+        }
+    }
+
+    constexpr Uint8 MGShadingRateCombinerOpIndex(GLenum op) {
+        return (op >= GL_FRAGMENT_SHADING_RATE_COMBINER_OP_KEEP_EXT &&
+                op <= GL_FRAGMENT_SHADING_RATE_COMBINER_OP_MUL_EXT)
+                   ? static_cast<Uint8>(op - GL_FRAGMENT_SHADING_RATE_COMBINER_OP_KEEP_EXT)
+                   : kMGInvalidShadingRateEncoding;
+    }
+
+    constexpr GLenum MGShadingRateCombinerOpEnum(Uint8 index) {
+        return static_cast<GLenum>(GL_FRAGMENT_SHADING_RATE_COMBINER_OP_KEEP_EXT + index);
+    }
 
     enum class SamplerFilterMode {
         Nearest,

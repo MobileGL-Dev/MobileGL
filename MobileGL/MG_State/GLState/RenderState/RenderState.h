@@ -132,6 +132,13 @@ namespace MobileGL {
                 // glMinSampleShading. `value` is stored as given; the entry point clamps.
                 void SetMinSampleShadingValue(Float value);
                 Float GetMinSampleShadingValue() const;
+                // GL_EXT_fragment_shading_rate. `rate` is the packed (log2 w << 2 | log2 h) form and
+                // each op its KEEP..MUL index (see RenderStateParameters); the entry points validate.
+                void SetShadingRate(Uint8 rate);
+                Uint8 GetShadingRate() const;
+                void SetShadingRateCombinerOps(Uint8 op0, Uint8 op1);
+                Uint8 GetShadingRateCombinerOp0() const;
+                Uint8 GetShadingRateCombinerOp1() const;
 
                 // Pixel Store
                 void SetPixelStoreParam(PixelStoreParam param, Int value);

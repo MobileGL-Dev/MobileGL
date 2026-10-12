@@ -9,6 +9,7 @@
 #include "GL_RenderState.h"
 #include <cmath>
 #include <MG_Impl/GLImpl/Getter/GL_Getter.h>
+#include <MG_Backend/BackendObjects.h>
 #include <MG_State/GLState/Core.h>
 #include <MG_Util/Converters/GLToStr/GLEnumConverter.h>
 #include <MG_Util/Converters/GLToMG/RenderStateEnumConverter.h>
@@ -370,6 +371,61 @@ namespace MobileGL::MG_Impl::GLImpl {
             return;
         }
         MG_State::pGLContext->SetClipControl(origin, depth);
+    }
+
+    // GL_EXT_fragment_shading_rate 14.X.1: the only error is a rate outside table X.1, and the
+    // state is left untouched by it. Whether the device can honour the rate is not an error -
+    // an unsupported rate is clamped at rasterization, which the backends leave to the driver.
+    void ShadingRateEXT_State(GLenum rate) {
+        const Uint8 packed = MGPackShadingRate(rate);
+        if (packed == kMGInvalidShadingRateEncoding) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidEnum,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                             "glShadingRateEXT rate is not a GL_SHADING_RATE_*_PIXELS_EXT value; got " +
+                                                 MG_Util::ConvertGLEnumToString(rate) + "."));
+            return;
+        }
+        MG_State::pGLContext->SetShadingRate(packed);
+    }
+
+    // GL_EXT_fragment_shading_rate 14.X.4, in the spec's order: an op outside the five combiner
+    // enums is INVALID_ENUM; a non-trivial op (MIN, MAX, MUL) without
+    // FRAGMENT_SHADING_RATE_NON_TRIVIAL_COMBINERS_SUPPORTED_EXT, or a non-KEEP op whose input
+    // extension (_primitive for op 0, _attachment for op 1) is absent, is INVALID_OPERATION.
+    void ShadingRateCombinerOpsEXT_State(GLenum combinerOp0, GLenum combinerOp1) {
+        const Uint8 op0 = MGShadingRateCombinerOpIndex(combinerOp0);
+        const Uint8 op1 = MGShadingRateCombinerOpIndex(combinerOp1);
+        if (op0 == kMGInvalidShadingRateEncoding || op1 == kMGInvalidShadingRateEncoding) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidEnum,
+                MakeUnique<GenericErrorInfo>(
+                    "MG_Impl/GLImpl", __func__,
+                    "glShadingRateCombinerOpsEXT ops must be GL_FRAGMENT_SHADING_RATE_COMBINER_OP_*_EXT; got " +
+                        MG_Util::ConvertGLEnumToString(combinerOp0) + ", " +
+                        MG_Util::ConvertGLEnumToString(combinerOp1) + "."));
+            return;
+        }
+        const auto& caps = MG_Backend::pActiveBackendObject->GetDynamicParameters();
+        constexpr Uint8 kKeep = 0;
+        constexpr Uint8 kReplace = 1;
+        const auto isTrivial = [](Uint8 op) { return op == kKeep || op == kReplace; };
+        const char* refusal = nullptr;
+        if (!caps.FragmentShadingRateNonTrivialCombiners && (!isTrivial(op0) || !isTrivial(op1))) {
+            refusal = "MIN, MAX and MUL need GL_FRAGMENT_SHADING_RATE_NON_TRIVIAL_COMBINERS_SUPPORTED_EXT";
+        } else if (!caps.SupportsPrimitiveFragmentShadingRate && op0 != kKeep) {
+            refusal = "combinerOp0 must be KEEP without GL_EXT_fragment_shading_rate_primitive";
+        } else if (!caps.SupportsAttachmentFragmentShadingRate && op1 != kKeep) {
+            refusal = "combinerOp1 must be KEEP without GL_EXT_fragment_shading_rate_attachment";
+        }
+        if (refusal != nullptr) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                             String("glShadingRateCombinerOpsEXT: ") + refusal + "."));
+            return;
+        }
+        MG_State::pGLContext->SetShadingRateCombinerOps(op0, op1);
     }
 
     void PolygonMode_State(GLenum face, GLenum mode) {
@@ -1067,6 +1123,14 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     void ClipControl(GLenum origin, GLenum depth) {
         ClipControl_State(origin, depth);
+    }
+
+    void ShadingRateEXT(GLenum rate) {
+        ShadingRateEXT_State(rate);
+    }
+
+    void ShadingRateCombinerOpsEXT(GLenum combinerOp0, GLenum combinerOp1) {
+        ShadingRateCombinerOpsEXT_State(combinerOp0, combinerOp1);
     }
 
     void PolygonMode(GLenum face, GLenum mode) {

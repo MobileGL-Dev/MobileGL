@@ -435,6 +435,11 @@ namespace MobileGL {
                 Uint32 GetSampleMaskValue() const;
                 void SetMinSampleShadingValue(Float value);
                 Float GetMinSampleShadingValue() const;
+                void SetShadingRate(Uint8 rate);
+                Uint8 GetShadingRate() const;
+                void SetShadingRateCombinerOps(Uint8 op0, Uint8 op1);
+                Uint8 GetShadingRateCombinerOp0() const;
+                Uint8 GetShadingRateCombinerOp1() const;
                 void SetPixelStoreParam(PixelStoreParam param, Int value);
                 Int GetPixelStoreParam(PixelStoreParam param) const;
                 PixelStoreParameters GetPixelStoreParameters(Bool isUnpack) const;

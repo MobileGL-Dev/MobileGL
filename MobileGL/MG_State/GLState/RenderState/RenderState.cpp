@@ -837,6 +837,35 @@ namespace MobileGL {
                 return m_parameters.MinSampleShadingValue;
             }
 
+            void RenderState::SetShadingRate(Uint8 rate) {
+                if (m_parameters.ShadingRate == rate) return;
+
+                m_parameters.ShadingRate = rate;
+                // BumpVersions, not just ++m_version: the bytes sit in a pipeline chunk (they took
+                // its alignment padding), and the G7 rule makes every byte there pipeline state.
+                BumpVersions();
+            }
+
+            Uint8 RenderState::GetShadingRate() const {
+                return m_parameters.ShadingRate;
+            }
+
+            void RenderState::SetShadingRateCombinerOps(Uint8 op0, Uint8 op1) {
+                if (m_parameters.ShadingRateCombinerOp0 == op0 && m_parameters.ShadingRateCombinerOp1 == op1) return;
+
+                m_parameters.ShadingRateCombinerOp0 = op0;
+                m_parameters.ShadingRateCombinerOp1 = op1;
+                BumpVersions();
+            }
+
+            Uint8 RenderState::GetShadingRateCombinerOp0() const {
+                return m_parameters.ShadingRateCombinerOp0;
+            }
+
+            Uint8 RenderState::GetShadingRateCombinerOp1() const {
+                return m_parameters.ShadingRateCombinerOp1;
+            }
+
             // -------------------- Pixel Store --------------------
             void RenderState::SetPixelStoreParam(PixelStoreParam param, Int value) {
 #define SET_PIXEL_STORE_PARAM(paramNameHead, paramNameTail, val)                                                       \

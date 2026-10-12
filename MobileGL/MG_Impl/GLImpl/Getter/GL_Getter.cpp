@@ -1632,6 +1632,121 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
     }
 
+    // GL_EXT_fragment_shading_rate's state and limits (tables 23.9 / 23.53 of the extension).
+    // Returns false for any other pname. The tokens belong to the extension, so a context whose
+    // backend cannot back it answers them like any unknown pname, and the attachment limits the
+    // same way unless the attachment extension is advertised too.
+    static Bool TryGetFragmentShadingRateInteger(GLenum pname, GLint* params) {
+        Bool attachmentToken = false;
+        switch (pname) {
+        case GL_SHADING_RATE_EXT:
+        case GL_FRAGMENT_SHADING_RATE_NON_TRIVIAL_COMBINERS_SUPPORTED_EXT:
+        case GL_FRAGMENT_SHADING_RATE_WITH_SHADER_DEPTH_STENCIL_WRITES_SUPPORTED_EXT:
+        case GL_FRAGMENT_SHADING_RATE_WITH_SAMPLE_MASK_SUPPORTED_EXT:
+        case GL_FRAGMENT_SHADING_RATE_PRIMITIVE_RATE_WITH_MULTI_VIEWPORT_SUPPORTED_EXT:
+            break;
+        case GL_MIN_FRAGMENT_SHADING_RATE_ATTACHMENT_TEXEL_WIDTH_EXT:
+        case GL_MIN_FRAGMENT_SHADING_RATE_ATTACHMENT_TEXEL_HEIGHT_EXT:
+        case GL_MAX_FRAGMENT_SHADING_RATE_ATTACHMENT_TEXEL_WIDTH_EXT:
+        case GL_MAX_FRAGMENT_SHADING_RATE_ATTACHMENT_TEXEL_HEIGHT_EXT:
+        case GL_MAX_FRAGMENT_SHADING_RATE_ATTACHMENT_TEXEL_ASPECT_RATIO_EXT:
+        case GL_MAX_FRAGMENT_SHADING_RATE_ATTACHMENT_LAYERS_EXT:
+        case GL_FRAGMENT_SHADING_RATE_ATTACHMENT_WITH_DEFAULT_FRAMEBUFFER_SUPPORTED_EXT:
+            attachmentToken = true;
+            break;
+        default:
+            return false;
+        }
+
+        const auto& caps = MG_Backend::pActiveBackendObject->GetDynamicParameters();
+        if (!caps.SupportsFragmentShadingRate || (attachmentToken && !caps.SupportsAttachmentFragmentShadingRate)) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidEnum,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "GetIntegerv",
+                                             std::format("Invalid enum: 0x{:X} (its fragment shading rate extension "
+                                                         "is not supported)",
+                                                         pname)));
+            return true;
+        }
+
+        switch (pname) {
+        case GL_SHADING_RATE_EXT:
+            *params = static_cast<GLint>(MGUnpackShadingRate(MG_State::pGLContext->GetShadingRate()));
+            return true;
+        case GL_FRAGMENT_SHADING_RATE_NON_TRIVIAL_COMBINERS_SUPPORTED_EXT:
+            *params = caps.FragmentShadingRateNonTrivialCombiners ? GL_TRUE : GL_FALSE;
+            return true;
+        case GL_FRAGMENT_SHADING_RATE_WITH_SHADER_DEPTH_STENCIL_WRITES_SUPPORTED_EXT:
+            *params = caps.FragmentShadingRateWithShaderDepthStencilWrites ? GL_TRUE : GL_FALSE;
+            return true;
+        case GL_FRAGMENT_SHADING_RATE_WITH_SAMPLE_MASK_SUPPORTED_EXT:
+            *params = caps.FragmentShadingRateWithSampleMask ? GL_TRUE : GL_FALSE;
+            return true;
+        case GL_FRAGMENT_SHADING_RATE_PRIMITIVE_RATE_WITH_MULTI_VIEWPORT_SUPPORTED_EXT:
+            *params = caps.FragmentShadingRatePrimitiveWithMultiViewport ? GL_TRUE : GL_FALSE;
+            return true;
+        case GL_MIN_FRAGMENT_SHADING_RATE_ATTACHMENT_TEXEL_WIDTH_EXT:
+            *params = caps.MinFragmentShadingRateAttachmentTexelWidth;
+            return true;
+        case GL_MIN_FRAGMENT_SHADING_RATE_ATTACHMENT_TEXEL_HEIGHT_EXT:
+            *params = caps.MinFragmentShadingRateAttachmentTexelHeight;
+            return true;
+        case GL_MAX_FRAGMENT_SHADING_RATE_ATTACHMENT_TEXEL_WIDTH_EXT:
+            *params = caps.MaxFragmentShadingRateAttachmentTexelWidth;
+            return true;
+        case GL_MAX_FRAGMENT_SHADING_RATE_ATTACHMENT_TEXEL_HEIGHT_EXT:
+            *params = caps.MaxFragmentShadingRateAttachmentTexelHeight;
+            return true;
+        case GL_MAX_FRAGMENT_SHADING_RATE_ATTACHMENT_TEXEL_ASPECT_RATIO_EXT:
+            *params = caps.MaxFragmentShadingRateAttachmentTexelAspectRatio;
+            return true;
+        case GL_MAX_FRAGMENT_SHADING_RATE_ATTACHMENT_LAYERS_EXT:
+            *params = caps.MaxFragmentShadingRateAttachmentLayers;
+            return true;
+        case GL_FRAGMENT_SHADING_RATE_ATTACHMENT_WITH_DEFAULT_FRAMEBUFFER_SUPPORTED_EXT:
+            *params = caps.FragmentShadingRateAttachmentWithDefaultFramebuffer ? GL_TRUE : GL_FALSE;
+            return true;
+        default:
+            return false;
+        }
+    }
+
+    // GL_EXT_fragment_shading_rate 14.X.1. The rates come from the backend's per-sample-count
+    // mask, largest area first (the order the Vulkan query uses; the extension leaves it open).
+    // A sample count the device does not list - including any that is not a power of two -
+    // answers zero rates rather than an error: the only error the extension gives is a negative
+    // maxCount.
+    void GetFragmentShadingRatesEXT(GLsizei samples, GLsizei maxCount, GLsizei* count, GLenum* shadingRates) {
+        if (maxCount < 0) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "maxCount must not be negative"));
+            return;
+        }
+        const auto& caps = MG_Backend::pActiveBackendObject->GetDynamicParameters();
+        Uint16 mask = 0;
+        if (caps.SupportsFragmentShadingRate) {
+            // GL counts a non-multisampled framebuffer as samples = 0 or 1; both are the 1x mask.
+            const GLsizei effectiveSamples = samples <= 1 ? 1 : samples;
+            for (SizeT i = 0; i < std::size(caps.FragmentShadingRateMasks); ++i) {
+                if (effectiveSamples == (GLsizei{1} << i)) {
+                    mask = caps.FragmentShadingRateMasks[i];
+                    break;
+                }
+            }
+        }
+        // Largest area first, then the wider rate of an equal area.
+        static constexpr Uint8 kOrder[] = {0xa, 0x9, 0x6, 0x8, 0x5, 0x2, 0x4, 0x1, 0x0};
+        GLsizei written = 0;
+        for (Uint8 packed : kOrder) {
+            if ((mask & (1u << packed)) == 0) continue;
+            if (written >= maxCount) break;
+            if (shadingRates != nullptr) shadingRates[written] = MGUnpackShadingRate(packed);
+            ++written;
+        }
+        if (count != nullptr) *count = written;
+    }
+
     void GetIntegerv(GLenum pname, GLint* params) {
         MGLOG_D("glGetIntegerv, pname: %s", MG_Util::ConvertGLEnumToString(pname).c_str());
         if (!params) {
@@ -1647,6 +1762,8 @@ namespace MobileGL::MG_Impl::GLImpl {
             *params = QueryTextureBindingOnUnit(MG_State::pGLContext->GetActiveTextureUnit(), textureBindingTarget);
             return;
         }
+
+        if (TryGetFragmentShadingRateInteger(pname, params)) return;
 
         switch (pname) {
         case GL_ACTIVE_TEXTURE:

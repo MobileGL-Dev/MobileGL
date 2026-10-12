@@ -28,6 +28,7 @@
 
 #include <limits>
 
+#include <MG_Backend/BackendObjects.h>
 #include <MG_Impl/GLImpl/Drawing/GL_Drawing.h>
 #include <MG_Impl/GLImpl/Getter/GL_Getter.h>
 #include <MG_Impl/GLImpl/RenderState/GL_RenderState.h>
@@ -1056,5 +1057,178 @@ TEST_F(RenderStateTest, NumSpirVExtensionsIsQueryableAndZero) {
     GLint count = -1;
     MG_Impl::GLImpl::GetIntegerv(GL_NUM_SPIR_V_EXTENSIONS, &count);
     EXPECT_EQ(count, 0);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
+// ---- GL_EXT_fragment_shading_rate ------------------------------------------------------------
+//
+// The state machine half of the extension: the pipeline rate and the combiner ops, their errors,
+// and the queries a backend's probed capability decides. The capability comes from a stand-in
+// backend, because no device stands behind this binary.
+namespace {
+    class FragmentShadingRateBackend final : public MG_Backend::BackendObject {
+    public:
+        FragmentShadingRateBackend(Bool primitive, Bool attachment, Bool nonTrivial) {
+            m_params.SupportsFragmentShadingRate = true;
+            m_params.SupportsPrimitiveFragmentShadingRate = primitive;
+            m_params.SupportsAttachmentFragmentShadingRate = attachment;
+            m_params.FragmentShadingRateNonTrivialCombiners = nonTrivial;
+            // 1x: 1x1, 1x2, 2x1, 2x2, 4x4. 4x: 1x1, 2x2. Every other count: nothing.
+            m_params.FragmentShadingRateMasks[0] = (1u << 0x0) | (1u << 0x1) | (1u << 0x4) | (1u << 0x5) | (1u << 0xa);
+            m_params.FragmentShadingRateMasks[2] = (1u << 0x0) | (1u << 0x5);
+            m_params.MaxFragmentShadingRateAttachmentTexelWidth = 16;
+        }
+
+        void Initialize() override {}
+        Bool InitCapabilities() override { return true; }
+        Bool InitWindowSurface() override { return true; }
+        const RendererInfo& GetRendererInfo() const override {
+            static RendererInfo info = {};
+            return info;
+        }
+        String GetBackendAPIVersionString() const override { return {}; }
+        const MG_Backend::GlobalBackendFunctionsTable& GetBackendFunctions() const override {
+            static MG_Backend::GlobalBackendFunctionsTable table = {};
+            return table;
+        }
+        const MG_Backend::DynamicBackendParameters& GetDynamicParameters() const override { return m_params; }
+        BackendType GetBackendType() const override { return BackendType::Unknown; }
+
+    private:
+        MG_Backend::DynamicBackendParameters m_params{};
+    };
+
+    class ScopedFragmentShadingRateBackend {
+    public:
+        ScopedFragmentShadingRateBackend(Bool primitive, Bool attachment, Bool nonTrivial):
+            m_previous(Move(MG_Backend::pActiveBackendObject)) {
+            MG_Backend::pActiveBackendObject = MakeUnique<FragmentShadingRateBackend>(primitive, attachment, nonTrivial);
+        }
+        ~ScopedFragmentShadingRateBackend() {
+            // Leave the context at the extension's initial state for whichever test runs next.
+            MG_State::pGLContext->SetShadingRate(0);
+            MG_State::pGLContext->SetShadingRateCombinerOps(0, 0);
+            MG_Backend::pActiveBackendObject = Move(m_previous);
+        }
+
+    private:
+        UniquePtr<MG_Backend::BackendObject> m_previous;
+    };
+} // namespace
+
+TEST_F(RenderStateTest, ShadingRateEncodingsRoundTrip) {
+    for (GLenum rate = GL_SHADING_RATE_1X1_PIXELS_EXT; rate <= GL_SHADING_RATE_4X4_PIXELS_EXT; ++rate) {
+        const Uint8 packed = MGPackShadingRate(rate);
+        ASSERT_NE(packed, kMGInvalidShadingRateEncoding) << std::hex << rate;
+        EXPECT_EQ(MGUnpackShadingRate(packed), rate);
+    }
+    // The packed form is the one gl_ShadingRateEXT carries: (log2 w << 2) | log2 h.
+    EXPECT_EQ(MGPackShadingRate(GL_SHADING_RATE_2X4_PIXELS_EXT), 0x6u);
+    EXPECT_EQ(MGPackShadingRate(GL_SHADING_RATE_4X1_PIXELS_EXT), 0x8u);
+    EXPECT_EQ(MGPackShadingRate(GL_SAMPLE_SHADING), kMGInvalidShadingRateEncoding);
+    EXPECT_EQ(MGUnpackShadingRate(0x3u), static_cast<GLenum>(GL_NONE));
+    EXPECT_EQ(MGShadingRateCombinerOpIndex(GL_FRAGMENT_SHADING_RATE_COMBINER_OP_MUL_EXT), 4u);
+    EXPECT_EQ(MGShadingRateCombinerOpIndex(GL_SHADING_RATE_EXT), kMGInvalidShadingRateEncoding);
+}
+
+TEST_F(RenderStateTest, ShadingRateTokensAreUnknownWithoutABackendThatBacksThem) {
+    GLint value = -1;
+    MG_Impl::GLImpl::GetIntegerv(GL_SHADING_RATE_EXT, &value);
+    ExpectSingleGlError(GL_INVALID_ENUM);
+
+    GLsizei count = -1;
+    GLenum rates[4] = {};
+    MG_Impl::GLImpl::GetFragmentShadingRatesEXT(1, 4, &count, rates);
+    EXPECT_EQ(count, 0);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
+TEST_F(RenderStateTest, ShadingRateRoundTripsAndRejectsANonRate) {
+    ScopedFragmentShadingRateBackend backend(/*primitive=*/true, /*attachment=*/false, /*nonTrivial=*/true);
+
+    GLint value = 0;
+    MG_Impl::GLImpl::GetIntegerv(GL_SHADING_RATE_EXT, &value);
+    EXPECT_EQ(value, GL_SHADING_RATE_1X1_PIXELS_EXT) << "the initial rate is 1x1";
+
+    MG_Impl::GLImpl::ShadingRateEXT(GL_SHADING_RATE_2X4_PIXELS_EXT);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    EXPECT_EQ(MG_State::pGLContext->GetShadingRate(), 0x6u);
+
+    MG_Impl::GLImpl::ShadingRateEXT(GL_SAMPLE_SHADING);
+    ExpectSingleGlError(GL_INVALID_ENUM);
+    MG_Impl::GLImpl::GetIntegerv(GL_SHADING_RATE_EXT, &value);
+    EXPECT_EQ(value, GL_SHADING_RATE_2X4_PIXELS_EXT) << "a rejected glShadingRateEXT must not change the state";
+}
+
+TEST_F(RenderStateTest, ShadingRateCombinerOpsFollowTheExtensionErrorOrder) {
+    {
+        ScopedFragmentShadingRateBackend backend(/*primitive=*/true, /*attachment=*/false, /*nonTrivial=*/false);
+
+        MG_Impl::GLImpl::ShadingRateCombinerOpsEXT(GL_SHADING_RATE_EXT,
+                                                   GL_FRAGMENT_SHADING_RATE_COMBINER_OP_REPLACE_EXT);
+        ExpectSingleGlError(GL_INVALID_ENUM);
+        MG_Impl::GLImpl::ShadingRateCombinerOpsEXT(GL_FRAGMENT_SHADING_RATE_COMBINER_OP_KEEP_EXT,
+                                                   GL_MIN_FRAGMENT_SHADING_RATE_ATTACHMENT_TEXEL_WIDTH_EXT);
+        ExpectSingleGlError(GL_INVALID_ENUM);
+        // Trivial combiners only on this device.
+        MG_Impl::GLImpl::ShadingRateCombinerOpsEXT(GL_FRAGMENT_SHADING_RATE_COMBINER_OP_MIN_EXT,
+                                                   GL_FRAGMENT_SHADING_RATE_COMBINER_OP_KEEP_EXT);
+        ExpectSingleGlError(GL_INVALID_OPERATION);
+        // No attachment extension: op 1 must stay KEEP.
+        MG_Impl::GLImpl::ShadingRateCombinerOpsEXT(GL_FRAGMENT_SHADING_RATE_COMBINER_OP_REPLACE_EXT,
+                                                   GL_FRAGMENT_SHADING_RATE_COMBINER_OP_REPLACE_EXT);
+        ExpectSingleGlError(GL_INVALID_OPERATION);
+
+        MG_Impl::GLImpl::ShadingRateCombinerOpsEXT(GL_FRAGMENT_SHADING_RATE_COMBINER_OP_REPLACE_EXT,
+                                                   GL_FRAGMENT_SHADING_RATE_COMBINER_OP_KEEP_EXT);
+        EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+        EXPECT_EQ(MG_State::pGLContext->GetShadingRateCombinerOp0(), 1u);
+        EXPECT_EQ(MG_State::pGLContext->GetShadingRateCombinerOp1(), 0u);
+    }
+    {
+        ScopedFragmentShadingRateBackend backend(/*primitive=*/false, /*attachment=*/true, /*nonTrivial=*/true);
+
+        // No primitive extension: op 0 must stay KEEP, whatever op 1 is.
+        MG_Impl::GLImpl::ShadingRateCombinerOpsEXT(GL_FRAGMENT_SHADING_RATE_COMBINER_OP_MAX_EXT,
+                                                   GL_FRAGMENT_SHADING_RATE_COMBINER_OP_REPLACE_EXT);
+        ExpectSingleGlError(GL_INVALID_OPERATION);
+        MG_Impl::GLImpl::ShadingRateCombinerOpsEXT(GL_FRAGMENT_SHADING_RATE_COMBINER_OP_KEEP_EXT,
+                                                   GL_FRAGMENT_SHADING_RATE_COMBINER_OP_MUL_EXT);
+        EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+        EXPECT_EQ(MG_State::pGLContext->GetShadingRateCombinerOp1(), 4u);
+    }
+}
+
+TEST_F(RenderStateTest, FragmentShadingRatesListTheBackendMaskLargestFirst) {
+    ScopedFragmentShadingRateBackend backend(/*primitive=*/false, /*attachment=*/false, /*nonTrivial=*/false);
+
+    GLsizei count = -1;
+    GLenum rates[16] = {};
+    MG_Impl::GLImpl::GetFragmentShadingRatesEXT(1, 16, &count, rates);
+    ASSERT_EQ(count, 5);
+    EXPECT_EQ(rates[0], static_cast<GLenum>(GL_SHADING_RATE_4X4_PIXELS_EXT));
+    EXPECT_EQ(rates[1], static_cast<GLenum>(GL_SHADING_RATE_2X2_PIXELS_EXT));
+    EXPECT_EQ(rates[2], static_cast<GLenum>(GL_SHADING_RATE_2X1_PIXELS_EXT));
+    EXPECT_EQ(rates[3], static_cast<GLenum>(GL_SHADING_RATE_1X2_PIXELS_EXT));
+    EXPECT_EQ(rates[4], static_cast<GLenum>(GL_SHADING_RATE_1X1_PIXELS_EXT));
+
+    // maxCount bounds what is written and counted; samples selects the mask.
+    MG_Impl::GLImpl::GetFragmentShadingRatesEXT(4, 1, &count, rates);
+    EXPECT_EQ(count, 1);
+    EXPECT_EQ(rates[0], static_cast<GLenum>(GL_SHADING_RATE_2X2_PIXELS_EXT));
+    MG_Impl::GLImpl::GetFragmentShadingRatesEXT(3, 16, &count, rates);
+    EXPECT_EQ(count, 0) << "a sample count the device does not list has no rates";
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    MG_Impl::GLImpl::GetFragmentShadingRatesEXT(1, -1, &count, rates);
+    ExpectSingleGlError(GL_INVALID_VALUE);
+
+    // The attachment limits belong to the attachment extension, absent here.
+    GLint limit = -1;
+    MG_Impl::GLImpl::GetIntegerv(GL_MAX_FRAGMENT_SHADING_RATE_ATTACHMENT_TEXEL_WIDTH_EXT, &limit);
+    ExpectSingleGlError(GL_INVALID_ENUM);
+    GLboolean nonTrivial = GL_TRUE;
+    MG_Impl::GLImpl::GetBooleanv(GL_FRAGMENT_SHADING_RATE_NON_TRIVIAL_COMBINERS_SUPPORTED_EXT, &nonTrivial);
+    EXPECT_EQ(nonTrivial, GL_FALSE);
     EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
 }

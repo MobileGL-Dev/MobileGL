@@ -1298,9 +1298,9 @@ namespace MobileGL::MG_Impl {
         GETPROC(glVertexArrayVertexAttribDivisorEXT, name);
         GETPROC(glDrawArraysInstancedEXT, name);
         GETPROC(glDrawElementsInstancedEXT, name);
-        // GETPROC(glGetFragmentShadingRatesEXT, name);
-        // GETPROC(glShadingRateEXT, name);
-        // GETPROC(glShadingRateCombinerOpsEXT, name);
+        GETPROC(glGetFragmentShadingRatesEXT, name);
+        GETPROC(glShadingRateEXT, name);
+        GETPROC(glShadingRateCombinerOpsEXT, name);
         // GETPROC(glFramebufferShadingRateEXT, name);
         // GETPROC(glDrawMeshTasksEXT, name);
         // GETPROC(glDrawMeshTasksIndirectEXT, name);

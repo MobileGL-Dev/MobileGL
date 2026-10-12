@@ -68,8 +68,9 @@ namespace MobileGL::MG_Pipe {
         offsetof(RenderStateParameters, BlendStates),
         // D2 dynamic: ClearColor, ClearDepth, ClearStencil, BlendColor, DepthRanges[16]
         offsetof(RenderStateParameters, ClearColor),
-        // P2 pipeline: SampleCoverageValue, SampleCoverageInvert, SampleMaskValue,
-        //              MinSampleShadingValue, StencilStates[0].Func
+        // P2 pipeline: SampleCoverageValue, SampleCoverageInvert, ShadingRate,
+        //              ShadingRateCombinerOp0/1, SampleMaskValue, MinSampleShadingValue,
+        //              StencilStates[0].Func
         offsetof(RenderStateParameters, SampleCoverageValue),
         // D3 dynamic: StencilStates[0].{Ref, ValueMask, WriteMask}
         MGPipeRenderStateChunkDetail::kStencilFace0 + MGPipeRenderStateChunkDetail::kFaceDynamicBegin,

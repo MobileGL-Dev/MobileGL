@@ -17,6 +17,8 @@ namespace MobileGL::MG_Impl::GLImpl {
     void GetFloatv(GLenum pname, GLfloat* params);
     void GetDoublev(GLenum pname, GLdouble* params);
     void GetIntegerv(GLenum pname, GLint* params);
+    // GL_EXT_fragment_shading_rate
+    void GetFragmentShadingRatesEXT(GLsizei samples, GLsizei maxCount, GLsizei* count, GLenum* shadingRates);
     void GetInteger64v(GLenum pname, GLint64* params);
     void GetIntegeri_v(GLenum target, GLuint index, GLint* data);
     void GetFloati_v(GLenum target, GLuint index, GLfloat* data);

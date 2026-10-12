@@ -50,6 +50,9 @@ inline constexpr const char* const kMGPipePipelineStateMembers[] = {
     "TextureCubeMapSeamlessEnabled",
     "SampleCoverageValue",
     "SampleCoverageInvert",
+    "ShadingRate",
+    "ShadingRateCombinerOp0",
+    "ShadingRateCombinerOp1",
     "SampleMaskValue",
     "MinSampleShadingValue",
     "StencilStates",
@@ -81,7 +84,7 @@ inline constexpr const char* const kMGPipePipelineStateMembers[] = {
     "ProgramPointSizeEnabled",
     "ScissorTestEnabledMask",
 };
-inline constexpr SizeT kMGPipePipelineStateMemberCount = 44;
+inline constexpr SizeT kMGPipePipelineStateMemberCount = 47;
 static_assert(kMGPipePipelineStateMemberCount ==
                   sizeof(kMGPipePipelineStateMembers) / sizeof(kMGPipePipelineStateMembers[0]));
 

@@ -518,6 +518,9 @@ namespace {
         check("SetSampleCoverage", [](RenderState& s) { s.SetSampleCoverage(0.375f, true); });
         check("SetSampleMaskValue", [](RenderState& s) { s.SetSampleMaskValue(0x5a5au); });
         check("SetMinSampleShadingValue", [](RenderState& s) { s.SetMinSampleShadingValue(0.625f); });
+        // The fragment shading rate took P2's alignment padding, so both setters are pipeline.
+        check("SetShadingRate", [](RenderState& s) { s.SetShadingRate(0x6u); });
+        check("SetShadingRateCombinerOps", [](RenderState& s) { s.SetShadingRateCombinerOps(1u, 4u); });
 
         // ---- Faces and scissor ----
         check("SetCullFaceMode", [](RenderState& s) { s.SetCullFaceMode(CullFaceMode::Front); });

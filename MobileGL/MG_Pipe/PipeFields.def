@@ -323,7 +323,8 @@
     F(ClipOrigin) F(ClipDepthMode) F(BlendStates) F(LogicOp) F(DepthTestEnabled) F(DepthFunc) \
     F(DepthMask) F(ColorMasks) F(FramebufferSrgbEnabled) F(DepthClampEnabled) \
     F(TextureCubeMapSeamlessEnabled) F(ClearColor) F(ClearDepth) F(ClearStencil) F(BlendColor) \
-    F(DepthRanges) F(SampleCoverageValue) F(SampleCoverageInvert) F(SampleMaskValue) \
+    F(DepthRanges) F(SampleCoverageValue) F(SampleCoverageInvert) F(ShadingRate) \
+    F(ShadingRateCombinerOp0) F(ShadingRateCombinerOp1) F(SampleMaskValue) \
     F(MinSampleShadingValue) F(StencilStates) F(CullFaceEnabled) F(CullFaceModeSetting) \
     F(FrontFaceModeSetting) F(ProvokingVertexModeSetting) F(LineSmoothHint) F(PolygonSmoothHint) \
     F(TextureCompressionHint) F(FragmentShaderDerivativeHint) F(PointFadeThresholdSize) \
@@ -389,7 +390,14 @@
     F(SupportsShaderFloat64) F(SupportsFloat64VertexAttributes) F(SupportsTessellationPointSize) \
     F(SupportsGeometryPointSize) F(MaxShaderStorageBlockSize) F(SubgroupSize) \
     F(SubgroupSupportedStages) F(SubgroupSupportedFeatures) F(SubgroupQuadOperationsInAllStages) \
-    F(GpuVendor)
+    F(GpuVendor) F(SupportsFragmentShadingRate) F(SupportsPrimitiveFragmentShadingRate) \
+    F(SupportsAttachmentFragmentShadingRate) F(FragmentShadingRateNonTrivialCombiners) \
+    F(FragmentShadingRateWithShaderDepthStencilWrites) F(FragmentShadingRateWithSampleMask) \
+    F(FragmentShadingRatePrimitiveWithMultiViewport) \
+    F(FragmentShadingRateAttachmentWithDefaultFramebuffer) F(FragmentShadingRateMasks) \
+    F(MinFragmentShadingRateAttachmentTexelWidth) F(MinFragmentShadingRateAttachmentTexelHeight) \
+    F(MaxFragmentShadingRateAttachmentTexelWidth) F(MaxFragmentShadingRateAttachmentTexelHeight) \
+    F(MaxFragmentShadingRateAttachmentTexelAspectRatio) F(MaxFragmentShadingRateAttachmentLayers)
 
 #define MGP_FIELDS_MGHostSpan(F) \
     F(Ptr) F(Seg) F(Size) F(Offset)

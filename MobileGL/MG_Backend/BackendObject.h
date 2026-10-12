@@ -557,6 +557,37 @@ namespace MobileGL {
             Uint32 SubgroupSupportedFeatures = 0;
             Bool SubgroupQuadOperationsInAllStages = false;
             GpuVendorKind GpuVendor = GpuVendorKind::Unknown;
+            // GL_EXT_fragment_shading_rate and its two companions. Each is a statement about the
+            // device, so all of them default to "absent" and the extension strings are advertised
+            // only from these: DirectGLES fills them from the driver's own
+            // EXT_fragment_shading_rate(_primitive, _attachment), DirectVulkan from
+            // VK_KHR_fragment_shading_rate's pipeline / primitive / attachment features.
+            //   SupportsFragmentShadingRate          glShadingRateEXT and gl_ShadingRateEXT
+            //   SupportsPrimitiveFragmentShadingRate gl_PrimitiveShadingRateEXT, combiner op 0
+            //   SupportsAttachmentFragmentShadingRate the R8UI rate attachment, combiner op 1
+            Bool SupportsFragmentShadingRate = false;
+            Bool SupportsPrimitiveFragmentShadingRate = false;
+            Bool SupportsAttachmentFragmentShadingRate = false;
+            // The four GL_FRAGMENT_SHADING_RATE_*_SUPPORTED_EXT booleans, as the device answers them.
+            Bool FragmentShadingRateNonTrivialCombiners = false;
+            Bool FragmentShadingRateWithShaderDepthStencilWrites = false;
+            Bool FragmentShadingRateWithSampleMask = false;
+            Bool FragmentShadingRatePrimitiveWithMultiViewport = false;
+            Bool FragmentShadingRateAttachmentWithDefaultFramebuffer = false;
+            // What glGetFragmentShadingRatesEXT answers, one mask per sample count 1, 2, 4 .. 64
+            // (index = log2(samples)): bit (log2(w) << 2 | log2(h)) is set when that rate is
+            // honoured exactly at that sample count, i.e. gl_ShadingRateEXT reads it back
+            // unclamped. Zero masks mean no rate at all, which is what a sample count the device
+            // cannot shade coarsely answers.
+            Uint16 FragmentShadingRateMasks[7] = {};
+            // The GL_{MIN,MAX}_FRAGMENT_SHADING_RATE_ATTACHMENT_TEXEL_{WIDTH,HEIGHT}_EXT,
+            // _ASPECT_RATIO_EXT and _LAYERS_EXT limits. Meaningful only with the attachment.
+            Int MinFragmentShadingRateAttachmentTexelWidth = 0;
+            Int MinFragmentShadingRateAttachmentTexelHeight = 0;
+            Int MaxFragmentShadingRateAttachmentTexelWidth = 0;
+            Int MaxFragmentShadingRateAttachmentTexelHeight = 0;
+            Int MaxFragmentShadingRateAttachmentTexelAspectRatio = 0;
+            Int MaxFragmentShadingRateAttachmentLayers = 0;
         };
 
         enum class WindowBackend {

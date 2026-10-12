@@ -206,6 +206,8 @@
     X(SetProvokingVertexMode,             NEW_RENDER_STATE|NEW_PIPELINE_STATE)                  \
     X(SetSampleCoverage,                  NEW_RENDER_STATE|NEW_PIPELINE_STATE)                  \
     X(SetSampleMaskValue,                 NEW_RENDER_STATE|NEW_PIPELINE_STATE)                  \
+    X(SetShadingRate,                     NEW_RENDER_STATE|NEW_PIPELINE_STATE)                  \
+    X(SetShadingRateCombinerOps,          NEW_RENDER_STATE|NEW_PIPELINE_STATE)                  \
     /* SetStencilFunc writes Func (pipeline chunk P2/P3) AND Ref/ValueMask (dynamic */          \
     /* D3/D4), and ++m_pipelineStateVersion is CONDITIONAL on Func moving - which is */         \
     /* what keeps a glStencilFunc that moves only the reference from evicting a     */          \

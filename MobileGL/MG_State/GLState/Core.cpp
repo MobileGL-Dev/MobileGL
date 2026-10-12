@@ -1208,6 +1208,26 @@ namespace MobileGL::MG_State {
             return m_renderState.GetMinSampleShadingValue();
         }
 
+        void GLContext::SetShadingRate(Uint8 rate) {
+            m_renderState.SetShadingRate(rate);
+        }
+
+        Uint8 GLContext::GetShadingRate() const {
+            return m_renderState.GetShadingRate();
+        }
+
+        void GLContext::SetShadingRateCombinerOps(Uint8 op0, Uint8 op1) {
+            m_renderState.SetShadingRateCombinerOps(op0, op1);
+        }
+
+        Uint8 GLContext::GetShadingRateCombinerOp0() const {
+            return m_renderState.GetShadingRateCombinerOp0();
+        }
+
+        Uint8 GLContext::GetShadingRateCombinerOp1() const {
+            return m_renderState.GetShadingRateCombinerOp1();
+        }
+
         void GLContext::SetPixelStoreParam(PixelStoreParam param, Int value) {
             m_renderState.SetPixelStoreParam(param, value);
         }
