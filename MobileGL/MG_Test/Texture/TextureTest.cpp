@@ -8,6 +8,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <limits>
 #include <vector>
 
@@ -1220,6 +1221,44 @@ namespace {
         Bool m_previous;
     };
 } // namespace
+
+// GL_OES_EGL_image_external(_essl3) are ES names: a desktop context may list no OES extension but
+// GL_OES_EGL_image, and an ES context no ARB one (KHR-GL40.exposed_extensions). Only the
+// advertisement is gated - external textures and samplerExternalOES keep working everywhere.
+TEST_F(TextureTest, ExternalImageExtensionNamesStayOffStrictDesktopContexts) {
+    using MG_Impl::GLImpl::ClientSideExtensionList;
+    using MG_Impl::GLImpl::ClientSideExternalImageExtensionsAllowed;
+    {
+        ScopedCoreProfileContext coreContext;
+        ASSERT_FALSE(MG_State::IsRelaxedSemanticsActive());
+        EXPECT_FALSE(ClientSideExternalImageExtensionsAllowed());
+        {
+            ScopedRelaxedSemantics relaxed;
+            EXPECT_TRUE(ClientSideExternalImageExtensionsAllowed());
+        }
+    }
+    EXPECT_TRUE(ClientSideExternalImageExtensionsAllowed()) << "no current context runs relaxed";
+
+    const auto contains = [](const Vector<const char*>& list, const char* name) {
+        return std::any_of(list.begin(), list.end(), [&](const char* n) { return std::strcmp(n, name) == 0; });
+    };
+    // Strict desktop: the caller passes external=false (see ClientSideExtensions).
+    const auto& desktop = ClientSideExtensionList(true, false, false, false);
+    for (const char* name : desktop) {
+        if (std::strstr(name, "OES") != nullptr) EXPECT_STREQ(name, "GL_OES_EGL_image");
+    }
+    EXPECT_TRUE(contains(desktop, "GL_ARB_robustness"));
+
+    const auto& relaxedDesktop = ClientSideExtensionList(true, true, false, false);
+    EXPECT_TRUE(contains(relaxedDesktop, "GL_OES_EGL_image_external"));
+    EXPECT_TRUE(contains(relaxedDesktop, "GL_OES_EGL_image_external_essl3"));
+
+    const auto& es = ClientSideExtensionList(true, true, false, true);
+    EXPECT_TRUE(contains(es, "GL_OES_EGL_image_external"));
+    EXPECT_TRUE(contains(es, "GL_OES_EGL_image_external_essl3"));
+    EXPECT_TRUE(contains(es, "GL_KHR_robustness"));
+    for (const char* name : es) EXPECT_EQ(std::strstr(name, "ARB"), nullptr) << name;
+}
 
 // GL 3.3 core 3.8.1: on an explicit core-profile context, DeleteTextures makes the name unused
 // again whether or not a bind ever instantiated an object, so the reservation must go back to
