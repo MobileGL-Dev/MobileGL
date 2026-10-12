@@ -47,6 +47,9 @@ namespace MobileGL {
             Int MaxIntegerSamples = 1;
             Int MaxSamples = 1;
             Int MaxSampleMaskWords = 1;
+            // VkPhysicalDeviceLimits::standardSampleLocations: the device places the samples of
+            // every supported count at the standard locations the Vulkan specification tabulates.
+            Bool StandardSampleLocations = false;
             Int MaxTextureImageUnits = 32;
             Int MaxVertexTextureImageUnits = 32;
             Int MaxComputeTextureImageUnits = 32;

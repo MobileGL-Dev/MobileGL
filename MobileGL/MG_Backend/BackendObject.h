@@ -573,6 +573,14 @@ namespace MobileGL {
             Uint32 SubgroupSize = 0;
             Uint32 SubgroupSupportedStages = 0;
             Uint32 SubgroupSupportedFeatures = 0;
+            // GL_SAMPLE_POSITION (GL 4.6 core 14.3.1.1) as the device actually places the samples
+            // of a 2-, 4-, 8- and 16-sample pixel: (x, y) pairs in [0, 1], the N-sample row starting
+            // at pair N - 2. Bit log2(N) of SamplePositionCountMask says row N was filled in; a row
+            // the backend could not determine stays unset rather than being guessed. Read and
+            // written through Get/SetSamplePositions only.
+            static constexpr Int kMaxSamplePositionCount = 16;
+            Float SamplePositions[60] = {}; // 2 * (2 + 4 + 8 + 16)
+            Uint32 SamplePositionCountMask = 0;
             Bool SubgroupQuadOperationsInAllStages = false;
             GpuVendorKind GpuVendor = GpuVendorKind::Unknown;
             // GL_EXT_fragment_shading_rate and its two companions. Each is a statement about the
@@ -606,6 +614,29 @@ namespace MobileGL {
             Int MaxFragmentShadingRateAttachmentTexelHeight = 0;
             Int MaxFragmentShadingRateAttachmentTexelAspectRatio = 0;
             Int MaxFragmentShadingRateAttachmentLayers = 0;
+
+
+            static constexpr Bool IsSamplePositionCount(Int samples) {
+                return samples >= 2 && samples <= kMaxSamplePositionCount && (samples & (samples - 1)) == 0;
+            }
+            static constexpr Uint32 SamplePositionCountBit(Int samples) {
+                return 1u << static_cast<Uint32>(std::countr_zero(static_cast<Uint32>(samples)));
+            }
+            // `xy` holds `samples` (x, y) pairs.
+            void SetSamplePositions(Int samples, const Float* xy) {
+                if (!IsSamplePositionCount(samples)) return;
+                for (Int i = 0; i < 2 * samples; ++i) SamplePositions[2 * (samples - 2) + i] = xy[i];
+                SamplePositionCountMask |= SamplePositionCountBit(samples);
+            }
+            Bool GetSamplePosition(Int samples, Int index, Float* outXY) const {
+                if (!IsSamplePositionCount(samples) || index < 0 || index >= samples ||
+                    (SamplePositionCountMask & SamplePositionCountBit(samples)) == 0) {
+                    return false;
+                }
+                outXY[0] = SamplePositions[2 * (samples - 2 + index)];
+                outXY[1] = SamplePositions[2 * (samples - 2 + index) + 1];
+                return true;
+            }
         };
 
         enum class WindowBackend {

@@ -664,6 +664,8 @@ inline constexpr WireLayoutMember kMGPipeWireLayoutMembers[] = {
     {"DynamicBackendParameters.SubgroupSize", offsetof(DynamicBackendParameters, SubgroupSize), sizeof(((DynamicBackendParameters*)nullptr)->SubgroupSize)},
     {"DynamicBackendParameters.SubgroupSupportedStages", offsetof(DynamicBackendParameters, SubgroupSupportedStages), sizeof(((DynamicBackendParameters*)nullptr)->SubgroupSupportedStages)},
     {"DynamicBackendParameters.SubgroupSupportedFeatures", offsetof(DynamicBackendParameters, SubgroupSupportedFeatures), sizeof(((DynamicBackendParameters*)nullptr)->SubgroupSupportedFeatures)},
+    {"DynamicBackendParameters.SamplePositions", offsetof(DynamicBackendParameters, SamplePositions), sizeof(((DynamicBackendParameters*)nullptr)->SamplePositions)},
+    {"DynamicBackendParameters.SamplePositionCountMask", offsetof(DynamicBackendParameters, SamplePositionCountMask), sizeof(((DynamicBackendParameters*)nullptr)->SamplePositionCountMask)},
     {"DynamicBackendParameters.SubgroupQuadOperationsInAllStages", offsetof(DynamicBackendParameters, SubgroupQuadOperationsInAllStages), sizeof(((DynamicBackendParameters*)nullptr)->SubgroupQuadOperationsInAllStages)},
     {"DynamicBackendParameters.GpuVendor", offsetof(DynamicBackendParameters, GpuVendor), sizeof(((DynamicBackendParameters*)nullptr)->GpuVendor)},
     {"DynamicBackendParameters.SupportsFragmentShadingRate", offsetof(DynamicBackendParameters, SupportsFragmentShadingRate), sizeof(((DynamicBackendParameters*)nullptr)->SupportsFragmentShadingRate)},

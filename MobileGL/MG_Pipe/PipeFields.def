@@ -390,7 +390,8 @@
     F(SupportsDistinctDepthStencilAttachments) F(PerLayerFramebufferAttachmentTargets) \
     F(SupportsShaderFloat64) F(SupportsFloat64VertexAttributes) F(SupportsTessellationPointSize) \
     F(SupportsGeometryPointSize) F(MaxShaderStorageBlockSize) F(SubgroupSize) \
-    F(SubgroupSupportedStages) F(SubgroupSupportedFeatures) F(SubgroupQuadOperationsInAllStages) \
+    F(SubgroupSupportedStages) F(SubgroupSupportedFeatures) F(SamplePositions) \
+    F(SamplePositionCountMask) F(SubgroupQuadOperationsInAllStages) \
     F(GpuVendor) F(SupportsFragmentShadingRate) F(SupportsPrimitiveFragmentShadingRate) \
     F(SupportsAttachmentFragmentShadingRate) F(FragmentShadingRateNonTrivialCombiners) \
     F(FragmentShadingRateWithShaderDepthStencilWrites) F(FragmentShadingRateWithSampleMask) \

@@ -1201,6 +1201,28 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         m_dynamicParameters.MaxIntegerSamples = m_vulkanCaps.MaxIntegerSamples;
         m_dynamicParameters.MaxSamples = m_vulkanCaps.MaxSamples;
         m_dynamicParameters.MaxSampleMaskWords = m_vulkanCaps.MaxSampleMaskWords;
+        // GL_SAMPLE_POSITION. A device reporting standardSampleLocations places the samples exactly
+        // at the Vulkan specification's table (Multisampling, "Standard sample locations"), which
+        // is also what gl_SamplePosition reads back in a shader. Vulkan's sample y grows with the
+        // framebuffer row, and a framebuffer object's row 0 is GL's y = 0, so the table needs no
+        // flip to be GL's answer. Without the flag the positions are unknown and stay unset.
+        if (m_vulkanCaps.StandardSampleLocations) {
+            static constexpr Float kStandard2[] = {0.75f, 0.75f, 0.25f, 0.25f};
+            static constexpr Float kStandard4[] = {0.375f, 0.125f, 0.875f, 0.375f, 0.125f, 0.625f, 0.625f, 0.875f};
+            static constexpr Float kStandard8[] = {0.5625f, 0.3125f, 0.4375f, 0.6875f, 0.8125f, 0.5625f,
+                                                   0.3125f, 0.1875f, 0.1875f, 0.8125f, 0.0625f, 0.4375f,
+                                                   0.6875f, 0.9375f, 0.9375f, 0.0625f};
+            static constexpr Float kStandard16[] = {
+                0.5625f, 0.5625f, 0.4375f, 0.3125f, 0.3125f, 0.625f,  0.75f,   0.4375f, 0.1875f, 0.375f, 0.625f,
+                0.8125f, 0.8125f, 0.6875f, 0.6875f, 0.1875f, 0.375f,  0.875f,  0.5f,    0.0625f, 0.25f,  0.125f,
+                0.125f,  0.75f,   0.0f,    0.5f,    0.9375f, 0.25f,   0.875f,  0.9375f, 0.0625f, 0.0f};
+            const Float* const tables[] = {kStandard2, kStandard4, kStandard8, kStandard16};
+            for (Int samples = 2, row = 0; samples <= decltype(m_dynamicParameters)::kMaxSamplePositionCount &&
+                                           samples <= m_vulkanCaps.MaxSamples;
+                 samples *= 2, ++row) {
+                m_dynamicParameters.SetSamplePositions(samples, tables[row]);
+            }
+        }
         const Int maxSupportedTextureUnits = static_cast<Int>(MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS);
         // GL_MAX_TEXTURE_IMAGE_UNITS is a *per-stage* sampler limit. Adreno/Qualcomm report a huge
         // maxPerStageDescriptorSampledImages (descriptor-indexing scale), so clamping it only to our

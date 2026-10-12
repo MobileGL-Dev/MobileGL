@@ -414,6 +414,48 @@ TEST_F(TextureTest, ClearTexImageRejectsCompressedTextures) {
     EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
 }
 
+// GL 4.6 core 14.3.1.1 (KHR-GL4x sample_variables.position.fixed): GL_SAMPLE_POSITION answers where
+// the backend places the samples of the draw framebuffer's sample count, and an index at or past
+// that framebuffer's GL_SAMPLES is INVALID_VALUE - every index, for a single-sample framebuffer.
+TEST_F(TextureTest, SamplePositionComesFromTheBackendForTheDrawFramebufferSampleCount) {
+    auto& params = FormatCapabilityBackend::MutableDynamicParameters();
+    const auto savedParams = params;
+    params.MaxSamples = params.MaxColorTextureSamples = params.MaxDepthTextureSamples = 4;
+    params.MaxIntegerSamples = params.MaxFramebufferSamples = 4;
+    const Float fourSamples[] = {0.375f, 0.125f, 0.875f, 0.375f, 0.125f, 0.625f, 0.625f, 0.875f};
+    params.SetSamplePositions(4, fourSamples);
+    ScopedBackendOverride override(MakeUnique<FormatCapabilityBackend>());
+
+    GLuint texture = 0;
+    MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_2D_MULTISAMPLE, 1, &texture);
+    MG_Impl::GLImpl::TextureStorage2DMultisample(texture, 4, GL_RGBA8, 8, 8, GL_TRUE);
+    GLuint framebuffer = 0;
+    MG_Impl::GLImpl::CreateFramebuffers(1, &framebuffer);
+    MG_Impl::GLImpl::NamedFramebufferTexture(framebuffer, GL_COLOR_ATTACHMENT0, texture, 0);
+    MG_Impl::GLImpl::BindFramebuffer(GL_DRAW_FRAMEBUFFER, framebuffer);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    for (GLuint index = 0; index < 4; ++index) {
+        GLfloat position[2] = {-1.0f, -1.0f};
+        MG_Impl::GLImpl::GetMultisamplefv(GL_SAMPLE_POSITION, index, position);
+        EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+        EXPECT_EQ(position[0], fourSamples[2 * index]) << "sample " << index;
+        EXPECT_EQ(position[1], fourSamples[2 * index + 1]) << "sample " << index;
+    }
+    GLfloat position[2] = {};
+    MG_Impl::GLImpl::GetMultisamplefv(GL_SAMPLE_POSITION, 4, position);
+    ExpectSingleGlError(GL_INVALID_VALUE);
+
+    MG_Impl::GLImpl::BindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+    MG_Impl::GLImpl::GetMultisamplefv(GL_SAMPLE_POSITION, 0, position);
+    ExpectSingleGlError(GL_INVALID_VALUE);
+
+    MG_Impl::GLImpl::DeleteFramebuffers(1, &framebuffer);
+    MG_Impl::GLImpl::DeleteTextures(1, &texture);
+    params = savedParams;
+    DrainPendingGlErrors();
+}
+
 // GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT is float state that must answer every numeric query: GetFloatv
 // is authoritative and GetIntegerv would otherwise fall through to its INVALID_ENUM default.
 TEST_F(TextureTest, MaxTextureMaxAnisotropyIsAnsweredFromTheBackendLimit) {

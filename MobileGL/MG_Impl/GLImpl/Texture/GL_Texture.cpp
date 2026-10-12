@@ -7208,19 +7208,27 @@ namespace MobileGL::MG_Impl::GLImpl {
             return;
         }
 
-        const Int maxSamples = MG_Backend::pActiveBackendObject != nullptr
-            ? std::max(MG_Backend::pActiveBackendObject->GetDynamicParameters().MaxSamples, 1)
-            : 1;
-        if (static_cast<Int>(index) >= maxSamples) {
+        // GL 4.6 core 14.3.1.1: a sample of the DRAW framebuffer, which has GL_SAMPLES of them - so
+        // a single-sample framebuffer has none to ask about.
+        const GLint samples = ResolveDrawFramebufferSampleCount();
+        if (static_cast<Int64>(index) >= samples) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidValue,
-                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "Sample index is out of range."));
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                             "Sample index is not below the draw framebuffer's GL_SAMPLES."));
             return;
         }
 
-        // Keep sample positions deterministic even before the backend exposes vendor-specific patterns.
-        val[0] = 0.5f;
-        val[1] = 0.5f;
+        // The backend publishes where its device really places the samples of each count (a
+        // shader's gl_SamplePosition reads the same places). A count it could not determine keeps
+        // answering the pixel centre.
+        Float position[2] = {0.5f, 0.5f};
+        if (MG_Backend::pActiveBackendObject != nullptr) {
+            MG_Backend::pActiveBackendObject->GetDynamicParameters().GetSamplePosition(
+                samples, static_cast<Int>(index), position);
+        }
+        val[0] = position[0];
+        val[1] = position[1];
     }
 
     void TexSubImage3D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint zoffset, GLsizei width,

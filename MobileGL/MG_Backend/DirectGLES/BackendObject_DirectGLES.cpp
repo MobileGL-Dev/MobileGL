@@ -453,6 +453,59 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return supported;
         }
 
+        // GL_SAMPLE_POSITION is a property of the multisample framebuffer the driver builds, so it
+        // is asked once per power-of-two sample count, of a throwaway RGBA8 renderbuffer framebuffer,
+        // through the driver's own glGetMultisamplefv (ES 3.1 core). A count the driver rounds up
+        // reports the first positions of the pattern it really uses - the samples gl_SampleID
+        // 0..count-1 address in a shader. Counts that cannot be built are left unset.
+        void ProbeSamplePositions(const MG_External::GLESFunctionsTable& gl,
+                                  const MG_External::GLESCapabilities& capabilities,
+                                  DynamicBackendParameters& dynamicParameters) {
+            const auto& version = capabilities.GLESVersion;
+            if (version.Major < 3 || (version.Major == 3 && version.Minor < 1)) return;
+            if (!gl.glGetMultisamplefv || !gl.glGenFramebuffers || !gl.glBindFramebuffer ||
+                !gl.glFramebufferRenderbuffer || !gl.glCheckFramebufferStatus || !gl.glDeleteFramebuffers ||
+                !gl.glGenRenderbuffers || !gl.glBindRenderbuffer || !gl.glRenderbufferStorageMultisample ||
+                !gl.glDeleteRenderbuffers || !gl.glGetIntegerv) {
+                return;
+            }
+
+            GLint prevFramebuffer = 0, prevRenderbuffer = 0;
+            gl.glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prevFramebuffer);
+            gl.glGetIntegerv(GL_RENDERBUFFER_BINDING, &prevRenderbuffer);
+            for (Int samples = 2; samples <= DynamicBackendParameters::kMaxSamplePositionCount &&
+                                  samples <= capabilities.MaxSamples;
+                 samples *= 2) {
+                GLuint framebuffer = 0, renderbuffer = 0;
+                gl.glGenFramebuffers(1, &framebuffer);
+                gl.glGenRenderbuffers(1, &renderbuffer);
+                gl.glBindRenderbuffer(GL_RENDERBUFFER, renderbuffer);
+                gl.glRenderbufferStorageMultisample(GL_RENDERBUFFER, samples, GL_RGBA8, 4, 4);
+                gl.glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+                gl.glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, renderbuffer);
+                GLint actualSamples = 0;
+                if (gl.glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE) {
+                    gl.glGetIntegerv(GL_SAMPLES, &actualSamples);
+                }
+                if (actualSamples >= samples) {
+                    Float positions[2 * DynamicBackendParameters::kMaxSamplePositionCount] = {};
+                    for (Int index = 0; index < samples; ++index) {
+                        gl.glGetMultisamplefv(GL_SAMPLE_POSITION, static_cast<GLuint>(index), &positions[2 * index]);
+                    }
+                    dynamicParameters.SetSamplePositions(samples, positions);
+                }
+                gl.glBindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(prevFramebuffer));
+                gl.glBindRenderbuffer(GL_RENDERBUFFER, static_cast<GLuint>(prevRenderbuffer));
+                gl.glDeleteFramebuffers(1, &framebuffer);
+                gl.glDeleteRenderbuffers(1, &renderbuffer);
+            }
+            // A count the driver refused leaves its error behind; it must not reach the application.
+            if (gl.glGetError) {
+                for (Int drained = 0; drained < 16 && gl.glGetError() != GL_NO_ERROR; ++drained) {
+                }
+            }
+        }
+
         Bool ProbeFramebufferCompletenessForRenderbuffer(const MG_External::GLESFunctionsTable& gl, GLuint renderbuffer,
                                                          TextureInternalFormat format) {
             GLuint framebuffer = 0;
@@ -1868,6 +1921,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             clampStageImageUniforms(m_GLESCapabilities.MaxComputeImageUniforms);
         m_dynamicParameters.SupportsDistinctDepthStencilAttachments =
             ProbeDistinctDepthStencilAttachments(DirectGLES::g_GLESFuncs);
+        ProbeSamplePositions(DirectGLES::g_GLESFuncs, m_GLESCapabilities, m_dynamicParameters);
         // SyncAttachmentObject routes a layered upload target to glFramebufferTextureLayer with the
         // attachment's layer passed through, so this backend really does render to the layer it was
         // given - provided the driver resolved the entry point at all.

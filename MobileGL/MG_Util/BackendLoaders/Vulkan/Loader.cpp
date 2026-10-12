@@ -187,6 +187,7 @@ namespace MobileGL::MG_Util::BackendLoader {
         // reproduced on this backend. One word is the spec minimum and therefore always legal.
         // It is also what PipelineCreatePayload::sampleMask is sized for.
         caps.MaxSampleMaskWords = std::min(SaturateToInt(p.limits.maxSampleMaskWords), 1);
+        caps.StandardSampleLocations = p.limits.standardSampleLocations == VK_TRUE;
         caps.MaxTextureImageUnits = SaturateToInt(p.limits.maxPerStageDescriptorSampledImages);
         caps.MaxVertexTextureImageUnits = SaturateToInt(p.limits.maxPerStageDescriptorSampledImages);
         caps.MaxComputeTextureImageUnits = SaturateToInt(p.limits.maxPerStageDescriptorSampledImages);
@@ -329,6 +330,7 @@ namespace MobileGL::MG_Util::BackendLoader {
         // reproduced on this backend. One word is the spec minimum and therefore always legal.
         // It is also what PipelineCreatePayload::sampleMask is sized for.
         caps.MaxSampleMaskWords = std::min(SaturateToInt(properties.limits.maxSampleMaskWords), 1);
+        caps.StandardSampleLocations = properties.limits.standardSampleLocations == VK_TRUE;
         caps.MaxTextureImageUnits = SaturateToInt(properties.limits.maxPerStageDescriptorSampledImages);
         caps.MaxVertexTextureImageUnits = SaturateToInt(properties.limits.maxPerStageDescriptorSampledImages);
         caps.MaxComputeTextureImageUnits = SaturateToInt(properties.limits.maxPerStageDescriptorSampledImages);
