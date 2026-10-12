@@ -843,7 +843,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 capabilities.SupportsDrawIndirect && capabilities.SupportsBaseInstance,
                 capabilities.SupportsTextureView, capabilities.SupportsTextureCubeMapArray,
                 AdvertisedFeatureSupport{.TessellationShader = capabilities.SupportsTessellationShader,
-                                         .CullDistance = capabilities.MaxCullDistances > 0});
+                                         .CullDistance = capabilities.MaxCullDistances > 0,
+                                         .ClipControl = capabilities.SupportsClipControl});
             // Exactly what InitCapabilities forwards into the dynamic parameters: the base
             // extension and _primitive when the driver has them, _attachment not yet.
             auto& extensions = MutableRendererInfo().RendererGLInfo.Extensions;
@@ -1528,6 +1529,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // reports where the driver answers a non-zero GL_MAX_CULL_DISTANCES.
         if (features.CullDistance) {
             extensions.push_back(E_GL_ARB_cull_distance);
+        }
+        // glClipControl is forwarded to the driver's glClipControlEXT.
+        if (features.ClipControl) {
+            extensions.push_back(E_GL_ARB_clip_control);
         }
         // Minecraft 26.3 checks this prerequisite before it even considers
         // GL_ARB_multi_draw_indirect. ES 3.1 supplies both single-draw entry points; the loader

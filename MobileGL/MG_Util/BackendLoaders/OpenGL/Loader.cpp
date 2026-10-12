@@ -661,6 +661,7 @@ namespace MobileGL::MG_Util::BackendLoader {
             INIT_GLES_FUNC(glMapBufferOES)
             INIT_GLES_FUNC_OPTIONAL(glPolygonModeNV)
             INIT_GLES_FUNC_OPTIONAL(glPolygonModeANGLE)
+            INIT_GLES_FUNC_OPTIONAL(glClipControlEXT)
             INIT_GLES_FUNC_OPTIONAL(glColorMaskiEXT)
             INIT_GLES_FUNC_OPTIONAL(glColorMaskiOES)
             // Extension-only multi-draw entry points. eglGetProcAddress may legally return a
@@ -1124,6 +1125,7 @@ namespace MobileGL::MG_Util::BackendLoader {
         // comes out false, so a stub pointer counting as support would silently break the draws.
         Bool hasBaseInstanceExtension = false;
         Bool hasTessellationShaderExtension = false;
+        Bool hasClipControlExtension = false;
         for (GLint i = 0; i < extCount; ++i) {
             const char* extension = (const char*)glesFuncs.glGetStringi(GL_EXTENSIONS, i);
             if (extension) {
@@ -1215,6 +1217,9 @@ namespace MobileGL::MG_Util::BackendLoader {
                 if (std::strcmp(extension, "GL_EXT_clip_cull_distance") == 0) {
                     caps.SupportsClipDistance = true;
                 }
+                if (std::strcmp(extension, "GL_EXT_clip_control") == 0) {
+                    hasClipControlExtension = true;
+                }
                 if (std::strcmp(extension, "GL_OES_viewport_array") == 0) {
                     caps.SupportsViewportArray = true;
                 }
@@ -1287,6 +1292,9 @@ namespace MobileGL::MG_Util::BackendLoader {
                                               glesFuncs.glDrawElementsBaseVertex != nullptr;
         caps.SupportsTessellationShader = (esAtLeast32 || (esAtLeast31 && hasTessellationShaderExtension)) &&
                                           glesFuncs.glPatchParameteri != nullptr;
+        // The string AND the pointer: eglGetProcAddress may hand back a stub for a name the
+        // driver does not implement.
+        caps.SupportsClipControl = hasClipControlExtension && glesFuncs.glClipControlEXT != nullptr;
         caps.SupportsComputeShader = esAtLeast31 && glesFuncs.glDispatchCompute != nullptr &&
                                      glesFuncs.glMemoryBarrier != nullptr &&
                                      glesFuncs.glCreateShader != nullptr &&
@@ -1319,6 +1327,7 @@ namespace MobileGL::MG_Util::BackendLoader {
         MGLOG_I("    base instance (EXT_base_instance; emulated by attribute offsets when absent): %s",
                 caps.SupportsBaseInstance ? "yes" : "no");
         MGLOG_I("    clip distances (EXT_clip_cull_distance): %s", caps.SupportsClipDistance ? "yes" : "no");
+        MGLOG_I("    clip control (EXT_clip_control): %s", caps.SupportsClipControl ? "yes" : "no");
         MGLOG_I("    viewport array (OES_viewport_array; gl_ViewportIndex collapses to viewport 0 when absent): %s",
                 caps.SupportsViewportArray ? "yes" : "no");
         {

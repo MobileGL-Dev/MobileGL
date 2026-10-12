@@ -916,6 +916,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             //  - mix() over integer and boolean vectors in GLSL below 4.50. The frontend compiles it
             //    to OpSelect, which SPIR-V consumes directly.
             E_GL_EXT_shader_integer_mix,
+            // The origin and depth mode select the Y negation and the [-1, 1] -> [0, 1] depth
+            // remap of the position fixup every program already gets, so no device feature is
+            // involved (ApplyClipControlToTransformFlags).
+            E_GL_ARB_clip_control,
             // Advertised with GL_NUM_PROGRAM_BINARY_FORMATS = 0, which the
             // extension explicitly permits. It is also the only thing that
             // exposes glProgramParameteri before GL 4.1.

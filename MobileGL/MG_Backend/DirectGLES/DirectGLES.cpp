@@ -4125,6 +4125,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
             }
 
+            if (headSpanDirty) { // Clip control. GL_ARB_clip_control is only advertised where the
+              // driver has GL_EXT_clip_control, so without it the state can only be the default.
+                if (g_GLESCapabilities.SupportsClipControl &&
+                    (forceFullPush || parameters.ClipOrigin != g_syncedRenderStateParameters.ClipOrigin ||
+                     parameters.ClipDepthMode != g_syncedRenderStateParameters.ClipDepthMode)) {
+                    g_GLESFuncs.glClipControlEXT(parameters.ClipOrigin, parameters.ClipDepthMode);
+                }
+            }
+
             if (headSpanDirty) { // Line width
                 if (forceFullPush || parameters.LineWidth != g_syncedRenderStateParameters.LineWidth) {
                     g_GLESFuncs.glLineWidth(parameters.LineWidth);
@@ -7485,6 +7494,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
     //  - An active transform feedback capture. GL rejects a draw issued with a program
     //    other than the one that began the capture, and would otherwise append the
     //    emulation's vertices to the application's buffers.
+    //
+    //  - The application's clip control. The passes place their triangle in the default
+    //    lower-left, [-1, 1] clip space; an upper-left origin would mirror it vertically.
     class ScopedEmulationDrawState {
     public:
         ScopedEmulationDrawState() {
@@ -7525,6 +7537,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 g_GLESFuncs.glPauseTransformFeedback();
                 m_pausedTransformFeedback = true;
                 DrainBlitErrors();
+            }
+
+            if (g_GLESCapabilities.SupportsClipControl) {
+                g_GLESFuncs.glGetIntegerv(GL_CLIP_ORIGIN, &m_clipOrigin);
+                g_GLESFuncs.glGetIntegerv(GL_CLIP_DEPTH_MODE, &m_clipDepthMode);
+                g_GLESFuncs.glClipControlEXT(GL_LOWER_LEFT, GL_NEGATIVE_ONE_TO_ONE);
             }
 
             m_activeTextureUnit = TextureImpl::g_activeTextureUnit;
@@ -7597,6 +7615,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                  colorMask.z() ? GL_TRUE : GL_FALSE, colorMask.w() ? GL_TRUE : GL_FALSE);
                 }
             }
+            if (g_GLESCapabilities.SupportsClipControl) {
+                g_GLESFuncs.glClipControlEXT(static_cast<GLenum>(m_clipOrigin), static_cast<GLenum>(m_clipDepthMode));
+            }
             if (m_pausedTransformFeedback && g_GLESFuncs.glResumeTransformFeedback) {
                 g_GLESFuncs.glResumeTransformFeedback();
             }
@@ -7628,6 +7649,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         GLint m_stencilPass[2] = {GL_KEEP, GL_KEEP};
         Uint m_activeTextureUnit = 0;
         Bool m_pausedTransformFeedback = false;
+        GLint m_clipOrigin = GL_LOWER_LEFT;
+        GLint m_clipDepthMode = GL_NEGATIVE_ONE_TO_ONE;
         // The eight GL_CLIP_DISTANCE0_EXT..7_EXT entries are last so that a driver without
         // GL_EXT_clip_cull_distance can be served by shortening the count instead of asking
         // it about tokens it does not know. They belong here at all because an emulation pass

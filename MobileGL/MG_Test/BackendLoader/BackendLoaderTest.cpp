@@ -1337,6 +1337,52 @@ TEST(TessellationCapabilities, FollowTheVersionOrTheExtension) {
     EXPECT_TRUE(es32.SupportsTessellationShader);
 }
 
+// glClipControl is forwarded only to a driver that both advertises GL_EXT_clip_control and
+// resolves its entry point.
+TEST(ClipControlCapabilities, NeedTheExtensionAndTheEntryPoint) {
+    auto withEntryPoint = MakeFakeGLESFunctions();
+    withEntryPoint.glClipControlEXT = [](GLenum, GLenum) {};
+
+    ResetFakeDriver();
+    g_fake.maxVertexSsboBlocks = 0;
+    MobileGL::MG_External::GLESCapabilities noExtension;
+    ASSERT_TRUE(MobileGL::MG_Util::BackendLoader::FillInGLESCapabilities(noExtension, withEntryPoint));
+    EXPECT_FALSE(noExtension.SupportsClipControl);
+
+    ResetFakeDriver();
+    g_fake.maxVertexSsboBlocks = 0;
+    g_fake.extensions.emplace_back("GL_EXT_clip_control");
+    MobileGL::MG_External::GLESCapabilities noEntryPoint;
+    ASSERT_TRUE(MobileGL::MG_Util::BackendLoader::FillInGLESCapabilities(noEntryPoint, MakeFakeGLESFunctions()));
+    EXPECT_FALSE(noEntryPoint.SupportsClipControl);
+
+    ResetFakeDriver();
+    g_fake.maxVertexSsboBlocks = 0;
+    g_fake.extensions.emplace_back("GL_EXT_clip_control");
+    MobileGL::MG_External::GLESCapabilities both;
+    ASSERT_TRUE(MobileGL::MG_Util::BackendLoader::FillInGLESCapabilities(both, withEntryPoint));
+    EXPECT_TRUE(both.SupportsClipControl);
+}
+
+// DirectGLES advertises ARB_clip_control on the driver's extension; DirectVulkan always, since it
+// applies clip control in its own position fixup.
+TEST(CoreSurfaceAdvertisement, ClipControlFollowsTheBackendsRoute) {
+    const auto contains = [](const MobileGL::Vector<MobileGL::GLExtension>& extensions,
+                             MobileGL::GLExtension wanted) {
+        return std::find(extensions.begin(), extensions.end(), wanted) != extensions.end();
+    };
+    EXPECT_FALSE(contains(MobileGL::MG_Backend::DirectGLES::BuildAdvertisedExtensions(false, false, false, false,
+                                                                                       false, false),
+                          MobileGL::E_GL_ARB_clip_control));
+    const MobileGL::MG_Backend::AdvertisedFeatureSupport clipControl{.ClipControl = true};
+    EXPECT_TRUE(contains(MobileGL::MG_Backend::DirectGLES::BuildAdvertisedExtensions(false, false, false, false,
+                                                                                      false, false, clipControl),
+                         MobileGL::E_GL_ARB_clip_control));
+    EXPECT_TRUE(contains(MobileGL::MG_Backend::DirectVulkan::BuildAdvertisedExtensions(false, false, false, false,
+                                                                                        false),
+                         MobileGL::E_GL_ARB_clip_control));
+}
+
 // Minecraft 26.3 checks ARB_draw_indirect before it considers the already-advertised
 // ARB_multi_draw_indirect, then separately requires ARB_base_instance before enabling its terrain
 // indirect path. Pin both strings and, just as importantly, the non-zero firstInstance gate.

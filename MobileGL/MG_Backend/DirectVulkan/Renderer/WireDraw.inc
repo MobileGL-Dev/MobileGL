@@ -520,8 +520,10 @@
         // not rewind an arena while this draw owns as-yet-unrecorded slices.
         WirePreparationScope preparing(m_wirePreparationDepth);
 
-        ProgramFactory::CompileOptionFlags flags =
-            ProgramFactory::CompileOptionFlags(GetBaseTransformFlagsRaw(fbo->IsDefault));
+        const RenderStateParameters& clipControl = MG_Pipe::gPipeInputs->GetRenderStateParameters();
+        ProgramFactory::CompileOptionFlags flags = ProgramFactory::CompileOptionFlags(
+            ProgramFactory::ApplyClipControlToTransformFlags(GetBaseTransformFlagsRaw(fbo->IsDefault),
+                                                             clipControl.ClipOrigin, clipControl.ClipDepthMode));
         if (m_transformFeedbackFeatureEnabled && MG_Pipe::gPipeInputs->IsTransformFeedbackActive() &&
             program.GetTransformFeedbackVaryingCount() > 0)
             flags |= ProgramFactory::CompileOptionBit::XfbCapture;

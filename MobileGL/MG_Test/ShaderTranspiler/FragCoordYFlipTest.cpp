@@ -111,3 +111,23 @@ void main() {
 }
 )");
 }
+
+// glClipControl rides on the position fixup's two bits. An upper-left origin toggles the Y flip
+// (an FBO gains one, the default framebuffer loses its own), a [0, 1] depth mode drops the
+// depth remap, and nothing else - the rotation and gl_FragCoord bits - moves.
+TEST(ClipControlTransformFlags, OriginTogglesTheFlipAndDepthModeDropsTheRemap) {
+    using Bit = MG_Backend::DirectVulkan::ProgramFactory::CompileOptionBit;
+    const auto apply = MG_Backend::DirectVulkan::ProgramFactory::ApplyClipControlToTransformFlags;
+    const Uint32 fbo = static_cast<Uint32>(Bit::PositionZRemap);
+    const Uint32 window = static_cast<Uint32>(Bit::PositionZRemap) | static_cast<Uint32>(Bit::PositionYFlip) |
+                          static_cast<Uint32>(Bit::FragCoordYFlip) | static_cast<Uint32>(Bit::SurfaceRotate90);
+
+    EXPECT_EQ(apply(fbo, GL_LOWER_LEFT, GL_NEGATIVE_ONE_TO_ONE), fbo);
+    EXPECT_EQ(apply(window, GL_LOWER_LEFT, GL_NEGATIVE_ONE_TO_ONE), window);
+    EXPECT_EQ(apply(fbo, GL_UPPER_LEFT, GL_NEGATIVE_ONE_TO_ONE), fbo | static_cast<Uint32>(Bit::PositionYFlip));
+    EXPECT_EQ(apply(window, GL_UPPER_LEFT, GL_NEGATIVE_ONE_TO_ONE),
+              window & ~static_cast<Uint32>(Bit::PositionYFlip));
+    EXPECT_EQ(apply(fbo, GL_LOWER_LEFT, GL_ZERO_TO_ONE), 0u);
+    EXPECT_EQ(apply(window, GL_UPPER_LEFT, GL_ZERO_TO_ONE),
+              static_cast<Uint32>(Bit::FragCoordYFlip) | static_cast<Uint32>(Bit::SurfaceRotate90));
+}

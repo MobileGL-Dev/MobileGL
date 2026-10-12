@@ -650,6 +650,8 @@ namespace MobileGL {
             // Extension aliases for glPolygonMode (GLES core has none) and indexed glColorMaski.
             GL_FUNC_TYPEDEF(void, glPolygonModeNV, GLenum face, GLenum mode)
             GL_FUNC_TYPEDEF(void, glPolygonModeANGLE, GLenum face, GLenum mode)
+            // GL_EXT_clip_control (ES has no core glClipControl).
+            GL_FUNC_TYPEDEF(void, glClipControlEXT, GLenum origin, GLenum depth)
             GL_FUNC_TYPEDEF(void, glColorMaskiEXT, GLuint index, GLboolean r, GLboolean g, GLboolean b, GLboolean a)
             GL_FUNC_TYPEDEF(void, glColorMaskiOES, GLuint index, GLboolean r, GLboolean g, GLboolean b, GLboolean a)
 
@@ -1066,6 +1068,7 @@ namespace MobileGL {
             GL_FUNC_DECL(glMapBufferOES)
             GL_FUNC_DECL(glPolygonModeNV)
             GL_FUNC_DECL(glPolygonModeANGLE)
+            GL_FUNC_DECL(glClipControlEXT)
             GL_FUNC_DECL(glColorMaskiEXT)
             GL_FUNC_DECL(glColorMaskiOES)
 
@@ -1117,6 +1120,9 @@ namespace MobileGL {
             // Tessellation stages: ES 3.2 core, or GL_EXT_tessellation_shader on 3.1, with
             // glPatchParameteri resolved either way.
             Bool SupportsTessellationShader = false;
+            // GL_EXT_clip_control advertised and glClipControlEXT resolved: the driver applies a
+            // clip-space origin and depth mode, so the application's glClipControl is forwarded.
+            Bool SupportsClipControl = false;
             // GL_EXT_texture_view / GL_OES_texture_view: two ES texture names sharing one
             // storage, i.e. the only way DirectGLES can answer glTextureView at all. ES never
             // made this core - not even in 3.2 - so unlike every other capability here there is

@@ -320,6 +320,9 @@ namespace MobileGL {
             // GL_MAX_CULL_DISTANCES; VkPhysicalDeviceFeatures::shaderCullDistance with a non-zero
             // maxCullDistances.
             Bool CullDistance = false;
+            // GL_EXT_clip_control on DirectGLES. DirectVulkan applies clip control in its own
+            // position fixup and does not read this.
+            Bool ClipControl = false;
         };
 
         // Coarse GPU vendor identity for gating device-specific quirks. Detected from the

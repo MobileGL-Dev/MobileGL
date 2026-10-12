@@ -75,6 +75,18 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             ZeroBaseVertex = 1 << 8,
         };
         using CompileOptionFlags = Flags<CompileOptionBit>;
+
+        // glClipControl folded into the position fixup's two bits. An upper-left origin negates
+        // clip-space Y on top of whatever the framebuffer needs (the fixup flips before it rotates,
+        // so this stays in the logical orientation), and inverts the cull sense with it, which
+        // keeps facing a property of the clip-space winding as the extension requires. A
+        // [0, 1] depth mode is Vulkan's own clip volume, so the remap is dropped. gl_FragCoord is
+        // a window coordinate, which clip control does not move.
+        static constexpr Uint32 ApplyClipControlToTransformFlags(Uint32 flags, GLenum origin, GLenum depthMode) {
+            if (origin == GL_UPPER_LEFT) flags ^= static_cast<Uint32>(CompileOptionBit::PositionYFlip);
+            if (depthMode == GL_ZERO_TO_ONE) flags &= ~static_cast<Uint32>(CompileOptionBit::PositionZRemap);
+            return flags;
+        }
         using HashType = Uint64;
 
         // The gl_PerVertex members a pass-through tessellation control stage may have to carry,
