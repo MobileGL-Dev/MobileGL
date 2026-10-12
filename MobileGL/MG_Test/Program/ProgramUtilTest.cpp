@@ -4550,6 +4550,33 @@ subroutine(FuncType) void Func0(int coord) {
     }
 }
 
+// The type declaration only sheds its keyword, so the type NAME still reaches glslang as a function
+// prototype: a reserved word there has to fail the compile (KHR-GL40.CommonBugs.CommonBug_ReservedNames)
+// instead of vanishing with a blanked declaration.
+TEST_F(ProgramUtilTest, PreprocessSubroutineKeepsTheTypeNameVisibleToTheCompiler) {
+    using namespace MG_Util::ShaderTranspiler;
+
+    const auto lowerAndCompile = [](const String& typeName) {
+        String source = "#version 400 core\n"
+                        "out vec4 fragColor;\n"
+                        "subroutine void " + typeName + "(void);\n"
+                        "subroutine(" + typeName + ") void Impl(void) { fragColor = vec4(1.0); }\n"
+                        "subroutine uniform " + typeName + " g_routine;\n"
+                        "void main() { g_routine(); }\n";
+        PreprocessShaderSource(ShaderStage::Fragment, source);
+        EXPECT_EQ(source.find("subroutine"), String::npos) << source;
+        EXPECT_NE(source.find("void " + typeName + "(void);"), String::npos)
+            << "the type declaration must survive as a prototype:\n" << source;
+        ShaderAttrib attrib{.shaderType = GL_FRAGMENT_SHADER, .sourceStr = source};
+        return Bool(ShaderCompiler::CompileShader(attrib));
+    };
+
+    EXPECT_TRUE(lowerAndCompile("Routine"));
+    for (const char* reserved : {"const", "vec4", "asm", "sampler2D"}) {
+        EXPECT_FALSE(lowerAndCompile(reserved)) << "a subroutine type named '" << reserved << "' must not compile";
+    }
+}
+
 // The forwarding function is rebuilt from the subroutine TYPE declaration, so it has to carry the
 // parameter qualifiers and array shapes across (an  parameter that arrives by value writes
 // nothing back) and has to return the forwarded value for a non-void subroutine.

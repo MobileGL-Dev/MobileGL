@@ -1275,7 +1275,7 @@ namespace {
     // it is left to fail at compile time exactly as it does today rather than silently pinned to
     // one of the alternatives.
     //
-    //     subroutine void FuncType(int coord);          ->  (blanked)
+    //     subroutine void FuncType(int coord);          ->  void FuncType(int coord);
     //     subroutine uniform FuncType g_func;           ->  void g_func(int mgl_sr_arg0);
     //     subroutine(FuncType) void Func0(int c) { }    ->  void Func0(int c) { }
     //                                                       ...plus, appended at end of source,
@@ -1440,7 +1440,11 @@ namespace {
             type.returnText = JoinTokenText(tokens, i + 1, paren - 1);
             if (type.returnText.empty()) return;
             if (!ParseSubroutineParameters(tokens, paren + 1, listEnd - 1, type.parameters)) return;
-            blanks.push_back({token.begin, tokens[listEnd].end});
+            // Only the keyword goes. What is left is an ordinary prototype that is never defined
+            // or called - legal - and it keeps the type NAME in front of glslang, which is what
+            // still rejects a reserved word there (`subroutine void const();`) instead of the
+            // name vanishing with the declaration.
+            blanks.push_back({token.begin, token.end});
             i = listEnd;
         }
 
