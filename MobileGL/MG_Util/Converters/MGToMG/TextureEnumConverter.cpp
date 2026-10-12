@@ -189,6 +189,12 @@ namespace MobileGL {
                     return internalformat;
                 }
             }
+            // The unsized depth formats always resolve to sized storage. The GL picks the size
+            // (GL 4.6 core 8.5: "the GL may choose an internal representation"), and a backend
+            // whose native API cannot read back or stage an unsized depth texture otherwise ends
+            // up with storage it can upload to but never copy out of again (KHR-GL3x.packed_pixels
+            // uploads GL_DEPTH_COMPONENT with GL_UNSIGNED_BYTE data). Types that carry more than
+            // 24 bits keep their precision; everything else lands on the common 24-bit storage.
             case TextureInternalFormat::DepthComponent: {
                 switch (type) {
                 case TexturePixelDataType::UnsignedShort:
@@ -196,27 +202,18 @@ namespace MobileGL {
                 case TexturePixelDataType::UnsignedInt:
                     return TextureInternalFormat::DepthComponent32;
                 case TexturePixelDataType::Float:
+                case TexturePixelDataType::Float32UnsignedInt248Rev:
                     return TextureInternalFormat::DepthComponent32F;
                 default:
-                    MGLOG_W_ONCE("%s: Can't infer sized internal format from internalformat=%s, format=%s, type=%s, "
-                            "returning original.",
-                            __func__, MG_Util::ConvertTextureInternalFormatToString(internalformat).c_str(),
-                            MG_Util::ConvertTextureInputFormatToString(format).c_str(),
-                            MG_Util::ConvertTexturePixelDataTypeToString(type).c_str());
-                    return internalformat;
+                    return TextureInternalFormat::DepthComponent24;
                 }
             }
             case TextureInternalFormat::DepthStencil: {
                 switch (type) {
-                case TexturePixelDataType::UnsignedInt248:
-                    return TextureInternalFormat::Depth24Stencil8;
+                case TexturePixelDataType::Float32UnsignedInt248Rev:
+                    return TextureInternalFormat::Depth32FStencil8;
                 default:
-                    MGLOG_W_ONCE("%s: Can't infer sized internal format from internalformat=%s, format=%s, type=%s, "
-                            "returning original.",
-                            __func__, MG_Util::ConvertTextureInternalFormatToString(internalformat).c_str(),
-                            MG_Util::ConvertTextureInputFormatToString(format).c_str(),
-                            MG_Util::ConvertTexturePixelDataTypeToString(type).c_str());
-                    return internalformat;
+                    return TextureInternalFormat::Depth24Stencil8;
                 }
             }
             default: {
