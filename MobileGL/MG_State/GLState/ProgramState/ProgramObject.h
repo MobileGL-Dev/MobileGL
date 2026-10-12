@@ -913,6 +913,11 @@ namespace MobileGL::MG_State::GLState {
         // assert. The live flag stays available as GetSeparable() for glGetProgramiv's sibling
         // state and for the next link to latch.
         Bool GetLinkedSeparable() const { return m_linkedSeparable; }
+        // Whether the last link consumed SPIR-V modules (ARB_gl_spirv; mixing them with GLSL
+        // shaders fails the link). Such a program carries no name reflection - OpName is
+        // optional debug information, and the names the translation invents are not the
+        // application's - so GL 4.6 core 7.13's name-length queries answer one for it.
+        Bool GetLinkedFromSpirv() const { return m_linkedFromSpirv; }
         void SetSeparable(Bool separable) {
             m_separable = separable;
             // ---- arming the uniform-write tracking latch ----
@@ -1438,6 +1443,8 @@ namespace MobileGL::MG_State::GLState {
         // not a result the worker computes - and because a FAILED link still latches it, exactly
         // as a successful one does.
         Bool m_linkedSeparable = false;
+        // See GetLinkedFromSpirv; latched by Link() alongside m_linkedSeparable.
+        Bool m_linkedFromSpirv = false;
         // Monotone "this program may ever be a pipeline stage" latch; see SetSeparable for why
         // it is a latch and not just m_separable. Outside LinkArtifacts on purpose: a relink
         // clears the write SET, but a program that was separable is still separable after it.

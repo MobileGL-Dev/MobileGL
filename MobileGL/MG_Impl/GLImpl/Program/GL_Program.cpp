@@ -893,8 +893,11 @@ namespace MobileGL::MG_Impl::GLImpl {
             *params = programObject->GetActiveAttributesCount();
             MGLOG_D("%s: %s = %d", __func__, MG_Util::ConvertGLEnumToString(pname).c_str(), *params);
             break;
+        // GL 4.6 core 7.13: "If no name reflection information is available, one is returned" -
+        // the case for every program linked from SPIR-V (see ProgramObject::GetLinkedFromSpirv),
+        // for this and the three other name-length queries below.
         case GL_ACTIVE_ATTRIBUTE_MAX_LENGTH:
-            *params = programObject->GetActiveAttributesMaxLength() + 1;
+            *params = programObject->GetLinkedFromSpirv() ? 1 : programObject->GetActiveAttributesMaxLength() + 1;
             MGLOG_D("%s: %s = %d", __func__, MG_Util::ConvertGLEnumToString(pname).c_str(), *params);
             break;
         case GL_ACTIVE_UNIFORMS:
@@ -902,7 +905,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             MGLOG_D("%s: %s = %d", __func__, MG_Util::ConvertGLEnumToString(pname).c_str(), *params);
             break;
         case GL_ACTIVE_UNIFORM_MAX_LENGTH:
-            *params = programObject->GetUniformMaxLength() + 1;
+            *params = programObject->GetLinkedFromSpirv() ? 1 : programObject->GetUniformMaxLength() + 1;
             MGLOG_D("%s: %s = %d", __func__, MG_Util::ConvertGLEnumToString(pname).c_str(), *params);
             break;
         case GL_ACTIVE_UNIFORM_BLOCKS: // GL >= 3.1
@@ -912,7 +915,8 @@ namespace MobileGL::MG_Impl::GLImpl {
             MGLOG_D("%s: %s = %d", __func__, MG_Util::ConvertGLEnumToString(pname).c_str(), *params);
             break;
         case GL_ACTIVE_UNIFORM_BLOCK_MAX_NAME_LENGTH: // ditto.
-            *params = programObject->GetActiveUniformBlocksMaxNameLength() + 1;
+            *params =
+                programObject->GetLinkedFromSpirv() ? 1 : programObject->GetActiveUniformBlocksMaxNameLength() + 1;
             MGLOG_D("%s: %s = %d", __func__, MG_Util::ConvertGLEnumToString(pname).c_str(), *params);
             break;
         case GL_TRANSFORM_FEEDBACK_VARYINGS:
@@ -924,7 +928,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             MGLOG_D("%s: %s = %d", __func__, MG_Util::ConvertGLEnumToString(pname).c_str(), *params);
             break;
         case GL_TRANSFORM_FEEDBACK_VARYING_MAX_LENGTH:
-            *params = programObject->GetTransformFeedbackVaryingMaxLength();
+            *params = programObject->GetLinkedFromSpirv() ? 1 : programObject->GetTransformFeedbackVaryingMaxLength();
             MGLOG_D("%s: %s = %d", __func__, MG_Util::ConvertGLEnumToString(pname).c_str(), *params);
             break;
         case GL_COMPUTE_WORK_GROUP_SIZE: { // GL >= 4.3

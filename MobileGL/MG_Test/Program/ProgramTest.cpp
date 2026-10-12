@@ -5077,6 +5077,54 @@ TEST_F(ProgramTest, ShaderSourceClearsTheSpecializedLatch) {
     DrainProgramTestErrors();
 }
 
+// GL 4.6 core 7.13: a program with no name reflection - every program linked from SPIR-V - answers
+// the four name-length queries with one (KHR-GL46.gl_spirv.spirv_modules_state_queries_test), while
+// the same interface linked from GLSL keeps reporting its real longest name.
+TEST_F(ProgramTest, ASpirvProgramReportsNoNameReflection) {
+    DrainProgramTestErrors();
+
+    const auto linkWith = [](GLuint shader) {
+        const GLuint program = CreateProgram();
+        AttachShader(program, shader);
+        LinkProgram(program);
+        GLint linked = GL_FALSE;
+        GetProgramiv(program, GL_LINK_STATUS, &linked);
+        EXPECT_EQ(linked, GL_TRUE);
+        return program;
+    };
+
+    const GLuint spirvShader = CreateShader(GL_VERTEX_SHADER);
+    ShaderBinary(1, &spirvShader, GL_SHADER_BINARY_FORMAT_SPIR_V, kVertexModule, sizeof(kVertexModule));
+    SpecializeShader(spirvShader, "main", 0, nullptr, nullptr);
+    ASSERT_EQ(GetError(), GL_NO_ERROR);
+    const GLuint spirvProgram = linkWith(spirvShader);
+
+    const GLuint glslShader = CreateShader(GL_VERTEX_SHADER);
+    const char* source = "#version 450 core\nlayout(location = 0) in vec2 aPos;\n"
+                         "void main() { gl_Position = vec4(aPos, 0.0, 1.0); }\n";
+    ShaderSource(glslShader, 1, &source, nullptr);
+    CompileShader(glslShader);
+    const GLuint glslProgram = linkWith(glslShader);
+    ASSERT_EQ(GetError(), GL_NO_ERROR);
+
+    for (const GLenum pname : {GL_ACTIVE_ATTRIBUTE_MAX_LENGTH, GL_ACTIVE_UNIFORM_MAX_LENGTH,
+                               GL_ACTIVE_UNIFORM_BLOCK_MAX_NAME_LENGTH, GL_TRANSFORM_FEEDBACK_VARYING_MAX_LENGTH}) {
+        GLint length = -1;
+        GetProgramiv(spirvProgram, pname, &length);
+        EXPECT_EQ(GetError(), GL_NO_ERROR);
+        EXPECT_EQ(length, 1) << "pname 0x" << std::hex << pname;
+    }
+    GLint glslLength = -1;
+    GetProgramiv(glslProgram, GL_ACTIVE_ATTRIBUTE_MAX_LENGTH, &glslLength);
+    EXPECT_EQ(glslLength, static_cast<GLint>(sizeof("aPos")));
+
+    DeleteProgram(spirvProgram);
+    DeleteProgram(glslProgram);
+    DeleteShader(spirvShader);
+    DeleteShader(glslShader);
+    DrainProgramTestErrors();
+}
+
 // A shader that came from glShaderBinary has never had glShaderSource called on it, so GL 4.6
 // core 7.1 makes its source the empty string - including AFTER glSpecializeShader, when the
 // object internally holds the GLSL the module was translated into. That text is MobileGL's, not

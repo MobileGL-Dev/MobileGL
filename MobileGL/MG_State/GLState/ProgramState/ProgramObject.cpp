@@ -9,6 +9,7 @@
 #include "ProgramObject.h"
 #include "ProgramLinkTask.h"
 #include "ProgramSpirvTask.h"
+#include <algorithm>
 #include <atomic>
 #include <cstring>
 #include <MG_Util/Async/ShaderCompilePool.h>
@@ -587,6 +588,8 @@ namespace MobileGL::MG_State::GLState {
             RemoveShader(detachedShader);
         }
         m_detachedShaders.clear();
+        m_linkedFromSpirv = std::any_of(m_shaders.begin(), m_shaders.end(),
+                                        [](const SharedPtr<ShaderObject>& shader) { return shader->HasSpirvBinary(); });
 
         if (addDefaultFSIfMissingForRenderingPipelineProgram) {
             AddDefaultFragmentShaderIfMissing();
