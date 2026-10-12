@@ -6203,6 +6203,20 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return reinterpret_cast<const void*>(static_cast<std::uintptr_t>(offset));
         }
 
+        // See Managers.h. One flag for every context, like the image-unit high-water mark: a
+        // dispatch on another context can consume an upload's flag before the uploading
+        // context's own dispatch sees it - a hole only a shared texture re-uploaded on one context
+        // and image-accessed on another can fall into, and GL wants a fence between those anyway.
+        static Bool g_inPlaceTextureUploadPending = false;
+
+        void NoteInPlaceTextureUpload() { g_inPlaceTextureUploadPending = true; }
+
+        GLbitfield TakeInPlaceTextureUploadBarrierBits() {
+            if (!g_inPlaceTextureUploadPending) return 0;
+            g_inPlaceTextureUploadPending = false;
+            return GL_TEXTURE_UPDATE_BARRIER_BIT | GL_TEXTURE_FETCH_BARRIER_BIT | GL_SHADER_IMAGE_ACCESS_BARRIER_BIT;
+        }
+
         static Uint GetNormFallbackComponentCount(TextureInternalFormat format) {
             switch (format) {
             case TextureInternalFormat::R8Snorm:
@@ -8420,6 +8434,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                             if (ringStaged) {
                                 BufferImpl::BindPixelUnpackBufferId(BufferImpl::UnpackRingBufferId());
                             }
+                            // Ring-sourced or not: see NoteInPlaceTextureUpload.
+                            NoteInPlaceTextureUpload();
                             if (MG_Util::PipeStats::Enabled()) {
                                 // One emission per (upload target, level) that ships texels;
                                 // the switch below turns it into either one union-box job or

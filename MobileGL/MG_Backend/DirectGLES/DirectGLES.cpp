@@ -3094,6 +3094,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 return;
             }
             SyncImageTextureBindings();
+            // The sweep may just have landed a re-upload into a texture the draw reaches through
+            // an image unit (the content clause above is one of the ways it gets here).
+            if (const GLbitfield barriers = TakeInPlaceTextureUploadBarrierBits();
+                barriers != 0 && g_GLESFuncs.glMemoryBarrier) {
+                g_GLESFuncs.glMemoryBarrier(barriers);
+            }
             g_imageSweepShaderImagesSerial = st.ShaderImagesSerial;
             g_imageSweepTextureShutterSerial = st.TextureShutterSerial;
             g_imageSweepContextSerial = st.ContextSerial;
@@ -6217,6 +6223,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
         TextureImpl::SyncNeccessaryTextures(textureKeys);
         TextureImpl::SyncImageTextureBindings();
         TextureImpl::MarkWritableImageBufferTexturesGpuWritten();
+        // Both syncs above may have re-uploaded a texture this dispatch reads or stores
+        // (Managers.h, NoteInPlaceTextureUpload).
+        {
+            GLbitfield barriers = TextureImpl::TakeInPlaceTextureUploadBarrierBits();
+            if (barriers != 0 && g_GLESFuncs.glMemoryBarrier) g_GLESFuncs.glMemoryBarrier(barriers);
+        }
         // P5e (pg), kimi row 92: the DISPATCH half of the same retirement -
         // MGPipeApplier().DispatchProgram, which set_dispatch_program carried. A compute-only
         // pipeline has no draw program at all, which is why the two applier fields are separate.

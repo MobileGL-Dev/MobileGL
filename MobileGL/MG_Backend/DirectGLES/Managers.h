@@ -2076,6 +2076,28 @@ namespace MobileGL::MG_Backend::DirectGLES {
         Bool FollowCopyImageInStagedStore(MG_Pipe::MGPipeHandle source, Uint32 sourceLevel, const IntVec3& sourceOrigin,
                                           MG_Pipe::MGPipeHandle destination, Uint32 destinationLevel,
                                           const IntVec3& destinationOrigin, const IntVec3& size);
+        // A re-upload into storage the driver already holds is a copy the driver may run on a path
+        // of its own that the next shader's image loads and stores do not wait for. On Adreno, a
+        // compute dispatch that imageStore()s over a texture whose re-upload the same Prepare had
+        // just issued read back with up to 2.4k of 4096 texels wrong, while the same dispatch over
+        // freshly created textures was exact (KHR-GL43.compute_shader.resource-image). The two
+        // differ in exactly two ways: the fresh ones are allocated and filled from client memory,
+        // the re-uploads go through the unpack ring as a buffer-to-texture copy; and the fresh
+        // ones were never used by the GPU. Both are covered - every in-place level upload is
+        // noted, ring-sourced or not.
+        //
+        // GL orders a texture update ahead of every later shader access without a barrier, so
+        // the application has nothing to fix this with - and its own barriers could not reach it
+        // anyway: the upload is applied lazily, at the dispatch that consumes it, after any
+        // barrier the application issued. So the shader-access sites that can see such a texture
+        // through an image unit - every dispatch, and a draw whose image units were just
+        // re-synced - issue ONE barrier ahead of the shader, and only when an in-place upload was
+        // issued since the last one. Sampled access from a draw does not take it: that is the
+        // order every driver keeps on its own, and it is the per-draw hot path.
+        void NoteInPlaceTextureUpload();
+        // The barrier bits owed for the uploads noted since the last call (0 when none), and
+        // the note cleared: the caller issues them, folded into any barrier of its own.
+        GLbitfield TakeInPlaceTextureUploadBarrierBits();
         // Brings every texture the next draw reads - the touched units' bindings and the draw
         // FBO's texture attachments - onto the backend, through the two borrowed-pair memos
         // documented at their definitions. Declared here so tests can drive those memos directly.

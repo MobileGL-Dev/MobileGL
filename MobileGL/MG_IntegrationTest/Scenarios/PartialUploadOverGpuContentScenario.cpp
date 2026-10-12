@@ -614,6 +614,51 @@ void main() {
             DestroyColorFbo(target);
         }
 
+        // The dispatch form of the case above, which is KHR-GL43.compute_shader.resource-image's
+        // shape: every pass re-uploads into the SAME image-bound texture and a dispatch stores
+        // over all of it. The upload is applied at the dispatch's own Prepare, after any barrier
+        // the application issued, so it is the backend that has to order it ahead of the stores.
+        TEST_F(PartialUploadOverGpuContentScenario, SubImageBeforeAnImageStoreDispatchLandsUnderTheStores) {
+            if (!Ready()) return;
+            const GLuint t = NewTexture(GL_TEXTURE_2D);
+            glBindTexture(GL_TEXTURE_2D, t);
+            glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA8, kEdge, kEdge);
+            glBindTexture(GL_TEXTURE_2D, 0);
+            const char* computeSource =
+                "#version 430 core\n"
+                "layout(local_size_x = 8, local_size_y = 8) in;\n"
+                "layout(rgba8, binding = 0) writeonly uniform image2D u_img;\n"
+                "void main() { imageStore(u_img, ivec2(gl_GlobalInvocationID.xy), vec4(0.0, 1.0, 0.0, 1.0)); }\n";
+            const GLuint shader = glCreateShader(GL_COMPUTE_SHADER);
+            glShaderSource(shader, 1, &computeSource, nullptr);
+            glCompileShader(shader);
+            const GLuint program = glCreateProgram();
+            glAttachShader(program, shader);
+            glLinkProgram(program);
+            glDeleteShader(shader);
+            m_programs.push_back(program);
+            GLint linked = GL_FALSE;
+            glGetProgramiv(program, GL_LINK_STATUS, &linked);
+            ASSERT_EQ(linked, GL_TRUE) << "compute program did not link";
+            glBindImageTexture(0, t, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA8);
+            ASSERT_EQ(FirstGLError(), 0u) << "setup";
+            const auto red = Fill(Rgba8(), kEdge * kEdge, 1.0f, 0.0f, 0.0f);
+            for (int pass = 0; pass < 3; ++pass) {
+                SCOPED_TRACE(::testing::Message() << "pass " << pass);
+                glBindTexture(GL_TEXTURE_2D, t);
+                glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, kEdge, kEdge, GL_RGBA, GL_UNSIGNED_BYTE, red.data());
+                glBindTexture(GL_TEXTURE_2D, 0);
+                glMemoryBarrier(GL_ALL_BARRIER_BITS);
+                glUseProgram(program);
+                glDispatchCompute(1, 1, 1);
+                glUseProgram(0);
+                glMemoryBarrier(GL_ALL_BARRIER_BITS);
+                ASSERT_EQ(FirstGLError(), 0u) << "dispatch";
+                ExpectRgba8(t, false);
+            }
+            glBindImageTexture(0, 0, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA8);
+        }
+
         // Two boxes in opposite corners: their union box is 7x7, of which the writes are 8 texels.
         TEST_F(PartialUploadOverGpuContentScenario, TwoDistantSubImagesKeepTheGpuClearBetweenThem) {
             if (!Ready()) return;
