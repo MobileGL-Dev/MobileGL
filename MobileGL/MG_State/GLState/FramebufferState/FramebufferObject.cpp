@@ -93,8 +93,31 @@ namespace MobileGL::MG_State::GLState {
 
     Bool FramebufferAttachmentObject::IsComplete() const {
         if (IsTexture()) {
-            Bool complete = m_texture->IsComplete();
-            return complete;
+            if (!m_texture->IsComplete()) return false;
+            // GL 4.6 core 9.4.1: a single layer of a three-dimensional, array or cube map array
+            // texture must exist, i.e. FRAMEBUFFER_ATTACHMENT_TEXTURE_LAYER has to be smaller than
+            // the level's depth / layer count. Attaching it is legal up to the implementation's
+            // layer limit (9.2.8), so this is where an out-of-range layer is caught. A cube map
+            // array counts layer-faces, which is the depth it was specified with.
+            if (!m_layered) {
+                const IntVec3 size = GetSize();
+                Int layerCount = -1;
+                switch (m_texture->GetTarget()) {
+                case TextureTarget::Texture1DArray:
+                    layerCount = size.y();
+                    break;
+                case TextureTarget::Texture3D:
+                case TextureTarget::Texture2DArray:
+                case TextureTarget::Texture2DMultisampleArray:
+                case TextureTarget::TextureCubeMapArray:
+                    layerCount = size.z();
+                    break;
+                default:
+                    break;
+                }
+                if (layerCount >= 0 && m_textureLayer >= layerCount) return false;
+            }
+            return true;
         } else if (IsRenderbuffer()) {
             Bool complete = m_renderbuffer->IsAllocated();
             return complete;
@@ -194,7 +217,33 @@ namespace MobileGL::MG_State::GLState {
         }
 
         if (validAttachmentCount == 0) return false;
-        return true;
+        return !HasLayerTargetMismatch();
+    }
+
+    Bool FramebufferObject::HasLayerTargetMismatch() const {
+        Bool anyLayered = false;
+        Bool anyNonLayered = false;
+        TextureTarget layeredColorTarget = TextureTarget::Unknown;
+        Bool colorTargetsDiffer = false;
+        for (SizeT index = 0; index < m_attachmentObjects.size(); ++index) {
+            const auto& attachment = m_attachmentObjects[index];
+            if (!attachment.IsValid() || attachment.IsEmpty()) continue;
+            // A renderbuffer is never layered.
+            const Bool layered = attachment.IsTexture() && attachment.IsLayered();
+            (layered ? anyLayered : anyNonLayered) = true;
+
+            const auto type = static_cast<FramebufferAttachmentType>(index);
+            if (!layered || type < FramebufferAttachmentType::Color0 || type > FramebufferAttachmentType::ColorMax) {
+                continue;
+            }
+            const TextureTarget target = attachment.GetTexture()->GetTarget();
+            if (layeredColorTarget == TextureTarget::Unknown) {
+                layeredColorTarget = target;
+            } else if (layeredColorTarget != target) {
+                colorTargetsDiffer = true;
+            }
+        }
+        return anyLayered && (anyNonLayered || colorTargetsDiffer);
     }
 
     void FramebufferObject::SetDrawBuffer(Uint index, FramebufferAttachmentType buffer) {

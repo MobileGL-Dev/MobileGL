@@ -1634,3 +1634,69 @@ TEST_F(FramebufferTest, NamedFramebufferTextureRejectsALevelTheTextureDoesNotHav
     EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_INVALID_VALUE);
     DrainPendingGlErrors();
 }
+
+// GL 4.6 core 9.4.2: if any populated attachment is layered, all of them must be, and the layered
+// color attachments must come from textures of one target - otherwise the framebuffer is
+// FRAMEBUFFER_INCOMPLETE_LAYER_TARGETS (KHR-GL4x geometry_shader.layered_fbo,
+// texture_cube_map_array.fbo_incompleteness).
+TEST_F(FramebufferTest, MixedLayeredAttachmentsAreIncompleteLayerTargets) {
+    GLuint textures[3] = {};
+    MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_2D, 1, &textures[0]);
+    MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_2D_ARRAY, 1, &textures[1]);
+    MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_3D, 1, &textures[2]);
+    MG_Impl::GLImpl::TextureStorage2D(textures[0], 1, GL_RGBA8, 8, 8);
+    MG_Impl::GLImpl::TextureStorage3D(textures[1], 1, GL_RGBA8, 8, 8, 4);
+    MG_Impl::GLImpl::TextureStorage3D(textures[2], 1, GL_RGBA8, 8, 8, 4);
+    GLuint framebuffer = 0;
+    MG_Impl::GLImpl::CreateFramebuffers(1, &framebuffer);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    // One layered (the whole 2D array) beside one that is not.
+    MG_Impl::GLImpl::NamedFramebufferTexture(framebuffer, GL_COLOR_ATTACHMENT0, textures[1], 0);
+    MG_Impl::GLImpl::NamedFramebufferTexture(framebuffer, GL_COLOR_ATTACHMENT1, textures[0], 0);
+    EXPECT_EQ(MG_Impl::GLImpl::CheckNamedFramebufferStatus(framebuffer, GL_DRAW_FRAMEBUFFER),
+              static_cast<GLenum>(GL_FRAMEBUFFER_INCOMPLETE_LAYER_TARGETS));
+
+    // Both layered, but from a 2D array and a 3D texture.
+    MG_Impl::GLImpl::NamedFramebufferTexture(framebuffer, GL_COLOR_ATTACHMENT1, textures[2], 0);
+    EXPECT_EQ(MG_Impl::GLImpl::CheckNamedFramebufferStatus(framebuffer, GL_DRAW_FRAMEBUFFER),
+              static_cast<GLenum>(GL_FRAMEBUFFER_INCOMPLETE_LAYER_TARGETS));
+
+    // The positive control: one layered target throughout.
+    MG_Impl::GLImpl::NamedFramebufferTexture(framebuffer, GL_COLOR_ATTACHMENT1, 0, 0);
+    EXPECT_EQ(MG_Impl::GLImpl::CheckNamedFramebufferStatus(framebuffer, GL_DRAW_FRAMEBUFFER),
+              static_cast<GLenum>(GL_FRAMEBUFFER_COMPLETE));
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    MG_Impl::GLImpl::DeleteFramebuffers(1, &framebuffer);
+    MG_Impl::GLImpl::DeleteTextures(3, textures);
+    DrainPendingGlErrors();
+}
+
+// GL 4.6 core 9.4.1: a single layer of a 3D / array texture has to exist. Attaching layer == depth
+// is legal (only the implementation's layer limit is checked at attach time); the attachment is
+// what is incomplete.
+TEST_F(FramebufferTest, AttachedLayerPastTheLastLayerIsIncompleteAttachment) {
+    GLuint texture = 0;
+    MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_3D, 1, &texture);
+    MG_Impl::GLImpl::TextureStorage3D(texture, 1, GL_RGBA8, 8, 8, 2);
+    GLuint framebuffer = 0;
+    MG_Impl::GLImpl::CreateFramebuffers(1, &framebuffer);
+    MG_Impl::GLImpl::BindFramebuffer(GL_DRAW_FRAMEBUFFER, framebuffer);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    MG_Impl::GLImpl::FramebufferTexture3D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_3D, texture, 0, 2);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    EXPECT_EQ(MG_Impl::GLImpl::CheckFramebufferStatus(GL_DRAW_FRAMEBUFFER),
+              static_cast<GLenum>(GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT));
+
+    MG_Impl::GLImpl::FramebufferTexture3D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_3D, texture, 0, 1);
+    EXPECT_EQ(MG_Impl::GLImpl::CheckFramebufferStatus(GL_DRAW_FRAMEBUFFER),
+              static_cast<GLenum>(GL_FRAMEBUFFER_COMPLETE));
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    MG_Impl::GLImpl::BindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+    MG_Impl::GLImpl::DeleteFramebuffers(1, &framebuffer);
+    MG_Impl::GLImpl::DeleteTextures(1, &texture);
+    DrainPendingGlErrors();
+}

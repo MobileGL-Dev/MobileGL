@@ -106,6 +106,15 @@ namespace MobileGL::MG_Impl::GLImpl {
             return false;
         }
 
+        // Which status an incomplete framebuffer reports. GL 4.6 core 9.4.2 leaves the choice open
+        // when several rules fail; the layer rule is checked first because it is a whole-framebuffer
+        // property no single attachment's state explains.
+        GLenum IncompleteFramebufferStatus(const MG_State::GLState::FramebufferObject& framebufferObject) {
+            if (framebufferObject.HasLayerTargetMismatch()) return GL_FRAMEBUFFER_INCOMPLETE_LAYER_TARGETS;
+            return HasDefinedAttachment(framebufferObject) ? GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT
+                                                           : GL_FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT;
+        }
+
         // Whether the backend can actually attach this color format to a framebuffer. Preferred
         // source of truth is the backend's probed format-capability cache (real glCheckFramebufferStatus
         // probes, so extensions like EXT_render_snorm are respected). Formats a probe-less backend
@@ -2329,15 +2338,9 @@ namespace MobileGL::MG_Impl::GLImpl {
             return GL_FRAMEBUFFER_UNDEFINED;
         }
 
-        // TODO: distinguish GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT and GL_FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT
         // TODO: GL_FRAMEBUFFER_INCOMPLETE_DRAW_BUFFER, GL_FRAMEBUFFER_INCOMPLETE_READ_BUFFER,
-        //       additional GL_FRAMEBUFFER_UNSUPPORTED cases, GL_FRAMEBUFFER_INCOMPLETE_MULTISAMPLE,
-        //       GL_FRAMEBUFFER_INCOMPLETE_LAYER_TARGETS
-        if (!framebufferObject->CheckCompleteness()) {
-            return HasDefinedAttachment(*framebufferObject) ?
-                GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT :
-                GL_FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT;
-        }
+        //       additional GL_FRAMEBUFFER_UNSUPPORTED cases, GL_FRAMEBUFFER_INCOMPLETE_MULTISAMPLE
+        if (!framebufferObject->CheckCompleteness()) return IncompleteFramebufferStatus(*framebufferObject);
         if (HasNonRenderableColorAttachment(*framebufferObject)) {
             return GL_FRAMEBUFFER_UNSUPPORTED;
         }
@@ -2361,11 +2364,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         auto framebufferObject = GetNamedFramebufferObject_State(framebuffer, "CheckNamedFramebufferStatus_State");
         if (!framebufferObject) return GL_FRAMEBUFFER_UNDEFINED;
 
-        if (!framebufferObject->CheckCompleteness()) {
-            return HasDefinedAttachment(*framebufferObject) ?
-                GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT :
-                GL_FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT;
-        }
+        if (!framebufferObject->CheckCompleteness()) return IncompleteFramebufferStatus(*framebufferObject);
         if (HasNonRenderableColorAttachment(*framebufferObject)) {
             return GL_FRAMEBUFFER_UNSUPPORTED;
         }

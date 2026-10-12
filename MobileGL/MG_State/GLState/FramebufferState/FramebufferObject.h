@@ -128,6 +128,10 @@ namespace MobileGL {
             const FramebufferAttachmentObject& GetAttachment(FramebufferAttachmentType type) const;
             const FramebufferAttachmentObjectArray& GetAllAttachmentObjects() const;
             Bool CheckCompleteness() const;
+            // GL 4.6 core 9.4.2 FRAMEBUFFER_INCOMPLETE_LAYER_TARGETS: some populated attachment is
+            // layered while another is not, or the layered color attachments come from textures of
+            // different targets. CheckCompleteness() includes it; this tells the status apart.
+            Bool HasLayerTargetMismatch() const;
             // aka. `buffer` as in glDrawBuffers/glReadBuffers
             void SetDrawBuffer(Uint index, FramebufferAttachmentType buffer);
             const FramebufferAttachmentArray& GetDrawBuffers() const;
