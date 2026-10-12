@@ -113,6 +113,23 @@ namespace MobileGL::MG_Impl::GLImpl {
     // DRAW FRAMEBUFFER binding, so it has to run after the caller's framebuffer state is settled
     // and before the backend consumes the program's UBO content version.
     static Bool PrepareCurrentProgramForDraw(const char* functionName) {
+        // GL 4.6 core 11.1.3.11: a draw through a program pipeline that would fail
+        // glValidateProgramPipeline is INVALID_OPERATION. Only when no glUseProgram program
+        // overrides the pipeline, and BEFORE the composite is resolved: the composite takes from
+        // each stage program only the shaders of the stages it is bound to, so a program bound
+        // to fewer stages than it was linked with no longer shows in it.
+        if (!MG_State::pGLContext->GetCurrentProgram() && MG_State::pGLContext->GetBoundProgramPipelineName() != 0) {
+            if (const auto& pipeline = MG_State::pGLContext->GetBoundProgramPipeline()) {
+                const String reason = pipeline->FindValidationError(/*requireAnyStage=*/false);
+                if (!reason.empty()) {
+                    MG_State::pGLContext->RecordError(
+                        ErrorCode::InvalidOperation,
+                        MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", functionName,
+                                                     "The bound program pipeline is not valid: " + reason));
+                    return false;
+                }
+            }
+        }
         const auto& currentProgram = MG_State::pGLContext->GetProgramForDraw();
         if (!ValidateResolvedProgramForDraw(currentProgram, functionName)) return false;
         PublishDrawFramebufferSampleCount(currentProgram);

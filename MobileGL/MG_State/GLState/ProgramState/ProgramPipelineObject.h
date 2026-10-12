@@ -40,6 +40,81 @@ namespace MobileGL {
 
                 Uint GetExternalIndex() const { return m_externalIndex; }
 
+                // GL 4.6 core 11.1.3.11, the pipeline validation rules - the ONE copy, read by
+                // glValidateProgramPipeline and by every draw made through the pipeline (where a
+                // failure is INVALID_OPERATION). Returns why the pipeline is not valid, or an empty
+                // string when it is.
+                //
+                // `requireAnyStage`: a pipeline with no program in any stage fails VALIDATION, but a
+                // draw through one is merely undefined and is dropped elsewhere without an error.
+                //
+                // Every question is asked of a program's EXECUTABLE (HasLinkedShaderStage and the
+                // separable flag as last linked), never of its live attach list.
+                String FindValidationError(Bool requireAnyStage) const {
+                    constexpr SizeT kStageCount = static_cast<SizeT>(ShaderStage::ShaderStageCount);
+                    const auto executes = [this](SizeT stage) {
+                        const auto& program = m_stagePrograms[stage];
+                        return program && program->HasLinkedShaderStage(static_cast<ShaderStage>(stage));
+                    };
+
+                    Bool anyStage = false;
+                    for (SizeT stage = 0; stage < kStageCount; ++stage) {
+                        const auto& program = m_stagePrograms[stage];
+                        if (!program) continue;
+                        anyStage = true;
+                        // A stage program whose last relink failed, or that was relinked as not
+                        // separable, can no longer serve as a stage (glUseProgramStages checked
+                        // both, but only at the time of the call).
+                        if (!program->GetLinkStatus()) {
+                            return std::format("The program in stage {} is not successfully linked.", stage);
+                        }
+                        if (!program->GetLinkedSeparable()) {
+                            return std::format("The program in stage {} was relinked as not separable.", stage);
+                        }
+                        // "A program object is active for at least one, but not all of the shader
+                        // stages that were present when the program was linked."
+                        for (SizeT other = 0; other < kStageCount; ++other) {
+                            if (program->HasLinkedShaderStage(static_cast<ShaderStage>(other)) &&
+                                m_stagePrograms[other] != program) {
+                                return std::format("A program is active for stage {} but not for its linked stage {}.",
+                                                   stage, other);
+                            }
+                        }
+                    }
+                    if (!anyStage) {
+                        return requireAnyStage ? String("The pipeline has no program in any stage.") : String();
+                    }
+
+                    // "One program object is active for at least two shader stages and a second
+                    // program is active for a shader stage between two stages for which the first
+                    // program was active." Over the graphics stages, in pipeline order.
+                    for (SizeT first = 0; first < kGraphicsStageCount; ++first) {
+                        if (!executes(first)) continue;
+                        for (SizeT last = first + 2; last < kGraphicsStageCount; ++last) {
+                            if (!executes(last) || m_stagePrograms[last] != m_stagePrograms[first]) continue;
+                            for (SizeT between = first + 1; between < last; ++between) {
+                                if (executes(between) && m_stagePrograms[between] != m_stagePrograms[first]) {
+                                    return std::format("The program in stage {} sits between two stages of another "
+                                                       "program.",
+                                                       between);
+                                }
+                            }
+                        }
+                    }
+
+                    // "There is an active program for tessellation control, tessellation evaluation,
+                    // or geometry stages with corresponding executable shader, but there is no
+                    // active program with an executable vertex shader."
+                    const Bool laterVertexProcessing =
+                        executes(static_cast<SizeT>(ShaderStage::TessControl)) ||
+                        executes(static_cast<SizeT>(ShaderStage::TessEval)) ||
+                        executes(static_cast<SizeT>(ShaderStage::Geometry));
+                    if (laterVertexProcessing && !executes(static_cast<SizeT>(ShaderStage::Vertex))) {
+                        return "A tessellation or geometry stage is active but no program supplies a vertex shader.";
+                    }
+                    return {};
+                }
+
                 // glIsProgramPipeline's answer, and NOT the same question as "does this object
                 // exist" (GL 4.6 core 7.4: a GenProgramPipelines name "acquires program pipeline
                 // state only when first bound"). The object is materialized by any of the

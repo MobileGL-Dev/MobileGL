@@ -605,6 +605,74 @@ void main() { gl_Position = vec4(0.0); EmitVertex(); EndPrimitive(); }
     EXPECT_EQ(GetError(), GL_NO_ERROR);
 }
 
+// GL 4.6 core 11.1.3.11, the shapes es31cSeparateShaderObjsTests' PipelineApi and
+// StateInteraction check: glValidateProgramPipeline and a draw through the pipeline must agree,
+// and a missing stage is NOT one of the failures.
+TEST_F(ProgramPipelineCompositeTest, PipelineValidationAndDrawsAgreeOnTheSpecRules) {
+    const char* kVf = R"(#version 430 core
+out gl_PerVertex { vec4 gl_Position; };
+void main() { gl_Position = vec4(0.0); }
+)";
+    // One separable program carrying BOTH the vertex and the fragment stage.
+    const GLuint both = CreateProgram();
+    ProgramParameteri(both, GL_PROGRAM_SEPARABLE, GL_TRUE);
+    for (const auto& [stage, source] : {std::pair{GL_VERTEX_SHADER, kVf}, std::pair{GL_FRAGMENT_SHADER, kSharedUniformFs}}) {
+        const GLuint shader = CreateShader(stage);
+        ShaderSource(shader, 1, &source, nullptr);
+        CompileShader(shader);
+        AttachShader(both, shader);
+    }
+    LinkProgram(both);
+    GLint linked = GL_FALSE;
+    GetProgramiv(both, GL_LINK_STATUS, &linked);
+    ASSERT_EQ(linked, GL_TRUE);
+    const GLuint fs = MakeSeparableProgram(GL_FRAGMENT_SHADER, kSharedUniformFs);
+
+    GLuint pipeline = 0;
+    GenProgramPipelines(1, &pipeline);
+    BindProgramPipeline(pipeline);
+    const auto validates = [pipeline] {
+        ValidateProgramPipeline(pipeline);
+        GLint status = -1;
+        GetProgramPipelineiv(pipeline, GL_VALIDATE_STATUS, &status);
+        return status == GL_TRUE;
+    };
+
+    EXPECT_FALSE(validates()) << "an empty pipeline does not validate";
+    GLint logLength = 0;
+    GetProgramPipelineiv(pipeline, GL_INFO_LOG_LENGTH, &logLength);
+    EXPECT_GT(logLength, 0) << "a failed validation says why";
+
+    UseProgramStages(pipeline, GL_VERTEX_SHADER_BIT | GL_FRAGMENT_SHADER_BIT, both);
+    EXPECT_TRUE(validates());
+
+    // Bound to only one of the two stages it was linked with.
+    UseProgramStages(pipeline, GL_FRAGMENT_SHADER_BIT, fs);
+    EXPECT_FALSE(validates());
+    ASSERT_EQ(GetError(), GL_NO_ERROR);
+    DrawArrays(GL_TRIANGLES, 0, 3);
+    EXPECT_EQ(GetError(), GL_INVALID_OPERATION) << "a draw through an invalid pipeline";
+
+    // A missing stage is fine: no vertex stage at all, only a fragment program.
+    UseProgramStages(pipeline, GL_VERTEX_SHADER_BIT, 0);
+    EXPECT_TRUE(validates());
+
+    // A stage program relinked as NOT separable can no longer serve.
+    UseProgramStages(pipeline, GL_VERTEX_SHADER_BIT | GL_FRAGMENT_SHADER_BIT, both);
+    ASSERT_TRUE(validates());
+    ProgramParameteri(both, GL_PROGRAM_SEPARABLE, GL_FALSE);
+    LinkProgram(both);
+    EXPECT_FALSE(validates());
+    ASSERT_EQ(GetError(), GL_NO_ERROR);
+    DrawArrays(GL_TRIANGLES, 0, 3);
+    EXPECT_EQ(GetError(), GL_INVALID_OPERATION);
+
+    BindProgramPipeline(0);
+    DeleteProgramPipelines(1, &pipeline);
+    for (Int drained = 0; drained < 16 && GetError() != GL_NO_ERROR; ++drained) {
+    }
+}
+
 // ---------------------------------------------------------------------------------------------
 // The composite's transform-feedback capture list.
 //

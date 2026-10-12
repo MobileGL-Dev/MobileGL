@@ -243,8 +243,8 @@ namespace MobileGL::MG_Impl::GLImpl {
     void ValidateProgramPipeline(GLuint pipeline) {
         const auto* pipelineObject = TryGetPipeline(pipeline, __func__);
         if (!pipelineObject) return;
-        // Nothing here can fail today: MobileGL links each stage program on its own, so there is no
-        // cross-stage interface to re-check at validation time. The log stays empty, which GL allows.
-        (*pipelineObject)->SetValidateStatus(true);
+        String reason = (*pipelineObject)->FindValidationError(/*requireAnyStage=*/true);
+        (*pipelineObject)->SetValidateStatus(reason.empty());
+        (*pipelineObject)->SetInfoLog(Move(reason));
     }
 } // namespace MobileGL::MG_Impl::GLImpl
