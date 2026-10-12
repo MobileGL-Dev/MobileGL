@@ -108,6 +108,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // The fragment module writes gl_FragDepth (SPIR-V DepthReplacing); exempts the
             // pipeline from the blended depth-write quirk (see ShouldSuppressDepthWrite).
             Bool fragmentReplacesDepth = false;
+            // The device enabled VK_KHR_fragment_shading_rate's pipeline rate, so the pipeline takes
+            // VK_DYNAMIC_STATE_FRAGMENT_SHADING_RATE_KHR and every draw sets glShadingRateEXT's rate
+            // and combiner ops on the command buffer. NOT hashed: it is a device constant, the same
+            // for every pipeline this renderer builds.
+            Bool fragmentShadingRateDynamic = false;
             Array<VkPipelineColorBlendAttachmentState, kMaxColorAttachments> colorBlendAttachments{};
             const Vector<VkPipelineShaderStageCreateInfo>* stages = nullptr;
             // The tessellation control stage this renderer synthesized for a program that has

@@ -382,6 +382,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             payload.colorAttachmentCount,
             payload.subpass);
 
+        // The fragment shading rate goes last so the common prefix is the eight-state list every
+        // pipeline shares; it is only present when the device enabled the pipeline rate.
         static constexpr VkDynamicState kDynamicStates[] = {
             VK_DYNAMIC_STATE_VIEWPORT,
             VK_DYNAMIC_STATE_SCISSOR,
@@ -390,12 +392,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             VK_DYNAMIC_STATE_LINE_WIDTH,
             VK_DYNAMIC_STATE_STENCIL_COMPARE_MASK,
             VK_DYNAMIC_STATE_STENCIL_WRITE_MASK,
-            VK_DYNAMIC_STATE_STENCIL_REFERENCE
+            VK_DYNAMIC_STATE_STENCIL_REFERENCE,
+            VK_DYNAMIC_STATE_FRAGMENT_SHADING_RATE_KHR
         };
 
         VkPipelineDynamicStateCreateInfo dynamicState{};
         dynamicState.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
-        dynamicState.dynamicStateCount = static_cast<uint32_t>(std::size(kDynamicStates));
+        dynamicState.dynamicStateCount =
+            static_cast<uint32_t>(std::size(kDynamicStates)) - (payload.fragmentShadingRateDynamic ? 0u : 1u);
         dynamicState.pDynamicStates = kDynamicStates;
 
         VkPipelineInputAssemblyStateCreateInfo ia{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};

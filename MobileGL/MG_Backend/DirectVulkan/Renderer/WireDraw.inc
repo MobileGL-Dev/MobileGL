@@ -903,6 +903,9 @@
         }
         ApplyDynamicDrawStateTail(frame, pass.extent, fbo->IsDefault,
                                  ResolveDrawViewportCount(programObj.writesViewportIndexBuiltin));
+        if (m_fragmentShadingRate.Pipeline) {
+            ShadowedSetFragmentShadingRate(frame.commandBuffer, s_vkCmdSetFragmentShadingRateKHR);
+        }
         // Storage images this draw writes are what the next sampled-image barrier must cover.
         if (programObj.hasStorageImages) BumpWireImageWriteEpoch();
         if (MG_Util::PipeStats::Enabled()) MG_Util::PipeStats::AddCalls(MG_Util::PipeStats::CallClass::Draws, 1);

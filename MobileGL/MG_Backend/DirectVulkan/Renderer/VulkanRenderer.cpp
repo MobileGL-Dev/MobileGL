@@ -315,6 +315,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Uint32 stencilBackWriteMask = 0;
         Uint32 stencilFrontReference = 0;
         Uint32 stencilBackReference = 0;
+        // glShadingRateEXT / glShadingRateCombinerOpsEXT, in RenderStateParameters' packed form
+        // (MGPackShadingRate). Only pipelines built with fragmentShadingRateDynamic carry the state.
+        Bool fragmentShadingRateValid = false;
+        Uint8 fragmentShadingRate = 0;
+        Uint8 fragmentShadingRateCombinerOp0 = 0;
+        Uint8 fragmentShadingRateCombinerOp1 = 0;
         // Gate over the whole per-draw dynamic-state tail (viewport, scissor, blend
         // constants, depth bias, line width, stencil) - see ApplyDynamicDrawStateTail.
         // Every GL input of that tail lives in RenderState's value-shadowed parameters:
@@ -506,6 +512,34 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         shadow.scissorValid = true;
         shadow.scissor = scissor;
         vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
+    }
+
+    // GL_EXT_fragment_shading_rate's pipeline rate and combiner ops for the draw about to be
+    // recorded. The packed rate is log2(width) << 2 | log2(height), which is exactly the extent
+    // VK_KHR_fragment_shading_rate takes, and the combiner op indices follow
+    // VkFragmentShadingRateCombinerOpKHR's order. Combiner op 1 combines with the attachment rate,
+    // which this backend does not enable, so it stays KEEP whatever the GL state holds.
+    static void ShadowedSetFragmentShadingRate(VkCommandBuffer commandBuffer,
+                                               PFN_vkCmdSetFragmentShadingRateKHR setFragmentShadingRate) {
+        const RenderStateParameters& p = MG_Pipe::gPipeInputs->GetRenderStateParameters();
+        auto& shadow = *g_dynamicStateShadow;
+        if (shadow.fragmentShadingRateValid && shadow.fragmentShadingRate == p.ShadingRate &&
+            shadow.fragmentShadingRateCombinerOp0 == p.ShadingRateCombinerOp0 &&
+            shadow.fragmentShadingRateCombinerOp1 == p.ShadingRateCombinerOp1) {
+            return;
+        }
+        shadow.fragmentShadingRateValid = true;
+        shadow.fragmentShadingRate = p.ShadingRate;
+        shadow.fragmentShadingRateCombinerOp0 = p.ShadingRateCombinerOp0;
+        shadow.fragmentShadingRateCombinerOp1 = p.ShadingRateCombinerOp1;
+        const Uint8 rate = p.ShadingRate == kMGInvalidShadingRateEncoding ? 0 : p.ShadingRate;
+        const VkExtent2D fragmentSize{1u << ((rate >> 2) & 3u), 1u << (rate & 3u)};
+        const VkFragmentShadingRateCombinerOpKHR combinerOps[2] = {
+            p.ShadingRateCombinerOp0 <= VK_FRAGMENT_SHADING_RATE_COMBINER_OP_MUL_KHR
+                ? static_cast<VkFragmentShadingRateCombinerOpKHR>(p.ShadingRateCombinerOp0)
+                : VK_FRAGMENT_SHADING_RATE_COMBINER_OP_KEEP_KHR,
+            VK_FRAGMENT_SHADING_RATE_COMBINER_OP_KEEP_KHR};
+        setFragmentShadingRate(commandBuffer, &fragmentSize, combinerOps);
     }
 
     // One viewport of the ARB_viewport_array state, mapped into Vulkan's frame. Split out of
@@ -2494,6 +2528,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         s_vkCmdWireDrawIndirectCount = nullptr;
         s_vkCmdDrawMultiEXT = nullptr;
         s_vkCmdDrawMultiIndexedEXT = nullptr;
+        s_vkCmdSetFragmentShadingRateKHR = nullptr;
+        m_fragmentShadingRate = {};
 
         if (m_instance != VK_NULL_HANDLE && m_surface != VK_NULL_HANDLE) {
             vkDestroySurfaceKHR(m_instance, m_surface, nullptr);
@@ -3146,6 +3182,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             .backStencilDepthFailOp = MG_Util::ConvertStencilOperationToVkEnum(backStencil.PassDepthFailOp),
             .backStencilCompareOp = MG_Util::ConvertDepthTestFuncToVkEnum(backStencil.Func),
             .fragmentReplacesDepth = programObj.fragmentReplacesDepth,
+            .fragmentShadingRateDynamic = m_fragmentShadingRate.Pipeline,
             .stages = &programObj.stages,
             .vertexInputState = pipelineVertexInputState,
             .stageSpirvDigests = &programObj.stageSpirvDigests
@@ -8063,6 +8100,84 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             }
         }
 
+        // VK_KHR_fragment_shading_rate, for GL_EXT_fragment_shading_rate. pipelineFragmentShadingRate
+        // is the floor (glShadingRateEXT, read back through gl_ShadingRateEXT); the primitive rate
+        // (gl_PrimitiveShadingRateEXT, combiner op 0) rides along when the device has it. The
+        // attachment rate is left off: no GL framebuffer carries a rate attachment to this backend
+        // yet, and enabling the feature would only change what the frontend may promise.
+        // The extension builds on VK_KHR_create_renderpass2, which this 1.1 device needs by name.
+        m_fragmentShadingRate = {};
+        VkPhysicalDeviceFragmentShadingRateFeaturesKHR fragmentShadingRateFeatures{
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADING_RATE_FEATURES_KHR};
+        if (IsExtensionSupported(availableExtensions, VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME) &&
+            (m_physicalDevice.properties.apiVersion >= VK_API_VERSION_1_2 ||
+             IsExtensionSupported(availableExtensions, VK_KHR_CREATE_RENDERPASS_2_EXTENSION_NAME)) &&
+            getPhysicalDeviceFeatures2 != nullptr && getPhysicalDeviceProperties2 != nullptr) {
+            VkPhysicalDeviceFeatures2 featureQuery{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
+            featureQuery.pNext = &fragmentShadingRateFeatures;
+            getPhysicalDeviceFeatures2(m_physicalDevice.handle, &featureQuery);
+            auto getFragmentShadingRates = reinterpret_cast<PFN_vkGetPhysicalDeviceFragmentShadingRatesKHR>(
+                vkGetInstanceProcAddr(m_instance, "vkGetPhysicalDeviceFragmentShadingRatesKHR"));
+            if (fragmentShadingRateFeatures.pipelineFragmentShadingRate == VK_TRUE &&
+                getFragmentShadingRates != nullptr) {
+                EnableOptionalDeviceExtension(availableExtensions, enabledDeviceExtensions,
+                                              VK_KHR_CREATE_RENDERPASS_2_EXTENSION_NAME);
+                EnableOptionalDeviceExtension(availableExtensions, enabledDeviceExtensions,
+                                              VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME);
+                fragmentShadingRateFeatures.attachmentFragmentShadingRate = VK_FALSE;
+                fragmentShadingRateFeatures.pNext = const_cast<void*>(deviceCreateInfo.pNext);
+                deviceCreateInfo.pNext = &fragmentShadingRateFeatures;
+
+                VkPhysicalDeviceFragmentShadingRatePropertiesKHR fragmentShadingRateProperties{
+                    VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADING_RATE_PROPERTIES_KHR};
+                VkPhysicalDeviceProperties2 propertyQuery{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
+                propertyQuery.pNext = &fragmentShadingRateProperties;
+                getPhysicalDeviceProperties2(m_physicalDevice.handle, &propertyQuery);
+
+                auto& support = m_fragmentShadingRate;
+                support.Pipeline = true;
+                support.Primitive = fragmentShadingRateFeatures.primitiveFragmentShadingRate == VK_TRUE;
+                support.NonTrivialCombiners = fragmentShadingRateProperties.fragmentShadingRateNonTrivialCombinerOps;
+                support.WithShaderDepthStencilWrites =
+                    fragmentShadingRateProperties.fragmentShadingRateWithShaderDepthStencilWrites;
+                support.WithSampleMask = fragmentShadingRateProperties.fragmentShadingRateWithSampleMask;
+                support.PrimitiveWithMultipleViewports =
+                    fragmentShadingRateProperties.primitiveFragmentShadingRateWithMultipleViewports;
+                support.LayeredAttachments = fragmentShadingRateProperties.layeredShadingRateAttachments;
+                support.MinAttachmentTexelWidth =
+                    fragmentShadingRateProperties.minFragmentShadingRateAttachmentTexelSize.width;
+                support.MinAttachmentTexelHeight =
+                    fragmentShadingRateProperties.minFragmentShadingRateAttachmentTexelSize.height;
+                support.MaxAttachmentTexelWidth =
+                    fragmentShadingRateProperties.maxFragmentShadingRateAttachmentTexelSize.width;
+                support.MaxAttachmentTexelHeight =
+                    fragmentShadingRateProperties.maxFragmentShadingRateAttachmentTexelSize.height;
+                support.MaxAttachmentTexelAspectRatio =
+                    fragmentShadingRateProperties.maxFragmentShadingRateAttachmentTexelSizeAspectRatio;
+
+                Uint32 rateCount = 0;
+                getFragmentShadingRates(m_physicalDevice.handle, &rateCount, nullptr);
+                Vector<VkPhysicalDeviceFragmentShadingRateKHR> rates(
+                    rateCount, VkPhysicalDeviceFragmentShadingRateKHR{
+                                   VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADING_RATE_KHR});
+                getFragmentShadingRates(m_physicalDevice.handle, &rateCount, rates.data());
+                const auto log2Of = [](Uint32 size) -> Int { return size == 1 ? 0 : size == 2 ? 1 : size == 4 ? 2 : -1; };
+                for (Uint32 r = 0; r < rateCount; ++r) {
+                    const Int w = log2Of(rates[r].fragmentSize.width);
+                    const Int h = log2Of(rates[r].fragmentSize.height);
+                    if (w < 0 || h < 0) continue; // larger than GL's 4x4 can name
+                    const Uint16 bit = static_cast<Uint16>(1u << ((w << 2) | h));
+                    for (Uint32 i = 0; i < std::size(support.RateMasks); ++i) {
+                        if ((rates[r].sampleCounts & (1u << i)) != 0) support.RateMasks[i] |= bit;
+                    }
+                }
+                MGLOG_I("%s: primitive=%d nonTrivialCombiners=%d "
+                        "rates(1x)=0x%04x rates(4x)=0x%04x",
+                        VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME, support.Primitive, support.NonTrivialCombiners,
+                        support.RateMasks[0], support.RateMasks[2]);
+            }
+        }
+
         // Codex closeout finding 2 (cf-magma): GL 4.6 core 8.26 makes an access through an
         // invalid image unit load zero and DISCARD stores and atomics. A null storage-image
         // descriptor is that rule exactly, so the wire arm binds one for such a unit
@@ -8194,6 +8309,17 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 s_vkCmdDrawMultiEXT = nullptr;
                 s_vkCmdDrawMultiIndexedEXT = nullptr;
                 m_multiDrawExtensionEnabled = false;
+            }
+        }
+
+        s_vkCmdSetFragmentShadingRateKHR = nullptr;
+        if (m_fragmentShadingRate.Pipeline) {
+            s_vkCmdSetFragmentShadingRateKHR = reinterpret_cast<PFN_vkCmdSetFragmentShadingRateKHR>(
+                vkGetDeviceProcAddr(m_device, "vkCmdSetFragmentShadingRateKHR"));
+            if (s_vkCmdSetFragmentShadingRateKHR == nullptr) {
+                MGLOG_W("VK_KHR_fragment_shading_rate enabled but vkCmdSetFragmentShadingRateKHR is missing, "
+                        "will continue without fragment shading rates!");
+                m_fragmentShadingRate = {};
             }
         }
 

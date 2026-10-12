@@ -1083,6 +1083,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             pVulkanRenderer && pVulkanRenderer->IsSamplerAnisotropySupported(),
             pVulkanRenderer && pVulkanRenderer->IsNonZeroIndirectBaseInstanceSupported(),
             m_vulkanCaps.SupportsImageCubeArray);
+        // GL_EXT_fragment_shading_rate rides on VK_KHR_fragment_shading_rate's pipeline rate, and
+        // its _primitive companion on the primitive rate; both only when the renderer enabled them.
+        // _attachment is not advertised: no framebuffer carries a rate attachment to this backend.
+        if (pVulkanRenderer != nullptr && pVulkanRenderer->GetFragmentShadingRateSupport().Pipeline) {
+            m_rendererInfo.RendererGLInfo.Extensions.push_back(E_GL_EXT_fragment_shading_rate);
+            if (pVulkanRenderer->GetFragmentShadingRateSupport().Primitive) {
+                m_rendererInfo.RendererGLInfo.Extensions.push_back(E_GL_EXT_fragment_shading_rate_primitive);
+            }
+        }
     }
 
     void BackendObject_DirectVulkan::UpdateDynamicBackendParameters() {
@@ -1466,6 +1475,31 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         default:
             m_dynamicParameters.GpuVendor = GpuVendorKind::Unknown;
             break;
+        }
+
+        // GL_EXT_fragment_shading_rate: what the renderer enabled of VK_KHR_fragment_shading_rate.
+        // The attachment rate stays off (see UpdateAdvertisedExtensions), and with it every limit
+        // that only describes the attachment.
+        {
+            const FragmentShadingRateSupport fsr =
+                pVulkanRenderer != nullptr ? pVulkanRenderer->GetFragmentShadingRateSupport() : FragmentShadingRateSupport{};
+            m_dynamicParameters.SupportsFragmentShadingRate = fsr.Pipeline;
+            m_dynamicParameters.SupportsPrimitiveFragmentShadingRate = fsr.Pipeline && fsr.Primitive;
+            m_dynamicParameters.SupportsAttachmentFragmentShadingRate = false;
+            m_dynamicParameters.FragmentShadingRateNonTrivialCombiners = fsr.NonTrivialCombiners;
+            m_dynamicParameters.FragmentShadingRateWithShaderDepthStencilWrites = fsr.WithShaderDepthStencilWrites;
+            m_dynamicParameters.FragmentShadingRateWithSampleMask = fsr.WithSampleMask;
+            m_dynamicParameters.FragmentShadingRatePrimitiveWithMultiViewport = fsr.PrimitiveWithMultipleViewports;
+            m_dynamicParameters.FragmentShadingRateAttachmentWithDefaultFramebuffer = false;
+            for (SizeT i = 0; i < std::size(m_dynamicParameters.FragmentShadingRateMasks); ++i) {
+                m_dynamicParameters.FragmentShadingRateMasks[i] = fsr.Pipeline ? fsr.RateMasks[i] : 0;
+            }
+            m_dynamicParameters.MinFragmentShadingRateAttachmentTexelWidth = 0;
+            m_dynamicParameters.MinFragmentShadingRateAttachmentTexelHeight = 0;
+            m_dynamicParameters.MaxFragmentShadingRateAttachmentTexelWidth = 0;
+            m_dynamicParameters.MaxFragmentShadingRateAttachmentTexelHeight = 0;
+            m_dynamicParameters.MaxFragmentShadingRateAttachmentTexelAspectRatio = 0;
+            m_dynamicParameters.MaxFragmentShadingRateAttachmentLayers = 0;
         }
     }
 } // namespace MobileGL::MG_Backend::DirectVulkan

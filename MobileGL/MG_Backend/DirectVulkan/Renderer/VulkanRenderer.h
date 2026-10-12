@@ -130,6 +130,28 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
     };
 
+    // VK_KHR_fragment_shading_rate as this renderer enabled it, which is everything
+    // GL_EXT_fragment_shading_rate needs to know about the device. The three feature flags are the
+    // ENABLED ones; the rest are the device's properties and are meaningful only under them.
+    struct FragmentShadingRateSupport {
+        Bool Pipeline = false;
+        Bool Primitive = false;
+        Bool Attachment = false;
+        Bool NonTrivialCombiners = false;
+        Bool WithShaderDepthStencilWrites = false;
+        Bool WithSampleMask = false;
+        Bool PrimitiveWithMultipleViewports = false;
+        Bool LayeredAttachments = false;
+        // Per sample count 1, 2, 4 .. 64: bit (log2(w) << 2 | log2(h)) per rate the device lists
+        // for that count (vkGetPhysicalDeviceFragmentShadingRatesKHR).
+        Uint16 RateMasks[7] = {};
+        Uint32 MinAttachmentTexelWidth = 0;
+        Uint32 MinAttachmentTexelHeight = 0;
+        Uint32 MaxAttachmentTexelWidth = 0;
+        Uint32 MaxAttachmentTexelHeight = 0;
+        Uint32 MaxAttachmentTexelAspectRatio = 0;
+    };
+
     class VulkanRenderer : public IBufferCopyCommandProvider,
                            public FrameContext::IRecordingObserver,
                            public ProgramFactory::IEvictionObserver {
@@ -391,6 +413,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // The samplerAnisotropy device feature was granted, so GL_TEXTURE_MAX_ANISOTROPY_EXT is
         // honored rather than accepted-and-ignored.
         Bool IsSamplerAnisotropySupported() const { return m_samplerAnisotropyFeatureEnabled; }
+        const FragmentShadingRateSupport& GetFragmentShadingRateSupport() const { return m_fragmentShadingRate; }
         // ARB_base_instance extends indirect command records with a non-zero firstInstance and
         // requires gl_InstanceID to remain zero-based. Vulkan needs both features to honor that
         // complete contract: one legalizes the command word, the other enables the shader rebase.
@@ -1192,6 +1215,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // (and its multiDraw feature) is enabled; null otherwise.
         PFN_vkCmdDrawMultiEXT s_vkCmdDrawMultiEXT = nullptr;
         PFN_vkCmdDrawMultiIndexedEXT s_vkCmdDrawMultiIndexedEXT = nullptr;
+        // VK_KHR_fragment_shading_rate, which backs GL_EXT_fragment_shading_rate: what was enabled
+        // at device creation and what the device answers for it (see GetFragmentShadingRateSupport).
+        // Null / all-false on a device without pipelineFragmentShadingRate.
+        PFN_vkCmdSetFragmentShadingRateKHR s_vkCmdSetFragmentShadingRateKHR = nullptr;
+        FragmentShadingRateSupport m_fragmentShadingRate{};
 
         // VK_EXT_transform_feedback (GL transform feedback capture)
         Bool m_transformFeedbackFeatureEnabled = false;
