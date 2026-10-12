@@ -795,6 +795,13 @@ namespace MobileGL::MG_State::GLState {
         MergeShaderSideChannels();
         if (!artifacts.infoLog.empty()) return; // a conflicting explicit uniform location
 
+        // Before the L1 probe, like the side channels: a memo hit publishes the artifacts of an
+        // identical earlier link, which computed the same answer from the same sources.
+        artifacts.esOrigin = std::any_of(in.shaders.begin(), in.shaders.end(), [](const LinkShaderInput& input) {
+            return MG_Util::ShaderTranspiler::FindEsOrigin(CompiledArtifacts(input.compiled).preprocessedSource)
+                .has_value();
+        });
+
         // ---- L1 of the shader translation memo ----
         // Everything below this point - the parse, the link, mapIO, GlslangToSpv, spirv-opt,
         // buildReflection and the global-UBO routing - is what a hit skips. See

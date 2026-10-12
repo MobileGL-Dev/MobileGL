@@ -783,6 +783,7 @@ namespace MobileGL::MG_State::GLState {
         // PHASE A: answerable without joining the SPIR-V job, which is what lets the draw path ask
         // every program this question and pay nothing for the overwhelming majority that say no.
         Bool UsesReservedNumSamples() const { return Artifacts().usesReservedNumSamples; }
+        Bool IsEsOrigin() const { return Artifacts().esOrigin; }
 
         // Publishes `samples` into the global-UBO shadow. Returns false when there is nowhere to
         // put it - no shim in this program, no SPIR-V (a cancelled phase B), or the optimizer

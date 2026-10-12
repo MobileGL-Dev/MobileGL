@@ -1581,6 +1581,16 @@ namespace MobileGL::MG_Impl::GLImpl {
         } else {
             const auto& ttype = programObject.GetUniformTypeFacts(location);
             if (!ttype.isTexture && !ttype.isImage) return;
+            // ESSL 3.10 has no way to re-point an image uniform: its unit is the binding layout
+            // qualifier, and ES 3.1 core 7.6.1 makes every Uniform* on one INVALID_OPERATION.
+            // Desktop GL sets the unit with Uniform1i, so only a program built from `es` sources.
+            if (ttype.isImage && programObject.IsEsOrigin()) {
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidOperation,
+                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                                 "An image uniform of an ES shader cannot be set with Uniform*."));
+                return;
+            }
             if constexpr (!std::is_same_v<std::remove_cv_t<T>, GLint> || ItemCount != 1) {
                 MG_State::pGLContext->RecordError(
                     ErrorCode::InvalidOperation,

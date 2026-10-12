@@ -348,6 +348,48 @@ namespace MobileGL {
                 return res;
             }
 
+            namespace {
+                // The first variable index into a uniform or shader storage block ARRAY, if any.
+                class BlockArrayVariableIndexFinder final : public glslang::TIntermTraverser {
+                public:
+                    const glslang::TIntermBinary* found = nullptr;
+
+                    bool visitBinary(glslang::TVisit, glslang::TIntermBinary* node) override {
+                        if (found) return false;
+                        if (node->getOp() != glslang::EOpIndexIndirect) return true;
+                        const glslang::TType& base = node->getLeft()->getType();
+                        const glslang::TStorageQualifier storage = base.getQualifier().storage;
+                        if (base.getBasicType() == glslang::EbtBlock && base.isArray() &&
+                            (storage == glslang::EvqBuffer || storage == glslang::EvqUniform)) {
+                            found = node;
+                            return false;
+                        }
+                        return true;
+                    }
+                };
+
+                // ESSL 3.10 4.3.9: "All indices used to index a uniform or shader storage block array
+                // must be constant integral expressions." ESSL 3.20 and GL_EXT/OES_gpu_shader5 relax
+                // it to dynamically uniform; desktop GLSL has no such rule at all. The rewrite to
+                // "#version 460 core" lost it, so it is put back here for the sources that declared
+                // an `es` version - and only those. Returns the info-log line, or empty.
+                String FindEsBlockArrayIndexViolation(const glslang::TShader& shader, const String& source) {
+                    const std::optional<EsOrigin> origin = FindEsOrigin(source);
+                    if (!origin || origin->version >= 320 || origin->gpuShader5) return {};
+                    glslang::TIntermediate* intermediate = shader.getIntermediate();
+                    if (intermediate == nullptr || intermediate->getTreeRoot() == nullptr) return {};
+                    BlockArrayVariableIndexFinder finder;
+                    intermediate->getTreeRoot()->traverse(&finder);
+                    if (!finder.found) return {};
+                    const glslang::TType& base = finder.found->getLeft()->getType();
+                    return std::format("ERROR: 0:{}: '[' : a {} block array must be indexed with a constant "
+                                       "integral expression in ESSL {} without GL_EXT_gpu_shader5\n",
+                                       finder.found->getLoc().line,
+                                       base.getQualifier().storage == glslang::EvqBuffer ? "shader storage" : "uniform",
+                                       origin->version);
+                }
+            } // namespace
+
             Result<SharedPtr<glslang::TShader>> ShaderCompiler::CompileShader(const ShaderAttrib& attrib) {
                 auto shaderType = attrib.shaderType;
 
@@ -361,7 +403,19 @@ namespace MobileGL {
 
                 const String source(attrib.sourceStr);
                 auto result = ParseShaderSource(lang, shaderType, source, attrib.flags, attrib.env);
-                if (result) return result;
+                if (result) {
+                    // Part of the parse verdict, so an L1c hit and ClaimParsedShader's re-parse reach
+                    // the same answer as this parse did.
+                    if (String violation = FindEsBlockArrayIndexViolation(*result.value(), source);
+                        !violation.empty()) {
+                        ResultInfo r;
+                        r.log = "Error: [glslang] Cannot compile " + ConvertGLEnumToString(shaderType) + ":\n" +
+                                violation;
+                        r.errc = -2;
+                        return std::unexpected(r);
+                    }
+                    return result;
+                }
 
                 // Legacy desktop sources are normalized to "#version 330 core" (with a marker on the
                 // directive), which parses under stricter rules than the 460 they used to be forced

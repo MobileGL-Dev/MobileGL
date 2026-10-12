@@ -974,6 +974,99 @@ layout(points, max_vertices = 1) out;
         ClearErrors();
     }
 
+    // ESSL 3.10 4.3.9 makes a variable index into a shader storage (or uniform) block array a
+    // compile error; desktop GLSL and ESSL 3.20 do not. An `es` source is compiled through a
+    // rewrite to desktop 460, so the rule is kept only for the sources that declared `es` -
+    // KHR-GL4x.es_31_compatibility.shader_storage_buffer_object.negative-glsl-compileTime.
+    TEST_F(ProgramInterfaceTest, EsslBlockArraysNeedAConstantIndexOnlyInEsslBelow320) {
+        std::string log;
+        const auto compiles = [&log](const std::string& version) {
+            const std::string source = version + R"(
+layout(local_size_x = 1) in;
+layout(std430, binding = 0) buffer Input { float data0; } g_input[4];
+layout(std430, binding = 4) buffer Output { float data0; } g_output[4];
+void main() {
+    for (int i = 0; i < 4; ++i) g_output[i].data0 = g_input[i].data0;
+}
+)";
+            const char* sourcePtr = source.c_str();
+            const GLuint sh = CreateShader(GL_COMPUTE_SHADER);
+            ShaderSource(sh, 1, &sourcePtr, nullptr);
+            CompileShader(sh);
+            GLint status = -1;
+            GetShaderiv(sh, GL_COMPILE_STATUS, &status);
+            char buffer[4096] = "";
+            GetShaderInfoLog(sh, sizeof(buffer), nullptr, buffer);
+            log = buffer;
+            DeleteShader(sh);
+            return status == GL_TRUE;
+        };
+        EXPECT_FALSE(compiles("#version 310 es"));
+        EXPECT_NE(log.find("constant integral expression"), std::string::npos) << "info log was: " << log;
+        EXPECT_TRUE(compiles("#version 320 es"));
+        EXPECT_TRUE(compiles("#version 430"));
+
+        const char* constantIndex = R"(#version 310 es
+layout(local_size_x = 1) in;
+layout(std430, binding = 0) buffer Input { float data0; } g_input[4];
+void main() { g_input[3].data0 = g_input[0].data0; }
+)";
+        const GLuint sh = CreateShader(GL_COMPUTE_SHADER);
+        ShaderSource(sh, 1, &constantIndex, nullptr);
+        CompileShader(sh);
+        GLint status = -1;
+        GetShaderiv(sh, GL_COMPILE_STATUS, &status);
+        EXPECT_EQ(status, GL_TRUE) << "a constant index stays legal";
+        DeleteShader(sh);
+        ClearErrors();
+    }
+
+    // ES 3.1 fixes an image uniform's unit at its binding qualifier, so every Uniform* on one is
+    // INVALID_OPERATION in a program built from `es` sources - while a desktop program sets the
+    // unit with glUniform1i. KHR-GL4x.es_31_compatibility.shader_image_load_store.negative-uniform.
+    TEST_F(ProgramInterfaceTest, ImageUniformsOfEsProgramsCannotBeSet) {
+        const auto imageProgram = [](const char* version) {
+            const std::string vs = std::string(version) + R"(
+layout(location = 0) in vec4 i_position;
+void main() { gl_Position = i_position; }
+)";
+            const std::string fs = std::string(version) + R"(
+layout(rgba32f, binding = 0) writeonly uniform highp image2D g_image;
+void main() {
+    imageStore(g_image, ivec2(gl_FragCoord.xy), vec4(0.0));
+    discard;
+}
+)";
+            const GLuint p = MakeProgram(vs.c_str(), fs.c_str());
+            LinkProgram(p);
+            return p;
+        };
+
+        const GLuint es = imageProgram("#version 310 es");
+        ExpectLinked(es);
+        ClearErrors();
+        const GLint esLocation = GetUniformLocation(es, "g_image");
+        ASSERT_GE(esLocation, 0);
+        UseProgram(es);
+        Uniform1i(esLocation, 1);
+        EXPECT_EQ(TakeError(), static_cast<GLenum>(GL_INVALID_OPERATION));
+        const GLint unit = 1;
+        Uniform1iv(esLocation, 1, &unit);
+        EXPECT_EQ(TakeError(), static_cast<GLenum>(GL_INVALID_OPERATION));
+        UseProgram(0);
+        ProgramUniform1i(es, esLocation, 1);
+        EXPECT_EQ(TakeError(), static_cast<GLenum>(GL_INVALID_OPERATION));
+
+        const GLuint desktop = imageProgram("#version 430");
+        ExpectLinked(desktop);
+        ClearErrors();
+        const GLint desktopLocation = GetUniformLocation(desktop, "g_image");
+        ASSERT_GE(desktopLocation, 0);
+        ProgramUniform1i(desktop, desktopLocation, 1);
+        EXPECT_EQ(TakeError(), static_cast<GLenum>(GL_NO_ERROR));
+        ClearErrors();
+    }
+
     // GL 4.6 core 7.6 fails the link when a stage's active image uniforms exceed
     // GL_MAX_*_IMAGE_UNIFORMS, or when their sum exceeds GL_MAX_COMBINED_IMAGE_UNIFORMS. Nothing
     // counted them - glslang keeps those numbers only so gl_Max*ImageUniforms can expand from

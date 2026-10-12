@@ -558,8 +558,9 @@ void main() {
     };
 
     // Preserve the pre-existing desktop-core route: the current resource table cannot parse ESSL built-ins.
-    verifyVersion("#version 300 es", "#version 460 core\n");
-    verifyVersion("#version 310 es", "#version 460 core\n");
+    // The directive carries the declared ESSL version, which FindEsOrigin reads back.
+    verifyVersion("#version 300 es", "#version 460 core /*mobilegl-es-origin:300*/\n");
+    verifyVersion("#version 310 es", "#version 460 core /*mobilegl-es-origin:310*/\n");
 }
 
 TEST_F(ProgramUtilTest, PreprocessModernDesktopVersionsRecognizesUtf8Bom) {

@@ -530,8 +530,9 @@ TEST(ProgramArtifactsCodec, AVersionMismatchIsRefused) {
 // no archive owns. A codec arm for it would be a use-after-free waiting for a cache hit.
 TEST(ProgramArtifactsCodec, TheTablesVisitEveryMemberExceptTheLiveProgram) {
     // P7 OQ-8: 59 members, 58 visited. The 59th is still the live TProgram; the 58th is
-    // storageBlocks, which follows the record arm's guard (ProgramArtifacts.h).
-    EXPECT_EQ(ProgramArtifactsVisitedFieldCount<LinkArtifacts>(), 58u);
+    // storageBlocks, which follows the record arm's guard (ProgramArtifacts.h). esOrigin then
+    // made it 60 and 59.
+    EXPECT_EQ(ProgramArtifactsVisitedFieldCount<LinkArtifacts>(), 59u);
     EXPECT_EQ(ProgramArtifactsVisitedFieldCount<StorageBlockReflection>(), 3u);
     EXPECT_EQ(ProgramArtifactsVisitedFieldCount<SpirvArtifacts>(), 8u);
     EXPECT_EQ(ProgramArtifactsVisitedFieldCount<ResourceReflection>(), 14u);

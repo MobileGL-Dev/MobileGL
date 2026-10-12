@@ -337,6 +337,10 @@ namespace MobileGL::MG_State::GLState {
         // gate has to be answerable without joining the SPIR-V job, or every draw of every
         // program would pay a join to discover it has nothing to write.
         Bool usesReservedNumSamples = false;
+        // A shader of this program declared an `es` #version (ShaderTranspiler::FindEsOrigin).
+        // ESSL fixes an image uniform's unit at its binding qualifier, so glUniform* on one is
+        // INVALID_OPERATION for such a program and legal for a desktop one.
+        Bool esOrigin = false;
         Uint maxUniformLocation = 0;
         Int uniformNameMaxLength = 0;
         Int attribInNameMaxLength = 0;
@@ -575,6 +579,7 @@ namespace MobileGL::MG_State::GLState {
         v("uniformBlocksWithoutBinding", a.uniformBlocksWithoutBinding);
         v("activeUniformCount", a.activeUniformCount);
         v("usesReservedNumSamples", a.usesReservedNumSamples);
+        v("esOrigin", a.esOrigin);
         v("maxUniformLocation", a.maxUniformLocation);
         v("uniformNameMaxLength", a.uniformNameMaxLength);
         v("attribInNameMaxLength", a.attribInNameMaxLength);

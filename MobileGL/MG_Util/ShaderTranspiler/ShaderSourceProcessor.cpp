@@ -465,13 +465,18 @@ namespace {
     // Stamped onto the normalized directive when a legacy (or absent) desktop
     // version was rewritten to 330; consumed by RetargetLegacyVersionDirectiveTo460.
     constexpr const char* kNormalizedLegacyMarker = "/*mobilegl-normalized-legacy*/";
+    // Stamped onto the directive an ES source is rewritten to, with the ESSL version it declared:
+    // the rules ESSL has and desktop GLSL does not are enforced off it (FindEsOrigin), and it keeps
+    // an ES source from sharing a parse verdict with a byte-identical desktop one.
+    constexpr const char* kEsOriginMarkerPrefix = "/*mobilegl-es-origin:";
 
     MobileGL::String GetNormalizedVersionDirective(const ShaderLanguageInfo& info) {
         if (info.profile == MobileGL::ShaderProfile::ES) {
             // Preserve the pre-existing behavior for standard lowercase "es" directives. MobileGL's Vulkan
             // glslang resource table cannot parse its ESSL built-ins today, even at ESSL 310, whereas the same
             // source is accepted through the normalized desktop core path.
-            return "#version 460 core\n";
+            return MobileGL::String("#version 460 core ") + kEsOriginMarkerPrefix + std::to_string(info.version) +
+                   "*/\n";
         }
 
         // Keep compatibility-profile handling on its pre-existing 460 path. Vulkan glslang does not accept that
@@ -1976,6 +1981,32 @@ namespace MobileGL {
                     at = comma + 1;
                 }
                 return names;
+            }
+
+            std::optional<EsOrigin> FindEsOrigin(const String& preprocessedSource) {
+                const SizeT markerStart = preprocessedSource.find(kEsOriginMarkerPrefix);
+                if (markerStart == String::npos) return std::nullopt;
+                SizeT probe = markerStart + std::char_traits<char>::length(kEsOriginMarkerPrefix);
+                Uint esVersion = 0;
+                bool hasDigits = false;
+                while (probe < preprocessedSource.size() && preprocessedSource[probe] >= '0' &&
+                       preprocessedSource[probe] <= '9') {
+                    hasDigits = true;
+                    esVersion = esVersion * 10 + static_cast<Uint>(preprocessedSource[probe] - '0');
+                    if (esVersion > 1000) return std::nullopt; // absurd; not a marker this pipeline wrote
+                    probe++;
+                }
+                if (!hasDigits || preprocessedSource.compare(probe, 2, "*/") != 0) return std::nullopt;
+
+                // The #extension lines survive preprocessing, and enabledExtensions is already
+                // closed under glslang's implication graph (GL_ANDROID_extension_pack_es31a turns
+                // GL_EXT_gpu_shader5 on).
+                const ShaderLanguageInfo info = InspectShaderLanguage(preprocessedSource);
+                EsOrigin origin;
+                origin.version = esVersion;
+                origin.gpuShader5 = ExtensionTurnedOn(info, "GL_EXT_gpu_shader5") ||
+                                    ExtensionTurnedOn(info, "GL_OES_gpu_shader5");
+                return origin;
             }
 
             String CollectEsPreambleMacroDefines(const String& preprocessedSource) {
