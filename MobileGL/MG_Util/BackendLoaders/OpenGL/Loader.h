@@ -619,6 +619,13 @@ namespace MobileGL {
             GL_FUNC_TYPEDEF(void, glTextureViewOES, GLuint texture, GLenum target, GLuint origtexture,
                             GLenum internalformat, GLuint minlevel, GLuint numlevels, GLuint minlayer,
                             GLuint numlayers)
+            // GL_EXT_fragment_shading_rate (+ _attachment). Extension-only in every ES version.
+            GL_FUNC_TYPEDEF(void, glShadingRateEXT, GLenum rate)
+            GL_FUNC_TYPEDEF(void, glShadingRateCombinerOpsEXT, GLenum combinerOp0, GLenum combinerOp1)
+            GL_FUNC_TYPEDEF(void, glGetFragmentShadingRatesEXT, GLsizei samples, GLsizei maxCount, GLsizei* count,
+                            GLenum* shadingRates)
+            GL_FUNC_TYPEDEF(void, glFramebufferShadingRateEXT, GLenum target, GLenum attachment, GLuint texture,
+                            GLint baseLayer, GLsizei numLayers, GLsizei texelWidth, GLsizei texelHeight)
             GL_FUNC_TYPEDEF(void, glTexBufferEXT, GLenum target, GLenum internalformat, GLuint buffer)
             GL_FUNC_TYPEDEF(void, glTexBufferOES, GLenum target, GLenum internalformat, GLuint buffer)
             GL_FUNC_TYPEDEF(void, glTexBufferRangeEXT, GLenum target, GLenum internalformat, GLuint buffer,
@@ -1040,6 +1047,10 @@ namespace MobileGL {
             GL_FUNC_DECL(glTexBufferRange)
             GL_FUNC_DECL(glTextureViewEXT)
             GL_FUNC_DECL(glTextureViewOES)
+            GL_FUNC_DECL(glShadingRateEXT)
+            GL_FUNC_DECL(glShadingRateCombinerOpsEXT)
+            GL_FUNC_DECL(glGetFragmentShadingRatesEXT)
+            GL_FUNC_DECL(glFramebufferShadingRateEXT)
             GL_FUNC_DECL(glTexBufferEXT)
             GL_FUNC_DECL(glTexBufferOES)
             GL_FUNC_DECL(glTexBufferRangeEXT)
@@ -1111,6 +1122,27 @@ namespace MobileGL {
             // through the other). Gate on this, never on the entry points: eglGetProcAddress
             // hands back live-looking stubs (see AcquireGLESFunctions).
             Bool SupportsTextureView = false;
+            // GL_EXT_fragment_shading_rate and its _primitive / _attachment companions, with what the
+            // driver answers for them. Extension-only in every ES version; each flag also requires
+            // the entry points that extension brings, and _primitive / _attachment require the base
+            // one. The values below are meaningful only when their flag is set.
+            Bool SupportsFragmentShadingRate = false;
+            Bool SupportsFragmentShadingRatePrimitive = false;
+            Bool SupportsFragmentShadingRateAttachment = false;
+            Bool FragmentShadingRateNonTrivialCombiners = false;
+            Bool FragmentShadingRateWithShaderDepthStencilWrites = false;
+            Bool FragmentShadingRateWithSampleMask = false;
+            Bool FragmentShadingRatePrimitiveWithMultiViewport = false;
+            Bool FragmentShadingRateAttachmentWithDefaultFramebuffer = false;
+            // glGetFragmentShadingRatesEXT for 1, 2, 4 .. 64 samples, as a mask of packed rates
+            // (see MG_Backend::DynamicBackendParameters::FragmentShadingRateMasks).
+            Uint16 FragmentShadingRateMasks[7] = {};
+            Int MinFragmentShadingRateAttachmentTexelWidth = 0;
+            Int MinFragmentShadingRateAttachmentTexelHeight = 0;
+            Int MaxFragmentShadingRateAttachmentTexelWidth = 0;
+            Int MaxFragmentShadingRateAttachmentTexelHeight = 0;
+            Int MaxFragmentShadingRateAttachmentTexelAspectRatio = 0;
+            Int MaxFragmentShadingRateAttachmentLayers = 0;
             // Which spelling of buffer-texture support the host driver has. Desktop GL makes buffer
             // textures core from 3.1 on, so the frontend advertises them unconditionally and an app
             // may call glTexBuffer at any time; ES only gained them in 3.2, and before that only

@@ -4177,6 +4177,22 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
             }
 
+            if (tailSpanDirty && g_GLESCapabilities.SupportsFragmentShadingRate) { // GL_EXT_fragment_shading_rate
+                // The frontend stores the packed rate and op indices; the driver takes the enums.
+                // Only forwarded where the driver has the extension, which is also the only place
+                // the frontend advertised it - so a non-default value cannot exist anywhere else.
+                if (forceFullPush || parameters.ShadingRate != g_syncedRenderStateParameters.ShadingRate) {
+                    const GLenum rate = MGUnpackShadingRate(parameters.ShadingRate);
+                    g_GLESFuncs.glShadingRateEXT(rate != GL_NONE ? rate : GL_SHADING_RATE_1X1_PIXELS_EXT);
+                }
+                if (forceFullPush ||
+                    parameters.ShadingRateCombinerOp0 != g_syncedRenderStateParameters.ShadingRateCombinerOp0 ||
+                    parameters.ShadingRateCombinerOp1 != g_syncedRenderStateParameters.ShadingRateCombinerOp1) {
+                    g_GLESFuncs.glShadingRateCombinerOpsEXT(MGShadingRateCombinerOpEnum(parameters.ShadingRateCombinerOp0),
+                                                            MGShadingRateCombinerOpEnum(parameters.ShadingRateCombinerOp1));
+                }
+            }
+
             g_syncedRenderStateVersion = currentRenderStateVersion;
             // Byte copy, not member copy: it also clones the frontend struct's padding bytes,
             // which is what lets the span memcmps above answer "unchanged" exactly instead of

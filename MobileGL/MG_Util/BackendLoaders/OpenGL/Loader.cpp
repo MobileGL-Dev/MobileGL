@@ -641,6 +641,11 @@ namespace MobileGL::MG_Util::BackendLoader {
             // absent on plenty of drivers and neither absence is an error.
             INIT_GLES_FUNC_OPTIONAL(glTextureViewEXT)
             INIT_GLES_FUNC_OPTIONAL(glTextureViewOES)
+            // GL_EXT_fragment_shading_rate: extension-only, so absence is not an error.
+            INIT_GLES_FUNC_OPTIONAL(glShadingRateEXT)
+            INIT_GLES_FUNC_OPTIONAL(glShadingRateCombinerOpsEXT)
+            INIT_GLES_FUNC_OPTIONAL(glGetFragmentShadingRatesEXT)
+            INIT_GLES_FUNC_OPTIONAL(glFramebufferShadingRateEXT)
             INIT_GLES_FUNC_OPTIONAL(glTexBufferEXT)
             INIT_GLES_FUNC_OPTIONAL(glTexBufferOES)
             INIT_GLES_FUNC_OPTIONAL(glTexBufferRangeEXT)
@@ -1021,6 +1026,66 @@ namespace MobileGL::MG_Util::BackendLoader {
         }
     }
 
+    // Reads what the driver answers for GL_EXT_fragment_shading_rate once the extension strings have
+    // been matched. The per-sample-count rate lists are folded into masks of the packed encoding
+    // ((log2 w << 2) | log2 h), which is what crosses to the frontend.
+    static void FillInFragmentShadingRateCapabilities(MG_External::GLESCapabilities& caps,
+                                                      const MG_External::GLESFunctionsTable& glesFuncs) {
+        const auto getBoolean = [&](GLenum pname) {
+            GLboolean value = GL_FALSE;
+            glesFuncs.glGetBooleanv(pname, &value);
+            return value == GL_TRUE;
+        };
+        caps.FragmentShadingRateNonTrivialCombiners =
+            getBoolean(GL_FRAGMENT_SHADING_RATE_NON_TRIVIAL_COMBINERS_SUPPORTED_EXT);
+        caps.FragmentShadingRateWithShaderDepthStencilWrites =
+            getBoolean(GL_FRAGMENT_SHADING_RATE_WITH_SHADER_DEPTH_STENCIL_WRITES_SUPPORTED_EXT);
+        caps.FragmentShadingRateWithSampleMask = getBoolean(GL_FRAGMENT_SHADING_RATE_WITH_SAMPLE_MASK_SUPPORTED_EXT);
+        if (caps.SupportsFragmentShadingRatePrimitive) {
+            caps.FragmentShadingRatePrimitiveWithMultiViewport =
+                getBoolean(GL_FRAGMENT_SHADING_RATE_PRIMITIVE_RATE_WITH_MULTI_VIEWPORT_SUPPORTED_EXT);
+        }
+        if (caps.SupportsFragmentShadingRateAttachment) {
+            caps.FragmentShadingRateAttachmentWithDefaultFramebuffer =
+                getBoolean(GL_FRAGMENT_SHADING_RATE_ATTACHMENT_WITH_DEFAULT_FRAMEBUFFER_SUPPORTED_EXT);
+            glesFuncs.glGetIntegerv(GL_MIN_FRAGMENT_SHADING_RATE_ATTACHMENT_TEXEL_WIDTH_EXT,
+                                    &caps.MinFragmentShadingRateAttachmentTexelWidth);
+            glesFuncs.glGetIntegerv(GL_MIN_FRAGMENT_SHADING_RATE_ATTACHMENT_TEXEL_HEIGHT_EXT,
+                                    &caps.MinFragmentShadingRateAttachmentTexelHeight);
+            glesFuncs.glGetIntegerv(GL_MAX_FRAGMENT_SHADING_RATE_ATTACHMENT_TEXEL_WIDTH_EXT,
+                                    &caps.MaxFragmentShadingRateAttachmentTexelWidth);
+            glesFuncs.glGetIntegerv(GL_MAX_FRAGMENT_SHADING_RATE_ATTACHMENT_TEXEL_HEIGHT_EXT,
+                                    &caps.MaxFragmentShadingRateAttachmentTexelHeight);
+            glesFuncs.glGetIntegerv(GL_MAX_FRAGMENT_SHADING_RATE_ATTACHMENT_TEXEL_ASPECT_RATIO_EXT,
+                                    &caps.MaxFragmentShadingRateAttachmentTexelAspectRatio);
+            glesFuncs.glGetIntegerv(GL_MAX_FRAGMENT_SHADING_RATE_ATTACHMENT_LAYERS_EXT,
+                                    &caps.MaxFragmentShadingRateAttachmentLayers);
+        }
+        // Table X.1 in enum order, 1X1 .. 4X4, as packed rates.
+        static constexpr Uint8 kPackedByEnumOffset[] = {0x0, 0x1, 0x4, 0x5, 0x2, 0x8, 0x9, 0x6, 0xa};
+        for (SizeT i = 0; i < std::size(caps.FragmentShadingRateMasks); ++i) {
+            GLenum rates[16] = {};
+            GLsizei count = 0;
+            glesFuncs.glGetFragmentShadingRatesEXT(static_cast<GLsizei>(1u << i), 16, &count, rates);
+            Uint16 mask = 0;
+            for (GLsizei r = 0; r < count && r < 16; ++r) {
+                const GLenum offset = rates[r] - GL_SHADING_RATE_1X1_PIXELS_EXT;
+                if (offset < std::size(kPackedByEnumOffset)) mask |= Uint16(1u << kPackedByEnumOffset[offset]);
+            }
+            caps.FragmentShadingRateMasks[i] = mask;
+        }
+        // The queries above are best-effort: a pname a driver does not know only leaves its default.
+        while (glesFuncs.glGetError() != GL_NO_ERROR) {
+        }
+        MGLOG_I("GL_EXT_fragment_shading_rate: primitive=%d attachment=%d nonTrivialCombiners=%d rates(1x)=0x%04x "
+                "rates(4x)=0x%04x attachment texel %dx%d..%dx%d",
+                caps.SupportsFragmentShadingRatePrimitive, caps.SupportsFragmentShadingRateAttachment,
+                caps.FragmentShadingRateNonTrivialCombiners, caps.FragmentShadingRateMasks[0],
+                caps.FragmentShadingRateMasks[2], caps.MinFragmentShadingRateAttachmentTexelWidth,
+                caps.MinFragmentShadingRateAttachmentTexelHeight, caps.MaxFragmentShadingRateAttachmentTexelWidth,
+                caps.MaxFragmentShadingRateAttachmentTexelHeight);
+    }
+
     Bool FillInGLESCapabilities(MG_External::GLESCapabilities& caps, const MG_External::GLESFunctionsTable& glesFuncs) {
         if (!glesFuncs.glGetString || !glesFuncs.glGetIntegerv) {
             MGLOG_E("Required GLES functions are not loaded, cannot query capabilities");
@@ -1096,6 +1161,15 @@ namespace MobileGL::MG_Util::BackendLoader {
                 }
                 if (std::strcmp(extension, "GL_OES_texture_view") == 0) {
                     hasOesTextureView = true;
+                }
+                if (std::strcmp(extension, "GL_EXT_fragment_shading_rate") == 0) {
+                    caps.SupportsFragmentShadingRate = true;
+                }
+                if (std::strcmp(extension, "GL_EXT_fragment_shading_rate_primitive") == 0) {
+                    caps.SupportsFragmentShadingRatePrimitive = true;
+                }
+                if (std::strcmp(extension, "GL_EXT_fragment_shading_rate_attachment") == 0) {
+                    caps.SupportsFragmentShadingRateAttachment = true;
                 }
                 if (std::strcmp(extension, "GL_EXT_texture_buffer") == 0) {
                     hasExtTextureBuffer = true;
@@ -1182,6 +1256,20 @@ namespace MobileGL::MG_Util::BackendLoader {
         if (std::getenv("MOBILEGL_DISABLE_TEXTURE_VIEW") != nullptr) {
             MGLOG_I("MOBILEGL_DISABLE_TEXTURE_VIEW is set; reporting no EXT/OES_texture_view support");
             caps.SupportsTextureView = false;
+        }
+        // Each companion builds on the base extension, and each needs the entry points it brings;
+        // the strings alone never count (see AcquireGLESFunctions on stub pointers).
+        caps.SupportsFragmentShadingRate = caps.SupportsFragmentShadingRate &&
+                                           glesFuncs.glShadingRateEXT != nullptr &&
+                                           glesFuncs.glShadingRateCombinerOpsEXT != nullptr &&
+                                           glesFuncs.glGetFragmentShadingRatesEXT != nullptr;
+        caps.SupportsFragmentShadingRatePrimitive =
+            caps.SupportsFragmentShadingRate && caps.SupportsFragmentShadingRatePrimitive;
+        caps.SupportsFragmentShadingRateAttachment = caps.SupportsFragmentShadingRate &&
+                                                     caps.SupportsFragmentShadingRateAttachment &&
+                                                     glesFuncs.glFramebufferShadingRateEXT != nullptr;
+        if (caps.SupportsFragmentShadingRate) {
+            FillInFragmentShadingRateCapabilities(caps, glesFuncs);
         }
         // Core from ES 3.2 on, so an extension string is not required there; below 3.2 the
         // extension is, and the pointer still has to have resolved either way.

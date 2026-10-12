@@ -842,6 +842,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 capabilities.SupportsDrawIndirect,
                 capabilities.SupportsDrawIndirect && capabilities.SupportsBaseInstance,
                 capabilities.SupportsTextureView, capabilities.SupportsTextureCubeMapArray);
+            // Exactly what InitCapabilities forwards into the dynamic parameters: the base
+            // extension and _primitive when the driver has them, _attachment not yet.
+            auto& extensions = MutableRendererInfo().RendererGLInfo.Extensions;
+            if (capabilities.SupportsFragmentShadingRate) {
+                extensions.push_back(E_GL_EXT_fragment_shading_rate);
+                if (capabilities.SupportsFragmentShadingRatePrimitive) {
+                    extensions.push_back(E_GL_EXT_fragment_shading_rate_primitive);
+                }
+            }
         }
     } // namespace
 
@@ -1895,6 +1904,25 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // describe behaviour this backend does not implement.
         m_dynamicParameters.LayerProvokingVertex = m_GLESCapabilities.LayerProvokingVertex;
         m_dynamicParameters.ViewportIndexProvokingVertex = m_GLESCapabilities.ViewportIndexProvokingVertex;
+        // GL_EXT_fragment_shading_rate is a straight pass-through: the pipeline rate and the
+        // combiner ops are forwarded per draw (SyncRenderState), gl_ShadingRateEXT and
+        // gl_PrimitiveShadingRateEXT are emitted into the ESSL as the driver's own built-ins, and
+        // the device answers every query. The attachment is not forwarded yet, so it is not
+        // claimed, whatever the driver offers.
+        m_dynamicParameters.SupportsFragmentShadingRate = m_GLESCapabilities.SupportsFragmentShadingRate;
+        m_dynamicParameters.SupportsPrimitiveFragmentShadingRate =
+            m_GLESCapabilities.SupportsFragmentShadingRatePrimitive;
+        m_dynamicParameters.SupportsAttachmentFragmentShadingRate = false;
+        m_dynamicParameters.FragmentShadingRateNonTrivialCombiners =
+            m_GLESCapabilities.FragmentShadingRateNonTrivialCombiners;
+        m_dynamicParameters.FragmentShadingRateWithShaderDepthStencilWrites =
+            m_GLESCapabilities.FragmentShadingRateWithShaderDepthStencilWrites;
+        m_dynamicParameters.FragmentShadingRateWithSampleMask = m_GLESCapabilities.FragmentShadingRateWithSampleMask;
+        m_dynamicParameters.FragmentShadingRatePrimitiveWithMultiViewport =
+            m_GLESCapabilities.FragmentShadingRatePrimitiveWithMultiViewport;
+        for (SizeT i = 0; i < std::size(m_dynamicParameters.FragmentShadingRateMasks); ++i) {
+            m_dynamicParameters.FragmentShadingRateMasks[i] = m_GLESCapabilities.FragmentShadingRateMasks[i];
+        }
         m_dynamicParameters.MaxViewportWidth = m_GLESCapabilities.MaxViewportWidth;
         m_dynamicParameters.MaxViewportHeight = m_GLESCapabilities.MaxViewportHeight;
         m_dynamicParameters.ViewportBoundsRangeMin = m_GLESCapabilities.ViewportBoundsRangeMin;
