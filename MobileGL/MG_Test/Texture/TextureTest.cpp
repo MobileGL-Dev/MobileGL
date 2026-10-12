@@ -2191,11 +2191,50 @@ TEST_F(TextureTest, GetTextureSubImageSelectsTheCubeFaceZOffsetNames) {
             << "zoffset " << face << " answered with face " << (static_cast<int>(output[0]) - 10);
     }
 
-    // Past the last face. Still a partial read of a level with no sixth-and-beyond image.
+    // Past the last face: zoffset + depth exceeds the six faces, a range error (GL 4.6 core 8.11.4).
     Uint8 output[4] = {};
     MG_Impl::GLImpl::GetTextureSubImage(texture, 0, 0, 0, 6, 1, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, sizeof(output),
                                         output);
-    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_INVALID_OPERATION);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_INVALID_VALUE);
+}
+
+// GL 4.6 core 8.11.4's region errors come before anything about whether the read can be served
+// (KHR-GL45.get_texture_sub_image.errors_test): they used to be reported as the INVALID_OPERATION
+// of an unimplemented partial read.
+TEST_F(TextureTest, GetTextureSubImageReportsRegionErrorsAsInvalidValue) {
+    GLuint textures[4] = {};
+    MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_2D, 1, &textures[0]);
+    MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_1D, 1, &textures[1]);
+    MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_1D_ARRAY, 1, &textures[2]);
+    MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_2D_MULTISAMPLE, 1, &textures[3]);
+    MG_Impl::GLImpl::TextureStorage2D(textures[0], 1, GL_RGBA8, 2, 2);
+    MG_Impl::GLImpl::TextureStorage1D(textures[1], 1, GL_RGBA8, 2);
+    MG_Impl::GLImpl::TextureStorage2D(textures[2], 1, GL_RGBA8, 2, 2);
+    MG_Impl::GLImpl::TextureStorage2DMultisample(textures[3], 1, GL_RGBA8, 2, 2, GL_TRUE);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    Uint8 output[64] = {};
+    const auto read = [&](GLuint texture, GLint x, GLint y, GLint z, GLsizei w, GLsizei h, GLsizei d) {
+        MG_Impl::GLImpl::GetTextureSubImage(texture, 0, x, y, z, w, h, d, GL_RGBA, GL_UNSIGNED_BYTE,
+                                            sizeof(output), output);
+    };
+    read(textures[0], -1, 0, 0, 2, 2, 1);
+    ExpectSingleGlError(GL_INVALID_VALUE);
+    read(textures[0], 2, 2, 0, 4, 4, 1); // past the level's width and height
+    ExpectSingleGlError(GL_INVALID_VALUE);
+    read(textures[1], 0, 1, 0, 2, 2, 1); // 1D: yoffset must be 0 and height 1
+    ExpectSingleGlError(GL_INVALID_VALUE);
+    for (const GLuint texture : {textures[0], textures[1], textures[2]}) {
+        read(texture, 0, 0, 1, 2, texture == textures[1] ? 1 : 2, 2); // zoffset must be 0 and depth 1
+        ExpectSingleGlError(GL_INVALID_VALUE);
+    }
+    read(textures[3], 0, 0, 0, 2, 2, 1); // a multisample texture has no image to return
+    ExpectSingleGlError(GL_INVALID_OPERATION);
+    MG_Impl::GLImpl::GetTextureSubImage(textures[0], 0, 0, 0, 0, 2, 2, 1, GL_RGBA, GL_UNSIGNED_BYTE, 1, output);
+    ExpectSingleGlError(GL_INVALID_OPERATION); // bufSize too small
+
+    MG_Impl::GLImpl::DeleteTextures(4, textures);
+    DrainPendingGlErrors();
 }
 
 TEST_F(TextureTest, TextureParameteriAndBindTextureUnitAreDirectStateAccess) {

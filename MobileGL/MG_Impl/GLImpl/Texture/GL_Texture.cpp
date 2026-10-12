@@ -6656,46 +6656,72 @@ namespace MobileGL::MG_Impl::GLImpl {
                                                 pixels, __func__);
     }
 
+    // GL 4.6 core 8.11.4: the region checks glGetTextureSubImage and glGetCompressedTextureSubImage
+    // share, ahead of anything about the destination. On success `levelExtent` is the level's
+    // (width, height, depth) in the sub-image's own coordinates - a 1D array's layers are its
+    // height, a 2D array's or cube map array's layer(-face)s its depth, and a cube map's six faces
+    // its depth too.
+    static Bool ValidateTextureSubImageRegion(const SharedPtr<MG_State::GLState::ITextureObject>& textureObject,
+                                              GLint level, GLint xoffset, GLint yoffset, GLint zoffset,
+                                              GLsizei width, GLsizei height, GLsizei depth, IntVec3& levelExtent,
+                                              const char* caller) {
+        const auto recordError = [caller](ErrorCode code, const char* message) {
+            MG_State::pGLContext->RecordError(code, MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller, message));
+            return false;
+        };
+        const auto target = textureObject->GetTarget();
+        if (textureObject->GetStorageType() != TextureStorageType::Mipmap ||
+            target == TextureTarget::Texture2DMultisample || target == TextureTarget::Texture2DMultisampleArray) {
+            return recordError(ErrorCode::InvalidOperation,
+                               "The effective target is a buffer or multisample texture.");
+        }
+        if (level < 0 || xoffset < 0 || yoffset < 0 || zoffset < 0 || width < 0 || height < 0 || depth < 0) {
+            return recordError(ErrorCode::InvalidValue, "Texture sub-image range is invalid.");
+        }
+        auto* textureMipmapObject = static_cast<MG_State::GLState::TextureObjectMipmap*>(textureObject.get());
+        if (static_cast<Uint>(level) >= textureMipmapObject->GetMipmapLevelCount()) {
+            return recordError(ErrorCode::InvalidValue, "Texture level is out of range.");
+        }
+        if (target == TextureTarget::Texture1D && (yoffset != 0 || height != 1)) {
+            return recordError(ErrorCode::InvalidValue, "A 1D texture needs yoffset 0 and height 1.");
+        }
+        if ((target == TextureTarget::Texture1D || target == TextureTarget::Texture1DArray ||
+             target == TextureTarget::Texture2D || target == TextureTarget::TextureRectangle) &&
+            (zoffset != 0 || depth != 1)) {
+            return recordError(ErrorCode::InvalidValue, "This texture target needs zoffset 0 and depth 1.");
+        }
+
+        levelExtent = textureMipmapObject->GetMipmapTexelSize(GetPrimaryUploadTarget(textureObject),
+                                                              static_cast<Uint>(level));
+        // A cube map's level is stored per face, so its own extent reads z = 1; the six faces are
+        // what zoffset/depth address.
+        if (target == TextureTarget::TextureCubeMap) levelExtent.z() = 6;
+        if (static_cast<Int64>(xoffset) + width > levelExtent.x() ||
+            static_cast<Int64>(yoffset) + height > levelExtent.y() ||
+            static_cast<Int64>(zoffset) + depth > levelExtent.z()) {
+            return recordError(ErrorCode::InvalidValue, "Texture sub-image region exceeds the texture level.");
+        }
+        return true;
+    }
+
     void GetTextureSubImage(GLuint texture, GLint level, GLint xoffset, GLint yoffset, GLint zoffset, GLsizei width,
                             GLsizei height, GLsizei depth, GLenum format, GLenum type, GLsizei bufSize, void* pixels) {
         auto textureObject = GetTextureObjectByName(texture, __func__);
         if (!textureObject) return;
-        if (level < 0 || xoffset < 0 || yoffset < 0 || zoffset < 0 || width < 0 || height < 0 || depth < 0) {
-            MG_State::pGLContext->RecordError(
-                ErrorCode::InvalidValue,
-                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "Texture sub-image range is invalid."));
-            return;
-        }
-        if (textureObject->GetStorageType() != TextureStorageType::Mipmap) {
-            MG_State::pGLContext->RecordError(
-                ErrorCode::InvalidOperation,
-                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "Texture storage is not mipmap-backed."));
+        IntVec3 levelExtent;
+        if (!ValidateTextureSubImageRegion(textureObject, level, xoffset, yoffset, zoffset, width, height, depth,
+                                           levelExtent, __func__)) {
             return;
         }
 
-        const auto uploadTarget = GetPrimaryUploadTarget(textureObject);
-        auto* textureMipmapObject = static_cast<MG_State::GLState::TextureObjectMipmap*>(textureObject.get());
-        if (static_cast<Uint>(level) >= textureMipmapObject->GetMipmapLevelCount()) {
-            MG_State::pGLContext->RecordError(
-                ErrorCode::InvalidValue,
-                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "Texture level is out of range."));
-            return;
-        }
-
-        const auto texelSize = textureMipmapObject->GetMipmapTexelSize(uploadTarget, static_cast<Uint>(level));
-        // On a cube map, z is the FACE axis. A cube map's level is stored per face, so its level
-        // size reads z = 1 whichever face named it - but GL 4.6 core 8.11.4 addresses the six faces
-        // of a cube map through zoffset/depth, exactly the six layers a face token names for
-        // glGetTexImage. Without this arm the z range was measured against that 1 and only zoffset 0
-        // (the +X face) was expressible; the other five were rejected as a partial read.
-        //
-        // Only ONE face at a time. depth > 1 would have to concatenate faces into the destination,
-        // which is the same unimplemented multi-image packing the check below still refuses.
-        const Bool isSingleCubeFaceRead = textureObject->GetTarget() == TextureTarget::TextureCubeMap &&
-                                          depth == 1 && zoffset < 6;
-        const Bool isFullLevelRead = xoffset == 0 && yoffset == 0 && width == texelSize.x() &&
-                                     height == texelSize.y() &&
-                                     (isSingleCubeFaceRead || (zoffset == 0 && depth == texelSize.z()));
+        // A cube map answers one face (zoffset names it, the by-name spelling of glGetTexImage's
+        // face token) or all six; any other run of faces would have to concatenate faces into the
+        // destination, which is the same unimplemented multi-image packing the check below refuses.
+        const Bool isCubeMap = textureObject->GetTarget() == TextureTarget::TextureCubeMap;
+        const Bool isSingleCubeFaceRead = isCubeMap && depth == 1;
+        const Bool isFullLevelRead = xoffset == 0 && yoffset == 0 && width == levelExtent.x() &&
+                                     height == levelExtent.y() &&
+                                     (isSingleCubeFaceRead || (zoffset == 0 && depth == levelExtent.z()));
         if (!isFullLevelRead) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,
@@ -6704,10 +6730,13 @@ namespace MobileGL::MG_Impl::GLImpl {
             return;
         }
 
-        const TextureUploadTarget readUploadTarget =
-            isSingleCubeFaceRead ? static_cast<TextureUploadTarget>(
-                                       static_cast<Int>(TextureUploadTarget::CubeMapPositiveX) + zoffset)
-                                 : uploadTarget;
+        TextureUploadTarget readUploadTarget = GetPrimaryUploadTarget(textureObject);
+        if (isSingleCubeFaceRead) {
+            readUploadTarget = static_cast<TextureUploadTarget>(
+                static_cast<Int>(TextureUploadTarget::CubeMapPositiveX) + zoffset);
+        } else if (isCubeMap) {
+            readUploadTarget = TextureUploadTarget::Unknown; // all six faces, as glGetTextureImage reads them
+        }
         if (!ValidateTextureImageQuery(textureObject, level, MG_Util::ConvertGLEnumToTextureInputFormat(format),
                                        MG_Util::ConvertGLEnumToTexturePixelDataType(type), bufSize, pixels, __func__,
                                        isSingleCubeFaceRead ? 1u : 0u)) {
