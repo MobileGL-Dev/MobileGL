@@ -925,6 +925,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (features.TessellationShader) {
             extensions.push_back(E_GL_ARB_tessellation_shader);
         }
+        // Follows the shaderCullDistance device feature, the same gate GL_MAX_CULL_DISTANCES uses.
+        if (features.CullDistance) {
+            extensions.push_back(E_GL_ARB_cull_distance);
+        }
         // Vulkan's drawIndirectFirstInstance feature is optional. Direct base-instance calls work
         // without it, but ARB_base_instance also promises non-zero firstInstance in GPU indirect
         // commands; the renderer supplies true only when that word is legal and gl_InstanceID can
@@ -1106,7 +1110,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             pVulkanRenderer && pVulkanRenderer->IsSamplerAnisotropySupported(),
             pVulkanRenderer && pVulkanRenderer->IsNonZeroIndirectBaseInstanceSupported(),
             m_vulkanCaps.SupportsImageCubeArray,
-            AdvertisedFeatureSupport{.TessellationShader = m_vulkanCaps.SupportsTessellationShader});
+            AdvertisedFeatureSupport{.TessellationShader = m_vulkanCaps.SupportsTessellationShader,
+                                     .CullDistance = m_vulkanCaps.SupportsShaderCullDistance &&
+                                                     m_vulkanCaps.MaxCullDistances > 0});
         // GL_EXT_fragment_shading_rate rides on VK_KHR_fragment_shading_rate's pipeline rate, and
         // its _primitive companion on the primitive rate; both only when the renderer enabled them.
         // _attachment is not advertised: no framebuffer carries a rate attachment to this backend.

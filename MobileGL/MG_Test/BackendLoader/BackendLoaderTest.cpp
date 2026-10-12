@@ -1281,6 +1281,27 @@ TEST(CoreSurfaceAdvertisement, BatchIsUnconditionalAndTessellationFollowsTheDevi
                          MobileGL::E_GL_ARB_tessellation_shader));
 }
 
+// ARB_cull_distance follows the backend's cull-distance capability, never the context version.
+TEST(CoreSurfaceAdvertisement, CullDistanceFollowsTheDevice) {
+    const auto contains = [](const MobileGL::Vector<MobileGL::GLExtension>& extensions,
+                             MobileGL::GLExtension wanted) {
+        return std::find(extensions.begin(), extensions.end(), wanted) != extensions.end();
+    };
+    EXPECT_FALSE(contains(MobileGL::MG_Backend::DirectGLES::BuildAdvertisedExtensions(false, false, false, false,
+                                                                                       false, false),
+                          MobileGL::E_GL_ARB_cull_distance));
+    EXPECT_FALSE(contains(MobileGL::MG_Backend::DirectVulkan::BuildAdvertisedExtensions(false, false, false, false,
+                                                                                         false),
+                          MobileGL::E_GL_ARB_cull_distance));
+    const MobileGL::MG_Backend::AdvertisedFeatureSupport cull{.CullDistance = true};
+    EXPECT_TRUE(contains(MobileGL::MG_Backend::DirectGLES::BuildAdvertisedExtensions(false, false, false, false,
+                                                                                      false, false, cull),
+                         MobileGL::E_GL_ARB_cull_distance));
+    EXPECT_TRUE(contains(MobileGL::MG_Backend::DirectVulkan::BuildAdvertisedExtensions(false, false, false, false,
+                                                                                        false, cull),
+                         MobileGL::E_GL_ARB_cull_distance));
+}
+
 // ES 3.2 has tessellation in core; ES 3.1 only through GL_EXT_tessellation_shader. Either way the
 // patch-size entry point has to have resolved.
 TEST(TessellationCapabilities, FollowTheVersionOrTheExtension) {

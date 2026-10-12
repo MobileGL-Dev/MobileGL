@@ -316,6 +316,10 @@ namespace MobileGL {
         struct AdvertisedFeatureSupport {
             // ES 3.2 or GL_EXT_tessellation_shader; VkPhysicalDeviceFeatures::tessellationShader.
             Bool TessellationShader = false;
+            // At least one cull distance: GL_EXT_clip_cull_distance with a non-zero
+            // GL_MAX_CULL_DISTANCES; VkPhysicalDeviceFeatures::shaderCullDistance with a non-zero
+            // maxCullDistances.
+            Bool CullDistance = false;
         };
 
         // Coarse GPU vendor identity for gating device-specific quirks. Detected from the
