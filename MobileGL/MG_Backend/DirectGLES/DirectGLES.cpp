@@ -455,6 +455,30 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return request;
         }
 
+        // True from a draw or dispatch that ran with a storage buffer bound until the next
+        // barrier that orders storage-buffer writes. Every bound storage point counts as written,
+        // the client's own conservative set (see serverGpuWritten below).
+        //
+        // WHAT IT IS FOR: two dispatches with no barrier between them that write DIFFERENT
+        // components of one vector in the same storage buffer. GL leaves the two unordered, which
+        // allows them to run concurrently, but every write still lands - they are separate memory
+        // locations. A driver that stores a vector component as a read-modify-write of the whole
+        // vector loses one of them instead: KHR-GL43.shader_storage_buffer_object.
+        // advanced-switchBuffers-cs writes digest.x .. digest.w of one uvec4 from four
+        // back-to-back dispatches and read back a zero component in 8 runs of 20 on Adreno (0 of
+        // 20 with a storage barrier between the dispatches, 0 of 20 with uint[4]). The fix is the
+        // barrier the application did not owe: PrepareForCompute issues it when the previous
+        // shader work may have written a storage buffer and nothing ordered those writes since.
+        //
+        // Compute only. A dispatch that follows a dispatch is the shape the test has and the one
+        // a driver may overlap; draws keep their own ordering and are not taxed, they only SET
+        // the flag here - one store in the walk that already visits every bound point.
+        static Bool g_shaderStorageWritesUnordered = false;
+
+        // Called by the application's own glMemoryBarrier: a barrier that orders storage writes
+        // already did the work.
+        static void NoteShaderStorageWritesOrdered() { g_shaderStorageWritesUnordered = false; }
+
         // The record arm of SyncBufferBindingPoints. Same shape, same order, same branches; the
         // four frontend reads become the applier's window and a handle per entry.
         //
@@ -502,6 +526,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // point is read-only by definition.
                 if (shaderBufferClass != MG_Pipe::kMGPipeShaderBufferClassUniform) {
                     backendResource->serverGpuWritten = true;
+                    g_shaderStorageWritesUnordered = true;
                 }
                 const auto backendBufferId = backendResource->id;
                 if (entry.Offset == 0 && entry.Size == MG_Pipe::kMGPipeWholeBuffer) {
@@ -6219,14 +6244,19 @@ namespace MobileGL::MG_Backend::DirectGLES {
             noFrontendProgram;
         const TextureImpl::DrawTextureSyncKeys textureKeys = TextureImpl::CaptureDrawTextureSyncKeys();
 
+        // Read BEFORE this dispatch's own binding walk sets it again (see the flag's comment).
+        const Bool storageWritesUnordered = BufferImpl::g_shaderStorageWritesUnordered;
+        BufferImpl::g_shaderStorageWritesUnordered = false;
         BufferImpl::SyncComputeBuffers(includeDispatchIndirectBuffer);
         TextureImpl::SyncNeccessaryTextures(textureKeys);
         TextureImpl::SyncImageTextureBindings();
         TextureImpl::MarkWritableImageBufferTexturesGpuWritten();
         // Both syncs above may have re-uploaded a texture this dispatch reads or stores
-        // (Managers.h, NoteInPlaceTextureUpload).
+        // (Managers.h, NoteInPlaceTextureUpload), and the previous shader work may have left
+        // storage writes unordered; one barrier covers whichever of the two applies.
         {
             GLbitfield barriers = TextureImpl::TakeInPlaceTextureUploadBarrierBits();
+            if (storageWritesUnordered) barriers |= GL_SHADER_STORAGE_BARRIER_BIT;
             if (barriers != 0 && g_GLESFuncs.glMemoryBarrier) g_GLESFuncs.glMemoryBarrier(barriers);
         }
         // P5e (pg), kimi row 92: the DISPATCH half of the same retirement -
@@ -9992,7 +10022,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
     }
 
     void MemoryBarrier(GLbitfield barriers) {
-        g_GLESFuncs.glMemoryBarrier(LowerAtomicCounterBarrierBits(barriers));
+        barriers = LowerAtomicCounterBarrierBits(barriers);
+        if ((barriers & GL_SHADER_STORAGE_BARRIER_BIT) != 0) BufferImpl::NoteShaderStorageWritesOrdered();
+        g_GLESFuncs.glMemoryBarrier(barriers);
         if (g_GLESCapabilities.IsAngleRenderer) {
             g_GLESFuncs.glFlush();
         }
