@@ -31,6 +31,12 @@ option(MOBILEGL_BUILD_DISAGGREGATED_INPROC "Compile the in-process (one-process,
 option(MOBILEGL_BUILD_SERVER_SPIKE "Build the P0 spike-A MobileGLServer delivery-chain executable (Android only)" OFF)
 option(MOBILEGL_BUILD_EXTMEM_PROBE "Package tools/spikes/extmem_probe as libMobileGLExtmemProbe.so for the trace APK's exec hook (P11 A3, Android only)" OFF)
 option(MOBILEGL_EXTMEM_PROBE_AS_SERVER "Spike only (P11 B2 step 1): also package the probe as libMobileGLServer.so, the real server as libMobileGLServerReal.so" OFF)
+# The GLX frontend on Android (Termux): an X server runs on the device, apps speak GLX to
+# MobileGL and the backend draws with the system GLES/Vulkan driver. Off by default - a normal
+# Android app has no X server. On such a build an X drawable can never become a native window
+# surface (Android's EGL only takes ANativeWindows), so every GLX drawable is a pbuffer whose
+# frames the GLX layer reads back and puts on the window itself.
+option(MOBILEGL_ENABLE_ANDROID_GLX "Build the GLX frontend on Android (Termux + an on-device X server)" OFF)
 # The PipeInputs strangler (ARCHITECTURE.md 9.2) is finished: since P13 every build pushes, and
 # there is neither an option nor a macro for it (W3a removed the option, W3b the `#if` guards and
 # the definition). A -DMOBILEGL_PIPE_PUSH=OFF (or the OFF that every pre-P13 build tree holds in its
@@ -805,6 +811,10 @@ if (MOBILEGL_PIPE_VERIFY)
     list(APPEND MOBILEGL_COMPILE_DEF -DMOBILEGL_PIPE_VERIFY=1)
 endif()
 
+if (MOBILEGL_ENABLE_ANDROID_GLX)
+    list(APPEND MOBILEGL_COMPILE_DEF -DMOBILEGL_ENABLE_ANDROID_GLX=1)
+endif()
+
 message(STATUS "MOBILEGL_COMPILE_DEF=${MOBILEGL_COMPILE_DEF}")
 
 set(MOBILEGL_INCLUDE_DIR
@@ -823,6 +833,14 @@ set(MOBILEGL_INCLUDE_DIR
         # pimpl so no consumer target needs this path.
         ${CMAKE_SOURCE_DIR}/3rdparty/asio/include
 )
+
+# Optional xcb protocol headers (Termux's libxcb ships them under $PREFIX/include). The GLX
+# present layer picks its MIT-SHM/DRI3 paths up with __has_include; without a path the build
+# keeps the plain PutImage readback path, which is slower but complete.
+set(MOBILEGL_XCB_INCLUDE_DIR "" CACHE PATH "Directory whose xcb/ subdirectory holds the xcb protocol headers (optional)")
+if (MOBILEGL_XCB_INCLUDE_DIR)
+    list(APPEND MOBILEGL_INCLUDE_DIR ${MOBILEGL_XCB_INCLUDE_DIR})
+endif()
 
 if (MOBILEGL_BUILD_DISAGGREGATED)
     # Header-only runtime: an include path, no add_subdirectory, no link

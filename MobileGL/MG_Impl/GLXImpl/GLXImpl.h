@@ -9,7 +9,7 @@
 #pragma once
 #include <Includes.h>
 
-#if defined(__linux__) && !defined(__ANDROID__)
+#if MOBILEGL_HAS_GLX
 
 namespace MobileGL::MG_Impl::GLXImpl {
     // GLX layered on MobileGL's own EGL, mirroring WGLImpl/CGLImpl. Handles are
@@ -66,4 +66,4 @@ namespace MobileGL::MG_Impl::GLXImpl {
     void* GetGLXEntryPoint(const char* name);
 } // namespace MobileGL::MG_Impl::GLXImpl
 
-#endif // __linux__ && !__ANDROID__
+#endif // MOBILEGL_HAS_GLX

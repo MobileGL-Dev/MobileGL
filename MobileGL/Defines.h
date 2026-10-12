@@ -46,6 +46,16 @@
 
 #define MOBILEGL_GLX_API MOBILEGL_API
 #define MOBILEGL_GL_API MOBILEGL_API
+
+// Whether this translation set carries the GLX frontend. It is a Linux window system, so
+// desktop Linux always has it; an Android build gets it only when the build asks for the
+// Termux shape (MOBILEGL_ENABLE_ANDROID_GLX): an X server running on the device, apps
+// through this frontend while the backend draws with the system GLES/Vulkan driver.
+#if defined(__linux__) && (!defined(__ANDROID__) || defined(MOBILEGL_ENABLE_ANDROID_GLX))
+#define MOBILEGL_HAS_GLX 1
+#else
+#define MOBILEGL_HAS_GLX 0
+#endif
 #define MOBILEGL_EGL_API MOBILEGL_API
 #define MOBILEGL_CGL_API MOBILEGL_API
 #define MOBILEGL_NSOPENGL_API MOBILEGL_API

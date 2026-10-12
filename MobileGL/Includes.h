@@ -106,6 +106,15 @@
 
 #ifdef __ANDROID__
 #define VK_USE_PLATFORM_ANDROID_KHR
+#if MOBILEGL_HAS_GLX
+// The GLX ABI spells these X types; on Android they stay forward declarations (the
+// Vulkan platform stays ANDROID_KHR, so no Xlib header - which does not exist in the
+// NDK - is ever pulled in).
+typedef struct _XDisplay Display;
+typedef unsigned long XID;
+typedef XID Window;
+typedef unsigned long VisualID;
+#endif
 #elif _WIN32
 #define VK_USE_PLATFORM_WIN32_KHR
 #elif defined(__APPLE__)
