@@ -347,6 +347,12 @@ namespace MobileGL {
                 static bool ZeroBaseVertexForVulkan(const Vector<Uint32>& inputBinary,
                                                     Vector<uint32_t>& outputBinary,
                                                     bool enableSpirvValidation = false);
+                // Drops `layout(pixel_center_integer)` from a fragment module, which the Vulkan
+                // environment forbids, and shifts every gl_FragCoord.xy read by -0.5 to keep its
+                // values. See LowerPixelCenterIntegerPass.
+                static bool LowerPixelCenterIntegerForVulkan(const Vector<Uint32>& inputBinary,
+                                                             Vector<uint32_t>& outputBinary,
+                                                             bool enableSpirvValidation = false);
                 // Replaces compute gl_NumSubgroups loads with ceil(workgroup invocations /
                 // gl_SubgroupSize). DirectVulkan only; this repairs drivers whose builtin
                 // disagrees with the subgroup IDs the same dispatch emits (Adreno reports 1

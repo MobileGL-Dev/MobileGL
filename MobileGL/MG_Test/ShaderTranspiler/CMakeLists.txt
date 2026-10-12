@@ -20,6 +20,7 @@ add_executable(
         GlslangCaptureTest.cpp
         DemotePointSizeTest.cpp
         FragCoordYFlipTest.cpp
+        PixelCenterIntegerTest.cpp
         RelaxedOpaqueStructTest.cpp
         ShadingRateEsslTest.cpp
 )

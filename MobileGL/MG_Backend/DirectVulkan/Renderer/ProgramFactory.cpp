@@ -3675,6 +3675,20 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 }
             }
 
+            // Vulkan forbids the PixelCenterInteger execution mode that
+            // `layout(pixel_center_integer) in vec4 gl_FragCoord;` compiles to, so a module
+            // carrying it would fail validation and every draw of the program be refused. This
+            // runs before the FragCoordYFlip variant: the flip then rewrites the unshifted builtin
+            // read and the -0.5 lands on the flipped value, as GL defines it.
+            if (stages[i] == ShaderStage::Fragment) {
+                Vector<Uint> centeredSpirv;
+                if (MG_Util::ShaderTranspiler::ShaderCompiler::LowerPixelCenterIntegerForVulkan(
+                        moduleSpirvs[i], centeredSpirv, enableSpirvValidation) &&
+                    !centeredSpirv.empty()) {
+                    moduleSpirvs[i] = Move(centeredSpirv);
+                }
+            }
+
             if ((flags & ProgramFactory::CompileOptionBit::FragCoordYFlip) && stages[i] == ShaderStage::Fragment) {
                 Vector<Uint> fragCoordSpirv;
                 if (TransformSpirvForFragCoordYFlip(moduleSpirvs[i], fragCoordSpirv, m_defaultFramebufferHeight)) {
