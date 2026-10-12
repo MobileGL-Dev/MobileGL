@@ -344,16 +344,29 @@ namespace MobileGL {
                 return m_levelRange;
             }
 
-            void TextureObjectBase::SetBaseLevel(Uint baseLevel) {
-                if (IsImmutable() && m_immutableLevels > 0) {
-                    baseLevel = std::min(baseLevel, m_immutableLevels - 1);
-                }
-                if (baseLevel == m_levelRange.x()) return;
+            const UintVec2& TextureObjectBase::GetSpecifiedLevelRange() const {
+                return m_specifiedLevelRange;
+            }
 
-                m_levelRange.x() = baseLevel;
-                if (IsImmutable() && m_levelRange.y() < m_levelRange.x()) {
-                    m_levelRange.y() = m_levelRange.x();
+            // GL 4.6 core 8.17: an immutable texture's level_base is clamped to [0, levels - 1]
+            // and its level_max to [level_base, levels - 1] - when they are USED. The parameters
+            // themselves keep what was set (glGetTexParameter(GL_TEXTURE_MAX_LEVEL) still reads
+            // 1000 after a two-level glTexStorage), so the clamp lives in this derived copy.
+            Bool TextureObjectBase::UpdateEffectiveLevelRange() {
+                UintVec2 effective = m_specifiedLevelRange;
+                if (IsImmutable()) {
+                    effective.x() = std::min(effective.x(), m_immutableLevels - 1);
+                    effective.y() = std::min(std::max(effective.y(), effective.x()), m_immutableLevels - 1);
                 }
+                if (effective == m_levelRange) return false;
+                m_levelRange = effective;
+                return true;
+            }
+
+            void TextureObjectBase::SetBaseLevel(Uint baseLevel) {
+                m_specifiedLevelRange.x() = baseLevel;
+                if (!UpdateEffectiveLevelRange()) return;
+
                 ++m_textureParamsVersion;
                 MGP_NOTE_AGGREGATE(TextureParams);
                 BumpShapeVersion();
@@ -364,12 +377,9 @@ namespace MobileGL {
             }
 
             void TextureObjectBase::SetMaxLevel(Uint maxLevel) {
-                if (IsImmutable() && m_immutableLevels > 0) {
-                    maxLevel = std::min(std::max(maxLevel, m_levelRange.x()), m_immutableLevels - 1);
-                }
-                if (maxLevel == m_levelRange.y()) return;
+                m_specifiedLevelRange.y() = maxLevel;
+                if (!UpdateEffectiveLevelRange()) return;
 
-                m_levelRange.y() = maxLevel;
                 ++m_textureParamsVersion;
                 MGP_NOTE_AGGREGATE(TextureParams);
                 BumpShapeVersion();
@@ -388,10 +398,7 @@ namespace MobileGL {
                 if (m_immutableLevels == levels) return;
 
                 m_immutableLevels = levels;
-                if (m_immutableLevels > 0) {
-                    m_levelRange.x() = std::min(m_levelRange.x(), m_immutableLevels - 1);
-                    m_levelRange.y() = std::min(std::max(m_levelRange.y(), m_levelRange.x()), m_immutableLevels - 1);
-                }
+                UpdateEffectiveLevelRange();
                 ++m_textureParamsVersion;
                 MGP_NOTE_AGGREGATE(TextureParams);
                 // Immutable is a descriptor fact the backend reads - and NOT a request for an

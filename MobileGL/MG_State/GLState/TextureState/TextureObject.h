@@ -47,7 +47,12 @@ namespace MobileGL::MG_State::GLState {
         virtual void SetSwizzleParam(TextureSwizzleParam param, TextureSwizzleParam value) = 0;
         virtual void SetSwizzleParamRGBA(const Vec4<TextureSwizzleParam>& values) = 0;
         virtual const Vec4<TextureSwizzleParam>& GetAllSwizzleParams() const = 0;
+        // The EFFECTIVE [base, max] level range every consumer of the level range samples,
+        // allocates and completes against: on an immutable texture both ends are clamped into
+        // the stored levels (GL 4.6 core 8.17). GetSpecifiedLevelRange() is what the
+        // application set, which is what glGetTexParameter reports.
         virtual const UintVec2& GetLevelRange() const = 0;
+        virtual const UintVec2& GetSpecifiedLevelRange() const = 0;
         virtual void SetBaseLevel(Uint baseLevel) = 0;
         virtual void SetMaxLevel(Uint maxLevel) = 0;
         virtual Bool IsImmutable() const = 0;
@@ -146,6 +151,7 @@ namespace MobileGL::MG_State::GLState {
         void SetSwizzleParam(TextureSwizzleParam param, TextureSwizzleParam value) override;
         void SetSwizzleParamRGBA(const Vec4<TextureSwizzleParam>& values) override;
         const UintVec2& GetLevelRange() const override;
+        const UintVec2& GetSpecifiedLevelRange() const override;
         void SetBaseLevel(Uint baseLevel) override;
         void SetMaxLevel(Uint maxLevel) override;
         Bool IsImmutable() const override;
@@ -225,6 +231,8 @@ namespace MobileGL::MG_State::GLState {
         // this form on the built descriptor, so an over-call costs one 88-byte compare and
         // never an extra record.
         void PipePublishDescriptor();
+        // Re-derives m_levelRange from the specified range; true when the effective range moved.
+        Bool UpdateEffectiveLevelRange();
         // The PER-LEVEL and the CHAIN-CUT forms of the same call (P4a final review C-1). The
         // applier keeps a pending-upload set per (uploadTarget, level) and drops the entries
         // against the storage a respecify REPLACES - and the descriptor cannot tell it which:
@@ -252,6 +260,9 @@ namespace MobileGL::MG_State::GLState {
         SharedPtr<SamplerObject> m_sampler = nullptr;
         Vec4<TextureSwizzleParam> m_swizzleParams = {TextureSwizzleParam::Red, TextureSwizzleParam::Green,
                                                      TextureSwizzleParam::Blue, TextureSwizzleParam::Alpha};
+        // m_specifiedLevelRange is stored as set; m_levelRange is derived from it and the
+        // immutable level count by UpdateEffectiveLevelRange().
+        UintVec2 m_specifiedLevelRange = {0, 1000};
         UintVec2 m_levelRange = {0, 1000};
         Uint m_immutableLevels = 0;
         Uint16 m_textureParamsVersion = 0;

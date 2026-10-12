@@ -1536,10 +1536,10 @@ namespace MobileGL::MG_Impl::GLImpl {
             *params = static_cast<GLint>(textureObject->GetSamplerObject()->GetMaxLod());
             break;
         case GL_TEXTURE_BASE_LEVEL:
-            *params = static_cast<GLint>(textureObject->GetLevelRange().x());
+            *params = static_cast<GLint>(textureObject->GetSpecifiedLevelRange().x());
             break;
         case GL_TEXTURE_MAX_LEVEL:
-            *params = static_cast<GLint>(textureObject->GetLevelRange().y());
+            *params = static_cast<GLint>(textureObject->GetSpecifiedLevelRange().y());
             break;
         case GL_TEXTURE_IMMUTABLE_FORMAT:
             *params = textureObject->IsImmutable() ? GL_TRUE : GL_FALSE;
@@ -3211,12 +3211,12 @@ namespace MobileGL::MG_Impl::GLImpl {
             break;
         case GL_TEXTURE_BASE_LEVEL:
             if (params) {
-                *params = static_cast<GLint>(textureObject->GetLevelRange().x());
+                *params = static_cast<GLint>(textureObject->GetSpecifiedLevelRange().x());
             }
             break;
         case GL_TEXTURE_MAX_LEVEL:
             if (params) {
-                *params = static_cast<GLint>(textureObject->GetLevelRange().y());
+                *params = static_cast<GLint>(textureObject->GetSpecifiedLevelRange().y());
             }
             break;
         case GL_TEXTURE_IMMUTABLE_FORMAT:
@@ -3398,12 +3398,12 @@ namespace MobileGL::MG_Impl::GLImpl {
             break;
         case GL_TEXTURE_BASE_LEVEL:
             if (params) {
-                *params = static_cast<GLfloat>(textureObject->GetLevelRange().x());
+                *params = static_cast<GLfloat>(textureObject->GetSpecifiedLevelRange().x());
             }
             break;
         case GL_TEXTURE_MAX_LEVEL:
             if (params) {
-                *params = static_cast<GLfloat>(textureObject->GetLevelRange().y());
+                *params = static_cast<GLfloat>(textureObject->GetSpecifiedLevelRange().y());
             }
             break;
         case GL_TEXTURE_IMMUTABLE_FORMAT:

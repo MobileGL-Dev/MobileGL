@@ -1134,6 +1134,46 @@ TEST_F(TextureTest, ScalarDsaTextureParameterAppliesTheSameTargetRuleAsItsVector
     DrainPendingGlErrors();
 }
 
+// GL 4.6 core 8.17 clamps an immutable texture's base/max level when they are USED; the parameters
+// keep what was set. A two-level glTexStorage must still read MAX_LEVEL 1000 back, while the
+// effective range the backends consume is [0, 1] - and a later out-of-range BASE_LEVEL is likewise
+// reported as set and clamped only in the effective range.
+TEST_F(TextureTest, ImmutableStorageClampsOnlyTheEffectiveLevelRange) {
+    GLuint texture = 0;
+    MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_2D, 1, &texture);
+    ASSERT_NE(texture, 0u);
+    MG_Impl::GLImpl::TextureStorage2D(texture, 2, GL_RGBA8, 4, 4);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    GLint queried = -1;
+    MG_Impl::GLImpl::GetTextureParameteriv(texture, GL_TEXTURE_MAX_LEVEL, &queried);
+    EXPECT_EQ(queried, 1000);
+    MG_Impl::GLImpl::GetTextureParameteriv(texture, GL_TEXTURE_BASE_LEVEL, &queried);
+    EXPECT_EQ(queried, 0);
+
+    const auto textureObject = MG_State::pGLContext->GetTextureObject(texture);
+    ASSERT_NE(textureObject, nullptr);
+    EXPECT_EQ(textureObject->GetLevelRange(), UintVec2(0, 1));
+
+    MG_Impl::GLImpl::TextureParameteri(texture, GL_TEXTURE_BASE_LEVEL, 5);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    MG_Impl::GLImpl::GetTextureParameteriv(texture, GL_TEXTURE_BASE_LEVEL, &queried);
+    EXPECT_EQ(queried, 5);
+    GLfloat queriedFloat = -1.0f;
+    MG_Impl::GLImpl::GetTextureParameterfv(texture, GL_TEXTURE_MAX_LEVEL, &queriedFloat);
+    EXPECT_EQ(queriedFloat, 1000.0f);
+    EXPECT_EQ(textureObject->GetLevelRange(), UintVec2(1, 1));
+
+    // Back in range: the effective range follows the specified one again.
+    MG_Impl::GLImpl::TextureParameteri(texture, GL_TEXTURE_BASE_LEVEL, 0);
+    MG_Impl::GLImpl::TextureParameteri(texture, GL_TEXTURE_MAX_LEVEL, 0);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    EXPECT_EQ(textureObject->GetLevelRange(), UintVec2(0, 0));
+
+    MG_Impl::GLImpl::DeleteTextures(1, &texture);
+    DrainPendingGlErrors();
+}
+
 // GL 4.6 core 8.10 and 8.11 enumerate exactly ten targets and no proxy. The spec's own asymmetry is
 // the proof: GetTexLevelParameter needs an explicit clause adding the proxies to ITS list, and these
 // two entry points carry no such clause - so the proxies must be rejected here and still accepted
