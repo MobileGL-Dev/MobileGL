@@ -19,6 +19,7 @@
 #include <algorithm>
 #include <cstring>
 #include <map>
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -401,6 +402,72 @@ namespace MobileGL {
                     return Status::SuccessWithoutChange;
                 }
 
+                // --- 2b. the stage interface that has to become flat --------------------------
+                // A double varying is never interpolated: GLSL requires `flat` on a fragment input
+                // of any double type, and nothing on the producing side, so a vertex `out dvec3`
+                // meets a fragment `flat in dvec3`. Once both narrow to float that is a smooth
+                // output feeding a flat input - an interpolation mismatch a linker that compares
+                // the two sides rejects. Every Input / Output that held a 64-bit float is
+                // therefore made Flat, on every stage, which is the one rule both sides of any
+                // interface agree on (the same reason integer varyings are forced flat
+                // everywhere). Collected now, while the wide types are still telling; the
+                // decorations are written once the rewrite is done. Vertex inputs and fragment
+                // outputs are not interpolants and must not carry the decoration.
+                Bool isVertexStage = false;
+                Bool isFragmentStage = false;
+                for (const Instruction& entryPoint : irContext->module()->entry_points()) {
+                    const auto model = static_cast<spv::ExecutionModel>(entryPoint.GetSingleWordInOperand(0));
+                    if (model == spv::ExecutionModel::Vertex) isVertexStage = true;
+                    if (model == spv::ExecutionModel::Fragment) isFragmentStage = true;
+                }
+                // {target, member}; member == kWholeVariable decorates the variable itself.
+                constexpr Uint32 kWholeVariable = ~0u;
+                std::vector<std::pair<Uint32, Uint32>> flatTargets;
+                for (Instruction& variable : irContext->types_values()) {
+                    if (variable.opcode() != spv::Op::OpVariable) continue;
+                    const auto storageClass = static_cast<spv::StorageClass>(variable.GetSingleWordInOperand(0));
+                    if (storageClass == spv::StorageClass::Input) {
+                        if (isVertexStage) continue;
+                    } else if (storageClass == spv::StorageClass::Output) {
+                        if (isFragmentStage) continue;
+                    } else {
+                        continue;
+                    }
+                    const Instruction* pointerType = defUseMgr->GetDef(variable.type_id());
+                    if (pointerType == nullptr || pointerType->opcode() != spv::Op::OpTypePointer) continue;
+                    if (wideTypeIds.count(pointerType->GetSingleWordInOperand(1)) == 0) continue;
+                    // A block's interpolation lives on its members, and an arrayed one (`in Blk
+                    // { ... } blk[]` on a geometry or tessellation stage) on the struct underneath.
+                    // A plain struct varying is decorated as a whole: its type may be shared with
+                    // a non-interface use that member decorations would leak into.
+                    const Instruction* pointee = defUseMgr->GetDef(pointerType->GetSingleWordInOperand(1));
+                    while (pointee != nullptr && (pointee->opcode() == spv::Op::OpTypeArray ||
+                                                  pointee->opcode() == spv::Op::OpTypeRuntimeArray)) {
+                        pointee = defUseMgr->GetDef(pointee->GetSingleWordInOperand(0));
+                    }
+                    Bool isBlock = false;
+                    if (pointee != nullptr && pointee->opcode() == spv::Op::OpTypeStruct) {
+                        for (const Instruction& annotation : irContext->annotations()) {
+                            if (annotation.opcode() == spv::Op::OpDecorate &&
+                                annotation.GetSingleWordInOperand(0) == pointee->result_id() &&
+                                static_cast<spv::Decoration>(annotation.GetSingleWordInOperand(1)) ==
+                                    spv::Decoration::Block) {
+                                isBlock = true;
+                                break;
+                            }
+                        }
+                    }
+                    if (isBlock) {
+                        for (Uint32 member = 0; member < pointee->NumInOperands(); ++member) {
+                            if (wideTypeIds.count(pointee->GetSingleWordInOperand(member)) != 0) {
+                                flatTargets.emplace_back(pointee->result_id(), member);
+                            }
+                        }
+                    } else {
+                        flatTargets.emplace_back(variable.result_id(), kWholeVariable);
+                    }
+                }
+
                 // --- 3. re-encode the literals ----------------------------------------------
                 // A 64-bit float constant carries two literal words and a 32-bit one carries a
                 // single word, so the value has to be narrowed before the type changes underneath
@@ -574,6 +641,47 @@ namespace MobileGL {
                                 blockType->result_id());
                     } else {
                         relayout.Commit();
+                    }
+                }
+
+                // --- 9. the flat interface collected in 2b ------------------------------------
+                // A target already Flat (a fragment input the source qualified) keeps its one
+                // decoration; a second one would be a duplicate.
+                const auto alreadyFlat = [&](Uint32 target, Uint32 member) {
+                    for (const Instruction& annotation : irContext->annotations()) {
+                        if (member == kWholeVariable) {
+                            if (annotation.opcode() != spv::Op::OpDecorate) continue;
+                            if (annotation.GetSingleWordInOperand(0) != target) continue;
+                            if (static_cast<spv::Decoration>(annotation.GetSingleWordInOperand(1)) ==
+                                spv::Decoration::Flat) {
+                                return true;
+                            }
+                        } else {
+                            if (annotation.opcode() != spv::Op::OpMemberDecorate) continue;
+                            if (annotation.GetSingleWordInOperand(0) != target) continue;
+                            if (annotation.GetSingleWordInOperand(1) != member) continue;
+                            if (static_cast<spv::Decoration>(annotation.GetSingleWordInOperand(2)) ==
+                                spv::Decoration::Flat) {
+                                return true;
+                            }
+                        }
+                    }
+                    return false;
+                };
+                for (const auto& [target, member] : flatTargets) {
+                    if (alreadyFlat(target, member)) continue;
+                    const Uint32 flat = static_cast<Uint32>(spv::Decoration::Flat);
+                    if (member == kWholeVariable) {
+                        irContext->AddAnnotationInst(std::make_unique<Instruction>(
+                            irContext, spv::Op::OpDecorate, 0, 0,
+                            std::initializer_list<Operand>{{SPV_OPERAND_TYPE_ID, {target}},
+                                                           {SPV_OPERAND_TYPE_DECORATION, {flat}}}));
+                    } else {
+                        irContext->AddAnnotationInst(std::make_unique<Instruction>(
+                            irContext, spv::Op::OpMemberDecorate, 0, 0,
+                            std::initializer_list<Operand>{{SPV_OPERAND_TYPE_ID, {target}},
+                                                           {SPV_OPERAND_TYPE_LITERAL_INTEGER, {member}},
+                                                           {SPV_OPERAND_TYPE_DECORATION, {flat}}}));
                     }
                 }
 

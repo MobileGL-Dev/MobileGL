@@ -463,6 +463,99 @@ void main() {
     EXPECT_FALSE(ShaderCompiler::ModuleDeclaresFloat64VertexInput({}));
 }
 
+namespace {
+    constexpr Uint32 kOpDecorate = 71;
+    constexpr Uint32 kDecorationFlat = 14;
+
+    Uint32 IdNamed(const Vector<Uint32>& spirv, const String& name) {
+        Uint32 id = 0;
+        ForEachInstruction(spirv, [&](Uint32 opcode, const Uint32* words, Uint32 wordCount) {
+            if (opcode != kOpName || wordCount < 3 || id != 0) return;
+            const char* text = reinterpret_cast<const char*>(&words[2]);
+            if (std::strncmp(text, name.c_str(), (wordCount - 2) * sizeof(Uint32)) == 0) id = words[1];
+        });
+        return id;
+    }
+
+    Bool MemberIsFlat(const Vector<Uint32>& spirv, Uint32 structId, Uint32 member) {
+        Bool flat = false;
+        ForEachInstruction(spirv, [&](Uint32 opcode, const Uint32* words, Uint32 wordCount) {
+            if (opcode == kOpMemberDecorate && wordCount >= 4 && words[1] == structId && words[2] == member &&
+                words[3] == kDecorationFlat) {
+                flat = true;
+            }
+        });
+        return flat;
+    }
+
+    Uint32 CountFlatDecorationsOf(const Vector<Uint32>& spirv, Uint32 id) {
+        Uint32 count = 0;
+        ForEachInstruction(spirv, [&](Uint32 opcode, const Uint32* words, Uint32 wordCount) {
+            if (opcode == kOpDecorate && wordCount >= 3 && words[1] == id && words[2] == kDecorationFlat) ++count;
+        });
+        return count;
+    }
+} // namespace
+
+// A double varying is flat by rule on the fragment side only; once both sides narrow to float a
+// smooth vertex output would feed a flat fragment input, which an interface-matching linker
+// rejects. The demotion makes every former-double interface member Flat on BOTH stages - and
+// leaves vertex inputs alone, where the decoration is invalid (the TearDown's spirv-val holds it).
+TEST_F(DemoteFloat64Test, AFormerDoubleVaryingIsFlatOnBothSidesOfTheInterface) {
+    const String vertex = R"(#version 430 core
+layout(location = 0) in vec4 inPos;
+layout(location = 3) in dvec3 inData0;
+out StageData {
+    vec2 color;
+    dvec3 data0;
+} vs_out;
+layout(location = 5) out double vLoose;
+void main() {
+    vs_out.color = inPos.xy;
+    vs_out.data0 = inData0;
+    vLoose = inData0.x;
+    gl_Position = inPos;
+}
+)";
+    const String fragment = R"(#version 430 core
+in StageData {
+    vec2 color;
+    flat dvec3 data0;
+} fs_in;
+layout(location = 5) flat in double vLoose;
+layout(location = 0) out vec4 fragColor;
+void main() {
+    fragColor = vec4(fs_in.color, float(fs_in.data0.x + vLoose), 1.0);
+}
+)";
+    const Vector<Uint32> wideVertex = CompileToSpirv(GL_VERTEX_SHADER, vertex);
+    const Vector<Uint32> wideFragment = CompileToSpirv(GL_FRAGMENT_SHADER, fragment);
+    ASSERT_FALSE(wideVertex.empty());
+    ASSERT_FALSE(wideFragment.empty());
+    ASSERT_FALSE(MemberIsFlat(wideVertex, IdNamed(wideVertex, "StageData"), 1)) << Disassemble(wideVertex);
+
+    Vector<Uint32> narrowVertex;
+    Vector<Uint32> narrowFragment;
+    ASSERT_TRUE(ShaderCompiler::DemoteFloat64ToFloat32(wideVertex, narrowVertex, true));
+    ASSERT_TRUE(ShaderCompiler::DemoteFloat64ToFloat32(wideFragment, narrowFragment, true));
+
+    const Uint32 vertexBlock = IdNamed(narrowVertex, "StageData");
+    const Uint32 fragmentBlock = IdNamed(narrowFragment, "StageData");
+    ASSERT_NE(vertexBlock, 0u);
+    ASSERT_NE(fragmentBlock, 0u);
+    EXPECT_TRUE(MemberIsFlat(narrowVertex, vertexBlock, 1)) << Disassemble(narrowVertex);
+    EXPECT_TRUE(MemberIsFlat(narrowFragment, fragmentBlock, 1)) << Disassemble(narrowFragment);
+    // The member that was always a float keeps its interpolation.
+    EXPECT_FALSE(MemberIsFlat(narrowVertex, vertexBlock, 0));
+    EXPECT_FALSE(MemberIsFlat(narrowFragment, fragmentBlock, 0));
+    // A loose varying is decorated on the variable, once - the fragment side already said flat.
+    EXPECT_EQ(CountFlatDecorationsOf(narrowVertex, IdNamed(narrowVertex, "vLoose")), 1u) << Disassemble(narrowVertex);
+    EXPECT_EQ(CountFlatDecorationsOf(narrowFragment, IdNamed(narrowFragment, "vLoose")), 1u)
+        << Disassemble(narrowFragment);
+    // Not an interpolant: a vertex input never takes the decoration.
+    EXPECT_EQ(CountFlatDecorationsOf(narrowVertex, IdNamed(narrowVertex, "inData0")), 0u);
+}
+
 // The payoff on the Espryt path: SPIRV-Cross throws "FP64 not supported in ES profile" for every
 // one of these before demotion, so the program simply could not be transpiled at all.
 class DemoteFloat64EsslTest : public DemoteFloat64Test, public ::testing::WithParamInterface<const char*> {};
