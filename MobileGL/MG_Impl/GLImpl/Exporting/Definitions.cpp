@@ -22,6 +22,7 @@
 #include "../Sync/GL_Sync.h"
 #include "../Debug/GL_Debug.h"
 #include <MG_State/GLState/Core.h>
+#include <MG_State/GLState/BufferState/BufferObject.h>
 #include <MG_Impl/EGLImpl/EGLImpl.h>
 
 #define DECLARE_GL_FUNCTION_STUB_HEAD(type, name, ...) MOBILEGL_GL_API type gl##name(__VA_ARGS__) {
@@ -127,6 +128,11 @@ MOBILEGL_GL_API void glFinish() {
     MobileGL::MG_Impl::EGLImpl::FlushSharedImageAccesses();
     MobileGL::MG_Pipe::MGPipeClientFinish();
 #endif
+    // Everything issued has completed, so a persistent read map now has to show the GPU's
+    // writes (GL 4.6 core 7.13).
+    if (MobileGL::MG_State::pGLContext != nullptr) {
+        MobileGL::MG_State::GLState::SyncPersistentReadMapsFromGpu();
+    }
 }
 MOBILEGL_GL_API void glFlush() {
     MGLOG_D("Implementing function: %s(...)", __FUNCTION__);

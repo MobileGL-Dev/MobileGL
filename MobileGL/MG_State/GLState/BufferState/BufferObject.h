@@ -168,6 +168,10 @@ namespace MobileGL {
             // call, no serial and no epoch, and the applier's IsBufferDrawCleanByHandle can
             // no longer ask this object (there is no object on that side of a spawn).
             void NotePersistentMapStateChanged();
+            // Keeps this buffer's membership in the live persistent READ map set current (see
+            // SyncPersistentReadMapsFromGpu). Called from NotePersistentMapStateChanged, so it
+            // rides every event that can move the predicate, on every transport.
+            void NotePersistentReadMapStateChanged();
 
             // What MGPipeEmitResourceSubData and MGPipeEmitBufferSubDataResident write into
             // MGPSubData::HasLiveHostWrites. The PUBLISHED value, not the live predicate: the
@@ -294,5 +298,14 @@ namespace MobileGL {
             SizeT m_stagingBias = 0;
             Bool m_ownsStagingData;
         };
+
+        // GL 4.6 core 6.2 / 7.13: GPU writes to a buffer become visible through a persistent
+        // READ map once the client has waited for them - glFinish, or a glClientWaitSync on a
+        // fence issued after them (coherent maps; a non-coherent map adds a
+        // CLIENT_MAPPED_BUFFER_BARRIER_BIT barrier before that fence). The pointer such a map
+        // hands out is the frontend shadow, which nothing else pulls the GPU's bytes into, so
+        // these two waits refresh every live persistent read map that has a GPU write
+        // outstanding.
+        void SyncPersistentReadMapsFromGpu();
     } // namespace MG_State::GLState
 } // namespace MobileGL

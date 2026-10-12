@@ -9,6 +9,7 @@
 #include "GL_Sync.h"
 #include <MG_Backend/BackendObjects.h>
 #include <MG_State/GLState/Core.h>
+#include <MG_State/GLState/BufferState/BufferObject.h>
 #include <MG_Impl/Pipe/PipeFill.h>
 // CONTRACT-P5.md §7 / ID-14: a null check on a GLFunctionsTable slot may not survive into the
 // client under split - it becomes a caps-mirror read. SlotCaps.h carries the rule and the test
@@ -101,11 +102,18 @@ namespace MobileGL::MG_Impl::GLImpl {
             return GL_WAIT_FAILED;
         }
         const auto backendClientWaitSync = MG_Backend::gBackendFunctionsTable.GL.ClientWaitSync;
-        if (!backendClientWaitSync || !syncObject->backendHandle) {
-            return GL_ALREADY_SIGNALED; // legacy always-signaled fallback
+        GLenum result = GL_ALREADY_SIGNALED; // legacy always-signaled fallback
+        if (backendClientWaitSync && syncObject->backendHandle) {
+            MGP_FILL(ClientWaitSync);
+            result = backendClientWaitSync(syncObject->backendHandle, flags, timeout);
         }
-        MGP_FILL(ClientWaitSync);
-        return backendClientWaitSync(syncObject->backendHandle, flags, timeout);
+        // A satisfied wait is the point at which GPU writes issued before the fence become
+        // visible through a persistent read map (GL 4.6 core 7.13), and its pointer is the
+        // frontend shadow, which only an explicit pull refreshes.
+        if (result == GL_ALREADY_SIGNALED || result == GL_CONDITION_SATISFIED) {
+            MG_State::GLState::SyncPersistentReadMapsFromGpu();
+        }
+        return result;
     }
 
     void WaitSync(GLsync sync, GLbitfield flags, GLuint64 timeout) {

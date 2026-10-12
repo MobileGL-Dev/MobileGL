@@ -11,6 +11,7 @@
 #include <Config.h>
 
 #include <atomic>
+#include <mutex>
 #include <MG_Pipe/PipeMutation.h>
 #if MOBILEGL_BUILD_DISAGGREGATED
 // MG_State reaching into MG_Remote/Client is the layering ARCHITECTURE.md:575 names - the CLIENT
@@ -64,6 +65,33 @@ namespace MobileGL::MG_State::GLState {
         }
     }
 
+    namespace {
+        // The live persistent READ maps, keyed on the never-reused lifetime id. Recursive
+        // because SyncGpuWrites runs under it and must stay free to reach map-state code.
+        std::recursive_mutex g_persistentReadMapsMutex;
+        UnorderedMap<Uint64, BufferObject*> g_livePersistentReadMaps;
+    } // namespace
+
+    void BufferObject::NotePersistentReadMapStateChanged() {
+        const Bool live = m_isMapped && (m_mappingAccess & BufferMappingAccessBit::Persistent) &&
+                          (m_mappingAccess & BufferMappingAccessBit::Read);
+        const std::lock_guard<std::recursive_mutex> lock(g_persistentReadMapsMutex);
+        if (live) {
+            g_livePersistentReadMaps[m_lifetimeId] = this;
+        } else {
+            g_livePersistentReadMaps.erase(m_lifetimeId);
+        }
+    }
+
+    void SyncPersistentReadMapsFromGpu() {
+        const std::lock_guard<std::recursive_mutex> lock(g_persistentReadMapsMutex);
+        if (g_livePersistentReadMaps.empty()) return;
+        for (const auto& [lifetimeId, buffer] : g_livePersistentReadMaps) {
+            (void)lifetimeId;
+            buffer->SyncGpuWrites();
+        }
+    }
+
     Uint64 BufferObject::AllocateLifetimeId() {
         return g_nextBufferLifetimeId.fetch_add(1, std::memory_order_relaxed);
     }
@@ -86,6 +114,10 @@ namespace MobileGL::MG_State::GLState {
         // outlives its object is the one failure this set must not have. Forget is a no-op
         // for a buffer that was never a member.
         MG_Record::PersistentMapTracker::Instance().Forget(*this);
+        {
+            const std::lock_guard<std::recursive_mutex> lock(g_persistentReadMapsMutex);
+            g_livePersistentReadMaps.erase(m_lifetimeId);
+        }
         // P3a D-L: the buffer's death crosses as resource_destroy, which is the catalogue
         // call for it - no seventh NotifyStateObjectDestroyed raiser is added, because that
         // header exists for kinds that have no such call. The emit-then-free ORDER is fixed
@@ -426,6 +458,7 @@ namespace MobileGL::MG_State::GLState {
     }
 
     void BufferObject::NotePersistentMapStateChanged() {
+        NotePersistentReadMapStateChanged();
         if (!MG_Record::PersistentMapTracker::PushIsArmed()) return;
         MG_Record::PersistentMapTracker::Instance().NoteMapStateChanged(*this);
         // Teardown must retire membership, but only the client publishes live-host-write state.
