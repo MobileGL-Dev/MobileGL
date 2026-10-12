@@ -104,6 +104,23 @@ TEST_F(RenderStateTest, IndexedBlendTogglesStillWork) {
     EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
 }
 
+TEST_F(RenderStateTest, SrcAlphaSaturateIsAcceptedAsSourceAndDestinationFactor) {
+    // Desktop GL takes GL_SRC_ALPHA_SATURATE for all four factors (KHR-GL30.api.coverage).
+    MG_Impl::GLImpl::BlendFuncSeparate(GL_SRC_ALPHA_SATURATE, GL_SRC_ALPHA_SATURATE, GL_SRC_ALPHA_SATURATE,
+                                       GL_SRC_ALPHA_SATURATE);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    for (const GLenum pname : {GL_BLEND_SRC_RGB, GL_BLEND_DST_RGB, GL_BLEND_SRC_ALPHA, GL_BLEND_DST_ALPHA}) {
+        GLint value = 0;
+        MG_Impl::GLImpl::GetIntegerv(pname, &value);
+        EXPECT_EQ(value, GL_SRC_ALPHA_SATURATE) << "pname " << pname;
+    }
+
+    MG_Impl::GLImpl::BlendFunci(1, GL_SRC_ALPHA_SATURATE, GL_SRC_ALPHA_SATURATE);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    MG_Impl::GLImpl::BlendFunc(GL_ONE, GL_ZERO);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
 // ---------------------------------------------------------------------------------------------
 // ARB_viewport_array: indexed viewport / scissor / depth-range state
 // ---------------------------------------------------------------------------------------------

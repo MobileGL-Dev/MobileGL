@@ -50,6 +50,9 @@ namespace MobileGL {
         OneMinusSrc1Color,
         Src1Alpha,
         OneMinusSrc1Alpha,
+        // GL_SRC_ALPHA_SATURATE: (f, f, f, 1) with f = min(As, 1 - Ad). Legal as a source and a
+        // destination factor in desktop GL. Appended so the values above keep their encoding.
+        SrcAlphaSaturate,
         BlendFactorCount,
         Unknown = -1
     };
