@@ -796,10 +796,10 @@ void main() {
         EXPECT_EQ(TakeError(), GL_NO_ERROR);
     }
 
-    // Two counters that share a binding AND an offset must fail to link. glslang's own check
-    // lives in fixOffset(), which the Vulkan-relaxed parse never reaches - it folds the
-    // atomic_uint into a storage block and returns from declareVariable() first - so the pair
-    // used to link cleanly and then increment the same four bytes.
+    // Two counters that share a binding AND an offset must not make a program. Within one
+    // shader that is a compile error (the relaxed parse now places counters the way fixOffset()
+    // does); the link-time check is what still catches the pair when they come from two shaders
+    // of one stage, so the link must fail either way.
     TEST_F(ProgramInterfaceTest, OverlappingAtomicCounterOffsetsFailToLink) {
         const char* fs = R"(#version 430
 out vec4 color;
@@ -807,14 +807,22 @@ layout (binding = 0, offset = 0) uniform atomic_uint a;
 layout (binding = 0, offset = 0) uniform atomic_uint b;
 void main() { color = vec4(float(atomicCounterIncrement(a) + atomicCounterIncrement(b))); }
 )";
+        const GLuint fsShader = CreateShader(GL_FRAGMENT_SHADER);
+        ShaderSource(fsShader, 1, &fs, nullptr);
+        CompileShader(fsShader);
+        GLint compiled = -1;
+        GetShaderiv(fsShader, GL_COMPILE_STATUS, &compiled);
+        EXPECT_EQ(compiled, GL_FALSE);
+        char shaderLog[4096] = "";
+        GetShaderInfoLog(fsShader, sizeof(shaderLog), nullptr, shaderLog);
+        EXPECT_NE(std::string(shaderLog).find("same offset"), std::string::npos) << "info log was: " << shaderLog;
+        DeleteShader(fsShader);
+
         const GLuint p = MakeProgram(kSimpleVs, fs);
         LinkProgram(p);
         GLint status = -1;
         GetProgramiv(p, GL_LINK_STATUS, &status);
         EXPECT_EQ(status, GL_FALSE);
-        char log[4096] = "";
-        GetProgramInfoLog(p, sizeof(log), nullptr, log);
-        EXPECT_NE(std::string(log).find("overlap"), std::string::npos) << "info log was: " << log;
         ClearErrors();
 
         // Distinct offsets at one binding, and the same offset at two different bindings, are
@@ -831,6 +839,81 @@ void main() {
         const GLuint legal = MakeProgram(kSimpleVs, legalFs);
         LinkProgram(legal);
         ExpectLinked(legal);
+        ClearErrors();
+    }
+
+    // GLSL 4.60 4.4.6.3: a counter without an offset qualifier takes its binding's offset
+    // cursor - set by a default declaration, advanced by every counter at that binding - not
+    // whatever the synthesized block's packing would give it. Covers the CTS's ac-binding
+    // examples 1 and 2.
+    TEST_F(ProgramInterfaceTest, ImplicitAtomicCounterOffsetsFollowTheBindingCursor) {
+        const char* fs = R"(#version 430
+out vec4 color;
+layout(binding = 2, offset = 4) uniform atomic_uint;
+layout(binding = 2) uniform atomic_uint a;
+layout(binding = 3, offset = 4) uniform atomic_uint b;
+layout(binding = 1) uniform atomic_uint c;
+layout(binding = 3) uniform atomic_uint d;
+layout(binding = 1) uniform atomic_uint e[2];
+layout(binding = 1) uniform atomic_uint f;
+void main() {
+    color = vec4(float(atomicCounter(a) + atomicCounter(b) + atomicCounter(c) + atomicCounter(d) +
+                       atomicCounter(e[1]) + atomicCounter(f)));
+}
+)";
+        const GLuint p = MakeProgram(kSimpleVs, fs);
+        LinkProgram(p);
+        ExpectLinked(p);
+        ClearErrors();
+        const struct {
+            const char* name;
+            GLint offset;
+        } expected[] = {{"a", 4}, {"b", 4}, {"c", 0}, {"d", 8}, {"e[0]", 4}, {"f", 12}};
+        for (const auto& counter : expected) {
+            const std::vector<GLint> offset = PropsOf(p, GL_UNIFORM, counter.name, {GL_OFFSET});
+            ASSERT_EQ(offset.size(), 1u) << counter.name;
+            EXPECT_EQ(offset[0], counter.offset) << counter.name;
+        }
+        EXPECT_EQ(TakeError(), GL_NO_ERROR);
+    }
+
+    // The rest of fixOffset()'s rules, raised where the relaxed parse folds the counter: an
+    // unsized counter array, a counter with no binding (there is no default binding - only a
+    // default offset), and a counter placed on top of an earlier one.
+    TEST_F(ProgramInterfaceTest, IllegalAtomicCounterDeclarationsFailToCompile) {
+        const auto compiles = [](const char* source) {
+            const GLuint sh = CreateShader(GL_FRAGMENT_SHADER);
+            ShaderSource(sh, 1, &source, nullptr);
+            CompileShader(sh);
+            GLint status = -1;
+            GetShaderiv(sh, GL_COMPILE_STATUS, &status);
+            DeleteShader(sh);
+            return status == GL_TRUE;
+        };
+        EXPECT_FALSE(compiles(R"(#version 430
+out vec4 color;
+layout(binding = 0, offset = 4) uniform atomic_uint ac[];
+void main() { color = vec4(float(atomicCounterIncrement(ac[0]))); }
+)")) << "unsized atomic_uint array";
+        EXPECT_FALSE(compiles(R"(#version 430
+out vec4 color;
+layout(binding = 2, offset = 4) uniform atomic_uint;
+layout(offset = 8) uniform atomic_uint ac;
+void main() { color = vec4(float(atomicCounterIncrement(ac))); }
+)")) << "no binding";
+        EXPECT_FALSE(compiles(R"(#version 430
+out vec4 color;
+layout(binding = 0, offset = 4) uniform atomic_uint a;
+layout(binding = 0, offset = 0) uniform atomic_uint b[2];
+void main() { color = vec4(float(atomicCounterIncrement(a) + atomicCounterIncrement(b[1]))); }
+)")) << "array overlapping an earlier counter";
+        EXPECT_TRUE(compiles(R"(#version 430
+out vec4 color;
+layout(binding = 0, offset = 0) uniform atomic_uint a;
+layout(binding = 1, offset = 0) uniform atomic_uint b;
+layout(binding = 0) uniform atomic_uint c[3];
+void main() { color = vec4(float(atomicCounterIncrement(a) + atomicCounterIncrement(b) + atomicCounterIncrement(c[2]))); }
+)")) << "legal layout";
         ClearErrors();
     }
 
