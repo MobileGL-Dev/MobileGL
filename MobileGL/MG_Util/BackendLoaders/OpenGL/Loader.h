@@ -654,6 +654,8 @@ namespace MobileGL {
             GL_FUNC_TYPEDEF(void, glClipControlEXT, GLenum origin, GLenum depth)
             GL_FUNC_TYPEDEF(void, glColorMaskiEXT, GLuint index, GLboolean r, GLboolean g, GLboolean b, GLboolean a)
             GL_FUNC_TYPEDEF(void, glColorMaskiOES, GLuint index, GLboolean r, GLboolean g, GLboolean b, GLboolean a)
+            // GL_EXT_polygon_offset_clamp. ES has no core spelling at any version.
+            GL_FUNC_TYPEDEF(void, glPolygonOffsetClampEXT, GLfloat factor, GLfloat units, GLfloat clamp)
 
             GL_FUNC_TYPEDEF(void, glMultiDrawArraysIndirectEXT, GLenum mode, const void* indirect, GLsizei drawcount,
                             GLsizei stride)
@@ -1071,6 +1073,7 @@ namespace MobileGL {
             GL_FUNC_DECL(glClipControlEXT)
             GL_FUNC_DECL(glColorMaskiEXT)
             GL_FUNC_DECL(glColorMaskiOES)
+            GL_FUNC_DECL(glPolygonOffsetClampEXT)
 
             GL_FUNC_DECL(glMultiDrawArraysIndirectEXT)
             GL_FUNC_DECL(glMultiDrawElementsIndirectEXT)
@@ -1216,6 +1219,10 @@ namespace MobileGL {
             // factors and layout(index = 1) fragment outputs. GLES core has no dual-source blending,
             // so without this a draw using a SRC1 factor cannot proceed.
             Bool SupportsDualSourceBlend = false;
+            // GL_EXT_polygon_offset_clamp is present and glPolygonOffsetClampEXT resolved. Without
+            // it the GL_POLYGON_OFFSET_CLAMP value cannot be applied and only glPolygonOffset's
+            // unclamped offset reaches the driver.
+            Bool SupportsPolygonOffsetClamp = false;
             // GL_NV_shader_noperspective_interpolation is present: the driver accepts the
             // `noperspective` interpolation qualifier in ESSL. GLES core has none, so without this
             // SPIRV-Cross's `#extension ... : require` would fail to compile and MobileGL falls back

@@ -664,6 +664,7 @@ namespace MobileGL::MG_Util::BackendLoader {
             INIT_GLES_FUNC_OPTIONAL(glClipControlEXT)
             INIT_GLES_FUNC_OPTIONAL(glColorMaskiEXT)
             INIT_GLES_FUNC_OPTIONAL(glColorMaskiOES)
+            INIT_GLES_FUNC_OPTIONAL(glPolygonOffsetClampEXT)
             // Extension-only multi-draw entry points. eglGetProcAddress may legally return a
             // non-NULL stub for these on drivers that do not implement them (NVIDIA's ES driver
             // returns one for glMultiDrawElementsBaseVertexEXT that silently drops every draw),
@@ -1126,6 +1127,7 @@ namespace MobileGL::MG_Util::BackendLoader {
         Bool hasBaseInstanceExtension = false;
         Bool hasTessellationShaderExtension = false;
         Bool hasClipControlExtension = false;
+        Bool hasPolygonOffsetClampExtension = false;
         for (GLint i = 0; i < extCount; ++i) {
             const char* extension = (const char*)glesFuncs.glGetStringi(GL_EXTENSIONS, i);
             if (extension) {
@@ -1192,6 +1194,9 @@ namespace MobileGL::MG_Util::BackendLoader {
                 if (std::strcmp(extension, "GL_KHR_parallel_shader_compile") == 0) {
                     caps.SupportsParallelShaderCompile = true;
                 }
+                if (std::strcmp(extension, "GL_EXT_polygon_offset_clamp") == 0) {
+                    hasPolygonOffsetClampExtension = true;
+                }
                 if (std::strcmp(extension, "GL_EXT_blend_func_extended") == 0) {
                     caps.SupportsDualSourceBlend = true;
                 }
@@ -1254,6 +1259,8 @@ namespace MobileGL::MG_Util::BackendLoader {
                                     glesFuncs.glDrawArraysInstancedBaseInstanceEXT != nullptr &&
                                     glesFuncs.glDrawElementsInstancedBaseInstanceEXT != nullptr &&
                                     glesFuncs.glDrawElementsInstancedBaseVertexBaseInstanceEXT != nullptr;
+        caps.SupportsPolygonOffsetClamp =
+            hasPolygonOffsetClampExtension && glesFuncs.glPolygonOffsetClampEXT != nullptr;
         // ES has no core texture views at any version, so this is extension-only by nature.
         // Each spelling must bring its OWN entry point: a driver that advertises the OES string
         // is not required to export glTextureViewEXT.

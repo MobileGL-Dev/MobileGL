@@ -4120,8 +4120,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
             if (headSpanDirty) { // Polygon offset (head-span scalars, like line width / point size below)
                 if (forceFullPush || parameters.PolygonOffsetFactor != g_syncedRenderStateParameters.PolygonOffsetFactor ||
-                    parameters.PolygonOffsetUnits != g_syncedRenderStateParameters.PolygonOffsetUnits) {
-                    g_GLESFuncs.glPolygonOffset(parameters.PolygonOffsetFactor, parameters.PolygonOffsetUnits);
+                    parameters.PolygonOffsetUnits != g_syncedRenderStateParameters.PolygonOffsetUnits ||
+                    parameters.PolygonOffsetClamp != g_syncedRenderStateParameters.PolygonOffsetClamp) {
+                    // glPolygonOffset IS glPolygonOffsetClampEXT(factor, units, 0), so where the
+                    // driver has the clamp entry point it carries all three values; without it the
+                    // clamp cannot be expressed and the offset goes through unclamped.
+                    if (g_GLESCapabilities.SupportsPolygonOffsetClamp) {
+                        g_GLESFuncs.glPolygonOffsetClampEXT(parameters.PolygonOffsetFactor,
+                                                            parameters.PolygonOffsetUnits,
+                                                            parameters.PolygonOffsetClamp);
+                    } else {
+                        g_GLESFuncs.glPolygonOffset(parameters.PolygonOffsetFactor, parameters.PolygonOffsetUnits);
+                    }
                 }
             }
 

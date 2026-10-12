@@ -306,6 +306,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Bool depthBiasValid = false;
         Float depthBiasConstantFactor = 0.0f;
         Float depthBiasSlopeFactor = 0.0f;
+        Float depthBiasClamp = 0.0f;
         Bool lineWidthValid = false;
         Float lineWidth = 0.0f;
         Bool stencilValid = false;
@@ -349,7 +350,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // RenderStateParameters field - RenderState.cpp):
         //   ApplyGLViewportState    : Viewports[0], DepthRanges[0], + extent/isDefaultFbo/preTransform
         //   ApplyBlendConstants     : BlendColor
-        //   ApplyPolygonOffsetState : PolygonOffsetUnits, PolygonOffsetFactor
+        //   ApplyPolygonOffsetState : PolygonOffsetUnits, PolygonOffsetFactor, PolygonOffsetClamp
         //   ApplyLineWidthState     : LineWidth (see the caveat below)
         //   ApplyStencilState       : StencilStates[0..1].{ValueMask, WriteMask, Ref}
         //   scissor rect            : ScissorTestEnabledMask bit 0, ScissorBoxes[0],
@@ -364,6 +365,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             Float blendColor[4] = {0.0f, 0.0f, 0.0f, 0.0f};
             Float polygonOffsetFactor = 0.0f;
             Float polygonOffsetUnits = 0.0f;
+            Float polygonOffsetClamp = 0.0f;
             Float lineWidth = 0.0f;
             Uint32 stencilValueMask[2] = {0, 0};
             Uint32 stencilWriteMask[2] = {0, 0};
@@ -393,7 +395,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     }
                 }
                 return polygonOffsetFactor == other.polygonOffsetFactor &&
-                       polygonOffsetUnits == other.polygonOffsetUnits && lineWidth == other.lineWidth &&
+                       polygonOffsetUnits == other.polygonOffsetUnits &&
+                       polygonOffsetClamp == other.polygonOffsetClamp && lineWidth == other.lineWidth &&
                        extentX == other.extentX && extentY == other.extentY &&
                        preTransform == other.preTransform && scissorEnabled == other.scissorEnabled &&
                        isDefaultFbo == other.isDefaultFbo;
@@ -455,6 +458,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         MAGMA_TAIL_INPUT_IS_DYNAMIC(BlendColor);       // ApplyBlendConstants
         MAGMA_TAIL_INPUT_IS_DYNAMIC(PolygonOffsetFactor); // ApplyPolygonOffsetState
         MAGMA_TAIL_INPUT_IS_DYNAMIC(PolygonOffsetUnits);  // ApplyPolygonOffsetState
+        MAGMA_TAIL_INPUT_IS_DYNAMIC(PolygonOffsetClamp);  // ApplyPolygonOffsetState
         MAGMA_TAIL_INPUT_IS_DYNAMIC(LineWidth);        // ApplyLineWidthState
         MAGMA_TAIL_INPUT_IS_DYNAMIC(ScissorBoxes);     // the scissor rect: ScissorBoxes[0]
 #undef MAGMA_TAIL_INPUT_IS_DYNAMIC
@@ -652,18 +656,25 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
     }
 
-    static void ApplyPolygonOffsetState(VkCommandBuffer commandBuffer) {
+    static void ApplyPolygonOffsetState(VkCommandBuffer commandBuffer, Bool depthBiasClampSupported) {
         const Float constantFactor = MG_Pipe::gPipeInputs->GetPolygonOffsetUnits();
         const Float slopeFactor = MG_Pipe::gPipeInputs->GetPolygonOffsetFactor();
+        // GL_POLYGON_OFFSET_CLAMP and depthBiasClamp share their semantics exactly (positive caps
+        // the offset from above, negative from below, zero disables). Without the device feature
+        // the value must be 0 (VUID-vkCmdSetDepthBias-depthBiasClamp-00790), so the offset then
+        // goes through unclamped.
+        const Float clamp =
+            depthBiasClampSupported ? MG_Pipe::gPipeInputs->GetRenderStateParameters().PolygonOffsetClamp : 0.0f;
         auto& shadow = *g_dynamicStateShadow;
         if (shadow.depthBiasValid && shadow.depthBiasConstantFactor == constantFactor &&
-            shadow.depthBiasSlopeFactor == slopeFactor) {
+            shadow.depthBiasSlopeFactor == slopeFactor && shadow.depthBiasClamp == clamp) {
             return;
         }
         shadow.depthBiasValid = true;
         shadow.depthBiasConstantFactor = constantFactor;
         shadow.depthBiasSlopeFactor = slopeFactor;
-        vkCmdSetDepthBias(commandBuffer, constantFactor, 0.0f, slopeFactor);
+        shadow.depthBiasClamp = clamp;
+        vkCmdSetDepthBias(commandBuffer, constantFactor, clamp, slopeFactor);
     }
 
     static void ApplyLineWidthState(VkCommandBuffer commandBuffer) {
@@ -3500,7 +3511,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // stencil masks are not per-viewport and a multi-viewport draw needs them just as
             // much. Only the viewport/scissor pair takes the array shape.
             ApplyBlendConstants(frame.commandBuffer);
-            ApplyPolygonOffsetState(frame.commandBuffer);
+            ApplyPolygonOffsetState(frame.commandBuffer, m_depthBiasClampFeatureEnabled);
             ApplyLineWidthState(frame.commandBuffer);
             ApplyStencilState(frame.commandBuffer);
             ApplyMultiViewportDynamicState(frame.commandBuffer, viewportCount, extent,
@@ -3564,6 +3575,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             key.blendColor[3] = p.BlendColor.w();
             key.polygonOffsetFactor = p.PolygonOffsetFactor;
             key.polygonOffsetUnits = p.PolygonOffsetUnits;
+            key.polygonOffsetClamp = p.PolygonOffsetClamp;
             key.lineWidth = p.LineWidth;
             // StencilStates[0] is Front, [1] is Back (RenderState::GetStencilFaceIndex),
             // the same order ApplyStencilState reads them in.
@@ -3590,7 +3602,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
         ApplyGLViewportState(frame.commandBuffer, extent, preTransform, isDefaultFbo);
         ApplyBlendConstants(frame.commandBuffer);
-        ApplyPolygonOffsetState(frame.commandBuffer);
+        ApplyPolygonOffsetState(frame.commandBuffer, m_depthBiasClampFeatureEnabled);
         ApplyLineWidthState(frame.commandBuffer);
         ApplyStencilState(frame.commandBuffer);
         VkRect2D scissor{};
@@ -7359,6 +7371,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         deviceFeatures.fillModeNonSolid = supportedDeviceFeatures.fillModeNonSolid;
         m_fillModeNonSolidFeatureEnabled = deviceFeatures.fillModeNonSolid == VK_TRUE;
         deviceFeatures.dualSrcBlend = supportedDeviceFeatures.dualSrcBlend;
+        // GL_POLYGON_OFFSET_CLAMP (glPolygonOffsetClamp) maps onto vkCmdSetDepthBias's clamp
+        // argument, which must stay 0 unless this feature is enabled.
+        deviceFeatures.depthBiasClamp = supportedDeviceFeatures.depthBiasClamp;
+        m_depthBiasClampFeatureEnabled = deviceFeatures.depthBiasClamp == VK_TRUE;
         m_dualSrcBlendFeatureEnabled = deviceFeatures.dualSrcBlend == VK_TRUE;
         // ARB_sample_shading. Without this feature a pipeline may not set sampleShadingEnable
         // (VUID-VkPipelineMultisampleStateCreateInfo-sampleShadingEnable-00784), so the GL enable

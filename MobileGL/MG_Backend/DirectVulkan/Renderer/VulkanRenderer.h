@@ -1155,6 +1155,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // drive a runtime fallback when the device lacks them.
         Bool m_fillModeNonSolidFeatureEnabled = false;
         Bool m_independentBlendFeatureEnabled = false;
+        // depthBiasClamp gates the clamp argument of vkCmdSetDepthBias (glPolygonOffsetClamp);
+        // without it the polygon offset is applied unclamped.
+        Bool m_depthBiasClampFeatureEnabled = false;
         // dualSrcBlend gates GL_SRC1_* blend factors (glBindFragDataLocationIndexed dual-source blend);
         // primitiveTopologyListRestart gates primitive restart on *list* topologies (strip/fan restart
         // needs no feature). Both cached at device creation and drive a hard-fail-at-draw when absent.

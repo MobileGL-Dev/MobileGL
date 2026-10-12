@@ -1112,7 +1112,21 @@ namespace {
     void StubClearStencil(GLint) {}
     void StubCullFace(GLenum) {}
     void StubFrontFace(GLenum) {}
-    void StubPolygonOffset(GLfloat, GLfloat) {}
+    // The polygon offset the driver was last handed, and through which entry point.
+    struct RecordedPolygonOffset {
+        Bool viaClamp = false;
+        Bool seen = false;
+        GLfloat factor = 0.0f;
+        GLfloat units = 0.0f;
+        GLfloat clamp = 0.0f;
+    };
+    RecordedPolygonOffset g_driverPolygonOffset;
+    void StubPolygonOffset(GLfloat factor, GLfloat units) {
+        g_driverPolygonOffset = {false, true, factor, units, 0.0f};
+    }
+    void StubPolygonOffsetClampEXT(GLfloat factor, GLfloat units, GLfloat clamp) {
+        g_driverPolygonOffset = {true, true, factor, units, clamp};
+    }
     void StubLineWidth(GLfloat) {}
     void StubSampleCoverage(GLfloat, GLboolean) {}
 
@@ -1274,6 +1288,56 @@ TEST_F(FramebufferTest, ClearIntoAWidenedDrawBufferKeepsAlphaWritableAndSubstitu
     const GLuint* widenedInteger = MG_Backend::DirectGLES::FramebufferImpl::SubstituteWidenedClearAlpha(
         appIntegerColor, true, GLuint(1), integerScratch);
     EXPECT_EQ(widenedInteger[3], 1u);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
+TEST_F(FramebufferTest, PolygonOffsetClampReachesTheDriverWhenItHasTheClampEntryPoint) {
+    ScopedRenderStateDriverStubs driver;
+    MG_Backend::DirectGLES::g_GLESFuncs.glPolygonOffsetClampEXT = StubPolygonOffsetClampEXT;
+    MG_Backend::DirectGLES::g_GLESCapabilities.SupportsPolygonOffsetClamp = true;
+    g_driverPolygonOffset = {};
+
+    MG_Impl::GLImpl::PolygonOffsetClamp(0.0f, 5000.0f, 0.0001f);
+    {
+        MG_Test::ScopedPipeVerb draw(MG_Pipe::MGPipeVerb::DrawArrays);
+        MG_Backend::DirectGLES::RenderStateImpl::SyncRenderState(/*forColorClear=*/false);
+    }
+    ASSERT_TRUE(g_driverPolygonOffset.seen);
+    EXPECT_TRUE(g_driverPolygonOffset.viaClamp) << "the clamp must not be dropped on the way to the driver";
+    EXPECT_EQ(g_driverPolygonOffset.factor, 0.0f);
+    EXPECT_EQ(g_driverPolygonOffset.units, 5000.0f);
+    EXPECT_EQ(g_driverPolygonOffset.clamp, 0.0001f);
+
+    // A clamp-only change (same factor and units) is still a change the driver has to see.
+    g_driverPolygonOffset = {};
+    MG_Impl::GLImpl::PolygonOffset(0.0f, 5000.0f);
+    {
+        MG_Test::ScopedPipeVerb draw(MG_Pipe::MGPipeVerb::DrawArrays);
+        MG_Backend::DirectGLES::RenderStateImpl::SyncRenderState(/*forColorClear=*/false);
+    }
+    ASSERT_TRUE(g_driverPolygonOffset.seen) << "glPolygonOffset resets the clamp to 0";
+    EXPECT_EQ(g_driverPolygonOffset.clamp, 0.0f);
+
+    MG_Impl::GLImpl::PolygonOffset(0.0f, 0.0f);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+}
+
+TEST_F(FramebufferTest, PolygonOffsetFallsBackToTheUnclampedEntryPointWithoutTheExtension) {
+    ScopedRenderStateDriverStubs driver;
+    MG_Backend::DirectGLES::g_GLESCapabilities.SupportsPolygonOffsetClamp = false;
+    g_driverPolygonOffset = {};
+
+    MG_Impl::GLImpl::PolygonOffsetClamp(1.0f, 2.0f, 0.5f);
+    {
+        MG_Test::ScopedPipeVerb draw(MG_Pipe::MGPipeVerb::DrawArrays);
+        MG_Backend::DirectGLES::RenderStateImpl::SyncRenderState(/*forColorClear=*/false);
+    }
+    ASSERT_TRUE(g_driverPolygonOffset.seen);
+    EXPECT_FALSE(g_driverPolygonOffset.viaClamp);
+    EXPECT_EQ(g_driverPolygonOffset.factor, 1.0f);
+    EXPECT_EQ(g_driverPolygonOffset.units, 2.0f);
+
+    MG_Impl::GLImpl::PolygonOffset(0.0f, 0.0f);
     EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
 }
 
