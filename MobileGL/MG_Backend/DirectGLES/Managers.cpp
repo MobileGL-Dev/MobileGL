@@ -12495,14 +12495,26 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // probe exists to avoid. Nothing else in the loop is order-sensitive: the two
             // passthrough-tessellation sources it captures are a vertex and an evaluation stage,
             // and the three sets it accumulates are unions.
+            //
+            // The pre-rasterization stages are walked in PIPELINE order (the stage enum's), so a
+            // consumer's input-block redeclaration below can mirror the output block its producer
+            // has already emitted.
             Vector<SizeT> stageOrder;
             stageOrder.reserve(linkedStages.size());
             for (SizeT index = 0; index < linkedStages.size(); ++index) {
                 if (linkedStages[index] != ShaderStage::Fragment) stageOrder.push_back(index);
             }
+            std::stable_sort(stageOrder.begin(), stageOrder.end(), [&linkedStages](SizeT a, SizeT b) {
+                return static_cast<Int>(linkedStages[a]) < static_cast<Int>(linkedStages[b]);
+            });
             for (SizeT index = 0; index < linkedStages.size(); ++index) {
                 if (linkedStages[index] == ShaderStage::Fragment) stageOrder.push_back(index);
             }
+            // The output gl_PerVertex members the last pre-rasterization stage emitted, for the
+            // next stage's input redeclaration (RedeclareClipCullDistanceInputsInPerVertexBlock).
+            // A synthesized pass-through control stage copies its input block through, so the
+            // vertex stage's members are what an evaluation stage behind one sees.
+            String producerOutPerVertexMembers;
             // Set by whichever pre-rasterization stage's demoted mg_ViewportIndex global the text
             // pass turned into a varying; read by the fragment stage to decide whether to inject
             // the gate that consumes it.
@@ -12739,6 +12751,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // before vertexStageEssl is captured, so a synthesized pass-through control
                 // stage mirrors the block this produces.
                 source = RedeclareClipCullDistancesInPerVertexBlock(std::move(source), glShaderType);
+                // ...and the consumer half: a stage reading gl_in[i].gl_ClipDistance/CullDistance
+                // redeclares its input block with the sizes the producer wrote.
+                source = RedeclareClipCullDistanceInputsInPerVertexBlock(std::move(source), glShaderType,
+                                                                         producerOutPerVertexMembers);
+                if (glShaderType != GL_FRAGMENT_SHADER) {
+                    producerOutPerVertexMembers =
+                        ExtractPerVertexBlockMembers(source, /*input=*/false).value_or(String());
+                }
 
                 // Position in the chain is arbitrary: this is the only header-level rewrite, it
                 // edits #extension directives and never the body, and the replacement is the

@@ -399,6 +399,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // Fragment inputs and the control stage (whose block SPIRV-Cross already emits) are
         // left alone; a stage without the standalone declarations comes back unchanged.
         String RedeclareClipCullDistancesInPerVertexBlock(String glslCode, GLenum shaderType);
+        // The INPUT half of the same problem, for a tessellation control, tessellation evaluation
+        // or geometry stage that reads gl_in[i].gl_ClipDistance / gl_CullDistance. SPIRV-Cross
+        // never redeclares an ES input block, so the stage reads the implicitly sized built-in
+        // arrays - and a driver that packs cull distances after clip distances then places the
+        // cull array at the implicit clip size rather than at the size the previous stage wrote,
+        // reading the wrong component. Redeclares `in gl_PerVertex { ... } gl_in[]` with exactly
+        // the members of the previous stage's output block (`producerOutMembers`, from
+        // ExtractPerVertexBlockMembers), which is also the shape ES interface matching wants.
+        // Unchanged when the stage does not read either array, already declares its input block,
+        // reads a gl_in member the producer's block does not carry, or the producer has no block.
+        String RedeclareClipCullDistanceInputsInPerVertexBlock(String glslCode, GLenum shaderType,
+                                                               const String& producerOutMembers);
         // Adds `#extension GL_EXT_clip_cull_distance : require` when `glslCode` names
         // gl_ClipDistance or gl_CullDistance and does not request it yet. For the synthesized
         // pass-through control stage, whose gl_in/gl_out member lists are mirrored from stages

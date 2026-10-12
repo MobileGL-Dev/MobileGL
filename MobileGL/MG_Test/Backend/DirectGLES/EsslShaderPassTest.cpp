@@ -34,6 +34,7 @@ using MobileGL::MG_Backend::DirectGLES::PrgramImpl::IMAGE_WRITE_ALIAS_PREFIX;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::IMAGE_WRITEONLY_ALIAS_PREFIX;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::ImageArrayUnitPlan;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::RedeclareClipCullDistancesInPerVertexBlock;
+using MobileGL::MG_Backend::DirectGLES::PrgramImpl::RedeclareClipCullDistanceInputsInPerVertexBlock;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::RemapImageArrayElementUnits;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::PointSizeExtensionName;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::RemoveLayoutBinding;
@@ -1674,4 +1675,91 @@ void main() { color = vec4(1.0); }
     EXPECT_FALSE(Contains(out, "out float gl_ClipDistance")) << out;
     EXPECT_TRUE(Contains(out, "    highp float gl_ClipDistance[3];\n};")) << out;
     EXPECT_TRUE(Contains(out, "GL_EXT_clip_cull_distance")) << out;
+}
+
+// The consumer half: SPIRV-Cross never redeclares an ES input block, so a stage reading
+// gl_in[i].gl_CullDistance gets the implicitly sized arrays, and a driver that packs cull
+// distances after clip distances reads them from the wrong component
+// (KHR-GL45.cull_distance.functional_test_item_{5,6}). The block mirrors the producer's.
+TEST(RedeclareClipCullDistanceInputsTest, MirrorsTheProducerBlockIntoATessellationStage) {
+    const String producer = "\n    highp vec4 gl_Position;\n    highp float gl_ClipDistance[1];\n"
+                            "    highp float gl_CullDistance[7];\n";
+    const String tes = R"(#version 320 es
+#extension GL_EXT_clip_cull_distance : require
+precision highp float;
+precision highp int;
+layout(triangles, ccw, equal_spacing) in;
+
+out gl_PerVertex
+{
+    highp vec4 gl_Position;
+    highp float gl_CullDistance[7];
+};
+
+void main()
+{
+    gl_CullDistance[0] = dot(vec3(gl_in[0].gl_CullDistance[0], gl_in[1].gl_CullDistance[0], gl_in[2].gl_CullDistance[0]), gl_TessCoord);
+    gl_Position = gl_in[0].gl_Position;
+}
+)";
+    const String out = RedeclareClipCullDistanceInputsInPerVertexBlock(tes, GL_TESS_EVALUATION_SHADER, producer);
+    EXPECT_TRUE(Contains(out, "layout(triangles, ccw, equal_spacing) in;\n\nin gl_PerVertex\n{\n"
+                              "    highp vec4 gl_Position;\n    highp float gl_ClipDistance[1];\n"
+                              "    highp float gl_CullDistance[7];\n} gl_in[gl_MaxPatchVertices];\n"))
+        << out;
+    // Applied once only.
+    EXPECT_EQ(RedeclareClipCullDistanceInputsInPerVertexBlock(out, GL_TESS_EVALUATION_SHADER, producer), out);
+}
+
+TEST(RedeclareClipCullDistanceInputsTest, GeometryStageGetsAnUnsizedBlockAfterItsLayouts) {
+    const String producer = "\n    invariant highp vec4 gl_Position;\n    highp float gl_CullDistance[8];\n";
+    const String gs = R"(#version 320 es
+#extension GL_EXT_clip_cull_distance : require
+precision highp float;
+layout(triangles) in;
+layout(max_vertices = 3, triangle_strip) out;
+
+out gl_PerVertex
+{
+    highp vec4 gl_Position;
+    highp float gl_CullDistance[8];
+};
+
+void main()
+{
+    gl_Position = gl_in[0].gl_Position;
+    gl_CullDistance[0] = gl_in[0].gl_CullDistance[0];
+    EmitVertex();
+}
+)";
+    const String out = RedeclareClipCullDistanceInputsInPerVertexBlock(gs, GL_GEOMETRY_SHADER, producer);
+    EXPECT_TRUE(Contains(out, "layout(max_vertices = 3, triangle_strip) out;\n\nin gl_PerVertex\n{\n"
+                              "    highp vec4 gl_Position;\n    highp float gl_CullDistance[8];\n} gl_in[];\n"))
+        << out;
+    EXPECT_FALSE(Contains(out, "invariant")) << out;
+}
+
+TEST(RedeclareClipCullDistanceInputsTest, LeavesStagesItCannotRedeclareHonestlyAlone) {
+    const String producer = "\n    highp vec4 gl_Position;\n    highp float gl_ClipDistance[2];\n";
+    // Reads gl_PointSize, which the producer's block does not carry.
+    const String readsPointSize = R"(#version 320 es
+layout(points) in;
+layout(points, max_vertices = 1) out;
+void main() { gl_Position = gl_in[0].gl_Position * gl_in[0].gl_PointSize + vec4(gl_in[0].gl_ClipDistance[1]); EmitVertex(); }
+)";
+    EXPECT_EQ(RedeclareClipCullDistanceInputsInPerVertexBlock(readsPointSize, GL_GEOMETRY_SHADER, producer),
+              readsPointSize);
+    // Does not read the distances at all.
+    const String plain = R"(#version 320 es
+layout(points) in;
+layout(points, max_vertices = 1) out;
+void main() { gl_Position = gl_in[0].gl_Position; EmitVertex(); }
+)";
+    EXPECT_EQ(RedeclareClipCullDistanceInputsInPerVertexBlock(plain, GL_GEOMETRY_SHADER, producer), plain);
+    // The producer wrote no distances, and a vertex stage has no gl_in at all.
+    EXPECT_EQ(RedeclareClipCullDistanceInputsInPerVertexBlock(readsPointSize, GL_GEOMETRY_SHADER,
+                                                              "\n    highp vec4 gl_Position;\n"),
+              readsPointSize);
+    EXPECT_EQ(RedeclareClipCullDistanceInputsInPerVertexBlock(readsPointSize, GL_VERTEX_SHADER, producer),
+              readsPointSize);
 }

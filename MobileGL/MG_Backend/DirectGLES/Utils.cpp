@@ -1047,6 +1047,60 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return result;
         }
 
+        String RedeclareClipCullDistanceInputsInPerVertexBlock(String glslCode, const GLenum shaderType,
+                                                               const String& producerOutMembers) {
+#ifdef TRACY_ENABLE
+            ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
+#endif
+            const Bool tessellation = shaderType == GL_TESS_CONTROL_SHADER || shaderType == GL_TESS_EVALUATION_SHADER;
+            if (!tessellation && shaderType != GL_GEOMETRY_SHADER) return glslCode;
+            if (producerOutMembers.find("gl_ClipDistance") == String::npos &&
+                producerOutMembers.find("gl_CullDistance") == String::npos) {
+                return glslCode;
+            }
+            if (ExtractPerVertexBlockMembers(glslCode, /*input=*/true).has_value()) return glslCode;
+
+            // Every gl_in member the stage reads has to be in the redeclared block, or the stage
+            // stops compiling; one the producer does not write cannot be added honestly.
+            static const std::regex memberRegex(R"(gl_in\s*\[[^\]]*\]\s*\.\s*(gl_[A-Za-z]+))");
+            Bool readsDistances = false;
+            for (auto it = std::sregex_iterator(glslCode.begin(), glslCode.end(), memberRegex);
+                 it != std::sregex_iterator(); ++it) {
+                const String member = (*it)[1].str();
+                if (member == "gl_ClipDistance" || member == "gl_CullDistance") readsDistances = true;
+                if (producerOutMembers.find(member) == String::npos) return glslCode;
+            }
+            if (!readsDistances) return glslCode;
+
+            // `invariant` qualifies outputs only.
+            String members = producerOutMembers;
+            for (SizeT pos = members.find("invariant "); pos != String::npos; pos = members.find("invariant ")) {
+                members.erase(pos, std::strlen("invariant "));
+            }
+            while (!members.empty() && std::isspace(static_cast<unsigned char>(members.back()))) members.pop_back();
+            while (!members.empty() && (members.front() == '\n' || members.front() == '\r')) members.erase(0, 1);
+            String block = "in gl_PerVertex\n{\n" + members + "\n} gl_in[";
+            block += tessellation ? "gl_MaxPatchVertices" : "";
+            block += "];\n";
+
+            // After the header (#directives, precision statements and the stage's layout-only
+            // in/out declarations, which a geometry stage's unsized gl_in[] depends on).
+            static const std::regex headerRegex(
+                R"(^\s*(#.*|precision\s.*|layout\s*\(.*\)\s*(in|out)\s*;\s*)?$)");
+            SizeT insertAt = 0;
+            SizeT lineStart = 0;
+            while (lineStart < glslCode.size()) {
+                SizeT lineEnd = glslCode.find('\n', lineStart);
+                if (lineEnd == String::npos) lineEnd = glslCode.size();
+                const String line = glslCode.substr(lineStart, lineEnd - lineStart);
+                if (!std::regex_match(line, headerRegex)) break;
+                insertAt = std::min(lineEnd + 1, glslCode.size());
+                lineStart = lineEnd + 1;
+            }
+            glslCode.insert(insertAt, block);
+            return glslCode;
+        }
+
         String RequestClipCullDistanceExtension(String glslCode) {
             static constexpr const char* kDirective = "#extension GL_EXT_clip_cull_distance : require\n";
             if (glslCode.find("GL_EXT_clip_cull_distance") != String::npos ||
