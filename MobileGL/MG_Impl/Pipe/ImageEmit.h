@@ -72,6 +72,36 @@ namespace MobileGL::MG_Pipe {
         }
     }
 
+    // GL 4.6 core 8.26: an image access is INVALID - loads return zero, stores are dropped - when
+    // the bound texture is incomplete or the bound level lies outside [level_base, q]. Image
+    // units ignore the sampler, so "complete" here is the level's own: the base level needs
+    // base-level completeness and any other level a complete mip chain up to it, the reading
+    // the conformance suite applies (a mutable texture with only level 0 defined, bound at
+    // level 2). Such a binding travels as an EMPTY unit, which both backends already answer
+    // with "no image" - an ES driver would otherwise happily address the undefined level.
+    inline Bool MGPipeImageBindingIsAccessible(const MG_State::GLState::ImageTextureBinding& binding) {
+        using namespace MG_State::GLState;
+        const ITextureObject* texture = binding.Texture.get();
+        if (texture == nullptr) return false;
+        const TextureObjectMipmap* mipmapTexture = AsMipmapTexture(texture);
+        // Buffer and multisample storage have exactly one level and no level range to leave.
+        if (mipmapTexture == nullptr) return true;
+        if (binding.Level < 0) return false;
+        const Uint level = static_cast<Uint>(binding.Level);
+        const UintVec2& range = texture->GetLevelRange();
+        if (level < range.x() || level > range.y()) return false;
+        if (texture->IsImmutable() || texture->IsTextureView()) {
+            // Every level of immutable storage exists, so the range against the storage is all.
+            return level < texture->GetAddressableLevelCount();
+        }
+        if (level >= mipmapTexture->GetMipmapLevelCount()) return false;
+        for (const auto uploadTarget : texture->GetUploadTargets()) {
+            const IntVec3 size = mipmapTexture->GetMipmapTexelSize(uploadTarget, level);
+            if (size.x() <= 0 || size.y() <= 0 || size.z() <= 0) return false;
+        }
+        return IsMipmapCompleteForFilter(texture, /*mipmapped=*/level != range.x());
+    }
+
     // D-G3. Over the tail with Start and Count mixed in, the same shape the two sampler sets
     // use - and it covers InternalFormat and Access because those are live glBindImageTexture
     // state that the format-less image bake keys on, not decoration.
@@ -128,9 +158,9 @@ namespace MobileGL::MG_Pipe {
                 MGPImageView& entry = m_entries[unit];
                 entry = MGPImageView{};
                 entry.Unit = unit;
-                entry.Res = binding.Texture ? MGPipeSlots().Acquire(MGPipeKind::Texture,
-                                                                    binding.Texture->GetLifetimeId())
-                                            : kMGPipeNullHandle;
+                entry.Res = MGPipeImageBindingIsAccessible(binding)
+                                ? MGPipeSlots().Acquire(MGPipeKind::Texture, binding.Texture->GetLifetimeId())
+                                : kMGPipeNullHandle;
                 // D-A4: a texture named in an emitted MGPImageView is SHADER-IMAGE-bound from
                 // then on - the bit ImageBindableHint is derived from. The bind itself noted it
                 // first (TextureState.h, so the hint precedes the first sync); this is the

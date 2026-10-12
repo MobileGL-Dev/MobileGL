@@ -607,6 +607,34 @@ void main() { imageStore(img, ivec2(0, 0), vec4(1.0)); }
         GL::BindImageTexture(0, 0, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA8);
     }
 
+    // GL 4.6 core 8.26: a level the texture does not have as a complete image - here a mutable
+    // texture with only level 0 defined and the default MAX_LEVEL, bound at level 2 - is an
+    // invalid access, so the unit travels EMPTY and the backend binds no image (loads read zero,
+    // stores are dropped). The same texture bound at its base level stays a real binding.
+    TEST(ImageEmit, AnIncompleteLevelTravelsAsAnEmptyUnit) {
+        EmitterScope scope;
+        const GLuint program = MakeComputeProgram(kImageCompute);
+        GL::UseProgram(program);
+        GLuint name = 0;
+        GL::GenTextures(1, &name);
+        GL::BindTexture(GL_TEXTURE_2D, name);
+        GL::TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 64, 64, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+
+        GL::BindImageTexture(1, name, 2, GL_FALSE, 0, GL_READ_WRITE, GL_RGBA8);
+        ASSERT_TRUE(Ctx().GetImageTextureBinding(1).Texture != nullptr) << "the bind itself is legal";
+        Emitter().EmitShaderImages(Ctx());
+        ASSERT_GE(Emitter().Window(), 2u);
+        EXPECT_TRUE(MGPipeHandleIsNull(Emitter().LastImageViews()[1].Res))
+            << "an undefined, mip-incomplete level must not reach the backend as an image";
+
+        GL::BindImageTexture(1, name, 0, GL_FALSE, 0, GL_READ_WRITE, GL_RGBA8);
+        Emitter().EmitShaderImages(Ctx());
+        EXPECT_FALSE(MGPipeHandleIsNull(Emitter().LastImageViews()[1].Res))
+            << "the base level is base-complete and must stay bound";
+        GL::UseProgram(0);
+        GL::BindImageTexture(1, 0, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA8);
+    }
+
     // P5d round 3, package C: glBindImageTexture IS THE PRODUCER OF THE IMAGE-UNIT HIGH-WATER
     // MARK, and this case is the reason a reader may bound a walk with it. The split client's
     // per-draw GPU-write sweep (MG_Remote/Client/GpuWritePending.cpp) stops at the mark instead
