@@ -535,8 +535,15 @@ namespace MobileGL::MG_Pipe {
         // The same mix Tracker.h's composite shutters use. Spelled here rather than
         // included so this header does not depend on the tracker.
         static constexpr Uint64 MGPipeMixShutterValue(Uint64 accumulator, Uint64 value) {
-            accumulator ^= value + 0x9e3779b97f4a7c15ull + (accumulator << 6) + (accumulator >> 2);
-            return accumulator;
+            const auto avalanche = [](Uint64 v) {
+                v ^= v >> 30;
+                v *= 0xbf58476d1ce4e5b9ull;
+                v ^= v >> 27;
+                v *= 0x94d049bb133111ebull;
+                v ^= v >> 31;
+                return v;
+            };
+            return avalanche(accumulator ^ avalanche(value + 0x9e3779b97f4a7c15ull));
         }
 
         Vector<Entry> m_bySlot;

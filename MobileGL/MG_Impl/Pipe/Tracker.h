@@ -245,17 +245,31 @@ namespace MobileGL::MG_Pipe {
     // compares, neither of which can collide.
     //
     // P3a's three ARE composed, so the risk is now real rather than academic, and it is
-    // accepted with its size stated: each mix takes a 64-bit input into a 64-bit
-    // accumulator, so two DIFFERENT vertex configurations collide with probability ~2^-64
-    // per pair, and the inputs are a monotone lifetime id, a monotone configuration version
-    // and a widened slot version - none of which an application can steer. The alternative,
-    // comparing the whole 32-attribute configuration byte for byte on every verb, is the
-    // per-draw cost the shutter exists to avoid. The narrowing that removes the composition
-    // for bit 10 - its own slot version plus the bound object's identity - is what this
-    // phase already did to the one shutter that was composed over an unrelated aggregate.
+    // accepted with its size stated: two DIFFERENT states collide with probability ~2^-64 per
+    // pair, and the inputs are monotone lifetime ids, versions and generations - none of which
+    // an application can steer. The alternative, comparing the whole 32-attribute configuration
+    // byte for byte on every verb, is the per-draw cost the shutter exists to avoid. The
+    // narrowing that removes the composition for bit 10 - its own slot version plus the bound
+    // object's identity - is what this phase already did to the one shutter that was composed
+    // over an unrelated aggregate.
+    //
+    // That bound needs a mix that avalanches. The hash_combine step this used to be
+    // (acc ^= value + k + (acc << 6) + (acc >> 2)) does not: small neighbouring counters collide
+    // outright - (1, 64) and (2, 1) mix to the same value - and bit 12 missed a fire on exactly
+    // such a pair, so a draw sampled the previous set's texture
+    // (KHR-GL46.internalformat.copy_tex_image.rgb10_a2ui after a run of earlier cases). Each
+    // step here is a bijection of either argument with the other fixed, so a change to one
+    // input alone always moves the result, and the 64-bit finalizer spreads a change to both.
+    inline constexpr Uint64 MGPipeShutterAvalanche(Uint64 value) {
+        value ^= value >> 30;
+        value *= 0xbf58476d1ce4e5b9ull;
+        value ^= value >> 27;
+        value *= 0x94d049bb133111ebull;
+        value ^= value >> 31;
+        return value;
+    }
     inline constexpr Uint64 MGPipeMixShutter(Uint64 accumulator, Uint64 value) {
-        accumulator ^= value + 0x9e3779b97f4a7c15ull + (accumulator << 6) + (accumulator >> 2);
-        return accumulator;
+        return MGPipeShutterAvalanche(accumulator ^ MGPipeShutterAvalanche(value + 0x9e3779b97f4a7c15ull));
     }
 
     // A Uint16 counter widened at the TRACKER boundary, never in MG_State

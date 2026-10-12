@@ -33,6 +33,7 @@
 #include <MG_State/GLState/Core.h>
 #include <MG_Util/Metrics/PipeStats.h>
 
+#include <algorithm>
 #include <cstring>
 #include <limits>
 #include <string>
@@ -44,6 +45,29 @@ namespace {
     // The subsystem bitmask the tracker dispatches on is allocated in every build.
     TEST(Tracker, SubsystemBitsDoNotOverlapTheBehaviourBit) {
         EXPECT_EQ(kMGPipeSubsystemsMigratedAtP2 & kMGPipeBehaviourNoCsoContentAddressing, 0ull);
+    }
+
+    // A composite shutter is only as good as its mix: a collision is a missed fire. The pairs
+    // below collided under the hash_combine step the mix used to be - the second one on a
+    // phone, the third is bit 12's (bind generation, program units) pair that left a draw
+    // sampling the previous unit set's texture.
+    TEST(Tracker, ShutterMixSeparatesSmallCounterPairs) {
+        EXPECT_NE(MGPipeMixShutter(1, 64), MGPipeMixShutter(2, 1));
+        EXPECT_NE(MGPipeMixShutter(174, 37), MGPipeMixShutter(48, 8026));
+        const auto bit12 = [](Uint64 content, Uint64 params, Uint64 bind, Uint64 units) {
+            return MGPipeMixShutter(MGPipeMixShutter(MGPipeMixShutter(content, params), bind), units);
+        };
+        Vector<Uint64> seen;
+        for (Uint64 content = 0; content < 4; ++content)
+            for (Uint64 params = 0; params < 40; ++params)
+                for (Uint64 bind = 0; bind < 16; ++bind)
+                    for (Uint64 program = 1; program < 8; ++program)
+                        for (Uint64 version = 0; version < 8; ++version) {
+                            seen.push_back(bit12(content, params, bind, MGPipeMixShutter(program, version)));
+                        }
+        std::sort(seen.begin(), seen.end());
+        EXPECT_EQ(std::adjacent_find(seen.begin(), seen.end()), seen.end())
+            << "two distinct small states share a shutter value";
     }
 
     using GLContext = MG_State::GLState::GLContext;
