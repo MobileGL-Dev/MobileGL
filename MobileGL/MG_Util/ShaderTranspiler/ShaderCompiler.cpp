@@ -212,6 +212,8 @@ namespace MobileGL {
                 Resources.maxCombinedShaderOutputResources =
                     Resources.maxCombinedImageUnitsAndFragmentOutputs;
                 Resources.maxVertexImageUniforms = dynamicParameters.MaxVertexImageUniforms;
+                Resources.maxTessControlImageUniforms = dynamicParameters.MaxTessControlImageUniforms;
+                Resources.maxTessEvaluationImageUniforms = dynamicParameters.MaxTessEvaluationImageUniforms;
                 Resources.maxGeometryImageUniforms = dynamicParameters.MaxGeometryImageUniforms;
                 Resources.maxFragmentImageUniforms = dynamicParameters.MaxFragmentImageUniforms;
                 Resources.maxComputeImageUniforms = dynamicParameters.MaxComputeImageUniforms;

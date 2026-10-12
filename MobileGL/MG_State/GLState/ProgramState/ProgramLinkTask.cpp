@@ -255,9 +255,9 @@ namespace {
     // its linker never counts uniforms against them - so a program declaring one image uniform
     // more than the limit linked cleanly and then rendered nothing.
     //
-    // The limits are the ones glGetIntegerv answers (MG_Impl/GLImpl/Getter/GL_Getter.cpp), the
-    // hardcoded tessellation zeros included: a program may not exceed a limit the implementation
-    // advertises, whatever the driver underneath would have taken.
+    // The limits are the ones glGetIntegerv answers (MG_Impl/GLImpl/Getter/GL_Getter.cpp): a
+    // program may not exceed a limit the implementation advertises, whatever the driver
+    // underneath would have taken.
     //
     // Counts the APPLICATION's image uniforms. The DirectGLES read/write split emits a second
     // declaration for an image a stage both reads and writes (MG_Backend/DirectGLES/Utils.h), but
@@ -279,8 +279,8 @@ namespace {
             "GL_MAX_FRAGMENT_IMAGE_UNIFORMS", "GL_MAX_COMPUTE_IMAGE_UNIFORMS"};
         constexpr SizeT kStageCount = sizeof(kStages) / sizeof(kStages[0]);
         const Int limits[kStageCount] = {env.params.MaxVertexImageUniforms,
-                                         0,
-                                         0,
+                                         env.params.MaxTessControlImageUniforms,
+                                         env.params.MaxTessEvaluationImageUniforms,
                                          env.params.MaxGeometryImageUniforms,
                                          env.params.MaxFragmentImageUniforms,
                                          env.params.MaxComputeImageUniforms};

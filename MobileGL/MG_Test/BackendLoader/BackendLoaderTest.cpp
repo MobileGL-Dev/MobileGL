@@ -46,6 +46,8 @@ namespace {
         GLint glesMinorVersion = 1;
         GLint maxVertexImageUniforms = 2;
         GLint maxGeometryImageUniforms = 3;
+        GLint maxTessControlImageUniforms = 6;
+        GLint maxTessEvaluationImageUniforms = 7;
         GLint maxFragmentImageUniforms = 4;
         GLint maxComputeImageUniforms = 5;
         bool maxGeometryImageUniformsQueried = false;
@@ -193,6 +195,14 @@ namespace {
             case GL_MAX_GEOMETRY_IMAGE_UNIFORMS:
                 g_fake.maxGeometryImageUniformsQueried = true;
                 *data = g_fake.maxGeometryImageUniforms;
+                break;
+            case GL_MAX_TESS_CONTROL_IMAGE_UNIFORMS:
+                g_fake.maxGeometryImageUniformsQueried = true;
+                *data = g_fake.maxTessControlImageUniforms;
+                break;
+            case GL_MAX_TESS_EVALUATION_IMAGE_UNIFORMS:
+                g_fake.maxGeometryImageUniformsQueried = true;
+                *data = g_fake.maxTessEvaluationImageUniforms;
                 break;
             case GL_MAX_FRAGMENT_IMAGE_UNIFORMS:
                 *data = g_fake.maxFragmentImageUniforms;
@@ -689,6 +699,8 @@ TEST(ImageUniformCapabilities, QueriesRealPerStageLimitsAndConservativelyGatesGe
     ASSERT_TRUE(MobileGL::MG_Util::BackendLoader::FillInGLESCapabilities(es31Caps, funcs));
     EXPECT_EQ(es31Caps.MaxVertexImageUniforms, g_fake.maxVertexImageUniforms);
     EXPECT_EQ(es31Caps.MaxGeometryImageUniforms, 0);
+    EXPECT_EQ(es31Caps.MaxTessControlImageUniforms, 0);
+    EXPECT_EQ(es31Caps.MaxTessEvaluationImageUniforms, 0);
     EXPECT_EQ(es31Caps.MaxFragmentImageUniforms, g_fake.maxFragmentImageUniforms);
     EXPECT_EQ(es31Caps.MaxComputeImageUniforms, g_fake.maxComputeImageUniforms);
     EXPECT_FALSE(g_fake.maxGeometryImageUniformsQueried);
@@ -700,6 +712,8 @@ TEST(ImageUniformCapabilities, QueriesRealPerStageLimitsAndConservativelyGatesGe
     ASSERT_TRUE(MobileGL::MG_Util::BackendLoader::FillInGLESCapabilities(es32Caps, funcs));
     EXPECT_EQ(es32Caps.MaxVertexImageUniforms, g_fake.maxVertexImageUniforms);
     EXPECT_EQ(es32Caps.MaxGeometryImageUniforms, g_fake.maxGeometryImageUniforms);
+    EXPECT_EQ(es32Caps.MaxTessControlImageUniforms, g_fake.maxTessControlImageUniforms);
+    EXPECT_EQ(es32Caps.MaxTessEvaluationImageUniforms, g_fake.maxTessEvaluationImageUniforms);
     EXPECT_EQ(es32Caps.MaxFragmentImageUniforms, g_fake.maxFragmentImageUniforms);
     EXPECT_EQ(es32Caps.MaxComputeImageUniforms, g_fake.maxComputeImageUniforms);
     EXPECT_TRUE(g_fake.maxGeometryImageUniformsQueried);

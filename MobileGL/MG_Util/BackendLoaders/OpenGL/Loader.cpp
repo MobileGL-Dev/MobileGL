@@ -1398,6 +1398,8 @@ namespace MobileGL::MG_Util::BackendLoader {
         GLint maxImageUnits = 8;
         GLint maxCombinedImageUniforms = 8;
         GLint maxVertexImageUniforms = 0;
+        GLint maxTessControlImageUniforms = 0;
+        GLint maxTessEvaluationImageUniforms = 0;
         GLint maxGeometryImageUniforms = 0;
         GLint maxFragmentImageUniforms = 8;
         GLint maxComputeImageUniforms = 8;
@@ -1547,12 +1549,14 @@ namespace MobileGL::MG_Util::BackendLoader {
         glesFuncs.glGetIntegerv(GL_MAX_VERTEX_IMAGE_UNIFORMS, &maxVertexImageUniforms);
         glesFuncs.glGetIntegerv(GL_MAX_FRAGMENT_IMAGE_UNIFORMS, &maxFragmentImageUniforms);
         glesFuncs.glGetIntegerv(GL_MAX_COMPUTE_IMAGE_UNIFORMS, &maxComputeImageUniforms);
-        // Geometry shaders and their image-uniform query are core only in ES 3.2. DirectGLES
-        // emits ESSL 3.10 on an ES 3.1 context, so reporting zero there is both legal and an
-        // accurate description of what the backend compiler can consume.
+        // Geometry and tessellation shaders and their image-uniform queries are core only in
+        // ES 3.2. DirectGLES emits ESSL 3.10 on an ES 3.1 context, so reporting zero there is
+        // both legal and an accurate description of what the backend compiler can consume.
         if (caps.GLESVersion.Major > 3 ||
             (caps.GLESVersion.Major == 3 && caps.GLESVersion.Minor >= 2)) {
             glesFuncs.glGetIntegerv(GL_MAX_GEOMETRY_IMAGE_UNIFORMS, &maxGeometryImageUniforms);
+            glesFuncs.glGetIntegerv(GL_MAX_TESS_CONTROL_IMAGE_UNIFORMS, &maxTessControlImageUniforms);
+            glesFuncs.glGetIntegerv(GL_MAX_TESS_EVALUATION_IMAGE_UNIFORMS, &maxTessEvaluationImageUniforms);
         }
         // Closes the bracket opened before the run: every local above now holds either the
         // driver's answer or a floor, and nothing this function asked for is left in the error
@@ -1864,6 +1868,8 @@ namespace MobileGL::MG_Util::BackendLoader {
         caps.MaxImageUnits = maxImageUnits;
         caps.MaxCombinedImageUniforms = maxCombinedImageUniforms;
         caps.MaxVertexImageUniforms = maxVertexImageUniforms;
+        caps.MaxTessControlImageUniforms = maxTessControlImageUniforms;
+        caps.MaxTessEvaluationImageUniforms = maxTessEvaluationImageUniforms;
         caps.MaxGeometryImageUniforms = maxGeometryImageUniforms;
         caps.MaxFragmentImageUniforms = maxFragmentImageUniforms;
         caps.MaxComputeImageUniforms = maxComputeImageUniforms;
@@ -1962,6 +1968,8 @@ namespace MobileGL::MG_Util::BackendLoader {
         MGLOG_I("    GL_MAX_IMAGE_UNITS: %d", caps.MaxImageUnits);
         MGLOG_I("    GL_MAX_COMBINED_IMAGE_UNIFORMS: %d", caps.MaxCombinedImageUniforms);
         MGLOG_I("    GL_MAX_VERTEX_IMAGE_UNIFORMS: %d", caps.MaxVertexImageUniforms);
+        MGLOG_I("    GL_MAX_TESS_CONTROL_IMAGE_UNIFORMS: %d", caps.MaxTessControlImageUniforms);
+        MGLOG_I("    GL_MAX_TESS_EVALUATION_IMAGE_UNIFORMS: %d", caps.MaxTessEvaluationImageUniforms);
         MGLOG_I("    GL_MAX_GEOMETRY_IMAGE_UNIFORMS: %d", caps.MaxGeometryImageUniforms);
         MGLOG_I("    GL_MAX_FRAGMENT_IMAGE_UNIFORMS: %d", caps.MaxFragmentImageUniforms);
         MGLOG_I("    GL_MAX_COMPUTE_IMAGE_UNIFORMS: %d", caps.MaxComputeImageUniforms);

@@ -632,6 +632,8 @@ inline constexpr WireLayoutMember kMGPipeWireLayoutMembers[] = {
     {"DynamicBackendParameters.MaxImageUnits", offsetof(DynamicBackendParameters, MaxImageUnits), sizeof(((DynamicBackendParameters*)nullptr)->MaxImageUnits)},
     {"DynamicBackendParameters.MaxCombinedImageUniforms", offsetof(DynamicBackendParameters, MaxCombinedImageUniforms), sizeof(((DynamicBackendParameters*)nullptr)->MaxCombinedImageUniforms)},
     {"DynamicBackendParameters.MaxVertexImageUniforms", offsetof(DynamicBackendParameters, MaxVertexImageUniforms), sizeof(((DynamicBackendParameters*)nullptr)->MaxVertexImageUniforms)},
+    {"DynamicBackendParameters.MaxTessControlImageUniforms", offsetof(DynamicBackendParameters, MaxTessControlImageUniforms), sizeof(((DynamicBackendParameters*)nullptr)->MaxTessControlImageUniforms)},
+    {"DynamicBackendParameters.MaxTessEvaluationImageUniforms", offsetof(DynamicBackendParameters, MaxTessEvaluationImageUniforms), sizeof(((DynamicBackendParameters*)nullptr)->MaxTessEvaluationImageUniforms)},
     {"DynamicBackendParameters.MaxGeometryImageUniforms", offsetof(DynamicBackendParameters, MaxGeometryImageUniforms), sizeof(((DynamicBackendParameters*)nullptr)->MaxGeometryImageUniforms)},
     {"DynamicBackendParameters.MaxFragmentImageUniforms", offsetof(DynamicBackendParameters, MaxFragmentImageUniforms), sizeof(((DynamicBackendParameters*)nullptr)->MaxFragmentImageUniforms)},
     {"DynamicBackendParameters.MaxComputeImageUniforms", offsetof(DynamicBackendParameters, MaxComputeImageUniforms), sizeof(((DynamicBackendParameters*)nullptr)->MaxComputeImageUniforms)},

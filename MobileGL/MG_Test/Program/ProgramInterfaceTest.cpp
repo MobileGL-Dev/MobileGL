@@ -951,6 +951,71 @@ void main() {
         }
     }
 
+    // The same rule for the tessellation stages, whose limits come from the backend like the
+    // others (they used to be hard-coded zeros). Sized off the advertised limit for the same
+    // reason as above: one image over it must fail and name the limit, and exactly at it must
+    // link whenever the limit is non-zero.
+    TEST_F(ProgramInterfaceTest, TessellationImageUniformsAreCheckedAgainstTheirOwnLimit) {
+        GLint maxTesImages = -1;
+        GetIntegerv(GL_MAX_TESS_EVALUATION_IMAGE_UNIFORMS, &maxTesImages);
+        ASSERT_EQ(TakeError(), GL_NO_ERROR);
+        ASSERT_GE(maxTesImages, 0);
+
+        const auto linkWithTesImages = [](GLint count) {
+            const std::string n = std::to_string(count);
+            const std::string tcs = R"(#version 430
+layout(vertices = 3) out;
+void main() {
+    gl_out[gl_InvocationID].gl_Position = gl_in[gl_InvocationID].gl_Position;
+    gl_TessLevelOuter[0] = 1.0; gl_TessLevelOuter[1] = 1.0; gl_TessLevelOuter[2] = 1.0;
+    gl_TessLevelInner[0] = 1.0;
+}
+)";
+            const std::string tes = std::string(R"(#version 430
+layout(triangles) in;
+layout(r32i) uniform iimage2D u_tesImage[)") + n + R"(];
+void main() {
+    int value = 1;
+    for (int i = 0; i < )" + n + R"(; ++i) {
+        value = imageAtomicAdd(u_tesImage[i], ivec2(0), value);
+    }
+    gl_Position = gl_in[0].gl_Position * float(value);
+}
+)";
+            const GLuint program = CreateProgram();
+            const auto attach = [program](GLenum stage, const char* source) {
+                const GLuint sh = CreateShader(stage);
+                ShaderSource(sh, 1, &source, nullptr);
+                CompileShader(sh);
+                GLint compiled = 0;
+                GetShaderiv(sh, GL_COMPILE_STATUS, &compiled);
+                EXPECT_EQ(compiled, GL_TRUE) << "stage " << stage << " must compile";
+                AttachShader(program, sh);
+            };
+            attach(GL_VERTEX_SHADER, kSimpleVs);
+            attach(GL_TESS_CONTROL_SHADER, tcs.c_str());
+            attach(GL_TESS_EVALUATION_SHADER, tes.c_str());
+            attach(GL_FRAGMENT_SHADER, kSimpleFs);
+            LinkProgram(program);
+            return program;
+        };
+
+        const GLuint over = linkWithTesImages(maxTesImages + 1);
+        GLint status = -1;
+        GetProgramiv(over, GL_LINK_STATUS, &status);
+        EXPECT_EQ(status, GL_FALSE);
+        char log[4096] = "";
+        GetProgramInfoLog(over, sizeof(log), nullptr, log);
+        EXPECT_NE(std::string(log).find("GL_MAX_TESS_EVALUATION_IMAGE_UNIFORMS"), std::string::npos)
+            << "info log was: " << log;
+        ClearErrors();
+
+        if (maxTesImages > 0) {
+            ExpectLinked(linkWithTesImages(maxTesImages));
+            ClearErrors();
+        }
+    }
+
     // Uniform blocks are counted the same way, and the synthesized block that carries the
     // default-block uniforms is not one of them.
     TEST_F(ProgramInterfaceTest, UniformBlocksOverAStageLimitFailToLink) {

@@ -11188,6 +11188,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             [[maybe_unused]] Int AdvertisedStageImageUniformLimit(ShaderStage stage) {
                 switch (stage) {
                 case ShaderStage::Vertex: return g_GLESCapabilities.MaxVertexImageUniforms;
+                case ShaderStage::TessControl: return g_GLESCapabilities.MaxTessControlImageUniforms;
+                case ShaderStage::TessEval: return g_GLESCapabilities.MaxTessEvaluationImageUniforms;
                 case ShaderStage::Geometry: return g_GLESCapabilities.MaxGeometryImageUniforms;
                 case ShaderStage::Fragment: return g_GLESCapabilities.MaxFragmentImageUniforms;
                 case ShaderStage::Compute: return g_GLESCapabilities.MaxComputeImageUniforms;

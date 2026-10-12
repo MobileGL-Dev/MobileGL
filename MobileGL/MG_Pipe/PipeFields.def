@@ -379,6 +379,7 @@
     F(MaxComputeWorkGroupCount) F(MaxComputeWorkGroupSize) F(MaxShaderStorageBufferBindings) \
     F(MaxTextureBufferSize) F(TextureBufferOffsetAlignment) F(MaxUniformBufferBindings) \
     F(MaxUniformBlockSize) F(MaxImageUnits) F(MaxCombinedImageUniforms) F(MaxVertexImageUniforms) \
+    F(MaxTessControlImageUniforms) F(MaxTessEvaluationImageUniforms) \
     F(MaxGeometryImageUniforms) F(MaxFragmentImageUniforms) F(MaxComputeImageUniforms) \
     F(MaxDrawBuffers) F(MaxColorAttachments) F(MaxClipDistances) F(MaxCullDistances) \
     F(MaxCombinedClipAndCullDistances) F(MaxViewports) F(LayerProvokingVertex) \

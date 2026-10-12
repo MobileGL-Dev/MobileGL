@@ -1281,6 +1281,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // device reports it, so these are the exact limits the logical device can compile and run.
         m_dynamicParameters.MaxVertexImageUniforms =
             m_vulkanCaps.SupportsVertexPipelineStoresAndAtomics ? maxPerStageImageUniforms : 0;
+        // The tessellation stages are vertex-pipeline stages too, so the same feature gates them.
+        m_dynamicParameters.MaxTessControlImageUniforms = m_dynamicParameters.MaxVertexImageUniforms;
+        m_dynamicParameters.MaxTessEvaluationImageUniforms = m_dynamicParameters.MaxVertexImageUniforms;
         m_dynamicParameters.MaxGeometryImageUniforms =
             m_vulkanCaps.SupportsVertexPipelineStoresAndAtomics && m_vulkanCaps.SupportsGeometryShader
                 ? maxPerStageImageUniforms

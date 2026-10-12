@@ -411,6 +411,8 @@ namespace MobileGL {
             Int MaxImageUnits = 8;
             Int MaxCombinedImageUniforms = 8;
             Int MaxVertexImageUniforms = 0;
+            Int MaxTessControlImageUniforms = 0;
+            Int MaxTessEvaluationImageUniforms = 0;
             Int MaxGeometryImageUniforms = 0;
             Int MaxFragmentImageUniforms = 8;
             Int MaxComputeImageUniforms = 8;

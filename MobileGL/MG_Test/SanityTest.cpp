@@ -664,6 +664,8 @@ TEST(DirectVulkanSanity, GatesPerStageImageUniformLimitsOnPhysicalDeviceFeatures
 
     const auto& withoutGeometry = backend.GetDynamicParameters();
     EXPECT_EQ(withoutGeometry.MaxVertexImageUniforms, 10);
+    EXPECT_EQ(withoutGeometry.MaxTessControlImageUniforms, 10);
+    EXPECT_EQ(withoutGeometry.MaxTessEvaluationImageUniforms, 10);
     EXPECT_EQ(withoutGeometry.MaxGeometryImageUniforms, 0);
     EXPECT_EQ(withoutGeometry.MaxFragmentImageUniforms, 10);
     EXPECT_EQ(withoutGeometry.MaxComputeImageUniforms, 9);
@@ -676,6 +678,8 @@ TEST(DirectVulkanSanity, GatesPerStageImageUniformLimitsOnPhysicalDeviceFeatures
     caps.SupportsFragmentStoresAndAtomics = false;
     backend.ApplyVulkanCapabilitiesForTesting(caps);
     EXPECT_EQ(backend.GetDynamicParameters().MaxVertexImageUniforms, 0);
+    EXPECT_EQ(backend.GetDynamicParameters().MaxTessControlImageUniforms, 0);
+    EXPECT_EQ(backend.GetDynamicParameters().MaxTessEvaluationImageUniforms, 0);
     EXPECT_EQ(backend.GetDynamicParameters().MaxGeometryImageUniforms, 0);
     EXPECT_EQ(backend.GetDynamicParameters().MaxFragmentImageUniforms, 0);
     EXPECT_EQ(backend.GetDynamicParameters().MaxComputeImageUniforms, 9);
@@ -689,6 +693,8 @@ TEST(DirectGLESSanity, PreservesHostPerStageImageUniformLimits) {
     caps.MaxImageUnits = 8;
     caps.MaxCombinedImageUniforms = 16;
     caps.MaxVertexImageUniforms = 2;
+    caps.MaxTessControlImageUniforms = 6;
+    caps.MaxTessEvaluationImageUniforms = 7;
     caps.MaxGeometryImageUniforms = 3;
     caps.MaxFragmentImageUniforms = 4;
     caps.MaxComputeImageUniforms = 5;
@@ -696,6 +702,8 @@ TEST(DirectGLESSanity, PreservesHostPerStageImageUniformLimits) {
 
     const auto& params = backend.GetDynamicParameters();
     EXPECT_EQ(params.MaxVertexImageUniforms, 2);
+    EXPECT_EQ(params.MaxTessControlImageUniforms, 6);
+    EXPECT_EQ(params.MaxTessEvaluationImageUniforms, 7);
     EXPECT_EQ(params.MaxGeometryImageUniforms, 3);
     EXPECT_EQ(params.MaxFragmentImageUniforms, 4);
     EXPECT_EQ(params.MaxComputeImageUniforms, 5);
@@ -1095,6 +1103,8 @@ TEST(GetterSanity, PerStageImageUniformQueriesMatchShaderCompilerLimits) {
     params.MaxImageUnits = 8;
     params.MaxCombinedImageUniforms = 8;
     params.MaxVertexImageUniforms = 1;
+    params.MaxTessControlImageUniforms = 5;
+    params.MaxTessEvaluationImageUniforms = 6;
     params.MaxGeometryImageUniforms = 2;
     params.MaxFragmentImageUniforms = 3;
     params.MaxComputeImageUniforms = 4;
@@ -1103,6 +1113,10 @@ TEST(GetterSanity, PerStageImageUniformQueriesMatchShaderCompilerLimits) {
     GLint reported = -1;
     MG_Impl::GLImpl::GetIntegerv(GL_MAX_VERTEX_IMAGE_UNIFORMS, &reported);
     EXPECT_EQ(reported, 1);
+    MG_Impl::GLImpl::GetIntegerv(GL_MAX_TESS_CONTROL_IMAGE_UNIFORMS, &reported);
+    EXPECT_EQ(reported, 5);
+    MG_Impl::GLImpl::GetIntegerv(GL_MAX_TESS_EVALUATION_IMAGE_UNIFORMS, &reported);
+    EXPECT_EQ(reported, 6);
     MG_Impl::GLImpl::GetIntegerv(GL_MAX_GEOMETRY_IMAGE_UNIFORMS, &reported);
     EXPECT_EQ(reported, 2);
     MG_Impl::GLImpl::GetIntegerv(GL_MAX_FRAGMENT_IMAGE_UNIFORMS, &reported);
@@ -1308,8 +1322,17 @@ TEST(GetterSanity, EveryLimitWithABuiltinAgreesWithItsQuery) {
     auto previousContext = MG_State::pGLContext.Take();
     auto previousBackend = Move(MG_Backend::pActiveBackendObject);
     MG_State::pGLContext = MakeUnique<MG_State::GLState::GLContext>();
-    MG_Backend::pActiveBackendObject =
-        MakeUnique<DynamicParameterBackend>(MG_Backend::DynamicBackendParameters{}, BackendType::DirectGLES);
+    // Distinct non-zero image-uniform limits, so the per-stage pairs below cannot agree by both
+    // falling back to the same default.
+    MG_Backend::DynamicBackendParameters params;
+    params.MaxVertexImageUniforms = 1;
+    params.MaxTessControlImageUniforms = 2;
+    params.MaxTessEvaluationImageUniforms = 3;
+    params.MaxGeometryImageUniforms = 4;
+    params.MaxFragmentImageUniforms = 5;
+    params.MaxComputeImageUniforms = 6;
+    params.MaxCombinedImageUniforms = 7;
+    MG_Backend::pActiveBackendObject = MakeUnique<DynamicParameterBackend>(params, BackendType::DirectGLES);
 
     struct LimitPair {
         GLenum pname;
@@ -1330,6 +1353,13 @@ TEST(GetterSanity, EveryLimitWithABuiltinAgreesWithItsQuery) {
         {GL_MAX_FRAGMENT_INPUT_COMPONENTS, "gl_MaxFragmentInputComponents"},
         {GL_MAX_DRAW_BUFFERS, "gl_MaxDrawBuffers"},
         {GL_MAX_IMAGE_UNITS, "gl_MaxImageUnits"},
+        {GL_MAX_VERTEX_IMAGE_UNIFORMS, "gl_MaxVertexImageUniforms"},
+        {GL_MAX_TESS_CONTROL_IMAGE_UNIFORMS, "gl_MaxTessControlImageUniforms"},
+        {GL_MAX_TESS_EVALUATION_IMAGE_UNIFORMS, "gl_MaxTessEvaluationImageUniforms"},
+        {GL_MAX_GEOMETRY_IMAGE_UNIFORMS, "gl_MaxGeometryImageUniforms"},
+        {GL_MAX_FRAGMENT_IMAGE_UNIFORMS, "gl_MaxFragmentImageUniforms"},
+        {GL_MAX_COMPUTE_IMAGE_UNIFORMS, "gl_MaxComputeImageUniforms"},
+        {GL_MAX_COMBINED_IMAGE_UNIFORMS, "gl_MaxCombinedImageUniforms"},
         // The SAME token (0x8F39) under two spellings, and the two glslang fields behind them
         // must therefore carry the same value.
         {GL_MAX_COMBINED_IMAGE_UNITS_AND_FRAGMENT_OUTPUTS, "gl_MaxCombinedImageUnitsAndFragmentOutputs"},

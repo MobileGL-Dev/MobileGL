@@ -1820,6 +1820,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                              m_dynamicParameters.MaxCombinedImageUniforms});
         };
         m_dynamicParameters.MaxVertexImageUniforms = clampStageImageUniforms(m_GLESCapabilities.MaxVertexImageUniforms);
+        m_dynamicParameters.MaxTessControlImageUniforms =
+            clampStageImageUniforms(m_GLESCapabilities.MaxTessControlImageUniforms);
+        m_dynamicParameters.MaxTessEvaluationImageUniforms =
+            clampStageImageUniforms(m_GLESCapabilities.MaxTessEvaluationImageUniforms);
         m_dynamicParameters.MaxGeometryImageUniforms =
             clampStageImageUniforms(m_GLESCapabilities.MaxGeometryImageUniforms);
         m_dynamicParameters.MaxFragmentImageUniforms =

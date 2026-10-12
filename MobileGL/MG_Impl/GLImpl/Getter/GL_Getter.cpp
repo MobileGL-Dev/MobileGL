@@ -2195,10 +2195,14 @@ namespace MobileGL::MG_Impl::GLImpl {
             *params = kFrontendMaxTessEvaluationAtomicCounterBuffers;
             return;
         case GL_MAX_TESS_CONTROL_IMAGE_UNIFORMS:
-            *params = 0;
+            *params = MG_Backend::pActiveBackendObject
+                          ? MG_Backend::pActiveBackendObject->GetDynamicParameters().MaxTessControlImageUniforms
+                          : MG_Backend::DynamicBackendParameters{}.MaxTessControlImageUniforms;
             return;
         case GL_MAX_TESS_EVALUATION_IMAGE_UNIFORMS:
-            *params = 0;
+            *params = MG_Backend::pActiveBackendObject
+                          ? MG_Backend::pActiveBackendObject->GetDynamicParameters().MaxTessEvaluationImageUniforms
+                          : MG_Backend::DynamicBackendParameters{}.MaxTessEvaluationImageUniforms;
             return;
         case GL_MAX_TESS_CONTROL_SHADER_STORAGE_BLOCKS:
             *params = StageStorageBlockCount(&MG_Backend::DynamicBackendParameters::MaxTessControlShaderStorageBlocks);

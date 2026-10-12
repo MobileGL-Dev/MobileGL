@@ -61,6 +61,8 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
         HashValue(state, env.params.MaxImageUnits);
         HashValue(state, env.params.MaxDrawBuffers);
         HashValue(state, env.params.MaxVertexImageUniforms);
+        HashValue(state, env.params.MaxTessControlImageUniforms);
+        HashValue(state, env.params.MaxTessEvaluationImageUniforms);
         HashValue(state, env.params.MaxGeometryImageUniforms);
         HashValue(state, env.params.MaxFragmentImageUniforms);
         HashValue(state, env.params.MaxComputeImageUniforms);
