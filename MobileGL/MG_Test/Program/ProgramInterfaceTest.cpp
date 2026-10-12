@@ -879,7 +879,9 @@ void main() {
 
     // The rest of fixOffset()'s rules, raised where the relaxed parse folds the counter: an
     // unsized counter array, a counter with no binding (there is no default binding - only a
-    // default offset), and a counter placed on top of an earlier one.
+    // default offset), and a counter placed on top of an earlier one. Plus a location qualifier,
+    // which an atomic counter cannot take (KHR-GL4x.layout_location.invalid_cases) and which the
+    // relaxed parse used to drop with only a warning.
     TEST_F(ProgramInterfaceTest, IllegalAtomicCounterDeclarationsFailToCompile) {
         const auto compiles = [](const char* source) {
             const GLuint sh = CreateShader(GL_FRAGMENT_SHADER);
@@ -907,6 +909,11 @@ layout(binding = 0, offset = 4) uniform atomic_uint a;
 layout(binding = 0, offset = 0) uniform atomic_uint b[2];
 void main() { color = vec4(float(atomicCounterIncrement(a) + atomicCounterIncrement(b[1]))); }
 )")) << "array overlapping an earlier counter";
+        EXPECT_FALSE(compiles(R"(#version 430
+out vec4 color;
+layout(location = 2, binding = 0) uniform atomic_uint ac;
+void main() { color = vec4(float(atomicCounterIncrement(ac))); }
+)")) << "location on an atomic counter";
         EXPECT_TRUE(compiles(R"(#version 430
 out vec4 color;
 layout(binding = 0, offset = 0) uniform atomic_uint a;
