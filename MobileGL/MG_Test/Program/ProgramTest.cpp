@@ -410,7 +410,51 @@ void main() {
 //     BUFFER block, so SPIRV-Reflect sees an ordinary storage descriptor for it and the
 //     backend's space has always contained it - even though GL's own GL_SHADER_STORAGE_BLOCK
 //     enumeration excludes it. The archive must follow the BACKEND's space, not GL's.
+namespace {
+    // A limits-only backend: what the link checks against comes from GetDynamicParameters, and the
+    // no-backend defaults are the spec minimums, which give the vertex stage no storage blocks.
+    class StorageBlockLimitsBackend final : public MG_Backend::BackendObject {
+    public:
+        StorageBlockLimitsBackend() {
+            m_params.MaxVertexShaderStorageBlocks = 8;
+            m_params.MaxCombinedShaderStorageBlocks = 16;
+            m_params.MaxShaderStorageBufferBindings = 16;
+        }
+        void Initialize() override {}
+        Bool InitCapabilities() override { return true; }
+        Bool InitWindowSurface() override { return true; }
+        const RendererInfo& GetRendererInfo() const override {
+            static RendererInfo info = {};
+            return info;
+        }
+        String GetBackendAPIVersionString() const override { return {}; }
+        const MG_Backend::GlobalBackendFunctionsTable& GetBackendFunctions() const override {
+            static MG_Backend::GlobalBackendFunctionsTable table = {};
+            return table;
+        }
+        const MG_Backend::DynamicBackendParameters& GetDynamicParameters() const override { return m_params; }
+        BackendType GetBackendType() const override { return BackendType::Unknown; }
+
+    private:
+        MG_Backend::DynamicBackendParameters m_params{};
+    };
+
+    class ScopedLimitsBackend {
+    public:
+        ScopedLimitsBackend(): m_previous(Move(MG_Backend::pActiveBackendObject)) {
+            MG_Backend::pActiveBackendObject = MakeUnique<StorageBlockLimitsBackend>();
+        }
+        ~ScopedLimitsBackend() { MG_Backend::pActiveBackendObject = Move(m_previous); }
+
+    private:
+        UniquePtr<MG_Backend::BackendObject> m_previous;
+    };
+} // namespace
+
 TEST_F(ProgramTest, TheArchivesStorageBlockOrderIsTheOneSpirvReflectProduces) {
+    // The vertex stage below uses storage blocks, which a link only accepts against a backend
+    // that advertises them.
+    const ScopedLimitsBackend limits;
     char infoLog[1024] = "";
     const char* vsSrc = R"(#version 460 core
 layout(std430, binding = 3) buffer Blocks {

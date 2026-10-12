@@ -905,6 +905,89 @@ void main() {
         }
     }
 
+    // The same rule for blocks (GL 4.6 core 7.6.2 / 7.8): a stage using more shader storage
+    // blocks than GL_MAX_<STAGE>_SHADER_STORAGE_BLOCKS fails the link. glslang does not count
+    // them, so a fragment stage with eight blocks against an advertised four reported
+    // LINK_STATUS = TRUE and then failed inside the backend. Sized off the advertised limit.
+    TEST_F(ProgramInterfaceTest, StorageBlocksOverAStageLimitFailToLink) {
+        GLint maxFragmentBlocks = 0;
+        GLint maxCombinedBlocks = 0;
+        GetIntegerv(GL_MAX_FRAGMENT_SHADER_STORAGE_BLOCKS, &maxFragmentBlocks);
+        GetIntegerv(GL_MAX_COMBINED_SHADER_STORAGE_BLOCKS, &maxCombinedBlocks);
+        ClearErrors();
+        ASSERT_GT(maxFragmentBlocks, 0);
+
+        // Bindings wrap at the limit: two blocks may share a binding point, and a binding past
+        // GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS would fail for a different reason.
+        const auto linkWithFragmentBlocks = [maxFragmentBlocks](GLint count) {
+            std::string source = "#version 430\nout vec4 color;\n";
+            std::string sum = "0.0";
+            for (GLint i = 0; i < count; ++i) {
+                const std::string n = std::to_string(i);
+                source += "layout(std430, binding = " + std::to_string(i % maxFragmentBlocks) + ") buffer B" + n +
+                          " { float v" + n + "; };\n";
+                sum += " + v" + n;
+            }
+            source += "void main() { color = vec4(" + sum + "); }\n";
+            return MakeProgram(kSimpleVs, source.c_str());
+        };
+
+        const GLuint over = linkWithFragmentBlocks(maxFragmentBlocks + 1);
+        LinkProgram(over);
+        GLint status = -1;
+        GetProgramiv(over, GL_LINK_STATUS, &status);
+        EXPECT_EQ(status, GL_FALSE);
+        char log[4096] = "";
+        GetProgramInfoLog(over, sizeof(log), nullptr, log);
+        EXPECT_NE(std::string(log).find("GL_MAX_FRAGMENT_SHADER_STORAGE_BLOCKS"), std::string::npos)
+            << "info log was: " << log;
+        ClearErrors();
+
+        if (maxFragmentBlocks <= maxCombinedBlocks) {
+            const GLuint atLimit = linkWithFragmentBlocks(maxFragmentBlocks);
+            LinkProgram(atLimit);
+            ExpectLinked(atLimit);
+            ClearErrors();
+        }
+    }
+
+    // Uniform blocks are counted the same way, and the synthesized block that carries the
+    // default-block uniforms is not one of them.
+    TEST_F(ProgramInterfaceTest, UniformBlocksOverAStageLimitFailToLink) {
+        GLint maxFragmentBlocks = 0;
+        GetIntegerv(GL_MAX_FRAGMENT_UNIFORM_BLOCKS, &maxFragmentBlocks);
+        ClearErrors();
+        ASSERT_GT(maxFragmentBlocks, 0);
+
+        const auto linkWithFragmentBlocks = [](GLint count) {
+            std::string source = "#version 430\nout vec4 color;\nuniform float loose;\n";
+            std::string sum = "loose";
+            for (GLint i = 0; i < count; ++i) {
+                const std::string n = std::to_string(i);
+                source += "layout(std140) uniform U" + n + " { float u" + n + "; };\n";
+                sum += " + u" + n;
+            }
+            source += "void main() { color = vec4(" + sum + "); }\n";
+            return MakeProgram(kSimpleVs, source.c_str());
+        };
+
+        const GLuint over = linkWithFragmentBlocks(maxFragmentBlocks + 1);
+        LinkProgram(over);
+        GLint status = -1;
+        GetProgramiv(over, GL_LINK_STATUS, &status);
+        EXPECT_EQ(status, GL_FALSE);
+        char log[4096] = "";
+        GetProgramInfoLog(over, sizeof(log), nullptr, log);
+        EXPECT_NE(std::string(log).find("GL_MAX_FRAGMENT_UNIFORM_BLOCKS"), std::string::npos)
+            << "info log was: " << log;
+        ClearErrors();
+
+        const GLuint atLimit = linkWithFragmentBlocks(maxFragmentBlocks);
+        LinkProgram(atLimit);
+        ExpectLinked(atLimit);
+        ClearErrors();
+    }
+
     // glGetProgramiv(GL_ACTIVE_ATOMIC_COUNTER_BUFFERS) and glGetActiveAtomicCounterBufferiv are
     // the pre-4.3 spelling of the interface above, and the spec requires the two to agree.
     // Neither did: the first counted glslang's atomic counter UNIFORMS - zero, because the

@@ -80,6 +80,11 @@ namespace MobileGL {
             inline constexpr Int MAX_ATOMIC_COUNTER_BUFFERS_PER_STAGE = 8;
             inline constexpr Int MAX_ATOMIC_COUNTERS_PER_STAGE = 8;
 
+            // GL_MAX_{VERTEX,TESS_CONTROL,TESS_EVALUATION,GEOMETRY,FRAGMENT}_UNIFORM_BLOCKS. No
+            // built-in constant expands from these, but the link fails a program that uses more
+            // (ProgramLinkTask's block-count check), so the getter and the check share one number.
+            inline constexpr Int MAX_GRAPHICS_STAGE_UNIFORM_BLOCKS = 14;
+
             // ---- Tessellation per-stage resource limits ----
             //
             // Here for exactly the reason the atomic-counter block above is here. GL 4.6 requires

@@ -118,23 +118,28 @@ namespace MobileGL::MG_Impl::GLImpl {
             static_cast<GLint>(MG_Util::ShaderTranspiler::MAX_VERTEX_UNIFORM_COMPONENTS);
         constexpr GLint kFrontendMaxVertexUniformVectors =
             static_cast<GLint>(MG_Util::ShaderTranspiler::MAX_VERTEX_UNIFORM_VECTORS);
-        constexpr GLint kFrontendMaxVertexUniformBlocks = 14;
+        constexpr GLint kFrontendMaxVertexUniformBlocks =
+            static_cast<GLint>(MG_Util::ShaderTranspiler::MAX_GRAPHICS_STAGE_UNIFORM_BLOCKS);
         constexpr GLint kFrontendMaxVertexOutputComponents = 64;
         constexpr GLint kFrontendMaxFragmentInputComponents = 128;
         constexpr GLint kFrontendMaxFragmentUniformComponents = 4096;
         constexpr GLint kFrontendMaxFragmentUniformVectors = 256;
-        constexpr GLint kFrontendMaxFragmentUniformBlocks = 14;
+        constexpr GLint kFrontendMaxFragmentUniformBlocks =
+            static_cast<GLint>(MG_Util::ShaderTranspiler::MAX_GRAPHICS_STAGE_UNIFORM_BLOCKS);
         constexpr GLint kFrontendMaxGeometryInputComponents = 64;
         constexpr GLint kFrontendMaxGeometryOutputComponents = 128;
         constexpr GLint kFrontendMaxGeometryTextureImageUnits = 16;
         constexpr GLint kFrontendMaxGeometryUniformComponents = 1024;
-        constexpr GLint kFrontendMaxGeometryUniformBlocks = 14;
+        constexpr GLint kFrontendMaxGeometryUniformBlocks =
+            static_cast<GLint>(MG_Util::ShaderTranspiler::MAX_GRAPHICS_STAGE_UNIFORM_BLOCKS);
         // ARB_geometry_shader4's per-invocation count. No TBuiltInResource field and no
         // gl_MaxGeometryShaderInvocations built-in exists to keep in step, so this is a getter
         // answer only; 32 is the GL 4.6 core minimum (table 23.57).
         constexpr GLint kFrontendMaxGeometryShaderInvocations = 32;
-        constexpr GLint kFrontendMaxTessControlUniformBlocks = 14;
-        constexpr GLint kFrontendMaxTessEvaluationUniformBlocks = 14;
+        constexpr GLint kFrontendMaxTessControlUniformBlocks =
+            static_cast<GLint>(MG_Util::ShaderTranspiler::MAX_GRAPHICS_STAGE_UNIFORM_BLOCKS);
+        constexpr GLint kFrontendMaxTessEvaluationUniformBlocks =
+            static_cast<GLint>(MG_Util::ShaderTranspiler::MAX_GRAPHICS_STAGE_UNIFORM_BLOCKS);
         // The compute stage's share of the combined sum below. Compute's own per-stage answer is
         // backend-derived (GL_MAX_COMPUTE_UNIFORM_BLOCKS reads dynamicParameters), so this is not
         // what that query returns - it is the GL 4.3 core minimum, present here only so the

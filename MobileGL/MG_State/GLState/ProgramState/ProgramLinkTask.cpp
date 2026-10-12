@@ -351,6 +351,106 @@ namespace {
         return {};
     }
 
+    // GL 4.6 core 7.6.2 / 7.8: LinkProgram FAILS when a stage uses more active uniform blocks or
+    // shader storage blocks than its GL_MAX_<STAGE>_* limit, or the stages together more than the
+    // GL_MAX_COMBINED_* one (a block used by two stages counts once per stage). glslang counts
+    // neither, so a program over a limit used to report LINK_STATUS = TRUE and then fail inside
+    // the backend - a fragment stage with eight storage blocks against an advertised four linked
+    // cleanly and rendered nothing.
+    //
+    // The limits are the ones glGetIntegerv answers (the storage family clamped to the backend's
+    // binding count as the getter clamps it); the synthesized global uniform block holds
+    // default-block uniforms and is not a GL block at all. An instance array costs one block per
+    // element, reconciled per name exactly as image arrays are above.
+    //
+    // Atomic counter buffers are deliberately NOT counted here. Their pre-fragment limits are a
+    // frontend 0 while every backend serves a counter as a lowered storage block in any stage,
+    // so enforcing that number would only start refusing programs that run today.
+    static MobileGL::String ValidateBlockLimits(glslang::TProgram& reflection,
+                                                const MobileGL::MG_Util::ShaderTranspiler::CompileEnv& env) {
+        using MobileGL::Array;
+        using MobileGL::Int;
+        using MobileGL::SizeT;
+        using MobileGL::UnorderedMap;
+        namespace Transpiler = MobileGL::MG_Util::ShaderTranspiler;
+
+        static constexpr EShLanguage kStages[] = {EShLangVertex,   EShLangTessControl, EShLangTessEvaluation,
+                                                  EShLangGeometry, EShLangFragment,    EShLangCompute};
+        static constexpr const char* kStageNames[] = {"VERTEX",   "TESS_CONTROL", "TESS_EVALUATION",
+                                                      "GEOMETRY", "FRAGMENT",     "COMPUTE"};
+        constexpr SizeT kStageCount = sizeof(kStages) / sizeof(kStages[0]);
+
+        enum Family : SizeT { kUniform = 0, kStorage, kFamilyCount };
+        static constexpr const char* kFamilyNames[] = {"UNIFORM_BLOCKS", "SHADER_STORAGE_BLOCKS"};
+        static constexpr const char* kFamilyNouns[] = {"uniform blocks", "shader storage blocks"};
+
+        const auto& p = env.params;
+        const Int storageBindings = std::max(p.MaxShaderStorageBufferBindings, 0);
+        const auto clampStorage = [storageBindings](Int limit) { return std::min(std::max(limit, 0), storageBindings); };
+        const Int graphicsUniform = Transpiler::MAX_GRAPHICS_STAGE_UNIFORM_BLOCKS;
+        const Int combinedUniform = 6 * graphicsUniform;
+        const Int limits[kFamilyCount][kStageCount] = {
+            {graphicsUniform, graphicsUniform, graphicsUniform, graphicsUniform, graphicsUniform,
+             std::min(std::max(p.MaxComputeUniformBlocks, 0), combinedUniform)},
+            {clampStorage(p.MaxVertexShaderStorageBlocks), clampStorage(p.MaxTessControlShaderStorageBlocks),
+             clampStorage(p.MaxTessEvaluationShaderStorageBlocks), clampStorage(p.MaxGeometryShaderStorageBlocks),
+             clampStorage(p.MaxFragmentShaderStorageBlocks), clampStorage(p.MaxComputeShaderStorageBlocks)},
+        };
+        const Int combinedLimits[kFamilyCount] = {combinedUniform, clampStorage(p.MaxCombinedShaderStorageBlocks)};
+
+        struct BlockUse {
+            Int entries = 0;
+            Int declared = 0;
+        };
+        UnorderedMap<MobileGL::String, Array<BlockUse, kStageCount>> useByName[kFamilyCount];
+
+        const Int blockCount = reflection.getNumUniformBlocks();
+        for (Int i = 0; i < blockCount; ++i) {
+            const auto& block = reflection.getUniformBlock(i);
+            if (std::strstr(block.name.c_str(), Transpiler::GLOBAL_UBO_NAME) != nullptr) continue;
+            if (IsAtomicCounterBlockName(block.name)) continue;
+            const Family family = IsStorageBlock(block) ? kStorage : kUniform;
+            Int elements = 1;
+            if (const glslang::TType* type = block.getType(); type != nullptr && type->isSizedArray()) {
+                elements = type->getCumulativeArraySize();
+            }
+            Array<BlockUse, kStageCount>* use = nullptr;
+            for (SizeT stage = 0; stage < kStageCount; ++stage) {
+                if ((static_cast<unsigned>(block.stages) & (1u << static_cast<unsigned>(kStages[stage]))) == 0) {
+                    continue;
+                }
+                if (use == nullptr) use = &useByName[family][StripArrayElementSuffix(block.name)];
+                ++(*use)[stage].entries;
+                (*use)[stage].declared = std::max((*use)[stage].declared, elements);
+            }
+        }
+
+        for (SizeT family = 0; family < kFamilyCount; ++family) {
+            Int counts[kStageCount] = {};
+            for (const auto& entry : useByName[family]) {
+                for (SizeT stage = 0; stage < kStageCount; ++stage) {
+                    counts[stage] += std::max(entry.second[stage].entries, entry.second[stage].declared);
+                }
+            }
+            Int combined = 0;
+            for (SizeT stage = 0; stage < kStageCount; ++stage) {
+                combined += counts[stage];
+                if (counts[stage] > limits[family][stage]) {
+                    return std::format("This program uses {} active {} in one stage, more than the {} "
+                                       "GL_MAX_{}_{} allows.",
+                                       counts[stage], kFamilyNouns[family], limits[family][stage],
+                                       kStageNames[stage], kFamilyNames[family]);
+                }
+            }
+            if (combined > combinedLimits[family]) {
+                return std::format("This program uses {} active {} across its stages, more than the {} "
+                                   "GL_MAX_COMBINED_{} allows.",
+                                   combined, kFamilyNouns[family], combinedLimits[family], kFamilyNames[family]);
+            }
+        }
+        return {};
+    }
+
     static bool IsBuiltInPipelineOutput(const glslang::TObjectReflection& output) {
         const auto* type = output.getType();
         return type && type->getQualifier().builtIn != glslang::EbvNone;
@@ -1139,6 +1239,13 @@ namespace MobileGL::MG_State::GLState {
         if (String imageUniformError = ValidateImageUniformLimits(*artifacts.program, env);
             !imageUniformError.empty()) {
             artifacts.infoLog = Move(imageUniformError);
+            DeferLog(std::format("ProgramObject {}: Link failed - {}", in.externalIndex, artifacts.infoLog));
+            ProgramObject::ResetLinkArtifacts(artifacts);
+            return false;
+        }
+
+        if (String blockLimitError = ValidateBlockLimits(*artifacts.program, env); !blockLimitError.empty()) {
+            artifacts.infoLog = Move(blockLimitError);
             DeferLog(std::format("ProgramObject {}: Link failed - {}", in.externalIndex, artifacts.infoLog));
             ProgramObject::ResetLinkArtifacts(artifacts);
             return false;
