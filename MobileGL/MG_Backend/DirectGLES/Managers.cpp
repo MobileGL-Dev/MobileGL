@@ -3528,7 +3528,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // AND PUBLISH IT, because the readers that have NO frontend object read
             // resource->hostBytes and nothing else: the readback flush (Ops_H_Readback), the
             // kill-switch map arm of Ops_H_FlushRange, and the fp64 narrowing
-            // (SyncFloat64AttributeAsFloat32ByHandle, whose legacy counterpart reads
+            // (SyncConvertedAttributeByHandle, whose legacy counterpart reads
             // bufferObject->MappedData()). A twin is created LAZILY - D-A2's row makes
             // Ops_H_Create a no-op - so the very first resource_respecify of a buffer finds
             // FindBufferResourceForHandle == nullptr and its base is dropped on the floor; with
@@ -4727,6 +4727,38 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     }
                 }
             }
+
+            // GL_BGRA as a vertex SIZE is desktop-only - ES rejects it outright - and it means
+            // nothing more than "the element's first and third components are stored swapped".
+            // So the element is put back in RGBA order and fetched as an ordinary size-4 array of
+            // the same type: for GL_UNSIGNED_BYTE the first and third BYTES swap, for the two
+            // 2_10_10_10_REV types the 10-bit fields in bits 0-9 and 20-29 (the core spec's packed
+            // component layout: with BGRA, x comes from bits 20-29 and z from bits 0-9). The 2-bit
+            // w field and the middle field stay where they are. Elements are copied word-wise, so
+            // no source alignment is assumed; the output is tightly packed, one word per element.
+            void SwizzleBgraElementToRgba(Uint8* element, DataType type) {
+                if (type == DataType::Uint8) {
+                    std::swap(element[0], element[2]);
+                    return;
+                }
+                Uint32 word = 0;
+                Memcpy(&word, element, sizeof(word));
+                constexpr Uint32 kField = 0x3FFu;
+                const Uint32 low = word & kField;
+                const Uint32 high = (word >> 20) & kField;
+                word = (word & ~(kField | (kField << 20))) | high | (low << 20);
+                Memcpy(element, &word, sizeof(word));
+            }
+
+            void SwizzleBgraStreamToRgba(const Uint8* sourceBase, SizeT sourceStride, SizeT elementCount,
+                                         DataType type, Vector<Uint8>& outData) {
+                outData.resize(elementCount * 4);
+                for (SizeT element = 0; element < elementCount; ++element) {
+                    Uint8* destination = outData.data() + element * 4;
+                    Memcpy(destination, sourceBase + element * sourceStride, 4);
+                    SwizzleBgraElementToRgba(destination, type);
+                }
+            }
         } // namespace
 
         BackendVertexArrayObject::BackendVertexArrayObject() {
@@ -4924,7 +4956,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 return false;
             }
             if (!attrib.IsInteger) {
-                const GLint glSize = attrib.IsBgra ? static_cast<GLint>(GL_BGRA) : static_cast<GLint>(attrib.Size);
+                const GLint glSize = static_cast<GLint>(attrib.Size);
                 g_GLESFuncs.glVertexAttribFormat(attribIndex, glSize,
                                                  MG_Util::ConvertDataTypeToGLEnum(static_cast<DataType>(attrib.Type)),
                                                  attrib.Normalized ? GL_TRUE : GL_FALSE, 0);
@@ -4976,7 +5008,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         // The same function, driven by the applier's records (D-G4). Every branch of the walk
         // survives - the enable/disable block, the fp64 narrowing with its Adreno disable, the
-        // zero-stride binding-API path, the attribute-buffer bind, the BGRA refusal probe, the
+        // zero-stride binding-API path, the attribute-buffer bind, the BGRA swizzle, the
         // pointer/IPointer at the shifted fetch offset and the divisor - and the gate is
         // re-keyed onto three server-owned MGGen counters plus the CSO's {slot, gen}:
         //
@@ -4988,7 +5020,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         //                                                        still the only thing that
         //                                                        catches a driver-id re-mint no
         //                                                        counter on either side moves
-        //   m_hasConvertedFloat64Attribute                    <- UNCHANGED: a narrowed stream is
+        //   m_hasConvertedAttribute                           <- UNCHANGED: a narrowed stream is
         //                                                        derived from buffer CONTENT,
         //                                                        which no serial covers
         //   m_syncedFetchBaseInstance                         <- no longer in the gate as a
@@ -5039,7 +5071,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             const Uint32 fetchBaseInstance =
                 BackendUsesNativeBaseInstance() ? 0u : st.VertexFetchBaseInstance;
             const Bool baseInstanceDirty = m_syncedFetchBaseInstance != fetchBaseInstance;
-            const Bool emitAttributes = attributesDirty || baseInstanceDirty || m_hasConvertedFloat64Attribute;
+            const Bool emitAttributes = attributesDirty || baseInstanceDirty || m_hasConvertedAttribute;
             if (!emitAttributes && !indexBufferDirty) {
                 return;
             }
@@ -5052,9 +5084,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // through other state, and the client-memory upload rewrites the VAO behind this
             // gate, so any of them sends the next sync through the whole walk again.
             const Bool buffersOnly = emitAttributes && !elementsDirty && m_lastWalkWasPlain &&
-                                     !m_hasConvertedFloat64Attribute;
+                                     !m_hasConvertedAttribute;
             Bool walkWasPlain = true;
-            m_hasConvertedFloat64Attribute = false;
+            m_hasConvertedAttribute = false;
+            // Rebuilt by every walk; a buffers-only one follows a plain walk, which set none.
+            if (emitAttributes && !buffersOnly) m_disabledEnabledAttribMask = 0;
 
             Bind();
             if (m_hostPointerBufferGeneration != currentBufferIdGeneration) {
@@ -5094,13 +5128,20 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // the next draw (KHR-GL43.vertex_attrib_binding.basic-input-case4). IsLong is
                 // carried separately from Type == Float64 on the wire precisely so this test
                 // can still tell the two apart.
-                if (attrib.IsLong || attrib.Type == static_cast<Uint32>(DataType::Float64)) {
+                //
+                // A GL_BGRA-sized array takes the same stream, swizzled instead of narrowed, and
+                // the same disable when it cannot be built: GL_BGRA as a vertex SIZE is
+                // desktop-only, ES rejects it, and the rejected call leaves the array ENABLED
+                // with no pointer - the shape the Adreno driver dereferences null on inside the
+                // next draw (KHR-GL43.vertex_attrib_binding.basic-input-case5).
+                const Bool bgraArray = attrib.IsBgra != 0 && !attrib.IsInteger;
+                if (attrib.IsLong || attrib.Type == static_cast<Uint32>(DataType::Float64) || bgraArray) {
                     walkWasPlain = false;
-                    if (attrib.Enabled && attrib.Type == static_cast<Uint32>(DataType::Float64) &&
-                        binding != nullptr &&
-                        SyncFloat64AttributeAsFloat32ByHandle(attribIndex, attrib, *binding, fetchBaseInstance)) {
-                        m_hasConvertedFloat64Attribute = true;
-                        // The narrowing pointed the attribute at its own stream (and may have
+                    const Bool convertible = bgraArray || attrib.Type == static_cast<Uint32>(DataType::Float64);
+                    if (attrib.Enabled && convertible && binding != nullptr &&
+                        SyncConvertedAttributeByHandle(attribIndex, attrib, *binding, fetchBaseInstance)) {
+                        m_hasConvertedAttribute = true;
+                        // The conversion pointed the attribute at its own stream (and may have
                         // used the binding API), so the pointer and divisor shadow are stale.
                         // An earlier walk that could not build the stream disabled this array.
                         m_hostPointer[attribIndex].valid = false;
@@ -5110,9 +5151,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         continue;
                     }
                     if (attrib.Enabled) {
-                        MGLOG_W_ONCE("DirectGLES: vertex attribute %u is a 64-bit (GL_DOUBLE) array whose source "
-                                     "stream could not be narrowed to float32 - disabling the array",
-                                     attribIndex);
+                        MGLOG_W_ONCE("DirectGLES: vertex attribute %u is a %s array whose source stream could not "
+                                     "be converted - disabling the array",
+                                     attribIndex, bgraArray ? "GL_BGRA" : "64-bit (GL_DOUBLE)");
+                        // The draw now reads the attribute's current generic value, which the
+                        // application had no reason to set for an enabled array.
+                        m_disabledEnabledAttribMask |= 1u << attribIndex;
                     }
                     HostSetEnabled(attribIndex, false);
                     continue;
@@ -5155,30 +5199,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     continue;
                 }
 
-                // GL_BGRA as a vertex SIZE is desktop-only and ES rejects it, which leaves the
-                // array ENABLED with no pointer - and the Adreno driver then dereferences null
-                // inside the next draw (KHR-GL43.vertex_attrib_binding.basic-input-case5). So
-                // the refusal is observed and the array disabled. Deliberately ONLY this
-                // format: the per-draw sync must not grow a glGetError round trip for the
-                // formats real applications use.
-                const Bool formatMayBeRefused = attrib.IsBgra != 0;
-                if (formatMayBeRefused) walkWasPlain = false;
-                if (formatMayBeRefused) {
-                    while (g_GLESFuncs.glGetError() != GL_NO_ERROR) {
-                    } // start from a clean slate so the check below is about THIS call
-                }
-
                 const SizeT fetchOffset = static_cast<SizeT>(attrib.Offset) +
                                           BaseInstanceByteShiftWire(attrib.Stride, divisor, fetchBaseInstance);
                 const GLenum glType = MG_Util::ConvertDataTypeToGLEnum(static_cast<DataType>(attrib.Type));
-                const GLint glSize = (!attrib.IsInteger && attrib.IsBgra) ? static_cast<GLint>(GL_BGRA)
-                                                                          : static_cast<GLint>(attrib.Size);
+                const GLint glSize = static_cast<GLint>(attrib.Size);
 
                 // The pointer the driver VAO already holds for this attribute - the buffer it
-                // captured included - needs no glBindBuffer + pointer call. A format that may be
-                // refused always goes to the driver, since its glGetError is the point.
+                // captured included - needs no glBindBuffer + pointer call.
                 auto& shadowPointer = m_hostPointer[attribIndex];
-                const Bool pointerHeld = VaoShadowOn() && !formatMayBeRefused && shadowPointer.valid &&
+                const Bool pointerHeld = VaoShadowOn() && shadowPointer.valid &&
                                          shadowPointer.bufferId == attribBuffer->id && shadowPointer.size == glSize &&
                                          shadowPointer.type == static_cast<Uint32>(glType) &&
                                          shadowPointer.stride == static_cast<Int32>(attrib.Stride) &&
@@ -5198,17 +5227,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     shadowPointer = {attribBuffer->id, glSize, static_cast<Uint32>(glType),
                                      static_cast<Int32>(attrib.Stride), fetchOffset, attrib.Normalized != 0,
                                      attrib.IsInteger != 0, true};
-                }
-
-                if (formatMayBeRefused && g_GLESFuncs.glGetError() != GL_NO_ERROR) {
-                    MGLOG_W_ONCE("DirectGLES: the driver refused the vertex format of attribute %u "
-                                 "(size=%d bgra=%d type=%s) - disabling the array so the draw cannot "
-                                 "fetch through a pointer the driver never accepted",
-                                 attribIndex, static_cast<int>(attrib.Size), attrib.IsBgra ? 1 : 0,
-                                 MG_Util::ConvertGLEnumToString(glType).c_str());
-                    shadowPointer.valid = false;
-                    HostSetEnabled(attribIndex, false);
-                    continue;
                 }
 
                 HostSetDivisor(attribIndex, divisor);
@@ -5395,8 +5413,20 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     }
                 }
 
+                // A GL_BGRA array is swizzled into RGBA order on the way, as on the buffer path
+                // (SyncConvertedAttributeByHandle): ES has no BGRA vertex size to declare.
+                const Bool bgra = attrib.IsBgra && !attrib.IsInteger;
+                Vector<Uint8> swizzled;
+                if (bgra) {
+                    swizzled.assign(clientData, clientData + uploadSize);
+                    for (SizeT element = 0; element < static_cast<SizeT>(first + count); ++element) {
+                        SwizzleBgraElementToRgba(swizzled.data() + element * stride, attrib.Type);
+                    }
+                }
+
                 BufferImpl::BindBufferId(GL_ARRAY_BUFFER, bufferId);
-                g_GLESFuncs.glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(uploadSize), clientData,
+                g_GLESFuncs.glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(uploadSize),
+                                         bgra ? static_cast<const void*>(swizzled.data()) : clientData,
                                          GL_STREAM_DRAW);
                 if (MG_Util::PipeStats::Enabled()) {
                     MG_Util::PipeStats::AddBytes(MG_Util::PipeStats::ByteClass::StageVertexClient,
@@ -5404,7 +5434,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
 
                 if (!attrib.IsInteger) {
-                    const GLint glSize = attrib.IsBgra ? static_cast<GLint>(GL_BGRA) : attrib.Size;
+                    const GLint glSize = bgra ? 4 : attrib.Size;
                     g_GLESFuncs.glVertexAttribPointer(
                         attribIndex, glSize, MG_Util::ConvertDataTypeToGLEnum(attrib.Type),
                         attrib.Normalized ? GL_TRUE : GL_FALSE, static_cast<GLsizei>(stride),
@@ -5426,7 +5456,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
 
 
-        Bool BackendVertexArrayObject::SyncFloat64AttributeAsFloat32ByHandle(
+        Bool BackendVertexArrayObject::SyncConvertedAttributeByHandle(
             Uint attribIndex, const MGPVertexAttribWire& attrib, const MG_Pipe::MGPVertexBuffer& binding,
             Uint32 fetchBaseInstance) {
 #ifdef TRACY_ENABLE
@@ -5435,6 +5465,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (attribIndex >= m_convertedAttributeBufferIds.size() || attrib.Size < 1 || attrib.Size > 4) {
                 return false;
             }
+            // Which of the two conversions: a BGRA array is a 4-byte element whatever its type,
+            // and only the three types GL allows with it reach here (the frontend refuses the
+            // rest at the format call).
+            const DataType sourceType = static_cast<DataType>(attrib.Type);
+            const Bool bgra = attrib.IsBgra != 0;
+            if (bgra && sourceType != DataType::Uint8 && sourceType != DataType::Int2101010Rev &&
+                sourceType != DataType::Uint2101010Rev) {
+                return false;
+            }
+            if (!bgra && sourceType != DataType::Float64) return false;
             if (MG_Pipe::MGPipeHandleIsNull(binding.Res)) {
                 // A client-memory 64-bit array is narrowed on the draw path instead, which is
                 // the only place its fetch range is known.
@@ -5481,7 +5521,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             const Bool sourceGpuWritten =
                 resource->serverGpuWritten;
             if (sourceGpuWritten) {
-                BufferImpl::SplitHostBytesForCpuRead(*resource, binding.Res, "fp64_vertex_narrowing");
+                BufferImpl::SplitHostBytesForCpuRead(*resource, binding.Res,
+                                                     bgra ? "bgra_vertex_swizzle" : "fp64_vertex_narrowing");
             }
             const Uint8* const sourceBase =
                 (resource->persistentMapped && resource->persistentPtr != nullptr)
@@ -5492,8 +5533,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 return false;
             }
 
+            // A BGRA element is always one 32-bit word, and so is its RGBA replacement; a 64-bit
+            // element narrows to the float32 vector of the same component count.
             const SizeT componentCount = static_cast<SizeT>(attrib.Size);
-            const SizeT sourceElementSize = componentCount * sizeof(Double);
+            const SizeT sourceElementSize = bgra ? 4 : componentCount * sizeof(Double);
+            const SizeT convertedElementSize = bgra ? 4 : componentCount * sizeof(Float);
             const SizeT available = sourceSize - static_cast<SizeT>(attrib.Offset);
             if (available < sourceElementSize) {
                 return false;
@@ -5517,60 +5561,82 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // frontend lifetime id, and the freshness input is the applier's server-owned
             // Serial instead of the frontend change serial. A PERSISTENTLY MAPPED source is
             // still never trusted - it is written through the pointer with no call at all, so
-            // no serial on either side can prove the converted copy is current.
+            // no serial on either side can prove the converted copy is current. The conversion
+            // itself is part of the key: one attribute index can carry both shapes over its life,
+            // over the same bytes.
             const Bool memoHit = stream.valid && convertedBufferId != 0 && !resource->persistentMapped &&
                                  !sourceGpuWritten && stream.sourceHandle == binding.Res &&
                                  stream.sourceChangeSerial == sourceSerial &&
                                  stream.sourceOffset == static_cast<SizeT>(attrib.Offset) &&
-                                 stream.sourceStride == sourceStride &&
-                                 stream.componentCount == componentCount && stream.elementCount == elementCount;
+                                 stream.sourceStride == sourceStride && stream.bgra == bgra &&
+                                 stream.sourceType == attrib.Type && stream.componentCount == componentCount &&
+                                 stream.elementCount == elementCount;
             if (!memoHit) {
                 if (convertedBufferId == 0) {
                     g_GLESFuncs.glGenBuffers(1, &convertedBufferId);
                     if (convertedBufferId == 0) {
-                        MGLOG_E_ONCE("Failed to create the float32 scratch buffer for the 64-bit vertex array at "
+                        MGLOG_E_ONCE("Failed to create the scratch buffer for the converted vertex array at "
                                      "attribute %u.",
                                      attribIndex);
                         return false;
                     }
                 }
-                Vector<Float> converted;
-                NarrowDoubleStreamToFloat32(sourceBase + attrib.Offset, sourceStride, componentCount, elementCount,
-                                            converted);
+                Vector<Float> narrowed;
+                Vector<Uint8> swizzled;
+                const void* convertedData = nullptr;
+                SizeT convertedBytes = 0;
+                if (bgra) {
+                    SwizzleBgraStreamToRgba(sourceBase + attrib.Offset, sourceStride, elementCount, sourceType,
+                                            swizzled);
+                    convertedData = swizzled.data();
+                    convertedBytes = swizzled.size();
+                } else {
+                    NarrowDoubleStreamToFloat32(sourceBase + attrib.Offset, sourceStride, componentCount,
+                                                elementCount, narrowed);
+                    convertedData = narrowed.data();
+                    convertedBytes = narrowed.size() * sizeof(Float);
+                }
                 BufferImpl::BindBufferId(GL_ARRAY_BUFFER, convertedBufferId);
-                g_GLESFuncs.glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(converted.size() * sizeof(Float)),
-                                         converted.data(), GL_STREAM_DRAW);
+                g_GLESFuncs.glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(convertedBytes), convertedData,
+                                         GL_STREAM_DRAW);
                 if (MG_Util::PipeStats::Enabled()) {
                     MG_Util::PipeStats::AddBytes(MG_Util::PipeStats::ByteClass::StageVertexClient,
-                                                 static_cast<Uint64>(converted.size() * sizeof(Float)));
+                                                 static_cast<Uint64>(convertedBytes));
                 }
                 stream.valid = true;
                 stream.sourceHandle = binding.Res;
                 stream.sourceChangeSerial = sourceSerial;
                 stream.sourceOffset = static_cast<SizeT>(attrib.Offset);
                 stream.sourceStride = sourceStride;
+                stream.bgra = bgra;
+                stream.sourceType = attrib.Type;
                 stream.componentCount = componentCount;
                 stream.elementCount = elementCount;
-                MGLOG_D("DirectGLES: narrowed the 64-bit vertex array at attribute %u to %zu float32 element(s).",
-                        attribIndex, elementCount);
+                MGLOG_D("DirectGLES: converted the %s vertex array at attribute %u, %zu element(s).",
+                        bgra ? "BGRA" : "64-bit", attribIndex, elementCount);
             }
 
-            const SizeT convertedElementSize = componentCount * sizeof(Float);
+            // What the converted stream is to the driver. The swizzled BGRA stream keeps its
+            // source type and `normalized` (GL accepts BGRA only normalized, and a packed type's
+            // signedness is the type's own). The narrowed stream is float32, and `normalized` is
+            // deliberately GL_FALSE there rather than attrib.Normalized: GL ignores it for
+            // floating-point array types, and honouring it would scale the fetched values.
+            const GLint convertedSize = bgra ? 4 : static_cast<GLint>(attrib.Size);
+            const GLenum convertedType = bgra ? MG_Util::ConvertDataTypeToGLEnum(sourceType) : GL_FLOAT;
+            const GLboolean convertedNormalized = (bgra && attrib.Normalized) ? GL_TRUE : GL_FALSE;
             if (neverAdvances) {
                 // Only the binding-point API can say "stride 0".
                 if (!HasVertexBindingApi()) {
                     return false;
                 }
-                g_GLESFuncs.glVertexAttribFormat(attribIndex, static_cast<GLint>(attrib.Size), GL_FLOAT, GL_FALSE, 0);
+                g_GLESFuncs.glVertexAttribFormat(attribIndex, convertedSize, convertedType, convertedNormalized, 0);
                 g_GLESFuncs.glVertexAttribBinding(attribIndex, attribIndex);
                 g_GLESFuncs.glBindVertexBuffer(attribIndex, convertedBufferId, 0, 0);
                 return true;
             }
 
             BufferImpl::BindBufferId(GL_ARRAY_BUFFER, convertedBufferId);
-            // `normalized` is deliberately GL_FALSE rather than attrib.Normalized: GL ignores it
-            // for floating-point array types, and honouring it would scale the fetched values.
-            g_GLESFuncs.glVertexAttribPointer(attribIndex, static_cast<GLint>(attrib.Size), GL_FLOAT, GL_FALSE,
+            g_GLESFuncs.glVertexAttribPointer(attribIndex, convertedSize, convertedType, convertedNormalized,
                                               static_cast<GLsizei>(convertedElementSize),
                                               (const void*)(firstElement * convertedElementSize));
             return true;

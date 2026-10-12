@@ -1786,9 +1786,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 memo.pendingMask = pending;
                 memo.valid = true;
             }
-            if (memo.pendingMask == 0) return;
+            // Plus the enabled arrays the walk had to disable (Managers.h, GetDisabledEnabledAttribMask).
+            const Uint32 pendingMask = memo.pendingMask | (vaoTwin->GetDisabledEnabledAttribMask() & memo.activeMask);
+            if (pendingMask == 0) return;
 
-            for (Uint32 remaining = memo.pendingMask; remaining != 0; remaining &= remaining - 1) {
+            for (Uint32 remaining = pendingMask; remaining != 0; remaining &= remaining - 1) {
                 const Uint32 location = static_cast<Uint32>(std::countr_zero(remaining));
 
                 const auto& currentValue = MG_Pipe::gPipeInputs->GetCurrentVertexAttribute(location);
@@ -1922,9 +1924,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 memo.pendingMask = pending;
                 memo.valid = true;
             }
-            if (memo.pendingMask == 0) return;
+            // Plus the enabled arrays the walk had to disable (Managers.h, GetDisabledEnabledAttribMask).
+            const Uint32 pendingMask = memo.pendingMask | (vaoTwin->GetDisabledEnabledAttribMask() & memo.activeMask);
+            if (pendingMask == 0) return;
 
-            for (Uint32 remaining = memo.pendingMask; remaining != 0; remaining &= remaining - 1) {
+            for (Uint32 remaining = pendingMask; remaining != 0; remaining &= remaining - 1) {
                 const Uint32 location = static_cast<Uint32>(std::countr_zero(remaining));
 
                 // BOUNDS-CHECKED, exactly as ProgramObject::GetAttribType is not: the frontend's

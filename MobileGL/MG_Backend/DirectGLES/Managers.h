@@ -1359,6 +1359,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 Uint64 elementsSerial = 0;
             };
             PendingAttribValueMask& GetPendingAttribValueMaskMemo() { return m_pendingAttribValueMask; }
+            // Attributes the configuration ENABLES but the last walk had to disable in the driver
+            // VAO (a GL_DOUBLE or GL_BGRA array whose converted stream could not be built). Those
+            // read the current generic value too, so the value sync pushes it for them as well -
+            // without that they read the driver's untouched (0,0,0,1) instead of what the
+            // application last set.
+            Uint32 GetDisabledEnabledAttribMask() const { return m_disabledEnabledAttribMask; }
 
         private:
             // Narrows one enabled GL_DOUBLE array into a tightly packed float32 stream held in
@@ -1369,6 +1375,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // dropping it. Returns false when the stream cannot be built, in which case the
             // caller must DISABLE the array - leaving a 64-bit array enabled with no pointer is
             // what the Adreno driver turns into a SIGSEGV at the next draw.
+            //
+            // The same stream carries the second format ES has no spelling for: a GL_BGRA-sized
+            // array (GL_UNSIGNED_BYTE or either 2_10_10_10_REV type) is swizzled into RGBA order
+            // element by element and declared as an ordinary size-4 array of its own type
+            // (KHR-GL43.vertex_attrib_binding.basic-input-case5). Passing GL_BGRA through is
+            // GL_INVALID_VALUE on ES, which left the array enabled with no pointer.
 
             // The handle arm of the whole vertex-elements half. Everything it needs arrives in
             // the applier's records - the bound CSO's two views, the vertex-buffer set, the
@@ -1378,14 +1390,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // as of P5e (vi) - see the note there.
             // Same narrowing, same memo, same Adreno disable; the source bytes are the shadow
             // base the resource call carried and the memo key is the buffer's {slot, gen}.
-            Bool SyncFloat64AttributeAsFloat32ByHandle(Uint attribIndex, const MGPVertexAttribWire& attrib,
-                                                       const MG_Pipe::MGPVertexBuffer& binding,
-                                                       Uint32 fetchBaseInstance);
+            Bool SyncConvertedAttributeByHandle(Uint attribIndex, const MGPVertexAttribWire& attrib,
+                                                const MG_Pipe::MGPVertexBuffer& binding, Uint32 fetchBaseInstance);
 
-            // What the converted float32 stream in m_convertedAttributeBufferIds[i] was built
-            // from. A hit skips the CPU conversion and the re-upload; the buffer's change serial
-            // is part of the key, so a glBufferSubData into the source invalidates it.
-            struct ConvertedFloat64Stream {
+            // What the converted stream in m_convertedAttributeBufferIds[i] was built from. A
+            // hit skips the CPU conversion and the re-upload; the buffer's change serial is part
+            // of the key, so a glBufferSubData into the source invalidates it.
+            struct ConvertedAttributeStream {
                 Bool valid = false;
                 // What replaces it: the source buffer's {slot, gen}. It is the SAME identity
                 // the rest of the backend now keys on, it cannot be reproduced by a recycled
@@ -1399,6 +1410,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 Uint64 sourceChangeSerial = 0;
                 SizeT sourceOffset = 0;
                 SizeT sourceStride = 0;
+                // The conversion: a BGRA swizzle of `sourceType` elements, or the fp64 narrowing.
+                Bool bgra = false;
+                Uint32 sourceType = 0;
                 SizeT componentCount = 0;
                 SizeT elementCount = 0;
             };
@@ -1407,16 +1421,17 @@ namespace MobileGL::MG_Backend::DirectGLES {
             PendingAttribValueMask m_pendingAttribValueMask;
             Uint m_backendVAOId = 0;
             Array<Uint, MG_State::GLState::VertexArrayObject::MAX_VERTEX_ATTRIBS> m_clientAttributeBufferIds;
-            // Scratch stores for the buffer-backed GL_DOUBLE narrowing. Deliberately separate
+            // Scratch stores for the buffer-backed GL_DOUBLE narrowing and BGRA swizzle. Deliberately separate
             // from m_clientAttributeBufferIds: that one holds the per-draw upload of a
             // CLIENT-MEMORY array, and an attribute index can carry both shapes over its life.
             Array<Uint, MG_State::GLState::VertexArrayObject::MAX_VERTEX_ATTRIBS> m_convertedAttributeBufferIds;
-            Array<ConvertedFloat64Stream, MG_State::GLState::VertexArrayObject::MAX_VERTEX_ATTRIBS>
+            Array<ConvertedAttributeStream, MG_State::GLState::VertexArrayObject::MAX_VERTEX_ATTRIBS>
                 m_convertedAttributeStreams;
             // True while at least one attribute of this VAO is fed by a converted stream. Such a
             // stream is derived from buffer CONTENT, which no VAO version covers, so the config
             // version early-out in SyncToBackend must not be trusted while it is set.
-            Bool m_hasConvertedFloat64Attribute = false;
+            Bool m_hasConvertedAttribute = false;
+            Uint32 m_disabledEnabledAttribMask = 0;
             Bool m_isInitialized = false;
             // ---- what replaces them on the handle arm (D-G4) ---------------------------
             // The bound vertex-elements CSO this twin last emitted, and the applier's
@@ -1463,7 +1478,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // enable/disable/divisor re-sets. The shadow lets the walk emit only differences. It
             // is valid from creation (a new VAO is all-disabled with divisor 0). Anything that
             // writes the VAO behind the walk (client-memory uploads, the fp64 narrowing, the
-            // binding-API zero stride, a refused BGRA format) forgets the affected part. Pointer
+            // binding-API zero stride, the BGRA swizzle) forgets the affected part. Pointer
             // entries name driver buffer ids, so they also go when g_bufferBackendIdGeneration
             // moves: an id can be re-minted.
             struct HostAttribPointer {

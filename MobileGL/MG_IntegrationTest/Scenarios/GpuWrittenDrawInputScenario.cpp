@@ -750,7 +750,7 @@ void main() {
         EXPECT_TRUE(IsGreen(Half(image, 1))) << "command 1 did not draw (" << Half(image, 1) << ")";
     }
 
-    // ---- fp64 vertex narrowing (Managers.cpp SyncFloat64AttributeAsFloat32ByHandle) ----
+    // ---- fp64 vertex narrowing (Managers.cpp SyncConvertedAttributeByHandle) ----
     //
     // A GL_DOUBLE vertex array is narrowed to float on the CPU from the source buffer's bytes,
     // and the narrowed copy is memoised on the source's serial - which a GPU write never moves.

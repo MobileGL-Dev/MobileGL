@@ -755,4 +755,64 @@ void main() {
         glDeleteBuffers(1, &vbo);
     }
 
+    // GL_BGRA as the SIZE of an array: the first and third components come from swapped places,
+    // for GL_UNSIGNED_BYTE and for both packed 2_10_10_10_REV types (KHR-GL43.vertex_attrib_binding.
+    // basic-input-case5). ES has no BGRA vertex size, so a backend that forwards it gets the array
+    // refused and reads the current value (0,0,0,0 here) instead. Attribute 1 is the plain-RGBA
+    // control over the same packed word attribute 2 reads as BGRA.
+    TEST_F(VertexAttribBindingScenario, BgraArraysAreFetchedWithRedAndBlueSwapped) {
+        if (!Ready()) GTEST_SKIP();
+        ResetCurrentAttribs();
+
+        constexpr int kStride = 12;
+        unsigned char vertices[2 * kStride] = {};
+        const auto put = [&](int vertex, int offset, const void* data, std::size_t size) {
+            std::memcpy(vertices + vertex * kStride + offset, data, size);
+        };
+        {
+            const unsigned char bytes0[4] = {0, 0xff / 4, 0xff / 2, 0xff};
+            const unsigned int packedUint0 = 0u | (1023u << 10) | (511u << 20) | (1u << 30);
+            const int packedInt0 = 0 | (511 << 10) | (255 << 20) | (0 << 30);
+            put(0, 0, bytes0, 4);
+            put(0, 4, &packedUint0, 4);
+            put(0, 8, &packedInt0, 4);
+            const unsigned char bytes1[4] = {0xff, 0xff / 2, 0xff / 4, 0};
+            const unsigned int packedUint1 = 0u | (1023u << 10) | (511u << 20) | (2u << 30);
+            const unsigned int packedInt1 = (static_cast<unsigned int>(-511) & 0x3ffu) | (511u << 10) |
+                                            (255u << 20) | (3u << 30);
+            put(1, 0, bytes1, 4);
+            put(1, 4, &packedUint1, 4);
+            put(1, 8, &packedInt1, 4);
+        }
+        GLuint vbo = 0;
+        glGenBuffers(1, &vbo);
+        glBindBuffer(GL_ARRAY_BUFFER, vbo);
+        glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
+
+        glBindVertexBuffer(0, vbo, 0, kStride);
+        glVertexAttribFormat(0, GL_BGRA, GL_UNSIGNED_BYTE, GL_TRUE, 0);
+        glVertexAttribFormat(1, 4, GL_UNSIGNED_INT_2_10_10_10_REV, GL_TRUE, 4);
+        glVertexAttribFormat(2, GL_BGRA, GL_UNSIGNED_INT_2_10_10_10_REV, GL_TRUE, 4);
+        glVertexAttribFormat(3, GL_BGRA, GL_INT_2_10_10_10_REV, GL_TRUE, 8);
+        for (GLuint i = 0; i < 4; ++i) {
+            glVertexAttribBinding(i, 0);
+            glEnableVertexAttribArray(i);
+        }
+        ASSERT_EQ(glGetError(), static_cast<GLenum>(GL_NO_ERROR));
+
+        const std::vector<float> data = CapturePoints(m_program, m_xfbo, 2, 1);
+        EXPECT_TRUE(Vec4Is(data, 0, 0, 0.5f, 0.25f, 0.0f, 1.0f));
+        EXPECT_TRUE(Vec4Is(data, 0, 1, 0.0f, 1.0f, 0.5f, 1.0f / 3.0f));
+        EXPECT_TRUE(Vec4Is(data, 0, 2, 0.5f, 1.0f, 0.0f, 1.0f / 3.0f));
+        EXPECT_TRUE(Vec4Is(data, 0, 3, 0.5f, 1.0f, 0.0f, 0.0f));
+        EXPECT_TRUE(Vec4Is(data, 1, 0, 0.25f, 0.5f, 1.0f, 0.0f));
+        EXPECT_TRUE(Vec4Is(data, 1, 1, 0.0f, 1.0f, 0.5f, 2.0f / 3.0f));
+        EXPECT_TRUE(Vec4Is(data, 1, 2, 0.5f, 1.0f, 0.0f, 2.0f / 3.0f));
+        EXPECT_TRUE(Vec4Is(data, 1, 3, 0.5f, 1.0f, -1.0f, -1.0f));
+
+        for (GLuint i = 0; i < 4; ++i) glDisableVertexAttribArray(i);
+        glDeleteBuffers(1, &vbo);
+    }
+
 } // namespace MGITest
