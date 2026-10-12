@@ -792,7 +792,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     Vector<GLExtension> BuildAdvertisedExtensions(Bool shaderSubgroupSupported, Bool timerQueriesSupported,
                                                   Bool anisotropicFilteringSupported,
                                                   Bool nonZeroIndirectBaseInstanceSupported,
-                                                  Bool cubeMapArraySupported) {
+                                                  Bool cubeMapArraySupported,
+                                                  const AdvertisedFeatureSupport& features) {
         Vector<GLExtension> extensions = {
             // The version tokens have to reach the version the backend actually claims:
             // TargetGLVersion is {4,6,0}, and a list that stopped at OpenGL40 told an
@@ -898,10 +899,32 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // glDepthRangeArrayv / glDepthRangeIndexed / glGetFloati_v / glGetDoublei_v, over the
             // 16 viewports GL_MAX_VIEWPORTS reports.
             E_GL_ARB_viewport_array,
+            // Core in the 4.x versions this backend already claims, and named so a context of an
+            // older requested version reaches the same, already-implemented surface (the conformance
+            // suite gates its GL 3.x runs of these on the string alone):
+            //  - transform feedback objects, pause/resume and glDrawTransformFeedback (4.0);
+            E_GL_ARB_transform_feedback2,
+            //  - multiple capture buffers per stream, gl_SkipComponents / gl_NextBuffer, the
+            //    indexed queries and glDrawTransformFeedbackStream (4.0);
+            E_GL_ARB_transform_feedback3,
+            //  - GL_RGB10_A2UI (3.3), GL_RGB9_E5 (3.0) and the integer colour formats (3.0);
+            E_GL_ARB_texture_rgb10_a2ui, E_GL_EXT_texture_shared_exponent, E_GL_EXT_texture_integer,
+            //  - the eleven pipeline-statistics query targets (4.6). Accepted by glBeginQuery and
+            //    answered with GL_QUERY_COUNTER_BITS = 0, the spec's own "this counter is not
+            //    instrumented" signal (see IsPipelineStatisticsQueryTarget in GL_Query.cpp);
+            E_GL_ARB_pipeline_statistics_query,
+            //  - mix() over integer and boolean vectors in GLSL below 4.50. The frontend compiles it
+            //    to OpSelect, which SPIR-V consumes directly.
+            E_GL_EXT_shader_integer_mix,
             // Advertised with GL_NUM_PROGRAM_BINARY_FORMATS = 0, which the
             // extension explicitly permits. It is also the only thing that
             // exposes glProgramParameteri before GL 4.1.
             E_GL_ARB_get_program_binary};
+        // Follows the tessellationShader device feature; GL_Query also reads the string to open
+        // the two tessellation pipeline-statistics targets.
+        if (features.TessellationShader) {
+            extensions.push_back(E_GL_ARB_tessellation_shader);
+        }
         // Vulkan's drawIndirectFirstInstance feature is optional. Direct base-instance calls work
         // without it, but ARB_base_instance also promises non-zero firstInstance in GPU indirect
         // commands; the renderer supplies true only when that word is legal and gl_InstanceID can
@@ -1082,7 +1105,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             subgroupSupportAdvertised, pVulkanRenderer && pVulkanRenderer->IsTimerQuerySupported(),
             pVulkanRenderer && pVulkanRenderer->IsSamplerAnisotropySupported(),
             pVulkanRenderer && pVulkanRenderer->IsNonZeroIndirectBaseInstanceSupported(),
-            m_vulkanCaps.SupportsImageCubeArray);
+            m_vulkanCaps.SupportsImageCubeArray,
+            AdvertisedFeatureSupport{.TessellationShader = m_vulkanCaps.SupportsTessellationShader});
         // GL_EXT_fragment_shading_rate rides on VK_KHR_fragment_shading_rate's pipeline rate, and
         // its _primitive companion on the primitive rate; both only when the renderer enabled them.
         // _attachment is not advertised: no framebuffer carries a rate attachment to this backend.

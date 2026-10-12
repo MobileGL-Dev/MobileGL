@@ -1123,6 +1123,7 @@ namespace MobileGL::MG_Util::BackendLoader {
         // Combined with the three entry points below; DirectGLES emulates baseInstance when this
         // comes out false, so a stub pointer counting as support would silently break the draws.
         Bool hasBaseInstanceExtension = false;
+        Bool hasTessellationShaderExtension = false;
         for (GLint i = 0; i < extCount; ++i) {
             const char* extension = (const char*)glesFuncs.glGetStringi(GL_EXTENSIONS, i);
             if (extension) {
@@ -1179,6 +1180,9 @@ namespace MobileGL::MG_Util::BackendLoader {
                 }
                 if (std::strcmp(extension, "GL_EXT_base_instance") == 0) {
                     hasBaseInstanceExtension = true;
+                }
+                if (std::strcmp(extension, "GL_EXT_tessellation_shader") == 0) {
+                    hasTessellationShaderExtension = true;
                 }
                 if (std::strcmp(extension, "GL_EXT_disjoint_timer_query") == 0) {
                     caps.SupportsDisjointTimerQuery = true;
@@ -1281,6 +1285,8 @@ namespace MobileGL::MG_Util::BackendLoader {
                                     glesFuncs.glDrawElementsIndirect != nullptr;
         caps.SupportsDrawElementsBaseVertex = (esAtLeast32 || hasDrawElementsBaseVertexExtension) &&
                                               glesFuncs.glDrawElementsBaseVertex != nullptr;
+        caps.SupportsTessellationShader = (esAtLeast32 || (esAtLeast31 && hasTessellationShaderExtension)) &&
+                                          glesFuncs.glPatchParameteri != nullptr;
         caps.SupportsComputeShader = esAtLeast31 && glesFuncs.glDispatchCompute != nullptr &&
                                      glesFuncs.glMemoryBarrier != nullptr &&
                                      glesFuncs.glCreateShader != nullptr &&
@@ -1308,6 +1314,8 @@ namespace MobileGL::MG_Util::BackendLoader {
         MGLOG_I("    draw elements base vertex (ES 3.2 core or EXT/OES_draw_elements_base_vertex): %s",
                 caps.SupportsDrawElementsBaseVertex ? "yes" : "no");
         MGLOG_I("    compute shaders (ES 3.1 core): %s", caps.SupportsComputeShader ? "yes" : "no");
+        MGLOG_I("    tessellation shaders (ES 3.2 core or EXT_tessellation_shader): %s",
+                caps.SupportsTessellationShader ? "yes" : "no");
         MGLOG_I("    base instance (EXT_base_instance; emulated by attribute offsets when absent): %s",
                 caps.SupportsBaseInstance ? "yes" : "no");
         MGLOG_I("    clip distances (EXT_clip_cull_distance): %s", caps.SupportsClipDistance ? "yes" : "no");

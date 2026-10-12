@@ -1571,6 +1571,57 @@ void main() { mgColor = vec4(float(gl_MaxCullDistances)); }
     MG_State::pGLContext = Move(previousContext);
 }
 
+// GL_EXT_shader_integer_mix (KHR-GL4x.shader_integer_mix.*): a 3.30 shader that requires the
+// extension must see its macro and must be able to mix integer and boolean vectors under a
+// boolean selector. Both backends carry the result: SPIR-V lowers the call to OpSelect, which
+// ESSL 3.10+ and GLSL 4.50 print back as a core boolean mix.
+TEST(ShaderCompilerSanity, ExtShaderIntegerMixIsUsableAt330) {
+    using namespace MobileGL;
+
+    auto previousContext = MG_State::pGLContext.Take();
+    auto previousBackend = Move(MG_Backend::pActiveBackendObject);
+    MG_State::pGLContext = MakeUnique<MG_State::GLState::GLContext>();
+    MG_Backend::pActiveBackendObject = MakeUnique<DynamicParameterBackend>(MG_Backend::DynamicBackendParameters{});
+    const auto env = MG_Util::ShaderTranspiler::CaptureCompileEnv();
+
+    const auto compile = [&env](GLenum stage, const String& source) {
+        return MG_Util::ShaderTranspiler::ShaderCompiler::CompileShader({
+            .shaderType = stage,
+            .sourceStr = source,
+            .env = env.get(),
+        });
+    };
+
+    const String defineProbe = R"(#version 330
+#extension GL_EXT_shader_integer_mix: require
+#if !defined GL_EXT_shader_integer_mix
+#  error GL_EXT_shader_integer_mix is not defined
+#elif GL_EXT_shader_integer_mix != 1
+#  error GL_EXT_shader_integer_mix is not equal to 1
+#endif
+void main(void) { gl_Position = vec4(0); }
+)";
+    auto define = compile(GL_VERTEX_SHADER, defineProbe);
+    EXPECT_TRUE(define) << (define ? String() : define.error().log);
+
+    const String mixes = R"(#version 330
+#extension GL_EXT_shader_integer_mix: enable
+uniform ivec4 a; uniform ivec4 b; uniform uvec4 c; uniform uvec4 d; uniform bvec4 sel;
+flat out ivec4 i; flat out uvec4 u; flat out ivec4 bo;
+void main(void) {
+    i = mix(a, b, sel);
+    u = mix(c, d, sel);
+    bo = ivec4(mix(bvec4(a), bvec4(b), sel));
+    gl_Position = vec4(0);
+}
+)";
+    auto mixed = compile(GL_VERTEX_SHADER, mixes);
+    EXPECT_TRUE(mixed) << (mixed ? String() : mixed.error().log);
+
+    MG_Backend::pActiveBackendObject = Move(previousBackend);
+    MG_State::pGLContext = Move(previousContext);
+}
+
 TEST(GetterSanity, ReportsKhrSubgroupDynamicParameters) {
     using namespace MobileGL;
 

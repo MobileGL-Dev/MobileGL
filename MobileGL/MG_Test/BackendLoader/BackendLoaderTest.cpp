@@ -1244,6 +1244,78 @@ TEST(CorePlumbingAdvertisement, IsUnconditionalAndIdenticalOnBothBackends) {
     }
 }
 
+// Strings for functionality that is core in the 4.x versions MobileGL claims, named so contexts of
+// an older requested version (the conformance suite's GL 3.x runs gate on the string alone) reach
+// the same surface. Unconditional on both backends; only the tessellation string follows a probed
+// device capability.
+TEST(CoreSurfaceAdvertisement, BatchIsUnconditionalAndTessellationFollowsTheDevice) {
+    const auto contains = [](const MobileGL::Vector<MobileGL::GLExtension>& extensions,
+                             MobileGL::GLExtension wanted) {
+        return std::find(extensions.begin(), extensions.end(), wanted) != extensions.end();
+    };
+    const MobileGL::GLExtension expected[] = {
+        MobileGL::E_GL_ARB_transform_feedback2,      MobileGL::E_GL_ARB_transform_feedback3,
+        MobileGL::E_GL_ARB_texture_rgb10_a2ui,       MobileGL::E_GL_EXT_texture_shared_exponent,
+        MobileGL::E_GL_EXT_texture_integer,          MobileGL::E_GL_ARB_pipeline_statistics_query,
+        MobileGL::E_GL_EXT_shader_integer_mix};
+
+    const auto es = MobileGL::MG_Backend::DirectGLES::BuildAdvertisedExtensions(false, false, false, false, false,
+                                                                                false);
+    const auto vk = MobileGL::MG_Backend::DirectVulkan::BuildAdvertisedExtensions(false, false, false, false, false);
+    for (const auto extension : expected) {
+        EXPECT_TRUE(contains(es, extension)) << "DirectGLES does not advertise extension " << extension;
+        EXPECT_TRUE(contains(vk, extension)) << "DirectVulkan does not advertise extension " << extension;
+    }
+    // Withheld until shaders can actually use the gl_FragCoord layout qualifiers it adds.
+    EXPECT_FALSE(contains(es, MobileGL::E_GL_ARB_fragment_coord_conventions));
+    EXPECT_FALSE(contains(vk, MobileGL::E_GL_ARB_fragment_coord_conventions));
+
+    EXPECT_FALSE(contains(es, MobileGL::E_GL_ARB_tessellation_shader));
+    EXPECT_FALSE(contains(vk, MobileGL::E_GL_ARB_tessellation_shader));
+    const MobileGL::MG_Backend::AdvertisedFeatureSupport tessellation{.TessellationShader = true};
+    EXPECT_TRUE(contains(MobileGL::MG_Backend::DirectGLES::BuildAdvertisedExtensions(false, false, false, false,
+                                                                                      false, false, tessellation),
+                         MobileGL::E_GL_ARB_tessellation_shader));
+    EXPECT_TRUE(contains(MobileGL::MG_Backend::DirectVulkan::BuildAdvertisedExtensions(false, false, false, false,
+                                                                                        false, tessellation),
+                         MobileGL::E_GL_ARB_tessellation_shader));
+}
+
+// ES 3.2 has tessellation in core; ES 3.1 only through GL_EXT_tessellation_shader. Either way the
+// patch-size entry point has to have resolved.
+TEST(TessellationCapabilities, FollowTheVersionOrTheExtension) {
+    const auto funcs = MakeFakeGLESFunctions();
+    auto withPatch = funcs;
+    withPatch.glPatchParameteri = [](GLenum, GLint) {};
+
+    ResetFakeDriver();
+    g_fake.maxVertexSsboBlocks = 0;
+    MobileGL::MG_External::GLESCapabilities es31;
+    ASSERT_TRUE(MobileGL::MG_Util::BackendLoader::FillInGLESCapabilities(es31, withPatch));
+    EXPECT_FALSE(es31.SupportsTessellationShader);
+
+    ResetFakeDriver();
+    g_fake.maxVertexSsboBlocks = 0;
+    g_fake.extensions.emplace_back("GL_EXT_tessellation_shader");
+    MobileGL::MG_External::GLESCapabilities es31Ext;
+    ASSERT_TRUE(MobileGL::MG_Util::BackendLoader::FillInGLESCapabilities(es31Ext, withPatch));
+    EXPECT_TRUE(es31Ext.SupportsTessellationShader);
+
+    ResetFakeDriver();
+    g_fake.maxVertexSsboBlocks = 0;
+    g_fake.glesMinorVersion = 2;
+    MobileGL::MG_External::GLESCapabilities es32NoEntryPoint;
+    ASSERT_TRUE(MobileGL::MG_Util::BackendLoader::FillInGLESCapabilities(es32NoEntryPoint, funcs));
+    EXPECT_FALSE(es32NoEntryPoint.SupportsTessellationShader);
+
+    ResetFakeDriver();
+    g_fake.maxVertexSsboBlocks = 0;
+    g_fake.glesMinorVersion = 2;
+    MobileGL::MG_External::GLESCapabilities es32;
+    ASSERT_TRUE(MobileGL::MG_Util::BackendLoader::FillInGLESCapabilities(es32, withPatch));
+    EXPECT_TRUE(es32.SupportsTessellationShader);
+}
+
 // Minecraft 26.3 checks ARB_draw_indirect before it considers the already-advertised
 // ARB_multi_draw_indirect, then separately requires ARB_base_instance before enabling its terrain
 // indirect path. Pin both strings and, just as importantly, the non-zero firstInstance gate.

@@ -841,7 +841,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 AreTimerQueriesSupported(), capabilities.SupportsTextureFilterAnisotropy,
                 capabilities.SupportsDrawIndirect,
                 capabilities.SupportsDrawIndirect && capabilities.SupportsBaseInstance,
-                capabilities.SupportsTextureView, capabilities.SupportsTextureCubeMapArray);
+                capabilities.SupportsTextureView, capabilities.SupportsTextureCubeMapArray,
+                AdvertisedFeatureSupport{.TessellationShader = capabilities.SupportsTessellationShader});
             // Exactly what InitCapabilities forwards into the dynamic parameters: the base
             // extension and _primitive when the driver has them, _attachment not yet.
             auto& extensions = MutableRendererInfo().RendererGLInfo.Extensions;
@@ -1383,7 +1384,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
     Vector<GLExtension> BuildAdvertisedExtensions(Bool timerQueriesSupported, Bool anisotropicFilteringSupported,
                                                   Bool drawIndirectSupported,
                                                   Bool nonZeroIndirectBaseInstanceSupported,
-                                                  Bool textureViewSupported, Bool cubeMapArraySupported) {
+                                                  Bool textureViewSupported, Bool cubeMapArraySupported,
+                                                  const AdvertisedFeatureSupport& features) {
         Vector<GLExtension> extensions = {
             // The version tokens have to reach the version the backend actually claims:
             // TargetGLVersion is {4,6,0}, and a list that stopped at OpenGL40 told an
@@ -1494,10 +1496,33 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // glDepthRangeArrayv / glDepthRangeIndexed / glGetFloati_v / glGetDoublei_v, over the
             // 16 viewports GL_MAX_VIEWPORTS reports and the per-viewport routing emulation.
             E_GL_ARB_viewport_array,
+            // Core in the 4.x versions this backend already claims, and named so a context of an
+            // older requested version reaches the same, already-implemented surface (the conformance
+            // suite gates its GL 3.x runs of these on the string alone):
+            //  - transform feedback objects, pause/resume and glDrawTransformFeedback (4.0);
+            E_GL_ARB_transform_feedback2,
+            //  - multiple capture buffers per stream, gl_SkipComponents / gl_NextBuffer, the
+            //    indexed queries and glDrawTransformFeedbackStream (4.0);
+            E_GL_ARB_transform_feedback3,
+            //  - GL_RGB10_A2UI (3.3), GL_RGB9_E5 (3.0) and the integer colour formats (3.0);
+            E_GL_ARB_texture_rgb10_a2ui, E_GL_EXT_texture_shared_exponent, E_GL_EXT_texture_integer,
+            //  - the eleven pipeline-statistics query targets (4.6). Accepted by glBeginQuery and
+            //    answered with GL_QUERY_COUNTER_BITS = 0, the spec's own "this counter is not
+            //    instrumented" signal (see IsPipelineStatisticsQueryTarget in GL_Query.cpp);
+            E_GL_ARB_pipeline_statistics_query,
+            //  - mix() over integer and boolean vectors in GLSL below 4.50. The frontend compiles it
+            //    to OpSelect, which the backend prints back as a core boolean mix.
+            E_GL_EXT_shader_integer_mix,
             // Advertised with GL_NUM_PROGRAM_BINARY_FORMATS = 0, which the
             // extension explicitly permits. It is also the only thing that
             // exposes glProgramParameteri before GL 4.1.
             E_GL_ARB_get_program_binary};
+        // Tessellation is core from GL 4.0, but on the host it is ES 3.2 or
+        // GL_EXT_tessellation_shader, so the string follows the driver. GL_Query also reads it to
+        // open the two tessellation pipeline-statistics targets.
+        if (features.TessellationShader) {
+            extensions.push_back(E_GL_ARB_tessellation_shader);
+        }
         // Minecraft 26.3 checks this prerequisite before it even considers
         // GL_ARB_multi_draw_indirect. ES 3.1 supplies both single-draw entry points; the loader
         // folds the version and pointer checks into SupportsDrawIndirect.

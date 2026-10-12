@@ -117,6 +117,9 @@ namespace MobileGL {
             Bool SupportsVertexPipelineStoresAndAtomics = false;
             Bool SupportsFragmentStoresAndAtomics = false;
             Bool SupportsGeometryShader = false;
+            // VkPhysicalDeviceFeatures::tessellationShader, which VulkanRenderer enables wherever
+            // the physical device has it.
+            Bool SupportsTessellationShader = false;
             // VkPhysicalDeviceFeatures::shaderClipDistance. maxClipDistances is a LIMIT and is
             // reported whatever the feature says, so the limit alone does not mean a module may
             // declare ClipDistance - VulkanRenderer enables the feature only where the physical

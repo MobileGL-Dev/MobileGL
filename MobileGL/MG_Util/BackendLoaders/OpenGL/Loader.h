@@ -1114,6 +1114,9 @@ namespace MobileGL {
             Bool SupportsTextureBorderClamp = false;
             // GL_TEXTURE_CUBE_MAP_ARRAY: ES 3.2 core, or EXT/OES_texture_cube_map_array before it.
             Bool SupportsTextureCubeMapArray = false;
+            // Tessellation stages: ES 3.2 core, or GL_EXT_tessellation_shader on 3.1, with
+            // glPatchParameteri resolved either way.
+            Bool SupportsTessellationShader = false;
             // GL_EXT_texture_view / GL_OES_texture_view: two ES texture names sharing one
             // storage, i.e. the only way DirectGLES can answer glTextureView at all. ES never
             // made this core - not even in 3.2 - so unlike every other capability here there is

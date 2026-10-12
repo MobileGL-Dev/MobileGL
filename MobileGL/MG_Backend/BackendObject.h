@@ -309,6 +309,15 @@ namespace MobileGL {
             void (*SetSwapInterval)(Int interval);
         };
 
+        // Device features that decide whether an extension string may be advertised, beyond the
+        // per-backend positional flags of BuildAdvertisedExtensions. Each is the PROBED driver
+        // capability (an ES version / extension on DirectGLES, a VkPhysicalDeviceFeatures bit on
+        // DirectVulkan), never a vendor guess. Defaults describe the no-device case.
+        struct AdvertisedFeatureSupport {
+            // ES 3.2 or GL_EXT_tessellation_shader; VkPhysicalDeviceFeatures::tessellationShader.
+            Bool TessellationShader = false;
+        };
+
         // Coarse GPU vendor identity for gating device-specific quirks. Detected from the
         // Vulkan physical-device vendorID or the GLES GL_VENDOR/GL_RENDERER strings; stays
         // Unknown when detection is inconclusive, in which case auto-gated quirks stay off.

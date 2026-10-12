@@ -114,12 +114,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
     // The full OpenGL extension list Espryt advertises (glGetString(GL_EXTENSIONS))
     // for a device whose timer queries / anisotropic filtering / native indirect draws /
-    // non-zero indirect baseInstance semantics / EXT-OES texture views are (or are not) usable.
-    // The MOBILEGL_DISABLE_TIMERQUERY escape hatch is applied inside.
+    // non-zero indirect baseInstance semantics / EXT-OES texture views are (or are not) usable,
+    // plus the feature set in `features`. The MOBILEGL_DISABLE_TIMERQUERY escape hatch is applied
+    // inside.
     Vector<GLExtension> BuildAdvertisedExtensions(Bool timerQueriesSupported, Bool anisotropicFilteringSupported,
                                                   Bool drawIndirectSupported,
                                                   Bool nonZeroIndirectBaseInstanceSupported,
-                                                  Bool textureViewSupported, Bool cubeMapArraySupported);
+                                                  Bool textureViewSupported, Bool cubeMapArraySupported,
+                                                  const AdvertisedFeatureSupport& features = {});
 
     // Format: <OpenGL ES Renderer>, OpenGL ES <Major>.<Minor> — the exact string an
     // initialized backend returns from GetBackendAPIVersionString (and that ends up
