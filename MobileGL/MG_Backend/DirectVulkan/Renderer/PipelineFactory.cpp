@@ -222,6 +222,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         XXHASH_VERIFY(XXH64_update(hashState, &payload.passthroughTessControlKey,
                                    sizeof(payload.passthroughTessControlKey)));
         XXHASH_VERIFY(XXH64_update(hashState, &payload.viewportCount, sizeof(payload.viewportCount)));
+        XXHASH_VERIFY(XXH64_update(hashState, &payload.nonLayeredStages, sizeof(payload.nonLayeredStages)));
         XXHASH_VERIFY(XXH64_update(hashState, &payload.polygonMode, sizeof(payload.polygonMode)));
         XXHASH_VERIFY(XXH64_update(hashState, &payload.cullMode, sizeof(payload.cullMode)));
         XXHASH_VERIFY(XXH64_update(hashState, &payload.frontFace, sizeof(payload.frontFace)));

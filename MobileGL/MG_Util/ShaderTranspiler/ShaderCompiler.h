@@ -353,6 +353,12 @@ namespace MobileGL {
                 static bool LowerPixelCenterIntegerForVulkan(const Vector<Uint32>& inputBinary,
                                                              Vector<uint32_t>& outputBinary,
                                                              bool enableSpirvValidation = false);
+                // Builds the variant of a pre-rasterization module that a non-layered framebuffer
+                // draws with: every gl_Layer store writes 0, since GL ignores gl_Layer there. A
+                // module that writes no Layer comes back unchanged. See ZeroLayerOutputPass.
+                static bool ZeroLayerOutputForVulkan(const Vector<Uint32>& inputBinary,
+                                                      Vector<uint32_t>& outputBinary,
+                                                      bool enableSpirvValidation = false);
                 // Replaces compute gl_NumSubgroups loads with ceil(workgroup invocations /
                 // gl_SubgroupSize). DirectVulkan only; this repairs drivers whose builtin
                 // disagrees with the subgroup IDs the same dispatch emits (Adreno reports 1

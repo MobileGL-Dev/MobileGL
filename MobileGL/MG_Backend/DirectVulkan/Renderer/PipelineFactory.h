@@ -81,6 +81,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // therefore hashed; the DYNAMIC viewport/scissor arrays the draw pushes must have
             // exactly this many elements (VUID-vkCmdDraw-viewportCount-03417/-03418).
             Uint32 viewportCount = 1;
+            // `stages` is the program's nonLayeredStages: the gl_Layer-zeroed modules a draw into
+            // a non-layered framebuffer uses (ZeroLayerOutputPass). Hashed - the two stage sets
+            // are different pipelines; the program hash alone names both.
+            Bool nonLayeredStages = false;
             VkPolygonMode polygonMode = VK_POLYGON_MODE_FILL;
             VkCullModeFlags cullMode = VK_CULL_MODE_BACK_BIT;
             VkFrontFace frontFace = VK_FRONT_FACE_CLOCKWISE;

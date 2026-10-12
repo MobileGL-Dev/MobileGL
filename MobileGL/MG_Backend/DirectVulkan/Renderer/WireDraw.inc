@@ -13,6 +13,19 @@
     // Through the same seam as MagmaWireFatal, and for the same reason (P7 wave 0). The family
     // stays RoleViolation: reaching the legacy buffer arm inside a Magma server is a role
     // invariant the two halves must hold, not a verb the wire failed to migrate.
+    // GL 4.6 core 9.8: a framebuffer is layered when its attachments are (completeness makes
+    // them agree), and only then does gl_Layer select a layer.
+    static Bool WireFramebufferIsLayered(const MG_Pipe::MGPFramebufferState& fbo) {
+        if (fbo.IsDefault) return false;
+        const auto layered = [](const MG_Pipe::MGPSurface& surface) {
+            return surface.Kind == MG_Pipe::kMGPipeSurfaceKindTexture && surface.Layered != 0;
+        };
+        for (const auto& color : fbo.Color) {
+            if (layered(color)) return true;
+        }
+        return layered(fbo.Depth) || layered(fbo.Stencil);
+    }
+
     [[noreturn]] static void WireBufferLegacyFatal() {
         MG_Pipe::MGPipeSessionFail(
             MG_Pipe::MGPipeFatalFamily::RoleViolation,
@@ -847,7 +860,7 @@
         // Interned once per pass (above): a continued pass has the same compatibility.
         const Uint64 compatibilityId = m_wireDrawPassCompatibilityId;
         const auto pipeline = GetOrCreatePipelineWithInput(mode, program, programObj, flags, input, pass,
-            ResolvePrimitiveRestartEnable(aspects, indices), compatibilityId);
+            ResolvePrimitiveRestartEnable(aspects, indices), WireFramebufferIsLayered(*fbo), compatibilityId);
         if (pipeline == VK_NULL_HANDLE) {
             MGL_WIRE_DECLINE_AT(PipelineUnavailable, "no graphics pipeline could be created for this draw");
             return false;

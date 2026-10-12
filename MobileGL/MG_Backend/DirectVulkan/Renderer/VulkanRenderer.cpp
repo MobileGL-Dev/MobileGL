@@ -2822,8 +2822,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     VkPipeline VulkanRenderer::GetOrCreatePipelineWithInput(GLenum mode, const MagmaProgramSource& program,
             const ProgramFactory::VkProgramObject& programObj, ProgramFactory::CompileOptionFlags transformFlags,
             const VertexInputStateFactory::BackendVertexInputState& vis, const RenderPassEntry& renderPassEntry,
-            Bool primitiveRestartEnable, Uint64 wireRenderPassCompatibilityId) {
+            Bool primitiveRestartEnable, Bool layeredFramebuffer, Uint64 wireRenderPassCompatibilityId) {
         Bool invertClockwise = transformFlags & ProgramFactory::CompileOptionBit::PositionYFlip;
+        const Bool nonLayeredStages = !layeredFramebuffer && !programObj.nonLayeredStages.empty();
         if (programObj.stages.empty()) {
             MGLOG_D("GetOrCreatePipeline skipped: program has no shader stages");
             return VK_NULL_HANDLE;
@@ -2874,6 +2875,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 entry.pipelineStateHash == pipelineStateHash &&
                 entry.renderStateCso == renderStateCso &&
                 entry.primitiveRestartEnable == primitiveRestartEnable &&
+                entry.nonLayeredStages == nonLayeredStages &&
                 entry.transformFlags == transformFlags) {
                 if (MG_Util::PipeStats::Enabled()) {
                     // Gate 5 of section 2.3.1. On a hit this whole function cost the one
@@ -3161,6 +3163,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             .primitiveRestartEnable = primitiveRestartEnabled,
             .patchControlPoints = static_cast<Uint32>(MG_Pipe::gPipeInputs->GetPatchVertices()),
             .viewportCount = ResolveDrawViewportCount(programObj.writesViewportIndexBuiltin),
+            .nonLayeredStages = nonLayeredStages,
             .polygonMode = effectivePolygonMode,
             .cullMode = cullFaceEnabled
                 ? MG_Util::ConvertCullFaceModeToVkEnum(MG_Pipe::gPipeInputs->GetCullFaceMode(), false)
@@ -3202,7 +3205,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             .backStencilCompareOp = MG_Util::ConvertDepthTestFuncToVkEnum(backStencil.Func),
             .fragmentReplacesDepth = programObj.fragmentReplacesDepth,
             .fragmentShadingRateDynamic = m_fragmentShadingRate.Pipeline,
-            .stages = &programObj.stages,
+            .stages = nonLayeredStages ? &programObj.nonLayeredStages : &programObj.stages,
             .vertexInputState = pipelineVertexInputState,
             .stageSpirvDigests = &programObj.stageSpirvDigests
         };
@@ -3445,6 +3448,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             entry.pipelineStateHash = pipelineStateHash;
             entry.renderStateCso = renderStateCso;
             entry.primitiveRestartEnable = primitiveRestartEnable;
+            entry.nonLayeredStages = nonLayeredStages;
             entry.transformFlags = transformFlags;
             entry.pipeline = pipeline;
             m_pipelineMemoNext = (m_pipelineMemoNext + 1) % kPipelineMemoSize;

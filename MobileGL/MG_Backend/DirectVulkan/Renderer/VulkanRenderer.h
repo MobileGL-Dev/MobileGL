@@ -973,7 +973,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         VkPipeline GetOrCreatePipelineWithInput(GLenum mode, const MagmaProgramSource& program,
             const ProgramFactory::VkProgramObject& programObj, ProgramFactory::CompileOptionFlags transformFlags,
             const VertexInputStateFactory::BackendVertexInputState& vis, const RenderPassEntry& renderPassEntry,
-            Bool primitiveRestartEnable, Uint64 wireRenderPassCompatibilityId = 0);
+            Bool primitiveRestartEnable, Bool layeredFramebuffer, Uint64 wireRenderPassCompatibilityId = 0);
 
         void CopyWireFramebufferToTexture(GLenum target, GLint level, GLint xoffset, GLint yoffset,
                                            GLint x, GLint y, GLsizei width, GLsizei height);
@@ -1468,6 +1468,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // indexed and a non-indexed draw over the same program and state collide on one entry
             // and the second one gets the first one's restart setting.
             Bool primitiveRestartEnable = false;
+            // The pipeline was built from the program's nonLayeredStages (gl_Layer stores zeroed,
+            // PipelineCreatePayload::nonLayeredStages). Not derivable from the render pass: a
+            // layered and a single-layer attachment of one format share it.
+            Bool nonLayeredStages = false;
             VkPipeline pipeline = VK_NULL_HANDLE;
         };
         static constexpr Uint32 kPipelineMemoSize = 8;

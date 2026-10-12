@@ -3998,6 +3998,32 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             entry.stageSpirvDigests.push_back(ShaderStageSpirvDigest{
                 static_cast<Uint32>(stage.stage), static_cast<Uint32>(moduleSpv.size()),
                 XXH64(moduleSpv.data(), moduleSpv.size() * sizeof(Uint), 0)});
+
+            // GL ignores gl_Layer when the framebuffer is not layered; Vulkan leaves a Layer at or
+            // past the framebuffer's layer count undefined. A stage that stores it gets a second
+            // module storing 0 for draws into a non-layered framebuffer (ZeroLayerOutputPass).
+            VkPipelineShaderStageCreateInfo nonLayeredStage = stage;
+            if (shaderStage == ShaderStage::Vertex || shaderStage == ShaderStage::TessEval ||
+                shaderStage == ShaderStage::Geometry) {
+                Vector<Uint> zeroLayerSpv;
+                if (MG_Util::ShaderTranspiler::ShaderCompiler::ZeroLayerOutputForVulkan(moduleSpv, zeroLayerSpv,
+                                                                                        enableSpirvValidation) &&
+                    !zeroLayerSpv.empty() && zeroLayerSpv != moduleSpv) {
+                    VkShaderModuleCreateInfo zeroLayerInfo{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
+                    zeroLayerInfo.codeSize = zeroLayerSpv.size() * sizeof(Uint);
+                    zeroLayerInfo.pCode = zeroLayerSpv.data();
+                    VkShaderModule zeroLayerModule = VK_NULL_HANDLE;
+                    VK_VERIFY(vkCreateShaderModule(m_device, &zeroLayerInfo, nullptr, &zeroLayerModule),
+                              "vkCreateShaderModule(zero gl_Layer)");
+                    entry.modules.push_back(zeroLayerModule);
+                    nonLayeredStage.module = zeroLayerModule;
+                    // Back-fill: every stage before this one is shared with `stages`.
+                    if (entry.nonLayeredStages.empty()) {
+                        entry.nonLayeredStages.assign(entry.stages.begin(), entry.stages.end() - 1);
+                    }
+                }
+            }
+            if (!entry.nonLayeredStages.empty()) entry.nonLayeredStages.push_back(nonLayeredStage);
         }
 
         // Reflect and create layout as part of the program object

@@ -128,6 +128,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
             HashType hash = 0;
             Vector<VkPipelineShaderStageCreateInfo> stages;
+            // `stages` for a draw into a NON-LAYERED framebuffer: the same list, except that every
+            // module storing gl_Layer is replaced by its ZeroLayerOutputPass variant (GL ignores
+            // gl_Layer there; Vulkan offsets the primitive out of the attachment). Empty for every
+            // program that never writes gl_Layer, which then uses `stages` for both. The variant
+            // modules are owned by `modules` like the others.
+            Vector<VkPipelineShaderStageCreateInfo> nonLayeredStages;
             Vector<VkShaderModule> modules;
             // Parallel to stages; identifies the exact module bytes handed to the driver when a
             // pipeline creation fails. Sixteen bytes per stage instead of keeping the SPIR-V.
@@ -277,6 +283,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             VkProgramObject(VkProgramObject&& other) noexcept {
                 hash = other.hash;
                 stages = std::move(other.stages);
+                nonLayeredStages = std::move(other.nonLayeredStages);
                 modules = std::move(other.modules);
                 // Must travel with `modules`: these digests name the SPIR-V those exact
                 // shader modules were built from, and the pipeline-failure diagnostics
@@ -356,6 +363,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 Destroy();
                 hash = other.hash;
                 stages = std::move(other.stages);
+                nonLayeredStages = std::move(other.nonLayeredStages);
                 modules = std::move(other.modules);
                 stageSpirvDigests = std::move(other.stageSpirvDigests); // travels with `modules` - see the move ctor
                 descriptorSetLayout = other.descriptorSetLayout;
@@ -446,6 +454,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 }
                 modules.clear();
                 stages.clear();
+                nonLayeredStages.clear();
                 stageSpirvDigests.clear(); // the modules they describe are gone
             }
         };

@@ -21,6 +21,7 @@ add_executable(
         DemotePointSizeTest.cpp
         FragCoordYFlipTest.cpp
         PixelCenterIntegerTest.cpp
+        ZeroLayerOutputTest.cpp
         RelaxedOpaqueStructTest.cpp
         ShadingRateEsslTest.cpp
 )
