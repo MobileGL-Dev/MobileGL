@@ -124,6 +124,17 @@ namespace MobileGL::MG_State::GLState {
                                    return ref.shader && ref.shader->GetShaderStage() == stage;
                                });
         }
+        // HasLinkedShaderStage without the default fragment shader Link() adds to a vertex-only
+        // program on a backend that cannot run one (AddDefaultFragmentShaderIfMissing; its shader
+        // object has no name). That stage is MobileGL's, not the application's, so it is not one
+        // the GL rules about "the stages present when the program was linked" may count.
+        Bool HasApplicationLinkedShaderStage(ShaderStage stage) const {
+            return std::any_of(m_linkedShaderSnapshot.begin(), m_linkedShaderSnapshot.end(),
+                               [stage](const LinkedShaderRef& ref) {
+                                   return ref.shader && ref.shader->GetShaderStage() == stage &&
+                                          ref.shader->GetExternalIndex() != 0;
+                               });
+        }
         // The stage of each module of GetGeneratedSpirv(), at the SAME index and with the same
         // size: phase B emits exactly one module per entry of the snapshot above, in that order
         // (Link() fills ProgramLinkTask::in.shaders from the snapshot loop, phase A copies the

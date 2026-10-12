@@ -74,7 +74,7 @@ namespace MobileGL {
                         // "A program object is active for at least one, but not all of the shader
                         // stages that were present when the program was linked."
                         for (SizeT other = 0; other < kStageCount; ++other) {
-                            if (program->HasLinkedShaderStage(static_cast<ShaderStage>(other)) &&
+                            if (program->HasApplicationLinkedShaderStage(static_cast<ShaderStage>(other)) &&
                                 m_stagePrograms[other] != program) {
                                 return std::format("A program is active for stage {} but not for its linked stage {}.",
                                                    stage, other);

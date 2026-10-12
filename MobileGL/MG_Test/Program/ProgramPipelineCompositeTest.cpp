@@ -673,6 +673,47 @@ void main() { gl_Position = vec4(0.0); }
     }
 }
 
+// KHR-GL4x.geometry_shader.api.program_pipeline_vs_gs_capture: a vertex-only separable program
+// and a geometry-only one. Link() gives the vertex-only program MobileGL's default fragment shader
+// (neither backend runs a vertex-only program), and the "active for some but not all of its linked
+// stages" rule must not count that stage, or every such pipeline fails validation and its draws.
+TEST_F(ProgramPipelineCompositeTest, AVertexOnlyStageProgramValidatesWithoutAFragmentStage) {
+    const char* kVs = R"(#version 430 core
+out gl_PerVertex { vec4 gl_Position; };
+flat out int vertexID;
+void main() { vertexID = gl_VertexID; gl_Position = vec4(0.0); }
+)";
+    const char* kGs = R"(#version 430 core
+in gl_PerVertex { vec4 gl_Position; } gl_in[];
+out gl_PerVertex { vec4 gl_Position; };
+layout(points) in;
+layout(points, max_vertices = 1) out;
+flat in int vertexID[];
+out vec4 color;
+void main() { color = vec4(vertexID[0]); gl_Position = vec4(0.0); EmitVertex(); }
+)";
+    const GLuint vs = MakeSeparableProgram(GL_VERTEX_SHADER, kVs);
+    const GLuint gs = MakeSeparableProgram(GL_GEOMETRY_SHADER, kGs);
+
+    GLuint pipeline = 0;
+    GenProgramPipelines(1, &pipeline);
+    UseProgramStages(pipeline, GL_VERTEX_SHADER_BIT, vs);
+    UseProgramStages(pipeline, GL_GEOMETRY_SHADER_BIT, gs);
+    BindProgramPipeline(pipeline);
+    ValidateProgramPipeline(pipeline);
+    GLint status = -1;
+    GetProgramPipelineiv(pipeline, GL_VALIDATE_STATUS, &status);
+    EXPECT_EQ(status, GL_TRUE);
+    ASSERT_EQ(GetError(), GL_NO_ERROR);
+    DrawArrays(GL_POINTS, 0, 1);
+    EXPECT_EQ(GetError(), GL_NO_ERROR) << "a draw through the valid pipeline";
+
+    BindProgramPipeline(0);
+    DeleteProgramPipelines(1, &pipeline);
+    for (Int drained = 0; drained < 16 && GetError() != GL_NO_ERROR; ++drained) {
+    }
+}
+
 // ---------------------------------------------------------------------------------------------
 // The composite's transform-feedback capture list.
 //
