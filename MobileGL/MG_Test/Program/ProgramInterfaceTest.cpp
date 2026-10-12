@@ -951,6 +951,45 @@ void main() {
         }
     }
 
+    // glGetAttribLocation("name[N]") on an attribute array answers element N's location
+    // (KHR-GL4x.cull_distance.functional_* feed `in float culldistance_data[N]` element by element).
+    TEST_F(ProgramInterfaceTest, AttribLocationResolvesArrayElements) {
+        const char* vs = R"(#version 430
+in vec4 position;
+in float data[4];
+in mat2 m[2];
+out float v;
+void main(void) {
+    v = data[0] + data[1] + data[2] + data[3] + m[0][0][0] + m[1][1][1];
+    gl_Position = position;
+}
+)";
+        const GLuint p = MakeProgram(vs, kSimpleFs);
+        LinkProgram(p);
+        ExpectLinked(p);
+        ClearErrors();
+
+        const GLint data = GetAttribLocation(p, "data");
+        ASSERT_GE(data, 0);
+        EXPECT_EQ(GetAttribLocation(p, "data[0]"), data);
+        EXPECT_EQ(GetAttribLocation(p, "data[1]"), data + 1);
+        EXPECT_EQ(GetAttribLocation(p, "data[3]"), data + 3);
+        EXPECT_EQ(GetAttribLocation(p, "data[4]"), -1);
+        EXPECT_EQ(GetAttribLocation(p, "data[01]"), -1);
+        EXPECT_EQ(GetAttribLocation(p, "data[ 1]"), -1);
+
+        // A matrix element occupies one location per column.
+        const GLint m = GetAttribLocation(p, "m");
+        ASSERT_GE(m, 0);
+        EXPECT_EQ(GetAttribLocation(p, "m[1]"), m + 2);
+        EXPECT_EQ(GetAttribLocation(p, "m[2]"), -1);
+
+        // A subscript on a non-array names nothing.
+        ASSERT_GE(GetAttribLocation(p, "position"), 0);
+        EXPECT_EQ(GetAttribLocation(p, "position[0]"), -1);
+        EXPECT_EQ(TakeError(), GL_NO_ERROR);
+    }
+
     // The same rule for the tessellation stages, whose limits come from the backend like the
     // others (they used to be hard-coded zeros). Sized off the advertised limit for the same
     // reason as above: one image over it must fail and name the limit, and exactly at it must

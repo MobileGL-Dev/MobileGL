@@ -26,6 +26,48 @@ void main() {}
 namespace MobileGL::MG_State::GLState {
     static std::atomic<Uint64> s_nextProgramLifetimeId = 1;
 
+    Int ProgramObject::GetAttributeArrayElementLocation(const String& name) {
+        if (name.empty()) return -1;
+        if (name.back() != ']') return GetAttributeArrayElementLocation(name + "[0]");
+        // A strict decimal subscript: no white space, no sign, no leading zeros.
+        const SizeT bracket = name.rfind('[');
+        if (bracket == String::npos || bracket == 0) return -1;
+        const SizeT first = bracket + 1;
+        const SizeT last = name.size() - 1;
+        if (first >= last || (name[first] == '0' && last - first > 1)) return -1;
+        Int element = 0;
+        for (SizeT i = first; i < last; ++i) {
+            if (name[i] < '0' || name[i] > '9') return -1;
+            element = element * 10 + (name[i] - '0');
+            if (element > 0xFFFF) return -1;
+        }
+        const String base = name.substr(0, bracket);
+
+        const auto& artifacts = Artifacts();
+        const auto& attribs = artifacts.attribs;
+        for (const auto& input : artifacts.pipeInputReflection) {
+            // Reflection may spell an array with or without its "[0]".
+            if (input.name != base && input.name != base + "[0]") continue;
+            if (!input.type.isArray || element >= input.arraySize) return -1;
+            // The link expanded the array over consecutive locations, every one carrying the
+            // reflected name (ProgramLinkTask's attribute table), so its span is the run of them.
+            // An exact match for the reflected name was already tried by GetAttributeLocation, so
+            // this is reached for element 0 only through the plain-name spelling.
+            const auto it = std::find(attribs.begin(), attribs.end(), input.name);
+            if (it == attribs.end()) return -1;
+            const Int baseLocation = static_cast<Int>(std::distance(attribs.begin(), it));
+            Int span = 0;
+            while (baseLocation + span < static_cast<Int>(attribs.size()) &&
+                   attribs[static_cast<SizeT>(baseLocation + span)] == input.name) {
+                ++span;
+            }
+            const Int locationsPerElement = std::max<Int>(1, span / std::max<Int>(input.arraySize, 1));
+            const Int location = baseLocation + element * locationsPerElement;
+            return location < baseLocation + span ? location : -1;
+        }
+        return -1;
+    }
+
     Uint64 ProgramObject::AllocateLifetimeId() {
         return s_nextProgramLifetimeId.fetch_add(1, std::memory_order_relaxed);
     }

@@ -663,8 +663,15 @@ namespace MobileGL::MG_State::GLState {
 
         Int GetAttributeLocation(const String& name) {
             const auto it = std::find(Artifacts().attribs.begin(), Artifacts().attribs.end(), name);
-            return (it == Artifacts().attribs.end()) ? -1 : (Int)std::distance(Artifacts().attribs.begin(), it);
+            return (it == Artifacts().attribs.end()) ? GetAttributeArrayElementLocation(name)
+                                                     : (Int)std::distance(Artifacts().attribs.begin(), it);
         }
+        // An attribute ARRAY by its plain name or as "name[N]" (GL 4.6 core 7.3.1.1 / 11.1.1).
+        // Reflection records the array as "name[0]", so the plain name answers element 0, and
+        // "name[N]" answers the array's base location plus N times the locations one element
+        // occupies (a matrix takes one per column). -1 past the end, for a subscript on a
+        // non-array, and for a subscript the resource-name grammar rejects ("a[01]", "a[ 1]").
+        Int GetAttributeArrayElementLocation(const String& name);
         Uint32 GetActiveAttributeLocationMask() const {
             Uint32 mask = 0;
             const SizeT count = std::min<SizeT>(Artifacts().attribs.size(), 32);
