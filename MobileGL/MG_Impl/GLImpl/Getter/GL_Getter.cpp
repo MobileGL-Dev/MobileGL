@@ -68,38 +68,8 @@ namespace MobileGL::MG_Impl::GLImpl {
         // limits below: gl_MaxComputeUniformComponents expands from BuildTBuiltInResource.
         constexpr GLint kFrontendMaxComputeUniformComponents =
             static_cast<GLint>(MG_Util::ShaderTranspiler::MAX_COMPUTE_UNIFORM_COMPONENTS);
-        // Every atomic-counter limit is shared with the glslang resource table
-        // (BuildTBuiltInResource) through MG_Util/ShaderTranspiler/Types.h: GL 4.6 requires
-        // glGetIntegerv and the gl_MaxAtomicCounter* built-in constants to agree, and the two
-        // used to be independent tables that disagreed on both the binding count and the buffer
-        // size. Never move one of these without the other.
-        constexpr GLint kFrontendMaxComputeAtomicCounters =
-            static_cast<GLint>(MG_Util::ShaderTranspiler::MAX_ATOMIC_COUNTERS_PER_STAGE);
-        constexpr GLint kFrontendMaxComputeAtomicCounterBuffers =
-            static_cast<GLint>(MG_Util::ShaderTranspiler::MAX_ATOMIC_COUNTER_BUFFERS_PER_STAGE);
         constexpr GLint kFrontendMaxComputeSharedMemorySize = 32768;
         constexpr GLint kFrontendMaxComputeWorkGroupInvocations = 1024;
-        constexpr GLint kFrontendMaxCombinedAtomicCounters =
-            static_cast<GLint>(MG_Util::ShaderTranspiler::MAX_ATOMIC_COUNTERS_PER_STAGE);
-        constexpr GLint kFrontendMaxCombinedAtomicCounterBuffers =
-            static_cast<GLint>(MG_Util::ShaderTranspiler::MAX_ATOMIC_COUNTER_BUFFERS_PER_STAGE);
-        constexpr GLint kFrontendMaxFragmentAtomicCounters =
-            static_cast<GLint>(MG_Util::ShaderTranspiler::MAX_ATOMIC_COUNTERS_PER_STAGE);
-        constexpr GLint kFrontendMaxFragmentAtomicCounterBuffers =
-            static_cast<GLint>(MG_Util::ShaderTranspiler::MAX_ATOMIC_COUNTER_BUFFERS_PER_STAGE);
-        constexpr GLint kFrontendMaxGeometryAtomicCounters = 0;
-        constexpr GLint kFrontendMaxTessControlAtomicCounters = 0;
-        constexpr GLint kFrontendMaxTessEvaluationAtomicCounters = 0;
-        constexpr GLint kFrontendMaxVertexAtomicCounters = 0;
-        // Zero counters means zero buffers to hold them. These have to be ANSWERED rather than
-        // left to the default INVALID_ENUM: a well-behaved application queries the limit exactly
-        // to find out that the stage cannot do this, and an error instead both leaves its output
-        // untouched (so it reads uninitialised memory and may conclude the opposite) and leaves a
-        // GL error pending that surfaces at whatever unrelated call checks next.
-        constexpr GLint kFrontendMaxGeometryAtomicCounterBuffers = 0;
-        constexpr GLint kFrontendMaxTessControlAtomicCounterBuffers = 0;
-        constexpr GLint kFrontendMaxTessEvaluationAtomicCounterBuffers = 0;
-        constexpr GLint kFrontendMaxVertexAtomicCounterBuffers = 0;
         // GL_MAX_ATOMIC_COUNTER_BUFFER_SIZE: the byte offset ceiling a counter may be declared
         // at. The matching binding count is applied in GetIndexedBufferQueryPointCount, so that
         // the getter, the indexed queries and glBindBufferBase all share one ceiling.
@@ -333,6 +303,18 @@ namespace MobileGL::MG_Impl::GLImpl {
         // ARM's GLES driver reports 0 for all four (a Mali-G925 does), and advertising 16 there
         // bought nothing: the program still failed to link inside the backend, the frontend
         // still reported LINK_STATUS as true, and every draw with it silently rendered nothing.
+        // Every per-stage and combined atomic-counter limit. Shared with the glslang resource
+        // table (BuildTBuiltInResource) through ResolveAtomicCounterLimits: GL 4.6 requires
+        // glGetIntegerv and the gl_Max*AtomicCounter* built-in constants to agree, and the link
+        // fails a program over them. A stage that cannot host a counter answers 0 rather than
+        // INVALID_ENUM - an application queries the limit exactly to find that out.
+        MG_Util::ShaderTranspiler::AtomicCounterLimits AdvertisedAtomicCounterLimits() {
+            static const MG_Backend::DynamicBackendParameters kBackendlessDefaults{};
+            return MG_Util::ShaderTranspiler::ResolveAtomicCounterLimits(
+                MG_Backend::pActiveBackendObject ? MG_Backend::pActiveBackendObject->GetDynamicParameters()
+                                                 : kBackendlessDefaults);
+        }
+
         GLint StageStorageBlockCount(Int MG_Backend::DynamicBackendParameters::*stageLimit) {
             static const MG_Backend::DynamicBackendParameters kBackendlessDefaults{};
             const MG_Backend::DynamicBackendParameters& parameters =
@@ -1885,10 +1867,10 @@ namespace MobileGL::MG_Impl::GLImpl {
             *params = kFrontendMaxComputeUniformComponents;
             return;
         case GL_MAX_COMPUTE_ATOMIC_COUNTERS:
-            *params = kFrontendMaxComputeAtomicCounters;
+            *params = AdvertisedAtomicCounterLimits().stageCounters[5];
             return;
         case GL_MAX_COMPUTE_ATOMIC_COUNTER_BUFFERS:
-            *params = kFrontendMaxComputeAtomicCounterBuffers;
+            *params = AdvertisedAtomicCounterLimits().stageBuffers[5];
             return;
         case GL_MAX_COMPUTE_SHARED_MEMORY_SIZE:
             *params = kFrontendMaxComputeSharedMemorySize;
@@ -2081,10 +2063,10 @@ namespace MobileGL::MG_Impl::GLImpl {
             *params = static_cast<GLint>(MG_Util::ConvertLogicOperationToGLEnum(MG_State::pGLContext->GetLogicOp()));
             return;
         case GL_MAX_COMBINED_ATOMIC_COUNTERS:
-            *params = kFrontendMaxCombinedAtomicCounters;
+            *params = AdvertisedAtomicCounterLimits().combinedCounters;
             return;
         case GL_MAX_COMBINED_ATOMIC_COUNTER_BUFFERS:
-            *params = kFrontendMaxCombinedAtomicCounterBuffers;
+            *params = AdvertisedAtomicCounterLimits().combinedBuffers;
             return;
         case GL_MAX_COMBINED_UNIFORM_BLOCKS:
             *params = ClampUniformBlockCount(kFrontendMaxCombinedUniformBlocks);
@@ -2099,10 +2081,10 @@ namespace MobileGL::MG_Impl::GLImpl {
             *params = 1024 * 1024; // TODO
             return;
         case GL_MAX_FRAGMENT_ATOMIC_COUNTERS:
-            *params = kFrontendMaxFragmentAtomicCounters;
+            *params = AdvertisedAtomicCounterLimits().stageCounters[4];
             return;
         case GL_MAX_FRAGMENT_ATOMIC_COUNTER_BUFFERS:
-            *params = kFrontendMaxFragmentAtomicCounterBuffers;
+            *params = AdvertisedAtomicCounterLimits().stageBuffers[4];
             return;
         case GL_MAX_FRAGMENT_SHADER_STORAGE_BLOCKS:
             *params = StageStorageBlockCount(&MG_Backend::DynamicBackendParameters::MaxFragmentShaderStorageBlocks);
@@ -2125,10 +2107,10 @@ namespace MobileGL::MG_Impl::GLImpl {
             *params = ClampUniformBlockCount(kFrontendMaxFragmentUniformBlocks);
             return;
         case GL_MAX_GEOMETRY_ATOMIC_COUNTERS:
-            *params = kFrontendMaxGeometryAtomicCounters;
+            *params = AdvertisedAtomicCounterLimits().stageCounters[3];
             return;
         case GL_MAX_GEOMETRY_ATOMIC_COUNTER_BUFFERS:
-            *params = kFrontendMaxGeometryAtomicCounterBuffers;
+            *params = AdvertisedAtomicCounterLimits().stageBuffers[3];
             return;
         case GL_MAX_GEOMETRY_SHADER_STORAGE_BLOCKS:
             *params = StageStorageBlockCount(&MG_Backend::DynamicBackendParameters::MaxGeometryShaderStorageBlocks);
@@ -2191,16 +2173,16 @@ namespace MobileGL::MG_Impl::GLImpl {
             *params = INT_MAX; // TODO
             return;
         case GL_MAX_TESS_CONTROL_ATOMIC_COUNTERS:
-            *params = kFrontendMaxTessControlAtomicCounters;
+            *params = AdvertisedAtomicCounterLimits().stageCounters[1];
             return;
         case GL_MAX_TESS_CONTROL_ATOMIC_COUNTER_BUFFERS:
-            *params = kFrontendMaxTessControlAtomicCounterBuffers;
+            *params = AdvertisedAtomicCounterLimits().stageBuffers[1];
             return;
         case GL_MAX_TESS_EVALUATION_ATOMIC_COUNTERS:
-            *params = kFrontendMaxTessEvaluationAtomicCounters;
+            *params = AdvertisedAtomicCounterLimits().stageCounters[2];
             return;
         case GL_MAX_TESS_EVALUATION_ATOMIC_COUNTER_BUFFERS:
-            *params = kFrontendMaxTessEvaluationAtomicCounterBuffers;
+            *params = AdvertisedAtomicCounterLimits().stageBuffers[2];
             return;
         case GL_MAX_TESS_CONTROL_IMAGE_UNIFORMS:
             *params = MG_Backend::pActiveBackendObject
@@ -2286,10 +2268,10 @@ namespace MobileGL::MG_Impl::GLImpl {
             *params = kFrontendMaxVaryingVectors;
             return;
         case GL_MAX_VERTEX_ATOMIC_COUNTERS:
-            *params = kFrontendMaxVertexAtomicCounters;
+            *params = AdvertisedAtomicCounterLimits().stageCounters[0];
             return;
         case GL_MAX_VERTEX_ATOMIC_COUNTER_BUFFERS:
-            *params = kFrontendMaxVertexAtomicCounterBuffers;
+            *params = AdvertisedAtomicCounterLimits().stageBuffers[0];
             return;
         case GL_MAX_VERTEX_IMAGE_UNIFORMS:
             *params = MG_Backend::pActiveBackendObject

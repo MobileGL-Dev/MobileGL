@@ -1230,6 +1230,84 @@ void main() {
     MG_State::pGLContext = Move(previousContext);
 }
 
+// Every per-stage atomic-counter limit follows the backend's per-stage STORAGE-BLOCK budget,
+// because both backends serve a counter buffer as a lowered storage block in any stage: a stage
+// with storage blocks gets counter buffers (up to the binding count) and a full buffer's worth of
+// counters, a stage without gets 0 of both. glGetIntegerv and the gl_Max*AtomicCounter*
+// constants must say the same thing (KHR-GL43.shader_atomic_counters.basic-glsl-built-in).
+TEST(GetterSanity, AtomicCounterLimitsFollowTheStageStorageBlockBudget) {
+    using namespace MobileGL;
+    namespace Transpiler = MG_Util::ShaderTranspiler;
+
+    auto previousContext = MG_State::pGLContext.Take();
+    auto previousBackend = Move(MG_Backend::pActiveBackendObject);
+    MG_State::pGLContext = MakeUnique<MG_State::GLState::GLContext>();
+    MG_Backend::DynamicBackendParameters params{};
+    params.MaxShaderStorageBufferBindings = 24;
+    params.MaxCombinedShaderStorageBlocks = 24;
+    params.MaxVertexShaderStorageBlocks = 4;
+    params.MaxTessControlShaderStorageBlocks = 0;
+    params.MaxTessEvaluationShaderStorageBlocks = 0;
+    params.MaxGeometryShaderStorageBlocks = 2;
+    params.MaxFragmentShaderStorageBlocks = 4;
+    params.MaxComputeShaderStorageBlocks = 24;
+    MG_Backend::pActiveBackendObject = MakeUnique<DynamicParameterBackend>(params);
+
+    const GLint fullBuffer = static_cast<GLint>(Transpiler::MAX_ATOMIC_COUNTER_BUFFER_SIZE / 4);
+    const struct {
+        GLenum buffersPname;
+        GLenum countersPname;
+        GLint buffers;
+        GLint counters;
+        const char* buffersConstant;
+        const char* countersConstant;
+    } expected[] = {
+        {GL_MAX_VERTEX_ATOMIC_COUNTER_BUFFERS, GL_MAX_VERTEX_ATOMIC_COUNTERS, 4, fullBuffer,
+         "gl_MaxVertexAtomicCounterBuffers", "gl_MaxVertexAtomicCounters"},
+        {GL_MAX_TESS_CONTROL_ATOMIC_COUNTER_BUFFERS, GL_MAX_TESS_CONTROL_ATOMIC_COUNTERS, 0, 0,
+         "gl_MaxTessControlAtomicCounterBuffers", "gl_MaxTessControlAtomicCounters"},
+        {GL_MAX_TESS_EVALUATION_ATOMIC_COUNTER_BUFFERS, GL_MAX_TESS_EVALUATION_ATOMIC_COUNTERS, 0, 0,
+         "gl_MaxTessEvaluationAtomicCounterBuffers", "gl_MaxTessEvaluationAtomicCounters"},
+        {GL_MAX_GEOMETRY_ATOMIC_COUNTER_BUFFERS, GL_MAX_GEOMETRY_ATOMIC_COUNTERS, 2, fullBuffer,
+         "gl_MaxGeometryAtomicCounterBuffers", "gl_MaxGeometryAtomicCounters"},
+        {GL_MAX_FRAGMENT_ATOMIC_COUNTER_BUFFERS, GL_MAX_FRAGMENT_ATOMIC_COUNTERS, 4, fullBuffer,
+         "gl_MaxFragmentAtomicCounterBuffers", "gl_MaxFragmentAtomicCounters"},
+        {GL_MAX_COMPUTE_ATOMIC_COUNTER_BUFFERS, GL_MAX_COMPUTE_ATOMIC_COUNTERS,
+         static_cast<GLint>(Transpiler::MAX_ATOMIC_COUNTER_BUFFER_BINDINGS), fullBuffer,
+         "gl_MaxComputeAtomicCounterBuffers", "gl_MaxComputeAtomicCounters"},
+        // The combined pair: the stage sum (4 + 2 + 4 + 8 buffers), bounded by the combined
+        // storage-block budget the lowered blocks draw from.
+        {GL_MAX_COMBINED_ATOMIC_COUNTER_BUFFERS, GL_MAX_COMBINED_ATOMIC_COUNTERS, 18, 4 * fullBuffer,
+         "gl_MaxCombinedAtomicCounterBuffers", "gl_MaxCombinedAtomicCounters"},
+    };
+    String checks;
+    for (const auto& limit : expected) {
+        GLint reported = -1;
+        MG_Impl::GLImpl::GetIntegerv(limit.buffersPname, &reported);
+        EXPECT_EQ(reported, limit.buffers) << limit.buffersConstant;
+        reported = -1;
+        MG_Impl::GLImpl::GetIntegerv(limit.countersPname, &reported);
+        EXPECT_EQ(reported, limit.counters) << limit.countersConstant;
+        // A negative array size is a compile error, so each line compiles only while the
+        // constant expands to exactly the number glGetIntegerv answers.
+        checks += "int mg_" + String(limit.buffersConstant) + "[" + limit.buffersConstant +
+                  " == " + std::to_string(limit.buffers) + " ? 1 : -1];\n";
+        checks += "int mg_" + String(limit.countersConstant) + "[" + limit.countersConstant +
+                  " == " + std::to_string(limit.counters) + " ? 1 : -1];\n";
+    }
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    const String source = "#version 430 core\nout vec4 color;\n" + checks + "void main() { color = vec4(1.0); }\n";
+    auto compiled = MG_Util::ShaderTranspiler::ShaderCompiler::CompileShader({
+        .shaderType = GL_FRAGMENT_SHADER,
+        .sourceStr = source,
+    });
+    EXPECT_TRUE(compiled) << (compiled ? "" : compiled.error().log);
+
+    MG_Backend::pActiveBackendObject = Move(previousBackend);
+    MG_State::pGLContext = Move(previousContext);
+}
+
 // KHR-GL43.compute_shader.max: the test queries every GL_MAX_COMPUTE_* value through the API and
 // then makes a compute shader compare the matching gl_MaxCompute* constant against it. The two
 // used to be independent tables and gl_MaxComputeWorkGroupSize.z disagreed - glslang compiled

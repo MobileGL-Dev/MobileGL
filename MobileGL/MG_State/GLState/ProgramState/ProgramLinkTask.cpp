@@ -363,9 +363,8 @@ namespace {
     // default-block uniforms and is not a GL block at all. An instance array costs one block per
     // element, reconciled per name exactly as image arrays are above.
     //
-    // Atomic counter buffers are deliberately NOT counted here. Their pre-fragment limits are a
-    // frontend 0 while every backend serves a counter as a lowered storage block in any stage,
-    // so enforcing that number would only start refusing programs that run today.
+    // Atomic counter buffers are lowered storage blocks too, but GL counts them against their
+    // own limits: ValidateAtomicCounterLimits below.
     static MobileGL::String ValidateBlockLimits(glslang::TProgram& reflection,
                                                 const MobileGL::MG_Util::ShaderTranspiler::CompileEnv& env) {
         using MobileGL::Array;
@@ -447,6 +446,95 @@ namespace {
                                    "GL_MAX_COMBINED_{} allows.",
                                    combined, kFamilyNouns[family], combinedLimits[family], kFamilyNames[family]);
             }
+        }
+        return {};
+    }
+
+    // GL 4.6 core 7.7: LinkProgram FAILS when a stage uses more atomic counter buffers or atomic
+    // counters than GL_MAX_<STAGE>_ATOMIC_COUNTER_BUFFERS / _ATOMIC_COUNTERS, or the stages
+    // together more than the GL_MAX_COMBINED_* pair (a buffer or counter two stages use counts in
+    // each). Nothing enforced either, so a geometry stage with more counters than advertised
+    // linked cleanly. The limits are ResolveAtomicCounterLimits', the derivation glGetIntegerv
+    // and the gl_Max*AtomicCounter* constants answer from, and they follow what the backend can
+    // host - a counter buffer is a lowered storage block in every stage - so this refuses nothing
+    // the backend could have run.
+    //
+    // A counter buffer is one synthesized gl_AtomicCounterBlock_<binding> block; a counter is one
+    // element of one of its members. Both are counted only in the stages that reference them.
+    static MobileGL::String ValidateAtomicCounterLimits(glslang::TProgram& reflection,
+                                                        const MobileGL::MG_Util::ShaderTranspiler::CompileEnv& env) {
+        using MobileGL::Int;
+        using MobileGL::SizeT;
+        using MobileGL::Vector;
+        namespace Transpiler = MobileGL::MG_Util::ShaderTranspiler;
+        constexpr SizeT kStageCount = Transpiler::ATOMIC_COUNTER_STAGE_COUNT;
+
+        static constexpr EShLanguage kStages[kStageCount] = {EShLangVertex,   EShLangTessControl, EShLangTessEvaluation,
+                                                             EShLangGeometry, EShLangFragment,    EShLangCompute};
+        static constexpr const char* kStageNames[kStageCount] = {"VERTEX",   "TESS_CONTROL", "TESS_EVALUATION",
+                                                                 "GEOMETRY", "FRAGMENT",     "COMPUTE"};
+        const auto inStage = [](EShLanguageMask stages, SizeT stage) {
+            return (static_cast<unsigned>(stages) & (1u << static_cast<unsigned>(kStages[stage]))) != 0;
+        };
+
+        const Int blockCount = reflection.getNumUniformBlocks();
+        if (blockCount <= 0) return {};
+        Vector<bool> isCounterBlock(static_cast<SizeT>(blockCount), false);
+        Int buffers[kStageCount] = {};
+        bool anyCounterBlock = false;
+        for (Int i = 0; i < blockCount; ++i) {
+            const auto& block = reflection.getUniformBlock(i);
+            if (!IsAtomicCounterBlockName(block.name)) continue;
+            isCounterBlock[static_cast<SizeT>(i)] = true;
+            anyCounterBlock = true;
+            for (SizeT stage = 0; stage < kStageCount; ++stage) {
+                if (inStage(block.stages, stage)) ++buffers[stage];
+            }
+        }
+        if (!anyCounterBlock) return {}; // every program that declares no atomic counter
+
+        Int counters[kStageCount] = {};
+        const Int uniformCount = reflection.getNumUniformVariables();
+        for (Int i = 0; i < uniformCount; ++i) {
+            const auto& uniform = reflection.getUniform(i);
+            if (uniform.index < 0 || uniform.index >= blockCount || !isCounterBlock[static_cast<SizeT>(uniform.index)]) {
+                continue;
+            }
+            Int elements = uniform.size > 1 ? uniform.size : 1;
+            if (const glslang::TType* type = uniform.getType(); type != nullptr && type->isSizedArray()) {
+                elements = type->getCumulativeArraySize();
+            }
+            for (SizeT stage = 0; stage < kStageCount; ++stage) {
+                if (inStage(uniform.stages, stage)) counters[stage] += elements;
+            }
+        }
+
+        const Transpiler::AtomicCounterLimits limits = Transpiler::ResolveAtomicCounterLimits(env.params);
+        Int combinedBuffers = 0;
+        Int combinedCounters = 0;
+        for (SizeT stage = 0; stage < kStageCount; ++stage) {
+            if (buffers[stage] > limits.stageBuffers[stage]) {
+                return std::format("This program uses {} atomic counter buffers in one stage, more than the {} "
+                                   "GL_MAX_{}_ATOMIC_COUNTER_BUFFERS allows.",
+                                   buffers[stage], limits.stageBuffers[stage], kStageNames[stage]);
+            }
+            if (counters[stage] > limits.stageCounters[stage]) {
+                return std::format("This program uses {} atomic counters in one stage, more than the {} "
+                                   "GL_MAX_{}_ATOMIC_COUNTERS allows.",
+                                   counters[stage], limits.stageCounters[stage], kStageNames[stage]);
+            }
+            combinedBuffers += buffers[stage];
+            combinedCounters += counters[stage];
+        }
+        if (combinedBuffers > limits.combinedBuffers) {
+            return std::format("This program uses {} atomic counter buffers across its stages, more than the {} "
+                               "GL_MAX_COMBINED_ATOMIC_COUNTER_BUFFERS allows.",
+                               combinedBuffers, limits.combinedBuffers);
+        }
+        if (combinedCounters > limits.combinedCounters) {
+            return std::format("This program uses {} atomic counters across its stages, more than the {} "
+                               "GL_MAX_COMBINED_ATOMIC_COUNTERS allows.",
+                               combinedCounters, limits.combinedCounters);
         }
         return {};
     }
@@ -1246,6 +1334,14 @@ namespace MobileGL::MG_State::GLState {
 
         if (String blockLimitError = ValidateBlockLimits(*artifacts.program, env); !blockLimitError.empty()) {
             artifacts.infoLog = Move(blockLimitError);
+            DeferLog(std::format("ProgramObject {}: Link failed - {}", in.externalIndex, artifacts.infoLog));
+            ProgramObject::ResetLinkArtifacts(artifacts);
+            return false;
+        }
+
+        if (String counterLimitError = ValidateAtomicCounterLimits(*artifacts.program, env);
+            !counterLimitError.empty()) {
+            artifacts.infoLog = Move(counterLimitError);
             DeferLog(std::format("ProgramObject {}: Link failed - {}", in.externalIndex, artifacts.infoLog));
             ProgramObject::ResetLinkArtifacts(artifacts);
             return false;

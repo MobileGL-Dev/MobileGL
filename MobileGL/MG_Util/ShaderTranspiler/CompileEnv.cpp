@@ -83,6 +83,16 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
         // gl_MaxCullDistances / gl_MaxCombinedClipAndCullDistances from the same numbers.
         HashValue(state, env.params.MaxCullDistances);
         HashValue(state, env.params.MaxCombinedClipAndCullDistances);
+        // The inputs of ResolveAtomicCounterLimits, which every gl_Max*AtomicCounter* constant
+        // expands from: the per-stage counter-buffer budget is the stage's storage-block budget.
+        HashValue(state, env.params.MaxVertexShaderStorageBlocks);
+        HashValue(state, env.params.MaxTessControlShaderStorageBlocks);
+        HashValue(state, env.params.MaxTessEvaluationShaderStorageBlocks);
+        HashValue(state, env.params.MaxGeometryShaderStorageBlocks);
+        HashValue(state, env.params.MaxFragmentShaderStorageBlocks);
+        HashValue(state, env.params.MaxComputeShaderStorageBlocks);
+        HashValue(state, env.params.MaxCombinedShaderStorageBlocks);
+        HashValue(state, env.params.MaxShaderStorageBufferBindings);
         // The texture-image-unit family, made env-derived in the same wave. They were stock
         // glslang defaults (32/32/80) that disagreed with what glGetIntegerv answered, and
         // gl_MaxTextureImageUnits / gl_MaxVertexTextureImageUnits / gl_MaxCombinedTextureImageUnits

@@ -924,6 +924,56 @@ void main() { color = vec4(float(atomicCounterIncrement(a) + atomicCounterIncrem
         ClearErrors();
     }
 
+    // GL 4.6 core 7.7 fails the link when a stage uses more atomic counter buffers than
+    // GL_MAX_<STAGE>_ATOMIC_COUNTER_BUFFERS. Nothing counted them, so a geometry stage with more
+    // counter buffers than advertised linked cleanly. Sized off the ADVERTISED limits, which
+    // follow the active backend's geometry-stage storage-block budget.
+    TEST_F(ProgramInterfaceTest, AtomicCounterBuffersOverAStageLimitFailToLink) {
+        GLint maxGeometryBuffers = -1;
+        GLint maxBindings = -1;
+        GetIntegerv(GL_MAX_GEOMETRY_ATOMIC_COUNTER_BUFFERS, &maxGeometryBuffers);
+        GetIntegerv(GL_MAX_ATOMIC_COUNTER_BUFFER_BINDINGS, &maxBindings);
+        ClearErrors();
+        ASSERT_GE(maxGeometryBuffers, 0);
+
+        // One counter per binding 0..buffers-1, each its own buffer.
+        const auto link = [](GLint buffers, std::string& log) {
+            std::string gs = R"(#version 430
+layout(points) in;
+layout(points, max_vertices = 1) out;
+)";
+            std::string body;
+            for (GLint i = 0; i < buffers; ++i) {
+                gs += "layout(binding = " + std::to_string(i) + ") uniform atomic_uint c" + std::to_string(i) + ";\n";
+                body += "    atomicCounterIncrement(c" + std::to_string(i) + ");\n";
+            }
+            gs += "void main() {\n" + body + "    gl_Position = vec4(0.0);\n    EmitVertex();\n}\n";
+            const char* gsSource = gs.c_str();
+            const GLuint p = MakeProgram(kSimpleVs, kSimpleFs);
+            const GLuint sh = CreateShader(GL_GEOMETRY_SHADER);
+            ShaderSource(sh, 1, &gsSource, nullptr);
+            CompileShader(sh);
+            AttachShader(p, sh);
+            LinkProgram(p);
+            GLint status = -1;
+            GetProgramiv(p, GL_LINK_STATUS, &status);
+            char buffer[4096] = "";
+            GetProgramInfoLog(p, sizeof(buffer), nullptr, buffer);
+            log = buffer;
+            return status == GL_TRUE;
+        };
+
+        std::string log;
+        if (maxGeometryBuffers + 1 <= maxBindings) {
+            EXPECT_FALSE(link(maxGeometryBuffers + 1, log)) << "one buffer over the advertised limit must not link";
+            EXPECT_NE(log.find("GL_MAX_GEOMETRY_ATOMIC_COUNTER_BUFFERS"), std::string::npos) << "info log was: " << log;
+        }
+        if (maxGeometryBuffers > 0) {
+            EXPECT_TRUE(link(maxGeometryBuffers, log)) << "exactly the advertised limit must link: " << log;
+        }
+        ClearErrors();
+    }
+
     // GL 4.6 core 7.6 fails the link when a stage's active image uniforms exceed
     // GL_MAX_*_IMAGE_UNIFORMS, or when their sum exceeds GL_MAX_COMBINED_IMAGE_UNIFORMS. Nothing
     // counted them - glslang keeps those numbers only so gl_Max*ImageUniforms can expand from

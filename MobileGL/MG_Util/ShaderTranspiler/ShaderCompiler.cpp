@@ -118,8 +118,6 @@ namespace MobileGL {
                 Resources.maxComputeUniformComponents = MAX_COMPUTE_UNIFORM_COMPONENTS;
                 Resources.maxComputeTextureImageUnits = 16;
                 Resources.maxComputeImageUniforms = 8;
-                Resources.maxComputeAtomicCounters = MAX_ATOMIC_COUNTERS_PER_STAGE;
-                Resources.maxComputeAtomicCounterBuffers = MAX_ATOMIC_COUNTER_BUFFERS_PER_STAGE;
                 Resources.maxVaryingComponents = MAX_VARYING_COMPONENTS;
                 Resources.maxVertexOutputComponents = 64;
                 Resources.maxGeometryInputComponents = 64;
@@ -153,25 +151,14 @@ namespace MobileGL {
                 Resources.maxPatchVertices = 32;
                 Resources.maxTessGenLevel = 64;
                 Resources.maxViewports = 16;
-                Resources.maxVertexAtomicCounters = 0;
-                Resources.maxTessControlAtomicCounters = 0;
-                Resources.maxTessEvaluationAtomicCounters = 0;
-                Resources.maxGeometryAtomicCounters = 0;
-                Resources.maxFragmentAtomicCounters = MAX_ATOMIC_COUNTERS_PER_STAGE;
-                Resources.maxCombinedAtomicCounters = MAX_ATOMIC_COUNTERS_PER_STAGE;
                 // Every atomic-counter limit below is the one glGetIntegerv answers; the shared
                 // constants in Types.h are what keeps the two sides from drifting apart again.
                 // gl_MaxAtomicCounterBindings and gl_MaxAtomicCounterBufferSize expand from these
                 // (Initialize.cpp), and the binding count is also the ceiling glslang checks a
                 // `layout(binding = N) uniform atomic_uint` against - it was 1, so every counter
                 // outside binding 0 failed to compile.
+                // The per-stage and combined counter counts are env-derived and set further down.
                 Resources.maxAtomicCounterBindings = MAX_ATOMIC_COUNTER_BUFFER_BINDINGS;
-                Resources.maxVertexAtomicCounterBuffers = 0;
-                Resources.maxTessControlAtomicCounterBuffers = 0;
-                Resources.maxTessEvaluationAtomicCounterBuffers = 0;
-                Resources.maxGeometryAtomicCounterBuffers = 0;
-                Resources.maxFragmentAtomicCounterBuffers = MAX_ATOMIC_COUNTER_BUFFERS_PER_STAGE;
-                Resources.maxCombinedAtomicCounterBuffers = MAX_ATOMIC_COUNTER_BUFFERS_PER_STAGE;
                 Resources.maxAtomicCounterBufferSize = MAX_ATOMIC_COUNTER_BUFFER_SIZE;
                 Resources.maxTransformFeedbackBuffers = 4;
                 Resources.maxTransformFeedbackInterleavedComponents = 64;
@@ -253,6 +240,27 @@ namespace MobileGL {
                 // declaration with a diagnostic the application can read.
                 Resources.maxCullDistances = dynamicParameters.MaxCullDistances;
                 Resources.maxCombinedClipAndCullDistances = dynamicParameters.MaxCombinedClipAndCullDistances;
+                // The per-stage and combined atomic-counter limits, from the same derivation
+                // glGetIntegerv answers with (ResolveAtomicCounterLimits): a stage's counter
+                // buffers are lowered storage blocks, so they follow the backend's per-stage
+                // storage-block budget, and gl_Max*AtomicCounter* has to expand to that number.
+                {
+                    const AtomicCounterLimits counterLimits = ResolveAtomicCounterLimits(dynamicParameters);
+                    Resources.maxVertexAtomicCounters = counterLimits.stageCounters[0];
+                    Resources.maxTessControlAtomicCounters = counterLimits.stageCounters[1];
+                    Resources.maxTessEvaluationAtomicCounters = counterLimits.stageCounters[2];
+                    Resources.maxGeometryAtomicCounters = counterLimits.stageCounters[3];
+                    Resources.maxFragmentAtomicCounters = counterLimits.stageCounters[4];
+                    Resources.maxComputeAtomicCounters = counterLimits.stageCounters[5];
+                    Resources.maxCombinedAtomicCounters = counterLimits.combinedCounters;
+                    Resources.maxVertexAtomicCounterBuffers = counterLimits.stageBuffers[0];
+                    Resources.maxTessControlAtomicCounterBuffers = counterLimits.stageBuffers[1];
+                    Resources.maxTessEvaluationAtomicCounterBuffers = counterLimits.stageBuffers[2];
+                    Resources.maxGeometryAtomicCounterBuffers = counterLimits.stageBuffers[3];
+                    Resources.maxFragmentAtomicCounterBuffers = counterLimits.stageBuffers[4];
+                    Resources.maxComputeAtomicCounterBuffers = counterLimits.stageBuffers[5];
+                    Resources.maxCombinedAtomicCounterBuffers = counterLimits.combinedBuffers;
+                }
 
                 // The compute work-group limits are the env's, not the backend parameters': they
                 // are the only ones that come from a REAL indexed driver query, which
