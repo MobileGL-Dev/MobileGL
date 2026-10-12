@@ -3897,28 +3897,12 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
     }
 
-    // The half glGetCompressedTexImage and glGetCompressedTextureImage share, factored out for the
-    // same reason ValidateTextureImageQuery was: the by-name entry point must not drift away from
-    // the by-target one's rules. bufSize < 0 means "no destination-size argument" - the by-target
-    // form has none (GL 4.6 core 8.11 has the caller size it from GL_TEXTURE_COMPRESSED_IMAGE_SIZE),
-    // so only the DSA form passes a real bound.
-    void CopyCompressedTextureImageToClientOrPBO(const SharedPtr<MG_State::GLState::ITextureObject>& textureObject,
-                                                 TextureUploadTarget uploadTarget, GLint level, GLsizei bufSize,
-                                                 void* pixels, const char* caller) {
-        if (GetCompressedLevelFormat(textureObject, uploadTarget, level) == GL_NONE) {
-            MG_State::pGLContext->RecordError(
-                ErrorCode::InvalidOperation,
-                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
-                                             "Texture level is not stored in a compressed format."));
-            return;
-        }
-
-        const auto* textureMipmapObject = MG_State::GLState::AsMipmapTexture(textureObject.get());
-        const SizeT imageSize =
-            textureMipmapObject->GetMipmapCompressedByteSize(uploadTarget, static_cast<Uint>(level));
-        const void* src = textureMipmapObject->MapMipmapCompressedImage(uploadTarget, static_cast<Uint>(level));
-        if (!src || imageSize == 0) return;
-
+    // Where every compressed readback lands its bytes: the destination-size check, then either the
+    // bound pixel pack buffer (pixels is an offset into it) or client memory. No pixel-store packing
+    // here on purpose: GL 4.6 core 8.11 says the pixel storage modes are ignored for a compressed
+    // image, which is also the only way the round trip stays byte-exact.
+    static void WriteCompressedImageToClientOrPBO(const void* src, SizeT imageSize, GLsizei bufSize, void* pixels,
+                                                  const char* caller) {
         if (bufSize >= 0 && static_cast<SizeT>(bufSize) < imageSize) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,
@@ -3948,9 +3932,32 @@ namespace MobileGL::MG_Impl::GLImpl {
             return;
         }
 
-        // No pixel-store packing here on purpose: GL 4.6 core 8.11 says the pixel storage modes are
-        // ignored for a compressed image, which is also the only way the round trip stays byte-exact.
         if (pixels) Memcpy(pixels, src, imageSize);
+    }
+
+    // The half glGetCompressedTexImage and glGetCompressedTextureImage share, factored out for the
+    // same reason ValidateTextureImageQuery was: the by-name entry point must not drift away from
+    // the by-target one's rules. bufSize < 0 means "no destination-size argument" - the by-target
+    // form has none (GL 4.6 core 8.11 has the caller size it from GL_TEXTURE_COMPRESSED_IMAGE_SIZE),
+    // so only the DSA form passes a real bound.
+    void CopyCompressedTextureImageToClientOrPBO(const SharedPtr<MG_State::GLState::ITextureObject>& textureObject,
+                                                 TextureUploadTarget uploadTarget, GLint level, GLsizei bufSize,
+                                                 void* pixels, const char* caller) {
+        if (GetCompressedLevelFormat(textureObject, uploadTarget, level) == GL_NONE) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
+                                             "Texture level is not stored in a compressed format."));
+            return;
+        }
+
+        const auto* textureMipmapObject = MG_State::GLState::AsMipmapTexture(textureObject.get());
+        const SizeT imageSize =
+            textureMipmapObject->GetMipmapCompressedByteSize(uploadTarget, static_cast<Uint>(level));
+        const void* src = textureMipmapObject->MapMipmapCompressedImage(uploadTarget, static_cast<Uint>(level));
+        if (!src || imageSize == 0) return;
+
+        WriteCompressedImageToClientOrPBO(src, imageSize, bufSize, pixels, caller);
     }
 
     void GetCompressedTexImage_State(GLenum target, GLint level, void* img) {
@@ -6744,6 +6751,83 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
         GetTextureImageForUploadTarget(textureObject, readUploadTarget, level, format, type, bufSize, pixels,
                                        __func__);
+    }
+
+    // GL 4.6 core 8.11.4. Like glGetCompressedTextureImage this answers out of the CPU shadow of the
+    // compressed blocks (no backend was handed them), cropped to whole blocks: the region has to
+    // start on a block boundary and cover whole blocks except where it reaches the level's edge.
+    void GetCompressedTextureSubImage(GLuint texture, GLint level, GLint xoffset, GLint yoffset, GLint zoffset,
+                                      GLsizei width, GLsizei height, GLsizei depth, GLsizei bufSize, void* pixels) {
+        auto textureObject = GetTextureObjectByName(texture, __func__);
+        if (!textureObject) return;
+        IntVec3 levelExtent;
+        if (!ValidateTextureSubImageRegion(textureObject, level, xoffset, yoffset, zoffset, width, height, depth,
+                                           levelExtent, __func__)) {
+            return;
+        }
+
+        // A cube map's faces are separate images; every other target keeps its layers in one.
+        const Bool isCubeMap = textureObject->GetTarget() == TextureTarget::TextureCubeMap;
+        const auto imageTarget = [&](GLint z) {
+            return isCubeMap
+                       ? static_cast<TextureUploadTarget>(static_cast<Int>(TextureUploadTarget::CubeMapPositiveX) + z)
+                       : GetPrimaryUploadTarget(textureObject);
+        };
+        const GLenum compressedFormat = GetCompressedLevelFormat(textureObject, imageTarget(zoffset), level);
+        if (compressedFormat == GL_NONE) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidOperation,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                             "Texture level is not stored in a compressed format."));
+            return;
+        }
+        const auto blockInfo = MG_Util::GetCompressedFormatInfo(compressedFormat);
+        const Int blockWidth = static_cast<Int>(blockInfo.blockWidth);
+        const Int blockHeight = static_cast<Int>(blockInfo.blockHeight);
+        if (blockWidth == 0 || blockHeight == 0) return;
+        if (xoffset % blockWidth != 0 || yoffset % blockHeight != 0 ||
+            (width % blockWidth != 0 && xoffset + width != levelExtent.x()) ||
+            (height % blockHeight != 0 && yoffset + height != levelExtent.y())) {
+            MG_State::pGLContext->RecordError(
+                ErrorCode::InvalidValue,
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                             "The region is not aligned to the compressed block size."));
+            return;
+        }
+
+        const auto blocksFor = [](Int extent, Int block) { return static_cast<SizeT>((extent + block - 1) / block); };
+        const SizeT levelRowBlocks = blocksFor(levelExtent.x(), blockWidth);
+        const SizeT levelImageBlocks = levelRowBlocks * blocksFor(levelExtent.y(), blockHeight);
+        const SizeT rowBlocks = blocksFor(width, blockWidth);
+        const SizeT rows = blocksFor(height, blockHeight);
+        const SizeT rowBytes = rowBlocks * blockInfo.blockByteSize;
+        Vector<Uint8> region(rowBytes * rows * static_cast<SizeT>(depth));
+
+        const auto* textureMipmapObject = MG_State::GLState::AsMipmapTexture(textureObject.get());
+        for (GLsizei z = 0; z < depth && rows > 0 && rowBytes > 0; ++z) {
+            const auto target = imageTarget(zoffset + z);
+            const auto* image = static_cast<const Uint8*>(
+                textureMipmapObject->MapMipmapCompressedImage(target, static_cast<Uint>(level)));
+            const SizeT imageSize = textureMipmapObject->GetMipmapCompressedByteSize(target, static_cast<Uint>(level));
+            // Layers of one image are stored one after another, each a full level's worth of blocks.
+            const SizeT layer = isCubeMap ? 0 : static_cast<SizeT>(zoffset + z);
+            const SizeT firstBlock = layer * levelImageBlocks +
+                                     static_cast<SizeT>(yoffset / blockHeight) * levelRowBlocks +
+                                     static_cast<SizeT>(xoffset / blockWidth);
+            const SizeT endByte = (firstBlock + (rows - 1) * levelRowBlocks) * blockInfo.blockByteSize + rowBytes;
+            if (!image || endByte > imageSize) {
+                MG_State::pGLContext->RecordError(
+                    ErrorCode::InvalidOperation,
+                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                                 "Texture image is not stored in a compressed format."));
+                return;
+            }
+            for (SizeT row = 0; row < rows; ++row) {
+                Memcpy(region.data() + (static_cast<SizeT>(z) * rows + row) * rowBytes,
+                       image + (firstBlock + row * levelRowBlocks) * blockInfo.blockByteSize, rowBytes);
+            }
+        }
+        WriteCompressedImageToClientOrPBO(region.data(), region.size(), bufSize, pixels, __func__);
     }
 
     // A buffer texture carries none of the sampler or level state these queries report. Reached by

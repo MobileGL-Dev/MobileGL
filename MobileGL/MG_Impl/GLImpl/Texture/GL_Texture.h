@@ -74,6 +74,8 @@ namespace MobileGL::MG_Impl::GLImpl {
     void TextureBufferRange(GLuint texture, GLenum internalformat, GLuint buffer, GLintptr offset, GLsizeiptr size);
     void GetTextureSubImage(GLuint texture, GLint level, GLint xoffset, GLint yoffset, GLint zoffset, GLsizei width,
                             GLsizei height, GLsizei depth, GLenum format, GLenum type, GLsizei bufSize, void* pixels);
+    void GetCompressedTextureSubImage(GLuint texture, GLint level, GLint xoffset, GLint yoffset, GLint zoffset,
+                                      GLsizei width, GLsizei height, GLsizei depth, GLsizei bufSize, void* pixels);
     void GetTextureParameterfv(GLuint texture, GLenum pname, GLfloat* params);
     void GetTextureParameterIiv(GLuint texture, GLenum pname, GLint* params);
     void GetTextureParameterIuiv(GLuint texture, GLenum pname, GLuint* params);

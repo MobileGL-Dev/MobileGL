@@ -2759,6 +2759,48 @@ namespace {
     }
 } // namespace
 
+// glGetCompressedTextureSubImage was a stub. It returns whole blocks of the stored image (GL 4.6 core
+// 8.11.4): the right-hand block column of an 8x8 RGTC1 image is the blocks at bytes 8 and 24, and the
+// region errors match glGetTextureSubImage's.
+TEST_F(TextureTest, GetCompressedTextureSubImageCropsWholeBlocks) {
+    const GLuint texture = MakeCompressedRgtc1Texture8x8();
+    Uint8 whole[kRgtc1Size8x8];
+    for (Int i = 0; i < kRgtc1Size8x8; ++i) whole[i] = static_cast<Uint8>(i + 1);
+    MG_Impl::GLImpl::CompressedTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 8, 8, GL_COMPRESSED_RED_RGTC1, kRgtc1Size8x8,
+                                             whole);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    Uint8 column[16] = {};
+    MG_Impl::GLImpl::GetCompressedTextureSubImage(texture, 0, 4, 0, 0, 4, 8, 1, sizeof(column), column);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    EXPECT_EQ(std::memcmp(column, whole + 8, 8), 0);
+    EXPECT_EQ(std::memcmp(column + 8, whole + 24, 8), 0);
+
+    Uint8 all[kRgtc1Size8x8] = {};
+    MG_Impl::GLImpl::GetCompressedTextureSubImage(texture, 0, 0, 0, 0, 8, 8, 1, sizeof(all), all);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    EXPECT_EQ(std::memcmp(all, whole, sizeof(all)), 0);
+
+    MG_Impl::GLImpl::GetCompressedTextureSubImage(texture, 0, 2, 0, 0, 4, 4, 1, sizeof(all), all);
+    ExpectSingleGlError(GL_INVALID_VALUE); // not on a block boundary
+    MG_Impl::GLImpl::GetCompressedTextureSubImage(texture, 0, 4, 4, 0, 8, 8, 1, sizeof(all), all);
+    ExpectSingleGlError(GL_INVALID_VALUE); // past the level
+    MG_Impl::GLImpl::GetCompressedTextureSubImage(texture, 0, 0, 0, 1, 8, 8, 2, sizeof(all), all);
+    ExpectSingleGlError(GL_INVALID_VALUE); // a 2D texture has one layer
+    MG_Impl::GLImpl::GetCompressedTextureSubImage(texture, 0, 0, 0, 0, 8, 8, 1, 1, all);
+    ExpectSingleGlError(GL_INVALID_OPERATION); // bufSize too small
+
+    GLuint plain = 0;
+    MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_2D, 1, &plain);
+    MG_Impl::GLImpl::TextureStorage2D(plain, 1, GL_RGBA8, 4, 4);
+    MG_Impl::GLImpl::GetCompressedTextureSubImage(plain, 0, 0, 0, 0, 4, 4, 1, sizeof(all), all);
+    ExpectSingleGlError(GL_INVALID_OPERATION); // not compressed
+
+    MG_Impl::GLImpl::DeleteTextures(1, &plain);
+    MG_Impl::GLImpl::DeleteTextures(1, &texture);
+    DrainPendingGlErrors();
+}
+
 // glCompressedTexSubImage2D was a stub that answered GL_INVALID_ENUM to every call. It replaces a
 // block-aligned rectangle of the stored image, and the arithmetic that places the incoming blocks
 // is what the partial write below pins: a full-width write would pass with the rows concatenated
