@@ -63,6 +63,8 @@ namespace MobileGL::MG_State::GLState {
             SharedPtr<const MG_Util::ShaderTranspiler::CompileEnv> env;
             // Startup configuration copied with the task, never read from worker code.
             Bool enableSpirvValidation = false;
+            // GL_PROGRAM_SEPARABLE as this link latches it (GL 4.6 core 7.3).
+            Bool separable = false;
             // The four "takes effect at the next link" request maps. Snapshotted rather than
             // referenced, which is precisely what makes glBindAttribLocation and friends
             // legal to call over a pending link without cancelling it: the pending link keeps

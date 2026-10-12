@@ -823,6 +823,9 @@ namespace MobileGL::MG_State {
                 }
                 break;
             }
+            // Separable, as every program it is assembled from is: a pipeline may leave the vertex
+            // stage to nobody, and that is the draw-time pipeline rule's to refuse, not the link's.
+            composite->SetSeparable(true);
             // A pipeline with no fragment stage still rasterises, so the default fragment
             // shader is wanted here even though the separable stage programs never get one.
             composite->Link(true);

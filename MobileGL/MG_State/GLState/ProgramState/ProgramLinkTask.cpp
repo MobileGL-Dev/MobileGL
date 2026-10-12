@@ -1223,6 +1223,28 @@ namespace MobileGL::MG_State::GLState {
             }
         }
 
+        // GL 4.6 core 7.3: a program that is NOT separable and has a tessellation control,
+        // tessellation evaluation or geometry shader must also have a vertex shader - only a
+        // separable program may supply a subset of the vertex-processing stages and leave the
+        // rest to a program pipeline. Pipeline composites link as separable for the same reason;
+        // the draw-time pipeline rule is what refuses such a composite.
+        if (!in.separable) {
+            Bool hasVertex = false;
+            Bool hasLaterVertexProcessing = false;
+            for (const LinkShaderInput& input : in.shaders) {
+                hasVertex = hasVertex || input.stage == ShaderStage::Vertex;
+                hasLaterVertexProcessing = hasLaterVertexProcessing || input.stage == ShaderStage::TessControl ||
+                                           input.stage == ShaderStage::TessEval ||
+                                           input.stage == ShaderStage::Geometry;
+            }
+            if (hasLaterVertexProcessing && !hasVertex) {
+                artifacts.infoLog = "A program that is not separable and has a tessellation or geometry shader "
+                                    "must also have a vertex shader.";
+                DeferLog(std::format("ProgramObject {}: Link failed - {}", in.externalIndex, artifacts.infoLog));
+                return false;
+            }
+        }
+
         for (SizeT i = 0; i < in.shaders.size(); i++) {
             const LinkShaderInput& input = in.shaders[i];
             const GLenum shaderType = MG_Util::ConvertShaderStageToGLEnum(input.stage);

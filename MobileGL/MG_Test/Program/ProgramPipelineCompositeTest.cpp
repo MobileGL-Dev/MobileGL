@@ -571,6 +571,40 @@ void main() { gl_Position = vec4(0.0); EmitVertex(); EndPrimitive(); }
     }
 }
 
+// GL 4.6 core 7.3: only a SEPARABLE program may have a geometry (or tessellation) stage without a
+// vertex stage - KHR-GL4x.geometry_shader.linking.incomplete_program_objects. The pipeline
+// composite assembled from such a separable program has to keep linking, which the case above
+// already pins.
+TEST_F(ProgramPipelineCompositeTest, OnlyASeparableProgramMayLinkAGeometryStageWithoutAVertexStage) {
+    const char* kGs = R"(#version 430 core
+layout(points) in;
+layout(points, max_vertices = 1) out;
+void main() { gl_Position = vec4(0.0); EmitVertex(); EndPrimitive(); }
+)";
+    const auto link = [&](Bool separable, Bool withFragment) {
+        const GLuint program = CreateProgram();
+        if (separable) ProgramParameteri(program, GL_PROGRAM_SEPARABLE, GL_TRUE);
+        const auto attach = [program](GLenum stage, const char* source) {
+            const GLuint shader = CreateShader(stage);
+            ShaderSource(shader, 1, &source, nullptr);
+            CompileShader(shader);
+            AttachShader(program, shader);
+        };
+        attach(GL_GEOMETRY_SHADER, kGs);
+        if (withFragment) attach(GL_FRAGMENT_SHADER, kSharedUniformFs);
+        LinkProgram(program);
+        GLint linked = -1;
+        GetProgramiv(program, GL_LINK_STATUS, &linked);
+        DeleteProgram(program);
+        return linked == GL_TRUE;
+    };
+    EXPECT_FALSE(link(false, false));
+    EXPECT_FALSE(link(false, true));
+    EXPECT_TRUE(link(true, false));
+    EXPECT_TRUE(link(true, true));
+    EXPECT_EQ(GetError(), GL_NO_ERROR);
+}
+
 // ---------------------------------------------------------------------------------------------
 // The composite's transform-feedback capture list.
 //
