@@ -34,6 +34,7 @@ using MobileGL::MG_Backend::DirectGLES::PrgramImpl::IMAGE_SPLIT_READ_ALIAS_PREFI
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::IMAGE_WRITE_ALIAS_PREFIX;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::IMAGE_WRITEONLY_ALIAS_PREFIX;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::ImageArrayUnitPlan;
+using MobileGL::MG_Backend::DirectGLES::PrgramImpl::LowerZeroGradCubeArrayShadowLookups;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::RedeclareClipCullDistancesInPerVertexBlock;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::RedeclareClipCullDistanceInputsInPerVertexBlock;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::RemapImageArrayElementUnits;
@@ -1847,4 +1848,58 @@ void main() {
         EXPECT_TRUE(Contains(out, "min(" + std::to_string(sample) + ", mg_msSampleMax_stencilTex)")) << out;
     }
     EXPECT_EQ(CountOf(out, "uniform highp int mg_msSampleMax_stencilTex;"), 1u) << out;
+}
+
+// End to end: texture() on a samplerCubeArrayShadow outside the fragment stage is an explicit
+// LOD 0 lookup in SPIR-V, which SPIRV-Cross prints as a textureGrad overload GLSL ES does not
+// have (KHR-GL4x.texture_cube_map_array.sampling). The pass turns it back into texture(), which
+// is level 0 in that stage.
+TEST(LowerZeroGradCubeArrayShadowLookupsTest, RestoresTextureOutsideTheFragmentStage) {
+    using namespace MG_Util::ShaderTranspiler;
+    MobileGL::Initialize();
+    const char* vertexSource = R"(#version 450 core
+uniform samplerCubeArrayShadow depthTex[2];
+uniform samplerCubeArrayShadow single;
+uniform vec4 coord;
+out float result;
+float lookup(samplerCubeArrayShadow s, vec4 p) { return texture(s, p, 0.5); }
+void main() {
+    result = texture(depthTex[1], coord, 0.25) + texture(single, coord, 0.75) + lookup(single, coord);
+    gl_Position = vec4(0.0, 0.0, 0.0, 1.0);
+}
+)";
+    const char* fragmentSource = R"(#version 450 core
+in float result;
+out vec4 color;
+void main() { color = vec4(result); }
+)";
+    Vector<SharedPtr<glslang::TShader>> shaders;
+    const Vector<Pair<GLenum, const char*>> stages{{GL_VERTEX_SHADER, vertexSource},
+                                                   {GL_FRAGMENT_SHADER, fragmentSource}};
+    for (const auto& [stage, text] : stages) {
+        ShaderAttrib attrib{.shaderType = stage, .sourceStr = text};
+        auto compiled = ShaderCompiler::CompileShader(attrib);
+        ASSERT_TRUE(compiled) << compiled.error().log;
+        shaders.push_back(compiled.value());
+    }
+    ProgramAttrib programAttrib{.shaders = shaders};
+    auto program = ShaderCompiler::LinkProgram(programAttrib);
+    ASSERT_TRUE(program) << program.error().log;
+    ProgramBinaryAttrib binaryAttrib{.shaderTypes = {GL_VERTEX_SHADER, GL_FRAGMENT_SHADER},
+                                     .program = *program.value()};
+    auto modules = ShaderCompiler::GetSpirvBinaryFromProgram(binaryAttrib);
+    ASSERT_TRUE(modules) << modules.error().log;
+    SpvcSession session(modules.value()[0], SessionUsageBit::Transpile);
+    auto essl = ShaderCompiler::DecompileShader(session);
+    ASSERT_TRUE(essl) << essl.error().log;
+    ASSERT_EQ(CountOf(essl.value(), "vec3(0.0), vec3(0.0))"), 3u) << essl.value();
+
+    const String out = LowerZeroGradCubeArrayShadowLookups(essl.value(), GL_VERTEX_SHADER);
+    EXPECT_FALSE(Contains(out, "textureGrad")) << out;
+    EXPECT_EQ(CountOf(out, "texture("), 3u) << out;
+    EXPECT_EQ(LowerZeroGradCubeArrayShadowLookups(essl.value(), GL_FRAGMENT_SHADER), essl.value());
+
+    const String other = "#version 320 es\nuniform highp samplerCube c;\n"
+                         "void main() { highp vec4 v = textureGrad(c, vec3(1.0), vec3(0.0), vec3(0.0)); }\n";
+    EXPECT_EQ(LowerZeroGradCubeArrayShadowLookups(other, GL_VERTEX_SHADER), other);
 }

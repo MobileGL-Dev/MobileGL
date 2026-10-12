@@ -2057,6 +2057,56 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return result;
         }
 
+        String LowerZeroGradCubeArrayShadowLookups(const String& glslCode, GLenum shaderType) {
+#ifdef TRACY_ENABLE
+            ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
+#endif
+            if (shaderType == GL_FRAGMENT_SHADER || glslCode.find("samplerCubeArrayShadow") == String::npos ||
+                glslCode.find("textureGrad") == String::npos) {
+                return glslCode;
+            }
+            // Every name declared with the type: uniforms, and the parameters of functions the
+            // sampler is passed to.
+            static const std::regex declRegex(R"(samplerCubeArrayShadow\s+([A-Za-z_][A-Za-z0-9_]*))");
+            UnorderedMap<String, Bool> names;
+            for (std::sregex_iterator it(glslCode.begin(), glslCode.end(), declRegex), end; it != end; ++it) {
+                names.emplace((*it)[1].str(), true);
+            }
+            if (names.empty()) return glslCode;
+
+            static constexpr const char* kName = "textureGrad";
+            static constexpr SizeT kNameLength = 11;
+            String result = glslCode;
+            Bool changed = false;
+            // Right to left, so an earlier call's offsets stay valid.
+            for (SizeT scan = result.rfind(kName); scan != String::npos;
+                 scan = scan == 0 ? String::npos : result.rfind(kName, scan - 1)) {
+                if (scan > 0 && IsIdentifierChar(result[scan - 1])) continue;
+                const SizeT openParen = result.find_first_not_of(" \t", scan + kNameLength);
+                if (openParen == String::npos || result[openParen] != '(') continue;
+                const Vector<SizeT> marks = SplitCallArguments(result, openParen);
+                // sampler, P, compare, dPdx, dPdy
+                if (marks.size() != 5) continue;
+                SizeT nameStart = result.find_first_not_of(" \t", openParen + 1);
+                SizeT nameEnd = nameStart;
+                while (nameEnd < marks[0] && IsIdentifierChar(result[nameEnd])) ++nameEnd;
+                if (names.find(result.substr(nameStart, nameEnd - nameStart)) == names.end()) continue;
+                const auto argument = [&](SizeT index) {
+                    const SizeT start = marks[index - 1] + 1;
+                    String text = result.substr(start, marks[index] - start);
+                    text.erase(std::remove_if(text.begin(), text.end(),
+                                              [](char c) { return c == ' ' || c == '\t'; }),
+                               text.end());
+                    return text;
+                };
+                if (argument(3) != "vec3(0.0)" || argument(4) != "vec3(0.0)") continue;
+                result.erase(marks[2], marks[4] - marks[2]);
+                result.replace(scan, kNameLength, "texture");
+                changed = true;
+            }
+            return changed ? result : glslCode;
+        }
+
         String ClampUnsignedMultisampleFetches(const String& glslCode) {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);

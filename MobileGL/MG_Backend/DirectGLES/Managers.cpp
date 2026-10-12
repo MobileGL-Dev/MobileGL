@@ -12943,6 +12943,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 source = ProcessOutColorLocations(source);
                 source = ForceFlatIntegerVaryings(source, glShaderType);
                 source = BroadcastLegacyFragColor(std::move(source), glShaderType, m_fragColorBroadcastCount);
+                source = LowerZeroGradCubeArrayShadowLookups(source, glShaderType);
                 source = EmulateTextureLodBias(source, ShouldAvoidExplicitLodBiasOnAngleLlvmpipe());
                 if (ClampsUnsignedMultisampleFetchesAtRuntime()) {
                     source = ClampUnsignedMultisampleFetches(source);

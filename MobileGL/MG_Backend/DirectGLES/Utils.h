@@ -576,6 +576,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // Off by default and only ever set on ANGLE + llvmpipe, where injecting the uniform
         // into a constant LOD crashes the driver (MOBILEGL_ESPRYT_AVOID_EXPLICIT_LOD_BIAS).
         String EmulateTextureLodBias(const String& glslCode, Bool avoidExplicitLodBias = false);
+        // A depth-compare lookup at an explicit LOD of 0 on a samplerCubeArrayShadow - what
+        // texture() is outside the fragment stage - has no GLSL ES spelling: there is no
+        // textureLod or textureGrad overload for that sampler. SPIRV-Cross prints it as
+        // textureGrad(s, P, compare, vec3(0.0), vec3(0.0)) anyway; Adreno compiles that and
+        // returns wrong comparisons (KHR-GL4x.texture_cube_map_array.sampling, DEPTH32F, vertex/
+        // tessellation control/geometry/compute). Outside the fragment stage texture(s, P,
+        // compare) samples level 0 exactly (GLSL ES 3.20 8.9), so those calls are rewritten to
+        // it. The fragment stage is left alone: there texture() would pick its own level.
+        String LowerZeroGradCubeArrayShadowLookups(const String& glslCode, GLenum shaderType);
         // Prefix of the per-sampler int uniform that carries the bound multisample texture's
         // last real sample index into the shader (see ClampUnsignedMultisampleFetches); the
         // suffix is the sampler's own name.
