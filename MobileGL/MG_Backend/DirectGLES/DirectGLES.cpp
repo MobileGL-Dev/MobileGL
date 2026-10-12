@@ -3029,13 +3029,68 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // before the sweep the saying provoked, so the property survives the re-key intact.
         // g_backendContextGeneration is not a counter of that kind either - it moves when the
         // ES context is rebuilt, which no sweep does.
+        //
+        // THE FOUR SERIALS SAY NOTHING ABOUT CONTENT, so the key carries each image texture's
+        // content serial as well. A glTexSubImage* into a texture that is bound ONLY to an image
+        // unit moves that texture's record Serial and none of the four: the upload stays in the
+        // record's pending set, and nothing else flushes it before the draw - the sampled-unit
+        // walk and the attachment lists never visit an image-only texture. The draw then
+        // imageStore()s into the driver texture, and the stale upload lands on top of those
+        // stores at the next sync that does visit the texture (a readback), which is the
+        // ordering the application asked for in reverse (KHR-GL42.shader_image_load_store.
+        // early-fragment-tests, which zeroes its image before every draw).
+        //
+        // Per unit, keyed on the bound HANDLE and its record's Serial: the handle carries the
+        // slot's generation, so a recycled slot cannot answer with its predecessor's serial, and
+        // the record Serial is the server's own monotone content version. The walk is bounded by
+        // the high-water mark, so it costs nothing on the draws the first early-out already
+        // returns from.
+        struct ImageSweepUnitContent {
+            MG_Pipe::MGPipeHandle Res = MG_Pipe::kMGPipeNullHandle;
+            Uint64 Serial = 0;
+        };
+        static Array<ImageSweepUnitContent, MG_Pipe::kMGPipeMaxImageUnits> g_imageSweepUnitContent{};
+        static Uint32 g_imageSweepUnitContentCount = 0;
+
+        static Uint32 ImageSweepUnitContentCount(const MG_Pipe::MGPipeApplierState& st) {
+            return std::min<Uint32>(static_cast<Uint32>(g_imageUnitHighWaterMark),
+                                    static_cast<Uint32>(st.BoundShaderImages.size()));
+        }
+
+        static Uint64 ImageUnitContentSerial(MG_Pipe::MGPipeHandle res) {
+            if (MG_Pipe::MGPipeHandleIsNull(res)) return 0;
+            const auto* record = PipeTextureRecordForHandle(res);
+            return record != nullptr ? record->Serial : 0;
+        }
+
+        static Bool ImageSweepContentUnchanged(const MG_Pipe::MGPipeApplierState& st) {
+            const Uint32 count = ImageSweepUnitContentCount(st);
+            if (count != g_imageSweepUnitContentCount) return false;
+            for (Uint32 unit = 0; unit < count; ++unit) {
+                const MG_Pipe::MGPipeHandle res = st.BoundShaderImages[unit].Res;
+                const auto& memo = g_imageSweepUnitContent[unit];
+                if (!(memo.Res == res) || memo.Serial != ImageUnitContentSerial(res)) return false;
+            }
+            return true;
+        }
+
+        static void StampImageSweepContent(const MG_Pipe::MGPipeApplierState& st) {
+            const Uint32 count = ImageSweepUnitContentCount(st);
+            for (Uint32 unit = 0; unit < count; ++unit) {
+                const MG_Pipe::MGPipeHandle res = st.BoundShaderImages[unit].Res;
+                g_imageSweepUnitContent[unit] = {res, ImageUnitContentSerial(res)};
+            }
+            g_imageSweepUnitContentCount = count;
+        }
+
         void SyncImageTextureBindingsForDraw(const DrawTextureSyncKeys& keys) {
             if (g_imageUnitHighWaterMark == 0) return;
             const auto& st = MG_Pipe::MGPipeApplier();
             if (g_imageSweepValid && g_imageSweepShaderImagesSerial == st.ShaderImagesSerial &&
                 g_imageSweepTextureShutterSerial == st.TextureShutterSerial &&
                 g_imageSweepContextSerial == st.ContextSerial &&
-                g_imageSweepBackendContextGeneration == g_backendContextGeneration) {
+                g_imageSweepBackendContextGeneration == g_backendContextGeneration &&
+                ImageSweepContentUnchanged(st)) {
                 return;
             }
             SyncImageTextureBindings();
@@ -3043,6 +3098,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
             g_imageSweepTextureShutterSerial = st.TextureShutterSerial;
             g_imageSweepContextSerial = st.ContextSerial;
             g_imageSweepBackendContextGeneration = g_backendContextGeneration;
+            // After the sweep: it is the sync that consumed the pending set, and it may raise the
+            // high-water mark the walk is bounded by.
+            StampImageSweepContent(st);
             g_imageSweepValid = true;
             return;
         }
