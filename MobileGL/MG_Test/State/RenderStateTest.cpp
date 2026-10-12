@@ -1232,3 +1232,27 @@ TEST_F(RenderStateTest, FragmentShadingRatesListTheBackendMaskLargestFirst) {
     EXPECT_EQ(nonTrivial, GL_FALSE);
     EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
 }
+
+// GL 4.6 core 22.2 (KHR-GL46.spirv_extensions.spirv_extensions_queries): an index at the list's
+// GL_NUM_* count is INVALID_VALUE and a name glGetStringi does not index is INVALID_ENUM, both
+// returning NULL rather than a string.
+TEST_F(RenderStateTest, GetStringiRejectsOutOfRangeIndicesAndUnindexedNames) {
+    DrainPendingGlErrors();
+
+    EXPECT_EQ(MG_Impl::GLImpl::GetStringi(GL_SPIR_V_EXTENSIONS, 0), nullptr);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_INVALID_VALUE);
+
+    GLint extensionCount = -1;
+    MG_Impl::GLImpl::GetIntegerv(GL_NUM_EXTENSIONS, &extensionCount);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    ASSERT_GE(extensionCount, 0);
+    if (extensionCount > 0) {
+        EXPECT_NE(MG_Impl::GLImpl::GetStringi(GL_EXTENSIONS, static_cast<GLuint>(extensionCount - 1)), nullptr);
+        EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    }
+    EXPECT_EQ(MG_Impl::GLImpl::GetStringi(GL_EXTENSIONS, static_cast<GLuint>(extensionCount)), nullptr);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_INVALID_VALUE);
+
+    EXPECT_EQ(MG_Impl::GLImpl::GetStringi(GL_VENDOR, 0), nullptr);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_INVALID_ENUM);
+}

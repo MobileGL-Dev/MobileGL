@@ -811,8 +811,18 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     const GLubyte* GetStringi(GLenum name, GLuint index) {
         MGLOG_D("glGetStringi, name: %s, index: %u", MG_Util::ConvertGLEnumToString(name).c_str(), index);
+        // GL 4.6 core 22.2: an index at or past the list's GL_NUM_* count is INVALID_VALUE, and a
+        // name glGetStringi does not index is INVALID_ENUM; both return NULL.
+        const auto recordError = [](ErrorCode code, const char* message) -> const GLubyte* {
+            MG_State::pGLContext->RecordError(code, MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "GetStringi", message));
+            return nullptr;
+        };
+        if (name == GL_SPIR_V_EXTENSIONS) {
+            // GL_NUM_SPIR_V_EXTENSIONS is zero (see GetIntegerv), so every index is past the end.
+            return recordError(ErrorCode::InvalidValue, "index is not below GL_NUM_SPIR_V_EXTENSIONS.");
+        }
         if (name != GL_EXTENSIONS) {
-            return (const GLubyte*)"";
+            return recordError(ErrorCode::InvalidEnum, "name is not an indexed string list.");
         }
 
         const auto& activeBackendObject = MG_Backend::pActiveBackendObject;
@@ -826,9 +836,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (index >= exts.size()) {
             const auto& extras = ClientSideExtensions();
             if (index - exts.size() < extras.size()) return (const GLubyte*)extras[index - exts.size()];
-        }
-        if (index >= exts.size()) {
-            return nullptr;
+            return recordError(ErrorCode::InvalidValue, "index is not below GL_NUM_EXTENSIONS.");
         }
 
         static Vector<String> extStrings;
