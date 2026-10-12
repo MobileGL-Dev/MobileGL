@@ -21,6 +21,7 @@ add_executable(
         DemotePointSizeTest.cpp
         FragCoordYFlipTest.cpp
         RelaxedOpaqueStructTest.cpp
+        ShadingRateEsslTest.cpp
 )
 
 target_include_directories(SpirvPassTest PRIVATE

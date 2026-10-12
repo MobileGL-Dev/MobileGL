@@ -12047,6 +12047,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // stage never reaches the program.
             spvcSession.RelaxReadWriteExclusiveStorageBuffers();
 
+            // gl_ShadingRateEXT / gl_PrimitiveShadingRateEXT: SPIRV-Cross spells them only for
+            // Vulkan GLSL, so they go through under a sentinel name and are restored below. Only
+            // a program whose stages use them gets here with anything to do, and only a driver
+            // with GL_EXT_fragment_shading_rate gets such a program past the frontend.
+            const Bool restoreShadingRateBuiltins = spvcSession.PrepareShadingRateBuiltinsForEssl();
+
             const char* result = nullptr;
             spvcSession.Compile(&result);
 
@@ -12060,6 +12066,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
 
             outSource = result;
+            if (restoreShadingRateBuiltins) {
+                MG_Util::ShaderTranspiler::SpvcSession::FinishShadingRateBuiltinsForEssl(outSource);
+            }
             return true;
         }
 

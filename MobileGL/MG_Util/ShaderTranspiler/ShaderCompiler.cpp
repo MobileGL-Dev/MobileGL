@@ -2315,6 +2315,8 @@ namespace MobileGL {
                 spvc_compiler_options_set_bool(options, SPVC_COMPILER_OPTION_GLSL_VULKAN_SEMANTICS, SPVC_FALSE);
 
                 session.SetOptions(options);
+                // Same ESSL spelling of the shading-rate built-ins DirectGLES emits.
+                const Bool restoreShadingRateBuiltins = session.PrepareShadingRateBuiltinsForEssl();
 
                 const char* result = nullptr;
                 session.Compile(&result);
@@ -2328,6 +2330,9 @@ namespace MobileGL {
                 }
 
                 std::string glsl = result;
+                if (restoreShadingRateBuiltins) {
+                    SpvcSession::FinishShadingRateBuiltinsForEssl(glsl);
+                }
 
                 return glsl;
             }

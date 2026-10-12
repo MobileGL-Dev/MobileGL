@@ -791,6 +791,127 @@ namespace MobileGL {
                 return true;
             }
 
+            namespace {
+                struct ShadingRateBuiltinSpelling {
+                    SpvBuiltIn builtin;
+                    const char* sentinel;
+                    const char* essl;
+                };
+                // The sentinels only have to survive SPIRV-Cross's renaming untouched (no "gl_"
+                // prefix, no double underscore) and be names no application spells.
+                constexpr ShadingRateBuiltinSpelling kShadingRateBuiltins[] = {
+                    {SpvBuiltInShadingRateKHR, "mgl_sentinel_ShadingRateEXT", "gl_ShadingRateEXT"},
+                    {SpvBuiltInPrimitiveShadingRateKHR, "mgl_sentinel_PrimitiveShadingRateEXT",
+                     "gl_PrimitiveShadingRateEXT"},
+                };
+
+                Bool IsIdentifierChar(char c) {
+                    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_';
+                }
+
+                // Whether `line` declares `name` as a plain interface variable - the one statement
+                // SPIRV-Cross prints for an undecorated in/out: optional layout(...), interpolation
+                // and precision qualifiers, `in`/`out`, a type, the name and the semicolon. No '=',
+                // no call, nothing after the name: every USE of the variable is an expression.
+                Bool IsInterfaceDeclarationOf(const String& line, const String& name) {
+                    const SizeT end = line.find_last_not_of(" \t\r");
+                    if (end == String::npos || end == 0 || line[end] != ';') return false;
+                    SizeT nameEnd = line.find_last_not_of(" \t", end - 1);
+                    if (nameEnd == String::npos || nameEnd + 1 < name.size()) return false;
+                    const SizeT nameBegin = nameEnd + 1 - name.size();
+                    if (line.compare(nameBegin, name.size(), name) != 0) return false;
+                    if (nameBegin > 0 && IsIdentifierChar(line[nameBegin - 1])) return false;
+                    String head = line.substr(0, nameBegin);
+                    // Drop a leading layout(...) block, then require the storage keyword as a word.
+                    const SizeT layout = head.find("layout");
+                    if (layout != String::npos) {
+                        const SizeT close = head.find(')', layout);
+                        if (close == String::npos) return false;
+                        head.erase(layout, close + 1 - layout);
+                    }
+                    if (head.find('(') != String::npos || head.find('=') != String::npos) return false;
+                    for (const char* keyword : {"in", "out"}) {
+                        const String word(keyword);
+                        for (SizeT at = head.find(word); at != String::npos; at = head.find(word, at + 1)) {
+                            const Bool startOk = at == 0 || !IsIdentifierChar(head[at - 1]);
+                            const Bool endOk = at + word.size() >= head.size() || !IsIdentifierChar(head[at + word.size()]);
+                            if (startOk && endOk) return true;
+                        }
+                    }
+                    return false;
+                }
+            } // namespace
+
+            Bool SpvcSession::PrepareShadingRateBuiltinsForEssl() {
+                if (!(usage & SessionUsageBit::Transpile) || !IsTranspileReady()) return false;
+
+                Bool renamed = false;
+                for (const spvc_builtin_resource_type type :
+                     {SPVC_BUILTIN_RESOURCE_TYPE_STAGE_INPUT, SPVC_BUILTIN_RESOURCE_TYPE_STAGE_OUTPUT}) {
+                    const spvc_reflected_builtin_resource* list = nullptr;
+                    size_t count = 0;
+                    if (spvc_resources_get_builtin_resource_list_for_type(resources, type, &list, &count) !=
+                        SPVC_SUCCESS) {
+                        continue;
+                    }
+                    for (size_t i = 0; i < count; ++i) {
+                        const SpvId variable = list[i].resource.id;
+                        // A member of a built-in block is reported here too; only a standalone
+                        // variable carries the decoration itself, and that is how both of these
+                        // are declared in every stage that has them.
+                        if (!spvc_compiler_has_decoration(compiler, variable, SpvDecorationBuiltIn)) continue;
+                        for (const auto& spelling : kShadingRateBuiltins) {
+                            if (list[i].builtin != spelling.builtin) continue;
+                            spvc_compiler_unset_decoration(compiler, variable, SpvDecorationBuiltIn);
+                            spvc_compiler_set_name(compiler, variable, spelling.sentinel);
+                            renamed = true;
+                        }
+                    }
+                }
+                if (renamed) {
+                    spvc_compiler_require_extension(compiler, "GL_EXT_fragment_shading_rate");
+                }
+                return renamed;
+            }
+
+            void SpvcSession::FinishShadingRateBuiltinsForEssl(String& essl) {
+                for (const auto& spelling : kShadingRateBuiltins) {
+                    const String sentinel = spelling.sentinel;
+                    if (essl.find(sentinel) == String::npos) continue;
+
+                    String rewritten;
+                    rewritten.reserve(essl.size());
+                    SizeT lineBegin = 0;
+                    while (lineBegin < essl.size()) {
+                        SizeT lineEnd = essl.find('\n', lineBegin);
+                        const SizeT next = lineEnd == String::npos ? essl.size() : lineEnd + 1;
+                        const String line = essl.substr(lineBegin, (lineEnd == String::npos ? essl.size() : lineEnd) -
+                                                                       lineBegin);
+                        if (!IsInterfaceDeclarationOf(line, sentinel)) {
+                            rewritten.append(essl, lineBegin, next - lineBegin);
+                        }
+                        lineBegin = next;
+                    }
+
+                    // Every remaining occurrence is a use; rename it, as a whole identifier only.
+                    String result;
+                    result.reserve(rewritten.size());
+                    SizeT cursor = 0;
+                    for (SizeT at = rewritten.find(sentinel); at != String::npos;
+                         at = rewritten.find(sentinel, at + sentinel.size())) {
+                        const Bool startOk = at == 0 || !IsIdentifierChar(rewritten[at - 1]);
+                        const SizeT after = at + sentinel.size();
+                        const Bool endOk = after >= rewritten.size() || !IsIdentifierChar(rewritten[after]);
+                        if (!startOk || !endOk) continue;
+                        result.append(rewritten, cursor, at - cursor);
+                        result.append(spelling.essl);
+                        cursor = after;
+                    }
+                    result.append(rewritten, cursor, String::npos);
+                    essl = Move(result);
+                }
+            }
+
             spvc_result SpvcSession::Compile(const char** result) {
                 if (!(usage & SessionUsageBit::Transpile)) return SPVC_ERROR_INVALID_ARGUMENT;
                 SPVC_CHK_INIT

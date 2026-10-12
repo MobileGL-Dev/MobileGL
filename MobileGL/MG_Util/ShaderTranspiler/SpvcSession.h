@@ -174,6 +174,20 @@ namespace MobileGL {
                 // A block carrying only ONE of the two is left exactly as it is: those really do
                 // constrain the accesses the shader makes, and the driver is entitled to know.
                 spvc_result RelaxReadWriteExclusiveStorageBuffers();
+                // GL_EXT_fragment_shading_rate in ESSL, in two halves around Compile().
+                //
+                // GLSL ES has the two built-ins - gl_ShadingRateEXT (fragment input) and
+                // gl_PrimitiveShadingRateEXT (vertex / geometry output) - under
+                // GL_EXT_fragment_shading_rate, but SPIRV-Cross only spells their SPIR-V
+                // counterparts (ShadingRateKHR / PrimitiveShadingRateKHR) for Vulkan GLSL and
+                // refuses the stage otherwise. So the first half strips the BuiltIn decoration
+                // from those variables, names them with a sentinel and requires the extension;
+                // SPIRV-Cross then emits them as an ordinary declaration plus ordinary uses, and
+                // FinishShadingRateBuiltinsForEssl deletes that declaration and puts the built-in
+                // name back at every use. Returns whether any variable was renamed - when it
+                // returns false the second half has nothing to do.
+                Bool PrepareShadingRateBuiltinsForEssl();
+                static void FinishShadingRateBuiltinsForEssl(String& essl);
                 // ---- GL_ARB_gl_spirv: an APPLICATION-supplied module, not one MobileGL emitted ----
                 // Select which OpEntryPoint of `model` this session compiles. A module may carry
                 // several of the same execution model, and glSpecializeShader names the one the
