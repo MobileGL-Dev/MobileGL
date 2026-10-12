@@ -3152,9 +3152,17 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             .viewportCount = ResolveDrawViewportCount(programObj.writesViewportIndexBuiltin),
             .polygonMode = effectivePolygonMode,
             .cullMode = cullFaceEnabled
-                ? MG_Util::ConvertCullFaceModeToVkEnum(MG_Pipe::gPipeInputs->GetCullFaceMode(), invertClockwise)
+                ? MG_Util::ConvertCullFaceModeToVkEnum(MG_Pipe::gPipeInputs->GetCullFaceMode(), false)
                 : VK_CULL_MODE_NONE,
-            .frontFace = VK_FRONT_FACE_CLOCKWISE,
+            // GL's counter-clockwise is Vulkan's clockwise (the two area formulas differ in sign
+            // over the same rows), and a Y-negated position - the default framebuffer's flip or
+            // an upper-left clip origin - reverses the winding once more. Expressed as the front
+            // face rather than as swapped cull bits so gl_FrontFacing agrees with culling, and
+            // so glFrontFace(GL_CW) is honoured.
+            .frontFace = ((MG_Pipe::gPipeInputs->GetRenderStateParameters().FrontFaceModeSetting ==
+                           FrontFaceMode::Clockwise) != invertClockwise)
+                ? VK_FRONT_FACE_COUNTER_CLOCKWISE
+                : VK_FRONT_FACE_CLOCKWISE,
             // Read the geometry stage off the program's own shader list rather than
             // programObj.rasterizationProducerStage: that field is filled by the clip-fixup analysis,
             // which does not run for every program, so it reads Unknown for exactly the
