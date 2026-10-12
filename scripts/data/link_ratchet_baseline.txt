@@ -27,7 +27,7 @@ MobileGL::MG_Remote::Client::ClientSessionInstance()
 MobileGL::MG_Remote::Client::EmitObjectDeathRecord(MobileGL::MG_Pipe::MGPipeKind, unsigned long)
 MobileGL::MG_State::GLState::BufferObject::GetExternalIndex() const
 MobileGL::MG_State::GLState::BufferObject::GetSize() const
-MobileGL::MG_State::GLState::BufferObject::WritebackFromBackend(MobileGL::DataPtr, unsigned long)
+MobileGL::MG_State::GLState::BufferObject::WritebackFromBackend(MobileGL::DataPtr, unsigned long, unsigned long)
 MobileGL::MG_State::GLState::ClassifyVertexAttribType(unsigned int)
 MobileGL::MG_State::GLState::DecodeProgramArchive(unsigned char const*, unsigned long, MobileGL::MG_State::GLState::ProgramArchive&)
 MobileGL::MG_State::GLState::ProgramArtifactsSchemaFingerprint()
