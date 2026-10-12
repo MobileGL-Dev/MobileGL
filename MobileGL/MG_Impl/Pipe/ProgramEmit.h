@@ -344,7 +344,7 @@ namespace MobileGL::MG_Pipe {
             for (Uint loc = 0; loc <= maxUniformLoc; ++loc) {
                 // The same guard CacheResourceLocations uses one level down: a location with no
                 // uniform behind it has an empty name and must not index the type tables.
-                if (program.GetUniformName(loc).empty()) continue;
+                if (!program.HasUniformLocationTables(loc) || program.GetUniformName(loc).empty()) continue;
                 const Int unit = program.GetUniformSamplerOrImageUnitIndex(loc);
                 if (unit < 0) continue;
                 if (m_samplerUnits.size() >= kMGPipeMaxProgramSamplerUnits) {

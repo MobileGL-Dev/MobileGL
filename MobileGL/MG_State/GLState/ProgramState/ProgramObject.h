@@ -895,6 +895,16 @@ namespace MobileGL::MG_State::GLState {
             return Artifacts().uniformSamplerOrImageUnitIndex[location];
         }
 
+        // True when |location| indexes the per-location tables. GetMaxUniformLocation() alone
+        // cannot say so: a link that fails clears the tables and leaves it at 0, which reads
+        // the same as "one location", while the program's previous executable - and its
+        // pipe handle - stays in use (GL 4.6 core 7.3).
+        Bool HasUniformLocationTables(Uint location) const {
+            const auto& artifacts = Artifacts();
+            return location < artifacts.uniformIndexInTProgram.size() &&
+                   location < artifacts.uniformSamplerOrImageUnitIndex.size();
+        }
+
         Bool GetDeleteStatus() const { return m_deleteStatus; }
         Bool GetLinkStatus() const { return Artifacts().linkStatus; }
         // GL_PROGRAM_BINARY_RETRIEVABLE_HINT. MobileGL exposes no program binary format

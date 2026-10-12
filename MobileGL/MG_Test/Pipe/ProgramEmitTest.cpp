@@ -919,6 +919,35 @@ void main() { gl_Position = u_a + u_b + u_c + u_d; }
         }
     }
 
+    // KHR-GL46.sepshaderobjs.StateInteraction crashed the client here. A relink that fails
+    // clears the per-location tables but leaves GetMaxUniformLocation() at 0, while the
+    // previous executable - and the CSO naming it - stays in use, so the next validate point
+    // walked location 0 straight off an empty array.
+    TEST(ProgramEmit, BindingsOfAProgramWhoseRelinkFailedReadNoLocationTables) {
+        EmitterScope scope;
+        const GLuint name = MakeVsFsProgram();
+        const SharedPtr<ProgramObject>& program = Ctx().GetProgramObject(name);
+        ASSERT_TRUE(program);
+        Uint64 bytes = 0;
+        const MGPipeHandle cso = Emitter().AcquireShaderCso(*program, bytes);
+        ASSERT_FALSE(MGPipeHandleIsNull(cso));
+        EXPECT_TRUE(program->HasUniformLocationTables(0)) << "a linked program must own its tables";
+
+        Vector<GLuint> attached;
+        for (const auto& shader : program->GetAttachedShaders()) attached.push_back(shader->GetExternalIndex());
+        for (const GLuint shader : attached) GL::DetachShader(name, shader);
+        GL::LinkProgram(name);
+        GLint linked = GL_TRUE;
+        GL::GetProgramiv(name, GL_LINK_STATUS, &linked);
+        ASSERT_EQ(linked, GL_FALSE) << "a program with no shaders must fail to link";
+        ASSERT_FALSE(program->HasUniformLocationTables(0)) << "the failed link must clear the tables";
+
+        const Uint64 before = Emitter().ProgramBindingsSetCount();
+        Emitter().EmitProgramBindings(*program, cso);
+        EXPECT_EQ(Emitter().ProgramBindingsSetCount(), before + 1);
+        EXPECT_EQ(Emitter().LastProgramBindings().SamplerUnitCount, 0u);
+    }
+
     // The applier's half: whole-set replacement in all three tails, and a re-issued create
     // drops them because they are INDICES INTO the archive it has just replaced.
     TEST(ProgramEmit, TheThreeBindingTailsAreWholeSetsAndAReIssuedCreateDropsThem) {
