@@ -380,8 +380,36 @@
         else if (fbo.Stencil.Kind != MG_Pipe::kMGPipeSurfaceKindNone)
             depth.attachment = add(fbo.Stencil, VK_IMAGE_ASPECT_STENCIL_BIT);
         if (attachments.empty()) {
-            MGL_WIRE_DECLINE_AT(NoAttachments, "the draw framebuffer resolved to no attachments");
-            return false;
+            // ARB_framebuffer_no_attachments (GL 4.6 core 9.2): a framebuffer with no image
+            // attached rasterizes at its default width/height/layers/samples, which the record
+            // carries in that case (FillGeometry). Vulkan expresses it directly as a render pass
+            // with no attachments over a framebuffer of that extent.
+            const Bool hasAnyAttachment = fbo.Depth.Kind != MG_Pipe::kMGPipeSurfaceKindNone ||
+                fbo.Stencil.Kind != MG_Pipe::kMGPipeSurfaceKindNone ||
+                std::any_of(std::begin(fbo.Color), std::end(fbo.Color), [](const MG_Pipe::MGPSurface& surface) {
+                    return surface.Kind != MG_Pipe::kMGPipeSurfaceKindNone;
+                });
+            if (fbo.IsDefault || hasAnyAttachment || fbo.Width == 0 || fbo.Height == 0) {
+                MGL_WIRE_DECLINE_AT(NoAttachments, "the draw framebuffer resolved to no attachments");
+                return false;
+            }
+            const auto& limits = m_physicalDevice.properties.limits;
+            extent.width = std::min<Uint32>(fbo.Width, limits.maxFramebufferWidth);
+            extent.height = std::min<Uint32>(fbo.Height, limits.maxFramebufferHeight);
+            layers = std::clamp<Uint32>(fbo.Layers, 1u, std::max<Uint32>(limits.maxFramebufferLayers, 1u));
+            // The smallest count the device rasterizes attachment-less passes at that covers the
+            // request (GL lets the effective count exceed the requested one), else its largest.
+            samples = VK_SAMPLE_COUNT_1_BIT;
+            const VkSampleCountFlags supported = limits.framebufferNoAttachmentsSampleCounts;
+            if (fbo.Samples > 1) {
+                for (Uint32 bit = VK_SAMPLE_COUNT_2_BIT; bit <= VK_SAMPLE_COUNT_64_BIT; bit <<= 1) {
+                    if ((supported & bit) == 0) continue;
+                    samples = static_cast<VkSampleCountFlagBits>(bit);
+                    if (bit >= fbo.Samples) break;
+                }
+            }
+            passKey.noAttachmentSamples = static_cast<Uint32>(samples);
+            passHash = XXH64(&samples, sizeof(samples), passHash);
         }
         passKey.width = extent.width;
         passKey.height = extent.height;

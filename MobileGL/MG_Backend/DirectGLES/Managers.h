@@ -2258,6 +2258,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // INVALID_OPERATION. Keying on the object is what makes "this hash is applied" mean
             // "these points are on the driver now".
             Uint64 m_syncedAttachmentRecordHash = 0;
+            // The ARB_framebuffer_no_attachments defaults (width, height, layers, samples,
+            // fixed sample locations) last pushed to the driver FBO with glFramebufferParameteri.
+            // Like the attachments they belong to the driver OBJECT, so one memo, not per target.
+            Array<Int, 5> m_syncedNoAttachmentDefaults = {0, 0, 0, 0, 0};
+            Bool m_syncedNoAttachmentDefaultsValid = false;
             // P5e (fb): the read-buffer decision, taken from the record alone. Both
             // SyncReadBufferToBackend overloads funnel through it, so the rule lives in one
             // place and the object form is visibly the half that only finds the handle.

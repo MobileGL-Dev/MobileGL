@@ -1223,6 +1223,10 @@ namespace MobileGL {
             // it the GL_POLYGON_OFFSET_CLAMP value cannot be applied and only glPolygonOffset's
             // unclamped offset reaches the driver.
             Bool SupportsPolygonOffsetClamp = false;
+            // GL_FRAMEBUFFER_DEFAULT_LAYERS is a legal glFramebufferParameteri pname: ES 3.2 core,
+            // or GL_EXT/OES_geometry_shader before it. The other four no-attachment defaults are
+            // ES 3.1 core and need no flag.
+            Bool SupportsFramebufferDefaultLayers = false;
             // GL_NV_shader_noperspective_interpolation is present: the driver accepts the
             // `noperspective` interpolation qualifier in ESSL. GLES core has none, so without this
             // SPIRV-Cross's `#extension ... : require` would fail to compile and MobileGL falls back

@@ -842,6 +842,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             Vector<Uint32> colorReferences;
             Uint32 depthReference = VK_ATTACHMENT_UNUSED;
             Uint32 width = 0, height = 0, layers = 1;
+            // The rasterization sample count of a pass with no attachments (0 otherwise), where
+            // nothing else in the key would tell two such passes apart.
+            Uint32 noAttachmentSamples = 0;
             Uint64 textureImageEpoch = 0, resourceEraseEpoch = 0;
             VkSwapchainKHR swapchain = VK_NULL_HANDLE;
             Uint32 swapchainImageIndex = 0;

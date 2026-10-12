@@ -9686,6 +9686,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // force. 0 is never a live hash, so a zeroed memo is a guaranteed miss.
             m_syncedRecordHashes = {0};
             m_syncedAttachmentRecordHash = 0;
+            m_syncedNoAttachmentDefaultsValid = false;
         }
 
         static Bool IsSnormFormat(TextureInternalFormat format) {
@@ -10463,6 +10464,39 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 applyPoint(FramebufferAttachmentType::Stencil, record.Stencil);
                 m_syncedAttachmentRecordHash = record.ContentHash;
                 NoteFramebufferTextureAttachments(fbo, record);
+            }
+
+            // 4. ARB_framebuffer_no_attachments. With no attachment at all the record's geometry
+            //    IS the framebuffer's default width/height/layers/samples (FillGeometry), and the
+            //    driver FBO needs them too: without a default size an attachment-less ES
+            //    framebuffer is incomplete and every draw into it is dropped. With attachments the
+            //    defaults are ignored by GL, so they are only pushed for the empty shape.
+            Bool hasAnyAttachment = !(record.Depth.Kind == MG_Pipe::kMGPipeSurfaceKindNone ||
+                                      MG_Pipe::MGPipeHandleIsNull(record.Depth.Res)) ||
+                                    !(record.Stencil.Kind == MG_Pipe::kMGPipeSurfaceKindNone ||
+                                      MG_Pipe::MGPipeHandleIsNull(record.Stencil.Res));
+            for (Uint i = 0; i < MG_Pipe::kMGPipeMaxColorAttachments && !hasAnyAttachment; ++i) {
+                hasAnyAttachment = !(record.Color[i].Kind == MG_Pipe::kMGPipeSurfaceKindNone ||
+                                     MG_Pipe::MGPipeHandleIsNull(record.Color[i].Res));
+            }
+            if (!hasAnyAttachment) {
+                const Array<Int, 5> defaults = {
+                    static_cast<Int>(record.Width), static_cast<Int>(record.Height),
+                    static_cast<Int>(record.Layers),
+                    std::min<Int>(static_cast<Int>(record.Samples), g_GLESCapabilities.MaxFramebufferSamples),
+                    static_cast<Int>(record.FixedSampleLocations != 0 ? GL_TRUE : GL_FALSE)};
+                if (!m_syncedNoAttachmentDefaultsValid || m_syncedNoAttachmentDefaults != defaults) {
+                    g_GLESFuncs.glFramebufferParameteri(glFBOTarget, GL_FRAMEBUFFER_DEFAULT_WIDTH, defaults[0]);
+                    g_GLESFuncs.glFramebufferParameteri(glFBOTarget, GL_FRAMEBUFFER_DEFAULT_HEIGHT, defaults[1]);
+                    if (g_GLESCapabilities.SupportsFramebufferDefaultLayers) {
+                        g_GLESFuncs.glFramebufferParameteri(glFBOTarget, GL_FRAMEBUFFER_DEFAULT_LAYERS, defaults[2]);
+                    }
+                    g_GLESFuncs.glFramebufferParameteri(glFBOTarget, GL_FRAMEBUFFER_DEFAULT_SAMPLES, defaults[3]);
+                    g_GLESFuncs.glFramebufferParameteri(glFBOTarget, GL_FRAMEBUFFER_DEFAULT_FIXED_SAMPLE_LOCATIONS,
+                                                        defaults[4]);
+                    m_syncedNoAttachmentDefaults = defaults;
+                    m_syncedNoAttachmentDefaultsValid = true;
+                }
             }
 
             // The walk itself can re-mint a driver id (the storage sync behind a texture

@@ -1128,6 +1128,7 @@ namespace MobileGL::MG_Util::BackendLoader {
         Bool hasTessellationShaderExtension = false;
         Bool hasClipControlExtension = false;
         Bool hasPolygonOffsetClampExtension = false;
+        Bool hasGeometryShaderExtension = false;
         for (GLint i = 0; i < extCount; ++i) {
             const char* extension = (const char*)glesFuncs.glGetStringi(GL_EXTENSIONS, i);
             if (extension) {
@@ -1193,6 +1194,10 @@ namespace MobileGL::MG_Util::BackendLoader {
                 }
                 if (std::strcmp(extension, "GL_KHR_parallel_shader_compile") == 0) {
                     caps.SupportsParallelShaderCompile = true;
+                }
+                if (std::strcmp(extension, "GL_EXT_geometry_shader") == 0 ||
+                    std::strcmp(extension, "GL_OES_geometry_shader") == 0) {
+                    hasGeometryShaderExtension = true;
                 }
                 if (std::strcmp(extension, "GL_EXT_polygon_offset_clamp") == 0) {
                     hasPolygonOffsetClampExtension = true;
@@ -1293,6 +1298,7 @@ namespace MobileGL::MG_Util::BackendLoader {
                                  (caps.GLESVersion.Major == 3 && caps.GLESVersion.Minor >= 2);
         const Bool esAtLeast31 = caps.GLESVersion.Major > 3 ||
                                  (caps.GLESVersion.Major == 3 && caps.GLESVersion.Minor >= 1);
+        caps.SupportsFramebufferDefaultLayers = esAtLeast32 || hasGeometryShaderExtension;
         caps.SupportsDrawIndirect = esAtLeast31 && glesFuncs.glDrawArraysIndirect != nullptr &&
                                     glesFuncs.glDrawElementsIndirect != nullptr;
         caps.SupportsDrawElementsBaseVertex = (esAtLeast32 || hasDrawElementsBaseVertexExtension) &&
