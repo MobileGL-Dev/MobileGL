@@ -806,6 +806,15 @@ namespace MobileGL::MG_Impl::GLImpl {
             return static_cast<GLint>(std::min(texelCount, maxTexelCount));
         }
 
+        // GL_TEXTURE_BUFFER_DATA_STORE_BINDING: the name of the buffer a buffer texture is attached
+        // to, or 0 when none is - and 0, the state's initial value, for any other storage.
+        GLuint GetBufferTextureDataStoreBinding(MG_State::GLState::ITextureObject* textureObject) {
+            if (textureObject->GetStorageType() != TextureStorageType::Buffer) return 0u;
+            auto* bufferTextureObject = static_cast<MG_State::GLState::TextureObjectBuffer*>(textureObject);
+            const auto& buffer = bufferTextureObject->GetBufferBindingSlot().GetBoundObject();
+            return buffer != nullptr ? buffer->GetExternalIndex() : 0u;
+        }
+
         // glGetTexLevelParameter{i,f}v answers WIDTH/HEIGHT/DEPTH out of the mipmap chain, and (since
         // the buffer-texture arms above) out of the attached buffer range for GL_TEXTURE_BUFFER. This
         // is what is left: a storage class with no level geometry at all. Report it instead of
@@ -3682,6 +3691,9 @@ namespace MobileGL::MG_Impl::GLImpl {
             }
             break;
         }
+        case GL_TEXTURE_BUFFER_DATA_STORE_BINDING:
+            if (params) *params = static_cast<GLint>(GetBufferTextureDataStoreBinding(textureObject.get()));
+            break;
         case GL_TEXTURE_BUFFER_SIZE:
         case GL_TEXTURE_BUFFER_OFFSET: {
             // GL 4.6 core 8.9: both describe the window of the attached buffer a GL_TEXTURE_BUFFER
@@ -3853,6 +3865,9 @@ namespace MobileGL::MG_Impl::GLImpl {
             }
             break;
         }
+        case GL_TEXTURE_BUFFER_DATA_STORE_BINDING:
+            if (params) *params = static_cast<GLfloat>(GetBufferTextureDataStoreBinding(textureObject.get()));
+            break;
         case GL_TEXTURE_BUFFER_SIZE:
         case GL_TEXTURE_BUFFER_OFFSET: {
             // See GetTexLevelParameteriv_State: both describe the attached buffer range of a

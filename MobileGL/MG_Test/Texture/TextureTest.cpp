@@ -5369,6 +5369,51 @@ TEST_F(TextureTest, GetTexLevelParameterAnswersBufferStorageGeometry) {
     }
 }
 
+// GL 4.6 core 8.11.3: GL_TEXTURE_BUFFER_DATA_STORE_BINDING names the buffer a buffer texture is
+// attached to, 0 once it is detached - and its initial value 0 for any other storage.
+TEST_F(TextureTest, GetTexLevelParameterReportsBufferDataStoreBinding) {
+    GLuint buffer = 0;
+    MG_Impl::GLImpl::CreateBuffers(1, &buffer);
+    MG_Impl::GLImpl::NamedBufferData(buffer, 64, nullptr, GL_STATIC_DRAW);
+    GLuint texture = 0;
+    MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_BUFFER, 1, &texture);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_BUFFER, texture);
+    MG_Impl::GLImpl::TexBuffer(GL_TEXTURE_BUFFER, GL_R8, buffer);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    GLint binding = -1;
+    MG_Impl::GLImpl::GetTexLevelParameteriv(GL_TEXTURE_BUFFER, 0, GL_TEXTURE_BUFFER_DATA_STORE_BINDING, &binding);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    EXPECT_EQ(binding, static_cast<GLint>(buffer));
+    GLfloat bindingFloat = -1.0f;
+    MG_Impl::GLImpl::GetTexLevelParameterfv(GL_TEXTURE_BUFFER, 0, GL_TEXTURE_BUFFER_DATA_STORE_BINDING,
+                                            &bindingFloat);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    EXPECT_EQ(bindingFloat, static_cast<GLfloat>(buffer));
+
+    MG_Impl::GLImpl::TexBuffer(GL_TEXTURE_BUFFER, GL_R8, 0);
+    MG_Impl::GLImpl::GetTexLevelParameteriv(GL_TEXTURE_BUFFER, 0, GL_TEXTURE_BUFFER_DATA_STORE_BINDING, &binding);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    EXPECT_EQ(binding, 0);
+
+    GLuint plain = 0;
+    MG_Impl::GLImpl::GenTextures(1, &plain);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, plain);
+    MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 2, 2, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    binding = -1;
+    MG_Impl::GLImpl::GetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_BUFFER_DATA_STORE_BINDING, &binding);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    EXPECT_EQ(binding, 0);
+
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, 0);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_BUFFER, 0);
+    MG_Impl::GLImpl::DeleteTextures(1, &plain);
+    MG_Impl::GLImpl::DeleteTextures(1, &texture);
+    MG_Impl::GLImpl::DeleteBuffers(1, &buffer);
+    DrainPendingGlErrors();
+}
+
 // Immutable storage plus glCompressedTexSubImage2D is the modern way to upload a compressed
 // texture, so glTexStorage2D has to commit its levels to a specific compressed internalformat
 // exactly as glTexImage2D does. When it did not, the sub-image call found an uncompressed level
