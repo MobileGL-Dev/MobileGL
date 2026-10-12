@@ -35,6 +35,7 @@
 #include "SpirvPasses/ZeroBaseVertexPass.h"
 #include "SpirvPasses/LowerPixelCenterIntegerPass.h"
 #include "SpirvPasses/ZeroLayerOutputPass.h"
+#include "SpirvPasses/FullCoverageSampleMaskPass.h"
 #include "SpirvPasses/DeriveNumSubgroupsPass.h"
 #include "SpirvPasses/EmulateSubgroupsPass.h"
 #include "SpirvPasses/FixIterationRPBarrierPass.h"
@@ -2007,6 +2008,17 @@ namespace MobileGL {
 
                 return RunOptimizerChecked("ZeroLayerOutputForVulkan", optimizer, inputBinary, outputBinary, true,
                                            enableSpirvValidation);
+            }
+
+            bool ShaderCompiler::FullCoverageSampleMaskForVulkan(const Vector<Uint32>& inputBinary,
+                                                                 Vector<uint32_t>& outputBinary,
+                                                                 const bool enableSpirvValidation) {
+                using namespace spvtools;
+                Optimizer optimizer(SPV_ENV_VULKAN_1_1);
+                optimizer.RegisterPass(FullCoverageSampleMaskPass::CreateFullCoverageSampleMaskPass());
+
+                return RunOptimizerChecked("FullCoverageSampleMaskForVulkan", optimizer, inputBinary, outputBinary,
+                                           true, enableSpirvValidation);
             }
 
             bool ShaderCompiler::DeriveNumSubgroupsForVulkan(const Vector<Uint32>& inputBinary,

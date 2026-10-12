@@ -22,6 +22,7 @@ add_executable(
         FragCoordYFlipTest.cpp
         PixelCenterIntegerTest.cpp
         ZeroLayerOutputTest.cpp
+        FullCoverageSampleMaskTest.cpp
         RelaxedOpaqueStructTest.cpp
         ShadingRateEsslTest.cpp
 )

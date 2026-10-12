@@ -1472,6 +1472,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // PipelineCreatePayload::nonLayeredStages). Not derivable from the render pass: a
             // layered and a single-layer attachment of one format share it.
             Bool nonLayeredStages = false;
+            // The pipeline was built with the program's full-coverage gl_SampleMask fragment
+            // module (PipelineCreatePayload::fullCoverageFragmentModule). Follows from the
+            // render pass's sample count and MULTISAMPLE, kept here so the key states it.
+            Bool fullCoverageSampleMask = false;
             VkPipeline pipeline = VK_NULL_HANDLE;
         };
         static constexpr Uint32 kPipelineMemoSize = 8;

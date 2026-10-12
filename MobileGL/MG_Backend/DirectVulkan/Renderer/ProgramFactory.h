@@ -134,6 +134,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // program that never writes gl_Layer, which then uses `stages` for both. The variant
             // modules are owned by `modules` like the others.
             Vector<VkPipelineShaderStageCreateInfo> nonLayeredStages;
+            // The fragment module a draw without multisample fragment operations uses (a
+            // single-sample framebuffer, or MULTISAMPLE disabled): every gl_SampleMask store
+            // writes all-ones, since GL ignores the shader's mask there and Vulkan would discard
+            // on a clear bit 0 (FullCoverageSampleMaskPass). VK_NULL_HANDLE for every program
+            // whose fragment stage never writes gl_SampleMask. Owned by `modules`.
+            VkShaderModule fullCoverageFragmentModule = VK_NULL_HANDLE;
             Vector<VkShaderModule> modules;
             // Parallel to stages; identifies the exact module bytes handed to the driver when a
             // pipeline creation fails. Sixteen bytes per stage instead of keeping the SPIR-V.
@@ -284,6 +290,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 hash = other.hash;
                 stages = std::move(other.stages);
                 nonLayeredStages = std::move(other.nonLayeredStages);
+                fullCoverageFragmentModule = other.fullCoverageFragmentModule;
+                other.fullCoverageFragmentModule = VK_NULL_HANDLE;
                 modules = std::move(other.modules);
                 // Must travel with `modules`: these digests name the SPIR-V those exact
                 // shader modules were built from, and the pipeline-failure diagnostics
@@ -364,6 +372,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 hash = other.hash;
                 stages = std::move(other.stages);
                 nonLayeredStages = std::move(other.nonLayeredStages);
+                fullCoverageFragmentModule = other.fullCoverageFragmentModule;
+                other.fullCoverageFragmentModule = VK_NULL_HANDLE;
                 modules = std::move(other.modules);
                 stageSpirvDigests = std::move(other.stageSpirvDigests); // travels with `modules` - see the move ctor
                 descriptorSetLayout = other.descriptorSetLayout;
@@ -455,6 +465,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 modules.clear();
                 stages.clear();
                 nonLayeredStages.clear();
+                fullCoverageFragmentModule = VK_NULL_HANDLE;
                 stageSpirvDigests.clear(); // the modules they describe are gone
             }
         };

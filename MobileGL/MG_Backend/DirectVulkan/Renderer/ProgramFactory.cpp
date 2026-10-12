@@ -4024,6 +4024,25 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 }
             }
             if (!entry.nonLayeredStages.empty()) entry.nonLayeredStages.push_back(nonLayeredStage);
+
+            // GL ignores gl_SampleMask without multisample fragment operations; Vulkan discards
+            // a fragment whose one-sample mask has bit 0 clear. A fragment stage that stores it
+            // gets a second module storing all-ones for those draws (FullCoverageSampleMaskPass).
+            if (shaderStage == ShaderStage::Fragment) {
+                Vector<Uint> fullCoverageSpv;
+                if (MG_Util::ShaderTranspiler::ShaderCompiler::FullCoverageSampleMaskForVulkan(
+                        moduleSpv, fullCoverageSpv, enableSpirvValidation) &&
+                    !fullCoverageSpv.empty() && fullCoverageSpv != moduleSpv) {
+                    VkShaderModuleCreateInfo fullCoverageInfo{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
+                    fullCoverageInfo.codeSize = fullCoverageSpv.size() * sizeof(Uint);
+                    fullCoverageInfo.pCode = fullCoverageSpv.data();
+                    VkShaderModule fullCoverageModule = VK_NULL_HANDLE;
+                    VK_VERIFY(vkCreateShaderModule(m_device, &fullCoverageInfo, nullptr, &fullCoverageModule),
+                              "vkCreateShaderModule(full-coverage gl_SampleMask)");
+                    entry.modules.push_back(fullCoverageModule);
+                    entry.fullCoverageFragmentModule = fullCoverageModule;
+                }
+            }
         }
 
         // Reflect and create layout as part of the program object

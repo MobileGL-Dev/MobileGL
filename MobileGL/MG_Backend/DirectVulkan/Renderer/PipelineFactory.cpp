@@ -223,6 +223,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                    sizeof(payload.passthroughTessControlKey)));
         XXHASH_VERIFY(XXH64_update(hashState, &payload.viewportCount, sizeof(payload.viewportCount)));
         XXHASH_VERIFY(XXH64_update(hashState, &payload.nonLayeredStages, sizeof(payload.nonLayeredStages)));
+        const Bool fullCoverageSampleMask = payload.fullCoverageFragmentModule != VK_NULL_HANDLE;
+        XXHASH_VERIFY(XXH64_update(hashState, &fullCoverageSampleMask, sizeof(fullCoverageSampleMask)));
         XXHASH_VERIFY(XXH64_update(hashState, &payload.polygonMode, sizeof(payload.polygonMode)));
         XXHASH_VERIFY(XXH64_update(hashState, &payload.cullMode, sizeof(payload.cullMode)));
         XXHASH_VERIFY(XXH64_update(hashState, &payload.frontFace, sizeof(payload.frontFace)));
@@ -507,11 +509,21 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // wrong). Returning VK_NULL_HANDLE routes this through the same path a driver rejection
         // takes: the draw is skipped, nothing is memoised, and the process survives.
         const Vector<VkPipelineShaderStageCreateInfo>* effectiveStages = payload.stages;
-        Vector<VkPipelineShaderStageCreateInfo> stagesWithPassthrough;
-        if (payload.passthroughTessControlStage.module != VK_NULL_HANDLE) {
-            stagesWithPassthrough = *payload.stages;
-            stagesWithPassthrough.push_back(payload.passthroughTessControlStage);
-            effectiveStages = &stagesWithPassthrough;
+        Vector<VkPipelineShaderStageCreateInfo> adjustedStages;
+        if (payload.passthroughTessControlStage.module != VK_NULL_HANDLE ||
+            payload.fullCoverageFragmentModule != VK_NULL_HANDLE) {
+            adjustedStages = *payload.stages;
+            if (payload.passthroughTessControlStage.module != VK_NULL_HANDLE) {
+                adjustedStages.push_back(payload.passthroughTessControlStage);
+            }
+            if (payload.fullCoverageFragmentModule != VK_NULL_HANDLE) {
+                for (auto& stageInfo : adjustedStages) {
+                    if (stageInfo.stage == VK_SHADER_STAGE_FRAGMENT_BIT) {
+                        stageInfo.module = payload.fullCoverageFragmentModule;
+                    }
+                }
+            }
+            effectiveStages = &adjustedStages;
         }
         {
             VkShaderStageFlags stagesPresent = 0;

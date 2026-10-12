@@ -359,6 +359,13 @@ namespace MobileGL {
                 static bool ZeroLayerOutputForVulkan(const Vector<Uint32>& inputBinary,
                                                       Vector<uint32_t>& outputBinary,
                                                       bool enableSpirvValidation = false);
+                // Builds the variant of a fragment module that a draw without multisample fragment
+                // operations (single-sample framebuffer, or MULTISAMPLE disabled) uses: every
+                // gl_SampleMask store writes all-ones, since GL ignores the mask there. A module
+                // that writes no SampleMask comes back unchanged. See FullCoverageSampleMaskPass.
+                static bool FullCoverageSampleMaskForVulkan(const Vector<Uint32>& inputBinary,
+                                                            Vector<uint32_t>& outputBinary,
+                                                            bool enableSpirvValidation = false);
                 // Replaces compute gl_NumSubgroups loads with ceil(workgroup invocations /
                 // gl_SubgroupSize). DirectVulkan only; this repairs drivers whose builtin
                 // disagrees with the subgroup IDs the same dispatch emits (Adreno reports 1

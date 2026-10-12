@@ -2825,6 +2825,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             Bool primitiveRestartEnable, Bool layeredFramebuffer, Uint64 wireRenderPassCompatibilityId) {
         Bool invertClockwise = transformFlags & ProgramFactory::CompileOptionBit::PositionYFlip;
         const Bool nonLayeredStages = !layeredFramebuffer && !programObj.nonLayeredStages.empty();
+        // GL 4.6 core 17.3.3: the shader's gl_SampleMask is a multisample fragment operation, a
+        // no-op on a single-sample framebuffer or with MULTISAMPLE disabled - the same gate
+        // ResolveEffectiveSampleMask applies to the fixed-function mask.
+        const Bool fullCoverageSampleMask =
+            programObj.fullCoverageFragmentModule != VK_NULL_HANDLE &&
+            (renderPassEntry.sampleCount == VK_SAMPLE_COUNT_1_BIT ||
+             !MG_Pipe::gPipeInputs->IsCapabilityEnabled(CapabilityInput::Multisample));
         if (programObj.stages.empty()) {
             MGLOG_D("GetOrCreatePipeline skipped: program has no shader stages");
             return VK_NULL_HANDLE;
@@ -2876,6 +2883,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 entry.renderStateCso == renderStateCso &&
                 entry.primitiveRestartEnable == primitiveRestartEnable &&
                 entry.nonLayeredStages == nonLayeredStages &&
+                entry.fullCoverageSampleMask == fullCoverageSampleMask &&
                 entry.transformFlags == transformFlags) {
                 if (MG_Util::PipeStats::Enabled()) {
                     // Gate 5 of section 2.3.1. On a hit this whole function cost the one
@@ -3164,6 +3172,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             .patchControlPoints = static_cast<Uint32>(MG_Pipe::gPipeInputs->GetPatchVertices()),
             .viewportCount = ResolveDrawViewportCount(programObj.writesViewportIndexBuiltin),
             .nonLayeredStages = nonLayeredStages,
+            .fullCoverageFragmentModule =
+                fullCoverageSampleMask ? programObj.fullCoverageFragmentModule : VK_NULL_HANDLE,
             .polygonMode = effectivePolygonMode,
             .cullMode = cullFaceEnabled
                 ? MG_Util::ConvertCullFaceModeToVkEnum(MG_Pipe::gPipeInputs->GetCullFaceMode(), false)
@@ -3449,6 +3459,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             entry.renderStateCso = renderStateCso;
             entry.primitiveRestartEnable = primitiveRestartEnable;
             entry.nonLayeredStages = nonLayeredStages;
+            entry.fullCoverageSampleMask = fullCoverageSampleMask;
             entry.transformFlags = transformFlags;
             entry.pipeline = pipeline;
             m_pipelineMemoNext = (m_pipelineMemoNext + 1) % kPipelineMemoSize;

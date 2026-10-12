@@ -85,6 +85,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // a non-layered framebuffer uses (ZeroLayerOutputPass). Hashed - the two stage sets
             // are different pipelines; the program hash alone names both.
             Bool nonLayeredStages = false;
+            // Non-null: the fragment stage in `stages` is replaced by this module, the program's
+            // full-coverage gl_SampleMask variant (VkProgramObject::fullCoverageFragmentModule),
+            // because this draw has no multisample fragment operations. Hashed as presence only -
+            // the module is a pure function of the program, which programHash already names.
+            VkShaderModule fullCoverageFragmentModule = VK_NULL_HANDLE;
             VkPolygonMode polygonMode = VK_POLYGON_MODE_FILL;
             VkCullModeFlags cullMode = VK_CULL_MODE_BACK_BIT;
             VkFrontFace frontFace = VK_FRONT_FACE_CLOCKWISE;
