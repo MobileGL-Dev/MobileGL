@@ -20,6 +20,7 @@
 #include <MG_State/GLState/ErrorState/Error.h>
 #include <MG_Util/Texture/PixelStoreProcessor.h>
 #include <MG_Util/Texture/TextureFormatProcessor.h>
+#include <MG_Util/Texture/EtcDecoder.h>
 #include <MG_Util/Classifiers/TextureEnumClassifier.h>
 #include <MG_Util/Converters/GLToStr/GLEnumConverter.h>
 #include <MG_Util/Converters/MGToMG/TextureEnumConverter.h>
@@ -783,6 +784,34 @@ namespace MobileGL::MG_Impl::GLImpl {
                 ErrorCode::InvalidEnum,
                 MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
                                              "Compressed texture formats are not supported."));
+        }
+
+        // The ETC2/EAC arm of the compressed uploads: the blocks are decoded into the level's
+        // uncompressed texel shadow (the storage the format resolves to), so the level samples and
+        // reads back as the application's image on every backend. `blocks` covers the region
+        // (offset, size) of the level. False - nothing written - for any other compressed format,
+        // which still has no decoder here, or for storage not shaped as the decoder writes it.
+        Bool DecodeEtcBlocksIntoTexelShadow(MG_State::GLState::TextureObjectMipmap* texture,
+                                            TextureUploadTarget uploadTarget, Uint level, GLenum format,
+                                            const void* blocks, IntVec3 offset, IntVec3 size) {
+            if (blocks == nullptr || !MG_Util::EtcDecoder::IsEtcFormat(format)) return false;
+            const SizeT texelBytes = MG_Util::EtcDecoder::DecodedTexelBytes(format);
+            if (MG_Util::GetInternalBytesPerPixel(texture->GetFormat(), TexturePixelDataType::UnsignedByte) !=
+                texelBytes) {
+                return false;
+            }
+            const IntVec3 levelSize = texture->GetMipmapTexelSize(uploadTarget, level);
+            const Int levelDepth = std::max(levelSize.z(), 1);
+            const SizeT levelBytes = static_cast<SizeT>(levelSize.x()) * static_cast<SizeT>(levelSize.y()) *
+                                     static_cast<SizeT>(levelDepth) * texelBytes;
+            if (levelBytes == 0 || texture->GetMipmapByteSize(uploadTarget, level) < levelBytes) return false;
+            auto* shadow = static_cast<Uint8*>(texture->MapMipmapData(uploadTarget, level));
+            if (shadow == nullptr) return false;
+            MG_Util::EtcDecoder::DecodeRegion(format, static_cast<const Uint8*>(blocks), size.x(), size.y(), size.z(),
+                                              shadow, levelSize.x(), levelSize.y(), levelDepth, offset.x(),
+                                              offset.y(), offset.z());
+            texture->MarkStorageDirtyRegion(uploadTarget, level, offset, size);
+            return true;
         }
 
         // GL_TEXTURE_WIDTH of a buffer texture: how many texels of the texture's internal format fit
@@ -4646,8 +4675,9 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     // The three-dimensional twin of CompressedTexSubImage2D_State: a block-aligned box of the
     // compressed image the level shadows is replaced, slice by slice. Same deviation as the 2D form
-    // - the uncompressed texel shadow beside it is NOT touched, so what changes is the image
-    // glGetCompressedTexImage hands back, not what the level samples as.
+    // - the uncompressed texel shadow beside it is touched only for ETC2/EAC, the one family with
+    // a decoder here; for the others what changes is the image glGetCompressedTexImage hands back,
+    // not what the level samples as.
     void CompressedTexSubImage3D_State(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint zoffset,
                                        GLsizei width, GLsizei height, GLsizei depth, GLenum format, GLsizei imageSize,
                                        const void* data) {
@@ -4759,7 +4789,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
 
         static std::atomic<Bool> announcedNoCodec3D{false};
-        if (!announcedNoCodec3D.exchange(true)) {
+        if (!MG_Util::EtcDecoder::IsEtcFormat(format) && !announcedNoCodec3D.exchange(true)) {
             MGLOG_W("%s: the compressed blocks are stored verbatim and returned by "
                     "glGetCompressedTexImage, but there is no BC/ETC decoder here, so they do not "
                     "reach the texels this level SAMPLES as. Upload through glTexSubImage3D for "
@@ -4809,14 +4839,16 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
         textureMipmapObject->SetMipmapCompressedImage(textureUploadTarget, static_cast<Uint>(level), format,
                                                       blob.data(), blobSize);
+        DecodeEtcBlocksIntoTexelShadow(textureMipmapObject, textureUploadTarget, static_cast<Uint>(level), format,
+                                       compressedBytes, {xoffset, yoffset, zoffset}, {width, height, depth});
     }
 
     // Replaces a block-aligned rectangle of the compressed image glCompressedTexImage2D (or a
     // compressed glTexImage2D) shadowed for this level. Same deviation as the image call it
-    // patches: the uncompressed texel shadow beside it is NOT touched, because there is no
-    // BC/ETC codec here to decode the incoming blocks with - so what changes is the image
-    // glGetCompressedTexImage hands back, not what the level samples as. Marking the texels
-    // dirty would therefore only re-upload bytes that did not change.
+    // patches: ETC2/EAC blocks are decoded into the uncompressed texel shadow beside it
+    // (MG_Util::EtcDecoder), but for every other family there is no codec here, so what changes
+    // is the image glGetCompressedTexImage hands back, not what the level samples as - and marking
+    // those texels dirty would only re-upload bytes that did not change.
     void CompressedTexSubImage2D_State(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLsizei width,
                                        GLsizei height, GLenum format, GLsizei imageSize, const void* data) {
         // ======================= Converting ================================
@@ -4931,7 +4963,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         // end. MGLOG_W is the right level and now survives at INFO; it sat at MGLOG_I only
         // while the Log.h ordering compiled warnings out of the builds that ship.
         static std::atomic<Bool> announcedNoCodec{false};
-        if (!announcedNoCodec.exchange(true)) {
+        if (!MG_Util::EtcDecoder::IsEtcFormat(format) && !announcedNoCodec.exchange(true)) {
             MGLOG_W("%s: the compressed blocks are stored verbatim and returned by "
                     "glGetCompressedTexImage, but there is no BC/ETC decoder here, so they do not "
                     "reach the texels this level SAMPLES as. Upload through glTexSubImage2D for "
@@ -4975,6 +5007,8 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
         textureMipmapObject->SetMipmapCompressedImage(textureUploadTarget, static_cast<Uint>(level), format,
                                                       blob.data(), blobSize);
+        DecodeEtcBlocksIntoTexelShadow(textureMipmapObject, textureUploadTarget, static_cast<Uint>(level), format,
+                                       compressedBytes, {xoffset, yoffset, 0}, {width, height, 1});
     }
 
     void CompressedTexSubImage1D_State(GLenum target, GLint level, GLint xoffset, GLsizei width, GLenum format,
@@ -4985,7 +5019,7 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     // The three-dimensional twin of CompressedTexImage2D_State, and the same deviation applies: the
     // blocks are shadowed verbatim for glGetCompressedTexImage while the texels this level SAMPLES
-    // as stay zero, because there is no BC/ETC decoder here. A 3D compressed image is a stack of
+    // as stay zero - except ETC2/EAC, which is decoded into them. A 3D compressed image is a stack of
     // `depth` two-dimensional block grids - every format that reaches here has a 4x4x1 block - so
     // the blob layout is slice-major and CalculateCompressedTextureImageSize already multiplies by
     // depth.
@@ -5060,6 +5094,8 @@ namespace MobileGL::MG_Impl::GLImpl {
         const void* compressedBytes = CompressedUnpackSource(data);
         textureMipmapObject->SetMipmapCompressedImage(textureUploadTarget, level, internalformat, compressedBytes,
                                                       expectedImageSize);
+        DecodeEtcBlocksIntoTexelShadow(textureMipmapObject, textureUploadTarget, static_cast<Uint>(level),
+                                       internalformat, compressedBytes, {0, 0, 0}, {width, height, depth});
         textureMipmapObject->MarkStorageDirty(textureUploadTarget, level, true);
     }
 
@@ -5113,8 +5149,9 @@ namespace MobileGL::MG_Impl::GLImpl {
         // ConvertGLEnumToTextureInternalFormat already document: neither backend has a BC/ETC codec
         // and TextureInternalFormat has no compressed enumerator, so the shadow keeps the "one
         // format, N bytes per texel" layout the backend upload sizing, glGenerateMipmap's
-        // bytes-per-texel division and the pixel-store packer all rely on. The image therefore
-        // samples as zeros. The application's bytes are kept beside it so glGetCompressedTexImage can
+        // bytes-per-texel division and the pixel-store packer all rely on. ETC2/EAC blocks are
+        // decoded into that storage (MG_Util::EtcDecoder); any other family samples as zeros, having
+        // no decoder here. The application's bytes are kept beside it so glGetCompressedTexImage can
         // return the image *as stored*, which GL 4.6 core 8.11 requires and which no re-encode could
         // satisfy byte for byte.
         const TextureInternalFormat textureInternalFormat =
@@ -5140,6 +5177,8 @@ namespace MobileGL::MG_Impl::GLImpl {
         const void* compressedBytes = CompressedUnpackSource(data);
         textureMipmapObject->SetMipmapCompressedImage(textureUploadTarget, level, internalformat, compressedBytes,
                                                       expectedImageSize);
+        DecodeEtcBlocksIntoTexelShadow(textureMipmapObject, textureUploadTarget, static_cast<Uint>(level),
+                                       internalformat, compressedBytes, {0, 0, 0}, {width, height, 1});
         textureMipmapObject->MarkStorageDirty(textureUploadTarget, level, true);
     }
 

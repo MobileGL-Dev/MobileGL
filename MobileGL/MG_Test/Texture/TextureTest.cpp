@@ -36,6 +36,7 @@
 #include <MG_Util/Math/SmallFloat.h>
 #include <MG_Util/Texture/PixelStoreProcessor.h>
 #include <MG_Util/Texture/TextureFormatProcessor.h>
+#include <MG_Util/Texture/EtcDecoder.h>
 #include <cstring>
 
 using namespace MobileGL;
@@ -7032,4 +7033,94 @@ TEST_F(TextureTest, TheExternalTargetIsABindingPointOfItsOwn) {
     ActiveTexture(GL_TEXTURE0);
     DeleteTextures(2, names);
     EXPECT_EQ(GetError(), GL_NO_ERROR);
+}
+
+namespace {
+    // The first layer of the conformance suite's cube-map-array ETC2 case: an 8x8
+    // GL_COMPRESSED_RGB8_ETC2 image (2x2 blocks) and the RGBA8 image it was compressed from.
+    // Texel row y has G = 32 * y and column x has B = 32 * x (the suite draws the +Z face, whose
+    // t runs against window y, and compares bottom-up, so its table reads G = 224 first).
+    constexpr Uint8 kEtc2Rgb8x8[32] = {0x0,  0x0, 0x4,  0x2,  0x1,  0x0,  0x6f, 0xc0, 0x0,  0x1, 0x4,
+                                       0x2,  0x1, 0xf8, 0x6f, 0xe0, 0x1,  0x0,  0x4,  0x2,  0x80, 0xf8,
+                                       0x5f, 0xc0, 0x1, 0x0,  0xfb, 0x82, 0x81, 0xf8, 0x5f, 0xe0};
+
+    Int ReferenceGreen(Int y) { return 32 * y; }
+    Int ReferenceBlue(Int x) { return 32 * x; }
+} // namespace
+
+// The decoder against an image a reference encoder produced; the suite's own tolerance for it is
+// 5% (13 of 255), which ETC2's quantisation needs.
+TEST(EtcDecoder, DecodesTheConformanceSuitesEtc2RgbImage) {
+    Uint8 texels[8 * 8 * 3] = {};
+    ASSERT_TRUE(MG_Util::EtcDecoder::DecodeRegion(GL_COMPRESSED_RGB8_ETC2, kEtc2Rgb8x8, 8, 8, 1, texels, 8, 8, 1, 0,
+                                                  0, 0));
+    for (Int y = 0; y < 8; ++y) {
+        for (Int x = 0; x < 8; ++x) {
+            const Uint8* t = texels + (y * 8 + x) * 3;
+            EXPECT_NEAR(t[0], 0, 13) << "red at (" << x << ", " << y << ")";
+            EXPECT_NEAR(t[1], ReferenceGreen(y), 13) << "green at (" << x << ", " << y << ")";
+            EXPECT_NEAR(t[2], ReferenceBlue(x), 13) << "blue at (" << x << ", " << y << ")";
+        }
+    }
+}
+
+// The EAC half: a block whose multiplier is 0 still moves every texel by the bare modifier, and a
+// base of 128 with modifier index 4 (+2 in table 0) reads 130 in the alpha channel; the colour half
+// is an individual-mode block of one flat colour (all-zero indices: +2 on 0x88 = 138).
+TEST(EtcDecoder, DecodesAnEacAlphaBlockAndAnIndividualModeColourBlock) {
+    Uint8 block[16] = {};
+    block[0] = 128;  // alpha base
+    block[1] = 0x10; // multiplier 1, table 0
+    // Every 3-bit index = 4 (0b100): the pattern 100 repeated over 48 bits.
+    const Uint64 indices = 0x924924924924ull;
+    for (Int i = 0; i < 6; ++i) block[2 + i] = static_cast<Uint8>(indices >> (40 - 8 * i));
+    // Colour: individual mode, both subblocks 0x8 per channel, codewords 0, all indices 0.
+    block[8] = 0x88;
+    block[9] = 0x88;
+    block[10] = 0x88;
+    block[11] = 0x00;
+    Uint8 texels[16 * 4] = {};
+    ASSERT_TRUE(MG_Util::EtcDecoder::DecodeBlock(GL_COMPRESSED_RGBA8_ETC2_EAC, block, texels));
+    for (Int t = 0; t < 16; ++t) {
+        EXPECT_EQ(texels[t * 4 + 0], 138);
+        EXPECT_EQ(texels[t * 4 + 1], 138);
+        EXPECT_EQ(texels[t * 4 + 2], 138);
+        EXPECT_EQ(texels[t * 4 + 3], 130);
+    }
+}
+
+// glCompressedTexImage2D of an ETC2 image used to leave the level's texels zero: the blocks were
+// kept for glGetCompressedTexImage only, so the level sampled - and read back - black. They are
+// decoded into the texel shadow now, which is what both backends upload.
+TEST_F(TextureTest, CompressedTexImage2DDecodesEtc2IntoTheTexels) {
+    GLuint texture = 0;
+    MG_Impl::GLImpl::GenTextures(1, &texture);
+    MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, texture);
+    MG_Impl::GLImpl::CompressedTexImage2D(GL_TEXTURE_2D, 0, GL_COMPRESSED_RGB8_ETC2, 8, 8, 0,
+                                          static_cast<GLsizei>(sizeof(kEtc2Rgb8x8)), kEtc2Rgb8x8);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+
+    Uint8 rgba[8 * 8 * 4] = {};
+    MG_Impl::GLImpl::GetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    for (Int y = 0; y < 8; ++y) {
+        for (Int x = 0; x < 8; ++x) {
+            const Uint8* t = rgba + (y * 8 + x) * 4;
+            EXPECT_NEAR(t[1], ReferenceGreen(y), 13) << "green at (" << x << ", " << y << ")";
+            EXPECT_NEAR(t[2], ReferenceBlue(x), 13) << "blue at (" << x << ", " << y << ")";
+        }
+    }
+
+    // A sub-image replace decodes too: the top-left block becomes a flat individual-mode colour.
+    const Uint8 flat[8] = {0x88, 0x88, 0x88, 0x00, 0x00, 0x00, 0x00, 0x00};
+    MG_Impl::GLImpl::CompressedTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 4, 4, GL_COMPRESSED_RGB8_ETC2,
+                                             static_cast<GLsizei>(sizeof(flat)), flat);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    MG_Impl::GLImpl::GetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+    EXPECT_EQ(rgba[0], 138);
+    EXPECT_EQ(rgba[(3 * 8 + 3) * 4 + 2], 138) << "the replaced block's last texel";
+    EXPECT_NEAR(rgba[(0 * 8 + 4) * 4 + 2], ReferenceBlue(4), 13) << "the block beside it is untouched";
+
+    MG_Impl::GLImpl::DeleteTextures(1, &texture);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
 }

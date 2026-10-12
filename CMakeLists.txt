@@ -448,6 +448,7 @@ set(SOURCE_FILES
 
     MobileGL/MG_Util/Texture/PixelStoreProcessor.cpp
     MobileGL/MG_Util/Texture/TextureFormatProcessor.cpp
+    MobileGL/MG_Util/Texture/EtcDecoder.cpp
 
     MobileGL/MG_Impl/GLXImpl/Exporting/Definitions.cpp
     MobileGL/MG_Impl/GLXImpl/Exporting/GlvndVendor.cpp
