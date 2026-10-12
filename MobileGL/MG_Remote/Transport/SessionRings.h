@@ -466,10 +466,20 @@ namespace MobileGL::MG_Remote::Transport {
             // A terminal rejection after Pop must not acknowledge an unapplied record.
             // A bool callback returning false ends this consumer's session; it cannot retry
             // the popped record. Existing void callbacks retain their original semantics.
-            if constexpr (std::is_same_v<std::invoke_result_t<Apply, const RingRecordView&>, bool>) {
-                if (!apply(view)) return false;
-            } else {
-                apply(view);
+            // ProducingSeq() names THIS record while its apply runs, so a reverse
+            // event the apply posts carries the seq of the record that produced it.
+            struct ApplyingScope {
+                bool& flag;
+                explicit ApplyingScope(bool& f) : flag(f) { flag = true; }
+                ~ApplyingScope() { flag = false; }
+            };
+            {
+                const ApplyingScope applying(m_applying);
+                if constexpr (std::is_same_v<std::invoke_result_t<Apply, const RingRecordView&>, bool>) {
+                    if (!apply(view)) return false;
+                } else {
+                    apply(view);
+                }
             }
             ++m_appliedSeq;
             Watermark::AdvanceApplied(*m_control, m_appliedSeq);
@@ -535,6 +545,11 @@ namespace MobileGL::MG_Remote::Transport {
         void NotifyClient();
 
         std::uint64_t AppliedSeq() const { return m_appliedSeq; }
+        // The seq of the record whose apply is running, or - between records -
+        // the last one applied. Every byte the server reads back at this point is
+        // current as of exactly this record, which is what a writeback event
+        // stamps so the client can order it against its own later records.
+        std::uint64_t ProducingSeq() const { return m_applying ? m_appliedSeq + 1 : m_appliedSeq; }
         // How many kRecBorrowSlot records this consumer has seen. Non-zero in P5
         // is a finding, not a statistic.
         std::uint64_t BorrowedRecordsSeen() const { return m_borrowedSeen; }
@@ -556,6 +571,7 @@ namespace MobileGL::MG_Remote::Transport {
         std::uint64_t m_retirableCursor = 0;
         std::uint64_t m_borrowedSeen = 0;
         bool m_borrowHeld = false;
+        bool m_applying = false;
 
         // Out of line so ApplyOne, which is a template in a header this layer
         // keeps free of MobileGL/Includes.h, can still log.

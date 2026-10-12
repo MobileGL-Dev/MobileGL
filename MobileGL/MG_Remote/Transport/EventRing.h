@@ -73,12 +73,20 @@ namespace MobileGL::MG_Remote::Transport {
     // makes "the destination is the client's shadow" (contract table 1 row 22)
     // reachable without a second segment. `Size` is therefore the record's own
     // tail length and is cross-checked against it.
+    //
+    // `ProducedAtSeq` is the SEG_CMD seq of the record whose apply posted the
+    // writeback (the record count the server had applied, when it was posted
+    // between records). Writebacks a client did not ask for - a transform
+    // feedback capture closing - drain whenever the client next waits, which
+    // can be after it has marked the same buffer written by a later record; the
+    // seq is what lets it tell an old writeback from the answer to its own.
     struct EventBufferWritebackHead {
         EventHandle Resource;
-        std::uint64_t Offset; // destination offset inside the resource
-        std::uint64_t Size;   // inline byte count that follows
+        std::uint64_t Offset;        // destination offset inside the resource
+        std::uint64_t Size;          // inline byte count that follows
+        std::uint64_t ProducedAtSeq; // SEG_CMD seq the bytes are current as of
     };
-    static_assert(sizeof(EventBufferWritebackHead) == 24, "wire shape");
+    static_assert(sizeof(EventBufferWritebackHead) == 32, "wire shape");
 
     // OnGpuWritten(res, rangeCount, ranges). EventRange[RangeCount] follows.
     struct EventGpuWrittenHead {

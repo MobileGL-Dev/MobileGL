@@ -480,7 +480,7 @@ namespace MobileGL::MG_State::GLState {
         return m_publishedLiveHostWrites;
     }
 
-    void BufferObject::WritebackFromBackend(DataPtr data, SizeT atOffset) {
+    void BufferObject::WritebackFromBackend(DataPtr data, SizeT atOffset, Uint64 producedAtSeq) {
         MOBILEGL_ASSERT(atOffset + data.size <= m_size,
                         "WritebackFromBackend out of bounds: atOffset (%zu) + data.size (%zu) > m_size (%zu)", atOffset,
                         data.size, m_size);
@@ -498,14 +498,40 @@ namespace MobileGL::MG_State::GLState {
         // P13 W4a: monolith's record arm refreshes an aliased store through this function too
         // (Managers.cpp RefreshAliasedStoreFromGpu), and a whole-store landing there is exactly as
         // current as one under split.
-        if (atOffset == 0 && data.size >= m_size) {
+        //
+        // ORDERED, NOT MERELY WHOLE. A writeback the client never asked for - the end of a
+        // transform feedback capture - is drained whenever the client next waits, which under
+        // run-ahead can be after a later dispatch has marked this same buffer written again.
+        // Those bytes are the capture's, not the dispatch's, so they may not retire the newer
+        // mark: only a writeback produced by a record after the one the mark was taken for can
+        // (the readback SyncGpuWrites emits always is). 0 is the synchronous answer - monolith
+        // and every no-session case - which has nothing to be ordered against.
+        if (atOffset == 0 && data.size >= m_size &&
+            (producedAtSeq == 0 || producedAtSeq > m_gpuWriteMarkSeq)) {
             m_gpuWritePending = false;
         }
     }
 
     void BufferObject::MarkGpuWritten() {
+#if MOBILEGL_BUILD_DISAGGREGATED
+        MarkGpuWrittenAfter(MG_Remote::Client::GpuWriteOrderSeq());
+#else
+        MarkGpuWrittenAfter(0);
+#endif
+    }
+
+    void BufferObject::MarkGpuWrittenInChannelOrder() {
         m_hasDefinedContent = true;
         m_gpuWritePending = true;
+    }
+
+    void BufferObject::MarkGpuWrittenAfter(Uint64 orderSeq) {
+        m_hasDefinedContent = true;
+        m_gpuWritePending = true;
+        // Assigned, not maxed: within a session the seq only grows, and a new session (or
+        // none, 0) restarts the numbering - a stamp kept from the old one would outrank every
+        // answer the new one can give.
+        m_gpuWriteMarkSeq = orderSeq;
     }
 
     void BufferObject::SyncGpuWrites() {
@@ -642,10 +668,9 @@ namespace MobileGL::MG_State::GLState {
         if (bytes.size > 0 && MG_Pipe::MGPipeResourceSubsystemEnabled() &&
             MG_Pipe::MGPipeResourceOpsHaveSubDataResident()) {
             MG_Pipe::MGPipeEmitBufferSubDataResident(*this, offset, bytes.data, bytes.size);
-            m_hasDefinedContent = true;
             ++m_changeSerial;
             MGP_NOTE_AGGREGATE(BufferChange);
-            m_gpuWritePending = true;
+            MarkGpuWritten();
             return;
         }
         // No resident op: the write lands in place below, after retiring the GPU writes this

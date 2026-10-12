@@ -461,11 +461,17 @@ TEST(SessionTest, AppliedSeqAdvancesExactlyOncePerRecordAndIsNeverBatched) {
     session.producer.PublishAndNotify(kRecords);
 
     std::uint64_t applied = 0;
-    while (session.consumer.ApplyOne([&](const RingRecordView&) { ++applied; })) {
+    EXPECT_EQ(session.consumer.ProducingSeq(), 0u);
+    while (session.consumer.ApplyOne([&](const RingRecordView&) {
+        // A reverse event posted by this apply is stamped with THIS record's seq.
+        EXPECT_EQ(session.consumer.ProducingSeq(), applied + 1);
+        ++applied;
+    })) {
         EXPECT_EQ(session.Control().Progress.appliedSeq.load(), applied)
             << "appliedSeq did not move with the record; a barrier waiter would be blocked on "
                "work that already ran";
         EXPECT_EQ(session.consumer.AppliedSeq(), applied);
+        EXPECT_EQ(session.consumer.ProducingSeq(), applied) << "between records: the last one applied";
     }
     EXPECT_EQ(applied, kRecords);
 }

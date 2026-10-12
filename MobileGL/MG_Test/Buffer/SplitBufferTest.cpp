@@ -540,6 +540,39 @@ TEST_F(SplitBufferSet, UnderSplitTheWritebackClearsThePendingFlagAndNotTheReques
     EXPECT_FALSE(buffer->HasOutstandingGpuWrite());
 }
 
+// A writeback the client never asked for (a capture's end) drains whenever the client next
+// waits, which can be after a later record marked the same buffer written again. Only a
+// writeback produced by a record AFTER the mark's may retire it; an older one lands its bytes
+// and leaves the mark standing, so the next read still reconciles with the newer write.
+TEST_F(SplitBufferSet, AnOlderWritebackCannotRetireANewerGpuWriteMark) {
+    auto buffer = MakeBuffer(27u, 96);
+    Vector<Uint8> capture(96, static_cast<Uint8>(0x11));
+
+    // The capture closed at record 4; a dispatch emitted after record 6 re-marked the buffer.
+    buffer->MarkGpuWrittenAfter(6);
+    buffer->WritebackFromBackend(DataPtr{capture.data(), capture.size()}, 0, /*producedAtSeq=*/4);
+    EXPECT_TRUE(buffer->HasOutstandingGpuWrite())
+        << "the capture's writeback predates the dispatch and cannot vouch for its write";
+    buffer->WritebackFromBackend(DataPtr{capture.data(), capture.size()}, 0, /*producedAtSeq=*/6);
+    EXPECT_TRUE(buffer->HasOutstandingGpuWrite()) << "record 6 is the mark's own seq, not after it";
+
+    // The readback the next read emits is a later record, and it does retire the mark.
+    buffer->WritebackFromBackend(DataPtr{capture.data(), capture.size()}, 0, /*producedAtSeq=*/7);
+    EXPECT_FALSE(buffer->HasOutstandingGpuWrite());
+
+    // An unordered (synchronous) writeback keeps the old rule.
+    buffer->MarkGpuWrittenAfter(9);
+    buffer->WritebackFromBackend(DataPtr{capture.data(), capture.size()}, 0);
+    EXPECT_FALSE(buffer->HasOutstandingGpuWrite());
+
+    // A server-announced mark is drained in channel order, so it keeps the standing stamp: the
+    // readback the client emitted after its own mark at 10 still answers it.
+    buffer->MarkGpuWrittenAfter(10);
+    buffer->MarkGpuWrittenInChannelOrder();
+    buffer->WritebackFromBackend(DataPtr{capture.data(), capture.size()}, 0, /*producedAtSeq=*/11);
+    EXPECT_FALSE(buffer->HasOutstandingGpuWrite());
+}
+
 // The tier gate in P11 B2's shape (CONTRACT-P11 §1 and B2). 0 / 1 are SETTLED AT THE HANDSHAKE by
 // the data plane rather than discovered at the first map_persistent: a stream refuses them by name
 // and runs T2 on either side; over shared segments a client with 0 ASKS T0 (0), with 1 is refused
@@ -826,6 +859,7 @@ TEST(SplitBufferSet, BothEdgesOfAWriteMapPublishOneStateRecord) { MGL_SPLIT_ONLY
 TEST(SplitBufferSet, AZeroBlockSizeTurnsThePushOffRatherThanMakingItUnlimited) { MGL_SPLIT_ONLY_OR_SKIP(); }
 TEST(SplitBufferSet, ADestroyedBufferLeavesTheSet) { MGL_SPLIT_ONLY_OR_SKIP(); }
 TEST(SplitBufferSet, UnderSplitTheWritebackClearsThePendingFlagAndNotTheRequest) { MGL_SPLIT_ONLY_OR_SKIP(); }
+TEST(SplitBufferSet, AnOlderWritebackCannotRetireANewerGpuWriteMark) { MGL_SPLIT_ONLY_OR_SKIP(); }
 TEST(SplitBufferSet, TheAdoptTierIsSettledAtTheHandshakeAndNeverFatal) { MGL_SPLIT_ONLY_OR_SKIP(); }
 TEST(SplitBufferSet, ASubPageMapIsOneProtectedPageAndAWriteThroughItFaults) { MGL_SPLIT_ONLY_OR_SKIP(); }
 TEST(SplitBufferSet, AShadowThatFailsThePageGranularTestKeepsTheInwardAlignmentAndItsEdges) {

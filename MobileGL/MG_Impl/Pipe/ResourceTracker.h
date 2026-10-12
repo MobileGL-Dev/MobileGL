@@ -579,7 +579,11 @@ namespace MobileGL::MG_Pipe {
     //                                transport this is rule B in the reverse direction and is
     //                                Fatal{ProtocolCorruption, "OnBufferWriteback.Seg"};
     //   anything else             -> the same Fatal.
-    inline void MGPipeClientOnBufferWriteback(MGPipeHandle res, Uint64 offset, MGPBlobRef bytes) {
+    //
+    // `producedAtSeq` is the event's ProducedAtSeq (the record the server read the bytes back
+    // at); 0 for the monolith callback, whose answer is synchronous with its request.
+    inline void MGPipeClientOnBufferWritebackAt(MGPipeHandle res, Uint64 offset, MGPBlobRef bytes,
+                                                Uint64 producedAtSeq) {
         auto* buffer = MGPipeResourceTrackerInstance().Resolve(res);
         if (buffer == nullptr) {
             MGLOG_E_ONCE("MGPipe: OnBufferWriteback for a handle {%u,%u} that resolves to no buffer",
@@ -641,7 +645,12 @@ namespace MobileGL::MG_Pipe {
         }
 #endif
         buffer->WritebackFromBackend(DataPtr{bytePtr, static_cast<SizeT>(bytes.Size)},
-                                     static_cast<SizeT>(offset));
+                                     static_cast<SizeT>(offset), producedAtSeq);
+    }
+
+    // The monolith callback's shape (MGPipeCallbacks::OnBufferWriteback).
+    inline void MGPipeClientOnBufferWriteback(MGPipeHandle res, Uint64 offset, MGPBlobRef bytes) {
+        MGPipeClientOnBufferWritebackAt(res, offset, bytes, 0);
     }
 
     // A draw or dispatch wrote these ranges. ARCHITECTURE.md 7.1 calls this a NARROWING
@@ -670,7 +679,7 @@ namespace MobileGL::MG_Pipe {
                          res.Gen);
             return;
         }
-        buffer->MarkGpuWritten();
+        buffer->MarkGpuWrittenInChannelOrder();
     }
 
     // MONOLITH ONLY (CONTRACT-P5C §4.1): with an active transport the three reverse entries

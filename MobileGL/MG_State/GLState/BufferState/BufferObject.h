@@ -113,7 +113,14 @@ namespace MobileGL {
             // Shadow-only write used when the backend copies GPU results (e.g. ReadPixels
             // into a pixel-pack buffer) back into the frontend mirror. Does not issue a
             // backend op: the backend storage already holds these bytes.
-            void WritebackFromBackend(DataPtr data, SizeT atOffset);
+            //
+            // `producedAtSeq` is the command seq the bytes are current as of (the event's
+            // ProducedAtSeq); 0 means the writeback is synchronous with its request and needs
+            // no ordering. A whole-buffer writeback clears the outstanding GPU write only when
+            // it is newer than the record the latest mark was taken for - an older one (a
+            // capture's writeback drained after a later dispatch re-marked the buffer) still
+            // lands its bytes but cannot vouch for the write it predates.
+            void WritebackFromBackend(DataPtr data, SizeT atOffset, Uint64 producedAtSeq = 0);
 
             // A draw or dispatch just ran with this buffer bound where a shader can write
             // it (shader storage / atomic counter). The next read has to reconcile with
@@ -121,6 +128,16 @@ namespace MobileGL {
             // memory - wait for the work that wrote them to retire. Which of the two is
             // the backend's business; the flag only says a GPU write is outstanding.
             void MarkGpuWritten();
+            // The same mark, stamped with an explicit command seq: the mark stands for GPU
+            // work in records AFTER `orderSeq`. MarkGpuWritten stamps the session's last
+            // published seq (0 without a session).
+            void MarkGpuWrittenAfter(Uint64 orderSeq);
+            // The mark a server announces on the reverse channel (OnGpuWritten). That channel
+            // is in order with the writebacks, so every writeback drained after this mark was
+            // produced after the write it announces: the standing stamp is kept, not raised to
+            // the drain point - raising it would outrank the very readback the next read is
+            // already waiting on.
+            void MarkGpuWrittenInChannelOrder();
             // Refreshes the shadow from the backend when a GPU write is outstanding. Called
             // from every path that reads the shadow on the app's behalf.
             void SyncGpuWrites();
@@ -258,6 +275,10 @@ namespace MobileGL {
             // and, in a split build, cleared by WritebackFromBackend instead, because there
             // the answer arrives later than the request. See SyncGpuWrites' definition.
             Bool m_gpuWritePending = false;
+            // The command seq the latest GPU-write mark was taken after. A monotonic record
+            // seq, never a count of writebacks: only a writeback produced by a LATER record
+            // can retire the mark (WritebackFromBackend).
+            Uint64 m_gpuWriteMarkSeq = 0;
             // The last value of MGPResourceDesc::HasLiveHostWrites this object published.
             // Behind the option so the pull build's layout - and therefore every inlined
             // constructor and accessor in it - does not move (G1).

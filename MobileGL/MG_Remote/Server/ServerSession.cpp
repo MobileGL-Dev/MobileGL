@@ -457,6 +457,7 @@ namespace MobileGL::MG_Remote::Server {
             head.Resource = Transport::EventHandle{res.Slot, res.Gen};
             head.Offset = offset;
             head.Size = bytes.Size;
+            head.ProducedAtSeq = session.Consumer().ProducingSeq();
             std::memcpy(slot, &head, sizeof(head));
             if (bytes.Size != 0) {
                 std::memcpy(static_cast<Uint8*>(slot) + sizeof(head),

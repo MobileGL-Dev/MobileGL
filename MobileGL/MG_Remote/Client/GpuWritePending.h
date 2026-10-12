@@ -33,6 +33,12 @@ namespace MobileGL::MG_Remote::Client {
     // caller writes, because the loop would be a hang in exactly that configuration.
     void AwaitBufferWriteback(MG_State::GLState::BufferObject& buffer);
 
+    // The order a GPU-write mark is stamped with: the last command seq this session
+    // published, so the work the mark stands for is in a LATER record and only a writeback
+    // the server produced after that record can retire it (BufferObject::WritebackFromBackend).
+    // 0 with no session, where every writeback is synchronous and needs no ordering.
+    Uint64 GpuWriteOrderSeq();
+
 
     // The slice a whole-buffer readback is cut into so one writeback event always fits
     // SEG_EVENT. The writeback's bytes travel INLINE in the event record (P5c ev, CONTRACT-P5C

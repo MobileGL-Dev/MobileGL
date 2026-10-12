@@ -31,7 +31,7 @@ namespace MobileGL::MG_Remote::Client {
         ClientSession* session = ClientSession::Active();
         if (session == nullptr) return 0;
         // A quarter of the ring, not the MaxRecordBytes half: the record carries its own
-        // header and the 24-byte EventBufferWritebackHead beside the payload, and the ring
+        // header and the 32-byte EventBufferWritebackHead beside the payload, and the ring
         // may still hold a few small events (gpu-written, gl-error) posted earlier in the
         // same verb's apply. Each slice round-trips with its own barrier + drain, so the
         // ring never holds more than one slice's bytes.
@@ -70,6 +70,11 @@ namespace MobileGL::MG_Remote::Client {
         // lane in a split build), so there is no arena to fit and the record's own bound stands.
         if (session == nullptr) return 0;
         return MGPipeStageChunkBytesFor(session->StageCapacityBytes());
+    }
+
+    Uint64 GpuWriteOrderSeq() {
+        ClientSession* session = ClientSession::Active();
+        return session == nullptr ? 0 : session->LastPublishedSeq();
     }
 
     void AwaitBufferWriteback(BufferObject& buffer) {

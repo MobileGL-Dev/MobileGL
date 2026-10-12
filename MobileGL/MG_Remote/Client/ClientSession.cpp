@@ -508,9 +508,9 @@ namespace MobileGL::MG_Remote::Client {
                     blob.Seg = Wire::kSegEvent;
                     blob.Offset = events.OffsetInSegment(bytes);
                     blob.Size = head->Size;
-                    MG_Pipe::MGPipeClientOnBufferWriteback(
+                    MG_Pipe::MGPipeClientOnBufferWritebackAt(
                         MG_Pipe::MGPipeHandle{head->Resource.Slot, head->Resource.Gen},
-                        head->Offset, blob);
+                        head->Offset, blob, head->ProducedAtSeq);
                     ++delivered;
                     break;
                 }
