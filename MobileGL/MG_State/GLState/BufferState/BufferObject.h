@@ -305,7 +305,8 @@ namespace MobileGL {
         // CLIENT_MAPPED_BUFFER_BARRIER_BIT barrier before that fence). The pointer such a map
         // hands out is the frontend shadow, which nothing else pulls the GPU's bytes into, so
         // these two waits refresh every live persistent read map that has a GPU write
-        // outstanding.
+        // outstanding. A CLIENT_MAPPED_BUFFER_BARRIER_BIT barrier refreshes them too, for an
+        // application that reads after some other wait instead of a fence.
         void SyncPersistentReadMapsFromGpu();
     } // namespace MG_State::GLState
 } // namespace MobileGL

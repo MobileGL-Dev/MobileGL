@@ -9,6 +9,7 @@
 #include "GL_Drawing.h"
 #include <Config.h>
 #include <MG_State/GLState/Core.h>
+#include <MG_State/GLState/BufferState/BufferObject.h>
 #include <MG_State/EGLState/Core.h>
 #include <MG_Backend/BackendObjects.h>
 #include <MG_Impl/Pipe/PipeFill.h>
@@ -936,6 +937,15 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
         MGP_FILL(MemoryBarrier);
         memoryBarrier(barriers);
+        // CLIENT_MAPPED_BUFFER_BARRIER_BIT asks for the shader writes issued so far to reach
+        // the client's persistent maps (GL 4.6 core 7.13). A persistent READ map hands out the
+        // frontend shadow, which only an explicit pull refreshes, and an application may read
+        // it after any command that waited for the GPU (a glGetTexImage, say) rather than after
+        // a fence - so pull here, while the writes are known to be ordered ahead of the read.
+        // Only buffers with a GPU write outstanding pay for it.
+        if ((barriers & GL_CLIENT_MAPPED_BUFFER_BARRIER_BIT) != 0) {
+            MG_State::GLState::SyncPersistentReadMapsFromGpu();
+        }
     }
 
     void TextureBarrier() {
