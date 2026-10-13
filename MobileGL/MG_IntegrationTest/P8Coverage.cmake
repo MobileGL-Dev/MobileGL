@@ -32,6 +32,7 @@ set(MGL_P8A_AMBIENT_CASES
     BufferTextureScenario.*
     ClearTexImageUndefinedLevelZeroScenario.*
     ClearOrderScenario.*
+    ClipControlScenario.*
     ClipDistanceScenario.*
     CopyImageLevelRangeScenario.*
     CopyImagePacked16Scenario.*
