@@ -531,6 +531,104 @@ namespace MobileGL::MG_Util::SelfTest {
     }
 
     namespace {
+        constexpr const char* kEmptyImageProbeName = "empty image unit load";
+        constexpr GLuint kEmptyImageSentinel = 0xDEADBEEFu;
+
+        // Loads texel (0, 0) of the rgba8 image on kProbeImageUnit and writes it packed.
+        String EmptyImageComputeSource() {
+            return "#version 310 es\n"
+                   "layout(local_size_x = 1) in;\n"
+                   "layout(rgba8, binding = " + std::to_string(kProbeImageUnit) +
+                   ") readonly uniform highp image2D u_image;\n"
+                   "layout(std430, binding = 0) buffer Result { highp uint data[4]; } g_result;\n"
+                   "void main() { g_result.data[0] = packUnorm4x8(imageLoad(u_image, ivec2(0))); }\n";
+        }
+
+        // Runs the program with `texture` (0 = empty) on the probe unit; nullopt when the
+        // dispatch failed or the shader never wrote its word.
+        Optional<GLuint> RunEmptyImageVariant(const GLESFunctionsTable& gl, GLuint program, GLuint buffer,
+                                              GLuint texture) {
+            const GLuint init[4] = {kEmptyImageSentinel, 0u, 0u, 0u};
+            gl.glBindBuffer(GL_SHADER_STORAGE_BUFFER, buffer);
+            gl.glBufferData(GL_SHADER_STORAGE_BUFFER, kProbeSize, init, GL_DYNAMIC_DRAW);
+            gl.glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, buffer);
+            gl.glBindImageTexture(kProbeImageUnit, texture, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA8);
+            gl.glUseProgram(program);
+            Drain(gl);
+            gl.glDispatchCompute(1, 1, 1);
+            if (gl.glGetError() != GL_NO_ERROR) return std::nullopt;
+            gl.glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_BUFFER_UPDATE_BARRIER_BIT);
+            gl.glFinish();
+            const GLuint value = ReadFirstWord(gl, buffer);
+            if (value == kEmptyImageSentinel) return std::nullopt;
+            return value;
+        }
+    } // namespace
+
+    Bool ProbeEmptyImageUnitsReadNonzero(const GLESFunctionsTable& gl) {
+        if (!HasEveryEntryPoint(gl) || gl.glDispatchCompute == nullptr || gl.glBindImageTexture == nullptr ||
+            gl.glTexStorage2D == nullptr || gl.glTexSubImage2D == nullptr) {
+            return false;
+        }
+
+        SavedState saved;
+        Save(gl, saved);
+        Drain(gl);
+
+        const String source = EmptyImageComputeSource();
+        const GLuint shader = CompileStage(gl, GL_COMPUTE_SHADER, source.c_str(), "compute", kEmptyImageProbeName);
+        GLuint program = 0;
+        GLuint buffer = 0;
+        GLuint texture = 0;
+        Optional<GLuint> control;
+        Optional<GLuint> empty;
+        if (shader != 0 && (program = gl.glCreateProgram()) != 0) {
+            gl.glAttachShader(program, shader);
+            gl.glLinkProgram(program);
+            GLint linked = 0;
+            gl.glGetProgramiv(program, GL_LINK_STATUS, &linked);
+            if (linked != GL_FALSE) {
+                gl.glGenBuffers(1, &buffer);
+                gl.glGenTextures(1, &texture);
+                gl.glActiveTexture(GL_TEXTURE0);
+                gl.glBindTexture(GL_TEXTURE_2D, texture);
+                gl.glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA8, 1, 1);
+                gl.glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
+                const GLubyte zero[4] = {0, 0, 0, 0};
+                gl.glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, zero);
+                if (gl.glGetError() == GL_NO_ERROR) {
+                    control = RunEmptyImageVariant(gl, program, buffer, texture);
+                    empty = RunEmptyImageVariant(gl, program, buffer, 0);
+                }
+            }
+        }
+        if (texture != 0) gl.glDeleteTextures(1, &texture);
+        if (buffer != 0) gl.glDeleteBuffers(1, &buffer);
+        if (program != 0) gl.glDeleteProgram(program);
+        if (shader != 0) gl.glDeleteShader(shader);
+        Restore(gl, saved);
+
+        if (!control || !empty) {
+            MGLOG_I("[driver-bug] %s probe reached no verdict (a variant did not build or run)", kEmptyImageProbeName);
+            return false;
+        }
+        if (*control != 0u) {
+            MGLOG_I("[driver-bug] %s probe reached no verdict: the zeroed control read 0x%08x", kEmptyImageProbeName,
+                    *control);
+            return false;
+        }
+        const Bool nonzero = *empty != 0u;
+        MGLOG_I("[driver-bug] %s probe: control reads 0x%08x, empty unit reads 0x%08x (expected 0)%s",
+                kEmptyImageProbeName, *control, *empty, nonzero ? " - EMPTY IMAGE UNITS READ NONZERO" : "");
+        return nonzero;
+    }
+
+    Bool EmptyImageUnitsReadNonzero(const GLESFunctionsTable& gl) {
+        static const Bool nonzero = ProbeEmptyImageUnitsReadNonzero(gl);
+        return nonzero;
+    }
+
+    namespace {
         // ===================== SHARED PROGRAM BUILDING =====================
         // The four probes below all decide their verdict from whether a program LINKS or from
         // what a draw wrote, so they share one builder that keeps the two apart: a stage that
@@ -2421,6 +2519,22 @@ namespace MobileGL::MG_Util::SelfTest {
                                     Move(detail)};
         }
 
+        Optional<DriverBugFinding> ProbeEmptyImageUnitBug(const GLESFunctionsTable& gl) {
+            if (!EmptyImageUnitsReadNonzero(gl)) return std::nullopt;
+            String detail = "a load through an image unit with no texture bound returns alpha 1 where GL 4.6 8.26 "
+                            "says every channel is 0. ";
+            if (MG_Config::Features.EsprytInvalidImagePlaceholder == MG_Config::QuirkOverride::ForceOff) {
+                detail += "THE REPAIR IS DISABLED in this process (MOBILEGL_ESPRYT_INVALID_IMAGE_PLACEHOLDER), so "
+                          "a load through an invalid image unit reads alpha 1";
+                return DriverBugFinding{"Empty image units read nonzero", DriverBugVerdict::Unfixable, Move(detail)};
+            }
+            detail += "DirectGLES binds an image unit whose texture lacks the bound level to a zeroed 1x1 texture "
+                      "of the bind's shape, so its loads read 0 (a store through that unit can still be read back "
+                      "through the same unit at texel 0 within one pass); a unit the application left empty stays "
+                      "empty; override with MOBILEGL_ESPRYT_INVALID_IMAGE_PLACEHOLDER";
+            return DriverBugFinding{"Empty image units read nonzero", DriverBugVerdict::Fixed, Move(detail)};
+        }
+
         Optional<DriverBugFinding> ProbeR32FMultisampleSwizzleBug(const GLESFunctionsTable& gl) {
             if (!R32FMultisampleSwizzleCorrupted(gl)) return std::nullopt;
             return DriverBugFinding{
@@ -2594,6 +2708,7 @@ namespace MobileGL::MG_Util::SelfTest {
         constexpr DriverBugProbeFn kGlesDriverBugProbes[] = {
             &ProbeGeometryWriteAfterEmitBug,
             &ProbeStaleSharedMemoryLoadBug,
+            &ProbeEmptyImageUnitBug,
             &ProbeR32FMultisampleSwizzleBug,
             &ProbeImageLocationPerNameBug,
             &ProbeCrossStageImageQualifierMergeBug,

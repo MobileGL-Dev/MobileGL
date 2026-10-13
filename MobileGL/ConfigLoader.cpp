@@ -400,6 +400,7 @@ namespace MobileGL::MG_ConfigLoader {
         features.EsprytUnlocatedIoBlocks = QueryEnvQuirkOverride("MOBILEGL_ESPRYT_UNLOCATED_IO_BLOCKS");
         features.EsprytDeferGeometryEmits = QueryEnvQuirkOverride("MOBILEGL_ESPRYT_DEFER_GEOMETRY_EMITS");
         features.EsprytAtomicSubgroupScratch = QueryEnvQuirkOverride("MOBILEGL_ESPRYT_ATOMIC_SUBGROUP_SCRATCH");
+        features.EsprytInvalidImagePlaceholder = QueryEnvQuirkOverride("MOBILEGL_ESPRYT_INVALID_IMAGE_PLACEHOLDER");
         features.PointSizeDemotion = QueryEnvQuirkOverride("MOBILEGL_POINT_SIZE_DEMOTION");
         features.CoherentAsFlush = QueryEnvFlag("MOBILEGL_COHERENT_AS_FLUSH");
         features.TraceSkipAutodestroy = QueryEnvFlag("MOBILEGL_TRACE_SKIP_AUTODESTROY");

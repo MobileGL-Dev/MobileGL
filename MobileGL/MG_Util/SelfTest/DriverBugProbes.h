@@ -198,6 +198,17 @@ namespace MobileGL::MG_Util::SelfTest {
     // ProbeSharedMemoryLoadsGoStale(), evaluated at most once per process.
     Bool SharedMemoryLoadsGoStale(const MG_External::GLESFunctionsTable& gl);
 
+    // A compute shader loads texel (0, 0) of an rgba8 image unit twice: once with a zeroed 1x1
+    // texture bound (the control, which must read 0) and once with the unit EMPTY (the subject).
+    // GL 4.6 8.26 makes the empty load return zero; Adreno returns alpha 1 (0xff000000). True
+    // only when the subject reads nonzero while the control reads zero. Deterministic, so
+    // latched; false when compute shaders or an entry point are missing or anything fails to
+    // set up. Restores the GL state it touches.
+    Bool ProbeEmptyImageUnitsReadNonzero(const MG_External::GLESFunctionsTable& gl);
+
+    // ProbeEmptyImageUnitsReadNonzero(), evaluated at most once per process.
+    Bool EmptyImageUnitsReadNonzero(const MG_External::GLESFunctionsTable& gl);
+
     // Samples one R32F GL_TEXTURE_2D_MULTISAMPLE texel through a swizzled alpha channel, twice,
     // with a separately linked program each time. Returns true only when the swizzled read goes
     // wrong while every control read stays right.

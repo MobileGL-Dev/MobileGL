@@ -1329,6 +1329,11 @@ namespace MobileGL {
             // Adreno). The subgroup emulation then reads its scratch through atomic loads.
             // Defaults FALSE: never assumed broken on an unmeasured driver.
             Bool SharedMemoryLoadsGoStale = false;
+            // True when a load through an EMPTY image unit returns a nonzero texel
+            // (SelfTest::EmptyImageUnitsReadNonzero - measured on Adreno: alpha 1). DirectGLES
+            // then binds an invalid unit to a zeroed placeholder instead of leaving it empty.
+            // Defaults FALSE: never assumed broken on an unmeasured driver.
+            Bool EmptyImageUnitsReadNonzero = false;
             Int UniformBufferOffsetAlignment = 256;
             // Its storage-buffer counterpart, queried separately because it is a separate limit:
             // Adreno 830 answers 32 for GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT and 64 for

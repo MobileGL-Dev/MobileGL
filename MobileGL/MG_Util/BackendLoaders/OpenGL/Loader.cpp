@@ -2125,6 +2125,23 @@ namespace MobileGL::MG_Util::BackendLoader {
                     ? "true (the subgroup emulation reads its scratch through atomic loads)"
                     : "false");
 
+        switch (MG_Config::Features.EsprytInvalidImagePlaceholder) {
+            case MG_Config::QuirkOverride::ForceOn:
+                caps.EmptyImageUnitsReadNonzero = true;
+                break;
+            case MG_Config::QuirkOverride::ForceOff:
+                caps.EmptyImageUnitsReadNonzero = false;
+                break;
+            case MG_Config::QuirkOverride::Auto:
+            default:
+                caps.EmptyImageUnitsReadNonzero = SelfTest::EmptyImageUnitsReadNonzero(glesFuncs);
+                break;
+        }
+        MGLOG_I("    Empty image units read nonzero: %s",
+                caps.EmptyImageUnitsReadNonzero
+                    ? "true (an invalid image unit is bound to a zeroed placeholder)"
+                    : "false");
+
         caps.IsAngleRenderer = caps.GLESRendererString.find("ANGLE") != String::npos;
         caps.IsAngleLlvmpipeRenderer =
             caps.IsAngleRenderer && caps.GLESRendererString.find("llvmpipe") != String::npos;

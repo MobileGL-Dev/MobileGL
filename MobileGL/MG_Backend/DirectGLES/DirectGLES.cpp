@@ -2870,8 +2870,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return false;
         }
 
-        // What such a unit is bound to instead. An EMPTY ES unit is not enough: ES 3.2 8.22 leaves
-        // an invalid load's alpha undefined, and Adreno answers 1 where GL says 0. A texel outside
+        // What such a unit is bound to instead, on a driver whose EMPTY unit is not enough
+        // (GLESCapabilities::EmptyImageUnitsReadNonzero): ES 3.2 8.22 leaves an invalid load's
+        // alpha undefined, and Adreno answers 1 where GL says 0. Elsewhere the unit stays empty,
+        // which is exact. A texel outside
         // a level is invalid too, and that Adreno answers (0, 0, 0, 0) with the store dropped - so
         // the unit gets a 1x1 texture of the shape and format the bind names, cleared to zero each
         // time it is bound. Only texel (0, 0[, 0]) of it exists; it is private to the unit, so a
@@ -2988,6 +2990,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 return;
             }
             if (ImageViewNamesNoTexel(view)) {
+                if (!g_GLESCapabilities.EmptyImageUnitsReadNonzero) {
+                    g_GLESFuncs.glBindImageTexture(unit, 0, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA8);
+                    return;
+                }
                 // The format the shader was widened from is the one the application bound, so
                 // the placeholder takes that format's carrier, as the storage would have.
                 GLenum format = static_cast<GLenum>(view.InternalFormat);

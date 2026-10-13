@@ -214,6 +214,15 @@ namespace MobileGL::MG_Config {
         // right everywhere. ForceOn exercises the atomic reads on a healthy driver; ForceOff is
         // the negative control.
         QuirkOverride EsprytAtomicSubgroupScratch = QuirkOverride::Auto;
+        // MOBILEGL_ESPRYT_INVALID_IMAGE_PLACEHOLDER: DirectGLES binds an image unit GL 4.6 8.26
+        // calls invalid (a level the texture does not have) to a zeroed 1x1 texture of the bind's
+        // shape instead of leaving it empty. The Adreno ES driver answers a load through an EMPTY
+        // unit with alpha 1 where GL says 0; the driver POST measures that and arms this by
+        // itself, so Auto is right everywhere. The placeholder's one texel is real, so a store
+        // through such a unit can be read back through the same unit in the same pass - which is
+        // why a healthy driver keeps the empty unit. ForceOn exercises the placeholder on a
+        // healthy driver; ForceOff is the negative control.
+        QuirkOverride EsprytInvalidImagePlaceholder = QuirkOverride::Auto;
         // MOBILEGL_POINT_SIZE_DEMOTION: demote gl_PointSize out of tessellation/geometry
         // stages into an ordinary varying (ShaderCompiler::
         // DemoteTessellationGeometryPointSizeForProgram) instead of declining such programs
