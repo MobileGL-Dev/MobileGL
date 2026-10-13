@@ -409,6 +409,7 @@ set(SOURCE_FILES
     MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/FlattenFloat64StorageBlockPass.cpp
     MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/LowerDrawParametersPass.cpp
     MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/LowerViewportIndexPass.cpp
+    MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/DeferGeometryEmitsPass.cpp
     MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/PackDoubleVertexInputsPass.cpp
     MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/FlattenXfbInterfaceBlocksPass.cpp
     MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/UniquifyIoBlockNamesPass.cpp

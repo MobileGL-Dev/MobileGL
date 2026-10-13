@@ -1319,6 +1319,11 @@ namespace MobileGL {
             // behaviour every driver had before the probe existed - a capability like this
             // must never be assumed broken on a driver nobody measured.
             Bool SupportsLocatedInterStageIoBlocks = true;
+            // True when a geometry shader's storage writes made AFTER EmitVertex() are dropped
+            // (SelfTest::GeometryStageSsboWriteAfterEmitDropped - measured on Adreno). DirectGLES
+            // then defers every emit of a geometry stage that writes memory behind those writes
+            // (DeferGeometryEmitsPass). Defaults FALSE: never assumed broken on an unmeasured driver.
+            Bool DropsGeometryWritesAfterEmit = false;
             Int UniformBufferOffsetAlignment = 256;
             // Its storage-buffer counterpart, queried separately because it is a separate limit:
             // Adreno 830 answers 32 for GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT and 64 for

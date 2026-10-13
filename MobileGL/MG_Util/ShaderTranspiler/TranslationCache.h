@@ -643,6 +643,10 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
         // decides, and a key carrying only it would serve a module lowered under one setting to a
         // link made under the other.
         Bool viewportIndexLoweringArmed = false;
+        // Whether DeferGeometryEmitsForEssl runs on this (geometry) module: the driver POST
+        // measured dropped storage writes after EmitVertex, or MOBILEGL_ESPRYT_DEFER_GEOMETRY_EMITS
+        // forced it.
+        Bool deferGeometryEmitsArmed = false;
         Bool supportsNoperspectiveInterpolation = false;
         // GL_NV_image_formats. Arms WidenImageFormatsForEssl, which re-declares every storage
         // image whose format GLSL ES core cannot spell in the core format that carries it and

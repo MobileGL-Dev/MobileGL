@@ -2275,15 +2275,23 @@ namespace MobileGL::MG_Util::SelfTest {
 
         Optional<DriverBugFinding> ProbeGeometryWriteAfterEmitBug(const GLESFunctionsTable& gl) {
             if (!GeometryStageSsboWriteAfterEmitDropped(gl)) return std::nullopt;
-            return DriverBugFinding{
-                "Geometry-stage storage writes after EmitVertex",
-                DriverBugVerdict::Unfixable,
+            String detail =
                 "the driver silently discards shader storage buffer writes a geometry shader "
                 "issues after its last EmitVertex()/EndPrimitive(); the identical write issued "
-                "BEFORE the emit lands, for both point and triangle geometry shaders. "
-                "GL_MAX_GEOMETRY_SHADER_STORAGE_BLOCKS is therefore NOT withdrawn - doing so "
-                "would break the shaders that write before emitting, which work correctly. "
-                "A shader that must write after emitting has no substitute on this driver"};
+                "BEFORE the emit lands, for both point and triangle geometry shaders. ";
+            // The repair follows the knob, so the row describes what this process does.
+            if (MG_Config::Features.EsprytDeferGeometryEmits == MG_Config::QuirkOverride::ForceOff) {
+                detail += "THE REPAIR IS DISABLED in this process (MOBILEGL_ESPRYT_DEFER_GEOMETRY_EMITS), so a "
+                          "geometry shader that writes after emitting loses those writes";
+                return DriverBugFinding{"Geometry-stage storage writes after EmitVertex",
+                                        DriverBugVerdict::Unfixable, Move(detail)};
+            }
+            detail += "DirectGLES defers every EmitVertex()/EndPrimitive() of a geometry stage that writes "
+                      "memory: the outputs are snapshotted at each emit and the vertices replayed after the "
+                      "shader body returns (DeferGeometryEmitsPass), so every write lands before any emit; "
+                      "override with MOBILEGL_ESPRYT_DEFER_GEOMETRY_EMITS";
+            return DriverBugFinding{"Geometry-stage storage writes after EmitVertex", DriverBugVerdict::Fixed,
+                                    Move(detail)};
         }
 
         Optional<DriverBugFinding> ProbeR32FMultisampleSwizzleBug(const GLESFunctionsTable& gl) {

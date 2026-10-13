@@ -50,6 +50,7 @@
 #include "SpirvPasses/PrivateToEntryLocalPass.h"
 #include "SpirvPasses/StripUniformLocationsPass.h"
 #include "SpirvPasses/StripIoBlockLocationsPass.h"
+#include "SpirvPasses/DeferGeometryEmitsPass.h"
 #include "SpirvPasses/StripUboMemberRelaxedPrecisionPass.h"
 #include "SpirvPasses/StripNoPerspectivePass.h"
 #include "SpirvPasses/EmulateNoPerspectivePass.h"
@@ -1452,6 +1453,19 @@ namespace MobileGL {
 
                 return RunOptimizerChecked("LowerViewportIndexForEssl", optimizer, inputBinary,
                                            outputBinary, true, enableSpirvValidation);
+            }
+
+            bool ShaderCompiler::DeferGeometryEmitsForEssl(const Vector<Uint32>& inputBinary,
+                                                           Vector<uint32_t>& outputBinary, bool& outDeferred,
+                                                           const bool enableSpirvValidation) {
+                using namespace spvtools;
+                Optimizer optimizer(SPV_ENV_VULKAN_1_1);
+                Bool deferred = false;
+                optimizer.RegisterPass(DeferGeometryEmitsPass::CreateDeferGeometryEmitsPass(&deferred));
+                const bool ok = RunOptimizerChecked("DeferGeometryEmitsForEssl", optimizer, inputBinary,
+                                                    outputBinary, true, enableSpirvValidation);
+                outDeferred = ok && deferred;
+                return ok;
             }
 
             bool ShaderCompiler::DeclaresViewportIndexBuiltin(const Vector<Uint32>& binary) {

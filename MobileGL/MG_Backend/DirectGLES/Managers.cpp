@@ -11629,6 +11629,24 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 effectiveSpirv = &loweredSpirv;
             }
 
+            // A geometry stage that writes memory, on a driver that drops the writes it makes
+            // after EmitVertex(): every emit is deferred behind them (DeferGeometryEmitsPass). FIRST
+            // in the chain, while every output is still an Output variable - the viewport-index
+            // lowering below demotes one, and must see the replay's stores to it as well.
+            // Self-gated on the module (an emit and a memory write), so a geometry stage that
+            // writes nothing comes back untouched. Keyed by deferGeometryEmitsArmed.
+            Vector<unsigned int> deferredEmitSpirv;
+            if (glShaderType == GL_GEOMETRY_SHADER && g_GLESCapabilities.DropsGeometryWritesAfterEmit) {
+                bool deferred = false;
+                if (MG_Util::ShaderTranspiler::ShaderCompiler::DeferGeometryEmitsForEssl(
+                        *effectiveSpirv, deferredEmitSpirv, deferred, enableSpirvValidation) &&
+                    deferred && !deferredEmitSpirv.empty()) {
+                    effectiveSpirv = &deferredEmitSpirv;
+                    MGLOG_I_ONCE("DirectGLES is deferring a geometry stage's EmitVertex() calls behind its "
+                                 "memory writes, because this driver drops storage writes made after an emit.");
+                }
+            }
+
             // ESSL cannot express gl_ViewportIndex either, but unlike the draw parameters
             // there IS an extension that provides it - so this runs only when the driver does
             // NOT advertise GL_OES_viewport_array. A driver that does keeps the builtin and
@@ -12641,6 +12659,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     (glShaderType == GL_VERTEX_SHADER || glShaderType == GL_TESS_EVALUATION_SHADER ||
                      glShaderType == GL_GEOMETRY_SHADER) &&
                     (ViewportArrayEmulationEnabled() || !g_GLESCapabilities.SupportsViewportArray);
+                esslKeyInputs.deferGeometryEmitsArmed =
+                    glShaderType == GL_GEOMETRY_SHADER && g_GLESCapabilities.DropsGeometryWritesAfterEmit;
                 esslKeyInputs.supportsNoperspectiveInterpolation =
                     g_GLESCapabilities.SupportsNoperspectiveInterpolation;
                 esslKeyInputs.supportsExtendedImageFormats =

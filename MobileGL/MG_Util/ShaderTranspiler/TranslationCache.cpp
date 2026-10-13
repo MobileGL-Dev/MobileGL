@@ -181,6 +181,7 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
         AppendCommonKeyPrefix(builder, kEsslKeyTag);
         builder.Value(static_cast<Uint32>(inputs.shaderType));
         builder.Value(static_cast<Uint8>(inputs.viewportIndexLoweringArmed));
+        builder.Value(static_cast<Uint8>(inputs.deferGeometryEmitsArmed));
         builder.Value(static_cast<Uint8>(inputs.supportsNoperspectiveInterpolation));
         builder.Value(static_cast<Uint8>(inputs.supportsExtendedImageFormats));
         builder.Value(inputs.maxColorTextureSamples);

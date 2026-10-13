@@ -214,6 +214,13 @@ namespace MobileGL::MG_Config {
         // lavapipe carry a located block correctly and would otherwise never run this code -
         // and ForceOff is the negative control. See StripIoBlockLocationsPass.
         QuirkOverride EsprytUnlocatedIoBlocks = QuirkOverride::Auto;
+        // MOBILEGL_ESPRYT_DEFER_GEOMETRY_EMITS: DirectGLES moves a geometry shader's
+        // EmitVertex()/EndPrimitive() behind its memory writes (DeferGeometryEmitsPass). The
+        // Adreno ES driver silently drops storage writes a geometry invocation makes after
+        // emitting; the driver POST measures that and arms this by itself, so Auto is right
+        // everywhere. ForceOn exercises the rewrite on a healthy driver; ForceOff is the
+        // negative control that replays the lost writes.
+        QuirkOverride EsprytDeferGeometryEmits = QuirkOverride::Auto;
         // MOBILEGL_POINT_SIZE_DEMOTION: demote gl_PointSize out of tessellation/geometry
         // stages into an ordinary varying (ShaderCompiler::
         // DemoteTessellationGeometryPointSizeForProgram) instead of declining such programs

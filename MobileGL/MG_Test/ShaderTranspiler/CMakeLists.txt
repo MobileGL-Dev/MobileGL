@@ -13,6 +13,7 @@ add_executable(
         UniquifyIoBlockNamesTest.cpp
         StripIoBlockLocationsTest.cpp
         LowerViewportIndexTest.cpp
+        DeferGeometryEmitsTest.cpp
         ClampMultisampleFetchTest.cpp
         LegalizeResourceArrayIndexTest.cpp
         FlattenAtomicCounterBlockTest.cpp

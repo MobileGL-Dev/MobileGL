@@ -67,6 +67,12 @@ namespace MobileGL {
                 static bool LowerViewportIndexForEssl(const Vector<Uint32>& inputBinary,
                                                       Vector<uint32_t>& outputBinary,
                                                       bool enableSpirvValidation = false);
+                // Moves a geometry stage's emits behind its memory writes (DeferGeometryEmitsPass), for
+                // an ES driver that drops storage writes made after EmitVertex(). `outDeferred` says
+                // whether the module was rewritten; a module the pass declines comes back unchanged.
+                static bool DeferGeometryEmitsForEssl(const Vector<Uint32>& inputBinary,
+                                                      Vector<uint32_t>& outputBinary, bool& outDeferred,
+                                                      bool enableSpirvValidation = false);
                 // Whether the module declares an output decorated BuiltIn ViewportIndex, i.e.
                 // whether the pass above has anything to do. The gate that keeps every other
                 // stage off an optimizer round trip it does not need.

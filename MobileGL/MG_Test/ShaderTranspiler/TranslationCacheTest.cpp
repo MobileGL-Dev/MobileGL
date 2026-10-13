@@ -982,6 +982,11 @@ TEST_F(TranslationCacheTest, L2KeyMovesWithEveryGateThatSteersTheEsslChain) {
         v.viewportIndexLoweringArmed = true;
         variants.emplace_back("viewportIndexLoweringArmed", BuildEsslTranslationKey(v));
     }
+    {   // arms DeferGeometryEmitsForEssl
+        EsslTranslationKeyInputs v = base;
+        v.deferGeometryEmitsArmed = true;
+        variants.emplace_back("deferGeometryEmitsArmed", BuildEsslTranslationKey(v));
+    }
     {   // arms EmulateNoPerspectiveForEssl
         EsslTranslationKeyInputs v = base;
         v.supportsNoperspectiveInterpolation = true;

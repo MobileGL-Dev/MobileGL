@@ -2061,6 +2061,23 @@ namespace MobileGL::MG_Util::BackendLoader {
                     : "false (DirectGLES will emit tessellation/geometry programs' interface "
                       "blocks without a location qualifier)");
 
+        switch (MG_Config::Features.EsprytDeferGeometryEmits) {
+            case MG_Config::QuirkOverride::ForceOn:
+                caps.DropsGeometryWritesAfterEmit = true;
+                break;
+            case MG_Config::QuirkOverride::ForceOff:
+                caps.DropsGeometryWritesAfterEmit = false;
+                break;
+            case MG_Config::QuirkOverride::Auto:
+            default:
+                caps.DropsGeometryWritesAfterEmit = SelfTest::GeometryStageSsboWriteAfterEmitDropped(glesFuncs);
+                break;
+        }
+        MGLOG_I("    Geometry-stage storage writes after EmitVertex are dropped: %s",
+                caps.DropsGeometryWritesAfterEmit
+                    ? "true (DirectGLES defers a writing geometry stage's emits behind its writes)"
+                    : "false");
+
         caps.IsAngleRenderer = caps.GLESRendererString.find("ANGLE") != String::npos;
         caps.IsAngleLlvmpipeRenderer =
             caps.IsAngleRenderer && caps.GLESRendererString.find("llvmpipe") != String::npos;
