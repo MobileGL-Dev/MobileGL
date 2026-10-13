@@ -86,18 +86,51 @@
             return true;
         }
         output.resize(count * attr.Size * sizeof(Float));
+        // GL 4.6 core 10.2.1 (equations 2.1 / 2.2) for a normalized fixed-point component; a
+        // double is not fixed-point, so its normalized flag changes nothing.
+        const Bool normalize = attr.Normalized && type != DataType::Float64;
         const auto convert = [&]<typename T>() {
             for (SizeT i = 0; i < count; ++i) {
                 for (SizeT component = 0; component < attr.Size; ++component) {
                     T value{};
                     Memcpy(&value, source + i * stride + component * sizeof(T), sizeof(T));
-                    const Float converted = static_cast<Float>(value);
+                    Float converted = static_cast<Float>(value);
+                    if constexpr (std::is_integral_v<T>) {
+                        if (normalize) {
+                            constexpr double kMax = static_cast<double>(std::numeric_limits<T>::max());
+                            converted = static_cast<Float>(std::is_signed_v<T>
+                                ? std::max(static_cast<double>(value) / kMax, -1.0)
+                                : static_cast<double>(value) / kMax);
+                        }
+                    }
                     Memcpy(output.data() + (i * attr.Size + component) * sizeof(Float), &converted, sizeof(Float));
                 }
             }
             return true;
         };
         switch (type) {
+        case DataType::Uint2101010Rev:
+        case DataType::Int2101010Rev: {
+            // x, y, z in 10-bit fields from bit 0, w in the top 2 bits; GL 4.6 core 10.2.1.
+            if (attr.Size != 4 || attr.IsBgra) return false;
+            const Bool isSigned = type == DataType::Int2101010Rev;
+            for (SizeT i = 0; i < count; ++i) {
+                Uint32 word = 0;
+                Memcpy(&word, source + i * stride, sizeof(word));
+                for (Uint32 component = 0; component < 4; ++component) {
+                    const Uint32 bits = component < 3 ? 10u : 2u;
+                    const Uint32 field = (word >> (component * 10u)) & ((1u << bits) - 1u);
+                    const Int32 value = isSigned && (field >> (bits - 1u))
+                        ? static_cast<Int32>(field) - static_cast<Int32>(1u << bits) : static_cast<Int32>(field);
+                    Float converted = static_cast<Float>(value);
+                    if (normalize)
+                        converted = isSigned ? std::max(converted / static_cast<Float>((1u << (bits - 1u)) - 1u), -1.0f)
+                                             : converted / static_cast<Float>((1u << bits) - 1u);
+                    Memcpy(output.data() + (i * 4 + component) * sizeof(Float), &converted, sizeof(Float));
+                }
+            }
+            return true;
+        }
         case DataType::Float64: return convert.template operator()<Double>();
         case DataType::Int8: return convert.template operator()<Int8>();
         case DataType::Uint8: return convert.template operator()<Uint8>();

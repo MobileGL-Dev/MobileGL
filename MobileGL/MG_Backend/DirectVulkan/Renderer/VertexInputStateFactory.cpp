@@ -160,6 +160,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 format = ToFloat32VertexFormat(attr.Size);
                 conversion = VertexStreamConversion::Float64ToFloat32;
             }
+            // GL_INT / GL_UNSIGNED_INT read as float (glVertexAttribFormat without the I suffix):
+            // Vulkan has no 32-bit SCALED or NORM vertex format, so the stream is converted to
+            // float32 on the CPU, normalized when the attribute asks for it.
+            if (format == VK_FORMAT_UNDEFINED && !attr.IsInteger && !attr.IsLong && !attr.IsBgra &&
+                (type == DataType::Int32 || type == DataType::Uint32)) {
+                format = ToFloat32VertexFormat(attr.Size);
+                conversion = VertexStreamConversion::ScaledIntegerToFloat32;
+            }
             if (format == VK_FORMAT_UNDEFINED) { maskOut("format-map"); continue; }
             if (!SupportsVertexBufferFormat(format)) {
                 if (!IsScaledIntegerVertexFormat(format)) { maskOut("native-format-feature", format); continue; }
@@ -432,6 +440,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         case VK_FORMAT_R16G16B16_SSCALED:
         case VK_FORMAT_R16G16B16A16_USCALED:
         case VK_FORMAT_R16G16B16A16_SSCALED:
+        // Packed 2_10_10_10 fetches are optional too (Adreno has neither SCALED form); the
+        // converter decodes the fields itself, normalized or not.
+        case VK_FORMAT_A2B10G10R10_USCALED_PACK32:
+        case VK_FORMAT_A2B10G10R10_SSCALED_PACK32:
+        case VK_FORMAT_A2B10G10R10_UNORM_PACK32:
+        case VK_FORMAT_A2B10G10R10_SNORM_PACK32:
             return true;
         default:
             return false;
