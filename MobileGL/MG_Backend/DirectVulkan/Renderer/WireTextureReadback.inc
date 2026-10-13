@@ -98,6 +98,20 @@
                     MG_Util::ConvertGLEnumToTextureUploadTarget(info.Target), info.Level,
                     IntVec3{static_cast<Int>(box.W), static_cast<Int>(box.H), static_cast<Int>(box.D)},
                     nativeFormat, raw)) return false;
+            // A depth-only level's shadow holds the format's own depth words, which the
+            // depth packer reads exactly as it reads them off a Vulkan copy.
+            if (nativeFormat == VK_FORMAT_D16_UNORM || nativeFormat == VK_FORMAT_D32_SFLOAT ||
+                nativeFormat == VK_FORMAT_X8_D24_UNORM_PACK32) {
+                if (info.Format != GL_DEPTH_COMPONENT) return false;
+                const SizeT texels = static_cast<SizeT>(Uint64(box.W) * box.H * box.D);
+                const SizeT wordBytes = nativeFormat == VK_FORMAT_D16_UNORM ? 2 : 4;
+                if (raw.size() < texels * wordBytes) return false;
+                Vector<Uint8> packed;
+                if (!PackDepthStencilTight(raw.data(), nullptr, nativeFormat, texels, info.Format, info.Type, packed) ||
+                    packed.size() != info.DstSize) return false;
+                ownedBytes = Move(packed);
+                return true;
+            }
             return PackWireColorTight(raw.data(), raw.size(), nativeFormat,
                 static_cast<TextureInternalFormat>(record.Desc.InternalFormat), info, ownedBytes);
         };
