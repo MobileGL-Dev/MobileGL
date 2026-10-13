@@ -735,6 +735,7 @@ list(APPEND SOURCE_FILES
     MobileGL/MG_Backend/DirectVulkan/Renderer/WireDepthResolveProbe.cpp
     MobileGL/MG_Backend/DirectVulkan/Renderer/WireE5RawCopy.cpp
     MobileGL/MG_Backend/DirectVulkan/Renderer/WireCopySliceProbe.cpp
+    MobileGL/MG_Backend/DirectVulkan/Renderer/WireDiscardStateProbe.cpp
     # P5 b1: the block-granularity persistent-map push the record arm makes mandatory (T2).
     MobileGL/MG_State/GLState/BufferState/PersistentMapTracker.cpp
     # P13 W5: the verb emitters and the monolith verb port, and the client GPU-write set

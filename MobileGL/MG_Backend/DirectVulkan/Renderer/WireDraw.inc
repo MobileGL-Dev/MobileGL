@@ -982,6 +982,11 @@
         if (m_fragmentShadingRate.Pipeline) {
             ShadowedSetFragmentShadingRate(frame.commandBuffer, s_vkCmdSetFragmentShadingRateKHR);
         }
+        // This draw's state is set; where a discard draw then loses it (WireDiscardStateProbe.h),
+        // the next draw must set its own rather than inherit.
+        if (m_wireReemitStateAfterDiscard &&
+            MG_Pipe::gPipeInputs->IsCapabilityEnabled(CapabilityInput::RasterizerDiscard))
+            ForgetDynamicStateAfterDiscardDraw();
         // Storage images this draw writes are what the next sampled-image barrier must cover.
         if (programObj.hasStorageImages) BumpWireImageWriteEpoch();
         if (MG_Util::PipeStats::Enabled()) MG_Util::PipeStats::AddCalls(MG_Util::PipeStats::CallClass::Draws, 1);

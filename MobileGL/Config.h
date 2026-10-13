@@ -397,6 +397,12 @@ namespace MobileGL::MG_Config {
         // a device probe at renderer bring-up (one region vs. per-slice regions); ForceOn splits
         // on any device; ForceOff is the negative control that replays the dropped slices.
         QuirkOverride MagmaSplitSliceCopies = QuirkOverride::Auto;
+        // MOBILEGL_MAGMA_REEMIT_STATE_AFTER_DISCARD: DirectVulkan sets the dynamic state again after
+        // every rasterizer-discard draw (WireDiscardStateProbe.h). On Adreno 750 a draw with a
+        // rasterizerDiscardEnable pipeline drops the dynamic viewport/scissor, and later draws that
+        // rely on it draw nothing. Auto defers to a device probe at renderer bring-up; ForceOn
+        // re-emits on any device; ForceOff is the negative control that replays the lost state.
+        QuirkOverride MagmaReemitStateAfterDiscard = QuirkOverride::Auto;
         // --- MGPipe (the disaggregation plan's explicit frontend/backend boundary) ---
         // MOBILEGL_PIPE_PUSH: per-subsystem bitmask selecting which state the frontend
         // PUSHES over MGPipe instead of leaving the backend to pull it out of GLContext.

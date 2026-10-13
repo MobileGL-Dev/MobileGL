@@ -62,6 +62,7 @@ using Uint32 = std::uint32_t;
 #include <MG_Backend/DirectVulkan/Renderer/WireMultisampleResolveSpirv.h>
 #include <MG_Backend/DirectVulkan/Renderer/WireYuvConvertSpirv.h>
 #include <MG_Backend/DirectVulkan/Renderer/WireE5RawCopySpirv.h>
+#include <MG_Backend/DirectVulkan/Renderer/WireDiscardStateProbeSpirv.h>
 
 struct BakedShader {
     const char* name;            // ctest entry name, and the bake file's stem
@@ -107,6 +108,19 @@ const BakedShader kBakedShaders[] = {
                   "kWireE5RawCopy3DSpirv", EShLangCompute,
                   glslang::EShTargetVulkan_1_0, glslang::EShTargetSpv_1_0,
                   kWireE5RawCopy3DSpirv),
+    // The rasterizer-discard state probe (WireDiscardStateProbe.h).
+    MGL_BAKED_ROW("WireDiscardStateProbeVertex",
+                  "MobileGL/MG_Backend/DirectVulkan/Renderer/WireDiscardStateProbe.vert",
+                  "MobileGL/MG_Backend/DirectVulkan/Renderer/WireDiscardStateProbeSpirv.h",
+                  "kWireDiscardStateProbeVertexSpirv", EShLangVertex,
+                  glslang::EShTargetVulkan_1_0, glslang::EShTargetSpv_1_0,
+                  kWireDiscardStateProbeVertexSpirv),
+    MGL_BAKED_ROW("WireDiscardStateProbeFragment",
+                  "MobileGL/MG_Backend/DirectVulkan/Renderer/WireDiscardStateProbe.frag",
+                  "MobileGL/MG_Backend/DirectVulkan/Renderer/WireDiscardStateProbeSpirv.h",
+                  "kWireDiscardStateProbeFragmentSpirv", EShLangFragment,
+                  glslang::EShTargetVulkan_1_0, glslang::EShTargetSpv_1_0,
+                  kWireDiscardStateProbeFragmentSpirv),
     MGL_BAKED_ROW("WireYuvConvertVertex",
                   "MobileGL/MG_Backend/DirectVulkan/Renderer/WireYuvConvert.vert",
                   "MobileGL/MG_Backend/DirectVulkan/Renderer/WireYuvConvertSpirv.h",

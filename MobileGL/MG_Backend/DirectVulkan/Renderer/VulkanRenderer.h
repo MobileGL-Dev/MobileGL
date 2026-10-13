@@ -799,6 +799,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // CopyImageSubData then records one region per slice. Set by ArmWireCopySliceSplit at bring-up.
         Bool m_wireSplitCrossFormatSliceCopies = false;
         void ArmWireCopySliceSplit();
+        // A rasterizer-discard draw drops the dynamic viewport/scissor it was recorded with on some
+        // drivers (WireDiscardStateProbe.h): there the draw path forgets the dynamic-state shadow after
+        // each discard draw (ForgetDynamicStateAfterDiscardDraw). Set by ArmWireDiscardStateReemit.
+        Bool m_wireReemitStateAfterDiscard = false;
+        void ArmWireDiscardStateReemit();
+        void ForgetDynamicStateAfterDiscardDraw();
         void ArmWireE5RawReads();
     public:
         // The kit when the route is armed, else nullptr. VkTextureManager asks before a level copy.

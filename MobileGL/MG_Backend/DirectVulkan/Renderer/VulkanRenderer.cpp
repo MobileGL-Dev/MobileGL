@@ -52,6 +52,7 @@
 #include "WireColorBlitFilter.h"
 #include "WireDepthResolveArm.h"
 #include "WireCopySliceProbe.h"
+#include "WireDiscardStateProbe.h"
 #include "WireDepthResolveProbe.h"
 #if MOBILEGL_BUILD_DISAGGREGATED
 #include <MG_Remote/Server/ServerLoop.h>
@@ -3520,6 +3521,21 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         auto& shadow = *g_dynamicStateShadow;
         shadow.viewportValid = false;
         shadow.scissorValid = false;
+        shadow.dynamicTailValid = false;
+    }
+
+    // A rasterizer-discard draw consumes the dynamic state it was recorded with on some drivers
+    // (WireDiscardStateProbe.h): every dynamic value is forgotten, so the next draw's tail sets its own
+    // again instead of trusting what the shadow says the command buffer holds. Binds stay valid.
+    void VulkanRenderer::ForgetDynamicStateAfterDiscardDraw() {
+        auto& shadow = *g_dynamicStateShadow;
+        shadow.viewportValid = false;
+        shadow.scissorValid = false;
+        shadow.blendConstantsValid = false;
+        shadow.depthBiasValid = false;
+        shadow.lineWidthValid = false;
+        shadow.stencilValid = false;
+        shadow.fragmentShadingRateValid = false;
         shadow.dynamicTailValid = false;
     }
 
@@ -8528,6 +8544,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // Same terms again.
         ArmWireE5RawReads();
         ArmWireCopySliceSplit();
+        ArmWireDiscardStateReemit();
     }
 
     // P7 gate 5 (g5-msprobe): THE ARM ORDER OF THE MULTISAMPLE DEPTH/STENCIL RESOLVE IS A MEASURED
@@ -8707,6 +8724,47 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         m_wireSplitCrossFormatSliceCopies = armed;
         MGLOG_I("DirectVulkan: cross-format layered <-> 3D copies %s",
                 armed ? "are split one slice per region" : "go as one region");
+    }
+
+    // THE RE-EMIT AFTER A DISCARD DRAW IS ARMED BY MEASUREMENT (WireDiscardStateProbe.h), once per
+    // device identity, or forced by MOBILEGL_MAGMA_REEMIT_STATE_AFTER_DISCARD.
+    void VulkanRenderer::ArmWireDiscardStateReemit() {
+        const MG_Config::QuirkOverride setting = MG_Config::Features.MagmaReemitStateAfterDiscard;
+        Bool armed = setting == MG_Config::QuirkOverride::ForceOn;
+        if (setting == MG_Config::QuirkOverride::Auto) {
+            struct Entry {
+                WireDepthResolveDeviceIdentity identity;
+                WireDiscardStateProbeVerdict verdict;
+            };
+            static std::mutex s_mutex;
+            static Vector<Entry> s_entries;
+            const WireDepthResolveDeviceIdentity identity = MakeWireDepthResolveDeviceIdentity(
+                m_physicalDevice.properties, false, WireDepthResolveProbeKnob::Measure);
+            std::lock_guard<std::mutex> lock(s_mutex);
+            const Entry* found = nullptr;
+            for (const Entry& entry : s_entries)
+                if (entry.identity == identity) found = &entry;
+            if (found == nullptr) {
+                WireDiscardStateProbeContext context;
+                context.physicalDevice = m_physicalDevice.handle;
+                context.device = m_device;
+                context.queue = m_graphicsQueue;
+                context.queueFamilyIndex = static_cast<Uint32>(m_physicalDevice.queueFamilies.graphicsFamily);
+                const WireDiscardStateProbeMeasurement measurement = RunWireDiscardStateProbe(context);
+                const WireDiscardStateProbeVerdict verdict = EvaluateWireDiscardStateProbe(measurement);
+                if (measurement.fenceWaitTimedOut)
+                    MGLOG_W("DirectVulkan: the discard state probe timed out waiting on its own submission; its "
+                            "Vulkan objects are deliberately leaked");
+                MGLOG_I("DirectVulkan: discard state probe verdict=%s: %s", WireDiscardStateProbeVerdictName(verdict),
+                        DescribeWireDiscardStateProbe(measurement).c_str());
+                s_entries.push_back({identity, verdict});
+                found = &s_entries.back();
+            }
+            armed = found->verdict == WireDiscardStateProbeVerdict::DiscardDrawDropsState;
+        }
+        m_wireReemitStateAfterDiscard = armed;
+        MGLOG_I("DirectVulkan: dynamic state %s",
+                armed ? "is set again after every rasterizer-discard draw" : "carries across discard draws");
     }
 
     void VulkanRenderer::ArmPrimGenReroute() {

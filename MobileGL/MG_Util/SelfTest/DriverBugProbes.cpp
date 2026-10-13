@@ -14,6 +14,7 @@
 #include <MG_Backend/DirectVulkan/Renderer/WireDepthResolveProbe.h>
 #include <MG_Backend/DirectVulkan/Renderer/WireE5RawCopy.h>
 #include <MG_Backend/DirectVulkan/Renderer/WireCopySliceProbe.h>
+#include <MG_Backend/DirectVulkan/Renderer/WireDiscardStateProbe.h>
 
 #include <algorithm>
 #include <cstring>
@@ -2578,11 +2579,34 @@ namespace MobileGL::MG_Util::SelfTest {
             return DriverBugFinding{"Cross-format 2D-array <-> 3D image copies drop slices",
                                     DriverBugVerdict::Fixed, Move(detail)};
         }
+
+        // The same probe the Magma renderer runs at bring-up (VulkanRenderer::ArmWireDiscardStateReemit).
+        Optional<DriverBugFinding> ProbeDiscardStateBug(const VulkanDriverBugProbeContext& context) {
+            using namespace MG_Backend::DirectVulkan;
+            if (context.getInstanceProcAddr == nullptr) return std::nullopt;
+            const WireDiscardStateProbeMeasurement measurement = RunWireDiscardStateProbeOnThrowawayDevice(
+                context.getInstanceProcAddr, context.instance, context.physicalDevice,
+                context.graphicsQueueFamilyIndex);
+            const WireDiscardStateProbeVerdict verdict = EvaluateWireDiscardStateProbe(measurement);
+            MGLOG_I("Driver POST: discard state probe verdict=%s: %s", WireDiscardStateProbeVerdictName(verdict),
+                    DescribeWireDiscardStateProbe(measurement).c_str());
+            if (verdict != WireDiscardStateProbeVerdict::DiscardDrawDropsState) return std::nullopt;
+            String detail =
+                "a draw with a rasterizerDiscardEnable pipeline drops the dynamic viewport/scissor, so a later "
+                "draw that inherits them draws nothing, while after a rasterizing draw it does: ";
+            detail += DescribeWireDiscardStateProbe(measurement);
+            detail +=
+                ". Magma sets the dynamic state again after every discard draw "
+                "(MOBILEGL_MAGMA_REEMIT_STATE_AFTER_DISCARD=0 turns it off)";
+            return DriverBugFinding{"Rasterizer-discard draws drop dynamic viewport/scissor",
+                                    DriverBugVerdict::Fixed, Move(detail)};
+        }
         using VulkanDriverBugProbeFn = Optional<DriverBugFinding> (*)(const VulkanDriverBugProbeContext&);
         constexpr VulkanDriverBugProbeFn kVulkanDriverBugProbes[] = {
             &ProbeDepthStencilResolvePassBug,
             &ProbeE5TransferReadNormalizeBug,
             &ProbeCrossFormatSliceCopyBug,
+            &ProbeDiscardStateBug,
         };
     } // namespace
 
