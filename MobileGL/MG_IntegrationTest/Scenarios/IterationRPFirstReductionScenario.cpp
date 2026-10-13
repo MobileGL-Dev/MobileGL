@@ -371,10 +371,22 @@ layout(std430, binding = 0) readonly buffer Input {
             return result;
         }
 
+        // The sequential binary32 sum. The shader's dot() may round differently - GLSL leaves a
+        // dot product's rounding (fused or not) to the implementation, and llvmpipe's ES
+        // compiler answers 1.0 where lavapipe answers this - so the probe accepts any value
+        // within one ulp of it, the same in every invocation, and checks the reduction against
+        // the value the driver actually produced.
         constexpr float kSampledLuminance = 0.2125f + 0.7154f + 0.0721f;
 
-        float ExpectedInput(InputMode mode, std::uint32_t localIndex) {
-            return mode == InputMode::SampledRgba32f ? kSampledLuminance : static_cast<float>(localIndex + 1u);
+        bool WithinOneUlp(float lhs, float rhs) {
+            const std::uint32_t a = FloatBits(lhs);
+            const std::uint32_t b = FloatBits(rhs);
+            if ((a ^ b) >> 31) return false; // never across a sign
+            return (a > b ? a - b : b - a) <= 1u;
+        }
+
+        float ExpectedInput(InputMode mode, std::uint32_t localIndex, float sampledLuminance) {
+            return mode == InputMode::SampledRgba32f ? sampledLuminance : static_cast<float>(localIndex + 1u);
         }
 
         ValidationResult ValidateProbe(const ProbeOutput& output, InputMode mode) {
@@ -405,6 +417,16 @@ layout(std430, binding = 0) readonly buffer Input {
                     return Failure("record identity", message.str());
                 }
             }
+            float sampledLuminance = kSampledLuminance;
+            if (mode == InputMode::SampledRgba32f) {
+                sampledLuminance = output.reduction[slotForLocal[0]].x;
+                if (!WithinOneUlp(sampledLuminance, kSampledLuminance)) {
+                    std::ostringstream message;
+                    message << "localIndex 0 input was " << FormatFloat(sampledLuminance) << ", expected "
+                            << FormatFloat(kSampledLuminance) << " within one ulp";
+                    return Failure("input", message.str());
+                }
+            }
             for (std::size_t localIndex = 0; localIndex < kInvocationCount; ++localIndex) {
                 const std::size_t slot = slotForLocal[localIndex];
                 const UVec4& invocation = output.invocation[slot];
@@ -417,7 +439,7 @@ layout(std430, binding = 0) readonly buffer Input {
                             << ",0)";
                     return Failure("record identity", message.str());
                 }
-                const float expectedInput = ExpectedInput(mode, static_cast<std::uint32_t>(localIndex));
+                const float expectedInput = ExpectedInput(mode, static_cast<std::uint32_t>(localIndex), sampledLuminance);
                 const float actualInput = output.reduction[slot].x;
                 if (!SameBits(actualInput, expectedInput)) {
                     std::ostringstream message;
@@ -500,7 +522,7 @@ layout(std430, binding = 0) readonly buffer Input {
                 float inclusive = 0.0f;
                 for (const std::size_t slot : subgroupSlots[subgroupID]) {
                     const std::uint32_t localIndex = output.invocation[slot].x;
-                    inclusive += ExpectedInput(mode, localIndex);
+                    inclusive += ExpectedInput(mode, localIndex, sampledLuminance);
                     nativePrefix[slot] = inclusive;
                     const float actualNative = output.reduction[slot].y;
                     if (!SameBits(actualNative, inclusive)) {
@@ -664,7 +686,7 @@ layout(std430, binding = 0) readonly buffer Input {
             float total = 0.0f;
             for (const float subtotal : nativeSubtotal) total += subtotal;
             float sampledExpectedTotal = 0.0f;
-            for (std::size_t i = 0; i < kInvocationCount; ++i) sampledExpectedTotal += kSampledLuminance;
+            for (std::size_t i = 0; i < kInvocationCount; ++i) sampledExpectedTotal += sampledLuminance;
             const float expectedTotal = mode == InputMode::IndexedSsbo ? 131328.0f : sampledExpectedTotal;
             if (!SameBits(total, expectedTotal) || !SameBits(mergedPrefix[index511Slot], expectedTotal)) {
                 std::ostringstream message;
