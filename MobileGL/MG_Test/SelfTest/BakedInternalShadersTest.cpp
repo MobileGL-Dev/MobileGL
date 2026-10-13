@@ -61,6 +61,7 @@ using Uint32 = std::uint32_t;
 #include <MG_Backend/DirectVulkan/Renderer/WireDepthMipmapSpirv.h>
 #include <MG_Backend/DirectVulkan/Renderer/WireMultisampleResolveSpirv.h>
 #include <MG_Backend/DirectVulkan/Renderer/WireYuvConvertSpirv.h>
+#include <MG_Backend/DirectVulkan/Renderer/WireE5RawCopySpirv.h>
 
 struct BakedShader {
     const char* name;            // ctest entry name, and the bake file's stem
@@ -93,6 +94,19 @@ const BakedShader kBakedShaders[] = {
                   "kWireColorBlitFragmentSpirv", EShLangFragment,
                   glslang::EShTargetVulkan_1_0, glslang::EShTargetSpv_1_0,
                   kWireColorBlitFragmentSpirv),
+    // The raw E5B9G9R9 read route (WireE5RawCopy.h): one compute program per source shape.
+    MGL_BAKED_ROW("WireE5RawCopy",
+                  "MobileGL/MG_Backend/DirectVulkan/Renderer/WireE5RawCopy.comp",
+                  "MobileGL/MG_Backend/DirectVulkan/Renderer/WireE5RawCopySpirv.h",
+                  "kWireE5RawCopySpirv", EShLangCompute,
+                  glslang::EShTargetVulkan_1_0, glslang::EShTargetSpv_1_0,
+                  kWireE5RawCopySpirv),
+    MGL_BAKED_ROW("WireE5RawCopy3D",
+                  "MobileGL/MG_Backend/DirectVulkan/Renderer/WireE5RawCopy3D.comp",
+                  "MobileGL/MG_Backend/DirectVulkan/Renderer/WireE5RawCopySpirv.h",
+                  "kWireE5RawCopy3DSpirv", EShLangCompute,
+                  glslang::EShTargetVulkan_1_0, glslang::EShTargetSpv_1_0,
+                  kWireE5RawCopy3DSpirv),
     MGL_BAKED_ROW("WireYuvConvertVertex",
                   "MobileGL/MG_Backend/DirectVulkan/Renderer/WireYuvConvert.vert",
                   "MobileGL/MG_Backend/DirectVulkan/Renderer/WireYuvConvertSpirv.h",

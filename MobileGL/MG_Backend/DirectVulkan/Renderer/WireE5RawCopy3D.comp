@@ -1,0 +1,19 @@
+#version 450
+// The volume twin of WireE5RawCopy.comp: the source level is a 3D image and the region's slices
+// are its z range.
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+layout(set = 0, binding = 0) uniform usampler3D sourceImage;
+layout(set = 0, binding = 1, r32ui) uniform writeonly uimage3D twinImage;
+layout(push_constant) uniform Region {
+    // xyz: the region's texel origin in the source level.
+    ivec4 sourceOffset;
+    // xyz: texels to copy.
+    ivec4 extent;
+} region;
+
+void main() {
+    ivec3 id = ivec3(gl_GlobalInvocationID);
+    if (any(greaterThanEqual(id, region.extent.xyz))) return;
+    uint word = texelFetch(sourceImage, region.sourceOffset.xyz + id, 0).r;
+    imageStore(twinImage, id, uvec4(word, 0u, 0u, 0u));
+}

@@ -22,6 +22,7 @@
 // The handle-keyed arm's key type. Header-only POD, disagg-only, exactly the shape
 // MagmaPipeArms.h already gives this directory.
 #include <MG_Pipe/MGPipeHandles.h>
+#include "WireE5RawCopy.h"
 
 namespace MobileGL::MG_State::GLState {
 class ITextureObject;
@@ -575,6 +576,18 @@ public:
     // stays as it was).
     Bool GrowWireTextureMipChain(MG_Pipe::MGPipeHandle handle, Uint32 requiredMipLevels,
                                  VkCommandBuffer commandBuffer);
+    // THE RAW E5B9G9R9 READ ROUTE (WireE5RawCopy.h). The renderer hands its kit over once
+    // ArmWireE5RawReads has armed the route; nullptr keeps every transfer read plain.
+    void SetWireE5RawCopyKit(const WireE5RawCopyKit* kit) { m_wireE5RawCopyKit = kit; }
+    // True when a transfer read of `resource` must go through the route: armed, and a
+    // single-sample E5B9G9R9 MUTABLE_FORMAT image that is not 1D.
+    Bool WireE5RawReadApplies(const TextureResource& resource) const;
+    // Records `region` of such an image (in GENERAL or SHADER_READ_ONLY_OPTIMAL) into a fresh
+    // R32_UINT twin, left in TRANSFER_SRC_OPTIMAL. On success `twin` owns the image and `objects`
+    // the views and the pool, and both must outlive the recording's submission. On failure
+    // nothing was recorded and everything created was destroyed.
+    Bool RecordWireE5RawTwin(VkCommandBuffer commandBuffer, const WireE5RawCopyRegion& region,
+                             VkImageLayout sourceLayout, TextureResource& twin, WireE5RawCopyObjects& objects);
     // Records that GPU writes superseded the staged CPU snapshot of this level. Layer
     // ranges select cube faces; array and 3D levels share one staged level shadow.
     void MarkWireTextureGpuWritten(MG_Pipe::MGPipeHandle handle, Uint32 mipLevel,
@@ -709,6 +722,7 @@ private:
     VkCommandPool m_uploadCommandPool = VK_NULL_HANDLE;
     VkQueue m_graphicsQueue = VK_NULL_HANDLE;
     Bool m_imageFormatListSupported = false;
+    const WireE5RawCopyKit* m_wireE5RawCopyKit = nullptr;
     Uint32 m_currentFrameIndex = 0;
 
     Uint8 m_gcCounter = 0;
@@ -741,6 +755,8 @@ private:
     std::unordered_map<VkFormat, VkSampleCountFlags> m_multisampleCountsByFormat;
     Vector<Vector<TextureResource>> m_deferredReleases;
     Vector<Vector<VkImageView>> m_deferredViewReleases;
+    // The raw E5B9G9R9 route's views and descriptor pools, on the same ring as the images they name.
+    Vector<Vector<WireE5RawCopyObjects>> m_deferredE5Releases;
 
     // --- Batched upload machinery ---
     // Uploads within a frame are recorded into ONE shared command buffer and

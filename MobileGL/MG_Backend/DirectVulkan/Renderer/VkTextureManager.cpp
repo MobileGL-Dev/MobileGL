@@ -274,6 +274,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                                   const VkTextureManager::TextureResource& oldResource,
                                                   VkTextureManager::TextureResource& newResource
                                                   , Bool splitAspects = false
+                                                  , VkTextureManager* rawE5Manager = nullptr
                                                   ) {
         MOBILEGL_ASSERT(device != VK_NULL_HANDLE, "PreserveTextureContentsOnRecreate: device is null");
         MOBILEGL_ASSERT(commandPool != VK_NULL_HANDLE, "PreserveTextureContentsOnRecreate: commandPool is null");
@@ -307,19 +308,74 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             0, VK_ACCESS_TRANSFER_WRITE_BIT, newResource.aspect, 0, newResource.mipLevels);
         MOBILEGL_ASSERT(ok, "PreserveTextureContentsOnRecreate: failed to prepare destination image");
 
+        // E5B9G9R9 on a device whose transfer reads canonicalize it: each level leaves through the
+        // raw route (WireE5RawCopy.h) into a twin, and the twins are copied instead. The old image
+        // and the new one must agree on the shape for the twin's single-level copy to stand in.
+        const Bool rawE5 = rawE5Manager != nullptr && rawE5Manager->WireE5RawReadApplies(oldResource) &&
+                           newResource.format == oldResource.format && newResource.viewType == oldResource.viewType;
         VkImageLayout srcTrackedLayout = oldResource.layout;
         VkPipelineStageFlags srcStageMask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
         VkAccessFlags srcAccessMask = 0;
         GetImageTransitionSourceState(srcTrackedLayout, srcStageMask, srcAccessMask);
         ok = VkTextureManager::TransitionImageLayout(
-            commandBuffer, oldResource.image, srcTrackedLayout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-            srcStageMask, VK_PIPELINE_STAGE_TRANSFER_BIT,
-            srcAccessMask, VK_ACCESS_TRANSFER_READ_BIT, oldResource.aspect, 0, preservedMipLevels);
+            commandBuffer, oldResource.image, srcTrackedLayout,
+            rawE5 ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+            srcStageMask, rawE5 ? VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT : VK_PIPELINE_STAGE_TRANSFER_BIT,
+            srcAccessMask, rawE5 ? VK_ACCESS_SHADER_READ_BIT : VK_ACCESS_TRANSFER_READ_BIT,
+            oldResource.aspect, 0, preservedMipLevels);
         MOBILEGL_ASSERT(ok, "PreserveTextureContentsOnRecreate: failed to prepare source image");
+
+        // Destroyed after the fence wait below, which is the twins' last use.
+        Vector<VkTextureManager::TextureResource> rawTwins;
+        Vector<WireE5RawCopyObjects> rawObjects;
+        if (rawE5) {
+            rawTwins.reserve(preservedMipLevels);
+            const Bool volume = oldResource.viewType == VK_IMAGE_VIEW_TYPE_3D;
+            for (Uint32 level = 0; level < preservedMipLevels; ++level) {
+                WireE5RawCopyRegion region;
+                region.source = oldResource.image;
+                region.volume = volume;
+                region.level = level;
+                region.layerCount = volume ? 1u : std::min(oldResource.arrayLayers, newResource.arrayLayers);
+                region.extent = {std::max(std::min(oldResource.extent.width, newResource.extent.width) >> level, 1u),
+                                 std::max(std::min(oldResource.extent.height, newResource.extent.height) >> level, 1u),
+                                 volume ? std::max(std::min(oldResource.depth, newResource.depth) >> level, 1u) : 1u};
+                VkTextureManager::TextureResource twin;
+                WireE5RawCopyObjects objects;
+                if (!rawE5Manager->RecordWireE5RawTwin(commandBuffer, region, VK_IMAGE_LAYOUT_GENERAL, twin, objects)) break;
+                VkImageCopy copy{};
+                copy.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, region.layerCount};
+                copy.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, level, 0, region.layerCount};
+                copy.extent = region.extent;
+                vkCmdCopyImage(commandBuffer, twin.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, newResource.image,
+                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+                rawTwins.push_back(Move(twin));
+                rawObjects.push_back(objects);
+            }
+            if (rawTwins.size() != preservedMipLevels) {
+                // A twin could not be made: the remaining levels go by transfer (canonicalized,
+                // as every level was before the route) rather than not at all.
+                MGLOG_W_ONCE("PreserveTextureContentsOnRecreate: the raw E5B9G9R9 route failed; levels %zu.. "
+                             "are copied by transfer", rawTwins.size());
+            }
+        }
+        const Uint32 firstTransferLevel = static_cast<Uint32>(rawTwins.size());
+        if (rawE5 && firstTransferLevel < preservedMipLevels) {
+            VkImageMemoryBarrier toTransfer{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+            toTransfer.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            toTransfer.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+            toTransfer.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+            toTransfer.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+            toTransfer.srcQueueFamilyIndex = toTransfer.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            toTransfer.image = oldResource.image;
+            toTransfer.subresourceRange = {oldResource.aspect, 0, preservedMipLevels, 0, VK_REMAINING_ARRAY_LAYERS};
+            vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
+                                 0, nullptr, 0, nullptr, 1, &toTransfer);
+        }
 
         Vector<VkImageCopy> copyRegions;
         copyRegions.reserve(preservedMipLevels);
-        for (Uint32 level = 0; level < preservedMipLevels; ++level) {
+        for (Uint32 level = firstTransferLevel; level < preservedMipLevels; ++level) {
             VkImageCopy copy{};
             copy.srcSubresource.aspectMask = oldResource.aspect;
             copy.srcSubresource.mipLevel = level;
@@ -346,10 +402,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
 
         EndActiveRenderPassOn(commandBuffer);
-        vkCmdCopyImage(commandBuffer,
-                       oldResource.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                       newResource.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                       static_cast<Uint32>(copyRegions.size()), copyRegions.data());
+        if (!copyRegions.empty())
+            vkCmdCopyImage(commandBuffer,
+                           oldResource.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                           newResource.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                           static_cast<Uint32>(copyRegions.size()), copyRegions.data());
 
         VkPipelineStageFlags dstStageMask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
         VkAccessFlags dstAccessMask = 0;
@@ -373,6 +430,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         VK_VERIFY(vkCreateFence(device, &fenceInfo, nullptr, &fence), "vkCreateFence(texture preserve)");
         VK_VERIFY(vkQueueSubmit(graphicsQueue, 1, &submitInfo, fence), "vkQueueSubmit(texture preserve)");
         VK_VERIFY(vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX), "vkWaitForFences(texture preserve)");
+        for (WireE5RawCopyObjects& objects : rawObjects) DestroyWireE5RawCopyObjects(device, objects);
 
         vkDestroyFence(device, fence, nullptr);
         vkFreeCommandBuffers(device, commandPool, 1, &commandBuffer);
@@ -486,6 +544,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         m_deferredReleases.resize(initInfo.frameCount);
         m_deferredViewReleases.clear();
         m_deferredViewReleases.resize(initInfo.frameCount);
+        m_deferredE5Releases.clear();
+        m_deferredE5Releases.resize(initInfo.frameCount);
 
         MOBILEGL_ASSERT(m_device != VK_NULL_HANDLE && m_physicalDevice != VK_NULL_HANDLE && m_allocator != nullptr &&
                             m_commandPool != VK_NULL_HANDLE && m_graphicsQueue != VK_NULL_HANDLE,
@@ -1252,7 +1312,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (preserve) {
             FlushPendingUploads();
             if (!PreserveTextureContentsOnRecreate(m_device, m_commandPool, m_graphicsQueue,
-                                                   resource, replacement, true)) {
+                                                   resource, replacement, true, this)) {
                 MGL_WIRE_DECLINE_AT(ShapePreserveCopyFailed,
                                     "texture {slot=%u, gen=%u}: its texels could not be copied into the "
                                     "reallocated image",
@@ -1953,6 +2013,45 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             static_cast<Uint16>(target), static_cast<Uint16>(mipLevel), true);
     }
 
+    Bool VkTextureManager::WireE5RawReadApplies(const TextureResource& resource) const {
+        return m_wireE5RawCopyKit != nullptr && resource.format == VK_FORMAT_E5B9G9R9_UFLOAT_PACK32 &&
+               resource.sampleCount == VK_SAMPLE_COUNT_1_BIT &&
+               (resource.imageCreateFlags & VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT) != 0 &&
+               resource.viewType != VK_IMAGE_VIEW_TYPE_1D && resource.viewType != VK_IMAGE_VIEW_TYPE_1D_ARRAY;
+    }
+
+    Bool VkTextureManager::RecordWireE5RawTwin(VkCommandBuffer commandBuffer, const WireE5RawCopyRegion& region,
+                                               VkImageLayout sourceLayout, TextureResource& twin,
+                                               WireE5RawCopyObjects& objects) {
+        if (m_wireE5RawCopyKit == nullptr) return false;
+        const VkImageCreateInfo info = WireE5RawCopyTwinInfo(region);
+        VmaAllocationCreateInfo allocation{};
+        allocation.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
+        allocation.requiredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+        if (vmaCreateImage(m_allocator, &info, &allocation, &twin.image, &twin.allocation, nullptr) != VK_SUCCESS) {
+            MGLOG_E_ONCE("RecordWireE5RawTwin: vmaCreateImage failed");
+            return false;
+        }
+        twin.format = info.format;
+        twin.extent = {info.extent.width, info.extent.height};
+        twin.depth = info.extent.depth;
+        twin.arrayLayers = info.arrayLayers;
+        twin.mipLevels = 1;
+        twin.aspect = VK_IMAGE_ASPECT_COLOR_BIT;
+        twin.viewType = region.volume ? VK_IMAGE_VIEW_TYPE_3D : VK_IMAGE_VIEW_TYPE_2D_ARRAY;
+        EndActiveRenderPassOn(commandBuffer);
+        const VkResult result = RecordWireE5RawCopy(m_device, commandBuffer, *m_wireE5RawCopyKit, region,
+                                                    sourceLayout, twin.image, objects);
+        if (result != VK_SUCCESS) {
+            MGLOG_E_ONCE("RecordWireE5RawTwin: recording the raw copy failed (%d)", static_cast<Int>(result));
+            DestroyWireE5RawCopyObjects(m_device, objects);
+            twin.Reset();
+            return false;
+        }
+        twin.layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        return true;
+    }
+
     Bool VkTextureManager::GrowWireTextureMipChain(MG_Pipe::MGPipeHandle handle, Uint32 requiredMipLevels,
                                                    VkCommandBuffer commandBuffer) {
         if (MG_Pipe::MGPipeHandleIsNull(handle)) {
@@ -2006,13 +2105,18 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         const VkImageAspectFlags aspect = old.aspect;
         const VkImageLayout oldLayout = old.layout;
+        // E5B9G9R9 on a device whose transfer reads canonicalize it: every level leaves through the
+        // raw route (WireE5RawCopy.h), so the old image is read by a shader, from GENERAL.
+        const Bool rawE5 = WireE5RawReadApplies(old);
         VkPipelineStageFlags srcStageMask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
         VkAccessFlags srcAccessMask = 0;
         GetImageTransitionSourceState(oldLayout, srcStageMask, srcAccessMask);
         Bool ok = TransitionImageLayout(commandBuffer, old.image, old.layout,
-                                        VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, srcStageMask,
-                                        VK_PIPELINE_STAGE_TRANSFER_BIT, srcAccessMask,
-                                        VK_ACCESS_TRANSFER_READ_BIT, aspect, 0, old.mipLevels);
+                                        rawE5 ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                        srcStageMask,
+                                        rawE5 ? VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT : VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                        srcAccessMask, rawE5 ? VK_ACCESS_SHADER_READ_BIT : VK_ACCESS_TRANSFER_READ_BIT,
+                                        aspect, 0, old.mipLevels);
         MOBILEGL_ASSERT(ok, "GrowWireTextureMipChain: source transition failed");
         VkImageLayout grownLayout = VK_IMAGE_LAYOUT_UNDEFINED;
         ok = TransitionImageLayout(commandBuffer, grown.image, grownLayout,
@@ -2029,6 +2133,44 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             copy.dstOffset = {0, 0, 0};
             copy.extent = {std::max(old.extent.width >> level, 1u), std::max(old.extent.height >> level, 1u),
                            std::max(old.depth >> level, 1u)};
+            if (rawE5) {
+                const Bool volume = old.viewType == VK_IMAGE_VIEW_TYPE_3D;
+                WireE5RawCopyRegion region;
+                region.source = old.image;
+                region.volume = volume;
+                region.level = level;
+                region.layerCount = volume ? 1u : old.arrayLayers;
+                region.extent = copy.extent;
+                TextureResource twin;
+                WireE5RawCopyObjects objects;
+                if (!RecordWireE5RawTwin(commandBuffer, region, VK_IMAGE_LAYOUT_GENERAL, twin, objects)) {
+                    // Nothing was recorded for this level; the plain copy below reads the
+                    // canonicalized words, which is what every level got before the route.
+                    MGLOG_W_ONCE("GrowWireTextureMipChain: the raw E5B9G9R9 route failed; level %u is copied "
+                                 "by transfer", level);
+                    VkImageMemoryBarrier toTransfer{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+                    toTransfer.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+                    toTransfer.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+                    toTransfer.oldLayout = toTransfer.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+                    toTransfer.srcQueueFamilyIndex = toTransfer.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                    toTransfer.image = old.image;
+                    toTransfer.subresourceRange = {aspect, level, 1, 0, VK_REMAINING_ARRAY_LAYERS};
+                    vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &toTransfer);
+                    EndActiveRenderPassOn(commandBuffer);
+                    vkCmdCopyImage(commandBuffer, old.image, VK_IMAGE_LAYOUT_GENERAL, grown.image,
+                                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+                    continue;
+                }
+                VkImageCopy twinCopy = copy;
+                twinCopy.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, region.layerCount};
+                vkCmdCopyImage(commandBuffer, twin.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, grown.image,
+                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &twinCopy);
+                // Both name the frame's command buffer, so they ride the old image's ring slot.
+                m_deferredE5Releases[m_currentFrameIndex].push_back(objects);
+                DeferResourceRelease(Move(twin));
+                continue;
+            }
             for (const VkImageAspectFlags copyAspect : {VK_IMAGE_ASPECT_COLOR_BIT,
                                                         VK_IMAGE_ASPECT_DEPTH_BIT,
                                                         VK_IMAGE_ASPECT_STENCIL_BIT}) {
@@ -2107,6 +2249,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         MOBILEGL_ASSERT(frameIndex < m_deferredReleases.size(),
                         "VkTextureManager::CollectDeferredReleases invalid frame index %u (size=%zu)",
                         frameIndex, m_deferredReleases.size());
+        if (frameIndex < m_deferredE5Releases.size()) {
+            for (WireE5RawCopyObjects& objects : m_deferredE5Releases[frameIndex])
+                DestroyWireE5RawCopyObjects(m_device, objects);
+            m_deferredE5Releases[frameIndex].clear();
+        }
         m_deferredReleases[frameIndex].clear();
 
         MOBILEGL_ASSERT(frameIndex < m_deferredViewReleases.size(),
@@ -2348,6 +2495,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     void VkTextureManager::DestroyDeferredReleases() {
+        for (auto& deferredE5 : m_deferredE5Releases) {
+            for (WireE5RawCopyObjects& objects : deferredE5) DestroyWireE5RawCopyObjects(m_device, objects);
+        }
+        m_deferredE5Releases.clear();
         for (auto& deferredReleases : m_deferredReleases) {
             deferredReleases.clear();
         }

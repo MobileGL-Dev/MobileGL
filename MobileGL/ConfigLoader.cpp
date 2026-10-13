@@ -420,6 +420,8 @@ namespace MobileGL::MG_ConfigLoader {
         features.EsprytWidenPacked16Storage =
             QueryEnvQuirkOverride("MOBILEGL_ESPRYT_WIDEN_PACKED16_STORAGE");
         features.MagmaPrimGenQueryReroute = QueryEnvQuirkOverride("MOBILEGL_MAGMA_PRIMGEN_QUERY_REROUTE");
+        features.MagmaE5RawReads = QueryEnvQuirkOverride("MOBILEGL_MAGMA_E5_RAW_READS");
+        features.MagmaSplitSliceCopies = QueryEnvQuirkOverride("MOBILEGL_MAGMA_SPLIT_SLICE_COPIES");
         // MGPipe. Nothing here needs adding to an allow-list: InitializeAcceptedEnvVariables
         // accepts every MOBILEGL_ / LIBGL_ prefixed variable in the environment, so a name
         // that starts with MOBILEGL_ is visible to these queries by construction.

@@ -24,6 +24,7 @@
 #include "VkTimerQueryManager.h"
 #include "GpuProgressMarkers.h"
 #include "WireRenderPassCompatibility.h"
+#include "WireE5RawCopy.h"
 #if MOBILEGL_BUILD_DISAGGREGATED
 #include <MG_Remote/Server/SharedImageRegistry.h>
 #endif
@@ -787,6 +788,24 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // Runs the probe (memoized per device identity) and sets the member above. Called at the end of
         // device creation, after ArmPrimGenReroute: it records on m_graphicsQueue.
         void ArmWireDepthResolveOrder();
+        // Adreno's E5B9G9R9 transfer-read canonicalization (WireE5RawCopy.h): when armed, every
+        // transfer read of an E5B9G9R9 texture (readback, glCopyImageSubData, a storage
+        // recreate's level copy) first copies the words out through the raw route's compute pass.
+        // Decided by ArmWireE5RawReads at bring-up (probe memoized per device identity, or
+        // MOBILEGL_MAGMA_E5_RAW_READS).
+        Bool m_wireE5RawReads = false;
+        WireE5RawCopyKit m_wireE5RawCopyKit;
+        // Cross-format 2D-array <-> 3D vkCmdCopyImage lands only its first slice (WireCopySliceProbe.h):
+        // CopyImageSubData then records one region per slice. Set by ArmWireCopySliceSplit at bring-up.
+        Bool m_wireSplitCrossFormatSliceCopies = false;
+        void ArmWireCopySliceSplit();
+        void ArmWireE5RawReads();
+    public:
+        // The kit when the route is armed, else nullptr. VkTextureManager asks before a level copy.
+        const WireE5RawCopyKit* GetWireE5RawCopyKit() const {
+            return m_wireE5RawReads ? &m_wireE5RawCopyKit : nullptr;
+        }
+    private:
         Bool BlitWireColorToDefault(WireImage source, WireImage destination,
                                    GLint sx0, GLint sy0, GLint sx1, GLint sy1,
                                    GLint dx0, GLint dy0, GLint dx1, GLint dy1, GLenum filter);

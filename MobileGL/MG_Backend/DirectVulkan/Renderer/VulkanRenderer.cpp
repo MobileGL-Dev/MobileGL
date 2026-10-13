@@ -51,6 +51,7 @@
 #include "WireDeclineTally.h"
 #include "WireColorBlitFilter.h"
 #include "WireDepthResolveArm.h"
+#include "WireCopySliceProbe.h"
 #include "WireDepthResolveProbe.h"
 #if MOBILEGL_BUILD_DISAGGREGATED
 #include <MG_Remote/Server/ServerLoop.h>
@@ -2284,6 +2285,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
              m_sampledReadStageMask,
              static_cast<Uint32>(m_physicalDevice.queueFamilies.graphicsFamily)});
         MOBILEGL_ASSERT(succeeded, "VkTextureManager initialization failed.");
+        m_textureManager->SetWireE5RawCopyKit(GetWireE5RawCopyKit());
         m_renderPassManager =
             MakeUnique<VkRenderPassManager>(m_device, m_physicalDevice.handle, m_allocator, m_config,
                                             *m_textureManager, m_swapchainObject);
@@ -2443,6 +2445,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 #endif
         DestroyWireDepthMipmapResources();
         DestroyWireMultisampleResolveResources();
+        if (m_textureManager) m_textureManager->SetWireE5RawCopyKit(nullptr);
+        DestroyWireE5RawCopyKit(m_device, m_wireE5RawCopyKit);
+        m_wireE5RawReads = false;
 #if MOBILEGL_BUILD_DISAGGREGATED
         DestroySharedImagePresentTargets(false);
         DestroySharedImageSync();
@@ -3997,6 +4002,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // formats whenever they differ (VUID-vkCmdCopyImage-srcImage-01548) and there is no
             // downstream check - a mismatched pair is a promise the driver takes at face value.
             VkFormat format = VK_FORMAT_UNDEFINED;
+            // A transfer read of this image canonicalizes E5B9G9R9 words: the copy reads it through
+            // the raw route (WireE5RawCopy.h) instead.
+            Bool rawE5 = false;
         };
 
         Bool TryResolveCopyImageSliceMapping(TextureTarget target, const CopyImageVkImage& image, Uint32 mipLevel,
@@ -4102,6 +4110,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             out.depth = resource->depth;
             out.arrayLayers = resource->arrayLayers;
             out.format = resource->format;
+            out.rawE5 = !renderbuffer && m_textureManager->WireE5RawReadApplies(*resource);
             return out.image != VK_NULL_HANDLE;
         };
         CopyImageVkImage srcImage{};
@@ -4346,8 +4355,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // of vkCmdCopyImage accept at once, the barrier covers the WHOLE image (both the source
         // level and the destination level are in it), and the access mask carries both directions
         // because this one barrier is the edge for both.
+        // An E5B9G9R9 source the raw route reads is read by a shader, which GENERAL also allows.
         const VkImageLayout copySourceLayout =
-            inPlace ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+            (inPlace || srcImage.rawE5) ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
         const VkImageLayout copyDestinationLayout =
             inPlace ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
         const VkAccessFlags copySourceAccess =
@@ -4426,10 +4436,58 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 copyRegion.srcOffset.z, MG_Util::ConvertTextureTargetToString(dstTextureTarget).c_str(), dstMipLevel,
                 copyRegion.dstSubresource.baseArrayLayer, copyRegion.dstSubresource.layerCount,
                 copyRegion.dstOffset.z, srcWidth, srcHeight, copyRegion.extent.depth);
-        vkCmdCopyImage(frame.commandBuffer,
-                       srcImage.image, copySourceLayout,
-                       dstImage.image, copyDestinationLayout,
-                       1, &copyRegion);
+        VkImage copySourceImage = srcImage.image;
+        VkImageLayout copySourceImageLayout = copySourceLayout;
+        if (srcImage.rawE5) {
+            // The words leave through a shader into a twin, and the twin is what is copied. A
+            // twin that cannot be made leaves the plain copy (canonicalized words) in place.
+            WireE5RawCopyRegion region;
+            region.source = srcImage.image;
+            region.volume = srcSlices.slicesAreDepth;
+            region.level = srcMipLevel;
+            region.baseLayer = copyRegion.srcSubresource.baseArrayLayer;
+            region.layerCount = copyRegion.srcSubresource.layerCount;
+            region.offset = copyRegion.srcOffset;
+            region.extent = {copyRegion.extent.width, copyRegion.extent.height,
+                             srcSlices.slicesAreDepth ? copySliceCount : 1u};
+            auto twin = MakeUnique<VkTextureManager::TextureResource>();
+            WireE5RawCopyObjects objects;
+            if (m_textureManager->RecordWireE5RawTwin(frame.commandBuffer, region, copySourceLayout, *twin, objects)) {
+                copySourceImage = twin->image;
+                copySourceImageLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+                copyRegion.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, region.layerCount};
+                copyRegion.srcOffset = {0, 0, 0};
+                WireRetiredObjects retired{};
+                retired.textures.push_back(Move(twin));
+                retired.imageViews = {objects.sourceView, objects.twinView};
+                retired.descriptorPools = {objects.descriptorPool};
+                RetireWireObjects(Move(retired));
+            }
+        }
+        // Cross-format copies between a layered image and a 3D one land only their first slice on
+        // some drivers (WireCopySliceProbe.h); there, the copy goes one slice per region.
+        const VkFormat copySourceFormat = copySourceImage == srcImage.image ? srcImage.format : VK_FORMAT_R32_UINT;
+        if (m_wireSplitCrossFormatSliceCopies && copySourceFormat != dstImage.format &&
+            srcSlices.slicesAreDepth != dstSlices.slicesAreDepth && copySliceCount > 1) {
+            Vector<VkImageCopy> slices(copySliceCount, copyRegion);
+            for (Uint32 slice = 0; slice < copySliceCount; ++slice) {
+                VkImageCopy& one = slices[slice];
+                one.extent.depth = 1;
+                if (srcSlices.slicesAreDepth) one.srcOffset.z += static_cast<Int32>(slice);
+                else one.srcSubresource = {copyRegion.srcSubresource.aspectMask, copyRegion.srcSubresource.mipLevel,
+                                           copyRegion.srcSubresource.baseArrayLayer + slice, 1};
+                if (dstSlices.slicesAreDepth) one.dstOffset.z += static_cast<Int32>(slice);
+                else one.dstSubresource = {copyRegion.dstSubresource.aspectMask, copyRegion.dstSubresource.mipLevel,
+                                           copyRegion.dstSubresource.baseArrayLayer + slice, 1};
+            }
+            vkCmdCopyImage(frame.commandBuffer, copySourceImage, copySourceImageLayout, dstImage.image,
+                           copyDestinationLayout, copySliceCount, slices.data());
+        } else {
+            vkCmdCopyImage(frame.commandBuffer,
+                           copySourceImage, copySourceImageLayout,
+                           dstImage.image, copyDestinationLayout,
+                           1, &copyRegion);
+        }
         // The copy coordinates above are already storage-relative. Name that
         // storage here too, so a texture view's offsets are not applied twice.
         if (wire && !dstImage.isRenderbuffer) m_textureManager->MarkWireTextureGpuWritten(dstStorageHandle,
@@ -8467,6 +8525,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         ArmPrimGenReroute();
         // Same terms: it records on m_graphicsQueue, which nothing but the probe above has used.
         ArmWireDepthResolveOrder();
+        // Same terms again.
+        ArmWireE5RawReads();
+        ArmWireCopySliceSplit();
     }
 
     // P7 gate 5 (g5-msprobe): THE ARM ORDER OF THE MULTISAMPLE DEPTH/STENCIL RESOLVE IS A MEASURED
@@ -8546,6 +8607,106 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return choice;
         });
         m_wirePreferShaderDepthResolve = resolved.preferShader;
+    }
+
+    // THE RAW E5B9G9R9 READ ROUTE IS ARMED BY MEASUREMENT (WireE5RawCopy.h): Auto runs
+    // RunWireE5TransferProbe once per device identity and arms the route only where a plain transfer
+    // read changed words a shader read back exactly; MOBILEGL_MAGMA_E5_RAW_READS=1/0 forces it.
+    void VulkanRenderer::ArmWireE5RawReads() {
+        m_wireE5RawReads = false;
+        const MG_Config::QuirkOverride setting = MG_Config::Features.MagmaE5RawReads;
+        if (setting == MG_Config::QuirkOverride::ForceOff) {
+            MGLOG_I("DirectVulkan: E5B9G9R9 raw reads off (MOBILEGL_MAGMA_E5_RAW_READS)");
+            return;
+        }
+        if (!WireE5RawCopySupported(m_physicalDevice.handle)) {
+            MGLOG_I("DirectVulkan: E5B9G9R9 raw reads unavailable (R32_UINT is not sampled + storage here)");
+            return;
+        }
+        Bool armed = setting == MG_Config::QuirkOverride::ForceOn;
+        if (setting == MG_Config::QuirkOverride::Auto) {
+            struct Entry {
+                WireDepthResolveDeviceIdentity identity;
+                WireE5TransferProbeVerdict verdict;
+            };
+            static std::mutex s_mutex;
+            static Vector<Entry> s_entries;
+            const WireDepthResolveDeviceIdentity identity = MakeWireDepthResolveDeviceIdentity(
+                m_physicalDevice.properties, false, WireDepthResolveProbeKnob::Measure);
+            std::lock_guard<std::mutex> lock(s_mutex);
+            const Entry* found = nullptr;
+            for (const Entry& entry : s_entries)
+                if (entry.identity == identity) found = &entry;
+            if (found == nullptr) {
+                WireE5TransferProbeContext context;
+                context.physicalDevice = m_physicalDevice.handle;
+                context.device = m_device;
+                context.queue = m_graphicsQueue;
+                context.queueFamilyIndex = static_cast<Uint32>(m_physicalDevice.queueFamilies.graphicsFamily);
+                const WireE5TransferProbeMeasurement measurement = RunWireE5TransferProbe(context);
+                const WireE5TransferProbeVerdict verdict = EvaluateWireE5TransferProbe(measurement);
+                if (measurement.fenceWaitTimedOut)
+                    MGLOG_W("DirectVulkan: the E5B9G9R9 transfer probe timed out waiting on its own submission; "
+                            "its Vulkan objects are deliberately leaked");
+                MGLOG_I("DirectVulkan: E5B9G9R9 transfer probe verdict=%s: %s", WireE5TransferProbeVerdictName(verdict),
+                        DescribeWireE5TransferProbe(measurement).c_str());
+                s_entries.push_back({identity, verdict});
+                found = &s_entries.back();
+            }
+            armed = found->verdict == WireE5TransferProbeVerdict::TransferReadNormalizes;
+        }
+        if (armed) {
+            if (const VkResult result = CreateWireE5RawCopyKit(m_device, m_wireE5RawCopyKit); result != VK_SUCCESS) {
+                MGLOG_W("DirectVulkan: E5B9G9R9 raw route kit creation failed (%d); transfer reads stay plain",
+                        static_cast<Int>(result));
+                DestroyWireE5RawCopyKit(m_device, m_wireE5RawCopyKit);
+                armed = false;
+            }
+        }
+        m_wireE5RawReads = armed;
+        MGLOG_I("DirectVulkan: E5B9G9R9 reads %s",
+                armed ? "go through the raw shader route" : "use plain transfers");
+    }
+
+    // THE PER-SLICE SPLIT IS ARMED BY MEASUREMENT (WireCopySliceProbe.h), once per device identity,
+    // or forced by MOBILEGL_MAGMA_SPLIT_SLICE_COPIES.
+    void VulkanRenderer::ArmWireCopySliceSplit() {
+        const MG_Config::QuirkOverride setting = MG_Config::Features.MagmaSplitSliceCopies;
+        Bool armed = setting == MG_Config::QuirkOverride::ForceOn;
+        if (setting == MG_Config::QuirkOverride::Auto) {
+            struct Entry {
+                WireDepthResolveDeviceIdentity identity;
+                WireCopySliceProbeVerdict verdict;
+            };
+            static std::mutex s_mutex;
+            static Vector<Entry> s_entries;
+            const WireDepthResolveDeviceIdentity identity = MakeWireDepthResolveDeviceIdentity(
+                m_physicalDevice.properties, false, WireDepthResolveProbeKnob::Measure);
+            std::lock_guard<std::mutex> lock(s_mutex);
+            const Entry* found = nullptr;
+            for (const Entry& entry : s_entries)
+                if (entry.identity == identity) found = &entry;
+            if (found == nullptr) {
+                WireCopySliceProbeContext context;
+                context.physicalDevice = m_physicalDevice.handle;
+                context.device = m_device;
+                context.queue = m_graphicsQueue;
+                context.queueFamilyIndex = static_cast<Uint32>(m_physicalDevice.queueFamilies.graphicsFamily);
+                const WireCopySliceProbeMeasurement measurement = RunWireCopySliceProbe(context);
+                const WireCopySliceProbeVerdict verdict = EvaluateWireCopySliceProbe(measurement);
+                if (measurement.fenceWaitTimedOut)
+                    MGLOG_W("DirectVulkan: the slice copy probe timed out waiting on its own submission; its Vulkan "
+                            "objects are deliberately leaked");
+                MGLOG_I("DirectVulkan: slice copy probe verdict=%s: %s", WireCopySliceProbeVerdictName(verdict),
+                        DescribeWireCopySliceProbe(measurement).c_str());
+                s_entries.push_back({identity, verdict});
+                found = &s_entries.back();
+            }
+            armed = found->verdict == WireCopySliceProbeVerdict::CrossFormatSlicesDropped;
+        }
+        m_wireSplitCrossFormatSliceCopies = armed;
+        MGLOG_I("DirectVulkan: cross-format layered <-> 3D copies %s",
+                armed ? "are split one slice per region" : "go as one region");
     }
 
     void VulkanRenderer::ArmPrimGenReroute() {

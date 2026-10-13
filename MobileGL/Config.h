@@ -381,6 +381,22 @@ namespace MobileGL::MG_Config {
         // immune to the probe's verdict moving), and ForceOff is the negative control that
         // replays the driver's silence.
         QuirkOverride MagmaPrimGenQueryReroute = QuirkOverride::Auto;
+        // MOBILEGL_MAGMA_E5_RAW_READS: DirectVulkan's raw read route for E5B9G9R9 textures
+        // (WireE5RawCopy.h). GL moves RGB9_E5 texel blocks bit-exactly (glGetTexImage with
+        // UNSIGNED_INT_5_9_9_9_REV, glCopyImageSubData), but Adreno 750's transfer reads of
+        // an E5B9G9R9 image larger than ~16x16 decode and re-encode, canonicalizing every
+        // non-canonical shared exponent. Auto defers to a device probe at renderer bring-up
+        // (RunWireE5TransferProbe: plain transfer read vs. a shader read through an R32_UINT
+        // view) and arms the route only where the plain read changed words; ForceOn arms it
+        // on any device (the host lanes exercise the route with it); ForceOff is the negative
+        // control that replays the canonicalization.
+        QuirkOverride MagmaE5RawReads = QuirkOverride::Auto;
+        // MOBILEGL_MAGMA_SPLIT_SLICE_COPIES: DirectVulkan's per-slice split of a cross-format
+        // glCopyImageSubData between a layered texture and a 3D one (WireCopySliceProbe.h).
+        // Adreno 750 lands only the first slice of such a vkCmdCopyImage region. Auto defers to
+        // a device probe at renderer bring-up (one region vs. per-slice regions); ForceOn splits
+        // on any device; ForceOff is the negative control that replays the dropped slices.
+        QuirkOverride MagmaSplitSliceCopies = QuirkOverride::Auto;
         // --- MGPipe (the disaggregation plan's explicit frontend/backend boundary) ---
         // MOBILEGL_PIPE_PUSH: per-subsystem bitmask selecting which state the frontend
         // PUSHES over MGPipe instead of leaving the backend to pull it out of GLContext.

@@ -147,7 +147,7 @@
         image.image = resource->image; image.format = resource->format; image.aspect = resource->aspect;
         image.layout = resource->layout; image.trackedLayout = &resource->layout; image.levels = resource->mipLevels;
         const auto restore = image.layout == VK_IMAGE_LAYOUT_UNDEFINED ? VK_IMAGE_LAYOUT_GENERAL : image.layout;
-        TransitionWireImage(image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+        auto& frame = m_frameContext.GetCurrent();
         VkBufferImageCopy regions[2]{};
         Uint32 regionCount = 0;
         const auto addCopy = [&](VkImageAspectFlags aspect, VkDeviceSize offset) {
@@ -160,8 +160,35 @@
         if (!depthStencil) addCopy(VK_IMAGE_ASPECT_COLOR_BIT, 0);
         if (depth) addCopy(VK_IMAGE_ASPECT_DEPTH_BIT, 0);
         if (stencil) addCopy(VK_IMAGE_ASPECT_STENCIL_BIT, stencilOffset);
-        auto& frame = m_frameContext.GetCurrent();
-        vkCmdCopyImageToBuffer(frame.commandBuffer, image.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+        // E5B9G9R9 on a device whose transfer reads canonicalize it: the words leave through a
+        // shader into a twin (WireE5RawCopy.h), which is what the buffer copy then reads.
+        VkImage copySource = image.image;
+        if (!depthStencil && m_textureManager->WireE5RawReadApplies(*resource)) {
+            TransitionWireImage(image, VK_IMAGE_LAYOUT_GENERAL);
+            WireE5RawCopyRegion region;
+            region.source = image.image;
+            region.volume = nativeVolume;
+            region.level = level;
+            region.baseLayer = nativeVolume ? 0u : layer;
+            region.layerCount = nativeVolume ? 1u : layerCount;
+            region.offset = regions[0].imageOffset;
+            region.extent = extent;
+            auto twin = MakeUnique<VkTextureManager::TextureResource>();
+            WireE5RawCopyObjects objects;
+            if (m_textureManager->RecordWireE5RawTwin(frame.commandBuffer, region, VK_IMAGE_LAYOUT_GENERAL, *twin,
+                                                      objects)) {
+                copySource = twin->image;
+                regions[0].imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, region.layerCount};
+                regions[0].imageOffset = {0, 0, 0};
+                WireRetiredObjects retired{};
+                retired.textures.push_back(Move(twin));
+                retired.imageViews = {objects.sourceView, objects.twinView};
+                retired.descriptorPools = {objects.descriptorPool};
+                RetireWireObjects(Move(retired));
+            }
+        }
+        if (copySource == image.image) TransitionWireImage(image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+        vkCmdCopyImageToBuffer(frame.commandBuffer, copySource, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                               readback.GetHandle(), regionCount, regions);
         TransitionWireImage(image, restore);
         VkMemoryBarrier host{VK_STRUCTURE_TYPE_MEMORY_BARRIER};

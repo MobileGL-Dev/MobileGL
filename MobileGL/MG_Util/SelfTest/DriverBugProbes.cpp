@@ -12,6 +12,8 @@
 #include <Config.h>
 #include <MG_Util/Debug/Log.h>
 #include <MG_Backend/DirectVulkan/Renderer/WireDepthResolveProbe.h>
+#include <MG_Backend/DirectVulkan/Renderer/WireE5RawCopy.h>
+#include <MG_Backend/DirectVulkan/Renderer/WireCopySliceProbe.h>
 
 #include <algorithm>
 #include <cstring>
@@ -2528,9 +2530,59 @@ namespace MobileGL::MG_Util::SelfTest {
             return DescribeDepthStencilResolvePassBug(measurement, shaderStencilExport);
         }
 
+
+        // The same probe the Magma renderer runs at bring-up (VulkanRenderer::ArmWireE5RawReads),
+        // on a throwaway device with one graphics queue.
+        Optional<DriverBugFinding> ProbeE5TransferReadNormalizeBug(const VulkanDriverBugProbeContext& context) {
+            using namespace MG_Backend::DirectVulkan;
+            if (context.getInstanceProcAddr == nullptr) return std::nullopt;
+            const WireE5TransferProbeMeasurement measurement = RunWireE5TransferProbeOnThrowawayDevice(
+                context.getInstanceProcAddr, context.instance, context.physicalDevice,
+                context.graphicsQueueFamilyIndex);
+            const WireE5TransferProbeVerdict verdict = EvaluateWireE5TransferProbe(measurement);
+            MGLOG_I("Driver POST: E5B9G9R9 transfer probe verdict=%s: %s", WireE5TransferProbeVerdictName(verdict),
+                    DescribeWireE5TransferProbe(measurement).c_str());
+            if (verdict != WireE5TransferProbeVerdict::TransferReadNormalizes) return std::nullopt;
+            String detail =
+                "vkCmdCopyImageToBuffer out of a 30x30 VK_FORMAT_E5B9G9R9_UFLOAT_PACK32 image returns "
+                "non-canonical shared-exponent words re-encoded (same value, different bits), while a "
+                "compute shader reading the same image through an R32_UINT view returns every stored "
+                "word: ";
+            detail += DescribeWireE5TransferProbe(measurement);
+            detail +=
+                ". GL moves RGB9_E5 blocks bit-exactly (glGetTexImage with UNSIGNED_INT_5_9_9_9_REV, "
+                "glCopyImageSubData), so Magma reads such textures through that shader into an R32_UINT "
+                "twin and copies the twin instead (MOBILEGL_MAGMA_E5_RAW_READS=0 turns it off)";
+            return DriverBugFinding{"E5B9G9R9 transfer reads canonicalize shared exponents",
+                                    DriverBugVerdict::Fixed, Move(detail)};
+        }
+
+        // The same probe the Magma renderer runs at bring-up (VulkanRenderer::ArmWireCopySliceSplit).
+        Optional<DriverBugFinding> ProbeCrossFormatSliceCopyBug(const VulkanDriverBugProbeContext& context) {
+            using namespace MG_Backend::DirectVulkan;
+            if (context.getInstanceProcAddr == nullptr) return std::nullopt;
+            const WireCopySliceProbeMeasurement measurement = RunWireCopySliceProbeOnThrowawayDevice(
+                context.getInstanceProcAddr, context.instance, context.physicalDevice,
+                context.graphicsQueueFamilyIndex);
+            const WireCopySliceProbeVerdict verdict = EvaluateWireCopySliceProbe(measurement);
+            MGLOG_I("Driver POST: slice copy probe verdict=%s: %s", WireCopySliceProbeVerdictName(verdict),
+                    DescribeWireCopySliceProbe(measurement).c_str());
+            if (verdict != WireCopySliceProbeVerdict::CrossFormatSlicesDropped) return std::nullopt;
+            String detail =
+                "a vkCmdCopyImage region between a 2D array and a 3D image of DIFFERENT (size-compatible) "
+                "formats moves only its first slice, while the same copy as one region per slice is exact: ";
+            detail += DescribeWireCopySliceProbe(measurement);
+            detail +=
+                ". Magma splits such glCopyImageSubData calls one slice per region "
+                "(MOBILEGL_MAGMA_SPLIT_SLICE_COPIES=0 turns it off)";
+            return DriverBugFinding{"Cross-format 2D-array <-> 3D image copies drop slices",
+                                    DriverBugVerdict::Fixed, Move(detail)};
+        }
         using VulkanDriverBugProbeFn = Optional<DriverBugFinding> (*)(const VulkanDriverBugProbeContext&);
         constexpr VulkanDriverBugProbeFn kVulkanDriverBugProbes[] = {
             &ProbeDepthStencilResolvePassBug,
+            &ProbeE5TransferReadNormalizeBug,
+            &ProbeCrossFormatSliceCopyBug,
         };
     } // namespace
 

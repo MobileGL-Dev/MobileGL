@@ -733,6 +733,8 @@ list(APPEND SOURCE_FILES
     # arms and the probe that measures the first against the second, shared by the
     # renderer's bring-up and the Vulkan POST.
     MobileGL/MG_Backend/DirectVulkan/Renderer/WireDepthResolveProbe.cpp
+    MobileGL/MG_Backend/DirectVulkan/Renderer/WireE5RawCopy.cpp
+    MobileGL/MG_Backend/DirectVulkan/Renderer/WireCopySliceProbe.cpp
     # P5 b1: the block-granularity persistent-map push the record arm makes mandatory (T2).
     MobileGL/MG_State/GLState/BufferState/PersistentMapTracker.cpp
     # P13 W5: the verb emitters and the monolith verb port, and the client GPU-write set
