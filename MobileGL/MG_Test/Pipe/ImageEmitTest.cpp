@@ -609,9 +609,10 @@ void main() { imageStore(img, ivec2(0, 0), vec4(1.0)); }
 
     // GL 4.6 core 8.26: a level the texture does not have as a complete image - here a mutable
     // texture with only level 0 defined and the default MAX_LEVEL, bound at level 2 - is an
-    // invalid access, so the unit travels EMPTY and the backend binds no image (loads read zero,
-    // stores are dropped). The same texture bound at its base level stays a real binding.
-    TEST(ImageEmit, AnIncompleteLevelTravelsAsAnEmptyUnit) {
+    // invalid access, so the unit travels with level kMGPipeImageLevelNone and the backend binds
+    // a stand-in (loads read zero, stores are dropped). The same texture bound at its base level
+    // stays a real binding.
+    TEST(ImageEmit, AnIncompleteLevelTravelsWithNoLevel) {
         EmitterScope scope;
         const GLuint program = MakeComputeProgram(kImageCompute);
         GL::UseProgram(program);
@@ -624,12 +625,14 @@ void main() { imageStore(img, ivec2(0, 0), vec4(1.0)); }
         ASSERT_TRUE(Ctx().GetImageTextureBinding(1).Texture != nullptr) << "the bind itself is legal";
         Emitter().EmitShaderImages(Ctx());
         ASSERT_GE(Emitter().Window(), 2u);
-        EXPECT_TRUE(MGPipeHandleIsNull(Emitter().LastImageViews()[1].Res))
+        EXPECT_FALSE(MGPipeHandleIsNull(Emitter().LastImageViews()[1].Res))
+            << "the texture still names the stand-in's shape";
+        EXPECT_EQ(Emitter().LastImageViews()[1].Level, kMGPipeImageLevelNone)
             << "an undefined, mip-incomplete level must not reach the backend as an image";
 
         GL::BindImageTexture(1, name, 0, GL_FALSE, 0, GL_READ_WRITE, GL_RGBA8);
         Emitter().EmitShaderImages(Ctx());
-        EXPECT_FALSE(MGPipeHandleIsNull(Emitter().LastImageViews()[1].Res))
+        EXPECT_EQ(Emitter().LastImageViews()[1].Level, 0u)
             << "the base level is base-complete and must stay bound";
         GL::UseProgram(0);
         GL::BindImageTexture(1, 0, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA8);

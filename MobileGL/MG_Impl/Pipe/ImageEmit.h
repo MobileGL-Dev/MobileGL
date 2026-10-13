@@ -77,8 +77,10 @@ namespace MobileGL::MG_Pipe {
     // units ignore the sampler, so "complete" here is the level's own: the base level needs
     // base-level completeness and any other level a complete mip chain up to it, the reading
     // the conformance suite applies (a mutable texture with only level 0 defined, bound at
-    // level 2). Such a binding travels as an EMPTY unit, which both backends already answer
-    // with "no image" - an ES driver would otherwise happily address the undefined level.
+    // level 2). Such a binding travels with its texture and level kMGPipeImageLevelNone, which
+    // both backends answer with a stand-in of the texture's shape that reads zero - an ES driver
+    // would otherwise happily address the undefined level, and an EMPTY ES unit reads alpha 1 on
+    // Adreno where GL says 0.
     inline Bool MGPipeImageBindingIsAccessible(const MG_State::GLState::ImageTextureBinding& binding) {
         using namespace MG_State::GLState;
         const ITextureObject* texture = binding.Texture.get();
@@ -158,7 +160,7 @@ namespace MobileGL::MG_Pipe {
                 MGPImageView& entry = m_entries[unit];
                 entry = MGPImageView{};
                 entry.Unit = unit;
-                entry.Res = MGPipeImageBindingIsAccessible(binding)
+                entry.Res = binding.Texture != nullptr
                                 ? MGPipeSlots().Acquire(MGPipeKind::Texture, binding.Texture->GetLifetimeId())
                                 : kMGPipeNullHandle;
                 // D-A4: a texture named in an emitted MGPImageView is SHADER-IMAGE-bound from
@@ -176,7 +178,8 @@ namespace MobileGL::MG_Pipe {
                 // that would be answering a driver question from the wrong side.
                 entry.InternalFormat = static_cast<Uint32>(binding.Format);
                 entry.Layer = static_cast<Uint32>(binding.Layer);
-                entry.Level = static_cast<Uint16>(binding.Level);
+                entry.Level = MGPipeImageBindingIsAccessible(binding) ? static_cast<Uint16>(binding.Level)
+                                                                       : kMGPipeImageLevelNone;
                 entry.Layered = binding.Layered != GL_FALSE ? 1 : 0;
                 entry.Access = static_cast<Uint8>(MGPipeEncodeImageAccess(binding.Access));
             }

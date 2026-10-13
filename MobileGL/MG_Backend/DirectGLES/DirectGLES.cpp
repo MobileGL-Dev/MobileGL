@@ -2819,6 +2819,144 @@ namespace MobileGL::MG_Backend::DirectGLES {
                    static_cast<TextureStorageType>(record->Desc.StorageKind) == TextureStorageType::Buffer;
         }
 
+        // GL 4.6 core 8.26: an access through an image unit whose texture does not HAVE the
+        // (level, layer) the unit names is INVALID - a load returns zero, a store does nothing,
+        // and neither is an error. The ES storage behind such a unit may well have that level
+        // (a mutable texture's storage is allocated for its whole chain the first time it is
+        // image-bound), and the driver would read whatever that undefined level holds. The
+        // client sends the bindings GL calls incomplete with level kMGPipeImageLevelNone
+        // (KHR-GL46.shader_image_load_store.incomplete_textures binds level 2 of a texture that
+        // defines only level 0); a level or layer past the storage is caught here. Decided from
+        // the applier's records alone, by the same walk the Vulkan backend makes
+        // (VkTextureManager::ResolveWireTextureStorage): through texture views to the root,
+        // against each window's levels and layers.
+        static Bool ImageViewNamesNoTexel(const MG_Pipe::MGPImageView& image) {
+            using T = MG_Pipe::MGPipeResourceTarget;
+            const auto& state = MG_Pipe::MGPipeApplier();
+            MG_Pipe::MGPipeHandle handle = image.Res;
+            if (MG_Pipe::MGPipeHandleIsNull(handle) || handle.Slot >= state.TextureResources.size()) return false;
+            const auto& first = state.TextureResources[handle.Slot];
+            if (!first.Live || first.Gen != handle.Gen) return false;
+            // GL ignores Layer for a target with no layers, and for a layered bind.
+            const auto firstTarget = static_cast<T>(first.Desc.Target);
+            const Bool selectsLayer = !image.Layered &&
+                (firstTarget == T::Tex1DArray || firstTarget == T::Tex2DArray || firstTarget == T::Tex2DMSArray ||
+                 firstTarget == T::Tex3D || firstTarget == T::TexCube || firstTarget == T::TexCubeArray);
+            Uint32 level = image.Level;
+            Uint32 layer = selectsLayer ? image.Layer : 0;
+            for (SizeT hop = 0; hop <= state.TextureResources.size(); ++hop) {
+                if (MG_Pipe::MGPipeHandleIsNull(handle) || handle.Slot >= state.TextureResources.size()) return false;
+                const auto& record = state.TextureResources[handle.Slot];
+                if (!record.Live || record.Gen != handle.Gen) return false;
+                if (MG_Pipe::MGPipeHandleIsNull(record.Desc.ViewOf)) {
+                    if (static_cast<T>(record.Desc.Target) == T::TexBuffer) return false;
+                    if (level >= record.Desc.Levels) return true;
+                    const Uint32 layers = static_cast<T>(record.Desc.Target) == T::Tex3D
+                                              ? std::max(record.Desc.Depth >> level, 1u)
+                                              : std::max<Uint32>(record.Desc.ArrayLayers, 1u);
+                    return layer >= layers;
+                }
+                const auto viewHandle = record.ViewCso;
+                if (MG_Pipe::MGPipeHandleIsNull(viewHandle) || viewHandle.Slot >= state.SamplerViewCsos.size())
+                    return false;
+                const auto& viewRecord = state.SamplerViewCsos[viewHandle.Slot];
+                const auto& view = viewRecord.View;
+                if (!viewRecord.Live || viewRecord.Gen != viewHandle.Gen || view.Texture != handle) return false;
+                if (level >= view.NumLevels || layer >= view.NumLayers) return true;
+                level += view.MinLevel;
+                layer += view.MinLayer;
+                handle = record.Desc.ViewOf;
+            }
+            return false;
+        }
+
+        // What such a unit is bound to instead. An EMPTY ES unit is not enough: ES 3.2 8.22 leaves
+        // an invalid load's alpha undefined, and Adreno answers 1 where GL says 0. A texel outside
+        // a level is invalid too, and that Adreno answers (0, 0, 0, 0) with the store dropped - so
+        // the unit gets a 1x1 texture of the shape and format the bind names, cleared to zero each
+        // time it is bound. Only texel (0, 0[, 0]) of it exists; it is private to the unit, so a
+        // store through one invalid unit cannot reach a load through another. Every context of the
+        // process shares one group (CreateContextTuple), so one set serves them all.
+        struct InvalidImagePlaceholder {
+            GLuint Id = 0;
+            GLenum Target = 0;
+            GLenum InternalFormat = 0;
+        };
+        static Array<InvalidImagePlaceholder, MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS>
+            g_invalidImagePlaceholders{};
+
+        // Zero when the shape has no 1x1 ES form (multisample, buffer) or the driver refused it;
+        // the caller then leaves the unit empty, which is right for every channel but alpha.
+        static GLuint EnsureInvalidImagePlaceholder(Uint unit, TextureTarget textureTarget, GLenum internalFormat) {
+            GLenum target = 0;
+            GLsizei depth = 1;
+            switch (TextureImpl::MapToBackendTextureTarget(textureTarget)) {
+            case TextureTarget::Texture2D: target = GL_TEXTURE_2D; break;
+            case TextureTarget::Texture2DArray: target = GL_TEXTURE_2D_ARRAY; break;
+            case TextureTarget::Texture3D: target = GL_TEXTURE_3D; break;
+            case TextureTarget::TextureCubeMap: target = GL_TEXTURE_CUBE_MAP; break;
+            case TextureTarget::TextureCubeMapArray: target = GL_TEXTURE_CUBE_MAP_ARRAY; depth = 6; break;
+            default: return 0;
+            }
+            GLenum format = 0, type = 0;
+            MG_Util::TextureFormatProcessor::NormalizePixelFormat(internalFormat, Flags<PixelFormatNormalizeOptionBit>{},
+                                                                  nullptr, &format, &type);
+            if (format == 0 || type == 0) return 0;
+            InvalidImagePlaceholder& slot = g_invalidImagePlaceholders[unit];
+            if (slot.Id != 0 && (slot.Target != target || slot.InternalFormat != internalFormat)) {
+                g_GLESFuncs.glDeleteTextures(1, &slot.Id);
+                slot = {};
+            }
+            GLint previous = 0;
+            const GLenum bindingQuery = target == GL_TEXTURE_2D ? GL_TEXTURE_BINDING_2D
+                : target == GL_TEXTURE_2D_ARRAY ? GL_TEXTURE_BINDING_2D_ARRAY
+                : target == GL_TEXTURE_3D ? GL_TEXTURE_BINDING_3D
+                : target == GL_TEXTURE_CUBE_MAP ? GL_TEXTURE_BINDING_CUBE_MAP
+                : GL_TEXTURE_BINDING_CUBE_MAP_ARRAY;
+            g_GLESFuncs.glGetIntegerv(bindingQuery, &previous);
+            DebugImpl::ErrorLopper::Clear();
+            if (slot.Id == 0) {
+                g_GLESFuncs.glGenTextures(1, &slot.Id);
+                g_GLESFuncs.glBindTexture(target, slot.Id);
+                if (depth > 1 || target == GL_TEXTURE_2D_ARRAY || target == GL_TEXTURE_3D) {
+                    g_GLESFuncs.glTexStorage3D(target, 1, internalFormat, 1, 1, depth);
+                } else {
+                    g_GLESFuncs.glTexStorage2D(target, 1, internalFormat, 1, 1);
+                }
+                slot.Target = target;
+                slot.InternalFormat = internalFormat;
+            } else {
+                g_GLESFuncs.glBindTexture(target, slot.Id);
+            }
+            // Six faces of the widest texel (rgba32) is the most any shape here holds.
+            static constexpr Uint8 kZeros[6 * 16] = {};
+            // The backend unpack state rests at the ES default (Managers.cpp
+            // ScopedDefaultUnpackState), and a single row ignores the alignment.
+            BufferImpl::BindPixelUnpackBufferId(0);
+            if (target == GL_TEXTURE_CUBE_MAP) {
+                for (GLenum face = 0; face < 6; ++face)
+                    g_GLESFuncs.glTexSubImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + face, 0, 0, 0, 1, 1, format, type,
+                                                kZeros);
+            } else if (target == GL_TEXTURE_2D) {
+                g_GLESFuncs.glTexSubImage2D(target, 0, 0, 0, 1, 1, format, type, kZeros);
+            } else {
+                g_GLESFuncs.glTexSubImage3D(target, 0, 0, 0, 0, 1, 1, depth, format, type, kZeros);
+            }
+            g_GLESFuncs.glBindTexture(target, static_cast<GLuint>(previous));
+            Bool failed = false;
+            DebugImpl::ErrorLopper::Loop([&failed, internalFormat](GLenum err) {
+                failed = true;
+                MGLOG_D("DirectGLES: invalid-image placeholder (%s) refused: %s",
+                        MG_Util::ConvertGLEnumToString(internalFormat).c_str(),
+                        MG_Util::ConvertGLEnumToString(err).c_str());
+            });
+            if (failed) {
+                g_GLESFuncs.glDeleteTextures(1, &slot.Id);
+                slot = {};
+            }
+            return slot.Id;
+        }
+
         // The record form. `Res` is the texture, the four well-defined fields are the record's,
         // Access is decoded, and the texture's own TARGET and STORAGE FORMAT - the two
         // properties the bind rules need and MGPImageView has no room for (24 bytes, no pad) -
@@ -2847,6 +2985,21 @@ namespace MobileGL::MG_Backend::DirectGLES {
                              "resource record; unbinding the unit",
                              static_cast<unsigned>(unit), view.Res.Slot, view.Res.Gen);
                 g_GLESFuncs.glBindImageTexture(unit, 0, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA8);
+                return;
+            }
+            if (ImageViewNamesNoTexel(view)) {
+                // The format the shader was widened from is the one the application bound, so
+                // the placeholder takes that format's carrier, as the storage would have.
+                GLenum format = static_cast<GLenum>(view.InternalFormat);
+                if (const auto widening = TextureImpl::GetImageBindableStorageWidening(
+                        MG_Util::ConvertGLEnumToTextureInternalFormat(format))) {
+                    format = widening.InternalFormat;
+                }
+                const GLuint placeholder =
+                    EnsureInvalidImagePlaceholder(unit, PipeTextureTargetForHandle(view.Res), format);
+                const GLboolean layered = placeholder != 0 && view.Layered != 0 ? GL_TRUE : GL_FALSE;
+                g_GLESFuncs.glBindImageTexture(unit, placeholder, 0, layered, 0, GLAccessForImageView(view),
+                                               placeholder != 0 ? format : GL_RGBA8);
                 return;
             }
             const auto textureFormat = static_cast<TextureInternalFormat>(resource->Desc.InternalFormat);

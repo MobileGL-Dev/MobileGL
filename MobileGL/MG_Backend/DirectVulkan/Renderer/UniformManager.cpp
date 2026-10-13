@@ -121,9 +121,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     // to find a texel's storage, and from that walk's "not there" answer ONLY: a null for any
     // other reason (a dead record, a stale view CSO) stays the descriptor resolve's refusal.
     //
-    // NOT DECIDED HERE, deliberately: a level that IS in storage but lies outside
-    // [BASE_LEVEL, MAX_LEVEL], or of a texture that is not mipmap-complete. The monolith arm
-    // binds those as it finds them too, and the P7 gate 5 comparison is against that arm.
+    // A level that IS in storage but lies outside [BASE_LEVEL, MAX_LEVEL], or of a texture that
+    // is not mipmap-complete, is decided by the client, which sends it as
+    // kMGPipeImageLevelNone - a level no texture has, so this walk answers it too.
     static Bool WireShaderImageNamesNoTexel(VkTextureManager& textures, const MG_Pipe::MGPImageView& image) {
         const auto& state = MG_Pipe::MGPipeApplier();
         if (MG_Pipe::MGPipeHandleIsNull(image.Res) || image.Res.Slot >= state.TextureResources.size()) return false;

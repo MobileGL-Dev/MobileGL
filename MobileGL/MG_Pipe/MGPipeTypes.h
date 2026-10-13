@@ -993,6 +993,12 @@ namespace MobileGL::MG_Pipe {
     };
     MGP_ASSERT_POD(MGPImageView, 24);
 
+    // MGPImageView::Level of a binding GL 4.6 core 8.26 calls INVALID (an incomplete level, one
+    // outside [BASE_LEVEL, MAX_LEVEL], a level the texture does not have): Res still names the
+    // texture, so a backend can shape the stand-in it binds after it, and no texture has this
+    // level, so every "is that texel there" walk answers no.
+    inline constexpr Uint16 kMGPipeImageLevelNone = 0xFFFF;
+
     struct MGPShaderImages {
         Uint32 Start, Count;
         Uint64 ContentHash;
