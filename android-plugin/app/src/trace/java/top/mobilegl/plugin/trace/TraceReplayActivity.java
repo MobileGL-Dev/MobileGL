@@ -173,9 +173,7 @@ public final class TraceReplayActivity extends Activity {
                 request.avoidAngleLlvmpipeSamplerMipmapMinFilter,
                 request.avoidAngleLlvmpipeExplicitLodBias,
                 request.coherentAsFlush,
-                request.fixIterationRPSubgroupScratch,
-                request.deriveNumSubgroups,
-                request.iterationRPFixBarrier,
+                request.iterationRPFix,
                 request.texture2dDumps,
                 request.benchmark,
                 request.benchmarkTailFrames,
@@ -210,9 +208,7 @@ public final class TraceReplayActivity extends Activity {
             boolean avoidAngleLlvmpipeSamplerMipmapMinFilter,
             boolean avoidAngleLlvmpipeExplicitLodBias,
             boolean coherentAsFlush,
-            boolean fixIterationRPSubgroupScratch,
-            boolean deriveNumSubgroups,
-            boolean iterationRPFixBarrier,
+            boolean iterationRPFix,
             String texture2dDumps,
             boolean benchmark,
             int benchmarkTailFrames,
@@ -340,9 +336,7 @@ public final class TraceReplayActivity extends Activity {
         final boolean avoidAngleLlvmpipeSamplerMipmapMinFilter;
         final boolean avoidAngleLlvmpipeExplicitLodBias;
         final boolean coherentAsFlush;
-        final boolean fixIterationRPSubgroupScratch;
-        final boolean deriveNumSubgroups;
-        final boolean iterationRPFixBarrier;
+        final boolean iterationRPFix;
         final String texture2dDumps;
         // Benchmark (frame-timing) mode. Replays the whole trace, times every frame
         // boundary, and skips the snapshot and the SSIM comparison; "passed" then only
@@ -377,9 +371,7 @@ public final class TraceReplayActivity extends Activity {
                 boolean avoidAngleLlvmpipeSamplerMipmapMinFilter,
                 boolean avoidAngleLlvmpipeExplicitLodBias,
                 boolean coherentAsFlush,
-                boolean fixIterationRPSubgroupScratch,
-                boolean deriveNumSubgroups,
-                boolean iterationRPFixBarrier,
+                boolean iterationRPFix,
                     String texture2dDumps,
                 boolean benchmark,
                 int benchmarkTailFrames,
@@ -408,9 +400,7 @@ public final class TraceReplayActivity extends Activity {
             this.avoidAngleLlvmpipeSamplerMipmapMinFilter = avoidAngleLlvmpipeSamplerMipmapMinFilter;
             this.avoidAngleLlvmpipeExplicitLodBias = avoidAngleLlvmpipeExplicitLodBias;
             this.coherentAsFlush = coherentAsFlush;
-            this.fixIterationRPSubgroupScratch = fixIterationRPSubgroupScratch;
-            this.deriveNumSubgroups = deriveNumSubgroups;
-            this.iterationRPFixBarrier = iterationRPFixBarrier;
+            this.iterationRPFix = iterationRPFix;
             this.texture2dDumps = texture2dDumps;
             this.benchmark = benchmark;
             this.benchmarkTailFrames = benchmarkTailFrames;
@@ -463,9 +453,7 @@ public final class TraceReplayActivity extends Activity {
                     intent.getBooleanExtra("avoid_angle_llvmpipe_sampler_mipmap_min_filter", false),
                     intent.getBooleanExtra("avoid_angle_llvmpipe_explicit_lod_bias", false),
                     intent.getBooleanExtra("coherent_as_flush", false),
-                    intent.getBooleanExtra("fix_iterationrp_subgroup_scratch", false),
-                    intent.getBooleanExtra("derive_num_subgroups", false),
-                    intent.getBooleanExtra("iterationrp_fix_barrier", false),
+                    intent.getBooleanExtra("itrp_fix", false),
                     readString(intent, "texture_2d_dumps", ""),
                     intent.getBooleanExtra("benchmark", false),
                     intent.getIntExtra("benchmark_tail_frames", 200),

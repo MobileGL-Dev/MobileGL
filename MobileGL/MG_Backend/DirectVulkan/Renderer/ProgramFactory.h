@@ -489,7 +489,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // repair passes patch modules AROUND them, and the emulation only replaces them
         // on opted-in devices with no subgroup support at all.
         struct SubgroupLoweringPolicy {
-            Bool emulateSubgroups = false;      // MOBILEGL_MAGMA_EMULATE_SUBGROUP, no-native-support devices
+            Bool emulateSubgroups = false;      // no-native-support devices, or MOBILEGL_SUBGROUP_EMULATION
             Bool fixIterationRPSubgroupScratch = false; // patch iterationRP's under-declared scratch
             Bool fixIterationRPBarrier = false; // repair Program 203's shared-scratch race
             Bool deriveNumSubgroups = false;    // repair the NumSubgroups builtin

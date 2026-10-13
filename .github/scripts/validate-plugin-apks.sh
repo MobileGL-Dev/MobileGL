@@ -44,7 +44,7 @@ require 'key:MOBILEGL_BACKEND_TYPE' "$plugin_resource_text" 'V2 backend variable
 require 'defaultValue:DirectGLES' "$plugin_resource_text" 'V2 DirectGLES default'
 require 'DirectVulkan' "$plugin_resource_text" 'V2 DirectVulkan option'
 require 'key:MOBILEGL_DISABLE_TIMERQUERY' "$plugin_resource_text" 'V2 timer-query toggle'
-require 'key:MOBILEGL_MAGMA_DISABLE_SUBGROUP' "$plugin_resource_text" 'V2 Vulkan subgroup toggle'
+require 'key:MOBILEGL_SUBGROUP_EMULATION' "$plugin_resource_text" 'V2 subgroup emulation setting'
 require 'key:MOBILEGL_MAGMA_R11G11B10F_FALLBACK' "$plugin_resource_text" 'V2 Magma format fallback toggle'
 require 'key:MOBILEGL_FRAMES_IN_FLIGHT' "$plugin_resource_text" 'V2 frames-in-flight setting'
 require 'key:MOBILEGL_ESPRYT_AVOID_SAMPLER_MIPMAP_MIN_FILTER' "$plugin_resource_text" 'V2 sampler workaround toggle'

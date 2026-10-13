@@ -162,9 +162,8 @@ TEST_F(ProgramTest, CompileFragment) {
     CompileShader(fs);
 }
 
-TEST_F(ProgramTest, CompileVoxySubgroupProbeShader) {
-    char infoLog[1024] = "";
-    const char* csSrc = R"(#version 430
+namespace {
+    const char* const kVoxySubgroupProbe = R"(#version 430
 #extension GL_KHR_shader_subgroup_basic : require
 #extension GL_KHR_shader_subgroup_arithmetic : require
 layout(local_size_x=32) in;
@@ -173,14 +172,48 @@ void main() {
 }
 )";
 
-    GLuint cs = CreateShader(GL_COMPUTE_SHADER);
-    ShaderSource(cs, 1, &csSrc, nullptr);
-    CompileShader(cs);
+    GLint CompileStatusOf(GLenum stage, const char* source, String& infoLog) {
+        GLuint shader = CreateShader(stage);
+        ShaderSource(shader, 1, &source, nullptr);
+        CompileShader(shader);
+        GLint compileStatus = GL_FALSE;
+        GetShaderiv(shader, GL_COMPILE_STATUS, &compileStatus);
+        char log[1024] = "";
+        GetShaderInfoLog(shader, sizeof(log), nullptr, log);
+        infoLog = log;
+        DeleteShader(shader);
+        return compileStatus;
+    }
+} // namespace
 
-    GLint compileStatus = GL_FALSE;
-    GetShaderiv(cs, GL_COMPILE_STATUS, &compileStatus);
-    GetShaderInfoLog(cs, sizeof(infoLog), nullptr, infoLog);
-    EXPECT_EQ(compileStatus, GL_TRUE) << infoLog;
+// A `#extension GL_KHR_shader_subgroup_* : require` compiles exactly where the active backend
+// offers that feature in that stage: against native compute subgroups with arithmetic it does;
+// against a backend advertising no subgroups at all (no native support, emulation forced off) the
+// frontend refuses it, rather than accepting a shader the backend would then fail on.
+TEST_F(ProgramTest, CompileVoxySubgroupProbeShader) {
+    auto previousBackend = Move(MG_Backend::pActiveBackendObject);
+    const auto savedEmulation = MG_Config::Features.SubgroupEmulation;
+    auto backend = MakeUnique<MG_Backend::DirectVulkan::BackendObject_DirectVulkan>();
+    auto* backendPtr = backend.get();
+    MG_Backend::pActiveBackendObject = Move(backend);
+    String infoLog;
+
+    MG_External::VulkanCapabilities nativeCaps;
+    nativeCaps.SupportsShaderSubgroup = true;
+    nativeCaps.SubgroupSize = 64;
+    nativeCaps.SubgroupSupportedStages = VK_SHADER_STAGE_COMPUTE_BIT;
+    nativeCaps.SubgroupSupportedOperations = VK_SUBGROUP_FEATURE_BASIC_BIT | VK_SUBGROUP_FEATURE_ARITHMETIC_BIT;
+    backendPtr->ApplyVulkanCapabilitiesForTesting(nativeCaps);
+    EXPECT_EQ(CompileStatusOf(GL_COMPUTE_SHADER, kVoxySubgroupProbe, infoLog), GL_TRUE) << infoLog;
+
+    MG_Config::Features.SubgroupEmulation = MG_Config::QuirkOverride::ForceOff;
+    MG_External::VulkanCapabilities noCaps;
+    backendPtr->ApplyVulkanCapabilitiesForTesting(noCaps);
+    EXPECT_EQ(CompileStatusOf(GL_COMPUTE_SHADER, kVoxySubgroupProbe, infoLog), GL_FALSE);
+    EXPECT_NE(infoLog.find("is not available to this shader stage"), String::npos) << infoLog;
+
+    MG_Config::Features.SubgroupEmulation = savedEmulation;
+    MG_Backend::pActiveBackendObject = Move(previousBackend);
 }
 
 TEST_F(ProgramTest, CompileVoxyGpuShaderInt64QuadDecode) {

@@ -368,9 +368,7 @@ if (MOBILEGL_ITEST_VK_ICD)
     if (MOBILEGL_ITEST_VK_ICD MATCHES "lvp_icd|lavapipe")
         message(STATUS "Integration tests: lavapipe ICD - forcing the iterationRP repairs on")
         list(APPEND MGL_ITEST_VULKAN_ENV
-            "MOBILEGL_MAGMA_FIX_ITERATIONRP_SUBGROUP_SCRATCH=1"
-            "MOBILEGL_MAGMA_DERIVE_NUM_SUBGROUPS=1"
-            "MOBILEGL_MAGMA_ITERATIONRP_FIX_BARRIER=1")
+            "MOBILEGL_ITRP_FIX=ForceOn")
     endif()
 endif()
 

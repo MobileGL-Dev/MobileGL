@@ -444,9 +444,7 @@ jobs:
         # crash stack without burning a CI round on an in-workflow debugger.
         env:
           MOBILEGL_ITEST_REQUIRE_GPU: "1"
-          MOBILEGL_MAGMA_FIX_ITERATIONRP_SUBGROUP_SCRATCH: "1"
-          MOBILEGL_MAGMA_DERIVE_NUM_SUBGROUPS: "1"
-          MOBILEGL_MAGMA_ITERATIONRP_FIX_BARRIER: "1"
+          MOBILEGL_ITRP_FIX: "ForceOn"
         run: |
           ulimit -c unlimited
           if [ "$MOBILEGL_CI_NATIVE_GPU" != 1 ] && [ ! -f /.dockerenv ]; then sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'; fi
@@ -771,9 +769,7 @@ jobs:
         # `integration`, unverified, and P2 can take it once the comparator's cost is known.
         env:
           MOBILEGL_ITEST_REQUIRE_GPU: "1"
-          MOBILEGL_MAGMA_FIX_ITERATIONRP_SUBGROUP_SCRATCH: "1"
-          MOBILEGL_MAGMA_DERIVE_NUM_SUBGROUPS: "1"
-          MOBILEGL_MAGMA_ITERATIONRP_FIX_BARRIER: "1"
+          MOBILEGL_ITRP_FIX: "ForceOn"
         run: |
           ulimit -c unlimited
           if [ "$MOBILEGL_CI_NATIVE_GPU" != 1 ] && [ ! -f /.dockerenv ]; then sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'; fi
@@ -859,9 +855,7 @@ jobs:
         working-directory: build-verify
         env:
           MOBILEGL_ITEST_REQUIRE_GPU: "1"
-          MOBILEGL_MAGMA_FIX_ITERATIONRP_SUBGROUP_SCRATCH: "1"
-          MOBILEGL_MAGMA_DERIVE_NUM_SUBGROUPS: "1"
-          MOBILEGL_MAGMA_ITERATIONRP_FIX_BARRIER: "1"
+          MOBILEGL_ITRP_FIX: "ForceOn"
         run: |
           ulimit -c unlimited
           if [ "$MOBILEGL_CI_NATIVE_GPU" != 1 ] && [ ! -f /.dockerenv ]; then sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'; fi
@@ -1635,9 +1629,7 @@ jobs:
         working-directory: build-split
         env:
           MOBILEGL_ITEST_REQUIRE_GPU: "1"
-          MOBILEGL_MAGMA_FIX_ITERATIONRP_SUBGROUP_SCRATCH: "1"
-          MOBILEGL_MAGMA_DERIVE_NUM_SUBGROUPS: "1"
-          MOBILEGL_MAGMA_ITERATIONRP_FIX_BARRIER: "1"
+          MOBILEGL_ITRP_FIX: "ForceOn"
         run: |
           ulimit -c unlimited
           if [ "$MOBILEGL_CI_NATIVE_GPU" != 1 ] && [ ! -f /.dockerenv ]; then sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'; fi
@@ -2913,9 +2905,7 @@ jobs:
           fi
           if [ '${{ matrix.backend }}' = 'DirectVulkan' ] \
              && [ '${{ matrix.case }}' = 'minecraft-1.21.4-fabric-iris-iterationrp-in-world' ]; then
-            export MOBILEGL_MAGMA_FIX_ITERATIONRP_SUBGROUP_SCRATCH=1
-            export MOBILEGL_MAGMA_DERIVE_NUM_SUBGROUPS=1
-            export MOBILEGL_MAGMA_ITERATIONRP_FIX_BARRIER=1
+            export MOBILEGL_ITRP_FIX=ForceOn
           fi
           # The blended depth-write quirk auto-enables only on Qualcomm, which no CI
           # runner has, so force it on for the OIT case it exists to fix. ForceOn
@@ -3388,9 +3378,7 @@ jobs:
           # and two runs that differ in a quirk knob are not.
           if [ '${{ matrix.backend }}' = 'DirectVulkan' ] \
              && [ '${{ matrix.case }}' = 'minecraft-1.21.4-fabric-iris-iterationrp-in-world' ]; then
-            echo "MOBILEGL_MAGMA_FIX_ITERATIONRP_SUBGROUP_SCRATCH=1" >> "${GITHUB_ENV}"
-            echo "MOBILEGL_MAGMA_DERIVE_NUM_SUBGROUPS=1" >> "${GITHUB_ENV}"
-            echo "MOBILEGL_MAGMA_ITERATIONRP_FIX_BARRIER=1" >> "${GITHUB_ENV}"
+            echo "MOBILEGL_ITRP_FIX=ForceOn" >> "${GITHUB_ENV}"
           fi
 
       - name: Retrace and validate (${{ matrix.transport }})

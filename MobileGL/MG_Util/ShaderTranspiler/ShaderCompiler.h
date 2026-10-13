@@ -383,17 +383,21 @@ namespace MobileGL {
                                                         Vector<uint32_t>& outputBinary,
                                                         bool enableSpirvValidation = false);
                 // Lowers every GL_KHR_shader_subgroup construct in a compute module onto a
-                // 32-lane virtual subgroup built from workgroup-shared memory. Last-resort
-                // path for devices with NO native subgroup support, opt-in via
-                // MOBILEGL_MAGMA_EMULATE_SUBGROUP=1; a device with native subgroup
-                // operations always uses them. maxWorkgroupScratchBytes bounds the shared
+                // 32-lane virtual subgroup built from workgroup-shared memory - what either
+                // backend runs on a driver with NO native subgroup support (or under
+                // MOBILEGL_SUBGROUP_EMULATION=ForceOn); the module is generic SPIR-V, consumed by
+                // DirectVulkan and transpiled to ESSL by DirectGLES alike.
+                // maxWorkgroupScratchBytes bounds the shared
                 // scratch the lowering may add (pass the device's
                 // maxComputeSharedMemorySize; 0 falls back to the 16384-byte Vulkan
-                // minimum). See EmulateSubgroupsPass.
+                // minimum). atomicScratchReads reads the scratch back through atomic loads,
+                // for a driver whose plain shared-memory loads go stale across barrier()
+                // (SelfTest::SharedMemoryLoadsGoStale). See EmulateSubgroupsPass.
                 static bool EmulateSubgroupsForVulkan(const Vector<Uint32>& inputBinary,
                                                       Vector<uint32_t>& outputBinary,
                                                       Uint32 maxWorkgroupScratchBytes,
-                                                      bool enableSpirvValidation = false);
+                                                      bool enableSpirvValidation = false,
+                                                      bool atomicScratchReads = false);
                 // Grows iterationRP's under-declared gl_SubgroupID-indexed scratch to the
                 // subgroup count the device actually partitions into, fingerprint-gated to
                 // that pack's reduction idiom; every other module - and every device whose

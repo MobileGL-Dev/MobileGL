@@ -637,13 +637,22 @@ namespace MobileGL {
                 std::map<uint32_t, Scratch> scratchByType;
                 const uint32_t cPadded = uintConst(paddedSlots);
                 if (cPadded == 0u) return Status::Failure;
-                const auto scratchFor = [&](uint32_t elementTypeId) -> const Scratch* {
-                    auto it = scratchByType.find(elementTypeId);
+                // `elementTypeId` is the scratch element type; with atomic scratch reads its
+                // array is instead a flat run of uint words, `wordsPerSlot` per slot (an atomic
+                // load needs a scalar integer pointer). Still one array per element type, so
+                // the types never share slots - the same aliasing as without atomic reads.
+                const auto scratchFor = [&](uint32_t elementTypeId, uint32_t wordsPerSlot) -> const Scratch* {
+                    const uint32_t key = elementTypeId;
+                    if (m_atomicScratchReads) elementTypeId = uintTypeId;
+                    auto it = scratchByType.find(key);
                     if (it != scratchByType.end()) return &it->second;
+                    const uint32_t lengthId =
+                        m_atomicScratchReads ? uintConst(paddedSlots * wordsPerSlot) : cPadded;
+                    if (lengthId == 0u) return nullptr;
                     const uint32_t arrayTypeId = irContext->TakeNextId();
                     irContext->AddType(spvtools::MakeUnique<Instruction>(
                         irContext, spv::Op::OpTypeArray, 0, arrayTypeId,
-                        Instruction::OperandList{IdOp(elementTypeId), IdOp(cPadded)}));
+                        Instruction::OperandList{IdOp(elementTypeId), IdOp(lengthId)}));
                     const uint32_t arrayPointerTypeId =
                         typeMgr->FindPointerToType(arrayTypeId, spv::StorageClass::Workgroup);
                     const uint32_t elementPointerTypeId =
@@ -656,7 +665,7 @@ namespace MobileGL {
                             {SPV_OPERAND_TYPE_STORAGE_CLASS,
                              {static_cast<uint32_t>(spv::StorageClass::Workgroup)}}}));
                     Scratch scratch{variableId, elementTypeId, elementPointerTypeId};
-                    return &scratchByType.emplace(elementTypeId, scratch).first->second;
+                    return &scratchByType.emplace(key, scratch).first->second;
                 };
 
                 // The uint-domain twin of a participating type: bools travel as 0/1 words.
@@ -691,25 +700,15 @@ namespace MobileGL {
                 if (numVirtualConstId == 0u) return Status::Failure;
 
                 // The x word of one of the five ballot-mask builtins for the calling
-                // invocation's virtual subgroup, bounded to lanes that exist (words y..w
-                // are zero at 32 lanes).
+                // invocation's virtual subgroup (words y..w are zero at 32 lanes). Defined
+                // over gl_SubgroupSize bits, NOT clipped to the lanes a partial last subgroup
+                // actually has: the masks name lane positions, and GL/Vulkan define them for
+                // every position below the subgroup size.
                 const auto emitMaskWord = [&](Emitter& em, spv::BuiltIn builtin) -> uint32_t {
                     const uint32_t index =
                         em.Emit(spv::Op::OpLoad, uintTypeId, {IdOp(liiVariableId)});
                     const uint32_t lane =
                         em.Emit(spv::Op::OpBitwiseAnd, uintTypeId, {IdOp(index), IdOp(c31)});
-                    const uint32_t base = em.Emit(spv::Op::OpBitwiseAnd, uintTypeId,
-                                                  {IdOp(index), IdOp(cNotLane)});
-                    const uint32_t tailBits =
-                        em.Emit(spv::Op::OpISub, uintTypeId, {IdOp(cTotal), IdOp(base)});
-                    const uint32_t full = em.Emit(spv::Op::OpUGreaterThanEqual, boolTypeId,
-                                                  {IdOp(tailBits), IdOp(c32)});
-                    const uint32_t tailShift = em.Emit(spv::Op::OpShiftLeftLogical, uintTypeId,
-                                                       {IdOp(c1), IdOp(tailBits)});
-                    const uint32_t tailMask =
-                        em.Emit(spv::Op::OpISub, uintTypeId, {IdOp(tailShift), IdOp(c1)});
-                    const uint32_t exists = em.Emit(spv::Op::OpSelect, uintTypeId,
-                                                    {IdOp(full), IdOp(cAllOnes), IdOp(tailMask)});
                     const auto lowMaskThroughLane = [&](bool inclusive) -> uint32_t {
                         if (!inclusive) {
                             const uint32_t bit = em.Emit(spv::Op::OpShiftLeftLogical, uintTypeId,
@@ -748,7 +747,7 @@ namespace MobileGL {
                     default:
                         return 0u;
                     }
-                    return em.Emit(spv::Op::OpBitwiseAnd, uintTypeId, {IdOp(word), IdOp(exists)});
+                    return word;
                 };
 
                 for (const BuiltinUse& use : builtinUses) {
@@ -840,22 +839,73 @@ namespace MobileGL {
                                        {IdOp(valueId), IdOp(zeros)});
                     };
 
+                    // Atomic scratch reads keep each slot as componentCount uint words; the
+                    // value crosses into that domain by bitcast (a no-op for uint data).
+                    const uint32_t wordsPerSlot = site.valueType.componentCount;
+                    const uint32_t wordTypeId = [&]() -> uint32_t {
+                        if (!m_atomicScratchReads || wordsPerSlot == 1u) return uintTypeId;
+                        const analysis::Type* registeredUint = typeMgr->GetType(uintTypeId);
+                        analysis::Vector vectorType(registeredUint, wordsPerSlot);
+                        return typeMgr->GetTypeInstruction(&vectorType);
+                    }();
+                    const bool wordsNeedBitcast = scratchType.scalarTypeId != uintTypeId;
+                    const auto wordIndex = [&](uint32_t slotId, uint32_t component) -> uint32_t {
+                        if (wordsPerSlot == 1u) return slotId;
+                        const uint32_t scaled = em.Emit(spv::Op::OpIMul, uintTypeId,
+                                                        {IdOp(slotId), IdOp(uintConst(wordsPerSlot))});
+                        return em.Emit(spv::Op::OpIAdd, uintTypeId, {IdOp(scaled), IdOp(uintConst(component))});
+                    };
+
                     const Scratch* scratch = nullptr;
                     const auto storeOwnSlot = [&](uint32_t valueId) -> bool {
-                        scratch = scratchFor(scratchType.typeId);
+                        scratch = scratchFor(scratchType.typeId, wordsPerSlot);
                         if (scratch == nullptr) return false;
-                        const uint32_t pointer =
-                            em.Emit(spv::Op::OpAccessChain, scratch->pointerTypeId,
-                                    {IdOp(scratch->variableId), IdOp(lii)});
-                        em.EmitNoResult(spv::Op::OpStore, {IdOp(pointer), IdOp(valueId)});
+                        if (!m_atomicScratchReads) {
+                            const uint32_t pointer =
+                                em.Emit(spv::Op::OpAccessChain, scratch->pointerTypeId,
+                                        {IdOp(scratch->variableId), IdOp(lii)});
+                            em.EmitNoResult(spv::Op::OpStore, {IdOp(pointer), IdOp(valueId)});
+                        } else {
+                            const uint32_t words =
+                                wordsNeedBitcast ? em.Emit(spv::Op::OpBitcast, wordTypeId, {IdOp(valueId)}) : valueId;
+                            for (uint32_t c = 0; c < wordsPerSlot; ++c) {
+                                const uint32_t word =
+                                    wordsPerSlot == 1u
+                                        ? words
+                                        : em.Emit(spv::Op::OpCompositeExtract, uintTypeId,
+                                                  {IdOp(words), {SPV_OPERAND_TYPE_LITERAL_INTEGER, {c}}});
+                                const uint32_t pointer =
+                                    em.Emit(spv::Op::OpAccessChain, scratch->pointerTypeId,
+                                            {IdOp(scratch->variableId), IdOp(wordIndex(lii, c))});
+                                em.EmitNoResult(spv::Op::OpStore, {IdOp(pointer), IdOp(word)});
+                            }
+                        }
                         barrier();
                         return true;
                     };
                     const auto readSlot = [&](uint32_t indexId) -> uint32_t {
-                        const uint32_t pointer =
-                            em.Emit(spv::Op::OpAccessChain, scratch->pointerTypeId,
-                                    {IdOp(scratch->variableId), IdOp(indexId)});
-                        return em.Emit(spv::Op::OpLoad, scratchType.typeId, {IdOp(pointer)});
+                        if (!m_atomicScratchReads) {
+                            const uint32_t pointer =
+                                em.Emit(spv::Op::OpAccessChain, scratch->pointerTypeId,
+                                        {IdOp(scratch->variableId), IdOp(indexId)});
+                            return em.Emit(spv::Op::OpLoad, scratchType.typeId, {IdOp(pointer)});
+                        }
+                        const uint32_t scopeId = uintConst(static_cast<uint32_t>(spv::Scope::Workgroup));
+                        Instruction::OperandList words;
+                        uint32_t packed = 0;
+                        for (uint32_t c = 0; c < wordsPerSlot; ++c) {
+                            const uint32_t pointer =
+                                em.Emit(spv::Op::OpAccessChain, scratch->pointerTypeId,
+                                        {IdOp(scratch->variableId), IdOp(wordIndex(indexId, c))});
+                            packed = em.Emit(spv::Op::OpAtomicLoad, uintTypeId,
+                                             {IdOp(pointer), IdOp(scopeId), IdOp(c0)});
+                            words.push_back(IdOp(packed));
+                        }
+                        if (wordsPerSlot > 1u) {
+                            packed = em.Emit(spv::Op::OpCompositeConstruct, wordTypeId, std::move(words));
+                        }
+                        return wordsNeedBitcast ? em.Emit(spv::Op::OpBitcast, scratchType.typeId, {IdOp(packed)})
+                                                : packed;
                     };
                     // A select whose condition is a scalar bool but whose values may be
                     // vectors; pre-SPIR-V-1.4 needs the condition splat to a bvec.
@@ -964,20 +1014,6 @@ namespace MobileGL {
                         default:
                             return 0u;
                         }
-                    };
-
-                    // The lanes-that-exist word for this virtual subgroup (tail handling).
-                    const auto existsWord = [&]() -> uint32_t {
-                        const uint32_t tailBits =
-                            em.Emit(spv::Op::OpISub, uintTypeId, {IdOp(cTotal), IdOp(base)});
-                        const uint32_t full = em.Emit(spv::Op::OpUGreaterThanEqual, boolTypeId,
-                                                      {IdOp(tailBits), IdOp(c32)});
-                        const uint32_t shifted = em.Emit(spv::Op::OpShiftLeftLogical, uintTypeId,
-                                                         {IdOp(c1), IdOp(tailBits)});
-                        const uint32_t mask =
-                            em.Emit(spv::Op::OpISub, uintTypeId, {IdOp(shifted), IdOp(c1)});
-                        return em.Emit(spv::Op::OpSelect, uintTypeId,
-                                       {IdOp(full), IdOp(cAllOnes), IdOp(mask)});
                     };
 
                     const auto finish = [&](uint32_t finalId) {
@@ -1190,9 +1226,11 @@ namespace MobileGL {
                                                       {IdOp(site.valueId),
                                                        {SPV_OPERAND_TYPE_LITERAL_INTEGER, {0u}}});
                         uint32_t masked = 0;
+                        // Counted over the gl_SubgroupSize (32) bits of the x word - the value is
+                        // an arbitrary uvec4, and bits of lanes a partial subgroup lacks still
+                        // count (subgroupBallotBitCount(uvec4(~0u)) == gl_SubgroupSize).
                         if (site.groupOperation == spv::GroupOperation::Reduce) {
-                            masked = em.Emit(spv::Op::OpBitwiseAnd, uintTypeId,
-                                             {IdOp(word), IdOp(existsWord())});
+                            masked = word;
                         } else {
                             const bool inclusive =
                                 site.groupOperation == spv::GroupOperation::InclusiveScan;
@@ -1227,8 +1265,8 @@ namespace MobileGL {
                         const uint32_t word = em.Emit(spv::Op::OpCompositeExtract, uintTypeId,
                                                       {IdOp(site.valueId),
                                                        {SPV_OPERAND_TYPE_LITERAL_INTEGER, {0u}}});
-                        const uint32_t masked = em.Emit(spv::Op::OpBitwiseAnd, uintTypeId,
-                                                        {IdOp(word), IdOp(existsWord())});
+                        // Over the gl_SubgroupSize (32) bits of the x word, like the bit count.
+                        const uint32_t masked = word;
                         const uint32_t instNumber =
                             site.opcode == spv::Op::OpGroupNonUniformBallotFindLSB ? kGlslFindILsb
                                                                                    : kGlslFindUMsb;
@@ -1404,9 +1442,9 @@ namespace MobileGL {
             }
 
             spvtools::Optimizer::PassToken EmulateSubgroupsPass::CreateEmulateSubgroupsPass(
-                const Uint32 maxWorkgroupScratchBytes) {
+                const Uint32 maxWorkgroupScratchBytes, const bool atomicScratchReads) {
                 return spvtools::Optimizer::PassToken(
-                    MakeUnique<EmulateSubgroupsPass>(maxWorkgroupScratchBytes));
+                    MakeUnique<EmulateSubgroupsPass>(maxWorkgroupScratchBytes, atomicScratchReads));
             }
         } // namespace ShaderTranspiler
     } // namespace MG_Util

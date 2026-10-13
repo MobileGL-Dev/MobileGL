@@ -905,17 +905,68 @@ namespace {
         return token.substr(start, end - start);
     }
 
-    void FilterUnsupportedGpuShaderInt64(const MobileGL::MG_Util::ShaderTranspiler::CompileEnv& env,
-                                         MobileGL::String& source) {
-        if (env.IsExtensionAdvertised(MobileGL::E_GL_ARB_gpu_shader_int64)) {
-            return;
+    // GL_SHADER_STAGE bit of a stage, as GL_SUBGROUP_SUPPORTED_STAGES_KHR spells it.
+    GLbitfield SubgroupStageBit(MobileGL::ShaderStage stage) {
+        switch (MobileGL::MG_Util::ConvertShaderStageToGLEnum(stage)) {
+        case GL_VERTEX_SHADER: return GL_VERTEX_SHADER_BIT;
+        case GL_TESS_CONTROL_SHADER: return GL_TESS_CONTROL_SHADER_BIT;
+        case GL_TESS_EVALUATION_SHADER: return GL_TESS_EVALUATION_SHADER_BIT;
+        case GL_GEOMETRY_SHADER: return GL_GEOMETRY_SHADER_BIT;
+        case GL_FRAGMENT_SHADER: return GL_FRAGMENT_SHADER_BIT;
+        case GL_COMPUTE_SHADER: return GL_COMPUTE_SHADER_BIT;
+        default: return 0;
         }
+    }
 
+    // The GL_SUBGROUP_FEATURE_*_BIT_KHR an extension name stands for, or 0 for a name that is
+    // not one of the eight GL_KHR_shader_subgroup_* extensions.
+    GLbitfield SubgroupFeatureBit(const MobileGL::String& name) {
+        static const std::pair<const char*, GLbitfield> kFeatures[] = {
+            {"GL_KHR_shader_subgroup_basic", GL_SUBGROUP_FEATURE_BASIC_BIT_KHR},
+            {"GL_KHR_shader_subgroup_vote", GL_SUBGROUP_FEATURE_VOTE_BIT_KHR},
+            {"GL_KHR_shader_subgroup_arithmetic", GL_SUBGROUP_FEATURE_ARITHMETIC_BIT_KHR},
+            {"GL_KHR_shader_subgroup_ballot", GL_SUBGROUP_FEATURE_BALLOT_BIT_KHR},
+            {"GL_KHR_shader_subgroup_shuffle", GL_SUBGROUP_FEATURE_SHUFFLE_BIT_KHR},
+            {"GL_KHR_shader_subgroup_shuffle_relative", GL_SUBGROUP_FEATURE_SHUFFLE_RELATIVE_BIT_KHR},
+            {"GL_KHR_shader_subgroup_clustered", GL_SUBGROUP_FEATURE_CLUSTERED_BIT_KHR},
+            {"GL_KHR_shader_subgroup_quad", GL_SUBGROUP_FEATURE_QUAD_BIT_KHR},
+        };
+        for (const auto& [featureName, bit] : kFeatures) {
+            if (name == featureName) return bit;
+        }
+        return 0;
+    }
+
+    // Whether the shader-language extension `name` is one this backend cannot honour in this
+    // stage - which is what a `#extension name : require` must then fail on, and what an
+    // `enable` must not pretend to have turned on. glslang parses desktop GLSL 4.60, where
+    // these are always available, so without this a shader would compile here and then fail
+    // (or worse, silently do nothing) at the backend:
+    //   * GL_ARB_gpu_shader_int64 when the extension is not advertised;
+    //   * any GL_KHR_shader_subgroup_* when GL_KHR_shader_subgroup is not advertised, when
+    //     this stage is not in GL_SUBGROUP_SUPPORTED_STAGES_KHR, or when that extension's
+    //     feature is not in GL_SUBGROUP_SUPPORTED_FEATURES_KHR - the KHR spec's own terms for
+    //     where each of the eight may be used. The stage and feature tests need a backend:
+    //     with none, every extension reads as available (CompileEnv::IsExtensionAdvertised).
+    bool IsUnavailableShaderExtension(const MobileGL::MG_Util::ShaderTranspiler::CompileEnv& env,
+                                      MobileGL::ShaderStage stage, const MobileGL::String& name) {
+        if (name == "GL_ARB_gpu_shader_int64") return !env.IsExtensionAdvertised(MobileGL::E_GL_ARB_gpu_shader_int64);
+        const GLbitfield feature = SubgroupFeatureBit(name);
+        if (feature == 0) return false;
+        if (!env.IsExtensionAdvertised(MobileGL::E_GL_KHR_shader_subgroup)) return true;
+        if (!env.HasBackend()) return false;
+        return (env.params.SubgroupSupportedStages & SubgroupStageBit(stage)) == 0 ||
+               (env.params.SubgroupSupportedFeatures & feature) == 0;
+    }
+
+    void FilterUnavailableShaderExtensions(const MobileGL::MG_Util::ShaderTranspiler::CompileEnv& env,
+                                           MobileGL::ShaderStage stage, MobileGL::String& source) {
         // Detect the directive on a comment/string-masked copy so a commented-out
-        // "#extension GL_ARB_gpu_shader_int64" is never turned into a synthesized #error. Comments are
-        // no longer blanked in the delivered source (glslang handles them), so this pass must mask
-        // locally like its siblings. Masking preserves offsets, so edits collected against the scan
-        // apply verbatim to `source`; they are applied back-to-front to keep earlier offsets valid.
+        // "#extension" is never turned into a synthesized #error. Comments are no longer
+        // blanked in the delivered source (glslang handles them), so this pass must mask
+        // locally like its siblings. Masking preserves offsets, so edits collected against the
+        // scan apply verbatim to `source`; they are applied back-to-front to keep earlier
+        // offsets valid.
         const MobileGL::String scan = MaskCommentsAndQuotedText(source);
         struct DirectiveEdit {
             SizeT pos;
@@ -923,6 +974,7 @@ namespace {
             MobileGL::String replacement;
         };
         Vector<DirectiveEdit> edits;
+        Vector<MobileGL::String> hiddenNames;
 
         SizeT lineStart = 0;
         while (lineStart < scan.size()) {
@@ -931,69 +983,56 @@ namespace {
             if (!hasLineBreak) {
                 lineEnd = scan.size();
             }
-
             const MobileGL::String line = scan.substr(lineStart, lineEnd - lineStart);
+            const SizeT replaceLen = lineEnd - lineStart + (hasLineBreak ? 1 : 0);
             SizeT probe = 0;
-            while (probe < line.size() && std::isspace(static_cast<unsigned char>(line[probe]))) {
-                probe++;
-            }
-
+            const auto skipSpace = [&] {
+                while (probe < line.size() && std::isspace(static_cast<unsigned char>(line[probe]))) probe++;
+            };
+            skipSpace();
             if (probe < line.size() && line[probe] == '#') {
                 probe++;
-                while (probe < line.size() && std::isspace(static_cast<unsigned char>(line[probe]))) {
-                    probe++;
-                }
-
+                skipSpace();
                 constexpr const char* extensionToken = "extension";
                 constexpr SizeT extensionLen = 9;
-                const bool hasExtensionDirective =
-                    probe + extensionLen <= line.size() &&
-                    line.compare(probe, extensionLen, extensionToken) == 0 &&
-                    (probe + extensionLen == line.size() || !IsIdentifierChar(line[probe + extensionLen]));
-                if (hasExtensionDirective) {
+                if (probe + extensionLen <= line.size() && line.compare(probe, extensionLen, extensionToken) == 0 &&
+                    (probe + extensionLen == line.size() || !IsIdentifierChar(line[probe + extensionLen]))) {
                     probe += extensionLen;
-                    while (probe < line.size() && std::isspace(static_cast<unsigned char>(line[probe]))) {
-                        probe++;
-                    }
-
-                    constexpr const char* int64Extension = "GL_ARB_gpu_shader_int64";
-                    constexpr SizeT int64ExtensionLen = 23;
-                    const bool hasInt64Extension =
-                        probe + int64ExtensionLen <= line.size() &&
-                        line.compare(probe, int64ExtensionLen, int64Extension) == 0 &&
-                        (probe + int64ExtensionLen == line.size() ||
-                         !IsIdentifierChar(line[probe + int64ExtensionLen]));
-                    if (hasInt64Extension) {
-                        probe += int64ExtensionLen;
-                        while (probe < line.size() && std::isspace(static_cast<unsigned char>(line[probe]))) {
-                            probe++;
+                    skipSpace();
+                    const SizeT nameStart = probe;
+                    while (probe < line.size() && IsIdentifierChar(line[probe])) probe++;
+                    const MobileGL::String name = line.substr(nameStart, probe - nameStart);
+                    skipSpace();
+                    if (!name.empty() && probe < line.size() && line[probe] == ':' &&
+                        IsUnavailableShaderExtension(env, stage, name)) {
+                        const MobileGL::String behavior = TrimDirectiveToken(line.substr(probe + 1));
+                        if (behavior == "require") {
+                            edits.push_back({lineStart, replaceLen,
+                                             "#error " + name + " is not available to this shader stage in MobileGL\n"});
+                        } else if (behavior == "enable" || behavior == "warn") {
+                            edits.push_back({lineStart, replaceLen, "\n"});
                         }
-
-                        if (probe < line.size() && line[probe] == ':') {
-                            probe++;
-                            const MobileGL::String behavior = TrimDirectiveToken(line.substr(probe));
-                            const SizeT replaceLen = lineEnd - lineStart + (hasLineBreak ? 1 : 0);
-                            if (behavior == "require") {
-                                edits.push_back({lineStart, replaceLen,
-                                                 "#error GL_ARB_gpu_shader_int64 is not advertised by MobileGL\n"});
-                            } else if (behavior == "enable" || behavior == "warn") {
-                                edits.push_back({lineStart, replaceLen, "\n"});
-                            }
-                            lineStart = lineEnd + (hasLineBreak ? 1 : 0);
-                            continue;
+                        if (std::find(hiddenNames.begin(), hiddenNames.end(), name) == hiddenNames.end()) {
+                            hiddenNames.push_back(name);
                         }
                     }
                 }
             }
-
             lineStart = lineEnd + (hasLineBreak ? 1 : 0);
         }
 
         for (auto it = edits.rbegin(); it != edits.rend(); ++it) {
             source.replace(it->pos, it->len, it->replacement);
         }
-
-        ReplaceIdentifier(source, "GL_ARB_gpu_shader_int64", "MG_DISABLED_GL_ARB_gpu_shader_int64");
+        // The extension's own feature-test macro, so an `#ifdef` guard takes the fallback branch.
+        // int64 keeps its historical treatment: hidden whether or not the source names it.
+        if (IsUnavailableShaderExtension(env, stage, "GL_ARB_gpu_shader_int64") &&
+            std::find(hiddenNames.begin(), hiddenNames.end(), "GL_ARB_gpu_shader_int64") == hiddenNames.end()) {
+            hiddenNames.push_back("GL_ARB_gpu_shader_int64");
+        }
+        for (const auto& name : hiddenNames) {
+            ReplaceIdentifier(source, name, "MG_DISABLED_" + name);
+        }
     }
 
     // GLSL 4.30 4.1.9 allows an interface-block member array to be left unsized when it is NOT the
@@ -1945,7 +1984,7 @@ namespace MobileGL {
                 // identifier that merely contained the word. The GLES fallback for devices without
                 // the extension lives in the backend, where device capabilities are known.
 
-                FilterUnsupportedGpuShaderInt64(env, source);
+                FilterUnavailableShaderExtensions(env, stage, source);
                 CoerceUniformBlockPackingToStd140(source);
                 // After the packing coercion: that one rewrites `packed`/`shared` in place and so
                 // cannot move an offset this pass depends on, and reading the block declarations

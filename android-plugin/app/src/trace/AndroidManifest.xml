@@ -19,7 +19,7 @@
             android:name="mobilegl_disable_timerquery_title"
             tools:node="remove" />
         <meta-data
-            android:name="mobilegl_disable_subgroup_title"
+            android:name="mobilegl_subgroup_emulation_title"
             tools:node="remove" />
         <meta-data
             android:name="mobilegl_magma_r11g11b10f_fallback_title"

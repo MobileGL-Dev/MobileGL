@@ -7,6 +7,7 @@
 // End of Source File Header
 
 #include "Managers.h"
+#include "SubgroupPolicy.h"
 #include <MG_Backend/MGPipe/PipeInputs.h>
 // P3a: the handle-shaped resource op table, the applier's records and the reverse channel.
 // Both headers are compiled into the library only under push, so they are included here
@@ -11647,6 +11648,37 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
             }
 
+            // GL_KHR_shader_subgroup where the ES driver has none (SubgroupPolicy.h): the compute
+            // stage's subgroup operations are lowered onto a 32-lane virtual subgroup in
+            // workgroup-shared memory, so the ESSL needs nothing from the driver but barrier()
+            // and shared memory. Where the driver has subgroups, the operations stay and
+            // SPIRV-Cross spells them as GL_KHR_shader_subgroup_* built-ins. iterationRP's
+            // scratch race is patched first unless MOBILEGL_ITRP_FIX is ForceOff, as
+            // on DirectVulkan. On a driver whose shared-memory loads go stale across barrier()
+            // the scratch is read through atomic loads. Keyed by subgroupEmulationArmed /
+            // iterationRPBarrierFixArmed / subgroupScratchAtomicReads.
+            Vector<unsigned int> barrierFixedSpirv;
+            Vector<unsigned int> emulatedSubgroupSpirv;
+            if (glShaderType == GL_COMPUTE_SHADER &&
+                ResolveEsprytSubgroupImplementation(g_GLESCapabilities) == SubgroupImplementation::Emulated) {
+                if (ShouldApplyIterationRPFixes() &&
+                    MG_Util::ShaderTranspiler::ShaderCompiler::FixIterationRPBarrierForVulkan(
+                        *effectiveSpirv, barrierFixedSpirv, enableSpirvValidation) &&
+                    !barrierFixedSpirv.empty()) {
+                    effectiveSpirv = &barrierFixedSpirv;
+                }
+                if (MG_Util::ShaderTranspiler::ShaderCompiler::EmulateSubgroupsForVulkan(
+                        *effectiveSpirv, emulatedSubgroupSpirv,
+                        static_cast<Uint32>(g_GLESCapabilities.MaxComputeSharedMemorySize), enableSpirvValidation,
+                        g_GLESCapabilities.SharedMemoryLoadsGoStale) &&
+                    !emulatedSubgroupSpirv.empty()) {
+                    effectiveSpirv = &emulatedSubgroupSpirv;
+                } else {
+                    MGLOG_E("DirectGLES: subgroup emulation declined a compute stage; it keeps subgroup "
+                            "operations this ES driver cannot compile");
+                }
+            }
+
             // ESSL cannot express gl_ViewportIndex either, but unlike the draw parameters
             // there IS an extension that provides it - so this runs only when the driver does
             // NOT advertise GL_OES_viewport_array. A driver that does keeps the builtin and
@@ -12661,6 +12693,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     (ViewportArrayEmulationEnabled() || !g_GLESCapabilities.SupportsViewportArray);
                 esslKeyInputs.deferGeometryEmitsArmed =
                     glShaderType == GL_GEOMETRY_SHADER && g_GLESCapabilities.DropsGeometryWritesAfterEmit;
+                esslKeyInputs.subgroupEmulationArmed =
+                    glShaderType == GL_COMPUTE_SHADER &&
+                    ResolveEsprytSubgroupImplementation(g_GLESCapabilities) == SubgroupImplementation::Emulated;
+                esslKeyInputs.subgroupEmulationScratchBytes =
+                    esslKeyInputs.subgroupEmulationArmed ? g_GLESCapabilities.MaxComputeSharedMemorySize : 0;
+                esslKeyInputs.iterationRPBarrierFixArmed =
+                    esslKeyInputs.subgroupEmulationArmed && ShouldApplyIterationRPFixes();
+                esslKeyInputs.subgroupScratchAtomicReads =
+                    esslKeyInputs.subgroupEmulationArmed && g_GLESCapabilities.SharedMemoryLoadsGoStale;
                 esslKeyInputs.supportsNoperspectiveInterpolation =
                     g_GLESCapabilities.SupportsNoperspectiveInterpolation;
                 esslKeyInputs.supportsExtendedImageFormats =

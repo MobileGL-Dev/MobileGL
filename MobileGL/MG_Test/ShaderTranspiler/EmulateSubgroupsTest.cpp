@@ -209,6 +209,24 @@ TEST(EmulateSubgroupsPass, LowersEveryCategoryToSharedMemory) {
     EXPECT_GT(CountOpcode(output, spv::Op::OpControlBarrier), CountOpcode(input, spv::Op::OpControlBarrier));
 }
 
+// The stale-shared-load repair: every scratch read becomes an OpAtomicLoad of a uint word
+// (floats, ints and vectors cross by bitcast), and the module still validates.
+TEST(EmulateSubgroupsPass, ReadsScratchThroughAtomicLoadsWhenAsked) {
+    const Vector<Uint32> input = CompileStage(GL_COMPUTE_SHADER, kEveryCategorySource);
+    ASSERT_FALSE(input.empty());
+
+    Vector<Uint32> plain;
+    ASSERT_TRUE(ShaderCompiler::EmulateSubgroupsForVulkan(input, plain, 16384u, true, false));
+    EXPECT_EQ(CountOpcode(plain, spv::Op::OpAtomicLoad), 0u);
+
+    Vector<Uint32> atomic;
+    ASSERT_TRUE(ShaderCompiler::EmulateSubgroupsForVulkan(input, atomic, 16384u, true, true));
+    ASSERT_TRUE(Validates(atomic));
+    EXPECT_EQ(CountGroupNonUniform(atomic), 0u);
+    EXPECT_GT(CountOpcode(atomic, spv::Op::OpAtomicLoad), 0u);
+    EXPECT_GT(CountOpcode(atomic, spv::Op::OpBitcast), CountOpcode(plain, spv::Op::OpBitcast));
+}
+
 TEST(EmulateSubgroupsPass, IsIdempotent) {
     const Vector<Uint32> input = CompileStage(GL_COMPUTE_SHADER, kEveryCategorySource);
     ASSERT_FALSE(input.empty());

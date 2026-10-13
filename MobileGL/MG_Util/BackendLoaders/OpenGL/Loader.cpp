@@ -1171,6 +1171,9 @@ namespace MobileGL::MG_Util::BackendLoader {
                 if (std::strcmp(extension, "GL_EXT_fragment_shading_rate") == 0) {
                     caps.SupportsFragmentShadingRate = true;
                 }
+                if (std::strcmp(extension, "GL_KHR_shader_subgroup") == 0) {
+                    caps.SupportsShaderSubgroup = true;
+                }
                 if (std::strcmp(extension, "GL_EXT_fragment_shading_rate_primitive") == 0) {
                     caps.SupportsFragmentShadingRatePrimitive = true;
                 }
@@ -1292,6 +1295,27 @@ namespace MobileGL::MG_Util::BackendLoader {
         if (caps.SupportsFragmentShadingRate) {
             FillInFragmentShadingRateCapabilities(caps, glesFuncs);
         }
+        if (caps.SupportsShaderSubgroup) {
+            // Through glesFuncs, never the bare entry point (that is MobileGL's own getter).
+            GLint size = 0, stages = 0, features = 0;
+            GLboolean quad = GL_FALSE;
+            while (glesFuncs.glGetError() != GL_NO_ERROR) {}
+            glesFuncs.glGetIntegerv(GL_SUBGROUP_SIZE_KHR, &size);
+            glesFuncs.glGetIntegerv(GL_SUBGROUP_SUPPORTED_STAGES_KHR, &stages);
+            glesFuncs.glGetIntegerv(GL_SUBGROUP_SUPPORTED_FEATURES_KHR, &features);
+            glesFuncs.glGetBooleanv(GL_SUBGROUP_QUAD_ALL_STAGES_KHR, &quad);
+            const Bool answered = glesFuncs.glGetError() == GL_NO_ERROR;
+            caps.SubgroupSize = size > 0 ? static_cast<Uint32>(size) : 0u;
+            caps.SubgroupSupportedStages = static_cast<Uint32>(stages);
+            caps.SubgroupSupportedFeatures = static_cast<Uint32>(features);
+            caps.SubgroupQuadOperationsInAllStages = quad == GL_TRUE;
+            caps.SupportsShaderSubgroup = answered && caps.SubgroupSize > 0 &&
+                                          (caps.SubgroupSupportedStages & GL_COMPUTE_SHADER_BIT) != 0 &&
+                                          (caps.SubgroupSupportedFeatures & GL_SUBGROUP_FEATURE_BASIC_BIT_KHR) != 0;
+        }
+        MGLOG_I("    GL_KHR_shader_subgroup (native ES): %s size=%u stages=0x%x features=0x%x",
+                caps.SupportsShaderSubgroup ? "usable" : "absent", caps.SubgroupSize, caps.SubgroupSupportedStages,
+                caps.SubgroupSupportedFeatures);
         // Core from ES 3.2 on, so an extension string is not required there; below 3.2 the
         // extension is, and the pointer still has to have resolved either way.
         const Bool esAtLeast32 = caps.GLESVersion.Major > 3 ||
@@ -1881,6 +1905,12 @@ namespace MobileGL::MG_Util::BackendLoader {
         }
         caps.MaxShaderStorageBufferBindings = maxShaderStorageBufferBindings;
         caps.MaxTextureBufferSize = maxTextureBufferSize;
+        {
+            GLint sharedMemory = 0;
+            while (glesFuncs.glGetError() != GL_NO_ERROR) {}
+            glesFuncs.glGetIntegerv(GL_MAX_COMPUTE_SHARED_MEMORY_SIZE, &sharedMemory);
+            if (glesFuncs.glGetError() == GL_NO_ERROR && sharedMemory > 0) caps.MaxComputeSharedMemorySize = sharedMemory;
+        }
         // Through glesFuncs, like every other capability query here: a bare glGetIntegerv resolves
         // to MobileGL's own exported entry point, which answers this pname from the very
         // capability table being filled in - so the driver's real alignment never arrived and the
@@ -2076,6 +2106,23 @@ namespace MobileGL::MG_Util::BackendLoader {
         MGLOG_I("    Geometry-stage storage writes after EmitVertex are dropped: %s",
                 caps.DropsGeometryWritesAfterEmit
                     ? "true (DirectGLES defers a writing geometry stage's emits behind its writes)"
+                    : "false");
+
+        switch (MG_Config::Features.EsprytAtomicSubgroupScratch) {
+            case MG_Config::QuirkOverride::ForceOn:
+                caps.SharedMemoryLoadsGoStale = true;
+                break;
+            case MG_Config::QuirkOverride::ForceOff:
+                caps.SharedMemoryLoadsGoStale = false;
+                break;
+            case MG_Config::QuirkOverride::Auto:
+            default:
+                caps.SharedMemoryLoadsGoStale = SelfTest::SharedMemoryLoadsGoStale(glesFuncs);
+                break;
+        }
+        MGLOG_I("    Shared-memory loads go stale across barrier(): %s",
+                caps.SharedMemoryLoadsGoStale
+                    ? "true (the subgroup emulation reads its scratch through atomic loads)"
                     : "false");
 
         caps.IsAngleRenderer = caps.GLESRendererString.find("ANGLE") != String::npos;

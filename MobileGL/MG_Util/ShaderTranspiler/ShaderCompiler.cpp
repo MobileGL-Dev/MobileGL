@@ -2049,11 +2049,12 @@ namespace MobileGL {
             bool ShaderCompiler::EmulateSubgroupsForVulkan(const Vector<Uint32>& inputBinary,
                                                            Vector<uint32_t>& outputBinary,
                                                            const Uint32 maxWorkgroupScratchBytes,
-                                                           const bool enableSpirvValidation) {
+                                                           const bool enableSpirvValidation,
+                                                           const bool atomicScratchReads) {
                 using namespace spvtools;
                 Optimizer optimizer(SPV_ENV_VULKAN_1_1);
-                optimizer.RegisterPass(
-                    EmulateSubgroupsPass::CreateEmulateSubgroupsPass(maxWorkgroupScratchBytes));
+                optimizer.RegisterPass(EmulateSubgroupsPass::CreateEmulateSubgroupsPass(maxWorkgroupScratchBytes,
+                                                                                        atomicScratchReads));
 
                 return RunOptimizerChecked("EmulateSubgroupsForVulkan", optimizer, inputBinary,
                                            outputBinary, true, enableSpirvValidation);

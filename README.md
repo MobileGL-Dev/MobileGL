@@ -166,7 +166,8 @@ MobileGL supports runtime configuration via environment variables.
 | `MOBILEGL_BACKEND_TYPE` | Select active backend implementation at startup. | `DirectGLES`, `DirectVulkan`         | `DirectGLES`   |
 | `MOBILEGL_DISABLE_TIMERQUERY` | Disable GPU timer-query exposure and use. | `0`, `1` | `0` |
 | `MOBILEGL_ESPRYT_USE_ANGLE` | Load ANGLE EGL/GLES libraries. | `0`, `1` | `0` |
-| `MOBILEGL_MAGMA_DISABLE_SUBGROUP` | Disable Vulkan shader subgroup support. | `0`, `1` | `0` |
+| `MOBILEGL_SUBGROUP_EMULATION` | `GL_KHR_shader_subgroup` emulation (32-lane, compute stage). `Auto` emulates only where the driver has no subgroup operations; `ForceOn` emulates even over native support; `ForceOff` never emulates (native support is still used). | `Auto`, `ForceOn`, `ForceOff` | `Auto` |
+| `MOBILEGL_ITRP_FIX` | The iterationRP shaderpack repairs (scratch-array size, missing workgroup barrier); fingerprint-gated, other shaders are untouched. | `Auto`, `ForceOn`, `ForceOff` | `Auto` |
 | `MOBILEGL_ADVERTISE_FP64` | Advertise `GL_ARB_gpu_shader_fp64`. GLSL `double`/`dvec`/`dmat` compile and run either way - they are narrowed to 32 bits - so this only changes whether an application is told it has 64-bit precision, which it does not. | `0`, `1` | `0` |
 | `MOBILEGL_MAGMA_R11G11B10F_FALLBACK` | Use Magma's R11G11B10F format fallback. | `0`, `1` | `0` |
 | `MOBILEGL_MAGMA_ALLOW_INVALID_SPIRV` | Hand a shader module that fails SPIR-V validation to the driver anyway. By default Magma declines such a program (no shader module is created, its draws and dispatches are refused and logged by name), because a driver that accepts invalid SPIR-V can fault the GPU into device loss. Diagnostic use only. | `0`, `1` | `0` |

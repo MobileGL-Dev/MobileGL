@@ -109,7 +109,11 @@ val pluginRendererConfig = buildJsonValue {
                 items = RendererConfig.EnvItems("DirectGLES", listOf("DirectVulkan")),
             )
             toggleable("MOBILEGL_DISABLE_TIMERQUERY", "1", false, RendererConfig.MetaString("mobilegl_disable_timerquery_title"))
-            toggleable("MOBILEGL_MAGMA_DISABLE_SUBGROUP", "1", false, RendererConfig.MetaString("mobilegl_disable_subgroup_title"))
+            selectable(
+                key = "MOBILEGL_SUBGROUP_EMULATION",
+                title = RendererConfig.MetaString("mobilegl_subgroup_emulation_title"),
+                items = RendererConfig.EnvItems("Auto", listOf("ForceOn", "ForceOff")),
+            )
             toggleable("MOBILEGL_MAGMA_R11G11B10F_FALLBACK", "1", false, RendererConfig.MetaString("mobilegl_magma_r11g11b10f_fallback_title"))
             customizable("MOBILEGL_FRAMES_IN_FLIGHT", "3", RendererConfig.MetaString("mobilegl_frames_inflight_title"))
             toggleable("MOBILEGL_ESPRYT_AVOID_SAMPLER_MIPMAP_MIN_FILTER", "1", false, RendererConfig.MetaString("mobilegl_avoid_sampler_mipmap_min_filter_title"))

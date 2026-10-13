@@ -116,7 +116,7 @@ In the plugin's **Render Server** screen:
 - Older or non-conformant programs: `MOBILEGL_RELAXED_SEMANTICS=1`.
 - Engines that write persistent buffer maps without flushing them: `MOBILEGL_COHERENT_AS_FLUSH=1`.
 - Suspect shader translation: `MOBILEGL_SHADER_CACHE=0` rules out the translation cache.
-- Magma on a driver with broken subgroup support: `MOBILEGL_MAGMA_DISABLE_SUBGROUP=1`.
+- A driver with broken subgroup operations: `MOBILEGL_SUBGROUP_EMULATION=ForceOn` replaces them with MobileGL's compute-stage emulation.
 
 ## Platform-specific
 

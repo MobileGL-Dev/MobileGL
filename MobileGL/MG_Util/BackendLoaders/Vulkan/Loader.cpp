@@ -91,9 +91,6 @@ namespace MobileGL::MG_Util::BackendLoader {
             return loaded;
         }
 
-        Bool IsShaderSubgroupForcedDisabled() {
-            return MG_Config::Features.MagmaDisableSubgroup;
-        }
     } // namespace
 
     inline Version DecodeApiVersion(uint32_t version) {
@@ -266,8 +263,7 @@ namespace MobileGL::MG_Util::BackendLoader {
         caps.MaxShaderStorageBlockSize = static_cast<SizeT>(p.limits.maxStorageBufferRange);
         const Bool supportsShaderSubgroup = vk.vkGetPhysicalDeviceProperties2 &&
                                             HasUsableShaderSubgroupSupport(subgroupProps);
-        const Bool forceDisableShaderSubgroup = IsShaderSubgroupForcedDisabled();
-        caps.SupportsShaderSubgroup = supportsShaderSubgroup && !forceDisableShaderSubgroup;
+        caps.SupportsShaderSubgroup = supportsShaderSubgroup;
         if (caps.SupportsShaderSubgroup) {
             caps.SubgroupSize = subgroupProps.subgroupSize;
             caps.SubgroupSupportedStages = subgroupProps.supportedStages;
@@ -280,12 +276,9 @@ namespace MobileGL::MG_Util::BackendLoader {
             caps.SubgroupQuadOperationsInAllStages = false;
         }
 
-        MGLOG_I("Vulkan shader subgroup support: detected=%s advertised=%s size=%u stages=0x%x operations=0x%x",
-                supportsShaderSubgroup ? "true" : "false", caps.SupportsShaderSubgroup ? "true" : "false",
-                subgroupProps.subgroupSize, subgroupProps.supportedStages, subgroupProps.supportedOperations);
-        if (supportsShaderSubgroup && forceDisableShaderSubgroup) {
-            MGLOG_W("Vulkan shader subgroup support forced off by MOBILEGL_MAGMA_DISABLE_SUBGROUP");
-        }
+        MGLOG_I("Vulkan shader subgroup support: native=%s size=%u stages=0x%x operations=0x%x",
+                supportsShaderSubgroup ? "true" : "false", subgroupProps.subgroupSize,
+                subgroupProps.supportedStages, subgroupProps.supportedOperations);
 
         return true;
     }

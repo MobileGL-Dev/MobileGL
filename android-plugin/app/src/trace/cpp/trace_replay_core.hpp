@@ -59,9 +59,7 @@ struct Request {
     bool avoidAngleLlvmpipeSamplerMipmapMinFilter = false;
     bool avoidAngleLlvmpipeExplicitLodBias = false;
     bool coherentAsFlush = false;
-    bool fixIterationRPSubgroupScratch = false;
-    bool deriveNumSubgroups = false;
-    bool iterationRPFixBarrier = false;
+    bool iterationRPFix = false;
     int holdMs = 0;
     // Generic environment passthrough, each entry `KEY=VALUE` (an entry with no '='
     // unsets KEY). Applied last, right before libMobileGL.so is loaded, so a knob that

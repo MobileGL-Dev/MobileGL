@@ -940,7 +940,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (nonZeroIndirectBaseInstanceSupported) {
             extensions.push_back(E_GL_ARB_base_instance);
         }
-        if (shaderSubgroupSupported && !MG_Config::Features.MagmaDisableSubgroup) {
+        if (shaderSubgroupSupported) {
             extensions.push_back(E_GL_KHR_shader_subgroup);
         }
         // GL_KHR_parallel_shader_compile is MobileGL's own capability, not the Vulkan
@@ -1103,12 +1103,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // real device timestamp support. ApplyVulkanCapabilitiesForTesting may
         // run without a renderer; no timer query is advertised then. Rebuilding
         // the whole list keeps re-runs idempotent.
-        // The opt-in emulated compute path (SubgroupSupportPolicy.h) carries the
-        // extension by itself on devices with no native subgroup support at all; a
-        // device with native subgroups always advertises - and uses - those.
+        // The emulated compute path (SubgroupSupportPolicy.h) carries the extension by
+        // itself on devices with no native subgroup support at all; a device with native
+        // subgroups advertises - and uses - those unless MOBILEGL_SUBGROUP_EMULATION forces
+        // the emulation.
         const Bool subgroupSupportAdvertised =
-            m_vulkanCaps.SupportsShaderSubgroup ||
-            ShouldEmulateSubgroups(m_vulkanCaps.SupportsShaderSubgroup);
+            ResolveVulkanSubgroupImplementation(m_vulkanCaps.SupportsShaderSubgroup) !=
+            MG_Backend::SubgroupImplementation::None;
         m_rendererInfo.RendererGLInfo.Extensions = BuildAdvertisedExtensions(
             subgroupSupportAdvertised, pVulkanRenderer && pVulkanRenderer->IsTimerQuerySupported(),
             pVulkanRenderer && pVulkanRenderer->IsSamplerAnisotropySupported(),
@@ -1480,14 +1481,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         m_dynamicParameters.SupportsFloat64VertexAttributes = false;
         m_dynamicParameters.MaxShaderStorageBlockSize =
             std::min(m_vulkanCaps.MaxShaderStorageBlockSize, kMaxAdvertisedShaderStorageBlockSize);
-        if (m_vulkanCaps.SupportsShaderSubgroup) {
+        const MG_Backend::SubgroupImplementation subgroupImplementation =
+            ResolveVulkanSubgroupImplementation(m_vulkanCaps.SupportsShaderSubgroup);
+        if (subgroupImplementation == MG_Backend::SubgroupImplementation::Native) {
             m_dynamicParameters.SubgroupSize = m_vulkanCaps.SubgroupSize;
             m_dynamicParameters.SubgroupSupportedStages = mapShaderStages(m_vulkanCaps.SubgroupSupportedStages);
             m_dynamicParameters.SubgroupSupportedFeatures =
                 mapSubgroupFeatures(m_vulkanCaps.SubgroupSupportedOperations);
             m_dynamicParameters.SubgroupQuadOperationsInAllStages = m_vulkanCaps.SubgroupQuadOperationsInAllStages;
-        } else if (ShouldEmulateSubgroups(m_vulkanCaps.SupportsShaderSubgroup)) {
-            // MOBILEGL_MAGMA_EMULATE_SUBGROUP on a device with no native subgroups: the
+        } else if (subgroupImplementation == MG_Backend::SubgroupImplementation::Emulated) {
+            // A device with no native subgroups (or MOBILEGL_SUBGROUP_EMULATION forcing it): the
             // advertised values describe the 32-lane virtual subgroup the compute
             // lowering implements (SubgroupSupportPolicy.h / EmulateSubgroupsPass).
             // GL requires the advertisement and the execution to agree, and on this
@@ -1496,8 +1499,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             m_dynamicParameters.SubgroupSupportedStages = kEmulatedSubgroupStages;
             m_dynamicParameters.SubgroupSupportedFeatures = kEmulatedSubgroupFeatures;
             m_dynamicParameters.SubgroupQuadOperationsInAllStages = false;
-            MGLOG_I("DirectVulkan: emulating 32-lane compute subgroups "
-                    "(MOBILEGL_MAGMA_EMULATE_SUBGROUP, no native subgroup support)");
+            MGLOG_I("DirectVulkan: emulating 32-lane compute subgroups (%s)",
+                    m_vulkanCaps.SupportsShaderSubgroup ? "forced by MOBILEGL_SUBGROUP_EMULATION"
+                                                        : "no native subgroup support");
         } else {
             m_dynamicParameters.SubgroupSize = 0;
             m_dynamicParameters.SubgroupSupportedStages = 0;

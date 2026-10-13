@@ -1,5 +1,6 @@
 #include "trace_replay_core.hpp"
 
+#include <cctype>
 #include <cstdlib>
 #include <iostream>
 #include <string>
@@ -81,11 +82,6 @@ bool ReadDouble(int argc, char **argv, int &index, double &out) {
     return true;
 }
 
-bool ReadEnvFlag(const char *name) {
-    const char *value = std::getenv(name);
-    return value != nullptr && std::string(value) == "1";
-}
-
 // The benchmark options are documented as --name=VALUE. The space-separated spelling every
 // other option here uses is accepted too, so --benchmark-tail-frames=300 and
 // --benchmark-tail-frames 300 both work; hasInlineValue says which one was given.
@@ -105,9 +101,12 @@ bool MatchOption(const std::string &arg, const char *name, std::string &inlineVa
 
 bool ParseArgs(int argc, char **argv, mobilegl_trace::Request &request) {
     request.backend = "DirectGLES";
-    request.fixIterationRPSubgroupScratch = ReadEnvFlag("MOBILEGL_MAGMA_FIX_ITERATIONRP_SUBGROUP_SCRATCH");
-    request.deriveNumSubgroups = ReadEnvFlag("MOBILEGL_MAGMA_DERIVE_NUM_SUBGROUPS");
-    request.iterationRPFixBarrier = ReadEnvFlag("MOBILEGL_MAGMA_ITERATIONRP_FIX_BARRIER");
+    // MOBILEGL_ITRP_FIX is a tri-state (Auto/ForceOn/ForceOff); the request only carries ForceOn.
+    if (const char *itrpFix = std::getenv("MOBILEGL_ITRP_FIX")) {
+        std::string value = itrpFix;
+        for (char &ch : value) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+        request.iterationRPFix = value == "1" || value == "true" || value == "on" || value == "forceon";
+    }
 
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];

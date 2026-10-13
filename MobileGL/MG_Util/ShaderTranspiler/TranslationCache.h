@@ -647,6 +647,15 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
         // measured dropped storage writes after EmitVertex, or MOBILEGL_ESPRYT_DEFER_GEOMETRY_EMITS
         // forced it.
         Bool deferGeometryEmitsArmed = false;
+        // Whether EmulateSubgroupsPass lowers this (compute) module, and the workgroup-scratch
+        // budget it may spend (GL_MAX_COMPUTE_SHARED_MEMORY_SIZE, which decides whether it
+        // declines); plus whether FixIterationRPBarrierPass runs ahead of it.
+        Bool subgroupEmulationArmed = false;
+        Int subgroupEmulationScratchBytes = 0;
+        Bool iterationRPBarrierFixArmed = false;
+        // Whether that lowering reads its scratch through atomic loads (the driver POST measured
+        // stale shared-memory loads, or MOBILEGL_ESPRYT_ATOMIC_SUBGROUP_SCRATCH forced it).
+        Bool subgroupScratchAtomicReads = false;
         Bool supportsNoperspectiveInterpolation = false;
         // GL_NV_image_formats. Arms WidenImageFormatsForEssl, which re-declares every storage
         // image whose format GLSL ES core cannot spell in the core format that carries it and

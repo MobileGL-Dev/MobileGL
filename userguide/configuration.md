@@ -70,7 +70,8 @@ environment too. The backend itself is the exception: the client asks for it (se
 
 | Variable | Values | Default | Meaning |
 |---|---|---|---|
-| `MOBILEGL_MAGMA_DISABLE_SUBGROUP` | flag | off | Do not use Vulkan subgroup operations in shaders |
+| `MOBILEGL_SUBGROUP_EMULATION` | Auto / ForceOn / ForceOff | Auto | Subgroup emulation: Auto emulates only where the driver lacks subgroups, ForceOn always emulates, ForceOff never does (native subgroups stay) |
+| `MOBILEGL_ITRP_FIX` | Auto / ForceOn / ForceOff | Auto | iterationRP shaderpack repairs; ForceOff replays the pack's own bugs |
 | `MOBILEGL_MAGMA_R11G11B10F_FALLBACK` | flag | off | Use a fallback format for `GL_R11F_G11F_B10F` |
 | `MOBILEGL_MAGMA_MAX_DRAWS_PER_COMMAND_BUFFER` | 0-16777216 | 16384 | Submit a command buffer mid-frame after this many draws/dispatches (0 = never). Bounds driver memory in huge loading frames. |
 | `MOBILEGL_MAGMA_DESCRIPTOR_TRIM_FRAMES` | 0-1048576 | 120 | Free grown descriptor pools after this many quiet frames (0 = never) |

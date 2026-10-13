@@ -115,10 +115,11 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
         //     GlslangToSpv branches on which backend is active - ShaderAttrib::flags is 0 on
         //     both production parse paths (ShaderCompileTask::RunCompilePipeline and
         //     ClaimParsedShader). Backend identity steers the TRANSPILE, which is L2's key.
-        //   * `advertisedExtensions`. Its only front-end consumer is ShaderSourceProcessor's
-        //     FilterUnsupportedGpuShaderInt64, which REWRITES THE SOURCE TEXT - and the
+        //   * `advertisedExtensions`, and params.SubgroupSupportedStages / SubgroupSupportedFeatures.
+        //     Their only front-end consumer is ShaderSourceProcessor's
+        //     FilterUnavailableShaderExtensions, which REWRITES THE SOURCE TEXT - and the
         //     preprocessed text is in the L1 key verbatim, a strictly finer discriminator
-        //     than the extension list. (E_GL_ARB_gpu_shader_fp64 is never read by the front
+        //     than the extension list or the masks. (E_GL_ARB_gpu_shader_fp64 is never read by the front
         //     end at all: MOBILEGL_ADVERTISE_FP64 only adds it to the extension STRING the
         //     application queries, and glslang parses `double` the same way either way.)
         //   * params.SupportsShaderFloat64, i.e. ConsumesFloat64Natively(). glslang produces

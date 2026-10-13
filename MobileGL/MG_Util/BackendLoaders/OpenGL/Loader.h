@@ -1324,6 +1324,11 @@ namespace MobileGL {
             // then defers every emit of a geometry stage that writes memory behind those writes
             // (DeferGeometryEmitsPass). Defaults FALSE: never assumed broken on an unmeasured driver.
             Bool DropsGeometryWritesAfterEmit = false;
+            // True when two loads of one shared-memory word separated by a store and barrier()
+            // return the same (first) value (SelfTest::SharedMemoryLoadsGoStale - measured on
+            // Adreno). The subgroup emulation then reads its scratch through atomic loads.
+            // Defaults FALSE: never assumed broken on an unmeasured driver.
+            Bool SharedMemoryLoadsGoStale = false;
             Int UniformBufferOffsetAlignment = 256;
             // Its storage-buffer counterpart, queried separately because it is a separate limit:
             // Adreno 830 answers 32 for GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT and 64 for
@@ -1380,6 +1385,18 @@ namespace MobileGL {
             // initialisers are those minimums, for a context that rejects the query.
             Int MaxComputeWorkGroupCount[3] = {65535, 65535, 65535};
             Int MaxComputeWorkGroupSize[3] = {1024, 1024, 64};
+            // GL_MAX_COMPUTE_SHARED_MEMORY_SIZE; the initialiser is the ES 3.1 minimum. The budget
+            // the subgroup emulation's workgroup scratch has to fit in.
+            Int MaxComputeSharedMemorySize = 16384;
+            // GL_KHR_shader_subgroup on the ES driver, with what it answers for it. Extension-only
+            // in every ES version; the values are meaningful only when the flag is set, and the
+            // flag is only set when the driver also answers a usable size (> 0) with the compute
+            // stage and the basic feature - the same rule the Vulkan loader applies.
+            Bool SupportsShaderSubgroup = false;
+            Uint32 SubgroupSize = 0;
+            Uint32 SubgroupSupportedStages = 0;   // GL_*_SHADER_BIT, as the ES query answers
+            Uint32 SubgroupSupportedFeatures = 0; // GL_SUBGROUP_FEATURE_*_BIT_KHR
+            Bool SubgroupQuadOperationsInAllStages = false;
             Int MaxShaderStorageBufferBindings = 8;
             Int MaxTextureBufferSize = 65536;
             // GL_TEXTURE_BUFFER_OFFSET_ALIGNMENT; 1 means the offset is unconstrained.

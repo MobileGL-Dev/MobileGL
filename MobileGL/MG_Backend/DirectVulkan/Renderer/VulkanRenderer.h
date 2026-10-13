@@ -1166,8 +1166,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Bool m_shaderDrawParametersFeatureEnabled = false;
         // Native subgroup topology, queried at device creation for the compute-module
         // subgroup repairs (SubgroupSupportPolicy.h) and the REQUIRE_FULL_SUBGROUPS
-        // stage flag; 0 / false when the device has no usable compute subgroups or
-        // MOBILEGL_MAGMA_DISABLE_SUBGROUP forced them off.
+        // stage flag; 0 / false when the device has no usable compute subgroups.
         Uint32 m_nativeSubgroupSize = 0;
         Bool m_nativeSubgroupSupported = false;
         Bool m_computeFullSubgroupsFeatureEnabled = false;

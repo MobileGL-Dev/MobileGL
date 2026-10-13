@@ -3698,8 +3698,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
             // GL_KHR_shader_subgroup handling (SubgroupSupportPolicy.h). Native subgroup
             // operations execute natively; module repairs keep the GL contract intact
-            // around them. The opt-in emulation path replaces them only on devices with no
-            // subgroup support at all (MOBILEGL_MAGMA_EMULATE_SUBGROUP).
+            // around them. The emulation path replaces them on devices with no subgroup
+            // support at all, or when MOBILEGL_SUBGROUP_EMULATION forces it.
             if (stages[i] == ShaderStage::Compute) {
                 // Program 203 broadcasts the first reduction through
                 // prefixSumCache[0], then lets the second reduction overwrite that

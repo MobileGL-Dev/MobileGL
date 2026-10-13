@@ -982,6 +982,26 @@ TEST_F(TranslationCacheTest, L2KeyMovesWithEveryGateThatSteersTheEsslChain) {
         v.viewportIndexLoweringArmed = true;
         variants.emplace_back("viewportIndexLoweringArmed", BuildEsslTranslationKey(v));
     }
+    {   // arms EmulateSubgroupsPass on the ESSL path
+        EsslTranslationKeyInputs v = base;
+        v.subgroupEmulationArmed = true;
+        variants.emplace_back("subgroupEmulationArmed", BuildEsslTranslationKey(v));
+    }
+    {   // the emulation's scratch budget decides whether it declines
+        EsslTranslationKeyInputs v = base;
+        v.subgroupEmulationScratchBytes = 32768;
+        variants.emplace_back("subgroupEmulationScratchBytes", BuildEsslTranslationKey(v));
+    }
+    {   // arms FixIterationRPBarrierPass on the ESSL path
+        EsslTranslationKeyInputs v = base;
+        v.iterationRPBarrierFixArmed = true;
+        variants.emplace_back("iterationRPBarrierFixArmed", BuildEsslTranslationKey(v));
+    }
+    {   // the subgroup emulation reads its scratch through atomic loads
+        EsslTranslationKeyInputs v = base;
+        v.subgroupScratchAtomicReads = true;
+        variants.emplace_back("subgroupScratchAtomicReads", BuildEsslTranslationKey(v));
+    }
     {   // arms DeferGeometryEmitsForEssl
         EsslTranslationKeyInputs v = base;
         v.deferGeometryEmitsArmed = true;

@@ -137,7 +137,7 @@ namespace MGITest {
             // invocations, i.e. an advertised subgroup width in [16, 256]. A device
             // outside that window (lavapipe's 8-lane subgroups give 64 subgroups) cannot
             // run the fixture's verbatim reduction at all, so the scenario SKIPS there -
-            // the pack itself replays through the MagmaFixIterationRPSubgroupScratch patch, which
+            // the pack itself replays through the MOBILEGL_ITRP_FIX scratch patch, which
             // this probe deliberately does not model. The width only gates the domain;
             // lane placement and group counts still come from observed values alone.
             bool SubgroupWidthInSourceDomain() const {

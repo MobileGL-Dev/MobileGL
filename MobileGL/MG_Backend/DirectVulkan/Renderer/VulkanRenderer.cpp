@@ -2329,10 +2329,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         ProgramFactory::SubgroupLoweringPolicy subgroupPolicy{};
         subgroupPolicy.emulateSubgroups = ShouldEmulateSubgroups(m_nativeSubgroupSupported);
         subgroupPolicy.fixIterationRPSubgroupScratch =
-            m_nativeSubgroupSupported && ShouldFixIterationRPSubgroupScratch();
-        subgroupPolicy.fixIterationRPBarrier = ShouldFixIterationRPBarrier();
-        subgroupPolicy.deriveNumSubgroups =
-            m_nativeSubgroupSupported && ShouldDeriveNumSubgroups();
+            UsesNativeSubgroups(m_nativeSubgroupSupported) && ShouldApplyIterationRPFixes();
+        subgroupPolicy.fixIterationRPBarrier = ShouldApplyIterationRPFixes();
+        subgroupPolicy.deriveNumSubgroups = UsesNativeSubgroups(m_nativeSubgroupSupported);
         subgroupPolicy.requireFullSubgroups = m_computeFullSubgroupsFeatureEnabled;
         subgroupPolicy.nativeSubgroupSize = m_nativeSubgroupSize;
         subgroupPolicy.maxComputeWorkgroupSubgroups = m_maxComputeWorkgroupSubgroups;
@@ -7915,14 +7914,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             subgroupPropertyQuery.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
             subgroupPropertyQuery.pNext = &subgroupProperties;
             getPhysicalDeviceProperties2(m_physicalDevice.handle, &subgroupPropertyQuery);
-            // Mirrors the loader's HasUsableShaderSubgroupSupport gate, including the
-            // MOBILEGL_MAGMA_DISABLE_SUBGROUP escape hatch, so the module lowerings can never
-            // disagree with the advertised capabilities.
+            // Mirrors the loader's HasUsableShaderSubgroupSupport gate, so the module lowerings
+            // can never disagree with the advertised capabilities.
             const Bool usableSubgroups =
                 subgroupProperties.subgroupSize > 0 &&
                 (subgroupProperties.supportedStages & VK_SHADER_STAGE_COMPUTE_BIT) != 0 &&
                 (subgroupProperties.supportedOperations & VK_SUBGROUP_FEATURE_BASIC_BIT) != 0;
-            if (usableSubgroups && !MG_Config::Features.MagmaDisableSubgroup) {
+            if (usableSubgroups) {
                 m_nativeSubgroupSize = subgroupProperties.subgroupSize;
                 m_nativeSubgroupSupported = true;
             }

@@ -425,6 +425,112 @@ namespace MobileGL::MG_Util::SelfTest {
     }
 
     namespace {
+        constexpr const char* kStaleSharedProbeName = "stale shared-memory load";
+        // a * 16 + b with a = 1 (first read) and b = 7 (second read).
+        constexpr GLuint kStaleSharedExpected = 0x17u;
+        // One result word per invocation of the 32-wide workgroup.
+        constexpr GLsizei kStaleSharedResultBytes = 32 * sizeof(GLuint);
+
+        // The probe program around `read`, the expression that loads slot 0: a plain load (the
+        // subject) or an atomic one (the control). Every invocation writes its own result word,
+        // unconditionally: guarding the write (`if (lane == 0u)`) splits the control flow and the
+        // compiler then keeps the loads in place - measured, that shape reads 0x17 on the very
+        // driver where this one reads 0x11.
+        String StaleSharedComputeSource(const char* read) {
+            return String("#version 310 es\n"
+                          "layout(local_size_x = 32) in;\n"
+                          "layout(std430, binding = 0) buffer Result { highp uint data[32]; } g_result;\n"
+                          "shared highp uint s_slots[32];\n"
+                          "void main() {\n"
+                          "  highp uint lane = gl_LocalInvocationIndex;\n"
+                          "  s_slots[lane] = 1u;\n"
+                          "  barrier();\n"
+                          "  highp uint a = ") +
+                   read +
+                   ";\n"
+                   "  barrier();\n"
+                   "  s_slots[lane] = 7u;\n"
+                   "  barrier();\n"
+                   "  highp uint b = " +
+                   read +
+                   ";\n"
+                   "  barrier();\n"
+                   "  g_result.data[lane] = a * 16u + b;\n"
+                   "}\n";
+        }
+
+        // Runs one variant and returns what invocation 0 wrote, or nullopt when the program
+        // could not be built or run.
+        Optional<GLuint> RunStaleSharedVariant(const GLESFunctionsTable& gl, const char* readExpression,
+                                               GLuint buffer) {
+            const String source = StaleSharedComputeSource(readExpression);
+            const GLuint shader =
+                CompileStage(gl, GL_COMPUTE_SHADER, source.c_str(), "compute", kStaleSharedProbeName);
+            if (shader == 0) return std::nullopt;
+            const GLuint program = gl.glCreateProgram();
+            Optional<GLuint> result;
+            if (program != 0) {
+                gl.glAttachShader(program, shader);
+                gl.glLinkProgram(program);
+                GLint linked = 0;
+                gl.glGetProgramiv(program, GL_LINK_STATUS, &linked);
+                if (linked != GL_FALSE) {
+                    const GLuint zero[kStaleSharedResultBytes / sizeof(GLuint)] = {};
+                    gl.glBindBuffer(GL_SHADER_STORAGE_BUFFER, buffer);
+                    gl.glBufferData(GL_SHADER_STORAGE_BUFFER, kStaleSharedResultBytes, zero, GL_DYNAMIC_DRAW);
+                    gl.glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, buffer);
+                    gl.glUseProgram(program);
+                    Drain(gl);
+                    gl.glDispatchCompute(1, 1, 1);
+                    if (gl.glGetError() == GL_NO_ERROR) {
+                        gl.glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_BUFFER_UPDATE_BARRIER_BIT);
+                        gl.glFinish();
+                        result = ReadFirstWord(gl, buffer);
+                    }
+                }
+                gl.glDeleteProgram(program);
+            }
+            gl.glDeleteShader(shader);
+            return result;
+        }
+    } // namespace
+
+    Bool ProbeSharedMemoryLoadsGoStale(const GLESFunctionsTable& gl) {
+        if (!HasEveryEntryPoint(gl) || gl.glDispatchCompute == nullptr) return false;
+
+        SavedState saved;
+        Save(gl, saved);
+        Drain(gl);
+
+        GLuint buffer = 0;
+        gl.glGenBuffers(1, &buffer);
+        const Optional<GLuint> plain = RunStaleSharedVariant(gl, "s_slots[0u]", buffer);
+        const Optional<GLuint> atomic = RunStaleSharedVariant(gl, "atomicAdd(s_slots[0u], 0u)", buffer);
+        if (buffer != 0) gl.glDeleteBuffers(1, &buffer);
+        Restore(gl, saved);
+
+        if (!plain || !atomic) {
+            MGLOG_I("[driver-bug] %s probe reached no verdict (a variant did not build or run)",
+                    kStaleSharedProbeName);
+            return false;
+        }
+        if (*atomic != kStaleSharedExpected) {
+            MGLOG_I("[driver-bug] %s probe reached no verdict: the atomic control read 0x%x (expected 0x%x)",
+                    kStaleSharedProbeName, *atomic, kStaleSharedExpected);
+            return false;
+        }
+        const Bool stale = *plain != kStaleSharedExpected;
+        MGLOG_I("[driver-bug] %s probe: plain reads 0x%x, atomic reads 0x%x (expected 0x%x)%s", kStaleSharedProbeName,
+                *plain, *atomic, kStaleSharedExpected, stale ? " - SHARED LOADS GO STALE ACROSS barrier()" : "");
+        return stale;
+    }
+
+    Bool SharedMemoryLoadsGoStale(const GLESFunctionsTable& gl) {
+        static const Bool stale = ProbeSharedMemoryLoadsGoStale(gl);
+        return stale;
+    }
+
+    namespace {
         // ===================== SHARED PROGRAM BUILDING =====================
         // The four probes below all decide their verdict from whether a program LINKS or from
         // what a draw wrote, so they share one builder that keeps the two apart: a stage that
@@ -2294,6 +2400,27 @@ namespace MobileGL::MG_Util::SelfTest {
                                     Move(detail)};
         }
 
+        Optional<DriverBugFinding> ProbeStaleSharedMemoryLoadBug(const GLESFunctionsTable& gl) {
+            if (!SharedMemoryLoadsGoStale(gl)) return std::nullopt;
+            String detail =
+                "the ES compiler treats ordinary loads from shared variables as pure: two reads of one "
+                "shared word separated by a store and barrier() (memoryBarrierShared() too) return the "
+                "first value, and a read can move past a later store; atomicAdd(x, 0u) reads of the same "
+                "words stay in place. ";
+            if (MG_Config::Features.EsprytAtomicSubgroupScratch == MG_Config::QuirkOverride::ForceOff) {
+                detail += "THE REPAIR IS DISABLED in this process (MOBILEGL_ESPRYT_ATOMIC_SUBGROUP_SCRATCH), so "
+                          "an emulated subgroup operation can see the lanes of an earlier one";
+                return DriverBugFinding{"Shared-memory loads go stale across barrier()", DriverBugVerdict::Unfixable,
+                                        Move(detail)};
+            }
+            detail += "DirectGLES's subgroup emulation reads its workgroup scratch through atomic loads "
+                      "(EmulateSubgroupsPass), so emulated subgroup operations see every lane's current value; "
+                      "an application's own shared-memory code is passed through as written; override with "
+                      "MOBILEGL_ESPRYT_ATOMIC_SUBGROUP_SCRATCH";
+            return DriverBugFinding{"Shared-memory loads go stale across barrier()", DriverBugVerdict::Fixed,
+                                    Move(detail)};
+        }
+
         Optional<DriverBugFinding> ProbeR32FMultisampleSwizzleBug(const GLESFunctionsTable& gl) {
             if (!R32FMultisampleSwizzleCorrupted(gl)) return std::nullopt;
             return DriverBugFinding{
@@ -2466,6 +2593,7 @@ namespace MobileGL::MG_Util::SelfTest {
         using DriverBugProbeFn = Optional<DriverBugFinding> (*)(const GLESFunctionsTable&);
         constexpr DriverBugProbeFn kGlesDriverBugProbes[] = {
             &ProbeGeometryWriteAfterEmitBug,
+            &ProbeStaleSharedMemoryLoadBug,
             &ProbeR32FMultisampleSwizzleBug,
             &ProbeImageLocationPerNameBug,
             &ProbeCrossStageImageQualifierMergeBug,

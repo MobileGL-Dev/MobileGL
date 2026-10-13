@@ -52,7 +52,7 @@ The plugin advertises itself through manifest metadata. The launcher lists it as
 | Metadata | Read by | Contents |
 |---|---|---|
 | `fclPlugin`, `renderer`, `boatEnv`, `pojavEnv` | launchers using the original FCL plugin format | Fixed environment: `LIBGL_ES=3`, `POJAV_RENDERER=opengles3`, `MOBILEGL_BACKEND_TYPE=DirectGLES`, plus `MOBILEGL_TRANSPORT=inproc` in an `inproc` build (see below) |
-| `fclPlugin_V2` | launchers that read the v2 renderer-plugin format | The same environment plus user options: backend (`DirectGLES`/`DirectVulkan`), frames in flight, and toggles for `MOBILEGL_DISABLE_TIMERQUERY`, `MOBILEGL_MAGMA_DISABLE_SUBGROUP`, `MOBILEGL_MAGMA_R11G11B10F_FALLBACK`, `MOBILEGL_ESPRYT_AVOID_SAMPLER_MIPMAP_MIN_FILTER`, `MOBILEGL_COHERENT_AS_FLUSH`, `MOBILEGL_RELAXED_SEMANTICS`, `MOBILEGL_ESPRYT_USE_ANGLE` |
+| `fclPlugin_V2` | launchers that read the v2 renderer-plugin format | The same environment plus user options: backend (`DirectGLES`/`DirectVulkan`), frames in flight, and toggles for `MOBILEGL_DISABLE_TIMERQUERY`, `MOBILEGL_SUBGROUP_EMULATION`, `MOBILEGL_MAGMA_R11G11B10F_FALLBACK`, `MOBILEGL_ESPRYT_AVOID_SAMPLER_MIPMAP_MIN_FILTER`, `MOBILEGL_COHERENT_AS_FLUSH`, `MOBILEGL_RELAXED_SEMANTICS`, `MOBILEGL_ESPRYT_USE_ANGLE` |
 
 The FCL build this guide was checked against reads only the original format, so it shows no plugin
 options and always starts the plugin with Espryt. To change anything there, use FCL's

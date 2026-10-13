@@ -21,9 +21,9 @@ namespace MobileGL {
             // subgroups partition the workgroup by gl_LocalInvocationIndex:
             // lane = index & 31, id = index >> 5, count = ceil(invocations / 32).
             //
-            // This is a LAST-RESORT path, never a substitute for real subgroups: it only
-            // runs when MOBILEGL_MAGMA_EMULATE_SUBGROUP=1 is set explicitly and the device
-            // has no native subgroup support at all (SubgroupSupportPolicy.h). A device
+            // This is never a substitute for real subgroups: by default it only runs on a
+            // driver with no native subgroup support at all (MG_Backend/SubgroupImplementation.h;
+            // MOBILEGL_SUBGROUP_EMULATION=ForceOn runs it everywhere, for testing). A device
             // with native subgroup operations - however narrow - uses them natively, with
             // FixIterationRPSubgroupScratchPass patching the known pack bug instead.
             //
@@ -54,19 +54,28 @@ namespace MobileGL {
             // module whose lowering would add more workgroup scratch than
             // maxWorkgroupScratchBytes (pass the device's maxComputeSharedMemorySize;
             // 0 falls back to the 16384-byte Vulkan minimum).
+            //
+            // atomicScratchReads stores the scratch as plain 32-bit words and reads every
+            // slot back with OpAtomicLoad (atomicAdd(x, 0u) in ESSL), bit-casting to and from
+            // the participating type. It is for drivers whose compiler treats ordinary
+            // shared-memory loads as pure and so merges or reorders them across stores and
+            // barrier() (SelfTest::SharedMemoryLoadsGoStale, measured on Adreno's ES driver);
+            // an atomic load is a memory operation such a compiler keeps in place.
             class EmulateSubgroupsPass : public spvtools::opt::Pass {
             public:
-                explicit EmulateSubgroupsPass(Uint32 maxWorkgroupScratchBytes)
-                    : m_maxWorkgroupScratchBytes(maxWorkgroupScratchBytes) {}
+                EmulateSubgroupsPass(Uint32 maxWorkgroupScratchBytes, bool atomicScratchReads)
+                    : m_maxWorkgroupScratchBytes(maxWorkgroupScratchBytes),
+                      m_atomicScratchReads(atomicScratchReads) {}
 
                 const char* name() const override { return "emulate-subgroups"; }
                 Status Process() override;
 
                 static spvtools::Optimizer::PassToken CreateEmulateSubgroupsPass(
-                    Uint32 maxWorkgroupScratchBytes);
+                    Uint32 maxWorkgroupScratchBytes, bool atomicScratchReads = false);
 
             private:
                 Uint32 m_maxWorkgroupScratchBytes;
+                bool m_atomicScratchReads;
             };
         } // namespace ShaderTranspiler
     } // namespace MG_Util

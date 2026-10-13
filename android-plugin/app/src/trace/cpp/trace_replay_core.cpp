@@ -194,20 +194,10 @@ bool LoadMobileGL(const Request& request, std::string& error) {
     } else {
         unsetenv("MOBILEGL_COHERENT_AS_FLUSH");
     }
-    if (request.fixIterationRPSubgroupScratch) {
-        setenv("MOBILEGL_MAGMA_FIX_ITERATIONRP_SUBGROUP_SCRATCH", "1", 1);
+    if (request.iterationRPFix) {
+        setenv("MOBILEGL_ITRP_FIX", "ForceOn", 1);
     } else {
-        unsetenv("MOBILEGL_MAGMA_FIX_ITERATIONRP_SUBGROUP_SCRATCH");
-    }
-    if (request.deriveNumSubgroups) {
-        setenv("MOBILEGL_MAGMA_DERIVE_NUM_SUBGROUPS", "1", 1);
-    } else {
-        unsetenv("MOBILEGL_MAGMA_DERIVE_NUM_SUBGROUPS");
-    }
-    if (request.iterationRPFixBarrier) {
-        setenv("MOBILEGL_MAGMA_ITERATIONRP_FIX_BARRIER", "1", 1);
-    } else {
-        unsetenv("MOBILEGL_MAGMA_ITERATIONRP_FIX_BARRIER");
+        unsetenv("MOBILEGL_ITRP_FIX");
     }
     if (request.fboAttachmentDumps.empty()) {
         unsetenv("MOBILEGL_TRACE_DUMP_FBO_ATTACHMENTS");
@@ -991,10 +981,7 @@ bool WriteResultJson(const Request& request, const Result& result) {
          << (request.avoidAngleLlvmpipeSamplerMipmapMinFilter ? "true" : "false") << ",\n";
     file << "  \"avoidAngleLlvmpipeExplicitLodBias\": "
          << (request.avoidAngleLlvmpipeExplicitLodBias ? "true" : "false") << ",\n";
-    file << "  \"fixIterationRPSubgroupScratch\": " << (request.fixIterationRPSubgroupScratch ? "true" : "false")
-         << ",\n";
-    file << "  \"deriveNumSubgroups\": " << (request.deriveNumSubgroups ? "true" : "false") << ",\n";
-    file << "  \"iterationRPFixBarrier\": " << (request.iterationRPFixBarrier ? "true" : "false") << ",\n";
+    file << "  \"iterationRPFix\": " << (request.iterationRPFix ? "true" : "false") << ",\n";
     file << "  \"holdMs\": " << request.holdMs << ",\n";
     file << "  \"mismatchPixels\": " << result.mismatchPixels;
     if (request.benchmark) {

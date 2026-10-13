@@ -12,6 +12,7 @@
 #include <MG_Backend/DirectGLES/DirectGLES.h>
 #include <MG_Backend/DirectGLES/Managers.h>
 #include <MG_Backend/DirectGLES/Utils.h>
+#include <MG_Backend/DirectGLES/SubgroupPolicy.h>
 #include <MG_Util/BackendLoaders/OpenGL/Loader.h>
 #include <MG_Util/Classifiers/TextureEnumClassifier.h>
 #include <MG_Util/Converters/GLToMG/TextureEnumConverter.h>
@@ -906,6 +907,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 if (capabilities.SupportsFragmentShadingRatePrimitive) {
                     extensions.push_back(E_GL_EXT_fragment_shading_rate_primitive);
                 }
+            }
+            // Native where the ES driver has subgroups, emulated in the compute stage where it
+            // has none (SubgroupPolicy.h); the dynamic parameters below say which.
+            if (ResolveEsprytSubgroupImplementation(capabilities) != SubgroupImplementation::None) {
+                extensions.push_back(E_GL_KHR_shader_subgroup);
             }
         }
     } // namespace
@@ -1949,6 +1955,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // mathematically mandatory here, on every device, forever - which is why this stays false
         // regardless of what the driver underneath happens to support.
         m_dynamicParameters.SupportsShaderFloat64 = false;
+        {
+            const EsprytSubgroupParameters subgroups = ResolveEsprytSubgroupParameters(m_GLESCapabilities);
+            m_dynamicParameters.SubgroupSize = subgroups.size;
+            m_dynamicParameters.SubgroupSupportedStages = subgroups.stages;
+            m_dynamicParameters.SubgroupSupportedFeatures = subgroups.features;
+            m_dynamicParameters.SubgroupQuadOperationsInAllStages = subgroups.quadInAllStages;
+            MGLOG_I("DirectGLES: GL_KHR_shader_subgroup %s (size %u, stages 0x%x, features 0x%x)",
+                    SubgroupImplementationName(ResolveEsprytSubgroupImplementation(m_GLESCapabilities)),
+                    subgroups.size, subgroups.stages, subgroups.features);
+        }
         // Follows the line above, and must: OpenGL ES has no double-precision vertex format and no
         // fp64 type to consume one with, so a 64-bit vertex attribute has nowhere to land here.
         m_dynamicParameters.SupportsFloat64VertexAttributes = false;

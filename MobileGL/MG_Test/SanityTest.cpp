@@ -6,6 +6,7 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
+#include <MG_Backend/SubgroupImplementation.h>
 #include <gtest/gtest.h>
 #include <algorithm>
 #include <cstdlib>
@@ -858,24 +859,38 @@ TEST(FragmentInterpolationCapabilities, PlumbsGLESAndBothVulkanPropertyPaths) {
     EXPECT_EQ(vkBackend.GetDynamicParameters().FragmentInterpolationOffsetBits, 4);
 }
 
-TEST(DirectVulkanSanity, AdvertisesSubgroupOnlyWhenVulkanReportsUsableSupport) {
+// Native subgroups whenever Vulkan reports usable support; otherwise the 32-lane compute
+// emulation by default, and nothing at all when MOBILEGL_SUBGROUP_EMULATION is ForceOff.
+TEST(DirectVulkanSanity, AdvertisesNativeSubgroupsOrTheEmulation) {
     using namespace MobileGL;
 
     MG_Backend::DirectVulkan::BackendObject_DirectVulkan backend;
+    const auto savedEmulation = MG_Config::Features.SubgroupEmulation;
 
     MG_External::VulkanCapabilities unsupportedCaps;
     unsupportedCaps.SupportsShaderSubgroup = false;
     unsupportedCaps.SubgroupSize = 32;
     unsupportedCaps.SubgroupSupportedStages = VK_SHADER_STAGE_COMPUTE_BIT;
     unsupportedCaps.SubgroupSupportedOperations = VK_SUBGROUP_FEATURE_BASIC_BIT;
-    backend.ApplyVulkanCapabilitiesForTesting(unsupportedCaps);
 
+    MG_Config::Features.SubgroupEmulation = MG_Config::QuirkOverride::ForceOff;
+    backend.ApplyVulkanCapabilitiesForTesting(unsupportedCaps);
     const auto& unsupportedExtensions = backend.GetRendererInfo().RendererGLInfo.Extensions;
     EXPECT_EQ(std::find(unsupportedExtensions.begin(), unsupportedExtensions.end(), E_GL_KHR_shader_subgroup),
               unsupportedExtensions.end());
     EXPECT_EQ(backend.GetDynamicParameters().SubgroupSize, 0u);
     EXPECT_EQ(backend.GetDynamicParameters().SubgroupSupportedStages, 0u);
     EXPECT_EQ(backend.GetDynamicParameters().SubgroupSupportedFeatures, 0u);
+
+    MG_Config::Features.SubgroupEmulation = MG_Config::QuirkOverride::Auto;
+    backend.ApplyVulkanCapabilitiesForTesting(unsupportedCaps);
+    const auto& emulatedExtensions = backend.GetRendererInfo().RendererGLInfo.Extensions;
+    EXPECT_NE(std::find(emulatedExtensions.begin(), emulatedExtensions.end(), E_GL_KHR_shader_subgroup),
+              emulatedExtensions.end());
+    EXPECT_EQ(backend.GetDynamicParameters().SubgroupSize, MG_Backend::kEmulatedSubgroupSize);
+    EXPECT_EQ(backend.GetDynamicParameters().SubgroupSupportedStages, MG_Backend::kEmulatedSubgroupStages);
+    EXPECT_EQ(backend.GetDynamicParameters().SubgroupSupportedFeatures, MG_Backend::kEmulatedSubgroupFeatures);
+    MG_Config::Features.SubgroupEmulation = savedEmulation;
 
     MG_External::VulkanCapabilities supportedCaps;
     supportedCaps.SupportsShaderSubgroup = true;

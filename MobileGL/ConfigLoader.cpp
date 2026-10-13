@@ -249,11 +249,19 @@ namespace MobileGL::MG_ConfigLoader {
 
     // Quirk overrides are tri-state: an unset variable keeps device auto-detection, a truthy
     // value forces the quirk on, anything else set ("0", "false", "") forces it off.
+    // Unset, empty or "auto" keeps Auto; "forceon"/"on" and "forceoff"/"off"/"no" name the two
+    // overrides; anything else is read as a flag (1/true -> ForceOn, 0/false -> ForceOff).
     inline MG_Config::QuirkOverride QueryEnvQuirkOverride(const String& key) {
         auto it = acceptedEnvVariablesMap->find(key);
         if (it == acceptedEnvVariablesMap->end()) {
             return MG_Config::QuirkOverride::Auto;
         }
+        String lowered = it->second;
+        std::transform(lowered.begin(), lowered.end(), lowered.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        if (lowered.empty() || lowered == "auto") return MG_Config::QuirkOverride::Auto;
+        if (lowered == "forceon" || lowered == "on") return MG_Config::QuirkOverride::ForceOn;
+        if (lowered == "forceoff" || lowered == "off" || lowered == "no") return MG_Config::QuirkOverride::ForceOff;
         return IsTruthyValue(it->second) ? MG_Config::QuirkOverride::ForceOn
                                          : MG_Config::QuirkOverride::ForceOff;
     }
@@ -361,12 +369,8 @@ namespace MobileGL::MG_ConfigLoader {
 #if defined(MOBILEGL_TRACE_ANGLE_VARIANTS)
         QueryEnvVariable("MOBILEGL_TRACE_ANGLE_VARIANT", features.TraceAngleVariant, "");
 #endif
-        features.MagmaDisableSubgroup = QueryEnvFlag("MOBILEGL_MAGMA_DISABLE_SUBGROUP");
-        features.MagmaEmulateSubgroup = QueryEnvFlag("MOBILEGL_MAGMA_EMULATE_SUBGROUP");
-        features.MagmaFixIterationRPSubgroupScratch =
-            QueryEnvQuirkOverride("MOBILEGL_MAGMA_FIX_ITERATIONRP_SUBGROUP_SCRATCH");
-        features.MagmaIterationRPFixBarrier = QueryEnvFlag("MOBILEGL_MAGMA_ITERATIONRP_FIX_BARRIER");
-        features.MagmaDeriveNumSubgroups = QueryEnvQuirkOverride("MOBILEGL_MAGMA_DERIVE_NUM_SUBGROUPS");
+        features.SubgroupEmulation = QueryEnvQuirkOverride("MOBILEGL_SUBGROUP_EMULATION");
+        features.IterationRPFix = QueryEnvQuirkOverride("MOBILEGL_ITRP_FIX");
         features.MagmaInPassClear = QueryEnvQuirkOverride("MOBILEGL_MAGMA_INPASS_CLEAR");
         features.MagmaInPassClearDefault = QueryEnvQuirkOverride("MOBILEGL_MAGMA_INPASS_CLEAR_DEFAULT");
         features.MagmaPassCache = QueryEnvQuirkOverride("MOBILEGL_MAGMA_PASS_CACHE");
@@ -395,6 +399,7 @@ namespace MobileGL::MG_ConfigLoader {
         features.EsprytAvoidExplicitLodBias = QueryEnvFlag("MOBILEGL_ESPRYT_AVOID_EXPLICIT_LOD_BIAS");
         features.EsprytUnlocatedIoBlocks = QueryEnvQuirkOverride("MOBILEGL_ESPRYT_UNLOCATED_IO_BLOCKS");
         features.EsprytDeferGeometryEmits = QueryEnvQuirkOverride("MOBILEGL_ESPRYT_DEFER_GEOMETRY_EMITS");
+        features.EsprytAtomicSubgroupScratch = QueryEnvQuirkOverride("MOBILEGL_ESPRYT_ATOMIC_SUBGROUP_SCRATCH");
         features.PointSizeDemotion = QueryEnvQuirkOverride("MOBILEGL_POINT_SIZE_DEMOTION");
         features.CoherentAsFlush = QueryEnvFlag("MOBILEGL_COHERENT_AS_FLUSH");
         features.TraceSkipAutodestroy = QueryEnvFlag("MOBILEGL_TRACE_SKIP_AUTODESTROY");

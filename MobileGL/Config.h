@@ -85,41 +85,26 @@ namespace MobileGL::MG_Config {
         // MOBILEGL_TRACE_ANGLE_VARIANT: signed trace-APK ANGLE build short hash.
         String TraceAngleVariant;
 #endif
-        // MOBILEGL_MAGMA_DISABLE_SUBGROUP: force-disable Vulkan shader subgroup support,
-        // including the opt-in emulated compute path below.
-        Bool MagmaDisableSubgroup = false;
-        // MOBILEGL_MAGMA_EMULATE_SUBGROUP: implement GL_KHR_shader_subgroup's compute
-        // stage on a 32-lane VIRTUAL subgroup lowered to workgroup-shared memory
-        // (ShaderTranspiler::EmulateSubgroupsPass). Strictly a last resort: it only ever
-        // engages when this flag is set AND the device has no native subgroup support at
-        // all - a device with real subgroup operations always uses them natively,
-        // whatever their width (the known iterationRP defect is patched by
-        // MagmaFixIterationRPSubgroupScratch below instead). Off by default.
-        Bool MagmaEmulateSubgroup = false;
-        // MOBILEGL_MAGMA_FIX_ITERATIONRP_SUBGROUP_SCRATCH: patch iterationRP's own bug - the
-        // pack declares `shared vec2 prefixSumCache[32]` for a 512-invocation exposure
-        // reduction and indexes it by gl_SubgroupID, so any device with sub-16-lane
-        // subgroups (8-lane lavapipe -> 64 subgroups) writes shared memory out of
-        // bounds. The pass grows that one array to what the device's topology needs and
-        // touches nothing else; it only rewrites modules positively matching the pack's
-        // reduction fingerprint (ShaderTranspiler::FixIterationRPSubgroupScratchPass),
-        // so every other shader passes through byte-identical - as does iterationRP
-        // itself on >= 16-lane devices. Auto is ON; ForceOff replays the pack's bug
-        // verbatim.
-        QuirkOverride MagmaFixIterationRPSubgroupScratch = QuirkOverride::Auto;
-        // MOBILEGL_MAGMA_ITERATIONRP_FIX_BARRIER: repair Program 203's missing workgroup
-        // rendezvous between its two reductions over prefixSumCache. Off by default and
-        // fingerprint-gated by FixIterationRPBarrierPass when enabled.
-        Bool MagmaIterationRPFixBarrier = false;
-        // MOBILEGL_MAGMA_DERIVE_NUM_SUBGROUPS: replace compute gl_NumSubgroups loads with
-        // ceil(workgroup invocations / gl_SubgroupSize) on the NATIVE subgroup path
-        // (ShaderTranspiler::DeriveNumSubgroupsPass). Auto is ON: GL requires
-        // gl_SubgroupID < gl_NumSubgroups, Adreno's builtin reports 1 while the same
-        // dispatch emits IDs 0..7, and the derived value is the one Vulkan guarantees
-        // whenever the pipeline can request REQUIRE_FULL_SUBGROUPS (which the renderer
-        // does whenever local_size_x is a multiple of the native width). ForceOff returns
-        // to the raw driver builtin.
-        QuirkOverride MagmaDeriveNumSubgroups = QuirkOverride::Auto;
+        // MOBILEGL_SUBGROUP_EMULATION: how either backend implements GL_KHR_shader_subgroup
+        // (MG_Backend/SubgroupImplementation.h). Auto (the default) uses the driver's own subgroup
+        // operations natively whenever it has them, at whatever width (8/16/32/64/128 lanes), and
+        // otherwise emulates the compute stage on a 32-lane VIRTUAL subgroup in workgroup-shared
+        // memory (ShaderTranspiler::EmulateSubgroupsPass). ForceOn emulates even over native
+        // support, so the emulation can be exercised on any device; ForceOff never emulates,
+        // leaving a driver without subgroups without the extension.
+        QuirkOverride SubgroupEmulation = QuirkOverride::Auto;
+        // MOBILEGL_ITRP_FIX: the iterationRP shaderpack's two compute-shader bugs, repaired by
+        // fingerprint-gated passes that leave every other module byte-identical
+        // (MG_Backend/SubgroupImplementation.h):
+        //   * FixIterationRPSubgroupScratchPass - the pack declares `shared vec2
+        //     prefixSumCache[32]` for a 512-invocation reduction indexed by gl_SubgroupID, so a
+        //     sub-16-lane device (8-lane lavapipe -> 64 subgroups) writes shared memory out of
+        //     bounds; the array grows to what the native width needs (inert at >= 16 lanes, and
+        //     under the 32-lane emulation);
+        //   * FixIterationRPBarrierPass - Program 203's second reduction overwrites that scratch
+        //     without a workgroup rendezvous after the first one's readers.
+        // Auto and ForceOn apply both; ForceOff replays the pack's bugs verbatim.
+        QuirkOverride IterationRPFix = QuirkOverride::Auto;
         // MOBILEGL_MAGMA_INPASS_CLEAR: a wire-arm glClear / glClearBuffer* whose targets are the
         // attachments of the draw pass for the bound framebuffer is recorded inside that pass
         // (vkCmdClearAttachments) rather than in a render pass of its own built for the clear.
@@ -221,6 +206,14 @@ namespace MobileGL::MG_Config {
         // everywhere. ForceOn exercises the rewrite on a healthy driver; ForceOff is the
         // negative control that replays the lost writes.
         QuirkOverride EsprytDeferGeometryEmits = QuirkOverride::Auto;
+        // MOBILEGL_ESPRYT_ATOMIC_SUBGROUP_SCRATCH: DirectGLES's subgroup emulation reads its
+        // workgroup scratch back through atomic loads (EmulateSubgroupsPass). The Adreno ES
+        // compiler treats ordinary shared-memory loads as pure and merges or reorders them
+        // across stores and barrier(), so an emulated subgroup operation would see the lanes of
+        // an earlier one; the driver POST measures that and arms this by itself, so Auto is
+        // right everywhere. ForceOn exercises the atomic reads on a healthy driver; ForceOff is
+        // the negative control.
+        QuirkOverride EsprytAtomicSubgroupScratch = QuirkOverride::Auto;
         // MOBILEGL_POINT_SIZE_DEMOTION: demote gl_PointSize out of tessellation/geometry
         // stages into an ordinary varying (ShaderCompiler::
         // DemoteTessellationGeometryPointSizeForProgram) instead of declining such programs

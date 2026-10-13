@@ -96,8 +96,8 @@
             android:name="mobilegl_disable_timerquery_title"
             android:resource="@string/mobilegl_disable_timerquery_title" />
         <meta-data
-            android:name="mobilegl_disable_subgroup_title"
-            android:resource="@string/mobilegl_disable_subgroup_title" />
+            android:name="mobilegl_subgroup_emulation_title"
+            android:resource="@string/mobilegl_subgroup_emulation_title" />
         <meta-data
             android:name="mobilegl_magma_r11g11b10f_fallback_title"
             android:resource="@string/mobilegl_magma_r11g11b10f_fallback_title" />

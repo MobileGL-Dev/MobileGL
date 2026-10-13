@@ -20,6 +20,8 @@
 // MG_State code: it runs standalone, before MG_State::Init().
 #include <MG_State/GLState/VertexArrayState/VertexArrayObject.h>
 #include <MG_Backend/DirectGLES/Utils.h>
+#include <MG_Backend/DirectGLES/SubgroupPolicy.h>
+#include <MG_Backend/SubgroupImplementation.h>
 #include <MG_Util/Converters/GLToStr/GLEnumConverter.h>
 #include <MG_Util/Converters/MGToGL/TextureEnumConverter.h>
 #include <MG_Util/Converters/MGToStr/GLExtensionConverter.h>
@@ -308,6 +310,37 @@ namespace MobileGL::MG_Util::SelfTest {
             }
             builder.Pass(rowName, format("{} = {}; MobileGL advertises GL_MAX_VERTEX_ATTRIBS = {}",
                                          driverLimitName, deviceLimit, deviceLimit));
+        }
+
+        // "Shader subgroups": how this backend implements GL_KHR_shader_subgroup on this driver
+        // (MG_Backend/SubgroupImplementation.h) - the driver's own operations at their native width,
+        // the 32-lane compute emulation, or nothing - and whether the iterationRP repairs are armed.
+        // `nativeDetail` describes what the driver offers natively, or is empty when it has nothing.
+        void ReportShaderSubgroups(ReportBuilder& builder, const Bool nativeSupported, const String& nativeDetail) {
+            using MG_Backend::SubgroupImplementation;
+            const String itrp = MG_Backend::ShouldApplyIterationRPFixes()
+                                    ? "iterationRP repairs armed (MOBILEGL_ITRP_FIX)"
+                                    : "iterationRP repairs DISABLED (MOBILEGL_ITRP_FIX=ForceOff)";
+            switch (MG_Backend::ResolveSubgroupImplementation(nativeSupported)) {
+            case SubgroupImplementation::Native:
+                builder.Pass("Shader subgroups", format("native: {}; {}", nativeDetail, itrp));
+                break;
+            case SubgroupImplementation::Emulated:
+                builder.Pass("Shader subgroups",
+                             format("emulated: {}-lane virtual subgroups in workgroup-shared memory, compute stage "
+                                    "only, every feature ({}); {}",
+                                    MG_Backend::kEmulatedSubgroupSize,
+                                    nativeSupported ? "forced over native " + nativeDetail +
+                                                          " by MOBILEGL_SUBGROUP_EMULATION=ForceOn"
+                                                    : String("the driver has no subgroup operations"),
+                                    itrp));
+                break;
+            case SubgroupImplementation::None:
+                builder.FailOptional("Shader subgroups",
+                                     "the driver has no subgroup operations and MOBILEGL_SUBGROUP_EMULATION=ForceOff "
+                                     "turned the emulation off, so GL_KHR_shader_subgroup is not advertised");
+                break;
+            }
         }
 
         void EvaluateGlesChecklist(ReportBuilder& builder, const MG_External::GLESCapabilities& caps,
@@ -1239,6 +1272,14 @@ namespace MobileGL::MG_Util::SelfTest {
             EvaluateGlesChecklist(builder, caps, glesFuncs);
             ProbeGlesTimerQuery(builder, caps, glesFuncs);
             ProbeGlesNoperspective(builder, caps, glesFuncs);
+            ReportShaderSubgroups(
+                builder, caps.SupportsShaderSubgroup,
+                caps.SupportsShaderSubgroup
+                    ? format("GL_KHR_shader_subgroup, subgroup size {}, stages 0x{:x}, features 0x{:x} (advertised: "
+                             "0x{:x}, what ESSL output can spell)",
+                             caps.SubgroupSize, caps.SubgroupSupportedStages, caps.SubgroupSupportedFeatures,
+                             caps.SubgroupSupportedFeatures & MG_Backend::DirectGLES::kEsslPrintableSubgroupFeatures)
+                    : String());
             builder.report.formatCapabilities.emplace();
             MG_Backend::DirectGLES::PopulateFormatCapabilities(
                 glesFuncs, caps, builder.report.formatCapabilities.value());
@@ -1266,11 +1307,16 @@ namespace MobileGL::MG_Util::SelfTest {
         if (summary.capsValid) {
             backendApiVersionString = MG_Backend::DirectGLES::FormatBackendAPIVersionString(
                 summary.caps.GLESRendererString, summary.caps.GLESVersion.Major, summary.caps.GLESVersion.Minor);
-            advertisedExtensions = JoinAdvertisedExtensions(MG_Backend::DirectGLES::BuildAdvertisedExtensions(
+            Vector<GLExtension> extensions = MG_Backend::DirectGLES::BuildAdvertisedExtensions(
                 summary.caps.SupportsDisjointTimerQuery, summary.caps.SupportsTextureFilterAnisotropy,
                 summary.caps.SupportsDrawIndirect,
                 summary.caps.SupportsDrawIndirect && summary.caps.SupportsBaseInstance,
-                summary.caps.SupportsTextureView, summary.caps.SupportsTextureCubeMapArray));
+                summary.caps.SupportsTextureView, summary.caps.SupportsTextureCubeMapArray);
+            if (MG_Backend::DirectGLES::ResolveEsprytSubgroupImplementation(summary.caps) !=
+                MG_Backend::SubgroupImplementation::None) {
+                extensions.push_back(E_GL_KHR_shader_subgroup);
+            }
+            advertisedExtensions = JoinAdvertisedExtensions(extensions);
         }
         AppendMobileGLReportedRows(builder, MG_Backend::DirectGLES::GetRendererIdentity(), backendApiVersionString,
                                    advertisedExtensions);
@@ -1929,7 +1975,7 @@ namespace MobileGL::MG_Util::SelfTest {
 
         // Native iterationRP compute witness. This deliberately uses a separate
         // throwaway Vulkan device rather than the real renderer's queues, and it
-        // treats MOBILEGL_MAGMA_DISABLE_SUBGROUP as irrelevant: the row reports what the
+        // treats MOBILEGL_SUBGROUP_EMULATION as irrelevant: the row reports what the
         // driver does, not what MobileGL elects to advertise to applications.
         void ProbeVulkanIterationRPWitness(ReportBuilder& builder, PFN_vkGetInstanceProcAddr getInstanceProcAddr,
                                            VkInstance instance, VkPhysicalDevice physicalDevice,
@@ -2999,26 +3045,19 @@ namespace MobileGL::MG_Util::SelfTest {
                                         (subgroupProperties.supportedStages & VK_SHADER_STAGE_COMPUTE_BIT) != 0 &&
                                         (subgroupProperties.supportedOperations & VK_SUBGROUP_FEATURE_BASIC_BIT) != 0;
             // Same usability rule as the Vulkan capability loader's
-            // HasUsableShaderSubgroupSupport, which feeds the GL_KHR_shader_subgroup
-            // advertisement of the real backend.
-            summary.shaderSubgroupUsable = subgroupUsable;
-            if (subgroupUsable) {
-                builder.Pass("Compute shader subgroup",
-                             format("basic subgroup operations in compute, subgroup size {}",
-                                    subgroupProperties.subgroupSize));
-            } else {
-                builder.FailOptional("Compute shader subgroup",
-                                     "basic subgroup operations are not usable from compute shaders, so "
-                                     "MobileGL withholds GL_KHR_shader_subgroup and the subgroup "
-                                     "iteration-render-pass path cannot run; there is no scalar rewrite "
-                                     "that stands in for a subgroup reduction");
-            }
+            // HasUsableShaderSubgroupSupport, which decides native vs emulated in the real backend.
+            ReportShaderSubgroups(builder, subgroupUsable,
+                                  subgroupUsable ? format("subgroup size {}, stages 0x{:x}, operations 0x{:x}",
+                                                          subgroupProperties.subgroupSize,
+                                                          subgroupProperties.supportedStages,
+                                                          subgroupProperties.supportedOperations)
+                                                 : String());
+            summary.shaderSubgroupUsable = MG_Backend::ResolveSubgroupImplementation(subgroupUsable) !=
+                                           MG_Backend::SubgroupImplementation::None;
         } else {
-            builder.FailOptional("Compute shader subgroup",
-                                 "subgroup properties could not be queried (no "
-                                 "vkGetPhysicalDeviceProperties2, or a pre-1.1 device), so MobileGL "
-                                 "withholds GL_KHR_shader_subgroup and the subgroup paths are "
-                                 "unavailable whatever the hardware can actually do");
+            ReportShaderSubgroups(builder, false, String());
+            summary.shaderSubgroupUsable =
+                MG_Backend::ResolveSubgroupImplementation(false) != MG_Backend::SubgroupImplementation::None;
         }
 
         ProbeVulkanIterationRPWitness(builder, getInstanceProcAddr, instance, physicalDevice, computeQueueFamilyIndex,

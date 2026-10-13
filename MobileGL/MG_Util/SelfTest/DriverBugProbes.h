@@ -184,6 +184,20 @@ namespace MobileGL::MG_Util::SelfTest {
     // ProbeGeometryStageSsboWriteAfterEmitDropped(), evaluated at most once per process.
     Bool GeometryStageSsboWriteAfterEmitDropped(const MG_External::GLESFunctionsTable& gl);
 
+    // Every invocation of a 32-wide compute workgroup stores 1 into its shared slot, barrier(),
+    // reads slot 0, barrier(), stores 7, barrier(), reads slot 0 again, and writes both reads
+    // to its own result word: the second read must see 7. The Adreno ES compiler treats ordinary shared loads as pure - it hands back the
+    // first read (and, with other addresses, moves a read past a later store) - while an
+    // atomicAdd(x, 0u) read of the same words is kept in place. That atomic twin is the
+    // control: the verdict is "stale" only when the plain program goes wrong while the atomic
+    // one stays right. Deterministic (a compiler transform), so latched; false when compute
+    // shaders or an entry point are missing or anything fails to set up. Restores the GL state
+    // it touches.
+    Bool ProbeSharedMemoryLoadsGoStale(const MG_External::GLESFunctionsTable& gl);
+
+    // ProbeSharedMemoryLoadsGoStale(), evaluated at most once per process.
+    Bool SharedMemoryLoadsGoStale(const MG_External::GLESFunctionsTable& gl);
+
     // Samples one R32F GL_TEXTURE_2D_MULTISAMPLE texel through a swizzled alpha channel, twice,
     // with a separately linked program each time. Returns true only when the swizzled read goes
     // wrong while every control read stays right.
