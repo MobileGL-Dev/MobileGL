@@ -488,6 +488,13 @@ namespace MobileGL::MG_State::GLState {
                           !m_resource.IsGpuResident();
         if (live == m_publishedLiveHostWrites) return;
         m_publishedLiveHostWrites = live;
+        // AN ADOPTION ENDS THE STATE WITHOUT A RECORD. The one falling edge a resident store
+        // takes is AcquireMemoryRange adopting the store under a live persistent map. From then
+        // on the application writes the store's own memory, so a block captured here would land
+        // on the far side AFTER writes made through the map since, and put back the bytes they
+        // replaced (the seed, zeros for a fresh store). The adoption itself clears the far
+        // side's bit (MGPipeApplyMapPersistent / AdoptExternal / DonateInProcess).
+        if (!live && m_resource.IsGpuResident()) return;
 
         // ONE BLOCK, NOT THE SPAN. On the falling edge the span's bytes have already shipped
         // on this same path (ReleaseMemory lands the staged writes and calls

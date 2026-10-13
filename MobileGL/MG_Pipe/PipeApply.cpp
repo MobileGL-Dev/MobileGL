@@ -2808,7 +2808,12 @@ namespace MobileGL::MG_Pipe {
         // kReplySlot. An unregistered table declines every acquisition, which is exactly the
         // answer a build with no migrated backend should give.
         if (g_resourceOps == nullptr || g_resourceOps->MapPersistent == nullptr) return nullptr;
-        return g_resourceOps->MapPersistent(handle.Handle, size, seedBytes);
+        void* base = g_resourceOps->MapPersistent(handle.Handle, size, seedBytes);
+        // An adopted store has no live host writer to announce: the client writes the store's
+        // own memory and tells the applier nothing (BufferObject::NotePersistentMapStateChanged
+        // sends no falling edge for it), so the rising edge the map published ends here.
+        if (base != nullptr) record->HasLiveHostWrites = false;
+        return base;
     }
 
     void MGPipeApplyUnmapPersistent(const MGPHandleOnly& handle) {
@@ -2858,7 +2863,9 @@ namespace MobileGL::MG_Pipe {
         // monolith client writes its adopted map, and the applier is told nothing either way.
         PinNoLiveHostWrites(*record, handle.Handle, "adopt_external");
         if (g_resourceOps == nullptr || g_resourceOps->ImportExternal == nullptr) return false;
-        return g_resourceOps->ImportExternal(handle.Handle, ahb, size);
+        if (!g_resourceOps->ImportExternal(handle.Handle, ahb, size)) return false;
+        record->HasLiveHostWrites = false; // as map_persistent's mint: the adoption ends the state
+        return true;
     }
 
     void* MGPipeApplyDonateInProcess(const MGPHandleOnly& handle) {
@@ -2875,7 +2882,9 @@ namespace MobileGL::MG_Pipe {
         // directly, as a monolith client writes its adopted map.
         PinNoLiveHostWrites(*record, handle.Handle, "donate_in_process");
         if (g_resourceOps == nullptr || g_resourceOps->DonateInProcess == nullptr) return nullptr;
-        return g_resourceOps->DonateInProcess(handle.Handle, record->Desc.Width);
+        void* base = g_resourceOps->DonateInProcess(handle.Handle, record->Desc.Width);
+        if (base != nullptr) record->HasLiveHostWrites = false; // as map_persistent's mint
+        return base;
     }
 #endif
 
