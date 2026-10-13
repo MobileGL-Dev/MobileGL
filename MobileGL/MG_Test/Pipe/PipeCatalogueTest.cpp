@@ -1100,8 +1100,9 @@ TEST(PipeCatalogue, PipelineSubsetMembersArePinned) {
     // pipeline state iff a setter that calls BumpVersions() writes it", and that is a strict
     // superset: sample coverage, front face, provoking vertex, the scissor-test mask, the
     // back polygon mode, eleven capability bools the hash never read, and the three
-    // capabilities P2 gave storage to.
-    EXPECT_EQ(kMGPipePipelineStateMemberCount, 44u);
+    // capabilities P2 gave storage to. 47 since GL_EXT_fragment_shading_rate added the rate
+    // and its two combiner ops.
+    EXPECT_EQ(kMGPipePipelineStateMemberCount, 47u);
     EXPECT_STREQ(kMGPipePipelineStateMembers[0], "PatchVertices");
     EXPECT_STREQ(kMGPipePipelineStateMembers[kMGPipePipelineStateMemberCount - 1],
                  "ScissorTestEnabledMask");
