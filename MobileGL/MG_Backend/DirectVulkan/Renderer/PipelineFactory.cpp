@@ -525,6 +525,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             }
             effectiveStages = &adjustedStages;
         }
+        // A static rasterizer discard leaves the pipeline without fragment shader state, and then
+        // pStages may not name a fragment stage (VUID-VkGraphicsPipelineCreateInfo-pStages-06894).
+        // Nothing would run it anyway.
+        if (payload.rasterizerDiscardEnable) {
+            if (effectiveStages != &adjustedStages) adjustedStages = *effectiveStages;
+            std::erase_if(adjustedStages, [](const VkPipelineShaderStageCreateInfo& stageInfo) {
+                return stageInfo.stage == VK_SHADER_STAGE_FRAGMENT_BIT;
+            });
+            effectiveStages = &adjustedStages;
+        }
         {
             VkShaderStageFlags stagesPresent = 0;
             for (const auto& stageInfo : *effectiveStages) {

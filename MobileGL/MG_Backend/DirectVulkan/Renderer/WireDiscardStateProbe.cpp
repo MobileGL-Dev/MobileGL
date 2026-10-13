@@ -265,7 +265,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             dynamic.dynamicStateCount = 2;
             dynamic.pDynamicStates = kDynamic;
             VkGraphicsPipelineCreateInfo info{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
-            info.stageCount = 2;
+            // As PipelineFactory builds it: a static discard has no fragment shader state, so no
+            // fragment stage (VUID-VkGraphicsPipelineCreateInfo-pStages-06894).
+            info.stageCount = discard ? 1u : 2u;
             info.pStages = stages;
             info.pVertexInputState = &vertexInput;
             info.pInputAssemblyState = &assembly;
