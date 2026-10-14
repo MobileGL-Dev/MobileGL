@@ -2871,9 +2871,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
 
         // What such a unit is bound to instead, on a driver whose EMPTY unit is not enough
-        // (GLESCapabilities::EmptyImageUnitsReadNonzero): ES 3.2 8.22 leaves an invalid load's
-        // alpha undefined, and Adreno answers 1 where GL says 0. Elsewhere the unit stays empty,
-        // which is exact. A texel outside
+        // (GLESCapabilities::UseInvalidImagePlaceholder): ES 3.2 8.22 leaves an invalid load's
+        // alpha undefined, Adreno answers 1 where GL says 0, and ANGLE faults outright.
+        // Elsewhere the unit stays empty, which is exact. A texel outside
         // a level is invalid too, and that Adreno answers (0, 0, 0, 0) with the store dropped - so
         // the unit gets a 1x1 texture of the shape and format the bind names, cleared to zero each
         // time it is bound. Only texel (0, 0[, 0]) of it exists; it is private to the unit, so a
@@ -2990,7 +2990,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 return;
             }
             if (ImageViewNamesNoTexel(view)) {
-                if (!g_GLESCapabilities.EmptyImageUnitsReadNonzero) {
+                if (!g_GLESCapabilities.UseInvalidImagePlaceholder) {
                     g_GLESFuncs.glBindImageTexture(unit, 0, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA8);
                     return;
                 }

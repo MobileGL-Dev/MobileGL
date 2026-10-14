@@ -217,8 +217,9 @@ namespace MobileGL::MG_Config {
         // MOBILEGL_ESPRYT_INVALID_IMAGE_PLACEHOLDER: DirectGLES binds an image unit GL 4.6 8.26
         // calls invalid (a level the texture does not have) to a zeroed 1x1 texture of the bind's
         // shape instead of leaving it empty. The Adreno ES driver answers a load through an EMPTY
-        // unit with alpha 1 where GL says 0; the driver POST measures that and arms this by
-        // itself, so Auto is right everywhere. The placeholder's one texel is real, so a store
+        // unit with alpha 1 where GL says 0, and ANGLE faults on any use of an empty unit; the
+        // driver POST measures the first and Auto arms this on ANGLE without probing, so Auto is
+        // right everywhere. The placeholder's one texel is real, so a store
         // through such a unit can be read back through the same unit in the same pass - which is
         // why a healthy driver keeps the empty unit. ForceOn exercises the placeholder on a
         // healthy driver; ForceOff is the negative control.

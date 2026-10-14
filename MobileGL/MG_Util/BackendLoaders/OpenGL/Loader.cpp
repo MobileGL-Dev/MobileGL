@@ -2125,24 +2125,30 @@ namespace MobileGL::MG_Util::BackendLoader {
                     ? "true (the subgroup emulation reads its scratch through atomic loads)"
                     : "false");
 
+        caps.IsAngleRenderer = caps.GLESRendererString.find("ANGLE") != String::npos;
+
         switch (MG_Config::Features.EsprytInvalidImagePlaceholder) {
             case MG_Config::QuirkOverride::ForceOn:
-                caps.EmptyImageUnitsReadNonzero = true;
+                caps.UseInvalidImagePlaceholder = true;
                 break;
             case MG_Config::QuirkOverride::ForceOff:
-                caps.EmptyImageUnitsReadNonzero = false;
+                caps.UseInvalidImagePlaceholder = false;
                 break;
             case MG_Config::QuirkOverride::Auto:
             default:
-                caps.EmptyImageUnitsReadNonzero = SelfTest::EmptyImageUnitsReadNonzero(glesFuncs);
+                // ANGLE dereferences a null texture when a dispatch or draw reaches an EMPTY image
+                // unit the program uses, so the probe cannot be run there: its subject variant is
+                // exactly that dispatch, and a crash is no verdict. ANGLE keeps the placeholder
+                // without being asked.
+                caps.UseInvalidImagePlaceholder =
+                    caps.IsAngleRenderer || SelfTest::EmptyImageUnitsReadNonzero(glesFuncs);
                 break;
         }
-        MGLOG_I("    Empty image units read nonzero: %s",
-                caps.EmptyImageUnitsReadNonzero
-                    ? "true (an invalid image unit is bound to a zeroed placeholder)"
-                    : "false");
+        MGLOG_I("    Invalid image units bound to a placeholder: %s",
+                !caps.UseInvalidImagePlaceholder ? "false (an invalid image unit stays empty)"
+                : caps.IsAngleRenderer           ? "true (ANGLE faults on a use of an empty image unit)"
+                                                 : "true (empty image units read nonzero)");
 
-        caps.IsAngleRenderer = caps.GLESRendererString.find("ANGLE") != String::npos;
         caps.IsAngleLlvmpipeRenderer =
             caps.IsAngleRenderer && caps.GLESRendererString.find("llvmpipe") != String::npos;
         caps.AvoidSamplerMipmapMinFilter =
