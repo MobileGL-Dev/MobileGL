@@ -2029,11 +2029,20 @@ namespace {
     // The client does not wait for anything while the drain is held (the applied notification may
     // only reach a parked client after the hook): it waits for the hold to be ENTERED, which says the
     // healthy record has been applied, publishes the GUILTY record, and only then waits.
-    std::atomic<int> g_holdDrainForGuilty{0};
+    // ARMED BY SEQ, NOT BY "THE NEXT RECORD". The client's wait for the record BEFORE the healthy one
+    // returns the instant that record's appliedSeq is published - inside the apply callback, before
+    // that drain reaches this hook. Armed with a bare flag, that drain could take the hold for the
+    // previous record; the healthy record then arrived unpolled after GUILTY was set, the drain
+    // polled first and latched, and the healthy record was never applied (bit 8, every CI failure).
+    std::atomic<Uint64> g_holdAfterSeq{0};
+    std::atomic<const std::atomic<std::uint64_t>*> g_holdAppliedSeq{nullptr};
     std::atomic<bool> g_holdEntered{false};
     std::atomic<bool> g_guiltyPublished{false};
     void HoldDrainUntilTheGuiltyRecordIsPublished() {
-        if (g_holdDrainForGuilty.exchange(0) != 1) return;
+        const Uint64 after = g_holdAfterSeq.load(std::memory_order_acquire);
+        const auto* appliedSeq = g_holdAppliedSeq.load(std::memory_order_acquire);
+        if (after == 0 || appliedSeq == nullptr || !Transport::Watermark::Reached(*appliedSeq, after)) return;
+        g_holdAfterSeq.store(0, std::memory_order_release); // once; only the apply thread runs this hook
         g_holdEntered.store(true, std::memory_order_release);
         const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(2);
         while (!g_guiltyPublished.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < until)
@@ -2060,14 +2069,17 @@ namespace {
         gles.glGetGraphicsResetStatus = &FakeGetGraphicsResetStatus;
         MG_Backend::DirectGLES::SetGLESFuncsTable(gles);
         int failed = 0;
-        const auto publish = [&] {
+        const auto encode = [&] {
             MG_Pipe::MGPMemoryBarrier barrier{};
             barrier.Bits = 0x2000u;
-            const Uint64 seq = fixture.encoder.EncodeRecord(MG_Pipe::MGPWireOp::MemoryBarrier, &barrier, sizeof(barrier));
+            return fixture.encoder.EncodeRecord(MG_Pipe::MGPWireOp::MemoryBarrier, &barrier, sizeof(barrier));
+        };
+        const auto send = [&](Uint64 seq) {
             fixture.encoder.Publish();
             fixture.producer.PublishAndNotify(seq);
             return seq;
         };
+        const auto publish = [&] { return send(encode()); };
         const auto applied = [&](Uint64 seq) {
             return fixture.producer.WaitForApplied(seq, 2000) == Transport::SessionWait::Reached;
         };
@@ -2077,9 +2089,13 @@ namespace {
         if (!applied(publish()) || MG_Remote::SessionLatched()) failed |= kResetInnocentEnded;
         // The drain that applies this healthy record is held, after acknowledging it, until the
         // GUILTY record below is published, so that drain pops the GUILTY record itself.
+        // Armed with the healthy record's seq BEFORE it is published, so the hold can be neither
+        // taken by the drain still finishing the previous record nor missed by this one.
+        g_holdAppliedSeq.store(&fixture.producer.Progress()->appliedSeq, std::memory_order_release);
         Server::ServerLoopInstance().SetBetweenRecordsHookForTesting(&HoldDrainUntilTheGuiltyRecordIsPublished);
-        g_holdDrainForGuilty = 1;
-        const Uint64 healthy = publish();
+        const Uint64 healthy = encode();
+        g_holdAfterSeq.store(healthy, std::memory_order_release);
+        send(healthy);
         const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(2);
         while (!g_holdEntered.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < until)
             std::this_thread::yield();
