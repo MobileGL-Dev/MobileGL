@@ -11,6 +11,7 @@ on:
       # someone remembering to dispatch the workflow by hand.
       - feat/disaggregated
       - codex/fix-github-ci
+      - cleanup
   workflow_dispatch:
 
 env:
@@ -40,7 +41,7 @@ jobs:
       contents: read
     env:
       BUILD_DIR: build-linux
-      MOBILEGL_CI_DISAGGREGATED: ${{ (github.ref_name == 'feat/disaggregated' || github.ref_name == 'codex/fix-github-ci') && 'ON' || 'OFF' }}
+      MOBILEGL_CI_DISAGGREGATED: ${{ (github.ref_name == 'feat/disaggregated' || github.ref_name == 'codex/fix-github-ci' || github.ref_name == 'cleanup') && 'ON' || 'OFF' }}
       CCACHE_BASEDIR: ${{ github.workspace }}
       CCACHE_COMPRESS: "true"
       CCACHE_DIR: ${{ github.workspace }}/.ccache
@@ -379,7 +380,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJSON((github.ref_name == 'feat/disaggregated' || github.ref_name == 'codex/fix-github-ci') && '[{"lane":"monolith-control","transport":"monolith"},{"lane":"inproc-acceptance","transport":"inproc"}]' || '[{"lane":"monolith-control","transport":"monolith"}]') }}
+        include: ${{ fromJSON((github.ref_name == 'feat/disaggregated' || github.ref_name == 'codex/fix-github-ci' || github.ref_name == 'cleanup') && '[{"lane":"monolith-control","transport":"monolith"},{"lane":"inproc-acceptance","transport":"inproc"}]' || '[{"lane":"monolith-control","transport":"monolith"}]') }}
     env:
       MOBILEGL_TRANSPORT: ${{ matrix.transport }}
       MOBILEGL_IPC_ROLE_SPLIT_STATE: "1"
@@ -1412,7 +1413,7 @@ jobs:
       # scripts/link_ratchet.py and compared against the stored LIST.
       #
       # THIS job and not `build-linux`: build-linux passes the same three options from
-      # ${MOBILEGL_CI_DISAGGREGATED}, which is ON only on feat/disaggregated and
+      # ${MOBILEGL_CI_DISAGGREGATED}, which is ON only on feat/disaggregated, cleanup and
       # codex/fix-github-ci, so on every other branch it builds a monolith - MG_Remote would not
       # be compiled at all, the SERVER half of the partition would be empty, and the gate would
       # go green having measured nothing. This job turns the three options on unconditionally,
@@ -2684,7 +2685,7 @@ jobs:
     name: trace case matrix
     runs-on: ubuntu-latest
     env:
-      MOBILEGL_CI_DISAGGREGATED: ${{ (github.ref_name == 'feat/disaggregated' || github.ref_name == 'codex/fix-github-ci') && 'ON' || 'OFF' }}
+      MOBILEGL_CI_DISAGGREGATED: ${{ (github.ref_name == 'feat/disaggregated' || github.ref_name == 'codex/fix-github-ci' || github.ref_name == 'cleanup') && 'ON' || 'OFF' }}
     outputs:
       matrix: ${{ steps.trace-cases.outputs.matrix }}
       names: ${{ steps.trace-cases.outputs.names }}
@@ -2946,7 +2947,7 @@ jobs:
     needs: [retrace]
     if: ${{ always() && needs.retrace.result != 'skipped' }}
     env:
-      MOBILEGL_CI_DISAGGREGATED: ${{ (github.ref_name == 'feat/disaggregated' || github.ref_name == 'codex/fix-github-ci') && 'ON' || 'OFF' }}
+      MOBILEGL_CI_DISAGGREGATED: ${{ (github.ref_name == 'feat/disaggregated' || github.ref_name == 'codex/fix-github-ci' || github.ref_name == 'cleanup') && 'ON' || 'OFF' }}
 
     steps:
       - name: Checkout repo
