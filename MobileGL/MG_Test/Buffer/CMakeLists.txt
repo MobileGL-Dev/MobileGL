@@ -23,7 +23,7 @@ target_include_directories(BufferTest PRIVATE
 
 target_link_libraries(
         BufferTest PRIVATE
-        GTest::gtest_main
+        MobileGLTestMain
         ${LINK_LIBRARIES}
 )
 
@@ -50,7 +50,7 @@ target_include_directories(SplitBufferTest PRIVATE
 
 target_link_libraries(
         SplitBufferTest PRIVATE
-        GTest::gtest_main
+        MobileGLTestMain
         ${LINK_LIBRARIES}
 )
 

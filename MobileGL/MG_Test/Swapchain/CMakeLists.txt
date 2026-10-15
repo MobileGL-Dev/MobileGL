@@ -22,7 +22,7 @@ target_include_directories(SwapchainPresentModeTest PRIVATE
 
 target_link_libraries(
         SwapchainPresentModeTest PRIVATE
-        GTest::gtest_main
+        MobileGLTestMain
         ${LINK_LIBRARIES}
 )
 

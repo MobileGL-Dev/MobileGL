@@ -21,7 +21,7 @@ target_include_directories(EGLStateTest PRIVATE
 
 target_link_libraries(
         EGLStateTest PRIVATE
-        GTest::gtest_main
+        MobileGLTestMain
         ${LINK_LIBRARIES}
 )
 

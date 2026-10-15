@@ -141,7 +141,7 @@ foreach (test IN LISTS MOBILEGL_WIRE_TESTS)
     endif ()
 
     target_link_libraries(${test} PRIVATE
-            GTest::gtest_main
+            MobileGLTestMain
             ${LINK_LIBRARIES}
     )
     if (test STREQUAL "ServerSpawnTest")
@@ -293,7 +293,7 @@ if (NOT WIN32)
             ${MGL_ROOT}/3rdparty/flatbuffers/include
     )
     target_link_libraries(EventForfeitPeerTest PRIVATE
-            GTest::gtest_main
+            MobileGLTestMain
             ${LINK_LIBRARIES}
     )
     if (TARGET MobileGLServer)

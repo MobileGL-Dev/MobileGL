@@ -29,6 +29,12 @@ FetchContent_Declare(
 set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(googletest)
 
+# The main() of every test binary: gtest's, then the shader compile workers stop before main
+# returns (see TestMain.cpp).
+add_library(MobileGLTestMain STATIC TestMain.cpp)
+target_link_libraries(MobileGLTestMain PUBLIC GTest::gtest MobileGL_s)
+target_include_directories(MobileGLTestMain PRIVATE ${MGL_ROOT}/include ${MGL_ROOT}/MobileGL)
+
 enable_testing()
 
 # # Find the required libraries using our custom Find modules
@@ -42,7 +48,7 @@ add_executable(
 )
 target_link_libraries(
   SanityTest
-  GTest::gtest_main
+  MobileGLTestMain
   MobileGL_s
 )
 
@@ -109,7 +115,7 @@ add_subdirectory(Backend/DirectGLES)
 # Which session's submission stops the GPU (MG_Backend/GpuHangWatch.h): no device, no driver.
 add_executable(GpuHangWatchTest Backend/GpuHangWatchTest.cpp)
 target_include_directories(GpuHangWatchTest PRIVATE ${MGL_ROOT}/include ${MGL_ROOT}/MobileGL)
-target_link_libraries(GpuHangWatchTest PRIVATE GTest::gtest_main ${LINK_LIBRARIES})
+target_link_libraries(GpuHangWatchTest PRIVATE MobileGLTestMain ${LINK_LIBRARIES})
 gtest_discover_tests(GpuHangWatchTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
 if (ENABLE_INTEGRATION_TESTS)
     add_subdirectory(Backend/DirectVulkan)

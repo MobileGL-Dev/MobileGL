@@ -20,7 +20,7 @@ target_include_directories(JobNodeTest PRIVATE
 
 target_link_libraries(
         JobNodeTest PRIVATE
-        GTest::gtest_main
+        MobileGLTestMain
         ${LINK_LIBRARIES}
 )
 
@@ -57,7 +57,7 @@ target_include_directories(PipeStatsTest PRIVATE
 
 target_link_libraries(
         PipeStatsTest PRIVATE
-        GTest::gtest_main
+        MobileGLTestMain
         ${LINK_LIBRARIES}
 )
 
@@ -75,7 +75,7 @@ target_include_directories(DamageTest PRIVATE
 
 target_link_libraries(
         DamageTest PRIVATE
-        GTest::gtest_main
+        MobileGLTestMain
         ${LINK_LIBRARIES}
 )
 
@@ -93,7 +93,7 @@ target_include_directories(ConfigFileTest PRIVATE
 
 target_link_libraries(
         ConfigFileTest PRIVATE
-        GTest::gtest_main
+        MobileGLTestMain
         ${LINK_LIBRARIES}
 )
 
@@ -111,7 +111,7 @@ target_include_directories(X11DisplayGuardTest PRIVATE
 
 target_link_libraries(
         X11DisplayGuardTest PRIVATE
-        GTest::gtest_main
+        MobileGLTestMain
         ${LINK_LIBRARIES}
 )
 
@@ -130,7 +130,7 @@ target_include_directories(X11PresentTest PRIVATE
 
 target_link_libraries(
         X11PresentTest PRIVATE
-        GTest::gtest_main
+        MobileGLTestMain
         ${LINK_LIBRARIES}
 )
 

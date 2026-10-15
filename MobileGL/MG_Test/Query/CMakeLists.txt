@@ -20,7 +20,7 @@ target_include_directories(QueryTest PRIVATE
 
 target_link_libraries(
         QueryTest PRIVATE
-        GTest::gtest_main
+        MobileGLTestMain
         ${LINK_LIBRARIES}
 )
 

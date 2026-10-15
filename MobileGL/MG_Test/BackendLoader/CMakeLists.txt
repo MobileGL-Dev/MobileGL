@@ -20,7 +20,7 @@ target_include_directories(BackendLoaderTest PRIVATE
 
 target_link_libraries(
         BackendLoaderTest PRIVATE
-        GTest::gtest_main
+        MobileGLTestMain
         ${LINK_LIBRARIES}
 )
 

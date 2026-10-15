@@ -26,7 +26,7 @@ target_include_directories(PipelineQuirkTest PRIVATE
 
 target_link_libraries(
         PipelineQuirkTest PRIVATE
-        GTest::gtest_main
+        MobileGLTestMain
         ${LINK_LIBRARIES}
 )
 

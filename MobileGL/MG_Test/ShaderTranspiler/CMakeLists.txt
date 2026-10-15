@@ -44,7 +44,7 @@ target_include_directories(SpirvPassTest PRIVATE
 
 target_link_libraries(
         SpirvPassTest PRIVATE
-        GTest::gtest_main
+        MobileGLTestMain
         ${LINK_LIBRARIES}
 )
 
@@ -69,7 +69,7 @@ target_include_directories(TranslationCacheTest PRIVATE
 
 target_link_libraries(
         TranslationCacheTest PRIVATE
-        GTest::gtest_main
+        MobileGLTestMain
         ${LINK_LIBRARIES}
 )
 

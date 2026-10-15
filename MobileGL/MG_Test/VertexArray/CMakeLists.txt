@@ -20,7 +20,7 @@ target_include_directories(VertexArrayTest PRIVATE
 
 target_link_libraries(
         VertexArrayTest PRIVATE
-        GTest::gtest_main
+        MobileGLTestMain
         ${LINK_LIBRARIES}
 )
 
@@ -36,7 +36,7 @@ target_include_directories(VertexAttribBindingStateTest PRIVATE
 
 target_link_libraries(
         VertexAttribBindingStateTest PRIVATE
-        GTest::gtest_main
+        MobileGLTestMain
         ${LINK_LIBRARIES}
 )
 

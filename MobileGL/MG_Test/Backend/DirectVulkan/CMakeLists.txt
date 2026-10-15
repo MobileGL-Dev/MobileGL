@@ -41,7 +41,7 @@ target_link_libraries(DirectVulkanSanityTest PRIVATE Vulkan::Vulkan)
 
 target_link_libraries(
         DirectVulkanSanityTest PRIVATE
-        GTest::gtest_main
+        MobileGLTestMain
         ${LINK_LIBRARIES}
 )
 if (APPLE)

@@ -53,7 +53,10 @@ namespace MobileGL::MG_Util::Async {
                     // it just also has to happen for a process that exits without ever
                     // calling eglTerminate, which is the norm for a test binary and legal
                     // for an application. Registered here, during main, so it runs before
-                    // the destructors of statics constructed at load time.
+                    // the destructors of statics constructed at load time. The MSVC runtime
+                    // runs this under its exit lock, so a worker that constructs a static for
+                    // the first time meanwhile deadlocks: a program linking MobileGL statically
+                    // drains before main returns, as MG_Test's TestMain.cpp does.
                     ShaderCompilePool::StopAndDrainProcessPoolAtExit();
                 });
             });

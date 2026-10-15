@@ -20,7 +20,7 @@ target_include_directories(TextureTest PRIVATE
 
 target_link_libraries(
         TextureTest PRIVATE
-        GTest::gtest_main
+        MobileGLTestMain
         ${LINK_LIBRARIES}
 )
 
@@ -39,7 +39,7 @@ target_include_directories(TextureViewTest PRIVATE
 
 target_link_libraries(
         TextureViewTest PRIVATE
-        GTest::gtest_main
+        MobileGLTestMain
         ${LINK_LIBRARIES}
 )
 

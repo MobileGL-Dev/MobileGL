@@ -19,7 +19,7 @@ target_include_directories(DriverPostIterationRPWitnessTest PRIVATE
 )
 
 target_link_libraries(DriverPostIterationRPWitnessTest PRIVATE
-        GTest::gtest_main
+        MobileGLTestMain
         ${LINK_LIBRARIES}
 )
 
@@ -35,7 +35,7 @@ target_include_directories(DriverBugProbesTest PRIVATE
 )
 
 target_link_libraries(DriverBugProbesTest PRIVATE
-        GTest::gtest_main
+        MobileGLTestMain
         ${LINK_LIBRARIES}
 )
 
@@ -50,7 +50,7 @@ target_include_directories(PrimitivesGeneratedNoXfbProbeTest PRIVATE
 )
 
 target_link_libraries(PrimitivesGeneratedNoXfbProbeTest PRIVATE
-        GTest::gtest_main
+        MobileGLTestMain
         ${LINK_LIBRARIES}
 )
 
@@ -78,7 +78,7 @@ target_compile_definitions(BakedInternalShadersTest PRIVATE
 )
 
 target_link_libraries(BakedInternalShadersTest PRIVATE
-        GTest::gtest_main
+        MobileGLTestMain
         glslang
         glslang-default-resource-limits
         ${LINK_LIBRARIES}

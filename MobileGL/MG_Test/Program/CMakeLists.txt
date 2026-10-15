@@ -27,7 +27,7 @@ target_include_directories(ProgramUtilTest PRIVATE
 
 target_link_libraries(
         ProgramUtilTest
-        GTest::gtest_main
+        MobileGLTestMain
         ${LINK_LIBRARIES}
 )
 
@@ -59,7 +59,7 @@ target_include_directories(AsyncCompileTest PRIVATE
 
 target_link_libraries(
         AsyncCompileTest PRIVATE
-        GTest::gtest_main
+        MobileGLTestMain
         ${LINK_LIBRARIES}
 )
 
@@ -80,7 +80,7 @@ target_include_directories(OptimisticStatusTest PRIVATE
 
 target_link_libraries(
         OptimisticStatusTest PRIVATE
-        GTest::gtest_main
+        MobileGLTestMain
         ${LINK_LIBRARIES}
 )
 
@@ -91,7 +91,7 @@ target_include_directories(AsyncLinkTest PRIVATE
 
 target_link_libraries(
         AsyncLinkTest PRIVATE
-        GTest::gtest_main
+        MobileGLTestMain
         ${LINK_LIBRARIES}
 )
 
@@ -109,7 +109,7 @@ target_include_directories(AsyncSpirvPhaseTest PRIVATE
 
 target_link_libraries(
         AsyncSpirvPhaseTest PRIVATE
-        GTest::gtest_main
+        MobileGLTestMain
         ${LINK_LIBRARIES}
 )
 
@@ -125,7 +125,7 @@ target_include_directories(ShaderCompileAdoptionTest PRIVATE
 
 target_link_libraries(
         ShaderCompileAdoptionTest PRIVATE
-        GTest::gtest_main
+        MobileGLTestMain
         ${LINK_LIBRARIES}
 )
 
@@ -141,7 +141,7 @@ target_include_directories(ParallelShaderCompileTest PRIVATE
 
 target_link_libraries(
         ParallelShaderCompileTest PRIVATE
-        GTest::gtest_main
+        MobileGLTestMain
         ${LINK_LIBRARIES}
 )
 
@@ -160,7 +160,7 @@ target_include_directories(XfbFrontendOrderInvarianceTest PRIVATE
 
 target_link_libraries(
         XfbFrontendOrderInvarianceTest PRIVATE
-        GTest::gtest_main
+        MobileGLTestMain
         ${LINK_LIBRARIES}
 )
 
@@ -179,7 +179,7 @@ target_include_directories(AsyncTeardownTest PRIVATE
 
 target_link_libraries(
         AsyncTeardownTest PRIVATE
-        GTest::gtest_main
+        MobileGLTestMain
         ${LINK_LIBRARIES}
 )
 
@@ -195,7 +195,7 @@ target_include_directories(XfbBlockVaryingTest PRIVATE
 
 target_link_libraries(
         XfbBlockVaryingTest PRIVATE
-        GTest::gtest_main
+        MobileGLTestMain
         ${LINK_LIBRARIES}
 )
 
@@ -211,7 +211,7 @@ target_include_directories(TessellationLinkTest PRIVATE
 
 target_link_libraries(
         TessellationLinkTest PRIVATE
-        GTest::gtest_main
+        MobileGLTestMain
         ${LINK_LIBRARIES}
 )
 
@@ -227,7 +227,7 @@ target_include_directories(ProgramPipelineCompositeTest PRIVATE
 
 target_link_libraries(
         ProgramPipelineCompositeTest PRIVATE
-        GTest::gtest_main
+        MobileGLTestMain
         ${LINK_LIBRARIES}
 )
 
@@ -243,7 +243,7 @@ target_include_directories(ProgramInterfaceTest PRIVATE
 
 target_link_libraries(
         ProgramInterfaceTest PRIVATE
-        GTest::gtest_main
+        MobileGLTestMain
         ${LINK_LIBRARIES}
 )
 
@@ -254,7 +254,7 @@ target_include_directories(ProgramTest PRIVATE
 
 target_link_libraries(
         ProgramTest PRIVATE
-        GTest::gtest_main
+        MobileGLTestMain
         ${LINK_LIBRARIES}
 )
 
@@ -299,7 +299,7 @@ target_include_directories(ProgramArtifactsTest PRIVATE
 
 target_link_libraries(
         ProgramArtifactsTest PRIVATE
-        GTest::gtest_main
+        MobileGLTestMain
         ${LINK_LIBRARIES}
 )
 
@@ -322,7 +322,7 @@ target_include_directories(ProgramArtifactsCodecTest PRIVATE
 
 target_link_libraries(
         ProgramArtifactsCodecTest PRIVATE
-        GTest::gtest_main
+        MobileGLTestMain
         ${LINK_LIBRARIES}
 )
 

@@ -20,7 +20,7 @@ target_include_directories(DebugTest PRIVATE
 
 target_link_libraries(
         DebugTest PRIVATE
-        GTest::gtest_main
+        MobileGLTestMain
         ${LINK_LIBRARIES}
 )
 
@@ -42,7 +42,7 @@ target_include_directories(ObjectLifetimeIdTest PRIVATE
 
 target_link_libraries(
         ObjectLifetimeIdTest PRIVATE
-        GTest::gtest_main
+        MobileGLTestMain
         ${LINK_LIBRARIES}
 )
 
@@ -68,7 +68,7 @@ target_include_directories(TransformFeedbackLifetimeIdTest PRIVATE
 
 target_link_libraries(
         TransformFeedbackLifetimeIdTest PRIVATE
-        GTest::gtest_main
+        MobileGLTestMain
         ${LINK_LIBRARIES}
 )
 
@@ -93,7 +93,7 @@ target_include_directories(RenderStateTest PRIVATE
 
 target_link_libraries(
         RenderStateTest PRIVATE
-        GTest::gtest_main
+        MobileGLTestMain
         ${LINK_LIBRARIES}
 )
 
@@ -118,7 +118,7 @@ target_include_directories(NegativeApiErrorsTest PRIVATE
 
 target_link_libraries(
         NegativeApiErrorsTest PRIVATE
-        GTest::gtest_main
+        MobileGLTestMain
         ${LINK_LIBRARIES}
 )
 
@@ -143,7 +143,7 @@ target_include_directories(MipmapFootprintTest PRIVATE
 
 target_link_libraries(
         MipmapFootprintTest PRIVATE
-        GTest::gtest_main
+        MobileGLTestMain
         ${LINK_LIBRARIES}
 )
 
@@ -165,7 +165,7 @@ target_include_directories(ContextStateOwnershipTest PRIVATE
 
 target_link_libraries(
         ContextStateOwnershipTest PRIVATE
-        GTest::gtest_main
+        MobileGLTestMain
         ${LINK_LIBRARIES}
 )
 

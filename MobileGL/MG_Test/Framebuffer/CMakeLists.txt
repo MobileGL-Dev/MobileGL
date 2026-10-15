@@ -20,7 +20,7 @@ target_include_directories(FramebufferTest PRIVATE
 
 target_link_libraries(
         FramebufferTest PRIVATE
-        GTest::gtest_main
+        MobileGLTestMain
         ${LINK_LIBRARIES}
 )
 
