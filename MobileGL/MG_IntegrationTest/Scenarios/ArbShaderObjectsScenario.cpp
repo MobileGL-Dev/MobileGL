@@ -236,7 +236,7 @@ void main() { oColor = uColor; }
             EXPECT_EQ(FirstGLError(), 0u);
         }
 
-        // A detach takes effect for every query at once (GL 4.6 ¡ì7.3), even though the program keeps
+        // A detach takes effect for every query at once (GL 4.6 Â§7.3), even though the program keeps
         // the shader for its current executable until the next link: a second detach is
         // INVALID_OPERATION, and attaching it again before that link is legal and lists it once.
         TEST_F(ArbShaderObjectsScenario, ADetachIsVisibleAtOnceAndAReattachWithdrawsIt) {
