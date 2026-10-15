@@ -30,7 +30,7 @@
 // changes what the three above assert:
 //
 //   * AnAdoptionCostsExactlyOneMapPersistentRoundtrip counts the acquisition.
-//     ARCHITECTURE.md:474 prices the adopted store at one round trip per STORAGE
+//     ARCHITECTURE.md §12 prices the adopted store at one round trip per STORAGE
 //     DEFINITION; `map-persistent-roundtrips` counts every map_persistent
 //     emission, mint or decline (D-B2), so one definition plus a frame of draws
 //     must publish exactly one. It reads the library's summary line, so it needs
@@ -602,7 +602,7 @@ void main() { word = 0xC0FFEEu; }
         ASSERT_GE(roundtrips, 0) << "the summary line carries no mpr= field: " << window.line;
         EXPECT_EQ(roundtrips, 1)
             << "one storage definition of an adopted arena is one map_persistent emission "
-               "(ARCHITECTURE.md:474, D-B2: mint OR decline, both need an answer from the resource "
+               "(ARCHITECTURE.md §12, D-B2: mint OR decline, both need an answer from the resource "
                "owner). This window defined the arena once and drew from it "
             << kDrawsInTheWindow << " times, so 1 is the whole cost; " << kDrawsInTheWindow
             << " would mean the acquisition moved onto the draw path - the ~167 ms/arena hiccup this "

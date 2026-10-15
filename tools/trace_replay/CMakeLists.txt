@@ -382,7 +382,7 @@ function(add_trace_replay_test CASE_NAME BACKEND)
 
     # --- P5: the variant suffix, and why the OUTPUT DIRECTORIES have to carry it too ----------
     #
-    # ARCHITECTURE.md:584 asks for the SPLIT suffix because without it the entry collides with
+    # ARCHITECTURE.md §16 asks for the SPLIT suffix because without it the entry collides with
     # the same case+backend and add_test with a duplicate NAME is a hard CMake error.
     #
     # THE DIRECTORIES ARE THE HALF THAT IS EASY TO FORGET AND EXPENSIVE TO GET WRONG. Both arms

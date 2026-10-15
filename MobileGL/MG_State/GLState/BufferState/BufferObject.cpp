@@ -14,7 +14,7 @@
 #include <mutex>
 #include <MG_Pipe/PipeMutation.h>
 #if MOBILEGL_BUILD_DISAGGREGATED
-// MG_State reaching into MG_Remote/Client is the layering ARCHITECTURE.md:575 names - the CLIENT
+// MG_State reaching into MG_Remote/Client is the layering ARCHITECTURE.md §16 names - the CLIENT
 // role IS MG_State plus MG_Impl - and the edge exists only in a build that has the transport at all.
 #include <MG_Remote/Client/GpuWritePending.h>
 #endif
@@ -577,7 +577,7 @@ namespace MobileGL::MG_State::GLState {
     void BufferObject::SyncGpuWrites() {
         if (!m_gpuWritePending) return;
 #if MOBILEGL_BUILD_DISAGGREGATED
-        // THE THIRD STATE (CONTRACT-P5.md section 3, ARCHITECTURE.md:509). This function has
+        // THE THIRD STATE (CONTRACT-P5.md section 3, ARCHITECTURE.md §13.1). This function has
         // only ever been able to say "pending" or "not pending", and clearing first is safe
         // in monolith because the readback is synchronous INSIDE the applier: the caller sees
         // the reconciled shadow on return. Under a transport there is a third state - the
@@ -585,7 +585,7 @@ namespace MobileGL::MG_State::GLState {
         // and clearing optimistically leaves the shadow silently stale for the object's life.
         //
         // So: emit, then BLOCK until OnBufferWriteback lands, and let the writeback do the
-        // clearing. ARCHITECTURE.md:509 lists "the first CPU read of a GPU-write-pending
+        // clearing. ARCHITECTURE.md §13.1 lists "the first CPU read of a GPU-write-pending
         // buffer" among the UNAVOIDABLE blocking points, because monolith already glFinish()es
         // here; under R-1's verb barrier the block is nearly free, since the client is already
         // waiting for appliedSeq to reach the record it just emitted.

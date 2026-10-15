@@ -15,7 +15,7 @@
 #include <set>        // std::set<String> (LinkArtifacts); NOT provided by Includes.h on its own terms
 // PURITY: no ShaderObject.h, no SpvcSession.h, nothing under MG_Util/ShaderTranspiler/, no Config.h,
 // no MG_Backend/, no BufferState/. scripts/check_include_closure.py probe "artifacts-header" (ROADMAP P0.5;
-// ARCHITECTURE.md:260) asserts that closure. The glslang scope token appears exactly twice below (B.0 D5: the two
+// ARCHITECTURE.md §13.2) asserts that closure. The glslang scope token appears exactly twice below (B.0 D5: the two
 // glslang-typed LinkArtifacts members moved verbatim) and the gate pins that count.
 
 namespace MobileGL::MG_State::GLState {
@@ -445,7 +445,7 @@ namespace MobileGL::MG_State::GLState {
         Bool pointSizeDemoted = false;
     };
 
-    // ---- the archive field tables (ARCHITECTURE.md:259): ONE table per type, serving both directions ----
+    // ---- the archive field tables (ARCHITECTURE.md §7): ONE table per type, serving both directions ----
     //
     // Visitor contract: v(const char* name, Field&) - Field is const when Self is const, so a
     // single table serves the serializer (const) and the deserializer (non-const); `Self`

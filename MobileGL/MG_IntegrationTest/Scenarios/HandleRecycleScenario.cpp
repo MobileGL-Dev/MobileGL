@@ -1760,7 +1760,7 @@ void main() { oColor = texture(uTex, vec2(4.0, 4.0)); }
         //
         //    A sampler view is the RESOLVED (texture, sampler) pair - what the unit actually
         //    samples - and P4a addresses it by IDENTITY per texture object (D-F2, the deviation
-        //    from ARCHITECTURE.md:63's content-addressed 4096-entry cache, which is P7's). So the
+        //    from ARCHITECTURE.md §2.3's content-addressed 4096-entry cache, which is P7's). So the
         //    view's key names the texture; the case recycles the TEXTURE while an explicitly bound
         //    SAMPLER OBJECT stays alive and unchanged across the window, so what a stale view
         //    would inherit is the dead texture through a live sampler - which the texture case

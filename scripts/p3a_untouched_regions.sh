@@ -2,8 +2,8 @@
 # G5's gate: "pool 与延迟释放原样搬" is LITERAL - ELEVEN functions in
 # MobileGL/MG_Backend/DirectGLES/Managers.cpp are byte-identical after P3a.
 #
-# WHAT G5 CLAIMS, and why a diff of the file cannot say it. ARCHITECTURE.md:316 puts the three
-# persistently mapped rings and the buffer pool in the do-not-touch list, and :515 says what
+# WHAT G5 CLAIMS, and why a diff of the file cannot say it. ARCHITECTURE.md §9.1 puts the three
+# persistently mapped rings and the buffer pool in the do-not-touch list, and §14 says what
 # protects them: `present` and eglSwapBuffers are strictly 1:1, so the rings' and the pool's retire
 # only ever happens inside Present, and a batching change would starve them. P3a rewrites the file
 # those functions live in - Ops_* becomes handle-shaped, the twin's gate is re-keyed - so the
@@ -69,8 +69,8 @@
 # "a G5-protected function" and E's risk row at :1708 makes this gate the WHOLE mitigation for
 # "the three-tier drain silently changes tier because its caller now supplies bytes differently":
 # dropping the hot path from tier 1 into tier 3 costs the Mali WAR stall back, which is
-# MEASUREMENTS.md:87's p99 163 -> 21 ms and ROADMAP.md:19's headline number, and under ID-6
-# performance is RECORDED rather than gated, so no other gate stops it. A risk row whose named
+# MEASUREMENTS.md §1.4's p99 163 -> 21 ms and the phase gate's headline number (MC 26.3 p99 on Adreno unchanged),
+# and under ID-6 performance is RECORDED rather than gated, so no other gate stops it. A risk row whose named
 # mitigation does not exist is worse than an unmitigated one. It is appended LAST rather than
 # inserted, so the first nine lines of the D.0 baseline capture keep their positions.
 #
@@ -449,7 +449,7 @@ compare_lists() {
           say "  SHIPS has moved away from the text that was reviewed. Either re-pin deliberately,"
           say "  replacing the sha AND the commit AND the decision beside it, or revert the body."
         fi
-        say "  G5 (ARCHITECTURE.md:316, :515) says the buffer pool, the deferred-release drain, the"
+        say "  G5 (ARCHITECTURE.md §9.1, §14) says the buffer pool, the deferred-release drain, the"
         say "  three rings and BOTH arms of the three-tier flush drain - FlushPendingRangesNow in"
         say "  the pull build, FlushPendingRangesFrom in the push build (BRIEF-P3A.md:420, :1708,"
         say "  ID-11, ID-15) - move VERBATIM. If this change is intended, it is not a P3a change"

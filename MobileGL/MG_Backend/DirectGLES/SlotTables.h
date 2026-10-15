@@ -40,7 +40,7 @@
 //    MG_Remote/Server/PipeObjectTables) be an array rather than an object graph.
 //
 // Death is ANNOUNCED, and that is what lets this table have no garbage collector - the
-// deliverable ROADMAP.md:18 spells "GC" in and the one D13 makes a precondition of the switch-
+// one the slot-table plan lists for deletion as "GC" and the one D13 makes a precondition of the switch-
 // over. All six re-keyed object classes raise MG_State::GLState::NotifyStateObjectDestroyed()
 // from their destructor carrying {kind, lifetimeId, handle}; the backend consumes it in
 // Managers.cpp and releases the twin BY THAT HANDLE in every holder of the kind
@@ -94,7 +94,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // sequence in a FORKED CHILD (MG_IntegrationTest/Harness/HeadlessGL.cpp): a child that dies
     // on a signal is reported as "no usable GPU/display/ICD" and every scenario in the lane is
     // SKIPPED - i.e. the lane goes green having run nothing, on the very pair of env vars the
-    // D14/D18 A/B is driven with, which is what ROADMAP.md:7 forbids. So bring-up only
+    // D14/D18 A/B is driven with, which is what ARCHITECTURE.md §13.2 forbids. So bring-up only
     // DIAGNOSES; the stop is raised by ResolveEsprytSlotTablesArm() at the first twin lookup,
     // which happens in the test body where the harness reports it as a failure.
     //

@@ -102,7 +102,7 @@ namespace MGITest {
         // as a hard SIGSEGV in the vertex fetch; that detour is what ID-9 supersedes.
         //
         // The COUNT is unaffected by the change: two storage definitions either way, which is
-        // what ARCHITECTURE.md:474 prices.
+        // what ARCHITECTURE.md §12 prices.
         constexpr int kDefinitionsInTheWindow = 2;
         constexpr int kDrawsPerDefinition = 3;
         constexpr int kInset = 2;

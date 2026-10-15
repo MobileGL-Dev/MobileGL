@@ -385,7 +385,7 @@ namespace {
         EXPECT_EQ(line.find("wrec/f=47.00"), String::npos) << line;
     }
 
-    // THE STAGED-BLOB DISTRIBUTION, which is the optional deliverable MEASUREMENTS.md:342 says
+    // THE STAGED-BLOB DISTRIBUTION, which is the optional deliverable MEASUREMENTS.md §6.3 says
     // has never existed. It shares the draw-payload histogram's edges - bucket 0 is "0 bytes",
     // bucket n>0 is [2^(n-1), 2^n) - so the two are read the same way, and it is a COUNT per
     // bucket rather than a byte sum: the shape is the deliverable and the bytes have their own

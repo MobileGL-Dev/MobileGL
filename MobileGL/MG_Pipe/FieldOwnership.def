@@ -71,8 +71,9 @@
 // (pack) has a carrier, and the applier writes it.
 //
 // AND THE UNPACK HALF HAS NO BACKEND READER AT ALL. Every gPipeInputs->GetPixelStoreParameters
-// call site in the tree passes `false`: DirectGLES.cpp:7924, :9399, :10893, :11272,
-// Utils.cpp:2302 and VulkanRenderer.cpp:10980 - six, not the five the scout named, and the
+// call site in the tree passes `false`: DirectGLES.cpp's PackStateFromContext, StoreReadbackRowsToClient
+// and ReadPixels, Utils.cpp's StoreClientRows, VulkanRenderer::ReadDepthStencilImageToClient() and
+// RecordVerbSink::ReadBoundFramebufferTight() - six, not the five the scout named, and the
 // scout did not open them. PipeFill.cpp's own EmitPixelPackState says the same thing from
 // the other side: "PACK only, deliberately: nothing on the far side of the boundary reads
 // unpack state". So the honest class for the unpack half is FATAL, not BARRIER_PULLED: a

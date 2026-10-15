@@ -11,7 +11,7 @@
 // WHAT IT IS FOR. SSIM is completely blind to the difference between "one union box" and "N
 // separate rects", and that difference is the Mali upload cliff: Mali prices an upload by the
 // number of JOBS, and ~100 one-rect sprite jobs against one union box measured +6 ms/frame
-// (ARCHITECTURE.md:249-251). Every gate in the phase can be green while the emission shape has
+// (ARCHITECTURE.md §6). Every gate in the phase can be green while the emission shape has
 // silently inverted, so the shape needs a number - and there are TWO numbers, deliberately:
 //
 //   tex[emit= box= rect= jobs=]   the SERVER's count, Espryt's own, which has existed since P2
@@ -633,10 +633,11 @@ void main() { oColor = texture(uTex, vUv); }
             EXPECT_EQ(rect, kGold.RectEmissions)
                 << "the BOX/RECT split moved: " << rect << " rect-list emissions against a gold of "
                 << kGold.RectEmissions
-                << ". This is the direction that costs ~+6 ms/frame on Mali (ARCHITECTURE.md:249-"
-                   "251): the driver is handed N upload jobs where it used to be handed one, and no "
+                << ". This is the direction that costs ~+6 ms/frame on Mali (ARCHITECTURE.md §6): "
+                   "the driver is handed N upload jobs where it used to be handed one, and no "
                    "SSIM case can see it. If this is intended, re-measure the row and say so in "
-                   "docs/Disaggregated/MEASUREMENTS.md. " << shapeWindow.line;
+                   "docs/Disaggregated/MEASUREMENTS.md. "
+                << shapeWindow.line;
             EXPECT_EQ(jobs, kGold.Jobs)
                 << "the JOB count moved: " << jobs << " against a gold of " << kGold.Jobs
                 << ". Jobs are what Mali prices the upload by. " << shapeWindow.line;

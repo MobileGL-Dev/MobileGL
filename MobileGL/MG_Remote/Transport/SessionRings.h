@@ -9,7 +9,7 @@
 // The ring-owning half of a session: the four segments, the two ring endpoints,
 // and the five watermarks. Owner: package s1.
 //
-// This is the object the P5 gate is really about. ROADMAP.md:21 asks that
+// This is the object the P5 gate is really about. ARCHITECTURE.md §10.1 asks that
 // `inproc` run THE SAME G3 codec as `spawn`, and InProcessTransport cannot
 // deliver that no matter how it is edited: it is two deque<vector<uint8_t>> plus
 // two condvar doorbells (InProcessTransport.cpp:38-97), it owns THE BELLS BUT

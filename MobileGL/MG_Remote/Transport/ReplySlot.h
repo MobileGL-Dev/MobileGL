@@ -12,7 +12,7 @@
 // THE ID IS THE RECORD SEQUENCE NUMBER (P5 R-3). There is no second id space and
 // no allocator: the ten kReplySlot calls carry no MGPReplySlot in their payloads
 // (that is why the id has to be DERIVED rather than carried), the wire has no
-// per-record seq field (ARCHITECTURE.md:124), so the record's ordinal IS its
+// per-record seq field (ARCHITECTURE.md §4), so the record's ordinal IS its
 // reply-slot id. The slot is addressed `seq % slotCount` and the server STAMPS
 // THE SEQ BACK INTO THE SLOT HEADER, which is what makes a wrong-slot read
 // detectable rather than merely plausible. Seq is 1-based; 0 means "no record".

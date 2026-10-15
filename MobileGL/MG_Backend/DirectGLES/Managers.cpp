@@ -7025,7 +7025,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         // P4a (D-D5), the dirty-ownership inversion, applied at the two places the upload loops
         // below actually ask: "does this (uploadTarget, level) owe an upload" and "it has been
-        // uploaded". ARCHITECTURE.md:253 puts the rect model and the emission cursor on the
+        // uploaded". ARCHITECTURE.md §6 puts the rect model and the emission cursor on the
         // CLIENT, which clears its own flags AT EMISSION - so on the handle arm the frontend's
         // IsStorageDirty is already false for every level the applier accepted, and asking it
         // would upload nothing at all. The applier's pending set is what these two read instead;
@@ -8127,7 +8127,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                             // name the client's texture object.)
                             const Bool layersAsRows =
                                 MGB_TEXTURE_TARGET(stateTextureObject) == TextureTarget::Texture1DArray;
-                            // P4a (D-D6, and ARCHITECTURE.md:321's ONE item moved out of the
+                            // P4a (D-D6, and ARCHITECTURE.md §9.1's ONE item moved out of the
                             // Espryt do-not-touch list): the DECISION below is unchanged and
                             // stays on the server - it is the side that pays the GPU cost, and
                             // the union-box-versus-N-rects choice is worth 16x the bytes on one
@@ -13908,7 +13908,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // PULL build each expands to the pre-P4a expression at its original site, so that
         // build's tokens and its symbol sizes are unchanged (D-P).
         //
-        // ARCHITECTURE.md:130 keeps the renderbuffer an INDEPENDENT frontend class while giving
+        // ARCHITECTURE.md §4.1 keeps the renderbuffer an INDEPENDENT frontend class while giving
         // it the same discriminated MGPResourceDesc a texture gets, and this is where that pays:
         // the same four fields, read out of the same record type, with Desc.Target telling the
         // applier which of the three per-kind tables the record lives in.

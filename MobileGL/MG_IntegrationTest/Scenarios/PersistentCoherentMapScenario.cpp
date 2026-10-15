@@ -54,7 +54,7 @@
 // only ever sees whichever arm its driver and transport happen to give it.
 //
 // `mpr` (map-persistent-roundtrips) is counted per ACQUISITION ATTEMPT, mint or decline
-// (ARCHITECTURE.md:492), so it is the SAME NUMBER on both arms and in both transports: that is
+// (ARCHITECTURE.md §12), so it is the SAME NUMBER on both arms and in both transports: that is
 // what makes exit gate E3(c)'s "mpr equal to the monolith arm's" checkable by one process. Both
 // lanes assert the same constant against the same workload, so the equality holds by
 // construction and each lane can fail on its own.
@@ -519,9 +519,8 @@ void main() { oColor = vec4(vColor, 1.0); }
         ASSERT_GE(roundtrips, 0) << "the summary line carries no mpr= field: " << window.line;
         EXPECT_EQ(roundtrips, kExpectedRoundtrips)
             << "one PERSISTENT|WRITE|COHERENT map of one freshly defined store is ONE acquisition "
-               "attempt, mint or decline (ARCHITECTURE.md:492). This window mapped once and drew "
-            << kDrawsInTheWindow << " times, so " << kExpectedRoundtrips << " is the whole cost; "
-            << kDrawsInTheWindow
+               "attempt, mint or decline (ARCHITECTURE.md §12). This window mapped once and drew "
+            << kDrawsInTheWindow << " times, so " << kExpectedRoundtrips << " is the whole cost; " << kDrawsInTheWindow
             << " would mean the acquisition moved onto the draw path. The number is counted as "
                "ATTEMPTS precisely so that it is the SAME on the adopted and the emulated arm and "
                "under both transports - which is what makes exit gate E3(c)'s 'mpr equal to the "

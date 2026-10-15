@@ -421,7 +421,7 @@ namespace MobileGL::MG_Util::PipeStats {
     // populations: the one above is the command payload of a draw (plan section 4.5.7, sizing
     // SEG_CMD), this one is how big the blobs a workload stages into SEG_STAGE actually are.
     //
-    // IT EXISTS FOR CONTRACT-P6.md §9 item 8, and MEASUREMENTS.md:342 says in as many words why:
+    // IT EXISTS FOR CONTRACT-P6.md §9 item 8, and MEASUREMENTS.md §6.3 says in as many words why:
     // the chunking work landed (1e7c372e buffer walks, 9469d48e texture slabs) and every
     // `maxrec` number the file carries predates it, so "the per-blob byte distribution after
     // chunking" had no measurement at all. A per-frame AVERAGE cannot answer it either: an

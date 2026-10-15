@@ -6,14 +6,14 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// THE CLIENT-SIDE CONSERVATIVE GPU-WRITE SET (ARCHITECTURE.md:575 names this component;
+// THE CLIENT-SIDE CONSERVATIVE GPU-WRITE SET (ARCHITECTURE.md §16 names this component;
 // CONTRACT-P5.md section 3, table 2's first set). Owner: package b1.
 //
 // WHY IT HAS TO MOVE SIDES. `BufferObject::SyncGpuWrites` (BufferObject.cpp:369) runs
 // synchronously, on the application's thread, the moment the application calls glMapBuffer or
 // glGetBufferSubData. It has to answer "did the GPU write this buffer since I last read it?"
 // - and today all six producers of that answer are BACKEND-side (DirectGLES.cpp:570, :618,
-// :2603, UniformManager.cpp:1075, :1231, VulkanRenderer.cpp:11618), i.e. on the server's side
+// :2603, UniformManager.cpp:1075, :1231, VulkanRenderer::BeginXfbCaptureForDraw), i.e. on the server's side
 // of a split. Asking the server is a round trip the design forbids in steady state, so the
 // client must build the set itself, from state it already owns: the SSBO and atomic-counter
 // binding points, the image units whose Access is not GL_READ_ONLY, and the transform-feedback
@@ -32,7 +32,7 @@
 // reads ResourceTracker.h:577-581 alone will think it owns that already. It does not.
 //
 // THE TWO NEW PRODUCERS. Rows 4 and 5 have no backend twin: they are behaviour P5 ADDS
-// (ARCHITECTURE.md:508), and both are strictly better than what monolith does.
+// (ARCHITECTURE.md §13.1), and both are strictly better than what monolith does.
 //   * glReadPixels into a pack PBO becomes fire-and-forget plus a client-side mark. Monolith
 //     maps the PBO and copies it into the shadow inside the call (DirectGLES.cpp:10983-10993),
 //     which is an unconditional stall on every glReadPixels whether or not anyone reads the
@@ -87,7 +87,7 @@ namespace MobileGL::MG_Record {
         // make the next map wait on - and then re-read - a dispatch that could not have
         // changed a byte of it.
         WritableImageBufferTexture,
-        // VulkanRenderer.cpp:11618 (BeginXfbCaptureForDraw): the capture targets, because
+        // VulkanRenderer.cpp (BeginXfbCaptureForDraw): the capture targets, because
         // "the capture is a GPU write like any shader's".
         TransformFeedbackCapture,
         // P5, new: glReadPixels into a bound GL_PIXEL_PACK_BUFFER.

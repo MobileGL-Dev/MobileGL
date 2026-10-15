@@ -47,7 +47,7 @@ if(DEFINED TRACE_TRANSPORT AND NOT "${TRACE_TRANSPORT}" STREQUAL "")
     set(ENV{MOBILEGL_TRANSPORT} "${TRACE_TRANSPORT}")
 endif()
 if(DEFINED TRACE_IPC_SERVER_PATH AND NOT "${TRACE_IPC_SERVER_PATH}" STREQUAL "")
-    # ARCHITECTURE.md:543. P6 consumes it; P5 carries it so that "unparsed" and
+    # ARCHITECTURE.md §15.1. P6 consumes it; P5 carries it so that "unparsed" and
     # "parsed and ignored" stop being the same observation.
     set(ENV{MOBILEGL_IPC_SERVER_PATH} "${TRACE_IPC_SERVER_PATH}")
 endif()

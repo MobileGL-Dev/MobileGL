@@ -831,20 +831,20 @@ jobs:
       # build, so an entry the filter misses is either never run under the P3a bits at all or runs
       # only in the pull `integration` job, where a MOBILEGL_PIPE_PUSH value steers nothing
       # (Config.h declares the field inside the push guard) and both arms are the same legacy path.
-      # A lane that cannot go red where it is installed is not a gate (ROADMAP.md:7).
+      # A lane that cannot go red where it is installed is not a gate (ARCHITECTURE.md §13.2).
       # P4a ADDS THREE ALTERNATIVES, and each one is here because this is the only CI job that
       # unpacks a push build:
       #   * `ObjectSubsystem` reaches the three DirectGLES.ObjectSubsystemControl. entries - the
       #     0x1fff-vs-0x1ff A/B and the 0x9ff dependency refusal (G12). `ResourceSubsystem` does
       #     NOT match it: the two families are named apart on purpose, because they are different
       #     phases' switches and a filter that merged them would hide one behind the other.
-      #   * `TextureParamsWithoutASamplerView` reaches G9's four cases, the scenario ROADMAP.md:20
+      #   * `TextureParamsWithoutASamplerView` reaches G9's four cases, the scenario the phase's acceptance gate
       #     names by hand. It runs in the ambient lanes, which the label already selects - but this
       #     step is where those cases run against a PUSH library, and G9's whole claim is about the
       #     push path. All four cases are green on the contract commit - including the one D-E3
       #     expected to be red, for the reason the scenario's header records - so this row is green
       #     from the day it lands and goes red only if a reachability path stops syncing texture
-      #     parameters at all, which is the coupling ARCHITECTURE.md:100 exists to remove.
+      #     parameters at all, which is the coupling ARCHITECTURE.md §3.2 exists to remove.
       #   * `TextureUploadShape` is RECORDED, not gated (D-D4): it asserts that the two upload-shape
       #     counters could be read and that they agree, and prints the shape for MEASUREMENTS.md. It
       #     is in the filter so that the number is actually collected on every run - an unmeasured
@@ -1496,7 +1496,7 @@ jobs:
           path: ci-artifacts/mobilegl-linux-runtime-split.tgz
           if-no-files-found: error
 
-  # The split lane itself: the three-arm shape ARCHITECTURE.md:521 asks for verbatim, plus the
+  # The split lane itself: the three-arm shape ARCHITECTURE.md §13.2 asks for verbatim, plus the
   # first real run of the five MG_Test/Wire suites, plus P5's two exit-gate negative controls.
   integration-split:
     runs-on: ubuntu-latest
@@ -2419,13 +2419,13 @@ jobs:
       - name: Protocol revision pin check
         run: python3 scripts/ci/protocol_revision_pin.py --self-test
 
-  # P0.5 interface-purity gate A (ARCHITECTURE.md:501): the two extracted headers' include closure,
+  # P0.5 interface-purity gate A (ARCHITECTURE.md §13.2): the two extracted headers' include closure,
   # asserted on `-H` output because `nm --undefined-only` is blind to "included but not called" -
   # a header whose types are never named leaves no symbol behind, and "included at all" is exactly
   # the coupling P1 and P7 have to sever. Needs a preprocessor and three header submodules, no
   # CMake configure and no glslang sources, so like pipe-gates it does not depend on build-linux.
   # The script's own --self-test is always on: a negative control that stopped tripping fails the
-  # job, because a gate that cannot go red is not a gate (ROADMAP.md:7).
+  # job, because a gate that cannot go red is not a gate (ARCHITECTURE.md §13.2).
   include-graph-check:
     name: Include-closure purity gate
     runs-on: ubuntu-latest
@@ -3683,7 +3683,7 @@ jobs:
           echo "no fprintf(stderr/stdout / printf( / puts( / std::cout|cerr under MobileGL/MG_Backend or MobileGL/MG_State"
 
       # A GATE as of P2, which is when MG_Pipe/DirtySurface.def exists to diff the scan against
-      # (ROADMAP.md:18 puts the first mapping round in P2). --check fails BOTH directions: a
+      # (the first mapping round was part of that phase's deliverable). --check fails BOTH directions: a
       # mutator the scanner finds with no row in the def, and a row naming a mutator the scan no
       # longer finds - so a deleted mutator cannot leave a stale row behind claiming coverage.
       #

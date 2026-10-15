@@ -21,7 +21,7 @@ option(MOBILEGL_IOS               "Build MobileGL for iOS instead of macOS when 
 # That emptiness is one of the two byte-level equalities the plan's validation
 # gates keep (section 10.3).
 option(MOBILEGL_BUILD_DISAGGREGATED "Build the MG_Remote transport layer (two-process shape)" OFF)
-# The CI / debugging shape (ARCHITECTURE.md:581): both roles in ONE process, talking over the
+# The CI / debugging shape (ARCHITECTURE.md §16): both roles in ONE process, talking over the
 # same SEG_CMD ring and the same G3 codec a spawned server would use. It IMPLIES
 # MOBILEGL_BUILD_DISAGGREGATED (below) and additionally admits the role-isolation shims that
 # only make sense when the two roles share an address space. It is a SUPERSET, never a
@@ -1204,7 +1204,7 @@ endif()
 # P0 spike, which links no MobileGL library and exists only to prove the Android
 # delivery chain - this one links the library and runs mobilegl_server_main.
 #
-# ARCHITECTURE.md:496 called for a ~30-line stub that dlopen's libMobileGL.so and
+# ARCHITECTURE.md §15.2 called for a ~30-line stub that dlopen's libMobileGL.so and
 # dlsym's the entry point, so one shared library serves both roles. On a desktop
 # configure we link it directly instead: there is no APK packaging rule to satisfy
 # and a direct link is what makes an undefined symbol a BUILD error rather than a

@@ -124,7 +124,7 @@ namespace MobileGL::MG_Record {
     // image's own dimensions. Texture1DArray shrinks x only; Texture2DArray and
     // TextureCubeMapArray shrink x and y; every other target shrinks all three. This is the
     // mip chain's definition (MG_State's IsMipmapCompleteForFilter applies the same split,
-    // TextureObject.cpp:705-734), so two honest ends compute the same number.
+    // via ComputeMipmapCompleteForFilter in TextureObject.cpp), so two honest ends compute the same number.
     struct StagedTextureDeviceLimits {
         Int MaxTextureSize = 16384;
         Int MaxRectangleTextureSize = 16384;

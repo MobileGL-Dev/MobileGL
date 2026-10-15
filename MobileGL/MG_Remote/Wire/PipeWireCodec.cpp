@@ -2387,7 +2387,7 @@ namespace MobileGL::MG_Remote::Wire {
             return m_verbs != nullptr && m_verbs->OnClear(*static_cast<const MGPClear*>(payload));
 
         case MGPWireOp::ReadPixels:
-            // P5 BLOCKS on read_pixels (ROADMAP.md:21) and the pixels come back in the reply
+            // P5 BLOCKS on read_pixels (ARCHITECTURE.md §13.1) and the pixels come back in the reply
             // slot, which is why ReplyPool::SlotBytes() is sized from the scenario's largest
             // read rather than guessed. MGPReadbackInfo has DstOffset/DstSize and no Seg on
             // purpose: in P5 the destination is ALWAYS SEG_REPLY (contract table 1 row 23).

@@ -495,7 +495,7 @@ namespace MobileGL::MG_ConfigLoader {
 
 #if MOBILEGL_BUILD_DISAGGREGATED
     // MOBILEGL_TRANSPORT = monolith | inproc | spawn | unix:<path> | pipe:<name>
-    // (ARCHITECTURE.md:583). Shaped after InitBackendType above: an exact-name table, then
+    // (ARCHITECTURE.md §16). Shaped after InitBackendType above: an exact-name table, then
     // one fallback that names what it did instead. The two prefixed forms are the only
     // reason this is not literally that function's ENTRY macro.
     //
@@ -539,7 +539,7 @@ namespace MobileGL::MG_ConfigLoader {
         // P6 `sm`/`cp`: spawn is IMPLEMENTED. It launches a server process on a
         // rendezvous of its own and connects to it - the two processes are
         // independent, so this is `Dial = Connect` with a launcher attached
-        // rather than the fork-coupled shape ARCHITECTURE.md:488 described.
+        // rather than the fork-coupled shape ARCHITECTURE.md §15.1 described.
         if (lowered == "spawn") {
             MG_Config::Transport = MG_Config::TransportMode::Spawn;
             MG_Config::SplitTransportRequestedByConfig = true; // P7 F1, as above.

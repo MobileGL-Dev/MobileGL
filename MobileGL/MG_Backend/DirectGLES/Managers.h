@@ -487,7 +487,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // runs inside eglMakeCurrent and the integration harness pre-flights exactly that sequence
     // in a FORKED CHILD; a child that dies on a signal is reported as "no usable GPU" and every
     // scenario in the lane is SKIPPED - the lane goes green having run nothing, on the very
-    // pair of env vars the A/B is driven with, which is what ROADMAP.md:7 forbids. So a stop
+    // pair of env vars the A/B is driven with, which is what ARCHITECTURE.md §13.2 forbids. So a stop
     // has to land in a test body, i.e. at the first lookup. That is what the inline latches
     // below give: a guard-variable load and a perfectly-predicted branch per consult, and the
     // arm dispatch folds into the caller (SlotTables.h's EsprytSlotTablesEnabled argument
@@ -1988,7 +1988,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
             // ---- P4a's handle arm (D-B3). Three server-owned serials that REPLACE, on their
             // own arm, the six frontend-version memos above; the legacy members stay beside
-            // them under MOBILEGL_PIPE_LEGACY_MEMOS because ARCHITECTURE.md:369 keeps the
+            // them under MOBILEGL_PIPE_LEGACY_MEMOS because ARCHITECTURE.md §9.6 keeps the
             // pre-handle arm compiled through P3a/P4a, and because clearing the family's bit
             // has to run the pre-handle arm rather than a half-migrated one.
             //
@@ -3219,7 +3219,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Uint16 m_syncedSamplerVersion = 0;
             // P4a (D-B3): the SamplerCso record's Serial at the last completed sync. It replaces
             // m_syncedSamplerVersion, which stays beside it because the pre-handle arm compiles
-            // under MOBILEGL_PIPE_LEGACY_MEMOS through P3a/P4a (ARCHITECTURE.md:369).
+            // under MOBILEGL_PIPE_LEGACY_MEMOS through P3a/P4a (ARCHITECTURE.md §9.6).
             //
             // The two are not interchangeable and that is the point: the frontend version is per
             // OBJECT, while the serial is per CONTENT-ADDRESSED CSO, and two frontend samplers
@@ -3274,14 +3274,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // has no frontend object at all. MobileGL has no sampler-view class: GL binds a texture
         // to a unit and the sampler uniform's type, the mipmap-completeness predicates and
         // IsUndefinedDefaultTexture decide what the shader sees. Gallium's one-view-per-slot IS
-        // that resolved form, the resolution moves to the CLIENT (ARCHITECTURE.md:206), and
+        // that resolved form, the resolution moves to the CLIENT (ARCHITECTURE.md §5.5), and
         // create_sampler_view carries the restrictions the resolution had to read.
         //
         // So this twin owns NO DRIVER ID. There is nothing in ES to create for a view; the id
         // the unit binds is the texture's, and it lives on BackendTextureObject. What this twin
         // is, is the server's MEMO of one resolved view: the record it was built from, keyed on
         // that record's serial, plus the two BACKEND-SPECIFIC POST-PROCESSINGS
-        // ARCHITECTURE.md:206 keeps on the server and which act on the already-resolved set.
+        // ARCHITECTURE.md §5.5 keeps on the server and which act on the already-resolved set.
         // Espryt's is the raw-depth-fetch sampler substitution; Magma's feedback-loop detection
         // is its own and is not here.
         //

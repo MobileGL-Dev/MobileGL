@@ -24,7 +24,7 @@
 // gone.
 //
 // ANTI-RECURSION IS STILL TWO INDEPENDENT CATCHES, and CONTRACT-P6 §3.1 is why
-// neither is ARCHITECTURE.md:488's. That rule says the child hard-sets
+// neither is the original ARCHITECTURE.md §15.1 rule. That rule says the child hard-sets
 // Transport to Monolith; a6 measured that 226 live lines test
 // `Transport != Monolith` to select the SERVER arm, 148 of them in MG_Backend,
 // so obeying it flips the whole backend to frontend glue in the one process

@@ -13014,7 +13014,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // (MG_IntegrationTest/Harness/HeadlessGL.cpp). A child that dies on a signal is reported
     // to the parent as "no usable GPU/display/ICD" and every scenario in the lane is
     // SKIPPED - so the stop became a green lane that ran nothing, on exactly the two env
-    // vars the D14/D18 A/B is driven with (ROADMAP.md:7). The stop now belongs to the first
+    // vars the D14/D18 A/B is driven with (ARCHITECTURE.md §13.2). The stop now belongs to the first
     // twin lookup, which happens in a scenario body where a crash IS a test failure.
     static void DiagnoseEsprytSlotArmAtBringUp() {
         DiagnoseEsprytSlotArm();

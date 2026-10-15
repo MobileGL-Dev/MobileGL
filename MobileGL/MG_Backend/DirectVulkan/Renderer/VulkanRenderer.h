@@ -1539,7 +1539,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // (MG_Util/Debug/Log.h) is an UNCONDITIONAL std::atomic_flag::test_and_set - a locked
         // xchg, executed on every evaluation, not "one static bool test" as an earlier round of
         // this comment claimed - and this site is on the per-draw pipeline path in the very
-        // configuration that reaches it (no tracker: every draw). ROADMAP.md:7 forbids leaving
+        // configuration that reaches it (no tracker: every draw). guide/discipline.md forbids leaving
         // instrumentation on a hot path, so the once-ness is one non-atomic, always-predicted
         // load of a member that is false exactly once. Single-threaded like the rest of the
         // renderer, and per renderer rather than per process, which is also the right scope: a

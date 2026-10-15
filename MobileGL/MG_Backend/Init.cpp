@@ -149,7 +149,7 @@ namespace MobileGL::MG_Backend {
         // question could never notice the swap - only the pointer can.
         const MG_Pipe::MGPipeResourceOps* g_resourceOpsAtStep2 = nullptr;
 
-        // The single hook (ARCHITECTURE.md:29). Returns false when the split could not be
+        // The single hook (ARCHITECTURE.md §1.3). Returns false when the split could not be
         // brought up, and the caller then REFUSES TO CONTINUE rather than falling back to the
         // switch below - a fallback here is "the split lane ran monolith and went green".
         // Steps 1 and 2 of the split bring-up: the server role's private backend
@@ -257,7 +257,7 @@ namespace MobileGL::MG_Backend {
             return true;
         }
 
-        // The single hook (ARCHITECTURE.md:29) for the INPROC shape: both roles in
+        // The single hook (ARCHITECTURE.md §1.3) for the INPROC shape: both roles in
         // this process. The spawn shape runs InitServerRoleCommon in the child and
         // the client half here.
         Bool InitSplitRoles() {

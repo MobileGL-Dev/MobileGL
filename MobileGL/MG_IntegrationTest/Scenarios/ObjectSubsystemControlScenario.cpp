@@ -573,7 +573,7 @@ void main() { oColor = texture(uTex, vUv); }
         // (texture resources). Every MGPBoundView::Texture and every MGPImageView::Res names a
         // Texture handle, and only bit 10 populates the texture slot table, so with bit 11 alone
         // every lookup would miss and the unit walk would `continue` without unbinding - a
-        // half-run subsystem, which ROADMAP.md:7 forbids as loudly as a dead switch. The bring-up
+        // half-run subsystem, which ARCHITECTURE.md §13.2 forbids as loudly as a dead switch. The bring-up
         // logs ONE error naming both bits, refuses bit 11, and runs the legacy sampler arm.
         //
         // TWO ASSERTIONS, and the second is the one that stops this from being a log-scraping test:

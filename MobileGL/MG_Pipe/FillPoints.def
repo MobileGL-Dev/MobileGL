@@ -147,7 +147,7 @@
     X(DeleteTransformFeedback,                        kXfbSpan)        \
     X(GetGpuTimestampNs,                              kQuery)
 
-// X(Class) - the nine verb classes (ARCHITECTURE.md:153 names eight; kProgramOp is split out because
+// X(Class) - the nine verb classes (ARCHITECTURE.md §5.1 first named eight; kProgramOp is split out because
 // ShaderStorageBlockBinding is the one non-draw verb that syncs Espryt's render state and textures).
 #define MGP_FILL_CLASS_LIST(X) \
     X(kDraw) X(kDispatch) X(kClear) X(kBlitOrCopy) X(kTextureOp) X(kReadback) X(kXfbSpan) X(kProgramOp) X(kQuery)

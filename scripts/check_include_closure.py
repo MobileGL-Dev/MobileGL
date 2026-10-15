@@ -10,7 +10,7 @@
 
 ROADMAP.md P0.5 asks for a CI assertion on the include CLOSURE of the two headers the
 phase extracts, and for a negative control that goes red when an `MG_State` include is
-added back (ROADMAP.md:7 - every gate must be able to fail for the reason it exists).
+added back (ARCHITECTURE.md §13.2 - every gate must be able to fail for the reason it exists).
 `nm --undefined-only` cannot do that job: a header that is included but whose types are
 never named leaves no symbol behind, and "included at all" is exactly the coupling P1
 and P7 have to be able to sever. So the arbiter here is the preprocessor's own
@@ -91,7 +91,7 @@ PROBES = [
         ],
         "Allow": [],
         "TextLimits": {},
-        "Why": "MG_Pipe is below MG_State (ARCHITECTURE.md:550-561): the value types P1 hands "
+        "Why": "MG_Pipe is below MG_State (ARCHITECTURE.md §16): the value types P1 hands "
                "the backend must not drag the frontend state tree back in.",
     },
     {
@@ -634,7 +634,7 @@ def main():
     # it. `--mode text` is the default and never reaches pick_compiler, so a gate line that
     # spelled a compiler this image does not have (clang++-20, say) used to run the text half,
     # print nothing about it and exit 0 - a green nobody earned, which is exactly what
-    # ROADMAP.md:7 forbids. Asking for a compiler that is not there is an operator error
+    # ARCHITECTURE.md §13.2 forbids. Asking for a compiler that is not there is an operator error
     # whatever the mode, and it stops the run here rather than half-running it.
     resolved_compiler = pick_compiler(args.compiler) if args.compiler else None
     if args.compiler and "clang" not in modes:

@@ -10,7 +10,7 @@
 //
 // Deliberately the smallest thing that can be one: everything it could do
 // belongs to mobilegl_server_main, which lives IN THE LIBRARY so that one
-// shared library serves both roles (ARCHITECTURE.md:496). Keeping this file
+// shared library serves both roles (ARCHITECTURE.md §15.2). Keeping this file
 // empty of logic is what stops the server growing a second, divergent copy of
 // bring-up that the client half never executes.
 

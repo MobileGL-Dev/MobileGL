@@ -2,8 +2,8 @@
 # G5's gate for P4a: the Espryt do-not-touch list is LITERAL - SEVENTEEN regions across THREE
 # files stay byte-identical after P4a.
 #
-# WHAT G5 CLAIMS, and why a diff of the files cannot say it. ARCHITECTURE.md:318 is the Espryt
-# do-not-touch list and :321 names the ONE item moved out of it (the sub-rect upload decision and
+# WHAT G5 CLAIMS, and why a diff of the files cannot say it. ARCHITECTURE.md §9.1 is the Espryt
+# do-not-touch list and §6 names the ONE item moved out of it (the sub-rect upload decision and
 # the stride computation, which is P4a's D-D3/D-D6 subject). P3a made the buffer half of that list
 # literal with a sha gate over eleven functions in Managers.cpp (scripts/p3a_untouched_regions.sh);
 # P4a rewrites the rest of Managers.cpp, DirectGLES.cpp and Utils.cpp by design - the twins become
@@ -85,7 +85,7 @@
 # expected shape of a #if/#else pair that re-spells one of these bodies beside an untouched copy -
 # a finding, not a limitation, because two ladders drift (ID-11, ID-15).
 #
-# A SHARED TEMPLATE OVER AN ACCESSOR INTERFACE IS REJECTED (ID-13, MEASUREMENTS.md:521): it resizes
+# A SHARED TEMPLATE OVER AN ACCESSOR INTERFACE IS REJECTED (ID-13 in notes/p3a/INTEGRATOR-DECISIONS.md): it resizes
 # pull symbols and breaks G1. If a P4a arm needs a variant of one of the seventeen it gets its own
 # `#if MOBILEGL_PIPE_PUSH` function with its own name and its own pinned sha - the
 # FlushPendingRangesFrom shape.
@@ -636,7 +636,7 @@ compare_lists() {
           say "  replacing the sha AND the commit AND the decision beside it in BOTH this script"
           say "  and its parent scripts/p3a_untouched_regions.sh, or revert the body."
         fi
-        say "  G5 (ARCHITECTURE.md:318, :321, :515) says the Espryt do-not-touch list is literal:"
+        say "  G5 (ARCHITECTURE.md §9.1, §6, §14) says the Espryt do-not-touch list is literal:"
         say "  P3a's buffer pool, deferred-release drain, three rings and BOTH arms of the three-tier"
         say "  flush drain, plus P4a's unpack-PBO staging repack and its two ring helpers, the"
         say "  attachment permutation, the D24S8 sampling-emulation core and the format-caveat"

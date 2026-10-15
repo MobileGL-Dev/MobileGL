@@ -48,7 +48,7 @@
 // (GL_Query.cpp:481, :785), BeginXfbPrimitivesQuery (:534), SubDataResident. With no null slot
 // in this table every one of them answers "supported" and the fallback behind it silently
 // disappears. A null check on a slot may not survive into the client: it becomes a caps-mirror
-// read, which is what ARCHITECTURE.md:114 means by "CallMask replaces 'is this table slot null'".
+// read, which is what ARCHITECTURE.md §3.3 means by "CallMask replaces 'is this table slot null'".
 //
 // NOTE the asymmetry this table does not resolve, AND WHERE IT IS RESOLVED (R-17): the
 // resource, CSO, framebuffer, texture, sampler and program families do NOT come through here.

@@ -10,8 +10,8 @@
 
 A design document that cites the code is only as good as its line numbers, and a wrong one
 is worse than none: it sends the next reader to a function that does something else. The
-disaggregation plan's first draft cited SamplerObject.h:468-492 for a struct that lives at
-:72-96 in a 160-line file, and nothing caught it.
+disaggregation plan's first draft cited lines 468-492 of SamplerObject.h for a struct that then
+lived at lines 72-96 of a 160-line file, and nothing caught it.
 
 So every `File.h:123` and `File.cpp:123-456` in the given documents is resolved against a
 git revision - the file must exist there and must have at least that many lines. Bare file

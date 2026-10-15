@@ -20,7 +20,7 @@
 // The assertion is deliberately on the WHOLE grown range, so a partial write names the byte the
 // stale extent stopped at.
 //
-// P3a ADDS THE COST OF THAT REGROWTH (gate G10). ARCHITECTURE.md:474 prices a persistently mapped
+// P3a ADDS THE COST OF THAT REGROWTH (gate G10). ARCHITECTURE.md §12 prices a persistently mapped
 // store at "one round trip per STORAGE DEFINITION, not one per store" - and, emphatically, not one
 // per draw. `map-persistent-roundtrips` (`mpr=` in the summary line) counts every map_persistent
 // EMISSION, mint or decline (D-B2), so the claim is directly countable: N definitions of an
@@ -297,9 +297,9 @@ void main() {
                "map-persistent-roundtrips counter to read: " << window.line;
         EXPECT_EQ(roundtrips, static_cast<long long>(kAdoptedDefinitions))
             << "an adopted store costs ONE map_persistent per STORAGE DEFINITION "
-               "(ARCHITECTURE.md:474). This window defined the store " << kAdoptedDefinitions
-            << " times and dispatched " << kDispatchesPerDefinition << " times against each of them, so "
-            << kAdoptedDefinitions << " is the whole cost. "
+               "(ARCHITECTURE.md §12). This window defined the store "
+            << kAdoptedDefinitions << " times and dispatched " << kDispatchesPerDefinition
+            << " times against each of them, so " << kAdoptedDefinitions << " is the whole cost. "
             << (kAdoptedDefinitions * kDispatchesPerDefinition)
             << " would mean an acquisition per DRAW - the regression this counter exists to catch - and 0 "
                "would mean nothing emitted map_persistent at all. It reported: "

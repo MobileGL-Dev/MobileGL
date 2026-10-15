@@ -11,7 +11,7 @@
 // no-op, hidden by the pre-handle program pass binding the same values) and F-2 / SD-4 (the
 // shader-image window does not follow a program switch, hidden by the server's window/high-water
 // union taking the pre-handle bind for the units outside it). Both are correct pictures over a
-// permanent silent fallback, which is precisely the class ROADMAP.md:20 says a gate has to be
+// permanent silent fallback, which is precisely the class ARCHITECTURE.md §13.2 says a gate has to be
 // able to make red - and the only place the difference exists is inside.
 //
 // A SEPARATE TRANSLATION UNIT for PipeApplyPeek.h's reason, verbatim: this file includes

@@ -7,9 +7,9 @@
 // End of Source File Header
 //
 // Scenario - A TEXTURE'S PARAMETERS TAKE EFFECT EVEN WHEN IT HAS NO SAMPLER VIEW (gate G9), the
-// one scenario ROADMAP.md:20 names by hand and requires to be RED before P4a lands.
+// one scenario the acceptance gate names by hand and requires to be RED before P4a lands.
 //
-// THE DESIGN STATEMENT IT TESTS, ARCHITECTURE.md:100 (D10), verbatim: "SetTextureParams 按资源寻址、
+// THE DESIGN STATEMENT IT TESTS, ARCHITECTURE.md §3.2 (D10), verbatim: "SetTextureParams 按资源寻址、
 // 与 sampler view 分开（D10）：只作 FBO attachment / image 单元 / glCopyImageSubData 端点的纹理没有
 // sampler view，但 Espryt 对 attachment 也同步纹理参数，且 RequireImageBindableStorage 需要在前端参数
 // 版本不动时强制重同步." A texture that is only an attachment, only an image-unit binding or only a
@@ -48,7 +48,7 @@
 //     in particular they would go RED if any of the four reachability paths were ever made to
 //     depend on the texture having a sampler VIEW - which is exactly the coupling P4a's
 //     resource-addressed set_texture_params removes and the thing a later phase could reintroduce;
-//   * the "落地前必须红" artefact ROADMAP.md:20 asks for is NOT produced by the public-GL half
+//   * the "must be red before landing" artefact the acceptance gate asks for is NOT produced by the public-GL half
 //     of this file, and no public-GL integration scenario on a monolith tree can produce it.
 //     Producing it needs an observation of the DRIVER's texture object taken while the texture is
 //     still read-attachment-only. ID-19 rules that G9 is therefore a WHITE-BOX assertion, and this
@@ -109,7 +109,7 @@
 // (DirectGLES.cpp:1944), so a texture that is exclusively a READ attachment gets its STORAGE synced
 // and its PARAMETERS never. P4a closes that gap deliberately (D-E3): the record is addressed by
 // resource, and Espryt's SyncAttachmentObject applies parameters for ANY attachment, draw or read.
-// It is a behaviour change and it is the deliverable, not a drive-by dev fix (ROADMAP.md:98).
+// It is a behaviour change and it is the deliverable, not a drive-by dev fix (guide/discipline.md).
 //
 // HOW EACH CASE OBSERVES "REACHED THE DRIVER", and why the observation is always a LATER SAMPLE.
 // A texture parameter is by definition a sampling parameter: nothing about an attachment, an image
@@ -524,7 +524,7 @@ void main() {
         }
 
         // ------------------------------------------------------------------------------------
-        // 2. READ ATTACHMENT ONLY - THE MANDATORY RED (ROADMAP.md:20, D-E3, G9).
+        // 2. READ ATTACHMENT ONLY - THE MANDATORY RED (D-E3, G9).
         //
         //    The parameter is GL_DEPTH_STENCIL_TEXTURE_MODE and the texture is a packed
         //    depth/stencil one, because that is the parameter whose absence is not a mis-filtered
@@ -652,7 +652,7 @@ void main() {
                    "unsynced parameter (see this file's header: the unit sync list calls "
                    "SyncTextureParamsToBackend whenever the params version moved) - a red here means "
                    "something stronger than the D-E3 gap: a reachability path that does not sync "
-                   "parameters AT ALL, i.e. the sampler-view coupling ARCHITECTURE.md:100 (D10) "
+                   "parameters AT ALL, i.e. the sampler-view coupling ARCHITECTURE.md §3.2 (D10) "
                    "exists to remove. Read the case's own stdout line for the GL error the sample "
                    "raised before assuming an aspect-mode bug.";
 

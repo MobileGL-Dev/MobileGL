@@ -246,9 +246,9 @@ TEST_F(SplitBufferSet, Row2TheSweepIsBoundedByTheImageUnitHighWaterMark) {
     binding = MG_State::GLState::ImageTextureBinding{};
 }
 
-// Row 3 - VulkanRenderer.cpp:11618. With no capture active there is nothing to mark, and that
-// gate is the half worth pinning: a mark taken with no active capture would mark whatever the
-// binding points happened to hold from a previous one.
+// Row 3 - VulkanRenderer::BeginXfbCaptureForDraw() in VulkanRenderer.cpp. With no capture
+// active there is nothing to mark, and that gate is the half worth pinning: a mark taken with no
+// active capture would mark whatever the binding points happened to hold from a previous one.
 TEST_F(SplitBufferSet, Row3TransformFeedbackTargetsAreOnlyMarkedWhileACaptureIsActive) {
     auto target = MakeBuffer(15u, 256);
     MG_State::pGLContext->GetBufferBindingPoint(BufferTarget::TransformFeedback, 0).Bind(target);

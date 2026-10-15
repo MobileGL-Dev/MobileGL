@@ -19,7 +19,7 @@
 // Each assertion exists because something would otherwise pass silently:
 //
 //   the image links          - a6 found mobilegl_server_main existed NOWHERE in
-//                              the tree, only in ARCHITECTURE.md:488-496. A
+//                              the tree, only in ARCHITECTURE.md §15. A
 //                              target that failed to link would make every case
 //                              below read as "did not run".
 //   the bytes crossed a      - the echo carries the SERVER's own getpid(), so a

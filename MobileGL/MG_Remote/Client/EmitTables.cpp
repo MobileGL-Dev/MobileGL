@@ -417,7 +417,7 @@ namespace MobileGL::MG_Remote::Client {
             // AND THE NO-OP IS THE ONE THIS FRONTEND ALREADY GIVES for a fence it cannot wait on:
             // GL_Sync.cpp:103-106 answers GL_ALREADY_SIGNALED for a sync with no backend handle,
             // PipeApplier.cpp:175-177 answers GL_ALREADY_SIGNALED for a fence with no native
-            // object (a fence that provably did no work), and DirectGLES.cpp:16489 does the same
+            // object (a fence that provably did no work), and ClientWaitSync() in DirectGLES.cpp does the same
             // for an absent sync. A lost device is that same class of fact.
             //
             // WHAT ABORTING HERE COSTS, MEASURED: after a clean device loss Minecraft 26.2's next

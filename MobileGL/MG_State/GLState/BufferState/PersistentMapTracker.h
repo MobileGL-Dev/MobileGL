@@ -12,8 +12,8 @@
 // WHY THIS EXISTS AT ALL. A coherent persistent map is the one buffer shape with no per-write
 // API call: the application memcpys through the pointer and neither a serial, an epoch nor a
 // record moves. In monolith that is free, because the pointer IS the backend's GPU storage -
-// MEASUREMENTS.md:87 prices the adoption at p99 163 -> 21 ms and ~400 MB saved, and
-// ARCHITECTURE.md:481 requires it to hold unmoved for the whole monolith track. Across a
+// MEASUREMENTS.md §1.4 prices the adoption at p99 163 -> 21 ms and ~400 MB saved, and
+// ARCHITECTURE.md §12 requires it to hold unmoved for the whole monolith track. Across a
 // process boundary the adopted address is meaningless, so P5 runs at tier T2 (emulate): the
 // client keeps the shadow, MGPipeApplyMapPersistent declines, and the bytes the application
 // wrote with no call have to be SHIPPED. `persistent-map-push` (PipeStats `pmap`) is exactly
@@ -39,7 +39,7 @@
 //
 // PHASE 1 IS CONSERVATIVE, AND SAYS SO. The whole mapped span is pushed, by block, at every
 // validate point; no dirty bits, no memcmp. Phase 2 (MOBILEGL_IPC_SHADOW_SHM, P6+) makes it
-// precise, and ARCHITECTURE.md:499 grants it the right to be pulled forward if Phase 1 is
+// precise, and ARCHITECTURE.md §12 grants it the right to be pulled forward if Phase 1 is
 // unacceptable on the Create/Flywheel fixtures - the one place in the plan where a
 // measurement may reorder phases.
 //
@@ -264,7 +264,7 @@ namespace MobileGL::MG_Record {
     // reads as what it is: "publish everything the application wrote with no call".
     //
     // In P5 the 21 SyncPersistentMappedRange sites (CONTRACT-P5.md section 3: 9 Espryt + 12
-    // Magma, MEASUREMENTS.md:111's 20 being one low) still stand where they are and route
+    // Magma, MEASUREMENTS.md §2.1's 20 being one low) still stand where they are and route
     // into PushBlocksFor through BufferObject::SyncPersistentMappedRange, so the push already
     // happens at every point monolith pushes at. They retire into THIS call at P8, when the
     // draw-path binding walks move to the client.

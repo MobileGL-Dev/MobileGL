@@ -427,8 +427,9 @@ namespace MobileGL::MG_Pipe {
         // Only [0] (pack) has a carrier - set_pixel_pack_state, which the applier writes
         // (PipeApply.cpp:1373) - so the field is APPLIER-DERIVED and the UNPACK half is FATAL:
         // every gPipeInputs->GetPixelStoreParameters site in the tree passes false
-        // (DirectGLES.cpp:7924, :9399, :10893, :11272, Utils.cpp:2302,
-        // VulkanRenderer.cpp:10980), and PipeFill.cpp's EmitPixelPackState says the same from
+        // (DirectGLES.cpp's PackStateFromContext, StoreReadbackRowsToClient and ReadPixels, Utils.cpp's
+        // ReadbackImpl::StoreClientRows, RecordVerbSink::ReadBoundFramebufferTight and
+        // VulkanRenderer::ReadDepthStencilImageToClient), and PipeFill.cpp's EmitPixelPackState says the same from
         // the other side: "nothing on the far side of the boundary reads unpack state".
         PixelStoreParameters GetPixelStoreParameters(Bool isUnpack) const {
             MGP_INPUT_CHECK_ARG(MGPipeInputField::GetPixelStoreParameters, isUnpack ? 1u : 0u);

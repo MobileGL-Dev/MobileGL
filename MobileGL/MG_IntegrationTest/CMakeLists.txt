@@ -2015,7 +2015,7 @@ else()
                    "PersistentCoherentMapScenario's membership assertion SKIPS")
 endif()
 
-# ARCHITECTURE.md:543 - every new ctest ENVIRONMENT and add_trace_replay_test's SPLIT branch
+# ARCHITECTURE.md §15.1 - every new ctest ENVIRONMENT and add_trace_replay_test's SPLIT branch
 # carries MOBILEGL_IPC_SERVER_PATH, because the dladdr fallback cannot find the server from a
 # binary that links MobileGL_s statically. P5 is inproc-only and nothing reads the value yet; it
 # is carried now so that an unparsed variable and a parsed-and-ignored one stop being

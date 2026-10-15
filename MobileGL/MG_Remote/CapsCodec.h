@@ -54,7 +54,7 @@ namespace MobileGL::MG_Remote {
     //   bits 48..63  reserved.
     //
     // protocol.fbs:94's `tableSlotMask: ulong` is DELETED rather than renamed (R-8 offered
-    // either). Two reasons, and the second is decisive: ARCHITECTURE.md:114 says CallMask
+    // either). Two reasons, and the second is decisive: ARCHITECTURE.md §3.3 says CallMask
     // REPLACES "is this table slot null" as the capability probe, so a field whose comment is
     // "which GLFunctionsTable slots the peer registered" re-introduces exactly what it
     // replaced; and GLFunctionsTable has SIXTY-NINE function-pointer slots

@@ -3723,7 +3723,7 @@ TEST(DirectGLESSlotTable, OneDeathNoticeDropsTheTwinInEveryHolderOfTheKind) {
     EXPECT_EQ(slots.LiveCount(kKind), liveBefore);
 }
 
-// The sweep and both of its drivers are RETIRED (ROADMAP.md:18's "delete the GC"), and this is
+// The sweep and both of its drivers are RETIRED, and this is
 // the property that replaces them: an announced death releases the twin before the next creation
 // asks for a slot, so NOTHING accumulates under object churn.
 TEST(DirectGLESSlotTable, AnnouncedDeathKeepsObjectChurnFromAccumulatingWithoutASweep) {
@@ -4055,7 +4055,7 @@ TEST(DirectGLESSlotTable, EverySwitchedOverKindResolvesItsTwinThroughTheHandleAr
     // resolution moves to the CLIENT (D-F3). So this table is handle-keyed only, like the
     // buffer resource table above, and its twin owns no driver id whatsoever - what it holds is
     // the server's memo of one resolved view plus the raw-depth-fetch substitution decision,
-    // which is one of the two backend post-processings ARCHITECTURE.md:206 keeps on the server.
+    // which is one of the two backend post-processings ARCHITECTURE.md §5.5 keeps on the server.
     //
     // The handle is minted off the TEXTURE's lifetime id (D-F2: one view per ITextureObject),
     // which is what makes HandleOf resolve at all - and it is legal precisely because the two

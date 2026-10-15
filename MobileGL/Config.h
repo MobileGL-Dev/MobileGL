@@ -503,7 +503,7 @@ namespace MobileGL::MG_Config {
     //
     // MOBILEGL_TRANSPORT = monolith | inproc | spawn | unix:<path> | pipe:<name>.
     //
-    // WHY `Transport` IS NOT A FeaturesTable MEMBER. ARCHITECTURE.md:580 requires that with
+    // WHY `Transport` IS NOT A FeaturesTable MEMBER. ARCHITECTURE.md §16 requires that with
     // MOBILEGL_BUILD_DISAGGREGATED=OFF it be a `constexpr Monolith`, so that the single hook
     // in MG_Backend/Init.cpp compiles away entirely rather than becoming a branch nobody can
     // take. A FeaturesTable member is a runtime field in every build, which is the opposite
@@ -590,7 +590,7 @@ namespace MobileGL::MG_Config {
     // transport: a build that cannot reach the MG_Remote code cannot honour one of them.
     //
     // P5 lands exactly the knobs P5's own packages read. A later phase's knob is added HERE,
-    // through the integrator, and not invented at its call site - ARCHITECTURE.md:615 holds
+    // through the integrator, and not invented at its call site - ARCHITECTURE.md appendix A holds
     // the full planned inventory (PRESENT_CREDIT, POLL_ESCALATE, SHADOW_SHM,
     // INLINE_PAYLOADS, TRACE, ATTACH, RESPAWN, IDLE_EXIT_S), and every one of those belongs
     // to P6 or later.

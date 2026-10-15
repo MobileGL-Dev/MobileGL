@@ -13,7 +13,7 @@
 // slot in the client's emit table - so in that table every one of those probes would answer
 // "supported", and whatever fallback sits behind it would silently disappear. That is not a
 // theoretical risk: it is how a split lane produces a plausible picture for the wrong reason.
-// ARCHITECTURE.md:114 already said what replaces the probe - "CallMask replaces 'is this table
+// ARCHITECTURE.md §3.3 already said what replaces the probe - "CallMask replaces 'is this table
 // slot null' as the implicit capability probe" - and this header is the concrete list.
 //
 // TWO SPELLINGS, AND WHICH ONE A SITE TAKES IS DECIDED BY THE SLOT'S CLASS, NOT BY TASTE:

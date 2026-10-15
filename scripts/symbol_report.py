@@ -9,7 +9,7 @@
 """Per-symbol nm/.text attribution between two libMobileGL.so builds.
 
 P0.5's acceptance gate says every `nm --defined-only -S` delta has to be explainable per
-symbol (ROADMAP.md:16). The awkward part is that de-nesting a type renames every mangled
+symbol. The awkward part is that de-nesting a type renames every mangled
 name that mentions it - `ProgramObject::LinkArtifacts` -> `LinkArtifacts` shows up inside
 every `std::vector<...>` instantiation too - so a raw nm diff of a pure move looks
 catastrophic. `--strip-scope` folds those into a "renamed-only" bucket: same normalised
@@ -30,8 +30,8 @@ GUARD RAILS - the comparison is meaningless unless both .so files were built wit
 The header of every report prints both paths and their byte sizes so a mismatched pair is
 visible in the output rather than only in the reader's assumptions.
 
-This tool is informational by default (ARCHITECTURE.md:507, job name `monolith-symbol-report`
-ARCHITECTURE.md:568): with no gate flag it prints its report and exits 0, whatever it found.
+This tool is informational by default (ARCHITECTURE.md §13.2, job name `monolith-symbol-report`
+ARCHITECTURE.md §16): with no gate flag it prints its report and exits 0, whatever it found.
 Three flags turn it into a hard gate, and P1's G1 uses the first two - the strangler's pull build
 has to stay byte-identical, and G1 spells that out as `added == removed == resized == renamed == 0`
 with a `.text` delta of zero:

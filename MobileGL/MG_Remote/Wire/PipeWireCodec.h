@@ -33,7 +33,7 @@
 //      0xDD, so an implementation that kept a pointer past apply reads 0xDD next frame.
 //
 // SEQ. The record ordinal IS the sequence number and IS the reply-slot id (R-3): there is no
-// per-record seq field on the wire (ARCHITECTURE.md:124) and no second id space. Seq is
+// per-record seq field on the wire (ARCHITECTURE.md §4) and no second id space. Seq is
 // 1-based so that 0 can mean "nothing encoded". A kRecPad wrap filler DOES NOT ADVANCE SEQ -
 // both sides must skip it before counting, or every ring wrap offsets the two sides'
 // numbering permanently and nothing checksums it (R-9, Ring.h's header).
