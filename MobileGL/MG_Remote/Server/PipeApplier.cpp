@@ -450,7 +450,7 @@ namespace MobileGL::MG_Remote::Server {
                 MGLOG_W_ONCE("MG_Remote server: a dma-buf import was refused: the client is this process");
                 return false;
             }
-            SI::ImageRef image = SI::Identify(fd, why);
+            SI::ImageRef image = SI::Identify(fd, op.Width, op.Height, op.Format, why);
             // YUV: the planes and colour hints ride in Damage (MGPImportPlaneWord). A buffer this
             // server did not allocate is taken too, through the labelled CPU-copy fallback
             // (SharedImageRegistry.h, Image::ForeignSource); RGBA ones never are.

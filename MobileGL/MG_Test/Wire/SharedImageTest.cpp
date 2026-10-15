@@ -59,7 +59,7 @@ TEST(SharedImage, AnExportedDescriptorIdentifiesItsImageAfterCrossingASocket) {
     EXPECT_EQ(image->Modifier, SI::kModifierInvalid);
     const int peer = ThroughSocket(image->Fd);
     ASSERT_GE(peer, 0);
-    SI::ImageRef found = SI::Identify(peer, why);
+    SI::ImageRef found = SI::Identify(peer, 64, 32, SI::kFourccAbgr8888, why);
     ::close(peer);
     ASSERT_NE(found, nullptr) << why;
     EXPECT_EQ(found->Id, image->Id);
@@ -73,7 +73,7 @@ TEST(SharedImage, AForeignDescriptorIsNotIdentified) {
     ASSERT_NE(image, nullptr) << why;
     const int foreign = ::memfd_create("not-a-shared-image", MFD_CLOEXEC);
     ASSERT_GE(foreign, 0);
-    EXPECT_EQ(SI::Identify(foreign, why), nullptr);
+    EXPECT_EQ(SI::Identify(foreign, 16, 16, SI::kFourccXbgr8888, why), nullptr);
     EXPECT_FALSE(why.empty());
     ::close(foreign);
 }
@@ -88,7 +88,7 @@ TEST(SharedImage, AnImageDiesWithItsLastReferenceAndIsNoLongerIdentified) {
     image.reset();
     EXPECT_EQ(SI::LiveCount(), live - 1);
     EXPECT_EQ(SI::Find(id), nullptr);
-    EXPECT_EQ(SI::Identify(kept, why), nullptr);
+    EXPECT_EQ(SI::Identify(kept, 8, 8, SI::kFourccAbgr8888, why), nullptr);
     ::close(kept);
 }
 
@@ -153,7 +153,7 @@ TEST(SharedImage, TheInboxKeepsSharedImageAndT0DescriptorsApart) {
 
     int fd = -1;
     ASSERT_EQ(inbox.TakeSharedImageFd(5, 1000, &fd, why), Server::AdoptInbox::Outcome::Taken) << why;
-    SI::ImageRef found = SI::Identify(fd, why);
+    SI::ImageRef found = SI::Identify(fd, 16, 16, SI::kFourccAbgr8888, why);
     ::close(fd);
     ASSERT_NE(found, nullptr) << why;
     EXPECT_EQ(found->Id, image->Id);
@@ -373,7 +373,7 @@ TEST(SharedImageYuv, AnNv12ImageHasTwoPlanesInOneDescriptor) {
     EXPECT_GE(image->Plane1Offset, image->Stride * 32u);
     // Its own descriptor names it, like any image this server exported.
     const int peer = ThroughSocket(image->Fd);
-    EXPECT_EQ(SI::Identify(peer, why), image);
+    EXPECT_EQ(SI::Identify(peer, 64, 32, SI::kFourccNv12, why), image);
     ::close(peer);
 }
 
@@ -384,7 +384,7 @@ TEST(SharedImageYuv, AForeignBufferIsCopiedIntoAnImageOfItsOwn) {
     ForeignFrame frame = MakeForeignNv12(48, 30, 0);
     ASSERT_GE(frame.Fd, 0);
     // Not one of the server's: Identify refuses it, the foreign import takes it.
-    EXPECT_EQ(SI::Identify(frame.Fd, why), nullptr);
+    EXPECT_EQ(SI::Identify(frame.Fd, 48, 30, SI::kFourccNv12, why), nullptr);
     const int peer = ThroughSocket(frame.Fd);
     SI::ImageRef image = SI::ImportForeignYuv(peer, 48, 30, SI::kFourccNv12, frame.Layout, why);
     ASSERT_NE(image, nullptr) << why;

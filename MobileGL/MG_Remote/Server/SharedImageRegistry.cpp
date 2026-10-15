@@ -15,6 +15,7 @@
 #include <cstdio>
 #include <cstring>
 #include <map>
+#include <set>
 #include <utility>
 
 #if defined(__ANDROID__)
@@ -48,6 +49,9 @@ namespace MobileGL::MG_Remote::Server::SharedImages {
             std::map<std::pair<Uint64, Uint64>, std::weak_ptr<const Image>> byIdentity;
             // Foreign YUV images, by the identity of the buffer they copy from.
             std::map<std::pair<Uint64, Uint64>, std::weak_ptr<const Image>> foreignByIdentity;
+            // Images an ambiguous-identity import has already named, so the next one takes the
+            // next image the server exported under that identity instead of naming this one twice.
+            std::set<Uint64> claimedByIdentity;
             // Set once two live images were seen with one identity: the kernel shares an inode
             // between dma-bufs, so a descriptor can no longer say which image it is.
             Bool identityAmbiguous = false;
@@ -362,6 +366,7 @@ namespace MobileGL::MG_Remote::Server::SharedImages {
             // Only this image's own entries: the weak pointer is already expired, but a newer
             // image may have taken the identity over (the kernel recycles inodes).
             if (auto it = reg.byId.find(Id); it != reg.byId.end() && it->second.expired()) reg.byId.erase(it);
+            reg.claimedByIdentity.erase(Id);
             const auto key = std::make_pair(IdentityDev, IdentityIno);
             if (auto it = reg.byIdentity.find(key); it != reg.byIdentity.end() && it->second.expired())
                 reg.byIdentity.erase(it);
@@ -444,7 +449,8 @@ namespace MobileGL::MG_Remote::Server::SharedImages {
                 if (!reg.identityAmbiguous) {
                     MGLOG_E("MG_Remote server: two live shared images have one dma-buf identity (dev %llu ino %llu); "
                             "this kernel does not keep dma-buf inodes unique, so a returned descriptor cannot name its "
-                            "image and every shared-image import is refused from here on",
+                            "image. Imports degrade to naming it by extent and format over the images exported under "
+                            "that identity, in allocation order (SharedImages::Identify)",
                             static_cast<unsigned long long>(key.first), static_cast<unsigned long long>(key.second));
                 }
                 reg.identityAmbiguous = true;
@@ -586,9 +592,9 @@ namespace MobileGL::MG_Remote::Server::SharedImages {
         return image.YuvHints;
     }
 
-    ImageRef Identify(int fd, std::string& why) {
+    ImageRef Identify(int fd, Uint32 width, Uint32 height, Uint32 fourcc, std::string& why) {
 #if defined(_WIN32)
-        (void)fd;
+        (void)fd, (void)width, (void)height, (void)fourcc;
         why = "shared images need POSIX descriptors";
         return nullptr;
 #else
@@ -599,9 +605,30 @@ namespace MobileGL::MG_Remote::Server::SharedImages {
         }
         Registry& reg = Reg();
         const std::lock_guard<std::mutex> lock(reg.mutex);
+        // A KERNEL THAT DOES NOT NAME ITS BUFFERS. Every descriptor of every image reports one
+        // identity here, so the descriptor cannot say which image it is; the import's own extent
+        // and format do, over the images exported under that identity, oldest first and each
+        // claimed once - the order the producer allocated and hands them over in. A foreign image
+        // is never a candidate: it is the server's copy of a client buffer, never handed out.
         if (reg.identityAmbiguous) {
-            why = "dma-buf identities are not unique on this kernel";
-            return nullptr;
+            ImageRef chosen;
+            for (const auto& [id, weak] : reg.byId) {
+                const ImageRef image = weak.lock();
+                if (image == nullptr || image->Foreign != nullptr || image->IdentityDev != dev ||
+                    image->IdentityIno != ino)
+                    continue;
+                if (image->Width != width || image->Height != height || image->Fourcc != fourcc) continue;
+                if (reg.claimedByIdentity.count(image->Id) != 0) continue;
+                if (chosen == nullptr || image->Id < chosen->Id) chosen = image;
+            }
+            if (chosen == nullptr) {
+                why = Format("no unclaimed live image of %llux%llu fourcc 0x%08llx was exported under the only "
+                             "identity this kernel reports for descriptors",
+                             width, height, fourcc);
+                return nullptr;
+            }
+            reg.claimedByIdentity.insert(chosen->Id);
+            return chosen;
         }
         const auto it = reg.byIdentity.find(std::make_pair(dev, ino));
         ImageRef image = it != reg.byIdentity.end() ? it->second.lock() : nullptr;
