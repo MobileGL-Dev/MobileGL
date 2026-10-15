@@ -9,27 +9,16 @@
 #include "WaylandWindow.h"
 #include "FrameThrottle.h"
 
-#if MOBILEGL_WAYLAND_WINDOWS
+// The readback helper below is shared with the GLX readback path - which puts its frames on an
+// X window on a build that has no Wayland windows - so it is compiled whenever either present
+// path is, not only with Wayland windows.
+#if MOBILEGL_WAYLAND_WINDOWS || MOBILEGL_HAS_GLX
 
 #include "EGLImpl.h"
-#include <MG_Backend/BackendObjects.h>
 #include <MG_Impl/GLImpl/Buffer/GL_Buffer.h>
 #include <MG_Impl/GLImpl/Framebuffer/GL_Framebuffer.h>
 #include <MG_Impl/GLImpl/Getter/GL_Getter.h>
 #include <MG_Impl/GLImpl/RenderState/GL_RenderState.h>
-#include <MG_Util/Debug/Log.h>
-#include <cerrno>
-#include <chrono>
-#include <cstdarg>
-#include <cstdint>
-#include <cstring>
-#include <dlfcn.h>
-#include <fcntl.h>
-#include <mutex>
-#include <poll.h>
-#include <sys/mman.h>
-#include <sys/uio.h>
-#include <unistd.h>
 
 namespace MobileGL::MG_Impl::EGLImpl {
     void ReadBackFrameBGRA(EGLint width, EGLint height, Vector<Uint8>& scratch, Uint8* dst, SizeT dstStride) {
@@ -69,6 +58,30 @@ namespace MobileGL::MG_Impl::EGLImpl {
         }
     }
 } // namespace MobileGL::MG_Impl::EGLImpl
+
+#endif // MOBILEGL_WAYLAND_WINDOWS || MOBILEGL_HAS_GLX
+
+#if MOBILEGL_WAYLAND_WINDOWS
+
+#include "EGLImpl.h"
+#include <MG_Backend/BackendObjects.h>
+#include <MG_Impl/GLImpl/Buffer/GL_Buffer.h>
+#include <MG_Impl/GLImpl/Framebuffer/GL_Framebuffer.h>
+#include <MG_Impl/GLImpl/Getter/GL_Getter.h>
+#include <MG_Impl/GLImpl/RenderState/GL_RenderState.h>
+#include <MG_Util/Debug/Log.h>
+#include <cerrno>
+#include <chrono>
+#include <cstdarg>
+#include <cstdint>
+#include <cstring>
+#include <dlfcn.h>
+#include <fcntl.h>
+#include <mutex>
+#include <poll.h>
+#include <sys/mman.h>
+#include <sys/uio.h>
+#include <unistd.h>
 
 namespace MobileGL::MG_Impl::EGLImpl::Wayland {
     namespace {

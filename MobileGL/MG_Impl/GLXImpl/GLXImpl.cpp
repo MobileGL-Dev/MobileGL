@@ -8,7 +8,7 @@
 
 #include "GLXImpl.h"
 
-#if defined(__linux__) && !defined(__ANDROID__)
+#if MOBILEGL_HAS_GLX
 #include "../EGLImpl/EGLImpl.h"
 #include "../EGLImpl/WaylandWindow.h"
 #include "../GetProcAddress.h"
@@ -17,6 +17,7 @@
 #include <Init.h>
 #include <Config.h>
 #include <MG_Backend/BackendObjects.h>
+#include <string>
 
 namespace MobileGL::MG_Impl::GLXImpl {
     namespace {
@@ -141,15 +142,32 @@ namespace MobileGL::MG_Impl::GLXImpl {
             }
         };
 
+        // ---- X11/xcb libraries are dlopen'd, never linked. Desktop distros install the
+        //      versioned soname; Termux ships bare unversioned files in $PREFIX/lib, which
+        //      is neither one of bionic's default dlopen search directories nor part of a
+        //      stock Termux shell's LD_LIBRARY_PATH - only absolute paths reach them there.
+        //      The desktop name is still tried first, so glibc behaviour is unchanged.
+        void* OpenX11Library(std::initializer_list<const char*> names) {
+            for (const char* name : names) {
+                if (void* lib = dlopen(name, RTLD_LOCAL | RTLD_NOW)) {
+                    return lib;
+                }
+            }
+            if (const char* prefix = std::getenv("PREFIX")) {
+                const std::string dir = std::string(prefix) + "/lib/";
+                for (const char* name : names) {
+                    if (void* lib = dlopen((dir + name).c_str(), RTLD_LOCAL | RTLD_NOW)) {
+                        return lib;
+                    }
+                }
+            }
+            return nullptr;
+        }
+
         const X11Functions& X11() {
             static const X11Functions* functions = [] {
                 auto* fns = new X11Functions();
-                for (const char* name : {"libX11.so.6", "libX11.so"}) {
-                    fns->Library = dlopen(name, RTLD_LOCAL | RTLD_NOW);
-                    if (fns->Library) {
-                        break;
-                    }
-                }
+                fns->Library = OpenX11Library({"libX11.so.6", "libX11.so"});
                 if (fns->Library) {
                     fns->GetGeometry = reinterpret_cast<decltype(fns->GetGeometry)>(
                         dlsym(fns->Library, "XGetGeometry"));
@@ -196,8 +214,8 @@ namespace MobileGL::MG_Impl::GLXImpl {
         const XcbFunctions& Xcb() {
             static const XcbFunctions* functions = [] {
                 auto* fns = new XcbFunctions();
-                void* x11xcb = dlopen("libX11-xcb.so.1", RTLD_LOCAL | RTLD_NOW);
-                void* xcb = dlopen("libxcb.so.1", RTLD_LOCAL | RTLD_NOW);
+                void* x11xcb = OpenX11Library({"libX11-xcb.so.1", "libX11-xcb.so"});
+                void* xcb = OpenX11Library({"libxcb.so.1", "libxcb.so"});
                 if (x11xcb && xcb) {
                     fns->GetXCBConnection =
                         reinterpret_cast<decltype(fns->GetXCBConnection)>(dlsym(x11xcb, "XGetXCBConnection"));
@@ -571,8 +589,15 @@ namespace MobileGL::MG_Impl::GLXImpl {
                 EGL_HEIGHT, static_cast<EGLAttrib>(height),
                 EGL_NONE,
             };
+#if MOBILEGL_HAS_GLX && defined(__ANDROID__)
+            // Android's EGL only presents ANativeWindows: an XID is not one, so no X drawable
+            // can become a native window surface here. Every GLX drawable is a pbuffer and this
+            // layer puts the frames on the window itself - the same shape as a split client.
+            const Bool remotePbuffer = true;
+#else
             const Bool remotePbuffer = MG_Config::Transport == MG_Config::TransportMode::Spawn ||
                                        MG_Config::Transport == MG_Config::TransportMode::UnixSocket;
+#endif
             const EGLint pbufferAttribs[] = {EGL_WIDTH, static_cast<EGLint>(width),
                                              EGL_HEIGHT, static_cast<EGLint>(height), EGL_NONE};
             EGLSurface surface = remotePbuffer
@@ -1394,4 +1419,4 @@ namespace MobileGL::MG_Impl::GLXImpl {
     }
 } // namespace MobileGL::MG_Impl::GLXImpl
 
-#endif // __linux__ && !__ANDROID__
+#endif // MOBILEGL_HAS_GLX

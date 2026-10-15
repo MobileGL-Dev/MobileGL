@@ -22,7 +22,7 @@
 
 #include <Includes.h>
 
-#if defined(__linux__) && !defined(__ANDROID__)
+#if MOBILEGL_HAS_GLX
 #include "../GLXImpl.h"
 #include "../../GetProcAddress.h"
 #include <Init.h>
@@ -133,4 +133,4 @@ extern "C" MOBILEGL_API int __glx_Main(Uint32 version, const void* exportsTable,
     return 1;
 }
 
-#endif // __linux__ && !__ANDROID__
+#endif // MOBILEGL_HAS_GLX

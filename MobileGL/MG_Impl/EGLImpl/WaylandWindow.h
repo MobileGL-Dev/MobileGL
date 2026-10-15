@@ -31,10 +31,11 @@
 #define MOBILEGL_WAYLAND_WINDOWS 0
 #endif
 
-#if MOBILEGL_WAYLAND_WINDOWS
+// The readback helper below is not a Wayland artifact: the GLX readback path puts its frames on
+// an X window with it too, so its declaration stands whenever either present path is compiled.
+#if MOBILEGL_WAYLAND_WINDOWS || MOBILEGL_HAS_GLX
 
 #include <EGL/egl.h>
-#include <MG_Util/Damage/Damage.h>
 
 namespace MobileGL::MG_Impl::EGLImpl {
     // The current context's default-framebuffer frame, `width` x `height`, written top-down in
@@ -44,6 +45,12 @@ namespace MobileGL::MG_Impl::EGLImpl {
     // back, so the readback is invisible to it. `scratch` is the caller's, reused across frames.
     void ReadBackFrameBGRA(EGLint width, EGLint height, Vector<Uint8>& scratch, Uint8* dst, SizeT dstStride);
 } // namespace MobileGL::MG_Impl::EGLImpl
+
+#endif // MOBILEGL_WAYLAND_WINDOWS || MOBILEGL_HAS_GLX
+
+#if MOBILEGL_WAYLAND_WINDOWS
+
+#include <MG_Util/Damage/Damage.h>
 
 namespace MobileGL::MG_Impl::EGLImpl::Wayland {
     // EGL_PLATFORM_WAYLAND_KHR and EGL_PLATFORM_WAYLAND_EXT are the same enum.

@@ -24,6 +24,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
+#include <string>
 
 #include <dlfcn.h>
 #include <fcntl.h>
@@ -31,6 +32,23 @@
 #include <sys/mman.h>
 #include <sys/socket.h>
 #include <unistd.h>
+
+#if defined(__ANDROID__) && __ANDROID_API__ < 30
+#include <sys/syscall.h>
+#endif
+
+namespace {
+    // bionic's <sys/mman.h> declares memfd_create only from API 30 (an android-26 build sees no
+    // prototype for it), while the syscall itself is older than that and is all the MIT-SHM
+    // segment needs - a private, sealable anonymous file.
+    int MemfdCreate(const char* name, unsigned int flags) {
+#if defined(__ANDROID__) && __ANDROID_API__ < 30
+        return static_cast<int>(::syscall(__NR_memfd_create, name, flags));
+#else
+        return ::memfd_create(name, flags);
+#endif
+    }
+} // namespace
 
 namespace MobileGL::MG_Impl::GLXImpl::X11Present {
     namespace {
@@ -88,6 +106,22 @@ namespace MobileGL::MG_Impl::GLXImpl::X11Present {
             return lib != nullptr ? lib : dlopen(name, RTLD_NOW | RTLD_LOCAL);
         }
 
+        // Two names per library: the desktop versioned soname first, then the bare
+        // unversioned name Termux installs (its xcb packages carry no .so.N links). Termux
+        // keeps those files in $PREFIX/lib, which is neither one of bionic's default dlopen
+        // search directories nor part of a stock Termux shell's LD_LIBRARY_PATH, so both
+        // names are retried as absolute paths there before giving up. The desktop name is
+        // still tried first, so glibc behaviour is unchanged.
+        void* OpenLibrary(const char* name, const char* unversioned) {
+            if (void* lib = OpenLibrary(name)) return lib;
+            if (void* lib = OpenLibrary(unversioned)) return lib;
+            const char* prefix = std::getenv("PREFIX");
+            if (prefix == nullptr) return nullptr;
+            const std::string dir = std::string(prefix) + "/lib/";
+            if (void* lib = OpenLibrary((dir + name).c_str())) return lib;
+            return OpenLibrary((dir + unversioned).c_str());
+        }
+
         template <typename Fn>
         Bool Resolve(void* lib, const char* name, Fn& out) {
             out = lib != nullptr ? reinterpret_cast<Fn>(dlsym(lib, name)) : nullptr;
@@ -97,7 +131,7 @@ namespace MobileGL::MG_Impl::GLXImpl::X11Present {
         const XcbApi& Api() {
             static const XcbApi* api = [] {
                 auto* a = new XcbApi();
-                void* xcb = OpenLibrary("libxcb.so.1");
+                void* xcb = OpenLibrary("libxcb.so.1", "libxcb.so");
 #define R(lib, fn) Resolve(lib, #fn, a->fn)
                 a->core = R(xcb, xcb_generate_id) & R(xcb, xcb_flush) & R(xcb, xcb_get_extension_data) &
                           R(xcb, xcb_request_check) & R(xcb, xcb_poll_for_reply) & R(xcb, xcb_discard_reply) &
@@ -106,28 +140,28 @@ namespace MobileGL::MG_Impl::GLXImpl::X11Present {
                           R(xcb, xcb_poll_for_special_event) & R(xcb, xcb_free_pixmap_checked) &
                           R(xcb, xcb_get_input_focus) & R(xcb, xcb_get_input_focus_reply);
                 if (a->core) {
-                    void* dri3 = OpenLibrary("libxcb-dri3.so.0");
+                    void* dri3 = OpenLibrary("libxcb-dri3.so.0", "libxcb-dri3.so");
                     a->dri3Id = dri3 != nullptr ? static_cast<xcb_extension_t*>(dlsym(dri3, "xcb_dri3_id")) : nullptr;
                     a->dri3 = a->dri3Id != nullptr && R(dri3, xcb_dri3_query_version) &
                                                           R(dri3, xcb_dri3_query_version_reply) &
                                                           R(dri3, xcb_dri3_pixmap_from_buffer_checked);
                     // 1.2's multi-plane request is optional: an older libxcb-dri3 has only 1.0's.
                     (void)R(dri3, xcb_dri3_pixmap_from_buffers_checked);
-                    void* present = OpenLibrary("libxcb-present.so.0");
+                    void* present = OpenLibrary("libxcb-present.so.0", "libxcb-present.so");
                     a->presentId =
                         present != nullptr ? static_cast<xcb_extension_t*>(dlsym(present, "xcb_present_id")) : nullptr;
                     a->present = a->presentId != nullptr && R(present, xcb_present_query_version) &
                                                                 R(present, xcb_present_query_version_reply) &
                                                                 R(present, xcb_present_select_input_checked) &
                                                                 R(present, xcb_present_pixmap_checked);
-                    void* xfixes = OpenLibrary("libxcb-xfixes.so.0");
+                    void* xfixes = OpenLibrary("libxcb-xfixes.so.0", "libxcb-xfixes.so");
                     a->xfixesId =
                         xfixes != nullptr ? static_cast<xcb_extension_t*>(dlsym(xfixes, "xcb_xfixes_id")) : nullptr;
                     a->xfixes = a->xfixesId != nullptr && R(xfixes, xcb_xfixes_query_version) &
                                                               R(xfixes, xcb_xfixes_query_version_reply) &
                                                               R(xfixes, xcb_xfixes_create_region) &
                                                               R(xfixes, xcb_xfixes_destroy_region);
-                    void* shm = OpenLibrary("libxcb-shm.so.0");
+                    void* shm = OpenLibrary("libxcb-shm.so.0", "libxcb-shm.so");
                     a->shmId = shm != nullptr ? static_cast<xcb_extension_t*>(dlsym(shm, "xcb_shm_id")) : nullptr;
                     a->shm = a->shmId != nullptr && R(shm, xcb_shm_query_version) &
                                                         R(shm, xcb_shm_query_version_reply) &
@@ -461,7 +495,7 @@ namespace MobileGL::MG_Impl::GLXImpl::X11Present {
             Bool Make(Segment& segment, SizeT size) {
                 const XcbApi& api = Api();
                 Release(segment);
-                const int fd = ::memfd_create("mobilegl-glx-shm", MFD_CLOEXEC);
+                const int fd = MemfdCreate("mobilegl-glx-shm", MFD_CLOEXEC);
                 if (fd < 0) return false;
                 if (::ftruncate(fd, static_cast<off_t>(size)) != 0) {
                     ::close(fd);

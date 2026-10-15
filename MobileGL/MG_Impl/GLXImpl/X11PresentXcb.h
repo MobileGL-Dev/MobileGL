@@ -16,7 +16,7 @@
 
 #include "X11Present.h"
 
-#if defined(__linux__) && !defined(__ANDROID__) && __has_include(<xcb/dri3.h>) && __has_include(<xcb/present.h>) && \
+#if MOBILEGL_HAS_GLX && __has_include(<xcb/dri3.h>) && __has_include(<xcb/present.h>) && \
     __has_include(<xcb/xfixes.h>) && __has_include(<xcb/shm.h>)
 #define MOBILEGL_GLX_XCB_PRESENT 1
 #else

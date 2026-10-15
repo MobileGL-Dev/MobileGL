@@ -25,7 +25,7 @@ MOBILEGL_GLX_API void* glXGetProcAddressARB(const char* name) {
     return MG_Impl::GLXImpl::GetProcAddressARB(name);
 }
 
-#if defined(__linux__) && !defined(__ANDROID__)
+#if MOBILEGL_HAS_GLX
 #include "../GLXImpl.h"
 
 namespace GLXImpl = MobileGL::MG_Impl::GLXImpl;
@@ -315,4 +315,4 @@ namespace MobileGL::MG_Impl::GLXImpl {
     }
 } // namespace MobileGL::MG_Impl::GLXImpl
 
-#endif // __linux__ && !__ANDROID__
+#endif // MOBILEGL_HAS_GLX
