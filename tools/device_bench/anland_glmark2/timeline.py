@@ -1,3 +1,11 @@
+# MobileGL - tools/device_bench/anland_glmark2/timeline.py
+# Copyright (c) 2025-2026 MobileGL-Dev
+# Licensed under the GNU Lesser General Public License v3.0:
+#   https://www.gnu.org/licenses/gpl-3.0.txt
+#   https://www.gnu.org/licenses/lgpl-3.0.txt
+# SPDX-License-Identifier: LGPL-3.0-only
+# End of Source File Header
+
 import sys, collections
 f = sys.argv[1]; tids = sys.argv[2].split(','); t0off = float(sys.argv[3]); span = float(sys.argv[4])
 samples = []; cur = None

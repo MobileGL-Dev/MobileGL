@@ -1,3 +1,11 @@
+// MobileGL - MobileGL/MG_Backend/DirectVulkan/Renderer/WireYuvConvertSpirv.h
+// Copyright (c) 2025-2026 MobileGL-Dev
+// Licensed under the GNU Lesser General Public License v3.0:
+//   https://www.gnu.org/licenses/gpl-3.0.txt
+//   https://www.gnu.org/licenses/lgpl-3.0.txt
+// SPDX-License-Identifier: LGPL-3.0-only
+// End of Source File Header
+
 // Generated from WireYuvConvert.vert / WireYuvConvert.frag (Vulkan 1.0 / SPIR-V 1.0) by
 // scripts/bake_internal_shaders.py, which runs MG_Test's BakedInternalShadersTest with the
 // IN-TREE glslang and splices the words it emits into the arrays below. Do not edit the words

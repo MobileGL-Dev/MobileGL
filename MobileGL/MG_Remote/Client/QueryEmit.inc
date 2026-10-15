@@ -1,3 +1,11 @@
+// MobileGL - MobileGL/MG_Remote/Client/QueryEmit.inc
+// Copyright (c) 2025-2026 MobileGL-Dev
+// Licensed under the GNU Lesser General Public License v3.0:
+//   https://www.gnu.org/licenses/gpl-3.0.txt
+//   https://www.gnu.org/licenses/lgpl-3.0.txt
+// SPDX-License-Identifier: LGPL-3.0-only
+// End of Source File Header
+
 // Opaque local proxies carry only {slot, generation, target} across the wire.
         // Epoch: the session the query was created on. A query of an ENDED session (a recovered
         // device loss) names nothing on the current server: it answers "no result yet", and its

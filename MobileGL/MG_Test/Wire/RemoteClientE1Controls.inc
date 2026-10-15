@@ -1,3 +1,11 @@
+// MobileGL - MobileGL/MG_Test/Wire/RemoteClientE1Controls.inc
+// Copyright (c) 2025-2026 MobileGL-Dev
+// Licensed under the GNU Lesser General Public License v3.0:
+//   https://www.gnu.org/licenses/gpl-3.0.txt
+//   https://www.gnu.org/licenses/lgpl-3.0.txt
+// SPDX-License-Identifier: LGPL-3.0-only
+// End of Source File Header
+
 // E1: real transport wait boundaries, with a peer that cannot complete until
 // either the client parks or its emission has already returned. No GPU or
 // scheduling-delay assumption decides whether the wait was observed.

@@ -1,4 +1,12 @@
 #!/usr/bin/env python3
+# MobileGL - MobileGL/MG_Test/Wire/c1f_redcheck.py
+# Copyright (c) 2025-2026 MobileGL-Dev
+# Licensed under the GNU Lesser General Public License v3.0:
+#   https://www.gnu.org/licenses/gpl-3.0.txt
+#   https://www.gnu.org/licenses/lgpl-3.0.txt
+# SPDX-License-Identifier: LGPL-3.0-only
+# End of Source File Header
+
 """c1f mutation gates. Run from the worktree, links ON, after building split.
 Every mutation must compile, fail its named test, then restore/build/pass that test.
 No git operation, server source edit, or unrelated failure is accepted as red.

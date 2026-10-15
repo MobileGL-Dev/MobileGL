@@ -1,3 +1,11 @@
+# MobileGL - tools/device_bench/disagg/fcl_stacks.py
+# Copyright (c) 2025-2026 MobileGL-Dev
+# Licensed under the GNU Lesser General Public License v3.0:
+#   https://www.gnu.org/licenses/gpl-3.0.txt
+#   https://www.gnu.org/licenses/lgpl-3.0.txt
+# SPDX-License-Identifier: LGPL-3.0-only
+# End of Source File Header
+
 # fcl_stacks.py <rundir> <tid> <frames> [depth] [filter-substring]: on-CPU inclusive function time (ms/frame) and top stacks
 import os, sys
 from collections import Counter

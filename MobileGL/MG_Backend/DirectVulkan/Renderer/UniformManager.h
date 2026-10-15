@@ -1,4 +1,4 @@
-// MobileGL - MobileGL/MG_Backend/DirectVulkan/Renderer/UniformDescriptorBinder.h
+// MobileGL - MobileGL/MG_Backend/DirectVulkan/Renderer/UniformManager.h
 // Copyright (c) 2025-2026 MobileGL-Dev
 // Licensed under the GNU Lesser General Public License v3.0:
 //   https://www.gnu.org/licenses/gpl-3.0.txt

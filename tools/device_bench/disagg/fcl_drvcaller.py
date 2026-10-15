@@ -1,3 +1,11 @@
+# MobileGL - tools/device_bench/disagg/fcl_drvcaller.py
+# Copyright (c) 2025-2026 MobileGL-Dev
+# Licensed under the GNU Lesser General Public License v3.0:
+#   https://www.gnu.org/licenses/gpl-3.0.txt
+#   https://www.gnu.org/licenses/lgpl-3.0.txt
+# SPDX-License-Identifier: LGPL-3.0-only
+# End of Source File Header
+
 # fcl_drvcaller.py <rundir> <tid> <frames>: driver-layer on-CPU time keyed by (driver entry, MobileGL caller)
 import os, sys
 from collections import Counter

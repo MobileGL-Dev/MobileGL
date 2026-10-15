@@ -1,4 +1,12 @@
 #!/usr/bin/env python3
+# MobileGL - tools/device_bench/disagg/p14_report.py
+# Copyright (c) 2025-2026 MobileGL-Dev
+# Licensed under the GNU Lesser General Public License v3.0:
+#   https://www.gnu.org/licenses/gpl-3.0.txt
+#   https://www.gnu.org/licenses/lgpl-3.0.txt
+# SPDX-License-Identifier: LGPL-3.0-only
+# End of Source File Header
+
 """Reduce matrix_p14.sh results: steady-state fps, per-thread CPU ms/frame, GPU busy share.
 
     python p14_report.py <results_dir> [--md out.md] [--json out.json]

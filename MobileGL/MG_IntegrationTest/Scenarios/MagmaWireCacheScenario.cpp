@@ -1,3 +1,11 @@
+// MobileGL - MobileGL/MG_IntegrationTest/Scenarios/MagmaWireCacheScenario.cpp
+// Copyright (c) 2025-2026 MobileGL-Dev
+// Licensed under the GNU Lesser General Public License v3.0:
+//   https://www.gnu.org/licenses/gpl-3.0.txt
+//   https://www.gnu.org/licenses/lgpl-3.0.txt
+// SPDX-License-Identifier: LGPL-3.0-only
+// End of Source File Header
+
 // Wire view/framebuffer caches must preserve public GL state transitions. All
 // draws in each case precede its first readback: no Finish/Present can retire an
 // old view between A -> B -> A or hide an allocation change from an in-flight draw.

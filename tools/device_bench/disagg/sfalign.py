@@ -1,3 +1,11 @@
+# MobileGL - tools/device_bench/disagg/sfalign.py
+# Copyright (c) 2025-2026 MobileGL-Dev
+# Licensed under the GNU Lesser General Public License v3.0:
+#   https://www.gnu.org/licenses/gpl-3.0.txt
+#   https://www.gnu.org/licenses/lgpl-3.0.txt
+# SPDX-License-Identifier: LGPL-3.0-only
+# End of Source File Header
+
 # sfalign.py <trace>: does SF's setTransactionState return right after SF main-thread flushTransactions?
 import re, sys, bisect
 from collections import defaultdict

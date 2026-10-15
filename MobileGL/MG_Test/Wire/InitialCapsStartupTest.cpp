@@ -1,4 +1,11 @@
+// MobileGL - MobileGL/MG_Test/Wire/InitialCapsStartupTest.cpp
+// Copyright (c) 2025-2026 MobileGL-Dev
+// Licensed under the GNU Lesser General Public License v3.0:
+//   https://www.gnu.org/licenses/gpl-3.0.txt
+//   https://www.gnu.org/licenses/lgpl-3.0.txt
 // SPDX-License-Identifier: LGPL-3.0-only
+// End of Source File Header
+
 // Starts at the post-Welcome boundary with real TCP endpoints and ControlInbox.
 // The peer publishes real CapsSnapshot bytes; no private run-ahead flag is set.
 #include <MG_Remote/Client/ClientSession.h>

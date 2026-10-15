@@ -1,3 +1,11 @@
+// MobileGL - MobileGL/MG_Backend/DirectGLES/WireTextureReadback.inc
+// Copyright (c) 2025-2026 MobileGL-Dev
+// Licensed under the GNU Lesser General Public License v3.0:
+//   https://www.gnu.org/licenses/gpl-3.0.txt
+//   https://www.gnu.org/licenses/lgpl-3.0.txt
+// SPDX-License-Identifier: LGPL-3.0-only
+// End of Source File Header
+
 // Included in DirectGLES.cpp after the native packed-word readback helper.
 // A storage promotion needs the driver's own texels as owned tight rows, not
 // client PACK layout or a fallback into a frontend texture's potentially stale

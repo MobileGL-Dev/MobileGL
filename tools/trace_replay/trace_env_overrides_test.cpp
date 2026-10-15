@@ -1,3 +1,11 @@
+// MobileGL - tools/trace_replay/trace_env_overrides_test.cpp
+// Copyright (c) 2025-2026 MobileGL-Dev
+// Licensed under the GNU Lesser General Public License v3.0:
+//   https://www.gnu.org/licenses/gpl-3.0.txt
+//   https://www.gnu.org/licenses/lgpl-3.0.txt
+// SPDX-License-Identifier: LGPL-3.0-only
+// End of Source File Header
+
 // Host-side check for the retrace lane's `K=V;K=V` environment passthrough.
 //
 // The passthrough is the one hand-rolled parse between a CI flag and setenv(), and the

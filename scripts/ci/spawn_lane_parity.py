@@ -1,4 +1,12 @@
 #!/usr/bin/env python3
+# MobileGL - scripts/ci/spawn_lane_parity.py
+# Copyright (c) 2025-2026 MobileGL-Dev
+# Licensed under the GNU Lesser General Public License v3.0:
+#   https://www.gnu.org/licenses/gpl-3.0.txt
+#   https://www.gnu.org/licenses/lgpl-3.0.txt
+# SPDX-License-Identifier: LGPL-3.0-only
+# End of Source File Header
+
 """Exit gate 9.2: integration-spawn's case-name set equals integration-split's.
 
 WHY A GATE AND NOT A COMMENT. The two lanes are registered from one macro, so today they agree

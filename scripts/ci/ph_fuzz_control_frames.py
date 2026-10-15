@@ -1,4 +1,12 @@
 #!/usr/bin/env python3
+# MobileGL - scripts/ci/ph_fuzz_control_frames.py
+# Copyright (c) 2025-2026 MobileGL-Dev
+# Licensed under the GNU Lesser General Public License v3.0:
+#   https://www.gnu.org/licenses/gpl-3.0.txt
+#   https://www.gnu.org/licenses/lgpl-3.0.txt
+# SPDX-License-Identifier: LGPL-3.0-only
+# End of Source File Header
+
 """Ph fuzz arm 1: malformed control frames against a live TCP supervisor, each refused by name.
 
 PLAN-PH-P34B-P7.md §1.1, row "gate: fuzz arm 1 malformed control frames": the mechanism was in the

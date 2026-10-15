@@ -1,4 +1,12 @@
 #!/usr/bin/env python3
+# MobileGL - scripts/ci/protocol_revision_pin.py
+# Copyright (c) 2025-2026 MobileGL-Dev
+# Licensed under the GNU Lesser General Public License v3.0:
+#   https://www.gnu.org/licenses/gpl-3.0.txt
+#   https://www.gnu.org/licenses/lgpl-3.0.txt
+# SPDX-License-Identifier: LGPL-3.0-only
+# End of Source File Header
+
 """The control-schema revision pin (P7 wave 2-F, F fix round; PH-7 (4) review).
 
 MOBILEGL_PROTOCOL_CONTROL_REVISION (MobileGL/MG_Remote/Protocol/mg_protocol_base.h) is mixed into

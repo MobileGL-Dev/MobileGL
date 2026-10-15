@@ -1,4 +1,12 @@
 #!/usr/bin/env python3
+# MobileGL - tools/device_bench/disagg/callee_split.py
+# Copyright (c) 2025-2026 MobileGL-Dev
+# Licensed under the GNU Lesser General Public License v3.0:
+#   https://www.gnu.org/licenses/gpl-3.0.txt
+#   https://www.gnu.org/licenses/lgpl-3.0.txt
+# SPDX-License-Identifier: LGPL-3.0-only
+# End of Source File Header
+
 """Split one function's inclusive samples by its direct callees (and by malloc/atomic leaves).
 
     python callee_split.py <perf.data> <binary_cache> <function substring> [--depth 1] [--thread NAME]

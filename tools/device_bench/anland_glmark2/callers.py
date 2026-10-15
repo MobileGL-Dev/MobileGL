@@ -1,3 +1,11 @@
+# MobileGL - tools/device_bench/anland_glmark2/callers.py
+# Copyright (c) 2025-2026 MobileGL-Dev
+# Licensed under the GNU Lesser General Public License v3.0:
+#   https://www.gnu.org/licenses/gpl-3.0.txt
+#   https://www.gnu.org/licenses/lgpl-3.0.txt
+# SPDX-License-Identifier: LGPL-3.0-only
+# End of Source File Header
+
 import sys, re, subprocess, collections, os
 f, tid, so, base, sub, target = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4],16), sys.argv[5], sys.argv[6]
 SYM = os.path.expandvars(r'$LOCALAPPDATA/Android/Sdk/ndk/27.2.12479018/toolchains/llvm/prebuilt/windows-x86_64/bin/llvm-symbolizer.exe')

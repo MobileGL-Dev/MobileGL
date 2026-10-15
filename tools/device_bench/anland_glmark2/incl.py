@@ -1,3 +1,11 @@
+# MobileGL - tools/device_bench/anland_glmark2/incl.py
+# Copyright (c) 2025-2026 MobileGL-Dev
+# Licensed under the GNU Lesser General Public License v3.0:
+#   https://www.gnu.org/licenses/gpl-3.0.txt
+#   https://www.gnu.org/licenses/lgpl-3.0.txt
+# SPDX-License-Identifier: LGPL-3.0-only
+# End of Source File Header
+
 # incl.py <samples> <tid> <so> <base> <dsosub> [top] - inclusive on-CPU %, and leaf-dso -> first own frame
 import sys, re, subprocess, collections, os
 f, tid, so, base, sub = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4], 16), sys.argv[5]

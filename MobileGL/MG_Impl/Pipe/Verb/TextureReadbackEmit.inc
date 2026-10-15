@@ -1,3 +1,11 @@
+// MobileGL - MobileGL/MG_Impl/Pipe/Verb/TextureReadbackEmit.inc
+// Copyright (c) 2025-2026 MobileGL-Dev
+// Licensed under the GNU Lesser General Public License v3.0:
+//   https://www.gnu.org/licenses/gpl-3.0.txt
+//   https://www.gnu.org/licenses/lgpl-3.0.txt
+// SPDX-License-Identifier: LGPL-3.0-only
+// End of Source File Header
+
 // Included in VerbPort.cpp's anonymous namespace (P13 W5: moved from MG_Remote/Client).
 // The server returns owned tight pixels. Only the client interprets PACK state
 // and application pointers. A pack-buffer destination (P9) is answered by nothing: the

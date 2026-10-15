@@ -1,3 +1,11 @@
+# MobileGL - tools/device_bench/disagg/snapdiff.py
+# Copyright (c) 2025-2026 MobileGL-Dev
+# Licensed under the GNU Lesser General Public License v3.0:
+#   https://www.gnu.org/licenses/gpl-3.0.txt
+#   https://www.gnu.org/licenses/lgpl-3.0.txt
+# SPDX-License-Identifier: LGPL-3.0-only
+# End of Source File Header
+
 import sys
 def rd(p):
     L=open(p).read().split('\n'); up=float(L[0].split()[0]); gpu=sum(int(x) for x in L[1].split())

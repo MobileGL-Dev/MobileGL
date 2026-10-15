@@ -1,4 +1,12 @@
 #!/usr/bin/env python3
+# MobileGL - tools/device_bench/disagg/freqcheck.py
+# Copyright (c) 2025-2026 MobileGL-Dev
+# Licensed under the GNU Lesser General Public License v3.0:
+#   https://www.gnu.org/licenses/gpl-3.0.txt
+#   https://www.gnu.org/licenses/lgpl-3.0.txt
+# SPDX-License-Identifier: LGPL-3.0-only
+# End of Source File Header
+
 """freqcheck.py <freq.txt> [pin.txt] - P15 measurement-validity verdict for one run.
 
 freq.txt is freq_sampler.sh output; pin.txt is the `pin_clocks.sh show` output taken when the

@@ -1,3 +1,11 @@
+// MobileGL - MobileGL/MG_Test/Wire/RemoteClientAdoptT0.inc
+// Copyright (c) 2025-2026 MobileGL-Dev
+// Licensed under the GNU Lesser General Public License v3.0:
+//   https://www.gnu.org/licenses/gpl-3.0.txt
+//   https://www.gnu.org/licenses/lgpl-3.0.txt
+// SPDX-License-Identifier: LGPL-3.0-only
+// End of Source File Header
+
 // P11 B2 (MG_Remote/CONTRACT-P11.md B2): T0'S PROTOCOL ON THE HOST, over a live inproc session.
 //
 // A host has no AHardwareBuffer, so what these prove is the protocol, the negotiation and the

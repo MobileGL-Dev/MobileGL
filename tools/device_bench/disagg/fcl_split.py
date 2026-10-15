@@ -1,3 +1,11 @@
+# MobileGL - tools/device_bench/disagg/fcl_split.py
+# Copyright (c) 2025-2026 MobileGL-Dev
+# Licensed under the GNU Lesser General Public License v3.0:
+#   https://www.gnu.org/licenses/gpl-3.0.txt
+#   https://www.gnu.org/licenses/lgpl-3.0.txt
+# SPDX-License-Identifier: LGPL-3.0-only
+# End of Source File Header
+
 # fcl_split.py <rundir> <tid> <ms_per_frame> [depth] [--detail=layer]
 # Period-weighted on/off-CPU split of one thread of an FCL simpleperf --trace-offcpu profile.
 # On-CPU goes to a layer (driver / backend / applier / client half / jvm+game / other), off-CPU is

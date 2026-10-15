@@ -1,4 +1,12 @@
 #!/usr/bin/env python3
+# MobileGL - scripts/ci/tcp_log_forwarding_control.py
+# Copyright (c) 2025-2026 MobileGL-Dev
+# Licensed under the GNU Lesser General Public License v3.0:
+#   https://www.gnu.org/licenses/gpl-3.0.txt
+#   https://www.gnu.org/licenses/lgpl-3.0.txt
+# SPDX-License-Identifier: LGPL-3.0-only
+# End of Source File Header
+
 """Run the four real arming scenarios with server log forwarding enabled and disabled."""
 import argparse
 import errno

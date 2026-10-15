@@ -1,3 +1,11 @@
+// MobileGL - MobileGL/MG_Pipe/PipeWireLayout.h
+// Copyright (c) 2025-2026 MobileGL-Dev
+// Licensed under the GNU Lesser General Public License v3.0:
+//   https://www.gnu.org/licenses/gpl-3.0.txt
+//   https://www.gnu.org/licenses/lgpl-3.0.txt
+// SPDX-License-Identifier: LGPL-3.0-only
+// End of Source File Header
+
 // MobileGL - P6.5 wire compatibility facts. Generated member coverage is checked by gen_pipe.py.
 #pragma once
 #include "MGPipe.h"

@@ -1,4 +1,12 @@
 #!/usr/bin/env python
+# MobileGL - tools/cts/scripts/run_cts_windows.py
+# Copyright (c) 2025-2026 MobileGL-Dev
+# Licensed under the GNU Lesser General Public License v3.0:
+#   https://www.gnu.org/licenses/gpl-3.0.txt
+#   https://www.gnu.org/licenses/lgpl-3.0.txt
+# SPDX-License-Identifier: LGPL-3.0-only
+# End of Source File Header
+
 """Run a local Windows glcts executable and resume across process failures.
 
 The desktop CTS normally runs a complete caselist in one process.  That is a

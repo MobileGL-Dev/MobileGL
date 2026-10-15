@@ -1,4 +1,12 @@
 #!/usr/bin/env python3
+# MobileGL - tools/device_bench/p6/ab_session.py
+# Copyright (c) 2025-2026 MobileGL-Dev
+# Licensed under the GNU Lesser General Public License v3.0:
+#   https://www.gnu.org/licenses/gpl-3.0.txt
+#   https://www.gnu.org/licenses/lgpl-3.0.txt
+# SPDX-License-Identifier: LGPL-3.0-only
+# End of Source File Header
+
 """Paired A/B on a disaggregated-campaign device: one reboot-clean thermal window, interleaved arms.
 
 Its first use was `CONTRACT-P6.md` section 9 item 7 (the paired device gate) and item 8-1 (the

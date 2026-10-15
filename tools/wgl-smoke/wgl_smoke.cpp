@@ -1,3 +1,11 @@
+// MobileGL - tools/wgl-smoke/wgl_smoke.cpp
+// Copyright (c) 2025-2026 MobileGL-Dev
+// Licensed under the GNU Lesser General Public License v3.0:
+//   https://www.gnu.org/licenses/gpl-3.0.txt
+//   https://www.gnu.org/licenses/lgpl-3.0.txt
+// SPDX-License-Identifier: LGPL-3.0-only
+// End of Source File Header
+
 // WGL smoke test for the MobileGL opengl32.dll drop-in.
 // Replicates GLFW 3.3.3's WGL bootstrap exactly as Minecraft 1.21.4 drives it:
 //   1. dummy window: gdi32 ChoosePixelFormat/SetPixelFormat -> wglCreateContext

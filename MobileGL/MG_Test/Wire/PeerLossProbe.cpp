@@ -1,4 +1,11 @@
+// MobileGL - MobileGL/MG_Test/Wire/PeerLossProbe.cpp
+// Copyright (c) 2025-2026 MobileGL-Dev
+// Licensed under the GNU Lesser General Public License v3.0:
+//   https://www.gnu.org/licenses/gpl-3.0.txt
+//   https://www.gnu.org/licenses/lgpl-3.0.txt
 // SPDX-License-Identifier: LGPL-3.0-only
+// End of Source File Header
+
 // Manual P6.5 S2/half-open probe. Never registered as a device-less unit test.
 #include <Init.h>
 #include <MG_Impl/GLImpl/Getter/GL_Getter.h>

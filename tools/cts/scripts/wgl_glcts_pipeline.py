@@ -1,4 +1,12 @@
 #!/usr/bin/env python
+# MobileGL - tools/cts/scripts/wgl_glcts_pipeline.py
+# Copyright (c) 2025-2026 MobileGL-Dev
+# Licensed under the GNU Lesser General Public License v3.0:
+#   https://www.gnu.org/licenses/gpl-3.0.txt
+#   https://www.gnu.org/licenses/lgpl-3.0.txt
+# SPDX-License-Identifier: LGPL-3.0-only
+# End of Source File Header
+
 """Build MobileGL's Windows WGL shim and run Khronos OpenGL CTS suites.
 
 The pipeline intentionally keeps the build, runtime, results, and reports in an

@@ -1,3 +1,11 @@
+// MobileGL - MobileGL/MG_Backend/DirectVulkan/Renderer/WireDraw.inc
+// Copyright (c) 2025-2026 MobileGL-Dev
+// Licensed under the GNU Lesser General Public License v3.0:
+//   https://www.gnu.org/licenses/gpl-3.0.txt
+//   https://www.gnu.org/licenses/lgpl-3.0.txt
+// SPDX-License-Identifier: LGPL-3.0-only
+// End of Source File Header
+
 // Server-owned draw/dispatch setup. The legacy setup remains the monolith implementation.
     static MagmaProgramSource WireProgramSource(MG_Pipe::MGPipeHandle handle) {
         auto& state = MG_Pipe::MGPipeApplier();

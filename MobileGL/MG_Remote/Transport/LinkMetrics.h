@@ -1,3 +1,11 @@
+// MobileGL - MobileGL/MG_Remote/Transport/LinkMetrics.h
+// Copyright (c) 2025-2026 MobileGL-Dev
+// Licensed under the GNU Lesser General Public License v3.0:
+//   https://www.gnu.org/licenses/gpl-3.0.txt
+//   https://www.gnu.org/licenses/lgpl-3.0.txt
+// SPDX-License-Identifier: LGPL-3.0-only
+// End of Source File Header
+
 // P6.5 transport measurements. The Window state is written only by the single client
 // producer; the socket-io counters drained by LinkMetricsTakeReadStats/TakeSendStats are
 // atomic and cross-thread (io thread writes, apply/client thread reads) - see below.
