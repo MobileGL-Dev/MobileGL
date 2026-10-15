@@ -411,6 +411,8 @@ def scan_tree(files, read=read_file):
                 strict.append((path, 1, "license header: %s (python3 scripts/update-source-file-header.py %s)"
                                % (status, path)))
 
+        # Count on LF text, so a CRLF checkout gives the same totals as CI.
+        text = text.replace("\r\n", "\n")
         ext = os.path.splitext(path)[1].lower()
         if (not path.startswith("docs/") and not is_generated(path)
                 and (ext in CITATION_TEXT_EXT or os.path.basename(path) == "CMakeLists.txt")):
@@ -704,6 +706,11 @@ def self_test():
     expect("tree: planning code", totals["planning_code_comment_lines"] == 1)
     expect("tree: caps", totals["allcaps_comment_lines"] == 1)
     expect("tree: non-English", totals["non_english_comment_lines"] == 1)
+    lf = files["MobileGL/MG_A/B/long.cpp"].replace(b"P13 W6c of the plan", b"what it is after P2:")
+    crlf = lf.replace(b"\n", b"\r\n")
+    expect("tree: line endings do not change totals",
+           scan_tree(["MobileGL/MG_A/B/long.cpp"], lambda _: lf)[1]
+           == scan_tree(["MobileGL/MG_A/B/long.cpp"], lambda _: crlf)[1])
 
     expect("format: hunks", changed_ranges("+++ b/a.cpp\n@@ -3,0 +4,2 @@\n@@ -9 +11 @@\n@@ -20,3 +22,0 @@\n")
            == {"a.cpp": [(4, 5), (11, 11)]})
