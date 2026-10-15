@@ -30,6 +30,12 @@
 #include <sstream>
 #include <string>
 
+#if defined(_WIN32)
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
+
 namespace {
 
     // ---------------------------------------------------------------------------
@@ -76,6 +82,14 @@ namespace {
     // MOBILEGL_LOG_FILE_PATH at a temp file before gtest runs; this fixture emits one
     // line per level and then reads the file back.
     std::string g_logPath;
+
+    int ProcessId() {
+#if defined(_WIN32)
+        return _getpid();
+#else
+        return static_cast<int>(getpid());
+#endif
+    }
 
     struct Emitted {
         bool debug = false;
@@ -186,9 +200,11 @@ namespace {
 
 int main(int argc, char** argv) {
     // Must happen before anything logs: MG_Util::Debug::InitFile() reads the variable
-    // once, on the first write, and caches the FILE*.
+    // once, on the first write, and caches the FILE*. The name carries the process id because
+    // ctest runs each case as its own process, in parallel.
     namespace fs = std::filesystem;
-    const fs::path path = fs::temp_directory_path() / "mobilegl-loglevel-test.log";
+    const fs::path path =
+        fs::temp_directory_path() / ("mobilegl-loglevel-test-" + std::to_string(ProcessId()) + ".log");
     std::error_code ec;
     fs::remove(path, ec);
     g_logPath = path.string();
