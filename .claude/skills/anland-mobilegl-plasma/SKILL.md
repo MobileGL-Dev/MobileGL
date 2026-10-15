@@ -176,7 +176,7 @@ Reference (glmark2-es2-wayland 1280x720, zero-copy vs wl_shm): Espryt 187 vs 49,
 ## House rules
 
 - Work in a git worktree, never in the shared main checkout or its build dirs; worktrees need `GIT_LFS_SKIP_SMUDGE=1`.
-- Commit with `git commit --no-verify`, one short sentence, **no** `Co-Authored-By` trailer.
+- Commit as `CONTRIBUTING.md` describes (`[Type] (Scope): content`, no trailer), with `git commit --no-verify`.
 - Never run the DirectVulkan integration tests (`ctest -E DirectVulkan`).
 - No external project names ("Mesa", "Zink", ...) in source code or comments; describe the technique.
 - Vendor-agnostic only on the zero-copy path: AHB, EGL_ANDROID_*, VK_ANDROID AHB import, sync_file, dma-buf, libgbm ABI - no kgsl/gralloc layouts/QCOM modifiers.
