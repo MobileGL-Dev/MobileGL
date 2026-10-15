@@ -1,3 +1,11 @@
+# MobileGL - MobileGL/MG_IntegrationTest/Harness/RefusedMaskControl.cmake
+# Copyright (c) 2025-2026 MobileGL-Dev
+# Licensed under the GNU Lesser General Public License v3.0:
+#   https://www.gnu.org/licenses/gpl-3.0.txt
+#   https://www.gnu.org/licenses/lgpl-3.0.txt
+# SPDX-License-Identifier: LGPL-3.0-only
+# End of Source File Header
+
 # P13 W3b (ID-P13-3): one named-refusal control. Runs the integration binary with a subsystem mask
 # that clears one of bits 0-13 and passes only if the run went red AND its log carries
 # ConfigLoader's Fatal{PipeSubsystemsFixedOn} naming that mask. Invoked by

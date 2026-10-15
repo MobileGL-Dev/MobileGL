@@ -1,4 +1,12 @@
 #!/usr/bin/env bash
+# MobileGL - tools/device_bench/disagg/bench_session.sh
+# Copyright (c) 2025-2026 MobileGL-Dev
+# Licensed under the GNU Lesser General Public License v3.0:
+#   https://www.gnu.org/licenses/gpl-3.0.txt
+#   https://www.gnu.org/licenses/lgpl-3.0.txt
+# SPDX-License-Identifier: LGPL-3.0-only
+# End of Source File Header
+
 # bench_session.sh start|stop|status - P15 measurement-validity rule, device side (Lenovo Y700, SM8650).
 #
 # start:

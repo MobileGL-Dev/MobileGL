@@ -1,4 +1,12 @@
 #!/bin/bash
+# MobileGL - tools/device_bench/disagg/phone_strace.sh
+# Copyright (c) 2025-2026 MobileGL-Dev
+# Licensed under the GNU Lesser General Public License v3.0:
+#   https://www.gnu.org/licenses/gpl-3.0.txt
+#   https://www.gnu.org/licenses/lgpl-3.0.txt
+# SPDX-License-Identifier: LGPL-3.0-only
+# End of Source File Header
+
 # Phone-side: attach strace (as app uid) to the session child for 6s, dump head.
 set -u
 PID=$(adb -s 2f7cbe2e shell "ps -A -o PID,NAME,ELAPSED | awk '\$2==\"libMobileGLServer.so\" && \$1>15000 {print \$1}'" | tr -d '\r' | head -1)

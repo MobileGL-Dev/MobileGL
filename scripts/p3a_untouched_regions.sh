@@ -1,4 +1,12 @@
 #!/usr/bin/env bash
+# MobileGL - scripts/p3a_untouched_regions.sh
+# Copyright (c) 2025-2026 MobileGL-Dev
+# Licensed under the GNU Lesser General Public License v3.0:
+#   https://www.gnu.org/licenses/gpl-3.0.txt
+#   https://www.gnu.org/licenses/lgpl-3.0.txt
+# SPDX-License-Identifier: LGPL-3.0-only
+# End of Source File Header
+
 # G5's gate: "pool 与延迟释放原样搬" is LITERAL - ELEVEN functions in
 # MobileGL/MG_Backend/DirectGLES/Managers.cpp are byte-identical after P3a.
 #

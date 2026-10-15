@@ -1,4 +1,12 @@
 #!/usr/bin/env bash
+# MobileGL - tools/device_bench/anland_glmark2/smoke.sh
+# Copyright (c) 2025-2026 MobileGL-Dev
+# Licensed under the GNU Lesser General Public License v3.0:
+#   https://www.gnu.org/licenses/gpl-3.0.txt
+#   https://www.gnu.org/licenses/lgpl-3.0.txt
+# SPDX-License-Identifier: LGPL-3.0-only
+# End of Source File Header
+
 # smoke.sh <tag> - (host) Chrome scrolling + lock screen greeter + Plasma screenshot on the running MobileGL desktop
 S=${SKILL_SCRIPTS:-$(cd "$(dirname "$0")/../../../.claude/skills/anland-mobilegl-plasma/scripts" && pwd)}
 O=${OUT_DIR:-${TEMP:-/tmp}}

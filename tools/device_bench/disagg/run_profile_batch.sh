@@ -1,4 +1,12 @@
 #!/usr/bin/env bash
+# MobileGL - tools/device_bench/disagg/run_profile_batch.sh
+# Copyright (c) 2025-2026 MobileGL-Dev
+# Licensed under the GNU Lesser General Public License v3.0:
+#   https://www.gnu.org/licenses/gpl-3.0.txt
+#   https://www.gnu.org/licenses/lgpl-3.0.txt
+# SPDX-License-Identifier: LGPL-3.0-only
+# End of Source File Header
+
 # Batch profile runs for the MobileGL split-mode attribution report.
 # Sequential: the device is exclusive. Each run = one arm with PROF=1.
 set -u

@@ -1,3 +1,11 @@
+# MobileGL - tools/device_bench/anland_glmark2/pbprof.sh
+# Copyright (c) 2025-2026 MobileGL-Dev
+# Licensed under the GNU Lesser General Public License v3.0:
+#   https://www.gnu.org/licenses/gpl-3.0.txt
+#   https://www.gnu.org/licenses/lgpl-3.0.txt
+# SPDX-License-Identifier: LGPL-3.0-only
+# End of Source File Header
+
 # pbprof.sh <container> <tag> <warm_s> <rec_s> <cmd...>  (phone, root)
 # Runs <cmd> in the container (mgl stack via pbrun), then after warm_s records: per-thread CPU (top -H),
 # simpleperf on the server (:mobilegl) and on the client, GPU busy samples. Results: /data/local/tmp/anl/prof/<tag>.*

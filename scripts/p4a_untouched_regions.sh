@@ -1,4 +1,12 @@
 #!/usr/bin/env bash
+# MobileGL - scripts/p4a_untouched_regions.sh
+# Copyright (c) 2025-2026 MobileGL-Dev
+# Licensed under the GNU Lesser General Public License v3.0:
+#   https://www.gnu.org/licenses/gpl-3.0.txt
+#   https://www.gnu.org/licenses/lgpl-3.0.txt
+# SPDX-License-Identifier: LGPL-3.0-only
+# End of Source File Header
+
 # G5's gate for P4a: the Espryt do-not-touch list is LITERAL - SEVENTEEN regions across THREE
 # files stay byte-identical after P4a.
 #

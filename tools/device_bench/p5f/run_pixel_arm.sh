@@ -1,4 +1,12 @@
 #!/usr/bin/env bash
+# MobileGL - tools/device_bench/p5f/run_pixel_arm.sh
+# Copyright (c) 2025-2026 MobileGL-Dev
+# Licensed under the GNU Lesser General Public License v3.0:
+#   https://www.gnu.org/licenses/gpl-3.0.txt
+#   https://www.gnu.org/licenses/lgpl-3.0.txt
+# SPDX-License-Identifier: LGPL-3.0-only
+# End of Source File Header
+
 # Windows Git Bash. Root coordinator runs this only AFTER its own clean reboot.
 # Does not reboot, install an APK, alter clocks, clear logcat, or launch FCL.
 # Usage: bash run_pixel_arm.sh <bundle-dir> <new-output-dir> DirectGLES|DirectVulkan inproc|monolith 0|1

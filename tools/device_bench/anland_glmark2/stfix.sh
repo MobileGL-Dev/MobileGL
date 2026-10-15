@@ -1,3 +1,11 @@
+# MobileGL - tools/device_bench/anland_glmark2/stfix.sh
+# Copyright (c) 2025-2026 MobileGL-Dev
+# Licensed under the GNU Lesser General Public License v3.0:
+#   https://www.gnu.org/licenses/gpl-3.0.txt
+#   https://www.gnu.org/licenses/lgpl-3.0.txt
+# SPDX-License-Identifier: LGPL-3.0-only
+# End of Source File Header
+
 # stfix.sh - (phone, root) if the stock desktop shows black, restart the stock stack; prints what it did
 D=/data/local/tmp/anl/pb; DS=/data/local/Droidspaces/bin/droidspaces; C=/data/local/Droidspaces/Containers/arch-kde/container.config
 screencap -p $D/pre.png; s=$(stat -c %s $D/pre.png)

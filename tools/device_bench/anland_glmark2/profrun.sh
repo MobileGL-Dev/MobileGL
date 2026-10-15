@@ -1,3 +1,11 @@
+# MobileGL - tools/device_bench/anland_glmark2/profrun.sh
+# Copyright (c) 2025-2026 MobileGL-Dev
+# Licensed under the GNU Lesser General Public License v3.0:
+#   https://www.gnu.org/licenses/gpl-3.0.txt
+#   https://www.gnu.org/licenses/lgpl-3.0.txt
+# SPDX-License-Identifier: LGPL-3.0-only
+# End of Source File Header
+
 # profrun.sh <container> <prefix> - profile the scene list (phone, root)
 ct=$1; pre=$2; E="MOBILEGL_PIPE_STATS=1"; [ $ct = arch-kde ] && E=""
 run() { t=$1; shift; sh /data/local/tmp/anl/pbcool.sh 46000 30 300 > /data/local/tmp/anl/prof/$pre-$t.cool; sh /data/local/tmp/anl/pbprof.sh $ct $pre-$t 7 8 "$@"; }

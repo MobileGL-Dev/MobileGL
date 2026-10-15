@@ -1,3 +1,11 @@
+# MobileGL - tools/device_bench/anland_glmark2/pbbatch.sh
+# Copyright (c) 2025-2026 MobileGL-Dev
+# Licensed under the GNU Lesser General Public License v3.0:
+#   https://www.gnu.org/licenses/gpl-3.0.txt
+#   https://www.gnu.org/licenses/lgpl-3.0.txt
+# SPDX-License-Identifier: LGPL-3.0-only
+# End of Source File Header
+
 # pbbatch.sh <container> <stack stock|mgl> <label> <cfg...>  (phone, root; run detached)
 # cfg: es2w es2f glw glf ; results -> /data/local/tmp/anl/pb/<label>-<cfg>.*
 ct=$1; st=$2; lab=$3; shift 3

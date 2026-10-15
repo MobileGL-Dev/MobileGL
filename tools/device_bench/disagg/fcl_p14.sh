@@ -1,4 +1,12 @@
 #!/usr/bin/env bash
+# MobileGL - tools/device_bench/disagg/fcl_p14.sh
+# Copyright (c) 2025-2026 MobileGL-Dev
+# Licensed under the GNU Lesser General Public License v3.0:
+#   https://www.gnu.org/licenses/gpl-3.0.txt
+#   https://www.gnu.org/licenses/lgpl-3.0.txt
+# SPDX-License-Identifier: LGPL-3.0-only
+# End of Source File Header
+
 # FCL Minecraft in-world fps for P14: swaps FCL's built-in libMobileGL.so (rooted device), picks
 # the backend through FCL's own renderer id and the transport through debug.mobilegl.transport,
 # launches FCL (it auto-enters the last world), and reads MobileGL's opt-in fps log

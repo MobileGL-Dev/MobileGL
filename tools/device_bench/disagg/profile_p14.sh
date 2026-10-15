@@ -1,4 +1,12 @@
 #!/usr/bin/env bash
+# MobileGL - tools/device_bench/disagg/profile_p14.sh
+# Copyright (c) 2025-2026 MobileGL-Dev
+# Licensed under the GNU Lesser General Public License v3.0:
+#   https://www.gnu.org/licenses/gpl-3.0.txt
+#   https://www.gnu.org/licenses/lgpl-3.0.txt
+# SPDX-License-Identifier: LGPL-3.0-only
+# End of Source File Header
+
 # One simpleperf profile of a matrix_p14 arm.
 #   ARM=monolith BACKEND=DirectVulkan WL=rd12 TAG=prof SYMDIR=<unstripped libs> bash profile_p14.sh
 # Records the whole run (every thread of the app's processes, the spawn/tcp render server

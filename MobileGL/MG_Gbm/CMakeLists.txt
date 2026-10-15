@@ -1,4 +1,12 @@
 # MobileGL - MobileGL/MG_Gbm/CMakeLists.txt
+# Copyright (c) 2025-2026 MobileGL-Dev
+# Licensed under the GNU Lesser General Public License v3.0:
+#   https://www.gnu.org/licenses/gpl-3.0.txt
+#   https://www.gnu.org/licenses/lgpl-3.0.txt
+# SPDX-License-Identifier: LGPL-3.0-only
+# End of Source File Header
+
+# MobileGL - MobileGL/MG_Gbm/CMakeLists.txt
 #
 # mobilegl_gbm.so: the GBM backend whose buffers are MobileGL shared images (MobileGLGbm.cpp).
 # A loadable module for the system GBM loader, NOT part of libMobileGL.so - it reaches the library

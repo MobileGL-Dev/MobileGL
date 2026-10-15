@@ -1,4 +1,12 @@
 #!/bin/bash
+# MobileGL - tools/device_bench/disagg/tcp_path_check.sh
+# Copyright (c) 2025-2026 MobileGL-Dev
+# Licensed under the GNU Lesser General Public License v3.0:
+#   https://www.gnu.org/licenses/gpl-3.0.txt
+#   https://www.gnu.org/licenses/lgpl-3.0.txt
+# SPDX-License-Identifier: LGPL-3.0-only
+# End of Source File Header
+
 # Is the WSL -> phone TCP path end to end? Run before any cross-host measurement.
 #
 # A TUN-mode proxy on the Windows host (v2rayN's xray_tun here, WSL's default route in mirrored

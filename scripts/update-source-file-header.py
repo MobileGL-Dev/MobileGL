@@ -12,8 +12,8 @@
     python3 scripts/update-source-file-header.py FILE ...     # only these files
     python3 scripts/update-source-file-header.py --check      # list what needs attention, exit 1 if anything does
 
-Covered under MobileGL/, scripts/ and tools/: C, C++ and .inc files with // comments and Python
-scripts with # comments.
+Covered under MobileGL/, scripts/ and tools/: C, C++, .inc, Java, JavaScript modules and GLSL with
+// comments; Python, shell, CMake modules and CMakeLists.txt with # comments.
 An existing header is kept as written, since its copyright years belong to the file; only a first
 line that names a different path is corrected. Generated files and files under another license are
 left alone. Files with mixed line endings are reported, never rewritten.
@@ -36,8 +36,9 @@ HEADER = """{c} MobileGL - {path}
 """
 OWN_SPDX = "SPDX-License-Identifier: LGPL-3.0-only"
 DIRS = ("MobileGL/", "scripts/", "tools/")
-SLASH_EXT = (".h", ".hpp", ".cpp", ".cc", ".c", ".inc")
-HASH_EXT = (".py",)
+SLASH_EXT = (".h", ".hpp", ".cpp", ".cc", ".c", ".inc", ".java", ".mjs",
+             ".vert", ".frag", ".comp", ".geom", ".tesc", ".tese", ".glsl")
+HASH_EXT = (".py", ".sh", ".cmake")
 FOREIGN_LICENSE = re.compile(r"Apache License|Permission is hereby granted|MIT License|BSD License|"
                              r"Mozilla Public License|zlib License")
 SPDX_RE = re.compile(r"SPDX-License-Identifier:\s*(\S+)")
@@ -57,7 +58,7 @@ def is_generated(path):
 
 
 def comment_prefix(path):
-    if path.endswith(HASH_EXT):
+    if path.endswith(HASH_EXT) or os.path.basename(path) == "CMakeLists.txt":
         return "#"
     if path.endswith(SLASH_EXT):
         return "//"

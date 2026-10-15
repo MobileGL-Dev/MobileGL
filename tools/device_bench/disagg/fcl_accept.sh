@@ -1,4 +1,12 @@
 #!/bin/bash
+# MobileGL - tools/device_bench/disagg/fcl_accept.sh
+# Copyright (c) 2025-2026 MobileGL-Dev
+# Licensed under the GNU Lesser General Public License v3.0:
+#   https://www.gnu.org/licenses/gpl-3.0.txt
+#   https://www.gnu.org/licenses/lgpl-3.0.txt
+# SPDX-License-Identifier: LGPL-3.0-only
+# End of Source File Header
+
 # P12 exit gate (a): FCL (the game, its own process) renders into the render server's on-screen
 # window on the same phone; then the server is killed and the client must latch DEVICE LOST.
 #

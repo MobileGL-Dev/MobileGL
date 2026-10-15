@@ -1,4 +1,12 @@
 #!/bin/bash
+# MobileGL - tools/device_bench/disagg/crosshost_accept.sh
+# Copyright (c) 2025-2026 MobileGL-Dev
+# Licensed under the GNU Lesser General Public License v3.0:
+#   https://www.gnu.org/licenses/gpl-3.0.txt
+#   https://www.gnu.org/licenses/lgpl-3.0.txt
+# SPDX-License-Identifier: LGPL-3.0-only
+# End of Source File Header
+
 # P12 exit gate (b): a client on ANOTHER machine (WSL on the Windows host) replays the in-world
 # Minecraft trace against the phone's render server over TCP + stream data plane, and the P6.5
 # link numbers are recorded. Run from Git Bash. Results: $PERF_WORK/crosshost/<run>/.

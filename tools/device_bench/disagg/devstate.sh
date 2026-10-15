@@ -1,4 +1,12 @@
 #!/usr/bin/env bash
+# MobileGL - tools/device_bench/disagg/devstate.sh
+# Copyright (c) 2025-2026 MobileGL-Dev
+# Licensed under the GNU Lesser General Public License v3.0:
+#   https://www.gnu.org/licenses/gpl-3.0.txt
+#   https://www.gnu.org/licenses/lgpl-3.0.txt
+# SPDX-License-Identifier: LGPL-3.0-only
+# End of Source File Header
+
 # devstate.sh <outdir>: the one-line device state every reported number carries (P15 measurement rules).
 # Needs <outdir>/freq.txt + pin.txt (freq_sampler / pin_clocks show). Writes <outdir>/profile.txt,
 # <outdir>/valid.txt and <outdir>/state.txt, and prints the state line:

@@ -1,4 +1,12 @@
 #!/bin/bash
+# MobileGL - scripts/ci/testdata/stub_ctest.sh
+# Copyright (c) 2025-2026 MobileGL-Dev
+# Licensed under the GNU Lesser General Public License v3.0:
+#   https://www.gnu.org/licenses/gpl-3.0.txt
+#   https://www.gnu.org/licenses/lgpl-3.0.txt
+# SPDX-License-Identifier: LGPL-3.0-only
+# End of Source File Header
+
 # A stubbed `ctest` for scripts/ci/control_smoke_test.sh.
 #
 # Descended from the verification agent's stub (wave1-codex-verify.md 8, ~/w7/p5-verify-f8-stub/ctest),

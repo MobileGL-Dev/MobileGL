@@ -1,4 +1,12 @@
 #!/system/bin/sh
+# MobileGL - tools/device_bench/disagg/freq_sampler.sh
+# Copyright (c) 2025-2026 MobileGL-Dev
+# Licensed under the GNU Lesser General Public License v3.0:
+#   https://www.gnu.org/licenses/gpl-3.0.txt
+#   https://www.gnu.org/licenses/lgpl-3.0.txt
+# SPDX-License-Identifier: LGPL-3.0-only
+# End of Source File Header
+
 # freq_sampler.sh <outfile> [period_s=2] - DEVICE-SIDE (pushed to /data/local/tmp, run as root in the
 # background for the length of one measurement, killed by the caller). One line per sample:
 #   t=<uptime> c<policy>=<cur>/<max> ... gpu=<devfreq cur> gpuclk=<kgsl gpuclk> tpl=<thermal_pwrlevel>

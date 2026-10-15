@@ -1,4 +1,12 @@
 #!/bin/bash
+# MobileGL - scripts/ci/dualblock_negative_control.sh
+# Copyright (c) 2025-2026 MobileGL-Dev
+# Licensed under the GNU Lesser General Public License v3.0:
+#   https://www.gnu.org/licenses/gpl-3.0.txt
+#   https://www.gnu.org/licenses/lgpl-3.0.txt
+# SPDX-License-Identifier: LGPL-3.0-only
+# End of Source File Header
+
 # P5f (f1)'s NEGATIVE CONTROL (P5F-WIRE-COMPLETENESS.md §6): the dual-block rehearsal must be
 # the thing the dual-block lane measures.
 #

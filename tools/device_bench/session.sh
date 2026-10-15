@@ -1,4 +1,12 @@
 #!/usr/bin/env bash
+# MobileGL - tools/device_bench/session.sh
+# Copyright (c) 2025-2026 MobileGL-Dev
+# Licensed under the GNU Lesser General Public License v3.0:
+#   https://www.gnu.org/licenses/gpl-3.0.txt
+#   https://www.gnu.org/licenses/lgpl-3.0.txt
+# SPDX-License-Identifier: LGPL-3.0-only
+# End of Source File Header
+
 # Launch the game into the benchmark world and leave it running (for profiling
 # or ad-hoc probing). Handles the flaky-launch failure mode seen on Odin Lite:
 # the JVM occasionally dies with "exited due to signal 34" right after

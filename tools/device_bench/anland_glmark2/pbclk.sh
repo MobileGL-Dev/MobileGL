@@ -1,3 +1,11 @@
+# MobileGL - tools/device_bench/anland_glmark2/pbclk.sh
+# Copyright (c) 2025-2026 MobileGL-Dev
+# Licensed under the GNU Lesser General Public License v3.0:
+#   https://www.gnu.org/licenses/gpl-3.0.txt
+#   https://www.gnu.org/licenses/lgpl-3.0.txt
+# SPDX-License-Identifier: LGPL-3.0-only
+# End of Source File Header
+
 # pbclk.sh save|pin|restore|show  (phone, root) - CPU/GPU clock pinning for the glmark2 baseline
 O=/data/local/tmp/anl/pb-clocks.orig
 C=/sys/devices/system/cpu/cpufreq; G=/sys/class/kgsl/kgsl-3d0

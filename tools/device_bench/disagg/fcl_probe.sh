@@ -1,4 +1,12 @@
 #!/usr/bin/env bash
+# MobileGL - tools/device_bench/disagg/fcl_probe.sh
+# Copyright (c) 2025-2026 MobileGL-Dev
+# Licensed under the GNU Lesser General Public License v3.0:
+#   https://www.gnu.org/licenses/gpl-3.0.txt
+#   https://www.gnu.org/licenses/lgpl-3.0.txt
+# SPDX-License-Identifier: LGPL-3.0-only
+# End of Source File Header
+
 # fcl_probe.sh <name> <hostlib> <backend> <transport> <outdir> [simpleperf=1]
 # One FCL launch: wait for steady in-world frames (fps log), then
 #  A) 4 s ftrace (sched + kgsl cmdbatch/waittimestamp + atrace gfx for the app), schedstat and gpu_clock_stats bracketing it

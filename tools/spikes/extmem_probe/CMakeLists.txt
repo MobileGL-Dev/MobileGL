@@ -1,3 +1,11 @@
+# MobileGL - tools/spikes/extmem_probe/CMakeLists.txt
+# Copyright (c) 2025-2026 MobileGL-Dev
+# Licensed under the GNU Lesser General Public License v3.0:
+#   https://www.gnu.org/licenses/gpl-3.0.txt
+#   https://www.gnu.org/licenses/lgpl-3.0.txt
+# SPDX-License-Identifier: LGPL-3.0-only
+# End of Source File Header
+
 # Standalone NDK command-line probe for MobileGL disaggregation spike B
 # (plan-B §8.3 / §11 P0).  Deliberately NOT part of the MobileGL build graph:
 # it links nothing from the project and is configured on its own, e.g.
