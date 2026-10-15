@@ -9,7 +9,7 @@
 #
 # Pin the vendor libraries explicitly, for the same reason
 # MG_Benchmark/Driver/run_driver_bench.sh does: a bare libEGL on a glvnd system
-# resolves to whatever vendor comes first, which is usually Mesa/llvmpipe - a
+# resolves to whatever vendor comes first, which is usually llvmpipe - a
 # software rasteriser silently replacing the GPU under a GPU test. Override
 # MGL_EGL_VENDOR / MGL_VK_ICD to test another driver.
 #

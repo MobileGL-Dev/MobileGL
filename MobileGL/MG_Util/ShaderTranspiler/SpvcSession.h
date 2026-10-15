@@ -143,7 +143,7 @@ namespace MobileGL {
                 // harmless: GLSL ES has no `index` layout qualifier in core, so the driver
                 // answers "index layout qualifier requires EXT_blend_func_extended" and refuses
                 // the stage. The program then links nothing and every draw with it renders
-                // NOTHING - verified on Mesa 26.1.4 llvmpipe with no MobileGL in the process,
+                // NOTHING - verified on llvmpipe 26.1.4 with no MobileGL in the process,
                 // and it is why KHR-GL43.shader_atomic_counters.basic-program-query read back a
                 // black render target.
                 //
@@ -163,9 +163,9 @@ namespace MobileGL {
                 // dropping it cannot change what the shader does.
                 //
                 // Emitting it does change whether the shader EXISTS. SPIRV-Cross hoists the
-                // qualifiers every member shares onto the block, and Mesa's ES compiler rejects
+                // qualifiers every member shares onto the block, and llvmpipe's ES compiler rejects
                 // that spelling outright ("Interface block sets both readonly and writeonly",
-                // verified on Mesa 26.1.4 llvmpipe with no MobileGL in the process, against the
+                // verified on llvmpipe 26.1.4 with no MobileGL in the process, against the
                 // exact source this transpiler emitted). The stage then never compiles, the
                 // program links without it, and every dispatch or draw is a silent no-op -
                 // which is how KHR-GL43.shader_storage_buffer_object.basic-readonly-writeonly

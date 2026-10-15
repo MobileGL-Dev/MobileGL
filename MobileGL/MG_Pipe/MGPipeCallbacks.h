@@ -15,8 +15,8 @@
 // The backend -> frontend reverse channel, named (plan B section 7.1).
 //
 // Today this traffic is 95 call sites across 17 methods poked directly into frontend
-// objects. gallium has no vocabulary for shadow writeback, GPU-write notification or
-// default-framebuffer geometry, because in Mesa the state tracker and the driver share an
+// objects. An in-process driver interface has no vocabulary for shadow writeback, GPU-write notification or
+// default-framebuffer geometry, because in such a design the state tracker and the driver share an
 // address space. Naming them as callbacks is the deliberate deviation (D8).
 //
 // SEVEN, NOT THE TEN PLAN B WROTE. Three went, each because nothing produces it.

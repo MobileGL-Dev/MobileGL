@@ -213,7 +213,7 @@ namespace MobileGL {
                 // constant-expression rule for both and the drivers refuse the whole stage
                 // ("indexing into an SSBO array using a non-constant expression is not
                 // permitted" on Qualcomm, "image arrays indexed with non-constant expressions
-                // are forbidden in GLSL ES" on Mesa), which loses the program while the
+                // are forbidden in GLSL ES" on llvmpipe), which loses the program while the
                 // frontend still reports GL_LINK_STATUS = TRUE. Same two halves as the
                 // fragment-output legalization: fold the loop-derived indices, then lower
                 // whatever is genuinely dynamic to a switch over the array's range. SAMPLER

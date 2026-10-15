@@ -66,7 +66,7 @@ namespace MobileGL::MG_Util::SelfTest {
     //
     // THE CONTROL DISCIPLINE (DriverBugProbes.h): the substitute slots are the
     // probe's controls, and the DISCARD dimension is measured separately because
-    // it is a real fault line, not paranoia: Mesa llvmpipe short-circuits its
+    // it is a real fault line, not paranoia: llvmpipe short-circuits its
     // clipping statistics under rasterizer discard (reading 0 there while counting
     // the identical undiscarded draw exactly) while its dedicated
     // primitives-generated query counts both - measured 2026-08, and the reason

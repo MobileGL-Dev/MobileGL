@@ -34,7 +34,7 @@
 // EVERY CASE HERE IS PHRASED IN THOSE GL RULES AND NOTHING ELSE, which is what makes it a
 // falsifiable net rather than a restatement of the implementation. Magma needs none of the
 // machinery (Vulkan takes the declared format natively), a driver that DOES advertise
-// GL_NV_image_formats - Mesa's, which is what the software lanes run - keeps the narrow format and
+// GL_NV_image_formats - llvmpipe, which is what the software lanes run - keeps the narrow format and
 // widens nothing, and all of them must produce the same numbers. A widening that forgot to mask a
 // store, or masked it with the wrong constants, or widened the storage without widening the bind,
 // fails these on the device while the software lanes stay green.
@@ -1003,7 +1003,7 @@ void main()
         // 3 were written past the end of the application's buffer.
         //
         // This runs on every backend, and on a driver that CAN spell rg32f for an imageBuffer
-        // (Mesa's, which the software lanes use) nothing is split at all - which is the other half
+        // (llvmpipe, which the software lanes use) nothing is split at all - which is the other half
         // of the claim: the arming has to agree with the shader, so a split that fired where the
         // driver needed none would double every subscript and fail here just as loudly.
         TEST_F(NonCoreImageFormatScenario, BufferImageAddressesTheApplicationsOwnTexels) {

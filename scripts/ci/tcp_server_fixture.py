@@ -75,7 +75,7 @@ def start(args):
         env.pop(key, None)
     # The harness's headless pin (HeadlessGL.cpp, EnsureHeadlessPlatform), for the one server it
     # does not start. Under inproc and spawn the server inherits the client's environment AFTER the
-    # pin; this supervisor inherits ctest's. Without it Mesa takes its build-time x11 platform: on a
+    # pin; this supervisor inherits ctest's. Without it the host EGL takes its build-time x11 platform: on a
     # WSLg workstation that binds the window system and goes green, on a runner with no DISPLAY
     # eglInitialize fails ("xcb_connect failed") and every Tcp. case reds with "remote TCP bring-up
     # failed". An operator's explicit EGL_PLATFORM still wins, as it does in the harness.

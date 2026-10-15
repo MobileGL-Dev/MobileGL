@@ -24,7 +24,7 @@
 // worse outcome, so the round trip below is pinned tightly enough to fail on a half-float substitute
 // (tolerance two SNORM steps, half-float error six).
 //
-// WHAT THIS GATE CAN AND CANNOT SEE. Both CI drivers (Mesa llvmpipe) and Adreno expose
+// WHAT THIS GATE CAN AND CANNOT SEE. Both CI drivers (llvmpipe) and Adreno expose
 // GL_EXT_render_snorm, so they take the NATIVE path here and the substitution stays dead. That is
 // precisely why the assertions are written as invariants of the format rather than of the fallback:
 // "a signed-normalized colour attachment is complete and round-trips its channel values" has to

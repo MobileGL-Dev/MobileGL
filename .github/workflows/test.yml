@@ -452,7 +452,7 @@ jobs:
           # Second, filtered pass: with the range-invalidating map flush disabled,
           # the buffer scenarios run on the upload ring's staged-copy tier - which
           # the default pass never reaches (the map tier absorbs every flush on
-          # Mesa), so without this the Mali fallback tier would have zero CI
+          # the CI drivers), so without this the Mali fallback tier would have zero CI
           # coverage. The flag is NOT baked into the ctest ENVIRONMENT properties,
           # so an inline env reaches the test processes (unlike the ICD pin above).
           if [ "${{ secrets.ACTIONS_STEP_DEBUG }}" = "true" ]; then

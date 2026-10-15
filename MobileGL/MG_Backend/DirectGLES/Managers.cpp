@@ -837,7 +837,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // case). Written only under the mutex; read lock-free.
             std::atomic<Bool> g_hasDeferredBufferReleases{false};
 
-            // --- Buffer-storage pool (Mesa-style BO recycle) -------------------------
+            // --- Buffer-storage pool (buffer-object recycling) -----------------------
             // Recycle idle GL buffer ids of an EXACT byte size instead of glDeleteBuffers
             // (which triggers the kgsl_sharedmem_free -> mmu_unmap -> smmu/power/bandwidth
             // cascade that dominated per-frame driver cost). An id retired during frame N
@@ -11962,7 +11962,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             //
             // A driver that HAS GL_NV_image_formats still needs part of this. SPIRV-Cross throws
             // for its is_desktop_only_format set when it targets ESSL rather than printing a
-            // token, and the throw loses the stage however willing the driver was - Mesa
+            // token, and the throw loses the stage however willing the driver was - llvmpipe
             // advertises the extension and `layout(r8ui) uimage2D` lost its whole program there
             // until the widening ran for it too. So the driver bit decides HOW MUCH is widened,
             // never WHETHER.
@@ -11996,7 +11996,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // reaches SPIRV-Cross intact and comes out as ESSL a strict driver rejects
             // outright ("array indexes for fragment outputs must be constant integral
             // expressions"), linking no program and silently no-oping every draw that
-            // uses it. Mesa accepts it, ANGLE does not - which is the whole of the
+            // uses it. llvmpipe accepts it, ANGLE does not - which is the whole of the
             // improved-transparency-minecraft-26.3 failure. Fold or lower the index here,
             // on the ESSL path only: the same module is legal for DirectVulkan.
             Vector<unsigned int> outputIndexSpirv;
@@ -12012,7 +12012,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // dynamically-uniform expression, GLSL ES keeps the ES 3.1
             // constant-expression rule for both, and the drivers enforce it - Qualcomm
             // ("indexing into an SSBO array using a non-constant expression is not
-            // permitted"), Mesa ("image arrays indexed with non-constant expressions are
+            // permitted"), llvmpipe ("image arrays indexed with non-constant expressions are
             // forbidden in GLSL ES") - losing the stage, the program, and every draw or
             // dispatch that used it, while the frontend keeps reporting the link glslang
             // performed. Fold or lower the index here, on the ESSL path only: the same
@@ -12158,7 +12158,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
             // `readonly writeonly` together says the buffer variable can only be asked its
             // .length(), which the frontend has already enforced - so the pair is inert, and
-            // printing it is not. Mesa's ES compiler refuses a block spelled that way and the
+            // printing it is not. llvmpipe's ES compiler refuses a block spelled that way and the
             // stage never reaches the program.
             spvcSession.RelaxReadWriteExclusiveStorageBuffers();
 
@@ -13327,8 +13327,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // installs the new executable - but only "for all shader stages where the program
             // is active", and a stage the previous link did not produce is not active for
             // anything. So a relink that ADDS a stage is precisely the case the promise does
-            // not cover. Verified with no MobileGL in the process (bare EGL + GLES 3.2, Mesa
-            // 26.1.4 llvmpipe): vertex+fragment linked, used and drawn renders; a geometry
+            // not cover. Verified with no MobileGL in the process (bare EGL + GLES 3.2,
+            // llvmpipe 26.1.4): vertex+fragment linked, used and drawn renders; a geometry
             // shader attached and relinked reports LINK_STATUS true with an empty info log,
             // and the next draw renders NOTHING and raises no error - while the same draw
             // after a fresh glUseProgram of the same name renders again.

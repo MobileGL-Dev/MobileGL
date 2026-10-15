@@ -60,7 +60,7 @@ namespace MGITest {
         protected:
             // Both backends now answer these reads. DirectGLES has no native ES path for
             // either aspect (GL_NV_read_depth / GL_NV_read_stencil are optional and absent on
-            // both the Adreno device and Mesa's ES), so it stages the attachment into a
+            // both the Adreno device and llvmpipe's ES), so it stages the attachment into a
             // scratch depth texture and samples it into a colour target; the assertions below
             // are the same either way, which is the point.
             bool BackendReadsDepthStencil() const { return true; }

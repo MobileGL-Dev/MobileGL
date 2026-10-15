@@ -24,7 +24,7 @@
 //
 // On DirectGLES none of this exists natively - ES has no depth or stencil readback in
 // core - so every assertion here is really an assertion about the shader-sampling
-// emulation. The catch is that some ES drivers accept the reads anyway (Mesa does,
+// emulation. The catch is that some ES drivers accept the reads anyway (llvmpipe does,
 // Adreno does not), which would make the emulation dead code on the very stack the
 // headless suite runs on. That is what the second ctest registration is for: the same
 // scenarios run again with MOBILEGL_ESPRYT_FORCE_DS_READBACK_EMULATION=1, which takes the
@@ -516,7 +516,7 @@ namespace MGITest {
     // P7 wave 2-B2 (review round): A MULTISAMPLE DEPTH RESOLVE THAT FLIPS, AND ONE THAT SCALES.
     //
     // GL 4.6 core 18.3.1 asks a multisample blit for identical rectangle DIMENSIONS, not for
-    // identical corners - Mesa compares absolute spans - so `glBlitFramebuffer(0, h, w, 0, ...)`
+    // identical corners - a conforming check compares absolute spans - so `glBlitFramebuffer(0, h, w, 0, ...)`
     // out of a multisample framebuffer is legal and owes a mirrored picture, while a blit whose
     // sizes differ is INVALID_OPERATION and owes nothing. The wire arm used to end the SESSION
     // on both: `Magma:multisample-depth-resolve-region` covered the reversed rectangle and the

@@ -5,7 +5,7 @@ if(NOT UNIX)
     return()
 endif()
 
-option(MOBILEGL_TRACE_SOFTWARE_RENDERING "Force Mesa software rendering for trace tests" ON)
+option(MOBILEGL_TRACE_SOFTWARE_RENDERING "Force host software rendering (llvmpipe) for trace tests" ON)
 
 set(MOBILEGL_TRACE_ROOT "${CMAKE_CURRENT_LIST_DIR}")
 set(MOBILEGL_TRACE_SHARED_CPP_DIR "${CMAKE_SOURCE_DIR}/android-plugin/app/src/trace/cpp")

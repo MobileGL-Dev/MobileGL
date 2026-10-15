@@ -167,10 +167,10 @@ namespace MGITest {
         // not a CI accommodation - it is what keeps a developer's run and a CI run
         // the same run. The lane was wired up green on a workstation and immediately
         // died on the runner precisely because the workstation had a DISPLAY (WSLg)
-        // and took Mesa's x11 platform, while the runner has none; that divergence
+        // and took the x11 EGL platform, while the runner has none; that divergence
         // is the bug, and pinning the platform here is the fix for it.
         //
-        // Mesa selects its EGL platform from EGL_PLATFORM at loader time, so this
+        // The desktop EGL library selects its platform from EGL_PLATFORM at loader time, so this
         // has to run before the first EGL call in the process (see EnsureHeadless
         // callers). surfaceless is the platform with no window-system dependency at
         // all; the surface this file then creates is still a pbuffer, which every

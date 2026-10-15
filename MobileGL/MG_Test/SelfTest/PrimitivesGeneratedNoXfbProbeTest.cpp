@@ -14,7 +14,7 @@
 // characterised is written down here as a fake measurement so the mapping cannot
 // drift without a red:
 //   - a conforming driver (stream counts everywhere),
-//   - Mesa lavapipe as measured 2026-08: stream silent everywhere, the dedicated
+//   - lavapipe as measured 2026-08: stream silent everywhere, the dedicated
 //     VK_EXT_primitives_generated_query exact everywhere (discard included), and
 //     the statistics control exact on the plain shape but dead under rasterizer
 //     discard (llvmpipe's discard short-circuit),
@@ -113,7 +113,7 @@ TEST(PrimitivesGeneratedNoXfbVerdictTest, HealthNeedsNeitherTessellationNorACont
               PrimitivesGeneratedNoXfbVerdict::StreamCounts);
 }
 
-// Mesa lavapipe as measured (2026-08): stream silent for every capture-less
+// lavapipe as measured (2026-08): stream silent for every capture-less
 // draw, the dedicated primitives-generated query exact on every shape (discard
 // included), the statistics control dead under discard. The dedicated query must
 // win - it is the only substitute that covers the CTS shape there.

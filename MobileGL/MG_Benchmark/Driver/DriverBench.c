@@ -336,7 +336,7 @@ static int boot_egl(void) {
     /* The default display first: it is the one a windowed app would get, and
      * on a desktop it is the one that reaches the real GPU - which is the
      * driver this bench exists to measure. It does need a window system,
-     * though; Mesa's default platform is X11, so with no $DISPLAY (CI, a
+     * though; desktop EGL usually defaults to the X11 platform, so with no $DISPLAY (CI, a
      * build server, ssh without forwarding) eglInitialize fails. Fall back to
      * EGL_MESA_platform_surfaceless rather than give up: every case draws into
      * the FBO built by build_resources(), so no window is needed for any of

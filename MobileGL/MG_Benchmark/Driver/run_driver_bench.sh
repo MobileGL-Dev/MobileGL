@@ -10,7 +10,7 @@
 #
 # Pin the vendor libraries explicitly. A bare libEGL.so.1 on a glvnd system
 # picks whatever vendor eglGetDisplay(EGL_DEFAULT_DISPLAY) resolves first,
-# which is Mesa/llvmpipe here - a software rasteriser silently replacing the
+# which is llvmpipe here - a software rasteriser silently replacing the
 # GPU under a benchmark. Override MGL_EGL_VENDOR / MGL_VK_ICD to test another
 # driver.
 set -eu

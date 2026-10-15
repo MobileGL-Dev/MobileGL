@@ -273,7 +273,7 @@ void main() {
     // The IMAGE half, and the case that has always been broken independently of any per-element
     // unit remapping: a plain CONSECUTIVE image array subscripted by a loop variable. This is
     // KHR-GL42.shader_image_load_store.advanced-sso-simple's own fragment shader shape, and a raw
-    // GLES probe on Mesa 26.1.4 at ES 3.2 refuses the ESSL it produces with "image arrays indexed
+    // GLES probe on llvmpipe 26.1.4 at ES 3.2 refuses the ESSL it produces with "image arrays indexed
     // with non-constant expressions are forbidden in GLSL ES". Foldable: after unrolling every
     // subscript is a literal.
     constexpr const char* kLoopIndexedImageArray = R"(#version 450 core

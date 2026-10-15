@@ -173,7 +173,7 @@ namespace {
     // THE HARNESS'S HEADLESS PIN (HeadlessGL.cpp, EnsureHeadlessPlatform), for the servers this test
     // starts itself: both the `--serve` supervisor (SupervisorEnvironment copies this process's
     // environment) and the LaunchServer child inherit it, and each peer brings a pbuffer context up
-    // on that server. Without it Mesa takes its build-time x11 platform: on a WSLg workstation that
+    // on that server. Without it the host EGL takes its build-time x11 platform: on a WSLg workstation that
     // binds the window system and goes green, on a runner with no DISPLAY InitPbufferSurface fails
     // and every case reds before the ring ever fills. An operator's explicit EGL_PLATFORM still
     // wins, as in the harness and in tcp_server_fixture.py.

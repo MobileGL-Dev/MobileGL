@@ -3273,7 +3273,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // P4a (D-F2/D-F3): the SIXTH Espryt twin table, and the only one of the six whose kind
         // has no frontend object at all. MobileGL has no sampler-view class: GL binds a texture
         // to a unit and the sampler uniform's type, the mipmap-completeness predicates and
-        // IsUndefinedDefaultTexture decide what the shader sees. Gallium's one-view-per-slot IS
+        // IsUndefinedDefaultTexture decide what the shader sees. Binding one sampler view per slot IS
         // that resolved form, the resolution moves to the CLIENT (ARCHITECTURE.md §5.5), and
         // create_sampler_view carries the restrictions the resolution had to read.
         //

@@ -347,7 +347,7 @@ class Supervisor(unittest.TestCase):
         Under inproc and spawn the server inherits the CLIENT's environment after
         HeadlessGL.cpp's EnsureHeadlessPlatform pinned EGL_PLATFORM=surfaceless and cleared
         DISPLAY/WAYLAND_DISPLAY. This supervisor is started by ctest from the job environment
-        instead, so on a WSLg workstation it bound Mesa's build-time default x11 platform and went
+        instead, so on a WSLg workstation it bound the host EGL's build-time default x11 platform and went
         green, and on a runner with no window system eglInitialize failed with "xcb_connect
         failed" for every session."""
         seen = self.started_server_environment(DISPLAY=':0', WAYLAND_DISPLAY='wayland-0', EGL_PLATFORM=None)

@@ -309,7 +309,7 @@ namespace MobileGL::MG_Util::SelfTest {
     // "unfixable". Probing only the shape MobileGL emits today (`coherent` plus
     // memoryBarrierImage()) reports a bug on drivers where simply adding `volatile` makes the
     // read correct, which is a defect MobileGL could fix rather than one it cannot: measured on
-    // Mesa llvmpipe, the emitted shape misses every texel while the `volatile` shape misses
+    // llvmpipe, the emitted shape misses every texel while the `volatile` shape misses
     // none. Only a driver that fails even the strongest shape has no in-shader substitute left.
     //
     // The control is the same dependency split across TWO draws with a glMemoryBarrier and a

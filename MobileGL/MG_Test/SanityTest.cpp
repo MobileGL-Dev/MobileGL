@@ -4051,7 +4051,7 @@ TEST(DirectGLESSlotTable, EverySwitchedOverKindResolvesItsTwinThroughTheHandleAr
     // P4a: the EIGHTH table and the SIXTH kind - the sampler view, which is the only kind in
     // the phase with no frontend object at all. MobileGL has no sampler-view class: GL binds a
     // texture to a unit and the sampler uniform's type plus the two completeness predicates
-    // decide what the shader sees, gallium's one-view-per-slot IS that resolved form, and the
+    // decide what the shader sees, a one-view-per-slot model IS that resolved form, and the
     // resolution moves to the CLIENT (D-F3). So this table is handle-keyed only, like the
     // buffer resource table above, and its twin owns no driver id whatsoever - what it holds is
     // the server's memo of one resolved view plus the raw-depth-fetch substitution decision,

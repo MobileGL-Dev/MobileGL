@@ -17,7 +17,7 @@
 // until the program stops being current, so GL_CURRENT_PROGRAM still names it. GuiBatchScenario
 // then replays AcceleratedRendering's save / switch / restore: it reads GL_CURRENT_PROGRAM, makes
 // its compute program current - which is what finally deletes the old one - and restores the
-// saved name, which no longer exists. GL_INVALID_VALUE, from MobileGL and from native Mesa alike:
+// saved name, which no longer exists. GL_INVALID_VALUE, from MobileGL and from a native driver alike:
 // the implementation is right and the fixture's "clean slate" was not.
 //
 // The two cases below run in declaration order in ONE process (the

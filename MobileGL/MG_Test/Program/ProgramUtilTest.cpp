@@ -3010,7 +3010,7 @@ void main() {
 // (GLSL ES 3.00 4.3.6). SPIRV-Cross carries the dynamic index straight into the ESSL, a strict
 // driver rejects the shader, the program links nothing, and every draw using it silently draws
 // nothing - which is what empties the translucent layer of improved-transparency-minecraft-26.3
-// on the Android DirectGLES (ANGLE) lane while Mesa, being lenient, renders it correctly.
+// on the Android DirectGLES (ANGLE) lane while llvmpipe, being lenient, renders it correctly.
 namespace {
     Vector<Uint32> CompileFragmentToRawSpirv(const String& source) {
         using namespace MG_Util::ShaderTranspiler;

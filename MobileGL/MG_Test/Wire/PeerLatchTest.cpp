@@ -1589,7 +1589,7 @@ namespace {
         // Welcome, the applied record and the clean reap of the next session - has been evaluated
         // by now, and a GTEST_SKIP after a failed EXPECT still reports the case FAILED; so on such a
         // host "Skipped" means "latched and served, render half not run". The CI unit job
-        // (.github/workflows/test.yml `test`) installs libegl1, whose Recommends brings the Mesa
+        // (.github/workflows/test.yml `test`) installs libegl1, whose Recommends brings the distribution's EGL
         // vendor library on an Ubuntu runner; a runner without it shows these rows as Skipped and
         // PresentFrameSerialZero (which needs a context to reach its site) as skipped outright.
         if (b.egl == 0) {

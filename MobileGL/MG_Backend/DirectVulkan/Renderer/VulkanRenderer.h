@@ -1350,7 +1350,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Uint32 m_xfbQueryOpenSlot = 0;
         // GL_PRIMITIVES_GENERATED reroute for draws made while transform feedback is
         // INACTIVE. The stream pool's primitivesNeeded is defined to count those draws
-        // too, but a Mali driver (and Mesa lavapipe) answers 0 unless a capture span
+        // too, but a Mali driver (and lavapipe) answers 0 unless a capture span
         // is open (the CTS's tessellator-measuring shape). Where the bring-up probe
         // finds that defect with a working control - or
         // MOBILEGL_MAGMA_PRIMGEN_QUERY_REROUTE forces it - such draws accumulate the

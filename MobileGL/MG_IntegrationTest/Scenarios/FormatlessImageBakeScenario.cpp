@@ -26,7 +26,7 @@
 // KHR-GL43.stencil_texturing.functional is where it surfaced: its compute half writes through a
 // format-less `uimage2D` bound to an R8UI texture, and returned zeros for every texel.
 //
-// DISCRIMINATING ONLY WHERE THE DRIVER ADVERTISES GL_NV_image_formats - Mesa does, which is what
+// DISCRIMINATING ONLY WHERE THE DRIVER ADVERTISES GL_NV_image_formats - llvmpipe does, which is what
 // the software lanes run and where this was found. On Adreno 830 and both Malis the extension is
 // absent, the old code already armed the widening, and these cases pass before and after; they
 // are kept running there as a guard against the opposite mistake.

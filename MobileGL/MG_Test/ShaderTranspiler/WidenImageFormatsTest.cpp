@@ -847,7 +847,7 @@ TEST(WidenImageFormats, WidenedModulesEmitEsslNamingTheCoreCarrier) {
     }
 }
 
-// The narrow mode, for a driver that HAS GL_NV_image_formats - Mesa, which every software lane
+// The narrow mode, for a driver that HAS GL_NV_image_formats - llvmpipe, which every software lane
 // runs on. There the driver can spell rg32f, so widening it would spend two to four times the
 // texture memory to change nothing; but SPIRV-Cross STILL throws for r8ui rather than printing it,
 // and the throw loses the stage whatever the driver would have accepted. So the extension narrows

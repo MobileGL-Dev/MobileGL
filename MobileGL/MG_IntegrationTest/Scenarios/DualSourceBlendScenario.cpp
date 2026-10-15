@@ -26,7 +26,7 @@
 //   capability absent  - src0, written straight through
 //
 // What each CI lane actually reaches: lavapipe has dualSrcBlend, so the DirectVulkan lane runs the
-// whole sequence and measures the blend. Mesa's GLES front end on llvmpipe has no
+// whole sequence and measures the blend. The GLES front end on llvmpipe has no
 // GL_EXT_blend_func_extended, so the ESSL stage carrying `layout(index = 1)` never compiles and the
 // program renders nothing - the DirectGLES lane therefore SKIPS on the capability probe in SetUp
 // rather than measuring a picture the driver never produced. The DECLINE arm itself - the path this

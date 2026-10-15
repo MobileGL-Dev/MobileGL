@@ -15,7 +15,7 @@ using MobileGL::MG_Backend::DirectVulkan::SwapchainObject;
 
 namespace {
     // What each surface reports. Android's loader exposes MAILBOX and FIFO (plus the shared
-    // modes with VK_KHR_shared_presentable_image) but never IMMEDIATE; Mesa's X11 WSI has
+    // modes with VK_KHR_shared_presentable_image) but never IMMEDIATE; a desktop X11 WSI has
     // all four classic modes.
     const Vector<VkPresentModeKHR> kAndroidModes{
         VK_PRESENT_MODE_MAILBOX_KHR, VK_PRESENT_MODE_FIFO_KHR, VK_PRESENT_MODE_SHARED_DEMAND_REFRESH_KHR,

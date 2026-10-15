@@ -40,7 +40,7 @@ namespace MobileGL::MG_Util::SelfTest {
             "void main() { gl_Position = vec4(0.0, 0.0, 0.0, 1.0); }\n";
 
         // No gl_PointSize anywhere: writing it from a geometry shader needs
-        // EXT/OES_geometry_point_size, which not every ES 3.2 driver exposes (Mesa's does not),
+        // EXT/OES_geometry_point_size, which not every ES 3.2 driver exposes (some desktop drivers do not),
         // and a probe that fails to COMPILE reaches no verdict at all.
         const char* const kProbeGeometrySource =
             "#version 320 es\n"

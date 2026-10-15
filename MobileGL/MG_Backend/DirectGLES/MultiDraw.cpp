@@ -390,7 +390,7 @@ namespace MobileGL::MG_Backend::DirectGLES::MultiDrawImpl {
         // driver entries it saves. mc_sodium_multidraw (132 batches x 32 sub-draws),
         // ns/op, median of three:
         //
-        //                    NVIDIA ES 3.2   Mesa llvmpipe ES 3.2
+        //                    NVIDIA ES 3.2     llvmpipe ES 3.2
         //   ext                  n/a               19300
         //   basevertex           2500              25200
         //   multiindirect        5700              27600

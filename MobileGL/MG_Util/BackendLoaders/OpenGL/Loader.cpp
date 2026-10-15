@@ -714,7 +714,7 @@ namespace MobileGL::MG_Util::BackendLoader {
             eglLib = OpenLib({"libtinygl4angle.dylib"});
 #else
             // Versioned SONAME first. The unversioned "libEGL.so" is a development
-            // symlink: it ships in libegl-dev/mesa-libEGL-devel, NOT in the runtime
+            // symlink: it ships in the EGL development package (libegl-dev), NOT in the runtime
             // package, so a machine that can run GL perfectly well may not have it -
             // every stock Ubuntu/Debian runtime image, the GitHub Actions runners
             // included. Asking only for the unversioned name there makes dlopen fail,

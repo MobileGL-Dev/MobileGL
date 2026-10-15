@@ -100,7 +100,7 @@ namespace MobileGL::MG_State::GLState {
         virtual ~BackendBufferResource() = default;
     };
 
-    // Mesa pipe_resource analogue for a GL buffer's storage. It owns the buffer's
+    // The storage resource behind a GL buffer object. It owns the buffer's
     // bytes and its backend GPU resource, and abstracts WHERE the authoritative
     // bytes live so no caller has to branch on the mode:
     //

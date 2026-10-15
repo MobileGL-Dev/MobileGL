@@ -191,7 +191,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // behind the native probe), so a driver that does render to a three-channel image keeps
         // allocating it byte for byte.
         //
-        // Do NOT read that as "nothing changes off-device". Measured on Mesa 26.1.6 llvmpipe
+        // Do NOT read that as "nothing changes off-device". Measured on llvmpipe 26.1.6
         // (the headless CI driver), an ES 3.2 GL_TEXTURE_2D colour attachment is COMPLETE for
         // GL_RGB8 and GL_RGB16F but INCOMPLETE_ATTACHMENT for GL_RGB8_SNORM, GL_SRGB8 and every
         // RGB integer format, and UNSUPPORTED for GL_RGB32F. Those eight formats therefore DO
@@ -328,7 +328,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // A driver WITH GL_NV_image_formats can spell the narrow format - but only for the
             // formats SPIRV-Cross will actually print. It throws for its is_desktop_only_format
             // set instead of emitting a token, and the throw loses the stage whatever the driver
-            // would have accepted: on Mesa, which advertises the extension, `layout(r8ui)
+            // would have accepted: on llvmpipe, which advertises the extension, `layout(r8ui)
             // uimage2D` still lost its whole program until the widening ran for it too.
             if (g_GLESCapabilities.SupportsExtendedImageFormats &&
                 MG_Util::ShaderTranspiler::ShaderCompiler::SpirvCrossCanPrintEsslImageFormat(requested)) {
@@ -1787,7 +1787,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // KHR-GL43.shading_language_420pack.binding_images_texture_type_* went from 6
                 // image uniforms to 30 and the link failed outright with "Error: Image Image
                 // location or component exceeds max allowed." on an Adreno 830, where Mali and
-                // Mesa both accept the same text.
+                // llvmpipe both accept the same text.
                 //
                 // Nothing downstream reads these names: the two passes that key on the GL uniform
                 // name (RebindImageUniformsToFrontendUnits, BakeImageFormatQualifiers) both run

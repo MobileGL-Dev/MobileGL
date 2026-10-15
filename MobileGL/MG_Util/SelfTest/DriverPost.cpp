@@ -1986,7 +1986,7 @@ namespace MobileGL::MG_Util::SelfTest {
             constexpr const char* RowName = "Subgroup first-reduction witness";
             // FailOptional, not Fail. The witness reports whether the NATIVE subgroup
             // first-reduction works; when it does not, the renderer takes its non-subgroup
-            // iteration path and draws the same image. Both an Adreno 830 and Mesa lavapipe
+            // iteration path and draws the same image. Both an Adreno 830 and lavapipe
             // fail this row's topology check today while running the DirectVulkan backend
             // perfectly well, so a fatal verdict here would have the screen announce that a
             // backend the user is looking at through that very backend cannot run.

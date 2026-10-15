@@ -1541,7 +1541,7 @@ TEST(ServerLoopTest, TheSevenFormatCapabilityReadsAnswerFromTheServersBackendNot
 }
 
 // =====================================================================================
-// The EGL fixture: the SERVER's real DirectGLES backend, a real headless context (mesa
+// The EGL fixture: the SERVER's real DirectGLES backend, a real headless context (EGL
 // surfaceless, llvmpipe) on the apply thread, driven only through v1's twelve forwarders
 // =====================================================================================
 //
@@ -1563,7 +1563,7 @@ TEST(ServerLoopTest, TheSevenFormatCapabilityReadsAnswerFromTheServersBackendNot
 // counting 1, review v2 item 10).
 //
 // NO USABLE EGL IS A SKIP, UNLESS MOBILEGL_ITEST_REQUIRE_GPU SAYS OTHERWISE - the integration
-// harness's own rule (ScenarioFixture.h): a developer box without mesa should not fail a run it could
+// harness's own rule (ScenarioFixture.h): a developer box without headless EGL should not fail a run it could
 // not perform, but a lane that relies on these cases sets the variable, and then an unusable EGL is
 // a FAILURE naming the step, never a green that ran nothing (review v2 N-1's lesson).
 #if !defined(_WIN32)
@@ -1588,7 +1588,7 @@ namespace {
     }
 
     // The integration harness's headless pin (HeadlessGL.cpp, EnsureHeadlessPlatform), for the same
-    // reason: mesa's surfaceless platform needs no display, and glvnd has to be told which vendor to
+    // reason: the EGL surfaceless platform needs no display, and glvnd has to be told which vendor to
     // load. The vendor json is the one MG_IntegrationTest/CMakeLists.txt pins by default; an operator
     // who set __EGL_VENDOR_LIBRARY_FILENAMES keeps theirs.
     void PinHeadlessEglEnvironment() {
@@ -1654,7 +1654,7 @@ namespace {
             // THE SURFACE'S OWN CREATION is what binds natively (InitPbufferSurface -> MakeCurrent).
             if (!Server::ServerCreateEGLPbufferSurface(Surf(), 64, 64)) {
                 return "ServerCreateEGLPbufferSurface - no usable headless EGL (EGL_PLATFORM=surfaceless, "
-                       "__EGL_VENDOR_LIBRARY_FILENAMES -> mesa/llvmpipe) on this box";
+                       "__EGL_VENDOR_LIBRARY_FILENAMES -> llvmpipe) on this box";
             }
             return {};
         }

@@ -21,7 +21,7 @@
 // ProgramUtilTest, LoopDerivedFragmentOutputIndexFoldsToConstantIndices and its
 // genuinely-dynamic sibling) prove the SPIR-V comes out with constant indices, validates, and
 // decompiles to ESSL with only literal indices. What they cannot prove is that a real driver
-// then ACCEPTS and RUNS it - and acceptance is the whole failure mode, because Mesa accepts the
+// then ACCEPTS and RUNS it - and acceptance is the whole failure mode, because the desktop CI drivers accept the
 // illegal form too. Only a live glCompileShader/glLinkProgram followed by a draw can tell the two
 // apart, and only reading the pixels back can tell "linked" from "wrote the right attachment".
 //

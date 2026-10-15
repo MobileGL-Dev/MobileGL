@@ -322,7 +322,7 @@ namespace {
         EXPECT_EQ(r.glxLoaded, 1);
         EXPECT_EQ(r.clientQueries, 1);
 
-        // Mesa's software-renderer selection must not disable MobileGL's EGL/GLX entry points.
+        // Selecting the software renderer (LIBGL_ALWAYS_SOFTWARE) must not disable MobileGL's EGL/GLX entry points.
         const EntryReport software = RunEntryPoints(server.endpoint, logBase, true);
         EXPECT_EQ(software.vendorDisplay, 1);
         EXPECT_EQ(software.getDisplay, 1);

@@ -617,7 +617,7 @@ namespace MobileGL::MG_Pipe {
     // ---------------------------------------------------------------------------------
     //
     // GL binds one texture per unit PER TARGET; which one the shader actually samples depends
-    // on the sampler uniform's TYPE. Gallium's one-view-per-slot is the resolved form, so the
+    // on the sampler uniform's TYPE. One sampler view per slot is the resolved form, so the
     // resolution moves to the client and the record carries the answer rather than the inputs.
     //
     // This is DirectGLES' SamplerUniformTextureTarget, moved to the side of the boundary that

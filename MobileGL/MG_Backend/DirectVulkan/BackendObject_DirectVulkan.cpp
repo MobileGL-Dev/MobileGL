@@ -1531,7 +1531,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         case 0x1010u: // Imagination
             m_dynamicParameters.GpuVendor = GpuVendorKind::ImgTec;
             break;
-        case 0x10005u: // Mesa software (lavapipe)
+        case 0x10005u: // software (lavapipe)
         case 0x1AE0u:  // Google (SwiftShader)
             m_dynamicParameters.GpuVendor = GpuVendorKind::Software;
             break;

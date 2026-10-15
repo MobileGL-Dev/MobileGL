@@ -180,7 +180,7 @@ void main() { fragColor = vec4(0.0, 1.0, 0.0, 1.0); }
             //     forwarded at all.
             //   - Vulkan has no such state: every clip distance a shader declares is active,
             //     always. DirectVulkan therefore clips by a disabled distance.
-            //   - Mesa's llvmpipe ES driver behaves like Vulkan here.
+            //   - llvmpipe's ES driver behaves like Vulkan here.
             //
             // Emulating GL's semantics on those two would mean forcing the disabled slots to a
             // non-negative value inside the shader, which makes the enable mask part of the

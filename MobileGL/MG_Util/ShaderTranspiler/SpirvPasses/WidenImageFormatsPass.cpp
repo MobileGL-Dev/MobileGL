@@ -1060,7 +1060,7 @@ namespace MobileGL {
                     // The raw texel through an OpCopyObject before anything reads it, which costs
                     // nothing in SPIR-V and is load-bearing in the ESSL: SPIRV-Cross emits a copy
                     // of a non-opaque value as a real `uvec4 _n = imageLoad(...);` statement,
-                    // where the read's own result is FORWARDED into whatever consumes it. Mesa's
+                    // where the read's own result is FORWARDED into whatever consumes it. The
                     // llvmpipe compiler miscompiles the forwarded form - `vec4(imageLoad(img, c))`
                     // written straight into an expression comes back as zeroes, and 0xFFFF comes
                     // back as a NaN, while the identical arithmetic on a named uvec4 is correct.

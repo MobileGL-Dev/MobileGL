@@ -1047,7 +1047,7 @@
         // otherwise - so `glBlitFramebuffer(0, h, w, 0, 0, 0, w, h, COLOR|DEPTH)` out of a
         // multisample framebuffer blitted its COLOUR correctly (the colour arm has handled a
         // flip since P5f and now handles a scale too) and then died on its DEPTH. GL 4.6 core
-        // 18.3.1 asks for identical DIMENSIONS, not identical corners - Mesa compares absolute
+        // 18.3.1 asks for identical DIMENSIONS, not identical corners - a conforming check compares absolute
         // spans - so a flip is a legal blit that has to produce a mirrored picture.
         //
         // Spans are therefore signed and everything downstream works off the min corner.

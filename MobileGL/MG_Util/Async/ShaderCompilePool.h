@@ -18,7 +18,7 @@
 // time. Do not add one here.
 
 namespace MobileGL::MG_Util::Async {
-    // Stage 7: on by default. The gate behind the flip (2026-08-09, headless Mesa, both
+    // Stage 7: on by default. The gate behind the flip (2026-08-09, headless llvmpipe and lavapipe, both
     // backends): GL30-40 mustpass + KHR-GL46.parallel_shader_compile at async=1 with the
     // extension advertised - 58,344 case-runs, 8 failures, and every one of the 8 also
     // fails standalone at async=0 and under the pre-P1 library, i.e. zero async-attributable

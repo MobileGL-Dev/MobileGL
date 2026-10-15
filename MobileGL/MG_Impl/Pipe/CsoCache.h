@@ -20,8 +20,8 @@
 //      before reusing the handle. ARCHITECTURE.md 4.1 says content addressing on an
 //      xxHash; a bare 64-bit equality would let a collision alias two different render
 //      states onto one CSO, which is silent wrong pixels with no gate that can see it.
-//      Mesa's cso_cache memcmps for the same reason. The memcmp only ever runs on a
-//      pipeline-version change, i.e. never in the steady state.
+//      Hashed constant-state caches confirm a hit with a full-key memcmp for the same reason.
+//      The memcmp only ever runs on a pipeline-version change, i.e. never in the steady state.
 //   3. miss -> mint a slot, emit create_render_state with every pipeline chunk, then bind.
 //
 // CAPACITY 64 (ROADMAP.md P2). 64 x (8 + 8 + 396 + 8) = about 26 KB per context. ROADMAP.md

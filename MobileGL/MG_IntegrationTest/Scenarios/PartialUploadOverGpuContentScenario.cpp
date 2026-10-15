@@ -19,7 +19,7 @@
 //
 // Every case uploads a level, lets the GPU clear it, writes one 2x2 box, and reads the level back:
 // the clear outside the box, the write inside. The formats are picked by what they cost the ES
-// upload, which is per driver - on Mesa llvmpipe GL_SRGB8, GL_RGB8_SNORM and GL_RGB8UI are stored
+// upload, which is per driver - on llvmpipe GL_SRGB8, GL_RGB8_SNORM and GL_RGB8UI are stored
 // four-channel (see ThreeChannelAttachmentScenario) while GL_RGB16F is native; ES has no renderable
 // three-channel format at all, so on a phone all four are converted. GL_RGBA8 is the control that
 // never converts. A format a backend cannot attach is skipped, not failed.

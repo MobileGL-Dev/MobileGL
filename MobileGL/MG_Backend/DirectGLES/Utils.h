@@ -352,7 +352,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // That rewrite needs every k in the emitted text to be a LITERAL, and it is:
         // LegalizeResourceArrayIndexingForEssl has already folded or lowered every dynamic
         // image-array subscript in the module, because ESSL forbids one outright ("image arrays
-        // indexed with non-constant expressions are forbidden in GLSL ES", Mesa 26.1.4 at
+        // indexed with non-constant expressions are forbidden in GLSL ES", llvmpipe 26.1.4 at
         // ES 3.2, on a raw GLES probe with no MobileGL in the loop). The earlier shape here -
         // widening the array to cover the whole span of units and routing each subscript through
         // a `const highp int` offset table - was written before that pass covered images, and
@@ -510,7 +510,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // linker answered "Error: Image Image location or component exceeds max allowed. Error:
         // Linking failed." - which, the frontend having already published LINK_STATUS = TRUE from
         // glslang's link, surfaced only as every draw silently doing nothing and the images
-        // reading back zero. Mali and Mesa link the same text, so nothing but a device gate
+        // reading back zero. Mali and a desktop GLES driver link the same text, so nothing but a device gate
         // catches this.
         //
         // A declaration SPIRV-Cross already tagged `readonly` or `writeonly` needs no qualifier

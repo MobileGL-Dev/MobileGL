@@ -18,7 +18,7 @@
 //
 // DirectVulkan serves the query from the transform-feedback stream query's
 // primitivesNeeded, which VK_EXT_transform_feedback defines to count whether or
-// not a capture span is open. Both the Mali-G1-Ultra driver AND Mesa lavapipe
+// not a capture span is open. Both the Mali-G1-Ultra driver AND lavapipe
 // disagree with that definition: with no vkCmdBeginTransformFeedbackEXT recorded,
 // the pair reads back 0. Where the bring-up probe measures that defect with a
 // working control - or MOBILEGL_MAGMA_PRIMGEN_QUERY_REROUTE=1 pins it on - the

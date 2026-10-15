@@ -69,7 +69,7 @@ void main() {
         // GL 4.6 core 4.10 lets a buffer variable be declared readonly AND writeonly at once:
         // it can then be neither read nor written, and `.length()` is the only thing left that
         // may be asked of it. The pair is inert - and printing it into ESSL is not, because
-        // SPIRV-Cross hoists the qualifiers every member shares onto the BLOCK and Mesa's ES
+        // SPIRV-Cross hoists the qualifiers every member shares onto the BLOCK and llvmpipe's ES
         // compiler refuses that spelling ("Interface block sets both readonly and writeonly").
         // Lifted from KHR-GL43.shader_storage_buffer_object.basic-readonly-writeonly.
         constexpr const char* kReadonlyWriteonlyComputeSource = R"(#version 430 core

@@ -23,7 +23,7 @@
 // actually PRODUCES that caveat. Only a live glCheckFramebufferStatus can, and the answer is
 // per-driver, not per-platform:
 //
-//   Mesa llvmpipe (the headless CI driver), ES 3.2, GL_TEXTURE_2D colour attachment:
+//   llvmpipe (the headless CI driver), ES 3.2, GL_TEXTURE_2D colour attachment:
 //     COMPLETE               GL_RGB8, GL_RGB16F, GL_R11F_G11F_B10F, every RGBA*
 //     INCOMPLETE_ATTACHMENT  GL_RGB8_SNORM, GL_SRGB8, every RGB integer format
 //     UNSUPPORTED            GL_RGB32F

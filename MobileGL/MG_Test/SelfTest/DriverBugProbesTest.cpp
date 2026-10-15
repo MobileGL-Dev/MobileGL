@@ -971,7 +971,7 @@ TEST(DriverBugProbes, ImageCoherencyResidualIsDetectedAndQuantified) {
     ExpectProbeReleasedEverything();
 }
 
-// The reason the subject is the STRONGEST shape and not the one MobileGL emits. Mesa llvmpipe
+// The reason the subject is the STRONGEST shape and not the one MobileGL emits. llvmpipe
 // misses every texel with `coherent` + memoryBarrierImage() and none once the pair is also
 // `volatile` - a defect MobileGL could fix by emitting a different shape, which is not what
 // UNFIXABLE means and does not belong in this section.

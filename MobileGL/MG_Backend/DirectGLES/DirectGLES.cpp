@@ -10153,7 +10153,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // was never anything but the frontend's way of naming the texture, and the record
             // names it now.
             backendTexture->Bind(backendTarget, TextureImpl::TempTextureUnit);
-            // ANGLE/Mesa may validate the currently bound FBO while generating mipmaps, so the
+            // ANGLE and some other drivers may validate the currently bound FBO while generating mipmaps, so the
             // source texture is detached from every framebuffer that attaches it - by handle,
             // over the applier's own framebuffer records.
             ScopedDetachedTextureFramebufferAttachments detachedAttachments(mipRes);
@@ -10726,7 +10726,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // all. GL_DEPTH_COMPONENT, GL_STENCIL_INDEX and GL_DEPTH_STENCIL are simply not
     // accepted formats there, and the optional extensions that add them (GL_NV_read_depth,
     // GL_NV_read_stencil, GL_NV_read_depth_stencil) are absent on both the Adreno device
-    // and Mesa's ES. Every native attempt therefore failed with a GL error and wrote
+    // and llvmpipe's ES. Every native attempt therefore failed with a GL error and wrote
     // NOTHING, so the caller kept whatever its buffer already held - which is how the CTS
     // reports "expected DEPTH[0.25] but got DEPTH[0.2]": 0.2 is the poison value the test
     // itself put there.

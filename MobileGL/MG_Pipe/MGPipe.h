@@ -17,7 +17,7 @@
 // The MGPipe boundary (plan B section 4).
 //
 // The two interface tables are FUNCTION-POINTER STRUCTS, not virtual bases. Three reasons
-// out of this repository rather than out of gallium: the boundary already is a
+// out of this repository rather than out of other driver interfaces: the boundary already is a
 // function-pointer struct sitting on one hook point in MG_Backend/Init.cpp; a nullptr entry
 // already means "not implemented, frontend falls back", which is exactly what a
 // not-yet-migrated subsystem needs to say while it keeps pulling; and MG_Test already

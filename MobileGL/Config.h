@@ -283,7 +283,7 @@ namespace MobileGL::MG_Config {
         Bool DisableLargeBufferAdoption = false;
         // MOBILEGL_ESPRYT_FORCE_DS_READBACK_EMULATION: make DirectGLES skip the native ES
         // depth/stencil reads and always go through the shader-sampling emulation. Core GL
-        // ES has no depth or stencil readback, but some drivers accept it anyway (Mesa does,
+        // ES has no depth or stencil readback, but some drivers accept it anyway (llvmpipe does,
         // Adreno does not), which means the emulation is dead code on exactly the stack the
         // headless suite runs on. This forces it live so the scenarios and the CTS can
         // exercise the path, and gives the device an A/B lever over the same choice.
@@ -378,7 +378,7 @@ namespace MobileGL::MG_Config {
         // MOBILEGL_MAGMA_PRIMGEN_QUERY_REROUTE: DirectVulkan's GL_PRIMITIVES_GENERATED
         // reroute for draws made while transform feedback is INACTIVE. The stream query
         // (VK_QUERY_TYPE_TRANSFORM_FEEDBACK_STREAM_EXT primitivesNeeded) is defined to count
-        // them, but a Mali driver - and Mesa lavapipe - answers 0 unless a capture span is
+        // them, but a Mali driver - and lavapipe - answers 0 unless a capture span is
         // open, which is exactly the shape the CTS uses to measure the tessellator, so ~29
         // tessellation tests per tree size a capture buffer from the 0 and die on the
         // zero-length map. Auto defers to a device probe at renderer bring-up

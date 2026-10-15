@@ -954,7 +954,7 @@ namespace {
 
     // ARCHITECTURE's third merge rule: the client emits the PROGRAM-RESOLVED set. A unit the
     // shader does not sample carries no view, whatever is bound to it - which is exactly the
-    // gallium one-view-per-slot resolved form, and exactly what DirectGLES arrives at by
+    // one-view-per-slot resolved form, and exactly what DirectGLES arrives at by
     // asking the program which of a unit's aliased bindings is the sampled one.
     TEST(SamplerEmit, OnlyTheProgramResolvedUnitsAreEmitted) {
         EmitterScope scope;

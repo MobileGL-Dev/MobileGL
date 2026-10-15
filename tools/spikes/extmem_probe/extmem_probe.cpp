@@ -1256,7 +1256,7 @@ static void glImportFdBuffer(GlCtx& g, int fd, uint64_t allocationSize, uint64_t
         if (eImport != GL_NO_ERROR) {
             // Deliberately NOT closed: EXT_memory_object_fd transfers ownership of
             // the fd to the implementation and does not say whether that still
-            // happens when the import fails, and Mesa closes it either way.  A
+            // happens when the import fails, and llvmpipe closes it either way.  A
             // double close would land on whatever fd the allocator handed out
             // next -- the socket, in this program.  At most a handful of rungs
             // run, so leaking the dup is the cheap, safe side of that trade.

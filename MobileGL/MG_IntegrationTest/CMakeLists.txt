@@ -241,7 +241,7 @@ endif()
 
 # --- ctest wiring --------------------------------------------------------
 # A bare libEGL on a glvnd box resolves to whatever vendor comes first, which is
-# usually Mesa/llvmpipe - a software rasteriser silently replacing the GPU under
+# usually llvmpipe - a software rasteriser silently replacing the GPU under
 # a GPU test. Pin the vendor/ICD json the same way MG_Benchmark's
 # run_driver_bench.sh does.
 #
@@ -316,7 +316,7 @@ else()
     message(WARNING
         "Integration tests: no EGL vendor json found or configured (MOBILEGL_ITEST_EGL_VENDOR is empty). "
         "An unpinned libEGL on a glvnd system resolves to whichever vendor comes first, which is usually "
-        "Mesa/llvmpipe - the scenarios would then go green against a software rasteriser instead of the GPU. "
+        "llvmpipe - the scenarios would then go green against a software rasteriser instead of the GPU. "
         "Set -DMOBILEGL_ITEST_EGL_VENDOR=/usr/share/glvnd/egl_vendor.d/<vendor>.json.")
 endif()
 if (MOBILEGL_ITEST_VK_ICD)
@@ -905,7 +905,7 @@ gtest_discover_tests(MobileGLIntegrationTest
 # A fourth registration, of the depth/stencil readback scenarios, with the ES
 # shader-sampling emulation forced on. Not paranoia - without it these scenarios are
 # UNFALSIFIABLE on the machines this suite runs on: OpenGL ES has no depth or stencil
-# readback in core, but Mesa accepts the reads anyway, so on llvmpipe every one of them
+# readback in core, but llvmpipe accepts the reads anyway, so every one of them
 # goes green through a native path that the Adreno device does not have. Deleting the
 # entire emulation left all of them passing. With the flag the native spellings are off
 # the table and only the path the device actually takes remains. DirectGLES only - the
@@ -2680,7 +2680,7 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     #
     # Without it this scenario is UNFALSIFIABLE on the machines this suite runs on, and the
     # ambient DirectGLES.ForcedDepthStencilEmulation. lane says why: OpenGL ES has no depth or
-    # stencil readback in core, but Mesa accepts the reads anyway, so on llvmpipe every case goes
+    # stencil readback in core, but llvmpipe accepts the reads anyway, so every case goes
     # green through a native path the Adreno device does not have - deleting the whole emulation
     # left all of them passing. A split arm that inherited the ambient default would be measuring
     # the same non-path three more times. So the pin is MIRRORED here, which is what the plan's

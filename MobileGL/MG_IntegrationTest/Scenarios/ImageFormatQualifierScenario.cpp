@@ -211,7 +211,7 @@ void main()
         // r32ui program for the rgba32ui texture, and the second half would come back seeded.
         //
         // What the SOFTWARE lanes cannot falsify: with the key disabled this case still passes on
-        // Mesa, because the reused r32ui declaration writes the red channel of an RGBA32UI image
+        // llvmpipe, because the reused r32ui declaration writes the red channel of an RGBA32UI image
         // anyway - a format-class mismatch GL leaves undefined and that driver happens to absorb.
         // FirstBindAfterLinkRebuilds below is the case that fails there, because the reused
         // program was built with no format at all and never compiled. Both are kept: this one is
