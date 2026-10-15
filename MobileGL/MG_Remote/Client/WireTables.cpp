@@ -395,7 +395,7 @@ namespace MobileGL::MG_Remote::Client {
         // other reply traffic.
         // (THE NARRATIVE ABOVE PREDATES RETENTION and ends at "the default is 1". It is kept as
         // the record of what was tried; what made the window work is the declared-answer store,
-        // and the default is 2 - Config.h carries the device numbers.)
+        // and the default is now 10 - docs/Performance/ipc-create-window.md carries the device numbers.)
         constexpr Uint32 kCreateWindowMax = 12;
         // THE POOL ARGUMENT THAT USED TO PIN THIS AT 4 IS GONE, AND WHY IT IS GONE IS THE ONE
         // THING TO RE-CHECK BEFORE RAISING IT AGAIN. It read: the pool is kDefaultReplySlotCount

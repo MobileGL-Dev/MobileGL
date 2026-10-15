@@ -79,13 +79,14 @@
 //   kCtxCso        13     CSO create/bind/delete
 //   kCtxState      19     16 of the 18 set_* calls + the temporary set_residual_value_state
 //                         + P5c rv's set_context_values + P5e's set_program_bindings
-//   kCtxObject     10     set_texture_params (the 17th set_*) + 8 object-scoped transfers, plus
-//                         P5c's object_death 1
-//   kCtxVerb       18     3 context-reading transfer calls + the 10 commands, plus the five
+//   kCtxObject     11     set_texture_params (the 17th set_*) + 8 object-scoped transfers, plus
+//                         P5c's object_death 1 and get_texture_image_to_buffer 1
+//   kCtxVerb       20     3 context-reading transfer calls + the 10 commands, plus the five
 //                         P5b-appended verbs (bind_shader_image, patch_parameter,
 //                         bind_stream_output, set_storage_block_binding,
-//                         copy_framebuffer_to_texture - MG_Remote/CONTRACT-P5B.md)
-//   total          81
+//                         copy_framebuffer_to_texture - MG_Remote/CONTRACT-P5B.md), plus
+//                         delete_stream_output 1 and read_pixels_to_buffer 1
+//   total          85
 //
 // Reconciliation with the plan's headline numbers (section 4.4 / appendix A), because they
 // do not add up to a set of UNIQUE records and this file has to hold unique records:

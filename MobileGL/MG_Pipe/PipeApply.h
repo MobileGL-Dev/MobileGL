@@ -1352,9 +1352,8 @@ namespace MobileGL::MG_Pipe {
     // never a copy (see MGPipeResourceOps). A null is a real answer wherever the payload says
     // the content is undefined.
     //
-    // AT THE CONTRACT COMMIT EVERY BODY BELOW IS A STUB. The signatures are what the client,
-    // the backend and the gates compile against, and the records above are what they write
-    // into; the bodies land in the two commits that follow this one on the same branch.
+    // The bodies are in PipeApply.cpp. The signatures are what the client, the backend and the
+    // gates compile against, and the records above are what they write into.
 
     // The scope of one resource_respecify, and it is an APPLIER-SIDE ARGUMENT and not a wire
     // record: it is not in PipeFields.def, it crosses no payload, and the transport reads the
@@ -1594,10 +1593,8 @@ namespace MobileGL::MG_Pipe {
     // wrote it; every other target stores and returns. The branch is one comparison against
     // kMGPipeResourceTargetBuffer and it is where a mis-typed descriptor becomes visible.
     //
-    // AT THE CONTRACT COMMIT EVERY BODY BELOW IS A STUB, exactly as P3a's nine were: the
-    // signatures are what the client, the backend and the gates compile against and the
-    // records above are what they write into; the bodies land in the three commits that
-    // follow this one on the same branch.
+    // The bodies are in PipeApply.cpp. The signatures are what the client, the backend and the
+    // gates compile against, and the records above are what they write into.
 
     // set_framebuffer_state. Fully resolved - nothing in the record requires a lookup on the
     // far side. ContentHash covers every field including Fbo and DrawBuffers[8], which is what

@@ -594,14 +594,9 @@ namespace MobileGL::MG_ConfigLoader {
         // filled between two of the client's drains, which is an ordinary backlog.
         ipc.EventWaitMs = QueryEnvUint32("MOBILEGL_IPC_EVENT_WAIT_MS", 2000, 1, 600000);
         ipc.BatchWaits = QueryEnvUint32("MOBILEGL_IPC_BATCH_WAITS", 1, 0, 1);
-        // The create window. DEFAULT 6, and it works because a link that declares RetainsReplies
-        // keeps a declared answer until its reader takes it - Config.h carries the three reasons it
-        // was inert before, the device numbers, and the sweep that put the default at 6 rather
-        // than 4 or 8 (the curve flattens at 6: 4->5 buys 1.92 s, 5->6 0.53 s, 6->8 nothing).
-        // Capped at 8: the retained set is bounded by the window's own depth, the store holds 24
-        // declared answers, and the device sweep showed the wall clock still falling at the old
-        // cap of 4 (see WireTables.cpp's kCreateWindowMax). WireTables.cpp's static_assert and
-        // StreamLink's crossing log are the checks on this number.
+        // The create window: default 10, range 1..12. 12 is WireTables.cpp's kCreateWindowMax, half
+        // of the stream link's declared-answer store, and its static_assert checks that bound.
+        // Config.h has the semantics and the reason for the default.
         ipc.CreateWindow = QueryEnvUint32("MOBILEGL_IPC_CREATE_WINDOW", 10, 1, 12);
         // P9 W1: the pack-buffer readback's A/B and red-once control (Config.h says both).
         ipc.PboReadbackSync = QueryEnvUint32("MOBILEGL_IPC_PBO_READBACK_SYNC", 0, 0, 1);

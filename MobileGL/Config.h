@@ -645,51 +645,17 @@ namespace MobileGL::MG_Config {
         // restores the per-record barrier of R-1.
         Uint32 BatchWaits = 1;
         // MOBILEGL_IPC_CREATE_WINDOW: how many RESOURCE_CREATE answers may be outstanding before the
-        // client waits for one. 1 = every create waits (the shape R-5 shipped with); N > 1 = up to N
-        // creates go out fire-and-forget, their caller reads a PROVISIONAL accept, and the oldest
-        // answer is taken when the window fills.
-        //
-        // DEFAULT 2, AND IT TOOK THREE THINGS TO GET HERE. The deferral was inert for two
-        // measured reasons and one structural one, in the order they were found:
-        //   1. the reply buffer was a ring of the last 8 answers, and between two creates this
-        //      client emits on the order of a thousand records - so the answer was always gone
-        //      (`want=310` on every miss while the ring spanned [1175..1504]);
-        //   2. a residency budget that tried to take answers back early could not help, because
-        //      what displaces an answer is what the SERVER sends, not what the client emits;
-        //   3. and so the fix was RETENTION - a link keeps a declared answer until its reader
-        //      takes it (Transport/ILink.h's RetainsReplies, StreamLink's declared-answer store).
-        //
-        // MEASURED ON THE DEVICE, load frame, both ends rebuilt (create 4,536, records 103,097,
-        // frame-sent identical per op throughout):
-        //     window 1    4,536 blocking takes   28.66 s   (the shape R-5 shipped)
-        //     window 2      2,500               17.27 s
-        //     window 4      1,644               11.02 s
-        // and the round trip does NOT grow as the window deepens (5,285 / 4,082 us against 5,672
-        // at 1), which is the measurement that says the ~5 ms is a WAKEUP the server batches away
-        // rather than its apply throughput - so amortising four creates per wakeup is a real 2.6x.
-        //
-        // 6 IS THE DEFAULT, AND IT IS WHERE THE CURVE FLATTENS - the sweep that says so is the
-        // one the paragraph above asked for, and it moved the ceiling too (kCreateWindowMax is 8
-        // now; the old 4 was derived from a reply pool the window does not run on). Three
-        // interleaved runs per arm on one binary, load frame, create 4,536 sent in every arm:
-        //
-        //     window 4   1,503 blocking takes   13.23 s median   (spread 11.37-16.29)
-        //     window 5   1,277                  11.31 s          (10.61-12.12)
-        //     window 6   1,155                  10.79 s          ( 9.69-10.81)
-        //     window 8     859                  10.96 s          ( 8.92-11.03)
-        //
-        // 4->5 buys 1.92 s, 5->6 buys 0.53 s, 6->8 buys NOTHING (-0.18 s, inside a session noise
-        // of ~1.5-2 s) - so 6 is the smallest window on the flat part and the extra answers a
-        // deeper one holds buy no time. AND PAST THIS POINT THE FRAME IS NOT WAIT-BOUND ANY MORE:
-        // window 8 pays 296 fewer blocking takes than window 6 and the wall clock does not move.
-        // The store is not the constraint either - its peak is logged as it crosses (StreamLink's
-        // P12 line) and reads 6..11 against a cap of 24 at every arm from 5 up. What is left is
-        // the constant ~350-400 creates that block for a reason depth does not reach, and the
-        // 101 MB / 103k records the SERVER has to apply. NOTE THE PREDICATE the whole mechanism rests
-        // on: an answer is retained because the wire DECLARED it will be read - NOT because its
-        // caller was fire-and-forget. The window's own creates are fire-and-forget AND read, so a
-        // flag keyed on wantReply would disable the very mechanism it exists to enable
-        // (docs/Disaggregated/notes/p12/CREATE-WINDOW-MEASURED.md sections 7-11).
+        // client waits for one. 1 turns the window off; N > 1 lets up to N creates go out without
+        // waiting: each caller reads a provisional accept, the answers are collected in order (the
+        // oldest once the window is full), and a create that comes back declined is un-published.
+        // The window runs only on a link that keeps a declared answer until its reader takes it (the
+        // stream link); on the shared-memory link it is always 1.
+        // Default 10: on a device world-load frame the wall clock stops improving at about 6, and a
+        // deeper window costs only entries in the link's declared-answer store, so 10 sits on the
+        // flat part of the curve.
+        // Range 1..12; a value outside it is ignored with a warning. 12 is kCreateWindowMax
+        // (WireTables.cpp), half of the stream link's 24-entry answer store.
+        // Measurements: docs/Performance/ipc-create-window.md.
         Uint32 CreateWindow = 10;
         // MOBILEGL_IPC_PBO_READBACK_SYNC (P9 W1, MG_Remote/CONTRACT-P9.md §1): 1 = a glReadPixels
         // or glGetTexImage into a bound GL_PIXEL_PACK_BUFFER takes the reply-slot form again -
