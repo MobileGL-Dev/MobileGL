@@ -26,7 +26,9 @@ them.
 """
 
 import argparse
+import contextlib
 import importlib.util
+import io
 import json
 import os
 import re
@@ -87,6 +89,10 @@ SOURCE_DIRS = ("MobileGL/", "scripts/", "tools/")
 # revision bump (scripts/ci/protocol_revision_pins.json), so only the UTF-8 rule applies to them.
 FROZEN = {"MobileGL/MG_Remote/Protocol/protocol.fbs"}
 NOTES_DIR = "docs/Disaggregated/notes/"
+# The archived planning notes and agent contracts. The commit that adds ARCHIVE_MARKER fills the
+# archive; every later commit leaves it alone.
+ARCHIVE_DIR = "docs/archive/"
+ARCHIVE_MARKER = ARCHIVE_DIR + "README.md"
 RATCHETS = ("line_citations", "planning_code_comment_lines", "long_comment_excess_lines",
             "allcaps_comment_lines", "non_english_comment_lines")
 
@@ -140,7 +146,7 @@ def external_names(text):
             if not (m.group(1).islower() and text[m.end():m.end() + 1] in ("-", "/"))]
 
 
-def check_message(message, changed_paths, added_paths, submodules, is_merge=False):
+def check_message(message, changed_paths, added_paths, submodules, is_merge=False, archive_frozen=False):
     """Return the list of problems with one commit message."""
     problems = []
     if message.startswith("\ufeff"):
@@ -205,14 +211,31 @@ def check_message(message, changed_paths, added_paths, submodules, is_merge=Fals
             problems.append("adds %s: working papers stay outside the repository" % path)
         elif path.endswith(".log"):
             problems.append("adds %s: logs are not committed" % path)
+    if archive_frozen:
+        touched = [p for p in changed_paths if p.startswith(ARCHIVE_DIR)]
+        if touched:
+            problems.append("changes %s (and %d more): %s is frozen" % (touched[0], len(touched) - 1, ARCHIVE_DIR))
     return problems
 
 
 def commit_paths(sha, repo=ROOT):
+    """Every path the commit touches (for the scope), and the files it adds. A moved file counts as
+    touched at both ends but is not added."""
     def names(*extra):
-        return [p for p in git("diff-tree", "--no-commit-id", "-r", "--no-renames", "--name-only", "--root",
+        return [p for p in git("diff-tree", "--no-commit-id", "-r", "--name-only", "--root",
                                *extra, sha, repo=repo).splitlines() if p]
-    return names(), names("--diff-filter=A")
+    return names("--no-renames"), names("-M", "--diff-filter=A")
+
+
+def archive_creation(repo=ROOT):
+    """The commit that created docs/archive/, or None."""
+    added = git("log", "--diff-filter=A", "--format=%H", "--", ARCHIVE_MARKER, check=False, repo=repo).split()
+    return added[-1] if added else None
+
+
+def is_ancestor(a, b, repo=ROOT):
+    return subprocess.run(["git", "-C", repo, "merge-base", "--is-ancestor", a, b],
+                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
 
 
 def grandfather_cutoff(repo=ROOT):
@@ -238,12 +261,14 @@ def is_merge(sha, repo=ROOT):
 def check_commits(rev_range, repo=ROOT):
     shas = commits_to_check(rev_range, repo)
     submodules = submodule_paths(repo)
+    created = archive_creation(repo)
     failures = 0
     for sha in shas:
         merge = is_merge(sha, repo)
         message = git("log", "-1", "--format=%B", sha, repo=repo)
         changed, added = ([], []) if merge else commit_paths(sha, repo)
-        problems = check_message(message, changed, added, submodules, is_merge=merge)
+        frozen = bool(created) and sha != created and is_ancestor(created, sha, repo)
+        problems = check_message(message, changed, added, submodules, is_merge=merge, archive_frozen=frozen)
         for p in problems:
             report(None, None, "%s %s: %s" % (sha[:9], message.split("\n", 1)[0][:60], p))
         failures += bool(problems)
@@ -656,6 +681,10 @@ def self_test():
     expect("message rejects new log",
            check_message("[Test] (tools/trace_replay): keep the run log\n", ["tools/trace_replay/run.log"],
                          ["tools/trace_replay/run.log"], subs) != [])
+    archived = ["docs/archive/notes/p9/r.md"]
+    expect("message: archive frozen",
+           check_message("[Docs] (docs/archive): fix a typo\n", archived, [], subs, archive_frozen=True) != []
+           and check_message("[Docs] (docs/archive): fill the archive\n", archived, archived, subs) == [])
     expect("merge: valid", check_message("[Merge] (MG_Remote): take the reply-window fix\n", [], [], subs, True) == [])
     expect("merge: local path", check_message(
         "[Merge] (MG_Remote): take fix\n\n- from /mnt/c/Users/x/repo\n", [], [], subs, True) != [])
@@ -715,6 +744,7 @@ def self_test():
     expect("format: hunks", changed_ranges("+++ b/a.cpp\n@@ -3,0 +4,2 @@\n@@ -9 +11 @@\n@@ -20,3 +22,0 @@\n")
            == {"a.cpp": [(4, 5), (11, 11)]})
     expect("range: first parent and cutoff", range_self_test())
+    expect("archive: a move fills it, a later edit fails", archive_self_test())
 
     for name in failures:
         print("self-test FAILED: %s" % name)
@@ -756,6 +786,43 @@ def range_self_test():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def archive_self_test():
+    """In a scratch repository: moving a log into the archive is not adding one, the commit that
+    creates docs/archive/ may fill it, and a later commit that edits it fails."""
+    tmp = tempfile.mkdtemp()
+    try:
+        def g(*args):
+            return git(*args, repo=tmp)
+
+        def write(path, text="x\n"):
+            full = os.path.join(tmp, path)
+            os.makedirs(os.path.dirname(full), exist_ok=True)
+            with open(full, "a", encoding="utf-8") as fh:
+                fh.write(text)
+            g("add", path)
+
+        g("init", "-q", "-b", "main")
+        g("config", "user.email", "t@t")
+        g("config", "user.name", "t")
+        write("docs/Disaggregated/notes/p1/run.log")
+        g("commit", "-q", "-m", "old notes")
+        base = g("rev-parse", "HEAD").strip()
+        write(SELF_PATH)
+        g("commit", "-q", "-m", "[CI] (scripts): add the lint")
+        os.makedirs(os.path.join(tmp, "docs/archive/notes/p1"))
+        g("mv", "docs/Disaggregated/notes/p1/run.log", "docs/archive/notes/p1/run.log")
+        write(ARCHIVE_MARKER, "The archived notes.\n")
+        g("commit", "-q", "-m", "[Docs] (docs/archive, docs/Disaggregated): move the notes into the archive")
+        with contextlib.redirect_stdout(io.StringIO()):
+            moved_ok = check_commits("%s..HEAD" % base, tmp)
+            write("docs/archive/notes/p1/run.log")
+            g("commit", "-q", "-m", "[Docs] (docs/archive): edit an archived log")
+            edit_fails = not check_commits("%s..HEAD" % base, tmp)
+        return moved_ok and edit_fails
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 # ---------------------------------------------------------------------------------------- main
 
 def main():
@@ -779,9 +846,10 @@ def main():
         if args.cmd == "scope":
             print("(%s)" % ", ".join(scopes_for(staged, submodule_paths())))
             return 0
-        added = [p for p in git("diff", "--cached", "--name-only", "--no-renames", "--diff-filter=A").splitlines() if p]
+        added = [p for p in git("diff", "--cached", "--name-only", "-M", "--diff-filter=A").splitlines() if p]
         with open(args.file, encoding="utf-8") as fh:
-            problems = check_message(fh.read(), staged, added, submodule_paths())
+            problems = check_message(fh.read(), staged, added, submodule_paths(),
+                                     archive_frozen=archive_creation() is not None)
         for prob in problems:
             print(prob)
         return 1 if problems else 0

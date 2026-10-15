@@ -70,6 +70,7 @@ Example:
 - Generated code, only together with a CI step that regenerates it and fails on any difference.
 - Binary test fixtures.
 - Not raw logs, and not working papers such as agent briefs, review rounds and drafts. Keep those outside the repository and commit the conclusion: a design-document change, a `DEBTS.md` entry, a measurement under `docs/Performance`.
+- `docs/archive/` keeps the planning notes and agent contracts of the disaggregation work as they were. It is frozen: no file there is added, edited or removed.
 
 ## Checks
 
@@ -78,7 +79,8 @@ Example:
 These fail on any violation:
 
 - commit messages, as described above;
-- a new file under `docs/Disaggregated/notes/` or a new `.log` file;
+- a new file under `docs/Disaggregated/notes/` or a new `.log` file (moving a file is not adding it);
+- any change under `docs/archive/`;
 - a missing or wrong license header;
 - a text file that is not UTF-8;
 - an external project name in a comment;
