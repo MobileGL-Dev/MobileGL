@@ -140,7 +140,7 @@ namespace {
 
 #if MOBILEGL_BUILD_DISAGGREGATED
 
-// Row 0 - DirectGLES.cpp:570 / UniformManager.cpp:1231.
+// Row 0 - SyncBufferBindingPointsByRecord (DirectGLES.cpp) / ResolveStorageBufferDescriptor (UniformManager.cpp).
 TEST_F(SplitBufferSet, Row0EverySsboBindingPointIsMarkedByADraw) {
     auto ssbo = MakeBuffer(11u, 256);
     MG_State::pGLContext->GetBufferBindingPoint(BufferTarget::ShaderStorage, 0).Bind(ssbo);
@@ -153,7 +153,7 @@ TEST_F(SplitBufferSet, Row0EverySsboBindingPointIsMarkedByADraw) {
            "behind the shadow glMapBuffer and glGetBufferSubData read";
 }
 
-// Row 1 - DirectGLES.cpp:618. The point of a counter is that the shader increments it.
+// Row 1 - SyncAtomicCounterBuffers (DirectGLES.cpp). The point of a counter is that the shader increments it.
 TEST_F(SplitBufferSet, Row1EveryBoundAtomicCounterIsMarkedByADraw) {
     auto counter = MakeBuffer(12u, 64);
     MG_State::pGLContext->GetBufferBindingPoint(BufferTarget::AtomicCounter, 0).Bind(counter);
@@ -246,9 +246,9 @@ TEST_F(SplitBufferSet, Row2TheSweepIsBoundedByTheImageUnitHighWaterMark) {
     binding = MG_State::GLState::ImageTextureBinding{};
 }
 
-// Row 3 - VulkanRenderer::BeginXfbCaptureForDraw() in VulkanRenderer.cpp. With no capture
-// active there is nothing to mark, and that gate is the half worth pinning: a mark taken with no
-// active capture would mark whatever the binding points happened to hold from a previous one.
+// Row 3 - BeginWireXfbCaptureForDraw() in WireDraw.inc, which VulkanRenderer::BeginXfbCaptureForDraw()
+// calls. With no capture active there is nothing to mark, and that gate is the half worth pinning: a mark
+// taken with no active capture would mark whatever the binding points happened to hold from a previous one.
 TEST_F(SplitBufferSet, Row3TransformFeedbackTargetsAreOnlyMarkedWhileACaptureIsActive) {
     auto target = MakeBuffer(15u, 256);
     MG_State::pGLContext->GetBufferBindingPoint(BufferTarget::TransformFeedback, 0).Bind(target);

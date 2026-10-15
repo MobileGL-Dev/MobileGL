@@ -20,8 +20,8 @@
 // The assertion is deliberately on the WHOLE grown range, so a partial write names the byte the
 // stale extent stopped at.
 //
-// P3a ADDS THE COST OF THAT REGROWTH (gate G10). ARCHITECTURE.md §12 prices a persistently mapped
-// store at "one round trip per STORAGE DEFINITION, not one per store" - and, emphatically, not one
+// P3a ADDS THE COST OF THAT REGROWTH (gate G10). An adopted store costs one map_persistent round trip
+// per STORAGE DEFINITION (BufferObject::TryAdoptLargeStorage runs on each one) - and, emphatically, not one
 // per draw. `map-persistent-roundtrips` (`mpr=` in the summary line) counts every map_persistent
 // EMISSION, mint or decline (D-B2), so the claim is directly countable: N definitions of an
 // adopted store must publish exactly N, whatever the workload does between them. A regression that

@@ -777,8 +777,8 @@ namespace MobileGL::MG_Util::PipeStats {
         // P6 gate 8's two per-frame numbers have their JSON homes where every other ByteClass and
         // CallClass already does - the `bytes` and `calls` blocks above, under their long names
         // (stage-segment-bytes, wire-records) - so there is nothing to add for them here. The
-        // staged-blob DISTRIBUTION does need one: it is the deliverable MEASUREMENTS.md §6.3 says
-        // has never been measured, and like the draw-payload histogram above it is a run-total
+        // staged-blob DISTRIBUTION does need one: it is the per-blob distribution after chunking,
+        // first measured through this dump, and like the draw-payload histogram above it is a run-total
         // distribution, which is exactly what Tracy cannot plot and this dump exists to carry.
         // Bucket 0 is "0 bytes" and bucket n>0 is [2^(n-1), 2^n): the same edges PayloadBucketOf
         // gives both histograms, so the two are read the same way.

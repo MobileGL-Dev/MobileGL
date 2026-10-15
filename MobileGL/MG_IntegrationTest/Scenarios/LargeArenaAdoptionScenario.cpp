@@ -30,7 +30,7 @@
 // changes what the three above assert:
 //
 //   * AnAdoptionCostsExactlyOneMapPersistentRoundtrip counts the acquisition.
-//     ARCHITECTURE.md §12 prices the adopted store at one round trip per STORAGE
+//     An adopted store costs one map_persistent round trip per STORAGE
 //     DEFINITION; `map-persistent-roundtrips` counts every map_persistent
 //     emission, mint or decline (D-B2), so one definition plus a frame of draws
 //     must publish exactly one. It reads the library's summary line, so it needs

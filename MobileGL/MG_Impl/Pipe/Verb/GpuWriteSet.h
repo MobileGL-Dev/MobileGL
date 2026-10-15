@@ -12,9 +12,11 @@
 // WHY IT HAS TO MOVE SIDES. `BufferObject::SyncGpuWrites` (BufferObject.cpp:369) runs
 // synchronously, on the application's thread, the moment the application calls glMapBuffer or
 // glGetBufferSubData. It has to answer "did the GPU write this buffer since I last read it?"
-// - and today all six producers of that answer are BACKEND-side (DirectGLES.cpp:570, :618,
-// :2603, UniformManager.cpp:1075, :1231, VulkanRenderer::BeginXfbCaptureForDraw), i.e. on the server's side
-// of a split. Asking the server is a round trip the design forbids in steady state, so the
+// - and the six backend sites that rows 0-3 below mirror are all on the server's side of a split
+// (DirectGLES.cpp's SyncBufferBindingPointsByRecord, SyncAtomicCounterBuffers and
+// MarkWritableImageBufferTexturesGpuWritten; UniformManager.cpp's ResolveStorageTexelBufferDescriptor
+// and ResolveStorageBufferDescriptor; WireDraw.inc's BeginWireXfbCaptureForDraw). Asking the server
+// is a round trip the design forbids in steady state, so the
 // client must build the set itself, from state it already owns: the SSBO and atomic-counter
 // binding points, the image units whose Access is not GL_READ_ONLY, and the transform-feedback
 // capture targets.
@@ -73,22 +75,22 @@ namespace MobileGL::MG_Record {
     // otherwise invisible, because an over-approximating set fails SILENTLY in the direction
     // that matters.
     enum class GpuWriteProducer : Uint8 {
-        // DirectGLES.cpp:570 (MarkShaderStorageBuffersGpuWritten) and
-        // UniformManager.cpp:1231 (ResolveStorageBufferDescriptor): every SSBO binding point,
+        // DirectGLES.cpp's SyncBufferBindingPointsByRecord (shader-storage class) and
+        // UniformManager.cpp's ResolveStorageBufferDescriptor: every SSBO binding point,
         // unconditional, once the points are bound and the draw or dispatch is going out.
         ShaderStorageBinding = 0,
-        // DirectGLES.cpp:618 (SyncAtomicCounterBuffers): every bound atomic counter. The
+        // DirectGLES.cpp's SyncAtomicCounterBuffers: every bound atomic counter. The
         // point of a counter is that the shader increments it and every conformance case
         // reads the increment back with glMapBufferRange or glGetBufferSubData.
         AtomicCounterBinding,
-        // DirectGLES.cpp:2603 (MarkWritableImageBufferTexturesGpuWritten) and
-        // UniformManager.cpp:1075 (ResolveStorageTexelBufferDescriptor): a buffer texture on
+        // DirectGLES.cpp's MarkWritableImageBufferTexturesGpuWritten and
+        // UniformManager.cpp's ResolveStorageTexelBufferDescriptor: a buffer texture on
         // an image unit, ONLY when Access != GL_READ_ONLY. Marking a read-only binding would
         // make the next map wait on - and then re-read - a dispatch that could not have
         // changed a byte of it.
         WritableImageBufferTexture,
-        // VulkanRenderer.cpp (BeginXfbCaptureForDraw): the capture targets, because
-        // "the capture is a GPU write like any shader's".
+        // WireDraw.inc's BeginWireXfbCaptureForDraw, which VulkanRenderer::BeginXfbCaptureForDraw
+        // calls: the capture targets, because the capture is a GPU write like any shader's.
         TransformFeedbackCapture,
         // P5, new: glReadPixels into a bound GL_PIXEL_PACK_BUFFER.
         ReadPixelsPackBuffer,

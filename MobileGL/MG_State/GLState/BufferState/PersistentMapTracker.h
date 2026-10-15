@@ -37,11 +37,12 @@
 // NEGATIVE CONTROL and means "push nothing" - not "one unlimited block" - so
 // PersistentCoherentMapScenario must go red under it.
 //
-// PHASE 1 IS CONSERVATIVE, AND SAYS SO. The whole mapped span is pushed, by block, at every
-// validate point; no dirty bits, no memcmp. Phase 2 (MOBILEGL_IPC_SHADOW_SHM, P6+) makes it
-// precise, and ARCHITECTURE.md §12 grants it the right to be pulled forward if Phase 1 is
-// unacceptable on the Create/Flywheel fixtures - the one place in the plan where a
-// measurement may reorder phases.
+// Only changed blocks ship. At each validate point a member pushes just the blocks written
+// since its last push. A map the mprotect write-fault tracker holds (MOBILEGL_PIPE_PERSISTENT_MPROTECT;
+// Linux and Android) has its pages protected read-only after each push, and a write fault marks
+// its page dirty; any other map compares each block's hash with the one the last push saw
+// (MOBILEGL_IPC_PERSISTENT_HASH_SUPPRESS; 0 restores the whole-span push). ARCHITECTURE.md §12
+// describes this dirty-page tracking and hash suppression.
 //
 // ORDERING IS THE CORRECTNESS PROPERTY, NOT THE GRANULARITY. In monolith the push is a memcpy
 // on the same thread as the draw that follows it, so the bytes the application wrote before

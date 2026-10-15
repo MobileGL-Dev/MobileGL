@@ -101,8 +101,8 @@ namespace MGITest {
         // path because the fix was not yet in this branch's history and the workload reproduced
         // as a hard SIGSEGV in the vertex fetch; that detour is what ID-9 supersedes.
         //
-        // The COUNT is unaffected by the change: two storage definitions either way, which is
-        // what ARCHITECTURE.md §12 prices.
+        // The COUNT is unaffected by the change: two storage definitions either way, and an
+        // adopted store costs one map_persistent round trip per storage definition.
         constexpr int kDefinitionsInTheWindow = 2;
         constexpr int kDrawsPerDefinition = 3;
         constexpr int kInset = 2;

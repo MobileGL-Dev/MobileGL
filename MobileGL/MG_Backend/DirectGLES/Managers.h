@@ -1987,13 +1987,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 const SharedPtr<MG_State::GLState::ITextureObject>& stateTextureObject);
 
             // ---- P4a's handle arm (D-B3). Three server-owned serials that REPLACE, on their
-            // own arm, the six frontend-version memos above; the legacy members stay beside
-            // them under MOBILEGL_PIPE_LEGACY_MEMOS because ARCHITECTURE.md §9.6 keeps the
-            // pre-handle arm compiled through P3a/P4a, and because clearing the family's bit
-            // has to run the pre-handle arm rather than a half-migrated one.
-            //
-            // Inside the guard, so the PULL build's BackendTextureObject is byte-for-byte the
-            // pre-P4a object and G1's admitted-resize set stays empty (D-P).
+            // own arm, the six frontend-version memos above; the legacy members still sit beside
+            // them, but the MOBILEGL_PIPE_LEGACY_MEMOS switch and the pre-handle arm it compiled
+            // are retired (ARCHITECTURE.md §9.6): clearing the family's bit is a named startup refusal.
             //
             // 0 is never a real serial - the applier's counters start at 1 and only ever
             // advance, including across a make-current (PipeApply.cpp's three-way argument) -
@@ -3042,7 +3038,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Uint32 m_syncedLinkVersion = ~0u;
             Uint32 m_syncedImageUnitVersion = ~0u;
             // P4a's replacement for the two above on the handle arm; see GetSyncedShaderCsoSerial.
-            // Push-only, so the pull build's object is byte-for-byte the pre-P4a one (D-P).
             Uint64 m_syncedShaderCsoSerial = 0;
             Uint64 m_syncedBindingsSerial = 0;
             // Image units addressed by the program's FORMAT-LESS image uniforms, and the digest
@@ -3218,15 +3213,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
             SamplerParameters m_cacheSamplerParameters;
             Uint16 m_syncedSamplerVersion = 0;
             // P4a (D-B3): the SamplerCso record's Serial at the last completed sync. It replaces
-            // m_syncedSamplerVersion, which stays beside it because the pre-handle arm compiles
-            // under MOBILEGL_PIPE_LEGACY_MEMOS through P3a/P4a (ARCHITECTURE.md §9.6).
+            // m_syncedSamplerVersion, which is still declared beside it but no longer read: the
+            // pre-handle arm and its MOBILEGL_PIPE_LEGACY_MEMOS switch are retired (ARCHITECTURE.md §9.6).
             //
             // The two are not interchangeable and that is the point: the frontend version is per
             // OBJECT, while the serial is per CONTENT-ADDRESSED CSO, and two frontend samplers
             // with identical parameters share one CSO and therefore one serial - so under the
             // handle arm the second of them costs no driver call at all.
-            //
-            // Push-only, so the pull build's object is byte-for-byte the pre-P4a one (D-P).
             Uint64 m_syncedSamplerSerial = 0;
         };
 
@@ -3362,8 +3355,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // on an ALREADY-ATTACHED renderbuffer moved nothing the framebuffer bit could see.
             // The client now emits resource_respecify straight from those three mutators, the
             // applier bumps this serial, and one compare here sees it.
-            //
-            // Push-only, so the pull build's object is byte-for-byte the pre-P4a one (D-P).
             Uint64 m_syncedResourceSerial = 0;
         };
 
