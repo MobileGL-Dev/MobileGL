@@ -60,6 +60,13 @@ Example:
   - Python, shell, CMake modules and `CMakeLists.txt`, with `#` comments.
   - Generated files and files under another license are exempt. `python3 scripts/update-source-file-header.py` adds the header.
 - Keep files to about 3,000 lines and functions to about 300 lines.
+- Modules are layered. A file includes files of its own layer and of the layers below it, never above:
+  1. the root headers (`Includes.h`, `Config.h`), `MG_Util` and `MG_State`;
+  2. `MG_Pipe`;
+  3. `MG_Backend`, `MG_Remote` and `MG_Impl`;
+  4. the root `.cpp` files and `MG_Gbm`;
+  5. `MG_Test`, `MG_IntegrationTest` and `MG_Benchmark`.
+- Each backend is isolated. Files under `MG_Backend/DirectGLES/` or `MG_Backend/DirectVulkan/` are included only by the same backend, by the registry files directly in `MG_Backend/`, by the root `.cpp` files and by tests.
 - Platform-specific APIs stay behind an abstraction, never raw in logic code.
 - A fix that restores intended behaviour ships unconditionally. Add a switch only for a real trade-off.
 - A cache keyed on object identity uses a monotonic lifetime id, never a GL name or a pointer, because both are recycled.
@@ -97,4 +104,12 @@ These are ratchets: each total may only go down.
 
 `python3 scripts/check_text_hygiene.py tree --update-baseline` lowers `scripts/data/text_hygiene_baseline.json` after a cleanup. It never raises it, and CI rejects a raised baseline.
 
-Not checked by CI: the size limits, the platform, switch and lifetime-id rules, planning ids outside comments, English outside comments, and the regeneration step for generated code.
+`python3 scripts/check_structure.py ci` checks three more ratchets over the C and C++ sources under `MobileGL/`, against `scripts/data/structure_baseline.json`:
+
+- includes that break the layering or the backend isolation above;
+- lines beyond 3,000 in a file;
+- lines beyond 300 in a function body.
+
+`python3 scripts/check_structure.py report` lists what each total counts, and `tree --update-baseline` lowers the baseline the same way.
+
+Not checked by CI: the platform, switch and lifetime-id rules, planning ids outside comments, English outside comments, and the regeneration step for generated code.
