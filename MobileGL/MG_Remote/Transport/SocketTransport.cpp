@@ -663,7 +663,7 @@ namespace MobileGL::MG_Remote::Transport {
         outServer.reset();
 
         int stream[2] = {-1, -1};
-        // SOCK_STREAM, not SOCK_SEQPACKET: Doorbell.h:390-398 already chose a
+        // SOCK_STREAM, not SOCK_SEQPACKET: SocketDoorbell (Doorbell.h) already chose a
         // stream socket for the bell so that a closed peer surfaces as
         // POLLIN|POLLHUP with recv()==0 rather than as a hang, and the control
         // plane must not disagree with the bell about what death looks like.

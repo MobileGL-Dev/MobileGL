@@ -57,7 +57,7 @@
 
 #include "Includes.h"
 #include <MG_Pipe/MGPipe.h>
-// MOBILEGL_PIPE_POISON is DERIVED in the header below (PipeInputs.h:20-26) and nowhere
+// MOBILEGL_PIPE_POISON is DERIVED in the header below (PipeInputs.h) and nowhere
 // else, so a TU that tests it without this include silently reads it as 0. That is
 // invisible in a push build (where it really is 0) and in a verify build (where
 // -DMOBILEGL_PIPE_VERIFY=1 is on the command line); MOBILEGL_BUILD_DISAGGREGATED is the
@@ -639,7 +639,7 @@ TEST(TextureEmit, ALevelTooLargeForTheStageChunkIsCutIntoSlabs) {
 #else
     EXPECT_EQ(MGPipeTextureStageChunkBytes(), 0u)
         << "a unit process has no ClientSession, so the drain must keep the whole-level record";
-    // SessionRings.h:89's default segment, and the cap is a quarter of it - the number the
+    // SessionRings.h's default SessionSegmentSizes::StageBytes, and the cap is a quarter of it - the number the
     // emitter really passes to the walk.
     const SizeT cap = MG_Remote::Client::MGPipeStageChunkBytesFor(32ull * 1024ull * 1024ull);
     ASSERT_EQ(cap, static_cast<SizeT>(8ull * 1024ull * 1024ull));

@@ -306,7 +306,7 @@ TEST(RemoteClientControls, LongFenceWaitBudgetStillWakesOnShutdown) {
 TEST(RemoteClientControls, ResourceRespecifyErrorIsNotADecline) {
     // THE TEXTURE HALF, WHICH IS THE HALF THAT STILL READS ITS ANSWER (P12). This case used a
     // zeroed descriptor, which is a BUFFER target - and the buffer half is now fire-and-forget
-    // because both of its call sites discard the Bool (PipeFill.cpp:1105, :1142). A row that reads
+    // because both of its call sites in MGPipeEmitResourceRespecify (PipeFill.cpp) discard the Bool. A row that reads
     // no answer cannot fold ERROR into a decision, so the rule this case exists for moved to the
     // half that does read one: the transport fault is caught here, at the next row that waits,
     // instead of at a record whose verdict nobody ever looked at.
@@ -761,19 +761,19 @@ TEST(RemoteClientControls, ADrawOnASessionWithoutTheRunAheadBitStaysStampedBarri
 // =====================================================================================
 //
 // ReplySink's status space is three-valued and its own header says what the values mean:
-// 0 OK, 1 DECLINED IS A REAL ANSWER, 2 ERROR (PipeWireCodec.h:457-460). The escape rows are
+// 0 OK, 1 DECLINED IS A REAL ANSWER, 2 ERROR (MGPipeReplySink in PipeVerbSink.h). The escape rows are
 // held to the other half of the same rule - "ERROR IS NOT A DECLINE", an escape may not fold
-// 2 into `false` (WireTables.cpp:446-450). The fence and query consumers folded BOTH 1 and 2
+// 2 into `false` (Wire_Escape_ResourceRespecify, WireTables.cpp). The fence and query consumers folded BOTH 1 and 2
 // into a single abort (EmitTables.cpp ReadFenceReply, QueryEmit.inc ReadQueryReply), so a
 // client that had latched device-lost - where every verb is DECLINED by design,
-// ClientSession.cpp:1837 - died of Fatal{ProtocolCorruption, "Fence.reply"} on its next
+// ClientSession::EmitAndWaitTails - died of Fatal{ProtocolCorruption, "Fence.reply"} on its next
 // glClientWaitSync instead of going quiet the way the design promises ("GL calls become
 // no-ops", design/08-runtime-and-platform.md:33).
 //
 // THE PEER BELOW IS THE SERVER'S OWN DECLINE, not a substitution of the status byte: these
 // verbs answer false when the server cannot answer them, and the codec posts exactly that as
-// DECLINED with a zero-length payload (PipeWireCodec.cpp:1820-1830 for the two fence rows,
-// :1841-1861 for the three query rows). The CLIENT's own decline is pinned separately, by
+// DECLINED with a zero-length payload (PipeWireDecoder::ApplyChecked in PipeWireCodec.cpp, for the
+// two fence rows and the three query rows). The CLIENT's own decline is pinned separately, by
 // LongFenceWaitBudgetStillWakesOnShutdown above.
 //
 // THE RED, RUN ONCE: take the `if (status == Wire::ReplySink::kStatusDeclined)` arm out of
@@ -810,7 +810,7 @@ TEST(RemoteClientControls, DeclinedFenceReplyAnswersSignaledInsteadOfAborting) {
         auto* sync = RemoteEmitTable().GL.FenceSync();
         if (sync == nullptr) ::_exit(131);
         // glClientWaitSync on a fence nobody can wait on: signaled now, as every fallback in
-        // this tree already answers (GL_Sync.cpp:103-106, PipeApplier.cpp:175-177).
+        // this tree already answers (ClientWaitSync in GL_Sync.cpp, ServerVerbSink::OnFenceWait).
         if (RemoteEmitTable().GL.ClientWaitSync(sync, 0, 0) != GL_ALREADY_SIGNALED) ::_exit(132);
         // GL_SYNC_STATUS: the same answer, in the boolean the row carries.
         if (!RemoteEmitTable().GL.GetSyncStatus(sync)) ::_exit(133);
@@ -919,8 +919,8 @@ TEST(RemoteClientControls, DeviceLostRespecifyDoesNotDieOfTheUncarriedBytesCheck
     // P12 exit gate (a): killing the server must give a CLEAN device-lost latch. With the
     // latch set every verb is DECLINED, so the resource_subdata that R-13.3 owes emits
     // nothing - which is the latch working, not bytes the client forgot to carry. The check
-    // at PipeFill.cpp:1115 compared client record ordinals only, so the next glBufferData
-    // with data aborted the client by name instead.
+    // in MGPipeEmitResourceRespecify (PipeFill.cpp) compared client record ordinals only, so
+    // the next glBufferData with data aborted the client by name instead.
     const auto child = RunInChild([] {
         StartControlSession();
         // Taken through the production entry point, the way the barrier and the encoder take
@@ -1260,12 +1260,12 @@ TEST(RemoteClientControls, AParameterChangeForAConfirmedObjectTakesNoReply) {
 // =====================================================================================
 //
 // The two halves of resource_respecify are not the same row. The buffer half's Bool is discarded
-// at BOTH call sites (PipeFill.cpp:1105, :1142), so its wait bought a value that was thrown away -
+// at BOTH call sites in MGPipeEmitResourceRespecify (PipeFill.cpp), so its wait bought a value that was thrown away -
 // fire-and-forget costs nothing and saves a round trip per glBufferData, which is the shape a
 // chunk uploader produces thousands of times per frame. The texture half's Bool is load-bearing:
 // it triggers the self-heal AND gates the acceptance mirror, and advancing that mirror on a
-// provisional accept is ID-18 M3 (TextureEmit.h:885-888). So this case asserts BOTH directions -
-// the asymmetry is the design, not an oversight.
+// provisional accept is ID-18 M3 (EmitResourceRespecify in TextureEmit.h). So this case asserts
+// BOTH directions - the asymmetry is the design, not an oversight.
 //
 // THE RED, RUN ONCE: take the bufferHalf branch out of Wire_Escape_ResourceRespecify and exit 155
 // fires (the buffer respecify starts waiting again).

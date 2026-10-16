@@ -218,7 +218,7 @@ namespace MobileGL::MG_Remote::Client {
         // catalogue's reply rule, and it exists for exactly one row - resource_subdata's
         // BUFFER half, whose Bool the only caller discards (PipeFill.cpp's
         // MGPipeEmitResourceSubData). The row keeps kReplySlot on the wire (the server still
-        // posts; an unread slot is harmless, ReplySlot.h:16, 105), so nothing about the
+        // posts; an unread slot is harmless, ReplySlotPool's seq-stamped slots), so nothing about the
         // protocol moves - what moves is that under run-ahead this client neither waits for
         // the answer nor reads it, which is what makes the 64 KB persistent-map push
         // fire-and-forget instead of a hidden round trip per block. It is NOT a licence to
@@ -302,7 +302,7 @@ namespace MobileGL::MG_Remote::Client {
         // direction - it only adds waits - so it is allowed.
         Bool RunAheadArmed() const;
 
-        // §2.3: the four O-class SharedPtr rows of gPipeInputs (PipeInputs.h:801-809 - the
+        // §2.3: the four O-class SharedPtr rows of gPipeInputs (PipeInputs' SharedPtr members - the
         // bound VAO and the three programs), dropped on the GL thread once a barriered apply
         // has returned. Under lockstep the next fill overwrites them within a verb; under
         // run-ahead the next fill may be a frame away, and a pinned VAO whose last owner ends
@@ -508,13 +508,13 @@ namespace MobileGL::MG_Remote::Client {
 
         // SEG_EVENT's ring capacity, exposed so the readback path can slice a writeback
         // request into records that always fit (RingProducer::MaxRecordBytes ==
-        // capacity/2, Ring.h:288).
+        // capacity/2, Ring.h).
         Uint64 EventRingCapacityBytes() const;
 
         // SEG_STAGE's capacity, exposed so a content emitter can cut a range into records that
         // always stage whole: the staging area is a linear arena of exactly these bytes (w1),
         // and one blob larger than it is Fatal{RingOverrun, "SEG_STAGE"} at the encoder rather
-        // than a split (PipeWireCodec.cpp:856-864).
+        // than a split (PipeWireEncoder::StageAllocate in PipeWireCodec.cpp).
         Uint64 StageCapacityBytes() const;
 
         // The CLIENT's own segment table (P5c ev, CONTRACT-P5C §4.3): the writeback

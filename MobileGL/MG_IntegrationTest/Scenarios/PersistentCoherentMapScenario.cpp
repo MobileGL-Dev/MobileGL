@@ -290,7 +290,7 @@ void main() { oColor = vec4(vColor, 1.0); }
             // undefined and this function returned at the line above before asserting anything;
             // the split build's monolith lane, where the tracker IS compiled, adopts
             // (MGPipeApplyMapPersistent's R-6 decline is ANDed with `Transport != Monolith`,
-            // PipeApply.cpp:2005), and seven entries went red the first time the assertion ran at
+            // PipeApply.cpp), and seven entries went red the first time the assertion ran at
             // all.
             //
             // So the expectation is `live == (arm == emulated)`, taken from the SAME peek

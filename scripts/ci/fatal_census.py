@@ -210,10 +210,10 @@ ENUM_VALUE = re.compile(r"^\s*([A-Za-z][A-Za-z0-9]*)\s*=", re.MULTILINE)
 # change and not a wave-0 instrument's to make. Recorded for the integrator.
 LOCAL_REFUSAL_WORDS = {
     "ProtocolMismatch":
-        "ClientSession.cpp:700/:718 - the CLIENT refusing a control/data transport pair locally, "
+        "ClientSession.cpp's StartSpawned - the CLIENT refusing a control/data transport pair locally, "
         "before any Hello is sent; there is no peer to send a Refuse frame to",
     "InitialCapsSnapshot":
-        "ClientSession.cpp:1292/:1302 - the CLIENT refusing a Welcome that carried no initial "
+        "ClientSession.cpp's FinishStartup - the CLIENT refusing a Welcome that carried no initial "
         "capabilities; the handshake has already been answered, so the decline is local",
     "AdoptTierOnStream":
         "Transport/AdoptTier.cpp (P11 A1) - either side refusing its OWN MOBILEGL_IPC_ADOPT_TIER=0/1 "

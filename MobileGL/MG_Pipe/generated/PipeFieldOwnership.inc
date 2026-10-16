@@ -206,10 +206,9 @@ inline constexpr SizeT kMGPipeFieldOwnershipRowCount =
 static_assert(kMGPipeFieldOwnershipRowCount == 70, "table 2's row count moved");
 
 // An ARGUMENT-KEYED narrowing of one field. The field keeps its single row above; this
-// says that one argument value of it belongs to a different class. Coverage.def:62-69 already
-// rules the shape for GetBufferBindingSlot - "THE ROW STAYS ONE ROW ... the field is ONE array
-// that a second row of the same name could only duplicate" - and m_pixelStore[2] is the same
-// shape indexed by its own isUnpack argument.
+// says that one argument value of it belongs to a different class. Coverage.def's comment on the
+// GetBufferBindingSlot row already rules the shape - "The field is one array, so it stays one
+// row" - and m_pixelStore[2] is the same shape indexed by its own isUnpack argument.
 struct MGPipeFieldArgumentOwnership {
     MGPipeInputField Field;
     Uint32 Arg0;
@@ -265,8 +264,8 @@ static_assert(MGPipeEveryFieldIsClassified(),
 // mask and name, so a field inside that mask would read FRESH while holding the previous
 // verb's value - the one silent failure this table has. The exemptions:
 //   Flush            not a verb at all: the verb census (BRIEF §12 C-3) found Flush is not a GLFunctionsTable 
-//   Present          FillPoints.def:21 - Present and SetSwapInterval go through BackendObject virtuals and 
-//   SetSwapInterval  the same sentence of FillPoints.def:21, and it is class C besides
+//   Present          Present and SetSwapInterval go through BackendObject virtuals and 
+//   SetSwapInterval  not a verb for the same reason as Present, and it is class C besides
 constexpr MGPipeVerb MGPipeVerbForWireOp(MGPWireOp op) {
     switch (op) {
     case MGPWireOp::Clear: return MGPipeVerb::Clear;

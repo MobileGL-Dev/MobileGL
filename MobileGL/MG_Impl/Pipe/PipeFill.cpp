@@ -819,7 +819,7 @@ namespace MobileGL::MG_Pipe {
     // R-8 (c1). THE SECOND CONJUNCT MOVES UNDER SPLIT, AND ONLY UNDER SPLIT.
     //
     // `MGPipeGetResourceOps() != nullptr` asks "has a backend registered the consumer". That
-    // table is the SERVER's registration and it is a PROCESS-WIDE global (PipeApply.cpp:402):
+    // table is the SERVER's registration and it is a PROCESS-WIDE global (g_resourceOps in PipeApply.cpp):
     // under inproc a client reading it answers correctly BY ACCIDENT, and under spawn the
     // client process has no backend at all, so the read answers null and five record families
     // stop emitting - silently, while the emitters go on clearing their per-level dirty flags
@@ -956,8 +956,8 @@ namespace MobileGL::MG_Pipe {
             // - and DeviceLost() is false.
             if (MG_Remote::Client::ClientWireRecordsEmitted() == before &&
                 !MG_Remote::Client::ClientSession::DeviceLost()) {
-                // UncarriedInitialBytes, not a second word for the same family: WireTables.cpp:418
-                // already dies of exactly this - a respecify that crossed with no initial bytes -
+                // UncarriedInitialBytes, not a second word for the same family: Wire_Escape_ResourceRespecify
+                // (WireTables.cpp) already dies of exactly this - a respecify that crossed with no initial bytes -
                 // under that name, and two words for one family is the vocabulary drift a6
                 // censused and 5.2's .def exists to bound (P7 wave 0).
                 MGLOG_F("MGPipe: Fatal{UncarriedInitialBytes, \"resource_respecify\"} - the "
@@ -976,7 +976,7 @@ namespace MobileGL::MG_Pipe {
     // THE CAP THE TWO CONTENT WALKS BELOW CUT A RANGE AT. The record's own bound (2^32-1) is not
     // the one a real upload meets first: one piece's bytes are staged WHOLE in SEG_STAGE, a
     // linear arena, and a blob larger than that arena is Fatal{RingOverrun, "SEG_STAGE"} at the
-    // encoder rather than a split (PipeWireCodec.cpp:856-864). Measured on the CI traces: a
+    // encoder rather than a split (PipeWireEncoder::StageAllocate). Measured on the CI traces: a
     // 128 MiB arena's whole-buffer follow-up against a 32 MiB segment aborted there, which is
     // the RingOverrun this walk exists to prevent.
     //
@@ -2008,7 +2008,7 @@ namespace MobileGL::MG_Pipe {
         if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
             // DELETED with an active transport (CONTRACT-P5C §4.2): R-12's caps
             // re-publication already invalidates the CLIENT's compile environment when the
-            // second snapshot arrives (CapsMirror.cpp:78-80), and this forward is a write
+            // second snapshot arrives (CapsMirror::Adopt), and this forward is a write
             // into the frontend with no wire shape. A caller that still needs it under a
             // transport is a defect to fix, not a pull to serve.
             return;
@@ -3338,8 +3338,8 @@ namespace MobileGL::MG_Pipe {
 
         // P3a's vertex segment, in the order the design fixes: vertex elements, then the
         // vertex buffers that fill them, then the index binding. All three are LIVE now (m1):
-        // bits 5 / 9 / 10 map onto kMGPipeSubsystemVertexInput in Tracker.h:145-148 and all
-        // three emitters have bodies, so `wants()` answers true whenever bit 8 is in the push
+        // bits 5 / 9 / 10 map onto kMGPipeSubsystemVertexInput in Tracker.h's MGPipeSubsystemForDirty and
+        // all three emitters have bodies, so `wants()` answers true whenever bit 8 is in the push
         // mask - which the phase default 0x1ff sets, on every backend. The sentence that used
         // to stand here ("all three still resolve to false today - their dirty bits map to no
         // subsystem") was the contract commit's and stopped being true when the client landed.

@@ -560,7 +560,7 @@ namespace MobileGL::MG_Record {
             info.RestartIndex = 0;
             info.DrawIdOffset = 0;
             info.IndexResource = MG_Pipe::kMGPipeNullHandle;
-            info.MinIndex = ~0u; // "unknown", MGPipeTypes.h:1330
+            info.MinIndex = ~0u; // "unknown", MGPDrawInfo::MinIndex in MGPipeTypes.h
             info.MaxIndex = ~0u;
             info.XfbCpuCapturedVertices = 0;
             info.NumDraws = 1;

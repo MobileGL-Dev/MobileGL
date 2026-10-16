@@ -140,7 +140,7 @@ PROBES = [
         "Forbidden": ["MobileGL/Includes.h"],
         "Allow": [],
         "TextLimits": {},
-        "Why": "WireLog.h:9-24 states the rule: nothing about a byte pipe needs the GL "
+        "Why": "ITransport.h's file comment states the rule: nothing about a byte pipe needs the GL "
                "frontend's umbrella header. Green today - it is the gate's own canary.",
     },
     {

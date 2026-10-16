@@ -230,7 +230,7 @@ namespace {
         std::atomic<std::uint64_t> answered{0};
         void SetUp() override {
             StreamClientPublication::SetUp();
-            // `Start()` does this on the real path (ClientSession.cpp:1615); this harness enters
+            // `Start()` does this on the real path; this harness enters
             // through FinishStartup, so the routed rows have to be installed by hand or
             // MGPipeRouteResourceCreate would reach the monolith screen.
             Client::InstallClientWireTables();

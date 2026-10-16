@@ -39,7 +39,7 @@
     /* as resource_subdata records IMMEDIATELY AFTER this one. Reuses a path that is        */  \
     /* already chunked (MGPipeForEachSubDataRecordRange) and already acceptance-gated; the  */  \
     /* cost is one extra record. NOTE the SECOND uncarried companion on this call, the      */  \
-    /* MGPRespecifiedLevel* scope (PipeApply.h:792) - it is NOT bytes and NOT covered by    */  \
+    /* MGPRespecifiedLevel* scope (PipeApply.h) - it is NOT bytes and NOT covered by        */  \
     /* this ruling; table 1 row 19 gives it the two pad fields of MGPResourceDesc.          */  \
     X(ResourceRespecify,        MGPResourceDesc,            kScreen,    kNeedsAck|kReplySlot,       kWaitReply)       \
     X(ResourceDestroy,          MGPHandleOnly,              kScreen,    kNone,                      kWaitNone)        \

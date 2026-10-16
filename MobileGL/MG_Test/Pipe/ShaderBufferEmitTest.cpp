@@ -51,7 +51,7 @@
 #include <MG_Pipe/MGPipe.h>
 #include "Init.h"
 #include <Config.h>
-// MOBILEGL_PIPE_POISON is DERIVED in the header below (PipeInputs.h:20-26) and nowhere else,
+// MOBILEGL_PIPE_POISON is DERIVED in the header below (PipeInputs.h) and nowhere else,
 // so a TU that tests it without this include silently reads it as 0 - and then
 // ExpectRefusedNaming takes the in-process arm while the applier's trip wire really does
 // abort, which takes the whole binary down with it. ImageEmitTest carries the same include for

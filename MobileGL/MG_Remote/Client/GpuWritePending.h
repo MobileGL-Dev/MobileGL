@@ -39,11 +39,10 @@ namespace MobileGL::MG_Remote::Client {
     // 0 with no session, where every writeback is synchronous and needs no ordering.
     Uint64 GpuWriteOrderSeq();
 
-
     // The slice a whole-buffer readback is cut into so one writeback event always fits
     // SEG_EVENT. The writeback's bytes travel INLINE in the event record (P5c ev, CONTRACT-P5C
     // §4.2), one record must fit the ring (RingProducer::MaxRecordBytes == capacity/2,
-    // Ring.h:288), and a 24 MiB arena's single shot cannot (measured: Fatal{EventRingOverflow}
+    // Ring.h), and a 24 MiB arena's single shot cannot (measured: Fatal{EventRingOverflow}
     // on LargeArenaAdoptionScenario.GpuWriteIntoTheArenaIsReadBack). 0 when no session is
     // active - the synchronous arm never slices.
     SizeT BufferWritebackSliceBytes();
@@ -52,7 +51,7 @@ namespace MobileGL::MG_Remote::Client {
     // before the range has to be cut. SEG_STAGE is a linear arena, one record's blob is
     // allocated from it whole, and a blob larger than the arena is
     // Fatal{RingOverrun, "SEG_STAGE"} at the encoder rather than a split
-    // (PipeWireCodec.cpp:856-864) - measured on the CI traces, where a 128 MiB arena's
+    // (PipeWireCodec.cpp's PipeWireEncoder::StageAllocate) - measured on the CI traces, where a 128 MiB arena's
     // whole-buffer follow-up against a 32 MiB segment aborted. 0 means "do not cut", i.e. the
     // record's own bound (MGPipeForEachSubDataRecordRange's default), which is the answer for
     // monolith, for the server role's own uploads (they run the monolith adapter) and for a
@@ -61,7 +60,7 @@ namespace MobileGL::MG_Remote::Client {
 
     // The clamp itself, a pure function of the segment's size so that a unit gate can drive the
     // splitter at exactly the value a live session produces. A quarter of the segment, never
-    // below 4096 (a zero-width piece is a refusal, ResourceTracker.h:254) and never above the
+    // below 4096 (a zero-width piece is a refusal, MGPipeForEachSubDataRecordRange) and never above the
     // segment (a larger cap would stage the very blob the arena refuses).
     SizeT MGPipeStageChunkBytesFor(Uint64 stageCapacityBytes);
 

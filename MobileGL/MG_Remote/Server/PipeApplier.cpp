@@ -344,7 +344,7 @@ namespace MobileGL::MG_Remote::Server {
         }
         ++m_applierResetSerial;
         // THE WHOLE POINT OF THE RECORD: the reset runs HERE, on the apply thread, against
-        // the g_applier this role owns (PipeApply.cpp:409). The layer-2 guard inside
+        // the applier this role owns (MGPipeApplier() in PipeApply.h). The layer-2 guard inside
         // MGPipeApplierReset passes because this IS the apply thread; the GL-thread direct
         // call it replaced is the Fatal arm.
         MG_Pipe::MGPipeApplierReset();
@@ -754,10 +754,10 @@ namespace MobileGL::MG_Remote::Server {
     // calling it unconditionally on every record is both correct and cheap. Four ops stamp:
     // Clear -> Clear, DrawVbo -> DrawArrays, ReadPixels -> ReadPixels, Blit -> BlitFramebuffer.
     //
-    // PRESENT IS DELIBERATELY NOT ONE, although contract 7 puts it in class B: FillPoints.def:21
-    // says Present and SetSwapInterval "go through BackendObject virtuals and read no frontend
-    // state, so they are not verbs here". There is no MGPipeVerb::Present, and stamping there
-    // would retire the previous verb's answers with nothing to put in their place.
+    // PRESENT IS DELIBERATELY NOT ONE, although contract 7 puts it in class B: Present and
+    // SetSwapInterval sit outside GLFunctionsTable (BackendObject.h) and read no frontend state,
+    // so FillPoints.def's MGP_FILL_VERB_LIST has no row for them. There is no MGPipeVerb::Present,
+    // and stamping there would retire the previous verb's answers with nothing to put in their place.
     void PipeApplier::StampVerbBoundary(MG_Pipe::MGPWireOp op) {
         const MG_Pipe::MGPipeVerb verb = MG_Pipe::MGPipeVerbForWireOp(op);
         if (verb == MG_Pipe::MGPipeVerb::kVerbCount) return; // not a verb boundary: stamp nothing

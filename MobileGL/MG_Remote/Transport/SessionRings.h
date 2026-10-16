@@ -262,8 +262,8 @@ namespace MobileGL::MG_Remote::Transport {
         void PublishAndNotify(std::uint64_t submittedSeq);
 
         // The last seq THIS producer published, kept locally rather than read back
-        // out of RingControl::submittedSeq. Teardown's drain needs it: Ring.h:72-77
-        // explicitly permits submittedSeq to be published LAZILY and Ring.h:243
+        // out of RingControl::submittedSeq. Teardown's drain needs it: ARCHITECTURE.md §11.2.1
+        // explicitly permits submittedSeq to be published LAZILY and Ring.h's RingProducer::Publish
         // encourages batching the publish, so the shared watermark may lag the
         // emitter - and a drain that waits for `appliedSeq >= submittedSeq` would
         // then under-wait and free an emitter's var-tail while a record still
@@ -295,7 +295,7 @@ namespace MobileGL::MG_Remote::Transport {
         // True when the peer latched "SEG_EVENT is full and I stopped producing".
         bool EventRingIsFull() const;
         // Back-pressure when Reserve returned nullptr. NEVER call this when
-        // FreeBytes() is already >= the record: Ring.h:226-233 - a nullptr with
+        // FreeBytes() is already >= the record: RingProducer::Reserve (Ring.h) - a nullptr with
         // enough free bytes can only mean "too big, chunk", and waiting on it
         // stalls forever.
         SessionWait WaitForCmdSpace(std::uint64_t bytes, std::uint32_t timeoutMs);
@@ -401,7 +401,7 @@ namespace MobileGL::MG_Remote::Transport {
             // THE BYTE CURSOR RetireThrough MAY RECLAIM TO, which is NOT simply
             // "everything popped". A record carrying kRecBorrowSlot has been lent
             // into the GPU timeline and its slot can only be recycled after
-            // completedFrameSerial (Ring.h:24-27), so the reclaimable cursor stops
+            // completedFrameSerial (Ring.h's header comment), so the reclaimable cursor stops
             // AT the first borrowed record and does not move again until
             // RetireBorrowedUpTo releases it. Nothing sets kRecBorrowSlot yet;
             // this is here so that the day something does, the producer does not

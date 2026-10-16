@@ -392,7 +392,7 @@ TEST(SessionTest, TwoThreadsMoveTwentyThousandRecordsAndAgreeOnEveryOne) {
         void* payload = nullptr;
         while ((payload = session.cmdProducer.Reserve(1, kRecNone, sizeof(std::uint32_t))) ==
                nullptr) {
-            // Never "wait" on a nullptr with enough free bytes - Ring.h:226-233 says that can
+            // Never "wait" on a nullptr with enough free bytes - RingProducer::Reserve (Ring.h) says that can
             // only mean "too big, chunk", and a producer that waited there would stall for ever.
             ASSERT_LT(session.cmdProducer.FreeBytes(), 16u);
             if (session.producer.WaitForCmdSpace(16, 5000) != SessionWait::Reached) {
@@ -1219,7 +1219,7 @@ TEST(SessionTest, TheInprocPeerGetsItsOwnMappingOfTheSameSharedMemory) {
 // M-5. RetireThrough must NOT hand back a slot borrowed into the GPU timeline. The first
 // version called RingConsumer::PublishRetired(), which stores the local tail into BOTH tails
 // and therefore frees every popped byte regardless of kRecBorrowSlot - defeating the reason the
-// ring carries two tails at all (Ring.h:24-27) and letting the producer overwrite a slot the
+// ring carries two tails at all (Ring.h's header comment) and letting the producer overwrite a slot the
 // GPU is still reading. Nothing sets kRecBorrowSlot yet; this is the case that has to be true
 // on the day something does.
 TEST(SessionTest, ABorrowedSlotIsNotHandedBackUntilItIsReleased) {
@@ -1269,7 +1269,7 @@ TEST(SessionTest, ABorrowedSlotIsNotHandedBackUntilItIsReleased) {
 }
 
 // q-1. Teardown's drain keys on the PRODUCER's own last-published seq, not on
-// RingControl::submittedSeq: Ring.h:72-77 permits that watermark to be published lazily, so a
+// RingControl::submittedSeq: Ring.h's header comment permits that watermark to be published lazily, so a
 // drain that trusted it would under-wait and free an emitter-owned var-tail while a record
 // still names it. With the verb barrier armed the two are equal; under
 // MOBILEGL_IPC_VERB_BARRIER=0 - R-1's negative control, which the phase must run once - they

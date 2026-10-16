@@ -227,14 +227,14 @@ namespace MobileGL::MG_Remote::Client {
         // -- the rows that fit none of the three shapes --------------------------------
 
         // set_dynamic_state. AN OPTIONAL BLOB, NOT A MANDATORY ONE (round-2 regression, the
-        // census's Fatal{BlobMissing, "SetDynamicState"}). EmitRenderState (PipeFill.cpp:2405-
-        // 2421) sends a set_dynamic_state whenever the RenderState VERSION moved, and when the
+        // census's Fatal{BlobMissing, "SetDynamicState"}). EmitRenderState (PipeFill.cpp) sends a
+        // set_dynamic_state whenever the RenderState VERSION moved, and when the
         // chunk-level suppressor finds NO dynamic chunk changed it sends the 32-byte header with
         // ChunkMask == 0 and blobByteCount == 0 - a version-only update, which the comment there
         // calls out as deliberate. The generic MGP_WIRE_BLOB wrapper stages through StageRequired,
         // which Fatals on a zero count, so a legal header-only update aborted the process with a
         // blob-shape complaint that had nothing to do with the actual state of the pipe. The
-        // DECODER already handles it: PipeWireCodec.cpp:1571-1587 takes the `ChunkMask == 0` arm
+        // DECODER already handles it: PipeWireDecoder::ApplyChecked takes the `ChunkMask == 0` arm
         // (CheckBlobIsHonest, no blob resolved) and applies the header alone. So the emitter is
         // the only side that was wrong; it stages OPTIONALLY, exactly like the two sub-data rows.
         // A non-empty mask still stages (blobByteCount > 0), so the reduced-path scenarios, whose
@@ -504,9 +504,9 @@ namespace MobileGL::MG_Remote::Client {
             // not - the shared pool, whose slot is seq % slotCount and is reused - the answer the
             // drain comes back for may already be gone, and there is NO recovery: retrying wedges
             // the row for the rest of the process, and re-latching the object by sending another
-            // create wipes the server's record along with its PendingUploads (PipeApply.cpp:2033,
-            // PipeApply.h:332) while the client cleared its dirty flags at emission
-            // (PipeApply.h:298-304), so nobody re-sends those texels. So it takes the blocking
+            // create wipes the server's record along with its PendingUploads (MGPipeApplyResourceCreate,
+            // MGPipeResourceRecord::PendingUploads) while the client cleared its dirty flags at emission
+            // (PipeApply.h's PendingUpload comment), so nobody re-sends those texels. So it takes the blocking
             // path instead, which is the pre-window shape exactly.
             const Uint32 window = session.LinkRetainsReplies() ? CreateWindowEffective() : 1u;
             // P15: UNDER RUN-AHEAD A CREATE IS FIRE-AND-FORGET. The handle is the client's own
@@ -651,7 +651,7 @@ namespace MobileGL::MG_Remote::Client {
             // the only caller discards it (PipeFill.cpp's MGPipeEmitResourceSubData), so
             // "accepted" is not a re-derivation of a server decision - it is the absence of a
             // question. The server still posts the real answer into the slot; nothing reads
-            // it, which ReplySlot.h:16, 105 makes legal. A row whose acceptance a caller USES
+            // it, which ReplySlotPool's seq-stamped slots make legal. A row whose acceptance a caller USES
             // may never take this path - R-5 has not moved.
             const Bool wantReply = MG_Pipe::MGPipeSubDataWantsItsReply(record);
             Int32 status = 0;

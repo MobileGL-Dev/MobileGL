@@ -3078,7 +3078,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                                   static_cast<Uint>(std::max(g_GLESCapabilities.MaxImageUnits, 0)));
             // P4a e3 (D-G2, D-J2), CORRECTED BY THE REVIEW'S MAJOR-1.
             //
-            // THE RECORD'S WINDOW IS NOT THIS SWEEP'S MEMBERSHIP. D-J2 and PipeApply.h:461-464
+            // THE RECORD'S WINDOW IS NOT THIS SWEEP'S MEMBERSHIP. D-J2 and PipeApply.h's MGPipeWorkingState
             // are a rule about RECORD RETENTION - entries outside the var-tail window are not
             // cleared in the applier - and say nothing about which DRIVER units a re-issue
             // sweep has to visit. The membership this loop needs is "every unit the driver
@@ -3100,7 +3100,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // Start is as undescribed as one above Start + Count).
             //
             // A8, which the review adds to this package's assumption list: NOTHING IN THE
-            // CONTRACT PINS THE WINDOW'S MEMBERSHIP. PipeApply.h:461-464 says only that the
+            // CONTRACT PINS THE WINDOW'S MEMBERSHIP. PipeApply.h's MGPipeWorkingState says only that the
             // record is the last set as received, and that Start + Count above the bound is
             // Fatal{ProtocolCorruption}. Until package C documents in ImageEmit.h that the
             // window covers every unit the driver holds, this union is load-bearing; the

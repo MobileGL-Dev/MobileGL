@@ -163,7 +163,7 @@ namespace MobileGL {
         // lavapipe and on an Adreno 830, because the two Init calls are two statements in one
         // thread. And "the legacy pull path runs for it" is false under split - the client has
         // no pull path to fall back to - so the records are simply lost, and only a later
-        // respecify's self-healing create (TextureEmit.h:872) ever brings one back.
+        // respecify's self-healing create (EmitResourceRespecify in TextureEmit.h) ever brings one back.
         //
         // A BOUNDED WAIT INSIDE ServerConsumes CANNOT FIX THIS AND WOULD DEADLOCK: during
         // MG_State::Init() no handshake is in flight, and the one that will land is started

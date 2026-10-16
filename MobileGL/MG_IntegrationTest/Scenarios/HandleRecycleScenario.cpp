@@ -819,12 +819,11 @@ void main() { oColor = texture(uTex, vUv); }
 
                 EXPECT_EQ(liveAfter, liveBefore)
                     << kChurn << " " << kindName << SpaceSuffix(space)
-                    << " objects were created, drawn with and destroyed and "
-                    << (liveAfter - liveBefore)
+                    << " objects were created, drawn with and destroyed and " << (liveAfter - liveBefore)
                     << " slots never came back. Each one holds a SlotState, a lifetime-id map node "
                        "and the applier's record for the life of the process, and past the kind's "
                        "slot bound every create trips Fatal{ProtocolCorruption} for good "
-                       "(PipeApply.h:97-113). This is P3a's C-1 defect, which is why every P4a kind "
+                       "(PipeApply.h's slot bounds). This is P3a's C-1 defect, which is why every P4a kind "
                        "frees its slot from the frontend destructor through one client-side helper "
                        "(D-I1) rather than from a backend death table. Backend "
                     << Gl().BackendName();

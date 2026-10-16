@@ -122,12 +122,12 @@
 // reviewer's head and so that the generator's completeness check has something to accept.
 #define MGP_VERB_OP_EXEMPT_LIST(X)                                                                   \
     X(Present,                                                                                       \
-      "FillPoints.def:21 - Present and SetSwapInterval go through BackendObject virtuals and "       \
+      "Present and SetSwapInterval go through BackendObject virtuals and "                           \
       "read no frontend state, so they are not verbs here. There is no MGPipeVerb::Present, "        \
       "MGPipeValidateForVerb is never called for it, and stamping would retire the previous "        \
       "verb's answers with nothing to put in their place. It is class B all the same.")              \
     X(SetSwapInterval,                                                                               \
-      "the same sentence of FillPoints.def:21, and it is class C besides")                           \
+      "not a verb for the same reason as Present, and it is class C besides")                        \
     X(Flush,                                                                                         \
       "not a verb at all: the verb census (BRIEF §12 C-3) found Flush is not a GLFunctionsTable "    \
       "slot and glFlush/glFinish are empty function bodies (Definitions.cpp:111-112), so there "     \

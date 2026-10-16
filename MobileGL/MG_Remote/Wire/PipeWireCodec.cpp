@@ -702,7 +702,7 @@ namespace MobileGL::MG_Remote::Wire {
         }
         case MGPWireOp::SetShaderBuffers: {
             // TWO TAILS. HostSpanCount is 0 or Count and NEVER anything else
-            // (MGPipeTypes.h:820-823), because the two arrays stay index-aligned; a third
+            // (MGPShaderBuffers in MGPipeTypes.h), because the two arrays stay index-aligned; a third
             // value would let a record describe spans for ranges it does not have.
             const auto& p = *static_cast<const MGPShaderBuffers*>(payload);
             // P5e (sb, CONTRACT-P5E.md §1): the class and the window, bounded HERE as well as
@@ -1750,7 +1750,7 @@ namespace MobileGL::MG_Remote::Wire {
             const auto& desc = *static_cast<const MGPResourceDesc*>(payload);
             // R-13.3: `initialBytes` IS ALWAYS NULL UNDER SPLIT. Initial content arrives as
             // resource_subdata records immediately after this one, which is what the texture
-            // path already does (TextureEmit.h:1137).
+            // path already does (ApplyRespecify in TextureEmit.h).
             //
             // The scope and exact mutable-level extent are one carrier value. Read each part
             // through the helpers; forgetting the presence byte would turn a whole-resource
@@ -1886,7 +1886,7 @@ namespace MobileGL::MG_Remote::Wire {
         case MGPWireOp::CreateVertexElements: {
             const auto& desc = *static_cast<const MGPVertexElements*>(payload);
             // The blob's length cross-check against the two counts is the applier's already
-            // (PipeApply.cpp:1990-1999) and is the model every other row copies; the decoder
+            // (MGPipeApplyCreateVertexElements in PipeApply.cpp) and is the model every other row copies; the decoder
             // adds only what the applier cannot see, which is that the bytes exist at all.
             const void* blob = ResolveOrFatal(op, desc.Blob);
             if (blob == nullptr) return false;
@@ -1907,7 +1907,7 @@ namespace MobileGL::MG_Remote::Wire {
             // R-13.1 gave this call its kHasBlob. The serialization IS the memcpy - a POD -
             // and borderColorForm must survive BYTE FOR BYTE, because all three colour
             // representations are always numerically populated and it is the only thing that
-            // says which one the backend must use (MGPipeTypes.h:425-428).
+            // says which one the backend must use (MGPSamplerDesc in MGPipeTypes.h).
             if (!RequireDeclaredBlob(op, desc.Parameters, *m_segments)) return false;
             if (desc.Parameters.Size != sizeof(MobileGL::SamplerParameters)) {
                 return WireProtocolLatchAt("CreateSamplerState.Parameters", desc.Parameters.Size,
@@ -2146,7 +2146,7 @@ namespace MobileGL::MG_Remote::Wire {
 
         case MGPWireOp::SetGlobalConstants: {
             const auto& rec = *static_cast<const MGPGlobalConstants*>(payload);
-            // The length cross-check is the applier's (PipeApply.cpp:2784, against the
+            // The length cross-check is the applier's (PipeApply.cpp's MGPipeApplySetGlobalConstants, against the
             // program's GlobalUboSize, which this record does not carry). Under rule A it
             // stops being inert for the first time, which is the whole point of arming Size.
             const void* bytes = ResolveOrFatal(op, rec.Blob);
@@ -2201,8 +2201,8 @@ namespace MobileGL::MG_Remote::Wire {
                     Uint64(rec.UnionBox.Z) + rec.UnionBox.D > rec.LevelDepth))
                 return WireProtocolLatch("ResourceSubData.LevelExtent", "invalid full image extent or dirty box");
             // Rule A arms both halves. The buffer half already declared a real size in
-            // monolith and is cross-checked at PipeApply.cpp:702; THE TEXTURE HALF DECLARED 0
-            // (TextureEmit.h:1265-1267, on the grounds that the byte count was "the server's
+            // monolith and is cross-checked by PipeApply.cpp's SubDataBoxFault; THE TEXTURE HALF DECLARED 0
+            // (TextureEmit.h's EmitOneLevel, on the grounds that the byte count was "the server's
             // to compute") and under split it must declare too - a length the reader computes
             // from the record it is checking is not a bounds check.
             const Bool namesABuffer = rec.Target == kMGPipeResourceTargetBuffer;
@@ -2263,7 +2263,7 @@ namespace MobileGL::MG_Remote::Wire {
             // drives rewrites its range from the AUTHORITATIVE SHADOW, which rule C makes
             // server-owned, so resource_subdata is already the only way bytes reach it and a
             // second way would be a forgeable one. AccessFlags cross verbatim, never
-            // normalised (PipeApply.h:902-903).
+            // normalised (MGPipeApplyResourceFlushRange in PipeApply.h).
             MGPipeApplyResourceFlushRange(*static_cast<const MGPFlushRange*>(payload), nullptr);
             return true;
 
@@ -2485,7 +2485,7 @@ namespace MobileGL::MG_Remote::Wire {
             return true;
 
         case MGPWireOp::SetSwapInterval:
-            // Class C, wave 3 (census-classC.md "static cross"); not a verb (FillPoints.def:21).
+            // Class C, wave 3 (census-classC.md "static cross"); not a verb (no MGP_FILL_VERB_LIST row).
             return false;
 
         case MGPWireOp::Flush:

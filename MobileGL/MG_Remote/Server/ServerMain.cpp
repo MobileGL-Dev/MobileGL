@@ -420,7 +420,7 @@ int RunSession(std::unique_ptr<SocketTransport> control, std::vector<std::uint8_
     }
     DelaySessionHandshakeForTest();
     // THE FIRST FRAME, CLASSIFIED BY THE SAME FUNCTION THE TCP SUPERVISOR USES (plan §1.1, fuzz
-    // arm 1 row: "ServerMain.cpp:193 CtrlEnvelopeBufferHasIdentifier"). The identifier is asked
+    // arm 1 row: add CtrlEnvelopeBufferHasIdentifier to this first-frame read). The identifier is asked
     // first, and every malformed shape is refused BY NAME - this read used to `_exit(67)` on all
     // of them, so a peer that sent garbage got a bare close and the supervisor counted a fault.
     const auto shape = Server::ClassifyFirstFrame(helloFrame.data(), helloFrame.size());
@@ -840,7 +840,7 @@ bool ReapActiveSession(pid_t& active, unsigned long& sessionsFaulted) {
     if (::waitpid(active, &status, WNOHANG) != active) return false;
     const int reaped = static_cast<int>(active);
     active = -1;
-    // WIFEXITED / WIFSIGNALED / WTERMSIG, the same three questions ServerSpawn.cpp:289 asks of
+    // WIFEXITED / WIFSIGNALED / WTERMSIG, the same three questions ReapServer (ServerSpawn.cpp) asks of
     // the same kind of child - but logged rather than folded into one signed integer, because
     // this side has nobody to return the answer to.
     if (WIFEXITED(status)) {

@@ -540,7 +540,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // GetOrCreate from a twin destructor cannot resurrect it.
         //
         // The slot itself is NOT freed here: it belongs to the kind, and for a handle-keyed
-        // kind the CLIENT frees it after the destroy call returns (SlotAllocator.h:60 - the
+        // kind the CLIENT frees it after the destroy call returns (MGPipeSlotAllocator::Free - the
         // Gen bump rides the next handout, so a double free cannot skip a generation). An
         // entry whose Gen no longer matches is a twin of the slot's previous owner and is
         // left alone: the successor's own GetOrCreate resets it.

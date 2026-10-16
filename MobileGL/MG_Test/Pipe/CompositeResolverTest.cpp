@@ -51,7 +51,7 @@
 #include "Includes.h"
 #include <MG_Pipe/MGPipe.h>
 #include "Init.h"
-// MOBILEGL_PIPE_POISON is DERIVED in the header below (PipeInputs.h:20-26) and nowhere
+// MOBILEGL_PIPE_POISON is DERIVED in the header below (PipeInputs.h) and nowhere
 // else, so a TU that tests it without this include silently reads it as 0. That is
 // invisible in a push build (where it really is 0) and in a verify build (where
 // -DMOBILEGL_PIPE_VERIFY=1 is on the command line); MOBILEGL_BUILD_DISAGGREGATED is the

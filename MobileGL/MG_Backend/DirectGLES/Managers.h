@@ -3239,9 +3239,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // BoundSamplerStates[unit])` (the record arm of BindCurrentUnitSamplers, E's S4) could
         // never find a twin, the record arm bound nothing on every draw, and every glBindSampler
         // reached the driver only through the pre-handle program pass - S-1's confusion one
-        // loop over, and exactly what SamplerEmit.h:201-205 forbids ("a backend must NOT key a
+        // loop over, and exactly what ARCHITECTURE.md §2.3.1 forbids (a backend must NOT key a
         // sampler twin on a SamplerObject's lifetime id; the twin's life is
-        // create_sampler_state -> delete_sampler_state").
+        // create_sampler_state -> delete_sampler_state).
         //
         // This is the twin keyed the way the record is: resolved-or-created AT THE CSO HANDLE
         // (GetOrCreateByHandle, the same slot table, a slot the identity family can never hold)

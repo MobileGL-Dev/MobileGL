@@ -534,7 +534,7 @@ function(mgl_itest_probe_for_two_symbols outVar directory symbolRegexA symbolReg
 endfunction()
 
 # DirectGLES' Track H arm, probed by the subsystem bit it is gated on rather than by
-# SlotTables.h existing: the bit is declared in the contract (MG_Pipe/MGPipe.h:77) and the
+# SlotTables.h existing: the bit is declared in the contract (kMGPipeSubsystemEsprytSlots, MG_Pipe/MGPipe.h) and the
 # backend has to name it to honour MOBILEGL_PIPE_PUSH's default mask, whatever files package C
 # spreads the slot tables across.
 mgl_itest_probe_for_symbol(MGL_ITEST_ESPRYT_SLOTS

@@ -82,7 +82,7 @@ namespace MobileGL::MG_Remote::Server {
 
     // THE THREE FLAG-SPACE COLLISIONS, AS TRIPWIRES RATHER THAN AS A COMMENT.
     //
-    // MGPipeCallFlags (MG_Pipe/MGPipe.h:42-54) and RingRecordFlags (Ring.h) are separate spaces
+    // MGPipeCallFlags (MG_Pipe/MGPipe.h) and RingRecordFlags (Ring.h) are separate spaces
     // that overlap, and three bits mean DIFFERENT things in each. Ring.h's enum carries the
     // table; these are the assertions that break the build if either enum is renumbered, so the
     // collision can never become news again. They live here because this is the nearest .cpp
@@ -105,7 +105,7 @@ namespace MobileGL::MG_Remote::Server {
 
     namespace {
 
-        // A control-plane frame is small by construction (ITransport.h:56-58: bulk bytes
+        // A control-plane frame is small by construction (ITransport::SendFrame: bulk bytes
         // belong in shm, never here), so one stack-free vector sized from PeekFrameSize is
         // the whole reader. The BUFFER_TOO_SMALL half of ReceiveFrame's contract is what
         // makes the two-step safe: a short buffer leaves the message queued.
@@ -452,8 +452,8 @@ namespace MobileGL::MG_Remote::Server {
             head.RangeCount = static_cast<std::uint32_t>(rangeCount);
             std::memcpy(slot, &head, sizeof(head));
             if (tailBytes != 0) {
-                // EventRange and MGPRange are the same two Uint64s (EventRing.h:61-66 asserts
-                // it), so the tail is a plain copy rather than a per-element conversion.
+                // EventRange and MGPRange are the same two Uint64s (EventRing.h asserts it at
+                // EventRange's declaration), so the tail is a plain copy rather than a per-element conversion.
                 std::memcpy(static_cast<Uint8*>(slot) + sizeof(head), ranges,
                             static_cast<SizeT>(tailBytes));
             }

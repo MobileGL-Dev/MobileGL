@@ -333,8 +333,8 @@ TEST_F(FieldOwnershipTest, VerbBoundaryOpsCoverEveryVerbShapedCall) {
     EXPECT_EQ(kMGPipeVerbBoundaryExemptCount, SizeT{3});
 
     // Present is class B (it is emitted in P5) and is STILL not a verb boundary:
-    // FillPoints.def:21 - "Present and SetSwapInterval go through BackendObject virtuals and
-    // read no frontend state, so they are not verbs here". Stamping there would retire the
+    // Present and SetSwapInterval go through BackendObject virtuals and read no frontend state,
+    // so FillPoints.def's MGP_FILL_VERB_LIST has no row for them. Stamping there would retire the
     // previous verb's answers with nothing to put in their place.
     EXPECT_EQ(MGPipeVerbForWireOp(MGPWireOp::Present), MGPipeVerb::kVerbCount);
     EXPECT_EQ(MGPipeVerbForWireOp(MGPWireOp::SetSwapInterval), MGPipeVerb::kVerbCount);

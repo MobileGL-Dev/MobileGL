@@ -241,7 +241,7 @@ namespace MobileGL::MG_Remote::Transport {
         // THESE TWO RETIRE CONTRACT-P5 §3.9. That ruling kept the doorbell
         // accessors on the session "so that this stays one switch in one file
         // rather than two virtuals every transport has to invent a home for"
-        // (ServerSession.cpp:709-724) - and the switch it produced aborts for
+        // (ServerSession::ConsumerDoorbell) - and the switch it produced aborts for
         // every role but InProcess, so a spawn apply thread dies in
         // ConsumerDoorbell before it pops its first record. The seam is the
         // home the ruling said did not exist. lk deletes both accessors rather

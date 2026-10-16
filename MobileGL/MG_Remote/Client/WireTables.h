@@ -53,7 +53,7 @@ namespace MobileGL::MG_Remote::Client {
     // moves for the class-B verbs too. So an armed Clear-only lane is green on EmitSeq while this
     // counter stays 0. Making the harness read THIS instead is t1's file (SplitRuntimePeek), so
     // the honest statement is the one here: c1 counts the routed ordinal at the only place that
-    // can, PipeFill's InitialBytesNotCarried self-check reads it (PipeFill.cpp:755), and the
+    // can, PipeFill's InitialBytesNotCarried self-check reads it (MGPipeEmitResourceRespecify), and the
     // lane's own arming remains EmitSeq until t1 re-points it. c1-v3.md M7 has the full note.
     Uint64 ClientWireRecordsEmitted();
 

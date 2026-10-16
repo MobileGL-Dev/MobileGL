@@ -7,7 +7,7 @@
 // End of Source File Header
 
 #pragma once
-#include <Includes.h> // String/Vector/Array/UnorderedMap/SharedPtr + GL enums. DEBT NOTE (MGPipeTypes.h:24-31 style):
+#include <Includes.h> // String/Vector/Array/UnorderedMap/SharedPtr + GL enums. DEBT NOTE (MGPipeTypes.h header style):
                       // Includes.h:80-84 still pulls glslang and :59 spirv_cross_c.h; this header is glslang-free BY
                       // SYMBOL (what P7's `nm -D | grep glslang` measures), not by preprocessed text. A textually
                       // glslang-free closure needs MG_Util/Types.h split off Includes.h (Types.h:11 includes it

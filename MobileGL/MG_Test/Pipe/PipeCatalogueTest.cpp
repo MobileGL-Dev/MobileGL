@@ -1333,8 +1333,8 @@ TEST(PipeCatalogue, ResourceRespecifyAcksOnlyImmutableStorage) {
 
     // And the four by name, because a count alone would let a row lose the flag while another
     // gained one. These are exactly the MGPipeApply* entry points that return Bool
-    // (PipeApply.h:820, :868, :897, :1023); map_persistent's void* is the fifth answer and was
-    // already declared.
+    // (ResourceCreate, ResourceRespecify, ResourceSubData, SetTextureParams in PipeApply.h);
+    // map_persistent's void* is the fifth answer and was already declared.
     Uint32 acceptanceWithSlot = 0;
 #define MGP_COUNT_ACCEPTANCE_ROWS(Name, Payload, Class, Flags, Wait)                                                         \
     if ((std::strcmp(#Name, "ResourceCreate") == 0 || std::strcmp(#Name, "ResourceRespecify") == 0 ||                   \

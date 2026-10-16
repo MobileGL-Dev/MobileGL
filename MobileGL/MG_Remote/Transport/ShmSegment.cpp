@@ -239,7 +239,7 @@ namespace MobileGL::MG_Remote::Transport {
         // closes what has already been created: Close only walks m_owned when
         // m_owns is true, and setting it afterwards left a failure at segment 3
         // holding segments 0-2's descriptors and mappings open with Valid()
-        // false, against ShmSegment.h:66's "unmaps and releases the descriptor".
+        // false, against ShmSegment::Close's "unmaps and releases the descriptor".
         m_owns = true;
 
         struct Spec {

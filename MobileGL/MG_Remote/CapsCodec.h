@@ -9,9 +9,9 @@
 // The MGPCaps snapshot's serializers, and the CallMask encoding. Owner: package w1 (the two
 // blob codecs) and s1 (the handshake asserts). Signatures by c0.
 //
-// MGPCaps (MG_Pipe/MGPipeTypes.h:126-139) has four members. Two are flat and cross by memcpy
+// MGPCaps (MG_Pipe/MGPipeTypes.h) has four members. Two are flat and cross by memcpy
 // (DynamicBackendParameters Dynamic, Uint64 CallMask); two are MGPBlobRefs over containers
-// and HAVE NO SERIALIZER IN THE TREE - the header says so itself at MGPipeTypes.h:134-136,
+// and HAVE NO SERIALIZER IN THE TREE - the header says so itself above MGPCaps::FormatCapabilities,
 // "Their serializers land with the transport (P5)". They are:
 //
 //   FormatCapabilities -> FormatCapabilityCache (MG_Backend/BackendObject.h:93-98):

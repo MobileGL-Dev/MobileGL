@@ -576,10 +576,9 @@ inline constexpr const char* kMGPipeFieldOwnershipNames[] = {
     add("static_assert(kMGPipeFieldOwnershipRowCount == 70, \"table 2's row count moved\");\n")
 
     add("""// An ARGUMENT-KEYED narrowing of one field. The field keeps its single row above; this
-// says that one argument value of it belongs to a different class. Coverage.def:62-69 already
-// rules the shape for GetBufferBindingSlot - "THE ROW STAYS ONE ROW ... the field is ONE array
-// that a second row of the same name could only duplicate" - and m_pixelStore[2] is the same
-// shape indexed by its own isUnpack argument.
+// says that one argument value of it belongs to a different class. Coverage.def's comment on the
+// GetBufferBindingSlot row already rules the shape - "The field is one array, so it stays one
+// row" - and m_pixelStore[2] is the same shape indexed by its own isUnpack argument.
 struct MGPipeFieldArgumentOwnership {
     MGPipeInputField Field;
     Uint32 Arg0;

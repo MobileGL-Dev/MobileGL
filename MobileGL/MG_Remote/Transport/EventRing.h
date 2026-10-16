@@ -36,14 +36,14 @@ namespace MobileGL::MG_Remote::Transport {
         kEventFenceSignaled = 5,   // P10: a client fence the server saw signaled (CONTRACT-P10 §1)
     };
 
-    // The 8-byte {slot, gen} pair, mirrored (MGPipeHandles.h:54-65).
+    // The 8-byte {slot, gen} pair, mirrored (MGPipeHandle in MGPipeHandles.h).
     struct EventHandle {
         std::uint32_t Slot;
         std::uint32_t Gen;
     };
     static_assert(sizeof(EventHandle) == 8, "the handle is the 8-byte {slot, gen} pair");
 
-    // MGPRange, mirrored (MGPipeTypes.h:63-67).
+    // MGPRange, mirrored (MGPipeTypes.h).
     struct EventRange {
         std::uint64_t Offset;
         std::uint64_t Size;
@@ -79,7 +79,7 @@ namespace MobileGL::MG_Remote::Transport {
     };
     static_assert(sizeof(EventGpuWrittenHead) == 16, "wire shape");
 
-    // OnSurfaceChanged(const MGPSurfaceInfo*), mirrored (MGPipeTypes.h:1394-1401).
+    // OnSurfaceChanged(const MGPSurfaceInfo*), mirrored (MGPipeTypes.h).
     struct EventSurfaceChangedHead {
         std::uint32_t Width;
         std::uint32_t Height;
@@ -135,7 +135,7 @@ namespace MobileGL::MG_Remote::Transport {
         void* Reserve(EventKind kind, std::uint64_t payloadBytes) {
             void* slot = m_producer.Reserve(static_cast<std::uint16_t>(kind), kRecNone, payloadBytes);
             if (slot == nullptr && m_cmdControl != nullptr) {
-                // "SEG_EVENT full, server stopped applying" - Ring.h:123. Latched
+                // "SEG_EVENT full, server stopped applying" - RingControl::eventRingFull in Ring.h. Latched
                 // here, cleared by the consumer once it has drained.
                 m_cmdControl->eventRingFull.store(1, std::memory_order_release);
             }

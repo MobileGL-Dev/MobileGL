@@ -11,8 +11,8 @@
 // P3a migrates two subsystems: kMGPipeSubsystemResources (bit 7, the resource_* family) and
 // kMGPipeSubsystemVertexInput (bit 8, vertex elements / buffers / index). The push build's default
 // mask becomes kMGPipeSubsystemsMigratedAtP3a = 0x1ff, and P2's 0x7f survives as the control that
-// clears exactly those two bits - MGPipe.h:79's rule that every phase's constant keeps meaning what
-// it meant, so an operator's recorded mask is still readable a phase later.
+// clears exactly those two bits - the rule in MGPipe.h's MOBILEGL_PIPE_PUSH bitmask section that every
+// phase's constant keeps meaning what it meant, so an operator's recorded mask is still readable a phase later.
 //
 // That A/B is what every "push vs pull" number in MEASUREMENTS.md is taken against, and it has one
 // characteristic failure mode: the bits stop steering anything, both arms run the same code, and

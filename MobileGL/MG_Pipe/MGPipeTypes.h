@@ -360,9 +360,9 @@ namespace MobileGL::MG_Pipe {
         // of a content hash (section 4.2.1). Widened from the plan's two bytes, which
         // cannot hold one.
         Uint32 GlNameForDiag;
-        // The pair HasRespecifiedLevel above gates. Byte for byte the two members of
-        // MGPRespecifiedLevel (PipeApply.h:792-795), in that order, so the applier's existing
-        // struct and this carrier are one layout - but spelled as two Uint16s rather than as
+        // The pair HasRespecifiedLevel above gates. Byte for byte the first two members of
+        // MGPRespecifiedLevel (PipeApply.h), in that order, so the applier's existing
+        // struct and this carrier share that pair's layout - but spelled as two Uint16s rather than as
         // that type, because PipeApply.h includes THIS header and not the other way round.
         Uint16 RespecifiedUploadTarget;
         Uint16 RespecifiedLevel;

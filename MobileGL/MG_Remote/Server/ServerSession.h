@@ -79,7 +79,7 @@ namespace MobileGL::MG_Remote::Server {
         // which is how DirectGLES - which has no OnCapsInvalidated producer - tells the client
         // its InitCapabilities re-ran, without any dev-shaped backend edit. It is also the
         // re-open signal for "the server's ES context died and its rings were dropped", the
-        // event MGPipeCallbacks has no eleventh slot for (MGPipeCallbacks.h:56-58).
+        // event MGPipeCallbacks has no slot for (the count is pinned by kMGPipeCallbackCount).
         MobileGLResult PublishCapsSnapshot();
 
         Transport::RingConsumer& CommandRing();

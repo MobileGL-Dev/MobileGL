@@ -10,7 +10,7 @@
 // StagedShadow.h (R-11), held to its four rulings (CONTRACT-P5C.md §2.1).
 //
 // THE DEFECT THIS ENDS (T1/T5). resource_subdata's texture half stages the level bytes into
-// SEG_STAGE and ApplyTextureUpload (PipeApply.cpp:989-1036) drops the pointer after the gate,
+// SEG_STAGE and ApplyTextureUpload (PipeApply.cpp) drops the pointer after the gate,
 // the accumulation and the serial. Espryt then re-reads the client's MipmapStorage at sync
 // time (Managers.cpp:6940, :7129, :7198, :7315), reads per-level shape off the client object
 // (:6928, :6936, :7314, :7332, DirectGLES.cpp:8502-8507, :8528-8529), and Magma WRITES the

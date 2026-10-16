@@ -4555,7 +4555,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         return PipeRecordAt(MG_Pipe::MGPipeApplier().ShaderCsos, cso);
     }
 
-    // N-7: D KEYS ON THE UPLOAD HALF; WIRE (AccumulatePendingUpload, PipeApply.cpp:814) KEYS ON
+    // N-7: D KEYS ON THE UPLOAD HALF; WIRE (AccumulatePendingUpload, PipeApply.cpp) KEYS ON
     // THE WHOLE PACKED FIELD. That asymmetry is resolved HERE, in D's favour and with the
     // reason, rather than by widening the two comparisons: D's question is per (uploadTarget,
     // level) because that is the granularity its upload loop iterates - it is handed a
@@ -4567,10 +4567,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
     //
     // So the low byte is CROSS-CHECKED instead of ignored. The comparand is the resource's own
     // descriptor Target, which B fills from exactly the expression the sub-data's low byte
-    // comes from (TextureEmit.h:223 / :517 against :1037), so the two are carried and equal by
-    // construction and any disagreement is a seam defect, not a shape to learn. This is also
-    // MGPResourceDesc::Target's first reader in this package (esprytobj-v2.md §2(6) recorded it
-    // as having none).
+    // comes from (TextureEmit.h's MGPipeBuildTextureResourceDesc and EmitResourceCreate against
+    // EmitOneLevel), so the two are carried and equal by construction and any disagreement is a
+    // seam defect, not a shape to learn. This is also MGPResourceDesc::Target's first reader in
+    // this package (esprytobj-v2.md §2(6) recorded it as having none).
     static void NotePipeSubDataTargetLowByte(const MG_Pipe::MGPipeResourceRecord& record, Uint16 packedTarget,
                                              Uint16 level) {
         const Uint8 carried = MG_Pipe::MGPipeSubDataResourceTargetOf(packedTarget);
@@ -4932,8 +4932,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // THE KEY IS THE ATTRIBUTE INDEX, NOT MGPVertexAttribWire::BindingIndex, and the two
         // live in different spaces. Espryt consumes RESOLVED attributes, so the client emits
         // set_vertex_buffers as one entry per attribute slot with
-        // MGPVertexBuffer::BindingIndex == the attribute index (VertexInputEmit.h:190-193,
-        // :229 - "Espryt consumes RESOLVED attributes, so the set is one entry per attribute
+        // MGPVertexBuffer::BindingIndex == the attribute index (EmitVertexBuffers in VertexInputEmit.h -
+        // "Espryt consumes RESOLVED attributes, so the set is one entry per attribute
         // slot with BindingIndex == the attribute index"), each carrying that attribute's
         // already-folded buffer, stride and divisor. MGPVertexAttribWire::BindingIndex is the
         // OTHER thing: the GL binding POINT the attribute was attached to by

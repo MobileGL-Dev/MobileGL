@@ -2684,7 +2684,7 @@ TEST_F(PipeWireCodecTest, ADeclaredPerStageSpirvRunIsFatal) {
 }
 
 TEST_F(PipeWireCodecTest, AHostSpanCountThatIsNeitherZeroNorCountIsFatal) {
-    // MGPipeTypes.h:820-823: HostSpanCount is 0 OR Count, never anything else, so the two
+    // MGPShaderBuffers (MGPipeTypes.h): HostSpanCount is 0 OR Count, never anything else, so the two
     // arrays stay index-aligned. A third value lets a record describe spans for ranges it does
     // not have - and the arrays would then be read off by one for the rest of the tail.
     const ChildResult r = RunInChild([] {

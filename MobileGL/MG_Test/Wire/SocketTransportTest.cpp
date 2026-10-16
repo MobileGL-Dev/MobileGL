@@ -440,7 +440,7 @@ TEST(SocketTransportTest, BlockedReceiverWakesOnSendAndOnShutdown) {
     std::uint64_t size = 0;
     MobileGLMutableByteSpan span{buffer.data(), buffer.size()};
     // The wake is a real POLLHUP here, not a condvar notify: this is the
-    // mechanism Doorbell.h:390-398 chose a stream socket for, and the reason
+    // mechanism SocketDoorbell (Doorbell.h) chose a stream socket for, and the reason
     // death is an event rather than a hang.
     EXPECT_EQ(pair.server->ReceiveFrame(span, &size, kWaitForever), MOBILEGL_ERR_TRANSPORT_CLOSED);
     closer.join();

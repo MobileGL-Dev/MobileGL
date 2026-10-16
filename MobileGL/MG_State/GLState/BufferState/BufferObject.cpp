@@ -590,7 +590,7 @@ namespace MobileGL::MG_State::GLState {
         // here; under R-1's verb barrier the block is nearly free, since the client is already
         // waiting for appliedSeq to reach the record it just emitted.
         //
-        // NO NARROWING (ResourceTracker.h:587-592's rangeCount == 1 assertion stays): this
+        // NO NARROWING (MGPipeClientOnGpuWritten's rangeCount == 1 assertion stays): this
         // phase only gives the client a conservative set, and a zero-range announcement stays
         // illegal until P8/P9 make it mean "fully narrowed - nothing is dirty".
         if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {

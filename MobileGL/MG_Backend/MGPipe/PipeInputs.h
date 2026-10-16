@@ -387,9 +387,9 @@ namespace MobileGL::MG_Pipe {
         }
         // THE ONE FIELD TABLE 2 NARROWS BY ARGUMENT. m_pixelStore[2] is one array indexed by
         // this accessor's own argument, exactly as m_bufferBindingSlot[15] is indexed by a
-        // BufferTarget, and Coverage.def:62-69 already rules that such a field stays ONE row.
+        // BufferTarget, and Coverage.def's GetBufferBindingSlot row already rules that such a field stays ONE row.
         // Only [0] (pack) has a carrier - set_pixel_pack_state, which the applier writes
-        // (PipeApply.cpp:1373) - so the field is APPLIER-DERIVED and the UNPACK half is FATAL:
+        // (MGPipeApplySetPixelPackState) - so the field is APPLIER-DERIVED and the UNPACK half is FATAL:
         // every gPipeInputs->GetPixelStoreParameters site in the tree passes false
         // (DirectGLES.cpp's PackStateFromContext, StoreReadbackRowsToClient and ReadPixels, Utils.cpp's
         // ReadbackImpl::StoreClientRows, RecordVerbSink::ReadBoundFramebufferTight and

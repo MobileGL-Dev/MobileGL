@@ -33,7 +33,7 @@
 //      MOBILEGL_TRANSPORT=inproc` (review finding M-5).
 //   2. `ClientSession::Active() != nullptr`. c0 made this one deliberately return null rather
 //      than Fatal, because "does a session exist" has a legitimate "no" - it is the monolith
-//      answer (ClientSession.cpp:31). So it is exactly "a client session exists in this process",
+//      answer (ClientSession::Active's definition). So it is exactly "a client session exists in this process",
 //      and no amount of editing stub MESSAGES makes a null pointer non-null.
 //   3. `ImplementedVerbCount() > 0`. c0's stub returns 0; the contract gives this function the
 //      job of making "a table that silently lost an emitter" distinguishable from "a table that

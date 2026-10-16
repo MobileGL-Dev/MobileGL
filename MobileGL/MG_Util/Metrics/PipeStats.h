@@ -99,7 +99,7 @@ namespace MobileGL::MG_Util::PipeStats {
         //
         // COUNTED AT THE ALLOCATOR, WHICH IS THE ONE CHOKE POINT. Every writer that puts bytes
         // into SEG_STAGE reaches them through PipeWireEncoder::StageBytes and that function's
-        // only allocation call is StageAllocate (PipeWireCodec.h:376), so a single site here
+        // only allocation call is PipeWireEncoder::StageAllocate (PipeWireCodec.h), so a single site here
         // covers the buffer content walks, the texture slabs, the CSO archives and the
         // storage-block names alike. Summing at the CALLERS instead would be a hand-kept list of
         // the paths that happen to exist today, and the next producer added would be missing

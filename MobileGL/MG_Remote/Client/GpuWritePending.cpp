@@ -52,7 +52,7 @@ namespace MobileGL::MG_Remote::Client {
         // avoided.
         const Uint64 quarter = stageCapacityBytes / 4;
         // A floor so a pathologically small operator-supplied segment cannot make the piece
-        // width zero, which the walk reads as "refuse" (ResourceTracker.h:254); such a segment
+        // width zero, which the walk reads as "refuse" (MGPipeForEachSubDataRecordRange); such a segment
         // is broken anyway, and the producer's Fatal{RingOverrun} names it on the first stage.
         const Uint64 chunk = quarter < 4096 ? 4096 : quarter;
         return static_cast<SizeT>(chunk > stageCapacityBytes ? stageCapacityBytes : chunk);

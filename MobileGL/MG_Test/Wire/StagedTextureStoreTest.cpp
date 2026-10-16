@@ -1004,7 +1004,7 @@ TEST(StagedTextureProductionTest, TextureSubDataThroughTheRealOpsTableCopiesAndS
     rec.UnionBox = {0, 0, 0, 4, 4, 1};
     rec.RegionCount = 0;
     // Under split the codec declares the run's length: "the bytes this record declares ARE
-    // the level shadow" (TextureEmit.h:1285). The adoption reads exactly this field.
+    // the level shadow" (TextureEmit.h's EmitOneLevel). The adoption reads exactly this field.
     rec.Blob.Size = src.size();
 
     // THE PRODUCTION CALL. Not StagedTextureStore::Adopt directly - the whole point of the

@@ -56,7 +56,7 @@
 #include "Includes.h"
 #include <MG_Pipe/MGPipe.h>
 #include <Config.h>
-// MOBILEGL_PIPE_POISON is DERIVED in the header below (PipeInputs.h:20-26) and nowhere
+// MOBILEGL_PIPE_POISON is DERIVED in the header below (PipeInputs.h) and nowhere
 // else, so a TU that tests it without this include silently reads it as 0. That is
 // invisible in a push build (where it really is 0) and in a verify build (where
 // -DMOBILEGL_PIPE_VERIFY=1 is on the command line); MOBILEGL_BUILD_DISAGGREGATED is the
@@ -2122,7 +2122,7 @@ namespace {
     // is what PipeFill.cpp's two content walks pass - because the record's own 2^32-1 bound is
     // not the one a real upload meets first. One piece's bytes are staged WHOLE in SEG_STAGE, a
     // linear arena, and a blob larger than that arena is Fatal{RingOverrun, "SEG_STAGE"} at the
-    // encoder rather than a split (PipeWireCodec.cpp:856-864); measured on the CI traces, where
+    // encoder rather than a split (PipeWireEncoder::StageAllocate); measured on the CI traces, where
     // a 128 MiB arena's whole-buffer follow-up against a 32 MiB segment aborted there.
     //
     // A UNIT PROCESS HAS NO SESSION, so the live answer is 0 - "nothing to fit, keep the
@@ -2139,7 +2139,7 @@ namespace {
                "bound rather than invent a cap";
         EXPECT_EQ(MG_Remote::Client::MGPipeStageChunkBytesFor(0), 0u);
 
-        // SessionRings.h:89's default segment, and the three shapes the clamp has to get right:
+        // SessionSegmentSizes::StageBytes' default segment, and the three shapes the clamp has to get right:
         // an ordinary arena, a segment below the floor, and a segment equal to it.
         constexpr Uint64 kStage = 32ull * 1024ull * 1024ull;
         constexpr Uint64 kChunk = kStage / 4;
@@ -2212,7 +2212,7 @@ namespace {
     // are bytes to carry: MappedData() answers a NON-NULL pointer for a zero-byte store
     // (PipeResource.h:140-143 reserves one byte whatever the size). Reading it alone is what
     // sent this call down the split arm's respecify(nullptr)-plus-follow-up shape, whose walk
-    // emits NOTHING for a zero-length range (ResourceTracker.h:253), so the self-check that
+    // emits NOTHING for a zero-length range (MGPipeForEachSubDataRecordRange), so the self-check that
     // exists to prove the content followed aborted by name:
     //     Fatal{InitialBytesNotCarried, "resource_respecify"} ... 0 bytes
     // measured on the first glBufferData(target, 0, NULL, ...) of the bsl-esc-menu trace.

@@ -358,7 +358,7 @@ namespace MobileGL::MG_Remote::Transport {
             // makes every later advance a no-op and every WaitForApplied on
             // kWaitForever - the verb barrier and every reply wait - block for
             // ever. A hang with one ERROR line in the log is strictly worse than
-            // an abort at the instruction that caused it, and Ring.h:181-185
+            // an abort at the instruction that caused it, and RingCursorsValid (Ring.h)
             // already rules the same way for the cursor invariants on this page.
             // "Early" can only be caught at the call site, which is why every
             // advance below has exactly one caller and a named unit case.
@@ -449,7 +449,7 @@ namespace MobileGL::MG_Remote::Transport {
         // RingCursorSet::Stage is driven by nobody (Ring.h's stage triple).
         m_cmd->Publish();
         // Kept locally as well as on the shared page: the shared watermark is
-        // allowed to lag (Ring.h:72-77), and teardown's drain must not.
+        // allowed to lag (Ring.h's header comment: late, never early), and teardown's drain must not.
         //
         // Clamped UP, not passed through. A caller that republishes an older
         // bound - teardown does exactly that, and so does any batched publisher
@@ -638,7 +638,7 @@ namespace MobileGL::MG_Remote::Transport {
         // into BOTH tails, i.e. it hands back every byte the consumer has popped
         // whether or not a record among them was borrowed into the GPU timeline.
         // That would defeat the whole reason the ring carries two tails
-        // (Ring.h:24-27) and would let the producer overwrite a slot the GPU is
+        // (Ring.h's header comment) and would let the producer overwrite a slot the GPU is
         // still reading. m_retirableCursor stops at the first borrowed record.
         m_cmd->PublishApplied();
         m_cmd->PublishRetiredUpTo(m_retirableCursor);

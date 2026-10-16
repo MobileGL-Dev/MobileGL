@@ -504,8 +504,8 @@ namespace MobileGL::MG_Remote::Client {
                                 static_cast<unsigned>(head->RangeCount),
                                 static_cast<unsigned long long>(tail));
                     }
-                    // EventRange and MGPRange are the same two Uint64s (EventRing.h:61-66
-                    // asserts it), so the tail is handed over as-is rather than copied into
+                    // EventRange and MGPRange are the same two Uint64s (EventRing.h asserts it next
+                    // to EventRange), so the tail is handed over as-is rather than copied into
                     // a second array a later reader could get out of step with.
                     const auto* ranges = reinterpret_cast<const MG_Pipe::MGPRange*>(
                         static_cast<const Uint8*>(view.payload) + sizeof(*head));
@@ -1989,8 +1989,8 @@ namespace MobileGL::MG_Remote::Client {
         // 1. publish and let the server drain. Bounded: a lost record must be a red lane, not
         //    a hung exit.
         if (m_link->Attached()) {
-            // The PRODUCER's own last-published seq, not RingControl::submittedSeq. Ring.h:72-77
-            // permits submittedSeq to be published lazily and Ring.h:243 encourages batching
+            // The PRODUCER's own last-published seq, not RingControl::submittedSeq. Ring.h's header comment
+            // permits submittedSeq to be published lazily and RingProducer::Publish encourages batching
             // the publish, so the shared watermark is allowed to lag the emitter - and a drain
             // that waited for `appliedSeq >= submittedSeq` would then under-wait and free an
             // emitter-owned var-tail while a record still names it. With the verb barrier armed
@@ -2677,9 +2677,9 @@ namespace MobileGL::MG_Remote::Client {
         // (P5d round 3, package D). Every line below is a pure predicate whose only effect is
         // "no violation, go home"; the Fatal fires on the AND of all of them, so reordering
         // cannot change which touches abort. It changes only what a touch that does NOT abort
-        // pays, and this guard sits on the per-verb fill path (PipeFill.cpp:542, :1951, :2789
-        // - MGPipeValidateForVerb is 4.11% self / 10.9% inclusive of the client thread), so
-        // "what it costs to answer no" is the whole of its cost in a healthy process.
+        // pays, and this guard sits on the per-verb fill path (PipeFill.cpp's MGPipeNoteFrontendMutation,
+        // MGPipeLeaveVerb and MGPipeValidateForVerb - the last is 4.11% self / 10.9% inclusive of the
+        // client thread), so "what it costs to answer no" is the whole of its cost in a healthy process.
         //
         // The two config reads come first because they are the two answers that are constant
         // for the life of the process and true for nearly every process that runs this code:
