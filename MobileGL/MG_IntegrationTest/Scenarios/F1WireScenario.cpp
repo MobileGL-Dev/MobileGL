@@ -1781,7 +1781,7 @@ void MakeSingleSampleTarget(int width, int height, const GLfloat (&clear)[4], GL
 // assertion.
 //
 // Red once (executed, reverted): restore the two `width != |dx1-dx0|` clauses in
-// WireFramebuffer.inc's colour resolve arm and both blits die as
+// WireFramebuffer.cpp's colour resolve arm and both blits die as
 // Fatal{UnmigratedVerb, "Magma:multisample-resolve-region"}.
 TEST_F(F1WireScenario, MultisampleColorBlitScalesAndFlipsThroughTheResolveScratch) {
     if (!Ready()) return;
@@ -1942,7 +1942,7 @@ TEST_F(F1WireScenario, MultisampleBlitOntoAMultisampleDestinationDeclinesAndKeep
 //
 // The half WITH an arm is ResolveWireDepthStencil's: a multisample depth or stencil source now
 // reaches a single-sample destination on every device - through VK_KHR_depth_stencil_resolve
-// where it exists, through WireMultisampleResolve.inc's baked pass where it does not - and the
+// where it exists, through WireMultisampleResolve.cpp's baked pass where it does not - and the
 // two MsResolve entries on each arm are its reading. This is the half with none.
 //
 // ONE SAMPLE INTO FOUR, with rectangles that MATCH so the shape decline next door is not what

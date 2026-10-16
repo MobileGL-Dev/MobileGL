@@ -136,7 +136,7 @@ TEST(FatalFunnelSeam, TheMagmaWireVerbDeathReachesSessionFailAndBumpsTheFaultCou
                     "reason MG_Test/Wire's spawn cases are POSIX only";
 #else
     using namespace MobileGL;
-    // WireFramebuffer.inc's MagmaWireFatal, character for character - the funnel eleven of the
+    // WireFramebuffer.cpp's MagmaWireFatal, character for character - the funnel eleven of the
     // fifteen P7-marked refusals die through.
     EXPECT_EXIT(
         {
@@ -159,7 +159,7 @@ TEST(FatalFunnelSeam, TheSeamHandsTheInstalledHookItsFamilyAndItsLineVerbatim) {
     GTEST_SKIP() << "POSIX only, as above";
 #else
     using namespace MobileGL;
-    // WireDraw.inc's WireBufferLegacyFatal, character for character. Through a hook of the test's
+    // WireDraw.cpp's WireBufferLegacyFatal, character for character. Through a hook of the test's
     // own rather than MG_Remote's, so what is under test is the SEAM - that the family enum and
     // the fully formatted line cross intact - and not what SessionFail then does with them. The
     // hook returns; MGPipeSessionFail must still abort, which is why this is an exit assertion.

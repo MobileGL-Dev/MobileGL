@@ -45,7 +45,7 @@ every arm (pairs.py), before and after.
 only the final window pass waits for the release.
 
 - Magma, 168451bc. `VulkanRenderer::SubmitAheadOfAcquiredImage` submits the recording without the acquire
-  wait when the frame first reaches the acquired image (through `WireFramebuffer.inc`).
+  wait when the frame first reaches the acquired image (through `WireFramebuffer.cpp`).
   `SubmitPendingCommandBuffer` attaches the image-available semaphore only to a submission that references
   the image (`FrameContext::FrameData::acquiredImageReferenced`). Always on; it logs "a frame's off-screen
   work goes to the queue ahead of its window pass" once.

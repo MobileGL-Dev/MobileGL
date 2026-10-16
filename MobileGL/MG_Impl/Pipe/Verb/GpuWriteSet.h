@@ -49,7 +49,7 @@ namespace MobileGL::MG_Record {
         // make the next map wait on - and then re-read - a dispatch that could not have
         // changed a byte of it.
         WritableImageBufferTexture,
-        // WireDraw.inc's BeginWireXfbCaptureForDraw, which VulkanRenderer::BeginXfbCaptureForDraw
+        // WireDraw.cpp's BeginWireXfbCaptureForDraw, which VulkanRenderer::BeginXfbCaptureForDraw
         // calls: the capture targets, because the capture is a GPU write like any shader's.
         TransformFeedbackCapture,
         // P5, new: glReadPixels into a bound GL_PIXEL_PACK_BUFFER.

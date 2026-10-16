@@ -410,7 +410,7 @@ glmark2-specific.
 
 ### Magma (DirectVulkan)
 
-1. **A VkRenderPass per draw.** `VulkanRenderer::SetupWireDraw` (`WireDraw.inc`) calls
+1. **A VkRenderPass per draw.** `VulkanRenderer::SetupWireDraw` (`WireDraw.cpp`) calls
    `RetireWireDrawPass()` unconditionally, which ends the active render pass, and begins a new one
    at the end of setup, for every draw. In ideas (305 draws/frame) `SetupWireDraw` is 41% of the
    apply thread and End/BeginRenderPass ~19%; on a tiler every pass also loads and stores its
@@ -431,7 +431,7 @@ glmark2-specific.
 3. **Allocation churn.** scudo malloc/free with lock contention (`__aarch64_cas4_acq` 20% + scudo
    ~15% of the ideas apply thread): per-draw vectors (`BeginRenderPass` clear values, vertex input
    state objects, retired wire objects). **Fix:** per-frame arenas / small vectors. **Gain:** 10-20%.
-4. **A VkRenderPass + VkFramebuffer created per clear** (`WireFramebuffer.inc` ~306-311): 7% of
+4. **A VkRenderPass + VkFramebuffer created per clear** (`WireFramebuffer.cpp`, `ClearWireFramebuffer`): 7% of
    texture fullscreen, and the objects pile up when nothing retires them (C2).
 
 ### Correctness found on the way
@@ -440,7 +440,7 @@ glmark2-specific.
   for the server to apply (`WaitForApplyToCatchUp`). Off-screen glmark2 then reports 6846 / 12117
   and nothing bounds the GPU queue. It must reach the backend (driver finish / fence wait) and reply.
 - **C2 Magma server crash** under `glmark2-wayland --off-screen`: `VK_ERROR_OUT_OF_HOST_MEMORY` FATAL
-  at `WireFramebuffer.inc:311` (`vkCreateFramebuffer` in `ClearWireFramebuffer`), then SIGSEGV in
+  at `vkCreateFramebuffer` in `ClearWireFramebuffer` (`WireFramebuffer.cpp`), then SIGSEGV in
   `vkCmdBeginRenderPass` (two server crashes in a row); the per-clear objects accumulate when the
   client runs ahead with no backpressure (C1).
 - **C3** ES extension parity (Espryt item 2).

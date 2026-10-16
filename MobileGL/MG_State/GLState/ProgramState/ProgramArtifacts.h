@@ -104,7 +104,7 @@ namespace MobileGL::MG_State::GLState {
     // from its OWN reflect pass over the same modules). This vector IS that space, built once.
     //
     // WHAT IT COSTS AND WHAT IT BUYS. MagmaProgramSource is a BORROWED VIEW constructed afresh
-    // for every wire draw (WireDraw.inc's WireProgramSource), so its lazy
+    // for every wire draw (WireDraw.cpp's WireProgramSource), so its lazy
     // `EnsureStorageBlocks` re-ran spvReflectCreateShaderModule over every stage module of
     // every program on every draw that touched an SSBO. Reading it out of the archive instead
     // takes the SPIR-V reflector off the wire draw path entirely.

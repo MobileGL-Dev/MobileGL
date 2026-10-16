@@ -246,7 +246,7 @@ TEST_F(SplitBufferSet, Row2TheSweepIsBoundedByTheImageUnitHighWaterMark) {
     binding = MG_State::GLState::ImageTextureBinding{};
 }
 
-// Row 3 - BeginWireXfbCaptureForDraw() in WireDraw.inc, which VulkanRenderer::BeginXfbCaptureForDraw()
+// Row 3 - BeginWireXfbCaptureForDraw() in WireDraw.cpp, which VulkanRenderer::BeginXfbCaptureForDraw()
 // calls. With no capture active there is nothing to mark, and that gate is the half worth pinning: a mark
 // taken with no active capture would mark whatever the binding points happened to hold from a previous one.
 TEST_F(SplitBufferSet, Row3TransformFeedbackTargetsAreOnlyMarkedWhileACaptureIsActive) {

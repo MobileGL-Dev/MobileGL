@@ -85,7 +85,7 @@ MAGMA_INPROC_ONLY = ("MagmaRunAheadScenario.", "MagmaWireCacheScenario.", "Descr
 
 # P7 wave 2-B2: THE SANCTIONED ASYMMETRY THAT IS NOT INPROC-ONLY - these exist on split AND
 # spawn and cannot exist on tcp. Every MGITEST_MAGMA_FORCE_* knob is read BY THE SERVER
-# (WireFramebuffer.inc's getenv readers run on the apply thread), and a ctest ENVIRONMENT
+# (WireFramebuffer.cpp's getenv readers run on the apply thread), and a ctest ENVIRONMENT
 # property only reaches the process ctest starts, the CLIENT. Under inproc the server is a
 # thread of that process and under spawn ServerSpawn.cpp copies ::environ into the child, so
 # both see it; under tcp the server is the LANE-WIDE TcpServer.Start fixture, started once from

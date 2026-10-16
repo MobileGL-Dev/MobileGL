@@ -66,7 +66,7 @@ prose is why that map reads the way it does.
 
 WHAT THE SAME PACKAGE RETIRED, so the numbers above can be checked: StagedShadow.h:115 and
 StagedTextureStore.h:344 now call SessionFail, and the three Magma wire funnels
-(WireFramebuffer.inc, UniformManager.cpp, WireDraw.inc) - through which all fifteen `@P7`
+(WireFramebuffer.cpp, UniformManager.cpp, WireDraw.cpp) - through which all fifteen `@P7`
 refusals die - go through MG_Pipe's MGPipeSessionFail seam. Those fifteen are now visible to
 every consumer of the funnel: a SessionFault frame for the peer, a SessionFaultCount() for exit
 gate S8, and a family word that FatalFamilies.def projects.

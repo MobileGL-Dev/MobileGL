@@ -258,7 +258,7 @@ namespace MGITest {
             // The claim is read off the SERVER's private log (the backend runs on the apply thread,
             // the server role, on every arm), where ResolveWireDepthStencil says once per arm which
             // one ran and ArmWireDepthResolveOrder states the verdict; keep the phrases in step with
-            // WireFramebuffer.inc and VulkanRenderer.cpp. Every other entry asserts nothing here.
+            // WireFramebuffer.cpp and VulkanRenderer.cpp. Every other entry asserts nothing here.
             //
             // Red once (executed, reverted): EvaluateWireDepthResolveProbe answering Clean for every
             // measurement fails the four Bug entries here (the render-pass line is in the log and
