@@ -51,4 +51,4 @@ Track V（值类型：render state、pixel store、capability 位、标量）是
 
 ### 10.3 索引宿主镜像（`Server/IndexHostMirror`，P8，待重裁）
 
-设计：`kCapNeedsHostIndexBytes` 下，server 从本来就要收的 `ResourceCreate/Respecify/SubData` 流增量维护 element-array buffer 的宿主镜像，零额外流量；预算 `MOBILEGL_PIPE_INDEX_MIRROR_MB`（默认 64），超预算退化为逐 draw 经 `MGHostSpan` 传送。**P6 的 a6 审计实测宿主索引 span 无 producer、client 索引已是 owned buffer**，所以 P8 要按真实消费者重新裁定，不照抄本节（[`notes/p8/README.md`](../notes/p8/README.md)）。
+设计：`kCapNeedsHostIndexBytes` 下，server 从本来就要收的 `ResourceCreate/Respecify/SubData` 流增量维护 element-array buffer 的宿主镜像，零额外流量；预算 `MOBILEGL_PIPE_INDEX_MIRROR_MB`（默认 64），超预算退化为逐 draw 经 `MGHostSpan` 传送。**P6 的 a6 审计实测宿主索引 span 无 producer、client 索引已是 owned buffer**，所以 P8 要按真实消费者重新裁定，不照抄本节（[`docs/archive/notes/p8/README.md`](../../archive/notes/p8/README.md)）。

@@ -6,7 +6,7 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// Shared images (docs/Disaggregated/notes/anland/plan-ahb-dmabuf.md): the server's registry, a
+// Shared images (docs/archive/notes/anland/plan-ahb-dmabuf.md): the server's registry, a
 // session's references, and the aux-socket inbox that carries an import's descriptor beside T0's
 // Offers. On a host the image memory is a memfd, which is enough for everything here: what is
 // under test is that a descriptor which travelled through SCM_RIGHTS still names its image.

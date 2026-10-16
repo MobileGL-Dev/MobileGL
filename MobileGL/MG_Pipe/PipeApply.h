@@ -11,7 +11,7 @@
 
 #include "MGPipeRenderStateSpans.h"
 #include "MGPipeTypes.h"
-// P5e (MG_Remote/CONTRACT-P5E.md §2.1): MGPipeBarriered takes an MGPWireOp and reads the
+// P5e (docs/archive/contracts/CONTRACT-P5E.md §2.1): MGPipeBarriered takes an MGPWireOp and reads the
 // generated wait-class and call-class tables, all of which live in MGPipe.h. It is a sibling
 // header in the same layer - MG_Pipe includes MG_Pipe - so the closure does not move.
 #include "MGPipe.h"
@@ -126,7 +126,7 @@ namespace MobileGL::MG_Pipe {
         void (*TextureRespecify)(MGPipeHandle res, const MGPResourceDesc& desc,
                                  const MGPRespecifiedLevel* level);
         void (*TextureDestroy)(MGPipeHandle res);
-        // P11 B2 (T0, MG_Remote/CONTRACT-P11.md B2): the two members a backend that can take a
+        // P11 B2 (T0, docs/archive/contracts/CONTRACT-P11.md B2): the two members a backend that can take a
         // client's AHardwareBuffer as a store registers. Both null = this backend has no T0 and
         // every session it serves runs T2. Appended after the texture trio for the same reason.
         //
@@ -296,7 +296,7 @@ namespace MobileGL::MG_Pipe {
         // DirectGLESBufferDrawProbe pair now pins from both sides.
         Bool HasLiveHostWrites = false;
 
-        // SHARED IMAGES (docs/Disaggregated/notes/anland/plan-ahb-dmabuf.md). Nonzero: this
+        // SHARED IMAGES (docs/archive/notes/anland/plan-ahb-dmabuf.md). Nonzero: this
         // texture's level-0 storage IS the server's shared image of this id (an EGLImage target),
         // set by shared_image's Attach and cleared by the next respecify that redefines storage.
         // The backend resolves the id at its texture sync (MG_Remote::Server::SharedImages::Find)
@@ -412,7 +412,7 @@ namespace MobileGL::MG_Pipe {
     // GlobalConstants is the one allocation P4a adds per program, it is bounded by
     // Desc.GlobalUboSize, and it is NOT on the hot path: set_global_constants is
     // (ShaderCso, Version) keyed and fires at most once per program per frame.
-    // P5e (MG_Remote/CONTRACT-P5E.md §1): one entry of set_program_bindings' third tail as the
+    // P5e (docs/archive/contracts/CONTRACT-P5E.md §1): one entry of set_program_bindings' third tail as the
     // RECORD owns it. The wire carries the block name as an MGHostSpan into SEG_STAGE, which
     // retires with the record that named it (rule C), so the applier copies the bytes here
     // rather than keeping the span: a rebuild happens at the next bind, which may be a frame
@@ -1150,7 +1150,7 @@ namespace MobileGL::MG_Pipe {
     Uint64 MGPipeApplierShareGroupKeyFor(Uint64 sessionKey, Uint64 contextToken);
 
     // ---------------------------------------------------------------------------------
-    // P5e: THE BARRIERED PREDICATE (MG_Remote/CONTRACT-P5E.md §2.1, ruling 3)
+    // P5e: THE BARRIERED PREDICATE (docs/archive/contracts/CONTRACT-P5E.md §2.1, ruling 3)
     // ---------------------------------------------------------------------------------
     //
     // ONE FUNCTION, TWO CALLERS, AND THAT IS THE WHOLE POINT. The client calls it at the emit

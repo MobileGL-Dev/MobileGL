@@ -1557,7 +1557,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // applier stored, so the answer is the same whichever side resolved it first.
         Bool BackendUsesNativeBaseInstance();
 
-        // ---- P5e SEAM (MG_Remote/CONTRACT-P5E.md §4.2; declared by c0e, bodied by id/vi) ----
+        // ---- P5e SEAM (docs/archive/contracts/CONTRACT-P5E.md §4.2; declared by c0e, bodied by id/vi) ----
         //
         // THE VAO TWIN, RESOLVED FROM THE HANDLE THE RECORD CARRIED - MGPipeApplierState::
         // BoundVertexElements - instead of from the frontend VertexArrayObject the draw's
@@ -1733,7 +1733,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // flag, allocator or pixel-store object participates. P9 W2: a level
             // the driver does not hold (defined after the last sync) is never read
             // back, and a readback the driver refuses falls back to the staged
-            // level when the store covers it (notes/p9/W2-REMINT.md).
+            // level when the store covers it (docs/archive/notes/p9/W2-REMINT.md).
             void RequireImageBindableStorageByHandle(MG_Pipe::MGPipeHandle res,
                                                      const MG_Pipe::MGPipeResourceRecord& record);
 #if MOBILEGL_BUILD_DISAGGREGATED
@@ -2057,7 +2057,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // table's answer is an array element and only a GetOrCreate that GROWS the table moves
         // it, which this function has already done by the time it returns.
         BackendTextureObject* ResolveTextureTwin(MG_Pipe::MGPipeHandle res);
-        // ---- P5e SEAM (MG_Remote/CONTRACT-P5E.md §4.2, §5.2; declared by c0e, bodied by
+        // ---- P5e SEAM (docs/archive/contracts/CONTRACT-P5E.md §4.2, §5.2; declared by c0e, bodied by
         // id/tx2) --------------------------------------------------------------------------
         //
         // EVERY DRAW-PATH TEXTURE ENTRY, BY HANDLE. The caller holds a Texture handle - a
@@ -2084,7 +2084,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // glCopyImageSubData passes: it tries FollowCopyImageInStagedStore first and marks the store
         // itself when that fails.
         void NoteDriverSideTextureWriteByHandle(MG_Pipe::MGPipeHandle texture, Bool storeFollowsTheWrite = false);
-        // P8-E (notes/p8/E.md): make glCopyImageSubData's texel-block move in the server's staged
+        // P8-E (docs/archive/notes/p8/E.md): make glCopyImageSubData's texel-block move in the server's staged
         // store too (StagedTextureStore::FollowCopy), so the destination level's bytes stay its
         // content. Box in each image's own texel grid. False when the store cannot follow: a cube
         // map or 1D array endpoint (copy-image puts faces / layers on z, the store does not), a view,
@@ -2143,7 +2143,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             ~BackendFramebufferObject();
             BackendFramebufferObject(const BackendFramebufferObject&) = delete;
             BackendFramebufferObject& operator=(const BackendFramebufferObject&) = delete;
-            // P5e SEAM (MG_Remote/CONTRACT-P5E.md §5.4; declared by c0e, bodied by fb): the same
+            // P5e SEAM (docs/archive/contracts/CONTRACT-P5E.md §5.4; declared by c0e, bodied by fb): the same
             // sync keyed on the framebuffer HANDLE. The record's eleven surfaces ARE the point
             // set - the emitter refuses a point at or above the wire width - so the attachment
             // walk needs no frontend FramebufferObject and no m_pushedSyncHandle handshake: the
@@ -3143,7 +3143,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         };
         ImageFormatBakeInputs CollectImageFormatBakeInputs(const ProgramBuildSource& src);
 
-        // ---- P5e SEAM (MG_Remote/CONTRACT-P5E.md §4.2, §5.5; declared by c0e, bodied by
+        // ---- P5e SEAM (docs/archive/contracts/CONTRACT-P5E.md §4.2, §5.5; declared by c0e, bodied by
         // id/pg) ---------------------------------------------------------------------------
         //
         // THE PROGRAM TWIN, RESOLVED FROM MGPipeApplierState::DrawProgram / DispatchProgram /

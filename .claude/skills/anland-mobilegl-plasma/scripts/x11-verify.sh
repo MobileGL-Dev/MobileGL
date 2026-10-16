@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# x11-verify.sh <step> [...] - device verification of X11 on the GPU (docs/Disaggregated/notes/anland/
+# x11-verify.sh <step> [...] - device verification of X11 on the GPU (docs/archive/notes/anland/
 # plan-x11-gpu.md): Xwayland drawing with glamor on MobileGL, and GLX windows presented through
 # DRI3 + Present from shared images. Steps, in the order a full run takes them:
 #

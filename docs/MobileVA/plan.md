@@ -5,7 +5,7 @@
 > source named) or **[unverified]** (expected from documentation or memory of the client sources;
 > each one has a check in the M1 spikes). Anything that says "will", "proposed" or "TODO" is design.
 >
-> Context: [`../Disaggregated/notes/anland/plan-ahb-dmabuf.md`](../Disaggregated/notes/anland/plan-ahb-dmabuf.md)
+> Context: [`docs/archive/notes/anland/plan-ahb-dmabuf.md`](../archive/notes/anland/plan-ahb-dmabuf.md)
 > (shared images), the YUV import work in MobileGL `7218bacb` / `18a5dba0`, and the skill
 > `.claude/skills/anland-mobilegl-plasma/` (build, deploy, probes).
 

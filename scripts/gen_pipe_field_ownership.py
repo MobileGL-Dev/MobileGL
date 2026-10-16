@@ -1012,7 +1012,7 @@ def self_test():
                  "the field set (%d of %d)" % (total, len(accessors)))
     if len(sticky) != 7:
         sys.exit("gen_pipe_field_ownership: self-test: Coverage.def no longer has seven sticky fields")
-    # EIGHT SINCE P5e (MG_Remote/CONTRACT-P5E.md 5.6): GetBufferBindingPoint joined the seven
+    # EIGHT SINCE P5e (docs/archive/contracts/CONTRACT-P5E.md 5.6): GetBufferBindingPoint joined the seven
     # when set_shader_buffers got its Coverage.def emitted row. The number is pinned rather
     # than merely derived because it is the SIZE OF THE SHAPE-ONLY SET - the rows where an
     # emitted call exists and still does not supply the field - and a row that quietly left

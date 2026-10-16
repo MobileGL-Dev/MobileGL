@@ -6,7 +6,7 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// SHARED IMAGES (docs/Disaggregated/notes/anland/plan-ahb-dmabuf.md). Included by VulkanRenderer.cpp
+// SHARED IMAGES (docs/archive/notes/anland/plan-ahb-dmabuf.md). Included by VulkanRenderer.cpp
 // inside the backend namespace, after WireFramebuffer.inc, whose readback the present side's copy
 // is modelled on: the same flush, the same write-visibility barrier, the same transition of the
 // default framebuffer's image.

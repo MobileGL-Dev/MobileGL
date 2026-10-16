@@ -8,7 +8,7 @@
 
 // mobilegl_gbm.so: a GBM backend (the loader's backend ABI, gbm_backend_abi.h) whose buffer
 // objects are MobileGL shared images - colour buffers the MobileGL server allocates and exports
-// as dma-bufs (docs/Disaggregated/notes/anland/plan-ahb-dmabuf.md). Selected with
+// as dma-bufs (docs/archive/notes/anland/plan-ahb-dmabuf.md). Selected with
 // GBM_BACKEND=mobilegl; the loader then finds <dir>/mobilegl_gbm.so on its backend path.
 //
 // THE DEVICE DESCRIPTOR IS OPAQUE. The fd a gbm_device is created on is only the identity the

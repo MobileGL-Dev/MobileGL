@@ -6,7 +6,7 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 //
-// P9 (W1, MG_Remote/CONTRACT-P9.md §1): READS INTO A PIXEL PACK BUFFER ARE ANSWERED BY NOTHING.
+// P9 (W1, docs/archive/contracts/CONTRACT-P9.md §1): READS INTO A PIXEL PACK BUFFER ARE ANSWERED BY NOTHING.
 //
 // Under a transport a glReadPixels / glGetTexImage whose destination is a bound
 // GL_PIXEL_PACK_BUFFER no longer waits for its pixels: it crosses as read_pixels_to_buffer /
@@ -418,7 +418,7 @@ namespace MGITest {
         // under a transport a pack-buffer read posts NO reply-slot record and marks the buffer
         // GPU-written, once per read. MOBILEGL_IPC_PBO_READBACK_SYNC=1 puts the reply form back,
         // and this case must then fail on both counters - that is its red-once, recorded in
-        // docs/Disaggregated/notes/p9/.
+        // docs/archive/notes/p9/.
         TEST_F(PackBufferReadbackScenario, APackBufferReadPostsNoReplyAndMarksTheBuffer) {
             if (!Ready()) return;
             const std::string split = SplitRuntimeSkipReason();

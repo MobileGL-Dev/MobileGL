@@ -656,7 +656,7 @@ namespace MobileGL {
             Uint32 Height = 0;
         };
 
-        // SHARED IMAGES (docs/Disaggregated/notes/anland/plan-ahb-dmabuf.md): server-allocated colour
+        // SHARED IMAGES (docs/archive/notes/anland/plan-ahb-dmabuf.md): server-allocated colour
         // buffers exported to clients as dma-buf descriptors.
         //
         // The server-side view of one image, as a backend sees it: `NativeBuffer` is the image's
@@ -756,7 +756,7 @@ namespace MobileGL {
                 (void)region;
                 return true;
             }
-            // IMPLICIT SYNC BY FLUSH (docs/Disaggregated/notes/anland/plan-x11-gpu.md): the session
+            // IMPLICIT SYNC BY FLUSH (docs/archive/notes/anland/plan-x11-gpu.md): the session
             // on this (the apply) thread ends a frame at a glFlush. Every shared image it used since
             // its last boundary is published as written and read by one fence of everything it
             // submitted (SharedImages::ReadTracker::PublishFrameAsWrite), and from now on its first

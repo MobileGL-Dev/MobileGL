@@ -657,7 +657,7 @@ namespace MobileGL::MG_Config {
         // (WireTables.cpp), half of the stream link's 24-entry answer store.
         // Measurements: docs/Performance/ipc-create-window.md.
         Uint32 CreateWindow = 10;
-        // MOBILEGL_IPC_PBO_READBACK_SYNC (P9 W1, MG_Remote/CONTRACT-P9.md §1): 1 = a glReadPixels
+        // MOBILEGL_IPC_PBO_READBACK_SYNC (P9 W1, docs/archive/contracts/CONTRACT-P9.md §1): 1 = a glReadPixels
         // or glGetTexImage into a bound GL_PIXEL_PACK_BUFFER takes the reply-slot form again -
         // the client waits for the pixels and uploads them into the buffer itself, as before P9.
         // 0 (default) sends read_pixels_to_buffer / get_texture_image_to_buffer, waits for
@@ -665,7 +665,7 @@ namespace MobileGL::MG_Config {
         // red-once of the wait-count gate (PackBufferReadbackScenario): it must show a reply
         // wait per read.
         Uint32 PboReadbackSync = 0;
-        // MOBILEGL_IPC_POLL_ESCALATE (P10, MG_Remote/CONTRACT-P10.md §1): a glClientWaitSync with a
+        // MOBILEGL_IPC_POLL_ESCALATE (P10, docs/archive/contracts/CONTRACT-P10.md §1): a glClientWaitSync with a
         // zero timeout or a glGetSynciv(GL_SYNC_STATUS) is answered by the client from what the
         // server reported (kEventFenceSignaled) - "signaled" when it has been, "not yet" otherwise
         // - and only the Nth "not yet" in a row on one fence crosses as a real round trip, so a
@@ -697,7 +697,7 @@ namespace MobileGL::MG_Config {
         // GLContext by the client's residual fill and a free-running queue lets the server
         // read a FUTURE value of them.
         Uint32 VerbBarrier = 1;
-        // MOBILEGL_IPC_RUN_AHEAD (P5e, MG_Remote/CONTRACT-P5E.md §1): 1 = after publishing an
+        // MOBILEGL_IPC_RUN_AHEAD (P5e, docs/archive/contracts/CONTRACT-P5E.md §1): 1 = after publishing an
         // UNBARRIERED record the client returns immediately instead of waiting for its apply.
         // It is one half of a conjunction and never a switch on its own - the client arms
         // run-ahead only when the server also publishes kCapRunAheadApply, so on Magma, and on

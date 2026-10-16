@@ -237,7 +237,7 @@
 // keyed by GL name, they are object lookups rather than verb state, and a forwarded field has
 // no storage for an emitted call to supply.
 //
-// P5e ADDS ONE ROW, GetBufferBindingPoint -> SetShaderBuffers (MG_Remote/CONTRACT-P5E.md §5.6),
+// P5e ADDS ONE ROW, GetBufferBindingPoint -> SetShaderBuffers (docs/archive/contracts/CONTRACT-P5E.md §5.6),
 // and it is SHAPE-ONLY like P3a's and P4a's six: the field's storage is four raw bases into the
 // frontend's Array<Array<BindingSlotRange1D, 84>, 4>, and set_shader_buffers carries RESOLVED
 // {handle, offset, size} ranges per class. The applier has no way to produce a pointer and P5e

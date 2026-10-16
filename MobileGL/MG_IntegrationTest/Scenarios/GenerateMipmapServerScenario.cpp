@@ -7,7 +7,7 @@
 // End of Source File Header
 //
 // Scenario - glGenerateMipmap ON THE FORMATS ESPRYT DOES NOT HAND STRAIGHT TO THE DRIVER
-// (P8-B, docs/Disaggregated/notes/p8/B.md).
+// (P8-B, docs/archive/notes/p8/B.md).
 //
 // Espryt generates R11F_G11F_B10F and depth chains with per-level blits, and RGB16F / RGB32F
 // chains outside glGenerateMipmap because ES refuses a three-channel float format there. Until

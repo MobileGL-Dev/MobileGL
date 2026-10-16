@@ -6,7 +6,7 @@
  * SPDX-License-Identifier: LGPL-3.0-only
  * End of Source File Header */
 
-/* SHARED IMAGES, AS A C ABI (docs/Disaggregated/notes/anland/plan-ahb-dmabuf.md).
+/* SHARED IMAGES, AS A C ABI (docs/archive/notes/anland/plan-ahb-dmabuf.md).
  *
  * libMobileGL.so exports these on Linux (not Android) in split builds, so a component that is not
  * a GL entry point - the GBM backend (MG_Gbm), above all - can ask the server for an image and

@@ -515,7 +515,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     } // namespace RenderStateImpl
 
 #if MOBILEGL_BUILD_DISAGGREGATED
-    // ---- SHARED IMAGES (docs/Disaggregated/notes/anland/plan-ahb-dmabuf.md) ----
+    // ---- SHARED IMAGES (docs/archive/notes/anland/plan-ahb-dmabuf.md) ----
     //
     // A shared image reaches the driver only through the Android import path: its AHardwareBuffer
     // becomes an EGLImage (EGL_ANDROID_get_native_client_buffer + EGL_ANDROID_image_native_buffer)

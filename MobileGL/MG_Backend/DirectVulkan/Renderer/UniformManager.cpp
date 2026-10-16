@@ -811,7 +811,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // is not the answer either: the transient arena carries no
             // {UNIFORM,STORAGE}_TEXEL_BUFFER usage (VkBufferManager::InitializeTransientArenas),
             // so no VkBufferView can be made over it, and widening a shared per-frame
-            // allocation to buy an unreachable path is the wrong trade. See notes/p7/magma-a.md.
+            // allocation to buy an unreachable path is the wrong trade. See docs/archive/notes/p7/magma-a.md.
             return writable ? false : placeholder();
         }
         VkBufferViewCreateInfo viewInfo{VK_STRUCTURE_TYPE_BUFFER_VIEW_CREATE_INFO};
@@ -942,7 +942,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // record that is the draw/dispatch tail in VulkanRenderer.cpp / WireDraw.inc,
             // which belong to wave-2 packages B and C, not to this file. Losing the
             // dispatch with a named line in the role log beats returning stale counters
-            // with no error at all. notes/p7/magma-a.md carries the recipe.
+            // with no error at all. docs/archive/notes/p7/magma-a.md carries the recipe.
             MGLOG_E_ONCE("ResolveStorageBufferDescriptor: block '%s' is bound at offset %llu, which is not a "
                          "multiple of this device's minStorageBufferOffsetAlignment (%llu); %s ranges cannot be "
                          "expressed as a descriptor and the shader's writes would be dropped by a read-only "
@@ -1114,7 +1114,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT, and that is a multiple of four on every
             // device - but GL 4.6 core 6.1.1 puts no such rule on the SIZE, so `copied` is free
             // to end mid-word and the Redmi Minecraft run lands there
-            // (notes/p5f/magma-inproc-fix.md #5). An unaligned start is not reachable through
+            // (docs/archive/notes/p5f/magma-inproc-fix.md #5). An unaligned start is not reachable through
             // the public API and only a protocol-level offset can produce one; the sub-word arm
             // handles it anyway rather than leaving a second shape to trip over later. Both arms
             // copy the same bytes to the same place: the sub-word one pays one extra transient

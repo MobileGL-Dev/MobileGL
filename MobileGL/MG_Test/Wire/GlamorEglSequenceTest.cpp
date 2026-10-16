@@ -17,7 +17,7 @@
 //   EGL_EXT_image_dma_buf_import + _modifiers (dmabuf_capable), XRGB8888/ARGB8888 importable,
 //   eglCreateImageKHR(EGL_LINUX_DMA_BUF_EXT) of a shared image's descriptor.
 //
-// And the implicit-sync flush (docs/Disaggregated/notes/anland/plan-x11-gpu.md): the shared_image
+// And the implicit-sync flush (docs/archive/notes/anland/plan-x11-gpu.md): the shared_image
 // Flush verb the client sends from glFlush is answered by the server.
 //
 // Chrome's GPU process on the same kind of display (a GBM one) is the other dma-buf producer, and it

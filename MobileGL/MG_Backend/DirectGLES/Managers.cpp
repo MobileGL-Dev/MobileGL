@@ -2720,7 +2720,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 const Uint16 uploadTarget = MG_Pipe::MGPipeSubDataUploadTargetOf(record.Target);
                 const IntVec3 extent = MG_Record::StagedTextureUploadExtent(stored->Desc, record);
                 const SizeT runBytes = static_cast<SizeT>(record.Blob.Size);
-                // P8-E (notes/p8/E.md): THE LEVEL HOLDS A COPY THE CLIENT NEVER SAW
+                // P8-E (docs/archive/notes/p8/E.md): THE LEVEL HOLDS A COPY THE CLIENT NEVER SAW
                 // (FollowCopyImageInStagedStore). The run is the client's shadow, stale everywhere it
                 // did not write, so only the texels it names land - its regions, or its union box
                 // when it carries none (D-D3's "the box is the whole story"). A run the store cannot
@@ -5769,7 +5769,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 m_forceTextureParamsResync = true;
                 return;
             }
-            // P9 W2 (notes/p9/W2-REMINT.md): EVERY BYTE THIS RE-MINT REPLAYS IS ALREADY ON THE
+            // P9 W2 (docs/archive/notes/p9/W2-REMINT.md): EVERY BYTE THIS RE-MINT REPLAYS IS ALREADY ON THE
             // SERVER. The GPU image holds what the GPU wrote (render targets, clears, copies,
             // generated mips, image stores) and the staged store holds what the client uploaded;
             // the client is never asked, so no pull protocol exists. Reading only the store would
@@ -7174,7 +7174,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                               : (obj)->GetStorageType())
 
 #if MOBILEGL_BUILD_DISAGGREGATED
-        // SHARED IMAGES (docs/Disaggregated/notes/anland/plan-ahb-dmabuf.md). The client defined
+        // SHARED IMAGES (docs/archive/notes/anland/plan-ahb-dmabuf.md). The client defined
         // level 0 as WxH RGBA8 with no data and then attached the image; the record's descriptor
         // still says so, but the texels are the image's, so nothing below may allocate or upload.
         Bool BackendTextureObject::SyncSharedImageStorage(const MG_Pipe::MGPipeResourceRecord& record) {
@@ -14009,7 +14009,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
     // =====================================================================================
     // P5e SEAMS: DECLARED AND REFUSED HERE, BODIED BY THE FAMILY PACKAGES
-    // (MG_Remote/CONTRACT-P5E.md §4.2; BRIEF-P5E §1's "each such seam is a declared signature
+    // (docs/archive/contracts/CONTRACT-P5E.md §4.2; BRIEF-P5E §1's "each such seam is a declared signature
     // in c0e so both sides compile from day one")
     // =====================================================================================
     //

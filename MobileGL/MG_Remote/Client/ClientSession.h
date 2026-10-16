@@ -278,7 +278,7 @@ namespace MobileGL::MG_Remote::Client {
                                 Uint64* replySizeOut = nullptr, Bool wantReply = true,
                                 Bool willReadReply = true);
 
-        // ---- P11 B2: T0 (MG_Remote/CONTRACT-P11.md B2) ------------------------------------
+        // ---- P11 B2: T0 (docs/archive/contracts/CONTRACT-P11.md B2) ------------------------------------
         //
         // Does this session adopt persistent stores through T0? Decided ONCE, lazily, at the first
         // map_persistent - the first moment it matters, and one at which the server's first native
@@ -294,7 +294,7 @@ namespace MobileGL::MG_Remote::Client {
         // adopts it as the store's mapping - or null on DECLINED (the store stays T2).
         void* AdoptPersistentT0(const MG_Pipe::MGPHandleOnly& handle, Uint64 size, const void* seed);
         void* AdoptPersistentInProcess(const MG_Pipe::MGPHandleOnly& handle, Uint64 size, const void* seed);
-        // shared_image (docs/Disaggregated/notes/anland/plan-ahb-dmabuf.md): emits `op` and waits
+        // shared_image (docs/archive/notes/anland/plan-ahb-dmabuf.md): emits `op` and waits
         // for its answer. `sendFd` >= 0 (an Import) is queued on the aux socket for the record's
         // seq BEFORE the record is published; `receivedFd` non-null (an Allocate) takes the
         // descriptor the server queued before its answer. False = DECLINED (the server's log says

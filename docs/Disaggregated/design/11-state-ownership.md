@@ -1,6 +1,6 @@
 # 状态归属：session / context / share group / thread current（P14 设计）
 
-> 为 anland 内置统一 server 而做。动因与否定项见 [`../notes/anland/handoff-legacy-mobilegl-unified.md`](../notes/anland/handoff-legacy-mobilegl-unified.md)：不许用「每应用 fork 一个渲染进程」掩盖全局状态归属。本文行号对 `2f64ede8`（+ `4156ca6e` 文档提交），代码移动后以符号名检索。
+> 为 anland 内置统一 server 而做。动因与否定项见 [`docs/archive/notes/anland/handoff-legacy-mobilegl-unified.md`](../../archive/notes/anland/handoff-legacy-mobilegl-unified.md)：不许用「每应用 fork 一个渲染进程」掩盖全局状态归属。本文行号对 `2f64ede8`（+ `4156ca6e` 文档提交），代码移动后以符号名检索。
 
 ## 结论
 

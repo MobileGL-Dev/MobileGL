@@ -14,7 +14,7 @@
 #   pending-fix     red on a split arm today; the reason names the package or DEBTS.md row that
 #                   fixes it, and the row goes when the case is registered (a stale row is an error)
 #
-# Evidence for every row: docs/Disaggregated/notes/p8/A.md (per-arm census, junit per case).
+# Evidence for every row: docs/archive/notes/p8/A.md (per-arm census, junit per case).
 
 # ---- mechanism: MGL_ITEST_MONOLITH_MECHANISM_FILTER, pinned to monolith by construction -------
 HandleRecycleScenario.* mechanism pointer-key ABA / slot recycling inside one process (integration-monolith-control)
@@ -64,7 +64,7 @@ SpirvShaderBinaryScenario.SpecializeShaderErrorSurfaceMatchesTheExtension no-rec
 ProgramPipelineScenario.AReservedNameTakesStateBeforeItIsAProgramPipeline no-records a reserved pipeline name's state is client-side and draws nothing
 
 # ---- pending-fix -------------------------------------------------------------------------------
-# (none: P8-SE fixed the default-framebuffer depth/stencil case and registered it, notes/p8/SE.md)
+# (none: P8-SE fixed the default-framebuffer depth/stencil case and registered it, docs/archive/notes/p8/SE.md)
 
 # These ambient copies cannot run their assertion; pinned controls are checked separately.
 LargeArenaAdoptionScenario.AnAdoptionCostsExactlyOneMapPersistentRoundtrip mechanism synchronous monolith accounting; required DirectGLES.MapPersistentRoundtrips control

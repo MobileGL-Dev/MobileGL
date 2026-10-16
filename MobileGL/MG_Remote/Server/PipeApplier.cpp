@@ -326,8 +326,7 @@ namespace MobileGL::MG_Remote::Server {
         return true;
     }
 
-
-    // ---- P5c ct (MG_Remote/CONTRACT-P5C.md §5) ------------------------------------------
+    // ---- P5c ct (docs/archive/contracts/CONTRACT-P5C.md §5) ------------------------------------------
     //
     // TWO CONTROL RECORDS, NO BACKEND TABLE AND NO DECLINE ARM. Neither body consults
     // Table(): the reset belongs to the applier this process owns, and the death release

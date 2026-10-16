@@ -146,7 +146,7 @@ namespace MobileGL::MG_Pipe {
     //                      explicitly promises it is not ("zero serialisation cost on the
     //                      monolith path").
     //   SetProgramBindings THREE tails in three index spaces plus a PARALLEL NAME ARRAY
-    //                      (P5e, MG_Remote/CONTRACT-P5E.md §1/§5.5). One `varTail` +
+    //                      (P5e, docs/archive/contracts/CONTRACT-P5E.md §1/§5.5). One `varTail` +
     //                      `varTailCount` pair cannot express three runs at all, and the
     //                      fourth argument is not a run: the storage-override key is a
     //                      `MGHostSpan` on the wire and a plain `const char*` under monolith,

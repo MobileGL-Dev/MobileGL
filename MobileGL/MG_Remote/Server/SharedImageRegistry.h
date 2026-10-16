@@ -8,7 +8,7 @@
 
 // SHARED IMAGES: colour buffers the server allocates and hands to clients as dma-buf descriptors,
 // so a frame one client renders can be sampled by another (a Wayland window by its compositor)
-// without leaving GPU memory (docs/Disaggregated/notes/anland/plan-ahb-dmabuf.md).
+// without leaving GPU memory (docs/archive/notes/anland/plan-ahb-dmabuf.md).
 //
 // THE SERVER IS THE ALLOCATOR AND THE ONLY IMPORTER. An image is an AHardwareBuffer; what leaves
 // the process is a duplicate of its first native-handle descriptor, which on every Android kernel
@@ -174,7 +174,7 @@ namespace MobileGL::MG_Remote::Server::SharedImages {
     // Live images, for tests and diagnostics.
     SizeT LiveCount();
 
-    // ---- synchronisation (docs/Disaggregated/notes/anland/plan-ahb-dmabuf.md) ---------------
+    // ---- synchronisation (docs/archive/notes/anland/plan-ahb-dmabuf.md) ---------------
     //
     // THE SERVER ORDERS THE IMAGE BETWEEN ITS SESSIONS, the way a kernel's implicit sync would:
     // a writer publishes the fence of its write and moves on; a reader that finds the generation

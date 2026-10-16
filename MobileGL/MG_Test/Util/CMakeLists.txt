@@ -116,7 +116,7 @@ target_link_libraries(
 )
 
 # GLX presentation through DRI3 + Present against a fake X server and fake shared images, and the
-# glFlush-as-shared-image-boundary policy (docs/Disaggregated/notes/anland/plan-x11-gpu.md).
+# glFlush-as-shared-image-boundary policy (docs/archive/notes/anland/plan-x11-gpu.md).
 add_executable(
         X11PresentTest
         X11PresentTest.cpp

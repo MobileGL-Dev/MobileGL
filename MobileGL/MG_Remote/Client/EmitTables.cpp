@@ -15,7 +15,7 @@
 // changes class without changing the arithmetic is a build break rather than a behaviour
 // change nobody reviewed.
 //
-// P5b MOVES SLOTS FROM C TO B, ONE PACKAGE AT A TIME (MG_Remote/CONTRACT-P5B.md §7). The three
+// P5b MOVES SLOTS FROM C TO B, ONE PACKAGE AT A TIME (docs/archive/contracts/CONTRACT-P5B.md §7). The three
 // numbers above are the partition AT THE P5b CONTRACT COMMIT and they are the ones the contract
 // states; the arithmetic below is what the tree currently has, and the per-package ownership
 // assertions say which package moved which slot. On this head t2 has landed: class B is 5 + 6
@@ -506,8 +506,8 @@ namespace MobileGL::MG_Remote::Client {
         // CLASS C - each remaining slot names its first blocker.
         // =============================================================================
         //
-        // PARTITIONED BY THE P5b PACKAGE THAT OWNS THE FLIP (MG_Remote/CONTRACT-P5B.md,
-        // ~/w7/notes/p5b/BRIEF-P5B.md), so that four packages migrating in parallel edit four
+        // PARTITIONED BY THE P5b PACKAGE THAT OWNS THE FLIP (docs/archive/contracts/CONTRACT-P5B.md,
+        // docs/archive/notes/p5b/BRIEF-P5B.md), so that four packages migrating in parallel edit four
         // DISJOINT lists and four DISJOINT counts rather than one list and one number. To flip a
         // slot a package (1) removes its X row from ITS list, (2) assigns the real emitter in
         // BuildRemoteEmitTable's class-B block, (3) raises ITS kEmittedSlots* by one. The

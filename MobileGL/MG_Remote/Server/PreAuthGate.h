@@ -6,7 +6,7 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// PH-7 (5), CONTRACT-P7 §12, notes/p7/ph-f.md §6.4. THE TCP SUPERVISOR AUTHENTICATES BEFORE IT
+// PH-7 (5), CONTRACT-P7 §12, docs/archive/notes/p7/ph-f.md §6.4. THE TCP SUPERVISOR AUTHENTICATES BEFORE IT
 // FORKS, AND AN UNAUTHENTICATED PEER'S WORK IS BOUNDED.
 //
 // Two exposures were on the tree before wave 2-F and were recorded by its review:

@@ -600,7 +600,7 @@ if (MOBILEGL_BUILD_DISAGGREGATED AND
     set(MOBILEGL_BUILD_DISAGGREGATED_INPROC OFF)
 endif()
 
-# P13 W5 (notes/p13/W5-DESIGN.md): the record arm is part of every library - the one without
+# P13 W5 (docs/archive/notes/p13/W5-DESIGN.md): the record arm is part of every library - the one without
 # MG_Remote (FCL's) runs it too. Its temporary guard, MOBILEGL_BUILD_RECORD_ARM, was folded away at
 # S8 (scripts/ci/retired_switches.py keeps it from coming back).
 
@@ -712,7 +712,7 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         # P11 B2: T0's Offers on the aux socket, matched to their map_persistent records by seq.
         MobileGL/MG_Remote/Server/AdoptInbox.cpp
         # Shared images: server-allocated AHardwareBuffers exported to clients as dma-buf descriptors
-        # (docs/Disaggregated/notes/anland/plan-ahb-dmabuf.md).
+        # (docs/archive/notes/anland/plan-ahb-dmabuf.md).
         MobileGL/MG_Remote/Server/SharedImageRegistry.cpp
         MobileGL/MG_Remote/Server/ServerSpawn.cpp
         # P5f fc: the value frame that replaced the control mailbox's function-pointer payload,
@@ -1009,7 +1009,7 @@ if (UNIX AND NOT APPLE)
 endif()
 
 # ---- Shared images outside GL: the C ABI and the GBM backend (Linux client, split builds) ----
-# docs/Disaggregated/notes/anland/plan-ahb-dmabuf.md. libMobileGL.so exports the shared-image C ABI
+# docs/archive/notes/anland/plan-ahb-dmabuf.md. libMobileGL.so exports the shared-image C ABI
 # (MG_Impl/SharedImageApi.h); mobilegl_gbm.so (MG_Gbm/) is a separate GBM loader module that reaches
 # it through dlsym. Self-contained: nothing outside this block refers to either.
 if (MOBILEGL_BUILD_DISAGGREGATED AND UNIX AND NOT APPLE AND NOT ANDROID)

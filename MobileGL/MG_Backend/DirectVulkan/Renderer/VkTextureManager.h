@@ -593,7 +593,7 @@ public:
     void MarkWireTextureGpuWritten(MG_Pipe::MGPipeHandle handle, Uint32 mipLevel,
                                     Uint32 baseArrayLayer = 0, Uint32 layerCount = 1);
 
-    // SHARED IMAGES (docs/Disaggregated/notes/anland/plan-ahb-dmabuf.md): a server shared image's
+    // SHARED IMAGES (docs/archive/notes/anland/plan-ahb-dmabuf.md): a server shared image's
     // AHardwareBuffer bound as a single-level 2D colour image on THIS session's device, on dedicated
     // memory imported from the buffer. Android only (false with `why` elsewhere, or when the device
     // did not take the AHardwareBuffer extension). The image is born UNDEFINED; whoever uses it

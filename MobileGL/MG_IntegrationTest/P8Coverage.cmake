@@ -19,7 +19,7 @@
 # monolith DirectGLES. / DirectVulkan. case is on a gated split arm or is named, with a reason
 # class, in scripts/data/split_coverage_exemptions.txt. Deleting a line below reds it BY NAME.
 # The per-case census this list was cut from (inproc / spawn / tcp, junit per arm) is
-# docs/Disaggregated/notes/p8/A.md.
+# docs/archive/notes/p8/A.md.
 
 # ---- (a) THE AMBIENT CASES -----------------------------------------------------------------
 #
@@ -190,7 +190,7 @@ set(MGL_P8A_KNOB_FILTER_WidenedPacked16 "CopyImagePacked16Scenario.*")
 set(MGL_P8A_KNOB_ENV_WidenedPacked16 "MOBILEGL_ESPRYT_WIDEN_PACKED16_STORAGE=1")
 # ForcedDs keeps the spelling the existing Split/Spawn DepthStencilReadbackMatrix block uses. The
 # default-framebuffer case was left out here while it was red on spawn and tcp; P8-SE fixed it
-# (notes/p8/SE.md) and it runs under the knob on every arm like the rest.
+# (docs/archive/notes/p8/SE.md) and it runs under the knob on every arm like the rest.
 set(MGL_P8A_KNOB_FILTER_ForcedDs
     "DepthStencilReadbackScenario.*:DepthStencilReadbackAttachmentShapeScenario.*")
 set(MGL_P8A_KNOB_ENV_ForcedDs "MOBILEGL_ESPRYT_FORCE_DS_READBACK_EMULATION=1")

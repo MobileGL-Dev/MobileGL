@@ -142,10 +142,10 @@ TEST(PipeCatalogue, GeneratedTablesHoldTheWholeCatalogue) {
     EXPECT_EQ(kMGPipeContextCallCount, kMGPipeCallCount - ClassCount<kScreen>());
 
     // The per-class counts PipeCalls.def documents in its header.
-    // kScreen is 11 + P5c's applier_reset (MG_Remote/CONTRACT-P5C.md §5.1); kCtxObject is
+    // kScreen is 11 + P5c's applier_reset (docs/archive/contracts/CONTRACT-P5C.md §5.1); kCtxObject is
     // 9 + P5c's object_death (§5.2), the framebuffer family's first wire delete opcode.
     // kCtxState is 17 + P5c rv's set_context_values (§5.3), the residual-value record, + P5e's
-    // set_program_bindings (MG_Remote/CONTRACT-P5E.md §1), the post-link binding record.
+    // set_program_bindings (docs/archive/contracts/CONTRACT-P5E.md §1), the post-link binding record.
     // + P14 S1's bind_context (docs/Disaggregated/design/11-state-ownership.md), the in-band
     // context binding - a kScreen row for applier_reset's reason: a context switch is a
     // whole-session edge, not a context-family verb.
@@ -153,9 +153,9 @@ TEST(PipeCatalogue, GeneratedTablesHoldTheWholeCatalogue) {
     EXPECT_EQ(ClassCount<kCtxQuery>(), 8u);
     EXPECT_EQ(ClassCount<kCtxCso>(), 13u);
     EXPECT_EQ(ClassCount<kCtxState>(), 19u);
-    // + P9's get_texture_image_to_buffer (MG_Remote/CONTRACT-P9.md §1), beside get_texture_image.
+    // + P9's get_texture_image_to_buffer (docs/archive/contracts/CONTRACT-P9.md §1), beside get_texture_image.
     EXPECT_EQ(ClassCount<kCtxObject>(), 11u);
-    // 13 + the five P5b-appended verbs (MG_Remote/CONTRACT-P5B.md): bind_shader_image,
+    // 13 + the five P5b-appended verbs (docs/archive/contracts/CONTRACT-P5B.md): bind_shader_image,
     // patch_parameter, bind_stream_output, set_storage_block_binding,
     // copy_framebuffer_to_texture; + delete_stream_output; + P9's read_pixels_to_buffer.
     EXPECT_EQ(ClassCount<kCtxVerb>(), 20u);
@@ -595,7 +595,7 @@ TEST(PipeCatalogue, LateArrivalsAreAppendedWithoutRenumbering) {
     EXPECT_EQ(static_cast<Uint16>(MGPWireOp::QueryTimestamp), 69);
     EXPECT_EQ(static_cast<Uint16>(MGPWireOp::QueryCounter), 70);
     EXPECT_EQ(static_cast<Uint16>(MGPWireOp::FenceWaitServer), 71);
-    // P5b (MG_Remote/CONTRACT-P5B.md) appended five verbs AFTER P0's three late arrivals, by
+    // P5b (docs/archive/contracts/CONTRACT-P5B.md) appended five verbs AFTER P0's three late arrivals, by
     // the same rule: opcodes 72..76, and nothing before them moved. The five are pinned by
     // VALUE, because the pin is the protocol - a row inserted ahead of one would silently
     // re-point every record a P5b package emits at the wrong arm.
@@ -604,7 +604,7 @@ TEST(PipeCatalogue, LateArrivalsAreAppendedWithoutRenumbering) {
     EXPECT_EQ(static_cast<Uint16>(MGPWireOp::BindStreamOutput), 74);
     EXPECT_EQ(static_cast<Uint16>(MGPWireOp::SetStorageBlockBinding), 75);
     EXPECT_EQ(static_cast<Uint16>(MGPWireOp::CopyFramebufferToTexture), 76);
-    // P5c (MG_Remote/CONTRACT-P5C.md §5) appended the two control records AFTER P5b's five, by
+    // P5c (docs/archive/contracts/CONTRACT-P5C.md §5) appended the two control records AFTER P5b's five, by
     // the same rule: opcodes 77..78, and nothing before them moved. applier_reset is a kScreen
     // row (a make-current is a whole-server edge, exactly as FenceWaitServer is a screen call)
     // and object_death a kCtxObject one; both carry no blob, no reply and no tail.
@@ -615,13 +615,13 @@ TEST(PipeCatalogue, LateArrivalsAreAppendedWithoutRenumbering) {
     // - fixed POD, no blob, no tail, no reply - with an MGPipeApply* entry point, which the two
     // control records deliberately do not have.
     EXPECT_EQ(static_cast<Uint16>(MGPWireOp::SetContextValues), 79);
-    // P5e (MG_Remote/CONTRACT-P5E.md §1) appended ONE more, by the same rule: opcode 80, and
+    // P5e (docs/archive/contracts/CONTRACT-P5E.md §1) appended ONE more, by the same rule: opcode 80, and
     // nothing before it moved. set_program_bindings is a kCtxState row with THREE tails and a
     // host span in the third; it lands with a null route and a sink that refuses it by name,
     // exactly as set_shader_buffers has sat catalogued-and-dead since P4a.
     EXPECT_EQ(static_cast<Uint16>(MGPWireOp::SetProgramBindings), 80);
     EXPECT_EQ(static_cast<Uint16>(MGPWireOp::DeleteStreamOutput), 81);
-    // P9 (MG_Remote/CONTRACT-P9.md §1) appended the two pack-buffer readbacks, by the same rule:
+    // P9 (docs/archive/contracts/CONTRACT-P9.md §1) appended the two pack-buffer readbacks, by the same rule:
     // opcodes 82..83, one payload, no flag at all - no reply slot, no blob, no tail.
     EXPECT_EQ(static_cast<Uint16>(MGPWireOp::ReadPixelsToBuffer), 82);
     EXPECT_EQ(static_cast<Uint16>(MGPWireOp::GetTextureImageToBuffer), 83);
@@ -630,7 +630,7 @@ TEST(PipeCatalogue, LateArrivalsAreAppendedWithoutRenumbering) {
     // kScreen control record with the applier_reset shape - one POD, no blob, no tail, no reply
     // and no MGPipeApply* entry point - so the row beside it is pinned the same way.
     EXPECT_EQ(static_cast<Uint16>(MGPWireOp::BindContext), 84);
-    // Shared images (docs/Disaggregated/notes/anland/plan-ahb-dmabuf.md) appended opcode 85 by the
+    // Shared images (docs/archive/notes/anland/plan-ahb-dmabuf.md) appended opcode 85 by the
     // same rule: a kScreen row with a reply slot - every operation is answered.
     EXPECT_EQ(static_cast<Uint16>(MGPWireOp::SharedImage), 85);
     EXPECT_EQ(static_cast<Uint16>(MGPWireOp::kOpCount), 86);
@@ -738,7 +738,7 @@ TEST(PipeCatalogue, LateArrivalsAreAppendedWithoutRenumbering) {
     EXPECT_EQ(kMGPipeClearValueClassUint + 1, kMGPipeClearValueClassCount);
 }
 
-// ---- P5e: the wait-class column (MG_Remote/CONTRACT-P5E.md §2.2) --------------------------
+// ---- P5e: the wait-class column (docs/archive/contracts/CONTRACT-P5E.md §2.2) --------------------------
 //
 // THE POINT OF THIS CASE IS THAT IT DOES NOT READ PipeCalls.def. Every other statement about
 // the column - the generated table, the two gates in gen_pipe.py, the static_asserts in
@@ -1020,14 +1020,14 @@ TEST(PipeCatalogue, FloatVectorsCompareBitwise) {
 // a cache that read the padding would mint a fresh CSO per call and the verify lane would
 // abort at random.
 TEST(PipeCatalogue, SixValueStructsHaveFieldLists) {
-    // 72 through P5; P5b appended five call payloads (MG_Remote/CONTRACT-P5B.md: MGPImageBind,
+    // 72 through P5; P5b appended five call payloads (docs/archive/contracts/CONTRACT-P5B.md: MGPImageBind,
     // MGPPatchParameter, MGPStreamOutputBind, MGPStorageBlockBinding, MGPCopyFromFramebuffer),
     // each with its own field list, so the comparator sees every one of them: 77. P5c appended
     // applier_reset's MGPApplierReset (CONTRACT-P5C.md §5.1) - object_death reuses
     // MGPHandleOnly, which has had a list since P0 - and rv added set_context_values'
     // MGPContextValues (§5.3): 79. P5e appended set_program_bindings' MGPProgramBindings AND
     // the two TAIL ELEMENT types beside it, MGPProgramSamplerUnit and MGPProgramStorageOverride
-    // (MG_Remote/CONTRACT-P5E.md §1) - the tails are listed for the same reason MGPBufferRange
+    // (docs/archive/contracts/CONTRACT-P5E.md §1) - the tails are listed for the same reason MGPBufferRange
     // and MGPVertexAttribWire are: the comparator has to see INTO an element whose members
     // include an MGHostSpan and a pad word, or it would memcmp the padding: 82. P9 appended the
     // pack-buffer readbacks' one payload, MGPReadbackToBuffer (CONTRACT-P9.md §1): 83. P14 S1
@@ -1115,7 +1115,7 @@ TEST(PipeCatalogue, PipelineSubsetMembersArePinned) {
 // than a claim, since the static_assert beside kMGPipeCallbackCount only proves the two agree.
 // P9 took two more, neither of which ever had a producer: W2 deleted OnTexturePullRequest (a
 // texture re-mint never needs the client's texels - the server reads the GPU level and its own
-// staged store, notes/p9/W2-REMINT.md), and W3 deleted OnLog (the server's log lines are LogLine
+// staged store, docs/archive/notes/p9/W2-REMINT.md), and W3 deleted OnLog (the server's log lines are LogLine
 // frames on the control plane, MG_Remote/Transport/LogForward.h, not reverse records).
 //
 // THE CASE NAME STAYS "…HasTenCallbacks" DELIBERATELY. G2/G14 say the ctest name set only ever
@@ -1436,18 +1436,18 @@ TEST(PipeCatalogue, EveryUnmigratedEmulationIsNamedOnce) {
     // new stall class the design admitted. It went because the stall class did: under a transport
     // the re-mint is the server's own (RequireImageBindableStorageByHandle reads the GPU level and
     // replays the staged store), the frontend arm that carried the marker is monolith-only, and no
-    // pull protocol or ResourceSubDataComplete terminator exists (notes/p9/W2-REMINT.md).
+    // pull protocol or ResourceSubDataComplete terminator exists (docs/archive/notes/p9/W2-REMINT.md).
     //
     // AND THE LIST HAD DRIFTED BY ONE UNTIL P8-B. The tree carried a sixth name this list never
     // had: "generate-mipmap-cpu-filter", the split arm's RGB16F/RGB32F refusal in
     // GenerateMipmapByRecord. P8-B2 retired it (the server filters its own level,
     // GenerateThreeChannelFloatMipmapOnServer), and P8-B1 retired the split arm's two
     // "generate-mipmap-storage" sites (the record's plan is the window). Every name left is on a
-    // MONOLITH arm - the split arms no longer reach an unmigrated emulation (notes/p8/B.md).
+    // MONOLITH arm - the split arms no longer reach an unmigrated emulation (docs/archive/notes/p8/B.md).
     //
     // THREE, NOT FOUR (P8-SE). "copy-image-shadow-mirror" sat after the mirror's own
     // `Transport != Monolith` return, so no transport ever reached it and on monolith it was a
-    // no-op; the call and the name went together (notes/p8/SE.md).
+    // no-op; the call and the name went together (docs/archive/notes/p8/SE.md).
     //
     // NONE (P13 W6). "get-tex-image-shadow" sat in GetTexImageViaShadowConversion, the monolith
     // frontend arm's shadow readback, and the two mipmap names in that arm's storage grow and CPU

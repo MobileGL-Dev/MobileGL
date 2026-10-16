@@ -759,7 +759,7 @@ namespace MobileGL::MG_Remote::Wire {
         }
         case MGPWireOp::SetProgramBindings: {
             // THREE TAILS, THREE COUNTS, THREE INDEX SPACES (P5e,
-            // MG_Remote/CONTRACT-P5E.md §1): Int32[BlockBindingCount] in GL uniform-block index
+            // docs/archive/contracts/CONTRACT-P5E.md §1): Int32[BlockBindingCount] in GL uniform-block index
             // order, MGPProgramSamplerUnit[SamplerUnitCount] ascending by Location, and
             // MGPProgramStorageOverride[StorageOverrideCount] whose Name is a host span staged
             // whole - the override map is name-keyed by design.
@@ -2138,7 +2138,7 @@ namespace MobileGL::MG_Remote::Wire {
             return true;
 
         case MGPWireOp::SetShaderBuffers: {
-            // P5e (sb, MG_Remote/CONTRACT-P5E.md §5.6): THE APPLIER ENTRY POINT EXISTS NOW and
+            // P5e (sb, docs/archive/contracts/CONTRACT-P5E.md §5.6): THE APPLIER ENTRY POINT EXISTS NOW and
             // this is the row's sink. The paragraph that stood here said "no applier entry
             // point exists, and P5 does not invent one: the call is on BRIEF §4's exclusion
             // list" - true for the whole of P5 through P5d, and withdrawn by the phase whose
@@ -2175,7 +2175,7 @@ namespace MobileGL::MG_Remote::Wire {
             return false;
 
         case MGPWireOp::SetProgramBindings: {
-            // P5e, opcode 80 (MG_Remote/CONTRACT-P5E.md §1). c0e wrote the shape check and left
+            // P5e, opcode 80 (docs/archive/contracts/CONTRACT-P5E.md §1). c0e wrote the shape check and left
             // the arm declining; PACKAGE pg COMPLETES IT. What the record needs before its
             // consumer sees it is its shape - the three declared counts against their bounds
             // and the three-tail arithmetic, both of which MGPipeWireRecordLayout above has
@@ -2341,7 +2341,7 @@ namespace MobileGL::MG_Remote::Wire {
         case MGPWireOp::ResourceSubDataComplete:
             // RETIRED (P9 W2). It was to be the forward terminator of a SERVER-initiated texture
             // pull (section 7.1), and no such pull exists: a re-mint reads the GPU level and the
-            // server's own staged store (notes/p9/W2-REMINT.md). The row stays because opcodes
+            // server's own staged store (docs/archive/notes/p9/W2-REMINT.md). The row stays because opcodes
             // only ever grow; no client emits it and a record that claims it is declined.
             return false;
 
@@ -2522,7 +2522,7 @@ namespace MobileGL::MG_Remote::Wire {
                    m_verbs->OnCopyFramebufferToTexture(
                        *static_cast<const MGPCopyFromFramebuffer*>(payload));
 
-        // ---- P5c's two control records, opcodes 77..78 (MG_Remote/CONTRACT-P5C.md §5) --------
+        // ---- P5c's two control records, opcodes 77..78 (docs/archive/contracts/CONTRACT-P5C.md §5) --------
         //
         // Fixed-size PODs the bounds gate has already proved; neither carries a blob, a tail
         // or a reply, so each arm hands over and stops. ObjectDeath's null-handle refusal is
@@ -2546,7 +2546,7 @@ namespace MobileGL::MG_Remote::Wire {
             return m_verbs != nullptr &&
                    m_verbs->OnBindContext(*static_cast<const MGPBindContext*>(payload));
 
-        // ---- shared images (docs/Disaggregated/notes/anland/plan-ahb-dmabuf.md), opcode 85.
+        // ---- shared images (docs/archive/notes/anland/plan-ahb-dmabuf.md), opcode 85.
         //
         // A fixed-size POD; every operation is answered, and a refusal is an answer (DECLINED,
         // the sink logs why) rather than a fault: an import of a descriptor this server never

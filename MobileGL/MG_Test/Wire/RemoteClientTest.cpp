@@ -398,7 +398,7 @@ TEST(RemoteEmitTable, SetSwapIntervalIsTheServerForwarderAndNotAFatal) {
 
 #endif // MGTEST_HAVE_FORK
 
-// ---- P5b package i1 (MG_Remote/CONTRACT-P5B.md §2 i1) -------------------------------------
+// ---- P5b package i1 (docs/archive/contracts/CONTRACT-P5B.md §2 i1) -------------------------------------
 
 TEST(RemoteEmitTable, TheSevenI1SlotsAreClassBAndAreNotTheFatalThunk) {
     // The census's five measured slots plus the two companions that share their rows. Named
@@ -927,7 +927,7 @@ TEST(CapsMirrorTest, TheConsumerBlockDoesNotCollideWithTheFeatureBits) {
 // =====================================================================================
 
 // =====================================================================================
-// P5b d1: the draw family's record plan (MG_Remote/CONTRACT-P5B.md §2 d1). These drive the
+// P5b d1: the draw family's record plan (docs/archive/contracts/CONTRACT-P5B.md §2 d1). These drive the
 // PRODUCTION derivation the nineteen emitters call - PlanDrawInfo / PlanDrawRange /
 // PlanDrawIndirect over a RemoteDrawBindings snapshot - so the fields on the wire are pinned
 // here without a GL context (R-16: the production predicate, not a copy). The bindings' READ
@@ -2570,7 +2570,7 @@ TEST(RemoteGuards, ClientPipeInputsFillWithTheApplierIdleIsAllowed) {
 
 // ===========================================================================================
 // P5e (ra) - the wait rule, the present credit and gPipeInputs' ownership
-// (MG_Remote/CONTRACT-P5E.md §1, §2.3, §2.4, §3.1, §3.3, §3.5)
+// (docs/archive/contracts/CONTRACT-P5E.md §1, §2.3, §2.4, §3.1, §3.3, §3.5)
 // ===========================================================================================
 //
 // EVERY CASE BELOW ARMS RUN-AHEAD BY PUBLISHING THE CAP BIT, because that is the only thing

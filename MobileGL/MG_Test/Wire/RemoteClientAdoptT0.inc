@@ -6,7 +6,7 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// P11 B2 (MG_Remote/CONTRACT-P11.md B2): T0'S PROTOCOL ON THE HOST, over a live inproc session.
+// P11 B2 (docs/archive/contracts/CONTRACT-P11.md B2): T0'S PROTOCOL ON THE HOST, over a live inproc session.
 //
 // A host has no AHardwareBuffer, so what these prove is the protocol, the negotiation and the
 // fallback - never GPU correctness, which is the device's (B2's device gates). Two halves:

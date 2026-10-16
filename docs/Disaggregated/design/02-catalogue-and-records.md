@@ -30,7 +30,7 @@
 
 ### 3.3 能力位（`MGPCapBit`）
 
-`CallMask` 取代"槽位是否为 null"这一隐式能力探测；`MGPCaps` = `DynamicBackendParameters` + `CallMask` + 格式能力表与 renderer 字符串两个 blob，握手后快照、`MakeCurrent` / `InitCapabilities` 后按 generation 重发布。位包括 viewport array、fp64 顶点、`kCapResidentSubData`、XFB / query 家族、`kCapNeedsHostIndexBytes`、`kCapNeedsHostUboBytes`、`kCapBackendOwnsXfbCapture`、`kCapRunAheadApply`（`MGPipeRunAheadCapBitsFor`：Espryt 自 P5e、Magma 自 P5f 之后的 Magma run-ahead 起发布，后者契约 `MG_Remote/CONTRACT-MAGMA-RUNAHEAD.md`）。**不存在"归属开关"（D-B7）**：multi-draw 分档与 restart 重写永远由 server 拥有，client 只在 caps 要求时提供索引字节。
+`CallMask` 取代"槽位是否为 null"这一隐式能力探测；`MGPCaps` = `DynamicBackendParameters` + `CallMask` + 格式能力表与 renderer 字符串两个 blob，握手后快照、`MakeCurrent` / `InitCapabilities` 后按 generation 重发布。位包括 viewport array、fp64 顶点、`kCapResidentSubData`、XFB / query 家族、`kCapNeedsHostIndexBytes`、`kCapNeedsHostUboBytes`、`kCapBackendOwnsXfbCapture`、`kCapRunAheadApply`（`MGPipeRunAheadCapBitsFor`：Espryt 自 P5e、Magma 自 P5f 之后的 Magma run-ahead 起发布，后者契约 `docs/archive/contracts/CONTRACT-MAGMA-RUNAHEAD.md`）。**不存在"归属开关"（D-B7）**：multi-draw 分档与 restart 重写永远由 server 拥有，client 只在 caps 要求时提供索引字节。
 
 ## 4. 记录与 payload 约定（`MG_Pipe/MGPipeTypes.h`）
 

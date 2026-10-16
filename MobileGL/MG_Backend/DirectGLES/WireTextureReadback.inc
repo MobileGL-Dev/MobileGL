@@ -327,7 +327,7 @@
         return width == extent.x() && height == extent.y() && (!layered || depth == extent.z());
     }
 
-    // P8-E (notes/p8/E.md). MGITEST_ESPRYT_REFUSE_TEXTURE_READBACK_EXTENT=<w>x<h>, READ BY THE SERVER:
+    // P8-E (docs/archive/notes/p8/E.md). MGITEST_ESPRYT_REFUSE_TEXTURE_READBACK_EXTENT=<w>x<h>, READ BY THE SERVER:
     // a colour level of exactly that extent is treated as one the driver refused to attach - what an
     // Adreno does for RGB16 and the 16-bit SNORM formats, and what no host driver can be made to do.
     // Scoped by the extent so the tcp lane's shared supervisor can carry it for the whole lane: only

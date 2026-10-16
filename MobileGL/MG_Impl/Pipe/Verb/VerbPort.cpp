@@ -593,7 +593,7 @@ namespace MobileGL::MG_Record {
 
         // =============================================================================
         // P5b d1 - the nineteen indexed / instanced / multi-draw / indirect draw slots
-        // (MG_Remote/CONTRACT-P5B.md §2 d1). ONE ROW, draw_vbo (59): the record carries the GL
+        // (docs/archive/contracts/CONTRACT-P5B.md §2 d1). ONE ROW, draw_vbo (59): the record carries the GL
         // call verbatim (rule D) beside the handle the P8 form will dispatch on, and the sink
         // reproduces the backend call the monolith makes.
         // =============================================================================
@@ -1286,7 +1286,7 @@ namespace MobileGL::MG_Record {
 
         // =============================================================================
         // CLASS B - P5b package i1: image bind, compute, barriers, copy-image, SSBO block
-        // (MG_Remote/CONTRACT-P5B.md §2 i1). Seven slots, five wire rows.
+        // (docs/archive/contracts/CONTRACT-P5B.md §2 i1). Seven slots, five wire rows.
         // =============================================================================
         //
         // RULE D, WHICH IS WHY THESE ARE SHORT. A P5b verb crosses AS THE CALL: the record
@@ -1513,7 +1513,7 @@ namespace MobileGL::MG_Record {
         }
 
         // CLASS B - P5b package t2: the transform-feedback spans, the XFB object bind and the
-        // tessellation patch parameter (MG_Remote/CONTRACT-P5B.md §2 t2).
+        // tessellation patch parameter (docs/archive/contracts/CONTRACT-P5B.md §2 t2).
         // =============================================================================
         //
         // SIX SLOTS, SIX ROWS, AND NOT ONE OF THEM STARTS A SHADER. Every one of the six is a

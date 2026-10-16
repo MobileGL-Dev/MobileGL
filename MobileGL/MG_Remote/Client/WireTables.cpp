@@ -356,7 +356,7 @@ namespace MobileGL::MG_Remote::Client {
         // same head for ever. Measured on the device (P12miss): `want=310` on every miss while
         // `replySeq` climbed from 1,504 to 102,915 - one answer lost to a bounded buffer wedges
         // the window permanently, and with 4,536 deferred answers that is a certainty rather
-        // than a risk. notes/p12/CREATE-WINDOW-MEASURED.md section 8 has the numbers and the
+        // than a risk. docs/archive/notes/p12/CREATE-WINDOW-MEASURED.md section 8 has the numbers and the
         // shape of the fix (abandon the head: un-latch the object, add it to the suspect list,
         // and pop - the DECLINE path reused for "unknown").
         //
@@ -388,7 +388,7 @@ namespace MobileGL::MG_Remote::Client {
         // the drain above reads them, so a bit keyed on wantReply disables the mechanism it is
         // meant to enable. The bit has to mean "this answer will never be read" - which is true
         // of respecify/params/sub-data and false of a windowed create. See
-        // docs/Disaggregated/notes/p12/CREATE-WINDOW-MEASURED.md section 7, reviewed).
+        // docs/archive/notes/p12/CREATE-WINDOW-MEASURED.md section 7, reviewed).
         //
         // The gates that pin it are in MG_Test/Wire/RemoteClientControls.inc, and they still hold:
         // the window is a coherent mechanism, it is simply unusable on a frame with this much

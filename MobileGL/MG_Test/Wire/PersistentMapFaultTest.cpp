@@ -17,7 +17,7 @@
 //      other made `address < base` true for EVERY fault, so the handler chained every fault
 //      on a page it had itself protected straight to debuggerd. No host produces a tagged
 //      pointer of its own, so the cases below hand the real predicate the two addresses the
-//      DEVICE produced (docs/Disaggregated/notes/p7/device-window-1,
+//      DEVICE produced (docs/archive/notes/p7/device-window-1,
 //      improved-transparency-minecraft-26.3 under inproc: x0 b4000073ac9a5000 against
 //      "fault addr 0x00000073ac9a5000"). That works on any host only because the
 //      normalisation is written without an architecture guard - masking bits 56-63 is the

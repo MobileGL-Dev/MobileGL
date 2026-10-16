@@ -8,7 +8,7 @@
 
 // G3: the MGPipe record codec. Owner: package w1.
 //
-// This header is the CONTRACT (MG_Remote/CONTRACT-P5.md) in C++ form; P5's c0 package wrote
+// This header is the CONTRACT (docs/archive/contracts/CONTRACT-P5.md) in C++ form; P5's c0 package wrote
 // it so the other seven could compile on day one against signatures that cannot then move
 // under them. Every body below is a named Fatal until w1 lands the real one.
 //
@@ -203,7 +203,7 @@ namespace MobileGL::MG_Remote::Wire {
     // nothing now and is stated now because the phase that arms kDrawHasUserIndices would
     // otherwise have to discover it as a misaligned load on a device.
     // THREE TAILS AND NOT TWO SINCE P5e. set_program_bindings (opcode 80,
-    // MG_Remote/CONTRACT-P5E.md §1) carries the uniform-block bindings, the sampler units and
+    // docs/archive/contracts/CONTRACT-P5E.md §1) carries the uniform-block bindings, the sampler units and
     // the storage-override map as three arrays in three different index spaces, so the array
     // that used to be exactly "the two-tail rows plus draw_vbo's conditional second" grew by
     // one. Every loop over TailCount below already reads the count rather than the literal 2;

@@ -24,7 +24,7 @@
 // OnTexturePullRequest, the server asking the client to re-send a texture's levels after
 // re-minting it (with op 50 ResourceSubDataComplete as the forward terminator). P9 W2 measured
 // that no re-mint needs the client: Espryt's server reads the GPU level back and replays its own
-// staged store, Magma copies GPU to GPU, on every arm (notes/p9/W2-REMINT.md). So the callback
+// staged store, Magma copies GPU to GPU, on every arm (docs/archive/notes/p9/W2-REMINT.md). So the callback
 // went; op 50 stays in the opcode table as a retired row (opcodes only ever grow) and its decoder
 // still declines it.
 //

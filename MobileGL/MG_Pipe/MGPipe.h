@@ -54,7 +54,7 @@ namespace MobileGL::MG_Pipe {
         kOptional = 1u << 5,
     };
 
-    // P5e (MG_Remote/CONTRACT-P5E.md §2.2). THE FIFTH COLUMN OF PipeCalls.def: what the client
+    // P5e (docs/archive/contracts/CONTRACT-P5E.md §2.2). THE FIFTH COLUMN OF PipeCalls.def: what the client
     // does after publishing a record of this call, on a server that publishes
     // kCapRunAheadApply. Unscoped for MGPipeCallClass's reason - PipeCalls.def spells these as
     // bare tokens so the same file can be read by the C++ preprocessor and by
@@ -143,7 +143,7 @@ namespace MobileGL::MG_Pipe {
                                                                           // the three unit sets
     inline constexpr Uint64 kMGPipeSubsystemPrograms = 1ull << 12;         // shader CSO, draw/dispatch
                                                                           // program, global constants
-    // P5e's one (MG_Remote/CONTRACT-P5E.md §1). The INDEXED BUFFER BINDING POINTS: the three
+    // P5e's one (docs/archive/contracts/CONTRACT-P5E.md §1). The INDEXED BUFFER BINDING POINTS: the three
     // dirty bits NewConstBuffers / NewShaderBuffers / NewSoTargets, the set_shader_buffers
     // emitter, and the backend's four binding-point walks. It is its own bit and not part of
     // bit 7's resource family for the reason every other split here has: a UBO/SSBO binding

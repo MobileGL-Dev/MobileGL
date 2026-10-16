@@ -2525,7 +2525,7 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     mgl_itest_register_split_arms("TextureUnitSamplingScenario.*" "")
     mgl_itest_register_split_arms("TriangleScenario.*" "")
     mgl_itest_register_split_arms("PersistentCoherentMapScenario.*" "")
-    # P11 A2 (MG_Remote/CONTRACT-P11.md §2): the >= 16 MiB arena on all three arms. Its tier case
+    # P11 A2 (docs/archive/contracts/CONTRACT-P11.md §2): the >= 16 MiB arena on all three arms. Its tier case
     # is declared emulated per entry by SplitLogPaths (T2: every acquisition declines); the mpr and
     # adopt-tier assertions are registered only in their configured controls. The Magma arms are the
     # gated `Arena.` block beside `Pbo.` / `Fence.` below, plus the Buffers lane.
@@ -2670,14 +2670,14 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     # buffer, depth and packed depth/stencil, and glGetTexImage's windowed twin. The Magma arms of
     # the same cases are the `Band.` block after the Fm lane below.
     mgl_itest_register_split_arms("BandedReadbackScenario.*" "")
-    # P9 (W1, MG_Remote/CONTRACT-P9.md §1): the pack-buffer readback crosses as
+    # P9 (W1, docs/archive/contracts/CONTRACT-P9.md §1): the pack-buffer readback crosses as
     # read_pixels_to_buffer / get_texture_image_to_buffer and is answered by nothing. Six parity
     # cases (every pack parameter, the map reader, a byte swap, a layered glGetTexImage, an upload
     # FROM the buffer the read filled, a later write over part of it) and the wire case (no
     # reply-slot record, one mark per read). The Magma arms are the `Pbo.` block after the Band
     # block below.
     mgl_itest_register_split_arms("PackBufferReadbackScenario.*" "")
-    # P10 (A, MG_Remote/CONTRACT-P10.md §1): fence polls answered from kEventFenceSignaled - the
+    # P10 (A, docs/archive/contracts/CONTRACT-P10.md §1): fence polls answered from kEventFenceSignaled - the
     # idiom's poll loops end (with and without the flush bit), a signaled fence's polls cross
     # nothing, and an idle server still reports a fence that finishes. The Magma arms are the
     # `Fence.` block beside the `Pbo.` block below.
@@ -2920,7 +2920,7 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         )
     endforeach()
 
-    # ---- P5b package i1 (MG_Remote/CONTRACT-P5B.md §2 i1) --------------------------------
+    # ---- P5b package i1 (docs/archive/contracts/CONTRACT-P5B.md §2 i1) --------------------------------
     #
     # THE LANE CASE THAT PROVES THE RECORDS CROSSED, and it is a RESULT and not a probe (R-16:
     # a probe may not arm against a stub). Each of these four scenarios asserts a value that
@@ -2980,7 +2980,7 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     #
     # The ROADMAP's `TextureRemintPullScenario`, and it proves the opposite of its name: the
     # server re-mints from the GPU level and its own staged store, so no pull protocol exists
-    # (notes/p9/W2-REMINT.md). Espryt's three arms here; the Magma arms are laid by hand in the
+    # (docs/archive/notes/p9/W2-REMINT.md). Espryt's three arms here; the Magma arms are laid by hand in the
     # `DirectVulkan.<arm>.Remint.` block, where the gated Magma flavour lives; both backends' monolith
     # entries come from the whole-binary discovery.
     mgl_itest_register_split_arms("TextureRemintPullScenario.*" "")
@@ -3039,7 +3039,7 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
 
     # ---- P5b t2: the transform-feedback spans, the XFB object bind, the patch parameter -------
     #
-    # MG_Remote/CONTRACT-P5B.md §2 t2. The three P5 lanes above are the REDUCED PATH's targets
+    # docs/archive/contracts/CONTRACT-P5B.md §2 t2. The three P5 lanes above are the REDUCED PATH's targets
     # (a clear, a triangle, a persistent map); these two are the first lane entries whose GREEN
     # DEPENDS ON A t2 RECORD HAVING CROSSED AND BEEN APPLIED BY THE BACKEND, which is the only
     # statement a package flipping a verb can make that a unit case cannot:
@@ -3084,7 +3084,7 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     # block as the XfbQuery. ones.
     mgl_itest_register_split_arms("XfbPrimitiveQueryScenario.*" "")
 
-    # ---- P5e package vi (MG_Remote/CONTRACT-P5E.md §5.1, ID-82 / ruling 2) --------------------
+    # ---- P5e package vi (docs/archive/contracts/CONTRACT-P5E.md §5.1, ID-82 / ruling 2) --------------------
     #
     # Client-memory vertices and indices now cross as owned ordinary buffers.
     # Keep the original names and private logs; all six scenarios join the full
@@ -3253,7 +3253,7 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     #
     # PLAN-PH-P34B-P7.md 1.2, "门：纹理 / program 场景 split 覆盖". Each candidate was run once
     # under MOBILEGL_TRANSPORT=inproc on build-split and its FIRST BLOCKER recorded; the row per
-    # scenario x backend x blocker is in notes/p34b/split-scenario-census.md. What follows is the
+    # scenario x backend x blocker is in docs/archive/notes/p34b/split-scenario-census.md. What follows is the
     # result of that census, not a guess: every scenario listed here passed, and every case that
     # did not is excluded BY NAME below with its blocker.
     #
@@ -3301,7 +3301,7 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     # case that produced no record RED for having nothing to say - which is the rule working, not
     # a defect. They stay unregistered for that reason and are listed in the census note.
 
-    # P8-E (docs/Disaggregated/notes/p8/E.md): glCopyImageSubData into a level the driver will not
+    # P8-E (docs/archive/notes/p8/E.md): glCopyImageSubData into a level the driver will not
     # read back, then glGetTexImage. The knob-free cases on Espryt's three arms; Magma's gated arms
     # are the `DirectVulkan.<arm>.CopyStore.` entries just below; both monolith entries come from
     # the whole-binary discovery.
@@ -3483,7 +3483,7 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
             ENVIRONMENT "${MGL_ITEST_GLES_SPLIT_STRICT_ENVIRONMENT}"
     )
 
-    # P8-B: glGenerateMipmap ON ESPRYT'S SERVER (notes/p8/B.md). The window a record names (B1) and
+    # P8-B: glGenerateMipmap ON ESPRYT'S SERVER (docs/archive/notes/p8/B.md). The window a record names (B1) and
     # RGB16F / RGB32F (B2) on the three Espryt arms; the Magma control is the gated
     # `DirectVulkan.<arm>.Mip.` block beside `Remint.`, and both monoliths come from the ambient
     # discovery. The FORCED-CPU entries run the three-channel cases with
@@ -3713,7 +3713,7 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         #
         # Making the tcp lane able to carry these would need the fixture to take a per-case
         # server environment - a supervisor control, not a ctest property - and that is a debt,
-        # recorded in notes/p7/magma-b2.md §6.
+        # recorded in docs/archive/notes/p7/magma-b2.md §6.
         set(mglItestServerEnvKnobArm TRUE)
         if(mglItestArm STREQUAL "Tcp")
             set(mglItestServerEnvKnobArm FALSE)
@@ -4158,7 +4158,7 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
                     ${mglItestArmProperties}
                     ENVIRONMENT "${mglItestMagmaBandEnvironment}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p10-fence${mglItestArmLogTag}-${fenceCase}.log")
         endforeach()
-        # P11 A2 (MG_Remote/CONTRACT-P11.md §2): the >= 16 MiB arena on Magma's three arms, in the
+        # P11 A2 (docs/archive/contracts/CONTRACT-P11.md §2): the >= 16 MiB arena on Magma's three arms, in the
         # same flavour, declared per arm (mglItestArenaArm above); DirectVulkan.ArenaArm. is its
         # monolith (adopted) half.
         foreach(arenaCase IN LISTS MGL_ITEST_ARENA_CASES)
@@ -4231,7 +4231,7 @@ endif()
 
 # P9 W2: THE TEXTURE RE-MINT ON MAGMA, all three arms, GATED. A storage-usage upgrade recreates
 # the VkImage and copies the old one into it GPU to GPU (PreserveTextureContentsOnRecreate), so
-# no byte comes from the client here either (notes/p9/W2-REMINT.md). The gated band flavour
+# no byte comes from the client here either (docs/archive/notes/p9/W2-REMINT.md). The gated band flavour
 # (role-split state, strict errors, run-ahead), one entry per case for a private log each.
 if (MOBILEGL_BUILD_DISAGGREGATED)
     foreach(mglItestArm IN LISTS MGL_ITEST_MAGMA_ARMS)
@@ -4493,7 +4493,7 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
             PersistentCoherentMapScenario.AWriteAfterAFrameBoundaryReachesTheNextFramesDraw
             StorageBufferRegrowScenario.AGrownStoreIsVisibleThroughItsExistingIndexedBinding
             # P11 A2: the >= 16 MiB arena, the flavour's MGITEST_PERSISTENT_MAP_ARM=emulated
-            # asserted by its tier case (MG_Remote/CONTRACT-P11.md §2).
+            # asserted by its tier case (docs/archive/contracts/CONTRACT-P11.md §2).
             LargeArenaAdoptionScenario.SubDataAfterAnInFlightDrawReachesTheNextDraw
             LargeArenaAdoptionScenario.RespecifiedVertexArenaKeepsVaoBindings
             LargeArenaAdoptionScenario.RespecifiedIndexArenaKeepsVaoBinding
@@ -4698,7 +4698,7 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     endforeach()
 endif()
 
-# P5c ct (MG_Remote/CONTRACT-P5C.md §5): the two control records, split-only source for the
+# P5c ct (docs/archive/contracts/CONTRACT-P5C.md §5): the two control records, split-only source for the
 # same reason as f1's - the scenario reads the SERVER sink's tallies, which a monolith build
 # has no symbol for. One block per case with a LOG PATH OF ITS OWN, the F1 pattern:
 # SplitLogPaths.PrivateAndDistinct fails a lane whose cases share one file, and the death
@@ -4920,7 +4920,7 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     include(${CMAKE_CURRENT_SOURCE_DIR}/P8Coverage.cmake)
 endif()
 
-# P8-D: the Magma wire arm issues indirect draws natively (docs/Disaggregated/notes/p8/D.md).
+# P8-D: the Magma wire arm issues indirect draws natively (docs/archive/notes/p8/D.md).
 # Public GL, so the source joins the binary unguarded and the ambient `DirectGLES.` /
 # `DirectVulkan.` monolith discovery runs it too. Split arms: DirectGLES through the registration
 # macro (which also replays it on Magma's informational tier), Magma's gated tier by hand, all
@@ -4955,7 +4955,7 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     endforeach()
 endif()
 
-# P8-SE (docs/Disaggregated/notes/p8/SE.md): Espryt split residuals.
+# P8-SE (docs/archive/notes/p8/SE.md): Espryt split residuals.
 if (MOBILEGL_BUILD_DISAGGREGATED)
     # The default framebuffer's depth/stencil format reaches a spawn / tcp client now (the server
     # process has no frontend placeholder, and the publish used to return on it before posting),
@@ -4993,7 +4993,7 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         PipeCatalogue.UnmigratedEmulationSitesMatchTheList PROPERTIES LABELS unit TIMEOUT 60)
 endif()
 
-# P8-SV: Magma split residuals (docs/Disaggregated/notes/p8/SV.md) - the 3D native mip blit's layer
+# P8-SV: Magma split residuals (docs/archive/notes/p8/SV.md) - the 3D native mip blit's layer
 # count, the 1D depth mip decline, the depth/stencil mip decline's tally row (asserted inside
 # F1WireScenario) and the wire arm's native glDispatchComputeIndirect. Public GL, so the sources join
 # the binary unguarded and the ambient `DirectGLES.` / `DirectVulkan.` monolith discovery runs them
@@ -5193,7 +5193,7 @@ endif()
 # THIS IS WHERE THE @P7 REFUSALS LIVE. None of tier 2's scenarios reaches one; the readback
 # matrices, the same-texture copy shapes and the odd-offset uniform ranges do, and they are in
 # this set and nowhere else in the disaggregated registry. THE FIRST RUN'S RED LIST IS WHAT
-# WAVE 2's CLUSTERS ARE SCHEDULED FROM - see notes/p7/magma-two-process-first-run.md.
+# WAVE 2's CLUSTERS ARE SCHEDULED FROM - see docs/archive/notes/p7/magma-two-process-first-run.md.
 #
 # IN NO CI GATING STEP, and that is the whole design: a lane that must be green cannot carry a
 # census. A case leaves this tier for a gated one with the commit that retires its blocker.
@@ -5346,7 +5346,7 @@ if (MOBILEGL_BUILD_DISAGGREGATED AND MOBILEGL_PIPE_VERIFY)
     # (GL error 0x0502 where the decline promises none, or none where it promises one; the
     # overlap copy writes the level the decline leaves alone) - because Espryt does not decline
     # those shapes at all. That is a finding about the DirectGLES whole-binary set on split, not
-    # about verify, and it is recorded in notes/p7/verify-split.md rather than hidden in a green.
+    # about verify, and it is recorded in docs/archive/notes/p7/verify-split.md rather than hidden in a green.
     # This lane was NOT the only DirectGLES split lane to reach them: the primary integration job
     # runs every integration-gpu entry under MOBILEGL_TRANSPORT=inproc, and there the same four
     # were red in CI (the depth-stencil and overlap pair from run 35781886930, the two blits from

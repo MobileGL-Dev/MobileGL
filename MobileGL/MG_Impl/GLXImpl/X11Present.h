@@ -8,7 +8,7 @@
 
 #pragma once
 
-// GLX WINDOWS PRESENTED THROUGH DRI3 + PRESENT (docs/Disaggregated/notes/anland/plan-x11-gpu.md).
+// GLX WINDOWS PRESENTED THROUGH DRI3 + PRESENT (docs/archive/notes/anland/plan-x11-gpu.md).
 //
 // A GLX window's frames are drawn by the server into a pbuffer. Instead of reading each frame back
 // and putting it on the window, the frame is copied GPU-side into one of a few server-allocated

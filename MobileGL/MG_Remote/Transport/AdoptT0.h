@@ -6,7 +6,7 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// P11 B2 (MG_Remote/CONTRACT-P11.md B2): T0, the zero-copy adoption of a persistently mapped
+// P11 B2 (docs/archive/contracts/CONTRACT-P11.md B2): T0, the zero-copy adoption of a persistently mapped
 // store. The CLIENT allocates the store as an AHardwareBuffer (AHB), keeps a CPU lock on it for
 // the store's life and uses that pointer as the adopted mapping; the SERVER imports the same
 // pages as the store's resident twin (Espryt glBufferStorageExternalEXT, Magma

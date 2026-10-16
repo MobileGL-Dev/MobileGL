@@ -139,7 +139,7 @@ namespace MobileGL::MG_Pipe {
             return false;
         }
 
-        // ---- P5b (MG_Remote/CONTRACT-P5B.md): the rows the four migration packages consume.
+        // ---- P5b (docs/archive/contracts/CONTRACT-P5B.md): the rows the four migration packages consume.
         //
         // Every one below is a GLFunctionsTable verb with NO MGPipeApply* entry point - the
         // census's correction - so, exactly like the five above, the codec validates and hands
@@ -212,7 +212,7 @@ namespace MobileGL::MG_Pipe {
             return false;
         }
 
-        // ---- P5c (MG_Remote/CONTRACT-P5C.md §5): the two control records, opcodes 77..78.
+        // ---- P5c (docs/archive/contracts/CONTRACT-P5C.md §5): the two control records, opcodes 77..78.
         //
         // Same hand-over shape as the P5b rows: the codec validates the record (a fixed-size
         // POD, no blob, no tail) and the SERVER'S sink does the work - OnApplierReset runs the
@@ -244,7 +244,7 @@ namespace MobileGL::MG_Pipe {
             return false;
         }
 
-        // ---- shared images, opcode 85 (docs/Disaggregated/notes/anland/plan-ahb-dmabuf.md).
+        // ---- shared images, opcode 85 (docs/archive/notes/anland/plan-ahb-dmabuf.md).
         // `seq` is the record's reply-slot id, which an Import's descriptor names on the aux
         // socket. True fills `reply`; false is a DECLINED answer.
         virtual Bool OnSharedImage(const MGPSharedImageOp& op, Uint64 seq,

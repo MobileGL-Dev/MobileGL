@@ -45,8 +45,8 @@
 - 删除：`OnTexturePullRequest`（与 W3 删除的 `OnLog` 合计，回调 9 → 7）、`texture-remint-pull` 标记。op 50 `ResourceSubDataComplete` 只追加不删，留作退役行（解码拒收）。`MOBILEGL_PIPE_TEXEL_RETAIN_MB` 已无消费者，但在 pull 构建里，随 P13 删（G1）。
 - `ImageBindableHint` 仍是预防：hint 在第一次 sync 前到达就直接按 image-bindable 分配，省掉一次 server 回读 + 重传。
 - 已知 dev 缺陷（非 P9）：monolith Espryt 的前端臂重放 client 影子，覆盖 GPU 写过的纹素。
-- 普查、覆盖矩阵、门与 red-once：[`notes/p9/W2-REMINT.md`](../notes/p9/W2-REMINT.md)。
+- 普查、覆盖矩阵、门与 red-once：[`docs/archive/notes/p9/W2-REMINT.md`](../../archive/notes/p9/W2-REMINT.md)。
 
 ### 8.5 XFB scatter 留在 server
 
-补丁循环需要"捕获前的字节"，而拆分后权威影子归 server（`StagedShadow`），所以 scatter 在 server 原地跑完；回程只有一条 `OnBufferWriteback`，载补好的整段，按 `SEG_EVENT` 容量的四分之一切片（`MGPipeBufferWritebackSliceBytes`），最后一片落地即蕴含之前每一片。孤儿目标（`HasDefinedContent == 0`）零填充后照常散射。`OnXfbScatterReady` 已删除（回调 10 → 9）。落地论证见 [`notes/p34b/README.md`](../notes/p34b/README.md)（espryt D1）。
+补丁循环需要"捕获前的字节"，而拆分后权威影子归 server（`StagedShadow`），所以 scatter 在 server 原地跑完；回程只有一条 `OnBufferWriteback`，载补好的整段，按 `SEG_EVENT` 容量的四分之一切片（`MGPipeBufferWritebackSliceBytes`），最后一片落地即蕴含之前每一片。孤儿目标（`HasDefinedContent == 0`）零填充后照常散射。`OnXfbScatterReady` 已删除（回调 10 → 9）。落地论证见 [`docs/archive/notes/p34b/README.md`](../../archive/notes/p34b/README.md)（espryt D1）。

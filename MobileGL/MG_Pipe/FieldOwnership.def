@@ -138,7 +138,7 @@
     X(ResumeStreamOutput, ResumeTransformFeedback)                                                   \
     X(GenerateMipmap,     GenerateMipmap)                                                            \
     X(GetTextureImage,    GetTextureImage)                                                           \
-    /* P5b (MG_Remote/CONTRACT-P5B.md). The ONE renamed, non-kCtxVerb boundary the file above  */   \
+    /* P5b (docs/archive/contracts/CONTRACT-P5B.md). The ONE renamed, non-kCtxVerb boundary the file above  */   \
     /* said "the phase that emits it adds its row and decides which verb it is": P5b rules      */   \
     /* resource_copy_region = glCopyImageSubData ONLY; the two framebuffer-sourced copies       */   \
     /* (CopyTexImage2D / CopyTexSubImage2D) are copy_framebuffer_to_texture below, stamped as   */   \

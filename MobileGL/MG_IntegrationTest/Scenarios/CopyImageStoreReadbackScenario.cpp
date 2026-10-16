@@ -7,7 +7,7 @@
 // End of Source File Header
 //
 // Scenario - glCopyImageSubData INTO A LEVEL THE DRIVER WILL NOT READ BACK (P8-E,
-// docs/Disaggregated/notes/p8/E.md).
+// docs/archive/notes/p8/E.md).
 //
 // The formats are the ones an ES driver keeps as texture-only storage: GL_RGB16 (EXT_texture_norm16
 // makes the three-channel spelling sampleable, never colour-renderable) and the 16-bit SNORM family
@@ -28,13 +28,13 @@
 // (WireTextureReadback.inc, ReadTextureImageWire): a colour level of exactly that extent is
 // treated as a level the driver refused to attach - what a driver without EXT_texture_norm16 /
 // EXT_render_snorm does for these formats (an Adreno 750, which has both, reads them all back
-// through the GPU; measured in P13), and what llvmpipe can be made to do no other way. The `DirectGLES.<arm>.StoreRead.`
-// entries set it, and this scenario then builds its textures at THAT extent instead of the default
-// one - so the knob is scoped by the extent, and the tcp lane's shared supervisor can carry it
-// (the TcpServer.Start fixture's ENVIRONMENT) without touching any other entry, this scenario's
-// own knob-free tcp entries included. Under the knob every read must still be right, and the
-// server log must name the store route - otherwise the entry would be pinning the GPU route a
-// second time under a name that claims otherwise.
+// through the GPU; measured in P13), and what llvmpipe can be made to do no other way. The
+// `DirectGLES.<arm>.StoreRead.` entries set it, and this scenario then builds its textures at
+// THAT extent instead of the default one - so the knob is scoped by the extent, and the tcp
+// lane's shared supervisor can carry it (the TcpServer.Start fixture's ENVIRONMENT) without
+// touching any other entry, this scenario's own knob-free tcp entries included. Under the knob
+// every read must still be right, and the server log must name the store route - otherwise the
+// entry would be pinning the GPU route a second time under a name that claims otherwise.
 
 #include <cstdint>
 #include <cstdio>

@@ -17,7 +17,7 @@
 //             MGPipeContext (plan section 4.3).
 //     Flags : kNone | kNeedsAck | kHasBlob | kVarTail | kHostSpan | kReplySlot | kOptional
 //     WaitClass : kWaitNone | kWaitApplied | kWaitReply | kWaitPresent
-//             P5e (MG_Remote/CONTRACT-P5E.md section 2.2). WHAT THE CLIENT DOES AFTER IT HAS
+//             P5e (docs/archive/contracts/CONTRACT-P5E.md section 2.2). WHAT THE CLIENT DOES AFTER IT HAS
 //             PUBLISHED A RECORD OF THIS CALL, on a server that publishes kCapRunAheadApply.
 //             It is A VALUE AND NOT A NEW OP: the opcode order and the flag column are
 //             untouched, and gen_pipe.py emits the column beside kMGPipeCallFlags as
@@ -84,7 +84,7 @@
 //   kCtxVerb       20     3 context-reading transfer calls + the 10 commands, plus the five
 //                         P5b-appended verbs (bind_shader_image, patch_parameter,
 //                         bind_stream_output, set_storage_block_binding,
-//                         copy_framebuffer_to_texture - MG_Remote/CONTRACT-P5B.md), plus
+//                         copy_framebuffer_to_texture - docs/archive/contracts/CONTRACT-P5B.md), plus
 //                         delete_stream_output 1 and read_pixels_to_buffer 1
 //   total          85
 //
@@ -123,7 +123,7 @@
 //     76 unique records. The catalogue footer's "ShaderStorageBlockBinding is folded into the
 //     reflection archive" is CORRECTED by the row: the archive carries the bindings the
 //     program LINKED with, and glShaderStorageBlockBinding moves one AFTER link.
-//   - P5c (MG_Remote/CONTRACT-P5C.md §5.1/§5.2) appended TWO more after those (opcodes 77..78),
+//   - P5c (docs/archive/contracts/CONTRACT-P5C.md §5.1/§5.2) appended TWO more after those (opcodes 77..78),
 //     same rule: applier_reset, the make-current edge's server-side reset that used to be a
 //     GL-thread direct call into server memory, and object_death, the framebuffer family's
 //     FIRST wire delete opcode and the handle-keyed replacement for the death-notice mailbox.
@@ -134,7 +134,7 @@
 //     routed through gMGPipeContext like its seventeen siblings, and under monolith it has no
 //     producer at all - the fields keep coming through the residual fill, byte for byte as
 //     before (G1). 79 unique records.
-//   - P5e (MG_Remote/CONTRACT-P5E.md section 1) appended ONE more (opcode 80):
+//   - P5e (docs/archive/contracts/CONTRACT-P5E.md section 1) appended ONE more (opcode 80):
 //     set_program_bindings, the three POST-LINK mutable reflection fields - the uniform-block
 //     bindings, the sampler uniform units and the name-keyed storage-block override map. They
 //     live inside the LinkArtifacts the reflection archive snapshots, and all three move AFTER
@@ -143,7 +143,7 @@
 //     refuses it by name until package pg wires the emitter, exactly as set_shader_buffers has
 //     sat catalogued-and-dead since P4a. 80 unique records.
 //   - delete_stream_output (opcode 81) took the XFB object's deletion across; 81 records.
-//   - P9 (MG_Remote/CONTRACT-P9.md §1) appended TWO more (opcodes 82..83):
+//   - P9 (docs/archive/contracts/CONTRACT-P9.md §1) appended TWO more (opcodes 82..83):
 //     read_pixels_to_buffer and get_texture_image_to_buffer, the pack-buffer halves of the two
 //     readbacks, answered by nothing (ID-57's fire-and-forget). Like P5b's five they reach
 //     WireVerbSink only and have no monolith producer. 83 unique records.
@@ -294,7 +294,7 @@
     /* glWaitSync - WaitSync, the GPU-side wait, distinct from FenceWait's client-side one.   */    \
     /* TimeoutNs is GL_TIMEOUT_IGNORED by contract.                                            */    \
     X(FenceWaitServer,          MGPFenceWait,               kScreen,    kNone,                      kWaitNone)        \
-    /* ---- APPENDED BY P5b (MG_Remote/CONTRACT-P5B.md): five GLFunctionsTable verbs the      ---- */ \
+    /* ---- APPENDED BY P5b (docs/archive/contracts/CONTRACT-P5B.md): five GLFunctionsTable verbs the      ---- */ \
     /* ---- class-C census measured as first blockers and that no existing row could carry.   ---- */ \
     /* ---- Opcodes 72..76. Every one reaches WireVerbSink, none has an MGPipeApply* entry    ---- */ \
     /* ---- point, and under monolith none has a producer - the backend slot is called       ---- */ \
@@ -313,7 +313,7 @@
     /* glCopyTexImage2D / glCopyTexSubImage2D - a copy whose SOURCE is the read framebuffer,   */    \
     /* which resource_copy_region (resource -> resource) cannot express.                        */    \
     X(CopyFramebufferToTexture, MGPCopyFromFramebuffer,     kCtxVerb,   kNone,                      kWaitNone)        \
-    /* ---- APPENDED BY P5c (MG_Remote/CONTRACT-P5C.md §5): the two control records. Opcodes ---- */ \
+    /* ---- APPENDED BY P5c (docs/archive/contracts/CONTRACT-P5C.md §5): the two control records. Opcodes ---- */ \
     /* ---- 77..78. Neither has an MGPipeApply* entry point and neither gains one: both reach  ---- */ \
     /* ---- WireVerbSink, and under monolith neither has a producer - the reset is a direct    ---- */ \
     /* ---- MGPipeApplierReset() call and the death notice's mailbox hop, byte for byte as     ---- */ \
@@ -340,7 +340,7 @@
     /* ---- (PipeFill.cpp gates both the emission and the residual-fill skip on it): under       ---- */ \
     /* ---- monolith there is no producer and the fields keep being pulled, byte for byte (G1). ---- */ \
     X(SetContextValues,         MGPContextValues,           kCtxState,  kNone,                      kWaitNone)        \
-    /* ---- P5e (MG_Remote/CONTRACT-P5E.md §1), opcode 80: the post-link binding record. ------ */ \
+    /* ---- P5e (docs/archive/contracts/CONTRACT-P5E.md §1), opcode 80: the post-link binding record. ------ */ \
     /* ---- THREE POST-LINK MUTABLE REFLECTION FIELDS LIVE INSIDE THE FRONTEND'S LinkArtifacts  ---- */ \
     /* ---- and therefore inside the archive create_shader_state carries - but glUniformBlock-  ---- */ \
     /* ---- Binding, glUniform1i on a sampler and glShaderStorageBlockBinding all move one      ---- */ \
@@ -355,7 +355,7 @@
     X(SetProgramBindings,       MGPProgramBindings,         kCtxState,  kVarTail|kHostSpan,         kWaitNone)        \
     /* Deletion carries the GL argument and its never-reused capture identity. */                          \
     X(DeleteStreamOutput,       MGPStreamOutputBind,        kCtxVerb,   kNone,                      kWaitNone)        \
-    /* ---- APPENDED BY P9 (MG_Remote/CONTRACT-P9.md §1), opcodes 82..83: the pack-buffer     ---- */ \
+    /* ---- APPENDED BY P9 (docs/archive/contracts/CONTRACT-P9.md §1), opcodes 82..83: the pack-buffer     ---- */ \
     /* ---- halves of read_pixels and get_texture_image. The reply-slot rows above keep every ---- */ \
     /* ---- read into client memory; a read whose destination is a bound PIXEL_PACK_BUFFER    ---- */ \
     /* ---- crosses as one of these instead, names the buffer by handle, and is answered by   ---- */ \
@@ -377,7 +377,7 @@
     /* ---- kWaitNone: the apply reads no client memory and the record's placement in the ring    ---- */ \
     /* ---- is the whole of its ordering.                                                        ---- */ \
     X(BindContext,              MGPBindContext,            kScreen,    kNone,                      kWaitNone)        \
-    /* ---- APPENDED FOR SHARED IMAGES (docs/Disaggregated/notes/anland/plan-ahb-dmabuf.md),    ---- */ \
+    /* ---- APPENDED FOR SHARED IMAGES (docs/archive/notes/anland/plan-ahb-dmabuf.md),    ---- */ \
     /* ---- opcode 85: allocate / import / release / present / attach of a server-allocated    ---- */ \
     /* ---- colour buffer exported as a dma-buf. kScreen: the image table is the server's, and  ---- */ \
     /* ---- present / attach act on the session's current context the way bind_context does.   ---- */ \

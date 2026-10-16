@@ -184,7 +184,7 @@ namespace MobileGL::MG_Remote::Server {
         void ReleaseQueries();
         Bool OnPresent(const MG_Pipe::MGPPresent& present) override;
 
-        // ---- P5c ct (MG_Remote/CONTRACT-P5C.md §5): the two control records ----------------
+        // ---- P5c ct (docs/archive/contracts/CONTRACT-P5C.md §5): the two control records ----------------
         //
         // REAL BODIES FROM THE DAY THE ROWS EXIST, not the P5b stub shape: the rows were
         // appended by the same package that lands these bodies, so there is no window in
@@ -210,7 +210,7 @@ namespace MobileGL::MG_Remote::Server {
         // rather than a silent bind. Token 0 (the release) is always legal.
         Bool OnBindContext(const MG_Pipe::MGPBindContext& bind) override;
 
-        // shared_image, opcode 85 (docs/Disaggregated/notes/anland/plan-ahb-dmabuf.md): the
+        // shared_image, opcode 85 (docs/archive/notes/anland/plan-ahb-dmabuf.md): the
         // session's image table (allocate / import / release) and the two GL-ordered operations
         // (present the default framebuffer into an image, attach an image to a texture).
         Bool OnSharedImage(const MG_Pipe::MGPSharedImageOp& op, Uint64 seq,

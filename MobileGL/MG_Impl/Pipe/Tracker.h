@@ -210,7 +210,7 @@ namespace MobileGL::MG_Pipe {
         case MGPipeDirty::NewSamplers:
         case MGPipeDirty::NewShaderImages:
             return kMGPipeSubsystemSamplers;
-        // P5e's three, one subsystem (MG_Remote/CONTRACT-P5E.md §1): the indexed buffer
+        // P5e's three, one subsystem (docs/archive/contracts/CONTRACT-P5E.md §1): the indexed buffer
         // binding points. Bits 15/16/17 have been computed and counted since P2 and have named
         // no subsystem since - "the remaining bits have no call of their own until P4b", which
         // the default arm below used to say for them. set_shader_buffers is the call, and
@@ -690,7 +690,7 @@ namespace MobileGL::MG_Pipe {
             now[Index(MGPipeDirty::NewShaderImages)] = MGPipeMixShutter(
             MGPipeMixShutter(MGPipeMixShutter(textureContent, textureParams), programImages),
             ctx.GetTextureBindGeneration());
-            // ---- bits 15/16/17, REWRITTEN AT P5e (sb, MG_Remote/CONTRACT-P5E.md §5.6) ----
+            // ---- bits 15/16/17, REWRITTEN AT P5e (sb, docs/archive/contracts/CONTRACT-P5E.md §5.6) ----
             //
             // ALL THREE USED TO READ `buffers` - the buffer CONTENT aggregate - AND THAT WAS
             // WRONG IN BOTH DIRECTIONS AT ONCE. Over: any glBufferSubData anywhere fired all

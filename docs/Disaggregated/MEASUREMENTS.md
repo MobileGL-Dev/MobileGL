@@ -25,29 +25,29 @@
   这解释了 handoff §3.6「换快 3.4 倍的链路墙钟不变」：钱花在设备每次唤醒上；handoff §3.2 那 249 s 是在**未定频**的机器上取的，含这份空闲税。
   **同一个诊断给出一条可移植修法**：把服务端的自旋预算调大（Activity 的 `env` extra → `MOBILEGL_IPC_SPIN_US=2000`，不需要 root、不需要改代码），
   那一帧 **221.5 s → 182.8 s（−17%）**；设备定频+关深度空闲则是 **166.5 s（−25%）**。服务端日志会打印 `spin 2000 us` 自证。
-  见 [`notes/p12/DEVICELOST-AND-UPLOAD-WAITS.md`](notes/p12/DEVICELOST-AND-UPLOAD-WAITS.md) §2.6–2.10。
+  见 [`docs/archive/notes/p12/DEVICELOST-AND-UPLOAD-WAITS.md`](../archive/notes/p12/DEVICELOST-AND-UPLOAD-WAITS.md) §2.6–2.10。
 - **画面正确**：Vulkan 后端真机画面检查 36/36 通过，CTS 五块相对基线没有超过 0.5 个百分点的退步、没有新崩溃（P7）；server 自有窗口上屏两后端 SSIM 1.0（P12）。
-- **五臂传输对比（2026-09-28，未定频交错 A/B）**：重负载（rd12）下 inproc ≈ spawn+shm 比 monolith **快约 1/3**（run-ahead 流水线并行 + applier 路径探针更少），轻负载（openra）下 split 只付固定开销；**tcp localhost 慢 ~8 倍，瓶颈是 present credit=1 的串行等待（~74%）+ futex 唤醒税**，`MOBILEGL_IPC_SPIN_US=2000` 单项实测 21.7→63.6 fps；跨主机 TCP 的「`eglMakeCurrent` hang」**是测试环境造成的**（主机 v2rayN `xray_tun` 代理终结 TCP 后中继卡住，不是源码 bug）；绕开后 P12 出口门 (b) 通过：WSL client 经 Wi-Fi 重放 rd12 世界内 trace，ssim 0.999883，稳态 17–22 fps（`PRESENT_CREDIT` 1/2/3 = 16.9 / 21.3 / 22.1），openra 稳态 105–133 fps；加载帧 2.7 GB 受带宽约束（server 实测 52 MB/s），稳态受往返延迟（20–24 MB/s）。全文 [`notes/perf-five-arm-20260928`](notes/perf-five-arm-20260928/README.md)。
+- **五臂传输对比（2026-09-28，未定频交错 A/B）**：重负载（rd12）下 inproc ≈ spawn+shm 比 monolith **快约 1/3**（run-ahead 流水线并行 + applier 路径探针更少），轻负载（openra）下 split 只付固定开销；**tcp localhost 慢 ~8 倍，瓶颈是 present credit=1 的串行等待（~74%）+ futex 唤醒税**，`MOBILEGL_IPC_SPIN_US=2000` 单项实测 21.7→63.6 fps；跨主机 TCP 的「`eglMakeCurrent` hang」**是测试环境造成的**（主机 v2rayN `xray_tun` 代理终结 TCP 后中继卡住，不是源码 bug）；绕开后 P12 出口门 (b) 通过：WSL client 经 Wi-Fi 重放 rd12 世界内 trace，ssim 0.999883，稳态 17–22 fps（`PRESENT_CREDIT` 1/2/3 = 16.9 / 21.3 / 22.1），openra 稳态 105–133 fps；加载帧 2.7 GB 受带宽约束（server 实测 52 MB/s），稳态受往返延迟（20–24 MB/s）。全文 [`docs/archive/notes/perf-five-arm-20260928`](../archive/notes/perf-five-arm-20260928/README.md)。
 
 ## 按阶段
 
 | § | 阶段 | 一句结论 | 全文 |
 |---|---|---|---|
-| 1 | P0 | 能从应用进程拉起第二个进程；跨进程共享 GPU 内存只有一条路在所有设备上可用 | [`notes/p0`](notes/p0/README.md) |
-| 2 | P1 | 逐 draw 核对推送状态，79 条 trace 零分歧 | [`notes/p1`](notes/p1/README.md) |
-| 3 | P2 | 桌面基准：新 tracker 比它替掉的旧填充更便宜 | [`notes/p2`](notes/p2/README.md) |
-| 4 | P3a | 两机真机 Release：接口代价 +6–12%，VAO 切换密集的场景 +27–30% | [`notes/p3a`](notes/p3a/README.md) |
-| 5 | P4a | 换到 Redmi；P4a 自己只加 3–6 个百分点 | [`notes/p4a`](notes/p4a/README.md) |
-| 6 | P5 | 两线程第一帧画对；真机两线程臂还跑不完 | [`notes/p5`](notes/p5/README.md) |
-| 7 | P5b | 真机两线程跑通四条游戏 trace；两线程额外代价 +6–18% | [`notes/p5b`](notes/p5b/README.md) |
-| 8 | P5c | 两线程之间零共享内存后，全部测试仍绿 | [`notes/p5c`](notes/p5c/README.md) |
-| 9 | P5d | 游戏内 7–13 → 103–106 fps，client CPU 15.0 → 9.2 ms/帧 | [`notes/p5d`](notes/p5d/README.md) |
-| 10–11 | P5e | 发完就走比每条都等快 69%；重负载下与单线程持平 | [`notes/p5e`](notes/p5e/README.md) |
-| 12 | P6 | 两进程与两线程持平；每帧数据量与记录数首次实测 | [`notes/p6`](notes/p6/README.md) |
-| 13 | P3b/P4b | 纹理上传形状在四种拓扑下完全一致 | [`notes/p34b`](notes/p34b/README.md) |
-| 14 | P6.5 | 跨机 TCP 102/102；断线约 5 s 检测到 | [`notes/p65`](notes/p65/README.md) |
-| 15 | P7 | 真机画面 36/36；server 内存无界增长收住（主机 825 → 546 MiB） | [`notes/p7`](notes/p7/README.md) |
-| 16 | P12 | 审查后真机复测：Espryt SSIM 1.0；Magma 1.0 / 0.999999511；P12 定向 CTest 46/46；纹理上传回包等待 1→0（主机机制门，真机墙钟待测）；**P12 已收官（09-29）**：跨机 TCP 门 (b) 通过（rd12 ssim 0.999883、稳态 17–22 fps）；FCL 门 (a) 通过（Minecraft 上屏到 render server 窗口，杀 server 后 33–54 ms 闩住 device-lost） | [`notes/p12`](notes/p12/README.md) |
-| 17 | 五臂传输测量（2026-09-28，非阶段） | inproc/shm 重负载比 monolith 快 ~1/3；tcp localhost 瓶颈是 credit=1 + 唤醒税（SPIN_US=2000 → 2.9×）；跨主机 hang 实为主机 xray TUN 代理造成；直连 Wi-Fi 稳态 rd12 17–22 fps、openra 105–133 fps | [`notes/perf-five-arm-20260928`](notes/perf-five-arm-20260928/README.md) |
-| 18 | P11 | 同机零拷贝（T0）MC 26.3 峰值内存 Espryt −41–42%、Magma −18–26%，ssim / 帧时 / CPU 不变；外部 client 走共享内存 rd12 Espryt 约 119 fps（TCP 40–53）；split T2 相对单进程采纳 p99 Espryt +37–42%、Magma 约 2.5×。未量：M2 后 split server 上纹理无 GPU 写时 Espryt 自己按存储阈值取舍精确写入框，非 ring 路径可能多发几个小框 | [`notes/p11`](notes/p11/README.md) |
-| 19 | P8 | 真实内容只 Magma wire indirect 命中（MC 26.3 × Magma inproc 1,300 万 draw CPU 展开）→ 原生后 create-indirect 每次整 GPU 等待 321 → 0；红米 create-instancing × Espryt × monolith 0.870 → 0.99998（Adreno 丢排队环形拷贝，dev + feat 两条阶梯）；最大 program archive 355 KB = arena/4 的 4.2 %（不分片）；出口设备矩阵 77 格 / 臂无一变差 | [`notes/p8`](notes/p8/README.md) |
+| 1 | P0 | 能从应用进程拉起第二个进程；跨进程共享 GPU 内存只有一条路在所有设备上可用 | [`docs/archive/notes/p0`](../archive/notes/p0/README.md) |
+| 2 | P1 | 逐 draw 核对推送状态，79 条 trace 零分歧 | [`docs/archive/notes/p1`](../archive/notes/p1/README.md) |
+| 3 | P2 | 桌面基准：新 tracker 比它替掉的旧填充更便宜 | [`docs/archive/notes/p2`](../archive/notes/p2/README.md) |
+| 4 | P3a | 两机真机 Release：接口代价 +6–12%，VAO 切换密集的场景 +27–30% | [`docs/archive/notes/p3a`](../archive/notes/p3a/README.md) |
+| 5 | P4a | 换到 Redmi；P4a 自己只加 3–6 个百分点 | [`docs/archive/notes/p4a`](../archive/notes/p4a/README.md) |
+| 6 | P5 | 两线程第一帧画对；真机两线程臂还跑不完 | [`docs/archive/notes/p5`](../archive/notes/p5/README.md) |
+| 7 | P5b | 真机两线程跑通四条游戏 trace；两线程额外代价 +6–18% | [`docs/archive/notes/p5b`](../archive/notes/p5b/README.md) |
+| 8 | P5c | 两线程之间零共享内存后，全部测试仍绿 | [`docs/archive/notes/p5c`](../archive/notes/p5c/README.md) |
+| 9 | P5d | 游戏内 7–13 → 103–106 fps，client CPU 15.0 → 9.2 ms/帧 | [`docs/archive/notes/p5d`](../archive/notes/p5d/README.md) |
+| 10–11 | P5e | 发完就走比每条都等快 69%；重负载下与单线程持平 | [`docs/archive/notes/p5e`](../archive/notes/p5e/README.md) |
+| 12 | P6 | 两进程与两线程持平；每帧数据量与记录数首次实测 | [`docs/archive/notes/p6`](../archive/notes/p6/README.md) |
+| 13 | P3b/P4b | 纹理上传形状在四种拓扑下完全一致 | [`docs/archive/notes/p34b`](../archive/notes/p34b/README.md) |
+| 14 | P6.5 | 跨机 TCP 102/102；断线约 5 s 检测到 | [`docs/archive/notes/p65`](../archive/notes/p65/README.md) |
+| 15 | P7 | 真机画面 36/36；server 内存无界增长收住（主机 825 → 546 MiB） | [`docs/archive/notes/p7`](../archive/notes/p7/README.md) |
+| 16 | P12 | 审查后真机复测：Espryt SSIM 1.0；Magma 1.0 / 0.999999511；P12 定向 CTest 46/46；纹理上传回包等待 1→0（主机机制门，真机墙钟待测）；**P12 已收官（09-29）**：跨机 TCP 门 (b) 通过（rd12 ssim 0.999883、稳态 17–22 fps）；FCL 门 (a) 通过（Minecraft 上屏到 render server 窗口，杀 server 后 33–54 ms 闩住 device-lost） | [`docs/archive/notes/p12`](../archive/notes/p12/README.md) |
+| 17 | 五臂传输测量（2026-09-28，非阶段） | inproc/shm 重负载比 monolith 快 ~1/3；tcp localhost 瓶颈是 credit=1 + 唤醒税（SPIN_US=2000 → 2.9×）；跨主机 hang 实为主机 xray TUN 代理造成；直连 Wi-Fi 稳态 rd12 17–22 fps、openra 105–133 fps | [`docs/archive/notes/perf-five-arm-20260928`](../archive/notes/perf-five-arm-20260928/README.md) |
+| 18 | P11 | 同机零拷贝（T0）MC 26.3 峰值内存 Espryt −41–42%、Magma −18–26%，ssim / 帧时 / CPU 不变；外部 client 走共享内存 rd12 Espryt 约 119 fps（TCP 40–53）；split T2 相对单进程采纳 p99 Espryt +37–42%、Magma 约 2.5×。未量：M2 后 split server 上纹理无 GPU 写时 Espryt 自己按存储阈值取舍精确写入框，非 ring 路径可能多发几个小框 | [`docs/archive/notes/p11`](../archive/notes/p11/README.md) |
+| 19 | P8 | 真实内容只 Magma wire indirect 命中（MC 26.3 × Magma inproc 1,300 万 draw CPU 展开）→ 原生后 create-indirect 每次整 GPU 等待 321 → 0；红米 create-instancing × Espryt × monolith 0.870 → 0.99998（Adreno 丢排队环形拷贝，dev + feat 两条阶梯）；最大 program archive 355 KB = arena/4 的 4.2 %（不分片）；出口设备矩阵 77 格 / 臂无一变差 | [`docs/archive/notes/p8`](../archive/notes/p8/README.md) |

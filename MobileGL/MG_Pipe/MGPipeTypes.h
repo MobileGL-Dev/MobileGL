@@ -133,7 +133,7 @@ namespace MobileGL::MG_Pipe {
         // buffer. So the answer is the SERVER's table, published as a bit and read through
         // MGL_BACKEND_SLOT_CAP. The first of the "XFB span family" bits SlotCaps.h predicted.
         kCapBackendOwnsXfbCapture = 1ull << 9,
-        // P5e (MG_Remote/CONTRACT-P5E.md §1, §6). THE SERVER APPLIES AN UNBARRIERED RECORD
+        // P5e (docs/archive/contracts/CONTRACT-P5E.md §1, §6). THE SERVER APPLIES AN UNBARRIERED RECORD
         // WITHOUT READING CLIENT MEMORY: every object it needs is resolved from a handle the
         // record or the applier state carries, so the client may publish and move on instead
         // of waiting for appliedSeq at every verb (rule F).
@@ -150,7 +150,7 @@ namespace MobileGL::MG_Pipe {
         // snapshot may only turn it OFF, because a caps re-run must not be able to make a
         // lockstep server run-ahead in the middle of a frame.
         kCapRunAheadApply = 1ull << 10,
-        // P11 B2 (MG_Remote/CONTRACT-P11.md B2). THIS SESSION MAY RUN T0: the client asked for
+        // P11 B2 (docs/archive/contracts/CONTRACT-P11.md B2). THIS SESSION MAY RUN T0: the client asked for
         // it in its Hello (LinkTerms.adoptTier = 0) on a shared-segment plane, the server's
         // allow switch is on, this platform has AHardwareBuffer, and the backend's POST
         // self-test of the sustained-lock pattern passed on its live context. Never set in the
@@ -1022,7 +1022,7 @@ namespace MobileGL::MG_Pipe {
     // 0, or Count for the Uniform class under kCapNeedsHostUboBytes (RESERVED, P8-F: 0 today;
     // a range with nothing to ship carries an empty span, so the two arrays stay aligned).
     // MGPShaderBuffers::Class's three values, and the ONLY spelling of them (P5e,
-    // MG_Remote/CONTRACT-P5E.md §1). The payload's comment has named them since P4a and
+    // docs/archive/contracts/CONTRACT-P5E.md §1). The payload's comment has named them since P4a and
     // nothing numbered them, so the emitter and the applier were one literal each away from
     // disagreeing. Uniform is 0 so a zeroed record describes the uniform binding points, which
     // is the class every workload has.
@@ -1624,7 +1624,7 @@ namespace MobileGL::MG_Pipe {
     };
     MGP_ASSERT_POD(MGPReadbackInfo, 64);
 
-    // P9 (W1, MG_Remote/CONTRACT-P9.md §1): read_pixels_to_buffer / get_texture_image_to_buffer,
+    // P9 (W1, docs/archive/contracts/CONTRACT-P9.md §1): read_pixels_to_buffer / get_texture_image_to_buffer,
     // the two readbacks whose destination is a bound GL_PIXEL_PACK_BUFFER. The destination is
     // the pack buffer's RESOURCE HANDLE (CONTRACT-P5 row 23: "a PBO destination is a resource
     // handle and needs no Seg field"), so nothing comes back and the client does not wait: the
@@ -1796,7 +1796,7 @@ namespace MobileGL::MG_Pipe {
     };
     MGP_ASSERT_POD(MGPFlush, 8);
 
-    // DAMAGE ON THE WIRE (eglSwapBuffersWithDamage, docs/Disaggregated/notes/anland/plan-ahb-dmabuf.md
+    // DAMAGE ON THE WIRE (eglSwapBuffersWithDamage, docs/archive/notes/anland/plan-ahb-dmabuf.md
     // item 5). At most kMGPMaxDamageRects rectangles, each x, y, width, height in GL window
     // coordinates - origin at the bottom-left, as EGL hands them over. A count of 0 means the whole
     // surface, which is also what every record from a client that sends no damage says.
@@ -1819,7 +1819,7 @@ namespace MobileGL::MG_Pipe {
     MGP_ASSERT_POD(MGPSwapInterval, 8);
 
     // ---------------------------------------------------------------------------------
-    // P5b: the five appended rows (MG_Remote/CONTRACT-P5B.md). APPENDED, never inserted:
+    // P5b: the five appended rows (docs/archive/contracts/CONTRACT-P5B.md). APPENDED, never inserted:
     // the wire opcode is a call's position in PipeCalls.def, so these sit after
     // FenceWaitServer at opcodes 72..76 and no earlier opcode moved.
     //
@@ -1940,7 +1940,7 @@ namespace MobileGL::MG_Pipe {
     MGP_ASSERT_POD(MGPCopyFromFramebuffer, 48);
 
     // ---------------------------------------------------------------------------------
-    // P5c: the three appended rows (MG_Remote/CONTRACT-P5C.md §5). APPENDED, never inserted:
+    // P5c: the three appended rows (docs/archive/contracts/CONTRACT-P5C.md §5). APPENDED, never inserted:
     // applier_reset is opcode 77, object_death opcode 78, and set_context_values (rv, §5.3)
     // opcode 79 - and no earlier opcode moved.
     //
@@ -1981,7 +1981,7 @@ namespace MobileGL::MG_Pipe {
     };
     MGP_ASSERT_POD(MGPBindContext, 8);
 
-    // shared_image = opcode 85 (docs/Disaggregated/notes/anland/plan-ahb-dmabuf.md). Colour
+    // shared_image = opcode 85 (docs/archive/notes/anland/plan-ahb-dmabuf.md). Colour
     // buffers the SERVER allocates and exports as dma-buf descriptors, so one client's frames
     // reach another client's textures without leaving GPU memory. One row, five operations, all
     // answered through the reply slot with an MGPSharedImageReply:

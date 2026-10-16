@@ -52,7 +52,7 @@
                     "Pixel packing exceeds the destination or its addressable range."));
         }
 
-        // P9 (W1, MG_Remote/CONTRACT-P9.md §1): MAY A READ INTO THIS PACK BUFFER GO WITHOUT A
+        // P9 (W1, docs/archive/contracts/CONTRACT-P9.md §1): MAY A READ INTO THIS PACK BUFFER GO WITHOUT A
         // REPLY? The answer is the buffer's handle when it may - the read then crosses as
         // read_pixels_to_buffer / get_texture_image_to_buffer, lands server-side, and the buffer
         // is marked GPU-written - and the null handle when the reply-slot form has to carry it.

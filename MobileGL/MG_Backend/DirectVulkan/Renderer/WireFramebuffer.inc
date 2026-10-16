@@ -884,7 +884,7 @@
         // (BlitDepthAcrossFormats, shared with the monolith arm) has no flip either. Both
         // decline by name, each under its OWN once-site (review round 2: one site covered both,
         // so after the first X decline a cross-format Y decline logged nothing); §6 in
-        // notes/p7/magma-b2.md carries them. These are declines of a LEGAL blit - GL would
+        // docs/archive/notes/p7/magma-b2.md carries them. These are declines of a LEGAL blit - GL would
         // raise no error here - so the INVALID_OPERATION is rule I (a)'s named refusal, not
         // GL's answer.
         const Bool mirrorX = (spanX < 0) != (dstSpanX < 0);
@@ -1159,7 +1159,7 @@
         // so a shader decline (a stencil aspect without VK_EXT_shader_stencil_export, a format
         // that is not SAMPLED_IMAGE + DEPTH_STENCIL_ATTACHMENT, a failed pipeline create -
         // WireMultisampleResolve.inc) that lands on the render pass is the resolve most likely
-        // to read back as zeroes with no GL error. A recorded debt (notes/p7/g5-msrbo.md §4).
+        // to read back as zeroes with no GL error. A recorded debt (docs/archive/notes/p7/g5-msrbo.md §4).
         if (resolvedByShader) {
             MGLOG_I_ONCE("DirectVulkan::ResolveWireDepthStencil: resolved by the shader pass "
                          "(prefer-shader=%d, render-pass arm available=%d)",

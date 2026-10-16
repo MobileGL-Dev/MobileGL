@@ -30,7 +30,7 @@
 // That is exactly the shape SSIM and every ordinary pixel case go green over.
 //
 // SO THE CLAIM IS ASSERTED ON BOTH CHANNELS AT ONCE, and neither alone is the gate
-// (notes/recovered/wf2/final/part3.md 7.3, "门：新增场景，通过 view 上传、经属主采样（以及反
+// (docs/archive/notes/recovered/wf2/final/part3.md 7.3, "门：新增场景，通过 view 上传、经属主采样（以及反
 // 向），跨 draw 边界各一次"):
 //
 //   PIXELS     an upload through one name must be visible through the other name, in the SAME
@@ -51,7 +51,7 @@
 // MarkStorageDirtyRegion call PipeNoteLevelDirty on ITSELF instead of forwarding to the owner -
 // i.e. build the two-cursor shape the design rejects. Case (a) then goes red on stale OWNER
 // texels AND on a SubDataCount that did not move, which is the pair this file exists to make
-// simultaneous. Recorded in docs/Disaggregated/notes/p34b/espryt-d2.md.
+// simultaneous. Recorded in docs/archive/notes/p34b/espryt-d2.md.
 //
 // VIEWS ARE OPT-IN ON ESPRYT. DirectGLES withholds GL_ARB_texture_view unless
 // MOBILEGL_ESPRYT_ENABLE_TEXTURE_VIEW=1 (ConfigLoader.cpp:213, Config.h:72), so every lane that

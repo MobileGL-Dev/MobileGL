@@ -13,7 +13,7 @@
 // in every lane; the DirectGLES.Split. entries run the same two cases with
 // MOBILEGL_TRANSPORT=inproc, where the same body is the smallest workload that crosses a real
 // ring. Four things about its shape are decisions rather than defaults, and all four come from
-// the measured verb census (~/w7/notes/p5/verb-census.md):
+// the measured verb census (docs/archive/notes/p5/verb-census.md):
 //
 // 1. THE DRAW IS VBO-BACKED AND HAS NO CLIENT-ARRAY INDICES. glDrawArrays against a buffer
 //    bound to GL_ARRAY_BUFFER, never glDrawElements with a client pointer. That keeps

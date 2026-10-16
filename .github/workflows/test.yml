@@ -1821,7 +1821,7 @@ jobs:
           MOBILEGL_IPC_STRICT_ERRORS: "1"
         run: ctest --output-on-failure -L unit --no-tests=error -j "$(nproc)" --output-junit "${RUNNER_TEMP}/unit-strict.xml"
 
-      # ---- P5e (ra), MG_Remote/CONTRACT-P5E.md §7: ONE STEP, TWO ARMS, AND THE TREE PICKS ----
+      # ---- P5e (ra), docs/archive/contracts/CONTRACT-P5E.md §7: ONE STEP, TWO ARMS, AND THE TREE PICKS ----
       #
       # This lane was written as an EXPECTED-RED control: under strict every integration-split
       # entry aborts on its first BARRIER-PULLED read, so the step gated on the run failing and

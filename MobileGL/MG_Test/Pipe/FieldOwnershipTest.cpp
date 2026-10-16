@@ -298,7 +298,7 @@ TEST_F(FieldOwnershipTest, VerbBoundaryOpsCoverEveryVerbShapedCall) {
     EXPECT_EQ(MGPipeVerbForWireOp(MGPWireOp::ResumeStreamOutput), MGPipeVerb::ResumeTransformFeedback);
     EXPECT_EQ(MGPipeVerbForWireOp(MGPWireOp::GenerateMipmap), MGPipeVerb::GenerateMipmap);
     EXPECT_EQ(MGPipeVerbForWireOp(MGPWireOp::GetTextureImage), MGPipeVerb::GetTextureImage);
-    // P5b (MG_Remote/CONTRACT-P5B.md): the renamed boundary the file left to "the phase that
+    // P5b (docs/archive/contracts/CONTRACT-P5B.md): the renamed boundary the file left to "the phase that
     // emits it" - resource_copy_region is glCopyImageSubData only - and the five appended verbs,
     // each stamped as the GLFunctionsTable verb it reproduces. copy_framebuffer_to_texture also
     // carries glCopyTexSubImage2D and stamps CopyTexImage2D for both: one kBlitOrCopy mask.

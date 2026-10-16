@@ -31,7 +31,7 @@
 # are the monolith-arm and the no-pulled-read scenarios, 4 skips are the two PersistentMapArm-
 # and two StrictArming-only cases skipping outside their own lanes, all by design).
 # Entry counts are first-blocker counts: an entry aborts on its FIRST pulled read, so retiring
-# a row advances those entries to their next one. See docs/Disaggregated/notes/p5f/f1-report.md.
+# a row advances those entries to their next one. See docs/archive/notes/p5f/f1-report.md.
 # ---------------------------------------------------------------------------------------------
 #
 # P5f wave 2: the expected set is empty after fc -> fe -> fm integration.

@@ -2994,7 +2994,7 @@ namespace MobileGL::MG_Remote::Client {
 
     Transport::ITransport* ClientSession::Control_Plane() { return m_transport; }
 
-    // ---- P11 B2: T0 (MG_Remote/CONTRACT-P11.md B2) --------------------------------------------
+    // ---- P11 B2: T0 (docs/archive/contracts/CONTRACT-P11.md B2) --------------------------------------------
 
     namespace {
         Uint64 T0Key(MG_Pipe::MGPipeHandle handle) {

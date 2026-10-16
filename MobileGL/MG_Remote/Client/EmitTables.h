@@ -25,7 +25,7 @@
 // log level, MGLOG_F + std::abort.
 //
 // WHICH SLOTS GET A REAL EMITTER IS DECIDED BY THE VERB CENSUS (R-4), not guessed here:
-// ~/w7/notes/p5/verb-census.md. CONTRACT-P5.md §7 carries the resulting THREE-CLASS SPLIT and
+// docs/archive/notes/p5/verb-census.md. CONTRACT-P5.md §7 carries the resulting THREE-CLASS SPLIT and
 // it is not to be re-derived:
 //
 //   A. ANSWERED LOCALLY from the caps mirror, never emitted and never Fatal (R-15) - two

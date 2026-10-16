@@ -616,7 +616,7 @@ namespace MobileGL::MG_ConfigLoader {
         // P11 B2: the server's own T0 allow switch (Config.h).
         ipc.AllowAdoptT0 = QueryEnvUint32("MOBILEGL_IPC_ALLOW_ADOPT_T0", 1, 0, 1);
         ipc.VerbBarrier = QueryEnvUint32("MOBILEGL_IPC_VERB_BARRIER", 1, 0, 1);
-        // P5e (MG_Remote/CONTRACT-P5E.md §1). The wait rule's A/B, parsed here like every
+        // P5e (docs/archive/contracts/CONTRACT-P5E.md §1). The wait rule's A/B, parsed here like every
         // other IPC knob and armed only where the server publishes kCapRunAheadApply.
         ipc.RunAhead = QueryEnvUint32("MOBILEGL_IPC_RUN_AHEAD", 1, 0, 1);
         // ... and forced OFF by the verify harness for BatchWaits' reason, one step further:

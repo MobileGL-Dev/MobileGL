@@ -61,7 +61,7 @@ namespace MobileGL::MG_Pipe {
         SetSamplerViews,          // P4a - wired (backend debounce deletion: P3b/P4b)
         BindSamplerStates,        // P4a - wired (backend debounce deletion: P3b/P4b)
         SetShaderImages,          // P4a - wired (backend debounce deletion: P3b/P4b)
-        // P5e (MG_Remote/CONTRACT-P5E.md §1, ruling 11): THREE SLOTS, ONE PER CLASS, not one
+        // P5e (docs/archive/contracts/CONTRACT-P5E.md §1, ruling 11): THREE SLOTS, ONE PER CLASS, not one
         // for the call. set_shader_buffers is emitted per Class (Uniform / ShaderStorage /
         // AtomicCounter) because the record's own Class field says which binding-point array
         // it describes - so a single slot would make every emission of one class cancel the

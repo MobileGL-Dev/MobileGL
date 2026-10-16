@@ -6,7 +6,7 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// P11 A1 + B2 (MG_Remote/CONTRACT-P11.md §1 and B2): THE PERSISTENT-MAP ADOPTION TIER IS ASKED
+// P11 A1 + B2 (docs/archive/contracts/CONTRACT-P11.md §1 and B2): THE PERSISTENT-MAP ADOPTION TIER IS ASKED
 // AT THE HANDSHAKE, BY THE SIDE THAT KNOWS THE DATA PLANE, BEFORE THE FIRST map_persistent.
 //
 // Tier names follow docs/Disaggregated/design/07: T0 = the client allocates an AHardwareBuffer

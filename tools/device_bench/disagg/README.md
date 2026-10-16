@@ -82,7 +82,7 @@ FCL's Minecraft renders into the Render Server's on-screen window on the same ph
 `fcl_accept.sh <backend> kill` kills the server and checks the client latches DEVICE LOST and FCL
 survives. Needs the FCL fork's version setting "keepRunningInBackground" ON in `config.json`
 (FCL pauses the game the moment its Activity leaves the foreground). The server is started through
-the Render Server screen's documented extras. Results: `docs/Disaggregated/notes/p12/FCL-ACCEPTANCE.md`.
+the Render Server screen's documented extras. Results: `docs/archive/notes/p12/FCL-ACCEPTANCE.md`.
 
 ## crosshost_accept.sh + crosshost_report.py — P12 exit gate (b)
 
@@ -90,7 +90,7 @@ A WSL client replays the openra and rd12 traces against the phone's render serve
 TCP + stream (ssim gate, then `PRESENT_CREDIT` 1/2/3 benchmarks). Adds a temporary /32 route
 around the host's TUN proxy, checks the path with `tcp_path_check.sh`, and removes the route and
 stops the server on exit. `crosshost_report.py` reduces the output to a table. Results and the
-P6.5 link numbers: `docs/Disaggregated/notes/p12/CROSSHOST-ACCEPTANCE.md`.
+P6.5 link numbers: `docs/archive/notes/p12/CROSSHOST-ACCEPTANCE.md`.
 
 ## netbench.sh — Wi-Fi TCP throughput baseline
 
@@ -133,7 +133,7 @@ Reducers, all reading a probe directory:
 - `fcl_stacks.py`: top stacks.
 
 The simpleperf reducers need `SIMPLEPERF_DIR` and a `binary_cache` from `binary_cache_builder.py`.
-Findings: `docs/Disaggregated/notes/perf-p15/PLAN-P15.md` section 2.
+Findings: `docs/archive/notes/perf-p15/PLAN-P15.md` section 2.
 
 ## Clocks, bench sessions and run validity (P15)
 

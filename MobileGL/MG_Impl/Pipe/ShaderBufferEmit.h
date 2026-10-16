@@ -10,7 +10,7 @@
 #include <Includes.h>
 
 // The CLIENT side of set_shader_buffers - the INDEXED BUFFER BINDING POINTS (P5e package sb,
-// MG_Remote/CONTRACT-P5E.md §5.6, rulings 10 and 11). The call has been in the catalogue since
+// docs/archive/contracts/CONTRACT-P5E.md §5.6, rulings 10 and 11). The call has been in the catalogue since
 // P4a with no emitter, no route and no applier; this file is the emitter half.
 //
 // ONE RECORD PER CLASS, THREE CLASSES. MGPShaderBuffers::Class names which binding-point array

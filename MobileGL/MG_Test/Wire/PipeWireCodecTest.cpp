@@ -1163,7 +1163,7 @@ TEST_F(PipeWireCodecTest, UserIndexSpanExactlyAtSegmentEndReachesTheSink) {
 }
 
 // =====================================================================================
-// P5b (MG_Remote/CONTRACT-P5B.md): one round trip per row the four migration packages consume
+// P5b (docs/archive/contracts/CONTRACT-P5B.md): one round trip per row the four migration packages consume
 // =====================================================================================
 //
 // The shape is the one above: encode, pump one record through the ring and the decoder, and
@@ -1373,7 +1373,7 @@ TEST_F(PipeWireCodecTest, BindStreamOutputReachesTheSink) {
 }
 
 // =====================================================================================
-// P5c ct (MG_Remote/CONTRACT-P5C.md §5): the two control records round-trip
+// P5c ct (docs/archive/contracts/CONTRACT-P5C.md §5): the two control records round-trip
 // =====================================================================================
 //
 // Same shape as the P5b rows above: encode, pump, and assert the record reached the RIGHT
@@ -1440,7 +1440,7 @@ TEST_F(PipeWireCodecTest, ObjectDeathReachesTheSinkWithItsHandleAndKind) {
 }
 
 // =====================================================================================
-// P5c rv (MG_Remote/CONTRACT-P5C.md §5.3): the residual-value record round-trips
+// P5c rv (docs/archive/contracts/CONTRACT-P5C.md §5.3): the residual-value record round-trips
 // =====================================================================================
 //
 // Not a sink row: the decoder's arm runs the REAL applier (MGPipeApplySetContextValues), so
@@ -1486,7 +1486,7 @@ TEST_F(PipeWireCodecTest, SetContextValuesRoundTripsIntoPipeInputs) {
 }
 
 // =====================================================================================
-// P5b t2 (MG_Remote/CONTRACT-P5B.md §2 t2). c0b's cases above round-trip each row once; these
+// P5b t2 (docs/archive/contracts/CONTRACT-P5B.md §2 t2). c0b's cases above round-trip each row once; these
 // pin the fields t2's EMITTERS actually fill and the one ordering property the span family has.
 // =====================================================================================
 
@@ -3343,9 +3343,8 @@ TEST(FenceWireRoundTrip, MissingConsumerDeclinesWithoutInventingASignaledAnswer)
     EXPECT_TRUE(wire.Answers().All[0].Bytes.empty());
 }
 
-
 // =====================================================================================
-// P5c ct (MG_Remote/CONTRACT-P5C.md §5): the two control records, through the REAL sink
+// P5c ct (docs/archive/contracts/CONTRACT-P5C.md §5): the two control records, through the REAL sink
 // =====================================================================================
 //
 // The codec cases above pin the bytes and the dispatch with a recording sink; these pin what

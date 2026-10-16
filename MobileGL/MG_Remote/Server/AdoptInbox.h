@@ -6,7 +6,7 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// P11 B2 (MG_Remote/CONTRACT-P11.md B2): the server's end of T0's descriptor channel.
+// P11 B2 (docs/archive/contracts/CONTRACT-P11.md B2): the server's end of T0's descriptor channel.
 //
 // WHO READS THE FD, AND WHY IT CANNOT DEADLOCK THE APPLY THREAD. The APPLY THREAD reads it,
 // inline, when it decodes the map_persistent record whose seq the Offer names - nothing else reads
