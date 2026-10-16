@@ -1,6 +1,6 @@
 # 设计与架构（索引）
 
-> 这一页只有设计要点和章节去向；每一部分的完整设计在 [`design/`](design/)。章节编号 §1–§17、附 A / B 沿用至今，代码注释里写的 `ARCHITECTURE.md §N` 按下表找到对应文件。wire 契约原文在 `MobileGL/MG_Remote/CONTRACT-*.md`，与设计文字冲突时以更新的契约为准。
+> 这一页只有设计要点和章节去向；每一部分的完整设计在 [`design/`](design/)。章节编号 §1–§17、附 A / B 沿用至今，代码注释里写的 `ARCHITECTURE.md §N` 按下表找到对应文件。各阶段的 wire 契约原文已冻结在 `docs/archive/contracts/CONTRACT-*.md`，与设计文字冲突时以更新的契约为准。
 
 ## 一句话
 
@@ -32,5 +32,5 @@
 | 12–13 | persistent map 与大缓冲采纳；回读、往返清单、五部分验证门 | [`design/07-memory-readback-verification.md`](design/07-memory-readback-verification.md) |
 | 14–15 | 帧节奏与线程；进程、握手、EGL、Android（含上屏 server）、崩溃处理 | [`design/08-runtime-and-platform.md`](design/08-runtime-and-platform.md) |
 | 16、附 A、附 B | 源码目录与构建选项；全部开关；边界计数器 | [`design/09-build-switches-counters.md`](design/09-build-switches-counters.md) |
-| 17 | 各阶段落地时的形状与仍生效的规则（链到 `notes/`） | [`design/10-phase-shapes.md`](design/10-phase-shapes.md) |
+| 17 | 各阶段落地时的形状与仍生效的规则（链到 `docs/archive/notes/`） | [`design/10-phase-shapes.md`](design/10-phase-shapes.md) |
 | — | 状态归属：多 session / 多 context / share group（anland 统一 server 前置） | [`design/11-state-ownership.md`](design/11-state-ownership.md) |

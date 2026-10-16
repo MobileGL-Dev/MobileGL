@@ -1,6 +1,6 @@
 # 路线图（索引）
 
-> **2026-10-07**：P0 到 P7、P12、P9、P10、P11、P8、**P13** 已完成——拆分路线与单进程路线都走完。P13（退役 pull 路径）：单进程也只走记录臂，pull / push 两套构建、`MOBILEGL_PIPE_PUSH` 与 `MOBILEGL_PIPE_LEGACY_MEMOS` 编译期开关、残余值块和后端的前端对象臂全部删除；库拆成按 link ratchet 分区的七个模块，split 构建里 server 一半单独真链接；G1 退役，由零 `MG_Remote` 符号、skip 普查与 recorder 金标接班；性能工作排在其后，基线是 `dev` 构建。下一项是 **P14**（状态归属）。每个阶段的计划、验收结果、实测与报告在 `notes/<阶段>/`（点阶段名进入）。
+> **2026-10-07**：P0 到 P7、P12、P9、P10、P11、P8、**P13** 已完成——拆分路线与单进程路线都走完。P13（退役 pull 路径）：单进程也只走记录臂，pull / push 两套构建、`MOBILEGL_PIPE_PUSH` 与 `MOBILEGL_PIPE_LEGACY_MEMOS` 编译期开关、残余值块和后端的前端对象臂全部删除；库拆成按 link ratchet 分区的七个模块，split 构建里 server 一半单独真链接；G1 退役，由零 `MG_Remote` 符号、skip 普查与 recorder 金标接班；性能工作排在其后，基线是 `dev` 构建。下一项是 **P14**（状态归属）。每个阶段的计划、验收结果、实测与报告在 `docs/archive/notes/<阶段>/`（点阶段名进入）。
 
 ## 目标
 

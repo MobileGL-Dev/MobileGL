@@ -21,10 +21,10 @@
 |---|---|
 | 现在做到哪、下一步 | [`CURRENT_STAGE_PROGRESS.md`](CURRENT_STAGE_PROGRESS.md) |
 | 设计要点与各部分设计 | [`ARCHITECTURE.md`](ARCHITECTURE.md) → [`design/`](design/) |
-| 分几个阶段、每个阶段做了什么 | [`ROADMAP.md`](ROADMAP.md) → [`notes/<阶段>/`](../archive/notes/README.md) |
+| 分几个阶段、每个阶段做了什么 | [`ROADMAP.md`](ROADMAP.md) → [`docs/archive/notes/<阶段>/`](../archive/notes/README.md) |
 | 性能与验证的关键数字 | [`MEASUREMENTS.md`](MEASUREMENTS.md) |
 | 怎么构建、运行、测试 | [`guide/build-and-run.md`](guide/build-and-run.md) |
 | 代码在哪 / 术语 / 工程纪律 | [`guide/code-map.md`](guide/code-map.md)、[`guide/glossary.md`](guide/glossary.md)、[`guide/discipline.md`](guide/discipline.md) |
-| 各阶段的原始计划、裁定、报告、证据 | [`notes/`](../archive/notes/README.md) |
+| 各阶段的原始计划、裁定、报告、证据（已冻结） | [`docs/archive/notes/`](../archive/notes/README.md) |
 
-整理记录：2026-09-24 两次整理——顶层只留索引，设计正文拆到 `design/`，上手与参考放 `guide/`，阶段细节放 `notes/<阶段>/`；整理前的版本见提交 `1fb18d9`。更早的设计竞赛与评审稿在 git 历史（`8b31de2f`、`1794ac94`、`8349babe`、`87ee17c6`）。
+整理记录：2026-09-24 两次整理——顶层只留索引，设计正文拆到 `design/`，上手与参考放 `guide/`，阶段细节放 `notes/<阶段>/`（2026-10 起冻结在 `docs/archive/notes/`）；整理前的版本见提交 `1fb18d9`。更早的设计竞赛与评审稿在 git 历史（`8b31de2f`、`1794ac94`、`8349babe`、`87ee17c6`）。

@@ -1,6 +1,6 @@
 # 实测（索引）
 
-> 这一页只有结论和去向；完整的表、命令、协议与读法在各阶段 `notes/<阶段>/README.md` 的"实测"节。代码和旧笔记里的 `MEASUREMENTS.md §N` 按下表"§"列找到对应阶段（小节编号在那里原样保留）。
+> 这一页只有结论和去向；完整的表、命令、协议与读法在各阶段 `docs/archive/notes/<阶段>/README.md` 的"实测"节。代码和旧笔记里的 `MEASUREMENTS.md §N` 按下表"§"列找到对应阶段（小节编号在那里原样保留）。
 
 **口径**：性能只记录、不设门；看**逐线程 CPU 时间**，不看整机帧率。性能对比只用一台手机（Redmi `2f7cbe2e`，Adreno 830），定频、同热窗口、两臂交替跑（[`guide/pin-verification-2026-09-07.md`](guide/pin-verification-2026-09-07.md)）。
 
