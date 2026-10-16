@@ -45,3 +45,21 @@ target_link_libraries(
 
 gtest_discover_tests(TextureViewTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
 
+add_executable(
+        TextureByNameTest
+        TextureByNameTest.cpp
+)
+
+target_include_directories(TextureByNameTest PRIVATE
+        ${MGL_ROOT}/include
+        ${MGL_ROOT}/MobileGL
+)
+
+target_link_libraries(
+        TextureByNameTest PRIVATE
+        MobileGLTestMain
+        ${LINK_LIBRARIES}
+)
+
+gtest_discover_tests(TextureByNameTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
+

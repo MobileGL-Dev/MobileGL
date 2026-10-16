@@ -181,23 +181,11 @@ namespace {
         GLuint BoundTexture = 0;
     } g_copyTexSubImage2DCall;
 
-    void RecordCopyTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint x, GLint y,
-                                 GLsizei width, GLsizei height) {
-        g_copyTexSubImage2DCall = {
-            true,
-            target,
-            level,
-            xoffset,
-            yoffset,
-            x,
-            y,
-            width,
-            height,
-            MG_State::pGLContext->GetTextureUnitObject(MG_State::pGLContext->GetActiveTextureUnit())
-                .GetBindingSlot(TextureTarget::Texture2D)
-                .GetBoundObject()
-                ->GetExternalIndex(),
-        };
+    void RecordCopyTextureSubImage2D(const SharedPtr<MG_State::GLState::ITextureObject>& texture, GLenum target,
+                                     GLint level, GLint xoffset, GLint yoffset, GLint x, GLint y, GLsizei width,
+                                     GLsizei height) {
+        g_copyTexSubImage2DCall = {true, target, level, xoffset, yoffset,
+                                   x,    y,      width, height,  texture->GetExternalIndex()};
     }
 } // namespace
 
@@ -285,7 +273,7 @@ TEST_F(TextureTest, ClearTexSubImageClearsOnlyRequestedRectangle) {
 
 TEST_F(TextureTest, CopyTextureSubImage2DUsesNamedObjectAndRestoresBinding) {
     const ScopedTextureBackendFunctionsOverride backendGuard;
-    MG_Backend::gBackendFunctionsTable.GL.CopyTexSubImage2D = RecordCopyTexSubImage2D;
+    MG_Backend::gBackendFunctionsTable.GL.CopyTextureSubImage2D = RecordCopyTextureSubImage2D;
     g_copyTexSubImage2DCall = {};
 
     GLuint namedTexture = 0;
@@ -319,6 +307,7 @@ TEST_F(TextureTest, CopyTextureSubImage2DUsesNamedObjectAndRestoresBinding) {
     EXPECT_EQ(g_copyTexSubImage2DCall.Y, 6);
     EXPECT_EQ(g_copyTexSubImage2DCall.Width, 7);
     EXPECT_EQ(g_copyTexSubImage2DCall.Height, 8);
+    // The backend is handed the named texture itself; nothing was bound to reach it.
     EXPECT_EQ(g_copyTexSubImage2DCall.BoundTexture, namedTexture);
     EXPECT_EQ(MG_State::pGLContext->GetTextureUnitObject(0).GetBindingSlot(TextureTarget::Texture2D).GetBoundObject(),
               boundBefore);
@@ -327,7 +316,7 @@ TEST_F(TextureTest, CopyTextureSubImage2DUsesNamedObjectAndRestoresBinding) {
 
 TEST_F(TextureTest, CopyTextureSubImage2DRejectsCubeMapTargets) {
     const ScopedTextureBackendFunctionsOverride backendGuard;
-    MG_Backend::gBackendFunctionsTable.GL.CopyTexSubImage2D = RecordCopyTexSubImage2D;
+    MG_Backend::gBackendFunctionsTable.GL.CopyTextureSubImage2D = RecordCopyTextureSubImage2D;
     g_copyTexSubImage2DCall = {};
 
     GLuint cubeTexture = 0;
@@ -1125,8 +1114,7 @@ TEST_F(TextureTest, EverySamplerScalarPnameConvertsToTheQueriedType) {
 }
 
 // glTextureParameter* has no target token, so GL 4.6 core 8.10 applies the ten-target list to the
-// texture's EFFECTIVE target. The four vector DSA forms reached that gate for free by re-entering
-// through the bound-target path; the two scalar forms called the per-object setter directly and
+// texture's EFFECTIVE target, and a texture outside it is INVALID_OPERATION. The scalar forms once
 // reached no gate at all, so one DSA family disagreed with itself about the same texture.
 TEST_F(TextureTest, ScalarDsaTextureParameterAppliesTheSameTargetRuleAsItsVectorTwins) {
     GLuint bufferTexture = 0;
@@ -1134,16 +1122,13 @@ TEST_F(TextureTest, ScalarDsaTextureParameterAppliesTheSameTargetRuleAsItsVector
     ASSERT_NE(bufferTexture, 0u);
     ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
 
-    // The vector form has rejected this since the target gate landed...
     const GLint baseLevel = 1;
     MG_Impl::GLImpl::TextureParameteriv(bufferTexture, GL_TEXTURE_BASE_LEVEL, &baseLevel);
-    ExpectSingleGlError(GL_INVALID_ENUM);
-
-    // ...and the scalar forms must agree rather than silently applying the parameter.
+    ExpectSingleGlError(GL_INVALID_OPERATION);
     MG_Impl::GLImpl::TextureParameteri(bufferTexture, GL_TEXTURE_BASE_LEVEL, 1);
-    ExpectSingleGlError(GL_INVALID_ENUM);
+    ExpectSingleGlError(GL_INVALID_OPERATION);
     MG_Impl::GLImpl::TextureParameterf(bufferTexture, GL_TEXTURE_MIN_LOD, 1.0f);
-    ExpectSingleGlError(GL_INVALID_ENUM);
+    ExpectSingleGlError(GL_INVALID_OPERATION);
 
     // A texture whose target IS legal still goes through, so the gate is about the target and not
     // about the by-name spelling.
@@ -4875,19 +4860,10 @@ TEST_F(TextureTest, BindSamplerRejectsUnitsBeyondMaxCombinedTextureImageUnits) {
     DrainPendingGlErrors();
 }
 
-// The DSA by-name entry points are emulated by temporarily binding the named texture onto the
-// active unit's slot for its target, running the classic bound-texture code, then putting the
-// previous binding back. For as long as the emulated call runs, that swap is a REAL change to
-// which texture is bound at that unit, so both transitions have to move the texture bind
-// generation.
-//
-// They used to move nothing. Backends memoise per-unit work keyed on the bind generation and
-// BORROW the binding slot (they hold a pointer to the slot's shared_ptr, not a copy), so a memo
-// built while texture A sat in the slot stayed "valid" while B was temporarily in it - and the
-// backend then drove A's backend twin from B's frontend state, re-specifying A's backend storage
-// with B's shape. Any content A only ever had on the GPU was gone. That is what blanked
-// Minecraft's lightmap when Iris uploaded to a BSL shadow map: the text shader multiplies by the
-// lightmap, so `if (color.a < 0.1) discard` then threw away every glyph in the process.
+// The by-name entry points edit the named texture directly. They used to be emulated by binding it
+// onto the active unit and running the bound-texture code, and a swap the bind generation did not
+// see let a backend memo drive one texture's twin from another's state - which blanked Minecraft's
+// lightmap under Iris. Neither the binding nor the bind generation may move now.
 TEST_F(TextureTest, NamedTextureCallKeepsUnitBindingAccountingCoherent) {
     GLuint names[2] = {};
     MG_Impl::GLImpl::GenTextures(2, names);
@@ -4905,19 +4881,13 @@ TEST_F(TextureTest, NamedTextureCallKeepsUnitBindingAccountingCoherent) {
     ASSERT_NE(boundObject, nullptr);
     ASSERT_EQ(boundObject->GetExternalIndex(), boundName);
 
-    // TextureParameteriv is one of the by-name calls that is emulated by binding: it reaches
-    // WithTemporarilyBoundNamedTexture, unlike the scalar TextureParameteri, which edits the
-    // object directly and never touches a unit.
     const Uint64 base = MG_State::pGLContext->GetTextureBindGeneration();
     const GLint maxLevel = 0;
     MG_Impl::GLImpl::TextureParameteriv(namedName, GL_TEXTURE_MAX_LEVEL, &maxLevel);
     EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
 
-    // The emulation put `namedName` on the unit and took it off again. A generation-keyed memo
-    // must be able to see that the slot it borrows was not stable across the call.
-    EXPECT_GT(MG_State::pGLContext->GetTextureBindGeneration(), base)
-        << "a by-name texture call swapped a live unit binding without moving the bind generation";
-    // ...and the application-visible binding is exactly what it was before the call.
+    EXPECT_EQ(MG_State::pGLContext->GetTextureBindGeneration(), base)
+        << "a by-name texture call moved the bind generation";
     EXPECT_EQ(slot.GetBoundObject(), boundObject);
 
     MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, 0);
@@ -6839,6 +6809,8 @@ namespace {
     struct ScopedNoOpGenerateMipmap {
         ScopedNoOpGenerateMipmap() : m_snapshot(MobileGL::MG_Backend::gBackendFunctionsTable) {
             MobileGL::MG_Backend::gBackendFunctionsTable.GL.GenerateMipmap = [](GLenum) {};
+            MobileGL::MG_Backend::gBackendFunctionsTable.GL.GenerateTextureMipmap =
+                [](const SharedPtr<MG_State::GLState::ITextureObject>&, GLenum) {};
         }
         ~ScopedNoOpGenerateMipmap() { MobileGL::MG_Backend::gBackendFunctionsTable = m_snapshot; }
         ScopedNoOpGenerateMipmap(const ScopedNoOpGenerateMipmap&) = delete;

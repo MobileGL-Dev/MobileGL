@@ -632,9 +632,8 @@ namespace MobileGL::MG_Remote::Client {
                 snapshot->apiVersion() == nullptr ? String{} : String{snapshot->apiVersion()->c_str()};
 
             // THE SERVER'S BACKEND TYPE, NEVER A NEW "Remote" ENUMERATOR and never guessed from
-            // the renderer string: GL_Framebuffer.cpp:47, GL_Texture.cpp:6536 and
-            // CompileEnv.cpp:122 SWITCH on it, and a value they do not know takes a wrong arm
-            // rather than failing.
+            // the renderer string: ActiveBackendRejectsDistinctDepthStencil and CaptureCompileEnv
+            // switch on it, and a value they do not know takes a wrong arm rather than failing.
             const Uint32 rawBackend = snapshot->backendType();
             if (rawBackend >= static_cast<Uint32>(BackendType::BackendTypeCount)) {
                 MGLOG_E("MG_Remote client: CapsSnapshot names backend type %u, which this build "

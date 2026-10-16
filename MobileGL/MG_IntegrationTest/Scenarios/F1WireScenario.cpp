@@ -468,6 +468,64 @@ void main() { color = vec4(value, 0.25, 0.75, 1.0); }
         for (int i = 0; i < 4; ++i)
             EXPECT_NEAR(pixel[i], expected[i], 1) << "F1.GenerateMipmap.pixels";
     }
+    // The by-name copy and mipmap verbs name their texture in the record. Another texture stays
+    // bound on the unit throughout: it is neither written nor unbound, and the named one is.
+    TEST_F(F1WireScenario, CopyTextureSubImage2DPixels) {
+        if (!Ready()) return;
+        Attach(GL_RGBA8);
+        glClearColor(0.25f, 0.5f, 0.75f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+        GLuint textures[2] = {}; // destination, decoy
+        glCreateTextures(GL_TEXTURE_2D, 2, textures);
+        const std::array<GLubyte, 4 * 4 * 4> zeros{};
+        for (GLuint name : textures) {
+            glTextureStorage2D(name, 1, GL_RGBA8, 4, 4);
+            glTextureSubImage2D(name, 0, 0, 0, 4, 4, GL_RGBA, GL_UNSIGNED_BYTE, zeros.data());
+        }
+        glBindTexture(GL_TEXTURE_2D, textures[1]);
+        const auto before = PeekSplitRuntime().emitSeq;
+        glCopyTextureSubImage2D(textures[0], 0, 1, 1, 2, 3, 2, 2);
+        ASSERT_GT(PeekSplitRuntime().emitSeq, before) << "F1.CopyTextureSubImage2D.wire";
+        GLint bound = 0;
+        glGetIntegerv(GL_TEXTURE_BINDING_2D, &bound);
+        EXPECT_EQ(GLuint(bound), textures[1]) << "F1.CopyTextureSubImage2D.binding";
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, textures[0], 0);
+        const auto copied = ReadOnePixel(1, 1);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, textures[1], 0);
+        const auto decoy = ReadOnePixel(1, 1);
+        ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << "F1.CopyTextureSubImage2D.error";
+        const int expected[4] = {64, 128, 191, 255};
+        for (int i = 0; i < 4; ++i) {
+            EXPECT_NEAR(copied[i], expected[i], 1) << "F1.CopyTextureSubImage2D.pixels";
+            EXPECT_EQ(decoy[i], 0) << "F1.CopyTextureSubImage2D.decoy";
+        }
+        glDeleteTextures(2, textures);
+    }
+
+    TEST_F(F1WireScenario, GenerateTextureMipmapPixels) {
+        if (!Ready()) return;
+        Attach(GL_RGBA8, GL_COLOR_ATTACHMENT0, 4);
+        glClearColor(0.25f, 0.5f, 0.75f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+        GLuint decoy = 0;
+        glGenTextures(1, &decoy);
+        glBindTexture(GL_TEXTURE_2D, decoy);
+        glTexStorage2D(GL_TEXTURE_2D, 4, GL_RGBA8, 8, 8);
+        const auto before = PeekSplitRuntime().emitSeq;
+        glGenerateTextureMipmap(texture);
+        ASSERT_GT(PeekSplitRuntime().emitSeq, before) << "F1.GenerateTextureMipmap.wire";
+        GLint bound = 0;
+        glGetIntegerv(GL_TEXTURE_BINDING_2D, &bound);
+        EXPECT_EQ(GLuint(bound), decoy) << "F1.GenerateTextureMipmap.binding";
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 2);
+        const auto pixel = ReadOnePixel(1, 1);
+        ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << "F1.GenerateTextureMipmap.error";
+        const int expected[4] = {64, 128, 191, 255};
+        for (int i = 0; i < 4; ++i)
+            EXPECT_NEAR(pixel[i], expected[i], 1) << "F1.GenerateTextureMipmap.pixels";
+        glDeleteTextures(1, &decoy);
+    }
+
     TEST_F(F1WireScenario, GenerateMipmapPackedFloatPixels) {
         if (!Ready()) return;
         // Only level zero exists initially. Generating the special-format chain must use the

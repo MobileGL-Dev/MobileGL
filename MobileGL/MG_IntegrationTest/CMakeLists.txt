@@ -2438,7 +2438,7 @@ endif()
 # f1: split-only source keeps the monolith registry unchanged.
 if (MOBILEGL_BUILD_DISAGGREGATED)
     target_sources(MobileGLIntegrationTest PRIVATE Scenarios/F1WireScenario.cpp)
-    foreach(f1Slot ClearBufferfi ClearBufferfv ClearBufferiv ClearBufferuiv ClearNamedFramebufferfi ClearNamedFramebufferfv ClearNamedFramebufferiv ClearNamedFramebufferuiv CopyTexImage2D CopyTexSubImage2D GenerateMipmap GenerateMipmapPackedFloat GenerateMipmapDepth)
+    foreach(f1Slot ClearBufferfi ClearBufferfv ClearBufferiv ClearBufferuiv ClearNamedFramebufferfi ClearNamedFramebufferfv ClearNamedFramebufferiv ClearNamedFramebufferuiv CopyTexImage2D CopyTexSubImage2D CopyTextureSubImage2D GenerateMipmap GenerateTextureMipmap GenerateMipmapPackedFloat GenerateMipmapDepth)
         mgl_itest_register_split_arms("F1WireScenario.${f1Slot}Pixels" "F1.")
     endforeach()
     # THE TWO PACK-STATE CASES OF F1, which are not ${slot}Pixels-shaped (P3b/P4b espryt D1
@@ -2467,7 +2467,7 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         mgl_itest_magma_arm_shape(${mglItestArm})
         mgl_itest_join_environment(mglItestMagmaWireEnvironment
             ${MGL_ITEST_MAGMA_WIRE_FLAVOUR_ENV} ${mglItestArmTransportEnv})
-        foreach(fmSlot ComputeImageStoreThroughViewPreservesOtherRootLayer EnabledVertexBufferDrawKeepsNamedP7Fatal SrgbDrawTracksFramebufferConversion Texture1DFramebufferClearPixels VertexIdSamplerAndScalarUniformPixels ComputeImageStoreFramebufferPixels PartialTextureUploadPreservesGpuClearPixels TextureViewClearTargetsItsRootMipAndLayer ClearBufferfiPixels ClearBufferfvPixels ClearBufferivPixels ClearBufferuivPixels ClearNamedFramebufferfiPixels ClearNamedFramebufferfvPixels ClearNamedFramebufferivPixels ClearNamedFramebufferuivPixels CopyTexImage2DPixels CopyTexSubImage2DPixels GenerateMipmapPixels GenerateMipmapPackedFloatPixels GenerateMipmapDepthPixels)
+        foreach(fmSlot ComputeImageStoreThroughViewPreservesOtherRootLayer EnabledVertexBufferDrawKeepsNamedP7Fatal SrgbDrawTracksFramebufferConversion Texture1DFramebufferClearPixels VertexIdSamplerAndScalarUniformPixels ComputeImageStoreFramebufferPixels PartialTextureUploadPreservesGpuClearPixels TextureViewClearTargetsItsRootMipAndLayer ClearBufferfiPixels ClearBufferfvPixels ClearBufferivPixels ClearBufferuivPixels ClearNamedFramebufferfiPixels ClearNamedFramebufferfvPixels ClearNamedFramebufferivPixels ClearNamedFramebufferuivPixels CopyTexImage2DPixels CopyTexSubImage2DPixels CopyTextureSubImage2DPixels GenerateMipmapPixels GenerateTextureMipmapPixels GenerateMipmapPackedFloatPixels GenerateMipmapDepthPixels)
             mgl_itest_lane("DirectVulkan.${mglItestArm}.Fm." "F1WireScenario.${fmSlot}"
                 LABELS "${mglItestMagmaLabels}" PROPERTIES ${mglItestArmProperties} ENV "${mglItestMagmaWireEnvironment}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p5f-fm${mglItestArmLogTag}-${fmSlot}.log")
         endforeach()

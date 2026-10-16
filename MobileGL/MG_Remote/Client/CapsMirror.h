@@ -43,8 +43,8 @@ namespace MobileGL::MG_Remote::Client {
         const MG_Backend::FormatCapabilityCache& Formats() const;
         const String& ApiVersion() const;
         // The SERVER's backend type, never a new "Remote" enumerator: frontend branches
-        // switch on this (GL_Framebuffer.cpp:47, GL_Texture.cpp:6536, CompileEnv.cpp:122) and
-        // a value they do not know silently takes the wrong arm.
+        // switch on this (ActiveBackendRejectsDistinctDepthStencil, CaptureCompileEnv) and a
+        // value they do not know silently takes the wrong arm.
         BackendType Backend() const;
 
         Uint64 CallMask() const;
