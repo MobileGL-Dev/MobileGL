@@ -1,8 +1,14 @@
 {
   "abort_sites": 70,
   "abort_sites_by_file": {
-    "MobileGL/MG_Backend/DirectGLES/DirectGLES.cpp": 10,
-    "MobileGL/MG_Backend/DirectGLES/Managers.cpp": 10,
+    "MobileGL/MG_Backend/DirectGLES/DirectGLESBind.cpp": 3,
+    "MobileGL/MG_Backend/DirectGLES/DirectGLESCopy.cpp": 3,
+    "MobileGL/MG_Backend/DirectGLES/DirectGLESDraw.cpp": 1,
+    "MobileGL/MG_Backend/DirectGLES/DirectGLESState.cpp": 2,
+    "MobileGL/MG_Backend/DirectGLES/DirectGLESTextures.cpp": 1,
+    "MobileGL/MG_Backend/DirectGLES/Managers.cpp": 2,
+    "MobileGL/MG_Backend/DirectGLES/ManagersBuffers.cpp": 1,
+    "MobileGL/MG_Backend/DirectGLES/ManagersTextures.cpp": 7,
     "MobileGL/MG_Backend/DirectGLES/MultiDraw.cpp": 2,
     "MobileGL/MG_Backend/DirectGLES/Utils.cpp": 1,
     "MobileGL/MG_Backend/DirectVulkan/DirectVulkan.cpp": 1,
