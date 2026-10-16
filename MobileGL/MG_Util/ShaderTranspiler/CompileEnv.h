@@ -9,7 +9,7 @@
 #pragma once
 #include <Includes.h>
 #include <Config.h>
-#include <MG_Backend/BackendObject.h>
+#include <BackendCaps.h>
 
 namespace MobileGL::MG_Util::ShaderTranspiler {
     // GL_MAX_COMPUTE_WORK_GROUP_COUNT / _SIZE core minimums (GL 4.6 core table 23.45), in ONE

@@ -64,7 +64,7 @@
 #include "source/opt/ir_context.h"
 
 #include "ShaderSourceProcessor.h"
-#include <MG_Backend/BackendObjects.h>
+#include <MG_Backend/BackendObject.h>
 #include <MG_Util/Async/ShaderCompilePool.h>
 #include <MG_Util/Converters/GLToStr/GLEnumConverter.h>
 #include <MG_Util/Converters/GLToGlslang/ProgramEnumConverter.h>

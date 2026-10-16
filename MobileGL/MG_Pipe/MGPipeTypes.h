@@ -17,10 +17,9 @@
 // MGHostSpan, the one shape that changes with the transport, rides only in a variable tail.
 // Sizes are asserted because the generated wire records (generated/PipeWire.inc) are memcpy'd,
 // so a field changing width is a protocol break no other test would see.
-// BackendObject.h supplies DynamicBackendParameters (embedded in MGPCaps), BackendType and,
-// through TextureEnum.h, the texture enums; that reach into MG_Backend is why the include-purity
-// gate (scripts/check_include_closure.py) checks MGPipeValueTypes.h rather than this header.
-#include <MG_Backend/BackendObject.h>
+// BackendCaps.h supplies DynamicBackendParameters (embedded in MGPCaps), BackendType and,
+// through TextureEnum.h, the texture enums.
+#include <BackendCaps.h>
 #include "MGPipeValueTypes.h"
 
 namespace MobileGL::MG_Pipe {

@@ -7,7 +7,7 @@
 // End of Source File Header
 
 #include "CompileEnv.h"
-#include <MG_Backend/BackendObjects.h>
+#include <MG_Backend/BackendObject.h>
 #include <MG_State/GLState/Core.h>
 
 namespace MobileGL::MG_Util::ShaderTranspiler {

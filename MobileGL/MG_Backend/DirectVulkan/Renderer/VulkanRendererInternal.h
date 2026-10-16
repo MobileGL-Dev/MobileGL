@@ -43,6 +43,7 @@
 #include "MG_Util/SelfTest/PrimitivesGeneratedNoXfbProbe.h"
 #include "MG_Util/Texture/PixelStoreProcessor.h"
 #include <Config.h>
+#include <MG_Backend/BackendObject.h>
 // P7 wave 0: the seam WireFramebuffer.cpp's MagmaWireFatal and WireDraw.cpp's
 // WireBufferLegacyFatal die through. Declared by MG_Pipe on purpose - see PipeSessionFail.h.
 #include <MG_Pipe/PipeSessionFail.h>

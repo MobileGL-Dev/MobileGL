@@ -24,7 +24,9 @@
 using namespace MobileGL;
 
 namespace {
+#if MOBILEGL_BUILD_DISAGGREGATED
     using namespace MobileGL::MG_Backend::DirectVulkan;
+#endif
     using MG_Pipe::MGPipeHandle;
 
     // Historical test name retained. Each backend's readiness is now a real gate:

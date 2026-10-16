@@ -226,12 +226,13 @@ def parse_calls():
 MEMCMP_FALLBACK_TYPES = set()
 
 # Where the structs named in PipeFields.def are declared: the payload header, the value
-# header, the host-span header and - for DynamicBackendParameters, the caps block - the
-# backend object header.
+# header, the host-span header, the backend capability header (DynamicBackendParameters, the
+# caps block) and the backend object header.
 FIELD_LIST_STRUCT_HEADERS = [
     os.path.join(PIPE_DIR, "MGPipeTypes.h"),
     os.path.join(PIPE_DIR, "MGPipeValueTypes.h"),
     os.path.join(PIPE_DIR, "MGPipeHostSpan.h"),
+    os.path.join(REPO_ROOT, "MobileGL", "BackendCaps.h"),
     FUNCTION_TABLE_HEADER,
 ]
 BACKEND_DIR = os.path.join(REPO_ROOT, "MobileGL", "MG_Backend")

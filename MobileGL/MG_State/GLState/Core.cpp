@@ -9,7 +9,7 @@
 #include "Core.h"
 #include "MG_State/GLState/RenderbufferState/RenderbufferObject.h"
 #include "MG_State/EGLState/Core.h"
-#include <MG_Backend/BackendObjects.h>
+#include <MG_Backend/BackendObject.h>
 #include <MG_Util/Async/ShaderCompilePool.h>
 #include <MG_Util/ShaderTranspiler/CompileEnv.h>
 #include <Config.h>

@@ -8,7 +8,7 @@
 
 #pragma once
 #include <Includes.h>
-#include <MG_Backend/BackendObjects.h>
+#include <BackendCaps.h>
 
 namespace MobileGL::MG_Config {
     inline const String ProjectName = "MobileGL";

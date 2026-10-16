@@ -10,7 +10,7 @@
 #include "DriverBugProbes.h"
 
 #include <Includes.h>
-#include <MG_Backend/BackendObject.h>
+#include <BackendCaps.h>
 
 namespace MobileGL::MG_Util::SelfTest {
     // One row of a backend power-on self-test (POST) report.

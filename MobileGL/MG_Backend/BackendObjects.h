@@ -13,9 +13,6 @@
 #include "DirectVulkan/BackendObject_DirectVulkan.h"
 
 namespace MobileGL::MG_Backend {
-    extern UniquePtr<BackendObject>& pActiveBackendObject;
-    extern GlobalBackendFunctionsTable gBackendFunctionsTable;
-
 #if MOBILEGL_BUILD_DISAGGREGATED
     // P5 v1. The counterpart of Init()'s single split hook, and a NO-OP in every run that is
     // not split. It exists ONLY in a split build: G1 admits no new symbol in the pull build,

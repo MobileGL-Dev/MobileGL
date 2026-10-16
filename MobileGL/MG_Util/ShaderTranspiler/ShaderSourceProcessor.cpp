@@ -17,7 +17,6 @@
 #include <initializer_list>
 #include <utility>
 #include <Config.h>
-#include <MG_Backend/BackendObjects.h>
 #include <MG_Util/ShaderTranspiler/CompileEnv.h>
 #include <MG_Util/Converters/MGToGL/ProgramEnumConverter.h>
 #include <MG_Util/ShaderTranspiler/ShaderCompiler.h>

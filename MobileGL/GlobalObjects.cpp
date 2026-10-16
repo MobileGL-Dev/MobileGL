@@ -7,6 +7,7 @@
 // End of Source File Header
 
 #include "Config.h"
+#include <MG_Backend/BackendObject.h>
 
 namespace MobileGL {
     namespace MG_Config {
