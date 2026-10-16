@@ -44,8 +44,8 @@ namespace {
     GLenum g_lastReadPixelsType = GL_NONE;
 
     void RecordBlitNamedFramebuffer(const SharedPtr<MG_State::GLState::FramebufferObject>& readFramebuffer,
-                                    const SharedPtr<MG_State::GLState::FramebufferObject>& drawFramebuffer,
-                                    GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLbitfield, GLenum) {
+                                    const SharedPtr<MG_State::GLState::FramebufferObject>& drawFramebuffer, GLint,
+                                    GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLbitfield, GLenum) {
         g_lastBlitReadFramebuffer = readFramebuffer;
         g_lastBlitDrawFramebuffer = drawFramebuffer;
         ++g_blitNamedFramebufferCallCount;
@@ -89,8 +89,7 @@ protected:
     // binary, so drain whatever an earlier test left pending - otherwise an error-code assertion
     // here reads someone else's error. Bounded: one flag per code, so this cannot hang the suite.
     static void DrainPendingGlErrors() {
-        for (Int drained = 0; drained < 16 && MG_Impl::GLImpl::GetError() != GL_NO_ERROR; ++drained) {
-        }
+        for (Int drained = 0; drained < 16 && MG_Impl::GLImpl::GetError() != GL_NO_ERROR; ++drained) {}
     }
 
     // The call under test must raise exactly the expected error and nothing more: a second pending
@@ -250,10 +249,8 @@ TEST_F(FramebufferTest, NamedFramebufferTextureAttachesWithoutChangingBindings) 
     MG_State::pGLContext->GenTextureNames(1, textureNames);
     MG_State::pGLContext->CreateTextureObject(textureNames[0], TextureTarget::Texture2D);
 
-    const auto originalDraw =
-        MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
-    const auto originalRead =
-        MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Read).GetBoundObject();
+    const auto originalDraw = MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
+    const auto originalRead = MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Read).GetBoundObject();
 
     MG_Impl::GLImpl::NamedFramebufferTexture(framebuffer, GL_COLOR_ATTACHMENT0, textureNames[0], 3);
 
@@ -273,10 +270,8 @@ TEST_F(FramebufferTest, NamedDepthFramebufferTextureStorageIsCompleteWithoutBind
     MG_Impl::GLImpl::CreateFramebuffers(1, &framebuffer);
     MG_Impl::GLImpl::CreateTextures(GL_TEXTURE_2D, 1, &texture);
 
-    const auto originalDraw =
-        MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
-    const auto originalRead =
-        MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Read).GetBoundObject();
+    const auto originalDraw = MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
+    const auto originalRead = MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Read).GetBoundObject();
 
     MG_Impl::GLImpl::TextureStorage2D(texture, 1, GL_DEPTH_COMPONENT24, 64, 32);
     MG_Impl::GLImpl::NamedFramebufferTexture(framebuffer, GL_DEPTH_ATTACHMENT, texture, 0);
@@ -321,11 +316,10 @@ TEST_F(FramebufferTest, ReadPixelsAllowsPersistentMappedPixelPackBuffer) {
     MG_Impl::GLImpl::BindFramebuffer(GL_READ_FRAMEBUFFER, framebuffer);
 
     MG_Impl::GLImpl::BindBuffer(GL_PIXEL_PACK_BUFFER, pixelPackBuffer);
-    MG_Impl::GLImpl::BufferStorage(GL_PIXEL_PACK_BUFFER, 4 * 4 * 4, nullptr,
-                                   GL_MAP_READ_BIT | GL_MAP_PERSISTENT_BIT);
-    ASSERT_NE(MG_Impl::GLImpl::MapBufferRange(GL_PIXEL_PACK_BUFFER, 0, 4 * 4 * 4,
-                                              GL_MAP_READ_BIT | GL_MAP_PERSISTENT_BIT),
-              nullptr);
+    MG_Impl::GLImpl::BufferStorage(GL_PIXEL_PACK_BUFFER, 4 * 4 * 4, nullptr, GL_MAP_READ_BIT | GL_MAP_PERSISTENT_BIT);
+    ASSERT_NE(
+        MG_Impl::GLImpl::MapBufferRange(GL_PIXEL_PACK_BUFFER, 0, 4 * 4 * 4, GL_MAP_READ_BIT | GL_MAP_PERSISTENT_BIT),
+        nullptr);
 
     MG_Backend::gBackendFunctionsTable.GL.ReadPixels = RecordReadPixels;
     MG_Impl::GLImpl::ReadPixels(0, 0, 4, 4, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
@@ -411,10 +405,8 @@ TEST_F(FramebufferTest, NamedRenderbufferStorageAndFramebufferAttachDoNotChangeB
     MG_Impl::GLImpl::CreateFramebuffers(1, &framebuffer);
     MG_Impl::GLImpl::CreateRenderbuffers(1, &renderbuffer);
 
-    const auto originalDraw =
-        MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
-    const auto originalRead =
-        MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Read).GetBoundObject();
+    const auto originalDraw = MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
+    const auto originalRead = MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Read).GetBoundObject();
     const auto originalRenderbuffer =
         MG_State::pGLContext->GetRenderbufferBindingSlot(RenderbufferTarget::Renderbuffer).GetBoundObject();
 
@@ -448,10 +440,8 @@ TEST_F(FramebufferTest, NamedFramebufferDrawBuffersDoNotModifyDefaultFramebuffer
     GLuint framebuffer = 0;
     MG_Impl::GLImpl::CreateFramebuffers(1, &framebuffer);
 
-    const auto defaultDraw =
-        MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
-    const auto defaultRead =
-        MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Read).GetBoundObject();
+    const auto defaultDraw = MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
+    const auto defaultRead = MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Read).GetBoundObject();
     const auto defaultDrawBuffer = defaultDraw->GetDrawBuffers()[0];
     const auto defaultReadBuffer = defaultRead->GetReadBuffer();
 
@@ -471,8 +461,7 @@ TEST_F(FramebufferTest, NamedFramebufferDrawBuffersDoNotModifyDefaultFramebuffer
 }
 
 TEST_F(FramebufferTest, DefaultFramebufferReadBufferAcceptsGLBackAlias) {
-    const auto defaultRead =
-        MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Read).GetBoundObject();
+    const auto defaultRead = MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Read).GetBoundObject();
 
     MG_Impl::GLImpl::ReadBuffer(GL_BACK);
 
@@ -481,8 +470,7 @@ TEST_F(FramebufferTest, DefaultFramebufferReadBufferAcceptsGLBackAlias) {
 }
 
 TEST_F(FramebufferTest, DefaultFramebufferDrawBufferAcceptsGLFrontAlias) {
-    const auto defaultDraw =
-        MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
+    const auto defaultDraw = MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
 
     MG_Impl::GLImpl::DrawBuffer(GL_FRONT);
 
@@ -514,10 +502,8 @@ TEST_F(FramebufferTest, ClearNamedFramebufferfvUsesNamedObjectWithoutChangingBin
     GLuint framebuffer = 0;
     MG_Impl::GLImpl::CreateFramebuffers(1, &framebuffer);
 
-    const auto defaultDraw =
-        MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
-    const auto defaultRead =
-        MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Read).GetBoundObject();
+    const auto defaultDraw = MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
+    const auto defaultRead = MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Read).GetBoundObject();
 
     const GLfloat depth[] = {0.25f};
     MG_Backend::gBackendFunctionsTable.GL.ClearNamedFramebufferfv = RecordClearNamedFramebufferfv;
@@ -538,10 +524,8 @@ TEST_F(FramebufferTest, ClearNamedFramebufferfiAllowsDefaultFramebufferZero) {
     GLuint framebuffer = 0;
     MG_Impl::GLImpl::CreateFramebuffers(1, &framebuffer);
 
-    const auto defaultDraw =
-        MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
-    const auto defaultRead =
-        MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Read).GetBoundObject();
+    const auto defaultDraw = MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
+    const auto defaultRead = MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Read).GetBoundObject();
 
     MG_Backend::gBackendFunctionsTable.GL.ClearNamedFramebufferfi = RecordClearNamedFramebufferfi;
     MG_Impl::GLImpl::ClearNamedFramebufferfi(0, GL_DEPTH_STENCIL, 0, 0.5f, 7);
@@ -569,12 +553,12 @@ TEST_F(FramebufferTest, GetNamedFramebufferAttachmentParameterivReadsTargetObjec
     GLint objectType = 0;
     GLint objectName = 0;
     GLint textureLevel = 0;
-    MG_Impl::GLImpl::GetNamedFramebufferAttachmentParameteriv(
-        framebuffer, GL_COLOR_ATTACHMENT0, GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE, &objectType);
-    MG_Impl::GLImpl::GetNamedFramebufferAttachmentParameteriv(
-        framebuffer, GL_COLOR_ATTACHMENT0, GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME, &objectName);
-    MG_Impl::GLImpl::GetNamedFramebufferAttachmentParameteriv(
-        framebuffer, GL_COLOR_ATTACHMENT0, GL_FRAMEBUFFER_ATTACHMENT_TEXTURE_LEVEL, &textureLevel);
+    MG_Impl::GLImpl::GetNamedFramebufferAttachmentParameteriv(framebuffer, GL_COLOR_ATTACHMENT0,
+                                                              GL_FRAMEBUFFER_ATTACHMENT_OBJECT_TYPE, &objectType);
+    MG_Impl::GLImpl::GetNamedFramebufferAttachmentParameteriv(framebuffer, GL_COLOR_ATTACHMENT0,
+                                                              GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME, &objectName);
+    MG_Impl::GLImpl::GetNamedFramebufferAttachmentParameteriv(framebuffer, GL_COLOR_ATTACHMENT0,
+                                                              GL_FRAMEBUFFER_ATTACHMENT_TEXTURE_LEVEL, &textureLevel);
 
     EXPECT_EQ(objectType, GL_TEXTURE);
     EXPECT_EQ(objectName, static_cast<GLint>(textureNames[0]));
@@ -586,14 +570,11 @@ TEST_F(FramebufferTest, BlitNamedFramebufferAllowsDefaultFramebufferZero) {
     GLuint framebuffer = 0;
     MG_Impl::GLImpl::CreateFramebuffers(1, &framebuffer);
 
-    const auto defaultDraw =
-        MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
-    const auto defaultRead =
-        MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Read).GetBoundObject();
+    const auto defaultDraw = MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Draw).GetBoundObject();
+    const auto defaultRead = MG_State::pGLContext->GetFramebufferBindingSlot(FramebufferTarget::Read).GetBoundObject();
 
     MG_Backend::gBackendFunctionsTable.GL.BlitNamedFramebuffer = RecordBlitNamedFramebuffer;
-    MG_Impl::GLImpl::BlitNamedFramebuffer(framebuffer, 0, 0, 0, 16, 16, 0, 0, 16, 16, GL_COLOR_BUFFER_BIT,
-                                          GL_NEAREST);
+    MG_Impl::GLImpl::BlitNamedFramebuffer(framebuffer, 0, 0, 0, 16, 16, 0, 0, 16, 16, GL_COLOR_BUFFER_BIT, GL_NEAREST);
 
     const auto framebufferObject = MG_State::pGLContext->GetFramebufferObject(framebuffer);
     EXPECT_EQ(g_blitNamedFramebufferCallCount, 1);
@@ -616,8 +597,7 @@ namespace {
 
     // Converts a row of wide pixels (4 components of wideType each) into `format`/`type` words.
     template <typename WordT, typename SrcT>
-    Vector<WordT> ConvertWideRowToPackedWords(const Vector<SrcT>& wide, GLenum wideType, GLenum format,
-                                              GLenum type) {
+    Vector<WordT> ConvertWideRowToPackedWords(const Vector<SrcT>& wide, GLenum wideType, GLenum format, GLenum type) {
         ClientReadback::ReadbackChannelMapping mapping{};
         EXPECT_TRUE(ClientReadback::GetReadbackChannelMapping(format, mapping));
         EXPECT_EQ(ClientReadback::GetReadbackDstPixelSize(mapping, type), sizeof(WordT));
@@ -637,9 +617,9 @@ namespace {
     // Wide RGBA8 pattern shared by the normalized-encode tests. Expected fields below are
     // round(v / 255 * (2^bits - 1)), computed by hand per pixel.
     //                            R     G     B     A
-    const Vector<Uint8> kRGBA8Row{255,  0,    128,  64,     // P0
-                                  10,   250,  33,   200,    // P1
-                                  85,   170,  255,  0};     // P2
+    const Vector<Uint8> kRGBA8Row{255, 0,   128, 64,  // P0
+                                  10,  250, 33,  200, // P1
+                                  85,  170, 255, 0};  // P2
 } // namespace
 
 TEST(PackedReadbackEncodeTest, EncodesUnsignedShort565) {
@@ -926,8 +906,8 @@ namespace {
 
     class ScopedBackendOverride {
     public:
-        explicit ScopedBackendOverride(UniquePtr<MG_Backend::BackendObject> backend):
-            m_previous(Move(MG_Backend::pActiveBackendObject)) {
+        explicit ScopedBackendOverride(UniquePtr<MG_Backend::BackendObject> backend)
+            : m_previous(Move(MG_Backend::pActiveBackendObject)) {
             MG_Backend::pActiveBackendObject = Move(backend);
         }
 
@@ -1020,7 +1000,8 @@ namespace {
     RecordedColorMask g_driverUniformColorMask;
 
     void ResetRecordedColorMasks() {
-        for (auto& recorded : g_driverIndexedColorMasks) recorded = {};
+        for (auto& recorded : g_driverIndexedColorMasks)
+            recorded = {};
         g_driverUniformColorMask = {};
     }
 
@@ -1028,7 +1009,8 @@ namespace {
         g_driverUniformColorMask = {true, r, g, b, a};
         // The non-indexed call sets every draw buffer, so record it as such: a later assertion
         // about draw buffer 1 must not read a stale indexed record the uniform push overwrote.
-        for (auto& recorded : g_driverIndexedColorMasks) recorded = {true, r, g, b, a};
+        for (auto& recorded : g_driverIndexedColorMasks)
+            recorded = {true, r, g, b, a};
     }
 
     void StubColorMaski(GLuint index, GLboolean r, GLboolean g, GLboolean b, GLboolean a) {
@@ -1047,7 +1029,8 @@ namespace {
     RecordedBlend g_driverBlend[kRecordedDrawBuffers];
 
     void ResetRecordedBlend() {
-        for (auto& recorded : g_driverBlend) recorded = {};
+        for (auto& recorded : g_driverBlend)
+            recorded = {};
     }
 
     void RecordBlendEnable(Bool enabled) {
@@ -1138,8 +1121,8 @@ namespace {
     public:
         // dualSourceBlendSupported models GL_EXT_blend_func_extended on the ES driver, which is
         // the one capability in here that a real device is commonly WITHOUT.
-        explicit ScopedRenderStateDriverStubs(Bool dualSourceBlendSupported = true):
-            m_funcs(MG_Backend::DirectGLES::g_GLESFuncs), m_caps(MG_Backend::DirectGLES::g_GLESCapabilities) {
+        explicit ScopedRenderStateDriverStubs(Bool dualSourceBlendSupported = true)
+            : m_funcs(MG_Backend::DirectGLES::g_GLESFuncs), m_caps(MG_Backend::DirectGLES::g_GLESCapabilities) {
             auto& gl = MG_Backend::DirectGLES::g_GLESFuncs;
             gl = MG_External::GLESFunctionsTable{};
             gl.glViewport = StubViewport;
@@ -1541,21 +1524,21 @@ TEST_F(FramebufferTest, FramebufferTextureRejectsAColourAttachmentPastTheLimit) 
 
     // The same limit ValidateColorAttachmentInRange reads, so the test cannot disagree with the
     // implementation about where the boundary is.
-    const GLint limit = MG_Backend::pActiveBackendObject
-                            ? static_cast<GLint>(
-                                  MG_Backend::pActiveBackendObject->GetDynamicParameters().MaxColorAttachments)
-                            : static_cast<GLint>(MG_State::GLState::FramebufferObject::MAX_DRAW_BUFFERS);
+    const GLint limit =
+        MG_Backend::pActiveBackendObject
+            ? static_cast<GLint>(MG_Backend::pActiveBackendObject->GetDynamicParameters().MaxColorAttachments)
+            : static_cast<GLint>(MG_State::GLState::FramebufferObject::MAX_DRAW_BUFFERS);
     ASSERT_GT(limit, 0);
     ASSERT_LT(limit, 32) << "the test needs a colour attachment enum past the limit to exist";
 
-    MG_Impl::GLImpl::FramebufferTexture(GL_DRAW_FRAMEBUFFER,
-                                        static_cast<GLenum>(GL_COLOR_ATTACHMENT0 + limit), texture, 0);
+    MG_Impl::GLImpl::FramebufferTexture(GL_DRAW_FRAMEBUFFER, static_cast<GLenum>(GL_COLOR_ATTACHMENT0 + limit), texture,
+                                        0);
     EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_INVALID_OPERATION);
     DrainPendingGlErrors();
 
     // The last legal one still attaches, so the boundary is off-by-none.
-    MG_Impl::GLImpl::FramebufferTexture(GL_DRAW_FRAMEBUFFER,
-                                        static_cast<GLenum>(GL_COLOR_ATTACHMENT0 + limit - 1), texture, 0);
+    MG_Impl::GLImpl::FramebufferTexture(GL_DRAW_FRAMEBUFFER, static_cast<GLenum>(GL_COLOR_ATTACHMENT0 + limit - 1),
+                                        texture, 0);
     EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
 }
 
@@ -1631,13 +1614,12 @@ TEST_F(FramebufferTest, FramebufferTexture2DRejectsTheDefaultFramebufferAndBadAt
     MG_Impl::GLImpl::BindFramebuffer(GL_DRAW_FRAMEBUFFER, framebuffer);
     ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
 
-    const GLint limit = MG_Backend::pActiveBackendObject
-                            ? static_cast<GLint>(
-                                  MG_Backend::pActiveBackendObject->GetDynamicParameters().MaxColorAttachments)
-                            : static_cast<GLint>(MG_State::GLState::FramebufferObject::MAX_DRAW_BUFFERS);
-    MG_Impl::GLImpl::FramebufferTexture2D(GL_DRAW_FRAMEBUFFER,
-                                          static_cast<GLenum>(GL_COLOR_ATTACHMENT0 + limit), GL_TEXTURE_2D,
-                                          texture, 0);
+    const GLint limit =
+        MG_Backend::pActiveBackendObject
+            ? static_cast<GLint>(MG_Backend::pActiveBackendObject->GetDynamicParameters().MaxColorAttachments)
+            : static_cast<GLint>(MG_State::GLState::FramebufferObject::MAX_DRAW_BUFFERS);
+    MG_Impl::GLImpl::FramebufferTexture2D(GL_DRAW_FRAMEBUFFER, static_cast<GLenum>(GL_COLOR_ATTACHMENT0 + limit),
+                                          GL_TEXTURE_2D, texture, 0);
     EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_INVALID_OPERATION);
     DrainPendingGlErrors();
 

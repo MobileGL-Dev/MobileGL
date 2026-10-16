@@ -34,8 +34,7 @@ namespace MobileGL {
                         if (static_cast<spv::Decoration>(annotation.GetSingleWordInOperand(1)) !=
                             spv::Decoration::BuiltIn)
                             continue;
-                        if (static_cast<spv::BuiltIn>(annotation.GetSingleWordInOperand(2)) !=
-                            spv::BuiltIn::SampleMask)
+                        if (static_cast<spv::BuiltIn>(annotation.GetSingleWordInOperand(2)) != spv::BuiltIn::SampleMask)
                             continue;
                         Instruction* variable = defUseMgr->GetDef(annotation.GetSingleWordInOperand(0));
                         if (variable != nullptr && variable->opcode() == spv::Op::OpVariable &&
@@ -116,7 +115,8 @@ namespace MobileGL {
                 const Instruction* allOnesInst =
                     allOnes ? constantMgr->GetDefiningInstruction(allOnes, elementTypeId) : nullptr;
                 if (elementTypeId == 0 || allOnesInst == nullptr) return Status::Failure;
-                for (Instruction* store : elementStores) store->SetInOperand(1, {allOnesInst->result_id()});
+                for (Instruction* store : elementStores)
+                    store->SetInOperand(1, {allOnesInst->result_id()});
 
                 if (!arrayStores.empty()) {
                     // The array's length is a constant (the builtin is sized at link time); a
@@ -133,7 +133,8 @@ namespace MobileGL {
                     const Instruction* allOnesArrayInst =
                         allOnesArray ? constantMgr->GetDefiningInstruction(allOnesArray, arrayTypeId) : nullptr;
                     if (arrayTypeId == 0 || allOnesArrayInst == nullptr) return Status::Failure;
-                    for (Instruction* store : arrayStores) store->SetInOperand(1, {allOnesArrayInst->result_id()});
+                    for (Instruction* store : arrayStores)
+                        store->SetInOperand(1, {allOnesArrayInst->result_id()});
                 }
 
                 irContext->InvalidateAnalysesExceptFor(IRContext::kAnalysisNone);

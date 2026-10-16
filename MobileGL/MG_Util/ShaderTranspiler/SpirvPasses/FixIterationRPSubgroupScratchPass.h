@@ -53,10 +53,8 @@ namespace MobileGL {
             // maxWorkgroupScratchBytes; 0 falls back to the 16384-byte Vulkan minimum.
             class FixIterationRPSubgroupScratchPass : public spvtools::opt::Pass {
             public:
-                FixIterationRPSubgroupScratchPass(Uint32 nativeSubgroupSize,
-                                                  Uint32 maxWorkgroupScratchBytes)
-                    : m_nativeSubgroupSize(nativeSubgroupSize),
-                      m_maxWorkgroupScratchBytes(maxWorkgroupScratchBytes) {}
+                FixIterationRPSubgroupScratchPass(Uint32 nativeSubgroupSize, Uint32 maxWorkgroupScratchBytes)
+                    : m_nativeSubgroupSize(nativeSubgroupSize), m_maxWorkgroupScratchBytes(maxWorkgroupScratchBytes) {}
 
                 const char* name() const override { return "fix-iterationrp-subgroup-scratch"; }
                 Status Process() override;

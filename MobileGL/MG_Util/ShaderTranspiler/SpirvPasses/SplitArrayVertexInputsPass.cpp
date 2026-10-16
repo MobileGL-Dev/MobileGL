@@ -25,8 +25,8 @@ namespace MobileGL {
     namespace MG_Util {
         namespace ShaderTranspiler {
             namespace {
-                using spvtools::opt::IRContext;
                 using spvtools::opt::Instruction;
+                using spvtools::opt::IRContext;
                 using spvtools::opt::Operand;
                 namespace analysis = spvtools::opt::analysis;
 
@@ -39,8 +39,7 @@ namespace MobileGL {
                 Uint32 LocationsPerElement(const analysis::Type* type) {
                     if (type == nullptr) return 0;
                     // Any scalar takes one location, a 64-bit one included.
-                    if (type->AsFloat() != nullptr || type->AsInteger() != nullptr ||
-                        type->AsBool() != nullptr) {
+                    if (type->AsFloat() != nullptr || type->AsInteger() != nullptr || type->AsBool() != nullptr) {
                         return 1u;
                     }
                     if (const auto* vector = type->AsVector()) {
@@ -109,8 +108,7 @@ namespace MobileGL {
 
                 for (Instruction& inst : irContext->types_values()) {
                     if (inst.opcode() != spv::Op::OpVariable) continue;
-                    if (static_cast<spv::StorageClass>(inst.GetSingleWordInOperand(0)) !=
-                        spv::StorageClass::Input) {
+                    if (static_cast<spv::StorageClass>(inst.GetSingleWordInOperand(0)) != spv::StorageClass::Input) {
                         continue;
                     }
                     Instruction* pointerType = defUseMgr->GetDef(inst.type_id());
@@ -176,10 +174,9 @@ namespace MobileGL {
                             // it) either cannot happen for a vertex input or would need the callee
                             // rewritten as well, and silently getting that wrong is worse than
                             // leaving the module for SPIRV-Cross to reject out loud.
-                            const Bool indexes =
-                                opcode == spv::Op::OpAccessChain ||
-                                opcode == spv::Op::OpInBoundsAccessChain ||
-                                opcode == spv::Op::OpCopyObject;
+                            const Bool indexes = opcode == spv::Op::OpAccessChain ||
+                                                 opcode == spv::Op::OpInBoundsAccessChain ||
+                                                 opcode == spv::Op::OpCopyObject;
                             if (indexes) {
                                 if (inst.NumInOperands() > 0 &&
                                     derivedPointers.count(inst.GetSingleWordInOperand(0)) != 0) {
@@ -265,17 +262,14 @@ namespace MobileGL {
                         const Uint32 elementVariableId = irContext->TakeNextId();
                         elementVariableIds[element] = elementVariableId;
                         irContext->AddGlobalValue(spvtools::MakeUnique<Instruction>(
-                            irContext, spv::Op::OpVariable, target.elementInputPointerTypeId,
-                            elementVariableId,
+                            irContext, spv::Op::OpVariable, target.elementInputPointerTypeId, elementVariableId,
                             std::initializer_list<Operand>{
-                                {SPV_OPERAND_TYPE_STORAGE_CLASS,
-                                 {static_cast<Uint32>(spv::StorageClass::Input)}}}));
+                                {SPV_OPERAND_TYPE_STORAGE_CLASS, {static_cast<Uint32>(spv::StorageClass::Input)}}}));
                         newDecorations.push_back(spvtools::MakeUnique<Instruction>(
                             irContext, spv::Op::OpDecorate, 0, 0,
                             std::initializer_list<Operand>{
                                 {SPV_OPERAND_TYPE_ID, {elementVariableId}},
-                                {SPV_OPERAND_TYPE_DECORATION,
-                                 {static_cast<Uint32>(spv::Decoration::Location)}},
+                                {SPV_OPERAND_TYPE_DECORATION, {static_cast<Uint32>(spv::Decoration::Location)}},
                                 {SPV_OPERAND_TYPE_LITERAL_INTEGER,
                                  {target.baseLocation + element * target.locationsPerElement}}}));
                     }
@@ -288,12 +282,9 @@ namespace MobileGL {
                     for (auto& annotation : irContext->annotations()) {
                         if (annotation.opcode() != spv::Op::OpDecorate) continue;
                         if (annotation.GetSingleWordInOperand(0) != oldVariableId) continue;
-                        const auto decoration =
-                            static_cast<spv::Decoration>(annotation.GetSingleWordInOperand(1));
-                        if (decoration == spv::Decoration::RelaxedPrecision ||
-                            decoration == spv::Decoration::Flat ||
-                            decoration == spv::Decoration::NoPerspective ||
-                            decoration == spv::Decoration::Centroid ||
+                        const auto decoration = static_cast<spv::Decoration>(annotation.GetSingleWordInOperand(1));
+                        if (decoration == spv::Decoration::RelaxedPrecision || decoration == spv::Decoration::Flat ||
+                            decoration == spv::Decoration::NoPerspective || decoration == spv::Decoration::Centroid ||
                             decoration == spv::Decoration::Sample) {
                             for (const Uint32 elementVariableId : elementVariableIds) {
                                 std::vector<Operand> operands;
@@ -301,8 +292,8 @@ namespace MobileGL {
                                 for (Uint32 i = 1; i < annotation.NumInOperands(); ++i) {
                                     operands.push_back(annotation.GetInOperand(i));
                                 }
-                                newDecorations.push_back(spvtools::MakeUnique<Instruction>(
-                                    irContext, spv::Op::OpDecorate, 0, 0, operands));
+                                newDecorations.push_back(
+                                    spvtools::MakeUnique<Instruction>(irContext, spv::Op::OpDecorate, 0, 0, operands));
                             }
                         }
                         deadDecorations.push_back(&annotation);
@@ -329,8 +320,8 @@ namespace MobileGL {
                     std::vector<Operand> rebuilt;
                     for (Uint32 i = 0; i < interfaceOperands.size(); ++i) {
                         const Operand& operand = interfaceOperands[i];
-                        if (i >= 3 && operand.type == SPV_OPERAND_TYPE_ID &&
-                            operand.words.size() == 1 && operand.words[0] == oldVariableId) {
+                        if (i >= 3 && operand.type == SPV_OPERAND_TYPE_ID && operand.words.size() == 1 &&
+                            operand.words[0] == oldVariableId) {
                             for (const Uint32 elementVariableId : elementVariableIds) {
                                 rebuilt.push_back({SPV_OPERAND_TYPE_ID, {elementVariableId}});
                             }
@@ -347,15 +338,12 @@ namespace MobileGL {
                         const Uint32 elementPointerId = irContext->TakeNextId();
                         insertPoint = insertPoint.InsertBefore(spvtools::MakeUnique<Instruction>(
                             irContext, spv::Op::OpLoad, target.elementTypeId, loadedId,
-                            std::initializer_list<Operand>{
-                                {SPV_OPERAND_TYPE_ID, {elementVariableIds[element]}}}));
+                            std::initializer_list<Operand>{{SPV_OPERAND_TYPE_ID, {elementVariableIds[element]}}}));
                         ++insertPoint;
                         insertPoint = insertPoint.InsertBefore(spvtools::MakeUnique<Instruction>(
-                            irContext, spv::Op::OpAccessChain, target.elementPrivatePointerTypeId,
-                            elementPointerId,
-                            std::initializer_list<Operand>{
-                                {SPV_OPERAND_TYPE_ID, {oldVariableId}},
-                                {SPV_OPERAND_TYPE_ID, {indexConstantIds[element]}}}));
+                            irContext, spv::Op::OpAccessChain, target.elementPrivatePointerTypeId, elementPointerId,
+                            std::initializer_list<Operand>{{SPV_OPERAND_TYPE_ID, {oldVariableId}},
+                                                           {SPV_OPERAND_TYPE_ID, {indexConstantIds[element]}}}));
                         ++insertPoint;
                         insertPoint = insertPoint.InsertBefore(spvtools::MakeUnique<Instruction>(
                             irContext, spv::Op::OpStore, 0, 0,
@@ -378,8 +366,8 @@ namespace MobileGL {
                         spv::StorageClass::Private) {
                         continue;
                     }
-                    pointer->SetResultType(typeMgr->FindPointerToType(resultType->GetSingleWordInOperand(1),
-                                                                      spv::StorageClass::Private));
+                    pointer->SetResultType(
+                        typeMgr->FindPointerToType(resultType->GetSingleWordInOperand(1), spv::StorageClass::Private));
                 }
 
                 irContext->InvalidateAnalysesExceptFor(IRContext::kAnalysisNone);

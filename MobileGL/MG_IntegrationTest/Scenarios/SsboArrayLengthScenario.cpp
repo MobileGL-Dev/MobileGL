@@ -142,8 +142,8 @@ void main() {
                 GLuint buffer = 0;
                 glGenBuffers(1, &buffer);
                 glBindBuffer(GL_SHADER_STORAGE_BUFFER, buffer);
-                glBufferData(GL_SHADER_STORAGE_BUFFER,
-                             static_cast<GLsizeiptr>(elements) * kElementBytes, contents.data(), GL_DYNAMIC_COPY);
+                glBufferData(GL_SHADER_STORAGE_BUFFER, static_cast<GLsizeiptr>(elements) * kElementBytes,
+                             contents.data(), GL_DYNAMIC_COPY);
                 m_buffers.push_back(buffer);
                 return buffer;
             }
@@ -155,8 +155,8 @@ void main() {
                 glMemoryBarrier(GL_BUFFER_UPDATE_BARRIER_BIT);
                 std::vector<int> lengths(4, -1);
                 glBindBuffer(GL_SHADER_STORAGE_BUFFER, outputBuffer);
-                glGetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0,
-                                   static_cast<GLsizeiptr>(lengths.size() * sizeof(int)), lengths.data());
+                glGetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, static_cast<GLsizeiptr>(lengths.size() * sizeof(int)),
+                                   lengths.data());
                 return lengths;
             }
 
@@ -188,8 +188,8 @@ void main() {
         const std::vector<int> lengths = RunAndReadLengths(output);
         EXPECT_EQ(FirstGLError(), 0u);
         EXPECT_EQ(lengths[0], 7) << "Input0 (no preamble, 7 elements) reported length " << lengths[0];
-        EXPECT_EQ(lengths[1], 5) << "Input1 (1 ivec4 of preamble, 6 elements of storage) reported length "
-                                 << lengths[1] << "; 6 means the array's byte offset inside the block was ignored";
+        EXPECT_EQ(lengths[1], 5) << "Input1 (1 ivec4 of preamble, 6 elements of storage) reported length " << lengths[1]
+                                 << "; 6 means the array's byte offset inside the block was ignored";
         EXPECT_EQ(lengths[2], 3) << "Input23[0] (binding 2, 3 elements) reported length " << lengths[2];
         EXPECT_EQ(lengths[3], 4) << "Input23[1] (binding 3, 4 elements) reported length " << lengths[3]
                                  << "; a block array's second element must resolve to the NEXT binding";
@@ -241,7 +241,7 @@ void main() {
         const GLuint program = CompileComputeProgram(kReadonlyWriteonlyComputeSource);
         ASSERT_NE(program, 0u) << m_buildLog;
 
-        const GLuint input = MakeStorageBuffer(6);  // 6 ivec4 = 24 ints
+        const GLuint input = MakeStorageBuffer(6); // 6 ivec4 = 24 ints
         const GLuint output = MakeStorageBuffer(1);
         glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, input);
         glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 4, output);

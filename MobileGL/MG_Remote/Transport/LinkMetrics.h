@@ -64,15 +64,15 @@ namespace MobileGL::MG_Remote::Transport {
     // ClientSession/ServerLoop. The counters themselves stay in StreamLink.cpp beside the recv /
     // sendmsg loops that feed them.
     struct LinkIoStats {
-        std::uint64_t bytes = 0;     // payload bytes taken off the socket
-        std::uint64_t calls = 0;     // recv() calls it took
-        std::uint64_t reads = 0;     // Link::Read() calls (one per header, envelope or chunk)
-        std::uint64_t nsInRecv = 0;  // wall time inside recv - blocking included
-        std::uint64_t nsTotal = 0;   // wall time inside Read
+        std::uint64_t bytes = 0;    // payload bytes taken off the socket
+        std::uint64_t calls = 0;    // recv() calls it took
+        std::uint64_t reads = 0;    // Link::Read() calls (one per header, envelope or chunk)
+        std::uint64_t nsInRecv = 0; // wall time inside recv - blocking included
+        std::uint64_t nsTotal = 0;  // wall time inside Read
     };
     LinkIoStats LinkMetricsTakeReadStats();
     // The client's half: bytes handed to the io thread's sendmsg, the calls it took, and the
     // wall time inside sendmsg (blocking included). nsInRecv carries the send time; reads is
     // unused on this side.
     LinkIoStats LinkMetricsTakeSendStats();
-}
+} // namespace MobileGL::MG_Remote::Transport

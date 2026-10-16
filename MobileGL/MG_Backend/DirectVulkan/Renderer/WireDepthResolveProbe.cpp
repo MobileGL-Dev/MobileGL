@@ -161,8 +161,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     VkResult CreateWireShaderResolvePipeline(VkDevice device, const WireShaderResolveKit& kit, VkRenderPass pass,
                                              VkImageAspectFlags aspect, VkPipeline* pipeline) {
-        const VkShaderModule fragment =
-            aspect == VK_IMAGE_ASPECT_STENCIL_BIT ? kit.stencilFragment : kit.depthFragment;
+        const VkShaderModule fragment = aspect == VK_IMAGE_ASPECT_STENCIL_BIT ? kit.stencilFragment : kit.depthFragment;
         if (fragment == VK_NULL_HANDLE || kit.vertex == VK_NULL_HANDLE) return VK_ERROR_FEATURE_NOT_PRESENT;
         VkPipelineShaderStageCreateInfo stages[2]{};
         for (auto& stage : stages) {
@@ -185,7 +184,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         raster.lineWidth = 1.0f;
         VkPipelineMultisampleStateCreateInfo samples{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
         samples.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
-        VkPipelineDepthStencilStateCreateInfo depthStencilState{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
+        VkPipelineDepthStencilStateCreateInfo depthStencilState{
+            VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
         depthStencilState.minDepthBounds = 0.0f;
         depthStencilState.maxDepthBounds = 1.0f;
         if (aspect == VK_IMAGE_ASPECT_DEPTH_BIT) {
@@ -228,9 +228,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &info, nullptr, pipeline);
     }
 
-    void RecordWireShaderResolveDraw(VkCommandBuffer commandBuffer, const WireShaderResolveKit& kit,
-                                     VkRenderPass pass, VkPipeline pipeline, VkFramebuffer framebuffer,
-                                     VkDescriptorSet descriptorSet, VkExtent2D attachmentExtent, VkRect2D rect) {
+    void RecordWireShaderResolveDraw(VkCommandBuffer commandBuffer, const WireShaderResolveKit& kit, VkRenderPass pass,
+                                     VkPipeline pipeline, VkFramebuffer framebuffer, VkDescriptorSet descriptorSet,
+                                     VkExtent2D attachmentExtent, VkRect2D rect) {
         VkRenderPassBeginInfo begin{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
         begin.renderPass = pass;
         begin.framebuffer = framebuffer;
@@ -244,8 +244,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // interchangeable here: gl_FragCoord is what the fragment shader fetches by, so the
         // clip-space-to-attachment mapping has to be the identity for every rectangle. A viewport
         // shrunk onto the rect would slide the whole image instead of moving a window over it.
-        const VkViewport viewport{0.0f, 0.0f, static_cast<float>(attachmentExtent.width),
-                                  static_cast<float>(attachmentExtent.height), 0.0f, 1.0f};
+        const VkViewport viewport{
+            0.0f, 0.0f, static_cast<float>(attachmentExtent.width), static_cast<float>(attachmentExtent.height),
+            0.0f, 1.0f};
         vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
         vkCmdSetScissor(commandBuffer, 0, 1, &rect);
         vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, kit.pipelineLayout, 0, 1,
@@ -294,7 +295,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return format == VK_FORMAT_D32_SFLOAT || format == VK_FORMAT_D32_SFLOAT_S8_UINT;
         }
 
-        Uint32 DepthCopyBytes(VkFormat format) { return format == VK_FORMAT_D16_UNORM ? 2u : 4u; }
+        Uint32 DepthCopyBytes(VkFormat format) {
+            return format == VK_FORMAT_D16_UNORM ? 2u : 4u;
+        }
 
         Uint32 EncodeDepth(VkFormat format, Float depth) {
             if (IsFloatDepth(format)) return std::bit_cast<Uint32>(depth);
@@ -314,7 +317,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return IsFloatDepth(format) ? word : (word & 0x00FFFFFFu);
         }
 
-        Uint32 WordDistance(Uint32 a, Uint32 b) { return a > b ? a - b : b - a; }
+        Uint32 WordDistance(Uint32 a, Uint32 b) {
+            return a > b ? a - b : b - a;
+        }
 
         struct ProbeImage {
             VkImage image = VK_NULL_HANDLE;
@@ -361,13 +366,19 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             WireShaderResolveKit kit;
 
             void Destroy() {
-                for (VkPipeline pipeline : pipelines) vkDestroyPipeline(device, pipeline, nullptr);
-                for (VkFramebuffer framebuffer : framebuffers) vkDestroyFramebuffer(device, framebuffer, nullptr);
-                for (VkRenderPass pass : passes) vkDestroyRenderPass(device, pass, nullptr);
-                for (VkImageView view : views) vkDestroyImageView(device, view, nullptr);
-                for (VkImage image : images) vkDestroyImage(device, image, nullptr);
+                for (VkPipeline pipeline : pipelines)
+                    vkDestroyPipeline(device, pipeline, nullptr);
+                for (VkFramebuffer framebuffer : framebuffers)
+                    vkDestroyFramebuffer(device, framebuffer, nullptr);
+                for (VkRenderPass pass : passes)
+                    vkDestroyRenderPass(device, pass, nullptr);
+                for (VkImageView view : views)
+                    vkDestroyImageView(device, view, nullptr);
+                for (VkImage image : images)
+                    vkDestroyImage(device, image, nullptr);
                 vkDestroyBuffer(device, buffer, nullptr);
-                for (VkDeviceMemory memory : memories) vkFreeMemory(device, memory, nullptr);
+                for (VkDeviceMemory memory : memories)
+                    vkFreeMemory(device, memory, nullptr);
                 vkDestroyDescriptorPool(device, descriptorPool, nullptr);
                 vkDestroyCommandPool(device, commandPool, nullptr);
                 vkDestroyFence(device, fence, nullptr);
@@ -446,8 +457,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             objects.images.push_back(out.image);
             VkMemoryRequirements requirements{};
             vkGetImageMemoryRequirements(device, out.image, &requirements);
-            const Optional<Uint32> type = PickMemoryType(memoryProperties, requirements.memoryTypeBits,
-                                                         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 0);
+            const Optional<Uint32> type =
+                PickMemoryType(memoryProperties, requirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 0);
             if (!type) return false;
             VkMemoryAllocateInfo allocate{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
             allocate.allocationSize = requirements.size;
@@ -483,8 +494,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             Uint32 stencil = 0;
         };
         Vector<ClearPass> clears;
-        const auto makeClear = [&](const ProbeImage& image, VkFormat format, VkSampleCountFlagBits samples,
-                                   Float depth, Uint32 stencil) -> Bool {
+        const auto makeClear = [&](const ProbeImage& image, VkFormat format, VkSampleCountFlagBits samples, Float depth,
+                                   Uint32 stencil) -> Bool {
             const VkImageAspectFlags aspects = WireDepthStencilFormatAspects(format);
             VkImageView view = VK_NULL_HANDLE;
             if (!makeView(WireDepthStencilViewInfo(image.image, format, aspects, 0, 0), view)) return false;
@@ -628,8 +639,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                               control.targetView) ||
                     !makeFramebuffer(control.pass, &control.targetView, 1, control.framebuffer))
                     return;
-                if (!makeClear(control.target, format, VK_SAMPLE_COUNT_1_BIT, kSentinelDepth, kSentinelStencil))
-                    return;
+                if (!makeClear(control.target, format, VK_SAMPLE_COUNT_1_BIT, kSentinelDepth, kSentinelStencil)) return;
                 control.ready = true;
             };
             if (aspects & VK_IMAGE_ASPECT_DEPTH_BIT) makeControl(VK_IMAGE_ASPECT_DEPTH_BIT, item.depthControl);
@@ -698,8 +708,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 PickMemoryType(memoryProperties, requirements.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT);
             if (!type) return fail("no host-visible memory type for the readback buffer");
-            bufferCoherent = (memoryProperties.memoryTypes[*type].propertyFlags &
-                              VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) != 0;
+            bufferCoherent =
+                (memoryProperties.memoryTypes[*type].propertyFlags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) != 0;
             VkMemoryAllocateInfo allocate{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
             allocate.allocationSize = requirements.size;
             allocate.memoryTypeIndex = *type;
@@ -907,8 +917,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 aspect.sentinel = kSentinelStencil;
                 aspect.tolerance = 0;
                 tally(aspect, item.subjectStencilOffset, 1, false, item.format, true);
-                if (item.stencilControl.ready)
-                    tally(aspect, item.stencilControl.offset, 1, false, item.format, false);
+                if (item.stencilControl.ready) tally(aspect, item.stencilControl.offset, 1, false, item.format, false);
             }
         }
         vkUnmapMemory(device, bufferMemory);
@@ -927,8 +936,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 if (std::strcmp(extension.extensionName, name) == 0) return true;
             return false;
         };
-        renderPassArmAvailable = has(VK_KHR_CREATE_RENDERPASS_2_EXTENSION_NAME) &&
-                                 has(VK_KHR_DEPTH_STENCIL_RESOLVE_EXTENSION_NAME);
+        renderPassArmAvailable =
+            has(VK_KHR_CREATE_RENDERPASS_2_EXTENSION_NAME) && has(VK_KHR_DEPTH_STENCIL_RESOLVE_EXTENSION_NAME);
         shaderStencilExport = has(VK_EXT_SHADER_STENCIL_EXPORT_EXTENSION_NAME);
         if (!renderPassArmAvailable) {
             measurement.failureReason = "no VK_KHR_create_renderpass2 + VK_KHR_depth_stencil_resolve";
@@ -941,8 +950,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (getProperties2 == nullptr)
             getProperties2 = reinterpret_cast<PFN_vkGetPhysicalDeviceProperties2>(
                 getInstanceProcAddr(instance, "vkGetPhysicalDeviceProperties2KHR"));
-        const auto createDevice =
-            reinterpret_cast<PFN_vkCreateDevice>(getInstanceProcAddr(instance, "vkCreateDevice"));
+        const auto createDevice = reinterpret_cast<PFN_vkCreateDevice>(getInstanceProcAddr(instance, "vkCreateDevice"));
         if (properties.apiVersion < VK_API_VERSION_1_1 || getProperties2 == nullptr || createDevice == nullptr) {
             renderPassArmAvailable = false;
             measurement.failureReason = "a pre-1.1 device, or no vkGetPhysicalDeviceProperties2 / vkCreateDevice";

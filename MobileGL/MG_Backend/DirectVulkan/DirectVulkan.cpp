@@ -153,11 +153,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // or maxdrawcount > 1 without multiDrawIndirect: VulkanRenderer.cpp's
         // MultiDrawElementsIndirectCount) - where ReadWireBuffer orders GPU-produced command/count
         // bytes before the expansion.
-        void DrawWireIndirect(GLenum mode, GLenum type, const void* indirect, GLsizei drawcount,
-                              GLsizei stride, Bool indexed, Bool counted = false, GLintptr countOffset = 0) {
+        void DrawWireIndirect(GLenum mode, GLenum type, const void* indirect, GLsizei drawcount, GLsizei stride,
+                              Bool indexed, Bool counted = false, GLintptr countOffset = 0) {
             if (drawcount <= 0 || countOffset < 0) return;
             if (pVulkanRenderer->DrawWireIndirectNative(mode, type, reinterpret_cast<Uint64>(indirect), drawcount,
-                    stride, indexed, counted, static_cast<Uint64>(countOffset)))
+                                                        stride, indexed, counted, static_cast<Uint64>(countOffset)))
                 return;
             auto& buffers = pVulkanRenderer->GetWireBufferManager();
             const auto& state = MG_Pipe::MGPipeApplier();
@@ -174,8 +174,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             } expansionCount{buffers};
             if (counted) {
                 Uint32 count = 0;
-                if (!buffers.ReadWireBuffer(state.VerbIndirectParameterBuffer,
-                        static_cast<Uint64>(countOffset), sizeof(count), &count)) return;
+                if (!buffers.ReadWireBuffer(state.VerbIndirectParameterBuffer, static_cast<Uint64>(countOffset),
+                                            sizeof(count), &count))
+                    return;
                 drawcount = static_cast<GLsizei>(std::min<Uint32>(count, static_cast<Uint32>(drawcount)));
                 if (!drawcount) return;
             }
@@ -185,8 +186,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             const Uint64 byteCount = static_cast<Uint64>(stride) * (drawcount - 1) + commandSize;
             if (byteCount > std::numeric_limits<SizeT>::max()) return;
             Vector<Uint8> bytes(static_cast<SizeT>(byteCount));
-            if (!buffers.ReadWireBuffer(state.VerbIndirectBuffer, reinterpret_cast<Uint64>(indirect),
-                    byteCount, bytes.data())) return;
+            if (!buffers.ReadWireBuffer(state.VerbIndirectBuffer, reinterpret_cast<Uint64>(indirect), byteCount,
+                                        bytes.data()))
+                return;
             if (indexed) {
                 const SizeT indexSize = MG_Util::GetGLTypeSize(type);
                 if (indexSize != 1 && indexSize != 2 && indexSize != 4) return;
@@ -199,12 +201,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 for (GLsizei i = 0; i < drawcount; ++i) {
                     DrawElementsIndirectCommand command{};
                     Memcpy(&command, bytes.data() + static_cast<SizeT>(i) * stride, sizeof(command));
-                    params[i] = {command.count, command.instanceCount, command.firstIndex,
-                                 command.baseVertex, std::bit_cast<Int32>(command.baseInstance)};
+                    params[i] = {command.count, command.instanceCount, command.firstIndex, command.baseVertex,
+                                 std::bit_cast<Int32>(command.baseInstance)};
                     const Uint64 end = (static_cast<Uint64>(command.firstIndex) + command.count) * indexSize;
                     if (end > std::numeric_limits<SizeT>::max()) return;
-                    payload.indexBufferView.indexByteSize = std::max<SizeT>(payload.indexBufferView.indexByteSize,
-                                                                          static_cast<SizeT>(end));
+                    payload.indexBufferView.indexByteSize =
+                        std::max<SizeT>(payload.indexBufferView.indexByteSize, static_cast<SizeT>(end));
                 }
                 pVulkanRenderer->MultiDrawElements(payload);
             } else {
@@ -255,7 +257,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     GLuint GetShaderStorageBlockIndex(const MG_State::GLState::ProgramObject& program, const String& name) {
         const auto& blocks = program.GetLinkReflection().storageBlocks;
         const auto find = [&blocks](const String& key) {
-            return std::find_if(blocks.begin(), blocks.end(),
+            return std::find_if(
+                blocks.begin(), blocks.end(),
                 [&](const MG_State::GLState::StorageBlockReflection& block) { return block.name == key; });
         };
         auto it = find(name);
@@ -324,8 +327,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         DrawWireIndirect(mode, type, indirect, maxdrawcount, stride, true, true, drawcount);
         return;
     }
-    void MultiDrawArraysIndirectCount(GLenum mode, const void* indirect, GLintptr drawcount,
-                                      GLsizei maxdrawcount, GLsizei stride) {
+    void MultiDrawArraysIndirectCount(GLenum mode, const void* indirect, GLintptr drawcount, GLsizei maxdrawcount,
+                                      GLsizei stride) {
         DrawWireIndirect(mode, 0, indirect, maxdrawcount, stride, false, true, drawcount);
         return;
     }
@@ -342,8 +345,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
     void DrawElementsInstancedBaseVertexBaseInstance(GLenum mode, GLsizei count, GLenum type, const void* indices,
                                                      GLsizei instancecount, GLint basevertex, GLuint baseinstance) {
-        MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::DrawElementsInstancedBaseVertexBaseInstance called with null VulkanRenderer");
-        MOBILEGL_ASSERT(MG_Pipe::gPipeInputs->IsLive(), "DirectVulkan::DrawElementsInstancedBaseVertexBaseInstance called with null GL context");
+        MOBILEGL_ASSERT(pVulkanRenderer,
+                        "DirectVulkan::DrawElementsInstancedBaseVertexBaseInstance called with null VulkanRenderer");
+        MOBILEGL_ASSERT(MG_Pipe::gPipeInputs->IsLive(),
+                        "DirectVulkan::DrawElementsInstancedBaseVertexBaseInstance called with null GL context");
 
         DrawIndexedCmd payload{};
         payload.mode = mode;
@@ -374,8 +379,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
     void DrawArraysInstancedBaseInstance(GLenum mode, GLint first, GLsizei count, GLsizei instancecount,
                                          GLuint baseinstance) {
-        MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::DrawArraysInstancedBaseInstance called with null VulkanRenderer");
-        MOBILEGL_ASSERT(MG_Pipe::gPipeInputs->IsLive(), "DirectVulkan::DrawArraysInstancedBaseInstance called with null GL context");
+        MOBILEGL_ASSERT(pVulkanRenderer,
+                        "DirectVulkan::DrawArraysInstancedBaseInstance called with null VulkanRenderer");
+        MOBILEGL_ASSERT(MG_Pipe::gPipeInputs->IsLive(),
+                        "DirectVulkan::DrawArraysInstancedBaseInstance called with null GL context");
 
         DrawCmd payload{};
         payload.mode = mode;
@@ -404,16 +411,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         MOBILEGL_ASSERT(MG_Pipe::gPipeInputs->IsLive(), "DirectVulkan::CopyTexSubImage2D called with null GL context");
         pVulkanRenderer->CopyTexSubImage2D(target, level, xoffset, yoffset, x, y, width, height);
     }
-    void CopyImageSubData(const CopyImageEndpoint& src,
-                          GLenum srcTarget, GLint srcLevel, GLint srcX, GLint srcY, GLint srcZ,
-                          const CopyImageEndpoint& dst,
-                          GLenum dstTarget, GLint dstLevel, GLint dstX, GLint dstY, GLint dstZ,
-                          GLsizei srcWidth, GLsizei srcHeight, GLsizei srcDepth) {
+    void CopyImageSubData(const CopyImageEndpoint& src, GLenum srcTarget, GLint srcLevel, GLint srcX, GLint srcY,
+                          GLint srcZ, const CopyImageEndpoint& dst, GLenum dstTarget, GLint dstLevel, GLint dstX,
+                          GLint dstY, GLint dstZ, GLsizei srcWidth, GLsizei srcHeight, GLsizei srcDepth) {
         MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::CopyImageSubData called with null VulkanRenderer");
         MOBILEGL_ASSERT(MG_Pipe::gPipeInputs->IsLive(), "DirectVulkan::CopyImageSubData called with null GL context");
-        pVulkanRenderer->CopyImageSubData(src, srcTarget, srcLevel, srcX, srcY, srcZ,
-                                          dst, dstTarget, dstLevel, dstX, dstY, dstZ,
-                                          srcWidth, srcHeight, srcDepth);
+        pVulkanRenderer->CopyImageSubData(src, srcTarget, srcLevel, srcX, srcY, srcZ, dst, dstTarget, dstLevel, dstX,
+                                          dstY, dstZ, srcWidth, srcHeight, srcDepth);
     }
     void GenerateMipmap(GLenum target) {
         MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::GenerateMipmap called with null VulkanRenderer");
@@ -501,10 +505,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
         auto& record = state.ShaderCsos[handle.Slot];
         auto found = std::find_if(record.StorageOverrides.begin(), record.StorageOverrides.end(),
-            [&](const auto& entry) { return entry.Name == storageBlockName; });
+                                  [&](const auto& entry) { return entry.Name == storageBlockName; });
         if (found == record.StorageOverrides.end())
             record.StorageOverrides.push_back({storageBlockName, static_cast<Int32>(storageBlockBinding)});
-        else found->Binding = static_cast<Int32>(storageBlockBinding);
+        else
+            found->Binding = static_cast<Int32>(storageBlockBinding);
         ++record.BindingsSerial;
         return;
         // P7 wave 2 package C, OQ-8: NOTHING LEFT TO PATCH, and the hazard goes with it.
@@ -564,8 +569,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (!MG_Pipe::MGPipeHandleIsNull(bound.Res)) {
             owned.resize(static_cast<SizeT>(count) * width);
             const Uint64 offset = bound.Offset + reinterpret_cast<Uint64>(indices);
-            if (offset < bound.Offset || !pVulkanRenderer->GetWireBufferManager().ReadWireBuffer(
-                    bound.Res, offset, owned.size(), owned.data())) return false;
+            if (offset < bound.Offset ||
+                !pVulkanRenderer->GetWireBufferManager().ReadWireBuffer(bound.Res, offset, owned.size(), owned.data()))
+                return false;
             bytes = owned.data();
         }
         if (!bytes) return false;
@@ -687,8 +693,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 if (count[i] <= 0) {
                     continue;
                 }
-                DrawElementsBaseVertex(mode, count[i], type, indices[i],
-                                       basevertex != nullptr ? basevertex[i] : 0);
+                DrawElementsBaseVertex(mode, count[i], type, indices[i], basevertex != nullptr ? basevertex[i] : 0);
             }
             return;
         }
@@ -722,9 +727,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // TODO: this index view needs a redesign, now there's a lotta redundant uploads
 
             payload.indexBufferView.indexByteOffset = 0;
-            payload.indexBufferView.indexByteSize =
-                    std::max(reinterpret_cast<SizeT>(indices[i]) + count[i] * indexSize,
-                             payload.indexBufferView.indexByteSize);
+            payload.indexBufferView.indexByteSize = std::max(reinterpret_cast<SizeT>(indices[i]) + count[i] * indexSize,
+                                                             payload.indexBufferView.indexByteSize);
 
             auto& param = params[i];
 
@@ -741,7 +745,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     void DrawElementsBaseVertex(GLenum mode, GLsizei count, GLenum type, const GLvoid* indices, GLint basevertex) {
         MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::DrawElementsBaseVertex called with null VulkanRenderer");
-        MOBILEGL_ASSERT(MG_Pipe::gPipeInputs->IsLive(), "DirectVulkan::DrawElementsBaseVertex called with null GL context");
+        MOBILEGL_ASSERT(MG_Pipe::gPipeInputs->IsLive(),
+                        "DirectVulkan::DrawElementsBaseVertex called with null GL context");
         if (mode == GL_LINE_LOOP) {
             Vector<Uint32> closedIndices;
             if (BuildClosedLineLoopIndices(count, type, indices, closedIndices)) {
@@ -765,7 +770,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     void MultiDrawElementsBaseVertex(GLenum mode, const GLsizei* count, GLenum type, const GLvoid* const* indices,
                                      GLsizei drawcount, const GLint* basevertex) {
         MOBILEGL_ASSERT(pVulkanRenderer, "DirectVulkan::MultiDrawElementsBaseVertex called with null VulkanRenderer");
-        MOBILEGL_ASSERT(MG_Pipe::gPipeInputs->IsLive(), "DirectVulkan::MultiDrawElementsBaseVertex called with null GL context");
+        MOBILEGL_ASSERT(MG_Pipe::gPipeInputs->IsLive(),
+                        "DirectVulkan::MultiDrawElementsBaseVertex called with null GL context");
         MultiDrawElementsImpl(mode, count, type, indices, drawcount, basevertex);
     }
 
@@ -819,8 +825,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             pVulkanRenderer->FlushForSyncPoint(sync->submitIndex);
         }
         if (timeout == 0) {
-            return pVulkanRenderer->IsSubmitIndexComplete(sync->submitIndex) ? GL_ALREADY_SIGNALED
-                                                                             : GL_TIMEOUT_EXPIRED;
+            return pVulkanRenderer->IsSubmitIndexComplete(sync->submitIndex) ? GL_ALREADY_SIGNALED : GL_TIMEOUT_EXPIRED;
         }
         // Blocking wait: flush even without the flush bit - the sync's batch
         // can only be submitted from this thread, so waiting on an unflushed
@@ -874,7 +879,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // records are shared (SharedPtr) with the owning pool's pending list,
         // so deleting the query while results are still in flight is safe.
         struct VulkanTimerQuery {
-            enum class Kind : Uint8 { Timer, Occlusion, XfbWritten, XfbGenerated };
+            enum class Kind : Uint8 {
+                Timer,
+                Occlusion,
+                XfbWritten,
+                XfbGenerated
+            };
             Kind kind = Kind::Timer;
             SharedPtr<VkTimerQueryManager::TimestampRecord> begin;
             SharedPtr<VkTimerQueryManager::TimestampRecord> end;
@@ -1003,22 +1013,20 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             *outNanoseconds = samples;
             return true;
         }
-        if (query->kind == VulkanTimerQuery::Kind::XfbWritten ||
-            query->kind == VulkanTimerQuery::Kind::XfbGenerated) {
+        if (query->kind == VulkanTimerQuery::Kind::XfbWritten || query->kind == VulkanTimerQuery::Kind::XfbGenerated) {
             Uint64 primitives = 0;
             if (!pVulkanRenderer->ResolveXfbQueryResult(query->occlusionSlots, query->rerouteSlots,
                                                         query->kind == VulkanTimerQuery::Kind::XfbGenerated,
                                                         primitives)) {
                 return false;
             }
-            if (query->kind == VulkanTimerQuery::Kind::XfbGenerated &&
-                !query->pausedPrimitivesCountedByGpu &&
+            if (query->kind == VulkanTimerQuery::Kind::XfbGenerated && !query->pausedPrimitivesCountedByGpu &&
 #if MOBILEGL_BUILD_DISAGGREGATED
                 MG_Config::Transport == MG_Config::TransportMode::Monolith &&
 #endif
                 MG_Pipe::gPipeInputs->IsLive()) {
-                primitives += MG_Pipe::gPipeInputs->GetTransformFeedbackPausedPrimitiveCounter() -
-                              query->pausedPrimitiveSnapshot;
+                primitives +=
+                    MG_Pipe::gPipeInputs->GetTransformFeedbackPausedPrimitiveCounter() - query->pausedPrimitiveSnapshot;
             }
             *outNanoseconds = primitives;
             return true;
@@ -1067,7 +1075,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 #if MOBILEGL_BUILD_DISAGGREGATED
             MG_Config::Transport == MG_Config::TransportMode::Monolith &&
 #endif
-            MG_Pipe::gPipeInputs->IsLive() ? MG_Pipe::gPipeInputs->GetTransformFeedbackPausedPrimitiveCounter() : 0;
+                    MG_Pipe::gPipeInputs->IsLive()
+                ? MG_Pipe::gPipeInputs->GetTransformFeedbackPausedPrimitiveCounter()
+                : 0;
         // Read AFTER StartXfbQueryCapture, which is where a failed reroute-pool creation
         // disarms: the answer is then what this span will actually do for every draw.
         query->pausedPrimitivesCountedByGpu = generated && pVulkanRenderer->ArePausedDrawsGpuCounted();
@@ -1080,9 +1090,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (query == nullptr || query->rendererGeneration != GetRendererGeneration()) {
             return;
         }
-        pVulkanRenderer->StopXfbQueryCapture(
-            query->kind == VulkanTimerQuery::Kind::XfbGenerated ? 1u : 0u, query->occlusionSlots,
-            query->rerouteSlots);
+        pVulkanRenderer->StopXfbQueryCapture(query->kind == VulkanTimerQuery::Kind::XfbGenerated ? 1u : 0u,
+                                             query->occlusionSlots, query->rerouteSlots);
     }
 
     BackendQueryHandle BeginOcclusionQuery() {

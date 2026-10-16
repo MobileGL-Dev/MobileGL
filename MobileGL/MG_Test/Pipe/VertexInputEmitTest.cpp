@@ -151,8 +151,12 @@ namespace {
         SharedPtr<GLContext> m_previousContext;
     };
 
-    GLContext& Ctx() { return *MG_State::pGLContext; }
-    MGPipeVertexInputEmitter& Emitter() { return MGPipeVertexInputEmitterInstance(); }
+    GLContext& Ctx() {
+        return *MG_State::pGLContext;
+    }
+    MGPipeVertexInputEmitter& Emitter() {
+        return MGPipeVertexInputEmitterInstance();
+    }
 
     const SharedPtr<VertexArrayObject>& MakeVao(Uint name) {
         Ctx().CreateVertexArrayObject(name);
@@ -423,14 +427,12 @@ namespace {
 
         ASSERT_GT(Emitter().EmitVertexBuffers(Ctx(), 3), 0u);
         ASSERT_EQ(Emitter().VertexBufferSetCount(), 1u);
-        const Uint64 latched =
-            MGPipeSetHashSuppressorInstance().LastEmitted(MGPipeSuppressorSlot::SetVertexBuffers);
+        const Uint64 latched = MGPipeSetHashSuppressorInstance().LastEmitted(MGPipeSuppressorSlot::SetVertexBuffers);
         EXPECT_NE(latched, 0u) << "0 is reserved for 'never emitted'";
 
         EXPECT_EQ(Emitter().EmitVertexBuffers(Ctx(), 3), 0u) << "an unchanged set went out again";
         EXPECT_EQ(Emitter().VertexBufferSetCount(), 1u);
-        EXPECT_EQ(MGPipeSetHashSuppressorInstance().LastEmitted(MGPipeSuppressorSlot::SetVertexBuffers),
-                  latched);
+        EXPECT_EQ(MGPipeSetHashSuppressorInstance().LastEmitted(MGPipeSuppressorSlot::SetVertexBuffers), latched);
 
         // A real change to the SET still goes out with the same base instance, so the
         // suppression above is not simply "this slot is stuck".
@@ -487,20 +489,18 @@ namespace {
             if (!declared[i].Enabled) continue;
             ++covered;
             SCOPED_TRACE(::testing::Message() << "attribute " << i);
-            EXPECT_GE(i, window.Start)
-                << "create_vertex_elements declares attribute " << i
-                << " ENABLED but set_vertex_buffers' window starts at " << window.Start
-                << ". The backend resolves no binding for it and SKIPS it, leaving the driver "
-                   "array enabled over whatever it last pointed at (ID-95 / ruling 19)";
+            EXPECT_GE(i, window.Start) << "create_vertex_elements declares attribute " << i
+                                       << " ENABLED but set_vertex_buffers' window starts at " << window.Start
+                                       << ". The backend resolves no binding for it and SKIPS it, leaving the driver "
+                                          "array enabled over whatever it last pointed at (ID-95 / ruling 19)";
             EXPECT_LT(i, window.Start + window.Count)
                 << "create_vertex_elements declares attribute " << i
                 << " ENABLED but set_vertex_buffers' window ends at " << (window.Start + window.Count)
                 << " - the same skip, at the other end. A narrower window is the sink's "
                    "Fatal{ProtocolCorruption, \"SetVertexBuffers.Count\"}";
         }
-        ASSERT_EQ(covered, 2u)
-            << "the record did not declare the two attributes this case enabled, so the window "
-               "check above had nothing to be about";
+        ASSERT_EQ(covered, 2u) << "the record did not declare the two attributes this case enabled, so the window "
+                                  "check above had nothing to be about";
 
         // And the window's own entries agree with the record about WHICH attribute each is, so
         // "covered" cannot be satisfied by a window of the right LENGTH over the wrong indices.
@@ -696,10 +696,11 @@ namespace {
         }
 
         EXPECT_EQ(slots.LiveCount(MGPipeKind::VertexElementsCso), liveBefore)
-            << kChurn << " vertex arrays were created and destroyed and the client kept their "
-                         "CSO slots; under a backend that installs no death notice consumer "
-                         "that is one SlotState, one map node and a ~1.3 KB applier record per "
-                         "VAO, for the life of the process";
+            << kChurn
+            << " vertex arrays were created and destroyed and the client kept their "
+               "CSO slots; under a backend that installs no death notice consumer "
+               "that is one SlotState, one map node and a ~1.3 KB applier record per "
+               "VAO, for the life of the process";
         // The default VAO plus one recycled slot, i.e. the churn recycles instead of growing.
         EXPECT_LE(slots.HighWater(MGPipeKind::VertexElementsCso) - highWaterBefore, 3u)
             << "the CSO slot space grew with the churn instead of being recycled";

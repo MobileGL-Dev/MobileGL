@@ -51,10 +51,8 @@ namespace MobileGL {
                 // global has no defined value to read, so lowering that one would answer the
                 // shader with garbage instead of the viewport it asked for. That case is left for
                 // the driver to reject.
-                Instruction* GetDecoratedViewportIndexOutput(IRContext* context,
-                                                             const Instruction& annotation) {
-                    Instruction* variable =
-                        context->get_def_use_mgr()->GetDef(annotation.GetSingleWordInOperand(0));
+                Instruction* GetDecoratedViewportIndexOutput(IRContext* context, const Instruction& annotation) {
+                    Instruction* variable = context->get_def_use_mgr()->GetDef(annotation.GetSingleWordInOperand(0));
                     if (variable == nullptr || variable->opcode() != spv::Op::OpVariable ||
                         static_cast<spv::StorageClass>(variable->GetSingleWordInOperand(0)) !=
                             spv::StorageClass::Output) {

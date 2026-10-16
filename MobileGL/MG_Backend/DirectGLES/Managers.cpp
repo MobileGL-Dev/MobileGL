@@ -24,8 +24,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     Bool g_anyProgramRoutesViewportIndex = false;
 
     GLenum ResolveBackendMinFilter(const SamplerParameters& samplerParams, Bool avoidMipmapMinFilter) {
-        GLenum filter = MG_Util::ConvertSamplerFilterModeToGLEnum(samplerParams.minFilter,
-                                                                  samplerParams.mipmapMode);
+        GLenum filter = MG_Util::ConvertSamplerFilterModeToGLEnum(samplerParams.minFilter, samplerParams.mipmapMode);
         if (!avoidMipmapMinFilter) {
             return filter;
         }
@@ -44,11 +43,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
     String ReplaceIdentifier(String source, const String& from, const String& to) {
         SizeT pos = 0;
         while ((pos = source.find(from, pos)) != String::npos) {
-            const Bool leftIsIdent = pos > 0 &&
-                (std::isalnum(static_cast<unsigned char>(source[pos - 1])) || source[pos - 1] == '_');
+            const Bool leftIsIdent =
+                pos > 0 && (std::isalnum(static_cast<unsigned char>(source[pos - 1])) || source[pos - 1] == '_');
             const SizeT end = pos + from.size();
-            const Bool rightIsIdent = end < source.size() &&
-                (std::isalnum(static_cast<unsigned char>(source[end])) || source[end] == '_');
+            const Bool rightIsIdent =
+                end < source.size() && (std::isalnum(static_cast<unsigned char>(source[end])) || source[end] == '_');
             if (!leftIsIdent && !rightIsIdent) {
                 source.replace(pos, from.size(), to);
                 pos += to.size();
@@ -73,7 +72,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         return source;
     }
 
-        namespace {
+    namespace {
         Bool g_processTeardown = false;
         std::once_flag g_teardownSentinelOnce;
 
@@ -85,14 +84,19 @@ namespace MobileGL::MG_Backend::DirectGLES {
     } // namespace
 
 #if MOBILEGL_BUILD_DISAGGREGATED
-    Bool InProcessTeardown() { return g_processTeardown || g_serverSessionTwinTeardown; }
+    Bool InProcessTeardown() {
+        return g_processTeardown || g_serverSessionTwinTeardown;
+    }
 #else
-    Bool InProcessTeardown() { return g_processTeardown; }
+    Bool InProcessTeardown() {
+        return g_processTeardown;
+    }
 #endif
-    Bool InProcessExit() { return g_processTeardown; }
+    Bool InProcessExit() {
+        return g_processTeardown;
+    }
     void EnsureProcessTeardownSentinel() {
-        std::call_once(g_teardownSentinelOnce,
-                       [] { std::atexit(+[] { g_processTeardown = true; }); });
+        std::call_once(g_teardownSentinelOnce, [] { std::atexit(+[] { g_processTeardown = true; }); });
     }
 
     namespace {
@@ -105,8 +109,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // A notice that arrives after exit() has begun is dropped: past that point the twin's
         // destructor must not call into the driver (see InProcessTeardown()), and the process
         // is about to hand every GPU object back anyway. That twin is a deliberate leak.
-        void OnFrontendStateObjectDestroyed(MG_Pipe::MGPipeKind kind, Uint64 lifetimeId,
-                                            MG_Pipe::MGPipeHandle handle) {
+        void OnFrontendStateObjectDestroyed(MG_Pipe::MGPipeKind kind, Uint64 lifetimeId, MG_Pipe::MGPipeHandle handle) {
             if (InProcessTeardown()) return;
 #if MOBILEGL_BUILD_DISAGGREGATED
             // P5c (ct), CONTRACT-P5C.md §5.2: with an active transport the death crosses AS A
@@ -267,9 +270,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
     }
 
     EsprytSlotArmVerdict CurrentEsprytSlotArmVerdict() {
-        return ClassifyEsprytSlotArm(
-            (MG_Config::Features.PipePush & MG_Pipe::kMGPipeSubsystemEsprytSlots) != 0,
-            /*legacyMemosEnabled=*/true);
+        return ClassifyEsprytSlotArm((MG_Config::Features.PipePush & MG_Pipe::kMGPipeSubsystemEsprytSlots) != 0,
+                                     /*legacyMemosEnabled=*/true);
     }
 
     void DiagnoseEsprytSlotArm() {
@@ -373,8 +375,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return source;
         }
         for (const char* name : {DRAW_ID_UNIFORM_NAME, BASE_VERTEX_UNIFORM_NAME}) {
-            for (const char* declPrefix : {"highp int ", "mediump int ", "lowp int ", "int ", "highp uint ",
-                                           "mediump uint ", "uint "}) {
+            for (const char* declPrefix :
+                 {"highp int ", "mediump int ", "lowp int ", "int ", "highp uint ", "mediump uint ", "uint "}) {
                 const String declaration = String(declPrefix) + name + ";";
                 const SizeT pos = source.find(declaration);
                 if (pos == String::npos) {
@@ -383,8 +385,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // Only promote a standalone global declaration, not a uniform we already emitted.
                 const Bool alreadyUniform = pos >= 8 && source.compare(pos - 8, 8, "uniform ") == 0;
                 if (!alreadyUniform) {
-                    const Bool hasPrecision = std::strncmp(declPrefix, "int ", 4) != 0 &&
-                                              std::strncmp(declPrefix, "uint ", 5) != 0;
+                    const Bool hasPrecision =
+                        std::strncmp(declPrefix, "int ", 4) != 0 && std::strncmp(declPrefix, "uint ", 5) != 0;
                     const String qualifier = hasPrecision ? "uniform " : "uniform highp ";
                     source.replace(pos, declaration.size(), qualifier + declaration);
                 }
@@ -454,9 +456,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 break;
             }
             machinery += String("uniform highp int ") + BASE_INSTANCE_WORD_INDEX_UNIFORM_NAME + ";\n";
-            machinery += String("layout(std430, binding = ") + std::to_string(paramsBinding) +
-                         ") readonly buffer " + INDIRECT_PARAMS_BLOCK_NAME +
-                         " { highp uint mg_indirectWords[]; };\n";
+            machinery += String("layout(std430, binding = ") + std::to_string(paramsBinding) + ") readonly buffer " +
+                         INDIRECT_PARAMS_BLOCK_NAME + " { highp uint mg_indirectWords[]; };\n";
             if (rebaseInstanceId) {
                 machinery += String("#define ") + ZERO_BASED_INSTANCE_ID_NAME + " (gl_InstanceID - ((" +
                              BASE_INSTANCE_WORD_INDEX_UNIFORM_NAME + " > 0) ? int(mg_indirectWords[uint(" +
@@ -523,8 +524,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (pos != 0 && source[pos - 1] != '\n') {
                 continue;
             }
-            source.replace(pos, declaration.size(),
-                           String("flat out highp int ") + VIEWPORT_INDEX_VARYING_NAME + ";");
+            source.replace(pos, declaration.size(), String("flat out highp int ") + VIEWPORT_INDEX_VARYING_NAME + ";");
             return true;
         }
         return false;
@@ -576,8 +576,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         gated += "\n";
         gated += String(ESSL_ENTRY_POINT_SIGNATURE) + "\n";
         gated += "{\n";
-        gated += String("    if (((") + VIEWPORT_PASS_MASK_UNIFORM_NAME + " >> (" +
-                 VIEWPORT_INDEX_VARYING_NAME + " & 15)) & 1) == 0)\n";
+        gated += String("    if (((") + VIEWPORT_PASS_MASK_UNIFORM_NAME + " >> (" + VIEWPORT_INDEX_VARYING_NAME +
+                 " & 15)) & 1) == 0)\n";
         gated += "    {\n";
         gated += "        discard;\n";
         gated += "    }\n";
@@ -621,7 +621,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
         //
         // This closes espryt D14 / closure row 7 and, with it, row 6's "LEGACY_MEMOS=0 +
         // PUSH=0x7f must name a verdict": that combination now names NoArm and stops.
-        enum class PipeSubsystemArmVerdict { Handles, Legacy, NoArm };
+        enum class PipeSubsystemArmVerdict {
+            Handles,
+            Legacy,
+            NoArm
+        };
 
         // The one voice for an armless verdict, so the two families cannot disagree about what
         // it means or about whether it stops. `what` names the family and the bit.
@@ -673,10 +677,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     "MG_Pipe/SubsystemDeps.def says it requires (requires 0x%llx, missing 0x%llx): "
                     "%s - REFUSING the dependent bit and running the legacy arm. Set every bit of "
                     "the row, or clear the family's own",
-                    what, static_cast<unsigned long long>(mask),
-                    static_cast<unsigned long long>(required),
-                    static_cast<unsigned long long>(required & ~mask),
-                    MG_Pipe::MGPipeSubsystemDependencyWhy(family));
+                    what, static_cast<unsigned long long>(mask), static_cast<unsigned long long>(required),
+                    static_cast<unsigned long long>(required & ~mask), MG_Pipe::MGPipeSubsystemDependencyWhy(family));
             return true;
         }
 
@@ -732,9 +734,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // make the record silently truncate, and truncating silently is the bug class this
             // phase is closing, while widening the payload is a wire change nobody has evidence
             // for. So: refuse the bit, name the cap, run the legacy arm.
-            if (!refused &&
-                static_cast<Uint32>(std::max<Int>(g_GLESCapabilities.MaxColorAttachments, 0)) >
-                    MG_Pipe::kMGPipeMaxColorAttachments) {
+            if (!refused && static_cast<Uint32>(std::max<Int>(g_GLESCapabilities.MaxColorAttachments, 0)) >
+                                MG_Pipe::kMGPipeMaxColorAttachments) {
                 MGLOG_E("MGPipe: this driver reports GL_MAX_COLOR_ATTACHMENTS = %d, above "
                         "MGPFramebufferState::Color[%u]'s wire width - REFUSING "
                         "kMGPipeSubsystemFramebuffer (bit 9) rather than truncating the record, "
@@ -743,9 +744,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 refused = true;
             }
         }
-        const BufferImpl::PipeSubsystemArmVerdict verdict = BufferImpl::ClassifyPipeSubsystemArm(
-            bitSet && !refused, /*legacyMemosEnabled=*/true,
-            /*legacyArmSurvivesLegacyMemos=*/false);
+        const BufferImpl::PipeSubsystemArmVerdict verdict =
+            BufferImpl::ClassifyPipeSubsystemArm(bitSet && !refused, /*legacyMemosEnabled=*/true,
+                                                 /*legacyArmSurvivesLegacyMemos=*/false);
         if (verdict == BufferImpl::PipeSubsystemArmVerdict::NoArm) {
             BufferImpl::StopOnArmlessPipeSubsystem(
                 "MOBILEGL_PIPE_PUSH leaves kMGPipeSubsystemFramebuffer (bit 9) clear (or refuses "
@@ -784,9 +785,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
             refused = PipeSubsystemDependencyMissing(mask, MG_Pipe::kMGPipeSubsystemTextureResources,
                                                      "kMGPipeSubsystemTextureResources (bit 10)");
         }
-        const BufferImpl::PipeSubsystemArmVerdict verdict = BufferImpl::ClassifyPipeSubsystemArm(
-            bitSet && !refused, /*legacyMemosEnabled=*/true,
-            /*legacyArmSurvivesLegacyMemos=*/false);
+        const BufferImpl::PipeSubsystemArmVerdict verdict =
+            BufferImpl::ClassifyPipeSubsystemArm(bitSet && !refused, /*legacyMemosEnabled=*/true,
+                                                 /*legacyArmSurvivesLegacyMemos=*/false);
         if (verdict == BufferImpl::PipeSubsystemArmVerdict::NoArm) {
             BufferImpl::StopOnArmlessPipeSubsystem(
                 "MOBILEGL_PIPE_PUSH leaves kMGPipeSubsystemTextureResources (bit 10) clear (or "
@@ -817,9 +818,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
             refused = PipeSubsystemDependencyMissing(mask, MG_Pipe::kMGPipeSubsystemSamplers,
                                                      "kMGPipeSubsystemSamplers (bit 11)");
         }
-        const BufferImpl::PipeSubsystemArmVerdict verdict = BufferImpl::ClassifyPipeSubsystemArm(
-            bitSet && !refused, /*legacyMemosEnabled=*/true,
-            /*legacyArmSurvivesLegacyMemos=*/false);
+        const BufferImpl::PipeSubsystemArmVerdict verdict =
+            BufferImpl::ClassifyPipeSubsystemArm(bitSet && !refused, /*legacyMemosEnabled=*/true,
+                                                 /*legacyArmSurvivesLegacyMemos=*/false);
         if (verdict == BufferImpl::PipeSubsystemArmVerdict::NoArm) {
             BufferImpl::StopOnArmlessPipeSubsystem(
                 "MOBILEGL_PIPE_PUSH leaves kMGPipeSubsystemSamplers (bit 11) clear (or refuses "
@@ -874,7 +875,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         const Uint32 cap = static_cast<Uint32>(std::max<Int>(g_GLESCapabilities.MaxColorAttachments, 0));
         if (cap > MG_Pipe::kMGPipeMaxColorAttachments) {
             MGLOG_E("MGPipe: this driver reports GL_MAX_COLOR_ATTACHMENTS = %u, above "
-                    "MGPFramebufferState::Color[%u]'s wire width", cap, MG_Pipe::kMGPipeMaxColorAttachments);
+                    "MGPFramebufferState::Color[%u]'s wire width",
+                    cap, MG_Pipe::kMGPipeMaxColorAttachments);
             BufferImpl::StopOnArmlessPipeSubsystem(
                 "kMGPipeSubsystemFramebuffer (bit 9) cannot carry this driver's colour attachments, and "
                 "the record arm is the only arm since P13 W6");
@@ -897,8 +899,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // was added to only one of them.
         for (SizeT i = 0; i < static_cast<SizeT>(MobileGL::TextureTarget::TextureTargetCount); ++i) {
             const auto target = static_cast<MobileGL::TextureTarget>(i);
-            if (MG_Pipe::MGPipeResourceTargetForTextureTarget(target) ==
-                static_cast<Uint32>(record->Desc.Target)) {
+            if (MG_Pipe::MGPipeResourceTargetForTextureTarget(target) == static_cast<Uint32>(record->Desc.Target)) {
                 return target;
             }
         }
@@ -950,8 +951,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         MGLOG_E_ONCE("MGPipe: a pending upload for level %u carries resource target %u while its "
                      "resource's descriptor says %u - D matches on the upload half only, so this "
                      "entry was matched anyway; the two sides disagree about what the resource is",
-                     static_cast<Uint>(level), static_cast<Uint>(carried),
-                     static_cast<Uint>(record.Desc.Target));
+                     static_cast<Uint>(level), static_cast<Uint>(carried), static_cast<Uint>(record.Desc.Target));
     }
 
     const MG_Pipe::MGPipeResourceRecord::PendingUpload* FindPipeTextureUpload(
@@ -1045,8 +1045,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         if (!record.Live || record.Gen != res.Gen) return false;
         const Uint8 uploadHalf = MG_Pipe::MGPipeSubDataUploadTargetOf(packedTarget);
         for (auto& pending : record.PendingUploads) {
-            if (MG_Pipe::MGPipeSubDataUploadTargetOf(pending.UploadTarget) != uploadHalf ||
-                pending.Level != level) {
+            if (MG_Pipe::MGPipeSubDataUploadTargetOf(pending.UploadTarget) != uploadHalf || pending.Level != level) {
                 continue;
             }
             pending.UnionBox = wholeLevel;

@@ -276,12 +276,12 @@ namespace MGITest {
         GLint depthBits = 0;
         GLint stencilBits = 0;
         GLint componentType = GL_UNSIGNED_NORMALIZED;
-        glGetFramebufferAttachmentParameteriv(GL_DRAW_FRAMEBUFFER, GL_DEPTH,
-                                              GL_FRAMEBUFFER_ATTACHMENT_DEPTH_SIZE, &depthBits);
-        glGetFramebufferAttachmentParameteriv(GL_DRAW_FRAMEBUFFER, GL_STENCIL,
-                                              GL_FRAMEBUFFER_ATTACHMENT_STENCIL_SIZE, &stencilBits);
-        glGetFramebufferAttachmentParameteriv(GL_DRAW_FRAMEBUFFER, GL_DEPTH,
-                                              GL_FRAMEBUFFER_ATTACHMENT_COMPONENT_TYPE, &componentType);
+        glGetFramebufferAttachmentParameteriv(GL_DRAW_FRAMEBUFFER, GL_DEPTH, GL_FRAMEBUFFER_ATTACHMENT_DEPTH_SIZE,
+                                              &depthBits);
+        glGetFramebufferAttachmentParameteriv(GL_DRAW_FRAMEBUFFER, GL_STENCIL, GL_FRAMEBUFFER_ATTACHMENT_STENCIL_SIZE,
+                                              &stencilBits);
+        glGetFramebufferAttachmentParameteriv(GL_DRAW_FRAMEBUFFER, GL_DEPTH, GL_FRAMEBUFFER_ATTACHMENT_COMPONENT_TYPE,
+                                              &componentType);
         EXPECT_EQ(FirstGLError(), 0u);
         if (depthBits <= 0 || stencilBits <= 0) {
             GTEST_SKIP() << "this surface has no packed depth/stencil (depth=" << depthBits
@@ -290,8 +290,8 @@ namespace MGITest {
 
         // The one sized format the reported description names. Getting here with the wrong
         // answer is the bug: the two candidates are not interchangeable for a blit.
-        const GLenum reported = (componentType == GL_FLOAT || depthBits > 24) ? GL_DEPTH32F_STENCIL8
-                                                                             : GL_DEPTH24_STENCIL8;
+        const GLenum reported =
+            (componentType == GL_FLOAT || depthBits > 24) ? GL_DEPTH32F_STENCIL8 : GL_DEPTH24_STENCIL8;
 
         GLuint fbo = 0;
         GLuint colorRbo = 0;
@@ -350,8 +350,8 @@ namespace MGITest {
             glDeleteRenderbuffers(1, &colorRbo);
             glDeleteRenderbuffers(1, &depthRbo);
             gl.EndFrame();
-            GTEST_SKIP() << "backend " << gl.BackendName() << " on this surface transferred no colour either (green="
-                         << int(color[1])
+            GTEST_SKIP() << "backend " << gl.BackendName()
+                         << " on this surface transferred no colour either (green=" << int(color[1])
                          << "): it cannot blit out of the default framebuffer here, so the depth/stencil half proves "
                             "nothing. The GL-error assertion above still ran, and it is the format contract";
         }

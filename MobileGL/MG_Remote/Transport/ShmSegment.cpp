@@ -32,9 +32,13 @@
 
 namespace MobileGL::MG_Remote::Transport {
 
-    ShmSegment::~ShmSegment() { Close(); }
+    ShmSegment::~ShmSegment() {
+        Close();
+    }
 
-    ShmSegment::ShmSegment(ShmSegment&& other) noexcept { Steal(std::move(other)); }
+    ShmSegment::ShmSegment(ShmSegment&& other) noexcept {
+        Steal(std::move(other));
+    }
 
     ShmSegment& ShmSegment::operator=(ShmSegment&& other) noexcept {
         if (this != &other) {
@@ -60,7 +64,9 @@ namespace MobileGL::MG_Remote::Transport {
         other.m_readOnly = false;
     }
 
-    bool ShmSegment::Valid() const { return m_size != 0 && (m_fd >= 0 || m_nativeHandle != nullptr); }
+    bool ShmSegment::Valid() const {
+        return m_size != 0 && (m_fd >= 0 || m_nativeHandle != nullptr);
+    }
 
     // =======================================================================
     // P5: the role memory ledger and the VmHWM sample
@@ -172,17 +178,14 @@ namespace MobileGL::MG_Remote::Transport {
     }
 
     RoleMemorySample SampleRoleMemoryInto(std::atomic<std::uint64_t>& runningPeak, MemoryRole role,
-                                          std::uint64_t kernelPeakRssBytes,
-                                          std::uint64_t kernelCurrentRssBytes) {
+                                          std::uint64_t kernelPeakRssBytes, std::uint64_t kernelCurrentRssBytes) {
         // max(running, kernel peak, kernel current), as a CAS loop: two threads
         // sampling at once (the GL thread and the apply thread both log memory
         // at phase boundaries) must not let a lower value overwrite a higher.
         const std::uint64_t observed =
             kernelPeakRssBytes > kernelCurrentRssBytes ? kernelPeakRssBytes : kernelCurrentRssBytes;
         std::uint64_t peak = runningPeak.load(std::memory_order_relaxed);
-        while (observed > peak &&
-               !runningPeak.compare_exchange_weak(peak, observed, std::memory_order_relaxed)) {
-        }
+        while (observed > peak && !runningPeak.compare_exchange_weak(peak, observed, std::memory_order_relaxed)) {}
         RoleMemorySample sample;
         sample.Role = role;
         // THE RUNNING MAXIMUM, never the kernel's peak verbatim - RoleMemory.h
@@ -222,8 +225,7 @@ namespace MobileGL::MG_Remote::Transport {
     // =======================================================================
 
     namespace {
-        constexpr std::size_t kSlotCount =
-            static_cast<std::size_t>(SessionSegmentSlot::kSessionSegmentCount);
+        constexpr std::size_t kSlotCount = static_cast<std::size_t>(SessionSegmentSlot::kSessionSegmentCount);
 
         std::size_t SlotIndex(SessionSegmentSlot slot) {
             const std::size_t index = static_cast<std::size_t>(slot);
@@ -231,7 +233,9 @@ namespace MobileGL::MG_Remote::Transport {
         }
     } // namespace
 
-    SessionSegments::~SessionSegments() { Close(); }
+    SessionSegments::~SessionSegments() {
+        Close();
+    }
 
     MobileGLResult SessionSegments::Create(const SessionSegmentSizes& sizes, MemoryRole role) {
         Close();
@@ -268,12 +272,10 @@ namespace MobileGL::MG_Remote::Transport {
         }
 
         for (std::size_t index = 0; index < kSlotCount; ++index) {
-            const MobileGLResult created =
-                ShmSegment::Create(specs[index].name, specs[index].bytes, m_owned[index]);
+            const MobileGLResult created = ShmSegment::Create(specs[index].name, specs[index].bytes, m_owned[index]);
             if (created != MOBILEGL_OK) {
-                MGLOG_E("MG_Remote session: could not create segment %s of %llu bytes (rc=%d)",
-                        specs[index].name, static_cast<unsigned long long>(specs[index].bytes),
-                        static_cast<int>(created));
+                MGLOG_E("MG_Remote session: could not create segment %s of %llu bytes (rc=%d)", specs[index].name,
+                        static_cast<unsigned long long>(specs[index].bytes), static_cast<int>(created));
                 Close();
                 return created;
             }
@@ -311,15 +313,19 @@ namespace MobileGL::MG_Remote::Transport {
 
     MobileGLResult SessionSegments::CreatePrivate(const SessionSegmentSizes& sizes, MemoryRole role) {
         Close();
-        const std::uint64_t bytes[4] = {SegmentBytesForRing(sizes.CmdRingBytes), sizes.StageBytes,
-                                      sizes.ReplyBytes, SegmentBytesForRing(sizes.EventRingBytes)};
+        const std::uint64_t bytes[4] = {SegmentBytesForRing(sizes.CmdRingBytes), sizes.StageBytes, sizes.ReplyBytes,
+                                        SegmentBytesForRing(sizes.EventRingBytes)};
         for (unsigned i = 0; i != 4; ++i) {
             if (!bytes[i] || bytes[i] > static_cast<std::uint64_t>(SIZE_MAX)) {
-                Close(); return MOBILEGL_ERR_INVALID_ARGUMENT;
+                Close();
+                return MOBILEGL_ERR_INVALID_ARGUMENT;
             }
-            m_private[i] = ::operator new(static_cast<std::size_t>(bytes[i]),
-                std::align_val_t{alignof(RingControl)}, std::nothrow);
-            if (!m_private[i]) { Close(); return MOBILEGL_ERR_OUT_OF_MEMORY; }
+            m_private[i] = ::operator new(static_cast<std::size_t>(bytes[i]), std::align_val_t{alignof(RingControl)},
+                                          std::nothrow);
+            if (!m_private[i]) {
+                Close();
+                return MOBILEGL_ERR_OUT_OF_MEMORY;
+            }
             m_privateSizes[i] = bytes[i];
             std::memset(m_private[i], 0, static_cast<std::size_t>(bytes[i]));
             m_mappedBytes += bytes[i];
@@ -327,15 +333,21 @@ namespace MobileGL::MG_Remote::Transport {
         m_cmdControl = static_cast<RingControl*>(m_private[0]);
         m_cmdRingBase = static_cast<std::uint8_t*>(m_private[0]) + sizeof(RingControl);
         m_cmdRingCapacity = RingCapacityForSegment(bytes[0]);
-        m_stageBase = m_private[1]; m_stageBytes = bytes[1];
-        m_replyBase = m_private[2]; m_replyBytes = bytes[2]; m_replySlotCount = sizes.ReplySlotCount;
+        m_stageBase = m_private[1];
+        m_stageBytes = bytes[1];
+        m_replyBase = m_private[2];
+        m_replyBytes = bytes[2];
+        m_replySlotCount = sizes.ReplySlotCount;
         m_eventControl = static_cast<RingControl*>(m_private[3]);
         m_eventSegmentBase = m_private[3];
         m_eventRingBase = static_cast<std::uint8_t*>(m_private[3]) + sizeof(RingControl);
         m_eventRingCapacity = RingCapacityForSegment(bytes[3]);
-        InitRingControl(*m_cmdControl); InitRingControl(*m_eventControl);
-        m_role = role; m_valid = true;
-        LedgerAddSegment(role, m_mappedBytes); m_booked = true;
+        InitRingControl(*m_cmdControl);
+        InitRingControl(*m_eventControl);
+        m_role = role;
+        m_valid = true;
+        LedgerAddSegment(role, m_mappedBytes);
+        m_booked = true;
         return MOBILEGL_OK;
     }
 
@@ -357,14 +369,12 @@ namespace MobileGL::MG_Remote::Transport {
             const ShmSegment* theirs = owner.m_segments[index];
             const int duplicate = theirs == nullptr ? -1 : ::dup(theirs->Fd());
             if (duplicate < 0) {
-                MGLOG_E("MG_Remote session: could not dup the owner's descriptor for segment %zu",
-                        index);
+                MGLOG_E("MG_Remote session: could not dup the owner's descriptor for segment %zu", index);
                 Close();
                 return MOBILEGL_ERR_INVALID_ARGUMENT;
             }
             // Adopt takes ownership of `duplicate` on success only.
-            const MobileGLResult adopted =
-                ShmSegment::Adopt(duplicate, theirs->Size(), m_owned[index]);
+            const MobileGLResult adopted = ShmSegment::Adopt(duplicate, theirs->Size(), m_owned[index]);
             if (adopted != MOBILEGL_OK) {
                 ::close(duplicate);
                 Close();
@@ -404,13 +414,14 @@ namespace MobileGL::MG_Remote::Transport {
         return MOBILEGL_OK;
     }
 
-    MobileGLResult SessionSegments::AdoptFromDescriptors(const int fds[4],
-                                                         const std::uint64_t sizes[4],
-                                                         std::uint32_t replySlotCount,
-                                                         MemoryRole role) {
+    MobileGLResult SessionSegments::AdoptFromDescriptors(const int fds[4], const std::uint64_t sizes[4],
+                                                         std::uint32_t replySlotCount, MemoryRole role) {
         Close();
 #if defined(_WIN32)
-        (void)fds; (void)sizes; (void)replySlotCount; (void)role;
+        (void)fds;
+        (void)sizes;
+        (void)replySlotCount;
+        (void)role;
         // ShmSegment::Adopt is POSIX-only and a Windows peer resolves the section
         // by the name in SegmentRef instead. Refused BY NAME rather than silently
         // producing an unmapped session (CONTRACT-P6 §2.6).
@@ -432,11 +443,10 @@ namespace MobileGL::MG_Remote::Transport {
             // against the announced size - which is the only bound there is on a
             // peer's claim about how big a segment is (CONTRACT-P6 §4.4 notes it
             // has no analogue on a link with no fd).
-            const MobileGLResult adopted = ShmSegment::Adopt(fds[index], sizes[index],
-                                                             m_owned[index]);
+            const MobileGLResult adopted = ShmSegment::Adopt(fds[index], sizes[index], m_owned[index]);
             if (adopted != MOBILEGL_OK) {
-                MGLOG_E("MG_Remote session: adopting slot %zu (fd=%d, %llu bytes) failed",
-                        index, fds[index], static_cast<unsigned long long>(sizes[index]));
+                MGLOG_E("MG_Remote session: adopting slot %zu (fd=%d, %llu bytes) failed", index, fds[index],
+                        static_cast<unsigned long long>(sizes[index]));
                 Close();
                 return adopted;
             }
@@ -501,14 +511,12 @@ namespace MobileGL::MG_Remote::Transport {
             m_mappedBytes += m_segments[index]->Size();
         }
 
-        if (m_cmdRingCapacity == 0 || m_stageBytes == 0 || m_eventRingCapacity == 0 ||
-            m_replyBytes == 0) {
+        if (m_cmdRingCapacity == 0 || m_stageBytes == 0 || m_eventRingCapacity == 0 || m_replyBytes == 0) {
             MGLOG_E("MG_Remote session: segment sizes leave no usable ring (cmd cap=%llu stage "
                     "cap=%llu event cap=%llu reply=%llu). A ring is the largest POWER OF TWO that "
                     "fits after the 4096 byte control page, so a segment must be strictly larger "
                     "than one page plus the smallest ring",
-                    static_cast<unsigned long long>(m_cmdRingCapacity),
-                    static_cast<unsigned long long>(m_stageBytes),
+                    static_cast<unsigned long long>(m_cmdRingCapacity), static_cast<unsigned long long>(m_stageBytes),
                     static_cast<unsigned long long>(m_eventRingCapacity),
                     static_cast<unsigned long long>(m_replyBytes));
             return;
@@ -529,7 +537,8 @@ namespace MobileGL::MG_Remote::Transport {
         for (std::size_t index = 0; index < kSlotCount; ++index) {
             m_segments[index] = nullptr;
             if (m_private[index]) ::operator delete(m_private[index], std::align_val_t{alignof(RingControl)});
-            m_private[index] = nullptr; m_privateSizes[index] = 0;
+            m_private[index] = nullptr;
+            m_privateSizes[index] = 0;
         }
         m_cmdControl = nullptr;
         m_cmdRingBase = nullptr;

@@ -230,17 +230,15 @@ void main()
                 glGetIntegerv(GL_MAX_TESS_GEN_LEVEL, &maxTessGenLevel);
                 GLint maxGeometryOutputVertices = 0;
                 glGetIntegerv(GL_MAX_GEOMETRY_OUTPUT_VERTICES, &maxGeometryOutputVertices);
-                while (glGetError() != GL_NO_ERROR) {
-                }
+                while (glGetError() != GL_NO_ERROR) {}
                 return maxTessGenLevel >= 1 && maxGeometryOutputVertices >= 4;
             }
 
             GLuint BuildPipeline(const char* tessEvalSource, const char* geometrySource) {
-                const GLenum stages[] = {GL_VERTEX_SHADER, GL_TESS_CONTROL_SHADER,
-                                         GL_TESS_EVALUATION_SHADER, GL_GEOMETRY_SHADER,
-                                         GL_FRAGMENT_SHADER};
-                const char* const sources[] = {kVertexSource, kTessControlSource, tessEvalSource,
-                                               geometrySource, kFragmentSource};
+                const GLenum stages[] = {GL_VERTEX_SHADER, GL_TESS_CONTROL_SHADER, GL_TESS_EVALUATION_SHADER,
+                                         GL_GEOMETRY_SHADER, GL_FRAGMENT_SHADER};
+                const char* const sources[] = {kVertexSource, kTessControlSource, tessEvalSource, geometrySource,
+                                               kFragmentSource};
 
                 GLuint shaders[5] = {0, 0, 0, 0, 0};
                 bool ok = true;
@@ -297,16 +295,13 @@ void main()
                 return pixel;
             }
 
-            static bool IsGreen(const Rgba8& pixel) {
-                return pixel.r < 64 && pixel.g > 192 && pixel.b < 64;
-            }
+            static bool IsGreen(const Rgba8& pixel) { return pixel.r < 64 && pixel.g > 192 && pixel.b < 64; }
 
             const std::string& BuildLog() const { return m_buildLog; }
 
             static GLenum FirstGLError() {
                 const GLenum first = glGetError();
-                while (glGetError() != GL_NO_ERROR) {
-                }
+                while (glGetError() != GL_NO_ERROR) {}
                 return first;
             }
 
@@ -346,8 +341,7 @@ void main()
             const GLuint program = BuildPipeline(kDistinctTessEvalSource, kDistinctGeometrySource);
             if (program == 0) {
                 GTEST_SKIP() << "this stack cannot build a five-stage tessellation+geometry program on "
-                             << Gl().BackendName() << ", so there is no block to carry through: "
-                             << BuildLog();
+                             << Gl().BackendName() << ", so there is no block to carry through: " << BuildLog();
             }
 
             const Rgba8 centre = DrawAndReadCentre(program);
@@ -363,26 +357,25 @@ void main()
             // DISTINCT-name build succeeds does a failure of the colliding one mean something.
             if (BuildPipeline(kDistinctTessEvalSource, kDistinctGeometrySource) == 0) {
                 GTEST_SKIP() << "this stack cannot build a five-stage tessellation+geometry program on "
-                             << Gl().BackendName() << ", so there is no block to carry through: "
-                             << BuildLog();
+                             << Gl().BackendName() << ", so there is no block to carry through: " << BuildLog();
             }
 
             // Legal desktop GLSL: input and output block names live in separate namespaces, so
             // the evaluation stage below declares TcsData twice and must still compile. The
             // control above having built is what makes this assertion about the NAME.
             const GLuint program = BuildPipeline(kCollidingTessEvalSource, kCollidingGeometrySource);
-            ASSERT_NE(program, 0u)
-                << "an interface block name reused across the two directions of one stage is legal "
-                   "desktop GLSL, but the program did not build: "
-                << BuildLog();
+            ASSERT_NE(program, 0u) << "an interface block name reused across the two directions of one stage is legal "
+                                      "desktop GLSL, but the program did not build: "
+                                   << BuildLog();
 
             const Rgba8 centre = DrawAndReadCentre(program);
             EXPECT_EQ(FirstGLError(), 0u);
             EXPECT_TRUE(IsGreen(centre))
                 << "the payload did not survive the stage that names its input and output block "
                    "the same: "
-                << centre << " (blue: nothing drew; red: the plain varying was lost too; black: "
-                             "the block arrived empty)";
+                << centre
+                << " (blue: nothing drew; red: the plain varying was lost too; black: "
+                   "the block arrived empty)";
         }
 
     } // namespace

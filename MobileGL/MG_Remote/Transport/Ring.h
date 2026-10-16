@@ -65,12 +65,12 @@ namespace MobileGL::MG_Remote::Transport {
         alignas(64) LinkProgress Progress;
 
         // ---- doorbell / generation -------------------------------------------
-        alignas(64) std::atomic<std::uint32_t> serverEpoch;    // ++ on context loss / server restart
-        std::atomic<std::uint32_t> ringGeneration;             // ++ after a hard drain
-        std::atomic<std::uint32_t> consumerParked;             // server asleep, producer must ring
-        std::atomic<std::uint32_t> producerParked;             // client asleep, server must ring
-        std::atomic<std::uint32_t> eventRingFull;              // SEG_EVENT full, server stopped applying
-        std::atomic<std::uint32_t> eventDropped;               // dropped lossy events
+        alignas(64) std::atomic<std::uint32_t> serverEpoch; // ++ on context loss / server restart
+        std::atomic<std::uint32_t> ringGeneration;          // ++ after a hard drain
+        std::atomic<std::uint32_t> consumerParked;          // server asleep, producer must ring
+        std::atomic<std::uint32_t> producerParked;          // client asleep, server must ring
+        std::atomic<std::uint32_t> eventRingFull;           // SEG_EVENT full, server stopped applying
+        std::atomic<std::uint32_t> eventDropped;            // dropped lossy events
 
         // ---- the parked producer's wake target -------------------------------
         //
@@ -120,8 +120,7 @@ namespace MobileGL::MG_Remote::Transport {
     // there. Growth INSIDE LinkProgress is caught, by sizeof below; growth BESIDE it is
     // not, and the only thing standing between that and a false-sharing regression is
     // this comment and the group's own.
-    static_assert(offsetof(RingControl, Progress) % 64 == 0,
-                  "LinkProgress starts a cache line of its own");
+    static_assert(offsetof(RingControl, Progress) % 64 == 0, "LinkProgress starts a cache line of its own");
     static_assert(offsetof(RingControl, serverEpoch) == offsetof(RingControl, Progress) + 64,
                   "the Progress line holds Progress and nothing else");
 
@@ -130,12 +129,9 @@ namespace MobileGL::MG_Remote::Transport {
     // roles map, and swapping two of them passes every other check in this file.
     static_assert(offsetof(LinkProgress, appliedSeq) == 0, "LinkProgress field order: appliedSeq");
     static_assert(offsetof(LinkProgress, retiredSeq) == 8, "LinkProgress field order: retiredSeq");
-    static_assert(offsetof(LinkProgress, completedFrameSerial) == 16,
-                  "LinkProgress field order: completedFrameSerial");
-    static_assert(offsetof(LinkProgress, presentAckSerial) == 24,
-                  "LinkProgress field order: presentAckSerial");
-    static_assert(sizeof(LinkProgress) == 32,
-                  "four consumer-written watermarks; the event flags are NOT in here");
+    static_assert(offsetof(LinkProgress, completedFrameSerial) == 16, "LinkProgress field order: completedFrameSerial");
+    static_assert(offsetof(LinkProgress, presentAckSerial) == 24, "LinkProgress field order: presentAckSerial");
+    static_assert(sizeof(LinkProgress) == 32, "four consumer-written watermarks; the event flags are NOT in here");
 
     // The two event flags stay in the doorbell group on purpose (see the group's comment).
     // LinkEventFlags mirrors them, so the mirror's shape is pinned too.
@@ -143,8 +139,8 @@ namespace MobileGL::MG_Remote::Transport {
                   "the two event flags are adjacent, in that order");
     static_assert(offsetof(RingControl, eventRingFull) / 64 == offsetof(RingControl, serverEpoch) / 64,
                   "the event flags share the doorbell group's line, NOT the Progress line");
-    static_assert(offsetof(LinkEventFlags, eventRingFull) == 0 &&
-                      offsetof(LinkEventFlags, eventDropped) == 4 && sizeof(LinkEventFlags) == 8,
+    static_assert(offsetof(LinkEventFlags, eventRingFull) == 0 && offsetof(LinkEventFlags, eventDropped) == 4 &&
+                      sizeof(LinkEventFlags) == 8,
                   "LinkEventFlags mirrors the pair in RingControl");
 
     // The page's real content must fit the page it claims. sizeof(RingControl) == 4096
@@ -181,7 +177,7 @@ namespace MobileGL::MG_Remote::Transport {
         kRecNone = 0,
         kRecNeedsAck = 1u << 0,
         kRecHasBlob = 1u << 1,
-        kRecPad = 1u << 2,       // filler to the wrap boundary, no payload meaning
+        kRecPad = 1u << 2,        // filler to the wrap boundary, no payload meaning
         kRecBorrowSlot = 1u << 3, // slot is borrowed into the GPU timeline; retires late
         kRecVarTail = 1u << 4,
         // P12: THE PEER NEED NOT ANSWER THIS RECORD. Set by the producer for a record whose
@@ -229,8 +225,7 @@ namespace MobileGL::MG_Remote::Transport {
     // head >= appliedTail >= retiredTail, and the ring never holds more than
     // its capacity. False means the shared page is corrupt (or a peer is
     // misbehaving), which is a Fatal{ProtocolCorruption}, never a retry.
-    bool RingCursorsValid(const RingControl& control, RingCursorSet cursors,
-                          std::uint64_t capacityBytes);
+    bool RingCursorsValid(const RingControl& control, RingCursorSet cursors, std::uint64_t capacityBytes);
 
     // Bumps ringGeneration, invalidating every offset either side has cached.
     // Both sides must be quiesced and the ring fully drained
@@ -254,8 +249,7 @@ namespace MobileGL::MG_Remote::Transport {
         // `base` is the ring's byte area (NOT the control page) and
         // `capacityBytes` must be a power of two between kMinRingCapacity and
         // kMaxRingCapacity. Anything else leaves Valid() false.
-        RingProducer(RingControl* control, void* base, std::uint64_t capacityBytes,
-                     RingCursorSet cursors);
+        RingProducer(RingControl* control, void* base, std::uint64_t capacityBytes, RingCursorSet cursors);
 
         bool Valid() const { return m_control != nullptr; }
 
@@ -287,9 +281,7 @@ namespace MobileGL::MG_Remote::Transport {
 
     private:
         std::uint64_t TailForReclaim() const;
-        std::uint8_t* SlotAt(std::uint64_t cursor) const {
-            return m_base + static_cast<std::size_t>(cursor & m_mask);
-        }
+        std::uint8_t* SlotAt(std::uint64_t cursor) const { return m_base + static_cast<std::size_t>(cursor & m_mask); }
 
         RingControl* m_control = nullptr;
         std::uint8_t* m_base = nullptr;
@@ -303,8 +295,7 @@ namespace MobileGL::MG_Remote::Transport {
     class RingConsumer {
     public:
         RingConsumer() = default;
-        RingConsumer(RingControl* control, void* base, std::uint64_t capacityBytes,
-                     RingCursorSet cursors);
+        RingConsumer(RingControl* control, void* base, std::uint64_t capacityBytes, RingCursorSet cursors);
 
         bool Valid() const { return m_control != nullptr; }
 

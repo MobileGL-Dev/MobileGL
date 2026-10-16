@@ -195,7 +195,8 @@ void main() { o_color = vec4(0.0, 1.0, 0.0, 1.0); }
                 glUseProgram(0);
                 if (!m_textures.empty()) glDeleteTextures(static_cast<GLsizei>(m_textures.size()), m_textures.data());
                 if (!m_buffers.empty()) glDeleteBuffers(static_cast<GLsizei>(m_buffers.size()), m_buffers.data());
-                for (GLuint p : m_programs) glDeleteProgram(p);
+                for (GLuint p : m_programs)
+                    glDeleteProgram(p);
                 if (m_vao != 0) glDeleteVertexArrays(1, &m_vao);
                 m_textures.clear();
                 m_buffers.clear();
@@ -391,7 +392,8 @@ void main() { o_color = vec4(0.0, 1.0, 0.0, 1.0); }
             return;
         }
         EXPECT_EQ(centre.r, 0) << "the array of arrays was not resolved, but the draw still painted "
-                                  "a mismatch instead of being declined: " << BadElements(centre.r);
+                                  "a mismatch instead of being declined: "
+                               << BadElements(centre.r);
     }
 
     // Instance k of a uniform block array sits on buffer binding point N+k - again both as

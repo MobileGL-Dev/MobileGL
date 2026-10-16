@@ -62,9 +62,9 @@ namespace MobileGL::MG_Remote::Server {
         // is safe by construction: these three never cross a process boundary and are named
         // symbolically everywhere they are used, so nothing outside this build could have pinned
         // them - where the eleven above and the two below are wire ABI and may never move.
-        SwapBuffersInprocOnly = 14,      // present travels as a record (the class-B Present emitter)
-        InitWindowSurfaceInprocOnly = 15,// a client-side no-op; kept for the inproc test lane
-        ProbeForTesting = 16,            // MG_Test's arbitrary-work seam through the same channel
+        SwapBuffersInprocOnly = 14,       // present travels as a record (the class-B Present emitter)
+        InitWindowSurfaceInprocOnly = 15, // a client-side no-op; kept for the inproc test lane
+        ProbeForTesting = 16,             // MG_Test's arbitrary-work seam through the same channel
     };
 
     // P12 (on-screen server window), D2. THE SERVER-OWNED WINDOW, AS A FRAME-LOCAL TAG.
@@ -151,16 +151,15 @@ namespace MobileGL::MG_Remote::Server {
             SurfaceControlFrame frame{};
             // Exhaustive by the language's aggregate decomposition rule: adding ANY member
             // without extending this binding is a compile error, so new fields cannot evade it.
-            const auto& [kind, seq, display, surface, readSurface, context, windowBackend,
-                         nativeToken, width, height, swapInterval, shareGroupToken, contextFlags, ok,
-                         eglMajor, eglMinor, eventHead, refusal] = frame;
+            const auto& [kind, seq, display, surface, readSurface, context, windowBackend, nativeToken, width, height,
+                         swapInterval, shareGroupToken, contextFlags, ok, eglMajor, eglMinor, eventHead, refusal] =
+                frame;
             return IsSurfaceControlValue<decltype(kind)> && IsSurfaceControlValue<decltype(seq)> &&
                    IsSurfaceControlValue<decltype(display)> && IsSurfaceControlValue<decltype(surface)> &&
                    IsSurfaceControlValue<decltype(readSurface)> && IsSurfaceControlValue<decltype(context)> &&
                    IsSurfaceControlValue<decltype(windowBackend)> && IsSurfaceControlValue<decltype(nativeToken)> &&
                    IsSurfaceControlValue<decltype(width)> && IsSurfaceControlValue<decltype(height)> &&
-                   IsSurfaceControlValue<decltype(swapInterval)> &&
-                   IsSurfaceControlValue<decltype(shareGroupToken)> &&
+                   IsSurfaceControlValue<decltype(swapInterval)> && IsSurfaceControlValue<decltype(shareGroupToken)> &&
                    IsSurfaceControlValue<decltype(contextFlags)> && IsSurfaceControlValue<decltype(ok)> &&
                    IsSurfaceControlValue<decltype(eglMajor)> && IsSurfaceControlValue<decltype(eglMinor)> &&
                    IsSurfaceControlValue<decltype(eventHead)> && IsSurfaceControlValue<decltype(refusal)>;
@@ -169,8 +168,7 @@ namespace MobileGL::MG_Remote::Server {
 
     static_assert(Detail::SurfaceControlFrameHasOnlyValues(),
                   "every surface control frame member must be an integer or enum, never a pointer");
-    static_assert(std::is_trivially_copyable_v<SurfaceControlFrame> &&
-                      std::is_standard_layout_v<SurfaceControlFrame>,
+    static_assert(std::is_trivially_copyable_v<SurfaceControlFrame> && std::is_standard_layout_v<SurfaceControlFrame>,
                   "the surface control frame must remain a trivially copyable value aggregate");
 
     const char* SurfaceControlOpName(SurfaceControlOp op);

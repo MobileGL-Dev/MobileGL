@@ -40,20 +40,29 @@ namespace MobileGL::MG_Remote::Transport {
     Wire::LogLevel WireLogLevelFor(int level) {
         if (level <= MOBILEGL_LOG_LEVEL_DEBUG) return Wire::LogLevel::Debug;
         switch (level) {
-        case MOBILEGL_LOG_LEVEL_INFO: return Wire::LogLevel::Info;
-        case MOBILEGL_LOG_LEVEL_WARN: return Wire::LogLevel::Warn;
-        case MOBILEGL_LOG_LEVEL_ERROR: return Wire::LogLevel::Error;
-        default: return Wire::LogLevel::Fatal;
+        case MOBILEGL_LOG_LEVEL_INFO:
+            return Wire::LogLevel::Info;
+        case MOBILEGL_LOG_LEVEL_WARN:
+            return Wire::LogLevel::Warn;
+        case MOBILEGL_LOG_LEVEL_ERROR:
+            return Wire::LogLevel::Error;
+        default:
+            return Wire::LogLevel::Fatal;
         }
     }
 
     int LogLevelFromWire(Wire::LogLevel level) {
         switch (level) {
-        case Wire::LogLevel::Debug: return MOBILEGL_LOG_LEVEL_DEBUG;
-        case Wire::LogLevel::Info: return MOBILEGL_LOG_LEVEL_INFO;
-        case Wire::LogLevel::Warn: return MOBILEGL_LOG_LEVEL_WARN;
-        case Wire::LogLevel::Error: return MOBILEGL_LOG_LEVEL_ERROR;
-        case Wire::LogLevel::Fatal: return MOBILEGL_LOG_LEVEL_FATAL;
+        case Wire::LogLevel::Debug:
+            return MOBILEGL_LOG_LEVEL_DEBUG;
+        case Wire::LogLevel::Info:
+            return MOBILEGL_LOG_LEVEL_INFO;
+        case Wire::LogLevel::Warn:
+            return MOBILEGL_LOG_LEVEL_WARN;
+        case Wire::LogLevel::Error:
+            return MOBILEGL_LOG_LEVEL_ERROR;
+        case Wire::LogLevel::Fatal:
+            return MOBILEGL_LOG_LEVEL_FATAL;
         }
         // A value this build's schema does not name: a newer peer's severity. Never demoted into
         // the lossy class - an unknown severity is filed as an error.
@@ -77,13 +86,17 @@ namespace MobileGL::MG_Remote::Transport {
         m_sender = std::thread([this] { Run(); });
     }
 
-    LogForwardChannel::~LogForwardChannel() { (void)Close(); }
+    LogForwardChannel::~LogForwardChannel() {
+        (void)Close();
+    }
 
     void LogForwardChannel::ForwardThunk(void* user, int level, const char* line) {
         static_cast<LogForwardChannel*>(user)->Offer(level, line);
     }
 
-    bool LogForwardChannel::IsUrgentLocked() const { return m_urgent > 0 || m_closing; }
+    bool LogForwardChannel::IsUrgentLocked() const {
+        return m_urgent > 0 || m_closing;
+    }
 
     void LogForwardChannel::QueueGapNoticesLocked(bool lossyGapToo) {
         // ONE NOTICE PER GAP, however many lines it swallowed, so a notice never needs room of its
@@ -180,8 +193,10 @@ namespace MobileGL::MG_Remote::Transport {
         item.text.assign(line, length);
         const std::uint64_t seq = item.seq;
         m_queue.push_back(std::move(item));
-        if (lossy) m_lossyBytes += length;
-        else m_errorBytes += length;
+        if (lossy)
+            m_lossyBytes += length;
+        else
+            m_errorBytes += length;
         if (fatal) ++m_urgent;
         m_cv.notify_all();
         if (!fatal) {
@@ -286,8 +301,10 @@ namespace MobileGL::MG_Remote::Transport {
             Item item = std::move(front);
             m_queue.pop_front();
             if (item.kind == Kind::Line) {
-                if (item.level <= MOBILEGL_LOG_LEVEL_WARN) m_lossyBytes -= item.text.size();
-                else m_errorBytes -= item.text.size();
+                if (item.level <= MOBILEGL_LOG_LEVEL_WARN)
+                    m_lossyBytes -= item.text.size();
+                else
+                    m_errorBytes -= item.text.size();
             }
             if (item.kind == Kind::Control || (item.kind == Kind::Line && item.level >= MOBILEGL_LOG_LEVEL_FATAL)) {
                 --m_urgent;
@@ -322,9 +339,7 @@ namespace MobileGL::MG_Remote::Transport {
                 // that the tail it has is not the whole tail.
                 QueueGapNoticesLocked(/*lossyGapToo=*/true);
                 m_cv.notify_all();
-                const auto drained = [this] {
-                    return (m_queue.empty() && !m_sending) || m_counters.transportFailed;
-                };
+                const auto drained = [this] { return (m_queue.empty() && !m_sending) || m_counters.transportFailed; };
                 if (!m_cv.wait_for(lock, std::chrono::milliseconds(m_limits.closeDrainMs), drained)) {
                     // Not taken within the budget: the peer is not reading. The rest is abandoned,
                     // and a sender inside a write is blocked on that peer and needs unblocking.

@@ -34,7 +34,9 @@ namespace MobileGL::MG_Remote::Transport::AdoptT0 {
 
 #if defined(__ANDROID__)
 
-        bool RealHasAhb() { return true; }
+        bool RealHasAhb() {
+            return true;
+        }
 
         bool RealAllocateHeld(std::uint64_t size, const void* seed, HeldStore& out, std::string& why) {
             out = HeldStore{};
@@ -82,8 +84,8 @@ namespace MobileGL::MG_Remote::Transport::AdoptT0 {
                 return -1;
             }
             if (store != nullptr && store->ahb != nullptr) {
-                const int sent = AHardwareBuffer_sendHandleToUnixSocket(
-                    static_cast<const AHardwareBuffer*>(store->ahb), pair[0]);
+                const int sent =
+                    AHardwareBuffer_sendHandleToUnixSocket(static_cast<const AHardwareBuffer*>(store->ahb), pair[0]);
                 if (sent != 0) {
                     why = Format("AHardwareBuffer_sendHandleToUnixSocket rc=%lld errno=%lld", sent, errno);
                     ::close(pair[0]);
@@ -137,7 +139,9 @@ namespace MobileGL::MG_Remote::Transport::AdoptT0 {
 
         // No AHardwareBuffer: the server never grants T0 here, so a client never allocates. The
         // empty hop still works, so a flags-0 Offer is real on every POSIX host.
-        bool RealHasAhb() { return false; }
+        bool RealHasAhb() {
+            return false;
+        }
 
         bool RealAllocateHeld(std::uint64_t, const void*, HeldStore& out, std::string& why) {
             out = HeldStore{};
@@ -165,7 +169,9 @@ namespace MobileGL::MG_Remote::Transport::AdoptT0 {
 #endif
         }
 
-        void RealReleaseHeld(HeldStore& store) { store = HeldStore{}; }
+        void RealReleaseHeld(HeldStore& store) {
+            store = HeldStore{};
+        }
 
         bool RealReceiveFromHop(int, std::uint64_t, void** outAhb, std::string& why) {
             *outAhb = nullptr;
@@ -196,8 +202,10 @@ namespace MobileGL::MG_Remote::Transport::AdoptT0 {
 
     void ReleaseHeld(HeldStore& store) {
         const PlatformForTest* test = g_testPlatform.load(std::memory_order_acquire);
-        if (test != nullptr) test->ReleaseHeld(store);
-        else RealReleaseHeld(store);
+        if (test != nullptr)
+            test->ReleaseHeld(store);
+        else
+            RealReleaseHeld(store);
     }
 
     bool ReceiveFromHop(int hopFd, std::uint64_t size, void** outAhb, std::string& why) {
@@ -208,14 +216,18 @@ namespace MobileGL::MG_Remote::Transport::AdoptT0 {
 
     void AcquireImported(void* ahb) {
         const PlatformForTest* test = g_testPlatform.load(std::memory_order_acquire);
-        if (test != nullptr) test->AcquireImported(ahb);
-        else RealAcquireImported(ahb);
+        if (test != nullptr)
+            test->AcquireImported(ahb);
+        else
+            RealAcquireImported(ahb);
     }
 
     void ReleaseImported(void* ahb) {
         const PlatformForTest* test = g_testPlatform.load(std::memory_order_acquire);
-        if (test != nullptr) test->ReleaseImported(ahb);
-        else RealReleaseImported(ahb);
+        if (test != nullptr)
+            test->ReleaseImported(ahb);
+        else
+            RealReleaseImported(ahb);
     }
 
     void SetPlatformForTest(const PlatformForTest* platform) {

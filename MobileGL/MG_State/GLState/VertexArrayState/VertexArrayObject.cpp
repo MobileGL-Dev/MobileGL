@@ -173,7 +173,6 @@ namespace MobileGL::MG_State::GLState {
         return m_indexBufferBindingSlot;
     }
 
-
     const VertexAttribute& VertexArrayObject::GetAttribute(Uint index) const {
         static VertexAttribute emptyAttr;
         if (index >= MAX_VERTEX_ATTRIBS) return emptyAttr;
@@ -297,8 +296,7 @@ namespace MobileGL::MG_State::GLState {
     }
 
     void VertexArrayObject::SetAttributeFormatSeparate(Uint attribIndex, int size, DataType type, Bool normalized,
-                                                       Bool isInteger, Uint relativeOffset, Bool isBgra,
-                                                       Bool isLong) {
+                                                       Bool isInteger, Uint relativeOffset, Bool isBgra, Bool isLong) {
         if (attribIndex >= MAX_VERTEX_ATTRIBS) return;
         if (size < 1 || size > 4) return;
 

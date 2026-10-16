@@ -84,8 +84,7 @@ namespace MobileGL {
                     return m_storage[targetIndex].GetDirtyRegion(level);
                 }
 
-                SizeT GetDirtyRects(Uint targetIndex, Uint level, MipmapDirtyRegion* outRects,
-                                    SizeT maxRects) const {
+                SizeT GetDirtyRects(Uint targetIndex, Uint level, MipmapDirtyRegion* outRects, SizeT maxRects) const {
                     MOBILEGL_ASSERT(targetIndex < TargetCount, "GetDirtyRects: target invalid");
                     return m_storage[targetIndex].GetDirtyRects(level, outRects, maxRects);
                 }

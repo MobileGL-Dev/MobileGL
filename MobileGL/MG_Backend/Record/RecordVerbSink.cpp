@@ -35,9 +35,9 @@ namespace MobileGL::MG_Record {
         m_backend = backend;
         if (backend != nullptr) {
             const auto& limits = backend->GetDynamicParameters();
-            MG_Record::ServerStagedTexture().SetDeviceLimits(
-                limits.MaxTextureSize, limits.Max3DTextureSize, limits.MaxCubeMapTextureSize,
-                limits.MaxArrayTextureLayers, limits.MaxTextureBufferSize);
+            MG_Record::ServerStagedTexture().SetDeviceLimits(limits.MaxTextureSize, limits.Max3DTextureSize,
+                                                             limits.MaxCubeMapTextureSize, limits.MaxArrayTextureLayers,
+                                                             limits.MaxTextureBufferSize);
         }
     }
 
@@ -86,18 +86,15 @@ namespace MobileGL::MG_Record {
             switch (clear.ValueClass) {
             case MG_Pipe::kMGPipeClearValueClassFloat:
                 if (gl.ClearBufferfv == nullptr) return false;
-                gl.ClearBufferfv(GL_COLOR, clear.DrawBufferIndex,
-                                 reinterpret_cast<const GLfloat*>(clear.ColorValue));
+                gl.ClearBufferfv(GL_COLOR, clear.DrawBufferIndex, reinterpret_cast<const GLfloat*>(clear.ColorValue));
                 break;
             case MG_Pipe::kMGPipeClearValueClassInt:
                 if (gl.ClearBufferiv == nullptr) return false;
-                gl.ClearBufferiv(GL_COLOR, clear.DrawBufferIndex,
-                                 reinterpret_cast<const GLint*>(clear.ColorValue));
+                gl.ClearBufferiv(GL_COLOR, clear.DrawBufferIndex, reinterpret_cast<const GLint*>(clear.ColorValue));
                 break;
             case MG_Pipe::kMGPipeClearValueClassUint:
                 if (gl.ClearBufferuiv == nullptr) return false;
-                gl.ClearBufferuiv(GL_COLOR, clear.DrawBufferIndex,
-                                  reinterpret_cast<const GLuint*>(clear.ColorValue));
+                gl.ClearBufferuiv(GL_COLOR, clear.DrawBufferIndex, reinterpret_cast<const GLuint*>(clear.ColorValue));
                 break;
             default:
                 // A value class outside the three is a wire fault, not a fallback: all three
@@ -140,12 +137,9 @@ namespace MobileGL::MG_Record {
         applierState.ClearVerbHandles();
         applierState.VerbBlitReadFbo = blit.ReadFbo;
         applierState.VerbBlitDrawFbo = blit.DrawFbo;
-        const Bool named = !MG_Pipe::MGPipeHandleIsNull(blit.ReadFbo) ||
-                           !MG_Pipe::MGPipeHandleIsNull(blit.DrawFbo);
-        table->GL.BlitFramebuffer(blit.SrcX0, blit.SrcY0, blit.SrcX1, blit.SrcY1, blit.DstX0,
-                                  blit.DstY0, blit.DstX1, blit.DstY1,
-                                  static_cast<GLbitfield>(blit.Mask),
-                                  static_cast<GLenum>(blit.Filter));
+        const Bool named = !MG_Pipe::MGPipeHandleIsNull(blit.ReadFbo) || !MG_Pipe::MGPipeHandleIsNull(blit.DrawFbo);
+        table->GL.BlitFramebuffer(blit.SrcX0, blit.SrcY0, blit.SrcX1, blit.SrcY1, blit.DstX0, blit.DstY0, blit.DstX1,
+                                  blit.DstY1, static_cast<GLbitfield>(blit.Mask), static_cast<GLenum>(blit.Filter));
         if (named && !applierState.VerbBlitNamedConsumed) {
             MGLOG_E_ONCE("MGPipe: a named blit (read {%u, %u}, draw {%u, %u}) reached a backend "
                          "with no named-blit arm; the verb is DECLINED rather than applied to "
@@ -162,15 +156,14 @@ namespace MobileGL::MG_Record {
     Bool RecordVerbSink::OnGetTextureImage(const MG_Pipe::MGPReadbackInfo& info, Uint64 seq,
                                            MG_Pipe::MGPipeReplySink* replies) {
         if (!replies) MG_Pipe::MGPipeProtocolFatal("GetTextureImage.reply", "missing reply sink");
-        const SizeT bpp = MG_Util::GetInputBytesPerPixel(
-            MG_Util::ConvertGLEnumToTextureInputFormat(info.Format),
-            MG_Util::ConvertGLEnumToTexturePixelDataType(info.Type));
+        const SizeT bpp = MG_Util::GetInputBytesPerPixel(MG_Util::ConvertGLEnumToTextureInputFormat(info.Format),
+                                                         MG_Util::ConvertGLEnumToTexturePixelDataType(info.Type));
         if (!bpp || !info.Box.W || !info.Box.H || !info.Box.D || info.Box.X || info.Box.Y || info.Box.Z) {
             MG_Pipe::MGPipeProtocolFatal("GetTextureImage.extent", "invalid tight image extent");
         }
         const Uint64 tight = static_cast<Uint64>(info.Box.W) * info.Box.H * info.Box.D * bpp;
-        if (tight / bpp / info.Box.W / info.Box.H != info.Box.D ||
-            info.DstOffset > tight || !info.DstSize || info.DstSize > tight - info.DstOffset)
+        if (tight / bpp / info.Box.W / info.Box.H != info.Box.D || info.DstOffset > tight || !info.DstSize ||
+            info.DstSize > tight - info.DstOffset)
             MG_Pipe::MGPipeProtocolFatal("GetTextureImage.range", "invalid reply window");
         auto image = info;
         image.DstOffset = 0;
@@ -193,10 +186,11 @@ namespace MobileGL::MG_Record {
             // The decoder always passes its ReplySink; a null one means the applier was built
             // without a reply pool, and answering nothing would leave the client's barrier
             // waiting for a slot that never gets stamped - a hang, not a wrong picture.
-            MG_Pipe::MGPipeRecordFail(MG_Pipe::MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"read_pixels without a reply sink\"} - "
-                    "the pixels' only destination in P5 is SEG_REPLY (contract table 1 row 23) "
-                    "and a client blocked on seq %llu would never be answered",
-                    static_cast<unsigned long long>(seq));
+            MG_Pipe::MGPipeRecordFail(MG_Pipe::MGFatalFamily::ProtocolCorruption,
+                                      "MGPipe: Fatal{ProtocolCorruption, \"read_pixels without a reply sink\"} - "
+                                      "the pixels' only destination in P5 is SEG_REPLY (contract table 1 row 23) "
+                                      "and a client blocked on seq %llu would never be answered",
+                                      static_cast<unsigned long long>(seq));
         }
         const SizeT bytesPerPixel = MG_Util::GetInputBytesPerPixel(
             MG_Util::ConvertGLEnumToTextureInputFormat(static_cast<GLenum>(info.Format)),
@@ -210,8 +204,8 @@ namespace MobileGL::MG_Record {
         };
         if (bytesPerPixel == 0 || info.Box.W == 0 || info.Box.H == 0 ||
             info.Box.W > static_cast<Uint32>(std::numeric_limits<GLsizei>::max()) ||
-            info.Box.H > static_cast<Uint32>(std::numeric_limits<GLsizei>::max()) ||
-            info.DstSize == 0 || m_maxReplyBytes == 0) {
+            info.Box.H > static_cast<Uint32>(std::numeric_limits<GLsizei>::max()) || info.DstSize == 0 ||
+            m_maxReplyBytes == 0) {
             return rejectReadback();
         }
 
@@ -225,8 +219,7 @@ namespace MobileGL::MG_Record {
         const Uint64 tight = pixels * bpp;
         // PH-3's bound is the SERVER's answer size: w*h*bpp against its own maxReplyBytes,
         // checked before the scratch grows. It is not a rule about DstSize.
-        if (tight > m_maxReplyBytes ||
-            tight > static_cast<Uint64>(std::numeric_limits<SizeT>::max())) {
+        if (tight > m_maxReplyBytes || tight > static_cast<Uint64>(std::numeric_limits<SizeT>::max())) {
             return rejectReadback();
         }
         // ID-49: THE REPLY CROSSES TIGHT, WHATEVER DstSize THE CLIENT SENT. The server reads with
@@ -241,9 +234,8 @@ namespace MobileGL::MG_Record {
         if (tight != info.DstSize) {
             MGLOG_E_ONCE("MG_Remote server: read_pixels DstSize %llu != tight w*h*bpp %llu "
                          "(%ux%u, bpp %llu); reading the tight extent (ID-49)",
-                         static_cast<unsigned long long>(info.DstSize),
-                         static_cast<unsigned long long>(tight), info.Box.W, info.Box.H,
-                         static_cast<unsigned long long>(bpp));
+                         static_cast<unsigned long long>(info.DstSize), static_cast<unsigned long long>(tight),
+                         info.Box.W, info.Box.H, static_cast<unsigned long long>(bpp));
         }
 
         if (!ReadBoundFramebufferTight(info, tight)) {
@@ -286,9 +278,9 @@ namespace MobileGL::MG_Record {
         const MG_Pipe::MGPPixelPackState neutralPack = MG_Pipe::MGPipeNeutralReadPixelsPack();
         MG_Pipe::MGPipeApplySetPixelPackState(neutralPack);
 
-        table->GL.ReadPixels(info.Box.X, info.Box.Y, static_cast<GLsizei>(info.Box.W),
-                             static_cast<GLsizei>(info.Box.H), static_cast<GLenum>(info.Format),
-                             static_cast<GLenum>(info.Type), m_readbackScratch.data());
+        table->GL.ReadPixels(info.Box.X, info.Box.Y, static_cast<GLsizei>(info.Box.W), static_cast<GLsizei>(info.Box.H),
+                             static_cast<GLenum>(info.Format), static_cast<GLenum>(info.Type),
+                             m_readbackScratch.data());
 
         MG_Pipe::MGPPixelPackState restorePack{};
         restorePack.Pack = savedPack;
@@ -342,8 +334,7 @@ namespace MobileGL::MG_Record {
     // no wider than the tight extent, and both are bounded here by what one MGPSubData can name
     // (MGPipeSetSubDataBufferRange: an offset up to 2^31-1, a width up to 2^32-1). Whether the
     // range fits the buffer is the applier's own gate, the one every buffer write meets.
-    static const char* ReadbackToBufferLayoutFault(const MG_Pipe::MGPReadbackToBuffer& record,
-                                                   Uint64 bytesPerPixel) {
+    static const char* ReadbackToBufferLayoutFault(const MG_Pipe::MGPReadbackToBuffer& record, Uint64 bytesPerPixel) {
         const MG_Pipe::MGPBox& box = record.Src.Box;
         const Uint64 rowBytes = static_cast<Uint64>(box.W) * bytesPerPixel;
         const Uint64 tightBytes = rowBytes * box.H * box.D; // the caller proved this fits
@@ -374,7 +365,8 @@ namespace MobileGL::MG_Record {
         if (record.SwapGroup != 0) {
             const Uint64 group = record.SwapGroup;
             for (Uint64 at = 0; at + group <= tightBytes; at += group) {
-                for (Uint64 i = 0; i < group / 2; ++i) std::swap(tight[at + i], tight[at + group - 1 - i]);
+                for (Uint64 i = 0; i < group / 2; ++i)
+                    std::swap(tight[at + i], tight[at + group - 1 - i]);
             }
         }
 
@@ -443,21 +435,25 @@ namespace MobileGL::MG_Record {
             }
         }
         if (fault != nullptr) {
-            return MG_Pipe::MGPipeRecordLatch(MG_Pipe::MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"ReadPixelsToBuffer.shape\"} %s", fault);
+            return MG_Pipe::MGPipeRecordLatch(MG_Pipe::MGFatalFamily::ProtocolCorruption,
+                                              "MGPipe: Fatal{ProtocolCorruption, \"ReadPixelsToBuffer.shape\"} %s",
+                                              fault);
         }
         if (!ReadBoundFramebufferTight(info, tight)) {
-            return MG_Pipe::MGPipeRecordLatch(MG_Pipe::MGFatalFamily::ReadbackDeclined, "MGPipe: Fatal{ReadbackDeclined, \"ReadPixelsToBuffer\"} - the server "
-                    "has no GL.ReadPixels; the pack buffer would keep bytes the application is "
-                    "about to read as pixels, and there is no reply to carry the decline");
+            return MG_Pipe::MGPipeRecordLatch(
+                MG_Pipe::MGFatalFamily::ReadbackDeclined,
+                "MGPipe: Fatal{ReadbackDeclined, \"ReadPixelsToBuffer\"} - the server "
+                "has no GL.ReadPixels; the pack buffer would keep bytes the application is "
+                "about to read as pixels, and there is no reply to carry the decline");
         }
         return LandReadbackInBuffer(record, m_readbackScratch.data(), bpp);
     }
 
     Bool RecordVerbSink::OnGetTextureImageToBuffer(const MG_Pipe::MGPReadbackToBuffer& record) {
         const MG_Pipe::MGPReadbackInfo& info = record.Src;
-        const Uint64 bpp = static_cast<Uint64>(MG_Util::GetInputBytesPerPixel(
-            MG_Util::ConvertGLEnumToTextureInputFormat(info.Format),
-            MG_Util::ConvertGLEnumToTexturePixelDataType(info.Type)));
+        const Uint64 bpp = static_cast<Uint64>(
+            MG_Util::GetInputBytesPerPixel(MG_Util::ConvertGLEnumToTextureInputFormat(info.Format),
+                                           MG_Util::ConvertGLEnumToTexturePixelDataType(info.Type)));
         const char* fault = nullptr;
         Uint64 tight = 0;
         if (!bpp || !info.Box.W || !info.Box.H || !info.Box.D || info.Box.X || info.Box.Y || info.Box.Z) {
@@ -473,15 +469,18 @@ namespace MobileGL::MG_Record {
             }
         }
         if (fault != nullptr) {
-            return MG_Pipe::MGPipeRecordLatch(MG_Pipe::MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"GetTextureImageToBuffer.shape\"} %s", fault);
+            return MG_Pipe::MGPipeRecordLatch(MG_Pipe::MGFatalFamily::ProtocolCorruption,
+                                              "MGPipe: Fatal{ProtocolCorruption, \"GetTextureImageToBuffer.shape\"} %s",
+                                              fault);
         }
         Vector<Uint8> bytes;
         if (!ReadTextureImageTight(info, bytes) || bytes.size() != tight) {
-            return MG_Pipe::MGPipeRecordLatch(MG_Pipe::MGFatalFamily::ReplyError, "MGPipe: Fatal{ReplyError, \"GetTextureImageToBuffer\"} - the level "
-                    "could not be read (%llu of %llu bytes); the reply form answers ERROR here, and "
-                    "this form has no reply to carry it",
-                    static_cast<unsigned long long>(bytes.size()),
-                    static_cast<unsigned long long>(tight));
+            return MG_Pipe::MGPipeRecordLatch(
+                MG_Pipe::MGFatalFamily::ReplyError,
+                "MGPipe: Fatal{ReplyError, \"GetTextureImageToBuffer\"} - the level "
+                "could not be read (%llu of %llu bytes); the reply form answers ERROR here, and "
+                "this form has no reply to carry it",
+                static_cast<unsigned long long>(bytes.size()), static_cast<unsigned long long>(tight));
         }
         return LandReadbackInBuffer(record, bytes.data(), bpp);
     }
@@ -497,10 +496,12 @@ namespace MobileGL::MG_Record {
     // PH-1 (3): the shape is the PEER's (a multi-draw record it chose to send), so in an armed
     // session child the refusal latches and the verb returns false; unarmed it still dies.
     static Bool MultiDrawShapeLatch(const char* slot) {
-        return MG_Pipe::MGPipeRecordLatch(MG_Pipe::MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"%s\"} a multi-draw "
-                "record with a shape this protocol does not carry: client indices travel as an owned "
-                "element buffer and no GL entry point produces an instanced multi-draw",
-                slot);
+        return MG_Pipe::MGPipeRecordLatch(
+            MG_Pipe::MGFatalFamily::ProtocolCorruption,
+            "MGPipe: Fatal{ProtocolCorruption, \"%s\"} a multi-draw "
+            "record with a shape this protocol does not carry: client indices travel as an owned "
+            "element buffer and no GL entry point produces an instanced multi-draw",
+            slot);
     }
 
     // P5b d1 (docs/archive/contracts/CONTRACT-P5B.md §2 d1): draw_vbo's whole cross product. The record
@@ -570,29 +571,29 @@ namespace MobileGL::MG_Record {
             if (maxTouched < 0) return true;
             const Uint32 required = static_cast<Uint32>(maxTouched) + 1u;
             if (st.SamplerViewStart != 0 || st.SamplerViewCount < required) {
-                return MG_Pipe::MGPipeRecordLatch(MG_Pipe::MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"SetSamplerViews.Count\"} - %s applies with "
-                        "units 0..%d touched, so set_sampler_views must carry Start=0 and Count >= %u "
-                        "(CONTRACT-P5E.md §5.3); the applied window is Start=%u Count=%u, which drops "
-                        "the sync of at least one texture this draw samples",
-                        verb, static_cast<int>(maxTouched), required, st.SamplerViewStart,
-                        st.SamplerViewCount);
+                return MG_Pipe::MGPipeRecordLatch(
+                    MG_Pipe::MGFatalFamily::ProtocolCorruption,
+                    "MGPipe: Fatal{ProtocolCorruption, \"SetSamplerViews.Count\"} - %s applies with "
+                    "units 0..%d touched, so set_sampler_views must carry Start=0 and Count >= %u "
+                    "(CONTRACT-P5E.md §5.3); the applied window is Start=%u Count=%u, which drops "
+                    "the sync of at least one texture this draw samples",
+                    verb, static_cast<int>(maxTouched), required, st.SamplerViewStart, st.SamplerViewCount);
             }
             if (st.SamplerStateStart != 0 || st.SamplerStateCount < required) {
-                return MG_Pipe::MGPipeRecordLatch(MG_Pipe::MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"BindSamplerStates.Count\"} - %s applies with "
-                        "units 0..%d touched, so bind_sampler_states must carry Start=0 and Count >= %u "
-                        "(CONTRACT-P5E.md §5.3); the applied window is Start=%u Count=%u, which leaves "
-                        "an earlier draw's sampler object on at least one unit",
-                        verb, static_cast<int>(maxTouched), required, st.SamplerStateStart,
-                        st.SamplerStateCount);
+                return MG_Pipe::MGPipeRecordLatch(
+                    MG_Pipe::MGFatalFamily::ProtocolCorruption,
+                    "MGPipe: Fatal{ProtocolCorruption, \"BindSamplerStates.Count\"} - %s applies with "
+                    "units 0..%d touched, so bind_sampler_states must carry Start=0 and Count >= %u "
+                    "(CONTRACT-P5E.md §5.3); the applied window is Start=%u Count=%u, which leaves "
+                    "an earlier draw's sampler object on at least one unit",
+                    verb, static_cast<int>(maxTouched), required, st.SamplerStateStart, st.SamplerStateCount);
             }
             return true;
         }
     } // namespace
 
-    Bool RecordVerbSink::OnDrawVbo(const MG_Pipe::MGPDrawInfo& info,
-                                   const MG_Pipe::MGPDrawRange* ranges,
-                                   const MG_Pipe::MGHostSpan* userIndices,
-                                   const MG_Pipe::MGPDrawIndirect* indirect) {
+    Bool RecordVerbSink::OnDrawVbo(const MG_Pipe::MGPDrawInfo& info, const MG_Pipe::MGPDrawRange* ranges,
+                                   const MG_Pipe::MGHostSpan* userIndices, const MG_Pipe::MGPDrawIndirect* indirect) {
         if (userIndices != nullptr && !CheckUserIndices(info, ranges, *userIndices)) {
             return false; // PH-1 (3): latched (armed session child); unarmed it died inside
         }
@@ -621,10 +622,17 @@ namespace MobileGL::MG_Record {
 
         GLenum indexType = 0;
         switch (info.IndexSize) {
-        case 0: break; // arrays
-        case 1: indexType = GL_UNSIGNED_BYTE; break;
-        case 2: indexType = GL_UNSIGNED_SHORT; break;
-        case 4: indexType = GL_UNSIGNED_INT; break;
+        case 0:
+            break; // arrays
+        case 1:
+            indexType = GL_UNSIGNED_BYTE;
+            break;
+        case 2:
+            indexType = GL_UNSIGNED_SHORT;
+            break;
+        case 4:
+            indexType = GL_UNSIGNED_INT;
+            break;
         default:
             // IndexSize is "0 = arrays, else 1 / 2 / 4" (MGPipeTypes.h) and nothing else is a
             // legal width; defaulting to 4 would read past the element buffer.
@@ -665,8 +673,7 @@ namespace MobileGL::MG_Record {
             } else {
                 if (counted) {
                     if (gl.MultiDrawElementsIndirectCount == nullptr) return false;
-                    gl.MultiDrawElementsIndirectCount(mode, indexType, offset, parameterOffset,
-                                                      drawCount, stride);
+                    gl.MultiDrawElementsIndirectCount(mode, indexType, offset, parameterOffset, drawCount, stride);
                 } else if (single) {
                     if (gl.DrawElementsIndirect == nullptr) return false;
                     gl.DrawElementsIndirect(mode, indexType, offset);
@@ -703,23 +710,21 @@ namespace MobileGL::MG_Record {
                     m_multiFirsts[i] = static_cast<GLint>(ranges[i].Start);
                     m_multiCounts[i] = static_cast<GLsizei>(ranges[i].Count);
                 }
-                gl.MultiDrawArrays(mode, m_multiFirsts.data(), m_multiCounts.data(),
-                                   static_cast<GLsizei>(n));
+                gl.MultiDrawArrays(mode, m_multiFirsts.data(), m_multiCounts.data(), static_cast<GLsizei>(n));
             } else {
                 if (gl.MultiDrawElementsBaseVertex == nullptr) return false;
                 m_multiOffsets.resize(n);
                 m_multiBaseVertices.resize(n);
                 for (SizeT i = 0; i < n; ++i) {
-                    m_multiOffsets[i] = reinterpret_cast<const void*>(
-                        static_cast<std::uintptr_t>(ranges[i].Start) * info.IndexSize);
+                    m_multiOffsets[i] =
+                        reinterpret_cast<const void*>(static_cast<std::uintptr_t>(ranges[i].Start) * info.IndexSize);
                     m_multiCounts[i] = static_cast<GLsizei>(ranges[i].Count);
                     m_multiBaseVertices[i] = ranges[i].IndexBias;
                 }
                 // MultiDrawElements is the same call with every base vertex 0, which is what
                 // its ranges carry (CONTRACT-P5B.md d1's MultiDrawElements row).
-                gl.MultiDrawElementsBaseVertex(mode, m_multiCounts.data(), indexType,
-                                               m_multiOffsets.data(), static_cast<GLsizei>(n),
-                                               m_multiBaseVertices.data());
+                gl.MultiDrawElementsBaseVertex(mode, m_multiCounts.data(), indexType, m_multiOffsets.data(),
+                                               static_cast<GLsizei>(n), m_multiBaseVertices.data());
             }
             ++m_draws;
             return true;
@@ -734,8 +739,8 @@ namespace MobileGL::MG_Record {
                 gl.DrawArrays(mode, static_cast<GLint>(range.Start), count);
             } else if (baseInstance != 0) {
                 if (gl.DrawArraysInstancedBaseInstance == nullptr) return false;
-                gl.DrawArraysInstancedBaseInstance(mode, static_cast<GLint>(range.Start), count,
-                                                   instanceCount, baseInstance);
+                gl.DrawArraysInstancedBaseInstance(mode, static_cast<GLint>(range.Start), count, instanceCount,
+                                                   baseInstance);
             } else {
                 if (gl.DrawArraysInstanced == nullptr) return false;
                 gl.DrawArraysInstanced(mode, static_cast<GLint>(range.Start), count, instanceCount);
@@ -754,13 +759,12 @@ namespace MobileGL::MG_Record {
             indices = MG_Pipe::MGPipeHostBytes(*userIndices);
             if (indices == nullptr) {
                 MG_Pipe::MGPipeProtocolFatal("DrawVbo.userIndices",
-                                        "the user-index span passed the codec's four honesty arms "
-                                        "but MGPipeHostBytes resolved it to null; the server's "
-                                        "segment resolver is not installed");
+                                             "the user-index span passed the codec's four honesty arms "
+                                             "but MGPipeHostBytes resolved it to null; the server's "
+                                             "segment resolver is not installed");
             }
         } else {
-            indices = reinterpret_cast<const void*>(static_cast<std::uintptr_t>(range.Start) *
-                                                    info.IndexSize);
+            indices = reinterpret_cast<const void*>(static_cast<std::uintptr_t>(range.Start) * info.IndexSize);
         }
         const GLint baseVertex = range.IndexBias;
         const Bool ranged = (info.Flags & MG_Pipe::kDrawHasIndexRange) != 0;
@@ -777,8 +781,8 @@ namespace MobileGL::MG_Record {
             if (ranged) {
                 if (baseVertex != 0) {
                     if (gl.DrawRangeElementsBaseVertex == nullptr) return false;
-                    gl.DrawRangeElementsBaseVertex(mode, info.MinIndex, info.MaxIndex, count, indexType,
-                                                   indices, baseVertex);
+                    gl.DrawRangeElementsBaseVertex(mode, info.MinIndex, info.MaxIndex, count, indexType, indices,
+                                                   baseVertex);
                 } else {
                     if (gl.DrawRangeElements == nullptr) return false;
                     gl.DrawRangeElements(mode, info.MinIndex, info.MaxIndex, count, indexType, indices);
@@ -793,12 +797,11 @@ namespace MobileGL::MG_Record {
         } else if (baseInstance != 0) {
             if (baseVertex != 0) {
                 if (gl.DrawElementsInstancedBaseVertexBaseInstance == nullptr) return false;
-                gl.DrawElementsInstancedBaseVertexBaseInstance(mode, count, indexType, indices,
-                                                               instanceCount, baseVertex, baseInstance);
+                gl.DrawElementsInstancedBaseVertexBaseInstance(mode, count, indexType, indices, instanceCount,
+                                                               baseVertex, baseInstance);
             } else {
                 if (gl.DrawElementsInstancedBaseInstance == nullptr) return false;
-                gl.DrawElementsInstancedBaseInstance(mode, count, indexType, indices, instanceCount,
-                                                     baseInstance);
+                gl.DrawElementsInstancedBaseInstance(mode, count, indexType, indices, instanceCount, baseInstance);
             }
         } else if (baseVertex != 0) {
             if (gl.DrawElementsInstancedBaseVertex == nullptr) return false;
@@ -898,10 +901,14 @@ namespace MobileGL::MG_Record {
         // Typed handles resolve both texture and renderbuffer storage on the server.
         MG_Backend::CopyImageEndpoint src{};
         MG_Backend::CopyImageEndpoint dst{};
-        if (copy.SrcTarget == GL_RENDERBUFFER) src.RenderbufferHandle = copy.Src;
-        else src.TextureHandle = copy.Src;
-        if (copy.DstTarget == GL_RENDERBUFFER) dst.RenderbufferHandle = copy.Dst;
-        else dst.TextureHandle = copy.Dst;
+        if (copy.SrcTarget == GL_RENDERBUFFER)
+            src.RenderbufferHandle = copy.Src;
+        else
+            src.TextureHandle = copy.Src;
+        if (copy.DstTarget == GL_RENDERBUFFER)
+            dst.RenderbufferHandle = copy.Dst;
+        else
+            dst.TextureHandle = copy.Dst;
         if (MG_Pipe::MGPipeHandleIsNull(copy.Src) || MG_Pipe::MGPipeHandleIsNull(copy.Dst)) {
             // The monolith's own answer to this, in its own words (DirectGLESCopy.cpp's CopyImageSubData,
             // "source or destination image failed to sync; declining the copy"): the frontend
@@ -909,20 +916,17 @@ namespace MobileGL::MG_Record {
             // application is owed. A decline here is a real answer, not a silent success.
             MGLOG_E_ONCE("MG_Remote server: resource_copy_region named texture(s) %u -> %u that "
                          "the frontend no longer holds; declining the copy",
-                         static_cast<unsigned>(copy.SrcGlName),
-                         static_cast<unsigned>(copy.DstGlName));
+                         static_cast<unsigned>(copy.SrcGlName), static_cast<unsigned>(copy.DstGlName));
             return false;
         }
 
         // SrcBox is {origin, extent} and the extent is the copy's, spelled once by GL for both
         // endpoints; the destination contributes only its origin.
-        table->GL.CopyImageSubData(src, static_cast<GLenum>(copy.SrcTarget),
-                                   static_cast<GLint>(copy.SrcLevel), copy.SrcBox.X, copy.SrcBox.Y,
-                                   copy.SrcBox.Z, dst, static_cast<GLenum>(copy.DstTarget),
-                                   static_cast<GLint>(copy.DstLevel), copy.DstX, copy.DstY,
-                                   copy.DstZ, static_cast<GLsizei>(copy.SrcBox.W),
-                                   static_cast<GLsizei>(copy.SrcBox.H),
-                                   static_cast<GLsizei>(copy.SrcBox.D));
+        table->GL.CopyImageSubData(src, static_cast<GLenum>(copy.SrcTarget), static_cast<GLint>(copy.SrcLevel),
+                                   copy.SrcBox.X, copy.SrcBox.Y, copy.SrcBox.Z, dst,
+                                   static_cast<GLenum>(copy.DstTarget), static_cast<GLint>(copy.DstLevel), copy.DstX,
+                                   copy.DstY, copy.DstZ, static_cast<GLsizei>(copy.SrcBox.W),
+                                   static_cast<GLsizei>(copy.SrcBox.H), static_cast<GLsizei>(copy.SrcBox.D));
         ++m_imageCopies;
         return true;
     }
@@ -938,10 +942,8 @@ namespace MobileGL::MG_Record {
         // arguments travel because rule D says a verb crosses as the CALL, and because P7 is
         // what makes the backend read them instead of pulling.
         table->GL.BindImageTexture(static_cast<GLuint>(bind.Unit), static_cast<GLuint>(bind.GlName),
-                                   static_cast<GLint>(bind.Level),
-                                   bind.Layered != 0 ? GL_TRUE : GL_FALSE,
-                                   static_cast<GLint>(bind.Layer),
-                                   static_cast<GLenum>(bind.Access),
+                                   static_cast<GLint>(bind.Level), bind.Layered != 0 ? GL_TRUE : GL_FALSE,
+                                   static_cast<GLint>(bind.Layer), static_cast<GLenum>(bind.Access),
                                    static_cast<GLenum>(bind.Format));
         ++m_imageBinds;
         // P5c (rv): an image bind moves the frontend's texture bind generation, and this verb
@@ -952,8 +954,7 @@ namespace MobileGL::MG_Record {
         return true;
     }
 
-    Bool RecordVerbSink::OnSetStorageBlockBinding(const MG_Pipe::MGPStorageBlockBinding& binding,
-                                                  const char* name) {
+    Bool RecordVerbSink::OnSetStorageBlockBinding(const MG_Pipe::MGPStorageBlockBinding& binding, const char* name) {
         const MG_Backend::GlobalBackendFunctionsTable* table = Table("set_storage_block_binding");
         if (table == nullptr) return false;
         if (table->GL.ShaderStorageBlockBinding == nullptr) return false;
@@ -1124,12 +1125,12 @@ namespace MobileGL::MG_Record {
         applierState.VerbCopyTexDst = copy.Dst;
         if (copy.SubImage) {
             if (table->GL.CopyTexSubImage2D == nullptr) return false;
-            table->GL.CopyTexSubImage2D(copy.Target, copy.Level, copy.XOffset, copy.YOffset,
-                                      copy.X, copy.Y, copy.Width, copy.Height);
+            table->GL.CopyTexSubImage2D(copy.Target, copy.Level, copy.XOffset, copy.YOffset, copy.X, copy.Y, copy.Width,
+                                        copy.Height);
         } else {
             if (table->GL.CopyTexImage2D == nullptr) return false;
-            table->GL.CopyTexImage2D(copy.Target, copy.Level, copy.InternalFormat,
-                                   copy.X, copy.Y, copy.Width, copy.Height, 0);
+            table->GL.CopyTexImage2D(copy.Target, copy.Level, copy.InternalFormat, copy.X, copy.Y, copy.Width,
+                                     copy.Height, 0);
         }
         return true;
     }

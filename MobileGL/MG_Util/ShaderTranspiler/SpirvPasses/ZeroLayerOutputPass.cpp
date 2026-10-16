@@ -95,7 +95,8 @@ namespace MobileGL {
                 if (valueTypeId == 0 || zeroInst == nullptr) return Status::Failure;
                 const uint32_t zeroId = zeroInst->result_id();
 
-                for (Instruction* store : stores) store->SetInOperand(1, {zeroId});
+                for (Instruction* store : stores)
+                    store->SetInOperand(1, {zeroId});
 
                 irContext->InvalidateAnalysesExceptFor(IRContext::kAnalysisNone);
                 return Status::SuccessWithChange;

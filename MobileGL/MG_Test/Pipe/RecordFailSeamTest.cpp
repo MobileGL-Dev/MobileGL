@@ -62,7 +62,9 @@ namespace {
         g_seenLine = line;
         return false;
     }
-    bool AlwaysLatched() { return true; }
+    bool AlwaysLatched() {
+        return true;
+    }
 } // namespace
 
 // An installed latch hook gets the family and the FORMATTED line, and its answer is the call's.

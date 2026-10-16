@@ -12,8 +12,8 @@
 
 namespace MobileGL::MG_State::GLState {
     SharedPtr<ShaderCompileTask> ShaderCompileAdoptionMap::FindAdoptable(const ShaderStage stage,
-                                                                        const Uint64 sourceHash, const String& source,
-                                                                        const Uint64 envFingerprint) {
+                                                                         const Uint64 sourceHash, const String& source,
+                                                                         const Uint64 envFingerprint) {
         const ShaderSourceKey key{.stage = stage,
                                   .sourceHash = sourceHash,
                                   .sourceLength = source.length(),

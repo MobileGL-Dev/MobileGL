@@ -55,31 +55,32 @@
 
 // GLhandleARB is GLuint everywhere but Apple, which this module does not build for. Resolved by
 // the linker straight into MobileGL, like every other gl* call here.
-extern "C" {
-GLuint glCreateShaderObjectARB(GLenum shaderType);
-GLuint glCreateProgramObjectARB(void);
-void glDeleteObjectARB(GLuint obj);
-GLuint glGetHandleARB(GLenum pname);
-void glDetachObjectARB(GLuint containerObj, GLuint attachedObj);
-void glAttachObjectARB(GLuint containerObj, GLuint obj);
-void glShaderSourceARB(GLuint shaderObj, GLsizei count, const char** string, const GLint* length);
-void glCompileShaderARB(GLuint shaderObj);
-void glLinkProgramARB(GLuint programObj);
-void glUseProgramObjectARB(GLuint programObj);
-void glValidateProgramARB(GLuint programObj);
-void glUniform4fARB(GLint location, GLfloat v0, GLfloat v1, GLfloat v2, GLfloat v3);
-void glGetObjectParameterivARB(GLuint obj, GLenum pname, GLint* params);
-void glGetObjectParameterfvARB(GLuint obj, GLenum pname, GLfloat* params);
-void glGetInfoLogARB(GLuint obj, GLsizei maxLength, GLsizei* length, char* infoLog);
-void glGetAttachedObjectsARB(GLuint containerObj, GLsizei maxCount, GLsizei* count, GLuint* obj);
-GLint glGetUniformLocationARB(GLuint programObj, const char* name);
-void glBindAttribLocationARB(GLuint programObj, GLuint index, const char* name);
-GLint glGetAttribLocationARB(GLuint programObj, const char* name);
-void glVertexAttrib4fARB(GLuint index, GLfloat x, GLfloat y, GLfloat z, GLfloat w);
-void glDisableVertexAttribArrayARB(GLuint index);
-void glGetVertexAttribfvARB(GLuint index, GLenum pname, GLfloat* params);
-void glGetUniformfvARB(GLuint programObj, GLint location, GLfloat* params);
-void glGetShaderSourceARB(GLuint obj, GLsizei maxLength, GLsizei* length, char* source);
+extern "C"
+{
+    GLuint glCreateShaderObjectARB(GLenum shaderType);
+    GLuint glCreateProgramObjectARB(void);
+    void glDeleteObjectARB(GLuint obj);
+    GLuint glGetHandleARB(GLenum pname);
+    void glDetachObjectARB(GLuint containerObj, GLuint attachedObj);
+    void glAttachObjectARB(GLuint containerObj, GLuint obj);
+    void glShaderSourceARB(GLuint shaderObj, GLsizei count, const char** string, const GLint* length);
+    void glCompileShaderARB(GLuint shaderObj);
+    void glLinkProgramARB(GLuint programObj);
+    void glUseProgramObjectARB(GLuint programObj);
+    void glValidateProgramARB(GLuint programObj);
+    void glUniform4fARB(GLint location, GLfloat v0, GLfloat v1, GLfloat v2, GLfloat v3);
+    void glGetObjectParameterivARB(GLuint obj, GLenum pname, GLint* params);
+    void glGetObjectParameterfvARB(GLuint obj, GLenum pname, GLfloat* params);
+    void glGetInfoLogARB(GLuint obj, GLsizei maxLength, GLsizei* length, char* infoLog);
+    void glGetAttachedObjectsARB(GLuint containerObj, GLsizei maxCount, GLsizei* count, GLuint* obj);
+    GLint glGetUniformLocationARB(GLuint programObj, const char* name);
+    void glBindAttribLocationARB(GLuint programObj, GLuint index, const char* name);
+    GLint glGetAttribLocationARB(GLuint programObj, const char* name);
+    void glVertexAttrib4fARB(GLuint index, GLfloat x, GLfloat y, GLfloat z, GLfloat w);
+    void glDisableVertexAttribArrayARB(GLuint index);
+    void glGetVertexAttribfvARB(GLuint index, GLenum pname, GLfloat* params);
+    void glGetUniformfvARB(GLuint programObj, GLint location, GLfloat* params);
+    void glGetShaderSourceARB(GLuint obj, GLsizei maxLength, GLsizei* length, char* source);
 }
 
 namespace MGITest {
@@ -154,14 +155,13 @@ void main() { oColor = uColor; }
             const char* names[] = {
                 "glDeleteObjectARB", "glGetHandleARB", "glDetachObjectARB", "glCreateShaderObjectARB",
                 "glShaderSourceARB", "glCompileShaderARB", "glCreateProgramObjectARB", "glAttachObjectARB",
-                "glLinkProgramARB", "glUseProgramObjectARB", "glValidateProgramARB", "glUniform1fARB",
-                "glUniform2fARB", "glUniform3fARB", "glUniform4fARB", "glUniform1iARB", "glUniform2iARB",
-                "glUniform3iARB", "glUniform4iARB", "glUniform1fvARB", "glUniform2fvARB", "glUniform3fvARB",
-                "glUniform4fvARB", "glUniform1ivARB", "glUniform2ivARB", "glUniform3ivARB", "glUniform4ivARB",
-                "glUniformMatrix2fvARB", "glUniformMatrix3fvARB", "glUniformMatrix4fvARB",
-                "glGetObjectParameterfvARB", "glGetObjectParameterivARB", "glGetInfoLogARB",
-                "glGetAttachedObjectsARB", "glGetUniformLocationARB", "glGetActiveUniformARB",
-                "glGetUniformfvARB", "glGetUniformivARB", "glGetShaderSourceARB",
+                "glLinkProgramARB", "glUseProgramObjectARB", "glValidateProgramARB", "glUniform1fARB", "glUniform2fARB",
+                "glUniform3fARB", "glUniform4fARB", "glUniform1iARB", "glUniform2iARB", "glUniform3iARB",
+                "glUniform4iARB", "glUniform1fvARB", "glUniform2fvARB", "glUniform3fvARB", "glUniform4fvARB",
+                "glUniform1ivARB", "glUniform2ivARB", "glUniform3ivARB", "glUniform4ivARB", "glUniformMatrix2fvARB",
+                "glUniformMatrix3fvARB", "glUniformMatrix4fvARB", "glGetObjectParameterfvARB",
+                "glGetObjectParameterivARB", "glGetInfoLogARB", "glGetAttachedObjectsARB", "glGetUniformLocationARB",
+                "glGetActiveUniformARB", "glGetUniformfvARB", "glGetUniformivARB", "glGetShaderSourceARB",
                 // GL_ARB_vertex_shader, advertised alongside.
                 "glVertexAttrib1sARB", "glVertexAttrib1fARB", "glVertexAttrib1dARB", "glVertexAttrib4fARB",
                 "glVertexAttrib4fvARB", "glVertexAttrib4NubARB", "glVertexAttrib4NubvARB", "glVertexAttrib4uivARB",
@@ -226,7 +226,7 @@ void main() { oColor = uColor; }
             EXPECT_EQ(FirstGLError(), 0u);
 
             glDeleteObjectARB(coreShader);
-            glDeleteShader(arbShader);   // attached to coreProgram: flagged, not yet gone
+            glDeleteShader(arbShader); // attached to coreProgram: flagged, not yet gone
             glDeleteObjectARB(arbProgram);
             glDeleteProgram(coreProgram); // takes arbShader with it
             EXPECT_EQ(glIsShader(coreShader), GL_FALSE);
@@ -275,7 +275,8 @@ void main() { oColor = uColor; }
             glUniform4f(glGetUniformLocation(program, "uColor"), 1.0f, 0.0f, 0.0f, 1.0f);
             DrawInto();
             const Image red = ReadPixels(kEdge, kEdge);
-            EXPECT_TRUE(RegionIsMostly(red, 0, kEdge - 1, 0, kEdge - 1, "red", 0.0, "relinked after detach + reattach"));
+            EXPECT_TRUE(
+                RegionIsMostly(red, 0, kEdge - 1, 0, kEdge - 1, "red", 0.0, "relinked after detach + reattach"));
             glUseProgram(0);
             glDeleteObjectARB(program);
             glDeleteObjectARB(vs);
@@ -326,7 +327,8 @@ void main() { oColor = uColor; }
             glUniform4f(glGetUniformLocation(program, "uColor"), 0.0f, 0.0f, 1.0f, 1.0f);
             DrawInto();
             const Image blue = ReadPixels(kEdge, kEdge);
-            EXPECT_TRUE(RegionIsMostly(blue, 0, kEdge - 1, 0, kEdge - 1, "blue", 0.0, "core uniform on an ARB program"));
+            EXPECT_TRUE(
+                RegionIsMostly(blue, 0, kEdge - 1, 0, kEdge - 1, "blue", 0.0, "core uniform on an ARB program"));
             glUseProgram(0);
             EXPECT_EQ(glGetHandleARB(MGITEST_PROGRAM_OBJECT_ARB), 0u);
 
@@ -457,8 +459,9 @@ void main() { oColor = vColor; }
             std::vector<GLuint> freed;
             for (int round = 0; round < 4; ++round) {
                 for (int i = 0; i < 8; ++i) {
-                    const GLuint names[4] = {glCreateShaderObjectARB(GL_VERTEX_SHADER), glCreateShader(GL_FRAGMENT_SHADER),
-                                             glCreateProgramObjectARB(), glCreateProgram()};
+                    const GLuint names[4] = {glCreateShaderObjectARB(GL_VERTEX_SHADER),
+                                             glCreateShader(GL_FRAGMENT_SHADER), glCreateProgramObjectARB(),
+                                             glCreateProgram()};
                     for (GLuint name : names) {
                         EXPECT_NE(name, 0u);
                         EXPECT_TRUE(live.insert(name).second) << "name " << name << " handed out while live";
@@ -482,8 +485,10 @@ void main() { oColor = vColor; }
                     }
                 }
             }
-            for (GLuint name : live) EXPECT_TRUE(glIsShader(name) || glIsProgram(name)) << name;
-            for (GLuint name : live) glDeleteObjectARB(name);
+            for (GLuint name : live)
+                EXPECT_TRUE(glIsShader(name) || glIsProgram(name)) << name;
+            for (GLuint name : live)
+                glDeleteObjectARB(name);
             EXPECT_EQ(FirstGLError(), 0u);
         }
 
@@ -505,7 +510,8 @@ void main() { oColor = vColor; }
             glGenProgramPipelines(1, &pipeline);
             glGenTransformFeedbacks(1, &xfb);
             ASSERT_EQ(FirstGLError(), 0u);
-            for (GLuint name : {buffer, texture, vao, fbo, rbo, sampler, query, pipeline, xfb}) EXPECT_NE(name, 0u);
+            for (GLuint name : {buffer, texture, vao, fbo, rbo, sampler, query, pipeline, xfb})
+                EXPECT_NE(name, 0u);
             // Reserved, not yet objects.
             EXPECT_EQ(glIsBuffer(buffer), GL_FALSE);
             EXPECT_EQ(glIsTexture(texture), GL_FALSE);

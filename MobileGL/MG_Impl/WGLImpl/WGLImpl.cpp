@@ -197,8 +197,8 @@ namespace MobileGL::MG_Impl::WGLImpl {
             if (width == surface.Width && height == surface.Height) {
                 return;
             }
-            if (EGLImpl::ResizePlatformWindowSurface(surface.Display, surface.Surface,
-                                                     static_cast<EGLint>(width), static_cast<EGLint>(height))) {
+            if (EGLImpl::ResizePlatformWindowSurface(surface.Display, surface.Surface, static_cast<EGLint>(width),
+                                                     static_cast<EGLint>(height))) {
                 surface.Width = width;
                 surface.Height = height;
             }
@@ -220,12 +220,9 @@ namespace MobileGL::MG_Impl::WGLImpl {
             }
 
             const EGLAttrib attribs[] = {
-                EGL_WIDTH, static_cast<EGLAttrib>(width),
-                EGL_HEIGHT, static_cast<EGLAttrib>(height),
-                EGL_NONE,
+                EGL_WIDTH, static_cast<EGLAttrib>(width), EGL_HEIGHT, static_cast<EGLAttrib>(height), EGL_NONE,
             };
-            EGLSurface surface =
-                EGLImpl::CreatePlatformWindowSurface(context.Display, context.Config, hwnd, attribs);
+            EGLSurface surface = EGLImpl::CreatePlatformWindowSurface(context.Display, context.Config, hwnd, attribs);
             if (surface == EGL_NO_SURFACE) {
                 MGLOG_E_ONCE("wgl: failed to create window surface for HWND %p (%ux%u)", hwnd, width, height);
                 return nullptr;
@@ -262,14 +259,22 @@ namespace MobileGL::MG_Impl::WGLImpl {
             HWND hwnd = WindowFromDC(hdc);
             const PixelFormatInfo& pixelFormat = PixelFormatForWindow(hwnd);
             const EGLint configAttribs[] = {
-                EGL_RED_SIZE, 8,
-                EGL_GREEN_SIZE, 8,
-                EGL_BLUE_SIZE, 8,
-                EGL_ALPHA_SIZE, pixelFormat.AlphaBits,
-                EGL_DEPTH_SIZE, pixelFormat.DepthBits,
-                EGL_STENCIL_SIZE, pixelFormat.StencilBits,
-                EGL_SURFACE_TYPE, EGL_WINDOW_BIT | EGL_PBUFFER_BIT,
-                EGL_RENDERABLE_TYPE, EGL_OPENGL_BIT,
+                EGL_RED_SIZE,
+                8,
+                EGL_GREEN_SIZE,
+                8,
+                EGL_BLUE_SIZE,
+                8,
+                EGL_ALPHA_SIZE,
+                pixelFormat.AlphaBits,
+                EGL_DEPTH_SIZE,
+                pixelFormat.DepthBits,
+                EGL_STENCIL_SIZE,
+                pixelFormat.StencilBits,
+                EGL_SURFACE_TYPE,
+                EGL_WINDOW_BIT | EGL_PBUFFER_BIT,
+                EGL_RENDERABLE_TYPE,
+                EGL_OPENGL_BIT,
                 EGL_NONE,
             };
             EGLConfig config = nullptr;
@@ -345,15 +350,17 @@ namespace MobileGL::MG_Impl::WGLImpl {
                 }
             }
 
-            if (major < 1 || (profileMask & ~(WGL_CONTEXT_CORE_PROFILE_BIT_ARB |
-                                              WGL_CONTEXT_COMPATIBILITY_PROFILE_BIT_ARB))) {
+            if (major < 1 ||
+                (profileMask & ~(WGL_CONTEXT_CORE_PROFILE_BIT_ARB | WGL_CONTEXT_COMPATIBILITY_PROFILE_BIT_ARB))) {
                 SetLastError(profileMask ? ERROR_INVALID_PROFILE_ARB : ERROR_INVALID_VERSION_ARB);
                 return nullptr;
             }
 
             Vector<EGLint> attribs = {
-                EGL_CONTEXT_MAJOR_VERSION, major,
-                EGL_CONTEXT_MINOR_VERSION, minor,
+                EGL_CONTEXT_MAJOR_VERSION,
+                major,
+                EGL_CONTEXT_MINOR_VERSION,
+                minor,
             };
             const Bool wantsCompat = (profileMask & WGL_CONTEXT_COMPATIBILITY_PROFILE_BIT_ARB) != 0;
             if (major > 3 || (major == 3 && minor >= 2) || profileMask != 0) {
@@ -625,9 +632,12 @@ namespace MobileGL::MG_Impl::WGLImpl {
         // A legacy WGL context is a compatibility-profile context; MobileGL keys
         // its relaxed-semantics mode off the explicit compatibility bit.
         const EGLint attribs[] = {
-            EGL_CONTEXT_MAJOR_VERSION, 3,
-            EGL_CONTEXT_MINOR_VERSION, 3,
-            EGL_CONTEXT_OPENGL_PROFILE_MASK, EGL_CONTEXT_OPENGL_COMPATIBILITY_PROFILE_BIT,
+            EGL_CONTEXT_MAJOR_VERSION,
+            3,
+            EGL_CONTEXT_MINOR_VERSION,
+            3,
+            EGL_CONTEXT_OPENGL_PROFILE_MASK,
+            EGL_CONTEXT_OPENGL_COMPATIBILITY_PROFILE_BIT,
             EGL_NONE,
         };
         return CreateContextFromEGLAttribs(hdc, nullptr, attribs);

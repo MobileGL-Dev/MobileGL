@@ -94,8 +94,7 @@ namespace MGITest {
             }
 
             static void DrainErrors() {
-                for (int i = 0; i < 16 && glGetError() != GL_NO_ERROR; ++i) {
-                }
+                for (int i = 0; i < 16 && glGetError() != GL_NO_ERROR; ++i) {}
             }
 
             // One level and nothing else, through glTexImage2D - deliberately NOT glTexStorage2D,
@@ -148,8 +147,8 @@ namespace MGITest {
                 glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, kLevelExtent, kLevelExtent, 0, GL_RGBA, GL_UNSIGNED_BYTE,
                              base.data());
                 const std::vector<Texel8> gapped(static_cast<std::size_t>(kLevelExtent) * kLevelExtent, kInitialValue);
-                glTexImage2D(GL_TEXTURE_2D, level, GL_RGBA8, kLevelExtent, kLevelExtent, 0, GL_RGBA,
-                             GL_UNSIGNED_BYTE, gapped.data());
+                glTexImage2D(GL_TEXTURE_2D, level, GL_RGBA8, kLevelExtent, kLevelExtent, 0, GL_RGBA, GL_UNSIGNED_BYTE,
+                             gapped.data());
                 glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, level);
                 glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
                 glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
@@ -186,8 +185,8 @@ namespace MGITest {
         if (!Ready()) GTEST_SKIP();
         MakeTextureWithOnlyLevel(kDefinedLevel);
 
-        glClearTexSubImage(m_texture, kDefinedLevel, 0, 0, 0, kLevelExtent, kLevelExtent, 1, GL_RGBA,
-                           GL_UNSIGNED_BYTE, &kClearValue);
+        glClearTexSubImage(m_texture, kDefinedLevel, 0, 0, 0, kLevelExtent, kLevelExtent, 1, GL_RGBA, GL_UNSIGNED_BYTE,
+                           &kClearValue);
         EXPECT_EQ(FirstGLError(), 0u) << "glClearTexSubImage was rejected";
 
         ExpectAllTexels("after the sub-image clear", ReadLevel(kDefinedLevel), kClearValue);
@@ -265,18 +264,25 @@ void main() { color=textureLod(source,vec2(0.5),lod); })";
         struct Objects {
             GLuint program, vao = 0, fbo = 0, output = 0;
             ~Objects() {
-                glUseProgram(0); glBindVertexArray(0); glBindFramebuffer(GL_FRAMEBUFFER, 0);
-                glDeleteFramebuffers(1, &fbo); glDeleteTextures(1, &output);
-                glDeleteVertexArrays(1, &vao); glDeleteProgram(program);
+                glUseProgram(0);
+                glBindVertexArray(0);
+                glBindFramebuffer(GL_FRAMEBUFFER, 0);
+                glDeleteFramebuffers(1, &fbo);
+                glDeleteTextures(1, &output);
+                glDeleteVertexArrays(1, &vao);
+                glDeleteProgram(program);
             }
         } objects{program};
-        glGenVertexArrays(1, &objects.vao); glBindVertexArray(objects.vao);
+        glGenVertexArrays(1, &objects.vao);
+        glBindVertexArray(objects.vao);
         glActiveTexture(GL_TEXTURE0);
-        glGenTextures(1, &objects.output); glBindTexture(GL_TEXTURE_2D, objects.output);
+        glGenTextures(1, &objects.output);
+        glBindTexture(GL_TEXTURE_2D, objects.output);
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 8, 4, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-        glGenFramebuffers(1, &objects.fbo); glBindFramebuffer(GL_FRAMEBUFFER, objects.fbo);
+        glGenFramebuffers(1, &objects.fbo);
+        glBindFramebuffer(GL_FRAMEBUFFER, objects.fbo);
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, objects.output, 0);
         ASSERT_EQ(glCheckFramebufferStatus(GL_FRAMEBUFFER), GLenum(GL_FRAMEBUFFER_COMPLETE));
         MakeTextureWithOnlyLevel(0);
@@ -284,8 +290,13 @@ void main() { color=textureLod(source,vec2(0.5),lod); })";
         glTexImage2D(GL_TEXTURE_2D, 1, GL_RGBA8, 4, 4, 0, GL_RGBA, GL_UNSIGNED_BYTE, upper.data());
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 1);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST_MIPMAP_NEAREST);
-        glDisable(GL_DEPTH_TEST); glDisable(GL_BLEND); glDisable(GL_SCISSOR_TEST); glDisable(GL_CULL_FACE);
-        glDisable(GL_STENCIL_TEST); glDisable(GL_RASTERIZER_DISCARD); glDisable(GL_FRAMEBUFFER_SRGB);
+        glDisable(GL_DEPTH_TEST);
+        glDisable(GL_BLEND);
+        glDisable(GL_SCISSOR_TEST);
+        glDisable(GL_CULL_FACE);
+        glDisable(GL_STENCIL_TEST);
+        glDisable(GL_RASTERIZER_DISCARD);
+        glDisable(GL_FRAMEBUFFER_SRGB);
         glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
         glUseProgram(program);
         const GLint lod = glGetUniformLocation(program, "lod");
@@ -293,9 +304,13 @@ void main() { color=textureLod(source,vec2(0.5),lod); })";
         std::vector<Texel8> readUpper(4 * 4);
         glGetTexImage(GL_TEXTURE_2D, 1, GL_RGBA, GL_UNSIGNED_BYTE, readUpper.data());
         ExpectAllTexels("upper level readback", readUpper, kClearValue);
-        glViewport(0, 0, 4, 4); glUniform1f(lod, 0); glDrawArrays(GL_TRIANGLES, 0, 3);
+        glViewport(0, 0, 4, 4);
+        glUniform1f(lod, 0);
+        glDrawArrays(GL_TRIANGLES, 0, 3);
         ExpectAllTexels("base level readback", ReadLevel(0), kInitialValue);
-        glViewport(4, 0, 4, 4); glUniform1f(lod, 1); glDrawArrays(GL_TRIANGLES, 0, 3);
+        glViewport(4, 0, 4, 4);
+        glUniform1f(lod, 1);
+        glDrawArrays(GL_TRIANGLES, 0, 3);
         Texel8 baseSample{}, upperSample{};
         glReadPixels(2, 2, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, &baseSample);
         glReadPixels(6, 2, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, &upperSample);

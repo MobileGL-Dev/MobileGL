@@ -33,10 +33,12 @@ namespace {
 
     // Every variable a case touches, restored after it.
     constexpr const char* kTouched[] = {
-        "MOBILEGL_CONFIG_FILE",       "MOBILEGL_BACKEND_FILE", "MOBILEGL_BACKEND_TYPE",
-        "MOBILEGL_MAGMA_FRAMESINFLIGHT", "MOBILEGL_TRANSPORT",   "MOBILEGL_IPC_CONTROL",
-        "MOBILEGL_IPC_DATA",          "MOBILEGL_IPC_ROLE",     "MOBILEGL_TEST_ONLY_KEY",
-        "MOBILEGL_FRAMES_IN_FLIGHT",  "MOBILEGL_IPC_PRESENT_CREDIT",
+        "MOBILEGL_CONFIG_FILE",        "MOBILEGL_BACKEND_FILE",
+        "MOBILEGL_BACKEND_TYPE",       "MOBILEGL_MAGMA_FRAMESINFLIGHT",
+        "MOBILEGL_TRANSPORT",          "MOBILEGL_IPC_CONTROL",
+        "MOBILEGL_IPC_DATA",           "MOBILEGL_IPC_ROLE",
+        "MOBILEGL_TEST_ONLY_KEY",      "MOBILEGL_FRAMES_IN_FLIGHT",
+        "MOBILEGL_IPC_PRESENT_CREDIT",
     };
 
     class ConfigFileTest : public ::testing::Test {
@@ -60,8 +62,10 @@ namespace {
         }
         void TearDown() override {
             for (const auto& [name, had, value] : saved_) {
-                if (had) ::setenv(name.c_str(), value.c_str(), 1);
-                else ::unsetenv(name.c_str());
+                if (had)
+                    ::setenv(name.c_str(), value.c_str(), 1);
+                else
+                    ::unsetenv(name.c_str());
             }
             std::error_code ec;
             std::filesystem::remove_all(dir_, ec);

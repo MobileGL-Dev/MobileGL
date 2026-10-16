@@ -101,7 +101,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     VkCommandBuffer& FrameContext::BeginCommandRecording(VkCommandBufferUsageFlags flags,
                                                          const VkCommandBufferInheritanceInfo* pInheritanceInfo) {
         auto& frame = GetCurrent();
-        MOBILEGL_ASSERT(!frame.isCommandRecording, "BeginCommandRecording called while command buffer is already recording");
+        MOBILEGL_ASSERT(!frame.isCommandRecording,
+                        "BeginCommandRecording called while command buffer is already recording");
 
         frame.hasCommandBufferRecorded = false;
         VK_VERIFY(vkResetCommandBuffer(frame.commandBuffer, 0), "BeginCommandRecording, vkResetCommandBuffer");
@@ -174,8 +175,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         m_swapchainImageRenderFinishedSemaphores.assign(swapchainImageCount, VK_NULL_HANDLE);
         VkSemaphoreCreateInfo semaphoreInfo{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
         for (Uint32 imageIndex = 0; imageIndex < swapchainImageCount; ++imageIndex) {
-            VkResult result =
-                vkCreateSemaphore(device, &semaphoreInfo, nullptr, &m_swapchainImageRenderFinishedSemaphores[imageIndex]);
+            VkResult result = vkCreateSemaphore(device, &semaphoreInfo, nullptr,
+                                                &m_swapchainImageRenderFinishedSemaphores[imageIndex]);
             if (result != VK_SUCCESS) {
                 DestroySwapchainSemaphores(device);
                 return result;
@@ -240,10 +241,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         presentBarrier.subresourceRange.levelCount = 1;
         presentBarrier.subresourceRange.baseArrayLayer = 0;
         presentBarrier.subresourceRange.layerCount = 1;
-        vkCmdPipelineBarrier(commandBuffer,
-                             VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-                             VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0,
-                             nullptr, 0, nullptr, 1, &presentBarrier);
+        vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0,
+                             0, nullptr, 0, nullptr, 1, &presentBarrier);
 
         if (openedRecording) {
             EndCommandRecording();
@@ -254,7 +253,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     FrameContext::SubmitInfoPacket FrameContext::GetSubmitInfo(Bool shouldSubmitCommandBuffer,
                                                                Uint32 swapchainImageIndex) const {
         const auto& frame = GetCurrent();
-        MOBILEGL_ASSERT(!frame.isCommandRecording, "GetSubmitInfo called while command buffer recording is still active");
+        MOBILEGL_ASSERT(!frame.isCommandRecording,
+                        "GetSubmitInfo called while command buffer recording is still active");
         MOBILEGL_ASSERT(!frame.isPreCommandRecording,
                         "GetSubmitInfo called while the pre-pass stream is still recording");
         AssertValidSwapchainImageIndex(swapchainImageIndex);
@@ -273,7 +273,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         packet.submitInfo.waitSemaphoreCount = frame.imageAvailableSemaphoreConsumed ? 0U : 1U;
         packet.submitInfo.pWaitSemaphores = frame.imageAvailableSemaphoreConsumed ? nullptr : &packet.waitSemaphore;
-        packet.submitInfo.pWaitDstStageMask = frame.imageAvailableSemaphoreConsumed ? nullptr : &packet.waitDstStageMask;
+        packet.submitInfo.pWaitDstStageMask =
+            frame.imageAvailableSemaphoreConsumed ? nullptr : &packet.waitDstStageMask;
         packet.submitInfo.commandBufferCount = commandBufferCount;
         packet.submitInfo.pCommandBuffers = commandBufferCount > 0 ? packet.commandBuffers : nullptr;
         packet.submitInfo.signalSemaphoreCount = 1;
@@ -464,8 +465,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         DestroySyncObjectsForFrame(device, frameIndex);
 
         auto& frame = m_frames[frameIndex];
-        VkResult result =
-            vkCreateSemaphore(device, &semaphoreInfo, nullptr, &frame.imageAvailableSemaphore);
+        VkResult result = vkCreateSemaphore(device, &semaphoreInfo, nullptr, &frame.imageAvailableSemaphore);
         if (result != VK_SUCCESS) {
             return result;
         }

@@ -180,16 +180,16 @@ BENCHMARK(BM_UpdateDataPartially)->Unit(benchmark::kMillisecond)->UseRealTime();
 
 int main(int argc, char** argv) {
     Initialize();
-    benchmark ::MaybeReenterWithoutASLR(argc, argv);
+    benchmark::MaybeReenterWithoutASLR(argc, argv);
     char arg0_default[] = "benchmark";
     char* args_default = reinterpret_cast<char*>(arg0_default);
     if (!argv) {
         argc = 1;
         argv = &args_default;
     }
-    ::benchmark ::Initialize(&argc, argv);
-    if (::benchmark ::ReportUnrecognizedArguments(argc, argv)) return 1;
-    ::benchmark ::RunSpecifiedBenchmarks();
-    ::benchmark ::Shutdown();
+    ::benchmark::Initialize(&argc, argv);
+    if (::benchmark::ReportUnrecognizedArguments(argc, argv)) return 1;
+    ::benchmark::RunSpecifiedBenchmarks();
+    ::benchmark::Shutdown();
     return 0;
 }

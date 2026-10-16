@@ -32,7 +32,11 @@ namespace MobileGL::MG_Impl::GLImpl {
         constexpr GLenum kObjectTypeArb = 0x8B4E;
         constexpr GLenum kObjectSubtypeArb = 0x8B4F;
 
-        enum class ObjectKind { None, Program, Shader };
+        enum class ObjectKind {
+            None,
+            Program,
+            Shader
+        };
 
         ObjectKind KindOf(GLuint obj) {
             if (obj == 0) return ObjectKind::None;
@@ -52,9 +56,14 @@ namespace MobileGL::MG_Impl::GLImpl {
     void DeleteObjectARB(GLuint obj) {
         if (obj == 0) return;
         switch (KindOf(obj)) {
-        case ObjectKind::Program: DeleteProgram(obj); return;
-        case ObjectKind::Shader: DeleteShader(obj); return;
-        case ObjectKind::None: break;
+        case ObjectKind::Program:
+            DeleteProgram(obj);
+            return;
+        case ObjectKind::Shader:
+            DeleteShader(obj);
+            return;
+        case ObjectKind::None:
+            break;
         }
         Fail(ErrorCode::InvalidValue, __func__, std::to_string(obj) + " is not a shader or program object.");
     }
@@ -81,18 +90,26 @@ namespace MobileGL::MG_Impl::GLImpl {
             switch (pname) {
             case kObjectTypeArb:
             case GL_DELETE_STATUS:
-            case GL_INFO_LOG_LENGTH: programParam = shaderParam = true; break;
+            case GL_INFO_LOG_LENGTH:
+                programParam = shaderParam = true;
+                break;
             case kObjectSubtypeArb:
             case GL_COMPILE_STATUS:
-            case GL_SHADER_SOURCE_LENGTH: shaderParam = true; break;
+            case GL_SHADER_SOURCE_LENGTH:
+                shaderParam = true;
+                break;
             case GL_LINK_STATUS:
             case GL_VALIDATE_STATUS:
             case GL_ATTACHED_SHADERS:
             case GL_ACTIVE_UNIFORMS:
             case GL_ACTIVE_UNIFORM_MAX_LENGTH:
             case GL_ACTIVE_ATTRIBUTES:
-            case GL_ACTIVE_ATTRIBUTE_MAX_LENGTH: programParam = true; break;
-            default: Fail(ErrorCode::InvalidEnum, func, "pname is not a GetObjectParameterARB parameter."); return false;
+            case GL_ACTIVE_ATTRIBUTE_MAX_LENGTH:
+                programParam = true;
+                break;
+            default:
+                Fail(ErrorCode::InvalidEnum, func, "pname is not a GetObjectParameterARB parameter.");
+                return false;
             }
             const ObjectKind kind = KindOf(obj);
             if (kind == ObjectKind::None) {
@@ -123,14 +140,20 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     void GetObjectParameterfvARB(GLuint obj, GLenum pname, GLfloat* params) {
         GLint value = 0;
-        if (QueryObjectParameter(obj, pname, &value, __func__) && params != nullptr) *params = static_cast<GLfloat>(value);
+        if (QueryObjectParameter(obj, pname, &value, __func__) && params != nullptr)
+            *params = static_cast<GLfloat>(value);
     }
 
     void GetInfoLogARB(GLuint obj, GLsizei maxLength, GLsizei* length, GLchar* infoLog) {
         switch (KindOf(obj)) {
-        case ObjectKind::Program: GetProgramInfoLog(obj, maxLength, length, infoLog); return;
-        case ObjectKind::Shader: GetShaderInfoLog(obj, maxLength, length, infoLog); return;
-        case ObjectKind::None: break;
+        case ObjectKind::Program:
+            GetProgramInfoLog(obj, maxLength, length, infoLog);
+            return;
+        case ObjectKind::Shader:
+            GetShaderInfoLog(obj, maxLength, length, infoLog);
+            return;
+        case ObjectKind::None:
+            break;
         }
         Fail(ErrorCode::InvalidValue, __func__, std::to_string(obj) + " is not a shader or program object.");
     }

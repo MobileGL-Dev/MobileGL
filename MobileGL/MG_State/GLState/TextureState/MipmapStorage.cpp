@@ -123,8 +123,7 @@ namespace MobileGL {
                 }
 
                 Bool SameFootprintXY(const MipmapDirtyRegion& a, const MipmapDirtyRegion& b) {
-                    return a.lo.x() == b.lo.x() && a.hi.x() == b.hi.x() && a.lo.y() == b.lo.y() &&
-                           a.hi.y() == b.hi.y();
+                    return a.lo.x() == b.lo.x() && a.hi.x() == b.hi.x() && a.lo.y() == b.lo.y() && a.hi.y() == b.hi.y();
                 }
 
                 Bool FootprintXYLess(const MipmapDirtyRegion& a, const MipmapDirtyRegion& b) {
@@ -148,7 +147,8 @@ namespace MobileGL {
                     Vector<Run> runs;
                     for (const auto& box : writes) {
                         for (Int z = box.lo.z(); z < box.hi.z(); ++z)
-                            for (Int y = box.lo.y(); y < box.hi.y(); ++y) runs.push_back({z, y, box.lo.x(), box.hi.x()});
+                            for (Int y = box.lo.y(); y < box.hi.y(); ++y)
+                                runs.push_back({z, y, box.lo.x(), box.hi.x()});
                     }
                     std::sort(runs.begin(), runs.end(), [](const Run& a, const Run& b) {
                         if (a.z != b.z) return a.z < b.z;
@@ -182,7 +182,8 @@ namespace MobileGL {
                         currentSlice.clear();
                         SizeT p = 0;
                         for (const auto& box : slice) {
-                            while (p < previousSlice.size() && FootprintXYLess(out[previousSlice[p]], box)) ++p;
+                            while (p < previousSlice.size() && FootprintXYLess(out[previousSlice[p]], box))
+                                ++p;
                             if (p < previousSlice.size() && SameFootprintXY(out[previousSlice[p]], box)) {
                                 out[previousSlice[p]].hi = {box.hi.x(), box.hi.y(), sliceZ + 1};
                                 currentSlice.push_back(previousSlice[p++]);
@@ -275,9 +276,8 @@ namespace MobileGL {
                 if (level < m_dirtyRegions.size()) {
                     m_dirtyRegions[level] =
                         m_isDirty[level]
-                            ? MipmapDirtyRegion{IntVec3{0, 0, 0},
-                                                IntVec3{input.texelSize.x(), input.texelSize.y(),
-                                                        std::max(input.texelSize.z(), 1)}}
+                            ? MipmapDirtyRegion{IntVec3{0, 0, 0}, IntVec3{input.texelSize.x(), input.texelSize.y(),
+                                                                          std::max(input.texelSize.z(), 1)}}
                             : MipmapDirtyRegion{};
                 }
                 // The rect list mirrors the union box's reset: whatever rects were
@@ -426,8 +426,7 @@ namespace MobileGL {
                 if (level < m_dirtyRegions.size()) {
                     if (dirty) {
                         const IntVec3 size = level < m_texelSizes.size() ? m_texelSizes[level] : IntVec3{0, 0, 0};
-                        m_dirtyRegions[level] = {IntVec3{0, 0, 0},
-                                                 IntVec3{size.x(), size.y(), std::max(size.z(), 1)}};
+                        m_dirtyRegions[level] = {IntVec3{0, 0, 0}, IntVec3{size.x(), size.y(), std::max(size.z(), 1)}};
                     } else {
                         m_dirtyRegions[level] = {};
                     }
@@ -473,8 +472,7 @@ namespace MobileGL {
                     if (!m_isDirty[level]) {
                         rects.clear(); // stale-safety; MarkDirty(false) already cleared it
                         m_footprintWrites[level].clear();
-                    } else if (rects.empty() && level < m_dirtyRegions.size() &&
-                               !m_dirtyRegions[level].Empty()) {
+                    } else if (rects.empty() && level < m_dirtyRegions.size() && !m_dirtyRegions[level].Empty()) {
                         rects.push_back(m_dirtyRegions[level]);
                     }
                     // Entering the log inside the insert already recorded this write.
@@ -487,11 +485,9 @@ namespace MobileGL {
                 if (level < m_dirtyRegions.size()) {
                     MipmapDirtyRegion& region = m_dirtyRegions[level];
                     if (m_isDirty[level] && !region.Empty()) {
-                        region.lo = {std::min(region.lo.x(), incoming.lo.x()),
-                                     std::min(region.lo.y(), incoming.lo.y()),
+                        region.lo = {std::min(region.lo.x(), incoming.lo.x()), std::min(region.lo.y(), incoming.lo.y()),
                                      std::min(region.lo.z(), incoming.lo.z())};
-                        region.hi = {std::max(region.hi.x(), incoming.hi.x()),
-                                     std::max(region.hi.y(), incoming.hi.y()),
+                        region.hi = {std::max(region.hi.x(), incoming.hi.x()), std::max(region.hi.y(), incoming.hi.y()),
                                      std::max(region.hi.z(), incoming.hi.z())};
                     } else {
                         region = incoming;

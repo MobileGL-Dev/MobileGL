@@ -271,8 +271,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             GLenum TakeXfbDriverError() {
                 const GLenum first = g_GLESFuncs.glGetError();
                 if (first == GL_NO_ERROR) return GL_NO_ERROR;
-                for (Int i = 0; i < kMaxDrainedXfbErrors && g_GLESFuncs.glGetError() != GL_NO_ERROR; ++i) {
-                }
+                for (Int i = 0; i < kMaxDrainedXfbErrors && g_GLESFuncs.glGetError() != GL_NO_ERROR; ++i) {}
                 return first;
             }
         } // namespace
@@ -354,7 +353,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // InvalidateFramebufferBindingCache so no caller can forget; it is one line in D's
         // file and it is on D's rework list.
         static void InvalidateFramebufferHandleArmMemos() {
-            for (auto& memo : g_fboSyncedSerials) memo.valid = false;
+            for (auto& memo : g_fboSyncedSerials)
+                memo.valid = false;
             g_fboRecordsTrusted = false;
         }
 
@@ -521,7 +521,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
     void DrainDriverErrors(const char* site);
 
-    static void DrainBlitErrors() { DrainDriverErrors("BlitFramebuffer"); }
+    static void DrainBlitErrors() {
+        DrainDriverErrors("BlitFramebuffer");
+    }
 
     // ---------------------------------------------------------------------------------
     // Shared guard for the emulation passes that have to DRAW to get their work done: the
@@ -622,9 +624,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             g_GLESFuncs.glUseProgram(static_cast<GLuint>(m_program));
             // Put back whatever the binding cache says lives on the borrowed unit, not what
             // the driver happened to hold: see the class comment.
-            auto* cachedBound =
-                TextureImpl::g_boundTexturesCache[TextureImpl::TempTextureUnit]
-                                                 [static_cast<SizeT>(TextureTarget::Texture2D)];
+            auto* cachedBound = TextureImpl::g_boundTexturesCache[TextureImpl::TempTextureUnit]
+                                                                 [static_cast<SizeT>(TextureTarget::Texture2D)];
             g_GLESFuncs.glBindTexture(GL_TEXTURE_2D, cachedBound ? cachedBound->GetBackendTextureId() : 0);
             TextureImpl::ActivateTextureUnit(m_activeTextureUnit);
             VertexArrayImpl::BindBackendVAOId(static_cast<GLuint>(m_vertexArray));
@@ -636,8 +637,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             const GLenum faces[2] = {GL_FRONT, GL_BACK};
             for (SizeT face = 0; face < 2; ++face) {
                 g_GLESFuncs.glStencilFuncSeparate(faces[face], static_cast<GLenum>(m_stencilFunc[face]),
-                                                  m_stencilRef[face],
-                                                  static_cast<GLuint>(m_stencilValueMask[face]));
+                                                  m_stencilRef[face], static_cast<GLuint>(m_stencilValueMask[face]));
                 g_GLESFuncs.glStencilOpSeparate(faces[face], static_cast<GLenum>(m_stencilFail[face]),
                                                 static_cast<GLenum>(m_stencilDepthFail[face]),
                                                 static_cast<GLenum>(m_stencilPass[face]));
@@ -717,15 +717,24 @@ namespace MobileGL::MG_Backend::DirectGLES {
         static constexpr Uint kClipDistanceCapabilityCount = 8;
         Uint m_capabilityCount = kBaseCapabilityCount;
         CapabilityState m_capabilities[kBaseCapabilityCount + kClipDistanceCapabilityCount] = {
-            {GL_SCISSOR_TEST, GL_FALSE},        {GL_DEPTH_TEST, GL_FALSE},
-            {GL_STENCIL_TEST, GL_FALSE},        {GL_CULL_FACE, GL_FALSE},
-            {GL_BLEND, GL_FALSE},               {GL_RASTERIZER_DISCARD, GL_FALSE},
-            {GL_POLYGON_OFFSET_FILL, GL_FALSE}, {GL_SAMPLE_ALPHA_TO_COVERAGE, GL_FALSE},
-            {GL_SAMPLE_COVERAGE, GL_FALSE},     {GL_SAMPLE_MASK, GL_FALSE},
-            {0x3000, GL_FALSE},                 {0x3001, GL_FALSE},
-            {0x3002, GL_FALSE},                 {0x3003, GL_FALSE},
-            {0x3004, GL_FALSE},                 {0x3005, GL_FALSE},
-            {0x3006, GL_FALSE},                 {0x3007, GL_FALSE},
+            {GL_SCISSOR_TEST, GL_FALSE},
+            {GL_DEPTH_TEST, GL_FALSE},
+            {GL_STENCIL_TEST, GL_FALSE},
+            {GL_CULL_FACE, GL_FALSE},
+            {GL_BLEND, GL_FALSE},
+            {GL_RASTERIZER_DISCARD, GL_FALSE},
+            {GL_POLYGON_OFFSET_FILL, GL_FALSE},
+            {GL_SAMPLE_ALPHA_TO_COVERAGE, GL_FALSE},
+            {GL_SAMPLE_COVERAGE, GL_FALSE},
+            {GL_SAMPLE_MASK, GL_FALSE},
+            {0x3000, GL_FALSE},
+            {0x3001, GL_FALSE},
+            {0x3002, GL_FALSE},
+            {0x3003, GL_FALSE},
+            {0x3004, GL_FALSE},
+            {0x3005, GL_FALSE},
+            {0x3006, GL_FALSE},
+            {0x3007, GL_FALSE},
         };
     };
 
@@ -870,7 +879,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
         const GLenum m_target;
     };
 
-    static void ClearGLErrors() { DrainDriverErrors("DirectGLES"); }
+    static void ClearGLErrors() {
+        DrainDriverErrors("DirectGLES");
+    }
 
     // DirectGLESReadback.cpp defines it: E's extent-scoped stand-in for a
     // driver that refuses to read a colour level back, asked here too so a host reaches the store
@@ -945,7 +956,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
     extern std::atomic<Uint64> g_nativeRegistryEpoch;
 
     extern std::atomic<Uint64> g_surfaceSizeEpoch;
-    static void NoteDrawSurfaceMoved() { g_surfaceSizeEpoch.fetch_add(1, std::memory_order_acq_rel); }
+    static void NoteDrawSurfaceMoved() {
+        g_surfaceSizeEpoch.fetch_add(1, std::memory_order_acq_rel);
+    }
 
     Vector<NativeContextTuple*>& NativeContexts();
 
@@ -1071,7 +1084,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #if MOBILEGL_BUILD_DISAGGREGATED
     namespace SharedImageImpl {
 #if defined(__ANDROID__)
-            using MG_Util::BackendLoader::HasExtensionWord;
+        using MG_Util::BackendLoader::HasExtensionWord;
 #endif
     } // namespace SharedImageImpl
 #endif

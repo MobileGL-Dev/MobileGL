@@ -106,30 +106,26 @@ TEST(SubsystemDepsTest, EveryRowNamesExactlyOneFamilyAndNoRowRequiresItself) {
     }
     // The families the rule is about. Bit 8 and bit 13 are in the table too, which is the half
     // MGPipe.h's old "THREE OF THEM" comment was missing.
-    EXPECT_EQ(seen, kMGPipeSubsystemVertexInput | kMGPipeSubsystemFramebuffer |
-                        kMGPipeSubsystemTextureResources | kMGPipeSubsystemSamplers |
-                        kMGPipeSubsystemPrograms | kMGPipeSubsystemBufferBindings);
+    EXPECT_EQ(seen, kMGPipeSubsystemVertexInput | kMGPipeSubsystemFramebuffer | kMGPipeSubsystemTextureResources |
+                        kMGPipeSubsystemSamplers | kMGPipeSubsystemPrograms | kMGPipeSubsystemBufferBindings);
 }
 
 TEST(SubsystemDepsTest, TheFourthRowIsPresentAndTheWithdrawnMirrorPairIsNotFine) {
     // ID-14/ID-15. This is the row two comments in the tree denied existed, and the reason this
     // case is written as an assertion rather than a paragraph.
-    EXPECT_NE(MGPipeSubsystemRequires(kMGPipeSubsystemTextureResources) & kMGPipeSubsystemSamplers,
-              0ull)
+    EXPECT_NE(MGPipeSubsystemRequires(kMGPipeSubsystemTextureResources) & kMGPipeSubsystemSamplers, 0ull)
         << "bit 10 no longer requires bit 11. If that is intended, the withdrawal recorded in "
            "PipeFill.cpp and in BRIEF-P4A's amendment has been reversed and Espryt's "
            "ResolveTextureResourceSubsystemArm must stop refusing 0x7ff in the same commit";
     EXPECT_FALSE(MGPipeSubsystemDependenciesAreSet(kMGPipeSubsystemTextureResources, 0x7ffull));
-    EXPECT_FALSE(MGPipeSubsystemDependenciesAreSet(
-        kMGPipeSubsystemSamplers,
-        kMGPipeSubsystemsMigratedAtP5e & ~kMGPipeSubsystemTextureResources))
+    EXPECT_FALSE(MGPipeSubsystemDependenciesAreSet(kMGPipeSubsystemSamplers,
+                                                   kMGPipeSubsystemsMigratedAtP5e & ~kMGPipeSubsystemTextureResources))
         << "bit 11 without bit 10 must not be live - the symmetric half of the fourth row";
     // ...and the mirrors that really are fine.
-    EXPECT_TRUE(MGPipeSubsystemDependenciesAreSet(kMGPipeSubsystemPrograms, 0ull))
-        << "bit 12 depends on nothing";
-    EXPECT_TRUE(MGPipeSubsystemDependenciesAreSet(
-        kMGPipeSubsystemTextureResources,
-        kMGPipeSubsystemResources | kMGPipeSubsystemSamplers | kMGPipeSubsystemTextureResources))
+    EXPECT_TRUE(MGPipeSubsystemDependenciesAreSet(kMGPipeSubsystemPrograms, 0ull)) << "bit 12 depends on nothing";
+    EXPECT_TRUE(MGPipeSubsystemDependenciesAreSet(kMGPipeSubsystemTextureResources,
+                                                  kMGPipeSubsystemResources | kMGPipeSubsystemSamplers |
+                                                      kMGPipeSubsystemTextureResources))
         << "bit 10 with 7 and 11 and WITHOUT bit 9 is fine and is not a row";
 }
 
@@ -148,16 +144,15 @@ TEST(SubsystemDepsTest, TheFourthRowIsPresentAndTheWithdrawnMirrorPairIsNotFine)
 // disagreement means records crossing to a server whose matching handle arm did not come up.
 // ---------------------------------------------------------------------------------------------
 TEST(SubsystemDepsTest, TheClientNeverEmitsAFamilyTheTableRefuses) {
-    const Uint64 families[] = {kMGPipeSubsystemFramebuffer, kMGPipeSubsystemTextureResources,
-                               kMGPipeSubsystemSamplers, kMGPipeSubsystemPrograms};
+    const Uint64 families[] = {kMGPipeSubsystemFramebuffer, kMGPipeSubsystemTextureResources, kMGPipeSubsystemSamplers,
+                               kMGPipeSubsystemPrograms};
     int emitted = 0;
     for (const Uint64 mask : InterestingMasks()) {
         for (const Uint64 family : families) {
             if (!MGPipeP4aFamilyEmits(family, mask)) continue;
             ++emitted;
             EXPECT_TRUE(MGPipeSubsystemDependenciesAreSet(family, mask))
-                << "at MOBILEGL_PIPE_PUSH=" << Describe(mask) << " the CLIENT emits family "
-                << Describe(family)
+                << "at MOBILEGL_PIPE_PUSH=" << Describe(mask) << " the CLIENT emits family " << Describe(family)
                 << " while MG_Pipe/SubsystemDeps.def says its dependency bits are not all set. "
                    "Those records reach a server whose matching handle arm refused to come up - "
                    "the half-run subsystem D-K2 exists to make impossible. The two statements of "
@@ -172,6 +167,3 @@ TEST(SubsystemDepsTest, TheClientNeverEmitsAFamilyTheTableRefuses) {
     // to have pulled in a consumer registration.
     RecordProperty("client_emitting_combinations", emitted);
 }
-
-
-

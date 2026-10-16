@@ -123,10 +123,9 @@ namespace MGITest {
                     glTexStorage3D(GL_TEXTURE_2D_ARRAY, 1, GL_RGBA8, 1, 1, 1);
                 }
                 glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
-                while (glGetError() != GL_NO_ERROR) {
-                }
-                glCopyImageSubData(probe[0], GL_TEXTURE_2D_ARRAY, 0, 0, 0, 0, probe[1], GL_TEXTURE_2D_ARRAY, 0, 0, 0,
-                                   0, 1, 1, 1);
+                while (glGetError() != GL_NO_ERROR) {}
+                glCopyImageSubData(probe[0], GL_TEXTURE_2D_ARRAY, 0, 0, 0, 0, probe[1], GL_TEXTURE_2D_ARRAY, 0, 0, 0, 0,
+                                   1, 1, 1);
                 const bool usable = glGetError() == GL_NO_ERROR;
                 glDeleteTextures(2, probe);
                 return usable;
@@ -152,8 +151,7 @@ namespace MGITest {
                 for (int level = 0; level < levels; ++level) {
                     const int levelWidth = kWidth << (levels - 1 - level);
                     const int levelHeight = kHeight << (levels - 1 - level);
-                    const int levelSlices =
-                        target == GL_TEXTURE_3D ? (kSlices << (levels - 1 - level)) : kSlices;
+                    const int levelSlices = target == GL_TEXTURE_3D ? (kSlices << (levels - 1 - level)) : kSlices;
                     for (int slice = 0; slice < levelSlices; ++slice) {
                         const Rgba8 color = colorForSlice(slice % kSlices);
                         std::vector<Rgba8> texels(static_cast<size_t>(levelWidth) * levelHeight, color);
@@ -194,16 +192,15 @@ namespace MGITest {
 
             // The assertion every case ends with: slices inside [dstZ, dstZ + depth) hold the
             // source slice they were fed, and every slice outside it still holds its own fill.
-            void ExpectCopied(GLuint destination, int level, int width, int height, int sliceCount, int srcZ,
-                              int dstZ, int depth, const char* what) {
+            void ExpectCopied(GLuint destination, int level, int width, int height, int sliceCount, int srcZ, int dstZ,
+                              int depth, const char* what) {
                 for (int slice = 0; slice < sliceCount; ++slice) {
                     const bool inRange = slice >= dstZ && slice < dstZ + depth;
-                    const Rgba8 expected =
-                        inRange ? SourceColor(srcZ + (slice - dstZ)) : DestinationFill(slice);
+                    const Rgba8 expected = inRange ? SourceColor(srcZ + (slice - dstZ)) : DestinationFill(slice);
                     const Rgba8 actual = ReadSlice(destination, level, slice, width, height);
                     EXPECT_TRUE(actual == expected)
-                        << what << ": destination slice " << slice << (inRange ? " (copied)" : " (untouched)")
-                        << " is " << Describe(actual) << ", expected " << Describe(expected);
+                        << what << ": destination slice " << slice << (inRange ? " (copied)" : " (untouched)") << " is "
+                        << Describe(actual) << ", expected " << Describe(expected);
                 }
             }
 
@@ -285,8 +282,7 @@ namespace MGITest {
                                kDstZ, kWidth, kHeight, kDepth);
             ASSERT_EQ(glGetError(), static_cast<GLenum>(GL_NO_ERROR)) << "glCopyImageSubData raised an error";
 
-            ExpectCopied(destination, kLevel, kWidth, kHeight, kSlices, kSrcZ, kDstZ, kDepth,
-                         "3d->3d at mip level 1");
+            ExpectCopied(destination, kLevel, kWidth, kHeight, kSlices, kSrcZ, kDstZ, kDepth, "3d->3d at mip level 1");
         }
 
         // 2d_array -> 3d. The mixed shape: the source counts its slices as layers, the destination

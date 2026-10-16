@@ -51,18 +51,18 @@ namespace MobileGL::MG_Remote::Transport {
     // §11.2). The event flags stay out: the client clears eventRingFull on every drain, an RMW
     // that would share the cache line the client's spin predicate reads for appliedSeq.
     struct LinkProgress {
-        std::atomic<std::uint64_t> appliedSeq;            // records applied
-        std::atomic<std::uint64_t> retiredSeq;            // GPU finished
-        std::atomic<std::uint64_t> completedFrameSerial;  // releases *RetiredTail / SEG_ADOPT
-        std::atomic<std::uint64_t> presentAckSerial;      // returns present credit
+        std::atomic<std::uint64_t> appliedSeq;           // records applied
+        std::atomic<std::uint64_t> retiredSeq;           // GPU finished
+        std::atomic<std::uint64_t> completedFrameSerial; // releases *RetiredTail / SEG_ADOPT
+        std::atomic<std::uint64_t> presentAckSerial;     // returns present credit
     };
 
     // The reverse channel's two flags. Separated from LinkProgress for the
     // false-sharing reason above, not for a taxonomic one: both roles read
     // eventRingFull in a park predicate, and both roles write it.
     struct LinkEventFlags {
-        std::atomic<std::uint32_t> eventRingFull;  // server latches, client clears
-        std::atomic<std::uint32_t> eventDropped;   // server-only counter
+        std::atomic<std::uint32_t> eventRingFull; // server latches, client clears
+        std::atomic<std::uint32_t> eventDropped;  // server-only counter
     };
 
     // ---- the producer's handle ----------------------------------------------
@@ -112,7 +112,7 @@ namespace MobileGL::MG_Remote::Transport {
     // second clause is that a transport DECLARES what it supports and may not
     // invent a third answer.
     struct LinkCapabilities {
-        bool SharedMapping = false;   // peers see one set of bytes; no copy on read
+        bool SharedMapping = false; // peers see one set of bytes; no copy on read
         bool DescriptorPassing = false;
         bool PublishIsDelivery = false; // false => Flush() is mandatory before any wait
         std::uint64_t MaxRecordBytes = 0;
@@ -168,7 +168,6 @@ namespace MobileGL::MG_Remote::Transport {
         virtual EventRingConsumer& EventsIn() = 0;
         virtual void BindDoorbells(Doorbell*, Doorbell*) {}
 
-
         // The watermark block. Taken once; every wait predicate reads through
         // the returned pointer with no further virtual dispatch. Never null on
         // an attached link.
@@ -190,8 +189,7 @@ namespace MobileGL::MG_Remote::Transport {
         // Reserve `bytes` of staging and return where the record should name
         // it. MOBILEGL_ERR_RING_OVERRUN when the request cannot be satisfied at
         // any occupancy; the caller's existing back-pressure path is unchanged.
-        virtual MobileGLResult StageBytes(std::uint64_t bytes, LinkSpan* outSpan,
-                                          void** outWritePtr) = 0;
+        virtual MobileGLResult StageBytes(std::uint64_t bytes, LinkSpan* outSpan, void** outWritePtr) = 0;
 
         // Resolve a span the peer named. On a shared mapping this is pointer
         // arithmetic over the peer's segment; on a stream it points into the
@@ -203,15 +201,14 @@ namespace MobileGL::MG_Remote::Transport {
         // progress transmission, send window, flush - did not name it, and
         // without it a stream link has no way to answer the eleven
         // ResolveOrFatal call sites in the decoder.
-        virtual MobileGLResult ResolveSpan(LinkSegment segment, LinkSpan span,
-                                           const void** outPtr) = 0;
+        virtual MobileGLResult ResolveSpan(LinkSegment segment, LinkSpan span, const void** outPtr) = 0;
 
         // ---- replies --------------------------------------------------------
 
-        virtual MobileGLResult PostReply(std::uint64_t seq, std::int32_t status,
-                                         const void* payload, std::uint64_t size) = 0;
-        virtual MobileGLResult ReadReply(std::uint64_t seq, std::int32_t* outStatus,
-                                         const void** outPayload, std::uint64_t* outSize) = 0;
+        virtual MobileGLResult PostReply(std::uint64_t seq, std::int32_t status, const void* payload,
+                                         std::uint64_t size) = 0;
+        virtual MobileGLResult ReadReply(std::uint64_t seq, std::int32_t* outStatus, const void** outPayload,
+                                         std::uint64_t* outSize) = 0;
 
         // P12: DECLARE THAT THIS SEQ'S ANSWER WILL BE READ, so that a link which can retain it
         // does. Called by the producer side of the wire, in seq order, BEFORE the record is
@@ -285,8 +282,8 @@ namespace MobileGL::MG_Remote::Transport {
 
     // Setup factories keep concrete link selection out of codec/session code.
     std::unique_ptr<ILink> CreateSharedLink(TransportRoleTag role);
-    MobileGLResult CreateStreamLink(int fd, const SessionSegmentSizes& sizes,
-                                   TransportRoleTag role, std::unique_ptr<ILink>& out);
+    MobileGLResult CreateStreamLink(int fd, const SessionSegmentSizes& sizes, TransportRoleTag role,
+                                    std::unique_ptr<ILink>& out);
     // PH-7 (4), ID-P7-3. The server's nonce-bound stream link, in the two steps
     // StreamLink::AttachOwnedDeferred / BindDataFd describe: created with its owned memory and
     // no descriptor (Welcome announces those sizes before the data connection exists), then

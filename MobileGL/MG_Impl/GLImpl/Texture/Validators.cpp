@@ -208,53 +208,53 @@ namespace MobileGL::MG_Impl::GLImpl::TextureImpl {
 
     Bool IsIntegerColorInternalFormat(TextureInternalFormat internalFormat) {
         switch (internalFormat) {
-            case TextureInternalFormat::R8I:
-            case TextureInternalFormat::R8UI:
-            case TextureInternalFormat::R16I:
-            case TextureInternalFormat::R16UI:
-            case TextureInternalFormat::R32I:
-            case TextureInternalFormat::R32UI:
-            case TextureInternalFormat::RG8I:
-            case TextureInternalFormat::RG8UI:
-            case TextureInternalFormat::RG16I:
-            case TextureInternalFormat::RG16UI:
-            case TextureInternalFormat::RG32I:
-            case TextureInternalFormat::RG32UI:
-            case TextureInternalFormat::RGB8I:
-            case TextureInternalFormat::RGB8UI:
-            case TextureInternalFormat::RGB16I:
-            case TextureInternalFormat::RGB16UI:
-            case TextureInternalFormat::RGB32I:
-            case TextureInternalFormat::RGB32UI:
-            case TextureInternalFormat::RGBA8I:
-            case TextureInternalFormat::RGBA8UI:
-            case TextureInternalFormat::RGBA16I:
-            case TextureInternalFormat::RGBA16UI:
-            case TextureInternalFormat::RGBA32I:
-            case TextureInternalFormat::RGBA32UI:
-            case TextureInternalFormat::RGB10A2UI:
-                return true;
-            default:
-                return false;
+        case TextureInternalFormat::R8I:
+        case TextureInternalFormat::R8UI:
+        case TextureInternalFormat::R16I:
+        case TextureInternalFormat::R16UI:
+        case TextureInternalFormat::R32I:
+        case TextureInternalFormat::R32UI:
+        case TextureInternalFormat::RG8I:
+        case TextureInternalFormat::RG8UI:
+        case TextureInternalFormat::RG16I:
+        case TextureInternalFormat::RG16UI:
+        case TextureInternalFormat::RG32I:
+        case TextureInternalFormat::RG32UI:
+        case TextureInternalFormat::RGB8I:
+        case TextureInternalFormat::RGB8UI:
+        case TextureInternalFormat::RGB16I:
+        case TextureInternalFormat::RGB16UI:
+        case TextureInternalFormat::RGB32I:
+        case TextureInternalFormat::RGB32UI:
+        case TextureInternalFormat::RGBA8I:
+        case TextureInternalFormat::RGBA8UI:
+        case TextureInternalFormat::RGBA16I:
+        case TextureInternalFormat::RGBA16UI:
+        case TextureInternalFormat::RGBA32I:
+        case TextureInternalFormat::RGBA32UI:
+        case TextureInternalFormat::RGB10A2UI:
+            return true;
+        default:
+            return false;
         }
     }
 
     static Bool IsDepthLikeInternalFormat(TextureInternalFormat internalFormat) {
         switch (internalFormat) {
-            case TextureInternalFormat::DepthComponent:
-            case TextureInternalFormat::DepthComponent16:
-            case TextureInternalFormat::DepthComponent24:
-            case TextureInternalFormat::DepthComponent32: // not core, kept for Minecraft 1.21.5+
-            case TextureInternalFormat::DepthComponent32F:
-            case TextureInternalFormat::Depth24Stencil8:
-            case TextureInternalFormat::Depth32FStencil8:
-            case TextureInternalFormat::DepthStencil:
-            // Stencil-only is not a colour format either: a colour client format read against a
-            // STENCIL_INDEX8 texture has to be the same INVALID_OPERATION as against a depth one.
-            case TextureInternalFormat::StencilIndex8:
-                return true;
-            default:
-                return false;
+        case TextureInternalFormat::DepthComponent:
+        case TextureInternalFormat::DepthComponent16:
+        case TextureInternalFormat::DepthComponent24:
+        case TextureInternalFormat::DepthComponent32: // not core, kept for Minecraft 1.21.5+
+        case TextureInternalFormat::DepthComponent32F:
+        case TextureInternalFormat::Depth24Stencil8:
+        case TextureInternalFormat::Depth32FStencil8:
+        case TextureInternalFormat::DepthStencil:
+        // Stencil-only is not a colour format either: a colour client format read against a
+        // STENCIL_INDEX8 texture has to be the same INVALID_OPERATION as against a depth one.
+        case TextureInternalFormat::StencilIndex8:
+            return true;
+        default:
+            return false;
         }
     }
 
@@ -339,8 +339,7 @@ namespace MobileGL::MG_Impl::GLImpl::TextureImpl {
         // pairs with stencil-only storage: against a depth, depth-stencil or colour internal format
         // STENCIL_INDEX keeps the pre-4.4 answer (GL CTS packed_pixels feeds exactly that pairing
         // and expects INVALID_OPERATION).
-        if (format == TextureInputFormat::StencilIndex &&
-            internalFormat != TextureInternalFormat::StencilIndex8) {
+        if (format == TextureInputFormat::StencilIndex && internalFormat != TextureInternalFormat::StencilIndex8) {
             return recordInvalidOperation("STENCIL_INDEX requires a stencil-only internal format");
         }
 
@@ -396,8 +395,7 @@ namespace MobileGL::MG_Impl::GLImpl::TextureImpl {
             // dereference a backend texture it never created.
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,
-                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
-                                             "Texture has no mipmap levels to address."));
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller, "Texture has no mipmap levels to address."));
             return false;
         }
 
@@ -423,15 +421,13 @@ namespace MobileGL::MG_Impl::GLImpl::TextureImpl {
             // copy names is an incomplete texture.
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,
-                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
-                                             "Texture has no image defined at any level."));
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller, "Texture has no image defined at any level."));
             return false;
         }
         if (level < 0 || static_cast<Uint>(level) >= levelCount) {
             MG_State::pGLContext->RecordError(
-                ErrorCode::InvalidValue,
-                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
-                                             "Texture level does not exist in this texture."));
+                ErrorCode::InvalidValue, MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
+                                                                      "Texture level does not exist in this texture."));
             return false;
         }
         return true;
@@ -592,8 +588,7 @@ namespace MobileGL::MG_Impl::GLImpl::TextureImpl {
                 MakeUnique<GenericErrorInfo>(
                     "MG_Impl/GLImpl", "ValidateCopyImageFormatCompatibility",
                     std::format("The two compressed images have different block dimensions ({}x{} vs. {}x{}).",
-                                srcBlock.blockWidth, srcBlock.blockHeight, dstBlock.blockWidth,
-                                dstBlock.blockHeight)));
+                                srcBlock.blockWidth, srcBlock.blockHeight, dstBlock.blockWidth, dstBlock.blockHeight)));
             return false;
         }
         return true;

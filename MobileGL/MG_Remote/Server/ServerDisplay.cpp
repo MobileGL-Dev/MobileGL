@@ -32,22 +32,32 @@ namespace MobileGL::MG_Remote::Server {
 
     const char* ServerWindowAcquireName(ServerWindowAcquire result) {
         switch (result) {
-        case ServerWindowAcquire::Acquired: return "Acquired";
-        case ServerWindowAcquire::NoDisplay: return "NoDisplay";
-        case ServerWindowAcquire::NoWindow: return "NoWindow";
-        case ServerWindowAcquire::Cancelled: return "Cancelled";
-        case ServerWindowAcquire::Interrupted: return "Interrupted";
-        case ServerWindowAcquire::LeasedElsewhere: return "LeasedElsewhere";
+        case ServerWindowAcquire::Acquired:
+            return "Acquired";
+        case ServerWindowAcquire::NoDisplay:
+            return "NoDisplay";
+        case ServerWindowAcquire::NoWindow:
+            return "NoWindow";
+        case ServerWindowAcquire::Cancelled:
+            return "Cancelled";
+        case ServerWindowAcquire::Interrupted:
+            return "Interrupted";
+        case ServerWindowAcquire::LeasedElsewhere:
+            return "LeasedElsewhere";
         }
         return "<unknown ServerWindowAcquire>";
     }
 
     const char* ServerWindowDetachName(ServerWindowDetach result) {
         switch (result) {
-        case ServerWindowDetach::NoWindow: return "NoWindow";
-        case ServerWindowDetach::Released: return "Released";
-        case ServerWindowDetach::ReleasedBySession: return "ReleasedBySession";
-        case ServerWindowDetach::TimedOut: return "TimedOut";
+        case ServerWindowDetach::NoWindow:
+            return "NoWindow";
+        case ServerWindowDetach::Released:
+            return "Released";
+        case ServerWindowDetach::ReleasedBySession:
+            return "ReleasedBySession";
+        case ServerWindowDetach::TimedOut:
+            return "TimedOut";
         }
         return "<unknown ServerWindowDetach>";
     }
@@ -164,8 +174,8 @@ namespace MobileGL::MG_Remote::Server {
                 m_lostRequested = true;
                 if (m_onLost != nullptr) m_onLost(m_leaseHolder);
             }
-            const Bool released = m_cv.wait_for(lock, std::chrono::milliseconds(timeoutMs),
-                                                [this] { return m_leaseHolder == nullptr; });
+            const Bool released =
+                m_cv.wait_for(lock, std::chrono::milliseconds(timeoutMs), [this] { return m_leaseHolder == nullptr; });
             if (!released) {
                 // NOT RELEASED UNDER IT. The holder may still reference the window (Magma keeps the
                 // raw pointer until the swapchain is built), so the reference stays until it ends
@@ -265,11 +275,10 @@ namespace MobileGL::MG_Remote::Server {
                     m_lostRequested = false;
                     m_leaseEnding = false;
                     // A suspended holder that leased a window again waits for no other.
-                    m_suspended.erase(std::remove_if(m_suspended.begin(), m_suspended.end(),
-                                                     [holder](const SuspendedHolder& entry) {
-                                                         return entry.holder == holder;
-                                                     }),
-                                      m_suspended.end());
+                    m_suspended.erase(
+                        std::remove_if(m_suspended.begin(), m_suspended.end(),
+                                       [holder](const SuspendedHolder& entry) { return entry.holder == holder; }),
+                        m_suspended.end());
                     if (out != nullptr) {
                         out->window = m_window;
                         out->width = m_width;
@@ -322,8 +331,7 @@ namespace MobileGL::MG_Remote::Server {
     void ServerDisplay::ReleaseAfterLease(const ServerDisplayHooks& hooks, const std::vector<void*>& releases) const {
         for (void* window : releases) {
             ReleaseOutsideLock(hooks, window);
-            MGLOG_I("MG_Remote server: server window %p released after its session let go (a late Detach)",
-                    window);
+            MGLOG_I("MG_Remote server: server window %p released after its session let go (a late Detach)", window);
         }
     }
 

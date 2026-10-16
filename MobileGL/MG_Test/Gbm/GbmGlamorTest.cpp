@@ -94,7 +94,7 @@ TEST_F(GbmGlamor, AWindowPixmapIsASharedImageWithOneExportablePlane) {
     EXPECT_EQ(gbm_bo_get_offset(bo, 0), 0u);
     // Exports are duplicates of one dma-buf: the same inode every time.
     const int again = gbm_bo_get_fd(bo);
-    struct stat a {}, b {};
+    struct stat a{}, b{};
     ASSERT_EQ(::fstat(fd, &a), 0);
     ASSERT_EQ(::fstat(again, &b), 0);
     EXPECT_EQ(a.st_ino, b.st_ino);
@@ -137,7 +137,7 @@ TEST_F(GbmGlamor, ADri3ClientsBufferImportsBackAsTheSameImage) {
     EXPECT_EQ(m_imports(), importsBefore + 1);
     // ...and re-exported for EGL_LINUX_DMA_BUF_EXT: still that image.
     const int reexport = gbm_bo_get_fd_for_plane(imported, 0);
-    struct stat a {}, b {};
+    struct stat a{}, b{};
     ::fstat(fd, &a);
     ::fstat(reexport, &b);
     EXPECT_EQ(a.st_ino, b.st_ino);

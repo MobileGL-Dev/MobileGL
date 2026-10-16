@@ -61,9 +61,15 @@ namespace MGITest {
         return true;
     }
 #else
-    bool PeekPipeTextureResourceRecord(unsigned, PipeTextureResourceRecordPeek*) { return false; }
-    bool PeekPipeStatsTextureRemintPulls(unsigned long long*) { return false; }
-    bool PeekPipeStatsTextureUploadEmissions(unsigned long long*) { return false; }
+    bool PeekPipeTextureResourceRecord(unsigned, PipeTextureResourceRecordPeek*) {
+        return false;
+    }
+    bool PeekPipeStatsTextureRemintPulls(unsigned long long*) {
+        return false;
+    }
+    bool PeekPipeStatsTextureUploadEmissions(unsigned long long*) {
+        return false;
+    }
 #endif
 
 } // namespace MGITest

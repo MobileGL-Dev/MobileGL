@@ -61,9 +61,8 @@ namespace MobileGL {
 
                 bool IsUnsignedInt32(IRContext* context, uint32_t typeId) {
                     const Instruction* type = context->get_def_use_mgr()->GetDef(typeId);
-                    return type != nullptr && type->opcode() == spv::Op::OpTypeInt &&
-                           type->NumInOperands() >= 2 && type->GetSingleWordInOperand(0) == 32u &&
-                           type->GetSingleWordInOperand(1) == 0u;
+                    return type != nullptr && type->opcode() == spv::Op::OpTypeInt && type->NumInOperands() >= 2 &&
+                           type->GetSingleWordInOperand(0) == 32u && type->GetSingleWordInOperand(1) == 0u;
                 }
 
                 uint32_t SynthesizeSubgroupSizeVariable(IRContext* context, uint32_t pointerTypeId) {
@@ -71,16 +70,13 @@ namespace MobileGL {
                     context->AddGlobalValue(spvtools::MakeUnique<Instruction>(
                         context, spv::Op::OpVariable, pointerTypeId, variableId,
                         std::initializer_list<Operand>{
-                            {SPV_OPERAND_TYPE_STORAGE_CLASS,
-                             {static_cast<uint32_t>(spv::StorageClass::Input)}}}));
+                            {SPV_OPERAND_TYPE_STORAGE_CLASS, {static_cast<uint32_t>(spv::StorageClass::Input)}}}));
                     context->AddAnnotationInst(spvtools::MakeUnique<Instruction>(
                         context, spv::Op::OpDecorate, 0, 0,
                         std::initializer_list<Operand>{
                             {SPV_OPERAND_TYPE_ID, {variableId}},
-                            {SPV_OPERAND_TYPE_DECORATION,
-                             {static_cast<uint32_t>(spv::Decoration::BuiltIn)}},
-                            {SPV_OPERAND_TYPE_LITERAL_INTEGER,
-                             {static_cast<uint32_t>(spv::BuiltIn::SubgroupSize)}}}));
+                            {SPV_OPERAND_TYPE_DECORATION, {static_cast<uint32_t>(spv::Decoration::BuiltIn)}},
+                            {SPV_OPERAND_TYPE_LITERAL_INTEGER, {static_cast<uint32_t>(spv::BuiltIn::SubgroupSize)}}}));
 
                     for (Instruction& entryPoint : context->module()->entry_points()) {
                         entryPoint.AddOperand({SPV_OPERAND_TYPE_ID, {variableId}});
@@ -104,8 +100,7 @@ namespace MobileGL {
                 defUseMgr->ForEachUser(numSubgroupsVar, [&](Instruction* user) {
                     switch (user->opcode()) {
                     case spv::Op::OpLoad:
-                        if (user->NumInOperands() >= 1 &&
-                            user->GetSingleWordInOperand(0) == numSubgroupsVarId) {
+                        if (user->NumInOperands() >= 1 && user->GetSingleWordInOperand(0) == numSubgroupsVarId) {
                             numSubgroupsLoads.push_back(user);
                         } else {
                             sawUnexpectedUser = true;
@@ -141,9 +136,8 @@ namespace MobileGL {
                 }
 
                 Instruction* workgroupSize = FindBuiltinDefinition(irContext, spv::BuiltIn::WorkgroupSize);
-                if (workgroupSize == nullptr ||
-                    (workgroupSize->opcode() != spv::Op::OpConstantComposite &&
-                     workgroupSize->opcode() != spv::Op::OpSpecConstantComposite)) {
+                if (workgroupSize == nullptr || (workgroupSize->opcode() != spv::Op::OpConstantComposite &&
+                                                 workgroupSize->opcode() != spv::Op::OpSpecConstantComposite)) {
                     return Status::Failure;
                 }
                 const Instruction* workgroupSizeType = defUseMgr->GetDef(workgroupSize->type_id());
@@ -155,8 +149,7 @@ namespace MobileGL {
                 }
 
                 Instruction* subgroupSizeVar = FindBuiltinDefinition(irContext, spv::BuiltIn::SubgroupSize);
-                if (subgroupSizeVar != nullptr &&
-                    !IsInputPointerTo(irContext, subgroupSizeVar, valueTypeId)) {
+                if (subgroupSizeVar != nullptr && !IsInputPointerTo(irContext, subgroupSizeVar, valueTypeId)) {
                     return Status::Failure;
                 }
 
@@ -174,9 +167,9 @@ namespace MobileGL {
                 }
                 const uint32_t oneId = oneInst->result_id();
 
-                const uint32_t subgroupSizeVarId = subgroupSizeVar != nullptr
-                    ? subgroupSizeVar->result_id()
-                    : SynthesizeSubgroupSizeVariable(irContext, numSubgroupsVar->type_id());
+                const uint32_t subgroupSizeVarId =
+                    subgroupSizeVar != nullptr ? subgroupSizeVar->result_id()
+                                               : SynthesizeSubgroupSizeVariable(irContext, numSubgroupsVar->type_id());
                 const uint32_t workgroupSizeId = workgroupSize->result_id();
 
                 // ceil(local invocation count / SubgroupSize): the subgroup count of a
@@ -200,49 +193,41 @@ namespace MobileGL {
 
                     load->InsertBefore(spvtools::MakeUnique<Instruction>(
                         irContext, spv::Op::OpCompositeExtract, valueTypeId, localSizeXId,
-                        std::initializer_list<Operand>{
-                            {SPV_OPERAND_TYPE_ID, {workgroupSizeId}},
-                            {SPV_OPERAND_TYPE_LITERAL_INTEGER, {0u}}}));
+                        std::initializer_list<Operand>{{SPV_OPERAND_TYPE_ID, {workgroupSizeId}},
+                                                       {SPV_OPERAND_TYPE_LITERAL_INTEGER, {0u}}}));
                     load->InsertBefore(spvtools::MakeUnique<Instruction>(
                         irContext, spv::Op::OpCompositeExtract, valueTypeId, localSizeYId,
-                        std::initializer_list<Operand>{
-                            {SPV_OPERAND_TYPE_ID, {workgroupSizeId}},
-                            {SPV_OPERAND_TYPE_LITERAL_INTEGER, {1u}}}));
+                        std::initializer_list<Operand>{{SPV_OPERAND_TYPE_ID, {workgroupSizeId}},
+                                                       {SPV_OPERAND_TYPE_LITERAL_INTEGER, {1u}}}));
                     load->InsertBefore(spvtools::MakeUnique<Instruction>(
                         irContext, spv::Op::OpCompositeExtract, valueTypeId, localSizeZId,
-                        std::initializer_list<Operand>{
-                            {SPV_OPERAND_TYPE_ID, {workgroupSizeId}},
-                            {SPV_OPERAND_TYPE_LITERAL_INTEGER, {2u}}}));
+                        std::initializer_list<Operand>{{SPV_OPERAND_TYPE_ID, {workgroupSizeId}},
+                                                       {SPV_OPERAND_TYPE_LITERAL_INTEGER, {2u}}}));
                     load->InsertBefore(spvtools::MakeUnique<Instruction>(
                         irContext, spv::Op::OpIMul, valueTypeId, localSizeXYId,
-                        std::initializer_list<Operand>{
-                            {SPV_OPERAND_TYPE_ID, {localSizeXId}},
-                            {SPV_OPERAND_TYPE_ID, {localSizeYId}}}));
+                        std::initializer_list<Operand>{{SPV_OPERAND_TYPE_ID, {localSizeXId}},
+                                                       {SPV_OPERAND_TYPE_ID, {localSizeYId}}}));
                     load->InsertBefore(spvtools::MakeUnique<Instruction>(
                         irContext, spv::Op::OpIMul, valueTypeId, invocationCountId,
-                        std::initializer_list<Operand>{
-                            {SPV_OPERAND_TYPE_ID, {localSizeXYId}},
-                            {SPV_OPERAND_TYPE_ID, {localSizeZId}}}));
+                        std::initializer_list<Operand>{{SPV_OPERAND_TYPE_ID, {localSizeXYId}},
+                                                       {SPV_OPERAND_TYPE_ID, {localSizeZId}}}));
                     load->InsertBefore(spvtools::MakeUnique<Instruction>(
                         irContext, spv::Op::OpISub, valueTypeId, adjustedCountId,
-                        std::initializer_list<Operand>{
-                            {SPV_OPERAND_TYPE_ID, {invocationCountId}},
-                            {SPV_OPERAND_TYPE_ID, {oneId}}}));
+                        std::initializer_list<Operand>{{SPV_OPERAND_TYPE_ID, {invocationCountId}},
+                                                       {SPV_OPERAND_TYPE_ID, {oneId}}}));
                     load->InsertBefore(spvtools::MakeUnique<Instruction>(
                         irContext, spv::Op::OpLoad, valueTypeId, subgroupSizeId,
                         std::initializer_list<Operand>{{SPV_OPERAND_TYPE_ID, {subgroupSizeVarId}}}));
                     load->InsertBefore(spvtools::MakeUnique<Instruction>(
                         irContext, spv::Op::OpUDiv, valueTypeId, quotientId,
-                        std::initializer_list<Operand>{
-                            {SPV_OPERAND_TYPE_ID, {adjustedCountId}},
-                            {SPV_OPERAND_TYPE_ID, {subgroupSizeId}}}));
+                        std::initializer_list<Operand>{{SPV_OPERAND_TYPE_ID, {adjustedCountId}},
+                                                       {SPV_OPERAND_TYPE_ID, {subgroupSizeId}}}));
 
                     // Preserve the original result id so every downstream use automatically sees
                     // the derived value instead of the driver's NumSubgroups builtin.
                     load->SetOpcode(spv::Op::OpIAdd);
-                    load->SetInOperands(Instruction::OperandList{
-                        {SPV_OPERAND_TYPE_ID, {quotientId}},
-                        {SPV_OPERAND_TYPE_ID, {oneId}}});
+                    load->SetInOperands(
+                        Instruction::OperandList{{SPV_OPERAND_TYPE_ID, {quotientId}}, {SPV_OPERAND_TYPE_ID, {oneId}}});
                 }
 
                 irContext->InvalidateAnalysesExceptFor(IRContext::kAnalysisNone);

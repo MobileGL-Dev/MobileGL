@@ -67,8 +67,7 @@ namespace {
         EXPECT_TRUE(programResult) << (programResult ? String{} : programResult.error().log);
         if (!programResult) return {};
 
-        ProgramBinaryAttrib binaryAttrib{.shaderTypes = {GL_FRAGMENT_SHADER},
-                                         .program = *programResult.value()};
+        ProgramBinaryAttrib binaryAttrib{.shaderTypes = {GL_FRAGMENT_SHADER}, .program = *programResult.value()};
         auto binaryResult = ShaderCompiler::GetSpirvBinaryFromProgram(binaryAttrib);
         EXPECT_TRUE(binaryResult) << (binaryResult ? String{} : binaryResult.error().log);
         if (!binaryResult || binaryResult->empty()) return {};
@@ -396,26 +395,22 @@ TEST(WidenImageFormats, TwentySixNonCoreFormatsHaveALosslessCoreCarrier) {
         {0x8F98, 0x8D76, 1, "GL_R16_SNORM -> GL_RGBA16UI"},
     };
     for (const Case& testCase : cases) {
-        EXPECT_EQ(ShaderCompiler::WidenedCoreEsslImageFormat(testCase.requested), testCase.carrier)
-            << testCase.name;
-        EXPECT_EQ(ShaderCompiler::ImageFormatChannelCount(testCase.requested), testCase.channels)
-            << testCase.name;
+        EXPECT_EQ(ShaderCompiler::WidenedCoreEsslImageFormat(testCase.requested), testCase.carrier) << testCase.name;
+        EXPECT_EQ(ShaderCompiler::ImageFormatChannelCount(testCase.requested), testCase.channels) << testCase.name;
         // Every carrier is one of the thirteen ES has in core, or the widening would have moved
         // the problem rather than solved it - and every carrier has four channels, or the mask
         // selectors would address components that are not there.
-        EXPECT_TRUE(ShaderCompiler::GLInternalFormatIsCoreEsslImageFormat(testCase.carrier))
-            << testCase.name;
+        EXPECT_TRUE(ShaderCompiler::GLInternalFormatIsCoreEsslImageFormat(testCase.carrier)) << testCase.name;
         EXPECT_EQ(ShaderCompiler::ImageFormatChannelCount(testCase.carrier), 4u) << testCase.name;
     }
 }
 
 TEST(WidenImageFormats, CoreFormatsAreRefused) {
     // The thirteen GLSL ES already has: nothing to carry.
-    for (const Uint coreFormat : {0x8814u /*RGBA32F*/, 0x881Au /*RGBA16F*/, 0x822Eu /*R32F*/,
-                                  0x8058u /*RGBA8*/, 0x8F97u /*RGBA8_SNORM*/, 0x8D82u /*RGBA32I*/,
-                                  0x8D88u /*RGBA16I*/, 0x8D8Eu /*RGBA8I*/, 0x8235u /*R32I*/,
-                                  0x8D70u /*RGBA32UI*/, 0x8D76u /*RGBA16UI*/, 0x8D7Cu /*RGBA8UI*/,
-                                  0x8236u /*R32UI*/}) {
+    for (const Uint coreFormat :
+         {0x8814u /*RGBA32F*/, 0x881Au /*RGBA16F*/, 0x822Eu /*R32F*/, 0x8058u /*RGBA8*/, 0x8F97u /*RGBA8_SNORM*/,
+          0x8D82u /*RGBA32I*/, 0x8D88u /*RGBA16I*/, 0x8D8Eu /*RGBA8I*/, 0x8235u /*R32I*/, 0x8D70u /*RGBA32UI*/,
+          0x8D76u /*RGBA16UI*/, 0x8D7Cu /*RGBA8UI*/, 0x8236u /*R32UI*/}) {
         EXPECT_EQ(ShaderCompiler::WidenedCoreEsslImageFormat(coreFormat), 0u)
             << "core format 0x" << std::hex << coreFormat;
     }
@@ -454,8 +449,7 @@ TEST(WidenImageFormats, OnlyTheNormalizedFormatsCarryCodesAndTheirDenominatorsAr
         EXPECT_TRUE(ShaderCompiler::NormalizedImageCarrierCodes(testCase.format, channelMax, isSigned))
             << testCase.name;
         for (Uint channel = 0; channel < 4; ++channel) {
-            EXPECT_EQ(channelMax[channel], testCase.channelMax[channel])
-                << testCase.name << " channel " << channel;
+            EXPECT_EQ(channelMax[channel], testCase.channelMax[channel]) << testCase.name << " channel " << channel;
         }
         EXPECT_EQ(isSigned, testCase.isSigned) << testCase.name;
     }
@@ -463,9 +457,9 @@ TEST(WidenImageFormats, OnlyTheNormalizedFormatsCarryCodesAndTheirDenominatorsAr
     // Everything else keeps its own component type in the carrier, so nothing is converted: an
     // rg8's carrier channel really is an 8-bit unsigned normalized one, and an rgb10_a2ui's
     // channel really does hold the integer the shader stored.
-    for (const Uint direct : {0x8230u /*RG32F*/, 0x8229u /*R8*/, 0x8F94u /*R8_SNORM*/,
-                              0x8232u /*R8UI*/, 0x8C3Au /*R11F_G11F_B10F*/, 0x906Fu /*RGB10_A2UI*/,
-                              0x8814u /*RGBA32F*/, 0x8051u /*RGB8, not an image format*/}) {
+    for (const Uint direct :
+         {0x8230u /*RG32F*/, 0x8229u /*R8*/, 0x8F94u /*R8_SNORM*/, 0x8232u /*R8UI*/, 0x8C3Au /*R11F_G11F_B10F*/,
+          0x906Fu /*RGB10_A2UI*/, 0x8814u /*RGBA32F*/, 0x8051u /*RGB8, not an image format*/}) {
         Uint32 channelMax[4] = {7u, 7u, 7u, 7u};
         bool isSigned = true;
         EXPECT_FALSE(ShaderCompiler::NormalizedImageCarrierCodes(direct, channelMax, isSigned))
@@ -516,8 +510,7 @@ TEST(WidenImageFormats, TwoChannelFloatImageBecomesRgba32fWithBothAccessesMasked
     const VectorShuffle* loadMask = FindShuffleOver(shuffles, readIds.front());
     ASSERT_NE(loadMask, nullptr) << "the imageLoad result is consumed unmasked";
     EXPECT_TRUE(HasComponents(*loadMask, {0u, 1u, 6u, 7u}));
-    EXPECT_NE(loadMask->resultId, readIds.front())
-        << "the mask must be a separate value, or it would feed itself";
+    EXPECT_NE(loadMask->resultId, readIds.front()) << "the mask must be a separate value, or it would feed itself";
 }
 
 // The three-channel case, which no format exercised before r11f_g11f_b10f was carried: only ALPHA
@@ -600,10 +593,9 @@ TEST(WidenImageFormats, PackedFloatImageOnlyReachesEsslThroughTheCarrier) {
     ASSERT_FALSE(spirv.empty());
 
     const EsslAttempt before = EmitEssl(spirv);
-    EXPECT_FALSE(before.succeeded)
-        << "SPIRV-Cross printed r11f_g11f_b10f for an ES target; the widening's premise has "
-           "changed:\n"
-        << before.text;
+    EXPECT_FALSE(before.succeeded) << "SPIRV-Cross printed r11f_g11f_b10f for an ES target; the widening's premise has "
+                                      "changed:\n"
+                                   << before.text;
 
     Vector<Uint32> widened;
     ASSERT_TRUE(ShaderCompiler::WidenImageFormatsForEssl(spirv, widened, /*onlyFormatsSpirvCrossRefusesToPrint=*/false,
@@ -752,8 +744,7 @@ TEST(WidenImageFormats, OnlyTheThirtyTwoBitTwoChannelFormatsSplitAsBufferImages)
         {0x823C, 0x8236, "GL_RG32UI -> GL_R32UI"},
     };
     for (const Case& testCase : cases) {
-        EXPECT_EQ(ShaderCompiler::SplitCoreEsslBufferImageFormat(testCase.format), testCase.base)
-            << testCase.name;
+        EXPECT_EQ(ShaderCompiler::SplitCoreEsslBufferImageFormat(testCase.format), testCase.base) << testCase.name;
         EXPECT_TRUE(ShaderCompiler::GLInternalFormatIsCoreEsslImageFormat(testCase.base)) << testCase.name;
         EXPECT_EQ(ShaderCompiler::ImageFormatChannelCount(testCase.base), 1u) << testCase.name;
     }
@@ -762,8 +753,7 @@ TEST(WidenImageFormats, OnlyTheThirtyTwoBitTwoChannelFormatsSplitAsBufferImages)
                                0x8F95u /*RG8_SNORM*/, 0x822Cu /*RG16*/, 0x8237u /*RG8I*/, 0x8238u /*RG8UI*/,
                                // Already core, or four-channel, or not an image format at all.
                                0x8814u /*RGBA32F*/, 0x822Eu /*R32F*/, 0x8051u /*RGB8*/, 0u}) {
-        EXPECT_EQ(ShaderCompiler::SplitCoreEsslBufferImageFormat(refused), 0u)
-            << "format 0x" << std::hex << refused;
+        EXPECT_EQ(ShaderCompiler::SplitCoreEsslBufferImageFormat(refused), 0u) << "format 0x" << std::hex << refused;
     }
 }
 
@@ -856,7 +846,7 @@ TEST(WidenImageFormats, TheExtensionNarrowsTheWideningToWhatSpirvCrossWillNotPri
     ASSERT_TRUE(ShaderCompiler::SpirvCrossCanPrintEsslImageFormat(0x8230 /*GL_RG32F*/));
     ASSERT_FALSE(ShaderCompiler::SpirvCrossCanPrintEsslImageFormat(0x8232 /*GL_R8UI*/));
 
-    {   // rg32f: printable, so the narrow mode leaves it exactly as declared.
+    { // rg32f: printable, so the narrow mode leaves it exactly as declared.
         const Vector<Uint32> spirv = CompileFragment(kRg32fLoadStore);
         ASSERT_FALSE(spirv.empty());
         EXPECT_TRUE(ShaderCompiler::DeclaresWidenableImageFormat(spirv, false));
@@ -872,15 +862,15 @@ TEST(WidenImageFormats, TheExtensionNarrowsTheWideningToWhatSpirvCrossWillNotPri
             EXPECT_EQ(CollectVectorShuffles(widened).size(), CollectVectorShuffles(spirv).size());
         }
     }
-    {   // r8ui: unprintable, so the narrow mode still carries it - and must mask it exactly as
+    { // r8ui: unprintable, so the narrow mode still carries it - and must mask it exactly as
         // the wide mode does, because the storage and the bind widen with it either way.
         const Vector<Uint32> spirv = CompileFragment(kR8uiLoadStore);
         ASSERT_FALSE(spirv.empty());
         EXPECT_TRUE(ShaderCompiler::DeclaresWidenableImageFormat(spirv, true));
 
         Vector<Uint32> widened;
-        ASSERT_TRUE(ShaderCompiler::WidenImageFormatsForEssl(
-            spirv, widened, /*onlyFormatsSpirvCrossRefusesToPrint=*/true, true));
+        ASSERT_TRUE(ShaderCompiler::WidenImageFormatsForEssl(spirv, widened,
+                                                             /*onlyFormatsSpirvCrossRefusesToPrint=*/true, true));
         ASSERT_FALSE(widened.empty());
         EXPECT_TRUE(Validates(widened));
         const auto types = CollectStorageImageTypes(widened);
@@ -904,7 +894,7 @@ TEST(WidenImageFormats, CoreFormatModuleIsHandedBackUntouched) {
 
     Vector<Uint32> widened;
     ShaderCompiler::WidenImageFormatsForEssl(spirv, widened, /*onlyFormatsSpirvCrossRefusesToPrint=*/false,
-                                                         /*enableSpirvValidation=*/true);
+                                             /*enableSpirvValidation=*/true);
     if (!widened.empty()) {
         EXPECT_EQ(CollectVectorShuffles(widened).size(), CollectVectorShuffles(spirv).size())
             << "a core-format module must gain no masks";
@@ -967,12 +957,10 @@ TEST(WidenImageFormats, NormalizedImageBecomesAUimageWhoseAccessesConvertItsCode
     EXPECT_EQ(after.text.find("rg16"), String::npos)
         << "the token no ES driver accepts is still in the emitted source:\n"
         << after.text;
-    EXPECT_NE(after.text.find("65535.0"), String::npos)
-        << "the unsigned-normalized denominator is 2^16 - 1:\n"
-        << after.text;
-    EXPECT_EQ(after.text.find("32767.0"), String::npos)
-        << "an unsigned format must not take the SIGNED denominator:\n"
-        << after.text;
+    EXPECT_NE(after.text.find("65535.0"), String::npos) << "the unsigned-normalized denominator is 2^16 - 1:\n"
+                                                        << after.text;
+    EXPECT_EQ(after.text.find("32767.0"), String::npos) << "an unsigned format must not take the SIGNED denominator:\n"
+                                                        << after.text;
 }
 
 // The signed half, which needs two things the unsigned one does not: the code is sign-extended
@@ -1010,12 +998,9 @@ TEST(WidenImageFormats, SignedNormalizedImageSignExtendsItsCodeAndClampsAtMinusO
     EXPECT_NE(after.text.find("uimage2D"), String::npos) << after.text;
     EXPECT_NE(after.text.find("rgba16ui"), String::npos) << after.text;
     EXPECT_EQ(after.text.find("rgba16_snorm"), String::npos) << after.text;
-    EXPECT_NE(after.text.find("32767.0"), String::npos)
-        << "the signed-normalized denominator is 2^15 - 1:\n"
-        << after.text;
-    EXPECT_NE(after.text.find("-1.0"), String::npos)
-        << "GL clamps the signed decode at -1:\n"
-        << after.text;
+    EXPECT_NE(after.text.find("32767.0"), String::npos) << "the signed-normalized denominator is 2^15 - 1:\n"
+                                                        << after.text;
+    EXPECT_NE(after.text.find("-1.0"), String::npos) << "GL clamps the signed decode at -1:\n" << after.text;
 }
 
 // rgb10_a2, whose four channels are 10, 10, 10 and 2 bits: the only entry where one denominator
@@ -1038,8 +1023,6 @@ TEST(WidenImageFormats, TenTenTenTwoImageTakesAPerChannelDenominator) {
     const EsslAttempt after = EmitEssl(widened);
     ASSERT_TRUE(after.succeeded) << after.error;
     EXPECT_NE(after.text.find("1023.0"), String::npos) << after.text;
-    EXPECT_NE(after.text.find("3.0"), String::npos)
-        << "the two-bit alpha saturates at 3, not at 1023:\n"
-        << after.text;
+    EXPECT_NE(after.text.find("3.0"), String::npos) << "the two-bit alpha saturates at 3, not at 1023:\n" << after.text;
     EXPECT_EQ(after.text.find("rgb10_a2)"), String::npos) << after.text;
 }

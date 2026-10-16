@@ -172,9 +172,8 @@ TEST_F(StripIoBlockLocationsTest, DropsTheQualifierFromBothBlocksAndLeavesVaryin
     // fragment stage's inputs and a vertex stage's attributes are matched by them.
     EXPECT_NE(after.find("in vec4 tcs_tes_result"), String::npos) << after;
     EXPECT_NE(after.find("out vec4 tes_gs_result"), String::npos) << after;
-    EXPECT_EQ(CountOf(after, "layout(location"), 2u)
-        << "exactly the two plain varyings should still be located:\n"
-        << after;
+    EXPECT_EQ(CountOf(after, "layout(location"), 2u) << "exactly the two plain varyings should still be located:\n"
+                                                     << after;
 }
 
 TEST_F(StripIoBlockLocationsTest, StripsOnlyTheDirectionTheCallerArmed) {
@@ -199,8 +198,7 @@ TEST_F(StripIoBlockLocationsTest, StripsOnlyTheDirectionTheCallerArmed) {
     // And the mirror image, for a program that BEGINS at this stage.
     bool strippedOutputOnly = false;
     Vector<Uint32> outputOnly;
-    ASSERT_TRUE(
-        ShaderCompiler::StripIoBlockLocationsForEssl(input, false, true, strippedOutputOnly, outputOnly, true));
+    ASSERT_TRUE(ShaderCompiler::StripIoBlockLocationsForEssl(input, false, true, strippedOutputOnly, outputOnly, true));
     ASSERT_FALSE(outputOnly.empty());
     EXPECT_TRUE(strippedOutputOnly);
     const String afterOutputOnly = Transpile(outputOnly);

@@ -94,13 +94,18 @@ namespace MGITest {
         GLenum AttachmentPointFor(GLenum internalFormat) {
             switch (internalFormat) {
             case GL_DEPTH24_STENCIL8:
-            case GL_DEPTH32F_STENCIL8: return GL_DEPTH_STENCIL_ATTACHMENT;
-            case GL_STENCIL_INDEX8: return GL_STENCIL_ATTACHMENT;
-            default: return GL_DEPTH_ATTACHMENT;
+            case GL_DEPTH32F_STENCIL8:
+                return GL_DEPTH_STENCIL_ATTACHMENT;
+            case GL_STENCIL_INDEX8:
+                return GL_STENCIL_ATTACHMENT;
+            default:
+                return GL_DEPTH_ATTACHMENT;
             }
         }
 
-        bool FormatHasDepth(GLenum internalFormat) { return internalFormat != GL_STENCIL_INDEX8; }
+        bool FormatHasDepth(GLenum internalFormat) {
+            return internalFormat != GL_STENCIL_INDEX8;
+        }
         bool FormatHasStencil(GLenum internalFormat) {
             return internalFormat == GL_DEPTH24_STENCIL8 || internalFormat == GL_DEPTH32F_STENCIL8 ||
                    internalFormat == GL_STENCIL_INDEX8;
@@ -208,8 +213,8 @@ namespace MGITest {
                         ++bad;
                     }
                 }
-                EXPECT_EQ(bad, 0u) << what << ": " << bad << " of " << values.size()
-                                   << " depth values differ from " << expected << "; first bad value " << worst
+                EXPECT_EQ(bad, 0u) << what << ": " << bad << " of " << values.size() << " depth values differ from "
+                                   << expected << "; first bad value " << worst
                                    << (std::fabs(worst - kDepthPoison) < 1e-6f
                                            ? " - which is the poison value, so nothing was written at all"
                                            : "");
@@ -224,8 +229,8 @@ namespace MGITest {
                         ++bad;
                     }
                 }
-                EXPECT_EQ(bad, 0u) << what << ": " << bad << " of " << values.size()
-                                   << " stencil values differ from " << expected << "; first bad value " << worst
+                EXPECT_EQ(bad, 0u) << what << ": " << bad << " of " << values.size() << " stencil values differ from "
+                                   << expected << "; first bad value " << worst
                                    << (worst == kStencilPoison
                                            ? " - which is the poison value, so nothing was written at all"
                                            : "");
@@ -287,12 +292,14 @@ namespace MGITest {
                     server.find("ResolveWireDepthStencil: resolved by the VK_KHR_depth_stencil_resolve render pass") !=
                     std::string::npos;
                 if (forcedBug || elidedSubject || renderPassDropped) {
-                    EXPECT_TRUE(shaderResolved) << what << ": the server never resolved with the shader pass (probe="
-                                                << probe << ", force-shader=" << renderPassDropped << ")";
-                    EXPECT_FALSE(renderPassResolved)
-                        << what << ": the server resolved with the no-draw render pass, the arm the probe verdict "
-                                   "(or the knob) rules out (probe=" << probe
+                    EXPECT_TRUE(shaderResolved)
+                        << what << ": the server never resolved with the shader pass (probe=" << probe
                         << ", force-shader=" << renderPassDropped << ")";
+                    EXPECT_FALSE(renderPassResolved)
+                        << what
+                        << ": the server resolved with the no-draw render pass, the arm the probe verdict "
+                           "(or the knob) rules out (probe="
+                        << probe << ", force-shader=" << renderPassDropped << ")";
                     if (forcedBug) {
                         EXPECT_NE(server.find("verdict=render-pass-resolve-broken"), std::string::npos)
                             << what << ": the forced `bug` measurement did not evaluate to the defect verdict";
@@ -300,10 +307,11 @@ namespace MGITest {
                     if (elidedSubject) {
                         // The source phrase is the REAL measurement's (a canned one says "forced by"),
                         // and ArmWireDepthResolveOrder states it once per process.
-                        EXPECT_NE(server.find("depth/stencil resolve probe (measured on this device with its render-pass "
-                                              "resolve elided by MGITEST_MAGMA_DEPTH_RESOLVE_PROBE=elide-subject) "
-                                              "verdict=render-pass-resolve-broken"),
-                                  std::string::npos)
+                        EXPECT_NE(
+                            server.find("depth/stencil resolve probe (measured on this device with its render-pass "
+                                        "resolve elided by MGITEST_MAGMA_DEPTH_RESOLVE_PROBE=elide-subject) "
+                                        "verdict=render-pass-resolve-broken"),
+                            std::string::npos)
                             << what << ": the real probe, its render-pass resolve elided, did not report the defect";
                         // DescribeWireDepthResolveFormat's reading, one line per probed format: some
                         // format's render pass matched no texel and kept the sentinel in all 16, and its
@@ -321,8 +329,9 @@ namespace MGITest {
                                 line.find("sentinel 16), shader control 16/16") != std::string::npos;
                         }
                         EXPECT_TRUE(sentinelKeptBesideAResolvedControl)
-                            << what << ": no real reading shows the elided render pass's sentinel kept beside a "
-                                       "shader control that resolved";
+                            << what
+                            << ": no real reading shows the elided render pass's sentinel kept beside a "
+                               "shader control that resolved";
                     }
                     return;
                 }
@@ -331,8 +340,9 @@ namespace MGITest {
                     << what << ": the server's resolve probe did not measure this device's render pass clean";
                 EXPECT_TRUE(renderPassResolved)
                     << what << ": a clean probe verdict must leave the render pass first, and it never resolved";
-                EXPECT_FALSE(shaderResolved) << what << ": the shader pass resolved although the probe found the "
-                                                        "render pass clean";
+                EXPECT_FALSE(shaderResolved) << what
+                                             << ": the shader pass resolved although the probe found the "
+                                                "render pass clean";
             }
         };
 
@@ -613,8 +623,8 @@ namespace MGITest {
         glBindFramebuffer(GL_READ_FRAMEBUFFER, multisampled.fbo);
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, resolved.fbo);
         glDisable(GL_SCISSOR_TEST);
-        glBlitFramebuffer(0, kHeight, kWidth, 0, 0, 0, kWidth, kHeight,
-                          GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT, GL_NEAREST);
+        glBlitFramebuffer(0, kHeight, kWidth, 0, 0, 0, kWidth, kHeight, GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT,
+                          GL_NEAREST);
         glFinish();
         EXPECT_EQ(FirstGLError(), 0u) << "a flipped multisample resolve is a legal blit";
 
@@ -645,8 +655,8 @@ namespace MGITest {
             constexpr int kSx = 5, kSy = 8, kDx = 20, kDy = 4, kW = 29, kH = 32;
             glBindFramebuffer(GL_READ_FRAMEBUFFER, multisampled.fbo);
             glBindFramebuffer(GL_DRAW_FRAMEBUFFER, resolved.fbo);
-            glBlitFramebuffer(kSx, kSy + kH, kSx + kW, kSy, kDx, kDy, kDx + kW, kDy + kH,
-                              GL_STENCIL_BUFFER_BIT, GL_NEAREST);
+            glBlitFramebuffer(kSx, kSy + kH, kSx + kW, kSy, kDx, kDy, kDx + kW, kDy + kH, GL_STENCIL_BUFFER_BIT,
+                              GL_NEAREST);
             glFinish();
             EXPECT_EQ(FirstGLError(), 0u) << "a flipped, narrow multisample stencil resolve is a legal blit";
             glBindFramebuffer(GL_FRAMEBUFFER, resolved.fbo);
@@ -663,14 +673,19 @@ namespace MGITest {
                     }
                     const int got = stencil[static_cast<size_t>(y) * kWidth + x];
                     if (got != want) {
-                        if (bad == 0) { firstX = x; firstY = y; firstGot = got; firstWant = want; }
+                        if (bad == 0) {
+                            firstX = x;
+                            firstY = y;
+                            firstGot = got;
+                            firstWant = want;
+                        }
                         ++bad;
                     }
                 }
             }
             EXPECT_EQ(bad, 0u) << "flipped narrow stencil resolve: " << bad << " of " << stencil.size()
-                               << " stencil values are wrong; first at (" << firstX << ", " << firstY
-                               << "): got " << firstGot << ", want " << firstWant;
+                               << " stencil values are wrong; first at (" << firstX << ", " << firstY << "): got "
+                               << firstGot << ", want " << firstWant;
         }
         // The two flipped resolves above are the only ones in this case that reach an arm: every
         // leg below declines on its shape first.
@@ -681,8 +696,7 @@ namespace MGITest {
         ASSERT_EQ(FirstGLError(), 0u);
         glBindFramebuffer(GL_READ_FRAMEBUFFER, multisampled.fbo);
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, resolved.fbo);
-        glBlitFramebuffer(0, 0, kWidth, kHeight, 0, 0, kWidth / 2, kHeight / 2,
-                          GL_DEPTH_BUFFER_BIT, GL_NEAREST);
+        glBlitFramebuffer(0, 0, kWidth, kHeight, 0, 0, kWidth / 2, kHeight / 2, GL_DEPTH_BUFFER_BIT, GL_NEAREST);
         glFinish(); // the decline's error rides a later reply under a transport
         EXPECT_EQ(FirstGLError(), GLenum(GL_INVALID_OPERATION))
             << "a scaled multisample resolve is INVALID_OPERATION, not a picture";
@@ -778,13 +792,13 @@ namespace MGITest {
                 std::array<GLubyte, 4> window{};
                 glReadPixels(x, y, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, window.data());
                 EXPECT_EQ(window, (std::array<GLubyte, 4>{255, 0, 255, 255}))
-                    << "the declined COLOR|DEPTH scale onto the window must not have written its colour at ("
-                    << x << ", " << y << ")";
+                    << "the declined COLOR|DEPTH scale onto the window must not have written its colour at (" << x
+                    << ", " << y << ")";
                 float depth = kDepthPoison;
                 glReadPixels(x, y, 1, 1, GL_DEPTH_COMPONENT, GL_FLOAT, &depth);
                 EXPECT_NEAR(depth, 0.625f, 1.0f / 4096.0f)
-                    << "the declined COLOR|DEPTH scale onto the window must have left its depth alone at ("
-                    << x << ", " << y << ")";
+                    << "the declined COLOR|DEPTH scale onto the window must have left its depth alone at (" << x << ", "
+                    << y << ")";
             }
             EXPECT_EQ(FirstGLError(), 0u) << "the session survived the default-framebuffer decline";
         }
@@ -831,7 +845,7 @@ namespace MGITest {
         // enough for a CPU rasterizer, plus the matrix's own rectangle.
         const Extent extents[] = {{1, 1}, {256, 1}, {1, 256}, {kWidth, kHeight}};
 
-        const auto makePair = [](GLenum internalFormat, int width, int height, GLuint (&fbo)[2], GLuint (&rbo)[2]) {
+        const auto makePair = [](GLenum internalFormat, int width, int height, GLuint(&fbo)[2], GLuint(&rbo)[2]) {
             glGenFramebuffers(2, fbo);
             glCreateRenderbuffers(2, rbo);
             for (int i = 0; i < 2; ++i) {
@@ -1125,7 +1139,13 @@ namespace MGITest {
         if (!Ready()) return;
         DepthSource source = MakeTextureSource(GL_DEPTH_COMPONENT32F);
         ASSERT_TRUE(SourceIsUsable());
-        struct Sample { float depth; GLbyte byte; GLshort shortValue; GLint intValue; GLushort halfBits; };
+        struct Sample {
+            float depth;
+            GLbyte byte;
+            GLshort shortValue;
+            GLint intValue;
+            GLushort halfBits;
+        };
         const Sample samples[] = {
             {0.0f, 0, 0, 0, 0x0000},
             {0.5f, 64, 16384, 1073741824, 0x3800},
@@ -1144,10 +1164,11 @@ namespace MGITest {
                 std::vector<Value> values(static_cast<size_t>(kWidth) * kHeight, static_cast<Value>(-37));
                 glGetTexImage(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT, type, values.data());
                 EXPECT_EQ(FirstGLError(), 0u) << "depth=" << sample.depth << " type=" << type;
-                const auto bad = std::count_if(values.begin(), values.end(), [&](Value value) { return value != expected; });
+                const auto bad =
+                    std::count_if(values.begin(), values.end(), [&](Value value) { return value != expected; });
                 EXPECT_EQ(bad, 0) << "depth=" << sample.depth << " type=" << type
-                                 << " first=" << static_cast<long long>(values[0])
-                                 << " expected=" << static_cast<long long>(expected);
+                                  << " first=" << static_cast<long long>(values[0])
+                                  << " expected=" << static_cast<long long>(expected);
             };
             read(GL_BYTE, sample.byte);
             read(GL_SHORT, sample.shortValue);
@@ -1190,8 +1211,8 @@ namespace MGITest {
         GLuint copy = 0;
         glGenTextures(1, &copy);
         glBindTexture(GL_TEXTURE_2D, copy);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH24_STENCIL8, kWidth, kHeight, 0, GL_DEPTH_STENCIL,
-                     GL_UNSIGNED_INT_24_8, nullptr);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH24_STENCIL8, kWidth, kHeight, 0, GL_DEPTH_STENCIL, GL_UNSIGNED_INT_24_8,
+                     nullptr);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
         glCopyTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH24_STENCIL8, 0, 0, kWidth, kHeight, 0);

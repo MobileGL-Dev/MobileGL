@@ -190,8 +190,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         twinBarrier.srcQueueFamilyIndex = twinBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         twinBarrier.image = twin;
         twinBarrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, VK_REMAINING_ARRAY_LAYERS};
-        vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                             0, 1, &memory, 0, nullptr, 1, &twinBarrier);
+        vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0,
+                             1, &memory, 0, nullptr, 1, &twinBarrier);
 
         vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE,
                           region.volume ? kit.volumePipeline : kit.arrayPipeline);
@@ -255,9 +255,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
             void Destroy() {
                 DestroyWireE5RawCopyObjects(device, copy);
-                for (VkImage image : images) vkDestroyImage(device, image, nullptr);
-                for (VkBuffer buffer : buffers) vkDestroyBuffer(device, buffer, nullptr);
-                for (VkDeviceMemory memory : memories) vkFreeMemory(device, memory, nullptr);
+                for (VkImage image : images)
+                    vkDestroyImage(device, image, nullptr);
+                for (VkBuffer buffer : buffers)
+                    vkDestroyBuffer(device, buffer, nullptr);
+                for (VkDeviceMemory memory : memories)
+                    vkFreeMemory(device, memory, nullptr);
                 vkDestroyCommandPool(device, commandPool, nullptr);
                 vkDestroyFence(device, fence, nullptr);
                 DestroyWireE5RawCopyKit(device, kit);
@@ -341,8 +344,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         const auto bindImage = [&](VkImage image) -> Bool {
             VkMemoryRequirements requirements{};
             vkGetImageMemoryRequirements(device, image, &requirements);
-            const Optional<Uint32> type = PickMemoryType(memoryProperties, requirements.memoryTypeBits,
-                                                         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 0);
+            const Optional<Uint32> type =
+                PickMemoryType(memoryProperties, requirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 0);
             if (!type) return false;
             VkMemoryAllocateInfo allocate{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
             allocate.allocationSize = requirements.size;
@@ -426,7 +429,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             if (vkMapMemory(device, upload.memory, 0, VK_WHOLE_SIZE, 0, &mapped) != VK_SUCCESS || mapped == nullptr)
                 return fail("vkMapMemory (upload) failed");
             Uint32* words = static_cast<Uint32*>(mapped);
-            for (Uint32 i = 0; i < kTexels; ++i) words[i] = NonCanonicalWord(i);
+            for (Uint32 i = 0; i < kTexels; ++i)
+                words[i] = NonCanonicalWord(i);
             if (!upload.coherent) {
                 VkMappedMemoryRange range{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE};
                 range.memory = upload.memory;
@@ -551,13 +555,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return measurement;
     }
 
-    WireE5TransferProbeMeasurement RunWireE5TransferProbeOnThrowawayDevice(PFN_vkGetInstanceProcAddr getInstanceProcAddr,
-                                                                           VkInstance instance,
-                                                                           VkPhysicalDevice physicalDevice,
-                                                                           Uint32 graphicsQueueFamilyIndex) {
+    WireE5TransferProbeMeasurement RunWireE5TransferProbeOnThrowawayDevice(
+        PFN_vkGetInstanceProcAddr getInstanceProcAddr, VkInstance instance, VkPhysicalDevice physicalDevice,
+        Uint32 graphicsQueueFamilyIndex) {
         WireE5TransferProbeMeasurement measurement;
-        const auto createDevice =
-            reinterpret_cast<PFN_vkCreateDevice>(getInstanceProcAddr(instance, "vkCreateDevice"));
+        const auto createDevice = reinterpret_cast<PFN_vkCreateDevice>(getInstanceProcAddr(instance, "vkCreateDevice"));
         if (createDevice == nullptr) {
             measurement.failureReason = "no vkCreateDevice";
             return measurement;

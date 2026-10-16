@@ -61,8 +61,7 @@ namespace MobileGL::MG_Remote::Transport {
         // nothing is written; otherwise this presents one - a fresh nonce, control then aux - exactly
         // as ConnectTo does, before the Hello. TRANSPORT_CLOSED when that send failed: the descriptors
         // are then left open, because the server's refusal may be waiting on the control connection.
-        static MobileGLResult AdoptConnectedPair(int controlFd, int auxFd,
-                                                 std::unique_ptr<SocketTransport>& outClient,
+        static MobileGLResult AdoptConnectedPair(int controlFd, int auxFd, std::unique_ptr<SocketTransport>& outClient,
                                                  bool pairedAtHandoff = false);
 
         // ---- PH-7 (4), ID-P7-3: a TCP data connection is BOUND, not paired --------
@@ -127,8 +126,8 @@ namespace MobileGL::MG_Remote::Transport {
         std::uint64_t PeekFrameSize() override;
 
         MobileGLResult ShareFd(int fd, MobileGLByteSpan sideband) override;
-        MobileGLResult ReceiveFd(int* outFd, MobileGLMutableByteSpan sideband,
-                                 std::uint64_t* outSidebandSize, std::uint32_t timeoutMs) override;
+        MobileGLResult ReceiveFd(int* outFd, MobileGLMutableByteSpan sideband, std::uint64_t* outSidebandSize,
+                                 std::uint32_t timeoutMs) override;
 
         void Shutdown() override;
         TransportRole Role() const override { return m_role; }

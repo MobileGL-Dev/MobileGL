@@ -47,8 +47,8 @@ namespace MobileGL::MG_Backend::GpuHangWatch {
 
     // One in-flight submission as the GPU reports progress on it.
     struct SubmissionProgress {
-        Uint64 Id = 0;       // the backend's own monotonic id for it; never reused
-        Bool Started = false; // the GPU has begun executing it
+        Uint64 Id = 0;         // the backend's own monotonic id for it; never reused
+        Bool Started = false;  // the GPU has begun executing it
         Bool Finished = false; // ... and completed it
     };
 

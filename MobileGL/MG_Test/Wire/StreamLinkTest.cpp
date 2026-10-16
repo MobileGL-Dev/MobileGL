@@ -164,7 +164,8 @@ namespace {
         Queue(3, 3);
         ASSERT_EQ(client.Flush(), MOBILEGL_OK);
         ASSERT_EQ(apply.WaitForWork(2000), SessionWait::Reached);
-        for (std::uint64_t seq = 1; seq <= 3; ++seq) client.DeclareReplyRead(seq);
+        for (std::uint64_t seq = 1; seq <= 3; ++seq)
+            client.DeclareReplyRead(seq);
         for (std::uint64_t seq = 1; seq <= 3; ++seq) {
             ASSERT_TRUE(apply.ApplyOne([&](const RingRecordView&) {
                 const std::uint64_t value = seq * 11;

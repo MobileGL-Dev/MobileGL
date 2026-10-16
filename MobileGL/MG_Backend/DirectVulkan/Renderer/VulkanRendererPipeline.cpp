@@ -10,13 +10,8 @@
 
 namespace MobileGL::MG_Backend::DirectVulkan {
     static VkPipelineColorBlendAttachmentState MakeColorBlendAttachmentState(
-        Bool blendEnable,
-        VkBlendFactor srcColorBlendFactor,
-        VkBlendFactor dstColorBlendFactor,
-        VkBlendOp colorBlendOp,
-        VkBlendFactor srcAlphaBlendFactor,
-        VkBlendFactor dstAlphaBlendFactor,
-        VkBlendOp alphaBlendOp,
+        Bool blendEnable, VkBlendFactor srcColorBlendFactor, VkBlendFactor dstColorBlendFactor, VkBlendOp colorBlendOp,
+        VkBlendFactor srcAlphaBlendFactor, VkBlendFactor dstAlphaBlendFactor, VkBlendOp alphaBlendOp,
         VkColorComponentFlags colorWriteMask) {
         VkPipelineColorBlendAttachmentState attachment{};
         attachment.blendEnable = blendEnable ? VK_TRUE : VK_FALSE;
@@ -96,8 +91,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Bool mirrorX = false;
     };
 
-    static DefaultFramebufferRectMapping GetDefaultFramebufferRectMapping(
-            VkSurfaceTransformFlagBitsKHR preTransform) {
+    static DefaultFramebufferRectMapping GetDefaultFramebufferRectMapping(VkSurfaceTransformFlagBitsKHR preTransform) {
         if (preTransform == VK_SURFACE_TRANSFORM_ROTATE_180_BIT_KHR) return {false, true};
         if (IsQuarterTurnPreTransform(preTransform)) return {false, false};
         return {true, false};
@@ -113,8 +107,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     static void ShadowedSetScissor(VkCommandBuffer commandBuffer, const VkRect2D& scissor) {
         auto& shadow = *g_dynamicStateShadow;
         if (shadow.scissorValid && shadow.scissor.offset.x == scissor.offset.x &&
-            shadow.scissor.offset.y == scissor.offset.y &&
-            shadow.scissor.extent.width == scissor.extent.width &&
+            shadow.scissor.offset.y == scissor.offset.y && shadow.scissor.extent.width == scissor.extent.width &&
             shadow.scissor.extent.height == scissor.extent.height) {
             return;
         }
@@ -128,10 +121,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     // arithmetic as index 0 - the default-framebuffer Y-flip and pre-transform rotation
     // especially, which is the classic way a multi-viewport port comes out upside down for every
     // index but the one that was tested.
-    static VkViewport ComputeGLViewport(Uint32 index,
-                                        const IntVec2& framebufferExtent,
-                                        VkSurfaceTransformFlagBitsKHR preTransform,
-                                        Bool isDefaultFramebuffer) {
+    static VkViewport ComputeGLViewport(Uint32 index, const IntVec2& framebufferExtent,
+                                        VkSurfaceTransformFlagBitsKHR preTransform, Bool isDefaultFramebuffer) {
         // Snapped to integers. The viewport is float STATE (glViewportIndexedf may set a
         // fractional origin, and GetFloati_v hands it back verbatim), but what rasterizes here is
         // the rounded rectangle - a deliberate, documented infidelity rather than a spec claim:
@@ -142,14 +133,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // default-framebuffer Y-flip/pre-transform helper to floats. See the KNOWN INFIDELITY
         // note in MG_IntegrationTest/Scenarios/AdvertisedLimitsScenario.cpp.
         const FloatVec4& stored = MG_Pipe::gPipeInputs->GetViewportIndexed(index);
-        const IntVec4 viewportState(static_cast<Int>(std::lround(stored.x())),
-                                    static_cast<Int>(std::lround(stored.y())),
-                                    static_cast<Int>(std::lround(stored.z())),
-                                    static_cast<Int>(std::lround(stored.w())));
+        const IntVec4 viewportState(
+            static_cast<Int>(std::lround(stored.x())), static_cast<Int>(std::lround(stored.y())),
+            static_cast<Int>(std::lround(stored.z())), static_cast<Int>(std::lround(stored.w())));
         const FloatVec2& depthRange = MG_Pipe::gPipeInputs->GetDepthRangeIndexed(index);
         const IntVec2 logicalExtent = isDefaultFramebuffer
-            ? ResolveDefaultFramebufferLogicalExtent(preTransform, framebufferExtent)
-            : framebufferExtent;
+                                          ? ResolveDefaultFramebufferLogicalExtent(preTransform, framebufferExtent)
+                                          : framebufferExtent;
 
         Int viewportX = viewportState.x();
         Int viewportY = viewportState.y();
@@ -168,10 +158,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // its exact behaviour.
         if (isDefaultFramebuffer) {
             const DefaultFramebufferRectMapping mapping = GetDefaultFramebufferRectMapping(preTransform);
-            viewportX = MapDefaultFramebufferRectAxis(viewportX, viewportWidth, framebufferExtent.x(),
-                                                      mapping.mirrorX);
-            viewportY = MapDefaultFramebufferRectAxis(viewportY, viewportHeight, framebufferExtent.y(),
-                                                      mapping.flipY);
+            viewportX = MapDefaultFramebufferRectAxis(viewportX, viewportWidth, framebufferExtent.x(), mapping.mirrorX);
+            viewportY = MapDefaultFramebufferRectAxis(viewportY, viewportHeight, framebufferExtent.y(), mapping.flipY);
         }
 
         VkViewport viewport{};
@@ -184,10 +172,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return viewport;
     }
 
-    static void ApplyGLViewportState(VkCommandBuffer commandBuffer,
-                                     const IntVec2& framebufferExtent,
-                                     VkSurfaceTransformFlagBitsKHR preTransform,
-                                     Bool isDefaultFramebuffer) {
+    static void ApplyGLViewportState(VkCommandBuffer commandBuffer, const IntVec2& framebufferExtent,
+                                     VkSurfaceTransformFlagBitsKHR preTransform, Bool isDefaultFramebuffer) {
         const VkViewport viewport = ComputeGLViewport(0, framebufferExtent, preTransform, isDefaultFramebuffer);
         auto& shadow = *g_dynamicStateShadow;
         if (shadow.viewportValid && shadow.viewport.x == viewport.x && shadow.viewport.y == viewport.y &&
@@ -273,7 +259,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             }
         } else
 #endif
-        if (MG_Backend::pActiveBackendObject != nullptr) {
+            if (MG_Backend::pActiveBackendObject != nullptr) {
             const auto& dynamicParameters = MG_Backend::pActiveBackendObject->GetDynamicParameters();
             const Float minLineWidth = dynamicParameters.AliasedLineWidthRangeMin;
             const Float maxLineWidth = dynamicParameters.AliasedLineWidthRangeMax;
@@ -320,8 +306,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return scissor;
     }
 
-    static VkRect2D MakeDefaultFramebufferScissorRect(const IntVec4& scissorBox,
-                                                      const IntVec2& framebufferExtent,
+    static VkRect2D MakeDefaultFramebufferScissorRect(const IntVec4& scissorBox, const IntVec2& framebufferExtent,
                                                       VkSurfaceTransformFlagBitsKHR preTransform) {
         if (!IsQuarterTurnPreTransform(preTransform)) {
             return MapScissorRectToDefaultFramebuffer(MakeClampedScissorRect(scissorBox, framebufferExtent),
@@ -367,8 +352,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (shadow.stencilValid && shadow.stencilFrontCompareMask == frontStencil.ValueMask &&
             shadow.stencilBackCompareMask == backStencil.ValueMask &&
             shadow.stencilFrontWriteMask == frontStencil.WriteMask &&
-            shadow.stencilBackWriteMask == backStencil.WriteMask &&
-            shadow.stencilFrontReference == frontReference && shadow.stencilBackReference == backReference) {
+            shadow.stencilBackWriteMask == backStencil.WriteMask && shadow.stencilFrontReference == frontReference &&
+            shadow.stencilBackReference == backReference) {
             return;
         }
         shadow.stencilValid = true;
@@ -486,8 +471,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
     }
 
-    static Bool TryCoerceVertexFormatNumericDomain(VkFormat sourceFormat,
-                                                   NumericDomain targetDomain,
+    static Bool TryCoerceVertexFormatNumericDomain(VkFormat sourceFormat, NumericDomain targetDomain,
                                                    VkFormat& outFormat) {
         const NumericDomain sourceDomain = GetNumericDomainForVertexFormat(sourceFormat);
         if (sourceDomain == targetDomain || targetDomain == NumericDomain::Unknown) {
@@ -557,7 +541,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             outFormat = targetDomain == NumericDomain::Uint ? VK_FORMAT_R16G16B16_UINT : VK_FORMAT_R16G16B16_SSCALED;
             return true;
         case VK_FORMAT_R16G16B16A16_SINT:
-            outFormat = targetDomain == NumericDomain::Uint ? VK_FORMAT_R16G16B16A16_UINT : VK_FORMAT_R16G16B16A16_SSCALED;
+            outFormat =
+                targetDomain == NumericDomain::Uint ? VK_FORMAT_R16G16B16A16_UINT : VK_FORMAT_R16G16B16A16_SSCALED;
             return true;
         case VK_FORMAT_R16_UINT:
             outFormat = targetDomain == NumericDomain::Sint ? VK_FORMAT_R16_SINT : VK_FORMAT_R16_USCALED;
@@ -569,7 +554,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             outFormat = targetDomain == NumericDomain::Sint ? VK_FORMAT_R16G16B16_SINT : VK_FORMAT_R16G16B16_USCALED;
             return true;
         case VK_FORMAT_R16G16B16A16_UINT:
-            outFormat = targetDomain == NumericDomain::Sint ? VK_FORMAT_R16G16B16A16_SINT : VK_FORMAT_R16G16B16A16_USCALED;
+            outFormat =
+                targetDomain == NumericDomain::Sint ? VK_FORMAT_R16G16B16A16_SINT : VK_FORMAT_R16G16B16A16_USCALED;
             return true;
         case VK_FORMAT_R8_SINT:
             outFormat = targetDomain == NumericDomain::Uint ? VK_FORMAT_R8_UINT : VK_FORMAT_R8_SSCALED;
@@ -674,7 +660,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return flags;
     }
 
-
     // Value hash over every fixed-function GL state the pipeline payload reads that
     // the memo key's other fields (mode, program hash, vertex-input hash, render-pass
     // hash, transform flags) do not already pin down. Enumerated against the payload
@@ -715,7 +700,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (!MG_Pipe::gPipeInputs->IsCapabilityEnabled(CapabilityInput::SampleMask)) return kFullCoverage;
         return MG_Pipe::gPipeInputs->GetRenderStateParameters().SampleMaskValue;
     }
-
 
     Uint64 VulkanRenderer::ComputePipelineSubsetStateHashFallback() const {
         // The client's own hash, over the client's own definition of the pipeline subset - the
@@ -785,18 +769,20 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     VkPipeline VulkanRenderer::GetOrCreatePipelineWithInput(GLenum mode, const MagmaProgramSource& program,
-            const ProgramFactory::VkProgramObject& programObj, ProgramFactory::CompileOptionFlags transformFlags,
-            const VertexInputStateFactory::BackendVertexInputState& vis, const RenderPassEntry& renderPassEntry,
-            Bool primitiveRestartEnable, Bool layeredFramebuffer, Uint64 wireRenderPassCompatibilityId) {
+                                                            const ProgramFactory::VkProgramObject& programObj,
+                                                            ProgramFactory::CompileOptionFlags transformFlags,
+                                                            const VertexInputStateFactory::BackendVertexInputState& vis,
+                                                            const RenderPassEntry& renderPassEntry,
+                                                            Bool primitiveRestartEnable, Bool layeredFramebuffer,
+                                                            Uint64 wireRenderPassCompatibilityId) {
         Bool invertClockwise = transformFlags & ProgramFactory::CompileOptionBit::PositionYFlip;
         const Bool nonLayeredStages = !layeredFramebuffer && !programObj.nonLayeredStages.empty();
         // GL 4.6 core 17.3.3: the shader's gl_SampleMask is a multisample fragment operation, a
         // no-op on a single-sample framebuffer or with MULTISAMPLE disabled - the same gate
         // ResolveEffectiveSampleMask applies to the fixed-function mask.
-        const Bool fullCoverageSampleMask =
-            programObj.fullCoverageFragmentModule != VK_NULL_HANDLE &&
-            (renderPassEntry.sampleCount == VK_SAMPLE_COUNT_1_BIT ||
-             !MG_Pipe::gPipeInputs->IsCapabilityEnabled(CapabilityInput::Multisample));
+        const Bool fullCoverageSampleMask = programObj.fullCoverageFragmentModule != VK_NULL_HANDLE &&
+                                            (renderPassEntry.sampleCount == VK_SAMPLE_COUNT_1_BIT ||
+                                             !MG_Pipe::gPipeInputs->IsCapabilityEnabled(CapabilityInput::Multisample));
         if (programObj.stages.empty()) {
             MGLOG_D("GetOrCreatePipeline skipped: program has no shader stages");
             return VK_NULL_HANDLE;
@@ -814,9 +800,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // layouts share one pipeline.
         // The one-arg fetch rides the VAO's state-pointer memo (no hash, no map).
         const Uint64 vertexLayoutHash = vis.layoutHash;
-        const Uint64 renderPassHash =
-            wireRenderPassCompatibilityId != 0 ? 0 :
-            renderPassEntry.hash;
+        const Uint64 renderPassHash = wireRenderPassCompatibilityId != 0 ? 0 : renderPassEntry.hash;
         // The pipeline-relevant subset only: glViewport / glScissor / glBlendColor / glStencilMask
         // and friends are dynamic state or not pipeline state at all, and keying the memo on the
         // all-state counter made any of them evict a perfectly good VkPipeline. The memo compares
@@ -835,21 +819,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         const Uint64 pipelineStateHash =
             !MG_Pipe::MGPipeHandleIsNull(renderStateCso)
                 ? 0
-                : ResolveFallbackPipelineStateHash(renderStateVersion,
-                                                   renderPassEntry.colorAttachmentCount,
+                : ResolveFallbackPipelineStateHash(renderStateVersion, renderPassEntry.colorAttachmentCount,
                                                    renderPassEntry.sampleCount);
         for (Uint32 i = 0; i < m_pipelineMemoCount; ++i) {
             const PipelineMemoEntry& entry = m_pipelineMemo[i];
-            if (entry.pipeline != VK_NULL_HANDLE && entry.mode == mode &&
-                entry.programHash == programObj.hash && entry.vertexInputHash == vertexLayoutHash &&
-                entry.renderPassHash == renderPassHash &&
+            if (entry.pipeline != VK_NULL_HANDLE && entry.mode == mode && entry.programHash == programObj.hash &&
+                entry.vertexInputHash == vertexLayoutHash && entry.renderPassHash == renderPassHash &&
                 entry.wireRenderPassCompatibilityId == wireRenderPassCompatibilityId &&
-                entry.pipelineStateHash == pipelineStateHash &&
-                entry.renderStateCso == renderStateCso &&
-                entry.primitiveRestartEnable == primitiveRestartEnable &&
-                entry.nonLayeredStages == nonLayeredStages &&
-                entry.fullCoverageSampleMask == fullCoverageSampleMask &&
-                entry.transformFlags == transformFlags) {
+                entry.pipelineStateHash == pipelineStateHash && entry.renderStateCso == renderStateCso &&
+                entry.primitiveRestartEnable == primitiveRestartEnable && entry.nonLayeredStages == nonLayeredStages &&
+                entry.fullCoverageSampleMask == fullCoverageSampleMask && entry.transformFlags == transformFlags) {
                 if (MG_Util::PipeStats::Enabled()) {
                     // Gate 5 of section 2.3.1. On a hit this whole function cost the one
                     // GetPipelineStateVersion read above plus this value compare.
@@ -883,13 +862,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             for (const auto& stage : programObj.stages) {
                 if (stage.module == VK_NULL_HANDLE) {
                     MGLOG_E_ONCE("GetOrCreatePipeline skipped: program=%u has a null shader module for stage 0x%x",
-                            program.GetExternalIndex(), static_cast<unsigned>(stage.stage));
+                                 program.GetExternalIndex(), static_cast<unsigned>(stage.stage));
                     return VK_NULL_HANDLE;
                 }
                 if (stage.stage == VK_SHADER_STAGE_COMPUTE_BIT) {
                     MGLOG_E_ONCE("GetOrCreatePipeline skipped: program=%u carries a compute stage, which no graphics "
-                            "pipeline may contain",
-                            program.GetExternalIndex());
+                                 "pipeline may contain",
+                                 program.GetExternalIndex());
                     return VK_NULL_HANDLE;
                 }
                 if (stage.stage == VK_SHADER_STAGE_VERTEX_BIT) {
@@ -908,9 +887,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             MOBILEGL_ASSERT(
                 programObj.fragmentInputComponentCount <= limits.maxFragmentInputComponents,
                 "GetOrCreatePipeline: fragmentInputComponents=%u exceeds device limit=%u program=%u producerStage=%d",
-                programObj.fragmentInputComponentCount,
-                limits.maxFragmentInputComponents,
-                program.GetExternalIndex(),
+                programObj.fragmentInputComponentCount, limits.maxFragmentInputComponents, program.GetExternalIndex(),
                 static_cast<Int>(programObj.rasterizationProducerStage));
         }
         if (programObj.producerOutputComponentCount != 0) {
@@ -929,13 +906,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 break;
             }
             if (producerOutputLimit != 0) {
-                MOBILEGL_ASSERT(
-                    programObj.producerOutputComponentCount <= producerOutputLimit,
-                    "GetOrCreatePipeline: producerOutputComponents=%u exceeds stage limit=%u program=%u producerStage=%d",
-                    programObj.producerOutputComponentCount,
-                    producerOutputLimit,
-                    program.GetExternalIndex(),
-                    static_cast<Int>(programObj.rasterizationProducerStage));
+                MOBILEGL_ASSERT(programObj.producerOutputComponentCount <= producerOutputLimit,
+                                "GetOrCreatePipeline: producerOutputComponents=%u exceeds stage limit=%u program=%u "
+                                "producerStage=%d",
+                                programObj.producerOutputComponentCount, producerOutputLimit,
+                                program.GetExternalIndex(), static_cast<Int>(programObj.rasterizationProducerStage));
             }
         }
 #endif
@@ -960,21 +935,18 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             }
 
             VkFormat patchedFormat = VK_FORMAT_UNDEFINED;
-            const Bool canPatch = TryCoerceVertexFormatNumericDomain(attribute.format, shaderInputDomain, patchedFormat);
+            const Bool canPatch =
+                TryCoerceVertexFormatNumericDomain(attribute.format, shaderInputDomain, patchedFormat);
             MOBILEGL_ASSERT(
                 canPatch,
                 "GetOrCreatePipeline: vertex input location=%u format=%d mismatches shader input type=%u program=%u",
-                attribute.location,
-                static_cast<Int>(attribute.format),
-                static_cast<Uint32>(shaderInputType),
+                attribute.location, static_cast<Int>(attribute.format), static_cast<Uint32>(shaderInputType),
                 program.GetExternalIndex());
 
-            MGLOG_W_ONCE("GetOrCreatePipeline: patching vertex input location=%u format=%d -> %d to match shader input type=%u for program=%u",
-                    attribute.location,
-                    static_cast<Int>(attribute.format),
-                    static_cast<Int>(patchedFormat),
-                    static_cast<Uint32>(shaderInputType),
-                    program.GetExternalIndex());
+            MGLOG_W_ONCE("GetOrCreatePipeline: patching vertex input location=%u format=%d -> %d to match shader input "
+                         "type=%u for program=%u",
+                         attribute.location, static_cast<Int>(attribute.format), static_cast<Int>(patchedFormat),
+                         static_cast<Uint32>(shaderInputType), program.GetExternalIndex());
             attribute.format = patchedFormat;
             hasPatchedVertexAttributes = true;
         }
@@ -997,9 +969,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 }
 
                 VkFormat format = VK_FORMAT_UNDEFINED;
-                const Bool supported = TryGetCurrentVertexAttributeFormat(programObj.vertexInputTypes[location], format);
+                const Bool supported =
+                    TryGetCurrentVertexAttributeFormat(programObj.vertexInputTypes[location], format);
                 MOBILEGL_ASSERT(supported,
-                                "DirectVulkan does not support current generic vertex attribute type yet: program=%u location=%u type=0x%x activeAttribMask=0x%x vertexInputAttribMask=0x%x",
+                                "DirectVulkan does not support current generic vertex attribute type yet: program=%u "
+                                "location=%u type=0x%x activeAttribMask=0x%x vertexInputAttribMask=0x%x",
                                 program.GetExternalIndex(), location, programObj.vertexInputTypes[location],
                                 activeAttribMask, vertexInputAttribMask);
 
@@ -1020,11 +994,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
         auto cullFaceEnabled = MG_Pipe::gPipeInputs->IsCapabilityEnabled(CapabilityInput::CullFace);
         auto depthTestEnabled = MG_Pipe::gPipeInputs->IsCapabilityEnabled(CapabilityInput::DepthTest);
-        auto polygonOffsetFillEnabled =
-            MG_Pipe::gPipeInputs->IsCapabilityEnabled(CapabilityInput::PolygonOffsetFill) &&
-            DrawModeUsesPolygonFill(mode);
-        auto rasterizerDiscardEnabled =
-            MG_Pipe::gPipeInputs->IsCapabilityEnabled(CapabilityInput::RasterizerDiscard);
+        auto polygonOffsetFillEnabled = MG_Pipe::gPipeInputs->IsCapabilityEnabled(CapabilityInput::PolygonOffsetFill) &&
+                                        DrawModeUsesPolygonFill(mode);
+        auto rasterizerDiscardEnabled = MG_Pipe::gPipeInputs->IsCapabilityEnabled(CapabilityInput::RasterizerDiscard);
         auto colorLogicOpEnabled =
             MG_Pipe::gPipeInputs->IsCapabilityEnabled(CapabilityInput::ColorLogicOp) && m_logicOpFeatureEnabled;
         auto stencilTestEnabled = MG_Pipe::gPipeInputs->IsCapabilityEnabled(CapabilityInput::StencilTest);
@@ -1045,9 +1017,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // VK_POLYGON_MODE_LINE/_POINT require the fillModeNonSolid device feature; fall back to
         // VK_POLYGON_MODE_FILL when the device lacks it.
         const VkPolygonMode effectivePolygonMode =
-            (requestedPolygonMode == VK_POLYGON_MODE_FILL || m_fillModeNonSolidFeatureEnabled)
-                ? requestedPolygonMode
-                : VK_POLYGON_MODE_FILL;
+            (requestedPolygonMode == VK_POLYGON_MODE_FILL || m_fillModeNonSolidFeatureEnabled) ? requestedPolygonMode
+                                                                                               : VK_POLYGON_MODE_FILL;
 
         const VkPrimitiveTopology vkTopology = MG_Util::ConvertPrimitiveModeToVkEnum(mode);
         // Resolved by the caller (ResolvePrimitiveRestartEnable), which knows whether the draw is
@@ -1083,8 +1054,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // init and then calls glDrawArrays(GL_TRIANGLES, ...) rendered nothing at all.
         const auto isListTopology = [](VkPrimitiveTopology t) {
             return t == VK_PRIMITIVE_TOPOLOGY_POINT_LIST || t == VK_PRIMITIVE_TOPOLOGY_LINE_LIST ||
-                   t == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST ||
-                   t == VK_PRIMITIVE_TOPOLOGY_LINE_LIST_WITH_ADJACENCY ||
+                   t == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST || t == VK_PRIMITIVE_TOPOLOGY_LINE_LIST_WITH_ADJACENCY ||
                    t == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST_WITH_ADJACENCY;
         };
         if (primitiveRestartEnabled && !m_primitiveTopologyListRestartFeatureEnabled && isListTopology(vkTopology)) {
@@ -1114,7 +1084,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // reads - are excluded for the same reason, so this stays a LOWER bound.
             MG_Util::PipeStats::AddCalls(MG_Util::PipeStats::CallClass::AccessorCalls, 15);
         }
-        PipelineFactory::PipelineCreatePayload payload {
+        PipelineFactory::PipelineCreatePayload payload{
             .programHash = programObj.hash,
             .vertexInputHash = vertexLayoutHash,
             .pipelineLayout = programObj.pipelineLayout,
@@ -1141,8 +1111,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 fullCoverageSampleMask ? programObj.fullCoverageFragmentModule : VK_NULL_HANDLE,
             .polygonMode = effectivePolygonMode,
             .cullMode = cullFaceEnabled
-                ? MG_Util::ConvertCullFaceModeToVkEnum(MG_Pipe::gPipeInputs->GetCullFaceMode(), false)
-                : VK_CULL_MODE_NONE,
+                            ? MG_Util::ConvertCullFaceModeToVkEnum(MG_Pipe::gPipeInputs->GetCullFaceMode(), false)
+                            : VK_CULL_MODE_NONE,
             // GL's counter-clockwise is Vulkan's clockwise (the two area formulas differ in sign
             // over the same rows), and a Y-negated position - the default framebuffer's flip or
             // an upper-left clip origin - reverses the winding once more. Expressed as the front
@@ -1150,8 +1120,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // so glFrontFace(GL_CW) is honoured.
             .frontFace = ((MG_Pipe::gPipeInputs->GetRenderStateParameters().FrontFaceModeSetting ==
                            FrontFaceMode::Clockwise) != invertClockwise)
-                ? VK_FRONT_FACE_COUNTER_CLOCKWISE
-                : VK_FRONT_FACE_CLOCKWISE,
+                             ? VK_FRONT_FACE_COUNTER_CLOCKWISE
+                             : VK_FRONT_FACE_CLOCKWISE,
             // Read the geometry stage off the program's own shader list rather than
             // programObj.rasterizationProducerStage: that field is filled by the clip-fixup analysis,
             // which does not run for every program, so it reads Unknown for exactly the
@@ -1160,8 +1130,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // SetupDrawSnapshot fast path key on - so no memo can hand back a pipeline built for the
             // other mode. IsTransformFeedbackActive() would be a live bug here: neither memo key
             // moves on glBeginTransformFeedback.
-            .provokingVertexMode = SelectProvokingVertexMode(
-                vkTopology, ProgramCapturesXfbFromGeometryStage(program)),
+            .provokingVertexMode = SelectProvokingVertexMode(vkTopology, ProgramCapturesXfbFromGeometryStage(program)),
             .depthTestEnable = depthTestEnabled,
             .depthWriteEnable = depthTestEnabled && MG_Pipe::gPipeInputs->GetDepthMask(),
             .depthBiasEnable = polygonOffsetFillEnabled,
@@ -1182,8 +1151,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             .fragmentShadingRateDynamic = m_fragmentShadingRate.Pipeline,
             .stages = nonLayeredStages ? &programObj.nonLayeredStages : &programObj.stages,
             .vertexInputState = pipelineVertexInputState,
-            .stageSpirvDigests = &programObj.stageSpirvDigests
-        };
+            .stageSpirvDigests = &programObj.stageSpirvDigests};
         // A program with a tessellation evaluation stage and no control stage relies on GL's
         // fixed-function pass-through (GL 4.6 core 11.2.2), which Vulkan does not have. Build the
         // stage GL describes for THIS draw's patch size - PATCH_VERTICES is draw state, not link
@@ -1228,10 +1196,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         const Bool hasDepthStencilAttachment = renderPassEntry.hasDepthStencilAttachment;
         if (!hasDepthStencilAttachment &&
             (payload.depthTestEnable || payload.depthWriteEnable || payload.stencilTestEnable)) {
-            MGLOG_D("GetOrCreatePipeline: disabling depth/stencil tests for program=%u because render pass has no depth attachment (attachmentCount=%u colorAttachmentCount=%u)",
-                    program.GetExternalIndex(),
-                    renderPassEntry.attachmentCount,
-                    renderPassEntry.colorAttachmentCount);
+            MGLOG_D("GetOrCreatePipeline: disabling depth/stencil tests for program=%u because render pass has no "
+                    "depth attachment (attachmentCount=%u colorAttachmentCount=%u)",
+                    program.GetExternalIndex(), renderPassEntry.attachmentCount, renderPassEntry.colorAttachmentCount);
             payload.depthTestEnable = false;
             payload.depthWriteEnable = false;
             payload.stencilTestEnable = false;
@@ -1268,8 +1235,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         const Bool isDefaultDrawFbo = wireFbo->IsDefault;
         Array<FramebufferAttachmentType, MG_Pipe::kMGPipeMaxColorAttachments> drawBuffers{};
         for (SizeT i = 0; i < drawBuffers.size(); ++i)
-            drawBuffers[i] = wireFbo->DrawBuffers[i] < 0 ? FramebufferAttachmentType::None :
-                static_cast<FramebufferAttachmentType>(static_cast<Int>(FramebufferAttachmentType::Color0) + wireFbo->DrawBuffers[i]);
+            drawBuffers[i] = wireFbo->DrawBuffers[i] < 0
+                                 ? FramebufferAttachmentType::None
+                                 : static_cast<FramebufferAttachmentType>(
+                                       static_cast<Int>(FramebufferAttachmentType::Color0) + wireFbo->DrawBuffers[i]);
         for (Uint32 i = 0; i < payload.colorAttachmentCount; ++i) {
             BlendFactor srcRGB = BlendFactor::One;
             BlendFactor dstRGB = BlendFactor::Zero;
@@ -1286,13 +1255,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             const BoolVec4 bufferMask =
                 MG_Pipe::gPipeInputs->GetColorMaskIndexed(m_independentBlendFeatureEnabled ? i : 0);
             VkColorComponentFlags attachmentColorWriteMask = static_cast<VkColorComponentFlags>(
-                (bufferMask.r() ? VK_COLOR_COMPONENT_R_BIT : 0u) |
-                (bufferMask.g() ? VK_COLOR_COMPONENT_G_BIT : 0u) |
-                (bufferMask.b() ? VK_COLOR_COMPONENT_B_BIT : 0u) |
-                (bufferMask.a() ? VK_COLOR_COMPONENT_A_BIT : 0u));
+                (bufferMask.r() ? VK_COLOR_COMPONENT_R_BIT : 0u) | (bufferMask.g() ? VK_COLOR_COMPONENT_G_BIT : 0u) |
+                (bufferMask.b() ? VK_COLOR_COMPONENT_B_BIT : 0u) | (bufferMask.a() ? VK_COLOR_COMPONENT_A_BIT : 0u));
             Bool effectiveBlendEnabled = blendEnabled;
-            if (isDefaultDrawFbo && i < drawBuffers.size() &&
-                drawBuffers[i] == FramebufferAttachmentType::None) {
+            if (isDefaultDrawFbo && i < drawBuffers.size() && drawBuffers[i] == FramebufferAttachmentType::None) {
                 // The default framebuffer spans the same MAX_DRAW_BUFFERS slots as an FBO
                 // (slot 0 is the back buffer, or None after glDrawBuffer(GL_NONE); slots
                 // 1+ are always None). Discard writes and blend state for the None slots
@@ -1311,14 +1277,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             }
             if (effectiveBlendEnabled) {
                 MOBILEGL_ASSERT(i < drawBuffers.size(),
-                                "GetOrCreatePipeline: color attachment %u is out of draw buffer range %zu",
-                                i, drawBuffers.size());
+                                "GetOrCreatePipeline: color attachment %u is out of draw buffer range %zu", i,
+                                drawBuffers.size());
 
                 VkFormat colorAttachmentFormat = VK_FORMAT_UNDEFINED;
                 Int textureExternalIndex = -1;
                 if (!isDefaultDrawFbo) {
                     const Int32 slot = wireFbo->DrawBuffers[i];
-                    colorAttachmentFormat = ResolveWireImage(*wireFbo, wireFbo->Color[slot], VK_IMAGE_ASPECT_COLOR_BIT).format;
+                    colorAttachmentFormat =
+                        ResolveWireImage(*wireFbo, wireFbo->Color[slot], VK_IMAGE_ASPECT_COLOR_BIT).format;
                 } else {
                     colorAttachmentFormat = m_swapchainObject.GetSurfaceFormat().format;
                 }
@@ -1338,19 +1305,21 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     blendSupportIt =
                         formatBlendSupport.emplace(static_cast<Int>(colorAttachmentFormat), blendable).first;
                     if (!blendable) {
-                        MGLOG_E_ONCE("GetOrCreatePipeline: format=%d lacks VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BLEND_BIT; "
-                                "disabling blending on attachments with this format (first hit: attachment %u textureId=%d program=%u)",
-                                static_cast<Int>(colorAttachmentFormat), i, textureExternalIndex,
-                                program.GetExternalIndex());
+                        MGLOG_E_ONCE(
+                            "GetOrCreatePipeline: format=%d lacks VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BLEND_BIT; "
+                            "disabling blending on attachments with this format (first hit: attachment %u textureId=%d "
+                            "program=%u)",
+                            static_cast<Int>(colorAttachmentFormat), i, textureExternalIndex,
+                            program.GetExternalIndex());
                         if (PipelineFactory::IsSuppressBlendedDepthWriteEnabled()) {
                             // With blending force-disabled the blended depth-write quirk can
                             // never fire for pipelines on this format, so a depth-equality
                             // chain that accumulates into it (MC 26.3 OIT depth_bounds on
                             // RGBA32F) keeps its depth writes and may flicker on this driver.
                             MGLOG_W_ONCE("GetOrCreatePipeline: format=%d is not blendable, so the blended "
-                                    "depth-write quirk cannot apply to it; depth-equality chains "
-                                    "accumulating into this format may flicker",
-                                    static_cast<Int>(colorAttachmentFormat));
+                                         "depth-write quirk cannot apply to it; depth-equality chains "
+                                         "accumulating into this format may flicker",
+                                         static_cast<Int>(colorAttachmentFormat));
                         }
                     }
                 }
@@ -1373,13 +1342,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             if (!m_dualSrcBlendFeatureEnabled &&
                 (IsDualSourceBlendFactor(srcRGB) || IsDualSourceBlendFactor(dstRGB) ||
                  IsDualSourceBlendFactor(srcAlpha) || IsDualSourceBlendFactor(dstAlpha))) {
-                MGLOG_E_ONCE(
-                    "GetOrCreatePipeline: dual-source blending (GL_SRC1_* blend factor) was requested on "
-                    "color attachment %u, but the Vulkan device does not support the dualSrcBlend feature "
-                    "(see the dualSrcBlend row in the driver POST). Blending is DECLINED on that "
-                    "attachment - the fragment's first output is written unblended and the second source "
-                    "is dropped (program=%u)",
-                    i, program.GetExternalIndex());
+                MGLOG_E_ONCE("GetOrCreatePipeline: dual-source blending (GL_SRC1_* blend factor) was requested on "
+                             "color attachment %u, but the Vulkan device does not support the dualSrcBlend feature "
+                             "(see the dualSrcBlend row in the driver POST). Blending is DECLINED on that "
+                             "attachment - the fragment's first output is written unblended and the second source "
+                             "is dropped (program=%u)",
+                             i, program.GetExternalIndex());
                 effectiveBlendEnabled = false;
                 srcRGB = BlendFactor::One;
                 dstRGB = BlendFactor::Zero;
@@ -1387,14 +1355,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 dstAlpha = BlendFactor::Zero;
             }
             payload.colorBlendAttachments[i] = MakeColorBlendAttachmentState(
-                effectiveBlendEnabled,
-                MG_Util::ConvertBlendFactorToVkEnum(srcRGB),
-                MG_Util::ConvertBlendFactorToVkEnum(dstRGB),
-                MG_Util::ConvertBlendEquationToVkEnum(colorEquation),
-                MG_Util::ConvertBlendFactorToVkEnum(srcAlpha),
-                MG_Util::ConvertBlendFactorToVkEnum(dstAlpha),
-                MG_Util::ConvertBlendEquationToVkEnum(alphaEquation),
-                attachmentColorWriteMask);
+                effectiveBlendEnabled, MG_Util::ConvertBlendFactorToVkEnum(srcRGB),
+                MG_Util::ConvertBlendFactorToVkEnum(dstRGB), MG_Util::ConvertBlendEquationToVkEnum(colorEquation),
+                MG_Util::ConvertBlendFactorToVkEnum(srcAlpha), MG_Util::ConvertBlendFactorToVkEnum(dstAlpha),
+                MG_Util::ConvertBlendEquationToVkEnum(alphaEquation), attachmentColorWriteMask);
         }
 #if MOBILEGL_BUILD_DISAGGREGATED
         // P7 wave 2-B: MOBILEGL_TEST_PIPELINE_CREATE_DELAY_MS.
@@ -1438,8 +1402,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     // GL scissor test is disabled gets the whole framebuffer, which is exactly "the test always
     // passes" (GL 4.6 core 17.3.2).
     VkRect2D VulkanRenderer::ComputeGLScissorRect(Uint32 index, const IntVec2& extent,
-                                                  VkSurfaceTransformFlagBitsKHR preTransform,
-                                                  Bool isDefaultFbo) const {
+                                                  VkSurfaceTransformFlagBitsKHR preTransform, Bool isDefaultFbo) const {
         const auto& parameters = MG_Pipe::gPipeInputs->GetRenderStateParameters();
         if (!GLScissorTestClips(index)) {
             VkRect2D full{};
@@ -1461,8 +1424,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     // single viewport instead of believing the array's element 0 is already bound.
     void VulkanRenderer::ApplyMultiViewportDynamicState(VkCommandBuffer commandBuffer, Uint32 viewportCount,
                                                         const IntVec2& extent,
-                                                        VkSurfaceTransformFlagBitsKHR preTransform,
-                                                        Bool isDefaultFbo) {
+                                                        VkSurfaceTransformFlagBitsKHR preTransform, Bool isDefaultFbo) {
         MOBILEGL_ASSERT(viewportCount <= RenderStateParameters::MAX_VIEWPORTS,
                         "ApplyMultiViewportDynamicState: viewportCount=%u exceeds the indexed state width",
                         viewportCount);
@@ -1607,7 +1569,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                    : MakeClampedScissorRect(scissorBox, extent);
         } else {
             scissor.offset = {0, 0};
-            scissor.extent = { (Uint)extent.x(), (Uint)extent.y() };
+            scissor.extent = {(Uint)extent.x(), (Uint)extent.y()};
         }
         ShadowedSetScissor(frame.commandBuffer, scissor);
         shadow.dynamicTailValid = true;
@@ -1647,8 +1609,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     Bool VulkanRenderer::SetupDraw(FrameContext::FrameData& frame, GLenum mode, Flags<DrawSetupAspect> aspects,
-                                   const DrawCmdParam& drawParams,
-                                   const IndexBufferView* pIndexBufferView) {
+                                   const DrawCmdParam& drawParams, const IndexBufferView* pIndexBufferView) {
         // First, before anything of this draw is recorded or resolved - on the wire arm too: a
         // split server records every draw its client sends into the same frame command buffer, so
         // the same loading frame grows it the same way there.
@@ -1688,17 +1649,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         VkMemoryBarrier memoryBarrier{};
         memoryBarrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
         memoryBarrier.srcAccessMask =
-            VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT |
-            VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_TRANSFER_READ_BIT |
-            VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT |
-            VK_ACCESS_HOST_WRITE_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+            VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT |
+            VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+            VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT | VK_ACCESS_HOST_WRITE_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
         memoryBarrier.dstAccessMask =
-            VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT |
-            VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT |
-            VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+            VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_READ_BIT |
+            VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
             VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT |
-            VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT | VK_ACCESS_INDEX_READ_BIT |
-            VK_ACCESS_UNIFORM_READ_BIT | VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+            VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT | VK_ACCESS_INDEX_READ_BIT | VK_ACCESS_UNIFORM_READ_BIT |
+            VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
 
         if ((barriers & GL_COMMAND_BARRIER_BIT) != 0) {
             memoryBarrier.dstAccessMask |= VK_ACCESS_INDIRECT_COMMAND_READ_BIT;
@@ -1722,8 +1681,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                              // ALL_COMMANDS does not include HOST. The barrier's
                              // HOST_WRITE access must have a matching source stage.
                              VK_PIPELINE_STAGE_ALL_COMMANDS_BIT | VK_PIPELINE_STAGE_HOST_BIT,
-                             VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0,
-                             1, &memoryBarrier, 0, nullptr, 0, nullptr);
+                             VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 1, &memoryBarrier, 0, nullptr, 0, nullptr);
     }
 
     void VulkanRenderer::DestroyComputePipelines() {
@@ -1766,12 +1724,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return it->second;
         }
 
-        const auto stageIt = std::find_if(programObj.stages.begin(), programObj.stages.end(),
-            [](const VkPipelineShaderStageCreateInfo& stage) {
-                return stage.stage == VK_SHADER_STAGE_COMPUTE_BIT;
-            });
-        MOBILEGL_ASSERT(stageIt != programObj.stages.end(),
-                        "GetOrCreateComputePipeline: program has no compute stage");
+        const auto stageIt = std::find_if(
+            programObj.stages.begin(), programObj.stages.end(),
+            [](const VkPipelineShaderStageCreateInfo& stage) { return stage.stage == VK_SHADER_STAGE_COMPUTE_BIT; });
+        MOBILEGL_ASSERT(stageIt != programObj.stages.end(), "GetOrCreateComputePipeline: program has no compute stage");
         if (stageIt == programObj.stages.end()) {
             return VK_NULL_HANDLE;
         }

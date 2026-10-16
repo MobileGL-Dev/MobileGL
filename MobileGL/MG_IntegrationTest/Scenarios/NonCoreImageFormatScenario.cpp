@@ -71,8 +71,10 @@ namespace MGITest {
             void TearDown() override {
                 if (!Ready()) return;
                 glUseProgram(0);
-                for (GLuint p : m_programs) glDeleteProgram(p);
-                for (GLuint t : m_textures) glDeleteTextures(1, &t);
+                for (GLuint p : m_programs)
+                    glDeleteProgram(p);
+                for (GLuint t : m_textures)
+                    glDeleteTextures(1, &t);
                 m_programs.clear();
                 m_textures.clear();
                 GLint maxImageUnits = 0;
@@ -80,8 +82,7 @@ namespace MGITest {
                 for (GLint unit = 0; unit < maxImageUnits; ++unit) {
                     glBindImageTexture(static_cast<GLuint>(unit), 0, 0, GL_FALSE, 0, GL_READ_ONLY, GL_R32UI);
                 }
-                while (glGetError() != GL_NO_ERROR) {
-                }
+                while (glGetError() != GL_NO_ERROR) {}
             }
 
             bool ImagesAreUsable() const {
@@ -89,8 +90,7 @@ namespace MGITest {
                 glGetIntegerv(GL_MAX_IMAGE_UNITS, &maxImageUnits);
                 GLint maxComputeImageUniforms = 0;
                 glGetIntegerv(GL_MAX_COMPUTE_IMAGE_UNIFORMS, &maxComputeImageUniforms);
-                while (glGetError() != GL_NO_ERROR) {
-                }
+                while (glGetError() != GL_NO_ERROR) {}
                 return maxImageUnits > static_cast<GLint>(kWideUnit) && maxComputeImageUniforms >= 2;
             }
 
@@ -129,8 +129,7 @@ namespace MGITest {
             // with a value no dispatch writes, so "the store never happened" and "the store wrote
             // the right thing" cannot be confused - which matters here more than usual, because
             // the failure this scenario exists for is a dispatch that silently does nothing.
-            GLuint MakeTexture(GLenum internalFormat, GLenum uploadFormat, GLenum uploadType,
-                               const void* seed) {
+            GLuint MakeTexture(GLenum internalFormat, GLenum uploadFormat, GLenum uploadType, const void* seed) {
                 GLuint texture = 0;
                 glGenTextures(1, &texture);
                 m_textures.push_back(texture);
@@ -145,15 +144,13 @@ namespace MGITest {
                 if (seed != nullptr) {
                     glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, kExtent, kExtent, uploadFormat, uploadType, seed);
                 }
-                while (glGetError() != GL_NO_ERROR) {
-                }
+                while (glGetError() != GL_NO_ERROR) {}
                 return texture;
             }
 
             void BindImage(GLuint unit, GLuint texture, GLenum internalFormat, GLenum access) {
                 glBindImageTexture(unit, texture, 0, GL_FALSE, 0, access, internalFormat);
-                ASSERT_EQ(FirstGLError(), 0u)
-                    << "glBindImageTexture refused format " << std::hex << internalFormat;
+                ASSERT_EQ(FirstGLError(), 0u) << "glBindImageTexture refused format " << std::hex << internalFormat;
             }
 
             void Dispatch(GLuint program) {
@@ -168,8 +165,7 @@ namespace MGITest {
             std::vector<GLuint> m_textures;
 
             std::vector<float> ReadFloats(GLuint texture, GLenum format, int componentsPerTexel) {
-                std::vector<float> texels(static_cast<std::size_t>(kExtent) * kExtent * componentsPerTexel,
-                                          -12345.0f);
+                std::vector<float> texels(static_cast<std::size_t>(kExtent) * kExtent * componentsPerTexel, -12345.0f);
                 glBindTexture(GL_TEXTURE_2D, texture);
                 glGetTexImage(GL_TEXTURE_2D, 0, format, GL_FLOAT, texels.data());
                 if (const GLenum error = FirstGLError()) {
@@ -182,14 +178,13 @@ namespace MGITest {
             // addressed as array layers. The target the allTargets walkers reach last and the one
             // that has caught the most emulation bugs, because it is the only one whose ES
             // equivalent is a 2D array with a different addressing rule from the GL name.
-            GLuint MakeCubeArrayTexture(GLenum internalFormat, GLenum uploadFormat, GLenum uploadType,
-                                        const void* seed, int cubeCount) {
+            GLuint MakeCubeArrayTexture(GLenum internalFormat, GLenum uploadFormat, GLenum uploadType, const void* seed,
+                                        int cubeCount) {
                 GLuint texture = 0;
                 glGenTextures(1, &texture);
                 m_textures.push_back(texture);
                 glBindTexture(GL_TEXTURE_CUBE_MAP_ARRAY, texture);
-                glTexStorage3D(GL_TEXTURE_CUBE_MAP_ARRAY, 1, internalFormat, kExtent, kExtent,
-                               6 * cubeCount);
+                glTexStorage3D(GL_TEXTURE_CUBE_MAP_ARRAY, 1, internalFormat, kExtent, kExtent, 6 * cubeCount);
                 if (const GLenum error = FirstGLError()) {
                     ADD_FAILURE() << "allocating cube-array storage errored with " << GLErrorName(error);
                     return 0;
@@ -197,11 +192,10 @@ namespace MGITest {
                 glTexParameteri(GL_TEXTURE_CUBE_MAP_ARRAY, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
                 glTexParameteri(GL_TEXTURE_CUBE_MAP_ARRAY, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
                 if (seed != nullptr) {
-                    glTexSubImage3D(GL_TEXTURE_CUBE_MAP_ARRAY, 0, 0, 0, 0, kExtent, kExtent,
-                                    6 * cubeCount, uploadFormat, uploadType, seed);
+                    glTexSubImage3D(GL_TEXTURE_CUBE_MAP_ARRAY, 0, 0, 0, 0, kExtent, kExtent, 6 * cubeCount,
+                                    uploadFormat, uploadType, seed);
                 }
-                while (glGetError() != GL_NO_ERROR) {
-                }
+                while (glGetError() != GL_NO_ERROR) {}
                 return texture;
             }
 
@@ -212,8 +206,7 @@ namespace MGITest {
             }
 
             // Sets `name` from `values`, which must hold 4 * count floats.
-            void SetVec4Array(GLuint program, const char* name, const std::vector<float>& values,
-                              int count) {
+            void SetVec4Array(GLuint program, const char* name, const std::vector<float>& values, int count) {
                 glUseProgram(program);
                 const GLint location = glGetUniformLocation(program, name);
                 ASSERT_GE(location, 0) << "the uniform array '" << name << "' was not reflected";
@@ -222,10 +215,9 @@ namespace MGITest {
                 glUseProgram(0);
             }
 
-            std::vector<float> ReadFloatsFrom(GLenum target, GLuint texture, GLenum format,
-                                              int componentsPerTexel, int texelCount) {
-                std::vector<float> texels(static_cast<std::size_t>(texelCount) * componentsPerTexel,
-                                          -12345.0f);
+            std::vector<float> ReadFloatsFrom(GLenum target, GLuint texture, GLenum format, int componentsPerTexel,
+                                              int texelCount) {
+                std::vector<float> texels(static_cast<std::size_t>(texelCount) * componentsPerTexel, -12345.0f);
                 glBindTexture(target, texture);
                 glGetTexImage(target, 0, format, GL_FLOAT, texels.data());
                 if (const GLenum error = FirstGLError()) {
@@ -559,8 +551,7 @@ void main()
                 EXPECT_EQ(loaded[texel * 4 + 2], 0u)
                     << "texel " << texel << ": imageLoad on a one-channel format must report 0 for blue";
                 EXPECT_EQ(loaded[texel * 4 + 3], 1u)
-                    << "texel " << texel
-                    << ": imageLoad on an INTEGER format without alpha must report the integer 1";
+                    << "texel " << texel << ": imageLoad on an INTEGER format without alpha must report the integer 1";
             }
         }
 
@@ -645,16 +636,25 @@ void main()
                 long code;
             };
             const Boundary boundaries[kTexels] = {
-                {0.0f, 0},          {1.0f, 65535},      {0.5f, 32768},      {0.25f, 16384},
-                {0.75f, 49151},     {-0.5f, 0},         {2.0f, 65535},      {-1.0f, 0},
-                {1.0f / 131072.0f, 0},                  // 0.4999923 of a code: rounds DOWN
-                {3.0f / 131072.0f, 1},                  // 1.4999771 of a code: rounds DOWN to 1
-                {1.0f / 65535.0f, 1},                   // exactly one code
-                {32767.0f / 65535.0f, 32767},           {32768.0f / 65535.0f, 32768},
+                {0.0f, 0},
+                {1.0f, 65535},
+                {0.5f, 32768},
+                {0.25f, 16384},
+                {0.75f, 49151},
+                {-0.5f, 0},
+                {2.0f, 65535},
+                {-1.0f, 0},
+                {1.0f / 131072.0f, 0}, // 0.4999923 of a code: rounds DOWN
+                {3.0f / 131072.0f, 1}, // 1.4999771 of a code: rounds DOWN to 1
+                {1.0f / 65535.0f, 1},  // exactly one code
+                {32767.0f / 65535.0f, 32767},
+                {32768.0f / 65535.0f, 32768},
                 // 0.125 * 65535 = 8191.875 and 0.875 * 65535 = 57343.125 - neither is a tie, and
                 // both round DOWN, which is the pair that catches a conversion that scaled by 2^b
                 // instead of 2^b - 1.
-                {65534.0f / 65535.0f, 65534},           {0.125f, 8192},     {0.875f, 57343},
+                {65534.0f / 65535.0f, 65534},
+                {0.125f, 8192},
+                {0.875f, 57343},
             };
             std::vector<float> values(static_cast<std::size_t>(kTexels) * 4u, 0.0f);
             for (int texel = 0; texel < kTexels; ++texel) {
@@ -710,13 +710,12 @@ void main()
 
             // The seed walks the whole signed range, INCLUDING -32768, whose decode is the one
             // value the division alone gets wrong.
-            const GLshort seedCodes[kTexels] = {0,     32767, -32767, -32768, 1,     -1,    16384, -16384,
-                                                12345, -12345, 32766, -32766, 255,   -256,  4095,  -4096};
+            const GLshort seedCodes[kTexels] = {0,     32767,  -32767, -32768, 1,   -1,   16384, -16384,
+                                                12345, -12345, 32766,  -32766, 255, -256, 4095,  -4096};
             std::vector<GLshort> seed(static_cast<std::size_t>(kTexels) * 4u, 0);
             for (int texel = 0; texel < kTexels; ++texel) {
                 seed[texel * 4 + 0] = seedCodes[texel];
-                seed[texel * 4 + 1] = static_cast<GLshort>(-seedCodes[texel] == -32768 ? 32767
-                                                                                       : -seedCodes[texel]);
+                seed[texel * 4 + 1] = static_cast<GLshort>(-seedCodes[texel] == -32768 ? 32767 : -seedCodes[texel]);
                 seed[texel * 4 + 2] = seedCodes[(texel + 1) % kTexels];
                 seed[texel * 4 + 3] = seedCodes[(texel + 2) % kTexels];
             }
@@ -761,8 +760,7 @@ void main()
             for (int texel = 0; texel < kTexels; ++texel) {
                 for (int channel = 0; channel < 4; ++channel) {
                     const GLshort code = seed[texel * 4 + channel];
-                    const float expected =
-                        std::max(static_cast<float>(code) / static_cast<float>(kSnorm16Max), -1.0f);
+                    const float expected = std::max(static_cast<float>(code) / static_cast<float>(kSnorm16Max), -1.0f);
                     EXPECT_FLOAT_EQ(loaded[texel * 4 + channel], expected)
                         << "texel " << texel << " channel " << channel << " code " << code;
                 }
@@ -775,17 +773,27 @@ void main()
                 long code;
             };
             const Boundary boundaries[kTexels] = {
-                {0.0f, 0},        {1.0f, 32767},    {-1.0f, -32767},  {0.5f, 16384},
-                {-0.5f, -16384},  {2.0f, 32767},    {-2.0f, -32767},  {0.25f, 8192},
-                {-0.25f, -8192},  {1.0f / 32767.0f, 1},               {-1.0f / 32767.0f, -1},
+                {0.0f, 0},
+                {1.0f, 32767},
+                {-1.0f, -32767},
+                {0.5f, 16384},
+                {-0.5f, -16384},
+                {2.0f, 32767},
+                {-2.0f, -32767},
+                {0.25f, 8192},
+                {-0.25f, -8192},
+                {1.0f / 32767.0f, 1},
+                {-1.0f / 32767.0f, -1},
                 // Three quarters of a code, not half: GL leaves the direction of a TIE to the
                 // implementation ("if two values are equally near, the implementation may choose
                 // either"), and Magma hands these formats to Vulkan unemulated, so a value exactly
                 // on 0.5 of a code is the one thing the two backends are allowed to disagree
                 // about. Every entry here is off a tie except the ones at 0.5 and 0.25 of the
                 // RANGE, whose products (16383.5 and 8192) round the same way under either rule.
-                {0.75f / 32767.0f, 1},              {-0.75f / 32767.0f, -1},
-                {16383.0f / 32767.0f, 16383},       {-16383.0f / 32767.0f, -16383},
+                {0.75f / 32767.0f, 1},
+                {-0.75f / 32767.0f, -1},
+                {16383.0f / 32767.0f, 16383},
+                {-16383.0f / 32767.0f, -16383},
                 {0.125f, 4096},
             };
             std::vector<float> values(static_cast<std::size_t>(kTexels) * 4u, 0.0f);
@@ -806,10 +814,8 @@ void main()
             loaded = ReadFloats(wide, GL_RGBA, 4);
             for (int texel = 0; texel < kTexels; ++texel) {
                 for (int channel = 0; channel < 4; ++channel) {
-                    EXPECT_EQ(std::lround(loaded[texel * 4 + channel] * kSnorm16Max),
-                              boundaries[texel].code)
-                        << "texel " << texel << " channel " << channel << " stored "
-                        << boundaries[texel].value;
+                    EXPECT_EQ(std::lround(loaded[texel * 4 + channel] * kSnorm16Max), boundaries[texel].code)
+                        << "texel " << texel << " channel " << channel << " stored " << boundaries[texel].value;
                 }
             }
         }
@@ -837,8 +843,7 @@ void main()
                 seedCodes[texel * 4 + 3] = a;
             }
             const std::vector<float> wideSeed(static_cast<std::size_t>(kTexels) * 4u, -1.0f);
-            const GLuint narrow =
-                MakeTexture(GL_RGB10_A2, GL_RGBA, GL_UNSIGNED_INT_2_10_10_10_REV, seed.data());
+            const GLuint narrow = MakeTexture(GL_RGB10_A2, GL_RGBA, GL_UNSIGNED_INT_2_10_10_10_REV, seed.data());
             const GLuint wide = MakeTexture(GL_RGBA32F, GL_RGBA, GL_FLOAT, wideSeed.data());
             if (narrow == 0 || wide == 0) return;
 
@@ -910,8 +915,7 @@ void main()
             if (!ImagesAreUsable()) GTEST_SKIP() << "no image load/store on this driver";
             GLint maxComputeImageUniforms = 0;
             glGetIntegerv(GL_MAX_COMPUTE_IMAGE_UNIFORMS, &maxComputeImageUniforms);
-            while (glGetError() != GL_NO_ERROR) {
-            }
+            while (glGetError() != GL_NO_ERROR) {}
 
             constexpr int kCubes = 2;
             constexpr int kLayerFaces = 6 * kCubes;
@@ -923,16 +927,14 @@ void main()
             for (int texel = 0; texel < kTexels; ++texel) {
                 seed[texel] = static_cast<GLushort>((texel * 5477u) & 0xFFFFu);
             }
-            const GLuint narrow =
-                MakeCubeArrayTexture(GL_R16, GL_RED, GL_UNSIGNED_SHORT, seed.data(), kCubes);
+            const GLuint narrow = MakeCubeArrayTexture(GL_R16, GL_RED, GL_UNSIGNED_SHORT, seed.data(), kCubes);
             if (narrow == 0) return;
 
             // THE UPLOAD, read back through glGetTexImage across every layer-face. A carrier that
             // widened the storage but seeded only the first face leaves the rest at zero, which is
             // what the per-layer readback path is there to catch, and this target is the only one
             // whose readback goes layer by layer.
-            const std::vector<float> uploaded =
-                ReadFloatsFrom(GL_TEXTURE_CUBE_MAP_ARRAY, narrow, GL_RED, 1, kTexels);
+            const std::vector<float> uploaded = ReadFloatsFrom(GL_TEXTURE_CUBE_MAP_ARRAY, narrow, GL_RED, 1, kTexels);
             for (int texel = 0; texel < kTexels; ++texel) {
                 EXPECT_EQ(std::lround(uploaded[texel] * kUnorm16Max), seed[texel])
                     << "texel " << texel << " of " << kTexels;
@@ -1011,8 +1013,7 @@ void main()
             if (!ImagesAreUsable()) GTEST_SKIP() << "no image load/store on this driver";
             GLint maxTextureBufferSize = 0;
             glGetIntegerv(GL_MAX_TEXTURE_BUFFER_SIZE, &maxTextureBufferSize);
-            while (glGetError() != GL_NO_ERROR) {
-            }
+            while (glGetError() != GL_NO_ERROR) {}
             if (maxTextureBufferSize <= 0) GTEST_SKIP() << "no buffer textures on this driver";
 
             constexpr int kBufferTexels = 4;
@@ -1059,20 +1060,18 @@ void main()
 
             std::vector<float> readback(seed.size(), -12345.0f);
             glBindBuffer(GL_TEXTURE_BUFFER, buffer);
-            glGetBufferSubData(GL_TEXTURE_BUFFER, 0,
-                               static_cast<GLsizeiptr>(readback.size() * sizeof(float)), readback.data());
+            glGetBufferSubData(GL_TEXTURE_BUFFER, 0, static_cast<GLsizeiptr>(readback.size() * sizeof(float)),
+                               readback.data());
             EXPECT_EQ(FirstGLError(), 0u) << "reading the buffer back errored";
 
             for (int texel = 0; texel < kBufferTexels; ++texel) {
-                EXPECT_FLOAT_EQ(readback[texel * 2 + 0], static_cast<float>(texel + 1))
-                    << "texel " << texel << " red";
+                EXPECT_FLOAT_EQ(readback[texel * 2 + 0], static_cast<float>(texel + 1)) << "texel " << texel << " red";
                 EXPECT_FLOAT_EQ(readback[texel * 2 + 1], 100.0f) << "texel " << texel << " green";
             }
 
             glBindBuffer(GL_TEXTURE_BUFFER, 0);
             glDeleteBuffers(1, &buffer);
-            while (glGetError() != GL_NO_ERROR) {
-            }
+            while (glGetError() != GL_NO_ERROR) {}
         }
 
         // The SAME buffer texture read through BOTH doors at once, which is the shape the split
@@ -1100,8 +1099,7 @@ void main()
             if (!ImagesAreUsable()) GTEST_SKIP() << "no image load/store on this driver";
             GLint maxTextureBufferSize = 0;
             glGetIntegerv(GL_MAX_TEXTURE_BUFFER_SIZE, &maxTextureBufferSize);
-            while (glGetError() != GL_NO_ERROR) {
-            }
+            while (glGetError() != GL_NO_ERROR) {}
             if (maxTextureBufferSize <= 0) GTEST_SKIP() << "no buffer textures on this driver";
 
             constexpr int kBufferTexels = 4;
@@ -1183,8 +1181,8 @@ void main()
 
             std::vector<float> readback(answerSeed.size(), -54321.0f);
             glBindBuffer(GL_TEXTURE_BUFFER, answerBuffer);
-            glGetBufferSubData(GL_TEXTURE_BUFFER, 0,
-                               static_cast<GLsizeiptr>(readback.size() * sizeof(float)), readback.data());
+            glGetBufferSubData(GL_TEXTURE_BUFFER, 0, static_cast<GLsizeiptr>(readback.size() * sizeof(float)),
+                               readback.data());
             EXPECT_EQ(FirstGLError(), 0u) << "reading the answers back errored";
 
             for (int texel = 0; texel < kBufferTexels; ++texel) {
@@ -1206,8 +1204,7 @@ void main()
             glBindBuffer(GL_TEXTURE_BUFFER, 0);
             glDeleteBuffers(1, &buffer);
             glDeleteBuffers(1, &answerBuffer);
-            while (glGetError() != GL_NO_ERROR) {
-            }
+            while (glGetError() != GL_NO_ERROR) {}
         }
 
         // The other consumer of the same texture. A widened texture's ES storage really does have

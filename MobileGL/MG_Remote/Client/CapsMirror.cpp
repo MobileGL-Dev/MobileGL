@@ -18,7 +18,7 @@
 #include "../CapsCodec.h"
 #include "../FatalFunnel.h"
 
-#include <Config.h> // MG_Config::SplitTransportRequestedByConfig
+#include <Config.h>                       // MG_Config::SplitTransportRequestedByConfig
 #include <MG_Backend/MGPipe/PipeInputs.h> // MGPipeServerArm, D1c's role predicate
 #include <MG_State/GLState/Core.h>
 #include <MG_Util/Async/ShaderCompilePool.h>
@@ -69,8 +69,7 @@ namespace MobileGL::MG_Remote::Client {
         // re-derived here from this process's switch, on every adoption.
         void ReconcileClientCompileExtensions(RendererInfo& renderer) {
             Vector<GLExtension>& extensions = renderer.RendererGLInfo.Extensions;
-            const auto found =
-                std::find(extensions.begin(), extensions.end(), E_GL_KHR_parallel_shader_compile);
+            const auto found = std::find(extensions.begin(), extensions.end(), E_GL_KHR_parallel_shader_compile);
             const Bool advertised = found != extensions.end();
             const Bool compilesAsync = MG_Util::Async::AsyncShaderCompileEnabled();
             if (advertised == compilesAsync) return;
@@ -86,8 +85,7 @@ namespace MobileGL::MG_Remote::Client {
     } // namespace
 
     void CapsMirror::Adopt(const MG_Pipe::MGPCaps& caps, const MG_Backend::FormatCapabilityCache& formats,
-                           const RendererInfo& renderer, const String& apiVersion,
-                           BackendType backend) {
+                           const RendererInfo& renderer, const String& apiVersion, BackendType backend) {
         m_caps = caps;
         // The two blobrefs inside MGPCaps name SEG_STAGE runs that belong to the SERVER's
         // encoder and are meaningless on this side; the decoded objects beside them are the
@@ -123,10 +121,16 @@ namespace MobileGL::MG_Remote::Client {
         if (g_capsAdoptedHook != nullptr) g_capsAdoptedHook();
     }
 
-    void SetCapsAdoptedHook(CapsAdoptedHook hook) { g_capsAdoptedHook = hook; }
+    void SetCapsAdoptedHook(CapsAdoptedHook hook) {
+        g_capsAdoptedHook = hook;
+    }
 
-    Bool CapsMirror::Valid() const { return m_generation != 0; }
-    Uint64 CapsMirror::Generation() const { return m_generation; }
+    Bool CapsMirror::Valid() const {
+        return m_generation != 0;
+    }
+    Uint64 CapsMirror::Generation() const {
+        return m_generation;
+    }
 
     const RendererInfo& CapsMirror::Renderer() const {
         WarnPlaceholder("Renderer", m_generation);
@@ -153,7 +157,9 @@ namespace MobileGL::MG_Remote::Client {
         return m_backend;
     }
 
-    Uint64 CapsMirror::CallMask() const { return m_caps.CallMask; }
+    Uint64 CapsMirror::CallMask() const {
+        return m_caps.CallMask;
+    }
 
     Bool CapsMirror::HasCap(MG_Pipe::MGPCapBit bit) const {
         return (m_caps.CallMask & static_cast<Uint64>(bit)) != 0;
@@ -178,8 +184,7 @@ namespace MobileGL::MG_Remote::Client {
                 MGLOG_W("MG_Remote client: the server does not consume MGPipe subsystem 0x%llx - "
                         "this family emits NOTHING and the legacy pull path runs for it "
                         "(R-8). callMask=0x%llx, caps generation %llu",
-                        static_cast<unsigned long long>(subsystemBit),
-                        static_cast<unsigned long long>(m_caps.CallMask),
+                        static_cast<unsigned long long>(subsystemBit), static_cast<unsigned long long>(m_caps.CallMask),
                         static_cast<unsigned long long>(m_generation));
             }
         }
@@ -209,8 +214,7 @@ namespace MobileGL::MG_Remote::Client {
         // The wait is real only when somebody else is fetching the snapshot. ClientSession's
         // hook answers false when no bring-up is in flight and when the CALLING thread is the
         // one performing it - both of which mean nothing can land while this call blocks.
-        if (g_firstSnapshotWait != nullptr && g_firstSnapshotWait(kFirstSnapshotWaitMs) &&
-            m_generation != 0) {
+        if (g_firstSnapshotWait != nullptr && g_firstSnapshotWait(kFirstSnapshotWaitMs) && m_generation != 0) {
             return;
         }
         // NOT MGLOG_W AND CARRY ON. The whole defect this closes is that carrying on was
@@ -226,11 +230,12 @@ namespace MobileGL::MG_Remote::Client {
                     "pull path on the client to take over. The session must be started - and its "
                     "first CapsSnapshot adopted - before any frontend object of this family is "
                     "born; MobileGL::Initialize does that before MG_State::Init()",
-                    CapsSubsystemName(subsystemBit),
-                    static_cast<unsigned long long>(subsystemBit));
+                    CapsSubsystemName(subsystemBit), static_cast<unsigned long long>(subsystemBit));
     }
 
-    void SetCapsFirstSnapshotWait(CapsFirstSnapshotWait wait) { g_firstSnapshotWait = wait; }
+    void SetCapsFirstSnapshotWait(CapsFirstSnapshotWait wait) {
+        g_firstSnapshotWait = wait;
+    }
 
     Uint64 PublishedCapsGeneration() {
         return g_publishedGeneration.load(::std::memory_order_acquire);
@@ -238,22 +243,34 @@ namespace MobileGL::MG_Remote::Client {
 
     const char* CapsSubsystemName(Uint64 subsystemBit) {
         switch (subsystemBit) {
-        case MG_Pipe::kMGPipeSubsystemResources: return "Resources";
-        case MG_Pipe::kMGPipeSubsystemVertexInput: return "VertexInput";
-        case MG_Pipe::kMGPipeSubsystemFramebuffer: return "Framebuffer";
-        case MG_Pipe::kMGPipeSubsystemTextureResources: return "TextureResources";
-        case MG_Pipe::kMGPipeSubsystemSamplers: return "Samplers";
-        case MG_Pipe::kMGPipeSubsystemPrograms: return "Programs";
-        case MG_Pipe::kMGPipeSubsystemBufferBindings: return "BufferBindings";
-        default: break;
+        case MG_Pipe::kMGPipeSubsystemResources:
+            return "Resources";
+        case MG_Pipe::kMGPipeSubsystemVertexInput:
+            return "VertexInput";
+        case MG_Pipe::kMGPipeSubsystemFramebuffer:
+            return "Framebuffer";
+        case MG_Pipe::kMGPipeSubsystemTextureResources:
+            return "TextureResources";
+        case MG_Pipe::kMGPipeSubsystemSamplers:
+            return "Samplers";
+        case MG_Pipe::kMGPipeSubsystemPrograms:
+            return "Programs";
+        case MG_Pipe::kMGPipeSubsystemBufferBindings:
+            return "BufferBindings";
+        default:
+            break;
         }
         // A bit with no word yet, or a mask of several. Named by its value rather than by a
         // guess: G14 lets the list grow, never lets a wrong word into a Fatal.
         return "unnamed-subsystem";
     }
 
-    Uint64 ConsumerRefusals() { return g_consumerRefusals; }
-    Uint64 LastRefusedSubsystem() { return g_lastRefusedSubsystem; }
+    Uint64 ConsumerRefusals() {
+        return g_consumerRefusals;
+    }
+    Uint64 LastRefusedSubsystem() {
+        return g_lastRefusedSubsystem;
+    }
     void ResetConsumerRefusalsForTest() {
         g_consumerRefusals = 0;
         g_lastRefusedSubsystem = 0;

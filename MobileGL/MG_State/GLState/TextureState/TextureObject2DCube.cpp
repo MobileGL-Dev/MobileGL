@@ -94,7 +94,7 @@ namespace MobileGL {
             }
 
             void TextureObject2DCube::SetMipmapCompressedImage(TextureUploadTarget uploadTarget, Uint mipmapLevel,
-                                                              GLenum internalFormat, const void* data, SizeT size) {
+                                                               GLenum internalFormat, const void* data, SizeT size) {
                 m_textureStorage.SetCompressedImage(GetIndexOfTextureUploadTarget(uploadTarget), mipmapLevel,
                                                     internalFormat, data, size);
             }
@@ -105,17 +105,17 @@ namespace MobileGL {
             }
 
             SizeT TextureObject2DCube::GetMipmapCompressedByteSize(TextureUploadTarget uploadTarget,
-                                                                    Uint mipmapLevel) const {
+                                                                   Uint mipmapLevel) const {
                 return m_textureStorage.GetCompressedByteSize(GetIndexOfTextureUploadTarget(uploadTarget), mipmapLevel);
             }
 
             const void* TextureObject2DCube::MapMipmapCompressedImage(TextureUploadTarget uploadTarget,
-                                                                       Uint mipmapLevel) const {
+                                                                      Uint mipmapLevel) const {
                 return m_textureStorage.MapCompressedData(GetIndexOfTextureUploadTarget(uploadTarget), mipmapLevel);
             }
 
             void TextureObject2DCube::SetMipmapRequestedCompressedFormat(TextureUploadTarget uploadTarget,
-                                                                       Uint mipmapLevel, GLenum internalFormat) {
+                                                                         Uint mipmapLevel, GLenum internalFormat) {
                 m_textureStorage.SetRequestedCompressedFormat(GetIndexOfTextureUploadTarget(uploadTarget), mipmapLevel,
                                                               internalFormat);
             }

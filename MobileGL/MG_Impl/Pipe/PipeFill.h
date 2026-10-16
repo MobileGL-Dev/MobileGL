@@ -126,5 +126,5 @@ namespace MobileGL::MG_Pipe {
 // baseinstance, carrying the argument RAW. It has to be a macro for MGP_FILL's reason: the
 // three call sites are compiled in the pull build too, where MGPipeSetPendingBaseInstance is
 // neither declared nor defined.
-#define MGP_SET_BASE_INSTANCE(BaseInstance)                                                        \
+#define MGP_SET_BASE_INSTANCE(BaseInstance)                                                                            \
     ::MobileGL::MG_Pipe::MGPipeSetPendingBaseInstance(static_cast<::MobileGL::Uint32>(BaseInstance))

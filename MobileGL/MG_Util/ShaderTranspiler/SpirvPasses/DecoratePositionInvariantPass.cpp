@@ -28,9 +28,7 @@ namespace MobileGL {
                 struct MemberKey {
                     uint32_t id = 0;
                     uint32_t member = 0;
-                    bool operator==(const MemberKey& other) const {
-                        return id == other.id && member == other.member;
-                    }
+                    bool operator==(const MemberKey& other) const { return id == other.id && member == other.member; }
                 };
 
                 // OpDecorate      <target-id> <decoration> [literals...]
@@ -58,8 +56,8 @@ namespace MobileGL {
                         if (annotation.NumInOperands() <= kDecorateDecorationOperand) {
                             continue;
                         }
-                        const auto decoration = static_cast<spv::Decoration>(
-                            annotation.GetSingleWordInOperand(kDecorateDecorationOperand));
+                        const auto decoration =
+                            static_cast<spv::Decoration>(annotation.GetSingleWordInOperand(kDecorateDecorationOperand));
                         const uint32_t target = annotation.GetSingleWordInOperand(kDecorateTargetOperand);
                         if (decoration == spv::Decoration::Invariant) {
                             invariantIds.push_back(target);
@@ -75,9 +73,8 @@ namespace MobileGL {
                         }
                         const auto decoration = static_cast<spv::Decoration>(
                             annotation.GetSingleWordInOperand(kMemberDecorateDecorationOperand));
-                        const MemberKey key{
-                            annotation.GetSingleWordInOperand(kMemberDecorateStructOperand),
-                            annotation.GetSingleWordInOperand(kMemberDecorateMemberOperand)};
+                        const MemberKey key{annotation.GetSingleWordInOperand(kMemberDecorateStructOperand),
+                                            annotation.GetSingleWordInOperand(kMemberDecorateMemberOperand)};
                         if (decoration == spv::Decoration::Invariant) {
                             invariantMembers.push_back(key);
                         } else if (decoration == spv::Decoration::BuiltIn &&
@@ -99,16 +96,14 @@ namespace MobileGL {
                         irContext, spv::Op::OpDecorate, 0, 0,
                         std::initializer_list<Operand>{
                             {SPV_OPERAND_TYPE_ID, {target}},
-                            {SPV_OPERAND_TYPE_DECORATION,
-                             {static_cast<uint32_t>(spv::Decoration::Invariant)}}}));
+                            {SPV_OPERAND_TYPE_DECORATION, {static_cast<uint32_t>(spv::Decoration::Invariant)}}}));
                     // Guard against a second Position decoration on the same target.
                     invariantIds.push_back(target);
                     changed = true;
                 }
 
                 for (const MemberKey& key : positionMembers) {
-                    if (std::find(invariantMembers.begin(), invariantMembers.end(), key) !=
-                        invariantMembers.end()) {
+                    if (std::find(invariantMembers.begin(), invariantMembers.end(), key) != invariantMembers.end()) {
                         continue;
                     }
                     irContext->AddAnnotationInst(spvtools::MakeUnique<Instruction>(
@@ -116,8 +111,7 @@ namespace MobileGL {
                         std::initializer_list<Operand>{
                             {SPV_OPERAND_TYPE_ID, {key.id}},
                             {SPV_OPERAND_TYPE_LITERAL_INTEGER, {key.member}},
-                            {SPV_OPERAND_TYPE_DECORATION,
-                             {static_cast<uint32_t>(spv::Decoration::Invariant)}}}));
+                            {SPV_OPERAND_TYPE_DECORATION, {static_cast<uint32_t>(spv::Decoration::Invariant)}}}));
                     invariantMembers.push_back(key);
                     changed = true;
                 }
@@ -130,8 +124,7 @@ namespace MobileGL {
                 return Status::SuccessWithChange;
             }
 
-            spvtools::Optimizer::PassToken
-            DecoratePositionInvariantPass::CreateDecoratePositionInvariantPass() {
+            spvtools::Optimizer::PassToken DecoratePositionInvariantPass::CreateDecoratePositionInvariantPass() {
                 return spvtools::Optimizer::PassToken(MakeUnique<DecoratePositionInvariantPass>());
             }
         } // namespace ShaderTranspiler

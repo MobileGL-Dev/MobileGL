@@ -53,8 +53,8 @@ namespace MobileGL::MG_Util::Async {
     };
 
     struct JobDiagnostics {
-        Vector<DeferredError> errors;      // replayed, in ascending `sequence`, by the join
-        Vector<DeferredLogLine> logLines;  // worker-side MGLOG text, flushed in order by the join
+        Vector<DeferredError> errors;     // replayed, in ascending `sequence`, by the join
+        Vector<DeferredLogLine> logLines; // worker-side MGLOG text, flushed in order by the join
     };
 
     // The scheduling primitive every asynchronous compile and link is built on. A node owns
@@ -83,7 +83,7 @@ namespace MobileGL::MG_Util::Async {
 
         // Lock-free and non-blocking - safe from any thread, including a pool thread.
         Bool IsTerminal() const;
-        Bool IsComplete() const; // Complete only; this is what backs GL_COMPLETION_STATUS_KHR
+        Bool IsComplete() const;  // Complete only; this is what backs GL_COMPLETION_STATUS_KHR
         Bool IsCancelled() const; // settled AS cancelled - the outcome, not the request
         JobState State() const;
 

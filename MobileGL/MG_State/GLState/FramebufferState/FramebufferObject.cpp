@@ -46,8 +46,8 @@ namespace MobileGL::MG_State::GLState {
     FramebufferAttachmentObject::FramebufferAttachmentObject(
         const SharedPtr<MG_State::GLState::ITextureObject>& texture, TextureUploadTarget textureUploadTarget, Int level,
         Int layer, Bool layered)
-        : m_texture(texture), m_textureUploadTarget(textureUploadTarget), m_textureLevel(level),
-          m_textureLayer(layer), m_layered(layered) {}
+        : m_texture(texture), m_textureUploadTarget(textureUploadTarget), m_textureLevel(level), m_textureLayer(layer),
+          m_layered(layered) {}
     FramebufferAttachmentObject::FramebufferAttachmentObject(const SharedPtr<RenderbufferObject>& renderbuffer)
         : m_renderbuffer(renderbuffer) {}
     FramebufferAttachmentObject::FramebufferAttachmentObject(Bool IsValid)
@@ -267,12 +267,12 @@ namespace MobileGL::MG_State::GLState {
         return m_externalIndex;
     }
 
-#define MOBILEGL_DEFINE_FRAMEBUFFER_DEFAULT_SETTER(name, member, type)                                                \
+#define MOBILEGL_DEFINE_FRAMEBUFFER_DEFAULT_SETTER(name, member, type)                                                 \
     void FramebufferObject::Set##name(type value) {                                                                    \
-        if (member == value) return;                                                                                    \
-        member = value;                                                                                                 \
-        ++m_objectVersion;                                                                                              \
-        MGP_NOTE_AGGREGATE(FramebufferAttachment); \
+        if (member == value) return;                                                                                   \
+        member = value;                                                                                                \
+        ++m_objectVersion;                                                                                             \
+        MGP_NOTE_AGGREGATE(FramebufferAttachment);                                                                     \
     }
 
     MOBILEGL_DEFINE_FRAMEBUFFER_DEFAULT_SETTER(DefaultWidth, m_defaultWidth, Int)

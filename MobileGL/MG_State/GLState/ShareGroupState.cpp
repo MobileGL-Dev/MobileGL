@@ -115,12 +115,12 @@ namespace MobileGL::MG_State::GLState {
     }
 
     const SharedPtr<ITextureObject>& ShareGroupState::CreateTextureViewObject(
-        Uint index, TextureTarget target, const SharedPtr<ITextureObject>& storageOwner, Uint minLevel,
-        Uint numLevels, Uint minLayer, Uint numLayers) {
+        Uint index, TextureTarget target, const SharedPtr<ITextureObject>& storageOwner, Uint minLevel, Uint numLevels,
+        Uint minLayer, Uint numLayers) {
         MOBILEGL_ASSERT(storageOwner != nullptr, "CreateTextureViewObject: storage owner is null");
         auto& textureObject = m_textureObjects[index];
-        textureObject = MakeShared<TextureObjectView>(index, target, storageOwner, minLevel, numLevels, minLayer,
-                                                      numLayers);
+        textureObject =
+            MakeShared<TextureObjectView>(index, target, storageOwner, minLevel, numLevels, minLayer, numLayers);
         return textureObject;
     }
 

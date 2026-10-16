@@ -10,7 +10,7 @@
 
 namespace MobileGL::MG_State::GLState {
     ShaderPreprocessResultPtr ShaderPreprocessCache::Find(const ShaderStage stage, const Uint64 sourceHash,
-                                                         const String& source, const Uint64 envFingerprint) const {
+                                                          const String& source, const Uint64 envFingerprint) const {
         const Key key{.stage = stage,
                       .sourceHash = sourceHash,
                       .sourceLength = source.length(),
@@ -78,8 +78,7 @@ namespace MobileGL::MG_State::GLState {
         // FIFO: the oldest insertion goes first. Insert() already refuses entries larger
         // than the byte budget, so this loop always terminates with at least the entry
         // that was just added still resident.
-        while (!m_entries.empty() &&
-               (m_entries.size() > kMaxEntries || m_storedSourceBytes > kMaxStoredSourceBytes)) {
+        while (!m_entries.empty() && (m_entries.size() > kMaxEntries || m_storedSourceBytes > kMaxStoredSourceBytes)) {
             EraseEntryLocked(m_entries.begin());
         }
     }

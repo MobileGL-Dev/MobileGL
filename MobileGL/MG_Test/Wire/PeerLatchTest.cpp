@@ -158,8 +158,8 @@ namespace {
         bool tcp = false;
 
         std::string Log() const {
-            return ReadFile(MobileGL::MG_Util::Debug::RoleLogPath(
-                logBase.c_str(), MobileGL::MG_Util::Debug::LogRole::Server));
+            return ReadFile(
+                MobileGL::MG_Util::Debug::RoleLogPath(logBase.c_str(), MobileGL::MG_Util::Debug::LogRole::Server));
         }
         // The supervisor's reap line for one session child, or "" while it has not been reaped.
         std::string ReapLine(Uint32 sessionPid) const {
@@ -214,8 +214,7 @@ namespace {
                 ::unlink(sup->endpoint.c_str());
             }
             MobileGL::MG_Util::Debug::TruncateRoleLogs(sup->logBase.c_str());
-            if (Server::LaunchServerWithArgs(ServerImage(), sup->endpoint, {"--serve"}, &sup->server) !=
-                MOBILEGL_OK) {
+            if (Server::LaunchServerWithArgs(ServerImage(), sup->endpoint, {"--serve"}, &sup->server) != MOBILEGL_OK) {
                 return false;
             }
             bool listening = false;
@@ -242,13 +241,13 @@ namespace {
     // ------------------------------------------------------------------------------------
 
     struct PeerReport {
-        Int32 started = 0;       // handshake answered Welcome
-        Int32 forged = 0;        // the row's bytes were published
-        Uint32 serverPid = 0;    // Welcome::serverPid - the session child this peer talked to
-        Int32 status = -99;      // a reply status, where the row reads one
-        Int32 applied = 0;       // a follow-up (or the health check's) record applied
-        Int32 egl = 0;           // headless EGL came up in the session
-        Uint32 pixel = 0;        // the health check's read-back texel
+        Int32 started = 0;    // handshake answered Welcome
+        Int32 forged = 0;     // the row's bytes were published
+        Uint32 serverPid = 0; // Welcome::serverPid - the session child this peer talked to
+        Int32 status = -99;   // a reply status, where the row reads one
+        Int32 applied = 0;    // a follow-up (or the health check's) record applied
+        Int32 egl = 0;        // headless EGL came up in the session
+        Uint32 pixel = 0;     // the health check's read-back texel
         char note[256] = {};
     };
 
@@ -263,8 +262,8 @@ namespace {
     // `holdMs` > 0: the peer reports as soon as `body` returns and then HOLDS its connections open
     // and silent for that long before it exits; the caller gets its pid in `heldPeer` and owes it
     // a kill + waitpid (the silent-peer cases' shape).
-    PeerReport RunPeer(const Supervisor& sup, const PeerBody& body, bool stopCleanly,
-                       int timeoutMs = 30000, int holdMs = 0, pid_t* heldPeer = nullptr) {
+    PeerReport RunPeer(const Supervisor& sup, const PeerBody& body, bool stopCleanly, int timeoutMs = 30000,
+                       int holdMs = 0, pid_t* heldPeer = nullptr) {
         PeerReport report{};
         int fds[2] = {-1, -1};
         if (::pipe(fds) != 0) {
@@ -291,8 +290,10 @@ namespace {
             }
             r.started = started == MOBILEGL_OK ? 1 : 0;
             r.serverPid = client.PeerServerPid();
-            if (r.started) body(client, r);
-            else std::snprintf(r.note, sizeof(r.note), "start rc=%d", static_cast<int>(started));
+            if (r.started)
+                body(client, r);
+            else
+                std::snprintf(r.note, sizeof(r.note), "start rc=%d", static_cast<int>(started));
             if (stopCleanly && r.started) client.Stop();
             const ssize_t wrote = ::write(fds[1], &r, sizeof(r));
             (void)wrote;
@@ -350,7 +351,9 @@ namespace {
     // The raw-record peer driver (F2's, generalised)
     // ------------------------------------------------------------------------------------
 
-    constexpr Uint64 Align8(Uint64 value) { return (value + 7u) & ~Uint64(7u); }
+    constexpr Uint64 Align8(Uint64 value) {
+        return (value + 7u) & ~Uint64(7u);
+    }
 
     template <class T>
     std::vector<Uint8> Bytes(const T& value) {
@@ -396,8 +399,7 @@ namespace {
     // overwritten, and one PublishAndNotify makes them visible to the server together - the shape
     // of a peer that batches, which is what DrainRing's pre-pop latch check stops mid-batch.
     // `mutateHeader` applies to the FIRST image's header; `outSeq` is the LAST record's seq.
-    bool PublishImages(Client::ClientSession& client, const std::vector<std::vector<Uint8>>& images,
-                       Uint64* outSeq,
+    bool PublishImages(Client::ClientSession& client, const std::vector<std::vector<Uint8>>& images, Uint64* outSeq,
                        const std::function<void(Transport::RingRecordHeader&)>& mutateHeader = {}) {
         if (outSeq != nullptr) *outSeq = Wire::kInvalidSeq;
         auto* link = client.DataLink();
@@ -416,8 +418,7 @@ namespace {
                 seq = encoder.EncodeRecord(P::MGPWireOp::MemoryBarrier, &barrier, sizeof(barrier));
             } else {
                 const Uint64 base = Align8(sizeof(P::MGPWireRecHeader) + sizeof(P::MGPSamplerStates));
-                if (total < base || (total - base) % 8 != 0 ||
-                    (total - base) / 8 > P::kMGPipeMaxTextureUnits)
+                if (total < base || (total - base) % 8 != 0 || (total - base) / 8 > P::kMGPipeMaxTextureUnits)
                     return false;
                 P::MGPSamplerStates filler{};
                 filler.Start = 0;
@@ -444,14 +445,13 @@ namespace {
         return true;
     }
 
-    bool PublishImage(Client::ClientSession& client, const std::vector<Uint8>& image,
-                      Uint64* outSeq,
+    bool PublishImage(Client::ClientSession& client, const std::vector<Uint8>& image, Uint64* outSeq,
                       const std::function<void(Transport::RingRecordHeader&)>& mutateHeader = {}) {
         return PublishImages(client, {image}, outSeq, mutateHeader);
     }
 
-    bool Forge(Client::ClientSession& client, PeerReport& r, P::MGPWireOp op,
-               const std::vector<Uint8>& payload, const std::vector<std::vector<Uint8>>& tails = {},
+    bool Forge(Client::ClientSession& client, PeerReport& r, P::MGPWireOp op, const std::vector<Uint8>& payload,
+               const std::vector<std::vector<Uint8>>& tails = {},
                const std::function<void(Transport::RingRecordHeader&)>& mutateHeader = {}) {
         Uint64 seq = Wire::kInvalidSeq;
         if (!PublishImage(client, RecordImage(op, payload, tails), &seq, mutateHeader)) {
@@ -468,8 +468,7 @@ namespace {
               const void* tail = nullptr, Uint64 tailBytes = 0) {
         Int32 status = Wire::ReplySink::kStatusError;
         const Uint64 seq = client.EmitAndWait(op, payload, bytes, tail, tailBytes, nullptr, 0, &status);
-        return seq != Wire::kInvalidSeq &&
-               client.WaitForApplied(seq, 5000) == Transport::SessionWait::Reached;
+        return seq != Wire::kInvalidSeq && client.WaitForApplied(seq, 5000) == Transport::SessionWait::Reached;
     }
 
     // A control frame straight onto the control connection - the SurfaceOp rows' carrier.
@@ -479,13 +478,12 @@ namespace {
             builder, /*seq=*/4242, static_cast<::MobileGL::Wire::SurfaceOpKind>(kind), /*display=*/1,
             /*surface=*/1, static_cast<::MobileGL::Wire::WindowKind>(windowKind),
             /*nativeToken=*/0x1234, 16, 16, 0, 1, 1);
-        const auto envelope = ::MobileGL::Wire::CreateCtrlEnvelope(
-            builder, ::MobileGL::Wire::CtrlMsg::SurfaceOp, op.Union());
+        const auto envelope =
+            ::MobileGL::Wire::CreateCtrlEnvelope(builder, ::MobileGL::Wire::CtrlMsg::SurfaceOp, op.Union());
         ::MobileGL::Wire::FinishCtrlEnvelopeBuffer(builder, envelope);
         Transport::ITransport* control = client.Control_Plane();
         if (control == nullptr ||
-            control->SendFrame(MobileGLByteSpan{builder.GetBufferPointer(), builder.GetSize()}) !=
-                MOBILEGL_OK) {
+            control->SendFrame(MobileGLByteSpan{builder.GetBufferPointer(), builder.GetSize()}) != MOBILEGL_OK) {
             Note(r, "the control frame could not be sent");
             return false;
         }
@@ -495,9 +493,15 @@ namespace {
     }
 
     // The client's virtual EGL handles (EGLImpl mints small integers; ServerLoopEglTest's shape).
-    EGLDisplay Dpy() { return reinterpret_cast<EGLDisplay>(static_cast<std::uintptr_t>(0x1)); }
-    EGLSurface Surf() { return reinterpret_cast<EGLSurface>(static_cast<std::uintptr_t>(0x1)); }
-    EGLContext Ctx() { return reinterpret_cast<EGLContext>(static_cast<std::uintptr_t>(0x1)); }
+    EGLDisplay Dpy() {
+        return reinterpret_cast<EGLDisplay>(static_cast<std::uintptr_t>(0x1));
+    }
+    EGLSurface Surf() {
+        return reinterpret_cast<EGLSurface>(static_cast<std::uintptr_t>(0x1));
+    }
+    EGLContext Ctx() {
+        return reinterpret_cast<EGLContext>(static_cast<std::uintptr_t>(0x1));
+    }
 
     bool BringUpEgl(PeerReport& r) {
         EGLint major = -1;
@@ -527,7 +531,8 @@ namespace {
         framebuffer.Width = framebuffer.Height = 8;
         framebuffer.Layers = framebuffer.Samples = 1;
         framebuffer.FixedSampleLocations = 1;
-        for (auto& drawBuffer : framebuffer.DrawBuffers) drawBuffer = -1;
+        for (auto& drawBuffer : framebuffer.DrawBuffers)
+            drawBuffer = -1;
         framebuffer.DrawBuffers[0] = 0;
         framebuffer.ContentHash = 1;
         P::MGPPixelPackState pack{};
@@ -543,7 +548,8 @@ namespace {
         // the bound CSO and nowhere else, so without one a clear writes nothing (the mask is
         // the struct's zero, not RenderState's all-true constructor).
         MobileGL::RenderStateParameters params{};
-        for (auto& mask : params.ColorMasks) mask = MobileGL::BoolVec4(true, true, true, true);
+        for (auto& mask : params.ColorMasks)
+            mask = MobileGL::BoolVec4(true, true, true, true);
         std::vector<Uint8> pipelineBytes(P::kMGPipePipelineChunkBytes, 0);
         P::MGPipeGatherPipelineBytes(params, pipelineBytes.data());
         P::MGPRenderStateDesc cso{};
@@ -583,8 +589,8 @@ namespace {
         Uint8 texel[4] = {};
         Int32 status = Wire::ReplySink::kStatusError;
         Uint64 replySize = 0;
-        const Uint64 seq = client.EmitAndWait(P::MGPWireOp::ReadPixels, &read, sizeof(read), nullptr,
-                                              0, texel, sizeof(texel), &status, &replySize);
+        const Uint64 seq = client.EmitAndWait(P::MGPWireOp::ReadPixels, &read, sizeof(read), nullptr, 0, texel,
+                                              sizeof(texel), &status, &replySize);
         r.status = status;
         if (seq == Wire::kInvalidSeq || replySize != sizeof(texel)) return Note(r, "no read-back");
         std::memcpy(&r.pixel, texel, sizeof(r.pixel));
@@ -601,9 +607,9 @@ namespace {
     };
 
     struct Row {
-        const char* name;   // gtest parameter name
-        const char* file;   // the source file of the site (scripts/ci/ph_latch_sites.py reads it)
-        const char* site;   // the quoted word inside the site's Fatal{Family, "word"} marker
+        const char* name; // gtest parameter name
+        const char* file; // the source file of the site (scripts/ci/ph_latch_sites.py reads it)
+        const char* site; // the quoted word inside the site's Fatal{Family, "word"} marker
         Outcome outcome;
         const char* marker; // must be the first `Fatal{` line of the server log (Latched/Fatal)
         bool needsEgl;      // the forging session needs a current context first
@@ -672,8 +678,8 @@ namespace {
         desc.Samples = samples;
         desc.Immutable = immutable;
         Int32 status = Wire::ReplySink::kStatusError;
-        const Uint64 seq = client.EmitAndWait(P::MGPWireOp::ResourceCreate, &desc, sizeof(desc), nullptr, 0,
-                                              nullptr, 0, &status);
+        const Uint64 seq =
+            client.EmitAndWait(P::MGPWireOp::ResourceCreate, &desc, sizeof(desc), nullptr, 0, nullptr, 0, &status);
         return seq != Wire::kInvalidSeq && status == Wire::ReplySink::kStatusOk &&
                client.WaitForApplied(seq, 5000) == Transport::SessionWait::Reached;
     }
@@ -697,15 +703,14 @@ namespace {
                                        static_cast<Uint32>(MobileGL::TextureUploadTarget::Texture2D)),
             0, 4, 4, 1);
         Int32 status = Wire::ReplySink::kStatusError;
-        const Uint64 seq = client.EmitAndWait(P::MGPWireOp::ResourceRespecify, &desc, sizeof(desc), nullptr,
-                                              0, nullptr, 0, &status);
+        const Uint64 seq =
+            client.EmitAndWait(P::MGPWireOp::ResourceRespecify, &desc, sizeof(desc), nullptr, 0, nullptr, 0, &status);
         return seq != Wire::kInvalidSeq && status == Wire::ReplySink::kStatusOk &&
                client.WaitForApplied(seq, 5000) == Transport::SessionWait::Reached;
     }
 
-    P::MGPSubData TextureUpload(Client::ClientSession& client, P::MGPipeHandle handle,
-                                P::MGPipeResourceTarget target, MobileGL::TextureUploadTarget upload,
-                                Uint64 bytes) {
+    P::MGPSubData TextureUpload(Client::ClientSession& client, P::MGPipeHandle handle, P::MGPipeResourceTarget target,
+                                MobileGL::TextureUploadTarget upload, Uint64 bytes) {
         P::MGPSubData rec{};
         rec.Res = handle;
         rec.Target = P::MGPipePackSubDataTarget(static_cast<Uint32>(target), static_cast<Uint32>(upload));
@@ -726,7 +731,8 @@ namespace {
         state.Complete = 1;
         state.Width = state.Height = state.Layers = state.Samples = 1;
         state.FixedSampleLocations = 1;
-        for (auto& drawBuffer : state.DrawBuffers) drawBuffer = -1;
+        for (auto& drawBuffer : state.DrawBuffers)
+            drawBuffer = -1;
         state.DrawBuffers[0] = 0;
         state.Color[0].Res = texture;
         state.Color[0].InternalFormat = static_cast<Uint32>(MobileGL::TextureInternalFormat::RGBA8);
@@ -1512,8 +1518,10 @@ namespace {
         switch (outcome) {
         case Outcome::Latched:
             return "exit=" + std::to_string(kSessionLatchedExitCode) + " (latched fault)";
-        case Outcome::Fatal: return "signal=6";
-        case Outcome::Refused: return "exit=0 ";
+        case Outcome::Fatal:
+            return "signal=6";
+        case Outcome::Refused:
+            return "exit=0 ";
         }
         return "?";
     }
@@ -1522,8 +1530,8 @@ namespace {
 
     // The two-session walk every row and the PH-1 (4) headline share. `forgeName` labels the
     // assertions.
-    void RunRowAgainst(Supervisor& sup, const char* forgeName, Outcome outcome, const char* marker,
-                       bool needsEgl, bool (*forge)(Client::ClientSession&, PeerReport&)) {
+    void RunRowAgainst(Supervisor& sup, const char* forgeName, Outcome outcome, const char* marker, bool needsEgl,
+                       bool (*forge)(Client::ClientSession&, PeerReport&)) {
         // ---- session A: the forged bytes
         const PeerReport a = RunPeer(
             sup,
@@ -1534,8 +1542,10 @@ namespace {
             /*stopCleanly=*/outcome == Outcome::Refused);
         ASSERT_EQ(a.started, 1) << forgeName << ": session A never got Welcome (" << a.note << ")";
         if (needsEgl && a.egl == 0) {
-            GTEST_SKIP() << forgeName << ": the row needs a current context and this host has no "
-                                         "headless EGL (" << a.note << ")";
+            GTEST_SKIP() << forgeName
+                         << ": the row needs a current context and this host has no "
+                            "headless EGL ("
+                         << a.note << ")";
         }
         ASSERT_EQ(a.forged, 1) << forgeName << ": the peer could not publish its bytes (" << a.note << ")";
         ASSERT_GT(a.serverPid, 0u);
@@ -1593,8 +1603,10 @@ namespace {
         // vendor library on an Ubuntu runner; a runner without it shows these rows as Skipped and
         // PresentFrameSerialZero (which needs a context to reach its site) as skipped outright.
         if (b.egl == 0) {
-            GTEST_SKIP() << forgeName << ": latch and next-session Welcome proven; the render half "
-                                         "needs headless EGL, absent here (" << b.note << ")";
+            GTEST_SKIP() << forgeName
+                         << ": latch and next-session Welcome proven; the render half "
+                            "needs headless EGL, absent here ("
+                         << b.note << ")";
         }
         EXPECT_EQ(b.status, Wire::ReplySink::kStatusOk) << forgeName << ": " << b.note;
         EXPECT_EQ(b.pixel, 0xFF00FF00u) << forgeName << ": the next session's clear did not read back green";
@@ -1629,15 +1641,15 @@ namespace {
 TEST(PeerLatchTest, AMalformedRecordLatchesTheSessionAndTheNextUnixConnectionGetsWelcomeAndRenders) {
     Supervisor sup;
     ASSERT_TRUE(Launch("headline-unix", /*tcp=*/false, &sup));
-    RunRowAgainst(sup, "headline-unix", Outcome::Latched, "Fatal{ProtocolCorruption, \"opcode\"} got=65535",
-                  false, &ForgeUnknownOpcode);
+    RunRowAgainst(sup, "headline-unix", Outcome::Latched, "Fatal{ProtocolCorruption, \"opcode\"} got=65535", false,
+                  &ForgeUnknownOpcode);
 }
 
 TEST(PeerLatchTest, AMalformedRecordLatchesTheSessionAndTheNextTcpConnectionGetsWelcomeAndRenders) {
     Supervisor sup;
     ASSERT_TRUE(Launch("headline-tcp", /*tcp=*/true, &sup));
-    RunRowAgainst(sup, "headline-tcp", Outcome::Latched, "Fatal{ProtocolCorruption, \"opcode\"} got=65535",
-                  false, &ForgeUnknownOpcode);
+    RunRowAgainst(sup, "headline-tcp", Outcome::Latched, "Fatal{ProtocolCorruption, \"opcode\"} got=65535", false,
+                  &ForgeUnknownOpcode);
 }
 
 // A malformed CONTROL frame over TCP: the SurfaceOp arm latches on the main thread (RunSession's
@@ -1731,8 +1743,7 @@ namespace {
             << sup.Log();
         EXPECT_TRUE(peerStillConnected)
             << label << ": the session ended only once the peer had gone, which says nothing about the latch";
-        EXPECT_NE(reap.find("exit=" + std::to_string(kSessionLatchedExitCode) + " (latched fault)"),
-                  std::string::npos)
+        EXPECT_NE(reap.find("exit=" + std::to_string(kSessionLatchedExitCode) + " (latched fault)"), std::string::npos)
             << label << ": `" << reap << "`";
         ExpectARenderingNextSession(sup, label, a.serverPid);
     }
@@ -1748,9 +1759,11 @@ TEST(PeerLatchTest, ALatchedRecordIsTheLastRecordItsBatchApplies) {
                   &ForgeTwoFaultsInOneBatch);
     const std::string log = sup.Log();
     EXPECT_EQ(log.find("\"ObjectDeath.Handle\""), std::string::npos)
-        << "the record published behind the latched one was applied after the latch:\n" << log;
+        << "the record published behind the latched one was applied after the latch:\n"
+        << log;
     EXPECT_NE(log.find("session closed on a latched fault (ProtocolCorruption; 1 named fault(s)"), std::string::npos)
-        << "the session did not close on exactly one latched fault:\n" << log;
+        << "the session did not close on exactly one latched fault:\n"
+        << log;
 }
 
 // RunSession's sliced control wait: a latch raised on the APPLY thread while the peer sits connected

@@ -111,8 +111,7 @@ void main() {
 
                 // A solid red 2x2 texture, so the sampled colour is the same wherever the
                 // (deliberately degenerate) coordinates land.
-                const unsigned char red[] = {255, 0, 0, 255, 255, 0, 0, 255,
-                                             255, 0, 0, 255, 255, 0, 0, 255};
+                const unsigned char red[] = {255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255};
                 glGenTextures(1, &m_texture);
                 glActiveTexture(GL_TEXTURE0);
                 glBindTexture(GL_TEXTURE_2D, m_texture);
@@ -186,10 +185,10 @@ void main() {
             const Image second = DrawOnce();
             EXPECT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << "the second draw errored";
 
-            EXPECT_TRUE(RegionIsMostly(second, 2, second.Width() - 3, 2, second.Height() - 3, "red", 0.0,
-                                       "second draw"));
-            EXPECT_TRUE(second == first) << "the second draw differs from the first in "
-                                         << second.ByteDiffCount(first) << " bytes - the pipeline the second "
+            EXPECT_TRUE(
+                RegionIsMostly(second, 2, second.Width() - 3, 2, second.Height() - 3, "red", 0.0, "second draw"));
+            EXPECT_TRUE(second == first) << "the second draw differs from the first in " << second.ByteDiffCount(first)
+                                         << " bytes - the pipeline the second "
                                             "draw resolved is not the one the first draw used";
         }
 

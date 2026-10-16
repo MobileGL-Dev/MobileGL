@@ -145,7 +145,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // context never answers GL_NO_ERROR, and the build runs on the thread that would
         // then spin forever.
         constexpr Int kMaxDrainedProgramErrors = 32;
-        TwinRegistry<MG_State::GLState::ProgramObject, BackendProgramObjectImpl, MG_Pipe::MGPipeKind::ShaderCso> g_backendProgramObjects;
+        TwinRegistry<MG_State::GLState::ProgramObject, BackendProgramObjectImpl, MG_Pipe::MGPipeKind::ShaderCso>
+            g_backendProgramObjects;
 
         // ---- P5e (pg): the source, both ways round ---------------------------------------
 
@@ -245,9 +246,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 if (SamplerUnitOverlay == nullptr) return -1;
                 const auto it = std::lower_bound(
                     SamplerUnitOverlay->begin(), SamplerUnitOverlay->end(), location,
-                    [](const MG_Pipe::MGPProgramSamplerUnit& entry, Uint value) {
-                        return entry.Location < value;
-                    });
+                    [](const MG_Pipe::MGPProgramSamplerUnit& entry, Uint value) { return entry.Location < value; });
                 if (it == SamplerUnitOverlay->end() || it->Location != location) return -1;
                 return static_cast<Int>(it->Unit);
             }
@@ -255,8 +254,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return Link->uniformSamplerOrImageUnitIndex[location];
         }
 
-        ProgramArchiveSource ProgramArchiveSource::FromRecord(
-            MG_Pipe::MGPipeHandle cso, const MG_Pipe::MGPipeShaderCsoRecord& record) {
+        ProgramArchiveSource ProgramArchiveSource::FromRecord(MG_Pipe::MGPipeHandle cso,
+                                                              const MG_Pipe::MGPipeShaderCsoRecord& record) {
             // THE HANDLE ARM. Every field below is server-owned: the archive the create adopted,
             // the descriptor the create stored, and the three tails set_program_bindings
             // carried. Nothing here touches a ProgramObject, which is the property the strict
@@ -312,9 +311,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (record.BindingsSerial != 0) {
                 // The tail is the whole set; a block past it is a record and an archive that
                 // disagree about the block count, and GL's own default of 0 is the safe answer.
-                return index < record.BlockBindings.size()
-                           ? static_cast<Uint>(record.BlockBindings[index])
-                           : 0;
+                return index < record.BlockBindings.size() ? static_cast<Uint>(record.BlockBindings[index]) : 0;
             }
             if (!record.Archive || index >= record.Archive->Link.uniformBlockBinding.size()) return 0;
             return static_cast<Uint>(record.Archive->Link.uniformBlockBinding[index]);
@@ -324,14 +321,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (record.BindingsSerial != 0) {
                 const auto it = std::lower_bound(
                     record.SamplerUnits.begin(), record.SamplerUnits.end(), location,
-                    [](const MG_Pipe::MGPProgramSamplerUnit& entry, Uint value) {
-                        return entry.Location < value;
-                    });
+                    [](const MG_Pipe::MGPProgramSamplerUnit& entry, Uint value) { return entry.Location < value; });
                 if (it == record.SamplerUnits.end() || it->Location != location) return -1;
                 return static_cast<Int>(it->Unit);
             }
-            if (!record.Archive ||
-                location >= record.Archive->Link.uniformSamplerOrImageUnitIndex.size()) {
+            if (!record.Archive || location >= record.Archive->Link.uniformSamplerOrImageUnitIndex.size()) {
                 return -1;
             }
             return record.Archive->Link.uniformSamplerOrImageUnitIndex[location];
@@ -406,8 +400,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return true;
         }
 
-        void ReseedShaderStorageBlockBindings(Uint backendProgramId,
-                                              const ProgramBuildSource& src) {
+        void ReseedShaderStorageBlockBindings(Uint backendProgramId, const ProgramBuildSource& src) {
             const auto& overrides = src.GetShaderStorageBlockBindingOverrides();
             if (overrides.empty()) return; // the overwhelming majority of programs
             for (const auto& [blockName, binding] : overrides) {
@@ -499,13 +492,20 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // build whose MOBILEGL_LOG_ACTIVE_LEVEL is above ERROR.
             [[maybe_unused]] Int AdvertisedStageImageUniformLimit(ShaderStage stage) {
                 switch (stage) {
-                case ShaderStage::Vertex: return g_GLESCapabilities.MaxVertexImageUniforms;
-                case ShaderStage::TessControl: return g_GLESCapabilities.MaxTessControlImageUniforms;
-                case ShaderStage::TessEval: return g_GLESCapabilities.MaxTessEvaluationImageUniforms;
-                case ShaderStage::Geometry: return g_GLESCapabilities.MaxGeometryImageUniforms;
-                case ShaderStage::Fragment: return g_GLESCapabilities.MaxFragmentImageUniforms;
-                case ShaderStage::Compute: return g_GLESCapabilities.MaxComputeImageUniforms;
-                default: return -1;
+                case ShaderStage::Vertex:
+                    return g_GLESCapabilities.MaxVertexImageUniforms;
+                case ShaderStage::TessControl:
+                    return g_GLESCapabilities.MaxTessControlImageUniforms;
+                case ShaderStage::TessEval:
+                    return g_GLESCapabilities.MaxTessEvaluationImageUniforms;
+                case ShaderStage::Geometry:
+                    return g_GLESCapabilities.MaxGeometryImageUniforms;
+                case ShaderStage::Fragment:
+                    return g_GLESCapabilities.MaxFragmentImageUniforms;
+                case ShaderStage::Compute:
+                    return g_GLESCapabilities.MaxComputeImageUniforms;
+                default:
+                    return -1;
                 }
             }
 
@@ -548,41 +548,67 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // one. That is exactly what r11f_g11f_b10f did until it was added here.
             Uint GLInternalFormatOfLayoutFormat(glslang::TLayoutFormat format) {
                 switch (format) {
-                case glslang::ElfRg32f: return 0x8230;    // GL_RG32F
-                case glslang::ElfRg16f: return 0x822F;    // GL_RG16F
-                case glslang::ElfR16f: return 0x822D;     // GL_R16F
-                case glslang::ElfRg8: return 0x822B;      // GL_RG8
-                case glslang::ElfR8: return 0x8229;       // GL_R8
-                case glslang::ElfRg8Snorm: return 0x8F95; // GL_RG8_SNORM
-                case glslang::ElfR8Snorm: return 0x8F94;  // GL_R8_SNORM
-                case glslang::ElfRg32i: return 0x823B;    // GL_RG32I
-                case glslang::ElfRg16i: return 0x8239;    // GL_RG16I
-                case glslang::ElfR16i: return 0x8233;     // GL_R16I
-                case glslang::ElfRg8i: return 0x8237;     // GL_RG8I
-                case glslang::ElfR8i: return 0x8231;      // GL_R8I
-                case glslang::ElfRg32ui: return 0x823C;   // GL_RG32UI
-                case glslang::ElfRg16ui: return 0x823A;   // GL_RG16UI
-                case glslang::ElfR16ui: return 0x8234;    // GL_R16UI
-                case glslang::ElfRg8ui: return 0x8238;    // GL_RG8UI
-                case glslang::ElfR8ui: return 0x8232;     // GL_R8UI
+                case glslang::ElfRg32f:
+                    return 0x8230; // GL_RG32F
+                case glslang::ElfRg16f:
+                    return 0x822F; // GL_RG16F
+                case glslang::ElfR16f:
+                    return 0x822D; // GL_R16F
+                case glslang::ElfRg8:
+                    return 0x822B; // GL_RG8
+                case glslang::ElfR8:
+                    return 0x8229; // GL_R8
+                case glslang::ElfRg8Snorm:
+                    return 0x8F95; // GL_RG8_SNORM
+                case glslang::ElfR8Snorm:
+                    return 0x8F94; // GL_R8_SNORM
+                case glslang::ElfRg32i:
+                    return 0x823B; // GL_RG32I
+                case glslang::ElfRg16i:
+                    return 0x8239; // GL_RG16I
+                case glslang::ElfR16i:
+                    return 0x8233; // GL_R16I
+                case glslang::ElfRg8i:
+                    return 0x8237; // GL_RG8I
+                case glslang::ElfR8i:
+                    return 0x8231; // GL_R8I
+                case glslang::ElfRg32ui:
+                    return 0x823C; // GL_RG32UI
+                case glslang::ElfRg16ui:
+                    return 0x823A; // GL_RG16UI
+                case glslang::ElfR16ui:
+                    return 0x8234; // GL_R16UI
+                case glslang::ElfRg8ui:
+                    return 0x8238; // GL_RG8UI
+                case glslang::ElfR8ui:
+                    return 0x8232; // GL_R8UI
                 // Not a channel widening but a lossless re-encoding into rgba16f - the one entry
                 // here whose carrier has a different per-channel layout. See
                 // WidenImageFormatsPass.h.
-                case glslang::ElfR11fG11fB10f: return 0x8C3A; // GL_R11F_G11F_B10F
+                case glslang::ElfR11fG11fB10f:
+                    return 0x8C3A; // GL_R11F_G11F_B10F
                 // 10/10/10/2 unsigned INTEGER channels in an rgba16ui: same component type, same
                 // channel count, every value representable. Only the transfer is re-encoded.
-                case glslang::ElfRgb10a2ui: return 0x906F; // GL_RGB10_A2UI
+                case glslang::ElfRgb10a2ui:
+                    return 0x906F; // GL_RGB10_A2UI
                 // The seven NORMALIZED formats, carried in an rgba16ui as their own channel CODES.
                 // These are the entries whose carrier changes the shader-visible type as well as
                 // the qualifier (image2D becomes uimage2D), so every access through them is
                 // wrapped in the GL 4.6 2.3.5 conversion - see WidenImageFormatsPass.h.
-                case glslang::ElfRgba16: return 0x805B;      // GL_RGBA16
-                case glslang::ElfRg16: return 0x822C;        // GL_RG16
-                case glslang::ElfR16: return 0x822A;         // GL_R16
-                case glslang::ElfRgb10A2: return 0x8059;     // GL_RGB10_A2
-                case glslang::ElfRgba16Snorm: return 0x8F9B; // GL_RGBA16_SNORM
-                case glslang::ElfRg16Snorm: return 0x8F99;   // GL_RG16_SNORM
-                case glslang::ElfR16Snorm: return 0x8F98;    // GL_R16_SNORM
+                case glslang::ElfRgba16:
+                    return 0x805B; // GL_RGBA16
+                case glslang::ElfRg16:
+                    return 0x822C; // GL_RG16
+                case glslang::ElfR16:
+                    return 0x822A; // GL_R16
+                case glslang::ElfRgb10A2:
+                    return 0x8059; // GL_RGB10_A2
+                case glslang::ElfRgba16Snorm:
+                    return 0x8F9B; // GL_RGBA16_SNORM
+                case glslang::ElfRg16Snorm:
+                    return 0x8F99; // GL_RG16_SNORM
+                case glslang::ElfR16Snorm:
+                    return 0x8F98; // GL_R16_SNORM
                 default:
                     return 0;
                 }
@@ -604,8 +630,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     return false;
                 }
                 return !g_GLESCapabilities.SupportsExtendedImageFormats ||
-                       !MG_Util::ShaderTranspiler::ShaderCompiler::SpirvCrossCanPrintEsslImageFormat(
-                           glInternalFormat);
+                       !MG_Util::ShaderTranspiler::ShaderCompiler::SpirvCrossCanPrintEsslImageFormat(glInternalFormat);
             }
         } // namespace
 
@@ -655,8 +680,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                 // From the OWNED TypeFacts, not from a live TType: the reflection
                                 // snapshot already carries the declared layout format, and there
                                 // is no glslang object to ask on a translation-cache L1 hit.
-                                recordUnspellableFormat(
-                                    name, glslang::TQualifier::getLayoutFormatString(declaredFormat));
+                                recordUnspellableFormat(name,
+                                                        glslang::TQualifier::getLayoutFormatString(declaredFormat));
                             }
                         }
                     }
@@ -796,9 +821,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
                 ImageArrayUnitPlan plan;
                 plan.name = baseName;
-                for (Uint element = loc; element <= maxUniformLoc &&
-                                         src.UniformLocationsAliasSameUniform(
-                                             static_cast<Int>(loc), static_cast<Int>(element));
+                for (Uint element = loc;
+                     element <= maxUniformLoc &&
+                     src.UniformLocationsAliasSameUniform(static_cast<Int>(loc), static_cast<Int>(element));
                      ++element) {
                     plan.units.push_back(src.GetUniformSamplerOrImageUnitIndex(element));
                 }
@@ -833,7 +858,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return ComputeImageUnitFormatSignature() == m_imageUnitFormatSignature;
         }
 
-
         // ===== THE MEMOIZED SEGMENT (shader translation memo, level 2) =====
         //
         // One stage's sanitized SPIR-V turned into the ESSL SPIRV-Cross emits, through the
@@ -862,9 +886,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             const Vector<unsigned int>& spirvCode, const GLenum glShaderType,
             const std::set<String>& xfbCaptureBlockNames, const ImageFormatBakeInputs& imageFormatBake,
             const UnorderedMap<String, Int>& storageBlockBindingOverrides,
-            const std::map<String, String>& inputBlockRenames,
-            const std::map<String, String>& outputBlockRenames, const Bool stripInputBlockLocations,
-            const Bool stripOutputBlockLocations,
+            const std::map<String, String>& inputBlockRenames, const std::map<String, String>& outputBlockRenames,
+            const Bool stripInputBlockLocations, const Bool stripOutputBlockLocations,
             const Int atomicCounterEsslBindingTop, const Bool enableSpirvValidation, String& outSource,
             std::set<String>& outFlattenedXfbBlockNames, Vector<Int>& outAtomicCounterGlBindings,
             String& outError) const {
@@ -873,7 +896,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Vector<unsigned int> loweredSpirv;
             const Vector<unsigned int>* effectiveSpirv = &spirvCode;
             if (glShaderType == GL_VERTEX_SHADER &&
-                MG_Util::ShaderTranspiler::ShaderCompiler::LowerDrawParametersForEssl(spirvCode, loweredSpirv, enableSpirvValidation) &&
+                MG_Util::ShaderTranspiler::ShaderCompiler::LowerDrawParametersForEssl(spirvCode, loweredSpirv,
+                                                                                      enableSpirvValidation) &&
                 !loweredSpirv.empty()) {
                 effectiveSpirv = &loweredSpirv;
             }
@@ -947,8 +971,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // this is backend code and must not reach into the GL frontend. 4 is that
             // translation unit's kFrontendMaxSamples, which is the source of truth -
             // keep the two in step.
-            const Int advertisedMaxSamples =
-                std::max(g_GLESCapabilities.MaxSamples, kFrontendMaxSamples);
+            const Int advertisedMaxSamples = std::max(g_GLESCapabilities.MaxSamples, kFrontendMaxSamples);
             // Armed by the EMULATION as well as by the missing extension, and the emulation is on
             // by default (MOBILEGL_ESPRYT_FORCE_VIEWPORT_ARRAY_EMULATION). Having the extension is not a
             // reason to keep the builtin: it only ever gave the SHADER a compilable name, while
@@ -969,10 +992,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
             const Bool viewportLoweringArmed =
                 stageCanWriteViewportIndex &&
                 (ViewportArrayEmulationEnabled() || !g_GLESCapabilities.SupportsViewportArray);
-            const Bool sampleClampArmed =
-                g_GLESCapabilities.MaxColorTextureSamples < advertisedMaxSamples ||
-                g_GLESCapabilities.MaxIntegerSamples < advertisedMaxSamples ||
-                g_GLESCapabilities.MaxDepthTextureSamples < advertisedMaxSamples;
+            const Bool sampleClampArmed = g_GLESCapabilities.MaxColorTextureSamples < advertisedMaxSamples ||
+                                          g_GLESCapabilities.MaxIntegerSamples < advertisedMaxSamples ||
+                                          g_GLESCapabilities.MaxDepthTextureSamples < advertisedMaxSamples;
             // The image-format widening is armed on EVERY driver, so its probe has to ride the
             // shared parse rather than add one: it is asked of every stage of every program, and
             // a BuildModule per stage per gate is exactly what cost compile-heavy CTS cases ~10%
@@ -982,8 +1004,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             const Bool widenOnlyUnprintableImageFormats = g_GLESCapabilities.SupportsExtendedImageFormats;
             MG_Util::ShaderTranspiler::ShaderCompiler::SpirvGateFeatures spirvGates;
             if (viewportLoweringArmed || sampleClampArmed) {
-                spirvGates = MG_Util::ShaderTranspiler::ShaderCompiler::ProbeSpirvGateFeatures(
-                    *effectiveSpirv);
+                spirvGates = MG_Util::ShaderTranspiler::ShaderCompiler::ProbeSpirvGateFeatures(*effectiveSpirv);
             }
 
             Vector<unsigned int> loweredViewportSpirv;
@@ -994,11 +1015,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 effectiveSpirv = &loweredViewportSpirv;
                 MGLOG_D("Program %u stage %s writes gl_ViewportIndex, which ESSL has no core "
                         "spelling for. The builtin was demoted to a plain global; %s.",
-                        m_backendProgramId,
-                        MG_Util::ConvertGLEnumToString(glShaderType).c_str(),
-                        ViewportArrayEmulationEnabled()
-                            ? "the ESSL passes below promote it to a routing varying"
-                            : "every invocation renders into viewport 0");
+                        m_backendProgramId, MG_Util::ConvertGLEnumToString(glShaderType).c_str(),
+                        ViewportArrayEmulationEnabled() ? "the ESSL passes below promote it to a routing varying"
+                                                        : "every invocation renders into viewport 0");
             }
 
             // GL 4.6 core table 23.53 requires GL_MAX_SAMPLES >= 4, so every multisample
@@ -1017,11 +1036,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Vector<unsigned int> clampedSampleSpirv;
             if (sampleClampArmed && spirvGates.DeclaresMultisampledImage &&
                 MG_Util::ShaderTranspiler::ShaderCompiler::ClampMultisampleFetchesForEssl(
-                    *effectiveSpirv, clampedSampleSpirv,
-                    g_GLESCapabilities.MaxColorTextureSamples,
-                    g_GLESCapabilities.MaxIntegerSamples,
-                    g_GLESCapabilities.MaxDepthTextureSamples, advertisedMaxSamples,
-                    enableSpirvValidation, ClampsUnsignedMultisampleFetchesAtRuntime()) &&
+                    *effectiveSpirv, clampedSampleSpirv, g_GLESCapabilities.MaxColorTextureSamples,
+                    g_GLESCapabilities.MaxIntegerSamples, g_GLESCapabilities.MaxDepthTextureSamples,
+                    advertisedMaxSamples, enableSpirvValidation, ClampsUnsignedMultisampleFetchesAtRuntime()) &&
                 !clampedSampleSpirv.empty()) {
                 effectiveSpirv = &clampedSampleSpirv;
             }
@@ -1090,8 +1107,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (!inputBlockRenames.empty() || !outputBlockRenames.empty()) {
                 std::set<String> stageRenamedIoBlockNames;
                 if (MG_Util::ShaderTranspiler::ShaderCompiler::UniquifyIoBlockNamesForEssl(
-                        *effectiveSpirv, inputBlockRenames, outputBlockRenames,
-                        stageRenamedIoBlockNames, uniquifiedIoBlockSpirv, enableSpirvValidation) &&
+                        *effectiveSpirv, inputBlockRenames, outputBlockRenames, stageRenamedIoBlockNames,
+                        uniquifiedIoBlockSpirv, enableSpirvValidation) &&
                     !uniquifiedIoBlockSpirv.empty() && !stageRenamedIoBlockNames.empty()) {
                     effectiveSpirv = &uniquifiedIoBlockSpirv;
                     MGLOG_D("Program %u stage %s: %zu inter-stage interface block(s) renamed per "
@@ -1136,7 +1153,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // divides the coordinate of every normalized-coordinate lookup by the texture
             // size, which is the whole of the difference between the two.
             Vector<unsigned int> rectLoweredSpirv;
-            if (MG_Util::ShaderTranspiler::ShaderCompiler::LowerRectImages(*effectiveSpirv, rectLoweredSpirv, enableSpirvValidation) &&
+            if (MG_Util::ShaderTranspiler::ShaderCompiler::LowerRectImages(*effectiveSpirv, rectLoweredSpirv,
+                                                                           enableSpirvValidation) &&
                 !rectLoweredSpirv.empty()) {
                 effectiveSpirv = &rectLoweredSpirv;
             }
@@ -1149,8 +1167,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // program with it. The pass does the conversion properly - type to 2D array,
             // coordinate to (u, 0, layer) - before SPIRV-Cross can apply its own.
             Vector<unsigned int> arrayImageSpirv;
-            if (MG_Util::ShaderTranspiler::ShaderCompiler::Lower1DArrayImagesForEssl(*effectiveSpirv,
-                                                                                      arrayImageSpirv, enableSpirvValidation) &&
+            if (MG_Util::ShaderTranspiler::ShaderCompiler::Lower1DArrayImagesForEssl(*effectiveSpirv, arrayImageSpirv,
+                                                                                     enableSpirvValidation) &&
                 !arrayImageSpirv.empty()) {
                 effectiveSpirv = &arrayImageSpirv;
             }
@@ -1170,8 +1188,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // on the module's own content (BinaryHasOffsetOrGrad1DSampledImage). The module is
             // already the largest thing in the L2 key, so it is covered completely.
             Vector<unsigned int> sampled1DSpirv;
-            if (MG_Util::ShaderTranspiler::ShaderCompiler::Lower1DSampledImagesForEssl(
-                    *effectiveSpirv, sampled1DSpirv, enableSpirvValidation) &&
+            if (MG_Util::ShaderTranspiler::ShaderCompiler::Lower1DSampledImagesForEssl(*effectiveSpirv, sampled1DSpirv,
+                                                                                       enableSpirvValidation) &&
                 !sampled1DSpirv.empty()) {
                 effectiveSpirv = &sampled1DSpirv;
             }
@@ -1190,8 +1208,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (!imageFormatBake.glFormatByUniformName.empty() &&
                 MG_Util::ShaderTranspiler::ShaderCompiler::DeclaresFormatlessStorageImage(*effectiveSpirv) &&
                 MG_Util::ShaderTranspiler::ShaderCompiler::BakeImageFormatsForEssl(
-                    *effectiveSpirv, imageFormatBake.glFormatByUniformName, imageFormatSpirv,
-                    enableSpirvValidation) &&
+                    *effectiveSpirv, imageFormatBake.glFormatByUniformName, imageFormatSpirv, enableSpirvValidation) &&
                 !imageFormatSpirv.empty()) {
                 effectiveSpirv = &imageFormatSpirv;
             }
@@ -1332,8 +1349,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (stripInputBlockLocations || stripOutputBlockLocations) {
                 Bool strippedAny = false;
                 if (MG_Util::ShaderTranspiler::ShaderCompiler::StripIoBlockLocationsForEssl(
-                        *effectiveSpirv, stripInputBlockLocations, stripOutputBlockLocations,
-                        strippedAny, strippedIoBlockLocationSpirv, enableSpirvValidation) &&
+                        *effectiveSpirv, stripInputBlockLocations, stripOutputBlockLocations, strippedAny,
+                        strippedIoBlockLocationSpirv, enableSpirvValidation) &&
                     !strippedIoBlockLocationSpirv.empty() && strippedAny) {
                     effectiveSpirv = &strippedIoBlockLocationSpirv;
                     // THE ARMING SIGNAL, and it is INFO on purpose: the per-stage line below is
@@ -1356,13 +1373,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
 
             MG_Util::ShaderTranspiler::SpvcSession spvcSession(*effectiveSpirv,
-                MG_Util::ShaderTranspiler::SessionUsageBit::Transpile);
+                                                               MG_Util::ShaderTranspiler::SessionUsageBit::Transpile);
 
             spvc_compiler_options options;
             spvcSession.CreateOptions(&options);
 
-            spvc_compiler_options_set_uint(options, SPVC_COMPILER_OPTION_GLSL_VERSION,
-                                           ResolveBackendEsslVersion());
+            spvc_compiler_options_set_uint(options, SPVC_COMPILER_OPTION_GLSL_VERSION, ResolveBackendEsslVersion());
             spvc_compiler_options_set_bool(options, SPVC_COMPILER_OPTION_GLSL_ES, SPVC_TRUE);
             spvc_compiler_options_set_bool(options, SPVC_COMPILER_OPTION_GLSL_VULKAN_SEMANTICS, SPVC_FALSE);
 
@@ -1391,8 +1407,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // payload. A hit that replayed only the text would leave the bindings empty and
             // every counter buffer unbound - the same class of silent loss the flattened XFB
             // block names would have been.
-            spvcSession.SetAtomicCounterBlockBindings(atomicCounterEsslBindingTop,
-                                                      outAtomicCounterGlBindings);
+            spvcSession.SetAtomicCounterBlockBindings(atomicCounterEsslBindingTop, outAtomicCounterGlBindings);
 
             // `layout(index = 0)` is the GL default spelled out loud, and GLSL ES has no such
             // qualifier in core - a stage that prints it is refused with "index layout
@@ -1464,9 +1479,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // patch size - so a program built for one value is stale for another. Recorded here
             // and compared on the draw path (SyncCurrentProgram), the same shape as the
             // storage-block and image-format signatures next to it.
-            const Uint patchVertices = MG_Pipe::gPipeInputs->IsLive()
-                                           ? MG_Pipe::gPipeInputs->GetPatchVertices()
-                                           : 3u;
+            const Uint patchVertices = MG_Pipe::gPipeInputs->IsLive() ? MG_Pipe::gPipeInputs->GetPatchVertices() : 3u;
             m_passthroughTessControlPatchVertices = static_cast<Int>(patchVertices);
             // PATCH_DEFAULT_{OUTER,INNER}_LEVEL are the same kind of dynamic state and are baked
             // into the same stage (ES has no such state and no entry point to forward them to), so
@@ -1479,8 +1492,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                                      ? MG_Pipe::gPipeInputs->GetPatchDefaultInnerLevel()
                                                      : FloatVec2(1.0f, 1.0f);
 
-            if (tessEvalShaderIndex < 0 ||
-                static_cast<SizeT>(tessEvalShaderIndex) >= shaderSpirvs.size()) {
+            if (tessEvalShaderIndex < 0 || static_cast<SizeT>(tessEvalShaderIndex) >= shaderSpirvs.size()) {
                 MGLOG_E("Program %u has a tessellation evaluation stage with no control stage, but no "
                         "SPIR-V for it; the pass-through control stage GL describes cannot be checked, so "
                         "the program is left to fail its ES link.",
@@ -1513,15 +1525,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // stage's IN block (that is what is expected). A neighbour that redeclared nothing
             // yields an empty list, which leaves the driver's own built-in declaration in place -
             // which is exactly what matching it requires.
-            const String inMembers =
-                ExtractPerVertexBlockMembers(vertexStageEssl, /*input=*/false).value_or(String());
+            const String inMembers = ExtractPerVertexBlockMembers(vertexStageEssl, /*input=*/false).value_or(String());
             const String outMembers =
                 ExtractPerVertexBlockMembers(tessEvalStageEssl, /*input=*/true).value_or(String());
 
-            String source = BuildPassthroughTessControlEssl(ResolveBackendEsslVersion(), patchVertices,
-                                                            inMembers, outMembers,
-                                                            m_passthroughTessControlOuterLevel,
-                                                            m_passthroughTessControlInnerLevel);
+            String source =
+                BuildPassthroughTessControlEssl(ResolveBackendEsslVersion(), patchVertices, inMembers, outMembers,
+                                                m_passthroughTessControlOuterLevel, m_passthroughTessControlInnerLevel);
             // The mirrored member lists can carry gl_PointSize - the neighbour stage declared it,
             // so matching it is the whole point - and a redeclaration is exactly as illegal as a
             // reference in ESSL without the extension. Same directive, same never-speculative
@@ -1606,13 +1616,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // answer, and this is where the ES backend expresses it.
             if (!src.GetLinkStatus() || !src.GetSpirvStatus()) {
                 MGLOG_E_ONCE("Program object is not linked or has no generated SPIR-V, skipping backend sync. State "
-                        "program ID: %u",
-                        src.GetExternalIndex());
+                             "program ID: %u",
+                             src.GetExternalIndex());
                 return;
             }
 
-            MGLOG_D("Syncing program to backend. State program ID: %u, Backend ID: %u",
-                    src.GetExternalIndex(), m_backendProgramId);
+            MGLOG_D("Syncing program to backend. State program ID: %u, Backend ID: %u", src.GetExternalIndex(),
+                    m_backendProgramId);
             // Every link-derived cache below (incl. m_samplerUniformBindings and its
             // lastAssignedUnit/lastAssignedLodBias program-state mirrors) is rebuilt;
             // the sampler-pass memo keyed on them must not survive.
@@ -1653,8 +1663,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // ...and once more for image ARRAYS whose per-element units are not consecutive, which
             // ESSL has no way to express in one declaration. Program-wide, like the bake, and read
             // from the same snapshot of the reflection; the per-stage rewrite happens below.
-            const Vector<ImageArrayUnitPlan> nonConsecutiveImageArrays =
-                CollectNonConsecutiveImageArrayPlans(src);
+            const Vector<ImageArrayUnitPlan> nonConsecutiveImageArrays = CollectNonConsecutiveImageArrayPlans(src);
 
             // Detach all existing shaders
             GLint attachedCount = 0;
@@ -1791,8 +1800,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // stage, this drops a qualifier from EVERY block of the program - so it does not
             // wait for the collision probe to find anything.
             const Bool ioBlockLocationStripArmed =
-                !g_GLESCapabilities.SupportsLocatedInterStageIoBlocks &&
-                anyStageCanDeclareBlocksInBothDirections;
+                !g_GLESCapabilities.SupportsLocatedInterStageIoBlocks && anyStageCanDeclareBlocksInBothDirections;
             if (anyStageCanDeclareBlocksInBothDirections) {
                 for (SizeT index = 0; index < shaderSpirvs.size(); ++index) {
                     MG_Util::ShaderTranspiler::ShaderCompiler::ProbeIoBlockNamesForEssl(
@@ -1810,8 +1818,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // by pipeline stage `producerPipelineIndex`. "__" is reserved in GLSL, so a name
             // already ending in '_' does not get another one, and the digit-suffix loop steps
             // off any name the program already spells.
-            const auto uniqueIoBlockName = [&declaredIoBlockNames](const String& blockName,
-                                                                   Int producerPipelineIndex) {
+            const auto uniqueIoBlockName = [&declaredIoBlockNames](const String& blockName, Int producerPipelineIndex) {
                 const char* separator = (!blockName.empty() && blockName.back() == '_') ? "" : "_";
                 String candidate = blockName + separator + "mgio" + std::to_string(producerPipelineIndex);
                 while (declaredIoBlockNames.find(candidate) != declaredIoBlockNames.end()) {
@@ -1887,10 +1894,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // varying off a program to buy nothing. Both cases keep the pre-emulation behaviour,
             // which is what a program with no fragment stage had anyway.
             const Bool programHasFragmentStage =
-                std::find(linkedStages.begin(), linkedStages.end(), ShaderStage::Fragment) !=
-                linkedStages.end();
-            const Bool viewportEmulationForThisProgram =
-                ViewportArrayEmulationEnabled() && programHasFragmentStage;
+                std::find(linkedStages.begin(), linkedStages.end(), ShaderStage::Fragment) != linkedStages.end();
+            const Bool viewportEmulationForThisProgram = ViewportArrayEmulationEnabled() && programHasFragmentStage;
 
             for (const SizeT index : stageOrder) {
                 GLenum glShaderType = MG_Util::ConvertShaderStageToGLEnum(linkedStages[index]);
@@ -1915,8 +1920,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     MGLOG_E("Program %u stage %s samples a buffer texture, which this ES driver "
                             "cannot provide (%s). The shader will not compile and the program will "
                             "not link; every draw using it is a no-op.",
-                            m_backendProgramId,
-                            MG_Util::ConvertGLEnumToString(glShaderType).c_str(),
+                            m_backendProgramId, MG_Util::ConvertGLEnumToString(glShaderType).c_str(),
                             GetBufferTextureTierName());
                     m_backendProgramUsable = false;
                     g_GLESFuncs.glDeleteShader(backendShaderId);
@@ -1952,13 +1956,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     esslKeyInputs.subgroupEmulationArmed && g_GLESCapabilities.SharedMemoryLoadsGoStale;
                 esslKeyInputs.supportsNoperspectiveInterpolation =
                     g_GLESCapabilities.SupportsNoperspectiveInterpolation;
-                esslKeyInputs.supportsExtendedImageFormats =
-                    g_GLESCapabilities.SupportsExtendedImageFormats;
+                esslKeyInputs.supportsExtendedImageFormats = g_GLESCapabilities.SupportsExtendedImageFormats;
                 esslKeyInputs.maxColorTextureSamples = g_GLESCapabilities.MaxColorTextureSamples;
                 esslKeyInputs.maxIntegerSamples = g_GLESCapabilities.MaxIntegerSamples;
                 esslKeyInputs.maxDepthTextureSamples = g_GLESCapabilities.MaxDepthTextureSamples;
-                esslKeyInputs.advertisedMaxSamples =
-                    std::max(g_GLESCapabilities.MaxSamples, kFrontendMaxSamples);
+                esslKeyInputs.advertisedMaxSamples = std::max(g_GLESCapabilities.MaxSamples, kFrontendMaxSamples);
                 esslKeyInputs.xfbCaptureBlockNames = &xfbCaptureBlockNames;
                 esslKeyInputs.glFormatByUniformName = &imageFormatBake.glFormatByUniformName;
                 esslKeyInputs.storageBlockBindingOverrides = &storageBlockBindingOverrides;
@@ -1991,8 +1993,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     Bool hasConsumerStage = false;
                     for (const Int otherPipelineIndex : stagePipelineIndices) {
                         if (otherPipelineIndex < 0) continue;
-                        if (otherPipelineIndex < myPipelineIndex &&
-                            otherPipelineIndex > producerPipelineIndex) {
+                        if (otherPipelineIndex < myPipelineIndex && otherPipelineIndex > producerPipelineIndex) {
                             producerPipelineIndex = otherPipelineIndex;
                         }
                         if (otherPipelineIndex > myPipelineIndex) hasConsumerStage = true;
@@ -2066,14 +2067,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     stageAtomicCounterGlBindings = esslHit->atomicCounterGlBindings;
                 } else {
                     String transpileError;
-                    if (!TranspileSpirvToEssl(spirvCode, glShaderType, xfbCaptureBlockNames,
-                                              imageFormatBake, storageBlockBindingOverrides,
-                                              inputBlockRenames, outputBlockRenames,
+                    if (!TranspileSpirvToEssl(spirvCode, glShaderType, xfbCaptureBlockNames, imageFormatBake,
+                                              storageBlockBindingOverrides, inputBlockRenames, outputBlockRenames,
                                               stripInputBlockLocations, stripOutputBlockLocations,
-                                              m_atomicCounterEsslBindingTop,
-                                              enableSpirvValidation, source,
-                                              stageFlattenedXfbBlockNames,
-                                              stageAtomicCounterGlBindings, transpileError)) {
+                                              m_atomicCounterEsslBindingTop, enableSpirvValidation, source,
+                                              stageFlattenedXfbBlockNames, stageAtomicCounterGlBindings,
+                                              transpileError)) {
                         // MGLOG_E, unlatched, like the compile- and link-failure diagnostics
                         // below: one line per failing stage is bounded by program count and
                         // naming the stage is the entire diagnostic value. A stage that never
@@ -2083,8 +2082,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         // KHR-GL43.vertex_attrib_binding family behind "the draw captured zeros".
                         MGLOG_E("Shader transpilation to ESSL failed. State program ID: %u, stage: %s, "
                                 "SPIRV-Cross error: %s",
-                                src.GetExternalIndex(),
-                                MG_Util::ConvertGLEnumToString(glShaderType).c_str(),
+                                src.GetExternalIndex(), MG_Util::ConvertGLEnumToString(glShaderType).c_str(),
                                 transpileError.c_str());
                         m_backendProgramUsable = false;
                         continue;
@@ -2094,26 +2092,22 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         payload->essl = source;
                         payload->flattenedXfbBlockNames = stageFlattenedXfbBlockNames;
                         payload->atomicCounterGlBindings = stageAtomicCounterGlBindings;
-                        const SizeT payloadBytes =
-                            MG_Util::ShaderTranspiler::EsslTranslationResultBytes(*payload);
-                        esslCache.Insert(
-                            esslCacheKey,
-                            MG_Util::ShaderTranspiler::EsslTranslationResultPtr(Move(payload)),
-                            payloadBytes);
+                        const SizeT payloadBytes = MG_Util::ShaderTranspiler::EsslTranslationResultBytes(*payload);
+                        esslCache.Insert(esslCacheKey,
+                                         MG_Util::ShaderTranspiler::EsslTranslationResultPtr(Move(payload)),
+                                         payloadBytes);
                     }
                 }
                 // Per stage, never cumulative: a fragment shader consuming the same block
                 // reports a name the vertex stage already reported, and its own rewrite must
                 // still be taken or the two stages stop matching. Done here rather than inside
                 // the transpile so a cache HIT contributes its names too.
-                flattenedXfbBlockNames.insert(stageFlattenedXfbBlockNames.begin(),
-                                              stageFlattenedXfbBlockNames.end());
+                flattenedXfbBlockNames.insert(stageFlattenedXfbBlockNames.begin(), stageFlattenedXfbBlockNames.end());
                 // Same rule for the atomic-counter bindings this stage declared, and for the
                 // same reason: the loop below de-duplicates across stages, so a hit that
                 // contributed nothing would silently drop a counter buffer the draw path has
                 // to bind.
-                m_atomicCounterGlBindings.insert(m_atomicCounterGlBindings.end(),
-                                                 stageAtomicCounterGlBindings.begin(),
+                m_atomicCounterGlBindings.insert(m_atomicCounterGlBindings.end(), stageAtomicCounterGlBindings.begin(),
                                                  stageAtomicCounterGlBindings.end());
 
                 // SPIRV-Cross sizes written clip/cull distances with a standalone
@@ -2137,15 +2131,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // same length and stays an #extension line - so it commutes with every pass
                 // below, including ForceSupporterOutput's scan for the last directive. First,
                 // because a header concern reads better before the body ones.
-                source = RetargetTextureBufferExtension(std::move(source),
-                                                        g_GLESCapabilities.TextureBufferSupport);
+                source = RetargetTextureBufferExtension(std::move(source), g_GLESCapabilities.TextureBufferSupport);
                 // The other header-level rewrite, and next to that one for the same reason. The
                 // formats it covers are both the ones the bake above put into the module and the
                 // ones the application declared itself - either can be outside the thirteen GLSL
                 // ES has in core, and neither reaches the driver without this directive.
-                source = RequestExtendedImageFormats(std::move(source),
-                                                     imageFormatBake.needsExtendedImageFormats &&
-                                                         g_GLESCapabilities.SupportsExtendedImageFormats);
+                source =
+                    RequestExtendedImageFormats(std::move(source), imageFormatBake.needsExtendedImageFormats &&
+                                                                       g_GLESCapabilities.SupportsExtendedImageFormats);
                 // The third header-level rewrite, for the builtin SPIRV-Cross prints bare:
                 // gl_ViewportIndex is in no version of ESSL core, so without this directive the
                 // stage does not compile and the whole program - not just its viewport routing -
@@ -2173,8 +2166,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // keeps the line off every other program and PointSizeExtensionName returns
                 // nullptr - i.e. nothing is emitted - on a driver advertising neither spelling.
                 if (source.find("gl_PointSize") != String::npos) {
-                    const Bool tessellationStage = glShaderType == GL_TESS_CONTROL_SHADER ||
-                                                   glShaderType == GL_TESS_EVALUATION_SHADER;
+                    const Bool tessellationStage =
+                        glShaderType == GL_TESS_CONTROL_SHADER || glShaderType == GL_TESS_EVALUATION_SHADER;
                     if (tessellationStage || glShaderType == GL_GEOMETRY_SHADER) {
                         const auto tier = tessellationStage ? g_GLESCapabilities.TessellationPointSizeSupport
                                                             : g_GLESCapabilities.GeometryPointSizeSupport;
@@ -2190,8 +2183,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                          "will fail to compile. Point size from a non-vertex stage is not "
                                          "available on this device.",
                                          tessellationStage ? "tessellation" : "geometry",
-                                         tessellationStage ? "tessellation" : "geometry",
-                                         src.GetExternalIndex());
+                                         tessellationStage ? "tessellation" : "geometry", src.GetExternalIndex());
                         }
                         source = RequestPointSizeExtension(std::move(source), pointSizeExtension);
                     }
@@ -2205,8 +2197,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // their declarations already qualified. AFTER the rebind, so the layout qualifier
                 // it edits is the one that already exists; BEFORE the split and the binding
                 // strip, so both halves of a split image inherit the format.
-                source = BakeImageFormatQualifiers(std::move(source),
-                                                   imageFormatBake.esslFormatQualifierByUniformName);
+                source = BakeImageFormatQualifiers(std::move(source), imageFormatBake.esslFormatQualifierByUniformName);
                 // An image ARRAY whose elements do not sit on consecutive units cannot be spelled
                 // by the single layout(binding=N) the rebind above stamped: ESSL gives element k
                 // the unit N+k and there is no glUniform1i to correct it with. Split the array
@@ -2216,8 +2207,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // element that is both read and written is split with its own binding on it.
                 if (!nonConsecutiveImageArrays.empty()) {
                     Vector<String> declinedImageArrays;
-                    source = RemapImageArrayElementUnits(source, nonConsecutiveImageArrays,
-                                                         &declinedImageArrays);
+                    source = RemapImageArrayElementUnits(source, nonConsecutiveImageArrays, &declinedImageArrays);
                     for (const auto& declined : declinedImageArrays) {
                         // MGLOG_E, unlatched, like the transpile- and compile-failure diagnostics
                         // around it: this is the "linked, drew, produced wrong numbers, said
@@ -2283,8 +2273,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     }
                 }
                 source = ForceSupporterOutput(source);
-                source = ClampNormFallbackOutputs(std::move(source), glShaderType,
-                                                  m_snormFallbackClampOutputMask,
+                source = ClampNormFallbackOutputs(std::move(source), glShaderType, m_snormFallbackClampOutputMask,
                                                   m_unormFallbackClampOutputMask);
 
                 // Patch for Photon compiler precision issue
@@ -2357,9 +2346,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     }
                     MGLOG_E("Shader compilation failed. State program ID: %u, stage: %s, backend shader ID: "
                             "%u, driver log: %s\nSource:\n%s",
-                            src.GetExternalIndex(),
-                            MG_Util::ConvertGLEnumToString(glShaderType).c_str(), backendShaderId,
-                            log.data(), sourceForLog);
+                            src.GetExternalIndex(), MG_Util::ConvertGLEnumToString(glShaderType).c_str(),
+                            backendShaderId, log.data(), sourceForLog);
                     m_backendProgramUsable = false;
                     // Nothing will ever attach this one, so nothing else can free it.
                     g_GLESFuncs.glDeleteShader(backendShaderId);
@@ -2398,8 +2386,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
 
             if (needsPassthroughTessControl) {
-                AttachPassthroughTessControlStage(src, tessEvalShaderIndex, shaderSpirvs,
-                                                  vertexStageEssl, tessEvalStageEssl);
+                AttachPassthroughTessControlStage(src, tessEvalShaderIndex, shaderSpirvs, vertexStageEssl,
+                                                  tessEvalStageEssl);
             }
 
             // A counter buffer declared by several stages was recorded once per stage; the draw
@@ -2418,8 +2406,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // the transpiled ESSL (`out vec4 result_0;` stays `result_0`), so the
             // frontend's requested names carry over unchanged.
             SizeT declaredXfbVaryingCount = 0;
-            if (src.GetTransformFeedbackVaryingCount() > 0 &&
-                g_GLESFuncs.glTransformFeedbackVaryings != nullptr) {
+            if (src.GetTransformFeedbackVaryingCount() > 0 && g_GLESFuncs.glTransformFeedbackVaryings != nullptr) {
                 const auto& xfbVaryings = src.GetTransformFeedbackVaryings();
                 Vector<const GLchar*> xfbNames;
                 xfbNames.reserve(xfbVaryings.size());
@@ -2460,15 +2447,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 for (const auto& xfbName : rewrittenXfbNames) {
                     xfbNames.push_back(xfbName.c_str());
                 }
-                MGLOG_D("Declaring %zu transform feedback varyings on program %u", xfbNames.size(),
-                        m_backendProgramId);
+                MGLOG_D("Declaring %zu transform feedback varyings on program %u", xfbNames.size(), m_backendProgramId);
                 // Bounded: a lost context never answers GL_NO_ERROR, and this runs on the
                 // thread that would then spin forever.
-                for (Int i = 0; i < kMaxDrainedProgramErrors && g_GLESFuncs.glGetError() != GL_NO_ERROR; ++i) {
-                }
+                for (Int i = 0; i < kMaxDrainedProgramErrors && g_GLESFuncs.glGetError() != GL_NO_ERROR; ++i) {}
                 g_GLESFuncs.glTransformFeedbackVaryings(m_backendProgramId, static_cast<GLsizei>(xfbNames.size()),
-                                                        xfbNames.data(),
-                                                        src.GetTransformFeedbackBufferMode());
+                                                        xfbNames.data(), src.GetTransformFeedbackBufferMode());
                 // Unchecked before. A rejected capture set leaves the program linking happily
                 // with NO capture set at all, and then every draw of every span records
                 // nothing while the application reads its buffer's pre-draw bytes and
@@ -2482,8 +2466,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     MGLOG_E("The ES driver REJECTED the transform feedback capture set for backend program %u with "
                             "%s (mode %s): [%s]. Every capture made with GL program %u will record nothing.",
                             m_backendProgramId, MG_Util::ConvertGLEnumToString(xfbError).c_str(),
-                            MG_Util::ConvertGLEnumToString(
-                                src.GetTransformFeedbackBufferMode()).c_str(),
+                            MG_Util::ConvertGLEnumToString(src.GetTransformFeedbackBufferMode()).c_str(),
                             declared.c_str(), src.GetExternalIndex());
                 }
                 declaredXfbVaryingCount = xfbNames.size();
@@ -2523,8 +2506,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                             "program did; GL_MAX_*_IMAGE_UNIFORMS for it is %d. If the driver log names "
                             "image uniforms, that is the cause.",
                             split.splitCount,
-                            MG_Util::ConvertGLEnumToString(
-                                MG_Util::ConvertShaderStageToGLEnum(split.stage)).c_str(),
+                            MG_Util::ConvertGLEnumToString(MG_Util::ConvertShaderStageToGLEnum(split.stage)).c_str(),
                             split.splitCount, AdvertisedStageImageUniformLimit(split.stage));
                 }
             } else {
@@ -2541,12 +2523,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 if (declaredXfbVaryingCount > 0) {
                     GLint linkedXfbVaryings = 0;
                     GLint linkedXfbBufferMode = 0;
-                    g_GLESFuncs.glGetProgramiv(m_backendProgramId, GL_TRANSFORM_FEEDBACK_VARYINGS,
-                                               &linkedXfbVaryings);
+                    g_GLESFuncs.glGetProgramiv(m_backendProgramId, GL_TRANSFORM_FEEDBACK_VARYINGS, &linkedXfbVaryings);
                     g_GLESFuncs.glGetProgramiv(m_backendProgramId, GL_TRANSFORM_FEEDBACK_BUFFER_MODE,
                                                &linkedXfbBufferMode);
-                    for (Int i = 0; i < kMaxDrainedProgramErrors && g_GLESFuncs.glGetError() != GL_NO_ERROR; ++i) {
-                    }
+                    for (Int i = 0; i < kMaxDrainedProgramErrors && g_GLESFuncs.glGetError() != GL_NO_ERROR; ++i) {}
                     const GLenum requestedMode = src.GetTransformFeedbackBufferMode();
                     if (static_cast<SizeT>(std::max(linkedXfbVaryings, 0)) != declaredXfbVaryingCount ||
                         static_cast<GLenum>(linkedXfbBufferMode) != requestedMode) {
@@ -2555,13 +2535,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                 "in mode %s. Captures made with it will be empty or wrongly laid out.",
                                 m_backendProgramId, src.GetExternalIndex(), declaredXfbVaryingCount,
                                 MG_Util::ConvertGLEnumToString(requestedMode).c_str(), linkedXfbVaryings,
-                                MG_Util::ConvertGLEnumToString(
-                                    static_cast<GLenum>(linkedXfbBufferMode)).c_str());
+                                MG_Util::ConvertGLEnumToString(static_cast<GLenum>(linkedXfbBufferMode)).c_str());
                     } else {
                         MGLOG_D("Backend program %u capture set confirmed by the driver: %d varying(s), mode %s",
                                 m_backendProgramId, linkedXfbVaryings,
-                                MG_Util::ConvertGLEnumToString(
-                                    static_cast<GLenum>(linkedXfbBufferMode)).c_str());
+                                MG_Util::ConvertGLEnumToString(static_cast<GLenum>(linkedXfbBufferMode)).c_str());
                     }
                 }
             }
@@ -2586,11 +2564,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // glUseProgram(0) and leave the failed program's previous executable running -
             // the silent wrong-shader draw Use() exists to prevent.
             m_rebindAfterRelink = true;
-            m_baseInstanceUniformLocation = g_GLESFuncs.glGetUniformLocation(m_backendProgramId,
-                                                                             BASE_INSTANCE_UNIFORM_NAME);
+            m_baseInstanceUniformLocation =
+                g_GLESFuncs.glGetUniformLocation(m_backendProgramId, BASE_INSTANCE_UNIFORM_NAME);
             m_drawIdUniformLocation = g_GLESFuncs.glGetUniformLocation(m_backendProgramId, DRAW_ID_UNIFORM_NAME);
-            m_baseVertexUniformLocation = g_GLESFuncs.glGetUniformLocation(m_backendProgramId,
-                                                                           BASE_VERTEX_UNIFORM_NAME);
+            m_baseVertexUniformLocation =
+                g_GLESFuncs.glGetUniformLocation(m_backendProgramId, BASE_VERTEX_UNIFORM_NAME);
             m_baseInstanceWordIndexUniformLocation =
                 g_GLESFuncs.glGetUniformLocation(m_backendProgramId, BASE_INSTANCE_WORD_INDEX_UNIFORM_NAME);
             // Asked of the DRIVER rather than remembered from the injection, deliberately: the
@@ -2725,7 +2703,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     }
                 } else {
                     MGLOG_W_ONCE("Program %u has frontend global UBO storage, but backend has no %s block.",
-                            src.GetExternalIndex(), MG_Util::ShaderTranspiler::GLOBAL_UBO_NAME);
+                                 src.GetExternalIndex(), MG_Util::ShaderTranspiler::GLOBAL_UBO_NAME);
                 }
             }
 
@@ -2743,9 +2721,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
                 m_uniformBlockBackendIndices[static_cast<SizeT>(i)] = static_cast<Int>(backendBlkIdx);
                 g_GLESFuncs.glUniformBlockBinding(m_backendProgramId, backendBlkIdx, lastUBOBinding);
-                MGLOG_D("CACHE prog=%u beProg=%u blk[%d]='%s' beIdx=%u -> bePoint=%u",
-                        src.GetExternalIndex(), m_backendProgramId, i, name.c_str(), backendBlkIdx,
-                        lastUBOBinding);
+                MGLOG_D("CACHE prog=%u beProg=%u blk[%d]='%s' beIdx=%u -> bePoint=%u", src.GetExternalIndex(),
+                        m_backendProgramId, i, name.c_str(), backendBlkIdx, lastUBOBinding);
             }
 
             m_samplerUniformBindings.clear();
@@ -2817,8 +2794,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // app alternating a healthy and a broken program would otherwise log every
                 // single draw. Parked at MGLOG_I until the level ordering was fixed.
                 MGLOG_E_ONCE("Backend program for GL program %u is unusable (a shader failed to transpile, "
-                        "compile or link); binding program 0 - draws with it will render nothing",
-                        m_frontendProgramId);
+                             "compile or link); binding program 0 - draws with it will render nothing",
+                             m_frontendProgramId);
             }
             MGLOG_D("Using program %u", programToBind);
             g_GLESFuncs.glUseProgram(programToBind);
@@ -2837,8 +2814,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // as "no indirect command" - see PromoteDrawParameterGlobalsToUniforms.
         void BackendProgramObjectImpl::SetBaseInstanceWordIndex(Int32 wordIndex) const {
             if (m_baseInstanceWordIndexUniformLocation >= 0) {
-                g_GLESFuncs.glUniform1i(m_baseInstanceWordIndexUniformLocation,
-                                        wordIndex < 0 ? 0 : wordIndex + 1);
+                g_GLESFuncs.glUniform1i(m_baseInstanceWordIndexUniformLocation, wordIndex < 0 ? 0 : wordIndex + 1);
             }
         }
 

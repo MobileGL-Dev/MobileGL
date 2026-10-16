@@ -140,7 +140,9 @@ namespace {
         return result;
     }
 
-    Bool DiedOfAbort(const ChildResult& r) { return WIFSIGNALED(r.Status) && WTERMSIG(r.Status) == SIGABRT; }
+    Bool DiedOfAbort(const ChildResult& r) {
+        return WIFSIGNALED(r.Status) && WTERMSIG(r.Status) == SIGABRT;
+    }
     std::string DescribeStatus(const ChildResult& r) {
         if (r.Status < 0) return "fork/waitpid failed";
         if (WIFEXITED(r.Status)) return "exited " + std::to_string(WEXITSTATUS(r.Status));
@@ -324,7 +326,6 @@ TEST(ImageEmit, AMakeCurrentClearsTheImageSetAndAdvancesItsSerial) {
     EXPECT_GT(MGPipeApplier().ShaderImagesSerial, serialBefore);
 }
 
-
 namespace {
     namespace GL = MobileGL::MG_Impl::GLImpl;
     using GLContext = MG_State::GLState::GLContext;
@@ -343,8 +344,12 @@ namespace {
         }
     };
 
-    GLContext& Ctx() { return *MG_State::pGLContext; }
-    MGPipeImageEmitter& Emitter() { return MGPipeImageEmitterInstance(); }
+    GLContext& Ctx() {
+        return *MG_State::pGLContext;
+    }
+    MGPipeImageEmitter& Emitter() {
+        return MGPipeImageEmitterInstance();
+    }
 
     GLuint MakeComputeProgram(const char* source) {
         const GLuint shader = GL::CreateShader(GL_COMPUTE_SHADER);
@@ -425,8 +430,7 @@ void main() { imageStore(img, ivec2(0), vec4(1.0)); }
         const auto& resolution = MGPipeProgramOpaqueUnitsShared().For(object.get());
         ASSERT_EQ(resolution.MaxImageUnit, 1)
             << "maxUniformLocation=" << object->GetMaxUniformLocation()
-            << " unit@0=" << object->GetUniformSamplerOrImageUnitIndex(0)
-            << " linked=" << object->GetLinkStatus();
+            << " unit@0=" << object->GetUniformSamplerOrImageUnitIndex(0) << " linked=" << object->GetLinkStatus();
 
         // ASSERTED ON THE COUNTER, NOT ON THIS CALL'S RETURN VALUE, and the reason is worth
         // writing down because it surprised this suite: the glBindImageTexture above ALREADY
@@ -518,9 +522,8 @@ void main() { imageStore(img, ivec2(0), vec4(1.0)); }
             ASSERT_GE(Emitter().ImageSetCount(), 1u);
             ASSERT_GE(Emitter().LastShaderImages().Count, 2u);
             const MGPImageView& view = Emitter().LastImageViews()[1];
-            EXPECT_EQ(view.Access, c.encoded)
-                << "glBindImageTexture(access=0x" << std::hex << static_cast<Uint>(c.gl) << std::dec
-                << ") did not travel as the shared constant";
+            EXPECT_EQ(view.Access, c.encoded) << "glBindImageTexture(access=0x" << std::hex << static_cast<Uint>(c.gl)
+                                              << std::dec << ") did not travel as the shared constant";
             ASSERT_TRUE(MGPipeImageAccessIsValid(view.Access));
             EXPECT_EQ(MGPipeDecodeImageAccess(view.Access), c.decoded)
                 << "the server's decode does not invert the client's encode";
@@ -632,8 +635,7 @@ void main() { imageStore(img, ivec2(0, 0), vec4(1.0)); }
 
         GL::BindImageTexture(1, name, 0, GL_FALSE, 0, GL_READ_WRITE, GL_RGBA8);
         Emitter().EmitShaderImages(Ctx());
-        EXPECT_EQ(Emitter().LastImageViews()[1].Level, 0u)
-            << "the base level is base-complete and must stay bound";
+        EXPECT_EQ(Emitter().LastImageViews()[1].Level, 0u) << "the base level is base-complete and must stay bound";
         GL::UseProgram(0);
         GL::BindImageTexture(1, 0, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA8);
     }
@@ -662,8 +664,8 @@ void main() { imageStore(img, ivec2(0, 0), vec4(1.0)); }
         // And the bind is checked before the mark is, so a REFUSED bind says so rather than
         // reading as a missing NoteImageUnitTouched.
         ASSERT_TRUE(Ctx().GetImageTextureBinding(kUnit).Texture != nullptr)
-            << "glBindImageTexture did not take: this lane's backend advertises fewer than "
-            << (kUnit + 1) << " image units, so the case cannot observe the mark at all";
+            << "glBindImageTexture did not take: this lane's backend advertises fewer than " << (kUnit + 1)
+            << " image units, so the case cannot observe the mark at all";
         EXPECT_GE(Ctx().GetMaxTouchedImageUnit(), kUnit)
             << "glBindImageTexture did not move the image-unit high-water mark, so every reader "
                "that bounds a per-draw walk with it now walks past this binding";
@@ -692,8 +694,7 @@ int main(int argc, char** argv) {
     // raised by the encoder on THIS thread - the client role. So g_logPath, which is the read
     // path from here on, becomes the client-derived name; the env keeps the base. The rule is
     // the library's own, not a copy.
-    g_logPath = MobileGL::MG_Util::Debug::RoleLogPath(g_logPath.c_str(),
-                                                      MobileGL::MG_Util::Debug::LogRole::Client);
+    g_logPath = MobileGL::MG_Util::Debug::RoleLogPath(g_logPath.c_str(), MobileGL::MG_Util::Debug::LogRole::Client);
     MobileGL::Initialize();
     ::testing::InitGoogleTest(&argc, argv);
     const int rc = RUN_ALL_TESTS();

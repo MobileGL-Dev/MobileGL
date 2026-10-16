@@ -118,8 +118,7 @@ namespace MGITest {
         // Set only in the re-executed child, so the worker case below runs in that process and skips
         // everywhere else (including in the ambient lanes, where it is registered like any other case).
         constexpr const char* kChildMarker = "MGITEST_POISON_OMISSION_CHILD";
-        constexpr const char* kWorkerFilter =
-            "--gtest_filter=PoisonOmissionScenario.TheSequenceThePoisonControlsRun";
+        constexpr const char* kWorkerFilter = "--gtest_filter=PoisonOmissionScenario.TheSequenceThePoisonControlsRun";
 
         constexpr const char* kVS = R"(#version 330 core
 in vec2 aPos;
@@ -215,7 +214,9 @@ void main() { o_color = vec4(0.25, 0.5, 0.75, 1.0); }
             return log;
         }
 
-        std::string ReadChildLog() { return ReadChildLogHalves().All; }
+        std::string ReadChildLog() {
+            return ReadChildLogHalves().All;
+        }
 
         class PoisonOmissionScenario : public ScenarioTest {
         protected:
@@ -317,7 +318,8 @@ void main() { o_color = vec4(0.25, 0.5, 0.75, 1.0); }
 
                 std::vector<char*> envp;
                 envp.reserve(env.size() + 1);
-                for (std::string& entry : env) envp.push_back(entry.data());
+                for (std::string& entry : env)
+                    envp.push_back(entry.data());
                 envp.push_back(nullptr);
 
                 std::string exe = "/proc/self/exe";
@@ -373,7 +375,9 @@ void main() { o_color = vec4(0.25, 0.5, 0.75, 1.0); }
         TEST_F(PoisonOmissionScenario, TheSequenceThePoisonControlsRun) {
             if (std::getenv(kChildMarker) == nullptr) {
                 GTEST_SKIP() << "this case is the body the two poison controls run in a child process; "
-                                "it does nothing unless " << kChildMarker << " is set, which only the "
+                                "it does nothing unless "
+                             << kChildMarker
+                             << " is set, which only the "
                                 "re-exec below does";
             }
             if (!Ready()) return;
@@ -412,8 +416,8 @@ void main() { o_color = vec4(0.25, 0.5, 0.75, 1.0); }
             }
             if (pair == nullptr) {
                 GTEST_SKIP() << "MOBILEGL_PIPE_POISON_OMIT is " << knob << ", but this case only knows "
-                             << "how to provoke " << kOmittedPairs[0].Verb << ":" << kOmittedPairs[0].Field
-                             << " and " << kOmittedPairs[1].Verb << ":" << kOmittedPairs[1].Field;
+                             << "how to provoke " << kOmittedPairs[0].Verb << ":" << kOmittedPairs[0].Field << " and "
+                             << kOmittedPairs[1].Verb << ":" << kOmittedPairs[1].Field;
             }
             const std::string expectedPair = std::string(pair->Field) + "@" + pair->Verb;
 
@@ -431,7 +435,8 @@ void main() { o_color = vec4(0.25, 0.5, 0.75, 1.0); }
                    "through the accessor). Child log:\n"
                 << childLog;
             EXPECT_EQ(WTERMSIG(status), SIGABRT)
-                << "the child died on signal " << WTERMSIG(status) << " rather than SIGABRT; the poison "
+                << "the child died on signal " << WTERMSIG(status)
+                << " rather than SIGABRT; the poison "
                    "reports through MGLOG_F + std::abort(), so any other signal is a different crash. "
                    "Child log:\n"
                 << childLog;
@@ -455,7 +460,8 @@ void main() { o_color = vec4(0.25, 0.5, 0.75, 1.0); }
             // named here.
             if (pair->FiresOnTheServer) {
                 EXPECT_NE(halves.Server.find(expectedFatal), std::string::npos)
-                    << "the child aborted with " << expectedFatal << ", but NOT in its server-role log. "
+                    << "the child aborted with " << expectedFatal
+                    << ", but NOT in its server-role log. "
                        "This pair is the split arm's control and its whole claim is that the stamp the "
                        "SERVER writes at the verb boundary honours the omission - a firing anywhere "
                        "else means the withheld stamp was the client's and the server-side half is "
@@ -466,7 +472,8 @@ void main() { o_color = vec4(0.25, 0.5, 0.75, 1.0); }
 #endif
             for (const char* earlier : pair->EarlierVerbs) {
                 EXPECT_EQ(childLog.find(earlier), std::string::npos)
-                    << "a verb that ran BEFORE the omitted one (" << earlier << ") also tripped the "
+                    << "a verb that ran BEFORE the omitted one (" << earlier
+                    << ") also tripped the "
                        "poison, so the omission is not scoped to its verb: the fill classes are wrong, "
                        "or the stamps are global. Child log:\n"
                     << childLog;
@@ -497,10 +504,9 @@ void main() { o_color = vec4(0.25, 0.5, 0.75, 1.0); }
             const std::string childLog = ReadChildLog();
             const std::string note =
                 omissionArmed
-                    ? std::string(
-                          " NOTE: MOBILEGL_PIPE_POISON_OMIT is set in this process, so this failure is "
-                          "what CI's negative control B is asking for - the poison IS armed, and this "
-                          "entry going red is the proof.")
+                    ? std::string(" NOTE: MOBILEGL_PIPE_POISON_OMIT is set in this process, so this failure is "
+                                  "what CI's negative control B is asking for - the poison IS armed, and this "
+                                  "entry going red is the proof.")
                     : std::string();
             ASSERT_TRUE(WIFEXITED(status))
                 << "with no omission armed, a draw followed by glGenerateMipmap must complete; the child "
@@ -515,9 +521,7 @@ void main() { o_color = vec4(0.25, 0.5, 0.75, 1.0); }
                    "HasFailure() ? 1 : 0), so its gtest output on this job's stderr names the line; "
                    "anything else came from the harness. Child log:\n"
                 << childLog;
-            EXPECT_EQ(childLog.find("Fatal{"), std::string::npos)
-                << "an unpoisoned run logged a Fatal:\n"
-                << childLog;
+            EXPECT_EQ(childLog.find("Fatal{"), std::string::npos) << "an unpoisoned run logged a Fatal:\n" << childLog;
         }
 
 #else

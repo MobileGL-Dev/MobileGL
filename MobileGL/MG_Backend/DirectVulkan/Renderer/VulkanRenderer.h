@@ -48,15 +48,15 @@ namespace MobileGL::MG_State::GLState {
 } // namespace MobileGL::MG_State::GLState
 
 namespace MobileGL::MG_Backend::DirectVulkan {
-    enum class DrawSetupAspect: Uint8 {
-        FramebufferObject  = 1 << 0,
-        VertexArrayObject  = 1 << 1,
-        UniformBuffer      = 1 << 2,
-        VertexBuffer       = 1 << 3,
-        IndexBuffer        = 1 << 4,
+    enum class DrawSetupAspect : Uint8 {
+        FramebufferObject = 1 << 0,
+        VertexArrayObject = 1 << 1,
+        UniformBuffer = 1 << 2,
+        VertexBuffer = 1 << 3,
+        IndexBuffer = 1 << 4,
         IndirectDrawBuffer = 1 << 5,
-        Viewport           = 1 << 6,
-        Scissor            = 1 << 7,
+        Viewport = 1 << 6,
+        Scissor = 1 << 7,
     };
 
     struct DrawCmdParam {
@@ -187,9 +187,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // (rd12 Magma: the wait was ~1.8 ms/frame of fence stall, one per lightmap update.)
         // P15 (WireFramebuffer.cpp): runs an image's deferred clears now, outside any pass.
         void MaterializeWirePendingClears(VkTextureManager::TextureResource& resource);
-        Bool FlushWirePendingCommandsForTextureUpload() {
-            return !HasPendingRecordedWork() || FlushPendingCommands();
-        }
+        Bool FlushWirePendingCommandsForTextureUpload() { return !HasPendingRecordedWork() || FlushPendingCommands(); }
         // P7 wave 2 package B3: the submission that will carry whatever is recorded NEXT.
         // RetireWireObjects (WireDraw.cpp) already tags future objects with exactly this, and
         // for the same reason: a draw being set up now is not in any submission yet, so the
@@ -265,32 +263,28 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // idleness guarantee - they are only bound through draws/dispatches that
         // stamp the program entry) and purge the descriptor-set cache entries
         // keyed by its now-recyclable VkDescriptorSetLayout handle.
-        void OnProgramEvicted(ProgramFactory::HashType programHash,
-                              VkDescriptorSetLayout descriptorSetLayout) override;
+        void OnProgramEvicted(ProgramFactory::HashType programHash, VkDescriptorSetLayout descriptorSetLayout) override;
 
         Bool SetupDraw(FrameContext::FrameData& frame, GLenum mode, Flags<DrawSetupAspect> aspects,
-                       const DrawCmdParam& drawParams,
-                       const IndexBufferView* pIndexBufferView = nullptr);
+                       const DrawCmdParam& drawParams, const IndexBufferView* pIndexBufferView = nullptr);
         enum class ScissoredClearPrep {
-            NotNeeded,  // scissor covers the whole target — take the deferred whole-surface path instead
-            NoOp,       // nothing to clear (degenerate target or empty scissor rect)
-            Ready,      // a render pass is active; record vkCmdClearAttachments with the returned rect
+            NotNeeded, // scissor covers the whole target — take the deferred whole-surface path instead
+            NoOp,      // nothing to clear (degenerate target or empty scissor rect)
+            Ready,     // a render pass is active; record vkCmdClearAttachments with the returned rect
         };
         void Clear(GLbitfield mask);
         void ClearBufferfi(GLenum buffer, GLint drawbuffer, GLfloat depth, GLint stencil);
         void ClearBufferfv(GLenum buffer, GLint drawbuffer, const GLfloat* value);
         void ClearBufferuiv(GLenum buffer, GLint drawbuffer, const GLuint* value);
         void ClearBufferiv(GLenum buffer, GLint drawbuffer, const GLint* value);
-        void BlitFramebuffer(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1,
-                             GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1,
-                             GLbitfield mask, GLenum filter);
-        void CopyTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset,
-                       GLint x, GLint y, GLsizei width, GLsizei height);
-        void CopyImageSubData(const CopyImageEndpoint& srcEndpoint,
-                              GLenum srcTarget, GLint srcLevel, GLint srcX, GLint srcY, GLint srcZ,
-                              const CopyImageEndpoint& dstEndpoint,
-                              GLenum dstTarget, GLint dstLevel, GLint dstX, GLint dstY, GLint dstZ,
-                              GLsizei srcWidth, GLsizei srcHeight, GLsizei srcDepth);
+        void BlitFramebuffer(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1, GLint dstX0, GLint dstY0, GLint dstX1,
+                             GLint dstY1, GLbitfield mask, GLenum filter);
+        void CopyTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint x, GLint y,
+                               GLsizei width, GLsizei height);
+        void CopyImageSubData(const CopyImageEndpoint& srcEndpoint, GLenum srcTarget, GLint srcLevel, GLint srcX,
+                              GLint srcY, GLint srcZ, const CopyImageEndpoint& dstEndpoint, GLenum dstTarget,
+                              GLint dstLevel, GLint dstX, GLint dstY, GLint dstZ, GLsizei srcWidth, GLsizei srcHeight,
+                              GLsizei srcDepth);
         void GenerateMipmap(GLenum target);
         void ReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, void* pixels);
         // Server resource handle in, tightly packed owned bytes out. No frontend
@@ -329,14 +323,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                                       VkOffset2D* imageOffset, VkExtent2D* imageCopyExtent);
         // Reorder a tightly packed block copied with MapDefaultFramebufferReadbackRect back into
         // GL row order. The input block has swapped dimensions for 90/270 degree transforms.
-        static Bool RemapDefaultFramebufferReadback(const Uint8* rawPixels, Uint32 logicalWidth,
-                                                    Uint32 logicalHeight,
-                                                    VkSurfaceTransformFlagBitsKHR preTransform,
-                                                    SizeT texelSize, Uint8* outPixels);
-        static Bool ConvertReadbackPixels(const Uint8* sourcePixels, VkFormat sourceFormat,
-                                          GLsizei width, GLsizei height, GLenum destinationFormat,
-                                          GLenum destinationType, SizeT destinationRowStride,
-                                          Uint8* destinationPixels);
+        static Bool RemapDefaultFramebufferReadback(const Uint8* rawPixels, Uint32 logicalWidth, Uint32 logicalHeight,
+                                                    VkSurfaceTransformFlagBitsKHR preTransform, SizeT texelSize,
+                                                    Uint8* outPixels);
+        static Bool ConvertReadbackPixels(const Uint8* sourcePixels, VkFormat sourceFormat, GLsizei width,
+                                          GLsizei height, GLenum destinationFormat, GLenum destinationType,
+                                          SizeT destinationRowStride, Uint8* destinationPixels);
         void DispatchCompute(GLuint numGroupsX, GLuint numGroupsY, GLuint numGroupsZ);
         void DispatchComputeIndirect(GLintptr indirect);
         void MemoryBarrier(GLbitfield barriers);
@@ -548,11 +540,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         //
         // The structs stay, empty, so ShutdownBlitResources and the two `= {}` assignments read
         // the same on both builds.
-        struct BlitResources {
-        };
+        struct BlitResources {};
 
-        struct DepthMipmapResources {
-        };
+        struct DepthMipmapResources {};
 
         // A single-sample staging image for multisample-resolve blits that also have to change
         // orientation. vkCmdResolveImage cannot flip (it takes one offset per side, not the
@@ -610,9 +600,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // `isWriteTarget` selects which side of the default framebuffer this resolves: a write
         // re-points it at the image Present() acquired, a read keeps the current one (see
         // m_defaultFramebufferImageIndex). Reads must pass false.
-        WireImage ResolveWireImage(const MG_Pipe::MGPFramebufferState& fbo,
-                                   const MG_Pipe::MGPSurface& surface, VkImageAspectFlags aspect,
-                                   Bool isWriteTarget = false);
+        WireImage ResolveWireImage(const MG_Pipe::MGPFramebufferState& fbo, const MG_Pipe::MGPSurface& surface,
+                                   VkImageAspectFlags aspect, Bool isWriteTarget = false);
         void TransitionWireImage(WireImage& image, VkImageLayout layout, Bool coalesceWithLastFullBarrier = false);
         // P15: WIRE DEFERRED CLEARS (WireFramebuffer.cpp). A clear of images the open pass
         // holds is recorded inside it; a whole-image clear of others waits on the image
@@ -637,26 +626,24 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Bool BeginWireDrawPassFolding(FrameContext::FrameData& frame, RenderPassEntry& begun, Uint64 variantKey,
                                       const VkClearValue* values);
         void ApplyWireFoldClearsInPass(FrameContext::FrameData& frame, RenderPassEntry& pass);
-        void ClearWireFramebuffer(const MG_Pipe::MGPFramebufferState& fbo,
-                                  const ClearAttachmentPayload& payload, GLint drawbuffer = -1);
-        void BlitWireFramebuffers(GLint sx0, GLint sy0, GLint sx1, GLint sy1,
-                                 GLint dx0, GLint dy0, GLint dx1, GLint dy1, GLbitfield mask, GLenum filter);
-        void ResolveWireDepthStencil(WireImage source, WireImage destination,
-                                     GLint sx0, GLint sy0, GLint sx1, GLint sy1,
-                                     GLint dx0, GLint dy0, GLint dx1, GLint dy1);
+        void ClearWireFramebuffer(const MG_Pipe::MGPFramebufferState& fbo, const ClearAttachmentPayload& payload,
+                                  GLint drawbuffer = -1);
+        void BlitWireFramebuffers(GLint sx0, GLint sy0, GLint sx1, GLint sy1, GLint dx0, GLint dy0, GLint dx1,
+                                  GLint dy1, GLbitfield mask, GLenum filter);
+        void ResolveWireDepthStencil(WireImage source, WireImage destination, GLint sx0, GLint sy0, GLint sx1,
+                                     GLint sy1, GLint dx0, GLint dy0, GLint dx1, GLint dy1);
         // One aspect of a depth/stencil image through a buffer (source in TRANSFER_SRC_OPTIMAL,
         // destination in TRANSFER_DST_OPTIMAL, one format). The returned buffer is named by the
         // recorded commands and must be retired with them.
         UniquePtr<VkBufferObject> CopyWireAspectThroughBuffer(VkImage srcImage, Uint32 srcLevel, Uint32 srcLayer,
                                                               GLint sx, GLint sy, const WireImage& destination,
                                                               GLint dx, GLint dy, Uint32 width, Uint32 height,
-                                                              VkImageAspectFlags aspect, VkFormat format,
-                                                              Bool mirrorY, const char* fatalDetail);
+                                                              VkImageAspectFlags aspect, VkFormat format, Bool mirrorY,
+                                                              const char* fatalDetail);
         // A single-sample depth/stencil blit whose rectangles make it a plain copy, performed
         // without vkCmdBlitImage (P7 gate 5). False when the shape is not a plain copy.
-        Bool CopyWireDepthStencilBlit(WireImage& source, WireImage& destination,
-                                      GLint sx0, GLint sy0, GLint sx1, GLint sy1,
-                                      GLint dx0, GLint dy0, GLint dx1, GLint dy1, VkImageAspectFlags aspect);
+        Bool CopyWireDepthStencilBlit(WireImage& source, WireImage& destination, GLint sx0, GLint sy0, GLint sx1,
+                                      GLint sy1, GLint dx0, GLint dy0, GLint dx1, GLint dy1, VkImageAspectFlags aspect);
         // True when the rectangles give a multisample depth/stencil resolve a shape it declines
         // (a scale, an X mirror, a Y mirror across two formats); the decline has then been
         // logged and its INVALID_OPERATION recorded. BlitWireFramebuffers asks it BEFORE any
@@ -665,9 +652,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // ResolveWireDepthStencil (a stencil-only resolve without VK_EXT_shader_stencil_export
         // on a device without VK_KHR_depth_stencil_resolve) is still decided per aspect, after
         // colour ran; rule I (a) accepts that (docs/archive/notes/p7/magma-b2.md §2.10).
-        Bool DeclineWireDepthStencilResolveShape(const WireImage& source, const WireImage& destination,
-                                                 GLint sx0, GLint sy0, GLint sx1, GLint sy1,
-                                                 GLint dx0, GLint dy0, GLint dx1, GLint dy1);
+        Bool DeclineWireDepthStencilResolveShape(const WireImage& source, const WireImage& destination, GLint sx0,
+                                                 GLint sy0, GLint sx1, GLint sy1, GLint dx0, GLint dy0, GLint dx1,
+                                                 GLint dy1);
         PFN_vkCreateRenderPass2 m_wireCreateRenderPass2 = nullptr;
         VkResolveModeFlags m_wireDepthResolveModes = 0;
         VkResolveModeFlags m_wireStencilResolveModes = 0;
@@ -676,9 +663,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // VK_KHR_depth_stencil_resolve. One baked pass per aspect, sample zero, no frontend
         // object - see WireMultisampleResolve.cpp. `resolved` must be a single-sample image of
         // the source's format and extent; the rect is expressed by the scissor.
-        Bool ResolveWireDepthStencilWithShader(WireImage source, WireImage resolved,
-                                               VkImageAspectFlags aspect, GLint sx0, GLint sy0,
-                                               Uint32 width, Uint32 height);
+        Bool ResolveWireDepthStencilWithShader(WireImage source, WireImage resolved, VkImageAspectFlags aspect,
+                                               GLint sx0, GLint sy0, Uint32 width, Uint32 height);
         struct WireMultisampleResolveResources;
         WireMultisampleResolveResources* m_wireMultisampleResolveResources = nullptr;
         void DestroyWireMultisampleResolveResources();
@@ -806,26 +792,23 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         void ArmWireDiscardStateReemit();
         void ForgetDynamicStateAfterDiscardDraw();
         void ArmWireE5RawReads();
+
     public:
         // The kit when the route is armed, else nullptr. VkTextureManager asks before a level copy.
-        const WireE5RawCopyKit* GetWireE5RawCopyKit() const {
-            return m_wireE5RawReads ? &m_wireE5RawCopyKit : nullptr;
-        }
+        const WireE5RawCopyKit* GetWireE5RawCopyKit() const { return m_wireE5RawReads ? &m_wireE5RawCopyKit : nullptr; }
+
     private:
-        Bool BlitWireColorToDefault(WireImage source, WireImage destination,
-                                   GLint sx0, GLint sy0, GLint sx1, GLint sy1,
-                                   GLint dx0, GLint dy0, GLint dx1, GLint dy1, GLenum filter);
-        Bool BlitWireColorImage(WireImage source, WireImage destination,
-                               GLint sx0, GLint sy0, GLint sx1, GLint sy1,
-                               GLint dx0, GLint dy0, GLint dx1, GLint dy1, GLenum filter, Bool mipmap);
+        Bool BlitWireColorToDefault(WireImage source, WireImage destination, GLint sx0, GLint sy0, GLint sx1, GLint sy1,
+                                    GLint dx0, GLint dy0, GLint dx1, GLint dy1, GLenum filter);
+        Bool BlitWireColorImage(WireImage source, WireImage destination, GLint sx0, GLint sy0, GLint sx1, GLint sy1,
+                                GLint dx0, GLint dy0, GLint dx1, GLint dy1, GLenum filter, Bool mipmap);
         // P7 wave 2-B, CONTRACT-P7 §3.2 (`default-color-blit-shape`): the rotated arm. Moves the
         // source region into an owned single-sample 2D image of a sampled-float format in the
         // same size-compatibility class, then shader-blits THAT to the rotated default
         // framebuffer - the shapes BlitWireColorImage itself cannot sample (an integer format, a
         // 3D or array source) become shapes it can.
-        Bool BlitWireColorToDefaultThroughScratch(WireImage source, WireImage destination,
-                                                  GLint sx0, GLint sy0, GLint sx1, GLint sy1,
-                                                  GLint dx0, GLint dy0, GLint dx1, GLint dy1,
+        Bool BlitWireColorToDefaultThroughScratch(WireImage source, WireImage destination, GLint sx0, GLint sy0,
+                                                  GLint sx1, GLint sy1, GLint dx0, GLint dy0, GLint dx1, GLint dy1,
                                                   GLenum filter);
         struct WireColorBlitResources;
         WireColorBlitResources* m_wireColorBlitResources = nullptr;
@@ -843,8 +826,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // P7 wave 2-B (exit gate 3): the readback's own write-visibility barrier, recorded before
         // the copy instead of inferred from the image's tracked layout. See WireFramebuffer.cpp.
         void RecordWireReadbackWriteBarrier();
-        void ReadWirePixels(GLint x, GLint y, GLsizei width, GLsizei height,
-                            GLenum format, GLenum type, void* pixels);
+        void ReadWirePixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, void* pixels);
         void GenerateWireMipmap();
         Bool SetupWireDraw(FrameContext::FrameData& frame, GLenum mode, Flags<DrawSetupAspect> aspects,
                            const DrawCmdParam& drawParams, const IndexBufferView* indices);
@@ -996,12 +978,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         UniquePtr<RenderPassEntry> m_wireDrawPass;
         Vector<VkImageView> m_wireDrawViews;
         VkPipeline GetOrCreatePipelineWithInput(GLenum mode, const MagmaProgramSource& program,
-            const ProgramFactory::VkProgramObject& programObj, ProgramFactory::CompileOptionFlags transformFlags,
-            const VertexInputStateFactory::BackendVertexInputState& vis, const RenderPassEntry& renderPassEntry,
-            Bool primitiveRestartEnable, Bool layeredFramebuffer, Uint64 wireRenderPassCompatibilityId = 0);
+                                                const ProgramFactory::VkProgramObject& programObj,
+                                                ProgramFactory::CompileOptionFlags transformFlags,
+                                                const VertexInputStateFactory::BackendVertexInputState& vis,
+                                                const RenderPassEntry& renderPassEntry, Bool primitiveRestartEnable,
+                                                Bool layeredFramebuffer, Uint64 wireRenderPassCompatibilityId = 0);
 
-        void CopyWireFramebufferToTexture(GLenum target, GLint level, GLint xoffset, GLint yoffset,
-                                           GLint x, GLint y, GLsizei width, GLsizei height);
+        void CopyWireFramebufferToTexture(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint x, GLint y,
+                                          GLsizei width, GLsizei height);
         // ---- Submission fence tracking (GL sync objects) ----
         // One record per vkQueueSubmit still in flight, in ascending submit
         // order. Present/readback submissions reference the frame slot's
@@ -1276,7 +1260,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // the pipeline-state value hash, neither of which moves when glBeginTransformFeedback is
         // called, so a dynamic input here would hand back a stale VkPipeline.
         VkProvokingVertexModeEXT SelectProvokingVertexMode(VkPrimitiveTopology topology,
-                                                          Bool capturesXfbFromGeometryStage) const;
+                                                           Bool capturesXfbFromGeometryStage) const;
         // VK_EXT_vertex_attribute_divisor: without it every non-zero glVertexAttribDivisor
         // behaves as 1, because that is all Vulkan's instance input rate can express.
         Bool m_vertexAttributeDivisorEnabled = false;
@@ -1310,9 +1294,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // Wraps a recorded draw with BeginTransformFeedbackEXT/EndTransformFeedbackEXT
         // when GL transform feedback is active; binds capture buffers on demand.
         Bool BeginXfbCaptureForDraw(FrameContext::FrameData& frame);
-        Bool BeginXfbCaptureWithBuffers(FrameContext::FrameData& frame, Uint32 count,
-                                       const VkBuffer* buffers, const VkDeviceSize* offsets,
-                                       const VkDeviceSize* sizes);
+        Bool BeginXfbCaptureWithBuffers(FrameContext::FrameData& frame, Uint32 count, const VkBuffer* buffers,
+                                        const VkDeviceSize* offsets, const VkDeviceSize* sizes);
         Bool BeginWireXfbCaptureForDraw(FrameContext::FrameData& frame);
         Uint32 m_currentDrawXfbBufferCount = 0;
         Uint32 m_currentDrawXfbBufferMask = 0;
@@ -1378,8 +1361,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // tessellationShader was enabled at device creation (it is taken whenever the
         // device advertises it); gates the probe's PATCHES shape.
         Bool m_tessellationShaderFeatureEnabled = false;
-        MG_Util::SelfTest::PrimGenRerouteKind m_primGenRerouteKind =
-            MG_Util::SelfTest::PrimGenRerouteKind::None;
+        MG_Util::SelfTest::PrimGenRerouteKind m_primGenRerouteKind = MG_Util::SelfTest::PrimGenRerouteKind::None;
         // The bring-up probe measured this device's stream query as counting draws made
         // with no capture span open (the StreamCounts verdict) - so it counts the
         // PAUSED-span ones too, through the stream slot they take when nothing is
@@ -1411,8 +1393,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // kind: 0 = PRIMITIVES_WRITTEN, 1 = PRIMITIVES_GENERATED.
         Bool StartXfbQueryCapture(Uint32 kind);
         void StopXfbQueryCapture(Uint32 kind, Vector<Uint32>& outSlots, Vector<Uint32>& outRerouteSlots);
-        Bool ResolveXfbQueryResult(const Vector<Uint32>& slots, const Vector<Uint32>& rerouteSlots,
-                                   Bool wantGenerated, Uint64& outPrimitives);
+        Bool ResolveXfbQueryResult(const Vector<Uint32>& slots, const Vector<Uint32>& rerouteSlots, Bool wantGenerated,
+                                   Uint64& outPrimitives);
 
     private:
         void BeginXfbQueryForDraw(VkCommandBuffer commandBuffer, Bool xfbActive);
@@ -1632,8 +1614,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // pass renders unflipped). Keyed on BOTH inputs; missing the FBO bit shipped
         // an upside-down default-framebuffer pass after any render-to-texture
         // (minecraft-1.17-main-menu retrace, whole frame flipped).
-        VkSurfaceTransformFlagBitsKHR m_baseTransformFlagsPreTransform =
-            VK_SURFACE_TRANSFORM_FLAG_BITS_MAX_ENUM_KHR;
+        VkSurfaceTransformFlagBitsKHR m_baseTransformFlagsPreTransform = VK_SURFACE_TRANSFORM_FLAG_BITS_MAX_ENUM_KHR;
         Bool m_baseTransformFlagsIsDefaultFbo = false;
         Bool m_baseTransformFlagsKeyValid = false;
         Uint32 m_baseTransformFlagsCache = 0;
@@ -1671,7 +1652,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // must not allocate.
         Vector<VkVertexInputAttributeDescription> m_patchedAttributesScratch;
 
-
         void CreateInstance();
         VkResult SetupDebugMessenger();
         VkResult DestroyDebugMessenger();
@@ -1708,8 +1688,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                        Uint32 viewportCount = 1);
         void ApplyMultiViewportDynamicState(VkCommandBuffer commandBuffer, Uint32 viewportCount, const IntVec2& extent,
                                             VkSurfaceTransformFlagBitsKHR preTransform, Bool isDefaultFbo);
-        VkRect2D ComputeGLScissorRect(Uint32 index, const IntVec2& extent,
-                                      VkSurfaceTransformFlagBitsKHR preTransform, Bool isDefaultFbo) const;
+        VkRect2D ComputeGLScissorRect(Uint32 index, const IntVec2& extent, VkSurfaceTransformFlagBitsKHR preTransform,
+                                      Bool isDefaultFbo) const;
         // How many viewports a draw with this program rasterizes into: 1 unless the program
         // assigns gl_ViewportIndex AND the device enabled multiViewport. Both the pipeline's
         // baked viewportCount and the dynamic arrays come from this one answer, so they cannot
@@ -1728,7 +1708,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     public:
     private:
-
         void ShutdownSwapchain();
 
         // Static functions

@@ -74,8 +74,8 @@ namespace MobileGL {
         class FramebufferAttachmentObject {
         public:
             explicit FramebufferAttachmentObject(const SharedPtr<MG_State::GLState::ITextureObject>& texture,
-                                                 TextureUploadTarget textureUploadTarget,
-                                                 Int level = 0, Int layer = 0, Bool layered = false);
+                                                 TextureUploadTarget textureUploadTarget, Int level = 0, Int layer = 0,
+                                                 Bool layered = false);
             explicit FramebufferAttachmentObject(const SharedPtr<RenderbufferObject>& renderbuffer);
             explicit FramebufferAttachmentObject(Bool IsValid = true);
 

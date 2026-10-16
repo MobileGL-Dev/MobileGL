@@ -128,11 +128,11 @@ void main() { o_color = vec4(0.1, 0.2, 0.3, 1.0); }
                 ++nonZero;
             }
         }
-        EXPECT_EQ(nonZero, 0) << "glClear(0,0,0,0) followed by glReadPixels with no draw returned " << nonZero
-                              << " of " << (width * height) << " non-zero pixels; first at (" << firstX << ", "
-                              << firstY << ") = (" << static_cast<int>(firstOffender.r) << ", "
-                              << static_cast<int>(firstOffender.g) << ", " << static_cast<int>(firstOffender.b)
-                              << ", " << static_cast<int>(firstOffender.a) << ")";
+        EXPECT_EQ(nonZero, 0) << "glClear(0,0,0,0) followed by glReadPixels with no draw returned " << nonZero << " of "
+                              << (width * height) << " non-zero pixels; first at (" << firstX << ", " << firstY
+                              << ") = (" << static_cast<int>(firstOffender.r) << ", "
+                              << static_cast<int>(firstOffender.g) << ", " << static_cast<int>(firstOffender.b) << ", "
+                              << static_cast<int>(firstOffender.a) << ")";
 
         gl.EndFrame();
         glDeleteProgram(program);
@@ -222,9 +222,9 @@ void main() { o_color = vec4(0.1, 0.2, 0.3, 1.0); }
         EXPECT_EQ(FirstGLError(), 0u);
         const Rgba8 centre = blitted.At(width / 2, height / 2);
         EXPECT_NEAR(centre.r, 26, 2) << "the blit into the default framebuffer did not survive the clear that "
-                                        "preceded it; read back rgba(" << static_cast<int>(centre.r) << ", "
-                                     << static_cast<int>(centre.g) << ", " << static_cast<int>(centre.b) << ", "
-                                     << static_cast<int>(centre.a) << ")";
+                                        "preceded it; read back rgba("
+                                     << static_cast<int>(centre.r) << ", " << static_cast<int>(centre.g) << ", "
+                                     << static_cast<int>(centre.b) << ", " << static_cast<int>(centre.a) << ")";
         EXPECT_NEAR(centre.g, 51, 2);
         EXPECT_NEAR(centre.b, 77, 2);
 
@@ -292,9 +292,8 @@ void main() { o_color = vec4(0.1, 0.2, 0.3, 1.0); }
                                  << static_cast<int>(bottom.b) << ") - blue there means the resolve landed "
                                  << "in the mirrored band";
         EXPECT_LT(bottom.b, 60);
-        EXPECT_GT(top.b, 200) << "the top band should be blue after the resolve, got rgba("
-                              << static_cast<int>(top.r) << ", " << static_cast<int>(top.g) << ", "
-                              << static_cast<int>(top.b) << ")";
+        EXPECT_GT(top.b, 200) << "the top band should be blue after the resolve, got rgba(" << static_cast<int>(top.r)
+                              << ", " << static_cast<int>(top.g) << ", " << static_cast<int>(top.b) << ")";
         EXPECT_LT(top.r, 60);
 
         glDeleteRenderbuffers(1, &rbo);

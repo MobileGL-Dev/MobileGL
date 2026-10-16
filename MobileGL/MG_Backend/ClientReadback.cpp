@@ -26,28 +26,64 @@ namespace MobileGL::MG_Backend {
 
         Bool GetReadbackChannelMapping(GLenum format, ReadbackChannelMapping& outMapping) {
             switch (format) {
-            case GL_RED:          outMapping = {{0, 0, 0, 0}, 1, false}; return true;
-            case GL_RED_INTEGER:  outMapping = {{0, 0, 0, 0}, 1, true};  return true;
+            case GL_RED:
+                outMapping = {{0, 0, 0, 0}, 1, false};
+                return true;
+            case GL_RED_INTEGER:
+                outMapping = {{0, 0, 0, 0}, 1, true};
+                return true;
             // Desktop-GL single-channel client formats (GL CTS packed_pixels rgba8_format_green/blue):
             // the destination holds one component sourced from the named channel of the wide RGBA read.
             // GL_ALPHA is mapped here from the raw enum because the state layer folds it into Red for the
             // legacy alpha-texture upload hack.
-            case GL_GREEN:         outMapping = {{1, 0, 0, 0}, 1, false}; return true;
-            case GL_GREEN_INTEGER: outMapping = {{1, 0, 0, 0}, 1, true};  return true;
-            case GL_BLUE:          outMapping = {{2, 0, 0, 0}, 1, false}; return true;
-            case GL_BLUE_INTEGER:  outMapping = {{2, 0, 0, 0}, 1, true};  return true;
-            case GL_ALPHA:         outMapping = {{3, 0, 0, 0}, 1, false}; return true;
-            case GL_ALPHA_INTEGER: outMapping = {{3, 0, 0, 0}, 1, true};  return true;
-            case GL_RG:           outMapping = {{0, 1, 0, 0}, 2, false}; return true;
-            case GL_RG_INTEGER:   outMapping = {{0, 1, 0, 0}, 2, true};  return true;
-            case GL_RGB:          outMapping = {{0, 1, 2, 0}, 3, false}; return true;
-            case GL_RGB_INTEGER:  outMapping = {{0, 1, 2, 0}, 3, true};  return true;
-            case GL_BGR:          outMapping = {{2, 1, 0, 0}, 3, false}; return true;
-            case GL_BGR_INTEGER:  outMapping = {{2, 1, 0, 0}, 3, true};  return true;
-            case GL_RGBA:         outMapping = {{0, 1, 2, 3}, 4, false}; return true;
-            case GL_RGBA_INTEGER: outMapping = {{0, 1, 2, 3}, 4, true};  return true;
-            case GL_BGRA:         outMapping = {{2, 1, 0, 3}, 4, false}; return true;
-            case GL_BGRA_INTEGER: outMapping = {{2, 1, 0, 3}, 4, true};  return true;
+            case GL_GREEN:
+                outMapping = {{1, 0, 0, 0}, 1, false};
+                return true;
+            case GL_GREEN_INTEGER:
+                outMapping = {{1, 0, 0, 0}, 1, true};
+                return true;
+            case GL_BLUE:
+                outMapping = {{2, 0, 0, 0}, 1, false};
+                return true;
+            case GL_BLUE_INTEGER:
+                outMapping = {{2, 0, 0, 0}, 1, true};
+                return true;
+            case GL_ALPHA:
+                outMapping = {{3, 0, 0, 0}, 1, false};
+                return true;
+            case GL_ALPHA_INTEGER:
+                outMapping = {{3, 0, 0, 0}, 1, true};
+                return true;
+            case GL_RG:
+                outMapping = {{0, 1, 0, 0}, 2, false};
+                return true;
+            case GL_RG_INTEGER:
+                outMapping = {{0, 1, 0, 0}, 2, true};
+                return true;
+            case GL_RGB:
+                outMapping = {{0, 1, 2, 0}, 3, false};
+                return true;
+            case GL_RGB_INTEGER:
+                outMapping = {{0, 1, 2, 0}, 3, true};
+                return true;
+            case GL_BGR:
+                outMapping = {{2, 1, 0, 0}, 3, false};
+                return true;
+            case GL_BGR_INTEGER:
+                outMapping = {{2, 1, 0, 0}, 3, true};
+                return true;
+            case GL_RGBA:
+                outMapping = {{0, 1, 2, 3}, 4, false};
+                return true;
+            case GL_RGBA_INTEGER:
+                outMapping = {{0, 1, 2, 3}, 4, true};
+                return true;
+            case GL_BGRA:
+                outMapping = {{2, 1, 0, 3}, 4, false};
+                return true;
+            case GL_BGRA_INTEGER:
+                outMapping = {{2, 1, 0, 3}, 4, true};
+                return true;
             default:
                 return false;
             }
@@ -58,22 +94,50 @@ namespace MobileGL::MG_Backend {
             // Non-REV types pack the first format component starting at the most significant bit,
             // *_REV types starting at the least significant bit (GL CTS pack_UNSIGNED_SHORT_5_6_5:
             // R bits 15-11; pack_UNSIGNED_SHORT_1_5_5_5_REV: R bits 4-0, A bit 15).
-            case GL_UNSIGNED_BYTE_3_3_2:          out = {3, {3, 3, 2, 0},    {5, 2, 0, 0},    1, false}; return true;
-            case GL_UNSIGNED_BYTE_2_3_3_REV:      out = {3, {3, 3, 2, 0},    {0, 3, 6, 0},    1, false}; return true;
-            case GL_UNSIGNED_SHORT_5_6_5:         out = {3, {5, 6, 5, 0},    {11, 5, 0, 0},   2, false}; return true;
-            case GL_UNSIGNED_SHORT_5_6_5_REV:     out = {3, {5, 6, 5, 0},    {0, 5, 11, 0},   2, false}; return true;
-            case GL_UNSIGNED_SHORT_4_4_4_4:       out = {4, {4, 4, 4, 4},    {12, 8, 4, 0},   2, false}; return true;
-            case GL_UNSIGNED_SHORT_4_4_4_4_REV:   out = {4, {4, 4, 4, 4},    {0, 4, 8, 12},   2, false}; return true;
-            case GL_UNSIGNED_SHORT_5_5_5_1:       out = {4, {5, 5, 5, 1},    {11, 6, 1, 0},   2, false}; return true;
-            case GL_UNSIGNED_SHORT_1_5_5_5_REV:   out = {4, {5, 5, 5, 1},    {0, 5, 10, 15},  2, false}; return true;
-            case GL_UNSIGNED_INT_8_8_8_8:         out = {4, {8, 8, 8, 8},    {24, 16, 8, 0},  4, false}; return true;
-            case GL_UNSIGNED_INT_8_8_8_8_REV:     out = {4, {8, 8, 8, 8},    {0, 8, 16, 24},  4, false}; return true;
-            case GL_UNSIGNED_INT_10_10_10_2:      out = {4, {10, 10, 10, 2}, {22, 12, 2, 0},  4, false}; return true;
-            case GL_UNSIGNED_INT_2_10_10_10_REV:  out = {4, {10, 10, 10, 2}, {0, 10, 20, 30}, 4, false}; return true;
+            case GL_UNSIGNED_BYTE_3_3_2:
+                out = {3, {3, 3, 2, 0}, {5, 2, 0, 0}, 1, false};
+                return true;
+            case GL_UNSIGNED_BYTE_2_3_3_REV:
+                out = {3, {3, 3, 2, 0}, {0, 3, 6, 0}, 1, false};
+                return true;
+            case GL_UNSIGNED_SHORT_5_6_5:
+                out = {3, {5, 6, 5, 0}, {11, 5, 0, 0}, 2, false};
+                return true;
+            case GL_UNSIGNED_SHORT_5_6_5_REV:
+                out = {3, {5, 6, 5, 0}, {0, 5, 11, 0}, 2, false};
+                return true;
+            case GL_UNSIGNED_SHORT_4_4_4_4:
+                out = {4, {4, 4, 4, 4}, {12, 8, 4, 0}, 2, false};
+                return true;
+            case GL_UNSIGNED_SHORT_4_4_4_4_REV:
+                out = {4, {4, 4, 4, 4}, {0, 4, 8, 12}, 2, false};
+                return true;
+            case GL_UNSIGNED_SHORT_5_5_5_1:
+                out = {4, {5, 5, 5, 1}, {11, 6, 1, 0}, 2, false};
+                return true;
+            case GL_UNSIGNED_SHORT_1_5_5_5_REV:
+                out = {4, {5, 5, 5, 1}, {0, 5, 10, 15}, 2, false};
+                return true;
+            case GL_UNSIGNED_INT_8_8_8_8:
+                out = {4, {8, 8, 8, 8}, {24, 16, 8, 0}, 4, false};
+                return true;
+            case GL_UNSIGNED_INT_8_8_8_8_REV:
+                out = {4, {8, 8, 8, 8}, {0, 8, 16, 24}, 4, false};
+                return true;
+            case GL_UNSIGNED_INT_10_10_10_2:
+                out = {4, {10, 10, 10, 2}, {22, 12, 2, 0}, 4, false};
+                return true;
+            case GL_UNSIGNED_INT_2_10_10_10_REV:
+                out = {4, {10, 10, 10, 2}, {0, 10, 20, 30}, 4, false};
+                return true;
             // Packed-float RGB types: fields hold unsigned small floats; 5_9_9_9_REV's shared 5-bit
             // exponent (bits 31-27) is emitted by EncodeSharedExponentRGB9E5, not a component field.
-            case GL_UNSIGNED_INT_10F_11F_11F_REV: out = {3, {11, 11, 10, 0}, {0, 11, 22, 0},  4, true};  return true;
-            case GL_UNSIGNED_INT_5_9_9_9_REV:     out = {3, {9, 9, 9, 0},    {0, 9, 18, 0},   4, true};  return true;
+            case GL_UNSIGNED_INT_10F_11F_11F_REV:
+                out = {3, {11, 11, 10, 0}, {0, 11, 22, 0}, 4, true};
+                return true;
+            case GL_UNSIGNED_INT_5_9_9_9_REV:
+                out = {3, {9, 9, 9, 0}, {0, 9, 18, 0}, 4, true};
+                return true;
             default:
                 return false;
             }
@@ -141,9 +205,15 @@ namespace MobileGL::MG_Backend {
 
         // Shared encoders live in MG_Util/Math/SmallFloat.h so the upload conversion
         // (PixelStoreProcessor) uses byte-identical packing; kept exported here for unit tests.
-        Uint32 EncodeFloatToUnsignedF11(Float value) { return MG_Util::EncodeFloatToUnsignedF11(value); }
-        Uint32 EncodeFloatToUnsignedF10(Float value) { return MG_Util::EncodeFloatToUnsignedF10(value); }
-        Uint32 EncodeSharedExponentRGB9E5(const Float rgb[3]) { return MG_Util::EncodeSharedExponentRGB9E5(rgb); }
+        Uint32 EncodeFloatToUnsignedF11(Float value) {
+            return MG_Util::EncodeFloatToUnsignedF11(value);
+        }
+        Uint32 EncodeFloatToUnsignedF10(Float value) {
+            return MG_Util::EncodeFloatToUnsignedF10(value);
+        }
+        Uint32 EncodeSharedExponentRGB9E5(const Float rgb[3]) {
+            return MG_Util::EncodeSharedExponentRGB9E5(rgb);
+        }
 
         void ConvertWideReadbackRow(const Uint8* src, Uint8* dst, SizeT width, GLenum wideType,
                                     const ReadbackChannelMapping& mapping, GLenum type) {
@@ -203,8 +273,7 @@ namespace MobileGL::MG_Backend {
                                 break;
                             }
                             case GL_INT: {
-                                const auto out =
-                                    static_cast<Int32>(std::clamp<Int64>(v, -2147483648LL, 2147483647LL));
+                                const auto out = static_cast<Int32>(std::clamp<Int64>(v, -2147483648LL, 2147483647LL));
                                 Memcpy(dstComponent, &out, sizeof(out));
                                 break;
                             }
@@ -229,8 +298,7 @@ namespace MobileGL::MG_Backend {
                         break;
                     case GL_UNSIGNED_SHORT:
                         for (Int c = 0; c < 4; ++c) {
-                            srcValues[c] =
-                                static_cast<Float>(reinterpret_cast<const Uint16*>(srcPixel)[c]) / 65535.0f;
+                            srcValues[c] = static_cast<Float>(reinterpret_cast<const Uint16*>(srcPixel)[c]) / 65535.0f;
                         }
                         break;
                     case GL_SHORT:
@@ -277,24 +345,20 @@ namespace MobileGL::MG_Backend {
                             Uint8* dstComponent = dstPixel + static_cast<SizeT>(ch) * dstComponentSize;
                             switch (type) {
                             case GL_UNSIGNED_BYTE:
-                                *dstComponent =
-                                    static_cast<Uint8>(std::llround(std::clamp(v, 0.0f, 1.0f) * 255.0));
+                                *dstComponent = static_cast<Uint8>(std::llround(std::clamp(v, 0.0f, 1.0f) * 255.0));
                                 break;
                             case GL_BYTE: {
-                                const auto out =
-                                    static_cast<Int8>(std::llround(std::clamp(v, -1.0f, 1.0f) * 127.0));
+                                const auto out = static_cast<Int8>(std::llround(std::clamp(v, -1.0f, 1.0f) * 127.0));
                                 Memcpy(dstComponent, &out, sizeof(out));
                                 break;
                             }
                             case GL_UNSIGNED_SHORT: {
-                                const auto out =
-                                    static_cast<Uint16>(std::llround(std::clamp(v, 0.0f, 1.0f) * 65535.0));
+                                const auto out = static_cast<Uint16>(std::llround(std::clamp(v, 0.0f, 1.0f) * 65535.0));
                                 Memcpy(dstComponent, &out, sizeof(out));
                                 break;
                             }
                             case GL_SHORT: {
-                                const auto out =
-                                    static_cast<Int16>(std::llround(std::clamp(v, -1.0f, 1.0f) * 32767.0));
+                                const auto out = static_cast<Int16>(std::llround(std::clamp(v, -1.0f, 1.0f) * 32767.0));
                                 Memcpy(dstComponent, &out, sizeof(out));
                                 break;
                             }
@@ -350,10 +414,9 @@ namespace MobileGL::MG_Backend {
             const auto packParams = MG_Pipe::gPipeInputs->GetPixelStoreParameters(false);
             const SizeT rowPixels = static_cast<SizeT>(packParams.RowLength > 0 ? packParams.RowLength : width);
             const SizeT dstRowStride = AlignReadbackRow(rowPixels * dstPixelBytes, packParams.Alignment);
-            const SizeT imageRows =
-                applyPackImageParams && packParams.ImageHeight > 0
-                    ? static_cast<SizeT>(packParams.ImageHeight)
-                    : static_cast<SizeT>(sliceHeight);
+            const SizeT imageRows = applyPackImageParams && packParams.ImageHeight > 0
+                                        ? static_cast<SizeT>(packParams.ImageHeight)
+                                        : static_cast<SizeT>(sliceHeight);
             const SizeT dstImageStride = imageRows * dstRowStride;
             const SizeT skipImages =
                 applyPackImageParams ? static_cast<SizeT>(std::max(packParams.SkipImages, 0)) : SizeT{0};
@@ -375,7 +438,7 @@ namespace MobileGL::MG_Backend {
                     }
 
                     const SizeT dstOffset = dstSkipOffset + static_cast<SizeT>(slice) * dstImageStride +
-                                         static_cast<SizeT>(row) * dstRowStride;
+                                            static_cast<SizeT>(row) * dstRowStride;
                     Memcpy(static_cast<Uint8*>(pixels) + dstOffset, convertedRow.data(), dstRowBytes);
                 }
             }
@@ -387,8 +450,8 @@ namespace MobileGL::MG_Backend {
         // `sliceHeight * sliceCount` rows of `width` texels (slice-major, tightly stacked),
         // 4 components x GetReadbackComponentSize(wideType) bytes each.
         Bool StoreWideRowsToClient(const Uint8* wide, GLenum wideType, GLsizei width, GLsizei sliceHeight,
-                                   GLsizei sliceCount, const ReadbackChannelMapping& mapping, GLenum type,
-                                   void* pixels, Bool applyPackImageParams) {
+                                   GLsizei sliceCount, const ReadbackChannelMapping& mapping, GLenum type, void* pixels,
+                                   Bool applyPackImageParams) {
             const SizeT dstPixelBytes = GetReadbackDstPixelSize(mapping, type);
             if (dstPixelBytes == 0) {
                 return false;
@@ -398,17 +461,14 @@ namespace MobileGL::MG_Backend {
             const SizeT swapGroupSize = isPackedType ? packedLayout.byteSize : GetReadbackComponentSize(type);
             const SizeT srcPixelBytes = 4 * GetReadbackComponentSize(wideType);
 
-            return StoreClientRows(dstPixelBytes, swapGroupSize, width, sliceHeight, sliceCount, pixels,
-                                   applyPackImageParams,
-                                   [&](GLsizei slice, GLsizei row, Uint8* dstRow) {
-                                       const SizeT flatRow = static_cast<SizeT>(slice) *
-                                                                 static_cast<SizeT>(sliceHeight) +
-                                                             static_cast<SizeT>(row);
-                                       const Uint8* srcRow =
-                                           wide + flatRow * static_cast<SizeT>(width) * srcPixelBytes;
-                                       ConvertWideReadbackRow(srcRow, dstRow, static_cast<SizeT>(width), wideType,
-                                                              mapping, type);
-                                   });
+            return StoreClientRows(
+                dstPixelBytes, swapGroupSize, width, sliceHeight, sliceCount, pixels, applyPackImageParams,
+                [&](GLsizei slice, GLsizei row, Uint8* dstRow) {
+                    const SizeT flatRow =
+                        static_cast<SizeT>(slice) * static_cast<SizeT>(sliceHeight) + static_cast<SizeT>(row);
+                    const Uint8* srcRow = wide + flatRow * static_cast<SizeT>(width) * srcPixelBytes;
+                    ConvertWideReadbackRow(srcRow, dstRow, static_cast<SizeT>(width), wideType, mapping, type);
+                });
         }
 
         Bool StorePackedWordsToClient(const Uint8* srcWords, GLsizei width, GLsizei sliceHeight, GLsizei sliceCount,
@@ -420,11 +480,10 @@ namespace MobileGL::MG_Backend {
             const SizeT srcRowBytes = static_cast<SizeT>(width) * 4;
 
             return StoreClientRows(4, packedLayout.byteSize, width, sliceHeight, sliceCount, pixels,
-                                   applyPackImageParams,
-                                   [&](GLsizei slice, GLsizei row, Uint8* dstRow) {
-                                       const SizeT flatRow = static_cast<SizeT>(slice) *
-                                                                 static_cast<SizeT>(sliceHeight) +
-                                                             static_cast<SizeT>(row);
+                                   applyPackImageParams, [&](GLsizei slice, GLsizei row, Uint8* dstRow) {
+                                       const SizeT flatRow =
+                                           static_cast<SizeT>(slice) * static_cast<SizeT>(sliceHeight) +
+                                           static_cast<SizeT>(row);
                                        Memcpy(dstRow, srcWords + flatRow * srcRowBytes, srcRowBytes);
                                    });
         }

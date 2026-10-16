@@ -11,7 +11,7 @@
 
 #if MOBILEGL_BUILD_DISAGGREGATED
 #include <Config.h>
-#include <MG_Backend/MGPipe/PipeInputs.h>  // D1c: MGPipeServerArm()
+#include <MG_Backend/MGPipe/PipeInputs.h> // D1c: MGPipeServerArm()
 #include <MG_Pipe/PipeApply.h>
 #include <MG_Remote/Server/ServerLoop.h>
 #include <MG_Util/Debug/Log.h>
@@ -70,8 +70,7 @@ namespace MobileGL::MG_Pipe {
         return m_kinds[index < kKindCount ? index : 0];
     }
 
-    MGPipeSlotAllocator::SlotState* MGPipeSlotAllocator::EntryOf(KindState& state, MGPipeKind kind,
-                                                                 Uint32 slot) {
+    MGPipeSlotAllocator::SlotState* MGPipeSlotAllocator::EntryOf(KindState& state, MGPipeKind kind, Uint32 slot) {
         if (kind == MGPipeKind::ShaderCso && MGPipeIsCompositeShaderSlot(slot)) {
             const SizeT index = slot - kMGPipeShaderCsoCompositeSlotBase;
             if (index >= state.BandSlots.size()) return nullptr;
@@ -81,8 +80,8 @@ namespace MobileGL::MG_Pipe {
         return &state.Slots[slot];
     }
 
-    const MGPipeSlotAllocator::SlotState*
-    MGPipeSlotAllocator::EntryOf(const KindState& state, MGPipeKind kind, Uint32 slot) {
+    const MGPipeSlotAllocator::SlotState* MGPipeSlotAllocator::EntryOf(const KindState& state, MGPipeKind kind,
+                                                                       Uint32 slot) {
         return EntryOf(const_cast<KindState&>(state), kind, slot);
     }
 
@@ -106,8 +105,7 @@ namespace MobileGL::MG_Pipe {
 
         if (!reused) {
             slot = static_cast<Uint32>(state.Slots.size());
-            MOBILEGL_ASSERT(SlotIsAllocatable(kind, slot),
-                            "MGPipe slot space of kind %u is exhausted at slot %u",
+            MOBILEGL_ASSERT(SlotIsAllocatable(kind, slot), "MGPipe slot space of kind %u is exhausted at slot %u",
                             static_cast<Uint32>(kind), slot);
             if (!SlotIsAllocatable(kind, slot)) return kMGPipeNullHandle;
             state.Slots.emplace_back();
@@ -223,8 +221,7 @@ namespace MobileGL::MG_Pipe {
         return MGPipeHandle{it->second, entry->Gen};
     }
 
-    MGPipeHandle MGPipeSlotAllocator::FindByLifetimeIdHinted(MGPipeKind kind, Uint64 lifetimeId,
-                                                             Uint64& hint) const {
+    MGPipeHandle MGPipeSlotAllocator::FindByLifetimeIdHinted(MGPipeKind kind, Uint64 lifetimeId, Uint64& hint) const {
         if (hint != 0 && lifetimeId != 0) {
 #if MOBILEGL_BUILD_DISAGGREGATED
             MGPipeRefuseAllocatorFromApplyThread("FindByLifetimeIdHinted");
@@ -317,7 +314,9 @@ namespace MobileGL::MG_Pipe {
         return static_cast<Uint32>(kMGPipeShaderCsoCompositeSlotBase + state.BandSlots.size());
     }
 
-    Uint32 MGPipeSlotAllocator::LiveCount(MGPipeKind kind) const { return StateOf(kind).LiveCount; }
+    Uint32 MGPipeSlotAllocator::LiveCount(MGPipeKind kind) const {
+        return StateOf(kind).LiveCount;
+    }
 
     Uint32 MGPipeSlotAllocator::CompositeLiveCount() const {
         return StateOf(MGPipeKind::ShaderCso).BandLiveCount;

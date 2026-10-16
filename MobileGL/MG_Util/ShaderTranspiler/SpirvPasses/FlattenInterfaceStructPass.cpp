@@ -22,8 +22,8 @@
 #include <vector>
 
 namespace {
-    using spvtools::opt::IRContext;
     using spvtools::opt::Instruction;
+    using spvtools::opt::IRContext;
     using spvtools::opt::Operand;
 
     constexpr const char* kTargetTypeName = "DailyWeatherVariation";
@@ -186,10 +186,10 @@ namespace {
     void AddLocationDecoration(IRContext* context, uint32_t id, uint32_t location) {
         context->AddAnnotationInst(spvtools::MakeUnique<Instruction>(
             context, spv::Op::OpDecorate, 0, 0,
-            std::initializer_list<Operand>{{SPV_OPERAND_TYPE_ID, {id}},
-                                           {SPV_OPERAND_TYPE_DECORATION,
-                                            {static_cast<uint32_t>(spv::Decoration::Location)}},
-                                           {SPV_OPERAND_TYPE_LITERAL_INTEGER, {location}}}));
+            std::initializer_list<Operand>{
+                {SPV_OPERAND_TYPE_ID, {id}},
+                {SPV_OPERAND_TYPE_DECORATION, {static_cast<uint32_t>(spv::Decoration::Location)}},
+                {SPV_OPERAND_TYPE_LITERAL_INTEGER, {location}}}));
     }
 
     std::optional<uint32_t> GetVariableDecorationLiteral(IRContext* context, uint32_t id, spv::Decoration kind) {
@@ -209,7 +209,8 @@ namespace {
     std::optional<uint32_t> GetMemberDecorationLiteral(IRContext* context, uint32_t structTypeId, uint32_t memberIndex,
                                                        spv::Decoration kind) {
         for (Instruction* decoration : context->get_decoration_mgr()->GetDecorationsFor(structTypeId, false)) {
-            if (decoration->opcode() != spv::Op::OpMemberDecorate || decoration->GetSingleWordInOperand(1) != memberIndex ||
+            if (decoration->opcode() != spv::Op::OpMemberDecorate ||
+                decoration->GetSingleWordInOperand(1) != memberIndex ||
                 static_cast<spv::Decoration>(decoration->GetSingleWordInOperand(2)) != kind ||
                 decoration->NumInOperands() < 4) {
                 continue;
@@ -239,8 +240,10 @@ namespace {
 
     void CloneMemberDecorations(IRContext* context, const Instruction* structType, uint32_t memberIndex,
                                 Instruction* target) {
-        for (Instruction* decoration : context->get_decoration_mgr()->GetDecorationsFor(structType->result_id(), false)) {
-            if (decoration->opcode() != spv::Op::OpMemberDecorate || decoration->GetSingleWordInOperand(1) != memberIndex) {
+        for (Instruction* decoration :
+             context->get_decoration_mgr()->GetDecorationsFor(structType->result_id(), false)) {
+            if (decoration->opcode() != spv::Op::OpMemberDecorate ||
+                decoration->GetSingleWordInOperand(1) != memberIndex) {
                 continue;
             }
 
@@ -304,7 +307,8 @@ namespace {
             }
 
             replacementChain->UpdateDebugInfoFrom(accessChain);
-            auto insertPoint = spvtools::opt::BasicBlock::iterator(accessChain).InsertBefore(std::move(replacementChain));
+            auto insertPoint =
+                spvtools::opt::BasicBlock::iterator(accessChain).InsertBefore(std::move(replacementChain));
             context->AnalyzeDefUse(&*insertPoint);
             context->set_instr_block(&*insertPoint, context->get_instr_block(accessChain));
             context->ReplaceAllUsesWith(accessChain->result_id(), replacementId);
@@ -490,14 +494,15 @@ namespace MobileGL {
                 uint32_t locationCursor =
                     GetVariableDecorationLiteral(irContext, targetVariable->result_id(), spv::Decoration::Location)
                         .value_or(0u);
-                for (uint32_t memberIndex = 0; memberIndex < static_cast<uint32_t>(kFlattenedMembers.size()); ++memberIndex) {
-                    const uint32_t location = GetMemberDecorationLiteral(irContext, targetStructType->result_id(), memberIndex,
-                                                                         spv::Decoration::Location)
+                for (uint32_t memberIndex = 0; memberIndex < static_cast<uint32_t>(kFlattenedMembers.size());
+                     ++memberIndex) {
+                    const uint32_t location = GetMemberDecorationLiteral(irContext, targetStructType->result_id(),
+                                                                         memberIndex, spv::Decoration::Location)
                                                   .value_or(locationCursor);
                     Instruction* const memberVar = CreateFlattenedVariable(
                         irContext, defUseMgr, typeMgr, targetVariable, targetStructType, memberIndex, location);
-                    replacements.push_back({memberIndex, targetStructType->GetSingleWordInOperand(memberIndex), location,
-                                            memberVar});
+                    replacements.push_back(
+                        {memberIndex, targetStructType->GetSingleWordInOperand(memberIndex), location, memberVar});
                     locationCursor = location + kFlattenedMembers[memberIndex].locationSpan;
                 }
 

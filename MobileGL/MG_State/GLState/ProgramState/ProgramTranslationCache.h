@@ -61,8 +61,7 @@ namespace MobileGL::MG_State::GLState {
     //
     // Global rather than per-context because the producer runs on a ShaderCompilePool worker
     // and must not reach MG_State::pGLContext.
-    MG_Util::ShaderTranspiler::BoundedTranslationCache<ProgramTranslationResult>&
-    GetProgramTranslationCache();
+    MG_Util::ShaderTranspiler::BoundedTranslationCache<ProgramTranslationResult>& GetProgramTranslationCache();
 
     void ClearProgramTranslationCache();
     void LogProgramTranslationCacheStats();

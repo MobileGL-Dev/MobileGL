@@ -102,8 +102,7 @@ TEST(RingTest, ControlPageLayoutIsTheSharedContract) {
 
     // Each contended group on its own cache line.
     const auto offset = [&control](const void* member) {
-        return reinterpret_cast<const std::uint8_t*>(member) -
-               reinterpret_cast<const std::uint8_t*>(&control);
+        return reinterpret_cast<const std::uint8_t*>(member) - reinterpret_cast<const std::uint8_t*>(&control);
     };
     EXPECT_EQ(offset(&control.cmdHead) % 64, 0);
     EXPECT_EQ(offset(&control.cmdAppliedTail) % 64, 0);
@@ -205,8 +204,7 @@ TEST(RingTest, WrapsWithoutSplittingARecord) {
     std::uint8_t seed = 0;
     for (int i = 0; i < 200; ++i) {
         const std::uint64_t size = 24 + (i % 5) * 8;
-        ASSERT_TRUE(ring.WriteRecord(static_cast<std::uint16_t>(1 + (i % 3)), size, seed))
-            << "record " << i;
+        ASSERT_TRUE(ring.WriteRecord(static_cast<std::uint16_t>(1 + (i % 3)), size, seed)) << "record " << i;
         RingRecordView view{};
         bool corrupt = false;
         ASSERT_TRUE(ring.Consumer().Pop(view, &corrupt)) << "record " << i;
@@ -432,8 +430,8 @@ TEST(RingTest, SpscProducerConsumerThreadsAgreeOnEveryRecord) {
     for (int i = 0; i < kRecords; ++i) {
         const std::uint64_t payloadSize = sizeof(std::uint32_t) + (i % 4) * 8;
         void* payload = nullptr;
-        while ((payload = ring.Producer().Reserve(static_cast<std::uint16_t>(1 + (i % 7)),
-                                                  kRecNone, payloadSize)) == nullptr) {
+        while ((payload = ring.Producer().Reserve(static_cast<std::uint16_t>(1 + (i % 7)), kRecNone, payloadSize)) ==
+               nullptr) {
             if (failed.load()) {
                 break;
             }
@@ -479,10 +477,7 @@ TEST(RingTest, DoorbellHandoffWakesBothSidesOnEveryPublish) {
         while (seen < kRecords) {
             const bool woke = consumerBell.Wait(
                 ring.Control().consumerParked,
-                [&] {
-                    return ring.Control().cmdHead.load(std::memory_order_acquire) !=
-                           ring.Consumer().LocalTail();
-                },
+                [&] { return ring.Control().cmdHead.load(std::memory_order_acquire) != ring.Consumer().LocalTail(); },
                 kDefaultSpinUs, 5000);
             if (!woke) {
                 ok.store(false); // a wakeup was lost, or the producer stalled
@@ -515,9 +510,8 @@ TEST(RingTest, DoorbellHandoffWakesBothSidesOnEveryPublish) {
                 break;
             }
             if (!producerBell.Wait(
-                    ring.Control().producerParked,
-                    [&] { return ring.Producer().FreeBytes() >= kRecordBytes; }, kDefaultSpinUs,
-                    5000)) {
+                    ring.Control().producerParked, [&] { return ring.Producer().FreeBytes() >= kRecordBytes; },
+                    kDefaultSpinUs, 5000)) {
                 ok.store(false);
                 break;
             }
@@ -590,8 +584,7 @@ TEST(RingTest, AppliedSeqAdvancesOncePerRecordAndIsNeverBatchedInP5) {
     RingFixture ring(1024);
     constexpr int kRecords = 12;
     for (int i = 0; i < kRecords; ++i) {
-        ASSERT_TRUE(ring.WriteRecord(static_cast<std::uint16_t>(i + 1), 16,
-                                     static_cast<std::uint8_t>(i)));
+        ASSERT_TRUE(ring.WriteRecord(static_cast<std::uint16_t>(i + 1), 16, static_cast<std::uint8_t>(i)));
     }
 
     std::uint64_t applied = 0;
@@ -616,8 +609,7 @@ TEST(RingTest, ALazyWatermarkMayTrailTheWorkButMustNeverLeadIt) {
     RingFixture ring(1024);
     constexpr int kRecords = 8;
     for (int i = 0; i < kRecords; ++i) {
-        ASSERT_TRUE(ring.WriteRecord(static_cast<std::uint16_t>(i + 1), 16,
-                                     static_cast<std::uint8_t>(i)));
+        ASSERT_TRUE(ring.WriteRecord(static_cast<std::uint16_t>(i + 1), 16, static_cast<std::uint8_t>(i)));
     }
 
     std::uint64_t drained = 0;
@@ -651,8 +643,7 @@ TEST(RingTest, AWrapFillerDoesNotAdvanceTheRecordSequence) {
     // it lands exactly at the boundary. The fifth is what forces the filler.
     std::uint64_t written = 0;
     for (int i = 0; i < 3; ++i) {
-        ASSERT_TRUE(ring.WriteRecord(static_cast<std::uint16_t>(i + 1), kPayload,
-                                     static_cast<std::uint8_t>(i)));
+        ASSERT_TRUE(ring.WriteRecord(static_cast<std::uint16_t>(i + 1), kPayload, static_cast<std::uint8_t>(i)));
         ++written;
     }
     const std::uint64_t headAfterThree = ring.Producer().LocalHead();
@@ -674,8 +665,7 @@ TEST(RingTest, AWrapFillerDoesNotAdvanceTheRecordSequence) {
     // the head advances by MORE than the records' own bytes, and that surplus is the
     // pad. The record count still has to match.
     for (int i = 0; i < 3; ++i) {
-        ASSERT_TRUE(ring.WriteRecord(static_cast<std::uint16_t>(i + 10), kPayload,
-                                     static_cast<std::uint8_t>(i + 10)));
+        ASSERT_TRUE(ring.WriteRecord(static_cast<std::uint16_t>(i + 10), kPayload, static_cast<std::uint8_t>(i + 10)));
         ++written;
     }
     const std::uint64_t headAfterSix = ring.Producer().LocalHead();
@@ -685,8 +675,7 @@ TEST(RingTest, AWrapFillerDoesNotAdvanceTheRecordSequence) {
         EXPECT_EQ(view.flags & kRecPad, 0u) << "a wrap filler reached the record counter";
         ++popped;
     }
-    EXPECT_EQ(popped, written)
-        << "the two sides' sequence spaces have drifted by the fillers between them";
+    EXPECT_EQ(popped, written) << "the two sides' sequence spaces have drifted by the fillers between them";
     EXPECT_TRUE(ring.Invariants());
 }
 
@@ -707,7 +696,9 @@ namespace {
     constexpr std::uint32_t Call(MobileGL::MG_Pipe::MGPipeCallFlags f) {
         return static_cast<std::uint32_t>(f);
     }
-    constexpr std::uint32_t Rec(RingRecordFlags f) { return static_cast<std::uint32_t>(f); }
+    constexpr std::uint32_t Rec(RingRecordFlags f) {
+        return static_cast<std::uint32_t>(f);
+    }
 } // namespace
 
 TEST(RingTest, TheTwoFlagSpacesAreDisjointByTranslation) {
@@ -745,8 +736,7 @@ TEST(RingTest, TheTwoFlagSpacesAreDisjointByTranslation) {
     // kRecNoReply; extend it again rather than reusing the count.
     static_assert(kMGPipeCallFlagsAllBits == 0x3Fu, "MGPipeCallFlags grew or shrank");
     constexpr std::uint32_t kAllRingFlags =
-        Rec(kRecNeedsAck) | Rec(kRecHasBlob) | Rec(kRecPad) | Rec(kRecBorrowSlot) |
-        Rec(kRecVarTail) | Rec(kRecNoReply);
+        Rec(kRecNeedsAck) | Rec(kRecHasBlob) | Rec(kRecPad) | Rec(kRecBorrowSlot) | Rec(kRecVarTail) | Rec(kRecNoReply);
     static_assert(kAllRingFlags == 0x3Fu, "RingRecordFlags grew or shrank");
 
     // ---- the runtime half, and it is NOT the story the collision table alone suggests ----
@@ -761,10 +751,10 @@ TEST(RingTest, TheTwoFlagSpacesAreDisjointByTranslation) {
     ASSERT_NE(drawVboCallFlags & Call(kVarTail), 0u) << "draw_vbo stopped being a var-tail call";
     ASSERT_NE(drawVboCallFlags & Call(kHostSpan), 0u) << "draw_vbo stopped being a host-span call";
 
-    void* payload = ring.Producer().Reserve(
-        static_cast<std::uint16_t>(MGPWireOp::DrawVbo),
-        static_cast<std::uint16_t>(drawVboCallFlags), // the mistake, made on purpose
-        16);
+    void* payload =
+        ring.Producer().Reserve(static_cast<std::uint16_t>(MGPWireOp::DrawVbo),
+                                static_cast<std::uint16_t>(drawVboCallFlags), // the mistake, made on purpose
+                                16);
     ASSERT_NE(payload, nullptr);
     std::memset(payload, 0xAB, 16);
     ring.Producer().Publish();
@@ -796,16 +786,13 @@ TEST(RingTest, TheTwoFlagSpacesAreDisjointByTranslation) {
     // `&& header.kind == kRingPadRecordKind` half of Pop's condition and this record vanishes
     // into the wrap-filler skip again, exactly as it did before the pair was required, and this
     // case goes red on the ASSERT's own message. That perturbation was run.
-    void* second = ring.Producer().Reserve(static_cast<std::uint16_t>(MGPWireOp::DrawVbo),
-                                           kRecNone, 16);
+    void* second = ring.Producer().Reserve(static_cast<std::uint16_t>(MGPWireOp::DrawVbo), kRecNone, 16);
     ASSERT_NE(second, nullptr);
     std::memset(second, 0xAB, 16);
     RingRecordHeader stamped{};
-    std::memcpy(&stamped, static_cast<std::uint8_t*>(second) - sizeof(RingRecordHeader),
-                sizeof(stamped));
+    std::memcpy(&stamped, static_cast<std::uint8_t*>(second) - sizeof(RingRecordHeader), sizeof(stamped));
     stamped.flags = static_cast<std::uint16_t>(drawVboCallFlags); // no mask in this path
-    std::memcpy(static_cast<std::uint8_t*>(second) - sizeof(RingRecordHeader), &stamped,
-                sizeof(stamped));
+    std::memcpy(static_cast<std::uint8_t*>(second) - sizeof(RingRecordHeader), &stamped, sizeof(stamped));
     ring.Producer().Publish();
 
     ASSERT_TRUE(ring.Consumer().Pop(view))
@@ -842,11 +829,9 @@ TEST(RingTest, TheTwoFlagSpacesAreDisjointByTranslation) {
     ASSERT_NE(filler, nullptr);
     std::memset(filler, 0xEF, 16);
     RingRecordHeader asFiller{};
-    std::memcpy(&asFiller, static_cast<std::uint8_t*>(filler) - sizeof(RingRecordHeader),
-                sizeof(asFiller));
+    std::memcpy(&asFiller, static_cast<std::uint8_t*>(filler) - sizeof(RingRecordHeader), sizeof(asFiller));
     asFiller.flags = static_cast<std::uint16_t>(kRecPad);
-    std::memcpy(static_cast<std::uint8_t*>(filler) - sizeof(RingRecordHeader), &asFiller,
-                sizeof(asFiller));
+    std::memcpy(static_cast<std::uint8_t*>(filler) - sizeof(RingRecordHeader), &asFiller, sizeof(asFiller));
     ring.Producer().Publish();
 
     EXPECT_FALSE(ring.Consumer().Pop(view))
@@ -856,8 +841,7 @@ TEST(RingTest, TheTwoFlagSpacesAreDisjointByTranslation) {
 
     // And the same record framed the way the encoder actually frames it - translated, with the
     // ring's own var-tail bit - round-trips intact.
-    void* honest = ring.Producer().Reserve(static_cast<std::uint16_t>(MGPWireOp::DrawVbo),
-                                           kRecVarTail, 16);
+    void* honest = ring.Producer().Reserve(static_cast<std::uint16_t>(MGPWireOp::DrawVbo), kRecVarTail, 16);
     ASSERT_NE(honest, nullptr);
     std::memset(honest, 0xCD, 16);
     ring.Producer().Publish();

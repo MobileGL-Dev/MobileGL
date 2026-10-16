@@ -379,7 +379,7 @@ MOBILEGL_EGL_API EGLBoolean eglDestroyImage(EGLDisplay dpy, EGLImage image) {
 // for every cached client buffer when it dies, wl_shm ones included; a null answer from
 // eglGetProcAddress made that a jump to address 0.
 MOBILEGL_EGL_API EGLImage eglCreateImageKHR(EGLDisplay dpy, EGLContext ctx, EGLenum target, EGLClientBuffer buffer,
-                                               const EGLint* attrib_list) {
+                                            const EGLint* attrib_list) {
     const MobileGL::MG_Impl::EGLImpl::StreamLockScope mglStreamLock;
     MGLOG_D("eglCreateImageKHR(dpy=%p, ctx=%p, target=%u, buffer=%p, attrib_list=%p)", dpy, ctx, target, buffer,
             attrib_list);

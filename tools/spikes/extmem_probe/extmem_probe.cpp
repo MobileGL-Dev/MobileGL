@@ -54,15 +54,15 @@
 // survive fork, and both routes need live Vulkan on both sides.
 
 #ifdef __ANDROID__
-#  define VK_USE_PLATFORM_ANDROID_KHR 1
-#  define PROBE_HAVE_AHB 1
+#define VK_USE_PLATFORM_ANDROID_KHR 1
+#define PROBE_HAVE_AHB 1
 #else
 // The probe is an Android deliverable; the host build exists only so the
 // T1/T1-gles/T3 harness itself can be validated against a driver that is known
 // to implement those routes (lavapipe/llvmpipe), which is what makes a
 // device-side FAIL attributable to the driver rather than to this program.
 // T0 is Android-only by nature.
-#  define PROBE_HAVE_AHB 0
+#define PROBE_HAVE_AHB 0
 #endif
 
 #include <vulkan/vulkan.h>
@@ -73,10 +73,10 @@
 #include <GLES2/gl2ext.h>
 
 #if PROBE_HAVE_AHB
-#  include <android/hardware_buffer.h>
-#  include <sys/system_properties.h>
+#include <android/hardware_buffer.h>
+#include <sys/system_properties.h>
 #else
-#  define PROP_VALUE_MAX 92
+#define PROP_VALUE_MAX 92
 #endif
 
 #include <errno.h>
@@ -103,7 +103,7 @@
 // bionic declares memfd_create only from API 30; the trace APK (MOBILEGL_BUILD_EXTMEM_PROBE)
 // builds at the project's API 26, where the syscall itself exists.
 #if defined(__ANDROID__) && __ANDROID_API__ < 30
-#  include <sys/syscall.h>
+#include <sys/syscall.h>
 static int memfd_create(const char* name, unsigned int flags) {
     return (int)syscall(__NR_memfd_create, name, flags);
 }
@@ -114,8 +114,8 @@ static int memfd_create(const char* name, unsigned int flags) {
 static VkInstance gVk11ShimInstance = VK_NULL_HANDLE;
 #if defined(__ANDROID__) && __ANDROID_API__ < 28
 static void probeGetPhysicalDeviceProperties2(VkPhysicalDevice pd, VkPhysicalDeviceProperties2* out) {
-    auto fn = (PFN_vkGetPhysicalDeviceProperties2)vkGetInstanceProcAddr(gVk11ShimInstance,
-                                                                         "vkGetPhysicalDeviceProperties2");
+    auto fn =
+        (PFN_vkGetPhysicalDeviceProperties2)vkGetInstanceProcAddr(gVk11ShimInstance, "vkGetPhysicalDeviceProperties2");
     if (fn) fn(pd, out);
 }
 static void probeGetPhysicalDeviceExternalBufferProperties(VkPhysicalDevice pd,
@@ -125,8 +125,8 @@ static void probeGetPhysicalDeviceExternalBufferProperties(VkPhysicalDevice pd,
         gVk11ShimInstance, "vkGetPhysicalDeviceExternalBufferProperties");
     if (fn) fn(pd, info, out);
 }
-#  define vkGetPhysicalDeviceProperties2 probeGetPhysicalDeviceProperties2
-#  define vkGetPhysicalDeviceExternalBufferProperties probeGetPhysicalDeviceExternalBufferProperties
+#define vkGetPhysicalDeviceProperties2 probeGetPhysicalDeviceProperties2
+#define vkGetPhysicalDeviceExternalBufferProperties probeGetPhysicalDeviceExternalBufferProperties
 #endif
 
 // ---------------------------------------------------------------------------
@@ -159,7 +159,7 @@ static void pr(const char* fmt, ...) {
 
 struct RouteResult {
     std::string route;
-    std::string status;  // OK / PARTIAL / UNSUPPORTED / FAIL / SKIP
+    std::string status; // OK / PARTIAL / UNSUPPORTED / FAIL / SKIP
     std::string detail;
 };
 static std::vector<RouteResult> gResults;
@@ -184,40 +184,69 @@ static std::string fmt(const char* f, ...) {
 // last one.
 static std::string vkStr(VkResult r) {
     switch (r) {
-        case VK_SUCCESS: return "VK_SUCCESS";
-        case VK_NOT_READY: return "VK_NOT_READY";
-        case VK_TIMEOUT: return "VK_TIMEOUT";
-        case VK_INCOMPLETE: return "VK_INCOMPLETE";
-        case VK_ERROR_OUT_OF_HOST_MEMORY: return "VK_ERROR_OUT_OF_HOST_MEMORY";
-        case VK_ERROR_OUT_OF_DEVICE_MEMORY: return "VK_ERROR_OUT_OF_DEVICE_MEMORY";
-        case VK_ERROR_INITIALIZATION_FAILED: return "VK_ERROR_INITIALIZATION_FAILED";
-        case VK_ERROR_DEVICE_LOST: return "VK_ERROR_DEVICE_LOST";
-        case VK_ERROR_MEMORY_MAP_FAILED: return "VK_ERROR_MEMORY_MAP_FAILED";
-        case VK_ERROR_LAYER_NOT_PRESENT: return "VK_ERROR_LAYER_NOT_PRESENT";
-        case VK_ERROR_EXTENSION_NOT_PRESENT: return "VK_ERROR_EXTENSION_NOT_PRESENT";
-        case VK_ERROR_FEATURE_NOT_PRESENT: return "VK_ERROR_FEATURE_NOT_PRESENT";
-        case VK_ERROR_INCOMPATIBLE_DRIVER: return "VK_ERROR_INCOMPATIBLE_DRIVER";
-        case VK_ERROR_TOO_MANY_OBJECTS: return "VK_ERROR_TOO_MANY_OBJECTS";
-        case VK_ERROR_FORMAT_NOT_SUPPORTED: return "VK_ERROR_FORMAT_NOT_SUPPORTED";
-        case VK_ERROR_FRAGMENTED_POOL: return "VK_ERROR_FRAGMENTED_POOL";
-        case VK_ERROR_UNKNOWN: return "VK_ERROR_UNKNOWN";
-        case VK_ERROR_OUT_OF_POOL_MEMORY: return "VK_ERROR_OUT_OF_POOL_MEMORY";
-        case VK_ERROR_INVALID_EXTERNAL_HANDLE: return "VK_ERROR_INVALID_EXTERNAL_HANDLE";
-        case VK_ERROR_FRAGMENTATION: return "VK_ERROR_FRAGMENTATION";
-        case VK_ERROR_INVALID_OPAQUE_CAPTURE_ADDRESS: return "VK_ERROR_INVALID_OPAQUE_CAPTURE_ADDRESS";
-        default: return fmt("VkResult(%d)", (int)r);
+    case VK_SUCCESS:
+        return "VK_SUCCESS";
+    case VK_NOT_READY:
+        return "VK_NOT_READY";
+    case VK_TIMEOUT:
+        return "VK_TIMEOUT";
+    case VK_INCOMPLETE:
+        return "VK_INCOMPLETE";
+    case VK_ERROR_OUT_OF_HOST_MEMORY:
+        return "VK_ERROR_OUT_OF_HOST_MEMORY";
+    case VK_ERROR_OUT_OF_DEVICE_MEMORY:
+        return "VK_ERROR_OUT_OF_DEVICE_MEMORY";
+    case VK_ERROR_INITIALIZATION_FAILED:
+        return "VK_ERROR_INITIALIZATION_FAILED";
+    case VK_ERROR_DEVICE_LOST:
+        return "VK_ERROR_DEVICE_LOST";
+    case VK_ERROR_MEMORY_MAP_FAILED:
+        return "VK_ERROR_MEMORY_MAP_FAILED";
+    case VK_ERROR_LAYER_NOT_PRESENT:
+        return "VK_ERROR_LAYER_NOT_PRESENT";
+    case VK_ERROR_EXTENSION_NOT_PRESENT:
+        return "VK_ERROR_EXTENSION_NOT_PRESENT";
+    case VK_ERROR_FEATURE_NOT_PRESENT:
+        return "VK_ERROR_FEATURE_NOT_PRESENT";
+    case VK_ERROR_INCOMPATIBLE_DRIVER:
+        return "VK_ERROR_INCOMPATIBLE_DRIVER";
+    case VK_ERROR_TOO_MANY_OBJECTS:
+        return "VK_ERROR_TOO_MANY_OBJECTS";
+    case VK_ERROR_FORMAT_NOT_SUPPORTED:
+        return "VK_ERROR_FORMAT_NOT_SUPPORTED";
+    case VK_ERROR_FRAGMENTED_POOL:
+        return "VK_ERROR_FRAGMENTED_POOL";
+    case VK_ERROR_UNKNOWN:
+        return "VK_ERROR_UNKNOWN";
+    case VK_ERROR_OUT_OF_POOL_MEMORY:
+        return "VK_ERROR_OUT_OF_POOL_MEMORY";
+    case VK_ERROR_INVALID_EXTERNAL_HANDLE:
+        return "VK_ERROR_INVALID_EXTERNAL_HANDLE";
+    case VK_ERROR_FRAGMENTATION:
+        return "VK_ERROR_FRAGMENTATION";
+    case VK_ERROR_INVALID_OPAQUE_CAPTURE_ADDRESS:
+        return "VK_ERROR_INVALID_OPAQUE_CAPTURE_ADDRESS";
+    default:
+        return fmt("VkResult(%d)", (int)r);
     }
 }
 
 static std::string glErrStr(GLenum e) {
     switch (e) {
-        case GL_NO_ERROR: return "GL_NO_ERROR";
-        case GL_INVALID_ENUM: return "GL_INVALID_ENUM";
-        case GL_INVALID_VALUE: return "GL_INVALID_VALUE";
-        case GL_INVALID_OPERATION: return "GL_INVALID_OPERATION";
-        case GL_OUT_OF_MEMORY: return "GL_OUT_OF_MEMORY";
-        case GL_INVALID_FRAMEBUFFER_OPERATION: return "GL_INVALID_FRAMEBUFFER_OPERATION";
-        default: return fmt("GL(0x%04x)", (unsigned)e);
+    case GL_NO_ERROR:
+        return "GL_NO_ERROR";
+    case GL_INVALID_ENUM:
+        return "GL_INVALID_ENUM";
+    case GL_INVALID_VALUE:
+        return "GL_INVALID_VALUE";
+    case GL_INVALID_OPERATION:
+        return "GL_INVALID_OPERATION";
+    case GL_OUT_OF_MEMORY:
+        return "GL_OUT_OF_MEMORY";
+    case GL_INVALID_FRAMEBUFFER_OPERATION:
+        return "GL_INVALID_FRAMEBUFFER_OPERATION";
+    default:
+        return fmt("GL(0x%04x)", (unsigned)e);
     }
 }
 
@@ -225,7 +254,8 @@ static std::string glErrStr(GLenum e) {
 // previous one
 static GLenum glDrain() {
     GLenum last = GL_NO_ERROR, e;
-    while ((e = glGetError()) != GL_NO_ERROR) last = e;
+    while ((e = glGetError()) != GL_NO_ERROR)
+        last = e;
     return last;
 }
 
@@ -237,7 +267,8 @@ static std::string readSmallFile(const char* path) {
     close(fd);
     if (n <= 0) return "<empty>";
     buf[n] = 0;
-    while (n > 0 && (buf[n - 1] == '\n' || buf[n - 1] == 0)) buf[--n] = 0;
+    while (n > 0 && (buf[n - 1] == '\n' || buf[n - 1] == 0))
+        buf[--n] = 0;
     return std::string(buf);
 }
 
@@ -245,18 +276,18 @@ static std::string readSmallFile(const char* path) {
 // payload patterns
 // ---------------------------------------------------------------------------
 
-static const uint64_t kRegion = 4096;      // bytes per verification region
-static const uint64_t kRegionCount = 8;    // A..F plus slack
+static const uint64_t kRegion = 4096;   // bytes per verification region
+static const uint64_t kRegionCount = 8; // A..F plus slack
 static const uint64_t kDefaultSize = 65536;
 
 // region indices inside the shared allocation
 enum {
-    REG_A = 0,  // first writer's payload (CPU, allocating side)
-    REG_B = 1,  // importer write through the plain host mapping (mmap / AHB lock / vk map)
-    REG_C = 2,  // importer write through the imported Vulkan mapping
-    REG_D = 3,  // importer write through the imported GL mapping (cross-process)
-    REG_E = 4,  // GPU write (vkCmdFillBuffer)
-    REG_F = 5,  // in-process GL-import write
+    REG_A = 0, // first writer's payload (CPU, allocating side)
+    REG_B = 1, // importer write through the plain host mapping (mmap / AHB lock / vk map)
+    REG_C = 2, // importer write through the imported Vulkan mapping
+    REG_D = 3, // importer write through the imported GL mapping (cross-process)
+    REG_E = 4, // GPU write (vkCmdFillBuffer)
+    REG_F = 5, // in-process GL-import write
 };
 
 static void fillPattern(void* p, uint64_t bytes, uint32_t seed) {
@@ -285,7 +316,9 @@ static uint64_t gRegionBase = 0;
 // the last round, while the parent still holds its Vulkan and GL imports, so an outside sampler
 // can read what a held, imported AHB of --size bytes costs in each accounting.
 static uint32_t gHoldMs = 0;
-static uint64_t regOff(int region) { return gRegionBase + (uint64_t)region * kRegion; }
+static uint64_t regOff(int region) {
+    return gRegionBase + (uint64_t)region * kRegion;
+}
 
 static void writeRegion(void* base, int region, uint32_t seed) {
     fillPattern((uint8_t*)base + regOff(region), kRegion, seed);
@@ -309,11 +342,11 @@ static int64_t checkFillWord(const void* base, int region, uint32_t word) {
 
 struct Leg {
     std::string name;
-    bool decisive = false;   // counted by the verdict; informational legs are not
+    bool decisive = false; // counted by the verdict; informational legs are not
     bool attempted = false;
-    bool readOk = false;     // the allocating side's bytes were visible to the other side
-    bool writeOk = false;    // the other side's bytes came back
-    std::string fail;        // failing step + driver error code
+    bool readOk = false;  // the allocating side's bytes were visible to the other side
+    bool writeOk = false; // the other side's bytes came back
+    std::string fail;     // failing step + driver error code
 };
 
 static const char* legVerdict(const std::vector<Leg>& legs, std::string* why) {
@@ -341,7 +374,7 @@ static std::string legTrace(const std::vector<Leg>& legs) {
     std::string s;
     for (const Leg& l : legs) {
         if (!s.empty()) s += " ";
-        const char* v = !l.attempted ? "notrun"
+        const char* v = !l.attempted              ? "notrun"
                         : (l.readOk && l.writeOk) ? "rt"
                         : l.readOk                ? "read-only"
                         : l.writeOk               ? "write-only"
@@ -446,7 +479,7 @@ static bool sendMsg(int sock, uint32_t tag, const void* payload, size_t len, int
     if ((size_t)s == total) return true;
     // partial: finish the tail with plain writes (control data already delivered)
     size_t done = (size_t)s;
-    if (done < sizeof(h)) return false;  // should not happen for such small headers
+    if (done < sizeof(h)) return false; // should not happen for such small headers
     return writeAll(sock, (const uint8_t*)payload + (done - sizeof(h)), total - done);
 }
 
@@ -521,8 +554,11 @@ static std::string describeFd(int fd) {
     }
     struct stat st;
     if (fstat(fd, &st) == 0) {
-        const char* kind = S_ISREG(st.st_mode) ? "reg" : S_ISCHR(st.st_mode) ? "chr"
-                           : S_ISFIFO(st.st_mode) ? "fifo" : S_ISSOCK(st.st_mode) ? "sock" : "other";
+        const char* kind = S_ISREG(st.st_mode)    ? "reg"
+                           : S_ISCHR(st.st_mode)  ? "chr"
+                           : S_ISFIFO(st.st_mode) ? "fifo"
+                           : S_ISSOCK(st.st_mode) ? "sock"
+                                                  : "other";
         desc += fmt(" kind=%s stsize=%lld", kind, (long long)st.st_size);
     }
     return desc;
@@ -630,7 +666,8 @@ static bool vkCtxInit(VkCtx& c, bool verbose) {
     vkEnumerateDeviceExtensionProperties(c.phys, nullptr, &extCount, nullptr);
     std::vector<VkExtensionProperties> exts(extCount);
     if (extCount) vkEnumerateDeviceExtensionProperties(c.phys, nullptr, &extCount, exts.data());
-    for (auto& e : exts) c.deviceExts.push_back(e.extensionName);
+    for (auto& e : exts)
+        c.deviceExts.push_back(e.extensionName);
 
     c.hasExtMemFd = c.hasExt(VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME);
     c.hasDmaBuf = c.hasExt(VK_EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION_NAME);
@@ -664,10 +701,8 @@ static bool vkCtxInit(VkCtx& c, bool verbose) {
             devExts.push_back(VK_KHR_DEDICATED_ALLOCATION_EXTENSION_NAME);
         if (c.hasExt(VK_KHR_GET_MEMORY_REQUIREMENTS_2_EXTENSION_NAME))
             devExts.push_back(VK_KHR_GET_MEMORY_REQUIREMENTS_2_EXTENSION_NAME);
-        if (c.hasExt(VK_KHR_BIND_MEMORY_2_EXTENSION_NAME))
-            devExts.push_back(VK_KHR_BIND_MEMORY_2_EXTENSION_NAME);
-        if (c.hasExt(VK_KHR_MAINTENANCE_1_EXTENSION_NAME))
-            devExts.push_back(VK_KHR_MAINTENANCE_1_EXTENSION_NAME);
+        if (c.hasExt(VK_KHR_BIND_MEMORY_2_EXTENSION_NAME)) devExts.push_back(VK_KHR_BIND_MEMORY_2_EXTENSION_NAME);
+        if (c.hasExt(VK_KHR_MAINTENANCE_1_EXTENSION_NAME)) devExts.push_back(VK_KHR_MAINTENANCE_1_EXTENSION_NAME);
     }
 
     float prio = 1.0f;
@@ -708,15 +743,16 @@ static bool vkCtxInit(VkCtx& c, bool verbose) {
     c.pGetAhbProps = (PFN_vkGetAndroidHardwareBufferPropertiesANDROID)vkGetDeviceProcAddr(
         c.device, "vkGetAndroidHardwareBufferPropertiesANDROID");
 #endif
-    c.pGetHostPtrProps = (PFN_vkGetMemoryHostPointerPropertiesEXT)vkGetDeviceProcAddr(
-        c.device, "vkGetMemoryHostPointerPropertiesEXT");
+    c.pGetHostPtrProps =
+        (PFN_vkGetMemoryHostPointerPropertiesEXT)vkGetDeviceProcAddr(c.device, "vkGetMemoryHostPointerPropertiesEXT");
 
     if (verbose) {
         pr("vulkan device: %s api=%u.%u.%u driverVersion=0x%08x vendor=0x%04x", c.props.deviceName,
            VK_VERSION_MAJOR(c.props.apiVersion), VK_VERSION_MINOR(c.props.apiVersion),
            VK_VERSION_PATCH(c.props.apiVersion), c.props.driverVersion, c.props.vendorID);
         char uuid[64] = {0};
-        for (uint32_t i = 0; i < VK_UUID_SIZE; ++i) snprintf(uuid + i * 2, 3, "%02x", c.deviceUUID[i]);
+        for (uint32_t i = 0; i < VK_UUID_SIZE; ++i)
+            snprintf(uuid + i * 2, 3, "%02x", c.deviceUUID[i]);
         pr("deviceUUID=%s minImportedHostPointerAlignment=%llu queueFamily=%u", uuid,
            (unsigned long long)c.minImportedHostPointerAlignment, c.queueFamily);
     }
@@ -742,9 +778,8 @@ static int pickMemType(const VkPhysicalDeviceMemoryProperties& mp, uint32_t bits
 }
 
 static const VkBufferUsageFlags kProbeBufferUsage =
-    VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
-    VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-    VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+    VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT |
+    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
 
 // ---------------------------------------------------------------------------
 // GPU touch: prove the shared allocation survives a real GPU access
@@ -759,12 +794,11 @@ static const VkBufferUsageFlags kProbeBufferUsage =
 struct GpuTouch {
     bool ran = false;
     VkResult submitResult = VK_NOT_READY;
-    int64_t readMismatch = -3;  // -1 match, -3 never ran
+    int64_t readMismatch = -3; // -1 match, -3 never ran
     std::string fail;
 };
 
-static GpuTouch gpuTouch(VkCtx& c, VkBuffer buf, int readRegion, uint32_t readSeed, int fillRegion,
-                         uint32_t fillWord) {
+static GpuTouch gpuTouch(VkCtx& c, VkBuffer buf, int readRegion, uint32_t readSeed, int fillRegion, uint32_t fillWord) {
     GpuTouch g;
     if (buf == VK_NULL_HANDLE || c.cmdPool == VK_NULL_HANDLE || c.queue == VK_NULL_HANDLE) {
         g.fail = "no buffer/queue/command pool for the GPU touch";
@@ -866,8 +900,8 @@ static GpuTouch gpuTouch(VkCtx& c, VkBuffer buf, int readRegion, uint32_t readSe
                 vkUnmapMemory(c.device, smem);
                 g.ran = true;
                 if (g.readMismatch != -1)
-                    g.fail = fmt("GPU copy out of the shared allocation mismatched at byte %lld",
-                                 (long long)g.readMismatch);
+                    g.fail =
+                        fmt("GPU copy out of the shared allocation mismatched at byte %lld", (long long)g.readMismatch);
             } else {
                 g.fail = "staging vkMapMemory=" + vkStr(mr);
             }
@@ -899,7 +933,7 @@ struct ExportAlloc {
     bool advertisedExportable = false;
     bool advertisedImportable = false;
     VkResult bindResult = VK_SUCCESS;
-    std::string fail;  // empty on success
+    std::string fail; // empty on success
 };
 
 // A failure on a handle type the driver advertised as EXPORTABLE is a driver
@@ -976,8 +1010,8 @@ static bool exportHostVisible(VkCtx& c, VkExternalMemoryHandleTypeFlagBits ht, u
     r = vkAllocateMemory(c.device, &mai, nullptr, &a.mem);
     if (r != VK_SUCCESS) {
         a.mem = VK_NULL_HANDLE;
-        a.fail = fmt("vkAllocateMemory(export)=%s (advertisedExportable=%d)", vkStr(r).c_str(),
-                     (int)a.advertisedExportable);
+        a.fail =
+            fmt("vkAllocateMemory(export)=%s (advertisedExportable=%d)", vkStr(r).c_str(), (int)a.advertisedExportable);
         return false;
     }
     a.bindResult = vkBindBufferMemory(c.device, a.buf, a.mem, 0);
@@ -1037,7 +1071,7 @@ struct GlCtx {
     PFNGLBUFFERSTORAGEMEMEXTPROC pBufferStorageMem = nullptr;
     PFNGLIMPORTMEMORYFDEXTPROC pImportMemoryFd = nullptr;
     PFNGLGETUNSIGNEDBYTEI_VEXTPROC pGetUnsignedBytei_v = nullptr;
-    void (GL_APIENTRYP pMemoryBarrier)(GLbitfield) = nullptr;
+    void(GL_APIENTRYP pMemoryBarrier)(GLbitfield) = nullptr;
 
     bool hasGl(const char* n) const {
         for (auto& s : glExts)
@@ -1093,9 +1127,18 @@ static bool glCtxInit(GlCtx& g) {
     const char* clientExts = eglQueryString(EGL_NO_DISPLAY, EGL_EXTENSIONS);
     splitExts(clientExts, g.eglExts);
 
-    const EGLint cfgAttr[] = {EGL_SURFACE_TYPE, EGL_PBUFFER_BIT,
-                              EGL_RENDERABLE_TYPE, EGL_OPENGL_ES3_BIT,
-                              EGL_RED_SIZE, 8, EGL_GREEN_SIZE, 8, EGL_BLUE_SIZE, 8, EGL_ALPHA_SIZE, 8,
+    const EGLint cfgAttr[] = {EGL_SURFACE_TYPE,
+                              EGL_PBUFFER_BIT,
+                              EGL_RENDERABLE_TYPE,
+                              EGL_OPENGL_ES3_BIT,
+                              EGL_RED_SIZE,
+                              8,
+                              EGL_GREEN_SIZE,
+                              8,
+                              EGL_BLUE_SIZE,
+                              8,
+                              EGL_ALPHA_SIZE,
+                              8,
                               EGL_NONE};
     EGLConfig cfg = nullptr;
     EGLint numCfg = 0;
@@ -1142,12 +1185,10 @@ static bool glCtxInit(GlCtx& g) {
 
     g.pGetNativeClientBuffer =
         (PFNEGLGETNATIVECLIENTBUFFERANDROIDPROC)eglGetProcAddress("eglGetNativeClientBufferANDROID");
-    g.pBufferStorageExternal =
-        (PFNGLBUFFERSTORAGEEXTERNALEXTPROC)eglGetProcAddress("glBufferStorageExternalEXT");
+    g.pBufferStorageExternal = (PFNGLBUFFERSTORAGEEXTERNALEXTPROC)eglGetProcAddress("glBufferStorageExternalEXT");
     g.pCreateMemoryObjects = (PFNGLCREATEMEMORYOBJECTSEXTPROC)eglGetProcAddress("glCreateMemoryObjectsEXT");
     g.pDeleteMemoryObjects = (PFNGLDELETEMEMORYOBJECTSEXTPROC)eglGetProcAddress("glDeleteMemoryObjectsEXT");
-    g.pMemoryObjectParameteriv =
-        (PFNGLMEMORYOBJECTPARAMETERIVEXTPROC)eglGetProcAddress("glMemoryObjectParameterivEXT");
+    g.pMemoryObjectParameteriv = (PFNGLMEMORYOBJECTPARAMETERIVEXTPROC)eglGetProcAddress("glMemoryObjectParameterivEXT");
     g.pBufferStorageMem = (PFNGLBUFFERSTORAGEMEMEXTPROC)eglGetProcAddress("glBufferStorageMemEXT");
     g.pImportMemoryFd = (PFNGLIMPORTMEMORYFDEXTPROC)eglGetProcAddress("glImportMemoryFdEXT");
     g.pGetUnsignedBytei_v = (PFNGLGETUNSIGNEDBYTEI_VEXTPROC)eglGetProcAddress("glGetUnsignedBytei_vEXT");
@@ -1180,7 +1221,8 @@ static std::string glDeviceUuidReport(GlCtx& g, const uint8_t* vkUuid, bool* mat
         GLubyte uuid[GL_UUID_SIZE_EXT] = {0};
         g.pGetUnsignedBytei_v(GL_DEVICE_UUID_EXT, (GLuint)i, uuid);
         char hex[2 * GL_UUID_SIZE_EXT + 1] = {0};
-        for (int k = 0; k < GL_UUID_SIZE_EXT; ++k) snprintf(hex + k * 2, 3, "%02x", uuid[k]);
+        for (int k = 0; k < GL_UUID_SIZE_EXT; ++k)
+            snprintf(hex + k * 2, 3, "%02x", uuid[k]);
         if (!out.empty()) out += ",";
         out += hex;
         if (!memcmp(uuid, vkUuid, GL_UUID_SIZE_EXT) && matched) *matched = true;
@@ -1196,17 +1238,17 @@ struct GlImport {
     bool memObjOk = false;
     bool storageOk = false;
     bool mapOk = false;
-    bool persistentCoherent = false;  // the PERSISTENT|COHERENT map is what AcquirePersistentMap needs
+    bool persistentCoherent = false; // the PERSISTENT|COHERENT map is what AcquirePersistentMap needs
     GLenum errImport = GL_NO_ERROR;
     GLenum errStorage = GL_NO_ERROR;
-    GLenum errMap = GL_NO_ERROR;   // error of the PERSISTENT|COHERENT attempt
-    GLenum errMap2 = GL_NO_ERROR;  // error of the plain MAP_READ|MAP_WRITE fallback
+    GLenum errMap = GL_NO_ERROR;  // error of the PERSISTENT|COHERENT attempt
+    GLenum errMap2 = GL_NO_ERROR; // error of the plain MAP_READ|MAP_WRITE fallback
     GLuint memObj = 0;
     GLuint buf = 0;
     void* ptr = nullptr;
     uint64_t mappedSize = 0;
-    std::string variant;  // which phrasing the driver accepted
-    std::string ladder;   // every phrasing tried, with its error
+    std::string variant; // which phrasing the driver accepted
+    std::string ladder;  // every phrasing tried, with its error
     std::string fail;
 };
 
@@ -1305,8 +1347,7 @@ static void glImportFdBuffer(GlCtx& g, int fd, uint64_t allocationSize, uint64_t
     bufferSize = o.mappedSize;
 
     o.ptr = glMapBufferRange(GL_ARRAY_BUFFER, 0, (GLsizeiptr)bufferSize,
-                             GL_MAP_READ_BIT | GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT_EXT |
-                                 GL_MAP_COHERENT_BIT_EXT);
+                             GL_MAP_READ_BIT | GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT_EXT | GL_MAP_COHERENT_BIT_EXT);
     o.errMap = glDrain();
     if (o.ptr) {
         o.mapOk = true;
@@ -1426,31 +1467,31 @@ static std::string reapChild(pid_t pid) {
 struct T1Offer {
     uint64_t allocationSize;
     uint64_t bufferSize;
-    uint32_t handleType;   // VkExternalMemoryHandleTypeFlagBits used to export
-    uint32_t seedA;        // pattern the parent wrote in REG_A
-    uint32_t seedB;        // pattern the child must write in REG_B (via mmap)
-    uint32_t seedC;        // pattern the child must write in REG_C (via imported vkMapMemory)
+    uint32_t handleType; // VkExternalMemoryHandleTypeFlagBits used to export
+    uint32_t seedA;      // pattern the parent wrote in REG_A
+    uint32_t seedB;      // pattern the child must write in REG_B (via mmap)
+    uint32_t seedC;      // pattern the child must write in REG_C (via imported vkMapMemory)
     uint32_t memoryTypeIndex;
     uint32_t memoryTypeBits;
-    uint32_t gpuWord;      // word the GPU filled REG_E with
-    uint32_t gpuRan;       // 0 -> REG_E carries nothing, do not check it
+    uint32_t gpuWord; // word the GPU filled REG_E with
+    uint32_t gpuRan;  // 0 -> REG_E carries nothing, do not check it
 };
 
 struct T1Result {
     int32_t gotFd;
     int32_t mmapOk;
     int32_t mmapErrno;
-    int64_t mmapMismatch;       // -1 == data matched
-    int64_t mmapPatternOffset;  // where the exporter's payload really starts in the mapping, -1 = not found
-    int64_t mmapGpuMismatch;    // REG_E through the plain mapping (-2 = not checked)
+    int64_t mmapMismatch;      // -1 == data matched
+    int64_t mmapPatternOffset; // where the exporter's payload really starts in the mapping, -1 = not found
+    int64_t mmapGpuMismatch;   // REG_E through the plain mapping (-2 = not checked)
     int32_t vkInitOk;
-    int32_t fdPropsResult;  // VkResult of vkGetMemoryFdPropertiesKHR
+    int32_t fdPropsResult; // VkResult of vkGetMemoryFdPropertiesKHR
     uint32_t fdMemoryTypeBits;
-    int32_t importResult;   // VkResult of vkAllocateMemory with the import struct
+    int32_t importResult; // VkResult of vkAllocateMemory with the import struct
     int32_t bindResult;
     int32_t mapResult;
-    int64_t vkMismatch;     // -1 == data matched
-    int64_t vkGpuMismatch;  // REG_E through the imported mapping (-2 = not checked)
+    int64_t vkMismatch;    // -1 == data matched
+    int64_t vkGpuMismatch; // REG_E through the imported mapping (-2 = not checked)
     int32_t wroteB;
     int32_t wroteC;
     char note[384];
@@ -1460,7 +1501,7 @@ struct T1GlOffer {
     uint64_t allocationSize;
     uint64_t bufferSize;
     uint32_t seedA;
-    uint32_t seedD;   // the child writes REG_D through the imported GL mapping
+    uint32_t seedD; // the child writes REG_D through the imported GL mapping
     uint32_t gpuWord;
     uint32_t gpuRan;
     uint32_t dedicated;
@@ -1482,7 +1523,7 @@ struct T1GlResult {
 
 struct T0Request {
     uint64_t size;
-    uint32_t seedA;  // pattern the child writes through AHardwareBuffer_lock
+    uint32_t seedA; // pattern the child writes through AHardwareBuffer_lock
 };
 
 struct T0Alloc {
@@ -1494,11 +1535,11 @@ struct T0Alloc {
 };
 
 struct T0Verify {
-    uint32_t seedB;        // parent wrote REG_B through the imported vkMapMemory
-    uint32_t seedC;        // parent wrote REG_C through the imported GL mapping
-    uint32_t seedD;        // parent wrote REG_D through AHardwareBuffer_lock
-    uint32_t gpuWord;      // the GPU filled REG_E with this
-    uint32_t writtenMask;  // bit0=B bit1=C bit2=D bit3=E(gpu)
+    uint32_t seedB;       // parent wrote REG_B through the imported vkMapMemory
+    uint32_t seedC;       // parent wrote REG_C through the imported GL mapping
+    uint32_t seedD;       // parent wrote REG_D through AHardwareBuffer_lock
+    uint32_t gpuWord;     // the GPU filled REG_E with this
+    uint32_t writtenMask; // bit0=B bit1=C bit2=D bit3=E(gpu)
 };
 
 struct T0Result {
@@ -1521,20 +1562,20 @@ struct T0SRequest {
 
 struct T0SRound {
     uint32_t round;
-    uint32_t seedA;  // the client CPU wrote REG_A with this pattern through its held lock
+    uint32_t seedA; // the client CPU wrote REG_A with this pattern through its held lock
 };
 
 struct T0SGpuDone {
     uint32_t round;
-    uint32_t vkWord;  // the server's Vulkan GPU filled REG_E with this word
-    uint32_t glWord;  // the server's GL compute dispatch filled REG_F with this word
-    uint32_t mask;    // bit0 = vk fill ran, bit1 = gl fill ran
+    uint32_t vkWord; // the server's Vulkan GPU filled REG_E with this word
+    uint32_t glWord; // the server's GL compute dispatch filled REG_F with this word
+    uint32_t mask;   // bit0 = vk fill ran, bit1 = gl fill ran
 };
 
 struct T0SCheck {
     uint32_t round;
     int32_t pad;
-    int64_t mismatchE;  // through the client's still-held lock pointer, -2 = not checked
+    int64_t mismatchE; // through the client's still-held lock pointer, -2 = not checked
     int64_t mismatchF;
 };
 
@@ -1543,7 +1584,7 @@ struct T0SDone {
     int32_t unlockRc;
     int32_t relockRc;
     int32_t pad;
-    int64_t relockMismatchE;  // after unlock + a fresh lock: the last GPU writes, -2 = not checked
+    int64_t relockMismatchE; // after unlock + a fresh lock: the last GPU writes, -2 = not checked
     int64_t relockMismatchF;
     char note[160];
 };
@@ -1567,8 +1608,8 @@ struct T3Result {
 // T3 in the direction that makes it a tier: the CLIENT allocates, the SERVER
 // imports the client's host pointer.
 struct T3cRequest {
-    uint64_t size;   // must be a multiple of minImportedHostPointerAlignment
-    uint32_t seedA;  // the child writes REG_A
+    uint64_t size;  // must be a multiple of minImportedHostPointerAlignment
+    uint32_t seedA; // the child writes REG_A
 };
 
 struct T3cReady {
@@ -1579,9 +1620,9 @@ struct T3cReady {
 };
 
 struct T3cVerify {
-    uint32_t seedB;    // the parent wrote REG_B through the imported VkDeviceMemory
-    uint32_t gpuWord;  // the parent's GPU filled REG_E
-    uint32_t mask;     // bit0=B bit1=E
+    uint32_t seedB;   // the parent wrote REG_B through the imported VkDeviceMemory
+    uint32_t gpuWord; // the parent's GPU filled REG_E
+    uint32_t mask;    // bit0=B bit1=E
 };
 
 struct T3cResult {
@@ -1651,8 +1692,8 @@ static void phaseEnumerate(VkCtx& c, GlCtx& g, bool glOk) {
     pr("device: model=%s device=%s android=%s", model, dev, rel);
 
     pr("vulkan: %s (api %u.%u.%u, driver 0x%08x, vendor 0x%04x)", c.props.deviceName,
-       VK_VERSION_MAJOR(c.props.apiVersion), VK_VERSION_MINOR(c.props.apiVersion),
-       VK_VERSION_PATCH(c.props.apiVersion), c.props.driverVersion, c.props.vendorID);
+       VK_VERSION_MAJOR(c.props.apiVersion), VK_VERSION_MINOR(c.props.apiVersion), VK_VERSION_PATCH(c.props.apiVersion),
+       c.props.driverVersion, c.props.vendorID);
 
     struct {
         const char* name;
@@ -1666,14 +1707,14 @@ static void phaseEnumerate(VkCtx& c, GlCtx& g, bool glOk) {
         {VK_EXT_QUEUE_FAMILY_FOREIGN_EXTENSION_NAME, c.hasQueueFamilyForeign},
         {VK_KHR_DEDICATED_ALLOCATION_EXTENSION_NAME, c.hasExt(VK_KHR_DEDICATED_ALLOCATION_EXTENSION_NAME)},
     };
-    for (auto& e : probe) pr("  VK ext %-58s %s", e.name, e.present ? "YES" : "no");
+    for (auto& e : probe)
+        pr("  VK ext %-58s %s", e.name, e.present ? "YES" : "no");
 
     pr("memory types (%u):", c.memProps.memoryTypeCount);
     for (uint32_t i = 0; i < c.memProps.memoryTypeCount; ++i) {
         const VkMemoryType& mt = c.memProps.memoryTypes[i];
         pr("  [%u] heap=%u size=%lluMiB flags=%s", i, mt.heapIndex,
-           (unsigned long long)(c.memProps.memoryHeaps[mt.heapIndex].size >> 20),
-           memFlagStr(mt.propertyFlags).c_str());
+           (unsigned long long)(c.memProps.memoryHeaps[mt.heapIndex].size >> 20), memFlagStr(mt.propertyFlags).c_str());
     }
 
     // Only query handle types the driver actually claims: a handle type whose
@@ -1693,16 +1734,23 @@ static void phaseEnumerate(VkCtx& c, GlCtx& g, bool glOk) {
     }
     pr("gles: vendor=%s renderer=%s version=%s", g.vendor.c_str(), g.renderer.c_str(), g.version.c_str());
     const char* glWanted[] = {
-        "GL_EXT_memory_object",       "GL_EXT_memory_object_fd", "GL_EXT_external_buffer",
-        "GL_EXT_buffer_storage",      "GL_OES_EGL_image",        "GL_OES_EGL_image_external",
-        "GL_OES_EGL_image_external_essl3", "GL_EXT_memory_object_win32",
+        "GL_EXT_memory_object",
+        "GL_EXT_memory_object_fd",
+        "GL_EXT_external_buffer",
+        "GL_EXT_buffer_storage",
+        "GL_OES_EGL_image",
+        "GL_OES_EGL_image_external",
+        "GL_OES_EGL_image_external_essl3",
+        "GL_EXT_memory_object_win32",
     };
-    for (const char* n : glWanted) pr("  GL ext %-40s %s", n, g.hasGl(n) ? "YES" : "no");
+    for (const char* n : glWanted)
+        pr("  GL ext %-40s %s", n, g.hasGl(n) ? "YES" : "no");
     const char* eglWanted[] = {
-        "EGL_ANDROID_get_native_client_buffer", "EGL_KHR_image_base", "EGL_ANDROID_image_native_buffer",
+        "EGL_ANDROID_get_native_client_buffer", "EGL_KHR_image_base",          "EGL_ANDROID_image_native_buffer",
         "EGL_EXT_image_dma_buf_import",         "EGL_KHR_gl_texture_2D_image",
     };
-    for (const char* n : eglWanted) pr("  EGL ext %-40s %s", n, g.hasEgl(n) ? "YES" : "no");
+    for (const char* n : eglWanted)
+        pr("  EGL ext %-40s %s", n, g.hasEgl(n) ? "YES" : "no");
     pr("  eglGetNativeClientBufferANDROID=%p glBufferStorageExternalEXT=%p", (void*)g.pGetNativeClientBuffer,
        (void*)g.pBufferStorageExternal);
     pr("  glCreateMemoryObjectsEXT=%p glImportMemoryFdEXT=%p glBufferStorageMemEXT=%p glMemoryObjectParameterivEXT=%p",
@@ -1712,7 +1760,8 @@ static void phaseEnumerate(VkCtx& c, GlCtx& g, bool glOk) {
     bool uuidMatch = false;
     std::string glUuid = glDeviceUuidReport(g, c.deviceUUID, &uuidMatch);
     char vkUuid[2 * VK_UUID_SIZE + 1] = {0};
-    for (uint32_t i = 0; i < VK_UUID_SIZE; ++i) snprintf(vkUuid + i * 2, 3, "%02x", c.deviceUUID[i]);
+    for (uint32_t i = 0; i < VK_UUID_SIZE; ++i)
+        snprintf(vkUuid + i * 2, 3, "%02x", c.deviceUUID[i]);
     pr("  GL_DEVICE_UUID_EXT=%s vkDeviceUUID=%s match=%d", glUuid.c_str(), vkUuid, (int)uuidMatch);
 }
 
@@ -1720,8 +1769,7 @@ static void phaseEnumerate(VkCtx& c, GlCtx& g, bool glOk) {
 // T1 parent: server exports its own allocation
 // ---------------------------------------------------------------------------
 
-static void runT1Parent(VkCtx& c, VkExternalMemoryHandleTypeFlagBits handleType, const char* routeName,
-                        uint64_t size) {
+static void runT1Parent(VkCtx& c, VkExternalMemoryHandleTypeFlagBits handleType, const char* routeName, uint64_t size) {
     if (!c.hasExtMemFd || !c.pGetMemoryFdKHR) {
         record(routeName, "UNSUPPORTED", "VK_KHR_external_memory_fd absent");
         return;
@@ -1822,8 +1870,7 @@ static void runT1Parent(VkCtx& c, VkExternalMemoryHandleTypeFlagBits handleType,
             l.fail = fmt("mmap failed errno=%d(%s)", res.mmapErrno, strerror(res.mmapErrno));
         else if (!l.readOk)
             l.fail = fmt("exporter payload not at offset 0 (cmp=%lld payloadAt=%lld gpuCmp=%lld)",
-                         (long long)res.mmapMismatch, (long long)res.mmapPatternOffset,
-                         (long long)res.mmapGpuMismatch);
+                         (long long)res.mmapMismatch, (long long)res.mmapPatternOffset, (long long)res.mmapGpuMismatch);
         else if (!l.writeOk)
             l.fail = fmt("importer write not visible to exporter (back=%lld)", (long long)backB);
         legs.push_back(l);
@@ -1843,8 +1890,8 @@ static void runT1Parent(VkCtx& c, VkExternalMemoryHandleTypeFlagBits handleType,
         else if (res.mapResult != VK_SUCCESS)
             l.fail = "importer vkMapMemory=" + vkStr((VkResult)res.mapResult);
         else if (!l.readOk)
-            l.fail = fmt("payload mismatch cmp=%lld gpuCmp=%lld", (long long)res.vkMismatch,
-                         (long long)res.vkGpuMismatch);
+            l.fail =
+                fmt("payload mismatch cmp=%lld gpuCmp=%lld", (long long)res.vkMismatch, (long long)res.vkGpuMismatch);
         else if (!l.writeOk)
             l.fail = fmt("importer write not visible to exporter (back=%lld)", (long long)backC);
         legs.push_back(l);
@@ -1867,18 +1914,17 @@ static void runT1Parent(VkCtx& c, VkExternalMemoryHandleTypeFlagBits handleType,
 
     std::string why;
     status = legVerdict(legs, &why);
-    detail = fmt(
-        "%s | mmap=%s(errno=%d,cmp=%lld,payloadAt=%lld,gpu=%lld,back=%lld) vkimport=%s(fdProps=%s bits=0x%x "
-        "bind=%s map=%s cmp=%lld gpu=%lld back=%lld) gpuTouch(submit=%s read=%lld fill=%lld) %s%s%s",
-        legTrace(legs).c_str(), res.mmapOk ? (res.mmapOk == 2 ? "ok-buffersize" : "ok") : "fail", res.mmapErrno,
-        (long long)res.mmapMismatch, (long long)res.mmapPatternOffset, (long long)res.mmapGpuMismatch,
-        (long long)backB, res.importResult == VK_SUCCESS ? "ok" : vkStr((VkResult)res.importResult).c_str(),
-        vkStr((VkResult)res.fdPropsResult).c_str(), res.fdMemoryTypeBits, vkStr((VkResult)res.bindResult).c_str(),
-        vkStr((VkResult)res.mapResult).c_str(), (long long)res.vkMismatch, (long long)res.vkGpuMismatch,
-        (long long)backC, vkStr(gt.submitResult).c_str(), (long long)gt.readMismatch, (long long)gpuFillSeenHere,
-        res.note, why.empty() ? "" : " | why: ", why.c_str());
-    if (!mmapDecisive)
-        detail += " | rawmmap informational: an opaque fd is not required to be mmap-able";
+    detail =
+        fmt("%s | mmap=%s(errno=%d,cmp=%lld,payloadAt=%lld,gpu=%lld,back=%lld) vkimport=%s(fdProps=%s bits=0x%x "
+            "bind=%s map=%s cmp=%lld gpu=%lld back=%lld) gpuTouch(submit=%s read=%lld fill=%lld) %s%s%s",
+            legTrace(legs).c_str(), res.mmapOk ? (res.mmapOk == 2 ? "ok-buffersize" : "ok") : "fail", res.mmapErrno,
+            (long long)res.mmapMismatch, (long long)res.mmapPatternOffset, (long long)res.mmapGpuMismatch,
+            (long long)backB, res.importResult == VK_SUCCESS ? "ok" : vkStr((VkResult)res.importResult).c_str(),
+            vkStr((VkResult)res.fdPropsResult).c_str(), res.fdMemoryTypeBits, vkStr((VkResult)res.bindResult).c_str(),
+            vkStr((VkResult)res.mapResult).c_str(), (long long)res.vkMismatch, (long long)res.vkGpuMismatch,
+            (long long)backC, vkStr(gt.submitResult).c_str(), (long long)gt.readMismatch, (long long)gpuFillSeenHere,
+            res.note, why.empty() ? "" : " | why: ", why.c_str());
+    if (!mmapDecisive) detail += " | rawmmap informational: an opaque fd is not required to be mmap-able";
 
     sendMsg(sock, MSG_BYE, nullptr, 0, -1);
     detail += " ";
@@ -1930,7 +1976,7 @@ static int childT1(int sock) {
         p = mmap(nullptr, mappedLen, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
         if (p != MAP_FAILED) {
             res.mmapOk = 2;
-            res.mmapErrno = 0;  // the mapping succeeded; the first errno is history, not the verdict
+            res.mmapErrno = 0; // the mapping succeeded; the first errno is history, not the verdict
             note += fmt(" [mmap needed bufferSize not allocationSize; allocationSize errno=%d]", firstErrno);
         } else {
             res.mmapErrno = errno;
@@ -2023,9 +2069,9 @@ static int childT1(int sock) {
     if (ht == VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT) {
         typeIdx = (int)offer.memoryTypeIndex;
     } else {
-        typeIdx = pickMemType(c.memProps, bits,
-                              VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-        if (typeIdx < 0) typeIdx = (int)offer.memoryTypeIndex;  // fall back to the exporter's choice
+        typeIdx =
+            pickMemType(c.memProps, bits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        if (typeIdx < 0) typeIdx = (int)offer.memoryTypeIndex; // fall back to the exporter's choice
     }
 
     // the import consumes the fd on success, so hand over a duplicate
@@ -2263,10 +2309,10 @@ static void runT1GlesParent(VkCtx& c, GlCtx& g, bool glOk, uint64_t size) {
                fmt("%s | memObj=%d(%s) storage=%d(%s) accepted=%s map=%d persistentCoherent=%d(%s/%s) cmpA=%lld "
                    "cmpGpu=%lld backF=%lld | ladder: %s| %s | %s",
                    legTrace(legs).c_str(), (int)imp.memObjOk, glErrStr(imp.errImport).c_str(), (int)imp.storageOk,
-                   glErrStr(imp.errStorage).c_str(), imp.variant.empty() ? "none" : imp.variant.c_str(),
-                   (int)imp.mapOk, (int)imp.persistentCoherent, glErrStr(imp.errMap).c_str(),
-                   glErrStr(imp.errMap2).c_str(), (long long)cmpA, (long long)cmpGpu, (long long)backF,
-                   imp.ladder.c_str(), uuidNote.c_str(), why.c_str()));
+                   glErrStr(imp.errStorage).c_str(), imp.variant.empty() ? "none" : imp.variant.c_str(), (int)imp.mapOk,
+                   (int)imp.persistentCoherent, glErrStr(imp.errMap).c_str(), glErrStr(imp.errMap2).c_str(),
+                   (long long)cmpA, (long long)cmpGpu, (long long)backF, imp.ladder.c_str(), uuidNote.c_str(),
+                   why.c_str()));
         glImportRelease(g, imp);
     }
 
@@ -2509,8 +2555,8 @@ static void runT0Parent(VkCtx& c, GlCtx& g, bool glOk, uint64_t size) {
     // (a) CPU path: AHardwareBuffer_lock on the receiving side
     {
         void* p = nullptr;
-        rc = AHardwareBuffer_lock(ahb, AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN | AHARDWAREBUFFER_USAGE_CPU_WRITE_OFTEN,
-                                  -1, nullptr, &p);
+        rc = AHardwareBuffer_lock(ahb, AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN | AHARDWAREBUFFER_USAGE_CPU_WRITE_OFTEN, -1,
+                                  nullptr, &p);
         if (rc != 0 || !p) {
             cpuFail = fmt("AHardwareBuffer_lock rc=%d errno=%d", rc, errno);
             record("T0-ahb-cpu-lock", "FAIL", cpuFail);
@@ -2765,7 +2811,7 @@ static void runT0Parent(VkCtx& c, GlCtx& g, bool glOk, uint64_t size) {
     {
         Leg l;
         l.name = "cpu-lock";
-        l.decisive = false;  // informational: proves the handle, not the tier
+        l.decisive = false; // informational: proves the handle, not the tier
         l.attempted = cpuCmp != -3;
         l.readOk = cpuCmp == -1;
         l.writeOk = gotVerify && (writtenMask & 4) && res.mismatchD == -1;
@@ -2801,8 +2847,7 @@ static void runT0Parent(VkCtx& c, GlCtx& g, bool glOk, uint64_t size) {
 // mapping kept stale lines".
 // ---------------------------------------------------------------------------
 
-static int t0sClientRounds(int sock, AHardwareBuffer* ahb, void* p, int lockRc, uint32_t rounds,
-                           uint32_t seedBase);
+static int t0sClientRounds(int sock, AHardwareBuffer* ahb, void* p, int lockRc, uint32_t rounds, uint32_t seedBase);
 
 static int childT0Sustained(int sock) {
     setRecvTimeout(sock, 60);
@@ -2858,8 +2903,7 @@ static int childT0Sustained(int sock) {
 // The client half of the T0S rounds, after the handle has been sent: per round the CPU writes
 // REG_A through the held lock, the server's GPU reads it and fills REG_E / REG_F, and the client
 // checks both fills through the still-held pointer; then unlock + relock. The caller releases.
-static int t0sClientRounds(int sock, AHardwareBuffer* ahb, void* p, int lockRc, uint32_t rounds,
-                           uint32_t seedBase) {
+static int t0sClientRounds(int sock, AHardwareBuffer* ahb, void* p, int lockRc, uint32_t rounds, uint32_t seedBase) {
     uint32_t tag = 0;
     size_t got = 0;
     uint32_t lastVk = 0, lastGl = 0, lastMask = 0;
@@ -2867,7 +2911,7 @@ static int t0sClientRounds(int sock, AHardwareBuffer* ahb, void* p, int lockRc, 
         T0SRound r{};
         r.round = i;
         r.seedA = seedBase + i * 0x01010101u;
-        writeRegion(p, REG_A, r.seedA);  // through the held lock, no unlock
+        writeRegion(p, REG_A, r.seedA); // through the held lock, no unlock
         if (!sendMsg(sock, MSG_T0S_ROUND, &r, sizeof(r), -1)) return 7;
         T0SGpuDone gd{};
         if (!recvMsg(sock, &tag, &gd, sizeof(gd), &got, nullptr) || tag != MSG_T0S_GPUDONE) {
@@ -2900,25 +2944,24 @@ static int t0sClientRounds(int sock, AHardwareBuffer* ahb, void* p, int lockRc, 
     }
     snprintf(dn.note, sizeof(dn.note), "held ptr=%p relock ptr=%p", p, q);
     sendMsg(sock, MSG_T0S_DONE, &dn, sizeof(dn), -1);
-    recvMsg(sock, &tag, nullptr, 0, &got, nullptr);  // BYE
+    recvMsg(sock, &tag, nullptr, 0, &got, nullptr); // BYE
     return 0;
 }
 
 // A GL compute pass over the imported buffer: copies `readWord`.. (1024 words) into
 // `out` and fills `fillWord`.. with `fill`. Word offsets are relative to the bound range.
-static const char* kT0SComputeSrc =
-    "#version 310 es\n"
-    "layout(local_size_x = 64) in;\n"
-    "layout(std430, binding = 0) buffer Ext { uint w[]; } ext;\n"
-    "layout(std430, binding = 1) buffer Out { uint w[]; } outb;\n"
-    "uniform uint uRead;\n"
-    "uniform uint uFillAt;\n"
-    "uniform uint uFill;\n"
-    "void main() {\n"
-    "  uint i = gl_GlobalInvocationID.x;\n"
-    "  outb.w[i] = ext.w[uRead + i];\n"
-    "  ext.w[uFillAt + i] = uFill;\n"
-    "}\n";
+static const char* kT0SComputeSrc = "#version 310 es\n"
+                                    "layout(local_size_x = 64) in;\n"
+                                    "layout(std430, binding = 0) buffer Ext { uint w[]; } ext;\n"
+                                    "layout(std430, binding = 1) buffer Out { uint w[]; } outb;\n"
+                                    "uniform uint uRead;\n"
+                                    "uniform uint uFillAt;\n"
+                                    "uniform uint uFill;\n"
+                                    "void main() {\n"
+                                    "  uint i = gl_GlobalInvocationID.x;\n"
+                                    "  outb.w[i] = ext.w[uRead + i];\n"
+                                    "  ext.w[uFillAt + i] = uFill;\n"
+                                    "}\n";
 
 static GLuint buildT0SCompute(std::string* fail) {
     GLuint sh = glCreateShader(GL_COMPUTE_SHADER);
@@ -2948,8 +2991,8 @@ static GLuint buildT0SCompute(std::string* fail) {
     return prog;
 }
 
-static void t0sServe(VkCtx& c, GlCtx& g, bool glOk, int sock, AHardwareBuffer* ahb, uint64_t size,
-                     uint32_t rounds, const char* rowPrefix, pid_t pid);
+static void t0sServe(VkCtx& c, GlCtx& g, bool glOk, int sock, AHardwareBuffer* ahb, uint64_t size, uint32_t rounds,
+                     const char* rowPrefix, pid_t pid);
 static void printSummary();
 
 static void runT0SustainedParent(VkCtx& c, GlCtx& g, bool glOk, uint64_t size, uint32_t rounds) {
@@ -2994,8 +3037,8 @@ static void runT0SustainedParent(VkCtx& c, GlCtx& g, bool glOk, uint64_t size, u
 // Vulkan and GL, run `rounds` rounds against the client on `sock`, take its DONE, send BYE, and
 // record <rowPrefix>-vulkan / -gles / <rowPrefix>. `pid` >= 0 is a spawned child to reap. The
 // caller releases the AHB and closes `sock`.
-static void t0sServe(VkCtx& c, GlCtx& g, bool glOk, int sock, AHardwareBuffer* ahb, uint64_t size,
-                     uint32_t rounds, const char* rowPrefix, pid_t pid) {
+static void t0sServe(VkCtx& c, GlCtx& g, bool glOk, int sock, AHardwareBuffer* ahb, uint64_t size, uint32_t rounds,
+                     const char* rowPrefix, pid_t pid) {
     uint32_t tag = 0;
     size_t got = 0;
     // --- Vulkan import of the (still client-locked) AHB ---
@@ -3245,10 +3288,14 @@ static void t0sServe(VkCtx& c, GlCtx& g, bool glOk, int sock, AHardwareBuffer* a
 // client checks through the same held pointer. Rows: ROUTE-<variant>-<size>{,-vulkan,-gles}.
 // ---------------------------------------------------------------------------
 
-enum : uint32_t { MSG_RT_HELLO = 40, MSG_RT_HOP = 41, MSG_RT_SERVER = 42 };
+enum : uint32_t {
+    MSG_RT_HELLO = 40,
+    MSG_RT_HOP = 41,
+    MSG_RT_SERVER = 42
+};
 
 struct RtHello {
-    uint32_t variant;  // 0 direct, 1 hop
+    uint32_t variant; // 0 direct, 1 hop
     uint32_t rounds;
     uint64_t size;
     uint64_t regionBase;
@@ -3259,7 +3306,7 @@ struct RtHello {
 };
 
 struct RtServer {
-    int32_t received;  // 1 = the handle arrived and describes as a BLOB of `size`
+    int32_t received; // 1 = the handle arrived and describes as a BLOB of `size`
     int32_t pad;
     char server[192];
     char note[192];
@@ -3267,7 +3314,8 @@ struct RtServer {
 
 static std::string selfContext() {
     std::string sec = readSmallFile("/proc/self/attr/current");
-    while (!sec.empty() && (sec.back() == '\n' || sec.back() == '\0')) sec.pop_back();
+    while (!sec.empty() && (sec.back() == '\n' || sec.back() == '\0'))
+        sec.pop_back();
     return fmt("%s uid=%d pid=%d", sec.c_str(), (int)getuid(), (int)getpid());
 }
 
@@ -3363,8 +3411,8 @@ static void rtServePair(VkCtx& c, GlCtx& g, bool glOk, int ctl, int aux) {
         h.note[sizeof(h.note) - 1] = 0;
         gRegionBase = h.regionBase;
         const char* vname = h.variant ? "hop" : "direct";
-        pr("route server: client [%s] variant=%s size=%llu rounds=%u (%s)", h.client, vname,
-           (unsigned long long)h.size, h.rounds, h.note);
+        pr("route server: client [%s] variant=%s size=%llu rounds=%u (%s)", h.client, vname, (unsigned long long)h.size,
+           h.rounds, h.note);
         AHardwareBuffer* ahb = nullptr;
         int rc = -1;
         std::string how;
@@ -3378,8 +3426,7 @@ static void rtServePair(VkCtx& c, GlCtx& g, bool glOk, int ctl, int aux) {
                 how = fmt("hop socket did not arrive over aux (tag=%u fd=%d errno=%d)", t2, hopFd, errno);
             } else {
                 rc = AHardwareBuffer_recvHandleFromUnixSocket(hopFd, &ahb);
-                how = fmt("hop %s; recvHandleFromUnixSocket(hop) rc=%d errno=%d", describeFd(hopFd).c_str(), rc,
-                          errno);
+                how = fmt("hop %s; recvHandleFromUnixSocket(hop) rc=%d errno=%d", describeFd(hopFd).c_str(), rc, errno);
                 close(hopFd);
             }
         }
@@ -3389,8 +3436,8 @@ static void rtServePair(VkCtx& c, GlCtx& g, bool glOk, int ctl, int aux) {
             AHardwareBuffer_Desc d{};
             AHardwareBuffer_describe(ahb, &d);
             sv.received = (d.format == AHARDWAREBUFFER_FORMAT_BLOB && d.width == h.size) ? 1 : 0;
-            snprintf(sv.note, sizeof(sv.note), "%s | desc w=%u fmt=0x%x usage=0x%llx", how.c_str(), d.width,
-                     d.format, (unsigned long long)d.usage);
+            snprintf(sv.note, sizeof(sv.note), "%s | desc w=%u fmt=0x%x usage=0x%llx", how.c_str(), d.width, d.format,
+                     (unsigned long long)d.usage);
         } else {
             snprintf(sv.note, sizeof(sv.note), "%s", how.c_str());
         }
@@ -3512,13 +3559,13 @@ static int rtClientVariant(int ctl, int aux, uint32_t variant, uint64_t size, ui
     int rrc = 10;
     if (sendRc != 0 || !haveServer || !sv.received) {
         record(row.c_str(), "FAIL",
-               fmt("sendRc=%d serverAnswered=%d received=%d server [%s]: %s", sendRc, (int)haveServer,
-                   (int)sv.received, sv.server, sv.note));
+               fmt("sendRc=%d serverAnswered=%d received=%d server [%s]: %s", sendRc, (int)haveServer, (int)sv.received,
+                   sv.server, sv.note));
     } else {
         rrc = t0sClientRounds(ctl, ahb, p, lockRc, rounds, h.seedBase);
         record(row.c_str(), rrc == 0 ? "OK" : "FAIL",
-               fmt("client [%s] -> server [%s] | %s | rounds rc=%d (the server's rows carry the GPU verdict)",
-                   h.client, sv.server, sv.note, rrc));
+               fmt("client [%s] -> server [%s] | %s | rounds rc=%d (the server's rows carry the GPU verdict)", h.client,
+                   sv.server, sv.note, rrc));
     }
     AHardwareBuffer_release(ahb);
     return rrc;
@@ -3567,7 +3614,7 @@ static int routeClient(const char* endpoint, uint64_t size, uint32_t rounds, boo
     return worst;
 }
 
-#else  // !PROBE_HAVE_AHB
+#else // !PROBE_HAVE_AHB
 
 static int childT0(int) {
     pr("T0 is Android-only");
@@ -3592,7 +3639,7 @@ static int routeClient(const char*, uint64_t, uint32_t, bool) {
     return 1;
 }
 
-#endif  // PROBE_HAVE_AHB
+#endif // PROBE_HAVE_AHB
 
 // ---------------------------------------------------------------------------
 // T3: VK_EXT_external_memory_host over a memfd-backed mapping
@@ -3659,8 +3706,8 @@ static bool importHostPointer(VkCtx& c, void* host, uint64_t mapSize, HostImport
         req.memoryTypeBits = 0xFFFFFFFFu;
     }
     o.bits = hp.memoryTypeBits & req.memoryTypeBits;
-    o.typeIdx = pickMemType(c.memProps, o.bits,
-                            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    o.typeIdx =
+        pickMemType(c.memProps, o.bits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
     if (o.typeIdx < 0) o.typeIdx = pickMemType(c.memProps, o.bits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT);
     if (o.typeIdx < 0) {
         o.fail = fmt("no host-visible memory type in hostPtrBits=0x%x & reqBits=0x%x", hp.memoryTypeBits,
@@ -3856,8 +3903,8 @@ static void runT3ClientAllocParent(VkCtx& c, uint64_t size) {
     int64_t cmpA = -3, gpuFillSeen = -3;
     GpuTouch gt;
     if (imported) {
-        cmpA = checkRegion(hi.mapped, REG_A, seedA);   // server reads what the client wrote
-        writeRegion(hi.mapped, REG_B, seedB);          // server writes back
+        cmpA = checkRegion(hi.mapped, REG_A, seedA); // server reads what the client wrote
+        writeRegion(hi.mapped, REG_B, seedB);        // server writes back
         gt = gpuTouch(c, hi.buf, REG_A, seedA, REG_E, gpuWord);
         gpuFillSeen = gt.ran ? checkFillWord(hi.mapped, REG_E, gpuWord) : -3;
     }
@@ -3869,8 +3916,8 @@ static void runT3ClientAllocParent(VkCtx& c, uint64_t size) {
     T3cResult res{};
     res.mismatchB = res.mismatchE = -3;
     bool gotVerify = false;
-    if (sendMsg(sock, MSG_T3C_VERIFY, &ver, sizeof(ver), -1) &&
-        recvMsg(sock, &tag, &res, sizeof(res), &got, nullptr) && tag == MSG_T3C_RESULT) {
+    if (sendMsg(sock, MSG_T3C_VERIFY, &ver, sizeof(ver), -1) && recvMsg(sock, &tag, &res, sizeof(res), &got, nullptr) &&
+        tag == MSG_T3C_RESULT) {
         gotVerify = true;
     }
 
@@ -3902,21 +3949,20 @@ static void runT3ClientAllocParent(VkCtx& c, uint64_t size) {
         else if (!l.readOk)
             l.fail = fmt("GPU read of the client's memory mismatched at %lld", (long long)gt.readMismatch);
         else if (!l.writeOk)
-            l.fail = fmt("GPU write not visible to the client (serverMap=%lld clientMap=%lld)",
-                         (long long)gpuFillSeen, (long long)res.mismatchE);
+            l.fail = fmt("GPU write not visible to the client (serverMap=%lld clientMap=%lld)", (long long)gpuFillSeen,
+                         (long long)res.mismatchE);
         legs.push_back(l);
     }
     std::string why;
     const char* status = legVerdict(legs, &why);
-    std::string detail =
-        fmt("%s | client allocates, server imports: align=%llu size=%llu hostPtrProps=%s create=%s alloc=%s bind=%s "
-            "map=%s type=%d bits=0x%x | serverReadOfClient=%lld clientReadOfServer=%lld gpuRead=%lld "
-            "gpuFill(server=%lld,client=%lld) | %s [%s] ",
-            legTrace(legs).c_str(), (unsigned long long)align, (unsigned long long)mapSize,
-            vkStr(hi.hostPtrProps).c_str(), vkStr(hi.createResult).c_str(), vkStr(hi.allocResult).c_str(),
-            vkStr(hi.bindResult).c_str(), vkStr(hi.mapResult).c_str(), hi.typeIdx, hi.bits, (long long)cmpA,
-            (long long)res.mismatchB, (long long)gt.readMismatch, (long long)gpuFillSeen, (long long)res.mismatchE,
-            why.c_str(), ready.note);
+    std::string detail = fmt(
+        "%s | client allocates, server imports: align=%llu size=%llu hostPtrProps=%s create=%s alloc=%s bind=%s "
+        "map=%s type=%d bits=0x%x | serverReadOfClient=%lld clientReadOfServer=%lld gpuRead=%lld "
+        "gpuFill(server=%lld,client=%lld) | %s [%s] ",
+        legTrace(legs).c_str(), (unsigned long long)align, (unsigned long long)mapSize, vkStr(hi.hostPtrProps).c_str(),
+        vkStr(hi.createResult).c_str(), vkStr(hi.allocResult).c_str(), vkStr(hi.bindResult).c_str(),
+        vkStr(hi.mapResult).c_str(), hi.typeIdx, hi.bits, (long long)cmpA, (long long)res.mismatchB,
+        (long long)gt.readMismatch, (long long)gpuFillSeen, (long long)res.mismatchE, why.c_str(), ready.note);
 
     releaseHostImport(c, hi);
     munmap(host, (size_t)mapSize);
@@ -3999,8 +4045,8 @@ static void runT3Parent(VkCtx& c, uint64_t size) {
                    "gpuRead=%lld gpuFill=%lld %s",
                    legTrace(legs).c_str(), (unsigned long long)align, hi.typeIdx, hi.bits,
                    vkStr(hi.hostPtrProps).c_str(), vkStr(hi.allocResult).c_str(), vkStr(hi.bindResult).c_str(),
-                   vkStr(hi.mapResult).c_str(), (long long)cmpA, (long long)gt.readMismatch,
-                   (long long)gpuFillSeen, why.c_str()));
+                   vkStr(hi.mapResult).c_str(), (long long)cmpA, (long long)gt.readMismatch, (long long)gpuFillSeen,
+                   why.c_str()));
     }
 
     // the same memfd handed to another process
@@ -4084,7 +4130,8 @@ static std::vector<std::string> readArgsFile(const std::string& path) {
     FILE* f = fopen(path.c_str(), "r");
     if (!f) return out;
     char tok[256];
-    while (fscanf(f, "%255s", tok) == 1) out.push_back(tok);
+    while (fscanf(f, "%255s", tok) == 1)
+        out.push_back(tok);
     fclose(f);
     return out;
 }
@@ -4116,7 +4163,7 @@ int main(int argc, char** argv) {
     for (const std::string& s : args) {
         const char* a = s.c_str();
         if (!strncmp(a, "--child=", 8)) {
-            static std::string route;  // outlives `args`
+            static std::string route; // outlives `args`
             route = a + 8;
             childRoute = route.c_str();
         } else if (!strcmp(a, "--route-client")) {
@@ -4151,7 +4198,8 @@ int main(int argc, char** argv) {
             doGles = false;
         } else if (!strcmp(a, "--help")) {
             printf("usage: extmem_probe [markerPath] [--size=BYTES] [--regions-at-end] [--sustained-lock[=ROUNDS]]\n"
-                   "       extmem_probe --route-client[=@endpoint] [--size=BYTES] [--sustained-lock=ROUNDS] [--regions-at-end]\n"
+                   "       extmem_probe --route-client[=@endpoint] [--size=BYTES] [--sustained-lock=ROUNDS] "
+                   "[--regions-at-end]\n"
                    "       extmem_probe <endpoint> --serve   (packaged as libMobileGLServer.so)\n"
                    "       [--only-t0|--only-t1|--only-t3|--only-gles|--only-sustained] [--no-gles]\n"
                    "  markerPath: exec-hook mode; options are also read from <markerPath>.args\n");
@@ -4183,7 +4231,8 @@ int main(int argc, char** argv) {
     }
 
     std::string joined;
-    for (const std::string& s : args) joined += " " + s;
+    for (const std::string& s : args)
+        joined += " " + s;
     pr("extmem_probe: MobileGL disaggregation spike B, size=%llu bytes regionBase=%llu sustainedRounds=%u "
        "marker=%s args=[%s ]",
        (unsigned long long)size, (unsigned long long)gRegionBase, sustainedRounds,
@@ -4225,17 +4274,21 @@ int main(int argc, char** argv) {
     if (!markerPath.empty()) {
         int ok = 0, partial = 0, fail = 0, unsup = 0, skip = 0;
         for (const RouteResult& r : gResults) {
-            if (r.status == "OK") ++ok;
-            else if (r.status == "PARTIAL") ++partial;
-            else if (r.status == "FAIL") ++fail;
-            else if (r.status == "UNSUPPORTED") ++unsup;
-            else ++skip;
+            if (r.status == "OK")
+                ++ok;
+            else if (r.status == "PARTIAL")
+                ++partial;
+            else if (r.status == "FAIL")
+                ++fail;
+            else if (r.status == "UNSUPPORTED")
+                ++unsup;
+            else
+                ++skip;
         }
         FILE* m = fopen(markerPath.c_str(), "w");
         if (m) {
             fprintf(m, "extmem_probe done selinux=%s rows=%zu OK=%d PARTIAL=%d FAIL=%d UNSUPPORTED=%d SKIP=%d\n",
-                    readSmallFile("/proc/self/attr/current").c_str(), gResults.size(), ok, partial, fail, unsup,
-                    skip);
+                    readSmallFile("/proc/self/attr/current").c_str(), gResults.size(), ok, partial, fail, unsup, skip);
             fclose(m);
         }
     }

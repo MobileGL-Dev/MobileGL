@@ -68,8 +68,8 @@ static LONG WINAPI CrashDump(EXCEPTION_POINTERS* ep) {
     static volatile LONG entered = 0;
     if (ep->ExceptionRecord->ExceptionCode != 0xC0000005) return EXCEPTION_CONTINUE_SEARCH;
     if (InterlockedExchange(&entered, 1)) return EXCEPTION_CONTINUE_SEARCH;
-    HANDLE f = CreateFileA("glfw-crash-stack.txt", GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
-                           FILE_ATTRIBUTE_NORMAL, nullptr);
+    HANDLE f =
+        CreateFileA("glfw-crash-stack.txt", GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (f == INVALID_HANDLE_VALUE) TerminateProcess(GetCurrentProcess(), 0x43);
     RawPrint(f, "AV at ");
     RawHex(f, (unsigned long long)ep->ExceptionRecord->ExceptionAddress);

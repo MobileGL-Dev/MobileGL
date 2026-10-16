@@ -395,7 +395,6 @@ namespace MobileGL {
             Int MaxFragmentShadingRateAttachmentTexelAspectRatio = 0;
             Int MaxFragmentShadingRateAttachmentLayers = 0;
 
-
             static constexpr Bool IsSamplePositionCount(Int samples) {
                 return samples >= 2 && samples <= kMaxSamplePositionCount && (samples & (samples - 1)) == 0;
             }
@@ -405,7 +404,8 @@ namespace MobileGL {
             // `xy` holds `samples` (x, y) pairs.
             void SetSamplePositions(Int samples, const Float* xy) {
                 if (!IsSamplePositionCount(samples)) return;
-                for (Int i = 0; i < 2 * samples; ++i) SamplePositions[2 * (samples - 2) + i] = xy[i];
+                for (Int i = 0; i < 2 * samples; ++i)
+                    SamplePositions[2 * (samples - 2) + i] = xy[i];
                 SamplePositionCountMask |= SamplePositionCountBit(samples);
             }
             Bool GetSamplePosition(Int samples, Int index, Float* outXY) const {

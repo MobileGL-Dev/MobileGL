@@ -32,11 +32,15 @@ namespace MGITest {
         return true;
     }
 
-    const char* TextureEmitPeekSkipReason() { return ""; }
+    const char* TextureEmitPeekSkipReason() {
+        return "";
+    }
 
 #else
 
-    bool PeekTextureEmitCounters(TextureEmitCountersPeek*) { return false; }
+    bool PeekTextureEmitCounters(TextureEmitCountersPeek*) {
+        return false;
+    }
 
     const char* TextureEmitPeekSkipReason() {
 #if defined(__ANDROID__)

@@ -28,18 +28,15 @@ namespace {
     constexpr Uint32 kVendorIdArm = 0x13B5;
 
     constexpr VkColorComponentFlags kFullColorWriteMask =
-        VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
-        VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+        VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
 
     // Builds non-separate blend state: the alpha channel repeats the color factors/op, which
     // is what glBlendFunc/glBlendEquation (as opposed to their *Separate forms) produce.
     // ShouldSuppressDepthWrite deliberately decides on the color channel alone, so these
     // cases cover its whole input space; SeparateAlphaAccumulationIsNotStripped below pins
     // the separate-alpha contract.
-    VkPipelineColorBlendAttachmentState MakeBlendAttachment(Bool blendEnable,
-                                                            VkBlendFactor srcColor,
-                                                            VkBlendFactor dstColor,
-                                                            VkBlendOp colorOp,
+    VkPipelineColorBlendAttachmentState MakeBlendAttachment(Bool blendEnable, VkBlendFactor srcColor,
+                                                            VkBlendFactor dstColor, VkBlendOp colorOp,
                                                             VkColorComponentFlags colorWriteMask) {
         VkPipelineColorBlendAttachmentState attachment{};
         attachment.blendEnable = blendEnable ? VK_TRUE : VK_FALSE;
@@ -59,130 +56,103 @@ namespace {
     //   void main() { outColor = vec4(1.0); gl_FragDepth = 0.5; }
     // Assigning gl_FragDepth makes glslang emit OpExecutionMode ... DepthReplacing.
     constexpr Uint32 kFragDepthWriterSpirv[] = {
-        0x07230203u, 0x00010000u, 0x0008000bu, 0x0000000fu, 0x00000000u, 0x00020011u,
-        0x00000001u, 0x0006000bu, 0x00000001u, 0x4c534c47u, 0x6474732eu, 0x3035342eu,
-        0x00000000u, 0x0003000eu, 0x00000000u, 0x00000001u, 0x0007000fu, 0x00000004u,
-        0x00000004u, 0x6e69616du, 0x00000000u, 0x00000009u, 0x0000000du, 0x00030010u,
-        0x00000004u, 0x00000007u, 0x00030010u, 0x00000004u, 0x0000000cu, 0x00030003u,
-        0x00000002u, 0x000001c2u, 0x00040005u, 0x00000004u, 0x6e69616du, 0x00000000u,
-        0x00050005u, 0x00000009u, 0x4374756fu, 0x726f6c6fu, 0x00000000u, 0x00060005u,
-        0x0000000du, 0x465f6c67u, 0x44676172u, 0x68747065u, 0x00000000u, 0x00040047u,
-        0x00000009u, 0x0000001eu, 0x00000000u, 0x00040047u, 0x0000000du, 0x0000000bu,
-        0x00000016u, 0x00020013u, 0x00000002u, 0x00030021u, 0x00000003u, 0x00000002u,
-        0x00030016u, 0x00000006u, 0x00000020u, 0x00040017u, 0x00000007u, 0x00000006u,
-        0x00000004u, 0x00040020u, 0x00000008u, 0x00000003u, 0x00000007u, 0x0004003bu,
-        0x00000008u, 0x00000009u, 0x00000003u, 0x0004002bu, 0x00000006u, 0x0000000au,
-        0x3f800000u, 0x0007002cu, 0x00000007u, 0x0000000bu, 0x0000000au, 0x0000000au,
-        0x0000000au, 0x0000000au, 0x00040020u, 0x0000000cu, 0x00000003u, 0x00000006u,
-        0x0004003bu, 0x0000000cu, 0x0000000du, 0x00000003u, 0x0004002bu, 0x00000006u,
-        0x0000000eu, 0x3f000000u, 0x00050036u, 0x00000002u, 0x00000004u, 0x00000000u,
-        0x00000003u, 0x000200f8u, 0x00000005u, 0x0003003eu, 0x00000009u, 0x0000000bu,
-        0x0003003eu, 0x0000000du, 0x0000000eu, 0x000100fdu, 0x00010038u,
+        0x07230203u, 0x00010000u, 0x0008000bu, 0x0000000fu, 0x00000000u, 0x00020011u, 0x00000001u, 0x0006000bu,
+        0x00000001u, 0x4c534c47u, 0x6474732eu, 0x3035342eu, 0x00000000u, 0x0003000eu, 0x00000000u, 0x00000001u,
+        0x0007000fu, 0x00000004u, 0x00000004u, 0x6e69616du, 0x00000000u, 0x00000009u, 0x0000000du, 0x00030010u,
+        0x00000004u, 0x00000007u, 0x00030010u, 0x00000004u, 0x0000000cu, 0x00030003u, 0x00000002u, 0x000001c2u,
+        0x00040005u, 0x00000004u, 0x6e69616du, 0x00000000u, 0x00050005u, 0x00000009u, 0x4374756fu, 0x726f6c6fu,
+        0x00000000u, 0x00060005u, 0x0000000du, 0x465f6c67u, 0x44676172u, 0x68747065u, 0x00000000u, 0x00040047u,
+        0x00000009u, 0x0000001eu, 0x00000000u, 0x00040047u, 0x0000000du, 0x0000000bu, 0x00000016u, 0x00020013u,
+        0x00000002u, 0x00030021u, 0x00000003u, 0x00000002u, 0x00030016u, 0x00000006u, 0x00000020u, 0x00040017u,
+        0x00000007u, 0x00000006u, 0x00000004u, 0x00040020u, 0x00000008u, 0x00000003u, 0x00000007u, 0x0004003bu,
+        0x00000008u, 0x00000009u, 0x00000003u, 0x0004002bu, 0x00000006u, 0x0000000au, 0x3f800000u, 0x0007002cu,
+        0x00000007u, 0x0000000bu, 0x0000000au, 0x0000000au, 0x0000000au, 0x0000000au, 0x00040020u, 0x0000000cu,
+        0x00000003u, 0x00000006u, 0x0004003bu, 0x0000000cu, 0x0000000du, 0x00000003u, 0x0004002bu, 0x00000006u,
+        0x0000000eu, 0x3f000000u, 0x00050036u, 0x00000002u, 0x00000004u, 0x00000000u, 0x00000003u, 0x000200f8u,
+        0x00000005u, 0x0003003eu, 0x00000009u, 0x0000000bu, 0x0003003eu, 0x0000000du, 0x0000000eu, 0x000100fdu,
+        0x00010038u,
     };
 
     // Same shader without the gl_FragDepth assignment.
     constexpr Uint32 kPlainFragmentSpirv[] = {
-        0x07230203u, 0x00010000u, 0x0008000bu, 0x0000000cu, 0x00000000u, 0x00020011u,
-        0x00000001u, 0x0006000bu, 0x00000001u, 0x4c534c47u, 0x6474732eu, 0x3035342eu,
-        0x00000000u, 0x0003000eu, 0x00000000u, 0x00000001u, 0x0006000fu, 0x00000004u,
-        0x00000004u, 0x6e69616du, 0x00000000u, 0x00000009u, 0x00030010u, 0x00000004u,
-        0x00000007u, 0x00030003u, 0x00000002u, 0x000001c2u, 0x00040005u, 0x00000004u,
-        0x6e69616du, 0x00000000u, 0x00050005u, 0x00000009u, 0x4374756fu, 0x726f6c6fu,
-        0x00000000u, 0x00040047u, 0x00000009u, 0x0000001eu, 0x00000000u, 0x00020013u,
-        0x00000002u, 0x00030021u, 0x00000003u, 0x00000002u, 0x00030016u, 0x00000006u,
-        0x00000020u, 0x00040017u, 0x00000007u, 0x00000006u, 0x00000004u, 0x00040020u,
-        0x00000008u, 0x00000003u, 0x00000007u, 0x0004003bu, 0x00000008u, 0x00000009u,
-        0x00000003u, 0x0004002bu, 0x00000006u, 0x0000000au, 0x3f800000u, 0x0007002cu,
-        0x00000007u, 0x0000000bu, 0x0000000au, 0x0000000au, 0x0000000au, 0x0000000au,
-        0x00050036u, 0x00000002u, 0x00000004u, 0x00000000u, 0x00000003u, 0x000200f8u,
-        0x00000005u, 0x0003003eu, 0x00000009u, 0x0000000bu, 0x000100fdu, 0x00010038u,
+        0x07230203u, 0x00010000u, 0x0008000bu, 0x0000000cu, 0x00000000u, 0x00020011u, 0x00000001u, 0x0006000bu,
+        0x00000001u, 0x4c534c47u, 0x6474732eu, 0x3035342eu, 0x00000000u, 0x0003000eu, 0x00000000u, 0x00000001u,
+        0x0006000fu, 0x00000004u, 0x00000004u, 0x6e69616du, 0x00000000u, 0x00000009u, 0x00030010u, 0x00000004u,
+        0x00000007u, 0x00030003u, 0x00000002u, 0x000001c2u, 0x00040005u, 0x00000004u, 0x6e69616du, 0x00000000u,
+        0x00050005u, 0x00000009u, 0x4374756fu, 0x726f6c6fu, 0x00000000u, 0x00040047u, 0x00000009u, 0x0000001eu,
+        0x00000000u, 0x00020013u, 0x00000002u, 0x00030021u, 0x00000003u, 0x00000002u, 0x00030016u, 0x00000006u,
+        0x00000020u, 0x00040017u, 0x00000007u, 0x00000006u, 0x00000004u, 0x00040020u, 0x00000008u, 0x00000003u,
+        0x00000007u, 0x0004003bu, 0x00000008u, 0x00000009u, 0x00000003u, 0x0004002bu, 0x00000006u, 0x0000000au,
+        0x3f800000u, 0x0007002cu, 0x00000007u, 0x0000000bu, 0x0000000au, 0x0000000au, 0x0000000au, 0x0000000au,
+        0x00050036u, 0x00000002u, 0x00000004u, 0x00000000u, 0x00000003u, 0x000200f8u, 0x00000005u, 0x0003003eu,
+        0x00000009u, 0x0000000bu, 0x000100fdu, 0x00010038u,
     };
-
 
     // glslangValidator -V output for a vertex shader reading gl_InstanceIndex:
     //   #version 450
     //   layout(location = 0) in vec4 inPos;
     //   void main() { gl_Position = inPos + vec4(float(gl_InstanceIndex)); }
     constexpr Uint32 kInstanceIndexVertexSpirv[] = {
-        0x07230203u, 0x00010000u, 0x0008000bu, 0x0000001bu, 0x00000000u, 0x00020011u,
-        0x00000001u, 0x0006000bu, 0x00000001u, 0x4c534c47u, 0x6474732eu, 0x3035342eu,
-        0x00000000u, 0x0003000eu, 0x00000000u, 0x00000001u, 0x0008000fu, 0x00000000u,
-        0x00000004u, 0x6e69616du, 0x00000000u, 0x0000000du, 0x00000011u, 0x00000014u,
-        0x00030003u, 0x00000002u, 0x000001c2u, 0x00040005u, 0x00000004u, 0x6e69616du,
-        0x00000000u, 0x00060005u, 0x0000000bu, 0x505f6c67u, 0x65567265u, 0x78657472u,
-        0x00000000u, 0x00060006u, 0x0000000bu, 0x00000000u, 0x505f6c67u, 0x7469736fu,
-        0x006e6f69u, 0x00070006u, 0x0000000bu, 0x00000001u, 0x505f6c67u, 0x746e696fu,
-        0x657a6953u, 0x00000000u, 0x00070006u, 0x0000000bu, 0x00000002u, 0x435f6c67u,
-        0x4470696cu, 0x61747369u, 0x0065636eu, 0x00070006u, 0x0000000bu, 0x00000003u,
-        0x435f6c67u, 0x446c6c75u, 0x61747369u, 0x0065636eu, 0x00030005u, 0x0000000du,
-        0x00000000u, 0x00040005u, 0x00000011u, 0x6f506e69u, 0x00000073u, 0x00070005u,
-        0x00000014u, 0x495f6c67u, 0x6174736eu, 0x4965636eu, 0x7865646eu, 0x00000000u,
-        0x00030047u, 0x0000000bu, 0x00000002u, 0x00050048u, 0x0000000bu, 0x00000000u,
-        0x0000000bu, 0x00000000u, 0x00050048u, 0x0000000bu, 0x00000001u, 0x0000000bu,
-        0x00000001u, 0x00050048u, 0x0000000bu, 0x00000002u, 0x0000000bu, 0x00000003u,
-        0x00050048u, 0x0000000bu, 0x00000003u, 0x0000000bu, 0x00000004u, 0x00040047u,
-        0x00000011u, 0x0000001eu, 0x00000000u, 0x00040047u, 0x00000014u, 0x0000000bu,
-        0x0000002bu, 0x00020013u, 0x00000002u, 0x00030021u, 0x00000003u, 0x00000002u,
-        0x00030016u, 0x00000006u, 0x00000020u, 0x00040017u, 0x00000007u, 0x00000006u,
-        0x00000004u, 0x00040015u, 0x00000008u, 0x00000020u, 0x00000000u, 0x0004002bu,
-        0x00000008u, 0x00000009u, 0x00000001u, 0x0004001cu, 0x0000000au, 0x00000006u,
-        0x00000009u, 0x0006001eu, 0x0000000bu, 0x00000007u, 0x00000006u, 0x0000000au,
-        0x0000000au, 0x00040020u, 0x0000000cu, 0x00000003u, 0x0000000bu, 0x0004003bu,
-        0x0000000cu, 0x0000000du, 0x00000003u, 0x00040015u, 0x0000000eu, 0x00000020u,
-        0x00000001u, 0x0004002bu, 0x0000000eu, 0x0000000fu, 0x00000000u, 0x00040020u,
-        0x00000010u, 0x00000001u, 0x00000007u, 0x0004003bu, 0x00000010u, 0x00000011u,
-        0x00000001u, 0x00040020u, 0x00000013u, 0x00000001u, 0x0000000eu, 0x0004003bu,
-        0x00000013u, 0x00000014u, 0x00000001u, 0x00040020u, 0x00000019u, 0x00000003u,
-        0x00000007u, 0x00050036u, 0x00000002u, 0x00000004u, 0x00000000u, 0x00000003u,
-        0x000200f8u, 0x00000005u, 0x0004003du, 0x00000007u, 0x00000012u, 0x00000011u,
-        0x0004003du, 0x0000000eu, 0x00000015u, 0x00000014u, 0x0004006fu, 0x00000006u,
-        0x00000016u, 0x00000015u, 0x00070050u, 0x00000007u, 0x00000017u, 0x00000016u,
-        0x00000016u, 0x00000016u, 0x00000016u, 0x00050081u, 0x00000007u, 0x00000018u,
-        0x00000012u, 0x00000017u, 0x00050041u, 0x00000019u, 0x0000001au, 0x0000000du,
-        0x0000000fu, 0x0003003eu, 0x0000001au, 0x00000018u, 0x000100fdu, 0x00010038u,
+        0x07230203u, 0x00010000u, 0x0008000bu, 0x0000001bu, 0x00000000u, 0x00020011u, 0x00000001u, 0x0006000bu,
+        0x00000001u, 0x4c534c47u, 0x6474732eu, 0x3035342eu, 0x00000000u, 0x0003000eu, 0x00000000u, 0x00000001u,
+        0x0008000fu, 0x00000000u, 0x00000004u, 0x6e69616du, 0x00000000u, 0x0000000du, 0x00000011u, 0x00000014u,
+        0x00030003u, 0x00000002u, 0x000001c2u, 0x00040005u, 0x00000004u, 0x6e69616du, 0x00000000u, 0x00060005u,
+        0x0000000bu, 0x505f6c67u, 0x65567265u, 0x78657472u, 0x00000000u, 0x00060006u, 0x0000000bu, 0x00000000u,
+        0x505f6c67u, 0x7469736fu, 0x006e6f69u, 0x00070006u, 0x0000000bu, 0x00000001u, 0x505f6c67u, 0x746e696fu,
+        0x657a6953u, 0x00000000u, 0x00070006u, 0x0000000bu, 0x00000002u, 0x435f6c67u, 0x4470696cu, 0x61747369u,
+        0x0065636eu, 0x00070006u, 0x0000000bu, 0x00000003u, 0x435f6c67u, 0x446c6c75u, 0x61747369u, 0x0065636eu,
+        0x00030005u, 0x0000000du, 0x00000000u, 0x00040005u, 0x00000011u, 0x6f506e69u, 0x00000073u, 0x00070005u,
+        0x00000014u, 0x495f6c67u, 0x6174736eu, 0x4965636eu, 0x7865646eu, 0x00000000u, 0x00030047u, 0x0000000bu,
+        0x00000002u, 0x00050048u, 0x0000000bu, 0x00000000u, 0x0000000bu, 0x00000000u, 0x00050048u, 0x0000000bu,
+        0x00000001u, 0x0000000bu, 0x00000001u, 0x00050048u, 0x0000000bu, 0x00000002u, 0x0000000bu, 0x00000003u,
+        0x00050048u, 0x0000000bu, 0x00000003u, 0x0000000bu, 0x00000004u, 0x00040047u, 0x00000011u, 0x0000001eu,
+        0x00000000u, 0x00040047u, 0x00000014u, 0x0000000bu, 0x0000002bu, 0x00020013u, 0x00000002u, 0x00030021u,
+        0x00000003u, 0x00000002u, 0x00030016u, 0x00000006u, 0x00000020u, 0x00040017u, 0x00000007u, 0x00000006u,
+        0x00000004u, 0x00040015u, 0x00000008u, 0x00000020u, 0x00000000u, 0x0004002bu, 0x00000008u, 0x00000009u,
+        0x00000001u, 0x0004001cu, 0x0000000au, 0x00000006u, 0x00000009u, 0x0006001eu, 0x0000000bu, 0x00000007u,
+        0x00000006u, 0x0000000au, 0x0000000au, 0x00040020u, 0x0000000cu, 0x00000003u, 0x0000000bu, 0x0004003bu,
+        0x0000000cu, 0x0000000du, 0x00000003u, 0x00040015u, 0x0000000eu, 0x00000020u, 0x00000001u, 0x0004002bu,
+        0x0000000eu, 0x0000000fu, 0x00000000u, 0x00040020u, 0x00000010u, 0x00000001u, 0x00000007u, 0x0004003bu,
+        0x00000010u, 0x00000011u, 0x00000001u, 0x00040020u, 0x00000013u, 0x00000001u, 0x0000000eu, 0x0004003bu,
+        0x00000013u, 0x00000014u, 0x00000001u, 0x00040020u, 0x00000019u, 0x00000003u, 0x00000007u, 0x00050036u,
+        0x00000002u, 0x00000004u, 0x00000000u, 0x00000003u, 0x000200f8u, 0x00000005u, 0x0004003du, 0x00000007u,
+        0x00000012u, 0x00000011u, 0x0004003du, 0x0000000eu, 0x00000015u, 0x00000014u, 0x0004006fu, 0x00000006u,
+        0x00000016u, 0x00000015u, 0x00070050u, 0x00000007u, 0x00000017u, 0x00000016u, 0x00000016u, 0x00000016u,
+        0x00000016u, 0x00050081u, 0x00000007u, 0x00000018u, 0x00000012u, 0x00000017u, 0x00050041u, 0x00000019u,
+        0x0000001au, 0x0000000du, 0x0000000fu, 0x0003003eu, 0x0000001au, 0x00000018u, 0x000100fdu, 0x00010038u,
     };
-
 
     // Same, but reading gl_VertexIndex instead: a DIFFERENT input builtin. glslang emits
     // this for GL's gl_VertexID, so nearly every real vertex shader has one - it is what
     // separates "declares some builtin" from "declares the InstanceIndex builtin".
     constexpr Uint32 kVertexIndexVertexSpirv[] = {
-        0x07230203u, 0x00010000u, 0x0008000bu, 0x0000001bu, 0x00000000u, 0x00020011u,
-        0x00000001u, 0x0006000bu, 0x00000001u, 0x4c534c47u, 0x6474732eu, 0x3035342eu,
-        0x00000000u, 0x0003000eu, 0x00000000u, 0x00000001u, 0x0008000fu, 0x00000000u,
-        0x00000004u, 0x6e69616du, 0x00000000u, 0x0000000du, 0x00000011u, 0x00000014u,
-        0x00030003u, 0x00000002u, 0x000001c2u, 0x00040005u, 0x00000004u, 0x6e69616du,
-        0x00000000u, 0x00060005u, 0x0000000bu, 0x505f6c67u, 0x65567265u, 0x78657472u,
-        0x00000000u, 0x00060006u, 0x0000000bu, 0x00000000u, 0x505f6c67u, 0x7469736fu,
-        0x006e6f69u, 0x00070006u, 0x0000000bu, 0x00000001u, 0x505f6c67u, 0x746e696fu,
-        0x657a6953u, 0x00000000u, 0x00070006u, 0x0000000bu, 0x00000002u, 0x435f6c67u,
-        0x4470696cu, 0x61747369u, 0x0065636eu, 0x00070006u, 0x0000000bu, 0x00000003u,
-        0x435f6c67u, 0x446c6c75u, 0x61747369u, 0x0065636eu, 0x00030005u, 0x0000000du,
-        0x00000000u, 0x00040005u, 0x00000011u, 0x6f506e69u, 0x00000073u, 0x00060005u,
-        0x00000014u, 0x565f6c67u, 0x65747265u, 0x646e4978u, 0x00007865u, 0x00030047u,
-        0x0000000bu, 0x00000002u, 0x00050048u, 0x0000000bu, 0x00000000u, 0x0000000bu,
-        0x00000000u, 0x00050048u, 0x0000000bu, 0x00000001u, 0x0000000bu, 0x00000001u,
-        0x00050048u, 0x0000000bu, 0x00000002u, 0x0000000bu, 0x00000003u, 0x00050048u,
-        0x0000000bu, 0x00000003u, 0x0000000bu, 0x00000004u, 0x00040047u, 0x00000011u,
-        0x0000001eu, 0x00000000u, 0x00040047u, 0x00000014u, 0x0000000bu, 0x0000002au,
-        0x00020013u, 0x00000002u, 0x00030021u, 0x00000003u, 0x00000002u, 0x00030016u,
-        0x00000006u, 0x00000020u, 0x00040017u, 0x00000007u, 0x00000006u, 0x00000004u,
-        0x00040015u, 0x00000008u, 0x00000020u, 0x00000000u, 0x0004002bu, 0x00000008u,
-        0x00000009u, 0x00000001u, 0x0004001cu, 0x0000000au, 0x00000006u, 0x00000009u,
-        0x0006001eu, 0x0000000bu, 0x00000007u, 0x00000006u, 0x0000000au, 0x0000000au,
-        0x00040020u, 0x0000000cu, 0x00000003u, 0x0000000bu, 0x0004003bu, 0x0000000cu,
-        0x0000000du, 0x00000003u, 0x00040015u, 0x0000000eu, 0x00000020u, 0x00000001u,
-        0x0004002bu, 0x0000000eu, 0x0000000fu, 0x00000000u, 0x00040020u, 0x00000010u,
-        0x00000001u, 0x00000007u, 0x0004003bu, 0x00000010u, 0x00000011u, 0x00000001u,
-        0x00040020u, 0x00000013u, 0x00000001u, 0x0000000eu, 0x0004003bu, 0x00000013u,
-        0x00000014u, 0x00000001u, 0x00040020u, 0x00000019u, 0x00000003u, 0x00000007u,
-        0x00050036u, 0x00000002u, 0x00000004u, 0x00000000u, 0x00000003u, 0x000200f8u,
-        0x00000005u, 0x0004003du, 0x00000007u, 0x00000012u, 0x00000011u, 0x0004003du,
-        0x0000000eu, 0x00000015u, 0x00000014u, 0x0004006fu, 0x00000006u, 0x00000016u,
-        0x00000015u, 0x00070050u, 0x00000007u, 0x00000017u, 0x00000016u, 0x00000016u,
-        0x00000016u, 0x00000016u, 0x00050081u, 0x00000007u, 0x00000018u, 0x00000012u,
-        0x00000017u, 0x00050041u, 0x00000019u, 0x0000001au, 0x0000000du, 0x0000000fu,
-        0x0003003eu, 0x0000001au, 0x00000018u, 0x000100fdu, 0x00010038u,
+        0x07230203u, 0x00010000u, 0x0008000bu, 0x0000001bu, 0x00000000u, 0x00020011u, 0x00000001u, 0x0006000bu,
+        0x00000001u, 0x4c534c47u, 0x6474732eu, 0x3035342eu, 0x00000000u, 0x0003000eu, 0x00000000u, 0x00000001u,
+        0x0008000fu, 0x00000000u, 0x00000004u, 0x6e69616du, 0x00000000u, 0x0000000du, 0x00000011u, 0x00000014u,
+        0x00030003u, 0x00000002u, 0x000001c2u, 0x00040005u, 0x00000004u, 0x6e69616du, 0x00000000u, 0x00060005u,
+        0x0000000bu, 0x505f6c67u, 0x65567265u, 0x78657472u, 0x00000000u, 0x00060006u, 0x0000000bu, 0x00000000u,
+        0x505f6c67u, 0x7469736fu, 0x006e6f69u, 0x00070006u, 0x0000000bu, 0x00000001u, 0x505f6c67u, 0x746e696fu,
+        0x657a6953u, 0x00000000u, 0x00070006u, 0x0000000bu, 0x00000002u, 0x435f6c67u, 0x4470696cu, 0x61747369u,
+        0x0065636eu, 0x00070006u, 0x0000000bu, 0x00000003u, 0x435f6c67u, 0x446c6c75u, 0x61747369u, 0x0065636eu,
+        0x00030005u, 0x0000000du, 0x00000000u, 0x00040005u, 0x00000011u, 0x6f506e69u, 0x00000073u, 0x00060005u,
+        0x00000014u, 0x565f6c67u, 0x65747265u, 0x646e4978u, 0x00007865u, 0x00030047u, 0x0000000bu, 0x00000002u,
+        0x00050048u, 0x0000000bu, 0x00000000u, 0x0000000bu, 0x00000000u, 0x00050048u, 0x0000000bu, 0x00000001u,
+        0x0000000bu, 0x00000001u, 0x00050048u, 0x0000000bu, 0x00000002u, 0x0000000bu, 0x00000003u, 0x00050048u,
+        0x0000000bu, 0x00000003u, 0x0000000bu, 0x00000004u, 0x00040047u, 0x00000011u, 0x0000001eu, 0x00000000u,
+        0x00040047u, 0x00000014u, 0x0000000bu, 0x0000002au, 0x00020013u, 0x00000002u, 0x00030021u, 0x00000003u,
+        0x00000002u, 0x00030016u, 0x00000006u, 0x00000020u, 0x00040017u, 0x00000007u, 0x00000006u, 0x00000004u,
+        0x00040015u, 0x00000008u, 0x00000020u, 0x00000000u, 0x0004002bu, 0x00000008u, 0x00000009u, 0x00000001u,
+        0x0004001cu, 0x0000000au, 0x00000006u, 0x00000009u, 0x0006001eu, 0x0000000bu, 0x00000007u, 0x00000006u,
+        0x0000000au, 0x0000000au, 0x00040020u, 0x0000000cu, 0x00000003u, 0x0000000bu, 0x0004003bu, 0x0000000cu,
+        0x0000000du, 0x00000003u, 0x00040015u, 0x0000000eu, 0x00000020u, 0x00000001u, 0x0004002bu, 0x0000000eu,
+        0x0000000fu, 0x00000000u, 0x00040020u, 0x00000010u, 0x00000001u, 0x00000007u, 0x0004003bu, 0x00000010u,
+        0x00000011u, 0x00000001u, 0x00040020u, 0x00000013u, 0x00000001u, 0x0000000eu, 0x0004003bu, 0x00000013u,
+        0x00000014u, 0x00000001u, 0x00040020u, 0x00000019u, 0x00000003u, 0x00000007u, 0x00050036u, 0x00000002u,
+        0x00000004u, 0x00000000u, 0x00000003u, 0x000200f8u, 0x00000005u, 0x0004003du, 0x00000007u, 0x00000012u,
+        0x00000011u, 0x0004003du, 0x0000000eu, 0x00000015u, 0x00000014u, 0x0004006fu, 0x00000006u, 0x00000016u,
+        0x00000015u, 0x00070050u, 0x00000007u, 0x00000017u, 0x00000016u, 0x00000016u, 0x00000016u, 0x00000016u,
+        0x00050081u, 0x00000007u, 0x00000018u, 0x00000012u, 0x00000017u, 0x00050041u, 0x00000019u, 0x0000001au,
+        0x0000000du, 0x0000000fu, 0x0003003eu, 0x0000001au, 0x00000018u, 0x000100fdu, 0x00010038u,
     };
 
     // Owns the reflection module so each test case cleans up after itself.
@@ -190,8 +160,7 @@ namespace {
     public:
         template <SizeT WordCount>
         explicit ReflectModule(const Uint32 (&spirv)[WordCount]) {
-            m_created = spvReflectCreateShaderModule(sizeof(spirv), spirv, &m_module) ==
-                        SPV_REFLECT_RESULT_SUCCESS;
+            m_created = spvReflectCreateShaderModule(sizeof(spirv), spirv, &m_module) == SPV_REFLECT_RESULT_SUCCESS;
         }
         ~ReflectModule() {
             if (m_created) {
@@ -223,22 +192,17 @@ namespace {
 // --- Device gate: MOBILEGL_MAGMA_DISABLE_BLENDED_DEPTH_WRITE tri-state ---
 
 TEST(PipelineQuirkDeviceGate, ForceOnEnablesOnAnyVendor) {
-    EXPECT_TRUE(PipelineFactory::ShouldSuppressBlendedDepthWriteForDevice(QuirkOverride::ForceOn,
-                                                                          kVendorIdArm));
-    EXPECT_TRUE(PipelineFactory::ShouldSuppressBlendedDepthWriteForDevice(QuirkOverride::ForceOn,
-                                                                          kVendorIdQualcomm));
+    EXPECT_TRUE(PipelineFactory::ShouldSuppressBlendedDepthWriteForDevice(QuirkOverride::ForceOn, kVendorIdArm));
+    EXPECT_TRUE(PipelineFactory::ShouldSuppressBlendedDepthWriteForDevice(QuirkOverride::ForceOn, kVendorIdQualcomm));
 }
 
 TEST(PipelineQuirkDeviceGate, ForceOffDisablesEvenOnQualcomm) {
-    EXPECT_FALSE(PipelineFactory::ShouldSuppressBlendedDepthWriteForDevice(QuirkOverride::ForceOff,
-                                                                           kVendorIdQualcomm));
+    EXPECT_FALSE(PipelineFactory::ShouldSuppressBlendedDepthWriteForDevice(QuirkOverride::ForceOff, kVendorIdQualcomm));
 }
 
 TEST(PipelineQuirkDeviceGate, AutoDetectsQualcommOnly) {
-    EXPECT_TRUE(PipelineFactory::ShouldSuppressBlendedDepthWriteForDevice(QuirkOverride::Auto,
-                                                                          kVendorIdQualcomm));
-    EXPECT_FALSE(PipelineFactory::ShouldSuppressBlendedDepthWriteForDevice(QuirkOverride::Auto,
-                                                                           kVendorIdArm));
+    EXPECT_TRUE(PipelineFactory::ShouldSuppressBlendedDepthWriteForDevice(QuirkOverride::Auto, kVendorIdQualcomm));
+    EXPECT_FALSE(PipelineFactory::ShouldSuppressBlendedDepthWriteForDevice(QuirkOverride::Auto, kVendorIdArm));
 }
 
 TEST(PipelineQuirkDeviceGate, ForceOnRoundTripsThroughTheFactoryFlag) {
@@ -253,14 +217,14 @@ TEST(PipelineQuirkDeviceGate, ForceOnRoundTripsThroughTheFactoryFlag) {
 
 TEST(PipelineQuirkStripDecision, MaxBlendIsStripped) {
     // MC 26.3 OIT depth_bounds: GL_MAX accumulation writing depth - the case the quirk fixes.
-    const auto payload = MakeDepthWritingPayload(MakeBlendAttachment(
-        true, VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ZERO, VK_BLEND_OP_MAX, kFullColorWriteMask));
+    const auto payload = MakeDepthWritingPayload(
+        MakeBlendAttachment(true, VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ZERO, VK_BLEND_OP_MAX, kFullColorWriteMask));
     EXPECT_TRUE(PipelineFactory::ShouldSuppressDepthWrite(payload));
 }
 
 TEST(PipelineQuirkStripDecision, MinBlendIsStripped) {
-    const auto payload = MakeDepthWritingPayload(MakeBlendAttachment(
-        true, VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ZERO, VK_BLEND_OP_MIN, kFullColorWriteMask));
+    const auto payload = MakeDepthWritingPayload(
+        MakeBlendAttachment(true, VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ZERO, VK_BLEND_OP_MIN, kFullColorWriteMask));
     EXPECT_TRUE(PipelineFactory::ShouldSuppressDepthWrite(payload));
 }
 
@@ -269,8 +233,8 @@ TEST(PipelineQuirkStripDecision, AdditiveOnePlusOneIsNotStripped) {
     // fixture sweep (transmittance/accumulate disable depth writes themselves); the only
     // real content with this shape was harmless additive glow effects (Create). A quirk
     // touches as little unrelated content as possible, so the shape stays exempt.
-    const auto payload = MakeDepthWritingPayload(MakeBlendAttachment(
-        true, VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ONE, VK_BLEND_OP_ADD, kFullColorWriteMask));
+    const auto payload = MakeDepthWritingPayload(
+        MakeBlendAttachment(true, VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ONE, VK_BLEND_OP_ADD, kFullColorWriteMask));
     EXPECT_FALSE(PipelineFactory::ShouldSuppressDepthWrite(payload));
 }
 
@@ -279,16 +243,15 @@ TEST(PipelineQuirkStripDecision, SortedTransparencyOverBlendIsNotStripped) {
     // draws each surface once and depends on its depth writes to occlude particles, rain,
     // and clouds drawn later - it must keep them.
     const auto payload = MakeDepthWritingPayload(MakeBlendAttachment(
-        true, VK_BLEND_FACTOR_SRC_ALPHA, VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA, VK_BLEND_OP_ADD,
-        kFullColorWriteMask));
+        true, VK_BLEND_FACTOR_SRC_ALPHA, VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA, VK_BLEND_OP_ADD, kFullColorWriteMask));
     EXPECT_FALSE(PipelineFactory::ShouldSuppressDepthWrite(payload));
 }
 
 TEST(PipelineQuirkStripDecision, EffectivelyOpaqueBlendIsNotStripped) {
     // GL_BLEND left enabled with ONE/ZERO+ADD factors is opaque in effect; stripping its
     // depth write would break occlusion for plainly opaque geometry.
-    const auto payload = MakeDepthWritingPayload(MakeBlendAttachment(
-        true, VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ZERO, VK_BLEND_OP_ADD, kFullColorWriteMask));
+    const auto payload = MakeDepthWritingPayload(
+        MakeBlendAttachment(true, VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ZERO, VK_BLEND_OP_ADD, kFullColorWriteMask));
     EXPECT_FALSE(PipelineFactory::ShouldSuppressDepthWrite(payload));
 }
 
@@ -296,20 +259,20 @@ TEST(PipelineQuirkStripDecision, FullyMaskedAccumulationBlendIsNotStripped) {
     // Depth-prepass pattern: colorMask(0,0,0,0) with blending left enabled - blending is
     // moot, and stripping would delete the entire prepass. MAX so the exemption, not the
     // blend-op filter, is what keeps the depth write.
-    const auto payload = MakeDepthWritingPayload(MakeBlendAttachment(
-        true, VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ONE, VK_BLEND_OP_MAX, 0));
+    const auto payload = MakeDepthWritingPayload(
+        MakeBlendAttachment(true, VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ONE, VK_BLEND_OP_MAX, 0));
     EXPECT_FALSE(PipelineFactory::ShouldSuppressDepthWrite(payload));
 }
 
 TEST(PipelineQuirkStripDecision, DisabledBlendIsNotStripped) {
-    const auto payload = MakeDepthWritingPayload(MakeBlendAttachment(
-        false, VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ONE, VK_BLEND_OP_MAX, kFullColorWriteMask));
+    const auto payload = MakeDepthWritingPayload(
+        MakeBlendAttachment(false, VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ONE, VK_BLEND_OP_MAX, kFullColorWriteMask));
     EXPECT_FALSE(PipelineFactory::ShouldSuppressDepthWrite(payload));
 }
 
 TEST(PipelineQuirkStripDecision, NoDepthWriteMeansNoStrip) {
-    auto payload = MakeDepthWritingPayload(MakeBlendAttachment(
-        true, VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ONE, VK_BLEND_OP_MAX, kFullColorWriteMask));
+    auto payload = MakeDepthWritingPayload(
+        MakeBlendAttachment(true, VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ONE, VK_BLEND_OP_MAX, kFullColorWriteMask));
     payload.depthWriteEnable = false;
     EXPECT_FALSE(PipelineFactory::ShouldSuppressDepthWrite(payload));
 }
@@ -317,8 +280,8 @@ TEST(PipelineQuirkStripDecision, NoDepthWriteMeansNoStrip) {
 TEST(PipelineQuirkStripDecision, FragDepthWriterIsExempt) {
     // gl_FragDepth output does not go through per-pipeline vertex position math, so the
     // cross-pipeline invariance hazard cannot affect it (e.g. the 26.3 OIT composite).
-    auto payload = MakeDepthWritingPayload(MakeBlendAttachment(
-        true, VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ONE, VK_BLEND_OP_MAX, kFullColorWriteMask));
+    auto payload = MakeDepthWritingPayload(
+        MakeBlendAttachment(true, VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ONE, VK_BLEND_OP_MAX, kFullColorWriteMask));
     payload.fragmentReplacesDepth = true;
     EXPECT_FALSE(PipelineFactory::ShouldSuppressDepthWrite(payload));
 }
@@ -330,10 +293,10 @@ TEST(PipelineQuirkStripDecision, AccumulationOnSecondaryAttachmentIsStripped) {
     payload.colorAttachmentCount = 2;
     payload.depthTestEnable = true;
     payload.depthWriteEnable = true;
-    payload.colorBlendAttachments[0] = MakeBlendAttachment(
-        false, VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ZERO, VK_BLEND_OP_ADD, kFullColorWriteMask);
-    payload.colorBlendAttachments[1] = MakeBlendAttachment(
-        true, VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ONE, VK_BLEND_OP_MAX, kFullColorWriteMask);
+    payload.colorBlendAttachments[0] =
+        MakeBlendAttachment(false, VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ZERO, VK_BLEND_OP_ADD, kFullColorWriteMask);
+    payload.colorBlendAttachments[1] =
+        MakeBlendAttachment(true, VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ONE, VK_BLEND_OP_MAX, kFullColorWriteMask);
     EXPECT_TRUE(PipelineFactory::ShouldSuppressDepthWrite(payload));
 }
 
@@ -349,15 +312,14 @@ TEST(PipelineQuirkStripDecision, ReverseSubtractIsNotStripped) {
     // Deliberate narrowing: only the MIN/MAX extremum ops carry the depth-bounds
     // signature. SUBTRACT-class ops stay outside the quirk until content demands them.
     const auto payload = MakeDepthWritingPayload(MakeBlendAttachment(
-        true, VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ONE, VK_BLEND_OP_REVERSE_SUBTRACT,
-        kFullColorWriteMask));
+        true, VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ONE, VK_BLEND_OP_REVERSE_SUBTRACT, kFullColorWriteMask));
     EXPECT_FALSE(PipelineFactory::ShouldSuppressDepthWrite(payload));
 }
 
 TEST(PipelineQuirkStripDecision, PartiallyMaskedAccumulationIsStripped) {
     // Only a fully masked attachment is exempt; a live alpha channel still accumulates.
-    const auto payload = MakeDepthWritingPayload(MakeBlendAttachment(
-        true, VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ONE, VK_BLEND_OP_MAX, VK_COLOR_COMPONENT_A_BIT));
+    const auto payload = MakeDepthWritingPayload(
+        MakeBlendAttachment(true, VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ONE, VK_BLEND_OP_MAX, VK_COLOR_COMPONENT_A_BIT));
     EXPECT_TRUE(PipelineFactory::ShouldSuppressDepthWrite(payload));
 }
 
@@ -367,8 +329,8 @@ TEST(PipelineQuirkStripDecision, NoColorAttachmentsMeansNoStrip) {
     payload.colorAttachmentCount = 0;
     payload.depthTestEnable = true;
     payload.depthWriteEnable = true;
-    payload.colorBlendAttachments[0] = MakeBlendAttachment(
-        true, VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ONE, VK_BLEND_OP_MAX, kFullColorWriteMask);
+    payload.colorBlendAttachments[0] =
+        MakeBlendAttachment(true, VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ONE, VK_BLEND_OP_MAX, kFullColorWriteMask);
     EXPECT_FALSE(PipelineFactory::ShouldSuppressDepthWrite(payload));
 }
 
@@ -376,9 +338,8 @@ TEST(PipelineQuirkStripDecision, SeparateAlphaAccumulationIsNotStripped) {
     // glBlendEquationSeparate(GL_FUNC_ADD, GL_MAX) over an ordinary color over-blend: the
     // alpha channel accumulates but the color channel does not. Pins that the decision is
     // color-channel only - widening it to alpha would re-capture sorted transparency.
-    auto attachment = MakeBlendAttachment(true, VK_BLEND_FACTOR_SRC_ALPHA,
-                                          VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA, VK_BLEND_OP_ADD,
-                                          kFullColorWriteMask);
+    auto attachment = MakeBlendAttachment(true, VK_BLEND_FACTOR_SRC_ALPHA, VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+                                          VK_BLEND_OP_ADD, kFullColorWriteMask);
     attachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
     attachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
     attachment.alphaBlendOp = VK_BLEND_OP_MAX;
@@ -391,10 +352,9 @@ TEST(PipelineQuirkStripDecision, MixedOverAndMaskedAttachmentsAreNotStripped) {
     payload.depthTestEnable = true;
     payload.depthWriteEnable = true;
     payload.colorBlendAttachments[0] = MakeBlendAttachment(
-        true, VK_BLEND_FACTOR_SRC_ALPHA, VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA, VK_BLEND_OP_ADD,
-        kFullColorWriteMask);
-    payload.colorBlendAttachments[1] = MakeBlendAttachment(
-        true, VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ONE, VK_BLEND_OP_MAX, 0);
+        true, VK_BLEND_FACTOR_SRC_ALPHA, VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA, VK_BLEND_OP_ADD, kFullColorWriteMask);
+    payload.colorBlendAttachments[1] =
+        MakeBlendAttachment(true, VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ONE, VK_BLEND_OP_MAX, 0);
     EXPECT_FALSE(PipelineFactory::ShouldSuppressDepthWrite(payload));
 }
 
@@ -426,8 +386,8 @@ TEST(ReflectedFragmentReplacesDepth, ReflectedFlagFlipsTheStripDecision) {
     ASSERT_TRUE(depthWriter.Created());
     ASSERT_TRUE(plain.Created());
 
-    auto payload = MakeDepthWritingPayload(MakeBlendAttachment(
-        true, VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ONE, VK_BLEND_OP_MAX, kFullColorWriteMask));
+    auto payload = MakeDepthWritingPayload(
+        MakeBlendAttachment(true, VK_BLEND_FACTOR_ONE, VK_BLEND_FACTOR_ONE, VK_BLEND_OP_MAX, kFullColorWriteMask));
 
     payload.fragmentReplacesDepth = ProgramFactory::ReflectedFragmentReplacesDepth(plain.Get());
     EXPECT_TRUE(PipelineFactory::ShouldSuppressDepthWrite(payload));
@@ -435,7 +395,6 @@ TEST(ReflectedFragmentReplacesDepth, ReflectedFlagFlipsTheStripDecision) {
     payload.fragmentReplacesDepth = ProgramFactory::ReflectedFragmentReplacesDepth(depthWriter.Get());
     EXPECT_FALSE(PipelineFactory::ShouldSuppressDepthWrite(payload));
 }
-
 
 // --- InstanceIndex reflection feeding the shaderDrawParameters diagnostic ---
 
@@ -464,13 +423,12 @@ TEST(ReflectedReadsInstanceIndexBuiltin, FalseForAnEmptyModule) {
     EXPECT_FALSE(ProgramFactory::ReflectedReadsInstanceIndexBuiltin(emptyModule));
 }
 
-
 TEST(WirePipelineCompatibility, ExactCompatibilitySurvivesNativeObjectTurnover) {
 #if MOBILEGL_BUILD_DISAGGREGATED
     using namespace MobileGL::MG_Backend::DirectVulkan;
     WireRenderPassCompatibilityTable table;
-    WireRenderPassCompatibilityKey a{{(Uint64(VK_FORMAT_R8G8B8A8_UNORM) << 32) | VK_SAMPLE_COUNT_1_BIT}, {0},
-                                      VK_ATTACHMENT_UNUSED};
+    WireRenderPassCompatibilityKey a{
+        {(Uint64(VK_FORMAT_R8G8B8A8_UNORM) << 32) | VK_SAMPLE_COUNT_1_BIT}, {0}, VK_ATTACHMENT_UNUSED};
     const Uint64 first = table.Intern(a);
     ASSERT_NE(first, 0u);
     auto b = a;
@@ -606,9 +564,9 @@ TEST(PipelineQuirkTest, WireDepthResolveProbeDetectsARenderPassThatWritesNothing
     wrong.formats[0].depth.renderPassSentinels = 0;
     EXPECT_EQ(EvaluateWireDepthResolveProbe(wrong), WireDepthResolveProbeVerdict::RenderPassResolveBroken);
     // One aspect of one format is enough: the render pass resolves every aspect in one pass.
-    EXPECT_EQ(EvaluateWireDepthResolveProbe(FakeMeasurement(
-                  {FakeFormat("D24_UNORM_S8_UINT", kBothArmsResolve, kRenderPassWroteNothing),
-                   FakeFormat("D32_SFLOAT", kBothArmsResolve, std::nullopt)})),
+    EXPECT_EQ(EvaluateWireDepthResolveProbe(
+                  FakeMeasurement({FakeFormat("D24_UNORM_S8_UINT", kBothArmsResolve, kRenderPassWroteNothing),
+                                   FakeFormat("D32_SFLOAT", kBothArmsResolve, std::nullopt)})),
               WireDepthResolveProbeVerdict::RenderPassResolveBroken);
     EXPECT_NE(DescribeWireDepthResolveProbe(choice.measurement).find("render pass 0/16"), String::npos);
 #else
@@ -849,14 +807,14 @@ TEST(PipelineQuirkTest, WirePlaceholderKeysArePrivatePerShapeAndUnitAndBounded) 
     using MobileGL::MG_Backend::DirectVulkan::WirePlaceholderKey;
     using MobileGL::MG_Backend::DirectVulkan::WirePlaceholderKeyHash;
     constexpr Uint32 kUnits = MobileGL::MG_Pipe::kMGPipeMaxImageUnits;
-    static_assert(kWirePrivateStoragePlaceholderCap >= kUnits,
-                  "one shape on every image unit must stay private");
+    static_assert(kWirePrivateStoragePlaceholderCap >= kUnits, "one shape on every image unit must stay private");
     UnorderedMap<WirePlaceholderKey, Int, WirePlaceholderKeyHash> cache;
     SizeT privateCount = 0;
     // What ResolveWirePlaceholderImage does with the key: find it, or make (and count) it.
     const auto take = [&](Uint64 shape, Bool storage, Uint32 unit) {
-        const WirePlaceholderKey key = ChooseWirePlaceholderKey(shape, storage, unit, privateCount,
-            [&](const WirePlaceholderKey& candidate) { return cache.count(candidate) != 0; });
+        const WirePlaceholderKey key =
+            ChooseWirePlaceholderKey(shape, storage, unit, privateCount,
+                                     [&](const WirePlaceholderKey& candidate) { return cache.count(candidate) != 0; });
         if (cache.emplace(key, 0).second && key.unit != WirePlaceholderKey::kShared) ++privateCount;
         return key;
     };
@@ -925,9 +883,9 @@ TEST(PipelineQuirkTest, WireColorBlitSamplesNearestWhereTheBlitIsACopy) {
 #if MOBILEGL_BUILD_DISAGGREGATED
     // create-instancing's last pass (trace call 530331): glBlitFramebuffer(0,0,854,480 -> 0,0,854,480,
     // GL_COLOR_BUFFER_BIT, GL_LINEAR) into FB 0, on an identity pbuffer.
-    EXPECT_EQ(WireColorBlitFilterFor({0, 0, 854, 480}, {0, 0, 854, 480}, GL_LINEAR,
-                                     VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR),
-              VK_FILTER_NEAREST)
+    EXPECT_EQ(
+        WireColorBlitFilterFor({0, 0, 854, 480}, {0, 0, 854, 480}, GL_LINEAR, VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR),
+        VK_FILTER_NEAREST)
         << "a 1:1 GL_LINEAR blit is a copy (GL 4.6 core 18.3.1); linear sampling of it is not exact on Adreno";
     const struct {
         const char* what;

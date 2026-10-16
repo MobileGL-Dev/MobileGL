@@ -261,8 +261,7 @@ void main() {
             static bool LimitIsAtLeastOne(GLenum limit) {
                 GLint value = 0;
                 glGetIntegerv(limit, &value);
-                while (glGetError() != GL_NO_ERROR) {
-                }
+                while (glGetError() != GL_NO_ERROR) {}
                 return value >= 1;
             }
 
@@ -303,9 +302,8 @@ void main() {
 
                 const std::vector<unsigned int> zeros(static_cast<std::size_t>(kElements), 0u);
                 glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_storage);
-                glBufferData(GL_SHADER_STORAGE_BUFFER,
-                             static_cast<GLsizeiptr>(zeros.size() * sizeof(unsigned int)), zeros.data(),
-                             GL_DYNAMIC_COPY);
+                glBufferData(GL_SHADER_STORAGE_BUFFER, static_cast<GLsizeiptr>(zeros.size() * sizeof(unsigned int)),
+                             zeros.data(), GL_DYNAMIC_COPY);
                 glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, m_storage);
                 ASSERT_EQ(FirstGLError(), 0u) << "setting up the output buffer raised a GL error";
 

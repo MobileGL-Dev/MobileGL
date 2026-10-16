@@ -75,7 +75,9 @@ namespace MGITest::PipeStatsWindow {
 
     // The lane's private CLIENT log path, or empty when the lane configured none. In the pull
     // build this IS the whole log.
-    inline std::string LibraryLogPath() { return RoleLogPath("client"); }
+    inline std::string LibraryLogPath() {
+        return RoleLogPath("client");
+    }
 
     // The server role's half, or EMPTY when this build has no separate server half. Empty rather
     // than "the same path again": every caller below concatenates the two, and a pull build that
@@ -141,11 +143,12 @@ namespace MGITest::PipeStatsWindow {
 #if MOBILEGL_BUILD_DISAGGREGATED
         MGPipeSyncPeerLog();
 #endif
-        return ReadFileSince(LibraryLogPath(), mark.client)
-               + ReadFileSince(ServerLibraryLogPath(), mark.server);
+        return ReadFileSince(LibraryLogPath(), mark.client) + ReadFileSince(ServerLibraryLogPath(), mark.server);
     }
 
-    inline std::string ReadLaneLog() { return ReadLaneLogSince(LogMark{}); }
+    inline std::string ReadLaneLog() {
+        return ReadLaneLogSince(LogMark{});
+    }
 
     // THE SERVER HALF ALONE, for a claim whose whole content is WHICH ROLE said it. The
     // concatenation above answers "did anyone report this", which is the right question for a

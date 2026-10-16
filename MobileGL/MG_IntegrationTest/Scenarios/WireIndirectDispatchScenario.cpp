@@ -187,8 +187,8 @@ void main() { words[gl_GlobalInvocationID.x] = source[gl_GlobalInvocationID.x]; 
                         }
                     }
                 }
-                EXPECT_EQ(wrong, 0u) << what << ": expected exactly the " << grid[0] << "x" << grid[1] << "x"
-                                     << grid[2] << " grid marked once; first wrong " << first;
+                EXPECT_EQ(wrong, 0u) << what << ": expected exactly the " << grid[0] << "x" << grid[1] << "x" << grid[2]
+                                     << " grid marked once; first wrong " << first;
             }
 
             // Magma's server in THIS process: the inproc arm. Spawn and tcp servers are other
@@ -286,7 +286,8 @@ void main() { words[gl_GlobalInvocationID.x] = source[gl_GlobalInvocationID.x]; 
                 const WireIndirectCounters delta = Delta();
                 EXPECT_EQ(delta.nativeDispatches, 3u);
                 EXPECT_EQ(delta.hostWaits, 0u) << "a host wait was taken";
-                EXPECT_EQ(delta.barriers, 2u) << "exactly one barrier per write: the second dispatch reads no new write";
+                EXPECT_EQ(delta.barriers, 2u)
+                    << "exactly one barrier per write: the second dispatch reads no new write";
             }
             ExpectGrid(first, {3, 2, 1}, "the first dispatch after the write");
             ExpectGrid(again, {3, 2, 1}, "a second dispatch, no write between");

@@ -34,7 +34,7 @@ namespace MobileGL::MG_Pipe {
     class MGPipeCsoCache {
     public:
         struct Counters {
-            Uint64 Mints = 0;     // create_render_state emissions
+            Uint64 Mints = 0; // create_render_state emissions
             // bind_render_state emissions, mint or reuse. Counted in Acquire because Acquire
             // has exactly ONE caller (PipeFill.cpp's EmitRenderState) and that caller binds
             // immediately after every call - so "acquisitions" and "binds" are the same
@@ -42,9 +42,9 @@ namespace MobileGL::MG_Pipe {
             // remembering to tick it. mints/binds is the cache's hit rate and it is the
             // number the CSO content-addressing negative control moves.
             Uint64 Binds = 0;
-            Uint64 Hits = 0;      // a probe that found a live entry and passed the memcmp
+            Uint64 Hits = 0;       // a probe that found a live entry and passed the memcmp
             Uint64 Collisions = 0; // a hash hit the memcmp REJECTED - the reason it exists
-            Uint64 Evictions = 0; // LRU evictions, each one a delete_render_state
+            Uint64 Evictions = 0;  // LRU evictions, each one a delete_render_state
         };
 
         // The handle for `params`' pipeline subset. Mints and emits create_render_state on a
@@ -55,11 +55,10 @@ namespace MobileGL::MG_Pipe {
             MGPipeGatherPipelineBytes(params, bytes.data());
             ++m_counters.Binds;
 
-            const Bool contentAddressed =
-                (MG_Config::Features.PipePush & kMGPipeBehaviourNoCsoContentAddressing) == 0;
+            const Bool contentAddressed = (MG_Config::Features.PipePush & kMGPipeBehaviourNoCsoContentAddressing) == 0;
             if (contentAddressed) {
-                const Uint64 hash = s_hashForTest != nullptr ? s_hashForTest(bytes.data())
-                                                             : MGPipeHashPipelineBytes(bytes.data());
+                const Uint64 hash =
+                    s_hashForTest != nullptr ? s_hashForTest(bytes.data()) : MGPipeHashPipelineBytes(bytes.data());
                 for (SizeT i = 0; i < m_entries.size(); ++i) {
                     if (m_entries[i].Hash != hash) continue;
                     if (std::memcmp(m_entries[i].Bytes.data(), bytes.data(), bytes.size()) != 0) {
@@ -87,7 +86,8 @@ namespace MobileGL::MG_Pipe {
         // is reset alongside, and a delete for a record that is about to be dropped anyway
         // would be a wire message with no reader.
         void Reset() {
-            for (auto& entry : m_entries) MGPipeSlots().Free(MGPipeKind::RenderStateCso, entry.Cso);
+            for (auto& entry : m_entries)
+                MGPipeSlots().Free(MGPipeKind::RenderStateCso, entry.Cso);
             m_entries.clear();
             m_clock = 0;
         }
@@ -114,8 +114,7 @@ namespace MobileGL::MG_Pipe {
             Array<Uint8, kMGPipePipelineChunkBytes> Bytes{};
         };
 
-        MGPipeHandle Mint(Uint64 hash, const Array<Uint8, kMGPipePipelineChunkBytes>& bytes,
-                          Uint64& payloadBytes) {
+        MGPipeHandle Mint(Uint64 hash, const Array<Uint8, kMGPipePipelineChunkBytes>& bytes, Uint64& payloadBytes) {
             if (m_entries.size() >= kMGPipeCsoCacheCapacity) {
                 SizeT victim = 0;
                 for (SizeT i = 1; i < m_entries.size(); ++i) {
@@ -161,8 +160,7 @@ namespace MobileGL::MG_Pipe {
             ++m_counters.Evictions;
         }
 
-        static constexpr Uint32 kAllPipelineChunks =
-            static_cast<Uint32>((Uint64{1} << kMGPipePipelineChunkCount) - 1);
+        static constexpr Uint32 kAllPipelineChunks = static_cast<Uint32>((Uint64{1} << kMGPipePipelineChunkCount) - 1);
 
         Vector<Entry> m_entries;
         Uint64 m_clock = 0;

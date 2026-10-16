@@ -35,9 +35,8 @@ namespace MobileGL::MG_Util::SelfTest {
         constexpr GLuint kBeforeEmitBinding = 0;
         constexpr GLuint kAfterEmitBinding = 1;
 
-        const char* const kProbeVertexSource =
-            "#version 320 es\n"
-            "void main() { gl_Position = vec4(0.0, 0.0, 0.0, 1.0); }\n";
+        const char* const kProbeVertexSource = "#version 320 es\n"
+                                               "void main() { gl_Position = vec4(0.0, 0.0, 0.0, 1.0); }\n";
 
         // No gl_PointSize anywhere: writing it from a geometry shader needs
         // EXT/OES_geometry_point_size, which not every ES 3.2 driver exposes (some desktop drivers do not),
@@ -56,34 +55,31 @@ namespace MobileGL::MG_Util::SelfTest {
             "  g_after.data[0] = 7u;\n"
             "}\n";
 
-        const char* const kProbeFragmentSource =
-            "#version 320 es\n"
-            "precision highp float;\n"
-            "layout(location = 0) out vec4 o_color;\n"
-            "void main() { o_color = vec4(0.0, 1.0, 0.0, 1.0); }\n";
+        const char* const kProbeFragmentSource = "#version 320 es\n"
+                                                 "precision highp float;\n"
+                                                 "layout(location = 0) out vec4 o_color;\n"
+                                                 "void main() { o_color = vec4(0.0, 1.0, 0.0, 1.0); }\n";
 
         Bool HasEveryEntryPoint(const GLESFunctionsTable& gl) {
             return gl.glCreateShader && gl.glShaderSource && gl.glCompileShader && gl.glGetShaderiv &&
                    gl.glGetShaderInfoLog && gl.glCreateProgram && gl.glAttachShader && gl.glLinkProgram &&
-                   gl.glGetProgramiv && gl.glDeleteShader && gl.glDeleteProgram && gl.glUseProgram &&
-                   gl.glGenBuffers && gl.glBindBuffer && gl.glBufferData && gl.glBindBufferBase &&
-                   gl.glDeleteBuffers && gl.glGenVertexArrays && gl.glBindVertexArray &&
-                   gl.glDeleteVertexArrays && gl.glGenFramebuffers && gl.glBindFramebuffer &&
-                   gl.glFramebufferRenderbuffer && gl.glCheckFramebufferStatus && gl.glDeleteFramebuffers &&
-                   gl.glGenRenderbuffers && gl.glBindRenderbuffer && gl.glRenderbufferStorage &&
-                   gl.glDeleteRenderbuffers && gl.glViewport && gl.glDrawArrays && gl.glMemoryBarrier &&
-                   gl.glMapBufferRange && gl.glUnmapBuffer && gl.glGetIntegerv && gl.glGetIntegeri_v &&
-                   gl.glGetError && gl.glFinish && gl.glEnable && gl.glDisable && gl.glIsEnabled;
+                   gl.glGetProgramiv && gl.glDeleteShader && gl.glDeleteProgram && gl.glUseProgram && gl.glGenBuffers &&
+                   gl.glBindBuffer && gl.glBufferData && gl.glBindBufferBase && gl.glDeleteBuffers &&
+                   gl.glGenVertexArrays && gl.glBindVertexArray && gl.glDeleteVertexArrays && gl.glGenFramebuffers &&
+                   gl.glBindFramebuffer && gl.glFramebufferRenderbuffer && gl.glCheckFramebufferStatus &&
+                   gl.glDeleteFramebuffers && gl.glGenRenderbuffers && gl.glBindRenderbuffer &&
+                   gl.glRenderbufferStorage && gl.glDeleteRenderbuffers && gl.glViewport && gl.glDrawArrays &&
+                   gl.glMemoryBarrier && gl.glMapBufferRange && gl.glUnmapBuffer && gl.glGetIntegerv &&
+                   gl.glGetIntegeri_v && gl.glGetError && gl.glFinish && gl.glEnable && gl.glDisable && gl.glIsEnabled;
         }
 
         void Drain(const GLESFunctionsTable& gl) {
             // Bounded: a driver that returns an error forever must not hang the probe.
-            for (Int i = 0; i < 32 && gl.glGetError() != GL_NO_ERROR; ++i) {
-            }
+            for (Int i = 0; i < 32 && gl.glGetError() != GL_NO_ERROR; ++i) {}
         }
 
-        GLuint CompileStage(const GLESFunctionsTable& gl, GLenum stage, const char* source,
-                            const char* stageName, const char* probeName) {
+        GLuint CompileStage(const GLESFunctionsTable& gl, GLenum stage, const char* source, const char* stageName,
+                            const char* probeName) {
             const GLuint shader = gl.glCreateShader(stage);
             if (shader == 0) return 0;
             gl.glShaderSource(shader, 1, &source, nullptr);
@@ -234,17 +230,15 @@ namespace MobileGL::MG_Util::SelfTest {
             gl.glUseProgram(static_cast<GLuint>(state.program));
             gl.glViewport(state.viewport[0], state.viewport[1], state.viewport[2], state.viewport[3]);
             if (gl.glBindImageTexture != nullptr) {
-                gl.glBindImageTexture(kProbeImageUnit, static_cast<GLuint>(state.imageName),
-                                      state.imageLevel, state.imageLayered != 0 ? GL_TRUE : GL_FALSE,
-                                      state.imageLayer, static_cast<GLenum>(state.imageAccess),
-                                      static_cast<GLenum>(state.imageFormat));
+                gl.glBindImageTexture(kProbeImageUnit, static_cast<GLuint>(state.imageName), state.imageLevel,
+                                      state.imageLayered != 0 ? GL_TRUE : GL_FALSE, state.imageLayer,
+                                      static_cast<GLenum>(state.imageAccess), static_cast<GLenum>(state.imageFormat));
             }
             if (gl.glActiveTexture != nullptr) {
                 gl.glActiveTexture(GL_TEXTURE0);
                 if (gl.glBindTexture != nullptr) {
                     gl.glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(state.texture2D));
-                    gl.glBindTexture(GL_TEXTURE_2D_MULTISAMPLE,
-                                     static_cast<GLuint>(state.texture2DMultisample));
+                    gl.glBindTexture(GL_TEXTURE_2D_MULTISAMPLE, static_cast<GLuint>(state.texture2DMultisample));
                     gl.glBindTexture(GL_TEXTURE_2D_ARRAY, static_cast<GLuint>(state.texture2DArray));
                 }
                 gl.glActiveTexture(static_cast<GLenum>(state.activeTexture));
@@ -266,8 +260,7 @@ namespace MobileGL::MG_Util::SelfTest {
                 gl.glBindBuffer(GL_PIXEL_UNPACK_BUFFER, static_cast<GLuint>(state.pixelUnpackBuffer));
             }
             if (gl.glClearColor != nullptr) {
-                gl.glClearColor(state.clearColor[0], state.clearColor[1], state.clearColor[2],
-                                state.clearColor[3]);
+                gl.glClearColor(state.clearColor[0], state.clearColor[1], state.clearColor[2], state.clearColor[3]);
             }
             if (state.rasterizerDiscard) gl.glEnable(GL_RASTERIZER_DISCARD);
             if (state.scissorTest) gl.glEnable(GL_SCISSOR_TEST);
@@ -279,8 +272,7 @@ namespace MobileGL::MG_Util::SelfTest {
 
         GLuint ReadFirstWord(const GLESFunctionsTable& gl, GLuint buffer) {
             gl.glBindBuffer(GL_SHADER_STORAGE_BUFFER, buffer);
-            const void* mapped =
-                gl.glMapBufferRange(GL_SHADER_STORAGE_BUFFER, 0, kProbeSize, GL_MAP_READ_BIT);
+            const void* mapped = gl.glMapBufferRange(GL_SHADER_STORAGE_BUFFER, 0, kProbeSize, GL_MAP_READ_BIT);
             if (mapped == nullptr) return 0u;
             GLuint value = 0;
             std::memcpy(&value, mapped, sizeof(value));
@@ -312,12 +304,9 @@ namespace MobileGL::MG_Util::SelfTest {
         GLuint vertexArray = 0, framebuffer = 0, renderbuffer = 0;
 
         do {
-            vertexShader = CompileStage(gl, GL_VERTEX_SHADER, kProbeVertexSource, "vertex",
-                                        kGeometryProbeName);
-            geometryShader = CompileStage(gl, GL_GEOMETRY_SHADER, kProbeGeometrySource, "geometry",
-                                          kGeometryProbeName);
-            fragmentShader = CompileStage(gl, GL_FRAGMENT_SHADER, kProbeFragmentSource, "fragment",
-                                          kGeometryProbeName);
+            vertexShader = CompileStage(gl, GL_VERTEX_SHADER, kProbeVertexSource, "vertex", kGeometryProbeName);
+            geometryShader = CompileStage(gl, GL_GEOMETRY_SHADER, kProbeGeometrySource, "geometry", kGeometryProbeName);
+            fragmentShader = CompileStage(gl, GL_FRAGMENT_SHADER, kProbeFragmentSource, "fragment", kGeometryProbeName);
             if (vertexShader == 0 || geometryShader == 0 || fragmentShader == 0) {
                 inconclusive = "one of the probe stages did not compile";
                 break;
@@ -355,8 +344,7 @@ namespace MobileGL::MG_Util::SelfTest {
             gl.glRenderbufferStorage(GL_RENDERBUFFER, GL_RGBA8, 4, 4);
             gl.glGenFramebuffers(1, &framebuffer);
             gl.glBindFramebuffer(GL_DRAW_FRAMEBUFFER, framebuffer);
-            gl.glFramebufferRenderbuffer(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER,
-                                         renderbuffer);
+            gl.glFramebufferRenderbuffer(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, renderbuffer);
             if (gl.glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
                 inconclusive = "the probe's own 4x4 RGBA8 framebuffer came back incomplete";
                 break;
@@ -401,8 +389,7 @@ namespace MobileGL::MG_Util::SelfTest {
         } while (false);
 
         if (inconclusive != nullptr) {
-            MGLOG_I("[driver-bug] geometry write-after-emit probe reached no verdict (%s)",
-                    inconclusive);
+            MGLOG_I("[driver-bug] geometry write-after-emit probe reached no verdict (%s)", inconclusive);
         }
 
         if (vertexArray != 0) gl.glDeleteVertexArrays(1, &vertexArray);
@@ -464,8 +451,7 @@ namespace MobileGL::MG_Util::SelfTest {
         Optional<GLuint> RunStaleSharedVariant(const GLESFunctionsTable& gl, const char* readExpression,
                                                GLuint buffer) {
             const String source = StaleSharedComputeSource(readExpression);
-            const GLuint shader =
-                CompileStage(gl, GL_COMPUTE_SHADER, source.c_str(), "compute", kStaleSharedProbeName);
+            const GLuint shader = CompileStage(gl, GL_COMPUTE_SHADER, source.c_str(), "compute", kStaleSharedProbeName);
             if (shader == 0) return std::nullopt;
             const GLuint program = gl.glCreateProgram();
             Optional<GLuint> result;
@@ -510,8 +496,7 @@ namespace MobileGL::MG_Util::SelfTest {
         Restore(gl, saved);
 
         if (!plain || !atomic) {
-            MGLOG_I("[driver-bug] %s probe reached no verdict (a variant did not build or run)",
-                    kStaleSharedProbeName);
+            MGLOG_I("[driver-bug] %s probe reached no verdict (a variant did not build or run)", kStaleSharedProbeName);
             return false;
         }
         if (*atomic != kStaleSharedExpected) {
@@ -538,7 +523,8 @@ namespace MobileGL::MG_Util::SelfTest {
         String EmptyImageComputeSource() {
             return "#version 310 es\n"
                    "layout(local_size_x = 1) in;\n"
-                   "layout(rgba8, binding = " + std::to_string(kProbeImageUnit) +
+                   "layout(rgba8, binding = " +
+                   std::to_string(kProbeImageUnit) +
                    ") readonly uniform highp image2D u_image;\n"
                    "layout(std430, binding = 0) buffer Result { highp uint data[4]; } g_result;\n"
                    "void main() { g_result.data[0] = packUnorm4x8(imageLoad(u_image, ivec2(0))); }\n";
@@ -658,8 +644,7 @@ namespace MobileGL::MG_Util::SelfTest {
                 }
             };
             for (const StageSource& stage : stages) {
-                const GLuint shader =
-                    CompileStage(gl, stage.stage, stage.source.c_str(), stage.name, probeName);
+                const GLuint shader = CompileStage(gl, stage.stage, stage.source.c_str(), stage.name, probeName);
                 if (shader == 0) {
                     releaseShaders();
                     return build;
@@ -701,17 +686,15 @@ namespace MobileGL::MG_Util::SelfTest {
 
         // Every probe below rasterizes the same full-viewport quad from a vertex ID, so none of
         // them needs a vertex buffer or an attribute.
-        const char* const kFullscreenQuadBody =
-            "    vec2 mg_p = vec2((gl_VertexID & 1) == 0 ? -1.0 : 1.0,\n"
-            "                     (gl_VertexID & 2) == 0 ? -1.0 : 1.0);\n"
-            "    gl_Position = vec4(mg_p, 0.0, 1.0);\n";
+        const char* const kFullscreenQuadBody = "    vec2 mg_p = vec2((gl_VertexID & 1) == 0 ? -1.0 : 1.0,\n"
+                                                "                     (gl_VertexID & 2) == 0 ? -1.0 : 1.0);\n"
+                                                "    gl_Position = vec4(mg_p, 0.0, 1.0);\n";
 
-        const char* const kProbeQuadVertexSource =
-            "#version 320 es\n"
-            "void main()\n{\n"
-            "    vec2 mg_p = vec2((gl_VertexID & 1) == 0 ? -1.0 : 1.0,\n"
-            "                     (gl_VertexID & 2) == 0 ? -1.0 : 1.0);\n"
-            "    gl_Position = vec4(mg_p, 0.0, 1.0);\n}\n";
+        const char* const kProbeQuadVertexSource = "#version 320 es\n"
+                                                   "void main()\n{\n"
+                                                   "    vec2 mg_p = vec2((gl_VertexID & 1) == 0 ? -1.0 : 1.0,\n"
+                                                   "                     (gl_VertexID & 2) == 0 ? -1.0 : 1.0);\n"
+                                                   "    gl_Position = vec4(mg_p, 0.0, 1.0);\n}\n";
 
         // Puts the context into the shape every probe draw wants. The caller has already saved
         // the state this disturbs.
@@ -741,30 +724,26 @@ namespace MobileGL::MG_Util::SelfTest {
         Bool HasMsaaEntryPoints(const GLESFunctionsTable& gl) {
             return gl.glCreateShader && gl.glShaderSource && gl.glCompileShader && gl.glGetShaderiv &&
                    gl.glGetShaderInfoLog && gl.glCreateProgram && gl.glAttachShader && gl.glLinkProgram &&
-                   gl.glGetProgramiv && gl.glGetProgramInfoLog && gl.glDeleteShader &&
-                   gl.glDeleteProgram && gl.glUseProgram && gl.glGenTextures && gl.glBindTexture &&
-                   gl.glDeleteTextures && gl.glTexParameteri && gl.glTexImage2D &&
-                   gl.glTexStorage2DMultisample && gl.glGenFramebuffers && gl.glBindFramebuffer &&
-                   gl.glFramebufferTexture2D && gl.glCheckFramebufferStatus && gl.glDeleteFramebuffers &&
-                   gl.glGenVertexArrays && gl.glBindVertexArray && gl.glDeleteVertexArrays &&
-                   gl.glActiveTexture && gl.glGetUniformLocation && gl.glUniform1i && gl.glViewport &&
-                   gl.glClear && gl.glClearColor && gl.glReadPixels && gl.glDrawArrays &&
-                   gl.glPixelStorei && gl.glGetIntegerv && gl.glGetIntegeri_v && gl.glGetError &&
-                   gl.glFinish && gl.glEnable && gl.glDisable && gl.glIsEnabled;
+                   gl.glGetProgramiv && gl.glGetProgramInfoLog && gl.glDeleteShader && gl.glDeleteProgram &&
+                   gl.glUseProgram && gl.glGenTextures && gl.glBindTexture && gl.glDeleteTextures &&
+                   gl.glTexParameteri && gl.glTexImage2D && gl.glTexStorage2DMultisample && gl.glGenFramebuffers &&
+                   gl.glBindFramebuffer && gl.glFramebufferTexture2D && gl.glCheckFramebufferStatus &&
+                   gl.glDeleteFramebuffers && gl.glGenVertexArrays && gl.glBindVertexArray && gl.glDeleteVertexArrays &&
+                   gl.glActiveTexture && gl.glGetUniformLocation && gl.glUniform1i && gl.glViewport && gl.glClear &&
+                   gl.glClearColor && gl.glReadPixels && gl.glDrawArrays && gl.glPixelStorei && gl.glGetIntegerv &&
+                   gl.glGetIntegeri_v && gl.glGetError && gl.glFinish && gl.glEnable && gl.glDisable && gl.glIsEnabled;
         }
 
-        const char* const kMsaaFillFragmentSource =
-            "#version 320 es\n"
-            "precision highp float;\n"
-            "layout(location = 0) out highp vec4 o_color;\n"
-            "void main() { o_color = vec4(1.0, 0.0, 0.0, 0.0); }\n";
+        const char* const kMsaaFillFragmentSource = "#version 320 es\n"
+                                                    "precision highp float;\n"
+                                                    "layout(location = 0) out highp vec4 o_color;\n"
+                                                    "void main() { o_color = vec4(1.0, 0.0, 0.0, 0.0); }\n";
 
-        const char* const kMsaaSampleFragmentSource =
-            "#version 320 es\n"
-            "precision highp float;\n"
-            "layout(location = 0) out highp float o_color;\n"
-            "layout(location = 0) flat in highp float v_result;\n"
-            "void main() { o_color = v_result; }\n";
+        const char* const kMsaaSampleFragmentSource = "#version 320 es\n"
+                                                      "precision highp float;\n"
+                                                      "layout(location = 0) out highp float o_color;\n"
+                                                      "layout(location = 0) flat in highp float v_result;\n"
+                                                      "void main() { o_color = v_result; }\n";
 
         // One vertex shader per round. The `round` term is multiplied by zero, so it changes
         // nothing about the result and everything about the source text - which is the point:
@@ -786,8 +765,8 @@ namespace MobileGL::MG_Util::SelfTest {
         // Samples one texel of `source` `rounds` times, each round through its own freshly
         // linked program and its own freshly created R32F output texture, and stores what came
         // back. Returns false when any round could not be set up at all.
-        Bool RunMsaaSampledRead(const GLESFunctionsTable& gl, GLuint source, Int sampleIndex,
-                                char component, Int rounds, Vector<GLfloat>& values) {
+        Bool RunMsaaSampledRead(const GLESFunctionsTable& gl, GLuint source, Int sampleIndex, char component,
+                                Int rounds, Vector<GLfloat>& values) {
             values.clear();
             for (Int round = 0; round < rounds; ++round) {
                 GLuint output = 0;
@@ -797,20 +776,18 @@ namespace MobileGL::MG_Util::SelfTest {
                 do {
                     gl.glGenTextures(1, &output);
                     gl.glBindTexture(GL_TEXTURE_2D, output);
-                    gl.glTexImage2D(GL_TEXTURE_2D, 0, GL_R32F, kMsaaOutputSize, kMsaaOutputSize, 0,
-                                    GL_RED, GL_FLOAT, nullptr);
+                    gl.glTexImage2D(GL_TEXTURE_2D, 0, GL_R32F, kMsaaOutputSize, kMsaaOutputSize, 0, GL_RED, GL_FLOAT,
+                                    nullptr);
                     gl.glGenFramebuffers(1, &framebuffer);
                     gl.glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
-                    gl.glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
-                                              output, 0);
+                    gl.glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, output, 0);
                     if (gl.glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) break;
 
-                    build = BuildProgram(gl,
-                                         {{GL_VERTEX_SHADER,
-                                           BuildMsaaSampleVertexSource(sampleIndex, component, round),
-                                           "vertex"},
-                                          {GL_FRAGMENT_SHADER, kMsaaSampleFragmentSource, "fragment"}},
-                                         kMsaaProbeName);
+                    build = BuildProgram(
+                        gl,
+                        {{GL_VERTEX_SHADER, BuildMsaaSampleVertexSource(sampleIndex, component, round), "vertex"},
+                         {GL_FRAGMENT_SHADER, kMsaaSampleFragmentSource, "fragment"}},
+                        kMsaaProbeName);
                     if (!build.linked) break;
 
                     gl.glUseProgram(build.program);
@@ -818,8 +795,7 @@ namespace MobileGL::MG_Util::SelfTest {
                     gl.glBindTexture(GL_TEXTURE_2D_MULTISAMPLE, source);
                     gl.glUniform1i(gl.glGetUniformLocation(build.program, "mg_probeSampler"), 0);
                     gl.glViewport(0, 0, kMsaaOutputSize, kMsaaOutputSize);
-                    gl.glClearColor(kMsaaClearSentinel, kMsaaClearSentinel, kMsaaClearSentinel,
-                                    kMsaaClearSentinel);
+                    gl.glClearColor(kMsaaClearSentinel, kMsaaClearSentinel, kMsaaClearSentinel, kMsaaClearSentinel);
                     gl.glClear(GL_COLOR_BUFFER_BIT);
                     Drain(gl);
                     gl.glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
@@ -827,8 +803,7 @@ namespace MobileGL::MG_Util::SelfTest {
                     gl.glFinish();
 
                     Vector<GLfloat> pixels(static_cast<SizeT>(kMsaaOutputSize) * kMsaaOutputSize, 0.0f);
-                    gl.glReadPixels(0, 0, kMsaaOutputSize, kMsaaOutputSize, GL_RED, GL_FLOAT,
-                                    pixels.data());
+                    gl.glReadPixels(0, 0, kMsaaOutputSize, kMsaaOutputSize, GL_RED, GL_FLOAT, pixels.data());
                     if (gl.glGetError() != GL_NO_ERROR) break;
                     values.push_back(pixels[0]);
                     ok = true;
@@ -845,8 +820,7 @@ namespace MobileGL::MG_Util::SelfTest {
         // Creates a `samples`-sample R32F multisample texture, fills it with (1, 0, 0, 0), and
         // points GL_TEXTURE_SWIZZLE_R/G/B at ALPHA/BLUE/GREEN with GL_TEXTURE_SWIZZLE_A at
         // `alphaSwizzle`. Every source the probe builds is identical except for that one enum.
-        GLuint MakeSwizzledMultisampleSource(const GLESFunctionsTable& gl, GLsizei samples,
-                                             GLenum alphaSwizzle) {
+        GLuint MakeSwizzledMultisampleSource(const GLESFunctionsTable& gl, GLsizei samples, GLenum alphaSwizzle) {
             GLuint texture = 0;
             gl.glGenTextures(1, &texture);
             gl.glBindTexture(GL_TEXTURE_2D_MULTISAMPLE, texture);
@@ -859,8 +833,7 @@ namespace MobileGL::MG_Util::SelfTest {
             GLuint framebuffer = 0;
             gl.glGenFramebuffers(1, &framebuffer);
             gl.glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
-            gl.glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D_MULTISAMPLE,
-                                      texture, 0);
+            gl.glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D_MULTISAMPLE, texture, 0);
             Bool filled = false;
             ProgramBuild fill;
             if (gl.glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE) {
@@ -920,9 +893,8 @@ namespace MobileGL::MG_Util::SelfTest {
         Bool HasImageProgramEntryPoints(const GLESFunctionsTable& gl) {
             return gl.glCreateShader && gl.glShaderSource && gl.glCompileShader && gl.glGetShaderiv &&
                    gl.glGetShaderInfoLog && gl.glCreateProgram && gl.glAttachShader && gl.glLinkProgram &&
-                   gl.glGetProgramiv && gl.glGetProgramInfoLog && gl.glDeleteShader &&
-                   gl.glDeleteProgram && gl.glGetIntegerv && gl.glGetIntegeri_v && gl.glGetError &&
-                   gl.glIsEnabled;
+                   gl.glGetProgramiv && gl.glGetProgramInfoLog && gl.glDeleteShader && gl.glDeleteProgram &&
+                   gl.glGetIntegerv && gl.glGetIntegeri_v && gl.glGetError && gl.glIsEnabled;
         }
 
         // One stage declaring `count` image uniforms named `namePrefix`0..count-1, each stored to
@@ -936,8 +908,8 @@ namespace MobileGL::MG_Util::SelfTest {
             }
             source += "precision highp float;\nprecision highp int;\n";
             for (Int i = 0; i < count; ++i) {
-                source += format("layout(binding = {}, rgba32f) uniform writeonly highp image2D {}{};\n",
-                                 i % units, namePrefix, i);
+                source += format("layout(binding = {}, rgba32f) uniform writeonly highp image2D {}{};\n", i % units,
+                                 namePrefix, i);
             }
             if (stage == GL_FRAGMENT_SHADER) {
                 source += "layout(location = 0) out highp vec4 o_color;\n";
@@ -966,12 +938,11 @@ namespace MobileGL::MG_Util::SelfTest {
                                                  const char* fragmentPrefix) {
             return BuildProgram(
                 gl,
-                {{GL_VERTEX_SHADER, BuildImageNameStageSource(GL_VERTEX_SHADER, count, units, vertexPrefix),
-                  "vertex"},
-                 {GL_GEOMETRY_SHADER,
-                  BuildImageNameStageSource(GL_GEOMETRY_SHADER, count, units, geometryPrefix), "geometry"},
-                 {GL_FRAGMENT_SHADER,
-                  BuildImageNameStageSource(GL_FRAGMENT_SHADER, count, units, fragmentPrefix), "fragment"}},
+                {{GL_VERTEX_SHADER, BuildImageNameStageSource(GL_VERTEX_SHADER, count, units, vertexPrefix), "vertex"},
+                 {GL_GEOMETRY_SHADER, BuildImageNameStageSource(GL_GEOMETRY_SHADER, count, units, geometryPrefix),
+                  "geometry"},
+                 {GL_FRAGMENT_SHADER, BuildImageNameStageSource(GL_FRAGMENT_SHADER, count, units, fragmentPrefix),
+                  "fragment"}},
                 kImageLocationProbeName);
         }
 
@@ -991,13 +962,13 @@ namespace MobileGL::MG_Util::SelfTest {
         };
 
         Bool HasImageDrawEntryPoints(const GLESFunctionsTable& gl) {
-            return HasImageProgramEntryPoints(gl) && gl.glUseProgram && gl.glGenTextures &&
-                   gl.glBindTexture && gl.glDeleteTextures && gl.glTexStorage2D && gl.glTexSubImage2D &&
-                   gl.glGenFramebuffers && gl.glBindFramebuffer && gl.glFramebufferTexture2D &&
-                   gl.glCheckFramebufferStatus && gl.glDeleteFramebuffers && gl.glGenVertexArrays &&
-                   gl.glBindVertexArray && gl.glDeleteVertexArrays && gl.glBindImageTexture &&
-                   gl.glViewport && gl.glClear && gl.glClearColor && gl.glReadPixels && gl.glDrawArrays &&
-                   gl.glMemoryBarrier && gl.glPixelStorei && gl.glFinish && gl.glEnable && gl.glDisable;
+            return HasImageProgramEntryPoints(gl) && gl.glUseProgram && gl.glGenTextures && gl.glBindTexture &&
+                   gl.glDeleteTextures && gl.glTexStorage2D && gl.glTexSubImage2D && gl.glGenFramebuffers &&
+                   gl.glBindFramebuffer && gl.glFramebufferTexture2D && gl.glCheckFramebufferStatus &&
+                   gl.glDeleteFramebuffers && gl.glGenVertexArrays && gl.glBindVertexArray && gl.glDeleteVertexArrays &&
+                   gl.glBindImageTexture && gl.glViewport && gl.glClear && gl.glClearColor && gl.glReadPixels &&
+                   gl.glDrawArrays && gl.glMemoryBarrier && gl.glPixelStorei && gl.glFinish && gl.glEnable &&
+                   gl.glDisable;
         }
 
         ImageDrawTargets MakeImageDrawTargets(const GLESFunctionsTable& gl, GLsizei size) {
@@ -1011,8 +982,7 @@ namespace MobileGL::MG_Util::SelfTest {
             gl.glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA8, size, size);
             gl.glGenFramebuffers(1, &targets.framebuffer);
             gl.glBindFramebuffer(GL_FRAMEBUFFER, targets.framebuffer);
-            gl.glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, targets.color,
-                                      0);
+            gl.glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, targets.color, 0);
             targets.valid = gl.glGetError() == GL_NO_ERROR &&
                             gl.glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
             Drain(gl);
@@ -1032,8 +1002,7 @@ namespace MobileGL::MG_Util::SelfTest {
             const SizeT texelCount = static_cast<SizeT>(targets.size) * targets.size * 4;
             const Vector<GLfloat> zeroes(texelCount, 0.0f);
             gl.glBindTexture(GL_TEXTURE_2D, targets.image);
-            gl.glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, targets.size, targets.size, GL_RGBA, GL_FLOAT,
-                               zeroes.data());
+            gl.glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, targets.size, targets.size, GL_RGBA, GL_FLOAT, zeroes.data());
             gl.glMemoryBarrier(GL_ALL_BARRIER_BITS);
             gl.glFinish();
             Drain(gl);
@@ -1057,8 +1026,7 @@ namespace MobileGL::MG_Util::SelfTest {
         }
 
         void BeginProbeDraw(const GLESFunctionsTable& gl, const ImageDrawTargets& targets) {
-            gl.glBindImageTexture(kProbeImageUnit, targets.image, 0, GL_FALSE, 0, GL_READ_WRITE,
-                                  GL_RGBA32F);
+            gl.glBindImageTexture(kProbeImageUnit, targets.image, 0, GL_FALSE, 0, GL_READ_WRITE, GL_RGBA32F);
             gl.glBindFramebuffer(GL_FRAMEBUFFER, targets.framebuffer);
             gl.glViewport(0, 0, targets.size, targets.size);
             gl.glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
@@ -1081,8 +1049,7 @@ namespace MobileGL::MG_Util::SelfTest {
                           "{}"
                           "    imageStore({}, ivec2(0), vec4({}));\n"
                           "    memoryBarrier();\n}}\n",
-                          kProbeImageUnit, writeName, kFullscreenQuadBody, writeName,
-                          kQualifierMergeValue);
+                          kProbeImageUnit, writeName, kFullscreenQuadBody, writeName, kQualifierMergeValue);
         }
 
         String BuildQualifierMergeFragmentSource(const char* readName) {
@@ -1100,13 +1067,12 @@ namespace MobileGL::MG_Util::SelfTest {
 
         // Draws the pair once and reports how many fragments failed to see the vertex stage's
         // store. -1 means the case could not be built or drawn at all.
-        Int RunQualifierMergeCase(const GLESFunctionsTable& gl, const ImageDrawTargets& targets,
-                                  const char* writeName, const char* readName) {
+        Int RunQualifierMergeCase(const GLESFunctionsTable& gl, const ImageDrawTargets& targets, const char* writeName,
+                                  const char* readName) {
             ProgramBuild build =
                 BuildProgram(gl,
                              {{GL_VERTEX_SHADER, BuildQualifierMergeVertexSource(writeName), "vertex"},
-                              {GL_FRAGMENT_SHADER, BuildQualifierMergeFragmentSource(readName),
-                               "fragment"}},
+                              {GL_FRAGMENT_SHADER, BuildQualifierMergeFragmentSource(readName), "fragment"}},
                              kQualifierMergeProbeName);
             Int failed = -1;
             if (build.linked) {
@@ -1135,24 +1101,23 @@ namespace MobileGL::MG_Util::SelfTest {
         // (the strongest shape ESSL offers) from the shape MobileGL emits today; everything else
         // about the two is identical, so the two numbers are comparable.
         String BuildCoherencyFragmentSource(const char* qualifiers, const char* barriers) {
-            return format(
-                "#version 320 es\n"
-                "precision highp float;\n"
-                "precision highp int;\n"
-                "layout(binding = {}, rgba32f) uniform {} readonly highp image2D mg_probeImageRead;\n"
-                "layout(binding = {}, rgba32f) uniform {} writeonly highp image2D mg_probeImageWrite;\n"
-                "layout(location = 0) out highp vec4 o_color;\n"
-                "void main()\n{{\n"
-                "    ivec2 mg_c = ivec2(gl_FragCoord.xy);\n"
-                "    o_color = vec4(0.0, 1.0, 0.0, 1.0);\n"
-                "    for (int mg_i = 0; mg_i < 3; ++mg_i)\n    {{\n"
-                "        imageStore(mg_probeImageWrite, mg_c, vec4(float(mg_i)));\n"
-                "        {}\n"
-                "        highp vec4 mg_v = imageLoad(mg_probeImageRead, mg_c);\n"
-                "        if (any(notEqual(mg_v, vec4(float(mg_i)))))\n        {{\n"
-                "            o_color = vec4(1.0, 0.0, 0.0, 1.0);\n            break;\n        }}\n"
-                "    }}\n}}\n",
-                kProbeImageUnit, qualifiers, kProbeImageUnit, qualifiers, barriers);
+            return format("#version 320 es\n"
+                          "precision highp float;\n"
+                          "precision highp int;\n"
+                          "layout(binding = {}, rgba32f) uniform {} readonly highp image2D mg_probeImageRead;\n"
+                          "layout(binding = {}, rgba32f) uniform {} writeonly highp image2D mg_probeImageWrite;\n"
+                          "layout(location = 0) out highp vec4 o_color;\n"
+                          "void main()\n{{\n"
+                          "    ivec2 mg_c = ivec2(gl_FragCoord.xy);\n"
+                          "    o_color = vec4(0.0, 1.0, 0.0, 1.0);\n"
+                          "    for (int mg_i = 0; mg_i < 3; ++mg_i)\n    {{\n"
+                          "        imageStore(mg_probeImageWrite, mg_c, vec4(float(mg_i)));\n"
+                          "        {}\n"
+                          "        highp vec4 mg_v = imageLoad(mg_probeImageRead, mg_c);\n"
+                          "        if (any(notEqual(mg_v, vec4(float(mg_i)))))\n        {{\n"
+                          "            o_color = vec4(1.0, 0.0, 0.0, 1.0);\n            break;\n        }}\n"
+                          "    }}\n}}\n",
+                          kProbeImageUnit, qualifiers, kProbeImageUnit, qualifiers, barriers);
         }
 
         // Every qualifier and every barrier ESSL has for this. A driver that still misses the
@@ -1168,45 +1133,43 @@ namespace MobileGL::MG_Util::SelfTest {
         // the store and the read are just in different draws, with a glMemoryBarrier and a
         // glFinish between them.
         String BuildCoherencyControlStoreSource() {
-            return format(
-                "#version 320 es\n"
-                "precision highp float;\n"
-                "precision highp int;\n"
-                "layout(binding = {}, rgba32f) uniform coherent writeonly highp image2D mg_probeImageWrite;\n"
-                "layout(location = 0) out highp vec4 o_color;\n"
-                "void main()\n{{\n"
-                "    ivec2 mg_c = ivec2(gl_FragCoord.xy);\n"
-                "    imageStore(mg_probeImageWrite, mg_c, vec4(float(mg_c.x * {} + mg_c.y)));\n"
-                "    memoryBarrierImage();\n"
-                "    o_color = vec4(0.0, 1.0, 0.0, 1.0);\n}}\n",
-                kProbeImageUnit, kCoherencySize);
+            return format("#version 320 es\n"
+                          "precision highp float;\n"
+                          "precision highp int;\n"
+                          "layout(binding = {}, rgba32f) uniform coherent writeonly highp image2D mg_probeImageWrite;\n"
+                          "layout(location = 0) out highp vec4 o_color;\n"
+                          "void main()\n{{\n"
+                          "    ivec2 mg_c = ivec2(gl_FragCoord.xy);\n"
+                          "    imageStore(mg_probeImageWrite, mg_c, vec4(float(mg_c.x * {} + mg_c.y)));\n"
+                          "    memoryBarrierImage();\n"
+                          "    o_color = vec4(0.0, 1.0, 0.0, 1.0);\n}}\n",
+                          kProbeImageUnit, kCoherencySize);
         }
 
         String BuildCoherencyControlLoadSource() {
-            return format(
-                "#version 320 es\n"
-                "precision highp float;\n"
-                "precision highp int;\n"
-                "layout(binding = {}, rgba32f) uniform coherent readonly highp image2D mg_probeImageRead;\n"
-                "layout(location = 0) out highp vec4 o_color;\n"
-                "void main()\n{{\n"
-                "    ivec2 mg_c = ivec2(gl_FragCoord.xy);\n"
-                "    highp vec4 mg_v = imageLoad(mg_probeImageRead, mg_c);\n"
-                "    o_color = all(equal(mg_v, vec4(float(mg_c.x * {} + mg_c.y))))\n"
-                "                  ? vec4(0.0, 1.0, 0.0, 1.0)\n"
-                "                  : vec4(1.0, 0.0, 0.0, 1.0);\n}}\n",
-                kProbeImageUnit, kCoherencySize);
+            return format("#version 320 es\n"
+                          "precision highp float;\n"
+                          "precision highp int;\n"
+                          "layout(binding = {}, rgba32f) uniform coherent readonly highp image2D mg_probeImageRead;\n"
+                          "layout(location = 0) out highp vec4 o_color;\n"
+                          "void main()\n{{\n"
+                          "    ivec2 mg_c = ivec2(gl_FragCoord.xy);\n"
+                          "    highp vec4 mg_v = imageLoad(mg_probeImageRead, mg_c);\n"
+                          "    o_color = all(equal(mg_v, vec4(float(mg_c.x * {} + mg_c.y))))\n"
+                          "                  ? vec4(0.0, 1.0, 0.0, 1.0)\n"
+                          "                  : vec4(1.0, 0.0, 0.0, 1.0);\n}}\n",
+                          kProbeImageUnit, kCoherencySize);
         }
 
         // One draw, store and dependent read inside the same invocation, in whichever
         // qualifier/barrier shape the caller asked for.
-        Int RunCoherencyShape(const GLESFunctionsTable& gl, const ImageDrawTargets& targets,
-                              const char* qualifiers, const char* barriers) {
-            ProgramBuild build = BuildProgram(
-                gl,
-                {{GL_VERTEX_SHADER, kProbeQuadVertexSource, "vertex"},
-                 {GL_FRAGMENT_SHADER, BuildCoherencyFragmentSource(qualifiers, barriers), "fragment"}},
-                kCoherencyProbeName);
+        Int RunCoherencyShape(const GLESFunctionsTable& gl, const ImageDrawTargets& targets, const char* qualifiers,
+                              const char* barriers) {
+            ProgramBuild build =
+                BuildProgram(gl,
+                             {{GL_VERTEX_SHADER, kProbeQuadVertexSource, "vertex"},
+                              {GL_FRAGMENT_SHADER, BuildCoherencyFragmentSource(qualifiers, barriers), "fragment"}},
+                             kCoherencyProbeName);
             Int failed = -1;
             if (build.linked) {
                 ZeroProbeImage(gl, targets);
@@ -1227,16 +1190,14 @@ namespace MobileGL::MG_Util::SelfTest {
         // The control: the same store and the same dependent read, split across two draws with a
         // glMemoryBarrier and a glFinish between them.
         Int RunCoherencyControl(const GLESFunctionsTable& gl, const ImageDrawTargets& targets) {
-            ProgramBuild store =
-                BuildProgram(gl,
-                             {{GL_VERTEX_SHADER, kProbeQuadVertexSource, "vertex"},
-                              {GL_FRAGMENT_SHADER, BuildCoherencyControlStoreSource(), "fragment"}},
-                             kCoherencyProbeName);
-            ProgramBuild load =
-                BuildProgram(gl,
-                             {{GL_VERTEX_SHADER, kProbeQuadVertexSource, "vertex"},
-                              {GL_FRAGMENT_SHADER, BuildCoherencyControlLoadSource(), "fragment"}},
-                             kCoherencyProbeName);
+            ProgramBuild store = BuildProgram(gl,
+                                              {{GL_VERTEX_SHADER, kProbeQuadVertexSource, "vertex"},
+                                               {GL_FRAGMENT_SHADER, BuildCoherencyControlStoreSource(), "fragment"}},
+                                              kCoherencyProbeName);
+            ProgramBuild load = BuildProgram(gl,
+                                             {{GL_VERTEX_SHADER, kProbeQuadVertexSource, "vertex"},
+                                              {GL_FRAGMENT_SHADER, BuildCoherencyControlLoadSource(), "fragment"}},
+                                             kCoherencyProbeName);
             Int failed = -1;
             if (store.linked && load.linked) {
                 ZeroProbeImage(gl, targets);
@@ -1271,8 +1232,7 @@ namespace MobileGL::MG_Util::SelfTest {
         const Bool sampleQueryAccepted = gl.glGetError() == GL_NO_ERROR;
         Drain(gl);
         if (!sampleQueryAccepted || maxColorTextureSamples < 2) return false;
-        const GLsizei samples =
-            maxColorTextureSamples >= 4 ? 4 : static_cast<GLsizei>(maxColorTextureSamples);
+        const GLsizei samples = maxColorTextureSamples >= 4 ? 4 : static_cast<GLsizei>(maxColorTextureSamples);
         const Int lastSample = static_cast<Int>(samples) - 1;
 
         SavedState saved;
@@ -1308,8 +1268,7 @@ namespace MobileGL::MG_Util::SelfTest {
             // sampling program onward, so a single read would call an affected driver clean.
             constexpr Int kRounds = 2;
             if (!RunMsaaSampledRead(gl, swizzledSource, lastSample, 'w', kRounds, subject) ||
-                !RunMsaaSampledRead(gl, defaultSwizzleSource, lastSample, 'w', kRounds,
-                                    controlDefaultSwizzle) ||
+                !RunMsaaSampledRead(gl, defaultSwizzleSource, lastSample, 'w', kRounds, controlDefaultSwizzle) ||
                 !RunMsaaSampledRead(gl, swizzledSource, 0, 'w', kRounds, controlSampleZero) ||
                 !RunMsaaSampledRead(gl, swizzledSource, lastSample, 'x', kRounds, controlRedComponent)) {
                 inconclusive = "one of the sampling programs could not be built or drawn";
@@ -1333,10 +1292,9 @@ namespace MobileGL::MG_Util::SelfTest {
             MGLOG_I("[driver-bug] R32F multisample swizzle probe: %d samples; subject(swizzle_a=RED, "
                     "sample=%d, .w) %s; controls default-swizzle [%s] sample-0 [%s] .x [%s]; expected "
                     "%g everywhere%s",
-                    static_cast<int>(samples), static_cast<int>(lastSample),
-                    DescribeRounds(subject).c_str(), DescribeRounds(controlDefaultSwizzle).c_str(),
-                    DescribeRounds(controlSampleZero).c_str(), DescribeRounds(controlRedComponent).c_str(),
-                    static_cast<double>(kMsaaExpected),
+                    static_cast<int>(samples), static_cast<int>(lastSample), DescribeRounds(subject).c_str(),
+                    DescribeRounds(controlDefaultSwizzle).c_str(), DescribeRounds(controlSampleZero).c_str(),
+                    DescribeRounds(controlRedComponent).c_str(), static_cast<double>(kMsaaExpected),
                     corrupted ? " - THE SWIZZLED ALPHA READ IS CORRUPTED" : "");
         } while (false);
 
@@ -1399,13 +1357,11 @@ namespace MobileGL::MG_Util::SelfTest {
 
         // Same stage count, same per-stage image count, same bindings, same stores. The names
         // are the only difference between these two programs.
-        ProgramBuild subject =
-            BuildThreeStageImageProgram(gl, perStage, static_cast<Int>(maxImageUnits), "mg_probeVsImage",
-                                        "mg_probeGsImage", "mg_probeFsImage");
+        ProgramBuild subject = BuildThreeStageImageProgram(gl, perStage, static_cast<Int>(maxImageUnits),
+                                                           "mg_probeVsImage", "mg_probeGsImage", "mg_probeFsImage");
         ProgramBuild control =
-            BuildThreeStageImageProgram(gl, perStage, static_cast<Int>(maxImageUnits),
-                                        "mg_probeSharedImage", "mg_probeSharedImage",
-                                        "mg_probeSharedImage");
+            BuildThreeStageImageProgram(gl, perStage, static_cast<Int>(maxImageUnits), "mg_probeSharedImage",
+                                        "mg_probeSharedImage", "mg_probeSharedImage");
         if (subject.compiled && control.compiled) {
             measurement.driverMessage = FirstLine(subject.infoLog);
             // Both failing is an honest refusal of a shape that is simply too big; both linking
@@ -1414,11 +1370,9 @@ namespace MobileGL::MG_Util::SelfTest {
             MGLOG_I("[driver-bug] image-location-per-name probe: %d image uniform(s) per stage over "
                     "%d image unit(s); %d distinct names %s, %d shared names %s%s%s",
                     static_cast<int>(perStage), static_cast<int>(maxImageUnits),
-                    static_cast<int>(measurement.subjectDistinctNames),
-                    subject.linked ? "link" : "FAIL", static_cast<int>(measurement.controlDistinctNames),
-                    control.linked ? "link" : "FAIL",
-                    measurement.driverMessage.empty() ? "" : "; driver says: ",
-                    measurement.driverMessage.c_str());
+                    static_cast<int>(measurement.subjectDistinctNames), subject.linked ? "link" : "FAIL",
+                    static_cast<int>(measurement.controlDistinctNames), control.linked ? "link" : "FAIL",
+                    measurement.driverMessage.empty() ? "" : "; driver says: ", measurement.driverMessage.c_str());
         } else {
             MGLOG_I("[driver-bug] image-location-per-name probe reached no verdict (a probe stage "
                     "did not compile)");
@@ -1475,8 +1429,7 @@ namespace MobileGL::MG_Util::SelfTest {
 
             subjectFailed = RunQualifierMergeCase(gl, targets, "mg_probeImage", "mg_probeImage");
             // The control names the two halves the way MobileGL's image-uniform repair does.
-            controlFailed = RunQualifierMergeCase(gl, targets, "mg_imageWo_mg_probeImage",
-                                                  "mg_imageRo_mg_probeImage");
+            controlFailed = RunQualifierMergeCase(gl, targets, "mg_imageWo_mg_probeImage", "mg_imageRo_mg_probeImage");
             if (subjectFailed < 0 || controlFailed < 0) {
                 inconclusive = "one of the two programs could not be built or drawn";
                 break;
@@ -1493,13 +1446,11 @@ namespace MobileGL::MG_Util::SelfTest {
                     "store for %d/%d texels, renamed control lost %d%s",
                     static_cast<int>(subjectFailed),
                     static_cast<int>(kQualifierMergeSize) * static_cast<int>(kQualifierMergeSize),
-                    static_cast<int>(controlFailed),
-                    dropped ? " - THE MERGED WRITE IS DISCARDED" : "");
+                    static_cast<int>(controlFailed), dropped ? " - THE MERGED WRITE IS DISCARDED" : "");
         } while (false);
 
         if (inconclusive != nullptr) {
-            MGLOG_I("[driver-bug] cross-stage image qualifier merge probe reached no verdict (%s)",
-                    inconclusive);
+            MGLOG_I("[driver-bug] cross-stage image qualifier merge probe reached no verdict (%s)", inconclusive);
         }
 
         ReleaseImageDrawTargets(gl, targets);
@@ -1514,8 +1465,7 @@ namespace MobileGL::MG_Util::SelfTest {
         return dropped;
     }
 
-    ImageCoherencyResidualMeasurement ProbeImageWriteReadCoherencyResidual(
-        const GLESFunctionsTable& gl) {
+    ImageCoherencyResidualMeasurement ProbeImageWriteReadCoherencyResidual(const GLESFunctionsTable& gl) {
         ImageCoherencyResidualMeasurement measurement;
         if (!HasImageDrawEntryPoints(gl)) return measurement;
 
@@ -1527,8 +1477,7 @@ namespace MobileGL::MG_Util::SelfTest {
         const Bool limitsAccepted = gl.glGetError() == GL_NO_ERROR;
         Drain(gl);
         // The subject declares BOTH halves of the split pair in the fragment stage.
-        if (!limitsAccepted || maxFragmentImages < 2 ||
-            maxImageUnits <= static_cast<GLint>(kProbeImageUnit)) {
+        if (!limitsAccepted || maxFragmentImages < 2 || maxImageUnits <= static_cast<GLint>(kProbeImageUnit)) {
             return measurement;
         }
 
@@ -1553,10 +1502,8 @@ namespace MobileGL::MG_Util::SelfTest {
                 break;
             }
 
-            subjectFailed = RunCoherencyShape(gl, targets, kStrongestCoherencyQualifiers,
-                                              kStrongestCoherencyBarriers);
-            emittedFailed =
-                RunCoherencyShape(gl, targets, kEmittedCoherencyQualifiers, kEmittedCoherencyBarriers);
+            subjectFailed = RunCoherencyShape(gl, targets, kStrongestCoherencyQualifiers, kStrongestCoherencyBarriers);
+            emittedFailed = RunCoherencyShape(gl, targets, kEmittedCoherencyQualifiers, kEmittedCoherencyBarriers);
             controlFailed = RunCoherencyControl(gl, targets);
             if (subjectFailed < 0 || emittedFailed < 0 || controlFailed < 0) {
                 inconclusive = "one of the three programs could not be built or drawn";
@@ -1586,8 +1533,7 @@ namespace MobileGL::MG_Util::SelfTest {
         } while (false);
 
         if (inconclusive != nullptr) {
-            MGLOG_I("[driver-bug] image write-read coherency probe reached no verdict (%s)",
-                    inconclusive);
+            MGLOG_I("[driver-bug] image write-read coherency probe reached no verdict (%s)", inconclusive);
         }
 
         ReleaseImageDrawTargets(gl, targets);
@@ -1597,10 +1543,8 @@ namespace MobileGL::MG_Util::SelfTest {
         return measurement;
     }
 
-    const ImageCoherencyResidualMeasurement& ImageWriteReadCoherencyResidual(
-        const GLESFunctionsTable& gl) {
-        static const ImageCoherencyResidualMeasurement measurement =
-            ProbeImageWriteReadCoherencyResidual(gl);
+    const ImageCoherencyResidualMeasurement& ImageWriteReadCoherencyResidual(const GLESFunctionsTable& gl) {
+        static const ImageCoherencyResidualMeasurement measurement = ProbeImageWriteReadCoherencyResidual(gl);
         return measurement;
     }
 
@@ -1619,8 +1563,7 @@ namespace MobileGL::MG_Util::SelfTest {
             gl.glGenTextures(1, &texture);
             if (texture == 0) return 0;
             gl.glBindTexture(GL_TEXTURE_2D_ARRAY, texture);
-            gl.glTexStorage3D(GL_TEXTURE_2D_ARRAY, 1, GL_RGBA8, kLayeredBlitSize, kLayeredBlitSize,
-                              kLayeredBlitLayers);
+            gl.glTexStorage3D(GL_TEXTURE_2D_ARRAY, 1, GL_RGBA8, kLayeredBlitSize, kLayeredBlitSize, kLayeredBlitLayers);
             gl.glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
             gl.glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
             const GLubyte fills[kLayeredBlitLayers] = {layer0, layer1};
@@ -1632,8 +1575,8 @@ namespace MobileGL::MG_Util::SelfTest {
                     texels[i + 2] = fills[layer];
                     texels[i + 3] = 255;
                 }
-                gl.glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, layer, kLayeredBlitSize, kLayeredBlitSize, 1,
-                                   GL_RGBA, GL_UNSIGNED_BYTE, texels);
+                gl.glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, layer, kLayeredBlitSize, kLayeredBlitSize, 1, GL_RGBA,
+                                   GL_UNSIGNED_BYTE, texels);
             }
             gl.glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
             return texture;
@@ -1682,8 +1625,8 @@ namespace MobileGL::MG_Util::SelfTest {
                 gl.glReadBuffer(GL_COLOR_ATTACHMENT0);
                 gl.glBindFramebuffer(GL_DRAW_FRAMEBUFFER, destinationFramebuffer);
                 Drain(gl);
-                gl.glBlitFramebuffer(0, 0, kLayeredBlitSize, kLayeredBlitSize, 0, 0, kLayeredBlitSize,
-                                     kLayeredBlitSize, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+                gl.glBlitFramebuffer(0, 0, kLayeredBlitSize, kLayeredBlitSize, 0, 0, kLayeredBlitSize, kLayeredBlitSize,
+                                     GL_COLOR_BUFFER_BIT, GL_NEAREST);
                 if (gl.glGetError() == GL_NO_ERROR) {
                     landedOn = -2; // issued, but seen on no layer yet
                     for (GLint layer = 0; layer < kLayeredBlitLayers; ++layer) {
@@ -1741,8 +1684,7 @@ namespace MobileGL::MG_Util::SelfTest {
             } else {
                 MGLOG_I("[driver-bug] %s probe: a blit asking for destination layer 1 landed on "
                         "layer %d%s",
-                        kLayeredBlitProbeName, subjectLanded,
-                        detected ? " - THE DESTINATION LAYER IS IGNORED" : "");
+                        kLayeredBlitProbeName, subjectLanded, detected ? " - THE DESTINATION LAYER IS IGNORED" : "");
             }
         }
 
@@ -1759,20 +1701,18 @@ namespace MobileGL::MG_Util::SelfTest {
     namespace {
         Optional<DriverBugFinding> ProbeLayeredBlitDestinationBug(const GLESFunctionsTable& gl) {
             if (!BlitIgnoresDestinationArrayLayer(gl)) return std::nullopt;
-            return DriverBugFinding{
-                "glBlitFramebuffer ignores the destination array layer",
-                DriverBugVerdict::Fixed,
-                "a glBlitFramebuffer whose DRAW framebuffer attaches a non-zero array layer with "
-                "glFramebufferTextureLayer writes to layer 0 instead, and raises no error doing "
-                "it. Measured here on the colour aspect; the depth aspect behaves the same way on "
-                "the device this was characterised on. The layer is honoured everywhere else on "
-                "the same driver - the blit's own SOURCE layer is read correctly, which is this "
-                "probe's control - so neither layered attachments nor blitting is withdrawn. "
-                "MobileGL performs such a blit with glCopyImageSubData instead, which takes the "
-                "destination layer explicitly and honours it here, and applies that substitute to "
-                "the depth and stencil aspects as well; a blit that scales, flips, changes format, "
-                "resolves samples or is clipped by the scissor cannot be expressed as a copy and "
-                "is still handed to the driver"};
+            return DriverBugFinding{"glBlitFramebuffer ignores the destination array layer", DriverBugVerdict::Fixed,
+                                    "a glBlitFramebuffer whose DRAW framebuffer attaches a non-zero array layer with "
+                                    "glFramebufferTextureLayer writes to layer 0 instead, and raises no error doing "
+                                    "it. Measured here on the colour aspect; the depth aspect behaves the same way on "
+                                    "the device this was characterised on. The layer is honoured everywhere else on "
+                                    "the same driver - the blit's own SOURCE layer is read correctly, which is this "
+                                    "probe's control - so neither layered attachments nor blitting is withdrawn. "
+                                    "MobileGL performs such a blit with glCopyImageSubData instead, which takes the "
+                                    "destination layer explicitly and honours it here, and applies that substitute to "
+                                    "the depth and stencil aspects as well; a blit that scales, flips, changes format, "
+                                    "resolves samples or is clipped by the scissor cannot be expressed as a copy and "
+                                    "is still handed to the driver"};
         }
 
         // ===================== EXPLICIT VERTEX INPUT LOCATION CEILING =====================
@@ -1806,7 +1746,8 @@ namespace MobileGL::MG_Util::SelfTest {
                 if (const SizeT newline = message.find('\n'); newline != String::npos) {
                     message.resize(newline);
                 }
-                while (!message.empty() && (message.back() == ' ' || message.back() == '\r')) message.pop_back();
+                while (!message.empty() && (message.back() == ' ' || message.back() == '\r'))
+                    message.pop_back();
                 *firstRejectionMessage = Move(message);
             }
             gl.glDeleteShader(shader);
@@ -1919,18 +1860,16 @@ namespace MobileGL::MG_Util::SelfTest {
         MGLOG_I("[driver-bug] %s probe: GL_MAX_VERTEX_ATTRIBS is %d but layout(location = N) on a "
                 "vertex input is refused from N = %d upward - only %d location(s) are usable; "
                 "glBindAttribLocation(%d) %s%s%s",
-                kAttributeLocationProbeName, advertised, measurement.usableLocations,
-                measurement.usableLocations, advertised - 1,
+                kAttributeLocationProbeName, advertised, measurement.usableLocations, measurement.usableLocations,
+                advertised - 1,
                 measurement.bindAttribLocationReachesAdvertisedMax ? "still resolves correctly"
                                                                    : "does not resolve either",
-                measurement.driverMessage.empty() ? "" : "; the driver says: ",
-                measurement.driverMessage.c_str());
+                measurement.driverMessage.empty() ? "" : "; the driver says: ", measurement.driverMessage.c_str());
         return measurement;
     }
 
     const VertexInputLocationCeilingMeasurement& ExplicitVertexInputLocationCeiling(const GLESFunctionsTable& gl) {
-        static const VertexInputLocationCeilingMeasurement measurement =
-            ProbeExplicitVertexInputLocationCeiling(gl);
+        static const VertexInputLocationCeilingMeasurement measurement = ProbeExplicitVertexInputLocationCeiling(gl);
         return measurement;
     }
 
@@ -1946,16 +1885,15 @@ namespace MobileGL::MG_Util::SelfTest {
         // BuildProgram, Save/Restore, PrepareForProbeDraw and the draw below actually call.
         Bool HasIoBlockProbeEntryPoints(const GLESFunctionsTable& gl) {
             return gl.glCreateShader && gl.glShaderSource && gl.glCompileShader && gl.glGetShaderiv &&
-                   gl.glGetShaderInfoLog && gl.glCreateProgram && gl.glAttachShader &&
-                   gl.glLinkProgram && gl.glGetProgramiv && gl.glGetProgramInfoLog &&
-                   gl.glDeleteShader && gl.glDeleteProgram && gl.glUseProgram && gl.glGenVertexArrays &&
-                   gl.glBindVertexArray && gl.glDeleteVertexArrays && gl.glGenRenderbuffers &&
-                   gl.glBindRenderbuffer && gl.glRenderbufferStorage && gl.glDeleteRenderbuffers &&
-                   gl.glGenFramebuffers && gl.glBindFramebuffer && gl.glFramebufferRenderbuffer &&
-                   gl.glCheckFramebufferStatus && gl.glDeleteFramebuffers && gl.glViewport &&
-                   gl.glClearColor && gl.glClear && gl.glDrawArrays && gl.glReadPixels &&
-                   gl.glPixelStorei && gl.glGetIntegerv && gl.glGetIntegeri_v && gl.glGetError &&
-                   gl.glEnable && gl.glDisable && gl.glIsEnabled;
+                   gl.glGetShaderInfoLog && gl.glCreateProgram && gl.glAttachShader && gl.glLinkProgram &&
+                   gl.glGetProgramiv && gl.glGetProgramInfoLog && gl.glDeleteShader && gl.glDeleteProgram &&
+                   gl.glUseProgram && gl.glGenVertexArrays && gl.glBindVertexArray && gl.glDeleteVertexArrays &&
+                   gl.glGenRenderbuffers && gl.glBindRenderbuffer && gl.glRenderbufferStorage &&
+                   gl.glDeleteRenderbuffers && gl.glGenFramebuffers && gl.glBindFramebuffer &&
+                   gl.glFramebufferRenderbuffer && gl.glCheckFramebufferStatus && gl.glDeleteFramebuffers &&
+                   gl.glViewport && gl.glClearColor && gl.glClear && gl.glDrawArrays && gl.glReadPixels &&
+                   gl.glPixelStorei && gl.glGetIntegerv && gl.glGetIntegeri_v && gl.glGetError && gl.glEnable &&
+                   gl.glDisable && gl.glIsEnabled;
         }
         // Two values that survive an 8-bit target exactly, so the read is a comparison and not
         // a tolerance: 0.25 -> 64, 0.5 -> 128. A stage that received nothing reads 0/0, which is
@@ -2012,20 +1950,18 @@ namespace MobileGL::MG_Util::SelfTest {
         // fragment stage received the payload. `outRan` distinguishes "the payload did not
         // arrive" from "this program could not be built or drawn at all" - the second is
         // inconclusive and must never become a finding.
-        Bool IoBlockPayloadArrives(const GLESFunctionsTable& gl, const char* blockQualifier,
-                                   Bool withGeometryStage, Bool& outRan) {
+        Bool IoBlockPayloadArrives(const GLESFunctionsTable& gl, const char* blockQualifier, Bool withGeometryStage,
+                                   Bool& outRan) {
             outRan = false;
             Vector<StageSource> stages;
             stages.push_back({GL_VERTEX_SHADER, BuildIoBlockVertexSource(blockQualifier), "vertex"});
             if (withGeometryStage) {
-                stages.push_back(
-                    {GL_GEOMETRY_SHADER, BuildIoBlockGeometrySource(blockQualifier), "geometry"});
+                stages.push_back({GL_GEOMETRY_SHADER, BuildIoBlockGeometrySource(blockQualifier), "geometry"});
             }
-            stages.push_back({GL_FRAGMENT_SHADER,
-                              BuildIoBlockFragmentSource(blockQualifier,
-                                                         withGeometryStage ? "MgProbeBlock2"
-                                                                           : "MgProbeBlock"),
-                              "fragment"});
+            stages.push_back(
+                {GL_FRAGMENT_SHADER,
+                 BuildIoBlockFragmentSource(blockQualifier, withGeometryStage ? "MgProbeBlock2" : "MgProbeBlock"),
+                 "fragment"});
 
             const ProgramBuild build = BuildProgram(gl, stages, kIoBlockProbeName);
             if (!build.linked) {
@@ -2041,8 +1977,7 @@ namespace MobileGL::MG_Util::SelfTest {
             gl.glRenderbufferStorage(GL_RENDERBUFFER, GL_RGBA8, 1, 1);
             gl.glGenFramebuffers(1, &framebuffer);
             gl.glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
-            gl.glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER,
-                                         renderbuffer);
+            gl.glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, renderbuffer);
             if (gl.glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE) {
                 gl.glUseProgram(build.program);
                 gl.glViewport(0, 0, 1, 1);
@@ -2098,8 +2033,7 @@ namespace MobileGL::MG_Util::SelfTest {
         const Bool controlArrives = IoBlockPayloadArrives(gl, "", true, controlRan);
         if (controlRan && controlArrives) {
             Bool subjectRan = false;
-            const Bool subjectArrives =
-                IoBlockPayloadArrives(gl, "layout(location = 0) ", true, subjectRan);
+            const Bool subjectArrives = IoBlockPayloadArrives(gl, "layout(location = 0) ", true, subjectRan);
             if (subjectRan && !subjectArrives) {
                 measurement.detected = true;
                 // The second control, and the one that scopes the repair: the same located
@@ -2109,8 +2043,7 @@ namespace MobileGL::MG_Util::SelfTest {
                 // ALSO fails is losing payloads the repair does not reach, and the report says
                 // so rather than implying the fix is complete.
                 Bool vsFsRan = false;
-                const Bool vsFsArrives =
-                    IoBlockPayloadArrives(gl, "layout(location = 0) ", false, vsFsRan);
+                const Bool vsFsArrives = IoBlockPayloadArrives(gl, "layout(location = 0) ", false, vsFsRan);
                 measurement.alsoAffectsVertexToFragment = vsFsRan && !vsFsArrives;
             }
         }
@@ -2200,14 +2133,16 @@ namespace MobileGL::MG_Util::SelfTest {
             // complete because all three levels exist under MAX_LEVEL = 2.
             CtsShape,
         };
-        constexpr Packed16Recipe kPacked16Recipes[] = {Packed16Recipe::UploadsFirst,
-                                                       Packed16Recipe::ParamsFirst,
+        constexpr Packed16Recipe kPacked16Recipes[] = {Packed16Recipe::UploadsFirst, Packed16Recipe::ParamsFirst,
                                                        Packed16Recipe::CtsShape};
         const char* Packed16RecipeName(Packed16Recipe recipe) {
             switch (recipe) {
-            case Packed16Recipe::UploadsFirst: return "uploads-first";
-            case Packed16Recipe::ParamsFirst: return "params-first";
-            case Packed16Recipe::CtsShape: return "cts-shape";
+            case Packed16Recipe::UploadsFirst:
+                return "uploads-first";
+            case Packed16Recipe::ParamsFirst:
+                return "params-first";
+            case Packed16Recipe::CtsShape:
+                return "cts-shape";
             }
             return "?";
         }
@@ -2229,10 +2164,10 @@ namespace MobileGL::MG_Util::SelfTest {
             }
             for (GLint level = 0; level < kPacked16Levels; ++level) {
                 const GLsizei size = kPacked16BaseSize >> level;
-                const Vector<Uint16> words(
-                    static_cast<SizeT>(size) * static_cast<SizeT>(size) * kPacked16Layers, kPacked16Word);
-                gl.glTexImage3D(GL_TEXTURE_2D_ARRAY, level, GL_RGB5_A1, size, size, kPacked16Layers, 0,
-                                GL_RGBA, GL_UNSIGNED_SHORT_5_5_5_1, words.data());
+                const Vector<Uint16> words(static_cast<SizeT>(size) * static_cast<SizeT>(size) * kPacked16Layers,
+                                           kPacked16Word);
+                gl.glTexImage3D(GL_TEXTURE_2D_ARRAY, level, GL_RGB5_A1, size, size, kPacked16Layers, 0, GL_RGBA,
+                                GL_UNSIGNED_SHORT_5_5_5_1, words.data());
             }
             if (recipe == Packed16Recipe::UploadsFirst) {
                 gl.glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
@@ -2261,8 +2196,8 @@ namespace MobileGL::MG_Util::SelfTest {
             for (GLint level = 0; level < kPacked16Levels; ++level) {
                 const GLsizei size = std::max<GLsizei>(kPacked16DstSize >> level, 1);
                 const Vector<Uint16> texels(static_cast<SizeT>(size) * size, fill);
-                gl.glTexImage2D(GL_TEXTURE_2D, level, GL_RGB5_A1, size, size, 0, GL_RGBA,
-                                GL_UNSIGNED_SHORT_5_5_5_1, texels.data());
+                gl.glTexImage2D(GL_TEXTURE_2D, level, GL_RGB5_A1, size, size, 0, GL_RGBA, GL_UNSIGNED_SHORT_5_5_5_1,
+                                texels.data());
             }
             gl.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
             gl.glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
@@ -2301,13 +2236,13 @@ namespace MobileGL::MG_Util::SelfTest {
         // Copies a kPacked16DstSize-square region out of (source, sourceTarget, sourceLevel)
         // layer 0 onto a freshly 0xFFFF-filled 2D destination and hands back the destination's
         // texel (0, 0). False when the copy raised an error or the readback could not run.
-        Bool Packed16CopyLandsTexel(const GLESFunctionsTable& gl, GLuint source, GLenum sourceTarget,
-                                    GLint sourceLevel, GLubyte out[4]) {
+        Bool Packed16CopyLandsTexel(const GLESFunctionsTable& gl, GLuint source, GLenum sourceTarget, GLint sourceLevel,
+                                    GLubyte out[4]) {
             const GLuint destination = MakePacked16FlatTexture(gl, Uint16{0xFFFF});
             if (destination == 0) return false;
             Drain(gl);
-            gl.glCopyImageSubData(source, sourceTarget, sourceLevel, 0, 0, 0, destination,
-                                  GL_TEXTURE_2D, 0, 0, 0, 0, kPacked16DstSize, kPacked16DstSize, 1);
+            gl.glCopyImageSubData(source, sourceTarget, sourceLevel, 0, 0, 0, destination, GL_TEXTURE_2D, 0, 0, 0, 0,
+                                  kPacked16DstSize, kPacked16DstSize, 1);
             const Bool copied = gl.glGetError() == GL_NO_ERROR;
             const Bool read = copied && ReadPacked16Texel(gl, destination, false, 0, out);
             gl.glDeleteTextures(1, &destination);
@@ -2341,8 +2276,8 @@ namespace MobileGL::MG_Util::SelfTest {
             GLubyte level1[4] = {0, 0, 0, 0};
             if (array == 0 || !Packed16CopyLandsTexel(gl, array, GL_TEXTURE_2D_ARRAY, 0, level0) ||
                 !Packed16CopyLandsTexel(gl, array, GL_TEXTURE_2D_ARRAY, 1, level1)) {
-                MGLOG_I("[driver-bug] %s probe [%s]: no verdict (a subject copy could not run)",
-                        kPacked16CopyProbeName, Packed16RecipeName(recipe));
+                MGLOG_I("[driver-bug] %s probe [%s]: no verdict (a subject copy could not run)", kPacked16CopyProbeName,
+                        Packed16RecipeName(recipe));
             } else if (!ReadPacked16Texel(gl, array, true, 1, direct) ||
                        !Packed16TexelNear(direct, kPacked16Expected)) {
                 // The recipe's own round trip: reading the level directly decodes the driver's
@@ -2352,26 +2287,23 @@ namespace MobileGL::MG_Util::SelfTest {
                 MGLOG_I("[driver-bug] %s probe [%s]: no verdict (the array's own level-1 readback "
                         "answered (%d, %d, %d, %d) instead of the word - the upload, not the "
                         "copy, is what diverges)",
-                        kPacked16CopyProbeName, Packed16RecipeName(recipe), direct[0], direct[1],
-                        direct[2], direct[3]);
-            } else if (Packed16TexelNear(level0, kPacked16Mirrored) ||
-                       Packed16TexelNear(level1, kPacked16Mirrored)) {
+                        kPacked16CopyProbeName, Packed16RecipeName(recipe), direct[0], direct[1], direct[2], direct[3]);
+            } else if (Packed16TexelNear(level0, kPacked16Mirrored) || Packed16TexelNear(level1, kPacked16Mirrored)) {
                 mirrored = true;
                 MGLOG_I("[driver-bug] %s probe [%s]: copies delivered level 0 (%d, %d, %d, %d) / "
                         "level 1 (%d, %d, %d, %d) - the 1_5_5_5_REV re-encoding of the word - "
                         "THIS ALLOCATION'S FIELD ORDER IS MIRRORED",
-                        kPacked16CopyProbeName, Packed16RecipeName(recipe), level0[0], level0[1],
-                        level0[2], level0[3], level1[0], level1[1], level1[2], level1[3]);
-            } else if (Packed16TexelNear(level0, kPacked16Expected) &&
-                       Packed16TexelNear(level1, kPacked16Expected)) {
-                MGLOG_I("[driver-bug] %s probe [%s]: both levels copied the word intact",
-                        kPacked16CopyProbeName, Packed16RecipeName(recipe));
+                        kPacked16CopyProbeName, Packed16RecipeName(recipe), level0[0], level0[1], level0[2], level0[3],
+                        level1[0], level1[1], level1[2], level1[3]);
+            } else if (Packed16TexelNear(level0, kPacked16Expected) && Packed16TexelNear(level1, kPacked16Expected)) {
+                MGLOG_I("[driver-bug] %s probe [%s]: both levels copied the word intact", kPacked16CopyProbeName,
+                        Packed16RecipeName(recipe));
             } else {
                 MGLOG_I("[driver-bug] %s probe [%s]: no verdict (copies read back level 0 "
                         "(%d, %d, %d, %d) / level 1 (%d, %d, %d, %d), neither the word nor its "
                         "mirror)",
-                        kPacked16CopyProbeName, Packed16RecipeName(recipe), level0[0], level0[1],
-                        level0[2], level0[3], level1[0], level1[1], level1[2], level1[3]);
+                        kPacked16CopyProbeName, Packed16RecipeName(recipe), level0[0], level0[1], level0[2], level0[3],
+                        level1[0], level1[1], level1[2], level1[3]);
             }
             if (array != 0) gl.glDeleteTextures(1, &array);
             return mirrored;
@@ -2379,11 +2311,10 @@ namespace MobileGL::MG_Util::SelfTest {
     } // namespace
 
     Bool ProbeCopyImageMirrorsPacked16FieldOrder(const GLESFunctionsTable& gl) {
-        if (!gl.glGenTextures || !gl.glBindTexture || !gl.glTexParameteri || !gl.glTexImage2D ||
-            !gl.glTexImage3D || !gl.glDeleteTextures || !gl.glCopyImageSubData || !gl.glGenFramebuffers ||
-            !gl.glBindFramebuffer || !gl.glFramebufferTexture2D || !gl.glFramebufferTextureLayer ||
-            !gl.glCheckFramebufferStatus || !gl.glDeleteFramebuffers || !gl.glReadBuffer ||
-            !gl.glReadPixels || !gl.glPixelStorei || !gl.glGetError) {
+        if (!gl.glGenTextures || !gl.glBindTexture || !gl.glTexParameteri || !gl.glTexImage2D || !gl.glTexImage3D ||
+            !gl.glDeleteTextures || !gl.glCopyImageSubData || !gl.glGenFramebuffers || !gl.glBindFramebuffer ||
+            !gl.glFramebufferTexture2D || !gl.glFramebufferTextureLayer || !gl.glCheckFramebufferStatus ||
+            !gl.glDeleteFramebuffers || !gl.glReadBuffer || !gl.glReadPixels || !gl.glPixelStorei || !gl.glGetError) {
             return false;
         }
 
@@ -2451,13 +2382,12 @@ namespace MobileGL::MG_Util::SelfTest {
         Optional<DriverBugFinding> ProbeExplicitVertexInputLocationCeilingBug(const GLESFunctionsTable& gl) {
             const VertexInputLocationCeilingMeasurement& measurement = ExplicitVertexInputLocationCeiling(gl);
             if (!measurement.detected) return std::nullopt;
-            String detail =
-                format("GL_MAX_VERTEX_ATTRIBS is {} but the ESSL compiler refuses "
-                       "layout(location = N) on a vertex input for every N at or above {} - so {} of "
-                       "the {} attributes advertised cannot be declared at all",
-                       measurement.advertisedMaxVertexAttribs, measurement.usableLocations,
-                       measurement.advertisedMaxVertexAttribs - measurement.usableLocations,
-                       measurement.advertisedMaxVertexAttribs);
+            String detail = format("GL_MAX_VERTEX_ATTRIBS is {} but the ESSL compiler refuses "
+                                   "layout(location = N) on a vertex input for every N at or above {} - so {} of "
+                                   "the {} attributes advertised cannot be declared at all",
+                                   measurement.advertisedMaxVertexAttribs, measurement.usableLocations,
+                                   measurement.advertisedMaxVertexAttribs - measurement.usableLocations,
+                                   measurement.advertisedMaxVertexAttribs);
             if (!measurement.driverMessage.empty()) {
                 detail += format(" - the driver says \"{}\"", measurement.driverMessage);
             }
@@ -2479,16 +2409,15 @@ namespace MobileGL::MG_Util::SelfTest {
 
         Optional<DriverBugFinding> ProbeGeometryWriteAfterEmitBug(const GLESFunctionsTable& gl) {
             if (!GeometryStageSsboWriteAfterEmitDropped(gl)) return std::nullopt;
-            String detail =
-                "the driver silently discards shader storage buffer writes a geometry shader "
-                "issues after its last EmitVertex()/EndPrimitive(); the identical write issued "
-                "BEFORE the emit lands, for both point and triangle geometry shaders. ";
+            String detail = "the driver silently discards shader storage buffer writes a geometry shader "
+                            "issues after its last EmitVertex()/EndPrimitive(); the identical write issued "
+                            "BEFORE the emit lands, for both point and triangle geometry shaders. ";
             // The repair follows the knob, so the row describes what this process does.
             if (MG_Config::Features.EsprytDeferGeometryEmits == MG_Config::QuirkOverride::ForceOff) {
                 detail += "THE REPAIR IS DISABLED in this process (MOBILEGL_ESPRYT_DEFER_GEOMETRY_EMITS), so a "
                           "geometry shader that writes after emitting loses those writes";
-                return DriverBugFinding{"Geometry-stage storage writes after EmitVertex",
-                                        DriverBugVerdict::Unfixable, Move(detail)};
+                return DriverBugFinding{"Geometry-stage storage writes after EmitVertex", DriverBugVerdict::Unfixable,
+                                        Move(detail)};
             }
             detail += "DirectGLES defers every EmitVertex()/EndPrimitive() of a geometry stage that writes "
                       "memory: the outputs are snapshotted at each emit and the vertices replayed after the "
@@ -2500,11 +2429,10 @@ namespace MobileGL::MG_Util::SelfTest {
 
         Optional<DriverBugFinding> ProbeStaleSharedMemoryLoadBug(const GLESFunctionsTable& gl) {
             if (!SharedMemoryLoadsGoStale(gl)) return std::nullopt;
-            String detail =
-                "the ES compiler treats ordinary loads from shared variables as pure: two reads of one "
-                "shared word separated by a store and barrier() (memoryBarrierShared() too) return the "
-                "first value, and a read can move past a later store; atomicAdd(x, 0u) reads of the same "
-                "words stay in place. ";
+            String detail = "the ES compiler treats ordinary loads from shared variables as pure: two reads of one "
+                            "shared word separated by a store and barrier() (memoryBarrierShared() too) return the "
+                            "first value, and a read can move past a later store; atomicAdd(x, 0u) reads of the same "
+                            "words stay in place. ";
             if (MG_Config::Features.EsprytAtomicSubgroupScratch == MG_Config::QuirkOverride::ForceOff) {
                 detail += "THE REPAIR IS DISABLED in this process (MOBILEGL_ESPRYT_ATOMIC_SUBGROUP_SCRATCH), so "
                           "an emulated subgroup operation can see the lanes of an earlier one";
@@ -2537,54 +2465,47 @@ namespace MobileGL::MG_Util::SelfTest {
 
         Optional<DriverBugFinding> ProbeR32FMultisampleSwizzleBug(const GLESFunctionsTable& gl) {
             if (!R32FMultisampleSwizzleCorrupted(gl)) return std::nullopt;
-            return DriverBugFinding{
-                "R32F multisample fetch through a swizzled alpha",
-                DriverBugVerdict::Unfixable,
-                "texelFetch() on an R32F GL_TEXTURE_2D_MULTISAMPLE texture whose "
-                "GL_TEXTURE_SWIZZLE_A is not the default returns uninitialised memory - a "
-                "different value every run - for any sample index other than 0, from the SECOND "
-                "such program in the context onward. The identical fetch with the default alpha "
-                "swizzle, at sample index 0, or through .x instead of .w is correct, so neither "
-                "R32F multisample targets nor texture swizzles are withdrawn. No substitute was "
-                "adopted: widening every R32F multisample target to RG32F would sidestep it and "
-                "doubles multisample memory, which was declined. A shader that fetches a non-zero "
-                "sample through a swizzled alpha cannot be relied on here"};
+            return DriverBugFinding{"R32F multisample fetch through a swizzled alpha", DriverBugVerdict::Unfixable,
+                                    "texelFetch() on an R32F GL_TEXTURE_2D_MULTISAMPLE texture whose "
+                                    "GL_TEXTURE_SWIZZLE_A is not the default returns uninitialised memory - a "
+                                    "different value every run - for any sample index other than 0, from the SECOND "
+                                    "such program in the context onward. The identical fetch with the default alpha "
+                                    "swizzle, at sample index 0, or through .x instead of .w is correct, so neither "
+                                    "R32F multisample targets nor texture swizzles are withdrawn. No substitute was "
+                                    "adopted: widening every R32F multisample target to RG32F would sidestep it and "
+                                    "doubles multisample memory, which was declined. A shader that fetches a non-zero "
+                                    "sample through a swizzled alpha cannot be relied on here"};
         }
 
         Optional<DriverBugFinding> ProbeImageLocationPerNameBug(const GLESFunctionsTable& gl) {
             const ImageLocationBudgetMeasurement& measurement = ImageLocationPerNameBudget(gl);
             if (!measurement.detected) return std::nullopt;
-            String detail = format(
-                "this driver's image-location budget is charged per distinct uniform NAME, not per "
-                "image unit: a vertex+geometry+fragment program declaring {} image uniform(s) per "
-                "stage links when all three stages share one set of names ({} distinct) and is "
-                "rejected when each stage names its own copies ({} distinct), with the same "
-                "bindings, the same qualifiers and the same stores either way",
-                measurement.perStageImageUniforms, measurement.controlDistinctNames,
-                measurement.subjectDistinctNames);
+            String detail = format("this driver's image-location budget is charged per distinct uniform NAME, not per "
+                                   "image unit: a vertex+geometry+fragment program declaring {} image uniform(s) per "
+                                   "stage links when all three stages share one set of names ({} distinct) and is "
+                                   "rejected when each stage names its own copies ({} distinct), with the same "
+                                   "bindings, the same qualifiers and the same stores either way",
+                                   measurement.perStageImageUniforms, measurement.controlDistinctNames,
+                                   measurement.subjectDistinctNames);
             if (!measurement.driverMessage.empty()) {
                 detail += format(" - the driver says \"{}\"", measurement.driverMessage);
             }
-            detail +=
-                ". MobileGL names a repaired image uniform after the REPAIR rather than after the "
-                "stage, so stages that use an image alike keep one shared name and stay merged; "
-                "applications never see the link failure";
-            return DriverBugFinding{"Image locations charged per uniform name",
-                                    DriverBugVerdict::Fixed, Move(detail)};
+            detail += ". MobileGL names a repaired image uniform after the REPAIR rather than after the "
+                      "stage, so stages that use an image alike keep one shared name and stay merged; "
+                      "applications never see the link failure";
+            return DriverBugFinding{"Image locations charged per uniform name", DriverBugVerdict::Fixed, Move(detail)};
         }
 
         Optional<DriverBugFinding> ProbeCrossStageImageQualifierMergeBug(const GLESFunctionsTable& gl) {
             if (!CrossStageImageQualifierMergeDropsWrites(gl)) return std::nullopt;
-            return DriverBugFinding{
-                "Cross-stage image qualifier merge discards writes",
-                DriverBugVerdict::Fixed,
-                "an image declared `coherent writeonly` in one stage and `coherent readonly` in "
-                "another under the SAME name is merged into one uniform whose writing stage's "
-                "imageStore()s are then silently discarded - every fragment reads the "
-                "pre-store value. The identical shader pair with the two halves renamed keeps "
-                "every store, which is what proves the stage's image writes work and only the "
-                "merge is at fault. MobileGL renames the two halves (mg_imageWo_ / mg_imageRo_) so "
-                "the driver cannot merge them, and application behaviour is correct"};
+            return DriverBugFinding{"Cross-stage image qualifier merge discards writes", DriverBugVerdict::Fixed,
+                                    "an image declared `coherent writeonly` in one stage and `coherent readonly` in "
+                                    "another under the SAME name is merged into one uniform whose writing stage's "
+                                    "imageStore()s are then silently discarded - every fragment reads the "
+                                    "pre-store value. The identical shader pair with the two halves renamed keeps "
+                                    "every store, which is what proves the stage's image writes work and only the "
+                                    "merge is at fault. MobileGL renames the two halves (mg_imageWo_ / mg_imageRo_) so "
+                                    "the driver cannot merge them, and application behaviour is correct"};
         }
 
         Optional<DriverBugFinding> ProbeImageCoherencyResidualBug(const GLESFunctionsTable& gl) {
@@ -2594,37 +2515,33 @@ namespace MobileGL::MG_Util::SelfTest {
                 return measurement.totalTexels > 0 ? 100.0 * texels / measurement.totalTexels : 0.0;
             };
             return DriverBugFinding{
-                "Image write-to-read ordering within one invocation",
-                DriverBugVerdict::Unfixable,
-                format(
-                    "an imageLoad() does not observe the imageStore() that precedes it in the same "
-                    "fragment invocation for {} of {} texels ({:.2f}%) under the STRONGEST shape "
-                    "ESSL offers - a `coherent volatile` readonly/writeonly pair on one binding "
-                    "with both memoryBarrierImage() and memoryBarrier() between the store and the "
-                    "read - which is what leaves nothing to substitute. The shape MobileGL emits "
-                    "today (`coherent` plus memoryBarrierImage()) misses {} ({:.2f}%) on this "
-                    "driver. The same dependency split across two draws with a glMemoryBarrier and "
-                    "a glFinish between them is clean, so writes do become visible; it is the "
-                    "ordering inside one invocation that is not honoured. MobileGL keeps the "
-                    "coherent pair and the barrier - without them every texel is wrong - and a "
-                    "shader that reads back its own image write within one invocation cannot be "
-                    "relied on here",
-                    measurement.mismatchedTexels, measurement.totalTexels,
-                    percentOf(measurement.mismatchedTexels), measurement.emittedShapeMismatchedTexels,
-                    percentOf(measurement.emittedShapeMismatchedTexels))};
+                "Image write-to-read ordering within one invocation", DriverBugVerdict::Unfixable,
+                format("an imageLoad() does not observe the imageStore() that precedes it in the same "
+                       "fragment invocation for {} of {} texels ({:.2f}%) under the STRONGEST shape "
+                       "ESSL offers - a `coherent volatile` readonly/writeonly pair on one binding "
+                       "with both memoryBarrierImage() and memoryBarrier() between the store and the "
+                       "read - which is what leaves nothing to substitute. The shape MobileGL emits "
+                       "today (`coherent` plus memoryBarrierImage()) misses {} ({:.2f}%) on this "
+                       "driver. The same dependency split across two draws with a glMemoryBarrier and "
+                       "a glFinish between them is clean, so writes do become visible; it is the "
+                       "ordering inside one invocation that is not honoured. MobileGL keeps the "
+                       "coherent pair and the barrier - without them every texel is wrong - and a "
+                       "shader that reads back its own image write within one invocation cannot be "
+                       "relied on here",
+                       measurement.mismatchedTexels, measurement.totalTexels, percentOf(measurement.mismatchedTexels),
+                       measurement.emittedShapeMismatchedTexels, percentOf(measurement.emittedShapeMismatchedTexels))};
         }
 
         Optional<DriverBugFinding> ProbeLocatedIoBlockPayloadBug(const GLESFunctionsTable& gl) {
             const LocatedIoBlockMeasurement& measurement = LocatedIoBlocksLosePayload(gl);
             if (!measurement.detected) return std::nullopt;
-            String detail =
-                "an inter-stage interface block that carries an explicit layout(location = N) "
-                "delivers NOTHING once a geometry (or tessellation) stage is in the pipeline: the "
-                "stages compile, the program links with an empty info log, the draw raises no "
-                "error, and the consuming stage reads zeroes. The byte-identical program with the "
-                "qualifier removed from the blocks carries its payload correctly, which is what "
-                "makes this a LOCATION defect rather than an interface-block one - blocks "
-                "themselves work here";
+            String detail = "an inter-stage interface block that carries an explicit layout(location = N) "
+                            "delivers NOTHING once a geometry (or tessellation) stage is in the pipeline: the "
+                            "stages compile, the program links with an empty info log, the draw raises no "
+                            "error, and the consuming stage reads zeroes. The byte-identical program with the "
+                            "qualifier removed from the blocks carries its payload correctly, which is what "
+                            "makes this a LOCATION defect rather than an interface-block one - blocks "
+                            "themselves work here";
             detail += measurement.alsoAffectsVertexToFragment
                           ? ". A located block between a VERTEX and a FRAGMENT stage is lost on "
                             "this driver too, so the defect is wider than the repair below "
@@ -2640,17 +2557,15 @@ namespace MobileGL::MG_Util::SelfTest {
             const Bool repairDisabled =
                 MG_Config::Features.EsprytUnlocatedIoBlocks == MG_Config::QuirkOverride::ForceOff;
             if (repairDisabled) {
-                detail +=
-                    ". THE REPAIR IS DISABLED in this process: MOBILEGL_ESPRYT_UNLOCATED_IO_BLOCKS "
-                    "is set to force located blocks ON, so DirectGLES emits the location "
-                    "qualifier the driver cannot honour and the payload is lost. Unset the "
-                    "variable to get the repair back";
+                detail += ". THE REPAIR IS DISABLED in this process: MOBILEGL_ESPRYT_UNLOCATED_IO_BLOCKS "
+                          "is set to force located blocks ON, so DirectGLES emits the location "
+                          "qualifier the driver cannot honour and the payload is lost. Unset the "
+                          "variable to get the repair back";
             } else {
-                detail +=
-                    ". MobileGL emits a tessellation/geometry program's interface blocks with no "
-                    "location qualifier at all (StripIoBlockLocationsPass) and lets ES match them "
-                    "by block name and member sequence, which it does; the locations were invented "
-                    "by the cross-stage IO resolver rather than written by the application";
+                detail += ". MobileGL emits a tessellation/geometry program's interface blocks with no "
+                          "location qualifier at all (StripIoBlockLocationsPass) and lets ES match them "
+                          "by block name and member sequence, which it does; the locations were invented "
+                          "by the cross-stage IO resolver rather than written by the application";
             }
             return DriverBugFinding{"Located inter-stage interface blocks carry no payload",
                                     (repairDisabled || measurement.alsoAffectsVertexToFragment)
@@ -2668,26 +2583,23 @@ namespace MobileGL::MG_Util::SelfTest {
             // probe has fired. Should POST ever run before env parsing, the field still holds
             // its Auto default - which is also what the widening itself consults, so the row
             // and the behaviour cannot disagree.
-            const Bool widened = MG_Config::Features.EsprytWidenPacked16Storage !=
-                                 MG_Config::QuirkOverride::ForceOff;
-            String detail =
-                "the driver stores SOME 16-bit packed images (RGB565 / RGB5_A1 / RGBA4) with the "
-                "R/G/B/A fields packed from the other end of the word - which allocations get the "
-                "*_REV layout depends on shape and context history (measured here on a 30x30x12 "
-                "three-level 2D array, every level of it) - so a glCopyImageSubData, a raw "
-                "texel-block move, between a mirrored allocation and a plain one lands the fields "
-                "reversed (a 5551 word 0x0047 arrives as 0x8C20). Uploads and readbacks of the "
-                "same image are clean - the driver decodes its own layout consistently, which is "
-                "this probe's second control - so only the raw-copy path ever crosses the two "
-                "layouts. ";
+            const Bool widened = MG_Config::Features.EsprytWidenPacked16Storage != MG_Config::QuirkOverride::ForceOff;
+            String detail = "the driver stores SOME 16-bit packed images (RGB565 / RGB5_A1 / RGBA4) with the "
+                            "R/G/B/A fields packed from the other end of the word - which allocations get the "
+                            "*_REV layout depends on shape and context history (measured here on a 30x30x12 "
+                            "three-level 2D array, every level of it) - so a glCopyImageSubData, a raw "
+                            "texel-block move, between a mirrored allocation and a plain one lands the fields "
+                            "reversed (a 5551 word 0x0047 arrives as 0x8C20). Uploads and readbacks of the "
+                            "same image are clean - the driver decodes its own layout consistently, which is "
+                            "this probe's second control - so only the raw-copy path ever crosses the two "
+                            "layouts. ";
             if (widened) {
-                detail +=
-                    "MobileGL stores these three formats as 8-bit-per-channel ES storage on this "
-                    "driver instead (GL_RGB8 / GL_RGBA8, the storage their canonical shadow "
-                    "already holds and the client word round-trips through exactly), so no "
-                    "16-bit packed image is left for a copy to disagree about, at twice the "
-                    "memory for images of those formats; override with "
-                    "MOBILEGL_ESPRYT_WIDEN_PACKED16_STORAGE";
+                detail += "MobileGL stores these three formats as 8-bit-per-channel ES storage on this "
+                          "driver instead (GL_RGB8 / GL_RGBA8, the storage their canonical shadow "
+                          "already holds and the client word round-trips through exactly), so no "
+                          "16-bit packed image is left for a copy to disagree about, at twice the "
+                          "memory for images of those formats; override with "
+                          "MOBILEGL_ESPRYT_WIDEN_PACKED16_STORAGE";
                 return DriverBugFinding{
                     "glCopyImageSubData mirrors 16-bit packed texels between differently-laid-out images",
                     DriverBugVerdict::Fixed, detail};
@@ -2743,17 +2655,15 @@ namespace MobileGL::MG_Util::SelfTest {
             "4-sample images cleared to depth 0.25 / stencil 0x5A over a depth 0.75 / stencil 0xA5 "
             "sentinel: ";
         detail += DescribeWireDepthResolveProbe(measurement);
-        detail +=
-            ". On the split, inproc and tcp transports a multisample depth/stencil resolve "
-            "(glBlitFramebuffer out of a multisample framebuffer) therefore takes the shader pass "
-            "first - sample 0 fetched and written through gl_FragDepth / gl_FragStencilRefARB - and "
-            "keeps the render pass only as the fallback for what the shader cannot write; the "
-            "monolith transport never records that render pass";
+        detail += ". On the split, inproc and tcp transports a multisample depth/stencil resolve "
+                  "(glBlitFramebuffer out of a multisample framebuffer) therefore takes the shader pass "
+                  "first - sample 0 fetched and written through gl_FragDepth / gl_FragStencilRefARB - and "
+                  "keeps the render pass only as the fallback for what the shader cannot write; the "
+                  "monolith transport never records that render pass";
         if (!shaderStencilExport) {
-            detail +=
-                ". THIS DEVICE HAS NO VK_EXT_shader_stencil_export, so a fragment shader cannot write "
-                "the stencil aspect: a STENCIL resolve still falls back to the render pass and reads "
-                "back unwritten. Depth is repaired, stencil is not";
+            detail += ". THIS DEVICE HAS NO VK_EXT_shader_stencil_export, so a fragment shader cannot write "
+                      "the stencil aspect: a STENCIL resolve still falls back to the render pass and reads "
+                      "back unwritten. Depth is repaired, stencil is not";
         }
         return DriverBugFinding{"Depth/stencil render-pass resolve writes nothing",
                                 shaderStencilExport ? DriverBugVerdict::Fixed : DriverBugVerdict::Unfixable,
@@ -2768,9 +2678,8 @@ namespace MobileGL::MG_Util::SelfTest {
             if (context.getInstanceProcAddr == nullptr || context.deviceExtensions == nullptr) return std::nullopt;
             Bool renderPassArmAvailable = false, shaderStencilExport = false;
             const WireDepthResolveProbeMeasurement measurement = RunWireDepthResolveProbeOnThrowawayDevice(
-                context.getInstanceProcAddr, context.instance, context.physicalDevice,
-                context.graphicsQueueFamilyIndex, *context.deviceExtensions, renderPassArmAvailable,
-                shaderStencilExport);
+                context.getInstanceProcAddr, context.instance, context.physicalDevice, context.graphicsQueueFamilyIndex,
+                *context.deviceExtensions, renderPassArmAvailable, shaderStencilExport);
             // Without the extension there is no render-pass arm and nothing to have a bug in.
             if (!renderPassArmAvailable) return std::nullopt;
             const WireDepthResolveProbeVerdict verdict = EvaluateWireDepthResolveProbe(measurement);
@@ -2782,40 +2691,37 @@ namespace MobileGL::MG_Util::SelfTest {
             return DescribeDepthStencilResolvePassBug(measurement, shaderStencilExport);
         }
 
-
         // The same probe the Magma renderer runs at bring-up (VulkanRenderer::ArmWireE5RawReads),
         // on a throwaway device with one graphics queue.
         Optional<DriverBugFinding> ProbeE5TransferReadNormalizeBug(const VulkanDriverBugProbeContext& context) {
             using namespace MG_Backend::DirectVulkan;
             if (context.getInstanceProcAddr == nullptr) return std::nullopt;
-            const WireE5TransferProbeMeasurement measurement = RunWireE5TransferProbeOnThrowawayDevice(
-                context.getInstanceProcAddr, context.instance, context.physicalDevice,
-                context.graphicsQueueFamilyIndex);
+            const WireE5TransferProbeMeasurement measurement =
+                RunWireE5TransferProbeOnThrowawayDevice(context.getInstanceProcAddr, context.instance,
+                                                        context.physicalDevice, context.graphicsQueueFamilyIndex);
             const WireE5TransferProbeVerdict verdict = EvaluateWireE5TransferProbe(measurement);
             MGLOG_I("Driver POST: E5B9G9R9 transfer probe verdict=%s: %s", WireE5TransferProbeVerdictName(verdict),
                     DescribeWireE5TransferProbe(measurement).c_str());
             if (verdict != WireE5TransferProbeVerdict::TransferReadNormalizes) return std::nullopt;
-            String detail =
-                "vkCmdCopyImageToBuffer out of a 30x30 VK_FORMAT_E5B9G9R9_UFLOAT_PACK32 image returns "
-                "non-canonical shared-exponent words re-encoded (same value, different bits), while a "
-                "compute shader reading the same image through an R32_UINT view returns every stored "
-                "word: ";
+            String detail = "vkCmdCopyImageToBuffer out of a 30x30 VK_FORMAT_E5B9G9R9_UFLOAT_PACK32 image returns "
+                            "non-canonical shared-exponent words re-encoded (same value, different bits), while a "
+                            "compute shader reading the same image through an R32_UINT view returns every stored "
+                            "word: ";
             detail += DescribeWireE5TransferProbe(measurement);
-            detail +=
-                ". GL moves RGB9_E5 blocks bit-exactly (glGetTexImage with UNSIGNED_INT_5_9_9_9_REV, "
-                "glCopyImageSubData), so Magma reads such textures through that shader into an R32_UINT "
-                "twin and copies the twin instead (MOBILEGL_MAGMA_E5_RAW_READS=0 turns it off)";
-            return DriverBugFinding{"E5B9G9R9 transfer reads canonicalize shared exponents",
-                                    DriverBugVerdict::Fixed, Move(detail)};
+            detail += ". GL moves RGB9_E5 blocks bit-exactly (glGetTexImage with UNSIGNED_INT_5_9_9_9_REV, "
+                      "glCopyImageSubData), so Magma reads such textures through that shader into an R32_UINT "
+                      "twin and copies the twin instead (MOBILEGL_MAGMA_E5_RAW_READS=0 turns it off)";
+            return DriverBugFinding{"E5B9G9R9 transfer reads canonicalize shared exponents", DriverBugVerdict::Fixed,
+                                    Move(detail)};
         }
 
         // The same probe the Magma renderer runs at bring-up (VulkanRenderer::ArmWireCopySliceSplit).
         Optional<DriverBugFinding> ProbeCrossFormatSliceCopyBug(const VulkanDriverBugProbeContext& context) {
             using namespace MG_Backend::DirectVulkan;
             if (context.getInstanceProcAddr == nullptr) return std::nullopt;
-            const WireCopySliceProbeMeasurement measurement = RunWireCopySliceProbeOnThrowawayDevice(
-                context.getInstanceProcAddr, context.instance, context.physicalDevice,
-                context.graphicsQueueFamilyIndex);
+            const WireCopySliceProbeMeasurement measurement =
+                RunWireCopySliceProbeOnThrowawayDevice(context.getInstanceProcAddr, context.instance,
+                                                       context.physicalDevice, context.graphicsQueueFamilyIndex);
             const WireCopySliceProbeVerdict verdict = EvaluateWireCopySliceProbe(measurement);
             MGLOG_I("Driver POST: slice copy probe verdict=%s: %s", WireCopySliceProbeVerdictName(verdict),
                     DescribeWireCopySliceProbe(measurement).c_str());
@@ -2824,20 +2730,19 @@ namespace MobileGL::MG_Util::SelfTest {
                 "a vkCmdCopyImage region between a 2D array and a 3D image of DIFFERENT (size-compatible) "
                 "formats moves only its first slice, while the same copy as one region per slice is exact: ";
             detail += DescribeWireCopySliceProbe(measurement);
-            detail +=
-                ". Magma splits such glCopyImageSubData calls one slice per region "
-                "(MOBILEGL_MAGMA_SPLIT_SLICE_COPIES=0 turns it off)";
-            return DriverBugFinding{"Cross-format 2D-array <-> 3D image copies drop slices",
-                                    DriverBugVerdict::Fixed, Move(detail)};
+            detail += ". Magma splits such glCopyImageSubData calls one slice per region "
+                      "(MOBILEGL_MAGMA_SPLIT_SLICE_COPIES=0 turns it off)";
+            return DriverBugFinding{"Cross-format 2D-array <-> 3D image copies drop slices", DriverBugVerdict::Fixed,
+                                    Move(detail)};
         }
 
         // The same probe the Magma renderer runs at bring-up (VulkanRenderer::ArmWireDiscardStateReemit).
         Optional<DriverBugFinding> ProbeDiscardStateBug(const VulkanDriverBugProbeContext& context) {
             using namespace MG_Backend::DirectVulkan;
             if (context.getInstanceProcAddr == nullptr) return std::nullopt;
-            const WireDiscardStateProbeMeasurement measurement = RunWireDiscardStateProbeOnThrowawayDevice(
-                context.getInstanceProcAddr, context.instance, context.physicalDevice,
-                context.graphicsQueueFamilyIndex);
+            const WireDiscardStateProbeMeasurement measurement =
+                RunWireDiscardStateProbeOnThrowawayDevice(context.getInstanceProcAddr, context.instance,
+                                                          context.physicalDevice, context.graphicsQueueFamilyIndex);
             const WireDiscardStateProbeVerdict verdict = EvaluateWireDiscardStateProbe(measurement);
             MGLOG_I("Driver POST: discard state probe verdict=%s: %s", WireDiscardStateProbeVerdictName(verdict),
                     DescribeWireDiscardStateProbe(measurement).c_str());
@@ -2846,11 +2751,10 @@ namespace MobileGL::MG_Util::SelfTest {
                 "a draw with a rasterizerDiscardEnable pipeline drops the dynamic viewport/scissor, so a later "
                 "draw that inherits them draws nothing, while after a rasterizing draw it does: ";
             detail += DescribeWireDiscardStateProbe(measurement);
-            detail +=
-                ". Magma sets the dynamic state again after every discard draw "
-                "(MOBILEGL_MAGMA_REEMIT_STATE_AFTER_DISCARD=0 turns it off)";
-            return DriverBugFinding{"Rasterizer-discard draws drop dynamic viewport/scissor",
-                                    DriverBugVerdict::Fixed, Move(detail)};
+            detail += ". Magma sets the dynamic state again after every discard draw "
+                      "(MOBILEGL_MAGMA_REEMIT_STATE_AFTER_DISCARD=0 turns it off)";
+            return DriverBugFinding{"Rasterizer-discard draws drop dynamic viewport/scissor", DriverBugVerdict::Fixed,
+                                    Move(detail)};
         }
         using VulkanDriverBugProbeFn = Optional<DriverBugFinding> (*)(const VulkanDriverBugProbeContext&);
         constexpr VulkanDriverBugProbeFn kVulkanDriverBugProbes[] = {

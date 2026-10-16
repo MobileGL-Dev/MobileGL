@@ -88,8 +88,7 @@ void main()
                 if (m_image != 0) glDeleteTextures(1, &m_image);
                 if (m_vao != 0) glDeleteVertexArrays(1, &m_vao);
                 m_program = m_fbo = m_color = m_image = m_vao = 0;
-                while (glGetError() != GL_NO_ERROR) {
-                }
+                while (glGetError() != GL_NO_ERROR) {}
             }
 
             // imageSize() needs a fragment-stage image uniform; a driver that serves none should
@@ -99,8 +98,7 @@ void main()
                 GLint maxFragmentImageUniforms = 0;
                 glGetIntegerv(GL_MAX_IMAGE_UNITS, &maxImageUnits);
                 glGetIntegerv(GL_MAX_FRAGMENT_IMAGE_UNIFORMS, &maxFragmentImageUniforms);
-                while (glGetError() != GL_NO_ERROR) {
-                }
+                while (glGetError() != GL_NO_ERROR) {}
                 return maxImageUnits >= 1 && maxFragmentImageUniforms >= 1;
             }
 
@@ -211,10 +209,9 @@ void main()
 
         unsigned char centre[4] = {0, 0, 0, 0};
         DrawAndReadCentre(32, 32, centre);
-        EXPECT_EQ(static_cast<int>(centre[0]), 0) << "the FIRST draw already disagrees about imageSize(): got ("
-                                                  << static_cast<int>(centre[0]) << ", "
-                                                  << static_cast<int>(centre[1]) << ", "
-                                                  << static_cast<int>(centre[2]) << ")";
+        EXPECT_EQ(static_cast<int>(centre[0]), 0)
+            << "the FIRST draw already disagrees about imageSize(): got (" << static_cast<int>(centre[0]) << ", "
+            << static_cast<int>(centre[1]) << ", " << static_cast<int>(centre[2]) << ")";
         EXPECT_EQ(static_cast<int>(centre[1]), 255);
 
         // The re-spec. The image unit is deliberately NOT re-bound: GL 4.6 core 8.26 says the
@@ -226,8 +223,8 @@ void main()
         DrawAndReadCentre(16, 16, centre);
         EXPECT_EQ(static_cast<int>(centre[0]), 0)
             << "after the re-spec the draw still sees the OLD image size; centre pixel was ("
-            << static_cast<int>(centre[0]) << ", " << static_cast<int>(centre[1]) << ", "
-            << static_cast<int>(centre[2]) << ")";
+            << static_cast<int>(centre[0]) << ", " << static_cast<int>(centre[1]) << ", " << static_cast<int>(centre[2])
+            << ")";
         EXPECT_EQ(static_cast<int>(centre[1]), 255);
     }
 

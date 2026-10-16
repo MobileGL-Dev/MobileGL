@@ -41,26 +41,32 @@ namespace MobileGL::MG_Remote::Server {
     struct ApplyThreadPolicy {
         Uint64 requestedMask = 0; // 0 = make no affinity call
         Uint32 spinUs = 0;
-        Bool recognised = true;   // false: the affinity text was not `auto`, `off` or a number
-        const char* rule = "";    // what the log line names
+        Bool recognised = true; // false: the affinity text was not `auto`, `off` or a number
+        const char* rule = "";  // what the log line names
     };
 
     inline const char* ApplyPeerName(ApplyPeer peer) {
         switch (peer) {
-        case ApplyPeer::InProcess: return "in-process";
-        case ApplyPeer::Forked: return "forked";
-        case ApplyPeer::Connected: return "connected";
+        case ApplyPeer::InProcess:
+            return "in-process";
+        case ApplyPeer::Forked:
+            return "forked";
+        case ApplyPeer::Connected:
+            return "connected";
         }
         return "unknown";
     }
 
     inline Uint32 PopCount64(Uint64 mask) {
         Uint32 count = 0;
-        for (; mask != 0; mask &= mask - 1) ++count;
+        for (; mask != 0; mask &= mask - 1)
+            ++count;
         return count;
     }
 
-    inline Uint64 LowestBit64(Uint64 mask) { return mask & (~mask + 1); }
+    inline Uint64 LowestBit64(Uint64 mask) {
+        return mask & (~mask + 1);
+    }
 
     // Why ReservedApplyCore answered what it did - the log line names it.
     enum class ReservedCoreReason : Uint8 {

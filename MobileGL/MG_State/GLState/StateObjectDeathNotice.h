@@ -54,8 +54,7 @@ namespace MobileGL::MG_State::GLState {
         return g_stateObjectDeathOps;
     }
 
-    inline void NotifyStateObjectDestroyed(MG_Pipe::MGPipeKind kind, Uint64 lifetimeId,
-                                           MG_Pipe::MGPipeHandle handle) {
+    inline void NotifyStateObjectDestroyed(MG_Pipe::MGPipeKind kind, Uint64 lifetimeId, MG_Pipe::MGPipeHandle handle) {
         const StateObjectDeathOps* ops = g_stateObjectDeathOps;
         if (ops == nullptr || ops->OnDestroyed == nullptr) return;
         ops->OnDestroyed(kind, lifetimeId, handle);

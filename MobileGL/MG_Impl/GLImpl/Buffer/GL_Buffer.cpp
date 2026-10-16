@@ -138,15 +138,14 @@ namespace MobileGL::MG_Impl::GLImpl {
                 return 0;
             }
 
-            const TextureInternalFormat internal =
-                MG_Util::ConvertGLEnumToTextureInternalFormat(internalformat);
+            const TextureInternalFormat internal = MG_Util::ConvertGLEnumToTextureInternalFormat(internalformat);
             const SizeT elementSize = MG_Util::GetSizedInternalFormatSizeInBytes(internal);
             if (elementSize == 0) {
                 MG_State::pGLContext->RecordError(
                     ErrorCode::InvalidEnum,
-                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", GetBufferOpName(op),
-                                                 std::format("internalformat 0x{:X} has no known element size.",
-                                                             internalformat)));
+                    MakeUnique<GenericErrorInfo>(
+                        "MG_Impl/GLImpl", GetBufferOpName(op),
+                        std::format("internalformat 0x{:X} has no known element size.", internalformat)));
                 return 0;
             }
 
@@ -157,9 +156,8 @@ namespace MobileGL::MG_Impl::GLImpl {
                                       GLsizeiptr size, SizeT patternSize, BufferOp op) {
             if (offset < 0 || size < 0) {
                 MG_State::pGLContext->RecordError(
-                    ErrorCode::InvalidValue,
-                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", GetBufferOpName(op),
-                                                 "Offset and size must be non-negative."));
+                    ErrorCode::InvalidValue, MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", GetBufferOpName(op),
+                                                                          "Offset and size must be non-negative."));
                 return false;
             }
 
@@ -173,10 +171,9 @@ namespace MobileGL::MG_Impl::GLImpl {
             }
 
             if (static_cast<SizeT>(offset) + static_cast<SizeT>(size) > bufferObject->GetSize()) {
-                MG_State::pGLContext->RecordError(
-                    ErrorCode::InvalidValue,
-                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", GetBufferOpName(op),
-                                                 "Offset and size exceed buffer size."));
+                MG_State::pGLContext->RecordError(ErrorCode::InvalidValue,
+                                                  MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", GetBufferOpName(op),
+                                                                               "Offset and size exceed buffer size."));
                 return false;
             }
 
@@ -191,8 +188,8 @@ namespace MobileGL::MG_Impl::GLImpl {
             return true;
         }
 
-        Bool BuildClearPattern(GLenum internalformat, GLenum format, GLenum type, const void* data,
-                               SizeT patternSize, BufferOp op, Vector<Uint8>& pattern) {
+        Bool BuildClearPattern(GLenum internalformat, GLenum format, GLenum type, const void* data, SizeT patternSize,
+                               BufferOp op, Vector<Uint8>& pattern) {
             const TextureInternalFormat internal = MG_Util::ConvertGLEnumToTextureInternalFormat(internalformat);
             const TextureInputFormat inputFormat = MG_Util::ConvertGLEnumToTextureInputFormat(format);
             const TexturePixelDataType inputType = MG_Util::ConvertGLEnumToTexturePixelDataType(type);
@@ -212,8 +209,8 @@ namespace MobileGL::MG_Impl::GLImpl {
                 inputPixel = zeroInput.data();
             }
 
-            if (!MG_Util::PixelStoreProcessor::ConvertOnePixelToInternal(
-                    internal, inputFormat, inputType, inputPixel, pattern)) {
+            if (!MG_Util::PixelStoreProcessor::ConvertOnePixelToInternal(internal, inputFormat, inputType, inputPixel,
+                                                                         pattern)) {
                 MG_State::pGLContext->RecordError(
                     ErrorCode::InvalidValue,
                     MakeUnique<GenericErrorInfo>(
@@ -233,8 +230,8 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
 
         void ClearBufferRange_State(const SharedPtr<MG_State::GLState::BufferObject>& bufferObject,
-                                    GLenum internalformat, GLintptr offset, GLsizeiptr size,
-                                    GLenum format, GLenum type, const void* data, BufferOp op) {
+                                    GLenum internalformat, GLintptr offset, GLsizeiptr size, GLenum format, GLenum type,
+                                    const void* data, BufferOp op) {
             const SizeT patternSize = GetClearPatternSize(internalformat, format, type, op);
             if (patternSize == 0) return;
             if (!ValidateBufferClearRange(bufferObject, offset, size, patternSize, op)) return;
@@ -298,8 +295,8 @@ namespace MobileGL::MG_Impl::GLImpl {
             if (!MG_Config::Features.CoherentAsFlush) return accessBits;
             if (!(accessBits & BufferMappingAccessBit::FlushExplicit)) return accessBits;
             if (!(accessBits & BufferMappingAccessBit::Persistent)) return accessBits;
-            accessBits = Flags<BufferMappingAccessBit>(
-                accessBits.GetRaw() & ~static_cast<Uint>(BufferMappingAccessBit::FlushExplicit));
+            accessBits = Flags<BufferMappingAccessBit>(accessBits.GetRaw() &
+                                                       ~static_cast<Uint>(BufferMappingAccessBit::FlushExplicit));
             accessBits |= BufferMappingAccessBit::Coherent;
             return accessBits;
         }
@@ -318,8 +315,9 @@ namespace MobileGL::MG_Impl::GLImpl {
             if ((flags & GL_MAP_PERSISTENT_BIT) && !(flags & (GL_MAP_READ_BIT | GL_MAP_WRITE_BIT))) {
                 MG_State::pGLContext->RecordError(
                     ErrorCode::InvalidValue,
-                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", GetBufferOpName(op),
-                                                 "GL_MAP_PERSISTENT_BIT requires GL_MAP_READ_BIT or GL_MAP_WRITE_BIT."));
+                    MakeUnique<GenericErrorInfo>(
+                        "MG_Impl/GLImpl", GetBufferOpName(op),
+                        "GL_MAP_PERSISTENT_BIT requires GL_MAP_READ_BIT or GL_MAP_WRITE_BIT."));
                 return false;
             }
 
@@ -382,9 +380,9 @@ namespace MobileGL::MG_Impl::GLImpl {
         void GetBufferParameteriv_Object(const SharedPtr<MG_State::GLState::BufferObject>& bufferObject, GLenum pname,
                                          GLint* params, BufferOp op) {
             if (!params) {
-                MG_State::pGLContext->RecordError(
-                    ErrorCode::InvalidValue, MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", GetBufferOpName(op),
-                                                                          "Params pointer cannot be null."));
+                MG_State::pGLContext->RecordError(ErrorCode::InvalidValue,
+                                                  MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", GetBufferOpName(op),
+                                                                               "Params pointer cannot be null."));
                 return;
             }
 
@@ -415,10 +413,9 @@ namespace MobileGL::MG_Impl::GLImpl {
             case GL_BUFFER_ACCESS_FLAGS:
                 // The MapBufferRange flags verbatim; glMapBuffer's access enum has already been
                 // normalised into the same bits. Zero while the buffer is not mapped.
-                *params = bufferObject->IsMapped()
-                    ? static_cast<GLint>(
-                          MG_Util::ConvertBufferMappingAccessToGLEnum(bufferObject->GetMappingAccess()))
-                    : 0;
+                *params = bufferObject->IsMapped() ? static_cast<GLint>(MG_Util::ConvertBufferMappingAccessToGLEnum(
+                                                         bufferObject->GetMappingAccess()))
+                                                   : 0;
                 break;
             case GL_BUFFER_MAPPED:
                 *params = bufferObject->IsMapped() ? GL_TRUE : GL_FALSE;
@@ -437,8 +434,9 @@ namespace MobileGL::MG_Impl::GLImpl {
                 break;
             default:
                 MG_State::pGLContext->RecordError(
-                    ErrorCode::InvalidEnum, MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", GetBufferOpName(op),
-                                                                         std::format("Invalid pname enum: 0x{:X}", pname)));
+                    ErrorCode::InvalidEnum,
+                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", GetBufferOpName(op),
+                                                 std::format("Invalid pname enum: 0x{:X}", pname)));
                 break;
             }
         }
@@ -446,9 +444,9 @@ namespace MobileGL::MG_Impl::GLImpl {
         void GetBufferParameteri64v_Object(const SharedPtr<MG_State::GLState::BufferObject>& bufferObject, GLenum pname,
                                            GLint64* params, BufferOp op) {
             if (!params) {
-                MG_State::pGLContext->RecordError(
-                    ErrorCode::InvalidValue, MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", GetBufferOpName(op),
-                                                                          "Params pointer cannot be null."));
+                MG_State::pGLContext->RecordError(ErrorCode::InvalidValue,
+                                                  MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", GetBufferOpName(op),
+                                                                               "Params pointer cannot be null."));
                 return;
             }
 
@@ -460,7 +458,8 @@ namespace MobileGL::MG_Impl::GLImpl {
                 *params = static_cast<GLint64>(bufferObject->GetMappedRange().start);
                 break;
             case GL_BUFFER_MAP_LENGTH:
-                *params = static_cast<GLint64>(bufferObject->GetMappedRange().end - bufferObject->GetMappedRange().start);
+                *params =
+                    static_cast<GLint64>(bufferObject->GetMappedRange().end - bufferObject->GetMappedRange().start);
                 break;
             default: {
                 GLint value = 0;
@@ -474,15 +473,16 @@ namespace MobileGL::MG_Impl::GLImpl {
         void GetBufferPointerv_Object(const SharedPtr<MG_State::GLState::BufferObject>& bufferObject, GLenum pname,
                                       void** params, BufferOp op) {
             if (!params) {
-                MG_State::pGLContext->RecordError(
-                    ErrorCode::InvalidValue, MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", GetBufferOpName(op),
-                                                                          "Params pointer cannot be null."));
+                MG_State::pGLContext->RecordError(ErrorCode::InvalidValue,
+                                                  MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", GetBufferOpName(op),
+                                                                               "Params pointer cannot be null."));
                 return;
             }
             if (pname != GL_BUFFER_MAP_POINTER) {
                 MG_State::pGLContext->RecordError(
-                    ErrorCode::InvalidEnum, MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", GetBufferOpName(op),
-                                                                         std::format("Invalid pname enum: 0x{:X}", pname)));
+                    ErrorCode::InvalidEnum,
+                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", GetBufferOpName(op),
+                                                 std::format("Invalid pname enum: 0x{:X}", pname)));
                 return;
             }
             *params = bufferObject->GetMappedPointer();
@@ -577,8 +577,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             // time (leaving Persistent|Coherent), so honor the app's flush on such a map as
             // a no-op: its writes reach the backend without explicit flushes. Other maps
             // keep the spec error.
-            if (MG_Config::Features.CoherentAsFlush &&
-                (mappingAccess & BufferMappingAccessBit::Persistent) &&
+            if (MG_Config::Features.CoherentAsFlush && (mappingAccess & BufferMappingAccessBit::Persistent) &&
                 (mappingAccess & BufferMappingAccessBit::Coherent)) {
                 return;
             }
@@ -690,7 +689,8 @@ namespace MobileGL::MG_Impl::GLImpl {
             }
         }
 
-        if ((accessBits & BufferMappingAccessBit::Persistent) && !(accessBits & (BufferMappingAccessBit::Read | BufferMappingAccessBit::Write))) {
+        if ((accessBits & BufferMappingAccessBit::Persistent) &&
+            !(accessBits & (BufferMappingAccessBit::Read | BufferMappingAccessBit::Write))) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,
                 MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "MapBufferRange_State",
@@ -882,10 +882,9 @@ namespace MobileGL::MG_Impl::GLImpl {
 
         SizeT bufferSize = bufferObject->GetSize();
         if (static_cast<SizeT>(offset) + static_cast<SizeT>(size) > bufferSize) {
-            MG_State::pGLContext->RecordError(
-                ErrorCode::InvalidValue,
-                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "BufferSubData_State",
-                                             "Offset and size exceed buffer size."));
+            MG_State::pGLContext->RecordError(ErrorCode::InvalidValue,
+                                              MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "BufferSubData_State",
+                                                                           "Offset and size exceed buffer size."));
             return;
         }
 
@@ -899,9 +898,8 @@ namespace MobileGL::MG_Impl::GLImpl {
             (offset < mappedRange.end) && (offset + size > mappedRange.start)) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,
-                MakeUnique<GenericErrorInfo>(
-                    "MG_Impl/GLImpl", "BufferSubData_State",
-                    "Cannot modify a non-persistently mapped buffer object."));
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "BufferSubData_State",
+                                             "Cannot modify a non-persistently mapped buffer object."));
             return;
         }
 
@@ -938,15 +936,13 @@ namespace MobileGL::MG_Impl::GLImpl {
 
         SizeT bufferSize = bufferObject->GetSize();
         if (static_cast<SizeT>(offset) + static_cast<SizeT>(size) > bufferSize) {
-            MG_State::pGLContext->RecordError(
-                ErrorCode::InvalidValue,
-                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "GetBufferSubData_State",
-                                             "Offset and size exceed buffer size."));
+            MG_State::pGLContext->RecordError(ErrorCode::InvalidValue,
+                                              MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "GetBufferSubData_State",
+                                                                           "Offset and size exceed buffer size."));
             return;
         }
 
-        if (bufferObject->IsMapped() &&
-            !(bufferObject->GetMappingAccess() & BufferMappingAccessBit::Persistent)) {
+        if (bufferObject->IsMapped() && !(bufferObject->GetMappingAccess() & BufferMappingAccessBit::Persistent)) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,
                 MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "GetBufferSubData_State",
@@ -966,9 +962,8 @@ namespace MobileGL::MG_Impl::GLImpl {
 
         if (size < 0 || offset < 0) {
             MG_State::pGLContext->RecordError(
-                ErrorCode::InvalidValue,
-                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "GetNamedBufferSubData_State",
-                                             "Offset and size must be non-negative."));
+                ErrorCode::InvalidValue, MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "GetNamedBufferSubData_State",
+                                                                      "Offset and size must be non-negative."));
             return;
         }
 
@@ -977,14 +972,12 @@ namespace MobileGL::MG_Impl::GLImpl {
 
         if (static_cast<SizeT>(offset) + static_cast<SizeT>(size) > bufferObject->GetSize()) {
             MG_State::pGLContext->RecordError(
-                ErrorCode::InvalidValue,
-                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "GetNamedBufferSubData_State",
-                                             "Offset and size exceed buffer size."));
+                ErrorCode::InvalidValue, MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "GetNamedBufferSubData_State",
+                                                                      "Offset and size exceed buffer size."));
             return;
         }
 
-        if (bufferObject->IsMapped() &&
-            !(bufferObject->GetMappingAccess() & BufferMappingAccessBit::Persistent)) {
+        if (bufferObject->IsMapped() && !(bufferObject->GetMappingAccess() & BufferMappingAccessBit::Persistent)) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,
                 MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "GetNamedBufferSubData_State",
@@ -1049,10 +1042,9 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (!ValidateStorageFlags(flags, BufferOp::BufferStorage)) return;
 
         if (bufferObject->IsImmutableStorage()) {
-            MG_State::pGLContext->RecordError(
-                ErrorCode::InvalidOperation,
-                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "BufferStorage_State",
-                                             "Buffer already has immutable storage."));
+            MG_State::pGLContext->RecordError(ErrorCode::InvalidOperation,
+                                              MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "BufferStorage_State",
+                                                                           "Buffer already has immutable storage."));
             return;
         }
         bufferObject->AllocateImmutableStorage(static_cast<SizeT>(size), data, flags);
@@ -1066,10 +1058,9 @@ namespace MobileGL::MG_Impl::GLImpl {
             return;
         }
         if (n > 0 && !buffers) {
-            MG_State::pGLContext->RecordError(
-                ErrorCode::InvalidValue,
-                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "CreateBuffers_State",
-                                             "Buffer output pointer cannot be null."));
+            MG_State::pGLContext->RecordError(ErrorCode::InvalidValue,
+                                              MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "CreateBuffers_State",
+                                                                           "Buffer output pointer cannot be null."));
             return;
         }
 
@@ -1095,10 +1086,9 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (!ValidateStorageFlags(flags, BufferOp::NamedBufferStorage)) return;
 
         if (bufferObject->IsImmutableStorage()) {
-            MG_State::pGLContext->RecordError(
-                ErrorCode::InvalidOperation,
-                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "NamedBufferStorage_State",
-                                             "Buffer already has immutable storage."));
+            MG_State::pGLContext->RecordError(ErrorCode::InvalidOperation,
+                                              MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "NamedBufferStorage_State",
+                                                                           "Buffer already has immutable storage."));
             return;
         }
         bufferObject->AllocateImmutableStorage(static_cast<SizeT>(size), data, flags);
@@ -1132,17 +1122,15 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     void NamedBufferSubData_State(GLuint buffer, GLintptr offset, GLsizeiptr size, const void* data) {
         if (!data) {
-            MG_State::pGLContext->RecordError(
-                ErrorCode::NoError,
-                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "NamedBufferSubData_State",
-                                             "Data pointer cannot be null."));
+            MG_State::pGLContext->RecordError(ErrorCode::NoError,
+                                              MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "NamedBufferSubData_State",
+                                                                           "Data pointer cannot be null."));
             return;
         }
         if (size < 0 || offset < 0) {
-            MG_State::pGLContext->RecordError(
-                ErrorCode::InvalidValue,
-                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "NamedBufferSubData_State",
-                                             "Offset and size must be non-negative."));
+            MG_State::pGLContext->RecordError(ErrorCode::InvalidValue,
+                                              MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "NamedBufferSubData_State",
+                                                                           "Offset and size must be non-negative."));
             return;
         }
 
@@ -1157,10 +1145,9 @@ namespace MobileGL::MG_Impl::GLImpl {
             return;
         }
         if (static_cast<SizeT>(offset) + static_cast<SizeT>(size) > bufferObject->GetSize()) {
-            MG_State::pGLContext->RecordError(
-                ErrorCode::InvalidValue,
-                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "NamedBufferSubData_State",
-                                             "Offset and size exceed buffer size."));
+            MG_State::pGLContext->RecordError(ErrorCode::InvalidValue,
+                                              MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "NamedBufferSubData_State",
+                                                                           "Offset and size exceed buffer size."));
             return;
         }
         const auto mappingAccess = bufferObject->GetMappingAccess();
@@ -1181,9 +1168,8 @@ namespace MobileGL::MG_Impl::GLImpl {
                                       GLsizeiptr size) {
         if (size < 0 || readOffset < 0 || writeOffset < 0) {
             MG_State::pGLContext->RecordError(
-                ErrorCode::InvalidValue,
-                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "CopyNamedBufferSubData_State",
-                                             "Offset and size must be non-negative."));
+                ErrorCode::InvalidValue, MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "CopyNamedBufferSubData_State",
+                                                                      "Offset and size must be non-negative."));
             return;
         }
 
@@ -1229,23 +1215,24 @@ namespace MobileGL::MG_Impl::GLImpl {
     void ClearBufferData_State(GLenum target, GLenum internalformat, GLenum format, GLenum type, const void* data) {
         auto bufferObject = GetBoundBufferObject(target, BufferOp::ClearBufferData);
         if (!bufferObject) return;
-        ClearBufferRange_State(bufferObject, internalformat, 0, static_cast<GLsizeiptr>(bufferObject->GetSize()), format,
-                               type, data, BufferOp::ClearBufferData);
+        ClearBufferRange_State(bufferObject, internalformat, 0, static_cast<GLsizeiptr>(bufferObject->GetSize()),
+                               format, type, data, BufferOp::ClearBufferData);
     }
 
-    void ClearBufferSubData_State(GLenum target, GLenum internalformat, GLintptr offset, GLsizeiptr size,
-                                  GLenum format, GLenum type, const void* data) {
+    void ClearBufferSubData_State(GLenum target, GLenum internalformat, GLintptr offset, GLsizeiptr size, GLenum format,
+                                  GLenum type, const void* data) {
         auto bufferObject = GetBoundBufferObject(target, BufferOp::ClearBufferSubData);
         if (!bufferObject) return;
         ClearBufferRange_State(bufferObject, internalformat, offset, size, format, type, data,
                                BufferOp::ClearBufferSubData);
     }
 
-    void ClearNamedBufferData_State(GLuint buffer, GLenum internalformat, GLenum format, GLenum type, const void* data) {
+    void ClearNamedBufferData_State(GLuint buffer, GLenum internalformat, GLenum format, GLenum type,
+                                    const void* data) {
         auto bufferObject = GetNamedBufferObject(buffer, BufferOp::ClearNamedBufferData);
         if (!bufferObject) return;
-        ClearBufferRange_State(bufferObject, internalformat, 0, static_cast<GLsizeiptr>(bufferObject->GetSize()), format,
-                               type, data, BufferOp::ClearNamedBufferData);
+        ClearBufferRange_State(bufferObject, internalformat, 0, static_cast<GLsizeiptr>(bufferObject->GetSize()),
+                               format, type, data, BufferOp::ClearNamedBufferData);
     }
 
     void ClearNamedBufferSubData_State(GLuint buffer, GLenum internalformat, GLintptr offset, GLsizeiptr size,
@@ -1291,23 +1278,20 @@ namespace MobileGL::MG_Impl::GLImpl {
 
         if (length < 0 || offset < 0) {
             MG_State::pGLContext->RecordError(
-                ErrorCode::InvalidValue,
-                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "MapNamedBufferRange_State",
-                                             "Offset and length must be non-negative."));
+                ErrorCode::InvalidValue, MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "MapNamedBufferRange_State",
+                                                                      "Offset and length must be non-negative."));
             return nullptr;
         }
         if (length == 0) {
             MG_State::pGLContext->RecordError(
-                ErrorCode::InvalidOperation,
-                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "MapNamedBufferRange_State",
-                                             "Length must be greater than zero."));
+                ErrorCode::InvalidOperation, MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "MapNamedBufferRange_State",
+                                                                          "Length must be greater than zero."));
             return nullptr;
         }
         if (static_cast<SizeT>(offset) + static_cast<SizeT>(length) > bufferObject->GetSize()) {
             MG_State::pGLContext->RecordError(
-                ErrorCode::InvalidValue,
-                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "MapNamedBufferRange_State",
-                                             "Offset and length exceed buffer size."));
+                ErrorCode::InvalidValue, MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "MapNamedBufferRange_State",
+                                                                      "Offset and length exceed buffer size."));
             return nullptr;
         }
 
@@ -1326,8 +1310,9 @@ namespace MobileGL::MG_Impl::GLImpl {
             if (accessBits & invalidFlags) {
                 MG_State::pGLContext->RecordError(
                     ErrorCode::InvalidOperation,
-                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "MapNamedBufferRange_State",
-                                                 "GL_MAP_READ_BIT cannot be combined with invalidation or unsynchronized flags."));
+                    MakeUnique<GenericErrorInfo>(
+                        "MG_Impl/GLImpl", "MapNamedBufferRange_State",
+                        "GL_MAP_READ_BIT cannot be combined with invalidation or unsynchronized flags."));
                 return nullptr;
             }
         }
@@ -1338,7 +1323,8 @@ namespace MobileGL::MG_Impl::GLImpl {
                                              "GL_MAP_FLUSH_EXPLICIT_BIT requires GL_MAP_WRITE_BIT."));
             return nullptr;
         }
-        if ((accessBits & BufferMappingAccessBit::Persistent) && !(accessBits & (BufferMappingAccessBit::Read | BufferMappingAccessBit::Write))) {
+        if ((accessBits & BufferMappingAccessBit::Persistent) &&
+            !(accessBits & (BufferMappingAccessBit::Read | BufferMappingAccessBit::Write))) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,
                 MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "MapNamedBufferRange_State",
@@ -1388,10 +1374,10 @@ namespace MobileGL::MG_Impl::GLImpl {
         auto bufferObject = GetNamedBufferObject(buffer, BufferOp::FlushMappedNamedBufferRange);
         if (!bufferObject) return;
         if (length < 0 || offset < 0) {
-            MG_State::pGLContext->RecordError(
-                ErrorCode::InvalidValue,
-                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "FlushMappedNamedBufferRange_State",
-                                             "Offset and length must be non-negative."));
+            MG_State::pGLContext->RecordError(ErrorCode::InvalidValue,
+                                              MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl",
+                                                                           "FlushMappedNamedBufferRange_State",
+                                                                           "Offset and length must be non-negative."));
             return;
         }
         if (!bufferObject->IsMapped()) {
@@ -1403,25 +1389,25 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
         const auto mappedRange = bufferObject->GetMappedRange();
         if (static_cast<SizeT>(offset) + static_cast<SizeT>(length) > mappedRange.end - mappedRange.start) {
-            MG_State::pGLContext->RecordError(
-                ErrorCode::InvalidValue,
-                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "FlushMappedNamedBufferRange_State",
-                                             "Offset and length exceed mapped range."));
+            MG_State::pGLContext->RecordError(ErrorCode::InvalidValue,
+                                              MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl",
+                                                                           "FlushMappedNamedBufferRange_State",
+                                                                           "Offset and length exceed mapped range."));
             return;
         }
         const auto namedMappingAccess = bufferObject->GetMappingAccess();
         if (!(namedMappingAccess & BufferMappingAccessBit::FlushExplicit)) {
             // See FlushMappedBufferRange_State: rewritten coherent-as-flush persistent maps
             // tolerate app flushes as no-ops.
-            if (MG_Config::Features.CoherentAsFlush &&
-                (namedMappingAccess & BufferMappingAccessBit::Persistent) &&
+            if (MG_Config::Features.CoherentAsFlush && (namedMappingAccess & BufferMappingAccessBit::Persistent) &&
                 (namedMappingAccess & BufferMappingAccessBit::Coherent)) {
                 return;
             }
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,
-                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "FlushMappedNamedBufferRange_State",
-                                             "Cannot flush a buffer object that is not mapped with GL_MAP_FLUSH_EXPLICIT_BIT."));
+                MakeUnique<GenericErrorInfo>(
+                    "MG_Impl/GLImpl", "FlushMappedNamedBufferRange_State",
+                    "Cannot flush a buffer object that is not mapped with GL_MAP_FLUSH_EXPLICIT_BIT."));
             return;
         }
         bufferObject->FlushMemoryRange(static_cast<SizeT>(offset), static_cast<SizeT>(length));
@@ -1548,8 +1534,8 @@ namespace MobileGL::MG_Impl::GLImpl {
     // They apply only to a non-zero buffer: buffer 0 detaches the binding point and ignores
     // offset and size, which is also how glBindBuffersRange spells "reset this element"
     // (a NULL buffers array, or a zero entry inside one).
-    static Bool ValidateBufferRangeOffsetAndSize(GLenum target, GLintptr offset, GLsizeiptr size,
-                                                 const char* funcName, Bool hasBuffer = true) {
+    static Bool ValidateBufferRangeOffsetAndSize(GLenum target, GLintptr offset, GLsizeiptr size, const char* funcName,
+                                                 Bool hasBuffer = true) {
         if (hasBuffer && size <= 0) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidValue,
@@ -1578,10 +1564,10 @@ namespace MobileGL::MG_Impl::GLImpl {
             if (alignment > 0 && (offset % static_cast<GLintptr>(alignment)) != 0) {
                 MG_State::pGLContext->RecordError(
                     ErrorCode::InvalidValue,
-                    MakeUnique<GenericErrorInfo>(
-                        "MG_Impl/GLImpl", funcName,
-                        std::format("offset ({}) must be a multiple of {} ({}).", offset,
-                                    MG_Util::ConvertGLEnumToString(alignmentQuery), alignment)));
+                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", funcName,
+                                                 std::format("offset ({}) must be a multiple of {} ({}).", offset,
+                                                             MG_Util::ConvertGLEnumToString(alignmentQuery),
+                                                             alignment)));
                 return false;
             }
         }

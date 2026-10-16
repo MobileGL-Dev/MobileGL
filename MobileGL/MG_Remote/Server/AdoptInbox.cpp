@@ -32,15 +32,18 @@ namespace MobileGL::MG_Remote::Server {
         }
     } // namespace
 
-    AdoptInbox::~AdoptInbox() { Clear(); }
+    AdoptInbox::~AdoptInbox() {
+        Clear();
+    }
 
     void AdoptInbox::Clear() {
-        for (auto& [seq, kept] : m_kept) CloseFd(kept.fd);
+        for (auto& [seq, kept] : m_kept)
+            CloseFd(kept.fd);
         m_kept.clear();
     }
 
-    AdoptInbox::Outcome AdoptInbox::Take(Uint64 seq, Uint32 timeoutMs, int* outFd,
-                                         Transport::AdoptT0::Offer* outOffer, std::string& why) {
+    AdoptInbox::Outcome AdoptInbox::Take(Uint64 seq, Uint32 timeoutMs, int* outFd, Transport::AdoptT0::Offer* outOffer,
+                                         std::string& why) {
         return TakeKind(Kind::T0, seq, timeoutMs, outFd, outOffer, why);
     }
 
@@ -71,13 +74,15 @@ namespace MobileGL::MG_Remote::Server {
         const auto deadline = Clock::now() + std::chrono::milliseconds(timeoutMs);
         for (;;) {
             const auto now = Clock::now();
-            const Uint32 left = now >= deadline ? 0u
-                : static_cast<Uint32>(std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now).count());
+            const Uint32 left =
+                now >= deadline ? 0u
+                                : static_cast<Uint32>(
+                                      std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now).count());
             int fd = -1;
             Uint8 sideband[Transport::FdPassing::kMaxSidebandBytes] = {};
             std::uint64_t sidebandSize = 0;
-            const MobileGLResult received = m_transport->ReceiveFd(
-                &fd, MobileGLMutableByteSpan{sideband, sizeof(sideband)}, &sidebandSize, left);
+            const MobileGLResult received =
+                m_transport->ReceiveFd(&fd, MobileGLMutableByteSpan{sideband, sizeof(sideband)}, &sidebandSize, left);
             if (received == MOBILEGL_ERR_TIMEOUT) {
                 why = std::string(kind == Kind::T0 ? "no store" : "no shared-image descriptor") +
                       " arrived on the aux socket within " + std::to_string(timeoutMs) + " ms of its record";

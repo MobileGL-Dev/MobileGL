@@ -12,8 +12,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
     namespace BufferImpl {
         // See Managers.h for why these two are named functions over the applier state and
         // nothing else.
-        Uint ResolveDrawVertexBuffersFromRecord(const MG_Pipe::MGPipeApplierState& st,
-                                                DrawVertexBufferRequest* out, Uint capacity) {
+        Uint ResolveDrawVertexBuffersFromRecord(const MG_Pipe::MGPipeApplierState& st, DrawVertexBufferRequest* out,
+                                                Uint capacity) {
             Uint count = 0;
             const Uint32 begin = st.VertexBufferStart;
             const Uint32 end = begin + st.VertexBufferCount;
@@ -33,7 +33,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 if (alreadySeen) continue;
                 if (count >= capacity) {
                     MGLOG_E_ONCE("MGPipe: the vertex-buffer window named more distinct buffers than "
-                                 "a draw can hold (%u); the tail is dropped", capacity);
+                                 "a draw can hold (%u); the tail is dropped",
+                                 capacity);
                     break;
                 }
                 out[count].Res = binding.Res;
@@ -97,8 +98,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 end = std::min(end, static_cast<SizeT>(g_GLESCapabilities.MaxUniformBufferBindings));
             }
             for (SizeT i = start; i < end; ++i) {
-                const MG_Pipe::MGPBufferRange& entry =
-                    st.BoundShaderBuffers[shaderBufferClass][i];
+                const MG_Pipe::MGPBufferRange& entry = st.BoundShaderBuffers[shaderBufferClass][i];
                 if (MG_Pipe::MGPipeHandleIsNull(entry.Res)) {
                     BindBufferBaseCached(glTarget, static_cast<GLuint>(i), 0);
                     continue;
@@ -106,8 +106,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 auto* backendResource = EnsureBufferResourceForHandle(nullptr, entry.Res);
                 if (!backendResource || backendResource->id == 0) {
                     MGLOG_E_ONCE("No backend buffer found for %s binding point %zu (handle {%u, %u}).",
-                                 MG_Util::ConvertGLEnumToString(glTarget).c_str(), i, entry.Res.Slot,
-                                 entry.Res.Gen);
+                                 MG_Util::ConvertGLEnumToString(glTarget).c_str(), i, entry.Res.Slot, entry.Res.Gen);
                     continue;
                 }
                 // P8-C: the SERVER's half of the mark MarkShaderStorageBuffersGpuWritten no longer
@@ -129,8 +128,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     // made legally against a buffer that has since shrunk.
                     const SizeT storage = backendResource->storageSize;
                     const SizeT rangeStart = std::min<SizeT>(static_cast<SizeT>(entry.Offset), storage);
-                    const SizeT rangeEnd =
-                        std::min<SizeT>(static_cast<SizeT>(entry.Offset + entry.Size), storage);
+                    const SizeT rangeEnd = std::min<SizeT>(static_cast<SizeT>(entry.Offset + entry.Size), storage);
                     BindBufferRangeCached(glTarget, static_cast<GLuint>(i), backendBufferId,
                                           static_cast<GLintptr>(rangeStart),
                                           static_cast<GLsizeiptr>(rangeEnd - rangeStart));
@@ -149,8 +147,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // the row this site was the Espryt reader of.
             const MG_Pipe::MGPipeApplierState& st = MG_Pipe::MGPipeApplier();
             const Uint32 windowStart = st.ShaderBufferStart[MG_Pipe::kMGPipeShaderBufferClassAtomicCounter];
-            const SizeT windowEnd = static_cast<SizeT>(windowStart) +
-                                    st.ShaderBufferCount[MG_Pipe::kMGPipeShaderBufferClassAtomicCounter];
+            const SizeT windowEnd =
+                static_cast<SizeT>(windowStart) + st.ShaderBufferCount[MG_Pipe::kMGPipeShaderBufferClassAtomicCounter];
             for (const Int glBinding : glBindings) {
                 if (glBinding < 0) continue;
                 const Int esslBinding = esslBindingTop - glBinding;
@@ -163,8 +161,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // which is the hole the frontend walk's `continue` never had because its
                 // bound was the whole 84-point array.
                 const MG_Pipe::MGPBufferRange* entry = nullptr;
-                if (static_cast<SizeT>(glBinding) >= windowStart &&
-                    static_cast<SizeT>(glBinding) < windowEnd) {
+                if (static_cast<SizeT>(glBinding) >= windowStart && static_cast<SizeT>(glBinding) < windowEnd) {
                     entry = &st.BoundShaderBuffers[MG_Pipe::kMGPipeShaderBufferClassAtomicCounter]
                                                   [static_cast<SizeT>(glBinding)];
                 }
@@ -180,15 +177,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     continue;
                 }
                 if (entry->Offset == 0 && entry->Size == MG_Pipe::kMGPipeWholeBuffer) {
-                    BindBufferBaseCached(GL_SHADER_STORAGE_BUFFER, static_cast<Uint>(esslBinding),
-                                         backendResource->id);
+                    BindBufferBaseCached(GL_SHADER_STORAGE_BUFFER, static_cast<Uint>(esslBinding), backendResource->id);
                 } else {
                     const SizeT storage = backendResource->storageSize;
                     const SizeT rangeStart = std::min<SizeT>(static_cast<SizeT>(entry->Offset), storage);
-                    const SizeT rangeEnd =
-                        std::min<SizeT>(static_cast<SizeT>(entry->Offset + entry->Size), storage);
-                    BindBufferRangeCached(GL_SHADER_STORAGE_BUFFER, static_cast<Uint>(esslBinding),
-                                          backendResource->id, static_cast<GLintptr>(rangeStart),
+                    const SizeT rangeEnd = std::min<SizeT>(static_cast<SizeT>(entry->Offset + entry->Size), storage);
+                    BindBufferRangeCached(GL_SHADER_STORAGE_BUFFER, static_cast<Uint>(esslBinding), backendResource->id,
+                                          static_cast<GLintptr>(rangeStart),
                                           static_cast<GLsizeiptr>(rangeEnd - rangeStart));
                 }
                 // AND NO MarkBufferGpuWritten HERE. It was the second of the three backend
@@ -239,19 +234,19 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
         } // namespace
 
-            XfbObjectState& CurrentXfb() {
-                auto& state = ActiveXfbState();
-                const Uint64 lifetime = MG_Pipe::MGPipeApplier().BoundStreamOutputLifetimeId;
-                if (state.Current != lifetime || state.Cached == nullptr || state.NeedsBind)
-                    BindTransformFeedback(0); // identity is the applier's lifetime, not this argument
-                auto& g_currentXfbState = state.Cached;
-                auto& g_xfbObjects = state.Objects;
-                const auto g_currentXfbName = state.Current;
-                if (g_currentXfbState == nullptr) {
-                    g_currentXfbState = &g_xfbObjects[g_currentXfbName];
-                }
-                return *g_currentXfbState;
+        XfbObjectState& CurrentXfb() {
+            auto& state = ActiveXfbState();
+            const Uint64 lifetime = MG_Pipe::MGPipeApplier().BoundStreamOutputLifetimeId;
+            if (state.Current != lifetime || state.Cached == nullptr || state.NeedsBind)
+                BindTransformFeedback(0); // identity is the applier's lifetime, not this argument
+            auto& g_currentXfbState = state.Cached;
+            auto& g_xfbObjects = state.Objects;
+            const auto g_currentXfbName = state.Current;
+            if (g_currentXfbState == nullptr) {
+                g_currentXfbState = &g_xfbObjects[g_currentXfbName];
             }
+            return *g_currentXfbState;
+        }
 
         namespace {
             Bool AreTransformFeedbackObjectsSupported() {
@@ -338,9 +333,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                 const SizeT bytes = std::min(step, size - off);
                                 MG_Pipe::gMGPipeCallbacks.OnBufferWriteback(
                                     res, target.start + off,
-                                    MG_Pipe::MGPBlobRef{
-                                        reinterpret_cast<Uint64>(static_cast<Uint8*>(mapped) + off),
-                                        static_cast<Uint64>(bytes), MG_Pipe::kMGHostSpanSegNone, 0});
+                                    MG_Pipe::MGPBlobRef{reinterpret_cast<Uint64>(static_cast<Uint8*>(mapped) + off),
+                                                        static_cast<Uint64>(bytes), MG_Pipe::kMGHostSpanSegNone, 0});
                             }
                         } else {
                             MGLOG_E_ONCE("EndTransformFeedback: no reverse channel is installed, so the "
@@ -391,9 +385,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
 
                 BufferImpl::BindBufferId(BufferImpl::TempBufferTarget, g_scatterBufferId);
-                const void* packed = g_GLESFuncs.glMapBufferRange(BufferImpl::TempBufferTarget, 0,
-                                                                  static_cast<GLsizeiptr>(packedStride * vertices),
-                                                                  GL_MAP_READ_BIT);
+                const void* packed = g_GLESFuncs.glMapBufferRange(
+                    BufferImpl::TempBufferTarget, 0, static_cast<GLsizeiptr>(packedStride * vertices), GL_MAP_READ_BIT);
                 if (packed == nullptr) {
                     MGLOG_E_ONCE("EndTransformFeedback: failed to map the scatter capture buffer");
                     return;
@@ -432,8 +425,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         continue;
                     }
                     // P8-C: made current first - a store a shader wrote here is refreshed.
-                    const Uint8* hostBytes = BufferImpl::SplitHostBytesForCpuRead(*splitResource, splitRes,
-                                                                                  "xfb_scatter_pre_capture");
+                    const Uint8* hostBytes =
+                        BufferImpl::SplitHostBytesForCpuRead(*splitResource, splitRes, "xfb_scatter_pre_capture");
                     // A NULL SHADOW IS NOT A LOST CAPTURE. It is the ORPHANED store
                     // (glBufferData(size, NULL) with no resource_subdata since), which
                     // M-3 declares legal: every byte the application has not staged is
@@ -453,8 +446,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         // it is silent data loss (Fatal by name); for an orphaned one the
                         // gap is its own undefined content and the read is legal.
                         if (BufferImpl::ResourceContentIsDeclared(splitRes)) {
-                            BufferImpl::RequireStagedCoverage(*splitResource, hostBytes, target.start,
-                                                              target.end, "xfb_scatter_pre_capture");
+                            BufferImpl::RequireStagedCoverage(*splitResource, hostBytes, target.start, target.end,
+                                                              "xfb_scatter_pre_capture");
                         }
                         Memcpy(staged.data(), hostBytes + target.start, rangeBytes);
                     }
@@ -485,8 +478,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                             MG_Pipe::gMGPipeCallbacks.OnBufferWriteback(
                                 splitRes, target.start + off,
                                 MG_Pipe::MGPBlobRef{reinterpret_cast<Uint64>(staged.data() + off),
-                                                    static_cast<Uint64>(bytes),
-                                                    MG_Pipe::kMGHostSpanSegNone, 0});
+                                                    static_cast<Uint64>(bytes), MG_Pipe::kMGHostSpanSegNone, 0});
                         }
                     } else {
                         MGLOG_E_ONCE("EndTransformFeedback: no reverse channel is installed, so the "
@@ -504,8 +496,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     BufferImpl::BumpBufferMutationEpoch();
                     if (g_GLESFuncs.glBufferSubData != nullptr) {
                         BufferImpl::BindBufferId(BufferImpl::TempBufferTarget, target.backendId);
-                        g_GLESFuncs.glBufferSubData(BufferImpl::TempBufferTarget,
-                                                    static_cast<GLintptr>(target.start),
+                        g_GLESFuncs.glBufferSubData(BufferImpl::TempBufferTarget, static_cast<GLintptr>(target.start),
                                                     static_cast<GLsizeiptr>(rangeBytes), staged.data());
                     }
                     BufferImpl::BindBufferId(BufferImpl::TempBufferTarget, g_scatterBufferId);
@@ -516,8 +507,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         } // namespace
 
         Bool AreTransformFeedbacksSupported() {
-            return g_GLESFuncs.glBeginTransformFeedback != nullptr &&
-                   g_GLESFuncs.glEndTransformFeedback != nullptr &&
+            return g_GLESFuncs.glBeginTransformFeedback != nullptr && g_GLESFuncs.glEndTransformFeedback != nullptr &&
                    g_GLESFuncs.glTransformFeedbackVaryings != nullptr;
         }
 
@@ -598,8 +588,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (!AreTransformFeedbackObjectsSupported()) {
                 // Without driver objects there is only the default span; keep the frontend
                 // name so the bookkeeping below stays consistent.
-                g_currentXfbName =
-                    key;
+                g_currentXfbName = key;
                 return;
             }
             auto& xfb = g_xfbObjects[key];
@@ -608,8 +597,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 g_GLESFuncs.glGenTransformFeedbacks(1, &xfb.esId);
             }
             g_GLESFuncs.glBindTransformFeedback(GL_TRANSFORM_FEEDBACK, xfb.esId);
-            g_currentXfbName =
-                key;
+            g_currentXfbName = key;
         }
 
         void DeleteTransformFeedback(GLuint name) {
@@ -629,9 +617,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             g_currentXfbState = nullptr; // erase shifts the probe cluster, moving other entries
             g_xfbObjects.erase(it);
             // The frontend reverts to the default object when the bound one is deleted.
-            if (g_currentXfbName ==
-                key
-            ) {
+            if (g_currentXfbName == key) {
                 // The following BindStreamOutput names this context's actual
                 // default lifetime. Never create a native object for key 0.
                 g_currentXfbName = 0;
@@ -644,7 +630,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // The ES context went away (or is being torn down): the spans, their buffer ids, the
         // driver objects and the frontend objects they pinned all belonged to it.
         void OnBackendContextDestroyed() {
-            for (auto& state : g_roleXfbState) state = {};
+            for (auto& state : g_roleXfbState)
+                state = {};
             g_currentXfbState = nullptr;
             g_xfbObjects.clear();
             g_currentXfbName = 0;

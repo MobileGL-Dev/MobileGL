@@ -204,8 +204,7 @@ namespace MobileGL {
                             if (!QueriesImageSize(instruction.opcode()) || instruction.NumInOperands() < 1) {
                                 continue;
                             }
-                            if (scope.Covers(
-                                    ResolveImageType(context.get(), instruction.GetSingleWordInOperand(0)))) {
+                            if (scope.Covers(ResolveImageType(context.get(), instruction.GetSingleWordInOperand(0)))) {
                                 traits.queriesImageSize = true;
                                 return traits;
                             }
@@ -236,8 +235,7 @@ namespace MobileGL {
                     for (auto& block : function) {
                         for (auto& instruction : block) {
                             if (QueriesImageSize(instruction.opcode()) && instruction.NumInOperands() >= 1 &&
-                                scope.Covers(
-                                    ResolveImageType(irContext, instruction.GetSingleWordInOperand(0)))) {
+                                scope.Covers(ResolveImageType(irContext, instruction.GetSingleWordInOperand(0)))) {
                                 return Status::SuccessWithoutChange;
                             }
                         }
@@ -284,36 +282,32 @@ namespace MobileGL {
                             if (arrayed && (coordinateVector == nullptr || coordinateVector->element_count() != 2)) {
                                 return Status::Failure;
                             }
-                            const auto* component =
-                                arrayed ? coordinateVector->element_type() : coordinateType;
+                            const auto* component = arrayed ? coordinateVector->element_type() : coordinateType;
                             const auto* componentInteger = component != nullptr ? component->AsInteger() : nullptr;
                             if (componentInteger == nullptr) return Status::Failure;
 
                             spvtools::opt::analysis::Vector widenedVector(component, arrayed ? 3 : 2);
                             const uint32_t widenedTypeId = typeMgr->GetTypeInstruction(&widenedVector);
                             const uint32_t intTypeId = typeMgr->GetTypeInstruction(component);
-                            const uint32_t zeroId = componentInteger->IsSigned()
-                                                        ? constantMgr->GetSIntConstId(0)
-                                                        : constantMgr->GetUIntConstId(0);
+                            const uint32_t zeroId = componentInteger->IsSigned() ? constantMgr->GetSIntConstId(0)
+                                                                                 : constantMgr->GetUIntConstId(0);
                             if (widenedTypeId == 0 || intTypeId == 0 || zeroId == 0) {
                                 return Status::Failure;
                             }
 
-                            InstructionBuilder builder(
-                                irContext, &instruction,
-                                IRContext::kAnalysisDefUse | IRContext::kAnalysisInstrToBlockMapping);
+                            InstructionBuilder builder(irContext, &instruction,
+                                                       IRContext::kAnalysisDefUse |
+                                                           IRContext::kAnalysisInstrToBlockMapping);
 
                             Instruction* widened = nullptr;
                             if (arrayed) {
-                                Instruction* u =
-                                    builder.AddCompositeExtract(intTypeId, coordinateId, {0});
-                                Instruction* layer =
-                                    builder.AddCompositeExtract(intTypeId, coordinateId, {1});
+                                Instruction* u = builder.AddCompositeExtract(intTypeId, coordinateId, {0});
+                                Instruction* layer = builder.AddCompositeExtract(intTypeId, coordinateId, {1});
                                 if (u == nullptr || layer == nullptr) {
                                     return Status::Failure;
                                 }
-                                widened = builder.AddCompositeConstruct(
-                                    widenedTypeId, {u->result_id(), zeroId, layer->result_id()});
+                                widened = builder.AddCompositeConstruct(widenedTypeId,
+                                                                        {u->result_id(), zeroId, layer->result_id()});
                             } else {
                                 widened = builder.AddCompositeConstruct(widenedTypeId, {coordinateId, zeroId});
                             }

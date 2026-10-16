@@ -90,8 +90,12 @@ namespace MobileGL::MG_Util::BackendLoader {
 #if defined(MOBILEGL_IOS)
             "@rpath/", "@executable_path/Frameworks/", "@loader_path/Frameworks/",
 #else
-            "/opt/vc/lib/", "/usr/local/lib/", "/usr/lib/", "/usr/lib/x86_64-linux-gnu/",
-            "/usr/lib64/", "/lib64/",
+            "/opt/vc/lib/",
+            "/usr/local/lib/",
+            "/usr/lib/",
+            "/usr/lib/x86_64-linux-gnu/",
+            "/usr/lib64/",
+            "/lib64/",
 #endif
             "" // Keep this last so the dynamic loader can use LD_LIBRARY_PATH.
         };
@@ -109,8 +113,7 @@ namespace MobileGL::MG_Util::BackendLoader {
                     }
                     lib = dlopen(signedPath.c_str(), flags);
                     if (lib == nullptr) {
-                        MGLOG_F("Failed to open signed trace ANGLE library %s: %s",
-                                signedPath.c_str(), dlerror());
+                        MGLOG_F("Failed to open signed trace ANGLE library %s: %s", signedPath.c_str(), dlerror());
                         return nullptr;
                     }
                     MGLOG_I("Loaded signed trace ANGLE library: %s", signedPath.c_str());
@@ -180,8 +183,8 @@ namespace MobileGL::MG_Util::BackendLoader {
 #endif
     }
 
-    MG_External::EGL::eglSwapBuffersWithDamageEXT_PTR
-    ResolveSwapBuffersWithDamage(const MG_External::EGLFunctionsTable& funcs) {
+    MG_External::EGL::eglSwapBuffersWithDamageEXT_PTR ResolveSwapBuffersWithDamage(
+        const MG_External::EGLFunctionsTable& funcs) {
         if (!funcs.eglGetCurrentDisplay || !funcs.eglQueryString || !funcs.eglGetProcAddress) {
             return nullptr;
         }
@@ -793,54 +796,26 @@ namespace MobileGL::MG_Util::BackendLoader {
         }                                                                                                              \
     } while (0);
 
-        {
-            INIT_EGL_FUNC(eglBindAPI)
-            INIT_EGL_FUNC(eglBindTexImage)
-            INIT_EGL_FUNC(eglChooseConfig)
-            INIT_EGL_FUNC(eglCopyBuffers)
-            INIT_EGL_FUNC(eglCreateContext)
-            INIT_EGL_FUNC(eglCreatePbufferFromClientBuffer)
-            INIT_EGL_FUNC(eglCreatePbufferSurface)
-            INIT_EGL_FUNC(eglCreatePixmapSurface)
-            INIT_EGL_FUNC(eglCreatePlatformPixmapSurface)
-            INIT_EGL_FUNC(eglCreatePlatformWindowSurface)
-            INIT_EGL_FUNC(eglCreateWindowSurface)
-            INIT_EGL_FUNC(eglDestroyContext)
-            INIT_EGL_FUNC(eglDestroySurface)
-            INIT_EGL_FUNC(eglGetConfigAttrib)
-            INIT_EGL_FUNC(eglGetConfigs)
-            INIT_EGL_FUNC(eglGetCurrentContext)
-            INIT_EGL_FUNC(eglGetCurrentDisplay)
-            INIT_EGL_FUNC(eglGetCurrentSurface)
-            INIT_EGL_FUNC(eglGetDisplay)
-            INIT_EGL_FUNC(eglGetPlatformDisplay)
-            INIT_EGL_FUNC(eglGetError)
-            INIT_EGL_FUNC(eglGetProcAddress)
-            INIT_EGL_FUNC(eglInitialize)
-            INIT_EGL_FUNC(eglMakeCurrent)
-            INIT_EGL_FUNC(eglQueryAPI)
-            INIT_EGL_FUNC(eglQueryContext)
-            INIT_EGL_FUNC(eglQueryString)
-            INIT_EGL_FUNC(eglQuerySurface)
-            INIT_EGL_FUNC(eglReleaseTexImage)
-            INIT_EGL_FUNC(eglReleaseThread)
-            INIT_EGL_FUNC(eglSurfaceAttrib)
-            INIT_EGL_FUNC(eglSwapBuffers)
-            INIT_EGL_FUNC(eglSwapInterval)
-            INIT_EGL_FUNC(eglTerminate)
-            INIT_EGL_FUNC_OPTIONAL(eglUnlockSurfaceKHR)
-            INIT_EGL_FUNC(eglWaitClient)
-            INIT_EGL_FUNC(eglWaitGL)
-            INIT_EGL_FUNC(eglWaitNative)
-            INIT_EGL_FUNC(eglCreateSync)
-            INIT_EGL_FUNC(eglDestroySync)
-            INIT_EGL_FUNC(eglClientWaitSync)
-            INIT_EGL_FUNC(eglGetSyncAttrib)
-            INIT_EGL_FUNC(eglCreateImage)
-            INIT_EGL_FUNC(eglDestroyImage)
-            INIT_EGL_FUNC(eglGetPlatformDisplay)
-            INIT_EGL_FUNC(eglWaitSync)
-        }
+        {INIT_EGL_FUNC(eglBindAPI) INIT_EGL_FUNC(eglBindTexImage) INIT_EGL_FUNC(eglChooseConfig) INIT_EGL_FUNC(
+            eglCopyBuffers) INIT_EGL_FUNC(eglCreateContext) INIT_EGL_FUNC(eglCreatePbufferFromClientBuffer)
+             INIT_EGL_FUNC(eglCreatePbufferSurface) INIT_EGL_FUNC(eglCreatePixmapSurface) INIT_EGL_FUNC(
+                 eglCreatePlatformPixmapSurface) INIT_EGL_FUNC(eglCreatePlatformWindowSurface)
+                 INIT_EGL_FUNC(eglCreateWindowSurface) INIT_EGL_FUNC(eglDestroyContext) INIT_EGL_FUNC(eglDestroySurface)
+                     INIT_EGL_FUNC(eglGetConfigAttrib) INIT_EGL_FUNC(eglGetConfigs) INIT_EGL_FUNC(eglGetCurrentContext)
+                         INIT_EGL_FUNC(eglGetCurrentDisplay) INIT_EGL_FUNC(eglGetCurrentSurface) INIT_EGL_FUNC(
+                             eglGetDisplay) INIT_EGL_FUNC(eglGetPlatformDisplay) INIT_EGL_FUNC(eglGetError)
+                             INIT_EGL_FUNC(eglGetProcAddress) INIT_EGL_FUNC(eglInitialize) INIT_EGL_FUNC(eglMakeCurrent)
+                                 INIT_EGL_FUNC(eglQueryAPI) INIT_EGL_FUNC(eglQueryContext) INIT_EGL_FUNC(eglQueryString)
+                                     INIT_EGL_FUNC(eglQuerySurface) INIT_EGL_FUNC(eglReleaseTexImage) INIT_EGL_FUNC(
+                                         eglReleaseThread) INIT_EGL_FUNC(eglSurfaceAttrib) INIT_EGL_FUNC(eglSwapBuffers)
+                                         INIT_EGL_FUNC(eglSwapInterval) INIT_EGL_FUNC(eglTerminate)
+                                             INIT_EGL_FUNC_OPTIONAL(eglUnlockSurfaceKHR) INIT_EGL_FUNC(eglWaitClient)
+                                                 INIT_EGL_FUNC(eglWaitGL) INIT_EGL_FUNC(eglWaitNative) INIT_EGL_FUNC(
+                                                     eglCreateSync) INIT_EGL_FUNC(eglDestroySync)
+                                                     INIT_EGL_FUNC(eglClientWaitSync) INIT_EGL_FUNC(eglGetSyncAttrib)
+                                                         INIT_EGL_FUNC(eglCreateImage) INIT_EGL_FUNC(eglDestroyImage)
+                                                             INIT_EGL_FUNC(eglGetPlatformDisplay)
+                                                                 INIT_EGL_FUNC(eglWaitSync)}
 
         // Display extensions can only be checked after the display is initialized.
         funcs.eglSwapBuffersWithDamageEXT = nullptr;
@@ -856,8 +831,8 @@ namespace MobileGL::MG_Util::BackendLoader {
                                                      const MG_External::GLESFunctionsTable& f) {
         const Bool esVersionOk =
             caps.GLESVersion.Major > 3 || (caps.GLESVersion.Major == 3 && caps.GLESVersion.Minor >= 1);
-        if (!esVersionOk || !f.glDrawArraysIndirect || !f.glBindBufferBase || !f.glMapBufferRange ||
-            !f.glUnmapBuffer || !f.glMemoryBarrier || !f.glCreateShader || !f.glCreateProgram) {
+        if (!esVersionOk || !f.glDrawArraysIndirect || !f.glBindBufferBase || !f.glMapBufferRange || !f.glUnmapBuffer ||
+            !f.glMemoryBarrier || !f.glCreateShader || !f.glCreateProgram) {
             return false;
         }
         // Read from caps, not re-queried: the per-stage limits are resolved (and their query
@@ -872,8 +847,7 @@ namespace MobileGL::MG_Util::BackendLoader {
             MGLOG_I("baseInstance probe skipped: GL_MAX_VERTEX_SHADER_STORAGE_BLOCKS = %d", maxVertexSsboBlocks);
             return false;
         }
-        while (f.glGetError() != GL_NO_ERROR) {
-        }
+        while (f.glGetError() != GL_NO_ERROR) {}
 
         const char* vsSource = "#version 310 es\n"
                                "layout(std430, binding = 0) buffer MgProbeResult { highp int mg_probeValue; };\n"
@@ -920,8 +894,7 @@ namespace MobileGL::MG_Util::BackendLoader {
         if (fs != 0) f.glDeleteShader(fs);
         if (program == 0) {
             MGLOG_I("baseInstance probe skipped: probe program failed to build (vs=%u fs=%u)", vs, fs);
-            while (f.glGetError() != GL_NO_ERROR) {
-            }
+            while (f.glGetError() != GL_NO_ERROR) {}
             return false;
         }
 
@@ -994,8 +967,7 @@ namespace MobileGL::MG_Util::BackendLoader {
         f.glDeleteVertexArrays(1, &vao);
         f.glDeleteBuffers(2, buffers);
         f.glDeleteProgram(program);
-        while (f.glGetError() != GL_NO_ERROR) {
-        }
+        while (f.glGetError() != GL_NO_ERROR) {}
         return includesBase;
     }
 
@@ -1077,8 +1049,7 @@ namespace MobileGL::MG_Util::BackendLoader {
             caps.FragmentShadingRateMasks[i] = mask;
         }
         // The queries above are best-effort: a pname a driver does not know only leaves its default.
-        while (glesFuncs.glGetError() != GL_NO_ERROR) {
-        }
+        while (glesFuncs.glGetError() != GL_NO_ERROR) {}
         MGLOG_I("GL_EXT_fragment_shading_rate: primitive=%d attachment=%d nonTrivialCombiners=%d rates(1x)=0x%04x "
                 "rates(4x)=0x%04x attachment texel %dx%d..%dx%d",
                 caps.SupportsFragmentShadingRatePrimitive, caps.SupportsFragmentShadingRateAttachment,
@@ -1258,8 +1229,7 @@ namespace MobileGL::MG_Util::BackendLoader {
         caps.SupportsMultiDrawIndirect = hasMultiDrawIndirectExtension &&
                                          glesFuncs.glMultiDrawArraysIndirectEXT != nullptr &&
                                          glesFuncs.glMultiDrawElementsIndirectEXT != nullptr;
-        caps.SupportsMultiDrawElementsBaseVertex = hasDrawElementsBaseVertexExtension &&
-                                                   hasMultiDrawArraysExtension &&
+        caps.SupportsMultiDrawElementsBaseVertex = hasDrawElementsBaseVertexExtension && hasMultiDrawArraysExtension &&
                                                    glesFuncs.glMultiDrawElementsBaseVertexEXT != nullptr;
         // All three, not any: DirectGLES picks native-vs-emulated once per draw entry point off
         // this single flag, so a driver that resolved only some of them must count as absent.
@@ -1283,8 +1253,7 @@ namespace MobileGL::MG_Util::BackendLoader {
         }
         // Each companion builds on the base extension, and each needs the entry points it brings;
         // the strings alone never count (see AcquireGLESFunctions on stub pointers).
-        caps.SupportsFragmentShadingRate = caps.SupportsFragmentShadingRate &&
-                                           glesFuncs.glShadingRateEXT != nullptr &&
+        caps.SupportsFragmentShadingRate = caps.SupportsFragmentShadingRate && glesFuncs.glShadingRateEXT != nullptr &&
                                            glesFuncs.glShadingRateCombinerOpsEXT != nullptr &&
                                            glesFuncs.glGetFragmentShadingRatesEXT != nullptr;
         caps.SupportsFragmentShadingRatePrimitive =
@@ -1318,42 +1287,37 @@ namespace MobileGL::MG_Util::BackendLoader {
                 caps.SubgroupSupportedFeatures);
         // Core from ES 3.2 on, so an extension string is not required there; below 3.2 the
         // extension is, and the pointer still has to have resolved either way.
-        const Bool esAtLeast32 = caps.GLESVersion.Major > 3 ||
-                                 (caps.GLESVersion.Major == 3 && caps.GLESVersion.Minor >= 2);
-        const Bool esAtLeast31 = caps.GLESVersion.Major > 3 ||
-                                 (caps.GLESVersion.Major == 3 && caps.GLESVersion.Minor >= 1);
+        const Bool esAtLeast32 =
+            caps.GLESVersion.Major > 3 || (caps.GLESVersion.Major == 3 && caps.GLESVersion.Minor >= 2);
+        const Bool esAtLeast31 =
+            caps.GLESVersion.Major > 3 || (caps.GLESVersion.Major == 3 && caps.GLESVersion.Minor >= 1);
         caps.SupportsFramebufferDefaultLayers = esAtLeast32 || hasGeometryShaderExtension;
-        caps.SupportsDrawIndirect = esAtLeast31 && glesFuncs.glDrawArraysIndirect != nullptr &&
-                                    glesFuncs.glDrawElementsIndirect != nullptr;
-        caps.SupportsDrawElementsBaseVertex = (esAtLeast32 || hasDrawElementsBaseVertexExtension) &&
-                                              glesFuncs.glDrawElementsBaseVertex != nullptr;
-        caps.SupportsTessellationShader = (esAtLeast32 || (esAtLeast31 && hasTessellationShaderExtension)) &&
-                                          glesFuncs.glPatchParameteri != nullptr;
+        caps.SupportsDrawIndirect =
+            esAtLeast31 && glesFuncs.glDrawArraysIndirect != nullptr && glesFuncs.glDrawElementsIndirect != nullptr;
+        caps.SupportsDrawElementsBaseVertex =
+            (esAtLeast32 || hasDrawElementsBaseVertexExtension) && glesFuncs.glDrawElementsBaseVertex != nullptr;
+        caps.SupportsTessellationShader =
+            (esAtLeast32 || (esAtLeast31 && hasTessellationShaderExtension)) && glesFuncs.glPatchParameteri != nullptr;
         // The string AND the pointer: eglGetProcAddress may hand back a stub for a name the
         // driver does not implement.
         caps.SupportsClipControl = hasClipControlExtension && glesFuncs.glClipControlEXT != nullptr;
         caps.SupportsComputeShader = esAtLeast31 && glesFuncs.glDispatchCompute != nullptr &&
-                                     glesFuncs.glMemoryBarrier != nullptr &&
-                                     glesFuncs.glCreateShader != nullptr &&
+                                     glesFuncs.glMemoryBarrier != nullptr && glesFuncs.glCreateShader != nullptr &&
                                      glesFuncs.glCreateProgram != nullptr;
-        caps.SupportsShaderMultisampleInterpolation =
-            caps.SupportsShaderMultisampleInterpolation || caps.GLESVersion.Major > 3 ||
-            (caps.GLESVersion.Major == 3 && caps.GLESVersion.Minor >= 2);
+        caps.SupportsShaderMultisampleInterpolation = caps.SupportsShaderMultisampleInterpolation ||
+                                                      caps.GLESVersion.Major > 3 ||
+                                                      (caps.GLESVersion.Major == 3 && caps.GLESVersion.Minor >= 2);
 
         // Detect optional raster/color-mask entry points by whether they loaded. glColorMaski is GLES
         // 3.2 core (no extension string), so pointer presence is the reliable signal for all of these.
-        caps.SupportsPolygonMode =
-            glesFuncs.glPolygonModeNV != nullptr || glesFuncs.glPolygonModeANGLE != nullptr;
-        caps.SupportsIndexedColorMask = glesFuncs.glColorMaski != nullptr ||
-                                        glesFuncs.glColorMaskiEXT != nullptr ||
+        caps.SupportsPolygonMode = glesFuncs.glPolygonModeNV != nullptr || glesFuncs.glPolygonModeANGLE != nullptr;
+        caps.SupportsIndexedColorMask = glesFuncs.glColorMaski != nullptr || glesFuncs.glColorMaskiEXT != nullptr ||
                                         glesFuncs.glColorMaskiOES != nullptr;
         MGLOG_I("    glPolygonMode (NV/ANGLE): %s", caps.SupportsPolygonMode ? "yes" : "no");
         MGLOG_I("    indexed glColorMaski: %s", caps.SupportsIndexedColorMask ? "yes" : "no");
-        MGLOG_I("    dual-source blend (EXT_blend_func_extended): %s",
-                caps.SupportsDualSourceBlend ? "yes" : "no");
+        MGLOG_I("    dual-source blend (EXT_blend_func_extended): %s", caps.SupportsDualSourceBlend ? "yes" : "no");
         MGLOG_I("    draw indirect (ES 3.1 core): %s", caps.SupportsDrawIndirect ? "yes" : "no");
-        MGLOG_I("    multi-draw indirect (EXT_multi_draw_indirect): %s",
-                caps.SupportsMultiDrawIndirect ? "yes" : "no");
+        MGLOG_I("    multi-draw indirect (EXT_multi_draw_indirect): %s", caps.SupportsMultiDrawIndirect ? "yes" : "no");
         MGLOG_I("    multi-draw base vertex (EXT/OES_draw_elements_base_vertex + EXT_multi_draw_arrays): %s",
                 caps.SupportsMultiDrawElementsBaseVertex ? "yes" : "no");
         MGLOG_I("    draw elements base vertex (ES 3.2 core or EXT/OES_draw_elements_base_vertex): %s",
@@ -1370,9 +1334,12 @@ namespace MobileGL::MG_Util::BackendLoader {
         {
             const auto pointSizeTierName = [](MG_External::GLESCapabilities::PointSizeTier tier) {
                 switch (tier) {
-                    case MG_External::GLESCapabilities::PointSizeTier::ExtensionEXT: return "EXT";
-                    case MG_External::GLESCapabilities::PointSizeTier::ExtensionOES: return "OES";
-                    default: return "no";
+                case MG_External::GLESCapabilities::PointSizeTier::ExtensionEXT:
+                    return "EXT";
+                case MG_External::GLESCapabilities::PointSizeTier::ExtensionOES:
+                    return "OES";
+                default:
+                    return "no";
                 }
             };
             MGLOG_I("    tessellation gl_PointSize (EXT/OES_tessellation_point_size): %s",
@@ -1394,8 +1361,7 @@ namespace MobileGL::MG_Util::BackendLoader {
         // make every storage-range offset legal, so an unusable answer keeps the 256 default.
         GLint shaderStorageOffsetAlignment = 0;
         glesFuncs.glGetIntegerv(GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT, &shaderStorageOffsetAlignment);
-        while (glesFuncs.glGetError() != GL_NO_ERROR) {
-        }
+        while (glesFuncs.glGetError() != GL_NO_ERROR) {}
         if (shaderStorageOffsetAlignment > 0) {
             caps.ShaderStorageBufferOffsetAlignment = shaderStorageOffsetAlignment;
         }
@@ -1494,7 +1460,8 @@ namespace MobileGL::MG_Util::BackendLoader {
         const auto drainErrors = [&glesFuncs]() {
             Bool hadError = false;
             if (glesFuncs.glGetError) {
-                while (glesFuncs.glGetError() != GL_NO_ERROR) hadError = true;
+                while (glesFuncs.glGetError() != GL_NO_ERROR)
+                    hadError = true;
             }
             return hadError;
         };
@@ -1606,8 +1573,7 @@ namespace MobileGL::MG_Util::BackendLoader {
         // Geometry and tessellation shaders and their image-uniform queries are core only in
         // ES 3.2. DirectGLES emits ESSL 3.10 on an ES 3.1 context, so reporting zero there is
         // both legal and an accurate description of what the backend compiler can consume.
-        if (caps.GLESVersion.Major > 3 ||
-            (caps.GLESVersion.Major == 3 && caps.GLESVersion.Minor >= 2)) {
+        if (caps.GLESVersion.Major > 3 || (caps.GLESVersion.Major == 3 && caps.GLESVersion.Minor >= 2)) {
             glesFuncs.glGetIntegerv(GL_MAX_GEOMETRY_IMAGE_UNIFORMS, &maxGeometryImageUniforms);
             glesFuncs.glGetIntegerv(GL_MAX_TESS_CONTROL_IMAGE_UNIFORMS, &maxTessControlImageUniforms);
             glesFuncs.glGetIntegerv(GL_MAX_TESS_EVALUATION_IMAGE_UNIFORMS, &maxTessEvaluationImageUniforms);
@@ -1643,8 +1609,7 @@ namespace MobileGL::MG_Util::BackendLoader {
                 maxFragmentShaderStorageBlocks = 4;
             }
             if (esAtLeast32) {
-                glesFuncs.glGetIntegerv(GL_MAX_TESS_CONTROL_SHADER_STORAGE_BLOCKS,
-                                        &maxTessControlShaderStorageBlocks);
+                glesFuncs.glGetIntegerv(GL_MAX_TESS_CONTROL_SHADER_STORAGE_BLOCKS, &maxTessControlShaderStorageBlocks);
                 glesFuncs.glGetIntegerv(GL_MAX_TESS_EVALUATION_SHADER_STORAGE_BLOCKS,
                                         &maxTessEvaluationShaderStorageBlocks);
                 glesFuncs.glGetIntegerv(GL_MAX_GEOMETRY_SHADER_STORAGE_BLOCKS, &maxGeometryShaderStorageBlocks);
@@ -1739,8 +1704,7 @@ namespace MobileGL::MG_Util::BackendLoader {
                 viewportBoundsRange[0] = -32768.0f;
                 viewportBoundsRange[1] = 32767.0f;
             } else {
-                viewportIndexProvokingVertex =
-                    NormalizeProvokingVertexConvention(driverViewportIndexConvention);
+                viewportIndexProvokingVertex = NormalizeProvokingVertexConvention(driverViewportIndexConvention);
             }
         }
         if (caps.SupportsShaderMultisampleInterpolation && glesFuncs.glGetFloatv) {
@@ -1795,8 +1759,7 @@ namespace MobileGL::MG_Util::BackendLoader {
                 // Drain first: an error left by any earlier probe would otherwise read as this
                 // query having failed, and the value would be discarded as a non-answer.
                 if (glesFuncs.glGetError) {
-                    while (glesFuncs.glGetError() != GL_NO_ERROR) {
-                    }
+                    while (glesFuncs.glGetError() != GL_NO_ERROR) {}
                 }
                 glesFuncs.glGetIntegerv(GL_MAX_TEXTURE_BUFFER_SIZE, &maxTextureBufferSize);
                 if (glesFuncs.glGetError) {
@@ -1827,11 +1790,10 @@ namespace MobileGL::MG_Util::BackendLoader {
                 MGLOG_I("    Buffer textures: UNSUPPORTED (%s). Any shader sampling a "
                         "samplerBuffer will fail to compile, and MobileGL keeps advertising "
                         "GL_MAX_TEXTURE_BUFFER_SIZE = %d because a GL 4.x context may not report 0.",
-                        claimsSupport
-                            ? "this driver advertises buffer textures but no glTexBuffer entry "
-                              "point resolved, so none of them can be called"
-                            : "ES core needs 3.2, and neither GL_EXT_texture_buffer nor "
-                              "GL_OES_texture_buffer is present",
+                        claimsSupport ? "this driver advertises buffer textures but no glTexBuffer entry "
+                                        "point resolved, so none of them can be called"
+                                      : "ES core needs 3.2, and neither GL_EXT_texture_buffer nor "
+                                        "GL_OES_texture_buffer is present",
                         maxTextureBufferSize);
             }
         }
@@ -1882,9 +1844,8 @@ namespace MobileGL::MG_Util::BackendLoader {
             SelfTest::ExplicitVertexInputLocationCeiling(glesFuncs);
         // Guarded on `detected` rather than on the number alone: a probe that reached no verdict
         // has measured nothing, and the clamp must be driven by evidence or not applied at all.
-        caps.MaxVertexAttribs = locationCeiling.detected
-                                    ? std::min(maxVertexAttribs, locationCeiling.usableLocations)
-                                    : maxVertexAttribs;
+        caps.MaxVertexAttribs =
+            locationCeiling.detected ? std::min(maxVertexAttribs, locationCeiling.usableLocations) : maxVertexAttribs;
         if (locationCeiling.detected) {
             MGLOG_I("    GL_MAX_VERTEX_ATTRIBS reduced from the driver's %d to %d: "
                     "layout(location = N) on a vertex input is refused from N = %d upward",
@@ -1909,7 +1870,8 @@ namespace MobileGL::MG_Util::BackendLoader {
             GLint sharedMemory = 0;
             while (glesFuncs.glGetError() != GL_NO_ERROR) {}
             glesFuncs.glGetIntegerv(GL_MAX_COMPUTE_SHARED_MEMORY_SIZE, &sharedMemory);
-            if (glesFuncs.glGetError() == GL_NO_ERROR && sharedMemory > 0) caps.MaxComputeSharedMemorySize = sharedMemory;
+            if (glesFuncs.glGetError() == GL_NO_ERROR && sharedMemory > 0)
+                caps.MaxComputeSharedMemorySize = sharedMemory;
         }
         // Through glesFuncs, like every other capability query here: a bare glGetIntegerv resolves
         // to MobileGL's own exported entry point, which answers this pname from the very
@@ -2045,15 +2007,13 @@ namespace MobileGL::MG_Util::BackendLoader {
         MGLOG_I("    GL_MAX_COMBINED_CLIP_AND_CULL_DISTANCES: %d", caps.MaxCombinedClipAndCullDistances);
         MGLOG_I("    GL_MAX_VIEWPORTS: %d", caps.MaxViewports);
         MGLOG_I("    GL_MAX_VIEWPORT_DIMS: [%d, %d]", caps.MaxViewportWidth, caps.MaxViewportHeight);
-        MGLOG_I("    GL_VIEWPORT_BOUNDS_RANGE: [%.3f, %.3f]", caps.ViewportBoundsRangeMin,
-                caps.ViewportBoundsRangeMax);
+        MGLOG_I("    GL_VIEWPORT_BOUNDS_RANGE: [%.3f, %.3f]", caps.ViewportBoundsRangeMin, caps.ViewportBoundsRangeMax);
         MGLOG_I("    GL_VIEWPORT_SUBPIXEL_BITS: %d", caps.ViewportSubpixelBits);
         MGLOG_I("    GL_LAYER_PROVOKING_VERTEX: %s", ProvokingVertexConventionName(caps.LayerProvokingVertex));
         MGLOG_I("    GL_VIEWPORT_INDEX_PROVOKING_VERTEX: %s",
                 ProvokingVertexConventionName(caps.ViewportIndexProvokingVertex));
 
-        caps.IndirectDrawInstanceIdIncludesBaseInstance =
-            ProbeIndirectInstanceIdIncludesBaseInstance(caps, glesFuncs);
+        caps.IndirectDrawInstanceIdIncludesBaseInstance = ProbeIndirectInstanceIdIncludesBaseInstance(caps, glesFuncs);
         MGLOG_I("    Indirect draw gl_InstanceID includes baseInstance: %s",
                 caps.IndirectDrawInstanceIdIncludesBaseInstance ? "true" : "false");
 
@@ -2063,27 +2023,26 @@ namespace MobileGL::MG_Util::BackendLoader {
         // emulation can be exercised on a healthy driver (the integration lane) and turned
         // off again as a negative control.
         switch (MG_Config::Features.EsprytUnlocatedIoBlocks) {
-            case MG_Config::QuirkOverride::ForceOn:
-                caps.SupportsLocatedInterStageIoBlocks = false;
-                MGLOG_I("    Located inter-stage interface blocks: forced OFF by "
-                        "MOBILEGL_ESPRYT_UNLOCATED_IO_BLOCKS; the driver was not probed");
-                break;
-            case MG_Config::QuirkOverride::ForceOff:
-                caps.SupportsLocatedInterStageIoBlocks = true;
-                MGLOG_I("    Located inter-stage interface blocks: forced ON by "
-                        "MOBILEGL_ESPRYT_UNLOCATED_IO_BLOCKS; the driver was not probed");
-                break;
-            case MG_Config::QuirkOverride::Auto:
-            default:
-                // SelfTest::ProbeLocatedIoBlocksLosePayload - the Mali-G1-Ultra ES driver
-                // delivers nothing through an interface block that carries an explicit
-                // layout(location=) once a tessellation or geometry stage is in the pipeline.
-                // Probed with its own controls rather than matched on a renderer string; see
-                // DriverBugProbes.h for the shape and for why the two controls decide what the
-                // finding is allowed to claim.
-                caps.SupportsLocatedInterStageIoBlocks =
-                    !SelfTest::LocatedIoBlocksLosePayload(glesFuncs).detected;
-                break;
+        case MG_Config::QuirkOverride::ForceOn:
+            caps.SupportsLocatedInterStageIoBlocks = false;
+            MGLOG_I("    Located inter-stage interface blocks: forced OFF by "
+                    "MOBILEGL_ESPRYT_UNLOCATED_IO_BLOCKS; the driver was not probed");
+            break;
+        case MG_Config::QuirkOverride::ForceOff:
+            caps.SupportsLocatedInterStageIoBlocks = true;
+            MGLOG_I("    Located inter-stage interface blocks: forced ON by "
+                    "MOBILEGL_ESPRYT_UNLOCATED_IO_BLOCKS; the driver was not probed");
+            break;
+        case MG_Config::QuirkOverride::Auto:
+        default:
+            // SelfTest::ProbeLocatedIoBlocksLosePayload - the Mali-G1-Ultra ES driver
+            // delivers nothing through an interface block that carries an explicit
+            // layout(location=) once a tessellation or geometry stage is in the pipeline.
+            // Probed with its own controls rather than matched on a renderer string; see
+            // DriverBugProbes.h for the shape and for why the two controls decide what the
+            // finding is allowed to claim.
+            caps.SupportsLocatedInterStageIoBlocks = !SelfTest::LocatedIoBlocksLosePayload(glesFuncs).detected;
+            break;
         }
         MGLOG_I("    Located inter-stage interface blocks transport their payload: %s",
                 caps.SupportsLocatedInterStageIoBlocks
@@ -2092,16 +2051,16 @@ namespace MobileGL::MG_Util::BackendLoader {
                       "blocks without a location qualifier)");
 
         switch (MG_Config::Features.EsprytDeferGeometryEmits) {
-            case MG_Config::QuirkOverride::ForceOn:
-                caps.DropsGeometryWritesAfterEmit = true;
-                break;
-            case MG_Config::QuirkOverride::ForceOff:
-                caps.DropsGeometryWritesAfterEmit = false;
-                break;
-            case MG_Config::QuirkOverride::Auto:
-            default:
-                caps.DropsGeometryWritesAfterEmit = SelfTest::GeometryStageSsboWriteAfterEmitDropped(glesFuncs);
-                break;
+        case MG_Config::QuirkOverride::ForceOn:
+            caps.DropsGeometryWritesAfterEmit = true;
+            break;
+        case MG_Config::QuirkOverride::ForceOff:
+            caps.DropsGeometryWritesAfterEmit = false;
+            break;
+        case MG_Config::QuirkOverride::Auto:
+        default:
+            caps.DropsGeometryWritesAfterEmit = SelfTest::GeometryStageSsboWriteAfterEmitDropped(glesFuncs);
+            break;
         }
         MGLOG_I("    Geometry-stage storage writes after EmitVertex are dropped: %s",
                 caps.DropsGeometryWritesAfterEmit
@@ -2109,60 +2068,54 @@ namespace MobileGL::MG_Util::BackendLoader {
                     : "false");
 
         switch (MG_Config::Features.EsprytAtomicSubgroupScratch) {
-            case MG_Config::QuirkOverride::ForceOn:
-                caps.SharedMemoryLoadsGoStale = true;
-                break;
-            case MG_Config::QuirkOverride::ForceOff:
-                caps.SharedMemoryLoadsGoStale = false;
-                break;
-            case MG_Config::QuirkOverride::Auto:
-            default:
-                caps.SharedMemoryLoadsGoStale = SelfTest::SharedMemoryLoadsGoStale(glesFuncs);
-                break;
+        case MG_Config::QuirkOverride::ForceOn:
+            caps.SharedMemoryLoadsGoStale = true;
+            break;
+        case MG_Config::QuirkOverride::ForceOff:
+            caps.SharedMemoryLoadsGoStale = false;
+            break;
+        case MG_Config::QuirkOverride::Auto:
+        default:
+            caps.SharedMemoryLoadsGoStale = SelfTest::SharedMemoryLoadsGoStale(glesFuncs);
+            break;
         }
         MGLOG_I("    Shared-memory loads go stale across barrier(): %s",
-                caps.SharedMemoryLoadsGoStale
-                    ? "true (the subgroup emulation reads its scratch through atomic loads)"
-                    : "false");
+                caps.SharedMemoryLoadsGoStale ? "true (the subgroup emulation reads its scratch through atomic loads)"
+                                              : "false");
 
         caps.IsAngleRenderer = caps.GLESRendererString.find("ANGLE") != String::npos;
 
         switch (MG_Config::Features.EsprytInvalidImagePlaceholder) {
-            case MG_Config::QuirkOverride::ForceOn:
-                caps.UseInvalidImagePlaceholder = true;
-                break;
-            case MG_Config::QuirkOverride::ForceOff:
-                caps.UseInvalidImagePlaceholder = false;
-                break;
-            case MG_Config::QuirkOverride::Auto:
-            default:
-                // ANGLE dereferences a null texture when a dispatch or draw reaches an EMPTY image
-                // unit the program uses, so the probe cannot be run there: its subject variant is
-                // exactly that dispatch, and a crash is no verdict. ANGLE keeps the placeholder
-                // without being asked.
-                caps.UseInvalidImagePlaceholder =
-                    caps.IsAngleRenderer || SelfTest::EmptyImageUnitsReadNonzero(glesFuncs);
-                break;
+        case MG_Config::QuirkOverride::ForceOn:
+            caps.UseInvalidImagePlaceholder = true;
+            break;
+        case MG_Config::QuirkOverride::ForceOff:
+            caps.UseInvalidImagePlaceholder = false;
+            break;
+        case MG_Config::QuirkOverride::Auto:
+        default:
+            // ANGLE dereferences a null texture when a dispatch or draw reaches an EMPTY image
+            // unit the program uses, so the probe cannot be run there: its subject variant is
+            // exactly that dispatch, and a crash is no verdict. ANGLE keeps the placeholder
+            // without being asked.
+            caps.UseInvalidImagePlaceholder = caps.IsAngleRenderer || SelfTest::EmptyImageUnitsReadNonzero(glesFuncs);
+            break;
         }
         MGLOG_I("    Invalid image units bound to a placeholder: %s",
                 !caps.UseInvalidImagePlaceholder ? "false (an invalid image unit stays empty)"
                 : caps.IsAngleRenderer           ? "true (ANGLE faults on a use of an empty image unit)"
                                                  : "true (empty image units read nonzero)");
 
-        caps.IsAngleLlvmpipeRenderer =
-            caps.IsAngleRenderer && caps.GLESRendererString.find("llvmpipe") != String::npos;
+        caps.IsAngleLlvmpipeRenderer = caps.IsAngleRenderer && caps.GLESRendererString.find("llvmpipe") != String::npos;
         caps.AvoidSamplerMipmapMinFilter =
             caps.IsAngleLlvmpipeRenderer && MG_Config::Features.EsprytAvoidSamplerMipmapMinFilter;
-        caps.AvoidExplicitLodBias =
-            caps.IsAngleLlvmpipeRenderer && MG_Config::Features.EsprytAvoidExplicitLodBias;
-        MGLOG_I("    GL_EXT_disjoint_timer_query supported: %s",
-                caps.SupportsDisjointTimerQuery ? "true" : "false");
+        caps.AvoidExplicitLodBias = caps.IsAngleLlvmpipeRenderer && MG_Config::Features.EsprytAvoidExplicitLodBias;
+        MGLOG_I("    GL_EXT_disjoint_timer_query supported: %s", caps.SupportsDisjointTimerQuery ? "true" : "false");
         MGLOG_I("    GL_KHR_parallel_shader_compile supported: %s",
                 caps.SupportsParallelShaderCompile ? "true" : "false");
         MGLOG_I("    ANGLE renderer: %s", caps.IsAngleRenderer ? "true" : "false");
         MGLOG_I("    ANGLE llvmpipe renderer: %s", caps.IsAngleLlvmpipeRenderer ? "true" : "false");
-        MGLOG_I("    Avoid sampler mipmap min filter: %s",
-                caps.AvoidSamplerMipmapMinFilter ? "true" : "false");
+        MGLOG_I("    Avoid sampler mipmap min filter: %s", caps.AvoidSamplerMipmapMinFilter ? "true" : "false");
         MGLOG_I("    Avoid explicit LOD bias: %s", caps.AvoidExplicitLodBias ? "true" : "false");
 
         // Last line of defence. Capability init is the very first thing that touches the driver,

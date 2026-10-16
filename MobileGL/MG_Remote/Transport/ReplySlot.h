@@ -79,8 +79,7 @@ namespace MobileGL::MG_Remote::Transport {
             if (slotBytes <= sizeof(ReplySlotHeader)) {
                 WireLogError("MG_Remote reply pool: rejected, %llu bytes over %u slots leaves no "
                              "room for a payload past the %llu byte slot header",
-                             static_cast<unsigned long long>(sizeBytes),
-                             static_cast<unsigned>(slotCount),
+                             static_cast<unsigned long long>(sizeBytes), static_cast<unsigned>(slotCount),
                              static_cast<unsigned long long>(sizeof(ReplySlotHeader)));
                 return;
             }
@@ -91,14 +90,13 @@ namespace MobileGL::MG_Remote::Transport {
             // it is naturally aligned. A geometry whose slotBytes is not a
             // multiple of 8 puts later slots on odd boundaries, so it is refused
             // here rather than left to a future caller to discover.
-            if ((slotBytes % 8) != 0 ||
-                (reinterpret_cast<std::uintptr_t>(base) % alignof(ReplySlotHeader)) != 0) {
-                WireLogError("MG_Remote reply pool: rejected, a %llu byte slot at base alignment "
-                             "%llu would put a slot header on an unaligned address, and the seq "
-                             "stamp the wrong-slot check reads has to be untorn",
-                             static_cast<unsigned long long>(slotBytes),
-                             static_cast<unsigned long long>(
-                                 reinterpret_cast<std::uintptr_t>(base) % alignof(ReplySlotHeader)));
+            if ((slotBytes % 8) != 0 || (reinterpret_cast<std::uintptr_t>(base) % alignof(ReplySlotHeader)) != 0) {
+                WireLogError(
+                    "MG_Remote reply pool: rejected, a %llu byte slot at base alignment "
+                    "%llu would put a slot header on an unaligned address, and the seq "
+                    "stamp the wrong-slot check reads has to be untorn",
+                    static_cast<unsigned long long>(slotBytes),
+                    static_cast<unsigned long long>(reinterpret_cast<std::uintptr_t>(base) % alignof(ReplySlotHeader)));
                 return;
             }
             m_base = static_cast<std::uint8_t*>(base);
@@ -107,8 +105,7 @@ namespace MobileGL::MG_Remote::Transport {
             // Truncated to 32 bits deliberately: the header's Size field is
             // 32-bit, so a slot no 32-bit count could describe would let a
             // legal-looking Size name bytes past the slot.
-            m_slotBytes = slotBytes > 0xFFFFFFFFull ? 0xFFFFFFFFu
-                                                    : static_cast<std::uint32_t>(slotBytes);
+            m_slotBytes = slotBytes > 0xFFFFFFFFull ? 0xFFFFFFFFu : static_cast<std::uint32_t>(slotBytes);
         }
 
         bool Valid() const { return m_base != nullptr; }
@@ -118,8 +115,7 @@ namespace MobileGL::MG_Remote::Transport {
         // it emits a ReadPixels, which is the whole reason a fixed slot size is
         // legitimate rather than a guess.
         std::uint32_t MaxReplyBytes() const {
-            return m_slotBytes == 0 ? 0u
-                                    : m_slotBytes - static_cast<std::uint32_t>(sizeof(ReplySlotHeader));
+            return m_slotBytes == 0 ? 0u : m_slotBytes - static_cast<std::uint32_t>(sizeof(ReplySlotHeader));
         }
 
         // ID-47: THE CLIENT'S HALF of "a reply larger than one slot is fatal". True
@@ -142,8 +138,8 @@ namespace MobileGL::MG_Remote::Transport {
         // what is refused is exactly what would have been posted. This is the one
         // call c1's OnReadPixels emitter makes before EmitAndWait; the
         // ClientSession forwards it verbatim (RequireReadPixelsReplyFits).
-        void RequireReadPixelsFits(std::uint32_t width, std::uint32_t height, std::uint32_t format,
-                                   std::uint32_t type, std::uint64_t bytes) const {
+        void RequireReadPixelsFits(std::uint32_t width, std::uint32_t height, std::uint32_t format, std::uint32_t type,
+                                   std::uint64_t bytes) const {
             if (CanHold(bytes)) {
                 return;
             }
@@ -153,9 +149,8 @@ namespace MobileGL::MG_Remote::Transport {
                          "client before emission (ID-47): a reply is neither truncated nor "
                          "chunked, and the client bands any read whose single pixel fits a slot, "
                          "so this answer is one that no banding could have sent",
-                         static_cast<unsigned>(width), static_cast<unsigned>(height),
-                         static_cast<unsigned>(format), static_cast<unsigned>(type),
-                         static_cast<unsigned long long>(bytes),
+                         static_cast<unsigned>(width), static_cast<unsigned>(height), static_cast<unsigned>(format),
+                         static_cast<unsigned>(type), static_cast<unsigned long long>(bytes),
                          static_cast<unsigned>(MaxReplyBytes()), static_cast<unsigned>(m_slots),
                          static_cast<unsigned>(m_slotBytes), static_cast<unsigned>(MaxReplyBytes()));
         }
@@ -168,8 +163,7 @@ namespace MobileGL::MG_Remote::Transport {
             }
             for (std::uint32_t slot = 0; slot < m_slots; ++slot) {
                 ReplySlotHeader header{};
-                std::memcpy(m_base + static_cast<std::uint64_t>(slot) * m_slotBytes, &header,
-                            sizeof(header));
+                std::memcpy(m_base + static_cast<std::uint64_t>(slot) * m_slotBytes, &header, sizeof(header));
             }
         }
 
@@ -194,9 +188,8 @@ namespace MobileGL::MG_Remote::Transport {
                              "for seq %llu does not fit a %u byte slot (payload cap %u). P5 does "
                              "not chunk replies: the client knows an answer's size before it emits "
                              "the record, so this means the two sides disagree about the frame",
-                             static_cast<unsigned long long>(size),
-                             static_cast<unsigned long long>(seq), static_cast<unsigned>(m_slotBytes),
-                             static_cast<unsigned>(MaxReplyBytes()));
+                             static_cast<unsigned long long>(size), static_cast<unsigned long long>(seq),
+                             static_cast<unsigned>(m_slotBytes), static_cast<unsigned>(MaxReplyBytes()));
             }
             std::uint8_t* slot = SlotAt(seq);
             if (size != 0 && bytes != nullptr) {
@@ -213,15 +206,17 @@ namespace MobileGL::MG_Remote::Transport {
 
         // The link can lend the immutable payload after appliedSeq without a
         // second copy. The same seq and size honesty checks guard both readers.
-        bool ReadView(std::uint64_t seq, std::int32_t* status, const void** payload,
-                      std::uint64_t* size) const {
+        bool ReadView(std::uint64_t seq, std::int32_t* status, const void** payload, std::uint64_t* size) const {
             if (!m_base || !seq || !status || !payload || !size) return false;
             const auto* slot = SlotAt(seq);
-            ReplySlotHeader header{}; std::memcpy(&header, slot, sizeof header);
+            ReplySlotHeader header{};
+            std::memcpy(&header, slot, sizeof header);
             std::atomic_thread_fence(std::memory_order_acquire);
             if (header.Seq != seq || header.Size > MaxReplyBytes()) return false;
-            *status = header.Status; *size = header.Size;
-            *payload = slot + sizeof header; return true;
+            *status = header.Status;
+            *size = header.Size;
+            *payload = slot + sizeof header;
+            return true;
         }
 
         // Client side. Returns false when the slot does not carry THIS seq - the
@@ -231,8 +226,8 @@ namespace MobileGL::MG_Remote::Transport {
         // A payload larger than the caller's buffer is a caller bug rather than a
         // wire fault (the caller sized it from the call it made), so it returns
         // false with *outSize set to what was there, the ReceiveFrame shape.
-        bool Read(std::uint64_t seq, void* outBytes, std::uint64_t outCapacity,
-                  std::int32_t* outStatus, std::uint64_t* outSize) const {
+        bool Read(std::uint64_t seq, void* outBytes, std::uint64_t outCapacity, std::int32_t* outStatus,
+                  std::uint64_t* outSize) const {
             if (outStatus != nullptr) {
                 *outStatus = kReplyStatusError;
             }
@@ -254,16 +249,14 @@ namespace MobileGL::MG_Remote::Transport {
                 WireLogError("MG_Remote reply pool: slot %llu carries seq %llu, not %llu - the two "
                              "sides' sequence spaces have drifted (a counted kRecPad, R-9) or the "
                              "addressing disagrees",
-                             static_cast<unsigned long long>(seq & m_mask),
-                             static_cast<unsigned long long>(header.Seq),
+                             static_cast<unsigned long long>(seq & m_mask), static_cast<unsigned long long>(header.Seq),
                              static_cast<unsigned long long>(seq));
                 return false;
             }
             if (header.Size > MaxReplyBytes()) {
                 WireLogError("MG_Remote reply pool: slot for seq %llu declares %u payload bytes in "
                              "a %u byte slot",
-                             static_cast<unsigned long long>(seq), header.Size,
-                             static_cast<unsigned>(m_slotBytes));
+                             static_cast<unsigned long long>(seq), header.Size, static_cast<unsigned>(m_slotBytes));
                 return false;
             }
             if (outStatus != nullptr) {

@@ -13,138 +13,138 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         static void GetImageTransitionDestinationState(VkImageLayout newLayout, VkPipelineStageFlags& outDstStageMask,
                                                        VkAccessFlags& outDstAccessMask) {
             switch (newLayout) {
-                case VK_IMAGE_LAYOUT_UNDEFINED:
-                    outDstStageMask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
-                    outDstAccessMask = 0;
-                    break;
-                case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL:
-                    outDstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-                    outDstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-                    break;
-                case VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL:
-                    outDstStageMask = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
-                                      VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
-                    outDstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
-                                       VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-                    break;
-                case VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL:
-                case VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_STENCIL_ATTACHMENT_OPTIMAL:
-                case VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_STENCIL_READ_ONLY_OPTIMAL:
-                case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
-                    outDstStageMask = VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT;
-                    outDstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-                    break;
-                case VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL:
-                    outDstStageMask = VK_PIPELINE_STAGE_TRANSFER_BIT;
-                    outDstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-                    break;
-                case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL:
-                    outDstStageMask = VK_PIPELINE_STAGE_TRANSFER_BIT;
-                    outDstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-                    break;
-                case VK_IMAGE_LAYOUT_PRESENT_SRC_KHR:
-                    outDstStageMask = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
-                    outDstAccessMask = VK_ACCESS_MEMORY_READ_BIT;
-                    break;
-                default:
-                    outDstStageMask = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
-                    outDstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
-                    break;
+            case VK_IMAGE_LAYOUT_UNDEFINED:
+                outDstStageMask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+                outDstAccessMask = 0;
+                break;
+            case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL:
+                outDstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+                outDstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+                break;
+            case VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL:
+                outDstStageMask =
+                    VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+                outDstAccessMask =
+                    VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+                break;
+            case VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL:
+            case VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_STENCIL_ATTACHMENT_OPTIMAL:
+            case VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_STENCIL_READ_ONLY_OPTIMAL:
+            case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
+                outDstStageMask = VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT;
+                outDstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+                break;
+            case VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL:
+                outDstStageMask = VK_PIPELINE_STAGE_TRANSFER_BIT;
+                outDstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+                break;
+            case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL:
+                outDstStageMask = VK_PIPELINE_STAGE_TRANSFER_BIT;
+                outDstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+                break;
+            case VK_IMAGE_LAYOUT_PRESENT_SRC_KHR:
+                outDstStageMask = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
+                outDstAccessMask = VK_ACCESS_MEMORY_READ_BIT;
+                break;
+            default:
+                outDstStageMask = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+                outDstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+                break;
             }
         }
 
         static Bool DecodeReadbackPixel(const Uint8* source, VkFormat sourceFormat, Float* rgba) {
             switch (sourceFormat) {
-                case VK_FORMAT_R8G8B8A8_UNORM:
-                case VK_FORMAT_R8G8B8A8_SRGB:
-                    rgba[0] = static_cast<Float>(source[0]) / 255.0f;
-                    rgba[1] = static_cast<Float>(source[1]) / 255.0f;
-                    rgba[2] = static_cast<Float>(source[2]) / 255.0f;
-                    rgba[3] = static_cast<Float>(source[3]) / 255.0f;
-                    return true;
-                case VK_FORMAT_B8G8R8A8_UNORM:
-                case VK_FORMAT_B8G8R8A8_SRGB:
-                    rgba[0] = static_cast<Float>(source[2]) / 255.0f;
-                    rgba[1] = static_cast<Float>(source[1]) / 255.0f;
-                    rgba[2] = static_cast<Float>(source[0]) / 255.0f;
-                    rgba[3] = static_cast<Float>(source[3]) / 255.0f;
-                    return true;
-                case VK_FORMAT_R16G16B16A16_UNORM:
-                    for (SizeT component = 0; component < 4; ++component) {
-                        Uint16 value = 0;
-                        Memcpy(&value, source + component * sizeof(value), sizeof(value));
-                        rgba[component] = static_cast<Float>(value) / 65535.0f;
-                    }
-                    return true;
-                case VK_FORMAT_R16G16B16A16_SFLOAT:
-                    for (SizeT component = 0; component < 4; ++component) {
-                        Uint16 value = 0;
-                        Memcpy(&value, source + component * sizeof(value), sizeof(value));
-                        rgba[component] = MG_Util::DecodeHalfBitsToFloat(value);
-                    }
-                    return true;
-                case VK_FORMAT_R32G32B32A32_SFLOAT:
-                    Memcpy(rgba, source, sizeof(Float) * 4);
-                    return true;
-                // Single- and dual-channel formats the reinterpretation feature makes common
-                // as readback sources (iterationRP custom images are R32F/R32UI-class).
-                // Missing channels take GL's defaults: 0 for GB, 1 for alpha.
-                case VK_FORMAT_R32_SFLOAT: {
-                    Float value = 0.0f;
-                    Memcpy(&value, source, sizeof(value));
-                    rgba[0] = value;
-                    rgba[1] = 0.0f;
-                    rgba[2] = 0.0f;
-                    rgba[3] = 1.0f;
-                    return true;
-                }
-                case VK_FORMAT_R32G32_SFLOAT: {
-                    Float values[2] = {0.0f, 0.0f};
-                    Memcpy(values, source, sizeof(values));
-                    rgba[0] = values[0];
-                    rgba[1] = values[1];
-                    rgba[2] = 0.0f;
-                    rgba[3] = 1.0f;
-                    return true;
-                }
-                case VK_FORMAT_R32_UINT: {
-                    Uint32 value = 0;
-                    Memcpy(&value, source, sizeof(value));
-                    rgba[0] = static_cast<Float>(value);
-                    rgba[1] = 0.0f;
-                    rgba[2] = 0.0f;
-                    rgba[3] = 1.0f;
-                    return true;
-                }
-                case VK_FORMAT_R32_SINT: {
-                    Int32 value = 0;
-                    Memcpy(&value, source, sizeof(value));
-                    rgba[0] = static_cast<Float>(value);
-                    rgba[1] = 0.0f;
-                    rgba[2] = 0.0f;
-                    rgba[3] = 1.0f;
-                    return true;
-                }
-                case VK_FORMAT_R16_SFLOAT: {
+            case VK_FORMAT_R8G8B8A8_UNORM:
+            case VK_FORMAT_R8G8B8A8_SRGB:
+                rgba[0] = static_cast<Float>(source[0]) / 255.0f;
+                rgba[1] = static_cast<Float>(source[1]) / 255.0f;
+                rgba[2] = static_cast<Float>(source[2]) / 255.0f;
+                rgba[3] = static_cast<Float>(source[3]) / 255.0f;
+                return true;
+            case VK_FORMAT_B8G8R8A8_UNORM:
+            case VK_FORMAT_B8G8R8A8_SRGB:
+                rgba[0] = static_cast<Float>(source[2]) / 255.0f;
+                rgba[1] = static_cast<Float>(source[1]) / 255.0f;
+                rgba[2] = static_cast<Float>(source[0]) / 255.0f;
+                rgba[3] = static_cast<Float>(source[3]) / 255.0f;
+                return true;
+            case VK_FORMAT_R16G16B16A16_UNORM:
+                for (SizeT component = 0; component < 4; ++component) {
                     Uint16 value = 0;
-                    Memcpy(&value, source, sizeof(value));
-                    rgba[0] = MG_Util::DecodeHalfBitsToFloat(value);
-                    rgba[1] = 0.0f;
-                    rgba[2] = 0.0f;
-                    rgba[3] = 1.0f;
-                    return true;
+                    Memcpy(&value, source + component * sizeof(value), sizeof(value));
+                    rgba[component] = static_cast<Float>(value) / 65535.0f;
                 }
-                case VK_FORMAT_R16G16_SFLOAT:
-                    for (SizeT component = 0; component < 2; ++component) {
-                        Uint16 value = 0;
-                        Memcpy(&value, source + component * sizeof(value), sizeof(value));
-                        rgba[component] = MG_Util::DecodeHalfBitsToFloat(value);
-                    }
-                    rgba[2] = 0.0f;
-                    rgba[3] = 1.0f;
-                    return true;
-                default:
-                    return false;
+                return true;
+            case VK_FORMAT_R16G16B16A16_SFLOAT:
+                for (SizeT component = 0; component < 4; ++component) {
+                    Uint16 value = 0;
+                    Memcpy(&value, source + component * sizeof(value), sizeof(value));
+                    rgba[component] = MG_Util::DecodeHalfBitsToFloat(value);
+                }
+                return true;
+            case VK_FORMAT_R32G32B32A32_SFLOAT:
+                Memcpy(rgba, source, sizeof(Float) * 4);
+                return true;
+            // Single- and dual-channel formats the reinterpretation feature makes common
+            // as readback sources (iterationRP custom images are R32F/R32UI-class).
+            // Missing channels take GL's defaults: 0 for GB, 1 for alpha.
+            case VK_FORMAT_R32_SFLOAT: {
+                Float value = 0.0f;
+                Memcpy(&value, source, sizeof(value));
+                rgba[0] = value;
+                rgba[1] = 0.0f;
+                rgba[2] = 0.0f;
+                rgba[3] = 1.0f;
+                return true;
+            }
+            case VK_FORMAT_R32G32_SFLOAT: {
+                Float values[2] = {0.0f, 0.0f};
+                Memcpy(values, source, sizeof(values));
+                rgba[0] = values[0];
+                rgba[1] = values[1];
+                rgba[2] = 0.0f;
+                rgba[3] = 1.0f;
+                return true;
+            }
+            case VK_FORMAT_R32_UINT: {
+                Uint32 value = 0;
+                Memcpy(&value, source, sizeof(value));
+                rgba[0] = static_cast<Float>(value);
+                rgba[1] = 0.0f;
+                rgba[2] = 0.0f;
+                rgba[3] = 1.0f;
+                return true;
+            }
+            case VK_FORMAT_R32_SINT: {
+                Int32 value = 0;
+                Memcpy(&value, source, sizeof(value));
+                rgba[0] = static_cast<Float>(value);
+                rgba[1] = 0.0f;
+                rgba[2] = 0.0f;
+                rgba[3] = 1.0f;
+                return true;
+            }
+            case VK_FORMAT_R16_SFLOAT: {
+                Uint16 value = 0;
+                Memcpy(&value, source, sizeof(value));
+                rgba[0] = MG_Util::DecodeHalfBitsToFloat(value);
+                rgba[1] = 0.0f;
+                rgba[2] = 0.0f;
+                rgba[3] = 1.0f;
+                return true;
+            }
+            case VK_FORMAT_R16G16_SFLOAT:
+                for (SizeT component = 0; component < 2; ++component) {
+                    Uint16 value = 0;
+                    Memcpy(&value, source + component * sizeof(value), sizeof(value));
+                    rgba[component] = MG_Util::DecodeHalfBitsToFloat(value);
+                }
+                rgba[2] = 0.0f;
+                rgba[3] = 1.0f;
+                return true;
+            default:
+                return false;
             }
         }
 
@@ -160,14 +160,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         static Int GetReadbackChannelCount(GLenum format) {
             switch (format) {
-                case GL_RGB:
-                case GL_BGR:
-                    return 3;
-                case GL_RGBA:
-                case GL_BGRA:
-                    return 4;
-                default:
-                    return 0;
+            case GL_RGB:
+            case GL_BGR:
+                return 3;
+            case GL_RGBA:
+            case GL_BGRA:
+                return 4;
+            default:
+                return 0;
             }
         }
 
@@ -177,30 +177,30 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             const Uint8 b = EncodeReadbackUnorm8(rgba[2]);
             const Uint8 a = EncodeReadbackUnorm8(rgba[3]);
             switch (dstFormat) {
-                case GL_RGB:
-                    dst[0] = r;
-                    dst[1] = g;
-                    dst[2] = b;
-                    break;
-                case GL_BGR:
-                    dst[0] = b;
-                    dst[1] = g;
-                    dst[2] = r;
-                    break;
-                case GL_RGBA:
-                    dst[0] = r;
-                    dst[1] = g;
-                    dst[2] = b;
-                    dst[3] = a;
-                    break;
-                case GL_BGRA:
-                    dst[0] = b;
-                    dst[1] = g;
-                    dst[2] = r;
-                    dst[3] = a;
-                    break;
-                default:
-                    break;
+            case GL_RGB:
+                dst[0] = r;
+                dst[1] = g;
+                dst[2] = b;
+                break;
+            case GL_BGR:
+                dst[0] = b;
+                dst[1] = g;
+                dst[2] = r;
+                break;
+            case GL_RGBA:
+                dst[0] = r;
+                dst[1] = g;
+                dst[2] = b;
+                dst[3] = a;
+                break;
+            case GL_BGRA:
+                dst[0] = b;
+                dst[1] = g;
+                dst[2] = r;
+                dst[3] = a;
+                break;
+            default:
+                break;
             }
         }
 
@@ -210,30 +210,30 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             const Float b = rgba[2];
             const Float a = rgba[3];
             switch (dstFormat) {
-                case GL_RGB:
-                    dst[0] = r;
-                    dst[1] = g;
-                    dst[2] = b;
-                    break;
-                case GL_BGR:
-                    dst[0] = b;
-                    dst[1] = g;
-                    dst[2] = r;
-                    break;
-                case GL_RGBA:
-                    dst[0] = r;
-                    dst[1] = g;
-                    dst[2] = b;
-                    dst[3] = a;
-                    break;
-                case GL_BGRA:
-                    dst[0] = b;
-                    dst[1] = g;
-                    dst[2] = r;
-                    dst[3] = a;
-                    break;
-                default:
-                    break;
+            case GL_RGB:
+                dst[0] = r;
+                dst[1] = g;
+                dst[2] = b;
+                break;
+            case GL_BGR:
+                dst[0] = b;
+                dst[1] = g;
+                dst[2] = r;
+                break;
+            case GL_RGBA:
+                dst[0] = r;
+                dst[1] = g;
+                dst[2] = b;
+                dst[3] = a;
+                break;
+            case GL_BGRA:
+                dst[0] = b;
+                dst[1] = g;
+                dst[2] = r;
+                dst[3] = a;
+                break;
+            default:
+                break;
             }
         }
     } // namespace
@@ -246,10 +246,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return formatInfo.texel_block_size;
     }
 
-    Bool VulkanRenderer::MapDefaultFramebufferReadbackRect(
-            GLint x, GLint y, GLsizei width, GLsizei height, VkExtent2D imageExtent,
-            VkSurfaceTransformFlagBitsKHR preTransform, VkOffset2D* imageOffset,
-            VkExtent2D* imageCopyExtent) {
+    Bool VulkanRenderer::MapDefaultFramebufferReadbackRect(GLint x, GLint y, GLsizei width, GLsizei height,
+                                                           VkExtent2D imageExtent,
+                                                           VkSurfaceTransformFlagBitsKHR preTransform,
+                                                           VkOffset2D* imageOffset, VkExtent2D* imageCopyExtent) {
         if (width <= 0 || height <= 0 || imageOffset == nullptr || imageCopyExtent == nullptr) {
             return false;
         }
@@ -287,8 +287,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             break;
         }
 
-        if (mappedX < 0 || mappedY < 0 || mappedWidth > imageExtent.width ||
-            mappedHeight > imageExtent.height ||
+        if (mappedX < 0 || mappedY < 0 || mappedWidth > imageExtent.width || mappedHeight > imageExtent.height ||
             static_cast<Uint64>(mappedX) + mappedWidth > imageExtent.width ||
             static_cast<Uint64>(mappedY) + mappedHeight > imageExtent.height) {
             return false;
@@ -298,11 +297,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return true;
     }
 
-    Bool VulkanRenderer::RemapDefaultFramebufferReadback(
-            const Uint8* rawPixels, Uint32 logicalWidth, Uint32 logicalHeight,
-            VkSurfaceTransformFlagBitsKHR preTransform, SizeT texelSize, Uint8* outPixels) {
-        if (rawPixels == nullptr || outPixels == nullptr || logicalWidth == 0 || logicalHeight == 0 ||
-            texelSize == 0) {
+    Bool VulkanRenderer::RemapDefaultFramebufferReadback(const Uint8* rawPixels, Uint32 logicalWidth,
+                                                         Uint32 logicalHeight,
+                                                         VkSurfaceTransformFlagBitsKHR preTransform, SizeT texelSize,
+                                                         Uint8* outPixels) {
+        if (rawPixels == nullptr || outPixels == nullptr || logicalWidth == 0 || logicalHeight == 0 || texelSize == 0) {
             return false;
         }
 
@@ -328,17 +327,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     break;
                 }
                 Memcpy(outPixels + (static_cast<SizeT>(outY) * logicalWidth + outX) * texelSize,
-                       rawPixels + (static_cast<SizeT>(srcY) * rawWidth + srcX) * texelSize,
-                       texelSize);
+                       rawPixels + (static_cast<SizeT>(srcY) * rawWidth + srcX) * texelSize, texelSize);
             }
         }
         return true;
     }
 
-    Bool VulkanRenderer::ConvertReadbackPixels(const Uint8* sourcePixels, VkFormat sourceFormat,
-                                               GLsizei width, GLsizei height, GLenum destinationFormat,
-                                               GLenum destinationType, SizeT destinationRowStride,
-                                               Uint8* destinationPixels) {
+    Bool VulkanRenderer::ConvertReadbackPixels(const Uint8* sourcePixels, VkFormat sourceFormat, GLsizei width,
+                                               GLsizei height, GLenum destinationFormat, GLenum destinationType,
+                                               SizeT destinationRowStride, Uint8* destinationPixels) {
         if (width <= 0 || height <= 0) {
             return true;
         }
@@ -359,8 +356,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
 
         for (GLsizei row = 0; row < height; ++row) {
-            const Uint8* sourceRow = sourcePixels +
-                static_cast<SizeT>(row) * static_cast<SizeT>(width) * sourceTexelSize;
+            const Uint8* sourceRow =
+                sourcePixels + static_cast<SizeT>(row) * static_cast<SizeT>(width) * sourceTexelSize;
             Uint8* destinationRow = destinationPixels + static_cast<SizeT>(row) * destinationRowStride;
             for (GLsizei column = 0; column < width; ++column) {
                 const Uint8* source = sourceRow + static_cast<SizeT>(column) * sourceTexelSize;
@@ -397,7 +394,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                                  const ClearAttachmentPayload& clearPayload) {
         const auto* fbo = MG_Pipe::MGPipeApplier().DrawFramebuffer();
         if (!fbo) MagmaWireFatal("clear-buffer-framebuffer-record");
-        ClearWireFramebuffer(*fbo,clearPayload,buffer == GL_COLOR ? drawbuffer : -1);
+        ClearWireFramebuffer(*fbo, clearPayload, buffer == GL_COLOR ? drawbuffer : -1);
         return;
     }
 
@@ -416,16 +413,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
         ClearAttachmentPayload payload{};
         switch (buffer) {
-            case GL_COLOR:
-                payload.mask = GL_COLOR_BUFFER_BIT;
-                payload.color = FloatVec4(value[0], value[1], value[2], value[3]);
-                break;
-            case GL_DEPTH:
-                payload.mask = GL_DEPTH_BUFFER_BIT;
-                payload.depth = std::clamp(value[0], 0.0f, 1.0f);
-                break;
-            default:
-                break;
+        case GL_COLOR:
+            payload.mask = GL_COLOR_BUFFER_BIT;
+            payload.color = FloatVec4(value[0], value[1], value[2], value[3]);
+            break;
+        case GL_DEPTH:
+            payload.mask = GL_DEPTH_BUFFER_BIT;
+            payload.depth = std::clamp(value[0], 0.0f, 1.0f);
+            break;
+        default:
+            break;
         }
         QueueClearBufferPayload(buffer, drawbuffer, payload);
     }
@@ -436,17 +433,17 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
         ClearAttachmentPayload payload{};
         switch (buffer) {
-            case GL_COLOR:
-                payload.mask = GL_COLOR_BUFFER_BIT;
-                payload.colorEncoding = ClearColorEncoding::Uint;
-                payload.colorUint = UintVec4(value[0], value[1], value[2], value[3]);
-                break;
-            case GL_STENCIL:
-                payload.mask = GL_STENCIL_BUFFER_BIT;
-                payload.stencil = value[0];
-                break;
-            default:
-                break;
+        case GL_COLOR:
+            payload.mask = GL_COLOR_BUFFER_BIT;
+            payload.colorEncoding = ClearColorEncoding::Uint;
+            payload.colorUint = UintVec4(value[0], value[1], value[2], value[3]);
+            break;
+        case GL_STENCIL:
+            payload.mask = GL_STENCIL_BUFFER_BIT;
+            payload.stencil = value[0];
+            break;
+        default:
+            break;
         }
         QueueClearBufferPayload(buffer, drawbuffer, payload);
     }
@@ -457,17 +454,17 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
         ClearAttachmentPayload payload{};
         switch (buffer) {
-            case GL_COLOR:
-                payload.mask = GL_COLOR_BUFFER_BIT;
-                payload.colorEncoding = ClearColorEncoding::Int;
-                payload.colorInt = IntVec4(value[0], value[1], value[2], value[3]);
-                break;
-            case GL_STENCIL:
-                payload.mask = GL_STENCIL_BUFFER_BIT;
-                payload.stencil = static_cast<Uint32>(std::max(value[0], 0));
-                break;
-            default:
-                break;
+        case GL_COLOR:
+            payload.mask = GL_COLOR_BUFFER_BIT;
+            payload.colorEncoding = ClearColorEncoding::Int;
+            payload.colorInt = IntVec4(value[0], value[1], value[2], value[3]);
+            break;
+        case GL_STENCIL:
+            payload.mask = GL_STENCIL_BUFFER_BIT;
+            payload.stencil = static_cast<Uint32>(std::max(value[0], 0));
+            break;
+        default:
+            break;
         }
         QueueClearBufferPayload(buffer, drawbuffer, payload);
     }
@@ -479,16 +476,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         m_msResolveScratch = {};
     }
 
-    void VulkanRenderer::BlitFramebuffer(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1,
-                                         GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1,
-                                         GLbitfield mask, GLenum filter) {
-        BlitWireFramebuffers(srcX0,srcY0,srcX1,srcY1,dstX0,dstY0,dstX1,dstY1,mask,filter);
+    void VulkanRenderer::BlitFramebuffer(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1, GLint dstX0, GLint dstY0,
+                                         GLint dstX1, GLint dstY1, GLbitfield mask, GLenum filter) {
+        BlitWireFramebuffers(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask, filter);
         return;
     }
 
-    void VulkanRenderer::CopyTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset,
-                                           GLint x, GLint y, GLsizei width, GLsizei height) {
-        CopyWireFramebufferToTexture(target,level,xoffset,yoffset,x,y,width,height);
+    void VulkanRenderer::CopyTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint x, GLint y,
+                                           GLsizei width, GLsizei height) {
+        CopyWireFramebufferToTexture(target, level, xoffset, yoffset, x, y, width, height);
         return;
     }
 
@@ -603,9 +599,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
     } // namespace
 
-    void VulkanRenderer::CopyImageSubData(const CopyImageEndpoint& srcEndpoint,
-                                          GLenum srcTarget, GLint srcLevel, GLint srcX, GLint srcY, GLint srcZ,
-                                          const CopyImageEndpoint& dstEndpoint,
+    void VulkanRenderer::CopyImageSubData(const CopyImageEndpoint& srcEndpoint, GLenum srcTarget, GLint srcLevel,
+                                          GLint srcX, GLint srcY, GLint srcZ, const CopyImageEndpoint& dstEndpoint,
                                           GLenum dstTarget, GLint dstLevel, GLint dstX, GLint dstY, GLint dstZ,
                                           GLsizei srcWidth, GLsizei srcHeight, GLsizei srcDepth) {
         const Bool wire = true; // P13 W6: the record arm is the only arm
@@ -671,8 +666,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         //
         // `inPlace` is constexpr false in the pull build so that every branch it guards folds
         // away: this function is in the monolith image too and G1 pins that image's .text.
-        const Bool inPlace = wire && srcImage.image != VK_NULL_HANDLE &&
-                             srcImage.image == dstImage.image;
+        const Bool inPlace = wire && srcImage.image != VK_NULL_HANDLE && srcImage.image == dstImage.image;
         if (wire) m_textureManager->FlushPendingUploads();
         // Real checks, not MOBILEGL_ASSERT: the assertions this replaces compile to nothing in
         // a release build, which is where both observed failures happened - a null resource
@@ -705,10 +699,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     return endpoint.RenderbufferHandle;
                 }
                 Uint32 mappedMip = static_cast<Uint32>(mip), mappedLayer = static_cast<Uint32>(layer);
-                const auto storage = m_textureManager->ResolveWireTextureStorage(
-                    endpoint.TextureHandle, mappedMip, mappedLayer);
+                const auto storage =
+                    m_textureManager->ResolveWireTextureStorage(endpoint.TextureHandle, mappedMip, mappedLayer);
                 if (MG_Pipe::MGPipeHandleIsNull(storage)) MagmaWireFatal("copy-image-view-record");
-                mip = static_cast<GLint>(mappedMip); layer = static_cast<GLint>(mappedLayer);
+                mip = static_cast<GLint>(mappedMip);
+                layer = static_cast<GLint>(mappedLayer);
                 return storage;
             };
             (void)mapSubresource(srcEndpoint, srcLevel, srcZ);
@@ -763,9 +758,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         const VkImageAspectFlags copyAspectMask =
             srcImage.aspect & dstImage.aspect &
             (VK_IMAGE_ASPECT_COLOR_BIT | VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT);
-        MOBILEGL_ASSERT(copyAspectMask != 0 &&
-                        (srcImage.aspect & copyAspectMask) == srcImage.aspect &&
-                        (dstImage.aspect & copyAspectMask) == dstImage.aspect,
+        MOBILEGL_ASSERT(copyAspectMask != 0 && (srcImage.aspect & copyAspectMask) == srcImage.aspect &&
+                            (dstImage.aspect & copyAspectMask) == dstImage.aspect,
                         "CopyImageSubData source and destination aspects are incompatible.");
         const Uint32 srcMipLevel = static_cast<Uint32>(srcLevel);
         const Uint32 dstMipLevel = static_cast<Uint32>(dstLevel);
@@ -779,15 +773,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // copy_image.exceeding_boundaries, that asks for exactly this input). Nothing legal is
         // lost by declining - a copy that reads or writes outside the image was never going to
         // produce a correct result, it was going to produce whatever the driver did next.
-        if (srcX < 0 || srcY < 0 || dstX < 0 || dstY < 0 ||
-            static_cast<Uint32>(srcX + srcWidth) > srcMipWidth ||
+        if (srcX < 0 || srcY < 0 || dstX < 0 || dstY < 0 || static_cast<Uint32>(srcX + srcWidth) > srcMipWidth ||
             static_cast<Uint32>(srcY + srcHeight) > srcMipHeight ||
             static_cast<Uint32>(dstX + srcWidth) > dstMipWidth ||
             static_cast<Uint32>(dstY + srcHeight) > dstMipHeight) {
             MGLOG_E_ONCE("%s: region outside image bounds (src %dx%d+%d+%d of %ux%u, dst +%d+%d of %ux%u); "
                          "declining the copy",
-                         __func__, srcWidth, srcHeight, srcX, srcY, srcMipWidth, srcMipHeight, dstX, dstY,
-                         dstMipWidth, dstMipHeight);
+                         __func__, srcWidth, srcHeight, srcX, srcY, srcMipWidth, srcMipHeight, dstX, dstY, dstMipWidth,
+                         dstMipHeight);
             return;
         }
 
@@ -828,17 +821,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // between disjoint rectangles of one level, is perfectly defined and is performed.
         if (inPlace && srcMipLevel == dstMipLevel) {
             const Uint32 srcSliceBegin = srcSlices.baseSlice, dstSliceBegin = dstSlices.baseSlice;
-            const Bool slicesOverlap = srcSliceBegin < dstSliceBegin + copySliceCount &&
-                                       dstSliceBegin < srcSliceBegin + copySliceCount;
-            const Bool rectOverlaps = srcX < dstX + srcWidth && dstX < srcX + srcWidth &&
-                                      srcY < dstY + srcHeight && dstY < srcY + srcHeight;
+            const Bool slicesOverlap =
+                srcSliceBegin < dstSliceBegin + copySliceCount && dstSliceBegin < srcSliceBegin + copySliceCount;
+            const Bool rectOverlaps =
+                srcX < dstX + srcWidth && dstX < srcX + srcWidth && srcY < dstY + srcHeight && dstY < srcY + srcHeight;
             if (slicesOverlap && rectOverlaps) {
                 MGLOG_E_ONCE("%s: in-place copy on objectId=%u overlaps itself at level %u "
                              "(src %dx%d+%d+%d slice %u, dst +%d+%d slice %u, %u slice(s)); GL leaves "
                              "the result undefined, so the copy is declined rather than recorded",
-                             __func__, CopyImageEndpointName(srcEndpoint), srcMipLevel,
-                             srcWidth, srcHeight, srcX, srcY, srcSliceBegin, dstX, dstY,
-                             dstSliceBegin, copySliceCount);
+                             __func__, CopyImageEndpointName(srcEndpoint), srcMipLevel, srcWidth, srcHeight, srcX, srcY,
+                             srcSliceBegin, dstX, dstY, dstSliceBegin, copySliceCount);
                 return;
             }
         }
@@ -853,17 +845,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             VkRenderPassManager::EndRenderPass(frame.commandBuffer);
         }
 
-        const auto materializeClear = [this, &frame](const CopyImageEndpoint& endpoint) {
-            return true;
-        };
+        const auto materializeClear = [this, &frame](const CopyImageEndpoint& endpoint) { return true; };
         const Bool clearReady = materializeClear(srcEndpoint);
-        MOBILEGL_ASSERT(clearReady, "%s: failed to materialize pending clear for source objectId=%u",
-                        __func__, CopyImageEndpointName(srcEndpoint));
+        MOBILEGL_ASSERT(clearReady, "%s: failed to materialize pending clear for source objectId=%u", __func__,
+                        CopyImageEndpointName(srcEndpoint));
         // A clear still parked on the destination would otherwise materialize AFTER this copy and
         // wipe the texels it just wrote.
         const Bool dstClearReady = materializeClear(dstEndpoint);
-        MOBILEGL_ASSERT(dstClearReady, "%s: failed to materialize pending clear for destination objectId=%u",
-                        __func__, CopyImageEndpointName(dstEndpoint));
+        MOBILEGL_ASSERT(dstClearReady, "%s: failed to materialize pending clear for destination objectId=%u", __func__,
+                        CopyImageEndpointName(dstEndpoint));
 
         const VkImageLayout srcOriginalLayout = *srcImage.trackedLayout;
         const VkImageLayout dstOriginalLayout = *dstImage.trackedLayout;
@@ -878,8 +868,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             if (originalLayout != VK_IMAGE_LAYOUT_UNDEFINED) {
                 return originalLayout;
             }
-            const Bool depthStencil =
-                (copyAspectMask & (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT)) != 0;
+            const Bool depthStencil = (copyAspectMask & (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT)) != 0;
             if (isRenderbuffer) {
                 return depthStencil ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
                                     : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
@@ -902,8 +891,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         const VkImageLayout copyDestinationLayout =
             inPlace ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
         const VkAccessFlags copySourceAccess =
-            inPlace ? (VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT)
-                    : VK_ACCESS_TRANSFER_READ_BIT;
+            inPlace ? (VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT) : VK_ACCESS_TRANSFER_READ_BIT;
         VkPipelineStageFlags srcStageMask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
         VkAccessFlags srcAccessMask = 0;
         GetImageTransitionSourceState(srcOriginalLayout, srcStageMask, srcAccessMask);
@@ -913,19 +901,17 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // [baseSlice, baseSlice + depth) the slice mapping above hands the copy.
         if (srcOriginalLayout == VK_IMAGE_LAYOUT_UNDEFINED) {
             Bool srcReady = VkTextureManager::TransitionImageLayout(
-                frame.commandBuffer, srcImage.image, *srcImage.trackedLayout, copySourceLayout,
-                srcStageMask, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                srcAccessMask, copySourceAccess,
-                srcImage.aspect, 0, srcImage.mipLevels);
+                frame.commandBuffer, srcImage.image, *srcImage.trackedLayout, copySourceLayout, srcStageMask,
+                VK_PIPELINE_STAGE_TRANSFER_BIT, srcAccessMask, copySourceAccess, srcImage.aspect, 0,
+                srcImage.mipLevels);
             MOBILEGL_ASSERT(srcReady, "%s: failed to transition undefined source image", __func__);
             srcCopyLayout = *srcImage.trackedLayout;
         } else {
             Bool srcReady = VkTextureManager::TransitionImageLayout(
-                frame.commandBuffer, srcImage.image, srcCopyLayout, copySourceLayout,
-                srcStageMask, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                srcAccessMask, copySourceAccess,
-                inPlace ? srcImage.aspect : copyAspectMask,
-                inPlace ? 0u : srcMipLevel, inPlace ? srcImage.mipLevels : 1u);
+                frame.commandBuffer, srcImage.image, srcCopyLayout, copySourceLayout, srcStageMask,
+                VK_PIPELINE_STAGE_TRANSFER_BIT, srcAccessMask, copySourceAccess,
+                inPlace ? srcImage.aspect : copyAspectMask, inPlace ? 0u : srcMipLevel,
+                inPlace ? srcImage.mipLevels : 1u);
             MOBILEGL_ASSERT(srcReady, "%s: failed to transition source image", __func__);
         }
 
@@ -939,16 +925,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         } else if (dstOriginalLayout == VK_IMAGE_LAYOUT_UNDEFINED) {
             Bool dstReady = VkTextureManager::TransitionImageLayout(
                 frame.commandBuffer, dstImage.image, *dstImage.trackedLayout, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                dstStageMask, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                dstAccessMask, VK_ACCESS_TRANSFER_WRITE_BIT,
+                dstStageMask, VK_PIPELINE_STAGE_TRANSFER_BIT, dstAccessMask, VK_ACCESS_TRANSFER_WRITE_BIT,
                 dstImage.aspect, 0, dstImage.mipLevels);
             MOBILEGL_ASSERT(dstReady, "%s: failed to transition undefined destination image", __func__);
             dstCopyLayout = *dstImage.trackedLayout;
         } else {
             Bool dstReady = VkTextureManager::TransitionImageLayout(
-                frame.commandBuffer, dstImage.image, dstCopyLayout, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                dstStageMask, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                dstAccessMask, VK_ACCESS_TRANSFER_WRITE_BIT, copyAspectMask, dstMipLevel, 1);
+                frame.commandBuffer, dstImage.image, dstCopyLayout, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, dstStageMask,
+                VK_PIPELINE_STAGE_TRANSFER_BIT, dstAccessMask, VK_ACCESS_TRANSFER_WRITE_BIT, copyAspectMask,
+                dstMipLevel, 1);
             MOBILEGL_ASSERT(dstReady, "%s: failed to transition destination image", __func__);
         }
 
@@ -973,10 +958,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         MGLOG_D("CopyImageSubData: src(target=%s level=%u layer=%u+%u z=%d) -> dst(target=%s level=%u layer=%u+%u "
                 "z=%d) extent=[%d x %d x %u]",
                 MG_Util::ConvertTextureTargetToString(srcTextureTarget).c_str(), srcMipLevel,
-                copyRegion.srcSubresource.baseArrayLayer, copyRegion.srcSubresource.layerCount,
-                copyRegion.srcOffset.z, MG_Util::ConvertTextureTargetToString(dstTextureTarget).c_str(), dstMipLevel,
-                copyRegion.dstSubresource.baseArrayLayer, copyRegion.dstSubresource.layerCount,
-                copyRegion.dstOffset.z, srcWidth, srcHeight, copyRegion.extent.depth);
+                copyRegion.srcSubresource.baseArrayLayer, copyRegion.srcSubresource.layerCount, copyRegion.srcOffset.z,
+                MG_Util::ConvertTextureTargetToString(dstTextureTarget).c_str(), dstMipLevel,
+                copyRegion.dstSubresource.baseArrayLayer, copyRegion.dstSubresource.layerCount, copyRegion.dstOffset.z,
+                srcWidth, srcHeight, copyRegion.extent.depth);
         VkImage copySourceImage = srcImage.image;
         VkImageLayout copySourceImageLayout = copySourceLayout;
         if (srcImage.rawE5) {
@@ -1014,25 +999,28 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             for (Uint32 slice = 0; slice < copySliceCount; ++slice) {
                 VkImageCopy& one = slices[slice];
                 one.extent.depth = 1;
-                if (srcSlices.slicesAreDepth) one.srcOffset.z += static_cast<Int32>(slice);
-                else one.srcSubresource = {copyRegion.srcSubresource.aspectMask, copyRegion.srcSubresource.mipLevel,
-                                           copyRegion.srcSubresource.baseArrayLayer + slice, 1};
-                if (dstSlices.slicesAreDepth) one.dstOffset.z += static_cast<Int32>(slice);
-                else one.dstSubresource = {copyRegion.dstSubresource.aspectMask, copyRegion.dstSubresource.mipLevel,
-                                           copyRegion.dstSubresource.baseArrayLayer + slice, 1};
+                if (srcSlices.slicesAreDepth)
+                    one.srcOffset.z += static_cast<Int32>(slice);
+                else
+                    one.srcSubresource = {copyRegion.srcSubresource.aspectMask, copyRegion.srcSubresource.mipLevel,
+                                          copyRegion.srcSubresource.baseArrayLayer + slice, 1};
+                if (dstSlices.slicesAreDepth)
+                    one.dstOffset.z += static_cast<Int32>(slice);
+                else
+                    one.dstSubresource = {copyRegion.dstSubresource.aspectMask, copyRegion.dstSubresource.mipLevel,
+                                          copyRegion.dstSubresource.baseArrayLayer + slice, 1};
             }
             vkCmdCopyImage(frame.commandBuffer, copySourceImage, copySourceImageLayout, dstImage.image,
                            copyDestinationLayout, copySliceCount, slices.data());
         } else {
-            vkCmdCopyImage(frame.commandBuffer,
-                           copySourceImage, copySourceImageLayout,
-                           dstImage.image, copyDestinationLayout,
-                           1, &copyRegion);
+            vkCmdCopyImage(frame.commandBuffer, copySourceImage, copySourceImageLayout, dstImage.image,
+                           copyDestinationLayout, 1, &copyRegion);
         }
         // The copy coordinates above are already storage-relative. Name that
         // storage here too, so a texture view's offsets are not applied twice.
-        if (wire && !dstImage.isRenderbuffer) m_textureManager->MarkWireTextureGpuWritten(dstStorageHandle,
-            dstMipLevel, dstSlices.BaseArrayLayer(), dstSlices.slicesAreDepth ? 1u : copySliceCount);
+        if (wire && !dstImage.isRenderbuffer)
+            m_textureManager->MarkWireTextureGpuWritten(dstStorageHandle, dstMipLevel, dstSlices.BaseArrayLayer(),
+                                                        dstSlices.slicesAreDepth ? 1u : copySliceCount);
 
         VkPipelineStageFlags srcRestoreStageMask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
         VkAccessFlags srcRestoreAccessMask = 0;
@@ -1040,16 +1028,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (srcOriginalLayout == VK_IMAGE_LAYOUT_UNDEFINED) {
             Bool srcRestored = VkTextureManager::TransitionImageLayout(
                 frame.commandBuffer, srcImage.image, *srcImage.trackedLayout, srcRestoreLayout,
-                VK_PIPELINE_STAGE_TRANSFER_BIT, srcRestoreStageMask,
-                copySourceAccess, srcRestoreAccessMask,
+                VK_PIPELINE_STAGE_TRANSFER_BIT, srcRestoreStageMask, copySourceAccess, srcRestoreAccessMask,
                 srcImage.aspect, 0, srcImage.mipLevels);
             MOBILEGL_ASSERT(srcRestored, "%s: failed to restore undefined source image layout", __func__);
         } else {
             Bool srcRestored = VkTextureManager::TransitionImageLayout(
-                frame.commandBuffer, srcImage.image, srcCopyLayout, srcRestoreLayout,
-                VK_PIPELINE_STAGE_TRANSFER_BIT, srcRestoreStageMask,
-                copySourceAccess, srcRestoreAccessMask,
-                inPlace ? srcImage.aspect : copyAspectMask,
+                frame.commandBuffer, srcImage.image, srcCopyLayout, srcRestoreLayout, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                srcRestoreStageMask, copySourceAccess, srcRestoreAccessMask, inPlace ? srcImage.aspect : copyAspectMask,
                 inPlace ? 0u : srcMipLevel, inPlace ? srcImage.mipLevels : 1u);
             MOBILEGL_ASSERT(srcRestored, "%s: failed to restore source image layout", __func__);
         }
@@ -1064,18 +1049,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         } else if (dstOriginalLayout == VK_IMAGE_LAYOUT_UNDEFINED) {
             Bool dstRestored = VkTextureManager::TransitionImageLayout(
                 frame.commandBuffer, dstImage.image, *dstImage.trackedLayout, dstRestoreLayout,
-                VK_PIPELINE_STAGE_TRANSFER_BIT, dstRestoreStageMask,
-                VK_ACCESS_TRANSFER_WRITE_BIT, dstRestoreAccessMask,
+                VK_PIPELINE_STAGE_TRANSFER_BIT, dstRestoreStageMask, VK_ACCESS_TRANSFER_WRITE_BIT, dstRestoreAccessMask,
                 dstImage.aspect, 0, dstImage.mipLevels);
             MOBILEGL_ASSERT(dstRestored, "%s: failed to restore undefined destination image layout", __func__);
         } else {
             Bool dstRestored = VkTextureManager::TransitionImageLayout(
-                frame.commandBuffer, dstImage.image, dstCopyLayout, dstRestoreLayout,
-                VK_PIPELINE_STAGE_TRANSFER_BIT, dstRestoreStageMask,
-                VK_ACCESS_TRANSFER_WRITE_BIT, dstRestoreAccessMask, copyAspectMask, dstMipLevel, 1);
+                frame.commandBuffer, dstImage.image, dstCopyLayout, dstRestoreLayout, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                dstRestoreStageMask, VK_ACCESS_TRANSFER_WRITE_BIT, dstRestoreAccessMask, copyAspectMask, dstMipLevel,
+                1);
             MOBILEGL_ASSERT(dstRestored, "%s: failed to restore destination image layout", __func__);
         }
-
     }
 
     Bool VulkanRenderer::SubmitReadbackCommandsAndWait(FrameContext::FrameData& frame) {
@@ -1152,8 +1135,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // fences=2 upTo=73 submitCounter=73 completed=71. Two fences, because submission 72 -
         // the frame's draws, flushed by ReadWirePixels under a pooled fence - was still
         // outstanding; the code this replaces waited on one.
-        VkResult result = vkWaitForFences(m_device, static_cast<Uint32>(readbackFences.size()),
-                                          readbackFences.data(), VK_TRUE, UINT64_MAX);
+        VkResult result = vkWaitForFences(m_device, static_cast<Uint32>(readbackFences.size()), readbackFences.data(),
+                                          VK_TRUE, UINT64_MAX);
         if (result != VK_SUCCESS) {
             NoteDeviceLoss(result, "readback vkWaitForFences");
             MGLOG_E_ONCE("DirectVulkan readback: vkWaitForFences returned %d", result);
@@ -1181,7 +1164,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     void VulkanRenderer::ReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type,
                                     void* pixels) {
-        ReadWirePixels(x,y,width,height,format,type,pixels);
+        ReadWirePixels(x, y, width, height, format, type, pixels);
         return;
     }
 
@@ -1190,9 +1173,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                                 Uint32 srcBaseArrayLayer, VkImage dstImage, VkFormat dstFormat,
                                                 VkImageLayout* dstTrackedLayout, Uint32 dstMipLevel,
                                                 Uint32 dstBaseArrayLayer, GLint srcX, GLint srcY, GLint dstX,
-                                                GLint dstY, GLint width, GLint height,
-                                                VkImageLayout srcRestoreLayout, VkImageLayout dstRestoreLayout,
-                                                Bool stencilAspect) {
+                                                GLint dstY, GLint width, GLint height, VkImageLayout srcRestoreLayout,
+                                                VkImageLayout dstRestoreLayout, Bool stencilAspect) {
         const auto aspectMaskForFormat = [](VkFormat format) -> VkImageAspectFlags {
             switch (format) {
             case VK_FORMAT_D16_UNORM:
@@ -1225,7 +1207,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         const SizeT dstTexel = stencilAspect ? 1 : depthTexelSize(dstFormat);
         if (srcTexel == 0 || dstTexel == 0 || width <= 0 || height <= 0) {
             MGLOG_E_ONCE("BlitDepthAcrossFormats skipped: unsupported formats src=%d dst=%d",
-                    static_cast<Int>(srcFormat), static_cast<Int>(dstFormat));
+                         static_cast<Int>(srcFormat), static_cast<Int>(dstFormat));
             return false;
         }
         const SizeT pixelCount = static_cast<SizeT>(width) * static_cast<SizeT>(height);
@@ -1246,8 +1228,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         GetImageTransitionSourceState(*srcTrackedLayout, srcStageMask, srcAccessMask);
         Bool ok = VkTextureManager::TransitionImageLayout(
             frame.commandBuffer, srcImage, *srcTrackedLayout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, srcStageMask,
-            VK_PIPELINE_STAGE_TRANSFER_BIT, srcAccessMask, VK_ACCESS_TRANSFER_READ_BIT,
-            aspectMaskForFormat(srcFormat), srcMipLevel, 1);
+            VK_PIPELINE_STAGE_TRANSFER_BIT, srcAccessMask, VK_ACCESS_TRANSFER_READ_BIT, aspectMaskForFormat(srcFormat),
+            srcMipLevel, 1);
         MOBILEGL_ASSERT(ok, "BlitDepthAcrossFormats: source transition failed");
 
         VkBufferImageCopy readRegion{};
@@ -1264,10 +1246,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         VkPipelineStageFlags srcRestoreStage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
         VkAccessFlags srcRestoreAccess = 0;
         GetImageTransitionDestinationState(srcRestoreLayout, srcRestoreStage, srcRestoreAccess);
-        ok = VkTextureManager::TransitionImageLayout(
-            frame.commandBuffer, srcImage, *srcTrackedLayout, srcRestoreLayout, VK_PIPELINE_STAGE_TRANSFER_BIT,
-            srcRestoreStage, VK_ACCESS_TRANSFER_READ_BIT, srcRestoreAccess,
-            aspectMaskForFormat(srcFormat), srcMipLevel, 1);
+        ok = VkTextureManager::TransitionImageLayout(frame.commandBuffer, srcImage, *srcTrackedLayout, srcRestoreLayout,
+                                                     VK_PIPELINE_STAGE_TRANSFER_BIT, srcRestoreStage,
+                                                     VK_ACCESS_TRANSFER_READ_BIT, srcRestoreAccess,
+                                                     aspectMaskForFormat(srcFormat), srcMipLevel, 1);
         MOBILEGL_ASSERT(ok, "BlitDepthAcrossFormats: source restore failed");
 
         if (!SubmitReadbackCommandsAndWait(frame)) {
@@ -1341,8 +1323,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         GetImageTransitionSourceState(*dstTrackedLayout, dstStageMask, dstAccessMask);
         ok = VkTextureManager::TransitionImageLayout(
             frame.commandBuffer, dstImage, *dstTrackedLayout, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, dstStageMask,
-            VK_PIPELINE_STAGE_TRANSFER_BIT, dstAccessMask, VK_ACCESS_TRANSFER_WRITE_BIT,
-            aspectMaskForFormat(dstFormat), dstMipLevel, 1);
+            VK_PIPELINE_STAGE_TRANSFER_BIT, dstAccessMask, VK_ACCESS_TRANSFER_WRITE_BIT, aspectMaskForFormat(dstFormat),
+            dstMipLevel, 1);
         MOBILEGL_ASSERT(ok, "BlitDepthAcrossFormats: destination transition failed");
 
         VkBufferImageCopy writeRegion{};
@@ -1360,10 +1342,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         VkPipelineStageFlags dstRestoreStage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
         VkAccessFlags dstRestoreAccess = 0;
         GetImageTransitionDestinationState(dstRestoreLayout, dstRestoreStage, dstRestoreAccess);
-        ok = VkTextureManager::TransitionImageLayout(
-            frame.commandBuffer, dstImage, *dstTrackedLayout, dstRestoreLayout, VK_PIPELINE_STAGE_TRANSFER_BIT,
-            dstRestoreStage, VK_ACCESS_TRANSFER_WRITE_BIT, dstRestoreAccess,
-            aspectMaskForFormat(dstFormat), dstMipLevel, 1);
+        ok = VkTextureManager::TransitionImageLayout(frame.commandBuffer, dstImage, *dstTrackedLayout, dstRestoreLayout,
+                                                     VK_PIPELINE_STAGE_TRANSFER_BIT, dstRestoreStage,
+                                                     VK_ACCESS_TRANSFER_WRITE_BIT, dstRestoreAccess,
+                                                     aspectMaskForFormat(dstFormat), dstMipLevel, 1);
         MOBILEGL_ASSERT(ok, "BlitDepthAcrossFormats: destination restore failed");
         return true;
     }
@@ -1407,7 +1389,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             break;
         default:
             MGLOG_E_ONCE("DirectVulkan::ReadDepthStencilPixels skipped: unsupported source format=%d",
-                    static_cast<Int>(vkFormat));
+                         static_cast<Int>(vkFormat));
             return;
         }
 
@@ -1445,8 +1427,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (defaultFramebufferOrientation) {
             const VkExtent2D defaultFboExtent = m_swapchainObject.GetExtent();
             const Bool mapped = MapDefaultFramebufferReadbackRect(
-                x, y, width, height, defaultFboExtent, m_swapchainObject.GetPreTransform(), &copyOffset,
-                &copyExtent);
+                x, y, width, height, defaultFboExtent, m_swapchainObject.GetPreTransform(), &copyOffset, &copyExtent);
             MOBILEGL_ASSERT(mapped, "ReadDepthStencilPixels: default framebuffer read rectangle is out of bounds");
             if (!mapped) return;
         }
@@ -1509,15 +1490,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             Bool remapped = true;
             if (wantDepth && depthCopyBytes > 0) {
                 remappedDepth.resize(pixelCount * depthCopyBytes);
-                remapped = RemapDefaultFramebufferReadback(depthSrc, static_cast<Uint32>(width),
-                                                           static_cast<Uint32>(height), preTransform,
-                                                           depthCopyBytes, remappedDepth.data());
+                remapped =
+                    RemapDefaultFramebufferReadback(depthSrc, static_cast<Uint32>(width), static_cast<Uint32>(height),
+                                                    preTransform, depthCopyBytes, remappedDepth.data());
             }
             if (remapped && wantStencil) {
                 remappedStencil.resize(pixelCount);
-                remapped = RemapDefaultFramebufferReadback(stencilSrc, static_cast<Uint32>(width),
-                                                           static_cast<Uint32>(height), preTransform, 1,
-                                                           remappedStencil.data());
+                remapped =
+                    RemapDefaultFramebufferReadback(stencilSrc, static_cast<Uint32>(width), static_cast<Uint32>(height),
+                                                    preTransform, 1, remappedStencil.data());
             }
             if (remapped) {
                 if (!remappedDepth.empty()) depthSrc = remappedDepth.data();
@@ -1543,14 +1524,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         // Store honoring the client pack state (single slice).
         const SharedPtr<MG_State::GLState::BufferObject> wireReplyHasNoPackBuffer;
-        const auto& pixelPackBufferObject =
-            wireReplyHasNoPackBuffer;
+        const auto& pixelPackBufferObject = wireReplyHasNoPackBuffer;
         const auto packParams = MG_Pipe::gPipeInputs->GetPixelStoreParameters(false);
         const SizeT rowPixels = static_cast<SizeT>(packParams.RowLength > 0 ? packParams.RowLength : width);
         const SizeT packAlignment = packParams.Alignment > 0 ? static_cast<SizeT>(packParams.Alignment) : 1;
         const SizeT dstRowStride = ((rowPixels * dstPixelBytes) + packAlignment - 1) / packAlignment * packAlignment;
         const SizeT dstSkipOffset = static_cast<SizeT>(std::max(packParams.SkipRows, 0)) * dstRowStride +
-            static_cast<SizeT>(std::max(packParams.SkipPixels, 0)) * dstPixelBytes;
+                                    static_cast<SizeT>(std::max(packParams.SkipPixels, 0)) * dstPixelBytes;
         const SizeT dstRowBytes = static_cast<SizeT>(width) * dstPixelBytes;
         const SizeT pboBaseOffset = reinterpret_cast<SizeT>(pixels);
         if (pixelPackBufferObject != nullptr) {

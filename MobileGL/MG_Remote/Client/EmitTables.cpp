@@ -97,10 +97,11 @@ namespace MobileGL::MG_Remote::Client {
             if (session == nullptr) {
                 // @Ph-declined (ID-P7-1): returns ClientSession& and runs in the CLIENT - no
                 // session to hand back, no peer bytes, and the latch is a server-session idea.
-                SessionFail(MGFatalFamily::NoClientSession, "MGPipe: Fatal{NoClientSession, \"%s\"} - the remote emit table is "
-                        "installed but no ClientSession is active. A slot may not fall through "
-                        "to a driver this role does not have",
-                        slot);
+                SessionFail(MGFatalFamily::NoClientSession,
+                            "MGPipe: Fatal{NoClientSession, \"%s\"} - the remote emit table is "
+                            "installed but no ClientSession is active. A slot may not fall through "
+                            "to a driver this role does not have",
+                            slot);
             }
             return *session;
         }
@@ -186,8 +187,7 @@ namespace MobileGL::MG_Remote::Client {
                     g_publishedMaxRecordBytes = encoder.MaxRecordBytesSeen();
                     MGLOG_I("MGPipe: wire ledger: new maximum record - maxrec=%llu "
                             "maxrecop=%s cap=%llu (R-10's proof obligation; blobs are cut, a record is not)",
-                            static_cast<unsigned long long>(g_publishedMaxRecordBytes),
-                            encoder.MaxRecordOpName(),
+                            static_cast<unsigned long long>(g_publishedMaxRecordBytes), encoder.MaxRecordOpName(),
                             static_cast<unsigned long long>(encoder.MaxRecordBytesCap()));
                 }
             }
@@ -208,8 +208,7 @@ namespace MobileGL::MG_Remote::Client {
             // travels exactly as it did - the present row's own barrier is the pacing there.
             record.FrameSerial = session.AcquirePresentCredit();
             record.DamageCount = session.TakePendingPresentDamage(record.Damage);
-            session.EmitAndWait(MG_Pipe::MGPWireOp::Present, &record, sizeof(record), nullptr, 0,
-                                nullptr, 0, nullptr);
+            session.EmitAndWait(MG_Pipe::MGPWireOp::Present, &record, sizeof(record), nullptr, 0, nullptr, 0, nullptr);
 
             // R-12's invalidation edge, drained at the one boundary every target crosses. A
             // second CapsSnapshot IS the invalidation; nothing else on the client can see that
@@ -278,12 +277,13 @@ namespace MobileGL::MG_Remote::Client {
 
         RemoteFenceProxy& FenceProxy(MG_Backend::BackendSyncHandle proxy) {
             const auto it = g_fenceProxies.find(proxy);
-            if (it == g_fenceProxies.end())
-                Wire::WireProtocolFatal("Fence.proxy", "unknown client fence proxy");
+            if (it == g_fenceProxies.end()) Wire::WireProtocolFatal("Fence.proxy", "unknown client fence proxy");
             return *it->second;
         }
 
-        MG_Pipe::MGPipeHandle FenceHandle(MG_Backend::BackendSyncHandle proxy) { return FenceProxy(proxy).Handle; }
+        MG_Pipe::MGPipeHandle FenceHandle(MG_Backend::BackendSyncHandle proxy) {
+            return FenceProxy(proxy).Handle;
+        }
 
         // ---- P10 (CONTRACT-P10.md §1): WHAT THE SERVER HAS SAID IS SIGNALED -----------------
         //
@@ -332,7 +332,11 @@ namespace MobileGL::MG_Remote::Client {
         // eventually true, and the escalation is the bound that holds even if one is late. A call
         // that may wait (a non-zero timeout) is never answered "not yet" here - it crosses and
         // waits on the server, as the GL call asks.
-        enum class FencePollAnswer { Signaled, NotYet, Cross };
+        enum class FencePollAnswer {
+            Signaled,
+            NotYet,
+            Cross
+        };
         FencePollAnswer AnswerFencePollLocally(ClientSession& session, RemoteFenceProxy& fence, Bool mayWait) {
             if (!FencePollsAnswerLocally()) return FencePollAnswer::Cross;
             session.PollEntry();
@@ -358,20 +362,17 @@ namespace MobileGL::MG_Remote::Client {
             auto proxy = MakeUnique<RemoteFenceProxy>();
             proxy->Handle = MG_Pipe::MGPipeSlots().Allocate(MG_Pipe::MGPipeKind::Fence);
             const MG_Pipe::MGPHandleOnly desc{proxy->Handle, static_cast<Uint32>(MG_Pipe::MGPipeKind::Fence), 0};
-            session.EmitAndWait(MG_Pipe::MGPWireOp::FenceCreate, &desc, sizeof(desc),
-                                nullptr, 0, nullptr, 0, nullptr);
+            session.EmitAndWait(MG_Pipe::MGPWireOp::FenceCreate, &desc, sizeof(desc), nullptr, 0, nullptr, 0, nullptr);
             auto* local = proxy.get();
             g_fenceProxies.emplace(local, std::move(proxy));
             return local;
         }
 
-        Uint32 ReadFenceReply(ClientSession& session, MG_Pipe::MGPWireOp op,
-                             const void* payload, Uint64 bytes) {
+        Uint32 ReadFenceReply(ClientSession& session, MG_Pipe::MGPWireOp op, const void* payload, Uint64 bytes) {
             Uint32 result = 0;
             Int32 status = Wire::ReplySink::kStatusError;
             Uint64 replyBytes = 0;
-            session.EmitAndWait(op, payload, bytes, nullptr, 0, &result, sizeof(result),
-                                &status, &replyBytes);
+            session.EmitAndWait(op, payload, bytes, nullptr, 0, &result, sizeof(result), &status, &replyBytes);
             // A declined reply is an answer, not a corruption: the server declines these rows when
             // it cannot answer them, and the client reports a verb that did not happen (the
             // device-lost latch, a doorbell that died during teardown) as declined. It gets the
@@ -382,8 +383,7 @@ namespace MobileGL::MG_Remote::Client {
                              "happen (a lost device, or a teardown); answering the no-op the "
                              "frontend uses for a fence it cannot wait on",
                              Wire::WireOpName(op));
-                return op == MG_Pipe::MGPWireOp::FenceWait ? static_cast<Uint32>(GL_ALREADY_SIGNALED)
-                                                           : 1u;
+                return op == MG_Pipe::MGPWireOp::FenceWait ? static_cast<Uint32>(GL_ALREADY_SIGNALED) : 1u;
             }
             // ERROR AND A SHORT OK ARE STILL THE PROTOCOL CORRUPTIONS THEY ALWAYS WERE: a
             // transport fault is not the server saying no, and an OK answer that arrived empty is
@@ -399,9 +399,12 @@ namespace MobileGL::MG_Remote::Client {
             RemoteFenceProxy& fence = FenceProxy(proxy);
             if (fence.FromEndedSession()) return GL_ALREADY_SIGNALED;
             switch (AnswerFencePollLocally(session, fence, /*mayWait=*/timeout != 0)) {
-            case FencePollAnswer::Signaled: return GL_ALREADY_SIGNALED;
-            case FencePollAnswer::NotYet: return GL_TIMEOUT_EXPIRED;
-            case FencePollAnswer::Cross: break;
+            case FencePollAnswer::Signaled:
+                return GL_ALREADY_SIGNALED;
+            case FencePollAnswer::NotYet:
+                return GL_TIMEOUT_EXPIRED;
+            case FencePollAnswer::Cross:
+                break;
             }
             g_fenceRoundTrips.fetch_add(1, std::memory_order_relaxed);
             const MG_Pipe::MGPFenceWait request{fence.Handle, timeout, flags, 0};
@@ -416,9 +419,12 @@ namespace MobileGL::MG_Remote::Client {
             RemoteFenceProxy& fence = FenceProxy(proxy);
             if (fence.FromEndedSession()) return true;
             switch (AnswerFencePollLocally(session, fence, /*mayWait=*/false)) {
-            case FencePollAnswer::Signaled: return true;
-            case FencePollAnswer::NotYet: return false;
-            case FencePollAnswer::Cross: break;
+            case FencePollAnswer::Signaled:
+                return true;
+            case FencePollAnswer::NotYet:
+                return false;
+            case FencePollAnswer::Cross:
+                break;
             }
             g_fenceRoundTrips.fetch_add(1, std::memory_order_relaxed);
             const MG_Pipe::MGPHandleOnly desc{fence.Handle, static_cast<Uint32>(MG_Pipe::MGPipeKind::Fence), 0};
@@ -433,8 +439,8 @@ namespace MobileGL::MG_Remote::Client {
             const std::lock_guard<std::mutex> lock(g_fenceMutex);
             if (FenceProxy(proxy).FromEndedSession()) return;
             const MG_Pipe::MGPFenceWait request{FenceHandle(proxy), timeout, flags, 0};
-            session.EmitAndWait(MG_Pipe::MGPWireOp::FenceWaitServer, &request, sizeof(request),
-                                nullptr, 0, nullptr, 0, nullptr);
+            session.EmitAndWait(MG_Pipe::MGPWireOp::FenceWaitServer, &request, sizeof(request), nullptr, 0, nullptr, 0,
+                                nullptr);
         }
 
         void EmitDeleteSync(MG_Backend::BackendSyncHandle proxy) {
@@ -446,8 +452,8 @@ namespace MobileGL::MG_Remote::Client {
             if (auto* session = ClientSession::Active();
                 session != nullptr && session->Started() && !FenceProxy(proxy).FromEndedSession()) {
                 const MG_Pipe::MGPHandleOnly desc{handle, static_cast<Uint32>(MG_Pipe::MGPipeKind::Fence), 0};
-                session->EmitAndWait(MG_Pipe::MGPWireOp::FenceDestroy, &desc, sizeof(desc),
-                                     nullptr, 0, nullptr, 0, nullptr);
+                session->EmitAndWait(MG_Pipe::MGPWireOp::FenceDestroy, &desc, sizeof(desc), nullptr, 0, nullptr, 0,
+                                     nullptr);
             }
             MG_Pipe::MGPipeSlots().Free(MG_Pipe::MGPipeKind::Fence, handle);
             ForgetFence(handle);
@@ -505,16 +511,18 @@ namespace MobileGL::MG_Remote::Client {
 
         // The union, for the places that want every class-C row at once (the definitions and
         // the assignments). A package never edits THIS; it edits its own list above.
-#define MGR_UNMIGRATED_GL_SLOTS(X)                                                                 \
-    MGR_UNMIGRATED_D1_SLOTS(X)                                                                     \
-    MGR_UNMIGRATED_I1_SLOTS(X)                                                                     \
-    MGR_UNMIGRATED_T2_SLOTS(X)                                                                     \
-    MGR_UNMIGRATED_F1_SLOTS(X)                                                                     \
+#define MGR_UNMIGRATED_GL_SLOTS(X)                                                                                     \
+    MGR_UNMIGRATED_D1_SLOTS(X)                                                                                         \
+    MGR_UNMIGRATED_I1_SLOTS(X)                                                                                         \
+    MGR_UNMIGRATED_T2_SLOTS(X)                                                                                         \
+    MGR_UNMIGRATED_F1_SLOTS(X)                                                                                         \
     MGR_UNMIGRATED_TAIL_SLOTS(X)
 #define MGR_UNMIGRATED_GL_VALUE_SLOTS(X) MGR_UNMIGRATED_TAIL_VALUE_SLOTS(X)
 
-#define MGR_DEFINE_UNMIGRATED(Name, Ret, Sig)                                                      \
-    Ret Name##_Unmigrated Sig { UnmigratedVerbFatal(#Name); }
+#define MGR_DEFINE_UNMIGRATED(Name, Ret, Sig)                                                                          \
+    Ret Name##_Unmigrated Sig {                                                                                        \
+        UnmigratedVerbFatal(#Name);                                                                                    \
+    }
 
         MGR_UNMIGRATED_GL_SLOTS(MGR_DEFINE_UNMIGRATED)
         MGR_UNMIGRATED_GL_VALUE_SLOTS(MGR_DEFINE_UNMIGRATED)
@@ -556,9 +564,8 @@ namespace MobileGL::MG_Remote::Client {
         constexpr Uint32 kEmittedSlotsTail = 4;
         constexpr Uint32 kEmittedSlotsSync = 5;
         constexpr Uint32 kEmittedSlotsQueries = 11;
-        constexpr Uint32 kEmittedSlots =
-            kEmittedSlotsP5 + kEmittedSlotsD1 + kEmittedSlotsI1 + kEmittedSlotsT2 + kEmittedSlotsF1 +
-            kEmittedSlotsTail + kEmittedSlotsSync + kEmittedSlotsQueries;
+        constexpr Uint32 kEmittedSlots = kEmittedSlotsP5 + kEmittedSlotsD1 + kEmittedSlotsI1 + kEmittedSlotsT2 +
+                                         kEmittedSlotsF1 + kEmittedSlotsTail + kEmittedSlotsSync + kEmittedSlotsQueries;
         constexpr Uint32 kLocallyAnsweredSlots = 2; // GetIntegeri_v, IsTimerQuerySupported
 
         // EACH PACKAGE'S OWNERSHIP, PINNED. A package that flips a slot removes one row and
@@ -613,8 +620,7 @@ namespace MobileGL::MG_Remote::Client {
             // reader is GL_Query.cpp:221. It does NOT ride inside MGPCaps::Dynamic - it is a
             // member of GLFunctionsTable, which is exactly the thing a split client never
             // receives - so it is answered from kCapCpuXfbPrimitiveAccounting.
-            table.GL.PrefersCpuXfbPrimitiveAccounting =
-                CapsMirrorInstance().PrefersCpuXfbPrimitiveAccounting();
+            table.GL.PrefersCpuXfbPrimitiveAccounting = CapsMirrorInstance().PrefersCpuXfbPrimitiveAccounting();
 
             // ---- class B. P13 W5: every slot a VerbChannel emitter serves (draws, clears,
             // blits, readbacks, compute, copies, image binds, XFB, mipmaps) is MG_Record's
@@ -681,8 +687,14 @@ namespace MobileGL::MG_Remote::Client {
         return table;
     }
 
-    Uint32 ImplementedVerbCount() { return kEmittedSlots; }
-    Uint32 LocallyAnsweredSlotCount() { return kLocallyAnsweredSlots; }
-    Uint32 UnmigratedSlotCount() { return kUnmigratedSlots; }
+    Uint32 ImplementedVerbCount() {
+        return kEmittedSlots;
+    }
+    Uint32 LocallyAnsweredSlotCount() {
+        return kLocallyAnsweredSlots;
+    }
+    Uint32 UnmigratedSlotCount() {
+        return kUnmigratedSlots;
+    }
 
 } // namespace MobileGL::MG_Remote::Client

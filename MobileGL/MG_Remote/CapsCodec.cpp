@@ -144,9 +144,7 @@ namespace MobileGL::MG_Remote {
             }
             // How many elements of `elementBytes` could still possibly be there. The gate a
             // length-prefixed array is held to before it reserves anything.
-            Uint64 RoomFor(Uint64 elementBytes) const {
-                return elementBytes == 0 ? 0 : m_left / elementBytes;
-            }
+            Uint64 RoomFor(Uint64 elementBytes) const { return elementBytes == 0 ? 0 : m_left / elementBytes; }
             Bool Ok() const { return m_ok; }
             Uint64 Left() const { return m_left; }
             // Trailing bytes the format does not account for are a REFUSAL: they mean the
@@ -244,8 +242,8 @@ namespace MobileGL::MG_Remote {
             return false;
         }
         if (version != kFormatCapabilitiesCodecVersion) {
-            MGLOG_E("MG_Remote caps: format-capability blob is version %u, this build reads %u",
-                    version, kFormatCapabilitiesCodecVersion);
+            MGLOG_E("MG_Remote caps: format-capability blob is version %u, this build reads %u", version,
+                    kFormatCapabilitiesCodecVersion);
             return false;
         }
         if (targets != MG_Backend::kFormatCapabilityTargetCount ||
@@ -253,8 +251,7 @@ namespace MobileGL::MG_Remote {
             // Not a corrupt stream: a peer whose TextureTarget or TextureInternalFormat enum
             // is a different size. Reading it anyway shears every cell onto a neighbouring
             // format, which is exactly the failure the ABI fingerprint exists to make loud.
-            MGLOG_E("MG_Remote caps: format-capability blob is %ux%u, this build is %llux%llu",
-                    targets, formats,
+            MGLOG_E("MG_Remote caps: format-capability blob is %ux%u, this build is %llux%llu", targets, formats,
                     static_cast<unsigned long long>(MG_Backend::kFormatCapabilityTargetCount),
                     static_cast<unsigned long long>(MG_Backend::kFormatCapabilityFormatCount));
             return false;
@@ -278,8 +275,7 @@ namespace MobileGL::MG_Remote {
                     return false;
                 }
                 table[index / MG_Backend::kFormatCapabilityFormatCount]
-                     [index % MG_Backend::kFormatCapabilityFormatCount] =
-                         FormatCapabilityFlags(raw);
+                     [index % MG_Backend::kFormatCapabilityFormatCount] = FormatCapabilityFlags(raw);
             }
             return true;
         };
@@ -460,9 +456,8 @@ namespace MobileGL::MG_Remote {
         inputs.ProgramArtifactsSchema = MG_State::GLState::ProgramArtifactsSchemaFingerprint();
         inputs.OpCount = static_cast<Uint64>(MG_Pipe::MGPWireOp::kOpCount);
 #if MOBILEGL_BUILD_DISAGGREGATED
-        inputs.ControlSchemaRevision =
-            (static_cast<Uint64>(MOBILEGL_PROTOCOL_CONTROL_REVISION) << 32) |
-            MG_Pipe::kMGPipeResourceRespecifyExtentCarrierRevision;
+        inputs.ControlSchemaRevision = (static_cast<Uint64>(MOBILEGL_PROTOCOL_CONTROL_REVISION) << 32) |
+                                       MG_Pipe::kMGPipeResourceRespecifyExtentCarrierRevision;
 #else
         // The pull build has no respecify extent carrier; preserve its pre-P7 wire fingerprint.
         inputs.ControlSchemaRevision = MOBILEGL_PROTOCOL_CONTROL_REVISION;
@@ -479,8 +474,14 @@ namespace MobileGL::MG_Remote {
         return fingerprint;
     }
     // Compatibility spelling for existing wire tests and helper peers.
-    Uint64 CapsAbiFingerprint() { return WireFingerprint(); }
-    const char* BuildFingerprint() { return MOBILEGL_BUILD_STAMP_VALUE; }
-    Bool BuildFingerprintPresent() { return MOBILEGL_BUILD_STAMP_PRESENT != 0; }
+    Uint64 CapsAbiFingerprint() {
+        return WireFingerprint();
+    }
+    const char* BuildFingerprint() {
+        return MOBILEGL_BUILD_STAMP_VALUE;
+    }
+    Bool BuildFingerprintPresent() {
+        return MOBILEGL_BUILD_STAMP_PRESENT != 0;
+    }
 
 } // namespace MobileGL::MG_Remote

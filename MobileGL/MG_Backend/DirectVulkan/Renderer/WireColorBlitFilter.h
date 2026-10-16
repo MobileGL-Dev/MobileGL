@@ -44,15 +44,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     // Same extent on both axes, orientation aside. The extents are taken in 64 bits: GL accepts any
     // GLint corner, and INT_MAX - INT_MIN does not fit in one.
     inline Bool WireBlitIsUnscaled(const WireBlitRect& source, const WireBlitRect& destination) {
-        const auto extent = [](GLint a, GLint b) {
-            return std::abs(static_cast<Int64>(b) - static_cast<Int64>(a));
-        };
+        const auto extent = [](GLint a, GLint b) { return std::abs(static_cast<Int64>(b) - static_cast<Int64>(a)); };
         return extent(source.x0, source.x1) == extent(destination.x0, destination.x1) &&
                extent(source.y0, source.y1) == extent(destination.y0, destination.y1);
     }
 
-    inline VkFilter WireColorBlitFilterFor(const WireBlitRect& source, const WireBlitRect& destination,
-                                           GLenum filter, VkSurfaceTransformFlagBitsKHR transform) {
+    inline VkFilter WireColorBlitFilterFor(const WireBlitRect& source, const WireBlitRect& destination, GLenum filter,
+                                           VkSurfaceTransformFlagBitsKHR transform) {
         if (filter != GL_LINEAR) return VK_FILTER_NEAREST;
         const Bool expressed = transform == VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR ||
                                transform == VK_SURFACE_TRANSFORM_ROTATE_90_BIT_KHR ||

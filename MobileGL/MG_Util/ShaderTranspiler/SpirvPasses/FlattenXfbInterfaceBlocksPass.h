@@ -48,8 +48,7 @@ namespace MobileGL {
                 // "StageData.attrib[0]". `flattenedBlockNames` receives the subset this pass
                 // actually rewrote, so the caller can rename exactly those capture requests
                 // and leave the rest spelled as the application wrote them.
-                FlattenXfbInterfaceBlocksPass(const std::set<String>& blockNames,
-                                              std::set<String>* flattenedBlockNames)
+                FlattenXfbInterfaceBlocksPass(const std::set<String>& blockNames, std::set<String>* flattenedBlockNames)
                     : m_blockNames(blockNames), m_flattenedBlockNames(flattenedBlockNames) {}
 
                 const char* name() const override { return "mobilegl-flatten-xfb-interface-blocks"; }

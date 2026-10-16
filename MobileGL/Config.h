@@ -520,11 +520,11 @@ namespace MobileGL::MG_Config {
     // MG_Remote` must be non-empty in build-split (CONTRACT-P5.md table 3, and the CI job
     // P5 adds beside build-linux-verify).
     enum class TransportMode : Uint8 {
-        Monolith = 0,  // today's in-library backend; no MG_Remote object is constructed
-        InProcess = 1, // P5: a real apply thread in this process, over the same G3 codec
-        Spawn = 2,     // P6: fork/exec MobileGLServer, socketpair
-        UnixSocket = 3,// P6: connect to an existing AF_UNIX endpoint (Endpoint = <path>)
-        NamedPipe = 4, // P6: Windows named pipe (Endpoint = <name>)
+        Monolith = 0,   // today's in-library backend; no MG_Remote object is constructed
+        InProcess = 1,  // P5: a real apply thread in this process, over the same G3 codec
+        Spawn = 2,      // P6: fork/exec MobileGLServer, socketpair
+        UnixSocket = 3, // P6: connect to an existing AF_UNIX endpoint (Endpoint = <path>)
+        NamedPipe = 4,  // P6: Windows named pipe (Endpoint = <name>)
     };
 
     // P13 W5: THE RECORD ARM'S OWN KNOBS. They kept their MOBILEGL_IPC_* names (logs, CI lanes and
@@ -799,8 +799,12 @@ namespace MobileGL::MG_Config {
     // wire and on monolith alike ("monolith is the push variant"). W4 switched monolith family by
     // family behind MOBILEGL_PIPE_DATA_ARM; W5 built the record arm into every library; W6 deleted
     // the frontend arm and the knob. The predicate stays as a name for the sites that read it.
-    inline constexpr Bool DataArmIsRecord() { return true; }
+    inline constexpr Bool DataArmIsRecord() {
+        return true;
+    }
     // ...and the record arm runs in this process over stores that ALIAS the frontend's shadows
     // (monolith) instead of copying them (every wire).
-    inline Bool RecordArmAliasesFrontend() { return Transport == TransportMode::Monolith; }
+    inline Bool RecordArmAliasesFrontend() {
+        return Transport == TransportMode::Monolith;
+    }
 } // namespace MobileGL::MG_Config

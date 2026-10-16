@@ -91,7 +91,8 @@ namespace MobileGL::MG_Remote::Server::SharedImages::Yuv {
             -cScale * 2.0 * kr * (1.0 - kr) / kg,
             0.0,
         };
-        for (SizeT i = 0; i < 9; ++i) c.Matrix[i] = static_cast<float>(m[i]);
+        for (SizeT i = 0; i < 9; ++i)
+            c.Matrix[i] = static_cast<float>(m[i]);
         c.Offset[0] = static_cast<float>(yOffset);
         c.Offset[1] = static_cast<float>(cOffset);
         c.Offset[2] = static_cast<float>(cOffset);
@@ -130,8 +131,8 @@ namespace MobileGL::MG_Remote::Server::SharedImages::Yuv {
                 std::memcpy(to, from, static_cast<SizeT>(width) * sampleBytes);
             } else {
                 for (Uint32 x = 0; x < width; ++x)
-                    std::memcpy(to + static_cast<SizeT>(x) * dst.Y.PixelStride, from + static_cast<SizeT>(x) * sampleBytes,
-                                sampleBytes);
+                    std::memcpy(to + static_cast<SizeT>(x) * dst.Y.PixelStride,
+                                from + static_cast<SizeT>(x) * sampleBytes, sampleBytes);
             }
         }
         // Chroma.

@@ -108,10 +108,12 @@ namespace MobileGL::MG_Backend {
         // itself establish run-ahead readiness: that has its separate gate below.
         Uint64 ConsumedSubsystemsFor(BackendType type) {
             switch (type) {
-            case BackendType::DirectGLES: return MG_Pipe::kMGPipeSubsystemsMigratedAtP5e;
+            case BackendType::DirectGLES:
+                return MG_Pipe::kMGPipeSubsystemsMigratedAtP5e;
             case BackendType::DirectVulkan:
                 return MG_Pipe::kMGPipeSubsystemsMigratedAtP4a | MG_Pipe::kMGPipeSubsystemBufferBindings;
-            default: return 0;
+            default:
+                return 0;
             }
         }
 
@@ -201,8 +203,7 @@ namespace MobileGL::MG_Backend {
             // MGL_BACKEND_SLOT_CAP at GL_Drawing.cpp's FixupGsStripCaptureOrder.
             Uint64 capBits = 0;
             if (const MG_Backend::BackendObject* serverBackend = loop.Backend();
-                serverBackend != nullptr &&
-                serverBackend->GetBackendFunctions().GL.EndTransformFeedback != nullptr) {
+                serverBackend != nullptr && serverBackend->GetBackendFunctions().GL.EndTransformFeedback != nullptr) {
                 capBits |= MG_Pipe::kCapBackendOwnsXfbCapture;
             }
             if (const auto* backend = loop.Backend()) {
@@ -210,14 +211,13 @@ namespace MobileGL::MG_Backend {
                 // The query owner publishes only complete native query/reply paths.
                 // Timer hardware support is refreshed when caps are published after
                 // make-current; no CPU primitive-accounting preference is advertised.
-                if (gl.IsQueryResultAvailable && gl.GetQueryResult64 && gl.DeleteBackendQuery &&
-                    gl.FenceSync && gl.ClientWaitSync && gl.DeleteSync) {
+                if (gl.IsQueryResultAvailable && gl.GetQueryResult64 && gl.DeleteBackendQuery && gl.FenceSync &&
+                    gl.ClientWaitSync && gl.DeleteSync) {
                     if (gl.BeginXfbPrimitivesQuery && gl.EndXfbPrimitivesQuery)
                         capBits |= MG_Pipe::kCapXfbPrimitivesQuery;
-                    if (gl.BeginOcclusionQuery && gl.EndOcclusionQuery)
-                        capBits |= MG_Pipe::kCapOcclusionQuery;
-                    if (gl.IsTimerQuerySupported && gl.BeginTimeElapsedQuery &&
-                        gl.EndTimeElapsedQuery && gl.QueryCounterTimestamp)
+                    if (gl.BeginOcclusionQuery && gl.EndOcclusionQuery) capBits |= MG_Pipe::kCapOcclusionQuery;
+                    if (gl.IsTimerQuerySupported && gl.BeginTimeElapsedQuery && gl.EndTimeElapsedQuery &&
+                        gl.QueryCounterTimestamp)
                         capBits |= MG_Pipe::kCapTimerQuery;
                 }
             }
@@ -250,7 +250,8 @@ namespace MobileGL::MG_Backend {
             // Each backend has an independent implementation-readiness gate.
             // The runtime RunAhead knob can decline the feature, never create it.
             const Bool runAheadReady = MG_Config::ActiveBackendType == BackendType::DirectVulkan
-                ? kMGPipeMagmaRunAheadReady : kMGPipeP5eRunAheadReady;
+                                           ? kMGPipeMagmaRunAheadReady
+                                           : kMGPipeP5eRunAheadReady;
             capBits |= MG_Pipe::MGPipeRunAheadCapBitsFor(MG_Config::ActiveBackendType, runAheadReady);
             session.SetCapabilityBits(capBits);
             session.SetBackend(loop.Backend());
@@ -338,27 +339,27 @@ namespace MobileGL::MG_Backend {
             // step-5 re-run's ability to catch a table REPLACED between accept and here, and
             // that is a question about one address space; it cannot be asked across two.
             if (MG_Config::Transport != MG_Config::TransportMode::Spawn) {
-            // m-6, re-worded per review v2 N-8. The honesty cross-check runs a SECOND time, now
-            // that step 4's pActiveBackendObject (the client's BackendObject_Remote) exists and
-            // its Initialize() has run inside InitSpecificBackendLibs. What the re-run CAN catch
-            // is a table that was REMOVED between step 2 and here (the claim would then be a lie
-            // again). What it cannot catch - and its first comment claimed it could - is a client
-            // object that REGISTERED a table of its own: that leaves "is a table registered"
-            // true. Only the pointer tells those apart, so the table is compared against the one
-            // step 2 saw and a swap is refused by name: the applier would otherwise dispatch the
-            // server's resource records into the CLIENT object's table under its feet.
-            AssertConsumerMaskIsHonest(ConsumedSubsystemsFor(MG_Config::ActiveBackendType));
-            if (MG_Pipe::MGPipeGetResourceOps() != g_resourceOpsAtStep2) {
-                MGLOG_F("MGPipe: Fatal{ConsumerMaskLie, \"resource ops table replaced\"} - the "
-                        "resource op table MGPipeGetResourceOps() answers with is not the one the "
-                        "server's backend registered at step 1 (%p now, %p then). Something between "
-                        "ServerSession::Accept and the client object's Initialize() registered its "
-                        "own table, and the applier would dispatch every resource record into it. A "
-                        "mask is a statement about the server's backend, and so is the table",
-                        static_cast<const void*>(MG_Pipe::MGPipeGetResourceOps()),
-                        static_cast<const void*>(g_resourceOpsAtStep2));
-                std::abort();
-            }
+                // m-6, re-worded per review v2 N-8. The honesty cross-check runs a SECOND time, now
+                // that step 4's pActiveBackendObject (the client's BackendObject_Remote) exists and
+                // its Initialize() has run inside InitSpecificBackendLibs. What the re-run CAN catch
+                // is a table that was REMOVED between step 2 and here (the claim would then be a lie
+                // again). What it cannot catch - and its first comment claimed it could - is a client
+                // object that REGISTERED a table of its own: that leaves "is a table registered"
+                // true. Only the pointer tells those apart, so the table is compared against the one
+                // step 2 saw and a swap is refused by name: the applier would otherwise dispatch the
+                // server's resource records into the CLIENT object's table under its feet.
+                AssertConsumerMaskIsHonest(ConsumedSubsystemsFor(MG_Config::ActiveBackendType));
+                if (MG_Pipe::MGPipeGetResourceOps() != g_resourceOpsAtStep2) {
+                    MGLOG_F("MGPipe: Fatal{ConsumerMaskLie, \"resource ops table replaced\"} - the "
+                            "resource op table MGPipeGetResourceOps() answers with is not the one the "
+                            "server's backend registered at step 1 (%p now, %p then). Something between "
+                            "ServerSession::Accept and the client object's Initialize() registered its "
+                            "own table, and the applier would dispatch every resource record into it. A "
+                            "mask is a statement about the server's backend, and so is the table",
+                            static_cast<const void*>(MG_Pipe::MGPipeGetResourceOps()),
+                            static_cast<const void*>(g_resourceOpsAtStep2));
+                    std::abort();
+                }
             }
             LogBackendInfo();
         }
@@ -411,7 +412,9 @@ namespace MobileGL::MG_Backend {
     // it: 2 symbols added, 1 removed, .text +16 bytes. The pull build's identity
     // is byte-for-byte, and "it returns false there" is not the same as "it is
     // not there".
-    Bool InitServerRoleForSpawn() { return InitServerRoleCommon(); }
+    Bool InitServerRoleForSpawn() {
+        return InitServerRoleCommon();
+    }
 #endif
 
     void Init() {

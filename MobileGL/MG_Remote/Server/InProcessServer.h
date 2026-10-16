@@ -17,21 +17,22 @@
 
 #pragma once
 
-extern "C" {
+extern "C"
+{
 
-// Serves `endpoint` on the CALLING thread until mobilegl_server_stop_inprocess is called and the
-// live session (if any) has ended, then returns 0. The endpoint is tcp://host:port, or - for a
-// same-device client - a unix @abstract name or filesystem path, whose control+data pair and
-// SCM_RIGHTS shm segments make it the fastest on-device shape. Other returns, all logged by
-// name: 64 / 65 (the environment preconditions above), 71 (empty endpoint), 72 (could not
-// listen - EADDRINUSE is retried for up to ~5 s first, the previous server may still be dying),
-// 73 (the listener failed), 74 (a server is already serving in this process). Re-callable after
-// it returned.
-__attribute__((visibility("default"))) int mobilegl_server_serve_inprocess(const char* endpoint);
+    // Serves `endpoint` on the CALLING thread until mobilegl_server_stop_inprocess is called and the
+    // live session (if any) has ended, then returns 0. The endpoint is tcp://host:port, or - for a
+    // same-device client - a unix @abstract name or filesystem path, whose control+data pair and
+    // SCM_RIGHTS shm segments make it the fastest on-device shape. Other returns, all logged by
+    // name: 64 / 65 (the environment preconditions above), 71 (empty endpoint), 72 (could not
+    // listen - EADDRINUSE is retried for up to ~5 s first, the previous server may still be dying),
+    // 73 (the listener failed), 74 (a server is already serving in this process). Re-callable after
+    // it returned.
+    __attribute__((visibility("default"))) int mobilegl_server_serve_inprocess(const char* endpoint);
 
-// Asks the in-process server to stop and returns at once (it does not wait: call it from a UI
-// thread). The live session ends within one control slice (~100 ms) - or when the op it is running
-// returns (a ServerOwned wait for a window is interrupted too) - and then serve returns 0.
-__attribute__((visibility("default"))) void mobilegl_server_stop_inprocess(void);
+    // Asks the in-process server to stop and returns at once (it does not wait: call it from a UI
+    // thread). The live session ends within one control slice (~100 ms) - or when the op it is running
+    // returns (a ServerOwned wait for a window is interrupted too) - and then serve returns 0.
+    __attribute__((visibility("default"))) void mobilegl_server_stop_inprocess(void);
 
 } // extern "C"

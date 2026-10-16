@@ -84,7 +84,9 @@ namespace MGITest {
             {GL_RGB9_E5, GL_RGB, GL_UNSIGNED_INT_5_9_9_9_REV, 0, false, "rgb9_e5"},
         };
 
-        int TexelBytes(const CopyFormat& format) { return format.components == 0 ? 4 : format.components * 2; }
+        int TexelBytes(const CopyFormat& format) {
+            return format.components == 0 ? 4 : format.components * 2;
+        }
 
         // Every word differs from its neighbours and from the other patterns, so a mis-addressed
         // row, a swapped endpoint or a copy that never happened cannot cancel out. SNORM never
@@ -113,9 +115,9 @@ namespace MGITest {
         }
 
         // `image` with the w x h block at (dx, dy) replaced by the block of `source` at (sx, sy).
-        std::vector<std::uint8_t> WithBlock(std::vector<std::uint8_t> image, int width, const std::vector<std::uint8_t>& source,
-                                            int sourceWidth, int sx, int sy, int dx, int dy, int w, int h,
-                                            int texelBytes) {
+        std::vector<std::uint8_t> WithBlock(std::vector<std::uint8_t> image, int width,
+                                            const std::vector<std::uint8_t>& source, int sourceWidth, int sx, int sy,
+                                            int dx, int dy, int w, int h, int texelBytes) {
             for (int row = 0; row < h; ++row) {
                 std::memcpy(image.data() + (static_cast<std::size_t>(dy + row) * width + dx) * texelBytes,
                             source.data() + (static_cast<std::size_t>(sy + row) * sourceWidth + sx) * texelBytes,
@@ -226,8 +228,8 @@ namespace MGITest {
             // W4b) that server code runs in this process and logs into the whole lane log.
             void ExpectStoreReadNamedSince(const PipeStatsWindow::LogMark& mark) {
                 if (!m_forced || !m_espryt || !m_recordArm) return;
-                const std::string log = m_wire ? PipeStatsWindow::ReadServerLogSince(mark)
-                                               : PipeStatsWindow::ReadLaneLogSince(mark);
+                const std::string log =
+                    m_wire ? PipeStatsWindow::ReadServerLogSince(mark) : PipeStatsWindow::ReadLaneLogSince(mark);
                 EXPECT_NE(log.find(kStoreReadMarker), std::string::npos)
                     << kRefuseExtentKnob << " is set but the server log carries no '" << kStoreReadMarker
                     << "' line: the knob did not reach the server, or no read took the store route";
@@ -369,8 +371,8 @@ namespace MGITest {
             for (std::size_t texel = 0; texel < cleared.size() / 8; ++texel) {
                 std::memcpy(cleared.data() + texel * 8, words, 8);
             }
-            const auto want = WithBlock(destinationTexels, m_width, cleared, m_width, kSrcX, kSrcY, kDstX, kDstY,
-                                        kCopyW, kCopyH, 8);
+            const auto want =
+                WithBlock(destinationTexels, m_width, cleared, m_width, kSrcX, kSrcY, kDstX, kDstY, kCopyW, kCopyH, 8);
             ExpectImage(ReadTexImage(destination, format), want, format, "the texture a renderbuffer was copied into");
             ASSERT_EQ(FirstGLError(), 0u) << "glGetTexImage raised a GL error";
         }

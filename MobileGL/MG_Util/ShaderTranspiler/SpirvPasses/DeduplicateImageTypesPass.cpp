@@ -31,9 +31,7 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
             case spv::Op::OpTypeRuntimeArray:
             case spv::Op::OpTypePointer:
             case spv::Op::OpTypeFunction:
-                type.ForEachInId([&](const uint32_t* id) {
-                    imageRelated |= imageTypes.count(*id) != 0;
-                });
+                type.ForEachInId([&](const uint32_t* id) { imageRelated |= imageTypes.count(*id) != 0; });
                 break;
             default:
                 break;
@@ -51,8 +49,7 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
             auto& candidates = canonical[key];
             Instruction* match = nullptr;
             for (auto* candidate : candidates) {
-                if (context()->get_decoration_mgr()->HaveTheSameDecorations(
-                        type.result_id(), candidate->result_id())) {
+                if (context()->get_decoration_mgr()->HaveTheSameDecorations(type.result_id(), candidate->result_id())) {
                     match = candidate;
                     break;
                 }
@@ -65,11 +62,12 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
             context()->ReplaceAllUsesWith(type.result_id(), match->result_id());
             duplicates.push_back(&type);
         }
-        for (auto* type : duplicates) context()->KillInst(type);
+        for (auto* type : duplicates)
+            context()->KillInst(type);
         return duplicates.empty() ? Status::SuccessWithoutChange : Status::SuccessWithChange;
     }
 
     spvtools::Optimizer::PassToken DeduplicateImageTypesPass::Create() {
         return spvtools::Optimizer::PassToken(spvtools::MakeUnique<DeduplicateImageTypesPass>());
     }
-}
+} // namespace MobileGL::MG_Util::ShaderTranspiler

@@ -34,11 +34,17 @@ namespace MobileGL::MG_Remote::Transport::FdPassing {
 
 #if defined(_WIN32)
 
-    bool Supported() { return false; }
+    bool Supported() {
+        return false;
+    }
 
-    MobileGLResult CreateSocketPair(int[2]) { return MOBILEGL_ERR_UNSUPPORTED; }
+    MobileGLResult CreateSocketPair(int[2]) {
+        return MOBILEGL_ERR_UNSUPPORTED;
+    }
 
-    MobileGLResult SendFd(int, int, MobileGLByteSpan, bool) { return MOBILEGL_ERR_UNSUPPORTED; }
+    MobileGLResult SendFd(int, int, MobileGLByteSpan, bool) {
+        return MOBILEGL_ERR_UNSUPPORTED;
+    }
 
     MobileGLResult ReceiveFd(int, int*, MobileGLMutableByteSpan, std::uint64_t*, std::uint32_t) {
         return MOBILEGL_ERR_UNSUPPORTED;
@@ -60,9 +66,9 @@ namespace MobileGL::MG_Remote::Transport::FdPassing {
             for (;;) {
                 int pollTimeout = -1;
                 if (timeoutMs != 0xFFFFFFFFu) {
-                    const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                             std::chrono::steady_clock::now() - start)
-                                             .count();
+                    const auto elapsed =
+                        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start)
+                            .count();
                     const long long remaining = static_cast<long long>(timeoutMs) - elapsed;
                     pollTimeout = remaining <= 0 ? 0 : static_cast<int>(remaining);
                 }
@@ -78,7 +84,9 @@ namespace MobileGL::MG_Remote::Transport::FdPassing {
         }
     } // namespace
 
-    bool Supported() { return true; }
+    bool Supported() {
+        return true;
+    }
 
     MobileGLResult CreateSocketPair(int outFds[2]) {
         if (outFds == nullptr) {
@@ -119,8 +127,7 @@ namespace MobileGL::MG_Remote::Transport::FdPassing {
         header.sidebandSize = static_cast<std::uint32_t>(sideband.size);
         std::memcpy(payload, &header, sizeof(header));
         if (sideband.size != 0) {
-            std::memcpy(payload + sizeof(header), sideband.data,
-                        static_cast<std::size_t>(sideband.size));
+            std::memcpy(payload + sizeof(header), sideband.data, static_cast<std::size_t>(sideband.size));
         }
         const std::size_t payloadSize = sizeof(header) + static_cast<std::size_t>(sideband.size);
 
@@ -154,8 +161,7 @@ namespace MobileGL::MG_Remote::Transport::FdPassing {
             if (sent >= 0) {
                 if (static_cast<std::size_t>(sent) != payloadSize) {
                     // A datagram socket sends all or nothing.
-                    MGLOG_E("MG_Remote fd passing: short datagram (%zd of %zu bytes)", sent,
-                            payloadSize);
+                    MGLOG_E("MG_Remote fd passing: short datagram (%zd of %zu bytes)", sent, payloadSize);
                     return MOBILEGL_ERR_TRANSPORT_CLOSED;
                 }
                 return MOBILEGL_OK;
@@ -180,8 +186,8 @@ namespace MobileGL::MG_Remote::Transport::FdPassing {
         }
     }
 
-    MobileGLResult ReceiveFd(int socket, int* outFd, MobileGLMutableByteSpan sideband,
-                             std::uint64_t* outSidebandSize, std::uint32_t timeoutMs) {
+    MobileGLResult ReceiveFd(int socket, int* outFd, MobileGLMutableByteSpan sideband, std::uint64_t* outSidebandSize,
+                             std::uint32_t timeoutMs) {
         if (socket < 0 || outFd == nullptr) {
             return MOBILEGL_ERR_INVALID_ARGUMENT;
         }
@@ -254,8 +260,7 @@ namespace MobileGL::MG_Remote::Transport::FdPassing {
         // rather than leaked, whatever else is wrong with the message.
         int received[4];
         int receivedCount = 0;
-        for (struct cmsghdr* cmsg = CMSG_FIRSTHDR(&msg); cmsg != nullptr;
-             cmsg = CMSG_NXTHDR(&msg, cmsg)) {
+        for (struct cmsghdr* cmsg = CMSG_FIRSTHDR(&msg); cmsg != nullptr; cmsg = CMSG_NXTHDR(&msg, cmsg)) {
             if (cmsg->cmsg_level != SOL_SOCKET || cmsg->cmsg_type != SCM_RIGHTS) {
                 continue;
             }
@@ -308,11 +313,10 @@ namespace MobileGL::MG_Remote::Transport::FdPassing {
 
         SidebandHeader header{};
         std::memcpy(&header, payload, sizeof(header));
-        if (header.magic != kSidebandMagic ||
-            header.sidebandSize > kMaxSidebandBytes ||
+        if (header.magic != kSidebandMagic || header.sidebandSize > kMaxSidebandBytes ||
             sizeof(SidebandHeader) + header.sidebandSize != static_cast<std::size_t>(got)) {
-            MGLOG_E("MG_Remote fd passing: bad sideband header (magic=0x%08X size=%u datagram=%zd)",
-                    header.magic, header.sidebandSize, got);
+            MGLOG_E("MG_Remote fd passing: bad sideband header (magic=0x%08X size=%u datagram=%zd)", header.magic,
+                    header.sidebandSize, got);
             closeAll(-1);
             return MOBILEGL_ERR_PROTOCOL_MISMATCH;
         }

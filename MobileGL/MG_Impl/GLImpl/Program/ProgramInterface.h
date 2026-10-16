@@ -11,7 +11,7 @@
 
 namespace MobileGL::MG_State::GLState {
     class ProgramObject;
-}
+} // namespace MobileGL::MG_State::GLState
 
 // The GL program interface (ARB_program_interface_query / GL 4.3 §7.3.1) as a frontend
 // resource model.

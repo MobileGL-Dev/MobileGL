@@ -206,8 +206,8 @@ namespace MobileGL::MG_Impl::EGLImpl::Wayland {
                 api.readEvents = reinterpret_cast<decltype(api.readEvents)>(sym("wl_display_read_events"));
                 api.cancelRead = reinterpret_cast<decltype(api.cancelRead)>(sym("wl_display_cancel_read"));
                 api.loaded = api.displayInterface && api.registryInterface && api.shmInterface &&
-                             api.shmPoolInterface && api.bufferInterface && api.marshalFlags && api.addListener && api.destroy &&
-                             api.getVersion && api.createWrapper && api.wrapperDestroy && api.setQueue &&
+                             api.shmPoolInterface && api.bufferInterface && api.marshalFlags && api.addListener &&
+                             api.destroy && api.getVersion && api.createWrapper && api.wrapperDestroy && api.setQueue &&
                              api.createQueue && api.queueDestroy && api.roundtripQueue && api.dispatchQueue &&
                              api.dispatchQueuePending && api.flush;
                 if (!api.loaded) MGLOG_E("Wayland: libwayland-client.so.0 lacks an entry point this library uses");
@@ -226,7 +226,9 @@ namespace MobileGL::MG_Impl::EGLImpl::Wayland {
         };
 
         // The compositor is done with a buffer: it may be drawn into again.
-        void OnBufferRelease(void* data, wl_proxy*) { static_cast<ShmBuffer*>(data)->busy = false; }
+        void OnBufferRelease(void* data, wl_proxy*) {
+            static_cast<ShmBuffer*>(data)->busy = false;
+        }
         void (*const kBufferListener[])(void) = {reinterpret_cast<void (*)(void)>(&OnBufferRelease)};
 
         // zwp_linux_dmabuf_v1 and zwp_linux_buffer_params_v1 as their generated protocol code
@@ -270,8 +272,12 @@ namespace MobileGL::MG_Impl::EGLImpl::Wayland {
                 p.paramsEvents[1] = {"failed", "", p.noObjectTypes};
                 p.dmabuf = {"zwp_linux_dmabuf_v1", static_cast<int>(kDmabufMaxVersion), 2, p.dmabufRequests, 2,
                             p.dmabufEvents};
-                p.params = {"zwp_linux_buffer_params_v1", static_cast<int>(kDmabufMaxVersion), 4, p.paramsRequests,
-                            2, p.paramsEvents};
+                p.params = {"zwp_linux_buffer_params_v1",
+                            static_cast<int>(kDmabufMaxVersion),
+                            4,
+                            p.paramsRequests,
+                            2,
+                            p.paramsEvents};
                 ready = true;
             });
             return ready ? &protocol : nullptr;
@@ -290,8 +296,12 @@ namespace MobileGL::MG_Impl::EGLImpl::Wayland {
             wl_proxy* buffer = nullptr;
             Bool failed = false;
         };
-        void OnParamsCreated(void* data, wl_proxy*, wl_proxy* buffer) { static_cast<ParamsOutcome*>(data)->buffer = buffer; }
-        void OnParamsFailed(void* data, wl_proxy*) { static_cast<ParamsOutcome*>(data)->failed = true; }
+        void OnParamsCreated(void* data, wl_proxy*, wl_proxy* buffer) {
+            static_cast<ParamsOutcome*>(data)->buffer = buffer;
+        }
+        void OnParamsFailed(void* data, wl_proxy*) {
+            static_cast<ParamsOutcome*>(data)->failed = true;
+        }
         void (*const kParamsListener[])(void) = {reinterpret_cast<void (*)(void)>(&OnParamsCreated),
                                                  reinterpret_cast<void (*)(void)>(&OnParamsFailed)};
 
@@ -304,7 +314,9 @@ namespace MobileGL::MG_Impl::EGLImpl::Wayland {
             Bool busy = false;
         };
 
-        void OnDmabufBufferRelease(void* data, wl_proxy*) { static_cast<DmabufBuffer*>(data)->busy = false; }
+        void OnDmabufBufferRelease(void* data, wl_proxy*) {
+            static_cast<DmabufBuffer*>(data)->busy = false;
+        }
         void (*const kDmabufBufferListener[])(void) = {reinterpret_cast<void (*)(void)>(&OnDmabufBufferRelease)};
 
         // MOBILEGL_WAYLAND_DMABUF=0 keeps every window on wl_shm.
@@ -357,8 +369,10 @@ namespace MobileGL::MG_Impl::EGLImpl::Wayland {
             const Api& api = WaylandApi();
             if (frameCallback) api.destroy(frameCallback);
             if (surfaceWrapper) api.wrapperDestroy(surfaceWrapper);
-            for (auto& buffer : buffers) Release(buffer);
-            for (auto& buffer : dmabufBuffers) Release(buffer);
+            for (auto& buffer : buffers)
+                Release(buffer);
+            for (auto& buffer : dmabufBuffers)
+                Release(buffer);
             if (dmabuf) api.marshalFlags(dmabuf, kDmabufDestroy, nullptr, api.getVersion(dmabuf), kMarshalFlagDestroy);
             // Neither wl_shm (version 1) nor wl_registry has a destroy request: the proxies go
             // on this side only.
@@ -374,8 +388,9 @@ namespace MobileGL::MG_Impl::EGLImpl::Wayland {
 
         void Release(ShmBuffer& buffer) {
             const Api& api = WaylandApi();
-            if (buffer.buffer) api.marshalFlags(buffer.buffer, kBufferDestroy, nullptr, api.getVersion(buffer.buffer),
-                                                kMarshalFlagDestroy);
+            if (buffer.buffer)
+                api.marshalFlags(buffer.buffer, kBufferDestroy, nullptr, api.getVersion(buffer.buffer),
+                                 kMarshalFlagDestroy);
             if (buffer.map) munmap(buffer.map, buffer.size);
             buffer = ShmBuffer{};
         }
@@ -402,8 +417,8 @@ namespace MobileGL::MG_Impl::EGLImpl::Wayland {
                 return false;
             }
             // One pool per buffer, destroyed at once: the buffer keeps the memory alive.
-            wl_proxy* pool = api.marshalFlags(shm, kShmCreatePool, api.shmPoolInterface, api.getVersion(shm), 0, nullptr,
-                                              fd, static_cast<int32_t>(size));
+            wl_proxy* pool = api.marshalFlags(shm, kShmCreatePool, api.shmPoolInterface, api.getVersion(shm), 0,
+                                              nullptr, fd, static_cast<int32_t>(size));
             close(fd);
             if (pool == nullptr) {
                 munmap(map, size);
@@ -451,8 +466,9 @@ namespace MobileGL::MG_Impl::EGLImpl::Wayland {
         // as long as it still shows it.
         void Release(DmabufBuffer& buffer) {
             const Api& api = WaylandApi();
-            if (buffer.buffer) api.marshalFlags(buffer.buffer, kBufferDestroy, nullptr, api.getVersion(buffer.buffer),
-                                                kMarshalFlagDestroy);
+            if (buffer.buffer)
+                api.marshalFlags(buffer.buffer, kBufferDestroy, nullptr, api.getVersion(buffer.buffer),
+                                 kMarshalFlagDestroy);
             if (buffer.imageId != 0) {
                 if (auto* backendObject = MG_Backend::pActiveBackendObject.get()) {
                     (void)backendObject->ReleaseSharedImage(buffer.imageId);
@@ -545,7 +561,8 @@ namespace MobileGL::MG_Impl::EGLImpl::Wayland {
 
         // The rest of this window's life is wl_shm's.
         void FallBackToShm() {
-            for (auto& buffer : dmabufBuffers) Release(buffer);
+            for (auto& buffer : dmabufBuffers)
+                Release(buffer);
             dmabufDamage.InvalidateAll();
             useDmabuf = false;
         }
@@ -649,8 +666,7 @@ namespace MobileGL::MG_Impl::EGLImpl::Wayland {
     };
 
     namespace {
-        void OnRegistryGlobal(void* data, wl_proxy* registry, uint32_t name, const char* interface,
-                              uint32_t version) {
+        void OnRegistryGlobal(void* data, wl_proxy* registry, uint32_t name, const char* interface, uint32_t version) {
             auto* impl = static_cast<WindowSurface::Impl*>(data);
             const Api& api = WaylandApi();
             if (impl->shm == nullptr && std::strcmp(interface, "wl_shm") == 0) {
@@ -658,8 +674,7 @@ namespace MobileGL::MG_Impl::EGLImpl::Wayland {
                     api.marshalFlags(registry, kRegistryBind, api.shmInterface, 1, 0, name, "wl_shm", 1u, nullptr);
                 return;
             }
-            if (impl->dmabufWanted && impl->dmabuf == nullptr &&
-                std::strcmp(interface, "zwp_linux_dmabuf_v1") == 0) {
+            if (impl->dmabufWanted && impl->dmabuf == nullptr && std::strcmp(interface, "zwp_linux_dmabuf_v1") == 0) {
                 const LinuxDmabufProtocol* protocol = LinuxDmabuf();
                 if (protocol == nullptr) return;
                 const uint32_t bindVersion = std::min(version, kDmabufMaxVersion);
@@ -680,7 +695,9 @@ namespace MobileGL::MG_Impl::EGLImpl::Wayland {
         void (*const kFrameListener[])(void) = {reinterpret_cast<void (*)(void)>(&OnFrameDone)};
 
         // The application destroyed its wl_egl_window first: nothing may be read from it after this.
-        void OnWindowDestroyed(void* data) { static_cast<WindowSurface::Impl*>(data)->window = nullptr; }
+        void OnWindowDestroyed(void* data) {
+            static_cast<WindowSurface::Impl*>(data)->window = nullptr;
+        }
     } // namespace
 
     namespace {
@@ -734,8 +751,8 @@ namespace MobileGL::MG_Impl::EGLImpl::Wayland {
             api.setQueue(static_cast<wl_proxy*>(surfaceWrapper), queue);
         }
         auto* wrapper = static_cast<wl_proxy*>(surfaceWrapper);
-        frameCallback = api.marshalFlags(wrapper, kSurfaceFrame, api.callbackInterface, api.getVersion(wrapper), 0,
-                                         nullptr);
+        frameCallback =
+            api.marshalFlags(wrapper, kSurfaceFrame, api.callbackInterface, api.getVersion(wrapper), 0, nullptr);
         if (frameCallback == nullptr) return;
         api.addListener(frameCallback, const_cast<void (**)(void)>(kFrameListener), this);
         throttle.Requested(NowMs());
@@ -767,8 +784,8 @@ namespace MobileGL::MG_Impl::EGLImpl::Wayland {
         if (impl->queue == nullptr || impl->displayWrapper == nullptr) return nullptr;
         api.setQueue(static_cast<wl_proxy*>(impl->displayWrapper), impl->queue);
         auto* wrapper = static_cast<wl_proxy*>(impl->displayWrapper);
-        impl->registry = api.marshalFlags(wrapper, kDisplayGetRegistry, api.registryInterface, api.getVersion(wrapper),
-                                          0, nullptr);
+        impl->registry =
+            api.marshalFlags(wrapper, kDisplayGetRegistry, api.registryInterface, api.getVersion(wrapper), 0, nullptr);
         if (impl->registry == nullptr) return nullptr;
         api.addListener(impl->registry, const_cast<void (**)(void)>(kRegistryListener), impl.get());
         if (api.roundtripQueue(wlDisplay, impl->queue) < 0 || impl->shm == nullptr) {
@@ -852,7 +869,8 @@ namespace MobileGL::MG_Impl::EGLImpl::Wayland {
             auto* backendObject = MG_Backend::pActiveBackendObject.get();
             if (buffer != nullptr && backendObject != nullptr) {
                 const SizeT index = static_cast<SizeT>(buffer - impl.dmabufBuffers);
-                const MG_Util::Damage::Region copy = impl.dmabufDamage.TakeForWrite(index, damage, impl.width, impl.height);
+                const MG_Util::Damage::Region copy =
+                    impl.dmabufDamage.TakeForWrite(index, damage, impl.width, impl.height);
                 if (backendObject->PresentToSharedImage(buffer->imageId, copy)) {
                     impl.Commit(buffer->buffer, damage);
                     buffer->busy = true;

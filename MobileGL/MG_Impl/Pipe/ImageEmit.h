@@ -145,7 +145,7 @@ namespace MobileGL::MG_Pipe {
                 entry.InternalFormat = static_cast<Uint32>(binding.Format);
                 entry.Layer = static_cast<Uint32>(binding.Layer);
                 entry.Level = MGPipeImageBindingIsAccessible(binding) ? static_cast<Uint16>(binding.Level)
-                                                                       : kMGPipeImageLevelNone;
+                                                                      : kMGPipeImageLevelNone;
                 entry.Layered = binding.Layered != GL_FALSE ? 1 : 0;
                 entry.Access = static_cast<Uint8>(MGPipeEncodeImageAccess(binding.Access));
             }

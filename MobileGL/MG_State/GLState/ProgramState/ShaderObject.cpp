@@ -286,8 +286,8 @@ namespace MobileGL::MG_State::GLState {
             }
         }
 
-        AdoptCompileNode(MakeShared<ShaderCompileTask>(m_stage, m_source, sourceHash, env, m_preprocessCache,
-                                                       m_externalIndex));
+        AdoptCompileNode(
+            MakeShared<ShaderCompileTask>(m_stage, m_source, sourceHash, env, m_preprocessCache, m_externalIndex));
 
         if (!runOnPool) {
             m_compiled->RunInline();

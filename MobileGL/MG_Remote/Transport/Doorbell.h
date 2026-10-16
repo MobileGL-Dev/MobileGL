@@ -131,8 +131,8 @@ namespace MobileGL::MG_Remote::Transport {
         // caller gets parks that are a subset of its OWN waits off a bell it
         // shares with another subsystem; see ParkEntries() above.
         template <class Ready>
-        bool Wait(std::atomic<std::uint32_t>& parked, Ready&& ready, std::uint32_t spinUs,
-                  std::uint32_t timeoutMs, std::atomic<std::uint64_t>* parkTally = nullptr) {
+        bool Wait(std::atomic<std::uint32_t>& parked, Ready&& ready, std::uint32_t spinUs, std::uint32_t timeoutMs,
+                  std::atomic<std::uint64_t>* parkTally = nullptr) {
             if (ready()) {
                 return true;
             }
@@ -141,9 +141,7 @@ namespace MobileGL::MG_Remote::Transport {
             // and skips the calibration probe: PipeWireCodec's SEG_STAGE retirement wait passes 0
             // because it wants the park, and MOBILEGL_IPC_SPIN_US=0 is a no-spin control.
             const std::uint64_t budget =
-                spinUs == 0 ? 0ull
-                            : static_cast<std::uint64_t>(SpinItersPerUs()) *
-                                  static_cast<std::uint64_t>(spinUs);
+                spinUs == 0 ? 0ull : static_cast<std::uint64_t>(SpinItersPerUs()) * static_cast<std::uint64_t>(spinUs);
             for (std::uint64_t spun = 0; spun < budget; ++spun) {
                 if (ready()) {
                     return true;
@@ -166,8 +164,7 @@ namespace MobileGL::MG_Remote::Transport {
             // safe direction for a deadline whose expiry is reported as a timeout.
             const auto deadline = timeoutMs == kWaitForever
                                       ? std::chrono::steady_clock::time_point::max()
-                                      : std::chrono::steady_clock::now() +
-                                            std::chrono::milliseconds(timeoutMs);
+                                      : std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
 
             // ONE PARK PER Wait is what the ledger counts, and this loop may Park
             // many times for one Wait; see the counting site below.
@@ -340,8 +337,8 @@ namespace MobileGL::MG_Remote::Transport {
         // afterwards.
         std::uint64_t Drain();
 
-        int m_fd;       // polled
-        int m_notifyFd; // written; equals m_fd in the single-fd (cross-process) form
+        int m_fd;             // polled
+        int m_notifyFd;       // written; equals m_fd in the single-fd (cross-process) form
         int m_witnessFd = -1; // polled for hangup only; NOT owned, NEVER read
         // Set ONLY by the witness branch of Park, never by Kill or by our own EOF. See
         // Doorbell::PeerHungUp for why the distinction is the whole design.

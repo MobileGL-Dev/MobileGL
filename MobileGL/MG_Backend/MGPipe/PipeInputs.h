@@ -77,15 +77,15 @@ namespace MobileGL::MG_Pipe {
 #if MOBILEGL_PIPE_POISON
 #define MGP_INPUT_CHECK(Field)                                                                                         \
     do {                                                                                                               \
-        if ((m_serverStampedVerb && ::MobileGL::MG_Pipe::MGPipeFieldOwnershipOf(Field) ==                            \
-                                      ::MobileGL::MG_Pipe::MGPipeFieldOwnership::kFatal) ||                           \
+        if ((m_serverStampedVerb && ::MobileGL::MG_Pipe::MGPipeFieldOwnershipOf(Field) ==                              \
+                                        ::MobileGL::MG_Pipe::MGPipeFieldOwnership::kFatal) ||                          \
             !::MobileGL::MG_Pipe::MGPipeInputFieldIsFresh(m_filled, (Field))) {                                        \
             ::MobileGL::MG_Pipe::MGPipeInputUnfreshRead((Field), m_currentVerb, m_serverStampedVerb);                  \
         }                                                                                                              \
     } while (0)
 #define MGP_INPUT_CHECK_ARG(Field, Arg0)                                                                               \
     do {                                                                                                               \
-        if (!::MobileGL::MG_Pipe::MGPipeInputArgumentRead((Field), static_cast<Uint32>(Arg0), m_currentVerb,            \
+        if (!::MobileGL::MG_Pipe::MGPipeInputArgumentRead((Field), static_cast<Uint32>(Arg0), m_currentVerb,           \
                                                           m_serverStampedVerb)) {                                      \
             MGP_INPUT_CHECK(Field);                                                                                    \
         }                                                                                                              \
@@ -800,7 +800,8 @@ namespace MobileGL::MG_Pipe {
 
         PipeInputs& Get() {
             PipeInputs* bound = m_bound;
-            if (bound == nullptr) [[unlikely]] bound = m_bound = &MGPipeServerInputsForCallingThread();
+            if (bound == nullptr) [[unlikely]]
+                bound = m_bound = &MGPipeServerInputsForCallingThread();
             return *bound;
         }
         PipeInputs* operator->() { return &Get(); }
@@ -869,9 +870,15 @@ namespace MobileGL::MG_Pipe {
     void MGPipeSetApplyThreadProbe(Bool (*probe)());
     void MGPipeSetSessionLive(Bool live);
 #else
-    inline constexpr Bool MGPipeServerArm() { return false; }
-    inline constexpr Bool MGPipeSessionLive() { return false; }
-    inline constexpr Bool MGPipeBlocksAreDistinct() { return false; }
+    inline constexpr Bool MGPipeServerArm() {
+        return false;
+    }
+    inline constexpr Bool MGPipeSessionLive() {
+        return false;
+    }
+    inline constexpr Bool MGPipeBlocksAreDistinct() {
+        return false;
+    }
     // Setters too: a caller guarded only at its own site would still need these to LINK.
     inline void MGPipeSetServerProcessRole(Bool) {}
     inline void MGPipeSetApplyThreadProbe(Bool (*)()) {}
@@ -918,10 +925,14 @@ namespace MobileGL::MG_Pipe {
     // folds onto gPipeInputs and PipeFill.cpp reads identically in both build flavours. An
     // inline that no caller in such a build ever has a reason to call twice - the disaggregated
     // arm above is the real one.
-    inline PipeInputs& MGPipeClientInputs() { return gPipeInputs; }
+    inline PipeInputs& MGPipeClientInputs() {
+        return gPipeInputs;
+    }
     // P13 W5: one block, no client-role stamp to withdraw - and no server role to be on.
     inline void MGPipeClientClearVerbBoundary() {}
-    inline constexpr Bool MGPipeServerArm() { return false; }
+    inline constexpr Bool MGPipeServerArm() {
+        return false;
+    }
 #endif
 
     // Every field has storage or is forwarded, and nothing else.

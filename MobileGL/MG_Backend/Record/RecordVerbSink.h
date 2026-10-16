@@ -33,8 +33,7 @@ namespace MobileGL::MG_Record {
 
         Bool OnClear(const MG_Pipe::MGPClear& clear) override;
         Bool OnBlit(const MG_Pipe::MGPBlit& blit) override;
-        Bool OnReadPixels(const MG_Pipe::MGPReadbackInfo& info, Uint64 seq,
-                          MG_Pipe::MGPipeReplySink* replies) override;
+        Bool OnReadPixels(const MG_Pipe::MGPReadbackInfo& info, Uint64 seq, MG_Pipe::MGPipeReplySink* replies) override;
         Bool OnGetTextureImage(const MG_Pipe::MGPReadbackInfo& info, Uint64 seq,
                                MG_Pipe::MGPipeReplySink* replies) override;
         // P9 (CONTRACT-P9.md §1): the pack-buffer halves. Nothing is answered; the tight pixels
@@ -42,8 +41,7 @@ namespace MobileGL::MG_Record {
         Bool OnReadPixelsToBuffer(const MG_Pipe::MGPReadbackToBuffer& record) override;
         Bool OnGetTextureImageToBuffer(const MG_Pipe::MGPReadbackToBuffer& record) override;
         Bool OnDrawVbo(const MG_Pipe::MGPDrawInfo& info, const MG_Pipe::MGPDrawRange* ranges,
-                       const MG_Pipe::MGHostSpan* userIndices,
-                       const MG_Pipe::MGPDrawIndirect* indirect) override;
+                       const MG_Pipe::MGHostSpan* userIndices, const MG_Pipe::MGPDrawIndirect* indirect) override;
 
         // ---- P5b (docs/archive/contracts/CONTRACT-P5B.md): one override per row a migration package owns.
         // At the contract commit EVERY BODY BELOW IS A STUB that dies
@@ -67,8 +65,7 @@ namespace MobileGL::MG_Record {
         Bool OnMemoryBarrier(const MG_Pipe::MGPMemoryBarrier& barrier) override;
         Bool OnResourceCopyRegion(const MG_Pipe::MGPCopyRegion& copy) override;
         Bool OnBindShaderImage(const MG_Pipe::MGPImageBind& bind) override;
-        Bool OnSetStorageBlockBinding(const MG_Pipe::MGPStorageBlockBinding& binding,
-                                      const char* name) override;
+        Bool OnSetStorageBlockBinding(const MG_Pipe::MGPStorageBlockBinding& binding, const char* name) override;
         Bool OnBeginStreamOutput(const MG_Pipe::MGPStreamOutputBegin& begin) override;
         Bool OnEndStreamOutput(const MG_Pipe::MGPXfbAccounting& accounting) override;
         Bool OnPauseStreamOutput(const MG_Pipe::MGPStreamOutputControl& control) override;
@@ -157,8 +154,7 @@ namespace MobileGL::MG_Record {
         // P9: `tight` holds Src's pixels, tightly packed; land them in record.Dst at the
         // record's layout through MGPipeApplyResourceSubData, one write per contiguous run. The
         // layout was checked before the read (PipeApplier.cpp ReadbackToBufferLayoutFault).
-        Bool LandReadbackInBuffer(const MG_Pipe::MGPReadbackToBuffer& record, Uint8* tight,
-                                  Uint64 bytesPerPixel);
+        Bool LandReadbackInBuffer(const MG_Pipe::MGPReadbackToBuffer& record, Uint8* tight, Uint64 bytesPerPixel);
 
         MG_Backend::BackendObject* m_backend = nullptr;
         Uint64 m_clears = 0;

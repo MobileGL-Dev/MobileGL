@@ -23,7 +23,6 @@ layout(location = 0) out vec4 FragColor;
 void main() {}
 )";
 
-
 namespace MobileGL::MG_State::GLState {
     static std::atomic<Uint64> s_nextProgramLifetimeId = 1;
 
@@ -138,9 +137,13 @@ namespace MobileGL::MG_State::GLState {
         MG_Util::Async::ApplyDeferredDiagnostics(*pending);
     }
 
-    Bool ProgramObject::IsPendingLinkTerminal() const { return m_pendingLink->IsTerminal(); }
+    Bool ProgramObject::IsPendingLinkTerminal() const {
+        return m_pendingLink->IsTerminal();
+    }
 
-    Bool ProgramObject::IsPendingSpirvTerminal() const { return m_pendingSpirv->IsTerminal(); }
+    Bool ProgramObject::IsPendingSpirvTerminal() const {
+        return m_pendingSpirv->IsTerminal();
+    }
 
     void ProgramObject::JoinPendingSpirv() const {
         MOBILEGL_ASSERT(!MG_Util::Async::ShaderCompilePool::IsPoolThread(),
@@ -191,11 +194,11 @@ namespace MobileGL::MG_State::GLState {
         const SizeT dataOffset = m_pendingUniformBytes.size();
         m_pendingUniformBytes.resize(dataOffset + byteSize);
         std::memcpy(m_pendingUniformBytes.data() + dataOffset, source, byteSize);
-        m_pendingUniformWrites.push_back(PendingUniformWrite{.location = location,
-                                                             .byteOffsetInUniform =
-                                                                 static_cast<Uint>(byteOffsetInUniform),
-                                                             .byteSize = static_cast<Uint>(byteSize),
-                                                             .dataOffset = static_cast<Uint>(dataOffset)});
+        m_pendingUniformWrites.push_back(
+            PendingUniformWrite{.location = location,
+                                .byteOffsetInUniform = static_cast<Uint>(byteOffsetInUniform),
+                                .byteSize = static_cast<Uint>(byteSize),
+                                .dataOffset = static_cast<Uint>(dataOffset)});
         return true;
     }
 
@@ -246,8 +249,7 @@ namespace MobileGL::MG_State::GLState {
             // has an 8-byte one, which the store width below picks up. glslang folded the value
             // into floatValues, a vector<double>, in both cases. Leaving it out meant the
             // initializer was silently dropped and the uniform came up zero.
-            const Bool isFloat = init.basicType == glslang::EbtFloat ||
-                                 init.basicType == glslang::EbtFloat16 ||
+            const Bool isFloat = init.basicType == glslang::EbtFloat || init.basicType == glslang::EbtFloat16 ||
                                  init.basicType == glslang::EbtDouble;
             const Bool isInt = init.basicType == glslang::EbtInt || init.basicType == glslang::EbtUint ||
                                init.basicType == glslang::EbtBool;
@@ -276,8 +278,7 @@ namespace MobileGL::MG_State::GLState {
                 const SizeT slotSpan =
                     UniformStorageSpanInBytes(GetUniformTypeFacts(static_cast<Uint>(location)),
                                               GetUniformSizesInBytes(static_cast<Uint>(location)), nativeFloat64);
-                const SizeT columnStride =
-                    columns > 0 ? slotSpan / static_cast<SizeT>(columns) : slotSpan;
+                const SizeT columnStride = columns > 0 ? slotSpan / static_cast<SizeT>(columns) : slotSpan;
                 const Int componentsPerColumn = columns > 0 ? rows : componentsPerElement;
                 const Int columnCount = columns > 0 ? columns : 1;
 
@@ -345,8 +346,8 @@ namespace MobileGL::MG_State::GLState {
                 // Same verdict the live write path reaches for a uniform without backing
                 // storage: log and drop, rather than fault.
                 MGLOG_E_ONCE("ProgramObject %u: buffered uniform write at location %u has no backing storage "
-                        "(offset=%u size=%u uboSize=%zu); dropping write",
-                        m_externalIndex, write.location, offset, write.byteSize, uboSize);
+                             "(offset=%u size=%u uboSize=%zu); dropping write",
+                             m_externalIndex, write.location, offset, write.byteSize, uboSize);
                 continue;
             }
             Uint8* const destination = scratch + offset + write.byteOffsetInUniform;
@@ -458,9 +459,6 @@ namespace MobileGL::MG_State::GLState {
         artifacts.linkStatus = false;
     }
 
-
-
-
     bool ProgramObject::ShaderIsAttached(const SharedPtr<ShaderObject>& shader) {
         MGLOG_D("ProgramObject %u: ShaderIsAttached check for shader %p", m_externalIndex, shader.get());
         auto it = std::find_if(m_shaders.begin(), m_shaders.end(),
@@ -551,7 +549,7 @@ namespace MobileGL::MG_State::GLState {
         auto status = defaultFS->GetCompileStatus();
         if (!status) {
             MGLOG_E_ONCE("ProgramObject %u: Failed to compile default fragment shader. InfoLog:\n%s", m_externalIndex,
-                    defaultFS->GetInfoLog().c_str());
+                         defaultFS->GetInfoLog().c_str());
             return;
         }
         m_shaders.push_back(defaultFS);
@@ -636,9 +634,8 @@ namespace MobileGL::MG_State::GLState {
         // which is not a shape ARB_gl_spirv defines, and honouring what the application explicitly
         // asked for is the safer of the two readings.
         if (task->in.requestedXfbVaryings.empty()) {
-            for (const ShaderStage captureStage:
-                 {ShaderStage::Geometry, ShaderStage::TessEval, ShaderStage::TessControl,
-                  ShaderStage::Vertex}) {
+            for (const ShaderStage captureStage :
+                 {ShaderStage::Geometry, ShaderStage::TessEval, ShaderStage::TessControl, ShaderStage::Vertex}) {
                 Bool stagePresent = false;
                 for (const auto& shader : m_shaders) {
                     if (!shader || shader->GetShaderStage() != captureStage) continue;
@@ -713,7 +710,6 @@ namespace MobileGL::MG_State::GLState {
         task->SubmitAfter(deps);
     }
 
-
     void ProgramObject::MarkAsDeleted() {
         MGLOG_D("ProgramObject %u: MarkAsDeleted called (was %s)", m_externalIndex,
                 m_deleteStatus ? "deleted" : "not deleted");
@@ -740,7 +736,6 @@ namespace MobileGL::MG_State::GLState {
         return m_shaders;
     }
 
-
     void ProgramObject::SetExplicitVertexInLocation(Uint index, const char* name) {
         MGLOG_D("ProgramObject %u: SetExplicitVertexInLocation called name='%s' index=%u", m_externalIndex, name,
                 index);
@@ -762,7 +757,6 @@ namespace MobileGL::MG_State::GLState {
         MGLOG_D("ProgramObject %u: SetExplicitFragmentOutIndex - stored color index for '%s' -> %u", m_externalIndex,
                 name, colorIndex);
     }
-
 
     Int ProgramObject::GetFragmentDataLocation(const char* name) {
         // Answered from the OWNED pipe-output snapshot, not from Artifacts().program. The live

@@ -261,7 +261,8 @@ void main() { oColor = texture(uTex, vUv); }
             void SkipUnlessTheLaneIsAssertableHere() {
                 if (std::getenv(kLaneMarker) == nullptr) {
                     GTEST_SKIP() << "runs only in its own lane: the TextureUploadShape. ctest entry "
-                                    "sets " << kLaneMarker
+                                    "sets "
+                                 << kLaneMarker
                                  << " together with MOBILEGL_PIPE_STATS=1, "
                                     "MOBILEGL_PIPE_STATS_PERIOD=1 and a private "
                                     "MOBILEGL_LOG_FILE_PATH. None of that is configured in the "
@@ -314,8 +315,7 @@ void main() { oColor = texture(uTex, vUv); }
                 glBindTexture(GL_TEXTURE_2D, 0);
                 GLuint view = 0;
                 glGenTextures(1, &view);
-                while (glGetError() != GL_NO_ERROR) {
-                }
+                while (glGetError() != GL_NO_ERROR) {}
                 glTextureView(view, GL_TEXTURE_2D, storage, GL_RGBA8, 0, 1, 0, 1);
                 const bool usable = glGetError() == GL_NO_ERROR;
                 glDeleteTextures(1, &view);
@@ -345,8 +345,8 @@ void main() { oColor = texture(uTex, vUv); }
                 GLuint texture = 0;
                 glGenTextures(1, &texture);
                 glBindTexture(GL_TEXTURE_2D, texture);
-                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, kAtlasSize, kAtlasSize, 0, GL_RGBA,
-                             GL_UNSIGNED_BYTE, texels.data());
+                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, kAtlasSize, kAtlasSize, 0, GL_RGBA, GL_UNSIGNED_BYTE,
+                             texels.data());
                 glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
                 glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
                 glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 0);
@@ -360,14 +360,12 @@ void main() { oColor = texture(uTex, vUv); }
                 GLuint texture = 0;
                 glGenTextures(1, &texture);
                 glBindTexture(GL_TEXTURE_2D, texture);
-                glTexStorage2D(GL_TEXTURE_2D, kViewedOwnerLevels, GL_RGBA8, kViewedOwnerSize,
-                               kViewedOwnerSize);
+                glTexStorage2D(GL_TEXTURE_2D, kViewedOwnerLevels, GL_RGBA8, kViewedOwnerSize, kViewedOwnerSize);
                 glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
                 for (int level = 0; level < kViewedOwnerLevels; ++level) {
                     const int size = kViewedOwnerSize >> level;
                     const std::vector<std::uint8_t> green = GreenTexels(size, size);
-                    glTexSubImage2D(GL_TEXTURE_2D, level, 0, 0, size, size, GL_RGBA, GL_UNSIGNED_BYTE,
-                                    green.data());
+                    glTexSubImage2D(GL_TEXTURE_2D, level, 0, 0, size, size, GL_RGBA, GL_UNSIGNED_BYTE, green.data());
                 }
                 glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
                 glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
@@ -395,13 +393,12 @@ void main() { oColor = texture(uTex, vUv); }
             void ScatterRectsInto(GLuint texture) {
                 glBindTexture(GL_TEXTURE_2D, texture);
                 glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-                const std::uint8_t patch[kRectSize * kRectSize * 4] = {
-                    0, 255, 0, 255, 0, 255, 0, 255, 0, 255, 0, 255, 0, 255, 0, 255};
+                const std::uint8_t patch[kRectSize * kRectSize * 4] = {0, 255, 0, 255, 0, 255, 0, 255,
+                                                                       0, 255, 0, 255, 0, 255, 0, 255};
                 for (int rect = 0; rect < kScatteredRects; ++rect) {
                     const int x = kScatterMargin + ((rect * 7) % kScatterCells) * kRectSize;
                     const int y = kScatterMargin + ((rect * 5) % kScatterCells) * kRectSize;
-                    glTexSubImage2D(GL_TEXTURE_2D, 0, x, y, kRectSize, kRectSize, GL_RGBA,
-                                    GL_UNSIGNED_BYTE, patch);
+                    glTexSubImage2D(GL_TEXTURE_2D, 0, x, y, kRectSize, kRectSize, GL_RGBA, GL_UNSIGNED_BYTE, patch);
                 }
             }
 
@@ -496,8 +493,7 @@ void main() { oColor = texture(uTex, vUv); }
                 // looking at the region at all.
                 glBindTexture(GL_TEXTURE_2D, m_contiguous);
                 const std::vector<std::uint8_t> band = GreenTexels(kAtlasSize, 8);
-                glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, kAtlasSize, 8, GL_RGBA, GL_UNSIGNED_BYTE,
-                                band.data());
+                glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, kAtlasSize, 8, GL_RGBA, GL_UNSIGNED_BYTE, band.data());
                 lastContiguous = DrawSampled(m_contiguous);
 
                 // THE SAME SCATTERED PATTERN THROUGH A VIEW. The writes name the view's level 0;
@@ -526,14 +522,11 @@ void main() { oColor = texture(uTex, vUv); }
             // two-sided comparison into `N == 0`. So each side is read from ITS OWN role's log, and
             // the server bracket falls back to the client log only where there is no server half -
             // the pull build and the monolith lane, where one file IS the whole run.
-            const PipeStatsWindow::Window clientWindow =
-                PipeStatsWindow::LastFromClientLogSince(statsMark);
-            const PipeStatsWindow::Window serverWindow =
-                PipeStatsWindow::LastFromServerLogSince(statsMark);
+            const PipeStatsWindow::Window clientWindow = PipeStatsWindow::LastFromClientLogSince(statsMark);
+            const PipeStatsWindow::Window serverWindow = PipeStatsWindow::LastFromServerLogSince(statsMark);
             const PipeStatsWindow::Window& shapeWindow =
-                (serverWindow.found && PipeStatsWindow::CounterOrAbsent(serverWindow, "emit") > 0)
-                    ? serverWindow
-                    : clientWindow;
+                (serverWindow.found && PipeStatsWindow::CounterOrAbsent(serverWindow, "emit") > 0) ? serverWindow
+                                                                                                   : clientWindow;
             // THE ASSERTION IS ON THE WINDOW THAT CARRIES THE BRACKET, not on the client's, and
             // moving to a marked read is what showed why. The client role emits NO summary window
             // of its own under inproc/spawn/tcp at the point this case reads - only the
@@ -545,8 +538,7 @@ void main() { oColor = texture(uTex, vUv); }
             ASSERT_TRUE(shapeWindow.found)
                 << "no 'MGPipe stats:' window was appended to either role's log by the swap that "
                    "closes the counted window. client="
-                << PipeStatsWindow::LibraryLogPath()
-                << " server=" << PipeStatsWindow::ServerLibraryLogPath()
+                << PipeStatsWindow::LibraryLogPath() << " server=" << PipeStatsWindow::ServerLibraryLogPath()
                 << ". The shape could not be read at all - which is a different finding from a "
                    "shape that read zero.";
             RecordProperty("stats_line_client", clientWindow.line.c_str());
@@ -574,20 +566,17 @@ void main() { oColor = texture(uTex, vUv); }
                 !statsRuntime.transportResolved || statsRuntime.transportName == "inproc";
             const bool ctuIsWindowAligned = oneProcessForCounters && shapeWindowCtu >= 0;
             const long long clientEmissions =
-                emitPeekClosed
-                    ? static_cast<long long>(emitAfter.SubDataCount - emitBefore.SubDataCount)
-                    : shapeWindowCtu;
+                emitPeekClosed ? static_cast<long long>(emitAfter.SubDataCount - emitBefore.SubDataCount)
+                               : shapeWindowCtu;
             ASSERT_GE(emissions, 0) << "the summary line carries no tex[emit=]: " << shapeWindow.line;
             ASSERT_GE(box, 0) << "no box=: " << shapeWindow.line;
             ASSERT_GE(rect, 0) << "no rect=: " << shapeWindow.line;
             ASSERT_GE(jobs, 0) << "no jobs=: " << shapeWindow.line;
 
             std::cout << "[ TextureUploadShape ] backend=" << Gl().BackendName() << " frames=" << kFrames
-                      << " scattered_rects_per_frame=" << kScatteredRects
-                      << " textures=" << kTexturesInTheWindow
-                      << " server[emit=" << emissions << " box=" << box << " rect=" << rect
-                      << " jobs=" << jobs << "] client[emitter=" << clientEmissions
-                      << " ctu_shape_window=" << shapeWindowCtu
+                      << " scattered_rects_per_frame=" << kScatteredRects << " textures=" << kTexturesInTheWindow
+                      << " server[emit=" << emissions << " box=" << box << " rect=" << rect << " jobs=" << jobs
+                      << "] client[emitter=" << clientEmissions << " ctu_shape_window=" << shapeWindowCtu
                       << " ctu_client_window=" << clientWindowCtu << "]" << std::endl;
             RecordProperty("ctu_shape_window", static_cast<int>(shapeWindowCtu));
             RecordProperty("ctu_client_window", static_cast<int>(clientWindowCtu));
@@ -601,21 +590,22 @@ void main() { oColor = texture(uTex, vUv); }
             // 1. the workload really uploaded. Without this the assertions below are all 0 == 0 and
             //    a run whose emitter was switched off records the same "healthy" shape as one that
             //    worked.
-            ASSERT_GT(emissions, 0)
-                << "the server counted no texture upload emission at all over " << kFrames
-                << " frames of " << kScatteredRects
-                << " sub-regions each, plus a contiguous band and a view write. Either the uploads "
-                   "never reached the backend or the counter stopped counting; in both cases every "
-                   "shape number below would be a zero that means nothing. "
-                << shapeWindow.line;
+            ASSERT_GT(emissions, 0) << "the server counted no texture upload emission at all over " << kFrames
+                                    << " frames of " << kScatteredRects
+                                    << " sub-regions each, plus a contiguous band and a view write. Either the uploads "
+                                       "never reached the backend or the counter stopped counting; in both cases every "
+                                       "shape number below would be a zero that means nothing. "
+                                    << shapeWindow.line;
 
             // 2. the server bracket's own arithmetic.
             EXPECT_EQ(box + rect, emissions)
                 << "tex[box=] + tex[rect=] must be tex[emit=]: every emission takes exactly one of "
-                   "the two shapes. " << shapeWindow.line;
+                   "the two shapes. "
+                << shapeWindow.line;
             EXPECT_GE(jobs, emissions)
                 << "tex[jobs=] must be at least tex[emit=]: a box emission is one driver upload job "
-                   "and a rect-list emission is N. " << shapeWindow.line;
+                   "and a rect-list emission is N. "
+                << shapeWindow.line;
 
             // 3. THE GOLD TABLE (R-11 / D-D4). This is the assertion the three around it cannot
             //    make: emit == box + rect and jobs >= emit are both satisfied by a shape that
@@ -623,14 +613,15 @@ void main() { oColor = texture(uTex, vUv); }
             //    direction on Mali and is invisible to SSIM.
             EXPECT_EQ(emissions, kGold.Emissions)
                 << "the emission COUNT moved. One resource_subdata per (storage owner, upload "
-                   "target, level) per frame is " << kTexturesInTheWindow << " textures x " << kFrames
-                << " frames = " << kGold.Emissions
+                   "target, level) per frame is "
+                << kTexturesInTheWindow << " textures x " << kFrames << " frames = " << kGold.Emissions
                 << ". A count above this says a level is being emitted more than once per validate "
                    "point - the two-cursor shape, if the extra one is the viewed texture; a count "
-                   "below says a level's record was dropped. " << shapeWindow.line;
+                   "below says a level's record was dropped. "
+                << shapeWindow.line;
             EXPECT_EQ(box, kGold.BoxEmissions)
-                << "the BOX/RECT split moved: " << box << " box emissions against a gold of "
-                << kGold.BoxEmissions << ". " << shapeWindow.line;
+                << "the BOX/RECT split moved: " << box << " box emissions against a gold of " << kGold.BoxEmissions
+                << ". " << shapeWindow.line;
             EXPECT_EQ(rect, kGold.RectEmissions)
                 << "the BOX/RECT split moved: " << rect << " rect-list emissions against a gold of "
                 << kGold.RectEmissions
@@ -639,9 +630,8 @@ void main() { oColor = texture(uTex, vUv); }
                    "SSIM case can see it. If this is intended, re-measure the row and say so in "
                    "docs/Disaggregated/MEASUREMENTS.md. "
                 << shapeWindow.line;
-            EXPECT_EQ(jobs, kGold.Jobs)
-                << "the JOB count moved: " << jobs << " against a gold of " << kGold.Jobs
-                << ". Jobs are what Mali prices the upload by. " << shapeWindow.line;
+            EXPECT_EQ(jobs, kGold.Jobs) << "the JOB count moved: " << jobs << " against a gold of " << kGold.Jobs
+                                        << ". Jobs are what Mali prices the upload by. " << shapeWindow.line;
 
             // 4. the two sides agree, WHEN THERE ARE TWO SIDES - and "there are two sides" is
             //    answered by the BUILD, not by the number (review F-m7).
@@ -657,14 +647,13 @@ void main() { oColor = texture(uTex, vUv); }
             //    THAT PROBE HITS ON THIS TREE: MG_Impl/Pipe/TextureEmit.h's EmitOneLevel increments
             //    it on every piece. The else-arm below is retained because it is what makes the
             //    arming decision falsifiable in both directions, not because it is reachable here.
-            const bool clientEmitterExists =
-                BuildMarkerIsSet("MGITEST_PIPE_CLIENT_TEXTURE_UPLOAD_EMITTER_PRESENT");
+            const bool clientEmitterExists = BuildMarkerIsSet("MGITEST_PIPE_CLIENT_TEXTURE_UPLOAD_EMITTER_PRESENT");
             ASSERT_GE(clientEmissions, 0)
                 << "the client half of the comparison could not be read at all. The in-process "
                    "emitter peek "
                 << (emitPeekLive ? "opened but did not close" : TextureEmitPeekSkipReason())
-                << ", and no role's summary line carried a ctu= field either. client="
-                << clientWindow.line << " shape=" << shapeWindow.line;
+                << ", and no role's summary line carried a ctu= field either. client=" << clientWindow.line
+                << " shape=" << shapeWindow.line;
             RecordProperty("client_emitter_present", clientEmitterExists ? 1 : 0);
             RecordProperty("client_half_source", emitPeekClosed ? "emitter peek" : "ctu= field");
             if (ctuIsWindowAligned) {
@@ -676,32 +665,34 @@ void main() { oColor = texture(uTex, vUv); }
                     << "the published ctu= field and MGPipeTextureEmitter's own SubDataCount "
                        "disagree in a window that covers the same work. EmitOneLevel increments "
                        "both on the same line, so this is the counter's publication and not the "
-                       "emission shape. " << shapeWindow.line;
+                       "emission shape. "
+                    << shapeWindow.line;
             } else {
-                RecordProperty("ctu_note",
-                               "the client's summary window is not aligned with the server's in "
-                               "this arm (two processes, two Present cadences), so ctu= is "
-                               "recorded and the assertion reads the in-process emitter instead");
+                RecordProperty("ctu_note", "the client's summary window is not aligned with the server's in "
+                                           "this arm (two processes, two Present cadences), so ctu= is "
+                                           "recorded and the assertion reads the in-process emitter instead");
             }
             if (clientEmitterExists) {
                 EXPECT_GT(clientEmissions, 0)
                     << "a MG_Impl/Pipe source emits CallClass::ClientTextureUploadEmissions on this "
-                       "tree, and the SERVER counted " << emissions
+                       "tree, and the SERVER counted "
+                    << emissions
                     << " texture upload emissions for this workload, but the client counted NONE. An "
                        "emitter that has stopped emitting reads exactly like no emitter at all in "
                        "this field, which is why this case asks the build rather than the number. "
                     << clientWindow.line;
                 EXPECT_EQ(clientEmissions, emissions)
-                    << "the CLIENT counted " << clientEmissions
-                    << " texture upload records and the SERVER counted " << emissions
+                    << "the CLIENT counted " << clientEmissions << " texture upload records and the SERVER counted "
+                    << emissions
                     << " for the same workload in the same window. The two counting the same records "
                        "is the entire reason both are published (D-L): a divergence here is an "
                        "emission-shape divergence that SSIM is blind to and that costs ~+6 ms/frame "
-                       "on Mali when it goes the wrong way. client=" << clientWindow.line
-                    << " server=" << shapeWindow.line;
+                       "on Mali when it goes the wrong way. client="
+                    << clientWindow.line << " server=" << shapeWindow.line;
                 EXPECT_EQ(clientEmissions, kGold.Emissions)
                     << "the client's own count against the gold row, so that a run where BOTH sides "
-                       "moved together is still red. " << clientWindow.line;
+                       "moved together is still red. "
+                    << clientWindow.line;
             } else {
                 // Not merely "not asserted": on a tree with no client emitter the counter must be
                 // ZERO, and a non-zero one would mean the probe is looking for the wrong symbol -
@@ -709,21 +700,21 @@ void main() { oColor = texture(uTex, vUv); }
                 // is mis-armed.
                 EXPECT_EQ(clientEmissions, 0)
                     << "no MG_Impl/Pipe source emits CallClass::ClientTextureUploadEmissions on this "
-                       "tree, yet the client counted " << clientEmissions
+                       "tree, yet the client counted "
+                    << clientEmissions
                     << " of them. Something is incrementing that counter which this build's probe "
                        "cannot see, so the probe is looking for the wrong symbol and this case's "
-                       "arming decision is unreliable in both directions. " << clientWindow.line;
+                       "arming decision is unreliable in both directions. "
+                    << clientWindow.line;
                 RecordProperty("client_side", "absent");
             }
 
             // The pixels, so that a recorded shape cannot be the shape of a workload that drew
             // nothing.
             EXPECT_TRUE(RegionIsMostly(lastScattered, kInset, lastScattered.Width() - kInset, kInset,
-                                       lastScattered.Height() - kInset, "green", 0.0,
-                                       "the scattered-rect atlas"));
+                                       lastScattered.Height() - kInset, "green", 0.0, "the scattered-rect atlas"));
             EXPECT_TRUE(RegionIsMostly(lastContiguous, kInset, lastContiguous.Width() - kInset, kInset,
-                                       lastContiguous.Height() - kInset, "green", 0.0,
-                                       "the contiguous-band atlas"));
+                                       lastContiguous.Height() - kInset, "green", 0.0, "the contiguous-band atlas"));
             EXPECT_TRUE(RegionIsMostly(lastViewed, kInset, lastViewed.Width() - kInset, kInset,
                                        lastViewed.Height() - kInset, "green", 0.0,
                                        "the atlas written through a glTextureView"));

@@ -22,13 +22,19 @@ namespace MobileGL::MG_Pipe {
     namespace {
         // Half-local chunk index -> global chunk index. The halves alternate, so this is
         // arithmetic rather than a table.
-        constexpr SizeT GlobalPipelineChunk(SizeT halfIndex) { return halfIndex * 2 + 1; }
-        constexpr SizeT GlobalDynamicChunk(SizeT halfIndex) { return halfIndex * 2; }
+        constexpr SizeT GlobalPipelineChunk(SizeT halfIndex) {
+            return halfIndex * 2 + 1;
+        }
+        constexpr SizeT GlobalDynamicChunk(SizeT halfIndex) {
+            return halfIndex * 2;
+        }
 
         const Uint8* BytesOf(const RenderStateParameters& params) {
             return reinterpret_cast<const Uint8*>(&params);
         }
-        Uint8* BytesOf(RenderStateParameters& params) { return reinterpret_cast<Uint8*>(&params); }
+        Uint8* BytesOf(RenderStateParameters& params) {
+            return reinterpret_cast<Uint8*>(&params);
+        }
 
         SizeT BlobBytes(Uint32 chunkMask, SizeT halfCount, SizeT (*toGlobal)(SizeT)) {
             SizeT total = 0;
@@ -63,8 +69,8 @@ namespace MobileGL::MG_Pipe {
             }
         }
 
-        Uint32 ChunksThatMoved(const RenderStateParameters& a, const RenderStateParameters& b,
-                               SizeT halfCount, SizeT (*toGlobal)(SizeT)) {
+        Uint32 ChunksThatMoved(const RenderStateParameters& a, const RenderStateParameters& b, SizeT halfCount,
+                               SizeT (*toGlobal)(SizeT)) {
             const Uint8* left = BytesOf(a);
             const Uint8* right = BytesOf(b);
             Uint32 mask = 0;
@@ -103,13 +109,11 @@ namespace MobileGL::MG_Pipe {
                   "kMGPipeDynamicChunks lost an entry");
 
     void MGPipeGatherPipelineBytes(const RenderStateParameters& params, void* dst) {
-        Gather(params, AllChunks(kMGPipePipelineChunkCount), dst, kMGPipePipelineChunkCount,
-               GlobalPipelineChunk);
+        Gather(params, AllChunks(kMGPipePipelineChunkCount), dst, kMGPipePipelineChunkCount, GlobalPipelineChunk);
     }
 
     void MGPipeScatterPipelineBytes(const void* src, RenderStateParameters& dst) {
-        Scatter(src, AllChunks(kMGPipePipelineChunkCount), dst, kMGPipePipelineChunkCount,
-                GlobalPipelineChunk);
+        Scatter(src, AllChunks(kMGPipePipelineChunkCount), dst, kMGPipePipelineChunkCount, GlobalPipelineChunk);
     }
 
     SizeT MGPipePipelineChunkBlobBytes(Uint32 chunkMask) {
@@ -145,8 +149,7 @@ namespace MobileGL::MG_Pipe {
     }
 
     Uint64 MGPipeHashPipelineBytes(const void* bytes) {
-        return static_cast<Uint64>(
-            XXH64(bytes, kMGPipePipelineChunkBytes, kMGPipeRenderStateChunkTableSeed));
+        return static_cast<Uint64>(XXH64(bytes, kMGPipePipelineChunkBytes, kMGPipeRenderStateChunkTableSeed));
     }
 
     Uint64 MGPipeComputePipelineSubsetHash(const RenderStateParameters& params) {

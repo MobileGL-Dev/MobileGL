@@ -43,8 +43,7 @@ namespace {
         if (result != MOBILEGL_OK) {
             return std::string("<result=") + std::to_string(static_cast<int>(result)) + ">";
         }
-        return std::string(reinterpret_cast<const char*>(buffer.data()),
-                           static_cast<std::size_t>(size));
+        return std::string(reinterpret_cast<const char*>(buffer.data()), static_cast<std::size_t>(size));
     }
 
 } // namespace
@@ -112,9 +111,7 @@ TEST(InProcessTransportTest, PollAndTimeoutDoNotBlockForever) {
 
     const auto start = std::chrono::steady_clock::now();
     EXPECT_EQ(server->ReceiveFrame(span, &size, 30), MOBILEGL_ERR_TIMEOUT);
-    EXPECT_GE(std::chrono::duration_cast<std::chrono::milliseconds>(
-                  std::chrono::steady_clock::now() - start)
-                  .count(),
+    EXPECT_GE(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count(),
               20);
 }
 
@@ -144,9 +141,7 @@ TEST(InProcessTransportTest, BlockedReceiverWakesOnSendAndOnShutdown) {
     InProcessTransport::CreatePair(client, server);
 
     std::atomic<bool> got{false};
-    std::thread reader([&] {
-        got.store(Receive(*server, kWaitForever) == "wake");
-    });
+    std::thread reader([&] { got.store(Receive(*server, kWaitForever) == "wake"); });
     std::this_thread::sleep_for(std::chrono::milliseconds(20));
     ASSERT_EQ(client->SendFrame(Span(std::string("wake"))), MOBILEGL_OK);
     reader.join();
@@ -203,9 +198,7 @@ TEST(InProcessTransportTest, HandsOverADescriptorAndItsSideband) {
     MobileGLMutableByteSpan bigSpan{big.data(), big.size()};
     ASSERT_EQ(server->ReceiveFd(&fd, bigSpan, &sidebandSize, 100), MOBILEGL_OK);
     ASSERT_GE(fd, 0);
-    EXPECT_EQ(std::string(reinterpret_cast<const char*>(big.data()),
-                          static_cast<std::size_t>(sidebandSize)),
-              sideband);
+    EXPECT_EQ(std::string(reinterpret_cast<const char*>(big.data()), static_cast<std::size_t>(sidebandSize)), sideband);
 
     // Same open file description, independent descriptor.
     const char payload[] = "bytes";
@@ -239,8 +232,7 @@ TEST(InProcessTransportTest, AFrameWakeupIsNotEatenByAWaiterOnDescriptors) {
         std::uint64_t size = 0;
         fdWaiterStarted.store(true);
         // Never offered a descriptor: this one ends on the Shutdown below.
-        EXPECT_EQ(client->ReceiveFd(&fd, span, &size, kWaitForever),
-                  MOBILEGL_ERR_TRANSPORT_CLOSED);
+        EXPECT_EQ(client->ReceiveFd(&fd, span, &size, kWaitForever), MOBILEGL_ERR_TRANSPORT_CLOSED);
         EXPECT_EQ(fd, -1);
     });
     while (!fdWaiterStarted.load()) {
@@ -263,9 +255,8 @@ TEST(InProcessTransportTest, AFrameWakeupIsNotEatenByAWaiterOnDescriptors) {
     const auto start = std::chrono::steady_clock::now();
     ASSERT_EQ(server->SendFrame(Span(message)), MOBILEGL_OK);
     frameWaiter.join();
-    const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
-                               std::chrono::steady_clock::now() - start)
-                               .count();
+    const auto elapsedMs =
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
 
     EXPECT_EQ(got, message);
     // Not "eventually, when the receive timed out and re-checked".
@@ -311,8 +302,7 @@ TEST(InProcessTransportTest, DoorbellReturnsImmediatelyWhenAlreadyReady) {
     std::atomic<std::uint32_t> parked{0};
     // No notification is sent at all: a condition that is already true must
     // never park, or the lost-wakeup window would be reachable.
-    EXPECT_TRUE(client->SelfDoorbell().Wait(
-        parked, [] { return true; }, kDefaultSpinUs, 0));
+    EXPECT_TRUE(client->SelfDoorbell().Wait(parked, [] { return true; }, kDefaultSpinUs, 0));
     EXPECT_EQ(parked.load(), 0u);
 }
 
@@ -339,8 +329,7 @@ TEST(InProcessTransportTest, DoorbellSpinsWithoutParkingWhenReadyFlipsInsideTheB
     // Flips on the 8th probe - far inside a 50 us budget on any core that can run this suite,
     // and deliberately NOT on the first, so the spin loop really iterates.
     int probes = 0;
-    EXPECT_TRUE(bell.Wait(
-        parked, [&probes] { return ++probes >= 8; }, kDefaultSpinUs, 5000));
+    EXPECT_TRUE(bell.Wait(parked, [&probes] { return ++probes >= 8; }, kDefaultSpinUs, 5000));
     EXPECT_GE(probes, 8);
     EXPECT_EQ(bell.ParkEntries(), parksBefore)
         << "the wait blocked although its condition flipped inside the spin budget: the "
@@ -358,8 +347,7 @@ TEST(InProcessTransportTest, DoorbellStillParksWhenTheSpinBudgetRunsOut) {
     Doorbell& bell = client->SelfDoorbell();
     const std::uint64_t parksBefore = bell.ParkEntries();
 
-    EXPECT_FALSE(bell.Wait(
-        parked, [] { return false; }, kDefaultSpinUs, 30));
+    EXPECT_FALSE(bell.Wait(parked, [] { return false; }, kDefaultSpinUs, 30));
     EXPECT_GT(bell.ParkEntries(), parksBefore)
         << "the wait never reached the blocking park, so a waiter with no deadline would burn "
            "a core at full clock for ever";
@@ -385,8 +373,7 @@ TEST(InProcessTransportTest, AWaitThatParksTwiceOnARememberedNotifyIsStillOnePar
     bell.Notify();
 
     const std::uint64_t parksBefore = bell.ParkEntries();
-    EXPECT_FALSE(bell.Wait(
-        parked, [] { return false; }, kDefaultSpinUs, 30));
+    EXPECT_FALSE(bell.Wait(parked, [] { return false; }, kDefaultSpinUs, 30));
     EXPECT_EQ(bell.ParkEntries(), parksBefore + 1)
         << "one wait counted more than one park: the ledger's parks are no longer a subset of "
            "its waits, and `clipark > cli` reads as 'every verb pays a futex round trip' when "
@@ -401,11 +388,8 @@ TEST(InProcessTransportTest, DoorbellTimesOutWhenNothingHappens) {
 
     std::atomic<std::uint32_t> parked{0};
     const auto start = std::chrono::steady_clock::now();
-    EXPECT_FALSE(client->SelfDoorbell().Wait(
-        parked, [] { return false; }, kDefaultSpinUs, 30));
-    EXPECT_GE(std::chrono::duration_cast<std::chrono::milliseconds>(
-                  std::chrono::steady_clock::now() - start)
-                  .count(),
+    EXPECT_FALSE(client->SelfDoorbell().Wait(parked, [] { return false; }, kDefaultSpinUs, 30));
+    EXPECT_GE(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count(),
               20);
     EXPECT_EQ(parked.load(), 0u);
 }
@@ -431,8 +415,8 @@ TEST(InProcessTransportTest, ShutdownUnparksAWaiterWithNoDeadline) {
     InProcessTransport::CreatePair(shared->client, shared->server);
 
     std::thread waiter([shared] {
-        shared->woke.store(shared->server->SelfDoorbell().Wait(
-            shared->parked, [] { return false; }, kDefaultSpinUs, kWaitForever));
+        shared->woke.store(
+            shared->server->SelfDoorbell().Wait(shared->parked, [] { return false; }, kDefaultSpinUs, kWaitForever));
         shared->returned.store(true, std::memory_order_release);
     });
     // Past the spin and announced as parked; a little longer and it is inside
@@ -447,8 +431,7 @@ TEST(InProcessTransportTest, ShutdownUnparksAWaiterWithNoDeadline) {
     shared->client->Shutdown();
 
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-    while (!shared->returned.load(std::memory_order_acquire) &&
-           std::chrono::steady_clock::now() < deadline) {
+    while (!shared->returned.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < deadline) {
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     if (!shared->returned.load(std::memory_order_acquire)) {
@@ -467,10 +450,8 @@ TEST(InProcessTransportTest, ShutdownUnparksAWaiterWithNoDeadline) {
     // Sticky: a wait with no deadline that ARRIVES after the Shutdown returns at
     // once rather than parking, so a late thread cannot hang either.
     const auto start = std::chrono::steady_clock::now();
-    EXPECT_FALSE(shared->server->SelfDoorbell().Wait(
-        shared->parked, [] { return false; }, 0, kWaitForever));
-    EXPECT_LT(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start)
-                  .count(),
+    EXPECT_FALSE(shared->server->SelfDoorbell().Wait(shared->parked, [] { return false; }, 0, kWaitForever));
+    EXPECT_LT(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count(),
               1000);
     EXPECT_EQ(shared->parked.load(), 0u);
 }

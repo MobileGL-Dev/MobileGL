@@ -37,7 +37,9 @@ namespace {
         return true;
     }
 
-    Region Of(std::initializer_list<Rect> rects) { return Region::FromRects(rects.begin(), rects.size()); }
+    Region Of(std::initializer_list<Rect> rects) {
+        return Region::FromRects(rects.begin(), rects.size());
+    }
 } // namespace
 
 // EGL damage (origin bottom-left) -> wl_surface.damage_buffer / shared-image rows (origin top-left).
@@ -87,12 +89,14 @@ TEST(Damage, NormalizeClipsDropsAndPromotesToFull) {
 
 TEST(Damage, NormalizeMergesDownToTheLimitAndStillCoversEverything) {
     Vector<Rect> input;
-    for (Int32 i = 0; i < 40; ++i) input.push_back({(i * 37) % 900, (i * 53) % 600, 9 + i % 5, 7 + i % 3});
+    for (Int32 i = 0; i < 40; ++i)
+        input.push_back({(i * 37) % 900, (i * 53) % 600, 9 + i % 5, 7 + i % 3});
     Region region = Region::FromRects(input.data(), input.size());
     region.Normalize(1000, 700, kMaxRects);
     ASSERT_FALSE(region.IsFull());
     EXPECT_LE(region.Rects().size(), kMaxRects);
-    for (const Rect& r : input) EXPECT_TRUE(Covers(region, r, 1000, 700)) << r.X << "," << r.Y;
+    for (const Rect& r : input)
+        EXPECT_TRUE(Covers(region, r, 1000, 700)) << r.X << "," << r.Y;
 
     // Two neighbours and one far away, limit 2: the neighbours merge, the far one stays apart.
     Region three = Of({{0, 0, 10, 10}, {10, 0, 10, 10}, {500, 500, 10, 10}});
@@ -107,8 +111,10 @@ TEST(Damage, DisjointCoversTheSamePixelsOnce) {
     for (Int32 y = 0; y < 40; ++y) {
         for (Int32 x = 0; x < 40; ++x) {
             Int32 inInput = 0, inOut = 0;
-            for (const Rect& r : input) inInput |= (x >= r.X && x < r.X + r.Width && y >= r.Y && y < r.Y + r.Height);
-            for (const Rect& r : out) inOut += (x >= r.X && x < r.X + r.Width && y >= r.Y && y < r.Y + r.Height);
+            for (const Rect& r : input)
+                inInput |= (x >= r.X && x < r.X + r.Width && y >= r.Y && y < r.Y + r.Height);
+            for (const Rect& r : out)
+                inOut += (x >= r.X && x < r.X + r.Width && y >= r.Y && y < r.Y + r.Height);
             EXPECT_EQ(inOut, inInput) << x << "," << y;
         }
     }
@@ -180,11 +186,13 @@ TEST(Damage, EachBufferCopiesTheDamageItMissedSinceItsLastWrite) {
     // Buffer 0 last held frame A; frames B and C went elsewhere, D comes now.
     Region copy0 = tracker.TakeForWrite(0, d, W, H);
     ASSERT_FALSE(copy0.IsFull());
-    for (const Region* r : {&b, &c, &d}) EXPECT_TRUE(Covers(copy0, r->Rects()[0], W, H));
+    for (const Region* r : {&b, &c, &d})
+        EXPECT_TRUE(Covers(copy0, r->Rects()[0], W, H));
     EXPECT_FALSE(Covers(copy0, a.Rects()[0], W, H)) << "A is already in buffer 0";
 
     Region copy1 = tracker.TakeForWrite(1, e, W, H);
-    for (const Region* r : {&c, &d, &e}) EXPECT_TRUE(Covers(copy1, r->Rects()[0], W, H));
+    for (const Region* r : {&c, &d, &e})
+        EXPECT_TRUE(Covers(copy1, r->Rects()[0], W, H));
     EXPECT_FALSE(Covers(copy1, b.Rects()[0], W, H));
 
     // A reallocated buffer starts over.
@@ -223,8 +231,10 @@ TEST(Damage, MissedDamageStaysBoundedAndClipped) {
     const Region copy = tracker.TakeForWrite(0, Region(), 100, 100);
     ASSERT_FALSE(copy.IsFull());
     EXPECT_LE(copy.Rects().size(), kMaxRects);
-    for (const Rect& r : copy.Rects()) EXPECT_FALSE(Clip(r, 100, 100) != r) << "clipped to the surface";
-    for (const Rect& r : written) EXPECT_TRUE(Covers(copy, r, 100, 100));
+    for (const Rect& r : copy.Rects())
+        EXPECT_FALSE(Clip(r, 100, 100) != r) << "clipped to the surface";
+    for (const Rect& r : written)
+        EXPECT_TRUE(Covers(copy, r, 100, 100));
 }
 
 // EGL_EXT_buffer_age per swapchain image.
@@ -241,7 +251,8 @@ TEST(Damage, SwapchainAgeCountsPresentsSinceTheImageWasShown) {
 
     // Triple buffering, in order.
     ages.Reset(3);
-    for (SizeT i = 0; i < 3; ++i) ages.OnPresented(i, true);
+    for (SizeT i = 0; i < 3; ++i)
+        ages.OnPresented(i, true);
     EXPECT_EQ(ages.AgeOf(0), 3);
     ages.OnPresented(0, true);
     EXPECT_EQ(ages.AgeOf(1), 3);

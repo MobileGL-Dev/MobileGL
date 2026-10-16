@@ -128,8 +128,7 @@ namespace MobileGL::MG_Pipe {
     // explicitly, and it may not reach into MG_Impl to do so. The second discriminator is the
     // frontend enum, named rather than open-coded, and stays here because only this file
     // produces it.
-    inline constexpr Uint8 kMGPipeResourceStorageKindBuffer =
-        static_cast<Uint8>(MobileGL::TextureStorageType::Buffer);
+    inline constexpr Uint8 kMGPipeResourceStorageKindBuffer = static_cast<Uint8>(MobileGL::TextureStorageType::Buffer);
 
     // ---------------------------------------------------------------------------------
     // D-A2: the payload builders. Pure, so a unit case can assert field by field.
@@ -138,9 +137,8 @@ namespace MobileGL::MG_Pipe {
     // The descriptor for `buffer`. `storageDefined` is false for the create that the
     // constructor emits - storage is defined lazily by the first respecify and a backend
     // tolerates a resource that has none - and true for every respecify.
-    inline MGPResourceDesc MGPipeBuildResourceDesc(const MG_State::GLState::BufferObject& buffer,
-                                                   MGPipeHandle handle, Uint16 bindMask,
-                                                   Bool storageDefined) {
+    inline MGPResourceDesc MGPipeBuildResourceDesc(const MG_State::GLState::BufferObject& buffer, MGPipeHandle handle,
+                                                   Uint16 bindMask, Bool storageDefined) {
         MGPResourceDesc desc{};
         desc.Resource = handle;
         desc.Target = static_cast<Uint8>(kMGPipeResourceTargetBuffer);
@@ -158,8 +156,7 @@ namespace MobileGL::MG_Pipe {
                 MGLOG_E_ONCE("MGPipe: buffer %u declares a store of %llu bytes, which does not fit "
                              "MGPResourceDesc::Width - the descriptor's extent is narrowed and every "
                              "write past 4 GiB will be refused by the applier's range gate",
-                             buffer.GetExternalIndex(),
-                             static_cast<unsigned long long>(buffer.GetSize()));
+                             buffer.GetExternalIndex(), static_cast<unsigned long long>(buffer.GetSize()));
                 MOBILEGL_ASSERT(false, "MGPResourceDesc::Width cannot carry this buffer's size");
             }
             desc.Width = static_cast<Uint32>(buffer.GetSize());
@@ -313,7 +310,8 @@ namespace MobileGL::MG_Pipe {
         // told about: a live buffer of the ended session's contexts dies with no destroy on the
         // new wire, and the inverse entries stay so the handles still resolve locally.
         void ForgetPublication() {
-            for (Entry& entry : m_bySlot) entry.Published = false;
+            for (Entry& entry : m_bySlot)
+                entry.Published = false;
         }
 
         // The sticky everBoundAs mask. Sticky exactly as MGPResourceDesc::ImageBindableHint's
@@ -504,8 +502,8 @@ namespace MobileGL::MG_Pipe {
                                                 Uint64 producedAtSeq) {
         auto* buffer = MGPipeResourceTrackerInstance().Resolve(res);
         if (buffer == nullptr) {
-            MGLOG_E_ONCE("MGPipe: OnBufferWriteback for a handle {%u,%u} that resolves to no buffer",
-                         res.Slot, res.Gen);
+            MGLOG_E_ONCE("MGPipe: OnBufferWriteback for a handle {%u,%u} that resolves to no buffer", res.Slot,
+                         res.Gen);
             return;
         }
         void* bytePtr = nullptr;
@@ -532,14 +530,13 @@ namespace MobileGL::MG_Pipe {
                 const void* resolved = nullptr;
                 if (session && session->DataLink()) {
                     session->DataLink()->ResolveSpan(MG_Remote::Transport::LinkSegment::Event,
-                                                    {bytes.Offset, bytes.Size}, &resolved);
+                                                     {bytes.Offset, bytes.Size}, &resolved);
                 }
                 if (resolved == nullptr) {
                     MGLOG_F("MGPipe: Fatal{ProtocolCorruption, \"OnBufferWriteback.Offset\"} - "
                             "the writeback blobref's {%llu + %llu} does not resolve inside the "
                             "session's SEG_EVENT segment",
-                            static_cast<unsigned long long>(bytes.Offset),
-                            static_cast<unsigned long long>(bytes.Size));
+                            static_cast<unsigned long long>(bytes.Offset), static_cast<unsigned long long>(bytes.Size));
                     std::abort();
                 }
                 bytePtr = const_cast<void*>(resolved);
@@ -562,8 +559,8 @@ namespace MobileGL::MG_Pipe {
             return;
         }
 #endif
-        buffer->WritebackFromBackend(DataPtr{bytePtr, static_cast<SizeT>(bytes.Size)},
-                                     static_cast<SizeT>(offset), producedAtSeq);
+        buffer->WritebackFromBackend(DataPtr{bytePtr, static_cast<SizeT>(bytes.Size)}, static_cast<SizeT>(offset),
+                                     producedAtSeq);
     }
 
     // The monolith callback's shape (MGPipeCallbacks::OnBufferWriteback).
@@ -593,8 +590,7 @@ namespace MobileGL::MG_Pipe {
             // Loud, like its sibling above: a backend announcing a write against a handle
             // this client cannot resolve is a dropped MarkGpuWritten, and a dropped
             // MarkGpuWritten is a stale shadow read back as if it were current.
-            MGLOG_E_ONCE("MGPipe: OnGpuWritten for a handle {%u,%u} that resolves to no buffer", res.Slot,
-                         res.Gen);
+            MGLOG_E_ONCE("MGPipe: OnGpuWritten for a handle {%u,%u} that resolves to no buffer", res.Slot, res.Gen);
             return;
         }
         buffer->MarkGpuWrittenInChannelOrder();
@@ -622,8 +618,7 @@ namespace MobileGL::MG_Pipe {
             }
             entry = fn;
         };
-        install(gMGPipeCallbacks.OnBufferWriteback, &MGPipeClientOnBufferWriteback,
-                "OnBufferWriteback");
+        install(gMGPipeCallbacks.OnBufferWriteback, &MGPipeClientOnBufferWriteback, "OnBufferWriteback");
         install(gMGPipeCallbacks.OnGpuWritten, &MGPipeClientOnGpuWritten, "OnGpuWritten");
     }
 
@@ -631,8 +626,7 @@ namespace MobileGL::MG_Pipe {
     // and call OnGpuWritten directly; P5f fm rejects Magma's P7 buffer consumers before
     // reaching here. Keep a named guard at this boundary so a future caller cannot turn
     // a missing callback/handle into a write through a client object.
-    inline void MGPipeAnnounceBufferGpuWritten(
-        const SharedPtr<MG_State::GLState::BufferObject>& bufferObject) {
+    inline void MGPipeAnnounceBufferGpuWritten(const SharedPtr<MG_State::GLState::BufferObject>& bufferObject) {
         if (bufferObject == nullptr) return;
 #if MOBILEGL_BUILD_DISAGGREGATED
         if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
@@ -645,8 +639,7 @@ namespace MobileGL::MG_Pipe {
             bufferObject->MarkGpuWritten();
             return;
         }
-        const MGPipeHandle res =
-            MGPipeSlots().FindByLifetimeId(MGPipeKind::Buffer, bufferObject->GetLifetimeId());
+        const MGPipeHandle res = MGPipeSlots().FindByLifetimeId(MGPipeKind::Buffer, bufferObject->GetLifetimeId());
         if (MGPipeHandleIsNull(res)) {
             MGLOG_E_ONCE("MGPipe: no handle for the GPU-write announcement of buffer %u - the "
                          "reverse channel is installed but the mint is missing, so the mark "

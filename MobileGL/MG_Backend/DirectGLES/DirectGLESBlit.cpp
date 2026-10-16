@@ -30,8 +30,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // never from a client binding slot. A twin with no noted object was never synced through
     // any binding - the DSA-on-a-never-bound-framebuffer case, which the split path already
     // refuses for the named clears - and is loud rather than silently unconfigured.
-    void SyncAndBindFramebufferByHandle(MG_Pipe::MGPipeHandle fbo, FramebufferTarget target,
-                                        Bool forceSync = false) {
+    void SyncAndBindFramebufferByHandle(MG_Pipe::MGPipeHandle fbo, FramebufferTarget target, Bool forceSync = false) {
 #ifdef TRACY_ENABLE
         ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
@@ -91,11 +90,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // trio, so the honest thing is to leave it invalid and pay one extra sync. Under a
         // transport the legacy arm is never taken anyway (SyncCurrentFBO refuses first), so the
         // memo it feeds has no reader.
-        SyncAndBindFramebufferByHandle(
-            MG_Pipe::MGPipeApplier().BoundFramebuffer[static_cast<SizeT>(
-                target == FramebufferTarget::Read ? MG_Pipe::MGPipeFramebufferTarget::Read
-                                                  : MG_Pipe::MGPipeFramebufferTarget::Draw)],
-            target);
+        SyncAndBindFramebufferByHandle(MG_Pipe::MGPipeApplier().BoundFramebuffer[static_cast<SizeT>(
+                                           target == FramebufferTarget::Read ? MG_Pipe::MGPipeFramebufferTarget::Read
+                                                                             : MG_Pipe::MGPipeFramebufferTarget::Draw)],
+                                       target);
         // P4a decline-site F9 / MINOR-3: THE HANDLE ARM'S MEMO IS INVALIDATED HERE, NOT
         //   STAMPED, and it is done per target for the reason the memo is kept per target at
         //   all - this entry point syncs ONE binding and must not say anything about the other.
@@ -137,8 +135,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             GLint previous = 0;
             g_GLESFuncs.glGetIntegerv(GL_RENDERBUFFER_BINDING, &previous);
             g_GLESFuncs.glBindRenderbuffer(GL_RENDERBUFFER, static_cast<GLuint>(attachmentName));
-            g_GLESFuncs.glGetRenderbufferParameteriv(GL_RENDERBUFFER, GL_RENDERBUFFER_INTERNAL_FORMAT,
-                                                     &internalFormat);
+            g_GLESFuncs.glGetRenderbufferParameteriv(GL_RENDERBUFFER, GL_RENDERBUFFER_INTERNAL_FORMAT, &internalFormat);
             g_GLESFuncs.glBindRenderbuffer(GL_RENDERBUFFER, static_cast<GLuint>(previous));
         } else if (attachmentType == GL_TEXTURE) {
             if (!g_GLESFuncs.glGetTexLevelParameteriv) return 0;
@@ -170,8 +167,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         static GLsizei s_resolveHeight = 0;
         static Uint s_resolveContextGeneration = ~0u;
 
-        if (!g_GLESFuncs.glGenFramebuffers || !g_GLESFuncs.glGenRenderbuffers ||
-            !g_GLESFuncs.glRenderbufferStorage || !g_GLESFuncs.glFramebufferRenderbuffer) {
+        if (!g_GLESFuncs.glGenFramebuffers || !g_GLESFuncs.glGenRenderbuffers || !g_GLESFuncs.glRenderbufferStorage ||
+            !g_GLESFuncs.glFramebufferRenderbuffer) {
             return false;
         }
         const GLenum sourceFormat = QueryReadColorAttachmentInternalFormat();
@@ -292,26 +289,24 @@ namespace MobileGL::MG_Backend::DirectGLES {
             "    vUv = p * uUvTransform.xy + uUvTransform.zw;\n"
             "}\n";
 
-        static const char* const kDepthFragmentSource =
-            "#version 300 es\n"
-            "precision highp float;\n"
-            "precision highp sampler2D;\n"
-            "uniform sampler2D uSource;\n"
-            "in vec2 vUv;\n"
-            "void main() {\n"
-            "    gl_FragDepth = texture(uSource, vUv).r;\n"
-            "}\n";
+        static const char* const kDepthFragmentSource = "#version 300 es\n"
+                                                        "precision highp float;\n"
+                                                        "precision highp sampler2D;\n"
+                                                        "uniform sampler2D uSource;\n"
+                                                        "in vec2 vUv;\n"
+                                                        "void main() {\n"
+                                                        "    gl_FragDepth = texture(uSource, vUv).r;\n"
+                                                        "}\n";
 
-        static const char* const kStencilFragmentSource =
-            "#version 300 es\n"
-            "precision highp float;\n"
-            "precision highp usampler2D;\n"
-            "uniform usampler2D uSource;\n"
-            "uniform uint uBit;\n"
-            "in vec2 vUv;\n"
-            "void main() {\n"
-            "    if ((texture(uSource, vUv).r & uBit) == 0u) discard;\n"
-            "}\n";
+        static const char* const kStencilFragmentSource = "#version 300 es\n"
+                                                          "precision highp float;\n"
+                                                          "precision highp usampler2D;\n"
+                                                          "uniform usampler2D uSource;\n"
+                                                          "uniform uint uBit;\n"
+                                                          "in vec2 vUv;\n"
+                                                          "void main() {\n"
+                                                          "    if ((texture(uSource, vUv).r & uBit) == 0u) discard;\n"
+                                                          "}\n";
 
         GLuint BuildProgram(const char* fragmentSource) {
             const GLuint vertexShader = g_GLESFuncs.glCreateShader(GL_VERTEX_SHADER);
@@ -424,8 +419,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 g_GLESFuncs.glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(objectName));
                 const Bool bound = g_GLESFuncs.glGetError() == GL_NO_ERROR;
                 if (bound) {
-                    g_GLESFuncs.glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_INTERNAL_FORMAT,
-                                                         &internalFormat);
+                    g_GLESFuncs.glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_INTERNAL_FORMAT, &internalFormat);
                     if (g_GLESFuncs.glGetError() != GL_NO_ERROR) {
                         internalFormat = 0;
                     }
@@ -482,9 +476,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // Sampling the stencil half of a packed texture goes through
         // GL_DEPTH_STENCIL_TEXTURE_MODE, which is ES 3.1 state; on an older driver the pname
         // would just raise GL_INVALID_ENUM and the shader would read depth bits as stencil.
-        const Bool supportsStencilTextureMode = g_GLESCapabilities.GLESVersion.Major > 3 ||
-                                                (g_GLESCapabilities.GLESVersion.Major == 3 &&
-                                                 g_GLESCapabilities.GLESVersion.Minor >= 1);
+        const Bool supportsStencilTextureMode =
+            g_GLESCapabilities.GLESVersion.Major > 3 ||
+            (g_GLESCapabilities.GLESVersion.Major == 3 && g_GLESCapabilities.GLESVersion.Minor >= 1);
         if (wantStencil && !supportsStencilTextureMode) {
             return false;
         }
@@ -582,8 +576,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 g_GLESFuncs.glTexParameteri(GL_TEXTURE_2D, GL_DEPTH_STENCIL_TEXTURE_MODE, GL_DEPTH_COMPONENT);
             }
             g_GLESFuncs.glUseProgram(s_depthProgram);
-            g_GLESFuncs.glUniform4f(s_depthUvTransform, uvTransform[0], uvTransform[1], uvTransform[2],
-                                    uvTransform[3]);
+            g_GLESFuncs.glUniform4f(s_depthUvTransform, uvTransform[0], uvTransform[1], uvTransform[2], uvTransform[3]);
             g_GLESFuncs.glEnable(GL_DEPTH_TEST);
             g_GLESFuncs.glDepthFunc(GL_ALWAYS);
             g_GLESFuncs.glDepthMask(GL_TRUE);
@@ -698,8 +691,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     GLint drawBuffer = GL_NONE;
                     g_GLESFuncs.glGetIntegerv(GL_DRAW_BUFFER0 + i, &drawBuffer);
                     if (drawBuffer < GL_COLOR_ATTACHMENT0 || drawBuffer > GL_COLOR_ATTACHMENT31) continue;
-                    if (IsSameDriverImage(source, QueryDriverAttachmentImage(GL_DRAW_FRAMEBUFFER,
-                                                                             static_cast<GLenum>(drawBuffer)))) {
+                    if (IsSameDriverImage(
+                            source, QueryDriverAttachmentImage(GL_DRAW_FRAMEBUFFER, static_cast<GLenum>(drawBuffer)))) {
                         shared |= GL_COLOR_BUFFER_BIT;
                         break;
                     }
@@ -733,8 +726,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             GLint previous = 0;
             g_GLESFuncs.glGetIntegerv(GL_RENDERBUFFER_BINDING, &previous);
             g_GLESFuncs.glBindRenderbuffer(GL_RENDERBUFFER, static_cast<GLuint>(image.Name));
-            g_GLESFuncs.glGetRenderbufferParameteriv(GL_RENDERBUFFER, GL_RENDERBUFFER_INTERNAL_FORMAT,
-                                                     &internalFormat);
+            g_GLESFuncs.glGetRenderbufferParameteriv(GL_RENDERBUFFER, GL_RENDERBUFFER_INTERNAL_FORMAT, &internalFormat);
             g_GLESFuncs.glBindRenderbuffer(GL_RENDERBUFFER, static_cast<GLuint>(previous));
         } else {
             if (!g_GLESFuncs.glGetTexLevelParameteriv) return 0;
@@ -767,11 +759,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // A texture specified with an unsized format reports it back; renderbuffer storage
         // takes only sized ones.
         switch (internalFormat) {
-            case GL_RGBA: return GL_RGBA8;
-            case GL_RGB: return GL_RGB8;
-            case GL_DEPTH_STENCIL: return GL_DEPTH24_STENCIL8;
-            case GL_DEPTH_COMPONENT: return GL_DEPTH_COMPONENT24;
-            default: return static_cast<GLenum>(internalFormat);
+        case GL_RGBA:
+            return GL_RGBA8;
+        case GL_RGB:
+            return GL_RGB8;
+        case GL_DEPTH_STENCIL:
+            return GL_DEPTH24_STENCIL8;
+        case GL_DEPTH_COMPONENT:
+            return GL_DEPTH_COMPONENT24;
+        default:
+            return static_cast<GLenum>(internalFormat);
         }
     }
 
@@ -793,8 +790,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         static GLsizei s_depthStencilWidth = 0, s_depthStencilHeight = 0;
         static Uint s_scratchContextGeneration = ~0u;
 
-        if (!g_GLESFuncs.glGenFramebuffers || !g_GLESFuncs.glGenRenderbuffers ||
-            !g_GLESFuncs.glRenderbufferStorage || !g_GLESFuncs.glFramebufferRenderbuffer) {
+        if (!g_GLESFuncs.glGenFramebuffers || !g_GLESFuncs.glGenRenderbuffers || !g_GLESFuncs.glRenderbufferStorage ||
+            !g_GLESFuncs.glFramebufferRenderbuffer) {
             return false;
         }
         const GLint left = std::min(srcX0, srcX1);
@@ -818,9 +815,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         GLenum depthStencilFormat = 0;
         GLenum depthStencilAttachment = GL_NONE;
         if ((mask & (GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT)) != 0) {
-            const GLenum depthFormat = (mask & GL_DEPTH_BUFFER_BIT) != 0
-                                           ? QueryDriverReadAttachmentInternalFormat(GL_DEPTH_ATTACHMENT)
-                                           : 0;
+            const GLenum depthFormat =
+                (mask & GL_DEPTH_BUFFER_BIT) != 0 ? QueryDriverReadAttachmentInternalFormat(GL_DEPTH_ATTACHMENT) : 0;
             const GLenum stencilFormat = (mask & GL_STENCIL_BUFFER_BIT) != 0
                                              ? QueryDriverReadAttachmentInternalFormat(GL_STENCIL_ATTACHMENT)
                                              : 0;
@@ -869,12 +865,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
         };
         if (colorFormat != 0) {
-            ensureStorage(s_colorRenderbuffer, s_colorFormat, s_colorWidth, s_colorHeight, colorFormat, width,
-                          height);
+            ensureStorage(s_colorRenderbuffer, s_colorFormat, s_colorWidth, s_colorHeight, colorFormat, width, height);
         }
         if (depthStencilFormat != 0) {
-            ensureStorage(s_depthStencilRenderbuffer, s_depthStencilFormat, s_depthStencilWidth,
-                          s_depthStencilHeight, depthStencilFormat, width, height);
+            ensureStorage(s_depthStencilRenderbuffer, s_depthStencilFormat, s_depthStencilWidth, s_depthStencilHeight,
+                          depthStencilFormat, width, height);
         }
         g_GLESFuncs.glBindRenderbuffer(GL_RENDERBUFFER, static_cast<GLuint>(previousRenderbuffer));
 
@@ -896,8 +891,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
         const GLbitfield stagedMask =
             (colorFormat != 0 ? static_cast<GLbitfield>(GL_COLOR_BUFFER_BIT) : 0) |
-            (depthStencilFormat != 0 ? mask & static_cast<GLbitfield>(GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT)
-                                     : 0);
+            (depthStencilFormat != 0 ? mask & static_cast<GLbitfield>(GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT) : 0);
         Bool copied = g_GLESFuncs.glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
         if (copied) {
             // The staging copy is not the application's blit: its scissor box would clip the
@@ -973,7 +967,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // outright, desktop GL replicates the source sample into every destination one.
             if (ReplicateBlitIntoMultisampleDraw(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask)) {
                 if ((mask & GL_COLOR_BUFFER_BIT) != 0) {
-                    MGLOG_E_ONCE("BlitFramebuffer: colour replicate into a multisample draw framebuffer is not emulated");
+                    MGLOG_E_ONCE(
+                        "BlitFramebuffer: colour replicate into a multisample draw framebuffer is not emulated");
                 }
             }
             return;
@@ -995,9 +990,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             DrainBlitErrors();
             g_GLESFuncs.glBlitFramebuffer(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, colourBit, filter);
             if (g_GLESFuncs.glGetError() != GL_NO_ERROR) {
-                const Bool emulated =
-                    multisampleResolve &&
-                    ResolveThenBlit(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, filter);
+                const Bool emulated = multisampleResolve &&
+                                      ResolveThenBlit(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, filter);
                 if (!emulated) {
                     MGLOG_E_ONCE("BlitFramebuffer: the colour aspect was dropped - the driver rejected it on its "
                                  "own and no emulation applies");
@@ -1051,10 +1045,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
             const auto& color = record.Color[i];
             if (color.Res == record.ReadSurface.Res && color.Kind == record.ReadSurface.Kind &&
                 color.Layered == record.ReadSurface.Layered && color.Level == record.ReadSurface.Level &&
-                color.Layer == record.ReadSurface.Layer &&
-                color.UploadTarget == record.ReadSurface.UploadTarget) {
-                return static_cast<FramebufferAttachmentType>(
-                    static_cast<Int>(FramebufferAttachmentType::Color0) + static_cast<Int>(i));
+                color.Layer == record.ReadSurface.Layer && color.UploadTarget == record.ReadSurface.UploadTarget) {
+                return static_cast<FramebufferAttachmentType>(static_cast<Int>(FramebufferAttachmentType::Color0) +
+                                                              static_cast<Int>(i));
             }
         }
         return FramebufferAttachmentType::None;
@@ -1062,8 +1055,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
     static GLbitfield BlitLayeredDestinationAspects(const MG_Pipe::MGPFramebufferState& readRecord,
                                                     const MG_Pipe::MGPFramebufferState& drawRecord, GLint srcX0,
-                                                    GLint srcY0, GLint srcX1, GLint srcY1, GLint dstX0,
-                                                    GLint dstY0, GLint dstX1, GLint dstY1, GLbitfield mask) {
+                                                    GLint srcY0, GLint srcX1, GLint srcY1, GLint dstX0, GLint dstY0,
+                                                    GLint dstX1, GLint dstY1, GLbitfield mask) {
         if (mask == 0) return 0;
         if (!g_GLESFuncs.glCopyImageSubData) return 0;
         if (!MG_Util::SelfTest::BlitIgnoresDestinationArrayLayer(g_GLESFuncs)) return 0;
@@ -1109,8 +1102,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if ((mask & plan.bit) == 0) continue;
             if (plan.source == FramebufferAttachmentType::Unknown ||
                 plan.destination == FramebufferAttachmentType::Unknown ||
-                plan.source == FramebufferAttachmentType::None ||
-                plan.destination == FramebufferAttachmentType::None) {
+                plan.source == FramebufferAttachmentType::None || plan.destination == FramebufferAttachmentType::None) {
                 continue;
             }
             const MG_Pipe::MGPSurface* const sourceSurface =
@@ -1141,8 +1133,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // Copying an image region onto itself is undefined for glCopyImageSubData, and a blit
             // whose source and destination overlap is undefined for GL too - so this is not a
             // shape to substitute FOR, it is one to leave exactly as the application wrote it.
-            if (sourceSurface->Res == destinationSurface->Res &&
-                sourceSurface->Level == destinationSurface->Level &&
+            if (sourceSurface->Res == destinationSurface->Res && sourceSurface->Level == destinationSurface->Level &&
                 sourceSurface->Layer == destinationSurface->Layer) {
                 continue;
             }
@@ -1158,25 +1149,23 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (hasStencil && (mask & GL_STENCIL_BUFFER_BIT) == 0) continue;
             // ... and having carried both, it must be credited with both, or the caller hands the
             // stencil half to the driver and it lands on layer 0 after all.
-            const GLbitfield aspectBits =
-                hasDepth || hasStencil
-                    ? static_cast<GLbitfield>((hasDepth ? GL_DEPTH_BUFFER_BIT : 0) |
-                                              (hasStencil ? GL_STENCIL_BUFFER_BIT : 0))
-                    : static_cast<GLbitfield>(GL_COLOR_BUFFER_BIT);
+            const GLbitfield aspectBits = hasDepth || hasStencil
+                                              ? static_cast<GLbitfield>((hasDepth ? GL_DEPTH_BUFFER_BIT : 0) |
+                                                                        (hasStencil ? GL_STENCIL_BUFFER_BIT : 0))
+                                              : static_cast<GLbitfield>(GL_COLOR_BUFFER_BIT);
             if ((handled & aspectBits) == aspectBits) continue;
 
             if (!oneToOne || scissorEnabled || (plan.bit == GL_COLOR_BUFFER_BIT && enabledDrawBuffers != 1)) {
                 MGLOG_E_ONCE("BlitFramebuffer: this driver ignores a non-zero destination array layer and this "
                              "blit cannot be expressed as a copy (%s), so it will land on layer 0",
-                             !oneToOne          ? "it scales or flips"
-                             : scissorEnabled   ? "the scissor test is enabled"
-                                                : "the destination has more than one draw buffer");
+                             !oneToOne        ? "it scales or flips"
+                             : scissorEnabled ? "the scissor test is enabled"
+                                              : "the destination has more than one draw buffer");
                 continue;
             }
 
-            auto& backendSource =
-                TextureImpl::SyncTextureToBackendByHandle(sourceSurface->Res,
-                                                          /*imageBindableStorageRequired=*/false);
+            auto& backendSource = TextureImpl::SyncTextureToBackendByHandle(sourceSurface->Res,
+                                                                            /*imageBindableStorageRequired=*/false);
             if (!backendSource) continue;
             const GLuint sourceName = backendSource->GetBackendTextureId();
             // BY VALUE past this point, for the reason the copy-image endpoint builder gives:
@@ -1193,11 +1182,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 static_cast<TextureTarget>(destinationSurface->TextureTarget));
 
             ClearGLErrors();
-            g_GLESFuncs.glCopyImageSubData(sourceName, sourceTarget, static_cast<GLint>(sourceSurface->Level),
-                                           srcX0, srcY0, static_cast<GLint>(sourceSurface->Layer),
-                                           destinationName, destinationTarget,
-                                           static_cast<GLint>(destinationSurface->Level), dstX0, dstY0,
-                                           static_cast<GLint>(destinationSurface->Layer), width, height, 1);
+            g_GLESFuncs.glCopyImageSubData(sourceName, sourceTarget, static_cast<GLint>(sourceSurface->Level), srcX0,
+                                           srcY0, static_cast<GLint>(sourceSurface->Layer), destinationName,
+                                           destinationTarget, static_cast<GLint>(destinationSurface->Level), dstX0,
+                                           dstY0, static_cast<GLint>(destinationSurface->Layer), width, height, 1);
             if (const GLenum error = g_GLESFuncs.glGetError(); error != GL_NO_ERROR) {
                 // The driver blit still runs for this aspect - onto the wrong layer, but the
                 // substitute has to leave the call no worse off than it found it.
@@ -1247,9 +1235,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             SyncAndBindFramebufferByHandle(drawFbo, FramebufferTarget::Draw, /*forceSync=*/true);
 
             MGLOG_D("ES BlitNamedFramebuffer({%u,%u} -> {%u,%u}, %d, %d, %d, %d, %d, %d, %d, %d, 0x%x, %s)",
-                    readFbo.Slot, readFbo.Gen, drawFbo.Slot, drawFbo.Gen, srcX0, srcY0, srcX1,
-                    srcY1, dstX0, dstY0, dstX1, dstY1, mask,
-                    MG_Util::ConvertGLEnumToString(filter).c_str());
+                    readFbo.Slot, readFbo.Gen, drawFbo.Slot, drawFbo.Gen, srcX0, srcY0, srcX1, srcY1, dstX0, dstY0,
+                    dstX1, dstY1, mask, MG_Util::ConvertGLEnumToString(filter).c_str());
             // P5e (fb, §5.4): only the probed defect makes this do anything, and it now
             // asks the two RECORDS. The state-note detour this used to take - the twin
             // table handing back the frontend object it was synced from, plus
@@ -1260,12 +1247,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
             const auto* readRecord = BlitEndpointRecord(readFbo, FramebufferTarget::Read);
             const auto* drawRecord = BlitEndpointRecord(drawFbo, FramebufferTarget::Draw);
             if (readRecord != nullptr && drawRecord != nullptr) {
-                mask &= ~BlitLayeredDestinationAspects(*readRecord, *drawRecord, srcX0, srcY0, srcX1,
-                                                       srcY1, dstX0, dstY0, dstX1, dstY1, mask);
+                mask &= ~BlitLayeredDestinationAspects(*readRecord, *drawRecord, srcX0, srcY0, srcX1, srcY1, dstX0,
+                                                       dstY0, dstX1, dstY1, mask);
             }
             if (mask != 0) {
-                IssueBlitWithResolveFallback(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1,
-                                             mask, filter);
+                IssueBlitWithResolveFallback(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask, filter);
             }
             // The driver's bindings are now the two NAMED framebuffers; put the bound ones
             // back exactly as the monolith named entry point does.
@@ -1305,13 +1291,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // case). SyncCurrentFBO ran a few lines up and refuses if either is missing, so a null
         // here means the blit is against the default framebuffer's record, which the overload
         // declines on IsDefault.
-        const auto* readRecord =
-            BlitEndpointRecord(MG_Pipe::kMGPipeNullHandle, FramebufferTarget::Read);
-        const auto* drawRecord =
-            BlitEndpointRecord(MG_Pipe::kMGPipeNullHandle, FramebufferTarget::Draw);
+        const auto* readRecord = BlitEndpointRecord(MG_Pipe::kMGPipeNullHandle, FramebufferTarget::Read);
+        const auto* drawRecord = BlitEndpointRecord(MG_Pipe::kMGPipeNullHandle, FramebufferTarget::Draw);
         if (readRecord != nullptr && drawRecord != nullptr) {
-            mask &= ~BlitLayeredDestinationAspects(*readRecord, *drawRecord, srcX0, srcY0, srcX1,
-                                                   srcY1, dstX0, dstY0, dstX1, dstY1, mask);
+            mask &= ~BlitLayeredDestinationAspects(*readRecord, *drawRecord, srcX0, srcY0, srcX1, srcY1, dstX0, dstY0,
+                                                   dstX1, dstY1, mask);
         }
         if (mask != 0) {
             IssueBlitWithResolveFallback(srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1, mask, filter);

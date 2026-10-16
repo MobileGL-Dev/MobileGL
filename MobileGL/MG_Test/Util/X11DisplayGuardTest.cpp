@@ -35,14 +35,13 @@ namespace X = MobileGL::MG_Util::X11;
 namespace {
     // /proc/net/unix as Xwayland's process sees it under KWin: the two listening sockets KWin bound
     // and handed over with -listenfd, plus connected ones.
-    const char* kProcNetUnix =
-        "Num       RefCount Protocol Flags    Type St Inode Path\n"
-        "0000000000000000: 00000002 00000000 00010000 0001 01 41001 @/tmp/.X11-unix/X0\n"
-        "0000000000000000: 00000002 00000000 00010000 0001 01 41002 /tmp/.X11-unix/X0\n"
-        "0000000000000000: 00000003 00000000 00000000 0001 03 41003 /tmp/.X11-unix/X0\n"
-        "0000000000000000: 00000002 00000000 00010000 0001 01 41004 /run/user/1000/wayland-0\n"
-        "0000000000000000: 00000003 00000000 00000000 0001 03 41005\n"
-        "0000000000000000: 00000002 00000000 00010000 0001 01 41006 @/tmp/.X11-unix/X1\n";
+    const char* kProcNetUnix = "Num       RefCount Protocol Flags    Type St Inode Path\n"
+                               "0000000000000000: 00000002 00000000 00010000 0001 01 41001 @/tmp/.X11-unix/X0\n"
+                               "0000000000000000: 00000002 00000000 00010000 0001 01 41002 /tmp/.X11-unix/X0\n"
+                               "0000000000000000: 00000003 00000000 00000000 0001 03 41003 /tmp/.X11-unix/X0\n"
+                               "0000000000000000: 00000002 00000000 00010000 0001 01 41004 /run/user/1000/wayland-0\n"
+                               "0000000000000000: 00000003 00000000 00000000 0001 03 41005\n"
+                               "0000000000000000: 00000002 00000000 00010000 0001 01 41006 @/tmp/.X11-unix/X1\n";
 } // namespace
 
 TEST(X11DisplayGuard, DisplayNamesYieldTheirNumber) {
@@ -113,7 +112,9 @@ namespace {
         return fd;
     }
 
-    int UnusedDisplayNumber() { return 3000 + static_cast<int>(::getpid() % 2000); }
+    int UnusedDisplayNumber() {
+        return 3000 + static_cast<int>(::getpid() % 2000);
+    }
 } // namespace
 
 TEST(X11DisplayGuard, ThisProcessServesADisplayWhileItListensOnItsSocket) {

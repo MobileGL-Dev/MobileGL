@@ -35,8 +35,9 @@ namespace MobileGL::MG_Pipe {
     // in that string, which is what keeps the two from diverging.
     inline const char* FatalFamilyName(MGFatalFamily family) {
         switch (family) {
-#define X(Family, WireCode, Why) \
-    case MGFatalFamily::Family: return #Family;
+#define X(Family, WireCode, Why)                                                                                       \
+    case MGFatalFamily::Family:                                                                                        \
+        return #Family;
             MGL_FATAL_FAMILY_LIST(X)
 #undef X
         }

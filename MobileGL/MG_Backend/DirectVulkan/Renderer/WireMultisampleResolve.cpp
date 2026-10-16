@@ -58,7 +58,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     // multisampled and the destination not. Returns false for every shape it cannot express,
     // which the caller turns into a decline; it never ends the session.
     Bool VulkanRenderer::ResolveWireDepthStencilWithShader(WireImage source, WireImage resolved,
-        VkImageAspectFlags aspect, GLint sx0, GLint sy0, Uint32 width, Uint32 height) {
+                                                           VkImageAspectFlags aspect, GLint sx0, GLint sy0,
+                                                           Uint32 width, Uint32 height) {
         if (!source.image || !resolved.image || !width || !height) return false;
         if (aspect != VK_IMAGE_ASPECT_DEPTH_BIT && aspect != VK_IMAGE_ASPECT_STENCIL_BIT) return false;
         // A fragment shader cannot write the stencil aspect at all without
@@ -72,8 +73,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (!(source.usageFlags & VK_IMAGE_USAGE_SAMPLED_BIT)) return false;
         VkFormatProperties properties{};
         vkGetPhysicalDeviceFormatProperties(m_physicalDevice.handle, source.format, &properties);
-        const VkFormatFeatureFlags required = VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT |
-                                              VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT;
+        const VkFormatFeatureFlags required =
+            VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT | VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT;
         if ((properties.optimalTilingFeatures & required) != required) return false;
 
         const VkImageAspectFlags formatAspects = WireDepthStencilFormatAspects(source.format);
@@ -85,21 +86,24 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                                  m_wireMultisampleResolveResources->kit));
         }
         auto& cache = *m_wireMultisampleResolveResources;
-        const VkShaderModule fragment = aspect == VK_IMAGE_ASPECT_STENCIL_BIT ? cache.kit.stencilFragment
-                                                                              : cache.kit.depthFragment;
+        const VkShaderModule fragment =
+            aspect == VK_IMAGE_ASPECT_STENCIL_BIT ? cache.kit.stencilFragment : cache.kit.depthFragment;
         if (fragment == VK_NULL_HANDLE) return false;
 
         WireMultisampleResolveResources::Target* target = nullptr;
         for (auto& entry : cache.targets)
-            if (entry.format == resolved.format && entry.aspect == aspect) { target = &entry; break; }
+            if (entry.format == resolved.format && entry.aspect == aspect) {
+                target = &entry;
+                break;
+            }
         if (!target) {
             cache.targets.emplace_back();
             target = &cache.targets.back();
             target->format = resolved.format;
             target->aspect = aspect;
             VK_VERIFY(CreateWireShaderResolveRenderPass(m_device, resolved.format, &target->renderPass));
-            if (CreateWireShaderResolvePipeline(m_device, cache.kit, target->renderPass, aspect,
-                                                &target->pipeline) != VK_SUCCESS) {
+            if (CreateWireShaderResolvePipeline(m_device, cache.kit, target->renderPass, aspect, &target->pipeline) !=
+                VK_SUCCESS) {
                 vkDestroyRenderPass(m_device, target->renderPass, nullptr);
                 cache.targets.pop_back();
                 return false;
@@ -149,8 +153,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         alloc.descriptorSetCount = 1;
         alloc.pSetLayouts = &cache.kit.descriptorLayout;
         VK_VERIFY(vkAllocateDescriptorSets(m_device, &alloc, &descriptorSet));
-        const VkDescriptorImageInfo sampled{cache.kit.nearest, sourceView,
-                                            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        const VkDescriptorImageInfo sampled{cache.kit.nearest, sourceView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
         VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
         write.dstSet = descriptorSet;
         write.dstBinding = 0;

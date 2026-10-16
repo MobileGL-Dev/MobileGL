@@ -544,15 +544,18 @@ void main() {
 }
 )";
         std::vector<std::string> names;
-        for (int i = 0; i < 16; ++i) names.push_back("StageData.attrib[" + std::to_string(i) + "]");
+        for (int i = 0; i < 16; ++i)
+            names.push_back("StageData.attrib[" + std::to_string(i) + "]");
         std::vector<const char*> varyings;
-        for (const auto& n : names) varyings.push_back(n.c_str());
+        for (const auto& n : names)
+            varyings.push_back(n.c_str());
 
         std::string log;
         const GLuint program = BuildCaptureProgram(vs, varyings, &log);
         ASSERT_NE(program, 0u) << "capture program did not link: " << log;
 
-        for (GLuint i = 0; i < 16; ++i) glVertexAttrib4f(i, 0.0f, 0.0f, 0.0f, 0.0f);
+        for (GLuint i = 0; i < 16; ++i)
+            glVertexAttrib4f(i, 0.0f, 0.0f, 0.0f, 0.0f);
 
         const float vertices[] = {1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f};
         GLuint vbo = 0;
@@ -580,8 +583,8 @@ void main() {
         glDisable(GL_RASTERIZER_DISCARD);
 
         std::vector<float> data(poison.size(), kPoison);
-        glGetBufferSubData(GL_TRANSFORM_FEEDBACK_BUFFER, 0,
-                           static_cast<GLsizeiptr>(data.size() * sizeof(float)), data.data());
+        glGetBufferSubData(GL_TRANSFORM_FEEDBACK_BUFFER, 0, static_cast<GLsizeiptr>(data.size() * sizeof(float)),
+                           data.data());
         glUseProgram(0);
 
         // Element 0 of the array has no enabled array behind it, so it must deliver the
@@ -629,9 +632,11 @@ void main() {
 }
 )";
         std::vector<std::string> names;
-        for (int i = 0; i < 16; ++i) names.push_back("StageData.attrib[" + std::to_string(i) + "]");
+        for (int i = 0; i < 16; ++i)
+            names.push_back("StageData.attrib[" + std::to_string(i) + "]");
         std::vector<const char*> varyings;
-        for (const auto& n : names) varyings.push_back(n.c_str());
+        for (const auto& n : names)
+            varyings.push_back(n.c_str());
 
         std::string log;
         const GLuint program = BuildCaptureProgram(vs, varyings, &log);
@@ -657,8 +662,8 @@ void main() {
         glDisable(GL_RASTERIZER_DISCARD);
 
         std::vector<float> data(poison.size(), kPoison);
-        glGetBufferSubData(GL_TRANSFORM_FEEDBACK_BUFFER, 0,
-                           static_cast<GLsizeiptr>(data.size() * sizeof(float)), data.data());
+        glGetBufferSubData(GL_TRANSFORM_FEEDBACK_BUFFER, 0, static_cast<GLsizeiptr>(data.size() * sizeof(float)),
+                           data.data());
         glUseProgram(0);
 
         for (int element = 0; element < 16; ++element) {
@@ -669,7 +674,8 @@ void main() {
             EXPECT_FLOAT_EQ(data[element * 4 + 3], base + 300.0f) << "element " << element;
         }
 
-        for (GLuint i = 0; i < 16; ++i) glVertexAttrib4f(i, 0.0f, 0.0f, 0.0f, 0.0f);
+        for (GLuint i = 0; i < 16; ++i)
+            glVertexAttrib4f(i, 0.0f, 0.0f, 0.0f, 0.0f);
         glDeleteProgram(program);
     }
 
@@ -778,8 +784,8 @@ void main() {
             put(0, 8, &packedInt0, 4);
             const unsigned char bytes1[4] = {0xff, 0xff / 2, 0xff / 4, 0};
             const unsigned int packedUint1 = 0u | (1023u << 10) | (511u << 20) | (2u << 30);
-            const unsigned int packedInt1 = (static_cast<unsigned int>(-511) & 0x3ffu) | (511u << 10) |
-                                            (255u << 20) | (3u << 30);
+            const unsigned int packedInt1 =
+                (static_cast<unsigned int>(-511) & 0x3ffu) | (511u << 10) | (255u << 20) | (3u << 30);
             put(1, 0, bytes1, 4);
             put(1, 4, &packedUint1, 4);
             put(1, 8, &packedInt1, 4);
@@ -811,7 +817,8 @@ void main() {
         EXPECT_TRUE(Vec4Is(data, 1, 2, 0.5f, 1.0f, 0.0f, 2.0f / 3.0f));
         EXPECT_TRUE(Vec4Is(data, 1, 3, 0.5f, 1.0f, -1.0f, -1.0f));
 
-        for (GLuint i = 0; i < 4; ++i) glDisableVertexAttribArray(i);
+        for (GLuint i = 0; i < 4; ++i)
+            glDisableVertexAttribArray(i);
         glDeleteBuffers(1, &vbo);
     }
 

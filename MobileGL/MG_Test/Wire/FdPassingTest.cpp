@@ -51,7 +51,9 @@ namespace {
 
 } // namespace
 
-TEST(FdPassingTest, IsSupportedOnThisPlatform) { EXPECT_TRUE(FdPassing::Supported()); }
+TEST(FdPassingTest, IsSupportedOnThisPlatform) {
+    EXPECT_TRUE(FdPassing::Supported());
+}
 
 TEST(FdPassingTest, ChildSharesASegmentThatTheParentMapsAndVerifies) {
     int sockets[2] = {-1, -1};
@@ -95,19 +97,16 @@ TEST(FdPassingTest, ChildSharesASegmentThatTheParentMapsAndVerifies) {
     int fd = -1;
     std::uint64_t required = 0;
     MobileGLMutableByteSpan smallSpan{small.data(), small.size()};
-    EXPECT_EQ(FdPassing::ReceiveFd(sockets[0], &fd, smallSpan, &required, 5000),
-              MOBILEGL_ERR_BUFFER_TOO_SMALL);
+    EXPECT_EQ(FdPassing::ReceiveFd(sockets[0], &fd, smallSpan, &required, 5000), MOBILEGL_ERR_BUFFER_TOO_SMALL);
     EXPECT_EQ(required, FdPassing::kMaxSidebandBytes);
     EXPECT_EQ(fd, -1);
 
     std::vector<std::uint8_t> sidebandBuffer(FdPassing::kMaxSidebandBytes);
     std::uint64_t sidebandSize = 0;
     MobileGLMutableByteSpan sidebandSpan{sidebandBuffer.data(), sidebandBuffer.size()};
-    ASSERT_EQ(FdPassing::ReceiveFd(sockets[0], &fd, sidebandSpan, &sidebandSize, 5000),
-              MOBILEGL_OK);
+    ASSERT_EQ(FdPassing::ReceiveFd(sockets[0], &fd, sidebandSpan, &sidebandSize, 5000), MOBILEGL_OK);
     ASSERT_GE(fd, 0);
-    EXPECT_EQ(std::string(reinterpret_cast<const char*>(sidebandBuffer.data()),
-                          static_cast<std::size_t>(sidebandSize)),
+    EXPECT_EQ(std::string(reinterpret_cast<const char*>(sidebandBuffer.data()), static_cast<std::size_t>(sidebandSize)),
               sideband);
 
     ShmSegment adopted;
@@ -156,8 +155,7 @@ TEST(FdPassingTest, RejectsBadArguments) {
     const std::vector<std::uint8_t> tooBig(FdPassing::kMaxSidebandBytes + 1, 0);
     const MobileGLByteSpan oversized{tooBig.data(), tooBig.size()};
     EXPECT_EQ(FdPassing::SendFd(sockets[1], sockets[0], oversized), MOBILEGL_ERR_INVALID_ARGUMENT);
-    EXPECT_EQ(FdPassing::SendFd(sockets[1], -1, MobileGLByteSpan{nullptr, 0}),
-              MOBILEGL_ERR_INVALID_ARGUMENT);
+    EXPECT_EQ(FdPassing::SendFd(sockets[1], -1, MobileGLByteSpan{nullptr, 0}), MOBILEGL_ERR_INVALID_ARGUMENT);
 
     ::close(sockets[0]);
     ::close(sockets[1]);
@@ -172,8 +170,7 @@ TEST(FdPassingTest, SegmentWithoutASidebandStillCarriesItsDescriptor) {
     ASSERT_EQ(segment.Map(false), MOBILEGL_OK);
     static_cast<std::uint8_t*>(segment.Data())[0] = 0xA5;
 
-    ASSERT_EQ(FdPassing::SendFd(sockets[1], segment.Fd(), MobileGLByteSpan{nullptr, 0}),
-              MOBILEGL_OK);
+    ASSERT_EQ(FdPassing::SendFd(sockets[1], segment.Fd(), MobileGLByteSpan{nullptr, 0}), MOBILEGL_OK);
 
     std::vector<std::uint8_t> sidebandBuffer(FdPassing::kMaxSidebandBytes);
     int fd = -1;
@@ -208,8 +205,8 @@ TEST(FdPassingTest, SocketDoorbellWakesAParkedWaiter) {
     std::atomic<bool> woke{false};
 
     std::thread waiter([&] {
-        woke.store(waiterBell.Wait(
-            parked, [&] { return ready.load(std::memory_order_acquire); }, kDefaultSpinUs, 5000));
+        woke.store(
+            waiterBell.Wait(parked, [&] { return ready.load(std::memory_order_acquire); }, kDefaultSpinUs, 5000));
     });
 
     std::this_thread::sleep_for(std::chrono::milliseconds(20));
@@ -234,9 +231,7 @@ TEST(FdPassingTest, SocketDoorbellTimesOutAndRemembersAnEarlyWakeup) {
     // Nothing rings: the park has to end on its deadline, not hang.
     const auto start = std::chrono::steady_clock::now();
     EXPECT_FALSE(waiterBell.Park(30));
-    EXPECT_GE(std::chrono::duration_cast<std::chrono::milliseconds>(
-                  std::chrono::steady_clock::now() - start)
-                  .count(),
+    EXPECT_GE(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count(),
               20);
 
     // A wakeup that arrives before anyone parks is not lost - it is sitting in
@@ -277,12 +272,9 @@ TEST(FdPassingTest, SocketDoorbellStopsParkingWhenThePeerHangsUp) {
 
     // ...and a Wait with no deadline at all gives up instead of re-parking.
     std::atomic<std::uint32_t> parked{0};
-    EXPECT_FALSE(waiterBell.Wait(
-        parked, [] { return false; }, /*spinUs=*/0, kWaitForever));
+    EXPECT_FALSE(waiterBell.Wait(parked, [] { return false; }, /*spinUs=*/0, kWaitForever));
     EXPECT_EQ(parked.load(), 0u);
-    EXPECT_LT(std::chrono::duration_cast<std::chrono::milliseconds>(
-                  std::chrono::steady_clock::now() - start)
-                  .count(),
+    EXPECT_LT(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count(),
               1000);
 }
 

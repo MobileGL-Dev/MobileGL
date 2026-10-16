@@ -213,13 +213,13 @@ void main() {
         // Which parts of the mod's real frame this replay reproduces. Each test flips exactly
         // one on top of the baseline so a failure names the element that killed the quad.
         struct Fidelity {
-            bool shortIndices = false;   // MC's AutoStorageIndexBuffer is USHORT at small counts
-            bool baseVertex = false;     // ...and the second builder draws at a base vertex
-            bool twoBuilders = false;    // two render types share one output buffer
-            bool blendAndDepth = false;  // TRANSLUCENT_TRANSPARENCY + LEQUAL_DEPTH_TEST
-            bool regrow = false;         // MutableBuffer.doExpand replaces the GL name
+            bool shortIndices = false;  // MC's AutoStorageIndexBuffer is USHORT at small counts
+            bool baseVertex = false;    // ...and the second builder draws at a base vertex
+            bool twoBuilders = false;   // two render types share one output buffer
+            bool blendAndDepth = false; // TRANSLUCENT_TRANSPARENCY + LEQUAL_DEPTH_TEST
+            bool regrow = false;        // MutableBuffer.doExpand replaces the GL name
             bool rewriteMapEachFrame = false;
-            bool skipRelayout = false;   // bindDrawBuffers() only re-lays-out when resized
+            bool skipRelayout = false;       // bindDrawBuffers() only re-lays-out when resized
             bool leaveMeshesUnbound = false; // a batch with no server meshes never binds binding 5
         };
 
@@ -469,8 +469,7 @@ void main() {
                     if (saved[i].start == 0 && saved[i].size == 0) {
                         glBindBufferBase(target, (GLuint)i, (GLuint)saved[i].buffer);
                     } else {
-                        glBindBufferRange(target, (GLuint)i, (GLuint)saved[i].buffer, saved[i].start,
-                                          saved[i].size);
+                        glBindBufferRange(target, (GLuint)i, (GLuint)saved[i].buffer, saved[i].start, saved[i].size);
                     }
                 }
             }
@@ -582,8 +581,8 @@ void main() {
             }
 
             void ExpectQuads(const Image& image, int builders, const char* when) {
-                EXPECT_TRUE(RegionIsMostly(image, 6, 26, 19, 45, "blue", 0.0,
-                                           std::string("left accelerated quad, ") + when));
+                EXPECT_TRUE(
+                    RegionIsMostly(image, 6, 26, 19, 45, "blue", 0.0, std::string("left accelerated quad, ") + when));
                 if (builders > 1) {
                     EXPECT_TRUE(RegionIsMostly(image, 38, 58, 19, 45, "blue", 0.0,
                                                std::string("right accelerated quad, ") + when));

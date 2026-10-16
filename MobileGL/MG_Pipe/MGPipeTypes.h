@@ -149,7 +149,8 @@ namespace MobileGL::MG_Pipe {
     // See CONTRACT-MAGMA-RUNAHEAD.md for the Vulkan resource/submission contract.
     inline constexpr Uint64 MGPipeRunAheadCapBitsFor(BackendType type, Bool ready) {
         return (ready && (type == BackendType::DirectGLES || type == BackendType::DirectVulkan))
-            ? static_cast<Uint64>(kCapRunAheadApply) : static_cast<Uint64>(kCapNone);
+                   ? static_cast<Uint64>(kCapRunAheadApply)
+                   : static_cast<Uint64>(kCapNone);
     }
 
     struct MGPCaps {
@@ -209,8 +210,7 @@ namespace MobileGL::MG_Pipe {
     // predicate at the bottom of this header now names the buffer target explicitly (D-A2) and
     // may not reach into MG_Impl to do it. The static_assert is what keeps the two spellings
     // from drifting; nothing may open-code either.
-    inline constexpr Uint8 kMGPipeResourceTargetBuffer =
-        static_cast<Uint8>(MGPipeResourceTarget::Buffer);
+    inline constexpr Uint8 kMGPipeResourceTargetBuffer = static_cast<Uint8>(MGPipeResourceTarget::Buffer);
     static_assert(kMGPipeResourceTargetBuffer == static_cast<Uint8>(MGPipeResourceTarget::Buffer),
                   "P3a's kMGPipeResourceTargetBuffer and MGPipeResourceTarget::Buffer have drifted");
 
@@ -334,10 +334,10 @@ namespace MobileGL::MG_Pipe {
         Uint32 Width, Height, Depth;
         Uint16 ArrayLayers, Levels, Samples;
         Uint8 FixedSampleLocations, Immutable;
-        Uint32 Usage;        // BufferUsage
-        Uint32 StorageFlags; // glBufferStorage flags
-        Uint8 HasDefinedContent;  // false after a NULL-data respecify - STORAGE-DEFINING
-        Uint8 ImageBindableHint;  // client-side everImageBound; pre-emptive allocation
+        Uint32 Usage;            // BufferUsage
+        Uint32 StorageFlags;     // glBufferStorage flags
+        Uint8 HasDefinedContent; // false after a NULL-data respecify - STORAGE-DEFINING
+        Uint8 ImageBindableHint; // client-side everImageBound; pre-emptive allocation
         // The scope of this respecify. Zero: it redefines the whole resource and the applier
         // drops every pending upload. Non-zero: it redefines only the (RespecifiedUploadTarget,
         // RespecifiedLevel) pair below and drops only that level's uploads, so a per-level
@@ -425,9 +425,8 @@ namespace MobileGL::MG_Pipe {
         return MGPipeRespecifyIsWholeResource(desc) || (desc.BufSize >> 32) == 0;
     }
 
-    inline constexpr void MGPipeSetRespecifiedLevel(MGPResourceDesc& desc, Uint16 uploadTarget,
-                                                   Uint16 level, Uint32 width = 0, Uint32 height = 0,
-                                                   Uint32 depth = 0) {
+    inline constexpr void MGPipeSetRespecifiedLevel(MGPResourceDesc& desc, Uint16 uploadTarget, Uint16 level,
+                                                    Uint32 width = 0, Uint32 height = 0, Uint32 depth = 0) {
         desc.HasRespecifiedLevel = 1;
         desc.RespecifiedUploadTarget = uploadTarget;
         desc.RespecifiedLevel = level;
@@ -437,8 +436,7 @@ namespace MobileGL::MG_Pipe {
         desc.BufSize = depth;
     }
     inline constexpr void MGPipeClearRespecifiedLevel(MGPResourceDesc& desc) {
-        if (desc.HasRespecifiedLevel != 0 &&
-            desc.Target != static_cast<Uint8>(MGPipeResourceTarget::TexBuffer)) {
+        if (desc.HasRespecifiedLevel != 0 && desc.Target != static_cast<Uint8>(MGPipeResourceTarget::TexBuffer)) {
             desc.BufOffset = 0;
             desc.BufSize = 0;
         }
@@ -581,7 +579,7 @@ namespace MobileGL::MG_Pipe {
     // for one value: SyncTextureParamsToBackend reads this record, SyncBuiltinSamplerToBackend
     // reads that CSO's SamplerParameters, and the two pushes stay two pushes.
     struct MGPTextureParams {
-        MGPipeHandle Res;            //  0
+        MGPipeHandle Res; //  0
         // Kind SamplerCso. kMGPipeNullHandle is ILLEGAL - every texture object owns a sampler
         // object, so a null here is Fatal{ProtocolCorruption} rather than "no sampler".
         MGPipeHandle BuiltinSampler; //  8
@@ -590,12 +588,12 @@ namespace MobileGL::MG_Pipe {
         Uint8 DepthStencilMode;      // 24
         // Mirrors m_forceTextureParamsResync: the widened-channel carrier needs a swizzle
         // override that the frontend params version does not move for.
-        Uint8 ForceResync;           // 25
+        Uint8 ForceResync; // 25
         // Mirrors m_forceSamplerResync, which had no wire spelling at all before P4a. What it
         // guards is not mis-filtering but an INCOMPLETE texture sampling (0,0,0,1) after a
         // driver re-mint, which is why it is a second bit and not folded into ForceResync.
-        Uint8 SamplerResync;         // 26
-        Uint8 Pad0;                  // 27
+        Uint8 SamplerResync;           // 26
+        Uint8 Pad0;                    // 27
         Float MinLod, MaxLod, LodBias; // 28
     };
     MGP_ASSERT_POD(MGPTextureParams, 40);
@@ -659,8 +657,7 @@ namespace MobileGL::MG_Pipe {
     // ever reordered.
     inline constexpr Uint8 kMGPipeSurfaceKindNone = static_cast<Uint8>(MGPipeKind::None);
     inline constexpr Uint8 kMGPipeSurfaceKindTexture = static_cast<Uint8>(MGPipeKind::Texture);
-    inline constexpr Uint8 kMGPipeSurfaceKindRenderbuffer =
-        static_cast<Uint8>(MGPipeKind::Renderbuffer);
+    inline constexpr Uint8 kMGPipeSurfaceKindRenderbuffer = static_cast<Uint8>(MGPipeKind::Renderbuffer);
     static_assert(kMGPipeSurfaceKindNone == 0,
                   "a zero-initialised MGPSurface must already be the empty attachment point");
 
@@ -669,8 +666,7 @@ namespace MobileGL::MG_Pipe {
     // therefore 0xFFFF in the field's Uint16 - a value no real target has, so a reader that
     // forgets to gate on Kind gets a nonsense target rather than a plausible wrong one.
     inline constexpr Uint16 kMGPipeSurfaceNoTextureTarget = 0xFFFF;
-    static_assert(kMGPipeSurfaceNoTextureTarget ==
-                      static_cast<Uint16>(MobileGL::TextureTarget::Unknown),
+    static_assert(kMGPipeSurfaceNoTextureTarget == static_cast<Uint16>(MobileGL::TextureTarget::Unknown),
                   "kMGPipeSurfaceNoTextureTarget is TextureTarget::Unknown widened to the "
                   "field, and MG_State moved Unknown off -1");
 
@@ -1215,8 +1211,7 @@ namespace MobileGL::MG_Pipe {
     // record's Target is exactly kMGPipeResourceTargetBuffer, whole field, upload byte and
     // all. TextureUploadTarget::Texture1D is 0, so the buffer case is the one place where the
     // packed form and a bare enumerator agree - and it has to stay that place.
-    static_assert(MGPipePackSubDataTarget(kMGPipeResourceTargetBuffer, 0u) ==
-                      kMGPipeResourceTargetBuffer,
+    static_assert(MGPipePackSubDataTarget(kMGPipeResourceTargetBuffer, 0u) == kMGPipeResourceTargetBuffer,
                   "a buffer sub-data record's Target must stay exactly "
                   "kMGPipeResourceTargetBuffer: the applier's SubDataNamesABuffer tests the "
                   "whole field == 0");
@@ -1237,7 +1232,9 @@ namespace MobileGL::MG_Pipe {
         // it lands above the encodable bound, which the applier's bounds gate refuses.
         return static_cast<Uint64>(static_cast<Uint32>(record.UnionBox.X));
     }
-    inline Uint64 MGPipeSubDataBufferSize(const MGPSubData& record) { return record.UnionBox.W; }
+    inline Uint64 MGPipeSubDataBufferSize(const MGPSubData& record) {
+        return record.UnionBox.W;
+    }
 
     // The per-record half of resource_respecify's kNeedsAck: the call flag says a record may
     // need an acknowledgement, and this decides. Only an immutable buffer (glBufferStorage) is a
@@ -1314,7 +1311,7 @@ namespace MobileGL::MG_Pipe {
     // glClearNamedFramebuffer* entry points (section 4.4.4).
     struct MGPClear {
         MGPipeHandle Fbo;
-        Uint32 Kind;   // kMGPipeClearKind*, below
+        Uint32 Kind; // kMGPipeClearKind*, below
         Int32 DrawBufferIndex;
         Uint32 BufferMask; // GL_COLOR_BUFFER_BIT etc. for the whole-framebuffer form
         Uint32 ValueClass; // kMGPipeClearValueClass*, below
@@ -1766,7 +1763,6 @@ namespace MobileGL::MG_Pipe {
     };
     MGP_ASSERT_POD(MGPSharedImageFdOffer, 32);
 
-
     // set_context_values = opcode 79, P5c rv (CONTRACT-P5C.md §5.3): the rv field table as
     // ONE fixed-width POD. It carries every value-class field that no set_* call supplies -
     // the two texture-unit counters, the per-target touched-buffer-binding high-water marks
@@ -1779,7 +1775,7 @@ namespace MobileGL::MG_Pipe {
     // deliberately carry NO field here: they are APPLIER_DERIVED, answered by the accessor
     // from the applier's own Serial (MG_Backend/MGPipe/PipeInputs.h).
     struct MGPContextValues {
-        Uint32 ActiveTextureUnit;   // feeds GetActiveTextureUnit
+        Uint32 ActiveTextureUnit;     // feeds GetActiveTextureUnit
         Uint32 MaxTouchedTextureUnit; // feeds GetMaxTouchedTextureUnit
         // 15 = BufferTarget::BufferTargetCount (BufferObject.h:15-33). MG_Pipe may not include
         // MG_State, so the pairing is asserted where both sides are visible (PipeFill.cpp).

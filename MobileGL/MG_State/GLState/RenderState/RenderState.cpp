@@ -31,10 +31,9 @@ namespace MobileGL {
                 }
 
                 // Every viewport's scissor-test bit set, i.e. what glEnable(GL_SCISSOR_TEST) writes.
-                constexpr Uint32 kAllViewportsMask =
-                    RenderStateParameters::MAX_VIEWPORTS >= 32
-                        ? ~0u
-                        : (1u << RenderStateParameters::MAX_VIEWPORTS) - 1u;
+                constexpr Uint32 kAllViewportsMask = RenderStateParameters::MAX_VIEWPORTS >= 32
+                                                         ? ~0u
+                                                         : (1u << RenderStateParameters::MAX_VIEWPORTS) - 1u;
             } // namespace
 
             RenderState::RenderState() {
@@ -97,7 +96,8 @@ namespace MobileGL {
                 // nearest (GL 4.6 core 22.2), and truncating a 63.5-wide viewport to 63 would
                 // also hand the backends a rectangle one pixel short of what was asked for.
                 return IntVec4(static_cast<Int>(std::lround(viewport.x())), static_cast<Int>(std::lround(viewport.y())),
-                               static_cast<Int>(std::lround(viewport.z())), static_cast<Int>(std::lround(viewport.w())));
+                               static_cast<Int>(std::lround(viewport.z())),
+                               static_cast<Int>(std::lround(viewport.w())));
             }
 
             void RenderState::SetViewportIndexed(Uint index, FloatVec4 viewport) {
@@ -133,11 +133,20 @@ namespace MobileGL {
             void RenderState::SetHint(GLenum target, GLenum mode) {
                 GLenum* slot = nullptr;
                 switch (target) {
-                case GL_LINE_SMOOTH_HINT: slot = &m_parameters.LineSmoothHint; break;
-                case GL_POLYGON_SMOOTH_HINT: slot = &m_parameters.PolygonSmoothHint; break;
-                case GL_TEXTURE_COMPRESSION_HINT: slot = &m_parameters.TextureCompressionHint; break;
-                case GL_FRAGMENT_SHADER_DERIVATIVE_HINT: slot = &m_parameters.FragmentShaderDerivativeHint; break;
-                default: return;
+                case GL_LINE_SMOOTH_HINT:
+                    slot = &m_parameters.LineSmoothHint;
+                    break;
+                case GL_POLYGON_SMOOTH_HINT:
+                    slot = &m_parameters.PolygonSmoothHint;
+                    break;
+                case GL_TEXTURE_COMPRESSION_HINT:
+                    slot = &m_parameters.TextureCompressionHint;
+                    break;
+                case GL_FRAGMENT_SHADER_DERIVATIVE_HINT:
+                    slot = &m_parameters.FragmentShaderDerivativeHint;
+                    break;
+                default:
+                    return;
                 }
                 if (*slot == mode) return;
                 *slot = mode;
@@ -146,11 +155,16 @@ namespace MobileGL {
 
             GLenum RenderState::GetHint(GLenum target) const {
                 switch (target) {
-                case GL_LINE_SMOOTH_HINT: return m_parameters.LineSmoothHint;
-                case GL_POLYGON_SMOOTH_HINT: return m_parameters.PolygonSmoothHint;
-                case GL_TEXTURE_COMPRESSION_HINT: return m_parameters.TextureCompressionHint;
-                case GL_FRAGMENT_SHADER_DERIVATIVE_HINT: return m_parameters.FragmentShaderDerivativeHint;
-                default: return GL_DONT_CARE;
+                case GL_LINE_SMOOTH_HINT:
+                    return m_parameters.LineSmoothHint;
+                case GL_POLYGON_SMOOTH_HINT:
+                    return m_parameters.PolygonSmoothHint;
+                case GL_TEXTURE_COMPRESSION_HINT:
+                    return m_parameters.TextureCompressionHint;
+                case GL_FRAGMENT_SHADER_DERIVATIVE_HINT:
+                    return m_parameters.FragmentShaderDerivativeHint;
+                default:
+                    return GL_DONT_CARE;
                 }
             }
 
@@ -323,7 +337,7 @@ namespace MobileGL {
     case CapabilityInput::capability:                                                                                  \
         if (m_parameters.capability##Enabled == (flag)) break;                                                         \
         m_parameters.capability##Enabled = (flag);                                                                     \
-        BumpVersions();                                                                                                   \
+        BumpVersions();                                                                                                \
         break;
 
                 switch (cap) {
@@ -382,9 +396,8 @@ namespace MobileGL {
                 case CapabilityInput::ClipDistance6:
                 case CapabilityInput::ClipDistance7: {
                     const Uint32 bit = ClipDistanceBit(cap);
-                    const Uint32 updated =
-                        enabled ? (m_parameters.ClipDistanceEnabledMask | bit)
-                                : (m_parameters.ClipDistanceEnabledMask & ~bit);
+                    const Uint32 updated = enabled ? (m_parameters.ClipDistanceEnabledMask | bit)
+                                                   : (m_parameters.ClipDistanceEnabledMask & ~bit);
                     if (updated == m_parameters.ClipDistanceEnabledMask) break;
                     m_parameters.ClipDistanceEnabledMask = updated;
                     // Deliberately NOT BumpVersions(): no backend bakes a clip-distance enable
@@ -673,8 +686,7 @@ namespace MobileGL {
             void RenderState::SetStencilOp(StencilFace face, StencilOperation fail, StencilOperation depthFail,
                                            StencilOperation depthPass) {
                 StencilFaceState& state = m_parameters.StencilStates[GetStencilFaceIndex(face)];
-                if (state.FailOp == fail && state.PassDepthFailOp == depthFail &&
-                    state.PassDepthPassOp == depthPass) {
+                if (state.FailOp == fail && state.PassDepthFailOp == depthFail && state.PassDepthPassOp == depthPass) {
                     return;
                 }
 

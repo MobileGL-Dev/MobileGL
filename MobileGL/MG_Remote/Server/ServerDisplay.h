@@ -48,7 +48,7 @@ namespace MobileGL::MG_Remote::Server {
 
     struct ServerWindowLease {
         void* window = nullptr;
-        Uint32 width = 0;  // the window's extent when the lease was taken
+        Uint32 width = 0; // the window's extent when the lease was taken
         Uint32 height = 0;
         Uint64 generation = 0;
         // False when a size was requested and the window had not reached it within the geometry
@@ -58,10 +58,10 @@ namespace MobileGL::MG_Remote::Server {
 
     enum class ServerWindowAcquire : Uint8 {
         Acquired,
-        NoDisplay,       // this process owns no display (HasDisplay() is false)
-        NoWindow,        // a display, but no window was attached within the wait
-        Cancelled,       // the caller's cancel predicate said so
-        Interrupted,     // Interrupt() (the in-process server is stopping)
+        NoDisplay,   // this process owns no display (HasDisplay() is false)
+        NoWindow,    // a display, but no window was attached within the wait
+        Cancelled,   // the caller's cancel predicate said so
+        Interrupted, // Interrupt() (the in-process server is stopping)
         // P14 S2: NOT A BUG ANY MORE. Several sessions share one process and the display's window
         // is one window, so a second ON-SCREEN session asking for it is refused by name here
         // (ServerLoop logs the holder); offscreen sessions take no lease and are unaffected. A holder
@@ -115,9 +115,8 @@ namespace MobileGL::MG_Remote::Server {
         // may lease again while it holds the lease (a surface re-created at a new size). `onResized`, when
         // given, is called whenever the leased window changes size while the lease lasts.
         ServerWindowAcquire AcquireFor(Uint32 width, Uint32 height, Uint32 timeoutMs, void* holder,
-                                       ServerWindowLostHook onLost, ServerWindowWaitCancel cancel,
-                                       void* cancelUser, ServerWindowLease* out,
-                                       ServerWindowResizedHook onResized = nullptr);
+                                       ServerWindowLostHook onLost, ServerWindowWaitCancel cancel, void* cancelUser,
+                                       ServerWindowLease* out, ServerWindowResizedHook onResized = nullptr);
         // THE WINDOW'S EXTENT AS THE PLATFORM LAST REPORTED IT (surfaceCreated / surfaceChanged): the one
         // source of truth for the size a session publishes to its client. False unless `holder` holds
         // the lease on an attached window.

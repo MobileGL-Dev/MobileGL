@@ -307,7 +307,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
     template <typename StateObject, typename BackendObject MGB_TWIN_KIND_PARAM>
     class StateBackendObjectRegistry {
     public:
-
         using BackendPtr = SharedPtr<BackendObject>;
         using SlotTable = BackendSlotTable<StateObject, BackendObject, kKind>;
         // P14 S6: the ONE bucket of this kind the calling thread is in. Every handle-keyed entry
@@ -435,13 +434,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (EsprytSlotTablesEnabled()) return m_slotTables.Snapshot();
             return {};
         }
-        SizeT BucketCount() const {
-            return EsprytSlotTablesEnabled() ? m_slotTables.BucketCount() : 0;
-        }
+        SizeT BucketCount() const { return EsprytSlotTablesEnabled() ? m_slotTables.BucketCount() : 0; }
         // Drop one {session, share group}. Answers whether such a bucket existed.
-        Bool DropBucket(const TwinKey& key) {
-            return EsprytSlotTablesEnabled() && m_slotTables.Drop(key);
-        }
+        Bool DropBucket(const TwinKey& key) { return EsprytSlotTablesEnabled() && m_slotTables.Drop(key); }
         // Drop every bucket of one session - the difference between "this session's twins go"
         // and "the process's do" - and answer how many groups that took with it.
         Uint32 DropBucketsOfSession(Uint64 sessionKey) {
@@ -634,8 +629,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // view record is live with Desc.ViewOf naming a freed slot. No draw can land in between, and
     // PipeTextureRecordForHandle tests Live and Gen, so that window answers null (= not clean)
     // rather than a recycled stranger's record.
-    const MG_Pipe::MGPipeResourceRecord* PipeTextureStorageRecordForRecord(
-        const MG_Pipe::MGPipeResourceRecord& record);
+    const MG_Pipe::MGPipeResourceRecord* PipeTextureStorageRecordForRecord(const MG_Pipe::MGPipeResourceRecord& record);
 
     // P5e (fb): the texture's own TARGET, from its descriptor. The image-unit bind needs it
     // (glBindImageTexture's layered/format rules are per target) and MGPImageView has no room
@@ -748,8 +742,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // The DISTINCT buffers the draw's enabled attributes fetch from, deduped on {slot, gen}.
         // A null Res is skipped: it is a disabled slot below the window's high-water mark, or a
         // client-memory array whose bytes have no store to ensure (P8 stages those).
-        Uint ResolveDrawVertexBuffersFromRecord(const MG_Pipe::MGPipeApplierState& st,
-                                                DrawVertexBufferRequest* out, Uint capacity);
+        Uint ResolveDrawVertexBuffersFromRecord(const MG_Pipe::MGPipeApplierState& st, DrawVertexBufferRequest* out,
+                                                Uint capacity);
 
         struct DrawIndexBufferRequest {
             MG_Pipe::MGPipeHandle Res = MG_Pipe::kMGPipeNullHandle;
@@ -895,8 +889,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // P5c (hd): the staged-coverage assertion (StagedShadowStore::RequireCoverage) for a
         // read of the server shadow outside the upload ladders - the indirect command-byte
         // resolver. A no-op for a base that is not this resource's server shadow.
-        void RequireStagedCoverage(GLESBufferResource& resource, const Uint8* hostBase, SizeT start,
-                                   SizeT end, const char* site);
+        void RequireStagedCoverage(GLESBufferResource& resource, const Uint8* hostBase, SizeT start, SizeT end,
+                                   const char* site);
 
         // P11 B2: THE CPU-READABLE BYTES OF A SPLIT SERVER'S BUFFER TWIN, for the handle-arm
         // readers that have no frontend object (indirect commands, primitive-restart
@@ -965,9 +959,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         //
         // Returns the glMapBufferRange access bits, or 0 when tier 1 must not be taken.
         inline constexpr SizeT kEsprytInvalidateRangeMinBytes = 128u * 1024u;
-        constexpr GLbitfield InvalidateFlushAccessFor(SizeT queuedStart, SizeT queuedEnd, SizeT mapStart,
-                                                      SizeT mapEnd, SizeT limit, SizeT storageSize,
-                                                      Bool ringCopyInFlight) {
+        constexpr GLbitfield InvalidateFlushAccessFor(SizeT queuedStart, SizeT queuedEnd, SizeT mapStart, SizeT mapEnd,
+                                                      SizeT limit, SizeT storageSize, Bool ringCopyInFlight) {
             if (mapEnd <= mapStart) return 0u;
             // THE WIDENING REFUSAL. Not >=, not "covers": exactly, in both directions. A map
             // narrower than the queued range leaves bytes unwritten inside a range it has just
@@ -986,8 +979,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // instead, GPU-ordered behind the copies. The whole-buffer orphan-map is exempt: it
             // rewrites every byte from the shadow the queued copies were taken from.
             if (!wholeBuffer && ringCopyInFlight) return 0u;
-            return GL_MAP_WRITE_BIT |
-                   (wholeBuffer ? GL_MAP_INVALIDATE_BUFFER_BIT : GL_MAP_INVALIDATE_RANGE_BIT);
+            return GL_MAP_WRITE_BIT | (wholeBuffer ? GL_MAP_INVALIDATE_BUFFER_BIT : GL_MAP_INVALIDATE_RANGE_BIT);
         }
 
         // P15: WRITE RENAMING FOR A SMALL STORE. The draw-time drain sends a partial range below
@@ -1142,8 +1134,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // frames, so re-referencing them would need per-bind pinning — rewriting
         // GetUBOSize() bytes once per program per frame is far cheaper.
         struct UboRingAllocation {
-            Uint32 contentVersion = ~0u; // frontend UBO content version held at `offset`
-            Uint32 ringGeneration = 0;   // ring identity the slot lives in (0 = never valid)
+            Uint32 contentVersion = ~0u;     // frontend UBO content version held at `offset`
+            Uint32 ringGeneration = 0;       // ring identity the slot lives in (0 = never valid)
             Uint64 frameSerial = ~Uint64{0}; // frame the slot was written in
             SizeT offset = 0;
         };
@@ -1161,7 +1153,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // this frame and ring generation, Allocated when a fresh slot was carved (`outWrite`
         // is where its bytes go), Failed when allocation failed. `outBufferId` names the ring
         // store for Reused and Allocated.
-        enum class UboRingSlotState : Uint8 { Unavailable, Reused, Allocated, Failed };
+        enum class UboRingSlotState : Uint8 {
+            Unavailable,
+            Reused,
+            Allocated,
+            Failed
+        };
         UboRingSlotState UboRingPrepareSlot(UboRingAllocation& slot, Uint32 contentVersion, Uint64 frameSerial,
                                             SizeT bindSize, void*& outWrite, Uint& outBufferId);
         void* UboRingMappedPtr();
@@ -1509,7 +1506,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Uint64 m_syncedContextSerial = 0;
         };
 
-        extern TwinRegistry<MG_State::GLState::VertexArrayObject, BackendVertexArrayObject, MG_Pipe::MGPipeKind::VertexElementsCso>
+        extern TwinRegistry<MG_State::GLState::VertexArrayObject, BackendVertexArrayObject,
+                            MG_Pipe::MGPipeKind::VertexElementsCso>
             g_backendVertexArrayObjects;
 
         // P5e (id), CONTRACT-P5E §4.1 / §4.2: THE VAO TWIN, RESOLVED BY THE HANDLE THE RECORD
@@ -1628,8 +1626,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
 
         inline Bool IsMultisampleTextureTarget(TextureTarget target) {
-            return target == TextureTarget::Texture2DMultisample ||
-                   target == TextureTarget::Texture2DMultisampleArray;
+            return target == TextureTarget::Texture2DMultisample || target == TextureTarget::Texture2DMultisampleArray;
         }
 
         inline Bool SupportsWrapR(TextureTarget target) {
@@ -1833,8 +1830,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             //
             // The contextId / samplingGeneration arguments are GONE: the applier's ContextSerial
             // and TextureShutterSerial are what the caller's keys already carry.
-            Bool IsDrawSyncCleanByRecord(MG_Pipe::MGPipeHandle res,
-                                         const MG_Pipe::MGPipeResourceRecord& record) const;
+            Bool IsDrawSyncCleanByRecord(MG_Pipe::MGPipeHandle res, const MG_Pipe::MGPipeResourceRecord& record) const;
 
         private:
             void RecreateBackendTexture();
@@ -2069,8 +2065,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // ResolveTextureTwin is the lookup without the sync, for the callers that need the twin
         // to answer a shape question (an image bind's target and storage format come off the
         // twin, not off a new wire field) after tx2's sync has already run this frame.
-        SharedPtr<BackendTextureObject>& SyncTextureToBackendByHandle(
-            MG_Pipe::MGPipeHandle texture, Bool imageBindableStorageRequired = false);
+        SharedPtr<BackendTextureObject>& SyncTextureToBackendByHandle(MG_Pipe::MGPipeHandle texture,
+                                                                      Bool imageBindableStorageRequired = false);
         BackendTextureObject* ResolveTextureTwin(MG_Pipe::MGPipeHandle texture);
         // NoteDriverSideTextureWrite's HANDLE ARM, for the same paths when the caller holds a
         // Texture handle (a framebuffer surface's Res, an image unit's Res, VerbMipRes,
@@ -2186,9 +2182,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
              */
             GLenum m_backendDrawBuffers[MG_State::GLState::FramebufferObject::MAX_DRAW_BUFFERS] = {GL_NONE};
 
-            static constexpr Uint MAX_COLOR_ATTACHMENT_SLOTS =
-                static_cast<Uint>(FramebufferAttachmentType::Color31) -
-                static_cast<Uint>(FramebufferAttachmentType::Color0) + 1;
+            static constexpr Uint MAX_COLOR_ATTACHMENT_SLOTS = static_cast<Uint>(FramebufferAttachmentType::Color31) -
+                                                               static_cast<Uint>(FramebufferAttachmentType::Color0) + 1;
             /* Where each frontend GL_COLOR_ATTACHMENTn image physically lives in the backend ES
                framebuffer, as a GL_COLOR_ATTACHMENTm enum. ES only accepts glDrawBuffers bufs[s] ==
                GL_COLOR_ATTACHMENTs, so a GL draw-buffer slot s naming attachment a forces a's image
@@ -2272,7 +2267,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             void ApplyReadBufferFromRecord(const MG_Pipe::MGPFramebufferState& record, Uint glNameForDiag);
         };
 
-        extern TwinRegistry<MG_State::GLState::FramebufferObject, BackendFramebufferObject, MG_Pipe::MGPipeKind::Framebuffer>
+        extern TwinRegistry<MG_State::GLState::FramebufferObject, BackendFramebufferObject,
+                            MG_Pipe::MGPipeKind::Framebuffer>
             g_backendFramebufferObjects;
 
         // P4a (D-C2 as corrected by ID-19): the applier's record for THE FRAMEBUFFER OBJECT this
@@ -2306,8 +2302,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // The index answers about a TEXTURE SLOT and returns whole FRAMEBUFFER handles, so a
         // recycled framebuffer slot never answers for its predecessor. See the definition for
         // why nothing prunes a dead row.
-        void NoteFramebufferTextureAttachments(MG_Pipe::MGPipeHandle fbo,
-                                               const MG_Pipe::MGPFramebufferState& record);
+        void NoteFramebufferTextureAttachments(MG_Pipe::MGPipeHandle fbo, const MG_Pipe::MGPFramebufferState& record);
         // The record's surface for an attachment POINT, or null when this record does not
         // describe that point at all (Color8..Color31, and the default framebuffer's FRONT/BACK
         // tokens). MGPFramebufferState carries Color[8] + Depth + Stencil, which is every point
@@ -2539,7 +2534,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
     namespace SamplerImpl {
         class BackendSamplerObject; // for PrgramImpl's sampler-pass memo rows below
-    }
+    } // namespace SamplerImpl
 
     // Image uniforms take their unit from the layout(binding=N) qualifier baked into
     // the transpiled ESSL; unlike samplers they must not (and in ES cannot) be
@@ -2686,9 +2681,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Bool PointSizeDemoted() const { return PointSizeWasDemoted; }
             Uint GetUBOSize() const { return GlobalUboSize; }
             const Vector<ShaderStage>& GetLinkedShaderStages() const { return LinkedStages; }
-            const UnorderedMap<String, Int>& GetShaderStorageBlockBindingOverrides() const {
-                return StorageOverrides;
-            }
+            const UnorderedMap<String, Int>& GetShaderStorageBlockBindingOverrides() const { return StorageOverrides; }
             // THE DEBUG LOG IS DELETED ON THIS ARM (CONTRACT-P5E §5.5). The snapshot is
             // GL-thread-owned ShaderObject SharedPtrs - the exact shape rule C forbids an
             // applier entry point to reach - and its one consumer in the build is an MGLOG_D
@@ -2734,9 +2727,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // arrays is keyed by its full "[0]"-terminated spelling - which is why the
             // suffixed lookup is tried before the trailing subscript is read as an index.
             Int GetUniformLocation(const String& name) const;
-            Int GetActiveUniformBlocksCount() const {
-                return static_cast<Int>(Link->glBlockIndexToTProgram.size());
-            }
+            Int GetActiveUniformBlocksCount() const { return static_cast<Int>(Link->glBlockIndexToTProgram.size()); }
             const String& GetUniformBlockName(Uint index) const;
 
             GLenum GetTransformFeedbackBufferMode() const { return Link->xfbBufferMode; }
@@ -2878,20 +2869,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // `layout(vertices = N) out`, so a program built for one patch size is stale for
             // another and the draw path has to say so. -1 compares equal to itself for every
             // program that has a control stage of its own, i.e. for all but a handful.
-            Int GetPassthroughTessControlPatchVertices() const {
-                return m_passthroughTessControlPatchVertices;
-            }
+            Int GetPassthroughTessControlPatchVertices() const { return m_passthroughTessControlPatchVertices; }
             // GL_PATCH_DEFAULT_{OUTER,INNER}_LEVEL the same synthesized stage was built with, for
             // the same reason: ES has neither the state nor an entry point to forward it to, so
             // glPatchParameterfv's values are compiled in as literals and a program built with one
             // set is stale for another. Meaningless (and never read) when the patch-vertices field
             // above is -1, which is the gate the draw path tests first.
-            const FloatVec4& GetPassthroughTessControlOuterLevel() const {
-                return m_passthroughTessControlOuterLevel;
-            }
-            const FloatVec2& GetPassthroughTessControlInnerLevel() const {
-                return m_passthroughTessControlInnerLevel;
-            }
+            const FloatVec4& GetPassthroughTessControlOuterLevel() const { return m_passthroughTessControlOuterLevel; }
+            const FloatVec2& GetPassthroughTessControlInnerLevel() const { return m_passthroughTessControlInnerLevel; }
 
             Bool HasGlobalUboBlock() const { return m_globalUboBackendBlockIndex >= 0; }
             const Vector<Int>& GetUniformBlockBackendIndices() const { return m_uniformBlockBackendIndices; }
@@ -2969,10 +2954,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // own - which ES 3.2 rejects outright. Called from SyncToBackend after every real
             // stage has been attached and before the link; see the definition for why it cannot
             // regress a program that works today.
-            void AttachPassthroughTessControlStage(
-                const ProgramBuildSource& src, Int tessEvalShaderIndex,
-                const Vector<Vector<unsigned int>>& shaderSpirvs, const String& vertexStageEssl,
-                const String& tessEvalStageEssl);
+            void AttachPassthroughTessControlStage(const ProgramBuildSource& src, Int tessEvalShaderIndex,
+                                                   const Vector<Vector<unsigned int>>& shaderSpirvs,
+                                                   const String& vertexStageEssl, const String& tessEvalStageEssl);
 
             // One stage's SPIR-V through the DirectGLES pass chain and SPIRV-Cross, producing
             // the raw emitted ESSL and the interface blocks this stage's XFB flattening
@@ -2985,10 +2969,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                       const ImageFormatBakeInputs& imageFormatBake,
                                       const UnorderedMap<String, Int>& storageBlockBindingOverrides,
                                       const std::map<String, String>& inputBlockRenames,
-                                      const std::map<String, String>& outputBlockRenames,
-                                      Bool stripInputBlockLocations, Bool stripOutputBlockLocations,
-                                      Int atomicCounterEsslBindingTop, Bool enableSpirvValidation,
-                                      String& outSource,
+                                      const std::map<String, String>& outputBlockRenames, Bool stripInputBlockLocations,
+                                      Bool stripOutputBlockLocations, Int atomicCounterEsslBindingTop,
+                                      Bool enableSpirvValidation, String& outSource,
                                       std::set<String>& outFlattenedXfbBlockNames,
                                       Vector<Int>& outAtomicCounterGlBindings, String& outError) const;
 
@@ -3309,9 +3292,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // look at it.
         // P14 S6: and a bucket registry for the same reason the buffer one above is - a sampler
         // view's twin is a driver object of the texture's group.
-        using BackendSamplerViewTable = SlotTableRegistry<MG_State::GLState::ITextureObject,
-                                                        BackendSamplerViewObject,
-                                                        MG_Pipe::MGPipeKind::SamplerViewCso>;
+        using BackendSamplerViewTable = SlotTableRegistry<MG_State::GLState::ITextureObject, BackendSamplerViewObject,
+                                                          MG_Pipe::MGPipeKind::SamplerViewCso>;
         extern BackendSamplerViewTable g_backendSamplerViews;
 
         BackendSamplerViewObject* FindSamplerViewForHandle(MG_Pipe::MGPipeHandle view);
@@ -3358,7 +3340,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Uint64 m_syncedResourceSerial = 0;
         };
 
-        extern TwinRegistry<MG_State::GLState::RenderbufferObject, BackendRenderbufferObject, MG_Pipe::MGPipeKind::Renderbuffer>
+        extern TwinRegistry<MG_State::GLState::RenderbufferObject, BackendRenderbufferObject,
+                            MG_Pipe::MGPipeKind::Renderbuffer>
             g_backendRenderbufferObjects;
     } // namespace RenderbufferImpl
 

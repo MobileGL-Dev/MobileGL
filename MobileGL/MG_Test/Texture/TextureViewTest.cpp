@@ -66,8 +66,7 @@ namespace {
 
     class ScopedBackendOverride {
     public:
-        explicit ScopedBackendOverride(Bool advertiseTextureView)
-            : m_previous(Move(MG_Backend::pActiveBackendObject)) {
+        explicit ScopedBackendOverride(Bool advertiseTextureView) : m_previous(Move(MG_Backend::pActiveBackendObject)) {
             MG_Backend::pActiveBackendObject = MakeUnique<TextureViewCapabilityBackend>(advertiseTextureView);
         }
         ~ScopedBackendOverride() { MG_Backend::pActiveBackendObject = Move(m_previous); }
@@ -83,8 +82,7 @@ namespace {
         // GetError() call - which silently turns error-code assertions into reads of someone
         // else's error. Bounded because there is one flag per code.
         static void DrainPendingGlErrors() {
-            for (Int drained = 0; drained < 16 && MG_Impl::GLImpl::GetError() != GL_NO_ERROR; ++drained) {
-            }
+            for (Int drained = 0; drained < 16 && MG_Impl::GLImpl::GetError() != GL_NO_ERROR; ++drained) {}
         }
 
         // The call under test must raise exactly the expected error and nothing more: a second
@@ -294,21 +292,21 @@ namespace {
     // ============================ the error surface ============================
     // KHR-GL43.texture_view.errors walks these in this order; the letters are its own.
 
-    TEST_F(TextureViewTest, ZeroTextureIsInvalidValue) {  // (a)
+    TEST_F(TextureViewTest, ZeroTextureIsInvalidValue) { // (a)
         const GLuint storage = MakeImmutable2D();
         DrainPendingGlErrors();
         MG_Impl::GLImpl::TextureView(0, GL_TEXTURE_2D, storage, GL_RGBA8, 0, 1, 0, 1);
         ExpectSingleGlError(GL_INVALID_VALUE);
     }
 
-    TEST_F(TextureViewTest, TextureThatGenTexturesNeverReturnedIsInvalidOperation) {  // (b)
+    TEST_F(TextureViewTest, TextureThatGenTexturesNeverReturnedIsInvalidOperation) { // (b)
         const GLuint storage = MakeImmutable2D();
         DrainPendingGlErrors();
         MG_Impl::GLImpl::TextureView(0xFFFFFFFFu, GL_TEXTURE_2D, storage, GL_RGBA8, 0, 1, 0, 1);
         ExpectSingleGlError(GL_INVALID_OPERATION);
     }
 
-    TEST_F(TextureViewTest, AlreadyBoundTextureIsInvalidOperation) {  // (c)
+    TEST_F(TextureViewTest, AlreadyBoundTextureIsInvalidOperation) { // (c)
         const GLuint storage = MakeImmutable2D();
         const GLuint alreadyBound = GenTexture();
         MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, alreadyBound);
@@ -318,7 +316,7 @@ namespace {
         ExpectSingleGlError(GL_INVALID_OPERATION);
     }
 
-    TEST_F(TextureViewTest, OrigTextureThatIsNotATextureObjectIsInvalidValue) {  // (d)
+    TEST_F(TextureViewTest, OrigTextureThatIsNotATextureObjectIsInvalidValue) { // (d)
         const GLuint view = GenTexture();
         DrainPendingGlErrors();
         // Note the code differs from (b): INVALID_VALUE here, INVALID_OPERATION there.
@@ -326,7 +324,7 @@ namespace {
         ExpectSingleGlError(GL_INVALID_VALUE);
     }
 
-    TEST_F(TextureViewTest, MutableOrigTextureIsInvalidOperation) {  // (e)
+    TEST_F(TextureViewTest, MutableOrigTextureIsInvalidOperation) { // (e)
         const GLuint mutableTexture = GenTexture();
         MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D, mutableTexture);
         MG_Impl::GLImpl::TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 8, 8, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
@@ -337,7 +335,7 @@ namespace {
         ExpectSingleGlError(GL_INVALID_OPERATION);
     }
 
-    TEST_F(TextureViewTest, IncompatibleTargetPairIsInvalidOperation) {  // (f)
+    TEST_F(TextureViewTest, IncompatibleTargetPairIsInvalidOperation) { // (f)
         const GLuint storage = MakeImmutable2D();
         const GLuint view = GenTexture();
         DrainPendingGlErrors();
@@ -346,7 +344,7 @@ namespace {
         ExpectSingleGlError(GL_INVALID_OPERATION);
     }
 
-    TEST_F(TextureViewTest, LegalTargetPairsAreAccepted) {  // (f), the other way round
+    TEST_F(TextureViewTest, LegalTargetPairsAreAccepted) { // (f), the other way round
         const GLuint storage = MakeImmutable2D(1, 16, 16);
         const GLuint sameTarget = GenTexture();
         MG_Impl::GLImpl::TextureView(sameTarget, GL_TEXTURE_2D, storage, GL_RGBA8, 0, 1, 0, 1);
@@ -356,7 +354,7 @@ namespace {
         ExpectSingleGlError(GL_NO_ERROR);
     }
 
-    TEST_F(TextureViewTest, FormatFromAnotherViewClassIsInvalidOperation) {  // (g)
+    TEST_F(TextureViewTest, FormatFromAnotherViewClassIsInvalidOperation) { // (g)
         const GLuint storage = MakeImmutable2D(1, 16, 16, GL_RGBA8);
         const GLuint view = GenTexture();
         DrainPendingGlErrors();
@@ -365,7 +363,7 @@ namespace {
         ExpectSingleGlError(GL_INVALID_OPERATION);
     }
 
-    TEST_F(TextureViewTest, FormatFromTheSameViewClassIsAccepted) {  // (g), the other way round
+    TEST_F(TextureViewTest, FormatFromTheSameViewClassIsAccepted) { // (g), the other way round
         const GLuint storage = MakeImmutable2D(1, 16, 16, GL_RGBA8);
         const GLuint view = GenTexture();
         // Both VIEW_CLASS_32_BITS.
@@ -379,7 +377,7 @@ namespace {
         EXPECT_EQ(internalFormat, GL_R32UI) << "the view must take the format it was asked for, not its parent's";
     }
 
-    TEST_F(TextureViewTest, ClasslessFormatMayOnlyBeViewedAsItself) {  // (h)
+    TEST_F(TextureViewTest, ClasslessFormatMayOnlyBeViewedAsItself) { // (h)
         // Depth, stencil and depth/stencil formats have NO entry in table 8.21, which the spec
         // turns into a stricter rule than "same class": the view's format must be IDENTICAL.
         // This is the rule the Better Clouds D24S8 view depends on being permissive enough.
@@ -393,7 +391,7 @@ namespace {
         ExpectSingleGlError(GL_INVALID_OPERATION);
     }
 
-    TEST_F(TextureViewTest, MinLevelPastTheLastLevelIsInvalidValue) {  // (i)
+    TEST_F(TextureViewTest, MinLevelPastTheLastLevelIsInvalidValue) { // (i)
         const GLuint storage = MakeImmutable2D(2, 16, 16);
         const GLuint view = GenTexture();
         DrainPendingGlErrors();
@@ -401,7 +399,7 @@ namespace {
         ExpectSingleGlError(GL_INVALID_VALUE);
     }
 
-    TEST_F(TextureViewTest, MinLayerPastTheLastLayerIsInvalidValue) {  // (j)
+    TEST_F(TextureViewTest, MinLayerPastTheLastLayerIsInvalidValue) { // (j)
         const GLuint storage = MakeImmutable2DArray(1, 16, 4);
         const GLuint view = GenTexture();
         DrainPendingGlErrors();
@@ -409,7 +407,7 @@ namespace {
         ExpectSingleGlError(GL_INVALID_VALUE);
     }
 
-    TEST_F(TextureViewTest, CubeMapViewDemandsExactlySixLayers) {  // (k)
+    TEST_F(TextureViewTest, CubeMapViewDemandsExactlySixLayers) { // (k)
         const GLuint storage = MakeImmutable2DArray(1, 16, 6);
         const GLuint view = GenTexture();
         DrainPendingGlErrors();
@@ -417,7 +415,7 @@ namespace {
         ExpectSingleGlError(GL_INVALID_VALUE);
     }
 
-    TEST_F(TextureViewTest, CubeMapArrayViewDemandsAMultipleOfSixLayers) {  // (l)
+    TEST_F(TextureViewTest, CubeMapArrayViewDemandsAMultipleOfSixLayers) { // (l)
         const GLuint storage = MakeImmutable2DArray(1, 16, 12);
         const GLuint view = GenTexture();
         DrainPendingGlErrors();
@@ -425,7 +423,7 @@ namespace {
         ExpectSingleGlError(GL_INVALID_VALUE);
     }
 
-    TEST_F(TextureViewTest, SingleLayerTargetsRejectMoreThanOneLayer) {  // (m).. (q)
+    TEST_F(TextureViewTest, SingleLayerTargetsRejectMoreThanOneLayer) { // (m).. (q)
         const GLuint storage = MakeImmutable2DArray(1, 16, 4);
         DrainPendingGlErrors();
         for (const GLenum target : {GL_TEXTURE_2D}) {
@@ -444,7 +442,7 @@ namespace {
         ExpectSingleGlError(GL_INVALID_VALUE);
     }
 
-    TEST_F(TextureViewTest, CubeMapViewDemandsSquareLevels) {  // (r)
+    TEST_F(TextureViewTest, CubeMapViewDemandsSquareLevels) { // (r)
         const GLuint storage = GenTexture();
         MG_Impl::GLImpl::BindTexture(GL_TEXTURE_2D_ARRAY, storage);
         MG_Impl::GLImpl::TexStorage3D(GL_TEXTURE_2D_ARRAY, 1, GL_RGBA8, 32, 33, 6);

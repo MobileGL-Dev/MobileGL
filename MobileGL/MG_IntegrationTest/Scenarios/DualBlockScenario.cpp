@@ -42,52 +42,52 @@
 #undef GL_GLEXT_PROTOTYPES
 
 namespace MGITest {
-namespace {
+    namespace {
 
-class DualBlockScenario : public ScenarioTest {
-protected:
-    void SetUp() override {
-        ScenarioTest::SetUp();
-        if (!Ready()) return;
-        const auto why = SplitRuntimeSkipReason();
-        if (!why.empty()) GTEST_SKIP() << why;
-    }
-};
+        class DualBlockScenario : public ScenarioTest {
+        protected:
+            void SetUp() override {
+                ScenarioTest::SetUp();
+                if (!Ready()) return;
+                const auto why = SplitRuntimeSkipReason();
+                if (!why.empty()) GTEST_SKIP() << why;
+            }
+        };
 
-TEST_F(DualBlockScenario, TheTwoRolesHaveDistinctBlocks) {
-    if (!Ready()) return;
-    DualBlockPeekState before;
-    ASSERT_TRUE(PeekDualBlockState(&before))
-        << "the dual-block peek is compiled out: this entry is only ever registered in a "
-           "disaggregated build, so a false here means the registration and the build disagree";
-    ASSERT_TRUE(before.roleSplitActive)
-        << "dual-block control: MGPipeRoleSplitRehearsalActive() is false - MOBILEGL_IPC_ROLE_SPLIT_STATE "
-           "is not armed in this process (or the transport is monolith), so the two roles share "
-           "one PipeInputs block and this case is the knob's negative control";
-    EXPECT_TRUE(before.blocksDistinct)
-        << "dual-block control: MGPipeClientInputs() and gPipeInputs are the SAME object with "
-           "the rehearsal armed - the fill side and the read side were never split";
-    EXPECT_NE(before.serverIdentity, nullptr)
-        << "dual-block control: the server block's identity was never set (CONTRACT-P5E §3.2's "
-           "server-owned SetIdentity) - the backend's identity-keyed memo caches read nullptr "
-           "as a hit on their zero-initialised slot";
+        TEST_F(DualBlockScenario, TheTwoRolesHaveDistinctBlocks) {
+            if (!Ready()) return;
+            DualBlockPeekState before;
+            ASSERT_TRUE(PeekDualBlockState(&before))
+                << "the dual-block peek is compiled out: this entry is only ever registered in a "
+                   "disaggregated build, so a false here means the registration and the build disagree";
+            ASSERT_TRUE(before.roleSplitActive)
+                << "dual-block control: MGPipeRoleSplitRehearsalActive() is false - MOBILEGL_IPC_ROLE_SPLIT_STATE "
+                   "is not armed in this process (or the transport is monolith), so the two roles share "
+                   "one PipeInputs block and this case is the knob's negative control";
+            EXPECT_TRUE(before.blocksDistinct)
+                << "dual-block control: MGPipeClientInputs() and gPipeInputs are the SAME object with "
+                   "the rehearsal armed - the fill side and the read side were never split";
+            EXPECT_NE(before.serverIdentity, nullptr)
+                << "dual-block control: the server block's identity was never set (CONTRACT-P5E §3.2's "
+                   "server-owned SetIdentity) - the backend's identity-keyed memo caches read nullptr "
+                   "as a hit on their zero-initialised slot";
 
-    // One client verb boundary, driven directly so no draw reaches the server: the CLIENT
-    // block's serial must move and the SERVER block's must not. Under a shared block the second
-    // half is impossible, which is the control's other edge. The glPixelStorei dirties the
-    // pixel-pack state so the boundary's emission step has a record to publish - the fixture's
-    // destructor asserts the wire moved on every armed split case.
-    glPixelStorei(GL_PACK_ALIGNMENT, 4);
-    ASSERT_TRUE(DualBlockDriveClientVerbBoundary());
-    DualBlockPeekState after;
-    ASSERT_TRUE(PeekDualBlockState(&after));
-    EXPECT_GT(after.clientSerial, before.clientSerial)
-        << "dual-block control: a client verb boundary did not move the client block's serial";
-    EXPECT_EQ(after.serverSerial, before.serverSerial)
-        << "dual-block control: a fill-side verb boundary moved the SERVER block's serial "
-           << before.serverSerial << " -> " << after.serverSerial
-           << " - the two roles are still writing one block";
-}
+            // One client verb boundary, driven directly so no draw reaches the server: the CLIENT
+            // block's serial must move and the SERVER block's must not. Under a shared block the second
+            // half is impossible, which is the control's other edge. The glPixelStorei dirties the
+            // pixel-pack state so the boundary's emission step has a record to publish - the fixture's
+            // destructor asserts the wire moved on every armed split case.
+            glPixelStorei(GL_PACK_ALIGNMENT, 4);
+            ASSERT_TRUE(DualBlockDriveClientVerbBoundary());
+            DualBlockPeekState after;
+            ASSERT_TRUE(PeekDualBlockState(&after));
+            EXPECT_GT(after.clientSerial, before.clientSerial)
+                << "dual-block control: a client verb boundary did not move the client block's serial";
+            EXPECT_EQ(after.serverSerial, before.serverSerial)
+                << "dual-block control: a fill-side verb boundary moved the SERVER block's serial "
+                << before.serverSerial << " -> " << after.serverSerial
+                << " - the two roles are still writing one block";
+        }
 
-} // namespace
+    } // namespace
 } // namespace MGITest

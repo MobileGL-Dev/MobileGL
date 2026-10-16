@@ -79,8 +79,8 @@ void main()
                 glGenVertexArrays(1, &m_vao);
                 glBindVertexArray(m_vao);
                 if (!BackendHostsTessellation()) {
-                    GTEST_SKIP() << "no tessellation stages on " << Gl().BackendName() << " ("
-                                 << Gl().RendererString() << "); there is no patch draw to validate";
+                    GTEST_SKIP() << "no tessellation stages on " << Gl().BackendName() << " (" << Gl().RendererString()
+                                 << "); there is no patch draw to validate";
                 }
             }
 
@@ -107,8 +107,7 @@ void main()
             }
 
             static void DrainErrors() {
-                for (int i = 0; i < 16 && glGetError() != GL_NO_ERROR; ++i) {
-                }
+                for (int i = 0; i < 16 && glGetError() != GL_NO_ERROR; ++i) {}
             }
 
             GLuint BuildProgram(const std::vector<std::pair<GLenum, const char*>>& stages) {
@@ -128,16 +127,19 @@ void main()
                     }
                 }
                 if (!ok) {
-                    for (const GLuint shader : shaders) glDeleteShader(shader);
+                    for (const GLuint shader : shaders)
+                        glDeleteShader(shader);
                     return 0;
                 }
 
                 const GLuint program = glCreateProgram();
-                for (const GLuint shader : shaders) glAttachShader(program, shader);
+                for (const GLuint shader : shaders)
+                    glAttachShader(program, shader);
                 glLinkProgram(program);
                 GLint linked = 0;
                 glGetProgramiv(program, GL_LINK_STATUS, &linked);
-                for (const GLuint shader : shaders) glDeleteShader(shader);
+                for (const GLuint shader : shaders)
+                    glDeleteShader(shader);
                 if (!linked) {
                     m_buildLog = InfoLog(program, false);
                     glDeleteProgram(program);
@@ -184,8 +186,8 @@ void main()
             glPatchParameteri(GL_PATCH_VERTICES, 1);
             DrainErrors();
 
-            for (const GLenum mode : {static_cast<GLenum>(GL_POINTS), static_cast<GLenum>(GL_LINES),
-                                      static_cast<GLenum>(GL_TRIANGLES)}) {
+            for (const GLenum mode :
+                 {static_cast<GLenum>(GL_POINTS), static_cast<GLenum>(GL_LINES), static_cast<GLenum>(GL_TRIANGLES)}) {
                 glDrawArrays(mode, 0, 1);
                 EXPECT_EQ(glGetError(), static_cast<GLenum>(GL_INVALID_OPERATION))
                     << "mode " << mode << " must not be accepted while tessellation is active";

@@ -244,224 +244,224 @@ namespace MobileGL::MG_Backend::DirectGLES {
     RequireStagedCoverageForPendingRanges((res), (base), (frontendSize), (site))
         } // namespace
 
-            // Ring machinery shared with the UBO/unpack rings; defined further down in
-            // this same unnamed namespace.
-            Bool RingAllocate(PersistentRing& ring, SizeT size, SizeT& outOffset);
+        // Ring machinery shared with the UBO/unpack rings; defined further down in
+        // this same unnamed namespace.
+        Bool RingAllocate(PersistentRing& ring, SizeT size, SizeT& outOffset);
 
-            // Push every queued range of `resource` from the shadow into the backend
-            // store, without ever letting a driver resolve the WAR hazard against
-            // in-flight frames at the WHOLE BUFFER's expense. Three tiers:
+        // Push every queued range of `resource` from the shadow into the backend
+        // store, without ever letting a driver resolve the WAR hazard against
+        // in-flight frames at the WHOLE BUFFER's expense. Three tiers:
+        //
+        //   1. glMapBufferRange(WRITE | INVALIDATE_RANGE) + memcpy. The entire
+        //      mapped range is rewritten from the authoritative shadow, so
+        //      declaring its old bytes dead is exact - and it lets the driver
+        //      swap fresh pages in for JUST that range. This is the only tier
+        //      whose cost scales with the RANGE on this Mali driver: both the
+        //      immediate glBufferSubData (pre-queueing) and a staged
+        //      glCopyBufferSubData into a busy MUTABLE store ghost the whole
+        //      destination with a worker-thread memcpy - Minecraft 26.3 streams
+        //      ~1MB section meshes into 128MB arenas about nine times a frame
+        //      during a camera pan, and 9 x 128MB of ghosting per frame is
+        //      ~380ms, the measured 2-4 fps. (Backing the arenas with immutable
+        //      stores also kills the ghost, but eagerly commits every arena's
+        //      full extent - +hundreds of MB - which LMK'd the whole device.)
+        //   2. The staging ring + glCopyBufferSubData: the copy is ordered on
+        //      the GPU timeline, no CPU wait (MOBILEGL_ESPRYT_DISABLE_INVALIDATE_FLUSH
+        //      forces this tier as the map path's negative control).
+        //   3. Direct glBufferSubData (potentially stalling) when neither the
+        //      map entry points nor the ring exist.
+        //
+        // The ranges are flushed AS QUEUED (VecRange1D::Add already merges
+        // near-adjacent ones): bytes, not flush calls, are the cost axis here,
+        // and collapsing a scattered flush into its union re-copied nearly whole
+        // chunk-mesh arenas every frame.
+        // The caller owns syncedChangeSerial; this only drains the queue.
+        //
+        // ONE body for both arms, and deliberately so: the three-tier decision (whole-buffer
+        // orphan map / >= 128 KiB range-invalidating map / staged ring copy) is what the MC
+        // 26.3 p99 depends on, and a second copy of it for the handle arm is exactly how a
+        // tier silently changes. The arms differ only in where `hostBase` and `frontendSize`
+        // come from.
+        //
+        // R-11'S PARAMETER, AND IT IS A PARAMETER RATHER THAN AN ASSUMPTION (P5 b1).
+        // `hostBase` is re-read at every use today precisely because a shadow resize or an
+        // adoption moves what an earlier base pointed at. Under split the server may hold
+        // no pointer into the client's shadow at all, so the base becomes a SNAPSHOT taken
+        // into SEG_STAGE at emission - and a snapshot covers a RANGE, not the store. The
+        // two extra arguments say which range `hostBase` is good for; the default is the
+        // whole store, which is exactly what a live shadow is, so every caller today is
+        // byte-identical. The moment w1 passes a real snapshot extent, tier 1's widening
+        // refusal below stops being unreachable and a too-narrow snapshot is named instead
+        // of silently clobbering GPU-written bytes with stale ones.
+        constexpr SizeT kHostBaseCoversWholeStore = ~static_cast<SizeT>(0);
+
+        void FlushPendingRangesFrom(GLESBufferResource& resource, const Uint8* hostBase, SizeT frontendSize,
+                                    SizeT hostBaseFrom = 0, SizeT hostBaseTo = kHostBaseCoversWholeStore);
+
+        void DrainResidentWritesNow(GLESBufferResource& resource);
+
+        namespace {
+            // The two-argument spelling the legacy arm's call sites use, kept so those sites
+            // are the SAME text in both builds (G1). The object was never read.
+            void DrainResidentWritesNow(GLESBufferResource& resource, BufferObject& bufferObject) {
+                (void)bufferObject;
+                DrainResidentWritesNow(resource);
+            }
+
+            // ---- P3a: the same seven ops plus the create/unmap pair, BY HANDLE ------------
             //
-            //   1. glMapBufferRange(WRITE | INVALIDATE_RANGE) + memcpy. The entire
-            //      mapped range is rewritten from the authoritative shadow, so
-            //      declaring its old bytes dead is exact - and it lets the driver
-            //      swap fresh pages in for JUST that range. This is the only tier
-            //      whose cost scales with the RANGE on this Mali driver: both the
-            //      immediate glBufferSubData (pre-queueing) and a staged
-            //      glCopyBufferSubData into a busy MUTABLE store ghost the whole
-            //      destination with a worker-thread memcpy - Minecraft 26.3 streams
-            //      ~1MB section meshes into 128MB arenas about nine times a frame
-            //      during a camera pan, and 9 x 128MB of ghosting per frame is
-            //      ~380ms, the measured 2-4 fps. (Backing the arenas with immutable
-            //      stores also kills the ghost, but eagerly commits every arena's
-            //      full extent - +hundreds of MB - which LMK'd the whole device.)
-            //   2. The staging ring + glCopyBufferSubData: the copy is ordered on
-            //      the GPU timeline, no CPU wait (MOBILEGL_ESPRYT_DISABLE_INVALIDATE_FLUSH
-            //      forces this tier as the map path's negative control).
-            //   3. Direct glBufferSubData (potentially stalling) when neither the
-            //      map entry points nor the ring exist.
+            // Every body below is its Ops_* counterpart above with exactly the substitutions
+            // D-A2's table names and nothing else: the frontend object's GetSize() / GetUsage()
+            // / HasDefinedContent() / MappedData() / GetChangeSerial() become the applier
+            // record's Desc.Width / Desc.Usage / Desc.HasDefinedContent, the shadow base the
+            // call carried, and the record's server-owned Serial. Every branch survives -
+            // pendingRespecify early-out, the off-thread queue, the adopted zero-copy stamp,
+            // the upload-ring kill switch, the Mali WAR-stall queue-only default.
             //
-            // The ranges are flushed AS QUEUED (VecRange1D::Add already merges
-            // near-adjacent ones): bytes, not flush calls, are the cost axis here,
-            // and collapsing a scattered flush into its union re-copied nearly whole
-            // chunk-mesh arenas every frame.
-            // The caller owns syncedChangeSerial; this only drains the queue.
-            //
-            // ONE body for both arms, and deliberately so: the three-tier decision (whole-buffer
-            // orphan map / >= 128 KiB range-invalidating map / staged ring copy) is what the MC
-            // 26.3 p99 depends on, and a second copy of it for the handle arm is exactly how a
-            // tier silently changes. The arms differ only in where `hostBase` and `frontendSize`
-            // come from.
-            //
-            // R-11'S PARAMETER, AND IT IS A PARAMETER RATHER THAN AN ASSUMPTION (P5 b1).
-            // `hostBase` is re-read at every use today precisely because a shadow resize or an
-            // adoption moves what an earlier base pointed at. Under split the server may hold
-            // no pointer into the client's shadow at all, so the base becomes a SNAPSHOT taken
-            // into SEG_STAGE at emission - and a snapshot covers a RANGE, not the store. The
-            // two extra arguments say which range `hostBase` is good for; the default is the
-            // whole store, which is exactly what a live shadow is, so every caller today is
-            // byte-identical. The moment w1 passes a real snapshot extent, tier 1's widening
-            // refusal below stops being unreachable and a too-narrow snapshot is named instead
-            // of silently clobbering GPU-written bytes with stale ones.
-            constexpr SizeT kHostBaseCoversWholeStore = ~static_cast<SizeT>(0);
+            // NOTHING here reads a frontend type. The one thing a handle op cannot do is ask
+            // an object for its shadow, which is why GLESBufferResource::hostBytes exists: the
+            // three content-carrying calls hand the base over and the later drains read it.
 
-            void FlushPendingRangesFrom(GLESBufferResource& resource, const Uint8* hostBase, SizeT frontendSize,
-                                        SizeT hostBaseFrom = 0, SizeT hostBaseTo = kHostBaseCoversWholeStore);
+            // The applier's record for this resource, or null when the client never created it
+            // (or created it into a slot that has since been recycled).
+            const MG_Pipe::MGPipeResourceRecord* ResourceRecordOf(MG_Pipe::MGPipeHandle res) {
+                if (MG_Pipe::MGPipeHandleIsNull(res)) return nullptr;
+                const auto& records = MG_Pipe::MGPipeApplier().Resources;
+                if (res.Slot >= records.size()) return nullptr;
+                const auto& record = records[res.Slot];
+                if (!record.Live || record.Gen != res.Gen) return nullptr;
+                return &record;
+            }
 
-            void DrainResidentWritesNow(GLESBufferResource& resource);
-
-            namespace {
-                // The two-argument spelling the legacy arm's call sites use, kept so those sites
-                // are the SAME text in both builds (G1). The object was never read.
-                void DrainResidentWritesNow(GLESBufferResource& resource, BufferObject& bufferObject) {
-                    (void)bufferObject;
-                    DrainResidentWritesNow(resource);
-                }
-
-                // ---- P3a: the same seven ops plus the create/unmap pair, BY HANDLE ------------
-                //
-                // Every body below is its Ops_* counterpart above with exactly the substitutions
-                // D-A2's table names and nothing else: the frontend object's GetSize() / GetUsage()
-                // / HasDefinedContent() / MappedData() / GetChangeSerial() become the applier
-                // record's Desc.Width / Desc.Usage / Desc.HasDefinedContent, the shadow base the
-                // call carried, and the record's server-owned Serial. Every branch survives -
-                // pendingRespecify early-out, the off-thread queue, the adopted zero-copy stamp,
-                // the upload-ring kill switch, the Mali WAR-stall queue-only default.
-                //
-                // NOTHING here reads a frontend type. The one thing a handle op cannot do is ask
-                // an object for its shadow, which is why GLESBufferResource::hostBytes exists: the
-                // three content-carrying calls hand the base over and the later drains read it.
-
-                // The applier's record for this resource, or null when the client never created it
-                // (or created it into a slot that has since been recycled).
-                const MG_Pipe::MGPipeResourceRecord* ResourceRecordOf(MG_Pipe::MGPipeHandle res) {
-                    if (MG_Pipe::MGPipeHandleIsNull(res)) return nullptr;
-                    const auto& records = MG_Pipe::MGPipeApplier().Resources;
-                    if (res.Slot >= records.size()) return nullptr;
-                    const auto& record = records[res.Slot];
-                    if (!record.Live || record.Gen != res.Gen) return nullptr;
-                    return &record;
-                }
-
-                // The server-owned MGGen this backend mirrors in syncedChangeSerial. Zero for a
-                // resource with no record, which is the same "never synced" answer a frontend
-                // change serial of zero gave.
-                Uint64 ResourceSerialOf(MG_Pipe::MGPipeHandle res) {
-                    const auto* record = ResourceRecordOf(res);
-                    return record != nullptr ? record->Serial : 0;
-                }
-                SizeT ResourceWidthOf(MG_Pipe::MGPipeHandle res) {
-                    const auto* record = ResourceRecordOf(res);
-                    return record != nullptr ? static_cast<SizeT>(record->Desc.Width) : 0;
-                }
-            } // namespace
+            // The server-owned MGGen this backend mirrors in syncedChangeSerial. Zero for a
+            // resource with no record, which is the same "never synced" answer a frontend
+            // change serial of zero gave.
+            Uint64 ResourceSerialOf(MG_Pipe::MGPipeHandle res) {
+                const auto* record = ResourceRecordOf(res);
+                return record != nullptr ? record->Serial : 0;
+            }
+            SizeT ResourceWidthOf(MG_Pipe::MGPipeHandle res) {
+                const auto* record = ResourceRecordOf(res);
+                return record != nullptr ? static_cast<SizeT>(record->Desc.Width) : 0;
+            }
+        } // namespace
 
 #if MOBILEGL_BUILD_DISAGGREGATED && defined(__ANDROID__)
-            using MG_Util::BackendLoader::HasExtensionWord;
+        using MG_Util::BackendLoader::HasExtensionWord;
 #endif // MOBILEGL_BUILD_DISAGGREGATED && __ANDROID__
 
-            const Vector<TextureUploadTarget>& StagedUploadTargetsForPipeTarget(Uint8 pipeResourceTarget);
+        const Vector<TextureUploadTarget>& StagedUploadTargetsForPipeTarget(Uint8 pipeResourceTarget);
 
-            TextureTarget StagedTextureTargetForPipeTarget(Uint8 pipeResourceTarget);
+        TextureTarget StagedTextureTargetForPipeTarget(Uint8 pipeResourceTarget);
 
-            void BumpBufferMutationEpoch();
+        void BumpBufferMutationEpoch();
 
-            GLESBufferResource* FindBufferResourceForHandle(MG_Pipe::MGPipeHandle res);
+        GLESBufferResource* FindBufferResourceForHandle(MG_Pipe::MGPipeHandle res);
 
-            SizeT ResourceWidthForHandle(MG_Pipe::MGPipeHandle res);
+        SizeT ResourceWidthForHandle(MG_Pipe::MGPipeHandle res);
 
-            Uint64 ResourceSerialForHandle(MG_Pipe::MGPipeHandle res);
+        Uint64 ResourceSerialForHandle(MG_Pipe::MGPipeHandle res);
 
-            GLESBufferResource* EnsureBufferResourceForHandle(
-                const SharedPtr<MG_State::GLState::BufferObject>& bufferObject, MG_Pipe::MGPipeHandle res);
+        GLESBufferResource* EnsureBufferResourceForHandle(
+            const SharedPtr<MG_State::GLState::BufferObject>& bufferObject, MG_Pipe::MGPipeHandle res);
 
-            void BindBufferId(GLenum target, Uint id);
+        void BindBufferId(GLenum target, Uint id);
 
-            void BindPixelUnpackBufferId(Uint id);
+        void BindPixelUnpackBufferId(Uint id);
 
-            void NoteBufferIdDeleted(Uint id);
+        void NoteBufferIdDeleted(Uint id);
 
-            Bool CreateRingStorage(PersistentRing& ring, SizeT minBytes);
-            Bool RingAllocateSlow(PersistentRing& ring, SizeT size, SizeT& outOffset);
+        Bool CreateRingStorage(PersistentRing& ring, SizeT minBytes);
+        Bool RingAllocateSlow(PersistentRing& ring, SizeT size, SizeT& outOffset);
 
-            Bool RingAllocate(PersistentRing& ring, SizeT size, SizeT& outOffset);
+        Bool RingAllocate(PersistentRing& ring, SizeT size, SizeT& outOffset);
 
-            Bool RingAllocateSlow(PersistentRing& ring, SizeT size, SizeT& outOffset);
+        Bool RingAllocateSlow(PersistentRing& ring, SizeT size, SizeT& outOffset);
 
-            Bool UnpackRingAvailable();
+        Bool UnpackRingAvailable();
 
-            Bool UnpackRingAllocate(SizeT size, SizeT& outOffset);
+        Bool UnpackRingAllocate(SizeT size, SizeT& outOffset);
 
-            void* UnpackRingMappedPtr();
+        void* UnpackRingMappedPtr();
 
-            Uint UnpackRingBufferId();
+        Uint UnpackRingBufferId();
 
-            SizeT UnpackRingMaxBytes();
+        SizeT UnpackRingMaxBytes();
     } // namespace BufferImpl
 
-        // The release-build VOICE for StateBackendObjectRegistry::GetOrCreateByHandle's two
-        // silent refusals, shared by the kinds P4a re-keys so the wording cannot drift between
-        // them. It is the shape GetOrCreateBufferResourceForHandle gives P3a's buffer family,
-        // lifted into one template because a copy per kind is a chance per kind to write one of
-        // them differently.
-        //
-        // ITS CALLERS IN THIS PACKAGE ARE THE FRAMEBUFFER ATTACHMENT WALK'S TWO
-        // (FramebufferImpl::SyncAttachmentSurface: the texture registry and the renderbuffer
-        // registry), because that is where a HANDLE arrives in a payload - MGPSurface::Res -
-        // and an ADOPTION is what the arm owes rather than a lookup. The other three re-keyed
-        // kinds resolve at sites in DirectGLES.cpp (package E's SyncCurrentFBO, the lazy
-        // sampler mint and SyncCurrentProgram), so their first adoption is E's to write; this
-        // template is what they call so all five say the same thing.
-        //
-        // WHY A VOICE AT ALL: the table asserts, and MOBILEGL_ASSERT compiles out at INFO -
-        // which all three gate builds and every shipped build are - so an object that silently
-        // stops being twinned is exactly the failure mode the refusal exists to replace.
-        //
-        // Returns null on the legacy arm too, so a caller that reaches this without checking
-        // its family's arm gets nothing rather than a twin the legacy arm would never see.
-        //
-        // SPLIT IN TWO (review N-3), and the split is what makes the two refusals REACHABLE.
-        // Both of this package's call sites stand behind a cross-check that the record's Res
-        // equals registry.HandleOf(frontendObject) - the LIVE handle - so by the time the
-        // adoption ran, the slot was in bounds and the generation was current BY CONSTRUCTION
-        // and neither refusal below could ever fire: the letter of M-4 was closed and its
-        // substance was not. The record's handle is the UNTRUSTED input and the frontend is the
-        // corroboration, so the validity question is asked FIRST, on its own, at both sites;
-        // the adoption then performs the resolve. Asking it first is also side-effect free,
-        // which the ordering rule N-1 states for the framebuffer refusal wants here too:
-        // GetOrCreateByHandle can reset an incumbent twin, and a handle this predicate rejects
-        // must not reach it.
-        template <typename Registry>
-        Bool PipeTwinHandleIsAdoptable(Registry& registry, MG_Pipe::MGPipeHandle handle, const char* kindName) {
-            if (MG_Pipe::MGPipeHandleIsNull(handle)) return false;
-            if (handle.Slot >= Registry::SlotTable::kMaxHandleSlot) {
+    // The release-build VOICE for StateBackendObjectRegistry::GetOrCreateByHandle's two
+    // silent refusals, shared by the kinds P4a re-keys so the wording cannot drift between
+    // them. It is the shape GetOrCreateBufferResourceForHandle gives P3a's buffer family,
+    // lifted into one template because a copy per kind is a chance per kind to write one of
+    // them differently.
+    //
+    // ITS CALLERS IN THIS PACKAGE ARE THE FRAMEBUFFER ATTACHMENT WALK'S TWO
+    // (FramebufferImpl::SyncAttachmentSurface: the texture registry and the renderbuffer
+    // registry), because that is where a HANDLE arrives in a payload - MGPSurface::Res -
+    // and an ADOPTION is what the arm owes rather than a lookup. The other three re-keyed
+    // kinds resolve at sites in DirectGLES.cpp (package E's SyncCurrentFBO, the lazy
+    // sampler mint and SyncCurrentProgram), so their first adoption is E's to write; this
+    // template is what they call so all five say the same thing.
+    //
+    // WHY A VOICE AT ALL: the table asserts, and MOBILEGL_ASSERT compiles out at INFO -
+    // which all three gate builds and every shipped build are - so an object that silently
+    // stops being twinned is exactly the failure mode the refusal exists to replace.
+    //
+    // Returns null on the legacy arm too, so a caller that reaches this without checking
+    // its family's arm gets nothing rather than a twin the legacy arm would never see.
+    //
+    // SPLIT IN TWO (review N-3), and the split is what makes the two refusals REACHABLE.
+    // Both of this package's call sites stand behind a cross-check that the record's Res
+    // equals registry.HandleOf(frontendObject) - the LIVE handle - so by the time the
+    // adoption ran, the slot was in bounds and the generation was current BY CONSTRUCTION
+    // and neither refusal below could ever fire: the letter of M-4 was closed and its
+    // substance was not. The record's handle is the UNTRUSTED input and the frontend is the
+    // corroboration, so the validity question is asked FIRST, on its own, at both sites;
+    // the adoption then performs the resolve. Asking it first is also side-effect free,
+    // which the ordering rule N-1 states for the framebuffer refusal wants here too:
+    // GetOrCreateByHandle can reset an incumbent twin, and a handle this predicate rejects
+    // must not reach it.
+    template <typename Registry>
+    Bool PipeTwinHandleIsAdoptable(Registry& registry, MG_Pipe::MGPipeHandle handle, const char* kindName) {
+        if (MG_Pipe::MGPipeHandleIsNull(handle)) return false;
+        if (handle.Slot >= Registry::SlotTable::kMaxHandleSlot) {
 #if MOBILEGL_BUILD_DISAGGREGATED
-                MG_Pipe::MGPipeSessionFail( // @Ph-declined (ID-P7-1): PH-2 stays Fatal, CONTRACT-P7 §12
-                    MG_Pipe::MGPipeFatalFamily::ProtocolCorruption,
-                    "MGPipe: Fatal{ProtocolCorruption, \"BackendSlotTable.HandleSlot\"} - "
-                    "%s handle slot %u is past this table's %u bound",
-                    kindName, handle.Slot, Registry::SlotTable::kMaxHandleSlot);
+            MG_Pipe::MGPipeSessionFail( // @Ph-declined (ID-P7-1): PH-2 stays Fatal, CONTRACT-P7 §12
+                MG_Pipe::MGPipeFatalFamily::ProtocolCorruption,
+                "MGPipe: Fatal{ProtocolCorruption, \"BackendSlotTable.HandleSlot\"} - "
+                "%s handle slot %u is past this table's %u bound",
+                kindName, handle.Slot, Registry::SlotTable::kMaxHandleSlot);
 #else
-                MGLOG_E_ONCE("MGPipe: %s handle slot %u is past the backend table's %u bound - "
-                             "refusing to twin it",
-                             kindName, handle.Slot, Registry::SlotTable::kMaxHandleSlot);
-                return false;
+            MGLOG_E_ONCE("MGPipe: %s handle slot %u is past the backend table's %u bound - "
+                         "refusing to twin it",
+                         kindName, handle.Slot, Registry::SlotTable::kMaxHandleSlot);
+            return false;
 #endif
-            }
-            const Uint32 liveGen = registry.LiveGenAt(handle.Slot);
-            if (liveGen != 0 && liveGen > handle.Gen) {
-#if MOBILEGL_BUILD_DISAGGREGATED
-                MG_Pipe::MGPipeSessionFail( // @Ph-declined (ID-P7-1): PH-2 stays Fatal, CONTRACT-P7 §12
-                    MG_Pipe::MGPipeFatalFamily::ProtocolCorruption,
-                    "MGPipe: Fatal{ProtocolCorruption, \"BackendSlotTable.Generation\"} - "
-                    "%s handle {%u, %u} names generation behind live generation %u",
-                    kindName, handle.Slot, handle.Gen, liveGen);
-#else
-                // SlotTables.h:301-321: forward is a recycle and resets the twin, BACKWARD is
-                // refused, because adopting it would release the incumbent LIVE twin's driver
-                // id and then stamp the slot back to the dead object's generation, after which
-                // the incumbent's own FindByHandle refuses it and it is silently handed a
-                // fresh, empty twin - a leak AND an object that loses its storage with no
-                // diagnostic. That is the shape commit d7655247 fixed on the buffer side.
-                MGLOG_E_ONCE("MGPipe: %s handle {%u, %u} names a generation BEHIND the live "
-                             "twin's %u - refusing rather than dropping the incumbent's driver "
-                             "object",
-                             kindName, handle.Slot, handle.Gen, liveGen);
-                return false;
-#endif
-            }
-            return true;
         }
+        const Uint32 liveGen = registry.LiveGenAt(handle.Slot);
+        if (liveGen != 0 && liveGen > handle.Gen) {
+#if MOBILEGL_BUILD_DISAGGREGATED
+            MG_Pipe::MGPipeSessionFail( // @Ph-declined (ID-P7-1): PH-2 stays Fatal, CONTRACT-P7 §12
+                MG_Pipe::MGPipeFatalFamily::ProtocolCorruption,
+                "MGPipe: Fatal{ProtocolCorruption, \"BackendSlotTable.Generation\"} - "
+                "%s handle {%u, %u} names generation behind live generation %u",
+                kindName, handle.Slot, handle.Gen, liveGen);
+#else
+            // SlotTables.h:301-321: forward is a recycle and resets the twin, BACKWARD is
+            // refused, because adopting it would release the incumbent LIVE twin's driver
+            // id and then stamp the slot back to the dead object's generation, after which
+            // the incumbent's own FindByHandle refuses it and it is silently handed a
+            // fresh, empty twin - a leak AND an object that loses its storage with no
+            // diagnostic. That is the shape commit d7655247 fixed on the buffer side.
+            MGLOG_E_ONCE("MGPipe: %s handle {%u, %u} names a generation BEHIND the live "
+                         "twin's %u - refusing rather than dropping the incumbent's driver "
+                         "object",
+                         kindName, handle.Slot, handle.Gen, liveGen);
+            return false;
+#endif
+        }
+        return true;
+    }
 
     namespace {
         template <typename Registry>
@@ -565,12 +565,30 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
             static void Apply(GLint alignment, GLint rowLength, GLint skipRows, GLint skipPixels, GLint imageHeight,
                               GLint skipImages) {
-                if (alignment != s_alignment) { g_GLESFuncs.glPixelStorei(GL_UNPACK_ALIGNMENT, alignment); s_alignment = alignment; }
-                if (rowLength != s_rowLength) { g_GLESFuncs.glPixelStorei(GL_UNPACK_ROW_LENGTH, rowLength); s_rowLength = rowLength; }
-                if (skipRows != s_skipRows) { g_GLESFuncs.glPixelStorei(GL_UNPACK_SKIP_ROWS, skipRows); s_skipRows = skipRows; }
-                if (skipPixels != s_skipPixels) { g_GLESFuncs.glPixelStorei(GL_UNPACK_SKIP_PIXELS, skipPixels); s_skipPixels = skipPixels; }
-                if (imageHeight != s_imageHeight) { g_GLESFuncs.glPixelStorei(GL_UNPACK_IMAGE_HEIGHT, imageHeight); s_imageHeight = imageHeight; }
-                if (skipImages != s_skipImages) { g_GLESFuncs.glPixelStorei(GL_UNPACK_SKIP_IMAGES, skipImages); s_skipImages = skipImages; }
+                if (alignment != s_alignment) {
+                    g_GLESFuncs.glPixelStorei(GL_UNPACK_ALIGNMENT, alignment);
+                    s_alignment = alignment;
+                }
+                if (rowLength != s_rowLength) {
+                    g_GLESFuncs.glPixelStorei(GL_UNPACK_ROW_LENGTH, rowLength);
+                    s_rowLength = rowLength;
+                }
+                if (skipRows != s_skipRows) {
+                    g_GLESFuncs.glPixelStorei(GL_UNPACK_SKIP_ROWS, skipRows);
+                    s_skipRows = skipRows;
+                }
+                if (skipPixels != s_skipPixels) {
+                    g_GLESFuncs.glPixelStorei(GL_UNPACK_SKIP_PIXELS, skipPixels);
+                    s_skipPixels = skipPixels;
+                }
+                if (imageHeight != s_imageHeight) {
+                    g_GLESFuncs.glPixelStorei(GL_UNPACK_IMAGE_HEIGHT, imageHeight);
+                    s_imageHeight = imageHeight;
+                }
+                if (skipImages != s_skipImages) {
+                    g_GLESFuncs.glPixelStorei(GL_UNPACK_SKIP_IMAGES, skipImages);
+                    s_skipImages = skipImages;
+                }
             }
 
             GLint m_prevAlignment = 4;
@@ -635,8 +653,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // Returns true when the caller must decline (no handle noted: the caller's bug it always
         // was, named by the caller's own log line), false when the record arm can serve the call,
         // and never returns at all when a handle was noted on an arm that cannot serve it.
-        static Bool RefuseNullFrontendTextureOffTheHandleArm(const char* entry,
-                                                            MG_Pipe::MGPipeHandle notedHandle) {
+        static Bool RefuseNullFrontendTextureOffTheHandleArm(const char* entry, MG_Pipe::MGPipeHandle notedHandle) {
             if (MG_Pipe::MGPipeHandleIsNull(notedHandle)) return true;
             return false;
         }

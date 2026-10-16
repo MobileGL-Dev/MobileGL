@@ -13,29 +13,29 @@
 
 namespace MobileGL::MG_Backend::DirectVulkan {
 
-// Collect every fence in the ordered submission prefix. Waiting on only the last matching
-// frame-serial record is insufficient: the same serial may have an earlier in-flight submit.
-template <typename Records, typename Fence>
-bool CollectSubmitFencePrefix(const Records& records, std::uint64_t submitIndex,
-                              Fence nullFence, std::vector<Fence>& fences) {
-    fences.clear();
-    bool foundTarget = false;
-    for (const auto& record : records) {
-        if (record.submitIndex > submitIndex) {
-            break;
+    // Collect every fence in the ordered submission prefix. Waiting on only the last matching
+    // frame-serial record is insufficient: the same serial may have an earlier in-flight submit.
+    template <typename Records, typename Fence>
+    bool CollectSubmitFencePrefix(const Records& records, std::uint64_t submitIndex, Fence nullFence,
+                                  std::vector<Fence>& fences) {
+        fences.clear();
+        bool foundTarget = false;
+        for (const auto& record : records) {
+            if (record.submitIndex > submitIndex) {
+                break;
+            }
+            if (record.fence == nullFence) {
+                fences.clear();
+                return false;
+            }
+            fences.push_back(record.fence);
+            foundTarget = foundTarget || record.submitIndex == submitIndex;
         }
-        if (record.fence == nullFence) {
+        if (!foundTarget) {
             fences.clear();
             return false;
         }
-        fences.push_back(record.fence);
-        foundTarget = foundTarget || record.submitIndex == submitIndex;
+        return true;
     }
-    if (!foundTarget) {
-        fences.clear();
-        return false;
-    }
-    return true;
-}
 
 } // namespace MobileGL::MG_Backend::DirectVulkan

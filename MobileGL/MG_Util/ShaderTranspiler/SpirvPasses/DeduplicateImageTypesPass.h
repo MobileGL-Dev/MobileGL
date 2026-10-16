@@ -18,4 +18,4 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
         Status Process() override;
         static spvtools::Optimizer::PassToken Create();
     };
-}
+} // namespace MobileGL::MG_Util::ShaderTranspiler

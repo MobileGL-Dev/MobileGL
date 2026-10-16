@@ -58,8 +58,8 @@ namespace MGITest {
         // Integers below 2^24 in every component, so float storage is exact and a byte swap of
         // any of them is visibly different from the value.
         std::array<GLfloat, 4> PatternRgba32f(int x, int y) {
-            return {static_cast<GLfloat>(x + 1), static_cast<GLfloat>(y + 3),
-                    static_cast<GLfloat>(x * 64 + y), static_cast<GLfloat>(1000 + x * y)};
+            return {static_cast<GLfloat>(x + 1), static_cast<GLfloat>(y + 3), static_cast<GLfloat>(x * 64 + y),
+                    static_cast<GLfloat>(1000 + x * y)};
         }
 
         struct PackState {
@@ -98,10 +98,12 @@ namespace MGITest {
                 ResetPack();
                 glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
                 glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
-                for (GLuint buffer : m_buffers) glDeleteBuffers(1, &buffer);
+                for (GLuint buffer : m_buffers)
+                    glDeleteBuffers(1, &buffer);
                 glBindFramebuffer(GL_FRAMEBUFFER, 0);
                 if (m_fbo != 0) glDeleteFramebuffers(1, &m_fbo);
-                for (GLuint texture : m_textures) glDeleteTextures(1, &texture);
+                for (GLuint texture : m_textures)
+                    glDeleteTextures(1, &texture);
                 m_buffers.clear();
                 m_textures.clear();
                 m_fbo = 0;
@@ -130,20 +132,20 @@ namespace MGITest {
             }
 
             static void DrainErrors() {
-                for (int i = 0; i < 16 && glGetError() != GL_NO_ERROR; ++i) {
-                }
+                for (int i = 0; i < 16 && glGetError() != GL_NO_ERROR; ++i) {}
             }
 
             // The bytes a pack state makes a width x height read occupy, from the first byte the
             // read may touch (GL 4.6 §8.4.4.1 / §18.2): the skips, then the padded rows, the last
             // row tight.
             static std::size_t PackedExtent(const PackState& pack, int width, int height, std::size_t bpp) {
-                const std::size_t rowPixels = pack.rowLength > 0 ? static_cast<std::size_t>(pack.rowLength)
-                                                                 : static_cast<std::size_t>(width);
+                const std::size_t rowPixels =
+                    pack.rowLength > 0 ? static_cast<std::size_t>(pack.rowLength) : static_cast<std::size_t>(width);
                 const std::size_t align = static_cast<std::size_t>(pack.alignment);
                 const std::size_t stride = (rowPixels * bpp + align - 1) / align * align;
-                return static_cast<std::size_t>(pack.skipRows) * stride + static_cast<std::size_t>(pack.skipPixels) * bpp +
-                       static_cast<std::size_t>(height - 1) * stride + static_cast<std::size_t>(width) * bpp;
+                return static_cast<std::size_t>(pack.skipRows) * stride +
+                       static_cast<std::size_t>(pack.skipPixels) * bpp + static_cast<std::size_t>(height - 1) * stride +
+                       static_cast<std::size_t>(width) * bpp;
             }
 
             GLuint NewTexture() {
@@ -209,7 +211,8 @@ namespace MGITest {
                 ResetPack();
 
                 std::size_t lead = 0;
-                for (std::size_t i = 0; i < kOffset; ++i) lead += actual[i] != kFill ? 1 : 0;
+                for (std::size_t i = 0; i < kOffset; ++i)
+                    lead += actual[i] != kFill ? 1 : 0;
                 EXPECT_EQ(lead, 0u) << pack.name << ": " << lead << " bytes in front of the read's offset moved";
                 std::size_t bad = 0, first = 0;
                 for (std::size_t i = 0; i < extent; ++i) {
@@ -231,9 +234,10 @@ namespace MGITest {
             AttachPatternRgba8(37, 23);
             if (HasFatalFailure()) return;
             for (const PackState& pack : kPackStates) {
-                ExpectPackBufferMatchesClientMemory(pack, 2, 1, 31, 19, GL_UNSIGNED_BYTE, 4, [](std::vector<GLubyte>& out) {
-                    glGetBufferSubData(GL_PIXEL_PACK_BUFFER, 0, static_cast<GLsizeiptr>(out.size()), out.data());
-                });
+                ExpectPackBufferMatchesClientMemory(
+                    pack, 2, 1, 31, 19, GL_UNSIGNED_BYTE, 4, [](std::vector<GLubyte>& out) {
+                        glGetBufferSubData(GL_PIXEL_PACK_BUFFER, 0, static_cast<GLsizeiptr>(out.size()), out.data());
+                    });
                 if (HasFatalFailure()) return;
             }
         }
@@ -246,13 +250,14 @@ namespace MGITest {
             AttachPatternRgba8(37, 23);
             if (HasFatalFailure()) return;
             for (const PackState& pack : {kPackStates[0], kPackStates[5]}) {
-                ExpectPackBufferMatchesClientMemory(pack, 0, 0, 37, 23, GL_UNSIGNED_BYTE, 4, [](std::vector<GLubyte>& out) {
-                    void* mapped = glMapBufferRange(GL_PIXEL_PACK_BUFFER, 0, static_cast<GLsizeiptr>(out.size()),
-                                                    GL_MAP_READ_BIT);
-                    ASSERT_NE(mapped, nullptr);
-                    std::memcpy(out.data(), mapped, out.size());
-                    glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
-                });
+                ExpectPackBufferMatchesClientMemory(
+                    pack, 0, 0, 37, 23, GL_UNSIGNED_BYTE, 4, [](std::vector<GLubyte>& out) {
+                        void* mapped = glMapBufferRange(GL_PIXEL_PACK_BUFFER, 0, static_cast<GLsizeiptr>(out.size()),
+                                                        GL_MAP_READ_BIT);
+                        ASSERT_NE(mapped, nullptr);
+                        std::memcpy(out.data(), mapped, out.size());
+                        glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
+                    });
                 if (HasFatalFailure()) return;
             }
         }
@@ -276,9 +281,10 @@ namespace MGITest {
             glReadBuffer(GL_COLOR_ATTACHMENT0);
             ASSERT_EQ(glCheckFramebufferStatus(GL_FRAMEBUFFER), static_cast<GLenum>(GL_FRAMEBUFFER_COMPLETE));
             const PackState swapped{"swap bytes, row length 17", 4, 17, 1, 1, GL_TRUE};
-            ExpectPackBufferMatchesClientMemory(swapped, 0, 0, kWidth, kHeight, GL_FLOAT, 16, [](std::vector<GLubyte>& out) {
-                glGetBufferSubData(GL_PIXEL_PACK_BUFFER, 0, static_cast<GLsizeiptr>(out.size()), out.data());
-            });
+            ExpectPackBufferMatchesClientMemory(
+                swapped, 0, 0, kWidth, kHeight, GL_FLOAT, 16, [](std::vector<GLubyte>& out) {
+                    glGetBufferSubData(GL_PIXEL_PACK_BUFFER, 0, static_cast<GLsizeiptr>(out.size()), out.data());
+                });
         }
 
         // glGetTexImage into a pack buffer, 2D and layered: the layered case is the one whose
@@ -324,7 +330,8 @@ namespace MGITest {
                 glPixelStorei(GL_PACK_SKIP_IMAGES, shape.skipImages);
                 const std::size_t rowPixels = shape.rowLength > 0 ? static_cast<std::size_t>(shape.rowLength) : kWidth;
                 const std::size_t stride = (rowPixels * 4 + shape.alignment - 1) / shape.alignment * shape.alignment;
-                const std::size_t imageRows = shape.imageHeight > 0 ? static_cast<std::size_t>(shape.imageHeight) : kHeight;
+                const std::size_t imageRows =
+                    shape.imageHeight > 0 ? static_cast<std::size_t>(shape.imageHeight) : kHeight;
                 const std::size_t imageStride = stride * imageRows;
                 const std::size_t extent = static_cast<std::size_t>(shape.skipImages) * imageStride +
                                            static_cast<std::size_t>(shape.depth - 1) * imageStride +
@@ -342,7 +349,8 @@ namespace MGITest {
                 glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
                 ResetPack();
                 std::size_t bad = 0, first = 0;
-                for (std::size_t i = 0; i < kOffset; ++i) bad += actual[i] != kFill ? 1 : 0;
+                for (std::size_t i = 0; i < kOffset; ++i)
+                    bad += actual[i] != kFill ? 1 : 0;
                 EXPECT_EQ(bad, 0u) << shape.name << ": bytes in front of the offset moved";
                 bad = 0;
                 for (std::size_t i = 0; i < extent; ++i)
@@ -361,7 +369,8 @@ namespace MGITest {
             constexpr int kWidth = 29, kHeight = 17;
             AttachPatternRgba8(kWidth, kHeight);
             if (HasFatalFailure()) return;
-            const GLuint buffer = NewBuffer(GL_PIXEL_PACK_BUFFER, static_cast<std::size_t>(kWidth) * kHeight * 4, kFill);
+            const GLuint buffer =
+                NewBuffer(GL_PIXEL_PACK_BUFFER, static_cast<std::size_t>(kWidth) * kHeight * 4, kFill);
             glReadPixels(0, 0, kWidth, kHeight, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
             glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
 
@@ -381,7 +390,8 @@ namespace MGITest {
             for (int y = 0; y < kHeight; ++y)
                 for (int x = 0; x < kWidth; ++x) {
                     const auto expected = PatternRgba8(x, y, 0);
-                    if (std::memcmp(actual.data() + (static_cast<std::size_t>(y) * kWidth + x) * 4, expected.data(), 4) != 0 &&
+                    if (std::memcmp(actual.data() + (static_cast<std::size_t>(y) * kWidth + x) * 4, expected.data(),
+                                    4) != 0 &&
                         bad++ == 0)
                         first = "(" + std::to_string(x) + "," + std::to_string(y) + ")";
                 }
@@ -433,7 +443,8 @@ namespace MGITest {
             ASSERT_EQ(FirstGLError(), static_cast<GLenum>(GL_NO_ERROR));
             constexpr int kReads = 4;
             const SplitRuntimeState before = PeekSplitRuntime();
-            for (int i = 0; i < kReads; ++i) glReadPixels(0, 0, kWidth, kHeight, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+            for (int i = 0; i < kReads; ++i)
+                glReadPixels(0, 0, kWidth, kHeight, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
             glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
             const SplitRuntimeState after = PeekSplitRuntime();
             ASSERT_EQ(FirstGLError(), static_cast<GLenum>(GL_NO_ERROR));

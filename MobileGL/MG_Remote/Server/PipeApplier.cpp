@@ -96,7 +96,9 @@ namespace MobileGL::MG_Remote::Server {
         ++m_posted;
     }
 
-    Uint32 ReplyPool::SlotBytes() const { return m_slotBytes; }
+    Uint32 ReplyPool::SlotBytes() const {
+        return m_slotBytes;
+    }
 
     // -----------------------------------------------------------------------------------
     // ServerVerbSink - the five class-B verbs
@@ -109,8 +111,7 @@ namespace MobileGL::MG_Remote::Server {
 
     ServerVerbSink::FenceEntry& ServerVerbSink::FindFence(MG_Pipe::MGPipeHandle handle) {
         const auto it = m_fences.find(handle.Slot);
-        if (handle.Slot == 0 || it == m_fences.end() ||
-            !it->second.Live || it->second.Gen != handle.Gen) {
+        if (handle.Slot == 0 || it == m_fences.end() || !it->second.Live || it->second.Gen != handle.Gen) {
             Wire::WireProtocolFatal("Fence.handle", "missing, destroyed or stale fence handle");
         }
         return it->second;
@@ -163,8 +164,7 @@ namespace MobileGL::MG_Remote::Server {
         auto& entry = FindFence(desc.Handle);
         const auto* table = Table("FenceStatus");
         if (table == nullptr) return false;
-        result = entry.Native == nullptr || table->GL.GetSyncStatus == nullptr ||
-                 table->GL.GetSyncStatus(entry.Native);
+        result = entry.Native == nullptr || table->GL.GetSyncStatus == nullptr || table->GL.GetSyncStatus(entry.Native);
         return true;
     }
 
@@ -296,10 +296,11 @@ namespace MobileGL::MG_Remote::Server {
         if (present.FrameSerial == 0 && MGPipeServerPublishesRunAhead()) {
             // PH-1 (3): latches in an armed session child - no credit is returned for it, the
             // session closes and the peer's credit wait ends on the hang-up.
-            return SessionLatch(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"Present.FrameSerial\"} - a run-ahead "
-                    "server was handed present serial 0. The client mints this 1-based and "
-                    "waits on it for its credit (CONTRACT-P5E §2.4); returning a credit for "
-                    "serial 0 would release a wait that is asking about frame N");
+            return SessionLatch(MGFatalFamily::ProtocolCorruption,
+                                "MGPipe: Fatal{ProtocolCorruption, \"Present.FrameSerial\"} - a run-ahead "
+                                "server was handed present serial 0. The client mints this 1-based and "
+                                "waits on it for its credit (CONTRACT-P5E §2.4); returning a credit for "
+                                "serial 0 would release a wait that is asking about frame N");
         }
         m_lastPresentSerial = present.FrameSerial != 0 ? present.FrameSerial : m_presents;
         // §2.4's other half, and the reason ServerSession::ReturnPresentCredit has had no
@@ -335,12 +336,13 @@ namespace MobileGL::MG_Remote::Server {
         // about how many make-current edges have crossed, which no backend answer can fix.
         // PH-1 (3): latches in an armed session child (the peer wrote the serial); dies unarmed.
         if (reset.ContextSerial != m_applierResetSerial) {
-            return SessionLatch(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"ApplierReset.ContextSerial\"} - the "
-                    "record carries %llu and this session has accepted %llu reset(s); the "
-                    "serial is asserted against the session's own count, not dispatched on "
-                    "(one context per session in P5c)",
-                    static_cast<unsigned long long>(reset.ContextSerial),
-                    static_cast<unsigned long long>(m_applierResetSerial));
+            return SessionLatch(MGFatalFamily::ProtocolCorruption,
+                                "MGPipe: Fatal{ProtocolCorruption, \"ApplierReset.ContextSerial\"} - the "
+                                "record carries %llu and this session has accepted %llu reset(s); the "
+                                "serial is asserted against the session's own count, not dispatched on "
+                                "(one context per session in P5c)",
+                                static_cast<unsigned long long>(reset.ContextSerial),
+                                static_cast<unsigned long long>(m_applierResetSerial));
         }
         ++m_applierResetSerial;
         // THE WHOLE POINT OF THE RECORD: the reset runs HERE, on the apply thread, against
@@ -357,7 +359,9 @@ namespace MobileGL::MG_Remote::Server {
         return *this;
     }
 
-    ServerVerbSink::OwnedFd::~OwnedFd() { Reset(-1); }
+    ServerVerbSink::OwnedFd::~OwnedFd() {
+        Reset(-1);
+    }
 
     void ServerVerbSink::OwnedFd::Reset(int next) {
 #if !defined(_WIN32)
@@ -521,7 +525,8 @@ namespace MobileGL::MG_Remote::Server {
         case MG_Pipe::kMGPSharedImageQueryBufferAge: {
             MG_Backend::BackendObject* backend = ServerLoopInstance().Backend();
             if (backend == nullptr) return false;
-            reply.BufferAge = backend->QueryCurrentBufferAge((op.Format & MG_Pipe::kMGPBufferAgeDamageRegionFollows) != 0);
+            reply.BufferAge =
+                backend->QueryCurrentBufferAge((op.Format & MG_Pipe::kMGPBufferAgeDamageRegionFollows) != 0);
             return true;
         }
         case MG_Pipe::kMGPSharedImageSetDamageRegion: {
@@ -596,11 +601,12 @@ namespace MobileGL::MG_Remote::Server {
         // PH-1 (3): the refusal latches in an armed session child (the peer wrote the token);
         // unarmed it dies, like every other contract fact about a peer.
         if (!session->BindContext(bind.ClientContextToken)) {
-            return SessionLatch(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"BindContext.ClientContextToken\"} - the "
-                    "record binds token %llu, which this session never created; a bind_context "
-                    "names a context CreateContext put in the session's table, and 0 (the "
-                    "release) is the only token that needs no entry",
-                    static_cast<unsigned long long>(bind.ClientContextToken));
+            return SessionLatch(MGFatalFamily::ProtocolCorruption,
+                                "MGPipe: Fatal{ProtocolCorruption, \"BindContext.ClientContextToken\"} - the "
+                                "record binds token %llu, which this session never created; a bind_context "
+                                "names a context CreateContext put in the session's table, and 0 (the "
+                                "release) is the only token that needs no entry",
+                                static_cast<unsigned long long>(bind.ClientContextToken));
         }
         ++m_bindContexts;
 #if MOBILEGL_BUILD_DISAGGREGATED
@@ -634,22 +640,24 @@ namespace MobileGL::MG_Remote::Server {
         // not a no-op.
         // PH-1 (3): both refusals latch in an armed session child; unarmed they die as before.
         if (MG_Pipe::MGPipeHandleIsNull(death.Handle)) {
-            return SessionLatch(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"ObjectDeath.Handle\"} - a null "
-                    "handle never crosses: the client emits nothing for an object its own "
-                    "allocator cannot resolve (CONTRACT-P5C.md §5.2)");
+            return SessionLatch(MGFatalFamily::ProtocolCorruption,
+                                "MGPipe: Fatal{ProtocolCorruption, \"ObjectDeath.Handle\"} - a null "
+                                "handle never crosses: the client emits nothing for an object its own "
+                                "allocator cannot resolve (CONTRACT-P5C.md §5.2)");
         }
         if (death.Kind >= static_cast<Uint32>(MG_Pipe::MGPipeKind::KindCount)) {
-            return SessionLatch(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"ObjectDeath.Kind\"} - %u is not an "
-                    "MGPipeKind",
-                    static_cast<unsigned>(death.Kind));
+            return SessionLatch(MGFatalFamily::ProtocolCorruption,
+                                "MGPipe: Fatal{ProtocolCorruption, \"ObjectDeath.Kind\"} - %u is not an "
+                                "MGPipeKind",
+                                static_cast<unsigned>(death.Kind));
         }
         // The per-kind release, keyed by the handle the record carried. A false answer is
         // NOT a decline: the kind's own delete opcode may already have released the twin
         // (the idempotent second path every notice arm documents), and a kind this backend
         // does not twin (Buffer, whose death crosses as resource_destroy) legally resolves
         // to nothing.
-        MG_Backend::DirectGLES::ReleaseTwinsForWireObjectDeath(
-            death.Handle, static_cast<MG_Pipe::MGPipeKind>(death.Kind));
+        MG_Backend::DirectGLES::ReleaseTwinsForWireObjectDeath(death.Handle,
+                                                               static_cast<MG_Pipe::MGPipeKind>(death.Kind));
         ++m_objectDeaths;
         return true;
     }
@@ -663,19 +671,22 @@ namespace MobileGL::MG_Remote::Server {
 
     void PipeApplier::Attach(Transport::ILink* link, MG_Backend::BackendObject* backend) {
         if (!link || !link->Attached() || !m_segments)
-            SessionFail(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, PipeApplier::Attach missing link}");
+            SessionFail(MGFatalFamily::ProtocolCorruption,
+                        "MGPipe: Fatal{ProtocolCorruption, PipeApplier::Attach missing link}");
         m_verbs.SetBackend(backend);
         m_verbs.SetMaxReplyBytes(link->Capabilities().MaxReplyBytes);
         m_decoder = Wire::PipeWireDecoder(link, m_segments, m_replies);
         m_decoder.SetVerbSink(&m_verbs);
-        MG_Pipe::MGPipeServerBlockNoteIdentity(); m_attached = true;
+        MG_Pipe::MGPipeServerBlockNoteIdentity();
+        m_attached = true;
     }
 
     void PipeApplier::Attach(Transport::RingControl* control, MG_Backend::BackendObject* backend) {
         if (control == nullptr || m_segments == nullptr) {
-            SessionFail(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"PipeApplier::Attach\"} - no control "
-                    "page or no segment table; ServerSession::Accept builds both before the "
-                    "apply thread starts");
+            SessionFail(MGFatalFamily::ProtocolCorruption,
+                        "MGPipe: Fatal{ProtocolCorruption, \"PipeApplier::Attach\"} - no control "
+                        "page or no segment table; ServerSession::Accept builds both before the "
+                        "apply thread starts");
         }
         m_verbs.SetBackend(backend);
         m_decoder = Wire::PipeWireDecoder(control, m_segments, m_replies);
@@ -695,13 +706,16 @@ namespace MobileGL::MG_Remote::Server {
         m_attached = false;
     }
 
-    Bool PipeApplier::Attached() const { return m_attached; }
+    Bool PipeApplier::Attached() const {
+        return m_attached;
+    }
 
     Bool PipeApplier::ApplyOne(const Transport::RingRecordView& record) {
         if (!m_attached) {
-            SessionFail(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"PipeApplier::ApplyOne before Attach\"} "
-                    "- a record reached the applier with no decoder; the apply thread calls "
-                    "Attach once before its first pop");
+            SessionFail(MGFatalFamily::ProtocolCorruption,
+                        "MGPipe: Fatal{ProtocolCorruption, \"PipeApplier::ApplyOne before Attach\"} "
+                        "- a record reached the applier with no decoder; the apply thread calls "
+                        "Attach once before its first pop");
         }
         // R-1's INVARIANT, THE SERVER'S HALF (table 3's gPipeInputs row, c1-v1 8.1). The flag
         // is raised for the WHOLE of this function and not only around DecodeAndApply: the
@@ -720,11 +734,10 @@ namespace MobileGL::MG_Remote::Server {
         // per-opcode tables, so in a session that latches faults a short or unknown record is
         // declined before anything is stamped.
         if (!m_decoder.AdmitOrDecline(record)) return false;
-        const Bool wireSaysBarriered = MG_Pipe::MGPipeBarriered(
-            static_cast<MG_Pipe::MGPWireOp>(record.kind), record.payload, MG_Pipe::MGPipeApplier());
-        MG_Pipe::MGPipeApplierSetCurrentRecordBarriered(
-            MGPipeApplierStampsBarriered(MG_Pipe::kMGPipeP5eClientWaitRuleLanded,
-                                         MGPipeServerPublishesRunAhead(), wireSaysBarriered));
+        const Bool wireSaysBarriered = MG_Pipe::MGPipeBarriered(static_cast<MG_Pipe::MGPWireOp>(record.kind),
+                                                                record.payload, MG_Pipe::MGPipeApplier());
+        MG_Pipe::MGPipeApplierSetCurrentRecordBarriered(MGPipeApplierStampsBarriered(
+            MG_Pipe::kMGPipeP5eClientWaitRuleLanded, MGPipeServerPublishesRunAhead(), wireSaysBarriered));
         // P5e (gl), ID-128: AND WHETHER IT WAS BARRIERED BY ESCALATION RATHER THAN BY ITS CLASS.
         // The predicate above is the static wait class plus two payload-derived escalations
         // (ID-83: an open transform-feedback span, a draw carrying client vertex arrays), so the
@@ -734,8 +747,7 @@ namespace MobileGL::MG_Remote::Server {
         // client arrays (ID-82) owes, neither of which is this one.
         MG_Pipe::MGPipeApplierSetCurrentRecordBarrieredByEscalation(
             wireSaysBarriered &&
-            MG_Pipe::MGPipeWaitClassFor(static_cast<MG_Pipe::MGPWireOp>(record.kind)) ==
-                MG_Pipe::kWaitNone);
+            MG_Pipe::MGPipeWaitClassFor(static_cast<MG_Pipe::MGPWireOp>(record.kind)) == MG_Pipe::kWaitNone);
         // ORDER IS THE CONTRACT'S: stamp, then apply. The stamp is what makes any server-side
         // read of gPipeInputs legal at all (PipeApplier.h's block 1), so a record applied
         // before it aborts on the FIRST field inside SyncRenderState.
@@ -764,9 +776,13 @@ namespace MobileGL::MG_Remote::Server {
         MG_Pipe::MGPipeServerStampVerbBoundary(verb);
     }
 
-    void PipeApplier::LeaveApplier() { MG_Pipe::MGPipeServerClearVerbBoundary(); }
+    void PipeApplier::LeaveApplier() {
+        MG_Pipe::MGPipeServerClearVerbBoundary();
+    }
 
-    Uint64 PipeApplier::ResidualPullCount() const { return MG_Pipe::MGPipeResidualPullCount(); }
+    Uint64 PipeApplier::ResidualPullCount() const {
+        return MG_Pipe::MGPipeResidualPullCount();
+    }
 
     // The decoder poisons EXACTLY the runs it resolved, from inside DecodeAndApply, once the
     // applier has returned - so this entry point is the manual one, for a caller that knows a
@@ -783,8 +799,12 @@ namespace MobileGL::MG_Remote::Server {
         std::memset(const_cast<void*>(run), 0xDD, static_cast<SizeT>(size));
     }
 
-    Uint64 PipeApplier::PoisonedStageBytes() const { return m_decoder.PoisonedStageBytes(); }
+    Uint64 PipeApplier::PoisonedStageBytes() const {
+        return m_decoder.PoisonedStageBytes();
+    }
 
-    Uint64 PipeApplier::DecoderAppliedSeq() const { return m_decoder.AppliedSeq(); }
+    Uint64 PipeApplier::DecoderAppliedSeq() const {
+        return m_decoder.AppliedSeq();
+    }
 
 } // namespace MobileGL::MG_Remote::Server

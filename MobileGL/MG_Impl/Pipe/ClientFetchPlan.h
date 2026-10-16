@@ -65,9 +65,9 @@ namespace MobileGL::MG_Pipe {
     // distinguished because the two roles resolve them from different places and a reader
     // that answered one for the other would size an upload off the wrong bytes.
     enum class MGPipeClientBufferKind : Uint8 {
-        Element,        // the bound GL_ELEMENT_ARRAY_BUFFER, for the index stream
-        IndirectCommand,// the bound GL_DRAW_INDIRECT_BUFFER, for the command block
-        IndirectCount,  // the bound GL_PARAMETER_BUFFER, for an *IndirectCount form's count
+        Element,         // the bound GL_ELEMENT_ARRAY_BUFFER, for the index stream
+        IndirectCommand, // the bound GL_DRAW_INDIRECT_BUFFER, for the command block
+        IndirectCount,   // the bound GL_PARAMETER_BUFFER, for an *IndirectCount form's count
     };
 
     // Reads `size` bytes at `offset` of the named buffer on the CPU. False when the bytes do
@@ -136,7 +136,8 @@ namespace MobileGL::MG_Pipe {
                 if (!fetch.Range.Count || !fetch.Instances) continue;
                 const Uint64 first = fetch.BaseInstance;
                 const Uint64 last = first + (fetch.Instances - 1u) / divisor;
-                for (Uint64 at = first; at <= last; ++at) out.push_back(at);
+                for (Uint64 at = first; at <= last; ++at)
+                    out.push_back(at);
             }
             std::sort(out.begin(), out.end());
             out.erase(std::unique(out.begin(), out.end()), out.end());
@@ -151,9 +152,8 @@ namespace MobileGL::MG_Pipe {
             Uint32 count = indirect.DrawCount;
             if (indirect.HasParameterBuffer) {
                 Uint32 actual = 0;
-                if (reader == nullptr ||
-                    !reader(user, MGPipeClientBufferKind::IndirectCount, indirect.ParameterOffset, sizeof(actual),
-                            &actual)) {
+                if (reader == nullptr || !reader(user, MGPipeClientBufferKind::IndirectCount, indirect.ParameterOffset,
+                                                 sizeof(actual), &actual)) {
                     return false;
                 }
                 count = std::min(count, actual);
@@ -165,9 +165,8 @@ namespace MobileGL::MG_Pipe {
                 const Uint64 displacement = static_cast<Uint64>(i) * stride;
                 if (displacement > std::numeric_limits<Uint64>::max() - indirect.Offset) return false;
                 Uint32 words[5]{};
-                if (reader == nullptr ||
-                    !reader(user, MGPipeClientBufferKind::IndirectCommand, indirect.Offset + displacement,
-                            commandBytes, words)) {
+                if (reader == nullptr || !reader(user, MGPipeClientBufferKind::IndirectCommand,
+                                                 indirect.Offset + displacement, commandBytes, words)) {
                     return false;
                 }
                 Int32 bias = 0;
@@ -199,8 +198,7 @@ namespace MobileGL::MG_Pipe {
                 } else {
                     indexBytes.resize(static_cast<SizeT>(size));
                     if (reader == nullptr ||
-                        !reader(user, MGPipeClientBufferKind::Element, offset, indexBytes.size(),
-                                indexBytes.data())) {
+                        !reader(user, MGPipeClientBufferKind::Element, offset, indexBytes.size(), indexBytes.data())) {
                         return false;
                     }
                     data = indexBytes.data();

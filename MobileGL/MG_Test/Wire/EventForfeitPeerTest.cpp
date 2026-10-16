@@ -242,7 +242,8 @@ namespace {
         const std::string image = ServerImage();
         std::vector<std::string> env = SupervisorEnvironment(logBase, waitMs, forwardLog, floodLines);
         std::vector<char*> envp;
-        for (auto& entry : env) envp.push_back(entry.data());
+        for (auto& entry : env)
+            envp.push_back(entry.data());
         envp.push_back(nullptr);
         std::string argv0 = image, argv1 = endpoint, argv2 = "--serve";
         char* argv[] = {argv0.data(), argv1.data(), argv2.data(), nullptr};
@@ -289,7 +290,8 @@ namespace {
 
     std::size_t Count(const std::string& text, const std::string& needle) {
         std::size_t n = 0;
-        for (auto at = text.find(needle); at != std::string::npos; at = text.find(needle, at + needle.size())) ++n;
+        for (auto at = text.find(needle); at != std::string::npos; at = text.find(needle, at + needle.size()))
+            ++n;
         return n;
     }
 
@@ -300,7 +302,8 @@ namespace {
         const auto begin = text.rfind('\n', at);
         const auto end = text.find('\n', at);
         return text.substr(begin == std::string::npos ? 0 : begin + 1,
-                           (end == std::string::npos ? text.size() : end) - (begin == std::string::npos ? 0 : begin + 1));
+                           (end == std::string::npos ? text.size() : end) -
+                               (begin == std::string::npos ? 0 : begin + 1));
     }
 
     // Polls the supervisor's log until `needle` has appeared `times` times, or the budget runs
@@ -312,8 +315,8 @@ namespace {
         const auto start = std::chrono::steady_clock::now();
         while (std::chrono::steady_clock::now() - start < budget) {
             if (Count(ServerLog(logBase), needle) >= times) {
-                return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() -
-                                                                             start).count();
+                return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start)
+                    .count();
             }
             std::this_thread::sleep_for(every);
         }
@@ -428,8 +431,8 @@ namespace {
         desc.StorageKind = static_cast<MobileGL::Uint8>(MobileGL::TextureStorageType::Buffer);
         desc.BindMask = MGP::kMGPipeBindShaderBuffer;
         MobileGL::Int32 status = Wire::ReplySink::kStatusError;
-        if (client.EmitAndWait(MGP::MGPWireOp::ResourceCreate, &desc, sizeof(desc), nullptr, 0, nullptr, 0,
-                               &status) == Wire::kInvalidSeq ||
+        if (client.EmitAndWait(MGP::MGPWireOp::ResourceCreate, &desc, sizeof(desc), nullptr, 0, nullptr, 0, &status) ==
+                Wire::kInvalidSeq ||
             status != Wire::ReplySink::kStatusOk) {
             return kBufferCreate;
         }
@@ -469,10 +472,10 @@ namespace {
     }
 
     enum class Scenario {
-        StopsDraining,              // the peer stays, silent: NotDraining after the knob
-        KilledWhileWaiting,         // SIGKILLed while the server waits: PeerGone, at once
-        KilledWithAControlOpQueued, // the same, with a surface op stuck behind the wait
-        ControlEndsWhileWaiting,    // the peer stays; its control stream ends: Stopped, at once
+        StopsDraining,                 // the peer stays, silent: NotDraining after the knob
+        KilledWhileWaiting,            // SIGKILLed while the server waits: PeerGone, at once
+        KilledWithAControlOpQueued,    // the same, with a surface op stuck behind the wait
+        ControlEndsWhileWaiting,       // the peer stays; its control stream ends: Stopped, at once
         ControlHalfClosedWhileWaiting, // the peer half-closes control (a teardown's first act),
                                        // data still open: PeerGone, at once
     };
@@ -611,11 +614,16 @@ namespace {
 
     const char* ScenarioTag(Scenario scenario) {
         switch (scenario) {
-        case Scenario::StopsDraining: return "silent";
-        case Scenario::KilledWhileWaiting: return "kill";
-        case Scenario::KilledWithAControlOpQueued: return "kill-op";
-        case Scenario::ControlEndsWhileWaiting: return "ctl-end";
-        case Scenario::ControlHalfClosedWhileWaiting: return "ctl-half";
+        case Scenario::StopsDraining:
+            return "silent";
+        case Scenario::KilledWhileWaiting:
+            return "kill";
+        case Scenario::KilledWithAControlOpQueued:
+            return "kill-op";
+        case Scenario::ControlEndsWhileWaiting:
+            return "ctl-end";
+        case Scenario::ControlHalfClosedWhileWaiting:
+            return "ctl-half";
         }
         return "?";
     }
@@ -628,8 +636,8 @@ namespace {
         const bool killed =
             scenario == Scenario::KilledWhileWaiting || scenario == Scenario::KilledWithAControlOpQueued;
         const std::uint32_t waitMs = scenario == Scenario::StopsDraining ? kEventWaitMs : kLongEventWaitMs;
-        const std::string tag = std::string(tcp ? "stream-" : "shm-") + ScenarioTag(scenario) + "-" +
-                                std::to_string(::getpid());
+        const std::string tag =
+            std::string(tcp ? "stream-" : "shm-") + ScenarioTag(scenario) + "-" + std::to_string(::getpid());
         const std::string logBase = "/tmp/mgl-fz3-" + tag + ".log";
         MobileGL::MG_Util::Debug::TruncateRoleLogs(logBase.c_str());
         std::string endpoint, control;
@@ -649,7 +657,8 @@ namespace {
             ~Reap() { StopSupervisor(pid); }
         } reapSupervisor{supervisor};
         ASSERT_GE(WaitForLog(logBase, "listening on", 1, std::chrono::milliseconds(10000)), 0)
-            << "the supervisor never listened\n" << ServerLog(logBase);
+            << "the supervisor never listened\n"
+            << ServerLog(logBase);
 
         int published[2] = {-1, -1}, release[2] = {-1, -1};
         ASSERT_EQ(::pipe(published), 0);
@@ -719,21 +728,25 @@ namespace {
             }
             const long long stoppedMs = WaitForLog(logBase, "mgl-srv-apply stops on ReverseChannelForfeit", 1,
                                                    std::chrono::milliseconds(waitMs + 20000));
-            const auto stoppedAfterEnd = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                             std::chrono::steady_clock::now() - endedAt).count();
-            const long long reapedMs = WaitForLog(logBase, "reaped exit=0 sessionsFaulted=0", 1,
-                                                  std::chrono::milliseconds(waitMs + 20000));
+            const auto stoppedAfterEnd =
+                std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - endedAt)
+                    .count();
+            const long long reapedMs =
+                WaitForLog(logBase, "reaped exit=0 sessionsFaulted=0", 1, std::chrono::milliseconds(waitMs + 20000));
             const std::string log = ServerLog(logBase);
             ASSERT_GE(stoppedMs, 0) << "the server never stopped on a forfeit\n" << log;
             ASSERT_GE(reapedMs, 0) << "the supervisor never reaped the session with exit 0\n" << log;
             const std::string forfeit = LineWith(log, "ReverseChannelForfeit{");
             EXPECT_NE(forfeit.find(expected), std::string::npos)
-                << "the early end of the wait was not named " << expected << "\n" << log;
+                << "the early end of the wait was not named " << expected << "\n"
+                << log;
             EXPECT_NE(forfeit.find(WaitKnobEntry(waitMs)), std::string::npos)
-                << "the forfeit did not run against the knob this supervisor was given\n" << log;
+                << "the forfeit did not run against the knob this supervisor was given\n"
+                << log;
             if (scenario == Scenario::ControlEndsWhileWaiting) {
                 EXPECT_NE(log.find("control frame is 4 bytes"), std::string::npos)
-                    << "the malformed control frame never reached the server's control loop\n" << log;
+                    << "the malformed control frame never reached the server's control loop\n"
+                    << log;
             }
             // WELL INSIDE THE KNOB: from a descriptor or the stop request, not from the 8000 ms
             // running out, and not from Stop()'s 5000 ms join either.
@@ -743,28 +756,32 @@ namespace {
         } else {
             // The server waits the knob, forfeits by name, stops the apply thread, ends the session;
             // the supervisor reaps it. Budget: the knob plus generous slack - and far under 30 s.
-            const long long stoppedMs =
-                WaitForLog(logBase, "mgl-srv-apply stops on ReverseChannelForfeit", 1,
-                           std::chrono::milliseconds(waitMs + 20000));
-            const long long reapedMs = WaitForLog(logBase, "reaped exit=0 sessionsFaulted=0", 1,
-                                                  std::chrono::milliseconds(waitMs + 20000));
-            const auto sinceReadbacks = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                            std::chrono::steady_clock::now() - published_at).count();
+            const long long stoppedMs = WaitForLog(logBase, "mgl-srv-apply stops on ReverseChannelForfeit", 1,
+                                                   std::chrono::milliseconds(waitMs + 20000));
+            const long long reapedMs =
+                WaitForLog(logBase, "reaped exit=0 sessionsFaulted=0", 1, std::chrono::milliseconds(waitMs + 20000));
+            const auto sinceReadbacks =
+                std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - published_at)
+                    .count();
             const std::string log = ServerLog(logBase);
             ASSERT_GE(stoppedMs, 0) << "the server never stopped on a forfeit\n" << log;
             ASSERT_GE(reapedMs, 0) << "the supervisor never reaped the forfeited session with exit 0\n" << log;
             const std::string forfeit = LineWith(log, "ReverseChannelForfeit{");
             EXPECT_NE(forfeit.find("ReverseChannelForfeit{NotDraining} - kEventBufferWriteback"), std::string::npos)
-                << "the forfeit was not named for the event that could not be placed\n" << log;
+                << "the forfeit was not named for the event that could not be placed\n"
+                << log;
             // THE VARIABLE WAS READ: the budget the server names is the one this supervisor was
             // given, not the 2000 ms default it would fall back to.
             EXPECT_NE(forfeit.find(WaitKnobEntry(waitMs)), std::string::npos)
-                << "the server did not wait against the MOBILEGL_IPC_EVENT_WAIT_MS it was given\n" << log;
+                << "the server did not wait against the MOBILEGL_IPC_EVENT_WAIT_MS it was given\n"
+                << log;
             EXPECT_NE(log.find("mgl-srv-apply stops on ReverseChannelForfeit - 1 reverse-channel event(s) dropped"),
                       std::string::npos)
-                << "the drop was not counted (one event: the fifth writeback)\n" << log;
+                << "the drop was not counted (one event: the fifth writeback)\n"
+                << log;
             EXPECT_NE(log.find("the apply thread has stopped (ReverseChannelForfeit"), std::string::npos)
-                << "the session child did not end the session from the server's side\n" << log;
+                << "the session child did not end the session from the server's side\n"
+                << log;
             EXPECT_EQ(log.find("Fatal{EventRingOverflow"), std::string::npos) << log;
             EXPECT_EQ(log.find("reaped signal="), std::string::npos) << "a session died of a signal\n" << log;
             // THE KNOB, NOT 30 s: the forfeit waited most of MOBILEGL_IPC_EVENT_WAIT_MS (it cannot
@@ -782,9 +799,11 @@ namespace {
         if (next == 0) NextPeer(control);
         const int nextCode = WaitChild(next, std::chrono::milliseconds(30000));
         EXPECT_EQ(nextCode, static_cast<int>(kChildOk))
-            << "the next connection was not welcomed (child exit " << nextCode << ")\n" << ServerLog(logBase);
+            << "the next connection was not welcomed (child exit " << nextCode << ")\n"
+            << ServerLog(logBase);
         EXPECT_GE(WaitForLog(logBase, "reaped exit=0 sessionsFaulted=0", 2, std::chrono::milliseconds(10000)), 0)
-            << "the welcomed session did not end cleanly\n" << ServerLog(logBase);
+            << "the welcomed session did not end cleanly\n"
+            << ServerLog(logBase);
         EXPECT_EQ(Count(ServerLog(logBase), "Refuse{Busy}"), 0u) << ServerLog(logBase);
         RemoveRoleLogsIfGreen(logBase);
     }
@@ -842,18 +861,20 @@ namespace {
         ::close(published[0]);
         const auto published_at = std::chrono::steady_clock::now();
         const int code = WaitChild(peer, std::chrono::milliseconds(kLaunchedEventWaitMs + 20000));
-        const auto sinceReadbacks = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                        std::chrono::steady_clock::now() - published_at).count();
+        const auto sinceReadbacks =
+            std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - published_at)
+                .count();
         const std::string log = ServerLog(logBase);
         ASSERT_EQ(got, 1) << "the peer did not reach its readbacks (child exit " << code << ")\n" << log;
         EXPECT_EQ(code, static_cast<int>(kChildOk))
-            << "the launched server was not reaped with exit 0 (child exit " << code << ")\n" << log;
-        const std::string forfeit = LineWith(log, "ReverseChannelForfeit{");
-        EXPECT_NE(forfeit.find("ReverseChannelForfeit{NotDraining} - kEventBufferWriteback"), std::string::npos)
+            << "the launched server was not reaped with exit 0 (child exit " << code << ")\n"
             << log;
+        const std::string forfeit = LineWith(log, "ReverseChannelForfeit{");
+        EXPECT_NE(forfeit.find("ReverseChannelForfeit{NotDraining} - kEventBufferWriteback"), std::string::npos) << log;
         EXPECT_NE(forfeit.find(WaitKnobEntry(kLaunchedEventWaitMs)), std::string::npos)
             << "the launched server did not wait against the knob its client exported - the launcher "
-               "scrubbed it\n" << log;
+               "scrubbed it\n"
+            << log;
         EXPECT_NE(log.find("the apply thread has stopped (ReverseChannelForfeit"), std::string::npos) << log;
         EXPECT_EQ(log.find("Fatal{"), std::string::npos) << log;
         EXPECT_GE(sinceReadbacks, static_cast<long long>(kLaunchedEventWaitMs) * 8 / 10) << log;
@@ -868,7 +889,8 @@ namespace {
         if (FILE* file = std::fopen(path.c_str(), "rb")) {
             char chunk[65536];
             std::size_t got = 0;
-            while ((got = std::fread(chunk, 1, sizeof(chunk), file)) > 0) all.append(chunk, got);
+            while ((got = std::fread(chunk, 1, sizeof(chunk), file)) > 0)
+                all.append(chunk, got);
             std::fclose(file);
         }
         return all;
@@ -893,7 +915,8 @@ namespace {
     // The sum of the counts the in-stream LogForward{Dropped} notices name.
     unsigned long long NamedDrops(const std::string& text) {
         unsigned long long sum = 0;
-        for (const auto count : Indices(text, "LogForward{Dropped} - ")) sum += count;
+        for (const auto count : Indices(text, "LogForward{Dropped} - "))
+            sum += count;
         return sum;
     }
 
@@ -914,9 +937,8 @@ namespace {
         if (client.StartSpawned() != MOBILEGL_OK) ::_exit(kNoWelcome);
         int originalReceiveBuffer = 0;
         if (alsoStopDraining) {
-            const int filled = FillTheEventRingWithoutDraining(client, [&] {
-                return StopReadingControlAndFlood(client, originalReceiveBuffer);
-            });
+            const int filled = FillTheEventRingWithoutDraining(
+                client, [&] { return StopReadingControlAndFlood(client, originalReceiveBuffer); });
             if (filled != kChildOk) ::_exit(filled);
         } else {
             const int up = BringUpPbufferContext();
@@ -930,8 +952,8 @@ namespace {
         (void)::read(release, &go, 1);
         if (alsoStopDraining) ::_exit(kChildOk);
         // End the receive-window fault before waiting for the ack behind the queued logs.
-        if (::setsockopt(client.ControlSocketForTest()->StreamFd(), SOL_SOCKET, SO_RCVBUF,
-                         &originalReceiveBuffer, sizeof(originalReceiveBuffer)) != 0)
+        if (::setsockopt(client.ControlSocketForTest()->StreamFd(), SOL_SOCKET, SO_RCVBUF, &originalReceiveBuffer,
+                         sizeof(originalReceiveBuffer)) != 0)
             ::_exit(kControlBuffer);
         if (!client.PauseControlReaderForTest(false)) ::_exit(kNoControlReader);
         client.SyncPeerLog();
@@ -944,8 +966,8 @@ namespace {
     void RunLogFloodArm(bool alsoStopDraining) {
         std::signal(SIGPIPE, SIG_IGN); // as RunArm: no write in this file may kill the test process
         PinHeadlessEgl();
-        const std::string tag = std::string("stream-flood-") + (alsoStopDraining ? "undrained-" : "") +
-                                std::to_string(::getpid());
+        const std::string tag =
+            std::string("stream-flood-") + (alsoStopDraining ? "undrained-" : "") + std::to_string(::getpid());
         const std::string logBase = "/tmp/mgl-fz3-" + tag + ".log";
         const std::string peerBase = "/tmp/mgl-fz3-" + tag + "-peer.log";
         const std::string peerLogPath =
@@ -964,7 +986,8 @@ namespace {
             ~Reap() { StopSupervisor(pid); }
         } reapSupervisor{supervisor};
         ASSERT_GE(WaitForLog(logBase, "listening on", 1, std::chrono::milliseconds(10000)), 0)
-            << "the supervisor never listened\n" << ServerLog(logBase);
+            << "the supervisor never listened\n"
+            << ServerLog(logBase);
 
         int published[2] = {-1, -1}, release[2] = {-1, -1}, synced[2] = {-1, -1};
         ASSERT_EQ(::pipe(published), 0);
@@ -1021,9 +1044,9 @@ namespace {
             // own log must reach the flood's last record: every one of the kFloodRecords records is
             // applied (and logs its ERROR line) while the control connection takes no byte. A forward
             // that waits on the socket stalls the apply thread a few MiB in, and this never arrives.
-            const long long reachedMs = WaitForLog(logBase, kFloodErrorNeedle, kFloodRecords,
-                                                   std::chrono::milliseconds(kFloodWithinMs),
-                                                   std::chrono::milliseconds(50));
+            const long long reachedMs =
+                WaitForLog(logBase, kFloodErrorNeedle, kFloodRecords, std::chrono::milliseconds(kFloodWithinMs),
+                           std::chrono::milliseconds(50));
             ASSERT_GE(reachedMs, 0) << "the apply thread did not get through the flood while its client was not "
                                        "reading control - it was held by logging ("
                                     << Count(ServerLog(logBase), kFloodErrorNeedle) << " of " << kFloodRecords
@@ -1036,7 +1059,8 @@ namespace {
             const char go = 1;
             ASSERT_EQ(::write(release[1], &go, 1), 1);
             struct pollfd wait{synced[0], POLLIN, 0};
-            ASSERT_EQ(::poll(&wait, 1, 30000), 1) << "the peer never finished SyncPeerLog\n" << ServerLog(logBase).substr(0, 20000);
+            ASSERT_EQ(::poll(&wait, 1, 30000), 1) << "the peer never finished SyncPeerLog\n"
+                                                  << ServerLog(logBase).substr(0, 20000);
             ASSERT_EQ(::read(synced[0], &byte, 1), 1) << "the peer died in SyncPeerLog (child exit "
                                                       << WaitChild(peer, std::chrono::milliseconds(5000)) << ")";
             ::close(synced[0]);
@@ -1090,7 +1114,8 @@ namespace {
             // ERROR line, not a guess at the socket's buffer growth.
             EXPECT_LE(Field(summary, "notices"), static_cast<unsigned long long>(kFloodRecords / 10)) << summary;
             EXPECT_LT(Field(summary, "max-offer-us"), kMaxOfferUs)
-                << "one forward held its logging thread for longer than " << kMaxOfferUs << " us\n" << summary;
+                << "one forward held its logging thread for longer than " << kMaxOfferUs << " us\n"
+                << summary;
             EXPECT_EQ(serverLog.find("Fatal{"), std::string::npos);
         } else {
             ::close(synced[0]);
@@ -1132,7 +1157,8 @@ namespace {
             if (next == 0) NextPeer(endpoint);
             const int nextCode = WaitChild(next, std::chrono::milliseconds(30000));
             EXPECT_EQ(nextCode, static_cast<int>(kChildOk)) << "the next connection was not welcomed";
-            EXPECT_GE(WaitForLog(logBase, "reaped exit=0 sessionsFaulted=0", 2, std::chrono::milliseconds(10000), every), 0)
+            EXPECT_GE(
+                WaitForLog(logBase, "reaped exit=0 sessionsFaulted=0", 2, std::chrono::milliseconds(10000), every), 0)
                 << "the welcomed session did not end cleanly";
         }
         RemoveRoleLogsIfGreen(logBase);
@@ -1166,7 +1192,9 @@ TEST(EventForfeitPeer, ShmControlHalfClosedWhileTheServerWaitsIsPeerGone) {
     RunArm(false, Scenario::ControlHalfClosedWhileWaiting);
 }
 
-TEST(EventForfeitPeer, ShmLaunchedServerTakesTheWaitKnobThroughTheScrubbedEnvironment) { RunLaunchedArm(); }
+TEST(EventForfeitPeer, ShmLaunchedServerTakesTheWaitKnobThroughTheScrubbedEnvironment) {
+    RunLaunchedArm();
+}
 
 TEST(EventForfeitPeer, StreamPeerThatStopsDrainingIsForfeitedAndTheNextConnectionIsWelcomed) {
     RunArm(true, Scenario::StopsDraining);

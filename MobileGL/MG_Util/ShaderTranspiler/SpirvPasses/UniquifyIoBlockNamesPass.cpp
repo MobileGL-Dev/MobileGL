@@ -66,10 +66,8 @@ namespace MobileGL {
                                                    const std::unordered_set<uint32_t>& blockStructIds,
                                                    spv::StorageClass& outStorageClass) {
                     if (variable.opcode() != spv::Op::OpVariable) return 0;
-                    const auto storageClass =
-                        static_cast<spv::StorageClass>(variable.GetSingleWordInOperand(0));
-                    if (storageClass != spv::StorageClass::Input &&
-                        storageClass != spv::StorageClass::Output) {
+                    const auto storageClass = static_cast<spv::StorageClass>(variable.GetSingleWordInOperand(0));
+                    if (storageClass != spv::StorageClass::Input && storageClass != spv::StorageClass::Output) {
                         return 0;
                     }
 
@@ -129,8 +127,7 @@ namespace MobileGL {
                     std::unordered_map<uint32_t, Uint32> storageMaskByStructId;
                 };
 
-                IoBlockIndex IndexIoBlocks(IRContext* irContext,
-                                           const std::unordered_set<uint32_t>& blockStructIds) {
+                IoBlockIndex IndexIoBlocks(IRContext* irContext, const std::unordered_set<uint32_t>& blockStructIds) {
                     IoBlockIndex index;
                     for (Instruction& variable : irContext->module()->types_values()) {
                         spv::StorageClass storageClass = spv::StorageClass::Input;
@@ -196,8 +193,7 @@ namespace MobileGL {
                     const Bool isInput = direction == 0;
                     const std::map<String, uint32_t>& byName =
                         isInput ? index.inputStructByName : index.outputStructByName;
-                    const std::map<String, String>& renames =
-                        isInput ? m_inputBlockRenames : m_outputBlockRenames;
+                    const std::map<String, String>& renames = isInput ? m_inputBlockRenames : m_outputBlockRenames;
                     const Uint32 wantedMask = isInput ? kSeenAsInput : kSeenAsOutput;
 
                     for (const auto& block : byName) {
@@ -221,10 +217,10 @@ namespace MobileGL {
             }
 
             spvtools::Optimizer::PassToken UniquifyIoBlockNamesPass::CreateUniquifyIoBlockNamesPass(
-                const std::map<String, String>& inputBlockRenames,
-                const std::map<String, String>& outputBlockRenames, std::set<String>* renamedBlockNames) {
-                return spvtools::Optimizer::PassToken(MakeUnique<UniquifyIoBlockNamesPass>(
-                    inputBlockRenames, outputBlockRenames, renamedBlockNames));
+                const std::map<String, String>& inputBlockRenames, const std::map<String, String>& outputBlockRenames,
+                std::set<String>* renamedBlockNames) {
+                return spvtools::Optimizer::PassToken(
+                    MakeUnique<UniquifyIoBlockNamesPass>(inputBlockRenames, outputBlockRenames, renamedBlockNames));
             }
         } // namespace ShaderTranspiler
     } // namespace MG_Util

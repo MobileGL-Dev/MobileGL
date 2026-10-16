@@ -91,8 +91,10 @@ void main()
                 if (!Ready()) return;
                 glBindProgramPipeline(0);
                 glUseProgram(0);
-                for (GLuint p : m_programs) glDeleteProgram(p);
-                for (GLuint p : m_pipelines) glDeleteProgramPipelines(1, &p);
+                for (GLuint p : m_programs)
+                    glDeleteProgram(p);
+                for (GLuint p : m_pipelines)
+                    glDeleteProgramPipelines(1, &p);
                 m_programs.clear();
                 m_pipelines.clear();
             }
@@ -139,8 +141,7 @@ void main()
                 if (Gl().BackendName() == "DirectVulkan") return true;
                 GLint maxFragmentImageUniforms = 0;
                 glGetIntegerv(GL_MAX_FRAGMENT_IMAGE_UNIFORMS, &maxFragmentImageUniforms);
-                while (glGetError() != GL_NO_ERROR) {
-                }
+                while (glGetError() != GL_NO_ERROR) {}
                 // One per element of the four-element array either fragment program declares.
                 return maxFragmentImageUniforms >= 4;
             }
@@ -150,8 +151,7 @@ void main()
             bool ImagesAreUsable() const {
                 GLint maxImageUnits = 0;
                 glGetIntegerv(GL_MAX_IMAGE_UNITS, &maxImageUnits);
-                while (glGetError() != GL_NO_ERROR) {
-                }
+                while (glGetError() != GL_NO_ERROR) {}
                 return maxImageUnits >= 8;
             }
 

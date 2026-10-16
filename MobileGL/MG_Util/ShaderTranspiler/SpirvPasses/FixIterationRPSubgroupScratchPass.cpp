@@ -87,8 +87,7 @@ namespace MobileGL {
                         type = defUseMgr->GetDef(type->GetSingleWordInOperand(0));
                         if (type == nullptr) return 0u;
                     }
-                    if (type->opcode() != spv::Op::OpTypeFloat ||
-                        type->GetSingleWordInOperand(0) != 32u) {
+                    if (type->opcode() != spv::Op::OpTypeFloat || type->GetSingleWordInOperand(0) != 32u) {
                         return 0u;
                     }
                     return components;
@@ -105,8 +104,8 @@ namespace MobileGL {
                 // budget check matters. Returns false for anything not modelled here,
                 // which the caller answers by declining to grow at all rather than by
                 // certifying growth against a total it knows is an underestimate.
-                bool WorkgroupTypeLayout(IRContext* context, uint32_t typeId, uint32_t* size,
-                                         uint32_t* alignment, uint32_t depth = 0u) {
+                bool WorkgroupTypeLayout(IRContext* context, uint32_t typeId, uint32_t* size, uint32_t* alignment,
+                                         uint32_t depth = 0u) {
                     if (depth > 8u) return false;
                     auto* defUseMgr = context->get_def_use_mgr();
                     const Instruction* type = defUseMgr->GetDef(typeId);
@@ -127,8 +126,8 @@ namespace MobileGL {
                     case spv::Op::OpTypeVector: {
                         uint32_t componentSize = 0u;
                         uint32_t componentAlignment = 0u;
-                        if (!WorkgroupTypeLayout(context, type->GetSingleWordInOperand(0),
-                                                 &componentSize, &componentAlignment, depth + 1u)) {
+                        if (!WorkgroupTypeLayout(context, type->GetSingleWordInOperand(0), &componentSize,
+                                                 &componentAlignment, depth + 1u)) {
                             return false;
                         }
                         const uint32_t components = type->GetSingleWordInOperand(1);
@@ -150,10 +149,9 @@ namespace MobileGL {
                         if (type->opcode() == spv::Op::OpTypeMatrix) {
                             count = type->GetSingleWordInOperand(1);
                         } else {
-                            const Instruction* length =
-                                defUseMgr->GetDef(type->GetSingleWordInOperand(1));
+                            const Instruction* length = defUseMgr->GetDef(type->GetSingleWordInOperand(1));
                             if (length == nullptr || length->opcode() != spv::Op::OpConstant) {
-                                return false;  // spec-constant length: not sizeable here
+                                return false; // spec-constant length: not sizeable here
                             }
                             count = length->GetSingleWordInOperand(0);
                         }
@@ -167,8 +165,8 @@ namespace MobileGL {
                         for (uint32_t i = 0; i < type->NumInOperands(); ++i) {
                             uint32_t memberSize = 0u;
                             uint32_t memberAlignment = 0u;
-                            if (!WorkgroupTypeLayout(context, type->GetSingleWordInOperand(i),
-                                                     &memberSize, &memberAlignment, depth + 1u)) {
+                            if (!WorkgroupTypeLayout(context, type->GetSingleWordInOperand(i), &memberSize,
+                                                     &memberAlignment, depth + 1u)) {
                                 return false;
                             }
                             offset = RoundUp(offset, memberAlignment) + memberSize;
@@ -222,14 +220,12 @@ namespace MobileGL {
                 };
                 uint32_t localSize[3] = {0, 0, 0};
                 bool haveLocalSize = false;
-                if (Instruction* workgroupSize =
-                        FindBuiltinDefinition(irContext, spv::BuiltIn::WorkgroupSize)) {
+                if (Instruction* workgroupSize = FindBuiltinDefinition(irContext, spv::BuiltIn::WorkgroupSize)) {
                     if (workgroupSize->opcode() == spv::Op::OpConstantComposite &&
                         workgroupSize->NumInOperands() == 3) {
-                        haveLocalSize =
-                            resolveUintConstant(workgroupSize->GetSingleWordInOperand(0), &localSize[0]) &&
-                            resolveUintConstant(workgroupSize->GetSingleWordInOperand(1), &localSize[1]) &&
-                            resolveUintConstant(workgroupSize->GetSingleWordInOperand(2), &localSize[2]);
+                        haveLocalSize = resolveUintConstant(workgroupSize->GetSingleWordInOperand(0), &localSize[0]) &&
+                                        resolveUintConstant(workgroupSize->GetSingleWordInOperand(1), &localSize[1]) &&
+                                        resolveUintConstant(workgroupSize->GetSingleWordInOperand(2), &localSize[2]);
                     }
                 }
                 if (!haveLocalSize) {
@@ -248,13 +244,12 @@ namespace MobileGL {
                 if (!haveLocalSize || localSize[0] == 0u || localSize[1] == 0u || localSize[2] == 0u) {
                     return Status::SuccessWithoutChange;
                 }
-                const uint64_t totalInvocations =
-                    static_cast<uint64_t>(localSize[0]) * localSize[1] * localSize[2];
+                const uint64_t totalInvocations = static_cast<uint64_t>(localSize[0]) * localSize[1] * localSize[2];
                 if (totalInvocations == 0u || totalInvocations > (1u << 20)) {
                     return Status::SuccessWithoutChange;
                 }
-                const uint32_t requiredLength = static_cast<uint32_t>(
-                    (totalInvocations + m_nativeSubgroupSize - 1u) / m_nativeSubgroupSize);
+                const uint32_t requiredLength =
+                    static_cast<uint32_t>((totalInvocations + m_nativeSubgroupSize - 1u) / m_nativeSubgroupSize);
 
                 // Fingerprint 2: a subgroup scan over a 32-bit float value - the pack's
                 // prefix-sum reduction, and the reason its scratch is indexed per subgroup.
@@ -268,8 +263,7 @@ namespace MobileGL {
                                 continue;
                             }
                             if (inst.NumInOperands() < 2) continue;
-                            if (!IsScanOrReduce(static_cast<spv::GroupOperation>(
-                                    inst.GetSingleWordInOperand(1)))) {
+                            if (!IsScanOrReduce(static_cast<spv::GroupOperation>(inst.GetSingleWordInOperand(1)))) {
                                 continue;
                             }
                             if (Float32ComponentCount(irContext, inst.type_id()) != 0u) {
@@ -283,10 +277,8 @@ namespace MobileGL {
                 }
 
                 // gl_SubgroupID, whose value range the pack's scratch size bakes in.
-                const Instruction* subgroupIdVariable =
-                    FindBuiltinDefinition(irContext, spv::BuiltIn::SubgroupId);
-                if (subgroupIdVariable == nullptr ||
-                    subgroupIdVariable->opcode() != spv::Op::OpVariable) {
+                const Instruction* subgroupIdVariable = FindBuiltinDefinition(irContext, spv::BuiltIn::SubgroupId);
+                if (subgroupIdVariable == nullptr || subgroupIdVariable->opcode() != spv::Op::OpVariable) {
                     return Status::SuccessWithoutChange;
                 }
                 const uint32_t subgroupIdVariableId = subgroupIdVariable->result_id();
@@ -316,8 +308,8 @@ namespace MobileGL {
                                 if (target == nullptr || target->opcode() != spv::Op::OpVariable) {
                                     continue;
                                 }
-                                const auto storageClass = static_cast<spv::StorageClass>(
-                                    target->GetSingleWordInOperand(0));
+                                const auto storageClass =
+                                    static_cast<spv::StorageClass>(target->GetSingleWordInOperand(0));
                                 if (storageClass != spv::StorageClass::Function &&
                                     storageClass != spv::StorageClass::Private) {
                                     continue;
@@ -340,22 +332,20 @@ namespace MobileGL {
                     for (auto& function : *irContext->module()) {
                         for (auto& block : function) {
                             for (auto& inst : block) {
-                                if (inst.result_id() == 0 ||
-                                    subgroupIdValues.count(inst.result_id())) {
+                                if (inst.result_id() == 0 || subgroupIdValues.count(inst.result_id())) {
                                     continue;
                                 }
                                 bool isSubgroupId = false;
                                 switch (inst.opcode()) {
                                 case spv::Op::OpLoad: {
                                     const uint32_t pointerId = inst.GetSingleWordInOperand(0);
-                                    isSubgroupId = pointerId == subgroupIdVariableId ||
-                                                   subgroupIdVariables.count(pointerId) != 0u;
+                                    isSubgroupId =
+                                        pointerId == subgroupIdVariableId || subgroupIdVariables.count(pointerId) != 0u;
                                     break;
                                 }
                                 case spv::Op::OpCopyObject:
                                 case spv::Op::OpBitcast:
-                                    isSubgroupId =
-                                        subgroupIdValues.count(inst.GetSingleWordInOperand(0)) != 0u;
+                                    isSubgroupId = subgroupIdValues.count(inst.GetSingleWordInOperand(0)) != 0u;
                                     break;
                                 default:
                                     break;
@@ -384,12 +374,9 @@ namespace MobileGL {
                             }
                             if (inst.NumInOperands() < 2) continue;
                             if (!subgroupIdValues.count(inst.GetSingleWordInOperand(1))) continue;
-                            Instruction* baseVariable =
-                                defUseMgr->GetDef(inst.GetSingleWordInOperand(0));
-                            if (baseVariable == nullptr ||
-                                baseVariable->opcode() != spv::Op::OpVariable ||
-                                static_cast<spv::StorageClass>(
-                                    baseVariable->GetSingleWordInOperand(0)) !=
+                            Instruction* baseVariable = defUseMgr->GetDef(inst.GetSingleWordInOperand(0));
+                            if (baseVariable == nullptr || baseVariable->opcode() != spv::Op::OpVariable ||
+                                static_cast<spv::StorageClass>(baseVariable->GetSingleWordInOperand(0)) !=
                                     spv::StorageClass::Workgroup) {
                                 continue;
                             }
@@ -442,16 +429,14 @@ namespace MobileGL {
                     if (pointerType == nullptr || pointerType->opcode() != spv::Op::OpTypePointer) {
                         continue;
                     }
-                    const Instruction* arrayType =
-                        defUseMgr->GetDef(pointerType->GetSingleWordInOperand(1));
+                    const Instruction* arrayType = defUseMgr->GetDef(pointerType->GetSingleWordInOperand(1));
                     if (arrayType == nullptr || arrayType->opcode() != spv::Op::OpTypeArray) {
                         continue;
                     }
                     const uint32_t elementTypeId = arrayType->GetSingleWordInOperand(0);
                     const uint32_t components = Float32ComponentCount(irContext, elementTypeId);
                     if (components == 0u) continue;
-                    const Instruction* lengthConstant =
-                        defUseMgr->GetDef(arrayType->GetSingleWordInOperand(1));
+                    const Instruction* lengthConstant = defUseMgr->GetDef(arrayType->GetSingleWordInOperand(1));
                     if (lengthConstant == nullptr || lengthConstant->opcode() != spv::Op::OpConstant) {
                         continue;
                     }
@@ -486,10 +471,9 @@ namespace MobileGL {
                         const Instruction* pointerType = defUseMgr->GetDef(global.type_id());
                         uint32_t bytes = 0u;
                         uint32_t alignment = 0u;
-                        if (pointerType == nullptr ||
-                            pointerType->opcode() != spv::Op::OpTypePointer ||
-                            !WorkgroupTypeLayout(irContext, pointerType->GetSingleWordInOperand(1),
-                                                 &bytes, &alignment)) {
+                        if (pointerType == nullptr || pointerType->opcode() != spv::Op::OpTypePointer ||
+                            !WorkgroupTypeLayout(irContext, pointerType->GetSingleWordInOperand(1), &bytes,
+                                                 &alignment)) {
                             sawUnsizeable = true;
                             break;
                         }
@@ -501,11 +485,11 @@ namespace MobileGL {
                     if (sawUnsizeable) {
                         return Status::SuccessWithoutChange;
                     }
-                    for (const Growth& growth : growths) declaredBytes += growth.addedBytes;
+                    for (const Growth& growth : growths)
+                        declaredBytes += growth.addedBytes;
 
-                    const uint32_t deviceBudget = m_maxWorkgroupScratchBytes != 0u
-                                                      ? m_maxWorkgroupScratchBytes
-                                                      : kMinimumSharedMemoryBytes;
+                    const uint32_t deviceBudget =
+                        m_maxWorkgroupScratchBytes != 0u ? m_maxWorkgroupScratchBytes : kMinimumSharedMemoryBytes;
                     if (declaredBytes > deviceBudget) {
                         return Status::SuccessWithoutChange;
                     }
@@ -524,20 +508,17 @@ namespace MobileGL {
                     const uint32_t newLengthId = irContext->TakeNextId();
                     variable->InsertBefore(spvtools::MakeUnique<Instruction>(
                         irContext, spv::Op::OpConstant, growth.lengthTypeId, newLengthId,
-                        Instruction::OperandList{{SPV_OPERAND_TYPE_TYPED_LITERAL_NUMBER,
-                                                  {requiredLength}}}));
+                        Instruction::OperandList{{SPV_OPERAND_TYPE_TYPED_LITERAL_NUMBER, {requiredLength}}}));
                     const uint32_t newArrayTypeId = irContext->TakeNextId();
                     variable->InsertBefore(spvtools::MakeUnique<Instruction>(
                         irContext, spv::Op::OpTypeArray, 0, newArrayTypeId,
-                        Instruction::OperandList{
-                            {SPV_OPERAND_TYPE_ID, {growth.elementTypeId}},
-                            {SPV_OPERAND_TYPE_ID, {newLengthId}}}));
+                        Instruction::OperandList{{SPV_OPERAND_TYPE_ID, {growth.elementTypeId}},
+                                                 {SPV_OPERAND_TYPE_ID, {newLengthId}}}));
                     const uint32_t newPointerTypeId = irContext->TakeNextId();
                     variable->InsertBefore(spvtools::MakeUnique<Instruction>(
                         irContext, spv::Op::OpTypePointer, 0, newPointerTypeId,
                         Instruction::OperandList{
-                            {SPV_OPERAND_TYPE_STORAGE_CLASS,
-                             {static_cast<uint32_t>(spv::StorageClass::Workgroup)}},
+                            {SPV_OPERAND_TYPE_STORAGE_CLASS, {static_cast<uint32_t>(spv::StorageClass::Workgroup)}},
                             {SPV_OPERAND_TYPE_ID, {newArrayTypeId}}}));
 
                     variable->SetResultType(newPointerTypeId);
@@ -547,11 +528,10 @@ namespace MobileGL {
                 return Status::SuccessWithChange;
             }
 
-            spvtools::Optimizer::PassToken
-            FixIterationRPSubgroupScratchPass::CreateFixIterationRPSubgroupScratchPass(
+            spvtools::Optimizer::PassToken FixIterationRPSubgroupScratchPass::CreateFixIterationRPSubgroupScratchPass(
                 const Uint32 nativeSubgroupSize, const Uint32 maxWorkgroupScratchBytes) {
-                return spvtools::Optimizer::PassToken(MakeUnique<FixIterationRPSubgroupScratchPass>(
-                    nativeSubgroupSize, maxWorkgroupScratchBytes));
+                return spvtools::Optimizer::PassToken(
+                    MakeUnique<FixIterationRPSubgroupScratchPass>(nativeSubgroupSize, maxWorkgroupScratchBytes));
             }
         } // namespace ShaderTranspiler
     } // namespace MG_Util

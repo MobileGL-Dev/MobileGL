@@ -88,8 +88,9 @@ namespace MobileGL::MG_Remote::Client {
         if (!g_declineLogged.exchange(true)) {
             ServerProbeTarget target;
             (void)ConfiguredProbeTarget(&target);
-            const auto tookUs = std::chrono::duration_cast<std::chrono::microseconds>(
-                                    std::chrono::steady_clock::now() - started).count();
+            const auto tookUs =
+                std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started)
+                    .count();
             MGLOG_I("MG_Remote client: no MobileGL server answers at \"%s\" (probed in %lld us); declining, so "
                     "the system's next GL implementation serves this process",
                     target.endpoint.c_str(), static_cast<long long>(tookUs));

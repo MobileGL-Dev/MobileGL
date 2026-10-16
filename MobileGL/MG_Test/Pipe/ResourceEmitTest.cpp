@@ -110,8 +110,7 @@ namespace {
     // It is also the negative control for the registration itself. A Set that did not stick
     // would leave the family permanently dark, and nothing else in the tree would say so.
     TEST(ResourceEmit, TheResourceOpTableIsUnregisteredUntilABackendInstallsOne) {
-        ASSERT_EQ(MGPipeGetResourceOps(), nullptr)
-            << "something registered a resource op table in a unit-test process";
+        ASSERT_EQ(MGPipeGetResourceOps(), nullptr) << "something registered a resource op table in a unit-test process";
 
         static const MGPipeResourceOps ops{};
         MGPipeSetResourceOps(&ops);
@@ -272,8 +271,8 @@ namespace {
         g_spy.LastHandle = res;
     }
 
-    const MGPipeResourceOps kSpyOps{SpyCreate,  SpyRespecify, SpySubData, SpyResident, SpyFlush,
-                                    SpyReadback, SpyDestroy,  SpyMap,     SpyUnmap};
+    const MGPipeResourceOps kSpyOps{SpyCreate,   SpyRespecify, SpySubData, SpyResident, SpyFlush,
+                                    SpyReadback, SpyDestroy,   SpyMap,     SpyUnmap};
 
 #if MGTEST_HAVE_FORK
     struct ChildResult {
@@ -304,7 +303,9 @@ namespace {
         return result;
     }
 
-    Bool DiedOfAbort(const ChildResult& r) { return WIFSIGNALED(r.Status) && WTERMSIG(r.Status) == SIGABRT; }
+    Bool DiedOfAbort(const ChildResult& r) {
+        return WIFSIGNALED(r.Status) && WTERMSIG(r.Status) == SIGABRT;
+    }
     std::string DescribeStatus(const ChildResult& r) {
         if (r.Status < 0) return "fork/waitpid failed";
         if (WIFEXITED(r.Status)) return "exited " + std::to_string(WEXITSTATUS(r.Status));
@@ -579,7 +580,8 @@ namespace {
                                                                   "acquisition";
 
         // Three declines still cost three answers.
-        for (Uint32 i = 0; i < 3; ++i) EXPECT_EQ(MGPipeApplyMapPersistent(BufferHandle(res), 256, bytes), nullptr);
+        for (Uint32 i = 0; i < 3; ++i)
+            EXPECT_EQ(MGPipeApplyMapPersistent(BufferHandle(res), 256, bytes), nullptr);
         EXPECT_EQ(MGPipeApplier().MapPersistentRoundtrips, 3u);
 
         // A mint costs the same one.
@@ -643,8 +645,10 @@ namespace {
         const std::string before = ReadLog();
         MGPipeApplyResourceSubData(pastTheEnd, bytes);
         EXPECT_EQ(RecordOf(res.Slot).Serial, 2u) << "a refused write must not move the serial";
-        EXPECT_NE(ReadLog().substr(before.size()).find("ProtocolCorruption resource_subdata {slot=7, gen=3, "
-                                                       "glName=41}"),
+        EXPECT_NE(ReadLog()
+                      .substr(before.size())
+                      .find("ProtocolCorruption resource_subdata {slot=7, gen=3, "
+                            "glName=41}"),
                   std::string::npos)
             << "the gate refused the write without saying which record it was";
 #endif
@@ -1002,7 +1006,8 @@ namespace {
         EXPECT_EQ(ElementsOf(cso.Slot).ContentSerial, 2u) << "a re-create on the same handle counts up";
         EXPECT_EQ(ElementsOf(cso.Slot).AttributeCount, 2u);
         EXPECT_EQ(ElementsOf(cso.Slot).BindingPointCount, 1u);
-        for (Uint32 i = 0; i < 2; ++i) ExpectAttribEq(ElementsOf(cso.Slot).Attributes[i], AttribAt(i), i);
+        for (Uint32 i = 0; i < 2; ++i)
+            ExpectAttribEq(ElementsOf(cso.Slot).Attributes[i], AttribAt(i), i);
         ExpectBindingEq(ElementsOf(cso.Slot).BindingPoints[0], BindingAt(0), 0);
         const MGPVertexAttribWire zeroAttrib{};
         const MGPVertexBindingPointWire zeroBinding{};
@@ -1054,18 +1059,16 @@ namespace {
         // And a count above the destination it would be unpacked into.
         MGPVertexElements tooManyAttributes = declared.Desc;
         tooManyAttributes.AttributeCount = kMGPipeMaxVertexAttribs + 1;
-        ExpectRefusedNaming("create_vertex_elements {slot=5, gen=2}: the declared attribute count is above "
-                            "GL's attribute limit",
-                            [&tooManyAttributes, blobBytes]() {
-                                MGPipeApplyCreateVertexElements(tooManyAttributes, blobBytes);
-                            });
+        ExpectRefusedNaming(
+            "create_vertex_elements {slot=5, gen=2}: the declared attribute count is above "
+            "GL's attribute limit",
+            [&tooManyAttributes, blobBytes]() { MGPipeApplyCreateVertexElements(tooManyAttributes, blobBytes); });
         MGPVertexElements tooManyBindings = declared.Desc;
         tooManyBindings.BindingPointCount = kMGPipeMaxVertexAttribs + 1;
-        ExpectRefusedNaming("create_vertex_elements {slot=5, gen=2}: the declared binding-point count is "
-                            "above GL's attribute limit",
-                            [&tooManyBindings, blobBytes]() {
-                                MGPipeApplyCreateVertexElements(tooManyBindings, blobBytes);
-                            });
+        ExpectRefusedNaming(
+            "create_vertex_elements {slot=5, gen=2}: the declared binding-point count is "
+            "above GL's attribute limit",
+            [&tooManyBindings, blobBytes]() { MGPipeApplyCreateVertexElements(tooManyBindings, blobBytes); });
         EXPECT_EQ(ElementsOf(cso.Slot).ContentSerial, 2u);
         EXPECT_EQ(ElementsOf(cso.Slot).AttributeCount, 3u);
     }
@@ -1301,9 +1304,8 @@ namespace {
     // The packed (resource target, upload target) pair a Tex2D level's records carry. 0x0102 -
     // and it is the very number the split bring-up's Fatal printed, which is how this case is
     // known to be about the same shape.
-    const Uint16 kTex2DUpload = MGPipePackSubDataTarget(
-        static_cast<Uint32>(MGPipeResourceTarget::Tex2D),
-        static_cast<Uint32>(TextureUploadTarget::Texture2D));
+    const Uint16 kTex2DUpload = MGPipePackSubDataTarget(static_cast<Uint32>(MGPipeResourceTarget::Tex2D),
+                                                        static_cast<Uint32>(TextureUploadTarget::Texture2D));
 
     MGPSubData TextureWrite(MGPipeHandle res, Uint16 uploadTarget, Uint16 level, Uint32 extent) {
         MGPSubData record{};
@@ -1397,18 +1399,15 @@ namespace {
             const ChildResult child = RunInChild([&res, &drive]() {
                 MGPResourceDesc perLevel = Tex2DDesc(res, 4, 2, 92);
                 MGPipeSetRespecifiedLevel(perLevel, kTex2DUpload, 1, 2, 2, 1);
-                const MGPRespecifiedLevel named = MGPipeMakeRespecifiedLevel(drive.PointerTarget, drive.PointerLevel, 2, 2, 1);
-                MGPipeApplyResourceRespecify(perLevel, nullptr,
-                                             drive.HasPointer ? &named : nullptr);
+                const MGPRespecifiedLevel named =
+                    MGPipeMakeRespecifiedLevel(drive.PointerTarget, drive.PointerLevel, 2, 2, 1);
+                MGPipeApplyResourceRespecify(perLevel, nullptr, drive.HasPointer ? &named : nullptr);
             });
-            EXPECT_TRUE(DiedOfAbort(child))
-                << drive.What << ": " << DescribeStatus(child) << "; log: " << child.Log;
-            const std::string named =
-                "Fatal{PipeRespecifyScope} resource_respecify {slot=13, gen=2}";
+            EXPECT_TRUE(DiedOfAbort(child)) << drive.What << ": " << DescribeStatus(child) << "; log: " << child.Log;
+            const std::string named = "Fatal{PipeRespecifyScope} resource_respecify {slot=13, gen=2}";
             EXPECT_NE(child.Log.find(named), std::string::npos)
                 << drive.What << ": wanted \"" << named << "\"; log: " << child.Log;
-            EXPECT_NE(child.Log.find("declares a per-level respecify scope (target=258, level=1)"),
-                      std::string::npos)
+            EXPECT_NE(child.Log.find("declares a per-level respecify scope (target=258, level=1)"), std::string::npos)
                 << drive.What << ": the refusal must print the DECLARED range; log: " << child.Log;
             EXPECT_NE(child.Log.find(drive.Wanted), std::string::npos)
                 << drive.What << ": wanted \"" << drive.Wanted << "\"; log: " << child.Log;
@@ -1504,8 +1503,7 @@ namespace {
 
         // A renderbuffer restorage is the publication D-D2 asks for: the frontend raises no
         // version for it, so the emission IS the notice, and the applier holds the new extent.
-        MGPipeApplyResourceRespecify(TargetedDesc(shared, MGPipeResourceTarget::Renderbuffer, 1024, 33),
-                                     nullptr);
+        MGPipeApplyResourceRespecify(TargetedDesc(shared, MGPipeResourceTarget::Renderbuffer, 1024, 33), nullptr);
         EXPECT_EQ(MGPipeApplier().RenderbufferResources[7].Desc.Width, 1024u);
         EXPECT_EQ(MGPipeApplier().RenderbufferResources[7].Serial, 1u);
 
@@ -1586,8 +1584,7 @@ namespace {
 
         // ---- with no consumer: every one of them declines, and NOTHING is stored ----
         EXPECT_FALSE(MGPipeApplyResourceCreate(TargetedDesc(texture, MGPipeResourceTarget::Tex2D, 0, 22)));
-        EXPECT_FALSE(
-            MGPipeApplyResourceRespecify(TargetedDesc(texture, MGPipeResourceTarget::Tex2D, 64, 22), nullptr));
+        EXPECT_FALSE(MGPipeApplyResourceRespecify(TargetedDesc(texture, MGPipeResourceTarget::Tex2D, 64, 22), nullptr));
         EXPECT_FALSE(MGPipeApplyResourceSubData(upload, nullptr));
         MGPipeApplySetTextureParams(params);
         MGPipeApplySetFramebufferState(fboState);
@@ -1638,18 +1635,17 @@ namespace {
         EXPECT_TRUE(MGPipeHandleIsNull(MGPipeApplier().BoundShaderCso));
         EXPECT_TRUE(MGPipeHandleIsNull(MGPipeApplier().DrawProgram));
         EXPECT_TRUE(MGPipeHandleIsNull(MGPipeApplier().DispatchProgram));
-        EXPECT_TRUE(MGPipeHandleIsNull(
-            MGPipeApplier().BoundFramebuffer[static_cast<SizeT>(MGPipeFramebufferTarget::Draw)]));
+        EXPECT_TRUE(
+            MGPipeHandleIsNull(MGPipeApplier().BoundFramebuffer[static_cast<SizeT>(MGPipeFramebufferTarget::Draw)]));
 
         // ---- and with one, every one of them lands. Same records, same order ----
         {
             ScopedResourceOps consumer;
             const Uint64 refusalsBefore = MGPipeApplier().RefusedNoConsumer;
 
+            EXPECT_TRUE(MGPipeApplyResourceCreate(TargetedDesc(texture, MGPipeResourceTarget::Tex2D, 0, 22)));
             EXPECT_TRUE(
-                MGPipeApplyResourceCreate(TargetedDesc(texture, MGPipeResourceTarget::Tex2D, 0, 22)));
-            EXPECT_TRUE(MGPipeApplyResourceRespecify(
-                TargetedDesc(texture, MGPipeResourceTarget::Tex2D, 64, 22), nullptr));
+                MGPipeApplyResourceRespecify(TargetedDesc(texture, MGPipeResourceTarget::Tex2D, 64, 22), nullptr));
             MGPipeApplySetTextureParams(params);
             MGPipeApplySetFramebufferState(fboState);
             MGPipeApplyCreateSamplerState(samplerDesc, &samplerParams);
@@ -1670,8 +1666,7 @@ namespace {
             EXPECT_EQ(MGPipeApplier().TextureResources[7].Params.BuiltinSampler, cso);
             ASSERT_GT(MGPipeApplier().FramebufferRecords.size(), 4u);
             EXPECT_TRUE(MGPipeApplier().FramebufferRecords[4].Live);
-            EXPECT_EQ(MGPipeApplier().BoundFramebuffer[static_cast<SizeT>(MGPipeFramebufferTarget::Draw)],
-                      fbo);
+            EXPECT_EQ(MGPipeApplier().BoundFramebuffer[static_cast<SizeT>(MGPipeFramebufferTarget::Draw)], fbo);
             ASSERT_GT(MGPipeApplier().SamplerCsos.size(), 9u);
             EXPECT_TRUE(MGPipeApplier().SamplerCsos[9].Live);
             ASSERT_GT(MGPipeApplier().SamplerViewCsos.size(), 9u);
@@ -1760,8 +1755,7 @@ namespace {
         MGPipeApplyResourceCreate(TargetedDesc(texture, MGPipeResourceTarget::Tex2D, 0, 55));
         MGPipeApplyResourceRespecify(TargetedDesc(texture, MGPipeResourceTarget::Tex2D, 8, 55), nullptr);
         MGPipeApplyResourceCreate(TargetedDesc(renderbuffer, MGPipeResourceTarget::Renderbuffer, 0, 66));
-        MGPipeApplyResourceRespecify(TargetedDesc(renderbuffer, MGPipeResourceTarget::Renderbuffer, 8, 66),
-                                     nullptr);
+        MGPipeApplyResourceRespecify(TargetedDesc(renderbuffer, MGPipeResourceTarget::Renderbuffer, 8, 66), nullptr);
         MGPSubData upload{};
         upload.Res = texture;
         upload.Target = static_cast<Uint16>(MGPipeResourceTarget::Tex2D);
@@ -1827,9 +1821,13 @@ namespace {
         SharedPtr<GLContext> m_previousContext;
     };
 
-    GLContext& Ctx() { return *MG_State::pGLContext; }
+    GLContext& Ctx() {
+        return *MG_State::pGLContext;
+    }
 
-    const SharedPtr<BufferObject>& MakeBuffer(Uint name) { return Ctx().CreateBufferObject(name); }
+    const SharedPtr<BufferObject>& MakeBuffer(Uint name) {
+        return Ctx().CreateBufferObject(name);
+    }
 
     // Bind `buffer` to `target` the way the GL entry point for that target does. The index
     // target is the BOUND VAO's element slot, not one of BufferState's, which is why it
@@ -1863,23 +1861,23 @@ namespace {
     Uint32 LiteralBindMaskFor(BufferTarget target) {
         switch (target) {
         case BufferTarget::Vertex:
-            return 1u << 0;                        // VERTEX
+            return 1u << 0; // VERTEX
         case BufferTarget::Index:
-            return (1u << 1) | (1u << 11);         // INDEX | ELEMENT_ARRAY
+            return (1u << 1) | (1u << 11); // INDEX | ELEMENT_ARRAY
         case BufferTarget::Uniform:
-            return 1u << 2;                        // CONSTANT
+            return 1u << 2; // CONSTANT
         case BufferTarget::ShaderStorage:
-            return 1u << 3;                        // SHADER_BUFFER
+            return 1u << 3; // SHADER_BUFFER
         case BufferTarget::DispatchIndirect:
         case BufferTarget::DrawIndirect:
         case BufferTarget::Parameter:
-            return 1u << 4;                        // INDIRECT
+            return 1u << 4; // INDIRECT
         case BufferTarget::Texture:
-            return 1u << 5;                        // SAMPLER
+            return 1u << 5; // SAMPLER
         case BufferTarget::TransformFeedback:
-            return 1u << 9;                        // STREAM_OUTPUT
+            return 1u << 9; // STREAM_OUTPUT
         case BufferTarget::AtomicCounter:
-            return 1u << 10;                       // ATOMIC
+            return 1u << 10; // ATOMIC
         case BufferTarget::CopyRead:
         case BufferTarget::CopyWrite:
         case BufferTarget::PixelPack:
@@ -1887,7 +1885,7 @@ namespace {
         case BufferTarget::Query:
         case BufferTarget::BufferTargetCount:
         case BufferTarget::Unknown:
-            return 0u;                             // transfer and query targets bind nothing
+            return 0u; // transfer and query targets bind nothing
         }
         return 0xFFFFFFFFu;
     }
@@ -2112,8 +2110,8 @@ namespace {
         // The same refusal through the reachable cap, which is what a transport will hit
         // first: a range whose later pieces cross the offset cap is refused whole.
         pieces.clear();
-        EXPECT_FALSE(MGPipeForEachSubDataRecordRange(kMGPipeSubDataMaxRecordOffset - kSegment,
-                                                     kSegment * 4, collect, kSegment));
+        EXPECT_FALSE(
+            MGPipeForEachSubDataRecordRange(kMGPipeSubDataMaxRecordOffset - kSegment, kSegment * 4, collect, kSegment));
         EXPECT_TRUE(pieces.empty());
     }
 
@@ -2152,8 +2150,7 @@ namespace {
         std::vector<std::pair<Uint64, Uint64>> pieces;
         const auto collect = [&](Uint64 at, Uint64 length) { pieces.emplace_back(at, length); };
         const auto checkCoverage = [&](Uint64 whole, Uint64 cap) {
-            EXPECT_GE(pieces.size(), 4u) << "a range of " << whole << " bytes was not cut at a "
-                                         << cap << " byte cap";
+            EXPECT_GE(pieces.size(), 4u) << "a range of " << whole << " bytes was not cut at a " << cap << " byte cap";
             Uint64 covered = 0;
             Uint64 expectedAt = 0;
             for (const auto& piece : pieces) {
@@ -2165,8 +2162,8 @@ namespace {
                 // And every piece the walk produced has to be encodable by the record builder -
                 // a piece the box refuses is a record the applier's bounds gate would abort on.
                 MGPSubData record{};
-                EXPECT_TRUE(MGPipeBuildSubDataRecord(MGPipeHandle{1, 1}, piece.first, piece.second,
-                                                     record, /*verbatimShadow=*/true))
+                EXPECT_TRUE(MGPipeBuildSubDataRecord(MGPipeHandle{1, 1}, piece.first, piece.second, record,
+                                                     /*verbatimShadow=*/true))
                     << "a piece the splitter produced does not fit one record";
                 EXPECT_EQ(MGPipeSubDataBufferOffset(record), piece.first);
                 EXPECT_EQ(MGPipeSubDataBufferSize(record), piece.second);
@@ -2250,8 +2247,7 @@ namespace {
             MG_Pipe::MGPCaps caps{};
             caps.CallMask = MG_Remote::MGCapsConsumerBits(MG_Pipe::kMGPipeSubsystemResources);
             MG_Remote::Client::CapsMirrorInstance().Adopt(caps, MG_Backend::FormatCapabilityCache{},
-                                                          MobileGL::RendererInfo{}, String{},
-                                                          BackendType::DirectGLES);
+                                                          MobileGL::RendererInfo{}, String{}, BackendType::DirectGLES);
             // The spy IS the applier's consumer here, so "no resource_subdata followed" is
             // counted rather than inferred from a missing log line.
             g_spy = SpyState{};
@@ -2331,8 +2327,7 @@ namespace {
             << "the first write after a make-current moved no serial - it was dropped";
         EXPECT_EQ(MGPipeApplier().RefusedResourceCalls, 0u)
             << "the write was refused because the applier had no record for it";
-        EXPECT_EQ(tracker.CreateCount(), 1u)
-            << "the client re-published a create for a record the applier still had";
+        EXPECT_EQ(tracker.CreateCount(), 1u) << "the client re-published a create for a record the applier still had";
     }
 
     // THE DSA HOLE, which is what makes the sampled mask insufficient on its own: an element
@@ -2355,8 +2350,7 @@ namespace {
         // The negative control FIRST, so the assertion below cannot pass because the bit is
         // set for everything: a respecify with nothing bound publishes an empty mask.
         indices->Respecify(64, nullptr);
-        ASSERT_EQ(tracker.LastDesc().BindMask, 0u)
-            << "a respecify with no binding at all published one";
+        ASSERT_EQ(tracker.LastDesc().BindMask, 0u) << "a respecify with no binding at all published one";
 
         // Bind, draw, unbind - the transient the sampler cannot see afterwards.
         Ctx().GetBoundVertexArray()->GetIndexBufferBindingSlot().Bind(indices);

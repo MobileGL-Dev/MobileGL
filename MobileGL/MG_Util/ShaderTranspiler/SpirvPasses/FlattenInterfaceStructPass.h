@@ -15,8 +15,10 @@
 namespace MobileGL {
     namespace MG_Util {
         namespace ShaderTranspiler {
-            // This is a custom SPIR-V optimization pass that flattens the "DailyWeatherVariation" interface struct into separate variables.
-            // This is actually a workaround for Adreno drivers that fail to work with struct as an interface block. Mali drivers don't have this issue, but we want to keep the shader code consistent across platforms.
+            // This is a custom SPIR-V optimization pass that flattens the "DailyWeatherVariation" interface struct into
+            // separate variables. This is actually a workaround for Adreno drivers that fail to work with struct as an
+            // interface block. Mali drivers don't have this issue, but we want to keep the shader code consistent
+            // across platforms.
             class FlattenInterfaceStructPass : public spvtools::opt::Pass {
             public:
                 const char* name() const override { return "flatten-interface-struct"; }

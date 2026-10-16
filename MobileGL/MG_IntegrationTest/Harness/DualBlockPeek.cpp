@@ -51,8 +51,12 @@ namespace MGITest {
         return true;
     }
 #else
-    bool PeekDualBlockState(DualBlockPeekState*) { return false; }
-    bool DualBlockDriveClientVerbBoundary() { return false; }
+    bool PeekDualBlockState(DualBlockPeekState*) {
+        return false;
+    }
+    bool DualBlockDriveClientVerbBoundary() {
+        return false;
+    }
 #endif
 
 } // namespace MGITest

@@ -29,9 +29,9 @@ namespace {
     std::vector<std::uint8_t> BuildHello() {
         ::flatbuffers::FlatBufferBuilder builder(1024);
         const std::vector<std::uint8_t> config{1, 2, 3, 4};
-        auto hello = CreateHelloDirect(builder, MOBILEGL_PROTOCOL_ABI_MAJOR,
-                                       MOBILEGL_PROTOCOL_ABI_MINOR, "mobilegl-test-build",
-                                       /*backendType=*/2, /*pid=*/4242, &config);
+        auto hello =
+            CreateHelloDirect(builder, MOBILEGL_PROTOCOL_ABI_MAJOR, MOBILEGL_PROTOCOL_ABI_MINOR, "mobilegl-test-build",
+                              /*backendType=*/2, /*pid=*/4242, &config);
         auto envelope = CreateCtrlEnvelope(builder, CtrlMsg::Hello, hello.Union());
         FinishCtrlEnvelopeBuffer(builder, envelope);
         const std::uint8_t* begin = builder.GetBufferPointer();
@@ -161,10 +161,9 @@ TEST(ProtocolSmokeTest, TravelsAcrossTheTransportUnchanged) {
 
 TEST(ProtocolSmokeTest, StreamHandshakeCarriesIndependentWireBuildAndServerWindows) {
     ::flatbuffers::FlatBufferBuilder builder(512);
-    auto terms = CreateLinkTerms(builder, DataPlane::Stream, WireForm::StructImage,
-                                 1048560, 8388608, 33554432, 262144);
-    auto hello = CreateHelloDirect(builder, MOBILEGL_PROTOCOL_ABI_MAJOR, MOBILEGL_PROTOCOL_ABI_MINOR,
-        "commit-123", 1, 42, nullptr, 0, 0x12345678, terms, "pairing-token", DialMode::Connect);
+    auto terms = CreateLinkTerms(builder, DataPlane::Stream, WireForm::StructImage, 1048560, 8388608, 33554432, 262144);
+    auto hello = CreateHelloDirect(builder, MOBILEGL_PROTOCOL_ABI_MAJOR, MOBILEGL_PROTOCOL_ABI_MINOR, "commit-123", 1,
+                                   42, nullptr, 0, 0x12345678, terms, "pairing-token", DialMode::Connect);
     auto envelope = CreateCtrlEnvelope(builder, CtrlMsg::Hello, hello.Union());
     FinishCtrlEnvelopeBuffer(builder, envelope);
     ::flatbuffers::Verifier verifier(builder.GetBufferPointer(), builder.GetSize());

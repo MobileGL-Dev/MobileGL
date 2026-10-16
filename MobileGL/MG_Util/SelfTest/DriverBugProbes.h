@@ -186,13 +186,12 @@ namespace MobileGL::MG_Util::SelfTest {
 
     // Every invocation of a 32-wide compute workgroup stores 1 into its shared slot, barrier(),
     // reads slot 0, barrier(), stores 7, barrier(), reads slot 0 again, and writes both reads
-    // to its own result word: the second read must see 7. The Adreno ES compiler treats ordinary shared loads as pure - it hands back the
-    // first read (and, with other addresses, moves a read past a later store) - while an
-    // atomicAdd(x, 0u) read of the same words is kept in place. That atomic twin is the
-    // control: the verdict is "stale" only when the plain program goes wrong while the atomic
-    // one stays right. Deterministic (a compiler transform), so latched; false when compute
-    // shaders or an entry point are missing or anything fails to set up. Restores the GL state
-    // it touches.
+    // to its own result word: the second read must see 7. The Adreno ES compiler treats ordinary shared loads as pure -
+    // it hands back the first read (and, with other addresses, moves a read past a later store) - while an atomicAdd(x,
+    // 0u) read of the same words is kept in place. That atomic twin is the control: the verdict is "stale" only when
+    // the plain program goes wrong while the atomic one stays right. Deterministic (a compiler transform), so latched;
+    // false when compute shaders or an entry point are missing or anything fails to set up. Restores the GL state it
+    // touches.
     Bool ProbeSharedMemoryLoadsGoStale(const MG_External::GLESFunctionsTable& gl);
 
     // ProbeSharedMemoryLoadsGoStale(), evaluated at most once per process.
@@ -319,12 +318,10 @@ namespace MobileGL::MG_Util::SelfTest {
     //
     // `detected` is false unless the strongest shape is dirty AND the control is clean. The
     // shape MobileGL emits is measured either way, so the report can say what applications get.
-    ImageCoherencyResidualMeasurement ProbeImageWriteReadCoherencyResidual(
-        const MG_External::GLESFunctionsTable& gl);
+    ImageCoherencyResidualMeasurement ProbeImageWriteReadCoherencyResidual(const MG_External::GLESFunctionsTable& gl);
 
     // ProbeImageWriteReadCoherencyResidual(), evaluated at most once per process.
-    const ImageCoherencyResidualMeasurement& ImageWriteReadCoherencyResidual(
-        const MG_External::GLESFunctionsTable& gl);
+    const ImageCoherencyResidualMeasurement& ImageWriteReadCoherencyResidual(const MG_External::GLESFunctionsTable& gl);
 
     // Copies one known GL_UNSIGNED_SHORT_5_5_5_1 word out of both mip levels of a GL_RGB5_A1
     // 2D array into plain 2D images with glCopyImageSubData and reads the landed texels back

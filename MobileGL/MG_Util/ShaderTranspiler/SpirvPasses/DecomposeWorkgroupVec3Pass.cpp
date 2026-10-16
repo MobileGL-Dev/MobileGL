@@ -25,10 +25,10 @@ namespace MobileGL {
     namespace MG_Util {
         namespace ShaderTranspiler {
             namespace {
-                using spvtools::opt::IRContext;
-                using spvtools::opt::Instruction;
-                using spvtools::opt::Operand;
                 using spvtools::opt::BasicBlock;
+                using spvtools::opt::Instruction;
+                using spvtools::opt::IRContext;
+                using spvtools::opt::Operand;
                 using spvtools::opt::analysis::Array;
                 using spvtools::opt::analysis::Type;
 
@@ -67,8 +67,7 @@ namespace MobileGL {
 
                 // Recursively rebuilds a pointee type, replacing the vec3 leaf with a
                 // scalar array [3]. Returns the new type id.
-                uint32_t RebuildPointeeType(IRContext* context, uint32_t typeId,
-                                            uint32_t scalarArr3TypeId,
+                uint32_t RebuildPointeeType(IRContext* context, uint32_t typeId, uint32_t scalarArr3TypeId,
                                             const std::unordered_map<uint32_t, uint32_t>& vec3ToArr3) {
                     auto* defUseMgr = context->get_def_use_mgr();
                     auto* typeMgr = context->get_type_mgr();
@@ -83,16 +82,13 @@ namespace MobileGL {
                     }
                     if (typeInst->opcode() == spv::Op::OpTypeArray) {
                         const uint32_t oldElemId = typeInst->GetSingleWordInOperand(0);
-                        const uint32_t newElemId =
-                            RebuildPointeeType(context, oldElemId, scalarArr3TypeId, vec3ToArr3);
+                        const uint32_t newElemId = RebuildPointeeType(context, oldElemId, scalarArr3TypeId, vec3ToArr3);
                         if (newElemId == oldElemId) {
                             return typeId;
                         }
                         const uint32_t lengthId = typeInst->GetSingleWordInOperand(1);
-                        const Array* oldArrTy =
-                            typeMgr->GetType(typeId)->AsArray();
-                        Array newArrTy(typeMgr->GetType(newElemId),
-                                                 oldArrTy->length_info());
+                        const Array* oldArrTy = typeMgr->GetType(typeId)->AsArray();
+                        Array newArrTy(typeMgr->GetType(newElemId), oldArrTy->length_info());
                         Type* regNewArrTy = typeMgr->GetRegisteredType(&newArrTy);
                         return typeMgr->GetTypeInstruction(regNewArrTy);
                     }
@@ -114,8 +110,8 @@ namespace MobileGL {
 
                 // Inserts an instruction before |where|, sets its debug info, and updates
                 // def-use and block mapping. Returns a pointer to the inserted instruction.
-                Instruction* InsertBefore(BasicBlock* block, Instruction* where,
-                                          std::unique_ptr<Instruction> inst, IRContext* context) {
+                Instruction* InsertBefore(BasicBlock* block, Instruction* where, std::unique_ptr<Instruction> inst,
+                                          IRContext* context) {
                     auto iter = BasicBlock::iterator(where).InsertBefore(std::move(inst));
                     if (where != nullptr) {
                         iter->UpdateDebugInfoFrom(where);
@@ -148,16 +144,14 @@ namespace MobileGL {
                             const uint32_t acId = context->TakeNextId();
                             auto acInst = MakeUnique<Instruction>(
                                 context, spv::Op::OpAccessChain, ptrScalarTypeId, acId,
-                                std::initializer_list<Operand>{
-                                    {SPV_OPERAND_TYPE_ID, {decomposedPtrId}},
-                                    {SPV_OPERAND_TYPE_ID, {constCId}}});
+                                std::initializer_list<Operand>{{SPV_OPERAND_TYPE_ID, {decomposedPtrId}},
+                                                               {SPV_OPERAND_TYPE_ID, {constCId}}});
                             InsertBefore(block, where, std::move(acInst), context);
 
                             const uint32_t loadId = context->TakeNextId();
-                            auto loadInst = MakeUnique<Instruction>(
-                                context, spv::Op::OpLoad, scalarTypeId, loadId,
-                                std::initializer_list<Operand>{
-                                    {SPV_OPERAND_TYPE_ID, {acId}}});
+                            auto loadInst =
+                                MakeUnique<Instruction>(context, spv::Op::OpLoad, scalarTypeId, loadId,
+                                                        std::initializer_list<Operand>{{SPV_OPERAND_TYPE_ID, {acId}}});
                             for (uint32_t opIdx = 1; opIdx < sourceLoad->NumInOperands(); ++opIdx) {
                                 loadInst->AddOperand(Operand(sourceLoad->GetInOperand(opIdx)));
                             }
@@ -166,9 +160,8 @@ namespace MobileGL {
                         }
 
                         const uint32_t compositeId = context->TakeNextId();
-                        auto composite = MakeUnique<Instruction>(
-                            context, spv::Op::OpCompositeConstruct, originalTypeId, compositeId,
-                            std::initializer_list<Operand>{});
+                        auto composite = MakeUnique<Instruction>(context, spv::Op::OpCompositeConstruct, originalTypeId,
+                                                                 compositeId, std::initializer_list<Operand>{});
                         for (uint32_t componentId : componentIds) {
                             composite->AddOperand({SPV_OPERAND_TYPE_ID, {componentId}});
                         }
@@ -198,18 +191,16 @@ namespace MobileGL {
                             const uint32_t elemPtrId = context->TakeNextId();
                             auto elemAc = MakeUnique<Instruction>(
                                 context, spv::Op::OpAccessChain, ptrDecomposedElemTypeId, elemPtrId,
-                                std::initializer_list<Operand>{
-                                    {SPV_OPERAND_TYPE_ID, {decomposedPtrId}},
-                                    {SPV_OPERAND_TYPE_ID, {constIId}}});
+                                std::initializer_list<Operand>{{SPV_OPERAND_TYPE_ID, {decomposedPtrId}},
+                                                               {SPV_OPERAND_TYPE_ID, {constIId}}});
                             InsertBefore(block, where, std::move(elemAc), context);
                             elementIds.push_back(BuildCompositeLoad(context, block, where, originalElemTypeId,
                                                                     elemPtrId, vec3ToArr3, sourceLoad));
                         }
 
                         const uint32_t compositeId = context->TakeNextId();
-                        auto composite = MakeUnique<Instruction>(
-                            context, spv::Op::OpCompositeConstruct, originalTypeId, compositeId,
-                            std::initializer_list<Operand>{});
+                        auto composite = MakeUnique<Instruction>(context, spv::Op::OpCompositeConstruct, originalTypeId,
+                                                                 compositeId, std::initializer_list<Operand>{});
                         for (uint32_t elementId : elementIds) {
                             composite->AddOperand({SPV_OPERAND_TYPE_ID, {elementId}});
                         }
@@ -241,25 +232,22 @@ namespace MobileGL {
                             const uint32_t extractId = context->TakeNextId();
                             auto extract = MakeUnique<Instruction>(
                                 context, spv::Op::OpCompositeExtract, scalarTypeId, extractId,
-                                std::initializer_list<Operand>{
-                                    {SPV_OPERAND_TYPE_ID, {valueId}},
-                                    {SPV_OPERAND_TYPE_LITERAL_INTEGER, {c}}});
+                                std::initializer_list<Operand>{{SPV_OPERAND_TYPE_ID, {valueId}},
+                                                               {SPV_OPERAND_TYPE_LITERAL_INTEGER, {c}}});
                             InsertBefore(block, where, std::move(extract), context);
 
                             const uint32_t constCId = constMgr->GetUIntConstId(c);
                             const uint32_t acId = context->TakeNextId();
                             auto acInst = MakeUnique<Instruction>(
                                 context, spv::Op::OpAccessChain, ptrScalarTypeId, acId,
-                                std::initializer_list<Operand>{
-                                    {SPV_OPERAND_TYPE_ID, {decomposedPtrId}},
-                                    {SPV_OPERAND_TYPE_ID, {constCId}}});
+                                std::initializer_list<Operand>{{SPV_OPERAND_TYPE_ID, {decomposedPtrId}},
+                                                               {SPV_OPERAND_TYPE_ID, {constCId}}});
                             InsertBefore(block, where, std::move(acInst), context);
 
                             auto compStore = MakeUnique<Instruction>(
                                 context, spv::Op::OpStore, 0, 0,
-                                std::initializer_list<Operand>{
-                                    {SPV_OPERAND_TYPE_ID, {acId}},
-                                    {SPV_OPERAND_TYPE_ID, {extractId}}});
+                                std::initializer_list<Operand>{{SPV_OPERAND_TYPE_ID, {acId}},
+                                                               {SPV_OPERAND_TYPE_ID, {extractId}}});
                             for (uint32_t opIdx = 2; opIdx < sourceStore->NumInOperands(); ++opIdx) {
                                 compStore->AddOperand(Operand(sourceStore->GetInOperand(opIdx)));
                             }
@@ -287,22 +275,20 @@ namespace MobileGL {
                             const uint32_t extractId = context->TakeNextId();
                             auto extract = MakeUnique<Instruction>(
                                 context, spv::Op::OpCompositeExtract, originalElemTypeId, extractId,
-                                std::initializer_list<Operand>{
-                                    {SPV_OPERAND_TYPE_ID, {valueId}},
-                                    {SPV_OPERAND_TYPE_LITERAL_INTEGER, {i}}});
+                                std::initializer_list<Operand>{{SPV_OPERAND_TYPE_ID, {valueId}},
+                                                               {SPV_OPERAND_TYPE_LITERAL_INTEGER, {i}}});
                             InsertBefore(block, where, std::move(extract), context);
 
                             const uint32_t constIId = constMgr->GetUIntConstId(i);
                             const uint32_t elemPtrId = context->TakeNextId();
                             auto elemAc = MakeUnique<Instruction>(
                                 context, spv::Op::OpAccessChain, ptrDecomposedElemTypeId, elemPtrId,
-                                std::initializer_list<Operand>{
-                                    {SPV_OPERAND_TYPE_ID, {decomposedPtrId}},
-                                    {SPV_OPERAND_TYPE_ID, {constIId}}});
+                                std::initializer_list<Operand>{{SPV_OPERAND_TYPE_ID, {decomposedPtrId}},
+                                                               {SPV_OPERAND_TYPE_ID, {constIId}}});
                             InsertBefore(block, where, std::move(elemAc), context);
 
-                            BuildCompositeStore(context, block, where, originalElemTypeId, elemPtrId,
-                                                extractId, vec3ToArr3, sourceStore);
+                            BuildCompositeStore(context, block, where, originalElemTypeId, elemPtrId, extractId,
+                                                vec3ToArr3, sourceStore);
                         }
                         return;
                     }
@@ -336,8 +322,7 @@ namespace MobileGL {
 
                         if (sawFirstVariable &&
                             (spvtools::opt::IsTypeInst(inst->opcode()) ||
-                             spvtools::opt::IsConstantInst(inst->opcode()) ||
-                             inst->opcode() == spv::Op::OpUndef)) {
+                             spvtools::opt::IsConstantInst(inst->opcode()) || inst->opcode() == spv::Op::OpUndef)) {
                             inst->InsertBefore(firstVariable);
                         }
                     }
@@ -366,8 +351,7 @@ namespace MobileGL {
                 std::unordered_map<uint32_t, uint32_t> ptrCompositeToDecomposed;
 
                 for (Instruction& typeInst : ctx->types_values()) {
-                    if (typeInst.opcode() == spv::Op::OpTypeVector &&
-                        IsVec3Type(&typeInst) != 0) {
+                    if (typeInst.opcode() == spv::Op::OpTypeVector && IsVec3Type(&typeInst) != 0) {
                         vec3TypeIds.insert(typeInst.result_id());
                     }
                 }
@@ -413,8 +397,7 @@ namespace MobileGL {
                     if (varInst.opcode() != spv::Op::OpVariable) {
                         continue;
                     }
-                    const auto sc = static_cast<spv::StorageClass>(
-                        varInst.GetSingleWordInOperand(0));
+                    const auto sc = static_cast<spv::StorageClass>(varInst.GetSingleWordInOperand(0));
                     if (sc != spv::StorageClass::Workgroup) {
                         continue;
                     }
@@ -436,11 +419,9 @@ namespace MobileGL {
                     if (pointeeId == vec3LeafId) {
                         newPointeeId = arr3LeafId;
                     } else {
-                        newPointeeId = RebuildPointeeType(ctx, pointeeId,
-                                                          arr3LeafId, vec3ToArr3);
+                        newPointeeId = RebuildPointeeType(ctx, pointeeId, arr3LeafId, vec3ToArr3);
                     }
-                    const uint32_t newPtrId = typeMgr->FindPointerToType(
-                        newPointeeId, spv::StorageClass::Workgroup);
+                    const uint32_t newPtrId = typeMgr->FindPointerToType(newPointeeId, spv::StorageClass::Workgroup);
                     varInst.SetResultType(newPtrId);
                     defUseMgr->AnalyzeInstUse(&varInst);
                     modified = true;
@@ -454,8 +435,7 @@ namespace MobileGL {
                     if (typeInst.opcode() != spv::Op::OpTypePointer) {
                         continue;
                     }
-                    const auto sc = static_cast<spv::StorageClass>(
-                        typeInst.GetSingleWordInOperand(0));
+                    const auto sc = static_cast<spv::StorageClass>(typeInst.GetSingleWordInOperand(0));
                     if (sc != spv::StorageClass::Workgroup) {
                         continue;
                     }
@@ -468,12 +448,10 @@ namespace MobileGL {
                     if (it == vec3ToArr3.end()) {
                         continue;
                     }
-                    const uint32_t newPointeeId =
-                        pointeeId == vec3LeafId
-                            ? it->second
-                            : RebuildPointeeType(ctx, pointeeId, it->second, vec3ToArr3);
-                    const uint32_t newPtrId =
-                        typeMgr->FindPointerToType(newPointeeId, spv::StorageClass::Workgroup);
+                    const uint32_t newPointeeId = pointeeId == vec3LeafId
+                                                      ? it->second
+                                                      : RebuildPointeeType(ctx, pointeeId, it->second, vec3ToArr3);
+                    const uint32_t newPtrId = typeMgr->FindPointerToType(newPointeeId, spv::StorageClass::Workgroup);
                     ptrCompositeToDecomposed[typeInst.result_id()] = newPtrId;
                 }
 
@@ -604,21 +582,14 @@ namespace MobileGL {
                     for (auto& bb : func) {
                         for (auto& inst : bb) {
                             const spv::Op op = inst.opcode();
-                            bool isAtomic = (op == spv::Op::OpAtomicLoad ||
-                                             op == spv::Op::OpAtomicStore ||
-                                             op == spv::Op::OpAtomicExchange ||
-                                             op == spv::Op::OpAtomicCompareExchange ||
-                                             op == spv::Op::OpAtomicIAdd ||
-                                             op == spv::Op::OpAtomicISub ||
-                                             op == spv::Op::OpAtomicSMin ||
-                                             op == spv::Op::OpAtomicUMin ||
-                                             op == spv::Op::OpAtomicSMax ||
-                                             op == spv::Op::OpAtomicUMax ||
-                                             op == spv::Op::OpAtomicAnd ||
-                                             op == spv::Op::OpAtomicOr ||
-                                             op == spv::Op::OpAtomicXor);
-                            bool isCopyMem = (op == spv::Op::OpCopyMemory ||
-                                              op == spv::Op::OpCopyMemorySized);
+                            bool isAtomic =
+                                (op == spv::Op::OpAtomicLoad || op == spv::Op::OpAtomicStore ||
+                                 op == spv::Op::OpAtomicExchange || op == spv::Op::OpAtomicCompareExchange ||
+                                 op == spv::Op::OpAtomicIAdd || op == spv::Op::OpAtomicISub ||
+                                 op == spv::Op::OpAtomicSMin || op == spv::Op::OpAtomicUMin ||
+                                 op == spv::Op::OpAtomicSMax || op == spv::Op::OpAtomicUMax ||
+                                 op == spv::Op::OpAtomicAnd || op == spv::Op::OpAtomicOr || op == spv::Op::OpAtomicXor);
+                            bool isCopyMem = (op == spv::Op::OpCopyMemory || op == spv::Op::OpCopyMemorySized);
                             if (!isAtomic && !isCopyMem) {
                                 continue;
                             }
@@ -628,11 +599,9 @@ namespace MobileGL {
                             if (ptrDef == nullptr) {
                                 continue;
                             }
-                            if (decomposedPtrTypeIds.find(ptrDef->type_id()) !=
-                                decomposedPtrTypeIds.end()) {
-                                MOBILEGL_ASSERT(false,
-                                    "DecomposeWorkgroupVec3Pass: unsupported atomic/CopyMemory "
-                                    "on workgroup vec3 pointer");
+                            if (decomposedPtrTypeIds.find(ptrDef->type_id()) != decomposedPtrTypeIds.end()) {
+                                MOBILEGL_ASSERT(false, "DecomposeWorkgroupVec3Pass: unsupported atomic/CopyMemory "
+                                                       "on workgroup vec3 pointer");
                                 return Status::Failure;
                             }
                         }
@@ -644,8 +613,7 @@ namespace MobileGL {
                 return Status::SuccessWithChange;
             }
 
-            spvtools::Optimizer::PassToken
-            DecomposeWorkgroupVec3Pass::CreateDecomposeWorkgroupVec3Pass() {
+            spvtools::Optimizer::PassToken DecomposeWorkgroupVec3Pass::CreateDecomposeWorkgroupVec3Pass() {
                 return spvtools::Optimizer::PassToken(MakeUnique<DecomposeWorkgroupVec3Pass>());
             }
         } // namespace ShaderTranspiler

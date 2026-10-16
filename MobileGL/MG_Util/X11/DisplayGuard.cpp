@@ -38,7 +38,8 @@ namespace MobileGL::MG_Util::X11 {
         Int32 ToNumber(const char* begin, const char* end) {
             if (!AllDigits(begin, end) || end - begin > 6) return -1;
             Int32 value = 0;
-            for (const char* p = begin; p != end; ++p) value = value * 10 + (*p - '0');
+            for (const char* p = begin; p != end; ++p)
+                value = value * 10 + (*p - '0');
             return value;
         }
 
@@ -66,7 +67,8 @@ namespace MobileGL::MG_Util::X11 {
         if (std::strncmp(path, kSocketDirectory, dirLength) == 0) {
             const char* digits = path + dirLength;
             const char* end = digits;
-            while (*end >= '0' && *end <= '9') ++end;
+            while (*end >= '0' && *end <= '9')
+                ++end;
             return ToNumber(digits, end);
         }
         // [protocol/][host]:display[.screen]: the LAST colon (an IPv6 host has colons of its own).
@@ -74,15 +76,16 @@ namespace MobileGL::MG_Util::X11 {
         if (colon == nullptr) return -1;
         const char* digits = colon + 1;
         const char* end = digits;
-        while (*end >= '0' && *end <= '9') ++end;
+        while (*end >= '0' && *end <= '9')
+            ++end;
         if (*end != '\0' && *end != '.') return -1;
         (void)length;
         return ToNumber(digits, end);
     }
 
     Bool IsXServerProgram(const String& basename) {
-        static const char* const kServers[] = {"Xwayland", "Xorg", "Xorg.bin", "X", "Xvfb", "Xephyr",
-                                               "Xnest", "Xvnc", "Xwin", "XWin", "Xquartz", "Xfake"};
+        static const char* const kServers[] = {"Xwayland", "Xorg", "Xorg.bin", "X",    "Xvfb",    "Xephyr",
+                                               "Xnest",    "Xvnc", "Xwin",     "XWin", "Xquartz", "Xfake"};
         for (const char* server : kServers) {
             if (basename == server) return true;
         }

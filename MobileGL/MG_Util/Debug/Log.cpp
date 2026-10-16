@@ -50,7 +50,9 @@ namespace MobileGL {
             t_forwardsToPeer = forwarder != nullptr;
         }
 
-        void SetThreadForwardsLogToPeer(bool forwards) { t_forwardsToPeer = forwards; }
+        void SetThreadForwardsLogToPeer(bool forwards) {
+            t_forwardsToPeer = forwards;
+        }
 
         void WithLogBarrier(void (*action)(void*), void* user) {
             std::lock_guard<std::mutex> lock(LogMutex());
@@ -63,12 +65,18 @@ namespace MobileGL {
         int LogLevelFromAndroidPriority(int priority) {
             switch (priority) {
             case ANDROID_LOG_VERBOSE:
-            case ANDROID_LOG_DEBUG: return MOBILEGL_LOG_LEVEL_DEBUG;
-            case ANDROID_LOG_INFO: return MOBILEGL_LOG_LEVEL_INFO;
-            case ANDROID_LOG_WARN: return MOBILEGL_LOG_LEVEL_WARN;
-            case ANDROID_LOG_ERROR: return MOBILEGL_LOG_LEVEL_ERROR;
-            case ANDROID_LOG_FATAL: return MOBILEGL_LOG_LEVEL_FATAL;
-            default: return MOBILEGL_LOG_LEVEL_INFO;
+            case ANDROID_LOG_DEBUG:
+                return MOBILEGL_LOG_LEVEL_DEBUG;
+            case ANDROID_LOG_INFO:
+                return MOBILEGL_LOG_LEVEL_INFO;
+            case ANDROID_LOG_WARN:
+                return MOBILEGL_LOG_LEVEL_WARN;
+            case ANDROID_LOG_ERROR:
+                return MOBILEGL_LOG_LEVEL_ERROR;
+            case ANDROID_LOG_FATAL:
+                return MOBILEGL_LOG_LEVEL_FATAL;
+            default:
+                return MOBILEGL_LOG_LEVEL_INFO;
             }
         }
 
@@ -125,7 +133,9 @@ namespace MobileGL {
             return t_logRole == 1;
         }
 
-        void SetThreadLogRole(LogRole role) { t_logRole = role == LogRole::Server ? 1 : 0; }
+        void SetThreadLogRole(LogRole role) {
+            t_logRole = role == LogRole::Server ? 1 : 0;
+        }
 
         std::string ReadRoleLogs(const char* basePath) {
             std::string all;
@@ -186,7 +196,9 @@ namespace MobileGL {
             return t_logRole == 1 ? LogRole::Server : LogRole::Client;
         }
 
-        bool CurrentProcessIsSpawnedServer() { return ProcessIsSpawnedServer(); }
+        bool CurrentProcessIsSpawnedServer() {
+            return ProcessIsSpawnedServer();
+        }
 #endif
 
         std::mutex& LogMutex() {
@@ -338,8 +350,7 @@ namespace MobileGL {
             // every MobileGL log occupy TWO logcat records, the second one empty. That
             // halved the useful depth of every `adb logcat -t N` window the CI
             // diagnostics read (android-plugin/trace-replay-ci.sh).
-            __android_log_print(androidLogLevel, "MobileGL", "%.*s", static_cast<int>(out.size() - 1),
-                                out.c_str());
+            __android_log_print(androidLogLevel, "MobileGL", "%.*s", static_cast<int>(out.size() - 1), out.c_str());
 #endif
 
             WriteToFile(out.c_str());
@@ -354,8 +365,10 @@ namespace MobileGL {
                     // A FATAL line goes out after the log mutex is released, like a session-scoped
                     // one: the forwarder may wait (bounded) for it to reach the peer before the
                     // process aborts, and must not hold every other thread's line while it does.
-                    if (level >= MOBILEGL_LOG_LEVEL_FATAL) forwardOutsideLock = true;
-                    else s_forwarder(s_forwarderUser, level, out.c_str());
+                    if (level >= MOBILEGL_LOG_LEVEL_FATAL)
+                        forwardOutsideLock = true;
+                    else
+                        s_forwarder(s_forwarderUser, level, out.c_str());
                 } else {
                     forwardOutsideLock = t_forwardsToPeer;
                 }

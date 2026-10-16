@@ -82,22 +82,19 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return options;
         }
 
-        Flags<PixelFormatNormalizeOptionBit>
-        GetRuntimeFallbackNormalizeOptions(GLenum requestedInternalFormat,
-                                           Flags<PixelFormatNormalizeOptionBit> extraOptions) {
+        Flags<PixelFormatNormalizeOptionBit> GetRuntimeFallbackNormalizeOptions(
+            GLenum requestedInternalFormat, Flags<PixelFormatNormalizeOptionBit> extraOptions) {
             using namespace MG_Util::TextureFormatProcessor;
             const Flags<PixelFormatNormalizeOptionBit> forcedOptions = GetApplicablePixelFormatNormalizeOptions(
                 requestedInternalFormat, GetForcedPixelFormatNormalizeOptions() | extraOptions);
             if (forcedOptions) {
                 return forcedOptions;
             }
-            return GetApplicablePixelFormatNormalizeOptions(
-                requestedInternalFormat, GetDriverPixelFormatNormalizeOptions() | extraOptions);
+            return GetApplicablePixelFormatNormalizeOptions(requestedInternalFormat,
+                                                            GetDriverPixelFormatNormalizeOptions() | extraOptions);
         }
 
-        Bool HasCachedFormatCapability(TextureInternalFormat internalFormat,
-                                       SizeT targetIndex,
-                                       Bool caveat,
+        Bool HasCachedFormatCapability(TextureInternalFormat internalFormat, SizeT targetIndex, Bool caveat,
                                        FormatCapability capability) {
             const FormatCapabilityCache* activeCaps = ActiveBackendFormatCaps();
             if (activeCaps == nullptr || targetIndex >= kFormatCapabilityTargetCount) {
@@ -114,8 +111,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return HasFormatCapability(caps, capability);
         }
 
-        Bool HasAnyCachedFormatCapability(TextureInternalFormat internalFormat,
-                                          Bool caveat,
+        Bool HasAnyCachedFormatCapability(TextureInternalFormat internalFormat, Bool caveat,
                                           FormatCapability capability) {
             for (SizeT targetIndex = 0; targetIndex < kFormatCapabilityTargetCount; ++targetIndex) {
                 if (HasCachedFormatCapability(internalFormat, targetIndex, caveat, capability)) {
@@ -131,10 +127,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     HasCachedFormatCapability(internalFormat, targetIndex, false, FormatCapability::Creatable);
                 const Bool caveatCreatable =
                     HasCachedFormatCapability(internalFormat, targetIndex, true, FormatCapability::Creatable);
-                const Bool fullRenderable =
-                    HasCachedFormatCapability(internalFormat, targetIndex, false, FormatCapability::FramebufferRenderable);
-                const Bool caveatRenderable =
-                    HasCachedFormatCapability(internalFormat, targetIndex, true, FormatCapability::FramebufferRenderable);
+                const Bool fullRenderable = HasCachedFormatCapability(internalFormat, targetIndex, false,
+                                                                      FormatCapability::FramebufferRenderable);
+                const Bool caveatRenderable = HasCachedFormatCapability(internalFormat, targetIndex, true,
+                                                                        FormatCapability::FramebufferRenderable);
                 return (!fullCreatable && caveatCreatable) || (!fullRenderable && caveatRenderable);
             }
 
@@ -144,11 +140,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return HasAnyCachedFormatCapability(internalFormat, true, FormatCapability::Creatable);
         }
 
-        void GenerateFormatInfo(TextureInternalFormat internalFormat,
-                                SizeT targetIndex,
-                                GLenum* outInternalFormat,
-                                GLenum* outFormat,
-                                GLenum* outType) {
+        void GenerateFormatInfo(TextureInternalFormat internalFormat, SizeT targetIndex, GLenum* outInternalFormat,
+                                GLenum* outFormat, GLenum* outType) {
             using namespace MobileGL::MG_Util::TextureFormatProcessor;
             const GLenum requestedInternalFormat = MG_Util::ConvertTextureInternalFormatToGLEnum(internalFormat);
             Flags<PixelFormatNormalizeOptionBit> options;
@@ -257,8 +250,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
-            const SizeT targetIndex =
-                target == TextureTarget::Unknown ? kFormatCapabilityTargetCount : GetFormatCapabilityTargetIndex(target);
+            const SizeT targetIndex = target == TextureTarget::Unknown ? kFormatCapabilityTargetCount
+                                                                       : GetFormatCapabilityTargetIndex(target);
             GenerateFormatInfo(internalFormat, targetIndex, outInternalFormat, outFormat, outType);
         }
 
@@ -272,8 +265,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
 
         Bool ShouldUseCaveatTextureFormat(TextureInternalFormat internalFormat, TextureTarget target) {
-            const SizeT targetIndex =
-                target == TextureTarget::Unknown ? kFormatCapabilityTargetCount : GetFormatCapabilityTargetIndex(target);
+            const SizeT targetIndex = target == TextureTarget::Unknown ? kFormatCapabilityTargetCount
+                                                                       : GetFormatCapabilityTargetIndex(target);
             return ShouldUseCaveatFormat(internalFormat, targetIndex);
         }
 
@@ -297,8 +290,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         } // namespace
 
         Bool BackendTextureFormatAddsAlpha(TextureInternalFormat internalFormat, TextureTarget target) {
-            const SizeT targetIndex =
-                target == TextureTarget::Unknown ? kFormatCapabilityTargetCount : GetFormatCapabilityTargetIndex(target);
+            const SizeT targetIndex = target == TextureTarget::Unknown ? kFormatCapabilityTargetCount
+                                                                       : GetFormatCapabilityTargetIndex(target);
             return BackendFormatAddsAlpha(internalFormat, targetIndex);
         }
 
@@ -308,8 +301,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         ImageBindableStorageWidening GetImageBindableStorageWidening(TextureInternalFormat internalFormat) {
             const GLenum requested = MG_Util::ConvertTextureInternalFormatToGLEnum(internalFormat);
-            const auto carrier = static_cast<GLenum>(
-                MG_Util::ShaderTranspiler::ShaderCompiler::WidenedCoreEsslImageFormat(requested));
+            const auto carrier =
+                static_cast<GLenum>(MG_Util::ShaderTranspiler::ShaderCompiler::WidenedCoreEsslImageFormat(requested));
             if (carrier == 0) {
                 return {};
             }
@@ -329,8 +322,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
             ImageBindableStorageWidening widening;
             widening.InternalFormat = carrier;
-            widening.SourceChannels =
-                MG_Util::ShaderTranspiler::ShaderCompiler::ImageFormatChannelCount(requested);
+            widening.SourceChannels = MG_Util::ShaderTranspiler::ShaderCompiler::ImageFormatChannelCount(requested);
             switch (carrier) {
             case GL_RGBA32UI:
             case GL_RGBA16UI:
@@ -496,7 +488,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             for (; outputIt != outputEnd; ++outputIt) {
                 const Uint location = static_cast<Uint>(std::stoul((*outputIt)[1].str()));
                 if (location < 32 && (outputMask & (1u << location))) {
-                    outputClamps.push_back({(*outputIt)[2].str(), static_cast<Bool>(snormOutputMask & (1u << location))});
+                    outputClamps.push_back(
+                        {(*outputIt)[2].str(), static_cast<Bool>(snormOutputMask & (1u << location))});
                 }
             }
             if (outputClamps.empty()) {
@@ -520,8 +513,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         String clampLine;
                         for (const OutputClamp& outputClamp : outputClamps) {
                             const String minValue = outputClamp.Signed ? "-1.0" : "0.0";
-                            clampLine += "\n    " + outputClamp.Name + " = clamp(" + outputClamp.Name +
-                                         ", vec4(" + minValue + "), vec4(1.0));";
+                            clampLine += "\n    " + outputClamp.Name + " = clamp(" + outputClamp.Name + ", vec4(" +
+                                         minValue + "), vec4(1.0));";
                         }
                         clampLine += "\n";
                         glslCode.insert(pos, clampLine);
@@ -557,8 +550,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             String replicaCopies;
             for (Uint location = 1; location < drawBufferCount; ++location) {
                 const String name = String(kLoweredName) + "_" + std::to_string(location);
-                replicaDecls += "\nlayout(location = " + std::to_string(location) + ") out " + precision + "vec4 " +
-                                name + ";";
+                replicaDecls +=
+                    "\nlayout(location = " + std::to_string(location) + ") out " + precision + "vec4 " + name + ";";
                 replicaCopies += "\n    " + name + " = " + kLoweredName + ";";
             }
 
@@ -632,8 +625,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return result;
         }
 
-        String RetargetTextureBufferExtension(String glslCode,
-                                              MG_External::GLESCapabilities::TextureBufferTier tier) {
+        String RetargetTextureBufferExtension(String glslCode, MG_External::GLESCapabilities::TextureBufferTier tier) {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
@@ -789,12 +781,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
         const char* PointSizeExtensionName(MG_External::GLESCapabilities::PointSizeTier tier, Bool tessellation) {
             using Tier = MG_External::GLESCapabilities::PointSizeTier;
             switch (tier) {
-                case Tier::ExtensionEXT:
-                    return tessellation ? "GL_EXT_tessellation_point_size" : "GL_EXT_geometry_point_size";
-                case Tier::ExtensionOES:
-                    return tessellation ? "GL_OES_tessellation_point_size" : "GL_OES_geometry_point_size";
-                default:
-                    return nullptr;
+            case Tier::ExtensionEXT:
+                return tessellation ? "GL_EXT_tessellation_point_size" : "GL_EXT_geometry_point_size";
+            case Tier::ExtensionOES:
+                return tessellation ? "GL_OES_tessellation_point_size" : "GL_OES_geometry_point_size";
+            default:
+                return nullptr;
             }
         }
 
@@ -827,8 +819,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return glslCode;
         }
 
-        String BakeImageFormatQualifiers(String glslCode,
-                                         const UnorderedMap<String, String>& esslFormatByUniformName) {
+        String BakeImageFormatQualifiers(String glslCode, const UnorderedMap<String, String>& esslFormatByUniformName) {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
@@ -931,11 +922,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
             while ((pos = essl.find("gl_PerVertex", pos)) != String::npos) {
                 // Walk back over whitespace to the direction keyword.
                 SizeT before = pos;
-                while (before > 0 && std::isspace(static_cast<unsigned char>(essl[before - 1]))) --before;
+                while (before > 0 && std::isspace(static_cast<unsigned char>(essl[before - 1])))
+                    --before;
                 const Bool matches = before >= keyword.size() &&
                                      essl.compare(before - keyword.size(), keyword.size(), keyword) == 0 &&
-                                     (before == keyword.size() ||
-                                      !isIdentifierChar(essl[before - keyword.size() - 1]));
+                                     (before == keyword.size() || !isIdentifierChar(essl[before - keyword.size() - 1]));
                 if (!matches) {
                     pos += 1;
                     continue;
@@ -1010,7 +1001,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     continue;
                 }
                 SizeT before = pos;
-                while (before > 0 && std::isspace(static_cast<unsigned char>(glslCode[before - 1]))) --before;
+                while (before > 0 && std::isspace(static_cast<unsigned char>(glslCode[before - 1])))
+                    --before;
                 if (before > 0 && (glslCode[before - 1] == '.' || isIdentifierChar(glslCode[before - 1]))) {
                     continue;
                 }
@@ -1070,16 +1062,17 @@ namespace MobileGL::MG_Backend::DirectGLES {
             for (SizeT pos = members.find("invariant "); pos != String::npos; pos = members.find("invariant ")) {
                 members.erase(pos, std::strlen("invariant "));
             }
-            while (!members.empty() && std::isspace(static_cast<unsigned char>(members.back()))) members.pop_back();
-            while (!members.empty() && (members.front() == '\n' || members.front() == '\r')) members.erase(0, 1);
+            while (!members.empty() && std::isspace(static_cast<unsigned char>(members.back())))
+                members.pop_back();
+            while (!members.empty() && (members.front() == '\n' || members.front() == '\r'))
+                members.erase(0, 1);
             String block = "in gl_PerVertex\n{\n" + members + "\n} gl_in[";
             block += tessellation ? "gl_MaxPatchVertices" : "";
             block += "];\n";
 
             // After the header (#directives, precision statements and the stage's layout-only
             // in/out declarations, which a geometry stage's unsized gl_in[] depends on).
-            static const std::regex headerRegex(
-                R"(^\s*(#.*|precision\s.*|layout\s*\(.*\)\s*(in|out)\s*;\s*)?$)");
+            static const std::regex headerRegex(R"(^\s*(#.*|precision\s.*|layout\s*\(.*\)\s*(in|out)\s*;\s*)?$)");
             SizeT insertAt = 0;
             SizeT lineStart = 0;
             while (lineStart < glslCode.size()) {
@@ -1097,7 +1090,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         String RequestClipCullDistanceExtension(String glslCode) {
             static constexpr const char* kDirective = "#extension GL_EXT_clip_cull_distance : require\n";
             if (glslCode.find("GL_EXT_clip_cull_distance") != String::npos ||
-                (glslCode.find("gl_ClipDistance") == String::npos && glslCode.find("gl_CullDistance") == String::npos)) {
+                (glslCode.find("gl_ClipDistance") == String::npos &&
+                 glslCode.find("gl_CullDistance") == String::npos)) {
                 return glslCode;
             }
             // Right after the #version line, like every other directive this backend adds.
@@ -1114,10 +1108,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
 
         String BuildPassthroughTessControlEssl(const Uint esslVersion, const Uint patchVertices,
-                                               const String& inPerVertexMembers,
-                                               const String& outPerVertexMembers,
-                                               const FloatVec4& defaultOuterLevel,
-                                               const FloatVec2& defaultInnerLevel) {
+                                               const String& inPerVertexMembers, const String& outPerVertexMembers,
+                                               const FloatVec4& defaultOuterLevel, const FloatVec2& defaultInnerLevel) {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
@@ -1169,8 +1161,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             SizeT CountIdentifierOccurrences(const String& code, const String& identifier) {
                 if (identifier.empty()) return 0;
                 SizeT count = 0;
-                for (SizeT pos = code.find(identifier); pos != String::npos;
-                     pos = code.find(identifier, pos + 1)) {
+                for (SizeT pos = code.find(identifier); pos != String::npos; pos = code.find(identifier, pos + 1)) {
                     if (pos > 0 && IsImagePassIdentifierChar(code[pos - 1])) continue;
                     const SizeT after = pos + identifier.size();
                     if (after < code.size() && IsImagePassIdentifierChar(code[after])) continue;
@@ -1188,14 +1179,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // readonly/writeonly rule only applies to a declaration that carries one of them.
             Bool IsImageFormatQualifier(const String& token) {
                 static constexpr StringView FORMATS[] = {
-                    "rgba32f",      "rgba16f",      "rg32f",       "rg16f",        "r11f_g11f_b10f",
-                    "r32f",         "r16f",         "rgba16",      "rgb10_a2",     "rgba8",
-                    "rg16",         "rg8",          "r16",         "r8",           "rgba16_snorm",
-                    "rgba8_snorm",  "rg16_snorm",   "rg8_snorm",   "r16_snorm",    "r8_snorm",
-                    "rgba32i",      "rgba16i",      "rgba8i",      "rg32i",        "rg16i",
-                    "rg8i",         "r32i",         "r16i",        "r8i",          "rgba32ui",
-                    "rgba16ui",     "rgb10_a2ui",   "rgba8ui",     "rg32ui",       "rg16ui",
-                    "rg8ui",        "r32ui",        "r16ui",       "r8ui",
+                    "rgba32f",     "rgba16f",    "rg32f",     "rg16f",     "r11f_g11f_b10f",
+                    "r32f",        "r16f",       "rgba16",    "rgb10_a2",  "rgba8",
+                    "rg16",        "rg8",        "r16",       "r8",        "rgba16_snorm",
+                    "rgba8_snorm", "rg16_snorm", "rg8_snorm", "r16_snorm", "r8_snorm",
+                    "rgba32i",     "rgba16i",    "rgba8i",    "rg32i",     "rg16i",
+                    "rg8i",        "r32i",       "r16i",      "r8i",       "rgba32ui",
+                    "rgba16ui",    "rgb10_a2ui", "rgba8ui",   "rg32ui",    "rg16ui",
+                    "rg8ui",       "r32ui",      "r16ui",     "r8ui",
                 };
                 for (const StringView format : FORMATS) {
                     if (token == format) return true;
@@ -1251,7 +1242,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
 
             // How an image builtin touches the image it is handed.
-            enum class ImageBuiltinAccess { None, Load, Store, Unknown };
+            enum class ImageBuiltinAccess {
+                None,
+                Load,
+                Store,
+                Unknown
+            };
 
             ImageBuiltinAccess ClassifyImageBuiltin(const String& name) {
                 if (name == "imageStore") return ImageBuiltinAccess::Store;
@@ -1279,7 +1275,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 String arraySuffix; // "" or "[7]"
                 SizeT declStart = 0;
                 SizeT declLength = 0;
-                SizeT nameStart = 0;   // the name token alone, for a rename that edits nothing else
+                SizeT nameStart = 0; // the name token alone, for a rename that edits nothing else
                 SizeT nameLength = 0;
                 SizeT referenceCount = 0; // uses this pass recognized and accounted for
                 Bool loaded = false;
@@ -1340,7 +1336,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     }
                     return false;
                 };
-                while (isTaken(candidate)) candidate += 'X';
+                while (isTaken(candidate))
+                    candidate += 'X';
                 return candidate;
             }
 
@@ -1498,8 +1495,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // stage that was never going to compile, and guessing which element it meant
                 // would only change which unit it addressed wrongly.
                 struct ElementUse {
-                    SizeT start;   // the first character of the name
-                    SizeT length;  // through the closing ']'
+                    SizeT start;  // the first character of the name
+                    SizeT length; // through the closing ']'
                     SizeT element;
                 };
                 Vector<ElementUse> uses;
@@ -1559,9 +1556,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 Vector<String> elementNames;
                 String replacement;
                 for (SizeT element = 0; element < elementCount; ++element) {
-                    const String elementName =
-                        MakeImageAliasName(IMAGE_ARRAY_ELEMENT_PREFIX,
-                                           plan.name + "_" + std::to_string(element), glslCode, takenNames);
+                    const String elementName = MakeImageAliasName(
+                        IMAGE_ARRAY_ELEMENT_PREFIX, plan.name + "_" + std::to_string(element), glslCode, takenNames);
                     takenNames.push_back(elementName);
                     elementNames.push_back(elementName);
 
@@ -1687,7 +1683,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             for (SizeT pos = glslCode.find("image"); pos != String::npos; pos = glslCode.find("image", pos + 1)) {
                 if (pos > 0 && IsImagePassIdentifierChar(glslCode[pos - 1])) continue; // uimage2D, myimageFoo
                 SizeT tokenEnd = pos;
-                while (tokenEnd < glslCode.size() && IsImagePassIdentifierChar(glslCode[tokenEnd])) ++tokenEnd;
+                while (tokenEnd < glslCode.size() && IsImagePassIdentifierChar(glslCode[tokenEnd]))
+                    ++tokenEnd;
                 const String builtin = glslCode.substr(pos, tokenEnd - pos);
 
                 const SizeT openParen = glslCode.find_first_not_of(" \t\r\n", tokenEnd);
@@ -1699,7 +1696,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     continue; // an expression, not a bare variable - it names no image of ours
                 }
                 SizeT argEnd = argStart;
-                while (argEnd < glslCode.size() && IsImagePassIdentifierChar(glslCode[argEnd])) ++argEnd;
+                while (argEnd < glslCode.size() && IsImagePassIdentifierChar(glslCode[argEnd]))
+                    ++argEnd;
 
                 const SizeT declIndex = findDecl(glslCode.substr(argStart, argEnd - argStart));
                 if (declIndex == decls.size()) continue;
@@ -1713,11 +1711,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     Int depth = 0;
                     SizeT scan = after;
                     for (; scan < glslCode.size(); ++scan) {
-                        if (glslCode[scan] == '[') ++depth;
-                        else if (glslCode[scan] == ']' && --depth == 0) break;
+                        if (glslCode[scan] == '[')
+                            ++depth;
+                        else if (glslCode[scan] == ']' && --depth == 0)
+                            break;
                     }
-                    after = scan >= glslCode.size() ? String::npos
-                                                    : glslCode.find_first_not_of(" \t\r\n", scan + 1);
+                    after = scan >= glslCode.size() ? String::npos : glslCode.find_first_not_of(" \t\r\n", scan + 1);
                 }
                 const char nextChar = after == String::npos ? '\0' : glslCode[after];
                 if (nextChar != ',' && nextChar != ')') {
@@ -1811,16 +1810,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
 
                 const char* aliasPrefix = decl.loaded && decl.stored ? IMAGE_SPLIT_READ_ALIAS_PREFIX
-                                          : decl.stored             ? IMAGE_WRITEONLY_ALIAS_PREFIX
-                                                                    : IMAGE_READONLY_ALIAS_PREFIX;
+                                          : decl.stored              ? IMAGE_WRITEONLY_ALIAS_PREFIX
+                                                                     : IMAGE_READONLY_ALIAS_PREFIX;
                 decl.aliasName = MakeImageAliasName(aliasPrefix, decl.name, glslCode, takenNames);
                 takenNames.push_back(decl.aliasName);
                 if (decl.loaded && decl.stored) {
                     // Minted from the ALREADY access-tagged name, so the write half of a split
                     // can never collide with the single declaration another stage's repair mints
                     // for the same image.
-                    decl.writeName =
-                        MakeImageAliasName(IMAGE_WRITE_ALIAS_PREFIX, decl.aliasName, glslCode, takenNames);
+                    decl.writeName = MakeImageAliasName(IMAGE_WRITE_ALIAS_PREFIX, decl.aliasName, glslCode, takenNames);
                     takenNames.push_back(decl.writeName);
                     decl.split = true;
                     if (outSplitCount != nullptr) ++*outSplitCount;
@@ -1835,13 +1833,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                          BuildImageDeclaration(decl, "writeonly", decl.writeName,
                                                                /*forceCoherent=*/true)});
                 } else if (decl.stored) {
-                    edits.push_back({decl.declStart, decl.declLength,
-                                     BuildImageDeclaration(decl, "writeonly", decl.aliasName)});
+                    edits.push_back(
+                        {decl.declStart, decl.declLength, BuildImageDeclaration(decl, "writeonly", decl.aliasName)});
                 } else {
                     // Loaded only, or only ever handed to imageSize (or unused): readonly is
                     // the qualifier that keeps every one of those legal.
-                    edits.push_back({decl.declStart, decl.declLength,
-                                     BuildImageDeclaration(decl, "readonly", decl.aliasName)});
+                    edits.push_back(
+                        {decl.declStart, decl.declLength, BuildImageDeclaration(decl, "readonly", decl.aliasName)});
                 }
             }
             for (const ImageUseSite& site : useSites) {
@@ -1849,8 +1847,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // Empty exactly when the declaration was poisoned above and left untouched; its
                 // uses must keep naming the variable that is still called that.
                 if (decl.aliasName.empty()) continue;
-                edits.push_back(
-                    {site.start, site.length, decl.split && site.stores ? decl.writeName : decl.aliasName});
+                edits.push_back({site.start, site.length, decl.split && site.stores ? decl.writeName : decl.aliasName});
                 if (!decl.split || !site.stores) continue;
                 // ...and an explicit barrier behind it. `coherent` on both halves is what makes
                 // the store VISIBLE to a load through the other variable, but it says nothing
@@ -1890,7 +1887,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // before the optional bias.
             struct LodLookupForm {
                 const char* name;
-                Int requiredArgs; // arguments before the optional bias (implicit form)
+                Int requiredArgs;   // arguments before the optional bias (implicit form)
                 Int explicitLodArg; // index of the explicit LOD argument, -1 for implicit
             };
 
@@ -1907,15 +1904,17 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // Sampler types with no mip chain, or whose GLSL lookups have no bias overload
             // at all (the array-shadow forms), so nothing can or should be folded in.
             Bool IsBiasableSamplerType(const String& samplerType) {
-                if (samplerType.find("MS") != String::npos) return false;      // multisample
-                if (samplerType.find("Buffer") != String::npos) return false;  // texture buffer
-                if (samplerType.find("Rect") != String::npos) return false;    // rectangle: no mips
+                if (samplerType.find("MS") != String::npos) return false;     // multisample
+                if (samplerType.find("Buffer") != String::npos) return false; // texture buffer
+                if (samplerType.find("Rect") != String::npos) return false;   // rectangle: no mips
                 if (samplerType == "sampler2DArrayShadow") return false;
                 if (samplerType == "samplerCubeArrayShadow") return false;
                 return true;
             }
 
-            Bool IsIdentifierChar(char c) { return std::isalnum(static_cast<unsigned char>(c)) || c == '_'; }
+            Bool IsIdentifierChar(char c) {
+                return std::isalnum(static_cast<unsigned char>(c)) || c == '_';
+            }
 
             // Byte offsets of the top-level argument separators and of the closing paren,
             // starting from the '(' at openParen. Empty when the parentheses do not balance.
@@ -1994,7 +1993,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // First argument must be one of our samplers.
                 const SizeT firstArgStart = result.find_first_not_of(" \t", openParen + 1);
                 SizeT firstArgEnd = marks.front();
-                while (firstArgEnd > firstArgStart && (result[firstArgEnd - 1] == ' ' || result[firstArgEnd - 1] == '\t')) {
+                while (firstArgEnd > firstArgStart &&
+                       (result[firstArgEnd - 1] == ' ' || result[firstArgEnd - 1] == '\t')) {
                     --firstArgEnd;
                 }
                 if (firstArgStart == String::npos || firstArgEnd <= firstArgStart) continue;
@@ -2040,8 +2040,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             for (const auto& samplerName : usedSamplers) {
                 const String& biasName = samplerNames[samplerName];
                 if (result.find(String("float ") + biasName + ";") != String::npos) continue;
-                const std::regex declRegex(
-                    R"(uniform\s+(?:(?:highp|mediump|lowp)\s+)?[iu]?sampler[A-Za-z0-9]*\s+)" + samplerName + R"(\s*;)");
+                const std::regex declRegex(R"(uniform\s+(?:(?:highp|mediump|lowp)\s+)?[iu]?sampler[A-Za-z0-9]*\s+)" +
+                                           samplerName + R"(\s*;)");
                 std::smatch match;
                 if (!std::regex_search(result, match, declRegex)) continue;
                 const SizeT declEnd = static_cast<SizeT>(match.position(0)) + match[0].str().size();
@@ -2082,13 +2082,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 if (marks.size() != 5) continue;
                 SizeT nameStart = result.find_first_not_of(" \t", openParen + 1);
                 SizeT nameEnd = nameStart;
-                while (nameEnd < marks[0] && IsIdentifierChar(result[nameEnd])) ++nameEnd;
+                while (nameEnd < marks[0] && IsIdentifierChar(result[nameEnd]))
+                    ++nameEnd;
                 if (names.find(result.substr(nameStart, nameEnd - nameStart)) == names.end()) continue;
                 const auto argument = [&](SizeT index) {
                     const SizeT start = marks[index - 1] + 1;
                     String text = result.substr(start, marks[index] - start);
-                    text.erase(std::remove_if(text.begin(), text.end(),
-                                              [](char c) { return c == ' ' || c == '\t'; }),
+                    text.erase(std::remove_if(text.begin(), text.end(), [](char c) { return c == ' ' || c == '\t'; }),
                                text.end());
                     return text;
                 };
@@ -2112,7 +2112,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // deferred, and the only ones a lookup can name directly as its first argument.
             static const std::regex declRegex(
                 R"(uniform\s+(?:(?:highp|mediump|lowp)\s+)?usampler2DMS(?:Array)?\s+([A-Za-z_][A-Za-z0-9_]*)\s*;)");
-            UnorderedMap<String, String> clampNames; // sampler name -> sample-max uniform name
+            UnorderedMap<String, String> clampNames;   // sampler name -> sample-max uniform name
             Vector<std::pair<SizeT, String>> declEnds; // where each declaration ends, and its uniform
             for (std::sregex_iterator it(glslCode.begin(), glslCode.end(), declRegex), end; it != end; ++it) {
                 const String name = (*it)[1].str();

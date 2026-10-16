@@ -20,8 +20,8 @@ namespace MobileGL::MG_Impl::GLImpl {
         Uint End = 0; // logical end-exclusive, including the source base level
     };
 
-    inline MipmapGenerationRange ComputeMipmapGenerationRange(
-        const MG_State::GLState::TextureObjectMipmap& texture, TextureUploadTarget uploadTarget) {
+    inline MipmapGenerationRange ComputeMipmapGenerationRange(const MG_State::GLState::TextureObjectMipmap& texture,
+                                                              TextureUploadTarget uploadTarget) {
         const auto range = texture.GetLevelRange();
         MipmapGenerationRange result{range.x(), range.x()};
         const Uint available = texture.GetMipmapLevelCount();
@@ -29,18 +29,19 @@ namespace MobileGL::MG_Impl::GLImpl {
         const auto extent = texture.GetMipmapTexelSize(uploadTarget, result.Base);
         if (extent.x() <= 0 || extent.y() <= 0 || extent.z() <= 0) return result;
         Int largest = extent.x();
-        if (texture.GetTarget() != TextureTarget::Texture1D &&
-            texture.GetTarget() != TextureTarget::Texture1DArray)
+        if (texture.GetTarget() != TextureTarget::Texture1D && texture.GetTarget() != TextureTarget::Texture1DArray)
             largest = std::max(largest, extent.y());
         if (texture.GetTarget() == TextureTarget::Texture3D) largest = std::max(largest, extent.z());
         Uint levels = 1;
-        while (largest > 1) { largest /= 2; ++levels; }
-        Uint64 end = std::min(static_cast<Uint64>(result.Base) + levels,
-                             static_cast<Uint64>(range.y()) + 1);
+        while (largest > 1) {
+            largest /= 2;
+            ++levels;
+        }
+        Uint64 end = std::min(static_cast<Uint64>(result.Base) + levels, static_cast<Uint64>(range.y()) + 1);
         // A view's level count is already relative to its own window. Neither
         // immutable storage nor a view may acquire levels beyond that allocation.
         if (texture.IsImmutable()) end = std::min(end, static_cast<Uint64>(available));
         result.End = static_cast<Uint>(end);
         return result;
     }
-}
+} // namespace MobileGL::MG_Impl::GLImpl

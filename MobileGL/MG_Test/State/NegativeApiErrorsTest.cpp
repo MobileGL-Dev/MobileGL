@@ -59,13 +59,10 @@ namespace {
             MG_State::pGLContext = MakeUnique<MG_State::GLState::GLContext>();
         }
 
-        void TearDown() override {
-            EXPECT_EQ(GetError(), GL_NO_ERROR) << "test left an unconsumed GL error behind";
-        }
+        void TearDown() override { EXPECT_EQ(GetError(), GL_NO_ERROR) << "test left an unconsumed GL error behind"; }
 
         static void DrainErrors() {
-            for (int i = 0; i < 16 && GetError() != GL_NO_ERROR; ++i) {
-            }
+            for (int i = 0; i < 16 && GetError() != GL_NO_ERROR; ++i) {}
         }
 
         static GLuint MakeBuffer(GLenum target, GLsizeiptr size) {
@@ -119,10 +116,8 @@ namespace {
             {"glBindBuffersBase with a reserved-but-uncreated name",
              [&] { BindBuffersBase(GL_UNIFORM_BUFFER, 0, 2, mixedBuffers); }, GL_INVALID_OPERATION},
             {"glBindBuffersRange with a reserved-but-uncreated name",
-             [&] { BindBuffersRange(GL_UNIFORM_BUFFER, 0, 2, mixedBuffers, offsets, sizes); },
-             GL_INVALID_OPERATION},
-            {"glBindSamplers with a deleted sampler name", [&] { BindSamplers(0, 1, samplers); },
-             GL_INVALID_OPERATION},
+             [&] { BindBuffersRange(GL_UNIFORM_BUFFER, 0, 2, mixedBuffers, offsets, sizes); }, GL_INVALID_OPERATION},
+            {"glBindSamplers with a deleted sampler name", [&] { BindSamplers(0, 1, samplers); }, GL_INVALID_OPERATION},
         });
 
         // ARB_multi_bind defines these as a LOOP of single binds, so the bad entry costs its own
@@ -294,8 +289,8 @@ namespace {
         RunRows({
             {"glDispatchComputeIndirect(-2)", [] { DispatchComputeIndirect(-2); }, GL_INVALID_VALUE},
             {"glDispatchComputeIndirect(3)", [] { DispatchComputeIndirect(3); }, GL_INVALID_VALUE},
-            {"glDispatchComputeIndirect(16) past the end of a 24-byte buffer",
-             [] { DispatchComputeIndirect(16); }, GL_INVALID_OPERATION},
+            {"glDispatchComputeIndirect(16) past the end of a 24-byte buffer", [] { DispatchComputeIndirect(16); },
+             GL_INVALID_OPERATION},
             {"glDispatchComputeIndirect(0) with nothing bound",
              [&] {
                  BindBuffer(GL_DISPATCH_INDIRECT_BUFFER, 0);
@@ -526,10 +521,10 @@ void main() { g_color = vec4(1); }
             {"glDrawElementsInstanced with an unaccepted mode",
              [] { DrawElementsInstanced(kBadMode, 3, GL_UNSIGNED_INT, nullptr, 4); }, GL_INVALID_ENUM},
             {"glDrawArrays with an unaccepted mode", [] { DrawArrays(kBadMode, 0, 3); }, GL_INVALID_ENUM},
-            {"glDrawElements with an unaccepted mode",
-             [] { DrawElements(kBadMode, 3, GL_UNSIGNED_INT, nullptr); }, GL_INVALID_ENUM},
-            {"glMultiDrawArrays with an unaccepted mode",
-             [] { MultiDrawArrays(kBadMode, nullptr, nullptr, 0); }, GL_INVALID_ENUM},
+            {"glDrawElements with an unaccepted mode", [] { DrawElements(kBadMode, 3, GL_UNSIGNED_INT, nullptr); },
+             GL_INVALID_ENUM},
+            {"glMultiDrawArrays with an unaccepted mode", [] { MultiDrawArrays(kBadMode, nullptr, nullptr, 0); },
+             GL_INVALID_ENUM},
             {"glDrawRangeElements with an unaccepted mode",
              [] { DrawRangeElements(kBadMode, 0, 2, 3, GL_UNSIGNED_INT, nullptr); }, GL_INVALID_ENUM},
             {"glDrawElementsIndirect with an unaccepted mode",
@@ -560,9 +555,7 @@ void main() { g_color = vec4(1); }
 
         RunRows({
             {"glBlitFramebuffer with a mask bit outside COLOR|DEPTH|STENCIL",
-             [] {
-                 BlitFramebuffer(0, 0, 16, 16, 0, 0, 16, 16, GL_COLOR_BUFFER_BIT | kForeignBit, GL_NEAREST);
-             },
+             [] { BlitFramebuffer(0, 0, 16, 16, 0, 0, 16, 16, GL_COLOR_BUFFER_BIT | kForeignBit, GL_NEAREST); },
              GL_INVALID_VALUE},
             {"glBlitFramebuffer with a filter that is neither GL_NEAREST nor GL_LINEAR",
              [] { BlitFramebuffer(0, 0, 16, 16, 0, 0, 16, 16, GL_COLOR_BUFFER_BIT, GL_NONE); }, GL_INVALID_ENUM},
@@ -572,13 +565,11 @@ void main() { g_color = vec4(1); }
              },
              GL_INVALID_OPERATION},
             {"glBlitFramebuffer of depth with GL_LINEAR",
-             [] { BlitFramebuffer(0, 0, 16, 16, 0, 0, 16, 16, GL_DEPTH_BUFFER_BIT, GL_LINEAR); },
-             GL_INVALID_OPERATION},
+             [] { BlitFramebuffer(0, 0, 16, 16, 0, 0, 16, 16, GL_DEPTH_BUFFER_BIT, GL_LINEAR); }, GL_INVALID_OPERATION},
             // The DSA form has to answer identically.
             {"glBlitNamedFramebuffer with a mask bit outside COLOR|DEPTH|STENCIL",
              [] {
-                 BlitNamedFramebuffer(0, 0, 0, 0, 16, 16, 0, 0, 16, 16, GL_COLOR_BUFFER_BIT | kForeignBit,
-                                      GL_NEAREST);
+                 BlitNamedFramebuffer(0, 0, 0, 0, 16, 16, 0, 0, 16, 16, GL_COLOR_BUFFER_BIT | kForeignBit, GL_NEAREST);
              },
              GL_INVALID_VALUE},
             {"glBlitNamedFramebuffer with a bad filter",
@@ -586,8 +577,8 @@ void main() { g_color = vec4(1); }
              GL_INVALID_ENUM},
             {"glBlitNamedFramebuffer of depth+stencil with GL_LINEAR",
              [] {
-                 BlitNamedFramebuffer(0, 0, 0, 0, 16, 16, 0, 0, 16, 16,
-                                      GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT, GL_LINEAR);
+                 BlitNamedFramebuffer(0, 0, 0, 0, 16, 16, 0, 0, 16, 16, GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT,
+                                      GL_LINEAR);
              },
              GL_INVALID_OPERATION},
         });

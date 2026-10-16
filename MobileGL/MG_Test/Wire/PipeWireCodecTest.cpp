@@ -104,12 +104,11 @@ namespace {
 
         Wire2() : m_cmdBytes(kCmdBytes), m_stageBytes(kStageBytes) {
             Transport::InitRingControl(m_control);
-            m_cmd = Transport::RingProducer(&m_control, m_cmdBytes.data(), kCmdBytes,
-                                            Transport::RingCursorSet::Cmd);
-            m_stage = Transport::RingProducer(&m_control, m_stageBytes.data(), kStageBytes,
-                                              Transport::RingCursorSet::Stage);
-            m_consumer = Transport::RingConsumer(&m_control, m_cmdBytes.data(), kCmdBytes,
-                                                 Transport::RingCursorSet::Cmd);
+            m_cmd = Transport::RingProducer(&m_control, m_cmdBytes.data(), kCmdBytes, Transport::RingCursorSet::Cmd);
+            m_stage =
+                Transport::RingProducer(&m_control, m_stageBytes.data(), kStageBytes, Transport::RingCursorSet::Stage);
+            m_consumer =
+                Transport::RingConsumer(&m_control, m_cmdBytes.data(), kCmdBytes, Transport::RingCursorSet::Cmd);
             m_segments.Install(kSegCmd, SegmentView{m_cmdBytes.data(), kCmdBytes});
             m_segments.Install(kSegStage, SegmentView{m_stageBytes.data(), kStageBytes});
             m_encoder = PipeWireEncoder(&m_control, &m_cmd, &m_stage, &m_segments);
@@ -203,8 +202,8 @@ namespace {
                 }
                 return true;
             }
-            Bool OnDrawVbo(const MGPDrawInfo& info, const MGPDrawRange* ranges,
-                           const MGHostSpan* userIndices, const MGPDrawIndirect* indirect) override {
+            Bool OnDrawVbo(const MGPDrawInfo& info, const MGPDrawRange* ranges, const MGHostSpan* userIndices,
+                           const MGPDrawIndirect* indirect) override {
                 Draws.push_back(info);
                 DrawRanges.clear();
                 for (Uint32 i = 0; i < info.NumDraws; ++i) {
@@ -238,8 +237,7 @@ namespace {
                 ImageBinds.push_back(bind);
                 return true;
             }
-            Bool OnSetStorageBlockBinding(const MGPStorageBlockBinding& binding,
-                                          const char* name) override {
+            Bool OnSetStorageBlockBinding(const MGPStorageBlockBinding& binding, const char* name) override {
                 StorageBindings.push_back(binding);
                 StorageBlockNames.push_back(name != nullptr ? name : "<null>");
                 return true;
@@ -366,8 +364,7 @@ namespace {
             if (reply.Status == ReplySink::kStatusDeclined) ++declined;
         }
         EXPECT_EQ(ok, wire.Decoder().AcceptedRecords())
-            << "the slots say " << ok << " accepted, the decoder's tally says "
-            << wire.Decoder().AcceptedRecords();
+            << "the slots say " << ok << " accepted, the decoder's tally says " << wire.Decoder().AcceptedRecords();
         EXPECT_EQ(declined, wire.Decoder().DeclinedRecords())
             << "the slots say " << declined << " declined, the decoder's tally says "
             << wire.Decoder().DeclinedRecords();
@@ -442,8 +439,8 @@ namespace {
     // Forges ONE record straight into SEG_CMD, bypassing the encoder. Every R-2 arm needs
     // this: the encoder REFUSES to build a dishonest record, which is the point of it, so a
     // case that drove the encoder could only ever test the encoder's own check.
-    void ForgeAndDecode(Wire2& wire, MGPWireOp op, const void* payload, std::uint64_t payloadBytes,
-                        const void* tail, std::uint64_t tailBytes) {
+    void ForgeAndDecode(Wire2& wire, MGPWireOp op, const void* payload, std::uint64_t payloadBytes, const void* tail,
+                        std::uint64_t tailBytes) {
         const std::uint64_t body = payloadBytes + tailBytes;
         void* slot = wire.Cmd().Reserve(static_cast<std::uint16_t>(op), Transport::kRecNone, body);
         if (slot == nullptr) {
@@ -451,8 +448,7 @@ namespace {
         }
         std::memcpy(slot, payload, static_cast<std::size_t>(payloadBytes));
         if (tailBytes != 0) {
-            std::memcpy(static_cast<std::uint8_t*>(slot) + payloadBytes, tail,
-                        static_cast<std::size_t>(tailBytes));
+            std::memcpy(static_cast<std::uint8_t*>(slot) + payloadBytes, tail, static_cast<std::size_t>(tailBytes));
         }
         wire.Cmd().Publish();
         Transport::RingRecordView view{};
@@ -529,11 +525,9 @@ TEST_F(PipeWireCodecTest, AVarTailRecordIsNotSkippedAsAWrapFiller) {
                   "kReplySlot and kRecVarTail alias");
     // Five of the six call-flag bits alias a ring bit; only kOptional is free, and only
     // because RingRecordFlags has not reached 1<<5.
-    static_assert((static_cast<Uint16>(kNeedsAck | kHasBlob | kVarTail | kHostSpan | kReplySlot |
-                                       kOptional) &
-                   static_cast<Uint16>(Transport::kRecNeedsAck | Transport::kRecHasBlob |
-                                       Transport::kRecPad | Transport::kRecBorrowSlot |
-                                       Transport::kRecVarTail)) == 0x1Fu,
+    static_assert((static_cast<Uint16>(kNeedsAck | kHasBlob | kVarTail | kHostSpan | kReplySlot | kOptional) &
+                   static_cast<Uint16>(Transport::kRecNeedsAck | Transport::kRecHasBlob | Transport::kRecPad |
+                                       Transport::kRecBorrowSlot | Transport::kRecVarTail)) == 0x1Fu,
                   "the overlap between the two flag spaces moved");
 
     Wire2 wire;
@@ -547,8 +541,7 @@ TEST_F(PipeWireCodecTest, AVarTailRecordIsNotSkippedAsAWrapFiller) {
     tail[1].Res = MakeHandle(12);
     tail[1].Stride = 32;
 
-    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::SetVertexBuffers, &header, sizeof(header), tail,
-                                          sizeof(tail)),
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::SetVertexBuffers, &header, sizeof(header), tail, sizeof(tail)),
               kInvalidSeq);
     wire.Encoder().Publish();
 
@@ -571,8 +564,7 @@ TEST_F(PipeWireCodecTest, KNoneRoundTripsAndReachesItsApplier) {
     bind.Cso = MakeHandle(4);
     bind.Version = 7;
     bind.PipelineVersion = 3;
-    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::BindRenderState, &bind, sizeof(bind)),
-              kInvalidSeq);
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::BindRenderState, &bind, sizeof(bind)), kInvalidSeq);
     bool applied = false;
     ASSERT_TRUE(wire.PumpOne(&applied));
     EXPECT_TRUE(applied);
@@ -602,8 +594,7 @@ TEST_F(PipeWireCodecTest, KHasBlobRoundTripsWithARealChunkBlob) {
     EXPECT_NE(desc.Blob.Size, 0u);
     EXPECT_EQ(desc.Blob.Seg, static_cast<Uint32>(kSegStage));
 
-    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::CreateRenderState, &desc, sizeof(desc)),
-              kInvalidSeq);
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::CreateRenderState, &desc, sizeof(desc)), kInvalidSeq);
     bool applied = false;
     ASSERT_TRUE(wire.PumpOne(&applied));
     EXPECT_TRUE(applied);
@@ -621,8 +612,7 @@ TEST_F(PipeWireCodecTest, KVarTailRoundTripsWithItsTailIntact) {
         tail[i].Texture = MakeHandle(200 + i);
         tail[i].Unit = 3 + i;
     }
-    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::SetSamplerViews, &header, sizeof(header), tail,
-                                          sizeof(tail)),
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::SetSamplerViews, &header, sizeof(header), tail, sizeof(tail)),
               kInvalidSeq);
     bool applied = false;
     ASSERT_TRUE(wire.PumpOne(&applied));
@@ -637,12 +627,10 @@ TEST_F(PipeWireCodecTest, AnEmptyVarTailIsALegalRecordAndNeedsNoPlaceholderEntry
     Wire2 wire;
     MGPStreamOutputTargets header{};
     header.Count = 0;
-    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::SetStreamOutputTargets, &header, sizeof(header)),
-              kInvalidSeq);
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::SetStreamOutputTargets, &header, sizeof(header)), kInvalidSeq);
     MGPVertexBuffers buffers{};
     buffers.Count = 0;
-    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::SetVertexBuffers, &buffers, sizeof(buffers)),
-              kInvalidSeq);
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::SetVertexBuffers, &buffers, sizeof(buffers)), kInvalidSeq);
     bool applied = false;
     ASSERT_TRUE(wire.PumpOne(&applied));
     EXPECT_FALSE(applied); // no applier for stream output; off the reduced path
@@ -656,8 +644,7 @@ TEST_F(PipeWireCodecTest, KReplySlotMapPersistentIsAConstantDecline) {
     // seedBytes MGPipeApplyMapPersistent takes.
     Wire2 wire;
     const MGPHandleOnly handle = HandleOnly(5, MGPipeKind::Buffer);
-    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::MapPersistent, &handle, sizeof(handle)),
-              kInvalidSeq);
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::MapPersistent, &handle, sizeof(handle)), kInvalidSeq);
     bool applied = false;
     ASSERT_TRUE(wire.PumpOne(&applied));
     EXPECT_TRUE(applied);
@@ -688,8 +675,7 @@ TEST_F(PipeWireCodecTest, TierTwoUnderSplitTransportStillDeclinesRatherThanRefus
 
     Wire2 wire;
     const MGPHandleOnly handle = HandleOnly(5, MGPipeKind::Buffer);
-    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::MapPersistent, &handle, sizeof(handle)),
-              kInvalidSeq);
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::MapPersistent, &handle, sizeof(handle)), kInvalidSeq);
     bool applied = false;
     ASSERT_TRUE(wire.PumpOne(&applied));
     EXPECT_TRUE(applied);
@@ -713,16 +699,14 @@ TEST_F(PipeWireCodecTest, KNeedsAckRespecifyCarriesItsRedefinitionScope) {
     create.ArrayLayers = 1;
     create.Levels = 2;
     create.Samples = 1;
-    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::ResourceCreate, &create, sizeof(create)),
-              kInvalidSeq);
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::ResourceCreate, &create, sizeof(create)), kInvalidSeq);
     bool applied = false;
     ASSERT_TRUE(wire.PumpOne(&applied));
 
     MGPResourceDesc respecify = create;
     MGPipeSetRespecifiedLevel(respecify, 0x0102u, 1u, 4u, 4u, 1u);
     EXPECT_FALSE(MGPipeRespecifyIsWholeResource(respecify));
-    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::ResourceRespecify, &respecify, sizeof(respecify)),
-              kInvalidSeq);
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::ResourceRespecify, &respecify, sizeof(respecify)), kInvalidSeq);
     ASSERT_TRUE(wire.PumpOne(&applied));
     EXPECT_TRUE(applied);
     // Two records, two ACCEPTANCE answers, AND THEY NOW RIDE THE REPLY SLOT (ID-31 + R-17).
@@ -746,8 +730,7 @@ TEST_F(PipeWireCodecTest, KNeedsAckRespecifyCarriesItsRedefinitionScope) {
 TEST_F(PipeWireCodecTest, KOptionalUnmapPersistentRoundTrips) {
     Wire2 wire;
     const MGPHandleOnly handle = HandleOnly(6, MGPipeKind::Buffer);
-    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::UnmapPersistent, &handle, sizeof(handle)),
-              kInvalidSeq);
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::UnmapPersistent, &handle, sizeof(handle)), kInvalidSeq);
     bool applied = false;
     ASSERT_TRUE(wire.PumpOne(&applied));
     EXPECT_TRUE(applied);
@@ -767,8 +750,7 @@ TEST_F(PipeWireCodecTest, KHostSpanClassIsValidatedEvenThoughP5ProducesNone) {
     ranges[0].Size = 64;
     ranges[1].Res = MakeHandle(32);
     ranges[1].Size = 128;
-    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::SetShaderBuffers, &header, sizeof(header),
-                                          ranges, sizeof(ranges)),
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::SetShaderBuffers, &header, sizeof(header), ranges, sizeof(ranges)),
               kInvalidSeq);
     bool applied = false;
     ASSERT_TRUE(wire.PumpOne(&applied));
@@ -812,8 +794,7 @@ TEST_F(PipeWireCodecTest, EveryPayloadByteCrossesIncludingTheOnesSpelledPad) {
     upload.RegionCount = 0;
     upload.Blob = wire.Encoder().StageBytes(texels.data(), texels.size());
 
-    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::ResourceSubData, &upload, sizeof(upload)),
-              kInvalidSeq);
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::ResourceSubData, &upload, sizeof(upload)), kInvalidSeq);
     wire.Encoder().Publish();
 
     Transport::RingRecordView view{};
@@ -821,8 +802,7 @@ TEST_F(PipeWireCodecTest, EveryPayloadByteCrossesIncludingTheOnesSpelledPad) {
     ASSERT_TRUE(wire.Consumer().Pop(view, &corrupt));
     ASSERT_FALSE(corrupt);
     ASSERT_GE(view.payloadSize, sizeof(upload));
-    EXPECT_EQ(std::memcmp(view.payload, &upload, sizeof(upload)), 0)
-        << "the payload did not cross byte for byte";
+    EXPECT_EQ(std::memcmp(view.payload, &upload, sizeof(upload)), 0) << "the payload did not cross byte for byte";
 
     // And the stamp really did survive somewhere the named fields do not cover, so the case
     // cannot pass by comparing a struct that has no unclaimed bytes left.
@@ -853,8 +833,7 @@ TEST_F(PipeWireCodecTest, ResourceDescPadsCrossToo) {
     desc.Samples = 1;
     MGPipeSetRespecifiedLevel(desc, 0x0304u, 2u, 4u, 4u, 1u);
 
-    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::ResourceRespecify, &desc, sizeof(desc)),
-              kInvalidSeq);
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::ResourceRespecify, &desc, sizeof(desc)), kInvalidSeq);
     wire.Encoder().Publish();
 
     Transport::RingRecordView view{};
@@ -869,7 +848,6 @@ TEST_F(PipeWireCodecTest, ResourceDescPadsCrossToo) {
     EXPECT_EQ(MGPipeRespecifiedWidthOf(*crossed), 4u);
     EXPECT_EQ(MGPipeRespecifiedHeightOf(*crossed), 4u);
     EXPECT_EQ(MGPipeRespecifiedDepthOf(*crossed), 1u);
-
 }
 
 // =====================================================================================
@@ -893,9 +871,7 @@ TEST_F(PipeWireCodecTest, SetShaderBuffersCarriesBothTailsWhenTheSpanTailIsPrese
     spans[1] = spans[0];
 
     const WireTail tails[2] = {{ranges, sizeof(ranges)}, {spans, sizeof(spans)}};
-    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::SetShaderBuffers, &header, sizeof(header),
-                                          tails, 2),
-              kInvalidSeq);
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::SetShaderBuffers, &header, sizeof(header), tails, 2), kInvalidSeq);
     bool applied = false;
     ASSERT_TRUE(wire.PumpOne(&applied));
     // P5e (sb): applied, for the reason the sibling case above states. BOTH tails still cross
@@ -918,8 +894,7 @@ TEST_F(PipeWireCodecTest, ResourceSubDataCarriesABlobAndARegionTailTogether) {
     create.ArrayLayers = 1;
     create.Levels = 1;
     create.Samples = 1;
-    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::ResourceCreate, &create, sizeof(create)),
-              kInvalidSeq);
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::ResourceCreate, &create, sizeof(create)), kInvalidSeq);
     bool applied = false;
     ASSERT_TRUE(wire.PumpOne(&applied));
 
@@ -935,8 +910,7 @@ TEST_F(PipeWireCodecTest, ResourceSubDataCarriesABlobAndARegionTailTogether) {
     region.W = 4;
     region.H = 4;
     region.D = 1;
-    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::ResourceSubData, &upload, sizeof(upload),
-                                          &region, sizeof(region)),
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::ResourceSubData, &upload, sizeof(upload), &region, sizeof(region)),
               kInvalidSeq);
     ASSERT_TRUE(wire.PumpOne(&applied));
     EXPECT_TRUE(applied);
@@ -958,8 +932,7 @@ TEST_F(PipeWireCodecTest, ResourceSubDataCarriesABlobAndARegionTailTogether) {
     // Both records answered - the texture create is declined by the same NoP4aConsumer belt.
     EXPECT_EQ(wire.Decoder().AcceptedRecords() + wire.Decoder().DeclinedRecords(), 2u);
     // And the texels themselves crossed intact: the decline is the applier's, not the wire's.
-    const void* staged =
-        wire.Segments().Resolve(upload.Blob.Seg, upload.Blob.Offset, upload.Blob.Size);
+    const void* staged = wire.Segments().Resolve(upload.Blob.Seg, upload.Blob.Offset, upload.Blob.Size);
     ASSERT_NE(staged, nullptr);
     EXPECT_EQ(std::memcmp(staged, texels.data(), texels.size()), 0);
 }
@@ -996,21 +969,19 @@ TEST_F(PipeWireCodecTest, TheNoReplyBitSkipsTheAnswerAndKeepsTheAcceptanceRecord
     // ---- THE NEGATIVE CONTROL FIRST: WITHOUT THE BIT NOTHING CHANGES ----
     // The bit is OPT-IN. A case that only checked the skip would pass against a server that
     // stopped answering everything, which is a different and much worse change.
-    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::ResourceCreate, &create, sizeof(create)),
-              kInvalidSeq);
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::ResourceCreate, &create, sizeof(create)), kInvalidSeq);
     bool applied = false;
     ASSERT_TRUE(wire.PumpOne(&applied));
-    ASSERT_EQ(wire.Answers().All.size(), 1u)
-        << "a reply-owning record that did not ask to be skipped was not answered";
+    ASSERT_EQ(wire.Answers().All.size(), 1u) << "a reply-owning record that did not ask to be skipped was not answered";
     EXPECT_EQ(wire.Answers().All[0].Seq, 1u);
 
     // ---- AND WITH IT: NO ANSWER, AND THE SAME ACCEPTANCE RECORD ----
     // THE SAME OPCODE, deliberately: the client decides this per CALL (set_texture_params waits
     // for an unconfirmed object and does not for a confirmed one), so a reader that recovered
     // "skip" from the opcode alone would get the first record right and this one wrong.
-    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::ResourceCreate, &create, sizeof(create),
-                                          nullptr, 0, /*noReply=*/true),
-              kInvalidSeq);
+    ASSERT_NE(
+        wire.Encoder().EncodeRecord(MGPWireOp::ResourceCreate, &create, sizeof(create), nullptr, 0, /*noReply=*/true),
+        kInvalidSeq);
     ASSERT_TRUE(wire.PumpOne(&applied));
     EXPECT_EQ(wire.Answers().All.size(), 1u)
         << "the bit was set and an answer was written anyway - the 55,903-reply budget the bit "
@@ -1035,9 +1006,7 @@ TEST_F(PipeWireCodecTest, TheNoReplyBitSkipsTheAnswerAndKeepsTheAcceptanceRecord
     // spaces themselves (all six call bits now alias a ring bit), so what is pinned HERE is that
     // this row's encoded flags carry it rather than a call flag that would be recovered on the
     // far side as something else entirely.
-    EXPECT_EQ(MGPipeCallFlagsFor(MGPWireOp::ResourceCreate) &
-                  static_cast<Uint32>(MG_Pipe::kOptional),
-              0u)
+    EXPECT_EQ(MGPipeCallFlagsFor(MGPWireOp::ResourceCreate) & static_cast<Uint32>(MG_Pipe::kOptional), 0u)
         << "ResourceCreate grew kOptional, whose ring alias is kRecNoReply: a stamped call flag "
            "would now read as 'do not answer me'";
 }
@@ -1049,8 +1018,7 @@ TEST_F(PipeWireCodecTest, SetGlobalConstantsCarriesTheDefaultUniformBlock) {
     record.ShaderCso = MakeHandle(71);
     record.Version = 2;
     record.Blob = wire.Encoder().StageBytes(block.data(), block.size());
-    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::SetGlobalConstants, &record, sizeof(record)),
-              kInvalidSeq);
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::SetGlobalConstants, &record, sizeof(record)), kInvalidSeq);
     bool applied = false;
     ASSERT_TRUE(wire.PumpOne(&applied));
     EXPECT_TRUE(applied);
@@ -1068,8 +1036,7 @@ TEST_F(PipeWireCodecTest, SetStreamOutputTargetsCarriesItsRangesAndItsOffsets) {
         ranges[i].Size = 256;
     }
     const WireTail tails[2] = {{ranges, sizeof(ranges)}, {offsets, sizeof(offsets)}};
-    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::SetStreamOutputTargets, &header, sizeof(header),
-                                          tails, 2),
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::SetStreamOutputTargets, &header, sizeof(header), tails, 2),
               kInvalidSeq);
     bool applied = false;
     ASSERT_TRUE(wire.PumpOne(&applied));
@@ -1083,8 +1050,7 @@ TEST_F(PipeWireCodecTest, DrawVboWithoutUserIndicesHasExactlyOneTail) {
     info.InstanceCount = 1;
     info.NumDraws = 3; // odd * 12 bytes: the case that makes the alignment rule matter
     MGPDrawRange ranges[3] = {{0, 3, 0}, {3, 6, 0}, {9, 3, 1}};
-    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::DrawVbo, &info, sizeof(info), ranges,
-                                          sizeof(ranges)),
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::DrawVbo, &info, sizeof(info), ranges, sizeof(ranges)),
               kInvalidSeq);
     bool applied = false;
     ASSERT_TRUE(wire.PumpOne(&applied));
@@ -1123,8 +1089,7 @@ TEST_F(PipeWireCodecTest, DrawVboConditionalSpanTailIsEightAlignedAndSurvives) {
     EXPECT_EQ(layout.TailOffset[1] % 8, 0u) << "MGPDrawRange is twelve bytes; the span behind an "
                                                "odd NumDraws must still be 8-aligned";
 
-    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::DrawVbo, &info, sizeof(info), tails, 2),
-              kInvalidSeq);
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::DrawVbo, &info, sizeof(info), tails, 2), kInvalidSeq);
     bool applied = false;
     ASSERT_TRUE(wire.PumpOne(&applied));
     EXPECT_TRUE(applied);
@@ -1148,8 +1113,7 @@ TEST_F(PipeWireCodecTest, UserIndexSpanExactlyAtSegmentEndReachesTheSink) {
     span.Offset = Wire2::kStageBytes - 2;
     span.Size = 2;
     const WireTail tails[] = {{&range, sizeof(range)}, {&span, sizeof(span)}};
-    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::DrawVbo, &info, sizeof(info), tails, 2),
-              kInvalidSeq);
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::DrawVbo, &info, sizeof(info), tails, 2), kInvalidSeq);
     bool applied = false;
     ASSERT_TRUE(wire.PumpOne(&applied));
     ASSERT_TRUE(applied);
@@ -1198,8 +1162,7 @@ TEST_F(PipeWireCodecTest, DrawVboIndirectTailCrossesInPlaceOfTheSpan) {
     EXPECT_EQ(layout.TailOffset[1] % 8, 0u);
 
     const WireTail tails[2] = {{nullptr, 0}, {&indirect, sizeof(indirect)}};
-    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::DrawVbo, &info, sizeof(info), tails, 2),
-              kInvalidSeq);
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::DrawVbo, &info, sizeof(info), tails, 2), kInvalidSeq);
     bool applied = false;
     ASSERT_TRUE(wire.PumpOne(&applied));
     EXPECT_TRUE(applied);
@@ -1235,8 +1198,7 @@ TEST_F(PipeWireCodecTest, MemoryBarrierReachesTheSink) {
     MGPMemoryBarrier barrier{};
     barrier.Bits = 0x2000u; // GL_SHADER_STORAGE_BARRIER_BIT
     barrier.ByRegion = 0;
-    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::MemoryBarrier, &barrier, sizeof(barrier)),
-              kInvalidSeq);
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::MemoryBarrier, &barrier, sizeof(barrier)), kInvalidSeq);
     bool applied = false;
     ASSERT_TRUE(wire.PumpOne(&applied));
     EXPECT_TRUE(applied);
@@ -1259,8 +1221,7 @@ TEST_F(PipeWireCodecTest, ResourceCopyRegionReachesTheSinkWithItsTwoNames) {
     copy.DstLevel = 1;
     copy.SrcGlName = 1001;
     copy.DstGlName = 1002;
-    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::ResourceCopyRegion, &copy, sizeof(copy)),
-              kInvalidSeq);
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::ResourceCopyRegion, &copy, sizeof(copy)), kInvalidSeq);
     bool applied = false;
     ASSERT_TRUE(wire.PumpOne(&applied));
     EXPECT_TRUE(applied);
@@ -1385,8 +1346,7 @@ TEST_F(PipeWireCodecTest, ApplierResetReachesTheSinkWithItsSerial) {
     Wire2 wire;
     MGPApplierReset reset{};
     reset.ContextSerial = 0; // 0 = the first make-current (CONTRACT-P5C.md §1)
-    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::ApplierReset, &reset, sizeof(reset)),
-              kInvalidSeq);
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::ApplierReset, &reset, sizeof(reset)), kInvalidSeq);
     bool applied = false;
     ASSERT_TRUE(wire.PumpOne(&applied));
     EXPECT_TRUE(applied);
@@ -1395,8 +1355,7 @@ TEST_F(PipeWireCodecTest, ApplierResetReachesTheSinkWithItsSerial) {
 
     // A second edge carries the next serial, and the two records arrive in order.
     reset.ContextSerial = 1;
-    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::ApplierReset, &reset, sizeof(reset)),
-              kInvalidSeq);
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::ApplierReset, &reset, sizeof(reset)), kInvalidSeq);
     ASSERT_TRUE(wire.PumpOne(&applied));
     EXPECT_TRUE(applied);
     ASSERT_EQ(wire.Sink().ApplierResets.size(), 2u);
@@ -1410,15 +1369,13 @@ TEST_F(PipeWireCodecTest, ObjectDeathReachesTheSinkWithItsHandleAndKind) {
     // seven), because the kind is what the sink dispatches on and a row that widened it
     // wrong would drop every death of that kind.
     const MGPipeKind kinds[] = {
-        MGPipeKind::Texture,      MGPipeKind::Framebuffer,      MGPipeKind::Renderbuffer,
-        MGPipeKind::SamplerCso,   MGPipeKind::ShaderCso,        MGPipeKind::SamplerViewCso,
-        MGPipeKind::VertexElementsCso,
+        MGPipeKind::Texture,   MGPipeKind::Framebuffer,    MGPipeKind::Renderbuffer,      MGPipeKind::SamplerCso,
+        MGPipeKind::ShaderCso, MGPipeKind::SamplerViewCso, MGPipeKind::VertexElementsCso,
     };
     Uint32 slot = 40;
     for (MGPipeKind kind : kinds) {
         MGPHandleOnly death = HandleOnly(slot, kind);
-        ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::ObjectDeath, &death, sizeof(death)),
-                  kInvalidSeq)
+        ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::ObjectDeath, &death, sizeof(death)), kInvalidSeq)
             << static_cast<Uint32>(kind);
         ++slot;
     }
@@ -1453,14 +1410,14 @@ TEST_F(PipeWireCodecTest, SetContextValuesRoundTripsIntoPipeInputs) {
     MGPContextValues values{};
     values.ActiveTextureUnit = 9;
     values.MaxTouchedTextureUnit = 41;
-    for (Uint32 t = 0; t < 15; ++t) values.TouchedBufferBindingPointCount[t] = 100 + t;
+    for (Uint32 t = 0; t < 15; ++t)
+        values.TouchedBufferBindingPointCount[t] = 100 + t;
     values.IsTransformFeedbackActive = 1;
     values.IsTransformFeedbackPaused = 1;
     values.TransformFeedbackGeneration = 0xA1A2A3A4A5A6A7A8ull;
     values.BoundTransformFeedbackLifetimeId = 0xB1B2B3B4B5B6B7B8ull;
     values.TransformFeedbackCapturedVertices = 0xC1C2C3C4C5C6C7C8ull;
-    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::SetContextValues, &values, sizeof(values)),
-              kInvalidSeq);
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::SetContextValues, &values, sizeof(values)), kInvalidSeq);
     bool applied = false;
     ASSERT_TRUE(wire.PumpOne(&applied));
     EXPECT_TRUE(applied);
@@ -1473,8 +1430,7 @@ TEST_F(PipeWireCodecTest, SetContextValuesRoundTripsIntoPipeInputs) {
     EXPECT_EQ(gPipeInputs->GetMaxTouchedTextureUnit(), 41);
     MGPipeServerStampVerbBoundary(MGPipeVerb::DrawArrays);
     for (Uint32 t = 0; t < 15; ++t) {
-        EXPECT_EQ(gPipeInputs->GetTouchedBufferBindingPointCount(static_cast<BufferTarget>(t)),
-                  SizeT{100 + t})
+        EXPECT_EQ(gPipeInputs->GetTouchedBufferBindingPointCount(static_cast<BufferTarget>(t)), SizeT{100 + t})
             << "target " << t;
     }
     EXPECT_TRUE(gPipeInputs->IsTransformFeedbackActive());
@@ -1604,8 +1560,7 @@ TEST_F(PipeWireCodecTest, SetStorageBlockBindingCarriesItsNameAsAStagedBlob) {
     binding.Name = wire.Encoder().StageBytes(name, sizeof(name));
     EXPECT_EQ(binding.Name.Size, sizeof(name));
     EXPECT_EQ(binding.Name.Seg, static_cast<Uint32>(kSegStage));
-    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::SetStorageBlockBinding, &binding, sizeof(binding)),
-              kInvalidSeq);
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::SetStorageBlockBinding, &binding, sizeof(binding)), kInvalidSeq);
     bool applied = false;
     ASSERT_TRUE(wire.PumpOne(&applied));
     EXPECT_TRUE(applied);
@@ -1633,10 +1588,8 @@ TEST_F(PipeWireCodecTest, CopyFramebufferToTextureReachesTheSinkForBothForms) {
     sub.InternalFormat = 0;
     sub.XOffset = 4;
     sub.YOffset = 8;
-    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::CopyFramebufferToTexture, &image, sizeof(image)),
-              kInvalidSeq);
-    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::CopyFramebufferToTexture, &sub, sizeof(sub)),
-              kInvalidSeq);
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::CopyFramebufferToTexture, &image, sizeof(image)), kInvalidSeq);
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::CopyFramebufferToTexture, &sub, sizeof(sub)), kInvalidSeq);
     bool applied = false;
     ASSERT_TRUE(wire.PumpOne(&applied));
     EXPECT_TRUE(applied);
@@ -1671,10 +1624,8 @@ TEST_F(PipeWireCodecTest, PackBufferReadbacksReachTheirOwnArmsAndPostNoReply) {
     image.Src.DstSize = 4u * 4u * 6u * 4u;
     image.ImageStride = 4u * 80u;
     image.SwapGroup = 4;
-    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::ReadPixelsToBuffer, &pixels, sizeof(pixels)),
-              kInvalidSeq);
-    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::GetTextureImageToBuffer, &image, sizeof(image)),
-              kInvalidSeq);
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::ReadPixelsToBuffer, &pixels, sizeof(pixels)), kInvalidSeq);
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::GetTextureImageToBuffer, &image, sizeof(image)), kInvalidSeq);
     bool applied = false;
     ASSERT_TRUE(wire.PumpOne(&applied));
     EXPECT_TRUE(applied);
@@ -1734,8 +1685,7 @@ TEST_F(PipeWireCodecTest, CreateShaderStateCrossesAsOneArchiveAndSixUndeclaredRu
         EXPECT_EQ(desc.Spirv[i].Offset, 0u);
     }
 
-    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::CreateShaderState, &desc, sizeof(desc)),
-              kInvalidSeq);
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::CreateShaderState, &desc, sizeof(desc)), kInvalidSeq);
     bool applied = false;
     ASSERT_TRUE(wire.PumpOne(&applied));
     EXPECT_TRUE(applied);
@@ -1767,8 +1717,7 @@ TEST_F(PipeWireCodecTest, ResidualValueBlockCrossesAsItsOwnBlob) {
     record.Version = 3;
     record.Blob = wire.Encoder().StageBytes(&eightBytes, sizeof(eightBytes));
 
-    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::SetResidualValueState, &record, sizeof(record)),
-              kInvalidSeq);
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::SetResidualValueState, &record, sizeof(record)), kInvalidSeq);
     bool applied = true;
     ASSERT_TRUE(wire.PumpOne(&applied));
     EXPECT_FALSE(applied) << "a retired row must be declined, not applied";
@@ -1790,14 +1739,12 @@ TEST_F(PipeWireCodecTest, SamplerParametersCrossByteForByteIncludingBorderColorF
     desc.Parameters = wire.Encoder().StageBytes(&params, sizeof(params));
     EXPECT_EQ(desc.Parameters.Size, sizeof(SamplerParameters));
 
-    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::CreateSamplerState, &desc, sizeof(desc)),
-              kInvalidSeq);
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::CreateSamplerState, &desc, sizeof(desc)), kInvalidSeq);
     bool applied = false;
     ASSERT_TRUE(wire.PumpOne(&applied));
     EXPECT_TRUE(applied);
 
-    const void* staged = wire.Segments().Resolve(desc.Parameters.Seg, desc.Parameters.Offset,
-                                                 desc.Parameters.Size);
+    const void* staged = wire.Segments().Resolve(desc.Parameters.Seg, desc.Parameters.Offset, desc.Parameters.Size);
     ASSERT_NE(staged, nullptr);
     SamplerParameters back{};
     std::memcpy(&back, staged, sizeof(back));
@@ -1826,8 +1773,7 @@ TEST_F(PipeWireCodecTest, TheFiveClassBVerbsReachTheSinkAndNothingElse) {
     MGPReadbackInfo readback{};
     readback.Box = MGPBox{0, 0, 0, 2, 2, 1};
     readback.DstSize = 16;
-    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::ReadPixels, &readback, sizeof(readback)),
-              kInvalidSeq);
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::ReadPixels, &readback, sizeof(readback)), kInvalidSeq);
 
     MGPPresent present{};
     present.FrameSerial = 12;
@@ -1894,8 +1840,7 @@ TEST_F(PipeWireCodecTest, TheDecoderWritesNoRingControlFieldOfItsOwn) {
     // documented.
     Wire2 wire;
     MGPPresent present{};
-    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::Present, &present, sizeof(present)),
-              kInvalidSeq);
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::Present, &present, sizeof(present)), kInvalidSeq);
     wire.Encoder().Publish();
 
     Transport::RingRecordView view{};
@@ -1972,8 +1917,7 @@ TEST_F(PipeWireCodecTest, TheCommandRingWrapCountIsWhatTheHeadActuallyDid) {
     // payload up to 8, and a case that restated that arithmetic would be asserting its own
     // copy of Ring.cpp rather than what the producer did.
     MGPBindRenderState bind{};
-    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::BindRenderState, &bind, sizeof(bind)),
-              kInvalidSeq);
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::BindRenderState, &bind, sizeof(bind)), kInvalidSeq);
     bool applied = false;
     ASSERT_TRUE(wire.PumpOne(&applied));
     const Uint64 stride = wire.Encoder().CmdBytesWritten();
@@ -1986,8 +1930,7 @@ TEST_F(PipeWireCodecTest, TheCommandRingWrapCountIsWhatTheHeadActuallyDid) {
     // there, and not an artefact of a backed-up queue.
     const Uint64 records = (Wire2::kCmdBytes / stride) + 3;
     for (Uint64 i = 1; i < records; ++i) {
-        ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::BindRenderState, &bind, sizeof(bind)),
-                  kInvalidSeq)
+        ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::BindRenderState, &bind, sizeof(bind)), kInvalidSeq)
             << "the ring refused record " << i << " of " << records;
         ASSERT_TRUE(wire.PumpOne(&applied));
     }
@@ -2025,8 +1968,7 @@ TEST_F(PipeWireCodecTest, ABigProgramArchiveDoesNotGrowItsRecordAtAll) {
     MGPProgramDesc desc{};
     desc.Cso = MakeHandle(91);
     desc.Reflection = wire.Encoder().StageBytes(archive.data(), archive.size());
-    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::CreateShaderState, &desc, sizeof(desc)),
-              kInvalidSeq);
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::CreateShaderState, &desc, sizeof(desc)), kInvalidSeq);
     EXPECT_EQ(wire.Encoder().MaxRecordBytesSeen(), 8u + sizeof(MGPProgramDesc));
     EXPECT_GE(wire.Encoder().StagedBytesInFlight(), archive.size());
 }
@@ -2041,8 +1983,7 @@ TEST_F(PipeWireCodecTest, AlreadyRetiredStagingReclamationIsNotAProducerWait) {
     ASSERT_TRUE(wire.PumpOne(&applied));
     // Do not explicitly reclaim: the second real allocation must do that itself.
     wire.Encoder().StageBytes(payload.data(), payload.size());
-    EXPECT_EQ(wire.Encoder().StageReclaimWaits(), 0u)
-        << "already-retired lazy reclamation is not a producer wait";
+    EXPECT_EQ(wire.Encoder().StageReclaimWaits(), 0u) << "already-retired lazy reclamation is not a producer wait";
 }
 
 TEST_F(PipeWireCodecTest, StagedBytesAreReclaimedOnlyBehindRetiredSeq) {
@@ -2054,8 +1995,7 @@ TEST_F(PipeWireCodecTest, StagedBytesAreReclaimedOnlyBehindRetiredSeq) {
     EXPECT_GE(inFlight, sizeof(payload));
 
     MGPBindRenderState bind{};
-    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::BindRenderState, &bind, sizeof(bind)),
-              kInvalidSeq);
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::BindRenderState, &bind, sizeof(bind)), kInvalidSeq);
     // Nothing is retired yet, so nothing may be released: R-11's whole content on this side.
     wire.Encoder().ReclaimStagedBytes();
     EXPECT_EQ(wire.Encoder().StagedBytesInFlight(), inFlight);
@@ -2116,8 +2056,7 @@ TEST_F(PipeWireCodecTest, TheEncoderNeverWritesSegStagesConsumerCursors) {
     const std::uint8_t payload[128] = {};
     (void)wire.Encoder().StageBytes(payload, sizeof(payload));
     MGPBindRenderState bind{};
-    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::BindRenderState, &bind, sizeof(bind)),
-              kInvalidSeq);
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::BindRenderState, &bind, sizeof(bind)), kInvalidSeq);
     bool applied = false;
     ASSERT_TRUE(wire.PumpOne(&applied));
     wire.Encoder().ReclaimStagedBytes();
@@ -2142,20 +2081,17 @@ TEST_F(PipeWireCodecTest, TheStageMarkQueueStaysBoundedWithOneRecordAlwaysInFlig
     // queue at every reclaim, which is the one regime the old "clear only when front reaches
     // size()" code handled - a case written that way stays green against the bug. One record
     // encoded ahead of the one being applied is what makes `front < size()` permanent.
-    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::BindRenderState, &bind, sizeof(bind)),
-              kInvalidSeq);
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::BindRenderState, &bind, sizeof(bind)), kInvalidSeq);
     for (int i = 0; i < 4000; ++i) {
         (void)wire.Encoder().StageBytes(blob, sizeof(blob));
-        ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::BindRenderState, &bind, sizeof(bind)),
-                  kInvalidSeq);
+        ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::BindRenderState, &bind, sizeof(bind)), kInvalidSeq);
         bool applied = false;
         ASSERT_TRUE(wire.PumpOne(&applied)) << "record " << i;
     }
     EXPECT_EQ(wire.Encoder().EmitSeq(), 4001u);
     EXPECT_EQ(wire.Decoder().AppliedSeq(), 4000u) << "one record must still be in flight";
     // Bounded by twice the records actually in flight, not by the records ever encoded.
-    EXPECT_LE(wire.Encoder().StageMarksHeld(), 4u)
-        << "the mark queue is tracking history rather than flight";
+    EXPECT_LE(wire.Encoder().StageMarksHeld(), 4u) << "the mark queue is tracking history rather than flight";
 }
 
 // ---- M4: the reply slot is for kReplySlot rows only ----------------------------------------
@@ -2191,15 +2127,13 @@ TEST_F(PipeWireCodecTest, NoReplyIsWrittenForARowTheCatalogueGivesNoReplySlot) {
     create.ArrayLayers = 1;
     create.Levels = 1;
     create.Samples = 1;
-    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::ResourceCreate, &create, sizeof(create)),
-              kInvalidSeq);
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::ResourceCreate, &create, sizeof(create)), kInvalidSeq);
     bool applied = false;
     ASSERT_TRUE(wire.PumpOne(&applied));
     ASSERT_EQ(wire.Answers().All.size(), 1u) << "the kReplySlot row did not answer";
 
     const MGPHandleOnly destroy = HandleOnly(131, MGPipeKind::Buffer);
-    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::ResourceDestroy, &destroy, sizeof(destroy)),
-              kInvalidSeq);
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::ResourceDestroy, &destroy, sizeof(destroy)), kInvalidSeq);
     ASSERT_TRUE(wire.PumpOne(&applied));
     EXPECT_TRUE(applied);
 
@@ -2213,10 +2147,9 @@ TEST_F(PipeWireCodecTest, EveryRowThatDoesWriteAReplyCarriesKReplySlot) {
     // this list at ID-31 and R-17 - and they are listed BY NAME rather than derived from the
     // flags table, because deriving the expectation from the same table the assertion reads
     // would make this case true by construction.
-    for (const MGPWireOp op : {MGPWireOp::MapPersistent, MGPWireOp::ResourceReadback,
-                               MGPWireOp::ReadPixels, MGPWireOp::ResourceCreate,
-                               MGPWireOp::ResourceRespecify, MGPWireOp::ResourceSubData,
-                               MGPWireOp::SetTextureParams}) {
+    for (const MGPWireOp op :
+         {MGPWireOp::MapPersistent, MGPWireOp::ResourceReadback, MGPWireOp::ReadPixels, MGPWireOp::ResourceCreate,
+          MGPWireOp::ResourceRespecify, MGPWireOp::ResourceSubData, MGPWireOp::SetTextureParams}) {
         EXPECT_NE(MGPipeCallFlagsFor(op) & static_cast<Uint32>(kReplySlot), 0u) << WireOpName(op);
     }
 }
@@ -2235,20 +2168,17 @@ TEST_F(PipeWireCodecTest, TheFourAcceptanceRowsAnswerThroughTheSlotAndNotOnlyThr
     MGPTextureParams params{};
     params.Res = MakeHandle(77);
     params.BuiltinSampler = MakeHandle(78);
-    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::SetTextureParams, &params, sizeof(params)),
-              kInvalidSeq);
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::SetTextureParams, &params, sizeof(params)), kInvalidSeq);
     bool applied = false;
     ASSERT_TRUE(wire.PumpOne(&applied));
     EXPECT_TRUE(applied) << "the record must still have CROSSED; acceptance is not 'applied'";
 
     ASSERT_EQ(wire.Answers().All.size(), 1u);
     EXPECT_EQ(wire.Answers().All[0].Seq, 1u) << "the id is the record's own ordinal (R-3)";
-    EXPECT_TRUE(wire.Answers().All[0].Bytes.empty())
-        << "an acceptance answer is a STATUS; DECLINED carries no payload";
+    EXPECT_TRUE(wire.Answers().All[0].Bytes.empty()) << "an acceptance answer is a STATUS; DECLINED carries no payload";
     ASSERT_TRUE(wire.Decoder().LastAcceptanceKnown());
-    EXPECT_EQ(wire.Answers().All[0].Status, wire.Decoder().LastAcceptance()
-                                                ? ReplySink::kStatusOk
-                                                : ReplySink::kStatusDeclined);
+    EXPECT_EQ(wire.Answers().All[0].Status,
+              wire.Decoder().LastAcceptance() ? ReplySink::kStatusOk : ReplySink::kStatusDeclined);
     ExpectRepliesAgreeWithTheAcceptanceTally(wire);
 }
 
@@ -2264,8 +2194,7 @@ TEST_F(PipeWireCodecTest, TheAuditFillOverwritesExactlyTheRunsTheRecordResolved)
     MGPSamplerDesc record{};
     record.Cso = MakeHandle(91);
     record.Parameters = wire.Encoder().StageBytes(&params, sizeof(params));
-    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::CreateSamplerState, &record, sizeof(record)),
-              kInvalidSeq);
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::CreateSamplerState, &record, sizeof(record)), kInvalidSeq);
     bool applied = false;
     ASSERT_TRUE(wire.PumpOne(&applied));
     EXPECT_TRUE(applied);
@@ -2283,8 +2212,7 @@ TEST_F(PipeWireCodecTest, TheAuditFillIsOffByDefaultSoTheHotPathPaysNothing) {
     MGPSamplerDesc record{};
     record.Cso = MakeHandle(92);
     record.Parameters = wire.Encoder().StageBytes(&params, sizeof(params));
-    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::CreateSamplerState, &record, sizeof(record)),
-              kInvalidSeq);
+    ASSERT_NE(wire.Encoder().EncodeRecord(MGPWireOp::CreateSamplerState, &record, sizeof(record)), kInvalidSeq);
     bool applied = false;
     ASSERT_TRUE(wire.PumpOne(&applied));
     EXPECT_EQ(wire.Decoder().PoisonedStageBytes(), 0u);
@@ -2298,9 +2226,9 @@ TEST_F(PipeWireCodecTest, TheAuditFillIsOffByDefaultSoTheHotPathPaysNothing) {
 
 TEST_F(PipeWireCodecTest, FormatCapabilitiesRoundTrip) {
     MG_Backend::FormatCapabilityCache cache;
-    cache.FullCaps[0][1] = MG_Backend::FormatCapabilityFlags(
-        static_cast<Uint64>(MG_Backend::FormatCapability::Creatable) |
-        static_cast<Uint64>(MG_Backend::FormatCapability::Sampled));
+    cache.FullCaps[0][1] =
+        MG_Backend::FormatCapabilityFlags(static_cast<Uint64>(MG_Backend::FormatCapability::Creatable) |
+                                          static_cast<Uint64>(MG_Backend::FormatCapability::Sampled));
     cache.CaveatCaps[2][3] =
         MG_Backend::FormatCapabilityFlags(static_cast<Uint64>(MG_Backend::FormatCapability::LinearFilter));
     cache.SampleCounts[1][4] = Vector<Int>{1, 2, 4, 8};
@@ -2349,8 +2277,7 @@ TEST_F(PipeWireCodecTest, RendererInfoRoundTrips) {
     info.RendererGLInfo.TargetGLVersion = Version{4, 6, 0, Optional<String>(), Optional<VersionType>()};
     info.RendererGLInfo.TargetGLSLVersion =
         Version{4, 60, 0, Optional<String>(String("-dev")), Optional<VersionType>(VersionType::Development)};
-    info.RendererGLInfo.Extensions = Vector<GLExtension>{static_cast<GLExtension>(1),
-                                                         static_cast<GLExtension>(7)};
+    info.RendererGLInfo.Extensions = Vector<GLExtension>{static_cast<GLExtension>(1), static_cast<GLExtension>(7)};
     info.RendererGLInfo.IsCompatibilityProfile = true;
     info.StaticBackendCapability.AllowVSOnlyPrograms = true;
 
@@ -2430,8 +2357,7 @@ TEST_F(PipeWireCodecTest, ANonNullHostSpanPointerIsFatal) {
         std::vector<std::uint8_t> tail(sizeof(range) + sizeof(span));
         std::memcpy(tail.data(), &range, sizeof(range));
         std::memcpy(tail.data() + sizeof(range), &span, sizeof(span));
-        ForgeAndDecode(wire, MGPWireOp::SetShaderBuffers, &header, sizeof(header), tail.data(),
-                       tail.size());
+        ForgeAndDecode(wire, MGPWireOp::SetShaderBuffers, &header, sizeof(header), tail.data(), tail.size());
     });
     ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
     EXPECT_NE(r.Log.find("Fatal{ProtocolCorruption, \"host-span\"}"), std::string::npos) << r.Log;
@@ -2483,8 +2409,7 @@ TEST_F(PipeWireCodecTest, ARecordLargerThanHalfTheRingIsFatalRingOverrun) {
         Wire2 wire;
         MGPDrawInfo info{};
         // Just over half the ring. Wire2's SEG_CMD is 64 KiB, so the cap is 32 KiB.
-        const Uint32 draws =
-            static_cast<Uint32>(((Wire2::kCmdBytes / 2) / sizeof(MGPDrawRange)) + 8);
+        const Uint32 draws = static_cast<Uint32>(((Wire2::kCmdBytes / 2) / sizeof(MGPDrawRange)) + 8);
         info.NumDraws = draws;
         std::vector<MGPDrawRange> ranges(draws);
         (void)wire.Encoder().EncodeRecord(MGPWireOp::DrawVbo, &info, sizeof(info), ranges.data(),
@@ -2495,8 +2420,7 @@ TEST_F(PipeWireCodecTest, ARecordLargerThanHalfTheRingIsFatalRingOverrun) {
     EXPECT_NE(r.Log.find("exceeds RingProducer::MaxRecordBytes()"), std::string::npos) << r.Log;
     // The diagnostic has to name the decision it forces, because the person reading it
     // has to choose between a cut for this row and a bigger ring and neither is a local fix.
-    EXPECT_NE(r.Log.find("budget cuts blobs, not a record's own bytes"), std::string::npos)
-        << r.Log;
+    EXPECT_NE(r.Log.find("budget cuts blobs, not a record's own bytes"), std::string::npos) << r.Log;
 }
 
 TEST_F(PipeWireCodecTest, ARunThatLeavesItsSegmentIsFatal) {
@@ -2605,8 +2529,7 @@ TEST_F(PipeWireCodecTest, ATailThatDoesNotMatchItsOwnCountIsFatal) {
         header.Start = 0;
         header.Count = 4000;
         const std::uint64_t eightBytes = 0;
-        ForgeAndDecode(wire, MGPWireOp::SetSamplerViews, &header, sizeof(header), &eightBytes,
-                       sizeof(eightBytes));
+        ForgeAndDecode(wire, MGPWireOp::SetSamplerViews, &header, sizeof(header), &eightBytes, sizeof(eightBytes));
     });
     ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
     // The count is past the unit bound, so the layout refuses it before the length even
@@ -2623,8 +2546,7 @@ TEST_F(PipeWireCodecTest, ATailWhoseLengthDisagreesWithItsCountIsFatal) {
         header.Start = 0;
         header.Count = 4; // 4 * sizeof(MGPBoundView) == 96 bytes of tail
         const std::uint64_t eightBytes = 0;
-        ForgeAndDecode(wire, MGPWireOp::SetSamplerViews, &header, sizeof(header), &eightBytes,
-                       sizeof(eightBytes));
+        ForgeAndDecode(wire, MGPWireOp::SetSamplerViews, &header, sizeof(header), &eightBytes, sizeof(eightBytes));
     });
     ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
     EXPECT_NE(r.Log.find("its own count fields describe"), std::string::npos) << r.Log;
@@ -2638,8 +2560,7 @@ TEST_F(PipeWireCodecTest, VertexAttribDefaultsMustAgreeWithItsOwnMask) {
         header.Mask = 0x7; // three bits
         header.Count = 2;  // two entries
         MGPAttribValue tail[2]{};
-        ForgeAndDecode(wire, MGPWireOp::SetVertexAttribDefaults, &header, sizeof(header), tail,
-                       sizeof(tail));
+        ForgeAndDecode(wire, MGPWireOp::SetVertexAttribDefaults, &header, sizeof(header), tail, sizeof(tail));
     });
     ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
     EXPECT_NE(r.Log.find("SetVertexAttribDefaults.Count"), std::string::npos) << r.Log;
@@ -2697,8 +2618,7 @@ TEST_F(PipeWireCodecTest, AHostSpanCountThatIsNeitherZeroNorCountIsFatal) {
         std::vector<std::uint8_t> tail(sizeof(ranges) + sizeof(spans));
         std::memcpy(tail.data(), ranges, sizeof(ranges));
         std::memcpy(tail.data() + sizeof(ranges), spans, sizeof(spans));
-        ForgeAndDecode(wire, MGPWireOp::SetShaderBuffers, &header, sizeof(header), tail.data(),
-                       tail.size());
+        ForgeAndDecode(wire, MGPWireOp::SetShaderBuffers, &header, sizeof(header), tail.data(), tail.size());
     });
     ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
     EXPECT_NE(r.Log.find("SetShaderBuffers.HostSpanCount"), std::string::npos) << r.Log;
@@ -2724,13 +2644,11 @@ TEST_F(PipeWireCodecTest, AHostSpanRunPastItsSegmentIsFatalOnSetShaderBuffers) {
         std::vector<std::uint8_t> tail(sizeof(range) + sizeof(span));
         std::memcpy(tail.data(), &range, sizeof(range));
         std::memcpy(tail.data() + sizeof(range), &span, sizeof(span));
-        ForgeAndDecode(wire, MGPWireOp::SetShaderBuffers, &header, sizeof(header), tail.data(),
-                       tail.size());
+        ForgeAndDecode(wire, MGPWireOp::SetShaderBuffers, &header, sizeof(header), tail.data(), tail.size());
     });
     ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
     EXPECT_NE(r.Log.find("Fatal{ProtocolCorruption, \"host-span\"}"), std::string::npos) << r.Log;
-    EXPECT_NE(r.Log.find("does not lie inside that segment (R-2.3 arm 4)"), std::string::npos)
-        << r.Log;
+    EXPECT_NE(r.Log.find("does not lie inside that segment (R-2.3 arm 4)"), std::string::npos) << r.Log;
 }
 
 TEST_F(PipeWireCodecTest, AHostSpanRunPastItsSegmentIsFatalOnDrawVbo) {
@@ -2758,8 +2676,7 @@ TEST_F(PipeWireCodecTest, AHostSpanRunPastItsSegmentIsFatalOnDrawVbo) {
         ForgeAndDecode(wire, MGPWireOp::DrawVbo, &info, sizeof(info), tail.data(), tail.size());
     });
     ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
-    EXPECT_NE(r.Log.find("does not lie inside that segment (R-2.3 arm 4)"), std::string::npos)
-        << r.Log;
+    EXPECT_NE(r.Log.find("does not lie inside that segment (R-2.3 arm 4)"), std::string::npos) << r.Log;
 }
 
 // The span itself is in bounds, but the driver's index count would leave it. Exercise
@@ -2816,17 +2733,30 @@ TEST_F(PipeWireCodecTest, UserIndexSpanRequiresOneIndexedRangeAndNonWrappingExte
                 span.Seg = kSegStage;
                 span.Size = 2;
                 switch (malformed) {
-                case 0: info.IndexSize = 0; break; // arrays cannot consume user indices
-                case 1: info.IndexSize = 3; break;
-                case 2: info.NumDraws = 0; break;
-                case 3: info.NumDraws = 2; break; // no flattening contract for multi-draw yet
-                case 4: ranges[0].Start = 1; break;
-                case 5: info.IndexSize = 4; ranges[0].Count = 0x80000001u; span.Size = 4; break;
+                case 0:
+                    info.IndexSize = 0;
+                    break; // arrays cannot consume user indices
+                case 1:
+                    info.IndexSize = 3;
+                    break;
+                case 2:
+                    info.NumDraws = 0;
+                    break;
+                case 3:
+                    info.NumDraws = 2;
+                    break; // no flattening contract for multi-draw yet
+                case 4:
+                    ranges[0].Start = 1;
+                    break;
+                case 5:
+                    info.IndexSize = 4;
+                    ranges[0].Count = 0x80000001u;
+                    span.Size = 4;
+                    break;
                 }
                 if (side == 0) {
-                    const WireTail tails[] = {
-                        {ranges, static_cast<Uint64>(info.NumDraws) * sizeof(MGPDrawRange)},
-                        {&span, sizeof(span)}};
+                    const WireTail tails[] = {{ranges, static_cast<Uint64>(info.NumDraws) * sizeof(MGPDrawRange)},
+                                              {&span, sizeof(span)}};
                     wire.Encoder().EncodeRecord(MGPWireOp::DrawVbo, &info, sizeof(info), tails, 2);
                 } else {
                     const auto bytes = info.NumDraws * sizeof(MGPDrawRange);
@@ -2857,9 +2787,8 @@ TEST_F(PipeWireCodecTest, ADrawThatSetsBothTheSpanAndTheIndirectFlagIsFatal) {
     info.InstanceCount = 1;
     info.NumDraws = 0;
     MGPDrawIndirect indirect{};
-    const ChildResult r = RunInChild([&] {
-        ForgeAndDecode(wire, MGPWireOp::DrawVbo, &info, sizeof(info), &indirect, sizeof(indirect));
-    });
+    const ChildResult r =
+        RunInChild([&] { ForgeAndDecode(wire, MGPWireOp::DrawVbo, &info, sizeof(info), &indirect, sizeof(indirect)); });
     EXPECT_TRUE(DiedOfAbort(r)) << DescribeStatus(r);
     EXPECT_NE(r.Log.find("Fatal{ProtocolCorruption, \"DrawVbo.Flags\"}"), std::string::npos) << r.Log;
 }
@@ -2873,9 +2802,8 @@ TEST_F(PipeWireCodecTest, AnIndirectDrawThatDeclaresRangesIsFatal) {
     info.InstanceCount = 1;
     info.NumDraws = 1; // the server never reads a count and the client never sends ranges
     MGPDrawRange range{0, 3, 0};
-    const ChildResult r = RunInChild([&] {
-        ForgeAndDecode(wire, MGPWireOp::DrawVbo, &info, sizeof(info), &range, sizeof(range));
-    });
+    const ChildResult r =
+        RunInChild([&] { ForgeAndDecode(wire, MGPWireOp::DrawVbo, &info, sizeof(info), &range, sizeof(range)); });
     EXPECT_TRUE(DiedOfAbort(r)) << DescribeStatus(r);
     EXPECT_NE(r.Log.find("Fatal{ProtocolCorruption, \"DrawVbo.NumDraws\"}"), std::string::npos) << r.Log;
 }
@@ -2930,8 +2858,7 @@ TEST_F(PipeWireCodecTest, APartiallyZeroUploadBoxIsFatalRatherThanReadAsEmpty) {
         ForgeAndDecode(wire, MGPWireOp::ResourceSubData, &rec, sizeof(rec), nullptr, 0);
     });
     ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
-    EXPECT_NE(r.Log.find("has a zero extent on some axes and not others"), std::string::npos)
-        << r.Log;
+    EXPECT_NE(r.Log.find("has a zero extent on some axes and not others"), std::string::npos) << r.Log;
 }
 
 TEST_F(PipeWireCodecTest, ASecondProcessResolverIsFatalRatherThanASilentRace) {
@@ -2997,7 +2924,8 @@ namespace {
         const std::string delta = ReadLog().substr(before.size());
         const std::string line = "Refuse{AdoptTierOnStream, \"T" + std::to_string(tier) + "\"}";
         std::size_t count = 0;
-        for (auto at = delta.find(line); at != std::string::npos; at = delta.find(line, at + 1)) ++count;
+        for (auto at = delta.find(line); at != std::string::npos; at = delta.find(line, at + 1))
+            ++count;
         EXPECT_EQ(count, 1u) << "one refusal at the handshake and none per map_persistent:\n" << delta;
         EXPECT_EQ(delta.find("Fatal{"), std::string::npos) << delta;
     }
@@ -3027,7 +2955,7 @@ TEST_F(PipeWireCodecTest, AnUnsettledAdoptTierStillDiesByNameOnTheWirePath) {
     });
     ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
     EXPECT_NE(r.Log.find("Fatal{UnimplementedAdoptTier, \"T0\"} - MOBILEGL_IPC_ADOPT_TIER=0 "
-                          "reached a map_persistent that no handshake settled"),
+                         "reached a map_persistent that no handshake settled"),
               std::string::npos)
         << r.Log;
 }
@@ -3081,7 +3009,6 @@ int main(int argc, char** argv) {
     return rc;
 }
 
-
 namespace {
     struct FenceProbeBackend final : MG_Backend::DirectGLES::BackendObject_DirectGLES {
         MG_Backend::GlobalBackendFunctionsTable Table{};
@@ -3097,8 +3024,8 @@ namespace {
         fenceDeletes = fenceServerWaits = fenceFlags = 0;
         fenceTimeout = 0;
         backend.Table.GL.FenceSync = +[]() -> MG_Backend::BackendSyncHandle { return &nativeFenceToken; };
-        backend.Table.GL.ClientWaitSync = +[](MG_Backend::BackendSyncHandle native, GLbitfield flags,
-                                               GLuint64 timeout) -> GLenum {
+        backend.Table.GL.ClientWaitSync =
+            +[](MG_Backend::BackendSyncHandle native, GLbitfield flags, GLuint64 timeout) -> GLenum {
             EXPECT_EQ(native, &nativeFenceToken);
             fenceFlags = flags;
             fenceTimeout = timeout;
@@ -3119,7 +3046,7 @@ namespace {
             ++fenceDeletes;
         };
     }
-}
+} // namespace
 
 TEST(FenceWireRoundTrip, PreservesWaitFlagsTimeoutAnswersAndNativeLifetime) {
     Wire2 wire;
@@ -3217,15 +3144,15 @@ namespace {
             EXPECT_EQ(query, &nativeQueryToken);
             ++queryDeletes;
         };
-        backend.Table.GL.ClientWaitSync = +[](MG_Backend::BackendSyncHandle sync, GLbitfield flags,
-                                              GLuint64 timeout) -> GLenum {
+        backend.Table.GL.ClientWaitSync =
+            +[](MG_Backend::BackendSyncHandle sync, GLbitfield flags, GLuint64 timeout) -> GLenum {
             EXPECT_EQ(sync, &nativeFenceToken);
             fenceFlags = flags;
             fenceTimeout = timeout;
             return queryGpuReady ? GL_CONDITION_SATISFIED : GL_TIMEOUT_EXPIRED;
         };
     }
-}
+} // namespace
 
 TEST(QueryWireRoundTrip, PrimitiveQueriesPreservePendingStateNativeResultsAndIdentity) {
     Wire2 wire;
@@ -3328,7 +3255,6 @@ TEST(FenceWireRoundTrip, DestroyedAndRecycledWireHandlesNeverReachTheBackend) {
 }
 #endif
 
-
 TEST(FenceWireRoundTrip, MissingConsumerDeclinesWithoutInventingASignaledAnswer) {
     Wire2 wire;
     const MGPFenceWait wait{{3, 0}, 0, 0, 0};
@@ -3358,8 +3284,7 @@ TEST(ApplierResetWireRoundTrip, TheSerialSequenceIsAssertedAndTheServerResetRuns
     wire.Decoder().SetVerbSink(&sink);
     auto send = [&](Uint64 serial) {
         const MGPApplierReset reset{serial};
-        EXPECT_NE(wire.Encoder().EncodeRecord(MGPWireOp::ApplierReset, &reset, sizeof(reset)),
-                  kInvalidSeq);
+        EXPECT_NE(wire.Encoder().EncodeRecord(MGPWireOp::ApplierReset, &reset, sizeof(reset)), kInvalidSeq);
         bool applied = false;
         EXPECT_TRUE(wire.PumpOne(&applied));
         EXPECT_TRUE(applied);
@@ -3429,8 +3354,7 @@ TEST(ObjectDeathWireRoundTrip, TheTextureAndFramebufferTwinsReleaseByHandleAndNe
         // The death crosses and the twin retires: the slot's live generation goes back to 0.
         const Uint64 deathsBefore = sink.ObjectDeaths();
         const MGPHandleOnly death{MakeHandle(one.slot, 1), static_cast<Uint32>(one.kind), 0};
-        EXPECT_NE(wire.Encoder().EncodeRecord(MGPWireOp::ObjectDeath, &death, sizeof(death)),
-                  kInvalidSeq);
+        EXPECT_NE(wire.Encoder().EncodeRecord(MGPWireOp::ObjectDeath, &death, sizeof(death)), kInvalidSeq);
         bool applied = false;
         EXPECT_TRUE(wire.PumpOne(&applied));
         EXPECT_TRUE(applied);
@@ -3444,18 +3368,15 @@ TEST(ObjectDeathWireRoundTrip, TheTextureAndFramebufferTwinsReleaseByHandleAndNe
         // new twin survives it.
         ASSERT_NE(getOrCreate(MakeHandle(one.slot, 2)), nullptr);
         ASSERT_EQ(liveGen(one.slot), 2u);
-        EXPECT_NE(wire.Encoder().EncodeRecord(MGPWireOp::ObjectDeath, &death, sizeof(death)),
-                  kInvalidSeq);
+        EXPECT_NE(wire.Encoder().EncodeRecord(MGPWireOp::ObjectDeath, &death, sizeof(death)), kInvalidSeq);
         ASSERT_TRUE(wire.PumpOne(&applied));
         EXPECT_TRUE(applied);
-        EXPECT_EQ(liveGen(one.slot), 2u)
-            << "a stale handle released the recycled slot's new twin (kind "
-            << static_cast<Uint32>(one.kind) << ")";
+        EXPECT_EQ(liveGen(one.slot), 2u) << "a stale handle released the recycled slot's new twin (kind "
+                                         << static_cast<Uint32>(one.kind) << ")";
 
         // And the new object's own death retires it, leaving the table as the case found it.
         const MGPHandleOnly newDeath{MakeHandle(one.slot, 2), static_cast<Uint32>(one.kind), 0};
-        EXPECT_NE(wire.Encoder().EncodeRecord(MGPWireOp::ObjectDeath, &newDeath, sizeof(newDeath)),
-                  kInvalidSeq);
+        EXPECT_NE(wire.Encoder().EncodeRecord(MGPWireOp::ObjectDeath, &newDeath, sizeof(newDeath)), kInvalidSeq);
         ASSERT_TRUE(wire.PumpOne(&applied));
         EXPECT_TRUE(applied);
         EXPECT_EQ(liveGen(one.slot), 0u);
@@ -3481,9 +3402,7 @@ TEST(CtWireFatals, ASerialTheSessionCannotProveIsProtocolCorruption) {
         (void)wire.PumpOne(&applied);
     });
     ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
-    EXPECT_NE(r.Log.find("Fatal{ProtocolCorruption, \"ApplierReset.ContextSerial\"}"),
-              std::string::npos)
-        << r.Log;
+    EXPECT_NE(r.Log.find("Fatal{ProtocolCorruption, \"ApplierReset.ContextSerial\"}"), std::string::npos) << r.Log;
 }
 
 TEST(CtWireFatals, ANullDeathHandleIsProtocolCorruption) {
@@ -3499,8 +3418,7 @@ TEST(CtWireFatals, ANullDeathHandleIsProtocolCorruption) {
         (void)wire.PumpOne(&applied);
     });
     ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
-    EXPECT_NE(r.Log.find("Fatal{ProtocolCorruption, \"ObjectDeath.Handle\"}"), std::string::npos)
-        << r.Log;
+    EXPECT_NE(r.Log.find("Fatal{ProtocolCorruption, \"ObjectDeath.Handle\"}"), std::string::npos) << r.Log;
 }
 
 // THE GUARD'S TWO NON-FATAL ARMS, as unit controls. The Fatal arm itself needs a LIVE client

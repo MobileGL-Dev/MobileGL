@@ -187,12 +187,12 @@ namespace {
     // ---- the entry points, each in a fresh process ---------------------------------------------
 
     struct EntryReport {
-        Int32 getDisplay = -1;     // 1: eglGetDisplay gave a display
-        Int32 vendorDisplay = -1;  // 1: the glvnd vendor's getPlatformDisplay did
-        Int32 vendorDevices = -1;  // the vendor's eglQueryDevicesEXT count
-        Int32 glxLoaded = -1;      // __glx_Main's answer
-        Int32 clientQueries = -1;  // 1: client extensions and a proc address answered (no display needed)
-        Int64 elapsedMs = -1;      // all of the above, end to end
+        Int32 getDisplay = -1;    // 1: eglGetDisplay gave a display
+        Int32 vendorDisplay = -1; // 1: the glvnd vendor's getPlatformDisplay did
+        Int32 vendorDevices = -1; // the vendor's eglQueryDevicesEXT count
+        Int32 glxLoaded = -1;     // __glx_Main's answer
+        Int32 clientQueries = -1; // 1: client extensions and a proc address answered (no display needed)
+        Int64 elapsedMs = -1;     // all of the above, end to end
     };
 
     EntryReport RunEntryPoints(const std::string& control, const std::string& logBase, bool software = false) {
@@ -207,8 +207,10 @@ namespace {
             ::setenv("MOBILEGL_TRANSPORT", "spawn", 1);
             ::setenv("MOBILEGL_IPC_CONTROL", control.c_str(), 1);
             ::setenv("MOBILEGL_BACKEND_TYPE", "DirectGLES", 1);
-            if (software) ::setenv("LIBGL_ALWAYS_SOFTWARE", "1", 1);
-            else ::unsetenv("LIBGL_ALWAYS_SOFTWARE");
+            if (software)
+                ::setenv("LIBGL_ALWAYS_SOFTWARE", "1", 1);
+            else
+                ::unsetenv("LIBGL_ALWAYS_SOFTWARE");
             EntryReport r{};
             const auto start = std::chrono::steady_clock::now();
 
@@ -220,7 +222,8 @@ namespace {
                               EGL::QueryString(EGL_NO_DISPLAY, EGL_EXTENSIONS) != nullptr &&
                               imports.getDispatchAddress("glClear") != nullptr &&
                               EGL::GetProcAddress("eglQueryDmaBufModifiersEXT") != nullptr;
-            r.vendorDisplay = vendor && imports.getPlatformDisplay(EGL_NONE, EGL_DEFAULT_DISPLAY, nullptr) != EGL_NO_DISPLAY;
+            r.vendorDisplay =
+                vendor && imports.getPlatformDisplay(EGL_NONE, EGL_DEFAULT_DISPLAY, nullptr) != EGL_NO_DISPLAY;
             r.getDisplay = EGL::GetDisplay(EGL_DEFAULT_DISPLAY) != EGL_NO_DISPLAY;
             if (vendor) {
                 using QueryDevices = EGLBoolean (*)(EGLint, EGLDeviceEXT*, EGLint*);

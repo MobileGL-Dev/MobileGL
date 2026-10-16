@@ -171,9 +171,7 @@ TEST(FramingTest, TakeWithNoCompleteMessageDoesNotBlockOrCorrupt) {
     std::vector<std::uint8_t> message;
     EXPECT_EQ(reader.TakeMessage(message), MOBILEGL_ERR_TIMEOUT);
 
-    ASSERT_EQ(reader.Feed(stream.data() + kFrameHeaderSize + 32,
-                          stream.size() - kFrameHeaderSize - 32),
-              MOBILEGL_OK);
+    ASSERT_EQ(reader.Feed(stream.data() + kFrameHeaderSize + 32, stream.size() - kFrameHeaderSize - 32), MOBILEGL_OK);
     ASSERT_TRUE(reader.HasMessage());
     ASSERT_EQ(reader.TakeMessage(message), MOBILEGL_OK);
     EXPECT_EQ(message, payload);

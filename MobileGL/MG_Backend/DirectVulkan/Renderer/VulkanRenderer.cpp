@@ -61,8 +61,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         using MagmaTailRsp = RenderStateParameters;
 
 #define MAGMA_TAIL_INPUT_IS_DYNAMIC(Member)                                                                            \
-    static_assert(MagmaRenderStateRangeIsDynamic(offsetof(MagmaTailRsp, Member),                                       \
-                                                 sizeof(MagmaTailRsp::Member)),                                        \
+    static_assert(MagmaRenderStateRangeIsDynamic(offsetof(MagmaTailRsp, Member), sizeof(MagmaTailRsp::Member)),        \
                   "ApplyDynamicDrawStateTail reads " #Member                                                           \
                   ", which the P2 chunk table no longer calls dynamic state: a change to it would "                    \
                   "move the pipeline version, not the parameters version, and the tail would stop "                    \
@@ -74,14 +73,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // is dynamic entirely, and asserting the whole of it says so. If a later phase ever
         // splits a per-viewport chunk out, this is a build break by design - narrow the assert
         // to element 0 then, and say why in the same commit.
-        MAGMA_TAIL_INPUT_IS_DYNAMIC(Viewports);        // ApplyGLViewportState: Viewports[0]
-        MAGMA_TAIL_INPUT_IS_DYNAMIC(DepthRanges);      // ApplyGLViewportState: DepthRanges[0]
-        MAGMA_TAIL_INPUT_IS_DYNAMIC(BlendColor);       // ApplyBlendConstants
+        MAGMA_TAIL_INPUT_IS_DYNAMIC(Viewports);           // ApplyGLViewportState: Viewports[0]
+        MAGMA_TAIL_INPUT_IS_DYNAMIC(DepthRanges);         // ApplyGLViewportState: DepthRanges[0]
+        MAGMA_TAIL_INPUT_IS_DYNAMIC(BlendColor);          // ApplyBlendConstants
         MAGMA_TAIL_INPUT_IS_DYNAMIC(PolygonOffsetFactor); // ApplyPolygonOffsetState
         MAGMA_TAIL_INPUT_IS_DYNAMIC(PolygonOffsetUnits);  // ApplyPolygonOffsetState
         MAGMA_TAIL_INPUT_IS_DYNAMIC(PolygonOffsetClamp);  // ApplyPolygonOffsetState
-        MAGMA_TAIL_INPUT_IS_DYNAMIC(LineWidth);        // ApplyLineWidthState
-        MAGMA_TAIL_INPUT_IS_DYNAMIC(ScissorBoxes);     // the scissor rect: ScissorBoxes[0]
+        MAGMA_TAIL_INPUT_IS_DYNAMIC(LineWidth);           // ApplyLineWidthState
+        MAGMA_TAIL_INPUT_IS_DYNAMIC(ScissorBoxes);        // the scissor rect: ScissorBoxes[0]
 #undef MAGMA_TAIL_INPUT_IS_DYNAMIC
 
         // ApplyStencilState reads three of the seven members of each face, and D6 splits
@@ -91,11 +90,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // because the split runs THROUGH the struct rather than around it.
         constexpr SizeT kMagmaStencilFace1 = offsetof(MagmaTailRsp, StencilStates) + sizeof(StencilFaceState);
 #define MAGMA_TAIL_STENCIL_IS_DYNAMIC(Member)                                                                          \
-    static_assert(MagmaRenderStateRangeIsDynamic(offsetof(MagmaTailRsp, StencilStates) +                               \
-                                                     offsetof(StencilFaceState, Member),                               \
-                                                 sizeof(StencilFaceState::Member)),                                    \
-                  "ApplyStencilState reads the FRONT face's " #Member " as dynamic state");                            \
-    static_assert(MagmaRenderStateRangeIsDynamic(kMagmaStencilFace1 + offsetof(StencilFaceState, Member),               \
+    static_assert(                                                                                                     \
+        MagmaRenderStateRangeIsDynamic(offsetof(MagmaTailRsp, StencilStates) + offsetof(StencilFaceState, Member),     \
+                                       sizeof(StencilFaceState::Member)),                                              \
+        "ApplyStencilState reads the FRONT face's " #Member " as dynamic state");                                      \
+    static_assert(MagmaRenderStateRangeIsDynamic(kMagmaStencilFace1 + offsetof(StencilFaceState, Member),              \
                                                  sizeof(StencilFaceState::Member)),                                    \
                   "ApplyStencilState reads the BACK face's " #Member " as dynamic state")
 
@@ -158,17 +157,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             maxBindings = std::min(maxBindings, maxSampledImages + maxDynamicUniformBuffers);
 
             if (updateAfterBindLimits.enabled) {
-                const Uint32 updateAfterBindSamplers = std::min(updateAfterBindLimits.maxPerStageSamplers,
-                                                                 updateAfterBindLimits.maxSetSamplers);
-                const Uint32 updateAfterBindSampledImages = std::min(updateAfterBindLimits.maxPerStageSampledImages,
-                                                                      updateAfterBindLimits.maxSetSampledImages);
-                const Uint32 updateAfterBindDynamicUniformBuffers =
-                    std::min(updateAfterBindLimits.maxPerStageUniformBuffers,
-                             updateAfterBindLimits.maxSetUniformBuffersDynamic);
+                const Uint32 updateAfterBindSamplers =
+                    std::min(updateAfterBindLimits.maxPerStageSamplers, updateAfterBindLimits.maxSetSamplers);
+                const Uint32 updateAfterBindSampledImages =
+                    std::min(updateAfterBindLimits.maxPerStageSampledImages, updateAfterBindLimits.maxSetSampledImages);
+                const Uint32 updateAfterBindDynamicUniformBuffers = std::min(
+                    updateAfterBindLimits.maxPerStageUniformBuffers, updateAfterBindLimits.maxSetUniformBuffersDynamic);
                 Uint32 updateAfterBindBindings = updateAfterBindLimits.maxPerStageResources;
                 updateAfterBindBindings = std::min(updateAfterBindBindings, updateAfterBindSamplers);
-                updateAfterBindBindings =
-                    std::min(updateAfterBindBindings, updateAfterBindSampledImages + updateAfterBindDynamicUniformBuffers);
+                updateAfterBindBindings = std::min(updateAfterBindBindings,
+                                                   updateAfterBindSampledImages + updateAfterBindDynamicUniformBuffers);
                 maxBindings = std::max(maxBindings, updateAfterBindBindings);
             }
 
@@ -257,11 +255,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             MGLOG_I("MaxFramesInFlight: configured request=%u", requestedFramesInFlight);
 
             VkSurfaceCapabilitiesKHR surfaceCaps{};
-            const VkResult capsResult = vkGetPhysicalDeviceSurfaceCapabilitiesKHR(
-                m_physicalDevice.handle, m_surface, &surfaceCaps);
+            const VkResult capsResult =
+                vkGetPhysicalDeviceSurfaceCapabilitiesKHR(m_physicalDevice.handle, m_surface, &surfaceCaps);
             if (capsResult != VK_SUCCESS) {
                 MGLOG_W("MaxFramesInFlight: vkGetPhysicalDeviceSurfaceCapabilitiesKHR failed (VkResult=%d); "
-                        "keeping requested %u", static_cast<Int>(capsResult), requestedFramesInFlight);
+                        "keeping requested %u",
+                        static_cast<Int>(capsResult), requestedFramesInFlight);
             } else {
                 // Frames-in-flight is the CPU pipeline depth; it only needs to stay <= the number
                 // of swapchain images the surface can provide (maxImageCount), so the extra slots
@@ -270,16 +269,17 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 // the count), and inflating the CPU depth would only add latency + memory.
                 Uint32 chosenFramesInFlight = requestedFramesInFlight;
                 if (surfaceCaps.maxImageCount != 0 && chosenFramesInFlight > surfaceCaps.maxImageCount) {
-                    chosenFramesInFlight = surfaceCaps.maxImageCount;  // 0 == no upper bound
+                    chosenFramesInFlight = surfaceCaps.maxImageCount; // 0 == no upper bound
                 }
                 if (chosenFramesInFlight < 2) {
-                    chosenFramesInFlight = 2;  // never drop below double buffering
+                    chosenFramesInFlight = 2; // never drop below double buffering
                 }
                 m_config.MaxFramesInFlight = chosenFramesInFlight;
                 if (chosenFramesInFlight != requestedFramesInFlight) {
                     MGLOG_W("MaxFramesInFlight: requested %u unsupported by surface (minImageCount=%u, "
-                            "maxImageCount=%u); using %u", requestedFramesInFlight, surfaceCaps.minImageCount,
-                            surfaceCaps.maxImageCount, chosenFramesInFlight);
+                            "maxImageCount=%u); using %u",
+                            requestedFramesInFlight, surfaceCaps.minImageCount, surfaceCaps.maxImageCount,
+                            chosenFramesInFlight);
                 } else {
                     MGLOG_I("MaxFramesInFlight: using %u (surface minImageCount=%u, maxImageCount=%u)",
                             chosenFramesInFlight, surfaceCaps.minImageCount, surfaceCaps.maxImageCount);
@@ -318,21 +318,20 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
         m_textureManager = MakeUnique<VkTextureManager>();
         MOBILEGL_ASSERT(m_textureManager != nullptr, "VkTextureManager creation failed.");
-        succeeded = m_textureManager->Initialize(
-            {m_device, m_physicalDevice.handle, m_allocator, m_commandPool, m_graphicsQueue,
-             m_frameContext.GetFrameCount(), m_imageFormatListExtensionEnabled,
-             m_sampledReadStageMask,
-             static_cast<Uint32>(m_physicalDevice.queueFamilies.graphicsFamily)});
+        succeeded = m_textureManager->Initialize({m_device, m_physicalDevice.handle, m_allocator, m_commandPool,
+                                                  m_graphicsQueue, m_frameContext.GetFrameCount(),
+                                                  m_imageFormatListExtensionEnabled, m_sampledReadStageMask,
+                                                  static_cast<Uint32>(m_physicalDevice.queueFamilies.graphicsFamily)});
         MOBILEGL_ASSERT(succeeded, "VkTextureManager initialization failed.");
         m_textureManager->SetWireE5RawCopyKit(GetWireE5RawCopyKit());
-        m_renderPassManager =
-            MakeUnique<VkRenderPassManager>(m_device, m_physicalDevice.handle, m_allocator, m_config,
-                                            *m_textureManager, m_swapchainObject);
+        m_renderPassManager = MakeUnique<VkRenderPassManager>(m_device, m_physicalDevice.handle, m_allocator, m_config,
+                                                              *m_textureManager, m_swapchainObject);
         MOBILEGL_ASSERT(m_renderPassManager != nullptr, "VkRenderPassManager creation failed.");
         succeeded = m_renderPassManager->Initialize();
         MOBILEGL_ASSERT(succeeded, "VkRenderPassManager initialization failed.");
 
-        const Uint32 maxProgramBindings = ComputeMaxProgramBindings(m_physicalDevice.properties, m_updateAfterBindLimits);
+        const Uint32 maxProgramBindings =
+            ComputeMaxProgramBindings(m_physicalDevice.properties, m_updateAfterBindLimits);
         MGLOG_I("DirectVulkan: using %u program descriptor bindings", maxProgramBindings);
         if (IsPowerVRDevice(m_physicalDevice.properties)) {
             m_config.DisablePipelineCache = true;
@@ -353,8 +352,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // there (see PipelineFactory::ShouldSuppressDepthWrite for the exact scope);
             // MOBILEGL_MAGMA_DISABLE_BLENDED_DEPTH_WRITE forces the quirk on or off on any
             // driver.
-            const MG_Config::QuirkOverride quirkOverride =
-                MG_Config::Features.MagmaDisableBlendedDepthWriteQuirk;
+            const MG_Config::QuirkOverride quirkOverride = MG_Config::Features.MagmaDisableBlendedDepthWriteQuirk;
             const Bool suppressBlendedDepthWrite = PipelineFactory::ShouldSuppressBlendedDepthWriteForDevice(
                 quirkOverride, m_physicalDevice.properties.vendorID);
             if (suppressBlendedDepthWrite) {
@@ -373,14 +371,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         subgroupPolicy.requireFullSubgroups = m_computeFullSubgroupsFeatureEnabled;
         subgroupPolicy.nativeSubgroupSize = m_nativeSubgroupSize;
         subgroupPolicy.maxComputeWorkgroupSubgroups = m_maxComputeWorkgroupSubgroups;
-        subgroupPolicy.maxComputeSharedMemoryBytes =
-            m_physicalDevice.properties.limits.maxComputeSharedMemorySize;
-        m_programFactory = MakeUnique<ProgramFactory>(m_device, m_config, maxProgramBindings,
-                                                      m_shaderDrawParametersFeatureEnabled,
-                                                      m_unformattedFloatStorageImagesEnabled,
-                                                      m_tessellationAndGeometryPointSizeFeatureEnabled,
-                                                      MG_Config::Features.EnableSpirvValidation,
-                                                      m_updateAfterBindLimits, subgroupPolicy);
+        subgroupPolicy.maxComputeSharedMemoryBytes = m_physicalDevice.properties.limits.maxComputeSharedMemorySize;
+        m_programFactory = MakeUnique<ProgramFactory>(
+            m_device, m_config, maxProgramBindings, m_shaderDrawParametersFeatureEnabled,
+            m_unformattedFloatStorageImagesEnabled, m_tessellationAndGeometryPointSizeFeatureEnabled,
+            MG_Config::Features.EnableSpirvValidation, m_updateAfterBindLimits, subgroupPolicy);
         MOBILEGL_ASSERT(m_programFactory != nullptr, "ProgramFactory creation failed.");
         // The swapchain already exists at this point (Initialize creates it first), so seed the
         // height the factory could not be told about from CreateSwapchain.
@@ -394,8 +389,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         MOBILEGL_ASSERT(m_samplerManager != nullptr, "VkSamplerManager creation failed.");
         succeeded = m_samplerManager->Initialize({m_device, &m_config, m_samplerAnisotropyFeatureEnabled,
                                                   m_physicalDevice.properties.limits.maxSamplerAnisotropy,
-                                                  m_customBorderColorFeatureEnabled,
-                                                  m_maxCustomBorderColorSamplers});
+                                                  m_customBorderColorFeatureEnabled, m_maxCustomBorderColorSamplers});
         MOBILEGL_ASSERT(succeeded, "VkSamplerManager initialization failed.");
         succeeded = InitializeBlitResources();
         MOBILEGL_ASSERT(succeeded, "Blit pipeline resource initialization failed.");
@@ -410,8 +404,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             maxProgramBindings, kDescriptorSetsPerFrame, m_textureManager.get(), m_samplerManager.get());
         MOBILEGL_ASSERT(succeeded, "UniformDescriptorBinder initialization failed.");
         m_uniformManager->SetWireInvalidStorageImageArm(m_wireNullDescriptor);
-        m_vertexInputStateFactory =
-            MakeUnique<VertexInputStateFactory>(m_config, m_physicalDevice.handle);
+        m_vertexInputStateFactory = MakeUnique<VertexInputStateFactory>(m_config, m_physicalDevice.handle);
         MOBILEGL_ASSERT(m_vertexInputStateFactory != nullptr, "VertexInputStateFactory creation failed.");
 
         // Prime the first frame so Render() always targets an acquired swapchain image.
@@ -427,8 +420,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 // rebuilding and re-acquiring on the same semaphore is safe.
                 MGLOG_D("Initialize, vkAcquireNextImageKHR got %d, recreating swapchain", acquireResult);
                 RecreateSwapchain();
-                acquireResult =
-                    m_frameContext.WaitAndAcquireNextImage(m_device, m_swapchainObject.GetHandle(), m_imageIndexAcquired);
+                acquireResult = m_frameContext.WaitAndAcquireNextImage(m_device, m_swapchainObject.GetHandle(),
+                                                                       m_imageIndexAcquired);
             } else if (acquireResult == VK_SUBOPTIMAL_KHR) {
                 // The image is usable, and its acquire signal is already armed on
                 // imageAvailableSemaphore. Re-acquiring here would arm a second signal on a
@@ -461,7 +454,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
         m_progressMarkers.Shutdown();
         // Parked surface targets (ActivateSurfaceTarget) go before the device and instance.
-        for (auto& [_, target] : m_parkedTargets) DestroyParkedTarget(target);
+        for (auto& [_, target] : m_parkedTargets)
+            DestroyParkedTarget(target);
         m_parkedTargets.clear();
         // P7 wave 2 package B3: the session's decline tally. Silent when nothing declined, so a
         // green lane stays quiet and a lane that dropped a draw cannot (rule I's observable).
@@ -499,8 +493,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         // No sweep runs during teardown, but the observers point at this renderer
         // and the factories die at different times below; disconnect them first.
-        if (m_renderPassManager) {
-        }
+        if (m_renderPassManager) {}
         if (m_programFactory) {
             m_programFactory->SetEvictionObserver(nullptr);
         }
@@ -708,8 +701,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     void VulkanRenderer::CollectDeferredDepthMipmapCleanup(Uint32 frameIndex) {
         MOBILEGL_ASSERT(frameIndex < m_deferredDepthMipmapCleanup.size(),
-                        "CollectDeferredDepthMipmapCleanup: frame index %u out of range (size=%zu)",
-                        frameIndex, m_deferredDepthMipmapCleanup.size());
+                        "CollectDeferredDepthMipmapCleanup: frame index %u out of range (size=%zu)", frameIndex,
+                        m_deferredDepthMipmapCleanup.size());
         if (m_device == VK_NULL_HANDLE) {
             return;
         }

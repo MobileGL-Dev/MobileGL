@@ -418,7 +418,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                                                        /*imageBindableStorageRequired=*/false);
                 list.push_back({surface.Res, twin.get()});
             };
-            for (Uint i = 0; i < MG_Pipe::kMGPipeMaxColorAttachments; ++i) add(record.Color[i]);
+            for (Uint i = 0; i < MG_Pipe::kMGPipeMaxColorAttachments; ++i)
+                add(record.Color[i]);
             add(record.Depth);
             add(record.Stencil);
         }
@@ -496,14 +497,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // question with a spelling a recycled slot cannot fool.
         static void SyncFramebufferAttachmentTexturesByRecord() {
             const auto& st = MG_Pipe::MGPipeApplier();
-            const MG_Pipe::MGPipeHandle drawHandle =
-                st.BoundFramebuffer[SizeT(MG_Pipe::MGPipeFramebufferTarget::Draw)];
-            const MG_Pipe::MGPipeHandle readHandle =
-                st.BoundFramebuffer[SizeT(MG_Pipe::MGPipeFramebufferTarget::Read)];
-            const MG_Pipe::MGPFramebufferState* const drawRecord =
-                BoundFramebufferRecord(FramebufferTarget::Draw);
-            const MG_Pipe::MGPFramebufferState* const readRecord =
-                BoundFramebufferRecord(FramebufferTarget::Read);
+            const MG_Pipe::MGPipeHandle drawHandle = st.BoundFramebuffer[SizeT(MG_Pipe::MGPipeFramebufferTarget::Draw)];
+            const MG_Pipe::MGPipeHandle readHandle = st.BoundFramebuffer[SizeT(MG_Pipe::MGPipeFramebufferTarget::Read)];
+            const MG_Pipe::MGPFramebufferState* const drawRecord = BoundFramebufferRecord(FramebufferTarget::Draw);
+            const MG_Pipe::MGPFramebufferState* const readRecord = BoundFramebufferRecord(FramebufferTarget::Read);
             const Uint64 contextSerial = st.ContextSerial;
 
             if (drawRecord == nullptr) {
@@ -513,8 +510,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 g_fboAttachmentSyncListValid = false;
                 g_fboAttachmentSyncList.clear();
             } else {
-                const Bool listValid = g_fboAttachmentSyncListValid &&
-                                       g_fboAttachmentSyncListFbo == drawRecord->Fbo &&
+                const Bool listValid = g_fboAttachmentSyncListValid && g_fboAttachmentSyncListFbo == drawRecord->Fbo &&
                                        g_fboAttachmentSyncListContentHash == drawRecord->ContentHash &&
                                        g_fboAttachmentSyncListContextSerial == contextSerial &&
                                        g_fboAttachmentSyncListContextGeneration == g_backendContextGeneration;
@@ -597,8 +593,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 g_unitTextureSyncListByHandleValid = false;
                 g_unitTextureSyncListByHandle.clear();
                 const Uint32 windowEnd = st.SamplerViewStart + st.SamplerViewCount;
-                for (Uint32 index = st.SamplerViewStart;
-                     index < windowEnd && index < st.BoundSamplerViews.size(); ++index) {
+                for (Uint32 index = st.SamplerViewStart; index < windowEnd && index < st.BoundSamplerViews.size();
+                     ++index) {
                     const auto& view = st.BoundSamplerViews[index];
                     if (MG_Pipe::MGPipeHandleIsNull(view.Texture)) continue;
                     auto& twin = SyncTextureToBackendByHandle(view.Texture);
@@ -635,7 +631,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return;
         }
 
-        void SyncNeccessaryTextures() { SyncNeccessaryTextures(CaptureDrawTextureSyncKeys()); }
+        void SyncNeccessaryTextures() {
+            SyncNeccessaryTextures(CaptureDrawTextureSyncKeys());
+        }
 
         // Whether glBindImageTexture's `layered` means anything for this target - asked of the
         // target the DRIVER will see, not the one the application named. A GL_TEXTURE_1D_ARRAY
@@ -672,8 +670,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // sweep re-reads the binding, finds nothing to mark, and CLEARS the bit on its way past.
         // So the error is self-healing, and in the direction that costs one wasted look rather
         // than one missed write.
-        static Array<Bool, MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS>
-            g_writableImageBufferUnits{};
+        static Array<Bool, MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS> g_writableImageBufferUnits{};
         static Uint g_writableImageBufferUnitCount = 0;
 
         static void TrackWritableImageBufferUnit(Uint unit, Bool writableBufferTexture) {
@@ -725,10 +722,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // so it has no symbol of its own there and the code it generates is the code that was
         // written inline before. Named here rather than discovered by a G1 diff.
         // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-        static void IssueImageTextureBind(Uint unit, BackendTextureObject& backendTexture,
-                                          TextureTarget textureTarget, TextureInternalFormat textureFormat,
-                                          GLenum appFormat, GLint level, Bool layeredRequested,
-                                          GLint layerRequested, GLenum access) {
+        static void IssueImageTextureBind(Uint unit, BackendTextureObject& backendTexture, TextureTarget textureTarget,
+                                          TextureInternalFormat textureFormat, GLenum appFormat, GLint level,
+                                          Bool layeredRequested, GLint layerRequested, GLenum access) {
             const Bool layerable = SupportsLayeredImageBinding(textureTarget);
             const GLboolean layered = layerable ? static_cast<GLboolean>(layeredRequested) : GL_FALSE;
             const GLint layer = layerable ? layerRequested : 0;
@@ -776,8 +772,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                             MG_Util::ConvertGLEnumToTextureInternalFormat(appFormat));
                         boundFormatSplit != GL_UNKNOWN_MGL) {
                         bindFormat = boundFormatSplit;
-                        if (const Uint splitViewId = backendTexture.GetBufferImageSplitViewId();
-                            splitViewId != 0) {
+                        if (const Uint splitViewId = backendTexture.GetBufferImageSplitViewId(); splitViewId != 0) {
                             bindTextureId = splitViewId;
                         }
                     }
@@ -805,10 +800,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 std::abort();
             }
             switch (MGPipeDecodeImageAccess(view.Access)) {
-            case MGPipeImageAccess::WriteOnly: return GL_WRITE_ONLY;
-            case MGPipeImageAccess::ReadWrite: return GL_READ_WRITE;
+            case MGPipeImageAccess::WriteOnly:
+                return GL_WRITE_ONLY;
+            case MGPipeImageAccess::ReadWrite:
+                return GL_READ_WRITE;
             case MGPipeImageAccess::ReadOnly:
-            case MGPipeImageAccess::Count: break;
+            case MGPipeImageAccess::Count:
+                break;
             }
             return GL_READ_ONLY;
         }
@@ -845,9 +843,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (!first.Live || first.Gen != handle.Gen) return false;
             // GL ignores Layer for a target with no layers, and for a layered bind.
             const auto firstTarget = static_cast<T>(first.Desc.Target);
-            const Bool selectsLayer = !image.Layered &&
-                (firstTarget == T::Tex1DArray || firstTarget == T::Tex2DArray || firstTarget == T::Tex2DMSArray ||
-                 firstTarget == T::Tex3D || firstTarget == T::TexCube || firstTarget == T::TexCubeArray);
+            const Bool selectsLayer = !image.Layered && (firstTarget == T::Tex1DArray || firstTarget == T::Tex2DArray ||
+                                                         firstTarget == T::Tex2DMSArray || firstTarget == T::Tex3D ||
+                                                         firstTarget == T::TexCube || firstTarget == T::TexCubeArray);
             Uint32 level = image.Level;
             Uint32 layer = selectsLayer ? image.Layer : 0;
             for (SizeT hop = 0; hop <= state.TextureResources.size(); ++hop) {
@@ -899,16 +897,28 @@ namespace MobileGL::MG_Backend::DirectGLES {
             GLenum target = 0;
             GLsizei depth = 1;
             switch (TextureImpl::MapToBackendTextureTarget(textureTarget)) {
-            case TextureTarget::Texture2D: target = GL_TEXTURE_2D; break;
-            case TextureTarget::Texture2DArray: target = GL_TEXTURE_2D_ARRAY; break;
-            case TextureTarget::Texture3D: target = GL_TEXTURE_3D; break;
-            case TextureTarget::TextureCubeMap: target = GL_TEXTURE_CUBE_MAP; break;
-            case TextureTarget::TextureCubeMapArray: target = GL_TEXTURE_CUBE_MAP_ARRAY; depth = 6; break;
-            default: return 0;
+            case TextureTarget::Texture2D:
+                target = GL_TEXTURE_2D;
+                break;
+            case TextureTarget::Texture2DArray:
+                target = GL_TEXTURE_2D_ARRAY;
+                break;
+            case TextureTarget::Texture3D:
+                target = GL_TEXTURE_3D;
+                break;
+            case TextureTarget::TextureCubeMap:
+                target = GL_TEXTURE_CUBE_MAP;
+                break;
+            case TextureTarget::TextureCubeMapArray:
+                target = GL_TEXTURE_CUBE_MAP_ARRAY;
+                depth = 6;
+                break;
+            default:
+                return 0;
             }
             GLenum format = 0, type = 0;
-            MG_Util::TextureFormatProcessor::NormalizePixelFormat(internalFormat, Flags<PixelFormatNormalizeOptionBit>{},
-                                                                  nullptr, &format, &type);
+            MG_Util::TextureFormatProcessor::NormalizePixelFormat(
+                internalFormat, Flags<PixelFormatNormalizeOptionBit>{}, nullptr, &format, &type);
             if (format == 0 || type == 0) return 0;
             InvalidImagePlaceholder& slot = g_invalidImagePlaceholders[unit];
             if (slot.Id != 0 && (slot.Target != target || slot.InternalFormat != internalFormat)) {
@@ -916,11 +926,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 slot = {};
             }
             GLint previous = 0;
-            const GLenum bindingQuery = target == GL_TEXTURE_2D ? GL_TEXTURE_BINDING_2D
-                : target == GL_TEXTURE_2D_ARRAY ? GL_TEXTURE_BINDING_2D_ARRAY
-                : target == GL_TEXTURE_3D ? GL_TEXTURE_BINDING_3D
-                : target == GL_TEXTURE_CUBE_MAP ? GL_TEXTURE_BINDING_CUBE_MAP
-                : GL_TEXTURE_BINDING_CUBE_MAP_ARRAY;
+            const GLenum bindingQuery = target == GL_TEXTURE_2D         ? GL_TEXTURE_BINDING_2D
+                                        : target == GL_TEXTURE_2D_ARRAY ? GL_TEXTURE_BINDING_2D_ARRAY
+                                        : target == GL_TEXTURE_3D       ? GL_TEXTURE_BINDING_3D
+                                        : target == GL_TEXTURE_CUBE_MAP ? GL_TEXTURE_BINDING_CUBE_MAP
+                                                                        : GL_TEXTURE_BINDING_CUBE_MAP_ARRAY;
             g_GLESFuncs.glGetIntegerv(bindingQuery, &previous);
             DebugImpl::ErrorLopper::Clear();
             if (slot.Id == 0) {
@@ -1138,10 +1148,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     // window keeps whatever MGPImageView the last set that covered it left
                     // there (D-J2: entries outside the window are not cleared), which is the
                     // record of the very binding that raised the mark.
-                    const Uint32 end = std::min<Uint32>(
-                        std::max<Uint32>(st.ShaderImageStart + st.ShaderImageCount,
-                                         static_cast<Uint32>(g_imageUnitHighWaterMark)),
-                        static_cast<Uint32>(unitCount));
+                    const Uint32 end = std::min<Uint32>(std::max<Uint32>(st.ShaderImageStart + st.ShaderImageCount,
+                                                                         static_cast<Uint32>(g_imageUnitHighWaterMark)),
+                                                        static_cast<Uint32>(unitCount));
                     for (Uint32 unit = 0; unit < end; ++unit) {
                         if (unit >= st.BoundShaderImages.size()) break;
                         // The union can include a slot no set_shader_images

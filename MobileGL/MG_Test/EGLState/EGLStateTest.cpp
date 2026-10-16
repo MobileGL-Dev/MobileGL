@@ -45,7 +45,7 @@ namespace {
         EXPECT_NE(fixture->Context, EGL_NO_CONTEXT);
         return fixture;
     }
-}
+} // namespace
 
 TEST(EGLStateMakeCurrent, ContextCannotBeCurrentOnTwoThreadsAtOnce) {
     auto fixture = CreateFixture();
@@ -66,19 +66,18 @@ TEST(EGLStateMakeCurrent, ContextCannotBeCurrentOnTwoThreadsAtOnce) {
     EGLint threadBAttachAfterReleaseError = EGL_SUCCESS;
 
     std::thread threadA([&] {
-        threadAAttachOk = fixture->State.MakeCurrent(fixture->Display, fixture->Surface, fixture->Surface,
-                                                      fixture->Context);
+        threadAAttachOk =
+            fixture->State.MakeCurrent(fixture->Display, fixture->Surface, fixture->Surface, fixture->Context);
         threadAReady.set_value();
         threadBAttemptedFuture.wait();
-        threadAReleaseOk =
-            fixture->State.MakeCurrent(fixture->Display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+        threadAReleaseOk = fixture->State.MakeCurrent(fixture->Display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
         threadAReleased.set_value();
     });
 
     std::thread threadB([&] {
         threadAReadyFuture.wait();
-        threadBDenied = fixture->State.MakeCurrent(fixture->Display, fixture->Surface, fixture->Surface,
-                                                   fixture->Context);
+        threadBDenied =
+            fixture->State.MakeCurrent(fixture->Display, fixture->Surface, fixture->Surface, fixture->Context);
         threadBDeniedError = fixture->State.ConsumeError();
         threadBAttempted.set_value();
         threadAReleasedFuture.wait();
@@ -276,9 +275,9 @@ TEST(EGLStateCreateContext, NoConfigContextIsAcceptedAndReportsConfigIdZero) {
     EXPECT_TRUE(fixture->State.MakeCurrent(fixture->Display, EGL_NO_SURFACE, EGL_NO_SURFACE, context));
     EXPECT_TRUE(fixture->State.MakeCurrent(EGL_NO_DISPLAY, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT));
     // A non-null handle that names no config is still EGL_BAD_CONFIG.
-    EXPECT_EQ(fixture->State.CreateContext(fixture->Display, reinterpret_cast<EGLConfig>(0xdead), EGL_NO_CONTEXT,
-                                           esAttribs),
-              EGL_NO_CONTEXT);
+    EXPECT_EQ(
+        fixture->State.CreateContext(fixture->Display, reinterpret_cast<EGLConfig>(0xdead), EGL_NO_CONTEXT, esAttribs),
+        EGL_NO_CONTEXT);
     EXPECT_EQ(fixture->State.ConsumeError(), EGL_BAD_CONFIG);
 }
 
@@ -291,8 +290,19 @@ namespace {
 
     // A complete single-plane import, as a compositor builds it for a linux-dmabuf wl_buffer.
     std::vector<EGLAttrib> DmaBufAttribs(EGLAttrib fourcc = kAbgr8888) {
-        return {EGL_WIDTH, 64, EGL_HEIGHT, 32, EGL_LINUX_DRM_FOURCC_EXT, fourcc, EGL_DMA_BUF_PLANE0_FD_EXT, 7,
-                EGL_DMA_BUF_PLANE0_OFFSET_EXT, 0, EGL_DMA_BUF_PLANE0_PITCH_EXT, 256, EGL_NONE};
+        return {EGL_WIDTH,
+                64,
+                EGL_HEIGHT,
+                32,
+                EGL_LINUX_DRM_FOURCC_EXT,
+                fourcc,
+                EGL_DMA_BUF_PLANE0_FD_EXT,
+                7,
+                EGL_DMA_BUF_PLANE0_OFFSET_EXT,
+                0,
+                EGL_DMA_BUF_PLANE0_PITCH_EXT,
+                256,
+                EGL_NONE};
     }
 
     std::vector<EGLAttrib> WithAttrib(std::vector<EGLAttrib> attribs, EGLAttrib name, EGLAttrib value) {
@@ -321,9 +331,9 @@ namespace {
 
 TEST(EGLStateDmaBufImport, ParsesACompleteSinglePlaneImport) {
     auto fixture = CreateFixture();
-    const auto attribs = WithAttrib(WithAttrib(DmaBufAttribs(kXbgr8888), EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT,
-                                               static_cast<EGLAttrib>(0xffffffffu)),
-                                    EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT, 0x00ffffff);
+    const auto attribs = WithAttrib(
+        WithAttrib(DmaBufAttribs(kXbgr8888), EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT, static_cast<EGLAttrib>(0xffffffffu)),
+        EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT, 0x00ffffff);
     StateContext::DmaBufImportAttribs parsed;
     ASSERT_TRUE(fixture->State.PrepareDmaBufImport(fixture->Display, EGL_NO_CONTEXT, nullptr, attribs.data(), &parsed));
     EXPECT_EQ(fixture->State.ConsumeError(), EGL_SUCCESS);
@@ -377,7 +387,8 @@ TEST(EGLStateDmaBufImport, RefusesWhatTheExtensionRefuses) {
 
 TEST(EGLStateDmaBufImport, SharedImageLifetime) {
     auto fixture = CreateFixture();
-    const StateContext::SharedImageInfo info{.Id = 42, .Width = 64, .Height = 32, .Fourcc = StateContext::kDrmFourccAbgr8888};
+    const StateContext::SharedImageInfo info{
+        .Id = 42, .Width = 64, .Height = 32, .Fourcc = StateContext::kDrmFourccAbgr8888};
     const EGLImage image = fixture->State.CreateSharedImage(fixture->Display, info);
     ASSERT_NE(image, EGL_NO_IMAGE);
 
@@ -498,7 +509,8 @@ TEST(EGLStateDmaBufImport, ParsesATwoPlaneYuvImportWithItsHints) {
     auto linear = WithAttrib(WithAttrib(Nv12Attribs(), EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT, 0),
                              EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT, 0);
     EXPECT_EQ(PrepareError(*fixture, linear), EGL_BAD_PARAMETER);
-    linear = WithAttrib(WithAttrib(linear, EGL_DMA_BUF_PLANE1_MODIFIER_LO_EXT, 0), EGL_DMA_BUF_PLANE1_MODIFIER_HI_EXT, 0);
+    linear =
+        WithAttrib(WithAttrib(linear, EGL_DMA_BUF_PLANE1_MODIFIER_LO_EXT, 0), EGL_DMA_BUF_PLANE1_MODIFIER_HI_EXT, 0);
     EXPECT_EQ(PrepareError(*fixture, linear), EGL_SUCCESS);
     auto mixed = WithAttrib(WithAttrib(WithoutAttrib(WithoutAttrib(linear, EGL_DMA_BUF_PLANE1_MODIFIER_LO_EXT),
                                                      EGL_DMA_BUF_PLANE1_MODIFIER_HI_EXT),
@@ -516,7 +528,8 @@ TEST(EGLStateDmaBufImport, RefusesAnIncompleteYuvImport) {
     }
     // NV12 has two planes, not three.
     EXPECT_EQ(PrepareError(*fixture, WithAttrib(Nv12Attribs(), EGL_DMA_BUF_PLANE2_FD_EXT, 7)), EGL_BAD_ATTRIBUTE);
-    auto badPitch = WithAttrib(WithoutAttrib(Nv12Attribs(), EGL_DMA_BUF_PLANE1_PITCH_EXT), EGL_DMA_BUF_PLANE1_PITCH_EXT, 0);
+    auto badPitch =
+        WithAttrib(WithoutAttrib(Nv12Attribs(), EGL_DMA_BUF_PLANE1_PITCH_EXT), EGL_DMA_BUF_PLANE1_PITCH_EXT, 0);
     EXPECT_EQ(PrepareError(*fixture, badPitch), EGL_BAD_ACCESS);
 }
 
@@ -575,8 +588,13 @@ TEST(EGLStateRobustness, ResetNotificationStrategyIsRecordedValidatedAndMatchedA
     EXPECT_EQ(strategyOf(robustExt), EGL_LOSE_CONTEXT_ON_RESET);
 
     // ANGLE's shape: an ES 3.2 request with the EGL 1.5 name.
-    const EGLint loseCore[] = {EGL_CONTEXT_MAJOR_VERSION, 3, EGL_CONTEXT_MINOR_VERSION, 2,
-                               EGL_CONTEXT_OPENGL_RESET_NOTIFICATION_STRATEGY, EGL_LOSE_CONTEXT_ON_RESET, EGL_NONE};
+    const EGLint loseCore[] = {EGL_CONTEXT_MAJOR_VERSION,
+                               3,
+                               EGL_CONTEXT_MINOR_VERSION,
+                               2,
+                               EGL_CONTEXT_OPENGL_RESET_NOTIFICATION_STRATEGY,
+                               EGL_LOSE_CONTEXT_ON_RESET,
+                               EGL_NONE};
     const auto robustCore = state.CreateContext(fixture->Display, fixture->Config, EGL_NO_CONTEXT, loseCore);
     ASSERT_NE(robustCore, EGL_NO_CONTEXT);
     EXPECT_EQ(strategyOf(robustCore), EGL_LOSE_CONTEXT_ON_RESET);
@@ -630,8 +648,8 @@ TEST(EGLStateRobustness, RobustAccessIsARequestAndNeverAGLContextFlagByItself) {
     EXPECT_TRUE(requestOf(core, &flags));
     EXPECT_EQ(flags & GL_CONTEXT_FLAG_ROBUST_ACCESS_BIT, 0);
     // KWin's desktop candidate: the KHR flag bit, next to the debug bit that IS a GL flag.
-    const EGLint khr[] = {EGL_CONTEXT_FLAGS_KHR, EGL_CONTEXT_OPENGL_ROBUST_ACCESS_BIT_KHR | EGL_CONTEXT_OPENGL_DEBUG_BIT_KHR,
-                          EGL_NONE};
+    const EGLint khr[] = {EGL_CONTEXT_FLAGS_KHR,
+                          EGL_CONTEXT_OPENGL_ROBUST_ACCESS_BIT_KHR | EGL_CONTEXT_OPENGL_DEBUG_BIT_KHR, EGL_NONE};
     EXPECT_TRUE(requestOf(khr, &flags));
     EXPECT_EQ(flags & GL_CONTEXT_FLAG_ROBUST_ACCESS_BIT, 0);
     EXPECT_NE(flags & GL_CONTEXT_FLAG_DEBUG_BIT, 0);

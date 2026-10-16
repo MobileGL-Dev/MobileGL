@@ -52,8 +52,7 @@ namespace MobileGL::MG_Pipe {
         // 32-slot bound is its invariant, not this one's, so a BindingIndex of 256 would wrap
         // to 0 and silently point every attribute at binding 0, and a negative Stride (the
         // frontend field is a signed int) would arrive as a ~4 GiB unsigned distance.
-        MOBILEGL_ASSERT(bindingIndex < 256u,
-                        "MGPVertexAttribWire::BindingIndex is a Uint8 and cannot carry %u",
+        MOBILEGL_ASSERT(bindingIndex < 256u, "MGPVertexAttribWire::BindingIndex is a Uint8 and cannot carry %u",
                         static_cast<Uint>(bindingIndex));
         MOBILEGL_ASSERT(attrib.Size >= 0 && attrib.Size <= 255,
                         "MGPVertexAttribWire::Size is a Uint8 and cannot carry %d", attrib.Size);
@@ -73,8 +72,8 @@ namespace MobileGL::MG_Pipe {
 
     // The ARB_vertex_attrib_binding view. Its initial Stride is 16, not 0 (GL 4.6 core table
     // 23.4), which is why the wire form keeps it signed and copies it verbatim.
-    inline MGPVertexBindingPointWire
-    MGPipeBuildVertexBindingPointWire(const MG_State::GLState::VertexBufferBindingPoint& point) {
+    inline MGPVertexBindingPointWire MGPipeBuildVertexBindingPointWire(
+        const MG_State::GLState::VertexBufferBindingPoint& point) {
         MGPVertexBindingPointWire wire{};
         wire.Offset = static_cast<Uint64>(point.Offset);
         wire.Stride = static_cast<Int32>(point.Stride);
@@ -153,8 +152,8 @@ namespace MobileGL::MG_Pipe {
             Latch& latch = m_latch[slot];
 
             Uint64 bytes = 0;
-            const Bool configMoved = !latch.Published || latch.ConfigVersion != configVersion ||
-                                     latch.Gen != handle.Gen;
+            const Bool configMoved =
+                !latch.Published || latch.ConfigVersion != configVersion || latch.Gen != handle.Gen;
             if (configMoved) {
                 BuildBlob(*vao);
                 // P15: the version moves on every glBindVertexBuffer, but the record only names
@@ -185,8 +184,10 @@ namespace MobileGL::MG_Pipe {
                 // MGPipeVertexElementsRecord). The mirror below says what that is; where it does
                 // not know, the next set goes out whatever it hashes to.
                 auto& suppressor = MGPipeSetHashSuppressorInstance();
-                if (memo.StoredBuffersValid) suppressor.Latch(MGPipeSuppressorSlot::SetVertexBuffers, memo.StoredBuffersHash);
-                else suppressor.Invalidate(MGPipeSuppressorSlot::SetVertexBuffers);
+                if (memo.StoredBuffersValid)
+                    suppressor.Latch(MGPipeSuppressorSlot::SetVertexBuffers, memo.StoredBuffersHash);
+                else
+                    suppressor.Invalidate(MGPipeSuppressorSlot::SetVertexBuffers);
                 m_serverIndexKnown = memo.StoredIndexValid;
                 m_serverIndexRes = memo.StoredIndexRes;
             }
@@ -203,7 +204,7 @@ namespace MobileGL::MG_Pipe {
         // fetches at draw emission and calls this again with ownedClientBuffers.
         // Monolith keeps its existing backend-side client-array upload.
         Uint64 EmitVertexBuffers(GLContext& ctx, Uint32 baseInstance,
-                                const Array<MGPipeHandle, kMGPipeMaxVertexAttribs>* ownedClientBuffers = nullptr) {
+                                 const Array<MGPipeHandle, kMGPipeMaxVertexAttribs>* ownedClientBuffers = nullptr) {
             const auto& vao = ctx.GetBoundVertexArray();
             Uint32 count = 0;
             // The resolved set is a function of the VAO's configuration alone (buffers, strides,
@@ -240,8 +241,8 @@ namespace MobileGL::MG_Pipe {
                         entry.Res = lastHandle;
                     } else {
                         entry.Res = attrib.Buffer ? MGPipeSlots().AcquireHinted(MGPipeKind::Buffer,
-                                                                               attrib.Buffer->GetLifetimeId(),
-                                                                               attrib.Buffer->PipeHandleHint())
+                                                                                attrib.Buffer->GetLifetimeId(),
+                                                                                attrib.Buffer->PipeHandleHint())
                                                   : kMGPipeNullHandle;
                         if (attrib.Buffer) {
                             lastBuffer = attrib.Buffer.get();
@@ -274,7 +275,8 @@ namespace MobileGL::MG_Pipe {
                     memo->BuffersValid = memoizable && count <= kVaoMemoBuffers;
                     memo->ConfigVersion = vao->GetConfigVersion();
                     memo->BufferCount = count;
-                    for (SizeT i = 0; i < count && i < kVaoMemoBuffers; ++i) memo->Buffers[i] = m_entries[i];
+                    for (SizeT i = 0; i < count && i < kVaoMemoBuffers; ++i)
+                        memo->Buffers[i] = m_entries[i];
                 }
             }
 
@@ -493,7 +495,8 @@ namespace MobileGL::MG_Pipe {
             if (m_vaoMemo.empty() || (m_vaoMemoUsed + 1) * 2 > m_vaoMemo.size()) GrowVaoMemo();
             const SizeT mask = m_vaoMemo.size() - 1;
             SizeT i = VaoMemoHome(lifetimeId, mask);
-            while (m_vaoMemo[i].LifetimeId != 0 && m_vaoMemo[i].LifetimeId != lifetimeId) i = (i + 1) & mask;
+            while (m_vaoMemo[i].LifetimeId != 0 && m_vaoMemo[i].LifetimeId != lifetimeId)
+                i = (i + 1) & mask;
             VaoMemo& memo = m_vaoMemo[i];
             m_lastMemoIndex = i;
             if (memo.LifetimeId == 0) ++m_vaoMemoUsed;
@@ -516,7 +519,8 @@ namespace MobileGL::MG_Pipe {
             for (const VaoMemo& entry : old) {
                 if (entry.LifetimeId == 0) continue;
                 SizeT i = VaoMemoHome(entry.LifetimeId, mask);
-                while (m_vaoMemo[i].LifetimeId != 0) i = (i + 1) & mask;
+                while (m_vaoMemo[i].LifetimeId != 0)
+                    i = (i + 1) & mask;
                 m_vaoMemo[i] = entry;
                 ++m_vaoMemoUsed;
             }
@@ -551,7 +555,6 @@ namespace MobileGL::MG_Pipe {
         }
 
     private:
-
         struct Latch {
             // The PER-CONTEXT half: "has this emitter told THIS server about this handle's
             // configuration". Cleared by Reset() at every make-current.
@@ -627,7 +630,7 @@ namespace MobileGL::MG_Pipe {
 
         Array<MGPVertexAttribWire, kMGPipeMaxVertexAttribs> m_attributes{};
         Array<MGPVertexBindingPointWire, kMGPipeMaxVertexAttribs> m_bindingPoints{};
-        Array<Uint8, kMGPipeMaxVertexAttribs *(sizeof(MGPVertexAttribWire) + sizeof(MGPVertexBindingPointWire))>
+        Array<Uint8, kMGPipeMaxVertexAttribs * (sizeof(MGPVertexAttribWire) + sizeof(MGPVertexBindingPointWire))>
             m_blob{};
         Array<MGPVertexBuffer, kMGPipeMaxVertexAttribs> m_entries{};
 

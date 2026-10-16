@@ -242,7 +242,6 @@ namespace MGITest {
     // do - they inset their regions away from primitive edges so exactness is
     // achievable).
     ::testing::AssertionResult RegionIsMostly(const Image& image, int x0, int x1, int y0, int y1,
-                                              const char* expectedColor, double tolerance,
-                                              const std::string& when);
+                                              const char* expectedColor, double tolerance, const std::string& when);
 
 } // namespace MGITest

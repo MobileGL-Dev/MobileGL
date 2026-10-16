@@ -86,8 +86,7 @@ void main()
             }
 
             static void DrainErrors() {
-                for (int i = 0; i < 16 && glGetError() != GL_NO_ERROR; ++i) {
-                }
+                for (int i = 0; i < 16 && glGetError() != GL_NO_ERROR; ++i) {}
             }
 
             static bool BackendHostsTessellation() {
@@ -384,11 +383,12 @@ void main()
             glPatchParameteri(GL_PATCH_VERTICES, 1);
             DrainErrors();
 
-            const GLuint program = BuildCaptureProgram({{GL_VERTEX_SHADER, kMinimalVertexSource},
-                                                        {GL_TESS_CONTROL_SHADER, kMinimalTessControlSource},
-                                                        {GL_TESS_EVALUATION_SHADER, kPositionAndPointSizeTessEvalSource},
-                                                        {GL_FRAGMENT_SHADER, kFragmentSource}},
-                                                       {"gl_Position", "gl_PointSize"});
+            const GLuint program =
+                BuildCaptureProgram({{GL_VERTEX_SHADER, kMinimalVertexSource},
+                                     {GL_TESS_CONTROL_SHADER, kMinimalTessControlSource},
+                                     {GL_TESS_EVALUATION_SHADER, kPositionAndPointSizeTessEvalSource},
+                                     {GL_FRAGMENT_SHADER, kFragmentSource}},
+                                    {"gl_Position", "gl_PointSize"});
             ASSERT_NE(program, 0u) << "program failed to build: " << m_buildLog;
 
             const std::vector<float> captured = RunPatchCaptureSpan(program, GL_POINTS, 5 * 3);
@@ -424,7 +424,8 @@ void main()
         std::string PayloadTessControlSource(int outputVertices, bool withPointSize) {
             const std::string perVertexTail = withPointSize ? "    float gl_PointSize;\n" : "";
             return R"(#version 420 core
-layout(vertices = )" + std::to_string(outputVertices) +
+layout(vertices = )" +
+                   std::to_string(outputVertices) +
                    R"() out;
 in gl_PerVertex {
     vec4  gl_Position;
@@ -441,9 +442,10 @@ out OUT_TC
 } result[];
 void main()
 {
-)" + std::string(withPointSize
-                                        ? "    gl_out[gl_InvocationID].gl_PointSize = 1.0 / float(gl_InvocationID + 1);\n"
-                                        : "") +
+)" +
+                   std::string(withPointSize
+                                   ? "    gl_out[gl_InvocationID].gl_PointSize = 1.0 / float(gl_InvocationID + 1);\n"
+                                   : "") +
                    R"(    gl_out[gl_InvocationID].gl_Position  = vec4(float(gl_InvocationID * 4 + 0), float(gl_InvocationID * 4 + 1),
                                                 float(gl_InvocationID * 4 + 2), float(gl_InvocationID * 4 + 3));
     result[gl_InvocationID].value1       = vec2(1.0 / float(gl_InvocationID + 1), 1.0 / float(gl_InvocationID + 2));
@@ -492,7 +494,8 @@ void main()
     te_value1    = vec2 (0.0);
     te_value2    = ivec4(0);
 
-    for (int n = 0; n < )" + std::to_string(inputVertices) +
+    for (int n = 0; n < )" +
+                   std::to_string(inputVertices) +
                    R"(; ++n)
     {
 )" + std::string(withPointSize ? "        te_pointsize += gl_in  [n].gl_PointSize;\n" : "") +
@@ -640,8 +643,7 @@ void main()
                 glEndTransformFeedback();
                 glDisable(GL_RASTERIZER_DISCARD);
                 float captured = kPoison;
-                glGetBufferSubData(GL_TRANSFORM_FEEDBACK_BUFFER, 0, static_cast<GLsizeiptr>(sizeof(float)),
-                                   &captured);
+                glGetBufferSubData(GL_TRANSFORM_FEEDBACK_BUFFER, 0, static_cast<GLsizeiptr>(sizeof(float)), &captured);
                 glUseProgram(0);
                 glBindBufferBase(GL_TRANSFORM_FEEDBACK_BUFFER, 0, 0);
                 glDeleteBuffers(1, &xfbBuffer);
@@ -757,9 +759,8 @@ void main()
                 glDisable(GL_RASTERIZER_DISCARD);
                 ASSERT_EQ(glGetError(), GL_NO_ERROR) << "glEndTransformFeedback, iteration " << iteration;
 
-                const auto* mapped =
-                    static_cast<const float*>(glMapBufferRange(GL_TRANSFORM_FEEDBACK_BUFFER, 0, kBytes,
-                                                               GL_MAP_READ_BIT));
+                const auto* mapped = static_cast<const float*>(
+                    glMapBufferRange(GL_TRANSFORM_FEEDBACK_BUFFER, 0, kBytes, GL_MAP_READ_BIT));
                 ASSERT_EQ(glGetError(), GL_NO_ERROR) << "glMapBufferRange, iteration " << iteration;
                 ASSERT_NE(mapped, nullptr) << "iteration " << iteration;
                 const std::vector<float> captured(mapped, mapped + kFloats);
@@ -864,8 +865,8 @@ void main()
             GLuint xfbBuffer = 0;
             glGenBuffers(1, &xfbBuffer);
             glBindBufferBase(GL_TRANSFORM_FEEDBACK_BUFFER, 0, xfbBuffer);
-            glBufferData(GL_TRANSFORM_FEEDBACK_BUFFER, static_cast<GLsizeiptr>(kFloats * sizeof(float)),
-                         poison.data(), GL_STATIC_DRAW);
+            glBufferData(GL_TRANSFORM_FEEDBACK_BUFFER, static_cast<GLsizeiptr>(kFloats * sizeof(float)), poison.data(),
+                         GL_STATIC_DRAW);
 
             glBindVertexArray(m_vao);
             glUseProgram(0);
@@ -878,8 +879,8 @@ void main()
             glDisable(GL_RASTERIZER_DISCARD);
 
             std::vector<float> captured(kFloats, kPoison);
-            glGetBufferSubData(GL_TRANSFORM_FEEDBACK_BUFFER, 0,
-                               static_cast<GLsizeiptr>(kFloats * sizeof(float)), captured.data());
+            glGetBufferSubData(GL_TRANSFORM_FEEDBACK_BUFFER, 0, static_cast<GLsizeiptr>(kFloats * sizeof(float)),
+                               captured.data());
             EXPECT_TRUE(ComponentIs(captured, 0, 11.0f));
             EXPECT_TRUE(ComponentIs(captured, 1, 12.0f));
             EXPECT_TRUE(ComponentIs(captured, 2, 13.0f));

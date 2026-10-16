@@ -184,7 +184,9 @@ void main() {
             std::uint32_t count, instanceCount, first, baseInstance;
         };
 
-        bool IsGreen(const Rgba8& p) { return p.g > 128 && p.r < 128; }
+        bool IsGreen(const Rgba8& p) {
+            return p.g > 128 && p.r < 128;
+        }
 
         class GpuWrittenDrawInputScenario : public ScenarioTest {
         protected:
@@ -221,7 +223,8 @@ void main() {
                     *buffer = 0;
                 }
                 if (m_vao != 0) glDeleteVertexArrays(1, &m_vao);
-                for (GLuint program : m_programs) glDeleteProgram(program);
+                for (GLuint program : m_programs)
+                    glDeleteProgram(program);
                 m_programs.clear();
                 BindDefaultFramebuffer();
                 DestroyColorFbo(m_target);
@@ -229,8 +232,7 @@ void main() {
             }
 
             static void DrainErrors() {
-                for (int i = 0; i < 16 && glGetError() != GL_NO_ERROR; ++i) {
-                }
+                for (int i = 0; i < 16 && glGetError() != GL_NO_ERROR; ++i) {}
             }
 
             // THE ARMS THIS FILE SKIPS, BY NAME: the monolith arm of a backend whose reason is
@@ -242,8 +244,8 @@ void main() {
                 const std::string backend = Gl().BackendName();
                 const char* why = backend == "DirectGLES" ? espryt : backend == "DirectVulkan" ? magma : nullptr;
                 if (why == nullptr) return false;
-                m_skipReason = "monolith " + backend + ": " + why +
-                               " (dev's fix, ID-P8-3) - this case gates the split arms";
+                m_skipReason =
+                    "monolith " + backend + ": " + why + " (dev's fix, ID-P8-3) - this case gates the split arms";
                 return true;
             }
             static constexpr const char* kUnsyncedCount =
@@ -356,8 +358,7 @@ void main() {
             }
 
             // A vertex + fragment program whose `varyings` are captured INTERLEAVED.
-            GLuint XfbProgram(const char* vertex, const char* fragment, const char* const* varyings,
-                              GLsizei count) {
+            GLuint XfbProgram(const char* vertex, const char* fragment, const char* const* varyings, GLsizei count) {
                 const GLuint vs = glCreateShader(GL_VERTEX_SHADER);
                 glShaderSource(vs, 1, &vertex, nullptr);
                 glCompileShader(vs);
@@ -435,9 +436,8 @@ void main() {
         const GLuint program = Program(kFlatVertex, kFlatFragment);
         ASSERT_NE(program, 0u);
         BuildRestartScene(/*orphaned=*/false);
-        const Image image = Render(program, [] {
-            glDrawElements(GL_TRIANGLE_STRIP, kRestartIndexCount, GL_UNSIGNED_INT, nullptr);
-        });
+        const Image image =
+            Render(program, [] { glDrawElements(GL_TRIANGLE_STRIP, kRestartIndexCount, GL_UNSIGNED_INT, nullptr); });
         EXPECT_EQ(FirstGLError(), 0u);
         ExpectSplitStrip(image, "glDrawElements over compute-written restart indices");
     }
@@ -450,9 +450,8 @@ void main() {
         const GLuint program = Program(kFlatVertex, kFlatFragment);
         ASSERT_NE(program, 0u);
         BuildRestartScene(/*orphaned=*/true);
-        const Image image = Render(program, [] {
-            glDrawElements(GL_TRIANGLE_STRIP, kRestartIndexCount, GL_UNSIGNED_INT, nullptr);
-        });
+        const Image image =
+            Render(program, [] { glDrawElements(GL_TRIANGLE_STRIP, kRestartIndexCount, GL_UNSIGNED_INT, nullptr); });
         EXPECT_EQ(FirstGLError(), 0u);
         ExpectSplitStrip(image, "glDrawElements over compute-written restart indices in an orphaned store");
     }
@@ -470,9 +469,8 @@ void main() {
         BuildRestartScene(/*orphaned=*/false);
         const GLsizei counts[2] = {3, 4};
         const void* offsets[2] = {nullptr, reinterpret_cast<const void*>(3 * sizeof(GLuint))};
-        const Image image = Render(program, [&] {
-            glMultiDrawElements(GL_TRIANGLE_STRIP, counts, GL_UNSIGNED_INT, offsets, 2);
-        });
+        const Image image =
+            Render(program, [&] { glMultiDrawElements(GL_TRIANGLE_STRIP, counts, GL_UNSIGNED_INT, offsets, 2); });
         EXPECT_EQ(FirstGLError(), 0u);
         ExpectSplitStrip(image, "glMultiDrawElements over compute-written restart indices");
     }
@@ -510,13 +508,11 @@ void main() {
         glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m_ebo);
         glBindBuffer(GL_DRAW_INDIRECT_BUFFER, m_commands);
         glBindBuffer(GL_PARAMETER_BUFFER, m_parameters);
-        const Image image = Render(program, [] {
-            glMultiDrawElementsIndirectCount(GL_TRIANGLES, GL_UNSIGNED_INT, nullptr, 0, 2, 0);
-        });
+        const Image image =
+            Render(program, [] { glMultiDrawElementsIndirectCount(GL_TRIANGLES, GL_UNSIGNED_INT, nullptr, 0, 2, 0); });
         EXPECT_EQ(FirstGLError(), 0u);
-        EXPECT_TRUE(IsGreen(Half(image, 0)))
-            << "command 0 did not draw (" << Half(image, 0)
-            << "): the count was read from a copy the compute shader never reached";
+        EXPECT_TRUE(IsGreen(Half(image, 0))) << "command 0 did not draw (" << Half(image, 0)
+                                             << "): the count was read from a copy the compute shader never reached";
         EXPECT_TRUE(IsGreen(Half(image, 1))) << "command 1 did not draw (" << Half(image, 1) << ")";
     }
 
@@ -545,13 +541,10 @@ void main() {
         glBindVertexArray(m_vao);
         glBindBuffer(GL_DRAW_INDIRECT_BUFFER, m_commands);
         glBindBuffer(GL_PARAMETER_BUFFER, m_parameters);
-        const Image image = Render(program, [] {
-            glMultiDrawArraysIndirectCount(GL_TRIANGLES, nullptr, 0, 2, 0);
-        });
+        const Image image = Render(program, [] { glMultiDrawArraysIndirectCount(GL_TRIANGLES, nullptr, 0, 2, 0); });
         EXPECT_EQ(FirstGLError(), 0u);
-        EXPECT_TRUE(IsGreen(Half(image, 0)))
-            << "command 0 did not draw (" << Half(image, 0)
-            << "): the count was read from a copy the compute shader never reached";
+        EXPECT_TRUE(IsGreen(Half(image, 0))) << "command 0 did not draw (" << Half(image, 0)
+                                             << "): the count was read from a copy the compute shader never reached";
         EXPECT_TRUE(IsGreen(Half(image, 1))) << "command 1 did not draw (" << Half(image, 1) << ")";
     }
 
@@ -580,9 +573,7 @@ void main() { command[3] = 9; }
         glBindVertexArray(m_vao);
         glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m_ebo);
         glBindBuffer(GL_DRAW_INDIRECT_BUFFER, m_commands);
-        const Image image = Render(program, [] {
-            glDrawElementsIndirect(GL_TRIANGLES, GL_UNSIGNED_INT, nullptr);
-        });
+        const Image image = Render(program, [] { glDrawElementsIndirect(GL_TRIANGLES, GL_UNSIGNED_INT, nullptr); });
         EXPECT_EQ(FirstGLError(), 0u);
         EXPECT_TRUE(IsGreen(Half(image, 1)))
             << "the right half is " << Half(image, 1)
@@ -614,9 +605,7 @@ void main() { command[0] = 6u; command[1] = 1u; command[2] = 0u; command[3] = 3u
         glBindVertexArray(m_vao);
         glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m_ebo);
         glBindBuffer(GL_DRAW_INDIRECT_BUFFER, m_commands);
-        const Image image = Render(program, [] {
-            glDrawElementsIndirect(GL_TRIANGLES, GL_UNSIGNED_INT, nullptr);
-        });
+        const Image image = Render(program, [] { glDrawElementsIndirect(GL_TRIANGLES, GL_UNSIGNED_INT, nullptr); });
         EXPECT_EQ(FirstGLError(), 0u);
         EXPECT_TRUE(IsGreen(Half(image, 0)))
             << "the compute-written command did not draw (" << Half(image, 0)
@@ -640,9 +629,8 @@ void main() { command[0] = 6u; command[1] = 1u; command[2] = 0u; command[3] = 3u
         Store(m_ebo, GL_ELEMENT_ARRAY_BUFFER, kRestartIndexCount * sizeof(GLuint), kRestartPoison.data());
         CaptureIntoElementBuffer(capture, kRestartIndexCount);
         ArmRestart();
-        const Image image = Render(program, [] {
-            glDrawElements(GL_TRIANGLE_STRIP, kRestartIndexCount, GL_UNSIGNED_INT, nullptr);
-        });
+        const Image image =
+            Render(program, [] { glDrawElements(GL_TRIANGLE_STRIP, kRestartIndexCount, GL_UNSIGNED_INT, nullptr); });
         EXPECT_EQ(FirstGLError(), 0u);
         ExpectSplitStrip(image, "glDrawElements over restart indices a transform feedback captured");
     }
@@ -661,9 +649,8 @@ void main() { command[0] = 6u; command[1] = 1u; command[2] = 0u; command[3] = 3u
         Store(m_ebo, GL_ELEMENT_ARRAY_BUFFER, sizeof(kScatterStaged), kScatterStaged);
         CaptureIntoElementBuffer(capture, 4);
         ArmRestart();
-        const Image image = Render(program, [] {
-            glDrawElements(GL_TRIANGLE_STRIP, kRestartIndexCount, GL_UNSIGNED_INT, nullptr);
-        });
+        const Image image =
+            Render(program, [] { glDrawElements(GL_TRIANGLE_STRIP, kRestartIndexCount, GL_UNSIGNED_INT, nullptr); });
         EXPECT_EQ(FirstGLError(), 0u);
         ExpectSplitStrip(image, "glDrawElements over restart indices a scattered capture composed");
     }
@@ -689,9 +676,8 @@ void main() { command[0] = 6u; command[1] = 1u; command[2] = 0u; command[3] = 3u
         glUseProgram(0);
         glBindImageTexture(0, 0, 0, GL_FALSE, 0, GL_READ_ONLY, GL_R32UI);
         ArmRestart();
-        const Image image = Render(program, [] {
-            glDrawElements(GL_TRIANGLE_STRIP, kRestartIndexCount, GL_UNSIGNED_INT, nullptr);
-        });
+        const Image image =
+            Render(program, [] { glDrawElements(GL_TRIANGLE_STRIP, kRestartIndexCount, GL_UNSIGNED_INT, nullptr); });
         EXPECT_EQ(FirstGLError(), 0u);
         ExpectSplitStrip(image, "glDrawElements over restart indices image stores wrote");
     }
@@ -740,13 +726,11 @@ void main() {
         glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, m_ebo);
         glBindBuffer(GL_DRAW_INDIRECT_BUFFER, m_commands);
         glBindBuffer(GL_PARAMETER_BUFFER, m_parameters);
-        const Image image = Render(program, [] {
-            glMultiDrawElementsIndirectCount(GL_TRIANGLES, GL_UNSIGNED_INT, nullptr, 0, 2, 0);
-        });
+        const Image image =
+            Render(program, [] { glMultiDrawElementsIndirectCount(GL_TRIANGLES, GL_UNSIGNED_INT, nullptr, 0, 2, 0); });
         EXPECT_EQ(FirstGLError(), 0u);
-        EXPECT_TRUE(IsGreen(Half(image, 0)))
-            << "command 0 did not draw (" << Half(image, 0)
-            << "): the count was read from a copy the atomic counter never reached";
+        EXPECT_TRUE(IsGreen(Half(image, 0))) << "command 0 did not draw (" << Half(image, 0)
+                                             << "): the count was read from a copy the atomic counter never reached";
         EXPECT_TRUE(IsGreen(Half(image, 1))) << "command 1 did not draw (" << Half(image, 1) << ")";
     }
 
@@ -774,7 +758,8 @@ void main() {
 layout(local_size_x = 1) in;
 layout(std430, binding = 0) buffer Positions { uint word[]; };
 void main() {
-    const uint hi[8] = uint[8]()") + highWords + R"();
+    const uint hi[8] = uint[8]()") + highWords +
+                                       R"();
     for (int i = 0; i < 8; ++i) { word[2 * i] = 0u; word[2 * i + 1] = hi[i]; }
 }
 )";
@@ -799,7 +784,6 @@ void main() {
             << "round 2: the right half still drew - the narrowed copy of round 1 was reused after the "
                "second GPU write";
     }
-
 
     // P13 W4a (ID-P8-14a): AN INDIRECT DRAW WITH NO CLIENT-MEMORY ARRAY READS NOTHING BACK. The
     // monolith indirect executors used to pull a GPU-written command buffer back into its shadow

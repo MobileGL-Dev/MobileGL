@@ -164,8 +164,7 @@ void main() { oColor = vec4(vColor, 1.0); }
             if (FirstGLError() != 0u) {
                 glDeleteBuffers(1, &store.vbo);
                 store.vbo = 0;
-                store.refusal =
-                    "this driver has no immutable storage with GL_MAP_PERSISTENT_BIT|GL_MAP_COHERENT_BIT";
+                store.refusal = "this driver has no immutable storage with GL_MAP_PERSISTENT_BIT|GL_MAP_COHERENT_BIT";
                 return store;
             }
             // THE ONE ACQUISITION. Everything below writes through this pointer and never maps
@@ -184,8 +183,7 @@ void main() { oColor = vec4(vColor, 1.0); }
 
         void DescribeAttributes() {
             glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex), nullptr);
-            glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex),
-                                  reinterpret_cast<void*>(2 * sizeof(float)));
+            glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), reinterpret_cast<void*>(2 * sizeof(float)));
             glEnableVertexAttribArray(0);
             glEnableVertexAttribArray(1);
         }
@@ -244,7 +242,7 @@ void main() { oColor = vec4(vColor, 1.0); }
                                         "build (on Android this module links the shipping "
                                         "libMobileGL.so, built -fvisibility=hidden, so no internal "
                                         "symbol resolves). 'Could not look' is not 'it was "
-                                        << declared << "'.";
+                                     << declared << "'.";
                     }
                     RecordProperty("persistent_map_arm", "unknown");
                     return;
@@ -261,8 +259,8 @@ void main() { oColor = vec4(vColor, 1.0); }
                 RecordProperty("persistent_map_arm", arm);
                 if (declared.empty()) return;
                 ASSERT_EQ(declared, std::string(arm))
-                    << "the lane declared the " << declared << " arm and IsBackendPersistentMapped() "
-                    << when << " says " << arm
+                    << "the lane declared the " << declared << " arm and IsBackendPersistentMapped() " << when
+                    << " says " << arm
                     << ". R-6 pins the split arm at adopt tier T2 = declined = emulated, and the two "
                        "arms are completely different code paths: adopted means the CPU shadow was "
                        "released and the application writes straight into storage the resource owner "
@@ -372,8 +370,7 @@ void main() { oColor = vec4(vColor, 1.0); }
 
             // The whole surface minus an 8-pixel inset, so a primitive edge cannot contribute an
             // offender.
-            ::testing::AssertionResult WholeSurfaceIs(const Image& image, const char* color,
-                                                      const std::string& when) {
+            ::testing::AssertionResult WholeSurfaceIs(const Image& image, const char* color, const std::string& when) {
                 return RegionIsMostly(image, 8, image.Width() - 9, 8, image.Height() - 9, color, 0.0, when);
             }
 
@@ -381,7 +378,11 @@ void main() { oColor = vec4(vColor, 1.0); }
             // declare none (the monolith counting lane does not), and the peek may be unable to
             // look at all, so the third state is not "assume emulated" - it is "there is no arm to
             // condition on", and AssertMembership records rather than asserts under it.
-            enum class ObservedArm { NotLookedAt, Adopted, Emulated };
+            enum class ObservedArm {
+                NotLookedAt,
+                Adopted,
+                Emulated
+            };
             ObservedArm m_observedArm = ObservedArm::NotLookedAt;
 
             unsigned int m_program = 0;
@@ -439,8 +440,7 @@ void main() { oColor = vec4(vColor, 1.0); }
         WriteThroughTheMapThenDraw(m_map, 1.0f, 0.0f, 0.0f);
         const Image second = ReadPixels(Gl().Width(), Gl().Height());
         EXPECT_EQ(FirstGLError(), 0u);
-        EXPECT_TRUE(WholeSurfaceIs(second, "red",
-                                   "frame 1's write through the SAME mapping, after a Present"));
+        EXPECT_TRUE(WholeSurfaceIs(second, "red", "frame 1's write through the SAME mapping, after a Present"));
         AssertOrRecordArm(m_vbo, "after a frame boundary and two draws");
         Gl().EndFrame();
     }
@@ -514,8 +514,8 @@ void main() { oColor = vec4(vColor, 1.0); }
             RecordProperty("stats_counter_owner", "client process totals over the counted workload");
         }
         const long long roundtrips = separateClientStats
-            ? static_cast<long long>(acquisitionsAfter - acquisitionsBefore)
-            : PipeStatsWindow::CounterOrAbsent(window, "mpr");
+                                         ? static_cast<long long>(acquisitionsAfter - acquisitionsBefore)
+                                         : PipeStatsWindow::CounterOrAbsent(window, "mpr");
         ASSERT_GE(roundtrips, 0) << "the summary line carries no mpr= field: " << window.line;
         EXPECT_EQ(roundtrips, kExpectedRoundtrips)
             << "one PERSISTENT|WRITE|COHERENT map of one freshly defined store is ONE acquisition "
@@ -537,9 +537,8 @@ void main() { oColor = vec4(vColor, 1.0); }
         // cross-check. Deriving the arm from pmap would have made "the push was never wired" and
         // "the store was adopted" the same reading, and they are different defects with different
         // owners.
-        const double pushedBytes = separateClientStats
-            ? static_cast<double>(pushedAfter - pushedBefore)
-            : PipeStatsWindow::CounterAsDoubleOrAbsent(window, "pmap");
+        const double pushedBytes = separateClientStats ? static_cast<double>(pushedAfter - pushedBefore)
+                                                       : PipeStatsWindow::CounterAsDoubleOrAbsent(window, "pmap");
         ASSERT_GE(pushedBytes, 0.0) << "the summary line carries no pmap= field: " << window.line;
         RecordProperty("persistent_map_push_bytes_per_frame", std::to_string(pushedBytes).c_str());
         RecordProperty("map_persistent_roundtrips", std::to_string(roundtrips).c_str());
@@ -559,8 +558,7 @@ void main() { oColor = vec4(vColor, 1.0); }
         } else {
             // Recorded, not asserted: on this arm the number is whatever the driver's adoption
             // decision makes it, and it is the figure MEASUREMENTS wants beside the split one.
-            RecordProperty("persistent_map_push_note",
-                           "recorded only - this lane declares no emulated arm");
+            RecordProperty("persistent_map_push_note", "recorded only - this lane declares no emulated arm");
         }
 
         unsigned int vbo = store.vbo;

@@ -258,8 +258,7 @@ void main() { o_color = vec4(float(gl_NumSamples) * (16.0 / 255.0), 0.0, 0.0, 1.
         const Rgba8 centre = resolved.At(width / 2, height / 2);
         // The rate changes how OFTEN the shader runs, never what it computes - so the same
         // gl_NumSamples reading has to come back.
-        EXPECT_NEAR(centre.r, 16 * realizedSamples, 2)
-            << "the draw changed its result once sample shading was enabled";
+        EXPECT_NEAR(centre.r, 16 * realizedSamples, 2) << "the draw changed its result once sample shading was enabled";
 
         glMinSampleShading(0.0f);
         glDisable(GL_SAMPLE_SHADING);

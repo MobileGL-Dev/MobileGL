@@ -40,7 +40,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return static_cast<Uint32>(registry.size() - 1);
     }
 
-    MagmaSession& Detail::ProcessMagmaSession() { return ProcessSessionInstance(); }
+    MagmaSession& Detail::ProcessMagmaSession() {
+        return ProcessSessionInstance();
+    }
 
     void* Detail::SessionLocalSlotSlow(MagmaSession& session, Uint32 index) {
         if (index >= session.m_slots.size()) session.m_slots.resize(Registry().size(), nullptr);
@@ -54,7 +56,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // the app renders on, and a lazily built slot would be a first-touch race between two.
         const auto& registry = Registry();
         m_slots.resize(registry.size(), nullptr);
-        for (SizeT i = 0; i < registry.size(); ++i) m_slots[i] = registry[i].construct();
+        for (SizeT i = 0; i < registry.size(); ++i)
+            m_slots[i] = registry[i].construct();
     }
 
     MagmaSession::~MagmaSession() {
@@ -73,10 +76,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Detail::t_boundMagmaSession = session;
     }
 
-    MagmaSessionScope::~MagmaSessionScope() { Detail::t_boundMagmaSession = m_previous; }
+    MagmaSessionScope::~MagmaSessionScope() {
+        Detail::t_boundMagmaSession = m_previous;
+    }
 
-    void BindMagmaSessionToThisThread(MagmaSession* session) { Detail::t_boundMagmaSession = session; }
+    void BindMagmaSessionToThisThread(MagmaSession* session) {
+        Detail::t_boundMagmaSession = session;
+    }
 
-    MagmaSession* BoundMagmaSession() { return Detail::t_boundMagmaSession; }
+    MagmaSession* BoundMagmaSession() {
+        return Detail::t_boundMagmaSession;
+    }
 
 } // namespace MobileGL::MG_Backend::DirectVulkan

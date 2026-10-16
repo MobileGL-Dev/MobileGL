@@ -105,7 +105,8 @@ namespace MobileGL::MG_Util::Damage {
             for (const Rect& taken : out) {
                 Vector<Rect> next;
                 for (const Rect& piece : pieces) {
-                    for (const Rect& left : Subtract(piece, taken)) next.push_back(left);
+                    for (const Rect& left : Subtract(piece, taken))
+                        next.push_back(left);
                 }
                 pieces = std::move(next);
                 if (pieces.empty()) break;
@@ -126,7 +127,8 @@ namespace MobileGL::MG_Util::Damage {
         }
         static Region FromRects(const Rect* rects, SizeT count) {
             Region region;
-            for (SizeT i = 0; i < count; ++i) region.Add(rects[i]);
+            for (SizeT i = 0; i < count; ++i)
+                region.Add(rects[i]);
             return region;
         }
         // EGL_KHR/EXT_swap_buffers_with_damage's argument: `count` groups of x, y, width, height,
@@ -157,7 +159,8 @@ namespace MobileGL::MG_Util::Damage {
                 SetFull();
                 return;
             }
-            for (const Rect& rect : other.m_rects) Add(rect);
+            for (const Rect& rect : other.m_rects)
+                Add(rect);
         }
         void SetFull() {
             m_full = true;
@@ -199,7 +202,8 @@ namespace MobileGL::MG_Util::Damage {
             // Far too many to pair up every frame: their bounding box.
             if (distinct.size() > 4 * kMaxRects && distinct.size() > limit) {
                 Rect box;
-                for (const Rect& rect : distinct) box = Bound(box, rect);
+                for (const Rect& rect : distinct)
+                    box = Bound(box, rect);
                 distinct.assign(1, box);
             }
             while (distinct.size() > limit) {
@@ -229,7 +233,8 @@ namespace MobileGL::MG_Util::Damage {
         // The rectangles flipped between bottom-left and top-left origin (a Full region stays Full).
         Region FlippedY(Int32 height) const {
             Region region = *this;
-            for (Rect& rect : region.m_rects) rect = FlipY(rect, height);
+            for (Rect& rect : region.m_rects)
+                rect = FlipY(rect, height);
             return region;
         }
 
@@ -253,7 +258,8 @@ namespace MobileGL::MG_Util::Damage {
         const Vector<Rect>& rects = region.Rects();
         if (rects.size() > maxRects) {
             Rect box;
-            for (const Rect& rect : rects) box = Bound(box, rect);
+            for (const Rect& rect : rects)
+                box = Bound(box, rect);
             out[0] = box.X, out[1] = box.Y, out[2] = box.Width, out[3] = box.Height;
             return 1;
         }
@@ -303,7 +309,8 @@ namespace MobileGL::MG_Util::Damage {
         if (clipped.IsFull()) return {FlippedCopy{whole, whole}};
         Vector<FlippedCopy> copies;
         copies.reserve(clipped.Rects().size());
-        for (const Rect& rect : clipped.Rects()) copies.push_back({rect, FlipY(rect, height)});
+        for (const Rect& rect : clipped.Rects())
+            copies.push_back({rect, FlipY(rect, height)});
         return copies;
     }
 
@@ -312,9 +319,7 @@ namespace MobileGL::MG_Util::Damage {
     public:
         explicit BufferDamageTracker(SizeT buffers = 0) { Resize(buffers); }
 
-        void Resize(SizeT buffers) {
-            m_missed.assign(buffers, Region::Full());
-        }
+        void Resize(SizeT buffers) { m_missed.assign(buffers, Region::Full()); }
         SizeT Size() const { return m_missed.size(); }
 
         // The buffer's contents are unknown (new, reallocated, resized): its next write copies all.
@@ -322,7 +327,8 @@ namespace MobileGL::MG_Util::Damage {
             if (index < m_missed.size()) m_missed[index].SetFull();
         }
         void InvalidateAll() {
-            for (Region& region : m_missed) region.SetFull();
+            for (Region& region : m_missed)
+                region.SetFull();
         }
 
         // A frame whose damage is `frame` is written into buffer `index` of a `width` x `height`

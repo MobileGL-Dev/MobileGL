@@ -75,7 +75,9 @@ void main() { o_color = vec4(0.0, 1.0, 0.0, 1.0); }
                << declaration << "\n"
                << "void main() {\n"
                   "    uint v = 0u;\n"
-                  "    if (u_read != 0u) { v = " << read << "; }\n"
+                  "    if (u_read != 0u) { v = "
+               << read
+               << "; }\n"
                   "    marker = 0xC0FFEEu;\n"
                   "    value = v;\n"
                   "}\n";
@@ -150,10 +152,12 @@ void main() {
 
             GLuint LinkShaders(std::initializer_list<GLuint> shaders, const char* varying = nullptr) {
                 const GLuint program = glCreateProgram();
-                for (GLuint s : shaders) glAttachShader(program, s);
+                for (GLuint s : shaders)
+                    glAttachShader(program, s);
                 if (varying != nullptr) glTransformFeedbackVaryings(program, 1, &varying, GL_INTERLEAVED_ATTRIBS);
                 glLinkProgram(program);
-                for (GLuint s : shaders) glDeleteShader(s);
+                for (GLuint s : shaders)
+                    glDeleteShader(s);
                 GLint ok = 0;
                 glGetProgramiv(program, GL_LINK_STATUS, &ok);
                 if (!ok) {
@@ -199,7 +203,8 @@ void main() {
                 bound = 0;
                 std::vector<unsigned int> payload(64);
                 for (int i = 0; i < kRecycledBuffers; ++i) {
-                    for (auto& word : payload) word = static_cast<unsigned int>(i);
+                    for (auto& word : payload)
+                        word = static_cast<unsigned int>(i);
                     m_owned.push_back(MakeBuffer(GL_ARRAY_BUFFER, payload.data(),
                                                  static_cast<GLsizeiptr>(payload.size() * sizeof(unsigned int))));
                 }
@@ -238,8 +243,8 @@ void main() {
             }
 
             // The three shader-buffer targets share one shape.
-            void RunShaderBufferTarget(GLenum target, const char* declaration, const char* read,
-                                       unsigned int freshSeed, unsigned int expectedRead) {
+            void RunShaderBufferTarget(GLenum target, const char* declaration, const char* read, unsigned int freshSeed,
+                                       unsigned int expectedRead) {
                 m_compute = LinkCompute(ComputeSource(declaration, read));
                 ASSERT_NE(m_compute, 0u) << m_log;
 
@@ -297,15 +302,14 @@ void main() {
 
     TEST_F(DeletedBoundBufferScenario, AStorageBufferDeletedWhileBoundLeavesNoStaleBinding) {
         if (!Ready() || IsSkipped()) return;
-        RunShaderBufferTarget(GL_SHADER_STORAGE_BUFFER,
-                              "layout(std430, binding = 0) buffer Target { uint word; };", "word",
-                              kFreshWord, kFreshWord);
+        RunShaderBufferTarget(GL_SHADER_STORAGE_BUFFER, "layout(std430, binding = 0) buffer Target { uint word; };",
+                              "word", kFreshWord, kFreshWord);
     }
 
     TEST_F(DeletedBoundBufferScenario, AUniformBufferDeletedWhileBoundLeavesNoStaleBinding) {
         if (!Ready() || IsSkipped()) return;
-        RunShaderBufferTarget(GL_UNIFORM_BUFFER, "layout(std140, binding = 0) uniform Target { uint word; };",
-                              "word", kFreshWord, kFreshWord);
+        RunShaderBufferTarget(GL_UNIFORM_BUFFER, "layout(std140, binding = 0) uniform Target { uint word; };", "word",
+                              kFreshWord, kFreshWord);
     }
 
     // The counter's pre-increment value is what the shader reads, and the buffer then holds seed + 1.

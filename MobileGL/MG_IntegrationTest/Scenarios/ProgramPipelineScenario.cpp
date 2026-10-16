@@ -108,8 +108,10 @@ void main()
                 if (!Ready()) return;
                 glBindProgramPipeline(0);
                 glUseProgram(0);
-                for (GLuint p : m_programs) glDeleteProgram(p);
-                for (GLuint p : m_pipelines) glDeleteProgramPipelines(1, &p);
+                for (GLuint p : m_programs)
+                    glDeleteProgram(p);
+                for (GLuint p : m_pipelines)
+                    glDeleteProgramPipelines(1, &p);
                 m_programs.clear();
                 m_pipelines.clear();
             }
@@ -851,9 +853,9 @@ void main() { o_color = texture(u_tex, vec2(0.5)); }
         glUseProgramStages(pipeline, GL_FRAGMENT_SHADER_BIT, fs);
 
         std::string error;
-        const unsigned int monolithic = CompileProgram(
-            "#version 330 core\nin vec2 aPos;\nvoid main(){ gl_Position = vec4(aPos,0.0,1.0); }\n",
-            "#version 330 core\nout vec4 o;\nvoid main(){ o = vec4(1.0,0.0,0.0,1.0); }\n", &error);
+        const unsigned int monolithic =
+            CompileProgram("#version 330 core\nin vec2 aPos;\nvoid main(){ gl_Position = vec4(aPos,0.0,1.0); }\n",
+                           "#version 330 core\nout vec4 o;\nvoid main(){ o = vec4(1.0,0.0,0.0,1.0); }\n", &error);
         ASSERT_NE(monolithic, 0u) << error;
         m_programs.push_back(monolithic);
 

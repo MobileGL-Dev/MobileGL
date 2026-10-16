@@ -92,10 +92,10 @@ namespace {
             // shape spawn has, and the reason the fixture does not share one pointer.
             RingControl* clientControl = clientSegments.CmdControl();
             RingControl* serverControl = serverSegments.CmdControl();
-            cmdProducer = RingProducer(clientControl, clientSegments.CmdRingBase(),
-                                       clientSegments.CmdRingCapacity(), RingCursorSet::Cmd);
-            cmdConsumer = RingConsumer(serverControl, serverSegments.CmdRingBase(),
-                                       serverSegments.CmdRingCapacity(), RingCursorSet::Cmd);
+            cmdProducer = RingProducer(clientControl, clientSegments.CmdRingBase(), clientSegments.CmdRingCapacity(),
+                                       RingCursorSet::Cmd);
+            cmdConsumer = RingConsumer(serverControl, serverSegments.CmdRingBase(), serverSegments.CmdRingCapacity(),
+                                       RingCursorSet::Cmd);
             if (!cmdProducer.Valid() || !cmdConsumer.Valid()) {
                 return false;
             }
@@ -105,16 +105,13 @@ namespace {
                             &clientTransport->SelfDoorbell(), kDefaultSpinUs);
             consumer.Attach(serverControl, &cmdConsumer, &serverTransport->PeerDoorbell(),
                             &serverTransport->SelfDoorbell(), kDefaultSpinUs);
-            replies = ReplySlotPool(serverSegments.ReplyBase(), serverSegments.ReplyBytes(),
-                                    serverSegments.ReplySlotCount());
+            replies =
+                ReplySlotPool(serverSegments.ReplyBase(), serverSegments.ReplyBytes(), serverSegments.ReplySlotCount());
             replies.Clear();
-            eventOut = EventRingProducer(serverSegments.EventControl(), serverControl,
-                                         serverSegments.EventRingBase(),
+            eventOut = EventRingProducer(serverSegments.EventControl(), serverControl, serverSegments.EventRingBase(),
                                          serverSegments.EventRingCapacity());
-            eventIn = EventRingConsumer(clientSegments.EventControl(), clientControl,
-                                        clientSegments.EventRingBase(),
-                                        clientSegments.EventRingCapacity(),
-                                        clientSegments.EventSegmentBase());
+            eventIn = EventRingConsumer(clientSegments.EventControl(), clientControl, clientSegments.EventRingBase(),
+                                        clientSegments.EventRingCapacity(), clientSegments.EventSegmentBase());
             return replies.Valid() && eventOut.Valid() && eventIn.Valid();
         }
 
@@ -202,14 +199,12 @@ TEST(SessionTest, TheDefaultGeometryIsTheFourContractRingSizes) {
     EXPECT_EQ(segments.ReplyBytes(), 16ull * 1024 * 1024);
     EXPECT_EQ(segments.EventRingCapacity(), 256ull * 1024);
 
-    EXPECT_EQ(segments.AnnouncedSize(SessionSegmentSlot::Cmd),
-              8ull * 1024 * 1024 + sizeof(RingControl));
+    EXPECT_EQ(segments.AnnouncedSize(SessionSegmentSlot::Cmd), 8ull * 1024 * 1024 + sizeof(RingControl));
     // SEG_STAGE is not a ring at all - no control page, no cursor triple, no power-of-two
     // rounding - and neither is SEG_REPLY, so both announce exactly what was asked for.
     EXPECT_EQ(segments.AnnouncedSize(SessionSegmentSlot::Stage), 32ull * 1024 * 1024);
     EXPECT_EQ(segments.AnnouncedSize(SessionSegmentSlot::Reply), 16ull * 1024 * 1024);
-    EXPECT_EQ(segments.AnnouncedSize(SessionSegmentSlot::Event),
-              256ull * 1024 + sizeof(RingControl));
+    EXPECT_EQ(segments.AnnouncedSize(SessionSegmentSlot::Event), 256ull * 1024 + sizeof(RingControl));
     segments.Close();
 }
 
@@ -305,8 +300,7 @@ TEST(SessionTest, TheLedgersPeakIsItsOwnRunningMaxAndNeverTheKernelsHighWaterMar
 
     // The CI shape: the kernel says peak 100, current 200.
     RoleMemorySample sample = SampleRoleMemoryInto(runningPeak, MemoryRole::Client, 100, 200);
-    EXPECT_EQ(sample.PeakRssBytes, 200u)
-        << "the kernel's peak was reported verbatim although its current exceeded it";
+    EXPECT_EQ(sample.PeakRssBytes, 200u) << "the kernel's peak was reported verbatim although its current exceeded it";
     EXPECT_GE(sample.PeakRssBytes, sample.CurrentRssBytes);
     EXPECT_EQ(sample.CurrentRssBytes, 200u);
     EXPECT_EQ(runningPeak.load(), 200u);
@@ -390,8 +384,7 @@ TEST(SessionTest, TwoThreadsMoveTwentyThousandRecordsAndAgreeOnEveryOne) {
     std::uint64_t emitted = 0;
     for (std::uint32_t index = 0; index < kRecords && ok.load(); ++index) {
         void* payload = nullptr;
-        while ((payload = session.cmdProducer.Reserve(1, kRecNone, sizeof(std::uint32_t))) ==
-               nullptr) {
+        while ((payload = session.cmdProducer.Reserve(1, kRecNone, sizeof(std::uint32_t))) == nullptr) {
             // Never "wait" on a nullptr with enough free bytes - RingProducer::Reserve (Ring.h) says that can
             // only mean "too big, chunk", and a producer that waited there would stall for ever.
             ASSERT_LT(session.cmdProducer.FreeBytes(), 16u);
@@ -417,8 +410,7 @@ TEST(SessionTest, TwoThreadsMoveTwentyThousandRecordsAndAgreeOnEveryOne) {
     // fillers. A side that counted a kRecPad would land here off by the number of wraps.
     EXPECT_EQ(session.Control().Progress.appliedSeq.load(), static_cast<std::uint64_t>(kRecords));
     EXPECT_EQ(session.consumer.AppliedSeq(), static_cast<std::uint64_t>(kRecords));
-    EXPECT_TRUE(RingCursorsValid(session.Control(), RingCursorSet::Cmd,
-                                 session.serverSegments.CmdRingCapacity()));
+    EXPECT_TRUE(RingCursorsValid(session.Control(), RingCursorSet::Cmd, session.serverSegments.CmdRingCapacity()));
 }
 
 // ---------------------------------------------------------------------------
@@ -504,8 +496,7 @@ TEST(SessionTest, RetiredSeqMayTrailTheApplyButCanNeverOvertakeIt) {
         ASSERT_NE(session.cmdProducer.Reserve(1, kRecNone, 8), nullptr);
     }
     session.producer.PublishAndNotify(3);
-    while (session.consumer.ApplyOne([](const RingRecordView&) {})) {
-    }
+    while (session.consumer.ApplyOne([](const RingRecordView&) {})) {}
     ASSERT_EQ(session.Control().Progress.appliedSeq.load(), 3u);
 
     // Trailing is legal and is what "late" means.
@@ -528,8 +519,7 @@ TEST(SessionTest, CompletedFrameSerialIsTheServersAndIsIndependentOfAppliedSeq) 
         ASSERT_NE(session.cmdProducer.Reserve(1, kRecNone, 8), nullptr);
     }
     session.producer.PublishAndNotify(5);
-    while (session.consumer.ApplyOne([](const RingRecordView&) {})) {
-    }
+    while (session.consumer.ApplyOne([](const RingRecordView&) {})) {}
     EXPECT_EQ(session.Control().Progress.appliedSeq.load(), 5u);
     // Five records applied, no frame completed: the two are not the same number and nothing
     // may derive one from the other.
@@ -764,8 +754,7 @@ TEST(SessionTest, AWrapFillerDoesNotAdvanceTheSessionsAppliedSeq) {
                 EXPECT_EQ(view.flags & kRecPad, 0u) << "a wrap filler reached the record counter";
                 EXPECT_NE(view.kind, kRingPadRecordKind);
                 ++applied;
-            })) {
-            }
+            })) {}
             session.consumer.RetireThrough(session.consumer.AppliedSeq());
             continue;
         }
@@ -780,8 +769,7 @@ TEST(SessionTest, AWrapFillerDoesNotAdvanceTheSessionsAppliedSeq) {
     while (session.consumer.ApplyOne([&](const RingRecordView& view) {
         EXPECT_EQ(view.flags & kRecPad, 0u) << "a wrap filler reached the record counter";
         ++applied;
-    })) {
-    }
+    })) {}
 
     EXPECT_GT(fillerBytes, 0u) << "the ring never wrapped, so this case proved nothing";
     EXPECT_EQ(applied, emitted);
@@ -799,8 +787,7 @@ TEST(SessionTest, AReplyIsAddressedBySeqAndCarriesItsSeqBackForSelfCheck) {
     ASSERT_TRUE(session.Build(TestSizes()));
     ASSERT_EQ(session.replies.SlotCount(), 8u);
     EXPECT_EQ(session.replies.SlotBytes(), 64ull * 1024 / 8);
-    EXPECT_EQ(session.replies.MaxReplyBytes(),
-              session.replies.SlotBytes() - sizeof(ReplySlotHeader));
+    EXPECT_EQ(session.replies.MaxReplyBytes(), session.replies.SlotBytes() - sizeof(ReplySlotHeader));
 
     const std::uint32_t pixels[4] = {1, 2, 3, 4};
     session.replies.Post(5, kReplyStatusOk, pixels, sizeof(pixels));
@@ -929,8 +916,8 @@ TEST(SessionTest, TheEventRingCarriesTheThreeReverseCallbacks) {
     // pointer (R-2's rule B).
     const std::uint8_t written[8] = {9, 8, 7, 6, 5, 4, 3, 2};
     {
-        void* slot = session.eventOut.Reserve(kEventBufferWriteback,
-                                              sizeof(EventBufferWritebackHead) + sizeof(written));
+        void* slot =
+            session.eventOut.Reserve(kEventBufferWriteback, sizeof(EventBufferWritebackHead) + sizeof(written));
         ASSERT_NE(slot, nullptr);
         EventBufferWritebackHead head{};
         head.Resource = EventHandle{7, 1};
@@ -941,8 +928,7 @@ TEST(SessionTest, TheEventRingCarriesTheThreeReverseCallbacks) {
     }
     // OnGpuWritten: a count and a tail of ranges.
     {
-        void* slot = session.eventOut.Reserve(kEventGpuWritten,
-                                              sizeof(EventGpuWrittenHead) + 2 * sizeof(EventRange));
+        void* slot = session.eventOut.Reserve(kEventGpuWritten, sizeof(EventGpuWrittenHead) + 2 * sizeof(EventRange));
         ASSERT_NE(slot, nullptr);
         EventGpuWrittenHead head{};
         head.Resource = EventHandle{9, 2};
@@ -961,8 +947,7 @@ TEST(SessionTest, TheEventRingCarriesTheThreeReverseCallbacks) {
         head.IsDefault = 1;
         std::memcpy(slot, &head, sizeof(head));
     }
-    session.eventOut.PublishAndNotify(session.clientTransport->SelfDoorbell(),
-                                      session.Control().producerParked);
+    session.eventOut.PublishAndNotify(session.clientTransport->SelfDoorbell(), session.Control().producerParked);
 
     RingRecordView view{};
     ASSERT_TRUE(session.eventIn.Pop(view));
@@ -1010,8 +995,7 @@ TEST(SessionTest, TheEventRingCarriesAGlError) {
     const std::uint32_t messageBytes = static_cast<std::uint32_t>(sizeof(message)); // NUL included
     ASSERT_LT(messageBytes, kEventGlErrorMaxMessageBytes);
     {
-        void* slot = session.eventOut.Reserve(kEventGlError,
-                                              sizeof(EventGlErrorHead) + messageBytes);
+        void* slot = session.eventOut.Reserve(kEventGlError, sizeof(EventGlErrorHead) + messageBytes);
         ASSERT_NE(slot, nullptr);
         EventGlErrorHead head{};
         head.Code = 4; // ErrorCode::InvalidOperation, widened
@@ -1019,8 +1003,7 @@ TEST(SessionTest, TheEventRingCarriesAGlError) {
         std::memcpy(slot, &head, sizeof(head));
         std::memcpy(static_cast<std::uint8_t*>(slot) + sizeof(head), message, messageBytes);
     }
-    session.eventOut.PublishAndNotify(session.clientTransport->SelfDoorbell(),
-                                      session.Control().producerParked);
+    session.eventOut.PublishAndNotify(session.clientTransport->SelfDoorbell(), session.Control().producerParked);
 
     RingRecordView view{};
     ASSERT_TRUE(session.eventIn.Pop(view));
@@ -1063,8 +1046,7 @@ TEST(SessionTest, AFullEventRingLatchesTheFlagRatherThanDecidingWhatToDoAboutIt)
     session.eventOut.CountDrop();
     EXPECT_EQ(session.eventIn.DroppedEvents(), 1u);
 
-    session.eventOut.PublishAndNotify(session.clientTransport->SelfDoorbell(),
-                                      session.Control().producerParked);
+    session.eventOut.PublishAndNotify(session.clientTransport->SelfDoorbell(), session.Control().producerParked);
     RingRecordView view{};
     std::uint64_t drained = 0;
     while (session.eventIn.Pop(view)) {
@@ -1105,8 +1087,7 @@ TEST(SessionTest, ShutdownUnparksTheApplyThreadAndTheJoinIsBounded) {
         shared->returned.store(true, std::memory_order_release);
     });
 
-    while (shared->session.Control().consumerParked.load() == 0 &&
-           !shared->returned.load(std::memory_order_acquire)) {
+    while (shared->session.Control().consumerParked.load() == 0 && !shared->returned.load(std::memory_order_acquire)) {
         std::this_thread::yield();
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
@@ -1116,8 +1097,7 @@ TEST(SessionTest, ShutdownUnparksTheApplyThreadAndTheJoinIsBounded) {
     shared->session.clientTransport->Shutdown();
 
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-    while (!shared->returned.load(std::memory_order_acquire) &&
-           std::chrono::steady_clock::now() < deadline) {
+    while (!shared->returned.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < deadline) {
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     if (!shared->returned.load(std::memory_order_acquire)) {
@@ -1135,9 +1115,7 @@ TEST(SessionTest, ShutdownUnparksTheApplyThreadAndTheJoinIsBounded) {
     // late thread cannot hang either.
     const auto start = std::chrono::steady_clock::now();
     EXPECT_EQ(shared->session.consumer.WaitForWork(kWaitForever), SessionWait::ShutDown);
-    EXPECT_LT(std::chrono::duration_cast<std::chrono::milliseconds>(
-                  std::chrono::steady_clock::now() - start)
-                  .count(),
+    EXPECT_LT(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count(),
               1000);
     // And so does a producer blocked in the verb barrier: without this, a client waiting for
     // appliedSeq when the server died would sit in the barrier for ever.
@@ -1193,16 +1171,14 @@ TEST(SessionTest, TheInprocPeerGetsItsOwnMappingOfTheSameSharedMemory) {
 
 #if !defined(_WIN32)
     // Different descriptors, different virtual addresses...
-    EXPECT_NE(peer.DescriptorFor(SessionSegmentSlot::Cmd),
-              owner.DescriptorFor(SessionSegmentSlot::Cmd));
+    EXPECT_NE(peer.DescriptorFor(SessionSegmentSlot::Cmd), owner.DescriptorFor(SessionSegmentSlot::Cmd));
     EXPECT_GE(peer.DescriptorFor(SessionSegmentSlot::Cmd), 0);
     EXPECT_NE(static_cast<void*>(peer.CmdControl()), static_cast<void*>(owner.CmdControl()));
     EXPECT_NE(peer.CmdRingBase(), owner.CmdRingBase());
 #endif
     // ... over the SAME physical page, which is the whole point: a store through one mapping is
     // visible through the other, exactly as it is across two processes under spawn.
-    EXPECT_EQ(peer.AnnouncedSize(SessionSegmentSlot::Cmd),
-              owner.AnnouncedSize(SessionSegmentSlot::Cmd));
+    EXPECT_EQ(peer.AnnouncedSize(SessionSegmentSlot::Cmd), owner.AnnouncedSize(SessionSegmentSlot::Cmd));
     owner.CmdControl()->Progress.appliedSeq.store(4242, std::memory_order_release);
     EXPECT_EQ(peer.CmdControl()->Progress.appliedSeq.load(std::memory_order_acquire), 4242u);
     peer.CmdControl()->Progress.presentAckSerial.store(77, std::memory_order_release);
@@ -1244,8 +1220,7 @@ TEST(SessionTest, ABorrowedSlotIsNotHandedBackUntilItIsReleased) {
             sawBorrow = true;
         }
         ++seen;
-    })) {
-    }
+    })) {}
     ASSERT_EQ(seen, 3);
     ASSERT_TRUE(sawBorrow) << "the producer dropped kRecBorrowSlot, so this case proved nothing";
 
@@ -1258,14 +1233,12 @@ TEST(SessionTest, ABorrowedSlotIsNotHandedBackUntilItIsReleased) {
     EXPECT_EQ(session.Control().cmdRetiredTail.load(), firstRecordEnd);
     EXPECT_LT(session.Control().cmdRetiredTail.load(), session.Control().cmdAppliedTail.load())
         << "a borrowed slot was handed back to the producer while the GPU may still read it";
-    EXPECT_TRUE(RingCursorsValid(session.Control(), RingCursorSet::Cmd,
-                                 session.serverSegments.CmdRingCapacity()));
+    EXPECT_TRUE(RingCursorsValid(session.Control(), RingCursorSet::Cmd, session.serverSegments.CmdRingCapacity()));
 
     // completedFrameSerial passed it: now the rest comes back.
     session.consumer.RetireBorrowedUpTo(session.cmdConsumer.LocalTail());
     EXPECT_EQ(session.Control().cmdRetiredTail.load(), session.Control().cmdAppliedTail.load());
-    EXPECT_TRUE(RingCursorsValid(session.Control(), RingCursorSet::Cmd,
-                                 session.serverSegments.CmdRingCapacity()));
+    EXPECT_TRUE(RingCursorsValid(session.Control(), RingCursorSet::Cmd, session.serverSegments.CmdRingCapacity()));
 }
 
 // q-1. Teardown's drain keys on the PRODUCER's own last-published seq, not on
@@ -1316,8 +1289,7 @@ TEST(SessionTest, TheProducersParkLedgerCountsItsOwnWaitsAndNotTheBellsOtherWait
     // A SECOND SUBSYSTEM waits on the same bell, exactly as the encoder does. spinUs 0 and a
     // condition that never flips, so it goes straight to the blocking park.
     std::atomic<std::uint32_t> parked{0};
-    EXPECT_FALSE(session.clientTransport->SelfDoorbell().Wait(
-        parked, [] { return false; }, 0, 20));
+    EXPECT_FALSE(session.clientTransport->SelfDoorbell().Wait(parked, [] { return false; }, 0, 20));
     EXPECT_EQ(session.producer.Waits(), waitsBefore)
         << "a foreign wait on the shared bell moved the producer's wait count";
     EXPECT_EQ(session.producer.Parks(), parksBefore)
@@ -1348,8 +1320,8 @@ TEST(SessionTest, TheProducersParkLedgerCountsItsOwnWaitsAndNotTheBellsOtherWait
 // simplified away"; it did not, and s1-v3.md says so.
 TEST(SessionTest, ANullUnionFrameVerifiesWhichIsThePremiseOfBothHandshakeGuards) {
     ::flatbuffers::FlatBufferBuilder builder(256);
-    auto envelope = ::MobileGL::Wire::CreateCtrlEnvelope(builder, ::MobileGL::Wire::CtrlMsg::Hello,
-                                                         ::flatbuffers::Offset<void>());
+    auto envelope =
+        ::MobileGL::Wire::CreateCtrlEnvelope(builder, ::MobileGL::Wire::CtrlMsg::Hello, ::flatbuffers::Offset<void>());
     ::MobileGL::Wire::FinishCtrlEnvelopeBuffer(builder, envelope);
 
     ::flatbuffers::Verifier verifier(builder.GetBufferPointer(), builder.GetSize());
@@ -1357,8 +1329,7 @@ TEST(SessionTest, ANullUnionFrameVerifiesWhichIsThePremiseOfBothHandshakeGuards)
         << "if this ever starts failing, the guard in both handshakes may be relaxed";
     ASSERT_TRUE(::MobileGL::Wire::CtrlEnvelopeBufferHasIdentifier(builder.GetBufferPointer()));
 
-    const ::MobileGL::Wire::CtrlEnvelope* parsed =
-        ::MobileGL::Wire::GetCtrlEnvelope(builder.GetBufferPointer());
+    const ::MobileGL::Wire::CtrlEnvelope* parsed = ::MobileGL::Wire::GetCtrlEnvelope(builder.GetBufferPointer());
     ASSERT_NE(parsed, nullptr);
     EXPECT_EQ(parsed->msg_type(), ::MobileGL::Wire::CtrlMsg::Hello);
     // The whole finding, in one line: the tag says Hello and there is no Hello.
@@ -1419,15 +1390,13 @@ TEST(SessionTest, TheStageCursorTripleStaysDeadAcrossAWholeSession) {
     for (int index = 0; index < kRecords; ++index) {
         void* payload = nullptr;
         while ((payload = session.cmdProducer.Reserve(1, kRecNone, 32)) == nullptr) {
-            while (session.consumer.ApplyOne([&](const RingRecordView&) { ++applied; })) {
-            }
+            while (session.consumer.ApplyOne([&](const RingRecordView&) { ++applied; })) {}
             session.consumer.RetireThrough(session.consumer.AppliedSeq());
         }
         std::memset(payload, index & 0xFF, 32);
         session.producer.PublishAndNotify(static_cast<std::uint64_t>(index + 1));
     }
-    while (session.consumer.ApplyOne([&](const RingRecordView&) { ++applied; })) {
-    }
+    while (session.consumer.ApplyOne([&](const RingRecordView&) { ++applied; })) {}
     session.consumer.RetireThrough(session.consumer.AppliedSeq());
     ASSERT_EQ(applied, kRecords);
 
@@ -1484,8 +1453,7 @@ TEST(SessionTest, ARecordWearingThePadBitIsDeliveredRatherThanEatenAsAFiller) {
         seenKind = view.kind;
         seenFlags = view.flags;
         ++seen;
-    })) {
-    }
+    })) {}
     EXPECT_EQ(seen, 1) << "the record was skipped as a wrap filler because it wore bit 2 - Pop's "
                           "kind check (a filler is kRecPad AND kind == kRingPadRecordKind) is the "
                           "only thing between a stamped header and a silently deleted record";
@@ -1504,8 +1472,7 @@ TEST(SessionTest, ARecordWearingThePadBitIsDeliveredRatherThanEatenAsAFiller) {
     stamped.flags = static_cast<std::uint16_t>(stamped.flags | kRecPad);
     std::memcpy(headerBytes, &stamped, sizeof(stamped));
     session.producer.PublishAndNotify(2);
-    while (session.consumer.ApplyOne([&](const RingRecordView&) { ++seen; })) {
-    }
+    while (session.consumer.ApplyOne([&](const RingRecordView&) { ++seen; })) {}
     EXPECT_EQ(seen, 1) << "a genuine filler was delivered as a record: Pop's skip was removed, "
                           "not narrowed";
     EXPECT_EQ(session.Control().Progress.appliedSeq.load(), 1u) << "a filler advanced appliedSeq (R-9)";
@@ -1522,8 +1489,7 @@ TEST(SessionTest, ABorrowSlotSightingIsCountedRatherThanJustActedOn) {
 
     ASSERT_NE(session.cmdProducer.Reserve(3, kRecBorrowSlot, 16), nullptr);
     session.producer.PublishAndNotify(1);
-    while (session.consumer.ApplyOne([](const RingRecordView&) {})) {
-    }
+    while (session.consumer.ApplyOne([](const RingRecordView&) {})) {}
     EXPECT_EQ(session.consumer.BorrowedRecordsSeen(), 1u)
         << "a kRecBorrowSlot record went by unnamed; in P5 that bit can only be kHostSpan";
 }

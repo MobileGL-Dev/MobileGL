@@ -106,8 +106,8 @@ namespace MobileGL {
                 const char* name() const override { return "mobilegl-demote-point-size"; }
                 Status Process() override;
 
-                static spvtools::Optimizer::PassToken CreateDemotePointSizePass(
-                    DemotePointSizeOptions options, DemotePointSizeReport* report);
+                static spvtools::Optimizer::PassToken CreateDemotePointSizePass(DemotePointSizeOptions options,
+                                                                                DemotePointSizeReport* report);
 
             private:
                 DemotePointSizeOptions m_options;

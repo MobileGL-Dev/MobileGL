@@ -292,14 +292,16 @@ void main() { o_color = texelFetch(u_texture, ivec2(gl_FragCoord.xy) % 4, 0); }
                         }
                     }
                 }
-                const std::size_t readAt = static_cast<std::size_t>((std::max(firstY, 0) * kEdge + std::max(firstX, 0)) * 4);
-                const std::size_t wantAt = static_cast<std::size_t>((std::max(firstY, 0) * edge + std::max(firstX, 0)) * 4);
+                const std::size_t readAt =
+                    static_cast<std::size_t>((std::max(firstY, 0) * kEdge + std::max(firstX, 0)) * 4);
+                const std::size_t wantAt =
+                    static_cast<std::size_t>((std::max(firstY, 0) * edge + std::max(firstX, 0)) * 4);
                 EXPECT_EQ(wrong, 0) << what << ": " << wrong << " channel(s) differ; first at (" << firstX << ", "
                                     << firstY << ") read " << int(read[readAt]) << "," << int(read[readAt + 1]) << ","
                                     << int(read[readAt + 2]) << "," << int(read[readAt + 3]) << " want "
-                                    << int(want[wantAt]) << "," << int(want[wantAt + 1]) << ","
-                                    << int(want[wantAt + 2]) << "," << int(want[wantAt + 3]) << " (backend "
-                                    << Gl().BackendName() << ", " << (m_wire ? "split" : "monolith") << ")";
+                                    << int(want[wantAt]) << "," << int(want[wantAt + 1]) << "," << int(want[wantAt + 2])
+                                    << "," << int(want[wantAt + 3]) << " (backend " << Gl().BackendName() << ", "
+                                    << (m_wire ? "split" : "monolith") << ")";
             }
 
             // W2-d: where the peek can see the server's count (monolith, inproc) - and only on a
@@ -400,8 +402,8 @@ void main() { o_color = texelFetch(u_texture, ivec2(gl_FragCoord.xy) % 4, 0); }
             SyncBySampling(texture);
             ClearOnTheGpu(texture, 0, kGreen);
             SyncBySampling(texture);
-            ExpectTexels("a null-defined texture only the GPU wrote", ImageCopy(texture, 0, GL_RGBA8, "rgba8"),
-                         kEdge, Solid(kEdge, 0, 255, 0, 255));
+            ExpectTexels("a null-defined texture only the GPU wrote", ImageCopy(texture, 0, GL_RGBA8, "rgba8"), kEdge,
+                         Solid(kEdge, 0, 255, 0, 255));
         }
 
         TEST_F(TextureRemintPullScenario, APendingPartialUploadMergesOverGpuWrittenTexels) {
@@ -427,8 +429,8 @@ void main() { o_color = texelFetch(u_texture, ivec2(gl_FragCoord.xy) % 4, 0); }
                     want[at + 2] = 255;
                 }
             }
-            ExpectTexels("a pending partial upload over GPU texels", ImageCopy(texture, 0, GL_RGBA8, "rgba8"),
-                         kEdge, want);
+            ExpectTexels("a pending partial upload over GPU texels", ImageCopy(texture, 0, GL_RGBA8, "rgba8"), kEdge,
+                         want);
         }
 
         TEST_F(TextureRemintPullScenario, AGeneratedMipLevelSurvivesTheImageBind) {
@@ -475,8 +477,8 @@ void main() { o_color = texelFetch(u_texture, ivec2(gl_FragCoord.xy) % 4, 0); }
             glBindTexture(GL_TEXTURE_2D, texture);
             glTexImage2D(GL_TEXTURE_2D, 1, GL_RGBA8, kEdge / 2, kEdge / 2, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
             glBindTexture(GL_TEXTURE_2D, 0);
-            ExpectTexels("level 0 beside a level defined after the last sync",
-                         ImageCopy(texture, 0, GL_RGBA8, "rgba8"), kEdge, pattern);
+            ExpectTexels("level 0 beside a level defined after the last sync", ImageCopy(texture, 0, GL_RGBA8, "rgba8"),
+                         kEdge, pattern);
         }
 
         // W2-a's extent half: the driver holds level 0 at its OLD extent. The new contents are

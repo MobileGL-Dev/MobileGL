@@ -37,8 +37,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     } // namespace
 
     const VertexInputStateFactory::BackendVertexInputState* VertexInputStateFactory::ResolveWireVertexInput(
-            const MG_Pipe::MGPipeVertexElementsRecord& elements, const MG_Pipe::MGPipeApplierState& state,
-            Uint32 activeMask) const {
+        const MG_Pipe::MGPipeVertexElementsRecord& elements, const MG_Pipe::MGPipeApplierState& state,
+        Uint32 activeMask) const {
         auto* memo = static_cast<WireVertexInputMemo*>(elements.BackendMemo.get());
         if (memo == nullptr) {
             auto created = std::make_shared<WireVertexInputMemo>();
@@ -77,7 +77,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     Bool VertexInputStateFactory::BuildWireVertexInput(const MG_Pipe::MGPipeVertexElementsRecord& elements,
-            const MG_Pipe::MGPipeApplierState& state, Uint32 activeMask, BackendVertexInputState& out) const {
+                                                       const MG_Pipe::MGPipeApplierState& state, Uint32 activeMask,
+                                                       BackendVertexInputState& out) const {
         // The caller's state is a per-draw scratch (WireDraw.cpp): reset it without freeing.
         out.ResetKeepingCapacity();
         for (Uint32 location = 0; location < elements.AttributeCount; ++location) {
@@ -117,11 +118,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // a Fatal for a number no application can reach on purpose. Recorded in
             // docs/archive/notes/p7/magma-c.md rather than silently reconciled.
             const auto describe = [&](const char* reason, VkFormat format) {
-                MGLOG_E_ONCE("Magma wire vertex layout: %s location=%u type=%u size=%u normalized=%u integer=%u long=%u bgra=%u stride=%d offset=%llu format=%d bufferWindow=%u+%u activeMask=0x%x",
-                    reason, location, attr.Type, static_cast<Uint32>(attr.Size), static_cast<Uint32>(attr.Normalized),
-                    static_cast<Uint32>(attr.IsInteger), static_cast<Uint32>(attr.IsLong), static_cast<Uint32>(attr.IsBgra),
-                    attr.Stride, static_cast<unsigned long long>(attr.Offset), static_cast<Int>(format),
-                    state.VertexBufferStart, state.VertexBufferCount, activeMask);
+                MGLOG_E_ONCE("Magma wire vertex layout: %s location=%u type=%u size=%u normalized=%u integer=%u "
+                             "long=%u bgra=%u stride=%d offset=%llu format=%d bufferWindow=%u+%u activeMask=0x%x",
+                             reason, location, attr.Type, static_cast<Uint32>(attr.Size),
+                             static_cast<Uint32>(attr.Normalized), static_cast<Uint32>(attr.IsInteger),
+                             static_cast<Uint32>(attr.IsLong), static_cast<Uint32>(attr.IsBgra), attr.Stride,
+                             static_cast<unsigned long long>(attr.Offset), static_cast<Int>(format),
+                             state.VertexBufferStart, state.VertexBufferCount, activeMask);
             };
             // The protocol verdict: the caller turns a false into the named Fatal.
             const auto reject = [&](const char* reason, VkFormat format = VK_FORMAT_UNDEFINED) {
@@ -138,13 +141,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             };
             // set_vertex_buffers is flattened PER ATTRIBUTE (VertexInputEmit.h), not
             // indexed by the original ARB binding point in attr.BindingIndex.
-            if (location < state.VertexBufferStart ||
-                location - state.VertexBufferStart >= state.VertexBufferCount) return reject("buffer-window");
+            if (location < state.VertexBufferStart || location - state.VertexBufferStart >= state.VertexBufferCount)
+                return reject("buffer-window");
             const auto& buffer = state.VertexBuffers[location];
             const auto type = static_cast<DataType>(attr.Type);
-            if (attr.Stride < 0 || attr.Size < 1 || attr.Size > 4) { maskOut("attribute-shape"); continue; }
-            VkFormat format = ToVkVertexFormat(type, attr.Size, attr.Normalized, attr.IsInteger,
-                                               attr.IsBgra, attr.IsLong);
+            if (attr.Stride < 0 || attr.Size < 1 || attr.Size > 4) {
+                maskOut("attribute-shape");
+                continue;
+            }
+            VkFormat format =
+                ToVkVertexFormat(type, attr.Size, attr.Normalized, attr.IsInteger, attr.IsBgra, attr.IsLong);
             auto conversion = VertexStreamConversion::None;
             if (format == VK_FORMAT_UNDEFINED && type == DataType::Float64) {
                 const auto* backend = MG_Backend::ApplyRoleBackend();
@@ -168,29 +174,45 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 format = ToFloat32VertexFormat(attr.Size);
                 conversion = VertexStreamConversion::ScaledIntegerToFloat32;
             }
-            if (format == VK_FORMAT_UNDEFINED) { maskOut("format-map"); continue; }
+            if (format == VK_FORMAT_UNDEFINED) {
+                maskOut("format-map");
+                continue;
+            }
             if (!SupportsVertexBufferFormat(format)) {
-                if (!IsScaledIntegerVertexFormat(format)) { maskOut("native-format-feature", format); continue; }
+                if (!IsScaledIntegerVertexFormat(format)) {
+                    maskOut("native-format-feature", format);
+                    continue;
+                }
                 format = ToFloat32VertexFormat(attr.Size);
                 conversion = VertexStreamConversion::ScaledIntegerToFloat32;
-                if (!SupportsVertexBufferFormat(format)) { maskOut("converted-format-feature", format); continue; }
+                if (!SupportsVertexBufferFormat(format)) {
+                    maskOut("converted-format-feature", format);
+                    continue;
+                }
             }
             const SizeT elementSize = GetAttributeByteSize(type, attr.Size, attr.IsBgra);
-            if (!elementSize) { maskOut("element-size", format); continue; }
+            if (!elementSize) {
+                maskOut("element-size", format);
+                continue;
+            }
             const Uint64 offset = attr.Offset + buffer.Offset;
-            if (offset < attr.Offset) { maskOut("offset-overflow", format); continue; }
+            if (offset < attr.Offset) {
+                maskOut("offset-overflow", format);
+                continue;
+            }
             const SizeT alignment = (type == DataType::Int2101010Rev || type == DataType::Uint2101010Rev)
-                ? elementSize : GetComponentSize(type);
+                                        ? elementSize
+                                        : GetComponentSize(type);
             if (conversion == VertexStreamConversion::None && alignment > 1 &&
                 (offset % alignment || static_cast<Uint32>(attr.Stride) % alignment))
                 conversion = VertexStreamConversion::Repack;
             Uint32 stride = static_cast<Uint32>(attr.Stride);
             if (stride && conversion != VertexStreamConversion::None)
                 stride = conversion == VertexStreamConversion::Repack ? static_cast<Uint32>(elementSize)
-                    : static_cast<Uint32>(attr.Size) * sizeof(Float);
+                                                                      : static_cast<Uint32>(attr.Size) * sizeof(Float);
             const Uint32 binding = static_cast<Uint32>(out.bindings.size());
-            out.bindings.push_back({binding, stride,
-                buffer.Divisor ? VK_VERTEX_INPUT_RATE_INSTANCE : VK_VERTEX_INPUT_RATE_VERTEX});
+            out.bindings.push_back(
+                {binding, stride, buffer.Divisor ? VK_VERTEX_INPUT_RATE_INSTANCE : VK_VERTEX_INPUT_RATE_VERTEX});
             out.attributes.push_back({location, binding, format, 0});
             out.bindingAttributeLocations.push_back(location);
             out.bindingBaseOffsets.push_back(static_cast<SizeT>(offset));
@@ -202,8 +224,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // resolved binding/attribute/divisor values, including a legal zero stride.
         Uint64 hash = XXH64(out.bindings.data(), out.bindings.size() * sizeof(out.bindings[0]), 0);
         hash = XXH64(out.attributes.data(), out.attributes.size() * sizeof(out.attributes[0]), hash);
-        hash = XXH64(out.bindingDivisors.data(),
-            out.bindingDivisors.size() * sizeof(out.bindingDivisors[0]), hash);
+        hash = XXH64(out.bindingDivisors.data(), out.bindingDivisors.size() * sizeof(out.bindingDivisors[0]), hash);
         // THE MASK IS PART OF THE LAYOUT NOW, for the same reason the monolith entry's hash
         // carries it (the XXH64_update over unsupportedAttribMask in GetOrCreateVertexInputState
         // above). Before this package the mask was always zero here, so leaving it out of the
@@ -271,60 +292,84 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 // P5c (hd, CONTRACT-P5C §3.7): see the narrowFloat64Arrays site above.
                 MG_Config::Transport != MG_Config::TransportMode::Monolith
                     ? (MG_Remote::Server::ServerLoopInstance().Backend() == nullptr ||
-                       !MG_Remote::Server::ServerLoopInstance().Backend()
+                       !MG_Remote::Server::ServerLoopInstance()
+                            .Backend()
                             ->GetDynamicParameters()
                             .SupportsFloat64VertexAttributes)
                     :
 #endif
-                MG_Backend::pActiveBackendObject == nullptr ||
-                !MG_Backend::pActiveBackendObject->GetDynamicParameters().SupportsFloat64VertexAttributes) {
+                    MG_Backend::pActiveBackendObject == nullptr ||
+                        !MG_Backend::pActiveBackendObject->GetDynamicParameters().SupportsFloat64VertexAttributes) {
                 return VK_FORMAT_UNDEFINED;
             }
             if (!isLong || isInteger || normalized) return VK_FORMAT_UNDEFINED;
             switch (size) {
-            case 1: return VK_FORMAT_R32G32_UINT;
-            case 2: return VK_FORMAT_R32G32B32A32_UINT;
+            case 1:
+                return VK_FORMAT_R32G32_UINT;
+            case 2:
+                return VK_FORMAT_R32G32B32A32_UINT;
             // A dvec3/dvec4 input is 6/8 uint32 components: no single VkFormat, and GL spreads it
             // over two attribute locations, which the location-per-VAO-index model here does not
             // express. Declined rather than fetched wrong.
-            default: return VK_FORMAT_UNDEFINED;
+            default:
+                return VK_FORMAT_UNDEFINED;
             }
         case DataType::Float32:
             switch (size) {
-            case 1: return VK_FORMAT_R32_SFLOAT;
-            case 2: return VK_FORMAT_R32G32_SFLOAT;
-            case 3: return VK_FORMAT_R32G32B32_SFLOAT;
-            case 4: return VK_FORMAT_R32G32B32A32_SFLOAT;
-            default: return VK_FORMAT_UNDEFINED;
+            case 1:
+                return VK_FORMAT_R32_SFLOAT;
+            case 2:
+                return VK_FORMAT_R32G32_SFLOAT;
+            case 3:
+                return VK_FORMAT_R32G32B32_SFLOAT;
+            case 4:
+                return VK_FORMAT_R32G32B32A32_SFLOAT;
+            default:
+                return VK_FORMAT_UNDEFINED;
             }
         case DataType::Float16:
             // GL_HALF_FLOAT is a floating-point array type: it is never an integer attribute, and
             // GL_TRUE for `normalized` is ignored for float types rather than selecting a *NORM format.
             if (isInteger) return VK_FORMAT_UNDEFINED;
             switch (size) {
-            case 1: return VK_FORMAT_R16_SFLOAT;
-            case 2: return VK_FORMAT_R16G16_SFLOAT;
-            case 3: return VK_FORMAT_R16G16B16_SFLOAT;
-            case 4: return VK_FORMAT_R16G16B16A16_SFLOAT;
-            default: return VK_FORMAT_UNDEFINED;
+            case 1:
+                return VK_FORMAT_R16_SFLOAT;
+            case 2:
+                return VK_FORMAT_R16G16_SFLOAT;
+            case 3:
+                return VK_FORMAT_R16G16B16_SFLOAT;
+            case 4:
+                return VK_FORMAT_R16G16B16A16_SFLOAT;
+            default:
+                return VK_FORMAT_UNDEFINED;
             }
         case DataType::Int32:
             if (!isInteger || normalized) return VK_FORMAT_UNDEFINED;
             switch (size) {
-            case 1: return VK_FORMAT_R32_SINT;
-            case 2: return VK_FORMAT_R32G32_SINT;
-            case 3: return VK_FORMAT_R32G32B32_SINT;
-            case 4: return VK_FORMAT_R32G32B32A32_SINT;
-            default: return VK_FORMAT_UNDEFINED;
+            case 1:
+                return VK_FORMAT_R32_SINT;
+            case 2:
+                return VK_FORMAT_R32G32_SINT;
+            case 3:
+                return VK_FORMAT_R32G32B32_SINT;
+            case 4:
+                return VK_FORMAT_R32G32B32A32_SINT;
+            default:
+                return VK_FORMAT_UNDEFINED;
             }
         case DataType::Uint32:
             if (!isInteger || normalized) return VK_FORMAT_UNDEFINED;
             switch (size) {
-            case 1: return VK_FORMAT_R32_UINT;
-            case 2: return VK_FORMAT_R32G32_UINT;
-            case 3: return VK_FORMAT_R32G32B32_UINT;
-            case 4: return VK_FORMAT_R32G32B32A32_UINT;
-            default: return VK_FORMAT_UNDEFINED;
+            case 1:
+                return VK_FORMAT_R32_UINT;
+            case 2:
+                return VK_FORMAT_R32G32_UINT;
+            case 3:
+                return VK_FORMAT_R32G32B32_UINT;
+            case 4:
+                return VK_FORMAT_R32G32B32A32_UINT;
+            default:
+                return VK_FORMAT_UNDEFINED;
             }
         case DataType::Int16:
             switch (size) {
@@ -339,7 +384,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             case 4:
                 return isInteger ? VK_FORMAT_R16G16B16A16_SINT
                                  : (normalized ? VK_FORMAT_R16G16B16A16_SNORM : VK_FORMAT_R16G16B16A16_SSCALED);
-            default: return VK_FORMAT_UNDEFINED;
+            default:
+                return VK_FORMAT_UNDEFINED;
             }
         case DataType::Uint16:
             switch (size) {
@@ -354,37 +400,38 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             case 4:
                 return isInteger ? VK_FORMAT_R16G16B16A16_UINT
                                  : (normalized ? VK_FORMAT_R16G16B16A16_UNORM : VK_FORMAT_R16G16B16A16_USCALED);
-            default: return VK_FORMAT_UNDEFINED;
+            default:
+                return VK_FORMAT_UNDEFINED;
             }
         case DataType::Int8:
             switch (size) {
             case 1:
                 return isInteger ? VK_FORMAT_R8_SINT : (normalized ? VK_FORMAT_R8_SNORM : VK_FORMAT_R8_SSCALED);
             case 2:
-                return isInteger ? VK_FORMAT_R8G8_SINT
-                                 : (normalized ? VK_FORMAT_R8G8_SNORM : VK_FORMAT_R8G8_SSCALED);
+                return isInteger ? VK_FORMAT_R8G8_SINT : (normalized ? VK_FORMAT_R8G8_SNORM : VK_FORMAT_R8G8_SSCALED);
             case 3:
                 return isInteger ? VK_FORMAT_R8G8B8_SINT
                                  : (normalized ? VK_FORMAT_R8G8B8_SNORM : VK_FORMAT_R8G8B8_SSCALED);
             case 4:
                 return isInteger ? VK_FORMAT_R8G8B8A8_SINT
                                  : (normalized ? VK_FORMAT_R8G8B8A8_SNORM : VK_FORMAT_R8G8B8A8_SSCALED);
-            default: return VK_FORMAT_UNDEFINED;
+            default:
+                return VK_FORMAT_UNDEFINED;
             }
         case DataType::Uint8:
             switch (size) {
             case 1:
                 return isInteger ? VK_FORMAT_R8_UINT : (normalized ? VK_FORMAT_R8_UNORM : VK_FORMAT_R8_USCALED);
             case 2:
-                return isInteger ? VK_FORMAT_R8G8_UINT
-                                 : (normalized ? VK_FORMAT_R8G8_UNORM : VK_FORMAT_R8G8_USCALED);
+                return isInteger ? VK_FORMAT_R8G8_UINT : (normalized ? VK_FORMAT_R8G8_UNORM : VK_FORMAT_R8G8_USCALED);
             case 3:
                 return isInteger ? VK_FORMAT_R8G8B8_UINT
                                  : (normalized ? VK_FORMAT_R8G8B8_UNORM : VK_FORMAT_R8G8B8_USCALED);
             case 4:
                 return isInteger ? VK_FORMAT_R8G8B8A8_UINT
                                  : (normalized ? VK_FORMAT_R8G8B8A8_UNORM : VK_FORMAT_R8G8B8A8_USCALED);
-            default: return VK_FORMAT_UNDEFINED;
+            default:
+                return VK_FORMAT_UNDEFINED;
             }
         default:
             return VK_FORMAT_UNDEFINED;
@@ -454,11 +501,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     VkFormat VertexInputStateFactory::ToFloat32VertexFormat(Int componentCount) {
         switch (componentCount) {
-        case 1: return VK_FORMAT_R32_SFLOAT;
-        case 2: return VK_FORMAT_R32G32_SFLOAT;
-        case 3: return VK_FORMAT_R32G32B32_SFLOAT;
-        case 4: return VK_FORMAT_R32G32B32A32_SFLOAT;
-        default: return VK_FORMAT_UNDEFINED;
+        case 1:
+            return VK_FORMAT_R32_SFLOAT;
+        case 2:
+            return VK_FORMAT_R32G32_SFLOAT;
+        case 3:
+            return VK_FORMAT_R32G32B32_SFLOAT;
+        case 4:
+            return VK_FORMAT_R32G32B32A32_SFLOAT;
+        default:
+            return VK_FORMAT_UNDEFINED;
         }
     }
 

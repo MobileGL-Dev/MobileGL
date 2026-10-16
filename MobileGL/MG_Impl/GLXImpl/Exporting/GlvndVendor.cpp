@@ -68,7 +68,9 @@ namespace {
     const GLXApiExports* g_glxExports = nullptr;
     GLXVendorInfo* g_glxVendor = nullptr;
 
-    XBool VendorIsScreenSupported(Display*, int) { return 1; }
+    XBool VendorIsScreenSupported(Display*, int) {
+        return 1;
+    }
 
     // GLX names are the exported entry points (each holds the stream lock); GL names are the
     // implementation's, as eglGetProcAddress hands them out.

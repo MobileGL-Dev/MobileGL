@@ -115,8 +115,8 @@ namespace MGITest {
         }
 
         std::string Describe(const Rgba8& color) {
-            return "(" + std::to_string(color.r) + ", " + std::to_string(color.g) + ", " +
-                   std::to_string(color.b) + ", " + std::to_string(color.a) + ")";
+            return "(" + std::to_string(color.r) + ", " + std::to_string(color.g) + ", " + std::to_string(color.b) +
+                   ", " + std::to_string(color.a) + ")";
         }
 
         // A full-viewport triangle built from gl_VertexID, so nothing here needs a vertex buffer
@@ -215,11 +215,14 @@ void main()
                 if (!Ready()) return;
                 glUseProgram(0);
                 glBindFramebuffer(GL_FRAMEBUFFER, 0);
-                for (const GLuint fbo : m_fbos) glDeleteFramebuffers(1, &fbo);
+                for (const GLuint fbo : m_fbos)
+                    glDeleteFramebuffers(1, &fbo);
                 m_fbos.clear();
-                for (const GLuint texture : m_textures) glDeleteTextures(1, &texture);
+                for (const GLuint texture : m_textures)
+                    glDeleteTextures(1, &texture);
                 m_textures.clear();
-                for (const GLuint program : m_programs) glDeleteProgram(program);
+                for (const GLuint program : m_programs)
+                    glDeleteProgram(program);
                 m_programs.clear();
                 glBindVertexArray(0);
                 if (m_vao != 0) glDeleteVertexArrays(1, &m_vao);
@@ -230,8 +233,7 @@ void main()
             }
 
             static void DrainErrors() {
-                for (int i = 0; i < 16 && glGetError() != GL_NO_ERROR; ++i) {
-                }
+                for (int i = 0; i < 16 && glGetError() != GL_NO_ERROR; ++i) {}
             }
 
             // 0 on a DirectGLES driver without GL_EXT_geometry_shader and on a DirectVulkan
@@ -283,14 +285,17 @@ void main()
                 if (ok && geometrySource != nullptr) ok = compile(GL_GEOMETRY_SHADER, geometrySource);
                 if (ok) ok = compile(GL_FRAGMENT_SHADER, fragmentSource);
                 if (!ok) {
-                    for (const GLuint shader : shaders) glDeleteShader(shader);
+                    for (const GLuint shader : shaders)
+                        glDeleteShader(shader);
                     return 0;
                 }
 
                 const GLuint program = glCreateProgram();
-                for (const GLuint shader : shaders) glAttachShader(program, shader);
+                for (const GLuint shader : shaders)
+                    glAttachShader(program, shader);
                 glLinkProgram(program);
-                for (const GLuint shader : shaders) glDeleteShader(shader);
+                for (const GLuint shader : shaders)
+                    glDeleteShader(shader);
                 GLint linked = 0;
                 glGetProgramiv(program, GL_LINK_STATUS, &linked);
                 if (linked == GL_FALSE) {
@@ -323,11 +328,10 @@ void main()
                 glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
                 glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
                 glTexStorage3D(GL_TEXTURE_3D, 1, GL_RGBA8, kExtent, kExtent, k3DSlices);
-                const std::vector<GLubyte> seed(
-                    static_cast<std::size_t>(kExtent) * kExtent * k3DSlices * 4, kPoison);
+                const std::vector<GLubyte> seed(static_cast<std::size_t>(kExtent) * kExtent * k3DSlices * 4, kPoison);
                 glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-                glTexSubImage3D(GL_TEXTURE_3D, 0, 0, 0, 0, kExtent, kExtent, k3DSlices, GL_RGBA,
-                                GL_UNSIGNED_BYTE, seed.data());
+                glTexSubImage3D(GL_TEXTURE_3D, 0, 0, 0, 0, kExtent, kExtent, k3DSlices, GL_RGBA, GL_UNSIGNED_BYTE,
+                                seed.data());
                 glBindTexture(GL_TEXTURE_3D, 0);
                 return texture;
             }
@@ -339,11 +343,11 @@ void main()
                 glTexParameteri(GL_TEXTURE_CUBE_MAP_ARRAY, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
                 glTexParameteri(GL_TEXTURE_CUBE_MAP_ARRAY, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
                 glTexStorage3D(GL_TEXTURE_CUBE_MAP_ARRAY, 1, GL_RGBA8, kExtent, kExtent, kCubeLayerFaces);
-                const std::vector<GLubyte> seed(
-                    static_cast<std::size_t>(kExtent) * kExtent * kCubeLayerFaces * 4, kPoison);
+                const std::vector<GLubyte> seed(static_cast<std::size_t>(kExtent) * kExtent * kCubeLayerFaces * 4,
+                                                kPoison);
                 glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-                glTexSubImage3D(GL_TEXTURE_CUBE_MAP_ARRAY, 0, 0, 0, 0, kExtent, kExtent, kCubeLayerFaces,
-                                GL_RGBA, GL_UNSIGNED_BYTE, seed.data());
+                glTexSubImage3D(GL_TEXTURE_CUBE_MAP_ARRAY, 0, 0, 0, 0, kExtent, kExtent, kCubeLayerFaces, GL_RGBA,
+                                GL_UNSIGNED_BYTE, seed.data());
                 glBindTexture(GL_TEXTURE_CUBE_MAP_ARRAY, 0);
                 return texture;
             }
@@ -379,8 +383,7 @@ void main()
                 glTexStorage2D(GL_TEXTURE_CUBE_MAP, 1, GL_RGBA8, kExtent, kExtent);
                 glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
                 for (int face = 0; face < 6; ++face) {
-                    const std::vector<Rgba8> seed(static_cast<std::size_t>(kExtent) * kExtent,
-                                                  ExpectedColor(face, 0));
+                    const std::vector<Rgba8> seed(static_cast<std::size_t>(kExtent) * kExtent, ExpectedColor(face, 0));
                     glTexSubImage2D(static_cast<GLenum>(GL_TEXTURE_CUBE_MAP_POSITIVE_X + face), 0, 0, 0, kExtent,
                                     kExtent, GL_RGBA, GL_UNSIGNED_BYTE, seed.data());
                 }
@@ -398,8 +401,8 @@ void main()
                 glTexParameteri(GL_TEXTURE_1D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
                 const std::vector<GLubyte> seed(static_cast<std::size_t>(kExtent) * kOneDArrayLayers * 4, kPoison);
                 glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-                glTexImage2D(GL_TEXTURE_1D_ARRAY, 0, GL_RGBA8, kExtent, kOneDArrayLayers, 0, GL_RGBA,
-                             GL_UNSIGNED_BYTE, seed.data());
+                glTexImage2D(GL_TEXTURE_1D_ARRAY, 0, GL_RGBA8, kExtent, kOneDArrayLayers, 0, GL_RGBA, GL_UNSIGNED_BYTE,
+                             seed.data());
                 glBindTexture(GL_TEXTURE_1D_ARRAY, 0);
                 return texture;
             }
@@ -500,16 +503,14 @@ void main()
                     const Rgba8 expected = ExpectedColor(layer, pass);
                     for (int y = 0; y < kExtent; ++y) {
                         for (int x = 0; x < kExtent; ++x) {
-                            const std::size_t index =
-                                (static_cast<std::size_t>(layer) * kExtent + y) * kExtent + x;
+                            const std::size_t index = (static_cast<std::size_t>(layer) * kExtent + y) * kExtent + x;
                             const Rgba8 actual = texels[index];
                             if (actual == expected) continue;
-                            ADD_FAILURE()
-                                << what << ": layer " << layer << " texel (" << x << ", " << y << ") is "
-                                << Describe(actual) << ", expected " << Describe(expected)
-                                << (actual.r == kPoison && actual.g == kPoison
-                                        ? " - the poison, so nothing was ever rendered into this layer"
-                                        : "");
+                            ADD_FAILURE() << what << ": layer " << layer << " texel (" << x << ", " << y << ") is "
+                                          << Describe(actual) << ", expected " << Describe(expected)
+                                          << (actual.r == kPoison && actual.g == kPoison
+                                                  ? " - the poison, so nothing was ever rendered into this layer"
+                                                  : "");
                             // One message per layer is enough to say what happened.
                             y = kExtent;
                             break;
@@ -653,8 +654,7 @@ void main()
                 const Rgba8& target = (slice == kSubjectSlice) ? expected : poison;
                 for (int y = 0; y < kExtent; ++y) {
                     for (int x = 0; x < kExtent; ++x) {
-                        const std::size_t index =
-                            (static_cast<std::size_t>(slice) * kExtent + y) * kExtent + x;
+                        const std::size_t index = (static_cast<std::size_t>(slice) * kExtent + y) * kExtent + x;
                         const Rgba8 actual = texels[index];
                         if (actual == target) continue;
                         ADD_FAILURE() << "slice " << slice << " texel (" << x << ", " << y << ") is "
@@ -806,8 +806,7 @@ void main()
 
             const GLuint depthStencil = MakeCubeArrayDepth(GL_DEPTH24_STENCIL8);
             if (const GLenum error = FirstGLError()) {
-                GTEST_SKIP() << "no depth-stencil GL_TEXTURE_CUBE_MAP_ARRAY on this backend: "
-                             << GLErrorName(error);
+                GTEST_SKIP() << "no depth-stencil GL_TEXTURE_CUBE_MAP_ARRAY on this backend: " << GLErrorName(error);
             }
 
             const std::string geometrySource = MakeGeometrySource(kCubeLayerFaces);
@@ -1100,8 +1099,8 @@ void main()
             glPixelStorei(GL_PACK_ALIGNMENT, 1);
             for (int face = 0; face < 6; ++face) {
                 std::vector<Rgba8> texels(static_cast<std::size_t>(kExtent) * kExtent, Rgba8{});
-                glGetTexImage(static_cast<GLenum>(GL_TEXTURE_CUBE_MAP_POSITIVE_X + face), 0, GL_RGBA,
-                              GL_UNSIGNED_BYTE, texels.data());
+                glGetTexImage(static_cast<GLenum>(GL_TEXTURE_CUBE_MAP_POSITIVE_X + face), 0, GL_RGBA, GL_UNSIGNED_BYTE,
+                              texels.data());
                 EXPECT_EQ(FirstGLError(), 0u) << "glGetTexImage of face " << kFaceNames[face] << " errored";
                 ExpectFaceColor(texels, face, "glGetTexImage(GL_TEXTURE_CUBE_MAP_<face>)");
             }

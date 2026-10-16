@@ -31,8 +31,7 @@ namespace MobileGL::MG_Pipe {
         ~MGPipeOwnedDrawInputs() {
             if (m_vertexBindingsChanged)
                 MGPipeVertexInputEmitterInstance().EmitVertexBuffers(m_context, m_baseInstance);
-            if (m_indexBindingChanged)
-                MGPipeVertexInputEmitterInstance().EmitIndexBuffer(m_context);
+            if (m_indexBindingChanged) MGPipeVertexInputEmitterInstance().EmitIndexBuffer(m_context);
             // The bindings no longer name them: the buffers go back to the share group for the
             // next client-array draw. Their next respecify orphans the store this draw reads.
             auto& group = *m_context.GetShareGroup();
@@ -41,8 +40,8 @@ namespace MobileGL::MG_Pipe {
             if (m_indexBuffer) group.ReturnClientArrayBuffer(std::move(m_indexBuffer));
         }
 
-        Bool Prepare(MGPDrawInfo& info, const MGPDrawRange* ranges, Uint32 rangeCount,
-                     const void* clientIndices, Uint64 clientIndexBytes, const MGPDrawIndirect* indirect) {
+        Bool Prepare(MGPDrawInfo& info, const MGPDrawRange* ranges, Uint32 rangeCount, const void* clientIndices,
+                     Uint64 clientIndexBytes, const MGPDrawIndirect* indirect) {
             m_baseInstance = info.StartInstance;
             const auto& vao = m_context.GetBoundVertexArray();
             if (!vao) return (info.Flags & kDrawClientArrays) == 0 && clientIndexBytes == 0;
@@ -87,9 +86,10 @@ namespace MobileGL::MG_Pipe {
             inputs.BaseInstance = info.StartInstance;
             inputs.PrimitiveRestart = (info.Flags & kDrawPrimitiveRestart) != 0;
             const Bool fixedRestart = m_context.IsCapabilityEnabled(CapabilityInput::PrimitiveRestartFixedIndex);
-            inputs.RestartIndex = fixedRestart
-                ? (info.IndexSize == 1 ? 0xffu : info.IndexSize == 2 ? 0xffffu : 0xffffffffu)
-                : info.RestartIndex;
+            inputs.RestartIndex = fixedRestart ? (info.IndexSize == 1   ? 0xffu
+                                                  : info.IndexSize == 2 ? 0xffffu
+                                                                        : 0xffffffffu)
+                                               : info.RestartIndex;
             inputs.ClientIndices = clientIndices;
             inputs.ClientIndexBytes = clientIndexBytes;
             inputs.WantVertices = needsVertexIndices;
@@ -114,8 +114,7 @@ namespace MobileGL::MG_Pipe {
                 if (!m_plan.Elements(static_cast<Uint32>(attribute.Divisor), referenced)) return false;
                 const Uint64 stride = static_cast<Uint32>(attribute.Stride);
                 const Uint64 last = referenced.empty() ? 0 : referenced.back();
-                if (stride != 0 && last > (std::numeric_limits<Uint32>::max() - elementBytes) / stride)
-                    return false;
+                if (stride != 0 && last > (std::numeric_limits<Uint32>::max() - elementBytes) / stride) return false;
                 const SizeT byteCount = static_cast<SizeT>(last * stride + elementBytes);
                 Vector<Uint8> bytes(byteCount, 0);
                 if (!referenced.empty()) {
@@ -139,7 +138,8 @@ namespace MobileGL::MG_Pipe {
                         }
                     }
                 }
-                m_vertexBuffers[location] = MakeOwnedBuffer(m_context, bytes.data(), bytes.size(), BufferTarget::Vertex);
+                m_vertexBuffers[location] =
+                    MakeOwnedBuffer(m_context, bytes.data(), bytes.size(), BufferTarget::Vertex);
                 handles[location] = MGPipeResourceTrackerInstance().Find(*m_vertexBuffers[location]);
             }
             MGPipeVertexInputEmitterInstance().EmitVertexBuffers(m_context, info.StartInstance, &handles);
@@ -173,15 +173,30 @@ namespace MobileGL::MG_Pipe {
 
         static SizeT AttributeBytes(const MG_State::GLState::VertexAttribute& attribute) {
             if (attribute.IsBgra || attribute.Type == DataType::Int2101010Rev ||
-                attribute.Type == DataType::Uint2101010Rev) return 4;
+                attribute.Type == DataType::Uint2101010Rev)
+                return 4;
             SizeT component = 0;
             switch (attribute.Type) {
-            case DataType::Int8: case DataType::Uint8: component = 1; break;
-            case DataType::Int16: case DataType::Uint16: case DataType::Float16: component = 2; break;
-            case DataType::Int32: case DataType::Uint32: case DataType::Float32: case DataType::Fixed32:
-                component = 4; break;
-            case DataType::Float64: component = 8; break;
-            default: return 0;
+            case DataType::Int8:
+            case DataType::Uint8:
+                component = 1;
+                break;
+            case DataType::Int16:
+            case DataType::Uint16:
+            case DataType::Float16:
+                component = 2;
+                break;
+            case DataType::Int32:
+            case DataType::Uint32:
+            case DataType::Float32:
+            case DataType::Fixed32:
+                component = 4;
+                break;
+            case DataType::Float64:
+                component = 8;
+                break;
+            default:
+                return 0;
             }
             return attribute.Size > 0 && attribute.Size <= 4 ? component * attribute.Size : 0;
         }

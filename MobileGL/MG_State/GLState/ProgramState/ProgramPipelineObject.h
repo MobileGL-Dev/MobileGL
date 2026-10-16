@@ -105,10 +105,9 @@ namespace MobileGL {
                     // "There is an active program for tessellation control, tessellation evaluation,
                     // or geometry stages with corresponding executable shader, but there is no
                     // active program with an executable vertex shader."
-                    const Bool laterVertexProcessing =
-                        executes(static_cast<SizeT>(ShaderStage::TessControl)) ||
-                        executes(static_cast<SizeT>(ShaderStage::TessEval)) ||
-                        executes(static_cast<SizeT>(ShaderStage::Geometry));
+                    const Bool laterVertexProcessing = executes(static_cast<SizeT>(ShaderStage::TessControl)) ||
+                                                       executes(static_cast<SizeT>(ShaderStage::TessEval)) ||
+                                                       executes(static_cast<SizeT>(ShaderStage::Geometry));
                     if (laterVertexProcessing && !executes(static_cast<SizeT>(ShaderStage::Vertex))) {
                         return "A tessellation or geometry stage is active but no program supplies a vertex shader.";
                     }

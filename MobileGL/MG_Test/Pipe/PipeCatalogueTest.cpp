@@ -75,7 +75,7 @@ namespace {
 
     // Every payload named in the catalogue must be a memcpy-able POD, and so must every
     // payload the verify comparator knows about.
-#define MGP_ASSERT_CALL_PAYLOAD_POD(Name, Payload, Class, Flags, Wait)                                                       \
+#define MGP_ASSERT_CALL_PAYLOAD_POD(Name, Payload, Class, Flags, Wait)                                                 \
     static_assert(std::is_trivially_copyable_v<Payload>, #Name "'s payload " #Payload " is not trivially copyable");
     MGP_CALL_LIST(MGP_ASSERT_CALL_PAYLOAD_POD)
 
@@ -87,19 +87,14 @@ namespace {
     // of these and MG_Pipe may not reach it (MG_Remote is above this layer), so the table is
     // expanded from the catalogue here rather than a name being duplicated per EXPECT.
 #define MGP_CATALOGUE_NAME_ROW(Name, Payload, Class, Flags, Wait) #Name,
-    constexpr const char* kCatalogueOpNames[] = {
-        "<kInvalid>",
-        MGP_CALL_LIST(MGP_CATALOGUE_NAME_ROW)
-    };
+    constexpr const char* kCatalogueOpNames[] = {"<kInvalid>", MGP_CALL_LIST(MGP_CATALOGUE_NAME_ROW)};
 #undef MGP_CATALOGUE_NAME_ROW
-    static_assert(sizeof(kCatalogueOpNames) / sizeof(kCatalogueOpNames[0]) ==
-                      static_cast<SizeT>(MGPWireOp::kOpCount),
+    static_assert(sizeof(kCatalogueOpNames) / sizeof(kCatalogueOpNames[0]) == static_cast<SizeT>(MGPWireOp::kOpCount),
                   "the diagnostic name table and the opcode space disagree");
 
     const char* WireOpNameForDiag(MGPWireOp op) {
         const SizeT index = static_cast<SizeT>(op);
-        return index < static_cast<SizeT>(MGPWireOp::kOpCount) ? kCatalogueOpNames[index]
-                                                               : "<opcode out of range>";
+        return index < static_cast<SizeT>(MGPWireOp::kOpCount) ? kCatalogueOpNames[index] : "<opcode out of range>";
     }
 } // namespace
 
@@ -130,8 +125,8 @@ TEST(PipeCatalogue, EntryCountMatchesTheDocumentedCount) {
 
 TEST(PipeCatalogue, GeneratedTablesHoldTheWholeCatalogue) {
     static_assert(ClassCount<kScreen>() == kMGPipeScreenCallCount);
-    static_assert(ClassCount<kScreen>() + ClassCount<kCtxCso>() + ClassCount<kCtxState>() +
-                      ClassCount<kCtxObject>() + ClassCount<kCtxVerb>() + ClassCount<kCtxQuery>() ==
+    static_assert(ClassCount<kScreen>() + ClassCount<kCtxCso>() + ClassCount<kCtxState>() + ClassCount<kCtxObject>() +
+                      ClassCount<kCtxVerb>() + ClassCount<kCtxQuery>() ==
                   kMGPipeCallCount);
     // The tables ARE their function pointers: a struct that is bigger than its call count
     // has grown a member no generator knows about.
@@ -228,10 +223,16 @@ TEST(PipeCatalogue, ExactlyTheRoutedRowsAreInstalledAndTheRestAreStillNull) {
     MGPipeInstallMonolithTables();
 
     for (SizeT i = 0; i < kMGPipeScreenCallCount; ++i) {
-        if (screen[i] != nullptr) ++installed; else ++nulls;
+        if (screen[i] != nullptr)
+            ++installed;
+        else
+            ++nulls;
     }
     for (SizeT i = 0; i < kMGPipeContextCallCount; ++i) {
-        if (context[i] != nullptr) ++installed; else ++nulls;
+        if (context[i] != nullptr)
+            ++installed;
+        else
+            ++nulls;
     }
     EXPECT_EQ(installed + nulls, static_cast<SizeT>(kMGPipeCallCount));
 
@@ -407,8 +408,7 @@ TEST(PipeCatalogue, EveryTextureTargetMapsToItsOwnResourceTarget) {
         const auto target = static_cast<TextureTarget>(i);
         EXPECT_NE(MGPipeResourceTargetForTextureTarget(target), kMGPipeResourceTargetUnmapped)
             << "TextureTarget " << i << " has no MGPResourceDesc::Target row";
-        EXPECT_LT(MGPipeResourceTargetForTextureTarget(target),
-                  static_cast<Uint32>(MGPipeResourceTarget::Count));
+        EXPECT_LT(MGPipeResourceTargetForTextureTarget(target), static_cast<Uint32>(MGPipeResourceTarget::Count));
     }
     // Buffer is 0 and stays 0: P3a's constant is what a zero-initialised record already says,
     // and the narrowed ack predicate below compares against it.
@@ -451,8 +451,7 @@ TEST(PipeCatalogue, SubDataTargetPacksAResourceTargetAndAnUploadTarget) {
         static_cast<Uint32>(TextureUploadTarget::CubeMapNegativeZ),
         static_cast<Uint32>(TextureUploadTarget::TextureUploadTargetCount) - 1u,
     };
-    for (Uint32 resource = 0; resource < static_cast<Uint32>(MGPipeResourceTarget::Count);
-         ++resource) {
+    for (Uint32 resource = 0; resource < static_cast<Uint32>(MGPipeResourceTarget::Count); ++resource) {
         for (const Uint32 upload : uploadTargets) {
             const Uint16 packed = MGPipePackSubDataTarget(resource, upload);
             EXPECT_EQ(MGPipeSubDataResourceTargetOf(packed), static_cast<Uint8>(resource))
@@ -465,11 +464,9 @@ TEST(PipeCatalogue, SubDataTargetPacksAResourceTargetAndAnUploadTarget) {
     // THE BUFFER INVARIANT, at compile time in MGPipeTypes.h and again here so a failure names
     // itself: a buffer record's Target is exactly kMGPipeResourceTargetBuffer, whole field,
     // upload byte and all, so P3a's records are unchanged on the wire.
-    static_assert(MGPipePackSubDataTarget(kMGPipeResourceTargetBuffer, 0u) ==
-                  kMGPipeResourceTargetBuffer);
+    static_assert(MGPipePackSubDataTarget(kMGPipeResourceTargetBuffer, 0u) == kMGPipeResourceTargetBuffer);
     EXPECT_EQ(MGPipePackSubDataTarget(kMGPipeResourceTargetBuffer, 0u), kMGPipeResourceTargetBuffer);
-    EXPECT_EQ(MGPipePackSubDataTarget(kMGPipeResourceTargetBuffer,
-                                      static_cast<Uint32>(TextureUploadTarget::Texture1D)),
+    EXPECT_EQ(MGPipePackSubDataTarget(kMGPipeResourceTargetBuffer, static_cast<Uint32>(TextureUploadTarget::Texture1D)),
               kMGPipeResourceTargetBuffer);
     MGPSubData zeroed{};
     EXPECT_EQ(zeroed.Target, kMGPipeResourceTargetBuffer);
@@ -477,8 +474,7 @@ TEST(PipeCatalogue, SubDataTargetPacksAResourceTargetAndAnUploadTarget) {
     // ...and the other side of it: a 1D texture's upload target IS 0, and packed it still
     // cannot be mistaken for a buffer, because no texture's resource target is 0.
     EXPECT_EQ(static_cast<Uint32>(TextureUploadTarget::Texture1D), 0u);
-    for (Uint32 resource = 1; resource < static_cast<Uint32>(MGPipeResourceTarget::Count);
-         ++resource) {
+    for (Uint32 resource = 1; resource < static_cast<Uint32>(MGPipeResourceTarget::Count); ++resource) {
         EXPECT_NE(MGPipePackSubDataTarget(resource, 0u), kMGPipeResourceTargetBuffer)
             << "resource target " << resource << " collides with a buffer record";
     }
@@ -488,13 +484,10 @@ TEST(PipeCatalogue, SubDataTargetPacksAResourceTargetAndAnUploadTarget) {
 
     // What a real cube-face record reads back as, through the field rather than a local.
     MGPSubData record{};
-    record.Target =
-        MGPipePackSubDataTarget(MGPipeResourceTargetForTextureTarget(TextureTarget::TextureCubeMap),
-                                static_cast<Uint32>(TextureUploadTarget::CubeMapNegativeY));
-    EXPECT_EQ(MGPipeSubDataResourceTargetOf(record.Target),
-              static_cast<Uint8>(MGPipeResourceTarget::TexCube));
-    EXPECT_EQ(MGPipeSubDataUploadTargetOf(record.Target),
-              static_cast<Uint8>(TextureUploadTarget::CubeMapNegativeY));
+    record.Target = MGPipePackSubDataTarget(MGPipeResourceTargetForTextureTarget(TextureTarget::TextureCubeMap),
+                                            static_cast<Uint32>(TextureUploadTarget::CubeMapNegativeY));
+    EXPECT_EQ(MGPipeSubDataResourceTargetOf(record.Target), static_cast<Uint8>(MGPipeResourceTarget::TexCube));
+    EXPECT_EQ(MGPipeSubDataUploadTargetOf(record.Target), static_cast<Uint8>(TextureUploadTarget::CubeMapNegativeY));
     // Six faces share one resource target: the high byte is the only thing that tells them
     // apart, which is why it cannot be dropped.
     EXPECT_EQ(MGPipeSubDataResourceTargetOf(
@@ -640,8 +633,7 @@ TEST(PipeCatalogue, LateArrivalsAreAppendedWithoutRenumbering) {
     EXPECT_EQ(MGPipeCallFlagsFor(MGPWireOp::ReadPixelsToBuffer), static_cast<Uint32>(kNone));
     EXPECT_EQ(MGPipeCallFlagsFor(MGPWireOp::GetTextureImageToBuffer), static_cast<Uint32>(kNone));
     EXPECT_EQ(sizeof(MGPReadbackToBuffer), 104u);
-    EXPECT_EQ(MGPipeCallFlagsFor(MGPWireOp::SetProgramBindings),
-              static_cast<Uint32>(kVarTail | kHostSpan));
+    EXPECT_EQ(MGPipeCallFlagsFor(MGPWireOp::SetProgramBindings), static_cast<Uint32>(kVarTail | kHostSpan));
     EXPECT_EQ(MGPipeCallFlagsFor(MGPWireOp::ApplierReset), static_cast<Uint32>(kNone));
     EXPECT_EQ(MGPipeCallFlagsFor(MGPWireOp::ObjectDeath), static_cast<Uint32>(kNone));
     EXPECT_EQ(MGPipeCallFlagsFor(MGPWireOp::SetContextValues), static_cast<Uint32>(kNone));
@@ -723,9 +715,8 @@ TEST(PipeCatalogue, LateArrivalsAreAppendedWithoutRenumbering) {
     // P5e's draw flag: the next free bit, and disjoint from all five before it.
     EXPECT_EQ(static_cast<Uint32>(kDrawClientArrays), 1u << 6);
     EXPECT_EQ(static_cast<Uint32>(kDrawClientArrays) &
-                  static_cast<Uint32>(kDrawHasUserIndices | kDrawPrimitiveRestart |
-                                      kDrawIndicesAreClient | kDrawHasIndexRange |
-                                      kDrawHasXfbCount | kDrawIsIndirect),
+                  static_cast<Uint32>(kDrawHasUserIndices | kDrawPrimitiveRestart | kDrawIndicesAreClient |
+                                      kDrawHasIndexRange | kDrawHasXfbCount | kDrawIsIndirect),
               0u);
     // ... and it still fits the one byte MGPDrawInfo::Flags is, which is why the record did not
     // grow: MGPDrawInfo stays 56 bytes.
@@ -757,16 +748,15 @@ TEST(PipeCatalogue, EveryRowCarriesTheWaitClassTheContractGivesIt) {
     // kWaitReply: every row whose answer is not derivable (R-5). Named, all fourteen, because
     // the flag-to-class agreement is what keeps a waiter from hanging on a slot nobody posts.
     const MGPWireOp replyRows[] = {
-        MGPWireOp::GetCaps,         MGPWireOp::ResourceCreate,   MGPWireOp::ResourceRespecify,
-        MGPWireOp::MapPersistent,   MGPWireOp::FenceStatus,      MGPWireOp::FenceWait,
-        MGPWireOp::QueryAvailable,  MGPWireOp::QueryResult,      MGPWireOp::QueryTimestamp,
+        MGPWireOp::GetCaps,          MGPWireOp::ResourceCreate,  MGPWireOp::ResourceRespecify,
+        MGPWireOp::MapPersistent,    MGPWireOp::FenceStatus,     MGPWireOp::FenceWait,
+        MGPWireOp::QueryAvailable,   MGPWireOp::QueryResult,     MGPWireOp::QueryTimestamp,
         MGPWireOp::SetTextureParams, MGPWireOp::ResourceSubData, MGPWireOp::ResourceReadback,
-        MGPWireOp::GetTextureImage, MGPWireOp::ReadPixels,
+        MGPWireOp::GetTextureImage,  MGPWireOp::ReadPixels,
     };
     for (const MGPWireOp op : replyRows) {
         EXPECT_EQ(MGPipeWaitClassFor(op), kWaitReply) << WireOpNameForDiag(op);
-        EXPECT_NE(MGPipeCallFlagsFor(op) & static_cast<Uint32>(kReplySlot), 0u)
-            << WireOpNameForDiag(op);
+        EXPECT_NE(MGPipeCallFlagsFor(op) & static_cast<Uint32>(kReplySlot), 0u) << WireOpNameForDiag(op);
     }
 
     // kWaitApplied: only applier_reset is left. P15 (user decision: everything fire-and-forget
@@ -788,22 +778,46 @@ TEST(PipeCatalogue, EveryRowCarriesTheWaitClassTheContractGivesIt) {
     // the rows the phase exists for, and then counted for the rest, so a new row cannot join
     // the set unnoticed.
     const MGPWireOp noneRows[] = {
-        MGPWireOp::DrawVbo,        MGPWireOp::LaunchGrid,        MGPWireOp::Clear,
-        MGPWireOp::Blit,           MGPWireOp::MemoryBarrier,     MGPWireOp::Flush,
-        MGPWireOp::SetSwapInterval, MGPWireOp::BindShaderImage,  MGPWireOp::PatchParameter,
-        MGPWireOp::ObjectDeath,    MGPWireOp::ResourceDestroy,   MGPWireOp::UnmapPersistent,
-        MGPWireOp::FenceCreate,    MGPWireOp::FenceDestroy,      MGPWireOp::FenceWaitServer,
-        MGPWireOp::QueryCreate,    MGPWireOp::QueryBegin,        MGPWireOp::QueryEnd,
-        MGPWireOp::QueryDestroy,   MGPWireOp::QueryCounter,      MGPWireOp::SetContextValues,
-        MGPWireOp::SetProgramBindings, MGPWireOp::SetShaderBuffers,
-        MGPWireOp::SetVertexBuffers, MGPWireOp::SetFramebufferState,
-        MGPWireOp::CreateShaderState, MGPWireOp::SetDrawProgram,
+        MGPWireOp::DrawVbo,
+        MGPWireOp::LaunchGrid,
+        MGPWireOp::Clear,
+        MGPWireOp::Blit,
+        MGPWireOp::MemoryBarrier,
+        MGPWireOp::Flush,
+        MGPWireOp::SetSwapInterval,
+        MGPWireOp::BindShaderImage,
+        MGPWireOp::PatchParameter,
+        MGPWireOp::ObjectDeath,
+        MGPWireOp::ResourceDestroy,
+        MGPWireOp::UnmapPersistent,
+        MGPWireOp::FenceCreate,
+        MGPWireOp::FenceDestroy,
+        MGPWireOp::FenceWaitServer,
+        MGPWireOp::QueryCreate,
+        MGPWireOp::QueryBegin,
+        MGPWireOp::QueryEnd,
+        MGPWireOp::QueryDestroy,
+        MGPWireOp::QueryCounter,
+        MGPWireOp::SetContextValues,
+        MGPWireOp::SetProgramBindings,
+        MGPWireOp::SetShaderBuffers,
+        MGPWireOp::SetVertexBuffers,
+        MGPWireOp::SetFramebufferState,
+        MGPWireOp::CreateShaderState,
+        MGPWireOp::SetDrawProgram,
         // P9: the pack-buffer readbacks - the point of the two rows is that nothing waits.
-        MGPWireOp::ReadPixelsToBuffer, MGPWireOp::GetTextureImageToBuffer,
+        MGPWireOp::ReadPixelsToBuffer,
+        MGPWireOp::GetTextureImageToBuffer,
         // P15: fire-and-forget.
-        MGPWireOp::GenerateMipmap, MGPWireOp::ResourceCopyRegion, MGPWireOp::CopyFramebufferToTexture,
-        MGPWireOp::SetStorageBlockBinding, MGPWireOp::BeginStreamOutput, MGPWireOp::EndStreamOutput,
-        MGPWireOp::PauseStreamOutput, MGPWireOp::ResumeStreamOutput, MGPWireOp::BindStreamOutput,
+        MGPWireOp::GenerateMipmap,
+        MGPWireOp::ResourceCopyRegion,
+        MGPWireOp::CopyFramebufferToTexture,
+        MGPWireOp::SetStorageBlockBinding,
+        MGPWireOp::BeginStreamOutput,
+        MGPWireOp::EndStreamOutput,
+        MGPWireOp::PauseStreamOutput,
+        MGPWireOp::ResumeStreamOutput,
+        MGPWireOp::BindStreamOutput,
     };
     for (const MGPWireOp op : noneRows) {
         EXPECT_EQ(MGPipeWaitClassFor(op), kWaitNone) << WireOpNameForDiag(op);
@@ -817,11 +831,21 @@ TEST(PipeCatalogue, EveryRowCarriesTheWaitClassTheContractGivesIt) {
     SizeT reply = 0, applied = 0, present = 0, none = 0, other = 0;
     for (SizeT i = 1; i < static_cast<SizeT>(MGPWireOp::kOpCount); ++i) {
         switch (MGPipeWaitClassFor(static_cast<MGPWireOp>(i))) {
-        case kWaitReply: ++reply; break;
-        case kWaitApplied: ++applied; break;
-        case kWaitPresent: ++present; break;
-        case kWaitNone: ++none; break;
-        default: ++other; break;
+        case kWaitReply:
+            ++reply;
+            break;
+        case kWaitApplied:
+            ++applied;
+            break;
+        case kWaitPresent:
+            ++present;
+            break;
+        case kWaitNone:
+            ++none;
+            break;
+        default:
+            ++other;
+            break;
         }
     }
     EXPECT_EQ(reply, 15u);
@@ -888,9 +912,8 @@ TEST(PipeCatalogue, VerifyComparatorNamesTheDifferingField) {
 TEST(PipeCatalogue, CoverageAccountsForEveryInventoryRow) {
     EXPECT_EQ(kMGPipeInventoryReadPoints, 477u);
     EXPECT_EQ(kMGPipeInventoryUnmapped, 0u);
-    EXPECT_EQ(kMGPipeInventoryMappedToCall + kMGPipeInventoryClientResolved +
-                  kMGPipeInventoryReverseChannel + kMGPipeInventoryStructuralHandle +
-                  kMGPipeInventoryUnmapped,
+    EXPECT_EQ(kMGPipeInventoryMappedToCall + kMGPipeInventoryClientResolved + kMGPipeInventoryReverseChannel +
+                  kMGPipeInventoryStructuralHandle + kMGPipeInventoryUnmapped,
               kMGPipeInventoryReadPoints);
     EXPECT_GT(kMGPipeCoverageEntryCount, 0u);
 }
@@ -947,9 +970,9 @@ TEST(PipeCatalogue, VerbTableIsTheFunctionTable) {
 // The sticky set is exactly the seven forwarded, argument-keyed accessors (P1 brief D6); no
 // version or generation accessor is among them.
 TEST(PipeCatalogue, StickyFieldsAreExactlyTheSeven) {
-    const char* const expected[] = {"GetBufferBindingPointCount", "GetProgramObject",   "GetTextureObject",
-                                    "HasOpenTransformFeedbackSpan", "InvalidateCompileEnv", "ValidateProgramName",
-                                    "RecordError"};
+    const char* const expected[] = {
+        "GetBufferBindingPointCount", "GetProgramObject",    "GetTextureObject", "HasOpenTransformFeedbackSpan",
+        "InvalidateCompileEnv",       "ValidateProgramName", "RecordError"};
     SizeT count = 0;
     for (SizeT f = 0; f < kMGPipeInputFieldCount; ++f) {
         Bool listed = false;
@@ -1104,8 +1127,7 @@ TEST(PipeCatalogue, PipelineSubsetMembersArePinned) {
     // and its two combiner ops.
     EXPECT_EQ(kMGPipePipelineStateMemberCount, 47u);
     EXPECT_STREQ(kMGPipePipelineStateMembers[0], "PatchVertices");
-    EXPECT_STREQ(kMGPipePipelineStateMembers[kMGPipePipelineStateMemberCount - 1],
-                 "ScissorTestEnabledMask");
+    EXPECT_STREQ(kMGPipePipelineStateMembers[kMGPipePipelineStateMemberCount - 1], "ScissorTestEnabledMask");
 }
 
 // The reverse channel is exactly SEVEN callbacks: plan B's section 7.1 wrote ten, and the tenth
@@ -1163,7 +1185,7 @@ TEST(PipeCatalogue, BufferRangeCarriesNoInlineHostSpan) {
 
     // The call still declares the span it may carry, so the transport lays the tail out.
     Uint32 flags = 0;
-#define MGP_FLAGS_OF_SET_SHADER_BUFFERS(Name, Payload, Class, Flags, Wait)                                                   \
+#define MGP_FLAGS_OF_SET_SHADER_BUFFERS(Name, Payload, Class, Flags, Wait)                                             \
     if (std::strcmp(#Name, "SetShaderBuffers") == 0) flags = static_cast<Uint32>(Flags);
     MGP_CALL_LIST(MGP_FLAGS_OF_SET_SHADER_BUFFERS)
 #undef MGP_FLAGS_OF_SET_SHADER_BUFFERS
@@ -1301,7 +1323,7 @@ TEST(PipeCatalogue, VertexWireViewsAreFlatAndCarryIsLongSeparately) {
 // inherits this pin rather than the guess.
 TEST(PipeCatalogue, ResourceRespecifyAcksOnlyImmutableStorage) {
     Uint32 flags = 0;
-#define MGP_FLAGS_OF_RESOURCE_RESPECIFY(Name, Payload, Class, Flags, Wait)                                                   \
+#define MGP_FLAGS_OF_RESOURCE_RESPECIFY(Name, Payload, Class, Flags, Wait)                                             \
     if (std::strcmp(#Name, "ResourceRespecify") == 0) flags = static_cast<Uint32>(Flags);
     MGP_CALL_LIST(MGP_FLAGS_OF_RESOURCE_RESPECIFY)
 #undef MGP_FLAGS_OF_RESOURCE_RESPECIFY
@@ -1309,7 +1331,7 @@ TEST(PipeCatalogue, ResourceRespecifyAcksOnlyImmutableStorage) {
     // And it is the ONLY call that carries it: a second one would be a second decision, and
     // this predicate answers for exactly one call.
     Uint32 ackingCalls = 0;
-#define MGP_COUNT_ACKING_CALLS(Name, Payload, Class, Flags, Wait)                                                            \
+#define MGP_COUNT_ACKING_CALLS(Name, Payload, Class, Flags, Wait)                                                      \
     if ((static_cast<Uint32>(Flags) & static_cast<Uint32>(kNeedsAck)) != 0) ++ackingCalls;
     MGP_CALL_LIST(MGP_COUNT_ACKING_CALLS)
 #undef MGP_COUNT_ACKING_CALLS
@@ -1325,7 +1347,7 @@ TEST(PipeCatalogue, ResourceRespecifyAcksOnlyImmutableStorage) {
     // carried no flag because in monolith that answer is a direct call's return value. FIFTEEN since
     // shared_image, whose every operation is answered.
     Uint32 replySlotCalls = 0;
-#define MGP_COUNT_REPLY_SLOT_CALLS(Name, Payload, Class, Flags, Wait)                                                        \
+#define MGP_COUNT_REPLY_SLOT_CALLS(Name, Payload, Class, Flags, Wait)                                                  \
     if ((static_cast<Uint32>(Flags) & static_cast<Uint32>(kReplySlot)) != 0) ++replySlotCalls;
     MGP_CALL_LIST(MGP_COUNT_REPLY_SLOT_CALLS)
 #undef MGP_COUNT_REPLY_SLOT_CALLS
@@ -1336,8 +1358,8 @@ TEST(PipeCatalogue, ResourceRespecifyAcksOnlyImmutableStorage) {
     // (ResourceCreate, ResourceRespecify, ResourceSubData, SetTextureParams in PipeApply.h);
     // map_persistent's void* is the fifth answer and was already declared.
     Uint32 acceptanceWithSlot = 0;
-#define MGP_COUNT_ACCEPTANCE_ROWS(Name, Payload, Class, Flags, Wait)                                                         \
-    if ((std::strcmp(#Name, "ResourceCreate") == 0 || std::strcmp(#Name, "ResourceRespecify") == 0 ||                   \
+#define MGP_COUNT_ACCEPTANCE_ROWS(Name, Payload, Class, Flags, Wait)                                                   \
+    if ((std::strcmp(#Name, "ResourceCreate") == 0 || std::strcmp(#Name, "ResourceRespecify") == 0 ||                  \
          std::strcmp(#Name, "ResourceSubData") == 0 || std::strcmp(#Name, "SetTextureParams") == 0) &&                 \
         (static_cast<Uint32>(Flags) & static_cast<Uint32>(kReplySlot)) != 0) {                                         \
         ++acceptanceWithSlot;                                                                                          \
@@ -1374,8 +1396,7 @@ TEST(PipeCatalogue, ResourceRespecifyAcksOnlyImmutableStorage) {
     // stopped naming the buffer target would turn these two green-and-wrong.
     MGPResourceDesc immutableTexture{};
     immutableTexture.Immutable = 1; // glTexStorage2D
-    immutableTexture.Target =
-        static_cast<Uint8>(MGPipeResourceTargetForTextureTarget(TextureTarget::Texture2D));
+    immutableTexture.Target = static_cast<Uint8>(MGPipeResourceTargetForTextureTarget(TextureTarget::Texture2D));
     immutableTexture.Width = 256;
     immutableTexture.Height = 256;
     immutableTexture.Levels = 9;
@@ -1411,8 +1432,7 @@ TEST(PipeCatalogue, ResourceRespecifyAcksOnlyImmutableStorage) {
     // of the line: glBufferData(size, NULL) at an unchanged size is an orphaning
     // reallocation, so a record that moves only it must still clear, and must never be read
     // as a mask change.
-    EXPECT_NE(offsetof(MGPResourceDesc, HasDefinedContent),
-              offsetof(MGPResourceDesc, ImageBindableHint));
+    EXPECT_NE(offsetof(MGPResourceDesc, HasDefinedContent), offsetof(MGPResourceDesc, ImageBindableHint));
 }
 
 // G13b, D-M: "emulation 在 split 下显式 Fatal 直到 P8" costs P4a a NAMED, GREPPABLE call site

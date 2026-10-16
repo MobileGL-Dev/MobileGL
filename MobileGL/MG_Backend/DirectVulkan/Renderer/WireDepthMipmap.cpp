@@ -68,11 +68,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     Bool VulkanRenderer::GenerateWireDepthMipLevel(WireImage source, WireImage destination) {
         const Bool sameImage = source.image == destination.image;
         if (!source.image || !destination.image) return false;
-        if (sameImage && source.level == destination.level && source.layer == destination.layer)
-            return false;
+        if (sameImage && source.level == destination.level && source.layer == destination.layer) return false;
         if (source.isDefault || destination.isDefault) return false;
-        if (source.samples != VK_SAMPLE_COUNT_1_BIT || destination.samples != VK_SAMPLE_COUNT_1_BIT)
-            return false;
+        if (source.samples != VK_SAMPLE_COUNT_1_BIT || destination.samples != VK_SAMPLE_COUNT_1_BIT) return false;
         if (source.is3D || destination.is3D) return false;
         // P8-SV: THE PASS MAKES 2D VIEWS (makeView below), which a 1D, 1D-array or 3D image does
         // not admit. A caller that fills viewType from the image gets a refusal here, and the
@@ -88,14 +86,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // else - the stencil aspect would come out of the render pass undefined, which is
         // not what GL's glGenerateMipmap promises for the level it just produced. The
         // caller declines that shape rather than producing half a level.
-        if (source.aspect != VK_IMAGE_ASPECT_DEPTH_BIT ||
-            destination.aspect != VK_IMAGE_ASPECT_DEPTH_BIT) return false;
-        if (!source.extent.width || !source.extent.height ||
-            !destination.extent.width || !destination.extent.height) return false;
+        if (source.aspect != VK_IMAGE_ASPECT_DEPTH_BIT || destination.aspect != VK_IMAGE_ASPECT_DEPTH_BIT) return false;
+        if (!source.extent.width || !source.extent.height || !destination.extent.width || !destination.extent.height)
+            return false;
         VkFormatProperties properties{};
         vkGetPhysicalDeviceFormatProperties(m_physicalDevice.handle, source.format, &properties);
-        const VkFormatFeatureFlags required = VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT |
-                                              VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT;
+        const VkFormatFeatureFlags required =
+            VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT | VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT;
         if ((properties.optimalTilingFeatures & required) != required) return false;
 
         // The baked block's layout, and the offsets are not a guess: the generated header
@@ -122,8 +119,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             };
             shader(kWireDepthMipmapVertexSpirv, sizeof(kWireDepthMipmapVertexSpirv), cache.vertex);
             shader(kWireDepthMipmapFragmentSpirv, sizeof(kWireDepthMipmapFragmentSpirv), cache.fragment);
-            const VkDescriptorSetLayoutBinding binding{0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                                                       1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
+            const VkDescriptorSetLayoutBinding binding{0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
+                                                       VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
             VkDescriptorSetLayoutCreateInfo layout{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
             layout.bindingCount = 1;
             layout.pBindings = &binding;
@@ -131,8 +128,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // BOTH STAGES ON ONE RANGE: the block is declared identically in the vertex and
             // fragment sources (a push-constant block must be), the vertex stage reads the
             // rects and the fragment stage reads srcTexelSize.
-            const VkPushConstantRange push{VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                                           0, sizeof(Constants)};
+            const VkPushConstantRange push{VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+                                           sizeof(Constants)};
             VkPipelineLayoutCreateInfo pipelineLayout{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
             pipelineLayout.setLayoutCount = 1;
             pipelineLayout.pSetLayouts = &cache.descriptorLayout;
@@ -145,18 +142,17 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // depth formats, which is most of them.
             VkSamplerCreateInfo sampler{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
             sampler.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
-            sampler.addressModeU = sampler.addressModeV = sampler.addressModeW =
-                VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+            sampler.addressModeU = sampler.addressModeV = sampler.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
             sampler.magFilter = sampler.minFilter = VK_FILTER_NEAREST;
             sampler.maxLod = 0.0f;
             VK_VERIFY(vkCreateSampler(m_device, &sampler, nullptr, &cache.nearest));
         }
         auto& cache = *m_wireDepthMipmapResources;
 
-        const VkImageLayout sourceLayout = sameImage ? VK_IMAGE_LAYOUT_GENERAL
-                                                     : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        const VkImageLayout destinationLayout = sameImage ? VK_IMAGE_LAYOUT_GENERAL
-                                                          : VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        const VkImageLayout sourceLayout =
+            sameImage ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        const VkImageLayout destinationLayout =
+            sameImage ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
         WireDepthMipmapResources::Target* target = nullptr;
         for (auto& entry : cache.targets) {
             if (entry.format == destination.format && entry.layout == destinationLayout) {
@@ -199,8 +195,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             stages[0].module = cache.vertex;
             stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
             stages[1].module = cache.fragment;
-            const VkPipelineVertexInputStateCreateInfo vertex{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
-            VkPipelineInputAssemblyStateCreateInfo assembly{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
+            const VkPipelineVertexInputStateCreateInfo vertex{
+                VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+            VkPipelineInputAssemblyStateCreateInfo assembly{
+                VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
             assembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
             VkPipelineViewportStateCreateInfo viewport{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
             viewport.viewportCount = viewport.scissorCount = 1;
@@ -213,7 +211,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             samples.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
             // ALWAYS + write enabled: the fragment shader's gl_FragDepth is the answer, and a
             // comparison against whatever DONT_CARE left behind would discard some of it.
-            VkPipelineDepthStencilStateCreateInfo depthStencil{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
+            VkPipelineDepthStencilStateCreateInfo depthStencil{
+                VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
             depthStencil.depthTestEnable = VK_TRUE;
             depthStencil.depthWriteEnable = VK_TRUE;
             depthStencil.depthCompareOp = VK_COMPARE_OP_ALWAYS;
@@ -246,8 +245,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // GENERAL keeps the whole-image layout tracker truthful; the transition also orders
         // the previous level's attachment write against this level's sample of it.
         TransitionWireImage(source, sourceLayout);
-        if (sameImage) destination.layout = source.layout;
-        else TransitionWireImage(destination, destinationLayout);
+        if (sameImage)
+            destination.layout = source.layout;
+        else
+            TransitionWireImage(destination, destinationLayout);
         const auto makeView = [&](const WireImage& image) {
             VkImageViewCreateInfo view{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
             view.image = image.image;
@@ -299,11 +300,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // the same source texels the monolith arm's fullscreen triangle lands on - which is
         // the point: §3.2 retires a refusal by making the wire arm observably the monolith's,
         // half-texel offset included.
-        const Constants constants{
-            {0.0f, 0.0f, 1.0f, 1.0f},
-            {0.0f, 1.0f, 1.0f, -1.0f},
-            0, 0,
-            {static_cast<Int32>(source.extent.width), static_cast<Int32>(source.extent.height)}};
+        const Constants constants{{0.0f, 0.0f, 1.0f, 1.0f},
+                                  {0.0f, 1.0f, 1.0f, -1.0f},
+                                  0,
+                                  0,
+                                  {static_cast<Int32>(source.extent.width), static_cast<Int32>(source.extent.height)}};
         auto& frame = m_frameContext.GetCurrent();
         VkRenderPassBeginInfo begin{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
         begin.renderPass = target->renderPass;
@@ -312,16 +313,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         EndActiveRenderPassOn(frame.commandBuffer);
         vkCmdBeginRenderPass(frame.commandBuffer, &begin, VK_SUBPASS_CONTENTS_INLINE);
         vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, target->pipeline);
-        const VkViewport viewport{0.0f, 0.0f, static_cast<float>(destination.extent.width),
-                                  static_cast<float>(destination.extent.height), 0.0f, 1.0f};
+        const VkViewport viewport{
+            0.0f, 0.0f, static_cast<float>(destination.extent.width), static_cast<float>(destination.extent.height),
+            0.0f, 1.0f};
         const VkRect2D scissor{{0, 0}, destination.extent};
         vkCmdSetViewport(frame.commandBuffer, 0, 1, &viewport);
         vkCmdSetScissor(frame.commandBuffer, 0, 1, &scissor);
-        vkCmdBindDescriptorSets(frame.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                cache.pipelineLayout, 0, 1, &descriptorSet, 0, nullptr);
+        vkCmdBindDescriptorSets(frame.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, cache.pipelineLayout, 0, 1,
+                                &descriptorSet, 0, nullptr);
         vkCmdPushConstants(frame.commandBuffer, cache.pipelineLayout,
-                           VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                           0, sizeof(constants), &constants);
+                           VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(constants), &constants);
         vkCmdDraw(frame.commandBuffer, 6, 1, 0, 0);
         vkCmdEndRenderPass(frame.commandBuffer);
         ResetDynamicStateShadow();

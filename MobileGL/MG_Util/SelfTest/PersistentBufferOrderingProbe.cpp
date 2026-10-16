@@ -30,9 +30,18 @@ namespace MobileGL::MG_Util::SelfTest {
         constexpr GLsizei kQuads = 64 * 32;
         constexpr Int kAttempts = 3;
         constexpr std::array<const char*, 3> kUploadNames = {"SubData", "Copy/persistent staging",
-                                                          "Copy/SubData staging"};
-        enum class Shape { Unmapped, Mapped, FinishBefore, FinishBoth, MapThenUnmap, BarrierBefore };
-        struct Vertex { GLfloat x, y, r, g, b; };
+                                                             "Copy/SubData staging"};
+        enum class Shape {
+            Unmapped,
+            Mapped,
+            FinishBefore,
+            FinishBoth,
+            MapThenUnmap,
+            BarrierBefore
+        };
+        struct Vertex {
+            GLfloat x, y, r, g, b;
+        };
         constexpr GLsizeiptr kPayloadSize = kQuads * 6 * sizeof(Vertex);
         static_assert(kOffset + kPayloadSize <= kArenaSize);
 
@@ -41,20 +50,20 @@ namespace MobileGL::MG_Util::SelfTest {
         }
 
         Bool CanProbe(const GLESFunctionsTable& gl) {
-            if (!(gl.glGetIntegerv && gl.glGetBooleanv && gl.glGetFloatv && gl.glGetError &&
-                  gl.glGetStringi && gl.glIsEnabled && gl.glEnable && gl.glDisable &&
-                  gl.glCreateShader && gl.glShaderSource && gl.glCompileShader && gl.glGetShaderiv &&
-                  gl.glGetShaderInfoLog && gl.glDeleteShader && gl.glCreateProgram && gl.glAttachShader &&
-                  gl.glLinkProgram && gl.glGetProgramiv && gl.glGetProgramInfoLog && gl.glDeleteProgram &&
-                  gl.glUseProgram && gl.glGenBuffers && gl.glBindBuffer && gl.glBufferStorageEXT &&
-                  gl.glMapBufferRange && gl.glUnmapBuffer && gl.glBufferData && gl.glBufferSubData &&
-                  gl.glCopyBufferSubData && gl.glDeleteBuffers && gl.glGenVertexArrays &&
-                  gl.glBindVertexArray && gl.glVertexAttribPointer && gl.glEnableVertexAttribArray &&
-                  gl.glDeleteVertexArrays && gl.glGenTextures && gl.glBindTexture && gl.glTexStorage2D &&
-                  gl.glDeleteTextures && gl.glGenFramebuffers && gl.glBindFramebuffer &&
+            if (!(gl.glGetIntegerv && gl.glGetBooleanv && gl.glGetFloatv && gl.glGetError && gl.glGetStringi &&
+                  gl.glIsEnabled && gl.glEnable && gl.glDisable && gl.glCreateShader && gl.glShaderSource &&
+                  gl.glCompileShader && gl.glGetShaderiv && gl.glGetShaderInfoLog && gl.glDeleteShader &&
+                  gl.glCreateProgram && gl.glAttachShader && gl.glLinkProgram && gl.glGetProgramiv &&
+                  gl.glGetProgramInfoLog && gl.glDeleteProgram && gl.glUseProgram && gl.glGenBuffers &&
+                  gl.glBindBuffer && gl.glBufferStorageEXT && gl.glMapBufferRange && gl.glUnmapBuffer &&
+                  gl.glBufferData && gl.glBufferSubData && gl.glCopyBufferSubData && gl.glDeleteBuffers &&
+                  gl.glGenVertexArrays && gl.glBindVertexArray && gl.glVertexAttribPointer &&
+                  gl.glEnableVertexAttribArray && gl.glDeleteVertexArrays && gl.glGenTextures && gl.glBindTexture &&
+                  gl.glTexStorage2D && gl.glDeleteTextures && gl.glGenFramebuffers && gl.glBindFramebuffer &&
                   gl.glFramebufferTexture2D && gl.glCheckFramebufferStatus && gl.glDeleteFramebuffers &&
-                  gl.glViewport && gl.glColorMask && gl.glClearColor && gl.glClear && gl.glDrawArrays &&
-                  gl.glFinish && gl.glMemoryBarrier && gl.glPixelStorei && gl.glReadPixels)) return false;
+                  gl.glViewport && gl.glColorMask && gl.glClearColor && gl.glClear && gl.glDrawArrays && gl.glFinish &&
+                  gl.glMemoryBarrier && gl.glPixelStorei && gl.glReadPixels))
+                return false;
             DrainErrors(gl);
             GLint major = 0, minor = 0, count = 0;
             gl.glGetIntegerv(GL_MAJOR_VERSION, &major);
@@ -63,8 +72,8 @@ namespace MobileGL::MG_Util::SelfTest {
             if (gl.glGetError() != GL_NO_ERROR || major < 3 || (major == 3 && minor < 1)) return false;
             for (GLint i = 0; i < count; ++i) {
                 const auto* extension = gl.glGetStringi(GL_EXTENSIONS, i);
-                if (extension && std::strcmp(reinterpret_cast<const char*>(extension),
-                                             "GL_EXT_buffer_storage") == 0) return true;
+                if (extension && std::strcmp(reinterpret_cast<const char*>(extension), "GL_EXT_buffer_storage") == 0)
+                    return true;
             }
             return false;
         }
@@ -79,11 +88,11 @@ namespace MobileGL::MG_Util::SelfTest {
             GLfloat clear[4]{};
             GLboolean colorMask[4]{};
             static constexpr std::array<GLenum, 10> enables = {
-                GL_BLEND, GL_DEPTH_TEST, GL_STENCIL_TEST, GL_CULL_FACE, GL_SCISSOR_TEST,
-                GL_RASTERIZER_DISCARD, GL_DITHER, GL_SAMPLE_ALPHA_TO_COVERAGE,
+                GL_BLEND,           GL_DEPTH_TEST,         GL_STENCIL_TEST, GL_CULL_FACE,
+                GL_SCISSOR_TEST,    GL_RASTERIZER_DISCARD, GL_DITHER,       GL_SAMPLE_ALPHA_TO_COVERAGE,
                 GL_SAMPLE_COVERAGE, GL_SAMPLE_MASK};
-            static constexpr std::array<GLenum, 4> packNames = {
-                GL_PACK_ALIGNMENT, GL_PACK_ROW_LENGTH, GL_PACK_SKIP_PIXELS, GL_PACK_SKIP_ROWS};
+            static constexpr std::array<GLenum, 4> packNames = {GL_PACK_ALIGNMENT, GL_PACK_ROW_LENGTH,
+                                                                GL_PACK_SKIP_PIXELS, GL_PACK_SKIP_ROWS};
             std::array<GLboolean, enables.size()> enabled{};
             std::array<GLint, packNames.size()> pack{};
 
@@ -100,14 +109,18 @@ namespace MobileGL::MG_Util::SelfTest {
                 gl.glGetIntegerv(GL_VIEWPORT, viewport);
                 gl.glGetFloatv(GL_COLOR_CLEAR_VALUE, clear);
                 gl.glGetBooleanv(GL_COLOR_WRITEMASK, colorMask);
-                for (SizeT i = 0; i < enables.size(); ++i) enabled[i] = gl.glIsEnabled(enables[i]);
-                for (SizeT i = 0; i < packNames.size(); ++i) gl.glGetIntegerv(packNames[i], &pack[i]);
+                for (SizeT i = 0; i < enables.size(); ++i)
+                    enabled[i] = gl.glIsEnabled(enables[i]);
+                for (SizeT i = 0; i < packNames.size(); ++i)
+                    gl.glGetIntegerv(packNames[i], &pack[i]);
             }
             void Prepare() {
-                for (auto cap : enables) gl.glDisable(cap);
+                for (auto cap : enables)
+                    gl.glDisable(cap);
                 gl.glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
                 gl.glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
-                for (auto name : packNames) gl.glPixelStorei(name, name == GL_PACK_ALIGNMENT ? 1 : 0);
+                for (auto name : packNames)
+                    gl.glPixelStorei(name, name == GL_PACK_ALIGNMENT ? 1 : 0);
                 gl.glViewport(0, 0, kSide, kSide);
                 gl.glClearColor(0, 0, 0, 1);
             }
@@ -125,9 +138,13 @@ namespace MobileGL::MG_Util::SelfTest {
                 gl.glClearColor(clear[0], clear[1], clear[2], clear[3]);
                 gl.glColorMask(colorMask[0], colorMask[1], colorMask[2], colorMask[3]);
                 for (SizeT i = 0; i < enables.size(); ++i) {
-                    if (enabled[i]) gl.glEnable(enables[i]); else gl.glDisable(enables[i]);
+                    if (enabled[i])
+                        gl.glEnable(enables[i]);
+                    else
+                        gl.glDisable(enables[i]);
                 }
-                for (SizeT i = 0; i < packNames.size(); ++i) gl.glPixelStorei(packNames[i], pack[i]);
+                for (SizeT i = 0; i < packNames.size(); ++i)
+                    gl.glPixelStorei(packNames[i], pack[i]);
             }
         };
 
@@ -159,12 +176,14 @@ namespace MobileGL::MG_Util::SelfTest {
                 return shader;
             }
             Bool Setup() {
-                const GLuint vs = Compile(GL_VERTEX_SHADER,
-                    "#version 310 es\nlayout(location=0) in vec2 pos; layout(location=1) in vec3 color;\n"
-                    "out highp vec3 vColor; void main(){gl_Position=vec4(pos,0,1);vColor=color;}\n");
-                const GLuint fs = Compile(GL_FRAGMENT_SHADER,
-                    "#version 310 es\nprecision highp float; in highp vec3 vColor;\n"
-                    "layout(location=0) out vec4 outColor; void main(){outColor=vec4(vColor,1);}\n");
+                const GLuint vs =
+                    Compile(GL_VERTEX_SHADER,
+                            "#version 310 es\nlayout(location=0) in vec2 pos; layout(location=1) in vec3 color;\n"
+                            "out highp vec3 vColor; void main(){gl_Position=vec4(pos,0,1);vColor=color;}\n");
+                const GLuint fs =
+                    Compile(GL_FRAGMENT_SHADER,
+                            "#version 310 es\nprecision highp float; in highp vec3 vColor;\n"
+                            "layout(location=0) out vec4 outColor; void main(){outColor=vec4(vColor,1);}\n");
                 if (vs && fs) {
                     program = gl.glCreateProgram();
                     if (program) {
@@ -194,8 +213,7 @@ namespace MobileGL::MG_Util::SelfTest {
                     gl.glBindTexture(GL_TEXTURE_2D, textures[i]);
                     gl.glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA8, kSide, kSide);
                     gl.glBindFramebuffer(GL_FRAMEBUFFER, fbos[i]);
-                    gl.glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
-                                              textures[i], 0);
+                    gl.glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, textures[i], 0);
                     if (gl.glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) return false;
                 }
                 return gl.glGetError() == GL_NO_ERROR;
@@ -216,8 +234,12 @@ namespace MobileGL::MG_Util::SelfTest {
         };
 
         void FillVertices(Vector<Vertex>& vertices, Int channel) {
-            constexpr std::array<Vertex, 6> quad = {{{-1,-1,0,0,0}, {1,-1,0,0,0}, {1,1,0,0,0},
-                                                    {-1,-1,0,0,0}, {1,1,0,0,0}, {-1,1,0,0,0}}};
+            constexpr std::array<Vertex, 6> quad = {{{-1, -1, 0, 0, 0},
+                                                     {1, -1, 0, 0, 0},
+                                                     {1, 1, 0, 0, 0},
+                                                     {-1, -1, 0, 0, 0},
+                                                     {1, 1, 0, 0, 0},
+                                                     {-1, 1, 0, 0, 0}}};
             for (SizeT k = 0; k < vertices.size(); ++k) {
                 auto& v = vertices[k];
                 v = quad[k % 6];
@@ -230,8 +252,8 @@ namespace MobileGL::MG_Util::SelfTest {
             }
         }
 
-        BufferOrderingSample Run(const GLESFunctionsTable& gl, const Resources& resources,
-                                 const Vector<Uint8>& seed, Int upload, Shape shape) {
+        BufferOrderingSample Run(const GLESFunctionsTable& gl, const Resources& resources, const Vector<Uint8>& seed,
+                                 Int upload, Shape shape) {
             BufferOrderingSample sample;
             sample.status = BufferOrderingProbeStatus::Failed;
             Buffers buffers(gl);
@@ -252,9 +274,9 @@ namespace MobileGL::MG_Util::SelfTest {
                     if (shape == Shape::MapThenUnmap && !gl.glUnmapBuffer(GL_ARRAY_BUFFER)) break;
                 }
                 gl.glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex),
-                                          reinterpret_cast<const void*>(kOffset));
+                                         reinterpret_cast<const void*>(kOffset));
                 gl.glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex),
-                                          reinterpret_cast<const void*>(kOffset + 2 * sizeof(GLfloat)));
+                                         reinterpret_cast<const void*>(kOffset + 2 * sizeof(GLfloat)));
                 gl.glEnableVertexAttribArray(0);
                 gl.glEnableVertexAttribArray(1);
                 void* sourceMap = nullptr;
@@ -283,19 +305,20 @@ namespace MobileGL::MG_Util::SelfTest {
                         } else {
                             // No slot is reused until the entire batch has finished on the GPU.
                             if (upload == 1) {
-                                std::memcpy(static_cast<Uint8*>(sourceMap) + slot * kPayloadSize,
-                                            payload.data(), kPayloadSize);
+                                std::memcpy(static_cast<Uint8*>(sourceMap) + slot * kPayloadSize, payload.data(),
+                                            kPayloadSize);
                             } else {
-                                gl.glBufferSubData(GL_COPY_READ_BUFFER, slot * kPayloadSize,
-                                                   kPayloadSize, payload.data());
+                                gl.glBufferSubData(GL_COPY_READ_BUFFER, slot * kPayloadSize, kPayloadSize,
+                                                   payload.data());
                             }
-                            gl.glCopyBufferSubData(GL_COPY_READ_BUFFER, GL_COPY_WRITE_BUFFER,
-                                                   slot * kPayloadSize, kOffset, kPayloadSize);
+                            gl.glCopyBufferSubData(GL_COPY_READ_BUFFER, GL_COPY_WRITE_BUFFER, slot * kPayloadSize,
+                                                   kOffset, kPayloadSize);
                         }
                         if (shape == Shape::FinishBoth) gl.glFinish();
                         gl.glBindFramebuffer(GL_FRAMEBUFFER, resources.fbos[slot]);
                         gl.glClear(GL_COLOR_BUFFER_BIT);
-                        for (Int draw = 0; draw < kDraws; ++draw) gl.glDrawArrays(GL_TRIANGLES, 0, kQuads * 6);
+                        for (Int draw = 0; draw < kDraws; ++draw)
+                            gl.glDrawArrays(GL_TRIANGLES, 0, kQuads * 6);
                     }
                     // No readback/Finish between subject update/draw pairs. Early readback
                     // would hide precisely the old-reader/new-writer overlap being tested.
@@ -337,9 +360,10 @@ namespace MobileGL::MG_Util::SelfTest {
 
         String DescribeUpload(const BufferOrderingUploadMeasurement& row, Int upload) {
             return format("{}: mapped {}, never-mapped {}, Finish-before {}, Finish-both {}, "
-                          "map-then-unmap {}, barrier-before {}", kUploadNames[upload], Describe(row.mapped),
-                          Describe(row.unmapped), Describe(row.finishBefore), Describe(row.finishBoth),
-                          Describe(row.mapThenUnmap), Describe(row.barrierBefore));
+                          "map-then-unmap {}, barrier-before {}",
+                          kUploadNames[upload], Describe(row.mapped), Describe(row.unmapped),
+                          Describe(row.finishBefore), Describe(row.finishBoth), Describe(row.mapThenUnmap),
+                          Describe(row.barrierBefore));
         }
     } // namespace
 
@@ -351,7 +375,8 @@ namespace MobileGL::MG_Util::SelfTest {
         state.Prepare();
         Resources resources(gl);
         if (gl.glGetError() != GL_NO_ERROR || !resources.Setup()) {
-            for (auto& row : measurement.uploads) row.unmapped.status = BufferOrderingProbeStatus::Failed;
+            for (auto& row : measurement.uploads)
+                row.unmapped.status = BufferOrderingProbeStatus::Failed;
             MGLOG_I("[driver-bug] persistent buffer ordering: setup failed; inconclusive");
             return measurement;
         }
@@ -382,13 +407,15 @@ namespace MobileGL::MG_Util::SelfTest {
                     row.Detected() ? "detected" : "not detected or inconclusive");
         }
         return measurement;
-    } catch (const std::bad_alloc&) {
+    }
+    catch (const std::bad_alloc&) {
         // The CPU initializer is arena-sized too. An allocation failure must not discard
         // the rest of the POST report or turn a partially sampled case into a finding.
         MGLOG_I("[driver-bug] persistent buffer ordering: host allocation failed; inconclusive");
         PersistentBufferOrderingMeasurement measurement;
         measurement.supported = true;
-        for (auto& row : measurement.uploads) row.unmapped.status = BufferOrderingProbeStatus::Failed;
+        for (auto& row : measurement.uploads)
+            row.unmapped.status = BufferOrderingProbeStatus::Failed;
         return measurement;
     }
 

@@ -31,7 +31,7 @@
 // flatbuffers) into every includer; the definition is protocol_generated.h's.
 namespace MobileGL::Wire {
     enum class LogLevel : std::uint8_t;
-}
+} // namespace MobileGL::Wire
 
 namespace MobileGL::MG_Remote::Transport {
 
@@ -60,8 +60,8 @@ namespace MobileGL::MG_Remote::Transport {
     };
 
     struct LogForwardCounters {
-        std::uint64_t forwarded = 0;          // lines written to the transport (notices excluded)
-        std::uint64_t lossyDropped = 0;       // DEBUG/INFO/WARN lines dropped at the lossy cap
+        std::uint64_t forwarded = 0;    // lines written to the transport (notices excluded)
+        std::uint64_t lossyDropped = 0; // DEBUG/INFO/WARN lines dropped at the lossy cap
         std::uint64_t lossyDroppedBytes = 0;
         std::uint64_t errorsCoalesced = 0;    // ERROR/FATAL lines past the error cap
         std::uint64_t errorsPaced = 0;        // ERROR lines that waited for the pace (delayed, sent)
@@ -99,14 +99,18 @@ namespace MobileGL::MG_Remote::Transport {
         static void ForwardThunk(void* user, int level, const char* line);
 
     private:
-        enum class Kind : std::uint8_t { Line, Notice, Control };
+        enum class Kind : std::uint8_t {
+            Line,
+            Notice,
+            Control
+        };
         struct Item {
             Kind kind = Kind::Line;
             int level = 0;
             std::uint64_t seq = 0;
-            std::string text;               // Line, Notice
+            std::string text;                // Line, Notice
             std::vector<std::uint8_t> frame; // Control
-            bool paced = false;             // already counted as paced once
+            bool paced = false;              // already counted as paced once
         };
 
         void Run();
@@ -129,7 +133,7 @@ namespace MobileGL::MG_Remote::Transport {
         // m_writtenSeq when a FATAL wait last ran out; while it has not moved since, the next FATAL
         // does not wait again (Offer). ~0 = no wait has run out.
         std::uint64_t m_fatalGaveUpAtWritten = ~0ull;
-        std::uint64_t m_urgent = 0;     // FATAL lines and control frames queued: do not pace
+        std::uint64_t m_urgent = 0; // FATAL lines and control frames queued: do not pace
         // A gap not yet marked in the stream, per class.
         std::uint64_t m_gapLossyLines = 0;
         std::uint64_t m_gapLossyBytes = 0;

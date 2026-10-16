@@ -51,7 +51,10 @@ using Transport::SocketTransport;
 
 namespace {
 
-    enum class Kind { Unix, Tcp };
+    enum class Kind {
+        Unix,
+        Tcp
+    };
 
     std::string MakeEndpoint(Kind kind) {
         static int serial = 0;
@@ -163,9 +166,11 @@ namespace {
         *outWho = -1;
         const std::string down = "server-to-control";
         if (server.SendFrame({down.data(), down.size()}) != MOBILEGL_OK)
-            return ::testing::AssertionFailure() << "the server could not write its control connection (its peer is gone)";
+            return ::testing::AssertionFailure()
+                   << "the server could not write its control connection (its peer is gone)";
         std::vector<pollfd> fds;
-        for (const auto& client : clients) fds.push_back({client.control, POLLIN, 0});
+        for (const auto& client : clients)
+            fds.push_back({client.control, POLLIN, 0});
         if (::poll(fds.data(), static_cast<nfds_t>(fds.size()), 2000) <= 0)
             return ::testing::AssertionFailure() << "no client's control connection received the server's frame";
         int who = -1;
@@ -176,24 +181,26 @@ namespace {
         std::vector<std::uint8_t> frame;
         if (SocketTransport::ReceiveOneFrame(client.control, 2000, 4096, &frame) != MOBILEGL_OK ||
             std::string(frame.begin(), frame.end()) != down)
-            return ::testing::AssertionFailure() << "client " << client.name << "'s control connection read something else";
+            return ::testing::AssertionFailure()
+                   << "client " << client.name << "'s control connection read something else";
         const std::string up = std::string("control-to-server:") + client.name;
         if (!SendFramed(client.control, up.data(), up.size()))
-            return ::testing::AssertionFailure() << "client " << client.name << " could not write its control connection";
+            return ::testing::AssertionFailure()
+                   << "client " << client.name << " could not write its control connection";
         std::vector<std::uint8_t> buffer(4096);
         std::uint64_t size = 0;
         if (server.ReceiveFrame({buffer.data(), buffer.size()}, &size, 2000) != MOBILEGL_OK ||
             std::string(buffer.begin(), buffer.begin() + static_cast<std::ptrdiff_t>(size)) != up)
-            return ::testing::AssertionFailure() << "the server's control connection did not carry client " << client.name
-                                                 << "'s frame";
+            return ::testing::AssertionFailure()
+                   << "the server's control connection did not carry client " << client.name << "'s frame";
         const std::string side = std::string("aux:") + client.name;
         if (::send(client.aux, side.data(), side.size(), MSG_NOSIGNAL) != static_cast<ssize_t>(side.size()))
             return ::testing::AssertionFailure() << "client " << client.name << " could not write its aux connection";
         std::string received(side.size(), '\0');
         if (!ReadExactly(server.AuxFd(), reinterpret_cast<std::uint8_t*>(received.data()), received.size(), 2000) ||
             received != side)
-            return ::testing::AssertionFailure() << "the server's aux connection is not client " << client.name
-                                                 << "'s (read \"" << received << "\")";
+            return ::testing::AssertionFailure()
+                   << "the server's aux connection is not client " << client.name << "'s (read \"" << received << "\")";
         *outWho = who;
         return ::testing::AssertionSuccess();
     }
@@ -255,7 +262,8 @@ TEST_P(PairAcceptorTest, TwoClientsWhoseFourConnectionsInterleaveArePairedEachWi
     EXPECT_TRUE(ServesExactly(*second, clients, &secondWho));
     EXPECT_NE(firstWho, secondWho) << "one client was handed out twice";
     EXPECT_EQ(pairs.Unpaired(), 0u);
-    for (int fd : {aControl, bControl, bAux, aAux}) ::close(fd);
+    for (int fd : {aControl, bControl, bAux, aAux})
+        ::close(fd);
 }
 
 // (3) An aux connection whose control connection never arrives: held within the budget, dropped
@@ -300,9 +308,9 @@ TEST_P(PairAcceptorTest, AClientWhoseFirstFrameIsAHelloIsRefusedByNameAndNeverPa
         ::flatbuffers::FlatBufferBuilder builder(512);
         const std::uint64_t fingerprint = currentWire ? WireFingerprint() : WireFingerprint() ^ 0x1ull;
         auto terms = ::MobileGL::Wire::CreateLinkTerms(builder);
-        auto hello = ::MobileGL::Wire::CreateHelloDirect(builder, MOBILEGL_PROTOCOL_ABI_MAJOR, MOBILEGL_PROTOCOL_ABI_MINOR,
-                                                         "an-older-client", 0, 1, nullptr, fingerprint, fingerprint, terms,
-                                                         nullptr, ::MobileGL::Wire::DialMode::Connect);
+        auto hello = ::MobileGL::Wire::CreateHelloDirect(
+            builder, MOBILEGL_PROTOCOL_ABI_MAJOR, MOBILEGL_PROTOCOL_ABI_MINOR, "an-older-client", 0, 1, nullptr,
+            fingerprint, fingerprint, terms, nullptr, ::MobileGL::Wire::DialMode::Connect);
         ::MobileGL::Wire::FinishCtrlEnvelopeBuffer(
             builder, ::MobileGL::Wire::CreateCtrlEnvelope(builder, ::MobileGL::Wire::CtrlMsg::Hello, hello.Union()));
         ASSERT_TRUE(SendFramed(control, builder.GetBufferPointer(), builder.GetSize()));

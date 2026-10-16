@@ -95,8 +95,7 @@ namespace MobileGL::MG_Record {
     // The one place a row actually marks. Null and duplicate marks are absorbed here so the
     // walks stay readable, and the per-row counter moves only when a buffer really was
     // marked.
-    void MarkBufferForProducer(const SharedPtr<MG_State::GLState::BufferObject>& buffer,
-                               GpuWriteProducer producer);
+    void MarkBufferForProducer(const SharedPtr<MG_State::GLState::BufferObject>& buffer, GpuWriteProducer producer);
 
     Uint64 ProducerMarkCount(GpuWriteProducer producer);
     void ResetProducerMarkCountsForTest();

@@ -38,8 +38,8 @@ namespace MGITest {
         // state would answer the question the scenario is asking with the input to it.)
         MobileGL::MG_State::GLState::ITextureObject* FrontendTexture(unsigned glTextureName) {
             if (!MobileGL::MG_State::pGLContext) return nullptr;
-            const auto& object = MobileGL::MG_State::pGLContext->GetTextureObject(
-                static_cast<MobileGL::Uint>(glTextureName));
+            const auto& object =
+                MobileGL::MG_State::pGLContext->GetTextureObject(static_cast<MobileGL::Uint>(glTextureName));
             return object ? object.get() : nullptr;
         }
 
@@ -67,8 +67,7 @@ namespace MGITest {
         // to what an untouched texture already has). This is that decode, and nothing else in
         // this module may open-code it.
         int DepthStencilModeToGLEnum(MobileGL::Uint8 encoded) {
-            return encoded == MGP::kMGPipeDepthStencilModeStencil ? GL_STENCIL_INDEX
-                                                                  : GL_DEPTH_COMPONENT;
+            return encoded == MGP::kMGPipeDepthStencilModeStencil ? GL_STENCIL_INDEX : GL_DEPTH_COMPONENT;
         }
 
         // The GL_TEXTURE_BINDING_* query for a target, or 0 where this file has no answer. A
@@ -76,26 +75,33 @@ namespace MGITest {
         // pname would leave the driver bound to this test's texture.
         int BindingQueryFor(unsigned glTarget) {
             switch (glTarget) {
-                case GL_TEXTURE_2D: return GL_TEXTURE_BINDING_2D;
-                default: return 0;
+            case GL_TEXTURE_2D:
+                return GL_TEXTURE_BINDING_2D;
+            default:
+                return 0;
             }
         }
     } // namespace
 
-    static bool ReadAppliedTextureParams(MGB::TextureImpl::BackendTextureObject* twin,
-                                         unsigned glTarget, EsprytAppliedTextureParamsPeek* out);
+    static bool ReadAppliedTextureParams(MGB::TextureImpl::BackendTextureObject* twin, unsigned glTarget,
+                                         EsprytAppliedTextureParamsPeek* out);
 
     static void CopyTextureParamsRecord(const MGP::MGPipeResourceRecord& record, unsigned slot,
                                         PipeTextureParamsRecordPeek& out) {
         out.Slot = slot;
         out.Gen = static_cast<unsigned>(record.Gen);
         out.ParamsSerial = static_cast<unsigned long long>(record.ParamsSerial);
-        for (int channel = 0; channel < 4; ++channel) out.Swizzle[channel] = SwizzleToGLEnum(record.Params.Swizzle[channel]);
+        for (int channel = 0; channel < 4; ++channel)
+            out.Swizzle[channel] = SwizzleToGLEnum(record.Params.Swizzle[channel]);
         out.DepthStencilMode = DepthStencilModeToGLEnum(record.Params.DepthStencilMode);
     }
 
 #if MOBILEGL_BUILD_DISAGGREGATED
-    enum class ServerPeekKind { Record, Applied, View };
+    enum class ServerPeekKind {
+        Record,
+        Applied,
+        View
+    };
     static bool PeekOnApplyThread(unsigned glTextureName, unsigned target, ServerPeekKind kind, void* output) {
         auto* object = FrontendTexture(glTextureName);
         auto* session = MobileGL::MG_Remote::Client::ClientSession::Active();
@@ -107,11 +113,12 @@ namespace MGITest {
             void* Output;
             bool Result = false;
         } request{MGP::MGPipeSlots().FindByLifetimeId(MGP::MGPipeKind::Texture, object->GetLifetimeId()),
-                  MGP::MGPipeSlots().FindByLifetimeId(MGP::MGPipeKind::SamplerViewCso, object->GetLifetimeId()),
-                  target, kind, output};
+                  MGP::MGPipeSlots().FindByLifetimeId(MGP::MGPipeKind::SamplerViewCso, object->GetLifetimeId()), target,
+                  kind, output};
         if (MGP::MGPipeHandleIsNull(request.Texture)) return false;
         if (session->WaitForApplied(session->LastPublishedSeq(), 30000) !=
-            MobileGL::MG_Remote::Transport::SessionWait::Reached) return false;
+            MobileGL::MG_Remote::Transport::SessionWait::Reached)
+            return false;
         const auto result = MobileGL::MG_Remote::Server::ServerLoopInstance().RunProbeOnApplyThreadForTesting(
             +[](void* opaque) -> MobileGLResult {
                 auto& r = *static_cast<Request*>(opaque);
@@ -120,7 +127,8 @@ namespace MGITest {
                 const auto& record = records[r.Texture.Slot];
                 if (!record.Live || record.Gen != r.Texture.Gen) return MOBILEGL_OK;
                 if (r.Kind == ServerPeekKind::Record) {
-                    CopyTextureParamsRecord(record, r.Texture.Slot, *static_cast<PipeTextureParamsRecordPeek*>(r.Output));
+                    CopyTextureParamsRecord(record, r.Texture.Slot,
+                                            *static_cast<PipeTextureParamsRecordPeek*>(r.Output));
                     r.Result = true;
                     return MOBILEGL_OK;
                 }
@@ -128,14 +136,15 @@ namespace MGITest {
                 if (!found || !*found) return MOBILEGL_OK;
                 if (r.Kind == ServerPeekKind::Applied)
                     r.Result = ReadAppliedTextureParams(found->get(), r.Target,
-                        static_cast<EsprytAppliedTextureParamsPeek*>(r.Output));
+                                                        static_cast<EsprytAppliedTextureParamsPeek*>(r.Output));
                 else {
                     *static_cast<bool*>(r.Output) = !MGP::MGPipeHandleIsNull(r.View) &&
-                        MGB::SamplerViewImpl::FindSamplerViewForHandle(r.View) != nullptr;
+                                                    MGB::SamplerViewImpl::FindSamplerViewForHandle(r.View) != nullptr;
                     r.Result = true;
                 }
                 return MOBILEGL_OK;
-            }, &request);
+            },
+            &request);
         return result == MOBILEGL_OK && request.Result;
     }
 #endif
@@ -168,17 +177,16 @@ namespace MGITest {
         return ReadAppliedTextureParams(EsprytTwin(glTextureName), glTarget, out);
     }
 
-    static bool ReadAppliedTextureParams(MGB::TextureImpl::BackendTextureObject* twin,
-                                         unsigned glTarget, EsprytAppliedTextureParamsPeek* out) {
+    static bool ReadAppliedTextureParams(MGB::TextureImpl::BackendTextureObject* twin, unsigned glTarget,
+                                         EsprytAppliedTextureParamsPeek* out) {
         if (out == nullptr) return false;
         const int bindingQuery = BindingQueryFor(glTarget);
         if (bindingQuery == 0) return false;
         if (twin == nullptr) return false;
         const MobileGL::Uint backendId = twin->GetBackendTextureId();
         if (backendId == 0) return false;
-        if (MGB::g_GLESFuncs.glGetTexParameteriv == nullptr ||
-            MGB::g_GLESFuncs.glBindTexture == nullptr || MGB::g_GLESFuncs.glGetIntegerv == nullptr ||
-            MGB::g_GLESFuncs.glGetError == nullptr) {
+        if (MGB::g_GLESFuncs.glGetTexParameteriv == nullptr || MGB::g_GLESFuncs.glBindTexture == nullptr ||
+            MGB::g_GLESFuncs.glGetIntegerv == nullptr || MGB::g_GLESFuncs.glGetError == nullptr) {
             return false;
         }
 
@@ -192,12 +200,11 @@ namespace MGITest {
         MGB::g_GLESFuncs.glBindTexture(static_cast<GLenum>(glTarget), backendId);
 
         out->BackendTextureId = static_cast<unsigned>(backendId);
-        static const GLenum kSwizzlePnames[4] = {GL_TEXTURE_SWIZZLE_R, GL_TEXTURE_SWIZZLE_G,
-                                                 GL_TEXTURE_SWIZZLE_B, GL_TEXTURE_SWIZZLE_A};
+        static const GLenum kSwizzlePnames[4] = {GL_TEXTURE_SWIZZLE_R, GL_TEXTURE_SWIZZLE_G, GL_TEXTURE_SWIZZLE_B,
+                                                 GL_TEXTURE_SWIZZLE_A};
         for (int channel = 0; channel < 4; ++channel) {
             GLint value = 0;
-            MGB::g_GLESFuncs.glGetTexParameteriv(static_cast<GLenum>(glTarget),
-                                                 kSwizzlePnames[channel], &value);
+            MGB::g_GLESFuncs.glGetTexParameteriv(static_cast<GLenum>(glTarget), kSwizzlePnames[channel], &value);
             out->Swizzle[channel] = static_cast<int>(value);
         }
 
@@ -207,18 +214,14 @@ namespace MGITest {
         // from this call's - Espryt drains it the same way at every one of its own sync sites
         // (DebugImpl::ErrorLopper), and this module's own GL errors are read from the FRONTEND
         // state (ScenarioTest::FirstGLError), which none of this touches.
-        while (MGB::g_GLESFuncs.glGetError() != GL_NO_ERROR) {
-        }
+        while (MGB::g_GLESFuncs.glGetError() != GL_NO_ERROR) {}
         GLint mode = 0;
-        MGB::g_GLESFuncs.glGetTexParameteriv(static_cast<GLenum>(glTarget),
-                                             GL_DEPTH_STENCIL_TEXTURE_MODE, &mode);
+        MGB::g_GLESFuncs.glGetTexParameteriv(static_cast<GLenum>(glTarget), GL_DEPTH_STENCIL_TEXTURE_MODE, &mode);
         out->DepthStencilModeIsReadable = MGB::g_GLESFuncs.glGetError() == GL_NO_ERROR;
         out->DepthStencilMode = static_cast<int>(mode);
 
-        MGB::g_GLESFuncs.glBindTexture(static_cast<GLenum>(glTarget),
-                                       static_cast<GLuint>(previousBinding));
-        while (MGB::g_GLESFuncs.glGetError() != GL_NO_ERROR) {
-        }
+        MGB::g_GLESFuncs.glBindTexture(static_cast<GLenum>(glTarget), static_cast<GLuint>(previousBinding));
+        while (MGB::g_GLESFuncs.glGetError() != GL_NO_ERROR) {}
         return true;
     }
 
@@ -253,12 +256,18 @@ namespace MGITest {
         return true;
     }
 #else
-    bool PeekPipeTextureParamsRecord(unsigned, PipeTextureParamsRecordPeek*) { return false; }
+    bool PeekPipeTextureParamsRecord(unsigned, PipeTextureParamsRecordPeek*) {
+        return false;
+    }
     bool PeekEsprytAppliedTextureParams(unsigned, unsigned, EsprytAppliedTextureParamsPeek*) {
         return false;
     }
-    bool PeekEsprytHasSamplerViewForTexture(unsigned, bool*) { return false; }
-    bool PeekPipeApplierRefusedNoConsumer(unsigned long long*) { return false; }
+    bool PeekEsprytHasSamplerViewForTexture(unsigned, bool*) {
+        return false;
+    }
+    bool PeekPipeApplierRefusedNoConsumer(unsigned long long*) {
+        return false;
+    }
 #endif
 
 } // namespace MGITest

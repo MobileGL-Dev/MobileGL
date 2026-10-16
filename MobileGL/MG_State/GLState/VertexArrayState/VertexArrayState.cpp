@@ -52,8 +52,7 @@ namespace MobileGL::MG_State::GLState {
         // Match the previous semantics exactly: binding an out-of-range name, or a name
         // whose slot holds no object, left the old SharedPtr member null - resolve that
         // NOW, so a slot created later does not silently become bound.
-        m_boundIndex =
-            (index < m_vertexArrays.size() && m_vertexArrays[index] != nullptr) ? index : kUnboundIndex;
+        m_boundIndex = (index < m_vertexArrays.size() && m_vertexArrays[index] != nullptr) ? index : kUnboundIndex;
     }
 
     const SharedPtr<VertexArrayObject>& VertexArrayState::CreateVertexArrayObject(Uint index) {
@@ -80,9 +79,8 @@ namespace MobileGL::MG_State::GLState {
             // "Deleting the bound VAO rebinds the default VAO" needs the same answer the old
             // SharedPtr compare gave: either the live bound slot is the one being deleted, or
             // the bound object is a detached one that carries this external index.
-            const Bool deletingBound = m_boundDetached
-                ? m_boundDetached->GetExternalIndex() == index
-                : (m_boundIndex == index && m_boundIndex != kUnboundIndex);
+            const Bool deletingBound = m_boundDetached ? m_boundDetached->GetExternalIndex() == index
+                                                       : (m_boundIndex == index && m_boundIndex != kUnboundIndex);
             if (deletingBound) {
                 m_boundDetached = nullptr;
                 m_boundIndex = 0; // the default VAO's slot always exists

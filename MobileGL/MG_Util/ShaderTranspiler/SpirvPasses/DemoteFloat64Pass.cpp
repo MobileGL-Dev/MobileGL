@@ -29,8 +29,8 @@ namespace MobileGL {
     namespace MG_Util {
         namespace ShaderTranspiler {
             namespace {
-                using spvtools::opt::IRContext;
                 using spvtools::opt::Instruction;
+                using spvtools::opt::IRContext;
                 using spvtools::opt::Operand;
 
                 constexpr Uint32 kFloat64Width = 64;
@@ -50,12 +50,14 @@ namespace MobileGL {
                 // Offset decoration sets with it.
                 Bool IsDuplicableType(spv::Op opcode) {
                     switch (opcode) {
-                        case spv::Op::OpTypeFloat:
-                        case spv::Op::OpTypeVector:
-                        case spv::Op::OpTypeMatrix:
-                        case spv::Op::OpTypePointer:
-                        case spv::Op::OpTypeFunction: return true;
-                        default: return false;
+                    case spv::Op::OpTypeFloat:
+                    case spv::Op::OpTypeVector:
+                    case spv::Op::OpTypeMatrix:
+                    case spv::Op::OpTypePointer:
+                    case spv::Op::OpTypeFunction:
+                        return true;
+                    default:
+                        return false;
                     }
                 }
 
@@ -89,8 +91,7 @@ namespace MobileGL {
                 // demoted shader reads.
                 class BlockRelayout {
                 public:
-                    BlockRelayout(IRContext* irContext, Bool std140)
-                        : m_irContext(irContext), m_std140(std140) {}
+                    BlockRelayout(IRContext* irContext, Bool std140) : m_irContext(irContext), m_std140(std140) {}
 
                     // Size and alignment of `typeId`, QUEUING every offset/stride decoration it
                     // implies on the way down. Zero size means "not a type this layout knows how
@@ -143,42 +144,44 @@ namespace MobileGL {
                         if (type == nullptr) return {};
 
                         switch (type->opcode()) {
-                            case spv::Op::OpTypeInt:
-                            case spv::Op::OpTypeFloat: {
-                                const Uint32 bytes = type->GetSingleWordInOperand(0) / 8;
-                                return {bytes, bytes};
+                        case spv::Op::OpTypeInt:
+                        case spv::Op::OpTypeFloat: {
+                            const Uint32 bytes = type->GetSingleWordInOperand(0) / 8;
+                            return {bytes, bytes};
+                        }
+                        case spv::Op::OpTypeBool:
+                            return {4, 4};
+                        case spv::Op::OpTypeVector: {
+                            const Extent component = Measure(type->GetSingleWordInOperand(0));
+                            if (component.size == 0) return {};
+                            const Uint32 count = type->GetSingleWordInOperand(1);
+                            // A three-component vector aligns like a four-component one.
+                            return {component.size * count, component.alignment * (count == 3 ? 4 : count)};
+                        }
+                        case spv::Op::OpTypeMatrix: {
+                            const Extent column = Measure(type->GetSingleWordInOperand(0));
+                            if (column.size == 0) return {};
+                            const Uint32 stride = MatrixOrArrayStride(column.alignment);
+                            return {stride * type->GetSingleWordInOperand(1), stride};
+                        }
+                        case spv::Op::OpTypeArray:
+                        case spv::Op::OpTypeRuntimeArray: {
+                            const Extent element = Measure(type->GetSingleWordInOperand(0));
+                            if (element.size == 0) return {};
+                            const Uint32 alignment = MatrixOrArrayStride(element.alignment);
+                            const Uint32 stride = RoundUp(element.size, alignment);
+                            SetTypeDecoration(typeId, spv::Decoration::ArrayStride, stride);
+                            if (type->opcode() == spv::Op::OpTypeRuntimeArray) {
+                                // An unsized array contributes its stride and nothing more; the
+                                // block's size is whatever the application bound.
+                                return {stride, alignment};
                             }
-                            case spv::Op::OpTypeBool: return {4, 4};
-                            case spv::Op::OpTypeVector: {
-                                const Extent component = Measure(type->GetSingleWordInOperand(0));
-                                if (component.size == 0) return {};
-                                const Uint32 count = type->GetSingleWordInOperand(1);
-                                // A three-component vector aligns like a four-component one.
-                                return {component.size * count,
-                                        component.alignment * (count == 3 ? 4 : count)};
-                            }
-                            case spv::Op::OpTypeMatrix: {
-                                const Extent column = Measure(type->GetSingleWordInOperand(0));
-                                if (column.size == 0) return {};
-                                const Uint32 stride = MatrixOrArrayStride(column.alignment);
-                                return {stride * type->GetSingleWordInOperand(1), stride};
-                            }
-                            case spv::Op::OpTypeArray:
-                            case spv::Op::OpTypeRuntimeArray: {
-                                const Extent element = Measure(type->GetSingleWordInOperand(0));
-                                if (element.size == 0) return {};
-                                const Uint32 alignment = MatrixOrArrayStride(element.alignment);
-                                const Uint32 stride = RoundUp(element.size, alignment);
-                                SetTypeDecoration(typeId, spv::Decoration::ArrayStride, stride);
-                                if (type->opcode() == spv::Op::OpTypeRuntimeArray) {
-                                    // An unsized array contributes its stride and nothing more; the
-                                    // block's size is whatever the application bound.
-                                    return {stride, alignment};
-                                }
-                                return {stride * ArrayLength(type->GetSingleWordInOperand(1)), alignment};
-                            }
-                            case spv::Op::OpTypeStruct: return MeasureStruct(*type);
-                            default: return {};
+                            return {stride * ArrayLength(type->GetSingleWordInOperand(1)), alignment};
+                        }
+                        case spv::Op::OpTypeStruct:
+                            return MeasureStruct(*type);
+                        default:
+                            return {};
                         }
                     }
 
@@ -199,8 +202,7 @@ namespace MobileGL {
                                 m_irContext->get_def_use_mgr()->GetDef(PeelArrays(memberTypeId));
                             if (memberType != nullptr && memberType->opcode() == spv::Op::OpTypeMatrix) {
                                 const Extent column = Measure(memberType->GetSingleWordInOperand(0));
-                                SetMemberDecoration(structType.result_id(), member,
-                                                    spv::Decoration::MatrixStride,
+                                SetMemberDecoration(structType.result_id(), member, spv::Decoration::MatrixStride,
                                                     MatrixOrArrayStride(column.alignment));
                             }
 
@@ -238,8 +240,7 @@ namespace MobileGL {
                         m_pendingWrites.push_back({false, targetId, 0, decoration, value});
                     }
 
-                    void SetMemberDecoration(Uint32 structId, Uint32 member, spv::Decoration decoration,
-                                             Uint32 value) {
+                    void SetMemberDecoration(Uint32 structId, Uint32 member, spv::Decoration decoration, Uint32 value) {
                         m_pendingWrites.push_back({true, structId, member, decoration, value});
                     }
 
@@ -320,24 +321,25 @@ namespace MobileGL {
                         return wideTypeIds.count(type.GetSingleWordInOperand(operand)) != 0;
                     };
                     switch (type.opcode()) {
-                        case spv::Op::OpTypeVector:
-                        case spv::Op::OpTypeMatrix:
-                        case spv::Op::OpTypeArray:
-                        case spv::Op::OpTypeRuntimeArray:
-                            if (contains(0)) wideTypeIds.insert(type.result_id());
-                            break;
-                        case spv::Op::OpTypePointer:
-                            if (contains(1)) wideTypeIds.insert(type.result_id());
-                            break;
-                        case spv::Op::OpTypeStruct:
-                            for (Uint32 member = 0; member < type.NumInOperands(); ++member) {
-                                if (contains(member)) {
-                                    wideTypeIds.insert(type.result_id());
-                                    break;
-                                }
+                    case spv::Op::OpTypeVector:
+                    case spv::Op::OpTypeMatrix:
+                    case spv::Op::OpTypeArray:
+                    case spv::Op::OpTypeRuntimeArray:
+                        if (contains(0)) wideTypeIds.insert(type.result_id());
+                        break;
+                    case spv::Op::OpTypePointer:
+                        if (contains(1)) wideTypeIds.insert(type.result_id());
+                        break;
+                    case spv::Op::OpTypeStruct:
+                        for (Uint32 member = 0; member < type.NumInOperands(); ++member) {
+                            if (contains(member)) {
+                                wideTypeIds.insert(type.result_id());
+                                break;
                             }
-                            break;
-                        default: break;
+                        }
+                        break;
+                    default:
+                        break;
                     }
                 }
 
@@ -365,32 +367,31 @@ namespace MobileGL {
                     [&](Instruction* inst) {
                         if (declineReason != nullptr) return;
                         switch (inst->opcode()) {
-                            case spv::Op::OpBitcast: {
-                                // "Total bit width of Result Type and Operand must match" - true
-                                // today, false the moment one of the two sides halves.
-                                const Bool resultIs64 = float64ValueTypeIds.count(inst->type_id()) != 0;
-                                const Bool operandIs64 = valueIsFloat64(inst->GetSingleWordInOperand(0));
-                                if (resultIs64 != operandIs64) {
-                                    declineReason = "an OpBitcast across the 64-bit boundary "
-                                                    "(doubleBitsToUint64 / uint64BitsToDouble / "
-                                                    "packDouble2x32)";
-                                }
+                        case spv::Op::OpBitcast: {
+                            // "Total bit width of Result Type and Operand must match" - true
+                            // today, false the moment one of the two sides halves.
+                            const Bool resultIs64 = float64ValueTypeIds.count(inst->type_id()) != 0;
+                            const Bool operandIs64 = valueIsFloat64(inst->GetSingleWordInOperand(0));
+                            if (resultIs64 != operandIs64) {
+                                declineReason = "an OpBitcast across the 64-bit boundary "
+                                                "(doubleBitsToUint64 / uint64BitsToDouble / "
+                                                "packDouble2x32)";
+                            }
+                            break;
+                        }
+                        case spv::Op::OpExtInst: {
+                            if (glslStd450SetId == 0 || inst->GetSingleWordInOperand(0) != glslStd450SetId) {
                                 break;
                             }
-                            case spv::Op::OpExtInst: {
-                                if (glslStd450SetId == 0 ||
-                                    inst->GetSingleWordInOperand(0) != glslStd450SetId) {
-                                    break;
-                                }
-                                const Uint32 extOpcode = inst->GetSingleWordInOperand(1);
-                                if (extOpcode == GLSLstd450PackDouble2x32 ||
-                                    extOpcode == GLSLstd450UnpackDouble2x32) {
-                                    declineReason = "GLSL.std.450 PackDouble2x32 / UnpackDouble2x32, "
-                                                    "which are defined only for a 64-bit float";
-                                }
-                                break;
+                            const Uint32 extOpcode = inst->GetSingleWordInOperand(1);
+                            if (extOpcode == GLSLstd450PackDouble2x32 || extOpcode == GLSLstd450UnpackDouble2x32) {
+                                declineReason = "GLSL.std.450 PackDouble2x32 / UnpackDouble2x32, "
+                                                "which are defined only for a 64-bit float";
                             }
-                            default: break;
+                            break;
+                        }
+                        default:
+                            break;
                         }
                     },
                     /*run_on_debug_line_insts=*/false);
@@ -539,8 +540,7 @@ namespace MobileGL {
                     /*run_on_debug_line_insts=*/false);
 
                 for (Instruction* conversion : identityConversions) {
-                    irContext->ReplaceAllUsesWith(conversion->result_id(),
-                                                  conversion->GetSingleWordInOperand(0));
+                    irContext->ReplaceAllUsesWith(conversion->result_id(), conversion->GetSingleWordInOperand(0));
                     irContext->KillInst(conversion);
                 }
 
@@ -597,8 +597,7 @@ namespace MobileGL {
                 // already correct.
                 for (Instruction& variable : irContext->types_values()) {
                     if (variable.opcode() != spv::Op::OpVariable) continue;
-                    const auto storageClass =
-                        static_cast<spv::StorageClass>(variable.GetSingleWordInOperand(0));
+                    const auto storageClass = static_cast<spv::StorageClass>(variable.GetSingleWordInOperand(0));
                     if (storageClass != spv::StorageClass::Uniform &&
                         storageClass != spv::StorageClass::StorageBuffer &&
                         storageClass != spv::StorageClass::PushConstant) {

@@ -19,12 +19,18 @@ namespace MobileGL::MG_Remote::Transport {
     namespace {
         std::atomic<bool> g_settled{false};
 
-        const char* SideName(AdoptTierSide side) { return side == AdoptTierSide::Client ? "client" : "server"; }
+        const char* SideName(AdoptTierSide side) {
+            return side == AdoptTierSide::Client ? "client" : "server";
+        }
     } // namespace
 
-    bool AdoptTierIsDefault() { return MG_Config::Ipc.AdoptTier == MG_Config::kAdoptTierUnset; }
+    bool AdoptTierIsDefault() {
+        return MG_Config::Ipc.AdoptTier == MG_Config::kAdoptTierUnset;
+    }
 
-    bool AdoptTierWantsT0() { return MG_Config::Ipc.AdoptTier == 0 || AdoptTierIsDefault(); }
+    bool AdoptTierWantsT0() {
+        return MG_Config::Ipc.AdoptTier == 0 || AdoptTierIsDefault();
+    }
 
     std::uint32_t AdoptTierAskFor(bool streamDataPlane) {
         if (streamDataPlane || !AdoptTierWantsT0()) return 2u;
@@ -81,8 +87,12 @@ namespace MobileGL::MG_Remote::Transport {
         return AdoptTierAskFor(false);
     }
 
-    bool AdoptTierSettledAtHandshake() { return g_settled.load(std::memory_order_acquire); }
+    bool AdoptTierSettledAtHandshake() {
+        return g_settled.load(std::memory_order_acquire);
+    }
 
-    void ForgetAdoptTierSettlementForTest() { g_settled.store(false, std::memory_order_release); }
+    void ForgetAdoptTierSettlementForTest() {
+        g_settled.store(false, std::memory_order_release);
+    }
 
 } // namespace MobileGL::MG_Remote::Transport

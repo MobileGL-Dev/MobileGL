@@ -52,8 +52,7 @@ namespace MobileGL::MG_Pipe {
     // MOBILEGL_PIPE_PUSH, not the wired constants, so this constant and the sampler one are set
     // together, and the framebuffer constant is never set without this one.
     inline constexpr Uint64 kMGPipeWiredTextureSubsystem = kMGPipeSubsystemTextureResources;
-    static_assert(kMGPipeWiredTextureSubsystem == 0 ||
-                      kMGPipeWiredTextureSubsystem == kMGPipeSubsystemTextureResources,
+    static_assert(kMGPipeWiredTextureSubsystem == 0 || kMGPipeWiredTextureSubsystem == kMGPipeSubsystemTextureResources,
                   "a family's wired constant is 0 or its own bit and nothing else");
 
     // BOTH HALVES MATTER, exactly as MGPipeResourceSubsystemEnabled()'s two do, and they are
@@ -170,10 +169,9 @@ namespace MobileGL::MG_Pipe {
     // `viewOf`, `bufferForTexBuffer` and the buffer window are handed in rather than resolved
     // here, because resolving them needs the slot allocator and this function must stay pure.
     inline MGPResourceDesc MGPipeBuildTextureResourceDesc(const MG_State::GLState::ITextureObject& texture,
-                                                          MGPipeHandle handle, Uint16 bindMask,
-                                                          Bool storageDefined, MGPipeHandle viewOf,
-                                                          MGPipeHandle bufferForTexBuffer, Uint64 bufOffset,
-                                                          Uint64 bufSize) {
+                                                          MGPipeHandle handle, Uint16 bindMask, Bool storageDefined,
+                                                          MGPipeHandle viewOf, MGPipeHandle bufferForTexBuffer,
+                                                          Uint64 bufOffset, Uint64 bufSize) {
         MGPResourceDesc desc{};
         desc.Resource = handle;
         desc.Target = static_cast<Uint8>(MGPipeResourceTargetForTextureTarget(texture.GetTarget()));
@@ -204,9 +202,8 @@ namespace MobileGL::MG_Pipe {
             // count, a buffer texture with whether a buffer is attached; both are what the
             // backend's ensure path already tests before it uploads anything.
             desc.HasDefinedContent =
-                (mipmap != nullptr ? mipmap->GetMipmapLevelCount() > 0 : !MGPipeHandleIsNull(bufferForTexBuffer))
-                    ? 1
-                    : 0;
+                (mipmap != nullptr ? mipmap->GetMipmapLevelCount() > 0 : !MGPipeHandleIsNull(bufferForTexBuffer)) ? 1
+                                                                                                                  : 0;
         }
         desc.ViewOf = viewOf;
         desc.BufferForTexBuffer = bufferForTexBuffer;
@@ -375,8 +372,8 @@ namespace MobileGL::MG_Pipe {
     // texel), and NOTHING has been handed out when it returns false, so the caller keeps the
     // whole-level record it would have emitted anyway.
     template <class Fn>
-    inline Bool MGPipeForEachTextureSlab(const IntVec3& levelSize, const MGPipeLevelPitch& pitch,
-                                         Uint64 levelBytes, SizeT chunkBytes, Fn&& body) {
+    inline Bool MGPipeForEachTextureSlab(const IntVec3& levelSize, const MGPipeLevelPitch& pitch, Uint64 levelBytes,
+                                         SizeT chunkBytes, Fn&& body) {
         const Uint64 cap = static_cast<Uint64>(chunkBytes);
         const Uint64 width = static_cast<Uint64>(std::max<Int>(levelSize.x(), 0));
         const Uint64 height = static_cast<Uint64>(std::max<Int>(levelSize.y(), 0));
@@ -390,12 +387,11 @@ namespace MobileGL::MG_Pipe {
         // tail no box describes, and it stays on the whole-level record.
         if (sliceStride * depth != levelBytes) return false;
 
-        const auto emit = [&](Uint64 x0, Uint64 y0, Uint64 z0, Uint64 w, Uint64 h, Uint64 d,
-                              Uint64 runOffset, Uint64 runBytes) {
+        const auto emit = [&](Uint64 x0, Uint64 y0, Uint64 z0, Uint64 w, Uint64 h, Uint64 d, Uint64 runOffset,
+                              Uint64 runBytes) {
             MGPipeTextureSlab slab{};
             slab.Box = MGPBox{static_cast<Int32>(x0), static_cast<Int32>(y0), static_cast<Int32>(z0),
-                              static_cast<Uint32>(w), static_cast<Uint32>(h),
-                              static_cast<Uint32>(d)};
+                              static_cast<Uint32>(w), static_cast<Uint32>(h), static_cast<Uint32>(d)};
             slab.RunOffset = runOffset;
             slab.RunBytes = runBytes;
             body(slab);
@@ -427,8 +423,7 @@ namespace MobileGL::MG_Pipe {
             for (Uint64 y = 0; y < height; ++y) {
                 for (Uint64 x = 0; x < width; x += slabTexels) {
                     const Uint64 w = std::min(slabTexels, width - x);
-                    emit(x, y, z, w, 1, 1, (z * height + y) * rowStride + x * texelBytes,
-                         w * texelBytes);
+                    emit(x, y, z, w, 1, 1, (z * height + y) * rowStride + x * texelBytes, w * texelBytes);
                 }
             }
         }
@@ -442,8 +437,7 @@ namespace MobileGL::MG_Pipe {
     // MGPipeBuildSubRegion computes it. THE STRIDES STAY THE LEVEL'S: a clipped rect's rows are no
     // more contiguous inside the piece than inside the level, and a 0 would be read as "tightly
     // packed" - the whole-level spelling - which would repack the wrong bytes.
-    inline MGPSubRegion MGPipeBuildPieceRegion(const MGPBox& box, const MGPBox& piece,
-                                               const MGPipeLevelPitch& pitch) {
+    inline MGPSubRegion MGPipeBuildPieceRegion(const MGPBox& box, const MGPBox& piece, const MGPipeLevelPitch& pitch) {
         MGPSubRegion region{};
         region.X = box.X;
         region.Y = box.Y;
@@ -467,9 +461,8 @@ namespace MobileGL::MG_Pipe {
         const Int64 y1 = std::min<Int64>(static_cast<Int64>(a.Y) + a.H, static_cast<Int64>(b.Y) + b.H);
         const Int64 z1 = std::min<Int64>(static_cast<Int64>(a.Z) + a.D, static_cast<Int64>(b.Z) + b.D);
         if (x1 <= x0 || y1 <= y0 || z1 <= z0) return MGPBox{};
-        return MGPBox{static_cast<Int32>(x0), static_cast<Int32>(y0), static_cast<Int32>(z0),
-                      static_cast<Uint32>(x1 - x0), static_cast<Uint32>(y1 - y0),
-                      static_cast<Uint32>(z1 - z0)};
+        return MGPBox{static_cast<Int32>(x0),       static_cast<Int32>(y0),       static_cast<Int32>(z0),
+                      static_cast<Uint32>(x1 - x0), static_cast<Uint32>(y1 - y0), static_cast<Uint32>(z1 - z0)};
     }
 
     // THE REGIONS ONE PIECE CARRIES: every dirty rect clipped to the piece's box, each with its
@@ -478,9 +471,8 @@ namespace MobileGL::MG_Pipe {
     // the far side reads as tightly packed), and the piece's bytes have to cross whether or not
     // any of them changed, because the server's level image is assembled from these runs and a
     // hole in it is a texel read nothing on that side can answer.
-    inline SizeT MGPipeBuildSlabRegions(const MGPBox* rects, SizeT rectCount,
-                                        const MGPipeTextureSlab& slab, const MGPipeLevelPitch& pitch,
-                                        MGPSubRegion* out, SizeT maxOut) {
+    inline SizeT MGPipeBuildSlabRegions(const MGPBox* rects, SizeT rectCount, const MGPipeTextureSlab& slab,
+                                        const MGPipeLevelPitch& pitch, MGPSubRegion* out, SizeT maxOut) {
         if (out == nullptr || maxOut == 0) return 0;
         SizeT count = 0;
         for (SizeT i = 0; i < rectCount && count < maxOut; ++i) {
@@ -697,8 +689,8 @@ namespace MobileGL::MG_Pipe {
         // entry points (glTexParameter BASE_LEVEL) move no descriptor field; a OneLevel call
         // never is: a non-base level's extent moves no descriptor field, and a pending box kept
         // across a shrink would upload past the end of the new level.
-        void EmitResourceRespecify(ITextureObject& texture, MGPipeTextureRespecifyScope scope,
-                                   Uint32 uploadTarget, Uint32 level) {
+        void EmitResourceRespecify(ITextureObject& texture, MGPipeTextureRespecifyScope scope, Uint32 uploadTarget,
+                                   Uint32 level) {
             const MGPipeHandle handle = AcquireTexture(texture.GetLifetimeId(), &texture);
             // THE VIEW'S OWNER IS ACQUIRED FIRST, and no Entry& is held across it (m3): the
             // owner's slot can be higher than this table's size, so AcquireTexture would
@@ -734,8 +726,7 @@ namespace MobileGL::MG_Pipe {
             }
             Entry& entry = EntryFor(m_textures, handle);
             const MGPResourceDesc desc = MGPipeBuildTextureResourceDesc(
-                texture, handle, entry.BindMask, /*storageDefined=*/true, viewOf, bufferHandle, bufOffset,
-                bufSize);
+                texture, handle, entry.BindMask, /*storageDefined=*/true, viewOf, bufferHandle, bufOffset, bufSize);
             const Bool unchanged = entry.HasLastDesc && std::memcmp(&entry.LastDesc, &desc, sizeof(desc)) == 0;
 
             // THE KEYS THIS CALL DROPS. `keyCount == 0` is the whole resource (a null level
@@ -772,9 +763,9 @@ namespace MobileGL::MG_Pipe {
             // REFUSED. A create rather than a respecify, because that is what the record's
             // absence means and because the applier starts a record over on a create.
             if (!MGPipeHandleIsPublished(MGPipeKind::Texture, handle)) {
-                const MGPResourceDesc createDesc = MGPipeBuildTextureResourceDesc(
-                    texture, handle, entry.BindMask, /*storageDefined=*/false, viewOf, bufferHandle,
-                    bufOffset, bufSize);
+                const MGPResourceDesc createDesc =
+                    MGPipeBuildTextureResourceDesc(texture, handle, entry.BindMask, /*storageDefined=*/false, viewOf,
+                                                   bufferHandle, bufOffset, bufSize);
                 NoteDesc(createDesc, /*isCreate=*/true);
                 PublishCreate(MGPipeKind::Texture, handle, entry, createDesc);
             }
@@ -795,8 +786,8 @@ namespace MobileGL::MG_Pipe {
                 static_cast<Uint32>(MGPipeResourceTargetForTextureTarget(texture.GetTarget())), uploadTarget);
             Bool accepted = false;
             if (keyCount == 0) {
-                accepted = RespecifyOnce(texture, handle, entry, desc, nullptr, viewOf, bufferHandle, bufOffset,
-                                         bufSize);
+                accepted =
+                    RespecifyOnce(texture, handle, entry, desc, nullptr, viewOf, bufferHandle, bufOffset, bufSize);
             } else {
                 for (Uint32 i = 0; i < keyCount; ++i) {
                     MGPRespecifiedLevel key{};
@@ -807,13 +798,13 @@ namespace MobileGL::MG_Pipe {
                         MGLOG_E_ONCE("MGPipe: a per-level texture respecify had no mipmap storage; it was not emitted");
                         return;
                     }
-                    const IntVec3 exactLevelExtent = mipmap->GetMipmapTexelSize(
-                        static_cast<TextureUploadTarget>(uploadTarget), key.Level);
+                    const IntVec3 exactLevelExtent =
+                        mipmap->GetMipmapTexelSize(static_cast<TextureUploadTarget>(uploadTarget), key.Level);
                     key.Width = static_cast<Uint32>(exactLevelExtent.x());
                     key.Height = static_cast<Uint32>(exactLevelExtent.y());
                     key.Depth = static_cast<Uint32>(exactLevelExtent.z());
-                    accepted = RespecifyOnce(texture, handle, entry, desc, &key, viewOf, bufferHandle, bufOffset,
-                                             bufSize);
+                    accepted =
+                        RespecifyOnce(texture, handle, entry, desc, &key, viewOf, bufferHandle, bufOffset, bufSize);
                     if (!accepted) break;
                 }
             }
@@ -833,8 +824,7 @@ namespace MobileGL::MG_Pipe {
                                    const MGPTextureParams& params) {
             Entry& entry = EntryFor(m_textures, handle);
             const MGPResourceDesc healDesc = MGPipeBuildTextureResourceDesc(
-                texture, handle, bindMask, /*storageDefined=*/false, kMGPipeNullHandle,
-                kMGPipeNullHandle, 0, 0);
+                texture, handle, bindMask, /*storageDefined=*/false, kMGPipeNullHandle, kMGPipeNullHandle, 0, 0);
             NoteDesc(healDesc, /*isCreate=*/true);
             PublishCreate(MGPipeKind::Texture, handle, entry, healDesc);
             const auto* mipmap = MG_State::GLState::AsMipmapTexture(&texture);
@@ -897,8 +887,7 @@ namespace MobileGL::MG_Pipe {
             // at the recycle, as the belt, for a death this emitter was not told about.
             MGPipeSamplerCsoCache& cache = MGPipeSamplerCsoCacheInstance();
             Uint64 samplerBytes = 0;
-            const MGPipeHandle builtinSampler =
-                cache.Acquire(sampler->GetAllSamplerParameters(), samplerBytes);
+            const MGPipeHandle builtinSampler = cache.Acquire(sampler->GetAllSamplerParameters(), samplerBytes);
             m_samplerCsoPayloadBytes += samplerBytes;
             if (entry.BuiltinSampler == builtinSampler) {
                 // The value did not move, so the cache handed back the handle this entry
@@ -947,9 +936,9 @@ namespace MobileGL::MG_Pipe {
                 // deduped away), and the parameters land on the record that now exists. The
                 // same repair covers the served context's teardown scope, where the records are
                 // dropped while the objects live on. One retry, never a loop.
-                const MGPResourceDesc healDesc = MGPipeBuildTextureResourceDesc(
-                    texture, handle, entry.BindMask, /*storageDefined=*/false, kMGPipeNullHandle,
-                    kMGPipeNullHandle, 0, 0);
+                const MGPResourceDesc healDesc =
+                    MGPipeBuildTextureResourceDesc(texture, handle, entry.BindMask, /*storageDefined=*/false,
+                                                   kMGPipeNullHandle, kMGPipeNullHandle, 0, 0);
                 NoteDesc(healDesc, /*isCreate=*/true);
                 PublishCreate(MGPipeKind::Texture, handle, entry, healDesc);
                 const auto* mipmap = MG_State::GLState::AsMipmapTexture(&texture);
@@ -983,9 +972,8 @@ namespace MobileGL::MG_Pipe {
         void EmitRenderbufferCreate(RenderbufferObject& renderbuffer) {
             const MGPipeHandle handle = AcquireRenderbuffer(renderbuffer.GetLifetimeId());
             Entry& entry = EntryFor(m_renderbuffers, handle);
-            const MGPResourceDesc desc = MGPipeBuildRenderbufferResourceDesc(renderbuffer, handle,
-                                                                            entry.BindMask,
-                                                                            /*storageDefined=*/false);
+            const MGPResourceDesc desc = MGPipeBuildRenderbufferResourceDesc(renderbuffer, handle, entry.BindMask,
+                                                                             /*storageDefined=*/false);
             NoteDesc(desc, /*isCreate=*/true);
             PublishCreate(MGPipeKind::Renderbuffer, handle, entry, desc);
         }
@@ -1003,13 +991,12 @@ namespace MobileGL::MG_Pipe {
         void EmitRenderbufferRespecify(RenderbufferObject& renderbuffer) {
             const MGPipeHandle handle = AcquireRenderbuffer(renderbuffer.GetLifetimeId());
             Entry& entry = EntryFor(m_renderbuffers, handle);
-            const MGPResourceDesc desc = MGPipeBuildRenderbufferResourceDesc(renderbuffer, handle,
-                                                                            entry.BindMask,
-                                                                            /*storageDefined=*/true);
+            const MGPResourceDesc desc = MGPipeBuildRenderbufferResourceDesc(renderbuffer, handle, entry.BindMask,
+                                                                             /*storageDefined=*/true);
             if (entry.HasLastDesc && std::memcmp(&entry.LastDesc, &desc, sizeof(desc)) == 0) return;
             if (!MGPipeHandleIsPublished(MGPipeKind::Renderbuffer, handle)) {
-                const MGPResourceDesc createDesc = MGPipeBuildRenderbufferResourceDesc(
-                    renderbuffer, handle, entry.BindMask, /*storageDefined=*/false);
+                const MGPResourceDesc createDesc =
+                    MGPipeBuildRenderbufferResourceDesc(renderbuffer, handle, entry.BindMask, /*storageDefined=*/false);
                 NoteDesc(createDesc, /*isCreate=*/true);
                 PublishCreate(MGPipeKind::Renderbuffer, handle, entry, createDesc);
             }
@@ -1042,8 +1029,8 @@ namespace MobileGL::MG_Pipe {
             if (m_draining) return;
             const MGPipeHandle handle = AcquireTexture(texture.GetLifetimeId(), &texture);
             Entry& entry = EntryFor(m_textures, handle);
-            const Uint32 key = PackLevelKey(static_cast<MobileGL::TextureUploadTarget>(uploadTarget),
-                                            static_cast<Uint>(level));
+            const Uint32 key =
+                PackLevelKey(static_cast<MobileGL::TextureUploadTarget>(uploadTarget), static_cast<Uint>(level));
             for (const Uint32 present : entry.DrainKeys) {
                 if (present == key) return;
             }
@@ -1263,8 +1250,7 @@ namespace MobileGL::MG_Pipe {
         // (D-I1, c0b): MGPipeHandleIsPublished is what the death helper reads, so latching on
         // a call the applier refused would emit a resource_destroy for a record that does not
         // exist - a refused call the applier asserts on in a verify build.
-        void PublishCreate(MGPipeKind kind, MGPipeHandle handle, Entry& entry,
-                           const MGPResourceDesc& desc) {
+        void PublishCreate(MGPipeKind kind, MGPipeHandle handle, Entry& entry, const MGPResourceDesc& desc) {
             Bool accepted = false;
             Bool dispatched = false;
             if constexpr (MGPipeTextureRecordsReachTheApplier()) {
@@ -1303,9 +1289,9 @@ namespace MobileGL::MG_Pipe {
             Bool accepted = ApplyRespecify(desc, key);
             if constexpr (MGPipeTextureRecordsReachTheApplier()) {
                 if (!accepted) {
-                    const MGPResourceDesc healDesc = MGPipeBuildTextureResourceDesc(
-                        texture, handle, entry.BindMask, /*storageDefined=*/false, viewOf, bufferHandle,
-                        bufOffset, bufSize);
+                    const MGPResourceDesc healDesc =
+                        MGPipeBuildTextureResourceDesc(texture, handle, entry.BindMask, /*storageDefined=*/false,
+                                                       viewOf, bufferHandle, bufOffset, bufSize);
                     NoteDesc(healDesc, /*isCreate=*/true);
                     PublishCreate(MGPipeKind::Texture, handle, entry, healDesc);
                     accepted = ApplyRespecify(desc, key);
@@ -1390,15 +1376,16 @@ namespace MobileGL::MG_Pipe {
             // and a piece clips each to its slab.
             mipmap->GetStorageDirtyFootprint(uploadTarget, level, m_footprint);
             m_rectBoxes.clear();
-            const Bool wholeLevelWrite =
-                m_footprint.size() == 1 && m_footprint.front().lo.x() <= 0 && m_footprint.front().lo.y() <= 0 &&
-                m_footprint.front().lo.z() <= 0 && m_footprint.front().hi.x() >= levelSize.x() &&
-                m_footprint.front().hi.y() >= levelSize.y() &&
-                m_footprint.front().hi.z() >= std::max<Int>(levelSize.z(), 1);
+            const Bool wholeLevelWrite = m_footprint.size() == 1 && m_footprint.front().lo.x() <= 0 &&
+                                         m_footprint.front().lo.y() <= 0 && m_footprint.front().lo.z() <= 0 &&
+                                         m_footprint.front().hi.x() >= levelSize.x() &&
+                                         m_footprint.front().hi.y() >= levelSize.y() &&
+                                         m_footprint.front().hi.z() >= std::max<Int>(levelSize.z(), 1);
             if (wholeLevelWrite) {
                 // The box is the story.
             } else if (m_footprint.size() <= static_cast<SizeT>(kMGPipeMaxPendingUploadRegions)) {
-                for (const auto& box : m_footprint) m_rectBoxes.push_back(MGPipeBoxOfDirtyRegion(box));
+                for (const auto& box : m_footprint)
+                    m_rectBoxes.push_back(MGPipeBoxOfDirtyRegion(box));
             } else {
                 MGLOG_W_ONCE("MGPipe: texture {slot=%u, gen=%u} level %u has %zu disjoint dirty boxes, more than one "
                              "record carries (%u); it goes out as the storage's rect list, which covers the writes "
@@ -1406,9 +1393,10 @@ namespace MobileGL::MG_Pipe {
                              pending.Handle.Slot, pending.Handle.Gen, static_cast<Uint>(level), m_footprint.size(),
                              kMGPipeMaxPendingUploadRegions);
                 MG_State::GLState::MipmapDirtyRegion rects[MG_State::GLState::MipmapStorage::kMaxDirtyRects];
-                const SizeT coverCount = mipmap->GetStorageDirtyRects(
-                    uploadTarget, level, rects, MG_State::GLState::MipmapStorage::kMaxDirtyRects);
-                for (SizeT i = 0; i < coverCount; ++i) m_rectBoxes.push_back(MGPipeBoxOfDirtyRegion(rects[i]));
+                const SizeT coverCount = mipmap->GetStorageDirtyRects(uploadTarget, level, rects,
+                                                                      MG_State::GLState::MipmapStorage::kMaxDirtyRects);
+                for (SizeT i = 0; i < coverCount; ++i)
+                    m_rectBoxes.push_back(MGPipeBoxOfDirtyRegion(rects[i]));
             }
             const SizeT rectCount = m_rectBoxes.size();
             const MGPBox* rectBoxes = m_rectBoxes.data();
@@ -1468,9 +1456,8 @@ namespace MobileGL::MG_Pipe {
                     // is: "the bytes this record declares ARE the level shadow". For a piece that
                     // is the piece's own run of it, and the regions' SrcOffsets index into exactly
                     // that run.
-                    pieceAccepted = MGPipeRouteResourceSubData(
-                        m_lastSubData, run, runBytes,
-                        m_regions.empty() ? nullptr : m_regions.data());
+                    pieceAccepted = MGPipeRouteResourceSubData(m_lastSubData, run, runBytes,
+                                                               m_regions.empty() ? nullptr : m_regions.data());
                 } else {
                     (void)run;
                     (void)runBytes;
@@ -1496,14 +1483,13 @@ namespace MobileGL::MG_Pipe {
                         // One slot per rect plus one for a piece no rect reaches, which is the
                         // most MGPipeBuildSlabRegions can write.
                         m_regions.assign(std::max<SizeT>(rectCount, 1), MGPSubRegion{});
-                        const SizeT pieceRegions = MGPipeBuildSlabRegions(
-                            rectBoxes, rectCount, slab, pitch, m_regions.data(), m_regions.size());
+                        const SizeT pieceRegions = MGPipeBuildSlabRegions(rectBoxes, rectCount, slab, pitch,
+                                                                          m_regions.data(), m_regions.size());
                         m_regions.resize(pieceRegions);
                         fillRecord(slab.Box,
-                                   static_cast<Uint64>(reinterpret_cast<std::uintptr_t>(shadow)) +
-                                       slab.RunOffset);
-                        const Bool pieceAccepted = emitRecord(
-                            static_cast<const Uint8*>(shadow) + slab.RunOffset, slab.RunBytes);
+                                   static_cast<Uint64>(reinterpret_cast<std::uintptr_t>(shadow)) + slab.RunOffset);
+                        const Bool pieceAccepted =
+                            emitRecord(static_cast<const Uint8*>(shadow) + slab.RunOffset, slab.RunBytes);
                         accepted = accepted && pieceAccepted;
                     });
             }

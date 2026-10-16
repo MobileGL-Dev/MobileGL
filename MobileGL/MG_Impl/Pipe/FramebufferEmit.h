@@ -268,10 +268,8 @@ namespace MobileGL::MG_Pipe {
             // that "nothing moved" costs one compare rather than two.
             const Uint64 drawHash = drawOk ? drawState.ContentHash : 0;
             const Uint64 readHash = readOk ? readState.ContentHash : 0;
-            const Uint64 combined =
-                MGPipeMixShutter(MGPipeMixShutter(drawHash, readHash), shared ? 1u : 0u);
-            if (!MGPipeSetHashSuppressorInstance().ShouldEmit(MGPipeSuppressorSlot::SetFramebufferState,
-                                                             combined)) {
+            const Uint64 combined = MGPipeMixShutter(MGPipeMixShutter(drawHash, readHash), shared ? 1u : 0u);
+            if (!MGPipeSetHashSuppressorInstance().ShouldEmit(MGPipeSuppressorSlot::SetFramebufferState, combined)) {
                 return 0;
             }
 
@@ -405,7 +403,8 @@ namespace MobileGL::MG_Pipe {
         void ResetForTest() {
             Reset();
             ResetCounters();
-            for (auto& memo : m_buildMemo) memo.Valid = false;
+            for (auto& memo : m_buildMemo)
+                memo.Valid = false;
             m_lastDraw = MGPFramebufferState{};
             m_lastRead = MGPFramebufferState{};
             m_lastNamed = MGPFramebufferState{};
@@ -453,15 +452,14 @@ namespace MobileGL::MG_Pipe {
             // truncating it silently is exactly the bug class this phase is closing. The
             // backend half of the same refusal (bit 9 declined at its first lookup, with one
             // ERROR naming the cap) rides ResolveFramebufferSubsystemArm.
-            for (Int point = static_cast<Int>(FramebufferAttachmentType::Color0) +
-                             static_cast<Int>(kMGPipeMaxColorAttachments);
+            for (Int point =
+                     static_cast<Int>(FramebufferAttachmentType::Color0) + static_cast<Int>(kMGPipeMaxColorAttachments);
                  point <= static_cast<Int>(FramebufferAttachmentType::ColorMax); ++point) {
                 if (fbo.GetAttachment(static_cast<FramebufferAttachmentType>(point)).IsEmpty()) continue;
                 MGLOG_E_ONCE("MGPipe: framebuffer %u has an attachment at colour point %d, which is at or "
                              "above the wire width of %u - set_framebuffer_state is refused rather than "
                              "truncated and the legacy arm runs",
-                             fbo.GetExternalIndex(),
-                             point - static_cast<Int>(FramebufferAttachmentType::Color0),
+                             fbo.GetExternalIndex(), point - static_cast<Int>(FramebufferAttachmentType::Color0),
                              static_cast<Uint>(kMGPipeMaxColorAttachments));
                 ++m_refusals;
                 return false;
@@ -478,8 +476,7 @@ namespace MobileGL::MG_Pipe {
                                  "at or above the wire width of %u - set_framebuffer_state is refused "
                                  "rather than truncated and the legacy arm runs",
                                  fbo.GetExternalIndex(),
-                                 static_cast<Int>(tokens[i]) -
-                                     static_cast<Int>(FramebufferAttachmentType::Color0),
+                                 static_cast<Int>(tokens[i]) - static_cast<Int>(FramebufferAttachmentType::Color0),
                                  static_cast<Uint>(i), static_cast<Uint>(kMGPipeMaxColorAttachments));
                     ++m_refusals;
                     return false;
@@ -505,9 +502,9 @@ namespace MobileGL::MG_Pipe {
             // the draw-buffer indices below still map BackLeft to slot 0.
             if (out.IsDefault == 0) {
                 for (SizeT i = 0; i < kMGPipeMaxColorAttachments; ++i) {
-                    out.Color[i] = SurfaceOf(fbo, static_cast<FramebufferAttachmentType>(
-                                                      static_cast<Int>(FramebufferAttachmentType::Color0) +
-                                                      static_cast<Int>(i)));
+                    out.Color[i] =
+                        SurfaceOf(fbo, static_cast<FramebufferAttachmentType>(
+                                           static_cast<Int>(FramebufferAttachmentType::Color0) + static_cast<Int>(i)));
                 }
                 out.Depth = SurfaceOf(fbo, FramebufferAttachmentType::Depth);
                 out.Stencil = SurfaceOf(fbo, FramebufferAttachmentType::Stencil);
@@ -594,8 +591,7 @@ namespace MobileGL::MG_Pipe {
             // DEPTH_STENCIL, the two sticky bind bits nothing set before P4a. Sticky and ORed,
             // so a texture that was ever a colour attachment keeps saying so, and the mask is
             // republished on the resource's next respecify.
-            const Uint16 bit = (type == FramebufferAttachmentType::Depth ||
-                                type == FramebufferAttachmentType::Stencil)
+            const Uint16 bit = (type == FramebufferAttachmentType::Depth || type == FramebufferAttachmentType::Stencil)
                                    ? static_cast<Uint16>(kMGPipeBindDepthStencil)
                                    : static_cast<Uint16>(kMGPipeBindRenderTarget);
             MGPipeHandle res = kMGPipeNullHandle;
@@ -622,15 +618,13 @@ namespace MobileGL::MG_Pipe {
                 if (!found) {
                     out.Width = static_cast<Uint16>(std::clamp<Int>(size.x(), 0, 0xFFFF));
                     out.Height = static_cast<Uint16>(std::clamp<Int>(size.y(), 0, 0xFFFF));
-                    out.Layers = static_cast<Uint16>(
-                        attachment.IsLayered() ? std::clamp<Int>(size.z(), 1, 0xFFFF) : 1);
+                    out.Layers = static_cast<Uint16>(attachment.IsLayered() ? std::clamp<Int>(size.z(), 1, 0xFFFF) : 1);
                     if (attachment.IsTexture()) {
                         const auto& texture = attachment.GetTexture();
                         out.Samples = static_cast<Uint16>(std::max<Int>(texture->GetSamples(), 0));
                         out.FixedSampleLocations = texture->HasFixedSampleLocations() ? 1 : 0;
                     } else {
-                        out.Samples = static_cast<Uint16>(
-                            std::max<Int>(attachment.GetRenderbuffer()->GetSamples(), 0));
+                        out.Samples = static_cast<Uint16>(std::max<Int>(attachment.GetRenderbuffer()->GetSamples(), 0));
                         out.FixedSampleLocations = 1;
                     }
                     found = true;
@@ -672,8 +666,7 @@ namespace MobileGL::MG_Pipe {
             if (entry.IsTexture) {
                 const auto& texture = attachment.GetTexture();
                 return texture->GetLifetimeId() == entry.LifetimeId &&
-                       texture->GetShapeVersion() == entry.ShapeVersion &&
-                       texture->GetSamples() == entry.Samples &&
+                       texture->GetShapeVersion() == entry.ShapeVersion && texture->GetSamples() == entry.Samples &&
                        texture->HasFixedSampleLocations() == entry.FixedSampleLocations;
             }
             const auto& renderbuffer = attachment.GetRenderbuffer();

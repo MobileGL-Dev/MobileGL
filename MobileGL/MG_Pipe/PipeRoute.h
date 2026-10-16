@@ -18,7 +18,6 @@
 #pragma once
 #include <Includes.h>
 
-
 #include "MGPipe.h"
 #include "PipeApply.h"
 // P12: MGPipeHandleIsPublished, the latch the respecify predicate below reads.
@@ -72,10 +71,9 @@ namespace MobileGL::MG_Pipe {
         // the stage of each lives in `ProgramObject::m_linkedShaderSnapshot`, which is GL-thread
         // state and not an artifact. The client arm frames it in front of the archive; the
         // monolith arm ignores it, because its twin reads the snapshot directly.
-        void (*CreateShaderState)(const MGPProgramDesc* desc,
-                                  const MG_State::GLState::LinkArtifacts* link,
-                                  const MG_State::GLState::SpirvArtifacts* spirv,
-                                  const Uint32* linkedStages, Uint32 linkedStageCount);
+        void (*CreateShaderState)(const MGPProgramDesc* desc, const MG_State::GLState::LinkArtifacts* link,
+                                  const MG_State::GLState::SpirvArtifacts* spirv, const Uint32* linkedStages,
+                                  Uint32 linkedStageCount);
         void (*SetProgramBindings)(const MGPProgramBindings* hdr, const Int32* blockBindings,
                                    const MGPProgramSamplerUnit* samplerUnits,
                                    const MGPProgramStorageOverride* storageOverrides,
@@ -124,7 +122,11 @@ namespace MobileGL::MG_Pipe {
     // Which arm is installed, so a case can assert the arm it thinks it is testing rather than
     // trusting `MOBILEGL_TRANSPORT`. `MG_Config::Transport` says what was ASKED for; this says
     // what the table actually does.
-    enum class MGPipeRouteArm : Uint8 { kNone, kMonolith, kClientWire };
+    enum class MGPipeRouteArm : Uint8 {
+        kNone,
+        kMonolith,
+        kClientWire
+    };
     MGPipeRouteArm MGPipeInstalledArm();
     void MGPipeNoteInstalledArm(MGPipeRouteArm arm);
 
@@ -151,8 +153,7 @@ namespace MobileGL::MG_Pipe {
     // latch clear, so later records keep waiting for the real answer.
     inline Bool MGPipeResourceRespecifyWantsItsReply(const MGPResourceDesc& desc) {
         if (MGPipeInstalledArm() != MGPipeRouteArm::kClientWire) return true;
-        if (static_cast<MGPipeResourceTarget>(desc.Target) == MGPipeResourceTarget::Buffer)
-            return false;
+        if (static_cast<MGPipeResourceTarget>(desc.Target) == MGPipeResourceTarget::Buffer) return false;
         return !MGPipeHandleIsPublished(MGPipeKind::Texture, desc.Resource);
     }
     inline Bool MGPipeRouteResourceRespecify(const MGPResourceDesc& desc, const void* initialBytes,
@@ -162,8 +163,7 @@ namespace MobileGL::MG_Pipe {
     inline void MGPipeRouteResourceDestroy(const MGPHandleOnly& handle) {
         MGP_ResourceDestroy(&handle);
     }
-    inline void* MGPipeRouteMapPersistent(const MGPHandleOnly& handle, Uint64 size,
-                                          const void* seedBytes) {
+    inline void* MGPipeRouteMapPersistent(const MGPHandleOnly& handle, Uint64 size, const void* seedBytes) {
         return gMGPipeRouteEscapes.MapPersistent(&handle, size, seedBytes);
     }
     inline void MGPipeRouteUnmapPersistent(const MGPHandleOnly& handle) {
@@ -190,8 +190,7 @@ namespace MobileGL::MG_Pipe {
         return record.Target != kMGPipeResourceTargetBuffer;
     }
 
-    inline Bool MGPipeRouteResourceSubData(const MGPSubData& record, const void* bytes,
-                                           Uint64 byteCount,
+    inline Bool MGPipeRouteResourceSubData(const MGPSubData& record, const void* bytes, Uint64 byteCount,
                                            const MGPSubRegion* regions = nullptr) {
         // THE SLOT IS STILL MINTED AND STILL TAKEN, even for the buffer half. The row keeps
         // kReplySlot on the wire, the server still posts, and the mailbox's "every minted slot
@@ -206,8 +205,7 @@ namespace MobileGL::MG_Pipe {
         if (MGPipeInstalledArm() == MGPipeRouteArm::kClientWire) return accepted;
         return MGPipeSubDataWantsItsReply(record) ? accepted : true;
     }
-    inline void MGPipeRouteBufferSubDataResident(const MGPSubData& record, const void* bytes,
-                                                 Uint64 byteCount) {
+    inline void MGPipeRouteBufferSubDataResident(const MGPSubData& record, const void* bytes, Uint64 byteCount) {
         MGP_BufferSubDataResident(&record, bytes, byteCount);
     }
     inline void MGPipeRouteResourceFlushRange(const MGPFlushRange& record, const void* bytes) {
@@ -223,8 +221,7 @@ namespace MobileGL::MG_Pipe {
     }
 
     // ---- render state ------------------------------------------------------------------
-    inline void MGPipeRouteCreateRenderState(const MGPRenderStateDesc& desc,
-                                             const void* chunkBytes) {
+    inline void MGPipeRouteCreateRenderState(const MGPRenderStateDesc& desc, const void* chunkBytes) {
         MGP_CreateRenderState(&desc, chunkBytes, desc.Blob.Size);
     }
     inline void MGPipeRouteBindRenderState(const MGPBindRenderState& bind) {
@@ -239,7 +236,9 @@ namespace MobileGL::MG_Pipe {
     inline void MGPipeRouteSetPixelPackState(const MGPPixelPackState& pack) {
         MGP_SetPixelPackState(&pack);
     }
-    inline void MGPipeRouteSetPatchState(const MGPPatchState& patch) { MGP_SetPatchState(&patch); }
+    inline void MGPipeRouteSetPatchState(const MGPPatchState& patch) {
+        MGP_SetPatchState(&patch);
+    }
     // P5c (rv, CONTRACT-P5C.md §5.3): emitted ONLY with an active transport (PipeFill.cpp
     // gates on it); under monolith the row is never produced and the fields keep coming
     // through the residual fill (G1). The row IS an ordinary routed set_* otherwise - the
@@ -248,14 +247,12 @@ namespace MobileGL::MG_Pipe {
     inline void MGPipeRouteSetContextValues(const MGPContextValues& values) {
         MGP_SetContextValues(&values);
     }
-    inline void MGPipeRouteSetVertexAttribDefaults(const MGPVertexAttribDefaults& hdr,
-                                                   const MGPAttribValue* tail) {
+    inline void MGPipeRouteSetVertexAttribDefaults(const MGPVertexAttribDefaults& hdr, const MGPAttribValue* tail) {
         MGP_SetVertexAttribDefaults(&hdr, tail, hdr.Count);
     }
 
     // ---- vertex input ------------------------------------------------------------------
-    inline void MGPipeRouteCreateVertexElements(const MGPVertexElements& desc,
-                                                const void* blobBytes) {
+    inline void MGPipeRouteCreateVertexElements(const MGPVertexElements& desc, const void* blobBytes) {
         MGP_CreateVertexElements(&desc, blobBytes, desc.Blob.Size);
     }
     inline void MGPipeRouteBindVertexElements(const MGPHandleOnly& handle) {
@@ -264,8 +261,7 @@ namespace MobileGL::MG_Pipe {
     inline void MGPipeRouteDeleteVertexElements(const MGPHandleOnly& handle) {
         MGP_DeleteVertexElements(&handle);
     }
-    inline void MGPipeRouteSetVertexBuffers(const MGPVertexBuffers& hdr,
-                                            const MGPVertexBuffer* tail) {
+    inline void MGPipeRouteSetVertexBuffers(const MGPVertexBuffers& hdr, const MGPVertexBuffer* tail) {
         MGP_SetVertexBuffers(&hdr, tail, hdr.Count);
     }
     inline void MGPipeRouteSetIndexBuffer(const MGPIndexBuffer& record) {
@@ -278,8 +274,7 @@ namespace MobileGL::MG_Pipe {
     }
     // The parameters row declares Size 0 today and table 1 row 17 puts it under rule A, so
     // the length is stated here once, from the type the applier stores by value.
-    inline void MGPipeRouteCreateSamplerState(const MGPSamplerDesc& desc,
-                                              const SamplerParameters* parameters) {
+    inline void MGPipeRouteCreateSamplerState(const MGPSamplerDesc& desc, const SamplerParameters* parameters) {
         MGP_CreateSamplerState(&desc, parameters, sizeof(SamplerParameters));
     }
     inline void MGPipeRouteDeleteSamplerState(const MGPHandleOnly& handle) {
@@ -319,10 +314,9 @@ namespace MobileGL::MG_Pipe {
     }
 
     // ---- programs ----------------------------------------------------------------------
-    inline void MGPipeRouteCreateShaderState(const MGPProgramDesc& desc,
-                                             const MG_State::GLState::LinkArtifacts* link,
-                                             const MG_State::GLState::SpirvArtifacts* spirv,
-                                             const Uint32* linkedStages, Uint32 linkedStageCount) {
+    inline void MGPipeRouteCreateShaderState(const MGPProgramDesc& desc, const MG_State::GLState::LinkArtifacts* link,
+                                             const MG_State::GLState::SpirvArtifacts* spirv, const Uint32* linkedStages,
+                                             Uint32 linkedStageCount) {
         gMGPipeRouteEscapes.CreateShaderState(&desc, link, spirv, linkedStages, linkedStageCount);
     }
     inline void MGPipeRouteBindShaderState(const MGPHandleOnly& handle) {
@@ -337,16 +331,14 @@ namespace MobileGL::MG_Pipe {
     inline void MGPipeRouteSetDispatchProgram(const MGPHandleOnly& handle) {
         MGP_SetDispatchProgram(&handle);
     }
-    inline void MGPipeRouteSetGlobalConstants(const MGPGlobalConstants& record, const void* bytes,
-                                              Uint64 byteCount) {
+    inline void MGPipeRouteSetGlobalConstants(const MGPGlobalConstants& record, const void* bytes, Uint64 byteCount) {
         MGP_SetGlobalConstants(&record, bytes, byteCount);
     }
     // P5e (pg), opcode 80. The fifth escape; see MGPipeRouteEscapes above for why this row has
     // no generated shape. `storageOverrideNames` is index-aligned with `storageOverrides` and
     // is what the applier copies into the record - the MGHostSpan inside each override element
     // describes where the name lives on the WIRE and is resolved by the decoder, never here.
-    inline void MGPipeRouteSetProgramBindings(const MGPProgramBindings& hdr,
-                                              const Int32* blockBindings,
+    inline void MGPipeRouteSetProgramBindings(const MGPProgramBindings& hdr, const Int32* blockBindings,
                                               const MGPProgramSamplerUnit* samplerUnits,
                                               const MGPProgramStorageOverride* storageOverrides,
                                               const char* const* storageOverrideNames) {
@@ -355,4 +347,3 @@ namespace MobileGL::MG_Pipe {
     }
 
 } // namespace MobileGL::MG_Pipe
-

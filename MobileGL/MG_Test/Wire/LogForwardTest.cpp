@@ -101,7 +101,8 @@ namespace {
             m_cv.notify_all();
             m_cv.wait(lock, [this] { return m_open || m_cut; });
             if (m_cut) return MOBILEGL_ERR_TRANSPORT_CLOSED;
-            m_written.push_back(Decode(static_cast<const std::uint8_t*>(bytes.data), static_cast<std::size_t>(bytes.size)));
+            m_written.push_back(
+                Decode(static_cast<const std::uint8_t*>(bytes.data), static_cast<std::size_t>(bytes.size)));
             m_cv.notify_all();
             return MOBILEGL_OK;
         }
@@ -163,7 +164,9 @@ namespace {
         return line + "\n";
     }
 
-    bool Contains(const std::string& text, const std::string& needle) { return text.find(needle) != std::string::npos; }
+    bool Contains(const std::string& text, const std::string& needle) {
+        return text.find(needle) != std::string::npos;
+    }
 
     // The count a LogForward notice names ("... - N line(s) ..."), or -1.
     long long NoticeCount(const std::string& text, const char* word) {
@@ -270,7 +273,8 @@ namespace {
         if (FILE* file = std::fopen(path.c_str(), "rb")) {
             char chunk[4096];
             std::size_t got = 0;
-            while ((got = std::fread(chunk, 1, sizeof(chunk), file)) > 0) all.append(chunk, got);
+            while ((got = std::fread(chunk, 1, sizeof(chunk), file)) > 0)
+                all.append(chunk, got);
             std::fclose(file);
         }
         return all;
@@ -422,12 +426,14 @@ namespace {
         long long offeringMs = -1;
         std::thread caller([&] {
             const auto start = Clock::now();
-            for (int i = 1; i <= kLines; ++i) channel.Offer(MOBILEGL_LOG_LEVEL_WARN, Numbered("stall warn", i, 100).c_str());
+            for (int i = 1; i <= kLines; ++i)
+                channel.Offer(MOBILEGL_LOG_LEVEL_WARN, Numbered("stall warn", i, 100).c_str());
             offeringMs = MillisecondsSince(start);
             done = true;
         });
         const auto start = Clock::now();
-        while (!done && MillisecondsSince(start) < 5000) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        while (!done && MillisecondsSince(start) < 5000)
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
         const bool heldTheCaller = !done;
         transport.Open(); // lets a held caller finish, so a red is a red and not a hang
         caller.join();
@@ -452,7 +458,8 @@ namespace {
         EXPECT_EQ(notice.text[0], '[') << "a notice must carry a header, so the client files it as it came";
         EXPECT_EQ(counters.notices, 1u);
         // Every line is accounted for: written, or counted as dropped.
-        EXPECT_EQ(SeriesIndices(written, "stall warn").size() + counters.lossyDropped, static_cast<std::size_t>(kLines));
+        EXPECT_EQ(SeriesIndices(written, "stall warn").size() + counters.lossyDropped,
+                  static_cast<std::size_t>(kLines));
         EXPECT_EQ(counters.forwarded, SeriesIndices(written, "stall warn").size() + 2); // + primer, + after
     }
 
@@ -472,8 +479,10 @@ namespace {
         transport.Open();
         counters = channel.Close();
         const auto errors = SeriesIndices(transport.Frames(), "mixed error");
-        ASSERT_EQ(errors.size(), static_cast<std::size_t>(kEach)) << "an ERROR line was lost while WARN lines were dropped";
-        for (int i = 0; i < kEach; ++i) EXPECT_EQ(errors[i], i + 1) << "ERROR lines out of order at " << i;
+        ASSERT_EQ(errors.size(), static_cast<std::size_t>(kEach))
+            << "an ERROR line was lost while WARN lines were dropped";
+        for (int i = 0; i < kEach; ++i)
+            EXPECT_EQ(errors[i], i + 1) << "ERROR lines out of order at " << i;
         EXPECT_EQ(counters.errorsCoalesced, 0u);
         EXPECT_EQ(counters.abandoned, 0u);
     }
@@ -486,7 +495,8 @@ namespace {
         limits.errorQueueBytes = 4 * 1024;
         LogForwardChannel channel(transport, &GatedTransport::CutThunk, &transport, limits);
         constexpr int kLines = 200;
-        for (int i = 1; i <= kLines; ++i) channel.Offer(MOBILEGL_LOG_LEVEL_ERROR, Numbered("capped error", i, 60).c_str());
+        for (int i = 1; i <= kLines; ++i)
+            channel.Offer(MOBILEGL_LOG_LEVEL_ERROR, Numbered("capped error", i, 60).c_str());
         auto counters = channel.Counters();
         EXPECT_GT(counters.errorsCoalesced, 0u);
         transport.Open();
@@ -502,7 +512,8 @@ namespace {
             coalescedNamed += named;
         }
         EXPECT_EQ(coalescedNamed, static_cast<long long>(counters.errorsCoalesced));
-        EXPECT_EQ(SeriesIndices(written, "capped error").size() + counters.errorsCoalesced, static_cast<std::size_t>(kLines))
+        EXPECT_EQ(SeriesIndices(written, "capped error").size() + counters.errorsCoalesced,
+                  static_cast<std::size_t>(kLines))
             << "an ERROR line was neither written nor counted";
         EXPECT_EQ(written.back().text, "after the error gap\n");
     }
@@ -515,16 +526,19 @@ namespace {
         LogForwardChannel channel(transport, &GatedTransport::CutThunk, &transport, limits);
         constexpr int kLines = 24;
         const auto start = Clock::now();
-        for (int i = 1; i <= kLines; ++i) channel.Offer(MOBILEGL_LOG_LEVEL_ERROR, Numbered("paced error", i).c_str());
+        for (int i = 1; i <= kLines; ++i)
+            channel.Offer(MOBILEGL_LOG_LEVEL_ERROR, Numbered("paced error", i).c_str());
         EXPECT_LT(MillisecondsSince(start), 200) << "pacing held the caller";
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
         // A burst of 4 and ~40/s: about 8 by now, and far fewer than all 24.
         EXPECT_LT(transport.Frames().size(), 18u) << "the pace did not hold anything back";
-        ASSERT_TRUE(transport.WaitForWritten(kLines, std::chrono::milliseconds(5000))) << "paced lines never all went out";
+        ASSERT_TRUE(transport.WaitForWritten(kLines, std::chrono::milliseconds(5000)))
+            << "paced lines never all went out";
         const auto counters = channel.Close();
         const auto indices = SeriesIndices(transport.Frames(), "paced error");
         ASSERT_EQ(indices.size(), static_cast<std::size_t>(kLines));
-        for (int i = 0; i < kLines; ++i) EXPECT_EQ(indices[i], i + 1);
+        for (int i = 0; i < kLines; ++i)
+            EXPECT_EQ(indices[i], i + 1);
         EXPECT_GE(counters.errorsPaced, 10u);
         EXPECT_EQ(counters.errorsCoalesced, 0u);
     }
@@ -537,7 +551,8 @@ namespace {
         limits.errorLinesPerSecond = 1;
         limits.errorBurstLines = 1;
         LogForwardChannel channel(transport, &GatedTransport::CutThunk, &transport, limits);
-        for (int i = 1; i <= 10; ++i) channel.Offer(MOBILEGL_LOG_LEVEL_ERROR, Numbered("before ack", i).c_str());
+        for (int i = 1; i <= 10; ++i)
+            channel.Offer(MOBILEGL_LOG_LEVEL_ERROR, Numbered("before ack", i).c_str());
         flatbuffers::FlatBufferBuilder builder(64);
         const auto flush = Wire::CreateLogFlush(builder, 77, true);
         const auto envelope = Wire::CreateCtrlEnvelope(builder, Wire::CtrlMsg::LogFlush, flush.Union());
@@ -598,7 +613,8 @@ namespace {
         LogForwardLimits limits;
         limits.closeDrainMs = 200;
         LogForwardChannel channel(transport, &GatedTransport::CutThunk, &transport, limits);
-        for (int i = 1; i <= 50; ++i) channel.Offer(MOBILEGL_LOG_LEVEL_ERROR, Numbered("never read", i).c_str());
+        for (int i = 1; i <= 50; ++i)
+            channel.Offer(MOBILEGL_LOG_LEVEL_ERROR, Numbered("never read", i).c_str());
         ASSERT_TRUE(transport.WaitForAttempt(std::chrono::milliseconds(2000)));
         const auto start = Clock::now();
         const auto counters = channel.Close();
@@ -654,14 +670,18 @@ namespace {
         const auto counters = channel.Close();
         const auto errors = SeriesIndices(received, "socket error");
         ASSERT_EQ(errors.size(), static_cast<std::size_t>(kLines / 100)) << "an ERROR line was lost";
-        for (std::size_t i = 0; i < errors.size(); ++i) EXPECT_EQ(errors[i], static_cast<int>((i + 1) * 100));
+        for (std::size_t i = 0; i < errors.size(); ++i)
+            EXPECT_EQ(errors[i], static_cast<int>((i + 1) * 100));
         long long droppedNamed = 0;
         for (const auto& line : received) {
             if (!line.isLog) continue;
             const long long named = NoticeCount(line.text, "Dropped");
-            if (named >= 0) droppedNamed += named;
-            else if (Contains(line.text, "socket warn")) EXPECT_EQ(line.level, Wire::LogLevel::Warn);
-            else if (Contains(line.text, "socket error")) EXPECT_EQ(line.level, Wire::LogLevel::Error);
+            if (named >= 0)
+                droppedNamed += named;
+            else if (Contains(line.text, "socket warn"))
+                EXPECT_EQ(line.level, Wire::LogLevel::Warn);
+            else if (Contains(line.text, "socket error"))
+                EXPECT_EQ(line.level, Wire::LogLevel::Error);
         }
         EXPECT_EQ(droppedNamed, static_cast<long long>(counters.lossyDropped));
         EXPECT_EQ(SeriesIndices(received, "socket warn").size() + counters.lossyDropped,

@@ -64,8 +64,8 @@ namespace MobileGL::MG_Pipe {
     // compile take effect only at the next link, and the same stages index GetGeneratedSpirv().
     inline Uint64 MGPipeStorageOverrideSignatureEntry(const String& blockName, Int binding) {
         Uint64 entry = std::hash<String>{}(blockName);
-        entry ^= (static_cast<Uint64>(static_cast<Uint32>(binding)) + 0x9e3779b97f4a7c15ull +
-                  (entry << 6) + (entry >> 2));
+        entry ^=
+            (static_cast<Uint64>(static_cast<Uint32>(binding)) + 0x9e3779b97f4a7c15ull + (entry << 6) + (entry >> 2));
         return entry;
     }
 
@@ -97,8 +97,7 @@ namespace MobileGL::MG_Pipe {
             const auto& drawProgram = ctx.GetProgramForDraw();
             const auto& dispatchProgram = ctx.GetProgramForDispatch();
 
-            const MGPipeHandle drawCso =
-                drawProgram ? AcquireShaderCso(*drawProgram, bytes) : kMGPipeNullHandle;
+            const MGPipeHandle drawCso = drawProgram ? AcquireShaderCso(*drawProgram, bytes) : kMGPipeNullHandle;
             // P5e (pg): AFTER the create and never before it. The draft note on
             // MGPProgramBindings said "emitted BEFORE create_shader_state at the same validate
             // point", and that ordering is wrong against the applier the same contract
@@ -123,13 +122,12 @@ namespace MobileGL::MG_Pipe {
                     // one pipeline name released the other context's LIVE composite.
                     // GetTextureContextId() is the tree's never-reused per-context id, the same
                     // one PipeInputs carries and the backends' per-context memos key on.
-                    MGPipeCompositeResolverInstance().Observe(ctx.GetTextureContextId(), *pipeline,
-                                                             *drawProgram, drawCso);
+                    MGPipeCompositeResolverInstance().Observe(ctx.GetTextureContextId(), *pipeline, *drawProgram,
+                                                              drawCso);
                 }
             }
             const MGPipeHandle dispatchCso =
-                dispatchProgram ? (dispatchProgram == drawProgram ? drawCso
-                                                                  : AcquireShaderCso(*dispatchProgram, bytes))
+                dispatchProgram ? (dispatchProgram == drawProgram ? drawCso : AcquireShaderCso(*dispatchProgram, bytes))
                                 : kMGPipeNullHandle;
             if (dispatchProgram && dispatchProgram != drawProgram) {
                 bytes += EmitProgramBindings(*dispatchProgram, dispatchCso);
@@ -353,13 +351,14 @@ namespace MobileGL::MG_Pipe {
             // every c_str() taken before that would dangle.
             m_storageOverrideNamePtrs.clear();
             m_storageOverrideNamePtrs.reserve(m_storageOverrideNames.size());
-            for (const String& name : m_storageOverrideNames) m_storageOverrideNamePtrs.push_back(name.c_str());
+            for (const String& name : m_storageOverrideNames)
+                m_storageOverrideNamePtrs.push_back(name.c_str());
 
-            MGPipeRouteSetProgramBindings(
-                m_lastBindings, m_blockBindings.empty() ? nullptr : m_blockBindings.data(),
-                m_samplerUnits.empty() ? nullptr : m_samplerUnits.data(),
-                m_storageOverrides.empty() ? nullptr : m_storageOverrides.data(),
-                m_storageOverrideNamePtrs.empty() ? nullptr : m_storageOverrideNamePtrs.data());
+            MGPipeRouteSetProgramBindings(m_lastBindings, m_blockBindings.empty() ? nullptr : m_blockBindings.data(),
+                                          m_samplerUnits.empty() ? nullptr : m_samplerUnits.data(),
+                                          m_storageOverrides.empty() ? nullptr : m_storageOverrides.data(),
+                                          m_storageOverrideNamePtrs.empty() ? nullptr
+                                                                            : m_storageOverrideNamePtrs.data());
             ++m_bindingSets;
 
             latch.BindingsLive = true;

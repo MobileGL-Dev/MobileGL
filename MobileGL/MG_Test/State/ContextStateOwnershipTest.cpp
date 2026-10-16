@@ -69,17 +69,14 @@ namespace {
             return context;
         }
 
-        void MakeCurrent(EGLContext context) {
-            ASSERT_TRUE(State->MakeCurrent(Display, Surface, Surface, context));
-        }
+        void MakeCurrent(EGLContext context) { ASSERT_TRUE(State->MakeCurrent(Display, Surface, Surface, context)); }
 
         void Release() {
             if (State) State->MakeCurrent(EGL_NO_DISPLAY, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
         }
 
         static void DrainErrors() {
-            for (Int drained = 0; drained < 16 && GetError() != GL_NO_ERROR; ++drained) {
-            }
+            for (Int drained = 0; drained < 16 && GetError() != GL_NO_ERROR; ++drained) {}
         }
 
         EGLStateContext* State = nullptr;

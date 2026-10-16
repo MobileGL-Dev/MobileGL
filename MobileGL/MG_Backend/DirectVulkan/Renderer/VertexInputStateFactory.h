@@ -69,11 +69,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // binding uses divisor 1, which is what the plain input rate already means.
             Vector<VkVertexInputBindingDivisorDescriptionEXT> bindingDivisors;
             VkPipelineVertexInputDivisorStateCreateInfoEXT divisorState{
-                VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_DIVISOR_STATE_CREATE_INFO_EXT
-            };
-            VkPipelineVertexInputStateCreateInfo state{
-                VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO
-            };
+                VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_DIVISOR_STATE_CREATE_INFO_EXT};
+            VkPipelineVertexInputStateCreateInfo state{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
 
             // Back to a default-constructed state while keeping the vectors' storage, so a
             // per-draw scratch rebuilds without touching the heap. Every member is reset by the
@@ -104,8 +101,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             }
         };
 
-        VertexInputStateFactory(const VulkanRendererConfig& config, VkPhysicalDevice physicalDevice):
-            m_config(config), m_physicalDevice(physicalDevice) {}
+        VertexInputStateFactory(const VulkanRendererConfig& config, VkPhysicalDevice physicalDevice)
+            : m_config(config), m_physicalDevice(physicalDevice) {}
         ~VertexInputStateFactory() = default;
         VertexInputStateFactory(const VertexInputStateFactory&) = delete;
 

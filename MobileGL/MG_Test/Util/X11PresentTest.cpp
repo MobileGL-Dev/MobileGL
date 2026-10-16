@@ -94,7 +94,8 @@ namespace {
             freed.push_back(pixmap);
             pixmaps.erase(pixmap);
         }
-        Bool PresentPixmap(Uint32 pixmap, Uint32 serial, Uint32 options, Uint64 targetMsc, const Region& update) override {
+        Bool PresentPixmap(Uint32 pixmap, Uint32 serial, Uint32 options, Uint64 targetMsc,
+                           const Region& update) override {
             presents.push_back({pixmap, serial, options, targetMsc, update});
             return true;
         }
@@ -227,7 +228,8 @@ TEST(X11PresentChain, AnImageComesBackWithIdleNotifyAndIsReused) {
 
 TEST(X11PresentChain, AllImagesHeldWaitsThenGrowsToFourThenDropsTheFrame) {
     Rig rig;
-    for (int i = 0; i < 3; ++i) ASSERT_TRUE(rig.chain->Present(Region::Full(), 0));
+    for (int i = 0; i < 3; ++i)
+        ASSERT_TRUE(rig.chain->Present(Region::Full(), 0));
     const Int64 before = rig.clock.now;
     ASSERT_TRUE(rig.chain->Present(Region::Full(), 0)) << "a fourth image after the idle wait";
     EXPECT_GE(rig.clock.now - before, XP::Chain::kIdleWaitMs);
@@ -310,7 +312,8 @@ TEST(X11PresentChain, AResizeRetiresOldImagesAsTheyComeBack) {
     rig.x.Idle(c);
     ASSERT_TRUE(rig.chain->Present(Region::Full(), 0));
     EXPECT_EQ(rig.x.pixmaps.count(b), 0u);
-    for (const auto& [id, size] : rig.images.live) EXPECT_EQ(size, newSize);
+    for (const auto& [id, size] : rig.images.live)
+        EXPECT_EQ(size, newSize);
 }
 
 TEST(X11PresentChain, ConfigureNotifyReportsTheNewSizeOnce) {
@@ -378,7 +381,8 @@ TEST(X11PresentChain, FailuresSendTheWindowBackToReadback) {
 
 TEST(X11PresentChain, TheChainFreesEveryPixmapAndReleasesEveryImage) {
     Rig rig;
-    for (int i = 0; i < 3; ++i) ASSERT_TRUE(rig.chain->Present(Region::Full(), 0));
+    for (int i = 0; i < 3; ++i)
+        ASSERT_TRUE(rig.chain->Present(Region::Full(), 0));
     EXPECT_EQ(rig.images.live.size(), 3u);
     rig.chain.reset();
     EXPECT_TRUE(rig.images.live.empty());

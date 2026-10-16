@@ -24,7 +24,7 @@
 
 namespace MobileGL::MG_Util::ShaderTranspiler {
     struct CompileEnv;
-}
+} // namespace MobileGL::MG_Util::ShaderTranspiler
 
 namespace MobileGL {
     namespace MG_State {
@@ -62,7 +62,12 @@ namespace MobileGL {
             };
 
             // Which of the three views above a shader input of a given GLSL type consumes.
-            enum class VertexAttribBaseType { Unsupported, Float, Int, Uint };
+            enum class VertexAttribBaseType {
+                Unsupported,
+                Float,
+                Int,
+                Uint
+            };
 
             struct VertexAttribTypeInfo {
                 VertexAttribBaseType baseType = VertexAttribBaseType::Unsupported;
@@ -276,9 +281,7 @@ namespace MobileGL {
                 // objects need no back-pointer, and it is push-only so the pull build's
                 // GLContext is byte-identical (G1).
                 void NoteVaoAttributeChanged() { m_vertexArrayState.NoteAttributeChanged(); }
-                Uint64 GetAnyVaoAttributeGeneration() const {
-                    return m_vertexArrayState.GetAnyAttributeGeneration();
-                }
+                Uint64 GetAnyVaoAttributeGeneration() const { return m_vertexArrayState.GetAnyAttributeGeneration(); }
                 // The framebuffer and the two texture aggregates (and the sampling resolution
                 // generation above) also bump the share group's twin: the objects behind them are
                 // the group's, and a sibling context's walk has to see the change too
@@ -301,28 +304,20 @@ namespace MobileGL {
                     m_textureState.NoteTextureParamsChanged();
                     m_shareGroup->BumpSharedClock(ShareGroupState::SharedClock::TextureParams);
                 }
-                Uint64 GetAnyTextureParamsGeneration() const {
-                    return m_textureState.GetAnyTextureParamsGeneration();
-                }
+                Uint64 GetAnyTextureParamsGeneration() const { return m_textureState.GetAnyTextureParamsGeneration(); }
                 void NoteBufferChanged() { m_bufferState.NoteBufferChanged(); }
-                Uint64 GetAnyBufferChangeGeneration() const {
-                    return m_bufferState.GetAnyBufferChangeGeneration();
-                }
+                Uint64 GetAnyBufferChangeGeneration() const { return m_bufferState.GetAnyBufferChangeGeneration(); }
                 // P5e (sb): the per-target INDEXED BINDING POINT generation, which is what dirty
                 // bits 15/16/17 shutter on now. See BufferState::NoteBindPointChanged for why
                 // the content aggregate above could not answer the question.
-                void NoteBufferBindPointChanged(BufferTarget target) {
-                    m_bufferState.NoteBindPointChanged(target);
-                }
+                void NoteBufferBindPointChanged(BufferTarget target) { m_bufferState.NoteBindPointChanged(target); }
                 Uint64 GetBufferBindPointGeneration(BufferTarget target) const {
                     return m_bufferState.GetBindPointGeneration(target);
                 }
                 // The sixth aggregate lives here rather than on a state container because
                 // the values it guards do too (m_currentVertexAttributes).
                 void NoteVertexAttribDefaultChanged() { ++m_anyVertexAttribDefaultGeneration; }
-                Uint64 GetAnyVertexAttribDefaultGeneration() const {
-                    return m_anyVertexAttribDefaultGeneration;
-                }
+                Uint64 GetAnyVertexAttribDefaultGeneration() const { return m_anyVertexAttribDefaultGeneration; }
 
                 // Which of the three views of m_currentVertexAttributes[index] the last
                 // glVertexAttrib* write filled DIRECTLY. The other two are NUMERIC
@@ -341,9 +336,8 @@ namespace MobileGL {
                 // only decides how to REBUILD the three views, so two writes that leave the
                 // three views identical rebuild identically whichever class they carried.
                 Uint32 GetCurrentVertexAttributeClass(Uint index) const {
-                    return index < m_currentVertexAttributeClasses.size()
-                               ? m_currentVertexAttributeClasses[index]
-                               : kVertexAttribValueClassFloat;
+                    return index < m_currentVertexAttributeClasses.size() ? m_currentVertexAttributeClasses[index]
+                                                                          : kVertexAttribValueClassFloat;
                 }
 
                 // RenderState

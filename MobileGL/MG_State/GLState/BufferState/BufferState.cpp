@@ -56,8 +56,8 @@ namespace MobileGL::MG_State::GLState {
                     // generation the next draw or dispatch that walks the window asks the
                     // backend for the dead one - Espryt dies with Fatal{ProtocolCorruption,
                     // "BackendSlotTable.Generation"} (DeletedBoundBufferScenario).
-                    NoteBindPointChanged(BufferBindPointTargets[static_cast<SizeT>(
-                        &bindingPointArray - m_bufferBindPointTargets.data())]);
+                    NoteBindPointChanged(BufferBindPointTargets[static_cast<SizeT>(&bindingPointArray -
+                                                                                   m_bufferBindPointTargets.data())]);
                 }
             }
         }

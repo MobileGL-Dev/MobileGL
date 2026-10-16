@@ -224,11 +224,11 @@ namespace {
     // when a generator first calls it.
     TEST_F(PipeStatsTest, PayloadHistogramBucketsByPowerOfTwo) {
         PS::RecordDrawPayloadBytes(0);
-        PS::RecordDrawPayloadBytes(1);   // [1, 2)   -> bucket 1
-        PS::RecordDrawPayloadBytes(2);   // [2, 4)   -> bucket 2
-        PS::RecordDrawPayloadBytes(3);   // [2, 4)   -> bucket 2
-        PS::RecordDrawPayloadBytes(48);  // [32, 64) -> bucket 6
-        PS::RecordDrawPayloadBytes(64);  // [64, 128)-> bucket 7
+        PS::RecordDrawPayloadBytes(1);  // [1, 2)   -> bucket 1
+        PS::RecordDrawPayloadBytes(2);  // [2, 4)   -> bucket 2
+        PS::RecordDrawPayloadBytes(3);  // [2, 4)   -> bucket 2
+        PS::RecordDrawPayloadBytes(48); // [32, 64) -> bucket 6
+        PS::RecordDrawPayloadBytes(64); // [64, 128)-> bucket 7
 
         EXPECT_EQ(PS::TotalPayloadBucket(0), 1u);
         EXPECT_EQ(PS::TotalPayloadBucket(1), 1u);
@@ -340,8 +340,7 @@ namespace {
         EXPECT_EQ(PS::TotalBytes(PS::ByteClass::StageSegmentBytes), 6144u);
         EXPECT_EQ(PS::FrameBytes(PS::ByteClass::StageSegmentBytes), 0u) << "a Present clears the frame";
         // 6144 over one frame, two decimals, in the ordinary bytes[] bracket.
-        EXPECT_NE(PS::FormatWindowLine().find("seg=6144.00"), String::npos)
-            << PS::FormatWindowLine();
+        EXPECT_NE(PS::FormatWindowLine().find("seg=6144.00"), String::npos) << PS::FormatWindowLine();
 
         PS::AdvanceSummaryWindow();
         // And it obeys the file's LABEL rule, not a rule of its own: the new window has no
@@ -392,10 +391,10 @@ namespace {
     // bucket rather than a byte sum: the shape is the deliverable and the bytes have their own
     // counter in `seg`.
     TEST_F(PipeStatsTest, StagedBlobHistogramSharesThePayloadBucketEdges) {
-        PS::RecordStagedBlobBytes(1);        // [1, 2)     -> bucket 1
-        PS::RecordStagedBlobBytes(4096);     // [4096,8192)-> bucket 13
-        PS::RecordStagedBlobBytes(4096);     // same bucket
-        PS::RecordStagedBlobBytes(8192);     // [8192,...) -> bucket 14: the edge is exclusive
+        PS::RecordStagedBlobBytes(1);    // [1, 2)     -> bucket 1
+        PS::RecordStagedBlobBytes(4096); // [4096,8192)-> bucket 13
+        PS::RecordStagedBlobBytes(4096); // same bucket
+        PS::RecordStagedBlobBytes(8192); // [8192,...) -> bucket 14: the edge is exclusive
 
         EXPECT_EQ(PS::TotalStagedBlobBucket(1), 1u);
         EXPECT_EQ(PS::TotalStagedBlobBucket(13), 2u);
@@ -425,9 +424,7 @@ namespace {
         // The ordering is the JSON document's shape, not decoration: the new array is a SIBLING
         // of the draw-payload one, so a reader that walks the object finds both where the two
         // comments say they are.
-        EXPECT_LT(json.find("\"cmd-bytes-per-draw-histogram\""),
-                  json.find("\"staged-blob-bytes-histogram\""))
-            << json;
+        EXPECT_LT(json.find("\"cmd-bytes-per-draw-histogram\""), json.find("\"staged-blob-bytes-histogram\"")) << json;
     }
 
     // Successive summaries report WINDOWS, not run totals: a run total over a workload that
@@ -541,8 +538,7 @@ namespace {
         EXPECT_STREQ(PS::NameOf(PS::CallClass::SamplerViewEmissions), "sampler-view-emissions");
         EXPECT_STREQ(PS::NameOf(PS::CallClass::SamplerStateEmissions), "sampler-state-emissions");
         EXPECT_STREQ(PS::NameOf(PS::CallClass::ShaderImageEmissions), "shader-image-emissions");
-        EXPECT_STREQ(PS::NameOf(PS::CallClass::ClientTextureUploadEmissions),
-                     "client-tex-upload-emissions");
+        EXPECT_STREQ(PS::NameOf(PS::CallClass::ClientTextureUploadEmissions), "client-tex-upload-emissions");
         EXPECT_STREQ(PS::NameOf(PS::ByteClass::CsoBlobBytes), "cso-blob-bytes");
         // P6 gate 8's two, under their long names - the JSON dump keys and the names the
         // MEASUREMENTS.md entry will quote.

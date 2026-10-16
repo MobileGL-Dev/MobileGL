@@ -38,21 +38,21 @@ namespace MobileGL::MG_Pipe {
         // ---- value class: NEW_VERTEX_ELEMENTS is emitted from P3a and the other three from
         // P4a - the program family, one subsystem, three bits because the frontend moves them
         // as three separate events ----
-        NewVertexElements,       // the bound VAO's attribute configuration -> create/bind_vertex_elements
-        NewShader,               // the current program's link version -> create/bind_shader_state,
-                                 //    set_draw_program, set_dispatch_program (P4a)
-        NewShaderBindings,       // image units, block bindings, uniform write set (P4a)
-        NewGlobalConstants,      // the default-uniform-block image -> set_global_constants (P4a)
+        NewVertexElements,  // the bound VAO's attribute configuration -> create/bind_vertex_elements
+        NewShader,          // the current program's link version -> create/bind_shader_state,
+                            //    set_draw_program, set_dispatch_program (P4a)
+        NewShaderBindings,  // image units, block bindings, uniform write set (P4a)
+        NewGlobalConstants, // the default-uniform-block image -> set_global_constants (P4a)
         // ---- object class. THE FIRST TWO ARE P3a's, not P3b/P4b's: the roadmap puts
         // set_vertex_buffers and set_index_buffer in the same phase as the vertex-elements
         // trio, and this comment said otherwise until the commit that wired them. THE NEXT
         // FOUR ARE P4a's. The last three are still computed and counted only, until P4b. ----
-        NewVertexBuffers,        // -> set_vertex_buffers (P3a)
-        NewIndexBuffer,          // -> set_index_buffer   (P3a)
-        NewFramebuffer,          // -> set_framebuffer_state, per bound target (P4a)
-        NewSamplerViews,         // -> set_sampler_views   (P4a)
-        NewSamplers,             // -> bind_sampler_states (P4a)
-        NewShaderImages,         // -> set_shader_images   (P4a)
+        NewVertexBuffers, // -> set_vertex_buffers (P3a)
+        NewIndexBuffer,   // -> set_index_buffer   (P3a)
+        NewFramebuffer,   // -> set_framebuffer_state, per bound target (P4a)
+        NewSamplerViews,  // -> set_sampler_views   (P4a)
+        NewSamplers,      // -> bind_sampler_states (P4a)
+        NewShaderImages,  // -> set_shader_images   (P4a)
         NewConstBuffers,
         NewShaderBuffers,
         NewSoTargets,
@@ -90,8 +90,7 @@ namespace MobileGL::MG_Pipe {
     // new shutters - and it is also why the two narrowings below are stated as requirements.
     inline constexpr Uint32 kMGPipeDirtyEmittedAtP4a =
         kMGPipeDirtyEmittedAtP3a | MGPipeDirtyBit(MGPipeDirty::NewShader) |
-        MGPipeDirtyBit(MGPipeDirty::NewShaderBindings) |
-        MGPipeDirtyBit(MGPipeDirty::NewGlobalConstants) |
+        MGPipeDirtyBit(MGPipeDirty::NewShaderBindings) | MGPipeDirtyBit(MGPipeDirty::NewGlobalConstants) |
         MGPipeDirtyBit(MGPipeDirty::NewFramebuffer) | MGPipeDirtyBit(MGPipeDirty::NewSamplerViews) |
         MGPipeDirtyBit(MGPipeDirty::NewSamplers) | MGPipeDirtyBit(MGPipeDirty::NewShaderImages);
 
@@ -109,24 +108,11 @@ namespace MobileGL::MG_Pipe {
         MGPipeDirtyBit(MGPipeDirty::NewShaderBuffers) | MGPipeDirtyBit(MGPipeDirty::NewSoTargets);
 
     inline constexpr const char* kMGPipeDirtyNames[kMGPipeDirtyCount] = {
-        "NEW_RENDER_STATE",
-        "NEW_PIPELINE_STATE",
-        "NEW_PIXEL_PACK",
-        "NEW_PATCH_STATE",
-        "NEW_VERTEX_ATTRIB_DEFAULTS",
-        "NEW_VERTEX_ELEMENTS",
-        "NEW_SHADER",
-        "NEW_SHADER_BINDINGS",
-        "NEW_GLOBAL_CONSTANTS",
-        "NEW_VERTEX_BUFFERS",
-        "NEW_INDEX_BUFFER",
-        "NEW_FRAMEBUFFER",
-        "NEW_SAMPLER_VIEWS",
-        "NEW_SAMPLERS",
-        "NEW_SHADER_IMAGES",
-        "NEW_CONST_BUFFERS",
-        "NEW_SHADER_BUFFERS",
-        "NEW_SO_TARGETS",
+        "NEW_RENDER_STATE",           "NEW_PIPELINE_STATE",  "NEW_PIXEL_PACK",    "NEW_PATCH_STATE",
+        "NEW_VERTEX_ATTRIB_DEFAULTS", "NEW_VERTEX_ELEMENTS", "NEW_SHADER",        "NEW_SHADER_BINDINGS",
+        "NEW_GLOBAL_CONSTANTS",       "NEW_VERTEX_BUFFERS",  "NEW_INDEX_BUFFER",  "NEW_FRAMEBUFFER",
+        "NEW_SAMPLER_VIEWS",          "NEW_SAMPLERS",        "NEW_SHADER_IMAGES", "NEW_CONST_BUFFERS",
+        "NEW_SHADER_BUFFERS",         "NEW_SO_TARGETS",
     };
 
     // Which runtime MOBILEGL_PIPE_PUSH subsystem bit gates a dirty bit's emission. Zero for
@@ -290,8 +276,7 @@ namespace MobileGL::MG_Pipe {
             const Uint64 vaoLifetime = vao ? vao->GetLifetimeId() : 0;
             const Uint32 vaoConfig = vao ? vao->GetConfigVersion() : 0;
             const Bool vaoChanged = !m_primed || vaoLifetime != m_lastVaoLifetime || vaoConfig != m_lastVaoConfig;
-            const Uint64 vaoIdentity =
-                vao ? MGPipeMixShutter(vaoLifetime, vaoConfig) : 0;
+            const Uint64 vaoIdentity = vao ? MGPipeMixShutter(vaoLifetime, vaoConfig) : 0;
             now[Index(MGPipeDirty::NewVertexElements)] = vaoIdentity;
 
             // Reads plain version counters, never GetProgramForDraw(): that joins a pending
@@ -321,11 +306,10 @@ namespace MobileGL::MG_Pipe {
             Uint64 opaqueUnits = 0;
             if (program) {
                 shader = MGPipeMixShutter(program->GetLifetimeId(), program->GetLinkVersion());
-                bindings = MGPipeMixShutter(
-                    MGPipeMixShutter(MGPipeMixShutter(program->GetImageUnitVersion(),
-                                                      program->GetBackendStateVersion()),
-                                     program->GetBlockBindingVersion()),
-                    program->GetUniformWriteSetVersion());
+                bindings = MGPipeMixShutter(MGPipeMixShutter(MGPipeMixShutter(program->GetImageUnitVersion(),
+                                                                              program->GetBackendStateVersion()),
+                                                             program->GetBlockBindingVersion()),
+                                            program->GetUniformWriteSetVersion());
                 constants = MGPipeMixShutter(program->GetLifetimeId(), program->GetUBOContentVersion());
                 // THE IDENTITY IS MIXED IN (P4a fable seam F-2), exactly as the pipeline arm
                 // below mixes stageLinks into its half: the counter alone is a per-program
@@ -378,12 +362,12 @@ namespace MobileGL::MG_Pipe {
                 for (SizeT stage = 0; stage < Pipeline::kGraphicsStageCount; ++stage) {
                     const auto& staged = pipeline->GetStageProgram(static_cast<ShaderStage>(stage));
                     if (!staged) continue;
-                    stageLinks = MGPipeMixShutter(
-                        MGPipeMixShutter(stageLinks, staged->GetLifetimeId()), staged->GetLinkVersion());
+                    stageLinks = MGPipeMixShutter(MGPipeMixShutter(stageLinks, staged->GetLifetimeId()),
+                                                  staged->GetLinkVersion());
                     stageState = MGPipeMixShutter(
-                        MGPipeMixShutter(MGPipeMixShutter(stageState, staged->GetBackendStateVersion()),
-                                         MGPipeMixShutter(staged->GetUBOContentVersion(),
-                                                          staged->GetBlockBindingVersion())),
+                        MGPipeMixShutter(
+                            MGPipeMixShutter(stageState, staged->GetBackendStateVersion()),
+                            MGPipeMixShutter(staged->GetUBOContentVersion(), staged->GetBlockBindingVersion())),
                         staged->GetUniformWriteSetVersion());
                     stageImages = MGPipeMixShutter(stageImages, staged->GetImageUnitVersion());
                     stageOpaque = MGPipeMixShutter(stageOpaque, staged->GetBackendStateVersion());
@@ -458,10 +442,8 @@ namespace MobileGL::MG_Pipe {
             now[Index(MGPipeDirty::NewFramebuffer)] = MGPipeMixShutter(
                 MGPipeMixShutter(
                     ctx.GetAnyFramebufferAttachmentGeneration(),
-                    m_framebufferBind.Observe(
-                        ctx.GetFramebufferBindingSlot(FramebufferTarget::Draw).GetVersion())),
-                m_readFramebufferBind.Observe(
-                    ctx.GetFramebufferBindingSlot(FramebufferTarget::Read).GetVersion()));
+                    m_framebufferBind.Observe(ctx.GetFramebufferBindingSlot(FramebufferTarget::Draw).GetVersion())),
+                m_readFramebufferBind.Observe(ctx.GetFramebufferBindingSlot(FramebufferTarget::Read).GetVersion()));
             // Bit 12 reads FOUR things (F-1): the two texture aggregates, the bind generation
             // and the program input computed above. The params aggregate is here because
             // SamplerEmit.h drops a unit's view to null when SamplesAsIncompleteTexture says so,
@@ -480,11 +462,10 @@ namespace MobileGL::MG_Pipe {
             // the extra fires are absorbed by the emitter's set-hash suppressor. A missed fire
             // here means wrong filtering, since bind_sampler_states has no pulled fallback.
             now[Index(MGPipeDirty::NewSamplers)] = MGPipeMixShutter(
-                MGPipeMixShutter(textureParams, ctx.GetSamplingResolutionGeneration()),
-                ctx.GetTextureBindGeneration());
-            now[Index(MGPipeDirty::NewShaderImages)] = MGPipeMixShutter(
-            MGPipeMixShutter(MGPipeMixShutter(textureContent, textureParams), programImages),
-            ctx.GetTextureBindGeneration());
+                MGPipeMixShutter(textureParams, ctx.GetSamplingResolutionGeneration()), ctx.GetTextureBindGeneration());
+            now[Index(MGPipeDirty::NewShaderImages)] =
+                MGPipeMixShutter(MGPipeMixShutter(MGPipeMixShutter(textureContent, textureParams), programImages),
+                                 ctx.GetTextureBindGeneration());
             // Bits 15-17 read the buffer bind-point generations that glBindBufferBase/Range move
             // (BufferState::NoteBindPointChanged), not the buffer content aggregate: the records
             // carry {handle, offset, size}, a base binding's size travels as kMGPipeWholeBuffer
@@ -493,14 +474,14 @@ namespace MobileGL::MG_Pipe {
             // indexed by the program's block bindings. Bit 16 covers storage and atomic-counter
             // points, which are emitted together. Bit 17 adds the transform-feedback generation
             // (capture points latch at Begin) and has no emitter.
-            now[Index(MGPipeDirty::NewConstBuffers)] = MGPipeMixShutter(
-                ctx.GetBufferBindPointGeneration(BufferTarget::Uniform), shader);
-            now[Index(MGPipeDirty::NewShaderBuffers)] = MGPipeMixShutter(
-                ctx.GetBufferBindPointGeneration(BufferTarget::ShaderStorage),
-                ctx.GetBufferBindPointGeneration(BufferTarget::AtomicCounter));
-            now[Index(MGPipeDirty::NewSoTargets)] = MGPipeMixShutter(
-                ctx.GetBufferBindPointGeneration(BufferTarget::TransformFeedback),
-                ctx.GetTransformFeedbackGeneration());
+            now[Index(MGPipeDirty::NewConstBuffers)] =
+                MGPipeMixShutter(ctx.GetBufferBindPointGeneration(BufferTarget::Uniform), shader);
+            now[Index(MGPipeDirty::NewShaderBuffers)] =
+                MGPipeMixShutter(ctx.GetBufferBindPointGeneration(BufferTarget::ShaderStorage),
+                                 ctx.GetBufferBindPointGeneration(BufferTarget::AtomicCounter));
+            now[Index(MGPipeDirty::NewSoTargets)] =
+                MGPipeMixShutter(ctx.GetBufferBindPointGeneration(BufferTarget::TransformFeedback),
+                                 ctx.GetTransformFeedbackGeneration());
 
             Uint32 dirty = 0;
             for (SizeT i = 0; i < kMGPipeDirtyCount; ++i) {
@@ -520,8 +501,7 @@ namespace MobileGL::MG_Pipe {
             // own emitters still suppress unchanged records.
             if (vaoChanged) {
                 dirty |= MGPipeDirtyBit(MGPipeDirty::NewVertexElements) |
-                         MGPipeDirtyBit(MGPipeDirty::NewVertexBuffers) |
-                         MGPipeDirtyBit(MGPipeDirty::NewIndexBuffer);
+                         MGPipeDirtyBit(MGPipeDirty::NewVertexBuffers) | MGPipeDirtyBit(MGPipeDirty::NewIndexBuffer);
             }
             m_lastVaoLifetime = vaoLifetime;
             m_lastVaoConfig = vaoConfig;
@@ -530,8 +510,7 @@ namespace MobileGL::MG_Pipe {
             // must still publish that new prefix, including its null samplers.
             const Int maxTextureUnit = ctx.GetMaxTouchedTextureUnit();
             if (!m_primed || maxTextureUnit != m_lastMaxTextureUnit) {
-                dirty |= MGPipeDirtyBit(MGPipeDirty::NewSamplerViews) |
-                         MGPipeDirtyBit(MGPipeDirty::NewSamplers);
+                dirty |= MGPipeDirtyBit(MGPipeDirty::NewSamplerViews) | MGPipeDirtyBit(MGPipeDirty::NewSamplers);
             }
             m_lastMaxTextureUnit = maxTextureUnit;
 
@@ -560,8 +539,8 @@ namespace MobileGL::MG_Pipe {
                     dirty |= MGPipeDirtyBit(MGPipeDirty::NewFramebuffer);
                 }
                 if (content || params) {
-                    dirty |= MGPipeDirtyBit(MGPipeDirty::NewSamplerViews) |
-                             MGPipeDirtyBit(MGPipeDirty::NewShaderImages);
+                    dirty |=
+                        MGPipeDirtyBit(MGPipeDirty::NewSamplerViews) | MGPipeDirtyBit(MGPipeDirty::NewShaderImages);
                 }
                 if (params || clocks.SamplingResolution != m_lastSharedClocks.SamplingResolution) {
                     dirty |= MGPipeDirtyBit(MGPipeDirty::NewSamplers);
@@ -582,8 +561,10 @@ namespace MobileGL::MG_Pipe {
             // which is the whole reason this is a byte compare.
             PatchTrio patch{};
             patch.PatchVertices = render.PatchVertices;
-            for (SizeT i = 0; i < 4; ++i) patch.Outer[i] = render.PatchDefaultOuterLevel[i];
-            for (SizeT i = 0; i < 2; ++i) patch.Inner[i] = render.PatchDefaultInnerLevel[i];
+            for (SizeT i = 0; i < 4; ++i)
+                patch.Outer[i] = render.PatchDefaultOuterLevel[i];
+            for (SizeT i = 0; i < 2; ++i)
+                patch.Inner[i] = render.PatchDefaultInnerLevel[i];
             if (!m_primed || std::memcmp(&patch, &m_patch, sizeof(patch)) != 0) {
                 dirty |= MGPipeDirtyBit(MGPipeDirty::NewPatchState);
                 m_patch = patch;
@@ -650,15 +631,15 @@ namespace MobileGL::MG_Pipe {
         }
         Uint64 FireCount(MGPipeDirty bit) const {
             Uint64 total = 0;
-            for (SizeT i = 0; i < kMGPipeVerbClassCount; ++i) total += m_fires[Index(bit)][i];
+            for (SizeT i = 0; i < kMGPipeVerbClassCount; ++i)
+                total += m_fires[Index(bit)][i];
             return total;
         }
-        Uint64 WalkCount(MGPipeVerbClass verbClass) const {
-            return m_walks[static_cast<SizeT>(verbClass)];
-        }
+        Uint64 WalkCount(MGPipeVerbClass verbClass) const { return m_walks[static_cast<SizeT>(verbClass)]; }
         Uint64 WalkCount() const {
             Uint64 total = 0;
-            for (SizeT i = 0; i < kMGPipeVerbClassCount; ++i) total += m_walks[i];
+            for (SizeT i = 0; i < kMGPipeVerbClassCount; ++i)
+                total += m_walks[i];
             return total;
         }
 
@@ -758,16 +739,13 @@ namespace MobileGL::MG_Pipe {
     // each view from its own array; ValueClass is the record of which view the application
     // wrote directly, kept for the comparator and for readers - the applier no longer needs
     // it to rebuild anything.
-    inline void MGPipeFillAttribValue(Uint32 location,
-                                      const MG_State::GLState::CurrentVertexAttributeValue& value,
+    inline void MGPipeFillAttribValue(Uint32 location, const MG_State::GLState::CurrentVertexAttributeValue& value,
                                       Uint32 writtenClass, MGPAttribValue& out) {
         out = MGPAttribValue{};
         out.Location = location;
         out.ValueClass = static_cast<Uint8>(writtenClass);
-        static_assert(sizeof(out.FloatView) == sizeof(value.floatValue),
-                      "MGPAttribValue's views are four words each");
-        static_assert(sizeof(out.IntView) == sizeof(value.intValue) &&
-                          sizeof(out.UintView) == sizeof(value.uintValue),
+        static_assert(sizeof(out.FloatView) == sizeof(value.floatValue), "MGPAttribValue's views are four words each");
+        static_assert(sizeof(out.IntView) == sizeof(value.intValue) && sizeof(out.UintView) == sizeof(value.uintValue),
                       "MGPAttribValue's views are four words each");
         std::memcpy(out.FloatView, value.floatValue.data(), sizeof(out.FloatView));
         std::memcpy(out.IntView, value.intValue.data(), sizeof(out.IntView));

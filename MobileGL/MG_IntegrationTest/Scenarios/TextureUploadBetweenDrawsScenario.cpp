@@ -79,7 +79,8 @@ void main() {
         std::vector<std::uint8_t> Solid(int texels, const Rgba& c) {
             std::vector<std::uint8_t> out(static_cast<std::size_t>(texels) * 4u);
             for (int i = 0; i < texels; ++i)
-                for (int k = 0; k < 4; ++k) out[static_cast<std::size_t>(i) * 4u + k] = c[k];
+                for (int k = 0; k < 4; ++k)
+                    out[static_cast<std::size_t>(i) * 4u + k] = c[k];
             return out;
         }
 

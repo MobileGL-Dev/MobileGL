@@ -41,15 +41,20 @@ namespace {
     }
 } // namespace
 
-FAKE_EXPORT uint32_t mobilegl_shared_image_abi_version(void) { return MOBILEGL_SHARED_IMAGE_ABI_VERSION; }
+FAKE_EXPORT uint32_t mobilegl_shared_image_abi_version(void) {
+    return MOBILEGL_SHARED_IMAGE_ABI_VERSION;
+}
 
-FAKE_EXPORT int mobilegl_server_available(void) { return 1; }
+FAKE_EXPORT int mobilegl_server_available(void) {
+    return 1;
+}
 
 FAKE_EXPORT int mobilegl_shared_image_formats(uint32_t* formats, uint32_t capacity) {
     const uint32_t all[] = {MOBILEGL_SHARED_IMAGE_FOURCC_ABGR8888, MOBILEGL_SHARED_IMAGE_FOURCC_XBGR8888,
                             MOBILEGL_SHARED_IMAGE_FOURCC_ARGB8888, MOBILEGL_SHARED_IMAGE_FOURCC_XRGB8888,
                             MOBILEGL_SHARED_IMAGE_FOURCC_NV12};
-    for (uint32_t i = 0; i < 5 && i < capacity; ++i) formats[i] = all[i];
+    for (uint32_t i = 0; i < 5 && i < capacity; ++i)
+        formats[i] = all[i];
     return 5;
 }
 
@@ -58,7 +63,7 @@ FAKE_EXPORT int mobilegl_shared_image_allocate(uint32_t width, uint32_t height, 
     if (width == 0 || height == 0 || !Supported(fourcc) || out == nullptr) return -EINVAL;
     const int fd = ::memfd_create("fake-shared-image", MFD_CLOEXEC);
     if (fd < 0 || ::ftruncate(fd, static_cast<off_t>(width) * height * 4) != 0) return -EIO;
-    struct stat st {};
+    struct stat st{};
     ::fstat(fd, &st);
     const std::lock_guard<std::mutex> lock(g_mutex);
     const uint64_t id = g_nextId++;
@@ -81,7 +86,7 @@ FAKE_EXPORT int mobilegl_shared_image_allocate(uint32_t width, uint32_t height, 
 
 FAKE_EXPORT int mobilegl_shared_image_import(int fd, uint32_t width, uint32_t height, uint32_t fourcc,
                                              uint64_t* out_id) {
-    struct stat st {};
+    struct stat st{};
     if (fd < 0 || ::fstat(fd, &st) != 0 || !Supported(fourcc)) return -EINVAL;
     const std::lock_guard<std::mutex> lock(g_mutex);
     for (auto& [id, image] : g_images) {
@@ -118,7 +123,8 @@ FAKE_EXPORT int fake_shared_image_imports(void) {
 
 // A YUV import names an image by its descriptor as an RGBA one does; the planes are not looked at.
 FAKE_EXPORT int mobilegl_shared_image_import_planes(int fd, uint32_t width, uint32_t height, uint32_t fourcc,
-                                                    const struct mobilegl_shared_image_planes* planes, uint64_t* out_id) {
+                                                    const struct mobilegl_shared_image_planes* planes,
+                                                    uint64_t* out_id) {
     if (planes == nullptr || planes->plane_count != 2 || fourcc != MOBILEGL_SHARED_IMAGE_FOURCC_NV12) return -EINVAL;
     return mobilegl_shared_image_import(fd, width, height, fourcc, out_id);
 }

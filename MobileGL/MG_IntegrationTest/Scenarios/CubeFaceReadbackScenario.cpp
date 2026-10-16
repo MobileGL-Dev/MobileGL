@@ -52,8 +52,10 @@ namespace MGITest {
             void TearDown() override {
                 if (!Ready()) return;
                 glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
-                for (GLuint buffer : m_buffers) glDeleteBuffers(1, &buffer);
-                for (GLuint texture : m_textures) glDeleteTextures(1, &texture);
+                for (GLuint buffer : m_buffers)
+                    glDeleteBuffers(1, &buffer);
+                for (GLuint texture : m_textures)
+                    glDeleteTextures(1, &texture);
                 m_buffers.clear();
                 m_textures.clear();
                 DrainErrors();
@@ -78,15 +80,15 @@ namespace MGITest {
                 GLint count = 0;
                 glGetIntegerv(GL_NUM_EXTENSIONS, &count);
                 for (GLint i = 0; i < count; ++i) {
-                    const auto* ext = reinterpret_cast<const char*>(glGetStringi(GL_EXTENSIONS, static_cast<GLuint>(i)));
+                    const auto* ext =
+                        reinterpret_cast<const char*>(glGetStringi(GL_EXTENSIONS, static_cast<GLuint>(i)));
                     if (ext != nullptr && std::strcmp(ext, name) == 0) return true;
                 }
                 return false;
             }
 
             static void DrainErrors() {
-                for (int i = 0; i < 16 && glGetError() != GL_NO_ERROR; ++i) {
-                }
+                for (int i = 0; i < 16 && glGetError() != GL_NO_ERROR; ++i) {}
             }
 
             std::vector<GLuint> m_buffers;
@@ -103,8 +105,8 @@ namespace MGITest {
             glTexStorage2D(GL_TEXTURE_CUBE_MAP, 1, GL_RGBA8, kEdge, kEdge);
             for (int face = 0; face < 6; ++face) {
                 std::vector<GLubyte> seed(static_cast<size_t>(kFaceBytes), static_cast<GLubyte>(10 + face));
-                glTexSubImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + face, 0, 0, 0, kEdge, kEdge, GL_RGBA,
-                                GL_UNSIGNED_BYTE, seed.data());
+                glTexSubImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + face, 0, 0, 0, kEdge, kEdge, GL_RGBA, GL_UNSIGNED_BYTE,
+                                seed.data());
             }
             ASSERT_EQ(glGetError(), static_cast<GLenum>(GL_NO_ERROR)) << "seeding the six faces failed";
 
@@ -120,9 +122,8 @@ namespace MGITest {
             std::vector<GLubyte> packed(static_cast<size_t>(kFaceBytes), 0);
             glGetBufferSubData(GL_PIXEL_PACK_BUFFER, 0, kFaceBytes, packed.data());
             for (size_t i = 0; i < packed.size(); ++i) {
-                ASSERT_EQ(static_cast<int>(packed[i]), 15)
-                    << "byte " << i << ": the pack buffer holds face " << (static_cast<int>(packed[i]) - 10)
-                    << ", not -Z (face 5)";
+                ASSERT_EQ(static_cast<int>(packed[i]), 15) << "byte " << i << ": the pack buffer holds face "
+                                                           << (static_cast<int>(packed[i]) - 10) << ", not -Z (face 5)";
             }
             glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
             EXPECT_EQ(glGetError(), static_cast<GLenum>(GL_NO_ERROR));

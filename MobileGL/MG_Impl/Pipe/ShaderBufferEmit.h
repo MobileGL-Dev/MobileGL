@@ -45,9 +45,12 @@ namespace MobileGL::MG_Pipe {
     // chances to pair Uniform with ShaderStorage.
     inline constexpr BufferTarget MGPipeBufferTargetForShaderBufferClass(Uint32 cls) {
         switch (cls) {
-        case kMGPipeShaderBufferClassShaderStorage: return BufferTarget::ShaderStorage;
-        case kMGPipeShaderBufferClassAtomicCounter: return BufferTarget::AtomicCounter;
-        default: return BufferTarget::Uniform;
+        case kMGPipeShaderBufferClassShaderStorage:
+            return BufferTarget::ShaderStorage;
+        case kMGPipeShaderBufferClassAtomicCounter:
+            return BufferTarget::AtomicCounter;
+        default:
+            return BufferTarget::Uniform;
         }
     }
 
@@ -58,7 +61,8 @@ namespace MobileGL::MG_Pipe {
             return MGPipeSuppressorSlot::SetShaderBuffersShaderStorage;
         case kMGPipeShaderBufferClassAtomicCounter:
             return MGPipeSuppressorSlot::SetShaderBuffersAtomicCounter;
-        default: return MGPipeSuppressorSlot::SetShaderBuffersUniform;
+        default:
+            return MGPipeSuppressorSlot::SetShaderBuffersUniform;
         }
     }
 
@@ -68,9 +72,8 @@ namespace MobileGL::MG_Pipe {
     // same, or the per-class A/B tallies would be reading each other's traffic - and the mask
     // words are mixed because they are a FIELD of the record that the entries alone do not
     // determine (a uniform range and a storage range with the same handle differ only there).
-    inline Uint64 MGPipeShaderBufferSetContentHash(const MGPBufferRange* entries, Uint32 cls,
-                                                   Uint32 start, Uint32 count,
-                                                   const Uint32* writableMask) {
+    inline Uint64 MGPipeShaderBufferSetContentHash(const MGPBufferRange* entries, Uint32 cls, Uint32 start,
+                                                   Uint32 count, const Uint32* writableMask) {
         Uint64 hash = XXH64(entries, static_cast<SizeT>(count) * sizeof(MGPBufferRange), 0);
         hash = MGPipeMixShutter(hash, cls);
         hash = MGPipeMixShutter(hash, start);
@@ -86,9 +89,7 @@ namespace MobileGL::MG_Pipe {
         using GLContext = MG_State::GLState::GLContext;
 
         // Dirty bit 15 (NEW_CONST_BUFFERS) -> the uniform binding points.
-        Uint64 EmitConstBuffers(GLContext& ctx) {
-            return EmitClass(ctx, kMGPipeShaderBufferClassUniform);
-        }
+        Uint64 EmitConstBuffers(GLContext& ctx) { return EmitClass(ctx, kMGPipeShaderBufferClassUniform); }
 
         // Dirty bit 16 (NEW_SHADER_BUFFERS) -> the two WRITABLE classes, which share a bit
         // because they share a shutter: a storage bind and a counter bind are both "the
@@ -111,7 +112,8 @@ namespace MobileGL::MG_Pipe {
         }
 
         void ResetCounters() {
-            for (Uint32 cls = 0; cls < kMGPipeShaderBufferClassCount; ++cls) m_emissions[cls] = 0;
+            for (Uint32 cls = 0; cls < kMGPipeShaderBufferClassCount; ++cls)
+                m_emissions[cls] = 0;
         }
 
         // What a unit case reads. The emitter hands m_entries straight to the route, so "what
@@ -119,12 +121,8 @@ namespace MobileGL::MG_Pipe {
         const MGPShaderBuffers& LastHeader(Uint32 cls) const {
             return m_last[cls < kMGPipeShaderBufferClassCount ? cls : 0];
         }
-        const Array<MGPBufferRange, kMGPipeMaxBufferBindingPoints>& LastRanges() const {
-            return m_entries;
-        }
-        Uint64 EmissionCount(Uint32 cls) const {
-            return m_emissions[cls < kMGPipeShaderBufferClassCount ? cls : 0];
-        }
+        const Array<MGPBufferRange, kMGPipeMaxBufferBindingPoints>& LastRanges() const { return m_entries; }
+        Uint64 EmissionCount(Uint32 cls) const { return m_emissions[cls < kMGPipeShaderBufferClassCount ? cls : 0]; }
 
     private:
         Uint64 EmitClass(GLContext& ctx, Uint32 cls) {
@@ -133,9 +131,8 @@ namespace MobileGL::MG_Pipe {
             // never binds an indexed buffer of this class.
             const SizeT touched = ctx.GetTouchedBufferBindingPointCount(target);
             if (touched == 0) return 0;
-            const Uint32 count = touched < kMGPipeMaxBufferBindingPoints
-                                     ? static_cast<Uint32>(touched)
-                                     : kMGPipeMaxBufferBindingPoints;
+            const Uint32 count =
+                touched < kMGPipeMaxBufferBindingPoints ? static_cast<Uint32>(touched) : kMGPipeMaxBufferBindingPoints;
             // NO CLIENT-SIDE CLAMP TO THE DEVICE's LIMIT (ruling 10). MobileGL advertises the
             // GL 4.5 minimum of 84 uniform binding points while ES 3.2's is 72, and which of
             // them the driver can actually hold is a SERVER question: the backend clamps to
@@ -191,10 +188,8 @@ namespace MobileGL::MG_Pipe {
                 if (classIsWritable) MGPipeShaderBufferMaskSet(writableMask, i);
             }
 
-            const Uint64 hash =
-                MGPipeShaderBufferSetContentHash(m_entries.data(), cls, 0, count, writableMask);
-            if (!MGPipeSetHashSuppressorInstance().ShouldEmit(
-                    MGPipeSuppressorSlotForShaderBufferClass(cls), hash)) {
+            const Uint64 hash = MGPipeShaderBufferSetContentHash(m_entries.data(), cls, 0, count, writableMask);
+            if (!MGPipeSetHashSuppressorInstance().ShouldEmit(MGPipeSuppressorSlotForShaderBufferClass(cls), hash)) {
                 return 0;
             }
             MGPShaderBuffers& header = m_last[cls];

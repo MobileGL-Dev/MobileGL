@@ -365,8 +365,8 @@ TEST(ProgramArtifactsCodec, ACompactArchiveOfTenEmptySpirvModulesRoundTrips) {
         spirv.generatedSpirv.resize(10);
         Vector<Uint8> bytes;
         EncodeProgramArtifacts(LinkArtifacts{}, spirv, bytes);
-        const SizeT remaining = BytesAfterTheCount(bytes, spirv.generatedSpirv.size(),
-                                                   Vector<Uint8>(10 * sizeof(Uint64), 0));
+        const SizeT remaining =
+            BytesAfterTheCount(bytes, spirv.generatedSpirv.size(), Vector<Uint8>(10 * sizeof(Uint64), 0));
         ASSERT_LT(remaining, spirv.generatedSpirv.size() * sizeof(Vector<unsigned>))
             << "fixture: a sizeof(value_type) charge would admit this count, so the case could not go red";
 
@@ -375,7 +375,8 @@ TEST(ProgramArtifactsCodec, ACompactArchiveOfTenEmptySpirvModulesRoundTrips) {
         ASSERT_TRUE(DecodeProgramArtifacts(bytes.data(), bytes.size(), decodedLink, decodedSpirv))
             << "a SpirvArtifacts with ten empty modules, which this encoder wrote, was refused";
         ASSERT_EQ(decodedSpirv.generatedSpirv.size(), 10u);
-        for (const auto& module : decodedSpirv.generatedSpirv) EXPECT_TRUE(module.empty());
+        for (const auto& module : decodedSpirv.generatedSpirv)
+            EXPECT_TRUE(module.empty());
         Vector<Uint8> reencoded;
         EncodeProgramArtifacts(decodedLink, decodedSpirv, reencoded);
         EXPECT_EQ(reencoded, bytes);
@@ -392,8 +393,7 @@ TEST(ProgramArtifactsCodec, ATruncatedStreamIsRefusedNotGuessed) {
 
     // Cut at a spread of points rather than one: the header, a length prefix, the middle of a
     // string and the last byte all fail through different branches.
-    for (const SizeT cut : {SizeT{0}, SizeT{4}, SizeT{9}, bytes.size() / 3, bytes.size() / 2,
-                            bytes.size() - 1}) {
+    for (const SizeT cut : {SizeT{0}, SizeT{4}, SizeT{9}, bytes.size() / 3, bytes.size() / 2, bytes.size() - 1}) {
         LinkArtifacts link;
         SpirvArtifacts spirv;
         link.infoLog = "must be cleared";
@@ -432,8 +432,7 @@ TEST(ProgramArtifactsCodec, AVectorCountCannotReservePastTheRemainingArchiveByte
     ASSERT_GT(perElement, 1u);
     ASSERT_LT(perElement, sizeof(UniformReflection));
     const Uint64 forgedCount = static_cast<Uint64>(available / perElement) + 1;
-    ASSERT_LT(forgedCount, static_cast<Uint64>(available))
-        << "fixture must pass the old count <= remaining check";
+    ASSERT_LT(forgedCount, static_cast<Uint64>(available)) << "fixture must pass the old count <= remaining check";
     std::memcpy(bytes.data() + countOffset, &forgedCount, sizeof(forgedCount));
 
     LinkArtifacts link;

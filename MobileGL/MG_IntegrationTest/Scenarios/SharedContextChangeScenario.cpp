@@ -203,8 +203,8 @@ void main() {
         ClearTo(0.0f, 0.0f, 1.0f, 1.0f);
         DrawQuad(program);
         const Image whole = ReadPixels(kFboSize, kFboSize);
-        EXPECT_TRUE(RegionIsMostly(whole, 0, kFboSize - 1, 0, kFboSize - 1, "green", 0.0,
-                                   "the resized renderbuffer through A"))
+        EXPECT_TRUE(
+            RegionIsMostly(whole, 0, kFboSize - 1, 0, kFboSize - 1, "green", 0.0, "the resized renderbuffer through A"))
             << "a corner left uncovered means A still recorded the renderbuffer's old extent";
 
         glBindFramebuffer(GL_FRAMEBUFFER, 0);

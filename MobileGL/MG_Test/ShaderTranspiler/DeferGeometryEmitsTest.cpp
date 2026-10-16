@@ -64,7 +64,8 @@ namespace {
 
     SizeT Count(const String& haystack, const String& needle) {
         SizeT count = 0;
-        for (SizeT at = haystack.find(needle); at != String::npos; at = haystack.find(needle, at + 1)) ++count;
+        for (SizeT at = haystack.find(needle); at != String::npos; at = haystack.find(needle, at + 1))
+            ++count;
         return count;
     }
 

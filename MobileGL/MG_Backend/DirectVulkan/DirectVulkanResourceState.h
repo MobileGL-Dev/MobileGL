@@ -12,9 +12,9 @@
 
 namespace MobileGL::MG_State::GLState {
     class ProgramObject;
-}
+} // namespace MobileGL::MG_State::GLState
 
 namespace MobileGL::MG_Backend::DirectVulkan {
     GLuint GetShaderStorageBlockIndex(const MG_State::GLState::ProgramObject& program, const String& name);
     GLuint GetShaderStorageBlockBinding(const MG_State::GLState::ProgramObject& program, GLuint blockIndex);
-}
+} // namespace MobileGL::MG_Backend::DirectVulkan

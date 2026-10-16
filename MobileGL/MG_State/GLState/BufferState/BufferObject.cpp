@@ -63,7 +63,7 @@ namespace MobileGL::MG_State::GLState {
             if (!MG_Record::PersistentMapTracker::OnServerRole()) return;
             FatalLegacyBufferArmFromApplyThread(accessor);
         }
-    }
+    } // namespace
 
     namespace {
         // The live persistent READ maps, keyed on the never-reused lifetime id. Recursive
@@ -307,9 +307,8 @@ namespace MobileGL::MG_State::GLState {
     void BufferObject::ReleaseMemory(Bool landStagedWrites) {
         if (!m_isMapped) return;
 
-        if (landStagedWrites &&
-            (m_mappingAccess & BufferMappingAccessBit::Write)) { // if we wrote to the buffer
-            if (!(m_mappingAccess & BufferMappingAccessBit::FlushExplicit)) { // if we didn't flush explicitly
+        if (landStagedWrites && (m_mappingAccess & BufferMappingAccessBit::Write)) { // if we wrote to the buffer
+            if (!(m_mappingAccess & BufferMappingAccessBit::FlushExplicit)) {        // if we didn't flush explicitly
                 const SizeT mappedLength = m_mappedRange.end - m_mappedRange.start;
                 if (m_resource.IsGpuResident()) {
                     // A persistent map of an adopted store wrote straight into coherent
@@ -452,8 +451,7 @@ namespace MobileGL::MG_State::GLState {
             // stage-buffer under-report what the BACKEND actually moves, which is the question
             // that class exists to answer; the two counters are different questions about the
             // same bytes and PipeStats.cpp:33-35 now says so.
-            MG_Util::PipeStats::AddBytes(MG_Util::PipeStats::ByteClass::PersistentMapPush,
-                                         static_cast<Uint64>(size));
+            MG_Util::PipeStats::AddBytes(MG_Util::PipeStats::ByteClass::PersistentMapPush, static_cast<Uint64>(size));
         }
     }
 
@@ -484,8 +482,8 @@ namespace MobileGL::MG_State::GLState {
         // regression one layer down, and the rising-edge record is what breaks the cycle: the
         // server learns a host writer is live BEFORE the first probe, answers dirty while the
         // map lives, and the ensure - and with it the push - runs every draw.
-        const Bool live = m_isMapped && (m_mappingAccess & BufferMappingAccessBit::Write) &&
-                          !m_resource.IsGpuResident();
+        const Bool live =
+            m_isMapped && (m_mappingAccess & BufferMappingAccessBit::Write) && !m_resource.IsGpuResident();
         if (live == m_publishedLiveHostWrites) return;
         m_publishedLiveHostWrites = live;
         // AN ADOPTION ENDS THE STATE WITHOUT A RECORD. The one falling edge a resident store
@@ -511,8 +509,7 @@ namespace MobileGL::MG_State::GLState {
         // nothing is published and nothing is pushed, so the probe answers clean, the frame
         // draws the last uploaded bytes, and PersistentCoherentMapScenario goes red.
         if (blockBytes == 0) return;
-        const SizeT length = blockBytes >= static_cast<Uint64>(m_size) ? m_size
-                                                                      : static_cast<SizeT>(blockBytes);
+        const SizeT length = blockBytes >= static_cast<Uint64>(m_size) ? m_size : static_cast<SizeT>(blockBytes);
         NotifySubData(0, length);
     }
 
@@ -546,8 +543,7 @@ namespace MobileGL::MG_State::GLState {
         // mark: only a writeback produced by a record after the one the mark was taken for can
         // (the readback SyncGpuWrites emits always is). 0 is the synchronous answer - monolith
         // and every no-session case - which has nothing to be ordered against.
-        if (atOffset == 0 && data.size >= m_size &&
-            (producedAtSeq == 0 || producedAtSeq > m_gpuWriteMarkSeq)) {
+        if (atOffset == 0 && data.size >= m_size && (producedAtSeq == 0 || producedAtSeq > m_gpuWriteMarkSeq)) {
             m_gpuWritePending = false;
         }
     }
@@ -618,8 +614,7 @@ namespace MobileGL::MG_State::GLState {
                     // channel makes the last slice's landing imply every earlier one.
                     for (SizeT off = 0; off < m_size; off += sliceBytes) {
                         const SizeT left = m_size - off;
-                        MG_Pipe::MGPipeEmitResourceReadbackRange(*this, off,
-                                                                 left < sliceBytes ? left : sliceBytes);
+                        MG_Pipe::MGPipeEmitResourceReadbackRange(*this, off, left < sliceBytes ? left : sliceBytes);
                     }
                     // No single writeback covered the whole buffer, so
                     // WritebackFromBackend's clear (above) never fired - but every slice
@@ -728,10 +723,9 @@ namespace MobileGL::MG_State::GLState {
     }
 
     void BufferObject::FillSubData(DataPtr pattern, SizeT atOffset, SizeT size) {
-        MOBILEGL_ASSERT(pattern.data != nullptr && pattern.size > 0,
-                        "FillSubData requires a non-empty pattern.");
-        MOBILEGL_ASSERT(size % pattern.size == 0,
-                        "FillSubData size (%zu) must be a multiple of pattern size (%zu).", size, pattern.size);
+        MOBILEGL_ASSERT(pattern.data != nullptr && pattern.size > 0, "FillSubData requires a non-empty pattern.");
+        MOBILEGL_ASSERT(size % pattern.size == 0, "FillSubData size (%zu) must be a multiple of pattern size (%zu).",
+                        size, pattern.size);
         MOBILEGL_ASSERT(atOffset <= m_size && size <= m_size - atOffset,
                         "FillSubData out of bounds: atOffset (%zu) + size (%zu) > m_size (%zu)", atOffset, size,
                         m_size);
@@ -748,8 +742,7 @@ namespace MobileGL::MG_State::GLState {
         // for nothing.
         if (m_resource.IsGpuResident() &&
             // The same question, asked of whichever table owns the family in this build.
-            MG_Pipe::MGPipeResourceSubsystemEnabled() && MG_Pipe::MGPipeResourceOpsHaveSubDataResident()
-        ) {
+            MG_Pipe::MGPipeResourceSubsystemEnabled() && MG_Pipe::MGPipeResourceOpsHaveSubDataResident()) {
             Vector<Uint8> expanded(size);
             if (pattern.size == 1) {
                 Memset(expanded.data(), *static_cast<const Uint8*>(pattern.data), size);
@@ -905,8 +898,7 @@ namespace MobileGL::MG_State::GLState {
             // shadow when the backend declines (returns null). Only attempted once - the
             // storage is immutable and outlives unmap/remap.
             if (!m_resource.IsGpuResident() && (access & BufferMappingAccessBit::Write) &&
-                !(access & BufferMappingAccessBit::FlushExplicit) &&
-                MG_Pipe::MGPipeResourceSubsystemEnabled()) {
+                !(access & BufferMappingAccessBit::FlushExplicit) && MG_Pipe::MGPipeResourceSubsystemEnabled()) {
                 if (void* pushedBase = MG_Pipe::MGPipeEmitMapPersistent(*this)) {
                     // P11 B2 made this reachable (a T0 adoption), so the tracker lets go of the
                     // shadow range WHILE THE SHADOW IS STILL OURS: AdoptPersistentMap frees it, and

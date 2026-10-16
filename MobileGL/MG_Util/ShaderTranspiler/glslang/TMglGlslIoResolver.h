@@ -33,8 +33,7 @@ namespace MobileGL {
                            ExplicitVarSlotMap* opaqueUniformBindings,
                            std::set<String>* storageBlocksWithoutBinding = nullptr,
                            std::set<String>* uniformBlocksWithoutBinding = nullptr,
-                           const ResourceBindingLimits* bindingLimits = nullptr,
-                           String* bindingViolation = nullptr)
+                           const ResourceBindingLimits* bindingLimits = nullptr, String* bindingViolation = nullptr)
             : TDefaultGlslIoResolver(intermediate), m_explicitVertexIns(vertexIns), m_explicitFragOuts(fragOuts),
               m_explicitFragOutIndices(fragOutIndices), m_explicitOpaqueUniformBindings(opaqueUniformBindings),
               m_storageBlocksWithoutBinding(storageBlocksWithoutBinding),
@@ -45,8 +44,7 @@ namespace MobileGL {
                            const ExplicitVarSlotMap& fragOutIndices, ExplicitVarSlotMap* opaqueUniformBindings,
                            std::set<String>* storageBlocksWithoutBinding = nullptr,
                            std::set<String>* uniformBlocksWithoutBinding = nullptr,
-                           const ResourceBindingLimits* bindingLimits = nullptr,
-                           String* bindingViolation = nullptr)
+                           const ResourceBindingLimits* bindingLimits = nullptr, String* bindingViolation = nullptr)
             : TMglGlslIoResolver(*program.getIntermediate(stage), vertexIns, fragOuts, fragOutIndices,
                                  opaqueUniformBindings, storageBlocksWithoutBinding, uniformBlocksWithoutBinding,
                                  bindingLimits, bindingViolation) {}

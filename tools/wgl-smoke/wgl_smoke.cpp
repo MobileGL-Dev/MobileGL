@@ -184,9 +184,9 @@ static LONG WINAPI CrashDump(EXCEPTION_POINTERS* ep) {
     static volatile LONG entered = 0;
     if (ep->ExceptionRecord->ExceptionCode != 0xC0000005) return EXCEPTION_CONTINUE_SEARCH;
     if (InterlockedExchange(&entered, 1)) return EXCEPTION_CONTINUE_SEARCH;
-    HANDLE f = CreateFileA(
-        "C:\\Users\\yello\\AndroidStudioProjects\\FoldCraftLauncher\\MobileGL\\.claude\\worktrees\\wgl-host\\wgl-smoke\\crash-stack.txt",
-        GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    HANDLE f = CreateFileA("C:\\Users\\yello\\AndroidStudioProjects\\FoldCraftLauncher\\MobileGL\\."
+                           "claude\\worktrees\\wgl-host\\wgl-smoke\\crash-stack.txt",
+                           GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (f == INVALID_HANDLE_VALUE) {
         TerminateProcess(GetCurrentProcess(), 0x43);
     }
@@ -290,10 +290,8 @@ int main() {
              eglGetError_ ? eglGetError_() : -1);
     }
 
-    auto wglGetExtensionsStringARB =
-        (PFN_wglGetExtensionsStringARB)p_wglGetProcAddress("wglGetExtensionsStringARB");
-    auto wglCreateContextAttribsARB =
-        (PFN_wglCreateContextAttribsARB)p_wglGetProcAddress("wglCreateContextAttribsARB");
+    auto wglGetExtensionsStringARB = (PFN_wglGetExtensionsStringARB)p_wglGetProcAddress("wglGetExtensionsStringARB");
+    auto wglCreateContextAttribsARB = (PFN_wglCreateContextAttribsARB)p_wglGetProcAddress("wglCreateContextAttribsARB");
     auto wglSwapIntervalEXT = (PFN_wglSwapIntervalEXT)p_wglGetProcAddress("wglSwapIntervalEXT");
     auto wglGetPixelFormatAttribivARB =
         (PFN_wglGetPixelFormatAttribivARB)p_wglGetProcAddress("wglGetPixelFormatAttribivARB");
@@ -326,7 +324,7 @@ int main() {
     int chosenFormat = 0;
     for (int i = 1; i <= nativeCount; ++i) {
         const int attribs[] = {WGL_SUPPORT_OPENGL_ARB, WGL_DRAW_TO_WINDOW_ARB, WGL_PIXEL_TYPE_ARB,
-                               WGL_DOUBLE_BUFFER_ARB, WGL_DEPTH_BITS_ARB, WGL_STENCIL_BITS_ARB};
+                               WGL_DOUBLE_BUFFER_ARB,  WGL_DEPTH_BITS_ARB,     WGL_STENCIL_BITS_ARB};
         int values[6] = {};
         if (!wglGetPixelFormatAttribivARB(dc, i, 0, 6, attribs, values)) continue;
         if (values[0] && values[1] && values[2] == WGL_TYPE_RGBA_ARB && values[3] && values[4] >= 24 &&
@@ -342,11 +340,16 @@ int main() {
     if (!SetPixelFormat(dc, chosenFormat, &realPfd)) FAIL("SetPixelFormat (real) failed");
 
     const int ctxAttribs[] = {
-        WGL_CONTEXT_OPENGL_NO_ERROR_ARB, 1,
-        WGL_CONTEXT_MAJOR_VERSION_ARB, 3,
-        WGL_CONTEXT_MINOR_VERSION_ARB, 2,
-        WGL_CONTEXT_FLAGS_ARB, WGL_CONTEXT_FORWARD_COMPATIBLE_BIT_ARB,
-        WGL_CONTEXT_PROFILE_MASK_ARB, WGL_CONTEXT_CORE_PROFILE_BIT_ARB,
+        WGL_CONTEXT_OPENGL_NO_ERROR_ARB,
+        1,
+        WGL_CONTEXT_MAJOR_VERSION_ARB,
+        3,
+        WGL_CONTEXT_MINOR_VERSION_ARB,
+        2,
+        WGL_CONTEXT_FLAGS_ARB,
+        WGL_CONTEXT_FORWARD_COMPATIBLE_BIT_ARB,
+        WGL_CONTEXT_PROFILE_MASK_ARB,
+        WGL_CONTEXT_CORE_PROFILE_BIT_ARB,
         0,
     };
     HGLRC ctx = wglCreateContextAttribsARB(dc, nullptr, ctxAttribs);
@@ -389,8 +392,7 @@ int main() {
     GLint major = 0, minor = 0;
     glGetIntegerv_(GL_MAJOR_VERSION, &major);
     glGetIntegerv_(GL_MINOR_VERSION, &minor);
-    std::printf("real ctx: GL %d.%d | %s | %s\n", major, minor, glGetString_(GL_RENDERER),
-                glGetString_(GL_VERSION));
+    std::printf("real ctx: GL %d.%d | %s | %s\n", major, minor, glGetString_(GL_RENDERER), glGetString_(GL_VERSION));
     if (major < 3 || (major == 3 && minor < 2)) FAIL("context version below 3.2");
 
     const char* vsSrc = "#version 150 core\n"

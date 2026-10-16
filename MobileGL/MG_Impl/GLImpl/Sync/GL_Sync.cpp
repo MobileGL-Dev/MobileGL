@@ -196,8 +196,8 @@ namespace MobileGL::MG_Impl::GLImpl {
         case GL_SYNC_STATUS: {
             const auto backendGetSyncStatus = MG_Backend::gBackendFunctionsTable.GL.GetSyncStatus;
             MGP_FILL(GetSyncStatus);
-            const Bool signaled = !backendGetSyncStatus || !syncObject->backendHandle ||
-                                  backendGetSyncStatus(syncObject->backendHandle);
+            const Bool signaled =
+                !backendGetSyncStatus || !syncObject->backendHandle || backendGetSyncStatus(syncObject->backendHandle);
             value = signaled ? GL_SIGNALED : GL_UNSIGNALED;
             break;
         }

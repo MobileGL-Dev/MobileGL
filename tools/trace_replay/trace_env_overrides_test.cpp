@@ -26,50 +26,47 @@
 
 namespace {
 
-int gFailures = 0;
+    int gFailures = 0;
 
-void ExpectSplit(const std::string& input, const std::vector<std::string>& expected) {
-    const std::vector<std::string> actual = mobilegl_trace::SplitSemicolonList(input);
-    if (actual == expected) {
-        return;
+    void ExpectSplit(const std::string& input, const std::vector<std::string>& expected) {
+        const std::vector<std::string> actual = mobilegl_trace::SplitSemicolonList(input);
+        if (actual == expected) {
+            return;
+        }
+        ++gFailures;
+        std::cerr << "SplitSemicolonList(\"" << input << "\") gave " << actual.size() << " entries, expected "
+                  << expected.size() << ":";
+        for (const std::string& entry : actual) {
+            std::cerr << " [" << entry << "]";
+        }
+        std::cerr << "\n";
     }
-    ++gFailures;
-    std::cerr << "SplitSemicolonList(\"" << input << "\") gave " << actual.size()
-              << " entries, expected " << expected.size() << ":";
-    for (const std::string& entry : actual) {
-        std::cerr << " [" << entry << "]";
-    }
-    std::cerr << "\n";
-}
 
-const char* ActionName(mobilegl_trace::EnvOverrideAction action) {
-    switch (action) {
+    const char* ActionName(mobilegl_trace::EnvOverrideAction action) {
+        switch (action) {
         case mobilegl_trace::EnvOverrideAction::Ignore:
             return "Ignore";
         case mobilegl_trace::EnvOverrideAction::Set:
             return "Set";
         case mobilegl_trace::EnvOverrideAction::Unset:
             return "Unset";
+        }
+        return "?";
     }
-    return "?";
-}
 
-void ExpectParse(const std::string& entry,
-                 mobilegl_trace::EnvOverrideAction expectedAction,
-                 const std::string& expectedKey,
-                 const std::string& expectedValue) {
-    std::string key = "<untouched>";
-    std::string value = "<untouched>";
-    const mobilegl_trace::EnvOverrideAction action =
-            mobilegl_trace::ParseEnvOverride(entry, &key, &value);
-    if (action == expectedAction && key == expectedKey && value == expectedValue) {
-        return;
+    void ExpectParse(const std::string& entry, mobilegl_trace::EnvOverrideAction expectedAction,
+                     const std::string& expectedKey, const std::string& expectedValue) {
+        std::string key = "<untouched>";
+        std::string value = "<untouched>";
+        const mobilegl_trace::EnvOverrideAction action = mobilegl_trace::ParseEnvOverride(entry, &key, &value);
+        if (action == expectedAction && key == expectedKey && value == expectedValue) {
+            return;
+        }
+        ++gFailures;
+        std::cerr << "ParseEnvOverride(\"" << entry << "\") gave " << ActionName(action) << " key=[" << key
+                  << "] value=[" << value << "], expected " << ActionName(expectedAction) << " key=[" << expectedKey
+                  << "] value=[" << expectedValue << "]\n";
     }
-    ++gFailures;
-    std::cerr << "ParseEnvOverride(\"" << entry << "\") gave " << ActionName(action) << " key=["
-              << key << "] value=[" << value << "], expected " << ActionName(expectedAction)
-              << " key=[" << expectedKey << "] value=[" << expectedValue << "]\n";
-}
 
 } // namespace
 
@@ -79,8 +76,7 @@ int main() {
     // Splitting.
     ExpectSplit("", {});
     ExpectSplit("MOBILEGL_PIPE_PUSH=1", {"MOBILEGL_PIPE_PUSH=1"});
-    ExpectSplit("MOBILEGL_PIPE_PUSH=1;MOBILEGL_PIPE_VERIFY=1",
-                {"MOBILEGL_PIPE_PUSH=1", "MOBILEGL_PIPE_VERIFY=1"});
+    ExpectSplit("MOBILEGL_PIPE_PUSH=1;MOBILEGL_PIPE_VERIFY=1", {"MOBILEGL_PIPE_PUSH=1", "MOBILEGL_PIPE_VERIFY=1"});
     // A trailing ';' is what a caller that joins a list gets for free, and an empty entry
     // must not be turned into an unsetenv("") - the whole passthrough would then depend on
     // how carefully the shell script trimmed its own string.

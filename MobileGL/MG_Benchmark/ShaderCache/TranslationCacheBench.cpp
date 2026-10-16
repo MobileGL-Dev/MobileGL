@@ -108,8 +108,7 @@ void main() {
 
     class CacheModeScope {
     public:
-        explicit CacheModeScope(const Bool enabled)
-            : m_saved(MG_Config::Features.ShaderTranslationCache) {
+        explicit CacheModeScope(const Bool enabled) : m_saved(MG_Config::Features.ShaderTranslationCache) {
             MG_Config::Features.ShaderTranslationCache =
                 enabled ? MG_Config::QuirkOverride::ForceOn : MG_Config::QuirkOverride::ForceOff;
         }
@@ -339,8 +338,7 @@ BENCHMARK(BM_SharedShaderLink_CacheOn)->Arg(0)->Arg(120)->Unit(benchmark::kMicro
 // ---------------------------------------------------------------------------------------
 static void BM_EsslTranspile_CacheOff(benchmark::State& state) {
     MobileGL::Initialize();
-    const Vector<Uint32> spirv =
-        BuildSanitizedFragmentSpirv(SwizzleLikeFragment("", static_cast<int>(state.range(0))));
+    const Vector<Uint32> spirv = BuildSanitizedFragmentSpirv(SwizzleLikeFragment("", static_cast<int>(state.range(0))));
     if (spirv.empty()) {
         state.SkipWithError("could not build the fragment module");
         return;
@@ -359,8 +357,7 @@ BENCHMARK(BM_EsslTranspile_CacheOff)->Arg(0)->Arg(120)->Unit(benchmark::kMicrose
 
 static void BM_EsslTranspile_CacheOn(benchmark::State& state) {
     MobileGL::Initialize();
-    const Vector<Uint32> spirv =
-        BuildSanitizedFragmentSpirv(SwizzleLikeFragment("", static_cast<int>(state.range(0))));
+    const Vector<Uint32> spirv = BuildSanitizedFragmentSpirv(SwizzleLikeFragment("", static_cast<int>(state.range(0))));
     if (spirv.empty()) {
         state.SkipWithError("could not build the fragment module");
         return;
@@ -413,8 +410,7 @@ BENCHMARK(BM_EsslTranspile_CacheOn)->Arg(0)->Arg(120)->Unit(benchmark::kMicrosec
 // hit rate reported below is high but not exactly 1.0 per iteration.
 namespace {
     String UniqueFragmentSource(const Uint64 serial, const int padLines) {
-        return SwizzleLikeFragment("", padLines) +
-               "\n// unique-" + std::to_string(serial) + "\n";
+        return SwizzleLikeFragment("", padLines) + "\n// unique-" + std::to_string(serial) + "\n";
     }
 } // namespace
 

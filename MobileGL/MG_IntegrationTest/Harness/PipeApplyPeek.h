@@ -86,8 +86,7 @@ namespace MGITest {
         bool DepthStencilModeIsReadable;
     };
 
-    bool PeekEsprytAppliedTextureParams(unsigned glTextureName, unsigned glTarget,
-                                        EsprytAppliedTextureParamsPeek* out);
+    bool PeekEsprytAppliedTextureParams(unsigned glTextureName, unsigned glTarget, EsprytAppliedTextureParamsPeek* out);
 
     // ---- and the claim that makes the two above mean anything ------------------------------
     //

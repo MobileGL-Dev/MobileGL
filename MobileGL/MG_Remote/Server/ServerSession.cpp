@@ -109,8 +109,7 @@ namespace MobileGL::MG_Remote::Server {
         // belong in shm, never here), so one stack-free vector sized from PeekFrameSize is
         // the whole reader. The BUFFER_TOO_SMALL half of ReceiveFrame's contract is what
         // makes the two-step safe: a short buffer leaves the message queued.
-        MobileGLResult ReceiveEnvelope(Transport::ITransport& transport, std::vector<Uint8>& out,
-                                       Uint32 timeoutMs) {
+        MobileGLResult ReceiveEnvelope(Transport::ITransport& transport, std::vector<Uint8>& out, Uint32 timeoutMs) {
             Uint64 size = 0;
             MobileGLMutableByteSpan empty{nullptr, 0};
             const MobileGLResult probe = transport.ReceiveFrame(empty, &size, timeoutMs);
@@ -124,10 +123,8 @@ namespace MobileGL::MG_Remote::Server {
             return transport.ReceiveFrame(span, &size, 0);
         }
 
-        MobileGLResult SendEnvelope(Transport::ITransport& transport,
-                                    ::flatbuffers::FlatBufferBuilder& builder) {
-            return transport.SendFrame(
-                MobileGLByteSpan{builder.GetBufferPointer(), builder.GetSize()});
+        MobileGLResult SendEnvelope(Transport::ITransport& transport, ::flatbuffers::FlatBufferBuilder& builder) {
+            return transport.SendFrame(MobileGLByteSpan{builder.GetBufferPointer(), builder.GetSize()});
         }
 
         // Every message from the peer is verified before a single field is read: the control
@@ -181,16 +178,16 @@ namespace MobileGL::MG_Remote::Server {
         // SetCapabilityBits / SetConsumedSubsystems for why the one that used to be here was
         // the phase's marquee defect committed from the server's side.
         [[noreturn]] void FatalUnsetCallMask(Bool capBitsSet, Bool consumedSet) {
-            SessionFail(MGFatalFamily::UnsetCallMask, "MGPipe: Fatal{UnsetCallMask} - %s%s%s was never set on this ServerSession, "
-                    "and there is no default: a guessed consumer mask makes the client's R-8 "
-                    "liveness gates answer from a server-side fact the server never stated. The "
-                    "client would stop emitting whole record families, clear its dirty flags on "
-                    "acceptance anyway, and the lane would go green with the uploads lost "
-                    "(ID-39, reflected). Call SetConsumedSubsystems() and SetCapabilityBits() "
-                    "before Accept(); SetCapabilityBits(0) is a legitimate explicit answer",
-                    capBitsSet ? "" : "SetCapabilityBits",
-                    (!capBitsSet && !consumedSet) ? " and " : "",
-                    consumedSet ? "" : "SetConsumedSubsystems");
+            SessionFail(MGFatalFamily::UnsetCallMask,
+                        "MGPipe: Fatal{UnsetCallMask} - %s%s%s was never set on this ServerSession, "
+                        "and there is no default: a guessed consumer mask makes the client's R-8 "
+                        "liveness gates answer from a server-side fact the server never stated. The "
+                        "client would stop emitting whole record families, clear its dirty flags on "
+                        "acceptance anyway, and the lane would go green with the uploads lost "
+                        "(ID-39, reflected). Call SetConsumedSubsystems() and SetCapabilityBits() "
+                        "before Accept(); SetCapabilityBits(0) is a legitimate explicit answer",
+                        capBitsSet ? "" : "SetCapabilityBits", (!capBitsSet && !consumedSet) ? " and " : "",
+                        consumedSet ? "" : "SetConsumedSubsystems");
         }
 
         // ---- P5c ev: the reverse channel's PRODUCER callbacks (CONTRACT-P5C §4.1) --------
@@ -208,11 +205,12 @@ namespace MobileGL::MG_Remote::Server {
         // a Reserve that returns nullptr is Fatal{EventRingOverflow}. CountDrop and the
         // eventRingFull latch stay built and stay unused-by-policy; P9 owns the policy.
         [[noreturn]] void FatalEventRingOverflow(const char* eventName, Uint64 payloadBytes) {
-            SessionFail(MGFatalFamily::EventRingOverflow, "MGPipe: Fatal{EventRingOverflow} - the producer of %s could not reserve "
-                    "%llu bytes on SEG_EVENT. P5c's events are lossless and a full ring under "
-                    "lockstep is a producer burst no measured workload has, so this is a "
-                    "defect, not a drop (CONTRACT-P5C §4.4; the drop policy is P9's)",
-                    eventName, static_cast<unsigned long long>(payloadBytes));
+            SessionFail(MGFatalFamily::EventRingOverflow,
+                        "MGPipe: Fatal{EventRingOverflow} - the producer of %s could not reserve "
+                        "%llu bytes on SEG_EVENT. P5c's events are lossless and a full ring under "
+                        "lockstep is a producer burst no measured workload has, so this is a "
+                        "defect, not a drop (CONTRACT-P5C §4.4; the drop policy is P9's)",
+                        eventName, static_cast<unsigned long long>(payloadBytes));
         }
 
         // With run-ahead the client drains SEG_EVENT only at its waits, so a full event ring is an
@@ -240,13 +238,13 @@ namespace MobileGL::MG_Remote::Server {
         }
 
         Uint32 MillisecondsSince(std::chrono::steady_clock::time_point start) {
-            const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                std::chrono::steady_clock::now() - start).count();
+            const auto elapsed =
+                std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
             return elapsed <= 0 ? 0u : static_cast<Uint32>(elapsed);
         }
 
-        void* ReserveEventOrBlock(ServerSession& session, Transport::EventKind kind,
-                                  const char* eventName, Uint64 payloadBytes) {
+        void* ReserveEventOrBlock(ServerSession& session, Transport::EventKind kind, const char* eventName,
+                                  Uint64 payloadBytes) {
             // FORFEITED: every event after the first drop is a drop too, at once - no Reserve and
             // no second wait. The session is on its way down, and the peer has already shown it
             // does not read this ring.
@@ -260,28 +258,25 @@ namespace MobileGL::MG_Remote::Server {
             // be a hang with a comment on it.
             const Uint64 cap = session.Events().Ring().MaxRecordBytes();
             if (payloadBytes + sizeof(Transport::RingRecordHeader) > cap) {
-                SessionFail(MGFatalFamily::EventRingOverflow, "MGPipe: Fatal{EventRingOverflow} - %s needs %llu bytes and SEG_EVENT "
-                        "caps ONE record at %llu (half its capacity). Flow control cannot help: "
-                        "no amount of draining makes a record fit a ring that is too small for "
-                        "it. SEG_EVENT's size is fixed (SessionSegmentSizes::EventRingBytes; the "
-                        "MOBILEGL_IPC_EVENT_KB knob P5e proposed was never built), so slice the "
-                        "event at its producer, as the writeback path already does",
-                        eventName, static_cast<unsigned long long>(payloadBytes),
-                        static_cast<unsigned long long>(cap));
+                SessionFail(MGFatalFamily::EventRingOverflow,
+                            "MGPipe: Fatal{EventRingOverflow} - %s needs %llu bytes and SEG_EVENT "
+                            "caps ONE record at %llu (half its capacity). Flow control cannot help: "
+                            "no amount of draining makes a record fit a ring that is too small for "
+                            "it. SEG_EVENT's size is fixed (SessionSegmentSizes::EventRingBytes; the "
+                            "MOBILEGL_IPC_EVENT_KB knob P5e proposed was never built), so slice the "
+                            "event at its producer, as the writeback path already does",
+                            eventName, static_cast<unsigned long long>(payloadBytes),
+                            static_cast<unsigned long long>(cap));
             }
 
             const auto signals = session.DataLink()->Signals();
             Transport::Doorbell& bell = session.DataLink()->ConsumerBell();
-            const auto drained = [signals] {
-                return signals.EventRingFull->load(std::memory_order_acquire) == 0;
-            };
+            const auto drained = [signals] { return signals.EventRingFull->load(std::memory_order_acquire) == 0; };
             // THE WAIT ALSO ENDS ON A STOP (PH-6 fix round). ServerLoop::Stop() raises the session's
             // request and rings this same bell; a predicate that asked only "drained?" swallowed
             // that ring and parked again for the rest of the knob, so any knob over Stop()'s 5000 ms
             // join turned an ordinary end of the control stream into Fatal{ApplyThreadJoinTimeout}.
-            const auto drainedOrStopping = [&drained, &session] {
-                return drained() || session.ApplyStopRequested();
-            };
+            const auto drainedOrStopping = [&drained, &session] { return drained() || session.ApplyStopRequested(); };
             // ONE DEADLINE FOR THE WHOLE RESERVATION, NOT ONE PER PARK. The loop goes round as
             // often as the client clears the latch - that is how a client that drains in pieces
             // eventually makes room - but every round spends the same budget, so a peer that
@@ -299,13 +294,13 @@ namespace MobileGL::MG_Remote::Server {
             const auto outOfPatience = [&]() {
                 return shortDrains == 0
                            ? session.ForfeitReverseChannel("NotDraining", "the client did not drain SEG_EVENT",
-                                                           eventName, payloadBytes, MillisecondsSince(start),
-                                                           budgetMs, shortDrains)
+                                                           eventName, payloadBytes, MillisecondsSince(start), budgetMs,
+                                                           shortDrains)
                            : session.ForfeitReverseChannel("TooSlow",
                                                            "the client drained SEG_EVENT but never made room for "
                                                            "this record",
-                                                           eventName, payloadBytes, MillisecondsSince(start),
-                                                           budgetMs, shortDrains);
+                                                           eventName, payloadBytes, MillisecondsSince(start), budgetMs,
+                                                           shortDrains);
             };
             // Asked AFTER Dead() everywhere below: under spawn a stop usually FOLLOWS the peer's
             // hangup (control EOF), and the hangup is the more specific answer. The same fact can
@@ -341,7 +336,8 @@ namespace MobileGL::MG_Remote::Server {
                 if (!drained()) {
                     if (session.ApplyStopRequested()) return stopped();
                     const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(
-                        deadline - std::chrono::steady_clock::now()).count();
+                                          deadline - std::chrono::steady_clock::now())
+                                          .count();
                     if (left <= 0) return outOfPatience();
                     if (!bell.Wait(*signals.ConsumerParked, drainedOrStopping, /*spinUs=*/0,
                                    static_cast<Uint32>(left))) {
@@ -386,8 +382,10 @@ namespace MobileGL::MG_Remote::Server {
                 // @Ph-declined (ID-P7-1): returns ServerSession& - there is no session to hand
                 // back and no honest "declined" reference, and the input is the backend's own
                 // reverse call, not a peer's bytes. Stays Fatal.
-                SessionFail(MGFatalFamily::RoleViolation, "MGPipe: Fatal{RoleViolation, \"%s.session-missing\"} - "
-                        "a reverse callback has no accepted session owner", callback);
+                SessionFail(MGFatalFamily::RoleViolation,
+                            "MGPipe: Fatal{RoleViolation, \"%s.session-missing\"} - "
+                            "a reverse callback has no accepted session owner",
+                            callback);
             }
             return *session;
         }
@@ -407,8 +405,7 @@ namespace MobileGL::MG_Remote::Server {
             return session->Events().Ring().Capacity();
         }
 
-        void ServerOnBufferWriteback(MG_Pipe::MGPipeHandle res, Uint64 offset,
-                                     MG_Pipe::MGPBlobRef bytes) {
+        void ServerOnBufferWriteback(MG_Pipe::MGPipeHandle res, Uint64 offset, MG_Pipe::MGPBlobRef bytes) {
             ServerSession& session = ReverseCallbackOwner("OnBufferWriteback");
             if (bytes.Seg != MG_Pipe::kMGHostSpanSegNone) {
                 // The backend handed over a segment-tagged blobref. The ONLY legal shape at
@@ -417,15 +414,16 @@ namespace MobileGL::MG_Remote::Server {
                 // @Ph-declined (ID-P7-1): the blobref is the BACKEND's (a reverse callback with
                 // a void signature and no caller that could act on a decline), and it rides the
                 // ServerSession& above; not a peer's bytes. Stays Fatal.
-                SessionFail(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"OnBufferWriteback.Seg\"} - the "
-                        "writeback producer was handed Seg %u; at the backend boundary the "
-                        "blobref names the backend's own mapped bytes (Seg = "
-                        "kMGHostSpanSegNone) and the copy into SEG_EVENT is the producer's",
-                        bytes.Seg);
+                SessionFail(MGFatalFamily::ProtocolCorruption,
+                            "MGPipe: Fatal{ProtocolCorruption, \"OnBufferWriteback.Seg\"} - the "
+                            "writeback producer was handed Seg %u; at the backend boundary the "
+                            "blobref names the backend's own mapped bytes (Seg = "
+                            "kMGHostSpanSegNone) and the copy into SEG_EVENT is the producer's",
+                            bytes.Seg);
             }
             const Uint64 payloadBytes = sizeof(Transport::EventBufferWritebackHead) + bytes.Size;
-            void* slot = ReserveEventOrBlock(session, Transport::kEventBufferWriteback,
-                                             "kEventBufferWriteback", payloadBytes);
+            void* slot =
+                ReserveEventOrBlock(session, Transport::kEventBufferWriteback, "kEventBufferWriteback", payloadBytes);
             Transport::EventBufferWritebackHead head{};
             head.Resource = Transport::EventHandle{res.Slot, res.Gen};
             head.Offset = offset;
@@ -440,13 +438,11 @@ namespace MobileGL::MG_Remote::Server {
             session.PublishEvents();
         }
 
-        void ServerOnGpuWritten(MG_Pipe::MGPipeHandle res, Uint rangeCount,
-                                const MG_Pipe::MGPRange* ranges) {
+        void ServerOnGpuWritten(MG_Pipe::MGPipeHandle res, Uint rangeCount, const MG_Pipe::MGPRange* ranges) {
             ServerSession& session = ReverseCallbackOwner("OnGpuWritten");
             const Uint64 tailBytes = static_cast<Uint64>(rangeCount) * sizeof(Transport::EventRange);
             const Uint64 payloadBytes = sizeof(Transport::EventGpuWrittenHead) + tailBytes;
-            void* slot = ReserveEventOrBlock(session, Transport::kEventGpuWritten,
-                                             "kEventGpuWritten", payloadBytes);
+            void* slot = ReserveEventOrBlock(session, Transport::kEventGpuWritten, "kEventGpuWritten", payloadBytes);
             Transport::EventGpuWrittenHead head{};
             head.Resource = Transport::EventHandle{res.Slot, res.Gen};
             head.RangeCount = static_cast<std::uint32_t>(rangeCount);
@@ -454,8 +450,7 @@ namespace MobileGL::MG_Remote::Server {
             if (tailBytes != 0) {
                 // EventRange and MGPRange are the same two Uint64s (EventRing.h asserts it at
                 // EventRange's declaration), so the tail is a plain copy rather than a per-element conversion.
-                std::memcpy(static_cast<Uint8*>(slot) + sizeof(head), ranges,
-                            static_cast<SizeT>(tailBytes));
+                std::memcpy(static_cast<Uint8*>(slot) + sizeof(head), ranges, static_cast<SizeT>(tailBytes));
             }
             session.PublishEvents();
         }
@@ -463,8 +458,8 @@ namespace MobileGL::MG_Remote::Server {
         void ServerOnSurfaceChanged(const MG_Pipe::MGPSurfaceInfo* info) {
             ServerSession& session = ReverseCallbackOwner("OnSurfaceChanged");
             constexpr Uint64 payloadBytes = sizeof(Transport::EventSurfaceChangedHead);
-            void* slot = ReserveEventOrBlock(session, Transport::kEventSurfaceChanged,
-                                             "kEventSurfaceChanged", payloadBytes);
+            void* slot =
+                ReserveEventOrBlock(session, Transport::kEventSurfaceChanged, "kEventSurfaceChanged", payloadBytes);
             Transport::EventSurfaceChangedHead head{};
             if (info != nullptr) {
                 head.Width = info->Width;
@@ -492,10 +487,11 @@ namespace MobileGL::MG_Remote::Server {
         template <typename Fn>
         void InstallReverseCallback(Fn& entry, Fn producer) {
             if (entry != nullptr && entry != producer) {
-                SessionFail(MGFatalFamily::RoleViolation, "MGPipe: Fatal{RoleViolation, \"callback-double-install\"} - a reverse "
-                        "MGPipeCallbacks entry is already claimed by a different function. With "
-                        "an active transport the four reverse entries are the server "
-                        "session's producers; the client installs them under monolith only");
+                SessionFail(MGFatalFamily::RoleViolation,
+                            "MGPipe: Fatal{RoleViolation, \"callback-double-install\"} - a reverse "
+                            "MGPipeCallbacks entry is already claimed by a different function. With "
+                            "an active transport the four reverse entries are the server "
+                            "session's producers; the client installs them under monolith only");
             }
             entry = producer;
         }
@@ -518,7 +514,9 @@ namespace MobileGL::MG_Remote::Server {
 
     } // namespace
 
-    Uint32 ServerSessionCount() { return g_liveSessions.load(std::memory_order_acquire); }
+    Uint32 ServerSessionCount() {
+        return g_liveSessions.load(std::memory_order_acquire);
+    }
 
     ServerSession& ServerSessionInstance() {
         if (ServerSession* const own = Detail::CurrentSession()) return *own;
@@ -536,10 +534,13 @@ namespace MobileGL::MG_Remote::Server {
 
     ServerSession::ServerSession() {
         m_link = Transport::CreateSharedLink(Transport::TransportRoleTag::ServerConsumer);
-        m_commands = &m_link->CommandsIn(); m_events = &m_link->EventsOut();
+        m_commands = &m_link->CommandsIn();
+        m_events = &m_link->EventsOut();
     }
 
-    ServerSession::~ServerSession() { Close(); }
+    ServerSession::~ServerSession() {
+        Close();
+    }
 
     void ServerSession::SetSegmentSizes(const Transport::SessionSegmentSizes& sizes) {
         if (m_accepted) {
@@ -551,7 +552,9 @@ namespace MobileGL::MG_Remote::Server {
         m_sizesSet = true;
     }
 
-    void ServerSession::SetBackend(MG_Backend::BackendObject* backend) { m_backend = backend; }
+    void ServerSession::SetBackend(MG_Backend::BackendObject* backend) {
+        m_backend = backend;
+    }
 
     void ServerSession::SetCapabilityBits(Uint64 capBits) {
         m_capBits = capBits;
@@ -563,7 +566,9 @@ namespace MobileGL::MG_Remote::Server {
         m_consumedSet = true;
     }
 
-    Bool ServerSession::CallMaskIsSet() const { return m_capBitsSet && m_consumedSet; }
+    Bool ServerSession::CallMaskIsSet() const {
+        return m_capBitsSet && m_consumedSet;
+    }
 
     Uint64 ServerSession::CallMask() const {
         if (!CallMaskIsSet()) {
@@ -572,10 +577,11 @@ namespace MobileGL::MG_Remote::Server {
         return m_capBits | MGCapsConsumerBits(m_consumedSubsystems);
     }
 
-    Bool ServerSession::Accepted() const { return m_accepted; }
+    Bool ServerSession::Accepted() const {
+        return m_accepted;
+    }
 
-    MobileGLResult ServerSession::Accept(Transport::ITransport& transport,
-                                        const std::vector<Uint8>* firstFrame) {
+    MobileGLResult ServerSession::Accept(Transport::ITransport& transport, const std::vector<Uint8>* firstFrame) {
         // P14 S2: A SERVED SESSION DOES NOT CLAIM THE PROCESS TABLE, because the table is SHARED.
         // Its entries are the same five functions for every session and they route by the calling
         // thread (ServerSession::Active()), so a second session installing them is the idempotent
@@ -586,19 +592,20 @@ namespace MobileGL::MG_Remote::Server {
         // Fatal{callback-double-install} the single-session ruling asks for.
         const Bool sharedTable = Detail::CurrentSession() == this;
         ServerSession* expectedOwner = nullptr;
-        if (!sharedTable && !g_sessionOwner.compare_exchange_strong(expectedOwner, this,
-                std::memory_order_acq_rel, std::memory_order_acquire)) {
+        if (!sharedTable && !g_sessionOwner.compare_exchange_strong(expectedOwner, this, std::memory_order_acq_rel,
+                                                                    std::memory_order_acquire)) {
             if (expectedOwner == this) return MOBILEGL_ERR_INVALID_ARGUMENT;
-            SessionFail(MGFatalFamily::RoleViolation, "MGPipe: Fatal{RoleViolation, \"callback-double-install\"} - another "
-                    "ServerSession already owns or is accepting the process reverse channel");
+            SessionFail(MGFatalFamily::RoleViolation,
+                        "MGPipe: Fatal{RoleViolation, \"callback-double-install\"} - another "
+                        "ServerSession already owns or is accepting the process reverse channel");
         }
         struct ReleaseFailedClaim {
             ServerSession* self;
             ~ReleaseFailedClaim() {
                 if (!self->Accepted()) {
                     ServerSession* expected = self;
-                    g_sessionOwner.compare_exchange_strong(expected, nullptr,
-                        std::memory_order_release, std::memory_order_relaxed);
+                    g_sessionOwner.compare_exchange_strong(expected, nullptr, std::memory_order_release,
+                                                           std::memory_order_relaxed);
                 }
             }
         } releaseOnFailure{this};
@@ -617,11 +624,10 @@ namespace MobileGL::MG_Remote::Server {
         // shared memory exists. Its whole purpose is to refuse to interpret the peer's bytes.
         std::vector<Uint8> frame;
         if (firstFrame != nullptr) frame = *firstFrame;
-        const MobileGLResult received = firstFrame != nullptr ? MOBILEGL_OK
-            : ReceiveEnvelope(transport, frame, kHandshakeTimeoutMs);
+        const MobileGLResult received =
+            firstFrame != nullptr ? MOBILEGL_OK : ReceiveEnvelope(transport, frame, kHandshakeTimeoutMs);
         if (received != MOBILEGL_OK) {
-            MGLOG_E("MG_Remote server: no Hello within %u ms (rc=%d)", kHandshakeTimeoutMs,
-                    static_cast<int>(received));
+            MGLOG_E("MG_Remote server: no Hello within %u ms (rc=%d)", kHandshakeTimeoutMs, static_cast<int>(received));
             return received;
         }
         const ::MobileGL::Wire::CtrlEnvelope* envelope = ParseEnvelope(frame);
@@ -637,8 +643,7 @@ namespace MobileGL::MG_Remote::Server {
                                    "first control frame is not a verifiable Hello");
         }
         const ::MobileGL::Wire::Hello* hello = envelope->msg_as_Hello();
-        const char* theirStamp =
-            hello->buildFingerprint() == nullptr ? nullptr : hello->buildFingerprint()->c_str();
+        const char* theirStamp = hello->buildFingerprint() == nullptr ? nullptr : hello->buildFingerprint()->c_str();
 
         // PH-7 (1). One policy, one constant-time comparison, shared with ServerMain's supervisor
         // and its session child (Handshake.h AuthenticatePeerToken). This site used std::strcmp,
@@ -656,15 +661,14 @@ namespace MobileGL::MG_Remote::Server {
         if (hello->dialMode() != ::MobileGL::Wire::DialMode::No &&
             hello->dialMode() != ::MobileGL::Wire::DialMode::Fork &&
             hello->dialMode() != ::MobileGL::Wire::DialMode::Connect)
-            return RefuseHandshake(transport, ::MobileGL::Wire::RefuseCode::MalformedHello,
-                                   "unknown dial mode");
+            return RefuseHandshake(transport, ::MobileGL::Wire::RefuseCode::MalformedHello, "unknown dial mode");
         // P11 B1: remembered for the apply thread's `auto` policy (ApplyThreadPolicy.h).
         m_peer = hello->dialMode() == ::MobileGL::Wire::DialMode::Connect ? ApplyPeer::Connected
                  : hello->dialMode() == ::MobileGL::Wire::DialMode::Fork  ? ApplyPeer::Forked
                                                                           : ApplyPeer::InProcess;
         m_clientPid = hello->pid();
-        const MobileGLResult compatible = ValidatePeerHandshake(transport, hello->abiMajor(),
-            hello->abiMinor(), hello->wireFingerprint(), theirStamp, hello->dialMode());
+        const MobileGLResult compatible = ValidatePeerHandshake(
+            transport, hello->abiMajor(), hello->abiMinor(), hello->wireFingerprint(), theirStamp, hello->dialMode());
         if (compatible != MOBILEGL_OK) return compatible;
         const Uint64 ourFingerprint = WireFingerprint();
         const auto* terms = hello->linkTerms();
@@ -680,9 +684,9 @@ namespace MobileGL::MG_Remote::Server {
                                    "stream requires a data connection");
         if (hello->backendType() >= static_cast<Uint32>(BackendType::BackendTypeCount) ||
             (m_backend != nullptr && hello->backendType() != static_cast<Uint32>(m_backend->GetBackendType())))
-            return RefuseHandshake(transport, ::MobileGL::Wire::RefuseCode::Backend,
-                "backend request differs from server", m_backend == nullptr ? 0 :
-                static_cast<Uint32>(m_backend->GetBackendType()), hello->backendType());
+            return RefuseHandshake(
+                transport, ::MobileGL::Wire::RefuseCode::Backend, "backend request differs from server",
+                m_backend == nullptr ? 0 : static_cast<Uint32>(m_backend->GetBackendType()), hello->backendType());
 
         // ---- P11 A1: this side's adopt tier, from its own knob and the plane the Hello asked
         // for, before a byte of Welcome. A stream refuses T0/T1 by name and serves T2; over
@@ -767,7 +771,6 @@ namespace MobileGL::MG_Remote::Server {
         m_replies = ReplyPool();
         m_replies.SetLink(m_link.get());
 
-
         m_consumer.SetLink(m_link->Capabilities().PublishIsDelivery ? nullptr : m_link.get());
         m_replies.SetLink(m_link.get());
         m_applier = PipeApplier(&m_segments, &m_replies);
@@ -777,8 +780,7 @@ namespace MobileGL::MG_Remote::Server {
             ::flatbuffers::FlatBufferBuilder builder(1024);
             using Slot = Transport::SessionSegmentSlot;
             const auto segmentRef = [&](Uint32 id, ::MobileGL::Wire::SegmentKind kind, Slot slot) {
-                return ::MobileGL::Wire::CreateSegmentRefDirect(builder, id, kind,
-                                                                m_link->Memory().AnnouncedSize(slot),
+                return ::MobileGL::Wire::CreateSegmentRefDirect(builder, id, kind, m_link->Memory().AnnouncedSize(slot),
                                                                 m_link->Memory().AnnouncedName(slot));
             };
             auto cmd = segmentRef(1, ::MobileGL::Wire::SegmentKind::Cmd, Slot::Cmd);
@@ -786,9 +788,8 @@ namespace MobileGL::MG_Remote::Server {
             auto reply = segmentRef(3, ::MobileGL::Wire::SegmentKind::Reply, Slot::Reply);
             auto event = segmentRef(4, ::MobileGL::Wire::SegmentKind::Event, Slot::Event);
             auto stamp = builder.CreateString(BuildFingerprint());
-            const auto nonce = pendingStream != nullptr
-                ? builder.CreateVector(dataNonce, sizeof(dataNonce))
-                : ::flatbuffers::Offset<::flatbuffers::Vector<Uint8>>();
+            const auto nonce = pendingStream != nullptr ? builder.CreateVector(dataNonce, sizeof(dataNonce))
+                                                        : ::flatbuffers::Offset<::flatbuffers::Vector<Uint8>>();
             const Uint64 maxReply = m_sizes.ReplyBytes / m_sizes.ReplySlotCount - sizeof(Transport::ReplySlotHeader);
             const Uint64 cmdWindow = m_link->Memory().CmdRingCapacity();
             const Uint64 stageWindow = m_link->Memory().StageBytes();
@@ -808,14 +809,12 @@ namespace MobileGL::MG_Remote::Server {
                         static_cast<unsigned long long>(terms->stageWindowBytes()),
                         static_cast<unsigned long long>(terms->eventWindowBytes()),
                         static_cast<unsigned long long>(terms->maxReplyBytes()),
-                        static_cast<unsigned long long>(cmdWindow),
-                        static_cast<unsigned long long>(stageWindow),
-                        static_cast<unsigned long long>(eventWindow),
-                        static_cast<unsigned long long>(maxReply));
+                        static_cast<unsigned long long>(cmdWindow), static_cast<unsigned long long>(stageWindow),
+                        static_cast<unsigned long long>(eventWindow), static_cast<unsigned long long>(maxReply));
             }
-            auto negotiated = ::MobileGL::Wire::CreateLinkTerms(builder, terms->dataPlane(),
-                ::MobileGL::Wire::WireForm::StructImage, maxReply, cmdWindow, stageWindow, eventWindow,
-                static_cast<Uint8>(m_adoptT0Asked ? m_adoptAsk : 2));
+            auto negotiated = ::MobileGL::Wire::CreateLinkTerms(
+                builder, terms->dataPlane(), ::MobileGL::Wire::WireForm::StructImage, maxReply, cmdWindow, stageWindow,
+                eventWindow, static_cast<Uint8>(m_adoptT0Asked ? m_adoptAsk : 2));
             auto welcome = ::MobileGL::Wire::CreateWelcome(
                 builder, MOBILEGL_PROTOCOL_ABI_MAJOR, MOBILEGL_PROTOCOL_ABI_MINOR,
                 // CONTRACT-P6 4.3: THE SERVER'S OWN PID, not an echo of the client's.
@@ -825,12 +824,11 @@ namespace MobileGL::MG_Remote::Server {
                 // this is its natural carrier: under spawn it is the one value in the handshake
                 // that a same-process session cannot produce, because there the two pids are
                 // equal by construction.
-                static_cast<Uint32>(SelfProcessId()),
-                cmd, stage, reply, event, stamp, ourFingerprint, ourFingerprint, negotiated,
-                m_backend == nullptr ? hello->backendType() : static_cast<Uint32>(m_backend->GetBackendType()),
-                nonce);
-            auto root = ::MobileGL::Wire::CreateCtrlEnvelope(
-                builder, ::MobileGL::Wire::CtrlMsg::Welcome, welcome.Union());
+                static_cast<Uint32>(SelfProcessId()), cmd, stage, reply, event, stamp, ourFingerprint, ourFingerprint,
+                negotiated,
+                m_backend == nullptr ? hello->backendType() : static_cast<Uint32>(m_backend->GetBackendType()), nonce);
+            auto root =
+                ::MobileGL::Wire::CreateCtrlEnvelope(builder, ::MobileGL::Wire::CtrlMsg::Welcome, welcome.Union());
             ::MobileGL::Wire::FinishCtrlEnvelopeBuffer(builder, root);
             const MobileGLResult sent = SendEnvelope(transport, builder);
             if (sent != MOBILEGL_OK) {
@@ -873,11 +871,9 @@ namespace MobileGL::MG_Remote::Server {
         // by definition not monolith, so finding one of them claimed here is the double
         // installation the check exists to name.
         InstallReverseCallback(MG_Pipe::gMGPipeCallbacks.OnGlError, &ServerOnGlError);
-        InstallReverseCallback(MG_Pipe::gMGPipeCallbacks.OnBufferWriteback,
-                               &ServerOnBufferWriteback);
+        InstallReverseCallback(MG_Pipe::gMGPipeCallbacks.OnBufferWriteback, &ServerOnBufferWriteback);
         InstallReverseCallback(MG_Pipe::gMGPipeCallbacks.OnGpuWritten, &ServerOnGpuWritten);
-        InstallReverseCallback(MG_Pipe::gMGPipeCallbacks.OnSurfaceChanged,
-                               &ServerOnSurfaceChanged);
+        InstallReverseCallback(MG_Pipe::gMGPipeCallbacks.OnSurfaceChanged, &ServerOnSurfaceChanged);
         // ... and, beside them, the one NUMBER a writeback producer has to know: how much of
         // SEG_EVENT one record may be. Same ownership rule as the four entries above - installed
         // here, released at Close only if it is still ours - because a producer left holding a
@@ -948,8 +944,7 @@ namespace MobileGL::MG_Remote::Server {
             callMask &= ~static_cast<Uint64>(MG_Pipe::kCapTimerQuery);
 
         ::flatbuffers::FlatBufferBuilder builder(4096);
-        auto dynamicVector =
-            builder.CreateVector(dynamicBytes, static_cast<::flatbuffers::uoffset_t>(sizeof(dynamic)));
+        auto dynamicVector = builder.CreateVector(dynamicBytes, static_cast<::flatbuffers::uoffset_t>(sizeof(dynamic)));
         auto rendererVector = builder.CreateVector(renderer.data(), renderer.size());
         auto formatsVector = builder.CreateVector(formats.data(), formats.size());
         // The client reads this back through BackendObject_Remote::GetBackendAPIVersionString()
@@ -960,11 +955,11 @@ namespace MobileGL::MG_Remote::Server {
         // answered "Espryt (MobileGL Core) (<real GLES renderer>, OpenGL ES <major>.<minor>)",
         // i.e. it dropped the only place the real device was named.
         auto apiVersion = builder.CreateString(m_backend->GetBackendAPIVersionString());
-        auto snapshot = ::MobileGL::Wire::CreateCapsSnapshot(
-            builder, dynamicVector, rendererVector, formatsVector, /*extensions=*/0, apiVersion,
-            callMask, static_cast<Uint32>(m_backend->GetBackendType()));
-        auto root = ::MobileGL::Wire::CreateCtrlEnvelope(
-            builder, ::MobileGL::Wire::CtrlMsg::CapsSnapshot, snapshot.Union());
+        auto snapshot = ::MobileGL::Wire::CreateCapsSnapshot(builder, dynamicVector, rendererVector, formatsVector,
+                                                             /*extensions=*/0, apiVersion, callMask,
+                                                             static_cast<Uint32>(m_backend->GetBackendType()));
+        auto root =
+            ::MobileGL::Wire::CreateCtrlEnvelope(builder, ::MobileGL::Wire::CtrlMsg::CapsSnapshot, snapshot.Union());
         ::MobileGL::Wire::FinishCtrlEnvelopeBuffer(builder, root);
         return SendEnvelope(*m_transport, builder);
     }
@@ -978,16 +973,18 @@ namespace MobileGL::MG_Remote::Server {
     // cannot end the session it failed to join. What ends the wait is the deadline or the
     // control peer going away; the deadline is refused on the control connection, where the
     // client is listening.
-    MobileGLResult ServerSession::BindDataConnection(Transport::ITransport& control,
-                                                     Transport::ILink& link, const Uint8* nonce) {
+    MobileGLResult ServerSession::BindDataConnection(Transport::ITransport& control, Transport::ILink& link,
+                                                     const Uint8* nonce) {
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(kHandshakeTimeoutMs);
         Uint32 refused = 0;
         for (;;) {
-            const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(
-                deadline - std::chrono::steady_clock::now()).count();
+            const auto left =
+                std::chrono::duration_cast<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now())
+                    .count();
             if (left <= 0) {
                 MGLOG_E("MG_Remote server: no data connection presented this session's nonce within "
-                        "%u ms (%u refused)", kHandshakeTimeoutMs, refused);
+                        "%u ms (%u refused)",
+                        kHandshakeTimeoutMs, refused);
                 return RefuseHandshake(control, ::MobileGL::Wire::RefuseCode::Authentication,
                                        "no data connection presented the session nonce");
             }
@@ -1017,7 +1014,8 @@ namespace MobileGL::MG_Remote::Server {
 
     void ServerSession::AttachDataLink(std::unique_ptr<Transport::ILink> link) {
         m_link = std::move(link);
-        m_commands = &m_link->CommandsIn(); m_events = &m_link->EventsOut();
+        m_commands = &m_link->CommandsIn();
+        m_events = &m_link->EventsOut();
         m_consumer.SetLink(m_link->Capabilities().PublishIsDelivery ? nullptr : m_link.get());
         m_replies.SetLink(m_link.get());
         if (m_link) SetExternalDoorbells(&m_link->ConsumerBell(), &m_link->ProducerBell());
@@ -1033,8 +1031,7 @@ namespace MobileGL::MG_Remote::Server {
         if (m_closed) return;
         m_closed = true;
         ServerSession* expectedActive = this;
-        g_active.compare_exchange_strong(expectedActive, nullptr,
-            std::memory_order_acq_rel, std::memory_order_acquire);
+        g_active.compare_exchange_strong(expectedActive, nullptr, std::memory_order_acq_rel, std::memory_order_acquire);
         if (m_accepted) {
             // P14 S2: DROP THIS SESSION FIRST, THEN ASK WHETHER ANY IS LEFT. The two process-wide
             // hooks below (the segment resolver and the reverse-channel table) are shared by every
@@ -1071,14 +1068,13 @@ namespace MobileGL::MG_Remote::Server {
             // A default ask that ended on T2 says its totals at MGLOG_D, like its refusal.
             const bool quiet = m_adoptT0Quiet && !m_adoptT0;
             const char* ran = m_adoptT0 ? "ran T0" : m_adoptT0Settled ? "not granted (T2)" : "no native bind (T2)";
-#define MGL_T0_SERVER_TOTALS(LOG)                                                                             \
-            LOG("MG_Remote server: T0 session totals - %s%s; stores imported %llu, bytes %llu, declined %llu, "  \
-                "refused %llu, stale offers %llu, malformed %llu, unclaimed %zu",                                 \
-                ran, m_adoptT0Quiet ? " (default ask)" : "", static_cast<unsigned long long>(m_t0Stores),         \
-                static_cast<unsigned long long>(m_t0Bytes), static_cast<unsigned long long>(m_t0Declined),        \
-                static_cast<unsigned long long>(m_t0Refusals),                                                     \
-                static_cast<unsigned long long>(m_adoptInbox.StaleOffers()),                                       \
-                static_cast<unsigned long long>(m_adoptInbox.MalformedOffers()), m_adoptInbox.Kept())
+#define MGL_T0_SERVER_TOTALS(LOG)                                                                                      \
+    LOG("MG_Remote server: T0 session totals - %s%s; stores imported %llu, bytes %llu, declined %llu, "                \
+        "refused %llu, stale offers %llu, malformed %llu, unclaimed %zu",                                              \
+        ran, m_adoptT0Quiet ? " (default ask)" : "", static_cast<unsigned long long>(m_t0Stores),                      \
+        static_cast<unsigned long long>(m_t0Bytes), static_cast<unsigned long long>(m_t0Declined),                     \
+        static_cast<unsigned long long>(m_t0Refusals), static_cast<unsigned long long>(m_adoptInbox.StaleOffers()),    \
+        static_cast<unsigned long long>(m_adoptInbox.MalformedOffers()), m_adoptInbox.Kept())
             if (quiet) {
                 MGL_T0_SERVER_TOTALS(MGLOG_D);
             } else {
@@ -1097,14 +1093,16 @@ namespace MobileGL::MG_Remote::Server {
         *m_events = Transport::EventRingProducer();
         m_replies = ReplyPool();
         m_link = Transport::CreateSharedLink(Transport::TransportRoleTag::ServerConsumer);
-        m_commands = &m_link->CommandsIn(); m_events = &m_link->EventsOut();
-        m_externalConsumerBell = nullptr; m_externalProducerBell = nullptr;
+        m_commands = &m_link->CommandsIn();
+        m_events = &m_link->EventsOut();
+        m_externalConsumerBell = nullptr;
+        m_externalProducerBell = nullptr;
         m_link->Memory().Close();
         m_transport = nullptr;
         m_accepted = false;
         ServerSession* expectedOwner = this;
-        g_sessionOwner.compare_exchange_strong(expectedOwner, nullptr,
-            std::memory_order_release, std::memory_order_relaxed);
+        g_sessionOwner.compare_exchange_strong(expectedOwner, nullptr, std::memory_order_release,
+                                               std::memory_order_relaxed);
     }
 
     // ---- P11 B2: T0 (docs/archive/contracts/CONTRACT-P11.md B2) ------------------------------------------
@@ -1127,8 +1125,9 @@ namespace MobileGL::MG_Remote::Server {
     void ServerSession::SettleAdoptT0AtBind() {
         if (!m_accepted || !m_adoptT0Asked || m_adoptT0Settled) return;
         m_adoptT0Settled = true;
-        const char* backendName = m_backend == nullptr ? "server"
-            : m_backend->GetBackendType() == BackendType::DirectVulkan ? "Magma" : "Espryt";
+        const char* backendName = m_backend == nullptr                                       ? "server"
+                                  : m_backend->GetBackendType() == BackendType::DirectVulkan ? "Magma"
+                                                                                             : "Espryt";
         std::string why;
         // A CLIENT IN THIS PROCESS SHARES THE SERVER'S MEMORY ALREADY: its persistent maps are the
         // stores' own mappings, donated as monolith donates them, and no AHardwareBuffer, import
@@ -1177,15 +1176,15 @@ namespace MobileGL::MG_Remote::Server {
         }
         if (!why.empty()) {
             ++m_t0Refusals;
-            const char* word = MG_Config::Ipc.AllowAdoptT0 == 0 ? "disallowed"
+            const char* word = MG_Config::Ipc.AllowAdoptT0 == 0        ? "disallowed"
                                : inProcess                             ? "in process"
                                : !Transport::AdoptT0::PlatformHasAhb() ? "no AHardwareBuffer"
                                                                        : "POST";
             if (m_adoptT0Quiet) {
                 // THE DEFAULT ASK (MOBILEGL_IPC_ADOPT_TIER unset) FALLS BACK QUIETLY: every host
                 // session would otherwise carry this line. Counted (T0Refusals, the totals line).
-                MGLOG_D("MG_Remote server: T0 by default not granted (%s) - %s; the session runs T2",
-                        word, why.c_str());
+                MGLOG_D("MG_Remote server: T0 by default not granted (%s) - %s; the session runs T2", word,
+                        why.c_str());
                 return;
             }
             MGLOG_W("MG_Remote server: Refuse{AdoptT0Unavailable, \"%s\"} - the client asked T0 "
@@ -1226,8 +1225,7 @@ namespace MobileGL::MG_Remote::Server {
         int hop = -1;
         Transport::AdoptT0::Offer offer{};
         std::string why;
-        const AdoptInbox::Outcome outcome =
-            m_adoptInbox.Take(seq, Transport::AdoptT0::kOfferWaitMs, &hop, &offer, why);
+        const AdoptInbox::Outcome outcome = m_adoptInbox.Take(seq, Transport::AdoptT0::kOfferWaitMs, &hop, &offer, why);
         const auto closeHop = [&] {
 #if !defined(_WIN32)
             if (hop >= 0) ::close(hop);
@@ -1336,27 +1334,35 @@ namespace MobileGL::MG_Remote::Server {
         return true;
     }
 
-    Transport::RingConsumer& ServerSession::CommandRing() { return *m_commands; }
+    Transport::RingConsumer& ServerSession::CommandRing() {
+        return *m_commands;
+    }
 
     Transport::RingControl& ServerSession::Control() {
         Transport::RingControl* control = m_link->Memory().CmdControl();
         if (control == nullptr) {
             // @Ph-declined (ID-P7-1): returns RingControl& - no honest reference exists before
             // Accept() mapped SEG_CMD, and this is a call-order invariant, not a peer's bytes.
-            SessionFail(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"ServerSession::Control\"} - the control "
-                    "page does not exist until Accept() has mapped SEG_CMD");
+            SessionFail(MGFatalFamily::ProtocolCorruption,
+                        "MGPipe: Fatal{ProtocolCorruption, \"ServerSession::Control\"} - the control "
+                        "page does not exist until Accept() has mapped SEG_CMD");
         }
         return *control;
     }
 
-    Wire::SegmentTable& ServerSession::Segments() { return m_segments; }
-    PipeApplier& ServerSession::Applier() { return m_applier; }
-    ReplyPool& ServerSession::Replies() { return m_replies; }
+    Wire::SegmentTable& ServerSession::Segments() {
+        return m_segments;
+    }
+    PipeApplier& ServerSession::Applier() {
+        return m_applier;
+    }
+    ReplyPool& ServerSession::Replies() {
+        return m_replies;
+    }
 
     // The bell the apply thread parks on. On the server endpoint of an InProcessTransport that
     // is SelfDoorbell(); the client reaches the same bell through its own PeerDoorbell().
-    void ServerSession::SetExternalDoorbells(Transport::Doorbell* consumer,
-                                             Transport::Doorbell* producer) {
+    void ServerSession::SetExternalDoorbells(Transport::Doorbell* consumer, Transport::Doorbell* producer) {
         m_externalConsumerBell = consumer;
         m_externalProducerBell = producer;
     }
@@ -1370,8 +1376,9 @@ namespace MobileGL::MG_Remote::Server {
         if (m_transport == nullptr) {
             // @Ph-declined (ID-P7-1): returns Doorbell& - no bell exists to hand back before
             // Accept(); a call-order invariant, not a peer's bytes.
-            SessionFail(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"ServerSession::ConsumerDoorbell\"} - no "
-                    "transport; Accept() has not run");
+            SessionFail(MGFatalFamily::ProtocolCorruption,
+                        "MGPipe: Fatal{ProtocolCorruption, \"ServerSession::ConsumerDoorbell\"} - no "
+                        "transport; Accept() has not run");
         }
         if (m_transport->Role() == Transport::TransportRole::InProcess) {
             return static_cast<Transport::InProcessTransport*>(m_transport)->SelfDoorbell();
@@ -1381,9 +1388,10 @@ namespace MobileGL::MG_Remote::Server {
         // every transport has to invent a home for.
         // @Ph-declined (ID-P7-1): returns Doorbell& for a transport role this build wires no
         // pair for - a build-shape fact, not a peer's bytes, and no reference to decline with.
-        SessionFail(MGFatalFamily::UnmigratedVerb, "MGPipe: Fatal{UnmigratedVerb, \"ServerSession::ConsumerDoorbell\"} - transport "
-                "role %u has no doorbell pair yet; that is P6's SocketTransport",
-                static_cast<unsigned>(m_transport->Role()));
+        SessionFail(MGFatalFamily::UnmigratedVerb,
+                    "MGPipe: Fatal{UnmigratedVerb, \"ServerSession::ConsumerDoorbell\"} - transport "
+                    "role %u has no doorbell pair yet; that is P6's SocketTransport",
+                    static_cast<unsigned>(m_transport->Role()));
     }
 
     Transport::Doorbell& ServerSession::ProducerDoorbell() {
@@ -1392,22 +1400,32 @@ namespace MobileGL::MG_Remote::Server {
         }
         if (m_transport == nullptr) {
             // @Ph-declined (ID-P7-1): returns Doorbell& - as ConsumerDoorbell above.
-            SessionFail(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"ServerSession::ProducerDoorbell\"} - no "
-                    "transport; Accept() has not run");
+            SessionFail(MGFatalFamily::ProtocolCorruption,
+                        "MGPipe: Fatal{ProtocolCorruption, \"ServerSession::ProducerDoorbell\"} - no "
+                        "transport; Accept() has not run");
         }
         if (m_transport->Role() == Transport::TransportRole::InProcess) {
             return static_cast<Transport::InProcessTransport*>(m_transport)->PeerDoorbell();
         }
         // @Ph-declined (ID-P7-1): returns Doorbell& - as ConsumerDoorbell above.
-        SessionFail(MGFatalFamily::UnmigratedVerb, "MGPipe: Fatal{UnmigratedVerb, \"ServerSession::ProducerDoorbell\"} - transport "
-                "role %u has no doorbell pair yet; that is P6's SocketTransport",
-                static_cast<unsigned>(m_transport->Role()));
+        SessionFail(MGFatalFamily::UnmigratedVerb,
+                    "MGPipe: Fatal{UnmigratedVerb, \"ServerSession::ProducerDoorbell\"} - transport "
+                    "role %u has no doorbell pair yet; that is P6's SocketTransport",
+                    static_cast<unsigned>(m_transport->Role()));
     }
 
-    Transport::SessionSegments& ServerSession::Shm() { return m_link->Memory(); }
-    Transport::SessionConsumer& ServerSession::Consumer() { return m_consumer; }
-    Transport::EventRingProducer& ServerSession::Events() { return *m_events; }
-    Transport::ITransport* ServerSession::Control_Plane() { return m_transport; }
+    Transport::SessionSegments& ServerSession::Shm() {
+        return m_link->Memory();
+    }
+    Transport::SessionConsumer& ServerSession::Consumer() {
+        return m_consumer;
+    }
+    Transport::EventRingProducer& ServerSession::Events() {
+        return *m_events;
+    }
+    Transport::ITransport* ServerSession::Control_Plane() {
+        return m_transport;
+    }
 
     void ServerSession::PublishEvents() {
         if (!m_accepted) {
@@ -1438,8 +1456,7 @@ namespace MobileGL::MG_Remote::Server {
         }
         const Uint32 messageBytes = static_cast<Uint32>(length) + 1;
         const Uint64 payloadBytes = sizeof(Transport::EventGlErrorHead) + messageBytes;
-        void* slot = ReserveEventOrBlock(*this, Transport::kEventGlError, "kEventGlError",
-                                         payloadBytes);
+        void* slot = ReserveEventOrBlock(*this, Transport::kEventGlError, "kEventGlError", payloadBytes);
         Transport::EventGlErrorHead head{};
         head.Code = code;
         head.MessageBytes = messageBytes;

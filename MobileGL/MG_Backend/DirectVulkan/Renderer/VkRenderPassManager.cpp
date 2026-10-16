@@ -18,7 +18,8 @@
 #include <MG_Backend/MGPipe/PipeInputs.h>
 
 namespace MobileGL::MG_Backend::DirectVulkan {
-    [[maybe_unused]] static Float ResolveColorClearAlpha(const MG_State::GLState::ITextureObject* texture, Float requestedAlpha) {
+    [[maybe_unused]] static Float ResolveColorClearAlpha(const MG_State::GLState::ITextureObject* texture,
+                                                         Float requestedAlpha) {
         if (texture != nullptr && MG_Util::GetBaseInternalFormatComponentCount(texture->GetFormat()) == 3) {
             return 1.0f;
         }
@@ -29,20 +30,19 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     // VkClearManager needs the SAME answer: its pending-clear key's layerCount becomes a real
     // VkImageSubresourceRange when a clear is materialised outside a render pass. See the header.
 
-    DepthStencilAttachmentLoadInfo ResolveDepthStencilAttachmentLoadInfo(
-        VkImageLayout trackedLayout, Bool clearDepth, Bool clearStencil) {
+    DepthStencilAttachmentLoadInfo ResolveDepthStencilAttachmentLoadInfo(VkImageLayout trackedLayout, Bool clearDepth,
+                                                                         Bool clearStencil) {
         DepthStencilAttachmentLoadInfo info{};
-        info.depthLoadOp = clearDepth
-            ? VK_ATTACHMENT_LOAD_OP_CLEAR
-            : (trackedLayout == VK_IMAGE_LAYOUT_UNDEFINED ? VK_ATTACHMENT_LOAD_OP_DONT_CARE
-                                                          : VK_ATTACHMENT_LOAD_OP_LOAD);
+        info.depthLoadOp = clearDepth ? VK_ATTACHMENT_LOAD_OP_CLEAR
+                                      : (trackedLayout == VK_IMAGE_LAYOUT_UNDEFINED ? VK_ATTACHMENT_LOAD_OP_DONT_CARE
+                                                                                    : VK_ATTACHMENT_LOAD_OP_LOAD);
         info.stencilLoadOp = clearStencil
-            ? VK_ATTACHMENT_LOAD_OP_CLEAR
-            : (trackedLayout == VK_IMAGE_LAYOUT_UNDEFINED ? VK_ATTACHMENT_LOAD_OP_DONT_CARE
-                                                          : VK_ATTACHMENT_LOAD_OP_LOAD);
-        info.initialLayout =
-            (trackedLayout == VK_IMAGE_LAYOUT_UNDEFINED || (clearDepth && clearStencil)) ? VK_IMAGE_LAYOUT_UNDEFINED
-                                                                                         : trackedLayout;
+                                 ? VK_ATTACHMENT_LOAD_OP_CLEAR
+                                 : (trackedLayout == VK_IMAGE_LAYOUT_UNDEFINED ? VK_ATTACHMENT_LOAD_OP_DONT_CARE
+                                                                               : VK_ATTACHMENT_LOAD_OP_LOAD);
+        info.initialLayout = (trackedLayout == VK_IMAGE_LAYOUT_UNDEFINED || (clearDepth && clearStencil))
+                                 ? VK_IMAGE_LAYOUT_UNDEFINED
+                                 : trackedLayout;
         return info;
     }
 
@@ -54,11 +54,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return {attachmentExtent.x(), attachmentExtent.y()};
     }
 
-    VkRenderPassManager::VkRenderPassManager(VkDevice device,
-        VkPhysicalDevice physicalDevice, VmaAllocator allocator, const VulkanRendererConfig& config,
-        VkTextureManager& textureManager, SwapchainObject& swapchainObject):
-        m_device(device), m_physicalDevice(physicalDevice), m_allocator(allocator), m_config(config),
-        m_textureManager(textureManager), m_swapchainObject(swapchainObject) {
+    VkRenderPassManager::VkRenderPassManager(VkDevice device, VkPhysicalDevice physicalDevice, VmaAllocator allocator,
+                                             const VulkanRendererConfig& config, VkTextureManager& textureManager,
+                                             SwapchainObject& swapchainObject)
+        : m_device(device), m_physicalDevice(physicalDevice), m_allocator(allocator), m_config(config),
+          m_textureManager(textureManager), m_swapchainObject(swapchainObject) {
         RenderPassEntry::s_device.Get() = m_device;
         s_textureManager.Get() = &m_textureManager;
         s_swapchainObject.Get() = &m_swapchainObject;
@@ -83,12 +83,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         renderPassBeginInfo.pNext = nullptr;
         renderPassBeginInfo.renderPass = renderPassEntry.renderPass;
         renderPassBeginInfo.framebuffer = renderPassEntry.framebuffer;
-        renderPassBeginInfo.renderArea.offset = { 0, 0 };
-        renderPassBeginInfo.renderArea.extent = {
-            (Uint32)renderPassEntry.extent.x(), (Uint32)renderPassEntry.extent.y() };
+        renderPassBeginInfo.renderArea.offset = {0, 0};
+        renderPassBeginInfo.renderArea.extent = {(Uint32)renderPassEntry.extent.x(),
+                                                 (Uint32)renderPassEntry.extent.y()};
 
         Vector<VkClearValue> clearValues(renderPassEntry.attachmentCount);
-        for (auto& clearValue: clearValues) {
+        for (auto& clearValue : clearValues) {
             clearValue.color = {0.0f, 0.0f, 0.0f, 1.0f};
             clearValue.depthStencil = {1.0f, 0};
         }
@@ -111,8 +111,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         VkRenderPassBeginInfo begin{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
         begin.renderPass = renderPass;
         begin.framebuffer = renderPassEntry.framebuffer;
-        begin.renderArea = {{0, 0}, {static_cast<Uint32>(renderPassEntry.extent.x()),
-                                     static_cast<Uint32>(renderPassEntry.extent.y())}};
+        begin.renderArea = {
+            {0, 0}, {static_cast<Uint32>(renderPassEntry.extent.x()), static_cast<Uint32>(renderPassEntry.extent.y())}};
         begin.clearValueCount = clearValueCount;
         begin.pClearValues = clearValues;
         vkCmdBeginRenderPass(commandBuffer, &begin, VK_SUBPASS_CONTENTS_INLINE);
@@ -137,9 +137,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
     namespace {
         std::atomic<Uint64> g_wireImageWriteEpoch{1};
+    } // namespace
+    Uint64 WireImageWriteEpoch() {
+        return g_wireImageWriteEpoch.load(std::memory_order_relaxed);
     }
-    Uint64 WireImageWriteEpoch() { return g_wireImageWriteEpoch.load(std::memory_order_relaxed); }
-    void BumpWireImageWriteEpoch() { g_wireImageWriteEpoch.fetch_add(1, std::memory_order_relaxed); }
+    void BumpWireImageWriteEpoch() {
+        g_wireImageWriteEpoch.fetch_add(1, std::memory_order_relaxed);
+    }
 
     void EndActiveRenderPassOn(VkCommandBuffer commandBuffer) {
         BumpWireImageWriteEpoch();

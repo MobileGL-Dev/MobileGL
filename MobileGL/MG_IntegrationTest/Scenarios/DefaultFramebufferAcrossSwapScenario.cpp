@@ -73,10 +73,8 @@ void main() { o_color = vColor; }
         // off, so the readback lands on a named colour whatever the driver's exact rounding is.
         void DrawFullViewportQuad(unsigned int program, float red, float green, float blue) {
             const float vertices[] = {
-                -1.0f, -1.0f, red, green, blue, 1.0f,
-                 1.0f, -1.0f, red, green, blue, 1.0f,
-                -1.0f,  1.0f, red, green, blue, 1.0f,
-                 1.0f,  1.0f, red, green, blue, 1.0f,
+                -1.0f, -1.0f, red, green, blue, 1.0f, 1.0f, -1.0f, red, green, blue, 1.0f,
+                -1.0f, 1.0f,  red, green, blue, 1.0f, 1.0f, 1.0f,  red, green, blue, 1.0f,
             };
             GLuint vao = 0, vbo = 0;
             glGenVertexArrays(1, &vao);
@@ -137,7 +135,8 @@ void main() { o_color = vColor; }
             << "the default framebuffer stopped naming the image the app rendered into once a swap "
                "had run; Present() acquires ahead of the app (and a kWaitPresent record is applied "
                "without the app waiting), so this readback must not resolve the freshly acquired "
-               "image " << gl.FrameIndex() << " frames in";
+               "image "
+            << gl.FrameIndex() << " frames in";
 
         gl.EndFrame();
         glDeleteProgram(program);

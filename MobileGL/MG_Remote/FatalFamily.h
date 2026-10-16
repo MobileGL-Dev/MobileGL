@@ -31,8 +31,9 @@ namespace MobileGL::MG_Remote {
     // that exists has a row, and a family that does not exist is not a value of the enum.
     inline ::MobileGL::Wire::FatalCode FatalCodeForFamily(MGFatalFamily family) {
         switch (family) {
-#define X(Family, WireCode, Why) \
-    case MGFatalFamily::Family: return ::MobileGL::Wire::FatalCode::WireCode;
+#define X(Family, WireCode, Why)                                                                                       \
+    case MGFatalFamily::Family:                                                                                        \
+        return ::MobileGL::Wire::FatalCode::WireCode;
             MGL_FATAL_FAMILY_LIST(X)
 #undef X
         }

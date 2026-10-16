@@ -79,7 +79,9 @@ void main() { o0 = vColor * uTint; }
                                                  << "), want (" << r << ", " << g << ", " << b << ")";
         }
 
-        Rgba8 At(int x, int y) { return ReadPixelsRect(x, y, 1, 1).At(0, 0); }
+        Rgba8 At(int x, int y) {
+            return ReadPixelsRect(x, y, 1, 1).At(0, 0);
+        }
 
         struct Scene {
             GLuint program = 0, fbo = 0, color = 0, vao = 0, vbo = 0, ibo = 0, ubo = 0;

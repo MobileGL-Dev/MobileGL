@@ -79,19 +79,18 @@ namespace {
     // at an array-of-storage-blocks variable carries a non-constant FIRST index, which is
     // exactly what the Qualcomm ES compiler refuses.
     bool HasDynamicBlockArrayIndex(const Vector<Uint32>& spirv) {
-        std::set<Uint32> blockStructs;      // OpTypeStruct ids decorated Block / BufferBlock
-        std::set<Uint32> constants;         // OpConstant / OpConstantNull result ids
-        std::set<Uint32> blockArrayTypes;   // OpTypeArray ids whose element is such a struct
-        std::set<Uint32> blockArrayPointers;// OpTypePointer ids pointing at one of those arrays
-        std::set<Uint32> blockArrayVars;    // OpVariable ids of one of those pointer types
+        std::set<Uint32> blockStructs;       // OpTypeStruct ids decorated Block / BufferBlock
+        std::set<Uint32> constants;          // OpConstant / OpConstantNull result ids
+        std::set<Uint32> blockArrayTypes;    // OpTypeArray ids whose element is such a struct
+        std::set<Uint32> blockArrayPointers; // OpTypePointer ids pointing at one of those arrays
+        std::set<Uint32> blockArrayVars;     // OpVariable ids of one of those pointer types
 
         ForEachInstruction(spirv, [&](spv::Op opcode, const Uint32* words, Uint32 wordCount) {
             switch (opcode) {
             case spv::Op::OpDecorate:
                 if (wordCount >= 3u) {
                     const auto decoration = static_cast<spv::Decoration>(words[2]);
-                    if (decoration == spv::Decoration::Block ||
-                        decoration == spv::Decoration::BufferBlock) {
+                    if (decoration == spv::Decoration::Block || decoration == spv::Decoration::BufferBlock) {
                         blockStructs.insert(words[1]);
                     }
                 }

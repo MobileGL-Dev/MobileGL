@@ -24,7 +24,9 @@ namespace MobileGL::MG_Remote::Transport {
             return (value + (kRingRecordAlignment - 1)) & ~(kRingRecordAlignment - 1);
         }
 
-        bool IsPowerOfTwo(std::uint64_t value) { return value != 0 && (value & (value - 1)) == 0; }
+        bool IsPowerOfTwo(std::uint64_t value) {
+            return value != 0 && (value & (value - 1)) == 0;
+        }
 
         std::atomic<std::uint64_t>& Head(RingControl& c, RingCursorSet which) {
             return which == RingCursorSet::Cmd ? c.cmdHead : c.stageHead;
@@ -54,8 +56,7 @@ namespace MobileGL::MG_Remote::Transport {
         control.ringGeneration.store(1, std::memory_order_relaxed);
     }
 
-    bool RingCursorsValid(const RingControl& control, RingCursorSet cursors,
-                          std::uint64_t capacityBytes) {
+    bool RingCursorsValid(const RingControl& control, RingCursorSet cursors, std::uint64_t capacityBytes) {
         const std::uint64_t head = Head(control, cursors).load(std::memory_order_acquire);
         const std::uint64_t applied = AppliedTail(control, cursors).load(std::memory_order_acquire);
         const std::uint64_t retired = RetiredTail(control, cursors).load(std::memory_order_acquire);
@@ -72,8 +73,7 @@ namespace MobileGL::MG_Remote::Transport {
         if (head != applied || applied != retired) {
             MGLOG_E("MG_Remote ring: hard drain refused, ring is not quiesced "
                     "(head=%llu applied=%llu retired=%llu)",
-                    static_cast<unsigned long long>(head),
-                    static_cast<unsigned long long>(applied),
+                    static_cast<unsigned long long>(head), static_cast<unsigned long long>(applied),
                     static_cast<unsigned long long>(retired));
             return MOBILEGL_ERR_INVALID_ARGUMENT;
         }
@@ -87,18 +87,16 @@ namespace MobileGL::MG_Remote::Transport {
     // Producer
     // -----------------------------------------------------------------------
 
-    RingProducer::RingProducer(RingControl* control, void* base, std::uint64_t capacityBytes,
-                               RingCursorSet cursors)
+    RingProducer::RingProducer(RingControl* control, void* base, std::uint64_t capacityBytes, RingCursorSet cursors)
         : m_control(control), m_base(static_cast<std::uint8_t*>(base)), m_capacity(capacityBytes),
           m_mask(capacityBytes - 1), m_cursors(cursors) {
-        if (control == nullptr || base == nullptr || !IsPowerOfTwo(capacityBytes) ||
-            capacityBytes < kMinRingCapacity || capacityBytes > kMaxRingCapacity) {
+        if (control == nullptr || base == nullptr || !IsPowerOfTwo(capacityBytes) || capacityBytes < kMinRingCapacity ||
+            capacityBytes > kMaxRingCapacity) {
             MGLOG_E("MG_Remote ring: producer rejected, capacity %llu must be a power of two "
                     "between %llu and %llu bytes over a non-null mapping (a record may be at most "
                     "half the ring, and the record header's size field is 32-bit, so a bigger ring "
                     "would truncate it)",
-                    static_cast<unsigned long long>(capacityBytes),
-                    static_cast<unsigned long long>(kMinRingCapacity),
+                    static_cast<unsigned long long>(capacityBytes), static_cast<unsigned long long>(kMinRingCapacity),
                     static_cast<unsigned long long>(kMaxRingCapacity));
             m_control = nullptr;
             m_base = nullptr;
@@ -124,8 +122,7 @@ namespace MobileGL::MG_Remote::Transport {
         return inFlight >= m_capacity ? 0 : m_capacity - inFlight;
     }
 
-    void* RingProducer::Reserve(std::uint16_t kind, std::uint16_t flags,
-                                std::uint64_t payloadBytes) {
+    void* RingProducer::Reserve(std::uint16_t kind, std::uint16_t flags, std::uint64_t payloadBytes) {
         if (m_control == nullptr) {
             return nullptr;
         }
@@ -160,8 +157,7 @@ namespace MobileGL::MG_Remote::Transport {
         const bool needsPad = spaceToEnd < total;
         const std::uint64_t needed = needsPad ? spaceToEnd + total : total;
         if (FreeBytes() < needed) {
-            MGLOG_D("MG_Remote ring: full, %llu bytes free, %llu needed",
-                    static_cast<unsigned long long>(FreeBytes()),
+            MGLOG_D("MG_Remote ring: full, %llu bytes free, %llu needed", static_cast<unsigned long long>(FreeBytes()),
                     static_cast<unsigned long long>(needed));
             return nullptr;
         }
@@ -198,18 +194,16 @@ namespace MobileGL::MG_Remote::Transport {
     // Consumer
     // -----------------------------------------------------------------------
 
-    RingConsumer::RingConsumer(RingControl* control, void* base, std::uint64_t capacityBytes,
-                               RingCursorSet cursors)
-        : m_control(control), m_base(static_cast<const std::uint8_t*>(base)),
-          m_capacity(capacityBytes), m_mask(capacityBytes - 1), m_cursors(cursors) {
-        if (control == nullptr || base == nullptr || !IsPowerOfTwo(capacityBytes) ||
-            capacityBytes < kMinRingCapacity || capacityBytes > kMaxRingCapacity) {
+    RingConsumer::RingConsumer(RingControl* control, void* base, std::uint64_t capacityBytes, RingCursorSet cursors)
+        : m_control(control), m_base(static_cast<const std::uint8_t*>(base)), m_capacity(capacityBytes),
+          m_mask(capacityBytes - 1), m_cursors(cursors) {
+        if (control == nullptr || base == nullptr || !IsPowerOfTwo(capacityBytes) || capacityBytes < kMinRingCapacity ||
+            capacityBytes > kMaxRingCapacity) {
             MGLOG_E("MG_Remote ring: consumer rejected, capacity %llu must be a power of two "
                     "between %llu and %llu bytes over a non-null mapping (a record may be at most "
                     "half the ring, and the record header's size field is 32-bit, so a bigger ring "
                     "would truncate it)",
-                    static_cast<unsigned long long>(capacityBytes),
-                    static_cast<unsigned long long>(kMinRingCapacity),
+                    static_cast<unsigned long long>(capacityBytes), static_cast<unsigned long long>(kMinRingCapacity),
                     static_cast<unsigned long long>(kMaxRingCapacity));
             m_control = nullptr;
             m_base = nullptr;
@@ -233,8 +227,7 @@ namespace MobileGL::MG_Remote::Transport {
             if (available < sizeof(RingRecordHeader) || available > m_capacity) {
                 MGLOG_E("MG_Remote ring: %llu bytes between tail and head is impossible for a %llu "
                         "byte ring",
-                        static_cast<unsigned long long>(available),
-                        static_cast<unsigned long long>(m_capacity));
+                        static_cast<unsigned long long>(available), static_cast<unsigned long long>(m_capacity));
                 if (outCorrupt != nullptr) {
                     *outCorrupt = true;
                 }
@@ -249,13 +242,12 @@ namespace MobileGL::MG_Remote::Transport {
             // preceded by these bounds checks and a violation is fatal, never a
             // retry (plan section 6.3, runtime bounds discipline).
             const std::uint64_t size = header.size;
-            if (size < sizeof(RingRecordHeader) || (size % kRingRecordAlignment) != 0 ||
-                size > available || offset + size > m_capacity) {
+            if (size < sizeof(RingRecordHeader) || (size % kRingRecordAlignment) != 0 || size > available ||
+                offset + size > m_capacity) {
                 MGLOG_E("MG_Remote ring: corrupt record header at cursor %llu "
                         "(kind=%u flags=0x%04X size=%u available=%llu)",
-                        static_cast<unsigned long long>(m_localTail),
-                        static_cast<unsigned>(header.kind), static_cast<unsigned>(header.flags),
-                        header.size, static_cast<unsigned long long>(available));
+                        static_cast<unsigned long long>(m_localTail), static_cast<unsigned>(header.kind),
+                        static_cast<unsigned>(header.flags), header.size, static_cast<unsigned long long>(available));
                 if (outCorrupt != nullptr) {
                     *outCorrupt = true;
                 }
@@ -362,8 +354,7 @@ namespace MobileGL::MG_Remote::Transport {
             // already rules the same way for the cursor invariants on this page.
             // "Early" can only be caught at the call site, which is why every
             // advance below has exactly one caller and a named unit case.
-            void AdvanceMonotonic(std::atomic<std::uint64_t>& watermark, std::uint64_t to,
-                                  const char* name) {
+            void AdvanceMonotonic(std::atomic<std::uint64_t>& watermark, std::uint64_t to, const char* name) {
                 const std::uint64_t current = watermark.load(std::memory_order_relaxed);
                 if (to < current) {
                     // WireLogFatal, not MGLOG_F + abort: the line has to reach stderr
@@ -373,8 +364,7 @@ namespace MobileGL::MG_Remote::Transport {
                                  "cannot be un-resumed, and every later advance of this watermark "
                                  "would be a no-op, so the verb barrier and every reply wait would "
                                  "block for ever",
-                                 name, static_cast<unsigned long long>(current),
-                                 static_cast<unsigned long long>(to));
+                                 name, static_cast<unsigned long long>(current), static_cast<unsigned long long>(to));
                 }
                 if (to == current) {
                     return;
@@ -423,8 +413,8 @@ namespace MobileGL::MG_Remote::Transport {
         SetLink(link.Capabilities().PublishIsDelivery ? nullptr : &link);
     }
 
-    void SessionProducer::Attach(RingControl* control, RingProducer* cmd, Doorbell* peerBell,
-                                 Doorbell* selfBell, std::uint32_t spinUs) {
+    void SessionProducer::Attach(RingControl* control, RingProducer* cmd, Doorbell* peerBell, Doorbell* selfBell,
+                                 std::uint32_t spinUs) {
         m_control = control;
         m_cmd = cmd;
         m_peerBell = peerBell;
@@ -519,8 +509,7 @@ namespace MobileGL::MG_Remote::Transport {
         }
         RingControl* control = m_control;
         const ScopedWakeTarget wake(control->producerWakeSeq, seq);
-        return Park([control, seq] { return Watermark::Reached(control->Progress.appliedSeq, seq); },
-                    timeoutMs);
+        return Park([control, seq] { return Watermark::Reached(control->Progress.appliedSeq, seq); }, timeoutMs);
     }
 
     SessionWait SessionProducer::WaitForPresentAck(std::uint64_t serial, std::uint32_t timeoutMs) {
@@ -538,8 +527,7 @@ namespace MobileGL::MG_Remote::Transport {
         return m_control != nullptr && m_control->eventRingFull.load(std::memory_order_acquire) != 0;
     }
 
-    SessionWait SessionProducer::WaitForAppliedOrEventBacklog(std::uint64_t seq,
-                                                              std::uint32_t timeoutMs) {
+    SessionWait SessionProducer::WaitForAppliedOrEventBacklog(std::uint64_t seq, std::uint32_t timeoutMs) {
         if (!Valid()) {
             return SessionWait::TimedOut;
         }
@@ -553,8 +541,7 @@ namespace MobileGL::MG_Remote::Transport {
             timeoutMs);
     }
 
-    SessionWait SessionProducer::WaitForPresentAckOrEventBacklog(std::uint64_t serial,
-                                                                 std::uint32_t timeoutMs) {
+    SessionWait SessionProducer::WaitForPresentAckOrEventBacklog(std::uint64_t serial, std::uint32_t timeoutMs) {
         if (!Valid()) {
             return SessionWait::TimedOut;
         }
@@ -588,8 +575,8 @@ namespace MobileGL::MG_Remote::Transport {
         SetLink(link.Capabilities().PublishIsDelivery ? nullptr : &link);
     }
 
-    void SessionConsumer::Attach(RingControl* control, RingConsumer* cmd, Doorbell* peerBell,
-                                 Doorbell* selfBell, std::uint32_t spinUs) {
+    void SessionConsumer::Attach(RingControl* control, RingConsumer* cmd, Doorbell* peerBell, Doorbell* selfBell,
+                                 std::uint32_t spinUs) {
         m_control = control;
         m_cmd = cmd;
         m_peerBell = peerBell;
@@ -619,10 +606,8 @@ namespace MobileGL::MG_Remote::Transport {
         if (m_link && m_link->FlushProgress() != MOBILEGL_OK) return SessionWait::ShutDown;
         const bool woke = m_selfBell->Wait(
             control->consumerParked,
-            [control, cmd] {
-                return control->cmdHead.load(std::memory_order_acquire) != cmd->LocalTail();
-            },
-            m_spinUs, timeoutMs);
+            [control, cmd] { return control->cmdHead.load(std::memory_order_acquire) != cmd->LocalTail(); }, m_spinUs,
+            timeoutMs);
         if (woke) {
             return SessionWait::Reached;
         }

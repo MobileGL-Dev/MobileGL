@@ -64,7 +64,7 @@ namespace MobileGL::MG_Remote::Server::SharedImages {
 
 #if !defined(_WIN32)
         Bool IdentityOf(int fd, Uint64* dev, Uint64* ino) {
-            struct stat st {};
+            struct stat st{};
             if (::fstat(fd, &st) != 0) return false;
             *dev = static_cast<Uint64>(st.st_dev);
             *ino = static_cast<Uint64>(st.st_ino);
@@ -105,7 +105,8 @@ namespace MobileGL::MG_Remote::Server::SharedImages {
                     if (c->cmsg_level != SOL_SOCKET || c->cmsg_type != SCM_RIGHTS) continue;
                     const SizeT n = (c->cmsg_len - CMSG_LEN(0)) / sizeof(int);
                     const int* in = reinterpret_cast<const int*>(CMSG_DATA(c));
-                    for (SizeT i = 0; i < n; ++i) fds.push_back(in[i]);
+                    for (SizeT i = 0; i < n; ++i)
+                        fds.push_back(in[i]);
                 }
             }
             ::close(pair[1]);
@@ -144,8 +145,8 @@ namespace MobileGL::MG_Remote::Server::SharedImages {
         // CPU usage also keeps the layout one the platform can lock plane by plane, which is how
         // every layout question about it is answered (AHardwareBuffer_lockPlanes) - never by
         // assuming one.
-        constexpr uint64_t kYuvUsage = AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE |
-                                       AHARDWAREBUFFER_USAGE_CPU_WRITE_OFTEN | AHARDWAREBUFFER_USAGE_CPU_READ_RARELY;
+        constexpr uint64_t kYuvUsage = AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE | AHARDWAREBUFFER_USAGE_CPU_WRITE_OFTEN |
+                                       AHARDWAREBUFFER_USAGE_CPU_READ_RARELY;
 
         uint32_t AhbFormatOf(Uint32 fourcc) {
             if (fourcc == kFourccNv12) return AHARDWAREBUFFER_FORMAT_Y8Cb8Cr8_420;
@@ -218,7 +219,8 @@ namespace MobileGL::MG_Remote::Server::SharedImages {
             }
             image.Native = ahb;
             image.Fd = fds[0];
-            for (SizeT i = 1; i < fds.size(); ++i) ::close(fds[i]);
+            for (SizeT i = 1; i < fds.size(); ++i)
+                ::close(fds[i]);
             image.Offset = 0;
             if (!FourccIsYuv(image.Fourcc)) {
                 image.Stride = described.stride * 4;
@@ -255,7 +257,9 @@ namespace MobileGL::MG_Remote::Server::SharedImages {
         // A host has no AHardwareBuffer. A memfd stands in for the dma-buf so the registry, the
         // descriptor round trip and identification can be exercised by the unit tests; no backend
         // binds one.
-        Bool YuvAllocatableNative(Uint32) { return true; }
+        Bool YuvAllocatableNative(Uint32) {
+            return true;
+        }
 
         Bool AllocateNative(Image& image, std::string& why) {
             Uint64 bytes = 0;
@@ -288,7 +292,9 @@ namespace MobileGL::MG_Remote::Server::SharedImages {
 
         void ReleaseNative(void*) {}
 #else
-        Bool YuvAllocatableNative(Uint32) { return false; }
+        Bool YuvAllocatableNative(Uint32) {
+            return false;
+        }
 
         Bool AllocateNative(Image&, std::string& why) {
             why = "shared images need POSIX descriptors";
@@ -353,8 +359,7 @@ namespace MobileGL::MG_Remote::Server::SharedImages {
         void DmaBufSync(int fd, Bool start) {
             dma_buf_sync sync{};
             sync.flags = DMA_BUF_SYNC_READ | (start ? DMA_BUF_SYNC_START : DMA_BUF_SYNC_END);
-            while (::ioctl(fd, DMA_BUF_IOCTL_SYNC, &sync) != 0 && (errno == EINTR || errno == EAGAIN)) {
-            }
+            while (::ioctl(fd, DMA_BUF_IOCTL_SYNC, &sync) != 0 && (errno == EINTR || errno == EAGAIN)) {}
         }
 #endif
     } // namespace
@@ -384,12 +389,15 @@ namespace MobileGL::MG_Remote::Server::SharedImages {
         }
         if (Fd >= 0) ::close(Fd);
         if (WriteFence >= 0) ::close(WriteFence);
-        for (const int fence : ReadFences) ::close(fence);
+        for (const int fence : ReadFences)
+            ::close(fence);
 #endif
         ReleaseNative(Native);
     }
 
-    Bool FourccIsYuv(Uint32 fourcc) { return fourcc == kFourccNv12 || fourcc == kFourccP010; }
+    Bool FourccIsYuv(Uint32 fourcc) {
+        return fourcc == kFourccNv12 || fourcc == kFourccP010;
+    }
 
     Uint32 FourccYuvSampleBytes(Uint32 fourcc) {
         if (fourcc == kFourccNv12) return 1;
@@ -414,7 +422,9 @@ namespace MobileGL::MG_Remote::Server::SharedImages {
                fourcc == kFourccXrgb8888 || YuvFourccAllocatable(fourcc);
     }
 
-    Bool FourccIgnoresAlpha(Uint32 fourcc) { return fourcc == kFourccXbgr8888 || fourcc == kFourccXrgb8888; }
+    Bool FourccIgnoresAlpha(Uint32 fourcc) {
+        return fourcc == kFourccXbgr8888 || fourcc == kFourccXrgb8888;
+    }
 
     namespace {
         // Allocate's body. `foreign`, when given, is on the image before anything can find it.
@@ -457,8 +467,7 @@ namespace MobileGL::MG_Remote::Server::SharedImages {
             }
             reg.byIdentity[key] = image;
             if (image->Foreign != nullptr) {
-                reg.foreignByIdentity[std::make_pair(image->Foreign->IdentityDev, image->Foreign->IdentityIno)] =
-                    image;
+                reg.foreignByIdentity[std::make_pair(image->Foreign->IdentityDev, image->Foreign->IdentityIno)] = image;
             }
             return image;
         }
@@ -517,8 +526,8 @@ namespace MobileGL::MG_Remote::Server::SharedImages {
         const Uint64 lumaEnd = static_cast<Uint64>(layout.Offset[0]) +
                                static_cast<Uint64>(layout.Pitch[0]) * (height - 1) +
                                static_cast<Uint64>(width) * sampleBytes;
-        const Uint64 chromaEnd =
-            static_cast<Uint64>(layout.Offset[1]) + static_cast<Uint64>(layout.Pitch[1]) * (chromaHeight - 1) + chromaRow;
+        const Uint64 chromaEnd = static_cast<Uint64>(layout.Offset[1]) +
+                                 static_cast<Uint64>(layout.Pitch[1]) * (chromaHeight - 1) + chromaRow;
         if (layout.Pitch[0] < width * sampleBytes || layout.Pitch[1] < chromaRow || lumaEnd > size ||
             chromaEnd > size) {
             why = Format("its planes do not fit the %lld-byte buffer", static_cast<long long>(size));
@@ -633,8 +642,8 @@ namespace MobileGL::MG_Remote::Server::SharedImages {
         const auto it = reg.byIdentity.find(std::make_pair(dev, ino));
         ImageRef image = it != reg.byIdentity.end() ? it->second.lock() : nullptr;
         if (image == nullptr) {
-            why = Format("the descriptor (dev %llu ino %llu) was not exported by this server", static_cast<long long>(dev),
-                         static_cast<long long>(ino));
+            why = Format("the descriptor (dev %llu ino %llu) was not exported by this server",
+                         static_cast<long long>(dev), static_cast<long long>(ino));
         }
         return image;
 #endif
@@ -651,14 +660,17 @@ namespace MobileGL::MG_Remote::Server::SharedImages {
         Registry& reg = Reg();
         const std::lock_guard<std::mutex> lock(reg.mutex);
         SizeT live = 0;
-        for (const auto& [id, weak] : reg.byId) live += weak.expired() ? 0 : 1;
+        for (const auto& [id, weak] : reg.byId)
+            live += weak.expired() ? 0 : 1;
         return live;
     }
 
     // ---- synchronisation ------------------------------------------------------------------------
 
     namespace SyncFile {
-        Bool Signaled(int fd) { return Wait(fd, 0); }
+        Bool Signaled(int fd) {
+            return Wait(fd, 0);
+        }
 
         Bool Wait(int fd, Uint32 timeoutMs) {
 #if defined(_WIN32)
@@ -767,7 +779,8 @@ namespace MobileGL::MG_Remote::Server::SharedImages {
     }
 
     void ReadTracker::PublishFrame(int fence) {
-        for (const auto& [id, image] : m_images) PublishRead(*image, Dup(fence));
+        for (const auto& [id, image] : m_images)
+            PublishRead(*image, Dup(fence));
         CloseFd(fence);
         m_images.clear();
     }

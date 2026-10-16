@@ -613,8 +613,7 @@ TEST_F(ShaderCompileAdoptionTest, AfterEverySharerIsGoneTheNextCompileIsStillCor
     ShaderSource(c, 1, &text, nullptr);
     CompileShader(c);
     ASSERT_EQ(QueryCompileStatus(c), GL_TRUE)
-        << "a cancelled node must never be adopted - it can only ever report GL_FALSE. "
-        << QueryShaderInfoLog(c);
+        << "a cancelled node must never be adopted - it can only ever report GL_FALSE. " << QueryShaderInfoLog(c);
     const GLuint program = LinkWith(c);
     ASSERT_EQ(QueryLinkStatus(program), GL_TRUE);
     EXPECT_GE(GetUniformLocation(program, "uSeed240"), 0);
@@ -781,8 +780,7 @@ TEST_F(ShaderCompileAdoptionTest, StressSharedNodesUnderResourceAndDelete) {
                 << "round " << round << " shader " << i << ": " << QueryShaderInfoLog(shader);
             const GLuint program = LinkWith(shader);
             ASSERT_EQ(QueryLinkStatus(program), GL_TRUE) << "round " << round << " shader " << i;
-            const String expected =
-                "uSeed" + std::to_string(i % 3 == 0 ? round * 100 + 50 : round * 100 + (i % 4));
+            const String expected = "uSeed" + std::to_string(i % 3 == 0 ? round * 100 + 50 : round * 100 + (i % 4));
             EXPECT_GE(GetUniformLocation(program, expected.c_str()), 0)
                 << "round " << round << " shader " << i << " expected " << expected;
             DeleteProgram(program);
@@ -818,19 +816,17 @@ TEST(ShaderCompileAdoptionMapTest, RegisteredNodeIsAdoptedOnAnExactMatch) {
     const SharedPtr<ShaderCompileTask> node = MakeNode(text, ShaderStage::Fragment, env);
     map.Register(node);
 
-    EXPECT_EQ(map.FindAdoptable(ShaderStage::Fragment, ShaderPreprocessCache::HashSource(text), text,
-                                env->fingerprint),
+    EXPECT_EQ(map.FindAdoptable(ShaderStage::Fragment, ShaderPreprocessCache::HashSource(text), text, env->fingerprint),
               node);
     EXPECT_EQ(map.GetAdoptionCount(), 1u);
 
     // Every discriminator in the key is load-bearing.
-    EXPECT_EQ(map.FindAdoptable(ShaderStage::Vertex, ShaderPreprocessCache::HashSource(text), text,
-                                env->fingerprint),
+    EXPECT_EQ(map.FindAdoptable(ShaderStage::Vertex, ShaderPreprocessCache::HashSource(text), text, env->fingerprint),
               nullptr);
     const String other = text + "\n";
-    EXPECT_EQ(map.FindAdoptable(ShaderStage::Fragment, ShaderPreprocessCache::HashSource(other), other,
-                                env->fingerprint),
-              nullptr);
+    EXPECT_EQ(
+        map.FindAdoptable(ShaderStage::Fragment, ShaderPreprocessCache::HashSource(other), other, env->fingerprint),
+        nullptr);
     EXPECT_EQ(map.GetAdoptionCount(), 1u) << "a miss must not count as an adoption";
 }
 
@@ -851,9 +847,9 @@ TEST(ShaderCompileAdoptionMapTest, EnvFingerprintMismatchIsNotAdopted) {
     otherEnv->fingerprint = MG_Util::ShaderTranspiler::ComputeCompileEnvFingerprint(*otherEnv);
     ASSERT_NE(otherEnv->fingerprint, env->fingerprint);
 
-    EXPECT_EQ(map.FindAdoptable(ShaderStage::Fragment, ShaderPreprocessCache::HashSource(text), text,
-                                otherEnv->fingerprint),
-              nullptr);
+    EXPECT_EQ(
+        map.FindAdoptable(ShaderStage::Fragment, ShaderPreprocessCache::HashSource(text), text, otherEnv->fingerprint),
+        nullptr);
     EXPECT_EQ(map.GetAdoptionCount(), 0u);
 }
 
@@ -871,8 +867,7 @@ TEST(ShaderCompileAdoptionMapTest, CancelledNodeIsNotAdoptedAndIsPruned) {
     ASSERT_TRUE(node->IsCancelled());
     ASSERT_EQ(map.GetEntryCount(), 1u);
 
-    EXPECT_EQ(map.FindAdoptable(ShaderStage::Fragment, ShaderPreprocessCache::HashSource(text), text,
-                                env->fingerprint),
+    EXPECT_EQ(map.FindAdoptable(ShaderStage::Fragment, ShaderPreprocessCache::HashSource(text), text, env->fingerprint),
               nullptr);
     EXPECT_EQ(map.GetEntryCount(), 0u) << "the dead entry must be pruned on the lookup that found it";
     EXPECT_EQ(map.GetAdoptionCount(), 0u);
@@ -884,13 +879,10 @@ TEST(ShaderCompileAdoptionMapTest, ExpiredNodeIsNotAdoptedAndIsPruned) {
     const auto& env = MG_Util::ShaderTranspiler::GetDefaultCompileEnv();
     ShaderCompileAdoptionMap map;
     const String text = "#version 460\nvoid main() {}\n";
-    {
-        map.Register(MakeNode(text, ShaderStage::Fragment, env));
-    }
+    { map.Register(MakeNode(text, ShaderStage::Fragment, env)); }
     ASSERT_EQ(map.GetEntryCount(), 1u);
 
-    EXPECT_EQ(map.FindAdoptable(ShaderStage::Fragment, ShaderPreprocessCache::HashSource(text), text,
-                                env->fingerprint),
+    EXPECT_EQ(map.FindAdoptable(ShaderStage::Fragment, ShaderPreprocessCache::HashSource(text), text, env->fingerprint),
               nullptr);
     EXPECT_EQ(map.GetEntryCount(), 0u);
 }

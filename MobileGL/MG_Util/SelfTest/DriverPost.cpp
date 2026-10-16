@@ -200,21 +200,19 @@ namespace MobileGL::MG_Util::SelfTest {
         void AppendAsyncShaderCompileRow(ReportBuilder& builder) {
             constexpr const char* rowName = "Asynchronous shader compilation";
             if (!MG_Util::Async::AsyncShaderCompileEnabled()) {
-                builder.Warn(rowName,
-                             "off; GL_KHR_parallel_shader_compile is not advertised and "
-                             "glCompileShader/glLinkProgram run on the calling thread instead. The "
-                             "programs are identical - only the overlap is lost, so a shaderpack load "
-                             "takes as long as its compiles do (set environment variable "
-                             "MOBILEGL_ASYNC_SHADER_COMPILE=1 to enable it)");
+                builder.Warn(rowName, "off; GL_KHR_parallel_shader_compile is not advertised and "
+                                      "glCompileShader/glLinkProgram run on the calling thread instead. The "
+                                      "programs are identical - only the overlap is lost, so a shaderpack load "
+                                      "takes as long as its compiles do (set environment variable "
+                                      "MOBILEGL_ASYNC_SHADER_COMPILE=1 to enable it)");
                 return;
             }
             const Uint threads = MG_Util::Async::DetectShaderCompileThreadCount();
-            builder.Pass(rowName,
-                         format("on with {} compiler thread{}; GL_KHR_parallel_shader_compile is advertised "
-                                "and GL_MAX_SHADER_COMPILER_THREADS_KHR = {} (set environment variable "
-                                "MOBILEGL_ASYNC_SHADER_COMPILE=0 to disable it, or "
-                                "MOBILEGL_ASYNC_SHADER_COMPILE_THREADS=n to change the count)",
-                                threads, threads == 1 ? "" : "s", threads));
+            builder.Pass(rowName, format("on with {} compiler thread{}; GL_KHR_parallel_shader_compile is advertised "
+                                         "and GL_MAX_SHADER_COMPILER_THREADS_KHR = {} (set environment variable "
+                                         "MOBILEGL_ASYNC_SHADER_COMPILE=0 to disable it, or "
+                                         "MOBILEGL_ASYNC_SHADER_COMPILE_THREADS=n to change the count)",
+                                         threads, threads == 1 ? "" : "s", threads));
         }
 
         // Appends the four "MobileGL reported ..." rows for one backend section.
@@ -300,16 +298,15 @@ namespace MobileGL::MG_Util::SelfTest {
                 return;
             }
             if (deviceLimit > kMobileGLMaxVertexAttribs) {
-                builder.Warn(rowName,
-                             format("{} = {} (> {}); MobileGL clamps GL_MAX_VERTEX_ATTRIBS to {} because its "
-                                    "current-vertex-attribute storage and its Uint32 attribute masks hold {} "
-                                    "locations, so the driver's extra attributes stay unusable",
-                                    driverLimitName, deviceLimit, kMobileGLMaxVertexAttribs,
-                                    kMobileGLMaxVertexAttribs, kMobileGLMaxVertexAttribs));
+                builder.Warn(rowName, format("{} = {} (> {}); MobileGL clamps GL_MAX_VERTEX_ATTRIBS to {} because its "
+                                             "current-vertex-attribute storage and its Uint32 attribute masks hold {} "
+                                             "locations, so the driver's extra attributes stay unusable",
+                                             driverLimitName, deviceLimit, kMobileGLMaxVertexAttribs,
+                                             kMobileGLMaxVertexAttribs, kMobileGLMaxVertexAttribs));
                 return;
             }
-            builder.Pass(rowName, format("{} = {}; MobileGL advertises GL_MAX_VERTEX_ATTRIBS = {}",
-                                         driverLimitName, deviceLimit, deviceLimit));
+            builder.Pass(rowName, format("{} = {}; MobileGL advertises GL_MAX_VERTEX_ATTRIBS = {}", driverLimitName,
+                                         deviceLimit, deviceLimit));
         }
 
         // "Shader subgroups": how this backend implements GL_KHR_shader_subgroup on this driver
@@ -361,12 +358,10 @@ namespace MobileGL::MG_Util::SelfTest {
                              versionLabel + " (< 3.1: no compute shaders or native indirect draws)");
             }
 
-            EvaluateVertexAttribLimit(builder, caps.MaxVertexAttribs, "Vertex attributes",
-                                      "GL_MAX_VERTEX_ATTRIBS");
+            EvaluateVertexAttribLimit(builder, caps.MaxVertexAttribs, "Vertex attributes", "GL_MAX_VERTEX_ATTRIBS");
 
             if (caps.SupportsPolygonMode) {
-                builder.Pass("Polygon mode",
-                             "glPolygonMode GL_LINE/GL_POINT available via GL_NV/ANGLE_polygon_mode");
+                builder.Pass("Polygon mode", "glPolygonMode GL_LINE/GL_POINT available via GL_NV/ANGLE_polygon_mode");
             } else {
                 builder.FailOptional("Polygon mode",
                                      "no GL_NV/ANGLE_polygon_mode; glPolygonMode GL_LINE/GL_POINT silently "
@@ -397,8 +392,7 @@ namespace MobileGL::MG_Util::SelfTest {
             if (es31) {
                 GLint maxVertexSsboBlocks = 0;
                 glesFuncs.glGetIntegerv(GL_MAX_VERTEX_SHADER_STORAGE_BLOCKS, &maxVertexSsboBlocks);
-                while (glesFuncs.glGetError && glesFuncs.glGetError() != GL_NO_ERROR) {
-                }
+                while (glesFuncs.glGetError && glesFuncs.glGetError() != GL_NO_ERROR) {}
                 if (maxVertexSsboBlocks >= 1) {
                     builder.Pass("Vertex shader storage blocks",
                                  format("GL_MAX_VERTEX_SHADER_STORAGE_BLOCKS = {}", maxVertexSsboBlocks));
@@ -520,28 +514,25 @@ namespace MobileGL::MG_Util::SelfTest {
                 }
             }
             if (caps.SupportsTextureBorderClamp) {
-                builder.Pass("Texture border clamp",
-                             "supported (GL_TEXTURE_BORDER_COLOR reaches the driver, so "
-                             "GL_CLAMP_TO_BORDER samples the colour the application set)");
+                builder.Pass("Texture border clamp", "supported (GL_TEXTURE_BORDER_COLOR reaches the driver, so "
+                                                     "GL_CLAMP_TO_BORDER samples the colour the application set)");
             } else {
-                builder.FailOptional(
-                    "Texture border clamp",
-                    "not supported (pre-ES 3.2 without GL_EXT/OES_texture_border_clamp); "
-                    "GL_TEXTURE_BORDER_COLOR is not synced to the driver at all, so anything "
-                    "sampling outside a GL_CLAMP_TO_BORDER texture reads the driver's default "
-                    "border instead of the requested colour, and no wrap mode substitutes for it");
+                builder.FailOptional("Texture border clamp",
+                                     "not supported (pre-ES 3.2 without GL_EXT/OES_texture_border_clamp); "
+                                     "GL_TEXTURE_BORDER_COLOR is not synced to the driver at all, so anything "
+                                     "sampling outside a GL_CLAMP_TO_BORDER texture reads the driver's default "
+                                     "border instead of the requested colour, and no wrap mode substitutes for it");
             }
             if (caps.SupportsTextureCubeMapArray) {
                 builder.Pass("Texture cube map array",
                              "supported (GL_TEXTURE_CUBE_MAP_ARRAY textures get real storage and can be "
                              "attached to a framebuffer)");
             } else {
-                builder.FailOptional(
-                    "Texture cube map array",
-                    "not supported (pre-ES 3.2 without GL_EXT/OES_texture_cube_map_array); a cube "
-                    "map array texture gets no driver storage at all, so sampling one reads nothing "
-                    "and rendering to one does not reach the screen. Nothing substitutes: the "
-                    "shaders that declare a samplerCubeArray do not compile either");
+                builder.FailOptional("Texture cube map array",
+                                     "not supported (pre-ES 3.2 without GL_EXT/OES_texture_cube_map_array); a cube "
+                                     "map array texture gets no driver storage at all, so sampling one reads nothing "
+                                     "and rendering to one does not reach the screen. Nothing substitutes: the "
+                                     "shaders that declare a samplerCubeArray do not compile either");
             }
             // FAIL, and specifically FailOptional. The consequence is severe - buffer textures
             // are CORE in OpenGL 3.1 and MobileGL advertises a 4.x context, so an application
@@ -569,11 +560,10 @@ namespace MobileGL::MG_Util::SelfTest {
                         : "MobileGL's floor - this driver claims buffer textures but rejected the query";
                 switch (caps.TextureBufferSupport) {
                 case Tier::CoreEs32:
-                    builder.Pass("Buffer textures",
-                                 format("core in ES 3.2; GL_MAX_TEXTURE_BUFFER_SIZE = {} is {}, and "
-                                        "ESSL 320 needs no #extension directive to declare a "
-                                        "samplerBuffer",
-                                        advertisedLimit, limitProvenance));
+                    builder.Pass("Buffer textures", format("core in ES 3.2; GL_MAX_TEXTURE_BUFFER_SIZE = {} is {}, and "
+                                                           "ESSL 320 needs no #extension directive to declare a "
+                                                           "samplerBuffer",
+                                                           advertisedLimit, limitProvenance));
                     break;
                 case Tier::ExtensionEXT:
                     builder.Pass("Buffer textures",
@@ -592,17 +582,16 @@ namespace MobileGL::MG_Util::SelfTest {
                     break;
                 case Tier::None:
                 default:
-                    builder.FailOptional(
-                        "Buffer textures",
-                        format("not supported (pre-ES 3.2 without GL_EXT/OES_texture_buffer); "
-                               "glTexBuffer does not exist, so a buffer texture gets no storage, "
-                               "and any shader declaring a samplerBuffer fails to compile and "
-                               "leaves its program unlinked - every draw using it is a silent "
-                               "no-op. MobileGL still reports GL_MAX_TEXTURE_BUFFER_SIZE = {}: "
-                               "the value is a floor it cannot honour, kept because an OpenGL "
-                               "4.x context may not answer 0 and GL has no way to say that a "
-                               "core feature is missing",
-                               advertisedLimit));
+                    builder.FailOptional("Buffer textures",
+                                         format("not supported (pre-ES 3.2 without GL_EXT/OES_texture_buffer); "
+                                                "glTexBuffer does not exist, so a buffer texture gets no storage, "
+                                                "and any shader declaring a samplerBuffer fails to compile and "
+                                                "leaves its program unlinked - every draw using it is a silent "
+                                                "no-op. MobileGL still reports GL_MAX_TEXTURE_BUFFER_SIZE = {}: "
+                                                "the value is a floor it cannot honour, kept because an OpenGL "
+                                                "4.x context may not answer 0 and GL has no way to say that a "
+                                                "core feature is missing",
+                                                advertisedLimit));
                     break;
                 }
             }
@@ -752,8 +741,7 @@ namespace MobileGL::MG_Util::SelfTest {
             }
 
             // Drain stale errors so probe failures are attributable to the probe itself.
-            while (glesFuncs.glGetError() != GL_NO_ERROR) {
-            }
+            while (glesFuncs.glGetError() != GL_NO_ERROR) {}
 
             GLuint queryId = 0;
             glesFuncs.glGenQueries(1, &queryId);
@@ -802,9 +790,9 @@ namespace MobileGL::MG_Util::SelfTest {
                 fail(format("GL error 0x{:x} while reading GL_QUERY_RESULT", resultError));
                 return;
             }
-            builder.Pass("Timer queries",
-                         extensionPresent + format("; timer query functional (probe observed {} ns)", elapsedNs) +
-                             disabledNote);
+            builder.Pass("Timer queries", extensionPresent +
+                                              format("; timer query functional (probe observed {} ns)", elapsedNs) +
+                                              disabledNote);
         }
 
         // Compiles + links a two-stage program on the probe context. Returns 0 on failure and writes a
@@ -825,16 +813,19 @@ namespace MobileGL::MG_Util::SelfTest {
                     GLchar log[512] = {};
                     GLsizei len = 0;
                     g.glGetShaderInfoLog(out, static_cast<GLsizei>(sizeof(log) - 1), &len, log);
-                    detail = format("{} shader compile failed: {}",
-                                    stage == GL_VERTEX_SHADER ? "vertex" : "fragment",
+                    detail = format("{} shader compile failed: {}", stage == GL_VERTEX_SHADER ? "vertex" : "fragment",
                                     len > 0 ? log : "(no info log)");
                     return false;
                 }
                 return true;
             };
             GLuint v = 0, f = 0;
-            const ScopeGuard delV([&]() { if (v) g.glDeleteShader(v); });
-            const ScopeGuard delF([&]() { if (f) g.glDeleteShader(f); });
+            const ScopeGuard delV([&]() {
+                if (v) g.glDeleteShader(v);
+            });
+            const ScopeGuard delF([&]() {
+                if (f) g.glDeleteShader(f);
+            });
             if (!compile(GL_VERTEX_SHADER, vs, v) || !compile(GL_FRAGMENT_SHADER, fs, f)) {
                 return 0;
             }
@@ -884,13 +875,12 @@ namespace MobileGL::MG_Util::SelfTest {
             if (!g.glCreateShader || !g.glShaderSource || !g.glCompileShader || !g.glGetShaderiv ||
                 !g.glGetShaderInfoLog || !g.glDeleteShader || !g.glCreateProgram || !g.glAttachShader ||
                 !g.glLinkProgram || !g.glGetProgramiv || !g.glUseProgram || !g.glDeleteProgram ||
-                !g.glGenFramebuffers || !g.glBindFramebuffer || !g.glDeleteFramebuffers ||
-                !g.glGenRenderbuffers || !g.glBindRenderbuffer || !g.glRenderbufferStorage ||
-                !g.glFramebufferRenderbuffer || !g.glDeleteRenderbuffers || !g.glCheckFramebufferStatus ||
-                !g.glGenBuffers || !g.glBindBuffer || !g.glBufferData || !g.glDeleteBuffers ||
-                !g.glGetAttribLocation || !g.glVertexAttribPointer || !g.glEnableVertexAttribArray ||
-                !g.glViewport || !g.glClearColor || !g.glClear || !g.glDrawArrays || !g.glReadPixels ||
-                !g.glFinish || !g.glGetError) {
+                !g.glGenFramebuffers || !g.glBindFramebuffer || !g.glDeleteFramebuffers || !g.glGenRenderbuffers ||
+                !g.glBindRenderbuffer || !g.glRenderbufferStorage || !g.glFramebufferRenderbuffer ||
+                !g.glDeleteRenderbuffers || !g.glCheckFramebufferStatus || !g.glGenBuffers || !g.glBindBuffer ||
+                !g.glBufferData || !g.glDeleteBuffers || !g.glGetAttribLocation || !g.glVertexAttribPointer ||
+                !g.glEnableVertexAttribArray || !g.glViewport || !g.glClearColor || !g.glClear || !g.glDrawArrays ||
+                !g.glReadPixels || !g.glFinish || !g.glGetError) {
                 fail("the render entry points did not resolve through eglGetProcAddress");
                 return;
             }
@@ -901,43 +891,39 @@ namespace MobileGL::MG_Util::SelfTest {
             // same header for consistency.
             const Int esslVer = caps.GLESVersion.Major * 100 + caps.GLESVersion.Minor * 10;
             const String header = format("#version {} es\n", esslVer >= 300 ? esslVer : 300);
-            static const char* const kVsNativeBody =
-                "#extension GL_NV_shader_noperspective_interpolation : require\n"
-                "in vec4 a_pos;\n"
-                "in float a_v;\n"
-                "noperspective out highp float v_out;\n"
-                "void main() { gl_Position = a_pos; v_out = a_v; }\n";
-            static const char* const kFsNativeBody =
-                "#extension GL_NV_shader_noperspective_interpolation : require\n"
-                "precision highp float;\n"
-                "noperspective in highp float v_out;\n"
-                "out vec4 fragColor;\n"
-                "void main() { fragColor = vec4(v_out, 0.0, 0.0, 1.0); }\n";
+            static const char* const kVsNativeBody = "#extension GL_NV_shader_noperspective_interpolation : require\n"
+                                                     "in vec4 a_pos;\n"
+                                                     "in float a_v;\n"
+                                                     "noperspective out highp float v_out;\n"
+                                                     "void main() { gl_Position = a_pos; v_out = a_v; }\n";
+            static const char* const kFsNativeBody = "#extension GL_NV_shader_noperspective_interpolation : require\n"
+                                                     "precision highp float;\n"
+                                                     "noperspective in highp float v_out;\n"
+                                                     "out vec4 fragColor;\n"
+                                                     "void main() { fragColor = vec4(v_out, 0.0, 0.0, 1.0); }\n";
             // Exactly MobileGL's emulation (verified against EmulateNoPerspectivePass output): pre-multiply
             // the varying by clip-w in the vertex stage, recover with gl_FragCoord.w in the fragment stage,
             // no noperspective qualifier (so the driver interpolates it perspective-correct).
-            static const char* const kVsEmuBody =
-                "in vec4 a_pos;\n"
-                "in float a_v;\n"
-                "out highp float v_out;\n"
-                "void main() { gl_Position = a_pos; v_out = a_v * gl_Position.w; }\n";
+            static const char* const kVsEmuBody = "in vec4 a_pos;\n"
+                                                  "in float a_v;\n"
+                                                  "out highp float v_out;\n"
+                                                  "void main() { gl_Position = a_pos; v_out = a_v * gl_Position.w; }\n";
             static const char* const kFsEmuBody =
                 "precision highp float;\n"
                 "in highp float v_out;\n"
                 "out vec4 fragColor;\n"
                 "void main() { fragColor = vec4(v_out * gl_FragCoord.w, 0.0, 0.0, 1.0); }\n";
 
-            while (g.glGetError() != GL_NO_ERROR) {
-            }
+            while (g.glGetError() != GL_NO_ERROR) {}
 
             const String vsSrc = header + (native ? kVsNativeBody : kVsEmuBody);
             const String fsSrc = header + (native ? kFsNativeBody : kFsEmuBody);
             String linkDetail;
             const GLuint prog = CompileLinkProgram(g, vsSrc.c_str(), fsSrc.c_str(), linkDetail);
             if (prog == 0) {
-                fail(native ? "a noperspective program failed to build though the extension is advertised: " +
-                                  linkDetail
-                            : "the emulation program failed to build: " + linkDetail);
+                fail(native
+                         ? "a noperspective program failed to build though the extension is advertised: " + linkDetail
+                         : "the emulation program failed to build: " + linkDetail);
                 return;
             }
             const ScopeGuard delProg([&]() { g.glDeleteProgram(prog); });
@@ -946,7 +932,9 @@ namespace MobileGL::MG_Util::SelfTest {
             constexpr GLsizei kDim = 9;
             GLuint rbo = 0, fbo = 0, vbo = 0;
             g.glGenRenderbuffers(1, &rbo);
-            const ScopeGuard delRbo([&]() { if (rbo) g.glDeleteRenderbuffers(1, &rbo); });
+            const ScopeGuard delRbo([&]() {
+                if (rbo) g.glDeleteRenderbuffers(1, &rbo);
+            });
             g.glBindRenderbuffer(GL_RENDERBUFFER, rbo);
             g.glRenderbufferStorage(GL_RENDERBUFFER, GL_RGBA8, kDim, kDim);
             g.glGenFramebuffers(1, &fbo);
@@ -972,7 +960,9 @@ namespace MobileGL::MG_Util::SelfTest {
                 8.f,  8.f,  0.f, 8.f, 1.f, //
             };
             g.glGenBuffers(1, &vbo);
-            const ScopeGuard delVbo([&]() { if (vbo) g.glDeleteBuffers(1, &vbo); });
+            const ScopeGuard delVbo([&]() {
+                if (vbo) g.glDeleteBuffers(1, &vbo);
+            });
             g.glBindBuffer(GL_ARRAY_BUFFER, vbo);
             g.glBufferData(GL_ARRAY_BUFFER, sizeof(verts), verts, GL_STATIC_DRAW);
 
@@ -1022,15 +1012,14 @@ namespace MobileGL::MG_Util::SelfTest {
                 return;
             }
             if (native) {
-                builder.Pass("noperspective interpolation",
-                             pathNote + format("; native noperspective renders screen-linear (centre {} ~= 0.5)",
-                                               observedByte));
+                builder.Pass(
+                    "noperspective interpolation",
+                    pathNote + format("; native noperspective renders screen-linear (centre {} ~= 0.5)", observedByte));
             } else {
                 builder.Warn("noperspective interpolation",
-                             pathNote +
-                                 format("; the emulation renders screen-linear correctly (centre {} ~= 0.5), "
-                                        "but this is the fallback path with less driver coverage",
-                                        observedByte));
+                             pathNote + format("; the emulation renders screen-linear correctly (centre {} ~= 0.5), "
+                                               "but this is the fallback path with less driver coverage",
+                                               observedByte));
             }
         }
 
@@ -1221,9 +1210,18 @@ namespace MobileGL::MG_Util::SelfTest {
             }
             stageDone("eglBindAPI(EGL_OPENGL_ES_API) succeeded");
 
-            const EGLint configAttribs[] = {EGL_SURFACE_TYPE, EGL_PBUFFER_BIT, EGL_RENDERABLE_TYPE, EGL_OPENGL_ES3_BIT,
-                                            EGL_RED_SIZE,     8,               EGL_GREEN_SIZE,      8,
-                                            EGL_BLUE_SIZE,    8,               EGL_ALPHA_SIZE,      8,
+            const EGLint configAttribs[] = {EGL_SURFACE_TYPE,
+                                            EGL_PBUFFER_BIT,
+                                            EGL_RENDERABLE_TYPE,
+                                            EGL_OPENGL_ES3_BIT,
+                                            EGL_RED_SIZE,
+                                            8,
+                                            EGL_GREEN_SIZE,
+                                            8,
+                                            EGL_BLUE_SIZE,
+                                            8,
+                                            EGL_ALPHA_SIZE,
+                                            8,
                                             EGL_NONE};
             EGLConfig config = nullptr;
             EGLint numConfigs = 0;
@@ -1281,8 +1279,8 @@ namespace MobileGL::MG_Util::SelfTest {
                              caps.SubgroupSupportedFeatures & MG_Backend::DirectGLES::kEsslPrintableSubgroupFeatures)
                     : String());
             builder.report.formatCapabilities.emplace();
-            MG_Backend::DirectGLES::PopulateFormatCapabilities(
-                glesFuncs, caps, builder.report.formatCapabilities.value());
+            MG_Backend::DirectGLES::PopulateFormatCapabilities(glesFuncs, caps,
+                                                               builder.report.formatCapabilities.value());
             ReportThreeChannelColorAttachments(builder, caps, builder.report.formatCapabilities.value());
             // The "Known Driver Bugs" section. Deliberately last, and deliberately not a
             // builder.Pass/Warn/Fail row: these are not capability checks and they must not move
@@ -1372,8 +1370,7 @@ namespace MobileGL::MG_Util::SelfTest {
         }
 
         String VkApiVersionToString(Uint32 version) {
-            return format("{}.{}.{}", VK_VERSION_MAJOR(version), VK_VERSION_MINOR(version),
-                          VK_VERSION_PATCH(version));
+            return format("{}.{}.{}", VK_VERSION_MAJOR(version), VK_VERSION_MINOR(version), VK_VERSION_PATCH(version));
         }
 
         // Real timestamp-query probe, emitting the backend's single "Timer queries" row:
@@ -1384,8 +1381,7 @@ namespace MobileGL::MG_Util::SelfTest {
         // down from a scope guard before the caller's instance guard runs.
         void ProbeVulkanTimerQuery(ReportBuilder& builder, PFN_vkGetInstanceProcAddr getInstanceProcAddr,
                                    VkInstance instance, VkPhysicalDevice physicalDevice,
-                                   Uint32 graphicsQueueFamilyIndex, Uint32 timestampValidBits,
-                                   Float timestampPeriod) {
+                                   Uint32 graphicsQueueFamilyIndex, Uint32 timestampValidBits, Float timestampPeriod) {
             const String disabledNote = TimerQueryDisabledNote();
             const String timestampFacts =
                 format("timestampValidBits = {} on the graphics queue family; timestampPeriod = {} ns per tick",
@@ -1427,19 +1423,18 @@ namespace MobileGL::MG_Util::SelfTest {
                 reinterpret_cast<PFN_vkWaitForFences>(getInstanceProcAddr(instance, "vkWaitForFences"));
             const auto vkQueueSubmitFn =
                 reinterpret_cast<PFN_vkQueueSubmit>(getInstanceProcAddr(instance, "vkQueueSubmit"));
-            const auto vkGetQueryPoolResultsFn = reinterpret_cast<PFN_vkGetQueryPoolResults>(
-                getInstanceProcAddr(instance, "vkGetQueryPoolResults"));
+            const auto vkGetQueryPoolResultsFn =
+                reinterpret_cast<PFN_vkGetQueryPoolResults>(getInstanceProcAddr(instance, "vkGetQueryPoolResults"));
             const auto vkDeviceWaitIdleFn =
                 reinterpret_cast<PFN_vkDeviceWaitIdle>(getInstanceProcAddr(instance, "vkDeviceWaitIdle"));
 
             if (vkCreateDeviceFn == nullptr || vkDestroyDeviceFn == nullptr || vkGetDeviceQueueFn == nullptr ||
                 vkCreateCommandPoolFn == nullptr || vkDestroyCommandPoolFn == nullptr ||
                 vkAllocateCommandBuffersFn == nullptr || vkBeginCommandBufferFn == nullptr ||
-                vkEndCommandBufferFn == nullptr || vkCreateQueryPoolFn == nullptr ||
-                vkDestroyQueryPoolFn == nullptr || vkCmdResetQueryPoolFn == nullptr ||
-                vkCmdWriteTimestampFn == nullptr || vkCreateFenceFn == nullptr || vkDestroyFenceFn == nullptr ||
-                vkWaitForFencesFn == nullptr || vkQueueSubmitFn == nullptr || vkGetQueryPoolResultsFn == nullptr ||
-                vkDeviceWaitIdleFn == nullptr) {
+                vkEndCommandBufferFn == nullptr || vkCreateQueryPoolFn == nullptr || vkDestroyQueryPoolFn == nullptr ||
+                vkCmdResetQueryPoolFn == nullptr || vkCmdWriteTimestampFn == nullptr || vkCreateFenceFn == nullptr ||
+                vkDestroyFenceFn == nullptr || vkWaitForFencesFn == nullptr || vkQueueSubmitFn == nullptr ||
+                vkGetQueryPoolResultsFn == nullptr || vkDeviceWaitIdleFn == nullptr) {
                 fail("vkGetInstanceProcAddr could not resolve the entry points required for the "
                      "timestamp probe");
                 return;
@@ -1573,21 +1568,19 @@ namespace MobileGL::MG_Util::SelfTest {
                 // Skip the teardown idle wait too (see the scope guard): the
                 // submission is still pending on a possibly-hung GPU.
                 fenceWaitTimedOut = true;
-                fail(format("vkWaitForFences did not signal within 5 s (VkResult = {})",
-                            static_cast<Int>(result)));
+                fail(format("vkWaitForFences did not signal within 5 s (VkResult = {})", static_cast<Int>(result)));
                 return;
             }
 
             Uint64 timestamps[2] = {0, 0};
-            result = vkGetQueryPoolResultsFn(device, queryPool, 0, 2, sizeof(timestamps), timestamps,
-                                             sizeof(Uint64), VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
+            result = vkGetQueryPoolResultsFn(device, queryPool, 0, 2, sizeof(timestamps), timestamps, sizeof(Uint64),
+                                             VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
             if (result != VK_SUCCESS) {
                 fail(format("vkGetQueryPoolResults failed (VkResult = {})", static_cast<Int>(result)));
                 return;
             }
 
-            const Uint64 validMask =
-                timestampValidBits >= 64 ? ~0ull : ((1ull << timestampValidBits) - 1ull);
+            const Uint64 validMask = timestampValidBits >= 64 ? ~0ull : ((1ull << timestampValidBits) - 1ull);
             const Uint64 t0 = timestamps[0] & validMask;
             const Uint64 t1 = timestamps[1] & validMask;
             if (t1 < t0) {
@@ -1618,8 +1611,7 @@ namespace MobileGL::MG_Util::SelfTest {
         // Throwaway device on purpose, like every probe here: the row reports the
         // driver, not the renderer's configuration - MOBILEGL_MAGMA_PRIMGEN_QUERY_REROUTE
         // steers the renderer, never this row.
-        void ProbeVulkanPrimitivesGeneratedNoXfb(ReportBuilder& builder,
-                                                 PFN_vkGetInstanceProcAddr getInstanceProcAddr,
+        void ProbeVulkanPrimitivesGeneratedNoXfb(ReportBuilder& builder, PFN_vkGetInstanceProcAddr getInstanceProcAddr,
                                                  VkInstance instance, VkPhysicalDevice physicalDevice,
                                                  Uint32 graphicsQueueFamilyIndex,
                                                  const Vector<VkExtensionProperties>& deviceExtensions,
@@ -1690,8 +1682,7 @@ namespace MobileGL::MG_Util::SelfTest {
 
             Bool primitivesGeneratedQueryUsable = false;
             VkPhysicalDevicePrimitivesGeneratedQueryFeaturesEXT enabledPgqFeatures{};
-            enabledPgqFeatures.sType =
-                VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRIMITIVES_GENERATED_QUERY_FEATURES_EXT;
+            enabledPgqFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRIMITIVES_GENERATED_QUERY_FEATURES_EXT;
             if (HasVkExtension(deviceExtensions, VK_EXT_PRIMITIVES_GENERATED_QUERY_EXTENSION_NAME)) {
                 VkPhysicalDevicePrimitivesGeneratedQueryFeaturesEXT pgqQuery{};
                 pgqQuery.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRIMITIVES_GENERATED_QUERY_FEATURES_EXT;
@@ -1705,16 +1696,14 @@ namespace MobileGL::MG_Util::SelfTest {
                     enabledPgqFeatures.primitivesGeneratedQuery = VK_TRUE;
                     enabledPgqFeatures.primitivesGeneratedQueryWithRasterizerDiscard = VK_TRUE;
                     enabledPgqFeatures.pNext = &enabledXfbFeatures;
-                    enabledExtensions[enabledExtensionCount++] =
-                        VK_EXT_PRIMITIVES_GENERATED_QUERY_EXTENSION_NAME;
+                    enabledExtensions[enabledExtensionCount++] = VK_EXT_PRIMITIVES_GENERATED_QUERY_EXTENSION_NAME;
                 }
             }
 
             VkDeviceCreateInfo deviceInfo{};
             deviceInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
-            deviceInfo.pNext = primitivesGeneratedQueryUsable
-                                   ? static_cast<const void*>(&enabledPgqFeatures)
-                                   : static_cast<const void*>(&enabledXfbFeatures);
+            deviceInfo.pNext = primitivesGeneratedQueryUsable ? static_cast<const void*>(&enabledPgqFeatures)
+                                                              : static_cast<const void*>(&enabledXfbFeatures);
             deviceInfo.queueCreateInfoCount = 1;
             deviceInfo.pQueueCreateInfos = &queueInfo;
             deviceInfo.enabledExtensionCount = enabledExtensionCount;
@@ -1761,12 +1750,10 @@ namespace MobileGL::MG_Util::SelfTest {
             auto& fns = probeContext.fns;
             const auto resolve = [&](const char* name) { return getInstanceProcAddr(instance, name); };
             fns.vkCreateCommandPool = reinterpret_cast<PFN_vkCreateCommandPool>(resolve("vkCreateCommandPool"));
-            fns.vkDestroyCommandPool =
-                reinterpret_cast<PFN_vkDestroyCommandPool>(resolve("vkDestroyCommandPool"));
+            fns.vkDestroyCommandPool = reinterpret_cast<PFN_vkDestroyCommandPool>(resolve("vkDestroyCommandPool"));
             fns.vkAllocateCommandBuffers =
                 reinterpret_cast<PFN_vkAllocateCommandBuffers>(resolve("vkAllocateCommandBuffers"));
-            fns.vkBeginCommandBuffer =
-                reinterpret_cast<PFN_vkBeginCommandBuffer>(resolve("vkBeginCommandBuffer"));
+            fns.vkBeginCommandBuffer = reinterpret_cast<PFN_vkBeginCommandBuffer>(resolve("vkBeginCommandBuffer"));
             fns.vkEndCommandBuffer = reinterpret_cast<PFN_vkEndCommandBuffer>(resolve("vkEndCommandBuffer"));
             fns.vkCreateQueryPool = reinterpret_cast<PFN_vkCreateQueryPool>(resolve("vkCreateQueryPool"));
             fns.vkDestroyQueryPool = reinterpret_cast<PFN_vkDestroyQueryPool>(resolve("vkDestroyQueryPool"));
@@ -1778,19 +1765,13 @@ namespace MobileGL::MG_Util::SelfTest {
             fns.vkCmdEndQueryIndexedEXT =
                 reinterpret_cast<PFN_vkCmdEndQueryIndexedEXT>(resolve("vkCmdEndQueryIndexedEXT"));
             fns.vkCreateRenderPass = reinterpret_cast<PFN_vkCreateRenderPass>(resolve("vkCreateRenderPass"));
-            fns.vkDestroyRenderPass =
-                reinterpret_cast<PFN_vkDestroyRenderPass>(resolve("vkDestroyRenderPass"));
-            fns.vkCreateFramebuffer =
-                reinterpret_cast<PFN_vkCreateFramebuffer>(resolve("vkCreateFramebuffer"));
-            fns.vkDestroyFramebuffer =
-                reinterpret_cast<PFN_vkDestroyFramebuffer>(resolve("vkDestroyFramebuffer"));
-            fns.vkCmdBeginRenderPass =
-                reinterpret_cast<PFN_vkCmdBeginRenderPass>(resolve("vkCmdBeginRenderPass"));
+            fns.vkDestroyRenderPass = reinterpret_cast<PFN_vkDestroyRenderPass>(resolve("vkDestroyRenderPass"));
+            fns.vkCreateFramebuffer = reinterpret_cast<PFN_vkCreateFramebuffer>(resolve("vkCreateFramebuffer"));
+            fns.vkDestroyFramebuffer = reinterpret_cast<PFN_vkDestroyFramebuffer>(resolve("vkDestroyFramebuffer"));
+            fns.vkCmdBeginRenderPass = reinterpret_cast<PFN_vkCmdBeginRenderPass>(resolve("vkCmdBeginRenderPass"));
             fns.vkCmdEndRenderPass = reinterpret_cast<PFN_vkCmdEndRenderPass>(resolve("vkCmdEndRenderPass"));
-            fns.vkCreateShaderModule =
-                reinterpret_cast<PFN_vkCreateShaderModule>(resolve("vkCreateShaderModule"));
-            fns.vkDestroyShaderModule =
-                reinterpret_cast<PFN_vkDestroyShaderModule>(resolve("vkDestroyShaderModule"));
+            fns.vkCreateShaderModule = reinterpret_cast<PFN_vkCreateShaderModule>(resolve("vkCreateShaderModule"));
+            fns.vkDestroyShaderModule = reinterpret_cast<PFN_vkDestroyShaderModule>(resolve("vkDestroyShaderModule"));
             fns.vkCreatePipelineLayout =
                 reinterpret_cast<PFN_vkCreatePipelineLayout>(resolve("vkCreatePipelineLayout"));
             fns.vkDestroyPipelineLayout =
@@ -1804,12 +1785,10 @@ namespace MobileGL::MG_Util::SelfTest {
             fns.vkDestroyFence = reinterpret_cast<PFN_vkDestroyFence>(resolve("vkDestroyFence"));
             fns.vkQueueSubmit = reinterpret_cast<PFN_vkQueueSubmit>(resolve("vkQueueSubmit"));
             fns.vkWaitForFences = reinterpret_cast<PFN_vkWaitForFences>(resolve("vkWaitForFences"));
-            fns.vkGetQueryPoolResults =
-                reinterpret_cast<PFN_vkGetQueryPoolResults>(resolve("vkGetQueryPoolResults"));
+            fns.vkGetQueryPoolResults = reinterpret_cast<PFN_vkGetQueryPoolResults>(resolve("vkGetQueryPoolResults"));
             fns.vkDeviceWaitIdle = reinterpret_cast<PFN_vkDeviceWaitIdle>(resolve("vkDeviceWaitIdle"));
 
-            const PrimitivesGeneratedNoXfbMeasurement measurement =
-                RunPrimitivesGeneratedNoXfbProbe(probeContext);
+            const PrimitivesGeneratedNoXfbMeasurement measurement = RunPrimitivesGeneratedNoXfbProbe(probeContext);
             // Before any return below: the guard above owns the device and must know.
             probeFenceWaitTimedOut = measurement.fenceWaitTimedOut;
             if (!measurement.ran) {
@@ -1819,8 +1798,7 @@ namespace MobileGL::MG_Util::SelfTest {
                 return;
             }
 
-            const auto shapeFacts = [](const char* name,
-                                       const PrimitivesGeneratedNoXfbShapeMeasurement& shape) {
+            const auto shapeFacts = [](const char* name, const PrimitivesGeneratedNoXfbShapeMeasurement& shape) {
                 if (!shape.drawn) {
                     return format("{} not drawn (no tessellationShader)", name);
                 }
@@ -1839,8 +1817,8 @@ namespace MobileGL::MG_Util::SelfTest {
                 return facts;
             };
             const String facts = shapeFacts("triangles", measurement.trianglesPlain) + "; " +
-                                 shapeFacts("triangles under discard", measurement.trianglesDiscard) +
-                                 "; " + shapeFacts("patches under discard", measurement.patchesDiscard);
+                                 shapeFacts("triangles under discard", measurement.trianglesDiscard) + "; " +
+                                 shapeFacts("patches under discard", measurement.patchesDiscard);
 
             const auto statisticsExactOn = [](const PrimitivesGeneratedNoXfbShapeMeasurement& shape) {
                 return shape.statisticsMeasured && shape.statisticsClippingInput == shape.expectedPrimitives;
@@ -1853,8 +1831,7 @@ namespace MobileGL::MG_Util::SelfTest {
             // string printed right after it.
             const auto describeMissedStatisticsShapes = [&]() {
                 String missed;
-                const auto note = [&](const char* name,
-                                      const PrimitivesGeneratedNoXfbShapeMeasurement& shape) {
+                const auto note = [&](const char* name, const PrimitivesGeneratedNoXfbShapeMeasurement& shape) {
                     if (!shape.drawn || statisticsExactOn(shape)) {
                         return;
                     }
@@ -1862,10 +1839,9 @@ namespace MobileGL::MG_Util::SelfTest {
                         missed += " and ";
                     }
                     missed += name;
-                    missed += shape.statisticsMeasured
-                                  ? format(" (read {} of {} expected)", shape.statisticsClippingInput,
-                                           shape.expectedPrimitives)
-                                  : String(" (its statistics slot did not read back)");
+                    missed += shape.statisticsMeasured ? format(" (read {} of {} expected)",
+                                                                shape.statisticsClippingInput, shape.expectedPrimitives)
+                                                       : String(" (its statistics slot did not read back)");
                 };
                 note("the plain draw", measurement.trianglesPlain);
                 note("triangles under rasterizer discard", measurement.trianglesDiscard);
@@ -1890,21 +1866,19 @@ namespace MobileGL::MG_Util::SelfTest {
 
             switch (EvaluatePrimitivesGeneratedNoXfbVerdict(measurement)) {
             case PrimitivesGeneratedNoXfbVerdict::StreamCounts:
-                builder.Pass(RowName,
-                             "the stream query counts a draw made with no capture span open, as "
-                             "VK_EXT_transform_feedback defines (" +
-                                 facts + ")");
+                builder.Pass(RowName, "the stream query counts a draw made with no capture span open, as "
+                                      "VK_EXT_transform_feedback defines (" +
+                                          facts + ")");
                 return;
             case PrimitivesGeneratedNoXfbVerdict::PrimitivesGeneratedExtSubstitute:
-                builder.Warn(RowName,
-                             "the stream query answers 0 for a draw made with no capture span open - "
-                             "the shape the CTS measures the tessellator with - while a "
-                             "VK_QUERY_TYPE_PRIMITIVES_GENERATED_EXT query around an identical replay answers "
-                             "exactly right, rasterizer discard included, so the renderer "
-                             "accumulates GL_PRIMITIVES_GENERATED for such draws through the "
-                             "dedicated query instead (one extra query slot per XFB-inactive draw "
-                             "inside a GENERATED span; " +
-                                 facts + ")");
+                builder.Warn(RowName, "the stream query answers 0 for a draw made with no capture span open - "
+                                      "the shape the CTS measures the tessellator with - while a "
+                                      "VK_QUERY_TYPE_PRIMITIVES_GENERATED_EXT query around an identical replay answers "
+                                      "exactly right, rasterizer discard included, so the renderer "
+                                      "accumulates GL_PRIMITIVES_GENERATED for such draws through the "
+                                      "dedicated query instead (one extra query slot per XFB-inactive draw "
+                                      "inside a GENERATED span; " +
+                                          facts + ")");
                 return;
             case PrimitivesGeneratedNoXfbVerdict::StatisticsSubstitute:
                 builder.Warn(RowName,
@@ -1936,8 +1910,7 @@ namespace MobileGL::MG_Util::SelfTest {
                 String downgradeShapes;
                 const auto noteDowngrade = [&](const char* name,
                                                const PrimitivesGeneratedNoXfbShapeMeasurement& shape) {
-                    if (!shape.drawn || statisticsExactOn(shape) ||
-                        shape.streamGenerated != shape.expectedPrimitives) {
+                    if (!shape.drawn || statisticsExactOn(shape) || shape.streamGenerated != shape.expectedPrimitives) {
                         return;
                     }
                     if (!downgradeShapes.empty()) {
@@ -1979,8 +1952,7 @@ namespace MobileGL::MG_Util::SelfTest {
         // driver does, not what MobileGL elects to advertise to applications.
         void ProbeVulkanIterationRPWitness(ReportBuilder& builder, PFN_vkGetInstanceProcAddr getInstanceProcAddr,
                                            VkInstance instance, VkPhysicalDevice physicalDevice,
-                                           Uint32 computeQueueFamilyIndex,
-                                           const VkPhysicalDeviceProperties& properties,
+                                           Uint32 computeQueueFamilyIndex, const VkPhysicalDeviceProperties& properties,
                                            Bool subgroupPropertiesAvailable,
                                            const VkPhysicalDeviceSubgroupProperties& subgroupProperties) {
             constexpr const char* RowName = "Subgroup first-reduction witness";
@@ -1998,8 +1970,7 @@ namespace MobileGL::MG_Util::SelfTest {
             }
 
             IterationRPWitnessLimits limits{};
-            limits.computeStageSupported =
-                (subgroupProperties.supportedStages & VK_SHADER_STAGE_COMPUTE_BIT) != 0;
+            limits.computeStageSupported = (subgroupProperties.supportedStages & VK_SHADER_STAGE_COMPUTE_BIT) != 0;
             limits.basicSubgroupSupported =
                 (subgroupProperties.supportedOperations & VK_SUBGROUP_FEATURE_BASIC_BIT) != 0;
             limits.arithmeticSubgroupSupported =
@@ -2007,8 +1978,8 @@ namespace MobileGL::MG_Util::SelfTest {
             limits.subgroupSize = subgroupProperties.subgroupSize;
             limits.maxComputeWorkGroupInvocations = properties.limits.maxComputeWorkGroupInvocations;
             limits.maxComputeWorkGroupSize = {properties.limits.maxComputeWorkGroupSize[0],
-                                               properties.limits.maxComputeWorkGroupSize[1],
-                                               properties.limits.maxComputeWorkGroupSize[2]};
+                                              properties.limits.maxComputeWorkGroupSize[1],
+                                              properties.limits.maxComputeWorkGroupSize[2]};
             limits.maxComputeSharedMemorySize = properties.limits.maxComputeSharedMemorySize;
             limits.maxPerStageDescriptorStorageBuffers = properties.limits.maxPerStageDescriptorStorageBuffers;
             limits.maxDescriptorSetStorageBuffers = properties.limits.maxDescriptorSetStorageBuffers;
@@ -2020,10 +1991,9 @@ namespace MobileGL::MG_Util::SelfTest {
                 // WARN, not FAIL: there is nothing to witness on a device with no native
                 // subgroup contract, and the renderer takes its non-subgroup iteration path,
                 // which produces the same image.
-                builder.Warn(RowName,
-                             eligibility.detail +
-                                 "; the renderer takes its non-subgroup iteration path instead, which "
-                                 "renders the same thing without the first-reduction shortcut");
+                builder.Warn(RowName, eligibility.detail +
+                                          "; the renderer takes its non-subgroup iteration path instead, which "
+                                          "renders the same thing without the first-reduction shortcut");
                 return;
             }
             if (eligibility.eligibility == IterationRPWitnessEligibility::FailInadequateLimits) {
@@ -2056,8 +2026,7 @@ namespace MobileGL::MG_Util::SelfTest {
                 reinterpret_cast<PFN_vkFreeMemory>(getInstanceProcAddr(instance, "vkFreeMemory"));
             const auto vkBindBufferMemoryFn =
                 reinterpret_cast<PFN_vkBindBufferMemory>(getInstanceProcAddr(instance, "vkBindBufferMemory"));
-            const auto vkMapMemoryFn =
-                reinterpret_cast<PFN_vkMapMemory>(getInstanceProcAddr(instance, "vkMapMemory"));
+            const auto vkMapMemoryFn = reinterpret_cast<PFN_vkMapMemory>(getInstanceProcAddr(instance, "vkMapMemory"));
             const auto vkUnmapMemoryFn =
                 reinterpret_cast<PFN_vkUnmapMemory>(getInstanceProcAddr(instance, "vkUnmapMemory"));
             const auto vkCreateDescriptorSetLayoutFn = reinterpret_cast<PFN_vkCreateDescriptorSetLayout>(
@@ -2066,8 +2035,8 @@ namespace MobileGL::MG_Util::SelfTest {
                 getInstanceProcAddr(instance, "vkDestroyDescriptorSetLayout"));
             const auto vkCreateDescriptorPoolFn =
                 reinterpret_cast<PFN_vkCreateDescriptorPool>(getInstanceProcAddr(instance, "vkCreateDescriptorPool"));
-            const auto vkDestroyDescriptorPoolFn = reinterpret_cast<PFN_vkDestroyDescriptorPool>(
-                getInstanceProcAddr(instance, "vkDestroyDescriptorPool"));
+            const auto vkDestroyDescriptorPoolFn =
+                reinterpret_cast<PFN_vkDestroyDescriptorPool>(getInstanceProcAddr(instance, "vkDestroyDescriptorPool"));
             const auto vkAllocateDescriptorSetsFn = reinterpret_cast<PFN_vkAllocateDescriptorSets>(
                 getInstanceProcAddr(instance, "vkAllocateDescriptorSets"));
             const auto vkUpdateDescriptorSetsFn =
@@ -2078,8 +2047,8 @@ namespace MobileGL::MG_Util::SelfTest {
                 reinterpret_cast<PFN_vkDestroyShaderModule>(getInstanceProcAddr(instance, "vkDestroyShaderModule"));
             const auto vkCreatePipelineLayoutFn =
                 reinterpret_cast<PFN_vkCreatePipelineLayout>(getInstanceProcAddr(instance, "vkCreatePipelineLayout"));
-            const auto vkDestroyPipelineLayoutFn = reinterpret_cast<PFN_vkDestroyPipelineLayout>(
-                getInstanceProcAddr(instance, "vkDestroyPipelineLayout"));
+            const auto vkDestroyPipelineLayoutFn =
+                reinterpret_cast<PFN_vkDestroyPipelineLayout>(getInstanceProcAddr(instance, "vkDestroyPipelineLayout"));
             const auto vkCreateComputePipelinesFn = reinterpret_cast<PFN_vkCreateComputePipelines>(
                 getInstanceProcAddr(instance, "vkCreateComputePipelines"));
             const auto vkDestroyPipelineFn =
@@ -2096,8 +2065,8 @@ namespace MobileGL::MG_Util::SelfTest {
                 reinterpret_cast<PFN_vkEndCommandBuffer>(getInstanceProcAddr(instance, "vkEndCommandBuffer"));
             const auto vkCmdBindPipelineFn =
                 reinterpret_cast<PFN_vkCmdBindPipeline>(getInstanceProcAddr(instance, "vkCmdBindPipeline"));
-            const auto vkCmdBindDescriptorSetsFn = reinterpret_cast<PFN_vkCmdBindDescriptorSets>(
-                getInstanceProcAddr(instance, "vkCmdBindDescriptorSets"));
+            const auto vkCmdBindDescriptorSetsFn =
+                reinterpret_cast<PFN_vkCmdBindDescriptorSets>(getInstanceProcAddr(instance, "vkCmdBindDescriptorSets"));
             const auto vkCmdDispatchFn =
                 reinterpret_cast<PFN_vkCmdDispatch>(getInstanceProcAddr(instance, "vkCmdDispatch"));
             const auto vkCmdPipelineBarrierFn =
@@ -2123,10 +2092,10 @@ namespace MobileGL::MG_Util::SelfTest {
                 vkUpdateDescriptorSetsFn == nullptr || vkCreateShaderModuleFn == nullptr ||
                 vkDestroyShaderModuleFn == nullptr || vkCreatePipelineLayoutFn == nullptr ||
                 vkDestroyPipelineLayoutFn == nullptr || vkCreateComputePipelinesFn == nullptr ||
-                vkDestroyPipelineFn == nullptr || vkCreateCommandPoolFn == nullptr || vkDestroyCommandPoolFn == nullptr ||
-                vkAllocateCommandBuffersFn == nullptr || vkBeginCommandBufferFn == nullptr ||
-                vkEndCommandBufferFn == nullptr || vkCmdBindPipelineFn == nullptr ||
-                vkCmdBindDescriptorSetsFn == nullptr || vkCmdDispatchFn == nullptr ||
+                vkDestroyPipelineFn == nullptr || vkCreateCommandPoolFn == nullptr ||
+                vkDestroyCommandPoolFn == nullptr || vkAllocateCommandBuffersFn == nullptr ||
+                vkBeginCommandBufferFn == nullptr || vkEndCommandBufferFn == nullptr ||
+                vkCmdBindPipelineFn == nullptr || vkCmdBindDescriptorSetsFn == nullptr || vkCmdDispatchFn == nullptr ||
                 vkCmdPipelineBarrierFn == nullptr || vkCreateFenceFn == nullptr || vkDestroyFenceFn == nullptr ||
                 vkQueueSubmitFn == nullptr || vkWaitForFencesFn == nullptr || vkDeviceWaitIdleFn == nullptr) {
                 fail("vkGetInstanceProcAddr could not resolve the Vulkan entry points required for the witness");
@@ -2211,8 +2180,8 @@ namespace MobileGL::MG_Util::SelfTest {
             Uint32 memoryTypeIndex = std::numeric_limits<Uint32>::max();
             for (Uint32 index = 0; index < memoryProperties.memoryTypeCount; ++index) {
                 const Bool compatible = (memoryRequirements.memoryTypeBits & (1u << index)) != 0u;
-                const VkMemoryPropertyFlags required = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                                                       VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+                const VkMemoryPropertyFlags required =
+                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
                 if (compatible && (memoryProperties.memoryTypes[index].propertyFlags & required) == required) {
                     memoryTypeIndex = index;
                     break;
@@ -2537,9 +2506,8 @@ namespace MobileGL::MG_Util::SelfTest {
         // fallback costs a buffer queue the headless path does not need, and because
         // this used to abort the process instead.
         if (HasVkExtension(instanceExtensions, VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME)) {
-            builder.Pass("Headless surface",
-                         format("{} present; windowless contexts get a real headless surface",
-                                VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME));
+            builder.Pass("Headless surface", format("{} present; windowless contexts get a real headless surface",
+                                                    VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME));
         } else {
             builder.Warn("Headless surface",
                          format("{} absent; a windowless (pbuffer) context falls back to an AImageReader "
@@ -2579,16 +2547,14 @@ namespace MobileGL::MG_Util::SelfTest {
                 getInstanceProcAddr(instance, "vkGetPhysicalDeviceQueueFamilyProperties"));
         const auto vkGetPhysicalDeviceFeaturesFn = reinterpret_cast<PFN_vkGetPhysicalDeviceFeatures>(
             getInstanceProcAddr(instance, "vkGetPhysicalDeviceFeatures"));
-        const auto vkEnumerateDeviceExtensionPropertiesFn =
-            reinterpret_cast<PFN_vkEnumerateDeviceExtensionProperties>(
-                getInstanceProcAddr(instance, "vkEnumerateDeviceExtensionProperties"));
+        const auto vkEnumerateDeviceExtensionPropertiesFn = reinterpret_cast<PFN_vkEnumerateDeviceExtensionProperties>(
+            getInstanceProcAddr(instance, "vkEnumerateDeviceExtensionProperties"));
         const auto vkGetPhysicalDeviceFeatures2Fn = reinterpret_cast<PFN_vkGetPhysicalDeviceFeatures2>(
             getInstanceProcAddr(instance, "vkGetPhysicalDeviceFeatures2"));
         const auto vkGetPhysicalDeviceProperties2Fn = reinterpret_cast<PFN_vkGetPhysicalDeviceProperties2>(
             getInstanceProcAddr(instance, "vkGetPhysicalDeviceProperties2"));
-        const auto vkGetPhysicalDeviceFormatPropertiesFn =
-            reinterpret_cast<PFN_vkGetPhysicalDeviceFormatProperties>(
-                getInstanceProcAddr(instance, "vkGetPhysicalDeviceFormatProperties"));
+        const auto vkGetPhysicalDeviceFormatPropertiesFn = reinterpret_cast<PFN_vkGetPhysicalDeviceFormatProperties>(
+            getInstanceProcAddr(instance, "vkGetPhysicalDeviceFormatProperties"));
 
         // The instance is destroyed from a scope guard so it is released on every early-return
         // path and even if a String/format allocation throws while report rows are being built.
@@ -2611,8 +2577,8 @@ namespace MobileGL::MG_Util::SelfTest {
         Uint32 deviceCount = 0;
         const VkResult countResult = vkEnumeratePhysicalDevicesFn(instance, &deviceCount, nullptr);
         if (countResult != VK_SUCCESS) {
-            builder.Fail("Graphics device", format("vkEnumeratePhysicalDevices failed (VkResult = {})",
-                                                   static_cast<Int>(countResult)));
+            builder.Fail("Graphics device",
+                         format("vkEnumeratePhysicalDevices failed (VkResult = {})", static_cast<Int>(countResult)));
             return;
         }
         if (deviceCount == 0) {
@@ -2679,14 +2645,12 @@ namespace MobileGL::MG_Util::SelfTest {
 
         // The chosen-device facts (name, enumeration count, graphics queue) ride along
         // on both outcomes so the device API verdict never hides them.
-        const String deviceFacts =
-            format("{} ({} device(s) enumerated, picked the first with a graphics queue); "
-                   "graphics queue family present",
-                   String(properties.deviceName), deviceCount);
+        const String deviceFacts = format("{} ({} device(s) enumerated, picked the first with a graphics queue); "
+                                          "graphics queue family present",
+                                          String(properties.deviceName), deviceCount);
         if (properties.apiVersion >= VK_API_VERSION_1_1) {
             builder.Pass("Graphics device",
-                         deviceFacts +
-                             format("; device API Vulkan {}", VkApiVersionToString(properties.apiVersion)));
+                         deviceFacts + format("; device API Vulkan {}", VkApiVersionToString(properties.apiVersion)));
         } else {
             builder.Fail("Graphics device",
                          deviceFacts + format("; but Device API version: Vulkan {} (< 1.1); the DirectVulkan "
@@ -2761,7 +2725,7 @@ namespace MobileGL::MG_Util::SelfTest {
                              "unsupported; glMultiDraw* batches take the indirect or unrolled tier "
                              "instead, with identical output");
             }
-            const char* resolvedTier = multiDrawExtUsable                    ? "ext"
+            const char* resolvedTier = multiDrawExtUsable                      ? "ext"
                                        : features.multiDrawIndirect == VK_TRUE ? "indirect"
                                                                                : "unroll";
             String tierDetail = format("default tier \"{}\" (chain: ext -> indirect -> unroll)", resolvedTier);
@@ -2809,9 +2773,8 @@ namespace MobileGL::MG_Util::SelfTest {
         if (features.dualSrcBlend == VK_TRUE) {
             builder.Pass("dualSrcBlend", "GL_SRC1_* dual-source blend factors supported");
         } else {
-            builder.FailOptional("dualSrcBlend",
-                                 "unsupported; a draw using a GL_SRC1_* blend factor hard-fails, and a "
-                                 "second fragment output cannot be produced any other way");
+            builder.FailOptional("dualSrcBlend", "unsupported; a draw using a GL_SRC1_* blend factor hard-fails, and a "
+                                                 "second fragment output cannot be produced any other way");
         }
         // The Magma counterpart of the GLES "Buffer textures" row, so the two sections can be
         // read side by side. Vulkan has no optional-feature bit here: a uniform texel buffer is
@@ -2841,8 +2804,8 @@ namespace MobileGL::MG_Util::SelfTest {
             const Bool sliceCapable =
                 vkGetPhysicalDeviceImageFormatProperties(
                     physicalDevice, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_TYPE_3D, VK_IMAGE_TILING_OPTIMAL,
-                    VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
-                        VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                    VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+                        VK_IMAGE_USAGE_TRANSFER_DST_BIT,
                     VK_IMAGE_CREATE_2D_ARRAY_COMPATIBLE_BIT, &sliceProbe) == VK_SUCCESS;
             if (sliceCapable) {
                 builder.Pass("2D-array-compatible 3D images",
@@ -2946,8 +2909,7 @@ namespace MobileGL::MG_Util::SelfTest {
                 properties2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
                 properties2.pNext = &provokingVertexProperties;
                 vkGetPhysicalDeviceProperties2Fn(physicalDevice, &properties2);
-                provokingVertexModePerPipeline =
-                    provokingVertexProperties.provokingVertexModePerPipeline == VK_TRUE;
+                provokingVertexModePerPipeline = provokingVertexProperties.provokingVertexModePerPipeline == VK_TRUE;
                 transformFeedbackPreservesTriangleFanProvokingVertex =
                     provokingVertexProperties.transformFeedbackPreservesTriangleFanProvokingVertex == VK_TRUE;
             }
@@ -3047,13 +3009,13 @@ namespace MobileGL::MG_Util::SelfTest {
             // Same usability rule as the Vulkan capability loader's
             // HasUsableShaderSubgroupSupport, which decides native vs emulated in the real backend.
             ReportShaderSubgroups(builder, subgroupUsable,
-                                  subgroupUsable ? format("subgroup size {}, stages 0x{:x}, operations 0x{:x}",
-                                                          subgroupProperties.subgroupSize,
-                                                          subgroupProperties.supportedStages,
-                                                          subgroupProperties.supportedOperations)
-                                                 : String());
-            summary.shaderSubgroupUsable = MG_Backend::ResolveSubgroupImplementation(subgroupUsable) !=
-                                           MG_Backend::SubgroupImplementation::None;
+                                  subgroupUsable
+                                      ? format("subgroup size {}, stages 0x{:x}, operations 0x{:x}",
+                                               subgroupProperties.subgroupSize, subgroupProperties.supportedStages,
+                                               subgroupProperties.supportedOperations)
+                                      : String());
+            summary.shaderSubgroupUsable =
+                MG_Backend::ResolveSubgroupImplementation(subgroupUsable) != MG_Backend::SubgroupImplementation::None;
         } else {
             ReportShaderSubgroups(builder, false, String());
             summary.shaderSubgroupUsable =
@@ -3061,7 +3023,7 @@ namespace MobileGL::MG_Util::SelfTest {
         }
 
         ProbeVulkanIterationRPWitness(builder, getInstanceProcAddr, instance, physicalDevice, computeQueueFamilyIndex,
-                                     properties, subgroupPropertiesAvailable, subgroupProperties);
+                                      properties, subgroupPropertiesAvailable, subgroupProperties);
 
         ProbeVulkanPrimitivesGeneratedNoXfb(builder, getInstanceProcAddr, instance, physicalDevice,
                                             graphicsQueueFamilyIndex, deviceExtensions, features,
@@ -3080,9 +3042,8 @@ namespace MobileGL::MG_Util::SelfTest {
         }
 
         if (HasVkExtension(deviceExtensions, VK_KHR_DRAW_INDIRECT_COUNT_EXTENSION_NAME)) {
-            builder.Pass("VK_KHR_draw_indirect_count",
-                         "supported (count-buffer indirect draws run as single native "
-                         "vkCmdDraw*IndirectCount commands)");
+            builder.Pass("VK_KHR_draw_indirect_count", "supported (count-buffer indirect draws run as single native "
+                                                       "vkCmdDraw*IndirectCount commands)");
         } else {
             builder.Warn("VK_KHR_draw_indirect_count",
                          "not supported; count-buffer indirect draws (glMultiDraw*IndirectCount) fall "
@@ -3110,25 +3071,24 @@ namespace MobileGL::MG_Util::SelfTest {
         // the graphics queue family and a non-zero tick period.
         summary.timerQueriesSupported = graphicsQueueTimestampValidBits > 0 && timestampPeriod > 0.0f;
         if (graphicsQueueTimestampValidBits > 0) {
-            ProbeVulkanTimerQuery(builder, getInstanceProcAddr, instance, physicalDevice,
-                                  graphicsQueueFamilyIndex, graphicsQueueTimestampValidBits, timestampPeriod);
+            ProbeVulkanTimerQuery(builder, getInstanceProcAddr, instance, physicalDevice, graphicsQueueFamilyIndex,
+                                  graphicsQueueTimestampValidBits, timestampPeriod);
         } else {
-            builder.FailOptional(
-                "Timer queries",
-                format("timestampValidBits = 0 on the graphics queue family; timestampPeriod = {} ns "
-                       "per tick; the graphics queue cannot write a timestamp at all, so there is "
-                       "nothing to time GPU work with and glBeginQuery(GL_TIME_ELAPSED) has no "
-                       "substitute",
-                       timestampPeriod) +
-                    TimerQueryDisabledNote());
+            builder.FailOptional("Timer queries",
+                                 format("timestampValidBits = 0 on the graphics queue family; timestampPeriod = {} ns "
+                                        "per tick; the graphics queue cannot write a timestamp at all, so there is "
+                                        "nothing to time GPU work with and glBeginQuery(GL_TIME_ELAPSED) has no "
+                                        "substitute",
+                                        timestampPeriod) +
+                                     TimerQueryDisabledNote());
         }
         if (vkGetPhysicalDeviceFormatPropertiesFn != nullptr) {
             MG_External::VulkanCapabilities formatProbeCapabilities{};
             BackendLoader::FillInVulkanCapabilities(formatProbeCapabilities, properties);
             builder.report.formatCapabilities.emplace();
-            MG_Backend::DirectVulkan::PopulateFormatCapabilities(
-                physicalDevice, vkGetPhysicalDeviceFormatPropertiesFn, formatProbeCapabilities,
-                builder.report.formatCapabilities.value());
+            MG_Backend::DirectVulkan::PopulateFormatCapabilities(physicalDevice, vkGetPhysicalDeviceFormatPropertiesFn,
+                                                                 formatProbeCapabilities,
+                                                                 builder.report.formatCapabilities.value());
         }
     }
 

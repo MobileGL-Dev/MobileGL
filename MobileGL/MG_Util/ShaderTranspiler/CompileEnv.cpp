@@ -45,8 +45,7 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
         // changing the fingerprint, which is exactly the memo-hazard property wanted here.
         HashBytes(state, &env.params, sizeof(env.params));
         if (!env.advertisedExtensions.empty()) {
-            HashBytes(state, env.advertisedExtensions.data(),
-                      env.advertisedExtensions.size() * sizeof(GLExtension));
+            HashBytes(state, env.advertisedExtensions.data(), env.advertisedExtensions.size() * sizeof(GLExtension));
         }
         return state;
     }

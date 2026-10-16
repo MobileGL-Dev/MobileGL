@@ -102,9 +102,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         };
         // What a program parsed below #version 450 carries, and the fallback when a module's
         // block cannot be read.
-        static constexpr Uint32 kDefaultPerVertexMembers =
-            static_cast<Uint32>(PerVertexMemberBit::Position) | static_cast<Uint32>(PerVertexMemberBit::PointSize) |
-            static_cast<Uint32>(PerVertexMemberBit::ClipDistance);
+        static constexpr Uint32 kDefaultPerVertexMembers = static_cast<Uint32>(PerVertexMemberBit::Position) |
+                                                           static_cast<Uint32>(PerVertexMemberBit::PointSize) |
+                                                           static_cast<Uint32>(PerVertexMemberBit::ClipDistance);
 
         struct UpdateAfterBindLimits {
             Bool enabled = false;
@@ -281,7 +281,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // entry pointer re-stamps use through a const reference (StampProgramUse).
             mutable Uint64 lastUsedFrame = 0;
 
-            static inline SessionLocal<VkDevice> s_device;  // per Magma session (MagmaSession.h)
+            static inline SessionLocal<VkDevice> s_device; // per Magma session (MagmaSession.h)
 
             VkProgramObject() = default;
             VkProgramObject(const VkProgramObject&) = delete;
@@ -315,8 +315,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 samplerTextureTargetByBinding = std::move(other.samplerTextureTargetByBinding);
                 samplerNumericDomainByBinding = std::move(other.samplerNumericDomainByBinding);
                 storageImageFormatByBinding = std::move(other.storageImageFormatByBinding);
-                storageImageUsesBindingFormatByBinding =
-                    std::move(other.storageImageUsesBindingFormatByBinding);
+                storageImageUsesBindingFormatByBinding = std::move(other.storageImageUsesBindingFormatByBinding);
                 storageBlockNameByBinding = std::move(other.storageBlockNameByBinding);
                 storageBlockIndexByBinding = std::move(other.storageBlockIndexByBinding);
                 hasStorageImages = other.hasStorageImages;
@@ -390,8 +389,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 samplerTextureTargetByBinding = std::move(other.samplerTextureTargetByBinding);
                 samplerNumericDomainByBinding = std::move(other.samplerNumericDomainByBinding);
                 storageImageFormatByBinding = std::move(other.storageImageFormatByBinding);
-                storageImageUsesBindingFormatByBinding =
-                    std::move(other.storageImageUsesBindingFormatByBinding);
+                storageImageUsesBindingFormatByBinding = std::move(other.storageImageUsesBindingFormatByBinding);
                 storageBlockNameByBinding = std::move(other.storageBlockNameByBinding);
                 storageBlockIndexByBinding = std::move(other.storageBlockIndexByBinding);
                 hasStorageImages = other.hasStorageImages;
@@ -441,9 +439,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 return *this;
             }
 
-            ~VkProgramObject() {
-                Destroy();
-            }
+            ~VkProgramObject() { Destroy(); }
 
         private:
             void Destroy() {
@@ -489,11 +485,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // repair passes patch modules AROUND them, and the emulation only replaces them
         // on opted-in devices with no subgroup support at all.
         struct SubgroupLoweringPolicy {
-            Bool emulateSubgroups = false;      // no-native-support devices, or MOBILEGL_SUBGROUP_EMULATION
+            Bool emulateSubgroups = false;              // no-native-support devices, or MOBILEGL_SUBGROUP_EMULATION
             Bool fixIterationRPSubgroupScratch = false; // patch iterationRP's under-declared scratch
-            Bool fixIterationRPBarrier = false; // repair Program 203's shared-scratch race
-            Bool deriveNumSubgroups = false;    // repair the NumSubgroups builtin
-            Bool requireFullSubgroups = false;  // computeFullSubgroups enabled on the device
+            Bool fixIterationRPBarrier = false;         // repair Program 203's shared-scratch race
+            Bool deriveNumSubgroups = false;            // repair the NumSubgroups builtin
+            Bool requireFullSubgroups = false;          // computeFullSubgroups enabled on the device
             Uint32 nativeSubgroupSize = 0;
             // Full-subgroup launches are bounded by this device limit; a dispatch whose
             // workgroup needs more subgroups than this cannot request the flag.
@@ -504,18 +500,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         };
 
         explicit ProgramFactory(VkDevice device, const VulkanRendererConfig& config, Uint32 maxBindings,
-                                Bool shaderDrawParametersEnabled,
-                                Bool unformattedFloatStorageImagesEnabled,
-                                Bool tessellationAndGeometryPointSizeEnabled,
-                                Bool enableSpirvValidation,
-                                UpdateAfterBindLimits updateAfterBindLimits,
-                                SubgroupLoweringPolicy subgroupPolicy)
+                                Bool shaderDrawParametersEnabled, Bool unformattedFloatStorageImagesEnabled,
+                                Bool tessellationAndGeometryPointSizeEnabled, Bool enableSpirvValidation,
+                                UpdateAfterBindLimits updateAfterBindLimits, SubgroupLoweringPolicy subgroupPolicy)
             : m_device(device), m_maxBindings(maxBindings), m_config(config),
               m_shaderDrawParametersEnabled(shaderDrawParametersEnabled),
               m_unformattedFloatStorageImagesEnabled(unformattedFloatStorageImagesEnabled),
               m_tessellationAndGeometryPointSizeEnabled(tessellationAndGeometryPointSizeEnabled),
-              m_enableSpirvValidation(enableSpirvValidation),
-              m_updateAfterBindLimits(updateAfterBindLimits),
+              m_enableSpirvValidation(enableSpirvValidation), m_updateAfterBindLimits(updateAfterBindLimits),
               m_subgroupPolicy(subgroupPolicy) {
             VkProgramObject::s_device.Get() = device;
         }
@@ -526,8 +518,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         ProgramFactory(const ProgramFactory&) = delete;
 
         HashType ComputeHash(const MagmaProgramSource& program, CompileOptionFlags flags) const;
-        const VkProgramObject& GetOrCreateProgram(
-            const MagmaProgramSource& program, CompileOptionFlags flags);
+        const VkProgramObject& GetOrCreateProgram(const MagmaProgramSource& program, CompileOptionFlags flags);
 
         // The default framebuffer's current image height, baked as a literal into every
         // FragCoordYFlip variant (there is no push-constant or specialization channel here, and
@@ -631,9 +622,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // (size, levels, members) combinations a program draws with - one or two in practice -
         // and only ever happens for the rare program that has no control stage at all.
         VkPipelineShaderStageCreateInfo GetOrCreatePassthroughTessControlStage(Uint32 patchVertices,
-                                                                              const FloatVec4& defaultOuterLevel,
-                                                                              const FloatVec2& defaultInnerLevel,
-                                                                              Uint32 perVertexMembers);
+                                                                               const FloatVec4& defaultOuterLevel,
+                                                                               const FloatVec2& defaultInnerLevel,
+                                                                               Uint32 perVertexMembers);
 
         // Source of the module above. Exposed for tests: the generated GLSL is the whole
         // contract with the evaluation stage, so it is worth pinning independently of a device.
@@ -668,22 +659,18 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // `spirv`, at the same index. Taking the stages rather than the shader objects is what
         // keeps the program's live attach list, which is a longer and differently-indexed list
         // the moment a glAttachShader lands after the link, from being passed here by mistake.
-        void ReflectVertexInputs(const Vector<ShaderStage>& stages,
-                     const Vector<Vector<Uint>>& spirv,
-                     VkProgramObject& entry) const;
-        void ReflectViewportIndexUsage(const Vector<ShaderStage>& stages,
-                                       const Vector<Vector<Uint>>& spirv,
+        void ReflectVertexInputs(const Vector<ShaderStage>& stages, const Vector<Vector<Uint>>& spirv,
+                                 VkProgramObject& entry) const;
+        void ReflectViewportIndexUsage(const Vector<ShaderStage>& stages, const Vector<Vector<Uint>>& spirv,
                                        VkProgramObject& entry) const;
-        void ReflectFragmentOutputs(const Vector<ShaderStage>& stages,
-                        const Vector<Vector<Uint>>& spirv,
-                        VkProgramObject& entry) const;
+        void ReflectFragmentOutputs(const Vector<ShaderStage>& stages, const Vector<Vector<Uint>>& spirv,
+                                    VkProgramObject& entry) const;
         void ReflectLayout(const MagmaProgramSource& program, const Vector<Vector<Uint>>& spirv,
                            VkProgramObject& entry) const;
         // Fills needsPassthroughTessControl / passthroughTessControlEmulatable off the linked
         // modules. Const and reflection-only: it decides nothing about the pipeline, it only
         // records what the evaluation stage's input interface is made of.
-        void ReflectPassthroughTessControlNeed(const Vector<ShaderStage>& stages,
-                                               const Vector<Vector<Uint>>& spirv,
+        void ReflectPassthroughTessControlNeed(const Vector<ShaderStage>& stages, const Vector<Vector<Uint>>& spirv,
                                                VkProgramObject& entry) const;
 
         VkDevice m_device = VK_NULL_HANDLE;

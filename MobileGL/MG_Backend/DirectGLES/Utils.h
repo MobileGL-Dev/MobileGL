@@ -211,8 +211,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // On a driver that advertises only GL_OES_texture_buffer that directive is a compile
         // error, so the name is retargeted in the emitted source. A no-op on every other tier:
         // ES 3.2 needs no directive at all and an EXT driver already has the right one.
-        String RetargetTextureBufferExtension(String glslCode,
-                                              MG_External::GLESCapabilities::TextureBufferTier tier);
+        String RetargetTextureBufferExtension(String glslCode, MG_External::GLESCapabilities::TextureBufferTier tier);
         // Adds `#extension GL_NV_image_formats : require` when the shader carries an image
         // format qualifier GLSL ES has no core spelling for. SPIRV-Cross prints the format and
         // asks for nothing, so the request has to be made here. `needed` is the caller's answer,
@@ -384,10 +383,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // disagree on everything but the algorithm: desktop GLSL 450 against ESSL, a fixed
         // gl_PerVertex shape that Vulkan matches structurally against a mirrored one, and a
         // VkShaderModule against a driver shader object.
-        String BuildPassthroughTessControlEssl(Uint esslVersion, Uint patchVertices,
-                                               const String& inPerVertexMembers,
-                                               const String& outPerVertexMembers,
-                                               const FloatVec4& defaultOuterLevel,
+        String BuildPassthroughTessControlEssl(Uint esslVersion, Uint patchVertices, const String& inPerVertexMembers,
+                                               const String& outPerVertexMembers, const FloatVec4& defaultOuterLevel,
                                                const FloatVec2& defaultInnerLevel);
         // Prefix of the writeonly half a read+write image uniform is split into (see
         // SplitReadWriteImageUniforms); the suffix is the image's own (already access-tagged) name.

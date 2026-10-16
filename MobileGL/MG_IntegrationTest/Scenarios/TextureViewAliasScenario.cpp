@@ -119,8 +119,8 @@ void main() { oColor = texture(uTex, vec3(vUv, float(uLayer))); }
         };
 
         std::string Describe(const Rgba8& c) {
-            return "rgba(" + std::to_string(c.r) + "," + std::to_string(c.g) + "," + std::to_string(c.b) +
-                   "," + std::to_string(c.a) + ")";
+            return "rgba(" + std::to_string(c.r) + "," + std::to_string(c.g) + "," + std::to_string(c.b) + "," +
+                   std::to_string(c.a) + ")";
         }
 
         class TextureViewAliasScenario : public ScenarioTest {
@@ -184,8 +184,7 @@ void main() { oColor = texture(uTex, vec3(vUv, float(uLayer))); }
                 glBindTexture(GL_TEXTURE_2D, 0);
                 GLuint view = 0;
                 glGenTextures(1, &view);
-                while (glGetError() != GL_NO_ERROR) {
-                }
+                while (glGetError() != GL_NO_ERROR) {}
                 glTextureView(view, GL_TEXTURE_2D, storage, GL_RGBA8, 0, 1, 0, 1);
                 const bool usable = glGetError() == GL_NO_ERROR;
                 glDeleteTextures(1, &view);
@@ -221,8 +220,8 @@ void main() { oColor = texture(uTex, vec3(vUv, float(uLayer))); }
             }
 
             static Rgba8 LayerSeed(int layer) {
-                return Rgba8{static_cast<std::uint8_t>(10 + layer * 20),
-                             static_cast<std::uint8_t>(200 - layer * 20), 30, 255};
+                return Rgba8{static_cast<std::uint8_t>(10 + layer * 20), static_cast<std::uint8_t>(200 - layer * 20),
+                             30, 255};
             }
 
             static std::vector<std::uint8_t> Fill(Rgba8 colour) {
@@ -240,8 +239,8 @@ void main() { oColor = texture(uTex, vec3(vUv, float(uLayer))); }
                 const std::vector<std::uint8_t> texels = Fill(colour);
                 glBindTexture(GL_TEXTURE_2D_ARRAY, owner);
                 glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-                glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, layer, kSize, kSize, 1, GL_RGBA,
-                                GL_UNSIGNED_BYTE, texels.data());
+                glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, layer, kSize, kSize, 1, GL_RGBA, GL_UNSIGNED_BYTE,
+                                texels.data());
                 glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
             }
 
@@ -252,16 +251,14 @@ void main() { oColor = texture(uTex, vec3(vUv, float(uLayer))); }
                 const std::vector<std::uint8_t> texels = Fill(colour);
                 glBindTexture(GL_TEXTURE_2D, view);
                 glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-                glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, kSize, kSize, GL_RGBA, GL_UNSIGNED_BYTE,
-                                texels.data());
+                glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, kSize, kSize, GL_RGBA, GL_UNSIGNED_BYTE, texels.data());
                 glBindTexture(GL_TEXTURE_2D, 0);
             }
 
             GLuint MakeLayerView(GLuint owner) {
                 const GLuint view = MakeTexture();
                 glTextureView(view, GL_TEXTURE_2D, owner, GL_RGBA8, 0, 1, kViewLayer, 1);
-                EXPECT_EQ(glGetError(), static_cast<GLenum>(GL_NO_ERROR))
-                    << "2D_ARRAY -> 2D is a legal view pair";
+                EXPECT_EQ(glGetError(), static_cast<GLenum>(GL_NO_ERROR)) << "2D_ARRAY -> 2D is a legal view pair";
                 glBindTexture(GL_TEXTURE_2D, view);
                 glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
                 glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
@@ -326,9 +323,8 @@ void main() { oColor = texture(uTex, vec3(vUv, float(uLayer))); }
                     }
                 }
                 EXPECT_EQ(offenders, 0) << what << ": " << offenders << " of " << total
-                                        << " pixels disagree; first at (" << firstX << ", " << firstY
-                                        << ") is " << Describe(firstOffender) << ", expected "
-                                        << Describe(expected) << " +/- 2";
+                                        << " pixels disagree; first at (" << firstX << ", " << firstY << ") is "
+                                        << Describe(firstOffender) << ", expected " << Describe(expected) << " +/- 2";
             }
 
             // ---- the emitter half -------------------------------------------------------------
@@ -350,8 +346,7 @@ void main() { oColor = texture(uTex, vec3(vUv, float(uLayer))); }
                     return after.RefusedSubDataCount - before.RefusedSubDataCount;
                 }
                 unsigned long long DescribedDelta() const {
-                    return (after.CreateCount - before.CreateCount) +
-                           (after.RespecifyCount - before.RespecifyCount);
+                    return (after.CreateCount - before.CreateCount) + (after.RespecifyCount - before.RespecifyCount);
                 }
             };
 
@@ -388,8 +383,7 @@ void main() { oColor = texture(uTex, vec3(vUv, float(uLayer))); }
                     return;
                 }
                 EXPECT_GT(window.SubDataDelta(), 0u)
-                    << what << ": the client texture emitter described "
-                    << window.DescribedDelta()
+                    << what << ": the client texture emitter described " << window.DescribedDelta()
                     << " texture(s) across this draw and put NO resource_subdata on the wire. A "
                        "drain that runs and emits nothing is exactly what a per-NAME emission "
                        "cursor produces when a view and its owner each hold one: whichever cursor "

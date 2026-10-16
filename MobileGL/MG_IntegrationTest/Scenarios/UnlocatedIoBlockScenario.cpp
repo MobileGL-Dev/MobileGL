@@ -278,17 +278,15 @@ void main()
                 glGetIntegerv(GL_MAX_TESS_GEN_LEVEL, &maxTessGenLevel);
                 GLint maxGeometryOutputVertices = 0;
                 glGetIntegerv(GL_MAX_GEOMETRY_OUTPUT_VERTICES, &maxGeometryOutputVertices);
-                while (glGetError() != GL_NO_ERROR) {
-                }
+                while (glGetError() != GL_NO_ERROR) {}
                 return maxTessGenLevel >= 1 && maxGeometryOutputVertices >= 4;
             }
 
             GLuint BuildPipeline(const char* tessEvalSource, const char* geometrySource) {
-                const GLenum stages[] = {GL_VERTEX_SHADER, GL_TESS_CONTROL_SHADER,
-                                         GL_TESS_EVALUATION_SHADER, GL_GEOMETRY_SHADER,
-                                         GL_FRAGMENT_SHADER};
-                const char* const sources[] = {kVertexSource, kTessControlSource, tessEvalSource,
-                                               geometrySource, kFragmentSource};
+                const GLenum stages[] = {GL_VERTEX_SHADER, GL_TESS_CONTROL_SHADER, GL_TESS_EVALUATION_SHADER,
+                                         GL_GEOMETRY_SHADER, GL_FRAGMENT_SHADER};
+                const char* const sources[] = {kVertexSource, kTessControlSource, tessEvalSource, geometrySource,
+                                               kFragmentSource};
 
                 GLuint shaders[5] = {0, 0, 0, 0, 0};
                 bool ok = true;
@@ -345,9 +343,7 @@ void main()
                 return pixel;
             }
 
-            static bool IsGreen(const Rgba8& pixel) {
-                return pixel.r < 64 && pixel.g > 192 && pixel.b < 64;
-            }
+            static bool IsGreen(const Rgba8& pixel) { return pixel.r < 64 && pixel.g > 192 && pixel.b < 64; }
 
             const std::string& BuildLog() const { return m_buildLog; }
 
@@ -356,8 +352,8 @@ void main()
             // fixture can reach, so the ctest entry sets it and this only reads it back.
             static std::filesystem::path LibraryLogPath() {
                 // P6: the path is a BASE NAME and the library writes one log per role; PipeStatsWindow
-            // derives the suffix, so the rule lives in one place.
-            return std::filesystem::path(MGITest::PipeStatsWindow::LibraryLogPath());
+                // derives the suffix, so the rule lives in one place.
+                return std::filesystem::path(MGITest::PipeStatsWindow::LibraryLogPath());
             }
 
             // How many bytes the library log already holds. Everything this fixture asserts on
@@ -382,8 +378,7 @@ void main()
 
             static GLenum FirstGLError() {
                 const GLenum first = glGetError();
-                while (glGetError() != GL_NO_ERROR) {
-                }
+                while (glGetError() != GL_NO_ERROR) {}
                 return first;
             }
 
@@ -415,16 +410,15 @@ void main()
             const GLuint program = BuildPipeline(kDistinctTessEvalSource, kDistinctGeometrySource);
             if (program == 0) {
                 GTEST_SKIP() << "this stack cannot build a five-stage tessellation+geometry program on "
-                             << Gl().BackendName() << ", so there is no block to carry through: "
-                             << BuildLog();
+                             << Gl().BackendName() << ", so there is no block to carry through: " << BuildLog();
             }
 
             const Rgba8 centre = DrawAndReadCentre(program);
             EXPECT_EQ(FirstGLError(), 0u);
-            EXPECT_TRUE(IsGreen(centre))
-                << "a four-boundary interface-block chain did not deliver its payload: " << centre
-                << " (blue: nothing drew; red: the plain varying was lost too; black: a block "
-                   "member arrived wrong, i.e. the interface stopped matching)";
+            EXPECT_TRUE(IsGreen(centre)) << "a four-boundary interface-block chain did not deliver its payload: "
+                                         << centre
+                                         << " (blue: nothing drew; red: the plain varying was lost too; black: a block "
+                                            "member arrived wrong, i.e. the interface stopped matching)";
         }
 
         // The two repairs together. The rename is what makes the evaluation stage's two
@@ -436,20 +430,17 @@ void main()
 
             if (BuildPipeline(kDistinctTessEvalSource, kDistinctGeometrySource) == 0) {
                 GTEST_SKIP() << "this stack cannot build a five-stage tessellation+geometry program on "
-                             << Gl().BackendName() << ", so there is no block to carry through: "
-                             << BuildLog();
+                             << Gl().BackendName() << ", so there is no block to carry through: " << BuildLog();
             }
 
             const GLuint program = BuildPipeline(kCollidingTessEvalSource, kCollidingGeometrySource);
-            ASSERT_NE(program, 0u)
-                << "an interface block name reused across the two directions of one stage is legal "
-                   "desktop GLSL, but the program did not build: "
-                << BuildLog();
+            ASSERT_NE(program, 0u) << "an interface block name reused across the two directions of one stage is legal "
+                                      "desktop GLSL, but the program did not build: "
+                                   << BuildLog();
 
             const Rgba8 centre = DrawAndReadCentre(program);
             EXPECT_EQ(FirstGLError(), 0u);
-            EXPECT_TRUE(IsGreen(centre))
-                << "the renamed-and-unlocated interface chain lost its payload: " << centre;
+            EXPECT_TRUE(IsGreen(centre)) << "the renamed-and-unlocated interface chain lost its payload: " << centre;
         }
 
         // THE ONE CASE THAT CAN FAIL WHEN THE REPAIR SILENTLY STOPS BEING ARMED.

@@ -56,7 +56,11 @@ namespace MGITest {
     // QueryEnvQuirkOverride / IsTruthyValue): unset is Auto - device auto-detection or a
     // built-in default, i.e. a value only the implementation knows - a truthy value is
     // On, and anything else that IS set ("0", "false", "") is Off.
-    enum class AmbientQuirk { Auto, On, Off };
+    enum class AmbientQuirk {
+        Auto,
+        On,
+        Off
+    };
 
     inline AmbientQuirk AmbientQuirkFromEnvironment(const char* name) {
         const char* value = std::getenv(name);
@@ -146,8 +150,7 @@ namespace MGITest {
             // and ImplementedVerbCount(), none of which a message edit can move. Registrations are
             // never deleted (gate G14); they skip, naming exactly which fact is not true.
             if (SplitLane::IsSplitLane()) {
-                if (const std::string splitSkip = SplitLane::SkipReasonForSplitOnlyAssertions();
-                    !splitSkip.empty()) {
+                if (const std::string splitSkip = SplitLane::SkipReasonForSplitOnlyAssertions(); !splitSkip.empty()) {
                     GTEST_SKIP() << splitSkip;
                 }
                 // Armed. Take the wire's baseline, so the destructor can require that this case

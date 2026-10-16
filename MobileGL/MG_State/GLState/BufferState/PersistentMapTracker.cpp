@@ -99,12 +99,14 @@ namespace MobileGL::MG_Record {
 
         TrackedWriteMap g_trackedMaps[kMaxTrackedMaps];
 #if MGL_TRACKER_MPROTECT_ARM
-        struct sigaction g_prevSegvAction {};
+        struct sigaction g_prevSegvAction{};
 #else
         // Never called: without the arm nothing is ever protected (g_segvInstalled stays false).
         constexpr int PROT_READ = 1;
         constexpr int PROT_WRITE = 2;
-        inline int mprotect(void*, SizeT, int) { return -1; }
+        inline int mprotect(void*, SizeT, int) {
+            return -1;
+        }
 #endif
         std::atomic<Bool> g_segvInstalled{false};
         // Bumped by the handler for every write fault it answers, and by TrackWriteMap
@@ -223,7 +225,8 @@ namespace MobileGL::MG_Record {
         }
 
         SizeT AppendText(char* out, SizeT at, const char* text) {
-            while (*text != '\0') out[at++] = *text++;
+            while (*text != '\0')
+                out[at++] = *text++;
             return at;
         }
 
@@ -236,8 +239,8 @@ namespace MobileGL::MG_Record {
             // the slack is deliberate, because this formats inside a signal handler where an
             // overrun would be the second bug in the same crash.
             char line[384];
-            SizeT at = AppendText(line, 0,
-                                  "MGPipe: persistent-map tracker DECLINED a SEGV_ACCERR as foreign - si_addr=");
+            SizeT at =
+                AppendText(line, 0, "MGPipe: persistent-map tracker DECLINED a SEGV_ACCERR as foreign - si_addr=");
             at = AppendHex(line, at, address);
             at = AppendText(line, at, " nearest-tracked=[");
             at = AppendHex(line, at, nearestBase);
@@ -251,11 +254,9 @@ namespace MobileGL::MG_Record {
 
         uintptr_t FaultPcFrom(void* ucontext) {
 #if defined(__aarch64__)
-            return static_cast<uintptr_t>(
-                reinterpret_cast<ucontext_t*>(ucontext)->uc_mcontext.pc);
+            return static_cast<uintptr_t>(reinterpret_cast<ucontext_t*>(ucontext)->uc_mcontext.pc);
 #elif defined(__x86_64__)
-            return static_cast<uintptr_t>(
-                reinterpret_cast<ucontext_t*>(ucontext)->uc_mcontext.gregs[REG_RIP]);
+            return static_cast<uintptr_t>(reinterpret_cast<ucontext_t*>(ucontext)->uc_mcontext.gregs[REG_RIP]);
 #else
             // No PC access on this arch: the refault test is skipped, ownership rests
             // on the si_code and range tests alone.
@@ -336,13 +337,12 @@ namespace MobileGL::MG_Record {
                     g_prevSegvAction.sa_sigaction(sig, info, ucontext);
                     return;
                 }
-            } else if (g_prevSegvAction.sa_handler != SIG_DFL &&
-                       g_prevSegvAction.sa_handler != SIG_IGN &&
+            } else if (g_prevSegvAction.sa_handler != SIG_DFL && g_prevSegvAction.sa_handler != SIG_IGN &&
                        g_prevSegvAction.sa_handler != nullptr) {
                 g_prevSegvAction.sa_handler(sig);
                 return;
             }
-            struct sigaction restore {};
+            struct sigaction restore{};
             restore.sa_handler = SIG_DFL;
             sigemptyset(&restore.sa_mask);
             sigaction(SIGSEGV, &restore, nullptr);
@@ -369,8 +369,7 @@ namespace MobileGL::MG_Record {
                         // first live slot is enough to tell "nothing was tracked at all"
                         // apart from "something was tracked and the comparison missed it".
                         if (nearestBase == 0) {
-                            const uintptr_t base =
-                                g_trackedMaps[i].base.load(std::memory_order_acquire);
+                            const uintptr_t base = g_trackedMaps[i].base.load(std::memory_order_acquire);
                             if (base > kSlotSettingUp) {
                                 nearestBase = base;
                                 nearestEnd = g_trackedMaps[i].end.load(std::memory_order_acquire);
@@ -381,14 +380,12 @@ namespace MobileGL::MG_Record {
                     std::atomic<Uint64>* bits = g_trackedMaps[i].pageBits;
                     if (bits != nullptr) {
                         const Uint64 mask = 1ull << (pageIndex & 63);
-                        const Uint64 old =
-                            bits[pageIndex >> 6].fetch_or(mask, std::memory_order_relaxed);
+                        const Uint64 old = bits[pageIndex >> 6].fetch_or(mask, std::memory_order_relaxed);
                         if (!matched) bitWasSet = (old & mask) != 0;
                     }
                     matched = true;
                 }
-                if (matched &&
-                    !RefaultOfANonWriteAccess(FaultPcFrom(ucontext), address, bitWasSet)) {
+                if (matched && !RefaultOfANonWriteAccess(FaultPcFrom(ucontext), address, bitWasSet)) {
                     // The epoch moves BEFORE the unprotect: a walk that starts the
                     // moment the page becomes writable must still see this fault. And it
                     // moves with RELEASE, after the bit: a walk that acquires the moved
@@ -396,8 +393,8 @@ namespace MobileGL::MG_Record {
                     g_faultEpoch.fetch_add(1, std::memory_order_release);
                     // Un-arm is a raw syscall, deliberately not the libc wrapper's
                     // bookkeeping: the handler's whole job is to get out of the way.
-                    mprotect(reinterpret_cast<void*>(UntagAddress(address) & ~(kPageBytes - 1)),
-                             kPageBytes, PROT_READ | PROT_WRITE);
+                    mprotect(reinterpret_cast<void*>(UntagAddress(address) & ~(kPageBytes - 1)), kPageBytes,
+                             PROT_READ | PROT_WRITE);
                     return;
                 }
                 // A SEGV_ACCERR this handler does not own. Legitimate (the JVM's implicit
@@ -445,7 +442,7 @@ namespace MobileGL::MG_Record {
             if (!KernelPageIsTheTrackerPage()) return;
             Bool expected = false;
             if (!g_segvInstalled.compare_exchange_strong(expected, true)) return;
-            struct sigaction action {};
+            struct sigaction action{};
             action.sa_sigaction = &PersistentWriteFaultHandler;
             sigemptyset(&action.sa_mask);
             action.sa_flags = SA_SIGINFO;
@@ -471,8 +468,8 @@ namespace MobileGL::MG_Record {
         // `shadowExtent` is the shadow allocation's own size in bytes as its allocator
         // sized it (BufferObject::ShadowAllocationBytes), or 0 when the caller cannot vouch
         // for it; it is what decides between the two alignments below.
-        Bool TrackWriteMap(Uint64 lifetimeId, const Uint8* shadow,
-                           SizeT rangeBegin, SizeT rangeEnd, SizeT shadowExtent) {
+        Bool TrackWriteMap(Uint64 lifetimeId, const Uint8* shadow, SizeT rangeBegin, SizeT rangeEnd,
+                           SizeT shadowExtent) {
             if (shadow == nullptr || rangeEnd <= rangeBegin) return false;
             InstallWriteFaultHandler();
             if (!MprotectArmLive()) return false;
@@ -590,11 +587,9 @@ namespace MobileGL::MG_Record {
                 // exist to keep out.
                 const SizeT wordCount = (pageCount + 63) / 64;
                 for (SizeT w = 0; w < wordCount; ++w) {
-                    const SizeT bitsInWord =
-                        (w == wordCount - 1 && (pageCount & 63) != 0) ? (pageCount & 63) : 64;
-                    g_trackedMaps[i].pageBits[w].store(
-                        bitsInWord == 64 ? ~0ull : ((1ull << bitsInWord) - 1),
-                        std::memory_order_relaxed);
+                    const SizeT bitsInWord = (w == wordCount - 1 && (pageCount & 63) != 0) ? (pageCount & 63) : 64;
+                    g_trackedMaps[i].pageBits[w].store(bitsInWord == 64 ? ~0ull : ((1ull << bitsInWord) - 1),
+                                                       std::memory_order_relaxed);
                 }
                 // AND THE RANGE IS *NOT* PROTECTED HERE. REGISTRATION ARMS NOTHING.
                 //
@@ -644,11 +639,9 @@ namespace MobileGL::MG_Record {
                              "allocator=MapAlignedAllocator shadow=0x%llx tag=0x%02llx extent=%zu "
                              "range=[%zu,%zu) tracked=[0x%llx,0x%llx) pages=%zu align=%s "
                              "handed-out-writable=yes (pages arm at the first push, never here)",
-                             static_cast<unsigned long long>(lifetimeId),
-                             static_cast<unsigned long long>(tagged),
-                             static_cast<unsigned long long>(tagged >> 56), shadowExtent, rangeBegin,
-                             rangeEnd, static_cast<unsigned long long>(base),
-                             static_cast<unsigned long long>(end), pageCount,
+                             static_cast<unsigned long long>(lifetimeId), static_cast<unsigned long long>(tagged),
+                             static_cast<unsigned long long>(tagged >> 56), shadowExtent, rangeBegin, rangeEnd,
+                             static_cast<unsigned long long>(base), static_cast<unsigned long long>(end), pageCount,
                              outward ? "outward" : "inward");
                 return true;
             }
@@ -748,7 +741,9 @@ namespace MobileGL::MG_Record {
     // server header inside PersistentMapTracker.h, which MG_State's BufferObject.cpp includes.
     // P13 W5: the apply-thread question through MG_Pipe's role probe (MG_Remote installs it; a library
     // without a transport has no server role, so it is false there).
-    Bool PersistentMapTracker::OnServerRole() { return MG_Pipe::MGPipeServerArm(); }
+    Bool PersistentMapTracker::OnServerRole() {
+        return MG_Pipe::MGPipeServerArm();
+    }
 
     // SyncPersistentMappedRange's early-out chain (BufferObject.cpp:341-353), in its order,
     // read as a membership test. Every line here has a line there; if one of them moves, the
@@ -800,8 +795,8 @@ namespace MobileGL::MG_Record {
             // the tracker can align outward (TrackWriteMap): a live member's MappedData()
             // IS the shadow vector's storage - the predicate's IsBackendPersistentMapped
             // row keeps every adopted store out - so the extent describes that pointer.
-            TrackWriteMap(key, buffer.MappedData(), static_cast<SizeT>(range.start),
-                          static_cast<SizeT>(range.end), buffer.ShadowAllocationBytes());
+            TrackWriteMap(key, buffer.MappedData(), static_cast<SizeT>(range.start), static_cast<SizeT>(range.end),
+                          buffer.ShadowAllocationBytes());
             TrackedWriteMap* slot = TrackedMapFor(key);
             m_livePersistentMaps[key] = MemberEntry{&buffer, slot};
             if (slot == nullptr) {
@@ -851,8 +846,8 @@ namespace MobileGL::MG_Record {
     // the gate that has to catch it is to hand the real predicate the two addresses the
     // device produced. A scratch slot, never one of the live ones - the handler scans
     // g_trackedMaps concurrently and a test may not publish a base into it.
-    Bool PersistentMapTracker::OwnershipProbeForTest(uintptr_t slotBase, uintptr_t slotEnd,
-                                                     uintptr_t faultAddress, SizeT* pageIndexOut) {
+    Bool PersistentMapTracker::OwnershipProbeForTest(uintptr_t slotBase, uintptr_t slotEnd, uintptr_t faultAddress,
+                                                     SizeT* pageIndexOut) {
         TrackedWriteMap probe;
         probe.base.store(slotBase, std::memory_order_relaxed);
         probe.end.store(slotEnd, std::memory_order_relaxed);
@@ -880,14 +875,15 @@ namespace MobileGL::MG_Record {
         return TrackedMapFor(buffer.GetLifetimeId());
     }
 
-    const TrackedWriteMap* PersistentMapTracker::TrackForTest(Uint64 lifetimeId, const Uint8* shadow,
-                                                              SizeT rangeBegin, SizeT rangeEnd,
-                                                              SizeT shadowExtent) {
+    const TrackedWriteMap* PersistentMapTracker::TrackForTest(Uint64 lifetimeId, const Uint8* shadow, SizeT rangeBegin,
+                                                              SizeT rangeEnd, SizeT shadowExtent) {
         TrackWriteMap(lifetimeId, shadow, rangeBegin, rangeEnd, shadowExtent);
         return TrackedMapFor(lifetimeId);
     }
 
-    void PersistentMapTracker::UntrackForTest(Uint64 lifetimeId) { UntrackWriteMap(lifetimeId); }
+    void PersistentMapTracker::UntrackForTest(Uint64 lifetimeId) {
+        UntrackWriteMap(lifetimeId);
+    }
 
     Uint64 PersistentMapTracker::FaultEpochForTest() {
         return g_faultEpoch.load(std::memory_order_acquire);
@@ -896,8 +892,9 @@ namespace MobileGL::MG_Record {
     void PersistentMapTracker::PushBlocksFor(BufferObject& buffer) {
         if (!PushIsArmed()) return;
         if (OnServerRole()) {
-            MG_Pipe::MGPipeRecordFail(MG_Pipe::MGFatalFamily::RoleViolation, "MGPipe: Fatal{RoleViolation, \"PushBlocksFor\"} - the persistent-map "
-                    "producer belongs to the client; the server consumes transported bytes");
+            MG_Pipe::MGPipeRecordFail(MG_Pipe::MGFatalFamily::RoleViolation,
+                                      "MGPipe: Fatal{RoleViolation, \"PushBlocksFor\"} - the persistent-map "
+                                      "producer belongs to the client; the server consumes transported bytes");
         }
         PushBlocksForChecked(buffer);
     }
@@ -994,16 +991,14 @@ namespace MobileGL::MG_Record {
                 const auto pushSpan = [&](Uint64 spanBegin, Uint64 spanEnd) {
                     if (spanBegin < pushedUpTo) spanBegin = pushedUpTo;
                     if (spanBegin >= spanEnd) return;
-                    buffer.PushMappedSpanBlock(static_cast<SizeT>(spanBegin),
-                                               static_cast<SizeT>(spanEnd - spanBegin));
+                    buffer.PushMappedSpanBlock(static_cast<SizeT>(spanBegin), static_cast<SizeT>(spanEnd - spanBegin));
                     ++m_blocksPushed;
                     m_bytesPushed += spanEnd - spanBegin;
                     pushedUpTo = spanEnd;
                 };
                 if (interiorBegin > begin) {
-                    const Uint64 edgeHash = XXH3_64bits(
-                        shadowBytes + begin,
-                        static_cast<size_t>(interiorBegin - begin));
+                    const Uint64 edgeHash =
+                        XXH3_64bits(shadowBytes + begin, static_cast<size_t>(interiorBegin - begin));
                     if (edgeHash != tracked->edgeHashHead) {
                         tracked->edgeHashHead = edgeHash;
                         const Uint64 headBlockEnd = (begin / blockBytes + 1) * blockBytes;
@@ -1023,15 +1018,13 @@ namespace MobileGL::MG_Record {
                         // every page of the run - clear, then re-arm, then read - and a
                         // write in the clear-to-re-arm window lands before the run's
                         // reads, so it is inside the shipped bytes.
-                        tracked->pageBits[wordIndex].fetch_and(~(1ull << bit),
-                                                               std::memory_order_relaxed);
+                        tracked->pageBits[wordIndex].fetch_and(~(1ull << bit), std::memory_order_relaxed);
                         SizeT runEnd = pageIndex + 1;
                         while (word != 0) {
                             const SizeT nextBit = static_cast<SizeT>(std::countr_zero(word));
                             if ((wordIndex << 6) + nextBit != runEnd) break;
                             word &= word - 1;
-                            tracked->pageBits[wordIndex].fetch_and(~(1ull << nextBit),
-                                                                   std::memory_order_relaxed);
+                            tracked->pageBits[wordIndex].fetch_and(~(1ull << nextBit), std::memory_order_relaxed);
                             ++runEnd;
                         }
                         mprotect(reinterpret_cast<void*>(trackedBase + (pageIndex << kPageShift)),
@@ -1046,21 +1039,17 @@ namespace MobileGL::MG_Record {
                             // [begin, end): a write to the shadow's own bytes outside the
                             // mapped range faults here too and ships, at worst, one block
                             // of the range redundantly.
-                            const Uint64 pageOffset =
-                                (trackedBase + (runPage << kPageShift)) - shadowBase;
+                            const Uint64 pageOffset = (trackedBase + (runPage << kPageShift)) - shadowBase;
                             const Uint64 blockFloor = (pageOffset / blockBytes) * blockBytes;
-                            const Uint64 blockStart =
-                                blockFloor < begin ? begin : blockFloor;
-                            const Uint64 blockEnd =
-                                (end - blockStart) < blockBytes ? end : blockStart + blockBytes;
+                            const Uint64 blockStart = blockFloor < begin ? begin : blockFloor;
+                            const Uint64 blockEnd = (end - blockStart) < blockBytes ? end : blockStart + blockBytes;
                             pushSpan(blockStart, blockEnd);
                         }
                     }
                 }
                 if (interiorEnd < end) {
-                    const Uint64 edgeHash = XXH3_64bits(
-                        shadowBytes + interiorEnd,
-                        static_cast<size_t>(end - interiorEnd));
+                    const Uint64 edgeHash =
+                        XXH3_64bits(shadowBytes + interiorEnd, static_cast<size_t>(end - interiorEnd));
                     if (edgeHash != tracked->edgeHashTail) {
                         tracked->edgeHashTail = edgeHash;
                         const Uint64 tailBlockStart = ((end - 1) / blockBytes) * blockBytes;
@@ -1118,15 +1107,17 @@ namespace MobileGL::MG_Record {
     void PersistentMapTracker::PushAllMembers() {
         if (!PushIsArmed()) return;
         if (OnServerRole()) {
-            MG_Pipe::MGPipeRecordFail(MG_Pipe::MGFatalFamily::RoleViolation, "MGPipe: Fatal{RoleViolation, \"PushAllMembers\"} - the persistent-map "
-                    "producer belongs to the client; the server consumes transported bytes");
+            MG_Pipe::MGPipeRecordFail(MG_Pipe::MGFatalFamily::RoleViolation,
+                                      "MGPipe: Fatal{RoleViolation, \"PushAllMembers\"} - the persistent-map "
+                                      "producer belongs to the client; the server consumes transported bytes");
         }
         if (m_livePersistentMaps.empty()) return;
         // Copied out first: PushBlocksFor can erase its own entry (a member that stopped
         // being one), and ska::flat_hash_map invalidates on erase.
         Vector<BufferObject*> members;
         members.reserve(m_livePersistentMaps.size());
-        for (const auto& entry : m_livePersistentMaps) members.push_back(entry.second.buffer);
+        for (const auto& entry : m_livePersistentMaps)
+            members.push_back(entry.second.buffer);
         for (BufferObject* buffer : members) {
             if (buffer != nullptr) PushBlocksForChecked(*buffer);
         }
@@ -1135,8 +1126,9 @@ namespace MobileGL::MG_Record {
     void PersistentMapTracker::PushDrawConsumers() {
         if (!PushIsArmed()) return;
         if (OnServerRole()) {
-            MG_Pipe::MGPipeRecordFail(MG_Pipe::MGFatalFamily::RoleViolation, "MGPipe: Fatal{RoleViolation, \"PushDrawConsumers\"} - the persistent-map "
-                    "producer belongs to the client; the server consumes transported bytes");
+            MG_Pipe::MGPipeRecordFail(MG_Pipe::MGFatalFamily::RoleViolation,
+                                      "MGPipe: Fatal{RoleViolation, \"PushDrawConsumers\"} - the persistent-map "
+                                      "producer belongs to the client; the server consumes transported bytes");
         }
         if (m_livePersistentMaps.empty()) return;
         // THE EPOCH SKIP, AND WHAT IT RESTS ON. A page of a tracked map is marked by
@@ -1165,7 +1157,8 @@ namespace MobileGL::MG_Record {
                 // stopped being one, and ska::flat_hash_map invalidates on erase.
                 Vector<Uint64> edged;
                 edged.reserve(m_edgedMembers.size());
-                for (const auto& entry : m_edgedMembers) edged.push_back(entry.first);
+                for (const auto& entry : m_edgedMembers)
+                    edged.push_back(entry.first);
                 for (const Uint64 key : edged) {
                     const auto it = m_livePersistentMaps.find(key);
                     if (it == m_livePersistentMaps.end() || it->second.buffer == nullptr) continue;
@@ -1236,9 +1229,10 @@ namespace MobileGL::MG_Record {
                 }
             }
             static constexpr BufferTarget kIndexedTargets[] = {
-                    BufferTarget::Uniform, BufferTarget::ShaderStorage, BufferTarget::AtomicCounter,
-                    BufferTarget::TransformFeedback, BufferTarget::CopyRead, BufferTarget::CopyWrite,
-                    BufferTarget::Query, BufferTarget::Texture};
+                BufferTarget::Uniform,       BufferTarget::ShaderStorage,
+                BufferTarget::AtomicCounter, BufferTarget::TransformFeedback,
+                BufferTarget::CopyRead,      BufferTarget::CopyWrite,
+                BufferTarget::Query,         BufferTarget::Texture};
             for (const BufferTarget target : kIndexedTargets) {
                 const SizeT count = ctx->GetBufferBindingPointCount(target);
                 for (SizeT i = 0; i < count; ++i) {
@@ -1247,8 +1241,7 @@ namespace MobileGL::MG_Record {
                     }
                 }
             }
-            static constexpr BufferTarget kSlotTargets[] = {BufferTarget::DrawIndirect,
-                                                            BufferTarget::DispatchIndirect,
+            static constexpr BufferTarget kSlotTargets[] = {BufferTarget::DrawIndirect, BufferTarget::DispatchIndirect,
                                                             BufferTarget::Parameter};
             for (const BufferTarget target : kSlotTargets) {
                 if (const auto& bound = ctx->GetBufferBindingSlot(target).GetBoundObject()) {
@@ -1265,9 +1258,8 @@ namespace MobileGL::MG_Record {
             // twitch this comment is written against.
             const Int maxUnit = ctx->GetMaxTouchedTextureUnit();
             for (Int unit = 0; unit <= maxUnit; ++unit) {
-                const auto& texture = ctx->GetTextureUnitObject(unit)
-                                          .GetBindingSlot(TextureTarget::TextureBuffer)
-                                          .GetBoundObject();
+                const auto& texture =
+                    ctx->GetTextureUnitObject(unit).GetBindingSlot(TextureTarget::TextureBuffer).GetBoundObject();
                 if (texture == nullptr || texture->GetStorageType() != TextureStorageType::Buffer) {
                     continue;
                 }
@@ -1291,6 +1283,5 @@ namespace MobileGL::MG_Record {
     void PushPersistentMapsBeforeVerb() {
         PersistentMapTracker::Instance().PushAllMembers();
     }
-
 
 } // namespace MobileGL::MG_Record

@@ -39,8 +39,8 @@ namespace MobileGL::MG_Pipe {
         }
         return hash;
     }
-    inline constexpr Uint64 kMGPipeWireMemberLayoutDigest = WireMemberLayoutDigest(
-        kMGPipeWireLayoutMembers, sizeof(kMGPipeWireLayoutMembers) / sizeof(WireLayoutMember));
+    inline constexpr Uint64 kMGPipeWireMemberLayoutDigest =
+        WireMemberLayoutDigest(kMGPipeWireLayoutMembers, sizeof(kMGPipeWireLayoutMembers) / sizeof(WireLayoutMember));
     // Bump when a fixed-layout pipe carrier keeps its bytes but changes their meaning. The
     // mutable-level extent carrier reuses BufOffset/BufSize only on named image respecifies.
     // 2 (P14): bind_vertex_elements re-applies the array's kept vertex-buffer and index
@@ -62,7 +62,8 @@ namespace MobileGL::MG_Pipe {
     constexpr Uint64 WireRenderStateDigest() {
         Uint64 hash = 1469598103934665603ull;
         WireMixNumber(hash, kMGPipeRenderStateChunkTableVersion);
-        for (SizeT boundary : kMGPipeRenderStateChunkBoundaries) WireMixNumber(hash, boundary);
+        for (SizeT boundary : kMGPipeRenderStateChunkBoundaries)
+            WireMixNumber(hash, boundary);
         return hash;
     }
 } // namespace MobileGL::MG_Pipe

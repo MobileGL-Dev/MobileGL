@@ -128,10 +128,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     inline const char* WireE5TransferProbeVerdictName(WireE5TransferProbeVerdict verdict) {
         switch (verdict) {
-            case WireE5TransferProbeVerdict::NotRun: return "not-run";
-            case WireE5TransferProbeVerdict::Inconclusive: return "inconclusive";
-            case WireE5TransferProbeVerdict::Clean: return "clean";
-            case WireE5TransferProbeVerdict::TransferReadNormalizes: return "transfer-read-normalizes";
+        case WireE5TransferProbeVerdict::NotRun:
+            return "not-run";
+        case WireE5TransferProbeVerdict::Inconclusive:
+            return "inconclusive";
+        case WireE5TransferProbeVerdict::Clean:
+            return "clean";
+        case WireE5TransferProbeVerdict::TransferReadNormalizes:
+            return "transfer-read-normalizes";
         }
         return "?";
     }

@@ -70,9 +70,11 @@ MOBILEGL_EXPORT int mobilegl_shared_image_formats(uint32_t* formats, uint32_t ca
         if (total < capacity) formats[total] = format;
         ++total;
     };
-    for (uint32_t format : kRgbFormats) put(format);
+    for (uint32_t format : kRgbFormats)
+        put(format);
     if (ActiveBackend(true) != nullptr && MobileGL::MG_Impl::EGLImpl::SharedImageYuvAvailable()) {
-        for (uint32_t format : kYuvFormats) put(format);
+        for (uint32_t format : kYuvFormats)
+            put(format);
     }
     return static_cast<int>(total);
 }

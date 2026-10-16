@@ -62,8 +62,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // Names, for a Fatal about an unknown handle, whether this manager ever saw it.
         void DescribeWireBufferHistory(MG_Pipe::MGPipeHandle res) const;
         Bool ReadWireBuffer(MG_Pipe::MGPipeHandle res, Uint64 offset, Uint64 size, void* dst);
-        Bool CopyWireBufferRangeToSlice(MG_Pipe::MGPipeHandle res, Uint64 offset, Uint64 size,
-                                        const BufferSlice& dst);
+        Bool CopyWireBufferRangeToSlice(MG_Pipe::MGPipeHandle res, Uint64 offset, Uint64 size, const BufferSlice& dst);
         // P7 A.1, the sub-word half of the one above: the same copy for a window whose start
         // or end does not land on a four-byte boundary. The read of the APPLICATION's store is
         // rounded OUT to whole words and clamped to the store's end, so the widened window can
@@ -73,8 +72,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // on a region's offsets or size (unlike vkCmdUpdateBuffer / vkCmdFillBuffer), so the
         // shift is a plain legal copy. `dstSkip` is the byte inside `dst` the window starts at.
         // This retires `uniform-buffer-byte-tail`.
-        Bool CopyWireBufferSubWordRangeToSlice(MG_Pipe::MGPipeHandle res, Uint64 offset, Uint64 size,
-                                               Uint32 frameIndex, const BufferSlice& dst, Uint64 dstSkip);
+        Bool CopyWireBufferSubWordRangeToSlice(MG_Pipe::MGPipeHandle res, Uint64 offset, Uint64 size, Uint32 frameIndex,
+                                               const BufferSlice& dst, Uint64 dstSkip);
         void MarkWireBufferGpuWritten(MG_Pipe::MGPipeHandle res, Uint64 offset, Uint64 size);
         // P8-D: whether a shader write was marked on this store since the last indirect draw
         // read it natively, clearing the mark. The caller records the INDIRECT_COMMAND_READ
@@ -186,6 +185,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // below it may be considered signaled. Drives IsResourceBusy and the
         // backend GL fence objects.
         Uint64 GetCompletedSerial() const;
+
     private:
         struct WireBufferResource {
             VkBufferObject buffer;

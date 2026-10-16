@@ -34,12 +34,13 @@ namespace MobileGL::MG_Remote {
 
     enum class SurfaceWireError {
         None = 0,
-        UnknownOpKind,           // no SurfaceControlOp for the wire kind (or None on the wire)
-        InprocOnlyOpOnTheWire,   // a kind that may ride the inproc channel but never the wire
-        WindowKindNamesNoBackend,// Surfaceless/Pbuffer where a window backend is required
-        UnknownWindowKind,       // a WindowKind the mapping table does not know
-        MetalLayerArrived,       // -> Fatal{UnmigratedSurface, "MetalLayer:use-MOBILEGL_IPC_SURFACE=server"}
-        AndroidNativeWindowArrived, // -> Fatal{UnmigratedSurface, "AndroidNativeWindow:use-MOBILEGL_IPC_SURFACE=server"}
+        UnknownOpKind,              // no SurfaceControlOp for the wire kind (or None on the wire)
+        InprocOnlyOpOnTheWire,      // a kind that may ride the inproc channel but never the wire
+        WindowKindNamesNoBackend,   // Surfaceless/Pbuffer where a window backend is required
+        UnknownWindowKind,          // a WindowKind the mapping table does not know
+        MetalLayerArrived,          // -> Fatal{UnmigratedSurface, "MetalLayer:use-MOBILEGL_IPC_SURFACE=server"}
+        AndroidNativeWindowArrived, // -> Fatal{UnmigratedSurface,
+                                    // "AndroidNativeWindow:use-MOBILEGL_IPC_SURFACE=server"}
         // P12 (on-screen server window), D2. WindowKind::ServerOwned is legal on
         // CreateWindowSurface only, and only with nativeToken 0:
         ServerOwnedTokenNotZero,      // -> Fatal{ProtocolCorruption, "SurfaceOp.nativeToken"}, latched
@@ -70,8 +71,7 @@ namespace MobileGL::MG_Remote {
     SurfaceWireError DecodeWireSurfaceOp(const ::MobileGL::Wire::SurfaceOp& op, Server::SurfaceControlFrame* frame);
 
     // The reply direction, same shape (CtrlEnvelope{SurfaceReply}).
-    void EncodeSurfaceReplyFrame(const Server::SurfaceControlFrame& frame,
-                                 flatbuffers::FlatBufferBuilder* builder);
+    void EncodeSurfaceReplyFrame(const Server::SurfaceControlFrame& frame, flatbuffers::FlatBufferBuilder* builder);
     void DecodeWireSurfaceReply(const ::MobileGL::Wire::SurfaceReply& reply, Server::SurfaceControlFrame* frame);
 
     // The server-side wire entry: decode, then post the frame through ServerLoop's channel and

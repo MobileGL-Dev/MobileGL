@@ -47,8 +47,7 @@ namespace MobileGL::MG_Remote::Server {
     // record is barriered. A server without that bit has a lockstep client, and stamping its
     // kWaitNone draws unbarriered while that client is parked would make CountBarrierPull abort.
     // Pure so a unit test can pin "no run-ahead bit, never runs ahead" for any input.
-    constexpr Bool MGPipeApplierStampsBarriered(Bool clientWaitRuleLanded,
-                                                Bool serverPublishesRunAhead,
+    constexpr Bool MGPipeApplierStampsBarriered(Bool clientWaitRuleLanded, Bool serverPublishesRunAhead,
                                                 Bool wireSaysBarriered) {
         return (clientWaitRuleLanded && serverPublishesRunAhead) ? wireSaysBarriered : true;
     }

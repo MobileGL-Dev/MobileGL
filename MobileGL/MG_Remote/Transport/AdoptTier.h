@@ -20,14 +20,19 @@
 
 namespace MobileGL::MG_Remote::Transport {
 
-    enum class AdoptTierSide : std::uint8_t { Client, Server };
+    enum class AdoptTierSide : std::uint8_t {
+        Client,
+        Server
+    };
 
     // THE HELLO'S T0 ASK WHEN THE KNOB IS UNSET (LinkTerms.adoptTier, protocol.fbs): T0 as asked
     // by 0, except that the server names a refusal only at MGLOG_D. The ask travels because only
     // the server knows why it did not grant T0 (its allow switch, its platform, its POST).
     inline constexpr std::uint32_t kAdoptAskT0Default = 0x80;
     // An ask that is a T0 ask (0 by name, kAdoptAskT0Default by default).
-    inline bool AdoptAskIsT0(std::uint32_t ask) { return ask == 0 || ask == kAdoptAskT0Default; }
+    inline bool AdoptAskIsT0(std::uint32_t ask) {
+        return ask == 0 || ask == kAdoptAskT0Default;
+    }
     // This process's knob asks for T0 (0, or unset).
     bool AdoptTierWantsT0();
     // This process's knob is unset: T0 fallbacks are quiet.

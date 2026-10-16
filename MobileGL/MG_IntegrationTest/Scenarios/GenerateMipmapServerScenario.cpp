@@ -125,7 +125,9 @@ void main() { o_color = gl_FragCoord.y < u_split ? u_bottom : u_top; }
         constexpr Format kRgb16F = {GL_RGB16F, false, "RGB16F"};
         constexpr Format kRgb32F = {GL_RGB32F, false, "RGB32F"};
 
-        int ToByte(float value) { return static_cast<int>(std::lround(value * 255.0f)); }
+        int ToByte(float value) {
+            return static_cast<int>(std::lround(value * 255.0f));
+        }
 
         class GenerateMipmapServerScenario : public ScenarioTest {
         protected:
@@ -206,7 +208,8 @@ void main() { o_color = gl_FragCoord.y < u_split ? u_bottom : u_top; }
                         if (format.depth) {
                             texel[0] = low ? depthBottom : depthTop;
                         } else {
-                            for (int c = 0; c < 3; ++c) texel[c] = low ? bottom[c] : top[c];
+                            for (int c = 0; c < 3; ++c)
+                                texel[c] = low ? bottom[c] : top[c];
                         }
                     }
                 }
@@ -274,8 +277,8 @@ void main() { o_color = gl_FragCoord.y < u_split ? u_bottom : u_top; }
                         const int want[3] = {ToByte(colour[0]), ToByte(colour[1]), ToByte(colour[2])};
                         const int have[3] = {got.r, got.g, got.b};
                         for (int c = 0; c < 3; ++c) {
-                            EXPECT_NEAR(have[c], want[c], 2) << what << " channel " << c << " at (" << x << ","
-                                                             << y << ") got " << got;
+                            EXPECT_NEAR(have[c], want[c], 2)
+                                << what << " channel " << c << " at (" << x << "," << y << ") got " << got;
                             if (std::abs(have[c] - want[c]) > 2) return;
                         }
                     }
@@ -303,8 +306,8 @@ void main() { o_color = gl_FragCoord.y < u_split ? u_bottom : u_top; }
             // whole lane log is where its line lands.
             void ExpectCpuArmNamed() {
                 if (!m_forcedCpu || !m_recordArm || !m_espryt) return;
-                const std::string log = m_wire ? PipeStatsWindow::ReadServerLogSince(m_mark)
-                                               : PipeStatsWindow::ReadLaneLogSince(m_mark);
+                const std::string log =
+                    m_wire ? PipeStatsWindow::ReadServerLogSince(m_mark) : PipeStatsWindow::ReadLaneLogSince(m_mark);
                 EXPECT_NE(log.find(kCpuMipmapMarker), std::string::npos)
                     << kForceCpuMipmap << " is set but the server log after glGenerateMipmap carries no '"
                     << kCpuMipmapMarker << "' line: the knob did not reach the server, or the three-channel "
@@ -352,8 +355,7 @@ void main() { o_color = gl_FragCoord.y < u_split ? u_bottom : u_top; }
                 if (MonolithDefect(true, !format.depth)) GTEST_SKIP() << (m_espryt ? kM2 : kM3);
                 NewTexture();
                 DefineLevel(format, 0, kEdge, Flat(format, kEdge, kLevelZero, kDepthLevelZero));
-                DefineLevel(format, 1, kEdge / 2,
-                            Halves(format, kEdge / 2, kBottom, kTop, kDepthBottom, kDepthTop));
+                DefineLevel(format, 1, kEdge / 2, Halves(format, kEdge / 2, kBottom, kTop, kDepthBottom, kDepthTop));
                 DefineLevel(format, 2, kEdge / 4, Flat(format, kEdge / 4, kLevelTwo, kDepthLevelTwo));
                 DefineLevel(format, 3, kEdge / 8, Flat(format, kEdge / 8, kLevelThree, kDepthLevelThree));
                 glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 1);
@@ -362,8 +364,10 @@ void main() { o_color = gl_FragCoord.y < u_split ? u_bottom : u_top; }
                 Generate();
                 EXPECT_EQ(LevelWidth(4), 0) << format.name << ": level 4 is past MAX_LEVEL and must stay undefined";
                 const std::string name(format.name);
-                ExpectFlat(SampleLevel(0, 3), format, kLevelZero, kDepthLevelZero, name + " level 0 (below BASE_LEVEL)");
-                ExpectHalves(SampleLevel(1, 3), format, kBottom, kTop, kDepthBottom, kDepthTop, name + " level 1 (base)");
+                ExpectFlat(SampleLevel(0, 3), format, kLevelZero, kDepthLevelZero,
+                           name + " level 0 (below BASE_LEVEL)");
+                ExpectHalves(SampleLevel(1, 3), format, kBottom, kTop, kDepthBottom, kDepthTop,
+                             name + " level 1 (base)");
                 ExpectHalves(SampleLevel(2, 3), format, kBottom, kTop, kDepthBottom, kDepthTop,
                              name + " level 2 (generated from level 1)");
                 ExpectFlat(SampleLevel(3, 3), format, kLevelThree, kDepthLevelThree,
@@ -424,7 +428,8 @@ void main() { o_color = gl_FragCoord.y < u_split ? u_bottom : u_top; }
                 const std::string log = PipeStatsWindow::ReadServerLogSince(m_mark);
                 EXPECT_NE(log.find(kStoreDeclinedMarker), std::string::npos)
                     << "the base level was drawn and its readback refused, but the server log after glGenerateMipmap "
-                       "has no '" << kStoreDeclinedMarker << "' line";
+                       "has no '"
+                    << kStoreDeclinedMarker << "' line";
                 EXPECT_EQ(log.find(kStoreFilteredMarker), std::string::npos)
                     << "the CPU arm filtered the staged store's copy of a level the driver has since drawn over";
                 const int last = 4;
@@ -433,7 +438,8 @@ void main() { o_color = gl_FragCoord.y < u_split ? u_bottom : u_top; }
                 for (int level = 1; level < last; ++level) {
                     const Image image = SampleLevel(level, last);
                     const Rgba8 got = image.At(0, 0);
-                    EXPECT_FALSE(std::abs(got.r - ToByte(kSentinel[0])) <= 2 && std::abs(got.g - ToByte(kSentinel[1])) <= 2 &&
+                    EXPECT_FALSE(std::abs(got.r - ToByte(kSentinel[0])) <= 2 &&
+                                 std::abs(got.g - ToByte(kSentinel[1])) <= 2 &&
                                  std::abs(got.b - ToByte(kSentinel[2])) <= 2)
                         << format.name << " level " << level << " is the uploaded sentinel " << got
                         << ": the chain was filtered from the stale staged store";

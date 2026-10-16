@@ -183,9 +183,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             key.externalFormat = format.format == VK_FORMAT_UNDEFINED ? format.externalFormat : 0;
             key.format = format.format;
             key.model = hints.ColorSpace != 0 ? YcbcrModelFor(hints) : format.suggestedYcbcrModel;
-            key.range = hints.Range != 0 ? (hints.FullRange() ? VK_SAMPLER_YCBCR_RANGE_ITU_FULL
-                                                              : VK_SAMPLER_YCBCR_RANGE_ITU_NARROW)
-                                         : format.suggestedYcbcrRange;
+            key.range = hints.Range != 0
+                            ? (hints.FullRange() ? VK_SAMPLER_YCBCR_RANGE_ITU_FULL : VK_SAMPLER_YCBCR_RANGE_ITU_NARROW)
+                            : format.suggestedYcbcrRange;
             key.components = format.samplerYcbcrConversionComponents;
             const auto chroma = [&format](Uint32 siting, VkChromaLocation suggested) {
                 const Bool midpoint = siting == SI::Yuv::kEglYuvChromaSiting0_5;
@@ -207,10 +207,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             for (SizeT i = 0; i < cache.pipelines.size(); ++i) {
                 const auto& p = cache.pipelines[i];
                 if (p.externalFormat == key.externalFormat && p.format == key.format && p.model == key.model &&
-                    p.range == key.range && p.components.r == key.components.r &&
-                    p.components.g == key.components.g && p.components.b == key.components.b &&
-                    p.components.a == key.components.a && p.xOffset == key.xOffset && p.yOffset == key.yOffset &&
-                    p.chromaFilter == key.chromaFilter && p.target == key.target) {
+                    p.range == key.range && p.components.r == key.components.r && p.components.g == key.components.g &&
+                    p.components.b == key.components.b && p.components.a == key.components.a &&
+                    p.xOffset == key.xOffset && p.yOffset == key.yOffset && p.chromaFilter == key.chromaFilter &&
+                    p.target == key.target) {
                     index = i;
                     break;
                 }
@@ -296,8 +296,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 raster.cullMode = VK_CULL_MODE_NONE;
                 raster.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
                 raster.lineWidth = 1.0f;
-                VkPipelineMultisampleStateCreateInfo samples{
-                    VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
+                VkPipelineMultisampleStateCreateInfo samples{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
                 samples.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
                 VkPipelineColorBlendAttachmentState colorMask{};
                 colorMask.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
@@ -483,8 +482,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         begin.renderArea = {{0, 0}, resource.extent};
         vkCmdBeginRenderPass(frame.commandBuffer, &begin, VK_SUBPASS_CONTENTS_INLINE);
         vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, chosen.pipeline);
-        const VkViewport viewport{0.0f, 0.0f, static_cast<float>(resource.extent.width),
-                                  static_cast<float>(resource.extent.height), 0.0f, 1.0f};
+        const VkViewport viewport{
+            0.0f, 0.0f, static_cast<float>(resource.extent.width), static_cast<float>(resource.extent.height),
+            0.0f, 1.0f};
         const VkRect2D scissor{{0, 0}, resource.extent};
         vkCmdSetViewport(frame.commandBuffer, 0, 1, &viewport);
         vkCmdSetScissor(frame.commandBuffer, 0, 1, &scissor);

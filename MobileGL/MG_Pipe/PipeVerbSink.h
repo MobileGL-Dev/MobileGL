@@ -105,9 +105,7 @@ namespace MobileGL::MG_Pipe {
             (void)replies;
             return false;
         }
-        virtual Bool OnGetTextureImage(const MGPReadbackInfo&, Uint64, MGPipeReplySink*) {
-            return false;
-        }
+        virtual Bool OnGetTextureImage(const MGPReadbackInfo&, Uint64, MGPipeReplySink*) { return false; }
         // P9 (CONTRACT-P9.md §1): the same two reads with a pack buffer as the destination. No
         // seq and no sink - nothing is answered; the rows land in `Dst` on this side.
         virtual Bool OnReadPixelsToBuffer(const MGPReadbackToBuffer&) { return false; }
@@ -118,8 +116,7 @@ namespace MobileGL::MG_Pipe {
         // two is non-null. The span is VALIDATED (all four R-2 arms, the segment-range one
         // included) and names a SEG_STAGE run the client staged; the sink resolves it through
         // MGPipeHostBytes and never holds the pointer past its return (rule C).
-        virtual Bool OnDrawVbo(const MGPDrawInfo& info, const MGPDrawRange* ranges,
-                               const MGHostSpan* userIndices,
+        virtual Bool OnDrawVbo(const MGPDrawInfo& info, const MGPDrawRange* ranges, const MGHostSpan* userIndices,
                                const MGPDrawIndirect* indirect) {
             (void)info;
             (void)ranges;
@@ -151,8 +148,7 @@ namespace MobileGL::MG_Pipe {
         }
         // `name` is the NUL-terminated block name the decoder copied out of the record's
         // SEG_STAGE blob; valid for the call only.
-        virtual Bool OnSetStorageBlockBinding(const MGPStorageBlockBinding& binding,
-                                              const char* name) {
+        virtual Bool OnSetStorageBlockBinding(const MGPStorageBlockBinding& binding, const char* name) {
             (void)binding;
             (void)name;
             return false;
@@ -225,8 +221,7 @@ namespace MobileGL::MG_Pipe {
         // ---- shared images, opcode 85 (docs/archive/notes/anland/plan-ahb-dmabuf.md).
         // `seq` is the record's reply-slot id, which an Import's descriptor names on the aux
         // socket. True fills `reply`; false is a DECLINED answer.
-        virtual Bool OnSharedImage(const MGPSharedImageOp& op, Uint64 seq,
-                                   MGPSharedImageReply& reply) {
+        virtual Bool OnSharedImage(const MGPSharedImageOp& op, Uint64 seq, MGPSharedImageReply& reply) {
             (void)op;
             (void)seq;
             (void)reply;

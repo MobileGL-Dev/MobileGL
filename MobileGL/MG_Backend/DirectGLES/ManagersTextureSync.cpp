@@ -25,13 +25,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // they use, so the type stays trivially default-constructible and the
         // declaration costs nothing on the levels that never reach the ring.
         struct UnpackStagingBlock {
-            const Uint8* src;      // top-left texel of the region in the level's upload bytes
-            SizeT rowBytes;        // bytes per region row (region width * bpp)
-            SizeT rows;            // region height
-            SizeT slices;          // region depth (1 for 2D)
-            SizeT srcRowStride;    // level row pitch
-            SizeT srcSliceStride;  // level slice pitch
-            SizeT offset;          // out: byte offset into the ring store
+            const Uint8* src;     // top-left texel of the region in the level's upload bytes
+            SizeT rowBytes;       // bytes per region row (region width * bpp)
+            SizeT rows;           // region height
+            SizeT slices;         // region depth (1 for 2D)
+            SizeT srcRowStride;   // level row pitch
+            SizeT srcSliceStride; // level slice pitch
+            SizeT offset;         // out: byte offset into the ring store
         };
 
         // False (nothing staged, ring untouched) whenever the caller must keep the
@@ -109,8 +109,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 return 2;
             case TextureInternalFormat::RGB8Snorm:
             case TextureInternalFormat::RGB16:
-            case TextureInternalFormat::RGB10:  // stored as RGB16 (UNorm16 shadow)
-            case TextureInternalFormat::RGB12:  // stored as RGB16 (UNorm16 shadow)
+            case TextureInternalFormat::RGB10: // stored as RGB16 (UNorm16 shadow)
+            case TextureInternalFormat::RGB12: // stored as RGB16 (UNorm16 shadow)
             case TextureInternalFormat::RGB16Snorm:
                 return 3;
             case TextureInternalFormat::RGBA8Snorm:
@@ -218,10 +218,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // driver walks three texels' worth of data per four-texel row and the image shears.
         // `componentCount` is the SOURCE component count and `byteSize` the source's size, so this
         // runs after any type conversion (which keeps the component count) has already happened.
-        const void* PrepareChannelWidenedUpload(Uint componentCount, const IntVec3& texelSize,
-                                                const void* data, SizeT byteSize, GLenum uploadType,
-                                                Vector<Uint8>& widenedData, Bool integerData,
-                                                Uint32 alphaOneCodeOverride) {
+        const void* PrepareChannelWidenedUpload(Uint componentCount, const IntVec3& texelSize, const void* data,
+                                                SizeT byteSize, GLenum uploadType, Vector<Uint8>& widenedData,
+                                                Bool integerData, Uint32 alphaOneCodeOverride) {
             Uint8 oneBits[8] = {};
             SizeT componentSize = 0;
             // One and two source components as well as three: the image-format widening carries
@@ -284,11 +283,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return widenedData.data();
         }
 
-        static const void* PrepareNormFloatFallbackUpload(TextureInternalFormat format,
-                                                          const IntVec3& texelSize,
-                                                          const void* data,
-                                                          SizeT byteSize,
-                                                          GLenum uploadType,
+        static const void* PrepareNormFloatFallbackUpload(TextureInternalFormat format, const IntVec3& texelSize,
+                                                          const void* data, SizeT byteSize, GLenum uploadType,
                                                           Vector<Float>& convertedData) {
             const Uint componentCount = GetNormFallbackComponentCount(format);
             if (componentCount == 0 || uploadType != GL_FLOAT || data == nullptr || byteSize == 0) {
@@ -389,8 +385,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         //
         // Sized from the LEVEL, not the source, for the reason PrepareChannelWidenedUpload is:
         // the driver reads a full width*height*depth*4 floats for the transfer it was handed.
-        static const void* PreparePackedFloatWidenedUpload(const IntVec3& texelSize, const void* data,
-                                                           SizeT byteSize, Vector<Uint8>& widenedData) {
+        static const void* PreparePackedFloatWidenedUpload(const IntVec3& texelSize, const void* data, SizeT byteSize,
+                                                           Vector<Uint8>& widenedData) {
             constexpr SizeT kSourceTexelBytes = sizeof(Uint32);
             if (data == nullptr || byteSize < kSourceTexelBytes) {
                 return data;
@@ -436,8 +432,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         //
         // Sized from the LEVEL, not the source, for the reason PrepareChannelWidenedUpload is: the
         // driver reads a full width*height*depth*4 shorts for the transfer it was handed.
-        const void* PreparePackedIntWidenedUpload(const IntVec3& texelSize, const void* data,
-                                                  SizeT byteSize, Vector<Uint8>& widenedData) {
+        const void* PreparePackedIntWidenedUpload(const IntVec3& texelSize, const void* data, SizeT byteSize,
+                                                  Vector<Uint8>& widenedData) {
             constexpr SizeT kSourceTexelBytes = sizeof(Uint32);
             if (data == nullptr || byteSize < kSourceTexelBytes) {
                 return data;
@@ -655,8 +651,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 // falls back to the frontend read when there is no active transport (the legacy arm, and
 // monolith). MGB_STAGED_TEXTURE_LIVE is the runtime discriminator; pushedStorage/pushedRes
 // are the function's own locals. All are #undef'd with the rest after the function.
-#define MGB_STAGED_TEXTURE_LIVE                                                                                        \
-    (pushedStorage != nullptr && MG_Record::ServerStagedTexture().Holds())
+#define MGB_STAGED_TEXTURE_LIVE (pushedStorage != nullptr && MG_Record::ServerStagedTexture().Holds())
 #define MGB_TEXTURE_TARGET(obj)                                                                                        \
     (MGB_STAGED_TEXTURE_LIVE ? BufferImpl::StagedTextureTargetForPipeTarget(pushedStorage->Desc.Target)                \
                              : (obj)->GetTarget())
@@ -664,23 +659,20 @@ namespace MobileGL::MG_Backend::DirectGLES {
     (MGB_STAGED_TEXTURE_LIVE ? BufferImpl::StagedUploadTargetsForPipeTarget(pushedStorage->Desc.Target)                \
                              : (obj)->GetUploadTargets())
 #define MGB_LEVEL_TEXEL_SIZE(obj, tgt, lvl)                                                                            \
-    (MGB_STAGED_TEXTURE_LIVE                                                                                           \
-         ? MG_Record::ServerStagedTexture().LevelExtentOrUndefined(                                            \
-               MG_Record::StagedTextureStore::KeyForHandle(pushedRes), static_cast<Uint16>(tgt),               \
-               static_cast<Uint16>(lvl))                                                                               \
-         : (obj)->GetMipmapTexelSize(tgt, lvl))
+    (MGB_STAGED_TEXTURE_LIVE ? MG_Record::ServerStagedTexture().LevelExtentOrUndefined(                                \
+                                   MG_Record::StagedTextureStore::KeyForHandle(pushedRes), static_cast<Uint16>(tgt),   \
+                                   static_cast<Uint16>(lvl))                                                           \
+                             : (obj)->GetMipmapTexelSize(tgt, lvl))
 #define MGB_LEVEL_BYTE_SIZE(obj, tgt, lvl)                                                                             \
     (MGB_STAGED_TEXTURE_LIVE                                                                                           \
-         ? MG_Record::ServerStagedTexture().LevelByteSize(                                                     \
-               MG_Record::StagedTextureStore::KeyForHandle(pushedRes), static_cast<Uint16>(tgt),               \
-               static_cast<Uint16>(lvl))                                                                               \
+         ? MG_Record::ServerStagedTexture().LevelByteSize(MG_Record::StagedTextureStore::KeyForHandle(pushedRes),      \
+                                                          static_cast<Uint16>(tgt), static_cast<Uint16>(lvl))          \
          : (obj)->GetMipmapByteSize(tgt, lvl))
 #define MGB_LEVEL_TEXELS(obj, tgt, lvl, site)                                                                          \
-    (MGB_STAGED_TEXTURE_LIVE                                                                                           \
-         ? MG_Record::ServerStagedTexture().RequireLevelBytes(                                                 \
-               MG_Record::StagedTextureStore::KeyForHandle(pushedRes), static_cast<Uint16>(tgt),               \
-               static_cast<Uint16>(lvl), site)                                                                         \
-         : (obj)->MapMipmapData(tgt, lvl))
+    (MGB_STAGED_TEXTURE_LIVE ? MG_Record::ServerStagedTexture().RequireLevelBytes(                                     \
+                                   MG_Record::StagedTextureStore::KeyForHandle(pushedRes), static_cast<Uint16>(tgt),   \
+                                   static_cast<Uint16>(lvl), site)                                                     \
+                             : (obj)->MapMipmapData(tgt, lvl))
 
 // P5c (tx): the disaggregated pair adds ONE term and ONE clear to the P4a shapes - the
 // staged-texture store's GPU-dirty mark (T5: a level the GPU generated dirties the SERVER's
@@ -690,10 +682,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
 // load when the store is empty.
 #define MGB_LEVEL_NEEDS_UPLOAD(obj, tgt, lvl)                                                                          \
     (pushedStorage != nullptr                                                                                          \
-         ? (FindPipeTextureUpload(*pushedStorage, static_cast<Uint16>(tgt), static_cast<Uint16>(lvl)) != nullptr ||   \
-            MG_Record::ServerStagedTexture().IsLevelGpuDirty(                                                  \
-                MG_Record::StagedTextureStore::KeyForHandle(pushedRes), static_cast<Uint16>(tgt),              \
-                static_cast<Uint16>(lvl)))                                                                             \
+         ? (FindPipeTextureUpload(*pushedStorage, static_cast<Uint16>(tgt), static_cast<Uint16>(lvl)) != nullptr ||    \
+            MG_Record::ServerStagedTexture().IsLevelGpuDirty(MG_Record::StagedTextureStore::KeyForHandle(pushedRes),   \
+                                                             static_cast<Uint16>(tgt), static_cast<Uint16>(lvl)))      \
          : (obj)->IsStorageDirty(tgt, lvl))
 // Re-resolves the record itself, so it is safe after any amount of driver work - and it
 // invalidates any PendingUpload* taken earlier for THIS texture, which is why every such pointer
@@ -701,10 +692,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #define MGB_LEVEL_UPLOAD_DONE(obj, tgt, lvl)                                                                           \
     do {                                                                                                               \
         if (pushedStorage != nullptr) {                                                                                \
-            ConsumePipeTextureUpload(pushedRes, static_cast<Uint16>(tgt), static_cast<Uint16>(lvl));                    \
+            ConsumePipeTextureUpload(pushedRes, static_cast<Uint16>(tgt), static_cast<Uint16>(lvl));                   \
             if (MGB_STAGED_TEXTURE_LIVE) {                                                                             \
-                MG_Record::ServerStagedTexture().MarkLevelGpuDirty(                                            \
-                    MG_Record::StagedTextureStore::KeyForHandle(pushedRes), static_cast<Uint16>(tgt),          \
+                MG_Record::ServerStagedTexture().MarkLevelGpuDirty(                                                    \
+                    MG_Record::StagedTextureStore::KeyForHandle(pushedRes), static_cast<Uint16>(tgt),                  \
                     static_cast<Uint16>(lvl), false);                                                                  \
             }                                                                                                          \
         } else {                                                                                                       \
@@ -745,13 +736,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // otherwise have been spelled on, so the pull expansion is the pre-P4a expression with
         // one pair of parentheses around the receiver. All are #undef'd with the pair above.
 #define MGB_STORAGE_FORMAT(obj)                                                                                        \
-    (pushedStorage != nullptr ? static_cast<TextureInternalFormat>(pushedStorage->Desc.InternalFormat)                  \
+    (pushedStorage != nullptr ? static_cast<TextureInternalFormat>(pushedStorage->Desc.InternalFormat)                 \
                               : (obj)->GetFormat())
 #define MGB_STORAGE_BASE_SIZE(obj)                                                                                     \
-    (pushedStorage != nullptr ? IntVec3{static_cast<Int>(pushedStorage->Desc.Width),                                    \
-                                        static_cast<Int>(pushedStorage->Desc.Height),                                   \
-                                        static_cast<Int>(pushedStorage->Desc.Depth)}                                    \
-                              : (obj)->GetBaseSize())
+    (pushedStorage != nullptr                                                                                          \
+         ? IntVec3{static_cast<Int>(pushedStorage->Desc.Width), static_cast<Int>(pushedStorage->Desc.Height),          \
+                   static_cast<Int>(pushedStorage->Desc.Depth)}                                                        \
+         : (obj)->GetBaseSize())
 #define MGB_STORAGE_LEVELS(obj)                                                                                        \
     (pushedStorage != nullptr ? static_cast<Uint>(pushedStorage->Desc.Levels) : (obj)->GetMipmapLevelCount())
 #define MGB_STORAGE_SAMPLES(obj)                                                                                       \
@@ -761,7 +752,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #define MGB_STORAGE_IMMUTABLE(obj)                                                                                     \
     (pushedStorage != nullptr ? pushedStorage->Desc.Immutable != 0 : (obj)->IsImmutable())
 #define MGB_STORAGE_KIND(obj)                                                                                          \
-    (pushedStorage != nullptr ? static_cast<TextureStorageType>(pushedStorage->Desc.StorageKind)                        \
+    (pushedStorage != nullptr ? static_cast<TextureStorageType>(pushedStorage->Desc.StorageKind)                       \
                               : (obj)->GetStorageType())
 
         void BackendTextureObject::SyncMipmapsToBackend(
@@ -791,14 +782,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
             pushedStorage = ResolveOwnRecord(stateTextureObject);
             pushedRes = !MG_Pipe::MGPipeHandleIsNull(m_pushedSyncHandle)
                             ? m_pushedSyncHandle
-                            : (pushedStorage != nullptr ? pushedStorage->Desc.Resource
-                                                        : MG_Pipe::kMGPipeNullHandle);
+                            : (pushedStorage != nullptr ? pushedStorage->Desc.Resource : MG_Pipe::kMGPipeNullHandle);
             if (pushedStorage == nullptr) {
                 MGLOG_E_ONCE("MGPipe: texture %u has no applier record on the handle arm, so its "
                              "storage and uploads cannot be driven from the pushed descriptor "
                              "(handle {%u, %u})",
-                             TextureDiagName(stateTextureObject, pushedStorage), pushedRes.Slot,
-                             pushedRes.Gen);
+                             TextureDiagName(stateTextureObject, pushedStorage), pushedRes.Slot, pushedRes.Gen);
                 return;
             }
 #if MOBILEGL_BUILD_DISAGGREGATED
@@ -827,8 +816,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // Ruling 1's arm: the push-monolith build keeps the frontend test below token for
             // token, because there the two answers are the same answer and the verify comparator
             // needs the frontend arm.
-            if (pushedStorage != nullptr &&
-                !MG_Pipe::MGPipeHandleIsNull(pushedStorage->Desc.ViewOf)) {
+            if (pushedStorage != nullptr && !MG_Pipe::MGPipeHandleIsNull(pushedStorage->Desc.ViewOf)) {
                 SyncTextureViewToBackendByRecord(pushedRes, *pushedStorage, stateTextureObject);
                 return;
             }
@@ -888,8 +876,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // refreshes and skips) with the serial already stamped, and the set is what
                 // survives that. Empty means every level this record ever declared has been
                 // consumed by a sync that actually uploaded it.
-                if (m_isInitialized && m_syncedResourceSerial != 0 &&
-                    m_syncedResourceSerial == pushedStorage->Serial &&
+                if (m_isInitialized && m_syncedResourceSerial != 0 && m_syncedResourceSerial == pushedStorage->Serial &&
                     pushedStorage->PendingUploads.empty()) {
                     return;
                 }
@@ -907,14 +894,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // LEGACY ARM ONLY from P4a on: the memos it reads are the pre-handle ones and the
             // record above answers the same question in one compare.
             if (pushedStorage == nullptr)
-            if (m_isInitialized && m_syncedShapeContextId != 0 && MG_Pipe::gPipeInputs->IsLive() &&
-                m_syncedShapeContextId == MG_Pipe::gPipeInputs->GetTextureContextId() &&
-                m_syncedShapeGeneration == MG_Pipe::gPipeInputs->GetSamplingResolutionGeneration() &&
-                m_syncedContentVersion == stateTextureObject->GetContentVersion() &&
-                m_syncedShapeParamsVersion == stateTextureObject->GetTextureParamsVersion() &&
-                stateTextureObject->GetStorageType() == TextureStorageType::Mipmap) {
-                return;
-            }
+                if (m_isInitialized && m_syncedShapeContextId != 0 && MG_Pipe::gPipeInputs->IsLive() &&
+                    m_syncedShapeContextId == MG_Pipe::gPipeInputs->GetTextureContextId() &&
+                    m_syncedShapeGeneration == MG_Pipe::gPipeInputs->GetSamplingResolutionGeneration() &&
+                    m_syncedContentVersion == stateTextureObject->GetContentVersion() &&
+                    m_syncedShapeParamsVersion == stateTextureObject->GetTextureParamsVersion() &&
+                    stateTextureObject->GetStorageType() == TextureStorageType::Mipmap) {
+                    return;
+                }
 
             MGLOG_D("Syncing texture mipmaps with backend ID %u to backend for state ID %u", m_backendTextureId,
                     MGB_TEXTURE_DIAG_NAME(pushedStorage, stateTextureObject));
@@ -925,7 +912,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     MG_Util::ConvertTextureTargetToString(targetInternal).c_str());
             if (!IsSupportedTextureTarget(targetInternal)) {
                 MGLOG_E_ONCE("    Texture target %s is not supported, skipping.",
-                        MG_Util::ConvertTextureTargetToString(targetInternal).c_str());
+                             MG_Util::ConvertTextureTargetToString(targetInternal).c_str());
                 return;
             }
 
@@ -959,8 +946,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 if (static_cast<TextureStorageType>(stagedDesc.StorageKind) == TextureStorageType::Buffer) {
                     // A buffer texture has no staged levels; its gate is the descriptor's
                     // format, which is what TextureObjectBase::IsComplete() reduces to here.
-                    anyDefined = static_cast<TextureInternalFormat>(stagedDesc.InternalFormat) !=
-                                 TextureInternalFormat::Unknown;
+                    anyDefined =
+                        static_cast<TextureInternalFormat>(stagedDesc.InternalFormat) != TextureInternalFormat::Unknown;
                 } else {
                     auto& stagedStore = MG_Record::ServerStagedTexture();
                     const Uint64 stagedKey = MG_Record::StagedTextureStore::KeyForHandle(pushedRes);
@@ -980,8 +967,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                             MGB_TEXTURE_DIAG_NAME(pushedStorage, stateTextureObject));
                     return;
                 }
-            } else
-            if (!stateTextureObject->IsComplete() && !HasAnyDefinedMipmapLevel(stateTextureObject.get())) {
+            } else if (!stateTextureObject->IsComplete() && !HasAnyDefinedMipmapLevel(stateTextureObject.get())) {
                 MGLOG_D("Texture object with ID: %u has no defined image level, skipping sync.",
                         stateTextureObject->GetExternalIndex());
                 return;
@@ -1005,34 +991,32 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // an answer already given, out of the very frontend state the arm exists to stop
             // reading.
             if (pushedStorage == nullptr)
-            if (m_isInitialized && stateTextureObject->GetStorageType() == TextureStorageType::Mipmap &&
-                m_syncedContentVersion != 0 &&
-                m_syncedContentVersion == stateTextureObject->GetContentVersion()) {
-                auto* mipmapObject =
-                    static_cast<MG_State::GLState::TextureObjectMipmap*>(stateTextureObject.get());
-                const auto probeBaseSize = stateTextureObject->GetBaseSize();
-                StateTextureBasicInfo probe = {stateTextureObject->GetFormat(),
-                                               static_cast<SizeT>(probeBaseSize.x()),
-                                               static_cast<SizeT>(probeBaseSize.y()),
-                                               static_cast<SizeT>(probeBaseSize.z()),
-                                               static_cast<SizeT>(mipmapObject->GetMipmapLevelCount()),
-                                               0,
-                                               stateTextureObject->GetSamples(),
-                                               stateTextureObject->HasFixedSampleLocations()};
-                if (probe == m_prevTextureInfo) {
-                    MGLOG_D("Texture ID %u already fully synced, skipping scratch bind + upload.",
-                            m_backendTextureId);
-                    // The probe just proved "fully synced" from the real state, so the cheap
-                    // gate may be (re)stamped here: the coarse generation only ever goes stale
-                    // from OTHER textures' churn, and this draw re-validated this one.
-                    if (MG_Pipe::gPipeInputs->IsLive()) {
-                        m_syncedShapeContextId = MG_Pipe::gPipeInputs->GetTextureContextId();
-                        m_syncedShapeGeneration = MG_Pipe::gPipeInputs->GetSamplingResolutionGeneration();
-                        m_syncedShapeParamsVersion = stateTextureObject->GetTextureParamsVersion();
+                if (m_isInitialized && stateTextureObject->GetStorageType() == TextureStorageType::Mipmap &&
+                    m_syncedContentVersion != 0 && m_syncedContentVersion == stateTextureObject->GetContentVersion()) {
+                    auto* mipmapObject = static_cast<MG_State::GLState::TextureObjectMipmap*>(stateTextureObject.get());
+                    const auto probeBaseSize = stateTextureObject->GetBaseSize();
+                    StateTextureBasicInfo probe = {stateTextureObject->GetFormat(),
+                                                   static_cast<SizeT>(probeBaseSize.x()),
+                                                   static_cast<SizeT>(probeBaseSize.y()),
+                                                   static_cast<SizeT>(probeBaseSize.z()),
+                                                   static_cast<SizeT>(mipmapObject->GetMipmapLevelCount()),
+                                                   0,
+                                                   stateTextureObject->GetSamples(),
+                                                   stateTextureObject->HasFixedSampleLocations()};
+                    if (probe == m_prevTextureInfo) {
+                        MGLOG_D("Texture ID %u already fully synced, skipping scratch bind + upload.",
+                                m_backendTextureId);
+                        // The probe just proved "fully synced" from the real state, so the cheap
+                        // gate may be (re)stamped here: the coarse generation only ever goes stale
+                        // from OTHER textures' churn, and this draw re-validated this one.
+                        if (MG_Pipe::gPipeInputs->IsLive()) {
+                            m_syncedShapeContextId = MG_Pipe::gPipeInputs->GetTextureContextId();
+                            m_syncedShapeGeneration = MG_Pipe::gPipeInputs->GetSamplingResolutionGeneration();
+                            m_syncedShapeParamsVersion = stateTextureObject->GetTextureParamsVersion();
+                        }
+                        return;
                     }
-                    return;
                 }
-            }
 
             Bind(target);
             DebugImpl::ErrorLopper::Loop([file = __FILE__, line = __LINE__, func = __func__](GLenum err) {
@@ -1070,9 +1054,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         : TextureImpl::ImageBindableStorageWidening{};
 
                 const Bool canAppendMipmaps =
-                    m_isInitialized &&
-                    !m_imageBindableStorageRequired &&
-                    !MGB_STORAGE_IMMUTABLE(stateTextureObject) &&
+                    m_isInitialized && !m_imageBindableStorageRequired && !MGB_STORAGE_IMMUTABLE(stateTextureObject) &&
                     currentTextureInfo.internalFormat == m_prevTextureInfo.internalFormat &&
                     currentTextureInfo.width == m_prevTextureInfo.width &&
                     currentTextureInfo.height == m_prevTextureInfo.height &&
@@ -1110,18 +1092,19 @@ namespace MobileGL::MG_Backend::DirectGLES {
                             auto levelByteSize = MGB_LEVEL_BYTE_SIZE(textureMipmapObject, uploadTarget, level);
                             bool levelDirty = MGB_LEVEL_NEEDS_UPLOAD(textureMipmapObject, uploadTarget, level);
                             auto glUploadTarget = ConvertTextureUploadTargetToBackendGLEnum(uploadTarget);
-                            auto* pData = (levelDirty && levelByteSize != 0)
-                                              ? MGB_LEVEL_TEXELS(textureMipmapObject, uploadTarget, level,
-                                                                 "append-mips")
-                                              : nullptr;
+                            auto* pData =
+                                (levelDirty && levelByteSize != 0)
+                                    ? MGB_LEVEL_TEXELS(textureMipmapObject, uploadTarget, level, "append-mips")
+                                    : nullptr;
                             Vector<Float> convertedUploadData;
                             Vector<Uint8> widenedUploadData;
                             const void* uploadData = PrepareFallbackUpload(
                                 MGB_STORAGE_FORMAT(textureMipmapObject), targetInternal, levelTexelSize, pData,
                                 levelByteSize, glType, convertedUploadData, widenedUploadData);
                             Vector<Uint8> packedUploadData;
-                            uploadData = PreparePackedNormUpload(MGB_STORAGE_FORMAT(textureMipmapObject), levelTexelSize,
-                                                                 uploadData, levelByteSize, &glType, packedUploadData);
+                            uploadData =
+                                PreparePackedNormUpload(MGB_STORAGE_FORMAT(textureMipmapObject), levelTexelSize,
+                                                        uploadData, levelByteSize, &glType, packedUploadData);
 
                             DebugImpl::ErrorLopper::Clear();
                             BufferImpl::BindPixelUnpackBufferId(0); // no-op once the resting 0 state is pinned
@@ -1130,10 +1113,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                             switch (MapToBackendTextureTarget(MGB_TEXTURE_TARGET(stateTextureObject))) {
                             case TextureTarget::Texture2D:
                             case TextureTarget::TextureCubeMap:
-                                g_GLESFuncs.glTexImage2D(
-                                    glUploadTarget, static_cast<GLint>(level), (GLint)glInternalFormat,
-                                    static_cast<GLsizei>(uploadSize.x()), static_cast<GLsizei>(uploadSize.y()),
-                                    0, glFormat, glType, uploadData);
+                                g_GLESFuncs.glTexImage2D(glUploadTarget, static_cast<GLint>(level),
+                                                         (GLint)glInternalFormat, static_cast<GLsizei>(uploadSize.x()),
+                                                         static_cast<GLsizei>(uploadSize.y()), 0, glFormat, glType,
+                                                         uploadData);
                                 break;
                             case TextureTarget::Texture3D:
                             case TextureTarget::Texture2DArray:
@@ -1146,8 +1129,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                     static_cast<GLsizei>(uploadSize.z()), 0, glFormat, glType, uploadData);
                                 break;
                             default:
-                                MGLOG_E_ONCE("Unhandled texture target %s",
-                                        MG_Util::ConvertTextureTargetToString(MGB_TEXTURE_TARGET(stateTextureObject)).c_str());
+                                MGLOG_E_ONCE("Unhandled texture target %s", MG_Util::ConvertTextureTargetToString(
+                                                                                MGB_TEXTURE_TARGET(stateTextureObject))
+                                                                                .c_str());
                                 break;
                             }
                             DebugImpl::ErrorLopper::Loop([file = __FILE__, line = __LINE__, func = __func__,
@@ -1222,15 +1206,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
                             switch (targetInternal) {
                             case TextureTarget::Texture2DMultisample:
                                 g_GLESFuncs.glTexStorage2DMultisample(
-                                    target, backendSamples, glInternalFormat,
-                                    static_cast<GLsizei>(baseSize.x()), static_cast<GLsizei>(baseSize.y()),
+                                    target, backendSamples, glInternalFormat, static_cast<GLsizei>(baseSize.x()),
+                                    static_cast<GLsizei>(baseSize.y()),
                                     MGB_STORAGE_FIXED_SAMPLE_LOCATIONS(stateTextureObject) ? GL_TRUE : GL_FALSE);
                                 break;
                             case TextureTarget::Texture2DMultisampleArray:
                                 g_GLESFuncs.glTexStorage3DMultisample(
-                                    target, backendSamples, glInternalFormat,
-                                    static_cast<GLsizei>(baseSize.x()), static_cast<GLsizei>(baseSize.y()),
-                                    static_cast<GLsizei>(baseSize.z()),
+                                    target, backendSamples, glInternalFormat, static_cast<GLsizei>(baseSize.x()),
+                                    static_cast<GLsizei>(baseSize.y()), static_cast<GLsizei>(baseSize.z()),
                                     MGB_STORAGE_FIXED_SAMPLE_LOCATIONS(stateTextureObject) ? GL_TRUE : GL_FALSE);
                                 break;
                             default:
@@ -1278,29 +1261,30 @@ namespace MobileGL::MG_Backend::DirectGLES {
                             break;
                         default:
                             MGLOG_E_ONCE("Unhandled immutable texture target %s",
-                                    MG_Util::ConvertTextureTargetToString(targetInternal).c_str());
+                                         MG_Util::ConvertTextureTargetToString(targetInternal).c_str());
                             break;
                         }
-                        DebugImpl::ErrorLopper::Loop([file = __FILE__, line = __LINE__, func = __func__, target,
-                                                      glInternalFormat](GLenum err) {
-                            MGLOG_D("%s(%s:%d) ES error: %s. glTexStorage*: target=%s, internalformat=%s", func,
-                                    file, line, MG_Util::ConvertGLEnumToString(err).c_str(),
-                                    MG_Util::ConvertGLEnumToString(target).c_str(),
-                                    MG_Util::ConvertGLEnumToString(glInternalFormat).c_str());
-                        });
+                        DebugImpl::ErrorLopper::Loop(
+                            [file = __FILE__, line = __LINE__, func = __func__, target, glInternalFormat](GLenum err) {
+                                MGLOG_D("%s(%s:%d) ES error: %s. glTexStorage*: target=%s, internalformat=%s", func,
+                                        file, line, MG_Util::ConvertGLEnumToString(err).c_str(),
+                                        MG_Util::ConvertGLEnumToString(target).c_str(),
+                                        MG_Util::ConvertGLEnumToString(glInternalFormat).c_str());
+                            });
                         m_backendStorageImmutable = true;
 
                         ScopedDefaultUnpackState unpackState;
                         for (auto& uploadTarget : uploadTargets) {
                             for (SizeT level = 0; level < mipmapCount; ++level) {
                                 auto levelByteSize = MGB_LEVEL_BYTE_SIZE(textureMipmapObject, uploadTarget, level);
-                                const bool levelDirty = MGB_LEVEL_NEEDS_UPLOAD(textureMipmapObject, uploadTarget, level);
+                                const bool levelDirty =
+                                    MGB_LEVEL_NEEDS_UPLOAD(textureMipmapObject, uploadTarget, level);
                                 if (levelDirty && levelByteSize != 0) {
                                     auto levelTexelSize =
                                         MGB_LEVEL_TEXEL_SIZE(textureMipmapObject, uploadTarget, level);
                                     auto glUploadTarget = ConvertTextureUploadTargetToBackendGLEnum(uploadTarget);
-                                    auto* pData = MGB_LEVEL_TEXELS(textureMipmapObject, uploadTarget, level,
-                                                                   "immutable-regen");
+                                    auto* pData =
+                                        MGB_LEVEL_TEXELS(textureMipmapObject, uploadTarget, level, "immutable-regen");
                                     Vector<Float> convertedUploadData;
                                     Vector<Uint8> widenedUploadData;
                                     const void* uploadData = PrepareFallbackUpload(
@@ -1316,38 +1300,35 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
                                     DebugImpl::ErrorLopper::Clear();
                                     BufferImpl::BindPixelUnpackBufferId(0); // no-op once the resting 0 state is pinned
-                                    const IntVec3 uploadSize =
-                                        GetBackendUploadSize(targetInternal, levelTexelSize);
+                                    const IntVec3 uploadSize = GetBackendUploadSize(targetInternal, levelTexelSize);
                                     switch (MapToBackendTextureTarget(targetInternal)) {
                                     case TextureTarget::Texture2D:
                                     case TextureTarget::TextureCubeMap:
-                                        g_GLESFuncs.glTexSubImage2D(
-                                            glUploadTarget, static_cast<GLint>(level), 0, 0,
-                                            static_cast<GLsizei>(uploadSize.x()),
-                                            static_cast<GLsizei>(uploadSize.y()), glFormat, glType, uploadData);
+                                        g_GLESFuncs.glTexSubImage2D(glUploadTarget, static_cast<GLint>(level), 0, 0,
+                                                                    static_cast<GLsizei>(uploadSize.x()),
+                                                                    static_cast<GLsizei>(uploadSize.y()), glFormat,
+                                                                    glType, uploadData);
                                         break;
                                     case TextureTarget::Texture3D:
                                     case TextureTarget::Texture2DArray:
                                     case TextureTarget::TextureCubeMapArray:
                                         g_GLESFuncs.glTexSubImage3D(
                                             glUploadTarget, static_cast<GLint>(level), 0, 0, 0,
-                                            static_cast<GLsizei>(uploadSize.x()),
-                                            static_cast<GLsizei>(uploadSize.y()),
+                                            static_cast<GLsizei>(uploadSize.x()), static_cast<GLsizei>(uploadSize.y()),
                                             static_cast<GLsizei>(uploadSize.z()), glFormat, glType, uploadData);
                                         break;
                                     default:
                                         break;
                                     }
-                                    DebugImpl::ErrorLopper::Loop(
-                                        [file = __FILE__, line = __LINE__, func = __func__, glUploadTarget,
-                                         glFormat, glType, pData](GLenum err) {
-                                            MGLOG_D("%s(%s:%d) ES error: %s. glTexSubImage*: target=%s, format=%s, "
-                                                    "type=%s, pixels=%p",
-                                                    func, file, line, MG_Util::ConvertGLEnumToString(err).c_str(),
-                                                    MG_Util::ConvertGLEnumToString(glUploadTarget).c_str(),
-                                                    MG_Util::ConvertGLEnumToString(glFormat).c_str(),
-                                                    MG_Util::ConvertGLEnumToString(glType).c_str(), pData);
-                                        });
+                                    DebugImpl::ErrorLopper::Loop([file = __FILE__, line = __LINE__, func = __func__,
+                                                                  glUploadTarget, glFormat, glType, pData](GLenum err) {
+                                        MGLOG_D("%s(%s:%d) ES error: %s. glTexSubImage*: target=%s, format=%s, "
+                                                "type=%s, pixels=%p",
+                                                func, file, line, MG_Util::ConvertGLEnumToString(err).c_str(),
+                                                MG_Util::ConvertGLEnumToString(glUploadTarget).c_str(),
+                                                MG_Util::ConvertGLEnumToString(glFormat).c_str(),
+                                                MG_Util::ConvertGLEnumToString(glType).c_str(), pData);
+                                    });
                                 }
                                 MGB_LEVEL_UPLOAD_DONE(textureMipmapObject, uploadTarget, level);
                             }
@@ -1360,18 +1341,17 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                 auto levelTexelSize = MGB_LEVEL_TEXEL_SIZE(textureMipmapObject, uploadTarget, level);
                                 // See the append-mips loop: an undefined level stays undefined on the
                                 // driver rather than becoming a 0x0 image.
-                                if (levelTexelSize.x() <= 0 || levelTexelSize.y() <= 0 ||
-                                    levelTexelSize.z() <= 0) {
+                                if (levelTexelSize.x() <= 0 || levelTexelSize.y() <= 0 || levelTexelSize.z() <= 0) {
                                     MGB_LEVEL_UPLOAD_DONE(textureMipmapObject, uploadTarget, level);
                                     continue;
                                 }
                                 auto levelByteSize = MGB_LEVEL_BYTE_SIZE(textureMipmapObject, uploadTarget, level);
                                 bool levelDirty = MGB_LEVEL_NEEDS_UPLOAD(textureMipmapObject, uploadTarget, level);
                                 auto glUploadTarget = ConvertTextureUploadTargetToBackendGLEnum(uploadTarget);
-                                auto* pData = (levelDirty && levelByteSize != 0)
-                                                  ? MGB_LEVEL_TEXELS(textureMipmapObject, uploadTarget, level,
-                                                                     "mutable-regen")
-                                                  : nullptr;
+                                auto* pData =
+                                    (levelDirty && levelByteSize != 0)
+                                        ? MGB_LEVEL_TEXELS(textureMipmapObject, uploadTarget, level, "mutable-regen")
+                                        : nullptr;
                                 Vector<Float> convertedUploadData;
                                 Vector<Uint8> widenedUploadData;
                                 const void* uploadData = PrepareFallbackUpload(
@@ -1396,8 +1376,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                 case TextureTarget::TextureCubeMap: {
                                     g_GLESFuncs.glTexImage2D(
                                         glUploadTarget, static_cast<GLint>(level), (GLint)glInternalFormat,
-                                        static_cast<GLsizei>(uploadSize.x()),
-                                        static_cast<GLsizei>(uploadSize.y()), 0, glFormat, glType, uploadData);
+                                        static_cast<GLsizei>(uploadSize.x()), static_cast<GLsizei>(uploadSize.y()), 0,
+                                        glFormat, glType, uploadData);
                                     break;
                                 }
                                 case TextureTarget::Texture3D:
@@ -1405,27 +1385,26 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                 case TextureTarget::TextureCubeMapArray: {
                                     g_GLESFuncs.glTexImage3D(
                                         glUploadTarget, static_cast<GLint>(level), (GLint)glInternalFormat,
-                                        static_cast<GLsizei>(uploadSize.x()),
-                                        static_cast<GLsizei>(uploadSize.y()),
+                                        static_cast<GLsizei>(uploadSize.x()), static_cast<GLsizei>(uploadSize.y()),
                                         static_cast<GLsizei>(uploadSize.z()), 0, glFormat, glType, uploadData);
                                     break;
                                 }
                                 default: {
                                     MGLOG_E_ONCE("Unhandled texture target %s",
-                                            MG_Util::ConvertTextureTargetToString(textureTarget).c_str());
+                                                 MG_Util::ConvertTextureTargetToString(textureTarget).c_str());
                                 }
                                 }
-                                DebugImpl::ErrorLopper::Loop(
-                                    [file = __FILE__, line = __LINE__, func = __func__, glUploadTarget,
-                                     glInternalFormat, glFormat, glType, pData](GLenum err) {
-                                        MGLOG_D("%s(%s:%d) ES error: %s. glTexImage*: target=%s, internalformat=%s, "
-                                                "format=%s, type=%s, pixels=%p",
-                                                func, file, line, MG_Util::ConvertGLEnumToString(err).c_str(),
-                                                MG_Util::ConvertGLEnumToString(glUploadTarget).c_str(),
-                                                MG_Util::ConvertGLEnumToString(glInternalFormat).c_str(),
-                                                MG_Util::ConvertGLEnumToString(glFormat).c_str(),
-                                                MG_Util::ConvertGLEnumToString(glType).c_str(), pData);
-                                    });
+                                DebugImpl::ErrorLopper::Loop([file = __FILE__, line = __LINE__, func = __func__,
+                                                              glUploadTarget, glInternalFormat, glFormat, glType,
+                                                              pData](GLenum err) {
+                                    MGLOG_D("%s(%s:%d) ES error: %s. glTexImage*: target=%s, internalformat=%s, "
+                                            "format=%s, type=%s, pixels=%p",
+                                            func, file, line, MG_Util::ConvertGLEnumToString(err).c_str(),
+                                            MG_Util::ConvertGLEnumToString(glUploadTarget).c_str(),
+                                            MG_Util::ConvertGLEnumToString(glInternalFormat).c_str(),
+                                            MG_Util::ConvertGLEnumToString(glFormat).c_str(),
+                                            MG_Util::ConvertGLEnumToString(glType).c_str(), pData);
+                                });
                                 MGLOG_D("Regenerated mipmap level %d for texture with ID: %u", level,
                                         m_backendTextureId);
                                 MGB_LEVEL_UPLOAD_DONE(textureMipmapObject, uploadTarget, level);
@@ -1490,8 +1469,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                             MG_Util::ConvertGLEnumToString(err).c_str());
                                 });
                             auto texelSize = MGB_LEVEL_TEXEL_SIZE(textureMipmapObject, uploadTarget, level);
-                            const void* mipData = MGB_LEVEL_TEXELS(textureMipmapObject, uploadTarget, level,
-                                                                   "dirty-level");
+                            const void* mipData =
+                                MGB_LEVEL_TEXELS(textureMipmapObject, uploadTarget, level, "dirty-level");
                             Vector<Float> convertedUploadData;
                             Vector<Uint8> widenedUploadData;
                             const void* uploadData = PrepareFallbackUpload(
@@ -1528,8 +1507,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                             SizeT uploadBytes = 0;
                             if (uploadData == mipData) {
                                 uploadBytes = byteSize;
-                            } else if (!imageWidenedUploadData.empty() &&
-                                       uploadData == imageWidenedUploadData.data()) {
+                            } else if (!imageWidenedUploadData.empty() && uploadData == imageWidenedUploadData.data()) {
                                 uploadBytes = imageWidenedUploadData.size();
                             } else if (!packedUploadData.empty() && uploadData == packedUploadData.data()) {
                                 uploadBytes = packedUploadData.size();
@@ -1581,10 +1559,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                 // MGPBox is {origin, extent}; MipmapDirtyRegion is {lo, hi}. The
                                 // conversion is the whole difference between the two spellings.
                                 const auto& box = pendingUpload->UnionBox;
-                                return MG_State::GLState::MipmapDirtyRegion{
-                                    IntVec3{box.X, box.Y, box.Z},
-                                    IntVec3{box.X + static_cast<Int32>(box.W), box.Y + static_cast<Int32>(box.H),
-                                            box.Z + static_cast<Int32>(box.D)}};
+                                return MG_State::GLState::MipmapDirtyRegion{IntVec3{box.X, box.Y, box.Z},
+                                                                            IntVec3{box.X + static_cast<Int32>(box.W),
+                                                                                    box.Y + static_cast<Int32>(box.H),
+                                                                                    box.Z + static_cast<Int32>(box.D)}};
                             }();
                             const SizeT texelCount = static_cast<SizeT>(texelSize.x()) *
                                                      static_cast<SizeT>(texelSize.y()) *
@@ -1646,14 +1624,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
                             const Bool carriedLayoutApplies = uploadData == mipData;
                             const SizeT carriedRowBytes =
                                 (pendingUpload != nullptr && pendingStridesAgree && carriedLayoutApplies &&
-                                 !pendingUpload->Regions.empty() &&
-                                 pendingUpload->Regions.front().SrcRowStride != 0)
+                                 !pendingUpload->Regions.empty() && pendingUpload->Regions.front().SrcRowStride != 0)
                                     ? static_cast<SizeT>(pendingUpload->Regions.front().SrcRowStride)
                                     : 0;
                             const SizeT carriedSliceBytes =
                                 (pendingUpload != nullptr && pendingStridesAgree && carriedLayoutApplies &&
-                                 !pendingUpload->Regions.empty() &&
-                                 pendingUpload->Regions.front().SrcSliceStride != 0)
+                                 !pendingUpload->Regions.empty() && pendingUpload->Regions.front().SrcSliceStride != 0)
                                     ? static_cast<SizeT>(pendingUpload->Regions.front().SrcSliceStride)
                                     : 0;
                             const SizeT levelRowBytes =
@@ -1708,18 +1684,17 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                                  "level cut into stage-chunk pieces, whose regions index their "
                                                  "own run; otherwise this names a record whose regions and "
                                                  "origins disagree",
-                                                 MGB_TEXTURE_DIAG_NAME(pushedStorage, stateTextureObject), static_cast<Uint>(level),
-                                                 static_cast<unsigned long long>(region.SrcOffset), region.X,
-                                                 region.Y, region.Z,
-                                                 static_cast<unsigned long long>(derivedOffset));
+                                                 MGB_TEXTURE_DIAG_NAME(pushedStorage, stateTextureObject),
+                                                 static_cast<Uint>(level),
+                                                 static_cast<unsigned long long>(region.SrcOffset), region.X, region.Y,
+                                                 region.Z, static_cast<unsigned long long>(derivedOffset));
                                     break;
                                 }
                             }
-                            const Uint8* regionPtr =
-                                static_cast<const Uint8*>(uploadData) +
-                                static_cast<SizeT>(dirtyRegion.lo.z()) * levelSliceBytes +
-                                static_cast<SizeT>(dirtyRegion.lo.y()) * levelRowBytes +
-                                static_cast<SizeT>(dirtyRegion.lo.x()) * bpp;
+                            const Uint8* regionPtr = static_cast<const Uint8*>(uploadData) +
+                                                     static_cast<SizeT>(dirtyRegion.lo.z()) * levelSliceBytes +
+                                                     static_cast<SizeT>(dirtyRegion.lo.y()) * levelRowBytes +
+                                                     static_cast<SizeT>(dirtyRegion.lo.x()) * bpp;
                             // Scatter refinement behind the union box: ~100 sprite
                             // writes into an atlas leave a box that spans nearly the
                             // whole level while the touched texels are a few percent of
@@ -1754,10 +1729,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                         summedTexels += static_cast<SizeT>(region.W) * static_cast<SizeT>(region.H) *
                                                         static_cast<SizeT>(std::max<Uint32>(region.D, 1));
                                     }
-                                    const Bool listWithheld =
-                                        pendingUpload->Regions.size() < 2 ||
-                                        pendingUpload->Regions.size() > MG_State::GLState::MipmapStorage::kMaxDirtyRects ||
-                                        summedTexels * 4 >= dirtyRegion.TexelCount() * 3;
+                                    const Bool listWithheld = pendingUpload->Regions.size() < 2 ||
+                                                              pendingUpload->Regions.size() >
+                                                                  MG_State::GLState::MipmapStorage::kMaxDirtyRects ||
+                                                              summedTexels * 4 >= dirtyRegion.TexelCount() * 3;
                                     dirtyRectCount = listWithheld ? 0 : pendingUpload->Regions.size();
                                     for (SizeT r = 0; r < dirtyRectCount; ++r) {
                                         const auto& region = pendingUpload->Regions[r];
@@ -1768,14 +1743,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                                     region.Z + static_cast<Int32>(region.D)}};
                                     }
                                 } else
-                                // tx: with an active transport the rect list is the record's (the
-                                // pendingUpload arm above) or nothing - the server's GPU-dirty mark
-                                // is whole-level and has no scatter refinement to hand out, and the
-                                // frontend's rect model is not this side's to read.
-                                if (!MGB_STAGED_TEXTURE_LIVE)
-                                dirtyRectCount = textureMipmapObject->GetStorageDirtyRects(
-                                    uploadTarget, level, dirtyRects,
-                                    MG_State::GLState::MipmapStorage::kMaxDirtyRects);
+                                    // tx: with an active transport the rect list is the record's (the
+                                    // pendingUpload arm above) or nothing - the server's GPU-dirty mark
+                                    // is whole-level and has no scatter refinement to hand out, and the
+                                    // frontend's rect model is not this side's to read.
+                                    if (!MGB_STAGED_TEXTURE_LIVE)
+                                        dirtyRectCount = textureMipmapObject->GetStorageDirtyRects(
+                                            uploadTarget, level, dirtyRects,
+                                            MG_State::GLState::MipmapStorage::kMaxDirtyRects);
                                 // The scatter refinement pays only on the client-pointer path,
                                 // where fewer bytes mean less driver-side copying. Through the
                                 // unpack ring every glTexSubImage is a GPU copy job (Mali), so
@@ -1809,13 +1784,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                                     region.Z + static_cast<Int32>(region.D)}});
                                     }
                                 } else
-                                // With an active transport and no record behind the level, the
-                                // server's own whole-level GPU-dirty mark is the whole story (the
-                                // same reason the rect list above is not read here).
-                                if (MGB_STAGED_TEXTURE_LIVE) {
-                                    dirtyFootprint.clear();
-                                } else
-                                textureMipmapObject->GetStorageDirtyFootprint(uploadTarget, level, dirtyFootprint);
+                                    // With an active transport and no record behind the level, the
+                                    // server's own whole-level GPU-dirty mark is the whole story (the
+                                    // same reason the rect list above is not read here).
+                                    if (MGB_STAGED_TEXTURE_LIVE) {
+                                        dirtyFootprint.clear();
+                                    } else
+                                        textureMipmapObject->GetStorageDirtyFootprint(uploadTarget, level,
+                                                                                      dirtyFootprint);
                                 // One box is the union box itself, which the branches below already
                                 // upload exactly (as the whole level when it is the whole level).
                                 if (dirtyFootprint.size() >= 2) {
@@ -1885,8 +1861,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                             // block wants. It also stages strictly fewer bytes than the
                             // client-pointer path makes the driver walk, which strides over
                             // the whole level width.
-                            UnpackStagingBlock
-                                stagingBlockArray[MG_State::GLState::MipmapStorage::kMaxDirtyRects];
+                            UnpackStagingBlock stagingBlockArray[MG_State::GLState::MipmapStorage::kMaxDirtyRects];
                             UnpackStagingBlock* stagingBlocks = stagingBlockArray;
                             SizeT stagingBlockCount = 0;
                             const Bool ringUsable = BufferImpl::UnpackRingAvailable();
@@ -1901,14 +1876,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                 }
                                 for (SizeT r = 0; r < uploadRectCount; ++r) {
                                     const auto& rect = uploadRects[r];
-                                    stagingBlocks[r] = {
-                                        MGB_RECT_SRC_PTR(r, rect),
-                                        static_cast<SizeT>(rect.hi.x() - rect.lo.x()) * bpp,
-                                        static_cast<SizeT>(rect.hi.y() - rect.lo.y()),
-                                        static_cast<SizeT>(std::max(rect.hi.z() - rect.lo.z(), 1)),
-                                        levelRowBytes,
-                                        levelSliceBytes,
-                                        0};
+                                    stagingBlocks[r] = {MGB_RECT_SRC_PTR(r, rect),
+                                                        static_cast<SizeT>(rect.hi.x() - rect.lo.x()) * bpp,
+                                                        static_cast<SizeT>(rect.hi.y() - rect.lo.y()),
+                                                        static_cast<SizeT>(std::max(rect.hi.z() - rect.lo.z(), 1)),
+                                                        levelRowBytes,
+                                                        levelSliceBytes,
+                                                        0};
                                 }
                                 stagingBlockCount = uploadRectCount;
                             } else if (subRectEligible) {
@@ -1920,8 +1894,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                                     levelSliceBytes,
                                                     0};
                                 stagingBlockCount = 1;
-                            } else if (uploadData == mipData && texelCount > 0 &&
-                                       byteSize % texelCount == 0) {
+                            } else if (uploadData == mipData && texelCount > 0 && byteSize % texelCount == 0) {
                                 // Whole level, shadow bytes verbatim: `byteSize` is exactly
                                 // what the driver would have read from the client pointer,
                                 // and the shadow is already tightly packed. A CONVERTED
@@ -1933,18 +1906,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                 // hold. (A 1D array's upload size permutes height and depth,
                                 // but the texel count and the tight byte order are the same,
                                 // so the flat copy still describes what the driver reads.)
-                                stagingBlocks[0] = {static_cast<const Uint8*>(uploadData),
-                                                    static_cast<SizeT>(byteSize),
-                                                    1,
-                                                    1,
-                                                    static_cast<SizeT>(byteSize),
-                                                    static_cast<SizeT>(byteSize),
-                                                    0};
+                                stagingBlocks[0] = {
+                                    static_cast<const Uint8*>(uploadData), static_cast<SizeT>(byteSize), 1, 1,
+                                    static_cast<SizeT>(byteSize),          static_cast<SizeT>(byteSize), 0};
                                 stagingBlockCount = 1;
                             }
                             const Bool ringStaged =
-                                stagingBlockCount > 0 &&
-                                StageBlocksIntoUnpackRing(stagingBlocks, stagingBlockCount);
+                                stagingBlockCount > 0 && StageBlocksIntoUnpackRing(stagingBlocks, stagingBlockCount);
                             if (ringStaged) {
                                 BufferImpl::BindPixelUnpackBufferId(BufferImpl::UnpackRingBufferId());
                             }
@@ -1968,17 +1936,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                                         static_cast<Uint64>(bpp);
                                     }
                                 } else if (subRectEligible) {
-                                    shippedBytes = static_cast<Uint64>(regionSize.x()) *
-                                                   static_cast<Uint64>(regionSize.y()) *
-                                                   static_cast<Uint64>(std::max(regionSize.z(), 1)) *
-                                                   static_cast<Uint64>(bpp);
+                                    shippedBytes =
+                                        static_cast<Uint64>(regionSize.x()) * static_cast<Uint64>(regionSize.y()) *
+                                        static_cast<Uint64>(std::max(regionSize.z(), 1)) * static_cast<Uint64>(bpp);
                                 } else {
                                     shippedBytes = static_cast<Uint64>(byteSize);
                                 }
-                                MG_Util::PipeStats::AddBytes(MG_Util::PipeStats::ByteClass::StageTexture,
-                                                             shippedBytes);
-                                MG_Util::PipeStats::AddCalls(
-                                    MG_Util::PipeStats::CallClass::TextureUploadEmissions, 1);
+                                MG_Util::PipeStats::AddBytes(MG_Util::PipeStats::ByteClass::StageTexture, shippedBytes);
+                                MG_Util::PipeStats::AddCalls(MG_Util::PipeStats::CallClass::TextureUploadEmissions, 1);
                                 MG_Util::PipeStats::AddCalls(
                                     rectShape ? MG_Util::PipeStats::CallClass::TextureUploadRectEmissions
                                               : MG_Util::PipeStats::CallClass::TextureUploadBoxEmissions,
@@ -1994,10 +1959,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                     for (SizeT r = 0; r < uploadRectCount; ++r) {
                                         const auto& rect = uploadRects[r];
                                         g_GLESFuncs.glTexSubImage2D(
-                                            glUploadTarget, static_cast<GLint>(level), rect.lo.x(),
-                                            rect.lo.y(), static_cast<GLsizei>(rect.hi.x() - rect.lo.x()),
-                                            static_cast<GLsizei>(rect.hi.y() - rect.lo.y()), glFormat,
-                                            glType,
+                                            glUploadTarget, static_cast<GLint>(level), rect.lo.x(), rect.lo.y(),
+                                            static_cast<GLsizei>(rect.hi.x() - rect.lo.x()),
+                                            static_cast<GLsizei>(rect.hi.y() - rect.lo.y()), glFormat, glType,
                                             ringStaged ? UnpackRingPixelOffset(stagingBlocks[r].offset)
                                                        : static_cast<const void*>(MGB_RECT_SRC_PTR(r, rect)));
                                     }
@@ -2014,13 +1978,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                     // The surrounding ScopedDefaultUnpackState shadow says 0.
                                     if (!ringStaged) g_GLESFuncs.glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
                                 } else {
-                                    g_GLESFuncs.glTexSubImage2D(glUploadTarget, static_cast<GLint>(level), 0, 0,
-                                                                static_cast<GLsizei>(uploadSize.x()),
-                                                                static_cast<GLsizei>(uploadSize.y()), glFormat,
-                                                                glType,
-                                                                ringStaged
-                                                                    ? UnpackRingPixelOffset(stagingBlocks[0].offset)
-                                                                    : uploadData);
+                                    g_GLESFuncs.glTexSubImage2D(
+                                        glUploadTarget, static_cast<GLint>(level), 0, 0,
+                                        static_cast<GLsizei>(uploadSize.x()), static_cast<GLsizei>(uploadSize.y()),
+                                        glFormat, glType,
+                                        ringStaged ? UnpackRingPixelOffset(stagingBlocks[0].offset) : uploadData);
                                 }
                                 break;
                             case TextureTarget::Texture3D:
@@ -2036,8 +1998,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                     for (SizeT r = 0; r < uploadRectCount; ++r) {
                                         const auto box = ToBackendBox(uploadRects[r]);
                                         g_GLESFuncs.glTexSubImage3D(
-                                            glUploadTarget, static_cast<GLint>(level), box.x, box.y, box.z,
-                                            box.w, box.h, box.d, glFormat, glType,
+                                            glUploadTarget, static_cast<GLint>(level), box.x, box.y, box.z, box.w,
+                                            box.h, box.d, glFormat, glType,
                                             ringStaged ? UnpackRingPixelOffset(stagingBlocks[r].offset)
                                                        : static_cast<const void*>(MGB_RECT_SRC_PTR(r, uploadRects[r])));
                                     }
@@ -2051,29 +2013,27 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                         g_GLESFuncs.glPixelStorei(GL_UNPACK_IMAGE_HEIGHT, imageHeight);
                                     }
                                     const auto box = ToBackendBox(dirtyRegion);
-                                    g_GLESFuncs.glTexSubImage3D(
-                                        glUploadTarget, static_cast<GLint>(level), box.x, box.y, box.z, box.w, box.h,
-                                        box.d, glFormat, glType,
-                                        ringStaged ? UnpackRingPixelOffset(stagingBlocks[0].offset)
-                                                   : static_cast<const void*>(regionPtr));
+                                    g_GLESFuncs.glTexSubImage3D(glUploadTarget, static_cast<GLint>(level), box.x, box.y,
+                                                                box.z, box.w, box.h, box.d, glFormat, glType,
+                                                                ringStaged
+                                                                    ? UnpackRingPixelOffset(stagingBlocks[0].offset)
+                                                                    : static_cast<const void*>(regionPtr));
                                     if (!ringStaged) {
                                         g_GLESFuncs.glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
                                         g_GLESFuncs.glPixelStorei(GL_UNPACK_IMAGE_HEIGHT, 0);
                                     }
                                 } else {
-                                    g_GLESFuncs.glTexSubImage3D(glUploadTarget, static_cast<GLint>(level), 0, 0, 0,
-                                                                static_cast<GLsizei>(uploadSize.x()),
-                                                                static_cast<GLsizei>(uploadSize.y()),
-                                                                static_cast<GLsizei>(uploadSize.z()), glFormat,
-                                                                glType,
-                                                                ringStaged
-                                                                    ? UnpackRingPixelOffset(stagingBlocks[0].offset)
-                                                                    : uploadData);
+                                    g_GLESFuncs.glTexSubImage3D(
+                                        glUploadTarget, static_cast<GLint>(level), 0, 0, 0,
+                                        static_cast<GLsizei>(uploadSize.x()), static_cast<GLsizei>(uploadSize.y()),
+                                        static_cast<GLsizei>(uploadSize.z()), glFormat, glType,
+                                        ringStaged ? UnpackRingPixelOffset(stagingBlocks[0].offset) : uploadData);
                                 }
                                 break;
                             default:
-                                MGLOG_E_ONCE("Unhandled texture target %s",
-                                        MG_Util::ConvertTextureTargetToString(MGB_TEXTURE_TARGET(stateTextureObject)).c_str());
+                                MGLOG_E_ONCE("Unhandled texture target %s", MG_Util::ConvertTextureTargetToString(
+                                                                                MGB_TEXTURE_TARGET(stateTextureObject))
+                                                                                .c_str());
                                 break;
                             }
                             if (ringStaged) {
@@ -2114,7 +2074,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     if (MG_Pipe::MGPipeHandleIsNull(pushedTexBuffer)) {
                         MGLOG_E_ONCE("MGPipe: buffer texture %u's descriptor names no backing buffer on "
                                      "the handle arm, so it cannot be backed (handle {%u, %u})",
-                                     MGB_TEXTURE_DIAG_NAME(pushedStorage, stateTextureObject), pushedRes.Slot, pushedRes.Gen);
+                                     MGB_TEXTURE_DIAG_NAME(pushedStorage, stateTextureObject), pushedRes.Slot,
+                                     pushedRes.Gen);
                         return;
                     }
                 }
@@ -2127,8 +2088,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // transport the conjunct is already implied by `pushedStorage != nullptr`, so
                 // this changes no behaviour and closes no door; it says the thing instead of
                 // depending on it.
-                const Bool texBufferByRecord = pushedStorage != nullptr &&
-                                               MGB_TEXTURE_HANDLE_ARM_OFF(*this) == false;
+                const Bool texBufferByRecord = pushedStorage != nullptr && MGB_TEXTURE_HANDLE_ARM_OFF(*this) == false;
                 static const SharedPtr<MG_State::GLState::BufferObject> kNoFrontendBuffer{};
                 auto& buffer = texBufferByRecord ? kNoFrontendBuffer
                                                  : textureBufferObject->GetBufferBindingSlot().GetBoundObject();
@@ -2147,11 +2107,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 Bool needsRegeneration = !m_isInitialized || (currentTextureInfo != m_prevTextureInfo);
 
                 // Need to sync texture buffer if not synced yet
-                auto* backendBufferResource =
-                    BufferImpl::EnsureBufferResourceForHandle(buffer, pushedTexBuffer);
+                auto* backendBufferResource = BufferImpl::EnsureBufferResourceForHandle(buffer, pushedTexBuffer);
                 if (!backendBufferResource || backendBufferResource->id == 0) {
                     MGLOG_E_ONCE("Failed to sync backing buffer for texture buffer with ID: %u",
-                            MGB_TEXTURE_DIAG_NAME(pushedStorage, stateTextureObject));
+                                 MGB_TEXTURE_DIAG_NAME(pushedStorage, stateTextureObject));
                     return;
                 }
 
@@ -2159,8 +2118,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 auto backendId = backendBufferResource->id;
 
                 GLenum glInternalFormat, glType, glFormat;
-                TextureImpl::GenerateTextureFormatInfo(MGB_STORAGE_FORMAT(textureBufferObject), &glInternalFormat, &glFormat,
-                                                       &glType, TextureTarget::TextureBuffer);
+                TextureImpl::GenerateTextureFormatInfo(MGB_STORAGE_FORMAT(textureBufferObject), &glInternalFormat,
+                                                       &glFormat, &glType, TextureTarget::TextureBuffer);
                 // The view half of the buffer-image SPLIT. A buffer texture has no storage of its
                 // own to widen, but the VIEW its format describes can be re-described one
                 // component at a time over the same bytes - rg32f over N texels is r32f over 2N -
@@ -2228,12 +2187,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                pushedStorage->Desc.BufSize == MG_Pipe::kMGPipeWholeBuffer)
                             : (textureBufferObject->GetBufferRangeOffset() == 0 &&
                                textureBufferObject->GetBufferRangeSizeInBytes() == buffer->GetSize());
-                    const SizeT rangeSize =
-                        pushedStorage == nullptr
-                            ? textureBufferObject->GetBufferRangeSizeInBytes()
-                            : (pushedStorage->Desc.BufSize == MG_Pipe::kMGPipeWholeBuffer
-                                   ? (buffer ? buffer->GetSize() : 0u)
-                                   : static_cast<SizeT>(pushedStorage->Desc.BufSize));
+                    const SizeT rangeSize = pushedStorage == nullptr
+                                                ? textureBufferObject->GetBufferRangeSizeInBytes()
+                                                : (pushedStorage->Desc.BufSize == MG_Pipe::kMGPipeWholeBuffer
+                                                       ? (buffer ? buffer->GetSize() : 0u)
+                                                       : static_cast<SizeT>(pushedStorage->Desc.BufSize));
                     // Through CallTexBuffer/CallTexBufferRange rather than g_GLESFuncs directly:
                     // the unsuffixed entry points are the ES 3.2 core spelling, and a driver
                     // whose buffer textures come from EXT/OES_texture_buffer exports the
@@ -2244,15 +2202,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                                    static_cast<GLintptr>(rangeOffset),
                                                    static_cast<GLsizeiptr>(rangeSize))) {
                         MGLOG_W_ONCE("Texture buffer %u names a sub-range but the driver has no "
-                                "glTexBufferRange; binding the whole buffer instead",
-                                MGB_TEXTURE_DIAG_NAME(pushedStorage, stateTextureObject));
+                                     "glTexBufferRange; binding the whole buffer instead",
+                                     MGB_TEXTURE_DIAG_NAME(pushedStorage, stateTextureObject));
                         CallTexBuffer(GL_TEXTURE_BUFFER, glInternalFormat, backendId);
                     }
                     DebugImpl::ErrorLopper::Loop(
                         [file = __FILE__, line = __LINE__, func = __func__, glInternalFormat, backendId](GLenum err) {
-                            MGLOG_D("%s(%s:%d) glTexBuffer(format=%s, buffer=%u) ES error: %s",
-                                    func, file, line, MG_Util::ConvertGLEnumToString(glInternalFormat).c_str(),
-                                    backendId, MG_Util::ConvertGLEnumToString(err).c_str());
+                            MGLOG_D("%s(%s:%d) glTexBuffer(format=%s, buffer=%u) ES error: %s", func, file, line,
+                                    MG_Util::ConvertGLEnumToString(glInternalFormat).c_str(), backendId,
+                                    MG_Util::ConvertGLEnumToString(err).c_str());
                         });
 
                     // The image half of the SPLIT, on its own name over the same buffer. Minted
@@ -2281,8 +2239,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                             // rather than names: leaving it claiming THIS object is bound would
                             // make the next Bind(GL_TEXTURE_BUFFER) a no-op and leave the split
                             // view bound in the application texture's place.
-                            g_boundTexturesCache[g_activeTextureUnit][static_cast<SizeT>(
-                                TextureTarget::TextureBuffer)] = nullptr;
+                            g_boundTexturesCache[g_activeTextureUnit]
+                                                [static_cast<SizeT>(TextureTarget::TextureBuffer)] = nullptr;
                         }
                     }
                 }
@@ -2293,9 +2251,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // backstop for a state object that grew a new storage kind. Skipping the upload
                 // renders wrong; throwing unwinds through the C GL ABI and kills the process.
                 MGLOG_E_ONCE("DirectGLES texture sync: no upload path for storage type %d on texture %u; "
-                        "skipping this sync",
-                        static_cast<int>(MGB_TEXTURE_STORAGE_KIND(pushedStorage, stateTextureObject)),
-                        MGB_TEXTURE_DIAG_NAME(pushedStorage, stateTextureObject));
+                             "skipping this sync",
+                             static_cast<int>(MGB_TEXTURE_STORAGE_KIND(pushedStorage, stateTextureObject)),
+                             MGB_TEXTURE_DIAG_NAME(pushedStorage, stateTextureObject));
                 break;
             }
 

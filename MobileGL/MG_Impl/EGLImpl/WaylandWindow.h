@@ -90,7 +90,11 @@ namespace MobileGL::MG_Impl::EGLImpl::Wayland {
         // that failed - or was read back - on a lost device is nothing but zeros: kLost, with no
         // buffer attached and the window left where it was, so the caller reports the loss at
         // this swap instead of showing a transparent window that the toolkit never redraws.
-        enum class PresentResult { kPresented, kNotShown, kLost };
+        enum class PresentResult {
+            kPresented,
+            kNotShown,
+            kLost
+        };
         PresentResult Present(const MG_Util::Damage::Region& damage, Int swapInterval, Bool (*sessionLost)());
 
         // wl_egl_window_resize's effect, taken: true (with the new size) when the application gave

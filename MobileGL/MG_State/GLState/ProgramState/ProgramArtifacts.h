@@ -38,17 +38,17 @@ namespace MobileGL::MG_State::GLState {
         Bool isOpaque = false;
         Bool isTexture = false;
         Bool isImage = false;
-        Bool isDouble = false;   // getBasicType() == EbtDouble
-        Bool isVoid = false;     // getBasicType() == EbtVoid (hidden block members)
-        Bool isBuffer = false;   // getQualifier().storage == EvqBuffer
-        Bool isPatch = false;    // getQualifier().patch
-        Bool hasIndex = false;   // getQualifier().hasIndex()
-        Bool hasFormat = false;  // getQualifier().hasFormat()
+        Bool isDouble = false;  // getBasicType() == EbtDouble
+        Bool isVoid = false;    // getBasicType() == EbtVoid (hidden block members)
+        Bool isBuffer = false;  // getQualifier().storage == EvqBuffer
+        Bool isPatch = false;   // getQualifier().patch
+        Bool hasIndex = false;  // getQualifier().hasIndex()
+        Bool hasFormat = false; // getQualifier().hasFormat()
         Int vectorSize = 0;
         Int matrixCols = 0;
         Int matrixRows = 0;
-        Int layoutIndex = 0;     // getQualifier().layoutIndex
-        Uint layoutFormat = 0;   // getQualifier().getFormat()
+        Int layoutIndex = 0;   // getQualifier().layoutIndex
+        Uint layoutFormat = 0; // getQualifier().getFormat()
         // glslang TLayoutMatrix, widened. For a uniform this is already RESOLVED against
         // the owning block's qualifier, so the getUniformBlock() fallback the old
         // accessors carried is gone.
@@ -134,10 +134,10 @@ namespace MobileGL::MG_State::GLState {
     struct XfbVarying {
         String name;
         GLenum type = GL_FLOAT;
-        GLint size = 1;           // array element count
-        Uint32 bufferIndex = 0;   // capture buffer slot
-        Uint32 offsetBytes = 0;   // offset within the capture buffer
-        Uint32 byteSize = 0;      // bytes captured per vertex for this varying
+        GLint size = 1;         // array element count
+        Uint32 bufferIndex = 0; // capture buffer slot
+        Uint32 offsetBytes = 0; // offset within the capture buffer
+        Uint32 byteSize = 0;    // bytes captured per vertex for this varying
         // Offset within the gap-free record a backend that cannot express the GL
         // layout captures into; see NeedsScatteredTransformFeedbackCapture.
         Uint32 packedOffsetBytes = 0;
@@ -622,7 +622,8 @@ namespace MobileGL::MG_State::GLState {
     // ---- trip wires ----
     // TypeFacts is a POD on every ABI: 13 Bool + 3 bytes of padding + 7 x 4-byte scalars.
     static_assert(std::is_trivially_copyable_v<TypeFacts> && sizeof(TypeFacts) == 44,
-                  "TypeFacts changed: add the field to VisitFields(TypeFacts) (and ProgramArtifactsCodec.cpp's serializer), then update this number");
+                  "TypeFacts changed: add the field to VisitFields(TypeFacts) (and ProgramArtifactsCodec.cpp's "
+                  "serializer), then update this number");
     // The container-bearing structs have one size per standard library (std::string and
     // std::set differ between libstdc++ and libc++), so their numbers are pinned PER STL:
     // libstdc++ (the Linux CI toolchain) here, libc++ (the NDK) by the integrator, MSVC
@@ -640,12 +641,16 @@ namespace MobileGL::MG_State::GLState {
 #endif
 #ifdef MGL_LINKARTIFACTS_SIZE
     static_assert(sizeof(ResourceReflection) == MGL_RESOURCEREFLECTION_SIZE,
-                  "ResourceReflection changed size: add the field to VisitFields(ResourceReflection) (and ProgramArtifactsCodec.cpp's serializer), then update this number");
+                  "ResourceReflection changed size: add the field to VisitFields(ResourceReflection) (and "
+                  "ProgramArtifactsCodec.cpp's serializer), then update this number");
     static_assert(sizeof(XfbVarying) == MGL_XFBVARYING_SIZE,
-                  "XfbVarying changed size: add the field to VisitFields(XfbVarying) (and ProgramArtifactsCodec.cpp's serializer), then update this number");
+                  "XfbVarying changed size: add the field to VisitFields(XfbVarying) (and ProgramArtifactsCodec.cpp's "
+                  "serializer), then update this number");
     static_assert(sizeof(LinkArtifacts) == MGL_LINKARTIFACTS_SIZE,
-                  "LinkArtifacts changed size: add the field to VisitFields(LinkArtifacts) (and ProgramArtifactsCodec.cpp's serializer), then update this number");
+                  "LinkArtifacts changed size: add the field to VisitFields(LinkArtifacts) (and "
+                  "ProgramArtifactsCodec.cpp's serializer), then update this number");
     static_assert(sizeof(SpirvArtifacts) == MGL_SPIRVARTIFACTS_SIZE,
-                  "SpirvArtifacts changed size: add the field to VisitFields(SpirvArtifacts) (and ProgramArtifactsCodec.cpp's serializer), then update this number");
+                  "SpirvArtifacts changed size: add the field to VisitFields(SpirvArtifacts) (and "
+                  "ProgramArtifactsCodec.cpp's serializer), then update this number");
 #endif
 } // namespace MobileGL::MG_State::GLState

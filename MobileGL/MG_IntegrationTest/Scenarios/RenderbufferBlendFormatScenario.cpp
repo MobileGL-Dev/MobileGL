@@ -116,8 +116,7 @@ void main()
                 glBindFramebuffer(GL_FRAMEBUFFER, m_fbo);
                 glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, m_renderbuffer);
                 const GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
-                for (int i = 0; i < 16 && glGetError() != GL_NO_ERROR; ++i) {
-                }
+                for (int i = 0; i < 16 && glGetError() != GL_NO_ERROR; ++i) {}
                 return status == GL_FRAMEBUFFER_COMPLETE;
             }
 
@@ -146,10 +145,11 @@ void main()
             const Image image = ReadPixels(kExtent, kExtent);
             ASSERT_FALSE(image.Empty()) << what;
             const Rgba8 centre = image.At(kExtent / 2, kExtent / 2);
-            EXPECT_GT(int(centre.r), 40) << what << ": got " << centre << ", which is darker than a blend of "
-                                                              "black and 50% white";
-            EXPECT_LT(int(centre.r), 215) << what << ": got " << centre
-                                          << ", which is the source colour - blending was disabled";
+            EXPECT_GT(int(centre.r), 40) << what << ": got " << centre
+                                         << ", which is darker than a blend of "
+                                            "black and 50% white";
+            EXPECT_LT(int(centre.r), 215)
+                << what << ": got " << centre << ", which is the source colour - blending was disabled";
         }
 
     } // namespace

@@ -425,32 +425,52 @@ namespace MobileGL {
 
     constexpr Uint8 MGPackShadingRate(GLenum rate) {
         switch (rate) {
-        case GL_SHADING_RATE_1X1_PIXELS_EXT: return 0x0u;
-        case GL_SHADING_RATE_1X2_PIXELS_EXT: return 0x1u;
-        case GL_SHADING_RATE_1X4_PIXELS_EXT: return 0x2u;
-        case GL_SHADING_RATE_2X1_PIXELS_EXT: return 0x4u;
-        case GL_SHADING_RATE_2X2_PIXELS_EXT: return 0x5u;
-        case GL_SHADING_RATE_2X4_PIXELS_EXT: return 0x6u;
-        case GL_SHADING_RATE_4X1_PIXELS_EXT: return 0x8u;
-        case GL_SHADING_RATE_4X2_PIXELS_EXT: return 0x9u;
-        case GL_SHADING_RATE_4X4_PIXELS_EXT: return 0xau;
-        default: return kMGInvalidShadingRateEncoding;
+        case GL_SHADING_RATE_1X1_PIXELS_EXT:
+            return 0x0u;
+        case GL_SHADING_RATE_1X2_PIXELS_EXT:
+            return 0x1u;
+        case GL_SHADING_RATE_1X4_PIXELS_EXT:
+            return 0x2u;
+        case GL_SHADING_RATE_2X1_PIXELS_EXT:
+            return 0x4u;
+        case GL_SHADING_RATE_2X2_PIXELS_EXT:
+            return 0x5u;
+        case GL_SHADING_RATE_2X4_PIXELS_EXT:
+            return 0x6u;
+        case GL_SHADING_RATE_4X1_PIXELS_EXT:
+            return 0x8u;
+        case GL_SHADING_RATE_4X2_PIXELS_EXT:
+            return 0x9u;
+        case GL_SHADING_RATE_4X4_PIXELS_EXT:
+            return 0xau;
+        default:
+            return kMGInvalidShadingRateEncoding;
         }
     }
 
     // The inverse; GL_NONE for an encoding no enum names (a 3 in either half, or > 0xa).
     constexpr GLenum MGUnpackShadingRate(Uint8 packed) {
         switch (packed) {
-        case 0x0u: return GL_SHADING_RATE_1X1_PIXELS_EXT;
-        case 0x1u: return GL_SHADING_RATE_1X2_PIXELS_EXT;
-        case 0x2u: return GL_SHADING_RATE_1X4_PIXELS_EXT;
-        case 0x4u: return GL_SHADING_RATE_2X1_PIXELS_EXT;
-        case 0x5u: return GL_SHADING_RATE_2X2_PIXELS_EXT;
-        case 0x6u: return GL_SHADING_RATE_2X4_PIXELS_EXT;
-        case 0x8u: return GL_SHADING_RATE_4X1_PIXELS_EXT;
-        case 0x9u: return GL_SHADING_RATE_4X2_PIXELS_EXT;
-        case 0xau: return GL_SHADING_RATE_4X4_PIXELS_EXT;
-        default: return GL_NONE;
+        case 0x0u:
+            return GL_SHADING_RATE_1X1_PIXELS_EXT;
+        case 0x1u:
+            return GL_SHADING_RATE_1X2_PIXELS_EXT;
+        case 0x2u:
+            return GL_SHADING_RATE_1X4_PIXELS_EXT;
+        case 0x4u:
+            return GL_SHADING_RATE_2X1_PIXELS_EXT;
+        case 0x5u:
+            return GL_SHADING_RATE_2X2_PIXELS_EXT;
+        case 0x6u:
+            return GL_SHADING_RATE_2X4_PIXELS_EXT;
+        case 0x8u:
+            return GL_SHADING_RATE_4X1_PIXELS_EXT;
+        case 0x9u:
+            return GL_SHADING_RATE_4X2_PIXELS_EXT;
+        case 0xau:
+            return GL_SHADING_RATE_4X4_PIXELS_EXT;
+        default:
+            return GL_NONE;
         }
     }
 
@@ -630,21 +650,21 @@ namespace MobileGL {
     // LegacyStride / LegacyPointer are likewise absent - they are the glGetVertexAttrib*
     // query answers and stay client-side, because nothing but the query path reads them.
     struct MGPVertexAttribWire {
-        Uint64 Offset;       //  0
-        Int32 Stride;        //  8
-        Uint32 Type;         // 12  DataType
-        Uint8 Size;          // 16  1..4; GL_BGRA keeps 4
-        Uint8 Enabled;       // 17
-        Uint8 Normalized;    // 18
-        Uint8 IsInteger;     // 19
+        Uint64 Offset;    //  0
+        Int32 Stride;     //  8
+        Uint32 Type;      // 12  DataType
+        Uint8 Size;       // 16  1..4; GL_BGRA keeps 4
+        Uint8 Enabled;    // 17
+        Uint8 Normalized; // 18
+        Uint8 IsInteger;  // 19
         // CARRIED SEPARATELY from Type == Float64, and it has to be: VertexAttribFormat(
         // GL_DOUBLE) also reads doubles from memory but asks for them converted to float,
         // while VertexAttribLFormat keeps all 64 bits. The backend's fp64 narrowing and its
         // Adreno disabled-attribute workaround both key on telling the two apart.
-        Uint8 IsLong;        // 20
-        Uint8 IsBgra;        // 21
-        Uint8 BindingIndex;  // 22  which MGPVertexBuffer entry feeds it (< MAX_VERTEX_ATTRIBS)
-        Uint8 Pad0;          // 23
+        Uint8 IsLong;       // 20
+        Uint8 IsBgra;       // 21
+        Uint8 BindingIndex; // 22  which MGPVertexBuffer entry feeds it (< MAX_VERTEX_ATTRIBS)
+        Uint8 Pad0;         // 23
     };
 
     // The ARB_vertex_attrib_binding view. Buffer identity is again in set_vertex_buffers.
@@ -733,11 +753,9 @@ namespace MobileGL {
     // blob they ride in is memcpy'd, and a field silently changing width is a protocol break
     // no test would otherwise see. (MGP_ASSERT_POD is MGPipeTypes.h's and that header
     // includes this one, so the assertions are spelled out here instead.)
-    static_assert(std::is_trivially_copyable_v<MGPVertexAttribWire> &&
-                  sizeof(MGPVertexAttribWire) == 24);
+    static_assert(std::is_trivially_copyable_v<MGPVertexAttribWire> && sizeof(MGPVertexAttribWire) == 24);
     static_assert(std::is_standard_layout_v<MGPVertexAttribWire>);
-    static_assert(std::is_trivially_copyable_v<MGPVertexBindingPointWire> &&
-                  sizeof(MGPVertexBindingPointWire) == 16);
+    static_assert(std::is_trivially_copyable_v<MGPVertexBindingPointWire> && sizeof(MGPVertexBindingPointWire) == 16);
     static_assert(std::is_standard_layout_v<MGPVertexBindingPointWire>);
 } // namespace MobileGL
 #endif // MOBILEGL_MG_PIPE_VALUE_TYPES_H

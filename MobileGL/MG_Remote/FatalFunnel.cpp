@@ -8,7 +8,7 @@
 
 #include <MG_Remote/FatalFunnel.h>
 
-#include "../Includes.h" // MGLOG_F and the umbrella; a .cpp may pull it, a Transport/ header may not
+#include "../Includes.h"             // MGLOG_F and the umbrella; a .cpp may pull it, a Transport/ header may not
 #include <MG_Pipe/PipeSessionFail.h> // the seam MG_Backend's renderer dies through
 #include "Client/ClientSession.h"
 #include "Protocol/generated/protocol_generated.h"
@@ -67,8 +67,7 @@ namespace MobileGL::MG_Remote {
             return MGFatalFamily::ProtocolCorruption;
         }
 
-        [[noreturn]] void PipeSessionFailAdapter(MG_Pipe::MGPipeFatalFamily family,
-                                                 const char* line) {
+        [[noreturn]] void PipeSessionFailAdapter(MG_Pipe::MGPipeFatalFamily family, const char* line) {
             SessionFail(MapPipeFamily(family), "%s", line);
         }
 
@@ -94,8 +93,7 @@ namespace MobileGL::MG_Remote {
         void FormatFaultLine(char (&line)[512], const char* fmt, va_list args) {
             const int written = std::vsnprintf(line, sizeof(line), fmt, args);
             if (written < 0) {
-                std::snprintf(line, sizeof(line),
-                              "MG_Remote: unformattable Fatal diagnostic (format=%s)", fmt);
+                std::snprintf(line, sizeof(line), "MG_Remote: unformattable Fatal diagnostic (format=%s)", fmt);
             }
         }
 
@@ -138,7 +136,9 @@ namespace MobileGL::MG_Remote {
         std::unordered_map<int, LatchState*> g_domains;
         int g_nextDomain = 1;
 
-        LatchState& Latch() { return *t_latch; }
+        LatchState& Latch() {
+            return *t_latch;
+        }
     } // namespace
 
     int FatalLatchDomainOpen() {
@@ -177,7 +177,9 @@ namespace MobileGL::MG_Remote {
         return previous->id;
     }
 
-    void ArmSessionLatch() { Latch().armed.store(true, std::memory_order_release); }
+    void ArmSessionLatch() {
+        Latch().armed.store(true, std::memory_order_release);
+    }
 
     void ResetSessionLatch() {
         LatchState& latch = Latch();
@@ -189,9 +191,13 @@ namespace MobileGL::MG_Remote {
         latch.latched.store(false, std::memory_order_release);
     }
 
-    bool SessionLatchArmed() { return Latch().armed.load(std::memory_order_acquire); }
+    bool SessionLatchArmed() {
+        return Latch().armed.load(std::memory_order_acquire);
+    }
 
-    bool SessionLatched() { return Latch().latched.load(std::memory_order_acquire); }
+    bool SessionLatched() {
+        return Latch().latched.load(std::memory_order_acquire);
+    }
 
     MGFatalFamily SessionLatchedFamily() {
         LatchState& latch = Latch();
@@ -199,9 +205,13 @@ namespace MobileGL::MG_Remote {
         return latch.latchedFamily;
     }
 
-    const char* SessionLatchedLine() { return Latch().latchedLine; }
+    const char* SessionLatchedLine() {
+        return Latch().latchedLine;
+    }
 
-    std::uint64_t SessionLatchCount() { return Latch().count.load(std::memory_order_relaxed); }
+    std::uint64_t SessionLatchCount() {
+        return Latch().count.load(std::memory_order_relaxed);
+    }
 
     bool SessionLatch(MGFatalFamily family, const char* fmt, ...) {
         char line[512];
@@ -249,8 +259,7 @@ namespace MobileGL::MG_Remote {
                 FatalFamilyName(family), kSessionLatchedExitCode);
         // Before the peer hears of it: what the observer records must already hold when the client
         // reacts (a lost compositor re-creates its window surface on a fresh session at once).
-        if (const SessionLatchObserver observer = g_sessionLatchObserver.load(std::memory_order_acquire))
-            observer();
+        if (const SessionLatchObserver observer = g_sessionLatchObserver.load(std::memory_order_acquire)) observer();
         PublishSessionFault(family, line);
         return false;
     }
@@ -270,41 +279,40 @@ namespace MobileGL::MG_Remote {
     }
 
     namespace {
-    void PublishSessionFault(MGFatalFamily family, const char* line) {
-        // A SessionFault frame to the peer, BEFORE the abort, so the other side's log names the
-        // family instead of reading a bare EOF (5.2). Best-effort by nature: this thread is about
-        // to die, so a send that blocks or fails changes nothing it could have changed anyway.
-        //
-        // WHICHEVER ROLE THIS PROCESS IS. Under spawn only one session is active per process -
-        // the client has ClientSession, the server has ServerSession - so publishing on whatever
-        // control plane exists reaches the far side. Under inproc both exist and the frame goes
-        // to an in-process transport the aborting process will never read; harmless, and not
-        // worth a special case that would then be the untested one.
-        //
-        // `code` is the coarse seven-value projection; `family` carries the full word; `message`
-        // is the same line just logged. seq/op are not threaded through the 90 call sites and the
-        // message already names the op where it matters, so the frame carries what it can name
-        // honestly rather than a field that is always zero.
-        Transport::ITransport* control = nullptr;
-        if (Client::ClientSession* client = Client::ClientSession::Active()) {
-            control = client->Control_Plane();
-        }
-        if (control == nullptr) {
-            if (Server::ServerSession* server = Server::ServerSession::Active()) {
-                control = server->Control_Plane();
+        void PublishSessionFault(MGFatalFamily family, const char* line) {
+            // A SessionFault frame to the peer, BEFORE the abort, so the other side's log names the
+            // family instead of reading a bare EOF (5.2). Best-effort by nature: this thread is about
+            // to die, so a send that blocks or fails changes nothing it could have changed anyway.
+            //
+            // WHICHEVER ROLE THIS PROCESS IS. Under spawn only one session is active per process -
+            // the client has ClientSession, the server has ServerSession - so publishing on whatever
+            // control plane exists reaches the far side. Under inproc both exist and the frame goes
+            // to an in-process transport the aborting process will never read; harmless, and not
+            // worth a special case that would then be the untested one.
+            //
+            // `code` is the coarse seven-value projection; `family` carries the full word; `message`
+            // is the same line just logged. seq/op are not threaded through the 90 call sites and the
+            // message already names the op where it matters, so the frame carries what it can name
+            // honestly rather than a field that is always zero.
+            Transport::ITransport* control = nullptr;
+            if (Client::ClientSession* client = Client::ClientSession::Active()) {
+                control = client->Control_Plane();
+            }
+            if (control == nullptr) {
+                if (Server::ServerSession* server = Server::ServerSession::Active()) {
+                    control = server->Control_Plane();
+                }
+            }
+            if (control != nullptr) {
+                ::flatbuffers::FlatBufferBuilder builder(256);
+                const auto fatal = ::MobileGL::Wire::CreateFatalDirect(builder, FatalCodeForFamily(family), line,
+                                                                       FatalFamilyName(family));
+                const auto root =
+                    ::MobileGL::Wire::CreateCtrlEnvelope(builder, ::MobileGL::Wire::CtrlMsg::Fatal, fatal.Union());
+                ::MobileGL::Wire::FinishCtrlEnvelopeBuffer(builder, root);
+                (void)control->SendFrame(MobileGLByteSpan{builder.GetBufferPointer(), builder.GetSize()});
             }
         }
-        if (control != nullptr) {
-            ::flatbuffers::FlatBufferBuilder builder(256);
-            const auto fatal = ::MobileGL::Wire::CreateFatalDirect(
-                builder, FatalCodeForFamily(family), line, FatalFamilyName(family));
-            const auto root = ::MobileGL::Wire::CreateCtrlEnvelope(
-                builder, ::MobileGL::Wire::CtrlMsg::Fatal, fatal.Union());
-            ::MobileGL::Wire::FinishCtrlEnvelopeBuffer(builder, root);
-            (void)control->SendFrame(
-                MobileGLByteSpan{builder.GetBufferPointer(), builder.GetSize()});
-        }
-    }
     } // namespace
 
     // P13 W5: THE RECORD ARM'S DEATHS GO THROUGH THIS FUNNEL WHEREVER MG_Remote IS LINKED.
@@ -320,8 +328,7 @@ namespace MobileGL::MG_Remote {
             return SessionLatch(family, "%s", line);
         }
         [[maybe_unused]] const bool g_recordFailHooksRegistered = [] {
-            MG_Pipe::MGPipeInstallRecordFailHooks(&RecordFailThroughFunnel, &RecordLatchThroughFunnel,
-                                                  &SessionLatched);
+            MG_Pipe::MGPipeInstallRecordFailHooks(&RecordFailThroughFunnel, &RecordLatchThroughFunnel, &SessionLatched);
             return true;
         }();
     } // namespace

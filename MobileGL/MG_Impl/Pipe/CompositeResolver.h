@@ -64,8 +64,8 @@ namespace MobileGL::MG_Pipe {
         // one death helper and in its fixed order. That is the pipeline-cache release path; the
         // composite's own destructor is the other one and the second of the two is the proven
         // no-op.
-        MGPipeHandle Observe(Uint64 contextId, const ProgramPipelineObject& pipeline,
-                             const ProgramObject& composite, MGPipeHandle handle) {
+        MGPipeHandle Observe(Uint64 contextId, const ProgramPipelineObject& pipeline, const ProgramObject& composite,
+                             MGPipeHandle handle) {
             const DrawProgramSignature signature = pipeline.ComputeDrawProgramSignature();
             const Uint pipelineName = pipeline.GetExternalIndex();
             Entry* entry = Find(contextId, pipelineName);

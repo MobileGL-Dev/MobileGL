@@ -57,8 +57,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                 static_cast<SizeT>(std::max(packParams.SkipPixels, 0)) * dstPixelBytes;
         const SizeT rowBytes = static_cast<SizeT>(width) * dstPixelBytes;
         const SizeT packedSize = dstOffset + static_cast<SizeT>(height - 1) * dstRowStride + rowBytes;
-        const auto& pixelPackBufferObject =
-            SplitReadbackPackBuffer();
+        const auto& pixelPackBufferObject = SplitReadbackPackBuffer();
         const SizeT pboOffset = reinterpret_cast<SizeT>(pixels);
         if (pixelPackBufferObject && pboOffset + packedSize > pixelPackBufferObject->GetSize()) {
             MGLOG_E_ONCE("ReadPixels: %s readback PBO is too small", what);
@@ -164,7 +163,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
         static StageSlot s_slots[2]; // [0] depth, [1] stencil
         // Each slot's own framebuffer (see StageSlot), one per native context.
         static NativeContextName s_slotFramebuffers[2];
-        static NativeContextName& SlotFramebuffer(const StageSlot& slot) { return s_slotFramebuffers[&slot - s_slots]; }
+        static NativeContextName& SlotFramebuffer(const StageSlot& slot) {
+            return s_slotFramebuffers[&slot - s_slots];
+        }
 
         // `precision highp int` is not decoration: ESSL 3.00 defaults integers to mediump in
         // the fragment language, which is allowed to be 16 bits - it would saw the top half
@@ -293,15 +294,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
             GLint stencilBits = 0;
             GLint componentType = GL_UNSIGNED_NORMALIZED;
             ClearGLErrors();
-            g_GLESFuncs.glGetFramebufferAttachmentParameteriv(GL_READ_FRAMEBUFFER,
-                                                              AttachmentPointFor(isDefault, false),
+            g_GLESFuncs.glGetFramebufferAttachmentParameteriv(GL_READ_FRAMEBUFFER, AttachmentPointFor(isDefault, false),
                                                               GL_FRAMEBUFFER_ATTACHMENT_DEPTH_SIZE, &depthBits);
-            g_GLESFuncs.glGetFramebufferAttachmentParameteriv(GL_READ_FRAMEBUFFER,
-                                                              AttachmentPointFor(isDefault, true),
+            g_GLESFuncs.glGetFramebufferAttachmentParameteriv(GL_READ_FRAMEBUFFER, AttachmentPointFor(isDefault, true),
                                                               GL_FRAMEBUFFER_ATTACHMENT_STENCIL_SIZE, &stencilBits);
-            g_GLESFuncs.glGetFramebufferAttachmentParameteriv(
-                GL_READ_FRAMEBUFFER, AttachmentPointFor(isDefault, false),
-                GL_FRAMEBUFFER_ATTACHMENT_COMPONENT_TYPE, &componentType);
+            g_GLESFuncs.glGetFramebufferAttachmentParameteriv(GL_READ_FRAMEBUFFER, AttachmentPointFor(isDefault, false),
+                                                              GL_FRAMEBUFFER_ATTACHMENT_COMPONENT_TYPE, &componentType);
             ClearGLErrors();
 
             const GLint aspectBits = stencilAspect ? stencilBits : depthBits;
@@ -439,9 +437,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 if (!EnsureStageTexture(slot, format, width, height)) {
                     continue;
                 }
-                g_GLESFuncs.glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER,
-                                                   ReplicateBlitImpl::ScratchAttachmentFor(format), GL_TEXTURE_2D,
-                                                   slot.texture, 0);
+                g_GLESFuncs.glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, ReplicateBlitImpl::ScratchAttachmentFor(format),
+                                                   GL_TEXTURE_2D, slot.texture, 0);
                 if (g_GLESFuncs.glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
                     continue;
                 }
@@ -473,8 +470,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             const Float uvScaleX = static_cast<Float>(width) / static_cast<Float>(slot.width);
             const Float uvScaleY = static_cast<Float>(height) / static_cast<Float>(slot.height);
             g_GLESFuncs.glUseProgram(stencilAspect ? s_stencilProgram : s_depthProgram);
-            g_GLESFuncs.glUniform4f(stencilAspect ? s_stencilUvTransform : s_depthUvTransform, uvScaleX, uvScaleY,
-                                    0.0f, 0.0f);
+            g_GLESFuncs.glUniform4f(stencilAspect ? s_stencilUvTransform : s_depthUvTransform, uvScaleX, uvScaleY, 0.0f,
+                                    0.0f);
             g_GLESFuncs.glViewport(0, 0, width, height);
             ClearGLErrors();
             g_GLESFuncs.glDrawArrays(GL_TRIANGLES, 0, 3);
@@ -496,7 +493,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             const GLenum readError = g_GLESFuncs.glGetError();
             if (readError != GL_NO_ERROR) {
                 MGLOG_E_ONCE("ReadPixels: could not read the %s conversion target back: %s",
-                        stencilAspect ? "stencil" : "depth", MG_Util::ConvertGLEnumToString(readError).c_str());
+                             stencilAspect ? "stencil" : "depth", MG_Util::ConvertGLEnumToString(readError).c_str());
                 return false;
             }
             return true;
@@ -516,7 +513,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             FramebufferImpl::BindFramebufferId(GL_DRAW_FRAMEBUFFER, SlotFramebuffer(slot));
             if (!StageAspect(slot, candidates, stencilAspect, isDefault, x, y, width, height)) {
                 MGLOG_E_ONCE("ReadPixels: no ES-compatible scratch format for the %s source",
-                        stencilAspect ? "stencil" : "depth");
+                             stencilAspect ? "stencil" : "depth");
                 return false;
             }
 
@@ -525,8 +522,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 return false;
             }
             FramebufferImpl::BindFramebufferId(GL_DRAW_FRAMEBUFFER, s_colorFramebuffer);
-            g_GLESFuncs.glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
-                                               s_colorTexture, 0);
+            g_GLESFuncs.glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, s_colorTexture,
+                                               0);
             if (g_GLESFuncs.glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
                 MGLOG_E_ONCE("ReadPixels: the depth/stencil conversion target is not renderable");
                 return false;
@@ -634,8 +631,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return true;
         }
         MGLOG_E_ONCE("ReadPixels: no depth readback path is available: native reads failed with %s and the "
-                "sampling emulation could not service the source",
-                MG_Util::ConvertGLEnumToString(floatError).c_str());
+                     "sampling emulation could not service the source",
+                     MG_Util::ConvertGLEnumToString(floatError).c_str());
         return false;
     }
 
@@ -645,19 +642,25 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // client asked for otherwise - 2^n - 1 for an unsigned width, 2^(n-1) - 1 for a signed one.
     // Sharing one denominator across the two signednesses would put a 0.5 depth at 32768, which
     // as a GLshort is -32768, so GL_BYTE/GL_SHORT/GL_INT each keep their own.
-    static Bool ReadPixelsDepthComponent(GLint x, GLint y, GLsizei width, GLsizei height, GLenum type,
-                                         void* pixels) {
+    static Bool ReadPixelsDepthComponent(GLint x, GLint y, GLsizei width, GLsizei height, GLenum type, void* pixels) {
         SizeT dstPixelBytes = 0;
         switch (type) {
         case GL_BYTE:
-        case GL_UNSIGNED_BYTE: dstPixelBytes = sizeof(Uint8); break;
+        case GL_UNSIGNED_BYTE:
+            dstPixelBytes = sizeof(Uint8);
+            break;
         case GL_SHORT:
         case GL_UNSIGNED_SHORT:
-        case GL_HALF_FLOAT: dstPixelBytes = sizeof(Uint16); break;
+        case GL_HALF_FLOAT:
+            dstPixelBytes = sizeof(Uint16);
+            break;
         case GL_INT:
         case GL_UNSIGNED_INT:
-        case GL_FLOAT: dstPixelBytes = sizeof(Uint32); break;
-        default: return false;
+        case GL_FLOAT:
+            dstPixelBytes = sizeof(Uint32);
+            break;
+        default:
+            return false;
         }
         if (width <= 0 || height <= 0) {
             return true;
@@ -668,47 +671,41 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return true; // already reported; nothing was written, as before
         }
 
-        StoreReadbackRowsToClient(width, height, dstPixelBytes, pixels, "depth",
-                                  [&](GLsizei row, Uint8* dst) {
-                                      const Float* srcRow =
-                                          depth.data() + static_cast<SizeT>(row) * static_cast<SizeT>(width);
-                                      for (GLsizei col = 0; col < width; ++col) {
-                                          const Float depthValue = srcRow[col];
-                                          switch (type) {
-                                          case GL_BYTE:
-                                              reinterpret_cast<Int8*>(dst)[col] = static_cast<Int8>(
-                                                  NormalizedDepthToUnsigned(depthValue, 127.0));
-                                              break;
-                                          case GL_UNSIGNED_BYTE:
-                                              dst[col] = static_cast<Uint8>(
-                                                  NormalizedDepthToUnsigned(depthValue, 255.0));
-                                              break;
-                                          case GL_SHORT:
-                                              reinterpret_cast<Int16*>(dst)[col] = static_cast<Int16>(
-                                                  NormalizedDepthToUnsigned(depthValue, 32767.0));
-                                              break;
-                                          case GL_UNSIGNED_SHORT:
-                                              reinterpret_cast<Uint16*>(dst)[col] = static_cast<Uint16>(
-                                                  NormalizedDepthToUnsigned(depthValue, 65535.0));
-                                              break;
-                                          case GL_INT:
-                                              reinterpret_cast<Int32*>(dst)[col] = static_cast<Int32>(
-                                                  NormalizedDepthToUnsigned(depthValue, 2147483647.0));
-                                              break;
-                                          case GL_UNSIGNED_INT:
-                                              reinterpret_cast<Uint32*>(dst)[col] =
-                                                  NormalizedDepthToUnsigned(depthValue, 4294967295.0);
-                                              break;
-                                          case GL_HALF_FLOAT:
-                                              reinterpret_cast<Uint16*>(dst)[col] =
-                                                  MG_Util::EncodeFloatToHalfBits(depthValue);
-                                              break;
-                                          default:
-                                              reinterpret_cast<GLfloat*>(dst)[col] = depthValue;
-                                              break;
-                                          }
-                                      }
-                                  });
+        StoreReadbackRowsToClient(width, height, dstPixelBytes, pixels, "depth", [&](GLsizei row, Uint8* dst) {
+            const Float* srcRow = depth.data() + static_cast<SizeT>(row) * static_cast<SizeT>(width);
+            for (GLsizei col = 0; col < width; ++col) {
+                const Float depthValue = srcRow[col];
+                switch (type) {
+                case GL_BYTE:
+                    reinterpret_cast<Int8*>(dst)[col] = static_cast<Int8>(NormalizedDepthToUnsigned(depthValue, 127.0));
+                    break;
+                case GL_UNSIGNED_BYTE:
+                    dst[col] = static_cast<Uint8>(NormalizedDepthToUnsigned(depthValue, 255.0));
+                    break;
+                case GL_SHORT:
+                    reinterpret_cast<Int16*>(dst)[col] =
+                        static_cast<Int16>(NormalizedDepthToUnsigned(depthValue, 32767.0));
+                    break;
+                case GL_UNSIGNED_SHORT:
+                    reinterpret_cast<Uint16*>(dst)[col] =
+                        static_cast<Uint16>(NormalizedDepthToUnsigned(depthValue, 65535.0));
+                    break;
+                case GL_INT:
+                    reinterpret_cast<Int32*>(dst)[col] =
+                        static_cast<Int32>(NormalizedDepthToUnsigned(depthValue, 2147483647.0));
+                    break;
+                case GL_UNSIGNED_INT:
+                    reinterpret_cast<Uint32*>(dst)[col] = NormalizedDepthToUnsigned(depthValue, 4294967295.0);
+                    break;
+                case GL_HALF_FLOAT:
+                    reinterpret_cast<Uint16*>(dst)[col] = MG_Util::EncodeFloatToHalfBits(depthValue);
+                    break;
+                default:
+                    reinterpret_cast<GLfloat*>(dst)[col] = depthValue;
+                    break;
+                }
+            }
+        });
         return true;
     }
 
@@ -762,16 +759,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return true;
         }
         MGLOG_E_ONCE("ReadPixels: no stencil readback path is available: native reads failed with %s and the "
-                "sampling emulation could not service the source",
-                MG_Util::ConvertGLEnumToString(packedError).c_str());
+                     "sampling emulation could not service the source",
+                     MG_Util::ConvertGLEnumToString(packedError).c_str());
         return false;
     }
 
     // GL_STENCIL_INDEX readback into the client's integer layout, honouring the PACK
     // pixel-store parameters. Handles the widths desktop clients ask for; the stencil
     // values themselves are always 8 bits.
-    static Bool ReadPixelsStencilViaNative(GLint x, GLint y, GLsizei width, GLsizei height, GLenum type,
-                                           void* pixels) {
+    static Bool ReadPixelsStencilViaNative(GLint x, GLint y, GLsizei width, GLsizei height, GLenum type, void* pixels) {
         // GL 4.6 core 18.2.8: a stencil index is written unconverted into whichever integer width
         // the client asked for, and converted to a float value for the floating-point widths - both
         // GL_FLOAT and GL_HALF_FLOAT. The signed widths are as legal as the unsigned ones - the CTS
@@ -781,14 +777,23 @@ namespace MobileGL::MG_Backend::DirectGLES {
         SizeT dstPixelBytes = 0;
         switch (type) {
         case GL_UNSIGNED_BYTE:
-        case GL_BYTE: dstPixelBytes = sizeof(Uint8); break;
+        case GL_BYTE:
+            dstPixelBytes = sizeof(Uint8);
+            break;
         case GL_UNSIGNED_SHORT:
         case GL_SHORT:
-        case GL_HALF_FLOAT: dstPixelBytes = sizeof(Uint16); break;
+        case GL_HALF_FLOAT:
+            dstPixelBytes = sizeof(Uint16);
+            break;
         case GL_UNSIGNED_INT:
-        case GL_INT: dstPixelBytes = sizeof(Uint32); break;
-        case GL_FLOAT: dstPixelBytes = sizeof(GLfloat); break;
-        default: return false;
+        case GL_INT:
+            dstPixelBytes = sizeof(Uint32);
+            break;
+        case GL_FLOAT:
+            dstPixelBytes = sizeof(GLfloat);
+            break;
+        default:
+            return false;
         }
         if (width <= 0 || height <= 0) {
             return true;
@@ -799,33 +804,31 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return true;
         }
 
-        StoreReadbackRowsToClient(width, height, dstPixelBytes, pixels, "stencil",
-                                  [&](GLsizei row, Uint8* dst) {
-                                      const Uint8* srcRow =
-                                          raw.data() + static_cast<SizeT>(row) * static_cast<SizeT>(width);
-                                      for (GLsizei col = 0; col < width; ++col) {
-                                          switch (type) {
-                                          case GL_UNSIGNED_BYTE:
-                                          case GL_BYTE:
-                                              dst[static_cast<SizeT>(col)] = srcRow[col];
-                                              break;
-                                          case GL_UNSIGNED_SHORT:
-                                          case GL_SHORT:
-                                              reinterpret_cast<Uint16*>(dst)[col] = srcRow[col];
-                                              break;
-                                          case GL_FLOAT:
-                                              reinterpret_cast<GLfloat*>(dst)[col] = static_cast<GLfloat>(srcRow[col]);
-                                              break;
-                                          case GL_HALF_FLOAT:
-                                              reinterpret_cast<Uint16*>(dst)[col] =
-                                                  MG_Util::EncodeFloatToHalfBits(static_cast<Float>(srcRow[col]));
-                                              break;
-                                          default:
-                                              reinterpret_cast<Uint32*>(dst)[col] = srcRow[col];
-                                              break;
-                                          }
-                                      }
-                                  });
+        StoreReadbackRowsToClient(width, height, dstPixelBytes, pixels, "stencil", [&](GLsizei row, Uint8* dst) {
+            const Uint8* srcRow = raw.data() + static_cast<SizeT>(row) * static_cast<SizeT>(width);
+            for (GLsizei col = 0; col < width; ++col) {
+                switch (type) {
+                case GL_UNSIGNED_BYTE:
+                case GL_BYTE:
+                    dst[static_cast<SizeT>(col)] = srcRow[col];
+                    break;
+                case GL_UNSIGNED_SHORT:
+                case GL_SHORT:
+                    reinterpret_cast<Uint16*>(dst)[col] = srcRow[col];
+                    break;
+                case GL_FLOAT:
+                    reinterpret_cast<GLfloat*>(dst)[col] = static_cast<GLfloat>(srcRow[col]);
+                    break;
+                case GL_HALF_FLOAT:
+                    reinterpret_cast<Uint16*>(dst)[col] =
+                        MG_Util::EncodeFloatToHalfBits(static_cast<Float>(srcRow[col]));
+                    break;
+                default:
+                    reinterpret_cast<Uint32*>(dst)[col] = srcRow[col];
+                    break;
+                }
+            }
+        });
         return true;
     }
 
@@ -837,9 +840,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                              void* pixels) {
         SizeT dstPixelBytes = 0;
         switch (type) {
-        case GL_UNSIGNED_INT_24_8: dstPixelBytes = sizeof(Uint32); break;
-        case GL_FLOAT_32_UNSIGNED_INT_24_8_REV: dstPixelBytes = sizeof(Float) + sizeof(Uint32); break;
-        default: return false;
+        case GL_UNSIGNED_INT_24_8:
+            dstPixelBytes = sizeof(Uint32);
+            break;
+        case GL_FLOAT_32_UNSIGNED_INT_24_8_REV:
+            dstPixelBytes = sizeof(Float) + sizeof(Uint32);
+            break;
+        default:
+            return false;
         }
         if (width <= 0 || height <= 0) {
             return true;
@@ -999,7 +1007,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
         data = std::move(expanded);
     }
 
-    static void DrainESErrors() { DrainDriverErrors("ReadPixels"); }
+    static void DrainESErrors() {
+        DrainDriverErrors("ReadPixels");
+    }
 
     static GLenum QueryReadAttachmentComponentType() {
         GLint framebufferId = 0;
@@ -1018,7 +1028,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
         DrainESErrors();
         return componentType != 0 ? static_cast<GLenum>(componentType) : GL_UNSIGNED_NORMALIZED;
     }
-
 
     // Reads the current READ framebuffer as wide RGBA(_INTEGER) and repacks the pixels into the client's
     // (format, type) layout. Returns false when the combination is not convertible (the caller keeps its
@@ -1062,28 +1071,26 @@ namespace MobileGL::MG_Backend::DirectGLES {
         if (width <= 0 || height <= 0) {
             return true;
         }
-        const auto& pixelPackBufferObject =
-            SplitReadbackPackBuffer();
+        const auto& pixelPackBufferObject = SplitReadbackPackBuffer();
         if (!pixelPackBufferObject && pixels == nullptr) {
             return true;
         }
 
         const GLenum attachmentComponentType = QueryReadAttachmentComponentType();
-        const Bool integerAttachment =
-            attachmentComponentType == GL_INT || attachmentComponentType == GL_UNSIGNED_INT;
+        const Bool integerAttachment = attachmentComponentType == GL_INT || attachmentComponentType == GL_UNSIGNED_INT;
         // A normalized image carrier is EXACTLY the case where the two disagree on purpose, and
         // it is the caller - which knows the TEXTURE being read, not just the attachment - that
         // says so. An integer client format through such a carrier is not a shape GL can ask for
         // (the frontend format is normalized), so it is refused here rather than converted.
         if (normalizedCarrier.Active() && (mapping.isInteger || !integerAttachment)) {
             MGLOG_E_ONCE("Readback conversion: a normalized image carrier was read as %s, which is not a "
-                    "normalized client format; skipping",
-                    MG_Util::ConvertGLEnumToString(format).c_str());
+                         "normalized client format; skipping",
+                         MG_Util::ConvertGLEnumToString(format).c_str());
             return true;
         }
         if (!normalizedCarrier.Active() && mapping.isInteger != integerAttachment) {
             MGLOG_E_ONCE("Readback conversion: integer-ness of format %s does not match the read buffer, skipping",
-                    MG_Util::ConvertGLEnumToString(format).c_str());
+                         MG_Util::ConvertGLEnumToString(format).c_str());
             return true;
         }
 
@@ -1111,9 +1118,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 (implType == GL_INT || implType == GL_UNSIGNED_INT)) {
                 candidates[candidateCount++] = {static_cast<GLenum>(implFormat), static_cast<GLenum>(implType)};
             }
-            candidates[candidateCount++] = {
-                GL_RGBA_INTEGER,
-                attachmentComponentType == GL_INT ? static_cast<GLenum>(GL_INT) : static_cast<GLenum>(GL_UNSIGNED_INT)};
+            candidates[candidateCount++] = {GL_RGBA_INTEGER, attachmentComponentType == GL_INT
+                                                                 ? static_cast<GLenum>(GL_INT)
+                                                                 : static_cast<GLenum>(GL_UNSIGNED_INT)};
         } else {
             if (GetWideReadChannelCount(static_cast<GLenum>(implFormat)) > 0 && !IsIntegerReadFormat(implFormat) &&
                 (CanDecodeWideSourceType(static_cast<GLenum>(implType)) ||
@@ -1152,8 +1159,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
             const Int channels = GetWideReadChannelCount(candidate.format);
             const SizeT candidateComponentSize = GetReadbackComponentSize(candidate.type);
-            wide.resize(static_cast<SizeT>(width) * static_cast<SizeT>(height) *
-                        static_cast<SizeT>(channels) * candidateComponentSize);
+            wide.resize(static_cast<SizeT>(width) * static_cast<SizeT>(height) * static_cast<SizeT>(channels) *
+                        candidateComponentSize);
             g_GLESFuncs.glReadPixels(x, y, width, height, candidate.format, candidate.type, wide.data());
             if (g_GLESFuncs.glGetError() == GL_NO_ERROR) {
                 wideType = candidate.type;
@@ -1164,7 +1171,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
         if (wideType == GL_NONE) {
             MGLOG_E_ONCE("Readback conversion: ES accepted no wide read type for format %s type %s, skipping readback",
-                    MG_Util::ConvertGLEnumToString(format).c_str(), MG_Util::ConvertGLEnumToString(type).c_str());
+                         MG_Util::ConvertGLEnumToString(format).c_str(), MG_Util::ConvertGLEnumToString(type).c_str());
             return true;
         }
 
@@ -1183,8 +1190,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     const auto denominator = static_cast<Float>(normalizedCarrier.ChannelMax[channel]);
                     if (normalizedCarrier.SignedNormalized) {
                         const auto signedCode = static_cast<Int16>(static_cast<Uint16>(code));
-                        dst[i * 4 + channel] =
-                            std::max(static_cast<Float>(signedCode) / denominator, -1.0f);
+                        dst[i * 4 + channel] = std::max(static_cast<Float>(signedCode) / denominator, -1.0f);
                     } else {
                         dst[i * 4 + channel] = static_cast<Float>(code) / denominator;
                     }
@@ -1236,7 +1242,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             switch (wideType) {
             case GL_FLOAT: {
                 auto* values = reinterpret_cast<Float*>(wide.data());
-                for (SizeT i = 0; i < valueCount; ++i) values[i] = std::clamp(values[i], 0.0f, 1.0f);
+                for (SizeT i = 0; i < valueCount; ++i)
+                    values[i] = std::clamp(values[i], 0.0f, 1.0f);
                 break;
             }
             case GL_HALF_FLOAT: {
@@ -1250,12 +1257,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
             case GL_SHORT: {
                 // Signed normalized: the negative half is exactly what the clamp removes.
                 auto* values = reinterpret_cast<Int16*>(wide.data());
-                for (SizeT i = 0; i < valueCount; ++i) values[i] = std::max<Int16>(values[i], 0);
+                for (SizeT i = 0; i < valueCount; ++i)
+                    values[i] = std::max<Int16>(values[i], 0);
                 break;
             }
             case GL_BYTE: {
                 auto* values = reinterpret_cast<Int8*>(wide.data());
-                for (SizeT i = 0; i < valueCount; ++i) values[i] = std::max<Int8>(values[i], 0);
+                for (SizeT i = 0; i < valueCount; ++i)
+                    values[i] = std::max<Int8>(values[i], 0);
                 break;
             }
             default:
@@ -1335,7 +1344,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // Re-bind whatever the binding cache says lives on the temp unit, so the cache stays
         // truthful without a driver query (same discipline as CopyR32FTexture2D).
         auto* cachedBound = TextureImpl::g_boundTexturesCache[TextureImpl::TempTextureUnit]
-                                                            [static_cast<SizeT>(TextureTarget::Texture2D)];
+                                                             [static_cast<SizeT>(TextureTarget::Texture2D)];
         g_GLESFuncs.glBindTexture(GL_TEXTURE_2D, cachedBound ? cachedBound->GetBackendTextureId() : 0);
         if (storageError != GL_NO_ERROR) {
             g_GLESFuncs.glDeleteTextures(1, &texture);
@@ -1361,9 +1370,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // 64 MiB image parked for the rest of the process. The cap is 1 MiB of GL_R32UI, with
         // 4 MiB of staging behind it because the read lands four words per texel.
         constexpr SizeT kMaxScratchTexels = SizeT{1} << 18;
-        const GLsizei bandRows = std::max<GLsizei>(
-            1, static_cast<GLsizei>(std::min<SizeT>(kMaxScratchTexels / static_cast<SizeT>(width),
-                                                    static_cast<SizeT>(height))));
+        const GLsizei bandRows =
+            std::max<GLsizei>(1, static_cast<GLsizei>(std::min<SizeT>(kMaxScratchTexels / static_cast<SizeT>(width),
+                                                                      static_cast<SizeT>(height))));
         const GLuint scratch = EnsurePackedWordScratchTexture(width, bandRows);
         if (scratch == 0) return false;
 
@@ -1390,13 +1399,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
         ClearGLErrors();
         for (GLsizei y = 0; y < height; y += bandRows) {
             const GLsizei rows = std::min(bandRows, height - y);
-            g_GLESFuncs.glCopyImageSubData(texture, backendTarget, level, 0, y, slice, scratch, GL_TEXTURE_2D, 0, 0,
-                                           0, 0, width, rows, 1);
+            g_GLESFuncs.glCopyImageSubData(texture, backendTarget, level, 0, y, slice, scratch, GL_TEXTURE_2D, 0, 0, 0,
+                                           0, width, rows, 1);
             g_GLESFuncs.glReadPixels(0, 0, width, rows, GL_RGBA_INTEGER, GL_UNSIGNED_INT, staging.data());
             for (GLsizei row = 0; row < rows; ++row) {
                 const Uint32* srcRow = staging.data() + static_cast<SizeT>(row) * wordsPerRow;
                 Uint32* dstRow = outWords + static_cast<SizeT>(y + row) * static_cast<SizeT>(width);
-                for (GLsizei x = 0; x < width; ++x) dstRow[x] = srcRow[static_cast<SizeT>(x) * 4];
+                for (GLsizei x = 0; x < width; ++x)
+                    dstRow[x] = srcRow[static_cast<SizeT>(x) * 4];
             }
         }
         const GLenum error = g_GLESFuncs.glGetError();
@@ -1409,22 +1419,31 @@ namespace MobileGL::MG_Backend::DirectGLES {
         return true;
     }
 
-
-// Included in DirectGLES.cpp after the native packed-word readback helper.
-// A storage promotion needs the driver's own texels as owned tight rows, not
-// client PACK layout or a fallback into a frontend texture's potentially stale
-// shadow.
+    // Included in DirectGLES.cpp after the native packed-word readback helper.
+    // A storage promotion needs the driver's own texels as owned tight rows, not
+    // client PACK layout or a fallback into a frontend texture's potentially stale
+    // shadow.
     class ScopedWireTextureReadLevel {
     public:
-        ScopedWireTextureReadLevel(GLuint texture, GLenum target, GLint level)
-            : m_texture(texture), m_target(target) {
+        ScopedWireTextureReadLevel(GLuint texture, GLenum target, GLint level) : m_texture(texture), m_target(target) {
             switch (target) {
-            case GL_TEXTURE_2D: m_binding = GL_TEXTURE_BINDING_2D; break;
-            case GL_TEXTURE_3D: m_binding = GL_TEXTURE_BINDING_3D; break;
-            case GL_TEXTURE_2D_ARRAY: m_binding = GL_TEXTURE_BINDING_2D_ARRAY; break;
-            case GL_TEXTURE_CUBE_MAP: m_binding = GL_TEXTURE_BINDING_CUBE_MAP; break;
-            case GL_TEXTURE_CUBE_MAP_ARRAY: m_binding = GL_TEXTURE_BINDING_CUBE_MAP_ARRAY; break;
-            default: return;
+            case GL_TEXTURE_2D:
+                m_binding = GL_TEXTURE_BINDING_2D;
+                break;
+            case GL_TEXTURE_3D:
+                m_binding = GL_TEXTURE_BINDING_3D;
+                break;
+            case GL_TEXTURE_2D_ARRAY:
+                m_binding = GL_TEXTURE_BINDING_2D_ARRAY;
+                break;
+            case GL_TEXTURE_CUBE_MAP:
+                m_binding = GL_TEXTURE_BINDING_CUBE_MAP;
+                break;
+            case GL_TEXTURE_CUBE_MAP_ARRAY:
+                m_binding = GL_TEXTURE_BINDING_CUBE_MAP_ARRAY;
+                break;
+            default:
+                return;
             }
             GLint previous = 0;
             DrainESErrors();
@@ -1468,22 +1487,23 @@ namespace MobileGL::MG_Backend::DirectGLES {
         Bool m_saved = false, m_valid = false;
     };
 
-    static Bool ReadWireColorRowsTight(GLsizei width, GLsizei height, GLenum format, GLenum type,
-                                      Bool forceOpaqueAlpha, const NormalizedImageCarrierRead& carrier,
-                                      Vector<Uint8>& bytes) {
+    static Bool ReadWireColorRowsTight(GLsizei width, GLsizei height, GLenum format, GLenum type, Bool forceOpaqueAlpha,
+                                       const NormalizedImageCarrierRead& carrier, Vector<Uint8>& bytes) {
         ReadbackChannelMapping mapping{};
         if (!GetReadbackChannelMapping(format, mapping)) return false;
         const SizeT pixelBytes = GetReadbackDstPixelSize(mapping, type);
         if (!pixelBytes || width <= 0 || height <= 0) return false;
         const GLenum componentType = QueryReadAttachmentComponentType();
         const Bool integerAttachment = componentType == GL_INT || componentType == GL_UNSIGNED_INT;
-        if (carrier.Active() ? (mapping.isInteger || !integerAttachment)
-                             : mapping.isInteger != integerAttachment) return false;
+        if (carrier.Active() ? (mapping.isInteger || !integerAttachment) : mapping.isInteger != integerAttachment)
+            return false;
 
         GLint implFormat = 0, implType = 0;
         g_GLESFuncs.glGetIntegerv(GL_IMPLEMENTATION_COLOR_READ_FORMAT, &implFormat);
         g_GLESFuncs.glGetIntegerv(GL_IMPLEMENTATION_COLOR_READ_TYPE, &implType);
-        struct Candidate { GLenum format, type; };
+        struct Candidate {
+            GLenum format, type;
+        };
         Vector<Candidate> candidates;
         if (carrier.Active()) {
             candidates.push_back({GL_RGBA_INTEGER, GL_UNSIGNED_INT});
@@ -1501,7 +1521,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (componentType == GL_SIGNED_NORMALIZED) {
                 candidates.push_back({GL_RGBA, GL_SHORT});
                 candidates.push_back({GL_RGBA, GL_BYTE});
-            } else candidates.push_back({GL_RGBA, GL_UNSIGNED_BYTE});
+            } else
+                candidates.push_back({GL_RGBA, GL_UNSIGNED_BYTE});
         }
         ScopedPixelPackBuffer packBuffer(0);
         ScopedPackState packState(PixelStoreImpl::PackState{1, 0, 0, 0});
@@ -1514,7 +1535,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
             channels = GetWideReadChannelCount(candidate.format);
             wide.resize(pixels * static_cast<SizeT>(channels) * GetReadbackComponentSize(candidate.type));
             g_GLESFuncs.glReadPixels(0, 0, width, height, candidate.format, candidate.type, wide.data());
-            if (g_GLESFuncs.glGetError() == GL_NO_ERROR) { wideType = candidate.type; break; }
+            if (g_GLESFuncs.glGetError() == GL_NO_ERROR) {
+                wideType = candidate.type;
+                break;
+            }
         }
         if (wideType == GL_NONE) return false;
 
@@ -1525,12 +1549,17 @@ namespace MobileGL::MG_Backend::DirectGLES {
             for (SizeT i = 0; i < pixels; ++i) {
                 for (SizeT c = 0; c < 4; ++c) {
                     const Float divisor = static_cast<Float>(carrier.ChannelMax[c]);
-                    dst[i * 4 + c] = carrier.SignedNormalized
-                        ? std::max(static_cast<Float>(static_cast<Int16>(static_cast<Uint16>(src[i * 4 + c]))) / divisor, -1.0f)
-                        : static_cast<Float>(src[i * 4 + c]) / divisor;
+                    dst[i * 4 + c] =
+                        carrier.SignedNormalized
+                            ? std::max(static_cast<Float>(static_cast<Int16>(static_cast<Uint16>(src[i * 4 + c]))) /
+                                           divisor,
+                                       -1.0f)
+                            : static_cast<Float>(src[i * 4 + c]) / divisor;
                 }
             }
-            wide = Move(decoded); wideType = GL_FLOAT; channels = 4;
+            wide = Move(decoded);
+            wideType = GL_FLOAT;
+            channels = 4;
         } else if (wideType == GL_UNSIGNED_INT_2_10_10_10_REV) {
             Vector<Uint8> decoded(pixels * 4 * sizeof(Float));
             auto* dst = reinterpret_cast<Float*>(decoded.data());
@@ -1542,7 +1571,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 dst[i * 4 + 2] = static_cast<Float>((word >> 20) & 1023u) / 1023.0f;
                 dst[i * 4 + 3] = static_cast<Float>((word >> 30) & 3u) / 3.0f;
             }
-            wide = Move(decoded); wideType = GL_FLOAT; channels = 4;
+            wide = Move(decoded);
+            wideType = GL_FLOAT;
+            channels = 4;
         }
         if (channels < 4) ExpandNarrowWideRead(wide, pixels, channels, wideType);
         if (forceOpaqueAlpha) ForceWideReadAlphaToOne(wide, pixels, wideType);
@@ -1550,30 +1581,33 @@ namespace MobileGL::MG_Backend::DirectGLES {
         const SizeT sourceRowBytes = static_cast<SizeT>(width) * 4 * GetReadbackComponentSize(wideType);
         for (GLsizei row = 0; row < height; ++row)
             ClientReadback::ConvertWideReadbackRow(wide.data() + static_cast<SizeT>(row) * sourceRowBytes,
-                converted.data() + static_cast<SizeT>(row) * width * pixelBytes, width, wideType, mapping, type);
+                                                   converted.data() + static_cast<SizeT>(row) * width * pixelBytes,
+                                                   width, wideType, mapping, type);
         bytes = Move(converted);
         return true;
     }
 
-    static Bool ReadWireDepthStencilLevelTight(GLuint texture, TextureTarget target,
-                                               TextureUploadTarget uploadTarget, GLint level,
-                                               const IntVec3& extent, GLenum format, GLenum type,
+    static Bool ReadWireDepthStencilLevelTight(GLuint texture, TextureTarget target, TextureUploadTarget uploadTarget,
+                                               GLint level, const IntVec3& extent, GLenum format, GLenum type,
                                                Vector<Uint8>& bytes) {
-        const SizeT pixelBytes = MG_Util::GetInputBytesPerPixel(
-            MG_Util::ConvertGLEnumToTextureInputFormat(format), MG_Util::ConvertGLEnumToTexturePixelDataType(type));
+        const SizeT pixelBytes = MG_Util::GetInputBytesPerPixel(MG_Util::ConvertGLEnumToTextureInputFormat(format),
+                                                                MG_Util::ConvertGLEnumToTexturePixelDataType(type));
         if (!pixelBytes) return false;
         const Bool needDepth = format == GL_DEPTH_COMPONENT || format == GL_DEPTH_STENCIL;
         const Bool needStencil = format == GL_STENCIL_INDEX || format == GL_DEPTH_STENCIL;
         ScopedFramebufferBinding bindings(true, false);
         GLuint fbo = 0;
         g_GLESFuncs.glGenFramebuffers(1, &fbo);
-        struct DeleteFbo { GLuint id; ~DeleteFbo() { g_GLESFuncs.glDeleteFramebuffers(1, &id); } } cleanup{fbo};
+        struct DeleteFbo {
+            GLuint id;
+            ~DeleteFbo() { g_GLESFuncs.glDeleteFramebuffers(1, &id); }
+        } cleanup{fbo};
         FramebufferImpl::BindFramebufferId(GL_READ_FRAMEBUFFER, fbo);
         ScopedPixelPackBuffer packBuffer(0);
         ScopedPackState packState(PixelStoreImpl::PackState{1, 0, 0, 0});
         const GLenum nativeTarget = TextureImpl::ConvertTextureTargetToBackendGLEnum(target);
-        const GLenum point = needDepth ? (needStencil ? GL_DEPTH_STENCIL_ATTACHMENT : GL_DEPTH_ATTACHMENT)
-                                      : GL_STENCIL_ATTACHMENT;
+        const GLenum point =
+            needDepth ? (needStencil ? GL_DEPTH_STENCIL_ATTACHMENT : GL_DEPTH_ATTACHMENT) : GL_STENCIL_ATTACHMENT;
         const SizeT count = static_cast<SizeT>(extent.x()) * extent.y();
         Vector<Uint8> result(count * extent.z() * pixelBytes);
         if (g_GLESFuncs.glMemoryBarrier) g_GLESFuncs.glMemoryBarrier(GL_ALL_BARRIER_BITS);
@@ -1584,7 +1618,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 g_GLESFuncs.glFramebufferTextureLayer(GL_READ_FRAMEBUFFER, point, texture, level, z);
             else
                 g_GLESFuncs.glFramebufferTexture2D(GL_READ_FRAMEBUFFER, point,
-                    TextureImpl::ConvertTextureUploadTargetToBackendGLEnum(uploadTarget), texture, level);
+                                                   TextureImpl::ConvertTextureUploadTargetToBackendGLEnum(uploadTarget),
+                                                   texture, level);
             g_GLESFuncs.glReadBuffer(GL_NONE);
             if (g_GLESFuncs.glCheckFramebufferStatus(GL_READ_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) return false;
             Vector<Float> depth;
@@ -1601,24 +1636,33 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     } else if (type == GL_FLOAT_32_UNSIGNED_INT_24_8_REV) {
                         Memcpy(dst + i * pixelBytes, &depth[i], sizeof(Float));
                         Memcpy(dst + i * pixelBytes + sizeof(Float), &s, sizeof(s));
-                    } else return false;
+                    } else
+                        return false;
                 } else if (type == GL_FLOAT) {
                     const Float value = needDepth ? depth[i] : static_cast<Float>(stencil[i]);
                     Memcpy(dst + i * pixelBytes, &value, sizeof(value));
                 } else if (type == GL_HALF_FLOAT) {
-                    const Uint16 value = MG_Util::EncodeFloatToHalfBits(
-                        needDepth ? depth[i] : static_cast<Float>(stencil[i]));
+                    const Uint16 value =
+                        MG_Util::EncodeFloatToHalfBits(needDepth ? depth[i] : static_cast<Float>(stencil[i]));
                     Memcpy(dst + i * pixelBytes, &value, sizeof(value));
                 } else {
                     const Bool signedType = type == GL_BYTE || type == GL_SHORT || type == GL_INT;
-                    const Double maximum = signedType
-                        ? (pixelBytes == 1 ? 127.0 : pixelBytes == 2 ? 32767.0 : 2147483647.0)
-                        : (pixelBytes == 1 ? 255.0 : pixelBytes == 2 ? 65535.0 : 4294967295.0);
+                    const Double maximum = signedType ? (pixelBytes == 1   ? 127.0
+                                                         : pixelBytes == 2 ? 32767.0
+                                                                           : 2147483647.0)
+                                                      : (pixelBytes == 1   ? 255.0
+                                                         : pixelBytes == 2 ? 65535.0
+                                                                           : 4294967295.0);
                     const Uint32 value = needDepth ? NormalizedDepthToUnsigned(depth[i], maximum) : stencil[i];
-                    if (pixelBytes == 1) dst[i] = static_cast<Uint8>(value);
-                    else if (pixelBytes == 2) { const Uint16 v = static_cast<Uint16>(value); Memcpy(dst + i * 2, &v, 2); }
-                    else if (pixelBytes == 4) Memcpy(dst + i * 4, &value, 4);
-                    else return false;
+                    if (pixelBytes == 1)
+                        dst[i] = static_cast<Uint8>(value);
+                    else if (pixelBytes == 2) {
+                        const Uint16 v = static_cast<Uint16>(value);
+                        Memcpy(dst + i * 2, &v, 2);
+                    } else if (pixelBytes == 4)
+                        Memcpy(dst + i * 4, &value, 4);
+                    else
+                        return false;
                 }
             }
         }
@@ -1641,8 +1685,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         const SizeT pixelBytes = GetReadbackDstPixelSize(mapping, type);
         if (!pixelBytes || extent.x() <= 0 || extent.y() <= 0 || extent.z() <= 0) return false;
         const GLenum faceTarget = TextureImpl::ConvertTextureUploadTargetToBackendGLEnum(uploadTarget);
-        const auto widening = sourceUsesImageCarrier
-            ? TextureImpl::GetImageBindableStorageWidening(logicalFormat) : TextureImpl::ImageBindableStorageWidening{};
+        const auto widening = sourceUsesImageCarrier ? TextureImpl::GetImageBindableStorageWidening(logicalFormat)
+                                                     : TextureImpl::ImageBindableStorageWidening{};
         const SizeT sliceBytes = static_cast<SizeT>(extent.x()) * extent.y() * pixelBytes;
         Vector<Uint8> result(sliceBytes * static_cast<SizeT>(extent.z()));
         if (g_GLESFuncs.glMemoryBarrier) g_GLESFuncs.glMemoryBarrier(GL_ALL_BARRIER_BITS);
@@ -1651,28 +1695,34 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // A raw packed word may have redundant encodings or NaN payloads. Read
         // it through R32UI when the source really still uses that native layout.
         const Bool rawPacked = !widening && MG_Util::PixelStoreProcessor::IsRawPackedPixelTransfer(
-            logicalFormat, MG_Util::ConvertGLEnumToTextureInputFormat(format),
-            MG_Util::ConvertGLEnumToTexturePixelDataType(type));
+                                                logicalFormat, MG_Util::ConvertGLEnumToTextureInputFormat(format),
+                                                MG_Util::ConvertGLEnumToTexturePixelDataType(type));
         if (rawPacked && pixelBytes == sizeof(Uint32)) {
-            const GLint face = uploadTarget >= TextureUploadTarget::CubeMapPositiveX &&
-                               uploadTarget <= TextureUploadTarget::CubeMapNegativeZ
-                ? static_cast<GLint>(uploadTarget) - static_cast<GLint>(TextureUploadTarget::CubeMapPositiveX) : 0;
+            const GLint face =
+                uploadTarget >= TextureUploadTarget::CubeMapPositiveX &&
+                        uploadTarget <= TextureUploadTarget::CubeMapNegativeZ
+                    ? static_cast<GLint>(uploadTarget) - static_cast<GLint>(TextureUploadTarget::CubeMapPositiveX)
+                    : 0;
             for (GLint layer = 0; layer < extent.z(); ++layer)
-                if (!ReadPackedLevelWordsViaScratch(texture, nativeTarget, level, face + layer, extent.x(), extent.y(),
-                        reinterpret_cast<Uint32*>(result.data() + static_cast<SizeT>(layer) * sliceBytes))) return false;
+                if (!ReadPackedLevelWordsViaScratch(
+                        texture, nativeTarget, level, face + layer, extent.x(), extent.y(),
+                        reinterpret_cast<Uint32*>(result.data() + static_cast<SizeT>(layer) * sliceBytes)))
+                    return false;
             bytes = Move(result);
             return true;
         }
 
         NormalizedImageCarrierRead carrier{};
         if (widening && widening.CarriesNormalizedCodes()) {
-            for (SizeT c = 0; c < 4; ++c) carrier.ChannelMax[c] = widening.ChannelMax[c];
+            for (SizeT c = 0; c < 4; ++c)
+                carrier.ChannelMax[c] = widening.ChannelMax[c];
             carrier.SignedNormalized = widening.SignedNormalized;
         }
         TempFBOBinder binder(true);
         auto& framebuffer = binder.Framebuffer();
         for (GLint layer = 0; layer < extent.z(); ++layer) {
-            if (nativeTarget == GL_TEXTURE_3D || nativeTarget == GL_TEXTURE_2D_ARRAY || nativeTarget == GL_TEXTURE_CUBE_MAP_ARRAY)
+            if (nativeTarget == GL_TEXTURE_3D || nativeTarget == GL_TEXTURE_2D_ARRAY ||
+                nativeTarget == GL_TEXTURE_CUBE_MAP_ARRAY)
                 ScratchFBOImpl::EnsureColorAttachmentLayer(framebuffer, GL_READ_FRAMEBUFFER, texture, level, layer);
             else
                 ScratchFBOImpl::EnsureColorAttachment2D(framebuffer, GL_READ_FRAMEBUFFER, texture, faceTarget, level);
@@ -1680,13 +1730,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
             const GLenum status = g_GLESFuncs.glCheckFramebufferStatus(GL_READ_FRAMEBUFFER);
             if (status != GL_FRAMEBUFFER_COMPLETE) {
                 MGLOG_E_ONCE("Espryt wire texture readback: framebuffer status=0x%x texture=%u level=%d target=0x%x",
-                            status, texture, level, nativeTarget);
+                             status, texture, level, nativeTarget);
                 return false;
             }
             Vector<Uint8> slice;
             if (!ReadWireColorRowsTight(extent.x(), extent.y(), format, type,
-                    TextureImpl::BackendTextureFormatAddsAlpha(logicalFormat, target), carrier, slice) ||
-                slice.size() != sliceBytes) return false;
+                                        TextureImpl::BackendTextureFormatAddsAlpha(logicalFormat, target), carrier,
+                                        slice) ||
+                slice.size() != sliceBytes)
+                return false;
             Memcpy(result.data() + static_cast<SizeT>(layer) * sliceBytes, slice.data(), sliceBytes);
         }
         bytes = Move(result);
@@ -1705,16 +1757,28 @@ namespace MobileGL::MG_Backend::DirectGLES {
         const GLenum nativeTarget = TextureImpl::ConvertTextureTargetToBackendGLEnum(target);
         GLenum binding = GL_NONE;
         switch (nativeTarget) {
-        case GL_TEXTURE_2D: binding = GL_TEXTURE_BINDING_2D; break;
-        case GL_TEXTURE_3D: binding = GL_TEXTURE_BINDING_3D; break;
-        case GL_TEXTURE_2D_ARRAY: binding = GL_TEXTURE_BINDING_2D_ARRAY; break;
-        case GL_TEXTURE_CUBE_MAP: binding = GL_TEXTURE_BINDING_CUBE_MAP; break;
-        case GL_TEXTURE_CUBE_MAP_ARRAY: binding = GL_TEXTURE_BINDING_CUBE_MAP_ARRAY; break;
-        default: return true;
+        case GL_TEXTURE_2D:
+            binding = GL_TEXTURE_BINDING_2D;
+            break;
+        case GL_TEXTURE_3D:
+            binding = GL_TEXTURE_BINDING_3D;
+            break;
+        case GL_TEXTURE_2D_ARRAY:
+            binding = GL_TEXTURE_BINDING_2D_ARRAY;
+            break;
+        case GL_TEXTURE_CUBE_MAP:
+            binding = GL_TEXTURE_BINDING_CUBE_MAP;
+            break;
+        case GL_TEXTURE_CUBE_MAP_ARRAY:
+            binding = GL_TEXTURE_BINDING_CUBE_MAP_ARRAY;
+            break;
+        default:
+            return true;
         }
         // A cube's levels are per face; every other target answers for the whole level.
         const GLenum queryTarget = nativeTarget == GL_TEXTURE_CUBE_MAP
-            ? TextureImpl::ConvertTextureUploadTargetToBackendGLEnum(uploadTarget) : nativeTarget;
+                                       ? TextureImpl::ConvertTextureUploadTargetToBackendGLEnum(uploadTarget)
+                                       : nativeTarget;
         DrainESErrors();
         GLint previous = 0;
         g_GLESFuncs.glGetIntegerv(binding, &previous);
@@ -1768,7 +1832,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         const auto target = static_cast<Uint16>(uploadTarget);
         const auto mip = static_cast<Uint16>(level);
         ReadbackChannelMapping mapping{};
-        const SizeT pixelBytes = GetReadbackChannelMapping(format, mapping) ? GetReadbackDstPixelSize(mapping, type) : 0;
+        const SizeT pixelBytes =
+            GetReadbackChannelMapping(format, mapping) ? GetReadbackDstPixelSize(mapping, type) : 0;
         const SizeT texels = static_cast<SizeT>(std::max(extent.x(), 0)) * static_cast<SizeT>(std::max(extent.y(), 0)) *
                              static_cast<SizeT>(std::max(extent.z(), 0));
         const char* declined = nullptr;
@@ -1799,7 +1864,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 Bool isInteger = false;
                 Bool isSigned = false;
                 if (!MG_Util::PixelStoreProcessor::DecodeShadowDataToWideRGBA(logicalFormat, staged, texels, wide,
-                                                                             isInteger, isSigned)) {
+                                                                              isInteger, isSigned)) {
                     declined = "the staged format has no wide decoding";
                 } else if (mapping.isInteger != isInteger) {
                     declined = "an integer read of a normalized level, or the reverse";
@@ -1811,8 +1876,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     out.resize(texels * pixelBytes);
                     for (SizeT row = 0; row < rows; ++row) {
                         ClientReadback::ConvertWideReadbackRow(wide.data() + row * wideRowBytes,
-                                                             out.data() + row * rowTexels * pixelBytes, rowTexels,
-                                                             wideType, mapping, type);
+                                                               out.data() + row * rowTexels * pixelBytes, rowTexels,
+                                                               wideType, mapping, type);
                     }
                 }
             }
@@ -1842,7 +1907,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         if (!twin) return false;
         const Bool wholeCube = info.Target == GL_TEXTURE_CUBE_MAP;
         const IntVec3 extent{static_cast<Int>(info.Box.W), static_cast<Int>(info.Box.H),
-                            wholeCube ? 1 : static_cast<Int>(info.Box.D)};
+                             wholeCube ? 1 : static_cast<Int>(info.Box.D)};
         const auto logicalFormat = static_cast<TextureInternalFormat>(record->Desc.InternalFormat);
         // The R32UI word leg never goes through a framebuffer, so the knob leaves it alone (it is
         // ReadTextureLevelTight's first choice for exactly these reads).
@@ -1856,15 +1921,17 @@ namespace MobileGL::MG_Backend::DirectGLES {
         const Bool refusedForTesting = !packedWordRead && WireTextureReadbackRefusedForTesting(extent);
         Vector<Uint8> result;
         for (Int face = 0; face < (wholeCube ? 6 : 1); ++face) {
-            const auto uploadTarget = wholeCube
-                ? static_cast<TextureUploadTarget>(static_cast<Int>(TextureUploadTarget::CubeMapPositiveX) + face)
-                : MG_Util::ConvertGLEnumToTextureUploadTarget(info.Target);
+            const auto uploadTarget =
+                wholeCube
+                    ? static_cast<TextureUploadTarget>(static_cast<Int>(TextureUploadTarget::CubeMapPositiveX) + face)
+                    : MG_Util::ConvertGLEnumToTextureUploadTarget(info.Target);
             Vector<Uint8> slice;
             if (refusedForTesting ||
                 !ReadTextureLevelTight(twin->GetBackendTextureId(), target, uploadTarget, logicalFormat, info.Level,
-                    extent, twin->RequiresImageBindableStorage(), info.Format, info.Type, slice)) {
+                                       extent, twin->RequiresImageBindableStorage(), info.Format, info.Type, slice)) {
                 if (!ReadWireLevelFromStagedStore(info.Res, logicalFormat, uploadTarget, info.Level, extent,
-                                                  info.Format, info.Type, slice)) return false;
+                                                  info.Format, info.Type, slice))
+                    return false;
             }
             result.insert(result.end(), slice.begin(), slice.end());
         }
@@ -1896,9 +1963,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
     static Bool IsSupportedDepthStencilReadPixelsPair(GLenum format, GLenum type) {
         switch (format) {
         case GL_DEPTH_COMPONENT:
-            return type == GL_BYTE || type == GL_UNSIGNED_BYTE || type == GL_SHORT ||
-                   type == GL_UNSIGNED_SHORT || type == GL_INT || type == GL_UNSIGNED_INT ||
-                   type == GL_FLOAT || type == GL_HALF_FLOAT;
+            return type == GL_BYTE || type == GL_UNSIGNED_BYTE || type == GL_SHORT || type == GL_UNSIGNED_SHORT ||
+                   type == GL_INT || type == GL_UNSIGNED_INT || type == GL_FLOAT || type == GL_HALF_FLOAT;
         case GL_STENCIL_INDEX:
             return type == GL_UNSIGNED_BYTE || type == GL_BYTE || type == GL_UNSIGNED_SHORT || type == GL_SHORT ||
                    type == GL_UNSIGNED_INT || type == GL_INT || type == GL_FLOAT || type == GL_HALF_FLOAT;
@@ -1927,7 +1993,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                  GetReadbackDstPixelSize(conversionMapping, type) != 0;
         if (!useNativeReadback && !convertible) {
             MGLOG_E_ONCE("ReadPixels: format %s with type %s is not implemented yet, skipping readback",
-                    MG_Util::ConvertGLEnumToString(format).c_str(), MG_Util::ConvertGLEnumToString(type).c_str());
+                         MG_Util::ConvertGLEnumToString(format).c_str(), MG_Util::ConvertGLEnumToString(type).c_str());
             return;
         }
 
@@ -1973,7 +2039,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 return;
             }
             MGLOG_E_ONCE("ReadPixels: format %s with type %s is not implemented yet, skipping readback",
-                    MG_Util::ConvertGLEnumToString(format).c_str(), MG_Util::ConvertGLEnumToString(type).c_str());
+                         MG_Util::ConvertGLEnumToString(format).c_str(), MG_Util::ConvertGLEnumToString(type).c_str());
             return;
         }
         // Every depth and stencil read goes through the helpers, not just the widening ones:
@@ -1997,8 +2063,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // on every exit path, so a later readback can never land in a stale PBO
         // (the driver-level binding used to stay on the user PBO after this call,
         // capturing subsequent client-memory readbacks into it).
-        auto& pixelPackBufferObject =
-            SplitReadbackPackBuffer();
+        auto& pixelPackBufferObject = SplitReadbackPackBuffer();
         Bool usePBO = false;
         GLuint packBufferId = 0;
         // P13: SplitReadbackPackBuffer() is always null - a pack buffer reaches the readback
@@ -2028,9 +2093,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 return;
             }
             MGLOG_E_ONCE("ReadPixels: native read of %s/%s failed (%s) and no conversion path covers it, "
-                    "skipping readback",
-                    MG_Util::ConvertGLEnumToString(format).c_str(), MG_Util::ConvertGLEnumToString(type).c_str(),
-                    MG_Util::ConvertGLEnumToString(nativeReadError).c_str());
+                         "skipping readback",
+                         MG_Util::ConvertGLEnumToString(format).c_str(), MG_Util::ConvertGLEnumToString(type).c_str(),
+                         MG_Util::ConvertGLEnumToString(nativeReadError).c_str());
             return;
         }
         if (usePBO) {

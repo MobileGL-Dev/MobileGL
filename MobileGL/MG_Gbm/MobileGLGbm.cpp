@@ -111,18 +111,21 @@ namespace {
             }
             const auto version = reinterpret_cast<PFN_mobilegl_shared_image_abi_version>(
                 dlsym(lib, "mobilegl_shared_image_abi_version"));
-            api.allocate = reinterpret_cast<PFN_mobilegl_shared_image_allocate>(dlsym(lib, "mobilegl_shared_image_allocate"));
+            api.allocate =
+                reinterpret_cast<PFN_mobilegl_shared_image_allocate>(dlsym(lib, "mobilegl_shared_image_allocate"));
             api.import = reinterpret_cast<PFN_mobilegl_shared_image_import>(dlsym(lib, "mobilegl_shared_image_import"));
-            api.release = reinterpret_cast<PFN_mobilegl_shared_image_release>(dlsym(lib, "mobilegl_shared_image_release"));
-            api.serverAvailable = reinterpret_cast<PFN_mobilegl_server_available>(dlsym(lib, "mobilegl_server_available"));
+            api.release =
+                reinterpret_cast<PFN_mobilegl_shared_image_release>(dlsym(lib, "mobilegl_shared_image_release"));
+            api.serverAvailable =
+                reinterpret_cast<PFN_mobilegl_server_available>(dlsym(lib, "mobilegl_server_available"));
             if (version == nullptr || version() < 1 || api.allocate == nullptr || api.import == nullptr ||
                 api.release == nullptr) {
                 std::fprintf(stderr, "mobilegl_gbm: this libMobileGL.so has no shared-image ABI\n");
                 return;
             }
             if (version() >= 2) {
-                api.formats = reinterpret_cast<PFN_mobilegl_shared_image_formats>(
-                    dlsym(lib, "mobilegl_shared_image_formats"));
+                api.formats =
+                    reinterpret_cast<PFN_mobilegl_shared_image_formats>(dlsym(lib, "mobilegl_shared_image_formats"));
                 api.importPlanes = reinterpret_cast<PFN_mobilegl_shared_image_import_planes>(
                     dlsym(lib, "mobilegl_shared_image_import_planes"));
             }
@@ -134,7 +137,8 @@ namespace {
     // ---- formats ----------------------------------------------------------------------------
 
     uint32_t Canonical(uint32_t format) {
-        if (g_core != nullptr && g_core->v0.format_canonicalize != nullptr) return g_core->v0.format_canonicalize(format);
+        if (g_core != nullptr && g_core->v0.format_canonicalize != nullptr)
+            return g_core->v0.format_canonicalize(format);
         // The two legacy GBM_BO_FORMAT_* enumerants are the only non-fourcc formats.
         if (format == GBM_BO_FORMAT_XRGB8888) return GBM_FORMAT_XRGB8888;
         if (format == GBM_BO_FORMAT_ARGB8888) return GBM_FORMAT_ARGB8888;
@@ -172,14 +176,18 @@ namespace {
                format == MOBILEGL_SHARED_IMAGE_FOURCC_ARGB8888 || format == MOBILEGL_SHARED_IMAGE_FOURCC_XRGB8888;
     }
 
-    uint32_t PlaneCount(uint32_t format) { return FormatIsYuv(format) ? 2 : 1; }
+    uint32_t PlaneCount(uint32_t format) {
+        return FormatIsYuv(format) ? 2 : 1;
+    }
 
     // A YUV buffer is sampled only.
     uint32_t RefusedUsage(uint32_t format) {
         return kRefusedUsage | (FormatIsYuv(format) ? static_cast<uint32_t>(GBM_BO_USE_RENDERING) : 0u);
     }
 
-    bool ModifierAcceptable(uint64_t modifier) { return modifier == kModifierInvalid || modifier == kModifierLinear; }
+    bool ModifierAcceptable(uint64_t modifier) {
+        return modifier == kModifierInvalid || modifier == kModifierLinear;
+    }
 
     // There is no GEM handle behind a shared image; callers that only use the handle as a key
     // (a buffer cache) still need it to be unique.
@@ -214,11 +222,15 @@ namespace {
         return &bo->base;
     }
 
-    Bo* AsBo(gbm_bo* bo) { return reinterpret_cast<Bo*>(bo); }
+    Bo* AsBo(gbm_bo* bo) {
+        return reinterpret_cast<Bo*>(bo);
+    }
 
     // ---- device -----------------------------------------------------------------------------
 
-    void DeviceDestroy(gbm_device* gbm) { delete reinterpret_cast<Device*>(gbm); }
+    void DeviceDestroy(gbm_device* gbm) {
+        delete reinterpret_cast<Device*>(gbm);
+    }
 
     int IsFormatSupported(gbm_device*, uint32_t format, uint32_t usage) {
         format = Canonical(format);
@@ -241,7 +253,8 @@ namespace {
         if (count > 0) {
             // The layout is the allocator's, which only a list that admits INVALID accepts.
             bool admitsImplicit = false;
-            for (unsigned int i = 0; i < count; ++i) admitsImplicit |= modifiers[i] == kModifierInvalid;
+            for (unsigned int i = 0; i < count; ++i)
+                admitsImplicit |= modifiers[i] == kModifierInvalid;
             if (!admitsImplicit) {
                 errno = EINVAL;
                 return nullptr;
@@ -261,8 +274,8 @@ namespace {
             errno = rc < 0 ? -rc : EIO;
             return nullptr;
         }
-        gbm_bo* bo = NewBo(gbm, image.id, image.fd, image.width, image.height, image.fourcc, image.stride,
-                           image.offset, image.modifier, image.plane1_stride, image.plane1_offset);
+        gbm_bo* bo = NewBo(gbm, image.id, image.fd, image.width, image.height, image.fourcc, image.stride, image.offset,
+                           image.modifier, image.plane1_stride, image.plane1_offset);
         if (bo == nullptr) {
             api->release(image.id);
             ::close(image.fd);
@@ -273,7 +286,7 @@ namespace {
     // Whether two descriptors name one dma-buf: a YUV buffer's planes must be in one.
     bool SameBuffer(int a, int b) {
         if (a == b) return true;
-        struct stat sa {}, sb {};
+        struct stat sa{}, sb{};
         return ::fstat(a, &sa) == 0 && ::fstat(b, &sb) == 0 && sa.st_dev == sb.st_dev && sa.st_ino == sb.st_ino;
     }
 
@@ -385,11 +398,17 @@ namespace {
         return -1;
     }
 
-    int BoGetFd(gbm_bo* bo) { return ::fcntl(AsBo(bo)->fd, F_DUPFD_CLOEXEC, 0); }
+    int BoGetFd(gbm_bo* bo) {
+        return ::fcntl(AsBo(bo)->fd, F_DUPFD_CLOEXEC, 0);
+    }
 
-    int BoGetPlanes(gbm_bo* bo) { return static_cast<int>(AsBo(bo)->planes); }
+    int BoGetPlanes(gbm_bo* bo) {
+        return static_cast<int>(AsBo(bo)->planes);
+    }
 
-    bool ValidPlane(gbm_bo* bo, int plane) { return plane >= 0 && static_cast<uint32_t>(plane) < AsBo(bo)->planes; }
+    bool ValidPlane(gbm_bo* bo, int plane) {
+        return plane >= 0 && static_cast<uint32_t>(plane) < AsBo(bo)->planes;
+    }
 
     // Every plane is in the one buffer, so every plane has its handle.
     gbm_bo_handle BoGetHandle(gbm_bo* bo, int plane) {
@@ -420,7 +439,9 @@ namespace {
         return plane == 1 && AsBo(bo)->planes == 2 ? AsBo(bo)->plane1Offset : 0;
     }
 
-    uint64_t BoGetModifier(gbm_bo* bo) { return AsBo(bo)->modifier; }
+    uint64_t BoGetModifier(gbm_bo* bo) {
+        return AsBo(bo)->modifier;
+    }
 
     void BoDestroy(gbm_bo* gbm) {
         Bo* bo = AsBo(gbm);
@@ -435,11 +456,15 @@ namespace {
         return nullptr;
     }
 
-    gbm_bo* SurfaceLockFrontBuffer(gbm_surface*) { return nullptr; }
+    gbm_bo* SurfaceLockFrontBuffer(gbm_surface*) {
+        return nullptr;
+    }
 
     void SurfaceReleaseBuffer(gbm_surface*, gbm_bo*) {}
 
-    int SurfaceHasFreeBuffers(gbm_surface*) { return 0; }
+    int SurfaceHasFreeBuffers(gbm_surface*) {
+        return 0;
+    }
 
     void SurfaceDestroy(gbm_surface*) {}
 

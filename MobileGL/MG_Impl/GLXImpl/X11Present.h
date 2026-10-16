@@ -49,11 +49,15 @@ namespace MobileGL::MG_Impl::GLXImpl::X11Present {
 
     // ---- which path a window's frames take -------------------------------------------------------
 
-    enum class Path { Dri3Present, ShmPutImage, PutImage };
+    enum class Path {
+        Dri3Present,
+        ShmPutImage,
+        PutImage
+    };
     const char* PathName(Path path);
 
     struct ConnectionCaps {
-        Bool SharedImages = false;  // the backend allocates shared images (a split client)
+        Bool SharedImages = false;    // the backend allocates shared images (a split client)
         Bool LocalConnection = false; // a unix socket: descriptors can be passed
         Uint32 Dri3Major = 0, Dri3Minor = 0;
         Uint32 PresentMajor = 0, PresentMinor = 0;
@@ -94,7 +98,12 @@ namespace MobileGL::MG_Impl::GLXImpl::X11Present {
     };
 
     struct Event {
-        enum class Kind { None, Idle, Complete, Configure };
+        enum class Kind {
+            None,
+            Idle,
+            Complete,
+            Configure
+        };
         Kind Type = Kind::None;
         Uint32 Serial = 0;
         Uint32 Pixmap = 0;

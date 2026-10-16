@@ -227,8 +227,8 @@ void main() { oColor = vec4(vColor, 1.0); }
                 glBindBuffer(GL_ARRAY_BUFFER, m_arena);
                 glBufferData(GL_ARRAY_BUFFER, kArenaBytes, nullptr, GL_DYNAMIC_DRAW);
                 const std::vector<Vertex> vertices = Quad(r, g, b);
-                glBufferSubData(GL_ARRAY_BUFFER, kVertexOffset,
-                                GLsizeiptr(vertices.size() * sizeof(Vertex)), vertices.data());
+                glBufferSubData(GL_ARRAY_BUFFER, kVertexOffset, GLsizeiptr(vertices.size() * sizeof(Vertex)),
+                                vertices.data());
                 if (index == 0) {
                     glBindVertexArray(m_vao);
                     glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex),
@@ -284,15 +284,15 @@ void main() { oColor = vec4(vColor, 1.0); }
             RecordProperty("stats_line", window.line.c_str());
 
             const long long roundtrips = PipeStatsWindow::CounterOrAbsent(window, "mpr");
-            ASSERT_GE(roundtrips, 0)
-                << "the summary line carries no mpr= field, so this build's PipeStats has no "
-                   "map-persistent-roundtrips counter to read: "
-                << window.line;
+            ASSERT_GE(roundtrips, 0) << "the summary line carries no mpr= field, so this build's PipeStats has no "
+                                        "map-persistent-roundtrips counter to read: "
+                                     << window.line;
 
             if (m_lane == kLaneOn) {
                 EXPECT_EQ(roundtrips, static_cast<long long>(kDefinitionsInTheWindow))
                     << "with bits 7|8 SET the resource family is the path a store definition takes, so "
-                       "each of the " << kDefinitionsInTheWindow
+                       "each of the "
+                    << kDefinitionsInTheWindow
                     << " definitions in this window is one map_persistent emission (mint or decline - "
                        "both need an answer from the resource owner, D-B2). "
                     << (kDefinitionsInTheWindow * kDrawsPerDefinition)
@@ -316,9 +316,8 @@ void main() { oColor = vec4(vColor, 1.0); }
 
             // ... and the picture is the same whichever arm ran. The arena is drawn with one solid
             // colour, so both arms must read back exactly that.
-            EXPECT_TRUE(RegionIsMostly(image, kInset, image.Width() - kInset, kInset,
-                                       image.Height() - kInset, "green", 0.0,
-                                       "the arena draw [" + m_lane + "]"))
+            EXPECT_TRUE(RegionIsMostly(image, kInset, image.Width() - kInset, kInset, image.Height() - kInset, "green",
+                                       0.0, "the arena draw [" + m_lane + "]"))
                 << "the subsystem bits changed what is DRAWN, which is not an A/B - the handle path and "
                    "the legacy path must produce the same pixels from the same arena.";
         }

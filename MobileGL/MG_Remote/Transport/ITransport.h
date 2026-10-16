@@ -80,8 +80,8 @@ namespace MobileGL::MG_Remote::Transport {
         // be half-consumed, so the capacity is checked BEFORE anything is read
         // and a short buffer returns MOBILEGL_ERR_BUFFER_TOO_SMALL with the
         // required size, having consumed nothing and dropped no descriptor.
-        virtual MobileGLResult ReceiveFd(int* outFd, MobileGLMutableByteSpan sideband,
-                                         std::uint64_t* outSidebandSize, std::uint32_t timeoutMs) = 0;
+        virtual MobileGLResult ReceiveFd(int* outFd, MobileGLMutableByteSpan sideband, std::uint64_t* outSidebandSize,
+                                         std::uint32_t timeoutMs) = 0;
 
         // ---- lifecycle ------------------------------------------------------
 

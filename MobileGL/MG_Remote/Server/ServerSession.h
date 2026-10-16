@@ -58,8 +58,7 @@ namespace MobileGL::MG_Remote::Server {
         // CapsSnapshot. The ABI assertion (CapsCodec.h) happens HERE, before a single record is
         // decoded: sizeof(DynamicBackendParameters), sizeof(MGPCaps), sizeof(GLFunctionsTable)
         // and the build fingerprint must match, and a mismatch is Fatal{AbiMismatch}.
-        MobileGLResult Accept(Transport::ITransport& transport,
-                              const std::vector<Uint8>* firstFrame = nullptr);
+        MobileGLResult Accept(Transport::ITransport& transport, const std::vector<Uint8>* firstFrame = nullptr);
 
         // PH-7 (4), ID-P7-3. WHERE A TCP SESSION'S DATA CONNECTION COMES FROM.
         //
@@ -203,18 +202,15 @@ namespace MobileGL::MG_Remote::Server {
         // into scratch; the apply loop sees the latch and stops, and ServerMain ends the session
         // with status 0, not as a fault. The latch is written only on the apply thread (reset by
         // Accept) and read with acquire elsewhere. See ARCHITECTURE.md §11.7.
-        Bool ReverseChannelForfeited() const {
-            return m_reverseChannelForfeit.load(std::memory_order_acquire);
-        }
+        Bool ReverseChannelForfeited() const { return m_reverseChannelForfeit.load(std::memory_order_acquire); }
         // Drops since the latch went up, counted HERE because the shared page's eventDropped is
         // on a page the peer can write.
         Uint64 ForfeitDrops() const { return m_forfeitDrops.load(std::memory_order_acquire); }
         // `cause` is one word (the braces' content); `why` the sentence; `shortDrains` how many
         // times the client cleared the latch without making room. Returns the scratch the caller
         // writes the dropped event into.
-        void* ForfeitReverseChannel(const char* cause, const char* why, const char* eventName,
-                                    Uint64 payloadBytes, Uint32 waitedMs, Uint32 budgetMs,
-                                    Uint32 shortDrains);
+        void* ForfeitReverseChannel(const char* cause, const char* why, const char* eventName, Uint64 payloadBytes,
+                                    Uint32 waitedMs, Uint32 budgetMs, Uint32 shortDrains);
         void* DropEventAfterForfeit(Uint64 payloadBytes);
 
         // PH-6 fix round. SERVERLOOP::STOP'S REQUEST, SEEN BY THE ONE APPLY-THREAD WAIT THAT IS NOT
@@ -271,8 +267,7 @@ namespace MobileGL::MG_Remote::Server {
         // DECLINED with a named line).
         // A client in this process (inproc) takes no AHardwareBuffer: the backend donates the
         // store's own mapping and `inProcessBase` carries its address in the OK answer.
-        Bool AdoptStoreT0(const MG_Pipe::MGPHandleOnly& handle, Uint64 seq, Int32& status,
-                          Uint64& inProcessBase);
+        Bool AdoptStoreT0(const MG_Pipe::MGPHandleOnly& handle, Uint64 seq, Int32& status, Uint64& inProcessBase);
         // T0 granted for a client in this process: map_persistent donates (kCapAdoptInProcess).
         Bool AdoptT0InProcess() const { return m_adoptT0InProcess; }
         // The arm's proof for this session (B2): stores imported and their bytes, declined.
@@ -335,8 +330,7 @@ namespace MobileGL::MG_Remote::Server {
         Uint64 ContextBinds() const { return m_contextBinds; }
 
     private:
-        MobileGLResult BindDataConnection(Transport::ITransport& control, Transport::ILink& link,
-                                          const Uint8* nonce);
+        MobileGLResult BindDataConnection(Transport::ITransport& control, Transport::ILink& link, const Uint8* nonce);
 
         DataConnectionSource m_dataSource;
         std::unique_ptr<Transport::ILink> m_link;

@@ -138,7 +138,8 @@ namespace MobileGL::MG_Pipe {
 
         constexpr auto MakeTable() {
             Array<MGPWireOp, static_cast<SizeT>(MGPipeVerb::kVerbCount)> table{};
-            for (const auto& row : kRows) table[static_cast<SizeT>(row.Verb)] = row.Op;
+            for (const auto& row : kRows)
+                table[static_cast<SizeT>(row.Verb)] = row.Op;
             return table;
         }
         inline constexpr auto kTable = MakeTable();

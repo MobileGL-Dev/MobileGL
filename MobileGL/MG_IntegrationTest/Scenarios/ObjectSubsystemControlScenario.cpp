@@ -234,8 +234,7 @@ void main() { oColor = texture(uTex, vUv); }
         // EARLIEST rather than any: a spelling that also occurs later in <why> (Espryt's
         // bit-10-requires-bit-11 sentence says "only bit 11 mints sampler CSOs" in its reason)
         // must not be able to satisfy an ordering the first occurrence does not.
-        std::size_t EarliestSpellingOffset(const std::string& line,
-                                           const std::vector<std::string>& spellings) {
+        std::size_t EarliestSpellingOffset(const std::string& line, const std::vector<std::string>& spellings) {
             std::size_t earliest = std::string::npos;
             for (const std::string& spelling : spellings) {
                 const std::size_t at = line.find(spelling);
@@ -248,28 +247,25 @@ void main() { oColor = texture(uTex, vUv); }
 
         // The matching line, or an empty string. Returned rather than a bool so the case can print
         // what it found: a reader of a green refusal lane must be able to see the sentence.
-        std::string FindTheRefusalLine(const std::string& log,
-                                       const std::vector<std::string>& bitThatWasSet,
+        std::string FindTheRefusalLine(const std::string& log, const std::vector<std::string>& bitThatWasSet,
                                        const std::string& neededMaskHex) {
             const std::string missingField = SaysWhichIsMissing(neededMaskHex);
             std::size_t pos = 0;
             while (pos <= log.size()) {
                 const std::size_t newline = log.find('\n', pos);
-                const std::string line = log.substr(
-                    pos, newline == std::string::npos ? std::string::npos : newline - pos);
+                const std::string line =
+                    log.substr(pos, newline == std::string::npos ? std::string::npos : newline - pos);
                 const bool atErrorSeverity = line.find("/ERROR]") != std::string::npos;
                 const std::size_t refusedAt = line.find(kSaysItRefused);
                 const std::size_t setAt = EarliestSpellingOffset(line, bitThatWasSet);
                 const std::size_t setClauseAt = line.find(kSaysWhichIsSet);
                 const std::size_t missingAt = line.find(missingField);
-                const bool everyPartIsThere =
-                    refusedAt != std::string::npos && setAt != std::string::npos &&
-                    setClauseAt != std::string::npos && missingAt != std::string::npos;
+                const bool everyPartIsThere = refusedAt != std::string::npos && setAt != std::string::npos &&
+                                              setClauseAt != std::string::npos && missingAt != std::string::npos;
                 // "<set bit> ... is set but ... missing <needed bit>)", strictly in that order.
                 // Swapping the caller's two arguments breaks the chain, which is the whole of
                 // F-v2-m1.
-                const bool inTheRightDirection =
-                    everyPartIsThere && setAt < setClauseAt && setClauseAt < missingAt;
+                const bool inTheRightDirection = everyPartIsThere && setAt < setClauseAt && setClauseAt < missingAt;
                 if (atErrorSeverity && inTheRightDirection) {
                     return line;
                 }
@@ -333,7 +329,8 @@ void main() { oColor = texture(uTex, vUv); }
             void SkipUnlessTheLaneIsAssertableHere(bool needsTheEmitters) {
                 if (m_lane.empty()) {
                     GTEST_SKIP() << "runs only in its own lane: the three ObjectSubsystemControl. "
-                                    "ctest entries set " << kLaneMarker
+                                    "ctest entries set "
+                                 << kLaneMarker
                                  << " together with the MOBILEGL_PIPE_PUSH bitmask that arm means, "
                                     "MOBILEGL_PIPE_STATS=1, MOBILEGL_PIPE_STATS_PERIOD=1 and a "
                                     "private MOBILEGL_LOG_FILE_PATH. None of that is configured in "
@@ -383,8 +380,8 @@ void main() { oColor = texture(uTex, vUv); }
                 }
                 glGenTextures(1, &m_texture);
                 glBindTexture(GL_TEXTURE_2D, m_texture);
-                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, kTextureSize, kTextureSize, 0, GL_RGBA,
-                             GL_UNSIGNED_BYTE, texels.data());
+                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, kTextureSize, kTextureSize, 0, GL_RGBA, GL_UNSIGNED_BYTE,
+                             texels.data());
                 glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
                 glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
                 glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 0);
@@ -401,13 +398,12 @@ void main() { oColor = texture(uTex, vUv); }
                 // framebuffer, which is exactly what a per-target set_framebuffer_state counts.
                 glGenTextures(1, &m_attachment);
                 glBindTexture(GL_TEXTURE_2D, m_attachment);
-                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, kTextureSize, kTextureSize, 0, GL_RGBA,
-                             GL_UNSIGNED_BYTE, nullptr);
+                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, kTextureSize, kTextureSize, 0, GL_RGBA, GL_UNSIGNED_BYTE,
+                             nullptr);
                 glBindTexture(GL_TEXTURE_2D, 0);
                 glGenFramebuffers(1, &m_fbo);
                 glBindFramebuffer(GL_FRAMEBUFFER, m_fbo);
-                glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
-                                       m_attachment, 0);
+                glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m_attachment, 0);
                 BindDefaultFramebuffer();
 
                 for (int draw = 0; draw < kDrawsInTheWindow; ++draw) {
@@ -430,8 +426,7 @@ void main() { oColor = texture(uTex, vUv); }
                     // same something.
                     const std::uint8_t green[4] = {0, 255, 0, 255};
                     glBindTexture(GL_TEXTURE_2D, m_texture);
-                    glTexSubImage2D(GL_TEXTURE_2D, 0, draw % kTextureSize, 0, 1, 1, GL_RGBA,
-                                    GL_UNSIGNED_BYTE, green);
+                    glTexSubImage2D(GL_TEXTURE_2D, 0, draw % kTextureSize, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, green);
                 }
             }
 
@@ -508,35 +503,31 @@ void main() { oColor = texture(uTex, vUv); }
             const long long samplerStates = PipeStatsWindow::CounterOrAbsent(window, "sse");
             const long long shaderImages = PipeStatsWindow::CounterOrAbsent(window, "sie");
             const long long clientUploads = PipeStatsWindow::CounterOrAbsent(window, "ctu");
-            ASSERT_GE(framebuffer, 0)
-                << "the summary line carries no fbe= field, so this build's PipeStats has no P4a "
-                   "emission counters to read: "
-                << window.line;
+            ASSERT_GE(framebuffer, 0) << "the summary line carries no fbe= field, so this build's PipeStats has no P4a "
+                                         "emission counters to read: "
+                                      << window.line;
             ASSERT_GE(samplerViews, 0) << "no sve= field: " << window.line;
             ASSERT_GE(samplerStates, 0) << "no sse= field: " << window.line;
             ASSERT_GE(shaderImages, 0) << "no sie= field: " << window.line;
             ASSERT_GE(clientUploads, 0) << "no ctu= field: " << window.line;
-            const long long total = framebuffer + samplerViews + samplerStates + shaderImages +
-                                    clientUploads;
+            const long long total = framebuffer + samplerViews + samplerStates + shaderImages + clientUploads;
 
             if (m_lane == kLaneOn) {
-                EXPECT_GT(total, 0)
-                    << "with bits 9|10|11|12 SET the four P4a families are the path this workload "
-                       "takes - a user framebuffer bound and unbound "
-                    << kDrawsInTheWindow
-                    << " times, a texture with parameters and a sub-region upload per iteration, an "
-                       "explicit sampler object on the unit and a program with a default-uniform "
-                       "write - so the window's emit[] bracket must carry something. All five "
-                       "reading zero means the emitters never ran on the arm that is supposed to run "
-                       "them. It reported: "
-                    << window.line;
+                EXPECT_GT(total, 0) << "with bits 9|10|11|12 SET the four P4a families are the path this workload "
+                                       "takes - a user framebuffer bound and unbound "
+                                    << kDrawsInTheWindow
+                                    << " times, a texture with parameters and a sub-region upload per iteration, an "
+                                       "explicit sampler object on the unit and a program with a default-uniform "
+                                       "write - so the window's emit[] bracket must carry something. All five "
+                                       "reading zero means the emitters never ran on the arm that is supposed to run "
+                                       "them. It reported: "
+                                    << window.line;
                 // The framebuffer family on its own, because it is the one that would be hidden by
                 // a large upload count: a suppressor that stopped suppressing shows up as fbe
                 // tracking the DRAW count, and a family that never emitted shows up as zero.
-                EXPECT_GT(framebuffer, 0)
-                    << "fbe= is zero on the ON lane: set_framebuffer_state never went out even "
-                       "though the workload bound a user framebuffer and the default framebuffer "
-                    << kDrawsInTheWindow << " times each. " << window.line;
+                EXPECT_GT(framebuffer, 0) << "fbe= is zero on the ON lane: set_framebuffer_state never went out even "
+                                             "though the workload bound a user framebuffer and the default framebuffer "
+                                          << kDrawsInTheWindow << " times each. " << window.line;
             } else if (m_lane == kLaneOff) {
                 EXPECT_EQ(total, 0)
                     << "with bits 9|10|11|12 CLEARED (MOBILEGL_PIPE_PUSH=0x1ff, P3a's default) the "
@@ -556,9 +547,8 @@ void main() { oColor = texture(uTex, vUv); }
             }
 
             // ... and the picture is the same whichever arm ran.
-            EXPECT_TRUE(RegionIsMostly(image, kInset, image.Width() - kInset, kInset,
-                                       image.Height() - kInset, "green", 0.0,
-                                       "the sampled draw [" + m_lane + "]"))
+            EXPECT_TRUE(RegionIsMostly(image, kInset, image.Width() - kInset, kInset, image.Height() - kInset, "green",
+                                       0.0, "the sampled draw [" + m_lane + "]"))
                 << "the subsystem bits changed what is DRAWN, which is not an A/B - the handle path "
                    "and the legacy path must produce the same pixels from the same texture, sampler "
                    "and framebuffer.";
@@ -606,9 +596,8 @@ void main() { oColor = texture(uTex, vUv); }
             {
                 const std::string& backend = Gl().BackendName();
                 const std::string marker =
-                    "MGITEST_HANDLE_REKEY_OBJECTS_" + (backend == "DirectVulkan"
-                                                           ? std::string("DirectVulkan")
-                                                           : std::string("DirectGLES"));
+                    "MGITEST_HANDLE_REKEY_OBJECTS_" +
+                    (backend == "DirectVulkan" ? std::string("DirectVulkan") : std::string("DirectGLES"));
                 if (!BuildMarkerIsSet(marker.c_str())) {
                     GTEST_SKIP() << "subsystem not implemented on this tree: no source under "
                                     "MobileGL/MG_Backend/"
@@ -643,8 +632,7 @@ void main() { oColor = texture(uTex, vUv); }
             // ONE LINE, at ERROR severity, saying it refused and naming BOTH bits. See
             // FindTheRefusalLine: a substring search over the whole file cannot go red for the
             // reason this case claims (F-M6).
-            const std::string refusal =
-                FindTheRefusalLine(log, SamplerBitSpellings(), kTextureResourceBitMask);
+            const std::string refusal = FindTheRefusalLine(log, SamplerBitSpellings(), kTextureResourceBitMask);
             EXPECT_FALSE(refusal.empty())
                 << "MOBILEGL_PIPE_PUSH=0x9ff sets the sampler subsystem (bit 11) without the texture "
                    "resource subsystem (bit 10) it depends on, and no single ERROR line of the "
@@ -662,9 +650,8 @@ void main() { oColor = texture(uTex, vUv); }
                 RecordProperty("refusal_line", refusal.c_str());
             }
 
-            EXPECT_TRUE(RegionIsMostly(image, kInset, image.Width() - kInset, kInset,
-                                       image.Height() - kInset, "green", 0.0,
-                                       "the sampled draw [refused]"))
+            EXPECT_TRUE(RegionIsMostly(image, kInset, image.Width() - kInset, kInset, image.Height() - kInset, "green",
+                                       0.0, "the sampled draw [refused]"))
                 << "the refused configuration did not draw what every other lane draws. A refusal is "
                    "supposed to run the LEGACY arm, which is the arm that ships in a pull build - so "
                    "the pixels are the one thing it may not change.";
@@ -723,9 +710,8 @@ void main() { oColor = texture(uTex, vUv); }
             {
                 const std::string& backend = Gl().BackendName();
                 const std::string marker =
-                    "MGITEST_HANDLE_REKEY_OBJECTS_" + (backend == "DirectVulkan"
-                                                           ? std::string("DirectVulkan")
-                                                           : std::string("DirectGLES"));
+                    "MGITEST_HANDLE_REKEY_OBJECTS_" +
+                    (backend == "DirectVulkan" ? std::string("DirectVulkan") : std::string("DirectGLES"));
                 if (!BuildMarkerIsSet(marker.c_str())) {
                     GTEST_SKIP() << "subsystem not implemented on this tree: no source under "
                                     "MobileGL/MG_Backend/"
@@ -770,8 +756,7 @@ void main() { oColor = texture(uTex, vUv); }
             // (Managers.cpp, PipeSubsystemDependencyMissing via
             // ResolveTextureResourceSubsystemArm). The row requires bit 7 as well; 0x5ff carries
             // it, so the missing field is bit 11 alone.
-            const std::string refusal =
-                FindTheRefusalLine(log, TextureResourceBitSpellings(), kSamplerBitMask);
+            const std::string refusal = FindTheRefusalLine(log, TextureResourceBitSpellings(), kSamplerBitMask);
             EXPECT_FALSE(refusal.empty())
                 << "MOBILEGL_PIPE_PUSH=0x5ff sets the texture resource subsystem (bit 10) without "
                    "the sampler subsystem (bit 11) that MGPTextureParams::BuiltinSampler depends on, "
@@ -788,9 +773,8 @@ void main() { oColor = texture(uTex, vUv); }
                 RecordProperty("refusal_line", refusal.c_str());
             }
 
-            EXPECT_TRUE(RegionIsMostly(image, kInset, image.Width() - kInset, kInset,
-                                       image.Height() - kInset, "green", 0.0,
-                                       "the sampled draw [refused-texture]"))
+            EXPECT_TRUE(RegionIsMostly(image, kInset, image.Width() - kInset, kInset, image.Height() - kInset, "green",
+                                       0.0, "the sampled draw [refused-texture]"))
                 << "the refused configuration did not draw what every other lane draws. A refusal is "
                    "supposed to run the LEGACY arm, which is the arm that ships in a pull build - so "
                    "the pixels are the one thing it may not change.";
@@ -837,8 +821,8 @@ void main() { oColor = texture(uTex, vUv); }
             SkipUnlessTheLaneIsAssertableHere(/*needsTheEmitters=*/false);
             if (IsSkipped()) return;
             if (!LaneIsAConsumerLane(m_lane)) {
-                GTEST_SKIP() << "runs only in the two consumer lanes (MGITEST_OBJECT_SUBSYSTEM_LANE="
-                             << kLaneConsumer << " / " << kLaneNoConsumer
+                GTEST_SKIP() << "runs only in the two consumer lanes (MGITEST_OBJECT_SUBSYSTEM_LANE=" << kLaneConsumer
+                             << " / " << kLaneNoConsumer
                              << "), which pin MOBILEGL_PIPE_PUSH at the phase default on the two "
                                 "backends. Every other lane configures a mask or a backend whose "
                                 "emission shape is a different question.";
@@ -867,28 +851,25 @@ void main() { oColor = texture(uTex, vUv); }
             // what happened since - which is the number this case is about either way.
             const unsigned long long fired = after >= before ? after - before : after;
 
-            std::cout << "[ ObjectSubsystemControl ] " << m_lane
-                      << " lane: applier RefusedNoConsumer " << before << " -> " << after
-                      << " over the workload (delta " << fired << ")" << std::endl;
+            std::cout << "[ ObjectSubsystemControl ] " << m_lane << " lane: applier RefusedNoConsumer " << before
+                      << " -> " << after << " over the workload (delta " << fired << ")" << std::endl;
             RecordProperty("refused_no_consumer_delta", static_cast<int>(fired));
 
-            EXPECT_EQ(fired, 0u)
-                << "the applier's no-consumer BELT fired " << fired
-                << " time(s) during this workload on the " << m_lane
-                << " lane. The belt exists so that a P4a record arriving on a backend that "
-                   "registered no MGPipeResourceOps is refused rather than accepted - and an "
-                   "accepted record is what makes the client clear the dirty flags whose texels "
-                   "nobody then uploads (ID-39: sixty-six DirectVulkan cases, all texture-upload "
-                   "shaped). A non-zero count means the CLIENT'S GATE let an emission through and "
-                   "only the belt caught it: the two are supposed to agree, and PipeFill's "
-                   "P4aFamilyHasItsConsumer() is where they stopped.";
+            EXPECT_EQ(fired, 0u) << "the applier's no-consumer BELT fired " << fired
+                                 << " time(s) during this workload on the " << m_lane
+                                 << " lane. The belt exists so that a P4a record arriving on a backend that "
+                                    "registered no MGPipeResourceOps is refused rather than accepted - and an "
+                                    "accepted record is what makes the client clear the dirty flags whose texels "
+                                    "nobody then uploads (ID-39: sixty-six DirectVulkan cases, all texture-upload "
+                                    "shaped). A non-zero count means the CLIENT'S GATE let an emission through and "
+                                    "only the belt caught it: the two are supposed to agree, and PipeFill's "
+                                    "P4aFamilyHasItsConsumer() is where they stopped.";
 
             // The pixels, on both lanes, for the reason every arm of this file asserts them: a
             // backend running its legacy path because no consumer is registered must draw exactly
             // what a backend running the handle arm draws.
-            EXPECT_TRUE(RegionIsMostly(image, kInset, image.Width() - kInset, kInset,
-                                       image.Height() - kInset, "green", 0.0,
-                                       "the sampled draw [" + m_lane + "]"))
+            EXPECT_TRUE(RegionIsMostly(image, kInset, image.Width() - kInset, kInset, image.Height() - kInset, "green",
+                                       0.0, "the sampled draw [" + m_lane + "]"))
                 << "the " << m_lane
                 << " lane did not draw what every other lane draws, so whatever the counter says, "
                    "this configuration is not running the workload correctly.";

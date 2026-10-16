@@ -106,9 +106,8 @@ namespace MobileGL {
                 explicit LegalizeResourceArrayIndexPass(Mode mode) : m_mode(mode) {}
 
                 const char* name() const override {
-                    return m_mode == Mode::MarkLoopsForUnroll
-                               ? "mobilegl-mark-resource-array-index-loops"
-                               : "mobilegl-lower-resource-array-index";
+                    return m_mode == Mode::MarkLoopsForUnroll ? "mobilegl-mark-resource-array-index-loops"
+                                                              : "mobilegl-lower-resource-array-index";
                 }
 
                 Status Process() override;
@@ -141,13 +140,11 @@ namespace MobileGL {
                 LoweringOutcome LowerLoad(spvtools::opt::Instruction* accessChain, uint32_t arrayLength,
                                           spvtools::opt::Instruction* load);
                 LoweringOutcome LowerImageChain(spvtools::opt::Instruction* accessChain, uint32_t arrayLength);
-                void KillImageChainIfDead(spvtools::opt::Instruction* accessChain,
-                                          spvtools::opt::Instruction* load);
+                void KillImageChainIfDead(spvtools::opt::Instruction* accessChain, spvtools::opt::Instruction* load);
                 LoweringOutcome LowerImageWrite(spvtools::opt::Instruction* accessChain, uint32_t arrayLength,
                                                 spvtools::opt::Instruction* load,
                                                 spvtools::opt::Instruction* imageWrite);
-                LoweringOutcome LowerImageReadOrQuery(spvtools::opt::Instruction* accessChain,
-                                                      uint32_t arrayLength,
+                LoweringOutcome LowerImageReadOrQuery(spvtools::opt::Instruction* accessChain, uint32_t arrayLength,
                                                       spvtools::opt::Instruction* load,
                                                       spvtools::opt::Instruction* consumer);
 

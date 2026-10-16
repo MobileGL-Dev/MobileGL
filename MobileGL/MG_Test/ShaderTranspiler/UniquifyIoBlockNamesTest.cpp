@@ -165,8 +165,7 @@ TEST_F(UniquifyIoBlockNamesTest, ProbeIgnoresAStageWhoseBlocksAlreadyHaveDistinc
 }
 
 TEST_F(UniquifyIoBlockNamesTest, ProbeNeverReportsTheBuiltinBlock) {
-    const Vector<Uint32> input =
-        CompileToSpirv(GL_TESS_EVALUATION_SHADER, kBuiltinBlockOnlyTessEvalSource);
+    const Vector<Uint32> input = CompileToSpirv(GL_TESS_EVALUATION_SHADER, kBuiltinBlockOnlyTessEvalSource);
     ASSERT_FALSE(input.empty());
 
     std::set<String> colliding;
@@ -196,17 +195,15 @@ TEST_F(UniquifyIoBlockNamesTest, RenamesTheTwoBlocksApartInTheEmittedEssl) {
 
     std::set<String> renamed;
     Vector<Uint32> output;
-    ASSERT_TRUE(ShaderCompiler::UniquifyIoBlockNamesForEssl(input, inputRenames, outputRenames, renamed,
-                                                            output, true));
+    ASSERT_TRUE(ShaderCompiler::UniquifyIoBlockNamesForEssl(input, inputRenames, outputRenames, renamed, output, true));
     ASSERT_FALSE(output.empty());
     EXPECT_EQ(renamed, (std::set<String>{"TCSOutputBlock"}));
 
     const String dis = Disassemble(output);
     spvtools::SpirvTools tools(SPV_ENV_VULKAN_1_1);
     ASSERT_TRUE(tools.Validate(output)) << dis;
-    EXPECT_EQ(dis.find("\"TCSOutputBlock\""), String::npos)
-        << "the colliding name is still on a block struct:\n"
-        << dis;
+    EXPECT_EQ(dis.find("\"TCSOutputBlock\""), String::npos) << "the colliding name is still on a block struct:\n"
+                                                            << dis;
     EXPECT_NE(dis.find("\"TCSOutputBlock_mgio1\""), String::npos) << dis;
     EXPECT_NE(dis.find("\"TCSOutputBlock_mgio2\""), String::npos) << dis;
 
@@ -231,8 +228,7 @@ TEST_F(UniquifyIoBlockNamesTest, RenamesOnlyTheDirectionTheCallerPlanned) {
 
     std::set<String> renamed;
     Vector<Uint32> output;
-    ASSERT_TRUE(
-        ShaderCompiler::UniquifyIoBlockNamesForEssl(input, inputRenames, {}, renamed, output, true));
+    ASSERT_TRUE(ShaderCompiler::UniquifyIoBlockNamesForEssl(input, inputRenames, {}, renamed, output, true));
     ASSERT_FALSE(output.empty());
     EXPECT_EQ(renamed, (std::set<String>{"TCSOutputBlock"}));
 

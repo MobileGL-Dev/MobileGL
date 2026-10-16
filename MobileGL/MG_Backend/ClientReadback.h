@@ -59,8 +59,8 @@ namespace MobileGL::MG_Backend {
         // applyPackImageParams - image height/skip images). Shared by the DirectGLES and DirectVulkan
         // readback conversion paths.
         Bool StoreWideRowsToClient(const Uint8* wide, GLenum wideType, GLsizei width, GLsizei sliceHeight,
-                                   GLsizei sliceCount, const ReadbackChannelMapping& mapping, GLenum type,
-                                   void* pixels, Bool applyPackImageParams);
+                                   GLsizei sliceCount, const ReadbackChannelMapping& mapping, GLenum type, void* pixels,
+                                   Bool applyPackImageParams);
 
         // Stores packed 32-bit source words verbatim, with the same destination addressing and PACK
         // parameters as StoreWideRowsToClient. For the sources whose storage word already IS the

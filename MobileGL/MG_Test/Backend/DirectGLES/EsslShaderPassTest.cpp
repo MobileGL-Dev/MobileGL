@@ -35,14 +35,14 @@ using MobileGL::MG_Backend::DirectGLES::PrgramImpl::IMAGE_WRITE_ALIAS_PREFIX;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::IMAGE_WRITEONLY_ALIAS_PREFIX;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::ImageArrayUnitPlan;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::LowerZeroGradCubeArrayShadowLookups;
-using MobileGL::MG_Backend::DirectGLES::PrgramImpl::RedeclareClipCullDistancesInPerVertexBlock;
-using MobileGL::MG_Backend::DirectGLES::PrgramImpl::RedeclareClipCullDistanceInputsInPerVertexBlock;
-using MobileGL::MG_Backend::DirectGLES::PrgramImpl::RemapImageArrayElementUnits;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::PointSizeExtensionName;
+using MobileGL::MG_Backend::DirectGLES::PrgramImpl::RedeclareClipCullDistanceInputsInPerVertexBlock;
+using MobileGL::MG_Backend::DirectGLES::PrgramImpl::RedeclareClipCullDistancesInPerVertexBlock;
+using MobileGL::MG_Backend::DirectGLES::PrgramImpl::RemapImageArrayElementUnits;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::RemoveLayoutBinding;
-using MobileGL::MG_Backend::DirectGLES::PrgramImpl::RequestPointSizeExtension;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::RequestClipCullDistanceExtension;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::RequestExtendedImageFormats;
+using MobileGL::MG_Backend::DirectGLES::PrgramImpl::RequestPointSizeExtension;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::RequestViewportArrayExtension;
 using MobileGL::MG_Backend::DirectGLES::PrgramImpl::SplitReadWriteImageUniforms;
 
@@ -61,12 +61,22 @@ namespace {
 
     // The pass tags the name of every declaration it rewrites with the REPAIR it applied, so the
     // expectations have to spell the tag that matches how the fixture uses the image.
-    String RoAlias(const String& name) { return String(IMAGE_READONLY_ALIAS_PREFIX) + name; }
-    String WoAlias(const String& name) { return String(IMAGE_WRITEONLY_ALIAS_PREFIX) + name; }
-    String RwAlias(const String& name) { return String(IMAGE_SPLIT_READ_ALIAS_PREFIX) + name; }
+    String RoAlias(const String& name) {
+        return String(IMAGE_READONLY_ALIAS_PREFIX) + name;
+    }
+    String WoAlias(const String& name) {
+        return String(IMAGE_WRITEONLY_ALIAS_PREFIX) + name;
+    }
+    String RwAlias(const String& name) {
+        return String(IMAGE_SPLIT_READ_ALIAS_PREFIX) + name;
+    }
     // The writeonly half is minted from the ALREADY access-tagged name, so it carries both.
-    String WriteAlias(const String& name) { return String(IMAGE_WRITE_ALIAS_PREFIX) + name; }
-    String SplitWriteAlias(const String& name) { return WriteAlias(RwAlias(name)); }
+    String WriteAlias(const String& name) {
+        return String(IMAGE_WRITE_ALIAS_PREFIX) + name;
+    }
+    String SplitWriteAlias(const String& name) {
+        return WriteAlias(RwAlias(name));
+    }
     // The scalar RemapImageArrayElementUnits declares for one element of a split image array.
     String Elem(const String& name, Int element) {
         return String(IMAGE_ARRAY_ELEMENT_PREFIX) + name + "_" + std::to_string(element);
@@ -94,8 +104,8 @@ void main()
     // Both halves: same binding, same format, same type - which is what makes two image
     // variables on one image unit legal - and both `coherent`, which is what makes the store
     // through one of them visible to the load through the other.
-    EXPECT_TRUE(Contains(out, "layout(binding = 2, rgba8) uniform coherent readonly highp image2D " +
-                                  RwAlias("goku") + ";"))
+    EXPECT_TRUE(
+        Contains(out, "layout(binding = 2, rgba8) uniform coherent readonly highp image2D " + RwAlias("goku") + ";"))
         << out;
     EXPECT_TRUE(Contains(out, "layout(binding = 2, rgba8) uniform coherent writeonly highp image2D " +
                                   SplitWriteAlias("goku") + ";"))
@@ -136,8 +146,8 @@ void main()
 }
 )";
     const String out = SplitReadWriteImageUniforms(source);
-    EXPECT_TRUE(Contains(out, "layout(binding = 1, rgba16f) uniform readonly highp image2DArray " +
-                                  RoAlias("trunks") + ";"))
+    EXPECT_TRUE(
+        Contains(out, "layout(binding = 1, rgba16f) uniform readonly highp image2DArray " + RoAlias("trunks") + ";"))
         << out;
     EXPECT_TRUE(Contains(out, "imageLoad(" + RoAlias("trunks") + ","));
     EXPECT_FALSE(Contains(out, "writeonly"));
@@ -154,8 +164,7 @@ void main()
 }
 )";
     const String out = SplitReadWriteImageUniforms(source);
-    EXPECT_TRUE(
-        Contains(out, "layout(binding = 3, rgba8) uniform writeonly highp image2D " + WoAlias("gohan") + ";"))
+    EXPECT_TRUE(Contains(out, "layout(binding = 3, rgba8) uniform writeonly highp image2D " + WoAlias("gohan") + ";"))
         << out;
     EXPECT_TRUE(Contains(out, "imageStore(" + WoAlias("gohan") + ","));
     EXPECT_FALSE(Contains(out, "readonly"));
@@ -189,11 +198,9 @@ void main()
 }
 )";
     const String out = SplitReadWriteImageUniforms(source);
-    EXPECT_TRUE(Contains(out, "layout(binding = 0, rgba8) uniform readonly highp image2D " +
-                                  RoAlias("reader") + ";"))
+    EXPECT_TRUE(Contains(out, "layout(binding = 0, rgba8) uniform readonly highp image2D " + RoAlias("reader") + ";"))
         << out;
-    EXPECT_TRUE(Contains(out, "layout(binding = 1, rgba8) uniform writeonly highp image2D " +
-                                  WoAlias("writer") + ";"))
+    EXPECT_TRUE(Contains(out, "layout(binding = 1, rgba8) uniform writeonly highp image2D " + WoAlias("writer") + ";"))
         << out;
     EXPECT_TRUE(Contains(out, "imageStore(" + WoAlias("writer") + ",")) << out;
     EXPECT_TRUE(Contains(out, "imageLoad(" + RoAlias("reader") + ",")) << out;
@@ -229,8 +236,8 @@ void main()
 }
 )";
     const String out = SplitReadWriteImageUniforms(source);
-    EXPECT_TRUE(Contains(out, "layout(binding = 6, rgba8) uniform coherent readonly highp image2D " +
-                                  RwAlias("gohan") + "[3];"))
+    EXPECT_TRUE(Contains(out, "layout(binding = 6, rgba8) uniform coherent readonly highp image2D " + RwAlias("gohan") +
+                                  "[3];"))
         << out;
     EXPECT_TRUE(Contains(out, "layout(binding = 6, rgba8) uniform coherent writeonly highp image2D " +
                                   SplitWriteAlias("gohan") + "[3];"))
@@ -256,14 +263,13 @@ void main()
 
     // goku is read+write -> split (and coherent with it); goku_hd is write-only -> qualified in
     // place, not split, and left non-coherent because nothing aliases it. Both are renamed.
-    EXPECT_TRUE(Contains(out, "layout(binding = 1, rgba8) uniform coherent readonly highp image2D " +
-                                  RwAlias("goku") + ";"))
+    EXPECT_TRUE(
+        Contains(out, "layout(binding = 1, rgba8) uniform coherent readonly highp image2D " + RwAlias("goku") + ";"))
         << out;
     EXPECT_TRUE(Contains(out, "layout(binding = 1, rgba8) uniform coherent writeonly highp image2D " +
                                   SplitWriteAlias("goku") + ";"))
         << out;
-    EXPECT_TRUE(Contains(out, "layout(binding = 2, rgba8) uniform writeonly highp image2D " +
-                                  WoAlias("goku_hd") + ";"))
+    EXPECT_TRUE(Contains(out, "layout(binding = 2, rgba8) uniform writeonly highp image2D " + WoAlias("goku_hd") + ";"))
         << out;
     EXPECT_TRUE(Contains(out, "imageStore(" + WoAlias("goku_hd") + ","));
     EXPECT_FALSE(Contains(out, SplitWriteAlias("goku") + "_hd"));
@@ -281,10 +287,8 @@ void main()
 }
 )";
     const String out = SplitReadWriteImageUniforms(source);
-    EXPECT_TRUE(Contains(out, "uniform readonly coherent restrict highp image2D " + RwAlias("goku") + ";"))
-        << out;
-    EXPECT_TRUE(
-        Contains(out, "uniform writeonly coherent restrict highp image2D " + SplitWriteAlias("goku") + ";"))
+    EXPECT_TRUE(Contains(out, "uniform readonly coherent restrict highp image2D " + RwAlias("goku") + ";")) << out;
+    EXPECT_TRUE(Contains(out, "uniform writeonly coherent restrict highp image2D " + SplitWriteAlias("goku") + ";"))
         << out;
     // ...and the coherent the split adds is not a SECOND one: a repeated memory qualifier is a
     // compile error in ESSL, so the source's own has to be recognized.
@@ -311,8 +315,7 @@ void main()
 )";
     const String out = SplitReadWriteImageUniforms(source);
     EXPECT_TRUE(Contains(out, "uniform coherent readonly highp image2D " + RwAlias("goku") + ";")) << out;
-    EXPECT_TRUE(Contains(out, "uniform coherent writeonly highp image2D " + SplitWriteAlias("goku") + ";"))
-        << out;
+    EXPECT_TRUE(Contains(out, "uniform coherent writeonly highp image2D " + SplitWriteAlias("goku") + ";")) << out;
     // Exactly the two halves of the pair, and nothing else: the store-only image is repaired in
     // place, has no alias to stay visible to, and must not pay for uncached access.
     EXPECT_EQ(CountOf(out, "coherent"), 2u);
@@ -377,8 +380,8 @@ void main()
 }
 )";
     const String out = SplitReadWriteImageUniforms(source);
-    EXPECT_TRUE(Contains(out, "max(imageLoad(" + RwAlias("gohan") +
-                                  "[2], ivec2(0)), vec4(0.5))); memoryBarrierImage();"))
+    EXPECT_TRUE(
+        Contains(out, "max(imageLoad(" + RwAlias("gohan") + "[2], ivec2(0)), vec4(0.5))); memoryBarrierImage();"))
         << out;
     EXPECT_EQ(CountOf(out, "memoryBarrierImage();"), 1u) << out;
 }
@@ -430,8 +433,8 @@ void main()
 }
 )";
     const String out = SplitReadWriteImageUniforms(source);
-    EXPECT_TRUE(Contains(out, "layout(binding = 8, rgba8ui) uniform readonly highp uimage2D " +
-                                  RoAlias("sizeOnly") + ";"))
+    EXPECT_TRUE(
+        Contains(out, "layout(binding = 8, rgba8ui) uniform readonly highp uimage2D " + RoAlias("sizeOnly") + ";"))
         << out;
     // The rename has to reach imageSize too, or the declaration and its only use stop agreeing.
     EXPECT_TRUE(Contains(out, "imageSize(" + RoAlias("sizeOnly") + ")")) << out;
@@ -593,8 +596,7 @@ void main()
     const String first = SplitReadWriteImageUniforms(stage);
     const String second = SplitReadWriteImageUniforms(stage);
     EXPECT_EQ(first, second);
-    EXPECT_TRUE(Contains(first, "uniform coherent readonly highp image2D " + RoAlias("g_image") + ";"))
-        << first;
+    EXPECT_TRUE(Contains(first, "uniform coherent readonly highp image2D " + RoAlias("g_image") + ";")) << first;
 }
 
 // The other side of that coin, and the one a per-STAGE tag got wrong. Two stages that use the
@@ -630,8 +632,7 @@ void main()
     // back into the single image uniform the application declared.
     for (const String& out : {vsOut, fsOut}) {
         EXPECT_TRUE(Contains(out, "uniform coherent readonly highp image2D " + RwAlias("goku") + ";")) << out;
-        EXPECT_TRUE(Contains(out, "uniform coherent writeonly highp image2D " + SplitWriteAlias("goku") + ";"))
-            << out;
+        EXPECT_TRUE(Contains(out, "uniform coherent writeonly highp image2D " + SplitWriteAlias("goku") + ";")) << out;
         EXPECT_TRUE(Contains(out, "imageLoad(" + RwAlias("goku") + ",")) << out;
         EXPECT_TRUE(Contains(out, "imageStore(" + SplitWriteAlias("goku") + ",")) << out;
     }
@@ -693,8 +694,7 @@ void main()
 // units 0, 1, 2, 3.
 TEST(RemapImageArrayElementUnitsTest, NonConsecutiveUnitsSplitIntoOneScalarPerElement) {
     Vector<String> declined;
-    const String out =
-        RemapImageArrayElementUnits(kSsoImageArrayFS, {Plan("g_image", {0, 2, 4, 6})}, &declined);
+    const String out = RemapImageArrayElementUnits(kSsoImageArrayFS, {Plan("g_image", {0, 2, 4, 6})}, &declined);
 
     EXPECT_TRUE(declined.empty()) << (declined.empty() ? String() : declined[0]);
     const Int units[4] = {0, 2, 4, 6};
@@ -702,8 +702,7 @@ TEST(RemapImageArrayElementUnitsTest, NonConsecutiveUnitsSplitIntoOneScalarPerEl
         EXPECT_TRUE(Contains(out, "layout(rgba32f, binding = " + std::to_string(units[element]) +
                                       ") uniform writeonly highp image2D " + Elem("g_image", element) + ";"))
             << out;
-        EXPECT_TRUE(Contains(out, "imageStore(" + Elem("g_image", element) + ", ivec2(gl_FragCoord.xy)"))
-            << out;
+        EXPECT_TRUE(Contains(out, "imageStore(" + Elem("g_image", element) + ", ivec2(gl_FragCoord.xy)")) << out;
     }
     // The array is gone entirely; nothing may still address units 0,1,2,3 through it.
     EXPECT_FALSE(Contains(out, "image2D g_image[4];")) << out;
@@ -727,8 +726,8 @@ void main()
     const String out = RemapImageArrayElementUnits(source, {Plan("g_image", {3, 1, 7, 5})});
     const Int units[4] = {3, 1, 7, 5};
     for (Int element = 0; element < 4; ++element) {
-        EXPECT_TRUE(Contains(out, "binding = " + std::to_string(units[element]) +
-                                      ") uniform writeonly highp image2D " + Elem("g_image", element) + ";"))
+        EXPECT_TRUE(Contains(out, "binding = " + std::to_string(units[element]) + ") uniform writeonly highp image2D " +
+                                      Elem("g_image", element) + ";"))
             << out;
     }
     // Only elements 0 and 3 are ever accessed; elements 1 and 2 are declared and unused, because
@@ -783,8 +782,7 @@ void main()
 }
 )";
     Vector<String> outOfRangeDeclined;
-    EXPECT_EQ(RemapImageArrayElementUnits(outOfRange, {Plan("g_image", {0, 5})}, &outOfRangeDeclined),
-              outOfRange);
+    EXPECT_EQ(RemapImageArrayElementUnits(outOfRange, {Plan("g_image", {0, 5})}, &outOfRangeDeclined), outOfRange);
     ASSERT_EQ(outOfRangeDeclined.size(), 1u);
 }
 
@@ -913,8 +911,7 @@ void main()
     // Element 1 sits on unit 9, and both halves of its split pair say so.
     EXPECT_EQ(CountOf(out, "binding = 9"), 2u) << out;
     EXPECT_TRUE(Contains(out, "readonly highp image2D " + RwAlias(Elem("g_image", 1)) + ";")) << out;
-    EXPECT_TRUE(Contains(out, "writeonly highp image2D " + WriteAlias(RwAlias(Elem("g_image", 1))) + ";"))
-        << out;
+    EXPECT_TRUE(Contains(out, "writeonly highp image2D " + WriteAlias(RwAlias(Elem("g_image", 1))) + ";")) << out;
     EXPECT_EQ(CountOf(out, "binding = 4"), 1u) << out;
 }
 
@@ -986,9 +983,11 @@ void main()
 TEST(RetargetTextureBufferExtensionTest, OesOnlyDriverGetsTheOesDirective) {
     const String out = RetargetTextureBufferExtension(kBufferTextureShader, Tier::ExtensionOES);
     EXPECT_TRUE(Contains(out, "#extension GL_OES_texture_buffer : require"))
-        << "the OES driver's own spelling must reach the directive:\n" << out;
+        << "the OES driver's own spelling must reach the directive:\n"
+        << out;
     EXPECT_FALSE(Contains(out, "GL_EXT_texture_buffer"))
-        << "the EXT spelling this driver does not advertise must be gone:\n" << out;
+        << "the EXT spelling this driver does not advertise must be gone:\n"
+        << out;
     // Only the directive changes; the declaration and the fetch are identical between the two
     // extensions and must not be touched.
     EXPECT_TRUE(Contains(out, "uniform highp isamplerBuffer CloudFaces;"));
@@ -996,17 +995,14 @@ TEST(RetargetTextureBufferExtensionTest, OesOnlyDriverGetsTheOesDirective) {
 }
 
 TEST(RetargetTextureBufferExtensionTest, ExtDriverKeepsWhatSpirvCrossEmitted) {
-    EXPECT_EQ(RetargetTextureBufferExtension(kBufferTextureShader, Tier::ExtensionEXT),
-              kBufferTextureShader);
+    EXPECT_EQ(RetargetTextureBufferExtension(kBufferTextureShader, Tier::ExtensionEXT), kBufferTextureShader);
 }
 
 // ES 3.2 needs no directive at all, and SPIRV-Cross emits none at ESSL 320 - but a shader
 // that arrived with one anyway must not be rewritten to a name the pass was not asked for.
 TEST(RetargetTextureBufferExtensionTest, CoreAndUnsupportedTiersAreNoOps) {
-    EXPECT_EQ(RetargetTextureBufferExtension(kBufferTextureShader, Tier::CoreEs32),
-              kBufferTextureShader);
-    EXPECT_EQ(RetargetTextureBufferExtension(kBufferTextureShader, Tier::None),
-              kBufferTextureShader);
+    EXPECT_EQ(RetargetTextureBufferExtension(kBufferTextureShader, Tier::CoreEs32), kBufferTextureShader);
+    EXPECT_EQ(RetargetTextureBufferExtension(kBufferTextureShader, Tier::None), kBufferTextureShader);
 }
 
 // The name is only the subject of a rewrite where it is the subject of an #extension
@@ -1065,7 +1061,8 @@ void main() {}
     const String out = RetargetTextureBufferExtension(source, Tier::ExtensionOES);
     EXPECT_TRUE(Contains(out, "#  extension GL_OES_texture_buffer : require")) << out;
     EXPECT_TRUE(Contains(out, "#extension GL_EXT_shader_io_blocks : require"))
-        << "an unrelated extension must survive untouched:\n" << out;
+        << "an unrelated extension must survive untouched:\n"
+        << out;
     EXPECT_EQ(CountOf(out, "GL_OES_texture_buffer"), 1u);
 }
 
@@ -1368,8 +1365,8 @@ layout(points) in;
 layout(points, max_vertices = 1) out;
 void main() { gl_ViewportIndex = 1; gl_PointSize = 2.0; EmitVertex(); }
 )";
-    const String out = RequestPointSizeExtension(RequestViewportArrayExtension(source, true),
-                                                 "GL_EXT_geometry_point_size");
+    const String out =
+        RequestPointSizeExtension(RequestViewportArrayExtension(source, true), "GL_EXT_geometry_point_size");
     EXPECT_EQ(out.find("#version 320 es"), 0u) << out;
     EXPECT_TRUE(Contains(out, "#extension GL_OES_viewport_array : require\n")) << out;
     EXPECT_TRUE(Contains(out, "#extension GL_EXT_geometry_point_size : require\n")) << out;
@@ -1407,9 +1404,7 @@ TEST(PassthroughTessControlEsslTest, DeclaresThePatchSizeAndWritesEveryTessLevel
     const String out = BuildPassthroughTessControlEssl(320, 4, "", "", kDefaultOuter, kDefaultInner);
     EXPECT_EQ(out.find("#version 320 es"), 0u) << out;
     EXPECT_TRUE(Contains(out, "layout(vertices = 4) out;")) << out;
-    EXPECT_TRUE(Contains(out,
-                         "gl_out[gl_InvocationID].gl_Position = gl_in[gl_InvocationID].gl_Position;"))
-        << out;
+    EXPECT_TRUE(Contains(out, "gl_out[gl_InvocationID].gl_Position = gl_in[gl_InvocationID].gl_Position;")) << out;
     // All six, unconditionally: writing a level the evaluation stage's domain does not use is
     // legal and ignored, and it saves the generator from having to know the domain.
     for (const char* level : {"gl_TessLevelOuter[0]", "gl_TessLevelOuter[1]", "gl_TessLevelOuter[2]",
@@ -1425,8 +1420,8 @@ TEST(PassthroughTessControlEsslTest, DeclaresThePatchSizeAndWritesEveryTessLevel
 // entry point to forward it to, so a generator that ignored these arguments would tessellate every
 // control-stage-less program at level 1 whatever the application asked for.
 TEST(PassthroughTessControlEsslTest, BakesTheDefaultTessLevelsIn) {
-    const String out = BuildPassthroughTessControlEssl(320, 4, "", "", FloatVec4(2.0f, 3.0f, 4.0f, 5.0f),
-                                                       FloatVec2(6.5f, 7.25f));
+    const String out =
+        BuildPassthroughTessControlEssl(320, 4, "", "", FloatVec4(2.0f, 3.0f, 4.0f, 5.0f), FloatVec2(6.5f, 7.25f));
     EXPECT_TRUE(Contains(out, "gl_TessLevelOuter[0] = 2.0;")) << out;
     EXPECT_TRUE(Contains(out, "gl_TessLevelOuter[1] = 3.0;")) << out;
     EXPECT_TRUE(Contains(out, "gl_TessLevelOuter[2] = 4.0;")) << out;
@@ -1439,8 +1434,8 @@ TEST(PassthroughTessControlEsslTest, BakesTheDefaultTessLevelsIn) {
 // `gl_TessLevelOuter[0] = 1;` as an int assigned to a float and refuses to compile the stage,
 // which would take the whole program down with it.
 TEST(PassthroughTessControlEsslTest, SpellsIntegralLevelsAsFloatLiterals) {
-    const String out = BuildPassthroughTessControlEssl(320, 4, "", "", FloatVec4(2.0f, 2.0f, 2.0f, 2.0f),
-                                                       FloatVec2(2.0f, 2.0f));
+    const String out =
+        BuildPassthroughTessControlEssl(320, 4, "", "", FloatVec4(2.0f, 2.0f, 2.0f, 2.0f), FloatVec2(2.0f, 2.0f));
     EXPECT_FALSE(Contains(out, "= 2;")) << out;
 }
 
@@ -1452,8 +1447,7 @@ TEST(PassthroughTessControlEsslTest, SpellsIntegralLevelsAsFloatLiterals) {
 TEST(PassthroughTessControlEsslTest, NonFiniteLevelsFollowTheDiscardRule) {
     const Float notANumber = std::numeric_limits<Float>::quiet_NaN();
     const Float infinity = std::numeric_limits<Float>::infinity();
-    const String out = BuildPassthroughTessControlEssl(320, 4, "", "",
-                                                       FloatVec4(notANumber, -infinity, infinity, 1.0f),
+    const String out = BuildPassthroughTessControlEssl(320, 4, "", "", FloatVec4(notANumber, -infinity, infinity, 1.0f),
                                                        FloatVec2(notANumber, 1.0f));
     EXPECT_TRUE(Contains(out, "gl_TessLevelOuter[0] = 0.0;")) << out;
     EXPECT_TRUE(Contains(out, "gl_TessLevelOuter[1] = 0.0;")) << out;
@@ -1467,9 +1461,8 @@ TEST(PassthroughTessControlEsslTest, NonFiniteLevelsFollowTheDiscardRule) {
 // A level below the old six-decimal format's resolution is still a POSITIVE level, which GL clamps
 // to 1 and draws; rendering it as "0.000000" discarded the patch instead.
 TEST(PassthroughTessControlEsslTest, TinyPositiveLevelsDoNotFlushToZero) {
-    const String out = BuildPassthroughTessControlEssl(320, 4, "", "",
-                                                       FloatVec4(1e-7f, 1.0f, 1.0f, 1.0f),
-                                                       FloatVec2(1.0f, 1.0f));
+    const String out =
+        BuildPassthroughTessControlEssl(320, 4, "", "", FloatVec4(1e-7f, 1.0f, 1.0f, 1.0f), FloatVec2(1.0f, 1.0f));
     EXPECT_FALSE(Contains(out, "gl_TessLevelOuter[0] = 0.0;")) << out;
     EXPECT_FALSE(Contains(out, "gl_TessLevelOuter[0] = 0.000000;")) << out;
 }

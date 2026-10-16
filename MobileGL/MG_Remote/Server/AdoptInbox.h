@@ -29,7 +29,11 @@ namespace MobileGL::MG_Remote::Server {
 
     class AdoptInbox {
     public:
-        enum class Outcome : Uint8 { Taken, TimedOut, Closed };
+        enum class Outcome : Uint8 {
+            Taken,
+            TimedOut,
+            Closed
+        };
 
         AdoptInbox() = default;
         ~AdoptInbox();
@@ -40,8 +44,7 @@ namespace MobileGL::MG_Remote::Server {
 
         // The Offer for record `seq` and its hop descriptor (owned by the caller on Taken). Waits
         // at most `timeoutMs` for it; `why` names what went wrong otherwise.
-        Outcome Take(Uint64 seq, Uint32 timeoutMs, int* outFd, Transport::AdoptT0::Offer* outOffer,
-                     std::string& why);
+        Outcome Take(Uint64 seq, Uint32 timeoutMs, int* outFd, Transport::AdoptT0::Offer* outOffer, std::string& why);
 
         // A shared image's descriptor for record `seq` (an Import; sideband MGPSharedImageFdOffer).
         // Same matching and the same bound as Take; the two kinds share the aux socket and are kept
@@ -56,7 +59,10 @@ namespace MobileGL::MG_Remote::Server {
         SizeT Kept() const { return m_kept.size(); }
 
     private:
-        enum class Kind : Uint8 { T0, SharedImage };
+        enum class Kind : Uint8 {
+            T0,
+            SharedImage
+        };
         struct KeptOffer {
             int fd = -1;
             Transport::AdoptT0::Offer offer{};

@@ -49,7 +49,7 @@ namespace MGITest {
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
             g_holdActive.store(false, std::memory_order_release);
         }
-    }
+    } // namespace
 #endif
     bool ArmSplitApplyHoldForTesting() {
 #if defined(MGITEST_SPLIT_RUNTIME_PEEK_LIVE)
@@ -111,7 +111,8 @@ namespace MGITest {
         } while (std::chrono::steady_clock::now() < until);
         return control->Progress.appliedSeq.load(std::memory_order_acquire) >= seq;
 #else
-        (void)seq; (void)timeoutMs;
+        (void)seq;
+        (void)timeoutMs;
         return false;
 #endif
     }
@@ -134,9 +135,15 @@ namespace MGITest {
         state.peekAvailable = true;
         state.totalVerbSlots = MobileGL::MG_Remote::Client::kRemoteEmitSlotCount;
         switch (MobileGL::MG_Config::Transport) {
-            case TransportMode::Monolith: state.transportName = "monolith"; break;
-            case TransportMode::InProcess: state.transportName = "inproc"; break;
-            default: state.transportName = "non-monolith"; break;
+        case TransportMode::Monolith:
+            state.transportName = "monolith";
+            break;
+        case TransportMode::InProcess:
+            state.transportName = "inproc";
+            break;
+        default:
+            state.transportName = "non-monolith";
+            break;
         }
         state.transportResolved = MobileGL::MG_Config::Transport != TransportMode::Monolith;
         state.dataArmIsRecord = MobileGL::MG_Config::DataArmIsRecord();
@@ -144,8 +151,7 @@ namespace MGITest {
         // Active() is c0's one deliberately non-aborting accessor: "does a session exist" has a
         // legitimate no. Everything below it is only reached through a live session, so nothing
         // here can trip one of c0's Fatal stubs.
-        MobileGL::MG_Remote::Client::ClientSession* session =
-            MobileGL::MG_Remote::Client::ClientSession::Active();
+        MobileGL::MG_Remote::Client::ClientSession* session = MobileGL::MG_Remote::Client::ClientSession::Active();
         state.sessionActive = session != nullptr;
         state.implementedVerbs = MobileGL::MG_Remote::Client::ImplementedVerbCount();
         if (session != nullptr) {
@@ -158,8 +164,7 @@ namespace MGITest {
             // MGPipeResourceOpsHaveSubDataResident reads (MG_Impl/Pipe/PipeFill.cpp), so a
             // green case here and a resident emission there cannot disagree about the bit.
             state.residentSubDataCap =
-                MobileGL::MG_Remote::Client::CapsMirrorInstance().HasCap(
-                    MobileGL::MG_Pipe::kCapResidentSubData);
+                MobileGL::MG_Remote::Client::CapsMirrorInstance().HasCap(MobileGL::MG_Pipe::kCapResidentSubData);
             state.presentCredit = MobileGL::MG_Config::Ipc.PresentCredit;
             state.presentCreditWaits = session->PresentCreditWaits();
             if (const auto* control = session->Control()) {
@@ -178,8 +183,8 @@ namespace MGITest {
             state.cmdBytesWritten = encoder.CmdBytesWritten();
             state.stageReclaimWaits = encoder.StageReclaimWaits();
             state.replyPostings = session->ReplyPostings();
-            state.packBufferReadbackMarks = MobileGL::MG_Record::ProducerMarkCount(
-                MobileGL::MG_Record::GpuWriteProducer::ReadPixelsPackBuffer);
+            state.packBufferReadbackMarks =
+                MobileGL::MG_Record::ProducerMarkCount(MobileGL::MG_Record::GpuWriteProducer::ReadPixelsPackBuffer);
             const auto fences = MobileGL::MG_Remote::Client::ReadFencePollCounters();
             state.fenceLocalAnswers = fences.LocalAnswers;
             state.fenceEscalations = fences.Escalations;
@@ -214,8 +219,7 @@ namespace MGITest {
                    "G14) and skips rather than passing against the monolith path";
         }
         if (state.implementedVerbs == 0) {
-            return "MG_Remote::Client::ImplementedVerbCount() is 0 of " +
-                   std::to_string(state.totalVerbSlots) +
+            return "MG_Remote::Client::ImplementedVerbCount() is 0 of " + std::to_string(state.totalVerbSlots) +
                    ": the emit table has no real emitter, so every verb this scenario issues would "
                    "take the Fatal{UnmigratedVerb} arm or fall through. Package c1 owns it";
         }

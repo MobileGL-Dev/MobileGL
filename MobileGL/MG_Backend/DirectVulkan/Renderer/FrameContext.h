@@ -120,7 +120,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         VkResult AcquireNextImageInCurrentSlot(VkDevice device, VkSwapchainKHR swapchain, Uint32& outImageIndex);
         // The per-swapchain-image render-finished semaphores belong to one swapchain; a renderer
         // that parks a surface parks them with it.
-        void ExchangeSwapchainSemaphores(Vector<VkSemaphore>& other) { std::swap(m_swapchainImageRenderFinishedSemaphores, other); }
+        void ExchangeSwapchainSemaphores(Vector<VkSemaphore>& other) {
+            std::swap(m_swapchainImageRenderFinishedSemaphores, other);
+        }
         VkResult WaitAndAcquireNextImage(VkDevice device, VkSwapchainKHR swapchain, Uint32& outImageIndex,
                                          Uint64 timeout = UINT64_MAX, VkFence acquireFence = VK_NULL_HANDLE);
 

@@ -121,11 +121,9 @@ void main()
                     Draw(/*src0=*/1.0f, /*src1=*/1.0f);
                     glFinish();
                     const Image probe = ReadPixels(kExtent, kExtent);
-                    m_programRenders =
-                        !probe.Empty() && static_cast<int>(probe.At(kExtent / 2, kExtent / 2).r) > 245;
+                    m_programRenders = !probe.Empty() && static_cast<int>(probe.At(kExtent / 2, kExtent / 2).r) > 245;
                 }
-                for (int i = 0; i < 16 && glGetError() != GL_NO_ERROR; ++i) {
-                }
+                for (int i = 0; i < 16 && glGetError() != GL_NO_ERROR; ++i) {}
             }
 
             void TearDown() override {
@@ -204,9 +202,9 @@ void main()
         const int red = static_cast<int>(centre.r);
         const bool blended = red > 100 && red < 160;
         const bool declined = red > 245;
-        EXPECT_TRUE(blended || declined)
-            << "got " << centre << ", which is neither the dual-source blend (~128) nor the declined "
-            << "straight-through source (255) - the SRC1 factors were mistranslated";
+        EXPECT_TRUE(blended || declined) << "got " << centre
+                                         << ", which is neither the dual-source blend (~128) nor the declined "
+                                         << "straight-through source (255) - the SRC1 factors were mistranslated";
         Gl().EndFrame();
     }
 

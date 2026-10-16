@@ -31,26 +31,38 @@ namespace MobileGL::MG_Util::Async {
             if (!continuation) return;
             try {
                 continuation();
-            } catch (const std::exception& e) {
+            }
+            catch (const std::exception& e) {
                 MGLOG_E_ONCE("JobNode: a terminal continuation threw (%s); it has been contained, but whatever it "
-                        "was going to do did not happen",
-                        e.what());
-            } catch (...) {
+                             "was going to do did not happen",
+                             e.what());
+            }
+            catch (...) {
                 MGLOG_E_ONCE("JobNode: a terminal continuation threw a non-std exception; it has been contained, "
-                        "but whatever it was going to do did not happen");
+                             "but whatever it was going to do did not happen");
             }
         }
     } // namespace
 
-    Bool JobNode::IsTerminal() const { return IsTerminalState(m_state.load(std::memory_order_acquire)); }
+    Bool JobNode::IsTerminal() const {
+        return IsTerminalState(m_state.load(std::memory_order_acquire));
+    }
 
-    Bool JobNode::IsComplete() const { return m_state.load(std::memory_order_acquire) == JobState::Complete; }
+    Bool JobNode::IsComplete() const {
+        return m_state.load(std::memory_order_acquire) == JobState::Complete;
+    }
 
-    Bool JobNode::IsCancelled() const { return m_state.load(std::memory_order_acquire) == JobState::Cancelled; }
+    Bool JobNode::IsCancelled() const {
+        return m_state.load(std::memory_order_acquire) == JobState::Cancelled;
+    }
 
-    Bool JobNode::IsCancellationRequested() const { return m_cancelled.load(std::memory_order_acquire); }
+    Bool JobNode::IsCancellationRequested() const {
+        return m_cancelled.load(std::memory_order_acquire);
+    }
 
-    JobState JobNode::State() const { return m_state.load(std::memory_order_acquire); }
+    JobState JobNode::State() const {
+        return m_state.load(std::memory_order_acquire);
+    }
 
     // The single place a node changes state. Keeping every transition here is what makes the
     // continuation list exactly-once: the same critical section that publishes the terminal
@@ -90,18 +102,18 @@ namespace MobileGL::MG_Util::Async {
 
         try {
             RunBody();
-        } catch (const std::exception& e) {
+        }
+        catch (const std::exception& e) {
             // Asio propagates an exception escaping a handler out of thread_pool::run(),
             // which means std::terminate for the whole process. Every job boundary contains
             // it and reports the job as Cancelled; the joining GL thread then sees a node
             // that produced no result, which is the same shape as an abandoned node.
-            diagnostics.logLines.push_back(
-                {MOBILEGL_LOG_LEVEL_DEBUG, std::format("Job body threw: {}", e.what())});
+            diagnostics.logLines.push_back({MOBILEGL_LOG_LEVEL_DEBUG, std::format("Job body threw: {}", e.what())});
             TryTransition(JobState::Running, JobState::Cancelled);
             return;
-        } catch (...) {
-            diagnostics.logLines.push_back(
-                {MOBILEGL_LOG_LEVEL_DEBUG, String("Job body threw a non-std exception")});
+        }
+        catch (...) {
+            diagnostics.logLines.push_back({MOBILEGL_LOG_LEVEL_DEBUG, String("Job body threw a non-std exception")});
             TryTransition(JobState::Running, JobState::Cancelled);
             return;
         }
@@ -119,7 +131,9 @@ namespace MobileGL::MG_Util::Async {
                       m_cancelled.load(std::memory_order_acquire) ? JobState::Cancelled : JobState::Complete);
     }
 
-    void JobNode::RunInline() { Run(); }
+    void JobNode::RunInline() {
+        Run();
+    }
 
     void JobNode::Wait() {
         // Invariant I4, mechanically enforced: no job body ever blocks on another job, so the

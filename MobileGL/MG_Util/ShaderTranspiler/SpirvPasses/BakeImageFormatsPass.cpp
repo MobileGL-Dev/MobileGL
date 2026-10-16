@@ -56,7 +56,12 @@ namespace MobileGL {
                 // requires the Image Format's class to agree with the OpTypeImage's Sampled
                 // Type, so a bake that disagrees would produce an invalid module rather than a
                 // merely wrong one.
-                enum class ComponentClass { Float, SignedInt, UnsignedInt, None };
+                enum class ComponentClass {
+                    Float,
+                    SignedInt,
+                    UnsignedInt,
+                    None
+                };
 
                 ComponentClass ClassOfImageFormat(spv::ImageFormat format) {
                     switch (format) {
@@ -114,7 +119,7 @@ namespace MobileGL {
                     if (sampledType->opcode() == spv::Op::OpTypeInt) {
                         // OpTypeInt in-operands: 0 width, 1 signedness.
                         return sampledType->GetSingleWordInOperand(1) != 0 ? ComponentClass::SignedInt
-                                                                          : ComponentClass::UnsignedInt;
+                                                                           : ComponentClass::UnsignedInt;
                     }
                     return ComponentClass::None;
                 }
@@ -136,7 +141,8 @@ namespace MobileGL {
                         return chain;
                     }
                     chain.pointerType = pointerType;
-                    Instruction* pointee = defUseMgr->GetDef(pointerType->GetSingleWordInOperand(kPointerPointeeOperand));
+                    Instruction* pointee =
+                        defUseMgr->GetDef(pointerType->GetSingleWordInOperand(kPointerPointeeOperand));
                     if (pointee != nullptr && pointee->opcode() == spv::Op::OpTypeArray) {
                         chain.arrayType = pointee;
                         pointee = defUseMgr->GetDef(pointee->GetSingleWordInOperand(kArrayElementOperand));
@@ -189,45 +195,84 @@ namespace MobileGL {
                 // The GL 4.2 image format table (core spec table 8.26), in its order. Written as
                 // literals rather than through the GL headers because this lives in MG_Util,
                 // which the GL frontend's enums do not reach.
-                case 0x8814: /*GL_RGBA32F*/ return static_cast<Uint32>(spv::ImageFormat::Rgba32f);
-                case 0x881A: /*GL_RGBA16F*/ return static_cast<Uint32>(spv::ImageFormat::Rgba16f);
-                case 0x8230: /*GL_RG32F*/ return static_cast<Uint32>(spv::ImageFormat::Rg32f);
-                case 0x822F: /*GL_RG16F*/ return static_cast<Uint32>(spv::ImageFormat::Rg16f);
-                case 0x8C3A: /*GL_R11F_G11F_B10F*/ return static_cast<Uint32>(spv::ImageFormat::R11fG11fB10f);
-                case 0x822E: /*GL_R32F*/ return static_cast<Uint32>(spv::ImageFormat::R32f);
-                case 0x822D: /*GL_R16F*/ return static_cast<Uint32>(spv::ImageFormat::R16f);
-                case 0x8D70: /*GL_RGBA32UI*/ return static_cast<Uint32>(spv::ImageFormat::Rgba32ui);
-                case 0x8D76: /*GL_RGBA16UI*/ return static_cast<Uint32>(spv::ImageFormat::Rgba16ui);
-                case 0x8D7C: /*GL_RGBA8UI*/ return static_cast<Uint32>(spv::ImageFormat::Rgba8ui);
-                case 0x906F: /*GL_RGB10_A2UI*/ return static_cast<Uint32>(spv::ImageFormat::Rgb10a2ui);
-                case 0x823C: /*GL_RG32UI*/ return static_cast<Uint32>(spv::ImageFormat::Rg32ui);
-                case 0x823A: /*GL_RG16UI*/ return static_cast<Uint32>(spv::ImageFormat::Rg16ui);
-                case 0x8238: /*GL_RG8UI*/ return static_cast<Uint32>(spv::ImageFormat::Rg8ui);
-                case 0x8236: /*GL_R32UI*/ return static_cast<Uint32>(spv::ImageFormat::R32ui);
-                case 0x8234: /*GL_R16UI*/ return static_cast<Uint32>(spv::ImageFormat::R16ui);
-                case 0x8232: /*GL_R8UI*/ return static_cast<Uint32>(spv::ImageFormat::R8ui);
-                case 0x8D82: /*GL_RGBA32I*/ return static_cast<Uint32>(spv::ImageFormat::Rgba32i);
-                case 0x8D88: /*GL_RGBA16I*/ return static_cast<Uint32>(spv::ImageFormat::Rgba16i);
-                case 0x8D8E: /*GL_RGBA8I*/ return static_cast<Uint32>(spv::ImageFormat::Rgba8i);
-                case 0x823B: /*GL_RG32I*/ return static_cast<Uint32>(spv::ImageFormat::Rg32i);
-                case 0x8239: /*GL_RG16I*/ return static_cast<Uint32>(spv::ImageFormat::Rg16i);
-                case 0x8237: /*GL_RG8I*/ return static_cast<Uint32>(spv::ImageFormat::Rg8i);
-                case 0x8235: /*GL_R32I*/ return static_cast<Uint32>(spv::ImageFormat::R32i);
-                case 0x8233: /*GL_R16I*/ return static_cast<Uint32>(spv::ImageFormat::R16i);
-                case 0x8231: /*GL_R8I*/ return static_cast<Uint32>(spv::ImageFormat::R8i);
-                case 0x8058: /*GL_RGBA8*/ return static_cast<Uint32>(spv::ImageFormat::Rgba8);
-                case 0x805B: /*GL_RGBA16*/ return static_cast<Uint32>(spv::ImageFormat::Rgba16);
-                case 0x8059: /*GL_RGB10_A2*/ return static_cast<Uint32>(spv::ImageFormat::Rgb10A2);
-                case 0x822B: /*GL_RG8*/ return static_cast<Uint32>(spv::ImageFormat::Rg8);
-                case 0x822C: /*GL_RG16*/ return static_cast<Uint32>(spv::ImageFormat::Rg16);
-                case 0x8229: /*GL_R8*/ return static_cast<Uint32>(spv::ImageFormat::R8);
-                case 0x822A: /*GL_R16*/ return static_cast<Uint32>(spv::ImageFormat::R16);
-                case 0x8F97: /*GL_RGBA8_SNORM*/ return static_cast<Uint32>(spv::ImageFormat::Rgba8Snorm);
-                case 0x8F9B: /*GL_RGBA16_SNORM*/ return static_cast<Uint32>(spv::ImageFormat::Rgba16Snorm);
-                case 0x8F95: /*GL_RG8_SNORM*/ return static_cast<Uint32>(spv::ImageFormat::Rg8Snorm);
-                case 0x8F99: /*GL_RG16_SNORM*/ return static_cast<Uint32>(spv::ImageFormat::Rg16Snorm);
-                case 0x8F94: /*GL_R8_SNORM*/ return static_cast<Uint32>(spv::ImageFormat::R8Snorm);
-                case 0x8F98: /*GL_R16_SNORM*/ return static_cast<Uint32>(spv::ImageFormat::R16Snorm);
+                case 0x8814: /*GL_RGBA32F*/
+                    return static_cast<Uint32>(spv::ImageFormat::Rgba32f);
+                case 0x881A: /*GL_RGBA16F*/
+                    return static_cast<Uint32>(spv::ImageFormat::Rgba16f);
+                case 0x8230: /*GL_RG32F*/
+                    return static_cast<Uint32>(spv::ImageFormat::Rg32f);
+                case 0x822F: /*GL_RG16F*/
+                    return static_cast<Uint32>(spv::ImageFormat::Rg16f);
+                case 0x8C3A: /*GL_R11F_G11F_B10F*/
+                    return static_cast<Uint32>(spv::ImageFormat::R11fG11fB10f);
+                case 0x822E: /*GL_R32F*/
+                    return static_cast<Uint32>(spv::ImageFormat::R32f);
+                case 0x822D: /*GL_R16F*/
+                    return static_cast<Uint32>(spv::ImageFormat::R16f);
+                case 0x8D70: /*GL_RGBA32UI*/
+                    return static_cast<Uint32>(spv::ImageFormat::Rgba32ui);
+                case 0x8D76: /*GL_RGBA16UI*/
+                    return static_cast<Uint32>(spv::ImageFormat::Rgba16ui);
+                case 0x8D7C: /*GL_RGBA8UI*/
+                    return static_cast<Uint32>(spv::ImageFormat::Rgba8ui);
+                case 0x906F: /*GL_RGB10_A2UI*/
+                    return static_cast<Uint32>(spv::ImageFormat::Rgb10a2ui);
+                case 0x823C: /*GL_RG32UI*/
+                    return static_cast<Uint32>(spv::ImageFormat::Rg32ui);
+                case 0x823A: /*GL_RG16UI*/
+                    return static_cast<Uint32>(spv::ImageFormat::Rg16ui);
+                case 0x8238: /*GL_RG8UI*/
+                    return static_cast<Uint32>(spv::ImageFormat::Rg8ui);
+                case 0x8236: /*GL_R32UI*/
+                    return static_cast<Uint32>(spv::ImageFormat::R32ui);
+                case 0x8234: /*GL_R16UI*/
+                    return static_cast<Uint32>(spv::ImageFormat::R16ui);
+                case 0x8232: /*GL_R8UI*/
+                    return static_cast<Uint32>(spv::ImageFormat::R8ui);
+                case 0x8D82: /*GL_RGBA32I*/
+                    return static_cast<Uint32>(spv::ImageFormat::Rgba32i);
+                case 0x8D88: /*GL_RGBA16I*/
+                    return static_cast<Uint32>(spv::ImageFormat::Rgba16i);
+                case 0x8D8E: /*GL_RGBA8I*/
+                    return static_cast<Uint32>(spv::ImageFormat::Rgba8i);
+                case 0x823B: /*GL_RG32I*/
+                    return static_cast<Uint32>(spv::ImageFormat::Rg32i);
+                case 0x8239: /*GL_RG16I*/
+                    return static_cast<Uint32>(spv::ImageFormat::Rg16i);
+                case 0x8237: /*GL_RG8I*/
+                    return static_cast<Uint32>(spv::ImageFormat::Rg8i);
+                case 0x8235: /*GL_R32I*/
+                    return static_cast<Uint32>(spv::ImageFormat::R32i);
+                case 0x8233: /*GL_R16I*/
+                    return static_cast<Uint32>(spv::ImageFormat::R16i);
+                case 0x8231: /*GL_R8I*/
+                    return static_cast<Uint32>(spv::ImageFormat::R8i);
+                case 0x8058: /*GL_RGBA8*/
+                    return static_cast<Uint32>(spv::ImageFormat::Rgba8);
+                case 0x805B: /*GL_RGBA16*/
+                    return static_cast<Uint32>(spv::ImageFormat::Rgba16);
+                case 0x8059: /*GL_RGB10_A2*/
+                    return static_cast<Uint32>(spv::ImageFormat::Rgb10A2);
+                case 0x822B: /*GL_RG8*/
+                    return static_cast<Uint32>(spv::ImageFormat::Rg8);
+                case 0x822C: /*GL_RG16*/
+                    return static_cast<Uint32>(spv::ImageFormat::Rg16);
+                case 0x8229: /*GL_R8*/
+                    return static_cast<Uint32>(spv::ImageFormat::R8);
+                case 0x822A: /*GL_R16*/
+                    return static_cast<Uint32>(spv::ImageFormat::R16);
+                case 0x8F97: /*GL_RGBA8_SNORM*/
+                    return static_cast<Uint32>(spv::ImageFormat::Rgba8Snorm);
+                case 0x8F9B: /*GL_RGBA16_SNORM*/
+                    return static_cast<Uint32>(spv::ImageFormat::Rgba16Snorm);
+                case 0x8F95: /*GL_RG8_SNORM*/
+                    return static_cast<Uint32>(spv::ImageFormat::Rg8Snorm);
+                case 0x8F99: /*GL_RG16_SNORM*/
+                    return static_cast<Uint32>(spv::ImageFormat::Rg16Snorm);
+                case 0x8F94: /*GL_R8_SNORM*/
+                    return static_cast<Uint32>(spv::ImageFormat::R8Snorm);
+                case 0x8F98: /*GL_R16_SNORM*/
+                    return static_cast<Uint32>(spv::ImageFormat::R16Snorm);
                 default:
                     return static_cast<Uint32>(spv::ImageFormat::Unknown);
                 }
@@ -295,45 +340,84 @@ namespace MobileGL {
 
             String BakeImageFormatsPass::EsslSpellingOfGLInternalFormat(Uint glInternalFormat) {
                 switch (static_cast<spv::ImageFormat>(SpirvImageFormatFromGLInternalFormat(glInternalFormat))) {
-                case spv::ImageFormat::Rgba32f: return "rgba32f";
-                case spv::ImageFormat::Rgba16f: return "rgba16f";
-                case spv::ImageFormat::R32f: return "r32f";
-                case spv::ImageFormat::Rgba8: return "rgba8";
-                case spv::ImageFormat::Rgba8Snorm: return "rgba8_snorm";
-                case spv::ImageFormat::Rg32f: return "rg32f";
-                case spv::ImageFormat::Rg16f: return "rg16f";
-                case spv::ImageFormat::R11fG11fB10f: return "r11f_g11f_b10f";
-                case spv::ImageFormat::R16f: return "r16f";
-                case spv::ImageFormat::Rgba16: return "rgba16";
-                case spv::ImageFormat::Rgb10A2: return "rgb10_a2";
-                case spv::ImageFormat::Rg16: return "rg16";
-                case spv::ImageFormat::Rg8: return "rg8";
-                case spv::ImageFormat::R16: return "r16";
-                case spv::ImageFormat::R8: return "r8";
-                case spv::ImageFormat::Rgba16Snorm: return "rgba16_snorm";
-                case spv::ImageFormat::Rg16Snorm: return "rg16_snorm";
-                case spv::ImageFormat::Rg8Snorm: return "rg8_snorm";
-                case spv::ImageFormat::R16Snorm: return "r16_snorm";
-                case spv::ImageFormat::R8Snorm: return "r8_snorm";
-                case spv::ImageFormat::Rgba32i: return "rgba32i";
-                case spv::ImageFormat::Rgba16i: return "rgba16i";
-                case spv::ImageFormat::Rgba8i: return "rgba8i";
-                case spv::ImageFormat::R32i: return "r32i";
-                case spv::ImageFormat::Rg32i: return "rg32i";
-                case spv::ImageFormat::Rg16i: return "rg16i";
-                case spv::ImageFormat::Rg8i: return "rg8i";
-                case spv::ImageFormat::R16i: return "r16i";
-                case spv::ImageFormat::R8i: return "r8i";
-                case spv::ImageFormat::Rgba32ui: return "rgba32ui";
-                case spv::ImageFormat::Rgba16ui: return "rgba16ui";
-                case spv::ImageFormat::Rgba8ui: return "rgba8ui";
-                case spv::ImageFormat::R32ui: return "r32ui";
-                case spv::ImageFormat::Rgb10a2ui: return "rgb10_a2ui";
-                case spv::ImageFormat::Rg32ui: return "rg32ui";
-                case spv::ImageFormat::Rg16ui: return "rg16ui";
-                case spv::ImageFormat::Rg8ui: return "rg8ui";
-                case spv::ImageFormat::R16ui: return "r16ui";
-                case spv::ImageFormat::R8ui: return "r8ui";
+                case spv::ImageFormat::Rgba32f:
+                    return "rgba32f";
+                case spv::ImageFormat::Rgba16f:
+                    return "rgba16f";
+                case spv::ImageFormat::R32f:
+                    return "r32f";
+                case spv::ImageFormat::Rgba8:
+                    return "rgba8";
+                case spv::ImageFormat::Rgba8Snorm:
+                    return "rgba8_snorm";
+                case spv::ImageFormat::Rg32f:
+                    return "rg32f";
+                case spv::ImageFormat::Rg16f:
+                    return "rg16f";
+                case spv::ImageFormat::R11fG11fB10f:
+                    return "r11f_g11f_b10f";
+                case spv::ImageFormat::R16f:
+                    return "r16f";
+                case spv::ImageFormat::Rgba16:
+                    return "rgba16";
+                case spv::ImageFormat::Rgb10A2:
+                    return "rgb10_a2";
+                case spv::ImageFormat::Rg16:
+                    return "rg16";
+                case spv::ImageFormat::Rg8:
+                    return "rg8";
+                case spv::ImageFormat::R16:
+                    return "r16";
+                case spv::ImageFormat::R8:
+                    return "r8";
+                case spv::ImageFormat::Rgba16Snorm:
+                    return "rgba16_snorm";
+                case spv::ImageFormat::Rg16Snorm:
+                    return "rg16_snorm";
+                case spv::ImageFormat::Rg8Snorm:
+                    return "rg8_snorm";
+                case spv::ImageFormat::R16Snorm:
+                    return "r16_snorm";
+                case spv::ImageFormat::R8Snorm:
+                    return "r8_snorm";
+                case spv::ImageFormat::Rgba32i:
+                    return "rgba32i";
+                case spv::ImageFormat::Rgba16i:
+                    return "rgba16i";
+                case spv::ImageFormat::Rgba8i:
+                    return "rgba8i";
+                case spv::ImageFormat::R32i:
+                    return "r32i";
+                case spv::ImageFormat::Rg32i:
+                    return "rg32i";
+                case spv::ImageFormat::Rg16i:
+                    return "rg16i";
+                case spv::ImageFormat::Rg8i:
+                    return "rg8i";
+                case spv::ImageFormat::R16i:
+                    return "r16i";
+                case spv::ImageFormat::R8i:
+                    return "r8i";
+                case spv::ImageFormat::Rgba32ui:
+                    return "rgba32ui";
+                case spv::ImageFormat::Rgba16ui:
+                    return "rgba16ui";
+                case spv::ImageFormat::Rgba8ui:
+                    return "rgba8ui";
+                case spv::ImageFormat::R32ui:
+                    return "r32ui";
+                case spv::ImageFormat::Rgb10a2ui:
+                    return "rgb10_a2ui";
+                case spv::ImageFormat::Rg32ui:
+                    return "rg32ui";
+                case spv::ImageFormat::Rg16ui:
+                    return "rg16ui";
+                case spv::ImageFormat::Rg8ui:
+                    return "rg8ui";
+                case spv::ImageFormat::R16ui:
+                    return "r16ui";
+                case spv::ImageFormat::R8ui:
+                    return "r8ui";
                 default:
                     return {};
                 }
@@ -599,8 +683,7 @@ namespace MobileGL {
                     // Only an ID operand names a definition the clone has to sit behind. The
                     // format operand is a LITERAL, and looking it up would resolve some unrelated
                     // instruction that happens to carry that number as its result id.
-                    Instruction* anchor =
-                        valueIsId ? laterInGlobals(original, defUseMgr->GetDef(value)) : original;
+                    Instruction* anchor = valueIsId ? laterInGlobals(original, defUseMgr->GetDef(value)) : original;
                     if (anchor == nullptr) return 0;
                     Instruction* inserted = clone.release();
                     inserted->InsertAfter(anchor);
@@ -618,16 +701,16 @@ namespace MobileGL {
                 bool changed = false;
                 for (Candidate& candidate : candidates) {
                     const uint32_t newImageId = cloneTypeWithOperand(candidate.chain.imageType, kImageFormatOperand,
-                                                                    static_cast<uint32_t>(candidate.format),
-                                                                    /*valueIsId=*/false);
+                                                                     static_cast<uint32_t>(candidate.format),
+                                                                     /*valueIsId=*/false);
                     if (newImageId == 0) return Status::Failure;
 
                     // The pointer-to-image type every access chain and every single-image
                     // variable resolves through.
                     uint32_t newPointeeId = newImageId;
                     if (candidate.chain.arrayType != nullptr) {
-                        newPointeeId = cloneTypeWithOperand(candidate.chain.arrayType, kArrayElementOperand,
-                                                            newImageId, /*valueIsId=*/true);
+                        newPointeeId = cloneTypeWithOperand(candidate.chain.arrayType, kArrayElementOperand, newImageId,
+                                                            /*valueIsId=*/true);
                         if (newPointeeId == 0) return Status::Failure;
                     }
                     const uint32_t newVariablePointerId = cloneTypeWithOperand(
@@ -711,8 +794,7 @@ namespace MobileGL {
 
             spvtools::Optimizer::PassToken BakeImageFormatsPass::CreateBakeImageFormatsPass(
                 GLFormatByName glFormatByName) {
-                return spvtools::Optimizer::PassToken(
-                    spvtools::MakeUnique<BakeImageFormatsPass>(Move(glFormatByName)));
+                return spvtools::Optimizer::PassToken(spvtools::MakeUnique<BakeImageFormatsPass>(Move(glFormatByName)));
             }
         } // namespace ShaderTranspiler
     } // namespace MG_Util

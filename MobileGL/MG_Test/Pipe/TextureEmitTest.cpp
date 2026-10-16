@@ -144,7 +144,9 @@ namespace {
         return result;
     }
 
-    Bool DiedOfAbort(const ChildResult& r) { return WIFSIGNALED(r.Status) && WTERMSIG(r.Status) == SIGABRT; }
+    Bool DiedOfAbort(const ChildResult& r) {
+        return WIFSIGNALED(r.Status) && WTERMSIG(r.Status) == SIGABRT;
+    }
     std::string DescribeStatus(const ChildResult& r) {
         if (r.Status < 0) return "fork/waitpid failed";
         if (WIFEXITED(r.Status)) return "exited " + std::to_string(WEXITSTATUS(r.Status));
@@ -186,8 +188,7 @@ namespace {
 // use-after-free this design closed once already.
 TEST(TextureEmit, TheEmitterIsOneNeverDestroyedProcessSingleton) {
     EXPECT_EQ(&MGPipeTextureEmitterInstance(), &MGPipeTextureEmitterInstance());
-    EXPECT_TRUE(kMGPipeWiredTextureSubsystem == 0 ||
-                kMGPipeWiredTextureSubsystem == kMGPipeSubsystemTextureResources);
+    EXPECT_TRUE(kMGPipeWiredTextureSubsystem == 0 || kMGPipeWiredTextureSubsystem == kMGPipeSubsystemTextureResources);
 }
 
 // ============================================================================
@@ -228,9 +229,8 @@ namespace {
             //     resource hook has anything to fire on.
             // Without all three the family gate is FALSE and every case below would be green for
             // the wrong reason - which is what the dependency cases at the end of this file pin.
-            MG_Config::Features.PipePush |= kMGPipeSubsystemResources |
-                                            kMGPipeSubsystemTextureResources |
-                                            kMGPipeSubsystemSamplers;
+            MG_Config::Features.PipePush |=
+                kMGPipeSubsystemResources | kMGPipeSubsystemTextureResources | kMGPipeSubsystemSamplers;
             m_previousContext = MG_State::pGLContext.Take();
             MG_State::pGLContext = MakeUnique<GLContext>();
             MGPipeTextureEmitterInstance().ResetForTest();
@@ -273,8 +273,12 @@ namespace {
         const MGPipeResourceOps* m_saved;
     };
 
-    MGPipeTextureEmitter& Textures() { return MGPipeTextureEmitterInstance(); }
-    GLContext& Ctx() { return *MG_State::pGLContext; }
+    MGPipeTextureEmitter& Textures() {
+        return MGPipeTextureEmitterInstance();
+    }
+    GLContext& Ctx() {
+        return *MG_State::pGLContext;
+    }
 
     // The APPLIER's own view of what this emitter sent. With the family's wired constant flipped
     // the calls actually land, so a case can read the record rather than the emitter's staging
@@ -288,8 +292,8 @@ namespace {
         return &record;
     }
 
-    const MGPipeResourceRecord::PendingUpload* AppliedUpload(const MGPipeResourceRecord& record,
-                                                             Uint16 target, Uint16 level) {
+    const MGPipeResourceRecord::PendingUpload* AppliedUpload(const MGPipeResourceRecord& record, Uint16 target,
+                                                             Uint16 level) {
         for (const auto& pending : record.PendingUploads) {
             if (pending.UploadTarget == target && pending.Level == level) return &pending;
         }
@@ -304,9 +308,9 @@ namespace {
         texture->SetInternalFormat(TextureInternalFormat::RGBA8);
         for (Uint level = 0; level < levels; ++level) {
             const Int extent = std::max<Int>(size >> level, 1);
-            texture->AllocateStorage(TextureUploadTarget::Texture2D, level,
-                                     MipmapInput{IntVec3{extent, extent, 1},
-                                                 static_cast<SizeT>(extent) * static_cast<SizeT>(extent) * 4});
+            texture->AllocateStorage(
+                TextureUploadTarget::Texture2D, level,
+                MipmapInput{IntVec3{extent, extent, 1}, static_cast<SizeT>(extent) * static_cast<SizeT>(extent) * 4});
         }
         return texture;
     }
@@ -373,8 +377,7 @@ TEST(TextureEmit, ABindMaskBitIsStickyAcrossARespecify) {
     Textures().NoteTextureBoundAs(handle, kMGPipeBindRenderTarget);
 
     // A storage definition REPUBLISHES the mask; it does not rebuild it.
-    texture->AllocateStorage(TextureUploadTarget::Texture2D, 0,
-                             MipmapInput{IntVec3{16, 16, 1}, 16 * 16 * 4});
+    texture->AllocateStorage(TextureUploadTarget::Texture2D, 0, MipmapInput{IntVec3{16, 16, 1}, 16 * 16 * 4});
     EXPECT_TRUE(Textures().LastDesc().Resource == handle);
     EXPECT_NE(Textures().LastDesc().BindMask & kMGPipeBindRenderTarget, 0)
         << "MGPResourceDesc::BindMask lost the RENDER_TARGET bit across a respecify";
@@ -437,8 +440,7 @@ TEST(TextureEmit, TheUnionBoxAndTheRegionListDescribeTheSameTexels) {
     TextureScope scope;
     const auto texture = MakeTexture2D(4, 256);
     texture->MarkStorageDirtyRegion(TextureUploadTarget::Texture2D, 0, IntVec3{0, 0, 0}, IntVec3{1, 1, 1});
-    texture->MarkStorageDirtyRegion(TextureUploadTarget::Texture2D, 0, IntVec3{255, 255, 0},
-                                    IntVec3{1, 1, 1});
+    texture->MarkStorageDirtyRegion(TextureUploadTarget::Texture2D, 0, IntVec3{255, 255, 0}, IntVec3{1, 1, 1});
     ASSERT_EQ(Textures().DrainListSize(), 1u);
 
     Textures().DrainTextureSubData(Ctx());
@@ -454,11 +456,9 @@ TEST(TextureEmit, TheUnionBoxAndTheRegionListDescribeTheSameTexels) {
     for (const MGPSubRegion& region : regions) {
         EXPECT_GE(region.X, record.UnionBox.X) << "a rect starts left of the union box";
         EXPECT_GE(region.Y, record.UnionBox.Y) << "a rect starts above the union box";
-        EXPECT_LE(region.X + static_cast<Int32>(region.W),
-                  record.UnionBox.X + static_cast<Int32>(record.UnionBox.W))
+        EXPECT_LE(region.X + static_cast<Int32>(region.W), record.UnionBox.X + static_cast<Int32>(record.UnionBox.W))
             << "a rect ends right of the union box";
-        EXPECT_LE(region.Y + static_cast<Int32>(region.H),
-                  record.UnionBox.Y + static_cast<Int32>(record.UnionBox.H))
+        EXPECT_LE(region.Y + static_cast<Int32>(region.H), record.UnionBox.Y + static_cast<Int32>(record.UnionBox.H))
             << "a rect ends below the union box";
         loX = std::min(loX, region.X);
         loY = std::min(loY, region.Y);
@@ -475,8 +475,7 @@ TEST(TextureEmit, AScatteredUploadCarriesTheLevelShadowsStridesAndNotZero) {
     TextureScope scope;
     const auto texture = MakeTexture2D(5, 256);
     texture->MarkStorageDirtyRegion(TextureUploadTarget::Texture2D, 0, IntVec3{4, 8, 0}, IntVec3{2, 2, 1});
-    texture->MarkStorageDirtyRegion(TextureUploadTarget::Texture2D, 0, IntVec3{200, 220, 0},
-                                    IntVec3{2, 2, 1});
+    texture->MarkStorageDirtyRegion(TextureUploadTarget::Texture2D, 0, IntVec3{200, 220, 0}, IntVec3{2, 2, 1});
     Textures().DrainTextureSubData(Ctx());
     const Vector<MGPSubRegion> regions = Textures().LastRegions();
     const auto& record = Textures().LastSubData();
@@ -488,10 +487,8 @@ TEST(TextureEmit, AScatteredUploadCarriesTheLevelShadowsStridesAndNotZero) {
     // not its own width - or the staging planner on the far side repacks the wrong bytes.
     for (const MGPSubRegion& region : regions) {
         EXPECT_EQ(region.SrcRowStride, 256u * 4u) << "SrcRowStride is not the LEVEL's row pitch";
-        EXPECT_EQ(region.SrcSliceStride, 256u * 4u * 256u)
-            << "SrcSliceStride is not the LEVEL's slice pitch";
-        const Uint64 expectedOffset =
-            static_cast<Uint64>(region.Y) * 256u * 4u + static_cast<Uint64>(region.X) * 4u;
+        EXPECT_EQ(region.SrcSliceStride, 256u * 4u * 256u) << "SrcSliceStride is not the LEVEL's slice pitch";
+        const Uint64 expectedOffset = static_cast<Uint64>(region.Y) * 256u * 4u + static_cast<Uint64>(region.X) * 4u;
         EXPECT_EQ(region.SrcOffset, expectedOffset) << "SrcOffset is not the first texel's byte offset";
     }
 }
@@ -499,8 +496,7 @@ TEST(TextureEmit, AScatteredUploadCarriesTheLevelShadowsStridesAndNotZero) {
 TEST(TextureEmit, AWholeLevelUploadCarriesZeroStrides) {
     TextureScope scope;
     const auto texture = MakeTexture2D(6, 64);
-    texture->MarkStorageDirtyRegion(TextureUploadTarget::Texture2D, 0, IntVec3{0, 0, 0},
-                                    IntVec3{64, 64, 1});
+    texture->MarkStorageDirtyRegion(TextureUploadTarget::Texture2D, 0, IntVec3{0, 0, 0}, IntVec3{64, 64, 1});
     Textures().DrainTextureSubData(Ctx());
     const MGPSubData record = Textures().LastSubData();
     EXPECT_EQ(record.RegionCount, 0u) << "a single whole-level rect IS the union box, not a list";
@@ -519,10 +515,8 @@ TEST(TextureEmit, AWholeLevelUploadCarriesZeroStrides) {
            "whole-level shape stays what it always was";
     // The upload target rides in the record's Target byte beside the resource target, which is
     // the only place a cube face could ever be carried.
-    EXPECT_EQ(MGPipeSubDataResourceTargetOf(record.Target),
-              static_cast<Uint8>(MGPipeResourceTarget::Tex2D));
-    EXPECT_EQ(MGPipeSubDataUploadTargetOf(record.Target),
-              static_cast<Uint8>(TextureUploadTarget::Texture2D));
+    EXPECT_EQ(MGPipeSubDataResourceTargetOf(record.Target), static_cast<Uint8>(MGPipeResourceTarget::Tex2D));
+    EXPECT_EQ(MGPipeSubDataUploadTargetOf(record.Target), static_cast<Uint8>(TextureUploadTarget::Texture2D));
     // And the whole-level builder really does say TIGHTLY PACKED.
     const MGPipeLevelPitch pitch = MGPipeLevelPitchOf(IntVec3{64, 64, 1}, 64 * 64 * 4);
     const MGPSubRegion whole = MGPipeBuildSubRegion(record.UnionBox, IntVec3{64, 64, 1}, pitch);
@@ -543,8 +537,7 @@ TEST(TextureEmit, MoreWritesThanTheRectListKeepsCrossAsTheExactFootprint) {
     for (Int i = 0; i < 4 * static_cast<Int>(MipmapStorage::kMaxDirtyRects); ++i) {
         const Int x = (i * 7) % 120;
         const Int y = (i * 11) % 120;
-        texture->MarkStorageDirtyRegion(TextureUploadTarget::Texture2D, 0, IntVec3{x, y, 0},
-                                        IntVec3{2, 2, 1});
+        texture->MarkStorageDirtyRegion(TextureUploadTarget::Texture2D, 0, IntVec3{x, y, 0}, IntVec3{2, 2, 1});
     }
     Vector<MipmapDirtyRegion> oracle;
     texture->GetStorageDirtyFootprint(TextureUploadTarget::Texture2D, 0, oracle);
@@ -558,8 +551,8 @@ TEST(TextureEmit, MoreWritesThanTheRectListKeepsCrossAsTheExactFootprint) {
     ASSERT_EQ(regions.size(), oracle.size());
     for (SizeT i = 0; i < oracle.size(); ++i) {
         const MGPBox box = MGPipeBoxOfDirtyRegion(oracle[i]);
-        EXPECT_TRUE(regions[i].X == box.X && regions[i].Y == box.Y && regions[i].Z == box.Z &&
-                    regions[i].W == box.W && regions[i].H == box.H && regions[i].D == box.D)
+        EXPECT_TRUE(regions[i].X == box.X && regions[i].Y == box.Y && regions[i].Z == box.Z && regions[i].W == box.W &&
+                    regions[i].H == box.H && regions[i].D == box.D)
             << "region " << i << " is not footprint box " << i;
     }
 }
@@ -575,8 +568,7 @@ TEST(TextureEmit, MoreThanKMaxDirtyRectsCollapsesToTheBoxWithRegionCountZero) {
     const auto texture = MakeTexture2D(91, 256);
     for (Int y = 0; y < 256; y += 2) {
         for (Int x = 0; x < 256; x += 2) {
-            texture->MarkStorageDirtyRegion(TextureUploadTarget::Texture2D, 0, IntVec3{x, y, 0},
-                                            IntVec3{1, 1, 1});
+            texture->MarkStorageDirtyRegion(TextureUploadTarget::Texture2D, 0, IntVec3{x, y, 0}, IntVec3{1, 1, 1});
         }
     }
     Vector<MipmapDirtyRegion> footprint;
@@ -584,8 +576,8 @@ TEST(TextureEmit, MoreThanKMaxDirtyRectsCollapsesToTheBoxWithRegionCountZero) {
     ASSERT_GT(footprint.size(), static_cast<SizeT>(kMGPipeMaxPendingUploadRegions))
         << "the writes must outgrow one record, or this case pins the footprint path instead";
     MipmapDirtyRegion oracle[MipmapStorage::kMaxDirtyRects];
-    const SizeT oracleCount = texture->GetStorageDirtyRects(TextureUploadTarget::Texture2D, 0, oracle,
-                                                            MipmapStorage::kMaxDirtyRects);
+    const SizeT oracleCount =
+        texture->GetStorageDirtyRects(TextureUploadTarget::Texture2D, 0, oracle, MipmapStorage::kMaxDirtyRects);
     EXPECT_LE(oracleCount, MipmapStorage::kMaxDirtyRects);
     Textures().DrainTextureSubData(Ctx());
     EXPECT_EQ(Textures().LastSubData().RegionCount, static_cast<Uint32>(oracleCount))
@@ -648,28 +640,23 @@ TEST(TextureEmit, ALevelTooLargeForTheStageChunkIsCutIntoSlabs) {
     // exactly once, in order, each within the cap and each exactly its own box's byte extent.
     const auto cut = [&](const IntVec3& levelSize, Uint64 levelBytes, SizeT chunk) {
         std::vector<MGPipeTextureSlab> slabs;
-        const MGPipeLevelPitch pitch =
-            MGPipeLevelPitchOf(levelSize, static_cast<SizeT>(levelBytes));
+        const MGPipeLevelPitch pitch = MGPipeLevelPitchOf(levelSize, static_cast<SizeT>(levelBytes));
         EXPECT_TRUE(MGPipeForEachTextureSlab(levelSize, pitch, levelBytes, chunk,
-                                             [&](const MGPipeTextureSlab& slab) {
-                                                 slabs.push_back(slab);
-                                             }));
-        EXPECT_GE(slabs.size(), 2u) << "a level of " << levelBytes << " bytes was not cut at a "
-                                    << chunk << " byte cap";
+                                             [&](const MGPipeTextureSlab& slab) { slabs.push_back(slab); }));
+        EXPECT_GE(slabs.size(), 2u) << "a level of " << levelBytes << " bytes was not cut at a " << chunk
+                                    << " byte cap";
         Uint64 expectedOffset = 0;
         Uint64 covered = 0;
         for (const MGPipeTextureSlab& slab : slabs) {
             EXPECT_GT(slab.RunBytes, 0u);
             EXPECT_LE(slab.RunBytes, static_cast<Uint64>(chunk)) << "a piece is bigger than the cap";
-            EXPECT_EQ(slab.RunOffset, expectedOffset)
-                << "the pieces are not contiguous and ascending";
+            EXPECT_EQ(slab.RunOffset, expectedOffset) << "the pieces are not contiguous and ascending";
             expectedOffset += slab.RunBytes;
             covered += slab.RunBytes;
             const Uint64 boxBytes = static_cast<Uint64>(slab.Box.D - 1) * pitch.SliceStride +
                                     static_cast<Uint64>(slab.Box.H - 1) * pitch.RowStride +
                                     static_cast<Uint64>(slab.Box.W) * pitch.BytesPerTexel;
-            EXPECT_EQ(boxBytes, slab.RunBytes)
-                << "the box does not describe the run, so the far side cannot place it";
+            EXPECT_EQ(boxBytes, slab.RunBytes) << "the box does not describe the run, so the far side cannot place it";
         }
         EXPECT_EQ(covered, levelBytes) << "the pieces do not cover the level exactly once";
         return slabs;
@@ -735,15 +722,11 @@ TEST(TextureEmit, ALevelTooLargeForTheStageChunkIsCutIntoSlabs) {
     // split existed: no cap at all, a pitch that does not tile the level's bytes exactly, and a cap
     // below one texel.
     std::vector<MGPipeTextureSlab> refusals;
-    const auto refuses = [&](const IntVec3& levelSize, const MGPipeLevelPitch& pitch,
-                             Uint64 levelBytes, SizeT chunk) {
+    const auto refuses = [&](const IntVec3& levelSize, const MGPipeLevelPitch& pitch, Uint64 levelBytes, SizeT chunk) {
         return !MGPipeForEachTextureSlab(levelSize, pitch, levelBytes, chunk,
-                                         [&](const MGPipeTextureSlab& slab) {
-                                             refusals.push_back(slab);
-                                         });
+                                         [&](const MGPipeTextureSlab& slab) { refusals.push_back(slab); });
     };
-    const MGPipeLevelPitch volumePitch =
-        MGPipeLevelPitchOf(volume, static_cast<SizeT>(volumeBytes));
+    const MGPipeLevelPitch volumePitch = MGPipeLevelPitchOf(volume, static_cast<SizeT>(volumeBytes));
     const MGPipeLevelPitch linePitch = MGPipeLevelPitchOf(line, static_cast<SizeT>(lineBytes));
     EXPECT_TRUE(refuses(volume, volumePitch, volumeBytes, 0));
     EXPECT_TRUE(refuses(volume, volumePitch, volumeBytes + 1, cap))
@@ -755,11 +738,11 @@ TEST(TextureEmit, ALevelTooLargeForTheStageChunkIsCutIntoSlabs) {
     // the piece's own run (MGPipeTypes.h: SrcOffset is "into the blob") and the LEVEL's pitches
     // kept. A slab the dirty set does not reach still carries its own box as ONE region.
     const MGPBox dirty[5] = {
-        {0, 0, 0, 512, 128, 1},    // the whole first slice, inside slab 0
-        {0, 0, 4, 64, 64, 1},      // a small rect in the middle of slab 0
-        {10, 20, 8, 64, 64, 2},    // a rect spanning the first two slices of slab 1
-        {460, 100, 7, 64, 64, 3},  // clipped on X, Y and the slab-0/slab-1 boundary
-        {0, 0, 32, 512, 128, 1},   // the last slice, inside slab 4
+        {0, 0, 0, 512, 128, 1},   // the whole first slice, inside slab 0
+        {0, 0, 4, 64, 64, 1},     // a small rect in the middle of slab 0
+        {10, 20, 8, 64, 64, 2},   // a rect spanning the first two slices of slab 1
+        {460, 100, 7, 64, 64, 3}, // clipped on X, Y and the slab-0/slab-1 boundary
+        {0, 0, 32, 512, 128, 1},  // the last slice, inside slab 4
     };
     SizeT regionCounts[5] = {0, 0, 0, 0, 0};
     for (SizeT i = 0; i < volumeSlabs.size(); ++i) {
@@ -772,21 +755,17 @@ TEST(TextureEmit, ALevelTooLargeForTheStageChunkIsCutIntoSlabs) {
             const MGPSubRegion& region = regions[r];
             EXPECT_EQ(region.SrcRowStride, volumePitch.RowStride);
             EXPECT_EQ(region.SrcSliceStride, volumePitch.SliceStride);
-            EXPECT_EQ(region.SrcOffset,
-                      static_cast<Uint64>(region.Z - slab.Box.Z) * volumePitch.SliceStride +
-                          static_cast<Uint64>(region.Y - slab.Box.Y) * volumePitch.RowStride +
-                          static_cast<Uint64>(region.X - slab.Box.X) * volumePitch.BytesPerTexel)
+            EXPECT_EQ(region.SrcOffset, static_cast<Uint64>(region.Z - slab.Box.Z) * volumePitch.SliceStride +
+                                            static_cast<Uint64>(region.Y - slab.Box.Y) * volumePitch.RowStride +
+                                            static_cast<Uint64>(region.X - slab.Box.X) * volumePitch.BytesPerTexel)
                 << "SrcOffset is not relative to the piece's own run";
             EXPECT_GE(region.X, slab.Box.X);
             EXPECT_GE(region.Y, slab.Box.Y);
             EXPECT_GE(region.Z, slab.Box.Z);
-            EXPECT_LE(region.X + static_cast<Int32>(region.W),
-                      slab.Box.X + static_cast<Int32>(slab.Box.W))
+            EXPECT_LE(region.X + static_cast<Int32>(region.W), slab.Box.X + static_cast<Int32>(slab.Box.W))
                 << "a clipped rect reaches outside the piece's box";
-            EXPECT_LE(region.Y + static_cast<Int32>(region.H),
-                      slab.Box.Y + static_cast<Int32>(slab.Box.H));
-            EXPECT_LE(region.Z + static_cast<Int32>(region.D),
-                      slab.Box.Z + static_cast<Int32>(slab.Box.D));
+            EXPECT_LE(region.Y + static_cast<Int32>(region.H), slab.Box.Y + static_cast<Int32>(slab.Box.H));
+            EXPECT_LE(region.Z + static_cast<Int32>(region.D), slab.Box.Z + static_cast<Int32>(slab.Box.D));
         }
     }
     // Slab 0 sees three rects (one of them clipped at its own z end), slab 1 two, slabs 2 and 3
@@ -819,10 +798,9 @@ TEST(TextureEmit, ALevelTooLargeForTheStageChunkIsCutIntoSlabs) {
             EXPECT_EQ(regions[i].H, 28u);
             EXPECT_EQ(regions[i].Z, 7);
             EXPECT_EQ(regions[i].D, 1u);
-            EXPECT_EQ(regions[i].SrcOffset,
-                      static_cast<Uint64>(7) * volumePitch.SliceStride +
-                          static_cast<Uint64>(100) * volumePitch.RowStride +
-                          static_cast<Uint64>(460) * volumePitch.BytesPerTexel);
+            EXPECT_EQ(regions[i].SrcOffset, static_cast<Uint64>(7) * volumePitch.SliceStride +
+                                                static_cast<Uint64>(100) * volumePitch.RowStride +
+                                                static_cast<Uint64>(460) * volumePitch.BytesPerTexel);
         }
     }
     EXPECT_TRUE(sawClippedRect) << "a rect wider than the level was not clipped to the piece";
@@ -841,8 +819,7 @@ TEST(TextureEmit, AnUploadThroughAViewKeysOnTheStorageOwner) {
     ASSERT_FALSE(ownerHandle == viewHandle);
     // ViewOf names the storage owner, and ONE HOP always reaches storage.
     EXPECT_TRUE(Textures().LastDesc().Resource == viewHandle);
-    EXPECT_TRUE(Textures().LastDesc().ViewOf == ownerHandle)
-        << "the view's descriptor does not name its storage owner";
+    EXPECT_TRUE(Textures().LastDesc().ViewOf == ownerHandle) << "the view's descriptor does not name its storage owner";
 
     // An upload through the VIEW: TextureObjectView forwards the mark to the OWNER's method
     // after remapping the level, so the drain list holds exactly one entry and it is the
@@ -862,10 +839,8 @@ TEST(TextureEmit, EveryTexturesParamsNameItsBuiltinSamplerCso) {
     TextureScope scope;
     const auto texture = MakeTexture2D(10, 8);
     const MGPipeHandle handle = Textures().FindTexture(*texture);
-    texture->SetSwizzleParamRGBA(Vec4<TextureSwizzleParam>{TextureSwizzleParam::Alpha,
-                                                           TextureSwizzleParam::Blue,
-                                                           TextureSwizzleParam::Green,
-                                                           TextureSwizzleParam::Red});
+    texture->SetSwizzleParamRGBA(Vec4<TextureSwizzleParam>{TextureSwizzleParam::Alpha, TextureSwizzleParam::Blue,
+                                                           TextureSwizzleParam::Green, TextureSwizzleParam::Red});
     const MGPTextureParams params = Textures().LastParams();
     EXPECT_TRUE(params.Res == handle);
     // kMGPipeNullHandle is ILLEGAL here: every texture object owns a sampler object, so a null
@@ -883,8 +858,8 @@ TEST(TextureEmit, EveryTexturesParamsNameItsBuiltinSamplerCso) {
     EXPECT_GE(MGPipeSamplerCsoCacheInstance().RefCountOf(params.BuiltinSampler), 1u)
         << "the texture holds no reference on its built-in sampler, so an LRU eviction could take "
            "the handle out from under a standing set_texture_params record";
-    EXPECT_TRUE(MGPipeHandleIsNull(MGPipeSlots().FindByLifetimeId(
-        MGPipeKind::SamplerCso, texture->GetSamplerObject()->GetLifetimeId())))
+    EXPECT_TRUE(MGPipeHandleIsNull(
+        MGPipeSlots().FindByLifetimeId(MGPipeKind::SamplerCso, texture->GetSamplerObject()->GetLifetimeId())))
         << "a SamplerCso slot was minted against the SamplerObject's lifetime id; the cache "
            "deliberately allocates without one, so ~SamplerObject frees nothing for this kind";
     EXPECT_EQ(params.Swizzle[0], static_cast<Uint8>(TextureSwizzleParam::Alpha));
@@ -1037,18 +1012,15 @@ TEST(TextureEmit, TheApplierStoresTheRegionListTheEmitterBuiltAndNotAnEmptyOne) 
 
     const MGPipeResourceRecord* stored = AppliedTexture(handle);
     ASSERT_NE(stored, nullptr);
-    const MGPipeResourceRecord::PendingUpload* pending =
-        AppliedUpload(*stored, Textures().LastSubData().Target, 0);
+    const MGPipeResourceRecord::PendingUpload* pending = AppliedUpload(*stored, Textures().LastSubData().Target, 0);
     ASSERT_NE(pending, nullptr) << "the applier accumulated no pending upload for the level";
-    ASSERT_EQ(pending->Regions.size(), emitted.size())
-        << "the applier's stored region count is not the emitted one";
+    ASSERT_EQ(pending->Regions.size(), emitted.size()) << "the applier's stored region count is not the emitted one";
     for (SizeT i = 0; i < pending->Regions.size(); ++i) {
         EXPECT_EQ(pending->Regions[i].X, emitted[i].X) << "MGPSubRegion::X at region " << i;
         EXPECT_EQ(pending->Regions[i].Y, emitted[i].Y) << "MGPSubRegion::Y at region " << i;
         EXPECT_EQ(pending->Regions[i].W, emitted[i].W) << "MGPSubRegion::W at region " << i;
         EXPECT_EQ(pending->Regions[i].H, emitted[i].H) << "MGPSubRegion::H at region " << i;
-        EXPECT_EQ(pending->Regions[i].SrcOffset, emitted[i].SrcOffset)
-            << "MGPSubRegion::SrcOffset at region " << i;
+        EXPECT_EQ(pending->Regions[i].SrcOffset, emitted[i].SrcOffset) << "MGPSubRegion::SrcOffset at region " << i;
         EXPECT_EQ(pending->Regions[i].SrcRowStride, emitted[i].SrcRowStride)
             << "MGPSubRegion::SrcRowStride at region " << i;
         EXPECT_EQ(pending->Regions[i].SrcSliceStride, emitted[i].SrcSliceStride)
@@ -1126,8 +1098,7 @@ TEST(TextureEmit, WithNoBackendConsumerTheFamilyGateIsFalseAndNothingReachesTheA
 
         // All four families, because all four ride the one signal (D-D1: a texture and a
         // renderbuffer ARE resource rows, and the other three name texture handles).
-        EXPECT_FALSE(
-            MGPipeP4aFamilyEmits(kMGPipeSubsystemTextureResources, kMGPipeWiredTextureSubsystem));
+        EXPECT_FALSE(MGPipeP4aFamilyEmits(kMGPipeSubsystemTextureResources, kMGPipeWiredTextureSubsystem));
         EXPECT_FALSE(MGPipeP4aFamilyEmits(kMGPipeSubsystemFramebuffer, kMGPipeSubsystemFramebuffer));
         EXPECT_FALSE(MGPipeP4aFamilyEmits(kMGPipeSubsystemSamplers, kMGPipeSubsystemSamplers));
         EXPECT_FALSE(MGPipeP4aFamilyEmits(kMGPipeSubsystemPrograms, kMGPipeSubsystemPrograms));
@@ -1154,8 +1125,7 @@ TEST(TextureEmit, WithNoBackendConsumerTheFamilyGateIsFalseAndNothingReachesTheA
         EXPECT_EQ(Textures().RespecifyCount(), 0u);
         EXPECT_TRUE(MGPipeApplier().TextureResources.empty());
 
-        texture->MarkStorageDirtyRegion(TextureUploadTarget::Texture2D, 0, IntVec3{0, 0, 0},
-                                        IntVec3{8, 8, 1});
+        texture->MarkStorageDirtyRegion(TextureUploadTarget::Texture2D, 0, IntVec3{0, 0, 0}, IntVec3{8, 8, 1});
         EXPECT_EQ(Textures().DrainListSize(), 0u) << "a level was queued for a drain that has no consumer";
         EXPECT_EQ(Textures().SubDataCount(), 0u);
         // THE ONE THAT MATTERED. The frontend's flag is what Magma's legacy path uploads from,
@@ -1176,8 +1146,7 @@ TEST(TextureEmit, WithNoBackendConsumerTheFamilyGateIsFalseAndNothingReachesTheA
     ASSERT_FALSE(MGPipeHandleIsNull(live));
     EXPECT_TRUE(MGPipeHandleIsPublished(MGPipeKind::Texture, live));
     EXPECT_GT(Textures().CreateCount(), 0u);
-    consumed->MarkStorageDirtyRegion(TextureUploadTarget::Texture2D, 0, IntVec3{0, 0, 0},
-                                     IntVec3{8, 8, 1});
+    consumed->MarkStorageDirtyRegion(TextureUploadTarget::Texture2D, 0, IntVec3{0, 0, 0}, IntVec3{8, 8, 1});
     EXPECT_EQ(Textures().DrainListSize(), 1u);
     Textures().DrainTextureSubData(Ctx());
     EXPECT_EQ(Textures().SubDataCount(), 1u);
@@ -1223,8 +1192,7 @@ TEST(TextureEmit, WithTheSamplerBitClearTheTextureFamilyGateIsFalseAndNothingRea
     EXPECT_EQ(Textures().RespecifyCount(), 0u);
     EXPECT_TRUE(MGPipeApplier().TextureResources.empty());
 
-    texture->MarkStorageDirtyRegion(TextureUploadTarget::Texture2D, 0, IntVec3{0, 0, 0},
-                                    IntVec3{8, 8, 1});
+    texture->MarkStorageDirtyRegion(TextureUploadTarget::Texture2D, 0, IntVec3{0, 0, 0}, IntVec3{8, 8, 1});
     EXPECT_EQ(Textures().DrainListSize(), 0u);
     Textures().DrainTextureSubData(Ctx());
     EXPECT_EQ(Textures().SubDataCount(), 0u);
@@ -1244,8 +1212,7 @@ TEST(TextureEmit, WithTheSamplerBitClearTheTextureFamilyGateIsFalseAndNothingRea
     const MGPipeHandle liveHandle = Textures().FindTexture(*live);
     ASSERT_FALSE(MGPipeHandleIsNull(liveHandle));
     EXPECT_TRUE(MGPipeHandleIsPublished(MGPipeKind::Texture, liveHandle));
-    live->MarkStorageDirtyRegion(TextureUploadTarget::Texture2D, 0, IntVec3{0, 0, 0},
-                                 IntVec3{8, 8, 1});
+    live->MarkStorageDirtyRegion(TextureUploadTarget::Texture2D, 0, IntVec3{0, 0, 0}, IntVec3{8, 8, 1});
     EXPECT_EQ(Textures().DrainListSize(), 1u);
     Textures().DrainTextureSubData(Ctx());
     EXPECT_EQ(Textures().SubDataCount(), 1u);
@@ -1273,8 +1240,7 @@ TEST(TextureEmit, WithTheBufferResourceBitClearTheTextureFamilyGateIsFalseAndNot
     EXPECT_EQ(Textures().RespecifyCount(), 0u);
     EXPECT_TRUE(MGPipeApplier().TextureResources.empty());
 
-    texture->MarkStorageDirtyRegion(TextureUploadTarget::Texture2D, 0, IntVec3{0, 0, 0},
-                                    IntVec3{8, 8, 1});
+    texture->MarkStorageDirtyRegion(TextureUploadTarget::Texture2D, 0, IntVec3{0, 0, 0}, IntVec3{8, 8, 1});
     EXPECT_EQ(Textures().DrainListSize(), 0u);
     Textures().DrainTextureSubData(Ctx());
     EXPECT_EQ(Textures().SubDataCount(), 0u);
@@ -1298,9 +1264,8 @@ TEST(TextureEmit, WithTheBufferResourceBitClearTheTextureFamilyGateIsFalseAndNot
 TEST(TextureEmit, EveryDKTwoDependencyRowGatesItsOwnFamilyAndTheMirrorPairsStayLive) {
     TextureScope scope;
     const auto emits = [](Uint64 family) { return MGPipeP4aFamilyEmits(family, family); };
-    const Uint64 kAll = kMGPipeSubsystemResources | kMGPipeSubsystemFramebuffer |
-                        kMGPipeSubsystemTextureResources | kMGPipeSubsystemSamplers |
-                        kMGPipeSubsystemPrograms;
+    const Uint64 kAll = kMGPipeSubsystemResources | kMGPipeSubsystemFramebuffer | kMGPipeSubsystemTextureResources |
+                        kMGPipeSubsystemSamplers | kMGPipeSubsystemPrograms;
 
     // ---- every dependency satisfied: all four families live ----
     MG_Config::Features.PipePush = kAll;
@@ -1420,8 +1385,7 @@ TEST(TextureEmit, ALodWriteOnTheBuiltinSamplerRepublishesTheParams) {
 
     // NOTHING MOVED: the version-first skip reads both counters and emits nothing.
     MG_Pipe::MGPipeEmitTextureParams(*texture);
-    EXPECT_EQ(Textures().ParamCount(), paramsBefore)
-        << "an unchanged texture re-emitted its parameters";
+    EXPECT_EQ(Textures().ParamCount(), paramsBefore) << "an unchanged texture re-emitted its parameters";
 
     // A WRITE THAT ONLY THE SAMPLER OBJECT SEES.
     const Uint16 textureVersionBefore = texture->GetTextureParamsVersion();
@@ -1533,8 +1497,7 @@ TEST(TextureEmit, ALevelMarkedCleanIsCollectedAtTheNextDrain) {
     EXPECT_EQ(Textures().DrainListSize(), 1u) << "the entry is collected at the drain, not here";
     const Uint64 emissionsBefore = Textures().SubDataCount();
     Textures().DrainTextureSubData(Ctx());
-    EXPECT_EQ(Textures().SubDataCount(), emissionsBefore)
-        << "a level that is no longer dirty was uploaded anyway";
+    EXPECT_EQ(Textures().SubDataCount(), emissionsBefore) << "a level that is no longer dirty was uploaded anyway";
     EXPECT_EQ(Textures().DrainListSize(), 0u) << "the clean level was never collected";
 
     // And the key really was dropped from the per-slot list, so a later write re-appends.
@@ -1578,7 +1541,8 @@ TEST(TextureEmit, ALevelDefinedAfterAnEmittedButUnconsumedUploadKeepsThatUpload)
     EXPECT_TRUE(levelZeroPending)
         << "defining level 1 dropped level 0's accepted-but-unconsumed pending upload (PendingUploads.size()="
         << record->PendingUploads.size() << ") while level 0's client dirty flag is "
-        << (texture->IsStorageDirty(TextureUploadTarget::Texture2D, 0) ? "set" : "CLEAR - the texels are owed by nobody");
+        << (texture->IsStorageDirty(TextureUploadTarget::Texture2D, 0) ? "set"
+                                                                       : "CLEAR - the texels are owed by nobody");
     // And after the next drain both levels stand in the set.
     Textures().DrainTextureSubData(Ctx());
     record = AppliedTexture(handle);
@@ -1913,9 +1877,8 @@ TEST(TextureEmit, ATextureInASecondShareGroupNamesABuiltinSamplerItsOwnGroupHold
     const MGPipeHandle sampler = record->Params.BuiltinSampler;
     const auto& samplers = MGPipeApplier().SamplerCsos;
     ASSERT_FALSE(MGPipeHandleIsNull(sampler));
-    ASSERT_LT(sampler.Slot, samplers.size())
-        << "the texture names built-in sampler {" << sampler.Slot << ", " << sampler.Gen
-        << "}, which its share group's applier was never sent";
+    ASSERT_LT(sampler.Slot, samplers.size()) << "the texture names built-in sampler {" << sampler.Slot << ", "
+                                             << sampler.Gen << "}, which its share group's applier was never sent";
     EXPECT_TRUE(samplers[sampler.Slot].Live && samplers[sampler.Slot].Gen == sampler.Gen)
         << "the texture names built-in sampler {" << sampler.Slot << ", " << sampler.Gen
         << "}, which its share group's applier was never sent";
@@ -1926,7 +1889,6 @@ TEST(TextureEmit, ATextureInASecondShareGroupNamesABuiltinSamplerItsOwnGroupHold
     makeCurrent(0);
     first.reset();
 }
-
 
 // =========================================================================================
 // The APPLIER's half of the texture family (the wire commits'): set_texture_params on the
@@ -2158,16 +2120,13 @@ TEST(TextureEmit, TheSubDataValidatorRefusesALevelABoxAndARegionTheRecordCannotD
     const MGPSubData escapes = TextureUpload(texture, 0, MGPBox{0, 0, 0, 8, 8, 1}, 1);
     ExpectRefusedNaming("resource_subdata {slot=5, gen=2, glName=99}: a sub-region is not inside the union "
                         "box the record declares",
-                        [&escapes, &texels, &outside]() {
-                            MGPipeApplyResourceSubData(escapes, texels, outside);
-                        });
+                        [&escapes, &texels, &outside]() { MGPipeApplyResourceSubData(escapes, texels, outside); });
 
     const MGPSubData nothing = TextureUpload(texture, 0, MGPBox{0, 0, 0, 0, 0, 0}, 0);
     ExpectRefusedNaming("resource_subdata {slot=5, gen=2, glName=99}: the record describes no texels at all",
                         [&nothing, &texels]() { MGPipeApplyResourceSubData(nothing, texels); });
 
-    EXPECT_EQ(TextureRecordOf(5).PendingUploads.size(), 1u)
-        << "a refused record was accumulated anyway";
+    EXPECT_EQ(TextureRecordOf(5).PendingUploads.size(), 1u) << "a refused record was accumulated anyway";
     EXPECT_EQ(TextureRecordOf(5).Serial, serialBefore) << "not one refusal may move the serial";
 }
 
@@ -2188,8 +2147,7 @@ TEST(TextureEmit, ARespecifyDropsThePendingUploadsAgainstTheStorageItReplaces) {
     ASSERT_EQ(TextureRecordOf(3).PendingUploads.size(), 2u);
 
     MGPipeApplyResourceRespecify(TextureDesc(texture, 8, 55), nullptr);
-    EXPECT_TRUE(TextureRecordOf(3).PendingUploads.empty())
-        << "a 64-wide box survived onto an 8-wide store";
+    EXPECT_TRUE(TextureRecordOf(3).PendingUploads.empty()) << "a 64-wide box survived onto an 8-wide store";
     EXPECT_EQ(TextureRecordOf(3).Desc.Width, 8u);
 }
 
@@ -2301,10 +2259,10 @@ TEST(TextureEmit, ARespecifyOfOneCubeFaceKeepsTheOtherFacesUploadOfTheSameLevel)
     // The packed Target's two bytes (ID-12): low = the RESOURCE target, high = the per-call
     // UPLOAD target, which for a cube map is the FACE. Both faces below name the same resource
     // target and the same level and differ only in the face, which is the whole point.
-    const Uint16 positiveX = MGPipePackSubDataTarget(
-        kTexCube, static_cast<Uint32>(TextureUploadTarget::CubeMapPositiveX));
-    const Uint16 negativeX = MGPipePackSubDataTarget(
-        kTexCube, static_cast<Uint32>(TextureUploadTarget::CubeMapNegativeX));
+    const Uint16 positiveX =
+        MGPipePackSubDataTarget(kTexCube, static_cast<Uint32>(TextureUploadTarget::CubeMapPositiveX));
+    const Uint16 negativeX =
+        MGPipePackSubDataTarget(kTexCube, static_cast<Uint32>(TextureUploadTarget::CubeMapNegativeX));
     ASSERT_NE(positiveX, negativeX);
     ASSERT_EQ(MGPipeSubDataResourceTargetOf(positiveX), MGPipeSubDataResourceTargetOf(negativeX))
         << "the two faces must differ in the UPLOAD byte alone, or this case would be measuring "
@@ -2388,8 +2346,7 @@ TEST(TextureEmit, TheSubDataCallAnswersWhetherTheRecordWasAcceptedSoTheClientCan
     // A stale generation is the refusal that is NOT a Fatal, so it is the one the answer has to
     // carry: the record is gone, the texels were never taken, and the flag may not be cleared.
     const Uint64 refusedBefore = MGPipeApplier().RefusedResourceCalls;
-    EXPECT_FALSE(
-        MGPipeApplyResourceSubData(TextureUpload(MGPipeHandle{8, 2}, 0, MGPBox{0, 0, 0, 8, 8, 1}, 0), texels))
+    EXPECT_FALSE(MGPipeApplyResourceSubData(TextureUpload(MGPipeHandle{8, 2}, 0, MGPBox{0, 0, 0, 8, 8, 1}, 0), texels))
         << "a refused upload answered 'accepted' and the client would clear a flag nothing owes";
     EXPECT_EQ(MGPipeApplier().RefusedResourceCalls, refusedBefore + 1);
     EXPECT_EQ(TextureRecordOf(8).PendingUploads.size(), 1u);
@@ -2442,9 +2399,7 @@ TEST(TextureEmit, ASubDataRecordWhoseResourceTargetNamesNoTextureIsRefusedRather
     pastTheCatalogue.Target = static_cast<Uint16>(MGPipeResourceTarget::Count);
     ExpectRefusedNaming("resource_subdata {slot=9, gen=1}: the record's resource target names no texture "
                         "to upload into",
-                        [&pastTheCatalogue, &texels]() {
-                            MGPipeApplyResourceSubData(pastTheCatalogue, texels);
-                        });
+                        [&pastTheCatalogue, &texels]() { MGPipeApplyResourceSubData(pastTheCatalogue, texels); });
 
     MGPSubData packedBuffer = renderbuffer;
     packedBuffer.Target = static_cast<Uint16>(0x0100u | kMGPipeResourceTargetBuffer);
@@ -2508,7 +2463,7 @@ TEST(TextureEmit, ARespecifyThatRedefinesNoStorageCarriesTheStickyMaskAndKeepsTh
     // glTexStorage2D: an IMMUTABLE store, which is the whole reason this arm exists.
     MGPResourceDesc allocated = TextureDesc(texture, 64, 151);
     allocated.Immutable = 1;
-    allocated.Levels = 2; // level 1 exists for the named-level clause below
+    allocated.Levels = 2;               // level 1 exists for the named-level clause below
     allocated.InternalFormat = 0x8058u; // GL_RGBA8
     allocated.BindMask = static_cast<Uint16>(kMGPipeBindSampler);
     ASSERT_TRUE(MGPipeApplyResourceRespecify(allocated, nullptr));

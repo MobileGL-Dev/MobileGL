@@ -10,9 +10,8 @@
 #include "MG_Util/Converters/GLToStr/GLEnumConverter.h"
 
 namespace MobileGL::MG_Util::TextureFormatProcessor {
-    Flags<PixelFormatNormalizeOptionBit>
-    GetApplicablePixelFormatNormalizeOptions(GLenum internalFormat,
-                                             Flags<PixelFormatNormalizeOptionBit> options) {
+    Flags<PixelFormatNormalizeOptionBit> GetApplicablePixelFormatNormalizeOptions(
+        GLenum internalFormat, Flags<PixelFormatNormalizeOptionBit> options) {
         Flags<PixelFormatNormalizeOptionBit> applicableOptions;
         switch (internalFormat) {
         case GL_DEPTH_COMPONENT32:
@@ -384,8 +383,7 @@ namespace MobileGL::MG_Util::TextureFormatProcessor {
                 *outInternalFormat = GL_RGBA8;
                 break;
             case GL_RGBA12:
-                *outInternalFormat =
-                    (options & PixelFormatNormalizeOptionBit::NoNorm16) ? GL_RGBA32F : GL_RGBA16;
+                *outInternalFormat = (options & PixelFormatNormalizeOptionBit::NoNorm16) ? GL_RGBA32F : GL_RGBA16;
                 break;
             default:
                 *outInternalFormat = internalFormat;
@@ -566,7 +564,7 @@ namespace MobileGL::MG_Util::TextureFormatProcessor {
 
             default:
                 MGLOG_E_ONCE("NormalizePixelFormat: outFormat: unhandled internalFormat: %s",
-                        MG_Util::ConvertGLEnumToString(internalFormat).c_str());
+                             MG_Util::ConvertGLEnumToString(internalFormat).c_str());
                 // Fallback handling for other formats
                 // Try to infer format from internal format name
                 if (strstr(MG_Util::ConvertGLEnumToString(internalFormat).c_str(), "RGBA") != nullptr) {
@@ -621,8 +619,7 @@ namespace MobileGL::MG_Util::TextureFormatProcessor {
             case GL_RG16_SNORM:
             case GL_R16_SNORM:
                 if ((options & PixelFormatNormalizeOptionBit::NoNorm16) ||
-                    (internalFormat == GL_RGB16_SNORM &&
-                     (options & PixelFormatNormalizeOptionBit::NoRGB16Snorm)) ||
+                    (internalFormat == GL_RGB16_SNORM && (options & PixelFormatNormalizeOptionBit::NoRGB16Snorm)) ||
                     (options & PixelFormatNormalizeOptionBit::NoSnorm16) ||
                     (options & PixelFormatNormalizeOptionBit::NoSnorm16RenderTarget)) {
                     *outType = GL_FLOAT;
@@ -798,7 +795,7 @@ namespace MobileGL::MG_Util::TextureFormatProcessor {
 
             default:
                 MGLOG_E_ONCE("NormalizePixelFormat: outType: unhandled internalFormat: %s",
-                        MG_Util::ConvertGLEnumToString(internalFormat).c_str());
+                             MG_Util::ConvertGLEnumToString(internalFormat).c_str());
                 // Fallback handling for other formats
                 *outType = GL_UNSIGNED_BYTE;
                 break;

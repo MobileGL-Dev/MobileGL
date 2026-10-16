@@ -150,7 +150,9 @@ namespace {
         return result;
     }
 
-    Bool DiedOfAbort(const ChildResult& r) { return WIFSIGNALED(r.Status) && WTERMSIG(r.Status) == SIGABRT; }
+    Bool DiedOfAbort(const ChildResult& r) {
+        return WIFSIGNALED(r.Status) && WTERMSIG(r.Status) == SIGABRT;
+    }
     std::string DescribeStatus(const ChildResult& r) {
         if (r.Status < 0) return "fork/waitpid failed";
         if (WIFEXITED(r.Status)) return "exited " + std::to_string(WEXITSTATUS(r.Status));
@@ -190,8 +192,7 @@ namespace {
 // See FramebufferEmitTest's twin for why this is a shape pin rather than a placeholder.
 TEST(ProgramEmit, TheEmitterIsOneNeverDestroyedProcessSingleton) {
     EXPECT_EQ(&MGPipeProgramEmitterInstance(), &MGPipeProgramEmitterInstance());
-    EXPECT_TRUE(kMGPipeWiredProgramSubsystem == 0 ||
-                kMGPipeWiredProgramSubsystem == kMGPipeSubsystemPrograms);
+    EXPECT_TRUE(kMGPipeWiredProgramSubsystem == 0 || kMGPipeWiredProgramSubsystem == kMGPipeSubsystemPrograms);
 }
 
 // =========================================================================================
@@ -305,11 +306,10 @@ TEST(ProgramEmit, ACreateWithNoArtefactsAnOversizedBlockOrACorruptSlotIsRefusedN
     EXPECT_TRUE(MGPipeApplier().ShaderCsos.empty()) << "the table was grown by a refused record";
 
     const MGPProgramDesc pastTheBound = ProgramDesc(MGPipeHandle{kMGPipeMaxShaderCsoSlots, 1}, 0x3u, 0);
-    ExpectRefusedNaming("create_shader_state {slot=1048576, gen=1}: the slot is outside the record table's "
-                        "bound",
-                        [&pastTheBound, &link, &spirv]() {
-                            MGPipeApplyCreateShaderState(pastTheBound, &link, &spirv, nullptr);
-                        });
+    ExpectRefusedNaming(
+        "create_shader_state {slot=1048576, gen=1}: the slot is outside the record table's "
+        "bound",
+        [&pastTheBound, &link, &spirv]() { MGPipeApplyCreateShaderState(pastTheBound, &link, &spirv, nullptr); });
     EXPECT_TRUE(MGPipeApplier().ShaderCsos.empty());
     EXPECT_TRUE(MGPipeApplier().CompositeShaderCsos.empty());
 }
@@ -469,7 +469,6 @@ TEST(ProgramEmit, TheProgramRecordSurvivesAMakeCurrentWhileTheThreeBindingsDoNot
     EXPECT_TRUE(MGPipeApplier().ShaderCsos.empty());
 }
 
-
 namespace {
     namespace GL = MobileGL::MG_Impl::GLImpl;
     using GLContext = MG_State::GLState::GLContext;
@@ -490,8 +489,12 @@ namespace {
         }
     };
 
-    GLContext& Ctx() { return *MG_State::pGLContext; }
-    MGPipeProgramEmitter& Emitter() { return MGPipeProgramEmitterInstance(); }
+    GLContext& Ctx() {
+        return *MG_State::pGLContext;
+    }
+    MGPipeProgramEmitter& Emitter() {
+        return MGPipeProgramEmitterInstance();
+    }
 
     const char* kVs = R"(#version 430 core
 uniform vec4 u_value;
@@ -525,7 +528,9 @@ void main() { gl_Position = vec4(0.0); EmitVertex(); }
         return program;
     }
 
-    constexpr Uint32 StageBit(ShaderStage stage) { return Uint32{1} << static_cast<Uint32>(stage); }
+    constexpr Uint32 StageBit(ShaderStage stage) {
+        return Uint32{1} << static_cast<Uint32>(stage);
+    }
 
     // ProgramObject.h says it in as many words and this is the case that holds it: a stage mask
     // built from the ATTACH list would describe a program that does not exist yet, because
@@ -702,8 +707,7 @@ void main() { gl_Position = vec4(0.0); EmitVertex(); }
         // Driven to the fixed point rather than assumed to settle in one call: the first
         // EmitGlobalConstants reads GetUBOContentVersion() BEFORE GetUBOSize() joins phase B,
         // and that join bumps the counter, so the first key is one behind by construction.
-        for (int i = 0; i < 8 && Emitter().EmitGlobalConstants(Ctx()) > 0u; ++i) {
-        }
+        for (int i = 0; i < 8 && Emitter().EmitGlobalConstants(Ctx()) > 0u; ++i) {}
         const Uint64 setsBefore = Emitter().GlobalConstantsSetCount();
         ASSERT_GT(setsBefore, 0u) << "this program declares a uniform, so a block must have gone out";
         const MGPipeHandle cso = Emitter().GlobalConstantsCso();
@@ -731,8 +735,7 @@ void main() { gl_Position = vec4(0.0); EmitVertex(); }
         EXPECT_EQ(Emitter().GlobalConstantsVersion(), kMGPipeGlobalConstantsNeverUploaded);
 
         // And the block really is sent again.
-        for (int i = 0; i < 8 && Emitter().EmitGlobalConstants(Ctx()) > 0u; ++i) {
-        }
+        for (int i = 0; i < 8 && Emitter().EmitGlobalConstants(Ctx()) > 0u; ++i) {}
         EXPECT_GT(Emitter().GlobalConstantsSetCount(), setsBefore);
     }
     // A default uniform block wide enough that one vec4 is less than half of it, so a write to
@@ -761,8 +764,7 @@ void main() { gl_Position = u_a + u_b + u_c + u_d; }
     void DrawWith(GLuint name) {
         GL::UseProgram(name);
         Emitter().EmitShaderState(Ctx());
-        for (int i = 0; i < 8 && Emitter().EmitGlobalConstants(Ctx()) > 0u; ++i) {
-        }
+        for (int i = 0; i < 8 && Emitter().EmitGlobalConstants(Ctx()) > 0u; ++i) {}
     }
 
     // THE set_global_constants KEY IS PER HANDLE, because the applier keeps one block per shader
@@ -899,8 +901,7 @@ void main() { gl_Position = u_a + u_b + u_c + u_d; }
         // is what keeps a program-pipeline composite's per-draw uniform mirror free.
         const Uint64 latched = Emitter().ProgramBindingsSetCount();
         Emitter().EmitProgramBindings(*program, cso);
-        EXPECT_EQ(Emitter().ProgramBindingsSetCount(), latched)
-            << "an unchanged binding set was re-sent";
+        EXPECT_EQ(Emitter().ProgramBindingsSetCount(), latched) << "an unchanged binding set was re-sent";
 
         // A REAL glUniformBlockBinding, after the link, on a program that declares no block:
         // the frontend's setter bails out on an out-of-range index, so this drives the other
@@ -914,8 +915,7 @@ void main() { gl_Position = u_a + u_b + u_c + u_d; }
                 << "a post-link unit assignment did not move the latch, so it never travels";
             const auto& hdr = Emitter().LastProgramBindings();
             EXPECT_EQ(hdr.Cso, cso);
-            EXPECT_GE(hdr.SamplerUnitCount, 1u)
-                << "the assigned unit is not in the record's second tail";
+            EXPECT_GE(hdr.SamplerUnitCount, 1u) << "the assigned unit is not in the record's second tail";
         }
     }
 
@@ -934,8 +934,10 @@ void main() { gl_Position = u_a + u_b + u_c + u_d; }
         EXPECT_TRUE(program->HasUniformLocationTables(0)) << "a linked program must own its tables";
 
         Vector<GLuint> attached;
-        for (const auto& shader : program->GetAttachedShaders()) attached.push_back(shader->GetExternalIndex());
-        for (const GLuint shader : attached) GL::DetachShader(name, shader);
+        for (const auto& shader : program->GetAttachedShaders())
+            attached.push_back(shader->GetExternalIndex());
+        for (const GLuint shader : attached)
+            GL::DetachShader(name, shader);
         GL::LinkProgram(name);
         GLint linked = GL_TRUE;
         GL::GetProgramiv(name, GL_LINK_STATUS, &linked);
@@ -1046,8 +1048,7 @@ void main() { gl_Position = u_a + u_b + u_c + u_d; }
         EXPECT_EQ(Emitter().CreateCount(), creates + 1)
             << "the failed relink did not re-issue, so the server keeps drawing an executable "
                "the frontend reports unlinked";
-        EXPECT_EQ(Emitter().LastProgramDesc().LinkStatus, 0u)
-            << "the re-issue claims the program linked";
+        EXPECT_EQ(Emitter().LastProgramDesc().LinkStatus, 0u) << "the re-issue claims the program linked";
         EXPECT_TRUE(MGPipeSlots().IsLive(MGPipeKind::ShaderCso, cso))
             << "a failed relink must never be modelled as an object_death";
     }
@@ -1064,8 +1065,7 @@ void main() { gl_Position = u_a + u_b + u_c + u_d; }
         spirv.generatedSpirv.resize(2);
         spirv.generatedSpirv[0].assign(3, 0x07230203u);
         spirv.generatedSpirv[1].assign(5, 0x07230204u);
-        const Vector<Uint32> stages{static_cast<Uint32>(ShaderStage::Vertex),
-                                    static_cast<Uint32>(ShaderStage::Vertex)};
+        const Vector<Uint32> stages{static_cast<Uint32>(ShaderStage::Vertex), static_cast<Uint32>(ShaderStage::Vertex)};
 
         Vector<Uint8> framed;
         MG_State::GLState::EncodeProgramArchive(link, spirv, stages, framed);
@@ -1082,8 +1082,7 @@ void main() { gl_Position = u_a + u_b + u_c + u_d; }
 
         // A TRUNCATED FRAME IS REFUSED, not guessed, and both outputs come back defined.
         MG_State::GLState::ProgramArchive refused;
-        EXPECT_FALSE(
-            MG_State::GLState::DecodeProgramArchive(framed.data(), framed.size() - 1, refused));
+        EXPECT_FALSE(MG_State::GLState::DecodeProgramArchive(framed.data(), framed.size() - 1, refused));
         EXPECT_TRUE(refused.LinkedStages.empty());
         EXPECT_TRUE(refused.Spirv.generatedSpirv.empty());
     }
@@ -1106,8 +1105,7 @@ int main(int argc, char** argv) {
     // raised by the encoder on THIS thread - the client role. So g_logPath, which is the read
     // path from here on, becomes the client-derived name; the env keeps the base. The rule is
     // the library's own, not a copy.
-    g_logPath = MobileGL::MG_Util::Debug::RoleLogPath(g_logPath.c_str(),
-                                                      MobileGL::MG_Util::Debug::LogRole::Client);
+    g_logPath = MobileGL::MG_Util::Debug::RoleLogPath(g_logPath.c_str(), MobileGL::MG_Util::Debug::LogRole::Client);
     MobileGL::Initialize();
     ::testing::InitGoogleTest(&argc, argv);
     const int rc = RUN_ALL_TESTS();

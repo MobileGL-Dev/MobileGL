@@ -11,4 +11,4 @@
 
 namespace MobileGL::MG_Impl::NSOpenGLImpl {
     void InstallHooks();
-}
+} // namespace MobileGL::MG_Impl::NSOpenGLImpl

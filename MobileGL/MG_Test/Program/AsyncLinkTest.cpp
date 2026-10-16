@@ -210,8 +210,8 @@ TEST_F(AsyncLinkTest, TwoProgramsSharingAShaderGenerateIdenticalSpirv) {
         const Vector<Uint64> digestA = SpirvDigest(programA);
         const Vector<Uint64> digestB = SpirvDigest(programB);
         ASSERT_EQ(digestA.size(), 2u) << "async=" << async;
-        EXPECT_EQ(digestA, digestB)
-            << "the claim winner and the re-parsing loser must produce identical SPIR-V (async=" << async << ")";
+        EXPECT_EQ(digestA, digestB) << "the claim winner and the re-parsing loser must produce identical SPIR-V (async="
+                                    << async << ")";
 
         // And the two programs really are usable independently.
         EXPECT_GE(GetUniformLocation(programA, "uColor"), 0);
@@ -803,13 +803,13 @@ TEST_F(AsyncLinkTest, StressLinkQueryRelinkDeleteInterleaved) {
             const GLuint program = programs[static_cast<SizeT>(i)];
             ASSERT_EQ(QueryLinkStatus(program), GL_TRUE)
                 << "round " << round << " program " << i << ": " << QueryProgramInfoLog(program);
-            const String expected =
-                "uSeed" + std::to_string(round * 1000 + (i % 2 == 0 ? 700 + i : 300 + i));
+            const String expected = "uSeed" + std::to_string(round * 1000 + (i % 2 == 0 ? 700 + i : 300 + i));
             EXPECT_GE(GetUniformLocation(program, expected.c_str()), 0)
                 << "round " << round << " program " << i << " expected " << expected;
             DeleteProgram(program);
         }
-        for (const GLuint fs : fragmentShaders) DeleteShader(fs);
+        for (const GLuint fs : fragmentShaders)
+            DeleteShader(fs);
         DeleteShader(vs);
         EXPECT_EQ(GetError(), GL_NO_ERROR);
     }

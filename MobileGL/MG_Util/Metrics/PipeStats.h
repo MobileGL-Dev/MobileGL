@@ -448,7 +448,9 @@ namespace MobileGL::MG_Util::PipeStats {
     // predicted branch - do not turn this into a function call.
     extern Bool g_pipeStatsEnabled;
 
-    inline Bool Enabled() { return g_pipeStatsEnabled; }
+    inline Bool Enabled() {
+        return g_pipeStatsEnabled;
+    }
 
     // Latches g_pipeStatsEnabled from MG_Config::Features.PipeStats and clears every
     // counter. Called from MobileGL::Initialize() right after the config load.

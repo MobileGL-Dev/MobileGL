@@ -31,6 +31,7 @@ namespace MobileGL::MG_Remote::Transport {
         // control connection, the peer the server's log forward (LogForward.h) must not be held by.
         // Frames already queued stay queued; resuming picks up where the socket is.
         void PauseReadingForTest(bool paused);
+
     private:
         void Read();
         ITransport& m_transport;
@@ -43,4 +44,4 @@ namespace MobileGL::MG_Remote::Transport {
         MobileGLResult m_result = MOBILEGL_OK;
         std::thread m_reader;
     };
-}
+} // namespace MobileGL::MG_Remote::Transport

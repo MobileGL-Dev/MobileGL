@@ -23,11 +23,10 @@
 
 #include "tcuDefs.hpp"
 
-namespace tcu
-{
-class Platform;
-}
+namespace tcu {
+    class Platform;
+} // namespace tcu
 
-tcu::Platform *createPlatform(void);
+tcu::Platform* createPlatform(void);
 
 #endif // _TCUMOBILEGLPLATFORM_HPP

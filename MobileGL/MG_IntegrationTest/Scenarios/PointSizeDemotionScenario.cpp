@@ -180,8 +180,7 @@ void main()
             }
 
             static void DrainErrors() {
-                for (int i = 0; i < 16 && glGetError() != GL_NO_ERROR; ++i) {
-                }
+                for (int i = 0; i < 16 && glGetError() != GL_NO_ERROR; ++i) {}
             }
 
             static bool BackendHostsTessellation() {
@@ -231,8 +230,8 @@ void main()
                     for (const GLuint shader : shaders) {
                         glAttachShader(program, shader);
                     }
-                    glTransformFeedbackVaryings(program, static_cast<GLsizei>(varyings.size()),
-                                                varyings.data(), GL_INTERLEAVED_ATTRIBS);
+                    glTransformFeedbackVaryings(program, static_cast<GLsizei>(varyings.size()), varyings.data(),
+                                                GL_INTERLEAVED_ATTRIBS);
                     glLinkProgram(program);
                     GLint linked = GL_FALSE;
                     glGetProgramiv(program, GL_LINK_STATUS, &linked);
@@ -258,8 +257,8 @@ void main()
                 GLuint xfbBuffer = 0;
                 glGenBuffers(1, &xfbBuffer);
                 glBindBuffer(GL_ARRAY_BUFFER, xfbBuffer);
-                glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(capturedFloats * sizeof(float)),
-                             poison.data(), GL_STATIC_COPY);
+                glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(capturedFloats * sizeof(float)), poison.data(),
+                             GL_STATIC_COPY);
                 glBindBuffer(GL_ARRAY_BUFFER, 0);
                 glBindBufferBase(GL_TRANSFORM_FEEDBACK_BUFFER, 0, xfbBuffer);
 
@@ -273,20 +272,17 @@ void main()
 
                 std::vector<float> readback(capturedFloats, kPoison);
                 glGetBufferSubData(GL_TRANSFORM_FEEDBACK_BUFFER, 0,
-                                   static_cast<GLsizeiptr>(capturedFloats * sizeof(float)),
-                                   readback.data());
+                                   static_cast<GLsizeiptr>(capturedFloats * sizeof(float)), readback.data());
                 glUseProgram(0);
                 glBindBufferBase(GL_TRANSFORM_FEEDBACK_BUFFER, 0, 0);
                 glDeleteBuffers(1, &xfbBuffer);
                 return readback;
             }
 
-            static ::testing::AssertionResult ComponentIs(const std::vector<float>& data,
-                                                          std::size_t index, float expected,
-                                                          float epsilon = 1e-4f) {
+            static ::testing::AssertionResult ComponentIs(const std::vector<float>& data, std::size_t index,
+                                                          float expected, float epsilon = 1e-4f) {
                 if (index >= data.size()) {
-                    return ::testing::AssertionFailure()
-                           << "component " << index << " is past the capture buffer";
+                    return ::testing::AssertionFailure() << "component " << index << " is past the capture buffer";
                 }
                 const float actual = data[index];
                 if (actual == kPoison) {
@@ -307,8 +303,8 @@ void main()
             // snapshot may satisfy an assertion.
             static std::filesystem::path LibraryLogPath() {
                 // P6: the path is a BASE NAME and the library writes one log per role; PipeStatsWindow
-            // derives the suffix, so the rule lives in one place.
-            return std::filesystem::path(MGITest::PipeStatsWindow::LibraryLogPath());
+                // derives the suffix, so the rule lives in one place.
+                return std::filesystem::path(MGITest::PipeStatsWindow::LibraryLogPath());
             }
 
             // ONE MARK PER ROLE. The library writes a log per role, so "how long is the log
@@ -342,8 +338,8 @@ void main()
         TEST_F(PointSizeDemotionScenario, TheValueSurvivesTheFiveStageChainIntoTheCapture) {
             if (!Ready()) return;
             if (!BackendHostsTessellation()) {
-                GTEST_SKIP() << "no tessellation stages on " << Gl().BackendName() << " ("
-                             << Gl().RendererString() << ")";
+                GTEST_SKIP() << "no tessellation stages on " << Gl().BackendName() << " (" << Gl().RendererString()
+                             << ")";
             }
             glPatchParameteri(GL_PATCH_VERTICES, 3);
             DrainErrors();
@@ -367,8 +363,8 @@ void main()
         TEST_F(PointSizeDemotionScenario, TheEvaluationStageOwnsTheCaptureWithoutAGeometryStage) {
             if (!Ready()) return;
             if (!BackendHostsTessellation()) {
-                GTEST_SKIP() << "no tessellation stages on " << Gl().BackendName() << " ("
-                             << Gl().RendererString() << ")";
+                GTEST_SKIP() << "no tessellation stages on " << Gl().BackendName() << " (" << Gl().RendererString()
+                             << ")";
             }
             glPatchParameteri(GL_PATCH_VERTICES, 3);
             DrainErrors();
@@ -389,8 +385,8 @@ void main()
             GLsizei nameLength = 0;
             GLsizei varyingSize = 0;
             GLenum varyingType = 0;
-            glGetTransformFeedbackVarying(program, 0, sizeof(varyingName), &nameLength, &varyingSize,
-                                          &varyingType, varyingName);
+            glGetTransformFeedbackVarying(program, 0, sizeof(varyingName), &nameLength, &varyingSize, &varyingType,
+                                          varyingName);
             EXPECT_STREQ(varyingName, "gl_PointSize");
             EXPECT_EQ(varyingType, static_cast<GLenum>(GL_FLOAT));
             EXPECT_EQ(glGetError(), GL_NO_ERROR);
@@ -446,11 +442,10 @@ void main()
                                                         {GL_GEOMETRY_SHADER, kReadOnlyGeometrySource},
                                                         {GL_FRAGMENT_SHADER, kEchoFragmentSource}},
                                                        {"g_echo", "gl_PointSize"});
-            ASSERT_NE(program, 0u)
-                << "the capture set failed to link. On a demoting configuration this is the "
-                   "capture request never reaching the demotion, so the point-size capture was "
-                   "respelled to a carrier no stage declares. Build log: "
-                << m_buildLog;
+            ASSERT_NE(program, 0u) << "the capture set failed to link. On a demoting configuration this is the "
+                                      "capture request never reaching the demotion, so the point-size capture was "
+                                      "respelled to a carrier no stage declares. Build log: "
+                                   << m_buildLog;
 
             const std::vector<float> captured = RunCaptureSpan(program, GL_POINTS, 1, 2);
             EXPECT_TRUE(ComponentIs(captured, 0, 7.0f))
@@ -503,8 +498,7 @@ void main()
             // use still reaches the build the latched line fires in - and the capture must
             // STILL be right through the carrier.
             const std::vector<float> captured = RunCaptureSpan(program, GL_POINTS, 1, 1);
-            EXPECT_TRUE(ComponentIs(captured, 0, 8.0f))
-                << "the pinned-on lane did not even capture correctly";
+            EXPECT_TRUE(ComponentIs(captured, 0, 8.0f)) << "the pinned-on lane did not even capture correctly";
             EXPECT_EQ(glGetError(), GL_NO_ERROR);
 
             const std::string appended = LibraryLogSince(before);

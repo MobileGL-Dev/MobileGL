@@ -231,8 +231,8 @@ void main() {
                 EXPECT_TRUE(RegionIsMostly(image, inset, w / 2 - inset, inset, h / 2 - inset, "blue", 0.0, when));
                 EXPECT_TRUE(RegionIsMostly(image, w / 2 + inset, w - inset, inset, h / 2 - inset, "green", 0.0, when));
                 EXPECT_TRUE(RegionIsMostly(image, inset, w / 2 - inset, h / 2 + inset, h - inset, "red", 0.0, when));
-                EXPECT_TRUE(RegionIsMostly(image, w / 2 + inset, w - inset, h / 2 + inset, h - inset, "white", 0.0,
-                                           when));
+                EXPECT_TRUE(
+                    RegionIsMostly(image, w / 2 + inset, w - inset, h / 2 + inset, h - inset, "white", 0.0, when));
             }
 
             unsigned int m_program = 0;
@@ -292,8 +292,7 @@ void main() {
             const Image offscreen = OffscreenPass();
             const Image presented = DefaultFramebufferPass();
 
-            EXPECT_EQ(offscreen.QuadrantSignature(), kUprightSignature)
-                << "render-to-texture pass rendered flipped";
+            EXPECT_EQ(offscreen.QuadrantSignature(), kUprightSignature) << "render-to-texture pass rendered flipped";
             EXPECT_EQ(presented.QuadrantSignature(), kUprightSignature)
                 << "the default-framebuffer pass that follows a render-to-texture pass "
                    "rendered upside down";
@@ -450,10 +449,10 @@ void main() {
 
             // Nothing may have been painted outside the viewport. This is what catches the
             // mirrored placement: the drawn band would sit at GL rows [41, 83) instead.
-            EXPECT_TRUE(RegionIsMostly(whole, 0, Gl().Width() - 1, 0, kSubY - 2, "black", 0.0,
-                                       "below the sub-viewport"));
-            EXPECT_TRUE(RegionIsMostly(whole, 0, Gl().Width() - 1, kSubY + kSubH + 1, Gl().Height() - 1, "black",
-                                       0.0, "above the sub-viewport"));
+            EXPECT_TRUE(
+                RegionIsMostly(whole, 0, Gl().Width() - 1, 0, kSubY - 2, "black", 0.0, "below the sub-viewport"));
+            EXPECT_TRUE(RegionIsMostly(whole, 0, Gl().Width() - 1, kSubY + kSubH + 1, Gl().Height() - 1, "black", 0.0,
+                                       "above the sub-viewport"));
         }
 
         // Readback: a full-viewport draw read back through a sub-rect must return the requested
@@ -529,12 +528,11 @@ void main() {
             ClearTo(0.0f, 0.0f, 0.0f, 1.0f);
             glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
             glBindFramebuffer(GL_DRAW_FRAMEBUFFER, m_offscreen.fbo);
-            glBlitFramebuffer(kSubX, kSubY, kSubX + kSubW, kSubY + kSubH, kSubX, kSubY, kSubX + kSubW,
-                              kSubY + kSubH, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+            glBlitFramebuffer(kSubX, kSubY, kSubX + kSubW, kSubY + kSubH, kSubX, kSubY, kSubX + kSubW, kSubY + kSubH,
+                              GL_COLOR_BUFFER_BIT, GL_NEAREST);
             const unsigned int blitError = FirstGLError();
             if (blitError != GL_NO_ERROR) {
-                GTEST_SKIP() << "this backend refused the default-framebuffer blit: "
-                             << GLErrorName(blitError);
+                GTEST_SKIP() << "this backend refused the default-framebuffer blit: " << GLErrorName(blitError);
             }
 
             glBindFramebuffer(GL_FRAMEBUFFER, m_offscreen.fbo);
@@ -543,8 +541,7 @@ void main() {
 
             const Image landed = CropRect(blitted, kSubX, kSubY, kSubW, kSubH);
             const Image expected = CropRect(whole, kSubX, kSubY, kSubW, kSubH);
-            EXPECT_FALSE(landed == VFlip(expected))
-                << "ORIENTATION: the blitted band arrived upside down";
+            EXPECT_FALSE(landed == VFlip(expected)) << "ORIENTATION: the blitted band arrived upside down";
             EXPECT_TRUE(landed == expected)
                 << "the blitted sub-rect differs from the same sub-rect of a direct read in "
                 << landed.ByteDiffCount(expected) << " bytes";
@@ -576,8 +573,8 @@ void main() {
                 << "an FBO sub-viewport draw must land in GL rows [y0, y0+h) upright";
             EXPECT_TRUE(RegionIsMostly(placedWhole, 0, m_offscreen.width - 1, 0, kSubY - 2, "black", 0.0,
                                        "below an FBO sub-viewport"));
-            EXPECT_TRUE(RegionIsMostly(placedWhole, 0, m_offscreen.width - 1, kSubY + kSubH + 1,
-                                       m_offscreen.height - 1, "black", 0.0, "above an FBO sub-viewport"));
+            EXPECT_TRUE(RegionIsMostly(placedWhole, 0, m_offscreen.width - 1, kSubY + kSubH + 1, m_offscreen.height - 1,
+                                       "black", 0.0, "above an FBO sub-viewport"));
         }
 
     } // namespace

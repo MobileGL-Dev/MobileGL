@@ -26,8 +26,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         VkImageLayout initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     };
 
-    DepthStencilAttachmentLoadInfo ResolveDepthStencilAttachmentLoadInfo(
-        VkImageLayout trackedLayout, Bool clearDepth, Bool clearStencil);
+    DepthStencilAttachmentLoadInfo ResolveDepthStencilAttachmentLoadInfo(VkImageLayout trackedLayout, Bool clearDepth,
+                                                                         Bool clearStencil);
     IntVec2 ResolveRenderPassFramebufferExtent(Bool isDefaultFbo, const TextureSize& attachmentExtent,
                                                VkExtent2D swapchainExtent);
 
@@ -128,9 +128,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return this->compatibilityHash == that.compatibilityHash;
         }
 
-        Bool CompatibleWith(Uint64 compatibilityHash) const {
-            return this->compatibilityHash == compatibilityHash;
-        }
+        Bool CompatibleWith(Uint64 compatibilityHash) const { return this->compatibilityHash == compatibilityHash; }
     };
 
     struct ActiveRenderPassInfo {
@@ -139,31 +137,25 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
         IntVec2 extent = {0, 0};
 
-        Bool CompatibleWith(const RenderPassEntry& that) const {
-            return compatibilityHash == that.compatibilityHash;
-        }
+        Bool CompatibleWith(const RenderPassEntry& that) const { return compatibilityHash == that.compatibilityHash; }
 
-        Bool CompatibleWith(Uint64 thatCompatibilityHash) const {
-            return compatibilityHash == thatCompatibilityHash;
-        }
+        Bool CompatibleWith(Uint64 thatCompatibilityHash) const { return compatibilityHash == thatCompatibilityHash; }
     };
 
     class VkRenderPassManager {
     public:
         using HashType = Uint64;
 
-        VkRenderPassManager(VkDevice device,
-            VkPhysicalDevice physicalDevice, VmaAllocator allocator, const VulkanRendererConfig& config,
-            VkTextureManager& textureManager, SwapchainObject& swapchainObject);
+        VkRenderPassManager(VkDevice device, VkPhysicalDevice physicalDevice, VmaAllocator allocator,
+                            const VulkanRendererConfig& config, VkTextureManager& textureManager,
+                            SwapchainObject& swapchainObject);
         ~VkRenderPassManager();
 
         Bool Initialize();
         void Shutdown();
         // The surface target the default framebuffer currently names (VulkanRenderer's surface
         // targets): a default-framebuffer pass of one surface is not another's.
-        void SetDefaultFramebufferTarget(Uint64 serial) {
-            m_defaultFramebufferTarget = serial;
-        }
+        void SetDefaultFramebufferTarget(Uint64 serial) { m_defaultFramebufferTarget = serial; }
         static Bool BeginRenderPass(VkCommandBuffer commandBuffer, RenderPassEntry& renderPassEntry);
         // P15 S0: begins `renderPassEntry` through `renderPass` (one of its clear-load variants)
         // with these clear values; it is active as the entry itself, so a draw continues it.
@@ -171,6 +163,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                     VkRenderPass renderPass, const VkClearValue* clearValues, Uint32 clearValueCount);
         static Bool EndRenderPass(VkCommandBuffer commandBuffer);
         static ActiveRenderPassInfo* GetActiveRenderPass();
+
     private:
         VkDevice m_device = VK_NULL_HANDLE;
         VkPhysicalDevice m_physicalDevice = VK_NULL_HANDLE;
@@ -190,13 +183,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Uint64 GetRenderbufferImageEpoch() const { return m_renderbufferImageEpoch; }
 
     private:
-
         Uint64 m_defaultFramebufferTarget = 0;
 
         // Supported sample counts per attachment format, so per-draw resource lookups
         // do not repeat vkGetPhysicalDeviceImageFormatProperties.
         UnorderedMap<VkFormat, VkSampleCountFlags> m_attachmentSampleCountsByFormat;
-
 
         static inline thread_local XXH64_state_t* m_hashState = XXH64_createState();
         // Per Magma session (MagmaSession.h): one session's open render pass and managers are not

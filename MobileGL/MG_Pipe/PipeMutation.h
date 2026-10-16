@@ -85,7 +85,7 @@ namespace MobileGL::MG_State::GLState {
     class FramebufferObject;
     class SamplerObject;
     class ProgramObject;
-}
+} // namespace MobileGL::MG_State::GLState
 
 namespace MobileGL::MG_Pipe {
     // (Features.PipePush & kMGPipeSubsystemResources) != 0 && MGPipeGetResourceOps() != nullptr.
@@ -224,8 +224,8 @@ namespace MobileGL::MG_Pipe {
     void MGPipeEmitResourceCreate(MG_State::GLState::BufferObject& buffer);
     void MGPipeEmitResourceRespecify(MG_State::GLState::BufferObject& buffer);
     void MGPipeEmitResourceSubData(MG_State::GLState::BufferObject& buffer, SizeT offset, SizeT size);
-    void MGPipeEmitBufferSubDataResident(MG_State::GLState::BufferObject& buffer, SizeT offset,
-                                         const void* bytes, SizeT size);
+    void MGPipeEmitBufferSubDataResident(MG_State::GLState::BufferObject& buffer, SizeT offset, const void* bytes,
+                                         SizeT size);
     void MGPipeEmitResourceFlushRange(MG_State::GLState::BufferObject& buffer, SizeT offset, SizeT size,
                                       Uint32 accessFlags);
     void MGPipeEmitResourceReadback(MG_State::GLState::BufferObject& buffer);
@@ -323,8 +323,7 @@ namespace MobileGL::MG_Pipe {
         LevelsFrom = 2,
     };
     void MGPipeEmitTextureResourceRespecify(MG_State::GLState::ITextureObject& texture,
-                                            MGPipeTextureRespecifyScope scope, Uint32 uploadTarget,
-                                            Uint32 level);
+                                            MGPipeTextureRespecifyScope scope, Uint32 uploadTarget, Uint32 level);
     void MGPipeEmitTextureParams(MG_State::GLState::ITextureObject& texture);
     // The DRAIN LIST's append, on a level's FIRST dirty mark, keyed on the STORAGE OWNER from
     // day one (D-D4: a view and its owner already share one dirty state, so an upload through
@@ -358,7 +357,6 @@ namespace MobileGL::MG_Pipe {
     // has to reach the applier before the texture's first sync, i.e. at the bind itself, not at
     // the validate point's image walk (which notes it as well, D-A4's letter).
     void MGPipeNoteTextureImageBound(MG_State::GLState::ITextureObject& texture);
-
 
     // ---- sampler CSOs and sampler views: MG_Impl/Pipe/SamplerEmit.h, package C ----
     //

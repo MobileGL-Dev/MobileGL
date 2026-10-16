@@ -518,8 +518,7 @@ void main() { o_color = texelFetch(u_tex, ivec2(gl_FragCoord.xy) % 4, 0); }
             glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8_SNORM, kEdge, kEdge, 0, GL_RGBA, GL_BYTE, s.data());
             Nearest(GL_TEXTURE_2D, t, 0);
             SyncBySampling(t);
-            ExpectImage(ImageCopy(t, 0, GL_RGBA8_SNORM, "rgba8_snorm", true), kEdge, Solid(kEdge, 255, 128, 0, 255),
-                        3);
+            ExpectImage(ImageCopy(t, 0, GL_RGBA8_SNORM, "rgba8_snorm", true), kEdge, Solid(kEdge, 255, 128, 0, 255), 3);
         }
 
         // Control: RGBA16_SNORM is desktop-only as an image format, so this re-mint widens too.
@@ -538,8 +537,8 @@ void main() { o_color = texelFetch(u_tex, ivec2(gl_FragCoord.xy) % 4, 0); }
             glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, kEdge, kEdge, GL_RGBA, GL_SHORT, s.data());
             Nearest(GL_TEXTURE_2D, t, 0);
             SyncBySampling(t);
-            ExpectImage(ImageCopy(t, 0, GL_RGBA16_SNORM, "rgba16_snorm", true), kEdge,
-                        Solid(kEdge, 255, 128, 0, 255), 3);
+            ExpectImage(ImageCopy(t, 0, GL_RGBA16_SNORM, "rgba16_snorm", true), kEdge, Solid(kEdge, 255, 128, 0, 255),
+                        3);
         }
 
         // An array texture is read back one layer at a time: the GPU-cleared layer and the

@@ -189,10 +189,10 @@ namespace MobileGL::MG_Remote::Transport {
             while (size) {
                 const auto recvStarted = std::chrono::steady_clock::now();
                 const auto n = ::recv(fd, p, size, 0);
-                gReadNsInRecv.fetch_add(static_cast<std::uint64_t>(
-                    std::chrono::duration_cast<std::chrono::nanoseconds>(
-                        std::chrono::steady_clock::now() - recvStarted).count()),
-                    std::memory_order_relaxed);
+                gReadNsInRecv.fetch_add(static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                                                       std::chrono::steady_clock::now() - recvStarted)
+                                                                       .count()),
+                                        std::memory_order_relaxed);
                 ++calls;
                 if (n < 0 && errno == EINTR) continue;
                 if (n <= 0) {
@@ -205,10 +205,10 @@ namespace MobileGL::MG_Remote::Transport {
             gReadCalls.fetch_add(calls, std::memory_order_relaxed);
             gReadReads.fetch_add(1, std::memory_order_relaxed);
             gReadBytes.fetch_add(wanted, std::memory_order_relaxed);
-            gReadNsTotal.fetch_add(static_cast<std::uint64_t>(
-                std::chrono::duration_cast<std::chrono::nanoseconds>(
-                    std::chrono::steady_clock::now() - readStarted).count()),
-                std::memory_order_relaxed);
+            gReadNsTotal.fetch_add(static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                                                  std::chrono::steady_clock::now() - readStarted)
+                                                                  .count()),
+                                   std::memory_order_relaxed);
             return true;
 #else
             (void)data;
@@ -237,9 +237,10 @@ namespace MobileGL::MG_Remote::Transport {
             while (message.msg_iovlen) {
                 const auto syscallStarted = std::chrono::steady_clock::now();
                 const auto sent = ::sendmsg(fd, &message, MSG_NOSIGNAL);
-                gSendNsInSend.fetch_add(static_cast<std::uint64_t>(
-                    std::chrono::duration_cast<std::chrono::nanoseconds>(
-                        std::chrono::steady_clock::now() - syscallStarted).count()),
+                gSendNsInSend.fetch_add(
+                    static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                                   std::chrono::steady_clock::now() - syscallStarted)
+                                                   .count()),
                     std::memory_order_relaxed);
                 ++sendCalls;
                 if (sent < 0 && errno == EINTR) continue;
@@ -260,10 +261,10 @@ namespace MobileGL::MG_Remote::Transport {
             }
             gSendCalls.fetch_add(sendCalls, std::memory_order_relaxed);
             gSendBytes.fetch_add(size, std::memory_order_relaxed);
-            gSendNsTotal.fetch_add(static_cast<std::uint64_t>(
-                std::chrono::duration_cast<std::chrono::nanoseconds>(
-                    std::chrono::steady_clock::now() - sendStarted).count()),
-                std::memory_order_relaxed);
+            gSendNsTotal.fetch_add(static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                                                  std::chrono::steady_clock::now() - sendStarted)
+                                                                  .count()),
+                                   std::memory_order_relaxed);
             return true;
 #else
             (void)payload;
@@ -582,7 +583,11 @@ namespace MobileGL::MG_Remote::Transport {
     }
     LinkCapabilities StreamLink::Capabilities() const {
         if (!m_impl->memory) return {};
-        return {false, false, false, m_impl->memory->CmdRingCapacity() / 2, m_impl->MaxReply(),
+        return {false,
+                false,
+                false,
+                m_impl->memory->CmdRingCapacity() / 2,
+                m_impl->MaxReply(),
                 /*RetainsReplies=*/true};
     }
     LinkProgress* StreamLink::Progress() {
@@ -769,8 +774,7 @@ namespace MobileGL::MG_Remote::Transport {
         // record for the life of the session (4,536 a frame). The cursor's entries can never be
         // needed again: a seq is answered once.
         if (x.wantCursor >= 64) {
-            x.wanted.erase(x.wanted.begin(),
-                           x.wanted.begin() + static_cast<std::ptrdiff_t>(x.wantCursor));
+            x.wanted.erase(x.wanted.begin(), x.wanted.begin() + static_cast<std::ptrdiff_t>(x.wantCursor));
             x.wantCursor = 0;
         }
     }
@@ -780,9 +784,15 @@ namespace MobileGL::MG_Remote::Transport {
         std::lock_guard<std::mutex> lock(x.replyMutex);
         return static_cast<std::uint64_t>(x.retained.size());
     }
-    std::uint64_t StreamLink::RetainedTotal() const { return m_impl->retainedTotal; }
-    std::uint64_t StreamLink::SkippedUnwanted() const { return m_impl->skippedUnwanted; }
-    std::uint64_t StreamLink::UnansweredWanted() const { return m_impl->unansweredWanted; }
+    std::uint64_t StreamLink::RetainedTotal() const {
+        return m_impl->retainedTotal;
+    }
+    std::uint64_t StreamLink::SkippedUnwanted() const {
+        return m_impl->skippedUnwanted;
+    }
+    std::uint64_t StreamLink::UnansweredWanted() const {
+        return m_impl->unansweredWanted;
+    }
 
     void StreamLink::Detach() {
         auto& x = *m_impl;

@@ -70,16 +70,16 @@ namespace MobileGL {
                 // `stripOutputBlocks` the ones it PRODUCES. `strippedAny`, when non-null,
                 // receives whether this stage actually had one, so the caller can decline the
                 // re-serialised module when there was nothing to strip.
-                StripIoBlockLocationsPass(Bool stripInputBlocks, Bool stripOutputBlocks,
-                                          Bool* strippedAny = nullptr)
+                StripIoBlockLocationsPass(Bool stripInputBlocks, Bool stripOutputBlocks, Bool* strippedAny = nullptr)
                     : m_stripInputBlocks(stripInputBlocks), m_stripOutputBlocks(stripOutputBlocks),
                       m_strippedAny(strippedAny) {}
 
                 const char* name() const override { return "mobilegl-strip-io-block-locations"; }
                 Status Process() override;
 
-                static spvtools::Optimizer::PassToken CreateStripIoBlockLocationsPass(
-                    Bool stripInputBlocks, Bool stripOutputBlocks, Bool* strippedAny);
+                static spvtools::Optimizer::PassToken CreateStripIoBlockLocationsPass(Bool stripInputBlocks,
+                                                                                      Bool stripOutputBlocks,
+                                                                                      Bool* strippedAny);
 
             private:
                 Bool m_stripInputBlocks = false;

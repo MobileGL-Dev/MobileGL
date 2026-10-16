@@ -38,11 +38,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     static Bool TryGetCurrentVertexAttributeUploadPayload(
-        const MG_State::GLState::CurrentVertexAttributeValue& currentValue,
-        GLenum glType,
-        VkFormat& outFormat,
-        const void*& outData,
-        VkDeviceSize& outSize) {
+        const MG_State::GLState::CurrentVertexAttributeValue& currentValue, GLenum glType, VkFormat& outFormat,
+        const void*& outData, VkDeviceSize& outSize) {
         switch (glType) {
         case GL_FLOAT:
             outFormat = VK_FORMAT_R32_SFLOAT;
@@ -109,14 +106,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
     }
 
-// Server-owned draw/dispatch setup. The legacy setup remains the monolith implementation.
+    // Server-owned draw/dispatch setup. The legacy setup remains the monolith implementation.
     static MagmaProgramSource WireProgramSource(MG_Pipe::MGPipeHandle handle) {
         auto& state = MG_Pipe::MGPipeApplier();
         const Bool composite = handle.Slot >= MG_Pipe::kMGPipeShaderCsoCompositeSlotBase;
         const auto& records = composite ? state.CompositeShaderCsos : state.ShaderCsos;
         const SizeT index = composite ? handle.Slot - MG_Pipe::kMGPipeShaderCsoCompositeSlotBase : handle.Slot;
-        if (MG_Pipe::MGPipeHandleIsNull(handle) || index >= records.size() ||
-            !records[index].Live || records[index].Gen != handle.Gen || !records[index].Archive)
+        if (MG_Pipe::MGPipeHandleIsNull(handle) || index >= records.size() || !records[index].Live ||
+            records[index].Gen != handle.Gen || !records[index].Archive)
             MagmaWireFatal("program-record");
         return MagmaProgramSource(handle, records[index]);
     }
@@ -138,9 +135,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     [[noreturn]] static void WireBufferLegacyFatal() {
-        MG_Pipe::MGPipeSessionFail(
-            MG_Pipe::MGPipeFatalFamily::RoleViolation,
-            "MGPipe: Fatal{RoleViolation, \"buffer-legacy-arm\"} (Magma P7 buffer consumer)");
+        MG_Pipe::MGPipeSessionFail(MG_Pipe::MGPipeFatalFamily::RoleViolation,
+                                   "MGPipe: Fatal{RoleViolation, \"buffer-legacy-arm\"} (Magma P7 buffer consumer)");
     }
 
     static const MG_Pipe::MGPStreamOutputBegin& WireXfbSpan() {
@@ -170,7 +166,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 MagmaWireFatal("xfb-buffer-resource");
             if (target.Offset >= slice.size) return false;
             const Uint64 size = target.Size == 0 || target.Size == MG_Pipe::kMGPipeWholeBuffer
-                ? slice.size - target.Offset : target.Size;
+                                    ? slice.size - target.Offset
+                                    : target.Size;
             if (!size || size > slice.size - target.Offset) return false;
             buffers[i] = slice.buffer;
             offsets[i] = slice.offset + target.Offset;
@@ -185,8 +182,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     static Bool ConvertWireVertexStream(const MGPVertexAttribWire& attr,
-            VertexInputStateFactory::VertexStreamConversion conversion, const Uint8* source,
-            SizeT stride, SizeT count, Vector<Uint8>& output) {
+                                        VertexInputStateFactory::VertexStreamConversion conversion, const Uint8* source,
+                                        SizeT stride, SizeT count, Vector<Uint8>& output) {
         using Conversion = VertexInputStateFactory::VertexStreamConversion;
         const auto type = static_cast<DataType>(attr.Type);
         const SizeT elementBytes = VertexInputStateFactory::GetAttributeByteSize(type, attr.Size, attr.IsBgra);
@@ -210,8 +207,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                         if (normalize) {
                             constexpr double kMax = static_cast<double>(std::numeric_limits<T>::max());
                             converted = static_cast<Float>(std::is_signed_v<T>
-                                ? std::max(static_cast<double>(value) / kMax, -1.0)
-                                : static_cast<double>(value) / kMax);
+                                                               ? std::max(static_cast<double>(value) / kMax, -1.0)
+                                                               : static_cast<double>(value) / kMax);
                         }
                     }
                     Memcpy(output.data() + (i * attr.Size + component) * sizeof(Float), &converted, sizeof(Float));
@@ -232,7 +229,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     const Uint32 bits = component < 3 ? 10u : 2u;
                     const Uint32 field = (word >> (component * 10u)) & ((1u << bits) - 1u);
                     const Int32 value = isSigned && (field >> (bits - 1u))
-                        ? static_cast<Int32>(field) - static_cast<Int32>(1u << bits) : static_cast<Int32>(field);
+                                            ? static_cast<Int32>(field) - static_cast<Int32>(1u << bits)
+                                            : static_cast<Int32>(field);
                     Float converted = static_cast<Float>(value);
                     if (normalize)
                         converted = isSigned ? std::max(converted / static_cast<Float>((1u << (bits - 1u)) - 1u), -1.0f)
@@ -242,14 +240,22 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             }
             return true;
         }
-        case DataType::Float64: return convert.template operator()<Double>();
-        case DataType::Int8: return convert.template operator()<Int8>();
-        case DataType::Uint8: return convert.template operator()<Uint8>();
-        case DataType::Int16: return convert.template operator()<Int16>();
-        case DataType::Uint16: return convert.template operator()<Uint16>();
-        case DataType::Int32: return convert.template operator()<Int32>();
-        case DataType::Uint32: return convert.template operator()<Uint32>();
-        default: return false;
+        case DataType::Float64:
+            return convert.template operator()<Double>();
+        case DataType::Int8:
+            return convert.template operator()<Int8>();
+        case DataType::Uint8:
+            return convert.template operator()<Uint8>();
+        case DataType::Int16:
+            return convert.template operator()<Int16>();
+        case DataType::Uint16:
+            return convert.template operator()<Uint16>();
+        case DataType::Int32:
+            return convert.template operator()<Int32>();
+        case DataType::Uint32:
+            return convert.template operator()<Uint32>();
+        default:
+            return false;
         }
     }
 
@@ -264,7 +270,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         m_wireDrawPassCompatibilityId = 0;
         m_wirePassMarksValid = false;
         m_wirePassMemo.valid = false;
-        for (const auto view : m_wireDrawViews) vkDestroyImageView(m_device, view, nullptr);
+        for (const auto view : m_wireDrawViews)
+            vkDestroyImageView(m_device, view, nullptr);
         m_wireDrawViews.clear();
         m_wireDrawPassKey = {};
     }
@@ -318,7 +325,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     void VulkanRenderer::DestroyWireDrawPassCacheEntry(WireDrawPassCacheEntry& entry) {
         entry.pass.reset();
-        for (const auto view : entry.views) vkDestroyImageView(m_device, view, nullptr);
+        for (const auto view : entry.views)
+            vkDestroyImageView(m_device, view, nullptr);
         entry.views.clear();
     }
 
@@ -356,7 +364,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     // Idle points only (shutdown, swapchain replacement, the device-idle drain): nothing in flight.
     void VulkanRenderer::ClearAllWireDrawPassCaches() {
-        for (auto& entry : m_wireDrawPassCache) DestroyWireDrawPassCacheEntry(entry);
+        for (auto& entry : m_wireDrawPassCache)
+            DestroyWireDrawPassCacheEntry(entry);
         m_wireDrawPassCache.clear();
         if (m_wireColorBlitResources) {
             for (Uint32 frameIndex = 0; frameIndex < m_frameContext.GetFrameCount(); ++frameIndex)
@@ -376,10 +385,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             }
             // Framebuffers/descriptor sets stop naming their views first.
             entry.drawPass.reset();
-            for (const auto pool : entry.descriptorPools) vkDestroyDescriptorPool(m_device, pool, nullptr);
-            for (const auto framebuffer : entry.framebuffers) vkDestroyFramebuffer(m_device, framebuffer, nullptr);
-            for (const auto pass : entry.renderPasses) vkDestroyRenderPass(m_device, pass, nullptr);
-            for (const auto view : entry.imageViews) vkDestroyImageView(m_device, view, nullptr);
+            for (const auto pool : entry.descriptorPools)
+                vkDestroyDescriptorPool(m_device, pool, nullptr);
+            for (const auto framebuffer : entry.framebuffers)
+                vkDestroyFramebuffer(m_device, framebuffer, nullptr);
+            for (const auto pass : entry.renderPasses)
+                vkDestroyRenderPass(m_device, pass, nullptr);
+            for (const auto view : entry.imageViews)
+                vkDestroyImageView(m_device, view, nullptr);
         }
         // Erase once: repeated front erases move the whole remaining cohort for
         // every draw retired by a fence, turning a batch retirement quadratic.
@@ -428,9 +441,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     // clear (WireFramebuffer.cpp): a clear into the attachments of the open pass is recorded
     // inside it instead of closing it and building a pass of its own. Leaves m_wireDrawPass and
     // m_wireDrawPassKey describing the pass, `continuing` true when it is the open one.
-    Bool VulkanRenderer::PrepareWireDrawPass(FrameContext::FrameData& frame,
-            const MG_Pipe::MGPFramebufferState& fbo, WireDrawScratch& scratch, Bool passContinues,
-            Bool& continuing) {
+    Bool VulkanRenderer::PrepareWireDrawPass(FrameContext::FrameData& frame, const MG_Pipe::MGPFramebufferState& fbo,
+                                             WireDrawScratch& scratch, Bool passContinues, Bool& continuing) {
         continuing = true;
         m_wireFoldClears.clear();
         if (passContinues) {
@@ -442,246 +454,253 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 m_wirePassMarksClearGeneration = store.GpuDirtyClearGeneration();
             }
         } else {
-        m_wirePassMemo.valid = false;
-        auto& attachments = scratch.attachments;
-        auto& viewInfos = scratch.viewInfos;
-        auto& colors = scratch.colors;
-        attachments.clear();
-        viewInfos.clear();
-        colors.clear();
-        VkAttachmentReference depth{VK_ATTACHMENT_UNUSED, VK_IMAGE_LAYOUT_GENERAL};
-        VkExtent2D extent{~0u, ~0u};
-        Uint32 layers = ~0u;
-        VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;
-        Uint64 passHash = 0;
-        auto& passKey = scratch.passKey;
-        passKey.ResetKeepingCapacity();
-        passKey.isDefault = fbo.IsDefault;
-        passKey.framebufferSrgb = MG_Pipe::gPipeInputs->IsCapabilityEnabled(CapabilityInput::FramebufferSrgb);
-        if (fbo.IsDefault) {
-            passKey.swapchain = m_swapchainObject.GetHandle();
-            // A drawing pass on the default framebuffer is what makes the freshly acquired
-            // swapchain image the one GL addresses (see m_defaultFramebufferImageIndex); the
-            // attachments below resolve the same index, so this key has to be taken after it.
-            passKey.swapchainImageIndex = DefaultFramebufferWriteIndex(true);
-        }
-        auto& sameLayoutAttachments = scratch.sameLayoutAttachments;
-        sameLayoutAttachments.clear();
-        scratch.gpuWriteMarks.clear();
-        m_wirePassMemo.attachments.clear();
-        const auto add = [&](const MG_Pipe::MGPSurface& surface, VkImageAspectFlags aspect) -> Uint32 {
-            // An attachment resolve: its deferred clears stay pending, to become this pass's load
-            // op (BeginWireDrawPassFolding) - WireFramebuffer.cpp's deferred-clear section.
-            WireImage image;
-            {
-                VkTextureManager::PendingClearHold hold(*m_textureManager);
-                image = ResolveWireImage(fbo, surface, aspect, /*isWriteTarget=*/true);
+            m_wirePassMemo.valid = false;
+            auto& attachments = scratch.attachments;
+            auto& viewInfos = scratch.viewInfos;
+            auto& colors = scratch.colors;
+            attachments.clear();
+            viewInfos.clear();
+            colors.clear();
+            VkAttachmentReference depth{VK_ATTACHMENT_UNUSED, VK_IMAGE_LAYOUT_GENERAL};
+            VkExtent2D extent{~0u, ~0u};
+            Uint32 layers = ~0u;
+            VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;
+            Uint64 passHash = 0;
+            auto& passKey = scratch.passKey;
+            passKey.ResetKeepingCapacity();
+            passKey.isDefault = fbo.IsDefault;
+            passKey.framebufferSrgb = MG_Pipe::gPipeInputs->IsCapabilityEnabled(CapabilityInput::FramebufferSrgb);
+            if (fbo.IsDefault) {
+                passKey.swapchain = m_swapchainObject.GetHandle();
+                // A drawing pass on the default framebuffer is what makes the freshly acquired
+                // swapchain image the one GL addresses (see m_defaultFramebufferImageIndex); the
+                // attachments below resolve the same index, so this key has to be taken after it.
+                passKey.swapchainImageIndex = DefaultFramebufferWriteIndex(true);
             }
-            if (!image.image) return VK_ATTACHMENT_UNUSED;
-            m_textureManager->FlushPendingUploads();
-            m_wirePassMemo.attachments.push_back(
-                {image.resource, image.storage, surface.Kind == MG_Pipe::kMGPipeSurfaceKindRenderbuffer});
-            if (aspect == VK_IMAGE_ASPECT_COLOR_BIT)
-                image.format = ResolveSrgbAttachmentWriteFormat(image.format,
-                    MG_Pipe::gPipeInputs->IsCapabilityEnabled(CapabilityInput::FramebufferSrgb));
-            const VkImageLayout layout = aspect == VK_IMAGE_ASPECT_COLOR_BIT ?
-                VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_GENERAL;
-            // Already in its attachment layout: its barrier (which closes any open pass) waits until
-            // it is known whether the open pass continues with this very attachment.
-            if (image.layout == layout)
-                sameLayoutAttachments.push_back(image);
-            else
-                TransitionWireImage(image, layout);
-            VkImageViewCreateInfo info{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
-            info.image = image.image;
-            info.viewType = image.viewType;
-            info.format = image.format;
-            info.subresourceRange = {aspect, image.level, 1, image.layer, image.layers};
-            if (image.format == VK_FORMAT_D24_UNORM_S8_UINT || image.format == VK_FORMAT_D32_SFLOAT_S8_UINT)
-                info.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
-            viewInfos.push_back(info);
-            passKey.attachments.push_back({image.storage, static_cast<Uint32>(surface.Kind), image.image,
-                image.viewType, image.format, info.subresourceRange.aspectMask, aspect,
-                image.level, image.layer, image.layers, image.levels, image.extent.width, image.extent.height,
-                image.samples});
-            VkAttachmentDescription description{};
-            description.format = image.format;
-            description.samples = image.samples;
-            description.loadOp = description.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
-            description.storeOp = description.stencilStoreOp = VK_ATTACHMENT_STORE_OP_STORE;
-            description.initialLayout = description.finalLayout = layout;
-            attachments.push_back(description);
-            if (image.resource != nullptr && !image.resource->pendingClears.empty())
-                m_wireFoldClears.push_back({static_cast<Uint32>(attachments.size() - 1), info.subresourceRange.aspectMask,
-                                            image.resource, image.level, image.layer, image.layers});
-            extent.width = std::min(extent.width, image.extent.width);
-            extent.height = std::min(extent.height, image.extent.height);
-            layers = std::min(layers, image.layers);
-            samples = image.samples;
-            passHash = XXH64(&description, sizeof(description), passHash);
-            // Marked below, once the pass is known: a continued pass repeats the same marks.
-            if (!image.isDefault && surface.Kind == MG_Pipe::kMGPipeSurfaceKindTexture)
-                scratch.gpuWriteMarks.push_back({image.storage, image.level, image.layer, image.layers});
-            if (image.isDefault) {
+            auto& sameLayoutAttachments = scratch.sameLayoutAttachments;
+            sameLayoutAttachments.clear();
+            scratch.gpuWriteMarks.clear();
+            m_wirePassMemo.attachments.clear();
+            const auto add = [&](const MG_Pipe::MGPSurface& surface, VkImageAspectFlags aspect) -> Uint32 {
+                // An attachment resolve: its deferred clears stay pending, to become this pass's load
+                // op (BeginWireDrawPassFolding) - WireFramebuffer.cpp's deferred-clear section.
+                WireImage image;
+                {
+                    VkTextureManager::PendingClearHold hold(*m_textureManager);
+                    image = ResolveWireImage(fbo, surface, aspect, /*isWriteTarget=*/true);
+                }
+                if (!image.image) return VK_ATTACHMENT_UNUSED;
+                m_textureManager->FlushPendingUploads();
+                m_wirePassMemo.attachments.push_back(
+                    {image.resource, image.storage, surface.Kind == MG_Pipe::kMGPipeSurfaceKindRenderbuffer});
                 if (aspect == VK_IMAGE_ASPECT_COLOR_BIT)
-                    m_swapchainObject.SetImageContentDefined(image.swapchainImageIndex, true);
+                    image.format = ResolveSrgbAttachmentWriteFormat(
+                        image.format, MG_Pipe::gPipeInputs->IsCapabilityEnabled(CapabilityInput::FramebufferSrgb));
+                const VkImageLayout layout =
+                    aspect == VK_IMAGE_ASPECT_COLOR_BIT ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_GENERAL;
+                // Already in its attachment layout: its barrier (which closes any open pass) waits until
+                // it is known whether the open pass continues with this very attachment.
+                if (image.layout == layout)
+                    sameLayoutAttachments.push_back(image);
                 else
-                    m_swapchainObject.SetDepthStencilContentDefined(image.swapchainImageIndex, true);
+                    TransitionWireImage(image, layout);
+                VkImageViewCreateInfo info{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+                info.image = image.image;
+                info.viewType = image.viewType;
+                info.format = image.format;
+                info.subresourceRange = {aspect, image.level, 1, image.layer, image.layers};
+                if (image.format == VK_FORMAT_D24_UNORM_S8_UINT || image.format == VK_FORMAT_D32_SFLOAT_S8_UINT)
+                    info.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
+                viewInfos.push_back(info);
+                passKey.attachments.push_back({image.storage, static_cast<Uint32>(surface.Kind), image.image,
+                                               image.viewType, image.format, info.subresourceRange.aspectMask, aspect,
+                                               image.level, image.layer, image.layers, image.levels, image.extent.width,
+                                               image.extent.height, image.samples});
+                VkAttachmentDescription description{};
+                description.format = image.format;
+                description.samples = image.samples;
+                description.loadOp = description.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+                description.storeOp = description.stencilStoreOp = VK_ATTACHMENT_STORE_OP_STORE;
+                description.initialLayout = description.finalLayout = layout;
+                attachments.push_back(description);
+                if (image.resource != nullptr && !image.resource->pendingClears.empty())
+                    m_wireFoldClears.push_back({static_cast<Uint32>(attachments.size() - 1),
+                                                info.subresourceRange.aspectMask, image.resource, image.level,
+                                                image.layer, image.layers});
+                extent.width = std::min(extent.width, image.extent.width);
+                extent.height = std::min(extent.height, image.extent.height);
+                layers = std::min(layers, image.layers);
+                samples = image.samples;
+                passHash = XXH64(&description, sizeof(description), passHash);
+                // Marked below, once the pass is known: a continued pass repeats the same marks.
+                if (!image.isDefault && surface.Kind == MG_Pipe::kMGPipeSurfaceKindTexture)
+                    scratch.gpuWriteMarks.push_back({image.storage, image.level, image.layer, image.layers});
+                if (image.isDefault) {
+                    if (aspect == VK_IMAGE_ASPECT_COLOR_BIT)
+                        m_swapchainObject.SetImageContentDefined(image.swapchainImageIndex, true);
+                    else
+                        m_swapchainObject.SetDepthStencilContentDefined(image.swapchainImageIndex, true);
+                }
+                return static_cast<Uint32>(attachments.size() - 1);
+            };
+            for (Uint32 i = 0; i < MG_Pipe::kMGPipeMaxColorAttachments; ++i) {
+                const Int32 slot = fbo.DrawBuffers[i];
+                const Uint32 index = slot < 0 ? VK_ATTACHMENT_UNUSED : add(fbo.Color[slot], VK_IMAGE_ASPECT_COLOR_BIT);
+                colors.push_back({index, VK_IMAGE_LAYOUT_GENERAL});
             }
-            return static_cast<Uint32>(attachments.size() - 1);
-        };
-        for (Uint32 i = 0; i < MG_Pipe::kMGPipeMaxColorAttachments; ++i) {
-            const Int32 slot = fbo.DrawBuffers[i];
-            const Uint32 index = slot < 0 ? VK_ATTACHMENT_UNUSED : add(fbo.Color[slot], VK_IMAGE_ASPECT_COLOR_BIT);
-            colors.push_back({index, VK_IMAGE_LAYOUT_GENERAL});
-        }
-        while (!colors.empty() && colors.back().attachment == VK_ATTACHMENT_UNUSED) colors.pop_back();
-        if (fbo.IsDefault || fbo.Depth.Kind != MG_Pipe::kMGPipeSurfaceKindNone)
-            depth.attachment = add(fbo.Depth, VK_IMAGE_ASPECT_DEPTH_BIT);
-        else if (fbo.Stencil.Kind != MG_Pipe::kMGPipeSurfaceKindNone)
-            depth.attachment = add(fbo.Stencil, VK_IMAGE_ASPECT_STENCIL_BIT);
-        if (attachments.empty()) {
-            // ARB_framebuffer_no_attachments (GL 4.6 core 9.2): a framebuffer with no image
-            // attached rasterizes at its default width/height/layers/samples, which the record
-            // carries in that case (FillGeometry). Vulkan expresses it directly as a render pass
-            // with no attachments over a framebuffer of that extent.
-            const Bool hasAnyAttachment = fbo.Depth.Kind != MG_Pipe::kMGPipeSurfaceKindNone ||
-                fbo.Stencil.Kind != MG_Pipe::kMGPipeSurfaceKindNone ||
-                std::any_of(std::begin(fbo.Color), std::end(fbo.Color), [](const MG_Pipe::MGPSurface& surface) {
-                    return surface.Kind != MG_Pipe::kMGPipeSurfaceKindNone;
-                });
-            if (fbo.IsDefault || hasAnyAttachment || fbo.Width == 0 || fbo.Height == 0) {
-                MGL_WIRE_DECLINE_AT(NoAttachments, "the draw framebuffer resolved to no attachments");
-                return false;
+            while (!colors.empty() && colors.back().attachment == VK_ATTACHMENT_UNUSED)
+                colors.pop_back();
+            if (fbo.IsDefault || fbo.Depth.Kind != MG_Pipe::kMGPipeSurfaceKindNone)
+                depth.attachment = add(fbo.Depth, VK_IMAGE_ASPECT_DEPTH_BIT);
+            else if (fbo.Stencil.Kind != MG_Pipe::kMGPipeSurfaceKindNone)
+                depth.attachment = add(fbo.Stencil, VK_IMAGE_ASPECT_STENCIL_BIT);
+            if (attachments.empty()) {
+                // ARB_framebuffer_no_attachments (GL 4.6 core 9.2): a framebuffer with no image
+                // attached rasterizes at its default width/height/layers/samples, which the record
+                // carries in that case (FillGeometry). Vulkan expresses it directly as a render pass
+                // with no attachments over a framebuffer of that extent.
+                const Bool hasAnyAttachment =
+                    fbo.Depth.Kind != MG_Pipe::kMGPipeSurfaceKindNone ||
+                    fbo.Stencil.Kind != MG_Pipe::kMGPipeSurfaceKindNone ||
+                    std::any_of(std::begin(fbo.Color), std::end(fbo.Color), [](const MG_Pipe::MGPSurface& surface) {
+                        return surface.Kind != MG_Pipe::kMGPipeSurfaceKindNone;
+                    });
+                if (fbo.IsDefault || hasAnyAttachment || fbo.Width == 0 || fbo.Height == 0) {
+                    MGL_WIRE_DECLINE_AT(NoAttachments, "the draw framebuffer resolved to no attachments");
+                    return false;
+                }
+                const auto& limits = m_physicalDevice.properties.limits;
+                extent.width = std::min<Uint32>(fbo.Width, limits.maxFramebufferWidth);
+                extent.height = std::min<Uint32>(fbo.Height, limits.maxFramebufferHeight);
+                layers = std::clamp<Uint32>(fbo.Layers, 1u, std::max<Uint32>(limits.maxFramebufferLayers, 1u));
+                // The smallest count the device rasterizes attachment-less passes at that covers the
+                // request (GL lets the effective count exceed the requested one), else its largest.
+                samples = VK_SAMPLE_COUNT_1_BIT;
+                const VkSampleCountFlags supported = limits.framebufferNoAttachmentsSampleCounts;
+                if (fbo.Samples > 1) {
+                    for (Uint32 bit = VK_SAMPLE_COUNT_2_BIT; bit <= VK_SAMPLE_COUNT_64_BIT; bit <<= 1) {
+                        if ((supported & bit) == 0) continue;
+                        samples = static_cast<VkSampleCountFlagBits>(bit);
+                        if (bit >= fbo.Samples) break;
+                    }
+                }
+                passKey.noAttachmentSamples = static_cast<Uint32>(samples);
+                passHash = XXH64(&samples, sizeof(samples), passHash);
             }
-            const auto& limits = m_physicalDevice.properties.limits;
-            extent.width = std::min<Uint32>(fbo.Width, limits.maxFramebufferWidth);
-            extent.height = std::min<Uint32>(fbo.Height, limits.maxFramebufferHeight);
-            layers = std::clamp<Uint32>(fbo.Layers, 1u, std::max<Uint32>(limits.maxFramebufferLayers, 1u));
-            // The smallest count the device rasterizes attachment-less passes at that covers the
-            // request (GL lets the effective count exceed the requested one), else its largest.
-            samples = VK_SAMPLE_COUNT_1_BIT;
-            const VkSampleCountFlags supported = limits.framebufferNoAttachmentsSampleCounts;
-            if (fbo.Samples > 1) {
-                for (Uint32 bit = VK_SAMPLE_COUNT_2_BIT; bit <= VK_SAMPLE_COUNT_64_BIT; bit <<= 1) {
-                    if ((supported & bit) == 0) continue;
-                    samples = static_cast<VkSampleCountFlagBits>(bit);
-                    if (bit >= fbo.Samples) break;
+            passKey.width = extent.width;
+            passKey.height = extent.height;
+            passKey.layers = layers;
+            passKey.depthReference = depth.attachment;
+            for (const auto& color : colors)
+                passKey.colorReferences.push_back(color.attachment);
+            // A native handle can be recycled after image replacement or death.
+            // Sample epochs after every lazy resolve, then compare them with the key.
+            passKey.textureImageEpoch = m_textureManager->GetTextureImageEpoch();
+            passKey.resourceEraseEpoch = m_textureManager->GetResourceEraseEpoch();
+            VkSubpassDescription subpass{};
+            subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+            subpass.colorAttachmentCount = static_cast<Uint32>(colors.size());
+            subpass.pColorAttachments = colors.data();
+            subpass.pDepthStencilAttachment = depth.attachment != VK_ATTACHMENT_UNUSED ? &depth : nullptr;
+            VkRenderPassCreateInfo passInfo{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};
+            passInfo.attachmentCount = static_cast<Uint32>(attachments.size());
+            passInfo.pAttachments = attachments.data();
+            passInfo.subpassCount = 1;
+            passInfo.pSubpasses = &subpass;
+            continuing = m_wireDrawPass && m_wireDrawPassKey == passKey;
+            {
+                const auto* active = VkRenderPassManager::GetActiveRenderPass();
+                const Bool stillOpen = continuing && active != nullptr && active->commandBuffer == frame.commandBuffer;
+                // A new pass orders itself after earlier writes to its attachments; a continued one
+                // is the same pass, whose attachment writes are ordered by rasterization.
+                if (!stillOpen)
+                    for (auto& image : sameLayoutAttachments)
+                        TransitionWireImage(image, VK_IMAGE_LAYOUT_GENERAL, /*coalesceWithLastFullBarrier=*/true);
+            }
+            if (!continuing) {
+                RetireWireDrawPass();
+                m_wireDrawPassCompatibilityId = 0;
+            }
+            if (!continuing && !AcquireCachedWireDrawPass(passKey)) {
+                // A copy, not a move: passKey is the scratch's, and a new pass is the rare case.
+                m_wireDrawPassKey = passKey;
+                Vector<VkImageView> views;
+                views.reserve(viewInfos.size());
+                for (const auto& info : viewInfos) {
+                    VkImageView view = VK_NULL_HANDLE;
+                    VK_VERIFY(vkCreateImageView(m_device, &info, nullptr, &view));
+                    m_wireDrawViews.push_back(view);
+                    views.push_back(view);
+                }
+                m_wireDrawPass = MakeUnique<RenderPassEntry>();
+                auto& created = *m_wireDrawPass;
+                VK_VERIFY(vkCreateRenderPass(m_device, &passInfo, nullptr, &created.renderPass));
+                VkFramebufferCreateInfo fbInfo{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
+                fbInfo.renderPass = created.renderPass;
+                fbInfo.attachmentCount = static_cast<Uint32>(views.size());
+                fbInfo.pAttachments = views.data();
+                fbInfo.width = extent.width;
+                fbInfo.height = extent.height;
+                fbInfo.layers = layers;
+                VK_VERIFY(vkCreateFramebuffer(m_device, &fbInfo, nullptr, &created.framebuffer));
+                created.attachmentCount = static_cast<Uint32>(attachments.size());
+                created.colorAttachmentCount = static_cast<Uint32>(colors.size());
+                created.hasDepthStencilAttachment = depth.attachment != VK_ATTACHMENT_UNUSED;
+                created.sampleCount = samples;
+                created.extent = {static_cast<Int>(extent.width), static_cast<Int>(extent.height)};
+                created.layers = layers;
+                created.hash = created.compatibilityHash =
+                    XXH64(colors.data(), colors.size() * sizeof(colors[0]), passHash);
+                created.wireAttachments.assign(attachments.begin(), attachments.end());
+                created.wireColors.assign(colors.begin(), colors.end());
+                created.wireDepth = depth;
+            }
+            // The attachments' GPU-write marks (MarkWireTextureGpuWritten): idempotent while nothing
+            // clears a GPU-dirty mark, so a draw that continues a pass whose draws already marked the
+            // same attachments - the pass key compared equal - repeats them only after a clear.
+            {
+                auto& store = MG_Record::ServerStagedTexture();
+                if (!continuing || !m_wirePassMarksValid ||
+                    m_wirePassMarksClearGeneration != store.GpuDirtyClearGeneration()) {
+                    for (const auto& mark : scratch.gpuWriteMarks)
+                        m_textureManager->MarkWireTextureGpuWritten(mark.storage, mark.level, mark.layer, mark.layers);
+                    m_wirePassMarksValid = true;
+                    m_wirePassMarksClearGeneration = store.GpuDirtyClearGeneration();
                 }
             }
-            passKey.noAttachmentSamples = static_cast<Uint32>(samples);
-            passHash = XXH64(&samples, sizeof(samples), passHash);
-        }
-        passKey.width = extent.width;
-        passKey.height = extent.height;
-        passKey.layers = layers;
-        passKey.depthReference = depth.attachment;
-        for (const auto& color : colors) passKey.colorReferences.push_back(color.attachment);
-        // A native handle can be recycled after image replacement or death.
-        // Sample epochs after every lazy resolve, then compare them with the key.
-        passKey.textureImageEpoch = m_textureManager->GetTextureImageEpoch();
-        passKey.resourceEraseEpoch = m_textureManager->GetResourceEraseEpoch();
-        VkSubpassDescription subpass{};
-        subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-        subpass.colorAttachmentCount = static_cast<Uint32>(colors.size());
-        subpass.pColorAttachments = colors.data();
-        subpass.pDepthStencilAttachment = depth.attachment != VK_ATTACHMENT_UNUSED ? &depth : nullptr;
-        VkRenderPassCreateInfo passInfo{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};
-        passInfo.attachmentCount = static_cast<Uint32>(attachments.size());
-        passInfo.pAttachments = attachments.data();
-        passInfo.subpassCount = 1;
-        passInfo.pSubpasses = &subpass;
-        continuing = m_wireDrawPass && m_wireDrawPassKey == passKey;
-        {
-            const auto* active = VkRenderPassManager::GetActiveRenderPass();
-            const Bool stillOpen = continuing && active != nullptr && active->commandBuffer == frame.commandBuffer;
-            // A new pass orders itself after earlier writes to its attachments; a continued one
-            // is the same pass, whose attachment writes are ordered by rasterization.
-            if (!stillOpen)
-                for (auto& image : sameLayoutAttachments)
-                    TransitionWireImage(image, VK_IMAGE_LAYOUT_GENERAL, /*coalesceWithLastFullBarrier=*/true);
-        }
-        if (!continuing) {
-            RetireWireDrawPass();
-            m_wireDrawPassCompatibilityId = 0;
-        }
-        if (!continuing && !AcquireCachedWireDrawPass(passKey)) {
-            // A copy, not a move: passKey is the scratch's, and a new pass is the rare case.
-            m_wireDrawPassKey = passKey;
-            Vector<VkImageView> views;
-            views.reserve(viewInfos.size());
-            for (const auto& info : viewInfos) {
-                VkImageView view = VK_NULL_HANDLE;
-                VK_VERIFY(vkCreateImageView(m_device, &info, nullptr, &view));
-                m_wireDrawViews.push_back(view);
-                views.push_back(view);
+            {
+                // What this walk proved, for WirePassMemoHolds on the next draw.
+                const auto& st = MG_Pipe::MGPipeApplier();
+                auto& memo = m_wirePassMemo;
+                memo.valid = !fbo.IsDefault;
+                memo.framebufferSerial = st.FramebufferSerial;
+                memo.contextSerial = st.ContextSerial;
+                memo.drawFramebuffer = st.BoundFramebuffer[SizeT(MG_Pipe::MGPipeFramebufferTarget::Draw)];
+                memo.textureImageEpoch = m_textureManager->GetTextureImageEpoch();
+                memo.resourceEraseEpoch = m_textureManager->GetResourceEraseEpoch();
+                memo.framebufferSrgb = MG_Pipe::gPipeInputs->IsCapabilityEnabled(CapabilityInput::FramebufferSrgb);
+                memo.passHash = m_wireDrawPass->hash;
+                memo.marks.assign(scratch.gpuWriteMarks.begin(), scratch.gpuWriteMarks.end());
             }
-            m_wireDrawPass = MakeUnique<RenderPassEntry>();
-            auto& created = *m_wireDrawPass;
-            VK_VERIFY(vkCreateRenderPass(m_device, &passInfo, nullptr, &created.renderPass));
-            VkFramebufferCreateInfo fbInfo{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
-            fbInfo.renderPass = created.renderPass;
-            fbInfo.attachmentCount = static_cast<Uint32>(views.size());
-            fbInfo.pAttachments = views.data();
-            fbInfo.width = extent.width; fbInfo.height = extent.height; fbInfo.layers = layers;
-            VK_VERIFY(vkCreateFramebuffer(m_device, &fbInfo, nullptr, &created.framebuffer));
-            created.attachmentCount = static_cast<Uint32>(attachments.size());
-            created.colorAttachmentCount = static_cast<Uint32>(colors.size());
-            created.hasDepthStencilAttachment = depth.attachment != VK_ATTACHMENT_UNUSED;
-            created.sampleCount = samples;
-            created.extent = {static_cast<Int>(extent.width), static_cast<Int>(extent.height)};
-            created.layers = layers;
-            created.hash = created.compatibilityHash = XXH64(colors.data(), colors.size() * sizeof(colors[0]), passHash);
-            created.wireAttachments.assign(attachments.begin(), attachments.end());
-            created.wireColors.assign(colors.begin(), colors.end());
-            created.wireDepth = depth;
-        }
-        // The attachments' GPU-write marks (MarkWireTextureGpuWritten): idempotent while nothing
-        // clears a GPU-dirty mark, so a draw that continues a pass whose draws already marked the
-        // same attachments - the pass key compared equal - repeats them only after a clear.
-        {
-            auto& store = MG_Record::ServerStagedTexture();
-            if (!continuing || !m_wirePassMarksValid ||
-                m_wirePassMarksClearGeneration != store.GpuDirtyClearGeneration()) {
-                for (const auto& mark : scratch.gpuWriteMarks)
-                    m_textureManager->MarkWireTextureGpuWritten(mark.storage, mark.level, mark.layer, mark.layers);
-                m_wirePassMarksValid = true;
-                m_wirePassMarksClearGeneration = store.GpuDirtyClearGeneration();
+            // The compatibility key is built from this walk's attachments only when the pass is new.
+            if (m_wireDrawPassCompatibilityId == 0) {
+                auto& pipelinePassKey = scratch.compatibilityKey;
+                pipelinePassKey.attachmentFormatsAndSamples.clear();
+                pipelinePassKey.colorReferences.clear();
+                for (const auto& attachment : attachments)
+                    pipelinePassKey.attachmentFormatsAndSamples.push_back(
+                        (static_cast<Uint64>(attachment.format) << 32) | static_cast<Uint32>(attachment.samples));
+                for (const auto& color : colors)
+                    pipelinePassKey.colorReferences.push_back(color.attachment);
+                pipelinePassKey.depthReference = depth.attachment;
+                m_wireDrawPassCompatibilityId = m_wireRenderPassCompatibility.Intern(pipelinePassKey);
             }
-        }
-        {
-            // What this walk proved, for WirePassMemoHolds on the next draw.
-            const auto& st = MG_Pipe::MGPipeApplier();
-            auto& memo = m_wirePassMemo;
-            memo.valid = !fbo.IsDefault;
-            memo.framebufferSerial = st.FramebufferSerial;
-            memo.contextSerial = st.ContextSerial;
-            memo.drawFramebuffer = st.BoundFramebuffer[SizeT(MG_Pipe::MGPipeFramebufferTarget::Draw)];
-            memo.textureImageEpoch = m_textureManager->GetTextureImageEpoch();
-            memo.resourceEraseEpoch = m_textureManager->GetResourceEraseEpoch();
-            memo.framebufferSrgb = MG_Pipe::gPipeInputs->IsCapabilityEnabled(CapabilityInput::FramebufferSrgb);
-            memo.passHash = m_wireDrawPass->hash;
-            memo.marks.assign(scratch.gpuWriteMarks.begin(), scratch.gpuWriteMarks.end());
-        }
-        // The compatibility key is built from this walk's attachments only when the pass is new.
-        if (m_wireDrawPassCompatibilityId == 0) {
-            auto& pipelinePassKey = scratch.compatibilityKey;
-            pipelinePassKey.attachmentFormatsAndSamples.clear();
-            pipelinePassKey.colorReferences.clear();
-            for (const auto& attachment : attachments)
-                pipelinePassKey.attachmentFormatsAndSamples.push_back(
-                    (static_cast<Uint64>(attachment.format) << 32) | static_cast<Uint32>(attachment.samples));
-            for (const auto& color : colors) pipelinePassKey.colorReferences.push_back(color.attachment);
-            pipelinePassKey.depthReference = depth.attachment;
-            m_wireDrawPassCompatibilityId = m_wireRenderPassCompatibility.Intern(pipelinePassKey);
-        }
         } // !passContinues
         return true;
     }
 
-
-    Bool VulkanRenderer::SetupWireDraw(FrameContext::FrameData& frame, GLenum mode,
-            Flags<DrawSetupAspect> aspects, const DrawCmdParam& drawParams, const IndexBufferView* indices) {
+    Bool VulkanRenderer::SetupWireDraw(FrameContext::FrameData& frame, GLenum mode, Flags<DrawSetupAspect> aspects,
+                                       const DrawCmdParam& drawParams, const IndexBufferView* indices) {
         auto& state = MG_Pipe::MGPipeApplier();
         // The per-draw containers (VulkanRenderer.h's WireDrawScratch). Nothing re-enters this
         // function from inside it today; if something ever does, it gets its own set rather
@@ -696,8 +715,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // P8-D: the wire arm's own indirect draw (DrawWireIndirectNative) is the one caller that
         // may pass this aspect; a monolith indirect entry point reached here is still the role
         // violation.
-        if ((aspects & DrawSetupAspect::IndirectDrawBuffer) && !m_wireNativeIndirectDraw)
-            WireBufferLegacyFatal();
+        if ((aspects & DrawSetupAspect::IndirectDrawBuffer) && !m_wireNativeIndirectDraw) WireBufferLegacyFatal();
         MakeXfbWritesVisible();
         const auto* fbo = state.DrawFramebuffer();
         if (!fbo) MagmaWireFatal("draw-framebuffer-record");
@@ -710,9 +728,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         WirePreparationScope preparing(m_wirePreparationDepth);
 
         const RenderStateParameters& clipControl = MG_Pipe::gPipeInputs->GetRenderStateParameters();
-        ProgramFactory::CompileOptionFlags flags = ProgramFactory::CompileOptionFlags(
-            ProgramFactory::ApplyClipControlToTransformFlags(GetBaseTransformFlagsRaw(fbo->IsDefault),
-                                                             clipControl.ClipOrigin, clipControl.ClipDepthMode));
+        ProgramFactory::CompileOptionFlags flags =
+            ProgramFactory::CompileOptionFlags(ProgramFactory::ApplyClipControlToTransformFlags(
+                GetBaseTransformFlagsRaw(fbo->IsDefault), clipControl.ClipOrigin, clipControl.ClipDepthMode));
         if (m_transformFeedbackFeatureEnabled && MG_Pipe::gPipeInputs->IsTransformFeedbackActive() &&
             program.GetTransformFeedbackVaryingCount() > 0)
             flags |= ProgramFactory::CompileOptionBit::XfbCapture;
@@ -722,17 +740,20 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             programObject = &m_programFactory->GetOrCreateProgram(program, flags);
         }
         if (programObject->invalidSpirvDeclined) {
-            MGL_WIRE_DECLINE_AT(ProgramInvalidSpirv, "a module of the program fails SPIR-V validation and was never built");
+            MGL_WIRE_DECLINE_AT(ProgramInvalidSpirv,
+                                "a module of the program fails SPIR-V validation and was never built");
             return false;
         }
         if (programObject->pointSizeCapabilityUnsupported) {
-            MGL_WIRE_DECLINE_AT(PointSizeCapability, "the program writes gl_PointSize and the device cannot express it");
+            MGL_WIRE_DECLINE_AT(PointSizeCapability,
+                                "the program writes gl_PointSize and the device cannot express it");
             return false;
         }
         const auto& programObj = *programObject;
         m_currentDrawXfbCaptureDeclined = programObj.xfbCaptureDeclined;
         if (!m_uniformManager->PrepareWireTextureResources(program, programObj)) {
-            MGL_WIRE_DECLINE_AT(TextureResourcesUnprepared, "a sampled/storage image could not be made ready; see the Tex* tally");
+            MGL_WIRE_DECLINE_AT(TextureResourcesUnprepared,
+                                "a sampled/storage image could not be made ready; see the Tex* tally");
             return false;
         }
         // Shared images another session writes: acquired ahead of the recording that samples them
@@ -776,10 +797,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // preparation, which builds into its own scratch rather than under the outer draw's feet.
         const VertexInputStateFactory::BackendVertexInputState* resolvedInput = nullptr;
         if (&scratch == &m_wireDrawScratch) {
-            resolvedInput = m_vertexInputStateFactory->ResolveWireVertexInput(vao, state,
-                programObj.activeVertexInputLocationMask);
-        } else if (m_vertexInputStateFactory->BuildWireVertexInput(vao, state,
-                       programObj.activeVertexInputLocationMask, scratch.input)) {
+            resolvedInput =
+                m_vertexInputStateFactory->ResolveWireVertexInput(vao, state, programObj.activeVertexInputLocationMask);
+        } else if (m_vertexInputStateFactory->BuildWireVertexInput(vao, state, programObj.activeVertexInputLocationMask,
+                                                                   scratch.input)) {
             resolvedInput = &scratch.input;
         }
         if (resolvedInput == nullptr) MagmaWireFatal("vertex-layout-buffer-window");
@@ -815,9 +836,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // draw record is built, or refuses the draw itself (MG_Impl/Pipe/OwnedDrawInputs.h),
             // so an attribute the program reads with no buffer handle is a foreign peer's record.
             if (MG_Pipe::MGPipeHandleIsNull(resource.Res))
-                MG_Pipe::MGPipeSessionFail(MG_Pipe::MGPipeFatalFamily::ProtocolCorruption,
+                MG_Pipe::MGPipeSessionFail(
+                    MG_Pipe::MGPipeFatalFamily::ProtocolCorruption,
                     "MGPipe: Fatal{ProtocolCorruption, \"Magma:client-vertex-array\"} location=%u: an "
-                    "attribute the program reads carries no buffer handle", location);
+                    "attribute the program reads carries no buffer handle",
+                    location);
             BufferSlice slice{};
             if (!m_bufferManager.AcquireWireSlice(BufferKind::Vertex, resource.Res, slice)) {
                 // A buffer with no data store is legal GL to bind (glGenBuffers + glBindBuffer, no
@@ -837,7 +860,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             const auto type = static_cast<DataType>(attr.Type);
             const SizeT elementSize = VertexInputStateFactory::GetAttributeByteSize(type, attr.Size, attr.IsBgra);
             if (offset > slice.size || elementSize > slice.size - offset) {
-                MGL_WIRE_DECLINE_AT(VertexAttributeWindow, "an enabled attribute's first element lies outside its buffer");
+                MGL_WIRE_DECLINE_AT(VertexAttributeWindow,
+                                    "an enabled attribute's first element lies outside its buffer");
                 return false;
             }
             const auto conversion = input.bindingConversions[binding];
@@ -858,11 +882,18 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 // changes (VkBufferManager's converted-stream cache): a multi-draw over a chunk arena
                 // names the same stream for every chunk, frame after frame.
                 Uint64 contentSerial = 0;
-                const Bool cacheable = MG_Config::Features.MagmaVertexConversionCache != MG_Config::QuirkOverride::ForceOff &&
-                                       m_bufferManager.GetWireBufferContentSerial(resource.Res, contentSerial);
-                const VkBufferManager::ConvertedStreamKey cacheKey{contentSerial, offset, static_cast<Uint32>(stride),
-                    static_cast<Uint32>(attr.Type), static_cast<Uint32>(attr.Size), static_cast<Uint32>(conversion),
-                    attr.Normalized != 0, attr.IsInteger != 0, attr.IsBgra != 0};
+                const Bool cacheable =
+                    MG_Config::Features.MagmaVertexConversionCache != MG_Config::QuirkOverride::ForceOff &&
+                    m_bufferManager.GetWireBufferContentSerial(resource.Res, contentSerial);
+                const VkBufferManager::ConvertedStreamKey cacheKey{contentSerial,
+                                                                   offset,
+                                                                   static_cast<Uint32>(stride),
+                                                                   static_cast<Uint32>(attr.Type),
+                                                                   static_cast<Uint32>(attr.Size),
+                                                                   static_cast<Uint32>(conversion),
+                                                                   attr.Normalized != 0,
+                                                                   attr.IsInteger != 0,
+                                                                   attr.IsBgra != 0};
                 if (cacheable && m_bufferManager.LookupConvertedStream(cacheKey, count, vertexSlices[binding])) {
                     ++m_wireStreamsReused;
                     continue;
@@ -885,17 +916,17 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 if (!ConvertWireVertexStream(attr, conversion, source.data(), stride, count, converted)) {
                     MGLOG_E_ONCE("Magma wire draw skipped: no vertex stream converter for "
                                  "location=%u type=%u size=%u conversion=%d",
-                                 location, attr.Type, static_cast<Uint32>(attr.Size),
-                                 static_cast<Int>(conversion));
+                                 location, attr.Type, static_cast<Uint32>(attr.Size), static_cast<Int>(conversion));
                     WireDeclineTally::Count(WireDeclineSite::VertexStreamConverter);
                     return false;
                 }
                 ++m_wireStreamsConverted;
                 if (!(cacheable && m_bufferManager.StoreConvertedStream(cacheKey, resource.Res, count, converted.data(),
-                                                                         converted.size(), vertexSlices[binding])) &&
+                                                                        converted.size(), vertexSlices[binding])) &&
                     !m_bufferManager.UploadTransient(BufferKind::Vertex, m_frameContext.GetCurrentFrameIndex(),
-                        converted.data(), converted.size(), 16, vertexSlices[binding])) {
-                    MGL_WIRE_DECLINE_AT(VertexTransientUpload, "the converted vertex stream did not fit the transient arena");
+                                                     converted.data(), converted.size(), 16, vertexSlices[binding])) {
+                    MGL_WIRE_DECLINE_AT(VertexTransientUpload,
+                                        "the converted vertex stream did not fit the transient arena");
                     return false;
                 }
             } else {
@@ -921,12 +952,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             const auto& restart = MG_Pipe::gPipeInputs->GetRenderStateParameters();
             const Uint32 fixed = MG_Util::FixedRestartIndexForGLType(indices->indexType);
             const Bool replaceRestart = restart.PrimitiveRestartEnabled && !restart.PrimitiveRestartFixedIndexEnabled &&
-                restart.PrimitiveRestartIndex < fixed;
+                                        restart.PrimitiveRestartIndex < fixed;
             const Bool expandByte = width == 1 && !m_indexTypeUint8ExtensionEnabled;
             const Bool cpuIndices = indices->forceClientMemory || MG_Pipe::MGPipeHandleIsNull(state.IndexBuffer.Res);
             Vector<Uint8> copied;
             const void* bytes = nullptr;
-            if (cpuIndices) bytes = reinterpret_cast<const void*>(indices->indexByteOffset);
+            if (cpuIndices)
+                bytes = reinterpret_cast<const void*>(indices->indexByteOffset);
             else {
                 if (!m_bufferManager.AcquireWireSlice(BufferKind::Index, state.IndexBuffer.Res, indexSlice)) {
                     // As for a vertex buffer: a bound element buffer with no data store yet.
@@ -965,15 +997,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                         Uint32 value = 0;
                         Memcpy(&value, static_cast<const Uint8*>(bytes) + i * width, width);
                         if (replaceRestart && value == restart.PrimitiveRestartIndex) value = fixed;
-                        if (expandByte && ResolvePrimitiveRestartEnable(aspects, indices) && value == fixed) value = 0xffffu;
+                        if (expandByte && ResolvePrimitiveRestartEnable(aspects, indices) && value == fixed)
+                            value = 0xffffu;
                         Memcpy(rewritten.data() + i * outWidth, &value, outWidth);
                     }
                     bytes = rewritten.data();
                     uploadSize = rewritten.size();
                     if (expandByte) indexType = VK_INDEX_TYPE_UINT16;
                 }
-                if (!m_bufferManager.UploadTransient(BufferKind::Index, m_frameContext.GetCurrentFrameIndex(),
-                        bytes, uploadSize, 16, indexSlice)) {
+                if (!m_bufferManager.UploadTransient(BufferKind::Index, m_frameContext.GetCurrentFrameIndex(), bytes,
+                                                     uploadSize, 16, indexSlice)) {
                     MGL_WIRE_DECLINE_AT(IndexTransientUpload, "the rewritten indices did not fit the transient arena");
                     return false;
                 }
@@ -989,7 +1022,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // Resolve it before constructing framebuffer views so both roles of that image
         // name the same allocation even on its first storage-image use.
         if (!m_uniformManager->BindProgramUniformBuffers(frame.commandBuffer, program, programObj,
-                m_frameContext.GetCurrentFrameIndex(), VK_PIPELINE_BIND_POINT_GRAPHICS)) {
+                                                         m_frameContext.GetCurrentFrameIndex(),
+                                                         VK_PIPELINE_BIND_POINT_GRAPHICS)) {
             MGL_WIRE_DECLINE_AT(UniformBufferBinding, "the program's uniform/storage bindings could not be bound");
             return false;
         }
@@ -1008,7 +1042,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // Interned once per pass (above): a continued pass has the same compatibility.
         const Uint64 compatibilityId = m_wireDrawPassCompatibilityId;
         const auto pipeline = GetOrCreatePipelineWithInput(mode, program, programObj, flags, input, pass,
-            ResolvePrimitiveRestartEnable(aspects, indices), WireFramebufferIsLayered(*fbo), compatibilityId);
+                                                           ResolvePrimitiveRestartEnable(aspects, indices),
+                                                           WireFramebufferIsLayered(*fbo), compatibilityId);
         if (pipeline == VK_NULL_HANDLE) {
             MGL_WIRE_DECLINE_AT(PipelineUnavailable, "no graphics pipeline could be created for this draw");
             return false;
@@ -1051,19 +1086,22 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Uint32 binding = static_cast<Uint32>(vertexSlices.size());
         for (Uint32 location = 0; location < kMaxVertexAttribs; ++location) {
             if (!(programObj.activeVertexInputLocationMask & (1u << location)) ||
-                (input.attributeLocationMask & (1u << location))) continue;
+                (input.attributeLocationMask & (1u << location)))
+                continue;
             VkFormat format = VK_FORMAT_UNDEFINED;
             const void* data = nullptr;
             VkDeviceSize size = 0;
             if (!TryGetCurrentVertexAttributeUploadPayload(MG_Pipe::gPipeInputs->GetCurrentVertexAttribute(location),
-                    programObj.vertexInputTypes[location], format, data, size)) {
-                MGL_WIRE_DECLINE_AT(CurrentAttributePayload, "a disabled array's current attribute value has no upload payload");
+                                                           programObj.vertexInputTypes[location], format, data, size)) {
+                MGL_WIRE_DECLINE_AT(CurrentAttributePayload,
+                                    "a disabled array's current attribute value has no upload payload");
                 return false;
             }
             BufferSlice slice{};
-            if (!m_bufferManager.UploadTransient(BufferKind::Vertex, m_frameContext.GetCurrentFrameIndex(),
-                    data, size, 16, slice)) {
-                MGL_WIRE_DECLINE_AT(CurrentAttributeUpload, "the current attribute value did not fit the transient arena");
+            if (!m_bufferManager.UploadTransient(BufferKind::Vertex, m_frameContext.GetCurrentFrameIndex(), data, size,
+                                                 16, slice)) {
+                MGL_WIRE_DECLINE_AT(CurrentAttributeUpload,
+                                    "the current attribute value did not fit the transient arena");
                 return false;
             }
             vkCmdBindVertexBuffers(frame.commandBuffer, binding++, 1, &slice.buffer, &slice.offset);
@@ -1093,7 +1131,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             bindShadow.graphicsPipeline = pipeline;
         }
         ApplyDynamicDrawStateTail(frame, pass.extent, fbo->IsDefault,
-                                 ResolveDrawViewportCount(programObj.writesViewportIndexBuiltin));
+                                  ResolveDrawViewportCount(programObj.writesViewportIndexBuiltin));
         if (m_fragmentShadingRate.Pipeline) {
             ShadowedSetFragmentShadingRate(frame.commandBuffer, s_vkCmdSetFragmentShadingRateKHR);
         }
@@ -1130,7 +1168,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     // attachment whose extent or layer count differs from the pass's (the pass covers the common area
     // only), and a stencil clear the pass's depth attachment does not carry.
     GLbitfield VulkanRenderer::ClearWireFramebufferInPass(const MG_Pipe::MGPFramebufferState& fbo,
-            const ClearAttachmentPayload& payload, GLint drawbuffer) {
+                                                          const ClearAttachmentPayload& payload, GLint drawbuffer) {
         GLbitfield remaining = payload.mask & (GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
         if (!remaining || MG_Config::Features.MagmaInPassClear == MG_Config::QuirkOverride::ForceOff) return remaining;
         // Nested inside a draw's preparation the scratch and the pass belong to that draw.
@@ -1141,7 +1179,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // vkCmdClearAttachments - while the same clear split across the two paths, or left
         // standalone, renders correctly. Default-framebuffer clears keep the standalone path until
         // that is explained (perf-p15/HANDOFF.md).
-        if (fbo.IsDefault && MG_Config::Features.MagmaInPassClearDefault != MG_Config::QuirkOverride::ForceOn) return remaining;
+        if (fbo.IsDefault && MG_Config::Features.MagmaInPassClearDefault != MG_Config::QuirkOverride::ForceOn)
+            return remaining;
         auto& frame = m_frameContext.GetCurrent();
         WirePreparationScope preparing(m_wirePreparationDepth);
         // As SetupWireDraw: resolve every attachment (a lazy upload or promotion may submit the
@@ -1188,22 +1227,29 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 if (!fbo.IsDefault && fbo.Color[attachment].Kind == MG_Pipe::kMGPipeSurfaceKindNone) continue;
                 const auto mask = MG_Pipe::gPipeInputs->GetColorMaskIndexed(i);
                 if (!mask.r() && !mask.g() && !mask.b() && !mask.a()) continue;
-                if (!mask.r() || !mask.g() || !mask.b() || !mask.a()) { all = false; break; }
+                if (!mask.r() || !mask.g() || !mask.b() || !mask.a()) {
+                    all = false;
+                    break;
+                }
                 if (i >= key.colorReferences.size() || key.colorReferences[i] == VK_ATTACHMENT_UNUSED ||
-                    !fits(key.colorReferences[i])) { all = false; break; }
+                    !fits(key.colorReferences[i])) {
+                    all = false;
+                    break;
+                }
                 auto& clear = colorClears[colorCount++];
                 clear.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
                 clear.colorAttachment = i;
                 clear.clearValue.color = MakeVkClearColorValue(payload, false);
             }
             if (all) {
-                for (Uint32 c = 0; c < colorCount; ++c) clears[count++] = colorClears[c];
+                for (Uint32 c = 0; c < colorCount; ++c)
+                    clears[count++] = colorClears[c];
                 handled |= GL_COLOR_BUFFER_BIT;
             }
         }
-        const WireDrawAttachmentKey* depthKey =
-            key.depthReference != VK_ATTACHMENT_UNUSED && fits(key.depthReference) ? &key.attachments[key.depthReference]
-                                                                                    : nullptr;
+        const WireDrawAttachmentKey* depthKey = key.depthReference != VK_ATTACHMENT_UNUSED && fits(key.depthReference)
+                                                    ? &key.attachments[key.depthReference]
+                                                    : nullptr;
         VkImageAspectFlags depthStencilAspects = 0;
         if (remaining & GL_DEPTH_BUFFER_BIT) {
             if (!MG_Pipe::gPipeInputs->GetDepthMask()) {
@@ -1228,9 +1274,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 // subresource (a DEPTH_STENCIL attachment point).
                 const auto& depth = fbo.Depth;
                 const auto& stencil = fbo.Stencil;
-                const Bool same = fbo.IsDefault || depthKey->requestedAspect == VK_IMAGE_ASPECT_STENCIL_BIT ||
-                    (depth.Kind == stencil.Kind && depth.Res == stencil.Res &&
-                     depth.Level == stencil.Level && depth.Layer == stencil.Layer && depth.Layered == stencil.Layered);
+                const Bool same =
+                    fbo.IsDefault || depthKey->requestedAspect == VK_IMAGE_ASPECT_STENCIL_BIT ||
+                    (depth.Kind == stencil.Kind && depth.Res == stencil.Res && depth.Level == stencil.Level &&
+                     depth.Layer == stencil.Layer && depth.Layered == stencil.Layered);
                 if (same) {
                     depthStencilAspects |= VK_IMAGE_ASPECT_STENCIL_BIT;
                     handled |= GL_STENCIL_BUFFER_BIT;
@@ -1253,8 +1300,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // An empty box clears nothing, on either path.
             if (x0 >= x1 || y0 >= y1) return 0;
             area = {{x0, y0}, {static_cast<Uint32>(x1 - x0), static_cast<Uint32>(y1 - y0)}};
-            if (fbo.IsDefault && !MapDefaultFramebufferReadbackRect(x0, y0, x1 - x0, y1 - y0, VkExtent2D{key.width, key.height},
-                    m_swapchainObject.GetPreTransform(), &area.offset, &area.extent))
+            if (fbo.IsDefault &&
+                !MapDefaultFramebufferReadbackRect(x0, y0, x1 - x0, y1 - y0, VkExtent2D{key.width, key.height},
+                                                   m_swapchainObject.GetPreTransform(), &area.offset, &area.extent))
                 MagmaWireFatal("clear-surface-transform");
         }
         const Bool wholeArea = area.offset.x == 0 && area.offset.y == 0 && area.extent.width == key.width &&
@@ -1333,7 +1381,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         constexpr Uint32 kMaxAttachments = MG_Pipe::kMGPipeMaxColorAttachments + 1;
         VkClearValue merged[kMaxAttachments]{};
         if (values != nullptr)
-            for (Uint32 a = 0; a < attachmentCount && a < kMaxAttachments; ++a) merged[a] = values[a];
+            for (Uint32 a = 0; a < attachmentCount && a < kMaxAttachments; ++a)
+                merged[a] = values[a];
         for (const auto& fold : m_wireFoldClears) {
             if (fold.attachment >= attachmentCount || fold.attachment >= kMaxAttachments || fold.resource == nullptr)
                 continue;
@@ -1359,8 +1408,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     merged[a].depthStencil.stencil = entry.value.depthStencil.stencil;
                 }
                 entry.aspects &= ~taken;
-                if (entry.aspects == 0) pending.erase(pending.begin() + static_cast<std::ptrdiff_t>(i));
-                else ++i;
+                if (entry.aspects == 0)
+                    pending.erase(pending.begin() + static_cast<std::ptrdiff_t>(i));
+                else
+                    ++i;
             }
         }
         m_wireFoldClears.clear();
@@ -1394,7 +1445,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                         break;
                     }
                 }
-                const VkImageAspectFlags depthStencil = taken & (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT);
+                const VkImageAspectFlags depthStencil =
+                    taken & (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT);
                 if (depthStencil && pass.wireDepth.attachment == fold.attachment &&
                     count < MG_Pipe::kMGPipeMaxColorAttachments + 1) {
                     auto& clear = clears[count++];
@@ -1402,14 +1454,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     clear.clearValue.depthStencil = entry.value.depthStencil;
                 }
                 entry.aspects &= ~taken;
-                if (entry.aspects == 0) pending.erase(pending.begin() + static_cast<std::ptrdiff_t>(i));
-                else ++i;
+                if (entry.aspects == 0)
+                    pending.erase(pending.begin() + static_cast<std::ptrdiff_t>(i));
+                else
+                    ++i;
             }
         }
         m_wireFoldClears.clear();
         if (count == 0) return;
-        const VkClearRect rect{{{0, 0}, {static_cast<Uint32>(pass.extent.x()), static_cast<Uint32>(pass.extent.y())}},
-                               0, pass.layers};
+        const VkClearRect rect{
+            {{0, 0}, {static_cast<Uint32>(pass.extent.x()), static_cast<Uint32>(pass.extent.y())}}, 0, pass.layers};
         vkCmdClearAttachments(frame.commandBuffer, count, clears, 1, &rect);
     }
 
@@ -1448,14 +1502,17 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // it for drawCount > 1; a peer's record that breaks either is declined, not issued.
         if (stride < static_cast<GLsizei>(commandSize) || (stride & 3) != 0 || (offset & 3u) != 0 ||
             offset > commands.size || span > commands.size - offset) {
-            MGL_WIRE_DECLINE_AT(IndirectCommandRange, "the indirect commands lie outside their store or are misaligned");
+            MGL_WIRE_DECLINE_AT(IndirectCommandRange,
+                                "the indirect commands lie outside their store or are misaligned");
             return true;
         }
         BufferSlice parameters{};
         if (counted) {
             if (MG_Pipe::MGPipeHandleIsNull(state.VerbIndirectParameterBuffer) ||
-                !m_bufferManager.AcquireWireSlice(BufferKind::Indirect, state.VerbIndirectParameterBuffer, parameters) ||
-                (countOffset & 3u) != 0 || countOffset > parameters.size || parameters.size - countOffset < sizeof(Uint32)) {
+                !m_bufferManager.AcquireWireSlice(BufferKind::Indirect, state.VerbIndirectParameterBuffer,
+                                                  parameters) ||
+                (countOffset & 3u) != 0 || countOffset > parameters.size ||
+                parameters.size - countOffset < sizeof(Uint32)) {
                 MGL_WIRE_DECLINE_AT(IndirectCountRange, "the indirect draw count lies outside its parameter store");
                 return true;
             }
@@ -1489,7 +1546,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // application's own glMemoryBarrier is BuildMemoryBarrierForGlBarriers, as on the monolith
         // arm; transfer writes carry their own MEMORY_READ after-barrier (VkBufferManager.cpp).
         const Bool commandsWritten = m_bufferManager.TakeWireIndirectReadBarrier(state.VerbIndirectBuffer);
-        const Bool countWritten = counted && m_bufferManager.TakeWireIndirectReadBarrier(state.VerbIndirectParameterBuffer);
+        const Bool countWritten =
+            counted && m_bufferManager.TakeWireIndirectReadBarrier(state.VerbIndirectParameterBuffer);
         if (commandsWritten || countWritten) {
             RetireWireDrawPass();
             auto& barrierFrame = m_frameContext.GetCurrent();
@@ -1518,24 +1576,28 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         const Uint32 byteStride = static_cast<Uint32>(stride);
         if (counted) {
             const auto countEntry = indexed ? s_vkCmdDrawIndexedIndirectCount : s_vkCmdWireDrawIndirectCount;
-            countEntry(commandBuffer, commands.buffer, first, parameters.buffer, parameters.offset + countOffset,
-                       count, byteStride);
+            countEntry(commandBuffer, commands.buffer, first, parameters.buffer, parameters.offset + countOffset, count,
+                       byteStride);
         } else if (count == 1 || (!m_multiDrawForceUnrollIndirect && m_multiDrawIndirectFeatureEnabled)) {
             // maxDrawIndirectCount bounds one call; GL's drawcount does not.
             const Uint32 limit = std::max<Uint32>(1u, m_physicalDevice.properties.limits.maxDrawIndirectCount);
             for (Uint32 base = 0; base < count; base += limit) {
                 const Uint32 chunk = std::min(count - base, limit);
                 const VkDeviceSize at = first + static_cast<VkDeviceSize>(base) * byteStride;
-                if (indexed) vkCmdDrawIndexedIndirect(commandBuffer, commands.buffer, at, chunk, byteStride);
-                else vkCmdDrawIndirect(commandBuffer, commands.buffer, at, chunk, byteStride);
+                if (indexed)
+                    vkCmdDrawIndexedIndirect(commandBuffer, commands.buffer, at, chunk, byteStride);
+                else
+                    vkCmdDrawIndirect(commandBuffer, commands.buffer, at, chunk, byteStride);
             }
         } else {
             // No multiDrawIndirect: one indirect draw per command, still read by the GPU
             // (the monolith arm's own fallback).
             for (Uint32 i = 0; i < count; ++i) {
                 const VkDeviceSize at = first + static_cast<VkDeviceSize>(i) * byteStride;
-                if (indexed) vkCmdDrawIndexedIndirect(commandBuffer, commands.buffer, at, 1, 0);
-                else vkCmdDrawIndirect(commandBuffer, commands.buffer, at, 1, 0);
+                if (indexed)
+                    vkCmdDrawIndexedIndirect(commandBuffer, commands.buffer, at, 1, 0);
+                else
+                    vkCmdDrawIndirect(commandBuffer, commands.buffer, at, 1, 0);
             }
         }
         if (MG_Util::PipeStats::Enabled())
@@ -1553,11 +1615,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
         const auto& programObj = m_programFactory->GetOrCreateProgram(program, {});
         if (programObj.invalidSpirvDeclined) {
-            MGL_WIRE_DECLINE_AT(ComputeProgramInvalidSpirv, "a module of the compute program fails SPIR-V validation and was never built");
+            MGL_WIRE_DECLINE_AT(ComputeProgramInvalidSpirv,
+                                "a module of the compute program fails SPIR-V validation and was never built");
             return;
         }
         if (!m_uniformManager->PrepareWireTextureResources(program, programObj)) {
-            MGL_WIRE_DECLINE_AT(ComputeTextureResourcesUnprepared, "a sampled/storage image could not be made ready for the dispatch");
+            MGL_WIRE_DECLINE_AT(ComputeTextureResourcesUnprepared,
+                                "a sampled/storage image could not be made ready for the dispatch");
             return;
         }
         AcquireNotedSharedImages(); // shared images another session writes (WireSharedImage.cpp)
@@ -1568,8 +1632,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
         if (!frame.isCommandRecording) m_frameContext.BeginCommandRecording();
         if (!m_uniformManager->BindProgramUniformBuffers(frame.commandBuffer, program, programObj,
-                m_frameContext.GetCurrentFrameIndex(), VK_PIPELINE_BIND_POINT_COMPUTE)) {
-            MGL_WIRE_DECLINE_AT(ComputeUniformBufferBinding, "the dispatch's uniform/storage bindings could not be bound");
+                                                         m_frameContext.GetCurrentFrameIndex(),
+                                                         VK_PIPELINE_BIND_POINT_COMPUTE)) {
+            MGL_WIRE_DECLINE_AT(ComputeUniformBufferBinding,
+                                "the dispatch's uniform/storage bindings could not be bound");
             return;
         }
         vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
@@ -1599,7 +1665,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         BufferSlice parameters{};
         if (MG_Pipe::MGPipeHandleIsNull(state.VerbDispatchIndirectBuffer) ||
             !m_bufferManager.AcquireWireSlice(BufferKind::Indirect, state.VerbDispatchIndirectBuffer, parameters)) {
-            MGL_WIRE_DECLINE_AT(DispatchIndirectBufferUnbound, "an indirect dispatch names no live dispatch-indirect store");
+            MGL_WIRE_DECLINE_AT(DispatchIndirectBufferUnbound,
+                                "an indirect dispatch names no live dispatch-indirect store");
             return;
         }
         // GL refuses an offset that is negative or not a multiple of four (INVALID_VALUE) and a
@@ -1607,7 +1674,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // either is declined, not issued.
         if (offset < 0 || (static_cast<Uint64>(offset) & 3u) != 0 || static_cast<Uint64>(offset) > parameters.size ||
             parameters.size - static_cast<Uint64>(offset) < kCommandSize) {
-            MGL_WIRE_DECLINE_AT(DispatchIndirectRange, "the dispatch group counts lie outside their store or are misaligned");
+            MGL_WIRE_DECLINE_AT(DispatchIndirectRange,
+                                "the dispatch group counts lie outside their store or are misaligned");
             return;
         }
         auto& frame = m_frameContext.GetCurrent();
@@ -1630,11 +1698,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
         const auto& programObj = m_programFactory->GetOrCreateProgram(program, {});
         if (programObj.invalidSpirvDeclined) {
-            MGL_WIRE_DECLINE_AT(ComputeProgramInvalidSpirv, "a module of the compute program fails SPIR-V validation and was never built");
+            MGL_WIRE_DECLINE_AT(ComputeProgramInvalidSpirv,
+                                "a module of the compute program fails SPIR-V validation and was never built");
             return;
         }
         if (!m_uniformManager->PrepareWireTextureResources(program, programObj)) {
-            MGL_WIRE_DECLINE_AT(ComputeTextureResourcesUnprepared, "a sampled/storage image could not be made ready for the dispatch");
+            MGL_WIRE_DECLINE_AT(ComputeTextureResourcesUnprepared,
+                                "a sampled/storage image could not be made ready for the dispatch");
             return;
         }
         AcquireNotedSharedImages(); // shared images another session writes (WireSharedImage.cpp)
@@ -1647,8 +1717,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         auto& dispatchFrame = m_frameContext.GetCurrent();
         if (!dispatchFrame.isCommandRecording) m_frameContext.BeginCommandRecording();
         if (!m_uniformManager->BindProgramUniformBuffers(dispatchFrame.commandBuffer, program, programObj,
-                m_frameContext.GetCurrentFrameIndex(), VK_PIPELINE_BIND_POINT_COMPUTE)) {
-            MGL_WIRE_DECLINE_AT(ComputeUniformBufferBinding, "the dispatch's uniform/storage bindings could not be bound");
+                                                         m_frameContext.GetCurrentFrameIndex(),
+                                                         VK_PIPELINE_BIND_POINT_COMPUTE)) {
+            MGL_WIRE_DECLINE_AT(ComputeUniformBufferBinding,
+                                "the dispatch's uniform/storage bindings could not be bound");
             return;
         }
         vkCmdBindPipeline(dispatchFrame.commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);

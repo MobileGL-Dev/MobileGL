@@ -37,7 +37,8 @@ namespace MGITest {
         *pushedBytes = Stats::TotalBytes(Stats::ByteClass::PersistentMapPush);
         return true;
 #else
-        (void)acquisitions; (void)pushedBytes;
+        (void)acquisitions;
+        (void)pushedBytes;
         return false;
 #endif
     }
@@ -93,8 +94,7 @@ namespace MGITest {
         if (outLive == nullptr) return false;
         MobileGL::MG_State::GLState::BufferObject* buffer = FrontendBuffer(bufferName);
         if (buffer == nullptr) return false;
-        *outLive = static_cast<bool>(
-            MobileGL::MG_Record::PersistentMapTracker::IsLivePersistentMap(*buffer));
+        *outLive = static_cast<bool>(MobileGL::MG_Record::PersistentMapTracker::IsLivePersistentMap(*buffer));
         return true;
 #else
         (void)bufferName;

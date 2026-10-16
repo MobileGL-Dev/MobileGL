@@ -40,8 +40,7 @@ namespace MobileGL::MG_Test {
     // drives a helper of a DIFFERENT verb class opens a nested scope for it.
     class ScopedPipeVerb {
     public:
-        explicit ScopedPipeVerb([[maybe_unused]] MG_Pipe::MGPipeVerb verb)
-            : m_verb(verb) {
+        explicit ScopedPipeVerb([[maybe_unused]] MG_Pipe::MGPipeVerb verb) : m_verb(verb) {
             MG_Pipe::MGPipeValidateForVerb(m_verb);
         }
 
@@ -51,9 +50,7 @@ namespace MobileGL::MG_Test {
         // A second verb of the same kind begins: re-fill and re-stamp, so a helper driven
         // again after the test moved frontend state sees the new values, the way the next GL
         // entry point's MGP_FILL would.
-        void Renew() {
-            MG_Pipe::MGPipeValidateForVerb(m_verb);
-        }
+        void Renew() { MG_Pipe::MGPipeValidateForVerb(m_verb); }
 
         // Leaving bumps the serial and puts the current verb back to "none": every field
         // this scope stamped goes stale, and a later test that forgets its own declaration

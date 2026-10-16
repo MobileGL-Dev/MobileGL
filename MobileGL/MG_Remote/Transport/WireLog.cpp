@@ -38,8 +38,7 @@ namespace MobileGL::MG_Remote::Transport {
         const int written = std::vsnprintf(line, sizeof(line), format, args);
         va_end(args);
         if (written < 0) {
-            std::snprintf(line, sizeof(line),
-                          "MG_Remote wire: unformattable Fatal diagnostic (format=%s)", format);
+            std::snprintf(line, sizeof(line), "MG_Remote wire: unformattable Fatal diagnostic (format=%s)", format);
         }
         MGLOG_F("%s", line);
         // The stderr echo is the half a death test can see (WireLog.h). Unbuffered

@@ -105,8 +105,7 @@ namespace MobileGL::MG_Util::BackendLoader {
     }
 
     inline Bool HasUsableShaderSubgroupSupport(const VkPhysicalDeviceSubgroupProperties& subgroupProps) {
-        return subgroupProps.subgroupSize > 0 &&
-               (subgroupProps.supportedStages & VK_SHADER_STAGE_COMPUTE_BIT) != 0 &&
+        return subgroupProps.subgroupSize > 0 && (subgroupProps.supportedStages & VK_SHADER_STAGE_COMPUTE_BIT) != 0 &&
                (subgroupProps.supportedOperations & VK_SUBGROUP_FEATURE_BASIC_BIT) != 0;
     }
 
@@ -236,15 +235,14 @@ namespace MobileGL::MG_Util::BackendLoader {
             // for one of them refuses per-slice attachment for that format only, which
             // VkTextureManager detects and records at image creation; this field just says whether
             // the capability is worth offering at all.
-            static constexpr VkFormat k3DSliceProbeFormats[] = {VK_FORMAT_R8G8B8A8_UNORM,
-                                                                VK_FORMAT_R8G8B8A8_SRGB};
+            static constexpr VkFormat k3DSliceProbeFormats[] = {VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_R8G8B8A8_SRGB};
             Bool all2DArrayCompatible = true;
             for (const VkFormat probeFormat : k3DSliceProbeFormats) {
                 VkImageFormatProperties probeProperties{};
                 const VkResult probeResult = vkGetPhysicalDeviceImageFormatProperties(
                     physicalDevice, probeFormat, VK_IMAGE_TYPE_3D, VK_IMAGE_TILING_OPTIMAL,
-                    VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
-                        VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                    VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+                        VK_IMAGE_USAGE_TRANSFER_DST_BIT,
                     VK_IMAGE_CREATE_2D_ARRAY_COMPATIBLE_BIT, &probeProperties);
                 if (probeResult != VK_SUCCESS) {
                     all2DArrayCompatible = false;
@@ -253,16 +251,15 @@ namespace MobileGL::MG_Util::BackendLoader {
             }
             caps.Supports2DArrayCompatible3DImages = all2DArrayCompatible;
         }
-        caps.SupportsVertexPipelineStoresAndAtomics =
-            supportedFeatures.vertexPipelineStoresAndAtomics == VK_TRUE;
+        caps.SupportsVertexPipelineStoresAndAtomics = supportedFeatures.vertexPipelineStoresAndAtomics == VK_TRUE;
         caps.SupportsFragmentStoresAndAtomics = supportedFeatures.fragmentStoresAndAtomics == VK_TRUE;
         caps.SupportsGeometryShader = supportedFeatures.geometryShader == VK_TRUE;
         caps.SupportsTessellationShader = supportedFeatures.tessellationShader == VK_TRUE;
         caps.SupportsShaderClipDistance = supportedFeatures.shaderClipDistance == VK_TRUE;
         caps.SupportsShaderCullDistance = supportedFeatures.shaderCullDistance == VK_TRUE;
         caps.MaxShaderStorageBlockSize = static_cast<SizeT>(p.limits.maxStorageBufferRange);
-        const Bool supportsShaderSubgroup = vk.vkGetPhysicalDeviceProperties2 &&
-                                            HasUsableShaderSubgroupSupport(subgroupProps);
+        const Bool supportsShaderSubgroup =
+            vk.vkGetPhysicalDeviceProperties2 && HasUsableShaderSubgroupSupport(subgroupProps);
         caps.SupportsShaderSubgroup = supportsShaderSubgroup;
         if (caps.SupportsShaderSubgroup) {
             caps.SubgroupSize = subgroupProps.subgroupSize;
@@ -277,8 +274,8 @@ namespace MobileGL::MG_Util::BackendLoader {
         }
 
         MGLOG_I("Vulkan shader subgroup support: native=%s size=%u stages=0x%x operations=0x%x",
-                supportsShaderSubgroup ? "true" : "false", subgroupProps.subgroupSize,
-                subgroupProps.supportedStages, subgroupProps.supportedOperations);
+                supportsShaderSubgroup ? "true" : "false", subgroupProps.subgroupSize, subgroupProps.supportedStages,
+                subgroupProps.supportedOperations);
 
         return true;
     }
@@ -290,8 +287,7 @@ namespace MobileGL::MG_Util::BackendLoader {
         caps.DriverVersionString = DecodeDriverVersion(properties.driverVersion);
         caps.VendorId = properties.vendorID;
         caps.UniformBufferOffsetAlignment = static_cast<int>(properties.limits.minUniformBufferOffsetAlignment);
-        caps.ShaderStorageBufferOffsetAlignment =
-            static_cast<int>(properties.limits.minStorageBufferOffsetAlignment);
+        caps.ShaderStorageBufferOffsetAlignment = static_cast<int>(properties.limits.minStorageBufferOffsetAlignment);
         caps.AliasedLineWidthRangeMin = properties.limits.lineWidthRange[0];
         caps.AliasedLineWidthRangeMax = properties.limits.lineWidthRange[1];
         caps.MaxSamplerAnisotropy = properties.limits.maxSamplerAnisotropy;

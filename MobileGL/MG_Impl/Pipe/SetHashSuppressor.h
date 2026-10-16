@@ -28,7 +28,7 @@ namespace MobileGL::MG_Pipe {
     // hash is the "did any covered value move" answer. The enum is
     // CLIENT-ONLY and is not a wire opcode, so appending before Count is safe.
     enum class MGPipeSuppressorSlot : Uint32 {
-        SetVertexBuffers = 0,     // P3a - wired, and its hash includes BaseInstance
+        SetVertexBuffers = 0, // P3a - wired, and its hash includes BaseInstance
         // P4a - WIRED. The three unit sets' suppressors are not optional and were never a
         // later phase's: MGPipeTypes.h makes the pattern mandatory for every kVarTail set_*,
         // because GetTextureBindGeneration() bumps on a REDUNDANT rebind - MC 26.2 rebinds the
@@ -37,9 +37,9 @@ namespace MobileGL::MG_Pipe {
         // the design names. What P3b/P4b owns is the ~175-line BACKEND debounce these replace
         // (UnitBindingsSnapshot / CaptureUnitBindings / UnitBindingsUnchanged and the two
         // g_*SyncList tables); P4a wires the carrier, P3b/P4b deletes the backend copy.
-        SetSamplerViews,          // P4a - wired (backend debounce deletion: P3b/P4b)
-        BindSamplerStates,        // P4a - wired (backend debounce deletion: P3b/P4b)
-        SetShaderImages,          // P4a - wired (backend debounce deletion: P3b/P4b)
+        SetSamplerViews,   // P4a - wired (backend debounce deletion: P3b/P4b)
+        BindSamplerStates, // P4a - wired (backend debounce deletion: P3b/P4b)
+        SetShaderImages,   // P4a - wired (backend debounce deletion: P3b/P4b)
         // P5e (docs/archive/contracts/CONTRACT-P5E.md §1, ruling 11): THREE SLOTS, ONE PER CLASS, not one
         // for the call. set_shader_buffers is emitted per Class (Uniform / ShaderStorage /
         // AtomicCounter) because the record's own Class field says which binding-point array
@@ -51,20 +51,20 @@ namespace MobileGL::MG_Pipe {
         SetShaderBuffersUniform,       // P5e (sb)
         SetShaderBuffersShaderStorage, // P5e (sb)
         SetShaderBuffersAtomicCounter, // P5e (sb)
-        SetStreamOutputTargets,   // P4b
+        SetStreamOutputTargets,        // P4b
         // P5e (CONTRACT-P5E.md §1): set_program_bindings, the post-link binding record. Not
         // kVarTail-only - it has three tails - but the same rule applies: the emitter latches
         // on (Cso, backendStateVersion, blockBindingVersion) and the whole-record hash is what
         // says "nothing moved".
-        SetProgramBindings,       // P5e (pg)
-        SetVertexAttribDefaults,  // P2 - the one consumer that is wired
-        SetFramebufferState,      // P4a - wired
+        SetProgramBindings,      // P5e (pg)
+        SetVertexAttribDefaults, // P2 - the one consumer that is wired
+        SetFramebufferState,     // P4a - wired
         // P5c rv (CONTRACT-P5C.md §5.3). NOT kVarTail either - the same shape as
         // SetFramebufferState's note: MGPContextValues is one fixed-width POD, and the
         // whole-record hash IS its "did any covered value move" answer (there is deliberately
         // no dirty mask in the payload - a suppressed record means "nothing moved", never
         // "field invalid").
-        SetContextValues,         // P5c rv - wired, split+transport only (PipeFill.cpp gates)
+        SetContextValues, // P5c rv - wired, split+transport only (PipeFill.cpp gates)
         Count,
     };
 
@@ -94,14 +94,13 @@ namespace MobileGL::MG_Pipe {
         void Invalidate(MGPipeSuppressorSlot slot) { m_lastEmitted[static_cast<SizeT>(slot)] = 0; }
 
         void InvalidateAll() {
-            for (SizeT i = 0; i < kMGPipeSuppressorSlotCount; ++i) m_lastEmitted[i] = 0;
+            for (SizeT i = 0; i < kMGPipeSuppressorSlotCount; ++i)
+                m_lastEmitted[i] = 0;
         }
 
         // 0 == "never emitted". Exposed for the unit test, which is what pins that the
         // reserved value really is reserved.
-        Uint64 LastEmitted(MGPipeSuppressorSlot slot) const {
-            return m_lastEmitted[static_cast<SizeT>(slot)];
-        }
+        Uint64 LastEmitted(MGPipeSuppressorSlot slot) const { return m_lastEmitted[static_cast<SizeT>(slot)]; }
 
     private:
         Array<Uint64, kMGPipeSuppressorSlotCount> m_lastEmitted{};

@@ -17,7 +17,6 @@
 
 #include "PipeRoute.h"
 
-
 #include <MG_Util/Debug/Log.h>
 #include <Config.h>
 #include <MG_State/GLState/ProgramState/ProgramArtifactsCodec.h>
@@ -35,9 +34,9 @@ namespace MobileGL::MG_Pipe {
         // ---------------------------------------------------------------------------------
 
         struct ReplyMailbox {
-            Uint64 Slot = 0;      // the MGPReplySlot::Id this answer belongs to; 0 = empty
-            Int32 Status = 0;     // 0 OK, 1 DECLINED, 2 ERROR (Transport::ReplyStatus)
-            Uint64 Value = 0;     // the Bool, or the pointer, the row answered with
+            Uint64 Slot = 0;  // the MGPReplySlot::Id this answer belongs to; 0 = empty
+            Int32 Status = 0; // 0 OK, 1 DECLINED, 2 ERROR (Transport::ReplyStatus)
+            Uint64 Value = 0; // the Bool, or the pointer, the row answered with
             Uint64 NextTicket = 0;
             Uint64 Taken = 0;
             Uint64 Declined = 0;
@@ -58,9 +57,15 @@ namespace MobileGL::MG_Pipe {
 
     } // namespace
 
-    const MGPipeScreen& MGPipeMonolithScreen() { return g_monolithScreen; }
-    const MGPipeContext& MGPipeMonolithContext() { return g_monolithContext; }
-    const MGPipeRouteEscapes& MGPipeMonolithEscapes() { return g_monolithEscapes; }
+    const MGPipeScreen& MGPipeMonolithScreen() {
+        return g_monolithScreen;
+    }
+    const MGPipeContext& MGPipeMonolithContext() {
+        return g_monolithContext;
+    }
+    const MGPipeRouteEscapes& MGPipeMonolithEscapes() {
+        return g_monolithEscapes;
+    }
 
     MGPReplySlot MGPipeMintReplySlot() {
         // 1-based, for ReplySlot.h's reason: "Seq is 1-based; 0 means 'no record'". A zero id
@@ -79,8 +84,7 @@ namespace MobileGL::MG_Pipe {
                     "unread. The mailbox is one deep because R-1's verb barrier makes the "
                     "in-flight depth one; two outstanding answers means the barrier is not "
                     "holding",
-                    static_cast<unsigned long long>(slot.Id),
-                    static_cast<unsigned long long>(g_reply.Slot));
+                    static_cast<unsigned long long>(slot.Id), static_cast<unsigned long long>(g_reply.Slot));
             std::abort();
         }
         g_reply.Slot = slot.Id;
@@ -101,8 +105,7 @@ namespace MobileGL::MG_Pipe {
             if (g_reply.Slot != slot.Id) {
                 MGLOG_F("MGPipe: Fatal{ReplyMismatched, \"%s\"} - waiting on slot %llu, the "
                         "mailbox holds slot %llu",
-                        row, static_cast<unsigned long long>(slot.Id),
-                        static_cast<unsigned long long>(g_reply.Slot));
+                        row, static_cast<unsigned long long>(slot.Id), static_cast<unsigned long long>(g_reply.Slot));
                 std::abort();
             }
             const Uint64 value = g_reply.Value;
@@ -144,12 +147,22 @@ namespace MobileGL::MG_Pipe {
         return reinterpret_cast<void*>(static_cast<std::uintptr_t>(value));
     }
 
-    Uint64 MGPipeRepliesTaken() { return g_reply.Taken; }
-    Uint64 MGPipeRepliesDeclined() { return g_reply.Declined; }
+    Uint64 MGPipeRepliesTaken() {
+        return g_reply.Taken;
+    }
+    Uint64 MGPipeRepliesDeclined() {
+        return g_reply.Declined;
+    }
 
-    MGPipeRouteArm MGPipeInstalledArm() { return g_arm; }
-    void MGPipeNoteInstalledArm(MGPipeRouteArm arm) { g_arm = arm; }
-    Bool MGPipeTablesAreInstalled() { return g_arm != MGPipeRouteArm::kNone; }
+    MGPipeRouteArm MGPipeInstalledArm() {
+        return g_arm;
+    }
+    void MGPipeNoteInstalledArm(MGPipeRouteArm arm) {
+        g_arm = arm;
+    }
+    Bool MGPipeTablesAreInstalled() {
+        return g_arm != MGPipeRouteArm::kNone;
+    }
 
     // ---------------------------------------------------------------------------------
     // The thirty-eight monolith adapters
@@ -162,17 +175,19 @@ namespace MobileGL::MG_Pipe {
 
     namespace {
 
-#define MGP_MONO_PLAIN(Name, Payload)                                                              \
-    void Mono_##Name(const Payload* payload) { MGPipeApply##Name(*payload); }
-
-#define MGP_MONO_BLOB(Name, Payload)                                                               \
-    void Mono_##Name(const Payload* payload, const void* blobBytes, Uint64) {                      \
-        MGPipeApply##Name(*payload, blobBytes);                                                    \
+#define MGP_MONO_PLAIN(Name, Payload)                                                                                  \
+    void Mono_##Name(const Payload* payload) {                                                                         \
+        MGPipeApply##Name(*payload);                                                                                   \
     }
 
-#define MGP_MONO_TAIL(Name, Payload, TailType)                                                     \
-    void Mono_##Name(const Payload* payload, const void* varTail, Uint32) {                        \
-        MGPipeApply##Name(*payload, static_cast<const TailType*>(varTail));                        \
+#define MGP_MONO_BLOB(Name, Payload)                                                                                   \
+    void Mono_##Name(const Payload* payload, const void* blobBytes, Uint64) {                                          \
+        MGPipeApply##Name(*payload, blobBytes);                                                                        \
+    }
+
+#define MGP_MONO_TAIL(Name, Payload, TailType)                                                                         \
+    void Mono_##Name(const Payload* payload, const void* varTail, Uint32) {                                            \
+        MGPipeApply##Name(*payload, static_cast<const TailType*>(varTail));                                            \
     }
 
         // -- screen -------------------------------------------------------------------
@@ -232,15 +247,16 @@ namespace MobileGL::MG_Pipe {
         // row 17, including its padding trap - the bytes staged must be the bytes a later
         // memcmp compares).
         void Mono_CreateSamplerState(const MGPSamplerDesc* payload, const void* blobBytes, Uint64) {
-            MGPipeApplyCreateSamplerState(*payload,
-                                          static_cast<const SamplerParameters*>(blobBytes));
+            MGPipeApplyCreateSamplerState(*payload, static_cast<const SamplerParameters*>(blobBytes));
         }
 
         // set_residual_value_state: RETIRED (P13 W3c). Nothing emits it any more; the row stays
         // installed so the table is total, and reaching it is a named death.
         void Mono_SetResidualValueState(const MGPResidualValueState*, const void*, Uint64) {
             MGLOG_F("MGPipe: Fatal{ResidualBlockSize} - set_residual_value_state reached the monolith "
-                    "route, but %s", "the residual value block was deleted in P13 W3c (op 46 is a retired row; the verify comparator owns the capability cross-check)");
+                    "route, but %s",
+                    "the residual value block was deleted in P13 W3c (op 46 is a retired row; the verify comparator "
+                    "owns the capability cross-check)");
             std::abort();
         }
 
@@ -266,10 +282,10 @@ namespace MobileGL::MG_Pipe {
             MGPipePostReply(*reply, accepted ? 0 : 1, accepted ? 1u : 0u);
         }
 
-        void Mono_ResourceSubData(const MGPSubData* payload, const void* blobBytes, Uint64,
-                                  const void* varTail, Uint32, MGPReplySlot* reply) {
-            const Bool accepted = MGPipeApplyResourceSubData(
-                *payload, blobBytes, static_cast<const MGPSubRegion*>(varTail));
+        void Mono_ResourceSubData(const MGPSubData* payload, const void* blobBytes, Uint64, const void* varTail, Uint32,
+                                  MGPReplySlot* reply) {
+            const Bool accepted =
+                MGPipeApplyResourceSubData(*payload, blobBytes, static_cast<const MGPSubRegion*>(varTail));
             MGPipePostReply(*reply, accepted ? 0 : 1, accepted ? 1u : 0u);
         }
 
@@ -284,15 +300,13 @@ namespace MobileGL::MG_Pipe {
             MGPipeApplyResourceFlushRange(*record, bytes);
         }
 
-        void* Mono_Escape_MapPersistent(const MGPHandleOnly* handle, Uint64 size,
-                                        const void* seedBytes) {
+        void* Mono_Escape_MapPersistent(const MGPHandleOnly* handle, Uint64 size, const void* seedBytes) {
             return MGPipeApplyMapPersistent(*handle, size, seedBytes);
         }
 
-        void Mono_Escape_CreateShaderState(const MGPProgramDesc* desc,
-                                           const MG_State::GLState::LinkArtifacts* link,
-                                           const MG_State::GLState::SpirvArtifacts* spirv,
-                                           const Uint32* linkedStages, Uint32 linkedStageCount) {
+        void Mono_Escape_CreateShaderState(const MGPProgramDesc* desc, const MG_State::GLState::LinkArtifacts* link,
+                                           const MG_State::GLState::SpirvArtifacts* spirv, const Uint32* linkedStages,
+                                           Uint32 linkedStageCount) {
             // The stage list is the CLIENT ARM's framing input and this arm has no use for it:
             // the monolith twin reads GetLinkedShaderStages() off the frontend object it is
             // handed. Named and discarded rather than left out of the signature, so the two
@@ -306,7 +320,8 @@ namespace MobileGL::MG_Pipe {
                 auto archive = MakeShared<MG_State::GLState::ProgramArchive>();
                 archive->Link = *link;
                 archive->Spirv = *spirv;
-                if (linkedStages != nullptr) archive->LinkedStages.assign(linkedStages, linkedStages + linkedStageCount);
+                if (linkedStages != nullptr)
+                    archive->LinkedStages.assign(linkedStages, linkedStages + linkedStageCount);
                 MGPipeApplyCreateShaderState(*desc, link, spirv, std::move(archive));
                 return;
             }
@@ -329,8 +344,7 @@ namespace MobileGL::MG_Pipe {
                                             const MGPProgramSamplerUnit* samplerUnits,
                                             const MGPProgramStorageOverride* storageOverrides,
                                             const char* const* storageOverrideNames) {
-            MGPipeApplySetProgramBindings(*hdr, blockBindings, samplerUnits, storageOverrides,
-                                          storageOverrideNames);
+            MGPipeApplySetProgramBindings(*hdr, blockBindings, samplerUnits, storageOverrides, storageOverrideNames);
         }
 
     } // namespace
@@ -389,4 +403,3 @@ namespace MobileGL::MG_Pipe {
     }
 
 } // namespace MobileGL::MG_Pipe
-

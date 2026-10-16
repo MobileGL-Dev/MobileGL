@@ -55,7 +55,8 @@ namespace {
         Uint64 bytes = 0;
         const RenderStateParameters params = PipelineState(7);
         const MGPipeHandle first = cache.Acquire(params, bytes);
-        for (int i = 0; i < 16; ++i) EXPECT_TRUE(cache.Acquire(params, bytes) == first);
+        for (int i = 0; i < 16; ++i)
+            EXPECT_TRUE(cache.Acquire(params, bytes) == first);
         EXPECT_EQ(cache.GetCounters().Mints, 1u);
         EXPECT_EQ(cache.GetCounters().Hits, 16u);
         EXPECT_EQ(cache.Size(), 1u);

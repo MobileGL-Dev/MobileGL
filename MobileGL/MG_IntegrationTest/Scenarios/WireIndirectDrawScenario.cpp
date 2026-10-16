@@ -78,8 +78,12 @@ void main() { words[gl_GlobalInvocationID.x] = source[gl_GlobalInvocationID.x]; 
             std::uint32_t padding[3];
         };
 
-        ArraysCommand Arrays(int strip) { return {kStripVertices, 1, kPad + kStripVertices * strip, 0}; }
-        ElementsCommand Elements(int strip) { return {kStripVertices, 1, kStripVertices * strip, 0, 0}; }
+        ArraysCommand Arrays(int strip) {
+            return {kStripVertices, 1, kPad + kStripVertices * strip, 0};
+        }
+        ElementsCommand Elements(int strip) {
+            return {kStripVertices, 1, kStripVertices * strip, 0, 0};
+        }
 
         using Strips = std::array<bool, kStrips>;
 
@@ -105,14 +109,15 @@ void main() { words[gl_GlobalInvocationID.x] = source[gl_GlobalInvocationID.x]; 
                     vertices.insert(vertices.end(), quad, quad + 12);
                 }
                 std::vector<std::uint32_t> indices;
-                for (std::uint32_t i = 0; i < kStripVertices * kStrips; ++i) indices.push_back(kPad + i);
+                for (std::uint32_t i = 0; i < kStripVertices * kStrips; ++i)
+                    indices.push_back(kPad + i);
 
                 glGenVertexArrays(1, &m_vao);
                 glBindVertexArray(m_vao);
                 glGenBuffers(1, &m_vbo);
                 glBindBuffer(GL_ARRAY_BUFFER, m_vbo);
-                glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(vertices.size() * sizeof(float)),
-                             vertices.data(), GL_STATIC_DRAW);
+                glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(vertices.size() * sizeof(float)), vertices.data(),
+                             GL_STATIC_DRAW);
                 glEnableVertexAttribArray(0);
                 glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float), nullptr);
                 glGenBuffers(1, &m_ebo);
@@ -254,14 +259,11 @@ void main() { words[gl_GlobalInvocationID.x] = source[gl_GlobalInvocationID.x]; 
             // The count forms: three commands each, a count word that allows fewer.
             Fill(m_parameter, GL_PARAMETER_BUFFER, std::vector<std::uint32_t>{7, 2, 1});
             Fill(m_indirect, GL_DRAW_INDIRECT_BUFFER, std::vector<ArraysCommand>{Arrays(0), Arrays(1), Arrays(2)});
-            image = Render([&] {
-                glMultiDrawArraysIndirectCount(GL_TRIANGLES, nullptr, 4, 3, 0);
-            });
+            image = Render([&] { glMultiDrawArraysIndirectCount(GL_TRIANGLES, nullptr, 4, 3, 0); });
             ExpectStrips(image, {true, true, false, false}, "glMultiDrawArraysIndirectCount, count word 2 of 3");
-            Fill(m_indirect, GL_DRAW_INDIRECT_BUFFER, std::vector<ElementsCommand>{Elements(3), Elements(2), Elements(1)});
-            image = Render([&] {
-                glMultiDrawElementsIndirectCount(GL_TRIANGLES, GL_UNSIGNED_INT, nullptr, 8, 3, 0);
-            });
+            Fill(m_indirect, GL_DRAW_INDIRECT_BUFFER,
+                 std::vector<ElementsCommand>{Elements(3), Elements(2), Elements(1)});
+            image = Render([&] { glMultiDrawElementsIndirectCount(GL_TRIANGLES, GL_UNSIGNED_INT, nullptr, 8, 3, 0); });
             ExpectStrips(image, {false, false, false, true}, "glMultiDrawElementsIndirectCount, count word 1 of 3");
             EXPECT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
 
@@ -313,14 +315,15 @@ void main() { words[gl_GlobalInvocationID.x] = source[gl_GlobalInvocationID.x]; 
                 GTEST_SKIP() << "Espryt's monolith arm reads the count word from the frontend shadow without "
                                 "a sync (OQ15; recorded for P13, ID-P8-13)";
             }
-            Fill(m_indirect, GL_DRAW_INDIRECT_BUFFER, std::vector<ElementsCommand>{Elements(0), Elements(3), Elements(2)});
+            Fill(m_indirect, GL_DRAW_INDIRECT_BUFFER,
+                 std::vector<ElementsCommand>{Elements(0), Elements(3), Elements(2)});
             Fill(m_parameter, GL_PARAMETER_BUFFER, std::vector<std::uint32_t>{3});
             ComputeWrite(m_parameter, std::vector<std::uint32_t>{1});
             glMemoryBarrier(GL_COMMAND_BARRIER_BIT);
-            Image image = Render([&] {
-                glMultiDrawElementsIndirectCount(GL_TRIANGLES, GL_UNSIGNED_INT, nullptr, 0, 3, 0);
-            });
-            ExpectStrips(image, {true, false, false, false}, "glMultiDrawElementsIndirectCount, shader-written count 1");
+            Image image =
+                Render([&] { glMultiDrawElementsIndirectCount(GL_TRIANGLES, GL_UNSIGNED_INT, nullptr, 0, 3, 0); });
+            ExpectStrips(image, {true, false, false, false},
+                         "glMultiDrawElementsIndirectCount, shader-written count 1");
             if (!m_recordArm) {
                 // DirectVulkan.cpp's monolith MultiDrawArraysIndirectCount reads this word from the
                 // frontend shadow without SyncGpuWrites: recorded for dev (ID-P8-3), not this lane's.

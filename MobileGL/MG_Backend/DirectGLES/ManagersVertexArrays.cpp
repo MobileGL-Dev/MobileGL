@@ -19,9 +19,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // resident writes next, then the read, the serial stamp and - last - the epoch bump.
         const Uint8* RefreshAliasedStoreFromGpu(GLESBufferResource& resource, MG_Pipe::MGPipeHandle res,
                                                 const char* site) {
-            if (!CanTouchGLNow() || resource.id == 0 || !resource.storageInitialized ||
-                resource.pendingRespecify || resource.contextGeneration != g_bufferContextGeneration ||
-                !g_GLESFuncs.glMapBufferRange || !g_GLESFuncs.glUnmapBuffer) {
+            if (!CanTouchGLNow() || resource.id == 0 || !resource.storageInitialized || resource.pendingRespecify ||
+                resource.contextGeneration != g_bufferContextGeneration || !g_GLESFuncs.glMapBufferRange ||
+                !g_GLESFuncs.glUnmapBuffer) {
                 MGLOG_E_ONCE("%s: buffer {%u, %u} was written on the GPU but its GL store cannot be read "
                              "back here, so the CPU reads the shadow as it is",
                              site, res.Slot, res.Gen);
@@ -39,18 +39,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
             FlushPendingRangesFrom(resource, resource.hostBytes, width);
             DrainResidentWritesNow(resource);
             BindBufferId(TempBufferTarget, resource.id);
-            void* mapped = g_GLESFuncs.glMapBufferRange(TempBufferTarget, 0, static_cast<GLsizeiptr>(size),
-                                                        GL_MAP_READ_BIT);
+            void* mapped =
+                g_GLESFuncs.glMapBufferRange(TempBufferTarget, 0, static_cast<GLsizeiptr>(size), GL_MAP_READ_BIT);
             if (mapped == nullptr) {
                 MGLOG_E_ONCE("%s: glMapBufferRange(read) failed for GPU-written buffer %u; the CPU reads the "
                              "shadow as it is",
                              site, resource.id);
                 return SplitHostBytes(resource);
             }
-            MG_Pipe::gMGPipeCallbacks.OnBufferWriteback(
-                res, 0,
-                MG_Pipe::MGPBlobRef{reinterpret_cast<Uint64>(mapped), static_cast<Uint64>(size),
-                                    MG_Pipe::kMGHostSpanSegNone, 0});
+            MG_Pipe::gMGPipeCallbacks.OnBufferWriteback(res, 0,
+                                                        MG_Pipe::MGPBlobRef{reinterpret_cast<Uint64>(mapped),
+                                                                            static_cast<Uint64>(size),
+                                                                            MG_Pipe::kMGHostSpanSegNone, 0});
             if (resource.hostBytes == nullptr) {
                 // Every content-carrying record and every respecify of a store with a size hands
                 // its base over on this arm, so no base here means a shape nothing recorded. Keep
@@ -94,9 +94,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 if (MG_Config::RecordArmAliasesFrontend()) return RefreshAliasedStoreFromGpu(resource, res, site);
                 return SplitHostBytes(resource);
             }
-            if (!CanTouchGLNow() || resource.id == 0 || !resource.storageInitialized ||
-                resource.pendingRespecify || resource.contextGeneration != g_bufferContextGeneration ||
-                !g_GLESFuncs.glMapBufferRange || !g_GLESFuncs.glUnmapBuffer) {
+            if (!CanTouchGLNow() || resource.id == 0 || !resource.storageInitialized || resource.pendingRespecify ||
+                resource.contextGeneration != g_bufferContextGeneration || !g_GLESFuncs.glMapBufferRange ||
+                !g_GLESFuncs.glUnmapBuffer) {
                 MGLOG_E_ONCE("%s: buffer {%u, %u} was written on the GPU but its GL store cannot be read "
                              "back here, so the CPU reads the staged copy as it is",
                              site, res.Slot, res.Gen);
@@ -118,8 +118,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             FlushPendingRangesFrom(resource, resource.hostBytes, width);
             DrainResidentWritesNow(resource);
             BindBufferId(TempBufferTarget, resource.id);
-            void* mapped = g_GLESFuncs.glMapBufferRange(TempBufferTarget, 0, static_cast<GLsizeiptr>(size),
-                                                        GL_MAP_READ_BIT);
+            void* mapped =
+                g_GLESFuncs.glMapBufferRange(TempBufferTarget, 0, static_cast<GLsizeiptr>(size), GL_MAP_READ_BIT);
             if (mapped == nullptr) {
                 MGLOG_E_ONCE("%s: glMapBufferRange(read) failed for GPU-written buffer %u; the CPU reads the "
                              "staged copy as it is",
@@ -134,8 +134,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             resource.serverGpuWritten = false;
             resource.syncedChangeSerial = ResourceSerialOf(res);
             BumpBufferMutationEpoch();
-            MGLOG_D("%s: refreshed the staged copy of GPU-written buffer {%u, %u} (%zu bytes)", site, res.Slot,
-                    res.Gen, size);
+            MGLOG_D("%s: refreshed the staged copy of GPU-written buffer {%u, %u} (%zu bytes)", site, res.Slot, res.Gen,
+                    size);
             return resource.hostBytes;
         }
     } // namespace BufferImpl
@@ -223,8 +223,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 Memcpy(element, &word, sizeof(word));
             }
 
-            void SwizzleBgraStreamToRgba(const Uint8* sourceBase, SizeT sourceStride, SizeT elementCount,
-                                         DataType type, Vector<Uint8>& outData) {
+            void SwizzleBgraStreamToRgba(const Uint8* sourceBase, SizeT sourceStride, SizeT elementCount, DataType type,
+                                         Vector<Uint8>& outData) {
                 outData.resize(elementCount * 4);
                 for (SizeT element = 0; element < elementCount; ++element) {
                     Uint8* destination = outData.data() + element * 4;
@@ -316,8 +316,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
         void BackendVertexArrayObject::HostSetEnabled(Uint index, Bool enabled) {
             const Uint32 bit = 1u << index;
             if (VaoShadowOn() && (m_hostEnabledKnownMask & bit) && ((m_hostEnabledMask & bit) != 0) == enabled) return;
-            if (enabled) g_GLESFuncs.glEnableVertexAttribArray(index);
-            else g_GLESFuncs.glDisableVertexAttribArray(index);
+            if (enabled)
+                g_GLESFuncs.glEnableVertexAttribArray(index);
+            else
+                g_GLESFuncs.glDisableVertexAttribArray(index);
             m_hostEnabledKnownMask |= bit;
             m_hostEnabledMask = enabled ? (m_hostEnabledMask | bit) : (m_hostEnabledMask & ~bit);
         }
@@ -333,7 +335,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         void BackendVertexArrayObject::HostForgetAll() {
             m_hostEnabledKnownMask = 0;
             m_hostDivisorKnownMask = 0;
-            for (auto& pointer : m_hostPointer) pointer.valid = false;
+            for (auto& pointer : m_hostPointer)
+                pointer.valid = false;
         }
 
         // ES 3.1 core. Queried through the loader rather than the version, because the whole
@@ -345,7 +348,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                    g_GLESFuncs.glVertexBindingDivisor != nullptr;
         }
 
-        Bool BackendUsesNativeBaseInstance() { return g_GLESCapabilities.SupportsBaseInstance; }
+        Bool BackendUsesNativeBaseInstance() {
+            return g_GLESCapabilities.SupportsBaseInstance;
+        }
 
         // The "+ baseInstance" of GL's instanced-array element index, expressed as a byte shift
         // of the array's own offset. Only divisor'd arrays step per instance, so only they move.
@@ -391,8 +396,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (st.VertexBufferCount == 0) return nullptr;
             const Uint32 begin = st.VertexBufferStart;
             const Uint32 end = begin + st.VertexBufferCount;
-            if (attributeIndex >= begin && attributeIndex < end &&
-                attributeIndex < MG_Pipe::kMGPipeMaxVertexAttribs &&
+            if (attributeIndex >= begin && attributeIndex < end && attributeIndex < MG_Pipe::kMGPipeMaxVertexAttribs &&
                 st.VertexBuffers[attributeIndex].BindingIndex == attributeIndex) {
                 return &st.VertexBuffers[attributeIndex];
             }
@@ -442,14 +446,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // The resolved offset goes on the binding point, not into a relative offset (the
             // relative offset is capped by GL_MAX_VERTEX_ATTRIB_RELATIVE_OFFSET, a buffer
             // offset is not). BindBufferId is bypassed deliberately.
-            g_GLESFuncs.glBindVertexBuffer(attribIndex, backendResource->id,
-                                           static_cast<GLintptr>(attrib.Offset), 0);
+            g_GLESFuncs.glBindVertexBuffer(attribIndex, backendResource->id, static_cast<GLintptr>(attrib.Offset), 0);
             return true;
         }
 
         // The record the applier holds for the bound vertex-elements CSO, or null.
-        const MG_Pipe::MGPipeVertexElementsRecord* BoundVertexElementsRecord(
-            const MG_Pipe::MGPipeApplierState& st) {
+        const MG_Pipe::MGPipeVertexElementsRecord* BoundVertexElementsRecord(const MG_Pipe::MGPipeApplierState& st) {
             const MG_Pipe::MGPipeHandle cso = st.BoundVertexElements;
             if (MG_Pipe::MGPipeHandleIsNull(cso)) return nullptr;
             if (cso.Slot >= st.VertexElementsCsos.size()) return nullptr;
@@ -541,8 +543,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // Emulation is server-owned: the client sends the draw's RAW base instance and never
             // learns the answer. Applied here as well as in the applier so the decision is the
             // same whichever side resolved it first - it is idempotent.
-            const Uint32 fetchBaseInstance =
-                BackendUsesNativeBaseInstance() ? 0u : st.VertexFetchBaseInstance;
+            const Uint32 fetchBaseInstance = BackendUsesNativeBaseInstance() ? 0u : st.VertexFetchBaseInstance;
             const Bool baseInstanceDirty = m_syncedFetchBaseInstance != fetchBaseInstance;
             const Bool emitAttributes = attributesDirty || baseInstanceDirty || m_hasConvertedAttribute;
             if (!emitAttributes && !indexBufferDirty) {
@@ -556,8 +557,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // path: the fp64, zero-stride, BGRA and no-buffer branches toggle enables or bind
             // through other state, and the client-memory upload rewrites the VAO behind this
             // gate, so any of them sends the next sync through the whole walk again.
-            const Bool buffersOnly = emitAttributes && !elementsDirty && m_lastWalkWasPlain &&
-                                     !m_hasConvertedAttribute;
+            const Bool buffersOnly = emitAttributes && !elementsDirty && m_lastWalkWasPlain && !m_hasConvertedAttribute;
             Bool walkWasPlain = true;
             m_hasConvertedAttribute = false;
             // Rebuilt by every walk; a buffers-only one follows a plain walk, which set none.
@@ -565,7 +565,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
             Bind();
             if (m_hostPointerBufferGeneration != currentBufferIdGeneration) {
-                for (auto& pointer : m_hostPointer) pointer.valid = false;
+                for (auto& pointer : m_hostPointer)
+                    pointer.valid = false;
                 m_hostPointerBufferGeneration = currentBufferIdGeneration;
             }
 
@@ -585,8 +586,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                  ++attribIndex) {
                 const MGPVertexAttribWire& attrib = rec->Attributes[attribIndex];
                 if (buffersOnly && !attrib.Enabled) continue;
-                const MG_Pipe::MGPVertexBuffer* binding =
-                    VertexBufferForAttributeIndex(st, attribIndex);
+                const MG_Pipe::MGPVertexBuffer* binding = VertexBufferForAttributeIndex(st, attribIndex);
                 const Uint32 divisor = binding != nullptr ? binding->Divisor : 0u;
 
                 // The enable/disable block. On this arm there is no per-attribute version to
@@ -680,13 +680,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // The pointer the driver VAO already holds for this attribute - the buffer it
                 // captured included - needs no glBindBuffer + pointer call.
                 auto& shadowPointer = m_hostPointer[attribIndex];
-                const Bool pointerHeld = VaoShadowOn() && shadowPointer.valid &&
-                                         shadowPointer.bufferId == attribBuffer->id && shadowPointer.size == glSize &&
-                                         shadowPointer.type == static_cast<Uint32>(glType) &&
-                                         shadowPointer.stride == static_cast<Int32>(attrib.Stride) &&
-                                         shadowPointer.offset == fetchOffset &&
-                                         shadowPointer.normalized == (attrib.Normalized != 0) &&
-                                         shadowPointer.integer == (attrib.IsInteger != 0);
+                const Bool pointerHeld =
+                    VaoShadowOn() && shadowPointer.valid && shadowPointer.bufferId == attribBuffer->id &&
+                    shadowPointer.size == glSize && shadowPointer.type == static_cast<Uint32>(glType) &&
+                    shadowPointer.stride == static_cast<Int32>(attrib.Stride) && shadowPointer.offset == fetchOffset &&
+                    shadowPointer.normalized == (attrib.Normalized != 0) &&
+                    shadowPointer.integer == (attrib.IsInteger != 0);
                 if (!pointerHeld) {
                     BufferImpl::BindBufferId(GL_ARRAY_BUFFER, attribBuffer->id);
                     if (!attrib.IsInteger) {
@@ -697,9 +696,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         g_GLESFuncs.glVertexAttribIPointer(attribIndex, glSize, glType, attrib.Stride,
                                                            (const void*)fetchOffset);
                     }
-                    shadowPointer = {attribBuffer->id, glSize, static_cast<Uint32>(glType),
-                                     static_cast<Int32>(attrib.Stride), fetchOffset, attrib.Normalized != 0,
-                                     attrib.IsInteger != 0, true};
+                    shadowPointer = {attribBuffer->id,
+                                     glSize,
+                                     static_cast<Uint32>(glType),
+                                     static_cast<Int32>(attrib.Stride),
+                                     fetchOffset,
+                                     attrib.Normalized != 0,
+                                     attrib.IsInteger != 0,
+                                     true};
                 }
 
                 HostSetDivisor(attribIndex, divisor);
@@ -745,8 +749,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 m_hasSyncedElements = true;
                 // The window this walk emitted, for AdoptUnchangedBufferSets.
                 m_syncedBufferStart = st.VertexBufferStart;
-                m_syncedBufferCount = std::min<Uint32>(st.VertexBufferCount,
-                                                       MG_Pipe::kMGPipeMaxVertexAttribs - st.VertexBufferStart);
+                m_syncedBufferCount =
+                    std::min<Uint32>(st.VertexBufferCount, MG_Pipe::kMGPipeMaxVertexAttribs - st.VertexBufferStart);
                 m_syncedBufferBaseInstance = st.VertexFetchBaseInstance;
                 for (Uint32 i = 0; i < m_syncedBufferCount; ++i)
                     m_syncedBuffers[i] = st.VertexBuffers[m_syncedBufferStart + i];
@@ -763,24 +767,28 @@ namespace MobileGL::MG_Backend::DirectGLES {
         void BackendVertexArrayObject::AdoptUnchangedBufferSets(const MG_Pipe::MGPipeApplierState& st) {
             if (!m_hasSyncedElements || m_syncedContextSerial != st.ContextSerial) return;
             if (m_syncedBuffersValid && m_syncedVertexBuffersSerial != st.VertexBuffersSerial &&
-                st.VertexBufferStart == m_syncedBufferStart && st.VertexFetchBaseInstance == m_syncedBufferBaseInstance &&
+                st.VertexBufferStart == m_syncedBufferStart &&
+                st.VertexFetchBaseInstance == m_syncedBufferBaseInstance &&
                 std::min<Uint32>(st.VertexBufferCount, MG_Pipe::kMGPipeMaxVertexAttribs - st.VertexBufferStart) ==
                     m_syncedBufferCount) {
                 Bool same = true;
                 for (Uint32 i = 0; same && i < m_syncedBufferCount; ++i) {
                     const auto& a = m_syncedBuffers[i];
                     const auto& b = st.VertexBuffers[m_syncedBufferStart + i];
-                    same = a.Res == b.Res && a.Offset == b.Offset && a.Stride == b.Stride &&
-                           a.Divisor == b.Divisor && a.BindingIndex == b.BindingIndex;
+                    same = a.Res == b.Res && a.Offset == b.Offset && a.Stride == b.Stride && a.Divisor == b.Divisor &&
+                           a.BindingIndex == b.BindingIndex;
                 }
                 if (same) {
-                    if (m_resolvedDrawBuffers.valid && m_resolvedDrawBuffers.buffersSerial == m_syncedVertexBuffersSerial)
+                    if (m_resolvedDrawBuffers.valid &&
+                        m_resolvedDrawBuffers.buffersSerial == m_syncedVertexBuffersSerial)
                         m_resolvedDrawBuffers.buffersSerial = st.VertexBuffersSerial;
                     m_syncedVertexBuffersSerial = st.VertexBuffersSerial;
                 }
             }
-            if (m_syncedIndexValid && m_syncedIndexSerial != st.IndexBufferSerial && m_syncedIndexRes == st.IndexBuffer.Res) {
-                if (m_resolvedDrawBuffers.iboSerial == m_syncedIndexSerial) m_resolvedDrawBuffers.iboSerial = st.IndexBufferSerial;
+            if (m_syncedIndexValid && m_syncedIndexSerial != st.IndexBufferSerial &&
+                m_syncedIndexRes == st.IndexBuffer.Res) {
+                if (m_resolvedDrawBuffers.iboSerial == m_syncedIndexSerial)
+                    m_resolvedDrawBuffers.iboSerial = st.IndexBufferSerial;
                 m_syncedIndexSerial = st.IndexBufferSerial;
             }
         }
@@ -841,8 +849,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     NarrowDoubleStreamToFloat32(sourceBase, sourceStride, componentCount, elementCount, converted);
 
                     BufferImpl::BindBufferId(GL_ARRAY_BUFFER, bufferId);
-                    g_GLESFuncs.glBufferData(GL_ARRAY_BUFFER,
-                                             static_cast<GLsizeiptr>(converted.size() * sizeof(Float)),
+                    g_GLESFuncs.glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(converted.size() * sizeof(Float)),
                                              converted.data(), GL_STREAM_DRAW);
                     if (MG_Util::PipeStats::Enabled()) {
                         MG_Util::PipeStats::AddBytes(MG_Util::PipeStats::ByteClass::StageVertexClient,
@@ -850,15 +857,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     }
                     // GL ignores `normalized` for floating-point array types, so it is not
                     // forwarded here either.
-                    g_GLESFuncs.glVertexAttribPointer(attribIndex, attrib.Size, GL_FLOAT, GL_FALSE,
-                                                      static_cast<GLsizei>(componentCount * sizeof(Float)),
-                                                      // The converted stream is tightly packed, so a divisor'd array's
-                                                      // baseInstance shift is a whole number of CONVERTED elements -
-                                                      // not BaseInstanceByteShift's source-stride arithmetic.
-                                                      reinterpret_cast<const void*>(
-                                                          attrib.Divisor == 0 ? 0u : static_cast<SizeT>(fetchBaseInstance) *
-                                                                                         componentCount *
-                                                                                         sizeof(Float)));
+                    g_GLESFuncs.glVertexAttribPointer(
+                        attribIndex, attrib.Size, GL_FLOAT, GL_FALSE,
+                        static_cast<GLsizei>(componentCount * sizeof(Float)),
+                        // The converted stream is tightly packed, so a divisor'd array's
+                        // baseInstance shift is a whole number of CONVERTED elements -
+                        // not BaseInstanceByteShift's source-stride arithmetic.
+                        reinterpret_cast<const void*>(attrib.Divisor == 0 ? 0u
+                                                                          : static_cast<SizeT>(fetchBaseInstance) *
+                                                                                componentCount * sizeof(Float)));
                     // glVertexAttribPointer's final argument IS that shift. A client array
                     // declared through the pointer API keeps element 0 at the buffer's byte 0, so
                     // the shift rides in the pointer argument the call above passes.
@@ -899,8 +906,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
                 BufferImpl::BindBufferId(GL_ARRAY_BUFFER, bufferId);
                 g_GLESFuncs.glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(uploadSize),
-                                         bgra ? static_cast<const void*>(swizzled.data()) : clientData,
-                                         GL_STREAM_DRAW);
+                                         bgra ? static_cast<const void*>(swizzled.data()) : clientData, GL_STREAM_DRAW);
                 if (MG_Util::PipeStats::Enabled()) {
                     MG_Util::PipeStats::AddBytes(MG_Util::PipeStats::ByteClass::StageVertexClient,
                                                  static_cast<Uint64>(uploadSize));
@@ -916,20 +922,20 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         // the same arithmetic SyncToBackend applies to a VBO-backed array.
                         reinterpret_cast<const void*>(BaseInstanceByteShift(attrib, fetchBaseInstance)));
                 } else {
-                    g_GLESFuncs.glVertexAttribIPointer(attribIndex, attrib.Size,
-                                                       MG_Util::ConvertDataTypeToGLEnum(attrib.Type),
-                                                       static_cast<GLsizei>(stride),
-                                                       // See the pointer call above: the divisor'd
-                                                       // arrays' baseInstance shift is the pointer.
-                                                       reinterpret_cast<const void*>(
-                                                           BaseInstanceByteShift(attrib, fetchBaseInstance)));
+                    g_GLESFuncs.glVertexAttribIPointer(
+                        attribIndex, attrib.Size, MG_Util::ConvertDataTypeToGLEnum(attrib.Type),
+                        static_cast<GLsizei>(stride),
+                        // See the pointer call above: the divisor'd
+                        // arrays' baseInstance shift is the pointer.
+                        reinterpret_cast<const void*>(BaseInstanceByteShift(attrib, fetchBaseInstance)));
                 }
             }
         }
 
-        Bool BackendVertexArrayObject::SyncConvertedAttributeByHandle(
-            Uint attribIndex, const MGPVertexAttribWire& attrib, const MG_Pipe::MGPVertexBuffer& binding,
-            Uint32 fetchBaseInstance) {
+        Bool BackendVertexArrayObject::SyncConvertedAttributeByHandle(Uint attribIndex,
+                                                                      const MGPVertexAttribWire& attrib,
+                                                                      const MG_Pipe::MGPVertexBuffer& binding,
+                                                                      Uint32 fetchBaseInstance) {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
@@ -989,16 +995,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // recorded shadow base for such a resource read freed memory; hostBytes is nulled
             // at adoption for the same reason, so the fallback below is a null and a refusal
             // rather than a stale read.
-            const Bool sourceGpuWritten =
-                resource->serverGpuWritten;
+            const Bool sourceGpuWritten = resource->serverGpuWritten;
             if (sourceGpuWritten) {
                 BufferImpl::SplitHostBytesForCpuRead(*resource, binding.Res,
                                                      bgra ? "bgra_vertex_swizzle" : "fp64_vertex_narrowing");
             }
-            const Uint8* const sourceBase =
-                (resource->persistentMapped && resource->persistentPtr != nullptr)
-                    ? static_cast<const Uint8*>(resource->persistentPtr)
-                    : resource->hostBytes;
+            const Uint8* const sourceBase = (resource->persistentMapped && resource->persistentPtr != nullptr)
+                                                ? static_cast<const Uint8*>(resource->persistentPtr)
+                                                : resource->hostBytes;
             const SizeT sourceSize = BufferImpl::ResourceWidthForHandle(binding.Res);
             if (sourceBase == nullptr || attrib.Offset >= sourceSize) {
                 return false;
@@ -1035,13 +1039,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // no serial on either side can prove the converted copy is current. The conversion
             // itself is part of the key: one attribute index can carry both shapes over its life,
             // over the same bytes.
-            const Bool memoHit = stream.valid && convertedBufferId != 0 && !resource->persistentMapped &&
-                                 !sourceGpuWritten && stream.sourceHandle == binding.Res &&
-                                 stream.sourceChangeSerial == sourceSerial &&
-                                 stream.sourceOffset == static_cast<SizeT>(attrib.Offset) &&
-                                 stream.sourceStride == sourceStride && stream.bgra == bgra &&
-                                 stream.sourceType == attrib.Type && stream.componentCount == componentCount &&
-                                 stream.elementCount == elementCount;
+            const Bool memoHit =
+                stream.valid && convertedBufferId != 0 && !resource->persistentMapped && !sourceGpuWritten &&
+                stream.sourceHandle == binding.Res && stream.sourceChangeSerial == sourceSerial &&
+                stream.sourceOffset == static_cast<SizeT>(attrib.Offset) && stream.sourceStride == sourceStride &&
+                stream.bgra == bgra && stream.sourceType == attrib.Type && stream.componentCount == componentCount &&
+                stream.elementCount == elementCount;
             if (!memoHit) {
                 if (convertedBufferId == 0) {
                     g_GLESFuncs.glGenBuffers(1, &convertedBufferId);
@@ -1062,8 +1065,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     convertedData = swizzled.data();
                     convertedBytes = swizzled.size();
                 } else {
-                    NarrowDoubleStreamToFloat32(sourceBase + attrib.Offset, sourceStride, componentCount,
-                                                elementCount, narrowed);
+                    NarrowDoubleStreamToFloat32(sourceBase + attrib.Offset, sourceStride, componentCount, elementCount,
+                                                narrowed);
                     convertedData = narrowed.data();
                     convertedBytes = narrowed.size() * sizeof(Float);
                 }
@@ -1113,7 +1116,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return true;
         }
 
-        TwinRegistry<MG_State::GLState::VertexArrayObject, BackendVertexArrayObject, MG_Pipe::MGPipeKind::VertexElementsCso>
+        TwinRegistry<MG_State::GLState::VertexArrayObject, BackendVertexArrayObject,
+                     MG_Pipe::MGPipeKind::VertexElementsCso>
             g_backendVertexArrayObjects;
     } // namespace VertexArrayImpl
 } // namespace MobileGL::MG_Backend::DirectGLES

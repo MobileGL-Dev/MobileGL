@@ -42,7 +42,9 @@ namespace MobileGL {
                 // only guards against a pathological one turning into a huge private array.
                 constexpr uint32_t kMaxSnapshotScalars = 8192;
 
-                Operand Id(uint32_t id) { return {SPV_OPERAND_TYPE_ID, {id}}; }
+                Operand Id(uint32_t id) {
+                    return {SPV_OPERAND_TYPE_ID, {id}};
+                }
 
                 std::unique_ptr<Instruction> Make(IRContext* context, spv::Op op, uint32_t typeId, uint32_t resultId,
                                                   OperandList operands) {
@@ -190,9 +192,9 @@ namespace MobileGL {
                             return;
                         }
                     }
-                    context->AddDebug2Inst(Make(context, spv::Op::OpName, 0, 0,
-                                                {Id(id), {SPV_OPERAND_TYPE_LITERAL_STRING,
-                                                          spvtools::utils::MakeVector(name)}}));
+                    context->AddDebug2Inst(
+                        Make(context, spv::Op::OpName, 0, 0,
+                             {Id(id), {SPV_OPERAND_TYPE_LITERAL_STRING, spvtools::utils::MakeVector(name)}}));
                 }
             } // namespace
 
@@ -206,16 +208,14 @@ namespace MobileGL {
                     if (entryPoint != nullptr) return Status::SuccessWithoutChange;
                     entryPoint = &candidate;
                 }
-                if (entryPoint == nullptr ||
-                    static_cast<spv::ExecutionModel>(entryPoint->GetSingleWordInOperand(0)) !=
-                        spv::ExecutionModel::Geometry) {
+                if (entryPoint == nullptr || static_cast<spv::ExecutionModel>(entryPoint->GetSingleWordInOperand(0)) !=
+                                                 spv::ExecutionModel::Geometry) {
                     return Status::SuccessWithoutChange;
                 }
                 const uint32_t bodyFunctionId = entryPoint->GetSingleWordInOperand(1);
                 uint32_t maxVertices = 0;
                 for (const Instruction& mode : irContext->module()->execution_modes()) {
-                    if (mode.opcode() == spv::Op::OpExecutionMode &&
-                        mode.GetSingleWordInOperand(0) == bodyFunctionId &&
+                    if (mode.opcode() == spv::Op::OpExecutionMode && mode.GetSingleWordInOperand(0) == bodyFunctionId &&
                         static_cast<spv::ExecutionMode>(mode.GetSingleWordInOperand(1)) ==
                             spv::ExecutionMode::OutputVertices) {
                         maxVertices = mode.GetSingleWordInOperand(2);
@@ -230,10 +230,16 @@ namespace MobileGL {
                     Bool streams = false;
                     function.ForEachInst([&](Instruction* inst) {
                         switch (inst->opcode()) {
-                        case spv::Op::OpEmitVertex: emits.push_back(inst); break;
-                        case spv::Op::OpEndPrimitive: cuts.push_back(inst); break;
+                        case spv::Op::OpEmitVertex:
+                            emits.push_back(inst);
+                            break;
+                        case spv::Op::OpEndPrimitive:
+                            cuts.push_back(inst);
+                            break;
                         case spv::Op::OpEmitStreamVertex:
-                        case spv::Op::OpEndStreamPrimitive: streams = true; break;
+                        case spv::Op::OpEndStreamPrimitive:
+                            streams = true;
+                            break;
                         default:
                             if (!writesMemory && IsMemoryWrite(irContext, *inst)) writesMemory = true;
                             break;
@@ -270,7 +276,8 @@ namespace MobileGL {
                     std::vector<Bool> written(valueType->NumInOperands(), false);
                     Bool dynamicMember = false;
                     defUse->ForEachUser(&global, [&](Instruction* user) {
-                        if (user->opcode() == spv::Op::OpStore && user->GetSingleWordInOperand(0) == global.result_id()) {
+                        if (user->opcode() == spv::Op::OpStore &&
+                            user->GetSingleWordInOperand(0) == global.result_id()) {
                             std::fill(written.begin(), written.end(), true);
                             return;
                         }
@@ -278,7 +285,8 @@ namespace MobileGL {
                             std::fill(written.begin(), written.end(), true);
                             return;
                         }
-                        if (user->opcode() != spv::Op::OpAccessChain && user->opcode() != spv::Op::OpInBoundsAccessChain)
+                        if (user->opcode() != spv::Op::OpAccessChain &&
+                            user->opcode() != spv::Op::OpInBoundsAccessChain)
                             return;
                         if (user->NumInOperands() < 2) return;
                         const auto member = ConstantValue(irContext, user->GetSingleWordInOperand(1));
@@ -311,17 +319,21 @@ namespace MobileGL {
                 const uint32_t lengthId = constMgr->GetUIntConstId(maxVertices);
                 const uint32_t lastId = constMgr->GetUIntConstId(maxVertices - 1);
                 const uint32_t cutLengthId = constMgr->GetUIntConstId(maxVertices + 1);
-                const uint32_t privateUintPointerId = typeMgr->FindPointerToType(uintTypeId, spv::StorageClass::Private);
-                const uint32_t functionUintPointerId = typeMgr->FindPointerToType(uintTypeId, spv::StorageClass::Function);
+                const uint32_t privateUintPointerId =
+                    typeMgr->FindPointerToType(uintTypeId, spv::StorageClass::Private);
+                const uint32_t functionUintPointerId =
+                    typeMgr->FindPointerToType(uintTypeId, spv::StorageClass::Function);
                 for (Slot& slot : slots) {
                     slot.snapshotElementPointerTypeId =
                         typeMgr->FindPointerToType(slot.valueTypeId, spv::StorageClass::Private);
                     if (slot.member >= 0) {
                         slot.memberIndexId = constMgr->GetUIntConstId(uint32_t(slot.member));
-                        slot.outputPointerTypeId = typeMgr->FindPointerToType(slot.valueTypeId, spv::StorageClass::Output);
+                        slot.outputPointerTypeId =
+                            typeMgr->FindPointerToType(slot.valueTypeId, spv::StorageClass::Output);
                     }
                 }
-                const uint32_t bodyFunctionTypeId = irContext->GetFunction(bodyFunctionId)->DefInst().GetSingleWordInOperand(1);
+                const uint32_t bodyFunctionTypeId =
+                    irContext->GetFunction(bodyFunctionId)->DefInst().GetSingleWordInOperand(1);
 
                 // Hand-built from here on; analyses are rebuilt once at the end.
                 auto newPrivateArray = [&](uint32_t elementTypeId, uint32_t lengthConstantId) {
@@ -329,22 +341,23 @@ namespace MobileGL {
                     irContext->AddType(Make(irContext, spv::Op::OpTypeArray, 0, arrayTypeId,
                                             {Id(elementTypeId), Id(lengthConstantId)}));
                     const uint32_t pointerTypeId = irContext->TakeNextId();
-                    irContext->AddType(Make(irContext, spv::Op::OpTypePointer, 0, pointerTypeId,
-                                            {{SPV_OPERAND_TYPE_STORAGE_CLASS, {uint32_t(spv::StorageClass::Private)}},
-                                             Id(arrayTypeId)}));
+                    irContext->AddType(Make(
+                        irContext, spv::Op::OpTypePointer, 0, pointerTypeId,
+                        {{SPV_OPERAND_TYPE_STORAGE_CLASS, {uint32_t(spv::StorageClass::Private)}}, Id(arrayTypeId)}));
                     const uint32_t variableId = irContext->TakeNextId();
-                    irContext->AddGlobalValue(Make(irContext, spv::Op::OpVariable, pointerTypeId, variableId,
-                                                   {{SPV_OPERAND_TYPE_STORAGE_CLASS,
-                                                     {uint32_t(spv::StorageClass::Private)}}}));
+                    irContext->AddGlobalValue(
+                        Make(irContext, spv::Op::OpVariable, pointerTypeId, variableId,
+                             {{SPV_OPERAND_TYPE_STORAGE_CLASS, {uint32_t(spv::StorageClass::Private)}}}));
                     return variableId;
                 };
-                for (Slot& slot : slots) slot.snapshotVariableId = newPrivateArray(slot.valueTypeId, lengthId);
+                for (Slot& slot : slots)
+                    slot.snapshotVariableId = newPrivateArray(slot.valueTypeId, lengthId);
                 // One slot past max_vertices: where an EndPrimitive with no vertex before it lands.
                 const uint32_t cutVariableId = newPrivateArray(uintTypeId, cutLengthId);
                 const uint32_t countVariableId = irContext->TakeNextId();
-                irContext->AddGlobalValue(Make(irContext, spv::Op::OpVariable, privateUintPointerId, countVariableId,
-                                               {{SPV_OPERAND_TYPE_STORAGE_CLASS,
-                                                 {uint32_t(spv::StorageClass::Private)}}}));
+                irContext->AddGlobalValue(
+                    Make(irContext, spv::Op::OpVariable, privateUintPointerId, countVariableId,
+                         {{SPV_OPERAND_TYPE_STORAGE_CLASS, {uint32_t(spv::StorageClass::Private)}}}));
                 ReplaceName(irContext, countVariableId, "mg_deferredVertexCount");
                 ReplaceName(irContext, cutVariableId, "mg_deferredStripEnd");
 
@@ -366,7 +379,8 @@ namespace MobileGL {
                 for (Instruction* emit : emits) {
                     const uint32_t count = before(emit, spv::Op::OpLoad, uintTypeId, {Id(countVariableId)});
                     const uint32_t inRange = before(emit, spv::Op::OpULessThan, boolTypeId, {Id(count), Id(lengthId)});
-                    const uint32_t index = before(emit, spv::Op::OpSelect, uintTypeId, {Id(inRange), Id(count), Id(lastId)});
+                    const uint32_t index =
+                        before(emit, spv::Op::OpSelect, uintTypeId, {Id(inRange), Id(count), Id(lastId)});
                     for (const Slot& slot : slots) {
                         const uint32_t source = outputPointer(emit, slot);
                         const uint32_t value = before(emit, spv::Op::OpLoad, slot.valueTypeId, {Id(source)});
@@ -374,8 +388,8 @@ namespace MobileGL {
                                                        {Id(slot.snapshotVariableId), Id(index)});
                         before(emit, spv::Op::OpStore, 0, {Id(target), Id(value)});
                     }
-                    const uint32_t cut = before(emit, spv::Op::OpAccessChain, privateUintPointerId,
-                                                {Id(cutVariableId), Id(index)});
+                    const uint32_t cut =
+                        before(emit, spv::Op::OpAccessChain, privateUintPointerId, {Id(cutVariableId), Id(index)});
                     before(emit, spv::Op::OpStore, 0, {Id(cut), Id(zeroId)});
                     const uint32_t next = before(emit, spv::Op::OpIAdd, uintTypeId, {Id(count), Id(oneId)});
                     before(emit, spv::Op::OpStore, 0, {Id(countVariableId), Id(next)});
@@ -384,16 +398,20 @@ namespace MobileGL {
                     const uint32_t count = before(end, spv::Op::OpLoad, uintTypeId, {Id(countVariableId)});
                     const uint32_t any = before(end, spv::Op::OpINotEqual, boolTypeId, {Id(count), Id(zeroId)});
                     const uint32_t previous = before(end, spv::Op::OpISub, uintTypeId, {Id(count), Id(oneId)});
-                    const uint32_t inRange = before(end, spv::Op::OpULessThan, boolTypeId, {Id(previous), Id(lengthId)});
+                    const uint32_t inRange =
+                        before(end, spv::Op::OpULessThan, boolTypeId, {Id(previous), Id(lengthId)});
                     const uint32_t clamped =
                         before(end, spv::Op::OpSelect, uintTypeId, {Id(inRange), Id(previous), Id(lastId)});
-                    const uint32_t index = before(end, spv::Op::OpSelect, uintTypeId, {Id(any), Id(clamped), Id(lengthId)});
-                    const uint32_t cut = before(end, spv::Op::OpAccessChain, privateUintPointerId,
-                                                {Id(cutVariableId), Id(index)});
+                    const uint32_t index =
+                        before(end, spv::Op::OpSelect, uintTypeId, {Id(any), Id(clamped), Id(lengthId)});
+                    const uint32_t cut =
+                        before(end, spv::Op::OpAccessChain, privateUintPointerId, {Id(cutVariableId), Id(index)});
                     before(end, spv::Op::OpStore, 0, {Id(cut), Id(oneId)});
                 }
-                for (Instruction* inst : emits) irContext->KillInst(inst);
-                for (Instruction* inst : cuts) irContext->KillInst(inst);
+                for (Instruction* inst : emits)
+                    irContext->KillInst(inst);
+                for (Instruction* inst : cuts)
+                    irContext->KillInst(inst);
 
                 // ---- The new entry point: run the body, then replay -----------------------------
                 const uint32_t entryId = irContext->TakeNextId();
@@ -421,13 +439,15 @@ namespace MobileGL {
                 };
 
                 auto start = newBlock(startLabel);
-                const uint32_t iterator = add(*start, spv::Op::OpVariable, functionUintPointerId,
-                                              {{SPV_OPERAND_TYPE_STORAGE_CLASS, {uint32_t(spv::StorageClass::Function)}}});
+                const uint32_t iterator =
+                    add(*start, spv::Op::OpVariable, functionUintPointerId,
+                        {{SPV_OPERAND_TYPE_STORAGE_CLASS, {uint32_t(spv::StorageClass::Function)}}});
                 add(*start, spv::Op::OpStore, 0, {Id(countVariableId), Id(zeroId)});
                 add(*start, spv::Op::OpFunctionCall, voidTypeId, {Id(bodyFunctionId)});
                 const uint32_t recorded = add(*start, spv::Op::OpLoad, uintTypeId, {Id(countVariableId)});
                 const uint32_t fits = add(*start, spv::Op::OpULessThan, boolTypeId, {Id(recorded), Id(lengthId)});
-                const uint32_t limit = add(*start, spv::Op::OpSelect, uintTypeId, {Id(fits), Id(recorded), Id(lengthId)});
+                const uint32_t limit =
+                    add(*start, spv::Op::OpSelect, uintTypeId, {Id(fits), Id(recorded), Id(lengthId)});
                 add(*start, spv::Op::OpStore, 0, {Id(iterator), Id(zeroId)});
                 add(*start, spv::Op::OpBranch, 0, {Id(headerLabel)});
 

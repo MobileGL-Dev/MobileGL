@@ -12,7 +12,11 @@
 #include <array>
 
 namespace MobileGL::MG_Util::SelfTest {
-    enum class BufferOrderingProbeStatus : Uint8 { NotRun, Complete, Failed };
+    enum class BufferOrderingProbeStatus : Uint8 {
+        NotRun,
+        Complete,
+        Failed
+    };
 
     struct BufferOrderingSample {
         BufferOrderingProbeStatus status = BufferOrderingProbeStatus::NotRun;
@@ -33,8 +37,8 @@ namespace MobileGL::MG_Util::SelfTest {
         BufferOrderingSample barrierBefore;
 
         Bool Detected() const {
-            return unmapped.Passed() && finishBoth.Passed() &&
-                   mapped.status == BufferOrderingProbeStatus::Complete && mapped.badFrames != 0;
+            return unmapped.Passed() && finishBoth.Passed() && mapped.status == BufferOrderingProbeStatus::Complete &&
+                   mapped.badFrames != 0;
         }
     };
 
@@ -57,8 +61,7 @@ namespace MobileGL::MG_Util::SelfTest {
     // Finish-before-and-after control permits a finding. Setup/GL failures are inconclusive.
     // Explicit allocations are one 128 MiB arena, its initializer, and small staging/FBOs;
     // allocations, batches and draws are bounded. Every touched GL state is restored.
-    PersistentBufferOrderingMeasurement ProbePersistentBufferUpdateOrdering(
-        const MG_External::GLESFunctionsTable& gl);
+    PersistentBufferOrderingMeasurement ProbePersistentBufferUpdateOrdering(const MG_External::GLESFunctionsTable& gl);
 
     // Used by the POST collector. A report never labels an inconclusive sample as a bug.
     Optional<DriverBugFinding> DescribePersistentBufferOrderingBug(

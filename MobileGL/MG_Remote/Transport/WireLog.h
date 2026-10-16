@@ -21,8 +21,7 @@ namespace MobileGL::MG_Remote::Transport {
 #if defined(__GNUC__) || defined(__clang__)
     __attribute__((format(printf, 1, 2)))
 #endif
-    void
-    WireLogError(const char* format, ...);
+    void WireLogError(const char* format, ...);
 
     // Formats one line, emits it at FATAL level (MGLOG_F), ECHOES IT TO STDERR,
     // and aborts. Every `Fatal{...}` this layer raises goes through here.
@@ -42,7 +41,6 @@ namespace MobileGL::MG_Remote::Transport {
 #if defined(__GNUC__) || defined(__clang__)
     __attribute__((format(printf, 1, 2)))
 #endif
-    void
-    WireLogFatal(const char* format, ...);
+    void WireLogFatal(const char* format, ...);
 
 } // namespace MobileGL::MG_Remote::Transport

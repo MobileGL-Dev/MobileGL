@@ -190,8 +190,7 @@ namespace MobileGL {
                 const MG_Backend::DynamicBackendParameters fallbackParameters{};
                 const auto& activeBackend = MG_Backend::pActiveBackendObject;
                 const auto& dynamicParameters =
-                    env ? env->params
-                        : (activeBackend ? activeBackend->GetDynamicParameters() : fallbackParameters);
+                    env ? env->params : (activeBackend ? activeBackend->GetDynamicParameters() : fallbackParameters);
                 Resources.maxImageUnits = dynamicParameters.MaxImageUnits;
                 Resources.maxCombinedImageUnitsAndFragmentOutputs =
                     dynamicParameters.MaxImageUnits + dynamicParameters.MaxDrawBuffers;
@@ -200,8 +199,7 @@ namespace MobileGL {
                 // the two glslang fields have to carry the same value: glGetIntegerv answers this
                 // expression while gl_MaxCombinedShaderOutputResources expanded from a stale
                 // literal 8, and the CTS compares the two directly.
-                Resources.maxCombinedShaderOutputResources =
-                    Resources.maxCombinedImageUnitsAndFragmentOutputs;
+                Resources.maxCombinedShaderOutputResources = Resources.maxCombinedImageUnitsAndFragmentOutputs;
                 Resources.maxVertexImageUniforms = dynamicParameters.MaxVertexImageUniforms;
                 Resources.maxTessControlImageUniforms = dynamicParameters.MaxTessControlImageUniforms;
                 Resources.maxTessEvaluationImageUniforms = dynamicParameters.MaxTessEvaluationImageUniforms;
@@ -413,8 +411,8 @@ namespace MobileGL {
                     if (String violation = FindEsBlockArrayIndexViolation(*result.value(), source);
                         !violation.empty()) {
                         ResultInfo r;
-                        r.log = "Error: [glslang] Cannot compile " + ConvertGLEnumToString(shaderType) + ":\n" +
-                                violation;
+                        r.log =
+                            "Error: [glslang] Cannot compile " + ConvertGLEnumToString(shaderType) + ":\n" + violation;
                         r.errc = -2;
                         return std::unexpected(r);
                     }
@@ -454,7 +452,9 @@ namespace MobileGL {
                 Bool g_builtinsPrewarmed = false;
             } // namespace
 
-            void ShaderCompiler::ResetPrewarmLatch() { g_builtinsPrewarmed = false; }
+            void ShaderCompiler::ResetPrewarmLatch() {
+                g_builtinsPrewarmed = false;
+            }
 
             void ShaderCompiler::PrewarmBuiltins() {
                 if (g_builtinsPrewarmed) return;
@@ -474,14 +474,11 @@ namespace MobileGL {
                     "#version 330 core\nvoid main() { gl_Position = vec4(0.0); }\n";
 
                 const CompileEnv& env = *GetDefaultCompileEnv();
-                for (const auto& [type, source] :
-                     {std::pair{GL_VERTEX_SHADER, kPrewarmVertexSource},
-                      std::pair{GL_FRAGMENT_SHADER, kPrewarmFragmentSource},
-                      std::pair{GL_VERTEX_SHADER, kPrewarmLegacyVertexSource}}) {
-                    ShaderAttrib attrib{.shaderType = static_cast<GLenum>(type),
-                                        .sourceStr = source,
-                                        .flags = 0,
-                                        .env = &env};
+                for (const auto& [type, source] : {std::pair{GL_VERTEX_SHADER, kPrewarmVertexSource},
+                                                   std::pair{GL_FRAGMENT_SHADER, kPrewarmFragmentSource},
+                                                   std::pair{GL_VERTEX_SHADER, kPrewarmLegacyVertexSource}}) {
+                    ShaderAttrib attrib{
+                        .shaderType = static_cast<GLenum>(type), .sourceStr = source, .flags = 0, .env = &env};
                     // The result is deliberately discarded: the value is the symbol table
                     // glslang cached as a side effect. A failure here is not fatal - it just
                     // means the first real compile pays for the table, exactly as before.
@@ -524,7 +521,8 @@ namespace MobileGL {
                         long long remainder = element;
                         for (SizeT d = 0; d < outerDimensions; ++d) {
                             long long stride = 1;
-                            for (SizeT inner = d + 1; inner < outerDimensions; ++inner) stride *= dimensions[inner];
+                            for (SizeT inner = d + 1; inner < outerDimensions; ++inner)
+                                stride *= dimensions[inner];
                             key += "[" + std::to_string(remainder / stride) + "]";
                             remainder %= stride;
                         }
@@ -565,14 +563,12 @@ namespace MobileGL {
 
                 // Half one: the uniforms the relaxed remap swallowed, out of the snapshot it
                 // takes on the way past.
-                for (const glslang::TIntermediate::TUniformLocation& record :
-                     intermediate->getUniformLocations()) {
+                for (const glslang::TIntermediate::TUniformLocation& record : intermediate->getUniformLocations()) {
                     if (record.location < 0) continue;
                     // Keep the first sighting. Two records for one name mean the parser saw the
                     // declaration twice, and the first is the one the symbol table kept.
                     locations.emplace(record.name, record.location);
-                    RecordArrayOfArraysElementLocations(record.name, record.arraySizes, record.location,
-                                                        locations);
+                    RecordArrayOfArraysElementLocations(record.name, record.arraySizes, record.location, locations);
                 }
 
                 // Half two: the OPAQUE uniforms, which the remap never touches (the guard in
@@ -638,15 +634,12 @@ namespace MobileGL {
                 UniquePtr<TMglGlslIoResolver> resolver;
                 for (unsigned stage = 0; stage < EShLangCount; stage++) {
                     if (program->getIntermediate((EShLanguage)stage) == nullptr) continue;
-                    resolver =
-                        MakeUnique<TMglGlslIoResolver>(*program, (EShLanguage)stage, attrib.explicitVertexInLocations,
-                                                       attrib.explicitFragmentOutLocations,
-                                                       attrib.explicitFragmentOutIndices,
-                                                       attrib.explicitOpaqueUniformBindings,
-                                                       attrib.storageBlocksWithoutBinding,
-                                                       attrib.uniformBlocksWithoutBinding,
-                                                       &attrib.resourceBindingLimits,
-                                                       attrib.resourceBindingViolation);
+                    resolver = MakeUnique<TMglGlslIoResolver>(
+                        *program, (EShLanguage)stage, attrib.explicitVertexInLocations,
+                        attrib.explicitFragmentOutLocations, attrib.explicitFragmentOutIndices,
+                        attrib.explicitOpaqueUniformBindings, attrib.storageBlocksWithoutBinding,
+                        attrib.uniformBlocksWithoutBinding, &attrib.resourceBindingLimits,
+                        attrib.resourceBindingViolation);
                     break;
                 }
                 auto ioMapper = UniquePtr<glslang::TIoMapper>(glslang::GetGlslIoMapper());
@@ -737,28 +730,26 @@ namespace MobileGL {
                                            &warmup)) {
                             tools.Validate(warmup);
                         }
-                        std::atexit(+[] {
-                            Async::ShaderCompilePool::StopAndDrainProcessPoolAtExit();
-                        });
+                        std::atexit(+[] { Async::ShaderCompilePool::StopAndDrainProcessPoolAtExit(); });
                     });
                 }
 
                 spvtools::MessageConsumer MakeSpirvMessageConsumer(const char* site) {
-                    return [site](spv_message_level_t level, const char* /*source*/,
-                                  const spv_position_t& position, const char* message) {
+                    return [site](spv_message_level_t level, const char* /*source*/, const spv_position_t& position,
+                                  const char* message) {
                         const char* text = message ? message : "";
                         switch (level) {
-                            case SPV_MSG_FATAL:
-                            case SPV_MSG_INTERNAL_ERROR:
-                            case SPV_MSG_ERROR:
-                                // Unlatched: only reachable with the validation switch armed,
-                                // and every VUID names a different defect. (Parked at MGLOG_I
-                                // until the Log.h ordering fix made E live at INFO.)
-                                MGLOG_E("[spirv] %s: %s (word index %zu)", site, text, position.index);
-                                break;
-                            default:
-                                MGLOG_D("[spirv] %s: %s", site, text);
-                                break;
+                        case SPV_MSG_FATAL:
+                        case SPV_MSG_INTERNAL_ERROR:
+                        case SPV_MSG_ERROR:
+                            // Unlatched: only reachable with the validation switch armed,
+                            // and every VUID names a different defect. (Parked at MGLOG_I
+                            // until the Log.h ordering fix made E live at INFO.)
+                            MGLOG_E("[spirv] %s: %s (word index %zu)", site, text, position.index);
+                            break;
+                        default:
+                            MGLOG_D("[spirv] %s: %s", site, text);
+                            break;
                         }
                     };
                 }
@@ -766,17 +757,14 @@ namespace MobileGL {
                 // Validation is decoupled from control flow on purpose: a failure logs and
                 // bumps the latch, and the caller proceeds exactly as the shipping (non-
                 // validating) configuration would. Tests assert on the latch delta.
-                void ValidateOrLatch(const char* site, const Vector<Uint32>& binary,
-                                     const bool enableSpirvValidation) {
+                void ValidateOrLatch(const char* site, const Vector<Uint32>& binary, const bool enableSpirvValidation) {
                     if (!enableSpirvValidation) return;
                     PinValidatorTablesForProcessExit();
                     spvtools::SpirvTools tools(SPV_ENV_VULKAN_1_1);
                     tools.SetMessageConsumer(MakeSpirvMessageConsumer(site));
                     if (!tools.Validate(binary)) {
-                        MGLOG_E("[spirv] %s: produced a module that fails validation (failure #%llu)",
-                                site,
-                                static_cast<unsigned long long>(
-                                    ShaderCompiler::NoteSpirvValidationFailure()));
+                        MGLOG_E("[spirv] %s: produced a module that fails validation (failure #%llu)", site,
+                                static_cast<unsigned long long>(ShaderCompiler::NoteSpirvValidationFailure()));
                     }
                 }
 
@@ -789,9 +777,8 @@ namespace MobileGL {
                 // receive. The message consumer is installed unconditionally: without one,
                 // spirv-tools drops pass diagnostics on the floor.
                 bool RunOptimizerChecked(const char* site, spvtools::Optimizer& optimizer,
-                                         const Vector<Uint32>& inputBinary,
-                                         Vector<uint32_t>& outputBinary, const bool validateOutput,
-                                         const bool enableSpirvValidation) {
+                                         const Vector<Uint32>& inputBinary, Vector<uint32_t>& outputBinary,
+                                         const bool validateOutput, const bool enableSpirvValidation) {
                     spvtools::OptimizerOptions options;
                     options.set_run_validator(false);
                     optimizer.SetMessageConsumer(MakeSpirvMessageConsumer(site));
@@ -828,8 +815,8 @@ namespace MobileGL {
                 // here only ever happens on a degraded driver that is about to fail the compile
                 // anyway - it is not on the healthy path.
                 std::unique_ptr<spvtools::opt::IRContext> context = spvtools::BuildModule(
-                    SPV_ENV_VULKAN_1_1, MakeSpirvMessageConsumer("ModuleDeclaresBufferTextureSampler"),
-                    spirv.data(), spirv.size());
+                    SPV_ENV_VULKAN_1_1, MakeSpirvMessageConsumer("ModuleDeclaresBufferTextureSampler"), spirv.data(),
+                    spirv.size());
                 if (!context) {
                     // Unparseable here means unusable downstream too; let the ordinary transpile
                     // path produce the error rather than inventing a capability verdict from it.
@@ -858,8 +845,8 @@ namespace MobileGL {
                     return false;
                 }
                 std::unique_ptr<spvtools::opt::IRContext> context = spvtools::BuildModule(
-                    SPV_ENV_VULKAN_1_1, MakeSpirvMessageConsumer("ModuleDeclaresTransformFeedback"),
-                    spirv.data(), spirv.size());
+                    SPV_ENV_VULKAN_1_1, MakeSpirvMessageConsumer("ModuleDeclaresTransformFeedback"), spirv.data(),
+                    spirv.size());
                 if (!context) {
                     // Unparseable is not a capture verdict; say no, which makes the caller decline
                     // the span rather than issue transform-feedback commands against it.
@@ -872,8 +859,7 @@ namespace MobileGL {
                 // no Xfb entry point, and the VUID is about the mode.
                 for (const spvtools::opt::Instruction& mode : context->module()->execution_modes()) {
                     if (mode.NumInOperands() >= 2 &&
-                        static_cast<spv::ExecutionMode>(mode.GetSingleWordInOperand(1)) ==
-                            spv::ExecutionMode::Xfb) {
+                        static_cast<spv::ExecutionMode>(mode.GetSingleWordInOperand(1)) == spv::ExecutionMode::Xfb) {
                         return true;
                     }
                 }
@@ -885,9 +871,8 @@ namespace MobileGL {
                     return false;
                 }
                 std::unique_ptr<spvtools::opt::IRContext> context = spvtools::BuildModule(
-                    SPV_ENV_VULKAN_1_1,
-                    MakeSpirvMessageConsumer("ModuleDeclaresTessellationOrGeometryPointSize"), spirv.data(),
-                    spirv.size());
+                    SPV_ENV_VULKAN_1_1, MakeSpirvMessageConsumer("ModuleDeclaresTessellationOrGeometryPointSize"),
+                    spirv.data(), spirv.size());
                 if (!context) {
                     // Unparseable is not a verdict about point size. Say no, so the caller keeps
                     // building the program: the module is already broken for other reasons and
@@ -920,8 +905,7 @@ namespace MobileGL {
                 Uint32 ConservativeLocationSpan(const opt_analysis::Type* type) {
                     constexpr Uint32 kUnknownSpan = 4;
                     if (type == nullptr) return kUnknownSpan;
-                    if (type->AsFloat() != nullptr || type->AsInteger() != nullptr ||
-                        type->AsBool() != nullptr) {
+                    if (type->AsFloat() != nullptr || type->AsInteger() != nullptr || type->AsBool() != nullptr) {
                         return 1u;
                     }
                     if (const auto* vector = type->AsVector()) {
@@ -944,8 +928,7 @@ namespace MobileGL {
                     if (const auto* array = type->AsArray()) {
                         const auto& lengthWords = array->length_info().words;
                         if (lengthWords.size() != 2 ||
-                            lengthWords[0] !=
-                                static_cast<Uint32>(opt_analysis::Array::LengthInfo::kConstant)) {
+                            lengthWords[0] != static_cast<Uint32>(opt_analysis::Array::LengthInfo::kConstant)) {
                             return kUnknownSpan;
                         }
                         return ConservativeLocationSpan(array->element_type()) * std::max(lengthWords[1], 1u);
@@ -977,16 +960,15 @@ namespace MobileGL {
                         probe.parsed = true; // an absent stage constrains nothing
                         return probe;
                     }
-                    std::unique_ptr<spvtools::opt::IRContext> context = spvtools::BuildModule(
-                        SPV_ENV_VULKAN_1_1, MakeSpirvMessageConsumer("ProbePointSizeModule"), spirv.data(),
-                        spirv.size());
+                    std::unique_ptr<spvtools::opt::IRContext> context =
+                        spvtools::BuildModule(SPV_ENV_VULKAN_1_1, MakeSpirvMessageConsumer("ProbePointSizeModule"),
+                                              spirv.data(), spirv.size());
                     if (!context) return probe;
                     probe.parsed = true;
 
                     for (const spvtools::opt::Instruction& capability : context->capabilities()) {
                         if (capability.NumInOperands() < 1) continue;
-                        const auto declared =
-                            static_cast<spv::Capability>(capability.GetSingleWordInOperand(0));
+                        const auto declared = static_cast<spv::Capability>(capability.GetSingleWordInOperand(0));
                         if (declared == spv::Capability::TessellationPointSize) {
                             probe.declaresTessellationPointSize = true;
                         } else if (declared == spv::Capability::GeometryPointSize) {
@@ -1023,29 +1005,23 @@ namespace MobileGL {
                                 spv::Decoration::Location) {
                             const Uint32 location = annotation.GetSingleWordInOperand(2);
                             Uint32 span = 1;
-                            spvtools::opt::Instruction* var =
-                                defUse->GetDef(annotation.GetSingleWordInOperand(0));
+                            spvtools::opt::Instruction* var = defUse->GetDef(annotation.GetSingleWordInOperand(0));
                             if (var != nullptr && var->opcode() == spv::Op::OpVariable) {
-                                const auto storage =
-                                    static_cast<spv::StorageClass>(var->GetSingleWordInOperand(0));
+                                const auto storage = static_cast<spv::StorageClass>(var->GetSingleWordInOperand(0));
                                 // Two location namespaces are NOT varying slots and must not
                                 // shrink the carrier budget: vertex-stage inputs (attribute
                                 // locations) and fragment-stage outputs (draw buffers).
-                                if ((model == spv::ExecutionModel::Vertex &&
-                                     storage == spv::StorageClass::Input) ||
-                                    (model == spv::ExecutionModel::Fragment &&
-                                     storage == spv::StorageClass::Output)) {
+                                if ((model == spv::ExecutionModel::Vertex && storage == spv::StorageClass::Input) ||
+                                    (model == spv::ExecutionModel::Fragment && storage == spv::StorageClass::Output)) {
                                     continue;
                                 }
                                 spvtools::opt::Instruction* pointerType = defUse->GetDef(var->type_id());
-                                if (pointerType != nullptr &&
-                                    pointerType->opcode() == spv::Op::OpTypePointer) {
+                                if (pointerType != nullptr && pointerType->opcode() == spv::Op::OpTypePointer) {
                                     const opt_analysis::Type* pointee =
                                         typeMgr->GetType(pointerType->GetSingleWordInOperand(1));
-                                    const Bool peel =
-                                        ((storage == spv::StorageClass::Input && peelInputs) ||
-                                         (storage == spv::StorageClass::Output && peelOutputs)) &&
-                                        patchDecorated.count(var->result_id()) == 0;
+                                    const Bool peel = ((storage == spv::StorageClass::Input && peelInputs) ||
+                                                       (storage == spv::StorageClass::Output && peelOutputs)) &&
+                                                      patchDecorated.count(var->result_id()) == 0;
                                     if (peel && pointee != nullptr && pointee->AsArray() != nullptr) {
                                         pointee = pointee->AsArray()->element_type();
                                     }
@@ -1096,9 +1072,8 @@ namespace MobileGL {
             } // namespace
 
             Bool ShaderCompiler::DemoteTessellationGeometryPointSizeForProgram(
-                Vector<Vector<Uint32>>& modules, const Vector<GLenum>& shaderTypes,
-                const Bool demoteTessellation, const Bool demoteGeometry,
-                const Bool captureRequestsPointSize, PointSizeDemotionOutcome& outcome,
+                Vector<Vector<Uint32>>& modules, const Vector<GLenum>& shaderTypes, const Bool demoteTessellation,
+                const Bool demoteGeometry, const Bool captureRequestsPointSize, PointSizeDemotionOutcome& outcome,
                 const bool validateOutput, const bool enableSpirvValidation) {
                 outcome = {};
                 if (!demoteTessellation && !demoteGeometry) return true;
@@ -1107,11 +1082,20 @@ namespace MobileGL {
                 Int stageIndex[4] = {-1, -1, -1, -1}; // VS, TCS, TES, GS
                 for (SizeT i = 0; i < shaderTypes.size() && i < modules.size(); ++i) {
                     switch (shaderTypes[i]) {
-                    case GL_VERTEX_SHADER: stageIndex[0] = static_cast<Int>(i); break;
-                    case GL_TESS_CONTROL_SHADER: stageIndex[1] = static_cast<Int>(i); break;
-                    case GL_TESS_EVALUATION_SHADER: stageIndex[2] = static_cast<Int>(i); break;
-                    case GL_GEOMETRY_SHADER: stageIndex[3] = static_cast<Int>(i); break;
-                    default: break;
+                    case GL_VERTEX_SHADER:
+                        stageIndex[0] = static_cast<Int>(i);
+                        break;
+                    case GL_TESS_CONTROL_SHADER:
+                        stageIndex[1] = static_cast<Int>(i);
+                        break;
+                    case GL_TESS_EVALUATION_SHADER:
+                        stageIndex[2] = static_cast<Int>(i);
+                        break;
+                    case GL_GEOMETRY_SHADER:
+                        stageIndex[3] = static_cast<Int>(i);
+                        break;
+                    default:
+                        break;
                     }
                 }
                 if (stageIndex[1] < 0 && stageIndex[2] < 0 && stageIndex[3] < 0) return true;
@@ -1133,22 +1117,20 @@ namespace MobileGL {
                     anyGeometryUse |= probe.declaresGeometryPointSize;
                     carrierLocation = std::max(carrierLocation, probe.locationSlotEnd);
                 }
-                if (!((anyTessellationUse && demoteTessellation) ||
-                      (anyGeometryUse && demoteGeometry))) {
+                if (!((anyTessellationUse && demoteTessellation) || (anyGeometryUse && demoteGeometry))) {
                     return true;
                 }
                 if (carrierLocation > kMaxDemotedPointSizeCarrierLocation) {
                     outcome.declineDetail = std::format(
-                        "the program's varyings already reach location {}, past the carrier budget",
-                        carrierLocation);
+                        "the program's varyings already reach location {}, past the carrier budget", carrierLocation);
                     return true;
                 }
 
                 // GL 4.6 core 13.3: capture reads the last capture-capable stage - geometry,
                 // else evaluation, else the vertex stage (whose built-in needs no demotion).
                 const Int captureStage = stageIndex[3] >= 0 ? 3 : (stageIndex[2] >= 0 ? 2 : -1);
-                constexpr GLenum kStageEnum[4] = {GL_VERTEX_SHADER, GL_TESS_CONTROL_SHADER,
-                                                  GL_TESS_EVALUATION_SHADER, GL_GEOMETRY_SHADER};
+                constexpr GLenum kStageEnum[4] = {GL_VERTEX_SHADER, GL_TESS_CONTROL_SHADER, GL_TESS_EVALUATION_SHADER,
+                                                  GL_GEOMETRY_SHADER};
 
                 // Back to front, so each stage's "I now read the carrier" report can force the
                 // producing stage's output carrier into existence - Vulkan requires every
@@ -1164,7 +1146,8 @@ namespace MobileGL {
                     const Int moduleIndex = stageIndex[stage];
                     if (moduleIndex < 0) continue;
                     Int producer = stage - 1;
-                    while (producer >= 0 && stageIndex[producer] < 0) --producer;
+                    while (producer >= 0 && stageIndex[producer] < 0)
+                        --producer;
 
                     DemotePointSizeOptions options;
                     options.location = carrierLocation;
@@ -1187,11 +1170,10 @@ namespace MobileGL {
 
                     DemotePointSizeReport report;
                     spvtools::Optimizer optimizer(SPV_ENV_VULKAN_1_1);
-                    optimizer.RegisterPass(
-                        DemotePointSizePass::CreateDemotePointSizePass(options, &report));
+                    optimizer.RegisterPass(DemotePointSizePass::CreateDemotePointSizePass(options, &report));
                     if (!RunOptimizerChecked("DemoteTessellationGeometryPointSizeForProgram", optimizer,
-                                             modules[moduleIndex], rewritten[moduleIndex],
-                                             validateOutput, enableSpirvValidation)) {
+                                             modules[moduleIndex], rewritten[moduleIndex], validateOutput,
+                                             enableSpirvValidation)) {
                         return false; // modules untouched: nothing was committed
                     }
                     if (report.declined) {
@@ -1210,9 +1192,8 @@ namespace MobileGL {
                     // byte-identical and leaves the honest built-in refusal in charge; only
                     // teaching the synthesized stage to forward the carrier could do better.
                     if (stage == 2 && stageIndex[1] < 0 && report.createdInputCarrier) {
-                        outcome.declineDetail =
-                            "an evaluation stage reads gl_in point size with no control stage to "
-                            "carry it; the synthesized pass-through cannot forward the carrier";
+                        outcome.declineDetail = "an evaluation stage reads gl_in point size with no control stage to "
+                                                "carry it; the synthesized pass-through cannot forward the carrier";
                         return true;
                     }
                     rewrote[stage] = true;
@@ -1238,8 +1219,7 @@ namespace MobileGL {
                     return false;
                 }
                 std::unique_ptr<spvtools::opt::IRContext> context = spvtools::BuildModule(
-                    SPV_ENV_VULKAN_1_1, MakeSpirvMessageConsumer("ModuleDeclaresFloat64"), spirv.data(),
-                    spirv.size());
+                    SPV_ENV_VULKAN_1_1, MakeSpirvMessageConsumer("ModuleDeclaresFloat64"), spirv.data(), spirv.size());
                 if (!context) {
                     return false;
                 }
@@ -1271,8 +1251,8 @@ namespace MobileGL {
                     return false;
                 }
                 std::unique_ptr<spvtools::opt::IRContext> context = spvtools::BuildModule(
-                    SPV_ENV_VULKAN_1_1, MakeSpirvMessageConsumer("ModuleDeclaresFloat64VertexInput"),
-                    spirv.data(), spirv.size());
+                    SPV_ENV_VULKAN_1_1, MakeSpirvMessageConsumer("ModuleDeclaresFloat64VertexInput"), spirv.data(),
+                    spirv.size());
                 if (!context) {
                     return false;
                 }
@@ -1307,9 +1287,9 @@ namespace MobileGL {
                 if (spirv.empty()) {
                     return false;
                 }
-                std::unique_ptr<spvtools::opt::IRContext> context = spvtools::BuildModule(
-                    SPV_ENV_VULKAN_1_1, MakeSpirvMessageConsumer("ModuleReadsLocatedInput"), spirv.data(),
-                    spirv.size());
+                std::unique_ptr<spvtools::opt::IRContext> context =
+                    spvtools::BuildModule(SPV_ENV_VULKAN_1_1, MakeSpirvMessageConsumer("ModuleReadsLocatedInput"),
+                                          spirv.data(), spirv.size());
                 if (!context) {
                     return false;
                 }
@@ -1347,14 +1327,13 @@ namespace MobileGL {
                 Optimizer optimizer(SPV_ENV_VULKAN_1_1);
                 optimizer.RegisterPass(DemoteFloat64Pass::CreateDemoteFloat64Pass());
 
-                return RunOptimizerChecked("DemoteFloat64ToFloat32", optimizer, inputBinary, outputBinary, true, enableSpirvValidation);
+                return RunOptimizerChecked("DemoteFloat64ToFloat32", optimizer, inputBinary, outputBinary, true,
+                                           enableSpirvValidation);
             }
 
             bool ShaderCompiler::SanitizeAndOptimizeBinary(const Vector<Uint32>& inputBinary,
-                                                           Vector<uint32_t>& outputBinary,
-                                                           const bool validateOutput,
-                                                           const bool enableSpirvValidation,
-                                                           const bool nativeFloat64) {
+                                                           Vector<uint32_t>& outputBinary, const bool validateOutput,
+                                                           const bool enableSpirvValidation, const bool nativeFloat64) {
                 using namespace spvtools;
                 Optimizer optimizer(SPV_ENV_VULKAN_1_1);
 
@@ -1424,13 +1403,12 @@ namespace MobileGL {
                 // would have laid out correctly by itself only costs the shader its index
                 // arithmetic.
                 if (!nativeFloat64) {
-                    optimizer.RegisterPass(
-                        FlattenFloat64StorageBlockPass::CreateFlattenFloat64StorageBlockPass());
+                    optimizer.RegisterPass(FlattenFloat64StorageBlockPass::CreateFlattenFloat64StorageBlockPass());
                     optimizer.RegisterPass(DemoteFloat64Pass::CreateDemoteFloat64Pass());
                 }
 
-                return RunOptimizerChecked("SanitizeAndOptimizeBinary", optimizer, inputBinary,
-                                           outputBinary, validateOutput, enableSpirvValidation);
+                return RunOptimizerChecked("SanitizeAndOptimizeBinary", optimizer, inputBinary, outputBinary,
+                                           validateOutput, enableSpirvValidation);
             }
 
             bool ShaderCompiler::LowerDrawParametersForEssl(const Vector<Uint32>& inputBinary,
@@ -1440,8 +1418,8 @@ namespace MobileGL {
                 Optimizer optimizer(SPV_ENV_VULKAN_1_1);
                 optimizer.RegisterPass(LowerDrawParametersPass::CreateLowerDrawParametersPass());
 
-                return RunOptimizerChecked("LowerDrawParametersForEssl", optimizer, inputBinary,
-                                           outputBinary, true, enableSpirvValidation);
+                return RunOptimizerChecked("LowerDrawParametersForEssl", optimizer, inputBinary, outputBinary, true,
+                                           enableSpirvValidation);
             }
 
             bool ShaderCompiler::LowerViewportIndexForEssl(const Vector<Uint32>& inputBinary,
@@ -1451,8 +1429,8 @@ namespace MobileGL {
                 Optimizer optimizer(SPV_ENV_VULKAN_1_1);
                 optimizer.RegisterPass(LowerViewportIndexPass::CreateLowerViewportIndexPass());
 
-                return RunOptimizerChecked("LowerViewportIndexForEssl", optimizer, inputBinary,
-                                           outputBinary, true, enableSpirvValidation);
+                return RunOptimizerChecked("LowerViewportIndexForEssl", optimizer, inputBinary, outputBinary, true,
+                                           enableSpirvValidation);
             }
 
             bool ShaderCompiler::DeferGeometryEmitsForEssl(const Vector<Uint32>& inputBinary,
@@ -1462,8 +1440,8 @@ namespace MobileGL {
                 Optimizer optimizer(SPV_ENV_VULKAN_1_1);
                 Bool deferred = false;
                 optimizer.RegisterPass(DeferGeometryEmitsPass::CreateDeferGeometryEmitsPass(&deferred));
-                const bool ok = RunOptimizerChecked("DeferGeometryEmitsForEssl", optimizer, inputBinary,
-                                                    outputBinary, true, enableSpirvValidation);
+                const bool ok = RunOptimizerChecked("DeferGeometryEmitsForEssl", optimizer, inputBinary, outputBinary,
+                                                    true, enableSpirvValidation);
                 outDeferred = ok && deferred;
                 return ok;
             }
@@ -1472,37 +1450,31 @@ namespace MobileGL {
                 return LowerViewportIndexPass::DeclaresViewportIndexBuiltin(binary);
             }
 
-            bool ShaderCompiler::ClampMultisampleFetchesForEssl(const Vector<Uint32>& inputBinary,
-                                                                Vector<uint32_t>& outputBinary,
-                                                                const Int32 maxColorSamples,
-                                                                const Int32 maxIntegerSamples,
-                                                                const Int32 maxDepthSamples,
-                                                                const Int32 advertisedMaxSamples,
-                                                                const bool enableSpirvValidation,
-                                                                const bool deferDirectUnsignedFetches) {
+            bool ShaderCompiler::ClampMultisampleFetchesForEssl(
+                const Vector<Uint32>& inputBinary, Vector<uint32_t>& outputBinary, const Int32 maxColorSamples,
+                const Int32 maxIntegerSamples, const Int32 maxDepthSamples, const Int32 advertisedMaxSamples,
+                const bool enableSpirvValidation, const bool deferDirectUnsignedFetches) {
                 using namespace spvtools;
                 Optimizer optimizer(SPV_ENV_VULKAN_1_1);
                 optimizer.RegisterPass(ClampMultisampleFetchPass::CreateClampMultisampleFetchPass(
                     maxColorSamples, maxIntegerSamples, maxDepthSamples, advertisedMaxSamples,
                     deferDirectUnsignedFetches));
 
-                return RunOptimizerChecked("ClampMultisampleFetchesForEssl", optimizer, inputBinary,
-                                           outputBinary, true, enableSpirvValidation);
+                return RunOptimizerChecked("ClampMultisampleFetchesForEssl", optimizer, inputBinary, outputBinary, true,
+                                           enableSpirvValidation);
             }
 
             bool ShaderCompiler::DeclaresMultisampledImage(const Vector<Uint32>& binary) {
                 return ClampMultisampleFetchPass::DeclaresMultisampledImage(binary);
             }
 
-            ShaderCompiler::SpirvGateFeatures ShaderCompiler::ProbeSpirvGateFeatures(
-                const Vector<Uint32>& binary) {
+            ShaderCompiler::SpirvGateFeatures ShaderCompiler::ProbeSpirvGateFeatures(const Vector<Uint32>& binary) {
                 SpirvGateFeatures features;
                 if (binary.empty()) {
                     return features;
                 }
                 std::unique_ptr<spvtools::opt::IRContext> context = spvtools::BuildModule(
-                    SPV_ENV_VULKAN_1_1,
-                    [](spv_message_level_t, const char*, const spv_position_t&, const char*) {},
+                    SPV_ENV_VULKAN_1_1, [](spv_message_level_t, const char*, const spv_position_t&, const char*) {},
                     binary.data(), binary.size());
                 if (!context) {
                     // Unparseable here means unusable downstream too; let the ordinary transpile
@@ -1523,8 +1495,8 @@ namespace MobileGL {
                 Optimizer optimizer(SPV_ENV_VULKAN_1_1);
                 optimizer.RegisterPass(SplitArrayVertexInputsPass::CreateSplitArrayVertexInputsPass());
 
-                return RunOptimizerChecked("SplitArrayVertexInputsForEssl", optimizer, inputBinary,
-                                           outputBinary, true, enableSpirvValidation);
+                return RunOptimizerChecked("SplitArrayVertexInputsForEssl", optimizer, inputBinary, outputBinary, true,
+                                           enableSpirvValidation);
             }
 
             bool ShaderCompiler::BakeImageFormatsForEssl(const Vector<Uint32>& inputBinary,
@@ -1536,7 +1508,8 @@ namespace MobileGL {
                 Optimizer optimizer(SPV_ENV_VULKAN_1_1);
                 optimizer.RegisterPass(BakeImageFormatsPass::CreateBakeImageFormatsPass(glFormatByName));
 
-                return RunOptimizerChecked("BakeImageFormatsForEssl", optimizer, inputBinary, outputBinary, true, enableSpirvValidation);
+                return RunOptimizerChecked("BakeImageFormatsForEssl", optimizer, inputBinary, outputBinary, true,
+                                           enableSpirvValidation);
             }
 
             bool ShaderCompiler::DeclaresFormatlessStorageImage(const Vector<Uint32>& binary) {
@@ -1572,14 +1545,13 @@ namespace MobileGL {
                 // itself deliberately does not carry a join of its own.
                 optimizer.RegisterPass(CreateRemoveDuplicatesPass());
 
-                return RunOptimizerChecked("WidenImageFormatsForEssl", optimizer, inputBinary, outputBinary,
-                                           true, enableSpirvValidation);
+                return RunOptimizerChecked("WidenImageFormatsForEssl", optimizer, inputBinary, outputBinary, true,
+                                           enableSpirvValidation);
             }
 
             bool ShaderCompiler::DeclaresWidenableImageFormat(const Vector<Uint32>& binary,
                                                               const bool onlyFormatsSpirvCrossRefusesToPrint) {
-                return WidenImageFormatsPass::DeclaresWidenableImageFormat(binary,
-                                                                           onlyFormatsSpirvCrossRefusesToPrint);
+                return WidenImageFormatsPass::DeclaresWidenableImageFormat(binary, onlyFormatsSpirvCrossRefusesToPrint);
             }
 
             Uint ShaderCompiler::WidenedCoreEsslImageFormat(Uint glInternalFormat) {
@@ -1611,14 +1583,14 @@ namespace MobileGL {
                 optimizer.RegisterPass(FlattenXfbInterfaceBlocksPass::CreateFlattenXfbInterfaceBlocksPass(
                     blockNames, &flattenedBlockNames));
 
-                return RunOptimizerChecked("FlattenXfbInterfaceBlocksForEssl", optimizer, inputBinary,
-                                           outputBinary, true, enableSpirvValidation);
+                return RunOptimizerChecked("FlattenXfbInterfaceBlocksForEssl", optimizer, inputBinary, outputBinary,
+                                           true, enableSpirvValidation);
             }
 
-            bool ShaderCompiler::RewriteXfbCaptureNameForFlattenedBlock(
-                const String& captureName, const std::set<String>& flattenedBlockNames, String& outName) {
-                return FlattenXfbInterfaceBlocksPass::RewriteCaptureName(captureName, flattenedBlockNames,
-                                                                         outName);
+            bool ShaderCompiler::RewriteXfbCaptureNameForFlattenedBlock(const String& captureName,
+                                                                        const std::set<String>& flattenedBlockNames,
+                                                                        String& outName) {
+                return FlattenXfbInterfaceBlocksPass::RewriteCaptureName(captureName, flattenedBlockNames, outName);
             }
 
             void ShaderCompiler::ProbeIoBlockNamesForEssl(const Vector<Uint32>& binary,
@@ -1630,9 +1602,9 @@ namespace MobileGL {
                     // spurious diagnostic through the message consumer.
                     return;
                 }
-                std::unique_ptr<spvtools::opt::IRContext> context = spvtools::BuildModule(
-                    SPV_ENV_VULKAN_1_1, MakeSpirvMessageConsumer("ProbeIoBlockNamesForEssl"), binary.data(),
-                    binary.size());
+                std::unique_ptr<spvtools::opt::IRContext> context =
+                    spvtools::BuildModule(SPV_ENV_VULKAN_1_1, MakeSpirvMessageConsumer("ProbeIoBlockNamesForEssl"),
+                                          binary.data(), binary.size());
                 if (!context) {
                     // Unparseable here means unusable downstream too; let the ordinary transpile
                     // path produce the error rather than inventing a rename plan from it.
@@ -1653,15 +1625,13 @@ namespace MobileGL {
                 optimizer.RegisterPass(UniquifyIoBlockNamesPass::CreateUniquifyIoBlockNamesPass(
                     inputBlockRenames, outputBlockRenames, &renamedBlockNames));
 
-                return RunOptimizerChecked("UniquifyIoBlockNamesForEssl", optimizer, inputBinary,
-                                           outputBinary, true, enableSpirvValidation);
+                return RunOptimizerChecked("UniquifyIoBlockNamesForEssl", optimizer, inputBinary, outputBinary, true,
+                                           enableSpirvValidation);
             }
 
             bool ShaderCompiler::StripIoBlockLocationsForEssl(const Vector<Uint32>& inputBinary,
-                                                              const bool stripInputBlocks,
-                                                              const bool stripOutputBlocks,
-                                                              bool& strippedAny,
-                                                              Vector<uint32_t>& outputBinary,
+                                                              const bool stripInputBlocks, const bool stripOutputBlocks,
+                                                              bool& strippedAny, Vector<uint32_t>& outputBinary,
                                                               const bool enableSpirvValidation) {
                 using namespace spvtools;
                 strippedAny = false;
@@ -1678,8 +1648,8 @@ namespace MobileGL {
                 // and hands the result straight to SPIRV-Cross, which needs no location to
                 // print a block. Validating here would latch a failure on every affected
                 // program and teach the counter to cry wolf.
-                return RunOptimizerChecked("StripIoBlockLocationsForEssl", optimizer, inputBinary,
-                                           outputBinary, false, enableSpirvValidation);
+                return RunOptimizerChecked("StripIoBlockLocationsForEssl", optimizer, inputBinary, outputBinary, false,
+                                           enableSpirvValidation);
             }
 
             bool ShaderCompiler::PackDoubleVertexInputsForVulkan(const Vector<Uint32>& inputBinary,
@@ -1689,8 +1659,8 @@ namespace MobileGL {
                 Optimizer optimizer(SPV_ENV_VULKAN_1_1);
                 optimizer.RegisterPass(PackDoubleVertexInputsPass::CreatePackDoubleVertexInputsPass());
 
-                return RunOptimizerChecked("PackDoubleVertexInputsForVulkan", optimizer, inputBinary,
-                                           outputBinary, true, enableSpirvValidation);
+                return RunOptimizerChecked("PackDoubleVertexInputsForVulkan", optimizer, inputBinary, outputBinary,
+                                           true, enableSpirvValidation);
             }
 
             bool ShaderCompiler::StripUboMemberRelaxedPrecisionForEssl(const Vector<Uint32>& inputBinary,
@@ -1698,11 +1668,10 @@ namespace MobileGL {
                                                                        const bool enableSpirvValidation) {
                 using namespace spvtools;
                 Optimizer optimizer(SPV_ENV_VULKAN_1_1);
-                optimizer.RegisterPass(
-                    StripUboMemberRelaxedPrecisionPass::CreateStripUboMemberRelaxedPrecisionPass());
+                optimizer.RegisterPass(StripUboMemberRelaxedPrecisionPass::CreateStripUboMemberRelaxedPrecisionPass());
 
-                return RunOptimizerChecked("StripUboMemberRelaxedPrecisionForEssl", optimizer,
-                                           inputBinary, outputBinary, true, enableSpirvValidation);
+                return RunOptimizerChecked("StripUboMemberRelaxedPrecisionForEssl", optimizer, inputBinary,
+                                           outputBinary, true, enableSpirvValidation);
             }
 
             bool ShaderCompiler::StripNoPerspectiveForEssl(const Vector<Uint32>& inputBinary,
@@ -1712,8 +1681,8 @@ namespace MobileGL {
                 Optimizer optimizer(SPV_ENV_VULKAN_1_1);
                 optimizer.RegisterPass(StripNoPerspectivePass::CreateStripNoPerspectivePass());
 
-                return RunOptimizerChecked("StripNoPerspectiveForEssl", optimizer, inputBinary,
-                                           outputBinary, true, enableSpirvValidation);
+                return RunOptimizerChecked("StripNoPerspectiveForEssl", optimizer, inputBinary, outputBinary, true,
+                                           enableSpirvValidation);
             }
 
             bool ShaderCompiler::EmulateNoPerspectiveForEssl(const Vector<Uint32>& inputBinary,
@@ -1723,8 +1692,8 @@ namespace MobileGL {
                 Optimizer optimizer(SPV_ENV_VULKAN_1_1);
                 optimizer.RegisterPass(EmulateNoPerspectivePass::CreateEmulateNoPerspectivePass());
 
-                return RunOptimizerChecked("EmulateNoPerspectiveForEssl", optimizer, inputBinary,
-                                           outputBinary, true, enableSpirvValidation);
+                return RunOptimizerChecked("EmulateNoPerspectiveForEssl", optimizer, inputBinary, outputBinary, true,
+                                           enableSpirvValidation);
             }
 
             bool ShaderCompiler::LegalizeFragmentOutputIndexingForEssl(const Vector<Uint32>& inputBinary,
@@ -1761,8 +1730,8 @@ namespace MobileGL {
                 folder.RegisterPass(CreateBlockMergePass());
 
                 Vector<uint32_t> folded;
-                if (!RunOptimizerChecked("LegalizeFragmentOutputIndexingForEssl.fold", folder, inputBinary,
-                                         folded, true, enableSpirvValidation) ||
+                if (!RunOptimizerChecked("LegalizeFragmentOutputIndexingForEssl.fold", folder, inputBinary, folded,
+                                         true, enableSpirvValidation) ||
                     folded.empty()) {
                     // Fail open onto the fallback rather than onto the illegal module.
                     folded = inputBinary;
@@ -1780,8 +1749,8 @@ namespace MobileGL {
                 // false here for the same reason it does in SanitizeAndOptimizeBinary.
                 lowerer.RegisterPass(CreateAggressiveDCEPass(false));
 
-                if (!RunOptimizerChecked("LegalizeFragmentOutputIndexingForEssl.lower", lowerer, folded,
-                                         outputBinary, true, enableSpirvValidation) ||
+                if (!RunOptimizerChecked("LegalizeFragmentOutputIndexingForEssl.lower", lowerer, folded, outputBinary,
+                                         true, enableSpirvValidation) ||
                     outputBinary.empty()) {
                     outputBinary = folded;
                     return true;
@@ -1792,22 +1761,21 @@ namespace MobileGL {
                     // lazily mid-session, so an unlatched line here is unbounded runtime noise.
                     // (Parked at MGLOG_I until the Log.h ordering fix made W live at INFO.)
                     MGLOG_W_ONCE("[spirv] LegalizeFragmentOutputIndexingForEssl: a fragment output is still "
-                            "indexed dynamically; a strict ES driver will reject this shader");
+                                 "indexed dynamically; a strict ES driver will reject this shader");
                 }
                 return true;
             }
 
-            bool ShaderCompiler::LegalizeResourceArrayIndexingForEssl(
-                const Vector<Uint32>& inputBinary, Vector<uint32_t>& outputBinary,
-                const bool enableSpirvValidation) {
+            bool ShaderCompiler::LegalizeResourceArrayIndexingForEssl(const Vector<Uint32>& inputBinary,
+                                                                      Vector<uint32_t>& outputBinary,
+                                                                      const bool enableSpirvValidation) {
                 using namespace spvtools;
 
                 // Detection gates everything: a module that declares no array of storage blocks
                 // and no array of images, or indexes one only with constants - every shader but
                 // a handful - pays one BuildModule and is handed back byte for byte, so the
                 // folding chain can never perturb a shader that did not need it.
-                if (!LegalizeResourceArrayIndexPass::BinaryHasDynamicResourceArrayIndexing(
-                        inputBinary)) {
+                if (!LegalizeResourceArrayIndexPass::BinaryHasDynamicResourceArrayIndexing(inputBinary)) {
                     outputBinary = inputBinary;
                     return true;
                 }
@@ -1832,36 +1800,33 @@ namespace MobileGL {
                 folder.RegisterPass(CreateBlockMergePass());
 
                 Vector<uint32_t> folded;
-                if (!RunOptimizerChecked("LegalizeResourceArrayIndexingForEssl.fold", folder,
-                                         inputBinary, folded, true, enableSpirvValidation) ||
+                if (!RunOptimizerChecked("LegalizeResourceArrayIndexingForEssl.fold", folder, inputBinary, folded, true,
+                                         enableSpirvValidation) ||
                     folded.empty()) {
                     // Fail open onto the fallback rather than onto the illegal module.
                     folded = inputBinary;
                 }
 
-                if (!LegalizeResourceArrayIndexPass::BinaryHasDynamicResourceArrayIndexing(
-                        folded)) {
+                if (!LegalizeResourceArrayIndexPass::BinaryHasDynamicResourceArrayIndexing(folded)) {
                     outputBinary = folded;
                     return true;
                 }
 
                 // Genuinely dynamic (uniform-derived, non-constant trip count, ...): lower it.
                 Optimizer lowerer(SPV_ENV_VULKAN_1_1);
-                lowerer.RegisterPass(
-                    LegalizeResourceArrayIndexPass::CreateLowerToConstantSwitchPass());
+                lowerer.RegisterPass(LegalizeResourceArrayIndexPass::CreateLowerToConstantSwitchPass());
                 // The chains the lowering replaced are dead now; remove_outputs must stay
                 // false here for the same reason it does in SanitizeAndOptimizeBinary.
                 lowerer.RegisterPass(CreateAggressiveDCEPass(false));
 
-                if (!RunOptimizerChecked("LegalizeResourceArrayIndexingForEssl.lower", lowerer, folded,
-                                         outputBinary, true, enableSpirvValidation) ||
+                if (!RunOptimizerChecked("LegalizeResourceArrayIndexingForEssl.lower", lowerer, folded, outputBinary,
+                                         true, enableSpirvValidation) ||
                     outputBinary.empty()) {
                     outputBinary = folded;
                     return true;
                 }
 
-                if (LegalizeResourceArrayIndexPass::BinaryHasDynamicResourceArrayIndexing(
-                        outputBinary)) {
+                if (LegalizeResourceArrayIndexPass::BinaryHasDynamicResourceArrayIndexing(outputBinary)) {
                     // MGLOG_W, latched, for the same reason the fragment-output one is: this
                     // runs per shader compile and shader packs compile lazily mid-session.
                     MGLOG_W_ONCE("[spirv] LegalizeResourceArrayIndexingForEssl: an array of storage "
@@ -1871,9 +1836,9 @@ namespace MobileGL {
                 return true;
             }
 
-            bool ShaderCompiler::FlattenAtomicCounterBlockOffsetsForEssl(
-                const Vector<Uint32>& inputBinary, Vector<uint32_t>& outputBinary,
-                const bool enableSpirvValidation) {
+            bool ShaderCompiler::FlattenAtomicCounterBlockOffsetsForEssl(const Vector<Uint32>& inputBinary,
+                                                                         Vector<uint32_t>& outputBinary,
+                                                                         const bool enableSpirvValidation) {
                 using namespace spvtools;
 
                 // Detection gates everything: a module with no atomic counter, or one whose
@@ -1891,8 +1856,7 @@ namespace MobileGL {
                                            outputBinary, true, enableSpirvValidation);
             }
 
-            bool ShaderCompiler::LowerRectImages(const Vector<Uint32>& inputBinary,
-                                                 Vector<uint32_t>& outputBinary,
+            bool ShaderCompiler::LowerRectImages(const Vector<Uint32>& inputBinary, Vector<uint32_t>& outputBinary,
                                                  const bool enableSpirvValidation) {
                 using namespace spvtools;
                 Optimizer optimizer(SPV_ENV_VULKAN_1_1);
@@ -1900,11 +1864,13 @@ namespace MobileGL {
                 // Rect and 2D images of the same format become the same type after lowering.
                 optimizer.RegisterPass(DeduplicateImageTypesPass::Create());
 
-                return RunOptimizerChecked("LowerRectImages", optimizer, inputBinary, outputBinary, true, enableSpirvValidation);
+                return RunOptimizerChecked("LowerRectImages", optimizer, inputBinary, outputBinary, true,
+                                           enableSpirvValidation);
             }
 
             bool ShaderCompiler::Lower1DArrayImagesForEssl(const Vector<Uint32>& inputBinary,
-                                                            Vector<uint32_t>& outputBinary, const bool enableSpirvValidation) {
+                                                           Vector<uint32_t>& outputBinary,
+                                                           const bool enableSpirvValidation) {
                 using namespace spvtools;
 
                 // Declined rather than half-translated: after the rewrite the image is a 2D
@@ -1928,8 +1894,8 @@ namespace MobileGL {
                 }
                 if (traits.queriesImageSize) {
                     MGLOG_W_ONCE("[spirv] Lower1DArrayImagesForEssl: the module queries the size of a 1D "
-                            "storage image, which cannot be answered in the 2D shape ES stores it in; "
-                            "leaving the module alone, and a strict ES driver will reject it");
+                                 "storage image, which cannot be answered in the 2D shape ES stores it in; "
+                                 "leaving the module alone, and a strict ES driver will reject it");
                     outputBinary = inputBinary;
                     return true;
                 }
@@ -1947,7 +1913,8 @@ namespace MobileGL {
                 // second Shader. Deduplicating afterwards collapses all three at once.
                 optimizer.RegisterPass(CreateRemoveDuplicatesPass());
 
-                return RunOptimizerChecked("Lower1DArrayImagesForEssl", optimizer, inputBinary, outputBinary, true, enableSpirvValidation);
+                return RunOptimizerChecked("Lower1DArrayImagesForEssl", optimizer, inputBinary, outputBinary, true,
+                                           enableSpirvValidation);
             }
 
             bool ShaderCompiler::Lower1DSampledImagesForEssl(const Vector<Uint32>& inputBinary,
@@ -1979,27 +1946,30 @@ namespace MobileGL {
                 // them, and to the Sampled1D capability the rewrite turns into a second Shader.
                 optimizer.RegisterPass(CreateRemoveDuplicatesPass());
 
-                return RunOptimizerChecked("Lower1DSampledImagesForEssl", optimizer, inputBinary,
-                                           outputBinary, true, enableSpirvValidation);
+                return RunOptimizerChecked("Lower1DSampledImagesForEssl", optimizer, inputBinary, outputBinary, true,
+                                           enableSpirvValidation);
             }
 
             bool ShaderCompiler::RebaseInstanceIndexForVulkan(const Vector<Uint32>& inputBinary,
-                                                              Vector<uint32_t>& outputBinary, const bool enableSpirvValidation) {
+                                                              Vector<uint32_t>& outputBinary,
+                                                              const bool enableSpirvValidation) {
                 using namespace spvtools;
                 Optimizer optimizer(SPV_ENV_VULKAN_1_1);
                 optimizer.RegisterPass(RebaseInstanceIndexPass::CreateRebaseInstanceIndexPass());
 
-                return RunOptimizerChecked("RebaseInstanceIndexForVulkan", optimizer, inputBinary,
-                                           outputBinary, true, enableSpirvValidation);
+                return RunOptimizerChecked("RebaseInstanceIndexForVulkan", optimizer, inputBinary, outputBinary, true,
+                                           enableSpirvValidation);
             }
 
             bool ShaderCompiler::ZeroBaseVertexForVulkan(const Vector<Uint32>& inputBinary,
-                                                         Vector<uint32_t>& outputBinary, const bool enableSpirvValidation) {
+                                                         Vector<uint32_t>& outputBinary,
+                                                         const bool enableSpirvValidation) {
                 using namespace spvtools;
                 Optimizer optimizer(SPV_ENV_VULKAN_1_1);
                 optimizer.RegisterPass(ZeroBaseVertexPass::CreateZeroBaseVertexPass());
 
-                return RunOptimizerChecked("ZeroBaseVertexForVulkan", optimizer, inputBinary, outputBinary, true, enableSpirvValidation);
+                return RunOptimizerChecked("ZeroBaseVertexForVulkan", optimizer, inputBinary, outputBinary, true,
+                                           enableSpirvValidation);
             }
 
             bool ShaderCompiler::LowerPixelCenterIntegerForVulkan(const Vector<Uint32>& inputBinary,
@@ -2014,8 +1984,8 @@ namespace MobileGL {
             }
 
             bool ShaderCompiler::ZeroLayerOutputForVulkan(const Vector<Uint32>& inputBinary,
-                                                           Vector<uint32_t>& outputBinary,
-                                                           const bool enableSpirvValidation) {
+                                                          Vector<uint32_t>& outputBinary,
+                                                          const bool enableSpirvValidation) {
                 using namespace spvtools;
                 Optimizer optimizer(SPV_ENV_VULKAN_1_1);
                 optimizer.RegisterPass(ZeroLayerOutputPass::CreateZeroLayerOutputPass());
@@ -2042,8 +2012,8 @@ namespace MobileGL {
                 Optimizer optimizer(SPV_ENV_VULKAN_1_1);
                 optimizer.RegisterPass(DeriveNumSubgroupsPass::CreateDeriveNumSubgroupsPass());
 
-                return RunOptimizerChecked("DeriveNumSubgroupsForVulkan", optimizer, inputBinary,
-                                           outputBinary, true, enableSpirvValidation);
+                return RunOptimizerChecked("DeriveNumSubgroupsForVulkan", optimizer, inputBinary, outputBinary, true,
+                                           enableSpirvValidation);
             }
 
             bool ShaderCompiler::EmulateSubgroupsForVulkan(const Vector<Uint32>& inputBinary,
@@ -2053,51 +2023,52 @@ namespace MobileGL {
                                                            const bool atomicScratchReads) {
                 using namespace spvtools;
                 Optimizer optimizer(SPV_ENV_VULKAN_1_1);
-                optimizer.RegisterPass(EmulateSubgroupsPass::CreateEmulateSubgroupsPass(maxWorkgroupScratchBytes,
-                                                                                        atomicScratchReads));
+                optimizer.RegisterPass(
+                    EmulateSubgroupsPass::CreateEmulateSubgroupsPass(maxWorkgroupScratchBytes, atomicScratchReads));
 
-                return RunOptimizerChecked("EmulateSubgroupsForVulkan", optimizer, inputBinary,
+                return RunOptimizerChecked("EmulateSubgroupsForVulkan", optimizer, inputBinary, outputBinary, true,
+                                           enableSpirvValidation);
+            }
+
+            bool ShaderCompiler::FixIterationRPSubgroupScratchForVulkan(const Vector<Uint32>& inputBinary,
+                                                                        Vector<uint32_t>& outputBinary,
+                                                                        const Uint32 nativeSubgroupSize,
+                                                                        const Uint32 maxWorkgroupScratchBytes,
+                                                                        const bool enableSpirvValidation) {
+                using namespace spvtools;
+                Optimizer optimizer(SPV_ENV_VULKAN_1_1);
+                optimizer.RegisterPass(FixIterationRPSubgroupScratchPass::CreateFixIterationRPSubgroupScratchPass(
+                    nativeSubgroupSize, maxWorkgroupScratchBytes));
+
+                return RunOptimizerChecked("FixIterationRPSubgroupScratchForVulkan", optimizer, inputBinary,
                                            outputBinary, true, enableSpirvValidation);
             }
 
-            bool ShaderCompiler::FixIterationRPSubgroupScratchForVulkan(
-                const Vector<Uint32>& inputBinary, Vector<uint32_t>& outputBinary,
-                const Uint32 nativeSubgroupSize, const Uint32 maxWorkgroupScratchBytes,
-                const bool enableSpirvValidation) {
-                using namespace spvtools;
-                Optimizer optimizer(SPV_ENV_VULKAN_1_1);
-                optimizer.RegisterPass(
-                    FixIterationRPSubgroupScratchPass::CreateFixIterationRPSubgroupScratchPass(
-                        nativeSubgroupSize, maxWorkgroupScratchBytes));
-
-                return RunOptimizerChecked("FixIterationRPSubgroupScratchForVulkan", optimizer,
-                                           inputBinary, outputBinary, true, enableSpirvValidation);
-            }
-
-            bool ShaderCompiler::FixIterationRPBarrierForVulkan(
-                const Vector<Uint32>& inputBinary, Vector<uint32_t>& outputBinary,
-                const bool enableSpirvValidation) {
+            bool ShaderCompiler::FixIterationRPBarrierForVulkan(const Vector<Uint32>& inputBinary,
+                                                                Vector<uint32_t>& outputBinary,
+                                                                const bool enableSpirvValidation) {
                 using namespace spvtools;
                 Optimizer optimizer(SPV_ENV_VULKAN_1_1);
                 optimizer.RegisterPass(FixIterationRPBarrierPass::CreateFixIterationRPBarrierPass());
 
-                return RunOptimizerChecked("FixIterationRPBarrierForVulkan", optimizer,
-                                           inputBinary, outputBinary, true, enableSpirvValidation);
+                return RunOptimizerChecked("FixIterationRPBarrierForVulkan", optimizer, inputBinary, outputBinary, true,
+                                           enableSpirvValidation);
             }
 
             bool ShaderCompiler::DecoratePositionInvariantForVulkan(const Vector<Uint32>& inputBinary,
-                                                                    Vector<uint32_t>& outputBinary, const bool enableSpirvValidation) {
+                                                                    Vector<uint32_t>& outputBinary,
+                                                                    const bool enableSpirvValidation) {
                 using namespace spvtools;
                 Optimizer optimizer(SPV_ENV_VULKAN_1_1);
                 optimizer.RegisterPass(DecoratePositionInvariantPass::CreateDecoratePositionInvariantPass());
 
-                return RunOptimizerChecked("DecoratePositionInvariantForVulkan", optimizer, inputBinary,
-                                           outputBinary, true, enableSpirvValidation);
+                return RunOptimizerChecked("DecoratePositionInvariantForVulkan", optimizer, inputBinary, outputBinary,
+                                           true, enableSpirvValidation);
             }
 
-            bool ShaderCompiler::UseUnformattedFloatStorageImagesForVulkan(
-                const Vector<Uint32>& inputBinary, Vector<uint32_t>& outputBinary,
-                const bool enableSpirvValidation) {
+            bool ShaderCompiler::UseUnformattedFloatStorageImagesForVulkan(const Vector<Uint32>& inputBinary,
+                                                                           Vector<uint32_t>& outputBinary,
+                                                                           const bool enableSpirvValidation) {
                 constexpr SizeT kSpirvHeaderWordCount = 5;
                 outputBinary.clear();
                 if (inputBinary.size() < kSpirvHeaderWordCount || inputBinary[0] != spv::MagicNumber) {
@@ -2122,8 +2093,7 @@ namespace MobileGL {
                     if (opcode == spv::Op::OpCapability && wordCount >= 2) {
                         capabilityInsertOffset = offset + wordCount;
                         const auto capability = static_cast<spv::Capability>(inputBinary[offset + 1]);
-                        hasReadWithoutFormatCapability |=
-                            capability == spv::Capability::StorageImageReadWithoutFormat;
+                        hasReadWithoutFormatCapability |= capability == spv::Capability::StorageImageReadWithoutFormat;
                         hasWriteWithoutFormatCapability |=
                             capability == spv::Capability::StorageImageWriteWithoutFormat;
                     } else if (opcode == spv::Op::OpTypeFloat && wordCount >= 3) {
@@ -2165,13 +2135,11 @@ namespace MobileGL {
                             return false;
                         }
                         Uint32 imageTypeId = resultTypeById[imageId];
-                        if (imageTypeId < pointerPointeeTypeById.size() &&
-                            pointerPointeeTypeById[imageTypeId] != 0) {
+                        if (imageTypeId < pointerPointeeTypeById.size() && pointerPointeeTypeById[imageTypeId] != 0) {
                             imageTypeId = pointerPointeeTypeById[imageTypeId];
                         }
-                        if (imageTypeId != 0 &&
-                            std::find(atomicImageTypeIds.begin(), atomicImageTypeIds.end(), imageTypeId) ==
-                                atomicImageTypeIds.end()) {
+                        if (imageTypeId != 0 && std::find(atomicImageTypeIds.begin(), atomicImageTypeIds.end(),
+                                                          imageTypeId) == atomicImageTypeIds.end()) {
                             atomicImageTypeIds.push_back(imageTypeId);
                         }
                     }
@@ -2193,9 +2161,8 @@ namespace MobileGL {
                         const Uint32 sampled = outputBinary[offset + 7];
                         const Bool hasFloatSampledType =
                             std::find(floatTypeIds.begin(), floatTypeIds.end(), sampledTypeId) != floatTypeIds.end();
-                        const Bool usedByAtomic =
-                            std::find(atomicImageTypeIds.begin(), atomicImageTypeIds.end(), imageTypeId) !=
-                            atomicImageTypeIds.end();
+                        const Bool usedByAtomic = std::find(atomicImageTypeIds.begin(), atomicImageTypeIds.end(),
+                                                            imageTypeId) != atomicImageTypeIds.end();
                         if (sampled == 2 && hasFloatSampledType && !usedByAtomic) {
                             outputBinary[offset + 8] = static_cast<Uint32>(spv::ImageFormat::Unknown);
                             hasFloatStorageImage = true;
@@ -2209,17 +2176,14 @@ namespace MobileGL {
                 }
 
                 Vector<Uint32> addedCapabilities;
-                const Uint32 capabilityInstruction =
-                    (2u << 16u) | static_cast<Uint32>(spv::Op::OpCapability);
+                const Uint32 capabilityInstruction = (2u << 16u) | static_cast<Uint32>(spv::Op::OpCapability);
                 if (!hasReadWithoutFormatCapability) {
                     addedCapabilities.push_back(capabilityInstruction);
-                    addedCapabilities.push_back(
-                        static_cast<Uint32>(spv::Capability::StorageImageReadWithoutFormat));
+                    addedCapabilities.push_back(static_cast<Uint32>(spv::Capability::StorageImageReadWithoutFormat));
                 }
                 if (!hasWriteWithoutFormatCapability) {
                     addedCapabilities.push_back(capabilityInstruction);
-                    addedCapabilities.push_back(
-                        static_cast<Uint32>(spv::Capability::StorageImageWriteWithoutFormat));
+                    addedCapabilities.push_back(static_cast<Uint32>(spv::Capability::StorageImageWriteWithoutFormat));
                 }
                 outputBinary.insert(outputBinary.begin() + static_cast<std::ptrdiff_t>(capabilityInsertOffset),
                                     addedCapabilities.begin(), addedCapabilities.end());
@@ -2228,8 +2192,8 @@ namespace MobileGL {
                 spvtools::Optimizer optimizer(SPV_ENV_VULKAN_1_1);
                 optimizer.RegisterPass(DeduplicateImageTypesPass::Create());
                 Vector<Uint32> rewrittenBinary = std::move(outputBinary);
-                return RunOptimizerChecked("UseUnformattedFloatStorageImagesForVulkan", optimizer,
-                                           rewrittenBinary, outputBinary, true, enableSpirvValidation);
+                return RunOptimizerChecked("UseUnformattedFloatStorageImagesForVulkan", optimizer, rewrittenBinary,
+                                           outputBinary, true, enableSpirvValidation);
             }
 
             namespace {
@@ -2321,11 +2285,11 @@ namespace MobileGL {
                 PrepareSpirvValidation();
                 spvtools::SpirvTools tools(SPV_ENV_OPENGL_4_5);
                 String diagnostics;
-                tools.SetMessageConsumer([&diagnostics](spv_message_level_t, const char*, const spv_position_t&,
-                                                        const char* message) {
-                    if (!diagnostics.empty()) diagnostics += "\n";
-                    diagnostics += message ? message : "";
-                });
+                tools.SetMessageConsumer(
+                    [&diagnostics](spv_message_level_t, const char*, const spv_position_t&, const char* message) {
+                        if (!diagnostics.empty()) diagnostics += "\n";
+                        diagnostics += message ? message : "";
+                    });
                 if (!tools.Validate(spirv.data(), spirv.size())) {
                     r.log = "Error: [ARB_gl_spirv] the module failed SPIR-V validation:\n" + diagnostics;
                     return std::unexpected(r);

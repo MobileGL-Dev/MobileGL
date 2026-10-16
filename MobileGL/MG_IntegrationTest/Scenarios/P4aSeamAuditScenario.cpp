@@ -139,8 +139,7 @@ void main() { imageStore(i1, 0, imageLoad(i0, 0) + uvec4(2u, 0u, 0u, 0u)); }
                 glDisable(GL_SCISSOR_TEST);
                 glDisable(GL_DEPTH_TEST);
                 glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
-                while (glGetError() != GL_NO_ERROR) {
-                }
+                while (glGetError() != GL_NO_ERROR) {}
             }
 
             void TearDown() override {
@@ -149,8 +148,7 @@ void main() { imageStore(i1, 0, imageLoad(i0, 0) + uvec4(2u, 0u, 0u, 0u)); }
                 glBindVertexArray(0);
                 if (m_vao != 0) glDeleteVertexArrays(1, &m_vao);
                 glBindFramebuffer(GL_FRAMEBUFFER, 0);
-                while (glGetError() != GL_NO_ERROR) {
-                }
+                while (glGetError() != GL_NO_ERROR) {}
             }
 
             // The F-3 cases are about Espryt's four cross-object masks, which are its own
@@ -219,8 +217,7 @@ void main() { imageStore(i1, 0, imageLoad(i0, 0) + uvec4(2u, 0u, 0u, 0u)); }
                 glGetIntegerv(GL_MAX_COMPUTE_IMAGE_UNIFORMS, &maxComputeImageUniforms);
                 GLint maxBufferSize = 0;
                 glGetIntegerv(GL_MAX_TEXTURE_BUFFER_SIZE, &maxBufferSize);
-                while (glGetError() != GL_NO_ERROR) {
-                }
+                while (glGetError() != GL_NO_ERROR) {}
                 return maxImageUnits >= 2 && maxComputeImageUniforms >= 2 && maxBufferSize >= 4;
             }
 
@@ -571,7 +568,7 @@ void main() { imageStore(i1, 0, imageLoad(i0, 0) + uvec4(2u, 0u, 0u, 0u)); }
             glGenTextures(1, &touch3D);
             glBindTexture(GL_TEXTURE_3D, touch3D);
             const std::uint8_t blue[2 * 2 * 2 * 4] = {0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255, 255,
-                                                     0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255, 255};
+                                                      0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255, 255};
             glTexImage3D(GL_TEXTURE_3D, 0, GL_RGBA8, 2, 2, 2, 0, GL_RGBA, GL_UNSIGNED_BYTE, blue);
             glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
             glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);

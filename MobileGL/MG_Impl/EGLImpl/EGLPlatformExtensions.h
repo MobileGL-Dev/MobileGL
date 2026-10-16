@@ -17,7 +17,7 @@ namespace MobileGL::MG_Impl::EGLImpl {
 // like a surfaceless one (the frames come from the backend, not from the device), and window
 // surfaces on it are refused. Chromium's Wayland GPU process hands its GL implementation nothing
 // but a GBM display, so without the claim it never reaches this library at all.
-#define MOBILEGL_PLATFORM_WAYLAND_EXTENSIONS \
+#define MOBILEGL_PLATFORM_WAYLAND_EXTENSIONS                                                                           \
     " EGL_KHR_platform_wayland EGL_EXT_platform_wayland EGL_KHR_platform_gbm EGL_MESA_platform_gbm"
 #else
 #define MOBILEGL_PLATFORM_WAYLAND_EXTENSIONS ""
@@ -52,4 +52,4 @@ namespace MobileGL::MG_Impl::EGLImpl {
     inline constexpr const char* kClientExtensionString =
         "EGL_EXT_client_extensions EGL_KHR_create_context EGL_EXT_platform_base "
         "EGL_KHR_platform_base EGL_MESA_platform_surfaceless" MOBILEGL_PLATFORM_WAYLAND_EXTENSIONS;
-}
+} // namespace MobileGL::MG_Impl::EGLImpl

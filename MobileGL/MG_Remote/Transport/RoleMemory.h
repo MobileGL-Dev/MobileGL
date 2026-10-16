@@ -94,8 +94,7 @@ namespace MobileGL::MG_Remote::Transport {
     // (R-16's control on this rule: revert PeakRssBytes to the kernel's peak and
     // it does).
     RoleMemorySample SampleRoleMemoryInto(std::atomic<std::uint64_t>& runningPeak, MemoryRole role,
-                                          std::uint64_t kernelPeakRssBytes,
-                                          std::uint64_t kernelCurrentRssBytes);
+                                          std::uint64_t kernelPeakRssBytes, std::uint64_t kernelCurrentRssBytes);
 
     // Emits one line at INFO level, which is what every P5 lane builds at, so
     // t1's harness can grep it out of a lane log without a new log sink. Not

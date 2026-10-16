@@ -32,8 +32,8 @@ namespace {
         using namespace MG_Util::ShaderTranspiler;
         Vector<SharedPtr<glslang::TShader>> shaders;
         Vector<GLenum> types;
-        for (const auto& [stage, source] : Vector<Pair<GLenum, const char*>>{{GL_VERTEX_SHADER, vertex},
-                                                                           {GL_FRAGMENT_SHADER, fragment}}) {
+        for (const auto& [stage, source] :
+             Vector<Pair<GLenum, const char*>>{{GL_VERTEX_SHADER, vertex}, {GL_FRAGMENT_SHADER, fragment}}) {
             ShaderAttrib attrib{.shaderType = stage, .sourceStr = source};
             auto shader = ShaderCompiler::CompileShader(attrib);
             EXPECT_TRUE(shader) << (shader ? String{} : shader.error().log);
@@ -60,8 +60,9 @@ namespace {
     String VulkanValidationError(const Vector<Uint32>& spirv) {
         spvtools::SpirvTools tools(SPV_ENV_VULKAN_1_1);
         String error;
-        tools.SetMessageConsumer([&](spv_message_level_t, const char*, const spv_position_t&,
-                                     const char* message) { error += message != nullptr ? message : ""; });
+        tools.SetMessageConsumer([&](spv_message_level_t, const char*, const spv_position_t&, const char* message) {
+            error += message != nullptr ? message : "";
+        });
         if (tools.Validate(spirv)) return {};
         String text;
         tools.Disassemble(spirv, &text);
@@ -74,7 +75,8 @@ namespace {
 
 TEST(RelaxedOpaqueStructTest, AnAnonymousUniformStructLosesItsSamplerInTheDefaultBlock) {
     MobileGL::Initialize();
-    const auto modules = CompileProgram(kVertex,
+    const auto modules = CompileProgram(
+        kVertex,
         "#version 330 core\n"
         "uniform struct { vec3 size; float time; int loaded; sampler2D smp; } c0, c1, c2, c3;\n"
         "uniform vec3 res; out vec4 o;\n"
@@ -85,11 +87,11 @@ TEST(RelaxedOpaqueStructTest, AnAnonymousUniformStructLosesItsSamplerInTheDefaul
 
 TEST(RelaxedOpaqueStructTest, ANamedUniformStructLosesItsSamplerInTheDefaultBlock) {
     MobileGL::Initialize();
-    const auto modules = CompileProgram(kVertex,
-        "#version 330 core\n"
-        "struct Channel { vec3 size; float time; int loaded; sampler2D smp; };\n"
-        "uniform Channel c0; uniform Channel c1; uniform vec3 res; out vec4 o;\n"
-        "void main() { o = texture(c1.smp, gl_FragCoord.xy / res.xy) + vec4(c0.size, c0.time); }");
+    const auto modules = CompileProgram(
+        kVertex, "#version 330 core\n"
+                 "struct Channel { vec3 size; float time; int loaded; sampler2D smp; };\n"
+                 "uniform Channel c0; uniform Channel c1; uniform vec3 res; out vec4 o;\n"
+                 "void main() { o = texture(c1.smp, gl_FragCoord.xy / res.xy) + vec4(c0.size, c0.time); }");
     ASSERT_EQ(modules.size(), 2u);
     EXPECT_EQ(VulkanValidationError(modules[1]), String{});
 }

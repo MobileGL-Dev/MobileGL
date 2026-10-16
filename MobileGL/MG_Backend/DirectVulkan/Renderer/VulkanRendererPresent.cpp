@@ -55,8 +55,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // flushes retired. Wait the full prefix before FrameContext may
             // free its retired command buffers and reset the slot fence.
             const Uint64 slotSubmit = m_frameContext.GetCurrent().lastSubmitIndex;
-            if (slotSubmit > m_completedSubmitCounter &&
-                !WaitForSubmitsUpTo(slotSubmit, UINT64_MAX)) {
+            if (slotSubmit > m_completedSubmitCounter && !WaitForSubmitsUpTo(slotSubmit, UINT64_MAX)) {
                 if (LatchWireDeviceLoss("deferred-acquire-submit-wait")) return;
                 MagmaWireFatal("deferred-acquire-submit-wait");
             }
@@ -94,8 +93,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         m_samplerManager->OnFrameBoundary();
         auto& frame = m_frameContext.GetCurrent();
         auto* activeRenderPass = VkRenderPassManager::GetActiveRenderPass();
-        if (activeRenderPass)
-            VkRenderPassManager::EndRenderPass(frame.commandBuffer);
+        if (activeRenderPass) VkRenderPassManager::EndRenderPass(frame.commandBuffer);
 #if MOBILEGL_BUILD_DISAGGREGATED
         // The frame boundary of the shared images this frame read (WireSharedImage.cpp): handed
         // back to the foreign family in this recording, and this submission signals the read
@@ -141,10 +139,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         const GpuProgressMarkers::Bracket bracket = m_progressMarkers.Acquire(m_completedSubmitCounter);
         const VkResult presentSubmit = GpuProgressMarkers::SubmitBracketed(m_graphicsQueue, submitPacket.submitInfo,
                                                                            frame.imageInFlightFence, bracket);
-        if (presentSubmit == VK_SUCCESS) m_progressMarkers.Submitted(bracket, m_submitCounter + 1); // RegisterSubmit below
-        else m_progressMarkers.Abandon(bracket);
+        if (presentSubmit == VK_SUCCESS)
+            m_progressMarkers.Submitted(bracket, m_submitCounter + 1); // RegisterSubmit below
+        else
+            m_progressMarkers.Abandon(bracket);
 #else
-        const VkResult presentSubmit = vkQueueSubmit(m_graphicsQueue, 1, &submitPacket.submitInfo, frame.imageInFlightFence);
+        const VkResult presentSubmit =
+            vkQueueSubmit(m_graphicsQueue, 1, &submitPacket.submitInfo, frame.imageInFlightFence);
 #endif
         NoteDeviceLoss(presentSubmit, "Present vkQueueSubmit");
         if (presentSubmit != VK_SUCCESS && LatchWireDeviceLoss("present-submit")) return;
@@ -240,8 +241,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // earlier pooled flushes, so wait every registered submission in this
         // slot's prefix BEFORE the reset/free happens.
         const Uint64 slotSubmit = m_frameContext.GetCurrent().lastSubmitIndex;
-        if (slotSubmit > m_completedSubmitCounter &&
-            !WaitForSubmitsUpTo(slotSubmit, UINT64_MAX)) {
+        if (slotSubmit > m_completedSubmitCounter && !WaitForSubmitsUpTo(slotSubmit, UINT64_MAX)) {
             if (LatchWireDeviceLoss("present-slot-submit-wait")) return;
             MagmaWireFatal("present-slot-submit-wait");
         }
@@ -394,8 +394,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return false;
         }
         VkSurfaceCapabilitiesKHR surfaceCaps{};
-        if (vkGetPhysicalDeviceSurfaceCapabilitiesKHR(m_physicalDevice.handle, m_surface, &surfaceCaps) !=
-            VK_SUCCESS) {
+        if (vkGetPhysicalDeviceSurfaceCapabilitiesKHR(m_physicalDevice.handle, m_surface, &surfaceCaps) != VK_SUCCESS) {
             return false;
         }
         // A driver-defined currentExtent (UINT32_MAX) means the surface takes its size from the
@@ -408,14 +407,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // the swapchain's own (quarter-turn swapped) extent here would report a difference on
         // every rotated frame and rebuild forever.
         const VkExtent2D builtFrom = m_swapchainObject.GetSurfaceExtent();
-        const Bool extentChanged = surfaceCaps.currentExtent.width != builtFrom.width ||
-                                   surfaceCaps.currentExtent.height != builtFrom.height;
+        const Bool extentChanged =
+            surfaceCaps.currentExtent.width != builtFrom.width || surfaceCaps.currentExtent.height != builtFrom.height;
         const Bool transformChanged = surfaceCaps.currentTransform != m_swapchainObject.GetPreTransform();
         if (!extentChanged && !transformChanged) {
             return false;
         }
-        MGLOG_D("Swapchain out of date: surface %ux%u transform %u -> %ux%u transform %u",
-                builtFrom.width, builtFrom.height, static_cast<Uint32>(m_swapchainObject.GetPreTransform()),
+        MGLOG_D("Swapchain out of date: surface %ux%u transform %u -> %ux%u transform %u", builtFrom.width,
+                builtFrom.height, static_cast<Uint32>(m_swapchainObject.GetPreTransform()),
                 surfaceCaps.currentExtent.width, surfaceCaps.currentExtent.height,
                 static_cast<Uint32>(surfaceCaps.currentTransform));
         return true;
@@ -529,8 +528,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                           m_device, static_cast<Uint32>(m_swapchainObject.GetImageCount())),
                       "ActivateSurfaceTarget, InitializeSwapchainSemaphores");
             if (m_swapchainObject.GetHandle() != VK_NULL_HANDLE) {
-                VkResult result = m_frameContext.AcquireNextImageInCurrentSlot(
-                    m_device, m_swapchainObject.GetHandle(), m_imageIndexAcquired);
+                VkResult result = m_frameContext.AcquireNextImageInCurrentSlot(m_device, m_swapchainObject.GetHandle(),
+                                                                               m_imageIndexAcquired);
                 if (result == VK_SUBOPTIMAL_KHR) result = VK_SUCCESS;
                 VK_VERIFY(result, "ActivateSurfaceTarget, AcquireNextImageInCurrentSlot");
                 m_defaultFramebufferImageIndex = m_imageIndexAcquired;

@@ -70,8 +70,7 @@ namespace MobileGL::MG_Remote::Transport {
         // on across the sysroots this builds against.
         fd = static_cast<int>(::syscall(SYS_memfd_create, label, MFD_CLOEXEC));
         if (fd >= 0 && ::ftruncate(fd, static_cast<off_t>(size)) != 0) {
-            MGLOG_E("MG_Remote shm: ftruncate(%llu) failed (errno=%d)",
-                    static_cast<unsigned long long>(size), errno);
+            MGLOG_E("MG_Remote shm: ftruncate(%llu) failed (errno=%d)", static_cast<unsigned long long>(size), errno);
             ::close(fd);
             fd = -1;
         }
@@ -84,8 +83,7 @@ namespace MobileGL::MG_Remote::Transport {
             // travels by SCM_RIGHTS.
             char shmName[kShmNameMax];
             std::snprintf(shmName, sizeof(shmName), "/mgl-%d-%u-%s", static_cast<int>(::getpid()),
-                          g_shmCounter.fetch_add(1, std::memory_order_relaxed),
-                          nameHint != nullptr ? nameHint : "seg");
+                          g_shmCounter.fetch_add(1, std::memory_order_relaxed), nameHint != nullptr ? nameHint : "seg");
             fd = ::shm_open(shmName, O_RDWR | O_CREAT | O_EXCL, 0600);
             if (fd < 0) {
                 MGLOG_E("MG_Remote shm: shm_open(%s) failed (errno=%d)", shmName, errno);
@@ -93,8 +91,8 @@ namespace MobileGL::MG_Remote::Transport {
             }
             ::shm_unlink(shmName);
             if (::ftruncate(fd, static_cast<off_t>(size)) != 0) {
-                MGLOG_E("MG_Remote shm: ftruncate(%llu) failed (errno=%d)",
-                        static_cast<unsigned long long>(size), errno);
+                MGLOG_E("MG_Remote shm: ftruncate(%llu) failed (errno=%d)", static_cast<unsigned long long>(size),
+                        errno);
                 ::close(fd);
                 return MOBILEGL_ERR_SHM_EXHAUSTED;
             }
@@ -125,8 +123,7 @@ namespace MobileGL::MG_Remote::Transport {
         // the announcement claims would turn every later offset into an
         // out-of-bounds map.
         struct stat st{};
-        if (::fstat(fd, &st) == 0 && st.st_size > 0 &&
-            static_cast<std::uint64_t>(st.st_size) < size) {
+        if (::fstat(fd, &st) == 0 && st.st_size > 0 && static_cast<std::uint64_t>(st.st_size) < size) {
             MGLOG_E("MG_Remote shm: peer announced %llu bytes but the descriptor is %lld",
                     static_cast<unsigned long long>(size), static_cast<long long>(st.st_size));
             return MOBILEGL_ERR_INVALID_ARGUMENT;
@@ -159,8 +156,8 @@ namespace MobileGL::MG_Remote::Transport {
         const int prot = readOnly ? PROT_READ : (PROT_READ | PROT_WRITE);
         void* addr = ::mmap(nullptr, static_cast<size_t>(m_size), prot, MAP_SHARED, m_fd, 0);
         if (addr == MAP_FAILED) {
-            MGLOG_E("MG_Remote shm: mmap of %llu bytes failed (errno=%d)",
-                    static_cast<unsigned long long>(m_size), errno);
+            MGLOG_E("MG_Remote shm: mmap of %llu bytes failed (errno=%d)", static_cast<unsigned long long>(m_size),
+                    errno);
             return MOBILEGL_ERR_OUT_OF_MEMORY;
         }
         m_mapping = addr;

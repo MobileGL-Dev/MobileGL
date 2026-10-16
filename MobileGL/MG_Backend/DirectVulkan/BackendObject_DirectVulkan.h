@@ -18,8 +18,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     // initialization; the physical device must remain valid for the duration of the call.
     void PopulateFormatCapabilities(VkPhysicalDevice physicalDevice,
                                     PFN_vkGetPhysicalDeviceFormatProperties getFormatProperties,
-                                    const MG_External::VulkanCapabilities& capabilities,
-                                    FormatCapabilityCache& cache);
+                                    const MG_External::VulkanCapabilities& capabilities, FormatCapabilityCache& cache);
 
     class BackendObject_DirectVulkan : public BackendObject {
     public:
@@ -115,8 +114,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     // GL_KHR_shader_subgroup is offered at all, natively or emulated.
     Vector<GLExtension> BuildAdvertisedExtensions(Bool shaderSubgroupSupported, Bool timerQueriesSupported,
                                                   Bool anisotropicFilteringSupported,
-                                                  Bool nonZeroIndirectBaseInstanceSupported,
-                                                  Bool cubeMapArraySupported,
+                                                  Bool nonZeroIndirectBaseInstanceSupported, Bool cubeMapArraySupported,
                                                   const AdvertisedFeatureSupport& features = {});
 
     // Format: <GPU Name>, Vulkan <Vulkan Version>, Driver <Driver Version> — the exact

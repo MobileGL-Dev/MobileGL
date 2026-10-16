@@ -171,7 +171,8 @@ namespace MobileGL {
                 constexpr EGLenum kPlatformX11 = 0x31D5;
                 if (platform == EGL_NONE || platform == kPlatformX11) {
                     const EGLint visualId = QueryDefaultX11VisualId();
-                    for (const auto config : displayObject.Configs) m_configs[config].NativeVisualId = visualId;
+                    for (const auto config : displayObject.Configs)
+                        m_configs[config].NativeVisualId = visualId;
                 }
 #endif
 
@@ -316,8 +317,8 @@ namespace MobileGL {
 #if MOBILEGL_BUILD_DISAGGREGATED
                 {
                     const auto released = context != nullptr ? m_contexts.find(context) : m_contexts.end();
-                    tThreadReleasedLostContext = !currentIt->second.RestoreThreadGLState && released != m_contexts.end() &&
-                                                 released->second.GLStateObject &&
+                    tThreadReleasedLostContext = !currentIt->second.RestoreThreadGLState &&
+                                                 released != m_contexts.end() && released->second.GLStateObject &&
                                                  released->second.GLStateObject->IsFromEndedWireSession();
                 }
 #endif
@@ -744,8 +745,7 @@ namespace MobileGL {
             }
 
             EGLContext::EGLContextHandle EGLContext::CreateContext(EGLDisplayHandle display, EGLConfigHandle config,
-                                                                   EGLContextHandle shareCtx,
-                                                                   const EGLint* attribList,
+                                                                   EGLContextHandle shareCtx, const EGLint* attribList,
                                                                    Bool deferGLState) {
                 const std::lock_guard<std::recursive_mutex> lock(m_mutex);
                 const auto* displayObject = TryGetDisplay(display);
@@ -776,8 +776,8 @@ namespace MobileGL {
                 // own native context) - with the two values they share. Contexts that share
                 // objects must agree on it (EGL_BAD_MATCH otherwise).
                 EGLint resetStrategy = EGL_NO_RESET_NOTIFICATION;
-                for (const EGLint name :
-                     {EGL_CONTEXT_OPENGL_RESET_NOTIFICATION_STRATEGY_EXT, EGL_CONTEXT_OPENGL_RESET_NOTIFICATION_STRATEGY}) {
+                for (const EGLint name : {EGL_CONTEXT_OPENGL_RESET_NOTIFICATION_STRATEGY_EXT,
+                                          EGL_CONTEXT_OPENGL_RESET_NOTIFICATION_STRATEGY}) {
                     if (auto value = ParseAttribValue(attribList, name); value) {
                         if (*value != EGL_NO_RESET_NOTIFICATION && *value != EGL_LOSE_CONTEXT_ON_RESET) {
                             SetError(EGL_BAD_ATTRIBUTE);
@@ -1035,8 +1035,8 @@ namespace MobileGL {
                     (ctx->OpenGLProfileMask & EGL_CONTEXT_OPENGL_COMPATIBILITY_PROFILE_BIT)) {
                     return false;
                 }
-                return (ctx->OpenGLProfileMask & EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT) ||
-                       ctx->MajorVersion > 3 || (ctx->MajorVersion == 3 && ctx->MinorVersion >= 1);
+                return (ctx->OpenGLProfileMask & EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT) || ctx->MajorVersion > 3 ||
+                       (ctx->MajorVersion == 3 && ctx->MinorVersion >= 1);
             }
 
             Bool EGLContext::IsCurrentContextOpenGLCompatibilityProfile() const {
@@ -1324,8 +1324,8 @@ namespace MobileGL {
                 return true;
             }
 
-            Bool EGLContext::ResizeSurface(EGLDisplayHandle display, EGLSurfaceHandle surface,
-                                           EGLint width, EGLint height) {
+            Bool EGLContext::ResizeSurface(EGLDisplayHandle display, EGLSurfaceHandle surface, EGLint width,
+                                           EGLint height) {
                 const std::lock_guard<std::recursive_mutex> lock(m_mutex);
                 auto surfaceIt = m_surfaces.find(surface);
                 if (surfaceIt == m_surfaces.end()) {
@@ -1562,8 +1562,7 @@ namespace MobileGL {
                 // P14 S3: whatever this thread's GL state was before the first EGL context was
                 // bound to it is what a later release goes back to.
                 SharedPtr<GLState::GLContext> restoreThreadGLState;
-                if (const auto currentIt = m_threadCurrents.find(threadKey);
-                    currentIt != m_threadCurrents.end()) {
+                if (const auto currentIt = m_threadCurrents.find(threadKey); currentIt != m_threadCurrents.end()) {
                     restoreThreadGLState = currentIt->second.RestoreThreadGLState;
                 } else {
                     restoreThreadGLState = pGLContext;
@@ -1641,8 +1640,7 @@ namespace MobileGL {
                     return false;
                 }
 
-                return surfaceObject->Type == SurfaceType::Window ||
-                       surfaceObject->Type == SurfaceType::PlatformWindow;
+                return surfaceObject->Type == SurfaceType::Window || surfaceObject->Type == SurfaceType::PlatformWindow;
             }
 
             EGLContext::EGLSyncHandle EGLContext::CreateSync(EGLDisplayHandle display, EGLenum type,
@@ -2015,7 +2013,8 @@ namespace MobileGL {
                     SetError(EGL_BAD_ATTRIBUTE);
                     return false;
                 }
-                if (yuv && (!has[1][0] || !has[1][1] || !has[1][2] || has[1][3] != has[1][4] || has[1][3] != has[0][3])) {
+                if (yuv &&
+                    (!has[1][0] || !has[1][1] || !has[1][2] || has[1][3] != has[1][4] || has[1][3] != has[0][3])) {
                     SetError(EGL_BAD_PARAMETER);
                     return false;
                 }
@@ -2023,7 +2022,8 @@ namespace MobileGL {
                     SetError(EGL_BAD_PARAMETER);
                     return false;
                 }
-                if (attribs.Offset < 0 || attribs.Pitch <= 0 || (yuv && (attribs.Plane1Offset < 0 || attribs.Plane1Pitch <= 0))) {
+                if (attribs.Offset < 0 || attribs.Pitch <= 0 ||
+                    (yuv && (attribs.Plane1Offset < 0 || attribs.Plane1Pitch <= 0))) {
                     SetError(EGL_BAD_ACCESS);
                     return false;
                 }
@@ -2094,7 +2094,7 @@ namespace MobileGL {
                     return false;
                 }
                 static constexpr Uint32 kFormats[] = {kDrmFourccAbgr8888, kDrmFourccXbgr8888, kDrmFourccArgb8888,
-                                                      kDrmFourccXrgb8888, kDrmFourccNv12, kDrmFourccP010};
+                                                      kDrmFourccXrgb8888, kDrmFourccNv12,     kDrmFourccP010};
                 constexpr EGLint kRgbCount = 4;
                 const EGLint total =
                     !available ? 0 : (yuvAvailable ? static_cast<EGLint>(std::size(kFormats)) : kRgbCount);
@@ -2103,7 +2103,8 @@ namespace MobileGL {
                     return true;
                 }
                 const EGLint count = std::min(maxFormats, total);
-                for (EGLint i = 0; i < count; ++i) formats[i] = static_cast<EGLint>(kFormats[i]);
+                for (EGLint i = 0; i < count; ++i)
+                    formats[i] = static_cast<EGLint>(kFormats[i]);
                 *numFormats = count;
                 return true;
             }

@@ -52,7 +52,11 @@ namespace MobileGL::MG_Remote::Transport {
     LinkCapabilities ShmLink::Capabilities() const {
         const ReplySlotPool replies(m_memory.ReplyBase(), m_memory.ReplyBytes(), m_memory.ReplySlotCount());
         // RetainsReplies stays false: a slot is seq % slotCount and the next answer into it wins.
-        return {true, true, true, m_memory.CmdRingCapacity() / 2, replies.MaxReplyBytes(),
+        return {true,
+                true,
+                true,
+                m_memory.CmdRingCapacity() / 2,
+                replies.MaxReplyBytes(),
                 /*RetainsReplies=*/false};
     }
     LinkProgress* ShmLink::Progress() {

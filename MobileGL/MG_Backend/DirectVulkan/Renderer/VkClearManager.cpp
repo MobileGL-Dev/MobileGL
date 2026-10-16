@@ -22,8 +22,7 @@
 
 namespace MobileGL::MG_Backend::DirectVulkan {
     static Bool IsCubeMapFaceUploadTarget(TextureUploadTarget target) {
-        return target >= TextureUploadTarget::CubeMapPositiveX &&
-               target <= TextureUploadTarget::CubeMapNegativeZ;
+        return target >= TextureUploadTarget::CubeMapPositiveX && target <= TextureUploadTarget::CubeMapNegativeZ;
     }
 
     VkClearColorValue MakeVkClearColorValue(const ClearAttachmentPayload& payload, Bool formatLacksAlpha) {
@@ -64,8 +63,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             const Float value = std::clamp(encoded, 0.0f, 1.0f);
             return value <= 0.04045f ? value / 12.92f : std::pow((value + 0.055f) / 1.055f, 2.4f);
         };
-        payload.color = FloatVec4(toLinear(payload.color.x()), toLinear(payload.color.y()),
-                                  toLinear(payload.color.z()), payload.color.w());
+        payload.color = FloatVec4(toLinear(payload.color.x()), toLinear(payload.color.y()), toLinear(payload.color.z()),
+                                  payload.color.w());
     }
 
     // ResolveAttachmentLayerCount used to be duplicated here, reading attachment.GetSize().z()

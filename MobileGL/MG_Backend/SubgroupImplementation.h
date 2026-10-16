@@ -24,15 +24,19 @@ namespace MobileGL::MG_Backend {
     // MOBILEGL_SUBGROUP_EMULATION: Auto emulates exactly where nothing native exists; ForceOn
     // emulates even over native support (to exercise the emulation on any device); ForceOff
     // never emulates.
-    enum class SubgroupImplementation : Uint8 { None, Native, Emulated };
+    enum class SubgroupImplementation : Uint8 {
+        None,
+        Native,
+        Emulated
+    };
 
     inline constexpr Uint32 kEmulatedSubgroupSize = 32u;
     inline constexpr Uint32 kEmulatedSubgroupStages = GL_COMPUTE_SHADER_BIT;
     inline constexpr Uint32 kEmulatedSubgroupFeatures =
-        GL_SUBGROUP_FEATURE_BASIC_BIT_KHR | GL_SUBGROUP_FEATURE_VOTE_BIT_KHR |
-        GL_SUBGROUP_FEATURE_ARITHMETIC_BIT_KHR | GL_SUBGROUP_FEATURE_BALLOT_BIT_KHR |
-        GL_SUBGROUP_FEATURE_SHUFFLE_BIT_KHR | GL_SUBGROUP_FEATURE_SHUFFLE_RELATIVE_BIT_KHR |
-        GL_SUBGROUP_FEATURE_CLUSTERED_BIT_KHR | GL_SUBGROUP_FEATURE_QUAD_BIT_KHR;
+        GL_SUBGROUP_FEATURE_BASIC_BIT_KHR | GL_SUBGROUP_FEATURE_VOTE_BIT_KHR | GL_SUBGROUP_FEATURE_ARITHMETIC_BIT_KHR |
+        GL_SUBGROUP_FEATURE_BALLOT_BIT_KHR | GL_SUBGROUP_FEATURE_SHUFFLE_BIT_KHR |
+        GL_SUBGROUP_FEATURE_SHUFFLE_RELATIVE_BIT_KHR | GL_SUBGROUP_FEATURE_CLUSTERED_BIT_KHR |
+        GL_SUBGROUP_FEATURE_QUAD_BIT_KHR;
 
     inline SubgroupImplementation ResolveSubgroupImplementation(const Bool nativeSupported) {
         switch (MG_Config::Features.SubgroupEmulation) {
@@ -54,9 +58,12 @@ namespace MobileGL::MG_Backend {
 
     inline const char* SubgroupImplementationName(const SubgroupImplementation implementation) {
         switch (implementation) {
-        case SubgroupImplementation::Native: return "native";
-        case SubgroupImplementation::Emulated: return "emulated";
-        case SubgroupImplementation::None: break;
+        case SubgroupImplementation::Native:
+            return "native";
+        case SubgroupImplementation::Emulated:
+            return "emulated";
+        case SubgroupImplementation::None:
+            break;
         }
         return "none";
     }

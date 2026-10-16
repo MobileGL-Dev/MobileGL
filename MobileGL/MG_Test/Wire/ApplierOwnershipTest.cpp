@@ -196,8 +196,8 @@ namespace {
         BindSession(kSessionA, 4);
         P::MGPipeApplierState& fourth = P::MGPipeApplier();
         EXPECT_NE(&third, &fourth) << "two contexts of one share group share one applier - the "
-                                     "bindings, the current program and the CSO store would all "
-                                     "overwrite each other";
+                                      "bindings, the current program and the CSO store would all "
+                                      "overwrite each other";
         EXPECT_EQ(&third.Resources, &fourth.Resources)
             << "two contexts of one share group were given different object tables";
         EXPECT_NE(ResourceRecord(shared), nullptr)
@@ -237,8 +237,7 @@ namespace {
         P::MGPipeApplierState& inB = P::MGPipeApplier();
         EXPECT_NE(&inA, &inB) << "two sessions with identical tokens resolved one applier";
         EXPECT_NE(&inA.Resources, &inB.Resources);
-        EXPECT_EQ(ResourceRecord(handle), nullptr)
-            << "session B resolved an object record session A created";
+        EXPECT_EQ(ResourceRecord(handle), nullptr) << "session B resolved an object record session A created";
     }
 
     // THE GROUP'S RECORDS GO WITH ITS LAST CONTEXT, NOT ITS FIRST. A context of a live group is
@@ -261,8 +260,7 @@ namespace {
         EXPECT_EQ(P::MGPipeApplierShareGroupCountForTesting(kSessionA), 1u);
 
         P::MGPipeApplierUnregisterContext(kSessionA, 6);
-        EXPECT_EQ(P::MGPipeApplierShareGroupCountForTesting(kSessionA), 0u)
-            << "the group outlived its last context";
+        EXPECT_EQ(P::MGPipeApplierShareGroupCountForTesting(kSessionA), 0u) << "the group outlived its last context";
 
         // A RECREATED CONTEXT MUST NOT INHERIT THE DEAD GROUP'S RECORDS. The frontend never
         // re-uses a token, so this is the belt: a token that comes back resolves to a fresh
@@ -285,8 +283,7 @@ namespace {
         t_sessionKey = 0;
         t_contextToken = 0;
         P::MGPipeApplierState& processWide = P::MGPipeApplier();
-        EXPECT_EQ(ResourceRecord(handle), nullptr)
-            << "the process-wide applier resolved a record a session registered";
+        EXPECT_EQ(ResourceRecord(handle), nullptr) << "the process-wide applier resolved a record a session registered";
 
         BindSession(kSessionA, 1);
         EXPECT_NE(&P::MGPipeApplier(), &processWide) << "a session resolved the process-wide applier";

@@ -77,8 +77,7 @@ namespace MobileGL {
 
                 std::vector<Instruction*> modes;
                 for (Instruction& mode : irContext->module()->execution_modes()) {
-                    if (mode.opcode() == spv::Op::OpExecutionMode &&
-                        mode.NumInOperands() > kExecutionModeModeOperand &&
+                    if (mode.opcode() == spv::Op::OpExecutionMode && mode.NumInOperands() > kExecutionModeModeOperand &&
                         static_cast<spv::ExecutionMode>(mode.GetSingleWordInOperand(kExecutionModeModeOperand)) ==
                             spv::ExecutionMode::PixelCenterInteger) {
                         modes.push_back(&mode);
@@ -94,7 +93,8 @@ namespace MobileGL {
                     const auto* floatType = typeMgr->GetType(floatTypeId);
                     if (floatType == nullptr || floatType->AsFloat() == nullptr) return 0;
                     const auto* constant = constantMgr->GetConstant(floatType, {std::bit_cast<uint32_t>(value)});
-                    const Instruction* inst = constant ? constantMgr->GetDefiningInstruction(constant, floatTypeId) : nullptr;
+                    const Instruction* inst =
+                        constant ? constantMgr->GetDefiningInstruction(constant, floatTypeId) : nullptr;
                     return inst ? inst->result_id() : 0;
                 };
 
@@ -155,7 +155,8 @@ namespace MobileGL {
                 }
                 if (refused) return Status::Failure;
 
-                for (Instruction* mode : modes) irContext->KillInst(mode);
+                for (Instruction* mode : modes)
+                    irContext->KillInst(mode);
 
                 // `%r = OpLoad %ty %ptr` becomes `%fresh = OpLoad %ty %ptr` followed by
                 // `%r = OpFSub %ty %fresh %offset`: every existing use of %r picks the shifted
@@ -170,10 +171,10 @@ namespace MobileGL {
                     Instruction* next = shifted.load->NextNode();
                     if (next == nullptr) return Status::Failure;
                     shifted.load->SetResultId(freshId);
-                    next->InsertBefore(MakeUnique<Instruction>(
-                        irContext, spv::Op::OpFSub, typeId, resultId,
-                        Instruction::OperandList{{SPV_OPERAND_TYPE_ID, {freshId}},
-                                                 {SPV_OPERAND_TYPE_ID, {shifted.offsetId}}}));
+                    next->InsertBefore(
+                        MakeUnique<Instruction>(irContext, spv::Op::OpFSub, typeId, resultId,
+                                                Instruction::OperandList{{SPV_OPERAND_TYPE_ID, {freshId}},
+                                                                         {SPV_OPERAND_TYPE_ID, {shifted.offsetId}}}));
                 }
 
                 irContext->InvalidateAnalysesExceptFor(IRContext::kAnalysisNone);

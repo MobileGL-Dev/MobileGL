@@ -76,7 +76,7 @@ namespace MobileGL::MG_Pipe {
     // list of friend functions so the header names exactly one friend.
     struct MGPipeFillAccess {
         static void CopyServerPackReference(PipeInputs& dst, const PipeInputs& actual,
-                                             const PixelStoreParameters& pack) {
+                                            const PixelStoreParameters& pack) {
             dst.m_pixelStore[0] = pack;
             dst.m_pixelStore[1] = actual.m_pixelStore[1];
         }
@@ -139,7 +139,8 @@ namespace MobileGL::MG_Pipe {
             // every draw does not pay a reference-count increment and decrement for a pointer it
             // already holds (P14: one of these moves per Minecraft draw, the other three rarely).
             case F::GetBoundVertexArray:
-                if (dst.m_boundVertexArray != ctx.GetBoundVertexArray()) dst.m_boundVertexArray = ctx.GetBoundVertexArray();
+                if (dst.m_boundVertexArray != ctx.GetBoundVertexArray())
+                    dst.m_boundVertexArray = ctx.GetBoundVertexArray();
                 break;
             case F::GetBufferBindingSlot:
                 // Every global target has a slot; Index stays null - GLContext resolves it
@@ -358,11 +359,15 @@ namespace MobileGL::MG_Pipe {
     };
 
     namespace {
-        GLContext* LiveContext() { return MG_State::pGLContext.get(); }
+        GLContext* LiveContext() {
+            return MG_State::pGLContext.get();
+        }
 
 #if !MOBILEGL_BUILD_DISAGGREGATED
         // P13 W5: no transport, no run-ahead client.
-        Bool ClientRunsAhead() { return false; }
+        Bool ClientRunsAhead() {
+            return false;
+        }
 #endif
 #if MOBILEGL_BUILD_DISAGGREGATED
         // ---- P5e (ra): the fill decision (CONTRACT-P5E §3.1) -----------------------------
@@ -408,12 +413,12 @@ namespace MobileGL::MG_Pipe {
             if (g_forceBarrieredFill) return true;
             MGPWireOp op = MGPipeRecordOpForVerb(verb);
             if (op == MGPWireOp::ReadPixels && PackReadbackGoesToBuffer(ctx)) op = MGPWireOp::ReadPixelsToBuffer;
-            if (op == MGPWireOp::GetTextureImage && PackReadbackGoesToBuffer(ctx)) op = MGPWireOp::GetTextureImageToBuffer;
+            if (op == MGPWireOp::GetTextureImage && PackReadbackGoesToBuffer(ctx))
+                op = MGPWireOp::GetTextureImageToBuffer;
             // No record (answered from the caps mirror): no apply can read a fill for it.
             if (op == kMGPipeNoRecord) return false;
             if (MGPipeWaitClassFor(op) != kWaitNone) return true;
-            if (MGPipeCallClassFor(op) == kCtxVerb && ctx != nullptr &&
-                ctx->IsTransformFeedbackActive()) {
+            if (MGPipeCallClassFor(op) == kCtxVerb && ctx != nullptr && ctx->IsTransformFeedbackActive()) {
                 return true;
             }
             return false;
@@ -529,7 +534,8 @@ namespace MobileGL::MG_Pipe {
         // precedes MGP_INPUT_VERIFY_READ in every accessor and a stamp of 0 is never fresh,
         // so such a read is Fatal{UnmigratedPipeInput, "<Field>@<none>"} before the hook
         // could matter - which holds only while a verify build always carries the poison.
-        static_assert(MOBILEGL_PIPE_POISON, "the compare-at-read hook relies on the poison for reads before the first fill");
+        static_assert(MOBILEGL_PIPE_POISON,
+                      "the compare-at-read hook relies on the poison for reads before the first fill");
 
         struct VerifyState {
             Bool Parsed = false;
@@ -569,8 +575,8 @@ namespace MobileGL::MG_Pipe {
         // filled). Cost: two Bool compares and one String compare per fill, verify builds only.
         void ArmVerify() {
             const auto& features = MG_Config::Features;
-            if (g_verify.Parsed && g_verify.Enabled == features.PipeVerify && g_verify.Fatal == features.PipeVerifyFatal &&
-                g_verify.CorruptKnob == features.PipeVerifyCorrupt) {
+            if (g_verify.Parsed && g_verify.Enabled == features.PipeVerify &&
+                g_verify.Fatal == features.PipeVerifyFatal && g_verify.CorruptKnob == features.PipeVerifyCorrupt) {
                 return;
             }
             g_verify.Parsed = true;
@@ -588,18 +594,20 @@ namespace MobileGL::MG_Pipe {
                 g_verify.Corrupt = field;
             }
             // The lanes grep for this line: a verify run whose log lacks it never armed.
-            MGLOG_I("MGPipe: verify armed - %u fields, %u verbs, fatal=%d", static_cast<unsigned>(kMGPipeInputFieldCount),
-                    static_cast<unsigned>(kMGPipeVerbCount), g_verify.Fatal ? 1 : 0);
+            MGLOG_I("MGPipe: verify armed - %u fields, %u verbs, fatal=%d",
+                    static_cast<unsigned>(kMGPipeInputFieldCount), static_cast<unsigned>(kMGPipeVerbCount),
+                    g_verify.Fatal ? 1 : 0);
             if (g_verify.Corrupt) {
-                MGLOG_I("MGPipe: verify corruption armed - %s", kMGPipeInputFieldNames[static_cast<SizeT>(*g_verify.Corrupt)]);
+                MGLOG_I("MGPipe: verify corruption armed - %s",
+                        kMGPipeInputFieldNames[static_cast<SizeT>(*g_verify.Corrupt)]);
             }
         }
 
         void ReportDivergence(MGPipeInputField field, const char* where) {
             const Uint64 serial = MGPipeFillAccess::Filled(MGPipeClientInputs()).CurrentVerbSerial;
             MGLOG_F("MGPipe: Fatal{PipeVerifyDiffer, \"%s@%s\", verb=%llu, where=%s}",
-                    kMGPipeInputFieldNames[static_cast<SizeT>(field)], MGPipeVerbName(MGPipeClientInputs().CurrentVerb()),
-                    static_cast<unsigned long long>(serial), where);
+                    kMGPipeInputFieldNames[static_cast<SizeT>(field)],
+                    MGPipeVerbName(MGPipeClientInputs().CurrentVerb()), static_cast<unsigned long long>(serial), where);
             if (g_verify.Fatal) std::abort();
             g_verify.Divergences.fetch_add(1, std::memory_order_relaxed);
         }
@@ -685,7 +693,9 @@ namespace MobileGL::MG_Pipe {
     // PipeInputs.h. The FATAL=0 summary, written while the role's log is still open:
     // MobileGL::Destroy calls this right before MG_Util::Debug::Close() - see VerifyState for why
     // the static destructor cannot be the writer.
-    void MGPipeVerifyFlushSummary() { g_verify.FlushSummary(); }
+    void MGPipeVerifyFlushSummary() {
+        g_verify.FlushSummary();
+    }
 #endif // MOBILEGL_PIPE_VERIFY
 
     // ---- push on mutation (P1 lane finding F2) ----
@@ -722,8 +732,8 @@ namespace MobileGL::MG_Pipe {
         // barriered verb the applier is usually already caught up, so this is a watermark test
         // rather than a park in the common case.
         QuiesceApplierBeforeFill("MGPipeNoteFrontendMutation");
-        MG_Remote::Client::ClientSession::RefusePipeInputsTouchWhileApplierOwnsIt(
-            "MGPipeNoteFrontendMutation", /*isBarrieredFill=*/true);
+        MG_Remote::Client::ClientSession::RefusePipeInputsTouchWhileApplierOwnsIt("MGPipeNoteFrontendMutation",
+                                                                                  /*isBarrieredFill=*/true);
 #endif
         auto* ctx = LiveContext();
         if (ctx == nullptr) return;
@@ -931,8 +941,8 @@ namespace MobileGL::MG_Pipe {
         // place. Monolith keeps initialBytes on the record; its applier reads them directly. The
         // apply thread (RunsAsTheServerRole()) also takes the plain route: it emits no client wire
         // records, so the follow-up's self-check would abort the server.
-        if (MG_Config::Transport != MG_Config::TransportMode::Monolith &&
-            !MG_Remote::Client::RunsAsTheServerRole() && initialBytes != nullptr) {
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith && !MG_Remote::Client::RunsAsTheServerRole() &&
+            initialBytes != nullptr) {
             MGPipeRouteResourceRespecify(desc, nullptr);
             // COUNTED, NOT ASSUMED, and this is the only thing that can gate the follow-up at
             // all. Dropping the walk below leaves a respecify that went out with nullptr and
@@ -989,15 +999,18 @@ namespace MobileGL::MG_Pipe {
         return stageChunk == 0 ? kMGPipeSubDataMaxRecordSize : static_cast<Uint64>(stageChunk);
     }
 #else
-    constexpr Uint64 MGPipeContentChunkCap() { return kMGPipeSubDataMaxRecordSize; }
+    constexpr Uint64 MGPipeContentChunkCap() {
+        return kMGPipeSubDataMaxRecordSize;
+    }
 #endif
 
     void MGPipeEmitResourceSubData(BufferObject& buffer, SizeT offset, SizeT size) {
         const MGPipeHandle handle = ContentHandleFor(buffer, "resource_subdata");
         if (MGPipeHandleIsNull(handle)) return;
         const Uint8* base = buffer.MappedData();
-        const Bool encodable =
-            MGPipeForEachSubDataRecordRange(offset, size, [&](Uint64 at, Uint64 length) {
+        const Bool encodable = MGPipeForEachSubDataRecordRange(
+            offset, size,
+            [&](Uint64 at, Uint64 length) {
                 MGPSubData record{};
                 // The pre-pass inside the walk proved every piece encodable before the first
                 // one was emitted, so this cannot be false - but a zeroed record (null
@@ -1015,7 +1028,8 @@ namespace MobileGL::MG_Pipe {
                 // rather than re-read so the staged run and the record's own claim come from
                 // one number.
                 MGPipeRouteResourceSubData(record, base + at, length);
-            }, MGPipeContentChunkCap());
+            },
+            MGPipeContentChunkCap());
         if (!encodable) {
             MGLOG_E_ONCE("MGPipe: resource_subdata range [%llu, +%llu) on buffer %u cannot be encoded - "
                          "one record's destination box caps the offset at 2^31-1",
@@ -1028,8 +1042,9 @@ namespace MobileGL::MG_Pipe {
         const MGPipeHandle handle = ContentHandleFor(buffer, "buffer_subdata_resident");
         if (MGPipeHandleIsNull(handle)) return;
         const auto* base = static_cast<const Uint8*>(bytes);
-        const Bool encodable =
-            MGPipeForEachSubDataRecordRange(offset, size, [&](Uint64 at, Uint64 length) {
+        const Bool encodable = MGPipeForEachSubDataRecordRange(
+            offset, size,
+            [&](Uint64 at, Uint64 length) {
                 MGPSubData record{};
                 // NOT a verbatim level shadow: these bytes are the application's staging
                 // store, or the pattern FillSubData expanded locally, and neither is this
@@ -1049,10 +1064,10 @@ namespace MobileGL::MG_Pipe {
                 // PipeStats.h's CallClass::ResidentSubDataEmissions for why the count is the
                 // only thing that can tell this arm from the in-place memcpy beside it.
                 if (MG_Util::PipeStats::Enabled()) {
-                    MG_Util::PipeStats::AddCalls(
-                        MG_Util::PipeStats::CallClass::ResidentSubDataEmissions, 1);
+                    MG_Util::PipeStats::AddCalls(MG_Util::PipeStats::CallClass::ResidentSubDataEmissions, 1);
                 }
-            }, MGPipeContentChunkCap());
+            },
+            MGPipeContentChunkCap());
         if (!encodable) {
             MGLOG_E_ONCE("MGPipe: buffer_subdata_resident range [%llu, +%llu) on buffer %u cannot be encoded",
                          static_cast<unsigned long long>(offset), static_cast<unsigned long long>(size),
@@ -1078,8 +1093,8 @@ namespace MobileGL::MG_Pipe {
         // Only that range: staging bytes outside it would write stale shadow bytes over server
         // data the flush does not cover, such as GPU writes. The apply thread takes the plain
         // route, as in MGPipeEmitResourceRespecify.
-        if (MG_Config::Transport != MG_Config::TransportMode::Monolith &&
-            !MG_Remote::Client::RunsAsTheServerRole() && size != 0) {
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith && !MG_Remote::Client::RunsAsTheServerRole() &&
+            size != 0) {
             MGPipeEmitResourceSubData(buffer, offset, size);
         }
 #endif
@@ -1217,7 +1232,9 @@ namespace MobileGL::MG_Pipe {
     // fill only for UNBARRIERED records); an unbarriered apply may not read it at all, and
     // §3.3's detector is what says so by name. Clearing the stamps as well would trade that
     // named abort for the poison Fatal, which names the field but not the rule it broke.
-    void MGPipeReleaseResidualFillPins() { MGPipeFillAccess::ReleaseObjectPins(MGPipeClientInputs()); }
+    void MGPipeReleaseResidualFillPins() {
+        MGPipeFillAccess::ReleaseObjectPins(MGPipeClientInputs());
+    }
 
     // P5e (ra), CONTRACT-P5E §2.5. Declared in PipeMutation.h; see there for why it is not a
     // ClientSession call at the GL entry point.
@@ -1279,8 +1296,7 @@ namespace MobileGL::MG_Pipe {
 
     Bool MGPipeEmitVertexElementsDestroyAndFree(Uint64 lifetimeId) {
 #if MOBILEGL_BUILD_DISAGGREGATED
-        if (MGPipeDeferDestroyAndFreeIfOnApplyThread(MGPipeKind::VertexElementsCso,
-                                                     lifetimeId)) {
+        if (MGPipeDeferDestroyAndFreeIfOnApplyThread(MGPipeKind::VertexElementsCso, lifetimeId)) {
             return false;
         }
 #endif
@@ -1296,8 +1312,7 @@ namespace MobileGL::MG_Pipe {
         // May be the null handle: no slot is minted for a VAO that no draw ever validated with
         // and no backend twin table ever looked up. That case still raises the notice below -
         // see there.
-        const MGPipeHandle handle =
-            MGPipeSlots().FindByLifetimeId(MGPipeKind::VertexElementsCso, lifetimeId);
+        const MGPipeHandle handle = MGPipeSlots().FindByLifetimeId(MGPipeKind::VertexElementsCso, lifetimeId);
 
         // ASKED, NOT ASSUMED. A slot is not evidence of a record: DirectGLES mints one from
         // BackendSlotTable::GetOrCreate at every VAO sync, whether or not bit 8 asked this
@@ -1355,9 +1370,9 @@ namespace MobileGL::MG_Pipe {
         // once instead of four times. It is deliberately NOT kMGPipeSubsystemsMigratedAtP4a
         // (which is 0x1fff, every bit through P4a): the rule belongs to the families this
         // phase adds and to no earlier one.
-        inline constexpr Uint64 kMGPipeP4aFamilySubsystems =
-            kMGPipeSubsystemFramebuffer | kMGPipeSubsystemTextureResources |
-            kMGPipeSubsystemSamplers | kMGPipeSubsystemPrograms;
+        inline constexpr Uint64 kMGPipeP4aFamilySubsystems = kMGPipeSubsystemFramebuffer |
+                                                             kMGPipeSubsystemTextureResources |
+                                                             kMGPipeSubsystemSamplers | kMGPipeSubsystemPrograms;
 
         // A handle family (framebuffer, texture resources, samplers, programs) emits only when
         // something consumes its records; otherwise it emits nothing and the legacy path runs. An
@@ -1380,8 +1395,7 @@ namespace MobileGL::MG_Pipe {
             if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
                 // P5f fm: texture/framebuffer records have their own server consumers;
                 // Magma consumes them without claiming the still-unmigrated buffer family.
-                return MG_Remote::Client::CapsMirrorInstance().ServerConsumes(
-                    subsystem & kMGPipeP4aFamilySubsystems);
+                return MG_Remote::Client::CapsMirrorInstance().ServerConsumes(subsystem & kMGPipeP4aFamilySubsystems);
             }
 #endif
             return MGPipeGetResourceOps() != nullptr;
@@ -1401,36 +1415,31 @@ namespace MobileGL::MG_Pipe {
 
         constexpr Uint64 P4aFamilyDependencyTableCoverage() {
             Uint64 covered = 0;
-            for (const MGPipeSubsystemDependencyRow& row : kMGPipeSubsystemDependencies) covered |= row.Family;
+            for (const MGPipeSubsystemDependencyRow& row : kMGPipeSubsystemDependencies)
+                covered |= row.Family;
             return covered;
         }
-        static_assert((P4aFamilyDependencyTableCoverage() & kMGPipeP4aFamilySubsystems) ==
-                          kMGPipeP4aFamilySubsystems,
+        static_assert((P4aFamilyDependencyTableCoverage() & kMGPipeP4aFamilySubsystems) == kMGPipeP4aFamilySubsystems,
                       "every P4a family needs a D-K2 dependency row in MG_Pipe/SubsystemDeps.def, "
                       "even an empty one");
-        static_assert(P4aFamilyDependencyBits(kMGPipeSubsystemFramebuffer) ==
-                          kMGPipeSubsystemTextureResources,
+        static_assert(P4aFamilyDependencyBits(kMGPipeSubsystemFramebuffer) == kMGPipeSubsystemTextureResources,
                       "bit 9 requires bit 10");
         static_assert(P4aFamilyDependencyBits(kMGPipeSubsystemTextureResources) ==
                           (kMGPipeSubsystemResources | kMGPipeSubsystemSamplers),
                       "bit 10 requires bit 7 and bit 11");
-        static_assert(P4aFamilyDependencyBits(kMGPipeSubsystemSamplers) ==
-                          kMGPipeSubsystemTextureResources,
+        static_assert(P4aFamilyDependencyBits(kMGPipeSubsystemSamplers) == kMGPipeSubsystemTextureResources,
                       "bit 11 requires bit 10");
         static_assert(P4aFamilyDependencyBits(kMGPipeSubsystemPrograms) == 0, "bit 12 depends on nothing");
         // No family may depend on itself: a row that did would be unfalsifiable (its own bit is
         // set by the time the conjunct is evaluated) and would read as a dependency nobody has.
-        static_assert((P4aFamilyDependencyBits(kMGPipeSubsystemFramebuffer) &
-                       kMGPipeSubsystemFramebuffer) == 0 &&
+        static_assert((P4aFamilyDependencyBits(kMGPipeSubsystemFramebuffer) & kMGPipeSubsystemFramebuffer) == 0 &&
                           (P4aFamilyDependencyBits(kMGPipeSubsystemTextureResources) &
                            kMGPipeSubsystemTextureResources) == 0 &&
-                          (P4aFamilyDependencyBits(kMGPipeSubsystemSamplers) &
-                           kMGPipeSubsystemSamplers) == 0,
+                          (P4aFamilyDependencyBits(kMGPipeSubsystemSamplers) & kMGPipeSubsystemSamplers) == 0,
                       "a D-K2 row must not name its own family");
         // The default mask carries every dependency, so the shipped arm is unchanged by all of
         // this - the table only ever narrows a HAND-PICKED A/B mask.
-        static_assert((kMGPipeSubsystemsMigratedAtP4a &
-                       P4aFamilyDependencyBits(kMGPipeP4aFamilySubsystems)) ==
+        static_assert((kMGPipeSubsystemsMigratedAtP4a & P4aFamilyDependencyBits(kMGPipeP4aFamilySubsystems)) ==
                           P4aFamilyDependencyBits(kMGPipeP4aFamilySubsystems),
                       "the P4a phase mask must satisfy every dependency it declares");
 
@@ -1457,8 +1466,7 @@ namespace MobileGL::MG_Pipe {
             if (!MGPipeSubsystemDependenciesAreSet(kMGPipeSubsystemBufferBindings, pushMask)) return false;
 #if MOBILEGL_BUILD_DISAGGREGATED
             if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
-                return MG_Remote::Client::CapsMirrorInstance().ServerConsumes(
-                    kMGPipeSubsystemBufferBindings);
+                return MG_Remote::Client::CapsMirrorInstance().ServerConsumes(kMGPipeSubsystemBufferBindings);
             }
 #endif
             // Under monolith the "consumer" is the backend that registered the resource op
@@ -1469,10 +1477,8 @@ namespace MobileGL::MG_Pipe {
 
         Bool FamilyIsLive(Uint64 subsystem, Uint64 wired) {
             const Uint64 pushMask = MG_Config::Features.PipePush;
-            return (pushMask & subsystem) != 0 && (wired & subsystem) != 0 &&
-                   P4aFamilyHasItsConsumer(subsystem) &&
-                   P4aFamilyDependenciesAreSet(subsystem, pushMask) &&
-                   P5eFamilyIsLive(subsystem, pushMask);
+            return (pushMask & subsystem) != 0 && (wired & subsystem) != 0 && P4aFamilyHasItsConsumer(subsystem) &&
+                   P4aFamilyDependenciesAreSet(subsystem, pushMask) && P5eFamilyIsLive(subsystem, pushMask);
         }
 
         // ---- The family seam: a birth hook forwards to its family's emitter ----
@@ -1543,7 +1549,8 @@ namespace MobileGL::MG_Pipe {
 
             // A fresh server holds no record at all (MGPipeForgetEndedSession).
             void ForgetAll() {
-                for (Vector<Entry>& table : m_kinds) table.clear();
+                for (Vector<Entry>& table : m_kinds)
+                    table.clear();
                 m_band.clear();
             }
 
@@ -1641,22 +1648,22 @@ namespace MobileGL::MG_Pipe {
 
     void MGPipeEmitTextureResourceCreate(ITextureObject& texture) {
         if (!FamilyIsLive(kMGPipeSubsystemTextureResources, kMGPipeWiredTextureSubsystem)) return;
-        ForwardWhenWired<kMGPipeWiredTextureSubsystem>(
-            MGPipeTextureEmitterInstance(), [&](auto& emitter) { emitter.EmitResourceCreate(texture); });
+        ForwardWhenWired<kMGPipeWiredTextureSubsystem>(MGPipeTextureEmitterInstance(),
+                                                       [&](auto& emitter) { emitter.EmitResourceCreate(texture); });
     }
 
     void MGPipeEmitTextureResourceRespecify(ITextureObject& texture, MGPipeTextureRespecifyScope scope,
                                             Uint32 uploadTarget, Uint32 level) {
         if (!FamilyIsLive(kMGPipeSubsystemTextureResources, kMGPipeWiredTextureSubsystem)) return;
-        ForwardWhenWired<kMGPipeWiredTextureSubsystem>(
-            MGPipeTextureEmitterInstance(),
-            [&](auto& emitter) { emitter.EmitResourceRespecify(texture, scope, uploadTarget, level); });
+        ForwardWhenWired<kMGPipeWiredTextureSubsystem>(MGPipeTextureEmitterInstance(), [&](auto& emitter) {
+            emitter.EmitResourceRespecify(texture, scope, uploadTarget, level);
+        });
     }
 
     void MGPipeEmitTextureParams(ITextureObject& texture) {
         if (!FamilyIsLive(kMGPipeSubsystemTextureResources, kMGPipeWiredTextureSubsystem)) return;
-        ForwardWhenWired<kMGPipeWiredTextureSubsystem>(
-            MGPipeTextureEmitterInstance(), [&](auto& emitter) { emitter.EmitTextureParams(texture); });
+        ForwardWhenWired<kMGPipeWiredTextureSubsystem>(MGPipeTextureEmitterInstance(),
+                                                       [&](auto& emitter) { emitter.EmitTextureParams(texture); });
     }
 
     void MGPipeNoteTextureLevelDirty(ITextureObject& storageOwner, Uint32 uploadTarget, Uint32 level) {
@@ -1668,31 +1675,29 @@ namespace MobileGL::MG_Pipe {
         // the texture. The level stays dirty on the object, which no live context can reach.
         if (MG_Remote::Client::ClientSession::DeviceLost()) return;
 #endif
-        ForwardWhenWired<kMGPipeWiredTextureSubsystem>(
-            MGPipeTextureEmitterInstance(),
-            [&](auto& emitter) { emitter.NoteLevelDirty(storageOwner, uploadTarget, level); });
+        ForwardWhenWired<kMGPipeWiredTextureSubsystem>(MGPipeTextureEmitterInstance(), [&](auto& emitter) {
+            emitter.NoteLevelDirty(storageOwner, uploadTarget, level);
+        });
     }
 
     void MGPipeEmitRenderbufferResourceCreate(RenderbufferObject& renderbuffer) {
         if (!FamilyIsLive(kMGPipeSubsystemTextureResources, kMGPipeWiredTextureSubsystem)) return;
         ForwardWhenWired<kMGPipeWiredTextureSubsystem>(
-            MGPipeTextureEmitterInstance(),
-            [&](auto& emitter) { emitter.EmitRenderbufferCreate(renderbuffer); });
+            MGPipeTextureEmitterInstance(), [&](auto& emitter) { emitter.EmitRenderbufferCreate(renderbuffer); });
     }
 
     void MGPipeEmitRenderbufferResourceRespecify(RenderbufferObject& renderbuffer) {
         if (!FamilyIsLive(kMGPipeSubsystemTextureResources, kMGPipeWiredTextureSubsystem)) return;
         ForwardWhenWired<kMGPipeWiredTextureSubsystem>(
-            MGPipeTextureEmitterInstance(),
-            [&](auto& emitter) { emitter.EmitRenderbufferRespecify(renderbuffer); });
+            MGPipeTextureEmitterInstance(), [&](auto& emitter) { emitter.EmitRenderbufferRespecify(renderbuffer); });
     }
 
     void MGPipeNoteTextureBoundAs(MGPipeHandle texture, Uint32 bindBit) {
         // Not gated on FamilyIsLive: the mask is client state (see the declaration), and the
         // emitter gates the emission it causes.
-        ForwardWhenWired<kMGPipeWiredTextureSubsystem>(
-            MGPipeTextureEmitterInstance(),
-            [&](auto& emitter) { emitter.NoteTextureBoundAs(texture, static_cast<Uint16>(bindBit)); });
+        ForwardWhenWired<kMGPipeWiredTextureSubsystem>(MGPipeTextureEmitterInstance(), [&](auto& emitter) {
+            emitter.NoteTextureBoundAs(texture, static_cast<Uint16>(bindBit));
+        });
     }
 
     void MGPipeNoteTextureImageBound(ITextureObject& texture) {
@@ -1704,20 +1709,20 @@ namespace MobileGL::MG_Pipe {
 
     void MGPipeEmitSamplerCsoCreate(SamplerObject& sampler) {
         if (!FamilyIsLive(kMGPipeSubsystemSamplers, kMGPipeWiredSamplerSubsystem)) return;
-        ForwardWhenWired<kMGPipeWiredSamplerSubsystem>(
-            MGPipeSamplerEmitterInstance(), [&](auto& emitter) { emitter.EmitSamplerCso(sampler); });
+        ForwardWhenWired<kMGPipeWiredSamplerSubsystem>(MGPipeSamplerEmitterInstance(),
+                                                       [&](auto& emitter) { emitter.EmitSamplerCso(sampler); });
     }
 
     void MGPipeEmitSamplerViewCreate(ITextureObject& texture) {
         if (!FamilyIsLive(kMGPipeSubsystemSamplers, kMGPipeWiredSamplerSubsystem)) return;
-        ForwardWhenWired<kMGPipeWiredSamplerSubsystem>(
-            MGPipeSamplerEmitterInstance(), [&](auto& emitter) { emitter.EmitSamplerView(texture); });
+        ForwardWhenWired<kMGPipeWiredSamplerSubsystem>(MGPipeSamplerEmitterInstance(),
+                                                       [&](auto& emitter) { emitter.EmitSamplerView(texture); });
     }
 
     void MGPipeEmitShaderCsoCreate(ProgramObject& program) {
         if (!FamilyIsLive(kMGPipeSubsystemPrograms, kMGPipeWiredProgramSubsystem)) return;
-        ForwardWhenWired<kMGPipeWiredProgramSubsystem>(
-            MGPipeProgramEmitterInstance(), [&](auto& emitter) { emitter.EmitShaderCso(program); });
+        ForwardWhenWired<kMGPipeWiredProgramSubsystem>(MGPipeProgramEmitterInstance(),
+                                                       [&](auto& emitter) { emitter.EmitShaderCso(program); });
     }
 
     // ---- Client-side death helpers, one per handle kind minted above ----
@@ -1759,8 +1764,7 @@ namespace MobileGL::MG_Pipe {
         // The parameter type is the route's, which is byte-identical to the applier's
         // (const MGPHandleOnly&, void return), so the fix is `&MGPipeRoute<Name>` at the five call
         // sites; PipeCatalogue.FrontendNeverTakesAnApplierAddress checks MG_Impl in every unit lane.
-        Bool EmitDeleteIfPublished(MGPipeKind kind, MGPipeHandle handle,
-                                   void (*route)(const MGPHandleOnly&)) {
+        Bool EmitDeleteIfPublished(MGPipeKind kind, MGPipeHandle handle, void (*route)(const MGPHandleOnly&)) {
             if (!MGPipeHandleIsPublished(kind, handle)) return false;
             route(HandleOnly(kind, handle));
             MGPipeNoteHandleUnpublished(kind, handle);
@@ -1785,12 +1789,10 @@ namespace MobileGL::MG_Pipe {
             return false;
         }
 #endif
-        const MGPipeHandle handle =
-            MGPipeSlots().FindByLifetimeId(MGPipeKind::SamplerViewCso, lifetimeId);
-        const Bool published =
-            EmitDeleteIfPublished(MGPipeKind::SamplerViewCso, handle, &MGPipeRouteDeleteSamplerView);
-        ForwardWhenWired<kMGPipeWiredSamplerSubsystem>(
-            MGPipeSamplerEmitterInstance(), [&](auto& emitter) { emitter.NoteRecordDestroyed(handle); });
+        const MGPipeHandle handle = MGPipeSlots().FindByLifetimeId(MGPipeKind::SamplerViewCso, lifetimeId);
+        const Bool published = EmitDeleteIfPublished(MGPipeKind::SamplerViewCso, handle, &MGPipeRouteDeleteSamplerView);
+        ForwardWhenWired<kMGPipeWiredSamplerSubsystem>(MGPipeSamplerEmitterInstance(),
+                                                       [&](auto& emitter) { emitter.NoteRecordDestroyed(handle); });
         // THE NOTICE IS RAISED FOR THIS KIND TOO, and the reason it once was not is wrong:
         // NotifyStateObjectDestroyed takes a KIND and a lifetime id, not an object
         // (StateObjectDeathNotice.h - one entry point for every kind rather than one ops table
@@ -1813,13 +1815,12 @@ namespace MobileGL::MG_Pipe {
         }
 #endif
         const MGPipeHandle handle = MGPipeSlots().FindByLifetimeId(MGPipeKind::Texture, lifetimeId);
-        const Bool published =
-            EmitDeleteIfPublished(MGPipeKind::Texture, handle, &MGPipeRouteResourceDestroy);
+        const Bool published = EmitDeleteIfPublished(MGPipeKind::Texture, handle, &MGPipeRouteResourceDestroy);
         // The emitter retires its entry while the handle still resolves (C-2): the drain list
         // drops the dead texture's levels, the raw pointer goes, the built-in sampler's cache
         // reference is given back, the latches and the sticky mask are cleared.
-        ForwardWhenWired<kMGPipeWiredTextureSubsystem>(
-            MGPipeTextureEmitterInstance(), [&](auto& emitter) { emitter.NoteTextureDied(handle); });
+        ForwardWhenWired<kMGPipeWiredTextureSubsystem>(MGPipeTextureEmitterInstance(),
+                                                       [&](auto& emitter) { emitter.NoteTextureDied(handle); });
         NotifyAndFree(MGPipeKind::Texture, lifetimeId, handle);
         // The texture's SamplerViewCso shares its lifetime id and is released here, after the
         // texture's own record, so a server reading the view while the texture is dropped still
@@ -1838,12 +1839,10 @@ namespace MobileGL::MG_Pipe {
             return false;
         }
 #endif
-        const MGPipeHandle handle =
-            MGPipeSlots().FindByLifetimeId(MGPipeKind::Renderbuffer, lifetimeId);
-        const Bool published =
-            EmitDeleteIfPublished(MGPipeKind::Renderbuffer, handle, &MGPipeRouteResourceDestroy);
-        ForwardWhenWired<kMGPipeWiredTextureSubsystem>(
-            MGPipeTextureEmitterInstance(), [&](auto& emitter) { emitter.NoteRenderbufferDied(handle); });
+        const MGPipeHandle handle = MGPipeSlots().FindByLifetimeId(MGPipeKind::Renderbuffer, lifetimeId);
+        const Bool published = EmitDeleteIfPublished(MGPipeKind::Renderbuffer, handle, &MGPipeRouteResourceDestroy);
+        ForwardWhenWired<kMGPipeWiredTextureSubsystem>(MGPipeTextureEmitterInstance(),
+                                                       [&](auto& emitter) { emitter.NoteRenderbufferDied(handle); });
         NotifyAndFree(MGPipeKind::Renderbuffer, lifetimeId, handle);
         return published;
     }
@@ -1861,10 +1860,9 @@ namespace MobileGL::MG_Pipe {
         // MarkFramebufferObjectForDeletion rebinds slots holding it to framebuffer 0, and a
         // recycled handle cannot match its predecessor's record because Gen is in its ContentHash.
         // Nothing latches a framebuffer publication, so the answer is always false.
-        const MGPipeHandle handle =
-            MGPipeSlots().FindByLifetimeId(MGPipeKind::Framebuffer, lifetimeId);
-        ForwardWhenWired<kMGPipeWiredFramebufferSubsystem>(
-            MGPipeFramebufferEmitterInstance(), [&](auto& emitter) { emitter.NoteFramebufferDied(handle); });
+        const MGPipeHandle handle = MGPipeSlots().FindByLifetimeId(MGPipeKind::Framebuffer, lifetimeId);
+        ForwardWhenWired<kMGPipeWiredFramebufferSubsystem>(MGPipeFramebufferEmitterInstance(),
+                                                           [&](auto& emitter) { emitter.NoteFramebufferDied(handle); });
         NotifyAndFree(MGPipeKind::Framebuffer, lifetimeId, handle);
         return false;
     }
@@ -1875,10 +1873,8 @@ namespace MobileGL::MG_Pipe {
             return false;
         }
 #endif
-        const MGPipeHandle handle =
-            MGPipeSlots().FindByLifetimeId(MGPipeKind::SamplerCso, lifetimeId);
-        const Bool published =
-            EmitDeleteIfPublished(MGPipeKind::SamplerCso, handle, &MGPipeRouteDeleteSamplerState);
+        const MGPipeHandle handle = MGPipeSlots().FindByLifetimeId(MGPipeKind::SamplerCso, lifetimeId);
+        const Bool published = EmitDeleteIfPublished(MGPipeKind::SamplerCso, handle, &MGPipeRouteDeleteSamplerState);
         // NOTHING TO RETIRE IN AN EMITTER FOR THIS KIND, stated rather than implied: a sampler
         // CSO is content-addressed and belongs to a value, so no emitter keeps an entry under
         // a SamplerObject's handle - the cache's entries are keyed by value and reference
@@ -1901,12 +1897,10 @@ namespace MobileGL::MG_Pipe {
         // destructor - and the second is a proven no-op, because MGPipeSlotAllocator::Free
         // refuses a slot that is not live at that generation and bumps no generation of its
         // own (the bump rides the next handout).
-        const MGPipeHandle handle =
-            MGPipeSlots().FindByLifetimeId(MGPipeKind::ShaderCso, lifetimeId);
-        const Bool published =
-            EmitDeleteIfPublished(MGPipeKind::ShaderCso, handle, &MGPipeRouteDeleteShaderState);
-        ForwardWhenWired<kMGPipeWiredProgramSubsystem>(
-            MGPipeProgramEmitterInstance(), [&](auto& emitter) { emitter.NoteRecordDestroyed(handle); });
+        const MGPipeHandle handle = MGPipeSlots().FindByLifetimeId(MGPipeKind::ShaderCso, lifetimeId);
+        const Bool published = EmitDeleteIfPublished(MGPipeKind::ShaderCso, handle, &MGPipeRouteDeleteShaderState);
+        ForwardWhenWired<kMGPipeWiredProgramSubsystem>(MGPipeProgramEmitterInstance(),
+                                                       [&](auto& emitter) { emitter.NoteRecordDestroyed(handle); });
         NotifyAndFree(MGPipeKind::ShaderCso, lifetimeId, handle);
         return published;
     }
@@ -1934,8 +1928,7 @@ namespace MobileGL::MG_Pipe {
     // ---- liveness ----
     Bool PipeInputs::IsLive() const {
 #if MOBILEGL_BUILD_DISAGGREGATED
-        if (MG_Config::Transport != MG_Config::TransportMode::Monolith)
-            return MGPipeServerContextIsLive();
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) return MGPipeServerContextIsLive();
 #endif
         return LiveContext() != nullptr;
     }
@@ -1966,7 +1959,8 @@ namespace MobileGL::MG_Pipe {
             case BufferTarget::AtomicCounter:
             case BufferTarget::TransformFeedback:
                 return kMGPipeMaxBufferBindingPoints;
-            default: return 0;
+            default:
+                return 0;
             }
         }
 #endif
@@ -2000,7 +1994,7 @@ namespace MobileGL::MG_Pipe {
             });
             return true;
         }();
-    }
+    } // namespace
 
     void PipeInputs::InvalidateCompileEnv() {
         MGP_STICKY_FORWARD_PULL(InvalidateCompileEnv);
@@ -2065,7 +2059,9 @@ namespace MobileGL::MG_Pipe {
         MGPipeTrackerInstance().SetPendingBaseInstance(baseInstance);
     }
 
-    Uint32 MGPipePendingBaseInstance() { return MGPipeTrackerInstance().PendingBaseInstance(); }
+    Uint32 MGPipePendingBaseInstance() {
+        return MGPipeTrackerInstance().PendingBaseInstance();
+    }
 
     void MGPipeLeaveVerb() {
         PipeInputs& inputs = MGPipeClientInputs();
@@ -2077,8 +2073,8 @@ namespace MobileGL::MG_Pipe {
         if (g_lastFillWasBarriered) {
             // Same layer-2 gate as the fill: the serial bump and the verb reset below are
             // writes into gPipeInputs (gt).
-            MG_Remote::Client::ClientSession::RefusePipeInputsTouchWhileApplierOwnsIt(
-                "MGPipeLeaveVerb", /*isBarrieredFill=*/true);
+            MG_Remote::Client::ClientSession::RefusePipeInputsTouchWhileApplierOwnsIt("MGPipeLeaveVerb",
+                                                                                      /*isBarrieredFill=*/true);
         }
         if (!g_lastFillWasBarriered) {
             MGPipeTrackerInstance().ClearPendingBaseInstance();
@@ -2104,7 +2100,6 @@ namespace MobileGL::MG_Pipe {
         // at every other Update") is held by MGPipeValidateForVerb, on both of its exits.
         MGPipeTrackerInstance().ClearPendingBaseInstance();
     }
-
 
     // ================================================================================
     // The emission step (P2 brief D1 step 3, D5, D6, D7)
@@ -2192,8 +2187,7 @@ namespace MobileGL::MG_Pipe {
         // rather than kMGPipeSubsystemVertexInput to pin the two maps to each other: an emitter
         // row moved to another subsystem must fail too. bind_vertex_elements is the family's only
         // Coverage.def emitter row, so it is the emitter side of all three.
-        static_assert(SubsystemForEmitter(MGPipeFieldEmitter::BindVertexElements) ==
-                          kMGPipeSubsystemVertexInput,
+        static_assert(SubsystemForEmitter(MGPipeFieldEmitter::BindVertexElements) == kMGPipeSubsystemVertexInput,
                       "bind_vertex_elements must name the vertex-input subsystem");
         static_assert(MGPipeSubsystemForDirty(MGPipeDirty::NewVertexElements) ==
                           SubsystemForEmitter(MGPipeFieldEmitter::BindVertexElements),
@@ -2207,8 +2201,7 @@ namespace MobileGL::MG_Pipe {
         // The two vertex views' capacity is one number on both sides of the boundary. This is
         // the one translation unit that sees the frontend constant and the MG_Pipe one, so it
         // is where they are pinned together; MGPipeTypes.h says so in place.
-        static_assert(kMGPipeMaxVertexAttribs ==
-                          MG_State::GLState::VertexArrayObject::MAX_VERTEX_ATTRIBS,
+        static_assert(kMGPipeMaxVertexAttribs == MG_State::GLState::VertexArrayObject::MAX_VERTEX_ATTRIBS,
                       "the MGPipe vertex-attribute capacity and the frontend's have drifted");
 
         // P5e (docs/archive/contracts/CONTRACT-P5E.md §1, ruling 10), pinned here for the same reason and in
@@ -2216,8 +2209,7 @@ namespace MobileGL::MG_Pipe {
         // and nothing else does. 84 is what the emitter may describe and what the wire carries;
         // the BACKEND clamps to the device's real GL_MAX_UNIFORM_BUFFER_BINDINGS, as it does
         // today, because a client-side clamp would read a device capability from the wrong side.
-        static_assert(kMGPipeMaxBufferBindingPoints ==
-                          MG_State::GLState::BufferBindingPointCount,
+        static_assert(kMGPipeMaxBufferBindingPoints == MG_State::GLState::BufferBindingPointCount,
                       "the MGPipe buffer-binding-point capacity and the frontend's have drifted");
 
         // ---- P4a's SEVEN pairings, and EVERY ONE OF THEM COMPARES AGAINST
@@ -2281,8 +2273,7 @@ namespace MobileGL::MG_Pipe {
         // one of them was edited. Exactly the shape NoDirtyBitOwnsTheResidualSubsystem uses.
         constexpr Bool NoDirtyBitOwnsTheTextureResourceSubsystem() {
             for (SizeT i = 0; i < kMGPipeDirtyCount; ++i) {
-                if (MGPipeSubsystemForDirty(static_cast<MGPipeDirty>(i)) ==
-                    kMGPipeSubsystemTextureResources) {
+                if (MGPipeSubsystemForDirty(static_cast<MGPipeDirty>(i)) == kMGPipeSubsystemTextureResources) {
                     return false;
                 }
             }
@@ -2311,24 +2302,18 @@ namespace MobileGL::MG_Pipe {
         // own emit header; the sampler one covers SamplerEmit.h and ImageEmit.h. The residual
         // subsystem is here for set_context_values, which has no dirty bit, so the residual-fill
         // skip reads this mask for its eight fields.
-        constexpr Uint64 kMGPipeWiredSubsystems = kMGPipeSubsystemRenderState |
-                                                  kMGPipeSubsystemPixelPack |
-                                                  kMGPipeSubsystemPatchState |
-                                                  kMGPipeSubsystemVertexAttribDefaults |
-                                                  kMGPipeSubsystemResidualValues |
-                                                  kMGPipeSubsystemResources |
-                                                  kMGPipeSubsystemVertexInput |
-                                                  kMGPipeWiredFramebufferSubsystem |
-                                                  kMGPipeWiredTextureSubsystem |
-                                                  kMGPipeWiredSamplerSubsystem |
-                                                  kMGPipeWiredProgramSubsystem |
-                                                  // P5e (sb): the indexed buffer binding
-                                                  // points, by the same rule and from the same
-                                                  // kind of header. ID-106 pins the other half
-                                                  // of the switch: MG_Backend/Init.cpp's
-                                                  // consumer mask gains bit 13 in the same
-                                                  // commit, or R-8 withholds the whole family.
-                                                  kMGPipeWiredBufferBindingSubsystem;
+        constexpr Uint64 kMGPipeWiredSubsystems =
+            kMGPipeSubsystemRenderState | kMGPipeSubsystemPixelPack | kMGPipeSubsystemPatchState |
+            kMGPipeSubsystemVertexAttribDefaults | kMGPipeSubsystemResidualValues | kMGPipeSubsystemResources |
+            kMGPipeSubsystemVertexInput | kMGPipeWiredFramebufferSubsystem | kMGPipeWiredTextureSubsystem |
+            kMGPipeWiredSamplerSubsystem | kMGPipeWiredProgramSubsystem |
+            // P5e (sb): the indexed buffer binding
+            // points, by the same rule and from the same
+            // kind of header. ID-106 pins the other half
+            // of the switch: MG_Backend/Init.cpp's
+            // consumer mask gains bit 13 in the same
+            // commit, or R-8 withholds the whole family.
+            kMGPipeWiredBufferBindingSubsystem;
 
         // P15: the dirty bits whose family this build, push mask and consumer emit - every
         // condition of the per-bit gate in MGPipeValidateForVerb except the dirty bit itself.
@@ -2376,11 +2361,9 @@ namespace MobileGL::MG_Pipe {
         static_assert(kMGPipeWiredTextureSubsystem == 0 ||
                           kMGPipeWiredTextureSubsystem == kMGPipeSubsystemTextureResources,
                       "TextureEmit.h's wired constant must be 0 or the texture-resource bit");
-        static_assert(kMGPipeWiredSamplerSubsystem == 0 ||
-                          kMGPipeWiredSamplerSubsystem == kMGPipeSubsystemSamplers,
+        static_assert(kMGPipeWiredSamplerSubsystem == 0 || kMGPipeWiredSamplerSubsystem == kMGPipeSubsystemSamplers,
                       "SamplerEmit.h's wired constant must be 0 or the sampler bit");
-        static_assert(kMGPipeWiredProgramSubsystem == 0 ||
-                          kMGPipeWiredProgramSubsystem == kMGPipeSubsystemPrograms,
+        static_assert(kMGPipeWiredProgramSubsystem == 0 || kMGPipeWiredProgramSubsystem == kMGPipeSubsystemPrograms,
                       "ProgramEmit.h's wired constant must be 0 or the program bit");
         static_assert(kMGPipeWiredBufferBindingSubsystem == 0 ||
                           kMGPipeWiredBufferBindingSubsystem == kMGPipeSubsystemBufferBindings,
@@ -2487,8 +2470,7 @@ namespace MobileGL::MG_Pipe {
             for (SizeT i = 0; i < kMGPipeInputFieldCount; ++i) {
                 const auto field = static_cast<MGPipeInputField>(i);
                 const Uint64 subsystem = SubsystemForEmitter(kMGPipeFieldEmittedBy[i]);
-                if ((subsystem & kMGPipeP4aFamilySubsystems) != 0 &&
-                    EmittedCallSuppliesTheWholeField(field)) {
+                if ((subsystem & kMGPipeP4aFamilySubsystems) != 0 && EmittedCallSuppliesTheWholeField(field)) {
                     return false;
                 }
             }
@@ -2557,8 +2539,7 @@ namespace MobileGL::MG_Pipe {
         };
         ResidualFillPlan g_fillPlan;
 
-        MGPipeFieldMask SuppliedFieldMask(Uint64 pushMask, Bool applierDerives,
-                                          Bool contextValuesWireLive) {
+        MGPipeFieldMask SuppliedFieldMask(Uint64 pushMask, Bool applierDerives, Bool contextValuesWireLive) {
             // THE CONSUMER SIGNAL IS READ ONLY WHERE THE WALK BELOW COULD REACH IT, and that
             // guard is not a micro-optimisation - it is what keeps R-8's DIAGNOSTIC COUNTERS
             // where they were (P5d r3 package C review, minor 2). In the conjunction below
@@ -2570,17 +2551,16 @@ namespace MobileGL::MG_Pipe {
             // where the baseline never touched the mirror, which is the opposite direction from
             // the one this change is supposed to move them in. The key stays COMPLETE because
             // pushMask is itself in the key: a mask that gains a P4a bit re-keys on the mask.
-            const Bool p4aConsumer = (pushMask & kMGPipeP4aFamilySubsystems) != 0 &&
-                                     P4aFamilyHasItsConsumer(kMGPipeP4aFamilySubsystems);
-            if (g_fillPlan.Valid && g_fillPlan.PushMask == pushMask &&
-                g_fillPlan.ApplierDerives == applierDerives &&
-                g_fillPlan.ContextValuesWireLive == contextValuesWireLive &&
-                g_fillPlan.P4aConsumer == p4aConsumer
+            const Bool p4aConsumer =
+                (pushMask & kMGPipeP4aFamilySubsystems) != 0 && P4aFamilyHasItsConsumer(kMGPipeP4aFamilySubsystems);
+            if (g_fillPlan.Valid && g_fillPlan.PushMask == pushMask && g_fillPlan.ApplierDerives == applierDerives &&
+                g_fillPlan.ContextValuesWireLive == contextValuesWireLive && g_fillPlan.P4aConsumer == p4aConsumer
 #if MOBILEGL_BUILD_DISAGGREGATED
-                && g_fillPlan.CapsGeneration == (MG_Config::Transport != MG_Config::TransportMode::Monolith ?
-                    MG_Remote::Client::CapsMirrorInstance().Generation() : 0)
+                && g_fillPlan.CapsGeneration == (MG_Config::Transport != MG_Config::TransportMode::Monolith
+                                                     ? MG_Remote::Client::CapsMirrorInstance().Generation()
+                                                     : 0)
 #endif
-                ) {
+            ) {
                 return g_fillPlan.Supplied;
             }
             MGPipeFieldMask built{};
@@ -2605,14 +2585,11 @@ namespace MobileGL::MG_Pipe {
                 // NO PRODUCER without a live wire (its emission is transport-gated at the validate
                 // point), so its eight fields keep being pulled under monolith - G1's byte-for-byte
                 // rule - and are skipped only when the record really crosses.
-                const Bool supplied = subsystem != 0 && (subsystem & kMGPipeWiredSubsystems) != 0 &&
-                                      (pushMask & subsystem) != 0 &&
-                                      P4aFamilyHasItsConsumer(subsystem) &&
-                                      P4aFamilyDependenciesAreSet(subsystem, pushMask) &&
-                                      EmittedCallSuppliesTheWholeField(field) &&
-                                      (applierDerives || AppliedWithoutDerivation(field)) &&
-                                      (emitter != MGPipeFieldEmitter::SetContextValues ||
-                                       contextValuesWireLive);
+                const Bool supplied =
+                    subsystem != 0 && (subsystem & kMGPipeWiredSubsystems) != 0 && (pushMask & subsystem) != 0 &&
+                    P4aFamilyHasItsConsumer(subsystem) && P4aFamilyDependenciesAreSet(subsystem, pushMask) &&
+                    EmittedCallSuppliesTheWholeField(field) && (applierDerives || AppliedWithoutDerivation(field)) &&
+                    (emitter != MGPipeFieldEmitter::SetContextValues || contextValuesWireLive);
                 if (supplied) built.Words[i / 64] |= (Uint64{1} << (i % 64));
             }
             // PUBLISHED IN ONE ASSIGNMENT, after the walk - see the paragraph above the struct.
@@ -2622,8 +2599,9 @@ namespace MobileGL::MG_Pipe {
             g_fillPlan.ContextValuesWireLive = contextValuesWireLive;
             g_fillPlan.P4aConsumer = p4aConsumer;
 #if MOBILEGL_BUILD_DISAGGREGATED
-            g_fillPlan.CapsGeneration = MG_Config::Transport != MG_Config::TransportMode::Monolith ?
-                MG_Remote::Client::CapsMirrorInstance().Generation() : 0;
+            g_fillPlan.CapsGeneration = MG_Config::Transport != MG_Config::TransportMode::Monolith
+                                            ? MG_Remote::Client::CapsMirrorInstance().Generation()
+                                            : 0;
 #endif
             g_fillPlan.Supplied = built;
             for (SizeT c = 0; c < ResidualFillPlan::kClasses; ++c) {
@@ -2666,8 +2644,10 @@ namespace MobileGL::MG_Pipe {
             const RenderStateParameters& live = ctx.GetRenderStateParameters();
             MGPPatchState patch{};
             patch.Vertices = live.PatchVertices;
-            for (SizeT i = 0; i < 4; ++i) patch.Outer[i] = live.PatchDefaultOuterLevel[i];
-            for (SizeT i = 0; i < 2; ++i) patch.Inner[i] = live.PatchDefaultInnerLevel[i];
+            for (SizeT i = 0; i < 4; ++i)
+                patch.Outer[i] = live.PatchDefaultOuterLevel[i];
+            for (SizeT i = 0; i < 2; ++i)
+                patch.Inner[i] = live.PatchDefaultInnerLevel[i];
             MGPipeRouteSetPatchState(patch);
             return sizeof(MGPPatchState);
         }
@@ -2696,11 +2676,12 @@ namespace MobileGL::MG_Pipe {
             static_assert(kAttribs <= 32, "MGPVertexAttribDefaults::Mask is a Uint32");
 
             Array<MG_State::GLState::CurrentVertexAttributeValue, kAttribs> resolved;
-            for (SizeT i = 0; i < kAttribs; ++i) resolved[i] = ctx.GetCurrentVertexAttribute(static_cast<Uint>(i));
+            for (SizeT i = 0; i < kAttribs; ++i)
+                resolved[i] = ctx.GetCurrentVertexAttribute(static_cast<Uint>(i));
 
             const Uint64 contentHash = XXH64(resolved.data(), sizeof(resolved), 0);
             if (!MGPipeSetHashSuppressorInstance().ShouldEmit(MGPipeSuppressorSlot::SetVertexAttribDefaults,
-                                                             contentHash)) {
+                                                              contentHash)) {
                 return 0;
             }
 
@@ -2729,8 +2710,7 @@ namespace MobileGL::MG_Pipe {
                 // it says nothing about which view holds the value the other two were
                 // converted from.
                 MGPipeFillAttribValue(static_cast<Uint32>(i), resolved[i],
-                                      ctx.GetCurrentVertexAttributeClass(static_cast<Uint>(i)),
-                                      tail[header.Count]);
+                                      ctx.GetCurrentVertexAttributeClass(static_cast<Uint>(i)), tail[header.Count]);
                 header.Mask |= Uint32{1} << static_cast<Uint32>(i);
                 ++header.Count;
                 staged[i] = resolved[i];
@@ -2799,10 +2779,9 @@ namespace MobileGL::MG_Pipe {
             values.MaxTouchedTextureUnit = static_cast<Uint32>(ctx.GetMaxTouchedTextureUnit());
             // The array is indexed by BufferTarget value, all 15 of them (MGPipeTypes.h);
             // targets with no binding points answer 0 (BufferState::GetTouchedBindPointCount).
-            static_assert(
-                std::extent_v<decltype(MGPContextValues::TouchedBufferBindingPointCount)> ==
-                    static_cast<SizeT>(BufferTarget::BufferTargetCount),
-                "MGPContextValues' per-target array and BufferTargetCount have drifted");
+            static_assert(std::extent_v<decltype(MGPContextValues::TouchedBufferBindingPointCount)> ==
+                              static_cast<SizeT>(BufferTarget::BufferTargetCount),
+                          "MGPContextValues' per-target array and BufferTargetCount have drifted");
             for (Uint32 t = 0; t < static_cast<Uint32>(BufferTarget::BufferTargetCount); ++t) {
                 values.TouchedBufferBindingPointCount[t] =
                     static_cast<Uint32>(ctx.GetTouchedBufferBindingPointCount(static_cast<BufferTarget>(t)));
@@ -2847,8 +2826,6 @@ namespace MobileGL::MG_Pipe {
                    MGPipeFieldMaskHas(mask, MGPipeInputField::GetTransformFeedbackCapturedVertices);
         }
 
-
-
         // The residual block is the ONE emission whose gate names a subsystem constant
         // directly instead of going through MGPipeSubsystemForDirty, and the reason is that
         // it has no dirty bit: it carries what has no shutter of its own, which is what makes
@@ -2858,8 +2835,7 @@ namespace MobileGL::MG_Pipe {
         // assumed, the same discipline SubsystemForEmitter's five static_asserts use.
         constexpr Bool NoDirtyBitOwnsTheResidualSubsystem() {
             for (SizeT i = 0; i < kMGPipeDirtyCount; ++i) {
-                if (MGPipeSubsystemForDirty(static_cast<MGPipeDirty>(i)) ==
-                    kMGPipeSubsystemResidualValues) {
+                if (MGPipeSubsystemForDirty(static_cast<MGPipeDirty>(i)) == kMGPipeSubsystemResidualValues) {
                     return false;
                 }
             }
@@ -2870,8 +2846,7 @@ namespace MobileGL::MG_Pipe {
                       "residual block's gate through MGPipeSubsystemForDirty like every other "
                       "emission, or the two gates will disagree");
 
-        constexpr Uint32 kAllDynamicChunks =
-            static_cast<Uint32>((Uint64{1} << kMGPipeDynamicChunkCount) - 1);
+        constexpr Uint32 kAllDynamicChunks = static_cast<Uint32>((Uint64{1} << kMGPipeDynamicChunkCount) - 1);
 
         // create/bind_render_state and set_dynamic_state. Returns the bytes that went on the
         // wire, for the payload histogram.
@@ -2901,8 +2876,7 @@ namespace MobileGL::MG_Pipe {
                 // glClearColor sends D2. An EMPTY mask still sends the 32-byte header,
                 // because the VERSION is what Magma's dynamic tail gates on and it moved.
                 const Uint32 chunkMask =
-                    freshlyPrimed ? kAllDynamicChunks
-                                  : MGPipeDynamicChunksThatMoved(live, tracker.Staged());
+                    freshlyPrimed ? kAllDynamicChunks : MGPipeDynamicChunksThatMoved(live, tracker.Staged());
                 Array<Uint8, kMGPipeDynamicChunkBytes> blob;
                 const SizeT blobBytes = MGPipeDynamicChunkBlobBytes(chunkMask);
                 MGPipeGatherDynamicChunks(live, chunkMask, blob.data());
@@ -3017,8 +2991,12 @@ namespace MobileGL::MG_Pipe {
         }
     } // namespace
 
-    Uint64 MGPipeVertexAttribDefaultRepairCount() { return g_attribDefaultRepairs; }
-    MGPVertexAttribDefaults MGPipeVertexAttribDefaultsLastHeader() { return g_attribDefaultLastHeader; }
+    Uint64 MGPipeVertexAttribDefaultRepairCount() {
+        return g_attribDefaultRepairs;
+    }
+    MGPVertexAttribDefaults MGPipeVertexAttribDefaultsLastHeader() {
+        return g_attribDefaultLastHeader;
+    }
 
     // The unit gate's door onto step 4's predicate (PipeFill.h says why it needs one). It
     // returns the memo's answer rather than a second copy of the expression, so a case that
@@ -3026,8 +3004,7 @@ namespace MobileGL::MG_Pipe {
     // re-implementation of it.
     Bool MGPipeResidualFillSuppliesField(MGPipeInputField field, Uint64 pushMask, Bool applierDerives,
                                          Bool contextValuesWireLive) {
-        return MGPipeFieldMaskHas(SuppliedFieldMask(pushMask, applierDerives, contextValuesWireLive),
-                                  field);
+        return MGPipeFieldMaskHas(SuppliedFieldMask(pushMask, applierDerives, contextValuesWireLive), field);
     }
 
     void MGPipeValidateForVerbBarriered(MGPipeVerb verb) {
@@ -3097,10 +3074,11 @@ namespace MobileGL::MG_Pipe {
             // change scalars the apply thread reads inside the record it is applying. The guard
             // then checks the fact and aborts with Fatal{RoleViolation, "gPipeInputs"} if the wait
             // is missing. See ARCHITECTURE.md §9.2.2.
-            if (runAhead) MG_Remote::Client::ClientSession::NoteBarrieredVerbForStats(kMGPipeVerbNames[static_cast<SizeT>(verb)]);
+            if (runAhead)
+                MG_Remote::Client::ClientSession::NoteBarrieredVerbForStats(kMGPipeVerbNames[static_cast<SizeT>(verb)]);
             QuiesceApplierBeforeFill("MGPipeValidateForVerb");
-            MG_Remote::Client::ClientSession::RefusePipeInputsTouchWhileApplierOwnsIt(
-                "MGPipeValidateForVerb", /*isBarrieredFill=*/barriered);
+            MG_Remote::Client::ClientSession::RefusePipeInputsTouchWhileApplierOwnsIt("MGPipeValidateForVerb",
+                                                                                      /*isBarrieredFill=*/barriered);
         }
 #else
         constexpr Bool fillOwed = true;
@@ -3164,10 +3142,9 @@ namespace MobileGL::MG_Pipe {
         // P13 W4d: AND ON MONOLITH'S RECORD ARM, where the route is the in-process applier
         // (Mono_SetContextValues) and the backend reads what the record put in gPipeInputs - the
         // same supplier as a wire, one call away.
-        const Bool contextValuesWireLive =
-            MG_Config::Transport != MG_Config::TransportMode::Monolith
-                ? MG_Remote::Client::ContextValuesWireLive()
-                : MG_Config::RecordArmAliasesFrontend();
+        const Bool contextValuesWireLive = MG_Config::Transport != MG_Config::TransportMode::Monolith
+                                               ? MG_Remote::Client::ContextValuesWireLive()
+                                               : MG_Config::RecordArmAliasesFrontend();
 #else
         // P13 W8: a library without a transport is ALWAYS monolith's record arm, so it takes the
         // eight fields from the record exactly as the split build's monolith does. This branch
@@ -3203,8 +3180,7 @@ namespace MobileGL::MG_Pipe {
             // would wait on itself) and a transport with no live session (EmitApplierResetRecord
             // returns false) make the direct call instead.
             const Bool transportActive =
-                MG_Config::Transport != MG_Config::TransportMode::Monolith &&
-                !MG_Remote::Client::RunsAsTheServerRole();
+                MG_Config::Transport != MG_Config::TransportMode::Monolith && !MG_Remote::Client::RunsAsTheServerRole();
             Bool resetCrossed = false;
             if (transportActive) {
                 resetCrossed = MG_Remote::Client::EmitApplierResetRecord();
@@ -3383,8 +3359,8 @@ namespace MobileGL::MG_Pipe {
         // into a named abort rather than a torn read.
         if (fillOwed) {
             QuiesceApplierBeforeFill("MGPipeValidateForVerb/residual");
-            MG_Remote::Client::ClientSession::RefusePipeInputsTouchWhileApplierOwnsIt(
-                "MGPipeValidateForVerb/residual", /*isBarrieredFill=*/true);
+            MG_Remote::Client::ClientSession::RefusePipeInputsTouchWhileApplierOwnsIt("MGPipeValidateForVerb/residual",
+                                                                                      /*isBarrieredFill=*/true);
         }
 #endif
         const Bool applierDerives = ApplierDerivesRenderStateFields();

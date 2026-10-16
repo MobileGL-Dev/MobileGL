@@ -538,8 +538,7 @@ void main() {
                 EXPECT_EQ(FirstGLError(), expected) << what;
                 // FirstGLError stops at the first one; make sure nothing else is queued so the
                 // next case starts clean.
-                while (glGetError() != GL_NO_ERROR) {
-                }
+                while (glGetError() != GL_NO_ERROR) {}
             };
 
             glDrawElementsBaseVertex(GL_TRIANGLES, -1, GL_UNSIGNED_INT, nullptr, 0);

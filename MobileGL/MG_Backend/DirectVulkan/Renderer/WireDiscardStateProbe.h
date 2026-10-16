@@ -58,10 +58,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     inline const char* WireDiscardStateProbeVerdictName(WireDiscardStateProbeVerdict verdict) {
         switch (verdict) {
-            case WireDiscardStateProbeVerdict::NotRun: return "not-run";
-            case WireDiscardStateProbeVerdict::Inconclusive: return "inconclusive";
-            case WireDiscardStateProbeVerdict::Clean: return "clean";
-            case WireDiscardStateProbeVerdict::DiscardDrawDropsState: return "discard-draw-drops-state";
+        case WireDiscardStateProbeVerdict::NotRun:
+            return "not-run";
+        case WireDiscardStateProbeVerdict::Inconclusive:
+            return "inconclusive";
+        case WireDiscardStateProbeVerdict::Clean:
+            return "clean";
+        case WireDiscardStateProbeVerdict::DiscardDrawDropsState:
+            return "discard-draw-drops-state";
         }
         return "?";
     }

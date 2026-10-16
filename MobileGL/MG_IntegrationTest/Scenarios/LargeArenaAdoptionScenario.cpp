@@ -100,8 +100,8 @@ void main() { word = 0xC0FFEEu; }
         // which also set MOBILEGL_IPC_ADOPT_TIER=0; a harness marker, never read by the library.
         constexpr const char* kAdoptTierRefusalMarker = "MGITEST_ADOPT_TIER_REFUSAL";
         // P11 B2: set by the shared-segment `.AdoptTier0.` / `.AdoptT0Disallowed.` entries to the reason word the
-        // server gives for not granting T0 ("no AHardwareBuffer" on a host, "in process" where the backend cannot hand an
-        // in-process client its stores, "disallowed" with its allow switch off).
+        // server gives for not granting T0 ("no AHardwareBuffer" on a host, "in process" where the backend cannot hand
+        // an in-process client its stores, "disallowed" with its allow switch off).
         constexpr const char* kAdoptT0FallbackMarker = "MGITEST_ADOPT_T0_FALLBACK";
         // Draws issued against the arena inside the counted window. One definition, many draws:
         // "one per definition" (1) and "one per draw" (kDrawsInTheWindow) have to be different
@@ -148,8 +148,7 @@ void main() { word = 0xC0FFEEu; }
             void ConfigureVertexArray(GLuint vao) {
                 glBindVertexArray(vao);
                 glBindBuffer(GL_ARRAY_BUFFER, m_arena);
-                glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex),
-                                      reinterpret_cast<void*>(kVertexOffset));
+                glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex), reinterpret_cast<void*>(kVertexOffset));
                 glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex),
                                       reinterpret_cast<void*>(kVertexOffset + 2 * sizeof(float)));
                 glEnableVertexAttribArray(0);
@@ -215,8 +214,8 @@ void main() { word = 0xC0FFEEu; }
             void UploadQuad(float r, float g, float b) {
                 const auto vertices = QuadVertices(r, g, b);
                 glBindBuffer(GL_ARRAY_BUFFER, m_arena);
-                glBufferSubData(GL_ARRAY_BUFFER, kVertexOffset,
-                                GLsizeiptr(vertices.size() * sizeof(Vertex)), vertices.data());
+                glBufferSubData(GL_ARRAY_BUFFER, kVertexOffset, GLsizeiptr(vertices.size() * sizeof(Vertex)),
+                                vertices.data());
             }
 
             void DrawQuad(GLuint vao = 0) {
@@ -264,8 +263,7 @@ void main() { word = 0xC0FFEEu; }
 
             std::array<unsigned char, 4> CenterPixel() {
                 std::array<unsigned char, 4> px = {0, 0, 0, 0};
-                glReadPixels(Gl().Width() / 2, Gl().Height() / 2, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE,
-                             px.data());
+                glReadPixels(Gl().Width() / 2, Gl().Height() / 2, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
                 return px;
             }
 
@@ -278,8 +276,7 @@ void main() { word = 0xC0FFEEu; }
                 ASSERT_TRUE(PeekBufferIsAdoptedPersistentMap(m_arena, &adopted))
                     << "no frontend BufferObject behind the arena " << when;
                 const std::string landed = adopted ? "adopted" : "emulated";
-                RecordProperty(std::string("arena_arm_") + (m_armPeeks++ == 0 ? "defined" : "used"),
-                               landed.c_str());
+                RecordProperty(std::string("arena_arm_") + (m_armPeeks++ == 0 ? "defined" : "used"), landed.c_str());
                 EXPECT_EQ(declared, landed)
                     << "the lane declared the " << declared << " arm and the " << (kArenaBytes >> 20)
                     << " MiB arena is " << landed << " " << when
@@ -380,10 +377,14 @@ void main() { word = 0xC0FFEEu; }
         EXPECT_EQ(FirstGLError(), 0u);
 
         constexpr std::array<GLsizeiptr, 3> sizes = {
-            kArenaBytes, kArenaBytes + 4096, kArenaBytes - 4096,
+            kArenaBytes,
+            kArenaBytes + 4096,
+            kArenaBytes - 4096,
         };
         constexpr std::array<std::array<float, 3>, 3> colors = {{
-            {0.f, 1.f, 0.f}, {0.f, 0.f, 1.f}, {1.f, 0.f, 0.f},
+            {0.f, 1.f, 0.f},
+            {0.f, 0.f, 1.f},
+            {1.f, 0.f, 0.f},
         }};
         for (std::size_t i = 0; i < sizes.size(); ++i) {
             SCOPED_TRACE(sizes[i]);
@@ -454,8 +455,7 @@ void main() { word = 0xC0FFEEu; }
         const auto green = QuadVertices(0.f, 1.f, 0.f);
         vertices.insert(vertices.end(), green.begin(), green.end());
         glBindBuffer(GL_ARRAY_BUFFER, m_arena);
-        glBufferSubData(GL_ARRAY_BUFFER, kVertexOffset,
-                        GLsizeiptr(vertices.size() * sizeof(Vertex)), vertices.data());
+        glBufferSubData(GL_ARRAY_BUFFER, kVertexOffset, GLsizeiptr(vertices.size() * sizeof(Vertex)), vertices.data());
 
         GLuint indices = 0;
         glGenBuffers(1, &indices);
@@ -465,7 +465,10 @@ void main() { word = 0xC0FFEEu; }
         // changes. The small final store also exercises returning to shadow storage.
         glBindBuffer(GL_COPY_WRITE_BUFFER, indices);
         constexpr std::array<GLsizeiptr, 4> sizes = {
-            kArenaBytes, kArenaBytes, kArenaBytes + 4096, 4096,
+            kArenaBytes,
+            kArenaBytes,
+            kArenaBytes + 4096,
+            4096,
         };
         for (std::size_t i = 0; i < sizes.size(); ++i) {
             SCOPED_TRACE(sizes[i]);
@@ -497,11 +500,9 @@ void main() { word = 0xC0FFEEu; }
 
         const auto vertices = QuadVertices(0.25f, 0.5f, 0.75f);
         glBindBuffer(GL_ARRAY_BUFFER, m_arena);
-        glBufferSubData(GL_ARRAY_BUFFER, kVertexOffset,
-                        GLsizeiptr(vertices.size() * sizeof(Vertex)), vertices.data());
+        glBufferSubData(GL_ARRAY_BUFFER, kVertexOffset, GLsizeiptr(vertices.size() * sizeof(Vertex)), vertices.data());
         std::vector<Vertex> read(vertices.size());
-        glGetBufferSubData(GL_ARRAY_BUFFER, kVertexOffset,
-                           GLsizeiptr(read.size() * sizeof(Vertex)), read.data());
+        glGetBufferSubData(GL_ARRAY_BUFFER, kVertexOffset, GLsizeiptr(read.size() * sizeof(Vertex)), read.data());
         EXPECT_EQ(FirstGLError(), 0u);
         EXPECT_EQ(0, std::memcmp(read.data(), vertices.data(), read.size() * sizeof(Vertex)))
             << "GetBufferSubData of the adopted arena returned different bytes than the SubData wrote";
@@ -539,8 +540,7 @@ void main() { word = 0xC0FFEEu; }
         unsigned int marker = 0;
         glGetBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(marker), &marker);
         EXPECT_EQ(FirstGLError(), 0u);
-        EXPECT_EQ(marker, 0xC0FFEEu)
-            << "the compute write into the adopted arena did not reach the CPU readback";
+        EXPECT_EQ(marker, 0xC0FFEEu) << "the compute write into the adopted arena did not reach the CPU readback";
     }
 
     // G10, the per-adoption half: ONE storage definition of an arena costs ONE map_persistent
@@ -628,7 +628,8 @@ void main() { word = 0xC0FFEEu; }
                             "emulated)";
         }
         if (!PersistentMapPeekAvailable()) {
-            GTEST_SKIP() << "this lane declares the " << declared << " arm but Harness/PersistentMapPeek "
+            GTEST_SKIP() << "this lane declares the " << declared
+                         << " arm but Harness/PersistentMapPeek "
                             "cannot look in this build (on Android this module links the shipping "
                             "library, built -fvisibility=hidden). 'Could not look' is not 'it was "
                          << declared << "'.";
@@ -675,7 +676,8 @@ void main() { word = 0xC0FFEEu; }
         const char* tier = std::getenv(kAdoptTierRefusalMarker);
         if (tier == nullptr || tier[0] == '\0') {
             GTEST_SKIP() << "runs only in the `.AdoptTier0.` tcp entries, which set "
-                            "MOBILEGL_IPC_ADOPT_TIER=0 and " << kAdoptTierRefusalMarker << "=T0";
+                            "MOBILEGL_IPC_ADOPT_TIER=0 and "
+                         << kAdoptTierRefusalMarker << "=T0";
         }
         if (PipeStatsWindow::LibraryLogPath().empty()) {
             GTEST_SKIP() << "the lane configured no MOBILEGL_LOG_FILE_PATH, and the client's log is "
@@ -692,10 +694,12 @@ void main() { word = 0xC0FFEEu; }
         const std::string log = PipeStatsWindow::ReadWholeFile(PipeStatsWindow::LibraryLogPath());
         const std::string line = std::string("Refuse{AdoptTierOnStream, \"") + tier + "\"}";
         std::size_t count = 0;
-        for (auto at = log.find(line); at != std::string::npos; at = log.find(line, at + 1)) ++count;
+        for (auto at = log.find(line); at != std::string::npos; at = log.find(line, at + 1))
+            ++count;
         RecordProperty("adopt_tier_refusals", static_cast<int>(count));
         EXPECT_EQ(count, 1u) << "the client names MOBILEGL_IPC_ADOPT_TIER on a stream exactly once, at "
-                                "its handshake (" << line << "), in " << PipeStatsWindow::LibraryLogPath();
+                                "its handshake ("
+                             << line << "), in " << PipeStatsWindow::LibraryLogPath();
         EXPECT_EQ(log.find("Fatal{UnimplementedAdoptTier"), std::string::npos) << log;
     }
 
@@ -711,7 +715,8 @@ void main() { word = 0xC0FFEEu; }
         const char* why = std::getenv(kAdoptT0FallbackMarker);
         if (why == nullptr || why[0] == '\0') {
             GTEST_SKIP() << "runs only in the shared-segment `.AdoptTier0.` / `.AdoptT0Disallowed.` entries, "
-                            "which set MOBILEGL_IPC_ADOPT_TIER=0 and " << kAdoptT0FallbackMarker;
+                            "which set MOBILEGL_IPC_ADOPT_TIER=0 and "
+                         << kAdoptT0FallbackMarker;
         }
         if (PipeStatsWindow::LibraryLogPath().empty()) {
             GTEST_SKIP() << "the lane configured no MOBILEGL_LOG_FILE_PATH, and the two logs are where the "
@@ -728,7 +733,8 @@ void main() { word = 0xC0FFEEu; }
 
         const auto countOf = [](const std::string& text, const std::string& needle) {
             std::size_t n = 0;
-            for (auto at = text.find(needle); at != std::string::npos; at = text.find(needle, at + 1)) ++n;
+            for (auto at = text.find(needle); at != std::string::npos; at = text.find(needle, at + 1))
+                ++n;
             return n;
         };
         const std::string client = PipeStatsWindow::ReadWholeFile(PipeStatsWindow::LibraryLogPath());

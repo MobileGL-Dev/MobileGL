@@ -237,8 +237,7 @@ namespace MobileGL {
             // make a float (0,0,0,1) and an integer (0,0,0,1) numerically identical, but they are
             // different GL state and the DirectGLES sync memoises on m_textureParamsVersion.
             void TextureObjectBase::SetBorderColor(const FloatVec4& color) {
-                if (color == m_sampler->GetBorderColor() &&
-                    m_sampler->GetBorderColorForm() == BorderColorForm::Float) {
+                if (color == m_sampler->GetBorderColor() && m_sampler->GetBorderColorForm() == BorderColorForm::Float) {
                     return;
                 }
 
@@ -253,8 +252,7 @@ namespace MobileGL {
             }
 
             void TextureObjectBase::SetBorderColorI(const IntVec4& color) {
-                if (color == m_sampler->GetBorderColorI() &&
-                    m_sampler->GetBorderColorForm() == BorderColorForm::Int) {
+                if (color == m_sampler->GetBorderColorI() && m_sampler->GetBorderColorForm() == BorderColorForm::Int) {
                     return;
                 }
 
@@ -551,8 +549,7 @@ namespace MobileGL {
             }
 
             SizeT TextureObjectWithOneMipmap::GetStorageDirtyRects(TextureUploadTarget uploadTarget, Uint mipmapLevel,
-                                                                   MipmapDirtyRegion* outRects,
-                                                                   SizeT maxRects) const {
+                                                                   MipmapDirtyRegion* outRects, SizeT maxRects) const {
                 return m_textureStorage.GetDirtyRects(GetIndexOfTextureUploadTarget(uploadTarget), mipmapLevel,
                                                       outRects, maxRects);
             }
@@ -563,35 +560,37 @@ namespace MobileGL {
                 m_textureStorage.GetDirtyFootprint(GetIndexOfTextureUploadTarget(uploadTarget), mipmapLevel, outRects);
             }
 
-            void TextureObjectWithOneMipmap::SetMipmapCompressedImage(TextureUploadTarget uploadTarget, Uint mipmapLevel,
-                                                              GLenum internalFormat, const void* data, SizeT size) {
+            void TextureObjectWithOneMipmap::SetMipmapCompressedImage(TextureUploadTarget uploadTarget,
+                                                                      Uint mipmapLevel, GLenum internalFormat,
+                                                                      const void* data, SizeT size) {
                 m_textureStorage.SetCompressedImage(GetIndexOfTextureUploadTarget(uploadTarget), mipmapLevel,
                                                     internalFormat, data, size);
             }
 
             GLenum TextureObjectWithOneMipmap::GetMipmapCompressedFormat(TextureUploadTarget uploadTarget,
-                                                                  Uint mipmapLevel) const {
+                                                                         Uint mipmapLevel) const {
                 return m_textureStorage.GetCompressedFormat(GetIndexOfTextureUploadTarget(uploadTarget), mipmapLevel);
             }
 
             SizeT TextureObjectWithOneMipmap::GetMipmapCompressedByteSize(TextureUploadTarget uploadTarget,
-                                                                    Uint mipmapLevel) const {
+                                                                          Uint mipmapLevel) const {
                 return m_textureStorage.GetCompressedByteSize(GetIndexOfTextureUploadTarget(uploadTarget), mipmapLevel);
             }
 
             const void* TextureObjectWithOneMipmap::MapMipmapCompressedImage(TextureUploadTarget uploadTarget,
-                                                                       Uint mipmapLevel) const {
+                                                                             Uint mipmapLevel) const {
                 return m_textureStorage.MapCompressedData(GetIndexOfTextureUploadTarget(uploadTarget), mipmapLevel);
             }
 
             void TextureObjectWithOneMipmap::SetMipmapRequestedCompressedFormat(TextureUploadTarget uploadTarget,
-                                                                       Uint mipmapLevel, GLenum internalFormat) {
+                                                                                Uint mipmapLevel,
+                                                                                GLenum internalFormat) {
                 m_textureStorage.SetRequestedCompressedFormat(GetIndexOfTextureUploadTarget(uploadTarget), mipmapLevel,
                                                               internalFormat);
             }
 
             GLenum TextureObjectWithOneMipmap::GetMipmapRequestedCompressedFormat(TextureUploadTarget uploadTarget,
-                                                                       Uint mipmapLevel) const {
+                                                                                  Uint mipmapLevel) const {
                 return m_textureStorage.GetRequestedCompressedFormat(GetIndexOfTextureUploadTarget(uploadTarget),
                                                                      mipmapLevel);
             }
@@ -635,88 +634,89 @@ namespace MobileGL {
 
             // TODO: add other texture types as needed
 
-        Bool IsMipmapCompleteForFilter(const ITextureObject* texture, Bool mipmapped) {
-            if (texture == nullptr) return true;
-            return texture->IsMipmapCompleteForFilterCached(mipmapped);
-        }
-
-        Bool SamplesAsIncompleteTexture(const ITextureObject* texture, const SamplerObject* effectiveSampler) {
-            // A multisample texture is fetched, never filtered. GL 4.6 core 8.17 gives it exactly
-            // one level and says its sampler state is not used at all - texelFetch is the only way
-            // a shader can read it - so 8.14's filter-completeness rules, which is what the
-            // `mipmapped` branch below asks about, never apply to it.
-            //
-            // Deriving `mipmapped` from that unused sampler is what made EVERY multisample texture
-            // look incomplete: MIN_FILTER's initial value is NEAREST_MIPMAP_LINEAR, and a texture
-            // that can only ever have one level never satisfies the mip-chain check. Both backends
-            // treat "samples as incomplete" as "do not bind it" (DirectGLES's per-unit walk in
-            // ResolveAndBindUnitTextures, DirectVulkan's UniformManager), so the sampler2DMS the
-            // shader declared was left pointing at nothing and every texelFetch read zero. That is
-            // the sampler2DMS/sampler2DMSArray half of KHR-GL43.compute_shader.resource-texture,
-            // which fails at the first data7 element with the multisample texture correctly
-            // cleared and simply never bound.
-            //
-            // IsCopyImageEndpointComplete already spells the same guard as
-            // CopyImageTargetHasMipmapChain; this was the one place that asked without it.
-            const TextureTarget target = texture != nullptr ? texture->GetTarget() : TextureTarget::Unknown;
-            const Bool filtered = target != TextureTarget::Texture2DMultisample &&
-                                  target != TextureTarget::Texture2DMultisampleArray;
-            const Bool mipmapped = filtered && effectiveSampler != nullptr &&
-                                   effectiveSampler->GetMipmapMode() != SamplerMipmapMode::None;
-            return !IsMipmapCompleteForFilter(texture, mipmapped);
-        }
-
-        static Bool ComputeMipmapCompleteForFilter(const ITextureObject* texture, Bool mipmapped) {
-            if (texture == nullptr) return true;
-            if (!texture->IsComplete()) return false;
-            if (!mipmapped) return true;
-
-            const auto* mipmapTexture = AsMipmapTexture(texture);
-            if (mipmapTexture == nullptr) return true; // no mip chain to be incomplete about
-
-            const UintVec2& levelRange = texture->GetLevelRange();
-            const Uint baseLevel = levelRange.x();
-            const Uint storedLevels = mipmapTexture->GetMipmapLevelCount();
-            if (baseLevel >= storedLevels) return false;
-
-            // An array texture's layer count is not a dimension of the image: it stays put all
-            // the way down the chain (GL 4.6 core 8.14.3). GetMipmapTexelSize reports it in the
-            // slot after the image's own dimensions.
-            const TextureTarget target = texture->GetTarget();
-            Int shrinkingComponents = 3;
-            if (target == TextureTarget::Texture1DArray) {
-                shrinkingComponents = 1;
-            } else if (target == TextureTarget::Texture2DArray || target == TextureTarget::TextureCubeMapArray) {
-                shrinkingComponents = 2;
+            Bool IsMipmapCompleteForFilter(const ITextureObject* texture, Bool mipmapped) {
+                if (texture == nullptr) return true;
+                return texture->IsMipmapCompleteForFilterCached(mipmapped);
             }
 
-            for (const auto uploadTarget : texture->GetUploadTargets()) {
-                const IntVec3 baseSize = mipmapTexture->GetMipmapTexelSize(uploadTarget, baseLevel);
-                Int largest = 0;
-                for (Int component = 0; component < shrinkingComponents; ++component) {
-                    largest = std::max(largest, baseSize[component]);
+            Bool SamplesAsIncompleteTexture(const ITextureObject* texture, const SamplerObject* effectiveSampler) {
+                // A multisample texture is fetched, never filtered. GL 4.6 core 8.17 gives it exactly
+                // one level and says its sampler state is not used at all - texelFetch is the only way
+                // a shader can read it - so 8.14's filter-completeness rules, which is what the
+                // `mipmapped` branch below asks about, never apply to it.
+                //
+                // Deriving `mipmapped` from that unused sampler is what made EVERY multisample texture
+                // look incomplete: MIN_FILTER's initial value is NEAREST_MIPMAP_LINEAR, and a texture
+                // that can only ever have one level never satisfies the mip-chain check. Both backends
+                // treat "samples as incomplete" as "do not bind it" (DirectGLES's per-unit walk in
+                // ResolveAndBindUnitTextures, DirectVulkan's UniformManager), so the sampler2DMS the
+                // shader declared was left pointing at nothing and every texelFetch read zero. That is
+                // the sampler2DMS/sampler2DMSArray half of KHR-GL43.compute_shader.resource-texture,
+                // which fails at the first data7 element with the multisample texture correctly
+                // cleared and simply never bound.
+                //
+                // IsCopyImageEndpointComplete already spells the same guard as
+                // CopyImageTargetHasMipmapChain; this was the one place that asked without it.
+                const TextureTarget target = texture != nullptr ? texture->GetTarget() : TextureTarget::Unknown;
+                const Bool filtered =
+                    target != TextureTarget::Texture2DMultisample && target != TextureTarget::Texture2DMultisampleArray;
+                const Bool mipmapped = filtered && effectiveSampler != nullptr &&
+                                       effectiveSampler->GetMipmapMode() != SamplerMipmapMode::None;
+                return !IsMipmapCompleteForFilter(texture, mipmapped);
+            }
+
+            static Bool ComputeMipmapCompleteForFilter(const ITextureObject* texture, Bool mipmapped) {
+                if (texture == nullptr) return true;
+                if (!texture->IsComplete()) return false;
+                if (!mipmapped) return true;
+
+                const auto* mipmapTexture = AsMipmapTexture(texture);
+                if (mipmapTexture == nullptr) return true; // no mip chain to be incomplete about
+
+                const UintVec2& levelRange = texture->GetLevelRange();
+                const Uint baseLevel = levelRange.x();
+                const Uint storedLevels = mipmapTexture->GetMipmapLevelCount();
+                if (baseLevel >= storedLevels) return false;
+
+                // An array texture's layer count is not a dimension of the image: it stays put all
+                // the way down the chain (GL 4.6 core 8.14.3). GetMipmapTexelSize reports it in the
+                // slot after the image's own dimensions.
+                const TextureTarget target = texture->GetTarget();
+                Int shrinkingComponents = 3;
+                if (target == TextureTarget::Texture1DArray) {
+                    shrinkingComponents = 1;
+                } else if (target == TextureTarget::Texture2DArray || target == TextureTarget::TextureCubeMapArray) {
+                    shrinkingComponents = 2;
                 }
-                if (largest <= 0) return false;
 
-                // p = log2 of the largest base dimension: the last level the chain needs
-                // before every dimension has reached 1. TEXTURE_MAX_LEVEL can cut it short.
-                Uint p = 0;
-                for (Int extent = largest; extent > 1; extent >>= 1) ++p;
-                const Uint lastLevel = std::min(baseLevel + p, levelRange.y());
+                for (const auto uploadTarget : texture->GetUploadTargets()) {
+                    const IntVec3 baseSize = mipmapTexture->GetMipmapTexelSize(uploadTarget, baseLevel);
+                    Int largest = 0;
+                    for (Int component = 0; component < shrinkingComponents; ++component) {
+                        largest = std::max(largest, baseSize[component]);
+                    }
+                    if (largest <= 0) return false;
 
-                for (Uint level = baseLevel; level <= lastLevel; ++level) {
-                    if (level >= storedLevels) return false;
-                    const IntVec3 actual = mipmapTexture->GetMipmapTexelSize(uploadTarget, level);
-                    for (Int component = 0; component < 3; ++component) {
-                        const Int expected = component < shrinkingComponents
-                            ? std::max(1, baseSize[component] >> (level - baseLevel))
-                            : baseSize[component];
-                        if (actual[component] != expected) return false;
+                    // p = log2 of the largest base dimension: the last level the chain needs
+                    // before every dimension has reached 1. TEXTURE_MAX_LEVEL can cut it short.
+                    Uint p = 0;
+                    for (Int extent = largest; extent > 1; extent >>= 1)
+                        ++p;
+                    const Uint lastLevel = std::min(baseLevel + p, levelRange.y());
+
+                    for (Uint level = baseLevel; level <= lastLevel; ++level) {
+                        if (level >= storedLevels) return false;
+                        const IntVec3 actual = mipmapTexture->GetMipmapTexelSize(uploadTarget, level);
+                        for (Int component = 0; component < 3; ++component) {
+                            const Int expected = component < shrinkingComponents
+                                                     ? std::max(1, baseSize[component] >> (level - baseLevel))
+                                                     : baseSize[component];
+                            if (actual[component] != expected) return false;
+                        }
                     }
                 }
+                return true;
             }
-            return true;
-        }
 
         } // namespace GLState
     } // namespace MG_State

@@ -117,8 +117,7 @@ void main() { oColor = texture(uTex, vUv); }
                 // The "other" texture: a complete, single-level white texture, so a draw that
                 // samples it is a verb the texture under test is not reached by.
                 m_other = MakeLevel0(255, 255, 255, /*maxLevel=*/0);
-                while (glGetError() != GL_NO_ERROR) {
-                }
+                while (glGetError() != GL_NO_ERROR) {}
             }
 
             void TearDown() override {
@@ -132,8 +131,7 @@ void main() { oColor = texture(uTex, vUv); }
                 if (m_vao != 0) glDeleteVertexArrays(1, &m_vao);
                 if (m_quadBuffer != 0) glDeleteBuffers(1, &m_quadBuffer);
                 if (m_program != 0) glDeleteProgram(m_program);
-                while (glGetError() != GL_NO_ERROR) {
-                }
+                while (glGetError() != GL_NO_ERROR) {}
             }
 
             // The C-1 and M-A pictures are about Espryt's consumption of the texture records;
@@ -237,8 +235,7 @@ void main() { oColor = texture(uTex, vUv); }
             void FenceTheApplierRead() {
                 GLubyte fencePixel[4]{};
                 glReadPixels(0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, fencePixel);
-                ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR))
-                    << "the applier-read fence left a GL error behind";
+                ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << "the applier-read fence left a GL error behind";
             }
 
             // The white-box gate of the M-A case: true when the applier holds a record for the
@@ -530,8 +527,7 @@ void main() { oColor = texture(uTex, vUv); }
             if (IsSkipped()) return;
             GLint maxImageUnits = 0;
             glGetIntegerv(GL_MAX_IMAGE_UNITS, &maxImageUnits);
-            while (glGetError() != GL_NO_ERROR) {
-            }
+            while (glGetError() != GL_NO_ERROR) {}
             if (maxImageUnits < 1) {
                 GTEST_SKIP() << "no image units";
                 return;

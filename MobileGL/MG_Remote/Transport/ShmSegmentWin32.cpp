@@ -51,23 +51,20 @@ namespace MobileGL::MG_Remote::Transport {
         out.Close();
 
         char name[kShmNameMax];
-        std::snprintf(name, sizeof(name), "Local\\mgl-%lu-%u-%s",
-                      static_cast<unsigned long>(::GetCurrentProcessId()),
-                      g_sectionCounter.fetch_add(1, std::memory_order_relaxed),
-                      nameHint != nullptr ? nameHint : "seg");
+        std::snprintf(name, sizeof(name), "Local\\mgl-%lu-%u-%s", static_cast<unsigned long>(::GetCurrentProcessId()),
+                      g_sectionCounter.fetch_add(1, std::memory_order_relaxed), nameHint != nullptr ? nameHint : "seg");
 
         wchar_t wide[kShmNameMax];
         if (!ToWide(name, wide, static_cast<int>(kShmNameMax))) {
             return MOBILEGL_ERR_INVALID_ARGUMENT;
         }
 
-        HANDLE section = ::CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE,
-                                              static_cast<DWORD>(size >> 32),
-                                              static_cast<DWORD>(size & 0xFFFFFFFFull), wide);
+        HANDLE section =
+            ::CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, static_cast<DWORD>(size >> 32),
+                                 static_cast<DWORD>(size & 0xFFFFFFFFull), wide);
         if (section == nullptr) {
             MGLOG_E("MG_Remote shm: CreateFileMappingW(%s, %llu) failed (GetLastError=%lu)", name,
-                    static_cast<unsigned long long>(size),
-                    static_cast<unsigned long>(::GetLastError()));
+                    static_cast<unsigned long long>(size), static_cast<unsigned long>(::GetLastError()));
             return MOBILEGL_ERR_SHM_EXHAUSTED;
         }
         if (::GetLastError() == ERROR_ALREADY_EXISTS) {
@@ -126,12 +123,10 @@ namespace MobileGL::MG_Remote::Transport {
             Unmap();
         }
         void* view = ::MapViewOfFile(static_cast<HANDLE>(m_nativeHandle),
-                                     readOnly ? FILE_MAP_READ : FILE_MAP_ALL_ACCESS, 0, 0,
-                                     static_cast<SIZE_T>(m_size));
+                                     readOnly ? FILE_MAP_READ : FILE_MAP_ALL_ACCESS, 0, 0, static_cast<SIZE_T>(m_size));
         if (view == nullptr) {
             MGLOG_E("MG_Remote shm: MapViewOfFile of %llu bytes failed (GetLastError=%lu)",
-                    static_cast<unsigned long long>(m_size),
-                    static_cast<unsigned long>(::GetLastError()));
+                    static_cast<unsigned long long>(m_size), static_cast<unsigned long>(::GetLastError()));
             return MOBILEGL_ERR_OUT_OF_MEMORY;
         }
         m_mapping = view;

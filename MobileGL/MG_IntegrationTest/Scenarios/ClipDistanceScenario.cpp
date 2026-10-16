@@ -139,13 +139,9 @@ void main() { fragColor = vec4(0.0, 1.0, 0.0, 1.0); }
                 glDrawArrays(GL_TRIANGLES, 0, 3);
             }
 
-            static bool IsGreen(const unsigned char* px) {
-                return px[0] < 64 && px[1] > 192;
-            }
+            static bool IsGreen(const unsigned char* px) { return px[0] < 64 && px[1] > 192; }
 
-            static bool IsRed(const unsigned char* px) {
-                return px[0] > 192 && px[1] < 64;
-            }
+            static bool IsRed(const unsigned char* px) { return px[0] > 192 && px[1] < 64; }
 
             void PixelAt(int x, int y, unsigned char* out) const {
                 glReadPixels(x, y, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, out);
@@ -275,8 +271,9 @@ void main() { fragColor = vec4(0.0, 1.0, 0.0, 1.0); }
         PixelAt(width / 4, height / 2, left);
         EXPECT_EQ(FirstGLError(), 0u);
 
-        EXPECT_TRUE(IsGreen(right)) << "the kept half is not painted (" << int(right[0]) << "," << int(right[1])
-                                    << "," << int(right[2]) << ") - the draw itself did not happen, so the clipped "
+        EXPECT_TRUE(IsGreen(right)) << "the kept half is not painted (" << int(right[0]) << "," << int(right[1]) << ","
+                                    << int(right[2])
+                                    << ") - the draw itself did not happen, so the clipped "
                                        "half below proves nothing";
         EXPECT_TRUE(IsRed(left)) << "gl_ClipDistance[0] is negative on the left half and GL_CLIP_DISTANCE0 is "
                                     "enabled, so those fragments must be clipped away; found ("

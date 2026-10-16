@@ -47,8 +47,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // The format has this aspect and the render-pass arm's copy of it was read back.
         Bool measured = false;
         Uint32 texels = 0;
-        Uint32 expected = 0;  // the multisample source's cleared value
-        Uint32 sentinel = 0;  // what the resolve target was pre-filled with
+        Uint32 expected = 0; // the multisample source's cleared value
+        Uint32 sentinel = 0; // what the resolve target was pre-filled with
         Uint32 tolerance = 0;
         // THE SUBJECT: VK_KHR_depth_stencil_resolve render pass, no draw.
         Uint32 renderPassMatches = 0;   // texels within tolerance of `expected`
@@ -62,8 +62,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     };
 
     struct WireDepthResolveFormatReading {
-        String name;          // e.g. "D24_UNORM_S8_UINT"
-        Int32 format = 0;     // the VkFormat
+        String name;      // e.g. "D24_UNORM_S8_UINT"
+        Int32 format = 0; // the VkFormat
         Uint32 samples = 0;
         // False when the format was not probed; `skipReason` says why (unsupported, the render-pass
         // arm would not be taken for it, an object the probe needed could not be created).
@@ -103,10 +103,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     inline const char* WireDepthResolveProbeVerdictName(WireDepthResolveProbeVerdict verdict) {
         switch (verdict) {
-            case WireDepthResolveProbeVerdict::NotRun: return "not-run";
-            case WireDepthResolveProbeVerdict::Inconclusive: return "inconclusive";
-            case WireDepthResolveProbeVerdict::Clean: return "clean";
-            case WireDepthResolveProbeVerdict::RenderPassResolveBroken: return "render-pass-resolve-broken";
+        case WireDepthResolveProbeVerdict::NotRun:
+            return "not-run";
+        case WireDepthResolveProbeVerdict::Inconclusive:
+            return "inconclusive";
+        case WireDepthResolveProbeVerdict::Clean:
+            return "clean";
+        case WireDepthResolveProbeVerdict::RenderPassResolveBroken:
+            return "render-pass-resolve-broken";
         }
         return "?";
     }
@@ -122,7 +126,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     // An aspect only counts where its control holds; a format is conclusive when any of its
     // aspects is. The render pass resolves every aspect of the format in one pass, so one aspect
     // it fails is the defect for the whole arm.
-    inline WireDepthResolveProbeVerdict EvaluateWireDepthResolveProbe(const WireDepthResolveProbeMeasurement& measurement) {
+    inline WireDepthResolveProbeVerdict EvaluateWireDepthResolveProbe(
+        const WireDepthResolveProbeMeasurement& measurement) {
         if (!measurement.ran || measurement.fenceWaitTimedOut) return WireDepthResolveProbeVerdict::NotRun;
         Bool conclusive = false, broken = false;
         for (const WireDepthResolveFormatReading& reading : measurement.formats) {
@@ -153,7 +158,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     // the real readback keeps the sentinel while the shader control still runs. The
     // DirectVulkan.{Split,Spawn}.MsResolveElide. entries then require the defect verdict from the
     // measurement itself.
-    enum class WireDepthResolveProbeKnob : Uint8 { Measure, ForceBug, ForceClean, ElideSubject, Unrecognised };
+    enum class WireDepthResolveProbeKnob : Uint8 {
+        Measure,
+        ForceBug,
+        ForceClean,
+        ElideSubject,
+        Unrecognised
+    };
 
     inline WireDepthResolveProbeKnob ParseWireDepthResolveProbeKnob(const char* value) {
         if (value == nullptr || *value == '\0') return WireDepthResolveProbeKnob::Measure;
@@ -244,9 +255,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     // The renderer's identity from its device's VkPhysicalDeviceProperties - the ONE place the fields
     // are filled (VulkanRenderer::ArmWireDepthResolveOrder calls it), so the unit test proves that each
     // property reaches the key: with only the cache tested, a field left out here stayed green.
-    inline WireDepthResolveDeviceIdentity MakeWireDepthResolveDeviceIdentity(const VkPhysicalDeviceProperties& properties,
-                                                                             Bool renderPassArmAvailable,
-                                                                             WireDepthResolveProbeKnob knob) {
+    inline WireDepthResolveDeviceIdentity MakeWireDepthResolveDeviceIdentity(
+        const VkPhysicalDeviceProperties& properties, Bool renderPassArmAvailable, WireDepthResolveProbeKnob knob) {
         WireDepthResolveDeviceIdentity identity;
         identity.vendorID = properties.vendorID;
         identity.deviceID = properties.deviceID;
@@ -317,7 +327,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     // Every format, "; "-separated, for the POST row.
     inline String DescribeWireDepthResolveProbe(const WireDepthResolveProbeMeasurement& measurement) {
         if (!measurement.ran) {
-            return measurement.failureReason.empty() ? String("not run") : "not run (" + measurement.failureReason + ")";
+            return measurement.failureReason.empty() ? String("not run")
+                                                     : "not run (" + measurement.failureReason + ")";
         }
         String out;
         for (const WireDepthResolveFormatReading& reading : measurement.formats) {

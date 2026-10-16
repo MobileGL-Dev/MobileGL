@@ -85,14 +85,18 @@ void main() { o_color = texture(uTex, vUv); }
 
         // Saturated colours only: ColorName() names them exactly whatever the rounding.
         constexpr NamedColor kCycle[] = {
-            {1.0f, 0.0f, 0.0f, "red"},  {0.0f, 1.0f, 0.0f, "green"}, {0.0f, 0.0f, 1.0f, "blue"},
+            {1.0f, 0.0f, 0.0f, "red"},    {0.0f, 1.0f, 0.0f, "green"}, {0.0f, 0.0f, 1.0f, "blue"},
             {1.0f, 1.0f, 0.0f, "yellow"}, {1.0f, 1.0f, 1.0f, "white"},
         };
         constexpr int kCycleLength = static_cast<int>(sizeof(kCycle) / sizeof(kCycle[0]));
         constexpr int kFrames = 7;
 
-        const NamedColor& Background(int frame) { return kCycle[frame % kCycleLength]; }
-        const NamedColor& Foreground(int frame) { return kCycle[(frame + 2) % kCycleLength]; }
+        const NamedColor& Background(int frame) {
+            return kCycle[frame % kCycleLength];
+        }
+        const NamedColor& Foreground(int frame) {
+            return kCycle[(frame + 2) % kCycleLength];
+        }
 
         // The NDC rectangle [x0, x1] x [y0, y1] in one colour; aPos at 0, aColor at 1.
         void DrawRect(unsigned int program, float x0, float y0, float x1, float y1, const NamedColor& c) {
@@ -109,7 +113,8 @@ void main() { o_color = texture(uTex, vUv); }
             glEnableVertexAttribArray(0);
             glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 6 * sizeof(float), nullptr);
             glEnableVertexAttribArray(1);
-            glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, 6 * sizeof(float), reinterpret_cast<void*>(2 * sizeof(float)));
+            glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, 6 * sizeof(float),
+                                  reinterpret_cast<void*>(2 * sizeof(float)));
             glUseProgram(program);
             glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
             glBindVertexArray(0);
@@ -138,7 +143,10 @@ void main() { o_color = texture(uTex, vUv); }
             glDeleteVertexArrays(1, &vao);
         }
 
-        enum class WindowPass { Blit, SampledDraw };
+        enum class WindowPass {
+            Blit,
+            SampledDraw
+        };
 
         class WindowPassGateScenario : public ScenarioTest {
         protected:
@@ -231,7 +239,8 @@ void main() { o_color = texture(uTex, vUv); }
                 RecordProperty("arming_checked", armed ? "yes" : "no");
                 if (!armed) return;
                 const std::string appended = PipeStatsWindow::ReadLaneLogSince(m_logBefore);
-                EXPECT_NE(appended.find("off-screen work goes to the queue ahead of its window pass"), std::string::npos)
+                EXPECT_NE(appended.find("off-screen work goes to the queue ahead of its window pass"),
+                          std::string::npos)
                     << "this case recorded off-screen work ahead of every window pass, but DirectVulkan never "
                        "reported submitting it ahead of the acquire wait: the whole frame still queues behind "
                        "the swapchain image's release (VulkanRenderer::SubmitAheadOfAcquiredImage). Log appended "

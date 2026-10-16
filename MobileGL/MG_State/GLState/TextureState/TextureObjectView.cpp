@@ -18,7 +18,11 @@ namespace MobileGL::MG_State::GLState {
         // TextureObject.cpp's completeness walk assumes); every other layered target keeps them
         // in z. GL_TEXTURE_3D is deliberately None: its depth is a spatial axis, not layers, and
         // ARB_texture_view forbids anything but a full-depth 3D->3D view of it.
-        enum class LayerAxis { None, Y, Z };
+        enum class LayerAxis {
+            None,
+            Y,
+            Z
+        };
 
         LayerAxis LayerAxisOf(TextureTarget target) {
             switch (target) {
@@ -189,10 +193,9 @@ namespace MobileGL::MG_State::GLState {
         const SizeT bytesPerTexel = ownerBytes / ownerTexels;
         // One "layer" is a whole x*y slice for a 2D/cube array, and a single row of `width`
         // texels for a 1D array (whose layer count lives in the state-side height).
-        const SizeT layerTexels = ownerAxis == LayerAxis::Y
-                                      ? static_cast<SizeT>(std::max(ownerSize.x(), 0))
-                                      : static_cast<SizeT>(std::max(ownerSize.x(), 0)) *
-                                            static_cast<SizeT>(std::max(ownerSize.y(), 0));
+        const SizeT layerTexels = ownerAxis == LayerAxis::Y ? static_cast<SizeT>(std::max(ownerSize.x(), 0))
+                                                            : static_cast<SizeT>(std::max(ownerSize.x(), 0)) *
+                                                                  static_cast<SizeT>(std::max(ownerSize.y(), 0));
         const SizeT offset = static_cast<SizeT>(layerIndex) * layerTexels * bytesPerTexel;
         return offset < ownerBytes ? offset : 0;
     }
@@ -337,8 +340,7 @@ namespace MobileGL::MG_State::GLState {
                                                      Vector<MipmapDirtyRegion>& outRects) const {
         outRects.clear();
         if (m_ownerMipmap == nullptr) return;
-        m_ownerMipmap->GetStorageDirtyFootprint(ToOwnerUploadTarget(uploadTarget), ToOwnerLevel(mipmapLevel),
-                                                outRects);
+        m_ownerMipmap->GetStorageDirtyFootprint(ToOwnerUploadTarget(uploadTarget), ToOwnerLevel(mipmapLevel), outRects);
     }
 
     void TextureObjectView::SetMipmapCompressedImage(TextureUploadTarget uploadTarget, Uint mipmapLevel,

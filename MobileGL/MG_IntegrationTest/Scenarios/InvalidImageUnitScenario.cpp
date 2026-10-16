@@ -152,11 +152,11 @@ void main() {
         }
 
         enum class Invalidity {
-            MissingMipLevel,      // mutable, level 0 only, MAX_LEVEL 7, bound at level 2 (the CTS shape)
-            PastImmutableLevels,  // glTexStorage2D with 2 levels, bound at level 2
-            PastArrayLayers,      // 2D array of 2 slices, bound non-layered at layer 2
-            NoStorage,            // a named texture that was never given an image
-            PastViewWindow,       // a 1-level view of a 3-level owner, bound at view level 1
+            MissingMipLevel,     // mutable, level 0 only, MAX_LEVEL 7, bound at level 2 (the CTS shape)
+            PastImmutableLevels, // glTexStorage2D with 2 levels, bound at level 2
+            PastArrayLayers,     // 2D array of 2 slices, bound non-layered at layer 2
+            NoStorage,           // a named texture that was never given an image
+            PastViewWindow,      // a 1-level view of a 3-level owner, bound at view level 1
         };
 
         class InvalidImageUnitScenario : public ScenarioTest {
@@ -201,8 +201,7 @@ void main() {
             static bool LimitIsAtLeast(GLenum limit, GLint wanted) {
                 GLint value = 0;
                 glGetIntegerv(limit, &value);
-                while (glGetError() != GL_NO_ERROR) {
-                }
+                while (glGetError() != GL_NO_ERROR) {}
                 return value >= wanted;
             }
 
@@ -230,8 +229,8 @@ void main() {
                 GLint bindLevel = 0;
                 GLint bindLayer = 0;
                 GLenum readTarget = GL_TEXTURE_2D;
-                GLuint readTexture = 0;           // the texture whose texels are checked (a view's owner)
-                std::vector<int> definedLevels;   // levels of readTexture that hold `magic`
+                GLuint readTexture = 0;         // the texture whose texels are checked (a view's owner)
+                std::vector<int> definedLevels; // levels of readTexture that hold `magic`
                 int layers = 1;
                 GLubyte magic = 0;
             };
@@ -244,8 +243,7 @@ void main() {
                     made.texture = NewTexture();
                     glBindTexture(GL_TEXTURE_2D, made.texture);
                     const auto texels = Pattern(kEdge, kEdge, 1, magic);
-                    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, kEdge, kEdge, 0, GL_RGBA, GL_UNSIGNED_BYTE,
-                                 texels.data());
+                    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, kEdge, kEdge, 0, GL_RGBA, GL_UNSIGNED_BYTE, texels.data());
                     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 0);
                     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 7);
                     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST_MIPMAP_LINEAR);
@@ -372,8 +370,8 @@ void main() {
                 glBindImageTexture(1, completeSource, 0, GL_FALSE, 0, GL_READ_WRITE, GL_RGBA8);
                 glBindImageTexture(2, invalidDestination.texture, invalidDestination.bindLevel, GL_FALSE,
                                    invalidDestination.bindLayer, GL_READ_WRITE, GL_RGBA8);
-                glBindImageTexture(3, invalidSource.texture, invalidSource.bindLevel, GL_FALSE,
-                                   invalidSource.bindLayer, GL_READ_WRITE, GL_RGBA8);
+                glBindImageTexture(3, invalidSource.texture, invalidSource.bindLevel, GL_FALSE, invalidSource.bindLayer,
+                                   GL_READ_WRITE, GL_RGBA8);
                 // A binding that is invalid at ACCESS time is still a legal bind (8.26 validates
                 // only the unit, the level's sign, the layer's sign, the access and the format).
                 ASSERT_EQ(FirstGLError(), 0u) << "glBindImageTexture raised a GL error (" << what << ")";
@@ -421,8 +419,8 @@ void main() {
                 }
                 if (nonZero != 0) {
                     const std::size_t at = static_cast<std::size_t>((firstY * kEdge + firstX) * 4);
-                    ADD_FAILURE() << nonZero << " of " << kEdge * kEdge << " texels loaded through the invalid "
-                                  << what << " unit were not zero; first at (" << firstX << ", " << firstY << ") = ("
+                    ADD_FAILURE() << nonZero << " of " << kEdge * kEdge << " texels loaded through the invalid " << what
+                                  << " unit were not zero; first at (" << firstX << ", " << firstY << ") = ("
                                   << int(loaded[at]) << ", " << int(loaded[at + 1]) << ", " << int(loaded[at + 2])
                                   << ", " << int(loaded[at + 3]) << ") (R = 17 means the pass never ran)";
                 }
@@ -433,12 +431,13 @@ void main() {
                     const auto expected = Pattern(edge, edge, invalidDestination.layers, invalidDestination.magic);
                     const auto actual = ReadLevel(invalidDestination.readTarget, invalidDestination.readTexture, level,
                                                   invalidDestination.layers);
-                    EXPECT_EQ(actual, expected) << "a store through the invalid " << what
-                                                << " unit modified level " << level << " of the texture it names";
+                    EXPECT_EQ(actual, expected) << "a store through the invalid " << what << " unit modified level "
+                                                << level << " of the texture it names";
                 }
 
                 // (3) The valid half of the same pass is intact: the complete source was only read.
-                EXPECT_EQ(ReadLevel(GL_TEXTURE_2D, completeSource, 0, 1), Pattern(kEdge, kEdge, 1, kCompleteSourceMagic))
+                EXPECT_EQ(ReadLevel(GL_TEXTURE_2D, completeSource, 0, 1),
+                          Pattern(kEdge, kEdge, 1, kCompleteSourceMagic))
                     << "the complete source changed (" << what << ")";
                 EXPECT_EQ(FirstGLError(), 0u) << "the readbacks raised a GL error (" << what << ")";
             }
@@ -491,8 +490,9 @@ void main() {
                 // the units no longer alias - but A's load of A's own store in the same pass is
                 // not: that is the CONTRACT-P7 §12 residual, and here it is what PROVES the knob
                 // reached the server (the null-descriptor arm would read zero there too).
-                const bool privatePlaceholderArm = m_wire && Gl().BackendName() == "DirectVulkan" &&
-                                                   SplitLane::MarkerIsOne("MGITEST_MAGMA_FORCE_PRIVATE_IMAGE_PLACEHOLDER");
+                const bool privatePlaceholderArm =
+                    m_wire && Gl().BackendName() == "DirectVulkan" &&
+                    SplitLane::MarkerIsOne("MGITEST_MAGMA_FORCE_PRIVATE_IMAGE_PLACEHOLDER");
                 const GLuint loadedThroughB = MakeComplete2D(kCompleteDestinationMagic);
                 const GLuint loadedThroughA = MakeComplete2D(kCompleteSourceMagic);
                 InvalidTexture invalidA{};

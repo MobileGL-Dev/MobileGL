@@ -55,10 +55,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     inline const char* WireCopySliceProbeVerdictName(WireCopySliceProbeVerdict verdict) {
         switch (verdict) {
-            case WireCopySliceProbeVerdict::NotRun: return "not-run";
-            case WireCopySliceProbeVerdict::Inconclusive: return "inconclusive";
-            case WireCopySliceProbeVerdict::Clean: return "clean";
-            case WireCopySliceProbeVerdict::CrossFormatSlicesDropped: return "cross-format-slices-dropped";
+        case WireCopySliceProbeVerdict::NotRun:
+            return "not-run";
+        case WireCopySliceProbeVerdict::Inconclusive:
+            return "inconclusive";
+        case WireCopySliceProbeVerdict::Clean:
+            return "clean";
+        case WireCopySliceProbeVerdict::CrossFormatSlicesDropped:
+            return "cross-format-slices-dropped";
         }
         return "?";
     }

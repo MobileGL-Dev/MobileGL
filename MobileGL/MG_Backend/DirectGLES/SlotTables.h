@@ -70,7 +70,6 @@
 // slot allocator (the link ratchet's P13 exit gate pins that).
 namespace MobileGL::MG_Backend::DirectGLES {
 
-
     // Declared in Managers.h as well; repeated here because this header is included from it
     // before that declaration, and the table below is the arming site on this arm (D13: "the
     // arming site moves to the slot table's first insertion").
@@ -218,7 +217,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         Vector<SharedPtr<Table>> Snapshot() const {
             Vector<SharedPtr<Table>> all;
             all.reserve(m_buckets.size());
-            for (const auto& bucket : m_buckets) all.push_back(bucket.second);
+            for (const auto& bucket : m_buckets)
+                all.push_back(bucket.second);
             return all;
         }
 
@@ -271,7 +271,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             m_buckets.clear();
             m_memoKey = Key{};
             m_memoTable = nullptr;
-            for (const SharedPtr<Table>& table : all) table->Reset();
+            for (const SharedPtr<Table>& table : all)
+                table->Reset();
         }
 
         // ---- the calling thread's bucket, member for member ---------------------------------
@@ -282,12 +283,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // - unchanged source - answer from the right context's object namespace. A caller that
         // must name a bucket OTHER than its own (a death walk, a case) takes Shared()/Snapshot()
         // and calls the table directly.
-        BackendPtr& GetOrCreate(MG_Pipe::MGPipeHandle handle) {
-            return ForCallingThread().GetOrCreate(handle);
-        }
-        BackendPtr* FindByHandle(MG_Pipe::MGPipeHandle handle) {
-            return ForCallingThread().FindByHandle(handle);
-        }
+        BackendPtr& GetOrCreate(MG_Pipe::MGPipeHandle handle) { return ForCallingThread().GetOrCreate(handle); }
+        BackendPtr* FindByHandle(MG_Pipe::MGPipeHandle handle) { return ForCallingThread().FindByHandle(handle); }
         const BackendPtr* FindByHandle(MG_Pipe::MGPipeHandle handle) const {
             return ForCallingThread().FindByHandle(handle);
         }
@@ -321,17 +318,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // The process-wide answer for the two statics: a notice is about an OBJECT, so it must
         // reach the twin in EVERY bucket of EVERY holder. They forward to the table's own
         // statics, which walk the holder list - each SHARED holder of it is one bucket.
-        static Bool ReleaseTwinByHandle(MG_Pipe::MGPipeHandle handle) {
-            return Table::ReleaseTwinByHandle(handle);
-        }
+        static Bool ReleaseTwinByHandle(MG_Pipe::MGPipeHandle handle) { return Table::ReleaseTwinByHandle(handle); }
         // The instance spelling, and it HANDS THE TWIN OUT rather than answering a Bool: the two
         // tables that ARE a bucket registry (buffers, sampler views) have always been called as
         // `g_backendBufferResources.ReleaseByHandle(res)` and their callers still have to decide
         // what happens to the driver id the twin owns. The bucket is the CALLING THREAD'S, which
         // is the bucket that twin was created in.
-        BackendPtr ReleaseByHandle(MG_Pipe::MGPipeHandle handle) {
-            return ForCallingThread().ReleaseByHandle(handle);
-        }
+        BackendPtr ReleaseByHandle(MG_Pipe::MGPipeHandle handle) { return ForCallingThread().ReleaseByHandle(handle); }
         static Uint32 HolderCount() { return Table::HolderCount(); }
         Uint32 LiveCount() const { return ForCallingThread().LiveCount(); }
         Uint32 CompositeLiveCount() const { return ForCallingThread().CompositeLiveCount(); }
@@ -405,18 +398,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // registry) is a holder for exactly as long as it exists. Copy and move carry the
         // ENTRIES; the links are the table's own and are never copied.
         BackendSlotTable() { LinkHolder(); }
-        BackendSlotTable(const BackendSlotTable& other):
-            m_ownerSession(other.m_ownerSession),
-            m_slots(other.m_slots),
-            m_band(other.m_band),
-            m_nullTwin(other.m_nullTwin) {
+        BackendSlotTable(const BackendSlotTable& other)
+            : m_ownerSession(other.m_ownerSession), m_slots(other.m_slots), m_band(other.m_band),
+              m_nullTwin(other.m_nullTwin) {
             LinkHolder();
         }
-        BackendSlotTable(BackendSlotTable&& other) noexcept:
-            m_ownerSession(other.m_ownerSession),
-            m_slots(std::move(other.m_slots)),
-            m_band(std::move(other.m_band)),
-            m_nullTwin(std::move(other.m_nullTwin)) {
+        BackendSlotTable(BackendSlotTable&& other) noexcept
+            : m_ownerSession(other.m_ownerSession), m_slots(std::move(other.m_slots)), m_band(std::move(other.m_band)),
+              m_nullTwin(std::move(other.m_nullTwin)) {
             other.m_slots.clear();
             other.m_band.clear();
             LinkHolder();
@@ -457,8 +446,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // releases the twin by handle, and the slot is freed by the CLIENT after that returns.
         //
         BackendPtr& GetOrCreate(MG_Pipe::MGPipeHandle handle) {
-            MOBILEGL_ASSERT(!MG_Pipe::MGPipeHandleIsNull(handle),
-                            "GetOrCreate(handle) named the reserved null handle");
+            MOBILEGL_ASSERT(!MG_Pipe::MGPipeHandleIsNull(handle), "GetOrCreate(handle) named the reserved null handle");
             if (MG_Pipe::MGPipeHandleIsNull(handle)) return m_nullTwin;
 
             // A slot index that ARRIVED in a payload indexes a vector this call would RESIZE,
@@ -479,8 +467,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     "GetOrCreate(handle) named slot %u, past this table's %u bound",
                     handle.Slot, kMaxHandleSlot);
 #else
-                MOBILEGL_ASSERT(false, "GetOrCreate(handle) named slot %u, past this table's %u bound",
-                                handle.Slot, kMaxHandleSlot);
+                MOBILEGL_ASSERT(false, "GetOrCreate(handle) named slot %u, past this table's %u bound", handle.Slot,
+                                kMaxHandleSlot);
                 return m_nullTwin;
 #endif
             }
@@ -489,15 +477,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
             EnsureProcessTeardownSentinel();
 
             // THE TWO DIRECTIONS ARE NOT SYMMETRIC. The handle arrived in a payload, so
-            // `handle.Gen < entry.Gen` is a reachable input, and adopting it would destroy the INCUMBENT LIVE twin - a driver buffer id,
-            // a persistent map, a pooled store, released by a defaulted destructor that issues
-            // no glDeleteBuffers and no pool enrolment - and then stamp the slot back to the
-            // dead resource's generation, after which the incumbent's own FindByHandle refuses
-            // it and it is silently handed a fresh, empty twin. That is a leak AND a resource
-            // that loses its storage with no diagnostic, i.e. the shape commit d7655247 fixed
-            // and the thing MGPipeHandle::Gen exists to prevent. So: forward is a recycle and
-            // resets the twin, BACKWARD is refused - which is the same answer FindByHandle
-            // below already gives the same input.
+            // `handle.Gen < entry.Gen` is a reachable input, and adopting it would destroy the INCUMBENT LIVE twin - a
+            // driver buffer id, a persistent map, a pooled store, released by a defaulted destructor that issues no
+            // glDeleteBuffers and no pool enrolment - and then stamp the slot back to the dead resource's generation,
+            // after which the incumbent's own FindByHandle refuses it and it is silently handed a fresh, empty twin.
+            // That is a leak AND a resource that loses its storage with no diagnostic, i.e. the shape commit d7655247
+            // fixed and the thing MGPipeHandle::Gen exists to prevent. So: forward is a recycle and resets the twin,
+            // BACKWARD is refused - which is the same answer FindByHandle below already gives the same input.
             Entry& entry = EntryAt(handle.Slot);
             if (entry.Live && entry.Gen > handle.Gen) {
 #if MOBILEGL_BUILD_DISAGGREGATED
@@ -599,8 +585,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // list; nothing on a shipping path asks.
         static Uint32 HolderCount() {
             Uint32 count = 0;
-            for (const BackendSlotTable* holder = s_firstHolder; holder != nullptr;
-                 holder = holder->m_nextHolder) {
+            for (const BackendSlotTable* holder = s_firstHolder; holder != nullptr; holder = holder->m_nextHolder) {
                 ++count;
             }
             return count;
@@ -632,9 +617,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 const Entry& entry = m_band[index];
                 if (!entry.Live || !entry.backend) continue;
                 const BackendPtr twin = entry.backend;
-                fn(MG_Pipe::MGPipeHandle{
-                       static_cast<Uint32>(index) + MG_Pipe::kMGPipeShaderCsoCompositeSlotBase,
-                       entry.Gen},
+                fn(MG_Pipe::MGPipeHandle{static_cast<Uint32>(index) + MG_Pipe::kMGPipeShaderCsoCompositeSlotBase,
+                                         entry.Gen},
                    twin);
             }
         }
@@ -714,9 +698,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return kHasCompositeBand && MG_Pipe::MGPipeIsCompositeShaderSlot(slot);
         }
         static constexpr SizeT IndexOfSlot(Uint32 slot) {
-            return SlotIsBanded(slot)
-                       ? static_cast<SizeT>(slot - MG_Pipe::kMGPipeShaderCsoCompositeSlotBase)
-                       : static_cast<SizeT>(slot);
+            return SlotIsBanded(slot) ? static_cast<SizeT>(slot - MG_Pipe::kMGPipeShaderCsoCompositeSlotBase)
+                                      : static_cast<SizeT>(slot);
         }
 
         // The entry a slot names, or null when its space has never grown that far. NEVER grows:
@@ -728,9 +711,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (index >= table.size()) return nullptr;
             return &table[index];
         }
-        const Entry* EntryOrNull(Uint32 slot) const {
-            return const_cast<BackendSlotTable*>(this)->EntryOrNull(slot);
-        }
+        const Entry* EntryOrNull(Uint32 slot) const { return const_cast<BackendSlotTable*>(this)->EntryOrNull(slot); }
 
         // Grows the right space to hold `slot`. Every caller bounds `slot` first - against
         // kMaxHandleSlot - because this is the one place a client-supplied number decides an
@@ -779,7 +760,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
         Vector<Entry> m_band;
         // Handed back by GetOrCreate for a null state object. Never live, never handed a handle.
         BackendPtr m_nullTwin;
-
     };
 
 } // namespace MobileGL::MG_Backend::DirectGLES

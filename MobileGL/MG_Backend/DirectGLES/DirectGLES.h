@@ -75,11 +75,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         GLsizei height, GLint border);
     void CopyTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint x, GLint y, GLsizei width,
                            GLsizei height);
-    void CopyImageSubData(const CopyImageEndpoint& src,
-                          GLenum srcTarget, GLint srcLevel, GLint srcX, GLint srcY, GLint srcZ,
-                          const CopyImageEndpoint& dst,
-                          GLenum dstTarget, GLint dstLevel, GLint dstX, GLint dstY, GLint dstZ,
-                          GLsizei srcWidth, GLsizei srcHeight, GLsizei srcDepth);
+    void CopyImageSubData(const CopyImageEndpoint& src, GLenum srcTarget, GLint srcLevel, GLint srcX, GLint srcY,
+                          GLint srcZ, const CopyImageEndpoint& dst, GLenum dstTarget, GLint dstLevel, GLint dstX,
+                          GLint dstY, GLint dstZ, GLsizei srcWidth, GLsizei srcHeight, GLsizei srcDepth);
     void GenerateMipmap(GLenum target);
     const GLubyte* GetString(GLenum name);
     void ReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, void* pixels);
@@ -291,8 +289,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         SizeT operator()(const TwinKey& key) const {
             // The 64-bit mix SlotAllocator and the applier's registry already use for their own
             // pair keys, so every keyed table in this tree hashes a session the same way.
-            Uint64 mixed = key.SessionKey ^ (key.ShareGroupKey + 0x9E3779B97F4A7C15ull +
-                                             (key.SessionKey << 6) + (key.SessionKey >> 2));
+            Uint64 mixed = key.SessionKey ^
+                           (key.ShareGroupKey + 0x9E3779B97F4A7C15ull + (key.SessionKey << 6) + (key.SessionKey >> 2));
             mixed ^= mixed >> 33;
             mixed *= 0xFF51AFD7ED558CCDull;
             mixed ^= mixed >> 33;
@@ -344,7 +342,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
         CacheEntry Cache[kCacheEntries]{};
     };
     inline constinit thread_local NativeContextThreadState t_nativeContextThread;
-    inline Uint64 CurrentNativeContextSerial() { return t_nativeContextThread.BoundSerial; }
+    inline Uint64 CurrentNativeContextSerial() {
+        return t_nativeContextThread.BoundSerial;
+    }
 
     class PerNativeContextBase {
     public:
@@ -391,7 +391,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         template <typename F>
         void ForEach(F&& visit) {
             const std::lock_guard<std::mutex> lock(m_mutex);
-            for (auto& entry : m_bySerial) visit(entry.second);
+            for (auto& entry : m_bySerial)
+                visit(entry.second);
         }
         void Clear() {
             const std::lock_guard<std::mutex> lock(m_mutex);

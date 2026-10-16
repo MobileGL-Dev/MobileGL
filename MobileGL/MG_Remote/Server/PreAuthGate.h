@@ -70,7 +70,8 @@ namespace MobileGL::MG_Remote::Server {
     inline constexpr const char* kFirstFrameBadDataBind = "first frame is a DataBind without a 16-byte nonce";
     inline constexpr const char* kPreAuthDeadline = "no authenticated first frame within the pre-auth deadline";
     inline constexpr const char* kPreAuthFull = "too many connections are awaiting authentication";
-    inline constexpr const char* kPreAuthDisplaced = "displaced from the pre-auth queue by a connection from another address";
+    inline constexpr const char* kPreAuthDisplaced =
+        "displaced from the pre-auth queue by a connection from another address";
     inline constexpr const char* kAuthBackoffRefusal = "too many failed authentications from this address; retry later";
 
     struct PreAuthKnobs {
@@ -118,7 +119,14 @@ namespace MobileGL::MG_Remote::Server {
     // verify", and a peer speaking some other schema deserves the specific answer. msg_as_Hello()
     // and msg_as_DataBind() are part of the guard, not consequences of it: flatbuffers verifies a
     // NULL union member as valid, so a 24-byte envelope whose tag says Hello carries no Hello.
-    enum class FirstFrameShape { NoIdentifier, Unverifiable, Hello, DataBind, BadDataBind, NotAHello };
+    enum class FirstFrameShape {
+        NoIdentifier,
+        Unverifiable,
+        Hello,
+        DataBind,
+        BadDataBind,
+        NotAHello
+    };
 
     inline FirstFrameShape ClassifyFirstFrame(const std::uint8_t* payload, std::size_t size) {
         if (payload == nullptr || size < 8 || !::MobileGL::Wire::CtrlEnvelopeBufferHasIdentifier(payload))
@@ -128,8 +136,7 @@ namespace MobileGL::MG_Remote::Server {
         const auto* envelope = ::MobileGL::Wire::GetCtrlEnvelope(payload);
         if (envelope->msg_type() == ::MobileGL::Wire::CtrlMsg::DataBind) {
             const auto* bind = envelope->msg_as_DataBind();
-            return bind != nullptr && bind->nonce() != nullptr &&
-                           bind->nonce()->size() == Transport::kDataNonceBytes
+            return bind != nullptr && bind->nonce() != nullptr && bind->nonce()->size() == Transport::kDataNonceBytes
                        ? FirstFrameShape::DataBind
                        : FirstFrameShape::BadDataBind;
         }
@@ -142,12 +149,17 @@ namespace MobileGL::MG_Remote::Server {
     // shapes that are not malformed.
     inline const char* FirstFrameRefusalDetail(FirstFrameShape shape) {
         switch (shape) {
-            case FirstFrameShape::NoIdentifier: return kFirstFrameNoIdentifier;
-            case FirstFrameShape::Unverifiable: return kFirstFrameUnverifiable;
-            case FirstFrameShape::BadDataBind: return kFirstFrameBadDataBind;
-            case FirstFrameShape::NotAHello: return kFirstFrameNotAHello;
-            case FirstFrameShape::Hello:
-            case FirstFrameShape::DataBind: return nullptr;
+        case FirstFrameShape::NoIdentifier:
+            return kFirstFrameNoIdentifier;
+        case FirstFrameShape::Unverifiable:
+            return kFirstFrameUnverifiable;
+        case FirstFrameShape::BadDataBind:
+            return kFirstFrameBadDataBind;
+        case FirstFrameShape::NotAHello:
+            return kFirstFrameNotAHello;
+        case FirstFrameShape::Hello:
+        case FirstFrameShape::DataBind:
+            return nullptr;
         }
         return kFirstFrameNotAHello;
     }
@@ -166,7 +178,8 @@ namespace MobileGL::MG_Remote::Server {
     inline std::size_t ChoosePendingToDisplace(const std::vector<std::string>& pending, const std::string& newcomer) {
         std::unordered_map<std::string, std::size_t> held;
         std::size_t most = 0;
-        for (const auto& address : pending) most = std::max(most, ++held[address]);
+        for (const auto& address : pending)
+            most = std::max(most, ++held[address]);
         const auto own = held.find(newcomer);
         if (own != held.end() && own->second >= most) return pending.size();
         for (std::size_t index = 0; index < pending.size(); ++index)
@@ -238,7 +251,10 @@ namespace MobileGL::MG_Remote::Server {
             auto victim = m_peers.end();
             for (auto it = m_peers.begin(); it != m_peers.end(); ++it) {
                 const bool expired = it->second.until <= now;
-                if (victim == m_peers.end()) { victim = it; continue; }
+                if (victim == m_peers.end()) {
+                    victim = it;
+                    continue;
+                }
                 const bool victimExpired = victim->second.until <= now;
                 if (expired != victimExpired) {
                     if (expired) victim = it;

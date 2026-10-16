@@ -33,15 +33,15 @@
 #include <string.h>
 #include <unistd.h>
 
-typedef void *EGLDisplay;
-typedef void *EGLConfig;
-typedef void *EGLSurface;
-typedef void *EGLContext;
+typedef void* EGLDisplay;
+typedef void* EGLConfig;
+typedef void* EGLSurface;
+typedef void* EGLContext;
 typedef int EGLint;
 typedef unsigned int EGLBoolean;
 typedef unsigned int EGLenum;
-typedef void *EGLNativeDisplayType;
-typedef void *EGLNativeWindowType;
+typedef void* EGLNativeDisplayType;
+typedef void* EGLNativeWindowType;
 
 #define EGL_DEFAULT_DISPLAY ((EGLNativeDisplayType)0)
 #define EGL_NO_CONTEXT ((EGLContext)0)
@@ -88,43 +88,45 @@ typedef void *EGLNativeWindowType;
 #define GL_RENDERBUFFER 0x8D41
 
 typedef EGLDisplay (*P_getDisplay)(EGLNativeDisplayType);
-typedef EGLBoolean (*P_initialize)(EGLDisplay, EGLint *, EGLint *);
+typedef EGLBoolean (*P_initialize)(EGLDisplay, EGLint*, EGLint*);
 typedef EGLBoolean (*P_bindAPI)(EGLenum);
-typedef EGLBoolean (*P_chooseConfig)(EGLDisplay, const EGLint *, EGLConfig *, EGLint, EGLint *);
-typedef EGLBoolean (*P_getConfigAttrib)(EGLDisplay, EGLConfig, EGLint, EGLint *);
-typedef EGLSurface (*P_createWindowSurface)(EGLDisplay, EGLConfig, EGLNativeWindowType, const EGLint *);
-typedef EGLSurface (*P_createPbufferSurface)(EGLDisplay, EGLConfig, const EGLint *);
-typedef EGLContext (*P_createContext)(EGLDisplay, EGLConfig, EGLContext, const EGLint *);
+typedef EGLBoolean (*P_chooseConfig)(EGLDisplay, const EGLint*, EGLConfig*, EGLint, EGLint*);
+typedef EGLBoolean (*P_getConfigAttrib)(EGLDisplay, EGLConfig, EGLint, EGLint*);
+typedef EGLSurface (*P_createWindowSurface)(EGLDisplay, EGLConfig, EGLNativeWindowType, const EGLint*);
+typedef EGLSurface (*P_createPbufferSurface)(EGLDisplay, EGLConfig, const EGLint*);
+typedef EGLContext (*P_createContext)(EGLDisplay, EGLConfig, EGLContext, const EGLint*);
 typedef EGLBoolean (*P_makeCurrent)(EGLDisplay, EGLSurface, EGLSurface, EGLContext);
 typedef EGLint (*P_getError)(void);
 
-typedef const unsigned char *(*P_glGetString)(unsigned int);
-typedef void (*P_glGetIntegerv)(unsigned int, int *);
+typedef const unsigned char* (*P_glGetString)(unsigned int);
+typedef void (*P_glGetIntegerv)(unsigned int, int*);
 typedef void (*P_glClearColor)(float, float, float, float);
 typedef void (*P_glClear)(unsigned int);
 typedef void (*P_glFinish)(void);
-typedef void (*P_glReadPixels)(int, int, int, int, unsigned int, unsigned int, void *);
+typedef void (*P_glReadPixels)(int, int, int, int, unsigned int, unsigned int, void*);
 typedef unsigned int (*P_glGetError)(void);
-typedef void (*P_glGenTextures)(int, unsigned int *);
+typedef void (*P_glGenTextures)(int, unsigned int*);
 typedef void (*P_glBindTexture)(unsigned int, unsigned int);
-typedef void (*P_glTexImage2D)(unsigned int, int, int, int, int, int, unsigned int, unsigned int, const void *);
+typedef void (*P_glTexImage2D)(unsigned int, int, int, int, int, int, unsigned int, unsigned int, const void*);
 typedef void (*P_glTexParameteri)(unsigned int, unsigned int, int);
-typedef void (*P_glGenFramebuffers)(int, unsigned int *);
+typedef void (*P_glGenFramebuffers)(int, unsigned int*);
 typedef void (*P_glBindFramebuffer)(unsigned int, unsigned int);
 typedef void (*P_glFramebufferTexture2D)(unsigned int, unsigned int, unsigned int, unsigned int, int);
 typedef unsigned int (*P_glCheckFramebufferStatus)(unsigned int);
 typedef void (*P_glViewport)(int, int, int, int);
-typedef void (*P_glGenRenderbuffers)(int, unsigned int *);
+typedef void (*P_glGenRenderbuffers)(int, unsigned int*);
 typedef void (*P_glBindRenderbuffer)(unsigned int, unsigned int);
 typedef void (*P_glRenderbufferStorage)(unsigned int, unsigned int, int, int);
 typedef void (*P_glFramebufferRenderbuffer)(unsigned int, unsigned int, unsigned int, unsigned int);
 
-static void *g_lib;
-static void *S(const char *n) { return dlsym(g_lib, n); }
+static void* g_lib;
+static void* S(const char* n) {
+    return dlsym(g_lib, n);
+}
 
-static void on_image(void *ctx, AImageReader *r) {
+static void on_image(void* ctx, AImageReader* r) {
     (void)ctx;
-    AImage *img = NULL;
+    AImage* img = NULL;
     /* Drain the queue, or the producer blocks once maxImages are in flight. */
     if (AImageReader_acquireNextImage(r, &img) == AMEDIA_OK && img) AImage_delete(img);
 }
@@ -136,18 +138,23 @@ static int near8(unsigned got, int want, int tol) {
     return d <= tol && d >= -tol;
 }
 
-int main(int argc, char **argv) {
-    const char *backend = "DirectGLES";
-    const char *surface = "pbuffer";
-    const char *libpath = "libMobileGL.so";
+int main(int argc, char** argv) {
+    const char* backend = "DirectGLES";
+    const char* surface = "pbuffer";
+    const char* libpath = "libMobileGL.so";
 
     for (int i = 1; i < argc; ++i) {
-        if (!strcmp(argv[i], "--backend") && i + 1 < argc) backend = argv[++i];
-        else if (!strcmp(argv[i], "--surface") && i + 1 < argc) surface = argv[++i];
-        else if (!strcmp(argv[i], "--lib") && i + 1 < argc) libpath = argv[++i];
+        if (!strcmp(argv[i], "--backend") && i + 1 < argc)
+            backend = argv[++i];
+        else if (!strcmp(argv[i], "--surface") && i + 1 < argc)
+            surface = argv[++i];
+        else if (!strcmp(argv[i], "--lib") && i + 1 < argc)
+            libpath = argv[++i];
         else {
-            fprintf(stderr, "usage: %s [--backend DirectGLES|DirectVulkan]"
-                            " [--surface pbuffer|imagereader] [--lib path]\n", argv[0]);
+            fprintf(stderr,
+                    "usage: %s [--backend DirectGLES|DirectVulkan]"
+                    " [--surface pbuffer|imagereader] [--lib path]\n",
+                    argv[0]);
             return 2;
         }
     }
@@ -159,13 +166,13 @@ int main(int argc, char **argv) {
     printf("mgprobe backend=%s surface=%s lib=%s\n", backend, surface, libpath);
 
     int useWindow = !strcmp(surface, "imagereader");
-    ANativeWindow *win = NULL;
-    AImageReader *reader = NULL;
+    ANativeWindow* win = NULL;
+    AImageReader* reader = NULL;
     if (useWindow) {
         if (AImageReader_newWithUsage(DIM, DIM, AIMAGE_FORMAT_RGBA_8888,
-                                      AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE |
-                                          AHARDWAREBUFFER_USAGE_GPU_COLOR_OUTPUT,
-                                      4, &reader) != AMEDIA_OK || !reader) {
+                                      AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE | AHARDWAREBUFFER_USAGE_GPU_COLOR_OUTPUT,
+                                      4, &reader) != AMEDIA_OK ||
+            !reader) {
             printf("FAIL AImageReader_newWithUsage\n");
             return 3;
         }
@@ -210,12 +217,23 @@ int main(int argc, char **argv) {
         return 7;
     }
 
-    const EGLint cfgAttribs[] = {
-        EGL_SURFACE_TYPE, useWindow ? EGL_WINDOW_BIT : EGL_PBUFFER_BIT,
-        EGL_RENDERABLE_TYPE, EGL_OPENGL_BIT,
-        EGL_RED_SIZE, 8, EGL_GREEN_SIZE, 8, EGL_BLUE_SIZE, 8, EGL_ALPHA_SIZE, 8,
-        EGL_DEPTH_SIZE, 24, EGL_STENCIL_SIZE, 8,
-        EGL_NONE};
+    const EGLint cfgAttribs[] = {EGL_SURFACE_TYPE,
+                                 useWindow ? EGL_WINDOW_BIT : EGL_PBUFFER_BIT,
+                                 EGL_RENDERABLE_TYPE,
+                                 EGL_OPENGL_BIT,
+                                 EGL_RED_SIZE,
+                                 8,
+                                 EGL_GREEN_SIZE,
+                                 8,
+                                 EGL_BLUE_SIZE,
+                                 8,
+                                 EGL_ALPHA_SIZE,
+                                 8,
+                                 EGL_DEPTH_SIZE,
+                                 24,
+                                 EGL_STENCIL_SIZE,
+                                 8,
+                                 EGL_NONE};
     EGLConfig cfg = 0;
     EGLint ncfg = 0;
     if (!eglChooseConfig_(dpy, cfgAttribs, &cfg, 1, &ncfg) || ncfg < 1) {
@@ -234,14 +252,13 @@ int main(int argc, char **argv) {
         surf = eglCreatePbufferSurface_(dpy, cfg, sa);
     }
     if (surf == EGL_NO_SURFACE) {
-        printf("FAIL create%sSurface err=0x%x\n", useWindow ? "Window" : "Pbuffer",
-               eglGetError_ ? eglGetError_() : 0);
+        printf("FAIL create%sSurface err=0x%x\n", useWindow ? "Window" : "Pbuffer", eglGetError_ ? eglGetError_() : 0);
         return 9;
     }
 
     const EGLint ctxAttribs[] = {
-        EGL_CONTEXT_MAJOR_VERSION, 3, EGL_CONTEXT_MINOR_VERSION, 3,
-        EGL_CONTEXT_OPENGL_PROFILE_MASK, EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT, EGL_NONE};
+        EGL_CONTEXT_MAJOR_VERSION,           3,       EGL_CONTEXT_MINOR_VERSION, 3, EGL_CONTEXT_OPENGL_PROFILE_MASK,
+        EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT, EGL_NONE};
     EGLContext ctx = eglCreateContext_(dpy, cfg, EGL_NO_CONTEXT, ctxAttribs);
     if (ctx == EGL_NO_CONTEXT) {
         printf("FAIL eglCreateContext(3.3 core) err=0x%x\n", eglGetError_ ? eglGetError_() : 0);
@@ -272,18 +289,18 @@ int main(int argc, char **argv) {
     P_glGenRenderbuffers glGenRenderbuffers_ = (P_glGenRenderbuffers)S("glGenRenderbuffers");
     P_glBindRenderbuffer glBindRenderbuffer_ = (P_glBindRenderbuffer)S("glBindRenderbuffer");
     P_glRenderbufferStorage glRenderbufferStorage_ = (P_glRenderbufferStorage)S("glRenderbufferStorage");
-    P_glFramebufferRenderbuffer glFramebufferRenderbuffer_ = (P_glFramebufferRenderbuffer)S("glFramebufferRenderbuffer");
+    P_glFramebufferRenderbuffer glFramebufferRenderbuffer_ =
+        (P_glFramebufferRenderbuffer)S("glFramebufferRenderbuffer");
 
     int major = -1, minor = -1, profile = -1;
     glGetIntegerv_(GL_MAJOR_VERSION, &major);
     glGetIntegerv_(GL_MINOR_VERSION, &minor);
     glGetIntegerv_(GL_CONTEXT_PROFILE_MASK, &profile);
-    printf("  GL_VENDOR   %s\n", (const char *)glGetString_(GL_VENDOR));
-    printf("  GL_RENDERER %s\n", (const char *)glGetString_(GL_RENDERER));
-    printf("  GL_VERSION  %s\n", (const char *)glGetString_(GL_VERSION));
-    printf("  GLSL        %s\n", (const char *)glGetString_(GL_SHADING_LANGUAGE_VERSION));
-    printf("  version %d.%d profile_mask 0x%x %s\n", major, minor, profile,
-           (profile & 1) ? "(core)" : "(NOT CORE)");
+    printf("  GL_VENDOR   %s\n", (const char*)glGetString_(GL_VENDOR));
+    printf("  GL_RENDERER %s\n", (const char*)glGetString_(GL_RENDERER));
+    printf("  GL_VERSION  %s\n", (const char*)glGetString_(GL_VERSION));
+    printf("  GLSL        %s\n", (const char*)glGetString_(GL_SHADING_LANGUAGE_VERSION));
+    printf("  version %d.%d profile_mask 0x%x %s\n", major, minor, profile, (profile & 1) ? "(core)" : "(NOT CORE)");
 
     unsigned char px[4];
 
@@ -294,8 +311,7 @@ int main(int argc, char **argv) {
     memset(px, 0, sizeof px);
     glReadPixels_(DIM / 2, DIM / 2, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, px);
     int defOk = near8(px[0], 64, 10) && near8(px[1], 128, 10) && near8(px[2], 191, 10);
-    printf("  default-FB readback (%u,%u,%u,%u) %s\n", px[0], px[1], px[2], px[3],
-           defOk ? "ok" : "BROKEN");
+    printf("  default-FB readback (%u,%u,%u,%u) %s\n", px[0], px[1], px[2], px[3], defOk ? "ok" : "BROKEN");
 
     /* User FBO - this is what dEQP uses with --deqp-surface-type=fbo. */
     unsigned int tex = 0, fbo = 0;
@@ -317,8 +333,7 @@ int main(int argc, char **argv) {
         memset(px, 0, sizeof px);
         glReadPixels_(DIM / 2, DIM / 2, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, px);
         fboOk = near8(px[0], 230, 10) && near8(px[1], 51, 10) && near8(px[2], 102, 10);
-        printf("  user-FBO readback   (%u,%u,%u,%u) %s\n", px[0], px[1], px[2], px[3],
-               fboOk ? "ok" : "BROKEN");
+        printf("  user-FBO readback   (%u,%u,%u,%u) %s\n", px[0], px[1], px[2], px[3], fboOk ? "ok" : "BROKEN");
     } else {
         printf("  user-FBO incomplete status=0x%x\n", fbst);
     }
@@ -346,8 +361,7 @@ int main(int argc, char **argv) {
             memset(px, 0, sizeof px);
             glReadPixels_(DIM / 2, DIM / 2, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, px);
             rboOk = near8(px[0], 26, 10) && near8(px[1], 179, 10) && near8(px[2], 77, 10);
-            printf("  rbo-FBO readback    (%u,%u,%u,%u) %s\n", px[0], px[1], px[2], px[3],
-                   rboOk ? "ok" : "BROKEN");
+            printf("  rbo-FBO readback    (%u,%u,%u,%u) %s\n", px[0], px[1], px[2], px[3], rboOk ? "ok" : "BROKEN");
         } else {
             printf("  rbo-FBO incomplete status=0x%x\n", rst);
         }
@@ -357,9 +371,8 @@ int main(int argc, char **argv) {
 
     unsigned glerr = glGetError_ ? glGetError_() : 0;
     int ok = fboOk && rboOk && (major > 3 || (major == 3 && minor >= 3)) && (profile & 1) && glerr == 0;
-    printf("%s backend=%s surface=%s default_fb=%s user_fbo=%s rbo_fbo=%s glerr=0x%x\n",
-           ok ? "PASS" : "FAIL", backend, surface, defOk ? "ok" : "broken",
-           fboOk ? "ok" : "broken", rboOk ? "ok" : "broken", glerr);
+    printf("%s backend=%s surface=%s default_fb=%s user_fbo=%s rbo_fbo=%s glerr=0x%x\n", ok ? "PASS" : "FAIL", backend,
+           surface, defOk ? "ok" : "broken", fboOk ? "ok" : "broken", rboOk ? "ok" : "broken", glerr);
 
     fflush(stdout);
     /* MobileGL aborts in static teardown; leave before that runs. */

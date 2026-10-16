@@ -121,9 +121,10 @@ namespace {
         RecordProperty("sizeof_XfbVarying", static_cast<int>(sizeof(XfbVarying)));
         RecordProperty("sizeof_LinkArtifacts", static_cast<int>(sizeof(LinkArtifacts)));
         RecordProperty("sizeof_SpirvArtifacts", static_cast<int>(sizeof(SpirvArtifacts)));
-        std::printf("sizeof: TypeFacts=%zu ResourceReflection=%zu XfbVarying=%zu LinkArtifacts=%zu SpirvArtifacts=%zu\n",
-                    sizeof(TypeFacts), sizeof(ResourceReflection), sizeof(XfbVarying), sizeof(LinkArtifacts),
-                    sizeof(SpirvArtifacts));
+        std::printf(
+            "sizeof: TypeFacts=%zu ResourceReflection=%zu XfbVarying=%zu LinkArtifacts=%zu SpirvArtifacts=%zu\n",
+            sizeof(TypeFacts), sizeof(ResourceReflection), sizeof(XfbVarying), sizeof(LinkArtifacts),
+            sizeof(SpirvArtifacts));
 #ifdef MGL_LINKARTIFACTS_SIZE // whichever STL branch the header pinned, this twin follows it
         EXPECT_EQ(sizeof(ResourceReflection), static_cast<std::size_t>(MGL_RESOURCEREFLECTION_SIZE));
         EXPECT_EQ(sizeof(XfbVarying), static_cast<std::size_t>(MGL_XFBVARYING_SIZE));

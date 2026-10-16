@@ -118,7 +118,6 @@ namespace MGITest {
             0x00000009u, 0x0003003eu, 0x00000012u, 0x00000013u, 0x000100fdu, 0x00010038u,
         };
 
-
         // The quad the vertex module transforms. Full-viewport before the scale, so a scale of
         // 0.5 covers exactly the middle half of each axis and the corners stay background.
         const float kQuad[] = {-1.0f, -1.0f, 1.0f, -1.0f, -1.0f, 1.0f, 1.0f, 1.0f};
@@ -127,8 +126,8 @@ namespace MGITest {
         constexpr unsigned int kScaleConstantId = 3;
         constexpr unsigned int kChannelConstantId = 7;
 
-        unsigned int MakeSpirvShader(GLenum type, const unsigned int* words, size_t wordCount,
-                                     unsigned int constantId, unsigned int constantValue, std::string* outLog) {
+        unsigned int MakeSpirvShader(GLenum type, const unsigned int* words, size_t wordCount, unsigned int constantId,
+                                     unsigned int constantValue, std::string* outLog) {
             const GLuint shader = glCreateShader(type);
             glShaderBinary(1, &shader, GL_SHADER_BINARY_FORMAT_SPIR_V, words,
                            static_cast<GLsizei>(wordCount * sizeof(unsigned int)));
@@ -273,15 +272,15 @@ namespace MGITest {
         const float half = 0.5f;
         std::memcpy(&halfBits, &half, sizeof(halfBits));
 
-        const unsigned int vs = MakeSpirvShader(GL_VERTEX_SHADER, kVertexModule,
-                                                sizeof(kVertexModule) / sizeof(kVertexModule[0]),
-                                                kScaleConstantId, halfBits, &log);
+        const unsigned int vs =
+            MakeSpirvShader(GL_VERTEX_SHADER, kVertexModule, sizeof(kVertexModule) / sizeof(kVertexModule[0]),
+                            kScaleConstantId, halfBits, &log);
         ASSERT_NE(vs, 0u) << "vertex: " << log;
         // Channel 1 is green; the module's own default is 0 (red), so a specialization that did
         // nothing paints the wrong colour.
-        const unsigned int fs = MakeSpirvShader(GL_FRAGMENT_SHADER, kFragmentModule,
-                                                sizeof(kFragmentModule) / sizeof(kFragmentModule[0]),
-                                                kChannelConstantId, 1u, &log);
+        const unsigned int fs =
+            MakeSpirvShader(GL_FRAGMENT_SHADER, kFragmentModule, sizeof(kFragmentModule) / sizeof(kFragmentModule[0]),
+                            kChannelConstantId, 1u, &log);
         ASSERT_NE(fs, 0u) << "fragment: " << log;
 
         const GLuint program = glCreateProgram();

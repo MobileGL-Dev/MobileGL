@@ -96,9 +96,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // Cold path: pin the shadow from the driver once (init probes and
                 // pre-shadow code bind raw but restore what they found).
                 GLint binding = 0;
-                g_GLESFuncs.glGetIntegerv(
-                    target == FramebufferTarget::Read ? GL_READ_FRAMEBUFFER_BINDING : GL_DRAW_FRAMEBUFFER_BINDING,
-                    &binding);
+                g_GLESFuncs.glGetIntegerv(target == FramebufferTarget::Read ? GL_READ_FRAMEBUFFER_BINDING
+                                                                            : GL_DRAW_FRAMEBUFFER_BINDING,
+                                          &binding);
                 g_driverFBOBindings[idx] = static_cast<Uint>(binding);
                 g_driverFBOBindingKnown[idx] = true;
             }
@@ -370,8 +370,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         static Bool SyncAttachmentSurface(GLenum glFBOTarget, const MG_Pipe::MGPSurface& surface,
                                           GLenum glBackendAttachment,
                                           const MG_State::GLState::FramebufferAttachmentObject* monolithAttachment) {
-            if (surface.Kind == MG_Pipe::kMGPipeSurfaceKindNone ||
-                MG_Pipe::MGPipeHandleIsNull(surface.Res)) {
+            if (surface.Kind == MG_Pipe::kMGPipeSurfaceKindNone || MG_Pipe::MGPipeHandleIsNull(surface.Res)) {
                 // An empty point: the caller detached it on exactly this test, so attaching
                 // nothing here is the whole of the agreement. (The legacy arm does the same.)
                 return true;
@@ -419,10 +418,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                            uploadTarget == TextureUploadTarget::Texture1DArray ||
                            uploadTarget == TextureUploadTarget::CubeMapArray ||
                            uploadTarget == TextureUploadTarget::Texture2DMultisampleArray) {
-                    g_GLESFuncs.glFramebufferTextureLayer(glFBOTarget, glBackendAttachment,
-                                                          backendTextureObject->GetBackendTextureId(),
-                                                          static_cast<GLint>(surface.Level),
-                                                          static_cast<GLint>(surface.Layer));
+                    g_GLESFuncs.glFramebufferTextureLayer(
+                        glFBOTarget, glBackendAttachment, backendTextureObject->GetBackendTextureId(),
+                        static_cast<GLint>(surface.Level), static_cast<GLint>(surface.Layer));
                 } else {
                     auto glTextureTarget = TextureImpl::ConvertTextureUploadTargetToBackendGLEnum(uploadTarget);
                     if (glTextureTarget == GL_UNKNOWN_MGL) {
@@ -449,8 +447,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                                "renderbuffer")) {
                     return false;
                 }
-                auto* twinSlot = AdoptTwinByHandle(RenderbufferImpl::g_backendRenderbufferObjects, surface.Res,
-                                                   "renderbuffer");
+                auto* twinSlot =
+                    AdoptTwinByHandle(RenderbufferImpl::g_backendRenderbufferObjects, surface.Res, "renderbuffer");
                 if (twinSlot == nullptr) {
                     return false;
                 }
@@ -495,7 +493,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         Bool IsFixedPointFallbackReadAttachment() {
             const auto* record = MG_Pipe::MGPipeApplier().ReadFramebuffer();
             return record && record->ReadSurface.Kind != MG_Pipe::kMGPipeSurfaceKindNone &&
-                IsSnormFormat(static_cast<TextureInternalFormat>(record->ReadSurface.InternalFormat));
+                   IsSnormFormat(static_cast<TextureInternalFormat>(record->ReadSurface.InternalFormat));
             const auto& readFBO =
                 MG_Pipe::gPipeInputs->GetFramebufferBindingSlot(FramebufferTarget::Read).GetBoundObject();
             if (!readFBO) {
@@ -581,8 +579,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 for (Uint i = 0; i < MG_Pipe::kMGPipeMaxColorAttachments; ++i) {
                     const auto& color = record.Color[i];
                     if (color.Res == record.ReadSurface.Res && color.Kind == record.ReadSurface.Kind &&
-                        color.Layered == record.ReadSurface.Layered &&
-                        color.Level == record.ReadSurface.Level && color.Layer == record.ReadSurface.Layer &&
+                        color.Layered == record.ReadSurface.Layered && color.Level == record.ReadSurface.Level &&
+                        color.Layer == record.ReadSurface.Layer &&
                         color.UploadTarget == record.ReadSurface.UploadTarget) {
                         pushedReadBuf = static_cast<FramebufferAttachmentType>(
                             static_cast<Int>(FramebufferAttachmentType::Color0) + static_cast<Int>(i));
@@ -655,15 +653,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     frontendBuf > FramebufferAttachmentType::Color31) {
                     continue; // GL_NONE, or a default-framebuffer FRONT/BACK token: never relocated.
                 }
-                const Uint a =
-                    static_cast<Uint>(frontendBuf) - static_cast<Uint>(FramebufferAttachmentType::Color0);
+                const Uint a = static_cast<Uint>(frontendBuf) - static_cast<Uint>(FramebufferAttachmentType::Color0);
                 // Neither guard may ever fire: a duplicate draw buffer is already INVALID_OPERATION
                 // and an out-of-range one is rejected by ValidateColorAttachmentInRange. If one did
                 // fire the table would disagree with the glDrawBuffers the caller already issued,
                 // which is the exact non-injectivity this table exists to remove.
                 MOBILEGL_ASSERT(a < slotCount && !assigned[a],
-                                "Draw buffer %u names colour attachment %u which is out of range or duplicated.", s,
-                                a);
+                                "Draw buffer %u names colour attachment %u which is out of range or duplicated.", s, a);
                 if (a >= slotCount || assigned[a]) {
                     continue;
                 }
@@ -758,8 +754,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
         } // namespace
 
-        void NoteFramebufferTextureAttachments(MG_Pipe::MGPipeHandle fbo,
-                                               const MG_Pipe::MGPFramebufferState& record) {
+        void NoteFramebufferTextureAttachments(MG_Pipe::MGPipeHandle fbo, const MG_Pipe::MGPFramebufferState& record) {
             if (MG_Pipe::MGPipeHandleIsNull(fbo)) return;
             ForgetFramebufferTextureAttachmentsLocked(fbo.Slot);
             Vector<Uint32> textureSlots;
@@ -772,7 +767,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 textureSlots.push_back(surface.Res.Slot);
                 g_framebuffersByAttachedTextureSlot[surface.Res.Slot].push_back(fbo);
             };
-            for (Uint i = 0; i < MG_Pipe::kMGPipeMaxColorAttachments; ++i) note(record.Color[i]);
+            for (Uint i = 0; i < MG_Pipe::kMGPipeMaxColorAttachments; ++i)
+                note(record.Color[i]);
             note(record.Depth);
             note(record.Stencil);
             if (textureSlots.empty()) return; // the common Minecraft frame: renderbuffers only
@@ -797,8 +793,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // of this arm. The two SERVER-owned gates stay, because no client-side value can answer
         // what they answer: g_attachmentBackendIdGeneration ("did I re-mint a driver id") and
         // the re-entry it drives.
-        void BackendFramebufferObject::SyncToBackendByHandle(MG_Pipe::MGPipeHandle fbo,
-                                                             FramebufferTarget asTarget) {
+        void BackendFramebufferObject::SyncToBackendByHandle(MG_Pipe::MGPipeHandle fbo, FramebufferTarget asTarget) {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
@@ -904,28 +899,24 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (idGenerationMoved) {
                 m_syncedBackendIdGeneration = g_attachmentBackendIdGeneration;
             }
-            if (idGenerationMoved || attachmentPointsMoved ||
-                m_syncedAttachmentRecordHash != record.ContentHash) {
-                const auto applyPoint = [&](FramebufferAttachmentType point,
-                                            const MG_Pipe::MGPSurface& surface) {
-                    const Bool isColorPoint = point >= FramebufferAttachmentType::Color0 &&
-                                              point <= FramebufferAttachmentType::Color31;
-                    const GLenum glBackendAttachment =
-                        isColorPoint ? GetBackendAttachmentType(point)
-                                     : MG_Util::ConvertFramebufferAttachmentTypeToGLEnum(point);
+            if (idGenerationMoved || attachmentPointsMoved || m_syncedAttachmentRecordHash != record.ContentHash) {
+                const auto applyPoint = [&](FramebufferAttachmentType point, const MG_Pipe::MGPSurface& surface) {
+                    const Bool isColorPoint =
+                        point >= FramebufferAttachmentType::Color0 && point <= FramebufferAttachmentType::Color31;
+                    const GLenum glBackendAttachment = isColorPoint
+                                                           ? GetBackendAttachmentType(point)
+                                                           : MG_Util::ConvertFramebufferAttachmentTypeToGLEnum(point);
                     if (glBackendAttachment == GL_NONE || glBackendAttachment == GL_UNKNOWN_MGL) return;
-                    const Bool empty = surface.Kind == MG_Pipe::kMGPipeSurfaceKindNone ||
-                                       MG_Pipe::MGPipeHandleIsNull(surface.Res);
+                    const Bool empty =
+                        surface.Kind == MG_Pipe::kMGPipeSurfaceKindNone || MG_Pipe::MGPipeHandleIsNull(surface.Res);
                     // The detach that keeps m_backendColorSlots a permutation of the PHYSICAL
                     // layout: a colour point whose record says empty must not keep the previous
                     // owner's image, or glReadBuffer returns it. Bounded by the driver's cap,
                     // because GL_COLOR_ATTACHMENTn above it is INVALID_ENUM.
                     if (isColorPoint && empty) {
-                        const Int index =
-                            static_cast<Int>(point) - static_cast<Int>(FramebufferAttachmentType::Color0);
+                        const Int index = static_cast<Int>(point) - static_cast<Int>(FramebufferAttachmentType::Color0);
                         if (index < g_GLESCapabilities.MaxColorAttachments) {
-                            g_GLESFuncs.glFramebufferRenderbuffer(glFBOTarget, glBackendAttachment,
-                                                                  GL_RENDERBUFFER, 0);
+                            g_GLESFuncs.glFramebufferRenderbuffer(glFBOTarget, glBackendAttachment, GL_RENDERBUFFER, 0);
                         }
                         return;
                     }
@@ -961,8 +952,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
             if (!hasAnyAttachment) {
                 const Array<Int, 5> defaults = {
-                    static_cast<Int>(record.Width), static_cast<Int>(record.Height),
-                    static_cast<Int>(record.Layers),
+                    static_cast<Int>(record.Width), static_cast<Int>(record.Height), static_cast<Int>(record.Layers),
                     std::min<Int>(static_cast<Int>(record.Samples), g_GLESCapabilities.MaxFramebufferSamples),
                     static_cast<Int>(record.FixedSampleLocations != 0 ? GL_TRUE : GL_FALSE)};
                 if (!m_syncedNoAttachmentDefaultsValid || m_syncedNoAttachmentDefaults != defaults) {
@@ -1057,8 +1047,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // earlier operation left queued; drain before attaching (rare path -
             // only runs when the attachment actually changes).
             void DrainPendingGLErrors() {
-                while (g_GLESFuncs.glGetError() != GL_NO_ERROR) {
-                }
+                while (g_GLESFuncs.glGetError() != GL_NO_ERROR) {}
             }
 
             // Record the color point as detached when the shadow said something was
@@ -1105,8 +1094,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return fb.id;
         }
 
-        void EnsureColorAttachment2D(ScratchFramebuffer& fb, GLenum fbTarget, Uint tex, GLenum texTarget,
-                                     GLint level) {
+        void EnsureColorAttachment2D(ScratchFramebuffer& fb, GLenum fbTarget, Uint tex, GLenum texTarget, GLint level) {
             PrepareForUse(fb, fbTarget);
             if (fb.depthTex != 0) {
                 g_GLESFuncs.glFramebufferTexture2D(fbTarget, GL_DEPTH_STENCIL_ATTACHMENT, GL_TEXTURE_2D, 0, 0);
@@ -1163,9 +1151,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 g_GLESFuncs.glFramebufferTexture2D(fbTarget, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, 0, 0);
                 RecordNoColor(fb);
             }
-            if (fb.depthTex == tex && fb.depthTarget == texTarget && fb.depthLevel == level &&
-                fb.depthLayer < 0 && fb.depthHasStencil == withStencil &&
-                fb.depthIsStencilOnly == stencilOnly) {
+            if (fb.depthTex == tex && fb.depthTarget == texTarget && fb.depthLevel == level && fb.depthLayer < 0 &&
+                fb.depthHasStencil == withStencil && fb.depthIsStencilOnly == stencilOnly) {
                 return;
             }
             if (fb.depthTex != 0) {
@@ -1176,11 +1163,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
             DrainPendingGLErrors();
             // A stencil-only texture has no depth point to attach at, and a depth one has no
             // stencil point; GL_DEPTH_STENCIL_ATTACHMENT is only the combined texture's form.
-            g_GLESFuncs.glFramebufferTexture2D(fbTarget,
-                                               stencilOnly ? GL_STENCIL_ATTACHMENT
-                                                           : (withStencil ? GL_DEPTH_STENCIL_ATTACHMENT
-                                                                          : GL_DEPTH_ATTACHMENT),
-                                               texTarget, tex, level);
+            g_GLESFuncs.glFramebufferTexture2D(
+                fbTarget,
+                stencilOnly ? GL_STENCIL_ATTACHMENT : (withStencil ? GL_DEPTH_STENCIL_ATTACHMENT : GL_DEPTH_ATTACHMENT),
+                texTarget, tex, level);
             if (g_GLESFuncs.glGetError() != GL_NO_ERROR) {
                 RecordNoDepth(fb);
                 return;
@@ -1383,13 +1369,17 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // the same four fields, read out of the same record type, with Desc.Target telling the
         // applier which of the three per-kind tables the record lives in.
 #define MGB_RBO_FORMAT                                                                                                 \
-    (pushedRecord != nullptr ? static_cast<TextureInternalFormat>(pushedRecord->Desc.InternalFormat)                    \
+    (pushedRecord != nullptr ? static_cast<TextureInternalFormat>(pushedRecord->Desc.InternalFormat)                   \
                              : stateRBOObject->GetInternalFormat())
-#define MGB_RBO_WIDTH (pushedRecord != nullptr ? static_cast<Int>(pushedRecord->Desc.Width) : static_cast<Int>(stateRBOObject->GetWidth()))
+#define MGB_RBO_WIDTH                                                                                                  \
+    (pushedRecord != nullptr ? static_cast<Int>(pushedRecord->Desc.Width)                                              \
+                             : static_cast<Int>(stateRBOObject->GetWidth()))
 #define MGB_RBO_HEIGHT                                                                                                 \
-    (pushedRecord != nullptr ? static_cast<Int>(pushedRecord->Desc.Height) : static_cast<Int>(stateRBOObject->GetHeight()))
+    (pushedRecord != nullptr ? static_cast<Int>(pushedRecord->Desc.Height)                                             \
+                             : static_cast<Int>(stateRBOObject->GetHeight()))
 #define MGB_RBO_SAMPLES                                                                                                \
-    (pushedRecord != nullptr ? static_cast<Int>(pushedRecord->Desc.Samples) : static_cast<Int>(stateRBOObject->GetSamples()))
+    (pushedRecord != nullptr ? static_cast<Int>(pushedRecord->Desc.Samples)                                            \
+                             : static_cast<Int>(stateRBOObject->GetSamples()))
 
 #undef MGB_RBO_FORMAT
 #undef MGB_RBO_WIDTH
@@ -1407,16 +1397,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
-            const MG_Pipe::MGPipeResourceRecord* const pushedRecord =
-                PipeRenderbufferRecordForHandle(renderbuffer);
+            const MG_Pipe::MGPipeResourceRecord* const pushedRecord = PipeRenderbufferRecordForHandle(renderbuffer);
             if (pushedRecord == nullptr) {
                 MGLOG_E_ONCE("MGPipe: renderbuffer handle {%u, %u} has no applier record, so its "
                              "storage cannot be allocated from the pushed descriptor",
                              renderbuffer.Slot, renderbuffer.Gen);
                 return;
             }
-            if (m_isInitialized && m_syncedResourceSerial != 0 &&
-                m_syncedResourceSerial == pushedRecord->Serial) {
+            if (m_isInitialized && m_syncedResourceSerial != 0 && m_syncedResourceSerial == pushedRecord->Serial) {
                 return;
             }
 
@@ -1446,8 +1434,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 const auto backendSamples = static_cast<GLsizei>(ClampSamplesToBackendSupport(
                     GetRenderbufferFormatCapabilityTargetIndex(), internalFormat, glFormat, samples));
                 g_GLESFuncs.glRenderbufferStorageMultisample(GL_RENDERBUFFER, backendSamples, glInternalFormat,
-                                                             static_cast<GLsizei>(width),
-                                                             static_cast<GLsizei>(height));
+                                                             static_cast<GLsizei>(width), static_cast<GLsizei>(height));
             } else {
                 g_GLESFuncs.glRenderbufferStorage(GL_RENDERBUFFER, glInternalFormat, static_cast<GLsizei>(width),
                                                   static_cast<GLsizei>(height));
@@ -1473,7 +1460,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             m_isInitialized = true;
         }
 
-        TwinRegistry<MG_State::GLState::RenderbufferObject, BackendRenderbufferObject, MG_Pipe::MGPipeKind::Renderbuffer>
+        TwinRegistry<MG_State::GLState::RenderbufferObject, BackendRenderbufferObject,
+                     MG_Pipe::MGPipeKind::Renderbuffer>
             g_backendRenderbufferObjects;
     } // namespace RenderbufferImpl
 } // namespace MobileGL::MG_Backend::DirectGLES

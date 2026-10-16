@@ -40,7 +40,9 @@ namespace MobileGL::MG_Util::Async {
         // stack-allocated pools a test builds - those join themselves in their destructor.
         std::atomic<ShaderCompilePool*> g_processPool{nullptr};
 
-        Bool InProcessTeardown() { return g_processTeardown; }
+        Bool InProcessTeardown() {
+            return g_processTeardown;
+        }
 
         void EnsureProcessTeardownSentinel() {
             std::call_once(g_teardownSentinelOnce, [] {
@@ -63,8 +65,7 @@ namespace MobileGL::MG_Util::Async {
         }
 
         Uint64 ReadCpuMaxFrequencyKHz(const Uint cpu) {
-            const String path =
-                std::format("/sys/devices/system/cpu/cpu{}/cpufreq/cpuinfo_max_freq", cpu);
+            const String path = std::format("/sys/devices/system/cpu/cpu{}/cpufreq/cpuinfo_max_freq", cpu);
             std::FILE* file = std::fopen(path.c_str(), "r");
             if (file == nullptr) return 0;
             unsigned long long value = 0;
@@ -101,9 +102,12 @@ namespace MobileGL::MG_Util::Async {
 
     Bool AsyncShaderCompileEnabled() {
         switch (MG_Config::Features.AsyncShaderCompile) {
-        case MG_Config::QuirkOverride::ForceOn: return true;
-        case MG_Config::QuirkOverride::ForceOff: return false;
-        case MG_Config::QuirkOverride::Auto: break;
+        case MG_Config::QuirkOverride::ForceOn:
+            return true;
+        case MG_Config::QuirkOverride::ForceOff:
+            return false;
+        case MG_Config::QuirkOverride::Auto:
+            break;
         }
         return kAsyncShaderCompileDefault;
     }
@@ -129,9 +133,12 @@ namespace MobileGL::MG_Util::Async {
 
     Bool OptimisticShaderStatusActive() {
         switch (MG_Config::Features.AsyncOptimisticShaderStatus) {
-        case MG_Config::QuirkOverride::ForceOn: return AsyncShaderCompileActive();
-        case MG_Config::QuirkOverride::ForceOff: return false;
-        case MG_Config::QuirkOverride::Auto: break;
+        case MG_Config::QuirkOverride::ForceOn:
+            return AsyncShaderCompileActive();
+        case MG_Config::QuirkOverride::ForceOff:
+            return false;
+        case MG_Config::QuirkOverride::Auto:
+            break;
         }
         return kOptimisticShaderStatusDefault && AsyncShaderCompileActive();
     }
@@ -185,7 +192,8 @@ namespace MobileGL::MG_Util::Async {
                 ++inFlight;
                 try {
                     asio::post(*pool, [this, node]() mutable { RunOnWorker(Move(node)); });
-                } catch (...) {
+                }
+                catch (...) {
                     --inFlight;
                     toCancel.push_back(Move(node));
                 }
@@ -218,7 +226,9 @@ namespace MobileGL::MG_Util::Async {
 
     ShaderCompilePool::ShaderCompilePool(const Uint threadCount) : m_impl(MakeUnique<Impl>(threadCount)) {}
 
-    ShaderCompilePool::~ShaderCompilePool() { StopAndDrain(); }
+    ShaderCompilePool::~ShaderCompilePool() {
+        StopAndDrain();
+    }
 
     ShaderCompilePool& ShaderCompilePool::Get() {
         // Leak-at-exit, like the other MobileGL singletons: the object itself is never
@@ -235,9 +245,13 @@ namespace MobileGL::MG_Util::Async {
         return *pool;
     }
 
-    Bool ShaderCompilePool::IsPoolThread() { return tl_isPoolThread; }
+    Bool ShaderCompilePool::IsPoolThread() {
+        return tl_isPoolThread;
+    }
 
-    Uint ShaderCompilePool::GetThreadCount() const { return m_impl->threadCount; }
+    Uint ShaderCompilePool::GetThreadCount() const {
+        return m_impl->threadCount;
+    }
 
     Uint ShaderCompilePool::GetMaxConcurrency() const {
         const std::lock_guard<std::mutex> lock(m_impl->mutex);
@@ -283,9 +297,10 @@ namespace MobileGL::MG_Util::Async {
                 m_impl->DispatchLocked(toCancel);
                 enqueued = true;
             }
-        } catch (...) {
+        }
+        catch (...) {
             MGLOG_E_ONCE("ShaderCompilePool::Post: enqueue failed; cancelling the job so its joiner "
-                    "cannot block forever");
+                         "cannot block forever");
             if (node) node->Cancel();
             return;
         }

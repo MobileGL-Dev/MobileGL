@@ -40,13 +40,11 @@ namespace MobileGL::MG_Remote::Transport {
     inline constexpr std::uint64_t kFrameReaderCompactThreshold = 64ull * 1024;
 
     // Appends one framed message to `out`.
-    inline MobileGLResult AppendFrame(std::vector<std::uint8_t>& out, const void* payload,
-                                      std::uint64_t size) {
+    inline MobileGLResult AppendFrame(std::vector<std::uint8_t>& out, const void* payload, std::uint64_t size) {
         if (size > kMaxFramePayloadSize) {
             WireLogError("MG_Remote framing: refusing to send a %llu byte payload (cap %llu); "
                          "bulk bytes belong in shm",
-                    static_cast<unsigned long long>(size),
-                    static_cast<unsigned long long>(kMaxFramePayloadSize));
+                         static_cast<unsigned long long>(size), static_cast<unsigned long long>(kMaxFramePayloadSize));
             return MOBILEGL_ERR_INVALID_ARGUMENT;
         }
         if (size != 0 && payload == nullptr) {
@@ -87,9 +85,7 @@ namespace MobileGL::MG_Remote::Transport {
 
         bool Failed() const { return m_failed; }
 
-        bool HasMessage() const {
-            return !m_failed && m_haveHeader && Available() >= kFrameHeaderSize + m_pendingSize;
-        }
+        bool HasMessage() const { return !m_failed && m_haveHeader && Available() >= kFrameHeaderSize + m_pendingSize; }
 
         // Size of the next complete message, or 0 when none is complete yet.
         std::uint64_t PendingMessageSize() const { return HasMessage() ? m_pendingSize : 0; }
@@ -179,8 +175,7 @@ namespace MobileGL::MG_Remote::Transport {
                 m_buffer.clear();
                 m_readPos = 0;
             } else if (m_readPos >= kFrameReaderCompactThreshold) {
-                m_buffer.erase(m_buffer.begin(),
-                               m_buffer.begin() + static_cast<std::ptrdiff_t>(m_readPos));
+                m_buffer.erase(m_buffer.begin(), m_buffer.begin() + static_cast<std::ptrdiff_t>(m_readPos));
                 m_readPos = 0;
             }
             // Header of the next message may already be buffered.

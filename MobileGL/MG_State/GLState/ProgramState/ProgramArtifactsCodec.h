@@ -74,15 +74,13 @@ namespace MobileGL::MG_State::GLState {
 
     // Appends the archive to `out` (which is not cleared, so a caller may frame it). Never
     // fails: everything it walks is owned plain data.
-    void EncodeProgramArtifacts(const LinkArtifacts& link, const SpirvArtifacts& spirv,
-                                Vector<Uint8>& out);
+    void EncodeProgramArtifacts(const LinkArtifacts& link, const SpirvArtifacts& spirv, Vector<Uint8>& out);
 
     // Replaces `link` and `spirv` with what `bytes` describes. Returns false - with both
     // outputs left in a defined, default state - for a truncated stream, a version mismatch, a
     // wire-schema mismatch (native-size echo for local v1), or trailing bytes. `link.program`
     // is always null on return.
-    Bool DecodeProgramArtifacts(const Uint8* bytes, SizeT size, LinkArtifacts& link,
-                                SpirvArtifacts& spirv);
+    Bool DecodeProgramArtifacts(const Uint8* bytes, SizeT size, LinkArtifacts& link, SpirvArtifacts& spirv);
 
     // ---- P5e (pg): the archive as the SERVER OWNS it -------------------------------------
     //

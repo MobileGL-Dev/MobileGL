@@ -135,9 +135,8 @@ void main() {
                 GLuint buffer = 0;
                 glGenBuffers(1, &buffer);
                 glBindBuffer(GL_ATOMIC_COUNTER_BUFFER, buffer);
-                glBufferData(GL_ATOMIC_COUNTER_BUFFER,
-                             static_cast<GLsizeiptr>(seed.size() * sizeof(unsigned int)), seed.data(),
-                             GL_DYNAMIC_DRAW);
+                glBufferData(GL_ATOMIC_COUNTER_BUFFER, static_cast<GLsizeiptr>(seed.size() * sizeof(unsigned int)),
+                             seed.data(), GL_DYNAMIC_DRAW);
                 glBindBufferBase(GL_ATOMIC_COUNTER_BUFFER, binding, buffer);
                 glBindBuffer(GL_ATOMIC_COUNTER_BUFFER, 0);
                 m_buffers.push_back(buffer);
@@ -222,7 +221,8 @@ void main() {
         values = ReadCounters(zero, 2);
         EXPECT_EQ(FirstGLError(), 0u);
         EXPECT_EQ(values[0], reseed[0] + kInvocations) << "the re-seeded value did not reach the shader";
-        EXPECT_EQ(values[1], reseed[1] + 2 * kInvocations) << "the re-seeded value at offset 4 did not reach the shader";
+        EXPECT_EQ(values[1], reseed[1] + 2 * kInvocations)
+            << "the re-seeded value at offset 4 did not reach the shader";
     }
 
     // A CPU glBufferSubData issued AFTER a dispatch, read back with NO further GPU work in

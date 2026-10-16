@@ -16,15 +16,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         MOBILEGL_ASSERT(initInfo.frameCount > 0, "VkTimerQueryManager::Initialize requires non-zero frame count");
         if (initInfo.timestampValidBits == 0 || initInfo.timestampPeriodNs <= 0.0f || initInfo.slotsPerPool == 0) {
             MGLOG_W_ONCE("VkTimerQueryManager: timestamps unsupported (validBits=%u, period=%f, slots=%u)",
-                    initInfo.timestampValidBits, initInfo.timestampPeriodNs, initInfo.slotsPerPool);
+                         initInfo.timestampValidBits, initInfo.timestampPeriodNs, initInfo.slotsPerPool);
             return false;
         }
 
         m_device = initInfo.device;
         m_timestampPeriodNs = initInfo.timestampPeriodNs;
-        m_validBitsMask = initInfo.timestampValidBits >= 64
-                              ? ~0ull
-                              : ((1ull << initInfo.timestampValidBits) - 1ull);
+        m_validBitsMask = initInfo.timestampValidBits >= 64 ? ~0ull : ((1ull << initInfo.timestampValidBits) - 1ull);
         m_slotsPerPool = initInfo.slotsPerPool;
         m_pools.resize(initInfo.frameCount);
 
@@ -91,8 +89,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (poolState.cursor >= m_slotsPerPool) {
             if (!poolState.exhaustionWarned) {
                 MGLOG_W_ONCE("VkTimerQueryManager: frame %u timestamp pool exhausted (%u slots); further timer queries "
-                        "this frame fall back to the frontend path",
-                        frameIndex, m_slotsPerPool);
+                             "this frame fall back to the frontend path",
+                             frameIndex, m_slotsPerPool);
                 poolState.exhaustionWarned = true;
             }
             return nullptr;

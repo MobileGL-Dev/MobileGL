@@ -60,7 +60,7 @@
 
 namespace MobileGL::MG_State::GLState {
     class BufferObject;
-}
+} // namespace MobileGL::MG_State::GLState
 
 namespace MobileGL::MG_Record {
 
@@ -270,6 +270,5 @@ namespace MobileGL::MG_Record {
     // happens at every point monolith pushes at. They retire into THIS call at P8, when the
     // draw-path binding walks move to the client.
     void PushPersistentMapsBeforeVerb();
-
 
 } // namespace MobileGL::MG_Record

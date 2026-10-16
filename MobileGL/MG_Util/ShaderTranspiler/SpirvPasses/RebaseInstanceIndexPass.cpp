@@ -63,17 +63,14 @@ namespace MobileGL {
                     context->AddGlobalValue(spvtools::MakeUnique<Instruction>(
                         context, spv::Op::OpVariable, pointerTypeId, variableId,
                         std::initializer_list<Operand>{
-                            {SPV_OPERAND_TYPE_STORAGE_CLASS,
-                             {static_cast<uint32_t>(spv::StorageClass::Input)}}}));
+                            {SPV_OPERAND_TYPE_STORAGE_CLASS, {static_cast<uint32_t>(spv::StorageClass::Input)}}}));
 
                     context->AddAnnotationInst(spvtools::MakeUnique<Instruction>(
                         context, spv::Op::OpDecorate, 0, 0,
                         std::initializer_list<Operand>{
                             {SPV_OPERAND_TYPE_ID, {variableId}},
-                            {SPV_OPERAND_TYPE_DECORATION,
-                             {static_cast<uint32_t>(spv::Decoration::BuiltIn)}},
-                            {SPV_OPERAND_TYPE_LITERAL_INTEGER,
-                             {static_cast<uint32_t>(spv::BuiltIn::BaseInstance)}}}));
+                            {SPV_OPERAND_TYPE_DECORATION, {static_cast<uint32_t>(spv::Decoration::BuiltIn)}},
+                            {SPV_OPERAND_TYPE_LITERAL_INTEGER, {static_cast<uint32_t>(spv::BuiltIn::BaseInstance)}}}));
 
                     // Input variables must appear in the entry point interface list.
                     for (Instruction& entryPoint : context->module()->entry_points()) {
@@ -97,8 +94,7 @@ namespace MobileGL {
                 // Collect every load of the InstanceIndex variable before mutating anything.
                 std::vector<Instruction*> instanceLoads;
                 defUseMgr->ForEachUser(instanceIndexVar, [&](Instruction* user) {
-                    if (user->opcode() == spv::Op::OpLoad &&
-                        user->GetSingleWordInOperand(0) == instanceIndexVarId) {
+                    if (user->opcode() == spv::Op::OpLoad && user->GetSingleWordInOperand(0) == instanceIndexVarId) {
                         instanceLoads.push_back(user);
                     }
                 });
@@ -114,8 +110,8 @@ namespace MobileGL {
 
                 Instruction* baseInstanceVar = FindBuiltinInputVariable(irContext, spv::BuiltIn::BaseInstance);
                 const uint32_t baseInstanceVarId = (baseInstanceVar != nullptr)
-                    ? baseInstanceVar->result_id()
-                    : SynthesizeBaseInstanceVariable(irContext, instanceIndexVar);
+                                                       ? baseInstanceVar->result_id()
+                                                       : SynthesizeBaseInstanceVariable(irContext, instanceIndexVar);
 
                 // Replace each `OpLoad %ty %res %instanceIndex` with
                 //   OpLoad %ty %fresh1 %instanceIndex
@@ -135,9 +131,8 @@ namespace MobileGL {
                         std::initializer_list<Operand>{{SPV_OPERAND_TYPE_ID, {baseInstanceVarId}}}));
 
                     loadInst->SetOpcode(spv::Op::OpISub);
-                    loadInst->SetInOperands(Instruction::OperandList{
-                        {SPV_OPERAND_TYPE_ID, {instanceValueId}},
-                        {SPV_OPERAND_TYPE_ID, {baseValueId}}});
+                    loadInst->SetInOperands(Instruction::OperandList{{SPV_OPERAND_TYPE_ID, {instanceValueId}},
+                                                                     {SPV_OPERAND_TYPE_ID, {baseValueId}}});
                 }
 
                 irContext->InvalidateAnalysesExceptFor(IRContext::kAnalysisNone);

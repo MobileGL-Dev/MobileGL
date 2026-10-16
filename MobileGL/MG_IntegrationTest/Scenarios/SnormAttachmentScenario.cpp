@@ -218,8 +218,7 @@ void main() { oColor = vec4(uValue, 0.0, 0.0, 1.0); }
                 << "an R8_SNORM colour attachment must be complete before any value can be asserted";
             // Two 8-bit SNORM steps. A half float is exact here (worst case 0.03 of a step), so this
             // only has to catch a storage that quantizes harder than the format itself.
-            EXPECT_NEAR(red8, snorm8Expected, 2.0f / 127.0f)
-                << "R8_SNORM attachment lost its channel value";
+            EXPECT_NEAR(red8, snorm8Expected, 2.0f / 127.0f) << "R8_SNORM attachment lost its channel value";
             EXPECT_GT(red8, 0.5f) << "the draw never landed - this is the cleared texture, not the rendered one";
 
             const float snorm16Expected = static_cast<float>(kSnorm16Value) / 32767.0f;

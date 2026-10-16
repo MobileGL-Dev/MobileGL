@@ -23,7 +23,7 @@ namespace MobileGL {
                 // Starts at 1 so a zero-initialized cache slot can never carry a live
                 // renderbuffer's id.
                 std::atomic<Uint64> g_nextRenderbufferLifetimeId{1};
-            }
+            } // namespace
 
             Uint64 RenderbufferObject::AllocateLifetimeId() {
                 return g_nextRenderbufferLifetimeId.fetch_add(1, std::memory_order_relaxed);

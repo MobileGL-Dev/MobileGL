@@ -77,8 +77,7 @@ namespace MobileGL {
 
                 static spvtools::Optimizer::PassToken CreateUniquifyIoBlockNamesPass(
                     const std::map<String, String>& inputBlockRenames,
-                    const std::map<String, String>& outputBlockRenames,
-                    std::set<String>* renamedBlockNames);
+                    const std::map<String, String>& outputBlockRenames, std::set<String>* renamedBlockNames);
 
             private:
                 std::map<String, String> m_inputBlockRenames;

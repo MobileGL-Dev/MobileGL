@@ -16,8 +16,8 @@
 //     agreement with the schema is pinned, not assumed;
 //   * every framed op round-trips through a REAL CtrlEnvelope{SurfaceOp} buffer byte-for-byte;
 //   * the wire entry refuses by NAME: an ANativeWindow* arriving over the wire dies
-//     Fatal{UnmigratedSurface, "AndroidNativeWindow:use-MOBILEGL_IPC_SURFACE=server"} (a client window never crosses), and a kind the
-//     schema does not define dies Fatal{ProtocolCorruption, "SurfaceOp"}.
+//     Fatal{UnmigratedSurface, "AndroidNativeWindow:use-MOBILEGL_IPC_SURFACE=server"} (a client window never crosses),
+//     and a kind the schema does not define dies Fatal{ProtocolCorruption, "SurfaceOp"}.
 //
 // The inproc blocking path itself - posting, parking, the reply half coming back - is gated by
 // ServerLoopTest's cases (AVoidForwarderCrossesAsOneDispatchedFrame and the whole
@@ -88,7 +88,7 @@ namespace {
 
     // Encode one frame and hand back the parsed wire op. The builder must outlive the parse.
     const ::MobileGL::Wire::SurfaceOp* EncodeAndParse(const SurfaceControlFrame& frame,
-                                          flatbuffers::FlatBufferBuilder* builder) {
+                                                      flatbuffers::FlatBufferBuilder* builder) {
         if (EncodeSurfaceOpFrame(frame, builder) != SurfaceWireError::None) return nullptr;
         const auto* envelope = ::MobileGL::Wire::GetCtrlEnvelope(builder->GetBufferPointer());
         if (envelope == nullptr || envelope->msg_type() != ::MobileGL::Wire::CtrlMsg::SurfaceOp) return nullptr;
@@ -115,7 +115,9 @@ TEST(SurfaceControlFrameTest, EveryMemberIsMechanicallyCheckedAsAnIntegerOrEnum)
     static_assert(!Server::Detail::IsSurfaceControlValue<void (*)()>);
     EXPECT_TRUE(Server::Detail::SurfaceControlFrameHasOnlyValues());
     // Why trivially-copyable alone did not enforce this invariant.
-    struct PointerBag { void* pointer; };
+    struct PointerBag {
+        void* pointer;
+    };
     static_assert(std::is_trivially_copyable_v<PointerBag> && std::is_standard_layout_v<PointerBag>);
     EXPECT_FALSE(Server::Detail::IsSurfaceControlValue<decltype(PointerBag::pointer)>);
 }
@@ -125,11 +127,11 @@ TEST(SurfaceControlFrameTest, ExactlyTheTenFramedOpsHaveWireKindsAndTheValuesAre
     // asserted per op rather than trusted from the static_asserts, because THIS is the table a
     // reader consults when the schema next changes.
     const SurfaceControlOp wired[] = {
-        SurfaceControlOp::InitializeDisplay, SurfaceControlOp::CreateWindowSurface,
+        SurfaceControlOp::InitializeDisplay,    SurfaceControlOp::CreateWindowSurface,
         SurfaceControlOp::CreatePbufferSurface, SurfaceControlOp::ResizeWindowSurface,
-        SurfaceControlOp::ReleaseSurface, SurfaceControlOp::MakeCurrent,
-        SurfaceControlOp::ReleaseCurrent, SurfaceControlOp::SetSwapInterval,
-        SurfaceControlOp::ReleaseResources, SurfaceControlOp::SetWindowHandle,
+        SurfaceControlOp::ReleaseSurface,       SurfaceControlOp::MakeCurrent,
+        SurfaceControlOp::ReleaseCurrent,       SurfaceControlOp::SetSwapInterval,
+        SurfaceControlOp::ReleaseResources,     SurfaceControlOp::SetWindowHandle,
     };
     for (const SurfaceControlOp op : wired) {
         ::MobileGL::Wire::SurfaceOpKind kind;
@@ -152,7 +154,8 @@ TEST(SurfaceControlFrameTest, ExactlyTheTenFramedOpsHaveWireKindsAndTheValuesAre
     // a statement about ten and G14 does not let a name be traded for another.
     const SurfaceControlOp inprocOnly[] = {
         SurfaceControlOp::None,
-        SurfaceControlOp::SwapBuffersInprocOnly, SurfaceControlOp::InitWindowSurfaceInprocOnly,
+        SurfaceControlOp::SwapBuffersInprocOnly,
+        SurfaceControlOp::InitWindowSurfaceInprocOnly,
         SurfaceControlOp::ProbeForTesting,
     };
     for (const SurfaceControlOp op : inprocOnly) {
@@ -211,14 +214,13 @@ TEST(SurfaceControlFrameTest, TheContextLifecycleFramedOpsAreCreateContextAndDes
            "protocol break no other case would see";
     EXPECT_EQ(static_cast<unsigned>(::MobileGL::Wire::SurfaceOpKind::DestroyContext), 13u);
 
-    const SurfaceControlOp wired[] = {SurfaceControlOp::CreateContext,
-                                      SurfaceControlOp::DestroyContext};
+    const SurfaceControlOp wired[] = {SurfaceControlOp::CreateContext, SurfaceControlOp::DestroyContext};
     for (const SurfaceControlOp op : wired) {
         ::MobileGL::Wire::SurfaceOpKind kind;
-        ASSERT_TRUE(WireKindForSurfaceControlOp(op, &kind))
-            << Server::SurfaceControlOpName(op) << " may never leave the process, so a spawned "
-                                                   "client's eglCreateContext/eglDestroyContext "
-                                                   "cannot reach the server";
+        ASSERT_TRUE(WireKindForSurfaceControlOp(op, &kind)) << Server::SurfaceControlOpName(op)
+                                                            << " may never leave the process, so a spawned "
+                                                               "client's eglCreateContext/eglDestroyContext "
+                                                               "cannot reach the server";
         EXPECT_EQ(static_cast<unsigned>(kind), static_cast<unsigned>(op))
             << Server::SurfaceControlOpName(op) << ": the frame and wire enums drifted apart";
         SurfaceControlOp back;
@@ -234,7 +236,7 @@ TEST(SurfaceControlFrameTest, TheContextLifecycleFramedOpsAreCreateContextAndDes
     SurfaceControlFrame frame;
     frame.kind = SurfaceControlOp::CreateContext;
     frame.seq = 0x99;
-    frame.context = 7;            // the client context token
+    frame.context = 7; // the client context token
     frame.shareGroupToken = 3;
     frame.contextFlags = 0x5;
     flatbuffers::FlatBufferBuilder builder(256);
@@ -303,16 +305,22 @@ TEST(SurfaceControlFrameTest, WindowBackendAndWireWindowKindMapExplicitlyBothWay
 
 TEST(SurfaceControlFrameTest, EveryFramedOpRoundTripsThroughTheWireEnvelope) {
     const SurfaceControlOp wired[] = {
-        SurfaceControlOp::InitializeDisplay, SurfaceControlOp::CreateWindowSurface,
-        SurfaceControlOp::CreatePbufferSurface, SurfaceControlOp::ResizeWindowSurface,
-        SurfaceControlOp::ReleaseSurface, SurfaceControlOp::MakeCurrent,
-        SurfaceControlOp::ReleaseCurrent, SurfaceControlOp::SetSwapInterval,
-        SurfaceControlOp::ReleaseResources, SurfaceControlOp::SetWindowHandle,
+        SurfaceControlOp::InitializeDisplay,
+        SurfaceControlOp::CreateWindowSurface,
+        SurfaceControlOp::CreatePbufferSurface,
+        SurfaceControlOp::ResizeWindowSurface,
+        SurfaceControlOp::ReleaseSurface,
+        SurfaceControlOp::MakeCurrent,
+        SurfaceControlOp::ReleaseCurrent,
+        SurfaceControlOp::SetSwapInterval,
+        SurfaceControlOp::ReleaseResources,
+        SurfaceControlOp::SetWindowHandle,
         // P5f cp's append and P14 S1's two. This case's name is a claim about EVERY framed op,
         // which is what makes it the one place an append cannot be forgotten: a new kind that
         // encodes but does not decode fails here even if the ten-op case above was left alone.
         SurfaceControlOp::InitCapabilities,
-        SurfaceControlOp::CreateContext, SurfaceControlOp::DestroyContext,
+        SurfaceControlOp::CreateContext,
+        SurfaceControlOp::DestroyContext,
     };
     for (const SurfaceControlOp op : wired) {
         SurfaceControlFrame frame;
@@ -334,8 +342,7 @@ TEST(SurfaceControlFrameTest, EveryFramedOpRoundTripsThroughTheWireEnvelope) {
         ASSERT_NE(wireOp, nullptr) << Server::SurfaceControlOpName(op) << " failed to encode";
 
         SurfaceControlFrame back;
-        ASSERT_EQ(DecodeWireSurfaceOp(*wireOp, &back), SurfaceWireError::None)
-            << Server::SurfaceControlOpName(op);
+        ASSERT_EQ(DecodeWireSurfaceOp(*wireOp, &back), SurfaceWireError::None) << Server::SurfaceControlOpName(op);
         EXPECT_EQ(back.kind, frame.kind);
         EXPECT_EQ(back.seq, frame.seq);
         EXPECT_EQ(back.display, frame.display);
@@ -346,8 +353,7 @@ TEST(SurfaceControlFrameTest, EveryFramedOpRoundTripsThroughTheWireEnvelope) {
         EXPECT_EQ(back.width, frame.width);
         EXPECT_EQ(back.height, frame.height);
         EXPECT_EQ(back.swapInterval, frame.swapInterval);
-        EXPECT_EQ(back.windowBackend, frame.windowBackend)
-            << Server::SurfaceControlOpName(op);
+        EXPECT_EQ(back.windowBackend, frame.windowBackend) << Server::SurfaceControlOpName(op);
         EXPECT_EQ(back.nativeToken, frame.nativeToken);
         // P14 S1: the two appended fields travel with every op, 0 included - a field that only
         // survives on the op that uses it is a field the codec has quietly made op-dependent.
@@ -402,10 +408,10 @@ TEST(SurfaceControlFrameTest, MalformedAndInprocOnlyFramesRefuseToEncode) {
 
 TEST(SurfaceControlFrameTest, AWireWindowKindThatNamesNoBackendFailsDecodeByName) {
     flatbuffers::FlatBufferBuilder builder(256);
-    const auto op = ::MobileGL::Wire::CreateSurfaceOp(
-        builder, 1, ::MobileGL::Wire::SurfaceOpKind::SetWindowHandle, 0, 0, ::MobileGL::Wire::WindowKind::Surfaceless, 0, 0,
-        0, 0, 0, 0);
-    const auto envelope = ::MobileGL::Wire::CreateCtrlEnvelope(builder, ::MobileGL::Wire::CtrlMsg::SurfaceOp, op.Union());
+    const auto op = ::MobileGL::Wire::CreateSurfaceOp(builder, 1, ::MobileGL::Wire::SurfaceOpKind::SetWindowHandle, 0,
+                                                      0, ::MobileGL::Wire::WindowKind::Surfaceless, 0, 0, 0, 0, 0, 0);
+    const auto envelope =
+        ::MobileGL::Wire::CreateCtrlEnvelope(builder, ::MobileGL::Wire::CtrlMsg::SurfaceOp, op.Union());
     ::MobileGL::Wire::FinishCtrlEnvelopeBuffer(builder, envelope);
     const ::MobileGL::Wire::SurfaceOp* wireOp =
         ::MobileGL::Wire::GetCtrlEnvelope(builder.GetBufferPointer())->msg_as_SurfaceOp();
@@ -416,17 +422,16 @@ TEST(SurfaceControlFrameTest, AWireWindowKindThatNamesNoBackendFailsDecodeByName
 
     // And the Android refusal is a DECODE answer before it is a Fatal: the pure half.
     flatbuffers::FlatBufferBuilder androidBuilder(256);
-    const auto androidOp = ::MobileGL::Wire::CreateSurfaceOp(
-        androidBuilder, 1, ::MobileGL::Wire::SurfaceOpKind::CreateWindowSurface, 0, 0,
-        ::MobileGL::Wire::WindowKind::AndroidNativeWindow, 0x1234, 800, 600, 0, 0, 0);
+    const auto androidOp =
+        ::MobileGL::Wire::CreateSurfaceOp(androidBuilder, 1, ::MobileGL::Wire::SurfaceOpKind::CreateWindowSurface, 0, 0,
+                                          ::MobileGL::Wire::WindowKind::AndroidNativeWindow, 0x1234, 800, 600, 0, 0, 0);
     const auto androidEnvelope =
         ::MobileGL::Wire::CreateCtrlEnvelope(androidBuilder, ::MobileGL::Wire::CtrlMsg::SurfaceOp, androidOp.Union());
     ::MobileGL::Wire::FinishCtrlEnvelopeBuffer(androidBuilder, androidEnvelope);
     const ::MobileGL::Wire::SurfaceOp* androidWireOp =
         ::MobileGL::Wire::GetCtrlEnvelope(androidBuilder.GetBufferPointer())->msg_as_SurfaceOp();
     ASSERT_NE(androidWireOp, nullptr);
-    EXPECT_EQ(DecodeWireSurfaceOp(*androidWireOp, &frame),
-              SurfaceWireError::AndroidNativeWindowArrived);
+    EXPECT_EQ(DecodeWireSurfaceOp(*androidWireOp, &frame), SurfaceWireError::AndroidNativeWindowArrived);
 }
 
 #if !defined(_WIN32)
@@ -436,17 +441,20 @@ TEST(SurfaceControlFrameTest, AWireWindowKindThatNamesNoBackendFailsDecodeByName
 // test that only checks for a crash goes green on any other abort in the same body.
 TEST(SurfaceControlFrameTest, AnAndroidNativeWindowOnTheWireIsRefusedByName) {
     flatbuffers::FlatBufferBuilder builder(256);
-    const auto op = ::MobileGL::Wire::CreateSurfaceOp(
-        builder, 9, ::MobileGL::Wire::SurfaceOpKind::CreateWindowSurface, 1, 2,
-        ::MobileGL::Wire::WindowKind::AndroidNativeWindow, 0x1234, 800, 600, 0, 0, 0);
-    const auto envelope = ::MobileGL::Wire::CreateCtrlEnvelope(builder, ::MobileGL::Wire::CtrlMsg::SurfaceOp, op.Union());
+    const auto op =
+        ::MobileGL::Wire::CreateSurfaceOp(builder, 9, ::MobileGL::Wire::SurfaceOpKind::CreateWindowSurface, 1, 2,
+                                          ::MobileGL::Wire::WindowKind::AndroidNativeWindow, 0x1234, 800, 600, 0, 0, 0);
+    const auto envelope =
+        ::MobileGL::Wire::CreateCtrlEnvelope(builder, ::MobileGL::Wire::CtrlMsg::SurfaceOp, op.Union());
     ::MobileGL::Wire::FinishCtrlEnvelopeBuffer(builder, envelope);
-    const ::MobileGL::Wire::SurfaceOp* wireOp = ::MobileGL::Wire::GetCtrlEnvelope(builder.GetBufferPointer())->msg_as_SurfaceOp();
+    const ::MobileGL::Wire::SurfaceOp* wireOp =
+        ::MobileGL::Wire::GetCtrlEnvelope(builder.GetBufferPointer())->msg_as_SurfaceOp();
     ASSERT_NE(wireOp, nullptr);
 
     EXPECT_EXIT(ServerApplyWireSurfaceOp(*wireOp, nullptr), ::testing::KilledBySignal(SIGABRT), ".*");
     const std::string log = ReadLog();
-    EXPECT_NE(log.find("Fatal{UnmigratedSurface, \"AndroidNativeWindow:use-MOBILEGL_IPC_SURFACE=server\"}"), std::string::npos)
+    EXPECT_NE(log.find("Fatal{UnmigratedSurface, \"AndroidNativeWindow:use-MOBILEGL_IPC_SURFACE=server\"}"),
+              std::string::npos)
         << "the abort happened but not for this rule's reason; the log says: " << log;
 }
 
@@ -455,30 +463,33 @@ TEST(SurfaceControlFrameTest, AnAndroidNativeWindowOnTheWireIsRefusedByName) {
 // waiting on a reply that never comes, which is a hang wearing a green lane.
 TEST(SurfaceControlFrameTest, AMetalLayerOnTheWireIsRefusedByName) {
     // Both operations that consume a native window must refuse the process-local object.
-    for (const auto kind : {::MobileGL::Wire::SurfaceOpKind::CreateWindowSurface,
-                            ::MobileGL::Wire::SurfaceOpKind::SetWindowHandle}) {
+    for (const auto kind :
+         {::MobileGL::Wire::SurfaceOpKind::CreateWindowSurface, ::MobileGL::Wire::SurfaceOpKind::SetWindowHandle}) {
         flatbuffers::FlatBufferBuilder builder(256);
-        const auto op = ::MobileGL::Wire::CreateSurfaceOp(
-            builder, 19, kind, 1, 2, ::MobileGL::Wire::WindowKind::MetalLayer, 0x1234, 800, 600);
-        const auto envelope = ::MobileGL::Wire::CreateCtrlEnvelope(
-            builder, ::MobileGL::Wire::CtrlMsg::SurfaceOp, op.Union());
+        const auto op = ::MobileGL::Wire::CreateSurfaceOp(builder, 19, kind, 1, 2,
+                                                          ::MobileGL::Wire::WindowKind::MetalLayer, 0x1234, 800, 600);
+        const auto envelope =
+            ::MobileGL::Wire::CreateCtrlEnvelope(builder, ::MobileGL::Wire::CtrlMsg::SurfaceOp, op.Union());
         ::MobileGL::Wire::FinishCtrlEnvelopeBuffer(builder, envelope);
         const auto* wireOp = ::MobileGL::Wire::GetCtrlEnvelope(builder.GetBufferPointer())->msg_as_SurfaceOp();
         ASSERT_NE(wireOp, nullptr);
         SurfaceControlFrame frame;
         EXPECT_EQ(DecodeWireSurfaceOp(*wireOp, &frame), SurfaceWireError::MetalLayerArrived);
         EXPECT_EXIT(ServerApplyWireSurfaceOp(*wireOp, nullptr), ::testing::KilledBySignal(SIGABRT), ".*");
-        EXPECT_NE(ReadLog().find("Fatal{UnmigratedSurface, \"MetalLayer:use-MOBILEGL_IPC_SURFACE=server\"}"), std::string::npos);
+        EXPECT_NE(ReadLog().find("Fatal{UnmigratedSurface, \"MetalLayer:use-MOBILEGL_IPC_SURFACE=server\"}"),
+                  std::string::npos);
     }
 }
 
 TEST(SurfaceControlFrameTest, AnUnknownWireOpKindIsProtocolCorruptionByName) {
     flatbuffers::FlatBufferBuilder builder(256);
-    const auto op = ::MobileGL::Wire::CreateSurfaceOp(builder, 9, static_cast<::MobileGL::Wire::SurfaceOpKind>(200), 1, 2,
-                                          ::MobileGL::Wire::WindowKind::None, 0, 0, 0, 0, 0, 0);
-    const auto envelope = ::MobileGL::Wire::CreateCtrlEnvelope(builder, ::MobileGL::Wire::CtrlMsg::SurfaceOp, op.Union());
+    const auto op = ::MobileGL::Wire::CreateSurfaceOp(builder, 9, static_cast<::MobileGL::Wire::SurfaceOpKind>(200), 1,
+                                                      2, ::MobileGL::Wire::WindowKind::None, 0, 0, 0, 0, 0, 0);
+    const auto envelope =
+        ::MobileGL::Wire::CreateCtrlEnvelope(builder, ::MobileGL::Wire::CtrlMsg::SurfaceOp, op.Union());
     ::MobileGL::Wire::FinishCtrlEnvelopeBuffer(builder, envelope);
-    const ::MobileGL::Wire::SurfaceOp* wireOp = ::MobileGL::Wire::GetCtrlEnvelope(builder.GetBufferPointer())->msg_as_SurfaceOp();
+    const ::MobileGL::Wire::SurfaceOp* wireOp =
+        ::MobileGL::Wire::GetCtrlEnvelope(builder.GetBufferPointer())->msg_as_SurfaceOp();
     ASSERT_NE(wireOp, nullptr);
 
     EXPECT_EXIT(ServerApplyWireSurfaceOp(*wireOp, nullptr), ::testing::KilledBySignal(SIGABRT), ".*");
@@ -740,7 +751,9 @@ namespace {
         }
     };
 
-    NativeWindowType FakeClientWindow() { return (NativeWindowType)(std::uintptr_t)0x1234; }
+    NativeWindowType FakeClientWindow() {
+        return (NativeWindowType)(std::uintptr_t)0x1234;
+    }
 } // namespace
 
 // THE HEADLINE OF D1: a headless client (NULL window) with MOBILEGL_IPC_SURFACE=server gets a window

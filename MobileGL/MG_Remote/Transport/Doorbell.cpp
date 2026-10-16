@@ -108,15 +108,15 @@ namespace MobileGL::MG_Remote::Transport {
                     }
                     CpuRelax();
                 }
-                const auto elapsedNs = std::chrono::duration_cast<std::chrono::nanoseconds>(
-                                           std::chrono::steady_clock::now() - start)
-                                           .count();
+                const auto elapsedNs =
+                    std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start)
+                        .count();
                 if (elapsedNs <= 0) {
                     continue; // clock too coarse to see this probe at all
                 }
                 sawUsableClock = true;
-                const std::uint64_t perUs = (static_cast<std::uint64_t>(kProbeIterations) * 1000ull) /
-                                            static_cast<std::uint64_t>(elapsedNs);
+                const std::uint64_t perUs =
+                    (static_cast<std::uint64_t>(kProbeIterations) * 1000ull) / static_cast<std::uint64_t>(elapsedNs);
                 const std::uint32_t clamped =
                     perUs > kMaxSpinItersPerUs ? kMaxSpinItersPerUs : static_cast<std::uint32_t>(perUs);
                 if (clamped > best) {
@@ -164,7 +164,9 @@ namespace MobileGL::MG_Remote::Transport {
 
     CondVarDoorbell::CondVarDoorbell() : m_impl(new Impl()) {}
 
-    CondVarDoorbell::~CondVarDoorbell() { delete m_impl; }
+    CondVarDoorbell::~CondVarDoorbell() {
+        delete m_impl;
+    }
 
     void CondVarDoorbell::Notify() {
         {
@@ -189,9 +191,7 @@ namespace MobileGL::MG_Remote::Transport {
         if (timeoutMs == 0) {
             return false;
         }
-        const auto woken = [this] {
-            return m_impl->signals != 0 || m_dead.load(std::memory_order_relaxed);
-        };
+        const auto woken = [this] { return m_impl->signals != 0 || m_dead.load(std::memory_order_relaxed); };
         if (timeoutMs == kWaitForever) {
             m_impl->cv.wait(lock, woken);
         } else if (!m_impl->cv.wait_for(lock, std::chrono::milliseconds(timeoutMs), woken)) {
@@ -312,9 +312,9 @@ namespace MobileGL::MG_Remote::Transport {
         for (;;) {
             int pollTimeout = -1;
             if (timeoutMs != kWaitForever) {
-                const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                         std::chrono::steady_clock::now() - start)
-                                         .count();
+                const auto elapsed =
+                    std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start)
+                        .count();
                 const long long remaining = static_cast<long long>(timeoutMs) - elapsed;
                 pollTimeout = remaining <= 0 ? 0 : static_cast<int>(remaining);
             }
@@ -366,8 +366,7 @@ namespace MobileGL::MG_Remote::Transport {
             // Doorbell::Wait re-parks until its deadline and kWaitForever has
             // none.
             if ((pfd.revents & (POLLERR | POLLNVAL)) != 0) {
-                MGLOG_D("MG_Remote doorbell: fd %d unusable (revents=0x%X)", m_fd,
-                        static_cast<unsigned>(pfd.revents));
+                MGLOG_D("MG_Remote doorbell: fd %d unusable (revents=0x%X)", m_fd, static_cast<unsigned>(pfd.revents));
                 m_dead.store(true, std::memory_order_release);
                 return false;
             }
@@ -389,8 +388,7 @@ namespace MobileGL::MG_Remote::Transport {
             // Readiness with no bit we requested or recognise: there is
             // nothing to consume and no way to make progress, so refuse to
             // poll this descriptor again.
-            MGLOG_D("MG_Remote doorbell: fd %d ready with revents=0x%X", m_fd,
-                    static_cast<unsigned>(pfd.revents));
+            MGLOG_D("MG_Remote doorbell: fd %d ready with revents=0x%X", m_fd, static_cast<unsigned>(pfd.revents));
             m_dead.store(true, std::memory_order_release);
             return false;
         }

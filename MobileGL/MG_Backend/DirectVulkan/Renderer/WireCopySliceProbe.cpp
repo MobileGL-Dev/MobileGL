@@ -53,9 +53,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             VkFence fence = VK_NULL_HANDLE;
 
             void Destroy() {
-                for (VkImage image : images) vkDestroyImage(device, image, nullptr);
-                for (VkBuffer buffer : buffers) vkDestroyBuffer(device, buffer, nullptr);
-                for (VkDeviceMemory memory : memories) vkFreeMemory(device, memory, nullptr);
+                for (VkImage image : images)
+                    vkDestroyImage(device, image, nullptr);
+                for (VkBuffer buffer : buffers)
+                    vkDestroyBuffer(device, buffer, nullptr);
+                for (VkDeviceMemory memory : memories)
+                    vkFreeMemory(device, memory, nullptr);
                 vkDestroyCommandPool(device, commandPool, nullptr);
                 vkDestroyFence(device, fence, nullptr);
             }
@@ -97,7 +100,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             measurement.failureReason = "no device or queue";
             return measurement;
         }
-        constexpr VkFormatFeatureFlags kRequired = VK_FORMAT_FEATURE_TRANSFER_SRC_BIT | VK_FORMAT_FEATURE_TRANSFER_DST_BIT;
+        constexpr VkFormatFeatureFlags kRequired =
+            VK_FORMAT_FEATURE_TRANSFER_SRC_BIT | VK_FORMAT_FEATURE_TRANSFER_DST_BIT;
         for (const VkFormat format : {kSourceFormat, kDestinationFormat}) {
             VkFormatProperties properties{};
             vkGetPhysicalDeviceFormatProperties(context.physicalDevice, format, &properties);
@@ -142,16 +146,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             info.arrayLayers = volume ? 1u : kSlices;
             info.samples = VK_SAMPLE_COUNT_1_BIT;
             info.tiling = VK_IMAGE_TILING_OPTIMAL;
-            info.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
-                         (attachable ? VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT : 0u);
+            info.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+                         VK_IMAGE_USAGE_TRANSFER_DST_BIT | (attachable ? VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT : 0u);
             info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
             info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
             if (vkCreateImage(device, &info, nullptr, &out) != VK_SUCCESS) return false;
             objects.images.push_back(out);
             VkMemoryRequirements requirements{};
             vkGetImageMemoryRequirements(device, out, &requirements);
-            const Optional<Uint32> type = PickMemoryType(memoryProperties, requirements.memoryTypeBits,
-                                                         VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 0);
+            const Optional<Uint32> type =
+                PickMemoryType(memoryProperties, requirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 0);
             if (!type) return false;
             VkMemoryAllocateInfo allocate{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
             allocate.allocationSize = requirements.size;
@@ -212,8 +216,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             !makeBuffer(kTexels * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT, subjectOut) ||
             !makeBuffer(kTexels * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT, controlOut))
             return fail("buffer creation failed");
-        if (!access(sourceWords, true, [](Uint32* words) { for (Uint32 i = 0; i < kTexels; ++i) words[i] = Word(i, 1); }) ||
-            !access(sentinelWords, true, [](Uint32* words) { for (Uint32 i = 0; i < kDestinationTexels; ++i) words[i] = Word(i, 2); }))
+        if (!access(sourceWords, true,
+                    [](Uint32* words) {
+                        for (Uint32 i = 0; i < kTexels; ++i)
+                            words[i] = Word(i, 1);
+                    }) ||
+            !access(sentinelWords, true, [](Uint32* words) {
+                for (Uint32 i = 0; i < kDestinationTexels; ++i)
+                    words[i] = Word(i, 2);
+            }))
             return fail("vkMapMemory (upload) failed");
 
         VkCommandPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
@@ -245,8 +256,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         VkBufferImageCopy wholeVolume = volume;
         wholeVolume.imageExtent = {kDestinationExtent, kDestinationExtent, kDestinationDepth};
         vkCmdCopyBufferToImage(cmd, sourceWords.buffer, source, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &layered);
-        vkCmdCopyBufferToImage(cmd, sentinelWords.buffer, subject, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &wholeVolume);
-        vkCmdCopyBufferToImage(cmd, sentinelWords.buffer, control, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &wholeVolume);
+        vkCmdCopyBufferToImage(cmd, sentinelWords.buffer, subject, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
+                               &wholeVolume);
+        vkCmdCopyBufferToImage(cmd, sentinelWords.buffer, control, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
+                               &wholeVolume);
         ImageBarrier(cmd, source, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                      VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT);
         for (const VkImage image : {subject, control})
@@ -308,9 +321,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 if (exactSlices && sliceMismatches == 0) ++*exactSlices;
             }
         };
-        if (!access(subjectOut, false, [&](Uint32* words) {
-                tally(words, measurement.subjectMismatches, &measurement.subjectExactSlices);
-            }) ||
+        if (!access(
+                subjectOut, false,
+                [&](Uint32* words) { tally(words, measurement.subjectMismatches, &measurement.subjectExactSlices); }) ||
             !access(controlOut, false, [&](Uint32* words) { tally(words, measurement.controlMismatches, nullptr); }))
             return fail("vkMapMemory (readback) failed");
         measurement.texels = kTexels;
@@ -324,8 +337,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                                                          VkPhysicalDevice physicalDevice,
                                                                          Uint32 graphicsQueueFamilyIndex) {
         WireCopySliceProbeMeasurement measurement;
-        const auto createDevice =
-            reinterpret_cast<PFN_vkCreateDevice>(getInstanceProcAddr(instance, "vkCreateDevice"));
+        const auto createDevice = reinterpret_cast<PFN_vkCreateDevice>(getInstanceProcAddr(instance, "vkCreateDevice"));
         if (createDevice == nullptr) {
             measurement.failureReason = "no vkCreateDevice";
             return measurement;

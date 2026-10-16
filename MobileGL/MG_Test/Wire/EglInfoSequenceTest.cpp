@@ -43,11 +43,11 @@ namespace {
 
     // One "OpenGL ... profile" block of eglinfo's output, or why it is missing.
     struct ProfileReport {
-        Int32 configFound = 0;   // eglChooseConfig matched something
-        Int32 created = 0;       // some eglCreateContext in the version walk returned a context
-        Int32 madeCurrent = 0;   // ...and the surfaceless eglMakeCurrent took it
-        Int32 lastError = 0;     // eglGetError after the last failed create / make-current
-        Int32 drawIsNone = 0;    // eglGetCurrentSurface(EGL_DRAW) == EGL_NO_SURFACE while current
+        Int32 configFound = 0; // eglChooseConfig matched something
+        Int32 created = 0;     // some eglCreateContext in the version walk returned a context
+        Int32 madeCurrent = 0; // ...and the surfaceless eglMakeCurrent took it
+        Int32 lastError = 0;   // eglGetError after the last failed create / make-current
+        Int32 drawIsNone = 0;  // eglGetCurrentSurface(EGL_DRAW) == EGL_NO_SURFACE while current
         Int32 major = 0;
         Int32 minor = 0;
         char vendor[96] = {};
@@ -77,8 +77,9 @@ namespace {
     }
 
     EGLConfig ChooseLikeEglInfo(EGLDisplay dpy, EGLint apiBit, ProfileReport& out) {
-        const EGLint attribs[] = {EGL_CONFORMANT, apiBit, EGL_RED_SIZE, 1, EGL_GREEN_SIZE, 1, EGL_BLUE_SIZE, 1,
-                                  EGL_ALPHA_SIZE, 1, EGL_RENDERABLE_TYPE, apiBit, EGL_NONE};
+        const EGLint attribs[] = {EGL_CONFORMANT, apiBit, EGL_RED_SIZE,   1, EGL_GREEN_SIZE,      1,
+                                  EGL_BLUE_SIZE,  1,      EGL_ALPHA_SIZE, 1, EGL_RENDERABLE_TYPE, apiBit,
+                                  EGL_NONE};
         EGLConfig configs[64] = {};
         EGLint count = 0;
         (void)EGL::ChooseConfig(dpy, attribs, configs, 64, &count);
@@ -125,12 +126,15 @@ namespace {
     }
 
     void DesktopProfile(EGLDisplay dpy, EGLConfig config, bool core, bool khrCreateContext, ProfileReport& out) {
-        static const int kVersions[][2] = {{4, 6}, {4, 5}, {4, 4}, {4, 3}, {4, 2}, {4, 1}, {4, 0}, {3, 3},
-                                           {3, 2}, {3, 1}, {3, 0}, {2, 1}, {2, 0}, {1, 5}, {1, 4}, {1, 3},
-                                           {1, 2}, {1, 1}, {1, 0}};
+        static const int kVersions[][2] = {{4, 6}, {4, 5}, {4, 4}, {4, 3}, {4, 2}, {4, 1}, {4, 0},
+                                           {3, 3}, {3, 2}, {3, 1}, {3, 0}, {2, 1}, {2, 0}, {1, 5},
+                                           {1, 4}, {1, 3}, {1, 2}, {1, 1}, {1, 0}};
         for (const auto& v : kVersions) {
             if (core && v[0] == 3 && v[1] == 0) return;
-            const EGLint withProfile[] = {EGL_CONTEXT_MAJOR_VERSION, v[0], EGL_CONTEXT_MINOR_VERSION, v[1],
+            const EGLint withProfile[] = {EGL_CONTEXT_MAJOR_VERSION,
+                                          v[0],
+                                          EGL_CONTEXT_MINOR_VERSION,
+                                          v[1],
                                           EGL_CONTEXT_OPENGL_PROFILE_MASK,
                                           core ? EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT
                                                : EGL_CONTEXT_OPENGL_COMPATIBILITY_PROFILE_BIT,
@@ -189,7 +193,8 @@ namespace {
                 const bool khr = major == 1 && minor >= 4 && HasToken(exts, "EGL_KHR_create_context");
                 r.khrCreateContext = khr ? 1 : 0;
                 r.surfacelessExtensions =
-                    HasToken(exts, "EGL_KHR_surfaceless_context") && HasToken(exts, "EGL_KHR_no_config_context") ? 1 : 0;
+                    HasToken(exts, "EGL_KHR_surfaceless_context") && HasToken(exts, "EGL_KHR_no_config_context") ? 1
+                                                                                                                 : 0;
                 if (r.hasOpenGL && EGL::BindAPI(EGL_OPENGL_API) == EGL_TRUE) {
                     const EGLConfig config = ChooseLikeEglInfo(dpy, EGL_OPENGL_BIT, r.core);
                     r.compat.configFound = r.core.configFound;

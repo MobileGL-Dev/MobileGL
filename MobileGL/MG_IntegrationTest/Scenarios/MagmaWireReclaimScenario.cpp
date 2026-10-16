@@ -101,7 +101,7 @@ namespace MGITest {
         constexpr std::size_t kAbaPinStoreBytes = static_cast<std::size_t>(kMiB);
         constexpr std::size_t kAbaNewStoreBytes = 64 * 1024;
         constexpr GLuint64 kAbaWaitNs = 2000000000ull; // 2 s: a 64x16 draw on lavapipe retires in ms
-        constexpr int kDescriptorDraws = 2049; // one past UniformManager's wire epoch budget
+        constexpr int kDescriptorDraws = 2049;         // one past UniformManager's wire epoch budget
 
         constexpr const char* kVertex = R"(#version 330 core
 layout(location = 0) in vec2 aPos;
@@ -134,7 +134,8 @@ void main() { fragColor = color[0]; })";
             const float l = -1.0f + 2.0f * static_cast<float>(x0) / kWidth;
             const float r = -1.0f + 2.0f * static_cast<float>(x1) / kWidth;
             const float quad[12] = {l, -1.0f, r, -1.0f, r, 1.0f, l, -1.0f, r, 1.0f, l, 1.0f};
-            for (int i = 0; i < 12; ++i) out[i] = quad[i];
+            for (int i = 0; i < 12; ++i)
+                out[i] = quad[i];
         }
 
         // A colour per strip that no neighbour shares and the clear (all zero) is not.
@@ -171,7 +172,8 @@ void main() { fragColor = color[0]; })";
                     GTEST_SKIP() << "the reclaim under test is the Magma wire arm's VkBufferManager";
                 }
                 if (std::getenv(kLaneMarker) == nullptr) {
-                    GTEST_SKIP() << kLaneMarker << " is not set: this run has no private stats "
+                    GTEST_SKIP() << kLaneMarker
+                                 << " is not set: this run has no private stats "
                                     "channel to read the server's wbuf[] gauges from";
                 }
                 const SplitRuntimeState runtime = PeekSplitRuntime();
@@ -270,7 +272,8 @@ void main() { fragColor = color[0]; })";
             ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
             EXPECT_TRUE(Near(image.At(kWidth / 2, kHeight / 2), StripColor(7)))
                 << "read " << image.At(kWidth / 2, kHeight / 2) << ", wanted " << StripColor(7)
-                << ": the draw from the last of " << kUndrawnRespecifies << " respecified stores did "
+                << ": the draw from the last of " << kUndrawnRespecifies
+                << " respecified stores did "
                    "not land - the store it names was reclaimed, or never reached";
 
             const PipeStatsWindow::Window window = CloseFrameAndReadServerWindow(mark);
@@ -286,7 +289,8 @@ void main() { fragColor = color[0]; })";
                 << "the Magma server held " << livePeak << " VkBuffers at once for " << wireBuffers
                 << " wire buffer record(s) inside one frame of " << kUndrawnRespecifies
                 << " glBufferData calls. Orphans no GPU command named are dead at the park; a count "
-                   "that tracks the respecifies is the bsl-esc-menu-854 leak (ID-P7-32). " << window.line;
+                   "that tracks the respecifies is the bsl-esc-menu-854 leak (ID-P7-32). "
+                << window.line;
         }
 
         // --------------------------------------------------------------------------------------
@@ -340,15 +344,14 @@ void main() { fragColor = color[0]; })";
             // One store past the budget is the most a park can add before the watermark answers it.
             const long long deferredBound = static_cast<long long>(budget + kDrawnStoreBytes);
             EXPECT_LE(deferredPeak, deferredBound)
-                << "the Magma server parked " << deferredPeak << " bytes of orphaned stores inside one "
-                   "frame against a MOBILEGL_IPC_WIRE_DEFERRED_MB budget of " << budget
-                << " bytes (+ one " << kDrawnStoreBytes << "-byte store). " << window.line;
-            const long long liveBound =
-                wireBuffers + static_cast<long long>(budget / kDrawnStoreBytes) + 2;
+                << "the Magma server parked " << deferredPeak
+                << " bytes of orphaned stores inside one "
+                   "frame against a MOBILEGL_IPC_WIRE_DEFERRED_MB budget of "
+                << budget << " bytes (+ one " << kDrawnStoreBytes << "-byte store). " << window.line;
+            const long long liveBound = wireBuffers + static_cast<long long>(budget / kDrawnStoreBytes) + 2;
             EXPECT_LE(livePeak, liveBound)
-                << "the Magma server held " << livePeak << " VkBuffers at once; the records ("
-                << wireBuffers << ") plus a budget's worth of parked stores allow " << liveBound
-                << ". " << window.line;
+                << "the Magma server held " << livePeak << " VkBuffers at once; the records (" << wireBuffers
+                << ") plus a budget's worth of parked stores allow " << liveBound << ". " << window.line;
         }
 
         // --------------------------------------------------------------------------------------
@@ -370,8 +373,8 @@ void main() { fragColor = color[0]; })";
             ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
             const Rgba8 want = StripColor((kSmallDrawnRespecifies - 1) % 200);
             EXPECT_TRUE(Near(image.At(kWidth / 2, kHeight / 2), want))
-                << "read " << image.At(kWidth / 2, kHeight / 2) << ", wanted " << want
-                << ": the last of " << kSmallDrawnRespecifies << " draws did not land on top";
+                << "read " << image.At(kWidth / 2, kHeight / 2) << ", wanted " << want << ": the last of "
+                << kSmallDrawnRespecifies << " draws did not land on top";
 
             const PipeStatsWindow::Window window = CloseFrameAndReadServerWindow(mark);
             ASSERT_TRUE(window.found) << "no 'MGPipe stats:' window in the server log "
@@ -390,9 +393,10 @@ void main() { fragColor = color[0]; })";
             // records is the most the arm can hold.
             const long long liveBound = wireBuffers + kDeferredCountCeiling + 2;
             EXPECT_LE(livePeak, liveBound)
-                << "the Magma server held " << livePeak << " VkBuffers at once after "
-                << kSmallDrawnRespecifies << " small respecify-and-draw rounds in one frame; the "
-                   "records plus the " << kDeferredCountCeiling << "-store ceiling allow " << liveBound
+                << "the Magma server held " << livePeak << " VkBuffers at once after " << kSmallDrawnRespecifies
+                << " small respecify-and-draw rounds in one frame; the "
+                   "records plus the "
+                << kDeferredCountCeiling << "-store ceiling allow " << liveBound
                 << ". A count that tracks the rounds is the bsl-esc-menu-854 shape. " << window.line;
         }
 
@@ -484,8 +488,10 @@ void main() { fragColor = color[0]; })";
             // Step 5: D1's batch retires; the memos survive because step 4 is still recorded.
             const GLenum waited = glClientWaitSync(fence, 0, kAbaWaitNs);
             ASSERT_TRUE(waited == GL_ALREADY_SIGNALED || waited == GL_CONDITION_SATISFIED)
-                << "glClientWaitSync returned " << waited << ": the batch that drew from the first "
-                   "store did not retire within " << (kAbaWaitNs / 1000000) << " ms";
+                << "glClientWaitSync returned " << waited
+                << ": the batch that drew from the first "
+                   "store did not retire within "
+                << (kAbaWaitNs / 1000000) << " ms";
             // Step 6: the vertex store's park sweeps S1 out - the destroy the memos must notice.
             glBufferData(GL_ARRAY_BUFFER, 0, nullptr, GL_STREAM_DRAW);
             // Step 7: a new store through the freed handle value, holding B.
@@ -513,8 +519,9 @@ void main() { fragColor = color[0]; })";
             glDeleteBuffers(1, &ubo);
             glDeleteProgram(program);
             const PipeStatsWindow::Window window = CloseFrameAndReadServerWindow(mark);
-            if (window.found) RecordProperty("wire_stores_peak",
-                                             static_cast<int>(PipeStatsWindow::CounterOrAbsent(window, "wlivepk")));
+            if (window.found)
+                RecordProperty("wire_stores_peak",
+                               static_cast<int>(PipeStatsWindow::CounterOrAbsent(window, "wlivepk")));
         }
 
         // M3: a fixed SSBO store and one live layout, but 2049 distinct aligned
@@ -551,8 +558,7 @@ void main() { fragColor = color[0]; })";
             glBufferData(GL_SHADER_STORAGE_BUFFER, static_cast<GLsizeiptr>(bytes.size()), bytes.data(), GL_STATIC_DRAW);
             glUseProgram(program);
             for (int i = 0; i < kDescriptorDraws; ++i) {
-                glBindBufferRange(GL_SHADER_STORAGE_BUFFER, 0, storage,
-                                  static_cast<GLintptr>(stride * i), 16);
+                glBindBufferRange(GL_SHADER_STORAGE_BUFFER, 0, storage, static_cast<GLintptr>(stride * i), 16);
                 glDrawArrays(GL_TRIANGLES, 0, 6);
             }
             const Image image = ReadPixels(kWidth, kHeight);

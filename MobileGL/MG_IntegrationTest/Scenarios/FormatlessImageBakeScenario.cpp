@@ -71,8 +71,8 @@ void main()
                 ScenarioTest::SetUp();
                 if (!Ready()) return;
                 if (!BackendHostsCompute()) {
-                    GTEST_SKIP() << "no compute stage on " << Gl().BackendName() << " ("
-                                 << Gl().RendererString() << ")";
+                    GTEST_SKIP() << "no compute stage on " << Gl().BackendName() << " (" << Gl().RendererString()
+                                 << ")";
                 }
             }
 
@@ -84,8 +84,7 @@ void main()
             }
 
             static void DrainErrors() {
-                for (int i = 0; i < 16 && glGetError() != GL_NO_ERROR; ++i) {
-                }
+                for (int i = 0; i < 16 && glGetError() != GL_NO_ERROR; ++i) {}
             }
 
             static GLuint BuildCompute(const char* source, std::string& log) {
@@ -174,9 +173,9 @@ void main()
                 for (int i = 0; i < kExtent * kExtent; ++i) {
                     if (readback[i] != expected[i]) ++offenders;
                 }
-                EXPECT_EQ(offenders, 0) << "the dispatch wrote " << offenders << " of "
-                                        << (kExtent * kExtent) << " texels wrongly; texel 0 was "
-                                        << readback[0] << ", expected " << expected[0]
+                EXPECT_EQ(offenders, 0) << "the dispatch wrote " << offenders << " of " << (kExtent * kExtent)
+                                        << " texels wrongly; texel 0 was " << readback[0] << ", expected "
+                                        << expected[0]
                                         << ". A whole stage lost to the ESSL emitter looks exactly like this.";
 
                 glUseProgram(0);

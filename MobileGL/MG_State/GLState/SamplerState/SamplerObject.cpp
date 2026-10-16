@@ -204,8 +204,8 @@ namespace MobileGL {
                 m_samplerParameters.borderColorForm = BorderColorForm::Float;
                 m_samplerParameters.borderColor = color;
                 m_samplerParameters.borderColorI =
-                    IntVec4(static_cast<Int32>(color.x()), static_cast<Int32>(color.y()),
-                            static_cast<Int32>(color.z()), static_cast<Int32>(color.w()));
+                    IntVec4(static_cast<Int32>(color.x()), static_cast<Int32>(color.y()), static_cast<Int32>(color.z()),
+                            static_cast<Int32>(color.w()));
                 m_samplerParameters.borderColorUI =
                     UintVec4(static_cast<Uint32>(color.x()), static_cast<Uint32>(color.y()),
                              static_cast<Uint32>(color.z()), static_cast<Uint32>(color.w()));
@@ -238,8 +238,8 @@ namespace MobileGL {
                 m_samplerParameters.borderColorForm = BorderColorForm::Uint;
                 m_samplerParameters.borderColorUI = color;
                 m_samplerParameters.borderColorI =
-                    IntVec4(static_cast<Int32>(color.x()), static_cast<Int32>(color.y()),
-                            static_cast<Int32>(color.z()), static_cast<Int32>(color.w()));
+                    IntVec4(static_cast<Int32>(color.x()), static_cast<Int32>(color.y()), static_cast<Int32>(color.z()),
+                            static_cast<Int32>(color.w()));
                 m_samplerParameters.borderColor =
                     FloatVec4(static_cast<Float>(color.x()), static_cast<Float>(color.y()),
                               static_cast<Float>(color.z()), static_cast<Float>(color.w()));

@@ -39,9 +39,8 @@ TEST(DirectVulkanSanity, ExtensionEnumeration) {
     std::vector<VkExtensionProperties> extensions(extensionCount);
     vkEnumerateInstanceExtensionProperties(nullptr, &extensionCount, extensions.data());
 
-    for(const auto& extension : extensions) {
-        std::cout << extension.extensionName
-                  << " (r." << extension.specVersion << ")\n";
+    for (const auto& extension : extensions) {
+        std::cout << extension.extensionName << " (r." << extension.specVersion << ")\n";
     }
 }
 
@@ -52,7 +51,7 @@ TEST(DirectVulkanSanity, WindowCreation) {
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
     GLFWwindow* window = glfwCreateWindow(800, 600, "MobileGL WindowCreation", nullptr, nullptr);
 
-    while(!glfwWindowShouldClose(window)) {
+    while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();
     }
 
@@ -64,11 +63,11 @@ TEST(DirectVulkanSanity, WindowCreation) {
 #define EGLAPI
 #include <EGL/egl.h>
 #ifdef _WIN32
-    #define GLFW_EXPOSE_NATIVE_WIN32
+#define GLFW_EXPOSE_NATIVE_WIN32
 #elif defined(__linux__)
-    #define GLFW_EXPOSE_NATIVE_X11
+#define GLFW_EXPOSE_NATIVE_X11
 #elif defined(__APPLE__)
-    #define GLFW_EXPOSE_NATIVE_COCOA
+#define GLFW_EXPOSE_NATIVE_COCOA
 #endif
 #include <GLFW/glfw3native.h>
 #ifdef __APPLE__
@@ -79,12 +78,7 @@ TEST(DirectVulkanSanity, WindowCreation) {
 TEST(DirectVulkanSanity, ContextCreation) {
     glfwInit();
 
-    static EGLint const attribute_list[] = {
-        EGL_RED_SIZE, 8,
-        EGL_GREEN_SIZE, 8,
-        EGL_BLUE_SIZE, 8,
-        EGL_NONE
-    };
+    static EGLint const attribute_list[] = {EGL_RED_SIZE, 8, EGL_GREEN_SIZE, 8, EGL_BLUE_SIZE, 8, EGL_NONE};
 
     EGLDisplay display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
     eglInitialize(display, nullptr, nullptr);
@@ -122,7 +116,7 @@ TEST(DirectVulkanSanity, ContextCreation) {
     EGLSurface surface = eglCreateWindowSurface(display, config, nativewindow, nullptr);
     eglMakeCurrent(display, surface, surface, context);
 
-    while(!glfwWindowShouldClose(window)) {
+    while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();
         eglSwapBuffers(display, surface);
     }

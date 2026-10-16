@@ -85,8 +85,8 @@ namespace {
 
     // The six-registry shape, on the same trivial twin and on a kind no shipping path twins
     // (Query), so a case can instantiate it without touching a real slot space.
-    using RegistryShapedTable = GL::TwinRegistry<MobileGL::MG_State::GLState::ITextureObject, Twin,
-                                                 P::MGPipeKind::Query>;
+    using RegistryShapedTable =
+        GL::TwinRegistry<MobileGL::MG_State::GLState::ITextureObject, Twin, P::MGPipeKind::Query>;
 
     class TwinOwnershipTest : public ::testing::Test {
     protected:
@@ -210,8 +210,7 @@ namespace {
         // may still be rendering in this process (P14 S2).
         EXPECT_EQ(table.DropBucketsOfSession(kSessionA), 1u) << "the ended session's group was not dropped";
         BindKey(kSessionA, kGroupOne);
-        EXPECT_EQ(table.FindByHandle(handle), nullptr)
-            << "the ended session still resolves a twin it built";
+        EXPECT_EQ(table.FindByHandle(handle), nullptr) << "the ended session still resolves a twin it built";
         BindKey(kSessionB, kGroupOne);
         const MobileGL::SharedPtr<Twin>* const survivor = table.FindByHandle(handle);
         ASSERT_NE(survivor, nullptr)
@@ -236,8 +235,7 @@ namespace {
         Twin* const processWide = Mint(table, handle, 66u);
 
         BindKey(kSessionA, kGroupOne);
-        EXPECT_EQ(table.FindByHandle(handle), nullptr)
-            << "a served context resolved the process-wide twin";
+        EXPECT_EQ(table.FindByHandle(handle), nullptr) << "a served context resolved the process-wide twin";
         EXPECT_NE(Mint(table, handle, 77u), processWide);
 
         t_sessionKey = 0;
@@ -263,8 +261,7 @@ namespace {
         ASSERT_EQ(table.LiveGenAt(handle.Slot), handle.Gen);
 
         BindKey(kSessionA, kGroupTwo);
-        EXPECT_EQ(table.FindByHandle(handle), nullptr)
-            << "the six-registry shape is still one process-wide table";
+        EXPECT_EQ(table.FindByHandle(handle), nullptr) << "the six-registry shape is still one process-wide table";
         EXPECT_EQ(table.LiveGenAt(handle.Slot), 0u) << "the other group's slot reads as live";
         MobileGL::SharedPtr<Twin>* const other = table.GetOrCreateByHandle(handle);
         ASSERT_NE(other, nullptr);

@@ -20,9 +20,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             Vector<VkSurfaceFormatKHR> surfaceFormats;
             Vector<VkPresentModeKHR> presentModes;
 
-            Bool IsComplete() const {
-                return !surfaceFormats.empty() && !presentModes.empty();
-            }
+            Bool IsComplete() const { return !surfaceFormats.empty() && !presentModes.empty(); }
         };
 
         static SwapchainCapabilities GetSwapchainCapabilities(VkPhysicalDevice physicalDevice, VkSurfaceKHR surface);
@@ -97,12 +95,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         void CreateImageViews(VkDevice device);
         void CreateDepthStencilResources(VkDevice device, VkPhysicalDevice physicalDevice);
         void DestroyDepthStencilResources(VkDevice device);
-        static constexpr VkPresentModeKHR s_desiredPresentModes[] {
-            VK_PRESENT_MODE_MAILBOX_KHR,
-            VK_PRESENT_MODE_IMMEDIATE_KHR,
-            VK_PRESENT_MODE_FIFO_RELAXED_KHR,
-            VK_PRESENT_MODE_FIFO_KHR
-        };
+        static constexpr VkPresentModeKHR s_desiredPresentModes[]{
+            VK_PRESENT_MODE_MAILBOX_KHR, VK_PRESENT_MODE_IMMEDIATE_KHR, VK_PRESENT_MODE_FIFO_RELAXED_KHR,
+            VK_PRESENT_MODE_FIFO_KHR};
 
         VkSwapchainKHR m_swapchain = VK_NULL_HANDLE;
         VkPresentModeKHR m_presentMode = VK_PRESENT_MODE_FIFO_KHR;

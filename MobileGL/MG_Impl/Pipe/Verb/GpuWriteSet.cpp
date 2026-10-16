@@ -19,8 +19,8 @@
 namespace MobileGL::MG_Record {
 
     using MG_State::GLState::BufferObject;
-    using MobileGL::BufferTarget;
     using MG_State::GLState::ImageTextureBinding;
+    using MobileGL::BufferTarget;
 
     namespace {
         // Per-row tallies. Diagnostics, and the only thing a unit case can assert on: an
@@ -37,10 +37,9 @@ namespace MobileGL::MG_Record {
             const auto& program = context->GetTransformFeedbackProgram();
             if (program == nullptr) return;
             const SizeT declared = program->GetTransformFeedbackBufferCount();
-            const SizeT count =
-                declared < MG_State::GLState::GLContext::MAX_TRANSFORM_FEEDBACK_BUFFERS
-                    ? declared
-                    : static_cast<SizeT>(MG_State::GLState::GLContext::MAX_TRANSFORM_FEEDBACK_BUFFERS);
+            const SizeT count = declared < MG_State::GLState::GLContext::MAX_TRANSFORM_FEEDBACK_BUFFERS
+                                    ? declared
+                                    : static_cast<SizeT>(MG_State::GLState::GLContext::MAX_TRANSFORM_FEEDBACK_BUFFERS);
             for (SizeT i = 0; i < count; ++i) {
                 const auto& point =
                     context->GetBufferBindingPoint(BufferTarget::TransformFeedback, static_cast<Uint>(i));

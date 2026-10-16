@@ -117,8 +117,7 @@ namespace MobileGL::MG_Remote::Transport {
         // illegal the day the delivery mode changes to `spawn`.
         if (bytes.size > kMaxFramePayloadSize) {
             MGLOG_E("MG_Remote inproc: refusing a %llu byte message (cap %llu)",
-                    static_cast<unsigned long long>(bytes.size),
-                    static_cast<unsigned long long>(kMaxFramePayloadSize));
+                    static_cast<unsigned long long>(bytes.size), static_cast<unsigned long long>(kMaxFramePayloadSize));
             return MOBILEGL_ERR_INVALID_ARGUMENT;
         }
 
@@ -135,8 +134,7 @@ namespace MobileGL::MG_Remote::Transport {
         return MOBILEGL_OK;
     }
 
-    MobileGLResult InProcessTransport::ReceiveFrame(MobileGLMutableByteSpan buffer,
-                                                    std::uint64_t* outSize,
+    MobileGLResult InProcessTransport::ReceiveFrame(MobileGLMutableByteSpan buffer, std::uint64_t* outSize,
                                                     std::uint32_t timeoutMs) {
         if (outSize != nullptr) {
             *outSize = 0;
@@ -194,8 +192,7 @@ namespace MobileGL::MG_Remote::Transport {
         if (fd < 0) {
             return MOBILEGL_ERR_INVALID_ARGUMENT;
         }
-        if (sideband.size > FdPassing::kMaxSidebandBytes ||
-            (sideband.size != 0 && sideband.data == nullptr)) {
+        if (sideband.size > FdPassing::kMaxSidebandBytes || (sideband.size != 0 && sideband.data == nullptr)) {
             return MOBILEGL_ERR_INVALID_ARGUMENT;
         }
         // Same ownership rule as SCM_RIGHTS: the peer gets its own descriptor
@@ -228,8 +225,7 @@ namespace MobileGL::MG_Remote::Transport {
     }
 
     MobileGLResult InProcessTransport::ReceiveFd(int* outFd, MobileGLMutableByteSpan sideband,
-                                                 std::uint64_t* outSidebandSize,
-                                                 std::uint32_t timeoutMs) {
+                                                 std::uint64_t* outSidebandSize, std::uint32_t timeoutMs) {
         if (outFd == nullptr) {
             return MOBILEGL_ERR_INVALID_ARGUMENT;
         }
@@ -285,11 +281,17 @@ namespace MobileGL::MG_Remote::Transport {
     // directions are half-closed and both ring doorbells are KILLED, because a
     // peer parked on a ring doorbell mid-frame would otherwise never come back
     // (a mere ring is consumed once and the waiter parks again).
-    void InProcessTransport::Shutdown() { m_channel->Close(); }
+    void InProcessTransport::Shutdown() {
+        m_channel->Close();
+    }
 
-    Doorbell& InProcessTransport::PeerDoorbell() { return m_channel->Bell(1 - m_endpoint); }
+    Doorbell& InProcessTransport::PeerDoorbell() {
+        return m_channel->Bell(1 - m_endpoint);
+    }
 
-    Doorbell& InProcessTransport::SelfDoorbell() { return m_channel->Bell(m_endpoint); }
+    Doorbell& InProcessTransport::SelfDoorbell() {
+        return m_channel->Bell(m_endpoint);
+    }
 
     namespace {
         std::atomic<bool> g_peerInAnotherProcessForTest{false};

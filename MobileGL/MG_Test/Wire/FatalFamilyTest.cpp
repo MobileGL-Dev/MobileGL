@@ -70,8 +70,7 @@ TEST(FatalFamily, EveryFamilyProjectsToADefinedWireCode) {
     // projection would say a death was not a death.
     for (const MGFatalFamily family : kAllFamilies) {
         const FatalCode code = FatalCodeForFamily(family);
-        EXPECT_NE(code, FatalCode::None)
-            << FatalFamilyName(family) << " projects onto FatalCode::None";
+        EXPECT_NE(code, FatalCode::None) << FatalFamilyName(family) << " projects onto FatalCode::None";
     }
 }
 
@@ -143,11 +142,9 @@ TEST(FatalFunnelSeam, TheMagmaWireVerbDeathReachesSessionFailAndBumpsTheFaultCou
             std::signal(SIGABRT, &ReportFaultCountAndExit);
             MG_Remote::InstallPipeSessionFailHook();
             MG_Pipe::MGPipeSessionFail(MG_Pipe::MGPipeFatalFamily::UnmigratedVerb,
-                                       "MGPipe: Fatal{UnmigratedVerb, \"Magma:%s\"}",
-                                       "unit-probe");
+                                       "MGPipe: Fatal{UnmigratedVerb, \"Magma:%s\"}", "unit-probe");
         },
-        ::testing::ExitedWithCode(kFaultExitBase + 1),
-        "Fatal\\{UnmigratedVerb, \"Magma:unit-probe\"\\}")
+        ::testing::ExitedWithCode(kFaultExitBase + 1), "Fatal\\{UnmigratedVerb, \"Magma:unit-probe\"\\}")
         << "the Magma wire funnel did not end through SessionFail: either the line is not the "
            "site's own any more, or SessionFaultCount() did not move - which is what exit gate "
            "S8 reads and what every telemetry consumer of the funnel depends on";
@@ -186,10 +183,10 @@ TEST(FatalFamily, TheSessionFaultFrameCarriesTheFamilyAndItsCode) {
     // code the frame carries is the family's own projection.
     for (const MGFatalFamily family : kAllFamilies) {
         ::flatbuffers::FlatBufferBuilder builder(256);
-        const auto fatal = ::MobileGL::Wire::CreateFatalDirect(
-            builder, FatalCodeForFamily(family), "detail line", FatalFamilyName(family));
-        const auto root = ::MobileGL::Wire::CreateCtrlEnvelope(
-            builder, ::MobileGL::Wire::CtrlMsg::Fatal, fatal.Union());
+        const auto fatal = ::MobileGL::Wire::CreateFatalDirect(builder, FatalCodeForFamily(family), "detail line",
+                                                               FatalFamilyName(family));
+        const auto root =
+            ::MobileGL::Wire::CreateCtrlEnvelope(builder, ::MobileGL::Wire::CtrlMsg::Fatal, fatal.Union());
         ::MobileGL::Wire::FinishCtrlEnvelopeBuffer(builder, root);
 
         ::flatbuffers::Verifier verifier(builder.GetBufferPointer(), builder.GetSize());
@@ -221,8 +218,8 @@ TEST(FatalFunnelSeam, ADeviceLossLatchesAnArmedSessionAndTheProcessLives) {
             MG_Remote::InstallPipeSessionFailHook();
             MG_Remote::ArmSessionLatch();
             const bool answered = MG_Pipe::MGPipeSessionLatch(
-                MG_Pipe::MGPipeFatalFamily::DeviceLost,
-                "MGPipe: Fatal{BackendDeviceLost, \"Magma:%s\"} - unit probe", "wire-verb-flush");
+                MG_Pipe::MGPipeFatalFamily::DeviceLost, "MGPipe: Fatal{BackendDeviceLost, \"Magma:%s\"} - unit probe",
+                "wire-verb-flush");
             const bool ok = !answered && MG_Remote::SessionLatched() &&
                             MG_Remote::SessionLatchedFamily() == MG_Remote::MGFatalFamily::BackendDeviceLost &&
                             MG_Pipe::MGPipeSessionLatchArmed();
@@ -262,7 +259,8 @@ TEST(FatalFunnelSeam, TheDeviceLossKnobFiresOncePerValueAndReArmsOnANewOne) {
         {
             const auto checks = [](int n) {
                 int fired = 0;
-                for (int i = 0; i < n; ++i) fired += MobileGL::MG_Pipe::MGPipeDebugDeviceLossDue() ? 1 << i : 0;
+                for (int i = 0; i < n; ++i)
+                    fired += MobileGL::MG_Pipe::MGPipeDebugDeviceLossDue() ? 1 << i : 0;
                 return fired;
             };
             ::unsetenv("MOBILEGL_DEBUG_INJECT_DEVICE_LOST_AT");

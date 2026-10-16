@@ -94,7 +94,7 @@ namespace {
                                       "}\n";
 } // namespace
 
-class ShadingRateEsslTest: public ::testing::Test {
+class ShadingRateEsslTest : public ::testing::Test {
 protected:
     void SetUp() override { MobileGL::Initialize(); }
 };

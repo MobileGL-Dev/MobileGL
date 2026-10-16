@@ -188,7 +188,9 @@ namespace MobileGL::MG_Util::PipeStats {
             counter.fetch_add(amount, std::memory_order_relaxed);
         }
 
-        inline Uint64 Read(const Counter& counter) { return counter.load(std::memory_order_relaxed); }
+        inline Uint64 Read(const Counter& counter) {
+            return counter.load(std::memory_order_relaxed);
+        }
 
         // Bucket 0 is "0 bytes", bucket n>0 holds [2^(n-1), 2^n). Saturates at the last
         // bucket so a pathological record cannot index out of the array.
@@ -218,22 +220,38 @@ namespace MobileGL::MG_Util::PipeStats {
         }
 
         const char* const kByteClassNames[kByteClassCount] = {
-            "stage-buffer",        "stage-texture",       "stage-ubo-global",
-            "stage-ubo-named",     "stage-vertex-client", "stage-index-client",
-            "stage-indirect-cmd",  "persistent-map-push", "residual-value-block",
-            "cso-blob-bytes", "stage-segment-bytes",
+            "stage-buffer",         "stage-texture",      "stage-ubo-global",    "stage-ubo-named",
+            "stage-vertex-client",  "stage-index-client", "stage-indirect-cmd",  "persistent-map-push",
+            "residual-value-block", "cso-blob-bytes",     "stage-segment-bytes",
         };
         const char* const kCallClassNames[kCallClassCount] = {
-            "draws", "accessor-calls", "tex-upload-emissions", "tex-upload-box", "tex-upload-rect",
+            "draws",
+            "accessor-calls",
+            "tex-upload-emissions",
+            "tex-upload-box",
+            "tex-upload-rect",
             "tex-upload-jobs",
-            "render-state-cso-mints", "render-state-cso-binds", "map-persistent-roundtrips",
-            "framebuffer-emissions", "sampler-view-emissions", "sampler-state-emissions",
-            "shader-image-emissions", "client-tex-upload-emissions", "tex-remint-pulls",
+            "render-state-cso-mints",
+            "render-state-cso-binds",
+            "map-persistent-roundtrips",
+            "framebuffer-emissions",
+            "sampler-view-emissions",
+            "sampler-state-emissions",
+            "shader-image-emissions",
+            "client-tex-upload-emissions",
+            "tex-remint-pulls",
             "resident-subdata-emissions",
-            "residual-pulls", "server-verb-boundaries", "wire-records",
-            "wire-indirect-native-draws", "wire-indirect-cpu-expansions", "wire-indirect-barriers",
-            "wire-host-waits", "wire-host-waits-indirect", "wire-host-wait-us",
-            "wire-indirect-native-dispatches", "resource-readbacks",
+            "residual-pulls",
+            "server-verb-boundaries",
+            "wire-records",
+            "wire-indirect-native-draws",
+            "wire-indirect-cpu-expansions",
+            "wire-indirect-barriers",
+            "wire-host-waits",
+            "wire-host-waits-indirect",
+            "wire-host-wait-us",
+            "wire-indirect-native-dispatches",
+            "resource-readbacks",
         };
         const char* const kGateNames[kGateCount] = {
             "espryt-render-state", "espryt-texture-sync-list", "espryt-unit-bindings-epoch",
@@ -254,9 +272,8 @@ namespace MobileGL::MG_Util::PipeStats {
         // "csob-blob" and not "csob": the cso[] bracket below already prints csob= for the
         // render-state CSO BIND count, and two different numbers under one grep is how a
         // recorded baseline stops meaning anything.
-        const char* const kByteClassShort[kByteClassCount] = {"buf",  "tex",  "ubog", "ubon", "vtxc",
-                                                              "idxc", "icmd", "pmap", "resid",
-                                                              "csob-blob", "seg",
+        const char* const kByteClassShort[kByteClassCount] = {
+            "buf", "tex", "ubog", "ubon", "vtxc", "idxc", "icmd", "pmap", "resid", "csob-blob", "seg",
         };
         const char* const kGateShort[kGateCount] = {"ers", "etl", "eub", "mfp", "mpm", "mdt"};
 
@@ -353,8 +370,7 @@ namespace MobileGL::MG_Util::PipeStats {
 #endif
             std::ofstream out(path, std::ios::out | std::ios::trunc);
             if (!out) {
-                MGLOG_W("PipeStats: could not open MOBILEGL_PIPE_STATS_FILE='%s' for writing",
-                        path.c_str());
+                MGLOG_W("PipeStats: could not open MOBILEGL_PIPE_STATS_FILE='%s' for writing", path.c_str());
                 return;
             }
             out << FormatJson();
@@ -388,8 +404,8 @@ namespace MobileGL::MG_Util::PipeStats {
             // the price G1 charges for adding anything to this file at all.
             const String dumpPath = RoleDerivedJsonDumpPathForTesting();
             MGLOG_I("MGPipe stats: counters ON (MOBILEGL_PIPE_STATS), summary every %llu frames%s%s",
-                    static_cast<unsigned long long>(g_summaryPeriod),
-                    dumpPath.empty() ? "" : ", JSON dump to ", dumpPath.c_str());
+                    static_cast<unsigned long long>(g_summaryPeriod), dumpPath.empty() ? "" : ", JSON dump to ",
+                    dumpPath.c_str());
 #else
             MGLOG_I("MGPipe stats: counters ON (MOBILEGL_PIPE_STATS), summary every %llu frames%s%s",
                     static_cast<unsigned long long>(g_summaryPeriod),
@@ -399,7 +415,9 @@ namespace MobileGL::MG_Util::PipeStats {
         }
     }
 
-    Uint64 SummaryFramePeriod() { return g_summaryPeriod; }
+    Uint64 SummaryFramePeriod() {
+        return g_summaryPeriod;
+    }
 
     void Shutdown() {
         if (!g_pipeStatsEnabled || g_shutdownDone) {
@@ -431,7 +449,9 @@ namespace MobileGL::MG_Util::PipeStats {
         g_gauges[static_cast<Uint32>(gauge)].store(value, std::memory_order_relaxed);
     }
 
-    Uint64 GaugeValue(Gauge gauge) { return Read(g_gauges[static_cast<Uint32>(gauge)]); }
+    Uint64 GaugeValue(Gauge gauge) {
+        return Read(g_gauges[static_cast<Uint32>(gauge)]);
+    }
 
     void CountGate(Gate gate, Bool hit) {
         const Uint32 index = static_cast<Uint32>(gate);
@@ -444,7 +464,9 @@ namespace MobileGL::MG_Util::PipeStats {
         }
     }
 
-    void RecordDrawPayloadBytes(Uint64 bytes) { Bump(g_totalPayloadBuckets[PayloadBucketOf(bytes)], 1); }
+    void RecordDrawPayloadBytes(Uint64 bytes) {
+        Bump(g_totalPayloadBuckets[PayloadBucketOf(bytes)], 1);
+    }
 
     // P6 gate 8's staged-blob distribution. A count, not a sum: the bytes already have a home
     // in stage-segment-bytes, and what this exists to answer is the SHAPE (how many blobs there
@@ -499,23 +521,43 @@ namespace MobileGL::MG_Util::PipeStats {
         }
     }
 
-    Uint64 FrameBytes(ByteClass byteClass) { return Read(g_frameBytes[static_cast<Uint32>(byteClass)]); }
-    Uint64 TotalBytes(ByteClass byteClass) { return Read(g_totalBytes[static_cast<Uint32>(byteClass)]); }
-    Uint64 FrameCalls(CallClass callClass) { return Read(g_frameCalls[static_cast<Uint32>(callClass)]); }
-    Uint64 TotalCalls(CallClass callClass) { return Read(g_totalCalls[static_cast<Uint32>(callClass)]); }
-    Uint64 TotalGateHits(Gate gate) { return Read(g_totalGateHit[static_cast<Uint32>(gate)]); }
-    Uint64 TotalGateMisses(Gate gate) { return Read(g_totalGateMiss[static_cast<Uint32>(gate)]); }
+    Uint64 FrameBytes(ByteClass byteClass) {
+        return Read(g_frameBytes[static_cast<Uint32>(byteClass)]);
+    }
+    Uint64 TotalBytes(ByteClass byteClass) {
+        return Read(g_totalBytes[static_cast<Uint32>(byteClass)]);
+    }
+    Uint64 FrameCalls(CallClass callClass) {
+        return Read(g_frameCalls[static_cast<Uint32>(callClass)]);
+    }
+    Uint64 TotalCalls(CallClass callClass) {
+        return Read(g_totalCalls[static_cast<Uint32>(callClass)]);
+    }
+    Uint64 TotalGateHits(Gate gate) {
+        return Read(g_totalGateHit[static_cast<Uint32>(gate)]);
+    }
+    Uint64 TotalGateMisses(Gate gate) {
+        return Read(g_totalGateMiss[static_cast<Uint32>(gate)]);
+    }
     Uint64 TotalPayloadBucket(Uint32 bucket) {
         return bucket < kPayloadHistogramBuckets ? Read(g_totalPayloadBuckets[bucket]) : 0;
     }
     Uint64 TotalStagedBlobBucket(Uint32 bucket) {
         return bucket < kStagedBlobHistogramBuckets ? Read(g_totalStagedBlobBuckets[bucket]) : 0;
     }
-    Uint64 FrameCount() { return Read(g_frameCount); }
+    Uint64 FrameCount() {
+        return Read(g_frameCount);
+    }
 
-    const char* NameOf(ByteClass byteClass) { return kByteClassNames[static_cast<Uint32>(byteClass)]; }
-    const char* NameOf(CallClass callClass) { return kCallClassNames[static_cast<Uint32>(callClass)]; }
-    const char* NameOf(Gate gate) { return kGateNames[static_cast<Uint32>(gate)]; }
+    const char* NameOf(ByteClass byteClass) {
+        return kByteClassNames[static_cast<Uint32>(byteClass)];
+    }
+    const char* NameOf(CallClass callClass) {
+        return kCallClassNames[static_cast<Uint32>(callClass)];
+    }
+    const char* NameOf(Gate gate) {
+        return kGateNames[static_cast<Uint32>(gate)];
+    }
 
     String FormatWindowLine() {
         // Window values: everything since the previous summary. A run total over a workload
@@ -589,8 +631,7 @@ namespace MobileGL::MG_Util::PipeStats {
         line += " sve=" + std::to_string(calls[static_cast<Uint32>(CallClass::SamplerViewEmissions)]);
         line += " sse=" + std::to_string(calls[static_cast<Uint32>(CallClass::SamplerStateEmissions)]);
         line += " sie=" + std::to_string(calls[static_cast<Uint32>(CallClass::ShaderImageEmissions)]);
-        line += " ctu=" +
-                std::to_string(calls[static_cast<Uint32>(CallClass::ClientTextureUploadEmissions)]);
+        line += " ctu=" + std::to_string(calls[static_cast<Uint32>(CallClass::ClientTextureUploadEmissions)]);
         // trp is the texture re-mint count (ROADMAP open question 2): every one is a texture
         // Espryt had already allocated and then had to re-mint image-bindable because
         // ImageBindableHint reached it too late - replaying the client's shadow in monolith, the
@@ -602,8 +643,7 @@ namespace MobileGL::MG_Util::PipeStats {
         // buffer are identical either way - so it is what the white-box cases read. Zero under
         // monolith by construction, and zero under split too until the server publishes
         // kCapResidentSubData off its own wire resource table (MG_Backend/Init.cpp).
-        line += " rsd=" +
-                std::to_string(calls[static_cast<Uint32>(CallClass::ResidentSubDataEmissions)]);
+        line += " rsd=" + std::to_string(calls[static_cast<Uint32>(CallClass::ResidentSubDataEmissions)]);
         // rsp is P5's residual-pull count: reads, on the server side, of a PipeInputs field no
         // pushed record supplies, answered out of the client's residual fill under the verb
         // barrier. It is the SIZE OF THE P6/P7/P8 DEBT and it is published on this line rather
@@ -617,8 +657,7 @@ namespace MobileGL::MG_Util::PipeStats {
         // the monolith arm never stamps, so a green lane with vbs=0 says only that the mechanism
         // never ran. It is deliberately NOT rsp: rsp reaches zero when the phase SUCCEEDS, so a
         // positive control built on it would fail on the day the debt is paid.
-        line += " vbs=" +
-                std::to_string(calls[static_cast<Uint32>(CallClass::ServerVerbBoundaries)]);
+        line += " vbs=" + std::to_string(calls[static_cast<Uint32>(CallClass::ServerVerbBoundaries)]);
         // P6 GATE 8's SECOND NUMBER (CONTRACT-P6.md §9 item 8): records/frame AFTER chunking, i.e.
         // the count of records the wire encoder actually committed this window rather than the
         // number of times an emitter was asked for one. The gap between the two is the whole
@@ -633,10 +672,8 @@ namespace MobileGL::MG_Util::PipeStats {
         // its numerator times the frame count is a formatting bug, and a per-frame figure over a
         // window with no Present in it is the 47x overstatement PipeStatsTest already pins.
         line += " wrec=" + std::to_string(calls[static_cast<Uint32>(CallClass::WireRecords)]);
-        line += " wrec/f=" + (perFrame
-                                  ? FormatFixed2(calls[static_cast<Uint32>(CallClass::WireRecords)],
-                                                 windowFrames)
-                                  : std::to_string(calls[static_cast<Uint32>(CallClass::WireRecords)]));
+        line += " wrec/f=" + (perFrame ? FormatFixed2(calls[static_cast<Uint32>(CallClass::WireRecords)], windowFrames)
+                                       : std::to_string(calls[static_cast<Uint32>(CallClass::WireRecords)]));
         // P5's three wire gauges, and THEY ARE RUN TOTALS on a line whose every other field is
         // a window - see the Gauge enum for the argument. `maxrec` is R-10's proof obligation
         // (BRIEF 8 item 3): the largest single record this run wrote, in BYTES, beside the cap
@@ -674,8 +711,7 @@ namespace MobileGL::MG_Util::PipeStats {
         line += " wdefsync=" + std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::WireDeferredSyncs)]));
         // P8-D: the Magma wire arm's indirect draws and its host-access waits, windowed like the
         // other CallClass fields (per window, not per frame: the create fixtures hold one frame).
-        line += "] windr[wind=" +
-                std::to_string(calls[static_cast<Uint32>(CallClass::WireIndirectNativeDraws)]);
+        line += "] windr[wind=" + std::to_string(calls[static_cast<Uint32>(CallClass::WireIndirectNativeDraws)]);
         line += " wixp=" + std::to_string(calls[static_cast<Uint32>(CallClass::WireIndirectCpuExpansions)]);
         line += " wibar=" + std::to_string(calls[static_cast<Uint32>(CallClass::WireIndirectBarriers)]);
         line += " whw=" + std::to_string(calls[static_cast<Uint32>(CallClass::WireHostWaits)]);
@@ -739,30 +775,30 @@ namespace MobileGL::MG_Util::PipeStats {
         }
         // The gauges, under their long names. Run totals here as on the summary line.
         json += "  },\n  \"wire\": {\n";
-        json += "    \"max-record-bytes\": " +
-                std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::MaxRecordBytes)])) + ",\n";
+        json +=
+            "    \"max-record-bytes\": " + std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::MaxRecordBytes)])) +
+            ",\n";
         json += "    \"max-record-bytes-cap\": " +
                 std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::MaxRecordBytesCap)])) + ",\n";
-        json += "    \"ring-wraps\": " +
-                std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::RingWraps)])) + ",\n";
-        json += "    \"ring-wrap-pads\": " +
-                std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::RingWrapPads)])) + ",\n";
-        json += "    \"ring-waits\": " +
-                std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::RingWaits)])) + ",\n";
+        json += "    \"ring-wraps\": " + std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::RingWraps)])) + ",\n";
+        json += "    \"ring-wrap-pads\": " + std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::RingWrapPads)])) +
+                ",\n";
+        json += "    \"ring-waits\": " + std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::RingWaits)])) + ",\n";
         // The wait ledger under its long names, same run totals as the summary line's wait[].
-        json += "    \"server-waits\": " +
-                std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::ServerWaits)])) + ",\n";
-        json += "    \"server-parks\": " +
-                std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::ServerParks)])) + ",\n";
-        json += "    \"client-waits\": " +
-                std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::ClientWaits)])) + ",\n";
-        json += "    \"client-parks\": " +
-                std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::ClientParks)])) + ",\n";
+        json +=
+            "    \"server-waits\": " + std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::ServerWaits)])) + ",\n";
+        json +=
+            "    \"server-parks\": " + std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::ServerParks)])) + ",\n";
+        json +=
+            "    \"client-waits\": " + std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::ClientWaits)])) + ",\n";
+        json +=
+            "    \"client-parks\": " + std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::ClientParks)])) + ",\n";
         // P7 wave 4 M2's four, run maxima / a run count as on the summary line's wbuf[].
-        json += "    \"wire-buffers\": " +
-                std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::WireBuffers)])) + ",\n";
-        json += "    \"wire-stores-peak\": " +
-                std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::WireStoresPeak)])) + ",\n";
+        json +=
+            "    \"wire-buffers\": " + std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::WireBuffers)])) + ",\n";
+        json +=
+            "    \"wire-stores-peak\": " + std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::WireStoresPeak)])) +
+            ",\n";
         json += "    \"wire-deferred-bytes-peak\": " +
                 std::to_string(Read(g_gauges[static_cast<Uint32>(Gauge::WireDeferredBytesPeak)])) + ",\n";
         json += "    \"wire-deferred-syncs\": " +
@@ -793,9 +829,13 @@ namespace MobileGL::MG_Util::PipeStats {
         return json;
     }
 
-    void SetEnabledForTesting(Bool enabled) { g_pipeStatsEnabled = enabled; }
+    void SetEnabledForTesting(Bool enabled) {
+        g_pipeStatsEnabled = enabled;
+    }
 
-    void ResetForTesting() { ResetCounters(); }
+    void ResetForTesting() {
+        ResetCounters();
+    }
 
 #if MOBILEGL_BUILD_DISAGGREGATED
     String RoleDerivedJsonDumpPathForTesting() {

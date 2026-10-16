@@ -50,7 +50,10 @@
 // SyncGpuWrites, exactly as glMapBufferRange and glGetBufferSubData already do. Monolith keeps its
 // read as it was: its ReadPixels maps the driver PBO back into the shadow inside the call, and the
 // pull build compiles this to nothing (G1).
-#define MGL_SYNC_PIXEL_UNPACK_SOURCE(buffer)                                                             do {                                                                                                     (buffer)->SyncGpuWrites();       } while (0)
+#define MGL_SYNC_PIXEL_UNPACK_SOURCE(buffer)                                                                           \
+    do {                                                                                                               \
+        (buffer)->SyncGpuWrites();                                                                                     \
+    } while (0)
 
 namespace MobileGL::MG_Impl::GLImpl {
     static SharedPtr<MG_State::GLState::ITextureObject> nullTextureObject;
@@ -69,10 +72,9 @@ namespace MobileGL::MG_Impl::GLImpl {
         // equation 2.3; the two live in one header so they cannot drift apart.
         void SetTextureBorderColorFromInts(const SharedPtr<MG_State::GLState::ITextureObject>& textureObject,
                                            const GLint* params) {
-            textureObject->SetBorderColor(FloatVec4(MG_Util::SignedNormalizedInt32ToFloat(params[0]),
-                                                    MG_Util::SignedNormalizedInt32ToFloat(params[1]),
-                                                    MG_Util::SignedNormalizedInt32ToFloat(params[2]),
-                                                    MG_Util::SignedNormalizedInt32ToFloat(params[3])));
+            textureObject->SetBorderColor(FloatVec4(
+                MG_Util::SignedNormalizedInt32ToFloat(params[0]), MG_Util::SignedNormalizedInt32ToFloat(params[1]),
+                MG_Util::SignedNormalizedInt32ToFloat(params[2]), MG_Util::SignedNormalizedInt32ToFloat(params[3])));
         }
 
         void SetTextureBorderColorFromIntegerInts(const SharedPtr<MG_State::GLState::ITextureObject>& textureObject,
@@ -158,7 +160,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         // a live unit for the rest of the context's life.
         template <typename Fn>
         void WithTemporarilyBoundNamedTexture(const SharedPtr<MG_State::GLState::ITextureObject>& textureObject,
-                                             Fn&& fn) {
+                                              Fn&& fn) {
             if (!textureObject) return;
 
             const Int activeUnitIndex = MG_State::pGLContext->GetActiveTextureUnit();
@@ -258,8 +260,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         void SeedImmutableViewState(const SharedPtr<MG_State::GLState::ITextureObject>& textureObject, Uint levels) {
             if (!textureObject) return;
             textureObject->SetViewLevelLayerRange(
-                0, levels, 0,
-                LayerCountOfImmutableTexture(textureObject->GetTarget(), textureObject->GetBaseSize()));
+                0, levels, 0, LayerCountOfImmutableTexture(textureObject->GetTarget(), textureObject->GetBaseSize()));
         }
 
         Bool ValidateTextureMutable(const SharedPtr<MG_State::GLState::ITextureObject>& textureObject,
@@ -443,9 +444,9 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
 
         GLuint GetAdvertisedImageUnitCount() {
-            return static_cast<GLuint>(std::min<GLint>(
-                MG_Backend::pActiveBackendObject->GetDynamicParameters().MaxImageUnits,
-                MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS));
+            return static_cast<GLuint>(
+                std::min<GLint>(MG_Backend::pActiveBackendObject->GetDynamicParameters().MaxImageUnits,
+                                MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS));
         }
 
         // How many components of a GL-space texel size actually halve down the mip chain.
@@ -543,9 +544,8 @@ namespace MobileGL::MG_Impl::GLImpl {
         // MAX_LEVEL admit, and leaves every other level exactly as it was (GL 4.6 core 8.17). Both
         // transports take this one path: the window, and the refusal to redefine the levels around
         // it, are properties of the GL call rather than of how the backend is reached.
-        Bool EnsureGeneratedMipmapStorageAllocated(
-            MG_State::GLState::TextureObjectMipmap& texture,
-            TextureUploadTarget uploadTarget) {
+        Bool EnsureGeneratedMipmapStorageAllocated(MG_State::GLState::TextureObjectMipmap& texture,
+                                                   TextureUploadTarget uploadTarget) {
             const auto plan = ComputeMipmapGenerationRange(texture, uploadTarget);
             if (plan.End <= plan.Base) return false;
             // Immutable textures and views already own every level generation can write.
@@ -584,8 +584,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
 
         Bool IsMultisampleTextureTarget(TextureTarget target) {
-            return target == TextureTarget::Texture2DMultisample ||
-                   target == TextureTarget::Texture2DMultisampleArray;
+            return target == TextureTarget::Texture2DMultisample || target == TextureTarget::Texture2DMultisampleArray;
         }
 
         // The largest count the backend actually probed for this format on this target, or 0 when
@@ -616,8 +615,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         // application wrote per-sample data it could never read back. Raising INVALID_OPERATION
         // is what a real driver does, and it is what makes that silent squeeze unreachable for
         // application-visible storage.
-        Int GetMaxSupportedTextureSamples(TextureTarget textureTarget,
-                                          TextureInternalFormat textureInternalFormat) {
+        Int GetMaxSupportedTextureSamples(TextureTarget textureTarget, TextureInternalFormat textureInternalFormat) {
             if (MG_Backend::pActiveBackendObject == nullptr) {
                 return std::numeric_limits<Int>::max();
             }
@@ -626,8 +624,7 @@ namespace MobileGL::MG_Impl::GLImpl {
                                           MG_Util::IsStencilFormatInternalFormat(textureInternalFormat);
             Bool isIntegerFormat = false;
             if (!isDepthOrStencil) {
-                GLenum normalizedInternalFormat =
-                    MG_Util::ConvertTextureInternalFormatToGLEnum(textureInternalFormat);
+                GLenum normalizedInternalFormat = MG_Util::ConvertTextureInternalFormatToGLEnum(textureInternalFormat);
                 GLenum normalizedFormat = GL_RGBA;
                 GLenum normalizedType = GL_UNSIGNED_BYTE;
                 MG_Util::TextureFormatProcessor::NormalizePixelFormat(
@@ -636,7 +633,7 @@ namespace MobileGL::MG_Impl::GLImpl {
                 isIntegerFormat = normalizedFormat == GL_RED_INTEGER || normalizedFormat == GL_RG_INTEGER ||
                                   normalizedFormat == GL_RGB_INTEGER || normalizedFormat == GL_RGBA_INTEGER;
             }
-            const Int categoryMaxSamples = isDepthOrStencil ? GetAdvertisedDepthTextureMaxSamples()
+            const Int categoryMaxSamples = isDepthOrStencil  ? GetAdvertisedDepthTextureMaxSamples()
                                            : isIntegerFormat ? GetAdvertisedIntegerMaxSamples()
                                                              : GetAdvertisedColorTextureMaxSamples();
 
@@ -657,8 +654,8 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
 
         Bool ValidateTextureMultisampleStorage(TextureTarget textureTarget, GLsizei samples, GLsizei width,
-                                               GLsizei height, GLsizei depth, TextureInternalFormat textureInternalFormat,
-                                               const char* caller) {
+                                               GLsizei height, GLsizei depth,
+                                               TextureInternalFormat textureInternalFormat, const char* caller) {
             if (!IsMultisampleTextureTarget(textureTarget)) {
                 MG_State::pGLContext->RecordError(
                     ErrorCode::InvalidEnum,
@@ -680,9 +677,8 @@ namespace MobileGL::MG_Impl::GLImpl {
             }
             if (textureTarget == TextureTarget::Texture2DMultisample && depth != 1) {
                 MG_State::pGLContext->RecordError(
-                    ErrorCode::InvalidValue,
-                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
-                                                 "2D multisample textures must use depth 1."));
+                    ErrorCode::InvalidValue, MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
+                                                                          "2D multisample textures must use depth 1."));
                 return false;
             }
             // Zero layers is NOT an error for multisample arrays: depth == 0 (like width/height
@@ -723,8 +719,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             // every unit the reset touched, and reaches an ES glTexStorage*Multisample(..., 0, 0)
             // that ES 3.1 8.19 makes INVALID_VALUE on every driver there is. A proxy target holds
             // no image at all, only the query result, so it keeps recording what was asked for.
-            if ((width <= 0 || height <= 0 || depth <= 0) &&
-                !TextureImpl::IsProxyTextureTarget(textureUploadTarget)) {
+            if ((width <= 0 || height <= 0 || depth <= 0) && !TextureImpl::IsProxyTextureTarget(textureUploadTarget)) {
                 textureObject->SetInternalFormat(TextureInternalFormat::Unknown);
                 textureMipmapObject->TruncateMipmapLevels(textureUploadTarget, 0);
                 return;
@@ -781,9 +776,8 @@ namespace MobileGL::MG_Impl::GLImpl {
         // have no compressed upload path yet.
         void RecordUnsupportedCompressedFormat(const char* caller) {
             MG_State::pGLContext->RecordError(
-                ErrorCode::InvalidEnum,
-                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
-                                             "Compressed texture formats are not supported."));
+                ErrorCode::InvalidEnum, MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
+                                                                     "Compressed texture formats are not supported."));
         }
 
         // The ETC2/EAC arm of the compressed uploads: the blocks are decoded into the level's
@@ -808,8 +802,8 @@ namespace MobileGL::MG_Impl::GLImpl {
             auto* shadow = static_cast<Uint8*>(texture->MapMipmapData(uploadTarget, level));
             if (shadow == nullptr) return false;
             MG_Util::EtcDecoder::DecodeRegion(format, static_cast<const Uint8*>(blocks), size.x(), size.y(), size.z(),
-                                              shadow, levelSize.x(), levelSize.y(), levelDepth, offset.x(),
-                                              offset.y(), offset.z());
+                                              shadow, levelSize.x(), levelSize.y(), levelDepth, offset.x(), offset.y(),
+                                              offset.z());
             texture->MarkStorageDirtyRegion(uploadTarget, level, offset, size);
             return true;
         }
@@ -827,8 +821,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             // A format with no known footprint has no texel count to report; answering 0 beats
             // dividing by it.
             if (texelByteSize == 0) return 0;
-            const auto* bufferTextureObject =
-                static_cast<const MG_State::GLState::TextureObjectBuffer*>(textureObject);
+            const auto* bufferTextureObject = static_cast<const MG_State::GLState::TextureObjectBuffer*>(textureObject);
             const SizeT texelCount = bufferTextureObject->GetBufferRangeSizeInBytes() / texelByteSize;
             const SizeT maxTexelCount = static_cast<SizeT>(
                 std::max(0, MG_Backend::pActiveBackendObject->GetDynamicParameters().MaxTextureBufferSize));
@@ -852,13 +845,12 @@ namespace MobileGL::MG_Impl::GLImpl {
         // for the compressed-format path.
         void RecordUnsupportedLevelQueryStorage(const char* caller, GLenum pname) {
             MGLOG_W_ONCE("%s: glGetTexLevelParameter(pname=%s) is not implemented for this texture's "
-                    "storage class; recording GL_INVALID_OPERATION instead of terminating",
-                    caller, MG_Util::ConvertGLEnumToString(pname).c_str());
+                         "storage class; recording GL_INVALID_OPERATION instead of terminating",
+                         caller, MG_Util::ConvertGLEnumToString(pname).c_str());
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,
-                MakeUnique<GenericErrorInfo>(
-                    "MG_Impl/GLImpl", caller,
-                    "Level queries are not supported for this texture's storage class."));
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
+                                             "Level queries are not supported for this texture's storage class."));
         }
     } // namespace
 
@@ -904,8 +896,7 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     namespace {
         void RecordClearTextureError(const char* caller, ErrorCode code, const String& message) {
-            MG_State::pGLContext->RecordError(
-                code, MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller, message));
+            MG_State::pGLContext->RecordError(code, MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller, message));
         }
 
         SharedPtr<MG_State::GLState::TextureObjectMipmap> GetClearTextureObject(GLuint texture, GLint level,
@@ -948,21 +939,20 @@ namespace MobileGL::MG_Impl::GLImpl {
                 (mipmapTexture->GetMipmapCompressedFormat(uploadTargets[0], static_cast<Uint>(level)) != GL_NONE ||
                  mipmapTexture->GetMipmapRequestedCompressedFormat(uploadTargets[0], static_cast<Uint>(level)) !=
                      GL_NONE)) {
-                RecordClearTextureError(caller, ErrorCode::InvalidOperation,
-                                        "Compressed textures cannot be cleared.");
+                RecordClearTextureError(caller, ErrorCode::InvalidOperation, "Compressed textures cannot be cleared.");
                 return nullptr;
             }
             return mipmapTexture;
         }
 
-        Bool BuildClearPixel(const SharedPtr<MG_State::GLState::TextureObjectMipmap>& textureObject,
-                             GLenum format, GLenum type, const void* data, Vector<Uint8>& clearPixel) {
+        Bool BuildClearPixel(const SharedPtr<MG_State::GLState::TextureObjectMipmap>& textureObject, GLenum format,
+                             GLenum type, const void* data, Vector<Uint8>& clearPixel) {
             const TextureInputFormat inputFormat = MG_Util::ConvertGLEnumToTextureInputFormat(format);
             const TexturePixelDataType inputType = MG_Util::ConvertGLEnumToTexturePixelDataType(type);
             if (!TextureImpl::ValidateTextureInputFormat(inputFormat) ||
                 !TextureImpl::ValidateTexturePixelDataType(inputType) ||
-                !TextureImpl::ValidateTextureInternalFormatCompatibleWithInput(
-                    inputFormat, textureObject->GetFormat(), inputType)) {
+                !TextureImpl::ValidateTextureInternalFormatCompatibleWithInput(inputFormat, textureObject->GetFormat(),
+                                                                               inputType)) {
                 return false;
             }
 
@@ -977,8 +967,8 @@ namespace MobileGL::MG_Impl::GLImpl {
             clearPixelStore.Alignment = 1;
             SizeT clearPixelSize = 0;
             void* converted = MG_Util::PixelStoreProcessor::ProcessTexturePixelsDataUnpack(
-                data, clearPixelStore, textureObject->GetFormat(), inputFormat, inputType,
-                {1, 1, 1}, false, clearPixelSize);
+                data, clearPixelStore, textureObject->GetFormat(), inputFormat, inputType, {1, 1, 1}, false,
+                clearPixelSize);
             if (!converted || clearPixelSize == 0) {
                 if (converted) free(converted);
                 return false;
@@ -997,9 +987,8 @@ namespace MobileGL::MG_Impl::GLImpl {
         // the next sync. Full-level clears (glClearTexImage, or a sub-clear covering the
         // level) rewrite the entire shadow and are always correct.
         Bool ClearMipmapRegion(const SharedPtr<MG_State::GLState::TextureObjectMipmap>& textureObject,
-                               TextureUploadTarget uploadTarget, GLint level,
-                               GLint xoffset, GLint yoffset, GLint zoffset,
-                               GLsizei width, GLsizei height, GLsizei depth,
+                               TextureUploadTarget uploadTarget, GLint level, GLint xoffset, GLint yoffset,
+                               GLint zoffset, GLsizei width, GLsizei height, GLsizei depth,
                                const Vector<Uint8>& clearPixel, const char* caller) {
             const IntVec3 texelSize = textureObject->GetMipmapTexelSize(uploadTarget, static_cast<Uint>(level));
             if (texelSize.x() <= 0 || texelSize.y() <= 0 || texelSize.z() <= 0) {
@@ -1007,10 +996,8 @@ namespace MobileGL::MG_Impl::GLImpl {
                                         "The requested texture level has no storage.");
                 return false;
             }
-            if (xoffset < 0 || yoffset < 0 || zoffset < 0 ||
-                width < 0 || height < 0 || depth < 0 ||
-                width > texelSize.x() - xoffset ||
-                height > texelSize.y() - yoffset ||
+            if (xoffset < 0 || yoffset < 0 || zoffset < 0 || width < 0 || height < 0 || depth < 0 ||
+                width > texelSize.x() - xoffset || height > texelSize.y() - yoffset ||
                 depth > texelSize.z() - zoffset) {
                 RecordClearTextureError(caller, ErrorCode::InvalidValue,
                                         "The clear region lies outside the requested texture level.");
@@ -1018,8 +1005,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             }
             if (width == 0 || height == 0 || depth == 0) return true;
 
-            const SizeT texelCount = static_cast<SizeT>(texelSize.x()) *
-                                     static_cast<SizeT>(texelSize.y()) *
+            const SizeT texelCount = static_cast<SizeT>(texelSize.x()) * static_cast<SizeT>(texelSize.y()) *
                                      static_cast<SizeT>(texelSize.z());
             const SizeT byteSize = textureObject->GetMipmapByteSize(uploadTarget, static_cast<Uint>(level));
             if (byteSize == 0 || byteSize % texelCount != 0) {
@@ -1037,8 +1023,8 @@ namespace MobileGL::MG_Impl::GLImpl {
                 return false;
             }
 
-            auto* destination = static_cast<Uint8*>(
-                textureObject->MapMipmapData(uploadTarget, static_cast<Uint>(level)));
+            auto* destination =
+                static_cast<Uint8*>(textureObject->MapMipmapData(uploadTarget, static_cast<Uint>(level)));
             if (!destination) {
                 RecordClearTextureError(caller, ErrorCode::InvalidOperation,
                                         "The requested texture level could not be mapped.");
@@ -1052,8 +1038,7 @@ namespace MobileGL::MG_Impl::GLImpl {
 
             for (GLsizei z = 0; z < depth; ++z) {
                 for (GLsizei y = 0; y < height; ++y) {
-                    Uint8* row = destination +
-                                 static_cast<SizeT>(zoffset + z) * fullSliceBytes +
+                    Uint8* row = destination + static_cast<SizeT>(zoffset + z) * fullSliceBytes +
                                  static_cast<SizeT>(yoffset + y) * fullRowBytes +
                                  static_cast<SizeT>(xoffset) * bytesPerTexel;
                     if (firstClearRow) {
@@ -1104,10 +1089,9 @@ namespace MobileGL::MG_Impl::GLImpl {
         private:
             // PackAlignment must be first: it is the one that resets to 1 rather than 0.
             static constexpr Array<PixelStoreParam, 8> kParams{
-                PixelStoreParam::PackAlignment,  PixelStoreParam::PackRowLength,
-                PixelStoreParam::PackImageHeight, PixelStoreParam::PackSkipRows,
-                PixelStoreParam::PackSkipPixels, PixelStoreParam::PackSkipImages,
-                PixelStoreParam::PackSwapBytes,  PixelStoreParam::PackLSBFirst};
+                PixelStoreParam::PackAlignment, PixelStoreParam::PackRowLength,  PixelStoreParam::PackImageHeight,
+                PixelStoreParam::PackSkipRows,  PixelStoreParam::PackSkipPixels, PixelStoreParam::PackSkipImages,
+                PixelStoreParam::PackSwapBytes, PixelStoreParam::PackLSBFirst};
             Array<Int, 8> m_saved{};
             SharedPtr<MG_State::GLState::BufferObject> m_savedPackBuffer;
         };
@@ -1139,12 +1123,11 @@ namespace MobileGL::MG_Impl::GLImpl {
             GLenum type = GL_UNSIGNED_BYTE;
             MG_Util::TextureFormatProcessor::NormalizePixelFormat(glInternalFormat, PixelFormatNormalizeOptionBit::None,
                                                                   &realInternalFormat, &format, &type);
-            const SizeT readBytesPerTexel =
-                MG_Util::GetInputBytesPerPixel(MG_Util::ConvertGLEnumToTextureInputFormat(format),
-                                               MG_Util::ConvertGLEnumToTexturePixelDataType(type));
+            const SizeT readBytesPerTexel = MG_Util::GetInputBytesPerPixel(
+                MG_Util::ConvertGLEnumToTextureInputFormat(format), MG_Util::ConvertGLEnumToTexturePixelDataType(type));
             if (readBytesPerTexel != bytesPerTexel) {
                 MGLOG_W_ONCE("%s: cannot copy into a %zu-byte texel from a %zu-byte readback layout", caller,
-                        bytesPerTexel, readBytesPerTexel);
+                             bytesPerTexel, readBytesPerTexel);
                 return false;
             }
 
@@ -1182,16 +1165,15 @@ namespace MobileGL::MG_Impl::GLImpl {
 
         for (TextureUploadTarget uploadTarget : textureObject->GetUploadTargets()) {
             const IntVec3 size = textureObject->GetMipmapTexelSize(uploadTarget, static_cast<Uint>(level));
-            if (!ClearMipmapRegion(textureObject, uploadTarget, level, 0, 0, 0,
-                                   size.x(), size.y(), size.z(), clearPixel, __func__)) {
+            if (!ClearMipmapRegion(textureObject, uploadTarget, level, 0, 0, 0, size.x(), size.y(), size.z(),
+                                   clearPixel, __func__)) {
                 return;
             }
         }
     }
 
-    void ClearTexSubImage(GLuint texture, GLint level, GLint xoffset, GLint yoffset, GLint zoffset,
-                          GLsizei width, GLsizei height, GLsizei depth, GLenum format, GLenum type,
-                          const void* data) {
+    void ClearTexSubImage(GLuint texture, GLint level, GLint xoffset, GLint yoffset, GLint zoffset, GLsizei width,
+                          GLsizei height, GLsizei depth, GLenum format, GLenum type, const void* data) {
         auto textureObject = GetClearTextureObject(texture, level, __func__);
         if (!textureObject) return;
 
@@ -1200,16 +1182,15 @@ namespace MobileGL::MG_Impl::GLImpl {
 
         const auto& uploadTargets = textureObject->GetUploadTargets();
         if (textureObject->GetTarget() == TextureTarget::TextureCubeMap) {
-            if (zoffset < 0 || depth < 0 ||
-                static_cast<SizeT>(zoffset) > uploadTargets.size() ||
+            if (zoffset < 0 || depth < 0 || static_cast<SizeT>(zoffset) > uploadTargets.size() ||
                 static_cast<SizeT>(depth) > uploadTargets.size() - static_cast<SizeT>(zoffset)) {
                 RecordClearTextureError(__func__, ErrorCode::InvalidValue,
                                         "The cube-map clear region selects invalid faces.");
                 return;
             }
             for (GLsizei face = 0; face < depth; ++face) {
-                if (!ClearMipmapRegion(textureObject, uploadTargets[static_cast<SizeT>(zoffset + face)], level,
-                                       xoffset, yoffset, 0, width, height, 1, clearPixel, __func__)) {
+                if (!ClearMipmapRegion(textureObject, uploadTargets[static_cast<SizeT>(zoffset + face)], level, xoffset,
+                                       yoffset, 0, width, height, 1, clearPixel, __func__)) {
                     return;
                 }
             }
@@ -1221,8 +1202,8 @@ namespace MobileGL::MG_Impl::GLImpl {
                                     "The requested texture has no upload target.");
             return;
         }
-        ClearMipmapRegion(textureObject, uploadTargets.front(), level, xoffset, yoffset, zoffset,
-                          width, height, depth, clearPixel, __func__);
+        ClearMipmapRegion(textureObject, uploadTargets.front(), level, xoffset, yoffset, zoffset, width, height, depth,
+                          clearPixel, __func__);
     }
 
     Bool ValidateTextureParameterForTarget(const SharedPtr<MG_State::GLState::ITextureObject>& textureObject,
@@ -1233,18 +1214,16 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
         if ((pname == GL_TEXTURE_BASE_LEVEL || pname == GL_TEXTURE_MAX_LEVEL) && param < 0) {
             MG_State::pGLContext->RecordError(
-                ErrorCode::InvalidValue,
-                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller, "Texture level parameter must be non-negative."));
+                ErrorCode::InvalidValue, MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
+                                                                      "Texture level parameter must be non-negative."));
             return false;
         }
 
-        if ((target == TextureTarget::Texture2DMultisample ||
-             target == TextureTarget::Texture2DMultisampleArray) &&
+        if ((target == TextureTarget::Texture2DMultisample || target == TextureTarget::Texture2DMultisampleArray) &&
             pname == GL_TEXTURE_BASE_LEVEL && param != 0) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,
-                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
-                                             "Multisample texture base level must be zero."));
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller, "Multisample texture base level must be zero."));
             return false;
         }
 
@@ -1253,7 +1232,8 @@ namespace MobileGL::MG_Impl::GLImpl {
             if (pname == GL_TEXTURE_BASE_LEVEL && param != 0) {
                 MG_State::pGLContext->RecordError(
                     ErrorCode::InvalidOperation,
-                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller, "External texture base level must be zero."));
+                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
+                                                 "External texture base level must be zero."));
                 return false;
             }
             if (((pname == GL_TEXTURE_WRAP_S || pname == GL_TEXTURE_WRAP_T || pname == GL_TEXTURE_WRAP_R) &&
@@ -1274,8 +1254,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             return false;
         }
 
-        if ((target == TextureTarget::Texture2DMultisample ||
-             target == TextureTarget::Texture2DMultisampleArray) &&
+        if ((target == TextureTarget::Texture2DMultisample || target == TextureTarget::Texture2DMultisampleArray) &&
             (pname == GL_TEXTURE_WRAP_S || pname == GL_TEXTURE_WRAP_T || pname == GL_TEXTURE_WRAP_R ||
              pname == GL_TEXTURE_MIN_FILTER || pname == GL_TEXTURE_MAG_FILTER || pname == GL_TEXTURE_MIN_LOD ||
              pname == GL_TEXTURE_MAX_LOD || pname == GL_TEXTURE_LOD_BIAS || pname == GL_TEXTURE_COMPARE_MODE ||
@@ -1320,15 +1299,13 @@ namespace MobileGL::MG_Impl::GLImpl {
                 (param == GL_MIRROR_CLAMP_TO_EDGE || param == GL_MIRRORED_REPEAT || param == GL_REPEAT)) {
                 MG_State::pGLContext->RecordError(
                     ErrorCode::InvalidEnum,
-                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
-                                                 "Invalid wrap mode for rectangle texture."));
+                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller, "Invalid wrap mode for rectangle texture."));
                 return false;
             }
             if (pname == GL_TEXTURE_MIN_FILTER && param != GL_NEAREST && param != GL_LINEAR) {
                 MG_State::pGLContext->RecordError(
-                    ErrorCode::InvalidEnum,
-                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
-                                                 "Invalid min filter for rectangle texture."));
+                    ErrorCode::InvalidEnum, MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
+                                                                         "Invalid min filter for rectangle texture."));
                 return false;
             }
         }
@@ -1458,8 +1435,7 @@ namespace MobileGL::MG_Impl::GLImpl {
                                        GLfloat param, const char* caller) {
         if (!textureObject) return;
         if (pname == GL_TEXTURE_MAX_ANISOTROPY_EXT && !ValidateMaxAnisotropy(param, caller)) return;
-        const GLint validationParam =
-            pname == GL_TEXTURE_MAX_ANISOTROPY_EXT ? 1 : static_cast<GLint>(param);
+        const GLint validationParam = pname == GL_TEXTURE_MAX_ANISOTROPY_EXT ? 1 : static_cast<GLint>(param);
         if (!ValidateTextureParameterForTarget(textureObject, pname, validationParam, caller)) return;
 
         switch (pname) {
@@ -1560,8 +1536,8 @@ namespace MobileGL::MG_Impl::GLImpl {
 
         switch (pname) {
         case GL_TEXTURE_MAG_FILTER:
-            *params = (GLint)MG_Util::ConvertSamplerFilterModeToGLEnum(textureObject->GetSamplerObject()->GetMagFilter(),
-                                                                       SamplerMipmapMode::None);
+            *params = (GLint)MG_Util::ConvertSamplerFilterModeToGLEnum(
+                textureObject->GetSamplerObject()->GetMagFilter(), SamplerMipmapMode::None);
             break;
         case GL_TEXTURE_MIN_FILTER:
             *params = (GLint)MG_Util::ConvertSamplerFilterModeToGLEnum(
@@ -1646,8 +1622,7 @@ namespace MobileGL::MG_Impl::GLImpl {
                 ErrorCode::InvalidEnum,
                 MakeUnique<GenericErrorInfo>(
                     "MG_Impl/GLImpl", caller,
-                    std::format("pname {} is not a valid texture parameter.",
-                                MG_Util::ConvertGLEnumToString(pname))));
+                    std::format("pname {} is not a valid texture parameter.", MG_Util::ConvertGLEnumToString(pname))));
             return;
         }
     }
@@ -1655,8 +1630,7 @@ namespace MobileGL::MG_Impl::GLImpl {
     const SharedPtr<MG_State::GLState::ITextureObject>& GetTextureObjectByTarget(
         TextureUploadTarget textureUploadTarget, TextureTarget textureTarget) {
         if (TextureImpl::IsProxyTextureTarget(textureUploadTarget)) {
-            auto& textureObject =
-                TextureImpl::pProxyTextureManager->GetProxyTextureObject(textureUploadTarget);
+            auto& textureObject = TextureImpl::pProxyTextureManager->GetProxyTextureObject(textureUploadTarget);
             if (!TextureImpl::ValidateTextureObject(textureObject)) return nullTextureObject;
             return textureObject;
         } else {
@@ -1724,10 +1698,9 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (IsLegalTextureParameterTarget(effectiveTarget)) return true;
         MG_State::pGLContext->RecordError(
             ErrorCode::InvalidEnum,
-            MakeUnique<GenericErrorInfo>(
-                "MG_Impl/GLImpl", caller,
-                std::format("The effective target {} does not accept texture parameters.",
-                            MG_Util::ConvertGLEnumToString(effectiveTarget))));
+            MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
+                                         std::format("The effective target {} does not accept texture parameters.",
+                                                     MG_Util::ConvertGLEnumToString(effectiveTarget))));
         return false;
     }
 
@@ -1883,8 +1856,8 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (!TextureImpl::ValidateTextureSubImageOffsets(textureObject, xoffset, width, yoffset, height, zoffset,
                                                          depth))
             return;
-        if (!TextureImpl::ValidateTextureInternalFormatCompatibleWithInput(textureInputFormat, textureObject->GetFormat(),
-                                                                           texturePixelDataType))
+        if (!TextureImpl::ValidateTextureInternalFormatCompatibleWithInput(
+                textureInputFormat, textureObject->GetFormat(), texturePixelDataType))
             return;
         if (!ValidatePixelUnpackBufferSource(pixels, textureInputFormat, texturePixelDataType, {width, height, depth},
                                              __func__))
@@ -1905,8 +1878,8 @@ namespace MobileGL::MG_Impl::GLImpl {
             MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::PixelUnpack).GetBoundObject();
         if (pixelUnpackBufferObject) {
             MGL_SYNC_PIXEL_UNPACK_SOURCE(pixelUnpackBufferObject);
-            originalPixels = reinterpret_cast<const char*>(pixelUnpackBufferObject->MappedData()) +
-                             reinterpret_cast<SizeT>(pixels);
+            originalPixels =
+                reinterpret_cast<const char*>(pixelUnpackBufferObject->MappedData()) + reinterpret_cast<SizeT>(pixels);
         }
         if (!originalPixels) {
             MG_State::pGLContext->RecordError(
@@ -1945,10 +1918,9 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (destData) {
             for (GLsizei z = 0; z < depth; ++z) {
                 for (GLsizei y = 0; y < height; ++y) {
-                    const SizeT destRowOffset =
-                        static_cast<SizeT>(zoffset + z) * destSliceSize +
-                        static_cast<SizeT>(yoffset + y) * destRowSize +
-                        static_cast<SizeT>(xoffset) * internalBpp;
+                    const SizeT destRowOffset = static_cast<SizeT>(zoffset + z) * destSliceSize +
+                                                static_cast<SizeT>(yoffset + y) * destRowSize +
+                                                static_cast<SizeT>(xoffset) * internalBpp;
                     const SizeT srcRowOffset =
                         static_cast<SizeT>(z) * srcSliceSize + static_cast<SizeT>(y) * srcRowSize;
                     Memcpy(destData + destRowOffset, srcData + srcRowOffset, srcRowSize);
@@ -2028,8 +2000,8 @@ namespace MobileGL::MG_Impl::GLImpl {
             MGLOG_D("TexSubImage2D_State: Using Pixel Unpack Buffer Object ID: %u",
                     pixelUnpackBufferObject->GetExternalIndex());
             MGL_SYNC_PIXEL_UNPACK_SOURCE(pixelUnpackBufferObject);
-            originalPixels = reinterpret_cast<const char*>(pixelUnpackBufferObject->MappedData()) +
-                             reinterpret_cast<SizeT>(pixels);
+            originalPixels =
+                reinterpret_cast<const char*>(pixelUnpackBufferObject->MappedData()) + reinterpret_cast<SizeT>(pixels);
         }
 
         if (!originalPixels) {
@@ -2045,8 +2017,8 @@ namespace MobileGL::MG_Impl::GLImpl {
             {width, height, 1}, false, inputSize);
 
         if (!processedPixels || inputSize == 0) {
-            MGLOG_E_ONCE("TexSubImage2D_State: Failed to process pixel data for TexSubImage2D, width: %d, height: %d", width,
-                    height);
+            MGLOG_E_ONCE("TexSubImage2D_State: Failed to process pixel data for TexSubImage2D, width: %d, height: %d",
+                         width, height);
             if (processedPixels) free(processedPixels);
             return;
         }
@@ -2103,8 +2075,8 @@ namespace MobileGL::MG_Impl::GLImpl {
         auto& textureObject = bindingSlot.GetBoundObject();
         if (!TextureImpl::ValidateTextureObject(textureObject)) return;
         if (!TextureImpl::ValidateTextureSubImageOffsets(textureObject, xoffset, width)) return;
-        if (!TextureImpl::ValidateTextureInternalFormatCompatibleWithInput(textureInputFormat, textureObject->GetFormat(),
-                                                                           texturePixelDataType))
+        if (!TextureImpl::ValidateTextureInternalFormatCompatibleWithInput(
+                textureInputFormat, textureObject->GetFormat(), texturePixelDataType))
             return;
         if (!ValidatePixelUnpackBufferSource(pixels, textureInputFormat, texturePixelDataType, {width, 1, 1}, __func__))
             return;
@@ -2118,8 +2090,8 @@ namespace MobileGL::MG_Impl::GLImpl {
             MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::PixelUnpack).GetBoundObject();
         if (pixelUnpackBufferObject) {
             MGL_SYNC_PIXEL_UNPACK_SOURCE(pixelUnpackBufferObject);
-            originalPixels = reinterpret_cast<const char*>(pixelUnpackBufferObject->MappedData()) +
-                             reinterpret_cast<SizeT>(pixels);
+            originalPixels =
+                reinterpret_cast<const char*>(pixelUnpackBufferObject->MappedData()) + reinterpret_cast<SizeT>(pixels);
         }
         if (!originalPixels) {
             MG_State::pGLContext->RecordError(
@@ -2622,8 +2594,8 @@ namespace MobileGL::MG_Impl::GLImpl {
             MGLOG_D("%s: Using Pixel Unpack Buffer Object ID: %u", __func__,
                     pixelUnpackBufferObject->GetExternalIndex());
             MGL_SYNC_PIXEL_UNPACK_SOURCE(pixelUnpackBufferObject);
-            originalPixels = reinterpret_cast<const char*>(pixelUnpackBufferObject->MappedData()) +
-                             reinterpret_cast<SizeT>(pixels);
+            originalPixels =
+                reinterpret_cast<const char*>(pixelUnpackBufferObject->MappedData()) + reinterpret_cast<SizeT>(pixels);
         }
 
         MOBILEGL_ASSERT(nullptr != static_cast<MG_State::GLState::TextureObjectMipmap*>(textureObject.get()),
@@ -2671,8 +2643,8 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (processedPixels && imageSize > 0) {
             if (imageSize != internalBytes) {
                 MGLOG_W_ONCE("%s: Processed pixel data size (%zu) does not match expected size (%zu). "
-                        "This may indicate an alignment or processing issue.",
-                        __func__, imageSize, internalBytes);
+                             "This may indicate an alignment or processing issue.",
+                             __func__, imageSize, internalBytes);
             }
 
             const SizeT copySize = std::min(imageSize, internalBytes);
@@ -2770,8 +2742,8 @@ namespace MobileGL::MG_Impl::GLImpl {
             MGLOG_D("%s: Using Pixel Unpack Buffer Object ID: %u", __func__,
                     pixelUnpackBufferObject->GetExternalIndex());
             MGL_SYNC_PIXEL_UNPACK_SOURCE(pixelUnpackBufferObject);
-            originalPixels = reinterpret_cast<const char*>(pixelUnpackBufferObject->MappedData()) +
-                             reinterpret_cast<SizeT>(pixels);
+            originalPixels =
+                reinterpret_cast<const char*>(pixelUnpackBufferObject->MappedData()) + reinterpret_cast<SizeT>(pixels);
         }
 
         MOBILEGL_ASSERT(nullptr != static_cast<MG_State::GLState::TextureObjectMipmap*>(textureObject.get()),
@@ -2784,8 +2756,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         } else {
             MGLOG_D("%s: Allocating %d bytes at mip %d", __func__, internalBytes, level);
             DiscardMipmapChainOnBaseRespecification(textureMipmapObject, textureUploadTarget, level);
-            textureMipmapObject->AllocateStorage(textureUploadTarget, level,
-                                                 {{width, height, 1}, internalBytes});
+            textureMipmapObject->AllocateStorage(textureUploadTarget, level, {{width, height, 1}, internalBytes});
             // GL 4.6 core 8.5: a SPECIFIC compressed internalformat (unlike a generic
             // GL_COMPRESSED_* one, where the implementation is free to choose) commits the
             // level to that format - GL_TEXTURE_COMPRESSED must then answer true for it and
@@ -2825,8 +2796,8 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (processedPixels && imageSize > 0) {
             if (imageSize != internalBytes) {
                 MGLOG_W_ONCE("TexImage2D_State: Processed pixel data size (%zu) does not match expected size (%zu). "
-                        "This may indicate an alignment or processing issue.",
-                        imageSize, internalBytes);
+                             "This may indicate an alignment or processing issue.",
+                             imageSize, internalBytes);
             }
 
             const SizeT copySize = std::min(imageSize, internalBytes);
@@ -2889,8 +2860,8 @@ namespace MobileGL::MG_Impl::GLImpl {
             MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::PixelUnpack).GetBoundObject();
         if (pixelUnpackBufferObject) {
             MGL_SYNC_PIXEL_UNPACK_SOURCE(pixelUnpackBufferObject);
-            originalPixels = reinterpret_cast<const char*>(pixelUnpackBufferObject->MappedData()) +
-                             reinterpret_cast<SizeT>(pixels);
+            originalPixels =
+                reinterpret_cast<const char*>(pixelUnpackBufferObject->MappedData()) + reinterpret_cast<SizeT>(pixels);
         }
 
         MOBILEGL_ASSERT(nullptr != static_cast<MG_State::GLState::TextureObjectMipmap*>(textureObject.get()),
@@ -3038,8 +3009,8 @@ namespace MobileGL::MG_Impl::GLImpl {
                     MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller, "size must be greater than zero."));
                 return;
             }
-            const Int alignment = std::max(
-                1, MG_Backend::pActiveBackendObject->GetDynamicParameters().TextureBufferOffsetAlignment);
+            const Int alignment =
+                std::max(1, MG_Backend::pActiveBackendObject->GetDynamicParameters().TextureBufferOffsetAlignment);
             if (offset % alignment != 0) {
                 MG_State::pGLContext->RecordError(
                     ErrorCode::InvalidValue,
@@ -3146,9 +3117,9 @@ namespace MobileGL::MG_Impl::GLImpl {
             auto& activeUnit = MG_State::pGLContext->GetTextureUnitObject(MG_State::pGLContext->GetActiveTextureUnit());
             auto& bindingSlot = activeUnit.GetBindingSlot(textureTarget);
             Bool isProxy = TextureImpl::IsProxyTextureTarget(textureUploadTarget);
-            auto& textureObject =
-                isProxy ? TextureImpl::pProxyTextureManager->GetProxyTextureObject(textureUploadTarget)
-                        : bindingSlot.GetBoundObject();
+            auto& textureObject = isProxy
+                                      ? TextureImpl::pProxyTextureManager->GetProxyTextureObject(textureUploadTarget)
+                                      : bindingSlot.GetBoundObject();
 
             if (!TextureImpl::ValidateTextureObject(textureObject)) return;
 
@@ -3178,9 +3149,9 @@ namespace MobileGL::MG_Impl::GLImpl {
             auto& activeUnit = MG_State::pGLContext->GetTextureUnitObject(MG_State::pGLContext->GetActiveTextureUnit());
             auto& bindingSlot = activeUnit.GetBindingSlot(textureTarget);
             Bool isProxy = TextureImpl::IsProxyTextureTarget(textureUploadTarget);
-            auto& textureObject =
-                isProxy ? TextureImpl::pProxyTextureManager->GetProxyTextureObject(textureUploadTarget)
-                        : bindingSlot.GetBoundObject();
+            auto& textureObject = isProxy
+                                      ? TextureImpl::pProxyTextureManager->GetProxyTextureObject(textureUploadTarget)
+                                      : bindingSlot.GetBoundObject();
 
             if (!TextureImpl::ValidateTextureObject(textureObject)) return;
 
@@ -3206,9 +3177,8 @@ namespace MobileGL::MG_Impl::GLImpl {
         auto& activeUnit = MG_State::pGLContext->GetTextureUnitObject(MG_State::pGLContext->GetActiveTextureUnit());
         auto& bindingSlot = activeUnit.GetBindingSlot(textureTarget);
         Bool isProxy = TextureImpl::IsProxyTextureTarget(textureUploadTarget);
-        auto& textureObject =
-            isProxy ? TextureImpl::pProxyTextureManager->GetProxyTextureObject(textureUploadTarget)
-                    : bindingSlot.GetBoundObject();
+        auto& textureObject = isProxy ? TextureImpl::pProxyTextureManager->GetProxyTextureObject(textureUploadTarget)
+                                      : bindingSlot.GetBoundObject();
 
         if (!TextureImpl::ValidateTextureObject(textureObject)) return false;
 
@@ -3314,8 +3284,8 @@ namespace MobileGL::MG_Impl::GLImpl {
             break;
         case GL_TEXTURE_SWIZZLE_R:
             if (params) {
-                *params = static_cast<GLint>(
-                    MG_Util::ConvertTextureSwizzleParamToGLEnum(textureObject->GetSwizzleParam(TextureSwizzleParam::Red)));
+                *params = static_cast<GLint>(MG_Util::ConvertTextureSwizzleParamToGLEnum(
+                    textureObject->GetSwizzleParam(TextureSwizzleParam::Red)));
             }
             break;
         case GL_TEXTURE_SWIZZLE_G:
@@ -3326,8 +3296,8 @@ namespace MobileGL::MG_Impl::GLImpl {
             break;
         case GL_TEXTURE_SWIZZLE_B:
             if (params) {
-                *params = static_cast<GLint>(
-                    MG_Util::ConvertTextureSwizzleParamToGLEnum(textureObject->GetSwizzleParam(TextureSwizzleParam::Blue)));
+                *params = static_cast<GLint>(MG_Util::ConvertTextureSwizzleParamToGLEnum(
+                    textureObject->GetSwizzleParam(TextureSwizzleParam::Blue)));
             }
             break;
         case GL_TEXTURE_SWIZZLE_A:
@@ -3404,9 +3374,8 @@ namespace MobileGL::MG_Impl::GLImpl {
         auto& activeUnit = MG_State::pGLContext->GetTextureUnitObject(MG_State::pGLContext->GetActiveTextureUnit());
         auto& bindingSlot = activeUnit.GetBindingSlot(textureTarget);
         Bool isProxy = TextureImpl::IsProxyTextureTarget(textureUploadTarget);
-        auto& textureObject =
-            isProxy ? TextureImpl::pProxyTextureManager->GetProxyTextureObject(textureUploadTarget)
-                    : bindingSlot.GetBoundObject();
+        auto& textureObject = isProxy ? TextureImpl::pProxyTextureManager->GetProxyTextureObject(textureUploadTarget)
+                                      : bindingSlot.GetBoundObject();
 
         if (!TextureImpl::ValidateTextureObject(textureObject)) return;
 
@@ -3487,8 +3456,8 @@ namespace MobileGL::MG_Impl::GLImpl {
             break;
         case GL_TEXTURE_SWIZZLE_R:
             if (params) {
-                *params = static_cast<GLfloat>(
-                    MG_Util::ConvertTextureSwizzleParamToGLEnum(textureObject->GetSwizzleParam(TextureSwizzleParam::Red)));
+                *params = static_cast<GLfloat>(MG_Util::ConvertTextureSwizzleParamToGLEnum(
+                    textureObject->GetSwizzleParam(TextureSwizzleParam::Red)));
             }
             break;
         case GL_TEXTURE_SWIZZLE_G:
@@ -3595,9 +3564,8 @@ namespace MobileGL::MG_Impl::GLImpl {
         auto& activeUnit = MG_State::pGLContext->GetTextureUnitObject(MG_State::pGLContext->GetActiveTextureUnit());
         auto& bindingSlot = activeUnit.GetBindingSlot(textureTarget);
         Bool isProxy = TextureImpl::IsProxyTextureTarget(textureUploadTarget);
-        auto& textureObject =
-            isProxy ? TextureImpl::pProxyTextureManager->GetProxyTextureObject(textureUploadTarget)
-                    : bindingSlot.GetBoundObject();
+        auto& textureObject = isProxy ? TextureImpl::pProxyTextureManager->GetProxyTextureObject(textureUploadTarget)
+                                      : bindingSlot.GetBoundObject();
 
         if (!TextureImpl::ValidateTextureObject(textureObject)) return;
 
@@ -3696,9 +3664,8 @@ namespace MobileGL::MG_Impl::GLImpl {
             break;
         case GL_TEXTURE_COMPRESSED:
             if (params) {
-                *params =
-                    (GetCompressedLevelFormat(textureObject, textureUploadTarget, level) != GL_NONE) ? GL_TRUE
-                                                                                                     : GL_FALSE;
+                *params = (GetCompressedLevelFormat(textureObject, textureUploadTarget, level) != GL_NONE) ? GL_TRUE
+                                                                                                           : GL_FALSE;
             }
             break;
         case GL_TEXTURE_COMPRESSED_IMAGE_SIZE: {
@@ -3771,9 +3738,8 @@ namespace MobileGL::MG_Impl::GLImpl {
         auto& activeUnit = MG_State::pGLContext->GetTextureUnitObject(MG_State::pGLContext->GetActiveTextureUnit());
         auto& bindingSlot = activeUnit.GetBindingSlot(textureTarget);
         Bool isProxy = TextureImpl::IsProxyTextureTarget(textureUploadTarget);
-        auto& textureObject =
-            isProxy ? TextureImpl::pProxyTextureManager->GetProxyTextureObject(textureUploadTarget)
-                    : bindingSlot.GetBoundObject();
+        auto& textureObject = isProxy ? TextureImpl::pProxyTextureManager->GetProxyTextureObject(textureUploadTarget)
+                                      : bindingSlot.GetBoundObject();
 
         if (!TextureImpl::ValidateTextureObject(textureObject)) return;
 
@@ -4066,7 +4032,8 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (mipmapTexture == nullptr) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,
-                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller, "The destination texture has no mipmap storage."));
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
+                                             "The destination texture has no mipmap storage."));
             return false;
         }
         const IntVec3 levelSize = mipmapTexture->GetMipmapTexelSize(uploadTarget, static_cast<Uint>(level));
@@ -4076,8 +4043,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (levelSize.x() <= 0 || levelSize.y() <= 0 || levelSize.z() <= 0) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,
-                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
-                                             "The requested texture level has no storage."));
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller, "The requested texture level has no storage."));
             return false;
         }
         // Signed 64-bit sums: xoffset and width are both GLint and an application may pass values
@@ -4091,8 +4057,8 @@ namespace MobileGL::MG_Impl::GLImpl {
                 ErrorCode::InvalidValue,
                 MakeUnique<GenericErrorInfo>(
                     "MG_Impl/GLImpl", caller,
-                    std::format("The destination region does not lie inside level {} ({}x{}x{}).", level,
-                                levelSize.x(), levelSize.y(), levelSize.z())));
+                    std::format("The destination region does not lie inside level {} ({}x{}x{}).", level, levelSize.x(),
+                                levelSize.y(), levelSize.z())));
             return false;
         }
         return true;
@@ -4131,18 +4097,18 @@ namespace MobileGL::MG_Impl::GLImpl {
             if (zoffset < 0 || static_cast<SizeT>(zoffset) >= faceCount) {
                 MG_State::pGLContext->RecordError(
                     ErrorCode::InvalidValue,
-                    MakeUnique<GenericErrorInfo>(
-                        "MG_Impl/GLImpl", caller,
-                        "zoffset selects the cube map face and must be in [0, " + std::to_string(faceCount) + ")."));
+                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
+                                                 "zoffset selects the cube map face and must be in [0, " +
+                                                     std::to_string(faceCount) + ")."));
                 return;
             }
-            uploadTarget = static_cast<TextureUploadTarget>(
-                static_cast<SizeT>(TextureUploadTarget::CubeMapPositiveX) + static_cast<SizeT>(zoffset));
+            uploadTarget = static_cast<TextureUploadTarget>(static_cast<SizeT>(TextureUploadTarget::CubeMapPositiveX) +
+                                                            static_cast<SizeT>(zoffset));
             sliceOffset = 0;
         }
 
-        if (!ValidateCopySubImageRegionAtLevel(textureObject, uploadTarget, level, xoffset, yoffset, sliceOffset,
-                                               width, height, /*depth=*/1, caller)) {
+        if (!ValidateCopySubImageRegionAtLevel(textureObject, uploadTarget, level, xoffset, yoffset, sliceOffset, width,
+                                               height, /*depth=*/1, caller)) {
             return;
         }
         if (!FramebufferImpl::ValidateReadFramebufferForCopy(caller)) return;
@@ -4222,9 +4188,8 @@ namespace MobileGL::MG_Impl::GLImpl {
         MG_Backend::gBackendFunctionsTable.GL.CopyTexSubImage2D(target, level, xoffset, yoffset, x, y, width, height);
     }
 
-    void CopyImageSubData_Backend(const MG_Backend::CopyImageEndpoint& src,
-                                  GLenum srcTarget, GLint srcLevel, GLint srcX, GLint srcY, GLint srcZ,
-                                  const MG_Backend::CopyImageEndpoint& dst,
+    void CopyImageSubData_Backend(const MG_Backend::CopyImageEndpoint& src, GLenum srcTarget, GLint srcLevel,
+                                  GLint srcX, GLint srcY, GLint srcZ, const MG_Backend::CopyImageEndpoint& dst,
                                   GLenum dstTarget, GLint dstLevel, GLint dstX, GLint dstY, GLint dstZ,
                                   GLsizei srcWidth, GLsizei srcHeight, GLsizei srcDepth) {
         auto copyImageSubData = MG_Backend::gBackendFunctionsTable.GL.CopyImageSubData;
@@ -4236,8 +4201,8 @@ namespace MobileGL::MG_Impl::GLImpl {
             return;
         }
         MGP_FILL(CopyImageSubData);
-        copyImageSubData(src, srcTarget, srcLevel, srcX, srcY, srcZ, dst, dstTarget, dstLevel, dstX,
-                         dstY, dstZ, srcWidth, srcHeight, srcDepth);
+        copyImageSubData(src, srcTarget, srcLevel, srcX, srcY, srcZ, dst, dstTarget, dstLevel, dstX, dstY, dstZ,
+                         srcWidth, srcHeight, srcDepth);
     }
 
     namespace {
@@ -4263,10 +4228,9 @@ namespace MobileGL::MG_Impl::GLImpl {
             }
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidEnum,
-                MakeUnique<GenericErrorInfo>(
-                    "MG_Impl/GLImpl", "ValidateCopyImageSubData_State",
-                    std::format("{} is not a target glCopyImageSubData accepts as the {}.",
-                                MG_Util::ConvertGLEnumToString(target), endpointName)));
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "ValidateCopyImageSubData_State",
+                                             std::format("{} is not a target glCopyImageSubData accepts as the {}.",
+                                                         MG_Util::ConvertGLEnumToString(target), endpointName)));
             return false;
         }
 
@@ -4283,8 +4247,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         // the ~30 entry points that reach it through a BOUND object (where the name was never
         // in question and the fault is the binding), so this is a local rule rather than a
         // change to the helper.
-        Bool ValidateCopyImageObjectExists(const MG_Backend::CopyImageEndpoint& endpoint,
-                                           const char* endpointName) {
+        Bool ValidateCopyImageObjectExists(const MG_Backend::CopyImageEndpoint& endpoint, const char* endpointName) {
             if (endpoint.Exists()) return true;
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidValue,
@@ -4451,13 +4414,11 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
     } // namespace
 
-    Bool ValidateCopyImageSubData_State(const MG_Backend::CopyImageEndpoint& src,
-                                        GLenum srcTarget, GLint srcLevel, GLint srcX, GLint srcY, GLint srcZ,
-                                        const MG_Backend::CopyImageEndpoint& dst,
+    Bool ValidateCopyImageSubData_State(const MG_Backend::CopyImageEndpoint& src, GLenum srcTarget, GLint srcLevel,
+                                        GLint srcX, GLint srcY, GLint srcZ, const MG_Backend::CopyImageEndpoint& dst,
                                         GLenum dstTarget, GLint dstLevel, GLint dstX, GLint dstY, GLint dstZ,
                                         GLsizei srcWidth, GLsizei srcHeight, GLsizei srcDepth) {
-        if (!ValidateCopyImageObjectExists(src, "source") ||
-            !ValidateCopyImageObjectExists(dst, "destination")) {
+        if (!ValidateCopyImageObjectExists(src, "source") || !ValidateCopyImageObjectExists(dst, "destination")) {
             return false;
         }
         // GL_RENDERBUFFER has no TextureTarget to convert to, and it needs none: it is its own
@@ -4480,8 +4441,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             !ValidateCopyImageTargetMatchesObject(dst.Texture, dstTextureTarget, "destination")) {
             return false;
         }
-        if (!TextureImpl::ValidateTextureLevelNumber(srcLevel) ||
-            !TextureImpl::ValidateTextureLevelNumber(dstLevel)) {
+        if (!TextureImpl::ValidateTextureLevelNumber(srcLevel) || !TextureImpl::ValidateTextureLevelNumber(dstLevel)) {
             return false;
         }
         // ValidateTextureLevelNumber only bounds the index by GL_MAX_TEXTURE_SIZE; it cannot
@@ -4498,8 +4458,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (srcWidth < 0 || srcHeight < 0 || srcDepth < 0) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidValue,
-                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
-                                             "Copy dimensions must be non-negative."));
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "Copy dimensions must be non-negative."));
             return false;
         }
         if (srcWidth == 0 || srcHeight == 0 || srcDepth == 0) {
@@ -4515,8 +4474,7 @@ namespace MobileGL::MG_Impl::GLImpl {
                 ErrorCode::InvalidOperation,
                 MakeUnique<GenericErrorInfo>(
                     "MG_Impl/GLImpl", __func__,
-                    std::format("The two images have different sample counts ({} vs. {}).",
-                                srcSamples, dstSamples)));
+                    std::format("The two images have different sample counts ({} vs. {}).", srcSamples, dstSamples)));
             return false;
         }
         // 18.3.2: both images must be complete. An incomplete one has no defined texels to copy
@@ -4543,10 +4501,10 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
         const IntVec3 srcLevelSize = GetCopyImageEndpointLevelSize(src, srcUploadTarget, srcLevel);
         const IntVec3 dstLevelSize = GetCopyImageEndpointLevelSize(dst, dstUploadTarget, dstLevel);
-        if (!TextureImpl::ValidateCopyImageBlockAlignment(srcBlock, srcX, srcY, srcWidth, srcHeight,
-                                                          srcLevelSize.x(), srcLevelSize.y(), "source") ||
-            !TextureImpl::ValidateCopyImageBlockAlignment(dstBlock, dstX, dstY, srcWidth, srcHeight,
-                                                          dstLevelSize.x(), dstLevelSize.y(), "destination")) {
+        if (!TextureImpl::ValidateCopyImageBlockAlignment(srcBlock, srcX, srcY, srcWidth, srcHeight, srcLevelSize.x(),
+                                                          srcLevelSize.y(), "source") ||
+            !TextureImpl::ValidateCopyImageBlockAlignment(dstBlock, dstX, dstY, srcWidth, srcHeight, dstLevelSize.x(),
+                                                          dstLevelSize.y(), "destination")) {
             return false;
         }
         // One region extent, measured against both images: GL 4.6 core 18.3.2 gives the copy a
@@ -4566,9 +4524,8 @@ namespace MobileGL::MG_Impl::GLImpl {
         const auto textureTarget = MG_Util::ConvertGLEnumToTextureTarget(target);
         if (textureTarget != TextureTarget::Texture1D) {
             MG_State::pGLContext->RecordError(
-                ErrorCode::InvalidEnum,
-                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
-                                             "glCopyTexSubImage1D requires GL_TEXTURE_1D."));
+                ErrorCode::InvalidEnum, MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                                                     "glCopyTexSubImage1D requires GL_TEXTURE_1D."));
             return;
         }
         const auto textureUploadTarget = MG_Util::ConvertGLEnumToTextureUploadTarget(target);
@@ -4694,18 +4651,16 @@ namespace MobileGL::MG_Impl::GLImpl {
         // accepts one.
         if (TextureImpl::IsProxyTextureTarget(textureUploadTarget)) {
             MG_State::pGLContext->RecordError(
-                ErrorCode::InvalidEnum,
-                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
-                                             "A proxy target has no texture image to modify."));
+                ErrorCode::InvalidEnum, MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                                                     "A proxy target has no texture image to modify."));
             return;
         }
         if (!TextureImpl::ValidateTextureLevelNumber(level)) return;
         if (!TextureImpl::ValidateTextureLevelWithUploadTarget(textureUploadTarget, level)) return;
         if (width < 0 || height < 0 || depth < 0) {
             MG_State::pGLContext->RecordError(
-                ErrorCode::InvalidValue,
-                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
-                                             "width, height and depth must be non-negative."));
+                ErrorCode::InvalidValue, MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                                                      "width, height and depth must be non-negative."));
             return;
         }
         if (compressedInfo.blockWidth == 0) {
@@ -4735,7 +4690,8 @@ namespace MobileGL::MG_Impl::GLImpl {
             return;
         }
 
-        const IntVec3 levelSize = textureMipmapObject->GetMipmapTexelSize(textureUploadTarget, static_cast<Uint>(level));
+        const IntVec3 levelSize =
+            textureMipmapObject->GetMipmapTexelSize(textureUploadTarget, static_cast<Uint>(level));
         const Int levelDepth = std::max(levelSize.z(), 1);
         // Subtractions rather than sums for the reason CompressedTexSubImage2D_State spells out:
         // offset + extent are both application-supplied GLints and a signed overflow is undefined.
@@ -4753,10 +4709,10 @@ namespace MobileGL::MG_Impl::GLImpl {
         // each slice is its own block grid.
         const Int blockWidth = static_cast<Int>(compressedInfo.blockWidth);
         const Int blockHeight = static_cast<Int>(compressedInfo.blockHeight);
-        const Bool alignedX = (xoffset % blockWidth == 0) &&
-                              (width % blockWidth == 0 || xoffset + width == levelSize.x());
-        const Bool alignedY = (yoffset % blockHeight == 0) &&
-                              (height % blockHeight == 0 || yoffset + height == levelSize.y());
+        const Bool alignedX =
+            (xoffset % blockWidth == 0) && (width % blockWidth == 0 || xoffset + width == levelSize.x());
+        const Bool alignedY =
+            (yoffset % blockHeight == 0) && (height % blockHeight == 0 || yoffset + height == levelSize.y());
         if (!alignedX || !alignedY) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,
@@ -4812,16 +4768,16 @@ namespace MobileGL::MG_Impl::GLImpl {
         Memcpy(blob.data(), existing, blobSize);
 
         const SizeT blockByteSize = compressedInfo.blockByteSize;
-        const SizeT levelBlocksX = (static_cast<SizeT>(levelSize.x()) + compressedInfo.blockWidth - 1) /
-                                   compressedInfo.blockWidth;
-        const SizeT levelBlocksY = (static_cast<SizeT>(levelSize.y()) + compressedInfo.blockHeight - 1) /
-                                   compressedInfo.blockHeight;
+        const SizeT levelBlocksX =
+            (static_cast<SizeT>(levelSize.x()) + compressedInfo.blockWidth - 1) / compressedInfo.blockWidth;
+        const SizeT levelBlocksY =
+            (static_cast<SizeT>(levelSize.y()) + compressedInfo.blockHeight - 1) / compressedInfo.blockHeight;
         const SizeT levelRowBytes = levelBlocksX * blockByteSize;
         const SizeT levelSliceBytes = levelRowBytes * levelBlocksY;
-        const SizeT regionBlocksX = (static_cast<SizeT>(width) + compressedInfo.blockWidth - 1) /
-                                    compressedInfo.blockWidth;
-        const SizeT regionBlocksY = (static_cast<SizeT>(height) + compressedInfo.blockHeight - 1) /
-                                    compressedInfo.blockHeight;
+        const SizeT regionBlocksX =
+            (static_cast<SizeT>(width) + compressedInfo.blockWidth - 1) / compressedInfo.blockWidth;
+        const SizeT regionBlocksY =
+            (static_cast<SizeT>(height) + compressedInfo.blockHeight - 1) / compressedInfo.blockHeight;
         const SizeT firstBlockX = static_cast<SizeT>(xoffset) / compressedInfo.blockWidth;
         const SizeT firstBlockY = static_cast<SizeT>(yoffset) / compressedInfo.blockHeight;
         const SizeT regionRowBytes = regionBlocksX * blockByteSize;
@@ -4864,9 +4820,8 @@ namespace MobileGL::MG_Impl::GLImpl {
         // accepts one.
         if (TextureImpl::IsProxyTextureTarget(textureUploadTarget)) {
             MG_State::pGLContext->RecordError(
-                ErrorCode::InvalidEnum,
-                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
-                                             "A proxy target has no texture image to modify."));
+                ErrorCode::InvalidEnum, MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                                                     "A proxy target has no texture image to modify."));
             return;
         }
         if (!TextureImpl::ValidateTextureLevelNumber(level)) return;
@@ -4904,7 +4859,8 @@ namespace MobileGL::MG_Impl::GLImpl {
             return;
         }
 
-        const IntVec3 levelSize = textureMipmapObject->GetMipmapTexelSize(textureUploadTarget, static_cast<Uint>(level));
+        const IntVec3 levelSize =
+            textureMipmapObject->GetMipmapTexelSize(textureUploadTarget, static_cast<Uint>(level));
         // Written as a subtraction rather than `xoffset + width > levelSize.x()`: both operands
         // are application-supplied GLints, so the sum is free to overflow, and a signed overflow
         // is undefined behaviour that a compiler may resolve by assuming the check passes.
@@ -4921,10 +4877,10 @@ namespace MobileGL::MG_Impl::GLImpl {
         // and must either be a whole number of blocks wide/high or run to the image's edge.
         const Int blockWidth = static_cast<Int>(compressedInfo.blockWidth);
         const Int blockHeight = static_cast<Int>(compressedInfo.blockHeight);
-        const Bool alignedX = (xoffset % blockWidth == 0) &&
-                              (width % blockWidth == 0 || xoffset + width == levelSize.x());
-        const Bool alignedY = (yoffset % blockHeight == 0) &&
-                              (height % blockHeight == 0 || yoffset + height == levelSize.y());
+        const Bool alignedX =
+            (xoffset % blockWidth == 0) && (width % blockWidth == 0 || xoffset + width == levelSize.x());
+        const Bool alignedY =
+            (yoffset % blockHeight == 0) && (height % blockHeight == 0 || yoffset + height == levelSize.y());
         if (!alignedX || !alignedY) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,
@@ -4989,13 +4945,13 @@ namespace MobileGL::MG_Impl::GLImpl {
         Memcpy(blob.data(), existing, blobSize);
 
         const SizeT blockByteSize = compressedInfo.blockByteSize;
-        const SizeT levelBlocksX = (static_cast<SizeT>(levelSize.x()) + compressedInfo.blockWidth - 1) /
-                                   compressedInfo.blockWidth;
+        const SizeT levelBlocksX =
+            (static_cast<SizeT>(levelSize.x()) + compressedInfo.blockWidth - 1) / compressedInfo.blockWidth;
         const SizeT levelRowBytes = levelBlocksX * blockByteSize;
-        const SizeT regionBlocksX = (static_cast<SizeT>(width) + compressedInfo.blockWidth - 1) /
-                                    compressedInfo.blockWidth;
-        const SizeT regionBlocksY = (static_cast<SizeT>(height) + compressedInfo.blockHeight - 1) /
-                                    compressedInfo.blockHeight;
+        const SizeT regionBlocksX =
+            (static_cast<SizeT>(width) + compressedInfo.blockWidth - 1) / compressedInfo.blockWidth;
+        const SizeT regionBlocksY =
+            (static_cast<SizeT>(height) + compressedInfo.blockHeight - 1) / compressedInfo.blockHeight;
         const SizeT firstBlockX = static_cast<SizeT>(xoffset) / compressedInfo.blockWidth;
         const SizeT firstBlockY = static_cast<SizeT>(yoffset) / compressedInfo.blockHeight;
         const SizeT regionRowBytes = regionBlocksX * blockByteSize;
@@ -5257,8 +5213,9 @@ namespace MobileGL::MG_Impl::GLImpl {
         // layer's MAX_TEXTURE_IMAGE_UNITS capacity.
         Int maxCombinedUnits = static_cast<Int>(MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS);
         if (MG_Backend::pActiveBackendObject) {
-            maxCombinedUnits = std::min(
-                maxCombinedUnits, MG_Backend::pActiveBackendObject->GetDynamicParameters().MaxCombinedTextureImageUnits);
+            maxCombinedUnits =
+                std::min(maxCombinedUnits,
+                         MG_Backend::pActiveBackendObject->GetDynamicParameters().MaxCombinedTextureImageUnits);
         }
         if (texture < GL_TEXTURE0 || static_cast<Int>(texture - GL_TEXTURE0) >= maxCombinedUnits) {
             MG_State::pGLContext->RecordError(
@@ -5300,8 +5257,7 @@ namespace MobileGL::MG_Impl::GLImpl {
     // single-face read has any reason to pass.
     Bool ValidateTextureImageQuery(const SharedPtr<MG_State::GLState::ITextureObject>& textureObject, GLint level,
                                    TextureInputFormat textureInputFormat, TexturePixelDataType texturePixelDataType,
-                                   GLsizei bufSize, const void* pixels, const char* caller,
-                                   SizeT imagesQueried = 0) {
+                                   GLsizei bufSize, const void* pixels, const char* caller, SizeT imagesQueried = 0) {
         if (!TextureImpl::ValidateTextureObject(textureObject)) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,
@@ -5316,8 +5272,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             target == TextureTarget::TextureBuffer) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,
-                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
-                                             "Texture target has no image to read back."));
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller, "Texture target has no image to read back."));
             return false;
         }
 
@@ -5328,8 +5283,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (target == TextureTarget::TextureRectangle && level != 0) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidValue,
-                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
-                                             "Level must be zero for rectangle textures"));
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller, "Level must be zero for rectangle textures"));
             return false;
         }
 
@@ -5422,9 +5376,9 @@ namespace MobileGL::MG_Impl::GLImpl {
             // imagesQueried says. Pack pixel-store state only ever grows this, so a request
             // rejected here could not have fit under any packing.
             const SizeT imageCount = imagesQueried != 0 ? imagesQueried : uploadTargets.size();
-            const SizeT required = MG_Util::CalculateInputTextureImageSize(textureInputFormat,
-                                                                           texturePixelDataType, texelSize) *
-                                   imageCount;
+            const SizeT required =
+                MG_Util::CalculateInputTextureImageSize(textureInputFormat, texturePixelDataType, texelSize) *
+                imageCount;
 
             if (bufSize >= 0 && static_cast<SizeT>(bufSize) < required) {
                 MG_State::pGLContext->RecordError(
@@ -5493,9 +5447,8 @@ namespace MobileGL::MG_Impl::GLImpl {
         auto& activeUnit = MG_State::pGLContext->GetTextureUnitObject(MG_State::pGLContext->GetActiveTextureUnit());
         auto& bindingSlot = activeUnit.GetBindingSlot(textureTarget);
         Bool isProxy = TextureImpl::IsProxyTextureTarget(textureUploadTarget);
-        auto& textureObject =
-            isProxy ? TextureImpl::pProxyTextureManager->GetProxyTextureObject(textureUploadTarget)
-                    : bindingSlot.GetBoundObject();
+        auto& textureObject = isProxy ? TextureImpl::pProxyTextureManager->GetProxyTextureObject(textureUploadTarget)
+                                      : bindingSlot.GetBoundObject();
 
         // glGetTexImage has no bufSize argument: -1 stands for "no client-side limit". That skips
         // the destination-size branch but NOT the pixel-pack-buffer one, which measures the same
@@ -5503,8 +5456,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         // one image here too, or a PBO sized for the one face this call packs is refused as too
         // small while the copy that follows writes exactly that much into it.
         return ValidateTextureImageQuery(textureObject, level, textureInputFormat, texturePixelDataType, -1, pixels,
-                                         "GetTexImage_State",
-                                         IsCubeMapFaceUploadTarget(textureUploadTarget) ? 1u : 0u);
+                                         "GetTexImage_State", IsCubeMapFaceUploadTarget(textureUploadTarget) ? 1u : 0u);
     }
 
     // What this helper can and cannot answer.
@@ -5559,8 +5511,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         const SizeT rowBytes = static_cast<SizeT>(std::max<GLsizei>(width, 0)) * clientTexelSize;
         const Bool tightRows = (rowBytes % alignment) == 0;
         const Bool noOverrides = packParams.RowLength == 0 && packParams.ImageHeight == 0 &&
-                                 packParams.SkipPixels == 0 && packParams.SkipRows == 0 &&
-                                 packParams.SkipImages == 0;
+                                 packParams.SkipPixels == 0 && packParams.SkipRows == 0 && packParams.SkipImages == 0;
         if (!tightRows || !noOverrides) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,
@@ -5574,8 +5525,8 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     void CopyTextureImageToClientOrPBO_State(const SharedPtr<MG_State::GLState::ITextureObject>& textureObject,
-                                            TextureUploadTarget textureUploadTarget, GLint level, GLenum format,
-                                            GLenum type, GLsizei bufSize, void* pixels, const char* caller) {
+                                             TextureUploadTarget textureUploadTarget, GLint level, GLenum format,
+                                             GLenum type, GLsizei bufSize, void* pixels, const char* caller) {
         if (!textureObject) return;
 
         TextureInputFormat textureInputFormat = MG_Util::ConvertGLEnumToTextureInputFormat(format);
@@ -5692,8 +5643,8 @@ namespace MobileGL::MG_Impl::GLImpl {
     // Shared front half of glTextureStorage1D/2D/3D. `dimension` selects which set of targets the
     // entry point accepts; `depth` is 1 for the lower-dimensional forms.
     static Bool ValidateTextureStorageShape(const SharedPtr<MG_State::GLState::ITextureObject>& textureObject,
-                                            int dimension, GLsizei levels, GLsizei width, GLsizei height,
-                                            GLsizei depth, const char* caller) {
+                                            int dimension, GLsizei levels, GLsizei width, GLsizei height, GLsizei depth,
+                                            const char* caller) {
         if (levels < 1) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidValue,
@@ -5756,8 +5707,8 @@ namespace MobileGL::MG_Impl::GLImpl {
             if (IsCompressedGLInternalFormat(internalformat)) {
                 // After AllocateStorage, which clears the tag. See TexImage1D_State: no compressed
                 // format has a 1D block layout, but glClearTexImage still has to refuse the request.
-                textureMipmapObject->SetMipmapRequestedCompressedFormat(textureUploadTarget,
-                                                                        static_cast<Uint>(level), internalformat);
+                textureMipmapObject->SetMipmapRequestedCompressedFormat(textureUploadTarget, static_cast<Uint>(level),
+                                                                        internalformat);
             }
         }
         // Immutable storage defines exactly `levels` levels; AllocateStorage only grows, so a
@@ -5783,8 +5734,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (textureObject->GetTarget() == TextureTarget::TextureCubeMap && width != height) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidValue,
-                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
-                                             "Cube map immutable storage must be square."));
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "Cube map immutable storage must be square."));
             return;
         }
 
@@ -5821,24 +5771,21 @@ namespace MobileGL::MG_Impl::GLImpl {
                 // (max(1, width >> i), height). Shrinking it made every mipmapped 1D array
                 // level report fewer layers than it has.
                 const Bool heightIsLayerCount = textureObject->GetTarget() == TextureTarget::Texture1DArray;
-                const GLsizei levelHeight =
-                    heightIsLayerCount ? height : std::max<GLsizei>(1, height >> level);
-                const SizeT byteSize =
-                    static_cast<SizeT>(levelWidth) * static_cast<SizeT>(levelHeight) * bytesPerPixel;
+                const GLsizei levelHeight = heightIsLayerCount ? height : std::max<GLsizei>(1, height >> level);
+                const SizeT byteSize = static_cast<SizeT>(levelWidth) * static_cast<SizeT>(levelHeight) * bytesPerPixel;
                 textureMipmapObject->AllocateStorage(uploadTarget, level, {{levelWidth, levelHeight, 1}, byteSize});
                 textureMipmapObject->MarkStorageDirty(uploadTarget, level, false);
                 if (compressedInfo.blockWidth != 0) {
                     // After AllocateStorage, which clears the tag.
                     textureMipmapObject->SetMipmapCompressedImage(
                         uploadTarget, static_cast<Uint>(level), internalformat, nullptr,
-                        MG_Util::CalculateCompressedTextureImageSize(compressedInfo,
-                                                                     {levelWidth, levelHeight, 1}));
+                        MG_Util::CalculateCompressedTextureImageSize(compressedInfo, {levelWidth, levelHeight, 1}));
                 }
                 if (IsCompressedGLInternalFormat(internalformat)) {
                     // Also after AllocateStorage. The generic enums land here and nowhere above,
                     // and glClearTexImage has to refuse them too (GL 4.6 core 8.19).
-                    textureMipmapObject->SetMipmapRequestedCompressedFormat(uploadTarget,
-                                                                            static_cast<Uint>(level), internalformat);
+                    textureMipmapObject->SetMipmapRequestedCompressedFormat(uploadTarget, static_cast<Uint>(level),
+                                                                            internalformat);
                 }
             }
             // See TextureStorage1D.
@@ -5852,8 +5799,7 @@ namespace MobileGL::MG_Impl::GLImpl {
                           GLsizei depth) {
         auto textureObject = GetTextureObjectByName(texture, __func__);
         if (!textureObject) return;
-        if (textureObject->GetTarget() == TextureTarget::Texture3D &&
-            IsCompressedGLInternalFormat(internalformat)) {
+        if (textureObject->GetTarget() == TextureTarget::Texture3D && IsCompressedGLInternalFormat(internalformat)) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,
                 MakeUnique<GenericErrorInfo>(
@@ -5892,8 +5838,8 @@ namespace MobileGL::MG_Impl::GLImpl {
             const GLsizei levelWidth = std::max<GLsizei>(1, width >> level);
             const GLsizei levelHeight = std::max<GLsizei>(1, height >> level);
             const GLsizei levelDepth = depthMips ? std::max<GLsizei>(1, depth >> level) : depth;
-            const SizeT byteSize = ComputeTextureStorageByteSize(textureInternalFormat, levelWidth, levelHeight,
-                                                                 levelDepth);
+            const SizeT byteSize =
+                ComputeTextureStorageByteSize(textureInternalFormat, levelWidth, levelHeight, levelDepth);
             textureMipmapObject->AllocateStorage(textureUploadTarget, level,
                                                  {{levelWidth, levelHeight, levelDepth}, byteSize});
             textureMipmapObject->MarkStorageDirty(textureUploadTarget, level, false);
@@ -5907,8 +5853,8 @@ namespace MobileGL::MG_Impl::GLImpl {
             if (IsCompressedGLInternalFormat(internalformat)) {
                 // Also after AllocateStorage. The generic enums land here and nowhere above,
                 // and glClearTexImage has to refuse them too (GL 4.6 core 8.19).
-                textureMipmapObject->SetMipmapRequestedCompressedFormat(textureUploadTarget,
-                                                                        static_cast<Uint>(level), internalformat);
+                textureMipmapObject->SetMipmapRequestedCompressedFormat(textureUploadTarget, static_cast<Uint>(level),
+                                                                        internalformat);
             }
         }
         // See TextureStorage1D.
@@ -6045,8 +5991,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             // which is indistinguishable from success at the call site and renders garbage.
             MGLOG_W_ONCE("glTextureView: the active backend has no texture-view support "
                          "(GL_EXT_texture_view / GL_OES_texture_view absent); raising GL_INVALID_OPERATION");
-            RecordTextureViewError(ErrorCode::InvalidOperation,
-                                   "The active backend does not support texture views.");
+            RecordTextureViewError(ErrorCode::InvalidOperation, "The active backend does not support texture views.");
             return;
         }
 
@@ -6137,8 +6082,7 @@ namespace MobileGL::MG_Impl::GLImpl {
                             MG_Util::ConvertGLEnumToString(origFormat)));
             return;
         }
-        const TextureInternalFormat viewInternalFormat =
-            MG_Util::ConvertGLEnumToTextureInternalFormat(internalformat);
+        const TextureInternalFormat viewInternalFormat = MG_Util::ConvertGLEnumToTextureInternalFormat(internalformat);
         if (!TextureImpl::ValidateTextureInternalFormat(viewInternalFormat)) return;
 
         // i)/j) the range checks, both against the ORIGINAL's view state rather than its raw
@@ -6188,9 +6132,9 @@ namespace MobileGL::MG_Impl::GLImpl {
         const Uint composedMinLayer = minlayer + origTextureObject->GetViewMinLayer();
         const Uint composedNumLayers = std::min(numlayers, origNumLayers - minlayer);
 
-        const auto& viewObject = MG_State::pGLContext->CreateTextureViewObject(
-            texture, viewTarget, storageOwner, composedMinLevel, composedNumLevels, composedMinLayer,
-            composedNumLayers);
+        const auto& viewObject =
+            MG_State::pGLContext->CreateTextureViewObject(texture, viewTarget, storageOwner, composedMinLevel,
+                                                          composedNumLevels, composedMinLayer, composedNumLayers);
         if (!viewObject) {
             RecordTextureViewError(ErrorCode::InvalidOperation, "Failed to create the texture view object.");
             return;
@@ -6309,8 +6253,8 @@ namespace MobileGL::MG_Impl::GLImpl {
         SeedImmutableViewState(textureObject, 1);
     }
 
-    void TexStorage2DMultisample(GLenum target, GLsizei samples, GLenum internalformat, GLsizei width,
-                                 GLsizei height, GLboolean fixedsamplelocations) {
+    void TexStorage2DMultisample(GLenum target, GLsizei samples, GLenum internalformat, GLsizei width, GLsizei height,
+                                 GLboolean fixedsamplelocations) {
         const TextureTarget textureTarget = MG_Util::ConvertGLEnumToTextureTarget(target);
         auto& activeUnit = MG_State::pGLContext->GetTextureUnitObject(MG_State::pGLContext->GetActiveTextureUnit());
         if (!ValidateTextureMutable(activeUnit.GetBindingSlot(textureTarget).GetBoundObject(), __func__)) return;
@@ -6320,16 +6264,16 @@ namespace MobileGL::MG_Impl::GLImpl {
             __func__);
     }
 
-    void TexStorage3DMultisample(GLenum target, GLsizei samples, GLenum internalformat, GLsizei width,
-                                 GLsizei height, GLsizei depth, GLboolean fixedsamplelocations) {
+    void TexStorage3DMultisample(GLenum target, GLsizei samples, GLenum internalformat, GLsizei width, GLsizei height,
+                                 GLsizei depth, GLboolean fixedsamplelocations) {
         const TextureTarget textureTarget = MG_Util::ConvertGLEnumToTextureTarget(target);
         auto& activeUnit = MG_State::pGLContext->GetTextureUnitObject(MG_State::pGLContext->GetActiveTextureUnit());
         if (!ValidateTextureMutable(activeUnit.GetBindingSlot(textureTarget).GetBoundObject(), __func__)) return;
         if (!ValidateTexStorageMultisampleSize(width, height, depth, __func__)) return;
-        TexStorageMultisample_State(target,
-                                    TexImage3DMultisample_State(target, samples, internalformat, width, height, depth,
-                                                                fixedsamplelocations),
-                                    __func__);
+        TexStorageMultisample_State(
+            target,
+            TexImage3DMultisample_State(target, samples, internalformat, width, height, depth, fixedsamplelocations),
+            __func__);
     }
 
     void TextureSubImage1D(GLuint texture, GLint level, GLint xoffset, GLsizei width, GLenum format, GLenum type,
@@ -6360,8 +6304,8 @@ namespace MobileGL::MG_Impl::GLImpl {
 
         auto textureUploadTarget = GetPrimaryUploadTarget(textureObject);
         if (!TextureImpl::ValidateTextureUploadTarget(textureUploadTarget)) return;
-        if (!TextureImpl::ValidateTextureInternalFormatCompatibleWithInput(textureInputFormat, textureObject->GetFormat(),
-                                                                           texturePixelDataType))
+        if (!TextureImpl::ValidateTextureInternalFormatCompatibleWithInput(
+                textureInputFormat, textureObject->GetFormat(), texturePixelDataType))
             return;
 
         auto* textureMipmapObject = static_cast<MG_State::GLState::TextureObjectMipmap*>(textureObject.get());
@@ -6383,8 +6327,8 @@ namespace MobileGL::MG_Impl::GLImpl {
             MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::PixelUnpack).GetBoundObject();
         if (pixelUnpackBufferObject) {
             MGL_SYNC_PIXEL_UNPACK_SOURCE(pixelUnpackBufferObject);
-            originalPixels = reinterpret_cast<const char*>(pixelUnpackBufferObject->MappedData()) +
-                             reinterpret_cast<SizeT>(pixels);
+            originalPixels =
+                reinterpret_cast<const char*>(pixelUnpackBufferObject->MappedData()) + reinterpret_cast<SizeT>(pixels);
         }
         if (!originalPixels) {
             MG_State::pGLContext->RecordError(
@@ -6412,8 +6356,8 @@ namespace MobileGL::MG_Impl::GLImpl {
         Uint8* destData = static_cast<Uint8*>(textureMipmapObject->MapMipmapData(textureUploadTarget, level));
         if (destData) {
             for (GLsizei y = 0; y < height; ++y) {
-                const SizeT destRowOffset = static_cast<SizeT>(yoffset + y) * destRowSize +
-                                            static_cast<SizeT>(xoffset) * internalBpp;
+                const SizeT destRowOffset =
+                    static_cast<SizeT>(yoffset + y) * destRowSize + static_cast<SizeT>(xoffset) * internalBpp;
                 const SizeT srcRowOffset = static_cast<SizeT>(y) * srcRowSize;
                 Memcpy(destData + destRowOffset, srcData + srcRowOffset, srcRowSize);
             }
@@ -6474,32 +6418,32 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (!params) return;
         ScopedNamedTextureParameterCall namedCall;
         auto textureObject = GetTextureObjectByName(texture, __func__);
-        WithTemporarilyBoundNamedTexture(textureObject, [&](GLenum target) { TexParameterfv_State(target, pname, params); });
+        WithTemporarilyBoundNamedTexture(textureObject,
+                                         [&](GLenum target) { TexParameterfv_State(target, pname, params); });
     }
 
     void TextureParameteriv(GLuint texture, GLenum pname, const GLint* params) {
         if (!params) return;
         ScopedNamedTextureParameterCall namedCall;
         auto textureObject = GetTextureObjectByName(texture, __func__);
-        WithTemporarilyBoundNamedTexture(textureObject, [&](GLenum target) { TexParameteriv_State(target, pname, params); });
+        WithTemporarilyBoundNamedTexture(textureObject,
+                                         [&](GLenum target) { TexParameteriv_State(target, pname, params); });
     }
 
     void TextureParameterIiv(GLuint texture, GLenum pname, const GLint* params) {
         if (!params) return;
         ScopedNamedTextureParameterCall namedCall;
         auto textureObject = GetTextureObjectByName(texture, __func__);
-        WithTemporarilyBoundNamedTexture(textureObject, [&](GLenum target) {
-            TexParameterIiv_State(target, pname, params);
-        });
+        WithTemporarilyBoundNamedTexture(textureObject,
+                                         [&](GLenum target) { TexParameterIiv_State(target, pname, params); });
     }
 
     void TextureParameterIuiv(GLuint texture, GLenum pname, const GLuint* params) {
         if (!params) return;
         ScopedNamedTextureParameterCall namedCall;
         auto textureObject = GetTextureObjectByName(texture, __func__);
-        WithTemporarilyBoundNamedTexture(textureObject, [&](GLenum target) {
-            TexParameterIuiv_State(target, pname, params);
-        });
+        WithTemporarilyBoundNamedTexture(textureObject,
+                                         [&](GLenum target) { TexParameterIuiv_State(target, pname, params); });
     }
 
     void BindTextureUnit(GLuint unit, GLuint texture) {
@@ -6570,7 +6514,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         // Deliberately PER ELEMENT: the extension defines these calls as a loop, so a bad entry
         // costs its own unit and leaves the rest of the range bound.
         SharedPtr<MG_State::GLState::ITextureObject> ResolveMultiBindTexture(GLuint texture, GLsizei index,
-                                                                            const char* funcName) {
+                                                                             const char* funcName) {
             SharedPtr<MG_State::GLState::ITextureObject> textureObject =
                 MG_State::pGLContext->GetTextureObject(texture);
             if (!textureObject) {
@@ -6667,8 +6611,8 @@ namespace MobileGL::MG_Impl::GLImpl {
                                                TextureUploadTarget uploadTarget, GLint level, GLenum format,
                                                GLenum type, GLsizei bufSize, void* pixels, const char* caller) {
         MGP_FILL(GetTextureImage);
-        MG_Backend::gBackendFunctionsTable.GL.GetTextureImage(textureObject, uploadTarget, level, format, type,
-                                                              bufSize, pixels);
+        MG_Backend::gBackendFunctionsTable.GL.GetTextureImage(textureObject, uploadTarget, level, format, type, bufSize,
+                                                              pixels);
         return;
     }
 
@@ -6676,16 +6620,13 @@ namespace MobileGL::MG_Impl::GLImpl {
         auto textureObject = GetTextureObjectByName(texture, __func__);
         if (!textureObject) return;
         if (!ValidateTextureImageQuery(textureObject, level, MG_Util::ConvertGLEnumToTextureInputFormat(format),
-                                       MG_Util::ConvertGLEnumToTexturePixelDataType(type), bufSize, pixels,
-                                       __func__)) {
+                                       MG_Util::ConvertGLEnumToTexturePixelDataType(type), bufSize, pixels, __func__)) {
             return;
         }
         auto uploadTarget = GetPrimaryUploadTarget(textureObject);
         // Unlike glGetTexImage's face target, this DSA call reads all six faces.
-        if (textureObject->GetTarget() == TextureTarget::TextureCubeMap)
-            uploadTarget = TextureUploadTarget::Unknown;
-        GetTextureImageForUploadTarget(textureObject, uploadTarget, level, format, type,
-                                       bufSize, pixels, __func__);
+        if (textureObject->GetTarget() == TextureTarget::TextureCubeMap) uploadTarget = TextureUploadTarget::Unknown;
+        GetTextureImageForUploadTarget(textureObject, uploadTarget, level, format, type, bufSize, pixels, __func__);
     }
 
     void GetCompressedTextureImage(GLuint texture, GLint level, GLsizei bufSize, void* pixels) {
@@ -6708,9 +6649,8 @@ namespace MobileGL::MG_Impl::GLImpl {
     // height, a 2D array's or cube map array's layer(-face)s its depth, and a cube map's six faces
     // its depth too.
     static Bool ValidateTextureSubImageRegion(const SharedPtr<MG_State::GLState::ITextureObject>& textureObject,
-                                              GLint level, GLint xoffset, GLint yoffset, GLint zoffset,
-                                              GLsizei width, GLsizei height, GLsizei depth, IntVec3& levelExtent,
-                                              const char* caller) {
+                                              GLint level, GLint xoffset, GLint yoffset, GLint zoffset, GLsizei width,
+                                              GLsizei height, GLsizei depth, IntVec3& levelExtent, const char* caller) {
         const auto recordError = [caller](ErrorCode code, const char* message) {
             MG_State::pGLContext->RecordError(code, MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller, message));
             return false;
@@ -6718,8 +6658,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         const auto target = textureObject->GetTarget();
         if (textureObject->GetStorageType() != TextureStorageType::Mipmap ||
             target == TextureTarget::Texture2DMultisample || target == TextureTarget::Texture2DMultisampleArray) {
-            return recordError(ErrorCode::InvalidOperation,
-                               "The effective target is a buffer or multisample texture.");
+            return recordError(ErrorCode::InvalidOperation, "The effective target is a buffer or multisample texture.");
         }
         if (level < 0 || xoffset < 0 || yoffset < 0 || zoffset < 0 || width < 0 || height < 0 || depth < 0) {
             return recordError(ErrorCode::InvalidValue, "Texture sub-image range is invalid.");
@@ -6737,8 +6676,8 @@ namespace MobileGL::MG_Impl::GLImpl {
             return recordError(ErrorCode::InvalidValue, "This texture target needs zoffset 0 and depth 1.");
         }
 
-        levelExtent = textureMipmapObject->GetMipmapTexelSize(GetPrimaryUploadTarget(textureObject),
-                                                              static_cast<Uint>(level));
+        levelExtent =
+            textureMipmapObject->GetMipmapTexelSize(GetPrimaryUploadTarget(textureObject), static_cast<Uint>(level));
         // A cube map's level is stored per face, so its own extent reads z = 1; the six faces are
         // what zoffset/depth address.
         if (target == TextureTarget::TextureCubeMap) levelExtent.z() = 6;
@@ -6778,8 +6717,8 @@ namespace MobileGL::MG_Impl::GLImpl {
 
         TextureUploadTarget readUploadTarget = GetPrimaryUploadTarget(textureObject);
         if (isSingleCubeFaceRead) {
-            readUploadTarget = static_cast<TextureUploadTarget>(
-                static_cast<Int>(TextureUploadTarget::CubeMapPositiveX) + zoffset);
+            readUploadTarget =
+                static_cast<TextureUploadTarget>(static_cast<Int>(TextureUploadTarget::CubeMapPositiveX) + zoffset);
         } else if (isCubeMap) {
             readUploadTarget = TextureUploadTarget::Unknown; // all six faces, as glGetTextureImage reads them
         }
@@ -6788,8 +6727,7 @@ namespace MobileGL::MG_Impl::GLImpl {
                                        isSingleCubeFaceRead ? 1u : 0u)) {
             return;
         }
-        GetTextureImageForUploadTarget(textureObject, readUploadTarget, level, format, type, bufSize, pixels,
-                                       __func__);
+        GetTextureImageForUploadTarget(textureObject, readUploadTarget, level, format, type, bufSize, pixels, __func__);
     }
 
     // GL 4.6 core 8.11.4. Like glGetCompressedTextureImage this answers out of the CPU shadow of the
@@ -6888,39 +6826,41 @@ namespace MobileGL::MG_Impl::GLImpl {
     void GetTextureParameteriv(GLuint texture, GLenum pname, GLint* params) {
         auto textureObject = GetTextureObjectByName(texture, __func__);
         if (!ValidateNamedTextureHasParameters(textureObject, __func__)) return;
-        WithTemporarilyBoundNamedTexture(textureObject, [&](GLenum target) { GetTexParameteriv_State(target, pname, params); });
+        WithTemporarilyBoundNamedTexture(textureObject,
+                                         [&](GLenum target) { GetTexParameteriv_State(target, pname, params); });
     }
 
     void GetTextureParameterfv(GLuint texture, GLenum pname, GLfloat* params) {
         auto textureObject = GetTextureObjectByName(texture, __func__);
         if (!ValidateNamedTextureHasParameters(textureObject, __func__)) return;
-        WithTemporarilyBoundNamedTexture(textureObject, [&](GLenum target) { GetTexParameterfv_State(target, pname, params); });
+        WithTemporarilyBoundNamedTexture(textureObject,
+                                         [&](GLenum target) { GetTexParameterfv_State(target, pname, params); });
     }
 
     void GetTextureParameterIiv(GLuint texture, GLenum pname, GLint* params) {
         auto textureObject = GetTextureObjectByName(texture, __func__);
         if (!ValidateNamedTextureHasParameters(textureObject, __func__)) return;
-        WithTemporarilyBoundNamedTexture(textureObject, [&](GLenum target) { GetTexParameterIiv_State(target, pname, params); });
+        WithTemporarilyBoundNamedTexture(textureObject,
+                                         [&](GLenum target) { GetTexParameterIiv_State(target, pname, params); });
     }
 
     void GetTextureParameterIuiv(GLuint texture, GLenum pname, GLuint* params) {
         auto textureObject = GetTextureObjectByName(texture, __func__);
         if (!ValidateNamedTextureHasParameters(textureObject, __func__)) return;
-        WithTemporarilyBoundNamedTexture(textureObject, [&](GLenum target) { GetTexParameterIuiv_State(target, pname, params); });
+        WithTemporarilyBoundNamedTexture(textureObject,
+                                         [&](GLenum target) { GetTexParameterIuiv_State(target, pname, params); });
     }
 
     void GetTextureLevelParameteriv(GLuint texture, GLint level, GLenum pname, GLint* params) {
         auto textureObject = GetTextureObjectByName(texture, __func__);
-        WithTemporarilyBoundNamedTexture(textureObject, [&](GLenum target) {
-            GetTexLevelParameteriv_State(target, level, pname, params);
-        });
+        WithTemporarilyBoundNamedTexture(
+            textureObject, [&](GLenum target) { GetTexLevelParameteriv_State(target, level, pname, params); });
     }
 
     void GetTextureLevelParameterfv(GLuint texture, GLint level, GLenum pname, GLfloat* params) {
         auto textureObject = GetTextureObjectByName(texture, __func__);
-        WithTemporarilyBoundNamedTexture(textureObject, [&](GLenum target) {
-            GetTexLevelParameterfv_State(target, level, pname, params);
-        });
+        WithTemporarilyBoundNamedTexture(
+            textureObject, [&](GLenum target) { GetTexLevelParameterfv_State(target, level, pname, params); });
     }
 
     void BindImageTexture(GLuint unit, GLuint texture, GLint level, GLboolean layered, GLint layer, GLenum access,
@@ -7069,7 +7009,8 @@ namespace MobileGL::MG_Impl::GLImpl {
         GLenum preferredInternalFormat = MG_Util::ConvertTextureInternalFormatToGLEnum(textureInternalFormat);
         GLenum imageFormat = GL_RGBA;
         GLenum imageType = GL_UNSIGNED_BYTE;
-        MG_Util::TextureFormatProcessor::NormalizePixelFormat(preferredInternalFormat, PixelFormatNormalizeOptionBit::None,
+        MG_Util::TextureFormatProcessor::NormalizePixelFormat(preferredInternalFormat,
+                                                              PixelFormatNormalizeOptionBit::None,
                                                               &preferredInternalFormat, &imageFormat, &imageType);
 
         auto writeValues = [&](std::initializer_list<GLint> values) {
@@ -7231,9 +7172,8 @@ namespace MobileGL::MG_Impl::GLImpl {
             return;
         default:
             MG_State::pGLContext->RecordError(
-                ErrorCode::InvalidEnum,
-                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
-                                             "pname is not supported by GetInternalformativ."));
+                ErrorCode::InvalidEnum, MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                                                     "pname is not supported by GetInternalformativ."));
             return;
         }
     }
@@ -7263,8 +7203,8 @@ namespace MobileGL::MG_Impl::GLImpl {
         // answering the pixel centre.
         Float position[2] = {0.5f, 0.5f};
         if (MG_Backend::pActiveBackendObject != nullptr) {
-            MG_Backend::pActiveBackendObject->GetDynamicParameters().GetSamplePosition(
-                samples, static_cast<Int>(index), position);
+            MG_Backend::pActiveBackendObject->GetDynamicParameters().GetSamplePosition(samples, static_cast<Int>(index),
+                                                                                       position);
         }
         val[0] = position[0];
         val[1] = position[1];
@@ -7578,12 +7518,12 @@ namespace MobileGL::MG_Impl::GLImpl {
         };
         const MG_Backend::CopyImageEndpoint src = resolveEndpoint(srcName, srcTarget);
         const MG_Backend::CopyImageEndpoint dst = resolveEndpoint(dstName, dstTarget);
-        if (!ValidateCopyImageSubData_State(src, srcTarget, srcLevel, srcX, srcY, srcZ, dst, dstTarget,
-                                            dstLevel, dstX, dstY, dstZ, srcWidth, srcHeight, srcDepth)) {
+        if (!ValidateCopyImageSubData_State(src, srcTarget, srcLevel, srcX, srcY, srcZ, dst, dstTarget, dstLevel, dstX,
+                                            dstY, dstZ, srcWidth, srcHeight, srcDepth)) {
             return;
         }
-        CopyImageSubData_Backend(src, srcTarget, srcLevel, srcX, srcY, srcZ, dst, dstTarget, dstLevel,
-                                 dstX, dstY, dstZ, srcWidth, srcHeight, srcDepth);
+        CopyImageSubData_Backend(src, srcTarget, srcLevel, srcX, srcY, srcZ, dst, dstTarget, dstLevel, dstX, dstY, dstZ,
+                                 srcWidth, srcHeight, srcDepth);
     }
 
     void CompressedTexSubImage3D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint zoffset, GLsizei width,

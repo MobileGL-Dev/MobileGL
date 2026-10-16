@@ -77,8 +77,8 @@ namespace MobileGL::MG_Remote::Server {
             SessionRuntime* runtime = t_runtime;
             if (runtime == nullptr) return false;
             outKey->SessionKey = reinterpret_cast<Uint64>(&runtime->Session());
-            outKey->ShareGroupKey = MG_Pipe::MGPipeApplierShareGroupKeyFor(
-                outKey->SessionKey, runtime->Session().CurrentContextToken());
+            outKey->ShareGroupKey =
+                MG_Pipe::MGPipeApplierShareGroupKeyFor(outKey->SessionKey, runtime->Session().CurrentContextToken());
             return true;
         }
 
@@ -106,7 +106,9 @@ namespace MobileGL::MG_Remote::Server {
         MG_Record::SetStagedBucketResolver(&ResolveThreadStagedBucket);
     }
 
-    SessionRuntime* Detail::CurrentRuntime() { return t_runtime; }
+    SessionRuntime* Detail::CurrentRuntime() {
+        return t_runtime;
+    }
 
     ServerSession* Detail::CurrentSession() {
         SessionRuntime* runtime = t_runtime;
@@ -118,7 +120,9 @@ namespace MobileGL::MG_Remote::Server {
         return runtime != nullptr ? &runtime->Loop() : nullptr;
     }
 
-    MG_Pipe::PipeInputs* Detail::CurrentInputs() { return ResolveThreadInputs(); }
+    MG_Pipe::PipeInputs* Detail::CurrentInputs() {
+        return ResolveThreadInputs();
+    }
 
     Detail::ThreadSessionScope::ThreadSessionScope(SessionRuntime& runtime) {
         InstallSessionRuntimeHooks();
@@ -141,8 +145,7 @@ namespace MobileGL::MG_Remote::Server {
         t_runtime = m_previous;
     }
 
-    SessionRuntime::SessionRuntime()
-        : m_latchDomain(FatalLatchDomainOpen()) {}
+    SessionRuntime::SessionRuntime() : m_latchDomain(FatalLatchDomainOpen()) {}
 
     SessionRuntime::~SessionRuntime() {
         // P14 S5: this runtime's session is the key every applier it registered was filed
@@ -156,6 +159,8 @@ namespace MobileGL::MG_Remote::Server {
         m_latchDomain = 0;
     }
 
-    Uint32 LiveServerSessionCount() { return ServerSessionCount(); }
+    Uint32 LiveServerSessionCount() {
+        return ServerSessionCount();
+    }
 
 } // namespace MobileGL::MG_Remote::Server

@@ -28,37 +28,37 @@ namespace MobileGL::MG_Remote {
         // renumbers either side fails HERE, at compile time, instead of silently mistranslating
         // op identities between two processes that both still announce the same ABI major.
         static_assert(static_cast<Uint8>(SurfaceControlOp::InitializeDisplay) ==
-                          static_cast<Uint8>(::MobileGL::Wire::SurfaceOpKind::InitializeDisplay));
+                      static_cast<Uint8>(::MobileGL::Wire::SurfaceOpKind::InitializeDisplay));
         static_assert(static_cast<Uint8>(SurfaceControlOp::CreateWindowSurface) ==
-                          static_cast<Uint8>(::MobileGL::Wire::SurfaceOpKind::CreateWindowSurface));
+                      static_cast<Uint8>(::MobileGL::Wire::SurfaceOpKind::CreateWindowSurface));
         static_assert(static_cast<Uint8>(SurfaceControlOp::CreatePbufferSurface) ==
-                          static_cast<Uint8>(::MobileGL::Wire::SurfaceOpKind::CreatePbufferSurface));
+                      static_cast<Uint8>(::MobileGL::Wire::SurfaceOpKind::CreatePbufferSurface));
         static_assert(static_cast<Uint8>(SurfaceControlOp::ResizeWindowSurface) ==
-                          static_cast<Uint8>(::MobileGL::Wire::SurfaceOpKind::ResizeWindowSurface));
+                      static_cast<Uint8>(::MobileGL::Wire::SurfaceOpKind::ResizeWindowSurface));
         static_assert(static_cast<Uint8>(SurfaceControlOp::ReleaseSurface) ==
-                          static_cast<Uint8>(::MobileGL::Wire::SurfaceOpKind::ReleaseSurface));
+                      static_cast<Uint8>(::MobileGL::Wire::SurfaceOpKind::ReleaseSurface));
         static_assert(static_cast<Uint8>(SurfaceControlOp::MakeCurrent) ==
-                          static_cast<Uint8>(::MobileGL::Wire::SurfaceOpKind::MakeCurrent));
+                      static_cast<Uint8>(::MobileGL::Wire::SurfaceOpKind::MakeCurrent));
         static_assert(static_cast<Uint8>(SurfaceControlOp::ReleaseCurrent) ==
-                          static_cast<Uint8>(::MobileGL::Wire::SurfaceOpKind::ReleaseCurrent));
+                      static_cast<Uint8>(::MobileGL::Wire::SurfaceOpKind::ReleaseCurrent));
         // fc's three schema additions, append-only (protocol.fbs's own rule).
         static_assert(static_cast<Uint8>(SurfaceControlOp::SetSwapInterval) ==
-                          static_cast<Uint8>(::MobileGL::Wire::SurfaceOpKind::SetSwapInterval));
+                      static_cast<Uint8>(::MobileGL::Wire::SurfaceOpKind::SetSwapInterval));
         static_assert(static_cast<Uint8>(SurfaceControlOp::ReleaseResources) ==
-                          static_cast<Uint8>(::MobileGL::Wire::SurfaceOpKind::ReleaseResources));
+                      static_cast<Uint8>(::MobileGL::Wire::SurfaceOpKind::ReleaseResources));
         static_assert(static_cast<Uint8>(SurfaceControlOp::SetWindowHandle) ==
-                          static_cast<Uint8>(::MobileGL::Wire::SurfaceOpKind::SetWindowHandle));
+                      static_cast<Uint8>(::MobileGL::Wire::SurfaceOpKind::SetWindowHandle));
         // cp's one schema addition, on the same append-only terms.
         static_assert(static_cast<Uint8>(SurfaceControlOp::InitCapabilities) ==
-                          static_cast<Uint8>(::MobileGL::Wire::SurfaceOpKind::InitCapabilities));
+                      static_cast<Uint8>(::MobileGL::Wire::SurfaceOpKind::InitCapabilities));
         // P14 S1's two appends, on the same append-only terms. The VALUES are pinned because they
         // are wire ABI, and pinned SEPARATELY from the identity cast beside them: the cast would
         // stay green if both enums moved together to 20/21, and a peer built before the move
         // would then read the two ops as two others.
         static_assert(static_cast<Uint8>(SurfaceControlOp::CreateContext) ==
-                          static_cast<Uint8>(::MobileGL::Wire::SurfaceOpKind::CreateContext));
+                      static_cast<Uint8>(::MobileGL::Wire::SurfaceOpKind::CreateContext));
         static_assert(static_cast<Uint8>(SurfaceControlOp::DestroyContext) ==
-                          static_cast<Uint8>(::MobileGL::Wire::SurfaceOpKind::DestroyContext));
+                      static_cast<Uint8>(::MobileGL::Wire::SurfaceOpKind::DestroyContext));
         static_assert(static_cast<Uint8>(::MobileGL::Wire::SurfaceOpKind::SetSwapInterval) == 8 &&
                       static_cast<Uint8>(::MobileGL::Wire::SurfaceOpKind::ReleaseResources) == 9 &&
                       static_cast<Uint8>(::MobileGL::Wire::SurfaceOpKind::SetWindowHandle) == 10 &&
@@ -95,15 +95,24 @@ namespace MobileGL::MG_Remote {
 
     const char* SurfaceWireErrorName(SurfaceWireError error) {
         switch (error) {
-        case SurfaceWireError::None: return "None";
-        case SurfaceWireError::UnknownOpKind: return "UnknownOpKind";
-        case SurfaceWireError::InprocOnlyOpOnTheWire: return "InprocOnlyOpOnTheWire";
-        case SurfaceWireError::WindowKindNamesNoBackend: return "WindowKindNamesNoBackend";
-        case SurfaceWireError::UnknownWindowKind: return "UnknownWindowKind";
-        case SurfaceWireError::MetalLayerArrived: return "MetalLayerArrived";
-        case SurfaceWireError::AndroidNativeWindowArrived: return "AndroidNativeWindowArrived";
-        case SurfaceWireError::ServerOwnedTokenNotZero: return "ServerOwnedTokenNotZero";
-        case SurfaceWireError::ServerOwnedOnSetWindowHandle: return "ServerOwnedOnSetWindowHandle";
+        case SurfaceWireError::None:
+            return "None";
+        case SurfaceWireError::UnknownOpKind:
+            return "UnknownOpKind";
+        case SurfaceWireError::InprocOnlyOpOnTheWire:
+            return "InprocOnlyOpOnTheWire";
+        case SurfaceWireError::WindowKindNamesNoBackend:
+            return "WindowKindNamesNoBackend";
+        case SurfaceWireError::UnknownWindowKind:
+            return "UnknownWindowKind";
+        case SurfaceWireError::MetalLayerArrived:
+            return "MetalLayerArrived";
+        case SurfaceWireError::AndroidNativeWindowArrived:
+            return "AndroidNativeWindowArrived";
+        case SurfaceWireError::ServerOwnedTokenNotZero:
+            return "ServerOwnedTokenNotZero";
+        case SurfaceWireError::ServerOwnedOnSetWindowHandle:
+            return "ServerOwnedOnSetWindowHandle";
         }
         return "<unknown SurfaceWireError>";
     }
@@ -133,29 +142,50 @@ namespace MobileGL::MG_Remote {
 
     bool WireWindowKindForWindowBackend(MG_Backend::WindowBackend backend, ::MobileGL::Wire::WindowKind* out) {
         switch (backend) {
-        case MG_Backend::WindowBackend::Android: *out = ::MobileGL::Wire::WindowKind::AndroidNativeWindow; return true;
-        case MG_Backend::WindowBackend::X11: *out = ::MobileGL::Wire::WindowKind::X11; return true;
-        case MG_Backend::WindowBackend::MetalLayer: *out = ::MobileGL::Wire::WindowKind::MetalLayer; return true;
-        case MG_Backend::WindowBackend::Win32: *out = ::MobileGL::Wire::WindowKind::Win32Hwnd; return true;
-        case MG_Backend::WindowBackend::Unknown: *out = ::MobileGL::Wire::WindowKind::None; return true;
-        default: return false;
+        case MG_Backend::WindowBackend::Android:
+            *out = ::MobileGL::Wire::WindowKind::AndroidNativeWindow;
+            return true;
+        case MG_Backend::WindowBackend::X11:
+            *out = ::MobileGL::Wire::WindowKind::X11;
+            return true;
+        case MG_Backend::WindowBackend::MetalLayer:
+            *out = ::MobileGL::Wire::WindowKind::MetalLayer;
+            return true;
+        case MG_Backend::WindowBackend::Win32:
+            *out = ::MobileGL::Wire::WindowKind::Win32Hwnd;
+            return true;
+        case MG_Backend::WindowBackend::Unknown:
+            *out = ::MobileGL::Wire::WindowKind::None;
+            return true;
+        default:
+            return false;
         }
     }
 
     bool WindowBackendForWireWindowKind(::MobileGL::Wire::WindowKind kind, MG_Backend::WindowBackend* out) {
         switch (kind) {
-        case ::MobileGL::Wire::WindowKind::AndroidNativeWindow: *out = MG_Backend::WindowBackend::Android; return true;
-        case ::MobileGL::Wire::WindowKind::X11: *out = MG_Backend::WindowBackend::X11; return true;
-        case ::MobileGL::Wire::WindowKind::MetalLayer: *out = MG_Backend::WindowBackend::MetalLayer; return true;
-        case ::MobileGL::Wire::WindowKind::Win32Hwnd: *out = MG_Backend::WindowBackend::Win32; return true;
-        case ::MobileGL::Wire::WindowKind::None: *out = MG_Backend::WindowBackend::Unknown; return true;
+        case ::MobileGL::Wire::WindowKind::AndroidNativeWindow:
+            *out = MG_Backend::WindowBackend::Android;
+            return true;
+        case ::MobileGL::Wire::WindowKind::X11:
+            *out = MG_Backend::WindowBackend::X11;
+            return true;
+        case ::MobileGL::Wire::WindowKind::MetalLayer:
+            *out = MG_Backend::WindowBackend::MetalLayer;
+            return true;
+        case ::MobileGL::Wire::WindowKind::Win32Hwnd:
+            *out = MG_Backend::WindowBackend::Win32;
+            return true;
+        case ::MobileGL::Wire::WindowKind::None:
+            *out = MG_Backend::WindowBackend::Unknown;
+            return true;
             // Surfaceless and Pbuffer are surface SHAPES, not window backends: no answer.
-        default: return false;
+        default:
+            return false;
         }
     }
 
-    SurfaceWireError EncodeSurfaceOpFrame(const SurfaceControlFrame& frame,
-                                          flatbuffers::FlatBufferBuilder* builder) {
+    SurfaceWireError EncodeSurfaceOpFrame(const SurfaceControlFrame& frame, flatbuffers::FlatBufferBuilder* builder) {
         ::MobileGL::Wire::SurfaceOpKind kind;
         if (!WireKindForSurfaceControlOp(frame.kind, &kind)) {
             return frame.kind == SurfaceControlOp::None ? SurfaceWireError::UnknownOpKind
@@ -177,16 +207,16 @@ namespace MobileGL::MG_Remote {
                 }
                 windowKind = ::MobileGL::Wire::WindowKind::ServerOwned;
                 nativeToken = 0;
-            } else if (!WireWindowKindForWindowBackend(
-                           static_cast<MG_Backend::WindowBackend>(frame.windowBackend), &windowKind)) {
+            } else if (!WireWindowKindForWindowBackend(static_cast<MG_Backend::WindowBackend>(frame.windowBackend),
+                                                       &windowKind)) {
                 return SurfaceWireError::UnknownWindowKind;
             }
         }
         const auto op = ::MobileGL::Wire::CreateSurfaceOp(
-            *builder, frame.seq, kind, frame.display, frame.surface, windowKind, nativeToken,
-            frame.width, frame.height, frame.swapInterval, frame.readSurface, frame.context,
-            frame.shareGroupToken, frame.contextFlags);
-        const auto envelope = ::MobileGL::Wire::CreateCtrlEnvelope(*builder, ::MobileGL::Wire::CtrlMsg::SurfaceOp, op.Union());
+            *builder, frame.seq, kind, frame.display, frame.surface, windowKind, nativeToken, frame.width, frame.height,
+            frame.swapInterval, frame.readSurface, frame.context, frame.shareGroupToken, frame.contextFlags);
+        const auto envelope =
+            ::MobileGL::Wire::CreateCtrlEnvelope(*builder, ::MobileGL::Wire::CtrlMsg::SurfaceOp, op.Union());
         ::MobileGL::Wire::FinishCtrlEnvelopeBuffer(*builder, envelope);
         return SurfaceWireError::None;
     }
@@ -253,8 +283,7 @@ namespace MobileGL::MG_Remote {
         return SurfaceWireError::None;
     }
 
-    void EncodeSurfaceReplyFrame(const SurfaceControlFrame& frame,
-                                 flatbuffers::FlatBufferBuilder* builder) {
+    void EncodeSurfaceReplyFrame(const SurfaceControlFrame& frame, flatbuffers::FlatBufferBuilder* builder) {
         // P12: the reply's surface geometry and refusal (SurfaceReply.width/height/refusal).
         const auto reply = ::MobileGL::Wire::CreateSurfaceReply(
             *builder, frame.seq, frame.ok, frame.eglMajor, frame.eglMinor, /*defaultFb=*/0, frame.eventHead,
@@ -308,33 +337,35 @@ namespace MobileGL::MG_Remote {
                 // definition. A non-zero one is a value from the peer's window system trying to
                 // cross (Rule G) - the peer's corrupt bytes, latched like the rows beside it.
                 (void)SessionLatch(MGFatalFamily::ProtocolCorruption,
-                        "MGPipe: Fatal{ProtocolCorruption, \"SurfaceOp.nativeToken\"} - a wire %s named "
-                        "WindowKind::ServerOwned with native token 0x%llx. The server-owned window is the "
-                        "server's own and its token is always 0: no value from the client's window system "
-                        "crosses (Rule G)",
-                        ::MobileGL::Wire::EnumNameSurfaceOpKind(op.kind()),
-                        static_cast<unsigned long long>(op.nativeToken()));
+                                   "MGPipe: Fatal{ProtocolCorruption, \"SurfaceOp.nativeToken\"} - a wire %s named "
+                                   "WindowKind::ServerOwned with native token 0x%llx. The server-owned window is the "
+                                   "server's own and its token is always 0: no value from the client's window system "
+                                   "crosses (Rule G)",
+                                   ::MobileGL::Wire::EnumNameSurfaceOpKind(op.kind()),
+                                   static_cast<unsigned long long>(op.nativeToken()));
             } else if (error == SurfaceWireError::AndroidNativeWindowArrived) {
                 (void)SessionLatch(MGFatalFamily::UnmigratedSurface,
-                        "MGPipe: Fatal{UnmigratedSurface, \"AndroidNativeWindow:use-MOBILEGL_IPC_SURFACE=server\"} - a wire "
-                        "SurfaceOp (%s) named an ANativeWindow*, which is a pointer into the "
-                        "CLIENT's process and means nothing here. A client-process window "
-                        "handle can never cross processes: a windowed out-of-process client must "
-                        "use MOBILEGL_IPC_SURFACE=server (the server owns the window); "
-                        "otherwise it is pbuffer/surfaceless only",
-                        ::MobileGL::Wire::EnumNameSurfaceOpKind(op.kind()));
+                                   "MGPipe: Fatal{UnmigratedSurface, "
+                                   "\"AndroidNativeWindow:use-MOBILEGL_IPC_SURFACE=server\"} - a wire "
+                                   "SurfaceOp (%s) named an ANativeWindow*, which is a pointer into the "
+                                   "CLIENT's process and means nothing here. A client-process window "
+                                   "handle can never cross processes: a windowed out-of-process client must "
+                                   "use MOBILEGL_IPC_SURFACE=server (the server owns the window); "
+                                   "otherwise it is pbuffer/surfaceless only",
+                                   ::MobileGL::Wire::EnumNameSurfaceOpKind(op.kind()));
             } else if (error == SurfaceWireError::MetalLayerArrived) {
-                (void)SessionLatch(MGFatalFamily::UnmigratedSurface,
-                        "MGPipe: Fatal{UnmigratedSurface, \"MetalLayer:use-MOBILEGL_IPC_SURFACE=server\"} - a wire "
-                        "SurfaceOp named a CAMetalLayer* in the CLIENT's process. "
-                        "A client-process window handle can never cross processes: use "
-                        "MOBILEGL_IPC_SURFACE=server (the server owns the window)");
+                (void)SessionLatch(
+                    MGFatalFamily::UnmigratedSurface,
+                    "MGPipe: Fatal{UnmigratedSurface, \"MetalLayer:use-MOBILEGL_IPC_SURFACE=server\"} - a wire "
+                    "SurfaceOp named a CAMetalLayer* in the CLIENT's process. "
+                    "A client-process window handle can never cross processes: use "
+                    "MOBILEGL_IPC_SURFACE=server (the server owns the window)");
             } else {
                 (void)SessionLatch(MGFatalFamily::ProtocolCorruption,
-                        "MGPipe: Fatal{ProtocolCorruption, \"SurfaceOp\"} - a wire surface op "
-                        "failed validation: %s (wire kind %u, window kind %u)",
-                        SurfaceWireErrorName(error), static_cast<unsigned>(op.kind()),
-                        static_cast<unsigned>(op.windowKind()));
+                                   "MGPipe: Fatal{ProtocolCorruption, \"SurfaceOp\"} - a wire surface op "
+                                   "failed validation: %s (wire kind %u, window kind %u)",
+                                   SurfaceWireErrorName(error), static_cast<unsigned>(op.kind()),
+                                   static_cast<unsigned>(op.windowKind()));
             }
             if (replyOut != nullptr) {
                 *replyOut = SurfaceControlFrame{};

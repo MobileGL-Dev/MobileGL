@@ -235,17 +235,15 @@ namespace MobileGL::MG_Impl::GLImpl::VertexArrayImpl {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidValue,
                 MakeUnique<GenericErrorInfo>(
-                    "MG_Impl/GLImpl", fn,
-                    std::format("Invalid size {} for attribute {}. Must be 1-4.", size, index)));
+                    "MG_Impl/GLImpl", fn, std::format("Invalid size {} for attribute {}. Must be 1-4.", size, index)));
             return false;
         }
         // GL 4.6 core 10.3.2: the long form takes GL_DOUBLE and nothing else.
         if (type != GL_DOUBLE) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidEnum,
-                MakeUnique<GenericErrorInfo>(
-                    "MG_Impl/GLImpl", fn,
-                    std::format("Type 0x{:X} is not GL_DOUBLE (attribute {}).", type, index)));
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", fn,
+                                             std::format("Type 0x{:X} is not GL_DOUBLE (attribute {}).", type, index)));
             return false;
         }
         return true;

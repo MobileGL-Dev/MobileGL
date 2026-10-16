@@ -87,14 +87,13 @@ namespace MGITest {
                 GLint value = -424242;
                 glGetIntegerv(bound.pname, &value);
                 const unsigned int error = FirstGLError();
-                EXPECT_EQ(error, GLenum(GL_NO_ERROR))
-                    << bound.name << " is not answerable: " << GLErrorName(error);
+                EXPECT_EQ(error, GLenum(GL_NO_ERROR)) << bound.name << " is not answerable: " << GLErrorName(error);
                 if (error != GL_NO_ERROR) continue;
 
                 EXPECT_GE(value, bound.minimum)
-                    << bound.name << " = " << value << " is below the GL required minimum "
-                    << bound.minimum << " (a negative or tiny value here is a uint32 limit that lost "
-                                        "its top bit on the way to a signed Int)";
+                    << bound.name << " = " << value << " is below the GL required minimum " << bound.minimum
+                    << " (a negative or tiny value here is a uint32 limit that lost "
+                       "its top bit on the way to a signed Int)";
                 EXPECT_LE(value, bound.ceiling)
                     << bound.name << " = " << value << " exceeds the ceiling " << bound.ceiling
                     << " this implementation is willing to promise - an application that allocates "
@@ -180,8 +179,8 @@ namespace MGITest {
                 glGetIntegerv(relation.combined, &combined);
                 ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << relation.stageName;
                 EXPECT_LE(stage, combined)
-                    << relation.stageName << " = " << stage << " exceeds " << relation.combinedName << " = "
-                    << combined << "; GL 4.6 table 23.64 orders MAX_*_BUFFER_BINDINGS >= MAX_COMBINED_*_BLOCKS >= "
+                    << relation.stageName << " = " << stage << " exceeds " << relation.combinedName << " = " << combined
+                    << "; GL 4.6 table 23.64 orders MAX_*_BUFFER_BINDINGS >= MAX_COMBINED_*_BLOCKS >= "
                        "every per-stage count, and a single-stage program may use its whole per-stage allowance";
             }
         }
@@ -218,13 +217,12 @@ namespace MGITest {
                 ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << family.maxSizeName;
                 ASSERT_GT(maxBindings, 0) << family.maxBindingsName;
                 const GLint perBinding = maxSize / maxBindings;
-                EXPECT_GT(perBinding, 0)
-                    << family.maxSizeName << " (" << maxSize << ") / " << family.maxBindingsName << " ("
-                    << maxBindings << ") is zero, and BindBufferRange rejects a zero size";
+                EXPECT_GT(perBinding, 0) << family.maxSizeName << " (" << maxSize << ") / " << family.maxBindingsName
+                                         << " (" << maxBindings << ") is zero, and BindBufferRange rejects a zero size";
                 EXPECT_EQ(perBinding % family.sizeGranularity, 0)
-                    << family.maxSizeName << " (" << maxSize << ") / " << family.maxBindingsName << " ("
-                    << maxBindings << ") = " << perBinding << " is not a multiple of the "
-                    << family.sizeGranularity << "-byte size granularity BindBufferRange requires for it";
+                    << family.maxSizeName << " (" << maxSize << ") / " << family.maxBindingsName << " (" << maxBindings
+                    << ") = " << perBinding << " is not a multiple of the " << family.sizeGranularity
+                    << "-byte size granularity BindBufferRange requires for it";
             }
         }
 
@@ -244,9 +242,9 @@ namespace MGITest {
             EXPECT_GT(blockSize, 0);
             // GL_MAX_COMBINED_COMPUTE_UNIFORM_COMPONENTS is derived from the product of these two,
             // so their product has to stay representable.
-            EXPECT_LE(static_cast<long long>(blocks) * blockSize,
-                      static_cast<long long>(2147483647))
-                << "blocks(" << blocks << ") * blockSize(" << blockSize << ") overflows the GLint the "
+            EXPECT_LE(static_cast<long long>(blocks) * blockSize, static_cast<long long>(2147483647))
+                << "blocks(" << blocks << ") * blockSize(" << blockSize
+                << ") overflows the GLint the "
                    "derived component limits are computed in";
         }
 
@@ -281,8 +279,7 @@ namespace MGITest {
                 {GL_MAX_TESS_EVALUATION_INPUT_COMPONENTS, "GL_MAX_TESS_EVALUATION_INPUT_COMPONENTS", 128, 1 << 16},
                 {GL_MAX_TESS_EVALUATION_OUTPUT_COMPONENTS, "GL_MAX_TESS_EVALUATION_OUTPUT_COMPONENTS", 128, 1 << 16},
                 {GL_MAX_TESS_EVALUATION_TEXTURE_IMAGE_UNITS, "GL_MAX_TESS_EVALUATION_TEXTURE_IMAGE_UNITS", 16, 256},
-                {GL_MAX_TESS_EVALUATION_UNIFORM_COMPONENTS, "GL_MAX_TESS_EVALUATION_UNIFORM_COMPONENTS", 1024,
-                 1 << 20},
+                {GL_MAX_TESS_EVALUATION_UNIFORM_COMPONENTS, "GL_MAX_TESS_EVALUATION_UNIFORM_COMPONENTS", 1024, 1 << 20},
                 {GL_MAX_TESS_EVALUATION_UNIFORM_BLOCKS, "GL_MAX_TESS_EVALUATION_UNIFORM_BLOCKS", 14, 256},
                 {GL_MAX_TESS_PATCH_COMPONENTS, "GL_MAX_TESS_PATCH_COMPONENTS", 120, 1 << 16},
                 {GL_MAX_COMBINED_TESS_CONTROL_UNIFORM_COMPONENTS, "GL_MAX_COMBINED_TESS_CONTROL_UNIFORM_COMPONENTS",
@@ -296,10 +293,10 @@ namespace MGITest {
                 const unsigned int error = FirstGLError();
                 EXPECT_EQ(error, GLenum(GL_NO_ERROR)) << bound.name << " is not answerable: " << GLErrorName(error);
                 if (error != GL_NO_ERROR) continue;
-                EXPECT_GE(value, bound.minimum) << bound.name << " = " << value << " is below the GL 4.5 minimum "
-                                                << bound.minimum;
-                EXPECT_LE(value, bound.ceiling) << bound.name << " = " << value << " exceeds the ceiling "
-                                                << bound.ceiling;
+                EXPECT_GE(value, bound.minimum)
+                    << bound.name << " = " << value << " is below the GL 4.5 minimum " << bound.minimum;
+                EXPECT_LE(value, bound.ceiling)
+                    << bound.name << " = " << value << " exceeds the ceiling " << bound.ceiling;
             }
 
             // ARB_cull_distance's pair. Zero is honest on a backend with no cull-distance route,
@@ -379,7 +376,6 @@ namespace MGITest {
             EXPECT_GE(viewportDims[0], maxRenderbufferSize);
             EXPECT_GE(viewportDims[1], maxRenderbufferSize);
         }
-
 
         // THE INDEXED AND PER-PROGRAM QUERIES THAT NAME FRONTEND STATE, pinned on both lanes.
         //

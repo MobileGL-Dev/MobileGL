@@ -95,7 +95,7 @@ namespace {
 } // namespace
 
 extern "C" JNIEXPORT void JNICALL Java_top_mobilegl_plugin_MobileGLDisplayActivity_nativeInstallDisplay(JNIEnv* env,
-                                                                                                     jclass clazz) {
+                                                                                                        jclass clazz) {
     JavaVM* vm = nullptr;
     if (env->GetJavaVM(&vm) != JNI_OK) vm = nullptr;
     jmethodID onGeometryRequest = env->GetStaticMethodID(clazz, "onGeometryRequest", "(II)V");
@@ -117,7 +117,7 @@ extern "C" JNIEXPORT void JNICALL Java_top_mobilegl_plugin_MobileGLDisplayActivi
 }
 
 extern "C" JNIEXPORT jint JNICALL Java_top_mobilegl_plugin_MobileGLDisplayActivity_nativeServe(JNIEnv* env, jclass,
-                                                                                           jstring listen) {
+                                                                                               jstring listen) {
     if (listen == nullptr) return mobilegl_server_serve_inprocess(nullptr);
     const char* endpoint = env->GetStringUTFChars(listen, nullptr);
     if (endpoint == nullptr) return 71; // OutOfMemoryError pending
@@ -147,13 +147,13 @@ extern "C" JNIEXPORT jboolean JNICALL Java_top_mobilegl_plugin_MobileGLDisplayAc
 }
 
 extern "C" JNIEXPORT jstring JNICALL Java_top_mobilegl_plugin_MobileGLDisplayActivity_nativeDetachWindow(JNIEnv* env,
-                                                                                                     jclass) {
+                                                                                                         jclass) {
     const ServerWindowDetach detached = ServerDisplayInstance().Detach();
     return env->NewStringUTF(ServerWindowDetachName(detached));
 }
 
 extern "C" JNIEXPORT void JNICALL Java_top_mobilegl_plugin_MobileGLDisplayActivity_nativeUninstallDisplay(JNIEnv* env,
-                                                                                                      jclass) {
+                                                                                                          jclass) {
     ServerDisplayInstance().Uninstall();
     const std::lock_guard<std::mutex> lock(g_upcallMutex);
     if (g_activityClass != nullptr) env->DeleteGlobalRef(g_activityClass);

@@ -412,9 +412,8 @@ TEST_F(ParallelShaderCompileTest, NonzeroCompilerThreadsRestoresAsynchronousComp
     MaxShaderCompilerThreadsKHR(1);
     Vector<String> sources;
     const Vector<GLuint> shaders = EnqueueBacklog(64, 5000, sources);
-    const Bool anyOutstanding = std::any_of(shaders.begin(), shaders.end(), [](const GLuint shader) {
-        return QueryShaderCompletion(shader) == GL_FALSE;
-    });
+    const Bool anyOutstanding = std::any_of(
+        shaders.begin(), shaders.end(), [](const GLuint shader) { return QueryShaderCompletion(shader) == GL_FALSE; });
     if (!anyOutstanding) {
         GTEST_SKIP() << "the pool drained the backlog before the first query; asynchrony not observable here";
     }
@@ -516,15 +515,17 @@ TEST_F(ParallelShaderCompileTest, MaxShaderCompilerThreadsIgnoresTheCurrentBudge
 TEST_F(ParallelShaderCompileTest, BothBackendsAdvertiseTheExtensionIffAsyncIsEnabled) {
     {
         const AsyncModeScope async(true);
-        EXPECT_TRUE(Advertises(MG_Backend::DirectGLES::BuildAdvertisedExtensions(false, false, false, false, false, false),
-                               E_GL_KHR_parallel_shader_compile));
+        EXPECT_TRUE(
+            Advertises(MG_Backend::DirectGLES::BuildAdvertisedExtensions(false, false, false, false, false, false),
+                       E_GL_KHR_parallel_shader_compile));
         EXPECT_TRUE(Advertises(MG_Backend::DirectVulkan::BuildAdvertisedExtensions(false, false, false, false, false),
                                E_GL_KHR_parallel_shader_compile));
     }
     {
         const AsyncModeScope async(false);
-        EXPECT_FALSE(Advertises(MG_Backend::DirectGLES::BuildAdvertisedExtensions(false, false, false, false, false, false),
-                                E_GL_KHR_parallel_shader_compile))
+        EXPECT_FALSE(
+            Advertises(MG_Backend::DirectGLES::BuildAdvertisedExtensions(false, false, false, false, false, false),
+                       E_GL_KHR_parallel_shader_compile))
             << "MOBILEGL_ASYNC_SHADER_COMPILE=0 must withdraw the extension, not only the threading";
         EXPECT_FALSE(Advertises(MG_Backend::DirectVulkan::BuildAdvertisedExtensions(false, false, false, false, false),
                                 E_GL_KHR_parallel_shader_compile))

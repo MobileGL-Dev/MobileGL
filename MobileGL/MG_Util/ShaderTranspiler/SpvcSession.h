@@ -62,11 +62,11 @@ namespace MobileGL {
             // so a module that carries them and an implementation that ignores them capture
             // nothing at all.
             struct SpirvXfbCapture {
-                String name;        // the GL interface name: "gl_Position", or "Block.member"
-                Uint32 buffer = 0;  // XfbBuffer on the declaring variable
-                Uint32 offset = 0;  // Offset on the variable or on the member
-                Uint32 stride = 0;  // XfbStride on the declaring variable
-                Uint32 componentCount = 0;  // how many 32-bit components the capture occupies
+                String name;               // the GL interface name: "gl_Position", or "Block.member"
+                Uint32 buffer = 0;         // XfbBuffer on the declaring variable
+                Uint32 offset = 0;         // Offset on the variable or on the member
+                Uint32 stride = 0;         // XfbStride on the declaring variable
+                Uint32 componentCount = 0; // how many 32-bit components the capture occupies
             };
 
             enum class SessionUsageBit {
@@ -90,8 +90,7 @@ namespace MobileGL {
             public:
                 SpvcSession() = default;
 
-                explicit SpvcSession(const Vector<unsigned int>& spirv,
-                                     Flags<SessionUsageBit> usage);
+                explicit SpvcSession(const Vector<unsigned int>& spirv, Flags<SessionUsageBit> usage);
 
                 SpvcSession(SpvcSession&) = delete;
 
@@ -222,8 +221,7 @@ namespace MobileGL {
                 // sets `outUnknownConstantId` when an id the caller passed is not a
                 // specialization constant of this module, which the extension makes
                 // GL_INVALID_VALUE.
-                Bool SetSpecializationConstants(const Vector<Uint32>& constantIds,
-                                                const Vector<Uint32>& constantValues,
+                Bool SetSpecializationConstants(const Vector<Uint32>& constantIds, const Vector<Uint32>& constantValues,
                                                 Uint32& outUnknownConstantId);
                 spvc_result Compile(const char** result);
                 const SpvcMetadata& GetMetadata() const;

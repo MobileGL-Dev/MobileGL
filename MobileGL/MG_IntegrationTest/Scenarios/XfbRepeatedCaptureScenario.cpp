@@ -181,8 +181,7 @@ void main()
             static constexpr int kInputVertices = 4;
 
             static void DrainErrors() {
-                for (int i = 0; i < 16 && glGetError() != GL_NO_ERROR; ++i) {
-                }
+                for (int i = 0; i < 16 && glGetError() != GL_NO_ERROR; ++i) {}
             }
 
             static bool BackendHostsGeometry() {
@@ -234,8 +233,7 @@ void main()
                 return buffer.data();
             }
 
-            GLuint BuildCaptureProgram(const std::vector<std::pair<GLenum, const char*>>& stages,
-                                       const char* varying) {
+            GLuint BuildCaptureProgram(const std::vector<std::pair<GLenum, const char*>>& stages, const char* varying) {
                 return BuildCaptureProgram(stages, std::vector<const char*>{varying});
             }
 
@@ -308,8 +306,8 @@ void main()
                 glDisable(GL_RASTERIZER_DISCARD);
 
                 std::vector<int> readback(capturedInts, kPoison);
-                glGetBufferSubData(GL_TRANSFORM_FEEDBACK_BUFFER, 0,
-                                   static_cast<GLsizeiptr>(capturedInts * sizeof(int)), readback.data());
+                glGetBufferSubData(GL_TRANSFORM_FEEDBACK_BUFFER, 0, static_cast<GLsizeiptr>(capturedInts * sizeof(int)),
+                                   readback.data());
                 glUseProgram(0);
                 glDeleteBuffers(1, &xfbBuffer);
                 return readback;
@@ -423,9 +421,9 @@ void main()
                 GTEST_SKIP() << "no geometry stage on " << Gl().BackendName() << " (" << Gl().RendererString() << ")";
             }
 
-            const GLuint program = BuildCaptureProgram({{GL_VERTEX_SHADER, kPassthroughVertexSource},
-                                                        {GL_GEOMETRY_SHADER, kPointAmplifyingGeometrySource}},
-                                                       "gs_out_value");
+            const GLuint program = BuildCaptureProgram(
+                {{GL_VERTEX_SHADER, kPassthroughVertexSource}, {GL_GEOMETRY_SHADER, kPointAmplifyingGeometrySource}},
+                "gs_out_value");
             ASSERT_NE(program, 0u) << "fragmentless capture program failed to build: " << m_buildLog;
 
             const std::vector<int> expected = {10, 10, 11, 11, 12, 12, 13, 13};
@@ -472,8 +470,7 @@ void main()
         TEST_F(XfbRepeatedCaptureScenario, AVertexOnlyAdjacencyCaptureRecords) {
             if (!Ready()) GTEST_SKIP();
 
-            const GLuint program =
-                BuildCaptureProgram({{GL_VERTEX_SHADER, kPassthroughVertexSource}}, "vs_out_value");
+            const GLuint program = BuildCaptureProgram({{GL_VERTEX_SHADER, kPassthroughVertexSource}}, "vs_out_value");
             ASSERT_NE(program, 0u) << "vertex-only capture program failed to build: " << m_buildLog;
 
             // Four vertices of GL_LINES_ADJACENCY are one line whose real endpoints are the
@@ -524,8 +521,7 @@ void main()
             const GLsizeiptr captureBytes = static_cast<GLsizeiptr>(capturedInts * sizeof(int));
 
             // Span A: an ordinary capture, so capture point 0 is left holding bufferA.
-            const GLuint programA =
-                BuildCaptureProgram({{GL_VERTEX_SHADER, kPassthroughVertexSource}}, "vs_out_value");
+            const GLuint programA = BuildCaptureProgram({{GL_VERTEX_SHADER, kPassthroughVertexSource}}, "vs_out_value");
             ASSERT_NE(programA, 0u) << "plain capture program failed to build: " << m_buildLog;
 
             std::vector<int> poison(capturedInts, kPoison);
@@ -551,8 +547,8 @@ void main()
             ASSERT_TRUE(CapturedIs(afterA, spanAExpected)) << "the setup span itself did not capture";
 
             // Span B: gl_NextBuffer first, so buffer 0 captures nothing and only point 1 is bound.
-            const GLuint programB = BuildCaptureProgram({{GL_VERTEX_SHADER, kPassthroughVertexSource}},
-                                                        {"gl_NextBuffer", "vs_out_value"});
+            const GLuint programB =
+                BuildCaptureProgram({{GL_VERTEX_SHADER, kPassthroughVertexSource}}, {"gl_NextBuffer", "vs_out_value"});
             if (programB == 0) {
                 GTEST_SKIP() << "gl_NextBuffer capture lists are not linkable on " << Gl().BackendName() << " ("
                              << Gl().RendererString() << "): " << m_buildLog;
@@ -596,7 +592,6 @@ void main()
             glBindBufferBase(GL_TRANSFORM_FEEDBACK_BUFFER, 1, 0);
             glDeleteBuffers(1, &bufferA);
             glDeleteBuffers(1, &bufferB);
-
         }
 
         // The control for all of the above: a span that never draws must leave the capture
@@ -631,8 +626,8 @@ void main()
             glUseProgram(0);
 
             std::vector<int> readback(capturedInts, 0);
-            glGetBufferSubData(GL_TRANSFORM_FEEDBACK_BUFFER, 0,
-                               static_cast<GLsizeiptr>(capturedInts * sizeof(int)), readback.data());
+            glGetBufferSubData(GL_TRANSFORM_FEEDBACK_BUFFER, 0, static_cast<GLsizeiptr>(capturedInts * sizeof(int)),
+                               readback.data());
             EXPECT_TRUE(CapturedNothing(readback));
             EXPECT_EQ(glGetError(), GL_NO_ERROR);
 

@@ -167,11 +167,13 @@ namespace MGITest {
         // shape as CsoContentAddressingScenario's FAIL() on an unknown MGITEST_CSO_LANE.
         bool ArmNameIsRecognised() {
             const char* name = std::getenv(kArmMarker);
-            return name == nullptr || std::strcmp(name, "handles") == 0 ||
-                   std::strcmp(name, "legacy") == 0 || std::strcmp(name, "aba") == 0;
+            return name == nullptr || std::strcmp(name, "handles") == 0 || std::strcmp(name, "legacy") == 0 ||
+                   std::strcmp(name, "aba") == 0;
         }
 
-        bool RunningInAHandleRecycleLane() { return std::getenv(kArmMarker) != nullptr; }
+        bool RunningInAHandleRecycleLane() {
+            return std::getenv(kArmMarker) != nullptr;
+        }
 
         // Does THIS LANE run with a live client slot allocator behind it - i.e. did it pin a
         // non-zero MOBILEGL_PIPE_PUSH?
@@ -252,9 +254,12 @@ namespace MGITest {
 
         const char* ArmName(Arm arm) {
             switch (arm) {
-                case Arm::Handles: return "Handles";
-                case Arm::AbaControl: return "AbaControl";
-                default: return "Legacy";
+            case Arm::Handles:
+                return "Handles";
+            case Arm::AbaControl:
+                return "AbaControl";
+            default:
+                return "Legacy";
             }
         }
 
@@ -333,9 +338,8 @@ namespace MGITest {
         // input), the probe finds it and every one of the six flips to expecting the corruption.
         bool ObjectAbaControlIsWiredHere() {
             const std::string& backend = HeadlessGL::Get().BackendName();
-            const bool knob = backend == "DirectVulkan"
-                                  ? BuildMarkerIsSet("MGITEST_HANDLE_ABA_OBJECTS_DirectVulkan")
-                                  : BuildMarkerIsSet("MGITEST_HANDLE_ABA_OBJECTS_DirectGLES");
+            const bool knob = backend == "DirectVulkan" ? BuildMarkerIsSet("MGITEST_HANDLE_ABA_OBJECTS_DirectVulkan")
+                                                        : BuildMarkerIsSet("MGITEST_HANDLE_ABA_OBJECTS_DirectGLES");
             // Both halves, because either alone is a lie: a knob consumer with no object re-key
             // has nothing to defeat, and an object re-key with no knob consumer cannot be defeated.
             return knob && ThisBackendsObjectRekeyHasLanded();
@@ -399,8 +403,8 @@ void main() { oColor = texture(uTex, vUv); }
         constexpr int kInset = 2;
 
         void ExpectWholeViewportIs(const Image& image, const char* expected, const std::string& when) {
-            EXPECT_TRUE(RegionIsMostly(image, kInset, image.Width() - kInset, kInset, image.Height() - kInset,
-                                       expected, 0.0, when));
+            EXPECT_TRUE(RegionIsMostly(image, kInset, image.Width() - kInset, kInset, image.Height() - kInset, expected,
+                                       0.0, when));
         }
 
         // The one thing the whole file turns on: did the pixels come from the REPLACEMENT
@@ -411,25 +415,24 @@ void main() { oColor = texture(uTex, vUv); }
             // passes. The arm's expectation is only half the evidence, and a reader of the CI log
             // should not have to infer the other half from the exit status - least of all for a
             // control whose whole claim is "the corruption is still reproducible here".
-            const bool sawStale = static_cast<bool>(RegionIsMostly(
-                image, kInset, image.Width() - kInset, kInset, image.Height() - kInset, stale, 0.0, when));
-            const bool sawFresh = static_cast<bool>(RegionIsMostly(
-                image, kInset, image.Width() - kInset, kInset, image.Height() - kInset, fresh, 0.0, when));
+            const bool sawStale = static_cast<bool>(RegionIsMostly(image, kInset, image.Width() - kInset, kInset,
+                                                                   image.Height() - kInset, stale, 0.0, when));
+            const bool sawFresh = static_cast<bool>(RegionIsMostly(image, kInset, image.Width() - kInset, kInset,
+                                                                   image.Height() - kInset, fresh, 0.0, when));
             const bool expectsStale = arm == Arm::AbaControl && armExpectsCorruption;
-            std::cout << "[ HandleRecycle ] arm=" << ArmName(arm) << " expected="
-                      << (expectsStale ? "STALE" : "FRESH") << " observed="
-                      << (sawStale ? "STALE" : (sawFresh ? "FRESH" : "NEITHER")) << " (stale=" << stale
+            std::cout << "[ HandleRecycle ] arm=" << ArmName(arm) << " expected=" << (expectsStale ? "STALE" : "FRESH")
+                      << " observed=" << (sawStale ? "STALE" : (sawFresh ? "FRESH" : "NEITHER")) << " (stale=" << stale
                       << ", fresh=" << fresh << ") - " << when << std::endl;
             if (expectsStale) {
                 // The corruption IS the assertion. If this ever goes green-by-being-correct the
                 // reproducer has stopped reproducing and the other two arms prove nothing.
-                ExpectWholeViewportIs(image, stale, when + " [AbaControl expects the STALE object's pixels: "
-                                                          "the identity half of every key is deliberately "
-                                                          "defeated]");
+                ExpectWholeViewportIs(image, stale,
+                                      when + " [AbaControl expects the STALE object's pixels: "
+                                             "the identity half of every key is deliberately "
+                                             "defeated]");
                 return;
             }
-            ExpectWholeViewportIs(image, fresh,
-                                  when + " [" + ArmName(arm) + " expects the replacement's pixels]");
+            ExpectWholeViewportIs(image, fresh, when + " [" + ArmName(arm) + " expects the replacement's pixels]");
         }
 
         class HandleRecycleScenario : public ScenarioTest {
@@ -492,29 +495,30 @@ void main() { oColor = texture(uTex, vUv); }
                                     "arm is the one that is meaningful here, and it runs.";
                 }
                 switch (m_arm) {
-                    case Arm::Handles:
-                        if (!ThisBackendsRekeyHasLanded()) {
-                            GTEST_SKIP() << "the Handles arm needs the backend's {slot, gen} re-key, and this "
-                                            "build does not have it: the build's capability probe found no "
-                                            "slot table and no Track H subsystem constant under "
-                                            "MobileGL/MG_Backend/"
-                                         << Gl().BackendName()
-                                         << " (P2 package C for DirectGLES, package D for DirectVulkan). The "
-                                            "arm is registered and visible, and arms itself when that "
-                                            "package lands in a push build.";
-                        }
-                        return;
-                    case Arm::AbaControl:
-                        if (!BuildMarkerIsSet("MGITEST_HANDLE_ABA_IMPLEMENTED")) {
-                            GTEST_SKIP() << "the AbaControl arm needs MOBILEGL_PIPE_HANDLE_ABA_CONTROL to have a "
-                                            "consumer, and this build has none: MG_Config parses the knob "
-                                            "(ConfigLoader.cpp) but no source under MobileGL/MG_Backend/ reads "
-                                            "Features.PipeHandleAbaControl, so the two guards the knob is "
-                                            "supposed to defeat are still in force and the ABA cannot be "
-                                            "reproduced. P2 package D owns that consumer.";
-                        }
-                        return;
-                    default: return;
+                case Arm::Handles:
+                    if (!ThisBackendsRekeyHasLanded()) {
+                        GTEST_SKIP() << "the Handles arm needs the backend's {slot, gen} re-key, and this "
+                                        "build does not have it: the build's capability probe found no "
+                                        "slot table and no Track H subsystem constant under "
+                                        "MobileGL/MG_Backend/"
+                                     << Gl().BackendName()
+                                     << " (P2 package C for DirectGLES, package D for DirectVulkan). The "
+                                        "arm is registered and visible, and arms itself when that "
+                                        "package lands in a push build.";
+                    }
+                    return;
+                case Arm::AbaControl:
+                    if (!BuildMarkerIsSet("MGITEST_HANDLE_ABA_IMPLEMENTED")) {
+                        GTEST_SKIP() << "the AbaControl arm needs MOBILEGL_PIPE_HANDLE_ABA_CONTROL to have a "
+                                        "consumer, and this build has none: MG_Config parses the knob "
+                                        "(ConfigLoader.cpp) but no source under MobileGL/MG_Backend/ reads "
+                                        "Features.PipeHandleAbaControl, so the two guards the knob is "
+                                        "supposed to defeat are still in force and the ABA cannot be "
+                                        "reproduced. P2 package D owns that consumer.";
+                    }
+                    return;
+                default:
+                    return;
                 }
             }
 
@@ -565,8 +569,8 @@ void main() { oColor = texture(uTex, vUv); }
             bool ObjectAbaExpectation(const char* kindName) {
                 const bool wired = ObjectAbaControlIsWiredHere();
                 if (m_arm == Arm::AbaControl) {
-                    std::cout << "[ HandleRecycle ] aba_control kind=" << kindName
-                              << " backend=" << Gl().BackendName() << " wired=" << (wired ? "1" : "0")
+                    std::cout << "[ HandleRecycle ] aba_control kind=" << kindName << " backend=" << Gl().BackendName()
+                              << " wired=" << (wired ? "1" : "0")
                               << (wired ? " (the knob defeats this kind's identity: the corruption IS "
                                           "the assertion)"
                                         : " (no Features.PipeHandleAbaControl consumer over this "
@@ -585,9 +589,8 @@ void main() { oColor = texture(uTex, vUv); }
                 GLuint buffer = 0;
                 glGenBuffers(1, &buffer);
                 glBindBuffer(GL_ARRAY_BUFFER, buffer);
-                glBufferData(GL_ARRAY_BUFFER,
-                             static_cast<GLsizeiptr>(vertices.size() * sizeof(Vertex)), vertices.data(),
-                             GL_STATIC_DRAW);
+                glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(vertices.size() * sizeof(Vertex)),
+                             vertices.data(), GL_STATIC_DRAW);
                 return buffer;
             }
 
@@ -611,7 +614,7 @@ void main() { oColor = texture(uTex, vUv); }
             // inheritance be seen: with one buffer, a stale set and a stale everything look the
             // same in the pixels.
             GLuint MakePositionBuffer() {
-                const float positions[12] = {-1.0f, -1.0f, 1.0f, -1.0f, 1.0f, 1.0f,
+                const float positions[12] = {-1.0f, -1.0f, 1.0f, -1.0f, 1.0f,  1.0f,
                                              -1.0f, -1.0f, 1.0f, 1.0f,  -1.0f, 1.0f};
                 GLuint buffer = 0;
                 glGenBuffers(1, &buffer);
@@ -728,8 +731,8 @@ void main() { oColor = texture(uTex, vUv); }
             // which is what C-1 is about, still moves every one of them.
             using ChurnRound = std::function<void(bool checkPixels, const std::function<void()>& observe)>;
             void AssertChurnReturnsEverySlot(PipeSlotKind kind, SlotSpace space, const char* kindName,
-                                             const char* owner, unsigned maxInFlight,
-                                             const ChurnRound& round, unsigned warmUpRounds = 2u) {
+                                             const char* owner, unsigned maxInFlight, const ChurnRound& round,
+                                             unsigned warmUpRounds = 2u) {
                 // THE LANE'S OWN PIN, not the arm (F-m4). The Legacy and AbaControl lanes run
                 // MOBILEGL_PIPE_PUSH=0 and really have no allocator to leak from; the Handles
                 // lanes and DirectVulkan.HandleRecycle.AbaControlHandles. all pin the shipping
@@ -777,7 +780,8 @@ void main() { oColor = texture(uTex, vUv); }
                 // needs and the second proves the steady state has been reached.
                 ASSERT_GE(warmUpRounds, 2u) << "the warm-up has to reach a steady state";
                 round(/*checkPixels=*/true, observe);
-                for (unsigned i = 1; i < warmUpRounds; ++i) round(/*checkPixels=*/false, observe);
+                for (unsigned i = 1; i < warmUpRounds; ++i)
+                    round(/*checkPixels=*/false, observe);
                 peakLive = 0;
 
                 unsigned liveBefore = 0;
@@ -786,18 +790,18 @@ void main() { oColor = texture(uTex, vUv); }
                 ASSERT_TRUE(ReadSpaceHighWater(kind, space, &highWaterBefore));
 
                 constexpr int kChurn = 48;
-                for (int i = 0; i < kChurn; ++i) round(/*checkPixels=*/false, observe);
+                for (int i = 0; i < kChurn; ++i)
+                    round(/*checkPixels=*/false, observe);
                 ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << "the churn left a GL error behind";
 
                 unsigned liveAfter = 0;
                 unsigned highWaterAfter = 0;
                 ASSERT_TRUE(ReadSpaceLiveCount(kind, space, &liveAfter));
                 ASSERT_TRUE(ReadSpaceHighWater(kind, space, &highWaterAfter));
-                std::cout << "[ HandleRecycle ] backend=" << Gl().BackendName() << " " << kindName
-                          << SpaceSuffix(space) << " live " << liveBefore << " -> " << liveAfter
-                          << " (peak " << peakLive << "), high water " << highWaterBefore << " -> "
-                          << highWaterAfter << " (floor " << highWaterFloor << ") over " << kChurn
-                          << " create/draw/destroy rounds" << std::endl;
+                std::cout << "[ HandleRecycle ] backend=" << Gl().BackendName() << " " << kindName << SpaceSuffix(space)
+                          << " live " << liveBefore << " -> " << liveAfter << " (peak " << peakLive << "), high water "
+                          << highWaterBefore << " -> " << highWaterAfter << " (floor " << highWaterFloor << ") over "
+                          << kChurn << " create/draw/destroy rounds" << std::endl;
 
                 // NOTHING WAS EVER MINTED, which is not "did not leak" and must not be reported as
                 // one. On the P4a contract tree the client emits nothing for any of these kinds -
@@ -807,9 +811,8 @@ void main() { oColor = texture(uTex, vUv); }
                 // to the other way of not being able to look, and it arms itself the moment the
                 // owning package's emitter lands.
                 if (highWaterAfter == highWaterFloor && peakLive == 0 && liveAfter == 0) {
-                    GTEST_SKIP() << "subsystem not implemented on this tree: the client minted no "
-                                 << kindName << SpaceSuffix(space)
-                                 << " slot at all over " << (kChurn + 2)
+                    GTEST_SKIP() << "subsystem not implemented on this tree: the client minted no " << kindName
+                                 << SpaceSuffix(space) << " slot at all over " << (kChurn + 2)
                                  << " create/draw/destroy rounds, so there is nothing here that "
                                     "could leak and a green would assert nothing. P4a package "
                                  << owner
@@ -1003,8 +1006,7 @@ void main() { oColor = texture(uTex, vUv); }
         //     window gets a process of its own, where every VAO carries the same layout and the
         //     buffer identity is again the only thing that differs.
         // ------------------------------------------------------------------------------------
-        TEST_F(HandleRecycleScenario,
-               AVertexArrayAtARecycledAddressDoesNotInheritItsPredecessorsVertexBufferSet) {
+        TEST_F(HandleRecycleScenario, AVertexArrayAtARecycledAddressDoesNotInheritItsPredecessorsVertexBufferSet) {
             if (!Ready()) return;
             SkipUnlessTheArmIsAssertableHere();
             if (IsSkipped()) return;
@@ -1069,7 +1071,6 @@ void main() { oColor = texture(uTex, vUv); }
             GLuint splitCleanupBuffers[3] = {positionBuffer, redColorBuffer, greenColorBuffer};
             glDeleteBuffers(3, splitCleanupBuffers);
         }
-
 
         // ------------------------------------------------------------------------------------
         // 1b. The BUFFER (P3a). Today a buffer's backend twin is reached from the frontend
@@ -1141,8 +1142,7 @@ void main() { oColor = texture(uTex, vUv); }
             // only thing that differs and the only thing the pixels can show.
             const GLuint greenBuffer = MakeQuadBuffer(0.0f, 1.0f, 0.0f);
             ConfigureQuadVao(vao, greenBuffer);
-            ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR))
-                << "building the replacement buffer left a GL error behind";
+            ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << "building the replacement buffer left a GL error behind";
 
             glBindVertexArray(vao);
             glDrawArrays(GL_TRIANGLES, 0, kVertexCount);
@@ -1235,8 +1235,8 @@ void main() { oColor = texture(uTex, vUv); }
             RecordProperty("recycled_texture_name", static_cast<int>(greenTexture));
 
             const Image image = DrawTexturedQuadAndRead(vao, greenTexture);
-            ExpectPixelsFor(m_arm, /*armExpectsCorruption=*/ObjectAbaExpectation("texture"), image,
-                            "green", "red", "the draw after the texture was recycled");
+            ExpectPixelsFor(m_arm, /*armExpectsCorruption=*/ObjectAbaExpectation("texture"), image, "green", "red",
+                            "the draw after the texture was recycled");
 
             glBindTexture(GL_TEXTURE_2D, 0);
             GLuint cleanupTexture = greenTexture;
@@ -1328,8 +1328,7 @@ void main() { oColor = texture(uTex, vUv); }
                 glBindTexture(GL_TEXTURE_2D, 0);
                 return texels;
             };
-            const auto offendersAgainst = [](const std::vector<std::uint8_t>& texels, int r, int g,
-                                             int b) {
+            const auto offendersAgainst = [](const std::vector<std::uint8_t>& texels, int r, int g, int b) {
                 int offenders = 0;
                 for (std::size_t i = 0; i < texels.size(); i += 4) {
                     if (texels[i] != r || texels[i + 1] != g || texels[i + 2] != b) ++offenders;
@@ -1345,10 +1344,9 @@ void main() { oColor = texture(uTex, vUv); }
             const bool sawStale = deadIsNotRed != 0 && offendersAgainst(deadTexels, 0, 255, 0) == 0;
             std::cout << "[ HandleRecycle ] arm=" << ArmName(m_arm) << " framebuffer observed="
                       << (sawStale ? "STALE (the clear reached the DEAD framebuffer's attachment)"
-                                   : (replacementIsNotGreen == 0
-                                          ? "FRESH (the clear reached the replacement's own "
-                                            "attachment)"
-                                          : "NEITHER"))
+                                   : (replacementIsNotGreen == 0 ? "FRESH (the clear reached the replacement's own "
+                                                                   "attachment)"
+                                                                 : "NEITHER"))
                       << std::endl;
 
             if (ObjectAbaExpectation("framebuffer") && m_arm == Arm::AbaControl) {
@@ -1360,27 +1358,23 @@ void main() { oColor = texture(uTex, vUv); }
                 // claims. sawStale is the predicate the case already computes and prints - the
                 // dead attachment is now the REPLACEMENT'S green, i.e. the replacement's clear
                 // landed there - so the assertion and the printed line say the same thing.
-                EXPECT_TRUE(sawStale)
-                    << "[AbaControl expects the STALE framebuffer] the DEAD framebuffer's "
-                       "attachment did not come back as the replacement's green, so the "
-                       "replacement's clear did not land on it and the ABA was not reproduced - "
-                       "the control has stopped controlling anything. Texels that are neither the "
-                       "warm-up red nor the replacement green are a third answer and are not a "
-                       "reproduction either ("
-                    << deadIsNotRed << " of " << (deadTexels.size() / 4)
-                    << " dead texels are not red).";
+                EXPECT_TRUE(sawStale) << "[AbaControl expects the STALE framebuffer] the DEAD framebuffer's "
+                                         "attachment did not come back as the replacement's green, so the "
+                                         "replacement's clear did not land on it and the ABA was not reproduced - "
+                                         "the control has stopped controlling anything. Texels that are neither the "
+                                         "warm-up red nor the replacement green are a third answer and are not a "
+                                         "reproduction either ("
+                                      << deadIsNotRed << " of " << (deadTexels.size() / 4)
+                                      << " dead texels are not red).";
             } else {
                 EXPECT_EQ(replacementIsNotGreen, 0)
                     << "the replacement framebuffer's own attachment is not the colour it was "
                        "cleared to, so the clear reached a framebuffer this one only shares an "
                        "address with (first texel rgba="
-                    << static_cast<int>(replacementTexels[0]) << ","
-                    << static_cast<int>(replacementTexels[1]) << ","
-                    << static_cast<int>(replacementTexels[2]) << ","
-                    << static_cast<int>(replacementTexels[3]) << ")";
-                EXPECT_EQ(deadIsNotRed, 0)
-                    << "the DEAD framebuffer's attachment changed colour, so the replacement's "
-                       "clear reached the framebuffer it only shares a name with";
+                    << static_cast<int>(replacementTexels[0]) << "," << static_cast<int>(replacementTexels[1]) << ","
+                    << static_cast<int>(replacementTexels[2]) << "," << static_cast<int>(replacementTexels[3]) << ")";
+                EXPECT_EQ(deadIsNotRed, 0) << "the DEAD framebuffer's attachment changed colour, so the replacement's "
+                                              "clear reached the framebuffer it only shares a name with";
             }
 
             glBindFramebuffer(GL_FRAMEBUFFER, 0);
@@ -1479,25 +1473,21 @@ void main() { oColor = texture(uTex, vUv); }
 
             unsigned liveBefore = 0;
             unsigned highWaterBefore = 0;
-            ASSERT_TRUE(MGITest::PeekPipeSlotLiveCount(MGITest::PipeSlotKind::VertexElementsCso,
-                                                       &liveBefore));
-            ASSERT_TRUE(MGITest::PeekPipeSlotHighWater(MGITest::PipeSlotKind::VertexElementsCso,
-                                                       &highWaterBefore));
+            ASSERT_TRUE(MGITest::PeekPipeSlotLiveCount(MGITest::PipeSlotKind::VertexElementsCso, &liveBefore));
+            ASSERT_TRUE(MGITest::PeekPipeSlotHighWater(MGITest::PipeSlotKind::VertexElementsCso, &highWaterBefore));
 
             constexpr int kChurn = 48;
-            for (int i = 0; i < kChurn; ++i) round("a churn draw", /*checkPixels=*/false);
+            for (int i = 0; i < kChurn; ++i)
+                round("a churn draw", /*checkPixels=*/false);
             ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << "the churn left a GL error behind";
 
             unsigned liveAfter = 0;
             unsigned highWaterAfter = 0;
-            ASSERT_TRUE(MGITest::PeekPipeSlotLiveCount(MGITest::PipeSlotKind::VertexElementsCso,
-                                                       &liveAfter));
-            ASSERT_TRUE(MGITest::PeekPipeSlotHighWater(MGITest::PipeSlotKind::VertexElementsCso,
-                                                       &highWaterAfter));
-            std::cout << "[ HandleRecycle ] backend=" << Gl().BackendName() << " VertexElementsCso live "
-                      << liveBefore << " -> " << liveAfter << " (peak " << peakLive << "), high water "
-                      << highWaterBefore << " -> " << highWaterAfter << " over " << kChurn
-                      << " create/draw/destroy rounds" << std::endl;
+            ASSERT_TRUE(MGITest::PeekPipeSlotLiveCount(MGITest::PipeSlotKind::VertexElementsCso, &liveAfter));
+            ASSERT_TRUE(MGITest::PeekPipeSlotHighWater(MGITest::PipeSlotKind::VertexElementsCso, &highWaterAfter));
+            std::cout << "[ HandleRecycle ] backend=" << Gl().BackendName() << " VertexElementsCso live " << liveBefore
+                      << " -> " << liveAfter << " (peak " << peakLive << "), high water " << highWaterBefore << " -> "
+                      << highWaterAfter << " over " << kChurn << " create/draw/destroy rounds" << std::endl;
 
             EXPECT_EQ(liveAfter, liveBefore)
                 << kChurn << " vertex arrays were created, drawn with and destroyed and " << (liveAfter - liveBefore)
@@ -1569,8 +1559,7 @@ void main() { oColor = texture(uTex, vUv); }
             glBindRenderbuffer(GL_RENDERBUFFER, deadRenderbuffer);
             glRenderbufferStorage(GL_RENDERBUFFER, GL_RGBA8, 4, 4);
             glBindFramebuffer(GL_FRAMEBUFFER, fbo);
-            glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER,
-                                      deadRenderbuffer);
+            glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, deadRenderbuffer);
             ASSERT_EQ(glCheckFramebufferStatus(GL_FRAMEBUFFER), GLenum(GL_FRAMEBUFFER_COMPLETE));
             for (int frame = 0; frame < kWarmupFrames; ++frame) {
                 glBindFramebuffer(GL_FRAMEBUFFER, fbo);
@@ -1594,17 +1583,15 @@ void main() { oColor = texture(uTex, vUv); }
             if (liveRenderbuffer != deadRenderbuffer) {
                 glDeleteRenderbuffers(1, &liveRenderbuffer);
                 glDeleteFramebuffers(1, &fbo);
-                GTEST_SKIP() << "inconclusive, not proven: glGenRenderbuffers returned "
-                             << liveRenderbuffer << " rather than the deleted " << deadRenderbuffer
-                             << ", so no ABA was constructed";
+                GTEST_SKIP() << "inconclusive, not proven: glGenRenderbuffers returned " << liveRenderbuffer
+                             << " rather than the deleted " << deadRenderbuffer << ", so no ABA was constructed";
             }
             RecordProperty("recycled_renderbuffer_name", static_cast<int>(liveRenderbuffer));
 
             glBindRenderbuffer(GL_RENDERBUFFER, liveRenderbuffer);
             glRenderbufferStorage(GL_RENDERBUFFER, GL_RGBA8, 8, 8);
             glBindFramebuffer(GL_FRAMEBUFFER, fbo);
-            glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER,
-                                      liveRenderbuffer);
+            glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, liveRenderbuffer);
             const GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
             glViewport(0, 0, 8, 8);
             ClearTo(0.0f, 1.0f, 0.0f, 1.0f);
@@ -1613,28 +1600,26 @@ void main() { oColor = texture(uTex, vUv); }
             Gl().EndFrame();
 
             const bool complete = status == GLenum(GL_FRAMEBUFFER_COMPLETE);
-            const bool allGreen = complete && static_cast<bool>(RegionIsMostly(image, 0, 8, 0, 8,
-                                                                              "green", 0.0,
-                                                                              "the replacement "
-                                                                              "renderbuffer"));
-            std::cout << "[ HandleRecycle ] arm=" << ArmName(m_arm)
-                      << " renderbuffer observed=" << (allGreen ? "FRESH (8x8 all green)"
-                                                                : "STALE (the replacement did not "
-                                                                  "get its own 8x8 storage)")
+            const bool allGreen = complete && static_cast<bool>(RegionIsMostly(image, 0, 8, 0, 8, "green", 0.0,
+                                                                               "the replacement "
+                                                                               "renderbuffer"));
+            std::cout << "[ HandleRecycle ] arm=" << ArmName(m_arm) << " renderbuffer observed="
+                      << (allGreen ? "FRESH (8x8 all green)"
+                                   : "STALE (the replacement did not "
+                                     "get its own 8x8 storage)")
                       << " fbo_status=0x" << std::hex << status << std::dec << std::endl;
 
             if (ObjectAbaExpectation("renderbuffer") && m_arm == Arm::AbaControl) {
-                EXPECT_FALSE(allGreen)
-                    << "[AbaControl expects the STALE renderbuffer] the replacement got its own 8x8 "
-                       "storage with the identity half of the twin key deliberately defeated, so "
-                       "the ABA was not reproduced and this control is controlling nothing.";
+                EXPECT_FALSE(allGreen) << "[AbaControl expects the STALE renderbuffer] the replacement got its own 8x8 "
+                                          "storage with the identity half of the twin key deliberately defeated, so "
+                                          "the ABA was not reproduced and this control is controlling nothing.";
             } else {
                 EXPECT_EQ(status, GLenum(GL_FRAMEBUFFER_COMPLETE))
                     << "the framebuffer went incomplete after the recycled renderbuffer was given "
                        "8x8 storage, which is what a driver object inherited from the dead 4x4 "
                        "renderbuffer looks like";
-                EXPECT_TRUE(RegionIsMostly(image, 0, 8, 0, 8, "green", 0.0,
-                                           "the replacement renderbuffer's own 8x8 storage"))
+                EXPECT_TRUE(
+                    RegionIsMostly(image, 0, 8, 0, 8, "green", 0.0, "the replacement renderbuffer's own 8x8 storage"))
                     << "the replacement renderbuffer did not read back as its own storage, so the "
                        "clear reached a renderbuffer it only shares a name with";
             }
@@ -1730,15 +1715,13 @@ void main() { oColor = texture(uTex, vec2(4.0, 4.0)); }
                 glDeleteBuffers(1, const_cast<GLuint*>(&buffer));
                 glDeleteProgram(borderProgram);
                 GTEST_SKIP() << "inconclusive, not proven: glGenSamplers returned " << greenSampler
-                             << " rather than the deleted " << redSampler
-                             << ", so no ABA was constructed";
+                             << " rather than the deleted " << redSampler << ", so no ABA was constructed";
             }
             RecordProperty("recycled_sampler_name", static_cast<int>(greenSampler));
 
             const Image image = drawThroughSampler(greenSampler);
-            ExpectPixelsFor(m_arm, /*armExpectsCorruption=*/ObjectAbaExpectation("sampler object"),
-                            image, "green", "red",
-                            "the draw after the sampler object was recycled");
+            ExpectPixelsFor(m_arm, /*armExpectsCorruption=*/ObjectAbaExpectation("sampler object"), image, "green",
+                            "red", "the draw after the sampler object was recycled");
 
             glBindSampler(0, 0);
             glBindTexture(GL_TEXTURE_2D, 0);
@@ -1831,8 +1814,7 @@ void main() { oColor = texture(uTex, vec2(4.0, 4.0)); }
             RecordProperty("recycled_sampler_view_texture_name", static_cast<int>(greenTexture));
 
             const Image image = drawSampled(greenTexture);
-            ExpectPixelsFor(m_arm, /*armExpectsCorruption=*/ObjectAbaExpectation("sampler view"),
-                            image, "green", "red",
+            ExpectPixelsFor(m_arm, /*armExpectsCorruption=*/ObjectAbaExpectation("sampler view"), image, "green", "red",
                             "the draw after the sampler view's texture was recycled under a live "
                             "sampler object");
 
@@ -1911,14 +1893,13 @@ void main() { oColor = vec4(0.0, 1.0, 0.0, 1.0); }
                 glDeleteVertexArrays(1, &vao);
                 glDeleteBuffers(1, const_cast<GLuint*>(&buffer));
                 GTEST_SKIP() << "inconclusive, not proven: glCreateProgram returned " << greenProgram
-                             << " rather than the deleted " << redProgram
-                             << ", so no ABA was constructed";
+                             << " rather than the deleted " << redProgram << ", so no ABA was constructed";
             }
             RecordProperty("recycled_program_name", static_cast<int>(greenProgram));
 
             const Image image = drawWith(greenProgram);
-            ExpectPixelsFor(m_arm, /*armExpectsCorruption=*/ObjectAbaExpectation("program"), image,
-                            "green", "red", "the draw after the program was recycled");
+            ExpectPixelsFor(m_arm, /*armExpectsCorruption=*/ObjectAbaExpectation("program"), image, "green", "red",
+                            "the draw after the program was recycled");
 
             glUseProgram(0);
             glDeleteProgram(greenProgram);
@@ -1945,8 +1926,7 @@ void main() { oColor = vec4(0.0, 1.0, 0.0, 1.0); }
 
             AssertChurnReturnsEverySlot(
                 PipeSlotKind::Texture, SlotSpace::Ordinary, "Texture", "B (clientfb)",
-                /*maxInFlight=*/1u,
-                [&](bool checkPixels, const std::function<void()>& observe) {
+                /*maxInFlight=*/1u, [&](bool checkPixels, const std::function<void()>& observe) {
                     const GLuint texture = MakeSolidTexture(0, 255, 0);
                     const Image image = DrawTexturedQuadAndRead(vao, texture);
                     if (checkPixels) {
@@ -1984,8 +1964,7 @@ void main() { oColor = vec4(0.0, 1.0, 0.0, 1.0); }
             // that forgot one of its three frees leaks only that kind and nothing else moves.
             AssertChurnReturnsEverySlot(
                 PipeSlotKind::SamplerViewCso, SlotSpace::Ordinary, "SamplerViewCso", "C (clientsp)",
-                /*maxInFlight=*/1u,
-                [&](bool checkPixels, const std::function<void()>& observe) {
+                /*maxInFlight=*/1u, [&](bool checkPixels, const std::function<void()>& observe) {
                     const GLuint texture = MakeSolidTexture(0, 255, 0);
                     const Image image = DrawTexturedQuadAndRead(vao, texture);
                     if (checkPixels) {
@@ -2014,15 +1993,13 @@ void main() { oColor = vec4(0.0, 1.0, 0.0, 1.0); }
 
             AssertChurnReturnsEverySlot(
                 PipeSlotKind::Renderbuffer, SlotSpace::Ordinary, "Renderbuffer", "B (clientfb)",
-                /*maxInFlight=*/1u,
-                [&](bool checkPixels, const std::function<void()>& observe) {
+                /*maxInFlight=*/1u, [&](bool checkPixels, const std::function<void()>& observe) {
                     GLuint renderbuffer = 0;
                     glGenRenderbuffers(1, &renderbuffer);
                     glBindRenderbuffer(GL_RENDERBUFFER, renderbuffer);
                     glRenderbufferStorage(GL_RENDERBUFFER, GL_RGBA8, 4, 4);
                     glBindFramebuffer(GL_FRAMEBUFFER, fbo);
-                    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER,
-                                              renderbuffer);
+                    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, renderbuffer);
                     glViewport(0, 0, 4, 4);
                     ClearTo(0.0f, 1.0f, 0.0f, 1.0f);
                     if (checkPixels) {
@@ -2061,13 +2038,11 @@ void main() { oColor = vec4(0.0, 1.0, 0.0, 1.0); }
             // whole of its lifetime coverage rather than a supplement to a wire assertion.
             AssertChurnReturnsEverySlot(
                 PipeSlotKind::Framebuffer, SlotSpace::Ordinary, "Framebuffer", "B (clientfb)",
-                /*maxInFlight=*/1u,
-                [&](bool checkPixels, const std::function<void()>& observe) {
+                /*maxInFlight=*/1u, [&](bool checkPixels, const std::function<void()>& observe) {
                     GLuint fbo = 0;
                     glGenFramebuffers(1, &fbo);
                     glBindFramebuffer(GL_FRAMEBUFFER, fbo);
-                    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
-                                           attachment, 0);
+                    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, attachment, 0);
                     glViewport(0, 0, 4, 4);
                     ClearTo(0.0f, 1.0f, 0.0f, 1.0f);
                     if (checkPixels) {
@@ -2120,8 +2095,7 @@ void main() { oColor = vec4(0.0, 1.0, 0.0, 1.0); }
                     glSamplerParameteri(sampler, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
                     glSamplerParameteri(sampler, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
                     glSamplerParameteri(sampler, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-                    glSamplerParameterf(sampler, GL_TEXTURE_MIN_LOD,
-                                        -static_cast<float>(round % 16));
+                    glSamplerParameterf(sampler, GL_TEXTURE_MIN_LOD, -static_cast<float>(round % 16));
                     ++round;
 
                     BindDefaultFramebuffer();
@@ -2170,8 +2144,7 @@ void main() { oColor = vec4(0.0, 1.0, 0.0, 1.0); }
             int round = 0;
             AssertChurnReturnsEverySlot(
                 PipeSlotKind::ShaderCso, SlotSpace::Ordinary, "ShaderCso", "C (clientsp)",
-                /*maxInFlight=*/1u,
-                [&](bool checkPixels, const std::function<void()>& observe) {
+                /*maxInFlight=*/1u, [&](bool checkPixels, const std::function<void()>& observe) {
                     const std::string fs = "#version 330 core\nout vec4 oColor;\nvoid main() { "
                                            "oColor = vec4(0.0, 1.0, 0.0, 1.0) + vec4(" +
                                            std::to_string(round) + ".0 * 0.0); }\n";
@@ -2246,8 +2219,7 @@ void main() {
                 SlotSpace::CompositeBand, "ShaderCso (pipeline composites)", "C (clientsp)",
                 // ONE in flight, because in the BAND a round holds exactly one slot: the
                 // composite. (Against the ordinary space the answer would have been three.)
-                /*maxInFlight=*/1u,
-                [&](bool checkPixels, const std::function<void()>& observe) {
+                /*maxInFlight=*/1u, [&](bool checkPixels, const std::function<void()>& observe) {
                     // A DIFFERENT FRAGMENT STAGE PER ROUND: the composite is keyed on
                     // ProgramPipelineObject::ComputeDrawProgramSignature(), the per-stage
                     // {lifetimeId, GetLinkVersion()} array, so a round that rebuilt an identical
@@ -2255,7 +2227,8 @@ void main() {
                     // and the case would assert nothing about the release paths.
                     const std::string fsSource =
                         "#version 410 core\nin vec3 vColor;\nout vec4 oColor;\nvoid main() { oColor "
-                        "= vec4(vColor, 1.0) + vec4(" + std::to_string(round) + ".0 * 0.0); }\n";
+                        "= vec4(vColor, 1.0) + vec4(" +
+                        std::to_string(round) + ".0 * 0.0); }\n";
                     ++round;
                     const char* vsSource = kSeparableVS;
                     const char* fsSourcePtr = fsSource.c_str();

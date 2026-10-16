@@ -133,8 +133,7 @@ namespace MobileGL {
                 // %res makes every downstream use pick the zero up with no further rewriting.
                 for (size_t i = 0; i < baseVertexLoads.size(); ++i) {
                     baseVertexLoads[i]->SetOpcode(spv::Op::OpCopyObject);
-                    baseVertexLoads[i]->SetInOperands(Instruction::OperandList{
-                        {SPV_OPERAND_TYPE_ID, {zeroIds[i]}}});
+                    baseVertexLoads[i]->SetInOperands(Instruction::OperandList{{SPV_OPERAND_TYPE_ID, {zeroIds[i]}}});
                 }
 
                 irContext->InvalidateAnalysesExceptFor(IRContext::kAnalysisNone);

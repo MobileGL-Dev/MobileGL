@@ -47,9 +47,9 @@ namespace {
         ::setenv("MOBILEGL_LOG_FILE_PATH", logBase.c_str(), 1);
         ::setenv("MOBILEGL_IPC_ROLE", "server", 1);
         ::setenv("MOBILEGL_IPC_DIAL", "no", 1);
-        for (const char* name : {"MOBILEGL_TRANSPORT", "MOBILEGL_IPC_SERVER_PATH", "MOBILEGL_IPC_RING_MB",
-                                 "MOBILEGL_IPC_STAGE_MB", "MOBILEGL_IPC_CONTROL", "MOBILEGL_IPC_SURFACE",
-                                 "MOBILEGL_BACKEND_TYPE"})
+        for (const char* name :
+             {"MOBILEGL_TRANSPORT", "MOBILEGL_IPC_SERVER_PATH", "MOBILEGL_IPC_RING_MB", "MOBILEGL_IPC_STAGE_MB",
+              "MOBILEGL_IPC_CONTROL", "MOBILEGL_IPC_SURFACE", "MOBILEGL_BACKEND_TYPE"})
             ::unsetenv(name);
         sigset_t stop;
         sigemptyset(&stop);
@@ -147,10 +147,12 @@ namespace {
             return false;
         server->pid = launched.pid;
         bool listening = false;
-        (void)WaitFor([&] {
-            if (server->Log().find("listening on") != std::string::npos) return listening = true;
-            return server->WaitExit(0) && server->pid <= 0;
-        }, 10000);
+        (void)WaitFor(
+            [&] {
+                if (server->Log().find("listening on") != std::string::npos) return listening = true;
+                return server->WaitExit(0) && server->pid <= 0;
+            },
+            10000);
         // The listener takes the native address; the client control selector includes its
         // transport prefix. Bare @name is not a supported MOBILEGL_IPC_CONTROL spelling.
         if (listening) server->endpoint = "unix:" + server->endpoint;
@@ -193,8 +195,8 @@ TEST(UnixSupervisor, ConcurrentSharedMemoryClientsHaveSeparateWorkersAndAnExited
     EXPECT_EQ(excess.started, 0) << "the configured live-session limit was ignored";
     // The refusal line reaches the supervisor's log asynchronously; the client can see the refusal
     // first (one CI run read the log before the line landed), so the log is waited for.
-    EXPECT_TRUE(WaitFor([&] { return server.Log().find("Refuse{Busy} the session limit is reached") != std::string::npos; },
-                        5000))
+    EXPECT_TRUE(WaitFor(
+        [&] { return server.Log().find("Refuse{Busy} the session limit is reached") != std::string::npos; }, 5000))
         << server.Log();
 
     // The second worker must not hold the first peer's connection open after its EOF. This also
@@ -265,8 +267,8 @@ TEST(InProcessServer, SequentialSessionsShareOneProcessAndALatchedSessionDoesNot
     // Where headless EGL exists, both healthy sessions rendered - the backend came up, went away with
     // session A and came up again in the same process.
     if (a.egl == 0 || c.egl == 0) {
-        GTEST_SKIP() << "sessions, latch reset and stop proven; the render half needs headless EGL (" << a.note
-                     << " / " << c.note << ")";
+        GTEST_SKIP() << "sessions, latch reset and stop proven; the render half needs headless EGL (" << a.note << " / "
+                     << c.note << ")";
     }
     EXPECT_EQ(a.status, Remote::Wire::ReplySink::kStatusOk) << a.note;
     EXPECT_EQ(a.pixel, 0xFF00FF00u) << "session A's clear did not read back green";
@@ -307,9 +309,8 @@ TEST(InProcessServer, TheFirstSessionsBackendIsPinnedForTheProcessLifetime) {
     ASSERT_EQ(a.started, 1) << a.note << "\n" << server.Log();
     ASSERT_TRUE(WaitFor([&] { return !InProcessReapLine(server, 1).empty(); }, 15000)) << server.Log();
 
-    const PeerReport b = RunPeer(server.endpoint, ApplyOneRecord, /*stopCleanly=*/true, 30000, 0, nullptr, [] {
-        MobileGL::MG_Config::ActiveBackendType = MobileGL::BackendType::DirectVulkan;
-    });
+    const PeerReport b = RunPeer(server.endpoint, ApplyOneRecord, /*stopCleanly=*/true, 30000, 0, nullptr,
+                                 [] { MobileGL::MG_Config::ActiveBackendType = MobileGL::BackendType::DirectVulkan; });
     EXPECT_EQ(b.started, 0) << "a Magma session was admitted into a process whose first session was Espryt";
     const std::string log = server.Log();
     EXPECT_NE(log.find("pinned backend type"), std::string::npos) << log;
@@ -336,8 +337,7 @@ TEST(SupervisorChildren, AForkedSessionChildDiesWithItsSupervisor) {
     ::kill(supervisor.pid, SIGKILL);
     ASSERT_TRUE(supervisor.WaitExit(5000));
     int status = 0;
-    const bool reaped = WaitFor(
-        [&] { return ::waitpid(sessionChild, &status, WNOHANG) == sessionChild; }, 5000);
+    const bool reaped = WaitFor([&] { return ::waitpid(sessionChild, &status, WNOHANG) == sessionChild; }, 5000);
     EXPECT_TRUE(reaped) << "the session child outlived its supervisor by 5 s with its client still connected";
     if (reaped) {
         EXPECT_TRUE(WIFSIGNALED(status) && WTERMSIG(status) == SIGKILL)

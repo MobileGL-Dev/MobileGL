@@ -155,8 +155,8 @@ void main() { oColor = vec4(vColor, 1.0); }
             void ExpectTriangleInterior(const Image& image, const char* color, const std::string& when) {
                 const int w = image.Width();
                 const int h = image.Height();
-                EXPECT_TRUE(RegionIsMostly(image, (w * 45) / 100, (w * 55) / 100, (h * 20) / 100,
-                                           (h * 30) / 100, color, 0.0, when));
+                EXPECT_TRUE(RegionIsMostly(image, (w * 45) / 100, (w * 55) / 100, (h * 20) / 100, (h * 30) / 100, color,
+                                           0.0, when));
             }
 
             // The bottom-left corner, which is below the triangle's base and left of its left
@@ -258,8 +258,7 @@ void main() { oColor = vec4(vColor, 1.0); }
         // R-10's proof obligation over target B. Published in every split lane, small ring
         // included - the cap moves with MOBILEGL_IPC_RING_MB, so the SmallRing lane is also the
         // arm where a record closest to its cap would show up first.
-        WireLedger::ExpectMaxRecordBytesUnderCap(
-            "TriangleScenario.TheSameVboAndVaoRedrawAcrossAFrameBoundary");
+        WireLedger::ExpectMaxRecordBytesUnderCap("TriangleScenario.TheSameVboAndVaoRedrawAcrossAFrameBoundary");
 
         // Exit gate E3(e). Only the small-ring lane drives the overrun: at the default 8 MiB
         // the same loop would take eight times as long to say the same thing, and the point of
@@ -282,8 +281,8 @@ void main() { oColor = vec4(vColor, 1.0); }
             glBindBuffer(GL_COPY_WRITE_BUFFER, 0);
             glDeleteBuffers(1, &pressureBuffer);
             Gl().EndFrame();
-            WireLedger::ExpectSmallRingWrappedAtLeastOnce(
-                "TriangleScenario.TheSameVboAndVaoRedrawAcrossAFrameBoundary", driven);
+            WireLedger::ExpectSmallRingWrappedAtLeastOnce("TriangleScenario.TheSameVboAndVaoRedrawAcrossAFrameBoundary",
+                                                          driven);
         }
     }
 
@@ -365,10 +364,9 @@ void main() { oColor = vec4(vColor, 1.0); }
         ASSERT_TRUE(WaitForSplitAppliedForTesting(PeekSplitRuntime().emitSeq));
 
         const PipeStatsWindow::Window window = PipeStatsWindow::LastFromLaneLog();
-        ASSERT_TRUE(window.found)
-            << "the library emitted no `MGPipe stats:` line, so this lane's arming proof is "
-               "MISSING rather than zero - check MOBILEGL_PIPE_STATS=1, "
-               "MOBILEGL_PIPE_STATS_PERIOD=1 and this entry's private MOBILEGL_LOG_FILE_PATH";
+        ASSERT_TRUE(window.found) << "the library emitted no `MGPipe stats:` line, so this lane's arming proof is "
+                                     "MISSING rather than zero - check MOBILEGL_PIPE_STATS=1, "
+                                     "MOBILEGL_PIPE_STATS_PERIOD=1 and this entry's private MOBILEGL_LOG_FILE_PATH";
 
         const long long draws = PipeStatsWindow::CounterOrAbsent(window, "draws");
         const long long stamps = PipeStatsWindow::CounterOrAbsent(window, "vbs");
@@ -380,14 +378,12 @@ void main() { oColor = vec4(vColor, 1.0); }
         EXPECT_GT(draws, 0) << "no draw reached the instrumented entry point in the window this "
                                "case took, so there is nothing for the arming proof to be about: "
                             << window.line;
-        EXPECT_GT(stamps, 0)
-            << "the server stamped NO verb boundary on a drawing split entry. Every strict check "
-               "- the poison, rsp, the BARRIER-PULLED verdict - is downstream of that stamp, so "
-               "a green strict lane containing only entries like this one would mean the knob "
-               "was never armed rather than that the debt was paid (ID-115): "
-            << window.line;
-        EXPECT_EQ(residual, 0)
-            << "P5f exit: a drawing frame still reads client residual state: " << window.line;
+        EXPECT_GT(stamps, 0) << "the server stamped NO verb boundary on a drawing split entry. Every strict check "
+                                "- the poison, rsp, the BARRIER-PULLED verdict - is downstream of that stamp, so "
+                                "a green strict lane containing only entries like this one would mean the knob "
+                                "was never armed rather than that the debt was paid (ID-115): "
+                             << window.line;
+        EXPECT_EQ(residual, 0) << "P5f exit: a drawing frame still reads client residual state: " << window.line;
     }
 
 } // namespace MGITest

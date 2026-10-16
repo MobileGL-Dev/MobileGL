@@ -261,7 +261,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     template <class SamplerSource>
     Float VkSamplerManager::ResolveEffectiveMaxAnisotropy(const SamplerSource& sampler,
-                                                           Bool forceNearestFiltering) const {
+                                                          Bool forceNearestFiltering) const {
         if (!m_samplerAnisotropySupported) return 1.0f;
         if (forceNearestFiltering) return 1.0f;
         // VUID-VkSamplerCreateInfo-anisotropyEnable-01071/01072: anisotropy requires both filters to
@@ -322,9 +322,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     template <class SamplerSource>
-    Uint64 VkSamplerManager::BuildSamplerKey(const SamplerSource& sampler,
-                                             Bool forceNearestFiltering, Bool singleLevelView,
-                                             const ResolvedBorderColor& borderColor) const {
+    Uint64 VkSamplerManager::BuildSamplerKey(const SamplerSource& sampler, Bool forceNearestFiltering,
+                                             Bool singleLevelView, const ResolvedBorderColor& borderColor) const {
         MOBILEGL_ASSERT(m_config != nullptr, "VkSamplerManager::BuildSamplerKey: m_config is null");
         // P15: one read of the thread_local per hash (emulated TLS: every read is a call).
         XXH64_state_t* const hashState = m_hashState;
@@ -371,9 +370,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     template <class SamplerSource>
-    VkSampler VkSamplerManager::GetOrCreateSamplerImpl(const SamplerSource& sampler,
-                                                       TextureInternalFormat format,
-                                                   Bool forceNearestFiltering, Uint32 viewLevelCount) {
+    VkSampler VkSamplerManager::GetOrCreateSamplerImpl(const SamplerSource& sampler, TextureInternalFormat format,
+                                                       Bool forceNearestFiltering, Uint32 viewLevelCount) {
         // A view that exposes a single mip level has no second level to blend with, so GL's
         // *_MIPMAP_* minification filters degenerate to plain filtering on the base level -
         // sampling is unchanged by pinning the Vulkan sampler to NEAREST mip mode at LOD 0.
@@ -396,9 +394,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
         samplerInfo.magFilter = forceNearestFiltering ? VK_FILTER_NEAREST : ToVkFilter(sampler.GetMagFilter());
         samplerInfo.minFilter = forceNearestFiltering ? VK_FILTER_NEAREST : ToVkFilter(sampler.GetMinFilter());
-        samplerInfo.mipmapMode = (forceNearestFiltering || singleLevelView)
-                                     ? VK_SAMPLER_MIPMAP_MODE_NEAREST
-                                     : ToVkMipmapMode(sampler.GetMipmapMode());
+        samplerInfo.mipmapMode = (forceNearestFiltering || singleLevelView) ? VK_SAMPLER_MIPMAP_MODE_NEAREST
+                                                                            : ToVkMipmapMode(sampler.GetMipmapMode());
         samplerInfo.addressModeU = ToVkAddressMode(sampler.GetWrapS());
         samplerInfo.addressModeV = ToVkAddressMode(sampler.GetWrapT());
         samplerInfo.addressModeW = ToVkAddressMode(sampler.GetWrapR());
@@ -408,7 +405,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         const Float maxAnisotropy = ResolveEffectiveMaxAnisotropy(sampler, forceNearestFiltering);
         samplerInfo.anisotropyEnable = maxAnisotropy > 1.0f ? VK_TRUE : VK_FALSE;
         samplerInfo.maxAnisotropy = maxAnisotropy;
-        samplerInfo.compareEnable = sampler.GetCompareMode() == SamplerCompareMode::CompareToTexture ? VK_TRUE : VK_FALSE;
+        samplerInfo.compareEnable =
+            sampler.GetCompareMode() == SamplerCompareMode::CompareToTexture ? VK_TRUE : VK_FALSE;
         samplerInfo.compareOp = ToVkCompareOp(sampler.GetSamplerCompareFunc());
         // Must match BuildSamplerKey's resolution exactly.
         samplerInfo.maxLod = ResolveSingleLevelMaxLod(sampler, singleLevelView);
@@ -445,9 +443,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     VkSampler VkSamplerManager::GetOrCreateSamplerFromParameters(const SamplerParameters& parameters,
-        TextureInternalFormat format, Bool forceNearestFiltering, Uint32 viewLevelCount) {
-        return GetOrCreateSamplerImpl(SamplerParametersSource{parameters}, format,
-                                       forceNearestFiltering, viewLevelCount);
+                                                                 TextureInternalFormat format,
+                                                                 Bool forceNearestFiltering, Uint32 viewLevelCount) {
+        return GetOrCreateSamplerImpl(SamplerParametersSource{parameters}, format, forceNearestFiltering,
+                                      viewLevelCount);
     }
 
     VkFilter VkSamplerManager::ToVkFilter(SamplerFilterMode mode) {
@@ -506,8 +505,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     template <class SamplerSource>
-    VkSamplerManager::ResolvedBorderColor VkSamplerManager::ResolveBorderColor(
-        const SamplerSource& sampler, TextureInternalFormat format) const {
+    VkSamplerManager::ResolvedBorderColor VkSamplerManager::ResolveBorderColor(const SamplerSource& sampler,
+                                                                               TextureInternalFormat format) const {
         ResolvedBorderColor resolved{};
         if (!UsesBorderColor(sampler)) {
             return resolved; // FLOAT_TRANSPARENT_BLACK, never sampled

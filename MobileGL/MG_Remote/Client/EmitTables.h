@@ -47,27 +47,27 @@ namespace MobileGL::MG_Remote::Client {
     // planners are MG_Record's (MG_Impl/Pipe/Verb/VerbPort.h) - the record arm runs them in a
     // library without a transport. Re-exported here under the names the remote table's users
     // and its unit cases already spell.
-    using MG_Record::UnmigratedVerbFatal;
+    using MG_Record::DroppedClearEmissions;
+    using MG_Record::DroppedDrawEmissions;
+    using MG_Record::ForEachReadbackBand;
     using MG_Record::InstallMonolithVerbPort;
     using MG_Record::MonolithVerbPortInstalled;
-    using MG_Record::SetDropClearEmissionForNegativeControl;
-    using MG_Record::DroppedClearEmissions;
-    using MG_Record::SetDropDrawEmissionForNegativeControl;
-    using MG_Record::DroppedDrawEmissions;
-    using MG_Record::TightReadbackByteCount;
-    using MG_Record::ScatterTightReadbackIntoPackState;
+    using MG_Record::PlanDrawIndirect;
+    using MG_Record::PlanDrawInfo;
+    using MG_Record::PlanDrawRange;
+    using MG_Record::PlanReadbackBands;
     using MG_Record::ReadbackBand;
     using MG_Record::ReadbackBandPlan;
-    using MG_Record::PlanReadbackBands;
-    using MG_Record::ForEachReadbackBand;
-    using MG_Record::ScatterReadbackBandIntoPackState;
     using MG_Record::ReadbackPackStateIsTightForTest;
     using MG_Record::ReadbackReplyIsComplete;
     using MG_Record::RemoteDrawBindings;
     using MG_Record::RemoteIndexSizeFor;
-    using MG_Record::PlanDrawInfo;
-    using MG_Record::PlanDrawRange;
-    using MG_Record::PlanDrawIndirect;
+    using MG_Record::ScatterReadbackBandIntoPackState;
+    using MG_Record::ScatterTightReadbackIntoPackState;
+    using MG_Record::SetDropClearEmissionForNegativeControl;
+    using MG_Record::SetDropDrawEmissionForNegativeControl;
+    using MG_Record::TightReadbackByteCount;
+    using MG_Record::UnmigratedVerbFatal;
 
     // How many of the 71 slots have a real emitter. Reported at bring-up and asserted by the
     // gate: a table that silently loses an emitter should not be able to look the same as one

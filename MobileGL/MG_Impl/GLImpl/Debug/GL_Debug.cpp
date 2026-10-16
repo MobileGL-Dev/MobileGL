@@ -78,9 +78,9 @@ namespace MobileGL::MG_Impl::GLImpl {
             if (effective < limit) {
                 return true;
             }
-            RecordDebugError(ErrorCode::InvalidValue, caller,
-                             std::format("{} length {} is not less than the {} limit of {}.", what, effective, what,
-                                         limit));
+            RecordDebugError(
+                ErrorCode::InvalidValue, caller,
+                std::format("{} length {} is not less than the {} limit of {}.", what, effective, what, limit));
             return false;
         }
 
@@ -163,8 +163,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         state.groupStack.pop_back();
     }
 
-    void DebugMessageInsert(GLenum source, GLenum type, GLuint id, GLenum severity, GLsizei length,
-                            const GLchar* buf) {
+    void DebugMessageInsert(GLenum source, GLenum type, GLuint id, GLenum severity, GLsizei length, const GLchar* buf) {
         static_cast<void>(id);
         if (!ValidateInjectedSource(source, __func__)) return;
         switch (type) {
@@ -180,8 +179,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             break;
         default:
             RecordDebugError(ErrorCode::InvalidEnum, __func__,
-                             std::format("type {} is not a debug message type.",
-                                         MG_Util::ConvertGLEnumToString(type)));
+                             std::format("type {} is not a debug message type.", MG_Util::ConvertGLEnumToString(type)));
             return;
         }
         switch (severity) {
@@ -191,9 +189,9 @@ namespace MobileGL::MG_Impl::GLImpl {
         case GL_DEBUG_SEVERITY_NOTIFICATION:
             break;
         default:
-            RecordDebugError(ErrorCode::InvalidEnum, __func__,
-                             std::format("severity {} is not a debug message severity.",
-                                         MG_Util::ConvertGLEnumToString(severity)));
+            RecordDebugError(
+                ErrorCode::InvalidEnum, __func__,
+                std::format("severity {} is not a debug message severity.", MG_Util::ConvertGLEnumToString(severity)));
             return;
         }
         if (!ValidateDebugStringLength(length, buf, kMaxDebugMessageLength, __func__, "message")) return;

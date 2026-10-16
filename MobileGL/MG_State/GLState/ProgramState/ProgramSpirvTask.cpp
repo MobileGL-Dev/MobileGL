@@ -29,8 +29,7 @@ namespace MobileGL::MG_State::GLState {
         // First occurrence at WARN - the one a bug report needs - every later one back at
         // DEBUG, which shipped builds compile out.
         Int FirstTimeWarnLevel(std::atomic_flag& latch) {
-            return latch.test_and_set(std::memory_order_relaxed) ? MOBILEGL_LOG_LEVEL_DEBUG
-                                                                 : MOBILEGL_LOG_LEVEL_WARN;
+            return latch.test_and_set(std::memory_order_relaxed) ? MOBILEGL_LOG_LEVEL_DEBUG : MOBILEGL_LOG_LEVEL_WARN;
         }
         std::atomic_flag g_pointSizeDeclineReported;
         std::atomic_flag g_pointSizeOptimizerFailureReported;
@@ -73,7 +72,8 @@ namespace MobileGL::MG_State::GLState {
             // EnsureSpirvJoined(), which is far worse than a program reported as not drawable.
             try {
                 MG_Util::Async::ShaderCompilePool::Get().Post(self);
-            } catch (...) {
+            }
+            catch (...) {
                 self->Cancel();
             }
         });
@@ -204,8 +204,7 @@ namespace MobileGL::MG_State::GLState {
             payload->link.program.reset(); // belt and braces: never memoize a glslang arena
             payload->spirv = artifacts;
             const SizeT payloadBytes = ProgramTranslationResultBytes(*payload);
-            GetProgramTranslationCache().Insert(handoff.spirvCacheKey,
-                                                ProgramTranslationResultPtr(Move(payload)),
+            GetProgramTranslationCache().Insert(handoff.spirvCacheKey, ProgramTranslationResultPtr(Move(payload)),
                                                 payloadBytes);
         }
         MGLOG_D("ProgramObject %u: Binary generation finished (generatedSpirv size=%zu)", externalIndex,
@@ -215,8 +214,7 @@ namespace MobileGL::MG_State::GLState {
     void ProgramSpirvTask::GenerateSpirv(const ProgramLinkTask::SpirvHandoff& handoff, const Uint externalIndex,
                                          const Bool deferOutputValidationForDirectVulkan,
                                          const Bool enableSpirvValidation, const Bool nativeFloat64,
-                                         const Bool demoteTessellationPointSize,
-                                         const Bool demoteGeometryPointSize) {
+                                         const Bool demoteTessellationPointSize, const Bool demoteGeometryPointSize) {
         /* As we passed first stage compilation/linking,
          * we'll assume all the operations here should
          * pass. We may be able to employ some optimizations
@@ -312,9 +310,8 @@ namespace MobileGL::MG_State::GLState {
             const Bool captureRequestsPointSize = handoff.captureRequestsPointSize;
             ShaderCompiler::PointSizeDemotionOutcome outcome;
             if (!ShaderCompiler::DemoteTessellationGeometryPointSizeForProgram(
-                    artifacts.generatedSpirv, handoff.shaderTypes, demoteTessellationPointSize,
-                    demoteGeometryPointSize, captureRequestsPointSize, outcome,
-                    !deferOutputValidationForDirectVulkan, enableSpirvValidation)) {
+                    artifacts.generatedSpirv, handoff.shaderTypes, demoteTessellationPointSize, demoteGeometryPointSize,
+                    captureRequestsPointSize, outcome, !deferOutputValidationForDirectVulkan, enableSpirvValidation)) {
                 // Optimizer failure: modules untouched, so the capability is still declared
                 // and the backends' existing refusals stay in charge - honest, just slower.
                 DeferLog(std::format("ProgramObject {}: point-size demotion failed in the optimizer; the "
@@ -438,8 +435,8 @@ namespace MobileGL::MG_State::GLState {
                             externalIndex, name.c_str(), offset, arrayStride, baseLocation,
                             baseLocation + static_cast<Uint>(elementCount) - 1);
                 }
-                MGLOG_D("ProgramObject %u: BuildGlobalUboRouting - finished parsing module %zu metadata",
-                        externalIndex, i);
+                MGLOG_D("ProgramObject %u: BuildGlobalUboRouting - finished parsing module %zu metadata", externalIndex,
+                        i);
             }
         }
 
@@ -453,16 +450,14 @@ namespace MobileGL::MG_State::GLState {
         for (Uint location = 0; location <= reflection.maxUniformLocation; ++location) {
             if (artifacts.uniformOffsets[location] != ProgramObject::kInvalidUniformOffset) continue;
             if (!ProgramObject::IsValidUniformLocation(reflection, static_cast<Int>(location))) continue;
-            const auto& uniform =
-                ProgramObject::UniformAtIn(reflection, reflection.uniformIndexInTProgram[location]);
+            const auto& uniform = ProgramObject::UniformAtIn(reflection, reflection.uniformIndexInTProgram[location]);
             if (uniform.type.isOpaque) continue;
             // Member of a named uniform block: not settable through glUniform*, so it needs
             // no global-UBO shadow storage. tProgramBlockIndexToGl[i] >= 0 means block i is
             // GL-visible, i.e. NOT the synthesized MGL_GLOBAL_UBO - which is exactly what the
             // strstr(GLOBAL_UBO_NAME) test this replaced was asking, without needing the
             // TProgram to spell the block name.
-            if (uniform.index >= 0 &&
-                uniform.index < static_cast<Int>(reflection.tProgramBlockIndexToGl.size()) &&
+            if (uniform.index >= 0 && uniform.index < static_cast<Int>(reflection.tProgramBlockIndexToGl.size()) &&
                 reflection.tProgramBlockIndexToGl[uniform.index] >= 0) {
                 continue;
             }

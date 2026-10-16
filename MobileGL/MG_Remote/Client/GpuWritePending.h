@@ -24,7 +24,6 @@ namespace MobileGL::MG_State::GLState {
 
 namespace MobileGL::MG_Remote::Client {
 
-
     // ---- SyncGpuWrites' third state (CONTRACT-P5.md section 3) -----------------------
 
     // Blocks until this buffer's OnBufferWriteback has landed. With no session - a build-split

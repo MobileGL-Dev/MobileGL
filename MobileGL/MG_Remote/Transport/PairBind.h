@@ -31,8 +31,8 @@ namespace MobileGL::MG_Remote::Transport {
     inline std::vector<std::uint8_t> EncodePairBind(const std::uint8_t (&nonce)[kPairNonceBytes], bool aux) {
         ::flatbuffers::FlatBufferBuilder builder(64);
         auto bind = ::MobileGL::Wire::CreatePairBind(builder, builder.CreateVector(nonce, kPairNonceBytes), aux);
-        auto envelope = ::MobileGL::Wire::CreateCtrlEnvelope(builder, ::MobileGL::Wire::CtrlMsg::PairBind,
-                                                            bind.Union());
+        auto envelope =
+            ::MobileGL::Wire::CreateCtrlEnvelope(builder, ::MobileGL::Wire::CtrlMsg::PairBind, bind.Union());
         ::MobileGL::Wire::FinishCtrlEnvelopeBuffer(builder, envelope);
         return std::vector<std::uint8_t>(builder.GetBufferPointer(), builder.GetBufferPointer() + builder.GetSize());
     }

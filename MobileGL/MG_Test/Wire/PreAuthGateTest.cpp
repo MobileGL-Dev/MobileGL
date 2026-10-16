@@ -38,7 +38,8 @@ namespace Wire = ::MobileGL::Wire;
 
 namespace {
 
-    std::vector<std::uint8_t> Finish(::flatbuffers::FlatBufferBuilder& builder, ::flatbuffers::Offset<Wire::CtrlEnvelope> root,
+    std::vector<std::uint8_t> Finish(::flatbuffers::FlatBufferBuilder& builder,
+                                     ::flatbuffers::Offset<Wire::CtrlEnvelope> root,
                                      const char* identifier = Wire::CtrlEnvelopeIdentifier()) {
         builder.Finish(root, identifier);
         return std::vector<std::uint8_t>(builder.GetBufferPointer(), builder.GetBufferPointer() + builder.GetSize());
@@ -47,8 +48,8 @@ namespace {
     std::vector<std::uint8_t> HelloPayload(const char* identifier = Wire::CtrlEnvelopeIdentifier()) {
         ::flatbuffers::FlatBufferBuilder builder(512);
         auto terms = Wire::CreateLinkTerms(builder);
-        auto hello = Wire::CreateHelloDirect(builder, MOBILEGL_PROTOCOL_ABI_MAJOR, MOBILEGL_PROTOCOL_ABI_MINOR,
-                                             "build", 0, 1, nullptr, 0, 0, terms, "token", Wire::DialMode::Connect);
+        auto hello = Wire::CreateHelloDirect(builder, MOBILEGL_PROTOCOL_ABI_MAJOR, MOBILEGL_PROTOCOL_ABI_MINOR, "build",
+                                             0, 1, nullptr, 0, 0, terms, "token", Wire::DialMode::Connect);
         return Finish(builder, Wire::CreateCtrlEnvelope(builder, Wire::CtrlMsg::Hello, hello.Union()), identifier);
     }
 
@@ -85,11 +86,20 @@ namespace {
         std::string name, previous;
         bool had = false;
         ScopedEnvironment(const char* key, const char* value) : name(key) {
-            if (const char* old = std::getenv(key)) { previous = old; had = true; }
-            if (value) ::setenv(key, value, 1); else ::unsetenv(key);
+            if (const char* old = std::getenv(key)) {
+                previous = old;
+                had = true;
+            }
+            if (value)
+                ::setenv(key, value, 1);
+            else
+                ::unsetenv(key);
         }
         ~ScopedEnvironment() {
-            if (had) ::setenv(name.c_str(), previous.c_str(), 1); else ::unsetenv(name.c_str());
+            if (had)
+                ::setenv(name.c_str(), previous.c_str(), 1);
+            else
+                ::unsetenv(name.c_str());
         }
     };
 
@@ -101,7 +111,8 @@ namespace {
 // "did not verify"), and the first EXPECT_EQ names it.
 TEST(PreAuthGateTest, EachMalformedFirstFrameLandsOnTheShapeItIsNamedFor) {
     const auto wrongIdentifier = HelloPayload("XXXX");
-    EXPECT_EQ(Server::ClassifyFirstFrame(wrongIdentifier.data(), wrongIdentifier.size()), FirstFrameShape::NoIdentifier);
+    EXPECT_EQ(Server::ClassifyFirstFrame(wrongIdentifier.data(), wrongIdentifier.size()),
+              FirstFrameShape::NoIdentifier);
     // Shorter than a root offset plus an identifier: nothing to ask.
     const std::uint8_t tiny[5] = {1, 2, 3, 4, 5};
     EXPECT_EQ(Server::ClassifyFirstFrame(tiny, sizeof(tiny)), FirstFrameShape::NoIdentifier);
@@ -119,7 +130,8 @@ TEST(PreAuthGateTest, EachMalformedFirstFrameLandsOnTheShapeItIsNamedFor) {
     const auto logFlush = Finish(builder, Wire::CreateCtrlEnvelope(builder, Wire::CtrlMsg::LogFlush, flush.Union()));
     EXPECT_EQ(Server::ClassifyFirstFrame(logFlush.data(), logFlush.size()), FirstFrameShape::NotAHello);
     ::flatbuffers::FlatBufferBuilder empty(64);
-    const auto nullHello = Finish(empty, Wire::CreateCtrlEnvelope(empty, Wire::CtrlMsg::Hello, ::flatbuffers::Offset<void>()));
+    const auto nullHello =
+        Finish(empty, Wire::CreateCtrlEnvelope(empty, Wire::CtrlMsg::Hello, ::flatbuffers::Offset<void>()));
     EXPECT_EQ(Server::ClassifyFirstFrame(nullHello.data(), nullHello.size()), FirstFrameShape::NotAHello);
     // A DataBind is only a DataBind with exactly kDataNonceBytes of nonce.
     const auto shortBind = DataBindPayload(8);
@@ -239,10 +251,12 @@ TEST(PreAuthGateTest, TheBackoffWindowStartsAtTheThresholdDoublesAndIsCapped) {
     // Off means off.
     knobs.backoffAfter = 0;
     Server::AuthBackoff off(knobs);
-    for (int i = 0; i < 50; ++i) EXPECT_EQ(off.NoteFailure(peer, t0), 0u);
+    for (int i = 0; i < 50; ++i)
+        EXPECT_EQ(off.NoteFailure(peer, t0), 0u);
     EXPECT_EQ(off.RetryAfterMs(peer, t0), 0u);
     // Bounded, however many addresses fail.
-    for (int i = 0; i < 1000; ++i) backoff.NoteFailure("198.51.100." + std::to_string(i), t0);
+    for (int i = 0; i < 1000; ++i)
+        backoff.NoteFailure("198.51.100." + std::to_string(i), t0);
     EXPECT_LE(backoff.Tracked(), Server::kAuthBackoffTrackedPeers);
 }
 

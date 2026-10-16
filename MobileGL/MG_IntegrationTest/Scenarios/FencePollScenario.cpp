@@ -73,8 +73,8 @@ namespace MGITest {
                     ++polls;
                 }
                 EXPECT_TRUE(status == GL_ALREADY_SIGNALED || status == GL_CONDITION_SATISFIED)
-                    << "glClientWaitSync(flags 0x" << std::hex << flags << std::dec << ", 0) still "
-                    << status << " after " << polls << " polls";
+                    << "glClientWaitSync(flags 0x" << std::hex << flags << std::dec << ", 0) still " << status
+                    << " after " << polls << " polls";
                 glDeleteSync(sync);
             }
             QueueWork();
@@ -140,8 +140,7 @@ namespace MGITest {
             ASSERT_NE(sync, nullptr);
             const auto start = Clock::now();
             GLenum status = GL_TIMEOUT_EXPIRED;
-            while ((status = glClientWaitSync(sync, 0, 0)) == GL_TIMEOUT_EXPIRED &&
-                   Clock::now() - start < kLoopBound) {
+            while ((status = glClientWaitSync(sync, 0, 0)) == GL_TIMEOUT_EXPIRED && Clock::now() - start < kLoopBound) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(10));
             }
             const SplitRuntimeState after = PeekSplitRuntime();
@@ -188,7 +187,8 @@ namespace MGITest {
             }
             const double ms = std::chrono::duration<double, std::milli>(Clock::now() - start).count();
             const SplitRuntimeState after = PeekSplitRuntime();
-            for (GLsync sync : inFlight) glDeleteSync(sync);
+            for (GLsync sync : inFlight)
+                glDeleteSync(sync);
             const char* escalate = std::getenv("MOBILEGL_IPC_POLL_ESCALATE");
             std::printf("P10BENCH transport=%s poll-escalate=%s lag=%zu frames=%d ms=%.1f ms/frame=%.3f "
                         "reply-records=%llu fence-round-trips=%llu fence-local=%llu fence-reports=%llu\n",

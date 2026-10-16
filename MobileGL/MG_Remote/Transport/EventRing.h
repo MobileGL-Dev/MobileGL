@@ -122,10 +122,8 @@ namespace MobileGL::MG_Remote::Transport {
         // `eventControl` is SEG_EVENT's own control page; `cmdControl` is the
         // SEG_CMD page, because Ring.h declares eventRingFull / eventDropped
         // there and the client's waits already look at it.
-        EventRingProducer(RingControl* eventControl, RingControl* cmdControl, void* base,
-                          std::uint64_t capacityBytes)
-            : m_cmdControl(cmdControl),
-              m_producer(eventControl, base, capacityBytes, RingCursorSet::Cmd) {}
+        EventRingProducer(RingControl* eventControl, RingControl* cmdControl, void* base, std::uint64_t capacityBytes)
+            : m_cmdControl(cmdControl), m_producer(eventControl, base, capacityBytes, RingCursorSet::Cmd) {}
 
         bool Valid() const { return m_producer.Valid() && m_cmdControl != nullptr; }
 
@@ -170,17 +168,14 @@ namespace MobileGL::MG_Remote::Transport {
     public:
         EventRingConsumer() = default;
 
-        EventRingConsumer(RingControl* eventControl, RingControl* cmdControl, void* base,
-                          std::uint64_t capacityBytes, const void* segmentBase)
-            : m_cmdControl(cmdControl),
-              m_consumer(eventControl, base, capacityBytes, RingCursorSet::Cmd),
+        EventRingConsumer(RingControl* eventControl, RingControl* cmdControl, void* base, std::uint64_t capacityBytes,
+                          const void* segmentBase)
+            : m_cmdControl(cmdControl), m_consumer(eventControl, base, capacityBytes, RingCursorSet::Cmd),
               m_segmentBase(static_cast<const std::uint8_t*>(segmentBase)) {}
 
         bool Valid() const { return m_consumer.Valid() && m_cmdControl != nullptr; }
 
-        bool Pop(RingRecordView& out, bool* outCorrupt = nullptr) {
-            return m_consumer.Pop(out, outCorrupt);
-        }
+        bool Pop(RingRecordView& out, bool* outCorrupt = nullptr) { return m_consumer.Pop(out, outCorrupt); }
 
         // Release the bytes and clear the full latch. Only after the caller has
         // finished with every payload pointer it popped: a writeback's bytes live
@@ -197,8 +192,7 @@ namespace MobileGL::MG_Remote::Transport {
                 // the forward direction's publish-then-ring order exists to prevent. The
                 // exchange is what makes the ring one-shot: only the drain that actually found
                 // the flag up rings, so a steady stream of drains costs one relaxed RMW.
-                const bool wasFull =
-                    m_cmdControl->eventRingFull.exchange(0, std::memory_order_acq_rel) != 0;
+                const bool wasFull = m_cmdControl->eventRingFull.exchange(0, std::memory_order_acq_rel) != 0;
                 if (wasFull && m_serverBell != nullptr) {
                     NotifyIfParked(*m_serverBell, m_cmdControl->consumerParked);
                 }
@@ -215,18 +209,14 @@ namespace MobileGL::MG_Remote::Transport {
         // OnBufferWriteback MGPBlobRef must carry (Seg = kSegEvent, Offset =
         // this, Size = the head's Size). Never a host address - R-2's rule B.
         std::uint64_t OffsetInSegment(const void* payload) const {
-            return static_cast<std::uint64_t>(static_cast<const std::uint8_t*>(payload) -
-                                              m_segmentBase);
+            return static_cast<std::uint64_t>(static_cast<const std::uint8_t*>(payload) - m_segmentBase);
         }
 
         std::uint64_t DroppedEvents() const {
-            return m_cmdControl == nullptr
-                       ? 0
-                       : m_cmdControl->eventDropped.load(std::memory_order_relaxed);
+            return m_cmdControl == nullptr ? 0 : m_cmdControl->eventDropped.load(std::memory_order_relaxed);
         }
         bool RingIsFull() const {
-            return m_cmdControl != nullptr &&
-                   m_cmdControl->eventRingFull.load(std::memory_order_acquire) != 0;
+            return m_cmdControl != nullptr && m_cmdControl->eventRingFull.load(std::memory_order_acquire) != 0;
         }
 
         RingConsumer& Ring() { return m_consumer; }

@@ -58,7 +58,7 @@ namespace MobileGL::MG_State::GLState {
     public:
         // ---- inputs, snapshotted on the GL thread in ProgramObject::Link()'s prologue ----
         struct Inputs {
-            Uint externalIndex = 0; // logs only
+            Uint externalIndex = 0;          // logs only
             Vector<LinkShaderInput> shaders; // already stage-sorted
             SharedPtr<const MG_Util::ShaderTranspiler::CompileEnv> env;
             // Startup configuration copied with the task, never read from worker code.
@@ -69,10 +69,10 @@ namespace MobileGL::MG_State::GLState {
             // referenced, which is precisely what makes glBindAttribLocation and friends
             // legal to call over a pending link without cancelling it: the pending link keeps
             // linking the inputs it was given.
-            UnorderedMap<String, Uint> explicitAttribLocations; // glBindAttribLocation
+            UnorderedMap<String, Uint> explicitAttribLocations;  // glBindAttribLocation
             UnorderedMap<String, Uint> explicitFragDataLocation; // glBindFragDataLocation
-            UnorderedMap<String, Uint> explicitFragDataIndex; // glBindFragDataLocationIndexed
-            Vector<String> requestedXfbVaryings; // glTransformFeedbackVaryings
+            UnorderedMap<String, Uint> explicitFragDataIndex;    // glBindFragDataLocationIndexed
+            Vector<String> requestedXfbVaryings;                 // glTransformFeedbackVaryings
             GLenum requestedXfbBufferMode = GL_INTERLEAVED_ATTRIBS;
             Int maxFragmentOutputColorNumber = 8; // GL_MAX_DRAW_BUFFERS, stamped in by the entry point
         } in;

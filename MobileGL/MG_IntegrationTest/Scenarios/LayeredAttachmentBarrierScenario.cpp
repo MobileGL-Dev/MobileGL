@@ -151,8 +151,8 @@ void main() { o_color = vec4(0.1, 0.2, 0.8, 1.0); }
                 glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
                 for (int layer = 0; layer < kLayers; ++layer) {
                     const std::vector<Rgba8> texels(static_cast<std::size_t>(kWidth) * kHeight, LayerFill(layer));
-                    glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, layer, kWidth, kHeight, 1, GL_RGBA,
-                                    GL_UNSIGNED_BYTE, texels.data());
+                    glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, layer, kWidth, kHeight, 1, GL_RGBA, GL_UNSIGNED_BYTE,
+                                    texels.data());
                 }
                 glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
                 return texture;
@@ -200,8 +200,8 @@ void main() { o_color = vec4(0.1, 0.2, 0.8, 1.0); }
                 // a failure - reported here rather than silently reduced to pixels[0].
                 for (std::size_t i = 1; i < pixels.size(); ++i) {
                     EXPECT_TRUE(pixels[i] == pixels[0])
-                        << "layer " << layer << " is not uniform: texel 0 is " << Describe(pixels[0]) << ", texel "
-                        << i << " is " << Describe(pixels[i]);
+                        << "layer " << layer << " is not uniform: texel 0 is " << Describe(pixels[0]) << ", texel " << i
+                        << " is " << Describe(pixels[i]);
                 }
                 return pixels[0];
             }
@@ -384,8 +384,7 @@ void main() { o_color = vec4(0.1, 0.2, 0.8, 1.0); }
             for (int level = 0; level < 3; ++level) {
                 const int size = 16 >> level;
                 const std::vector<Rgba8> initial(size * size, LayerFill(level));
-                glTexSubImage2D(GL_TEXTURE_2D, level, 0, 0, size, size,
-                               GL_RGBA, GL_UNSIGNED_BYTE, initial.data());
+                glTexSubImage2D(GL_TEXTURE_2D, level, 0, 0, size, size, GL_RGBA, GL_UNSIGNED_BYTE, initial.data());
             }
             GLuint fbo = 0;
             glGenFramebuffers(1, &fbo);

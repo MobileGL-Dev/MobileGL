@@ -33,22 +33,22 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // drivers that otherwise fully support these core ES queries.
             GLenum coreTarget = 0;
         };
-    }
-        // EGL ground-truth verification stamp. glvnd's eglGetCurrentContext performs
-        // fork detection with a real getpid() syscall on every call, and this
-        // predicate sits 2-3 deep in every draw - measured at 16% of the render
-        // thread on a live workload. NOT thread_local although the stamp is
-        // per-owner-thread state: a shared-library thread_local costs a
-        // __tls_get_addr call per access, which itself showed at 1.5% of the draw
-        // loop. Plain globals are equivalent because only the thread that passes the
-        // owner-identity check below can ever stamp or trust them, only one thread
-        // can be the owner at a time, and the ONLY writers of the owner id -
-        // MakeCurrent/ReleaseCurrent - reset the stamps before publishing a new
-        // owner, so a stamp can never leak across an ownership change. Atomics
-        // (relaxed) because the resets may come from a non-owner thread; the
-        // owner-id release/acquire pairing orders them.
-        std::atomic<Uint64> g_eglVerifiedFrameSerial{~0ull};
-        std::atomic<Uint> g_eglVerifiedContextGeneration{0};
+    } // namespace
+    // EGL ground-truth verification stamp. glvnd's eglGetCurrentContext performs
+    // fork detection with a real getpid() syscall on every call, and this
+    // predicate sits 2-3 deep in every draw - measured at 16% of the render
+    // thread on a live workload. NOT thread_local although the stamp is
+    // per-owner-thread state: a shared-library thread_local costs a
+    // __tls_get_addr call per access, which itself showed at 1.5% of the draw
+    // loop. Plain globals are equivalent because only the thread that passes the
+    // owner-identity check below can ever stamp or trust them, only one thread
+    // can be the owner at a time, and the ONLY writers of the owner id -
+    // MakeCurrent/ReleaseCurrent - reset the stamps before publishing a new
+    // owner, so a stamp can never leak across an ownership change. Atomics
+    // (relaxed) because the resets may come from a non-owner thread; the
+    // owner-id release/acquire pairing orders them.
+    std::atomic<Uint64> g_eglVerifiedFrameSerial{~0ull};
+    std::atomic<Uint> g_eglVerifiedContextGeneration{0};
 
     Bool IsBackendContextCurrentOnThisThread() {
         const NativeContextTuple& tuple = ActiveNativeContext();
@@ -160,8 +160,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     Bool AreTimerQueriesSupported() {
         return g_GLESCapabilities.SupportsDisjointTimerQuery && g_GLESFuncs.glGenQueries &&
                g_GLESFuncs.glDeleteQueries && g_GLESFuncs.glBeginQuery && g_GLESFuncs.glEndQuery &&
-               g_GLESFuncs.glGetQueryObjectuiv && g_GLESFuncs.glQueryCounterEXT &&
-               g_GLESFuncs.glGetQueryObjectui64vEXT;
+               g_GLESFuncs.glGetQueryObjectuiv && g_GLESFuncs.glQueryCounterEXT && g_GLESFuncs.glGetQueryObjectui64vEXT;
     }
 
     namespace {
@@ -185,11 +184,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
             using Tier = MG_External::GLESCapabilities::TextureBufferTier;
             switch (g_GLESCapabilities.TextureBufferSupport) {
             case Tier::ExtensionEXT:
-                return g_GLESFuncs.glTexBufferRangeEXT ? g_GLESFuncs.glTexBufferRangeEXT
-                                                       : g_GLESFuncs.glTexBufferRange;
+                return g_GLESFuncs.glTexBufferRangeEXT ? g_GLESFuncs.glTexBufferRangeEXT : g_GLESFuncs.glTexBufferRange;
             case Tier::ExtensionOES:
-                return g_GLESFuncs.glTexBufferRangeOES ? g_GLESFuncs.glTexBufferRangeOES
-                                                       : g_GLESFuncs.glTexBufferRange;
+                return g_GLESFuncs.glTexBufferRangeOES ? g_GLESFuncs.glTexBufferRangeOES : g_GLESFuncs.glTexBufferRange;
             case Tier::CoreEs32:
                 return g_GLESFuncs.glTexBufferRange;
             case Tier::None:
@@ -204,8 +201,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // once the capabilities have been filled in; the resolved pointer is what MobileGL can
         // actually call, through the spelling that tier's support ships. Gating on the
         // unsuffixed name alone would call an entry point an EXT/OES driver never exported.
-        return g_GLESCapabilities.TextureBufferSupport !=
-                   MG_External::GLESCapabilities::TextureBufferTier::None &&
+        return g_GLESCapabilities.TextureBufferSupport != MG_External::GLESCapabilities::TextureBufferTier::None &&
                ResolveTexBufferEntryPoint() != nullptr;
     }
 
@@ -305,9 +301,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
     static void EndCoreQuery(BackendQueryHandle handle) {
         const auto* query = static_cast<GLESQueryObject*>(handle);
-        if (query == nullptr || query->coreTarget == 0 ||
-            query->contextGeneration != g_syncContextGeneration || !IsBackendContextCurrentOnThisThread() ||
-            !g_GLESFuncs.glEndQuery) {
+        if (query == nullptr || query->coreTarget == 0 || query->contextGeneration != g_syncContextGeneration ||
+            !IsBackendContextCurrentOnThisThread() || !g_GLESFuncs.glEndQuery) {
             return;
         }
         g_GLESFuncs.glEndQuery(query->coreTarget);
@@ -320,7 +315,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
         return BeginCoreQuery(GL_ANY_SAMPLES_PASSED);
     }
 
-    void EndOcclusionQuery(BackendQueryHandle handle) { EndCoreQuery(handle); }
+    void EndOcclusionQuery(BackendQueryHandle handle) {
+        EndCoreQuery(handle);
+    }
 
     // GL_TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN / GL_PRIMITIVES_GENERATED. The frontend
     // otherwise counts primitives on the CPU from the draw calls, which cannot see a
@@ -336,7 +333,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
         return BeginCoreQuery(generated ? GL_PRIMITIVES_GENERATED : GL_TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN);
     }
 
-    void EndXfbPrimitivesQuery(BackendQueryHandle handle) { EndCoreQuery(handle); }
+    void EndXfbPrimitivesQuery(BackendQueryHandle handle) {
+        EndCoreQuery(handle);
+    }
 
     Bool IsQueryResultAvailable(BackendQueryHandle handle) {
         const auto* query = static_cast<GLESQueryObject*>(handle);
@@ -364,8 +363,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // report it as produced and let the frontend cache it and release
         // the handle.
         if (query == nullptr || query->contextGeneration != g_syncContextGeneration ||
-            !g_GLESFuncs.glGetQueryObjectuiv ||
-            (query->coreTarget == 0 && !g_GLESFuncs.glGetQueryObjectui64vEXT)) {
+            !g_GLESFuncs.glGetQueryObjectuiv || (query->coreTarget == 0 && !g_GLESFuncs.glGetQueryObjectui64vEXT)) {
             return true;
         }
         // A thread that does not own the ES context cannot issue GL calls,
@@ -432,8 +430,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     Int64 GetGpuTimestampNs() {
         // Synchronous GPU clock sample; 0 tells the frontend GL_TIMESTAMP
         // getter to fall back.
-        if (!IsBackendContextCurrentOnThisThread() || !AreTimerQueriesSupported() ||
-            !g_GLESFuncs.glGetInteger64v) {
+        if (!IsBackendContextCurrentOnThisThread() || !AreTimerQueriesSupported() || !g_GLESFuncs.glGetInteger64v) {
             return 0;
         }
         GLint64 timestamp = 0;
@@ -441,8 +438,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
         return static_cast<Int64>(timestamp);
     }
 
-    Uint64 CurrentFrameSerial() { return g_currentFrameSerial.load(std::memory_order_relaxed); }
-    Uint64 CompletedFrameSerial() { return g_completedFrameSerial.load(std::memory_order_relaxed); }
+    Uint64 CurrentFrameSerial() {
+        return g_currentFrameSerial.load(std::memory_order_relaxed);
+    }
+    Uint64 CompletedFrameSerial() {
+        return g_completedFrameSerial.load(std::memory_order_relaxed);
+    }
 
     namespace {
         // THE WATERMARK IS CONTIGUOUS. Fences signal in submission order only within ONE context,
@@ -544,7 +545,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         if (g_GLESFuncs.glGetGraphicsResetStatus != nullptr && IsBackendContextCurrentOnThisThread()) {
             status = g_GLESFuncs.glGetGraphicsResetStatus();
         }
-        if (status == GL_NO_ERROR && debugKnob && MG_Pipe::MGPipeDebugDeviceLossDue()) status = GL_UNKNOWN_CONTEXT_RESET;
+        if (status == GL_NO_ERROR && debugKnob && MG_Pipe::MGPipeDebugDeviceLossDue())
+            status = GL_UNKNOWN_CONTEXT_RESET;
         return LatchOnResetStatus(site, status);
     }
 
@@ -621,7 +623,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             const MG_Util::Damage::Region& damage = MG_Backend::CurrentPresentDamage();
             EGLint rects[MG_Util::Damage::kMaxRects * 4] = {};
             const EGLint count = static_cast<EGLint>(MG_Util::Damage::NativeSwapRects(windowSurface, damage, rects));
-            mglSwapped = g_EGLFuncs.eglSwapBuffersWithDamageEXT(g_Display, drawSurface, count > 0 ? rects : nullptr, count);
+            mglSwapped =
+                g_EGLFuncs.eglSwapBuffersWithDamageEXT(g_Display, drawSurface, count > 0 ? rects : nullptr, count);
             // A DRIVER THAT NAMES THE ENTRY POINT AND THEN REFUSES THE SWAP. Some vendor EGLs
             // export eglSwapBuffersWithDamageEXT and answer EGL_FALSE on a window surface without
             // setting an error (measured on a 4.14 vendor kernel with an Adreno driver; the plain
@@ -651,9 +654,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // platform's own queueBuffer throttle already waits for S-1, so only N = 1 is stricter
         // than what Android does by itself; larger N is the same contract stated, not a change.
         const Uint32 framesInFlight = MG_Config::Features.FramesInFlight;
-        if (presentedSerial != 0 && framesInFlight != 0 &&
-            framesInFlight < static_cast<Uint32>(kFrameFenceRingDepth) && g_GLESFuncs.glClientWaitSync &&
-            presentedSerial + 1 > framesInFlight) {
+        if (presentedSerial != 0 && framesInFlight != 0 && framesInFlight < static_cast<Uint32>(kFrameFenceRingDepth) &&
+            g_GLESFuncs.glClientWaitSync && presentedSerial + 1 > framesInFlight) {
             const Uint64 target = presentedSerial + 1 - framesInFlight;
             const FrameFence& oldest = g_frameFenceRing[target % kFrameFenceRingDepth];
             if (oldest.sync && oldest.serial == target && oldest.contextGeneration == g_syncContextGeneration) {

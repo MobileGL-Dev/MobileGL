@@ -23,15 +23,13 @@
 
 using namespace MobileGL;
 
-
 class BufferTest : public ::testing::Test {
 protected:
     // GL error flags are sticky per error code and the context outlives an individual test in this
     // binary, so drain whatever an earlier test left pending - otherwise an error-code assertion
     // here reads someone else's error. Bounded: one flag per code, so this cannot hang the suite.
     static void DrainPendingGlErrors() {
-        for (Int drained = 0; drained < 16 && MG_Impl::GLImpl::GetError() != GL_NO_ERROR; ++drained) {
-        }
+        for (Int drained = 0; drained < 16 && MG_Impl::GLImpl::GetError() != GL_NO_ERROR; ++drained) {}
     }
 
     // The call under test must raise exactly the expected error and nothing more: a second pending
@@ -300,7 +298,8 @@ TEST_F(BufferTest, MappedPointersHonourTheAdvertisedMapBufferAlignment) {
     const SizeT offset = alignment - 1;
     bufObj->Resize(bufferSize);
     Vector<Uint8> initData(bufferSize);
-    for (SizeT i = 0; i < bufferSize; ++i) initData[i] = static_cast<Uint8>(i);
+    for (SizeT i = 0; i < bufferSize; ++i)
+        initData[i] = static_cast<Uint8>(i);
     bufObj->UploadData(DataPtr{.data = initData.data(), .size = bufferSize}, 0);
 
     const auto addressOf = [](const void* pointer) { return reinterpret_cast<std::uintptr_t>(pointer); };
@@ -366,8 +365,8 @@ TEST_F(BufferTest, ExplicitFlushOfARangeMapFollowsTheAlignmentBias) {
     bufObj->UploadData(DataPtr{.data = initData.data(), .size = bufferSize}, 0);
 
     const Range1D mapRange{.start = offset, .end = bufferSize};
-    Uint8* mapped = static_cast<Uint8*>(bufObj->AcquireMemoryRange(
-        mapRange, BufferMappingAccessBit::Write | BufferMappingAccessBit::FlushExplicit));
+    Uint8* mapped = static_cast<Uint8*>(
+        bufObj->AcquireMemoryRange(mapRange, BufferMappingAccessBit::Write | BufferMappingAccessBit::FlushExplicit));
     ASSERT_NE(mapped, nullptr);
     mapped[4] = 0x5A;
     mapped[5] = 0x5B;
@@ -724,9 +723,9 @@ TEST_F(BufferTest, ClearNamedBufferSubDataAcceptsSignedNormalizedIntPattern) {
     MobileGL::MG_Impl::GLImpl::CreateBuffers(1, &buffer);
 
     const Vector<Uint8> initial(24, 0x7F);
-    MobileGL::MG_Impl::GLImpl::NamedBufferStorage(
-        buffer, initial.size(), initial.data(),
-        GL_MAP_READ_BIT | GL_MAP_WRITE_BIT | GL_DYNAMIC_STORAGE_BIT | GL_MAP_PERSISTENT_BIT);
+    MobileGL::MG_Impl::GLImpl::NamedBufferStorage(buffer, initial.size(), initial.data(),
+                                                  GL_MAP_READ_BIT | GL_MAP_WRITE_BIT | GL_DYNAMIC_STORAGE_BIT |
+                                                      GL_MAP_PERSISTENT_BIT);
     ASSERT_EQ(MobileGL::MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
 
     const GLint zero = 0;
@@ -738,7 +737,8 @@ TEST_F(BufferTest, ClearNamedBufferSubDataAcceptsSignedNormalizedIntPattern) {
     ASSERT_NE(bufferObject, nullptr);
     Memcpy(actual.data(), bufferObject->AcquireMemory(false, true, false), actual.size());
     Vector<Uint8> expected(initial);
-    for (SizeT i = 0; i < sizeof(GLint); ++i) expected[i] = 0;
+    for (SizeT i = 0; i < sizeof(GLint); ++i)
+        expected[i] = 0;
     EXPECT_EQ(actual, expected);
 
     MobileGL::MG_Impl::GLImpl::DeleteBuffers(1, &buffer);
@@ -776,11 +776,10 @@ TEST_F(BufferTest, ClearBufferSubDataInitializesIrisStaticSsboRange) {
     MobileGL::MG_Impl::GLImpl::BindBuffer(GL_SHADER_STORAGE_BUFFER, buffer);
 
     Vector<Uint8> initial(32, 0x7F);
-    MobileGL::MG_Impl::GLImpl::BufferData(
-        GL_SHADER_STORAGE_BUFFER, initial.size(), initial.data(), GL_STATIC_DRAW);
+    MobileGL::MG_Impl::GLImpl::BufferData(GL_SHADER_STORAGE_BUFFER, initial.size(), initial.data(), GL_STATIC_DRAW);
     const GLbyte zero = 0;
-    const auto clear = reinterpret_cast<PFNGLCLEARBUFFERSUBDATAPROC>(
-        MobileGL::MG_Impl::GetProcAddress("glClearBufferSubData"));
+    const auto clear =
+        reinterpret_cast<PFNGLCLEARBUFFERSUBDATAPROC>(MobileGL::MG_Impl::GetProcAddress("glClearBufferSubData"));
     ASSERT_NE(clear, nullptr);
     clear(GL_SHADER_STORAGE_BUFFER, GL_R8, 4, 24, GL_RED, GL_BYTE, &zero);
 
@@ -788,10 +787,8 @@ TEST_F(BufferTest, ClearBufferSubDataInitializesIrisStaticSsboRange) {
     auto bufferObject = MobileGL::MG_State::pGLContext->GetBufferObject(buffer);
     ASSERT_NE(bufferObject, nullptr);
     Memcpy(actual.data(), bufferObject->AcquireMemory(false, true, false), actual.size());
-    EXPECT_EQ(actual, (Vector<Uint8>{0x7F, 0x7F, 0x7F, 0x7F,
-                                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                                    0x7F, 0x7F, 0x7F, 0x7F}));
+    EXPECT_EQ(actual, (Vector<Uint8>{0x7F, 0x7F, 0x7F, 0x7F, 0, 0, 0, 0, 0, 0, 0, 0, 0,    0,    0,    0,
+                                     0,    0,    0,    0,    0, 0, 0, 0, 0, 0, 0, 0, 0x7F, 0x7F, 0x7F, 0x7F}));
     EXPECT_EQ(MobileGL::MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
 
     MobileGL::MG_Impl::GLImpl::BindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
@@ -806,11 +803,10 @@ TEST_F(BufferTest, ClearBufferSubDataInitializesCompleteIrisStaticSsbo) {
     MobileGL::MG_Impl::GLImpl::BindBuffer(GL_SHADER_STORAGE_BUFFER, buffer);
 
     Vector<Uint8> initial(irisStaticSsboSize, 0x7F);
-    MobileGL::MG_Impl::GLImpl::BufferData(
-        GL_SHADER_STORAGE_BUFFER, initial.size(), initial.data(), GL_STATIC_DRAW);
+    MobileGL::MG_Impl::GLImpl::BufferData(GL_SHADER_STORAGE_BUFFER, initial.size(), initial.data(), GL_STATIC_DRAW);
     const GLbyte zero = 0;
-    MobileGL::MG_Impl::GLImpl::ClearBufferSubData(
-        GL_SHADER_STORAGE_BUFFER, GL_R8, 0, irisStaticSsboSize, GL_RED, GL_BYTE, &zero);
+    MobileGL::MG_Impl::GLImpl::ClearBufferSubData(GL_SHADER_STORAGE_BUFFER, GL_R8, 0, irisStaticSsboSize, GL_RED,
+                                                  GL_BYTE, &zero);
 
     Vector<Uint8> actual(irisStaticSsboSize);
     auto bufferObject = MobileGL::MG_State::pGLContext->GetBufferObject(buffer);
@@ -831,10 +827,9 @@ TEST_F(BufferTest, ClearBufferDataConvertsOneClientPixelBeforeRepeatingIt) {
 
     Vector<Uint32> initial(4, 0u);
     MobileGL::MG_Impl::GLImpl::BufferData(GL_ARRAY_BUFFER, initial.size() * sizeof(Uint32), initial.data(),
-                                           GL_STATIC_DRAW);
+                                          GL_STATIC_DRAW);
     const Uint8 value = 0xAB;
-    MobileGL::MG_Impl::GLImpl::ClearBufferData(
-        GL_ARRAY_BUFFER, GL_R32UI, GL_RED_INTEGER, GL_UNSIGNED_BYTE, &value);
+    MobileGL::MG_Impl::GLImpl::ClearBufferData(GL_ARRAY_BUFFER, GL_R32UI, GL_RED_INTEGER, GL_UNSIGNED_BYTE, &value);
 
     Vector<Uint32> actual(initial.size());
     auto bufferObject = MobileGL::MG_State::pGLContext->GetBufferObject(buffer);
@@ -851,8 +846,7 @@ TEST_F(BufferTest, ClearBufferDataConvertsOneClientPixelBeforeRepeatingIt) {
 TEST_F(BufferTest, ClearBufferSubDataRejectsUnboundTarget) {
     MobileGL::MG_Impl::GLImpl::BindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
     const GLbyte zero = 0;
-    MobileGL::MG_Impl::GLImpl::ClearBufferSubData(
-        GL_SHADER_STORAGE_BUFFER, GL_R8, 0, 1, GL_RED, GL_BYTE, &zero);
+    MobileGL::MG_Impl::GLImpl::ClearBufferSubData(GL_SHADER_STORAGE_BUFFER, GL_R8, 0, 1, GL_RED, GL_BYTE, &zero);
     ExpectSingleGlError(GL_INVALID_OPERATION);
 }
 
@@ -864,11 +858,9 @@ TEST_F(BufferTest, ClearBufferDataRejectsInvalidPixelFormatTypePairs) {
     const Vector<Uint8> initial{0x7F, 0x7F};
     MobileGL::MG_Impl::GLImpl::BufferData(GL_ARRAY_BUFFER, initial.size(), initial.data(), GL_STATIC_DRAW);
     const Uint16 packed = 0;
-    MobileGL::MG_Impl::GLImpl::ClearBufferData(
-        GL_ARRAY_BUFFER, GL_R16, GL_RED, GL_UNSIGNED_SHORT_5_6_5, &packed);
+    MobileGL::MG_Impl::GLImpl::ClearBufferData(GL_ARRAY_BUFFER, GL_R16, GL_RED, GL_UNSIGNED_SHORT_5_6_5, &packed);
     ExpectSingleGlError(GL_INVALID_VALUE);
-    MobileGL::MG_Impl::GLImpl::ClearBufferData(
-        GL_ARRAY_BUFFER, GL_R16, GL_RED, GL_UNSIGNED_SHORT_5_6_5, nullptr);
+    MobileGL::MG_Impl::GLImpl::ClearBufferData(GL_ARRAY_BUFFER, GL_R16, GL_RED, GL_UNSIGNED_SHORT_5_6_5, nullptr);
     ExpectSingleGlError(GL_INVALID_VALUE);
 
     Vector<Uint8> actual(initial.size());
@@ -881,7 +873,6 @@ TEST_F(BufferTest, ClearBufferDataRejectsInvalidPixelFormatTypePairs) {
     MobileGL::MG_Impl::GLImpl::DeleteBuffers(1, &buffer);
     DrainPendingGlErrors();
 }
-
 
 // GL 4.6 core 6.5: glBufferSubData fails only when the written range OVERLAPS the mapped range.
 // A second, wrong test used to sit next to the correct one and reject any write whose end reached
@@ -1117,8 +1108,7 @@ TEST_F(BufferTest, BindBufferRangeEnforcesUniformAndTransformFeedbackAlignment) 
 
     // Transform feedback captures 32-bit components: offset and size are both constrained, and the
     // size half has no analogue on any other target.
-    auto& feedbackPoint =
-        MobileGL::MG_State::pGLContext->GetBufferBindingPoint(BufferTarget::TransformFeedback, 0);
+    auto& feedbackPoint = MobileGL::MG_State::pGLContext->GetBufferBindingPoint(BufferTarget::TransformFeedback, 0);
     MobileGL::MG_Impl::GLImpl::BindBufferRange(GL_TRANSFORM_FEEDBACK_BUFFER, 0, buffer, 2, 4);
     ExpectSingleGlError(GL_INVALID_VALUE);
     EXPECT_EQ(feedbackPoint.GetBoundObject(), nullptr);
@@ -1394,9 +1384,8 @@ TEST_F(GeneralBufferTest, General_PersistentCoherentWriteDirtyWithoutUnmap) {
     ASSERT_NE(bufferObject, nullptr);
     const Uint64 baseSerial = bufferObject->GetChangeSerial();
 
-    auto* mapped = static_cast<GLint*>(
-        MapBufferRange(GL_ARRAY_BUFFER, 0, sizeof(initial),
-                       GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT | GL_MAP_COHERENT_BIT));
+    auto* mapped = static_cast<GLint*>(MapBufferRange(GL_ARRAY_BUFFER, 0, sizeof(initial),
+                                                      GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT | GL_MAP_COHERENT_BIT));
     ASSERT_NE(mapped, nullptr);
     mapped[2] = 1234;
 
@@ -1422,9 +1411,8 @@ TEST_F(GeneralBufferTest, General_PersistentExplicitFlushOnlyDirtiesFlushedRange
     ASSERT_NE(bufferObject, nullptr);
     const Uint64 baseSerial = bufferObject->GetChangeSerial();
 
-    auto* mapped = static_cast<GLint*>(
-        MapBufferRange(GL_ARRAY_BUFFER, 0, sizeof(initial),
-                       GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT | GL_MAP_FLUSH_EXPLICIT_BIT));
+    auto* mapped = static_cast<GLint*>(MapBufferRange(
+        GL_ARRAY_BUFFER, 0, sizeof(initial), GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT | GL_MAP_FLUSH_EXPLICIT_BIT));
     ASSERT_NE(mapped, nullptr);
     mapped[1] = 200;
     mapped[3] = 400;
@@ -1456,9 +1444,8 @@ TEST_F(GeneralBufferTest, General_NamedBufferStorageMappingWrappers) {
     ASSERT_NE(bufferObject, nullptr);
     const Uint64 baseSerial = bufferObject->GetChangeSerial();
 
-    auto* mapped = static_cast<GLint*>(
-        MapNamedBufferRange(buffer, 0, sizeof(initial),
-                            GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT | GL_MAP_FLUSH_EXPLICIT_BIT));
+    auto* mapped = static_cast<GLint*>(MapNamedBufferRange(
+        buffer, 0, sizeof(initial), GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT | GL_MAP_FLUSH_EXPLICIT_BIT));
     ASSERT_NE(mapped, nullptr);
     mapped[0] = 99;
 
@@ -1671,8 +1658,6 @@ namespace {
     };
 } // namespace
 
-
-
 // ---------------------------------------------------------------------------
 // MOBILEGL_COHERENT_AS_FLUSH: persistent FLUSH_EXPLICIT mapping requests are
 // rewritten to coherent semantics, so apps that bind mapped ranges for GPU reads
@@ -1817,9 +1802,9 @@ TEST_F(GeneralBufferTest, General_CoherentAsFlush_PersistentMapAdoptsZeroCopyBac
     // Flywheel-style map: FLUSH_EXPLICIT and never flushed. Under the feature it becomes
     // coherent-persistent and takes the zero-copy path: the app writes straight into the
     // backend's GPU storage, so nothing depends on flush calls.
-    auto* mapped = static_cast<GLint*>(
-        MapBufferRange(GL_ARRAY_BUFFER, 0, static_cast<GLsizeiptr>(kCount * sizeof(GLint)),
-                       GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT | GL_MAP_FLUSH_EXPLICIT_BIT));
+    auto* mapped =
+        static_cast<GLint*>(MapBufferRange(GL_ARRAY_BUFFER, 0, static_cast<GLsizeiptr>(kCount * sizeof(GLint)),
+                                           GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT | GL_MAP_FLUSH_EXPLICIT_BIT));
     ASSERT_NE(mapped, nullptr);
     EXPECT_EQ(mock.acquireMapCalls, 1);
 
@@ -1877,8 +1862,7 @@ TEST_F(BufferTest, RedefiningAnAdoptedBufferHandsTheMappingBack) {
     // The backend adopts the bytes, exactly as a capture target or an SSBO binding does.
     ASSERT_TRUE(bufferObject->EnsureGpuResidentStorage());
     ASSERT_TRUE(bufferObject->IsBackendPersistentMapped());
-    ASSERT_EQ(static_cast<const void*>(bufferObject->MappedData()),
-              static_cast<const void*>(mock.gpu.data()));
+    ASSERT_EQ(static_cast<const void*>(bufferObject->MappedData()), static_cast<const void*>(mock.gpu.data()));
     mock.respecifyCalls = 0;
 
     const GLint after[4] = {10, 20, 30, 40};
@@ -1886,8 +1870,7 @@ TEST_F(BufferTest, RedefiningAnAdoptedBufferHandsTheMappingBack) {
     ASSERT_EQ(GetError(), GL_NO_ERROR);
 
     EXPECT_FALSE(bufferObject->IsBackendPersistentMapped());
-    EXPECT_NE(static_cast<const void*>(bufferObject->MappedData()),
-              static_cast<const void*>(mock.gpu.data()));
+    EXPECT_NE(static_cast<const void*>(bufferObject->MappedData()), static_cast<const void*>(mock.gpu.data()));
     EXPECT_EQ(std::memcmp(bufferObject->MappedData(), after, sizeof(after)), 0);
     // The backend has a separate copy again, so it must have been told to refresh it.
     EXPECT_EQ(mock.respecifyCalls, 1);
@@ -2052,9 +2035,9 @@ namespace {
         GenBuffers(1, &buffer);
         BindBuffer(target, buffer);
         Vector<GLint> initial(kAdoptedInts);
-        for (SizeT i = 0; i < kAdoptedInts; ++i) initial[i] = static_cast<GLint>(i);
-        BufferData(target, static_cast<GLsizeiptr>(kAdoptedInts * sizeof(GLint)), initial.data(),
-                   GL_DYNAMIC_DRAW);
+        for (SizeT i = 0; i < kAdoptedInts; ++i)
+            initial[i] = static_cast<GLint>(i);
+        BufferData(target, static_cast<GLsizeiptr>(kAdoptedInts * sizeof(GLint)), initial.data(), GL_DYNAMIC_DRAW);
         EXPECT_EQ(GetError(), GL_NO_ERROR);
         auto bufferObject = MG_State::pGLContext->GetBufferObject(buffer);
         EXPECT_NE(bufferObject, nullptr);
@@ -2088,8 +2071,10 @@ TEST_F(BufferTest, ANonPersistentReadWriteRangeMapOfAnAdoptedStoreLandsAtUnmap) 
     ASSERT_NE(mapped, nullptr);
     // A non-persistent map is a staging copy, seeded from the adopted store...
     EXPECT_NE(static_cast<void*>(mapped), static_cast<void*>(mock.gpu.data()));
-    for (SizeT i = 0; i < kAdoptedInts; ++i) EXPECT_EQ(mapped[i], static_cast<GLint>(i));
-    for (SizeT i = 0; i < kAdoptedInts; ++i) mapped[i] = 1000 + static_cast<GLint>(i);
+    for (SizeT i = 0; i < kAdoptedInts; ++i)
+        EXPECT_EQ(mapped[i], static_cast<GLint>(i));
+    for (SizeT i = 0; i < kAdoptedInts; ++i)
+        mapped[i] = 1000 + static_cast<GLint>(i);
     // ...that the store does not see until the unmap.
     EXPECT_EQ(GpuInts(mock)[0], 0);
     bufferObject->ReleaseMemory();
@@ -2170,7 +2155,8 @@ TEST_F(BufferTest, AWriteMapInvalidatingAnAdoptedStoreLandsTheWholeRangeAtUnmap)
     ASSERT_NE(mapped, nullptr);
     EXPECT_NE(static_cast<void*>(mapped), static_cast<void*>(mock.gpu.data()));
     // The whole range is undefined by contract, so the application rewrites all of it.
-    for (SizeT i = 0; i < kAdoptedInts; ++i) mapped[i] = -static_cast<GLint>(i) - 1;
+    for (SizeT i = 0; i < kAdoptedInts; ++i)
+        mapped[i] = -static_cast<GLint>(i) - 1;
     bufferObject->ReleaseMemory();
 
     for (SizeT i = 0; i < kAdoptedInts; ++i) {
@@ -2204,14 +2190,16 @@ TEST_F(BufferTest, ARangeMapAtAnUnalignedOffsetOfAnAdoptedStoreLandsInPlace) {
     auto* mapped = static_cast<GLint*>(bufferObject->AcquireMemoryRange(range, BufferMappingAccessBit::Write));
     ASSERT_NE(mapped, nullptr);
     // Seeded from the right place...
-    for (SizeT i = 0; i < kCount; ++i) EXPECT_EQ(mapped[i], static_cast<GLint>(kFirst + i));
-    for (SizeT i = 0; i < kCount; ++i) mapped[i] = 500 + static_cast<GLint>(i);
+    for (SizeT i = 0; i < kCount; ++i)
+        EXPECT_EQ(mapped[i], static_cast<GLint>(kFirst + i));
+    for (SizeT i = 0; i < kCount; ++i)
+        mapped[i] = 500 + static_cast<GLint>(i);
     bufferObject->ReleaseMemory();
 
     // ...and landed in the right place, with everything outside the range untouched.
     for (SizeT i = 0; i < kAdoptedInts; ++i) {
-        const GLint expected = (i >= kFirst && i < kFirst + kCount) ? 500 + static_cast<GLint>(i - kFirst)
-                                                                    : static_cast<GLint>(i);
+        const GLint expected =
+            (i >= kFirst && i < kFirst + kCount) ? 500 + static_cast<GLint>(i - kFirst) : static_cast<GLint>(i);
         EXPECT_EQ(GpuInts(mock)[i], expected) << "int " << i;
     }
     EXPECT_GT(bufferObject->GetChangeSerial(), baseSerial);
@@ -2237,10 +2225,11 @@ TEST_F(BufferTest, AnExplicitFlushOfAWriteMapOfAnAdoptedStoreLandsOnlyTheFlushed
     constexpr SizeT kFirst = 2;
     constexpr SizeT kCount = 12;
     const Range1D range{kFirst * sizeof(GLint), (kFirst + kCount) * sizeof(GLint)};
-    auto* mapped = static_cast<GLint*>(bufferObject->AcquireMemoryRange(
-        range, BufferMappingAccessBit::Write | BufferMappingAccessBit::FlushExplicit));
+    auto* mapped = static_cast<GLint*>(
+        bufferObject->AcquireMemoryRange(range, BufferMappingAccessBit::Write | BufferMappingAccessBit::FlushExplicit));
     ASSERT_NE(mapped, nullptr);
-    for (SizeT i = 0; i < kCount; ++i) mapped[i] = 700 + static_cast<GLint>(i);
+    for (SizeT i = 0; i < kCount; ++i)
+        mapped[i] = 700 + static_cast<GLint>(i);
     // ...but only ints 5..8 (map-relative ints 3..6) flushed.
     constexpr SizeT kFlushFirst = 3;
     constexpr SizeT kFlushCount = 4;
@@ -2284,10 +2273,11 @@ TEST_F(BufferTest, ABackendWithAResidentSubDataOpTakesTheUnmappedBytesForAGpuOrd
     constexpr SizeT kFirst = 3;
     constexpr SizeT kCount = 5;
     const Range1D range{kFirst * sizeof(GLint), (kFirst + kCount) * sizeof(GLint)};
-    auto* mapped = static_cast<GLint*>(bufferObject->AcquireMemoryRange(
-        range, BufferMappingAccessBit::Read | BufferMappingAccessBit::Write));
+    auto* mapped = static_cast<GLint*>(
+        bufferObject->AcquireMemoryRange(range, BufferMappingAccessBit::Read | BufferMappingAccessBit::Write));
     ASSERT_NE(mapped, nullptr);
-    for (SizeT i = 0; i < kCount; ++i) mapped[i] = 900 + static_cast<GLint>(i);
+    for (SizeT i = 0; i < kCount; ++i)
+        mapped[i] = 900 + static_cast<GLint>(i);
     bufferObject->ReleaseMemory();
 
     // The op got exactly the mapped range's bytes at the mapped offset...
@@ -2295,9 +2285,11 @@ TEST_F(BufferTest, ABackendWithAResidentSubDataOpTakesTheUnmappedBytesForAGpuOrd
     EXPECT_EQ(mock.residentWrites[0].offset, range.start);
     ASSERT_EQ(mock.residentWrites[0].bytes.size(), kCount * sizeof(GLint));
     const auto* handed = reinterpret_cast<const GLint*>(mock.residentWrites[0].bytes.data());
-    for (SizeT i = 0; i < kCount; ++i) EXPECT_EQ(handed[i], 900 + static_cast<GLint>(i)) << "int " << i;
+    for (SizeT i = 0; i < kCount; ++i)
+        EXPECT_EQ(handed[i], 900 + static_cast<GLint>(i)) << "int " << i;
     // ...the mapping itself was not written through...
-    for (SizeT i = 0; i < kAdoptedInts; ++i) EXPECT_EQ(GpuInts(mock)[i], static_cast<GLint>(i)) << "int " << i;
+    for (SizeT i = 0; i < kAdoptedInts; ++i)
+        EXPECT_EQ(GpuInts(mock)[i], static_cast<GLint>(i)) << "int " << i;
     EXPECT_GT(bufferObject->GetChangeSerial(), baseSerial);
     EXPECT_EQ(mock.flushCalls, 0);
     EXPECT_EQ(mock.subDataCalls, 0);
@@ -2308,8 +2300,8 @@ TEST_F(BufferTest, ABackendWithAResidentSubDataOpTakesTheUnmappedBytesForAGpuOrd
     EXPECT_EQ(mock.readbackCalls, 1);
     EXPECT_TRUE(mock.residentWrites.empty());
     for (SizeT i = 0; i < kAdoptedInts; ++i) {
-        const GLint expected = (i >= kFirst && i < kFirst + kCount) ? 900 + static_cast<GLint>(i - kFirst)
-                                                                    : static_cast<GLint>(i);
+        const GLint expected =
+            (i >= kFirst && i < kFirst + kCount) ? 900 + static_cast<GLint>(i - kFirst) : static_cast<GLint>(i);
         EXPECT_EQ(readBack[i], expected) << "int " << i;
     }
     // A second read has nothing outstanding to reconcile.
@@ -2331,10 +2323,11 @@ TEST_F(BufferTest, ABackendWithAResidentSubDataOpTakesAnExplicitlyFlushedRangeTh
     constexpr SizeT kFirst = 2;
     constexpr SizeT kCount = 8;
     const Range1D range{kFirst * sizeof(GLint), (kFirst + kCount) * sizeof(GLint)};
-    auto* mapped = static_cast<GLint*>(bufferObject->AcquireMemoryRange(
-        range, BufferMappingAccessBit::Write | BufferMappingAccessBit::FlushExplicit));
+    auto* mapped = static_cast<GLint*>(
+        bufferObject->AcquireMemoryRange(range, BufferMappingAccessBit::Write | BufferMappingAccessBit::FlushExplicit));
     ASSERT_NE(mapped, nullptr);
-    for (SizeT i = 0; i < kCount; ++i) mapped[i] = 800 + static_cast<GLint>(i);
+    for (SizeT i = 0; i < kCount; ++i)
+        mapped[i] = 800 + static_cast<GLint>(i);
     constexpr SizeT kFlushFirst = 5;
     constexpr SizeT kFlushCount = 2;
     bufferObject->FlushMemoryRange(kFlushFirst * sizeof(GLint), kFlushCount * sizeof(GLint));
@@ -2368,12 +2361,13 @@ TEST_F(BufferTest, MapBufferRangeAndUnmapBufferReseedAnAdoptedShaderStorageBuffe
     ASSERT_NE(bufferObject, nullptr);
 
     for (GLint pass = 1; pass <= 3; ++pass) {
-        auto* mapped = static_cast<GLint*>(
-            MapBufferRange(GL_SHADER_STORAGE_BUFFER, 0, static_cast<GLsizeiptr>(kAdoptedInts * sizeof(GLint)),
-                           GL_MAP_READ_BIT | GL_MAP_WRITE_BIT));
+        auto* mapped = static_cast<GLint*>(MapBufferRange(GL_SHADER_STORAGE_BUFFER, 0,
+                                                          static_cast<GLsizeiptr>(kAdoptedInts * sizeof(GLint)),
+                                                          GL_MAP_READ_BIT | GL_MAP_WRITE_BIT));
         ASSERT_NE(mapped, nullptr);
         ASSERT_EQ(GetError(), GL_NO_ERROR);
-        for (SizeT i = 0; i < kAdoptedInts; ++i) mapped[i] = pass * 100 + static_cast<GLint>(i);
+        for (SizeT i = 0; i < kAdoptedInts; ++i)
+            mapped[i] = pass * 100 + static_cast<GLint>(i);
         EXPECT_TRUE(UnmapBuffer(GL_SHADER_STORAGE_BUFFER));
         ASSERT_EQ(GetError(), GL_NO_ERROR);
         for (SizeT i = 0; i < kAdoptedInts; ++i) {
@@ -2436,7 +2430,8 @@ TEST_F(BufferTest, ABackendWithAResidentSubDataOpTakesAGlBufferSubDataAtItsOffse
     ASSERT_EQ(mock.residentWrites[0].bytes.size(), sizeof(updated));
     EXPECT_EQ(std::memcmp(mock.residentWrites[0].bytes.data(), updated, sizeof(updated)), 0);
     // The mapping itself is left alone until the backend's ordered copy runs.
-    for (SizeT i = 0; i < kAdoptedInts; ++i) EXPECT_EQ(GpuInts(mock)[i], static_cast<GLint>(i)) << "int " << i;
+    for (SizeT i = 0; i < kAdoptedInts; ++i)
+        EXPECT_EQ(GpuInts(mock)[i], static_cast<GLint>(i)) << "int " << i;
 
     const auto* readBack = static_cast<const GLint*>(bufferObject->AcquireMemory(false, true, false));
     EXPECT_EQ(mock.readbackCalls, 1);
@@ -2497,8 +2492,10 @@ TEST_F(BufferTest, ABackendWithAResidentSubDataOpTakesTheExpandedClearPattern) {
     EXPECT_EQ(mock.residentWrites[0].offset, kFirst * sizeof(GLint));
     ASSERT_EQ(mock.residentWrites[0].bytes.size(), kCount * sizeof(GLint));
     const auto* handed = reinterpret_cast<const GLint*>(mock.residentWrites[0].bytes.data());
-    for (SizeT i = 0; i < kCount; ++i) EXPECT_EQ(handed[i], value) << "int " << i;
-    for (SizeT i = 0; i < kAdoptedInts; ++i) EXPECT_EQ(GpuInts(mock)[i], static_cast<GLint>(i)) << "int " << i;
+    for (SizeT i = 0; i < kCount; ++i)
+        EXPECT_EQ(handed[i], value) << "int " << i;
+    for (SizeT i = 0; i < kAdoptedInts; ++i)
+        EXPECT_EQ(GpuInts(mock)[i], static_cast<GLint>(i)) << "int " << i;
 
     const auto* readBack = static_cast<const GLint*>(bufferObject->AcquireMemory(false, true, false));
     EXPECT_EQ(mock.readbackCalls, 1);
@@ -2519,7 +2516,8 @@ namespace {
         GenBuffers(1, &buffer);
         BindBuffer(target, buffer);
         Vector<GLint> bytes(kAdoptedInts);
-        for (SizeT i = 0; i < kAdoptedInts; ++i) bytes[i] = bias + static_cast<GLint>(i);
+        for (SizeT i = 0; i < kAdoptedInts; ++i)
+            bytes[i] = bias + static_cast<GLint>(i);
         BufferData(target, static_cast<GLsizeiptr>(kAdoptedInts * sizeof(GLint)), bytes.data(), GL_STATIC_DRAW);
         EXPECT_EQ(GetError(), GL_NO_ERROR);
         return buffer;
@@ -2547,8 +2545,8 @@ TEST_F(BufferTest, GlCopyBufferSubDataIntoAnAdoptedStoreLandsAtTheDestinationOff
 
     for (SizeT i = 0; i < kAdoptedInts; ++i) {
         const GLint expected = (i >= kDstFirst && i < kDstFirst + kCount)
-            ? 900 + static_cast<GLint>(kSrcFirst + i - kDstFirst)
-            : static_cast<GLint>(i);
+                                   ? 900 + static_cast<GLint>(kSrcFirst + i - kDstFirst)
+                                   : static_cast<GLint>(i);
         EXPECT_EQ(GpuInts(mock)[i], expected) << "int " << i;
     }
     EXPECT_EQ(mock.subDataCalls, 0);
@@ -2583,7 +2581,8 @@ TEST_F(BufferTest, ABackendWithAResidentSubDataOpTakesACopyAtTheDestinationOffse
     for (SizeT i = 0; i < kCount; ++i) {
         EXPECT_EQ(handed[i], 900 + static_cast<GLint>(kSrcFirst + i)) << "int " << i;
     }
-    for (SizeT i = 0; i < kAdoptedInts; ++i) EXPECT_EQ(GpuInts(mock)[i], static_cast<GLint>(i)) << "int " << i;
+    for (SizeT i = 0; i < kAdoptedInts; ++i)
+        EXPECT_EQ(GpuInts(mock)[i], static_cast<GLint>(i)) << "int " << i;
 
     GLuint toDelete[] = {destination, source};
     DeleteBuffers(2, toDelete);
@@ -2606,13 +2605,14 @@ TEST_F(BufferTest, AnExplicitFlushOfAPersistentMapOfAnAdoptedStoreOnlyPublishesT
     constexpr SizeT kFirst = 2;
     constexpr SizeT kCount = 8;
     const Range1D range{kFirst * sizeof(GLint), (kFirst + kCount) * sizeof(GLint)};
-    auto* mapped = static_cast<GLint*>(bufferObject->AcquireMemoryRange(
-        range, BufferMappingAccessBit::Write | BufferMappingAccessBit::Persistent |
-                   BufferMappingAccessBit::FlushExplicit));
+    auto* mapped = static_cast<GLint*>(
+        bufferObject->AcquireMemoryRange(range, BufferMappingAccessBit::Write | BufferMappingAccessBit::Persistent |
+                                                    BufferMappingAccessBit::FlushExplicit));
     ASSERT_NE(mapped, nullptr);
     // The application writes the store itself: the map IS the adopted memory.
     EXPECT_EQ(static_cast<void*>(mapped), static_cast<void*>(mock.gpu.data() + range.start));
-    for (SizeT i = 0; i < kCount; ++i) mapped[i] = 400 + static_cast<GLint>(i);
+    for (SizeT i = 0; i < kCount; ++i)
+        mapped[i] = 400 + static_cast<GLint>(i);
 
     constexpr SizeT kFlushFirst = 3;
     constexpr SizeT kFlushCount = 2;
@@ -2658,8 +2658,7 @@ TEST_F(BufferTest, AZeroLengthExplicitFlushOfAnAdoptedStoreLeavesItUndefined) {
     const Uint64 baseSerial = bufferObject->GetChangeSerial();
 
     auto* mapped = bufferObject->AcquireMemoryRange({0, kAdoptedInts * sizeof(GLint)},
-                                                    BufferMappingAccessBit::Write |
-                                                        BufferMappingAccessBit::Persistent |
+                                                    BufferMappingAccessBit::Write | BufferMappingAccessBit::Persistent |
                                                         BufferMappingAccessBit::FlushExplicit);
     ASSERT_NE(mapped, nullptr);
     bufferObject->FlushMemoryRange(0, 0);
@@ -2701,7 +2700,8 @@ TEST_F(BufferTest, AWriteMapThatDiscardsWhatItMapsDoesNotReconcileAnAdoptedStore
         range, BufferMappingAccessBit::Write | BufferMappingAccessBit::InvalidateRange));
     ASSERT_NE(mapped, nullptr);
     EXPECT_EQ(mock.readbackCalls, 0);
-    for (SizeT i = 0; i < kCount; ++i) mapped[i] = 300 + static_cast<GLint>(i);
+    for (SizeT i = 0; i < kCount; ++i)
+        mapped[i] = 300 + static_cast<GLint>(i);
     bufferObject->ReleaseMemory();
     ASSERT_EQ(mock.residentWrites.size(), 2u);
 
@@ -2709,7 +2709,8 @@ TEST_F(BufferTest, AWriteMapThatDiscardsWhatItMapsDoesNotReconcileAnAdoptedStore
     const auto* readBack = static_cast<const GLint*>(bufferObject->AcquireMemory(false, true, false));
     EXPECT_EQ(mock.readbackCalls, 1);
     EXPECT_EQ(readBack[0], firstInt);
-    for (SizeT i = 0; i < kCount; ++i) EXPECT_EQ(readBack[kFirst + i], 300 + static_cast<GLint>(i)) << "int " << i;
+    for (SizeT i = 0; i < kCount; ++i)
+        EXPECT_EQ(readBack[kFirst + i], 300 + static_cast<GLint>(i)) << "int " << i;
 
     // The control: a map that keeps what it maps still reconciles before seeding.
     BufferSubData(GL_ARRAY_BUFFER, 0, sizeof(firstInt), &firstInt);
@@ -2718,7 +2719,8 @@ TEST_F(BufferTest, AWriteMapThatDiscardsWhatItMapsDoesNotReconcileAnAdoptedStore
         bufferObject->AcquireMemoryRange(range, BufferMappingAccessBit::Read | BufferMappingAccessBit::Write));
     ASSERT_NE(seeded, nullptr);
     EXPECT_EQ(mock.readbackCalls, 2);
-    for (SizeT i = 0; i < kCount; ++i) EXPECT_EQ(seeded[i], 300 + static_cast<GLint>(i)) << "int " << i;
+    for (SizeT i = 0; i < kCount; ++i)
+        EXPECT_EQ(seeded[i], 300 + static_cast<GLint>(i)) << "int " << i;
     bufferObject->ReleaseMemory();
 
     DeleteBuffers(1, &buffer);
@@ -2738,7 +2740,8 @@ TEST_F(BufferTest, AStorageBindingDoesNotAdoptTheStoreWhileTheApplicationHoldsAM
     GenBuffers(1, &buffer);
     BindBuffer(GL_SHADER_STORAGE_BUFFER, buffer);
     Vector<GLint> initial(kAdoptedInts);
-    for (SizeT i = 0; i < kAdoptedInts; ++i) initial[i] = static_cast<GLint>(i);
+    for (SizeT i = 0; i < kAdoptedInts; ++i)
+        initial[i] = static_cast<GLint>(i);
     BufferData(GL_SHADER_STORAGE_BUFFER, static_cast<GLsizeiptr>(kAdoptedInts * sizeof(GLint)), initial.data(),
                GL_DYNAMIC_DRAW);
     ASSERT_EQ(GetError(), GL_NO_ERROR);
@@ -2749,9 +2752,9 @@ TEST_F(BufferTest, AStorageBindingDoesNotAdoptTheStoreWhileTheApplicationHoldsAM
     constexpr SizeT kFirst = 2;
     constexpr SizeT kCount = 4;
     const Range1D range{kFirst * sizeof(GLint), (kFirst + kCount) * sizeof(GLint)};
-    auto* mapped = static_cast<GLint*>(bufferObject->AcquireMemoryRange(
-        range, BufferMappingAccessBit::Write | BufferMappingAccessBit::Persistent |
-                   BufferMappingAccessBit::FlushExplicit));
+    auto* mapped = static_cast<GLint*>(
+        bufferObject->AcquireMemoryRange(range, BufferMappingAccessBit::Write | BufferMappingAccessBit::Persistent |
+                                                    BufferMappingAccessBit::FlushExplicit));
     ASSERT_NE(mapped, nullptr);
     ASSERT_EQ(static_cast<const void*>(mapped), static_cast<const void*>(shadowBase + range.start));
 
@@ -2760,11 +2763,13 @@ TEST_F(BufferTest, AStorageBindingDoesNotAdoptTheStoreWhileTheApplicationHoldsAM
     EXPECT_EQ(mock.acquireMapCalls, 0);
     // The application's pointer is still the store's: it survived the binding.
     EXPECT_EQ(static_cast<const void*>(bufferObject->MappedData()), static_cast<const void*>(shadowBase));
-    for (SizeT i = 0; i < kCount; ++i) mapped[i] = 250 + static_cast<GLint>(i);
+    for (SizeT i = 0; i < kCount; ++i)
+        mapped[i] = 250 + static_cast<GLint>(i);
     bufferObject->FlushMemoryRange(0, kCount * sizeof(GLint));
     EXPECT_EQ(mock.flushCalls, 1);
     const auto* shadowInts = reinterpret_cast<const GLint*>(bufferObject->MappedData());
-    for (SizeT i = 0; i < kCount; ++i) EXPECT_EQ(shadowInts[kFirst + i], 250 + static_cast<GLint>(i));
+    for (SizeT i = 0; i < kCount; ++i)
+        EXPECT_EQ(shadowInts[kFirst + i], 250 + static_cast<GLint>(i));
 
     // Unmapped, the next binding adopts as usual.
     bufferObject->ReleaseMemory();
@@ -2789,7 +2794,8 @@ TEST_F(BufferTest, RespecifyingAStoreWhileItIsMappedDoesNotLandTheStagedBytesInt
     auto* mapped = static_cast<GLint*>(
         bufferObject->AcquireMemoryRange({0, kAdoptedInts * sizeof(GLint)}, BufferMappingAccessBit::Write));
     ASSERT_NE(mapped, nullptr);
-    for (SizeT i = 0; i < kAdoptedInts; ++i) mapped[i] = 1234;
+    for (SizeT i = 0; i < kAdoptedInts; ++i)
+        mapped[i] = 1234;
 
     bufferObject->Respecify(kAdoptedInts * sizeof(GLint), nullptr);
     EXPECT_TRUE(mock.residentWrites.empty());
@@ -2803,4 +2809,3 @@ TEST_F(BufferTest, RespecifyingAStoreWhileItIsMappedDoesNotLandTheStagedBytesInt
     DeleteBuffers(1, &buffer);
     g_zeroCopyMock = nullptr;
 }
-

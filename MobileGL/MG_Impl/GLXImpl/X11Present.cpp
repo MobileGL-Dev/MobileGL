@@ -51,9 +51,9 @@ namespace MobileGL::MG_Impl::GLXImpl::X11Present {
     Path SelectPath(const ConnectionCaps& caps, Uint32 depth, const char* overrideValue) {
         const Bool putImageOnly = overrideValue != nullptr && std::strcmp(overrideValue, "putimage") == 0;
         const Bool noDri3 = putImageOnly || (overrideValue != nullptr && (std::strcmp(overrideValue, "readback") == 0 ||
-                                                                         std::strcmp(overrideValue, "shm") == 0));
-        if (!noDri3 && caps.SharedImages && caps.LocalConnection && FourccForDepth(depth) != 0 &&
-            caps.Dri3Major >= 1 && caps.PresentMajor >= 1) {
+                                                                          std::strcmp(overrideValue, "shm") == 0));
+        if (!noDri3 && caps.SharedImages && caps.LocalConnection && FourccForDepth(depth) != 0 && caps.Dri3Major >= 1 &&
+            caps.PresentMajor >= 1) {
             return Path::Dri3Present;
         }
         // MIT-SHM 1.2 is the first with a client-made segment passed as a descriptor (no SysV
@@ -71,7 +71,8 @@ namespace MobileGL::MG_Impl::GLXImpl::X11Present {
     }
 
     Chain::~Chain() {
-        for (Buffer& buffer : m_buffers) Drop(buffer);
+        for (Buffer& buffer : m_buffers)
+            Drop(buffer);
         m_connection.Flush();
     }
 
@@ -83,13 +84,15 @@ namespace MobileGL::MG_Impl::GLXImpl::X11Present {
 
     SizeT Chain::AllocatedBuffers() const {
         SizeT count = 0;
-        for (const Buffer& buffer : m_buffers) count += buffer.Pixmap != 0 ? 1 : 0;
+        for (const Buffer& buffer : m_buffers)
+            count += buffer.Pixmap != 0 ? 1 : 0;
         return count;
     }
 
     SizeT Chain::BusyBuffers() const {
         SizeT count = 0;
-        for (const Buffer& buffer : m_buffers) count += buffer.Pixmap != 0 && buffer.Busy ? 1 : 0;
+        for (const Buffer& buffer : m_buffers)
+            count += buffer.Pixmap != 0 && buffer.Busy ? 1 : 0;
         return count;
     }
 
@@ -112,7 +115,8 @@ namespace MobileGL::MG_Impl::GLXImpl::X11Present {
             Break("the server allocated no shared image for the window");
             return false;
         }
-        if (image.Fd < 0 || image.Width != static_cast<Uint32>(m_width) || image.Height != static_cast<Uint32>(m_height)) {
+        if (image.Fd < 0 || image.Width != static_cast<Uint32>(m_width) ||
+            image.Height != static_cast<Uint32>(m_height)) {
             CloseDescriptor(image.Fd);
             m_images.Release(image.Id);
             Break("a shared image came back without a descriptor or at another size");
@@ -164,7 +168,8 @@ namespace MobileGL::MG_Impl::GLXImpl::X11Present {
 
     void Chain::DrainEvents() {
         Event event;
-        while (m_connection.PollEvent(&event)) Handle(event);
+        while (m_connection.PollEvent(&event))
+            Handle(event);
     }
 
     void Chain::WaitForPacing(Int swapInterval) {

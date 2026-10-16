@@ -64,14 +64,13 @@ namespace MobileGL {
             class EmulateSubgroupsPass : public spvtools::opt::Pass {
             public:
                 EmulateSubgroupsPass(Uint32 maxWorkgroupScratchBytes, bool atomicScratchReads)
-                    : m_maxWorkgroupScratchBytes(maxWorkgroupScratchBytes),
-                      m_atomicScratchReads(atomicScratchReads) {}
+                    : m_maxWorkgroupScratchBytes(maxWorkgroupScratchBytes), m_atomicScratchReads(atomicScratchReads) {}
 
                 const char* name() const override { return "emulate-subgroups"; }
                 Status Process() override;
 
-                static spvtools::Optimizer::PassToken CreateEmulateSubgroupsPass(
-                    Uint32 maxWorkgroupScratchBytes, bool atomicScratchReads = false);
+                static spvtools::Optimizer::PassToken CreateEmulateSubgroupsPass(Uint32 maxWorkgroupScratchBytes,
+                                                                                 bool atomicScratchReads = false);
 
             private:
                 Uint32 m_maxWorkgroupScratchBytes;

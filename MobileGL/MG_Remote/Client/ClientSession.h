@@ -20,7 +20,7 @@
 #include "../Transport/ControlInbox.h"
 #include <Includes.h>
 
-#include <atomic>  // the device-lost latch is read off the GL thread
+#include <atomic> // the device-lost latch is read off the GL thread
 
 #include <Config.h>
 #include <MG_Pipe/MGPipe.h>
@@ -47,7 +47,7 @@
 
 namespace MobileGL::MG_Remote::Transport {
     class InProcessTransport;
-}
+} // namespace MobileGL::MG_Remote::Transport
 
 namespace MobileGL::MG_Remote::Client {
 
@@ -165,8 +165,7 @@ namespace MobileGL::MG_Remote::Client {
         static MobileGLResult RemoteControlSinkThunk(void* user, Server::SurfaceControlFrame& frame);
         MobileGLResult RunRemoteSurfaceControlFrame(Server::SurfaceControlFrame& frame);
 
-        MobileGLResult FinishStartup(Transport::Doorbell* peerBell,
-                                     Transport::Doorbell* selfBell,
+        MobileGLResult FinishStartup(Transport::Doorbell* peerBell, Transport::Doorbell* selfBell,
                                      bool startApplyThreadHere);
 
         // `transport` is this process's end of a connection to an ALREADY
@@ -206,9 +205,9 @@ namespace MobileGL::MG_Remote::Client {
         //
         // Waiting is spin(MOBILEGL_IPC_SPIN_US) then park, through Doorbell::Wait, with
         // producerParked set before blocking - the shape Doorbell::Wait already implements.
-        Uint64 EmitAndWait(MG_Pipe::MGPWireOp op, const void* payload, Uint64 payloadBytes,
-                           const void* varTail, Uint64 varTailBytes, void* replyOut,
-                           Uint64 replyBytes, Int32* statusOut, Uint64* replySizeOut = nullptr);
+        Uint64 EmitAndWait(MG_Pipe::MGPWireOp op, const void* payload, Uint64 payloadBytes, const void* varTail,
+                           Uint64 varTailBytes, void* replyOut, Uint64 replyBytes, Int32* statusOut,
+                           Uint64* replySizeOut = nullptr);
 
         // The same call for a record that carries TWO tails (P5b d1: draw_vbo's user-index span
         // or its MGPDrawIndirect block behind the range array). The one-tail form above is this
@@ -225,9 +224,8 @@ namespace MobileGL::MG_Remote::Client {
         // skip an answer a caller uses: R-5 still forbids re-deriving one locally, and every
         // other kReplySlot row passes true (the default) and waits.
         Uint64 EmitAndWaitTails(MG_Pipe::MGPWireOp op, const void* payload, Uint64 payloadBytes,
-                                const Wire::WireTail* tails, Uint32 tailCount, void* replyOut,
-                                Uint64 replyBytes, Int32* statusOut,
-                                Uint64* replySizeOut = nullptr, Bool wantReply = true,
+                                const Wire::WireTail* tails, Uint32 tailCount, void* replyOut, Uint64 replyBytes,
+                                Int32* statusOut, Uint64* replySizeOut = nullptr, Bool wantReply = true,
                                 Bool willReadReply = true);
 
         // ---- P11 B2: T0 (docs/archive/contracts/CONTRACT-P11.md B2) ------------------------------------
@@ -381,8 +379,7 @@ namespace MobileGL::MG_Remote::Client {
         // barriered fill is always legal. Under lockstep it checks only with
         // MOBILEGL_IPC_BATCH_WAITS=0 and an armed barrier, and fires when the applier is inside
         // and this thread is not in a barrier wait. Never fires on the apply thread.
-        static void RefusePipeInputsTouchWhileApplierOwnsIt(const char* surface,
-                                                            Bool isBarrieredFill = false);
+        static void RefusePipeInputsTouchWhileApplierOwnsIt(const char* surface, Bool isBarrieredFill = false);
 
         // ---- c1's additions ---------------------------------------------------------------
 
@@ -455,8 +452,7 @@ namespace MobileGL::MG_Remote::Client {
         // The reply slot for `seq`, addressed seq % slots with the seq stamped back into the
         // header for self-check (R-3). `outStatus` is 0 OK / 1 DECLINED / 2 ERROR, and
         // DECLINED IS A REAL ANSWER - MapPersistent's nullptr and the four Bool acceptances.
-        Bool ReadReply(Uint64 seq, void* outBytes, Uint64 outCapacity, Int32* outStatus,
-                       Uint64* outSize);
+        Bool ReadReply(Uint64 seq, void* outBytes, Uint64 outCapacity, Int32* outStatus, Uint64* outSize);
         // What one answer may carry. No single answer is ever bigger than this: a ReadPixels
         // whose whole read is bigger is split by the emitter into row bands (or, for a row
         // wider than a reply, single-row pieces) that each fit (g5-readback, EmitTables.h
@@ -473,8 +469,7 @@ namespace MobileGL::MG_Remote::Client {
         // pixel fits a reply, once for that one pixel instead of emitting; the server's Post
         // keeps its own refusal as the last line of defence, but that one fires on the apply
         // thread with the record already on the wire, where all the client sees is a hang.
-        void RequireReadPixelsReplyFits(Uint32 width, Uint32 height, Uint32 format, Uint32 type,
-                                        Uint64 bytes) const;
+        void RequireReadPixelsReplyFits(Uint32 width, Uint32 height, Uint32 format, Uint32 type, Uint64 bytes) const;
 
         // The reverse channel's reading end: OnBufferWriteback / OnGpuWritten /
         // OnSurfaceChanged. Drained by the GL thread between verbs.

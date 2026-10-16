@@ -46,8 +46,12 @@ namespace MobileGL::MG_Util {
                (mantissa >> (23u - static_cast<Uint32>(mantissaBits)));
     }
 
-    inline Uint32 EncodeFloatToUnsignedF11(Float value) { return EncodeFloatToUnsignedSmallFloat(value, 6); }
-    inline Uint32 EncodeFloatToUnsignedF10(Float value) { return EncodeFloatToUnsignedSmallFloat(value, 5); }
+    inline Uint32 EncodeFloatToUnsignedF11(Float value) {
+        return EncodeFloatToUnsignedSmallFloat(value, 6);
+    }
+    inline Uint32 EncodeFloatToUnsignedF10(Float value) {
+        return EncodeFloatToUnsignedSmallFloat(value, 5);
+    }
 
     // Decodes an unsigned small float (5-bit exponent, bias 15, mantissaBits mantissa bits).
     inline Float DecodeUnsignedSmallFloatToFloat(Uint32 field, Int mantissaBits) {
@@ -58,15 +62,17 @@ namespace MobileGL::MG_Util {
             return std::exp2(-14.0f) * static_cast<Float>(mantissa) * mantissaScale;
         }
         if (exponent == 31) {
-            return mantissa == 0 ? std::numeric_limits<Float>::infinity()
-                                 : std::numeric_limits<Float>::quiet_NaN();
+            return mantissa == 0 ? std::numeric_limits<Float>::infinity() : std::numeric_limits<Float>::quiet_NaN();
         }
-        return std::exp2(static_cast<Float>(exponent) - 15.0f) *
-               (1.0f + static_cast<Float>(mantissa) * mantissaScale);
+        return std::exp2(static_cast<Float>(exponent) - 15.0f) * (1.0f + static_cast<Float>(mantissa) * mantissaScale);
     }
 
-    inline Float DecodeUnsignedF11ToFloat(Uint32 field) { return DecodeUnsignedSmallFloatToFloat(field, 6); }
-    inline Float DecodeUnsignedF10ToFloat(Uint32 field) { return DecodeUnsignedSmallFloatToFloat(field, 5); }
+    inline Float DecodeUnsignedF11ToFloat(Uint32 field) {
+        return DecodeUnsignedSmallFloatToFloat(field, 6);
+    }
+    inline Float DecodeUnsignedF10ToFloat(Uint32 field) {
+        return DecodeUnsignedSmallFloatToFloat(field, 5);
+    }
 
     // RGB9E5 shared-exponent encode, following the EXT_texture_shared_exponent spec algorithm
     // (N = 9 mantissa bits, B = 15 exponent bias, Emax = 31).
@@ -84,11 +90,10 @@ namespace MobileGL::MG_Util {
 
         Int sharedExponent = 0; // all-zero input keeps the all-zero word
         if (maxComponent > 0.0f) {
-            sharedExponent = std::max(-kExponentBias - 1, static_cast<Int>(std::floor(std::log2(maxComponent)))) +
-                             1 + kExponentBias;
+            sharedExponent =
+                std::max(-kExponentBias - 1, static_cast<Int>(std::floor(std::log2(maxComponent)))) + 1 + kExponentBias;
             const Float maxScaled = std::floor(
-                maxComponent / std::exp2(static_cast<Float>(sharedExponent - kExponentBias - kMantissaBits)) +
-                0.5f);
+                maxComponent / std::exp2(static_cast<Float>(sharedExponent - kExponentBias - kMantissaBits)) + 0.5f);
             if (maxScaled >= 512.0f) { // rounded up to 2^N: bump the shared exponent instead
                 ++sharedExponent;
             }

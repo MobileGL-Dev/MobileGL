@@ -115,7 +115,9 @@ namespace {
     };
 
     int g_windowStorage[4];
-    void* FakeWindow(int index) { return &g_windowStorage[index]; }
+    void* FakeWindow(int index) {
+        return &g_windowStorage[index];
+    }
 
 } // namespace
 
@@ -125,9 +127,7 @@ class EmbeddedServerTest : public ::testing::Test {
 protected:
     FakePlatform platform;
 
-    mobilegl_server_display_hooks Hooks() {
-        return {&FakeAcquire, &FakeRelease, &FakeGeometry, &platform};
-    }
+    mobilegl_server_display_hooks Hooks() { return {&FakeAcquire, &FakeRelease, &FakeGeometry, &platform}; }
     void TearDown() override {
         ServerDisplayInstance().EndLease(this);
         (void)mobilegl_server_display_uninstall(0);
@@ -198,7 +198,8 @@ TEST(ServerDisplayTest, AProcessThatInstalledNothingHasNoDisplay) {
     EXPECT_FALSE(display.HasDisplay());
     ServerWindowLease lease;
     const auto started = std::chrono::steady_clock::now();
-    EXPECT_EQ(display.AcquireFor(64, 48, 5000, this, nullptr, nullptr, nullptr, &lease), ServerWindowAcquire::NoDisplay);
+    EXPECT_EQ(display.AcquireFor(64, 48, 5000, this, nullptr, nullptr, nullptr, &lease),
+              ServerWindowAcquire::NoDisplay);
     EXPECT_LT(std::chrono::steady_clock::now() - started, std::chrono::milliseconds(1000))
         << "a process with no display must not wait for a window";
     // And the process singleton is that process: nothing on the host installs one.
@@ -213,7 +214,8 @@ TEST(ServerDisplayTest, AWaitForAWindowThatNeverComesEndsByNameAfterItsBound) {
     EXPECT_TRUE(display.HasDisplay());
     ServerWindowLease lease;
     const auto started = std::chrono::steady_clock::now();
-    EXPECT_EQ(display.AcquireFor(640, 480, 200, this, nullptr, nullptr, nullptr, &lease), ServerWindowAcquire::NoWindow);
+    EXPECT_EQ(display.AcquireFor(640, 480, 200, this, nullptr, nullptr, nullptr, &lease),
+              ServerWindowAcquire::NoWindow);
     const auto waited = std::chrono::steady_clock::now() - started;
     EXPECT_GE(waited, std::chrono::milliseconds(150));
     EXPECT_LT(waited, std::chrono::milliseconds(3000));
@@ -288,7 +290,8 @@ TEST(ServerDisplayTest, TheWindowsOwnSizeAfterAFixedSizeIsTheLayoutsNotTheStaleF
         display.Attach(FakeWindow(0), 640, 480);
     });
     ServerWindowLease lease;
-    ASSERT_EQ(display.AcquireFor(640, 480, 5000, this, nullptr, nullptr, nullptr, &lease), ServerWindowAcquire::Acquired);
+    ASSERT_EQ(display.AcquireFor(640, 480, 5000, this, nullptr, nullptr, nullptr, &lease),
+              ServerWindowAcquire::Acquired);
     fixer.join();
     display.EndLease(this);
     // Session 2 asks for the window's own size: setSizeFromLayout answers later, at the layout's size.
@@ -435,9 +438,9 @@ TEST(ServerDisplayTest, ALeaseWhoseSessionIsEndingIsWaitedForAndThenHandedOver) 
     const auto refusedAt = std::chrono::steady_clock::now();
     EXPECT_EQ(display.AcquireFor(0, 0, 2000, &third, nullptr, nullptr, nullptr, &lease),
               ServerWindowAcquire::LeasedElsewhere);
-    EXPECT_LT(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - refusedAt)
-                  .count(),
-              500);
+    EXPECT_LT(
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - refusedAt).count(),
+        500);
     display.EndLease(&fresh);
     EXPECT_EQ(platform.releases.load(), 0) << "a lease that changed hands released the window";
 }
@@ -460,8 +463,7 @@ TEST(ServerDisplayTest, AnEndingLeaseIsWaitedForOnlyAsLongAsTheRequestWaitsAndTh
     const auto started = std::chrono::steady_clock::now();
     EXPECT_EQ(display.AcquireFor(0, 0, 200, &second, nullptr, nullptr, nullptr, &lease),
               ServerWindowAcquire::LeasedElsewhere);
-    EXPECT_GE(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started)
-                  .count(),
+    EXPECT_GE(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started).count(),
               150)
         << "the ending lease was not waited for";
 
@@ -473,9 +475,9 @@ TEST(ServerDisplayTest, AnEndingLeaseIsWaitedForOnlyAsLongAsTheRequestWaitsAndTh
     const auto refusedAt = std::chrono::steady_clock::now();
     EXPECT_EQ(display.AcquireFor(0, 0, 2000, &second, nullptr, nullptr, nullptr, &lease),
               ServerWindowAcquire::LeasedElsewhere);
-    EXPECT_LT(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - refusedAt)
-                  .count(),
-              500);
+    EXPECT_LT(
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - refusedAt).count(),
+        500);
     display.EndLease(&first);
 }
 
@@ -490,7 +492,8 @@ TEST(ServerDisplayTest, InterruptAndTheCancelPredicateEndAWaitByName) {
         display.Interrupt();
     });
     ServerWindowLease lease;
-    EXPECT_EQ(display.AcquireFor(0, 0, 5000, this, nullptr, nullptr, nullptr, &lease), ServerWindowAcquire::Interrupted);
+    EXPECT_EQ(display.AcquireFor(0, 0, 5000, this, nullptr, nullptr, nullptr, &lease),
+              ServerWindowAcquire::Interrupted);
     interrupter.join();
 
     static std::atomic<bool> cancelled{false};
@@ -532,11 +535,13 @@ TEST(ServerDisplayTest, ASuspendedHolderIsToldAboutTheNextNewWindowUntilItLeases
     const auto onLost = [](void*) { lost.fetch_add(1); };
     int holder = 0;
     ServerWindowLease lease;
-    ASSERT_EQ(display.AcquireFor(64, 48, 100, &holder, onLost, nullptr, nullptr, &lease), ServerWindowAcquire::Acquired);
+    ASSERT_EQ(display.AcquireFor(64, 48, 100, &holder, onLost, nullptr, nullptr, &lease),
+              ServerWindowAcquire::Acquired);
 
     // The screen goes off; the "apply thread" suspends instead of ending.
     std::thread session([&] {
-        while (lost.load() == 0) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        while (lost.load() == 0)
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
         display.SuspendLease(&holder, onAttached);
     });
     EXPECT_EQ(display.Detach(3000), ServerWindowDetach::ReleasedBySession);

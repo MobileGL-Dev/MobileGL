@@ -168,7 +168,8 @@ namespace MobileGL {
             const int key = buildStorageKey(EShLangFragment, glslang::EvqInOut);
             for (int location = top; location >= 0; --location) {
                 bool free = true;
-                for (int i = 0; i < size && free; ++i) free = checkEmpty(key, location + i);
+                for (int i = 0; i < size && free; ++i)
+                    free = checkEmpty(key, location + i);
                 if (!free) continue;
                 reserveSlot(key, location, size);
                 ent.symbol->getWritableType().getQualifier().layoutLocation = location;
@@ -212,7 +213,7 @@ namespace MobileGL {
     // is the single derivation, and neither site computes a ceiling of its own.
     void TMglGlslIoResolver::CheckDeclaredBindingRange(const glslang::TType& type, const glslang::TString& name) {
         if (m_bindingLimits == nullptr || m_bindingViolation == nullptr) return;
-        if (!m_bindingViolation->empty()) return;   // first violation wins; the link is already lost
+        if (!m_bindingViolation->empty()) return; // first violation wins; the link is already lost
 
         const glslang::TQualifier& qualifier = type.getQualifier();
         const char* kind = nullptr;
@@ -232,8 +233,8 @@ namespace MobileGL {
             // TRAILING NUMBER is the GL binding the shader asked for (ParseContextBase::
             // growAtomicCounterBlock names it from bufferBinding). That name is the only surviving
             // record of the declaration, so it is what the counter ceiling is read off.
-            const Int counterBinding = MG_Util::ShaderTranspiler::AtomicCounterBlockGlBinding(
-                StringView(name.c_str(), name.size()));
+            const Int counterBinding =
+                MG_Util::ShaderTranspiler::AtomicCounterBlockGlBinding(StringView(name.c_str(), name.size()));
             if (counterBinding >= 0) {
                 kind = "atomic_uint";
                 limitName = "GL_MAX_ATOMIC_COUNTER_BUFFER_BINDINGS";
@@ -275,8 +276,8 @@ namespace MobileGL {
         const long long lastBinding = binding + elementCount - 1;
         if (lastBinding < static_cast<long long>(limit)) return;
 
-        String message = "Error: layout(binding = " + std::to_string(binding) + ") on " + kind + " '" +
-                         String(name.c_str()) + "'";
+        String message =
+            "Error: layout(binding = " + std::to_string(binding) + ") on " + kind + " '" + String(name.c_str()) + "'";
         if (elementCount > 1) {
             message += " (an array of " + std::to_string(elementCount) + ", occupying bindings " +
                        std::to_string(binding) + ".." + std::to_string(lastBinding) + ")";

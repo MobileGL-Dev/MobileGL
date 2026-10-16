@@ -15,7 +15,9 @@
 
 namespace MobileGL::MG_Remote::Transport {
     ControlInbox::ControlInbox(ITransport& transport) : m_transport(transport), m_reader([this] { Read(); }) {}
-    ControlInbox::~ControlInbox() { Stop(); }
+    ControlInbox::~ControlInbox() {
+        Stop();
+    }
 
     void ControlInbox::Stop() {
         {
@@ -53,7 +55,8 @@ namespace MobileGL::MG_Remote::Transport {
             }
             if (result == MOBILEGL_OK) {
                 flatbuffers::Verifier verifier(frame.data(), frame.size());
-                if (!::MobileGL::Wire::VerifyCtrlEnvelopeBuffer(verifier)) result = MOBILEGL_ERR_PROTOCOL_MISMATCH;
+                if (!::MobileGL::Wire::VerifyCtrlEnvelopeBuffer(verifier))
+                    result = MOBILEGL_ERR_PROTOCOL_MISMATCH;
                 else {
                     const auto* envelope = ::MobileGL::Wire::GetCtrlEnvelope(frame.data());
                     if (const auto* log = envelope->msg_as_LogLine()) {
@@ -81,8 +84,10 @@ namespace MobileGL::MG_Remote::Transport {
     MobileGLResult ControlInbox::Receive(std::vector<std::uint8_t>& frame, std::uint32_t timeoutMs) {
         std::unique_lock<std::mutex> lock(m_mutex);
         const auto ready = [&] { return m_stop || !m_frames.empty() || m_result != MOBILEGL_OK; };
-        if (timeoutMs == kWaitForever) m_cv.wait(lock, ready);
-        else if (!m_cv.wait_for(lock, std::chrono::milliseconds(timeoutMs), ready)) return MOBILEGL_ERR_TIMEOUT;
+        if (timeoutMs == kWaitForever)
+            m_cv.wait(lock, ready);
+        else if (!m_cv.wait_for(lock, std::chrono::milliseconds(timeoutMs), ready))
+            return MOBILEGL_ERR_TIMEOUT;
         if (m_frames.empty()) return m_result == MOBILEGL_OK ? MOBILEGL_ERR_TRANSPORT_CLOSED : m_result;
         frame = std::move(m_frames.front());
         m_frames.pop_front();
@@ -108,4 +113,4 @@ namespace MobileGL::MG_Remote::Transport {
             if (m_cv.wait_until(lock, deadline) == std::cv_status::timeout) return m_result != MOBILEGL_OK;
         }
     }
-}
+} // namespace MobileGL::MG_Remote::Transport

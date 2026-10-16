@@ -28,8 +28,7 @@ namespace MobileGL::MG_Remote::Client {
         // Replaces the whole mirror and bumps Generation(). Called once per CapsSnapshot,
         // including the re-sends that mean "invalidate" (R-12).
         void Adopt(const MG_Pipe::MGPCaps& caps, const MG_Backend::FormatCapabilityCache& formats,
-                   const RendererInfo& renderer, const String& apiVersion,
-                   BackendType backend);
+                   const RendererInfo& renderer, const String& apiVersion, BackendType backend);
 
         // False until the first snapshot. The placeholder answers below are still safe to
         // read - that is the point - but a caller that can wait should.

@@ -119,9 +119,9 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
             static_assert(std::is_trivially_copyable_v<ValueT>);
             Vector<Pair<StringView, ValueT>> sorted;
             sorted.reserve(map.size());
-            for (const auto& [name, value] : map) sorted.emplace_back(StringView(name), value);
-            std::sort(sorted.begin(), sorted.end(),
-                      [](const auto& a, const auto& b) { return a.first < b.first; });
+            for (const auto& [name, value] : map)
+                sorted.emplace_back(StringView(name), value);
+            std::sort(sorted.begin(), sorted.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
             Value(static_cast<Uint64>(sorted.size()));
             for (const auto& [name, value] : sorted) {
                 Text(name);
@@ -281,14 +281,11 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
             const Uint64 lookups = stats.hits + stats.misses;
             MGLOG_D("%s: %llu/%llu hits (%.1f%%), %llu inserts, %llu evictions, %llu oversize, "
                     "%llu duplicate, %zu entries / %zu KiB",
-                    m_name, static_cast<unsigned long long>(stats.hits),
-                    static_cast<unsigned long long>(lookups),
+                    m_name, static_cast<unsigned long long>(stats.hits), static_cast<unsigned long long>(lookups),
                     lookups ? 100.0 * static_cast<double>(stats.hits) / static_cast<double>(lookups) : 0.0,
-                    static_cast<unsigned long long>(stats.inserts),
-                    static_cast<unsigned long long>(stats.evictions),
+                    static_cast<unsigned long long>(stats.inserts), static_cast<unsigned long long>(stats.evictions),
                     static_cast<unsigned long long>(stats.rejectedOversize),
-                    static_cast<unsigned long long>(stats.duplicateInserts), EntryCount(),
-                    StoredBytes() / 1024u);
+                    static_cast<unsigned long long>(stats.duplicateInserts), EntryCount(), StoredBytes() / 1024u);
         }
 
         // Tests only: makes the caps small enough to exercise eviction without
@@ -313,8 +310,7 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
         using EntryList = std::list<Entry>;
 
         void EvictUntilWithinBudgetLocked() {
-            while (!m_entries.empty() &&
-                   (m_entries.size() > m_maxEntries || m_storedBytes > m_maxBytes)) {
+            while (!m_entries.empty() && (m_entries.size() > m_maxEntries || m_storedBytes > m_maxBytes)) {
                 const auto victim = m_entries.begin();
                 m_storedBytes -= victim->bytes;
                 m_index.erase(victim->key);

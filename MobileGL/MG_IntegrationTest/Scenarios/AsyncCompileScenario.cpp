@@ -349,7 +349,8 @@ void main() {
 
             glDeleteProgram(program);
             glDeleteShader(vs);
-            for (const GLuint shader : shaders) glDeleteShader(shader);
+            for (const GLuint shader : shaders)
+                glDeleteShader(shader);
             EXPECT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
         }
 
@@ -386,8 +387,7 @@ void main() {
             ASSERT_NE(extensions, nullptr);
             const std::string extensionString(extensions);
             const bool inString = extensionString.find("GL_KHR_parallel_shader_compile") != std::string::npos;
-            EXPECT_EQ(inString, expected)
-                << "backend " << Gl().BackendName() << " GL_EXTENSIONS = " << extensionString;
+            EXPECT_EQ(inString, expected) << "backend " << Gl().BackendName() << " GL_EXTENSIONS = " << extensionString;
 
             // LWJGL builds GLCapabilities from the INDEXED form on a core profile, so the
             // two spellings disagreeing would be invisible to the check above and fatal
@@ -441,8 +441,10 @@ void main() {
                 EXPECT_EQ(ShaderCompletion(shader), GL_TRUE) << "a compile after a zero count must be synchronous";
             }
 
-            for (const GLuint shader : backlog) glDeleteShader(shader);
-            for (const GLuint shader : serial) glDeleteShader(shader);
+            for (const GLuint shader : backlog)
+                glDeleteShader(shader);
+            for (const GLuint shader : serial)
+                glDeleteShader(shader);
             EXPECT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
         }
 
@@ -533,7 +535,8 @@ void main() {
                 const Image image = DrawFrameWith(programs[static_cast<std::size_t>(i)]);
                 EXPECT_EQ(image.QuadrantSignature(), "blue,green,red,white") << "program " << i;
             }
-            for (const GLuint program : programs) glDeleteProgram(program);
+            for (const GLuint program : programs)
+                glDeleteProgram(program);
             EXPECT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
         }
 
@@ -622,7 +625,8 @@ void main() {
                 const Image image = DrawFrameWith(program);
                 EXPECT_EQ(image.QuadrantSignature(), "blue,green,red,white") << "program " << i;
             }
-            for (const GLuint program : programs) glDeleteProgram(program);
+            for (const GLuint program : programs)
+                glDeleteProgram(program);
             EXPECT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
         }
 

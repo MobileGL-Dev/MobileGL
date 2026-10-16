@@ -35,10 +35,10 @@
 // `BufferTooSmallKeepsTheMessage` matters more here: the message it must keep
 // is one this side already reassembled out of bytes nobody else can re-deliver.
 
-#include <MG_Remote/Handshake.h> // PH-7 (4): EncodeDataBind / DecodeDataBind
+#include <MG_Remote/Handshake.h>                             // PH-7 (4): EncodeDataBind / DecodeDataBind
 #include <MG_Remote/Protocol/generated/protocol_generated.h> // RefuseCode, for the word below
-#include <MG_Remote/Transport/AuthToken.h> // PH-7 (3): the minimum and the comparison
-#include <MG_Remote/Transport/Doorbell.h> // kWaitForever
+#include <MG_Remote/Transport/AuthToken.h>                   // PH-7 (3): the minimum and the comparison
+#include <MG_Remote/Transport/Doorbell.h>                    // kWaitForever
 #include <MG_Remote/Transport/FdPassing.h>
 #include <MG_Remote/Transport/SocketTransport.h>
 
@@ -93,8 +93,9 @@ TEST(SocketTransportTest, TcpCarriesControlAndIndependentDataWithKeepalive) {
     ASSERT_EQ(SocketTransport::MintNonce(nonce, sizeof(nonce)), MOBILEGL_OK);
     const auto bind = MobileGL::MG_Remote::EncodeDataBind(nonce, sizeof(nonce));
     int clientData = -1, serverData = -1;
-    ASSERT_EQ(SocketTransport::ConnectDataConnection(endpoint, 1000, MobileGLByteSpan{bind.data(), bind.size()},
-                                                     &clientData), MOBILEGL_OK);
+    ASSERT_EQ(
+        SocketTransport::ConnectDataConnection(endpoint, 1000, MobileGLByteSpan{bind.data(), bind.size()}, &clientData),
+        MOBILEGL_OK);
     ASSERT_EQ(SocketTransport::AcceptOne(listener, 1000, &serverData), MOBILEGL_OK);
     ::close(listener);
     std::vector<std::uint8_t> bound;
@@ -149,8 +150,7 @@ TEST(SocketTransportTest, TcpRejectsMalformedNamesAndUnauthenticatedWildcard) {
     // no peer could ever receive. fatal_census.py's rule 4 refuses an invented word statically;
     // this pins the word that gate checks against to the enumerator the peer actually reads, so
     // renaming the enumerator without the log line fails here rather than silently.
-    EXPECT_STREQ(MobileGL::Wire::EnumNameRefuseCode(MobileGL::Wire::RefuseCode::Authentication),
-                 "Authentication");
+    EXPECT_STREQ(MobileGL::Wire::EnumNameRefuseCode(MobileGL::Wire::RefuseCode::Authentication), "Authentication");
     if (wasSet) ::setenv("MOBILEGL_IPC_TOKEN", saved.c_str(), 1);
 }
 
@@ -169,8 +169,7 @@ TEST(SocketTransportTest, TcpRefusesToListenWithATokenShorterThanTheMinimum) {
     const std::string tooShort(kMinimumAuthTokenBytes - 1, 'x');
     ::setenv("MOBILEGL_IPC_TOKEN", tooShort.c_str(), 1);
     int listener = -1;
-    EXPECT_EQ(SocketTransport::Listen("tcp://127.0.0.1:40697", &listener),
-              MOBILEGL_ERR_PROTOCOL_MISMATCH);
+    EXPECT_EQ(SocketTransport::Listen("tcp://127.0.0.1:40697", &listener), MOBILEGL_ERR_PROTOCOL_MISMATCH);
     EXPECT_EQ(listener, -1);
     // One more byte and the same endpoint comes up, so the refusal above is the LENGTH and not
     // the port, the address family or the environment variable's mere presence.
@@ -179,8 +178,10 @@ TEST(SocketTransportTest, TcpRefusesToListenWithATokenShorterThanTheMinimum) {
     EXPECT_EQ(SocketTransport::Listen("tcp://127.0.0.1:40697", &listener), MOBILEGL_OK);
     EXPECT_GE(listener, 0);
     if (listener >= 0) ::close(listener);
-    if (wasSet) ::setenv("MOBILEGL_IPC_TOKEN", saved.c_str(), 1);
-    else ::unsetenv("MOBILEGL_IPC_TOKEN");
+    if (wasSet)
+        ::setenv("MOBILEGL_IPC_TOKEN", saved.c_str(), 1);
+    else
+        ::unsetenv("MOBILEGL_IPC_TOKEN");
 }
 
 // The comparison itself. `std::strcmp` and `std::string::operator==` - the two this replaced -
@@ -197,8 +198,7 @@ TEST(SocketTransportTest, TheTokenComparisonAnswersLengthAndPrefixTheSameWay) {
     EXPECT_FALSE(ConstantTimeTokenMatch(expected, "", 0));
     // An embedded NUL is compared, not truncated at: `presented` carries its own length because
     // a flatbuffers string can hold one and c_str()-plus-strcmp would have stopped there.
-    const char embedded[] = {'0', '\0', '2', '3', '4', '5', '6', '7',
-                             '8', '9', 'a', 'b', 'c', 'd', 'e', 'f'};
+    const char embedded[] = {'0', '\0', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f'};
     EXPECT_FALSE(ConstantTimeTokenMatch(expected, embedded, sizeof(embedded)));
     EXPECT_FALSE(ConstantTimeTokenMatch(nullptr, "anything", 8));
     // F fix round: the loop runs a fixed kAuthTokenCompareBytes (64) so its trip count does not
@@ -241,8 +241,9 @@ TEST(SocketTransportTest, TheDataBindIsReadExactlyAndTheStreamBehindItIsLeftOnTh
     ASSERT_EQ(SocketTransport::MintNonce(nonce, sizeof(nonce)), MOBILEGL_OK);
     const auto bind = MobileGL::MG_Remote::EncodeDataBind(nonce, sizeof(nonce));
     int client = -1;
-    ASSERT_EQ(SocketTransport::ConnectDataConnection(endpoint, 1000, MobileGLByteSpan{bind.data(), bind.size()},
-                                                     &client), MOBILEGL_OK);
+    ASSERT_EQ(
+        SocketTransport::ConnectDataConnection(endpoint, 1000, MobileGLByteSpan{bind.data(), bind.size()}, &client),
+        MOBILEGL_OK);
     const char tail[] = "MGLD-the-first-stream-bytes";
     ASSERT_EQ(::send(client, tail, sizeof(tail), MSG_NOSIGNAL), static_cast<ssize_t>(sizeof(tail)));
 
@@ -270,8 +271,9 @@ TEST(SocketTransportTest, TheDataBindIsReadExactlyAndTheStreamBehindItIsLeftOnTh
 
     // A frame over the caller's bound is refused before its payload is read.
     int second = -1;
-    ASSERT_EQ(SocketTransport::ConnectDataConnection(endpoint, 1000, MobileGLByteSpan{bind.data(), bind.size()},
-                                                     &second), MOBILEGL_OK);
+    ASSERT_EQ(
+        SocketTransport::ConnectDataConnection(endpoint, 1000, MobileGLByteSpan{bind.data(), bind.size()}, &second),
+        MOBILEGL_OK);
     int big = -1;
     ASSERT_EQ(SocketTransport::AcceptOne(listener, 1000, &big), MOBILEGL_OK);
     EXPECT_EQ(SocketTransport::ReceiveOneFrame(big, 1000, bind.size() - 1, &frame), MOBILEGL_ERR_PROTOCOL_MISMATCH);
@@ -295,8 +297,7 @@ namespace {
         if (result != MOBILEGL_OK) {
             return std::string("<result=") + std::to_string(static_cast<int>(result)) + ">";
         }
-        return std::string(reinterpret_cast<const char*>(buffer.data()),
-                           static_cast<std::size_t>(size));
+        return std::string(reinterpret_cast<const char*>(buffer.data()), static_cast<std::size_t>(size));
     }
 
     struct Pair {
@@ -396,9 +397,7 @@ TEST(SocketTransportTest, PollAndTimeoutDoNotBlockForever) {
 
     const auto start = std::chrono::steady_clock::now();
     EXPECT_EQ(pair.server->ReceiveFrame(span, &size, 30), MOBILEGL_ERR_TIMEOUT);
-    EXPECT_GE(std::chrono::duration_cast<std::chrono::milliseconds>(
-                  std::chrono::steady_clock::now() - start)
-                  .count(),
+    EXPECT_GE(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count(),
               20);
 }
 
@@ -482,9 +481,7 @@ TEST(SocketTransportTest, HandsOverADescriptorAndItsSideband) {
     MobileGLMutableByteSpan bigSpan{big.data(), big.size()};
     ASSERT_EQ(pair.server->ReceiveFd(&fd, bigSpan, &sidebandSize, 100), MOBILEGL_OK);
     ASSERT_GE(fd, 0);
-    EXPECT_EQ(std::string(reinterpret_cast<const char*>(big.data()),
-                          static_cast<std::size_t>(sidebandSize)),
-              sideband);
+    EXPECT_EQ(std::string(reinterpret_cast<const char*>(big.data()), static_cast<std::size_t>(sidebandSize)), sideband);
 
     // Same open file description, independent descriptor - which is exactly
     // what the four segments will ride on in `sm`.
@@ -544,9 +541,8 @@ TEST(SocketTransportTest, AFrameWakeupIsNotEatenByAWaiterOnDescriptors) {
     const auto start = std::chrono::steady_clock::now();
     ASSERT_EQ(pair.server->SendFrame(Span(message)), MOBILEGL_OK);
     frameWaiter.join();
-    const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
-                               std::chrono::steady_clock::now() - start)
-                               .count();
+    const auto elapsedMs =
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
 
     EXPECT_EQ(got, message);
     // Not "eventually, when the receive timed out and re-checked".
@@ -574,9 +570,7 @@ TEST(SocketTransportTest, ReassemblesAMessageSplitAcrossReads) {
     sender.join();
 
     EXPECT_EQ(size, big.size());
-    EXPECT_EQ(std::string(reinterpret_cast<const char*>(buffer.data()),
-                          static_cast<std::size_t>(size)),
-              big);
+    EXPECT_EQ(std::string(reinterpret_cast<const char*>(buffer.data()), static_cast<std::size_t>(size)), big);
 }
 
 TEST(SocketTransportTest, AGarbageStreamIsLatchedFailedAndNeverRecovers) {
@@ -587,10 +581,8 @@ TEST(SocketTransportTest, AGarbageStreamIsLatchedFailedAndNeverRecovers) {
     // must not be retry-able past: the alternative is a reader that resyncs
     // onto a byte boundary it invented, which is how one bad frame becomes a
     // silently misparsed session.
-    const std::uint8_t garbage[16] = {0xDE, 0xAD, 0xBE, 0xEF, 0, 0, 0, 0,
-                                      0xFF, 0xFF, 0xFF, 0xFF, 1, 2, 3, 4};
-    ASSERT_EQ(::write(pair.client->StreamFd(), garbage, sizeof(garbage)),
-              static_cast<ssize_t>(sizeof(garbage)));
+    const std::uint8_t garbage[16] = {0xDE, 0xAD, 0xBE, 0xEF, 0, 0, 0, 0, 0xFF, 0xFF, 0xFF, 0xFF, 1, 2, 3, 4};
+    ASSERT_EQ(::write(pair.client->StreamFd(), garbage, sizeof(garbage)), static_cast<ssize_t>(sizeof(garbage)));
 
     std::vector<std::uint8_t> buffer(64);
     std::uint64_t size = 0;

@@ -57,7 +57,7 @@ namespace MobileGL::MG_Remote::Transport::FdPassing {
     // On success *outFd owns a descriptor this process must close.
     // MOBILEGL_ERR_TIMEOUT when nothing arrived (timeoutMs 0 = poll),
     // MOBILEGL_ERR_TRANSPORT_CLOSED on peer close.
-    MobileGLResult ReceiveFd(int socket, int* outFd, MobileGLMutableByteSpan sideband,
-                             std::uint64_t* outSidebandSize, std::uint32_t timeoutMs);
+    MobileGLResult ReceiveFd(int socket, int* outFd, MobileGLMutableByteSpan sideband, std::uint64_t* outSidebandSize,
+                             std::uint32_t timeoutMs);
 
 } // namespace MobileGL::MG_Remote::Transport::FdPassing

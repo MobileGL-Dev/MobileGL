@@ -107,14 +107,14 @@
 // 2026-08-13 renumbering unchanged; the contract is and stays
 // "INFO builds: asserts OFF; DEBUG builds: asserts ON".
 #if MOBILEGL_LOG_ACTIVE_LEVEL <= MOBILEGL_LOG_LEVEL_DEBUG
-    #define MOBILEGL_ASSERT(condition, ...)                                                                                \
-        do {                                                                                                               \
-            if (!(condition)) {                                                                                            \
-                MGLOG_F("Assertion failed" __VA_OPT__(": ") __VA_ARGS__);                                                  \
-                MGLOG_F("  at %s:%d (%s)", __FILE__, __LINE__, __func__);                                                  \
-                TRAP;                                                                                                      \
-            }                                                                                                              \
-        } while (0)
+#define MOBILEGL_ASSERT(condition, ...)                                                                                \
+    do {                                                                                                               \
+        if (!(condition)) {                                                                                            \
+            MGLOG_F("Assertion failed" __VA_OPT__(": ") __VA_ARGS__);                                                  \
+            MGLOG_F("  at %s:%d (%s)", __FILE__, __LINE__, __func__);                                                  \
+            TRAP;                                                                                                      \
+        }                                                                                                              \
+    } while (0)
 #else
-    #define MOBILEGL_ASSERT(condition, ...)
+#define MOBILEGL_ASSERT(condition, ...)
 #endif

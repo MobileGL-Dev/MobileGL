@@ -24,10 +24,8 @@ namespace MobileGL::MG_Backend {
             return std::this_thread::get_id();
         }
 
-        const char* GetFormatCapabilitySupportString(const FormatCapabilityCache& cache,
-                                                     SizeT targetIndex,
-                                                     SizeT formatIndex,
-                                                     FormatCapability capability) {
+        const char* GetFormatCapabilitySupportString(const FormatCapabilityCache& cache, SizeT targetIndex,
+                                                     SizeT formatIndex, FormatCapability capability) {
             if (HasFormatCapability(cache.FullCaps[targetIndex][formatIndex], capability)) return "Full";
             if (HasFormatCapability(cache.CaveatCaps[targetIndex][formatIndex], capability)) return "Caveat";
             return "None";
@@ -58,9 +56,7 @@ namespace MobileGL::MG_Backend {
             return line.str();
         }
 
-        String BuildFormatCapabilityRow(const FormatCapabilityCache& cache,
-                                        SizeT targetIndex,
-                                        SizeT formatIndex,
+        String BuildFormatCapabilityRow(const FormatCapabilityCache& cache, SizeT targetIndex, SizeT formatIndex,
                                         SizeT formatNameWidth) {
             const auto format = static_cast<TextureInternalFormat>(formatIndex);
             std::ostringstream line;
@@ -397,8 +393,12 @@ namespace MobileGL::MG_Backend {
         }
     } // namespace
 
-    const MG_Util::Damage::Region& CurrentPresentDamage() { return PresentDamageSlot(); }
-    void SetCurrentPresentDamage(const MG_Util::Damage::Region& damage) { PresentDamageSlot() = damage; }
+    const MG_Util::Damage::Region& CurrentPresentDamage() {
+        return PresentDamageSlot();
+    }
+    void SetCurrentPresentDamage(const MG_Util::Damage::Region& damage) {
+        PresentDamageSlot() = damage;
+    }
 
     Bool BackendObject::SwapEGLBuffers(EGLDisplay dpy, EGLSurface draw) {
         const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
@@ -458,8 +458,7 @@ namespace MobileGL::MG_Backend {
 
     void BackendObject::DestroyPendingEGLSurfaceIfUnused(EGLSurface surface) {
         auto surfaceIt = m_eglSurfaces.find(surface);
-        if (surfaceIt == m_eglSurfaces.end() || !surfaceIt->second.DestroyPending ||
-            IsEGLSurfaceCurrent(surface)) {
+        if (surfaceIt == m_eglSurfaces.end() || !surfaceIt->second.DestroyPending || IsEGLSurfaceCurrent(surface)) {
             return;
         }
 

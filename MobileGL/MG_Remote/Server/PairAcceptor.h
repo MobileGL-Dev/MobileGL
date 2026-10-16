@@ -96,8 +96,8 @@ namespace MobileGL::MG_Remote::Server {
 
         int m_listener;
         std::uint32_t m_budgetMs;
-        std::vector<Waiting> m_waiting;                 // accept order, oldest first
-        std::deque<std::pair<int, int>> m_ready;        // {control, aux}, not yet handed out
+        std::vector<Waiting> m_waiting;          // accept order, oldest first
+        std::deque<std::pair<int, int>> m_ready; // {control, aux}, not yet handed out
         Clock::time_point m_acceptResumeAt{};
     };
 

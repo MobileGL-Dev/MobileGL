@@ -108,13 +108,11 @@ namespace MobileGL::MG_Pipe {
         // "UNBARRIERED" is the value not existing (§3.3). The `<field>@<verb>` prefix and the
         // Fatal{UnmigratedPipeInput tag are unchanged, so every filter written since P5c still
         // matches.
-        [[noreturn]] void StrictBarrierPullFatal(MGPipeInputField field, MGPipeVerb verb,
-                                                 const char* why) {
+        [[noreturn]] void StrictBarrierPullFatal(MGPipeInputField field, MGPipeVerb verb, const char* why) {
             const SizeT index = static_cast<SizeT>(field);
             MGLOG_F("MGPipe: Fatal{UnmigratedPipeInput, \"%s@%s\"} [BARRIER-PULLED, %s, "
                     "retires in %s]",
-                    kMGPipeInputFieldNames[index], MGPipeVerbName(verb), why,
-                    kMGPipeFieldRetiringPhase[index]);
+                    kMGPipeInputFieldNames[index], MGPipeVerbName(verb), why, kMGPipeFieldRetiringPhase[index]);
             std::abort();
         }
 
@@ -144,8 +142,7 @@ namespace MobileGL::MG_Pipe {
             MGLOG_W("MGPipe: Admitted{UnmigratedPipeInput, \"%s@%s\"} [BARRIER-PULLED, %s, "
                     "retires in %s]",
                     kMGPipeInputFieldNames[fieldIndex], MGPipeVerbName(verb),
-                    escalated ? "ADMITTED-ESCALATED" : "ADMITTED",
-                    kMGPipeFieldRetiringPhase[fieldIndex]);
+                    escalated ? "ADMITTED-ESCALATED" : "ADMITTED", kMGPipeFieldRetiringPhase[fieldIndex]);
         }
 
         // Decides what a BARRIER-PULLED read does, for the field accessors and the sticky forwards:
@@ -237,8 +234,7 @@ namespace MobileGL::MG_Pipe {
                 const MGPipeFieldOwnership ownership = kMGPipeFieldOwnership[i];
                 const Bool answerable = (ownership == MGPipeFieldOwnership::kRecordSupplied ||
                                          ownership == MGPipeFieldOwnership::kApplierDerived) &&
-                                        MGPipeFieldMaskHas(
-                                            kMGPipeClassFieldMask[static_cast<SizeT>(verbClass)], field);
+                                        MGPipeFieldMaskHas(kMGPipeClassFieldMask[static_cast<SizeT>(verbClass)], field);
                 if (answerable) mask.Words[i / 64] |= (Uint64{1} << (i % 64));
             }
             return mask;
@@ -276,9 +272,7 @@ namespace MobileGL::MG_Pipe {
     struct MGPipeStampAccess {
         static MGPipeFilledState& Filled(PipeInputs& inputs) { return inputs.m_filled; }
         static void SetVerb(PipeInputs& inputs, MGPipeVerb verb) { inputs.m_currentVerb = verb; }
-        static void SetServerStamped(PipeInputs& inputs, Bool stamped) {
-            inputs.m_serverStampedVerb = stamped;
-        }
+        static void SetServerStamped(PipeInputs& inputs, Bool stamped) { inputs.m_serverStampedVerb = stamped; }
         // P5f (f1): the server block's identity half of the stamp door (CONTRACT-P5E §3.2).
         // The client's SetIdentity lives in MG_Impl's MGPipeFillAccess and writes the CLIENT
         // block now; this one is how the server block learns which served context it describes
@@ -301,8 +295,7 @@ namespace MobileGL::MG_Pipe {
     // stamp and the read verdicts around them are the record arm's (PipeInputs.h's dual block
     // gives a build without a transport the one-block answers inline).
     Bool MGPipeRoleSplitRehearsalActive() {
-        return MG_Config::Ipc.RoleSplitState &&
-               MG_Config::Transport != MG_Config::TransportMode::Monolith;
+        return MG_Config::Ipc.RoleSplitState && MG_Config::Transport != MG_Config::TransportMode::Monolith;
     }
 
     // ---- D1c's predicates (CONTRACT-P6 3.2) -------------------------------------------------
@@ -316,9 +309,15 @@ namespace MobileGL::MG_Pipe {
         Bool g_sessionLive = false;
     } // namespace
 
-    void MGPipeSetServerProcessRole(Bool isServerProcess) { g_serverProcessRole = isServerProcess; }
-    void MGPipeSetApplyThreadProbe(Bool (*probe)()) { g_applyThreadProbe = probe; }
-    void MGPipeSetSessionLive(Bool live) { g_sessionLive = live; }
+    void MGPipeSetServerProcessRole(Bool isServerProcess) {
+        g_serverProcessRole = isServerProcess;
+    }
+    void MGPipeSetApplyThreadProbe(Bool (*probe)()) {
+        g_applyThreadProbe = probe;
+    }
+    void MGPipeSetSessionLive(Bool live) {
+        g_sessionLive = live;
+    }
 
     Bool MGPipeServerArm() {
         // THE PROCESS FACT FIRST, and it short-circuits: in a spawn server every thread is a
@@ -328,7 +327,9 @@ namespace MobileGL::MG_Pipe {
         return g_applyThreadProbe != nullptr && g_applyThreadProbe();
     }
 
-    Bool MGPipeSessionLive() { return g_sessionLive; }
+    Bool MGPipeSessionLive() {
+        return g_sessionLive;
+    }
 
     Bool MGPipeBlocksAreDistinct() {
         // TWO DIFFERENT REASONS, ONE ANSWER. The rehearsal makes two blocks in one process;
@@ -337,8 +338,7 @@ namespace MobileGL::MG_Pipe {
         // question were therefore disarmed in the one shape where the answer matters most - a
         // spawn server's block is never the client's, whatever MOBILEGL_IPC_ROLE_SPLIT_STATE
         // says.
-        return MGPipeRoleSplitRehearsalActive() ||
-               MG_Config::Transport == MG_Config::TransportMode::Spawn;
+        return MGPipeRoleSplitRehearsalActive() || MG_Config::Transport == MG_Config::TransportMode::Spawn;
     }
 
     PipeInputs& MGPipeClientInputs() {
@@ -355,13 +355,21 @@ namespace MobileGL::MG_Pipe {
         MGPipeServerBlockNoteIdentity();
     }
 
-    Bool MGPipeServerContextIsLive() { return MGPipeStampAccess::ServerContextLive(gPipeInputs); }
+    Bool MGPipeServerContextIsLive() {
+        return MGPipeStampAccess::ServerContextLive(gPipeInputs);
+    }
 
-    namespace { const void* g_serverOwnedWindow = nullptr; }
+    namespace {
+        const void* g_serverOwnedWindow = nullptr;
+    } // namespace
 
-    void MGPipeServerSetOwnedWindow(const void* window) { g_serverOwnedWindow = window; }
+    void MGPipeServerSetOwnedWindow(const void* window) {
+        g_serverOwnedWindow = window;
+    }
 
-    const void* MGPipeServerOwnedWindow() { return g_serverOwnedWindow; }
+    const void* MGPipeServerOwnedWindow() {
+        return g_serverOwnedWindow;
+    }
 
     namespace {
         Uint32 g_serverOwnedWindowWidth = 0;
@@ -399,9 +407,9 @@ namespace MobileGL::MG_Pipe {
         // hands out a null slot - an unnamed crash where the rehearsal exists to produce a
         // named one.
         const Uint64 serial = MGPipeApplierContextSerial();
-        MGPipeStampAccess::SetIdentity(gPipeInputs, MGPipeServerContextIsLive(),
-                                       reinterpret_cast<const void*>(static_cast<std::uintptr_t>(
-                                           (serial << 1) | Uint64{1})));
+        MGPipeStampAccess::SetIdentity(
+            gPipeInputs, MGPipeServerContextIsLive(),
+            reinterpret_cast<const void*>(static_cast<std::uintptr_t>((serial << 1) | Uint64{1})));
     }
 #endif // MOBILEGL_BUILD_DISAGGREGATED
 
@@ -463,10 +471,16 @@ namespace MobileGL::MG_Pipe {
 #endif
     }
 
-    void MGPipeServerClearVerbBoundary() { MGPipeStampAccess::SetServerStamped(gPipeInputs, false); }
+    void MGPipeServerClearVerbBoundary() {
+        MGPipeStampAccess::SetServerStamped(gPipeInputs, false);
+    }
 
-    Uint64 MGPipeResidualPullCount() { return g_residualPulls; }
-    void MGPipeResetResidualPullCountForTesting() { g_residualPulls = 0; }
+    Uint64 MGPipeResidualPullCount() {
+        return g_residualPulls;
+    }
+    void MGPipeResetResidualPullCountForTesting() {
+        g_residualPulls = 0;
+    }
 
     void MGPipeInputUnfreshRead(MGPipeInputField field, MGPipeVerb verb, Bool serverStamped) {
         // OUTSIDE A SERVER-STAMPED VERB THIS IS THE MONOLITH ANSWER, UNCHANGED. A split BUILD
@@ -523,8 +537,7 @@ namespace MobileGL::MG_Pipe {
             MGLOG_F("MGPipe: Fatal{UnmigratedPipeInput, \"%s@%s\"} [argument 0 = %u is %s while the "
                     "field is %s]",
                     kMGPipeInputFieldNames[static_cast<SizeT>(field)], MGPipeVerbName(verb), arg0,
-                    MGPipeFieldOwnershipName(narrowed),
-                    MGPipeFieldOwnershipName(MGPipeFieldOwnershipOf(field)));
+                    MGPipeFieldOwnershipName(narrowed), MGPipeFieldOwnershipName(MGPipeFieldOwnershipOf(field)));
             std::abort();
         }
         if (narrowed == MGPipeFieldOwnership::kBarrierPulled) {
@@ -540,10 +553,8 @@ namespace MobileGL::MG_Pipe {
         // stamp's withdrawal. This is the only thing that puts them in `rsp`.
         if (!gPipeInputs->ServerStampedVerb()) return;
         const auto ownership = MGPipeFieldOwnershipOf(field);
-        if (ownership == MGPipeFieldOwnership::kFatal)
-            MGPipeInputPoisonFatalForVerb(field, gPipeInputs->CurrentVerb());
-        if (ownership == MGPipeFieldOwnership::kBarrierPulled)
-            CountBarrierPull(field, gPipeInputs->CurrentVerb());
+        if (ownership == MGPipeFieldOwnership::kFatal) MGPipeInputPoisonFatalForVerb(field, gPipeInputs->CurrentVerb());
+        if (ownership == MGPipeFieldOwnership::kBarrierPulled) CountBarrierPull(field, gPipeInputs->CurrentVerb());
     }
 #endif // MOBILEGL_BUILD_RECORD_ARM && MOBILEGL_PIPE_POISON
 

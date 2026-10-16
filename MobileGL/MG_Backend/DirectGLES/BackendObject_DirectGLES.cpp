@@ -50,14 +50,20 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // the recorded tuple; only that exact tuple may skip. Process-wide like the native state it
         // mirrors; under split exactly one DirectGLES object exists (the server's), and only the
         // apply thread reaches these.
-        enum class NativeBindState : Uint8 { NotBound, FreshFromSurfaceCreation, BoundForTuple };
+        enum class NativeBindState : Uint8 {
+            NotBound,
+            FreshFromSurfaceCreation,
+            BoundForTuple
+        };
         NativeBindState g_nativeBindState = NativeBindState::NotBound;
         EGLDisplay g_nativeBoundDpy = EGL_NO_DISPLAY;
         EGLSurface g_nativeBoundDraw = EGL_NO_SURFACE;
         EGLSurface g_nativeBoundRead = EGL_NO_SURFACE;
         EGLContext g_nativeBoundCtx = EGL_NO_CONTEXT;
 
-        void NoteNativeContextGone() { g_nativeBindState = NativeBindState::NotBound; }
+        void NoteNativeContextGone() {
+            g_nativeBindState = NativeBindState::NotBound;
+        }
         void NoteNativeContextFreshFromSurfaceCreation() {
             g_nativeBindState = NativeBindState::FreshFromSurfaceCreation;
         }
@@ -70,8 +76,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
         Bool NativeBindCanBeSkippedFor(EGLDisplay dpy, EGLSurface draw, EGLSurface read, EGLContext ctx) {
             switch (g_nativeBindState) {
-            case NativeBindState::NotBound: return false;
-            case NativeBindState::FreshFromSurfaceCreation: return true;
+            case NativeBindState::NotBound:
+                return false;
+            case NativeBindState::FreshFromSurfaceCreation:
+                return true;
             case NativeBindState::BoundForTuple:
                 return g_nativeBoundDpy == dpy && g_nativeBoundDraw == draw && g_nativeBoundRead == read &&
                        g_nativeBoundCtx == ctx;
@@ -364,8 +372,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // for EVERY colour format while GL_MAX_SAMPLES - ES 3.0 core, so genuinely answered -
         // reports 4. Once the frontend validates against this list, that would reject every
         // multisample renderbuffer on such a context.
-        Int GetGLESRenderbufferFormatMaxSamples(const MG_External::GLESCapabilities& capabilities,
-                                                GLenum imageFormat) {
+        Int GetGLESRenderbufferFormatMaxSamples(const MG_External::GLESCapabilities& capabilities, GLenum imageFormat) {
             const Bool isInteger = imageFormat == GL_RED_INTEGER || imageFormat == GL_RG_INTEGER ||
                                    imageFormat == GL_RGB_INTEGER || imageFormat == GL_RGBA_INTEGER;
             return isInteger ? capabilities.MaxIntegerSamples : capabilities.MaxSamples;
@@ -474,8 +481,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             GLint prevFramebuffer = 0, prevRenderbuffer = 0;
             gl.glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prevFramebuffer);
             gl.glGetIntegerv(GL_RENDERBUFFER_BINDING, &prevRenderbuffer);
-            for (Int samples = 2; samples <= DynamicBackendParameters::kMaxSamplePositionCount &&
-                                  samples <= capabilities.MaxSamples;
+            for (Int samples = 2;
+                 samples <= DynamicBackendParameters::kMaxSamplePositionCount && samples <= capabilities.MaxSamples;
                  samples *= 2) {
                 GLuint framebuffer = 0, renderbuffer = 0;
                 gl.glGenFramebuffers(1, &framebuffer);
@@ -502,8 +509,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
             // A count the driver refused leaves its error behind; it must not reach the application.
             if (gl.glGetError) {
-                for (Int drained = 0; drained < 16 && gl.glGetError() != GL_NO_ERROR; ++drained) {
-                }
+                for (Int drained = 0; drained < 16 && gl.glGetError() != GL_NO_ERROR; ++drained) {}
             }
         }
 
@@ -728,12 +734,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         const Flags<PixelFormatNormalizeOptionBit> forcedProbeOptions =
                             (outerHasForcedFallback || widenUnconditionally) ? forcedOptions | renderTargetOptions
                                                                              : forcedOptions;
-                        hasForcedFallback =
-                            BuildFallbackProbeFormatInfo(requestedInternalFormat, forcedProbeOptions, true,
-                                                         fallbackInfo);
+                        hasForcedFallback = BuildFallbackProbeFormatInfo(requestedInternalFormat, forcedProbeOptions,
+                                                                         true, fallbackInfo);
                         if (!hasForcedFallback) {
-                            BuildFallbackProbeFormatInfo(requestedInternalFormat,
-                                                         driverOptions | renderTargetOptions, false, fallbackInfo);
+                            BuildFallbackProbeFormatInfo(requestedInternalFormat, driverOptions | renderTargetOptions,
+                                                         false, fallbackInfo);
                         }
                         // HONEST STATUS OF THE FORCED PATH. A forced fallback is only ever built
                         // for ANGLE (GetForcedPixelFormatNormalizeOptions returns nothing for any
@@ -1162,7 +1167,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
         const auto state = m_eglSurfaces.find(surface);
         const auto native = m_nativeSurfaces.find(surface);
-        if (state == m_eglSurfaces.end() || state->second.Kind != SurfaceKind::Pbuffer || native == m_nativeSurfaces.end()) {
+        if (state == m_eglSurfaces.end() || state->second.Kind != SurfaceKind::Pbuffer ||
+            native == m_nativeSurfaces.end()) {
             return BackendObject::ResizeEGLWindowSurface(surface, width, height);
         }
         // A pbuffer has no resize: the client surface gets a new native pbuffer at the new size,
@@ -1398,9 +1404,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // driver dequeues); only the client has to be told.
             const auto native = m_nativeSurfaces.find(client);
             if (native == m_nativeSurfaces.end()) continue;
-            published = DirectGLES::RepublishWindowSurfaceShape(native->second,
-                                                                reinterpret_cast<NativeWindowType>(window)) ||
-                        published;
+            published =
+                DirectGLES::RepublishWindowSurfaceShape(native->second, reinterpret_cast<NativeWindowType>(window)) ||
+                published;
         }
         return published;
     }
@@ -1443,8 +1449,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     }
 
     Vector<GLExtension> BuildAdvertisedExtensions(Bool timerQueriesSupported, Bool anisotropicFilteringSupported,
-                                                  Bool drawIndirectSupported,
-                                                  Bool nonZeroIndirectBaseInstanceSupported,
+                                                  Bool drawIndirectSupported, Bool nonZeroIndirectBaseInstanceSupported,
                                                   Bool textureViewSupported, Bool cubeMapArraySupported,
                                                   const AdvertisedFeatureSupport& features) {
         Vector<GLExtension> extensions = {
@@ -1452,23 +1457,21 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // TargetGLVersion is {4,6,0}, and a list that stopped at OpenGL40 told an
             // application feature-detecting off these tokens the opposite of what
             // GL_MAJOR_VERSION / GL_MINOR_VERSION told it.
-            V_OpenGL30, V_OpenGL31, V_OpenGL32, V_OpenGL33, V_OpenGL40, V_OpenGL41, V_OpenGL42, V_OpenGL43,
-            V_OpenGL44, V_OpenGL45, V_OpenGL46,
-            E_GL_ARB_draw_buffers_blend,
+            V_OpenGL30, V_OpenGL31, V_OpenGL32, V_OpenGL33, V_OpenGL40, V_OpenGL41, V_OpenGL42, V_OpenGL43, V_OpenGL44,
+            V_OpenGL45, V_OpenGL46, E_GL_ARB_draw_buffers_blend,
             // The GLSL 1.00/1.10-era ARB trio plus NPOT textures: all core since GL 2.0 and
             // trivially true for every context this backend claims (4.6). KWin 6's
             // EglContext::checkSupported() gates desktop-GL compositing on exactly these four
             // strings, so withholding them fails its renderer bring-up on an otherwise capable
             // implementation.
             E_GL_ARB_shader_objects, E_GL_ARB_vertex_shader, E_GL_ARB_fragment_shader,
-            E_GL_ARB_texture_non_power_of_two,
-            E_GL_ARB_compute_shader, E_GL_ARB_shader_storage_buffer_object, E_GL_ARB_shader_image_load_store,
-            E_GL_ARB_clear_buffer_object, E_GL_ARB_program_interface_query, E_GL_ARB_framebuffer_object, E_GL_EXT_framebuffer_object,
-            E_GL_ARB_depth_texture, E_GL_ARB_buffer_storage, E_GL_ARB_texture_storage,
-            E_GL_ARB_texture_storage_multisample, E_GL_ARB_clear_texture, E_GL_ARB_direct_state_access,
-            E_GL_ARB_multi_draw_indirect, E_GL_ARB_indirect_parameters, E_GL_ARB_shader_draw_parameters,
-            E_GL_ARB_gpu_shader5, E_GL_ARB_multi_bind, E_GL_ARB_shading_language_420pack,
-            E_GL_ARB_vertex_attrib_binding,
+            E_GL_ARB_texture_non_power_of_two, E_GL_ARB_compute_shader, E_GL_ARB_shader_storage_buffer_object,
+            E_GL_ARB_shader_image_load_store, E_GL_ARB_clear_buffer_object, E_GL_ARB_program_interface_query,
+            E_GL_ARB_framebuffer_object, E_GL_EXT_framebuffer_object, E_GL_ARB_depth_texture, E_GL_ARB_buffer_storage,
+            E_GL_ARB_texture_storage, E_GL_ARB_texture_storage_multisample, E_GL_ARB_clear_texture,
+            E_GL_ARB_direct_state_access, E_GL_ARB_multi_draw_indirect, E_GL_ARB_indirect_parameters,
+            E_GL_ARB_shader_draw_parameters, E_GL_ARB_gpu_shader5, E_GL_ARB_multi_bind,
+            E_GL_ARB_shading_language_420pack, E_GL_ARB_vertex_attrib_binding,
             // Both are core from GL 3.2/3.3 on and implemented here for
             // every advertised version, but an app targeting 3.0/3.1
             // only reaches them through the extension string - the CTS
@@ -1808,8 +1811,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
     void BackendObject_DirectGLES::UpdateDynamicBackendParameters() {
         m_dynamicParameters.UniformBufferOffsetAlignment = m_GLESCapabilities.UniformBufferOffsetAlignment;
-        m_dynamicParameters.ShaderStorageBufferOffsetAlignment =
-            m_GLESCapabilities.ShaderStorageBufferOffsetAlignment;
+        m_dynamicParameters.ShaderStorageBufferOffsetAlignment = m_GLESCapabilities.ShaderStorageBufferOffsetAlignment;
         m_dynamicParameters.MaxTextureMaxAnisotropy = m_GLESCapabilities.MaxTextureMaxAnisotropy;
         m_dynamicParameters.AliasedLineWidthRangeMin = m_GLESCapabilities.AliasedLineWidthRangeMin;
         m_dynamicParameters.AliasedLineWidthRangeMax = m_GLESCapabilities.AliasedLineWidthRangeMax;
@@ -1962,8 +1964,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             m_dynamicParameters.SubgroupSupportedFeatures = subgroups.features;
             m_dynamicParameters.SubgroupQuadOperationsInAllStages = subgroups.quadInAllStages;
             MGLOG_I("DirectGLES: GL_KHR_shader_subgroup %s (size %u, stages 0x%x, features 0x%x)",
-                    SubgroupImplementationName(ResolveEsprytSubgroupImplementation(m_GLESCapabilities)),
-                    subgroups.size, subgroups.stages, subgroups.features);
+                    SubgroupImplementationName(ResolveEsprytSubgroupImplementation(m_GLESCapabilities)), subgroups.size,
+                    subgroups.stages, subgroups.features);
         }
         // Follows the line above, and must: OpenGL ES has no double-precision vertex format and no
         // fp64 type to consume one with, so a 64-bit vertex attribute has nowhere to land here.
@@ -1977,11 +1979,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // exercised on a healthy driver (the pinned integration lane); =0 restores the
         // detected answer's declines.
         m_dynamicParameters.SupportsTessellationPointSize =
-            m_GLESCapabilities.TessellationPointSizeSupport !=
-            MG_External::GLESCapabilities::PointSizeTier::None;
+            m_GLESCapabilities.TessellationPointSizeSupport != MG_External::GLESCapabilities::PointSizeTier::None;
         m_dynamicParameters.SupportsGeometryPointSize =
-            m_GLESCapabilities.GeometryPointSizeSupport !=
-            MG_External::GLESCapabilities::PointSizeTier::None;
+            m_GLESCapabilities.GeometryPointSizeSupport != MG_External::GLESCapabilities::PointSizeTier::None;
         switch (MG_Config::Features.PointSizeDemotion) {
         case MG_Config::QuirkOverride::ForceOn:
             MGLOG_I("DirectGLES: MOBILEGL_POINT_SIZE_DEMOTION=1 - treating tessellation/geometry "

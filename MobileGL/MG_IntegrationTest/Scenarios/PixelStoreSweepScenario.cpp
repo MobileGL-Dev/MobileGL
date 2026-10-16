@@ -66,11 +66,11 @@ namespace MGITest {
             GLint defaultValue;
         };
         const PixelStoreMode kAllModes[] = {
-            {GL_UNPACK_SWAP_BYTES, 0},   {GL_UNPACK_LSB_FIRST, 0},   {GL_UNPACK_ROW_LENGTH, 0},
-            {GL_UNPACK_IMAGE_HEIGHT, 0}, {GL_UNPACK_SKIP_ROWS, 0},   {GL_UNPACK_SKIP_PIXELS, 0},
-            {GL_UNPACK_SKIP_IMAGES, 0},  {GL_UNPACK_ALIGNMENT, 4},   {GL_PACK_SWAP_BYTES, 0},
-            {GL_PACK_LSB_FIRST, 0},      {GL_PACK_ROW_LENGTH, 0},    {GL_PACK_IMAGE_HEIGHT, 0},
-            {GL_PACK_SKIP_ROWS, 0},      {GL_PACK_SKIP_PIXELS, 0},   {GL_PACK_SKIP_IMAGES, 0},
+            {GL_UNPACK_SWAP_BYTES, 0},   {GL_UNPACK_LSB_FIRST, 0}, {GL_UNPACK_ROW_LENGTH, 0},
+            {GL_UNPACK_IMAGE_HEIGHT, 0}, {GL_UNPACK_SKIP_ROWS, 0}, {GL_UNPACK_SKIP_PIXELS, 0},
+            {GL_UNPACK_SKIP_IMAGES, 0},  {GL_UNPACK_ALIGNMENT, 4}, {GL_PACK_SWAP_BYTES, 0},
+            {GL_PACK_LSB_FIRST, 0},      {GL_PACK_ROW_LENGTH, 0},  {GL_PACK_IMAGE_HEIGHT, 0},
+            {GL_PACK_SKIP_ROWS, 0},      {GL_PACK_SKIP_PIXELS, 0}, {GL_PACK_SKIP_IMAGES, 0},
             {GL_PACK_ALIGNMENT, 4},
         };
 
@@ -82,28 +82,58 @@ namespace MGITest {
             GLint value;
         };
         const SweepCase kSweep[] = {
-            {GL_UNPACK_ROW_LENGTH, 0},     {GL_UNPACK_ROW_LENGTH, 10},   {GL_UNPACK_ROW_LENGTH, 15},
-            {GL_UNPACK_SKIP_ROWS, 0},      {GL_UNPACK_SKIP_ROWS, 1},     {GL_UNPACK_SKIP_ROWS, 2},
-            {GL_UNPACK_SKIP_PIXELS, 0},    {GL_UNPACK_SKIP_PIXELS, 1},   {GL_UNPACK_SKIP_PIXELS, 2},
-            {GL_UNPACK_ALIGNMENT, 1},      {GL_UNPACK_ALIGNMENT, 2},     {GL_UNPACK_ALIGNMENT, 4},
-            {GL_UNPACK_ALIGNMENT, 8},      {GL_UNPACK_IMAGE_HEIGHT, 0},  {GL_UNPACK_IMAGE_HEIGHT, 10},
-            {GL_UNPACK_IMAGE_HEIGHT, 15},  {GL_UNPACK_SKIP_IMAGES, 0},   {GL_UNPACK_SKIP_IMAGES, 1},
-            {GL_UNPACK_SKIP_IMAGES, 2},    {GL_PACK_ROW_LENGTH, 0},      {GL_PACK_ROW_LENGTH, 10},
-            {GL_PACK_ROW_LENGTH, 15},      {GL_PACK_SKIP_ROWS, 0},       {GL_PACK_SKIP_ROWS, 1},
-            {GL_PACK_SKIP_ROWS, 2},        {GL_PACK_SKIP_PIXELS, 0},     {GL_PACK_SKIP_PIXELS, 1},
-            {GL_PACK_SKIP_PIXELS, 2},      {GL_PACK_ALIGNMENT, 1},       {GL_PACK_ALIGNMENT, 2},
-            {GL_PACK_ALIGNMENT, 4},        {GL_PACK_ALIGNMENT, 8},
+            {GL_UNPACK_ROW_LENGTH, 0},
+            {GL_UNPACK_ROW_LENGTH, 10},
+            {GL_UNPACK_ROW_LENGTH, 15},
+            {GL_UNPACK_SKIP_ROWS, 0},
+            {GL_UNPACK_SKIP_ROWS, 1},
+            {GL_UNPACK_SKIP_ROWS, 2},
+            {GL_UNPACK_SKIP_PIXELS, 0},
+            {GL_UNPACK_SKIP_PIXELS, 1},
+            {GL_UNPACK_SKIP_PIXELS, 2},
+            {GL_UNPACK_ALIGNMENT, 1},
+            {GL_UNPACK_ALIGNMENT, 2},
+            {GL_UNPACK_ALIGNMENT, 4},
+            {GL_UNPACK_ALIGNMENT, 8},
+            {GL_UNPACK_IMAGE_HEIGHT, 0},
+            {GL_UNPACK_IMAGE_HEIGHT, 10},
+            {GL_UNPACK_IMAGE_HEIGHT, 15},
+            {GL_UNPACK_SKIP_IMAGES, 0},
+            {GL_UNPACK_SKIP_IMAGES, 1},
+            {GL_UNPACK_SKIP_IMAGES, 2},
+            {GL_PACK_ROW_LENGTH, 0},
+            {GL_PACK_ROW_LENGTH, 10},
+            {GL_PACK_ROW_LENGTH, 15},
+            {GL_PACK_SKIP_ROWS, 0},
+            {GL_PACK_SKIP_ROWS, 1},
+            {GL_PACK_SKIP_ROWS, 2},
+            {GL_PACK_SKIP_PIXELS, 0},
+            {GL_PACK_SKIP_PIXELS, 1},
+            {GL_PACK_SKIP_PIXELS, 2},
+            {GL_PACK_ALIGNMENT, 1},
+            {GL_PACK_ALIGNMENT, 2},
+            {GL_PACK_ALIGNMENT, 4},
+            {GL_PACK_ALIGNMENT, 8},
             // core-only, no ES equivalent
-            {GL_UNPACK_SWAP_BYTES, GL_FALSE}, {GL_UNPACK_SWAP_BYTES, GL_TRUE},
-            {GL_UNPACK_LSB_FIRST, GL_FALSE},  {GL_UNPACK_LSB_FIRST, GL_TRUE},
-            {GL_PACK_SWAP_BYTES, GL_FALSE},   {GL_PACK_SWAP_BYTES, GL_TRUE},
-            {GL_PACK_LSB_FIRST, GL_FALSE},    {GL_PACK_LSB_FIRST, GL_TRUE},
-            {GL_PACK_IMAGE_HEIGHT, 0},        {GL_PACK_IMAGE_HEIGHT, 10},
-            {GL_PACK_IMAGE_HEIGHT, 15},       {GL_PACK_SKIP_IMAGES, 0},
-            {GL_PACK_SKIP_IMAGES, 1},         {GL_PACK_SKIP_IMAGES, 2},
+            {GL_UNPACK_SWAP_BYTES, GL_FALSE},
+            {GL_UNPACK_SWAP_BYTES, GL_TRUE},
+            {GL_UNPACK_LSB_FIRST, GL_FALSE},
+            {GL_UNPACK_LSB_FIRST, GL_TRUE},
+            {GL_PACK_SWAP_BYTES, GL_FALSE},
+            {GL_PACK_SWAP_BYTES, GL_TRUE},
+            {GL_PACK_LSB_FIRST, GL_FALSE},
+            {GL_PACK_LSB_FIRST, GL_TRUE},
+            {GL_PACK_IMAGE_HEIGHT, 0},
+            {GL_PACK_IMAGE_HEIGHT, 10},
+            {GL_PACK_IMAGE_HEIGHT, 15},
+            {GL_PACK_SKIP_IMAGES, 0},
+            {GL_PACK_SKIP_IMAGES, 1},
+            {GL_PACK_SKIP_IMAGES, 2},
         };
 
-        std::size_t ImageBytes(int size) { return static_cast<std::size_t>(size) * size * 4; }
+        std::size_t ImageBytes(int size) {
+            return static_cast<std::size_t>(size) * size * 4;
+        }
 
         // Padded to kScratchBytes so it is safe to hand to an upload running under any of the
         // sweep's stride/skip settings.
@@ -205,8 +235,8 @@ namespace MGITest {
             ASSERT_EQ(afterStatus, static_cast<GLenum>(GL_FRAMEBUFFER_COMPLETE));
             const std::size_t diff = FirstDifference(baseline, after, ImageBytes(kTexSize));
             ASSERT_EQ(diff, ImageBytes(kTexSize))
-                << "default-state readback changed after setting and resetting 0x" << std::hex << sweep.mode
-                << std::dec << " = " << sweep.value << "; first differing byte " << diff << " (baseline "
+                << "default-state readback changed after setting and resetting 0x" << std::hex << sweep.mode << std::dec
+                << " = " << sweep.value << "; first differing byte " << diff << " (baseline "
                 << static_cast<int>(baseline[diff]) << ", now " << static_cast<int>(after[diff]) << ")";
         }
 
@@ -305,8 +335,7 @@ namespace MGITest {
         // Four distinct opaque colours, so a row or a pixel landing in the wrong place is a
         // wrong VALUE and not just a wrong offset.
         const std::uint8_t texels[kW * kH * kBpp] = {
-            0x11, 0x22, 0x33, 0xFF, 0x44, 0x55, 0x66, 0xFF,
-            0x77, 0x88, 0x99, 0xFF, 0xAA, 0xBB, 0xCC, 0xFF,
+            0x11, 0x22, 0x33, 0xFF, 0x44, 0x55, 0x66, 0xFF, 0x77, 0x88, 0x99, 0xFF, 0xAA, 0xBB, 0xCC, 0xFF,
         };
 
         GLuint texture = 0, framebuffer = 0, pbo = 0;
@@ -346,8 +375,8 @@ namespace MGITest {
         for (int y = 0; y < kH; ++y) {
             for (int x = 0; x < kW; ++x) {
                 for (std::size_t c = 0; c < kBpp; ++c) {
-                    const std::size_t at = kFirst + static_cast<std::size_t>(y) * kStride +
-                                           static_cast<std::size_t>(x) * kBpp + c;
+                    const std::size_t at =
+                        kFirst + static_cast<std::size_t>(y) * kStride + static_cast<std::size_t>(x) * kBpp + c;
                     ASSERT_LT(at, kPboBytes);
                     written[at] = true;
                     EXPECT_EQ(readback[at], texels[(y * kW + x) * kBpp + c])
@@ -389,9 +418,9 @@ namespace MGITest {
             ASSERT_EQ(status, static_cast<GLenum>(GL_FRAMEBUFFER_COMPLETE)) << "iteration " << i;
             const std::size_t diff = FirstDifference(gradient, read, ImageBytes(kSize));
             ASSERT_EQ(diff, ImageBytes(kSize))
-                << "iteration " << i << " read back a different image than it uploaded; first differing byte "
-                << diff << " (uploaded " << static_cast<int>(gradient[diff]) << ", read "
-                << static_cast<int>(read[diff]) << ")";
+                << "iteration " << i << " read back a different image than it uploaded; first differing byte " << diff
+                << " (uploaded " << static_cast<int>(gradient[diff]) << ", read " << static_cast<int>(read[diff])
+                << ")";
             ASSERT_EQ(FirstGLError(), 0u) << "iteration " << i;
         }
     }

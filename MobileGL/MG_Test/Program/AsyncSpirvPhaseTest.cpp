@@ -395,8 +395,9 @@ TEST_F(AsyncSpirvPhaseTest, ALinkedProgramWhoseSpirvJobWasCancelledDegradesInste
 
         const GLfloat tint[3] = {1.0f, 2.0f, 3.0f};
         GLfloat model[16] = {};
-        for (int c = 0; c < 16; ++c) model[c] = static_cast<GLfloat>(c);
-        ProgramUniform3fv(program, locTint, 1, tint);                 // dropped, not faulted
+        for (int c = 0; c < 16; ++c)
+            model[c] = static_cast<GLfloat>(c);
+        ProgramUniform3fv(program, locTint, 1, tint);                   // dropped, not faulted
         ProgramUniformMatrix4fv(program, locModel, 1, GL_FALSE, model); // ditto
         UseProgram(program);
         Uniform3fv(locTint, 1, tint); // the glUseProgram + glUniform* entry, same verdict
@@ -410,7 +411,8 @@ TEST_F(AsyncSpirvPhaseTest, ALinkedProgramWhoseSpirvJobWasCancelledDegradesInste
 
         // Reads leave the caller's buffer alone rather than faulting.
         GLfloat readback[16] = {};
-        for (int c = 0; c < 16; ++c) readback[c] = -1.0f;
+        for (int c = 0; c < 16; ++c)
+            readback[c] = -1.0f;
         GetUniformfv(program, locModel, readback);
         for (int c = 0; c < 16; ++c) {
             EXPECT_FLOAT_EQ(readback[c], -1.0f) << "a program with no shadow must not write the query buffer";
@@ -489,7 +491,8 @@ TEST_F(AsyncSpirvPhaseTest, UniformWritesInsideTheWindowReplayExactly) {
         ASSERT_GE(e.locArr, 0);
         ASSERT_GE(e.locTex, 0);
 
-        for (int c = 0; c < 16; ++c) e.model[c] = static_cast<GLfloat>(i) + static_cast<GLfloat>(c) * 0.25f;
+        for (int c = 0; c < 16; ++c)
+            e.model[c] = static_cast<GLfloat>(i) + static_cast<GLfloat>(c) * 0.25f;
         e.tint[0] = 0.125f * static_cast<GLfloat>(i);
         e.tint[1] = 0.25f * static_cast<GLfloat>(i);
         e.tint[2] = 0.5f * static_cast<GLfloat>(i);
@@ -591,7 +594,8 @@ TEST_F(AsyncSpirvPhaseTest, TheBufferedWriteValveFallsThroughToADirectWriteWitho
 
         GLfloat model[16] = {};
         for (int w = 0; w < kFloodWrites; ++w) {
-            for (int c = 0; c < 16; ++c) model[c] = static_cast<GLfloat>(w) + static_cast<GLfloat>(c);
+            for (int c = 0; c < 16; ++c)
+                model[c] = static_cast<GLfloat>(w) + static_cast<GLfloat>(c);
             ProgramUniformMatrix4fv(program, locModel, 1, GL_FALSE, model);
         }
 
@@ -852,16 +856,15 @@ TEST_F(AsyncSpirvPhaseTest, DeletingAProgramWithAPendingSpirvJobDoesNotBlock) {
     }
     const auto drainEnd = std::chrono::steady_clock::now();
 
-    const auto deleteUs =
-        std::chrono::duration_cast<std::chrono::microseconds>(deleteEnd - deleteStart).count();
+    const auto deleteUs = std::chrono::duration_cast<std::chrono::microseconds>(deleteEnd - deleteStart).count();
     const auto drainUs = std::chrono::duration_cast<std::chrono::microseconds>(drainEnd - drainStart).count();
 
     EXPECT_GT(outstandingBeforeDelete, 0) << "no program was deleted inside the A->B window";
     EXPECT_GT(outstandingBeforeDrain, 0) << "nothing was left to drain, so the timing bound has no calibration";
     if (outstandingBeforeDelete > 0 && outstandingBeforeDrain > 0 && drainUs > 2000) {
-        EXPECT_LT(deleteUs, drainUs / 4)
-            << "deleting " << kHalf << " programs with outstanding SPIR-V jobs took " << deleteUs
-            << " us against " << drainUs << " us to drain the same number - glDeleteProgram is waiting for them";
+        EXPECT_LT(deleteUs, drainUs / 4) << "deleting " << kHalf << " programs with outstanding SPIR-V jobs took "
+                                         << deleteUs << " us against " << drainUs
+                                         << " us to drain the same number - glDeleteProgram is waiting for them";
     }
     EXPECT_EQ(GetError(), GL_NO_ERROR);
 }
@@ -1417,7 +1420,10 @@ discard;
         GLint location;
     };
     const BoundAttribute kIrisWeatherBindings[] = {
-        {"iris_Position", 0}, {"iris_Color", 1}, {"iris_UV0", 2}, {"iris_UV2", 3},
+        {"iris_Position", 0},
+        {"iris_Color", 1},
+        {"iris_UV0", 2},
+        {"iris_UV2", 3},
     };
 
     // Drives Iris's own call sequence and returns the linked program name.
@@ -1466,8 +1472,8 @@ TEST_F(AsyncSpirvPhaseTest, IrisWeatherProgramReplaysCleanlyThroughBothPhases) {
         // ---- phase A: LINK_STATUS is the join, and it must be truthful ----
         GLint linkStatus = GL_FALSE;
         GetProgramiv(program, GL_LINK_STATUS, &linkStatus);
-        ASSERT_EQ(linkStatus, GL_TRUE) << QueryProgramInfoLog(program)
-                                       << " (optimistic quirk " << (optimisticQuirk ? "on" : "off") << ")";
+        ASSERT_EQ(linkStatus, GL_TRUE) << QueryProgramInfoLog(program) << " (optimistic quirk "
+                                       << (optimisticQuirk ? "on" : "off") << ")";
 
         // Iris queries uniforms straight after the status read; these are phase-A answers.
         EXPECT_GE(GetUniformLocation(program, "iris_ModelViewMatrix"), -1);
@@ -1502,15 +1508,16 @@ TEST_F(AsyncSpirvPhaseTest, IrisWeatherProgramReplaysCleanlyThroughBothPhases) {
         // which is precisely what the device victim did.
         spvtools::SpirvTools tools(SPV_ENV_VULKAN_1_1);
         String validatorMessages;
-        tools.SetMessageConsumer([&validatorMessages](spv_message_level_t, const char*, const spv_position_t&,
-                                                     const char* message) {
-            if (message != nullptr) validatorMessages += String(message) + "\n";
-        });
+        tools.SetMessageConsumer(
+            [&validatorMessages](spv_message_level_t, const char*, const spv_position_t&, const char* message) {
+                if (message != nullptr) validatorMessages += String(message) + "\n";
+            });
         for (SizeT i = 0; i < modules.size(); ++i) {
             validatorMessages.clear();
             EXPECT_TRUE(tools.Validate(modules[i]))
                 << "module " << i << " is not valid SPIR-V - Adreno rejects the pipeline for this while "
-                << "lavapipe tolerates it:\n" << validatorMessages;
+                << "lavapipe tolerates it:\n"
+                << validatorMessages;
         }
 
         // ---- every vertex input carries a unique Location ----
@@ -1545,8 +1552,7 @@ TEST_F(AsyncSpirvPhaseTest, IrisWeatherProgramReplaysCleanlyThroughBothPhases) {
             ASSERT_NE(it, locationById.end())
                 << "a vertex input reached SPIR-V with no Location decoration (optimistic quirk "
                 << (optimisticQuirk ? "on" : "off") << ")";
-            EXPECT_TRUE(usedLocations.insert(it->second).second)
-                << "two vertex inputs share location " << it->second;
+            EXPECT_TRUE(usedLocations.insert(it->second).second) << "two vertex inputs share location " << it->second;
             ++checkedInputs;
         }
         EXPECT_GT(checkedInputs, 0u) << "no vertex inputs found; the scan proved nothing";

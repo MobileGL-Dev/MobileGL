@@ -38,8 +38,8 @@ namespace {
 TEST(ApplyThreadPolicy, AutoKeepsEveryBigCoreAndTheConfiguredSpinForAnInProcessOrForkedPeer) {
     // inproc and the same-app fork spawn: exactly the pre-B1 `auto` (A4's measured shapes).
     for (const ApplyPeer peer : {ApplyPeer::InProcess, ApplyPeer::Forked}) {
-        const auto policy = SelectApplyThreadPolicy("auto", false, kConfigured, peer, kShm, kRedmiBig, kRedmiPrime,
-                                                    kRedmiOnline);
+        const auto policy =
+            SelectApplyThreadPolicy("auto", false, kConfigured, peer, kShm, kRedmiBig, kRedmiPrime, kRedmiOnline);
         EXPECT_TRUE(policy.recognised);
         EXPECT_EQ(policy.requestedMask, kRedmiBig) << ApplyPeerName(peer);
         EXPECT_EQ(policy.spinUs, kConfigured) << ApplyPeerName(peer);
@@ -100,9 +100,9 @@ TEST(ApplyThreadPolicy, NoAsymmetryLeavesTheApplyThreadUnpinned) {
                   std::string::npos);
     }
     // ...and the in-process / forked rows keep the whole (symmetric) big set as before.
-    EXPECT_EQ(SelectApplyThreadPolicy("auto", false, kConfigured, ApplyPeer::Forked, kShm, 0xff, 0xff, 0xff)
-                  .requestedMask,
-              0xffu);
+    EXPECT_EQ(
+        SelectApplyThreadPolicy("auto", false, kConfigured, ApplyPeer::Forked, kShm, 0xff, 0xff, 0xff).requestedMask,
+        0xffu);
 }
 
 TEST(ApplyThreadPolicy, AnEmptyOrMissingAffinityIsAuto) {
@@ -117,8 +117,8 @@ TEST(ApplyThreadPolicy, AnEmptyOrMissingAffinityIsAuto) {
 }
 
 TEST(ApplyThreadPolicy, AnExplicitSpinWinsForADialledInPeer) {
-    const auto policy = SelectApplyThreadPolicy("auto", true, 7, ApplyPeer::Connected, kShm, kRedmiBig, kRedmiPrime,
-                                                kRedmiOnline);
+    const auto policy =
+        SelectApplyThreadPolicy("auto", true, 7, ApplyPeer::Connected, kShm, kRedmiBig, kRedmiPrime, kRedmiOnline);
     EXPECT_EQ(policy.spinUs, 7u);
     EXPECT_EQ(policy.requestedMask, 0x40u);
 }
@@ -126,19 +126,19 @@ TEST(ApplyThreadPolicy, AnExplicitSpinWinsForADialledInPeer) {
 TEST(ApplyThreadPolicy, AnExplicitMaskOrOffWinsForEveryPeerAndPlaneAndReservesNothing) {
     for (const ApplyPeer peer : {ApplyPeer::InProcess, ApplyPeer::Forked, ApplyPeer::Connected}) {
         for (const Bool plane : {kShm, kStream}) {
-            const auto off = SelectApplyThreadPolicy("off", false, kConfigured, peer, plane, kRedmiBig, kRedmiPrime,
-                                                     kRedmiOnline);
+            const auto off =
+                SelectApplyThreadPolicy("off", false, kConfigured, peer, plane, kRedmiBig, kRedmiPrime, kRedmiOnline);
             EXPECT_TRUE(off.recognised);
             EXPECT_EQ(off.requestedMask, 0u) << ApplyPeerName(peer);
             EXPECT_EQ(off.spinUs, kConfigured) << "an operator's affinity keeps the configured spin";
-            const auto mask = SelectApplyThreadPolicy("0x80", false, kConfigured, peer, plane, kRedmiBig,
-                                                      kRedmiPrime, kRedmiOnline);
+            const auto mask =
+                SelectApplyThreadPolicy("0x80", false, kConfigured, peer, plane, kRedmiBig, kRedmiPrime, kRedmiOnline);
             EXPECT_TRUE(mask.recognised);
             EXPECT_EQ(mask.requestedMask, 0x80u) << ApplyPeerName(peer);
-            EXPECT_EQ(SelectApplyThreadPolicy("12", false, kConfigured, peer, plane, kRedmiBig, kRedmiPrime,
-                                              kRedmiOnline)
-                          .requestedMask,
-                      12u);
+            EXPECT_EQ(
+                SelectApplyThreadPolicy("12", false, kConfigured, peer, plane, kRedmiBig, kRedmiPrime, kRedmiOnline)
+                    .requestedMask,
+                12u);
         }
     }
     // What the supervisor announces (and the helper avoids) under an operator's affinity: nothing.

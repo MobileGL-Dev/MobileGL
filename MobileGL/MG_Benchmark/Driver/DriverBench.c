@@ -185,8 +185,7 @@ GLF(void, glBindAttribLocation, (GLuint, GLuint, const GLchar*))
 GLF(void, glUniform3fv, (GLint, GLsizei, const float*))
 GLF(void, glDrawArrays, (GLenum, GLint, GLsizei))
 GLF(void, glDrawElementsBaseVertex, (GLenum, GLsizei, GLenum, const void*, GLint))
-GLF(void, glMultiDrawElementsBaseVertex,
-    (GLenum, const GLsizei*, GLenum, const void* const*, GLsizei, const GLint*))
+GLF(void, glMultiDrawElementsBaseVertex, (GLenum, const GLsizei*, GLenum, const void* const*, GLsizei, const GLint*))
 GLF(void, glBindBufferRange, (GLenum, GLuint, GLuint, GLintptr, GLsizeiptr))
 GLF(void, glBindBufferBase, (GLenum, GLuint, GLuint))
 GLF(GLuint, glGetUniformBlockIndex, (GLuint, const GLchar*))
@@ -215,7 +214,6 @@ static int cmp_u64(const void* a, const void* b) {
     uint64_t x = *(const uint64_t*)a, y = *(const uint64_t*)b;
     return x < y ? -1 : x > y;
 }
-
 
 /* Scene, cases and the case table live next door so the Android plugin's
  * in-process benchmark runs byte-identical bodies. */
@@ -285,8 +283,7 @@ static void run_case(const char* name, case_fn body, long a, long b, long opsPer
     uint64_t med = samples[g_frames / 2];
     double frameMs = med / 1e6;
     double nsPerOp = opsPerFrame > 0 ? (double)med / (double)opsPerFrame : 0.0;
-    printf("%s,%d,%ld,%.3f,%.1f,%.1f\n", name, g_frames, opsPerFrame, frameMs, nsPerOp,
-           1e9 / (double)med);
+    printf("%s,%d,%ld,%.3f,%.1f,%.1f\n", name, g_frames, opsPerFrame, frameMs, nsPerOp, 1e9 / (double)med);
     fflush(stdout);
     if (glGetError() != GL_NO_ERROR) fprintf(stderr, "WARN: GL error after %s\n", name);
 }
@@ -302,8 +299,7 @@ static EGLDisplay surfaceless_display(void) {
     if (!fn) fn = dlsym(g_provider, "eglGetPlatformDisplayEXT");
     if (!fn) fn = g_eglGetProcAddress("eglGetPlatformDisplayEXT");
     if (!fn) return NULL;
-    return ((EGLDisplay(*)(EGLenum, void*, const void*))fn)(EGL_PLATFORM_SURFACELESS_MESA,
-                                                            EGL_DEFAULT_DISPLAY, NULL);
+    return ((EGLDisplay (*)(EGLenum, void*, const void*))fn)(EGL_PLATFORM_SURFACELESS_MESA, EGL_DEFAULT_DISPLAY, NULL);
 }
 
 /* ---- EGL bootstrap: one provider library, pbuffer, desktop-GL context ---- */
@@ -315,9 +311,12 @@ static int boot_egl(void) {
         fprintf(stderr, "FAIL: dlopen %s: %s\n", libpath, dlerror());
         return 1;
     }
-#define ESYM(name) \
-    void* p_##name = dlsym(g_provider, #name); \
-    if (!p_##name) { fprintf(stderr, "FAIL: dlsym %s\n", #name); return 1; }
+#define ESYM(name)                                                                                                     \
+    void* p_##name = dlsym(g_provider, #name);                                                                         \
+    if (!p_##name) {                                                                                                   \
+        fprintf(stderr, "FAIL: dlsym %s\n", #name);                                                                    \
+        return 1;                                                                                                      \
+    }
     ESYM(eglGetDisplay)
     ESYM(eglInitialize)
     ESYM(eglChooseConfig)
@@ -329,9 +328,9 @@ static int boot_egl(void) {
     ESYM(eglGetError)
     g_eglGetProcAddress = (void* (*)(const char*))p_eglGetProcAddress;
 
-    EGLint (*getError)(void) = (EGLint(*)(void))p_eglGetError;
+    EGLint (*getError)(void) = (EGLint (*)(void))p_eglGetError;
     EGLBoolean (*initialize)(EGLDisplay, EGLint*, EGLint*) =
-        (EGLBoolean(*)(EGLDisplay, EGLint*, EGLint*))p_eglInitialize;
+        (EGLBoolean (*)(EGLDisplay, EGLint*, EGLint*))p_eglInitialize;
 
     /* The default display first: it is the one a windowed app would get, and
      * on a desktop it is the one that reaches the real GPU - which is the
@@ -343,7 +342,7 @@ static int boot_egl(void) {
      * the work being timed. */
     EGLint maj = 0, min = 0;
     const char* how = "default display";
-    EGLDisplay dpy = ((EGLDisplay(*)(void*))p_eglGetDisplay)(EGL_DEFAULT_DISPLAY);
+    EGLDisplay dpy = ((EGLDisplay (*)(void*))p_eglGetDisplay)(EGL_DEFAULT_DISPLAY);
     if (!dpy || !initialize(dpy, &maj, &min)) {
         dpy = surfaceless_display();
         how = "surfaceless display";
@@ -359,22 +358,26 @@ static int boot_egl(void) {
     // native driver as the baseline. The .inc picks ESSL shader sources when the
     // context turns out to be ES.
     EGLBoolean (*chooseConfig)(EGLDisplay, const EGLint*, EGLConfig*, EGLint, EGLint*) =
-        (EGLBoolean(*)(EGLDisplay, const EGLint*, EGLConfig*, EGLint, EGLint*))p_eglChooseConfig;
+        (EGLBoolean (*)(EGLDisplay, const EGLint*, EGLConfig*, EGLint, EGLint*))p_eglChooseConfig;
     EGLContext (*createContext)(EGLDisplay, EGLConfig, EGLContext, const EGLint*) =
-        (EGLContext(*)(EGLDisplay, EGLConfig, EGLContext, const EGLint*))p_eglCreateContext;
-    EGLBoolean (*bindApi)(EGLenum) = (EGLBoolean(*)(EGLenum))p_eglBindAPI;
+        (EGLContext (*)(EGLDisplay, EGLConfig, EGLContext, const EGLint*))p_eglCreateContext;
+    EGLBoolean (*bindApi)(EGLenum) = (EGLBoolean (*)(EGLenum))p_eglBindAPI;
 
     EGLConfig cfg = NULL;
     EGLint ncfg = 0;
     EGLContext ctx = EGL_NO_CONTEXT;
 
     if (bindApi(EGL_OPENGL_API)) {
-        const EGLint cfgAttribs[] = {EGL_SURFACE_TYPE, EGL_PBUFFER_BIT, EGL_RED_SIZE, 8,
-                                     EGL_DEPTH_SIZE, 24, EGL_RENDERABLE_TYPE, EGL_OPENGL_BIT, EGL_NONE};
+        const EGLint cfgAttribs[] = {EGL_SURFACE_TYPE,    EGL_PBUFFER_BIT, EGL_RED_SIZE, 8, EGL_DEPTH_SIZE, 24,
+                                     EGL_RENDERABLE_TYPE, EGL_OPENGL_BIT,  EGL_NONE};
         if (chooseConfig(dpy, cfgAttribs, &cfg, 1, &ncfg) && ncfg >= 1) {
-            const EGLint ctxAttribs[] = {EGL_CONTEXT_MAJOR_VERSION, 3, EGL_CONTEXT_MINOR_VERSION, 2,
+            const EGLint ctxAttribs[] = {EGL_CONTEXT_MAJOR_VERSION,
+                                         3,
+                                         EGL_CONTEXT_MINOR_VERSION,
+                                         2,
                                          EGL_CONTEXT_OPENGL_PROFILE_MASK,
-                                         EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT, EGL_NONE};
+                                         EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT,
+                                         EGL_NONE};
             ctx = createContext(dpy, cfg, EGL_NO_CONTEXT, ctxAttribs);
             if (ctx == EGL_NO_CONTEXT) ctx = createContext(dpy, cfg, EGL_NO_CONTEXT, NULL);
         }
@@ -384,9 +387,19 @@ static int boot_egl(void) {
             fprintf(stderr, "FAIL: neither OpenGL nor OpenGL ES is bindable on this provider\n");
             return 1;
         }
-        const EGLint esCfgAttribs[] = {EGL_SURFACE_TYPE, EGL_PBUFFER_BIT, EGL_RED_SIZE, 8,
-                                       EGL_GREEN_SIZE, 8, EGL_BLUE_SIZE, 8, EGL_DEPTH_SIZE, 24,
-                                       EGL_RENDERABLE_TYPE, EGL_OPENGL_ES3_BIT, EGL_NONE};
+        const EGLint esCfgAttribs[] = {EGL_SURFACE_TYPE,
+                                       EGL_PBUFFER_BIT,
+                                       EGL_RED_SIZE,
+                                       8,
+                                       EGL_GREEN_SIZE,
+                                       8,
+                                       EGL_BLUE_SIZE,
+                                       8,
+                                       EGL_DEPTH_SIZE,
+                                       24,
+                                       EGL_RENDERABLE_TYPE,
+                                       EGL_OPENGL_ES3_BIT,
+                                       EGL_NONE};
         ncfg = 0;
         if (!chooseConfig(dpy, esCfgAttribs, &cfg, 1, &ncfg) || ncfg < 1) {
             // EGL_SURFACE_TYPE 0 matches any config: a stack that offers no
@@ -411,12 +424,10 @@ static int boot_egl(void) {
      * exactly what EGL_KHR_surfaceless_context takes, so the same call covers
      * both. */
     const EGLint pbAttribs[] = {EGL_WIDTH, 64, EGL_HEIGHT, 64, EGL_NONE};
-    EGLSurface surf = ((EGLSurface(*)(EGLDisplay, EGLConfig, const EGLint*))p_eglCreatePbufferSurface)(
-        dpy, cfg, pbAttribs);
-    if (surf == EGL_NO_SURFACE)
-        fprintf(stderr, "no pbuffer (0x%x), using a surfaceless context\n", getError());
-    if (!((EGLBoolean(*)(EGLDisplay, EGLSurface, EGLSurface, EGLContext))p_eglMakeCurrent)(dpy, surf,
-                                                                                          surf, ctx)) {
+    EGLSurface surf =
+        ((EGLSurface (*)(EGLDisplay, EGLConfig, const EGLint*))p_eglCreatePbufferSurface)(dpy, cfg, pbAttribs);
+    if (surf == EGL_NO_SURFACE) fprintf(stderr, "no pbuffer (0x%x), using a surfaceless context\n", getError());
+    if (!((EGLBoolean (*)(EGLDisplay, EGLSurface, EGLSurface, EGLContext))p_eglMakeCurrent)(dpy, surf, surf, ctx)) {
         fprintf(stderr, "FAIL: eglMakeCurrent (0x%x)\n", getError());
         return 1;
     }
@@ -424,32 +435,75 @@ static int boot_egl(void) {
     /* Core GL entry points: eglGetProcAddress first (EGL 1.5 serves core
      * functions), provider dlsym as fallback (both glvnd and MobileGL export
      * the gl* symbols directly). */
-#define RESOLVE(name)                                                              \
-    do {                                                                           \
-        *(void**)&name = g_eglGetProcAddress(#name);                               \
-        if (!name) *(void**)&name = dlsym(g_provider, #name);                      \
-        if (!name) { fprintf(stderr, "FAIL: resolve %s\n", #name); return 1; }     \
+#define RESOLVE(name)                                                                                                  \
+    do {                                                                                                               \
+        *(void**)&name = g_eglGetProcAddress(#name);                                                                   \
+        if (!name) *(void**)&name = dlsym(g_provider, #name);                                                          \
+        if (!name) {                                                                                                   \
+            fprintf(stderr, "FAIL: resolve %s\n", #name);                                                              \
+            return 1;                                                                                                  \
+        }                                                                                                              \
     } while (0)
-    RESOLVE(glClear); RESOLVE(glClearColor); RESOLVE(glEnable); RESOLVE(glViewport);
-    RESOLVE(glDisable); RESOLVE(glBlendFuncSeparate); RESOLVE(glDrawBuffers);
-    RESOLVE(glGetString); RESOLVE(glGetError); RESOLVE(glFinish); RESOLVE(glFlush);
-    RESOLVE(glGenBuffers); RESOLVE(glBindBuffer); RESOLVE(glBufferData); RESOLVE(glBufferSubData);
-    RESOLVE(glGenVertexArrays); RESOLVE(glBindVertexArray); RESOLVE(glEnableVertexAttribArray);
-    RESOLVE(glVertexAttribPointer); RESOLVE(glGenTextures); RESOLVE(glBindTexture);
-    RESOLVE(glActiveTexture); RESOLVE(glTexImage2D); RESOLVE(glTexSubImage2D);
-    RESOLVE(glTexParameteri); RESOLVE(glGenerateMipmap); RESOLVE(glCreateShader);
-    RESOLVE(glPixelStorei); RESOLVE(glGetIntegerv);
-    RESOLVE(glShaderSource); RESOLVE(glCompileShader); RESOLVE(glGetShaderiv);
-    RESOLVE(glGetShaderInfoLog); RESOLVE(glCreateProgram); RESOLVE(glAttachShader);
-    RESOLVE(glLinkProgram); RESOLVE(glGetProgramiv); RESOLVE(glUseProgram);
-    RESOLVE(glGetUniformLocation); RESOLVE(glUniform1i); RESOLVE(glUniform3f);
-    RESOLVE(glUniformMatrix4fv); RESOLVE(glDrawElements); RESOLVE(glBindAttribLocation);
-    RESOLVE(glUniform3fv); RESOLVE(glDrawArrays); RESOLVE(glDrawElementsBaseVertex);
-    RESOLVE(glBindBufferRange); RESOLVE(glBindBufferBase);
-    RESOLVE(glGetUniformBlockIndex); RESOLVE(glUniformBlockBinding);
-    RESOLVE(glGenSamplers); RESOLVE(glBindSampler); RESOLVE(glSamplerParameteri);
-    RESOLVE(glGenFramebuffers); RESOLVE(glBindFramebuffer); RESOLVE(glGenRenderbuffers);
-    RESOLVE(glBindRenderbuffer); RESOLVE(glRenderbufferStorage); RESOLVE(glFramebufferRenderbuffer);
+    RESOLVE(glClear);
+    RESOLVE(glClearColor);
+    RESOLVE(glEnable);
+    RESOLVE(glViewport);
+    RESOLVE(glDisable);
+    RESOLVE(glBlendFuncSeparate);
+    RESOLVE(glDrawBuffers);
+    RESOLVE(glGetString);
+    RESOLVE(glGetError);
+    RESOLVE(glFinish);
+    RESOLVE(glFlush);
+    RESOLVE(glGenBuffers);
+    RESOLVE(glBindBuffer);
+    RESOLVE(glBufferData);
+    RESOLVE(glBufferSubData);
+    RESOLVE(glGenVertexArrays);
+    RESOLVE(glBindVertexArray);
+    RESOLVE(glEnableVertexAttribArray);
+    RESOLVE(glVertexAttribPointer);
+    RESOLVE(glGenTextures);
+    RESOLVE(glBindTexture);
+    RESOLVE(glActiveTexture);
+    RESOLVE(glTexImage2D);
+    RESOLVE(glTexSubImage2D);
+    RESOLVE(glTexParameteri);
+    RESOLVE(glGenerateMipmap);
+    RESOLVE(glCreateShader);
+    RESOLVE(glPixelStorei);
+    RESOLVE(glGetIntegerv);
+    RESOLVE(glShaderSource);
+    RESOLVE(glCompileShader);
+    RESOLVE(glGetShaderiv);
+    RESOLVE(glGetShaderInfoLog);
+    RESOLVE(glCreateProgram);
+    RESOLVE(glAttachShader);
+    RESOLVE(glLinkProgram);
+    RESOLVE(glGetProgramiv);
+    RESOLVE(glUseProgram);
+    RESOLVE(glGetUniformLocation);
+    RESOLVE(glUniform1i);
+    RESOLVE(glUniform3f);
+    RESOLVE(glUniformMatrix4fv);
+    RESOLVE(glDrawElements);
+    RESOLVE(glBindAttribLocation);
+    RESOLVE(glUniform3fv);
+    RESOLVE(glDrawArrays);
+    RESOLVE(glDrawElementsBaseVertex);
+    RESOLVE(glBindBufferRange);
+    RESOLVE(glBindBufferBase);
+    RESOLVE(glGetUniformBlockIndex);
+    RESOLVE(glUniformBlockBinding);
+    RESOLVE(glGenSamplers);
+    RESOLVE(glBindSampler);
+    RESOLVE(glSamplerParameteri);
+    RESOLVE(glGenFramebuffers);
+    RESOLVE(glBindFramebuffer);
+    RESOLVE(glGenRenderbuffers);
+    RESOLVE(glBindRenderbuffer);
+    RESOLVE(glRenderbufferStorage);
+    RESOLVE(glFramebufferRenderbuffer);
     RESOLVE(glCheckFramebufferStatus);
     // Optional: end_frame_wait() falls back to glFinish when a stack has no
     // sync objects, so resolve without failing the run.

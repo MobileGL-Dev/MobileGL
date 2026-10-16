@@ -143,8 +143,8 @@ namespace MobileGL {
                 // `platformWindow` keeps eglCreatePlatformWindowSurface's surface type. Split builds
                 // only: the pull build's state class is unchanged (G1).
                 EGLSurfaceHandle CreateServerOwnedWindowSurface(EGLDisplayHandle display, EGLConfigHandle config,
-                                                                const void* nativeWindow, EGLint width,
-                                                                EGLint height, Bool platformWindow);
+                                                                const void* nativeWindow, EGLint width, EGLint height,
+                                                                Bool platformWindow);
                 // P12: the server's REAL extent of a surface - a server-owned window's geometry, from
                 // the CreateWindowSurface reply and from every surface-changed event after it - so
                 // eglQuerySurface(EGL_WIDTH/EGL_HEIGHT) answers what the server renders at. Unlike
@@ -247,8 +247,8 @@ namespace MobileGL {
                 // backend has shared images at all; without them the lists are empty. `yuvAvailable`
                 // adds the YUV formats, which are external-only (OES_EGL_image_external) and LINEAR
                 // as far as an explicit modifier goes.
-                Bool QueryDmaBufFormats(EGLDisplayHandle display, Bool available, Bool yuvAvailable,
-                                        EGLint maxFormats, EGLint* formats, EGLint* numFormats);
+                Bool QueryDmaBufFormats(EGLDisplayHandle display, Bool available, Bool yuvAvailable, EGLint maxFormats,
+                                        EGLint* formats, EGLint* numFormats);
                 Bool QueryDmaBufModifiers(EGLDisplayHandle display, Bool available, Bool yuvAvailable, EGLint format,
                                           EGLint maxModifiers, Uint64* modifiers, EGLBoolean* externalOnly,
                                           EGLint* numModifiers);

@@ -136,7 +136,8 @@ namespace MGITest {
                             if (got < want[c] - 2 || got > want[c] + 2) ok = false;
                         }
                         if (!ok && wrong++ == 0) {
-                            for (int c = 0; c < 4; ++c) first[c] = pixels[base + static_cast<size_t>(c)];
+                            for (int c = 0; c < 4; ++c)
+                                first[c] = pixels[base + static_cast<size_t>(c)];
                         }
                     }
                     EXPECT_EQ(wrong, 0u) << "level " << level << " slice " << z << ": expected (" << want[0] << ","
@@ -168,7 +169,8 @@ namespace MGITest {
             if (!Ready() || IsSkipped()) return;
             if (!m_magma)
                 GTEST_SKIP() << "Magma wire-arm decline (P8-SV): the knob and the depth shader arm it forces are "
-                                "Magma's; Espryt (" << Gl().BackendName() << ") generates this chain itself";
+                                "Magma's; Espryt ("
+                             << Gl().BackendName() << ") generates this chain itself";
             const std::string tier = SplitLane::MarkerValue("MGITEST_MAGMA_FORCE_SHADER_MIPMAP");
             if (tier.empty())
                 GTEST_SKIP() << "MGITEST_MAGMA_FORCE_SHADER_MIPMAP is unset: this driver blits depth natively, "
@@ -203,8 +205,8 @@ namespace MGITest {
                     }
                 }
                 EXPECT_EQ(wrong, 0u) << "level " << level << " tier=" << tier << ": a declined mip must leave "
-                                     << "every level as the application wrote it (expected " << want
-                                     << ", first wrong " << first << ")";
+                                     << "every level as the application wrote it (expected " << want << ", first wrong "
+                                     << first << ")";
             }
             glBindTexture(GL_TEXTURE_1D, 0);
             glDeleteTextures(1, &line);

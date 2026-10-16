@@ -69,12 +69,12 @@ void main()
         constexpr GLfloat kVertices[] = {
             -0.9f, -0.9f, // 0 - left triangle
             -0.1f, -0.9f, // 1
-            -0.9f,  0.9f, // 2
-             0.1f, -0.9f, // 3 - right triangle
-             0.9f, -0.9f, // 4
-             0.9f,  0.9f, // 5
-             0.0f,  0.0f, // 6 - spare
-             0.0f,  0.0f, // 7 - spare, and the application's restart index
+            -0.9f, 0.9f,  // 2
+            0.1f,  -0.9f, // 3 - right triangle
+            0.9f,  -0.9f, // 4
+            0.9f,  0.9f,  // 5
+            0.0f,  0.0f,  // 6 - spare
+            0.0f,  0.0f,  // 7 - spare, and the application's restart index
         };
         constexpr GLuint kRestartIndex = 7;
 
@@ -112,8 +112,7 @@ void main()
                 glGenFramebuffers(1, &m_fbo);
                 glBindFramebuffer(GL_FRAMEBUFFER, m_fbo);
                 glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m_colorTexture, 0);
-                ASSERT_EQ(glCheckFramebufferStatus(GL_FRAMEBUFFER),
-                          static_cast<GLenum>(GL_FRAMEBUFFER_COMPLETE));
+                ASSERT_EQ(glCheckFramebufferStatus(GL_FRAMEBUFFER), static_cast<GLenum>(GL_FRAMEBUFFER_COMPLETE));
                 glViewport(0, 0, kSurface, kSurface);
 
                 m_program = BuildProgram();
@@ -142,8 +141,7 @@ void main()
             }
 
             static void DrainErrors() {
-                for (int i = 0; i < 16 && glGetError() != GL_NO_ERROR; ++i) {
-                }
+                for (int i = 0; i < 16 && glGetError() != GL_NO_ERROR; ++i) {}
             }
 
             GLuint BuildProgram() {
@@ -178,8 +176,7 @@ void main()
             std::vector<Pixel> DrawAndRead() {
                 glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
                 glClear(GL_COLOR_BUFFER_BIT);
-                glDrawElements(GL_TRIANGLE_STRIP, static_cast<GLsizei>(std::size(kIndices)), GL_UNSIGNED_INT,
-                               nullptr);
+                glDrawElements(GL_TRIANGLE_STRIP, static_cast<GLsizei>(std::size(kIndices)), GL_UNSIGNED_INT, nullptr);
                 std::vector<Pixel> pixels(static_cast<std::size_t>(kSurface) * kSurface);
                 glReadPixels(0, 0, kSurface, kSurface, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
                 return pixels;

@@ -23,12 +23,13 @@
 #include <stdint.h>
 
 #ifdef __cplusplus
-extern "C" {
+extern "C"
+{
 #endif
 
-// ---------------------------------------------------------------------------
-// ABI versions
-// ---------------------------------------------------------------------------
+    // ---------------------------------------------------------------------------
+    // ABI versions
+    // ---------------------------------------------------------------------------
 
 #define MOBILEGL_PROTOCOL_ABI_MAJOR 1
 #define MOBILEGL_PROTOCOL_ABI_MINOR 0
@@ -46,63 +47,63 @@ extern "C" {
 #define MOBILEGL_ABI_MAJOR_OF(version) ((uint32_t)(version) >> 16)
 #define MOBILEGL_ABI_MINOR_OF(version) ((uint32_t)(version) & 0xFFFFu)
 
-// ---------------------------------------------------------------------------
-// Ids
-// ---------------------------------------------------------------------------
+    // ---------------------------------------------------------------------------
+    // Ids
+    // ---------------------------------------------------------------------------
 
-typedef uint64_t MobileGLSessionId;  // one client GL context flow
-typedef uint64_t MobileGLRequestSeq; // matches a request to its reply
-typedef uint32_t MobileGLSegmentId;  // shm segment id within a connection
+    typedef uint64_t MobileGLSessionId;  // one client GL context flow
+    typedef uint64_t MobileGLRequestSeq; // matches a request to its reply
+    typedef uint32_t MobileGLSegmentId;  // shm segment id within a connection
 
-// ---------------------------------------------------------------------------
-// Spans / regions
-// ---------------------------------------------------------------------------
+    // ---------------------------------------------------------------------------
+    // Spans / regions
+    // ---------------------------------------------------------------------------
 
-// Borrowed, read-only byte span. The pointee is owned by the producing side
-// and is only valid for the duration documented at the consuming call site.
-typedef struct MobileGLByteSpan {
-    const void* data;
-    uint64_t size;
-} MobileGLByteSpan;
+    // Borrowed, read-only byte span. The pointee is owned by the producing side
+    // and is only valid for the duration documented at the consuming call site.
+    typedef struct MobileGLByteSpan {
+        const void* data;
+        uint64_t size;
+    } MobileGLByteSpan;
 
-typedef struct MobileGLMutableByteSpan {
-    void* data;
-    uint64_t size;
-} MobileGLMutableByteSpan;
+    typedef struct MobileGLMutableByteSpan {
+        void* data;
+        uint64_t size;
+    } MobileGLMutableByteSpan;
 
-// A byte range inside an already-established shm segment. Segments are
-// announced out of band (the SegmentRef table on the control channel, with the
-// fd itself passed by SCM_RIGHTS) and stay stable for their declared lifetime;
-// offsets are segment-relative.
-typedef struct MobileGLShmRegion {
-    MobileGLSegmentId segmentId;
-    uint32_t reserved;
-    uint64_t offset;
-    uint64_t size;
-} MobileGLShmRegion;
+    // A byte range inside an already-established shm segment. Segments are
+    // announced out of band (the SegmentRef table on the control channel, with the
+    // fd itself passed by SCM_RIGHTS) and stay stable for their declared lifetime;
+    // offsets are segment-relative.
+    typedef struct MobileGLShmRegion {
+        MobileGLSegmentId segmentId;
+        uint32_t reserved;
+        uint64_t offset;
+        uint64_t size;
+    } MobileGLShmRegion;
 
-// ---------------------------------------------------------------------------
-// Result codes (structured errors across every contract boundary)
-// ---------------------------------------------------------------------------
+    // ---------------------------------------------------------------------------
+    // Result codes (structured errors across every contract boundary)
+    // ---------------------------------------------------------------------------
 
-typedef enum MobileGLResult {
-    MOBILEGL_OK = 0,
-    MOBILEGL_ERR_NOT_INITIALIZED = 1,
-    MOBILEGL_ERR_INVALID_ARGUMENT = 2,
-    MOBILEGL_ERR_UNSUPPORTED = 3,
-    MOBILEGL_ERR_OUT_OF_MEMORY = 4,
-    MOBILEGL_ERR_PROTOCOL_MISMATCH = 5, // ABI/wire major mismatch, bad framing
-    MOBILEGL_ERR_TRANSPORT_CLOSED = 6,  // peer gone / EOF
-    MOBILEGL_ERR_TIMEOUT = 7,           // nothing arrived within the deadline
-    MOBILEGL_ERR_SHM_EXHAUSTED = 8,
-    MOBILEGL_ERR_SESSION_UNKNOWN = 9,
-    MOBILEGL_ERR_HANDLE_UNKNOWN = 10,
-    // The caller's buffer is smaller than the pending message. The message is
-    // NOT consumed and the required size is reported back; see
-    // ITransport::ReceiveFrame.
-    MOBILEGL_ERR_BUFFER_TOO_SMALL = 11,
-    MOBILEGL_ERR_FORCE_U32 = 0x7FFFFFFF
-} MobileGLResult;
+    typedef enum MobileGLResult {
+        MOBILEGL_OK = 0,
+        MOBILEGL_ERR_NOT_INITIALIZED = 1,
+        MOBILEGL_ERR_INVALID_ARGUMENT = 2,
+        MOBILEGL_ERR_UNSUPPORTED = 3,
+        MOBILEGL_ERR_OUT_OF_MEMORY = 4,
+        MOBILEGL_ERR_PROTOCOL_MISMATCH = 5, // ABI/wire major mismatch, bad framing
+        MOBILEGL_ERR_TRANSPORT_CLOSED = 6,  // peer gone / EOF
+        MOBILEGL_ERR_TIMEOUT = 7,           // nothing arrived within the deadline
+        MOBILEGL_ERR_SHM_EXHAUSTED = 8,
+        MOBILEGL_ERR_SESSION_UNKNOWN = 9,
+        MOBILEGL_ERR_HANDLE_UNKNOWN = 10,
+        // The caller's buffer is smaller than the pending message. The message is
+        // NOT consumed and the required size is reported back; see
+        // ITransport::ReceiveFrame.
+        MOBILEGL_ERR_BUFFER_TOO_SMALL = 11,
+        MOBILEGL_ERR_FORCE_U32 = 0x7FFFFFFF
+    } MobileGLResult;
 
 #ifdef __cplusplus
 } // extern "C"

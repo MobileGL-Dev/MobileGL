@@ -31,7 +31,9 @@ namespace MGITest {
         return true;
     }
 #else
-    bool PeekWireIndirectCounters(WireIndirectCounters*) { return false; }
+    bool PeekWireIndirectCounters(WireIndirectCounters*) {
+        return false;
+    }
 #endif
 
 } // namespace MGITest

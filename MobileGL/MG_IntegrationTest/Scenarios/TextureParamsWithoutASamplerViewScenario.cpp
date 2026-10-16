@@ -267,8 +267,8 @@ void main() {
                 GLuint texture = 0;
                 glCreateTextures(GL_TEXTURE_2D, 1, &texture);
                 glTextureStorage2D(texture, 1, GL_RGBA8, kTextureSize, kTextureSize);
-                glTextureSubImage2D(texture, 0, 0, 0, kTextureSize, kTextureSize, GL_RGBA,
-                                    GL_UNSIGNED_BYTE, texels.data());
+                glTextureSubImage2D(texture, 0, 0, 0, kTextureSize, kTextureSize, GL_RGBA, GL_UNSIGNED_BYTE,
+                                    texels.data());
                 glTextureParameteri(texture, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
                 glTextureParameteri(texture, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
                 return texture;
@@ -294,8 +294,8 @@ void main() {
 
             ::testing::AssertionResult WholeViewportIs(const Image& image, const char* expected,
                                                        const std::string& when) {
-                return RegionIsMostly(image, kInset, image.Width() - kInset, kInset,
-                                      image.Height() - kInset, expected, 0.0, when);
+                return RegionIsMostly(image, kInset, image.Width() - kInset, kInset, image.Height() - kInset, expected,
+                                      0.0, when);
             }
 
             // R -> ZERO and G -> ONE, so a RED texel samples as GREEN if and only if the swizzle
@@ -311,7 +311,10 @@ void main() {
             // reading has to find on both sides of the seam. Two, because they are the two the
             // four cases use and because a peek that reported "some parameter" would be green for
             // a backend that applied the wrong one.
-            enum class MovedParameter { Swizzle, DepthStencilMode };
+            enum class MovedParameter {
+                Swizzle,
+                DepthStencilMode
+            };
 
             // ------------------------------------------------------------------------------
             // G9's WHITE-BOX READING (ID-19). Called by every case at the point where its
@@ -322,35 +325,34 @@ void main() {
             // `expectedDepthStencilMode` is GL_DEPTH_COMPONENT or GL_STENCIL_INDEX. Both are
             // always passed and `moved` says which one is the case's subject, so a reader of a
             // failure can see the untouched half beside the moved one.
-            void TakeTheWhiteBoxReadingBeforeAnySample(GLuint texture, GLenum target,
-                                                       MovedParameter moved,
-                                                       const GLint expectedSwizzle[4],
-                                                       GLint expectedDepthStencilMode,
+            void TakeTheWhiteBoxReadingBeforeAnySample(GLuint texture, GLenum target, MovedParameter moved,
+                                                       const GLint expectedSwizzle[4], GLint expectedDepthStencilMode,
                                                        const char* whatMadeItReachable) {
                 const char* const movedName =
-                    moved == MovedParameter::Swizzle ? "GL_TEXTURE_SWIZZLE_*"
-                                                     : "GL_DEPTH_STENCIL_TEXTURE_MODE";
+                    moved == MovedParameter::Swizzle ? "GL_TEXTURE_SWIZZLE_*" : "GL_DEPTH_STENCIL_TEXTURE_MODE";
 
                 PipeTextureParamsRecordPeek record{};
                 if (!PeekPipeTextureParamsRecord(static_cast<unsigned>(texture), &record)) {
-                    DeclineTheWhiteBoxReading(
-                        "no set_texture_params record for this texture in the applier. Either "
-                        "there is no applier here (a PULL build: MGPipeApplierState is "
-                        "#if MOBILEGL_PIPE_PUSH), or this lane's MOBILEGL_PIPE_PUSH leaves "
-                        "kMGPipeSubsystemTextureResources (bit 10) clear, or no backend "
-                        "registered MGPipeResourceOps so the client never emitted (c0f). The "
-                        "end-to-end half of this case below is unaffected and still decides it.");
+                    DeclineTheWhiteBoxReading("no set_texture_params record for this texture in the applier. Either "
+                                              "there is no applier here (a PULL build: MGPipeApplierState is "
+                                              "#if MOBILEGL_PIPE_PUSH), or this lane's MOBILEGL_PIPE_PUSH leaves "
+                                              "kMGPipeSubsystemTextureResources (bit 10) clear, or no backend "
+                                              "registered MGPipeResourceOps so the client never emitted (c0f). The "
+                                              "end-to-end half of this case below is unaffected and still decides it.");
                     return;
                 }
 
                 // From here the reading WAS taken, so everything is a hard assertion: a record
                 // that exists and does not carry the parameter is exactly the finding.
                 EXPECT_NE(record.ParamsSerial, 0u)
-                    << "the applier holds a resource record for texture " << texture
-                    << " at handle {" << record.Slot << ", " << record.Gen
+                    << "the applier holds a resource record for texture " << texture << " at handle {" << record.Slot
+                    << ", " << record.Gen
                     << "} but its ParamsSerial is 0, i.e. NO set_texture_params has ever been "
-                       "applied to it - and this case moved " << movedName << " while the texture "
-                       "was " << whatMadeItReachable
+                       "applied to it - and this case moved "
+                    << movedName
+                    << " while the texture "
+                       "was "
+                    << whatMadeItReachable
                     << ". A parameter change on a texture with no sampler view has to produce a "
                        "record addressed BY RESOURCE (D10, D-E1); a zero here means the client "
                        "never emitted one, which is the coupling P4a exists to remove reappearing "
@@ -360,26 +362,23 @@ void main() {
                     for (int channel = 0; channel < 4; ++channel) {
                         EXPECT_EQ(record.Swizzle[channel], static_cast<int>(expectedSwizzle[channel]))
                             << "the applier's set_texture_params record for texture " << texture
-                            << " carries the wrong swizzle in channel " << channel
-                            << " (record 0x" << std::hex << record.Swizzle[channel] << ", expected 0x"
-                            << expectedSwizzle[channel] << std::dec
+                            << " carries the wrong swizzle in channel " << channel << " (record 0x" << std::hex
+                            << record.Swizzle[channel] << ", expected 0x" << expectedSwizzle[channel] << std::dec
                             << "). The record is what Espryt reads, so a wrong value here is a "
                                "wrong value everywhere downstream of it.";
                     }
                 } else {
                     EXPECT_EQ(record.DepthStencilMode, static_cast<int>(expectedDepthStencilMode))
                         << "the applier's set_texture_params record for texture " << texture
-                        << " carries GL_DEPTH_STENCIL_TEXTURE_MODE 0x" << std::hex
-                        << record.DepthStencilMode << ", expected 0x" << expectedDepthStencilMode
-                        << std::dec << ".";
+                        << " carries GL_DEPTH_STENCIL_TEXTURE_MODE 0x" << std::hex << record.DepthStencilMode
+                        << ", expected 0x" << expectedDepthStencilMode << std::dec << ".";
                 }
 
                 // (c) - and it is checked BEFORE (b) is read, because (b) reads the driver and a
                 // reader of a failure needs to know the view question was answered on the state
                 // this case built rather than on anything the peek did.
                 bool hasSamplerView = true;
-                if (!PeekEsprytHasSamplerViewForTexture(static_cast<unsigned>(texture),
-                                                        &hasSamplerView)) {
+                if (!PeekEsprytHasSamplerViewForTexture(static_cast<unsigned>(texture), &hasSamplerView)) {
                     DeclineTheWhiteBoxReading(
                         "Espryt holds no twin for this texture, so neither the sampler-view "
                         "question nor the applied-value one can be asked here. On a backend other "
@@ -388,38 +387,37 @@ void main() {
                     return;
                 }
                 EXPECT_FALSE(hasSamplerView)
-                    << "Espryt already holds a SAMPLER VIEW for texture " << texture
-                    << ", which was " << whatMadeItReachable
+                    << "Espryt already holds a SAMPLER VIEW for texture " << texture << ", which was "
+                    << whatMadeItReachable
                     << " and has never been bound to a sampler unit in this case. The whole claim "
                        "of D10 is that a texture reached this way has no view, so if one exists "
                        "the reading below cannot separate 'applied by resource' from 'applied "
                        "through the view' and this case has stopped measuring G9.";
 
                 EsprytAppliedTextureParamsPeek applied{};
-                if (!PeekEsprytAppliedTextureParams(static_cast<unsigned>(texture),
-                                                    static_cast<unsigned>(target), &applied)) {
-                    DeclineTheWhiteBoxReading(
-                        "Espryt's applied value could not be read back from the driver (no twin, "
-                        "no ES name yet, or a target this peek has no binding query for).");
+                if (!PeekEsprytAppliedTextureParams(static_cast<unsigned>(texture), static_cast<unsigned>(target),
+                                                    &applied)) {
+                    DeclineTheWhiteBoxReading("Espryt's applied value could not be read back from the driver (no twin, "
+                                              "no ES name yet, or a target this peek has no binding query for).");
                     return;
                 }
 
                 std::cout << "[ TextureParamsWithoutASamplerView ] white-box: texture " << texture
-                          << " -> applier handle {" << record.Slot << ", " << record.Gen
-                          << "} paramsSerial " << record.ParamsSerial << ", Espryt ES name "
-                          << applied.BackendTextureId << ", sampler view: none, " << movedName
-                          << " applied before any sample" << std::endl;
+                          << " -> applier handle {" << record.Slot << ", " << record.Gen << "} paramsSerial "
+                          << record.ParamsSerial << ", Espryt ES name " << applied.BackendTextureId
+                          << ", sampler view: none, " << movedName << " applied before any sample" << std::endl;
 
                 if (moved == MovedParameter::Swizzle) {
                     for (int channel = 0; channel < 4; ++channel) {
                         EXPECT_EQ(applied.Swizzle[channel], static_cast<int>(expectedSwizzle[channel]))
                             << "ESPRYT HAS NOT APPLIED THE SWIZZLE YET. Channel " << channel
-                            << " of the driver texture (ES name " << applied.BackendTextureId
-                            << ") reads 0x" << std::hex << applied.Swizzle[channel] << ", the "
+                            << " of the driver texture (ES name " << applied.BackendTextureId << ") reads 0x"
+                            << std::hex << applied.Swizzle[channel] << ", the "
                             << "application set 0x" << expectedSwizzle[channel] << std::dec
                             << ", and the applier's record already carries the right value - so "
                                "the record reached the server and the server has not pushed it. "
-                               "The texture was " << whatMadeItReachable
+                               "The texture was "
+                            << whatMadeItReachable
                             << " and has NO sampler view (asserted above), which makes this "
                                "exactly the deferred-to-first-view shape G9 exists to catch: the "
                                "sample at the end of this case would repair it, and the "
@@ -436,11 +434,12 @@ void main() {
                     }
                     EXPECT_EQ(applied.DepthStencilMode, static_cast<int>(expectedDepthStencilMode))
                         << "ESPRYT HAS NOT APPLIED THE DEPTH/STENCIL ASPECT MODE YET. The driver "
-                           "texture (ES name " << applied.BackendTextureId << ") reads 0x"
-                        << std::hex << applied.DepthStencilMode << ", the application set 0x"
-                        << expectedDepthStencilMode << std::dec
+                           "texture (ES name "
+                        << applied.BackendTextureId << ") reads 0x" << std::hex << applied.DepthStencilMode
+                        << ", the application set 0x" << expectedDepthStencilMode << std::dec
                         << ", and the applier's record already carries the right value. The "
-                           "texture was " << whatMadeItReachable
+                           "texture was "
+                        << whatMadeItReachable
                         << " and has no sampler view, so this is D-E3's gap measured directly "
                            "rather than through a sample that would repair it: a driver left at "
                            "GL_DEPTH_COMPONENT samples the DEPTH bits where the application asked "
@@ -451,8 +450,7 @@ void main() {
             // Printed, recorded and named, never silent - a lane that stopped taking the reading
             // must be visible in the log. See this file's header for why it is not a GTEST_SKIP.
             void DeclineTheWhiteBoxReading(const std::string& why) {
-                std::cout << "[ TextureParamsWithoutASamplerView ] white-box reading DECLINED: "
-                          << why << std::endl;
+                std::cout << "[ TextureParamsWithoutASamplerView ] white-box reading DECLINED: " << why << std::endl;
                 RecordProperty("g9_white_box", "declined");
                 RecordProperty("g9_white_box_reason", why.c_str());
             }
@@ -506,8 +504,8 @@ void main() {
 
             // G9's white-box reading, taken here: the texture has been a draw attachment and
             // nothing else, and the sample below has not happened yet.
-            TakeTheWhiteBoxReadingBeforeAnySample(texture, GL_TEXTURE_2D, MovedParameter::Swizzle,
-                                                  kRedIntoGreenSwizzle, kUntouchedDepthStencilMode,
+            TakeTheWhiteBoxReadingBeforeAnySample(texture, GL_TEXTURE_2D, MovedParameter::Swizzle, kRedIntoGreenSwizzle,
+                                                  kUntouchedDepthStencilMode,
                                                   "an attachment of the DRAW framebuffer and "
                                                   "nothing else");
 
@@ -538,8 +536,7 @@ void main() {
         //    default framebuffer for the whole window, which is the ONE thing that separates this
         //    case from the one above.
         // ------------------------------------------------------------------------------------
-        TEST_F(TextureParamsWithoutASamplerViewScenario,
-               AReadAttachmentOnlyTexturesDepthStencilModeReachesTheDriver) {
+        TEST_F(TextureParamsWithoutASamplerViewScenario, AReadAttachmentOnlyTexturesDepthStencilModeReachesTheDriver) {
             if (!Ready()) return;
             SkipWithoutDirectStateAccess();
             if (IsSkipped()) return;
@@ -614,8 +611,7 @@ void main() {
             // mode was set while the texture was reachable ONLY as a read attachment, and the
             // observation below is a sample that would repair an unsynced parameter on its way
             // to reporting it.
-            TakeTheWhiteBoxReadingBeforeAnySample(texture, GL_TEXTURE_2D,
-                                                  MovedParameter::DepthStencilMode,
+            TakeTheWhiteBoxReadingBeforeAnySample(texture, GL_TEXTURE_2D, MovedParameter::DepthStencilMode,
                                                   kUntouchedSwizzle, GL_STENCIL_INDEX,
                                                   "an attachment of the READ framebuffer and "
                                                   "nothing else");
@@ -626,8 +622,7 @@ void main() {
             ClearTo(0.0f, 0.0f, 0.0f, 1.0f);
             glUseProgram(stencilProgram);
             glUniform1i(glGetUniformLocation(stencilProgram, "uTex"), 0);
-            glUniform1ui(glGetUniformLocation(stencilProgram, "uExpected"),
-                         static_cast<GLuint>(kStencil));
+            glUniform1ui(glGetUniformLocation(stencilProgram, "uExpected"), static_cast<GLuint>(kStencil));
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D, texture);
             glBindVertexArray(m_vao);
@@ -639,8 +634,7 @@ void main() {
             const GLenum sampleError = FirstGLError();
             std::cout << "[ TextureParamsWithoutASamplerView ] read-attachment-only "
                          "GL_DEPTH_STENCIL_TEXTURE_MODE=GL_STENCIL_INDEX, expecting stencil "
-                      << kStencil << "; sample GL error 0x" << std::hex << sampleError << std::dec
-                      << std::endl;
+                      << kStencil << "; sample GL error 0x" << std::hex << sampleError << std::dec << std::endl;
 
             EXPECT_TRUE(WholeViewportIs(image, "green",
                                         "a texture that was only ever a READ attachment, sampled "
@@ -687,8 +681,8 @@ void main() {
                 glBindImageTexture(0, 0, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA8);
                 GLuint cleanup = texture;
                 glDeleteTextures(1, &cleanup);
-                GTEST_SKIP() << "glBindImageTexture is not usable here (GL error 0x" << std::hex
-                             << bindError << std::dec
+                GTEST_SKIP() << "glBindImageTexture is not usable here (GL error 0x" << std::hex << bindError
+                             << std::dec
                              << "), so the RequireImageBindableStorage transition this case is about "
                                 "cannot be reached";
             }
@@ -702,8 +696,8 @@ void main() {
             // minted and the driver's swizzle is the application's own - the composition
             // RecreateBackendTexture applies for a NON-core format would show up here as a
             // legitimate difference and this case deliberately does not use one.
-            TakeTheWhiteBoxReadingBeforeAnySample(texture, GL_TEXTURE_2D, MovedParameter::Swizzle,
-                                                  kRedIntoGreenSwizzle, kUntouchedDepthStencilMode,
+            TakeTheWhiteBoxReadingBeforeAnySample(texture, GL_TEXTURE_2D, MovedParameter::Swizzle, kRedIntoGreenSwizzle,
+                                                  kUntouchedDepthStencilMode,
                                                   "an image-unit binding and nothing else, across "
                                                   "a RequireImageBindableStorage re-mint");
 
@@ -726,8 +720,7 @@ void main() {
         //    DESTINATION, so the case also proves the copy itself still lands: a swizzled read of
         //    the copied texel is only meaningful if the texel arrived.
         // ------------------------------------------------------------------------------------
-        TEST_F(TextureParamsWithoutASamplerViewScenario,
-               ACopyImageEndpointOnlyTexturesParamsReachTheDriver) {
+        TEST_F(TextureParamsWithoutASamplerViewScenario, ACopyImageEndpointOnlyTexturesParamsReachTheDriver) {
             if (!Ready()) return;
             SkipWithoutDirectStateAccess();
             if (IsSkipped()) return;
@@ -737,21 +730,20 @@ void main() {
 
             // The parameter moves while the destination is reachable only as a copy endpoint...
             SwizzleRedIntoGreen(destination);
-            glCopyImageSubData(source, GL_TEXTURE_2D, 0, 0, 0, 0, destination, GL_TEXTURE_2D, 0, 0, 0,
-                               0, kTextureSize, kTextureSize, 1);
+            glCopyImageSubData(source, GL_TEXTURE_2D, 0, 0, 0, 0, destination, GL_TEXTURE_2D, 0, 0, 0, 0, kTextureSize,
+                               kTextureSize, 1);
             const GLenum copyError = FirstGLError();
             if (copyError != GLenum(GL_NO_ERROR)) {
                 GLuint cleanup[2] = {source, destination};
                 glDeleteTextures(2, cleanup);
-                GTEST_SKIP() << "glCopyImageSubData is not usable here (GL error 0x" << std::hex
-                             << copyError << std::dec << "), so there is no copy endpoint to be";
+                GTEST_SKIP() << "glCopyImageSubData is not usable here (GL error 0x" << std::hex << copyError
+                             << std::dec << "), so there is no copy endpoint to be";
             }
             Gl().EndFrame();
 
             // G9's white-box reading, on the DESTINATION - the endpoint whose parameters moved.
-            TakeTheWhiteBoxReadingBeforeAnySample(destination, GL_TEXTURE_2D,
-                                                  MovedParameter::Swizzle, kRedIntoGreenSwizzle,
-                                                  kUntouchedDepthStencilMode,
+            TakeTheWhiteBoxReadingBeforeAnySample(destination, GL_TEXTURE_2D, MovedParameter::Swizzle,
+                                                  kRedIntoGreenSwizzle, kUntouchedDepthStencilMode,
                                                   "a glCopyImageSubData destination and nothing "
                                                   "else");
 

@@ -70,7 +70,8 @@ namespace MobileGL::MG_Remote::Server {
     PairAcceptor::PairAcceptor(int listenFd, std::uint32_t budgetMs) : m_listener(listenFd), m_budgetMs(budgetMs) {}
 
     PairAcceptor::~PairAcceptor() {
-        for (auto& waiting : m_waiting) Drop(waiting, true, kPairStopped);
+        for (auto& waiting : m_waiting)
+            Drop(waiting, true, kPairStopped);
         for (const auto& pair : m_ready) {
             RefuseAndClose(pair.first, Protocol::RefuseCode::Busy, kPairStopped);
             ::close(pair.second);
@@ -176,25 +177,25 @@ namespace MobileGL::MG_Remote::Server {
 
     void PairAcceptor::Read(Waiting& waiting) {
         switch (waiting.frame.Pump(waiting.fd)) {
-            case Step::NeedMore:
-                return;
-            case Step::Complete:
-                Judge(waiting);
-                return;
-            case Step::EndedEmpty:
-                // A readiness probe - a connect() and a close() - costs an accept and nothing else.
-                MGLOG_D("MG_Remote server: a connection closed before presenting a PairBind (a probe); dropped");
-                ::close(waiting.fd);
-                waiting.fd = -1;
-                return;
-            case Step::NotAFrame:
-                RefuseAndClose(waiting.fd, Protocol::RefuseCode::MalformedHello, kFirstFrameNotAFrame);
-                waiting.fd = -1;
-                return;
-            case Step::EndedPartial:
-                RefuseAndClose(waiting.fd, Protocol::RefuseCode::MalformedHello, kFirstFrameTruncated);
-                waiting.fd = -1;
-                return;
+        case Step::NeedMore:
+            return;
+        case Step::Complete:
+            Judge(waiting);
+            return;
+        case Step::EndedEmpty:
+            // A readiness probe - a connect() and a close() - costs an accept and nothing else.
+            MGLOG_D("MG_Remote server: a connection closed before presenting a PairBind (a probe); dropped");
+            ::close(waiting.fd);
+            waiting.fd = -1;
+            return;
+        case Step::NotAFrame:
+            RefuseAndClose(waiting.fd, Protocol::RefuseCode::MalformedHello, kFirstFrameNotAFrame);
+            waiting.fd = -1;
+            return;
+        case Step::EndedPartial:
+            RefuseAndClose(waiting.fd, Protocol::RefuseCode::MalformedHello, kFirstFrameTruncated);
+            waiting.fd = -1;
+            return;
         }
     }
 
@@ -281,9 +282,9 @@ namespace MobileGL::MG_Remote::Server {
     }
 
     void PairAcceptor::Compact() {
-        m_waiting.erase(std::remove_if(m_waiting.begin(), m_waiting.end(),
-                                       [](const Waiting& waiting) { return waiting.fd < 0; }),
-                        m_waiting.end());
+        m_waiting.erase(
+            std::remove_if(m_waiting.begin(), m_waiting.end(), [](const Waiting& waiting) { return waiting.fd < 0; }),
+            m_waiting.end());
     }
 
 } // namespace MobileGL::MG_Remote::Server

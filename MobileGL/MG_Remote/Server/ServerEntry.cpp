@@ -16,4 +16,6 @@
 
 extern "C" int mobilegl_server_main(int argc, char** argv);
 
-int main(int argc, char** argv) { return mobilegl_server_main(argc, argv); }
+int main(int argc, char** argv) {
+    return mobilegl_server_main(argc, argv);
+}

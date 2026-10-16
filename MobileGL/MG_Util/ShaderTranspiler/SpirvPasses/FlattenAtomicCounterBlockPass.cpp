@@ -77,8 +77,7 @@ namespace MobileGL {
                         if (debug.opcode() != spv::Op::OpName || debug.NumInOperands() < 2) continue;
                         if (debug.GetSingleWordInOperand(0) != id) continue;
                         const std::string name = debug.GetInOperand(1).AsString();
-                        return name.compare(0, std::strlen(kAtomicCounterBlockPrefix),
-                                            kAtomicCounterBlockPrefix) == 0;
+                        return name.compare(0, std::strlen(kAtomicCounterBlockPrefix), kAtomicCounterBlockPrefix) == 0;
                     }
                     return false;
                 }
@@ -86,10 +85,8 @@ namespace MobileGL {
                 // The literal of the first OpMemberDecorate <structId> <member> <kind>, or none.
                 bool TryGetMemberDecorationLiteral(IRContext* context, uint32_t structId, uint32_t member,
                                                    spv::Decoration kind, uint32_t* literal) {
-                    for (Instruction* decoration :
-                         context->get_decoration_mgr()->GetDecorationsFor(structId, false)) {
-                        if (decoration->opcode() != spv::Op::OpMemberDecorate ||
-                            decoration->NumInOperands() < 4 ||
+                    for (Instruction* decoration : context->get_decoration_mgr()->GetDecorationsFor(structId, false)) {
+                        if (decoration->opcode() != spv::Op::OpMemberDecorate || decoration->NumInOperands() < 4 ||
                             decoration->GetSingleWordInOperand(1) != member ||
                             static_cast<spv::Decoration>(decoration->GetSingleWordInOperand(2)) != kind) {
                             continue;
@@ -100,8 +97,7 @@ namespace MobileGL {
                     return false;
                 }
 
-                bool TryGetDecorationLiteral(IRContext* context, uint32_t id, spv::Decoration kind,
-                                             uint32_t* literal) {
+                bool TryGetDecorationLiteral(IRContext* context, uint32_t id, spv::Decoration kind, uint32_t* literal) {
                     for (Instruction* decoration : context->get_decoration_mgr()->GetDecorationsFor(id, false)) {
                         if (decoration->opcode() != spv::Op::OpDecorate || decoration->NumInOperands() < 3 ||
                             static_cast<spv::Decoration>(decoration->GetSingleWordInOperand(1)) != kind) {
@@ -114,15 +110,13 @@ namespace MobileGL {
                 }
 
                 bool IsUint32Type(const Instruction* type) {
-                    return type != nullptr && type->opcode() == spv::Op::OpTypeInt &&
-                           type->NumInOperands() >= 2 && type->GetSingleWordInOperand(0) == 32u &&
-                           type->GetSingleWordInOperand(1) == 0u;
+                    return type != nullptr && type->opcode() == spv::Op::OpTypeInt && type->NumInOperands() >= 2 &&
+                           type->GetSingleWordInOperand(0) == 32u && type->GetSingleWordInOperand(1) == 0u;
                 }
 
                 // The member's shape as this pass needs it, or false when it is one the pass
                 // cannot re-index.
-                bool DescribeMember(IRContext* context, uint32_t memberTypeId, uint32_t* uintTypeId,
-                                    MemberPlan* plan) {
+                bool DescribeMember(IRContext* context, uint32_t memberTypeId, uint32_t* uintTypeId, MemberPlan* plan) {
                     auto* defUseMgr = context->get_def_use_mgr();
                     Instruction* memberType = defUseMgr->GetDef(memberTypeId);
                     if (memberType == nullptr) return false;
@@ -208,8 +202,7 @@ namespace MobileGL {
                                 return;
                             case spv::Op::OpAccessChain:
                             case spv::Op::OpInBoundsAccessChain:
-                                if (user->NumInOperands() >= 2 &&
-                                    user->GetSingleWordInOperand(0) == variableId) {
+                                if (user->NumInOperands() >= 2 && user->GetSingleWordInOperand(0) == variableId) {
                                     chainsByStruct[structId].push_back(user);
                                     return;
                                 }
@@ -231,8 +224,8 @@ namespace MobileGL {
                         bool expressible = true;
                         for (uint32_t member = 0; member < memberCount; ++member) {
                             uint32_t byteOffset = 0;
-                            if (!TryGetMemberDecorationLiteral(context, structId, member,
-                                                               spv::Decoration::Offset, &byteOffset) ||
+                            if (!TryGetMemberDecorationLiteral(context, structId, member, spv::Decoration::Offset,
+                                                               &byteOffset) ||
                                 byteOffset % kCounterBytes != 0u) {
                                 expressible = false;
                                 break;
@@ -272,8 +265,7 @@ namespace MobileGL {
                         if (chains != chainsByStruct.end()) {
                             for (Instruction* chain : chains->second) {
                                 const spvtools::opt::analysis::Constant* memberIndex =
-                                    context->get_constant_mgr()->FindDeclaredConstant(
-                                        chain->GetSingleWordInOperand(1));
+                                    context->get_constant_mgr()->FindDeclaredConstant(chain->GetSingleWordInOperand(1));
                                 if (memberIndex == nullptr || memberIndex->AsIntConstant() == nullptr) {
                                     expressible = false;
                                     break;
@@ -297,8 +289,7 @@ namespace MobileGL {
                 // The id of |value| as a constant of the same integer type as |likeId|.
                 uint32_t ConstantLike(IRContext* context, uint32_t likeId, uint32_t value) {
                     Instruction* likeDef = context->get_def_use_mgr()->GetDef(likeId);
-                    const spvtools::opt::analysis::Type* type =
-                        context->get_type_mgr()->GetType(likeDef->type_id());
+                    const spvtools::opt::analysis::Type* type = context->get_type_mgr()->GetType(likeDef->type_id());
                     const spvtools::opt::analysis::Constant* constant =
                         context->get_constant_mgr()->GetConstant(type, {value});
                     return context->get_constant_mgr()->GetDefiningInstruction(constant)->result_id();
@@ -350,8 +341,8 @@ namespace MobileGL {
                 // the constant's old position and therefore after its new one too, so no use is
                 // left dangling - moving a definition earlier in the types/constants section
                 // cannot invalidate anything. Ordering is all that changes; def-use is untouched.
-                uint32_t CreateCounterArrayTypeBefore(IRContext* context, Instruction* structType,
-                                                      uint32_t uintTypeId, uint32_t length) {
+                uint32_t CreateCounterArrayTypeBefore(IRContext* context, Instruction* structType, uint32_t uintTypeId,
+                                                      uint32_t length) {
                     auto* constantMgr = context->get_constant_mgr();
                     const spvtools::opt::analysis::Type* uintType = context->get_type_mgr()->GetType(uintTypeId);
                     if (uintType == nullptr) return 0;
@@ -390,16 +381,13 @@ namespace MobileGL {
                 // rather than where they sit - are deliberately kept.
                 void StripMemberAnnotations(IRContext* context, uint32_t structId) {
                     std::vector<Instruction*> doomed;
-                    for (Instruction* decoration :
-                         context->get_decoration_mgr()->GetDecorationsFor(structId, false)) {
-                        if (decoration->opcode() != spv::Op::OpMemberDecorate ||
-                            decoration->NumInOperands() < 3) {
+                    for (Instruction* decoration : context->get_decoration_mgr()->GetDecorationsFor(structId, false)) {
+                        if (decoration->opcode() != spv::Op::OpMemberDecorate || decoration->NumInOperands() < 3) {
                             continue;
                         }
                         const bool pastMemberZero = decoration->GetSingleWordInOperand(1) != 0u;
-                        const bool isOffset =
-                            static_cast<spv::Decoration>(decoration->GetSingleWordInOperand(2)) ==
-                            spv::Decoration::Offset;
+                        const bool isOffset = static_cast<spv::Decoration>(decoration->GetSingleWordInOperand(2)) ==
+                                              spv::Decoration::Offset;
                         if (pastMemberZero || isOffset) doomed.push_back(decoration);
                     }
                     for (Instruction& debug : context->module()->debugs2()) {
@@ -408,7 +396,8 @@ namespace MobileGL {
                         if (debug.GetSingleWordInOperand(1) == 0u) continue; // member 0 keeps its name
                         doomed.push_back(&debug);
                     }
-                    for (Instruction* inst : doomed) context->KillInst(inst);
+                    for (Instruction* inst : doomed)
+                        context->KillInst(inst);
                 }
             } // namespace
 
@@ -417,8 +406,7 @@ namespace MobileGL {
                     return false;
                 }
                 std::unique_ptr<IRContext> context = spvtools::BuildModule(
-                    SPV_ENV_VULKAN_1_1,
-                    [](spv_message_level_t, const char*, const spv_position_t&, const char*) {},
+                    SPV_ENV_VULKAN_1_1, [](spv_message_level_t, const char*, const spv_position_t&, const char*) {},
                     binary.data(), binary.size());
                 if (!context) {
                     // Unparseable here means unusable downstream too; let the ordinary transpile
@@ -438,8 +426,8 @@ namespace MobileGL {
                 bool modified = false;
                 for (const BlockPlan& plan : plans) {
                     const uint32_t structId = plan.structType->result_id();
-                    const uint32_t arrayTypeId = CreateCounterArrayTypeBefore(
-                        irContext, plan.structType, plan.uintTypeId, plan.totalElements);
+                    const uint32_t arrayTypeId =
+                        CreateCounterArrayTypeBefore(irContext, plan.structType, plan.uintTypeId, plan.totalElements);
                     if (arrayTypeId == 0) {
                         MGLOG_D("[spirv] atomic-counter block %%%u: no legal place for the flattened array "
                                 "type; leaving the block alone",
@@ -461,9 +449,8 @@ namespace MobileGL {
                         operands.push_back(chain->GetInOperand(0));
                         operands.push_back({SPV_OPERAND_TYPE_ID, {ConstantLike(irContext, memberIndexId, 0u)}});
                         if (!memberPlan.isArray) {
-                            operands.push_back(
-                                {SPV_OPERAND_TYPE_ID,
-                                 {ConstantLike(irContext, memberIndexId, memberPlan.elementOffset)}});
+                            operands.push_back({SPV_OPERAND_TYPE_ID,
+                                                {ConstantLike(irContext, memberIndexId, memberPlan.elementOffset)}});
                         } else {
                             const uint32_t elementId = chain->GetSingleWordInOperand(2);
                             uint32_t shiftedId = elementId;
@@ -475,16 +462,15 @@ namespace MobileGL {
                                                              elementConstant->AsIntConstant()->GetU32BitValue() +
                                                                  memberPlan.elementOffset);
                                 } else {
-                                    InstructionBuilder builder(
-                                        irContext, chain,
-                                        IRContext::kAnalysisDefUse | IRContext::kAnalysisInstrToBlockMapping);
+                                    InstructionBuilder builder(irContext, chain,
+                                                               IRContext::kAnalysisDefUse |
+                                                                   IRContext::kAnalysisInstrToBlockMapping);
                                     Instruction* elementDef = irContext->get_def_use_mgr()->GetDef(elementId);
-                                    shiftedId = builder
-                                                    .AddBinaryOp(elementDef->type_id(), spv::Op::OpIAdd,
-                                                                 elementId,
-                                                                 ConstantLike(irContext, elementId,
-                                                                              memberPlan.elementOffset))
-                                                    ->result_id();
+                                    shiftedId =
+                                        builder
+                                            .AddBinaryOp(elementDef->type_id(), spv::Op::OpIAdd, elementId,
+                                                         ConstantLike(irContext, elementId, memberPlan.elementOffset))
+                                            ->result_id();
                                 }
                             }
                             operands.push_back({SPV_OPERAND_TYPE_ID, {shiftedId}});

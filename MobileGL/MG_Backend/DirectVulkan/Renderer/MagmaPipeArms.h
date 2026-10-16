@@ -81,26 +81,25 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     // longer does it SILENTLY: the combination is named once, at startup, right here.
     inline void MagmaPipeValidateSubsystemConfiguration() {
         if (!MagmaPipeSubsystemOn(MG_Pipe::kMGPipeSubsystemRenderState)) {
-            MGLOG_W("MGPipe: MOBILEGL_PIPE_LEGACY_MEMOS=0 with kMGPipeSubsystemRenderState (bit 0 "
-                    "of MOBILEGL_PIPE_PUSH) clear - Magma's pipeline memo has no CSO handle to key "
-                    "on, so every draw whose pipeline-state version moved runs the pre-handle STATE "
-                    "HASH instead. That is not a Track-H subsystem and not fatal, but it is not the "
-                    "handle arm either: set bit 0 (MOBILEGL_PIPE_PUSH=0x%llx) if this run was meant "
-                    "to measure it.",
-                    static_cast<unsigned long long>(MG_Config::Features.PipePush |
-                                                    MG_Pipe::kMGPipeSubsystemRenderState));
+            MGLOG_W(
+                "MGPipe: MOBILEGL_PIPE_LEGACY_MEMOS=0 with kMGPipeSubsystemRenderState (bit 0 "
+                "of MOBILEGL_PIPE_PUSH) clear - Magma's pipeline memo has no CSO handle to key "
+                "on, so every draw whose pipeline-state version moved runs the pre-handle STATE "
+                "HASH instead. That is not a Track-H subsystem and not fatal, but it is not the "
+                "handle arm either: set bit 0 (MOBILEGL_PIPE_PUSH=0x%llx) if this run was meant "
+                "to measure it.",
+                static_cast<unsigned long long>(MG_Config::Features.PipePush | MG_Pipe::kMGPipeSubsystemRenderState));
         }
         if (MagmaPipeSubsystemOn(MG_Pipe::kMGPipeSubsystemMagmaVertexInput)) return;
-        const char* const why =
-            "this build has cmake -DMOBILEGL_PIPE_LEGACY_MEMOS=OFF, which compiles no such arm";
-        MGLOG_F("MGPipe: Fatal{PipeLegacyMemosDisabled} Magma's Track-H subsystem "
-                "(kMGPipeSubsystemMagmaVertexInput, bit 6 of MOBILEGL_PIPE_PUSH) is clear, so the "
-                "vertex-input cache and the VAO draw memo want the pre-handle arm - but %s. Set "
-                "bit 6 (MOBILEGL_PIPE_PUSH=0x%llx, or the default 0x%llx), or allow the legacy arm.",
-                why,
-                static_cast<unsigned long long>(MG_Config::Features.PipePush |
-                                                MG_Pipe::kMGPipeSubsystemMagmaVertexInput),
-                static_cast<unsigned long long>(MG_Pipe::kMGPipeSubsystemsMigratedAtP2));
+        const char* const why = "this build has cmake -DMOBILEGL_PIPE_LEGACY_MEMOS=OFF, which compiles no such arm";
+        MGLOG_F(
+            "MGPipe: Fatal{PipeLegacyMemosDisabled} Magma's Track-H subsystem "
+            "(kMGPipeSubsystemMagmaVertexInput, bit 6 of MOBILEGL_PIPE_PUSH) is clear, so the "
+            "vertex-input cache and the VAO draw memo want the pre-handle arm - but %s. Set "
+            "bit 6 (MOBILEGL_PIPE_PUSH=0x%llx, or the default 0x%llx), or allow the legacy arm.",
+            why,
+            static_cast<unsigned long long>(MG_Config::Features.PipePush | MG_Pipe::kMGPipeSubsystemMagmaVertexInput),
+            static_cast<unsigned long long>(MG_Pipe::kMGPipeSubsystemsMigratedAtP2));
         std::abort();
     }
 } // namespace MobileGL::MG_Backend::DirectVulkan

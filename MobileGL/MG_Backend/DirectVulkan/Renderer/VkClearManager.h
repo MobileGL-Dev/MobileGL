@@ -29,7 +29,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     // image's format rather than converting between the members - a float written where an
     // integer format is expected is reinterpreted bit for bit, not rounded. Remember which entry
     // point supplied the value so the member written when the clear is materialized matches.
-    enum class ClearColorEncoding : Uint8 { Float, Int, Uint };
+    enum class ClearColorEncoding : Uint8 {
+        Float,
+        Int,
+        Uint
+    };
 
     struct ClearAttachmentPayload {
         GLbitfield mask = 0;

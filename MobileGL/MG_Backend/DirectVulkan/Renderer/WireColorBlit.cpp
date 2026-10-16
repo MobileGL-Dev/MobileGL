@@ -19,14 +19,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         static BlitSurfaceTransform ToBlitSurfaceTransform(VkSurfaceTransformFlagBitsKHR preTransform) {
             switch (preTransform) {
-                case VK_SURFACE_TRANSFORM_ROTATE_90_BIT_KHR:
-                    return BlitSurfaceTransform::Rotate90;
-                case VK_SURFACE_TRANSFORM_ROTATE_180_BIT_KHR:
-                    return BlitSurfaceTransform::Rotate180;
-                case VK_SURFACE_TRANSFORM_ROTATE_270_BIT_KHR:
-                    return BlitSurfaceTransform::Rotate270;
-                default:
-                    return BlitSurfaceTransform::Identity;
+            case VK_SURFACE_TRANSFORM_ROTATE_90_BIT_KHR:
+                return BlitSurfaceTransform::Rotate90;
+            case VK_SURFACE_TRANSFORM_ROTATE_180_BIT_KHR:
+                return BlitSurfaceTransform::Rotate180;
+            case VK_SURFACE_TRANSFORM_ROTATE_270_BIT_KHR:
+                return BlitSurfaceTransform::Rotate270;
+            default:
+                return BlitSurfaceTransform::Identity;
             }
         }
     } // namespace
@@ -130,9 +130,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         m_wireColorBlitResources = nullptr;
     }
 
-    Bool VulkanRenderer::BlitWireColorToDefault(WireImage source, WireImage destination,
-        GLint sx0, GLint sy0, GLint sx1, GLint sy1,
-        GLint dx0, GLint dy0, GLint dx1, GLint dy1, GLenum filter) {
+    Bool VulkanRenderer::BlitWireColorToDefault(WireImage source, WireImage destination, GLint sx0, GLint sy0,
+                                                GLint sx1, GLint sy1, GLint dx0, GLint dy0, GLint dx1, GLint dy1,
+                                                GLenum filter) {
         if (!destination.isDefault) return false;
         return BlitWireColorImage(source, destination, sx0, sy0, sx1, sy1, dx0, dy0, dx1, dy1, filter, false);
     }
@@ -150,19 +150,19 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     // there is no defined result to be wrong about - only a shape that used to end the session
     // and now produces the source's bits. For a float source of the wrong VIEW TYPE the copy is
     // a plain slice extraction and the result is exactly right.
-    Bool VulkanRenderer::BlitWireColorToDefaultThroughScratch(WireImage source, WireImage destination,
-        GLint sx0, GLint sy0, GLint sx1, GLint sy1,
-        GLint dx0, GLint dy0, GLint dx1, GLint dy1, GLenum filter) {
+    Bool VulkanRenderer::BlitWireColorToDefaultThroughScratch(WireImage source, WireImage destination, GLint sx0,
+                                                              GLint sy0, GLint sx1, GLint sy1, GLint dx0, GLint dy0,
+                                                              GLint dx1, GLint dy1, GLenum filter) {
         if (!destination.isDefault || source.isDefault) return false;
-        if (source.samples != VK_SAMPLE_COUNT_1_BIT || destination.samples != VK_SAMPLE_COUNT_1_BIT)
-            return false;
+        if (source.samples != VK_SAMPLE_COUNT_1_BIT || destination.samples != VK_SAMPLE_COUNT_1_BIT) return false;
         if (!source.image || !destination.image || source.image == destination.image) return false;
         const Int64 width = std::abs(static_cast<Int64>(sx1) - sx0);
         const Int64 height = std::abs(static_cast<Int64>(sy1) - sy0);
         if (!width || !height || dx0 == dx1 || dy0 == dy1) return true;
         if (std::min(sx0, sx1) < 0 || std::min(sy0, sy1) < 0 ||
             static_cast<Uint64>(std::max(sx0, sx1)) > source.extent.width ||
-            static_cast<Uint64>(std::max(sy0, sy1)) > source.extent.height) return false;
+            static_cast<Uint64>(std::max(sy0, sy1)) > source.extent.height)
+            return false;
         // A compressed source cannot be a colour attachment, so it cannot be a framebuffer blit's
         // source either - but the block arithmetic below would silently produce nonsense for one,
         // and "cannot happen" is the reason the guards this package retires were written as
@@ -171,16 +171,28 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (vkuFormatIsCompressed(source.format)) return false;
         VkFormat scratchFormat = VK_FORMAT_UNDEFINED;
         switch (vkuFormatTexelBlockSize(source.format)) {
-        case 1: scratchFormat = VK_FORMAT_R8_UNORM; break;
-        case 2: scratchFormat = VK_FORMAT_R8G8_UNORM; break;
-        case 4: scratchFormat = VK_FORMAT_R8G8B8A8_UNORM; break;
-        case 8: scratchFormat = VK_FORMAT_R16G16B16A16_SFLOAT; break;
-        case 16: scratchFormat = VK_FORMAT_R32G32B32A32_SFLOAT; break;
-        default: return false;
+        case 1:
+            scratchFormat = VK_FORMAT_R8_UNORM;
+            break;
+        case 2:
+            scratchFormat = VK_FORMAT_R8G8_UNORM;
+            break;
+        case 4:
+            scratchFormat = VK_FORMAT_R8G8B8A8_UNORM;
+            break;
+        case 8:
+            scratchFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
+            break;
+        case 16:
+            scratchFormat = VK_FORMAT_R32G32B32A32_SFLOAT;
+            break;
+        default:
+            return false;
         }
         VkFormatProperties scratchProperties{};
         vkGetPhysicalDeviceFormatProperties(m_physicalDevice.handle, scratchFormat, &scratchProperties);
-        const VkFormatFeatureFlags scratchRequired = VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT |
+        const VkFormatFeatureFlags scratchRequired =
+            VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT |
             (filter == GL_LINEAR ? VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT : 0);
         if ((scratchProperties.optimalTilingFeatures & scratchRequired) != scratchRequired) return false;
 
@@ -197,8 +209,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         VmaAllocationCreateInfo allocation{};
         allocation.usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE;
         allocation.requiredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
-        if (vmaCreateImage(m_allocator, &info, &allocation, &scratch->image, &scratch->allocation,
-                           nullptr) != VK_SUCCESS)
+        if (vmaCreateImage(m_allocator, &info, &allocation, &scratch->image, &scratch->allocation, nullptr) !=
+            VK_SUCCESS)
             return false;
         scratch->format = scratchFormat;
         scratch->extent = {info.extent.width, info.extent.height};
@@ -218,14 +230,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // A 3D source carries its slice on z and always names layer 0; every other source
         // carries it on the layer axis, which is the same split ResolveWireImage records.
         copy.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, source.level, source.is3D ? 0u : source.layer, 1};
-        copy.srcOffset = {std::min(sx0, sx1), std::min(sy0, sy1),
-                          source.is3D ? static_cast<Int32>(source.layer) : 0};
+        copy.srcOffset = {std::min(sx0, sx1), std::min(sy0, sy1), source.is3D ? static_cast<Int32>(source.layer) : 0};
         copy.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
         copy.dstOffset = {0, 0, 0};
         copy.extent = {static_cast<Uint32>(width), static_cast<Uint32>(height), 1};
-        vkCmdCopyImage(m_frameContext.GetCurrent().commandBuffer, source.image,
-                       VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, staged.image,
-                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+        vkCmdCopyImage(m_frameContext.GetCurrent().commandBuffer, source.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                       staged.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
         staged.layout = scratch->layout;
         // The scratch holds the region at its own origin, so a reversed source rectangle
         // becomes a reversed rectangle OVER THE SCRATCH - the multisample resolve arm's shape.
@@ -233,8 +243,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         const GLint rx1 = sx1 > sx0 ? static_cast<GLint>(width) : 0;
         const GLint ry0 = sy1 > sy0 ? 0 : static_cast<GLint>(height);
         const GLint ry1 = sy1 > sy0 ? static_cast<GLint>(height) : 0;
-        const Bool blitted = BlitWireColorImage(staged, destination, rx0, ry0, rx1, ry1,
-                                                dx0, dy0, dx1, dy1, filter, false);
+        const Bool blitted =
+            BlitWireColorImage(staged, destination, rx0, ry0, rx1, ry1, dx0, dy0, dx1, dy1, filter, false);
         // Retired whether or not the blit took: the copy above is already recorded against this
         // image, so the submission that consumes it owns the storage either way.
         WireRetiredObjects retired{};
@@ -243,39 +253,44 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return blitted;
     }
 
-    Bool VulkanRenderer::BlitWireColorImage(WireImage source, WireImage destination,
-        GLint sx0, GLint sy0, GLint sx1, GLint sy1,
-        GLint dx0, GLint dy0, GLint dx1, GLint dy1, GLenum filter, Bool mipmap) {
+    Bool VulkanRenderer::BlitWireColorImage(WireImage source, WireImage destination, GLint sx0, GLint sy0, GLint sx1,
+                                            GLint sy1, GLint dx0, GLint dy0, GLint dx1, GLint dy1, GLenum filter,
+                                            Bool mipmap) {
         const Bool sameImage = source.image == destination.image;
         if (source.isDefault || (sameImage && source.level == destination.level && source.layer == destination.layer) ||
-            source.samples != VK_SAMPLE_COUNT_1_BIT || destination.samples != VK_SAMPLE_COUNT_1_BIT ||
-            source.is3D || destination.is3D || (source.viewType != VK_IMAGE_VIEW_TYPE_2D &&
-                            source.viewType != VK_IMAGE_VIEW_TYPE_2D_ARRAY) ||
+            source.samples != VK_SAMPLE_COUNT_1_BIT || destination.samples != VK_SAMPLE_COUNT_1_BIT || source.is3D ||
+            destination.is3D ||
+            (source.viewType != VK_IMAGE_VIEW_TYPE_2D && source.viewType != VK_IMAGE_VIEW_TYPE_2D_ARRAY) ||
             (destination.viewType != VK_IMAGE_VIEW_TYPE_2D && destination.viewType != VK_IMAGE_VIEW_TYPE_2D_ARRAY) ||
-            !vkuFormatIsSampledFloat(source.format)) return false;
+            !vkuFormatIsSampledFloat(source.format))
+            return false;
         if (sx0 == sx1 || sy0 == sy1 || dx0 == dx1 || dy0 == dy1) return true;
-        if (!source.extent.width || !source.extent.height ||
-            !destination.extent.width || !destination.extent.height) return false;
-        const auto transform = destination.isDefault ? m_swapchainObject.GetPreTransform() :
-                                                       VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
-        if (transform != VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR &&
-            transform != VK_SURFACE_TRANSFORM_ROTATE_90_BIT_KHR &&
+        if (!source.extent.width || !source.extent.height || !destination.extent.width || !destination.extent.height)
+            return false;
+        const auto transform =
+            destination.isDefault ? m_swapchainObject.GetPreTransform() : VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
+        if (transform != VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR && transform != VK_SURFACE_TRANSFORM_ROTATE_90_BIT_KHR &&
             transform != VK_SURFACE_TRANSFORM_ROTATE_180_BIT_KHR &&
-            transform != VK_SURFACE_TRANSFORM_ROTATE_270_BIT_KHR) return false;
+            transform != VK_SURFACE_TRANSFORM_ROTATE_270_BIT_KHR)
+            return false;
         VkFormatProperties sourceProperties{};
         vkGetPhysicalDeviceFormatProperties(m_physicalDevice.handle, source.format, &sourceProperties);
-        const VkFormatFeatureFlags required = VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT |
+        const VkFormatFeatureFlags required =
+            VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT |
             (filter == GL_LINEAR ? VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT : 0);
         if ((sourceProperties.optimalTilingFeatures & required) != required) return false;
         // Mip generation samples and writes the texture's own color space;
         // GL_FRAMEBUFFER_SRGB only controls framebuffer operations.
-        if (!mipmap) destination.format = ResolveSrgbAttachmentWriteFormat(destination.format,
-            MG_Pipe::gPipeInputs->IsCapabilityEnabled(CapabilityInput::FramebufferSrgb));
+        if (!mipmap)
+            destination.format = ResolveSrgbAttachmentWriteFormat(
+                destination.format, MG_Pipe::gPipeInputs->IsCapabilityEnabled(CapabilityInput::FramebufferSrgb));
         VkFormatProperties destinationProperties{};
         vkGetPhysicalDeviceFormatProperties(m_physicalDevice.handle, destination.format, &destinationProperties);
         if (!(destinationProperties.optimalTilingFeatures & VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT)) return false;
-        const VkImageLayout sourceLayout = sameImage ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        const VkImageLayout destinationLayout = sameImage ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        const VkImageLayout sourceLayout =
+            sameImage ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        const VkImageLayout destinationLayout =
+            sameImage ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 
         struct Constants {
             float srcRect[4];
@@ -294,8 +309,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             };
             shader(kWireColorBlitVertexSpirv, sizeof(kWireColorBlitVertexSpirv), cache.vertex);
             shader(kWireColorBlitFragmentSpirv, sizeof(kWireColorBlitFragmentSpirv), cache.fragment);
-            const VkDescriptorSetLayoutBinding binding{0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                                                       1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
+            const VkDescriptorSetLayoutBinding binding{0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
+                                                       VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
             VkDescriptorSetLayoutCreateInfo layout{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
             layout.bindingCount = 1;
             layout.pBindings = &binding;
@@ -319,7 +334,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         auto& cache = *m_wireColorBlitResources;
         WireColorBlitResources::Target* target = nullptr;
         for (auto& entry : cache.targets) {
-            if (entry.format == destination.format && entry.layout == destinationLayout) { target = &entry; break; }
+            if (entry.format == destination.format && entry.layout == destinationLayout) {
+                target = &entry;
+                break;
+            }
         }
         if (!target) {
             cache.targets.emplace_back();
@@ -354,8 +372,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             stages[0].module = cache.vertex;
             stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
             stages[1].module = cache.fragment;
-            const VkPipelineVertexInputStateCreateInfo vertex{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
-            VkPipelineInputAssemblyStateCreateInfo assembly{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
+            const VkPipelineVertexInputStateCreateInfo vertex{
+                VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+            VkPipelineInputAssemblyStateCreateInfo assembly{
+                VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
             assembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
             VkPipelineViewportStateCreateInfo viewport{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
             viewport.viewportCount = viewport.scissorCount = 1;
@@ -367,8 +387,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             VkPipelineMultisampleStateCreateInfo samples{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
             samples.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
             VkPipelineColorBlendAttachmentState colorMask{};
-            colorMask.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
-                                       VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+            colorMask.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT |
+                                       VK_COLOR_COMPONENT_A_BIT;
             VkPipelineColorBlendStateCreateInfo blend{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
             blend.attachmentCount = 1;
             blend.pAttachments = &colorMask;
@@ -396,8 +416,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // output. GENERAL keeps the whole-image layout tracker truthful; the
         // transition also orders the previous mip's attachment write.
         TransitionWireImage(source, sourceLayout);
-        if (sameImage) destination.layout = source.layout;
-        else TransitionWireImage(destination, destinationLayout);
+        if (sameImage)
+            destination.layout = source.layout;
+        else
+            TransitionWireImage(destination, destinationLayout);
         const auto makeView = [&](const WireImage& image) {
             VkImageViewCreateInfo view{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
             view.image = image.image;
@@ -440,7 +462,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         auto& cachedTargets = cache.cachedTargets;
         WireColorBlitResources::CachedTarget* hit = nullptr;
         for (auto& entry : cachedTargets)
-            if (sameTarget(entry)) { hit = &entry; break; }
+            if (sameTarget(entry)) {
+                hit = &entry;
+                break;
+            }
         if (hit == nullptr) {
             if (cachedTargets.size() >= WireColorBlitResources::kCachedTargets) {
                 WireRetiredObjects evicted{};
@@ -487,7 +512,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 VK_VERIFY(vkCreateDescriptorPool(m_device, &pool, nullptr, &cache.framePools[frameIndex]));
             }
             alloc.descriptorPool = cache.framePools[frameIndex];
-            if (vkAllocateDescriptorSets(m_device, &alloc, &descriptorSet) != VK_SUCCESS) descriptorSet = VK_NULL_HANDLE;
+            if (vkAllocateDescriptorSets(m_device, &alloc, &descriptorSet) != VK_SUCCESS)
+                descriptorSet = VK_NULL_HANDLE;
         }
         if (descriptorSet == VK_NULL_HANDLE) {
             const VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1};
@@ -504,10 +530,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // at a quantised coordinate is not (WireColorBlitFilter.h). The format check above still
         // asks for SAMPLED_IMAGE_FILTER_LINEAR whenever GL said GL_LINEAR, so which blits reach
         // this pass is unchanged.
-        const VkFilter samplerFilter = WireColorBlitFilterFor({sx0, sy0, sx1, sy1}, {dx0, dy0, dx1, dy1},
-                                                              filter, transform);
+        const VkFilter samplerFilter =
+            WireColorBlitFilterFor({sx0, sy0, sx1, sy1}, {dx0, dy0, dx1, dy1}, filter, transform);
         const VkDescriptorImageInfo sampled{samplerFilter == VK_FILTER_LINEAR ? cache.linear : cache.nearest,
-                                           sourceView, sourceLayout};
+                                            sourceView, sourceLayout};
         VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
         write.dstSet = descriptorSet;
         write.dstBinding = 0;
@@ -517,8 +543,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         vkUpdateDescriptorSets(m_device, 1, &write, 0, nullptr);
 
         const float sw = static_cast<float>(source.extent.width), sh = static_cast<float>(source.extent.height);
-        const Bool quarterTurn = transform == VK_SURFACE_TRANSFORM_ROTATE_90_BIT_KHR ||
-                                 transform == VK_SURFACE_TRANSFORM_ROTATE_270_BIT_KHR;
+        const Bool quarterTurn =
+            transform == VK_SURFACE_TRANSFORM_ROTATE_90_BIT_KHR || transform == VK_SURFACE_TRANSFORM_ROTATE_270_BIT_KHR;
         const float dw = static_cast<float>(quarterTurn ? destination.extent.height : destination.extent.width);
         const float dh = static_cast<float>(quarterTurn ? destination.extent.width : destination.extent.height);
         // The shared vertex shader flips window Y. Offscreen images keep the
@@ -527,11 +553,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             dy0 = static_cast<GLint>(destination.extent.height) - dy0;
             dy1 = static_cast<GLint>(destination.extent.height) - dy1;
         }
-        const Constants constants{{sx0 / sw, sy0 / sh, (static_cast<float>(sx1) - sx0) / sw,
-                                    (static_cast<float>(sy1) - sy0) / sh},
-                                  {dx0 / dw, dy0 / dh, (static_cast<float>(dx1) - dx0) / dw,
-                                    (static_cast<float>(dy1) - dy0) / dh},
-                                  static_cast<Int32>(ToBlitSurfaceTransform(transform))};
+        const Constants constants{
+            {sx0 / sw, sy0 / sh, (static_cast<float>(sx1) - sx0) / sw, (static_cast<float>(sy1) - sy0) / sh},
+            {dx0 / dw, dy0 / dh, (static_cast<float>(dx1) - dx0) / dw, (static_cast<float>(dy1) - dy0) / dh},
+            static_cast<Int32>(ToBlitSurfaceTransform(transform))};
         auto& frame = m_frameContext.GetCurrent();
         VkRenderPassBeginInfo begin{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
         begin.renderPass = target->renderPass;
@@ -540,15 +565,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         EndActiveRenderPassOn(frame.commandBuffer);
         vkCmdBeginRenderPass(frame.commandBuffer, &begin, VK_SUBPASS_CONTENTS_INLINE);
         vkCmdBindPipeline(frame.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, target->pipeline);
-        const VkViewport viewport{0.0f, 0.0f, static_cast<float>(destination.extent.width),
-                                  static_cast<float>(destination.extent.height), 0.0f, 1.0f};
+        const VkViewport viewport{
+            0.0f, 0.0f, static_cast<float>(destination.extent.width), static_cast<float>(destination.extent.height),
+            0.0f, 1.0f};
         const VkRect2D scissor{{0, 0}, destination.extent};
         vkCmdSetViewport(frame.commandBuffer, 0, 1, &viewport);
         vkCmdSetScissor(frame.commandBuffer, 0, 1, &scissor);
-        vkCmdBindDescriptorSets(frame.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                cache.pipelineLayout, 0, 1, &descriptorSet, 0, nullptr);
-        vkCmdPushConstants(frame.commandBuffer, cache.pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT,
-                           0, sizeof(constants), &constants);
+        vkCmdBindDescriptorSets(frame.commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, cache.pipelineLayout, 0, 1,
+                                &descriptorSet, 0, nullptr);
+        vkCmdPushConstants(frame.commandBuffer, cache.pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(constants),
+                           &constants);
         vkCmdDraw(frame.commandBuffer, 6, 1, 0, 0);
         vkCmdEndRenderPass(frame.commandBuffer);
         ResetDynamicStateShadow();

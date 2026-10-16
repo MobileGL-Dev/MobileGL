@@ -133,9 +133,13 @@ void main() { o_color = vec4(1.0); }
         // mark and the read cover both roles, as PrimitivesGeneratedNoXfbScenario's arming does; a
         // read of the literal base found no file and reported an unsplit renderer. In the pull
         // build the client role is the whole log.
-        std::string LibraryLogPath() { return PipeStatsWindow::LibraryLogPath(); }
+        std::string LibraryLogPath() {
+            return PipeStatsWindow::LibraryLogPath();
+        }
 
-        PipeStatsWindow::LogMark LibraryLogSize() { return PipeStatsWindow::MarkLaneLog(); }
+        PipeStatsWindow::LogMark LibraryLogSize() {
+            return PipeStatsWindow::MarkLaneLog();
+        }
 
         std::string LibraryLogSince(const PipeStatsWindow::LogMark& mark) {
             return PipeStatsWindow::ReadLaneLogSince(mark);
@@ -176,18 +180,17 @@ void main() { o_color = vec4(1.0); }
         }
 
         // Every pixel of columns [x0, x1] (all rows) is `expected`, each channel within `tolerance`.
-        ::testing::AssertionResult ColumnsAre(const Image& image, int x0, int x1, const Rgba8& expected,
-                                              int tolerance, const char* what) {
+        ::testing::AssertionResult ColumnsAre(const Image& image, int x0, int x1, const Rgba8& expected, int tolerance,
+                                              const char* what) {
             int wrong = 0;
             int firstX = -1, firstY = -1;
             Rgba8 firstSeen{};
             for (int y = 0; y < kSide; ++y) {
                 for (int x = x0; x <= x1; ++x) {
                     const Rgba8 seen = image.At(x, y);
-                    const bool close = std::abs(seen.r - expected.r) <= tolerance &&
-                                       std::abs(seen.g - expected.g) <= tolerance &&
-                                       std::abs(seen.b - expected.b) <= tolerance &&
-                                       std::abs(seen.a - expected.a) <= tolerance;
+                    const bool close =
+                        std::abs(seen.r - expected.r) <= tolerance && std::abs(seen.g - expected.g) <= tolerance &&
+                        std::abs(seen.b - expected.b) <= tolerance && std::abs(seen.a - expected.a) <= tolerance;
                     if (!close) {
                         if (wrong == 0) {
                             firstX = x;
@@ -243,9 +246,12 @@ void main() { o_color = vec4(1.0); }
                     if (m_rectProgram != 0) glDeleteProgram(m_rectProgram);
                     if (m_vbo != 0) glDeleteBuffers(1, &m_vbo);
                     if (m_vao != 0) glDeleteVertexArrays(1, &m_vao);
-                    for (GLuint rbo : m_renderbuffers) glDeleteRenderbuffers(1, &rbo);
-                    for (GLuint fbo : m_framebuffers) glDeleteFramebuffers(1, &fbo);
-                    for (ColorFbo& target : m_colorTargets) DestroyColorFbo(target);
+                    for (GLuint rbo : m_renderbuffers)
+                        glDeleteRenderbuffers(1, &rbo);
+                    for (GLuint fbo : m_framebuffers)
+                        glDeleteFramebuffers(1, &fbo);
+                    for (ColorFbo& target : m_colorTargets)
+                        DestroyColorFbo(target);
                 }
                 ScenarioTest::TearDown();
             }
@@ -263,7 +269,8 @@ void main() { o_color = vec4(1.0); }
                 const std::string appended = LibraryLogSince(m_logBefore);
                 EXPECT_NE(appended.find("draws into one command buffer; submitting it"), std::string::npos)
                     << "MOBILEGL_MAGMA_MAX_DRAWS_PER_COMMAND_BUFFER=" << budget << " and this case recorded more "
-                    << "than " << kFillers << " draws in one frame, but DirectVulkan never reported splitting the "
+                    << "than " << kFillers
+                    << " draws in one frame, but DirectVulkan never reported splitting the "
                        "recording. A renderer that does not split grows a single command buffer without bound "
                        "(rd12 on Adreno: ~40k driver mappings, then SIGABRT). See "
                        "VulkanRenderer::SplitOversizedRecording. Log appended by this case:\n"

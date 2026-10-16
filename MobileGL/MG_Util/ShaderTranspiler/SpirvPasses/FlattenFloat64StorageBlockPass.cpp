@@ -52,9 +52,9 @@ namespace MobileGL {
                 // member would turn a two-instruction copy into a 32k-instruction one.
                 constexpr uint32_t kMaxLeavesPerAccess = 1024u;
                 // The analyses every builder in this pass keeps current as it inserts.
-                constexpr IRContext::Analysis kPreservedAnalyses = static_cast<IRContext::Analysis>(
-                    static_cast<uint32_t>(IRContext::kAnalysisDefUse) |
-                    static_cast<uint32_t>(IRContext::kAnalysisInstrToBlockMapping));
+                constexpr IRContext::Analysis kPreservedAnalyses =
+                    static_cast<IRContext::Analysis>(static_cast<uint32_t>(IRContext::kAnalysisDefUse) |
+                                                     static_cast<uint32_t>(IRContext::kAnalysisInstrToBlockMapping));
 
                 // How a type sits in memory, as the ENCLOSING struct member described it.
                 // MatrixStride and RowMajor are member decorations rather than type decorations,
@@ -99,8 +99,8 @@ namespace MobileGL {
                 };
 
                 bool IsDoubleType(const Instruction* type) {
-                    return type != nullptr && type->opcode() == spv::Op::OpTypeFloat &&
-                           type->NumInOperands() >= 1 && type->GetSingleWordInOperand(0) == 64u;
+                    return type != nullptr && type->opcode() == spv::Op::OpTypeFloat && type->NumInOperands() >= 1 &&
+                           type->GetSingleWordInOperand(0) == 64u;
                 }
 
                 // Byte size of a scalar this pass can carry, or 0 for one it cannot.
@@ -115,8 +115,7 @@ namespace MobileGL {
                     return 0;
                 }
 
-                bool TryGetDecorationLiteral(IRContext* context, uint32_t id, spv::Decoration kind,
-                                             uint32_t* literal) {
+                bool TryGetDecorationLiteral(IRContext* context, uint32_t id, spv::Decoration kind, uint32_t* literal) {
                     for (Instruction* decoration : context->get_decoration_mgr()->GetDecorationsFor(id, false)) {
                         if (decoration->opcode() != spv::Op::OpDecorate || decoration->NumInOperands() < 3 ||
                             static_cast<spv::Decoration>(decoration->GetSingleWordInOperand(1)) != kind) {
@@ -130,10 +129,8 @@ namespace MobileGL {
 
                 bool TryGetMemberDecorationLiteral(IRContext* context, uint32_t structId, uint32_t member,
                                                    spv::Decoration kind, uint32_t* literal) {
-                    for (Instruction* decoration :
-                         context->get_decoration_mgr()->GetDecorationsFor(structId, false)) {
-                        if (decoration->opcode() != spv::Op::OpMemberDecorate ||
-                            decoration->NumInOperands() < 4 ||
+                    for (Instruction* decoration : context->get_decoration_mgr()->GetDecorationsFor(structId, false)) {
+                        if (decoration->opcode() != spv::Op::OpMemberDecorate || decoration->NumInOperands() < 4 ||
                             decoration->GetSingleWordInOperand(1) != member ||
                             static_cast<spv::Decoration>(decoration->GetSingleWordInOperand(2)) != kind) {
                             continue;
@@ -144,12 +141,9 @@ namespace MobileGL {
                     return false;
                 }
 
-                bool HasMemberDecoration(IRContext* context, uint32_t structId, uint32_t member,
-                                         spv::Decoration kind) {
-                    for (Instruction* decoration :
-                         context->get_decoration_mgr()->GetDecorationsFor(structId, false)) {
-                        if (decoration->opcode() != spv::Op::OpMemberDecorate ||
-                            decoration->NumInOperands() < 3 ||
+                bool HasMemberDecoration(IRContext* context, uint32_t structId, uint32_t member, spv::Decoration kind) {
+                    for (Instruction* decoration : context->get_decoration_mgr()->GetDecorationsFor(structId, false)) {
+                        if (decoration->opcode() != spv::Op::OpMemberDecorate || decoration->NumInOperands() < 3 ||
                             decoration->GetSingleWordInOperand(1) != member) {
                             continue;
                         }
@@ -182,8 +176,8 @@ namespace MobileGL {
                                                       spv::Decoration::MatrixStride, &stride)) {
                         cursor.matrixStride = stride;
                     }
-                    cursor.rowMajor = HasMemberDecoration(context, structType->result_id(), member,
-                                                          spv::Decoration::RowMajor);
+                    cursor.rowMajor =
+                        HasMemberDecoration(context, structType->result_id(), member, spv::Decoration::RowMajor);
                     return cursor;
                 }
 
@@ -199,8 +193,8 @@ namespace MobileGL {
                     case spv::Op::OpTypeFloat:
                         return ScalarByteSize(type);
                     case spv::Op::OpTypeVector: {
-                        const uint32_t component = ScalarByteSize(
-                            context->get_def_use_mgr()->GetDef(type->GetSingleWordInOperand(0)));
+                        const uint32_t component =
+                            ScalarByteSize(context->get_def_use_mgr()->GetDef(type->GetSingleWordInOperand(0)));
                         if (component == 0) return 0;
                         return component * type->GetSingleWordInOperand(1);
                     }
@@ -210,8 +204,7 @@ namespace MobileGL {
                     }
                     case spv::Op::OpTypeArray: {
                         uint32_t stride = 0;
-                        if (!TryGetDecorationLiteral(context, cursor.typeId, spv::Decoration::ArrayStride,
-                                                     &stride) ||
+                        if (!TryGetDecorationLiteral(context, cursor.typeId, spv::Decoration::ArrayStride, &stride) ||
                             stride == 0) {
                             return 0;
                         }
@@ -226,8 +219,8 @@ namespace MobileGL {
                         uint64_t end = 0;
                         for (uint32_t member = 0; member < type->NumInOperands(); ++member) {
                             uint32_t offset = 0;
-                            if (!TryGetMemberDecorationLiteral(context, cursor.typeId, member,
-                                                               spv::Decoration::Offset, &offset)) {
+                            if (!TryGetMemberDecorationLiteral(context, cursor.typeId, member, spv::Decoration::Offset,
+                                                               &offset)) {
                                 return 0;
                             }
                             const uint32_t size = LaidOutByteSize(context, MemberCursor(context, type, member));
@@ -266,22 +259,19 @@ namespace MobileGL {
                     case spv::Op::OpTypeVector: {
                         TypeCursor component;
                         component.typeId = type->GetSingleWordInOperand(0);
-                        const uint32_t repeats =
-                            leafCount == nullptr ? 1u : type->GetSingleWordInOperand(1);
+                        const uint32_t repeats = leafCount == nullptr ? 1u : type->GetSingleWordInOperand(1);
                         for (uint32_t i = 0; i < repeats; ++i) {
                             if (!CanDecompose(context, component, leafCount)) return false;
                         }
                         return true;
                     }
                     case spv::Op::OpTypeMatrix: {
-                        if (cursor.matrixStride == 0 || cursor.rowMajor ||
-                            cursor.matrixStride % kWordBytes != 0) {
+                        if (cursor.matrixStride == 0 || cursor.rowMajor || cursor.matrixStride % kWordBytes != 0) {
                             return false;
                         }
                         TypeCursor column;
                         column.typeId = type->GetSingleWordInOperand(0);
-                        const uint32_t repeats =
-                            leafCount == nullptr ? 1u : type->GetSingleWordInOperand(1);
+                        const uint32_t repeats = leafCount == nullptr ? 1u : type->GetSingleWordInOperand(1);
                         for (uint32_t i = 0; i < repeats; ++i) {
                             if (!CanDecompose(context, column, leafCount)) return false;
                         }
@@ -289,8 +279,7 @@ namespace MobileGL {
                     }
                     case spv::Op::OpTypeArray: {
                         uint32_t stride = 0;
-                        if (!TryGetDecorationLiteral(context, cursor.typeId, spv::Decoration::ArrayStride,
-                                                     &stride) ||
+                        if (!TryGetDecorationLiteral(context, cursor.typeId, spv::Decoration::ArrayStride, &stride) ||
                             stride == 0 || stride % kWordBytes != 0) {
                             return false;
                         }
@@ -311,8 +300,8 @@ namespace MobileGL {
                     case spv::Op::OpTypeStruct: {
                         for (uint32_t member = 0; member < type->NumInOperands(); ++member) {
                             uint32_t offset = 0;
-                            if (!TryGetMemberDecorationLiteral(context, cursor.typeId, member,
-                                                               spv::Decoration::Offset, &offset) ||
+                            if (!TryGetMemberDecorationLiteral(context, cursor.typeId, member, spv::Decoration::Offset,
+                                                               &offset) ||
                                 offset % kWordBytes != 0) {
                                 return false;
                             }
@@ -334,8 +323,8 @@ namespace MobileGL {
                 // stride alongside. A runtime array anywhere else, one without a stride the
                 // words can step by, or one whose element the rewrite could not take apart is a
                 // shape this pass does not describe, and so is a bounded block it cannot size.
-                bool MeasureBlock(IRContext* context, const Instruction* structType, uint32_t* bytes,
-                                  bool* openEnded, uint32_t* tailStrideBytes) {
+                bool MeasureBlock(IRContext* context, const Instruction* structType, uint32_t* bytes, bool* openEnded,
+                                  uint32_t* tailStrideBytes) {
                     *bytes = 0;
                     *openEnded = false;
                     *tailStrideBytes = 0;
@@ -384,8 +373,7 @@ namespace MobileGL {
                     return true;
                 }
 
-                bool TypeContainsFloat64(IRContext* context, uint32_t typeId,
-                                         std::unordered_set<uint32_t>& visiting) {
+                bool TypeContainsFloat64(IRContext* context, uint32_t typeId, std::unordered_set<uint32_t>& visiting) {
                     const Instruction* type = context->get_def_use_mgr()->GetDef(typeId);
                     if (type == nullptr || !visiting.insert(typeId).second) return false;
                     switch (type->opcode()) {
@@ -420,8 +408,7 @@ namespace MobileGL {
                 // Walks one access chain against the block's type tree, recording the byte offset
                 // it names as a constant part plus a list of (index, stride) terms. False for any
                 // shape the rewrite cannot address exactly.
-                bool PlanChain(IRContext* context, Instruction* chain, const TypeCursor& blockCursor,
-                               ChainPlan* plan) {
+                bool PlanChain(IRContext* context, Instruction* chain, const TypeCursor& blockCursor, ChainPlan* plan) {
                     TypeCursor cursor = blockCursor;
                     uint64_t constantBytes = 0;
                     for (uint32_t operand = 1; operand < chain->NumInOperands(); ++operand) {
@@ -432,13 +419,12 @@ namespace MobileGL {
                         uint32_t stride = 0;
                         if (type->opcode() == spv::Op::OpTypeStruct) {
                             uint32_t member = 0;
-                            if (!TryGetConstantIndex(context, indexId, &member) ||
-                                member >= type->NumInOperands()) {
+                            if (!TryGetConstantIndex(context, indexId, &member) || member >= type->NumInOperands()) {
                                 return false;
                             }
                             uint32_t offset = 0;
-                            if (!TryGetMemberDecorationLiteral(context, cursor.typeId, member,
-                                                               spv::Decoration::Offset, &offset) ||
+                            if (!TryGetMemberDecorationLiteral(context, cursor.typeId, member, spv::Decoration::Offset,
+                                                               &offset) ||
                                 offset % kWordBytes != 0) {
                                 return false;
                             }
@@ -466,8 +452,8 @@ namespace MobileGL {
                             cursor.matrixStride = 0;
                             break;
                         case spv::Op::OpTypeVector:
-                            stride = ScalarByteSize(
-                                context->get_def_use_mgr()->GetDef(type->GetSingleWordInOperand(0)));
+                            stride =
+                                ScalarByteSize(context->get_def_use_mgr()->GetDef(type->GetSingleWordInOperand(0)));
                             cursor.typeId = type->GetSingleWordInOperand(0);
                             cursor.matrixStride = 0;
                             break;
@@ -508,8 +494,7 @@ namespace MobileGL {
                           m_floatTypeId(floatTypeId) {}
 
                     uint32_t UintConstant(uint32_t value) {
-                        const spvtools::opt::analysis::Type* type =
-                            m_context->get_type_mgr()->GetType(m_uintTypeId);
+                        const spvtools::opt::analysis::Type* type = m_context->get_type_mgr()->GetType(m_uintTypeId);
                         const spvtools::opt::analysis::Constant* constant =
                             m_context->get_constant_mgr()->GetConstant(type, {value});
                         return m_context->get_constant_mgr()->GetDefiningInstruction(constant)->result_id();
@@ -523,22 +508,19 @@ namespace MobileGL {
                         for (const auto& [indexId, wordsPerStep] : plan.dynamicTerms) {
                             uint32_t term = AsUint(builder, indexId);
                             if (wordsPerStep != 1u) {
-                                term = Binary(builder, spv::Op::OpIMul, m_uintTypeId, term,
-                                              UintConstant(wordsPerStep));
+                                term = Binary(builder, spv::Op::OpIMul, m_uintTypeId, term, UintConstant(wordsPerStep));
                             }
-                            total = total == 0 ? term
-                                               : Binary(builder, spv::Op::OpIAdd, m_uintTypeId, total, term);
+                            total = total == 0 ? term : Binary(builder, spv::Op::OpIAdd, m_uintTypeId, total, term);
                         }
                         if (total == 0) return UintConstant(plan.constantWords);
                         if (plan.constantWords == 0) return total;
-                        return Binary(builder, spv::Op::OpIAdd, m_uintTypeId, total,
-                                      UintConstant(plan.constantWords));
+                        return Binary(builder, spv::Op::OpIAdd, m_uintTypeId, total, UintConstant(plan.constantWords));
                     }
 
                     // Rebuilds the value an OpLoad of `cursor` would have produced, out of the
                     // words that live at `baseWordId + relWords`.
-                    uint32_t BuildValue(InstructionBuilder& builder, const Access& access,
-                                        const TypeCursor& cursor, uint32_t relWords) {
+                    uint32_t BuildValue(InstructionBuilder& builder, const Access& access, const TypeCursor& cursor,
+                                        uint32_t relWords) {
                         const Instruction* type = m_context->get_def_use_mgr()->GetDef(cursor.typeId);
                         switch (type->opcode()) {
                         case spv::Op::OpTypeInt:
@@ -550,9 +532,7 @@ namespace MobileGL {
                                                               .AddUnaryOp(m_floatTypeId, spv::Op::OpBitcast,
                                                                           NarrowDoubleBits(builder, lo, hi))
                                                               ->result_id();
-                                return builder
-                                    .AddUnaryOp(cursor.typeId, spv::Op::OpFConvert, narrowed)
-                                    ->result_id();
+                                return builder.AddUnaryOp(cursor.typeId, spv::Op::OpFConvert, narrowed)->result_id();
                             }
                             const uint32_t word = LoadWord(builder, access, relWords);
                             if (cursor.typeId == m_uintTypeId) return word;
@@ -582,8 +562,7 @@ namespace MobileGL {
                             TypeCursor element = cursor;
                             element.typeId = type->GetSingleWordInOperand(0);
                             uint32_t stride = 0;
-                            TryGetDecorationLiteral(m_context, cursor.typeId, spv::Decoration::ArrayStride,
-                                                    &stride);
+                            TryGetDecorationLiteral(m_context, cursor.typeId, spv::Decoration::ArrayStride, &stride);
                             const uint32_t count = m_context->get_constant_mgr()
                                                        ->FindDeclaredConstant(type->GetSingleWordInOperand(1))
                                                        ->AsIntConstant()
@@ -599,8 +578,8 @@ namespace MobileGL {
                             std::vector<uint32_t> parts;
                             for (uint32_t member = 0; member < type->NumInOperands(); ++member) {
                                 uint32_t offset = 0;
-                                TryGetMemberDecorationLiteral(m_context, cursor.typeId, member,
-                                                              spv::Decoration::Offset, &offset);
+                                TryGetMemberDecorationLiteral(m_context, cursor.typeId, member, spv::Decoration::Offset,
+                                                              &offset);
                                 parts.push_back(BuildValue(builder, access, MemberCursor(m_context, type, member),
                                                            relWords + offset / kWordBytes));
                             }
@@ -614,9 +593,8 @@ namespace MobileGL {
                     // The mirror image: writes `valueId` into the words at
                     // `baseWordId + relWords`. `path` is the composite-extract index list that
                     // reaches the part being written, empty at the root.
-                    void StoreValue(InstructionBuilder& builder, const Access& access,
-                                    const TypeCursor& cursor, uint32_t relWords, uint32_t rootValueId,
-                                    std::vector<uint32_t>& path) {
+                    void StoreValue(InstructionBuilder& builder, const Access& access, const TypeCursor& cursor,
+                                    uint32_t relWords, uint32_t rootValueId, std::vector<uint32_t>& path) {
                         const Instruction* type = m_context->get_def_use_mgr()->GetDef(cursor.typeId);
                         switch (type->opcode()) {
                         case spv::Op::OpTypeInt:
@@ -667,16 +645,15 @@ namespace MobileGL {
                             TypeCursor element = cursor;
                             element.typeId = type->GetSingleWordInOperand(0);
                             uint32_t stride = 0;
-                            TryGetDecorationLiteral(m_context, cursor.typeId, spv::Decoration::ArrayStride,
-                                                    &stride);
+                            TryGetDecorationLiteral(m_context, cursor.typeId, spv::Decoration::ArrayStride, &stride);
                             const uint32_t count = m_context->get_constant_mgr()
                                                        ->FindDeclaredConstant(type->GetSingleWordInOperand(1))
                                                        ->AsIntConstant()
                                                        ->GetU32BitValue();
                             for (uint32_t i = 0; i < count; ++i) {
                                 path.push_back(i);
-                                StoreValue(builder, access, element, relWords + i * (stride / kWordBytes),
-                                           rootValueId, path);
+                                StoreValue(builder, access, element, relWords + i * (stride / kWordBytes), rootValueId,
+                                           path);
                                 path.pop_back();
                             }
                             return;
@@ -684,8 +661,8 @@ namespace MobileGL {
                         case spv::Op::OpTypeStruct: {
                             for (uint32_t member = 0; member < type->NumInOperands(); ++member) {
                                 uint32_t offset = 0;
-                                TryGetMemberDecorationLiteral(m_context, cursor.typeId, member,
-                                                              spv::Decoration::Offset, &offset);
+                                TryGetMemberDecorationLiteral(m_context, cursor.typeId, member, spv::Decoration::Offset,
+                                                              &offset);
                                 path.push_back(member);
                                 StoreValue(builder, access, MemberCursor(m_context, type, member),
                                            relWords + offset / kWordBytes, rootValueId, path);
@@ -724,8 +701,7 @@ namespace MobileGL {
                             count = Select(builder, tooShort, UintConstant(0), past);
                         }
                         if (strideWords != 1) {
-                            count = Binary(builder, spv::Op::OpUDiv, m_uintTypeId, count,
-                                           UintConstant(strideWords));
+                            count = Binary(builder, spv::Op::OpUDiv, m_uintTypeId, count, UintConstant(strideWords));
                         }
                         m_context->ReplaceAllUsesWith(arrayLength->result_id(), count);
                         m_context->KillInst(arrayLength);
@@ -733,8 +709,7 @@ namespace MobileGL {
 
                 private:
                     uint32_t ComponentWords(uint32_t componentTypeId) {
-                        return ScalarByteSize(m_context->get_def_use_mgr()->GetDef(componentTypeId)) /
-                               kWordBytes;
+                        return ScalarByteSize(m_context->get_def_use_mgr()->GetDef(componentTypeId)) / kWordBytes;
                     }
 
                     uint32_t Binary(InstructionBuilder& builder, spv::Op opcode, uint32_t typeId, uint32_t a,
@@ -744,8 +719,7 @@ namespace MobileGL {
 
                     uint32_t Select(InstructionBuilder& builder, uint32_t condition, uint32_t whenTrue,
                                     uint32_t whenFalse) {
-                        return builder
-                            .AddTernaryOp(m_uintTypeId, spv::Op::OpSelect, condition, whenTrue, whenFalse)
+                        return builder.AddTernaryOp(m_uintTypeId, spv::Op::OpSelect, condition, whenTrue, whenFalse)
                             ->result_id();
                     }
 
@@ -763,16 +737,16 @@ namespace MobileGL {
 
                     uint32_t LoadWord(InstructionBuilder& builder, const Access& access, uint32_t words) {
                         const uint32_t indexId = Offset(builder, access.baseWordId, words);
-                        Instruction* pointer = builder.AddAccessChain(
-                            access.wordPointerTypeId, access.variableId, {access.memberZeroId, indexId});
+                        Instruction* pointer = builder.AddAccessChain(access.wordPointerTypeId, access.variableId,
+                                                                      {access.memberZeroId, indexId});
                         return builder.AddLoad(m_uintTypeId, pointer->result_id())->result_id();
                     }
 
                     void StoreWord(InstructionBuilder& builder, const Access& access, uint32_t words,
                                    uint32_t valueId) {
                         const uint32_t indexId = Offset(builder, access.baseWordId, words);
-                        Instruction* pointer = builder.AddAccessChain(
-                            access.wordPointerTypeId, access.variableId, {access.memberZeroId, indexId});
+                        Instruction* pointer = builder.AddAccessChain(access.wordPointerTypeId, access.variableId,
+                                                                      {access.memberZeroId, indexId});
                         builder.AddStore(pointer->result_id(), valueId);
                     }
 
@@ -787,20 +761,20 @@ namespace MobileGL {
                     // mantissa bits binary32 cannot hold. Straight-line by construction: every
                     // case is an OpSelect, so this needs no control flow and never splits a block.
                     uint32_t NarrowDoubleBits(InstructionBuilder& builder, uint32_t lo, uint32_t hi) {
-                        const uint32_t sign = Binary(builder, spv::Op::OpBitwiseAnd, m_uintTypeId, hi,
-                                                     UintConstant(0x80000000u));
-                        const uint32_t exponent = Binary(
-                            builder, spv::Op::OpBitwiseAnd, m_uintTypeId,
-                            Binary(builder, spv::Op::OpShiftRightLogical, m_uintTypeId, hi, UintConstant(20)),
-                            UintConstant(0x7FFu));
-                        const uint32_t significandHigh = Binary(builder, spv::Op::OpBitwiseAnd, m_uintTypeId,
-                                                                hi, UintConstant(0xFFFFFu));
+                        const uint32_t sign =
+                            Binary(builder, spv::Op::OpBitwiseAnd, m_uintTypeId, hi, UintConstant(0x80000000u));
+                        const uint32_t exponent =
+                            Binary(builder, spv::Op::OpBitwiseAnd, m_uintTypeId,
+                                   Binary(builder, spv::Op::OpShiftRightLogical, m_uintTypeId, hi, UintConstant(20)),
+                                   UintConstant(0x7FFu));
+                        const uint32_t significandHigh =
+                            Binary(builder, spv::Op::OpBitwiseAnd, m_uintTypeId, hi, UintConstant(0xFFFFFu));
                         // The 23 bits binary32 keeps: 20 from the high word, 3 from the low one.
-                        const uint32_t significand = Binary(
-                            builder, spv::Op::OpBitwiseOr, m_uintTypeId,
-                            Binary(builder, spv::Op::OpShiftLeftLogical, m_uintTypeId, significandHigh,
-                                   UintConstant(3)),
-                            Binary(builder, spv::Op::OpShiftRightLogical, m_uintTypeId, lo, UintConstant(29)));
+                        const uint32_t significand =
+                            Binary(builder, spv::Op::OpBitwiseOr, m_uintTypeId,
+                                   Binary(builder, spv::Op::OpShiftLeftLogical, m_uintTypeId, significandHigh,
+                                          UintConstant(3)),
+                                   Binary(builder, spv::Op::OpShiftRightLogical, m_uintTypeId, lo, UintConstant(29)));
 
                         // 1023 - 127 = 896, so the binary32 exponent field is `exponent - 896` and
                         // every bound on it is an unsigned comparison against that bias.
@@ -808,25 +782,21 @@ namespace MobileGL {
                             builder, spv::Op::OpBitwiseOr, m_uintTypeId, sign,
                             Binary(builder, spv::Op::OpBitwiseOr, m_uintTypeId,
                                    Binary(builder, spv::Op::OpShiftLeftLogical, m_uintTypeId,
-                                          Binary(builder, spv::Op::OpISub, m_uintTypeId, exponent,
-                                                 UintConstant(896)),
+                                          Binary(builder, spv::Op::OpISub, m_uintTypeId, exponent, UintConstant(896)),
                                           UintConstant(23)),
                                    significand));
-                        const uint32_t infinityBits = Binary(builder, spv::Op::OpBitwiseOr, m_uintTypeId, sign,
-                                                             UintConstant(0x7F800000u));
+                        const uint32_t infinityBits =
+                            Binary(builder, spv::Op::OpBitwiseOr, m_uintTypeId, sign, UintConstant(0x7F800000u));
                         // A quiet NaN that stays one even when every significant bit sat in the 29
                         // low bits binary32 discards.
-                        const uint32_t nanBits =
-                            Binary(builder, spv::Op::OpBitwiseOr, m_uintTypeId, infinityBits,
-                                   Binary(builder, spv::Op::OpBitwiseOr, m_uintTypeId,
-                                          UintConstant(0x400000u), significand));
+                        const uint32_t nanBits = Binary(
+                            builder, spv::Op::OpBitwiseOr, m_uintTypeId, infinityBits,
+                            Binary(builder, spv::Op::OpBitwiseOr, m_uintTypeId, UintConstant(0x400000u), significand));
 
-                        const uint32_t significandIsZero =
-                            Binary(builder, spv::Op::OpIEqual, m_boolTypeId,
-                                   Binary(builder, spv::Op::OpBitwiseOr, m_uintTypeId, significandHigh, lo),
-                                   UintConstant(0));
-                        const uint32_t maxExponentBits =
-                            Select(builder, significandIsZero, infinityBits, nanBits);
+                        const uint32_t significandIsZero = Binary(
+                            builder, spv::Op::OpIEqual, m_boolTypeId,
+                            Binary(builder, spv::Op::OpBitwiseOr, m_uintTypeId, significandHigh, lo), UintConstant(0));
+                        const uint32_t maxExponentBits = Select(builder, significandIsZero, infinityBits, nanBits);
 
                         const uint32_t isZeroExponent =
                             Binary(builder, spv::Op::OpIEqual, m_boolTypeId, exponent, UintConstant(0));
@@ -834,10 +804,10 @@ namespace MobileGL {
                             Binary(builder, spv::Op::OpIEqual, m_boolTypeId, exponent, UintConstant(0x7FFu));
                         // <= 896 is every magnitude binary32 could hold only as a subnormal;
                         // >= 1151 is every one it cannot hold at all.
-                        const uint32_t underflows = Binary(builder, spv::Op::OpULessThanEqual, m_boolTypeId,
-                                                           exponent, UintConstant(896));
-                        const uint32_t overflows = Binary(builder, spv::Op::OpUGreaterThanEqual, m_boolTypeId,
-                                                          exponent, UintConstant(1151));
+                        const uint32_t underflows =
+                            Binary(builder, spv::Op::OpULessThanEqual, m_boolTypeId, exponent, UintConstant(896));
+                        const uint32_t overflows =
+                            Binary(builder, spv::Op::OpUGreaterThanEqual, m_boolTypeId, exponent, UintConstant(1151));
 
                         uint32_t bits = Select(builder, overflows, infinityBits, normalBits);
                         bits = Select(builder, underflows, sign, bits);
@@ -846,27 +816,25 @@ namespace MobileGL {
                     }
 
                     // The inverse: a binary32 bit pattern -> the binary64 word pair for it.
-                    void WidenFloatBits(InstructionBuilder& builder, uint32_t bits, uint32_t* lo,
-                                        uint32_t* hi) {
-                        const uint32_t sign = Binary(builder, spv::Op::OpBitwiseAnd, m_uintTypeId, bits,
-                                                     UintConstant(0x80000000u));
-                        const uint32_t exponent = Binary(
-                            builder, spv::Op::OpBitwiseAnd, m_uintTypeId,
-                            Binary(builder, spv::Op::OpShiftRightLogical, m_uintTypeId, bits, UintConstant(23)),
-                            UintConstant(0xFFu));
-                        const uint32_t significand = Binary(builder, spv::Op::OpBitwiseAnd, m_uintTypeId, bits,
-                                                            UintConstant(0x7FFFFFu));
-                        const uint32_t significandHigh = Binary(builder, spv::Op::OpShiftRightLogical,
-                                                                m_uintTypeId, significand, UintConstant(3));
-                        const uint32_t significandLow = Binary(builder, spv::Op::OpShiftLeftLogical,
-                                                               m_uintTypeId, significand, UintConstant(29));
+                    void WidenFloatBits(InstructionBuilder& builder, uint32_t bits, uint32_t* lo, uint32_t* hi) {
+                        const uint32_t sign =
+                            Binary(builder, spv::Op::OpBitwiseAnd, m_uintTypeId, bits, UintConstant(0x80000000u));
+                        const uint32_t exponent =
+                            Binary(builder, spv::Op::OpBitwiseAnd, m_uintTypeId,
+                                   Binary(builder, spv::Op::OpShiftRightLogical, m_uintTypeId, bits, UintConstant(23)),
+                                   UintConstant(0xFFu));
+                        const uint32_t significand =
+                            Binary(builder, spv::Op::OpBitwiseAnd, m_uintTypeId, bits, UintConstant(0x7FFFFFu));
+                        const uint32_t significandHigh =
+                            Binary(builder, spv::Op::OpShiftRightLogical, m_uintTypeId, significand, UintConstant(3));
+                        const uint32_t significandLow =
+                            Binary(builder, spv::Op::OpShiftLeftLogical, m_uintTypeId, significand, UintConstant(29));
 
                         const uint32_t normalHigh = Binary(
                             builder, spv::Op::OpBitwiseOr, m_uintTypeId, sign,
                             Binary(builder, spv::Op::OpBitwiseOr, m_uintTypeId,
                                    Binary(builder, spv::Op::OpShiftLeftLogical, m_uintTypeId,
-                                          Binary(builder, spv::Op::OpIAdd, m_uintTypeId, exponent,
-                                                 UintConstant(896)),
+                                          Binary(builder, spv::Op::OpIAdd, m_uintTypeId, exponent, UintConstant(896)),
                                           UintConstant(20)),
                                    significandHigh));
                         const uint32_t maxHigh = Binary(builder, spv::Op::OpBitwiseOr, m_uintTypeId, sign,
@@ -933,8 +901,8 @@ namespace MobileGL {
                 // NOTHING IS WRITTEN until every reason to decline has been ruled out, so a block
                 // this returns 0 for leaves the module as it found it - which is what lets
                 // Process() truthfully report SuccessWithoutChange for a module of only those.
-                uint32_t CreateWordArrayTypeBefore(IRContext* context, Instruction* structType,
-                                                   uint32_t uintTypeId, uint32_t length, bool openEnded) {
+                uint32_t CreateWordArrayTypeBefore(IRContext* context, Instruction* structType, uint32_t uintTypeId,
+                                                   uint32_t length, bool openEnded) {
                     Instruction* uintType = context->get_def_use_mgr()->GetDef(uintTypeId);
                     if (uintType == nullptr || uintType->opcode() != spv::Op::OpTypeInt) return 0;
                     const bool hoistUint = !DeclaredBefore(context, uintTypeId, structType->result_id());
@@ -954,8 +922,7 @@ namespace MobileGL {
                         if (position == context->types_values_end()) return 0;
                         // Created in front of the block when it is not there yet, so the only way
                         // this declines is a constant the module already declares after it.
-                        Instruction* lengthInst =
-                            constantMgr->GetDefiningInstruction(lengthConstant, 0, &position);
+                        Instruction* lengthInst = constantMgr->GetDefiningInstruction(lengthConstant, 0, &position);
                         if (lengthInst == nullptr) return 0;
                         if (!DeclaredBefore(context, lengthInst->result_id(), structType->result_id())) return 0;
                         lengthConstantId = lengthInst->result_id();
@@ -966,14 +933,13 @@ namespace MobileGL {
 
                     if (hoistUint) uintType->InsertBefore(structType);
                     std::unique_ptr<Instruction> arrayType =
-                        openEnded
-                            ? MakeUnique<Instruction>(
-                                  context, spv::Op::OpTypeRuntimeArray, 0, arrayTypeId,
-                                  std::initializer_list<Operand>{{SPV_OPERAND_TYPE_ID, {uintTypeId}}})
-                            : MakeUnique<Instruction>(
-                                  context, spv::Op::OpTypeArray, 0, arrayTypeId,
-                                  std::initializer_list<Operand>{{SPV_OPERAND_TYPE_ID, {uintTypeId}},
-                                                                 {SPV_OPERAND_TYPE_ID, {lengthConstantId}}});
+                        openEnded ? MakeUnique<Instruction>(
+                                        context, spv::Op::OpTypeRuntimeArray, 0, arrayTypeId,
+                                        std::initializer_list<Operand>{{SPV_OPERAND_TYPE_ID, {uintTypeId}}})
+                                  : MakeUnique<Instruction>(
+                                        context, spv::Op::OpTypeArray, 0, arrayTypeId,
+                                        std::initializer_list<Operand>{{SPV_OPERAND_TYPE_ID, {uintTypeId}},
+                                                                       {SPV_OPERAND_TYPE_ID, {lengthConstantId}}});
                     Instruction* inserted = structType->InsertBefore(std::move(arrayType));
                     context->AnalyzeDefUse(inserted);
                     context->get_decoration_mgr()->AddDecorationVal(
@@ -987,12 +953,10 @@ namespace MobileGL {
                 // taken only from ALL of them, because each is a promise the shader would break
                 // if one member never made it.
                 std::vector<spv::Decoration> SurvivingAccessQualifiers(IRContext* context, uint32_t structId,
-                                                                      uint32_t memberCount) {
-                    static constexpr spv::Decoration kAny[] = {spv::Decoration::Coherent,
-                                                               spv::Decoration::Volatile};
-                    static constexpr spv::Decoration kAll[] = {spv::Decoration::Restrict,
-                                                              spv::Decoration::NonWritable,
-                                                              spv::Decoration::NonReadable};
+                                                                       uint32_t memberCount) {
+                    static constexpr spv::Decoration kAny[] = {spv::Decoration::Coherent, spv::Decoration::Volatile};
+                    static constexpr spv::Decoration kAll[] = {spv::Decoration::Restrict, spv::Decoration::NonWritable,
+                                                               spv::Decoration::NonReadable};
                     std::vector<spv::Decoration> surviving;
                     for (const spv::Decoration kind : kAny) {
                         for (uint32_t member = 0; member < memberCount; ++member) {
@@ -1017,8 +981,7 @@ namespace MobileGL {
                 // different thing entirely from the one that used to be member 0.
                 void StripMemberAnnotations(IRContext* context, uint32_t structId) {
                     std::vector<Instruction*> doomed;
-                    for (Instruction* decoration :
-                         context->get_decoration_mgr()->GetDecorationsFor(structId, false)) {
+                    for (Instruction* decoration : context->get_decoration_mgr()->GetDecorationsFor(structId, false)) {
                         if (decoration->opcode() == spv::Op::OpMemberDecorate) doomed.push_back(decoration);
                     }
                     for (Instruction& debug : context->module()->debugs2()) {
@@ -1026,7 +989,8 @@ namespace MobileGL {
                         if (debug.GetSingleWordInOperand(0) != structId) continue;
                         doomed.push_back(&debug);
                     }
-                    for (Instruction* inst : doomed) context->KillInst(inst);
+                    for (Instruction* inst : doomed)
+                        context->KillInst(inst);
                 }
 
                 // Plans every shader storage block in the module that holds a 64-bit float and
@@ -1045,8 +1009,7 @@ namespace MobileGL {
                         const uint32_t storageClass = inst.GetSingleWordInOperand(0);
                         const bool isStorageBufferClass =
                             storageClass == static_cast<uint32_t>(spv::StorageClass::StorageBuffer);
-                        const bool isUniformClass =
-                            storageClass == static_cast<uint32_t>(spv::StorageClass::Uniform);
+                        const bool isUniformClass = storageClass == static_cast<uint32_t>(spv::StorageClass::Uniform);
                         if (!isStorageBufferClass && !isUniformClass) continue;
 
                         Instruction* pointerType = defUseMgr->GetDef(inst.type_id());
@@ -1250,8 +1213,8 @@ namespace MobileGL {
                 bool touched = false;
                 for (BlockPlan& plan : plans) {
                     const uint32_t structId = plan.structType->result_id();
-                    const uint32_t arrayTypeId = CreateWordArrayTypeBefore(
-                        irContext, plan.structType, uintTypeId, plan.wordCount, plan.openEnded);
+                    const uint32_t arrayTypeId = CreateWordArrayTypeBefore(irContext, plan.structType, uintTypeId,
+                                                                           plan.wordCount, plan.openEnded);
                     if (arrayTypeId == 0) {
                         // Nothing was written for it, so the module is still the one that came in.
                         MGLOG_D("[spirv] storage block %%%u: no legal place for the flattened word array; "
@@ -1283,8 +1246,8 @@ namespace MobileGL {
                         for (Instruction* store : chainPlan.stores) {
                             InstructionBuilder builder(irContext, store, kPreservedAnalyses);
                             std::vector<uint32_t> path;
-                            emitter.StoreValue(builder, access, chainPlan.pointee, 0,
-                                               store->GetSingleWordInOperand(1), path);
+                            emitter.StoreValue(builder, access, chainPlan.pointee, 0, store->GetSingleWordInOperand(1),
+                                               path);
                             irContext->KillInst(store);
                         }
                         irContext->KillInst(chainPlan.chain);
@@ -1293,8 +1256,8 @@ namespace MobileGL {
                         emitter.RewriteArrayLength(arrayLength, plan.wordCount, plan.tailStrideWords);
                     }
 
-                    const std::vector<spv::Decoration> surviving = SurvivingAccessQualifiers(
-                        irContext, structId, plan.structType->NumInOperands());
+                    const std::vector<spv::Decoration> surviving =
+                        SurvivingAccessQualifiers(irContext, structId, plan.structType->NumInOperands());
                     StripMemberAnnotations(irContext, structId);
                     plan.structType->SetInOperands({{SPV_OPERAND_TYPE_ID, {arrayTypeId}}});
                     irContext->UpdateDefUse(plan.structType);
@@ -1304,10 +1267,9 @@ namespace MobileGL {
                         // AddMemberDecoration always carries a literal value; these have none, so
                         // the instruction has to be spelled out.
                         irContext->get_decoration_mgr()->AddDecoration(
-                            spv::Op::OpMemberDecorate,
-                            {{SPV_OPERAND_TYPE_ID, {structId}},
-                             {SPV_OPERAND_TYPE_LITERAL_INTEGER, {0u}},
-                             {SPV_OPERAND_TYPE_DECORATION, {static_cast<uint32_t>(kind)}}});
+                            spv::Op::OpMemberDecorate, {{SPV_OPERAND_TYPE_ID, {structId}},
+                                                        {SPV_OPERAND_TYPE_LITERAL_INTEGER, {0u}},
+                                                        {SPV_OPERAND_TYPE_DECORATION, {static_cast<uint32_t>(kind)}}});
                     }
                     modified = true;
                     if (plan.openEnded) {
@@ -1329,8 +1291,7 @@ namespace MobileGL {
                 return Status::SuccessWithChange;
             }
 
-            spvtools::Optimizer::PassToken
-            FlattenFloat64StorageBlockPass::CreateFlattenFloat64StorageBlockPass() {
+            spvtools::Optimizer::PassToken FlattenFloat64StorageBlockPass::CreateFlattenFloat64StorageBlockPass() {
                 return spvtools::Optimizer::PassToken(MakeUnique<FlattenFloat64StorageBlockPass>());
             }
         } // namespace ShaderTranspiler

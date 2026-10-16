@@ -103,11 +103,11 @@ namespace MobileGL::MG_Pipe {
     // between bits are in SubsystemDeps.def.
     inline constexpr Uint64 kMGPipeSubsystemFramebuffer = 1ull << 9;       // set_framebuffer_state
     inline constexpr Uint64 kMGPipeSubsystemTextureResources = 1ull << 10; // texture + renderbuffer
-                                                                          // resource_*, set_texture_params
+                                                                           // resource_*, set_texture_params
     inline constexpr Uint64 kMGPipeSubsystemSamplers = 1ull << 11;         // sampler CSO, sampler view,
-                                                                          // the three unit sets
+                                                                           // the three unit sets
     inline constexpr Uint64 kMGPipeSubsystemPrograms = 1ull << 12;         // shader CSO, draw/dispatch
-                                                                          // program, global constants
+                                                                           // program, global constants
     // P5e's one (docs/archive/contracts/CONTRACT-P5E.md §1). The INDEXED BUFFER BINDING POINTS: the three
     // dirty bits NewConstBuffers / NewShaderBuffers / NewSoTargets, the set_shader_buffers
     // emitter, and the backend's four binding-point walks. It is its own bit and not part of
@@ -133,16 +133,14 @@ namespace MobileGL::MG_Pipe {
     // had and nothing of mine" control, exactly as 0x7f was P3a's.
     inline constexpr Uint64 kMGPipeSubsystemsMigratedAtP4a = 0x1fffull; // bits 0..12
     static_assert(kMGPipeSubsystemsMigratedAtP4a ==
-                      (kMGPipeSubsystemsMigratedAtP3a | kMGPipeSubsystemFramebuffer |
-                       kMGPipeSubsystemTextureResources | kMGPipeSubsystemSamplers |
-                       kMGPipeSubsystemPrograms),
+                      (kMGPipeSubsystemsMigratedAtP3a | kMGPipeSubsystemFramebuffer | kMGPipeSubsystemTextureResources |
+                       kMGPipeSubsystemSamplers | kMGPipeSubsystemPrograms),
                   "the P4a phase constant and P4a's four subsystem bits have drifted");
     // P5e's, and P4a's is NOT edited: 0x1fff stays P5e's "everything P4a had and nothing of
     // mine" control, exactly as 0x1ff was P4a's and 0x7f was P3a's. The push default becomes
     // 0x3fff, so the A/B that reproduces today's picture is one bit cleared.
     inline constexpr Uint64 kMGPipeSubsystemsMigratedAtP5e = 0x3fffull; // bits 0..13
-    static_assert(kMGPipeSubsystemsMigratedAtP5e ==
-                      (kMGPipeSubsystemsMigratedAtP4a | kMGPipeSubsystemBufferBindings),
+    static_assert(kMGPipeSubsystemsMigratedAtP5e == (kMGPipeSubsystemsMigratedAtP4a | kMGPipeSubsystemBufferBindings),
                   "the P5e phase constant and P5e's subsystem bit have drifted");
 
     // ---- D-K2's dependency rule, in ONE place (P3b/P4b R-5) --------------------------------

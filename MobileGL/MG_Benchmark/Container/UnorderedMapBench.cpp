@@ -62,7 +62,8 @@ namespace {
     Vector<Uint64> SequentialKeys(SizeT n) {
         Vector<Uint64> keys;
         keys.reserve(n);
-        for (SizeT i = 0; i < n; ++i) keys.push_back(static_cast<Uint64>(i) + 1);
+        for (SizeT i = 0; i < n; ++i)
+            keys.push_back(static_cast<Uint64>(i) + 1);
         return keys;
     }
 
@@ -89,7 +90,8 @@ namespace {
         Vector<Uint64> keys;
         keys.reserve(n);
         std::mt19937_64 rng(0xC0FFEE);
-        for (SizeT i = 0; i < n; ++i) keys.push_back(rng());
+        for (SizeT i = 0; i < n; ++i)
+            keys.push_back(rng());
         return keys;
     }
 
@@ -117,7 +119,8 @@ namespace {
     template <typename Key>
     UnorderedMap<Key, Uint64> Populated(const Vector<Key>& keys) {
         UnorderedMap<Key, Uint64> map;
-        for (SizeT i = 0; i < keys.size(); ++i) map[keys[i]] = i;
+        for (SizeT i = 0; i < keys.size(); ++i)
+            map[keys[i]] = i;
         return map;
     }
 
@@ -160,7 +163,8 @@ namespace {
         const auto& keys = CachedKeys<KeyVec, Make>(static_cast<SizeT>(state.range(0)));
         for (auto _ : state) {
             UnorderedMap<typename KeyVec::value_type, Uint64> map;
-            for (SizeT i = 0; i < keys.size(); ++i) map[keys[i]] = i;
+            for (SizeT i = 0; i < keys.size(); ++i)
+                map[keys[i]] = i;
             benchmark::DoNotOptimize(map.size());
         }
         state.SetItemsProcessed(state.iterations() * static_cast<Int64>(keys.size()));
@@ -175,8 +179,10 @@ namespace {
             state.PauseTiming();
             auto map = Populated(keys);
             state.ResumeTiming();
-            for (SizeT i = 0; i < keys.size(); i += 2) benchmark::DoNotOptimize(map.erase(keys[i]));
-            for (SizeT i = 0; i < keys.size(); i += 2) map[keys[i]] = i;
+            for (SizeT i = 0; i < keys.size(); i += 2)
+                benchmark::DoNotOptimize(map.erase(keys[i]));
+            for (SizeT i = 0; i < keys.size(); i += 2)
+                map[keys[i]] = i;
             benchmark::DoNotOptimize(map.size());
         }
         state.SetItemsProcessed(state.iterations() * static_cast<Int64>(keys.size()));
@@ -192,7 +198,8 @@ namespace {
             state.PauseTiming();
             auto map = Populated(keys);
             state.ResumeTiming();
-            for (auto it = map.begin(); it != map.end();) it = map.erase(it);
+            for (auto it = map.begin(); it != map.end();)
+                it = map.erase(it);
             benchmark::DoNotOptimize(map.size());
         }
         state.SetItemsProcessed(state.iterations() * static_cast<Int64>(keys.size()));
@@ -206,7 +213,8 @@ namespace {
         auto map = Populated(keys);
         for (auto _ : state) {
             Uint64 acc = 0;
-            for (const auto& entry : map) acc += entry.second;
+            for (const auto& entry : map)
+                acc += entry.second;
             benchmark::DoNotOptimize(acc);
         }
         state.SetItemsProcessed(state.iterations() * static_cast<Int64>(keys.size()));
@@ -214,11 +222,8 @@ namespace {
 
 } // namespace
 
-#define MGL_MAP_BENCH(WORKLOAD, SHAPE, VEC, MAKER)                                                 \
-    BENCHMARK_TEMPLATE(WORKLOAD, VEC, MAKER)                                                       \
-        ->Name(#WORKLOAD "/" #SHAPE)                                                               \
-        ->RangeMultiplier(8)                                                                       \
-        ->Range(kMinSize, kMaxSize)
+#define MGL_MAP_BENCH(WORKLOAD, SHAPE, VEC, MAKER)                                                                     \
+    BENCHMARK_TEMPLATE(WORKLOAD, VEC, MAKER)->Name(#WORKLOAD "/" #SHAPE)->RangeMultiplier(8)->Range(kMinSize, kMaxSize)
 
 MGL_MAP_BENCH(LookupHit, sequential, Vector<Uint64>, SequentialKeys);
 MGL_MAP_BENCH(LookupHit, pointer, Vector<Uint64>, PointerKeys);

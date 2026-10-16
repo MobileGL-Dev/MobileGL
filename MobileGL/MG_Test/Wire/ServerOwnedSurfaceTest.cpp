@@ -34,9 +34,9 @@ namespace {
     namespace EGL = MobileGL::MG_Impl::EGLImpl;
 
     enum class Scenario {
-        ServerOwnedFirst,       // the ServerOwned create, then a pbuffer
-        NullWindowWithoutKnob,  // the knob unset: a NULL window, then a pbuffer
-        PbufferThenServerOwned, // a pbuffer first (offscreen), then the ServerOwned create
+        ServerOwnedFirst,           // the ServerOwned create, then a pbuffer
+        NullWindowWithoutKnob,      // the knob unset: a NULL window, then a pbuffer
+        PbufferThenServerOwned,     // a pbuffer first (offscreen), then the ServerOwned create
         SurfacelessThenServerOwned, // a surfaceless make-current first, then the ServerOwned create
     };
 
@@ -66,8 +66,10 @@ namespace {
             ::setenv("MOBILEGL_TRANSPORT", "spawn", 1);
             ::setenv("MOBILEGL_IPC_CONTROL", server.endpoint.c_str(), 1);
             ::setenv("MOBILEGL_BACKEND_TYPE", "DirectGLES", 1);
-            if (surfaceKnob) ::setenv("MOBILEGL_IPC_SURFACE", "server", 1);
-            else ::unsetenv("MOBILEGL_IPC_SURFACE");
+            if (surfaceKnob)
+                ::setenv("MOBILEGL_IPC_SURFACE", "server", 1);
+            else
+                ::unsetenv("MOBILEGL_IPC_SURFACE");
             EglPeerReport r{};
             const auto note = [&r](const char* text) { std::snprintf(r.note, sizeof(r.note), "%s", text); };
             const EGLDisplay dpy = EGL::GetDisplay(EGL_DEFAULT_DISPLAY);
@@ -102,8 +104,7 @@ namespace {
                     r.madeCurrent = EGL::MakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, context) == EGL_TRUE;
                     (void)EGL::MakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
                     tryWindow();
-                    r.madeCurrentAfter =
-                        EGL::MakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, context) == EGL_TRUE;
+                    r.madeCurrentAfter = EGL::MakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, context) == EGL_TRUE;
                 } else if (scenario == Scenario::PbufferThenServerOwned) {
                     tryPbuffer();
                     tryWindow();
@@ -133,7 +134,8 @@ namespace {
         }
         pollfd pfd{fds[0], POLLIN, 0};
         if (::poll(&pfd, 1, 60000) > 0) {
-            if (::read(fds[0], &report, sizeof(report)) != static_cast<ssize_t>(sizeof(report))) report = EglPeerReport{};
+            if (::read(fds[0], &report, sizeof(report)) != static_cast<ssize_t>(sizeof(report)))
+                report = EglPeerReport{};
         } else {
             ::kill(pid, SIGKILL);
         }
@@ -199,12 +201,15 @@ TEST(ServerOwnedSurface, ADisplaylessServerRefusesItByNameOnBothSidesAndTheSessi
     ASSERT_TRUE(WaitFor([&] { return !(reap = ReapLine(server, r.serverPid)).empty(); }, 15000)) << server.Log();
     const std::string serverLog = server.Log();
     EXPECT_NE(serverLog.find("Refuse ServerOwned: this server owns no display"), std::string::npos)
-        << "the server did not name its refusal:\n" << serverLog;
-    EXPECT_EQ(serverLog.find("Fatal{"), std::string::npos) << "the refusal latched or killed the session:\n" << serverLog;
+        << "the server did not name its refusal:\n"
+        << serverLog;
+    EXPECT_EQ(serverLog.find("Fatal{"), std::string::npos) << "the refusal latched or killed the session:\n"
+                                                           << serverLog;
     EXPECT_NE(reap.find("exit=0 "), std::string::npos) << "the session did not end cleanly: " << reap;
     const std::string clientLog = client.Own();
     EXPECT_NE(clientLog.find("Refuse ServerOwned (NoServerDisplay)"), std::string::npos)
-        << "the client did not name the refusal in its own log:\n" << clientLog;
+        << "the client did not name the refusal in its own log:\n"
+        << clientLog;
 
     // Not latched: the same session went on to its pbuffer. Its make-current needs headless EGL.
     EXPECT_EQ(r.pbufferCreated, 1) << "the session did not carry on after the refusal";
@@ -223,7 +228,8 @@ TEST(ServerOwnedSurface, WithoutTheKnobANullWindowIsTheClientsOwnRefusal) {
     EXPECT_EQ(r.windowCreated, 0);
     EXPECT_EQ(r.windowError, EGL_BAD_NATIVE_WINDOW);
     ASSERT_TRUE(WaitFor([&] { return !ReapLine(server, r.serverPid).empty(); }, 15000)) << server.Log();
-    EXPECT_EQ(server.Log().find("ServerOwned"), std::string::npos) << "a NULL window without the knob reached the server";
+    EXPECT_EQ(server.Log().find("ServerOwned"), std::string::npos)
+        << "a NULL window without the knob reached the server";
     EXPECT_EQ(r.pbufferCreated, 1);
 }
 
@@ -273,9 +279,11 @@ TEST(ServerOwnedSurface, ASurfacelessBindDoesNotLatchTheSessionOffscreen) {
     ASSERT_TRUE(WaitFor([&] { return !(reap = ReapLine(server, r.serverPid)).empty(); }, 15000)) << server.Log();
     const std::string serverLog = server.Log();
     EXPECT_NE(serverLog.find("surface=pbuffer 1x1 (surfaceless stand-in"), std::string::npos)
-        << "no stand-in arm proof:\n" << serverLog;
+        << "no stand-in arm proof:\n"
+        << serverLog;
     EXPECT_EQ(serverLog.find("SurfaceModeMismatch"), std::string::npos)
-        << "the surfaceless bind latched the session offscreen:\n" << serverLog;
+        << "the surfaceless bind latched the session offscreen:\n"
+        << serverLog;
     EXPECT_NE(serverLog.find("Refuse ServerOwned: this server owns no display"), std::string::npos) << serverLog;
     EXPECT_EQ(serverLog.find("Fatal{"), std::string::npos) << serverLog;
     EXPECT_NE(reap.find("exit=0 "), std::string::npos) << reap;

@@ -10,8 +10,7 @@
 
 #if defined(__APPLE__)
 
-MOBILEGL_CGL_API CGLError CGLChoosePixelFormat(const CGLPixelFormatAttribute* attribs,
-                                               CGLPixelFormatObj* pix,
+MOBILEGL_CGL_API CGLError CGLChoosePixelFormat(const CGLPixelFormatAttribute* attribs, CGLPixelFormatObj* pix,
                                                GLint* npix) {
     return MobileGL::MG_Impl::CGLImpl::ChoosePixelFormat(attribs, pix, npix);
 }
@@ -20,9 +19,7 @@ MOBILEGL_CGL_API CGLError CGLDestroyPixelFormat(CGLPixelFormatObj pix) {
     return MobileGL::MG_Impl::CGLImpl::DestroyPixelFormat(pix);
 }
 
-MOBILEGL_CGL_API CGLError CGLDescribePixelFormat(CGLPixelFormatObj pix,
-                                                 GLint pix_num,
-                                                 CGLPixelFormatAttribute attrib,
+MOBILEGL_CGL_API CGLError CGLDescribePixelFormat(CGLPixelFormatObj pix, GLint pix_num, CGLPixelFormatAttribute attrib,
                                                  GLint* value) {
     return MobileGL::MG_Impl::CGLImpl::DescribePixelFormat(pix, pix_num, attrib, value);
 }

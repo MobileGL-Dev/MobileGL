@@ -15,7 +15,8 @@ namespace MobileGL::MG_Util::EtcDecoder {
         // GL 4.6 core C.2 reads every block as a big-endian integer; bit 63 is the MSB of byte 0.
         Uint64 ReadBigEndian64(const Uint8* bytes) {
             Uint64 value = 0;
-            for (Int i = 0; i < 8; ++i) value = (value << 8) | bytes[i];
+            for (Int i = 0; i < 8; ++i)
+                value = (value << 8) | bytes[i];
             return value;
         }
 
@@ -23,25 +24,35 @@ namespace MobileGL::MG_Util::EtcDecoder {
             return static_cast<Uint32>((word >> low) & ((Uint64{1} << (high - low + 1)) - 1));
         }
 
-        Uint8 Clamp255(Int value) { return static_cast<Uint8>(std::clamp(value, 0, 255)); }
-        Int Extend4(Uint32 v) { return static_cast<Int>((v << 4) | v); }
-        Int Extend5(Uint32 v) { return static_cast<Int>((v << 3) | (v >> 2)); }
-        Int Extend6(Uint32 v) { return static_cast<Int>((v << 2) | (v >> 4)); }
-        Int Extend7(Uint32 v) { return static_cast<Int>((v << 1) | (v >> 6)); }
+        Uint8 Clamp255(Int value) {
+            return static_cast<Uint8>(std::clamp(value, 0, 255));
+        }
+        Int Extend4(Uint32 v) {
+            return static_cast<Int>((v << 4) | v);
+        }
+        Int Extend5(Uint32 v) {
+            return static_cast<Int>((v << 3) | (v >> 2));
+        }
+        Int Extend6(Uint32 v) {
+            return static_cast<Int>((v << 2) | (v >> 4));
+        }
+        Int Extend7(Uint32 v) {
+            return static_cast<Int>((v << 1) | (v >> 6));
+        }
 
         // Table C.12: intensity modifiers of the individual/differential modes, indexed by the
         // codeword; a texel's (msb, lsb) picks +a, +b, -a, -b.
-        constexpr Int kIntensityModifiers[8][2] = {{2, 8},   {5, 17},  {9, 29},  {13, 42},
+        constexpr Int kIntensityModifiers[8][2] = {{2, 8},   {5, 17},  {9, 29},   {13, 42},
                                                    {18, 60}, {24, 80}, {33, 106}, {47, 183}};
         // Table C.14: the T and H mode distances.
         constexpr Int kDistances[8] = {3, 6, 11, 16, 23, 32, 41, 64};
         // Table C.16: the EAC modifier tables (alpha, R11 and RG11 share them).
         constexpr Int kEacModifiers[16][8] = {
-            {-3, -6, -9, -15, 2, 5, 8, 14},  {-3, -7, -10, -13, 2, 6, 9, 12}, {-2, -5, -8, -13, 1, 4, 7, 12},
-            {-2, -4, -6, -13, 1, 3, 5, 12},  {-3, -6, -8, -12, 2, 5, 7, 11},  {-3, -7, -9, -11, 2, 6, 8, 10},
-            {-4, -7, -8, -11, 3, 6, 7, 10},  {-3, -5, -8, -11, 2, 4, 7, 10},  {-2, -6, -8, -10, 1, 5, 7, 9},
-            {-2, -5, -8, -10, 1, 4, 7, 9},   {-2, -4, -8, -10, 1, 3, 7, 9},   {-2, -5, -7, -10, 1, 4, 6, 9},
-            {-3, -4, -7, -10, 2, 3, 6, 9},   {-1, -2, -3, -10, 0, 1, 2, 9},   {-4, -6, -8, -9, 3, 5, 7, 8},
+            {-3, -6, -9, -15, 2, 5, 8, 14}, {-3, -7, -10, -13, 2, 6, 9, 12}, {-2, -5, -8, -13, 1, 4, 7, 12},
+            {-2, -4, -6, -13, 1, 3, 5, 12}, {-3, -6, -8, -12, 2, 5, 7, 11},  {-3, -7, -9, -11, 2, 6, 8, 10},
+            {-4, -7, -8, -11, 3, 6, 7, 10}, {-3, -5, -8, -11, 2, 4, 7, 10},  {-2, -6, -8, -10, 1, 5, 7, 9},
+            {-2, -5, -8, -10, 1, 4, 7, 9},  {-2, -4, -8, -10, 1, 3, 7, 9},   {-2, -5, -7, -10, 1, 4, 6, 9},
+            {-3, -4, -7, -10, 2, 3, 6, 9},  {-1, -2, -3, -10, 0, 1, 2, 9},   {-4, -6, -8, -9, 3, 5, 7, 8},
             {-3, -5, -7, -9, 2, 4, 6, 8}};
 
         // One ETC2 RGB block (with the punch-through alpha variant) into 16 RGBA texels,
@@ -152,10 +163,9 @@ namespace MobileGL::MG_Util::EtcDecoder {
                 }
                 if (b2 < 0 || b2 > 31) {
                     // Planar mode: always opaque, an origin and two gradients.
-                    const Int o[3] = {Extend6(Bits(word, 62, 57)),
-                                      Extend7((Bits(word, 56, 56) << 6) | Bits(word, 54, 49)),
-                                      Extend6((Bits(word, 48, 48) << 5) | (Bits(word, 44, 43) << 3) |
-                                              Bits(word, 41, 39))};
+                    const Int o[3] = {
+                        Extend6(Bits(word, 62, 57)), Extend7((Bits(word, 56, 56) << 6) | Bits(word, 54, 49)),
+                        Extend6((Bits(word, 48, 48) << 5) | (Bits(word, 44, 43) << 3) | Bits(word, 41, 39))};
                     const Int h[3] = {Extend6((Bits(word, 38, 34) << 1) | Bits(word, 32, 32)),
                                       Extend7(Bits(word, 31, 25)), Extend6(Bits(word, 24, 19))};
                     const Int v[3] = {Extend6(Bits(word, 18, 13)), Extend7(Bits(word, 12, 6)),
@@ -261,7 +271,9 @@ namespace MobileGL::MG_Util::EtcDecoder {
         }
     } // namespace
 
-    Bool IsEtcFormat(GLenum compressedFormat) { return DecodedTexelBytes(compressedFormat) != 0; }
+    Bool IsEtcFormat(GLenum compressedFormat) {
+        return DecodedTexelBytes(compressedFormat) != 0;
+    }
 
     SizeT DecodedTexelBytes(GLenum compressedFormat) {
         switch (compressedFormat) {
@@ -290,12 +302,14 @@ namespace MobileGL::MG_Util::EtcDecoder {
         case GL_COMPRESSED_RGB8_ETC2:
         case GL_COMPRESSED_SRGB8_ETC2:
             DecodeEtc2Rgb(block, false, rgba);
-            for (Int t = 0; t < 16; ++t) std::copy(rgba[t], rgba[t] + 3, out + t * 3);
+            for (Int t = 0; t < 16; ++t)
+                std::copy(rgba[t], rgba[t] + 3, out + t * 3);
             return true;
         case GL_COMPRESSED_RGB8_PUNCHTHROUGH_ALPHA1_ETC2:
         case GL_COMPRESSED_SRGB8_PUNCHTHROUGH_ALPHA1_ETC2:
             DecodeEtc2Rgb(block, true, rgba);
-            for (Int t = 0; t < 16; ++t) std::copy(rgba[t], rgba[t] + 4, out + t * 4);
+            for (Int t = 0; t < 16; ++t)
+                std::copy(rgba[t], rgba[t] + 4, out + t * 4);
             return true;
         case GL_COMPRESSED_RGBA8_ETC2_EAC:
         case GL_COMPRESSED_SRGB8_ALPHA8_ETC2_EAC: {
@@ -313,7 +327,8 @@ namespace MobileGL::MG_Util::EtcDecoder {
             const Bool isSigned = compressedFormat == GL_COMPRESSED_SIGNED_R11_EAC;
             Int red[16];
             DecodeEac11(block, isSigned, red);
-            for (Int t = 0; t < 16; ++t) out[t] = Eac11ToByte(red[t], isSigned);
+            for (Int t = 0; t < 16; ++t)
+                out[t] = Eac11ToByte(red[t], isSigned);
             return true;
         }
         case GL_COMPRESSED_RG11_EAC:

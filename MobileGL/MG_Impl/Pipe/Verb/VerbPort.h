@@ -26,9 +26,9 @@ namespace MobileGL::MG_Record {
     // it. Only MG_Remote implements it; a library without a transport never resolves one.
     class VerbSession {
     public:
-        virtual Uint64 EmitAndWait(MG_Pipe::MGPWireOp op, const void* payload, Uint64 payloadBytes,
-                                   const void* varTail, Uint64 varTailBytes, void* replyOut, Uint64 replyBytes,
-                                   Int32* statusOut, Uint64* replySizeOut) = 0;
+        virtual Uint64 EmitAndWait(MG_Pipe::MGPWireOp op, const void* payload, Uint64 payloadBytes, const void* varTail,
+                                   Uint64 varTailBytes, void* replyOut, Uint64 replyBytes, Int32* statusOut,
+                                   Uint64* replySizeOut) = 0;
         virtual Uint64 EmitAndWaitTails(MG_Pipe::MGPWireOp op, const void* payload, Uint64 payloadBytes,
                                         const MG_Pipe::MGPipeVerbTail* tails, Uint32 tailCount, void* replyOut,
                                         Uint64 replyBytes, Int32* statusOut, Uint64* replySizeOut) = 0;
@@ -111,9 +111,8 @@ namespace MobileGL::MG_Record {
     // same reason as the refusal above: the control drives the function the emitter calls
     // rather than a second copy of GL 4.6 8.4.4's arithmetic. THE GAPS ARE NEVER WRITTEN -
     // they belong to the application - and that is what the control checks with a sentinel.
-    void ScatterTightReadbackIntoPackState(const void* tight, void* destination, GLsizei width,
-                                           GLsizei height, Uint64 bytesPerPixel,
-                                           const PixelStoreParameters& pack);
+    void ScatterTightReadbackIntoPackState(const void* tight, void* destination, GLsizei width, GLsizei height,
+                                           Uint64 bytesPerPixel, const PixelStoreParameters& pack);
 
     // A glReadPixels whose tight answer exceeds one reply slot is split into bands, each an
     // ordinary read_pixels record with its own box and tight DstSize, scattered under the
@@ -136,14 +135,12 @@ namespace MobileGL::MG_Record {
     Bool PlanReadbackBands(Uint64 width, Uint64 height, Uint64 bytesPerPixel, Uint64 maxReplyBytes,
                            ReadbackBandPlan& plan);
     template <typename Visit>
-    void ForEachReadbackBand(Uint64 width, Uint64 height, const ReadbackBandPlan& plan,
-                             Visit&& visit) {
+    void ForEachReadbackBand(Uint64 width, Uint64 height, const ReadbackBandPlan& plan, Visit&& visit) {
         if (plan.RowsPerBand == 0 || plan.ColumnsPerBand == 0) return;
         for (Uint64 row = 0; row < height; row += plan.RowsPerBand) {
             const Uint64 rows = plan.RowsPerBand < height - row ? plan.RowsPerBand : height - row;
             for (Uint64 column = 0; column < width; column += plan.ColumnsPerBand) {
-                const Uint64 columns =
-                    plan.ColumnsPerBand < width - column ? plan.ColumnsPerBand : width - column;
+                const Uint64 columns = plan.ColumnsPerBand < width - column ? plan.ColumnsPerBand : width - column;
                 visit(ReadbackBand{row, rows, column, columns});
             }
         }
@@ -153,17 +150,15 @@ namespace MobileGL::MG_Record {
     // where ScatterTightReadbackIntoPackState would have put those pixels of the whole
     // `width`-wide read. ScatterTightReadbackIntoPackState is this function over the single band
     // {0, height, 0, width}, so the whole-read arithmetic and the banded one cannot drift.
-    void ScatterReadbackBandIntoPackState(const void* band, void* destination, GLsizei width,
-                                          const ReadbackBand& where, Uint64 bytesPerPixel,
-                                          const PixelStoreParameters& pack);
+    void ScatterReadbackBandIntoPackState(const void* band, void* destination, GLsizei width, const ReadbackBand& where,
+                                          Uint64 bytesPerPixel, const PixelStoreParameters& pack);
 
     // ID-49. True when the destination layout IS the tight layout, which is the only condition
     // under which EmitReadPixels may read the reply straight into the application pointer and
     // skip the bounce. Exported because the FAST PATH and the SCATTER have to agree, and the
     // only honest way to state that is to drive both and compare - a case that tested either
     // alone would pass a predicate that said yes to a layout the scatter would have rearranged.
-    Bool ReadbackPackStateIsTightForTest(GLsizei width, Uint64 bytesPerPixel,
-                                         const PixelStoreParameters& pack);
+    Bool ReadbackPackStateIsTightForTest(GLsizei width, Uint64 bytesPerPixel, const PixelStoreParameters& pack);
 
     // M2 / codex 11. True exactly when the readback reply is OK and carries the read's own exact
     // extent (CONTRACT-P5 row 23). EmitReadPixels calls this and Fatals by name when it is false
@@ -218,23 +213,22 @@ namespace MobileGL::MG_Record {
     // non-instanced entry point) and `baseInstance` its gl_BaseInstance value; the sink reads
     // "instanced" as InstanceCount != 1 || StartInstance != 0, so an instanced call with a
     // count of 1 and no base instance is dispatched as the plain draw it is equivalent to.
-    MG_Pipe::MGPDrawInfo PlanDrawInfo(GLenum mode, Uint8 indexSize, GLsizei instanceCount,
-                                      GLuint baseInstance, Uint32 numDraws,
-                                      const RemoteDrawBindings& bindings);
+    MG_Pipe::MGPDrawInfo PlanDrawInfo(GLenum mode, Uint8 indexSize, GLsizei instanceCount, GLuint baseInstance,
+                                      Uint32 numDraws, const RemoteDrawBindings& bindings);
 
     // One MGPDrawRange from one (first | indices, count, basevertex). Arrays: Start = first.
     // Indexed with an element buffer bound: Start = offset / IndexSize, and FALSE when the byte
     // offset is not a whole number of indices or does not fit the record's Uint32 Start - the
     // caller refuses by name rather than round. Indexed with no element buffer: Start = 0 and
     // the bytes are the client's (the emitter stages `count * IndexSize` of them).
-    Bool PlanDrawRange(const RemoteDrawBindings& bindings, Uint8 indexSize, const void* indicesOrFirst,
-                       GLsizei count, GLint baseVertex, MG_Pipe::MGPDrawRange& out);
+    Bool PlanDrawRange(const RemoteDrawBindings& bindings, Uint8 indexSize, const void* indicesOrFirst, GLsizei count,
+                       GLint baseVertex, MG_Pipe::MGPDrawRange& out);
 
     // The kDrawIsIndirect second tail: the bound GL_DRAW_INDIRECT_BUFFER handle, the call's
     // `indirect` byte offset, the stride and the draw count; for the *IndirectCount forms the
     // bound GL_PARAMETER_BUFFER handle and the byte offset the call spells as `drawcount`.
     MG_Pipe::MGPDrawIndirect PlanDrawIndirect(const RemoteDrawBindings& bindings, const void* indirect,
-                                              GLsizei drawCount, GLsizei stride,
-                                              GLintptr parameterOffset, Bool hasParameterBuffer);
+                                              GLsizei drawCount, GLsizei stride, GLintptr parameterOffset,
+                                              Bool hasParameterBuffer);
 
 } // namespace MobileGL::MG_Record

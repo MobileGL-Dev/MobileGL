@@ -91,7 +91,8 @@ namespace {
         });
 
         Vector<Uint32> offsets;
-        for (const auto& [member, offset] : offsetByMember) offsets.push_back(offset);
+        for (const auto& [member, offset] : offsetByMember)
+            offsets.push_back(offset);
         return offsets;
     }
 
@@ -206,8 +207,7 @@ void main() {
     ASSERT_FALSE(input.empty());
     // What glslang laid out for the 64-bit members, which is what an application computing
     // std140 by hand would also get.
-    EXPECT_EQ(CollectOffsetsOf(input, "Blk"), (Vector<Uint32>{0, 8, 16, 32, 64, 96, 224, 272}))
-        << Disassemble(input);
+    EXPECT_EQ(CollectOffsetsOf(input, "Blk"), (Vector<Uint32>{0, 8, 16, 32, 64, 96, 224, 272})) << Disassemble(input);
 
     Vector<Uint32> output;
     ASSERT_TRUE(ShaderCompiler::DemoteFloat64ToFloat32(input, output, true));
@@ -216,8 +216,7 @@ void main() {
     // vec4 at 32, mat4 at 48 with a 16-byte column stride, the array at 112 with the std140
     // 16-byte element stride, and the trailing float at 160. This is what SPIRV-Cross has to be
     // able to re-derive for GLSL ES, which has no member layout(offset=) to fall back on.
-    EXPECT_EQ(CollectOffsetsOf(output, "Blk"), (Vector<Uint32>{0, 4, 8, 16, 32, 48, 112, 160}))
-        << Disassemble(output);
+    EXPECT_EQ(CollectOffsetsOf(output, "Blk"), (Vector<Uint32>{0, 4, 8, 16, 32, 48, 112, 160})) << Disassemble(output);
     const String text = Disassemble(output);
     EXPECT_NE(text.find("MatrixStride 16"), String::npos) << text;
     EXPECT_NE(text.find("ArrayStride 16"), String::npos) << text;
@@ -560,11 +559,10 @@ void main() {
 // one of these before demotion, so the program simply could not be transpiled at all.
 class DemoteFloat64EsslTest : public DemoteFloat64Test, public ::testing::WithParamInterface<const char*> {};
 
-INSTANTIATE_TEST_SUITE_P(
-    Shapes, DemoteFloat64EsslTest,
-    ::testing::Values(
-        // A double that never reaches an interface: locals and literals only.
-        R"(#version 460 core
+INSTANTIATE_TEST_SUITE_P(Shapes, DemoteFloat64EsslTest,
+                         ::testing::Values(
+                             // A double that never reaches an interface: locals and literals only.
+                             R"(#version 460 core
 layout(location = 0) out float vOut;
 void main() {
     double s = 0.5lf;
@@ -573,9 +571,9 @@ void main() {
     gl_Position = vec4(float(s));
 }
 )",
-        // A default-block double uniform: the glUniform*d path, and the block MobileGL lays out
-        // itself.
-        R"(#version 460 core
+                             // A default-block double uniform: the glUniform*d path, and the block MobileGL lays out
+                             // itself.
+                             R"(#version 460 core
 layout(location = 0) uniform double uScale;
 layout(location = 1) uniform dvec3 uOffset;
 layout(location = 2) uniform dmat4 uTransform;
@@ -586,8 +584,8 @@ void main() {
     gl_Position = vec4(float(p.x));
 }
 )",
-        // An application-declared std140 block whose members are 64-bit.
-        R"(#version 460 core
+                             // An application-declared std140 block whose members are 64-bit.
+                             R"(#version 460 core
 layout(std140, binding = 0) uniform Blk {
     float  a;
     double d;
@@ -605,8 +603,8 @@ void main() {
     gl_Position = vec4(float(s));
 }
 )",
-        // A 64-bit vertex input, which is what glVertexAttribLFormat feeds.
-        R"(#version 460 core
+                             // A 64-bit vertex input, which is what glVertexAttribLFormat feeds.
+                             R"(#version 460 core
 layout(location = 0) in dvec3 inPos;
 layout(location = 2) in double inWeight;
 layout(location = 0) out float vOut;
@@ -615,8 +613,8 @@ void main() {
     gl_Position = vec4(vOut);
 }
 )",
-        // An std430 storage block, whose double members pack differently again.
-        R"(#version 460 core
+                             // An std430 storage block, whose double members pack differently again.
+                             R"(#version 460 core
 layout(std430, binding = 0) buffer Ssbo {
     double head;
     dvec4  wide;
@@ -697,10 +695,14 @@ namespace {
         return "#version 430 core\n"
                "layout(local_size_x = 1) in;\n"
                "buffer Result { int g_result; };\n"
-               "uniform " + type + " g_0;\n"
+               "uniform " +
+               type +
+               " g_0;\n"
                "void main() {\n"
                "  g_result = 0;\n"
-               "  if (g_0 " + op + " " + literal + ") g_result = 1;\n"
+               "  if (g_0 " +
+               op + " " + literal +
+               ") g_result = 1;\n"
                "}\n";
     }
 
@@ -720,7 +722,8 @@ namespace {
             Vector<String> tokens;
             StringStream words(line);
             String word;
-            while (words >> word) tokens.push_back(word);
+            while (words >> word)
+                tokens.push_back(word);
             instructions.push_back(tokens);
         }
         return instructions;
@@ -769,15 +772,13 @@ namespace {
                                          const String& unorderedOpcode) {
         const String disassembly = OptimizedDisassembly(source);
         const Vector<String> compare = FindRewrittenCompare(disassembly);
-        ASSERT_FALSE(compare.empty()) << "no rewritten compare in the optimized module\n"
-                                      << disassembly;
+        ASSERT_FALSE(compare.empty()) << "no rewritten compare in the optimized module\n" << disassembly;
         EXPECT_TRUE(compare[2] == orderedOpcode || compare[2] == unorderedOpcode)
             << "expected " << orderedOpcode << " (or its unordered twin), got " << compare[2] << "\n"
             << disassembly;
 
         const String zeroId = FindZeroConstantId(disassembly);
-        ASSERT_FALSE(zeroId.empty()) << "the module has no 0.0 constant of the abs() type\n"
-                                     << disassembly;
+        ASSERT_FALSE(zeroId.empty()) << "the module has no 0.0 constant of the abs() type\n" << disassembly;
         EXPECT_EQ(compare.back(), zeroId)
             << "the rewrite compares against " << compare.back()
             << " instead of the module's own zero; a synthesized threshold is the epsilon bug\n"
@@ -818,8 +819,8 @@ TEST_F(DemoteFloat64Test, AComparisonAgainstASmallNonZeroLiteralIsLeftAlone) {
 TEST_F(DemoteFloat64Test, TheRewriteComparesAbsAgainstTheModulesOwnZero) {
     // `x == 0.0` -> `abs(x) <= 0.0`. The equality has to be INSIDE the replacement: with a strict
     // `<` and no epsilon left to hide behind, +/-0 would stop comparing equal to zero.
-    ExpectComparedAgainstModuleZero(CompareAgainstUsing("float", "==", "0.0"),
-                                    "OpFOrdLessThanEqual", "OpFUnordLessThanEqual");
+    ExpectComparedAgainstModuleZero(CompareAgainstUsing("float", "==", "0.0"), "OpFOrdLessThanEqual",
+                                    "OpFUnordLessThanEqual");
     // `x != 0.0` -> `abs(x) > 0.0`, the strict complement of the above.
     ExpectComparedAgainstModuleZero(CompareAgainstUsing("float", "!=", "0.0"), "OpFOrdGreaterThan",
                                     "OpFUnordGreaterThan");

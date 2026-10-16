@@ -25,7 +25,9 @@ using namespace MobileGL;
 namespace {
     thread_local MG_Pipe::PipeInputs* t_sessionBlock = nullptr;
 
-    MG_Pipe::PipeInputs* ResolveTestSessionBlock() { return t_sessionBlock; }
+    MG_Pipe::PipeInputs* ResolveTestSessionBlock() {
+        return t_sessionBlock;
+    }
 
     // A fresh thread, bound to `block` before its first touch of gPipeInputs - the order
     // ThreadSessionScope keeps on a real session thread.

@@ -118,7 +118,7 @@ namespace {
         Uint64 staleHint = MGPipePackHandleHint(minted);
         const MGPipeHandle successor = allocator.AcquireHinted(MGPipeKind::Buffer, kSecond, staleHint);
         EXPECT_EQ(successor.Slot, minted.Slot) << "the free list did not hand the slot back";
-        Uint64 forged = MGPipePackHandleHint(successor);  // the successor's exact slot and generation
+        Uint64 forged = MGPipePackHandleHint(successor); // the successor's exact slot and generation
         EXPECT_TRUE(MGPipeHandleIsNull(allocator.FindByLifetimeIdHinted(MGPipeKind::Buffer, kFirst, forged)))
             << "a hint naming another object's live slot answered for the dead object";
 
@@ -133,7 +133,8 @@ namespace {
         MGPipeSlotAllocator allocator;
 
         MGPipeHandle handles[8];
-        for (MGPipeHandle& handle : handles) handle = allocator.Allocate(MGPipeKind::Framebuffer);
+        for (MGPipeHandle& handle : handles)
+            handle = allocator.Allocate(MGPipeKind::Framebuffer);
         const Uint32 highWater = allocator.HighWater(MGPipeKind::Framebuffer);
         EXPECT_EQ(allocator.LiveCount(MGPipeKind::Framebuffer), 8u);
         EXPECT_EQ(allocator.FreeCount(MGPipeKind::Framebuffer), 0u);
@@ -148,7 +149,7 @@ namespace {
         const MGPipeHandle a = allocator.Allocate(MGPipeKind::Framebuffer);
         const MGPipeHandle b = allocator.Allocate(MGPipeKind::Framebuffer);
         EXPECT_EQ(allocator.HighWater(MGPipeKind::Framebuffer), highWater) << "the high-water mark grew with two "
-                                                                             "slots waiting on the free list";
+                                                                              "slots waiting on the free list";
         EXPECT_TRUE((a.Slot == handles[2].Slot && b.Slot == handles[5].Slot) ||
                     (a.Slot == handles[5].Slot && b.Slot == handles[2].Slot))
             << "the reused slots are not the two that were freed";
@@ -247,10 +248,10 @@ namespace {
         EXPECT_FALSE(MGPipeHandleIsNull(first));
         sharp.Free(MGPipeKind::VertexElementsCso, first);
         const MGPipeHandle second = sharp.Acquire(MGPipeKind::VertexElementsCso, repeatedLifetimeId);
-        EXPECT_FALSE(second == first)
-            << "re-acquiring the SAME lifetime id after a free reproduced handle {slot=" << first.Slot
-            << ", gen=" << first.Gen << "}; an address-keyed or name-keyed memo would then serve the dead "
-                                        "object's entry to the live one";
+        EXPECT_FALSE(second == first) << "re-acquiring the SAME lifetime id after a free reproduced handle {slot="
+                                      << first.Slot << ", gen=" << first.Gen
+                                      << "}; an address-keyed or name-keyed memo would then serve the dead "
+                                         "object's entry to the live one";
         EXPECT_EQ(second.Slot, first.Slot) << "the freed slot was not the one handed back";
         EXPECT_EQ(second.Gen, first.Gen + 1) << "a reused slot must carry a new generation";
         // And the dead handle stays dead, which is what makes the ABA detectable rather than

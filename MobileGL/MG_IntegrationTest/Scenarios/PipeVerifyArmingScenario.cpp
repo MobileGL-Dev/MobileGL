@@ -119,8 +119,7 @@ void main() { o_color = vec4(0.25, 0.5, 0.75, 1.0); }
             std::size_t pos = 0;
             while (pos < text.size()) {
                 const std::size_t eol = text.find('\n', pos);
-                const std::string line =
-                    text.substr(pos, eol == std::string::npos ? std::string::npos : eol - pos);
+                const std::string line = text.substr(pos, eol == std::string::npos ? std::string::npos : eol - pos);
                 if (line.find(needle) != std::string::npos && line.find("where=read") != std::string::npos) {
                     ++count;
                 }
@@ -135,8 +134,8 @@ void main() { o_color = vec4(0.25, 0.5, 0.75, 1.0); }
             // The library log this process is writing, or an empty path when none was configured.
             static std::filesystem::path LibraryLogPath() {
                 // P6: the path is a BASE NAME and the library writes one log per role; PipeStatsWindow
-            // derives the suffix, so the rule lives in one place.
-            return std::filesystem::path(MGITest::PipeStatsWindow::LibraryLogPath());
+                // derives the suffix, so the rule lives in one place.
+                return std::filesystem::path(MGITest::PipeStatsWindow::LibraryLogPath());
             }
 
             // ONE MARK PER ROLE. The library writes a log per role, so "how long is the log
@@ -287,7 +286,9 @@ void main() { o_color = vec4(0.25, 0.5, 0.75, 1.0); }
             EXPECT_NE(appended.find(expected), std::string::npos)
                 << "MOBILEGL_PIPE_VERIFY_CORRUPT=" << knob
                 << " perturbs that field in the snapshot arm before every entry compare, so a working "
-                   "comparator must have reported " << expected << "...\". It reported nothing, which "
+                   "comparator must have reported "
+                << expected
+                << "...\". It reported nothing, which "
                    "means the comparator is not comparing - and every green entry in this lane is "
                    "green for no reason. Log appended by this case:\n"
                 << appended;
@@ -325,7 +326,9 @@ void main() { o_color = vec4(0.25, 0.5, 0.75, 1.0); }
             const char* knob = std::getenv("MOBILEGL_PIPE_VERIFY_CORRUPT");
             if (knob == nullptr || std::string(knob) != kPackField) {
                 GTEST_SKIP() << "this case is the compare-at-read hook's negative control and needs "
-                                "MOBILEGL_PIPE_VERIFY_CORRUPT=" << kPackField << " for the whole "
+                                "MOBILEGL_PIPE_VERIFY_CORRUPT="
+                             << kPackField
+                             << " for the whole "
                                 "process, which is what the VerifySplitReadCorrupted. ctest entries "
                                 "set; no other field is read by the server inside a window whose "
                                 "oracle the hook rewrites";
@@ -348,13 +351,14 @@ void main() { o_color = vec4(0.25, 0.5, 0.75, 1.0); }
             ASSERT_NO_FATAL_FAILURE(DrawOneFrame());
 
             const std::string server = MGITest::PipeStatsWindow::ReadServerLogSince(before);
-            const std::string expected =
-                std::string(kDifferPrefix) + ", \"" + kPackField + "@ReadPixels\"";
+            const std::string expected = std::string(kDifferPrefix) + ", \"" + kPackField + "@ReadPixels\"";
             const std::size_t at = server.find(expected);
             ASSERT_NE(at, std::string::npos)
-                << "MOBILEGL_PIPE_VERIFY_CORRUPT=" << kPackField << " perturbs the hook's ORACLE at "
+                << "MOBILEGL_PIPE_VERIFY_CORRUPT=" << kPackField
+                << " perturbs the hook's ORACLE at "
                    "every backend read of that field, and the server's read_pixels reads it under "
-                   "the server's own stamp - so the server role's log had to carry " << expected
+                   "the server's own stamp - so the server role's log had to carry "
+                << expected
                 << ", ...}. It carried nothing: either the compare-at-read hook is not running on "
                    "the apply thread, or the neutral-pack window swallowed the perturbation, and "
                    "in both cases every per-read green in this lane is green for no reason. Server "
@@ -362,8 +366,7 @@ void main() { o_color = vec4(0.25, 0.5, 0.75, 1.0); }
                 << server;
 
             const std::size_t eol = server.find('\n', at);
-            const std::string line =
-                server.substr(at, eol == std::string::npos ? std::string::npos : eol - at);
+            const std::string line = server.substr(at, eol == std::string::npos ? std::string::npos : eol - at);
             EXPECT_NE(line.find("where=read"), std::string::npos)
                 << "the server half reported the corrupted field, but not from the compare-at-read "
                    "arm - `where=` says which comparator spoke, and only `read` is this case's "

@@ -57,8 +57,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // substitution itself on the server; this is only where its inputs come from, and the CSO
     // record carries all three (MGPipeValueTypes.h). The SharedPtr overload below is the same
     // three lines with one dereference in front, so the two arms cannot part.
-    Bool NeedsRawDepthFetchSampler(const SamplerParameters& samplerParams,
-                                   TextureInternalFormat textureFormat) {
+    Bool NeedsRawDepthFetchSampler(const SamplerParameters& samplerParams, TextureInternalFormat textureFormat) {
         if (!MG_Util::IsDepthFormatInternalFormat(textureFormat)) {
             return false;
         }
@@ -115,13 +114,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         void ErrorLopper::Loop(const std::function<void(GLenum)>& func) {
             static_cast<void>(func);
-            for (Int i = 0; i < kMaxDrainedESErrors && g_GLESFuncs.glGetError() != GL_NO_ERROR; ++i) {
-            }
+            for (Int i = 0; i < kMaxDrainedESErrors && g_GLESFuncs.glGetError() != GL_NO_ERROR; ++i) {}
         }
 
         void ErrorLopper::Clear() {
-            for (Int i = 0; i < kMaxDrainedESErrors && g_GLESFuncs.glGetError() != GL_NO_ERROR; ++i) {
-            }
+            for (Int i = 0; i < kMaxDrainedESErrors && g_GLESFuncs.glGetError() != GL_NO_ERROR; ++i) {}
         }
 
         ErrorLopper::ErrorLopper() {

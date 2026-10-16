@@ -78,8 +78,10 @@ void main()
             void TearDown() override {
                 if (!Ready()) return;
                 glUseProgram(0);
-                for (GLuint p : m_programs) glDeleteProgram(p);
-                for (GLuint t : m_textures) glDeleteTextures(1, &t);
+                for (GLuint p : m_programs)
+                    glDeleteProgram(p);
+                for (GLuint t : m_textures)
+                    glDeleteTextures(1, &t);
                 m_programs.clear();
                 m_textures.clear();
                 GLint maxImageUnits = 0;
@@ -87,8 +89,7 @@ void main()
                 for (GLint unit = 0; unit < maxImageUnits; ++unit) {
                     glBindImageTexture(static_cast<GLuint>(unit), 0, 0, GL_FALSE, 0, GL_READ_ONLY, GL_R32UI);
                 }
-                while (glGetError() != GL_NO_ERROR) {
-                }
+                while (glGetError() != GL_NO_ERROR) {}
             }
 
             bool ImagesAreUsable() const {
@@ -96,8 +97,7 @@ void main()
                 glGetIntegerv(GL_MAX_IMAGE_UNITS, &maxImageUnits);
                 GLint maxComputeImageUniforms = 0;
                 glGetIntegerv(GL_MAX_COMPUTE_IMAGE_UNIFORMS, &maxComputeImageUniforms);
-                while (glGetError() != GL_NO_ERROR) {
-                }
+                while (glGetError() != GL_NO_ERROR) {}
                 return maxImageUnits > kImageUnit && maxComputeImageUniforms >= 1;
             }
 
@@ -147,8 +147,7 @@ void main()
                 glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, kExtent, kExtent,
                                 internalFormat == GL_RGBA32UI ? GL_RGBA_INTEGER : GL_RED_INTEGER, GL_UNSIGNED_INT,
                                 zeros.data());
-                while (glGetError() != GL_NO_ERROR) {
-                }
+                while (glGetError() != GL_NO_ERROR) {}
                 return texture;
             }
 
@@ -157,8 +156,7 @@ void main()
             // a reader declared the same way and could cancel itself out.
             GLuint ReadRedTexel(GLuint texture, GLenum internalFormat, int x) {
                 const bool rgba = internalFormat == GL_RGBA32UI;
-                std::vector<GLuint> texels(static_cast<std::size_t>(kExtent) * kExtent * (rgba ? 4u : 1u),
-                                           0xFFFFFFFFu);
+                std::vector<GLuint> texels(static_cast<std::size_t>(kExtent) * kExtent * (rgba ? 4u : 1u), 0xFFFFFFFFu);
                 glBindTexture(GL_TEXTURE_2D, texture);
                 glGetTexImage(GL_TEXTURE_2D, 0, rgba ? GL_RGBA_INTEGER : GL_RED_INTEGER, GL_UNSIGNED_INT,
                               texels.data());

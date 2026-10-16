@@ -198,8 +198,7 @@ TEST(RemoteEmitTable, TheThreeClassesPartitionAllSeventyOneSlots) {
     EXPECT_EQ(LocallyAnsweredSlotCount(), 2u);
     EXPECT_EQ(ImplementedVerbCount(), 69u);
     EXPECT_EQ(UnmigratedSlotCount(), 0u);
-    EXPECT_EQ(LocallyAnsweredSlotCount() + ImplementedVerbCount() + UnmigratedSlotCount(),
-              kRemoteEmitSlotCount);
+    EXPECT_EQ(LocallyAnsweredSlotCount() + ImplementedVerbCount() + UnmigratedSlotCount(), kRemoteEmitSlotCount);
 }
 
 TEST(RemoteEmitTable, TheSixXfbAndPatchSlotsAreNonNullAndDistinct) {
@@ -262,13 +261,11 @@ TEST(RemoteEmitTable, EachXfbAndPatchSlotIsClassBAndDemandsASessionByItsOwnName)
     for (const Slot& slot : kSlots) {
         const ChildResult r = RunInChild([&slot] { slot.Call(); });
         ASSERT_TRUE(DiedOfAbort(r)) << slot.Name << ": " << DescribeStatus(r) << "\n" << r.Log;
-        EXPECT_NE(r.Log.find(std::string("Fatal{NoClientSession, \"") + slot.Name + "\"}"),
-                  std::string::npos)
+        EXPECT_NE(r.Log.find(std::string("Fatal{NoClientSession, \"") + slot.Name + "\"}"), std::string::npos)
             << slot.Name << " did not reach the class-B emitter's session demand:\n"
             << r.Log;
-        EXPECT_EQ(r.Log.find("Fatal{UnmigratedVerb"), std::string::npos)
-            << slot.Name << " is still class C:\n"
-            << r.Log;
+        EXPECT_EQ(r.Log.find("Fatal{UnmigratedVerb"), std::string::npos) << slot.Name << " is still class C:\n"
+                                                                         << r.Log;
     }
 }
 
@@ -285,8 +282,7 @@ TEST(RemoteEmitTable, DeleteTransformFeedbackHasNoRowAndStillAbortsByItsOwnName)
     // failed.
     const ChildResult r = RunInChild([] { RemoteEmitTable().GL.DeleteTransformFeedback(7); });
     ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
-    EXPECT_NE(r.Log.find("Fatal{NoClientSession, \"DeleteTransformFeedback\"}"), std::string::npos)
-        << r.Log;
+    EXPECT_NE(r.Log.find("Fatal{NoClientSession, \"DeleteTransformFeedback\"}"), std::string::npos) << r.Log;
     EXPECT_EQ(r.Log.find("Fatal{UnmigratedVerb"), std::string::npos) << r.Log;
 }
 #endif // MGTEST_HAVE_FORK
@@ -311,10 +307,9 @@ TEST(RemoteEmitTable, NoSlotIsNull) {
     for (SizeT i = 0; i < cellCount; ++i) {
         if (cells[i] == nullptr) ++nullCells;
     }
-    EXPECT_LE(nullCells, 1u)
-        << "a slot in the remote emit table is null (" << nullCells << " null cells out of "
-        << cellCount
-        << "). R-4 forbids it: 91 MG_Impl sites call through this table with no null check at all";
+    EXPECT_LE(nullCells, 1u) << "a slot in the remote emit table is null (" << nullCells << " null cells out of "
+                             << cellCount
+                             << "). R-4 forbids it: 91 MG_Impl sites call through this table with no null check at all";
 }
 
 TEST(RemoteEmitTable, TheFiveEmittersAreTheOnesTheCensusMeasured) {
@@ -329,8 +324,7 @@ TEST(RemoteEmitTable, TheFiveEmittersAreTheOnesTheCensusMeasured) {
     // And the two R-15 answers them locally, so they are not the same pointer as any Fatal one.
     EXPECT_NE(table.GL.GetIntegeri_v, nullptr);
     EXPECT_NE(table.GL.IsTimerQuerySupported, nullptr);
-    EXPECT_NE(reinterpret_cast<const void*>(table.GL.DrawArrays),
-              reinterpret_cast<const void*>(table.GL.DrawElements))
+    EXPECT_NE(reinterpret_cast<const void*>(table.GL.DrawArrays), reinterpret_cast<const void*>(table.GL.DrawElements))
         << "DrawArrays is class B and DrawElements is class C; they cannot share a thunk";
 }
 
@@ -344,11 +338,9 @@ TEST(RemoteEmitTable, AnUnmigratedShapeRefusalAbortsAndNamesItself) {
     // unrepresentable SHAPE (RefuseDrawByName, EmitF1Clear's default arm), and every refusal
     // left on it is spelled "<slot>+<QUALIFIER>" - so that is what is driven here, through the
     // funnel itself, because every emitter that reaches it needs a session and a context first.
-    const ChildResult r =
-        RunInChild([] { UnmigratedVerbFatal("MultiDrawElementsBaseVertex+CLIENT_INDICES"); });
+    const ChildResult r = RunInChild([] { UnmigratedVerbFatal("MultiDrawElementsBaseVertex+CLIENT_INDICES"); });
     ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
-    EXPECT_NE(r.Log.find("Fatal{UnmigratedVerb, \"MultiDrawElementsBaseVertex+CLIENT_INDICES\"}"),
-              std::string::npos)
+    EXPECT_NE(r.Log.find("Fatal{UnmigratedVerb, \"MultiDrawElementsBaseVertex+CLIENT_INDICES\"}"), std::string::npos)
         << r.Log;
 }
 
@@ -357,8 +349,7 @@ TEST(RemoteEmitTable, EachUnmigratedShapeRefusalNamesItsOwnShape) {
     // caller's and not a constant. Two different shapes, two different names.
     const ChildResult r = RunInChild([] { UnmigratedVerbFatal("DrawArraysIndirect+CLIENT_COMMANDS"); });
     ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
-    EXPECT_NE(r.Log.find("Fatal{UnmigratedVerb, \"DrawArraysIndirect+CLIENT_COMMANDS\"}"), std::string::npos)
-        << r.Log;
+    EXPECT_NE(r.Log.find("Fatal{UnmigratedVerb, \"DrawArraysIndirect+CLIENT_COMMANDS\"}"), std::string::npos) << r.Log;
     EXPECT_EQ(r.Log.find("MultiDrawElementsBaseVertex"), std::string::npos)
         << "the Fatal message names a shape other than the one that was refused:\n"
         << r.Log;
@@ -369,10 +360,8 @@ TEST(RemoteEmitTable, EachUnmigratedShapeRefusalNamesItsOwnShape) {
 // the stub it replaced, by behaviour rather than by pointer. Red once by: moving DrawElements
 // back into MGR_UNMIGRATED_D1_SLOTS - the log then reads UnmigratedVerb.
 TEST(RemoteEmitTable, AFlippedDrawSlotDemandsASessionRatherThanNamingItselfUnmigrated) {
-    const ChildResult r = RunInChild([] {
-        RemoteEmitTable().GL.DrawElements(0x0004 /*GL_TRIANGLES*/, 3, 0x1405 /*GL_UNSIGNED_INT*/,
-                                          nullptr);
-    });
+    const ChildResult r = RunInChild(
+        [] { RemoteEmitTable().GL.DrawElements(0x0004 /*GL_TRIANGLES*/, 3, 0x1405 /*GL_UNSIGNED_INT*/, nullptr); });
     ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
     EXPECT_NE(r.Log.find("Fatal{NoClientSession, \"DrawElements\"}"), std::string::npos) << r.Log;
     EXPECT_EQ(r.Log.find("Fatal{UnmigratedVerb"), std::string::npos)
@@ -417,10 +406,9 @@ TEST(RemoteEmitTable, TheSevenI1SlotsAreClassBAndAreNotTheFatalThunk) {
         reinterpret_cast<const void*>(table.GL.CopyImageSubData),
         reinterpret_cast<const void*>(table.GL.ShaderStorageBlockBinding),
     };
-    static const char* const kNames[] = {"BindImageTexture",      "DispatchCompute",
-                                         "DispatchComputeIndirect", "MemoryBarrier",
-                                         "MemoryBarrierByRegion", "CopyImageSubData",
-                                         "ShaderStorageBlockBinding"};
+    static const char* const kNames[] = {
+        "BindImageTexture",      "DispatchCompute",  "DispatchComputeIndirect",  "MemoryBarrier",
+        "MemoryBarrierByRegion", "CopyImageSubData", "ShaderStorageBlockBinding"};
     for (SizeT i = 0; i < sizeof(i1) / sizeof(i1[0]); ++i) {
         EXPECT_NE(i1[i], nullptr) << kNames[i] << " is null";
     }
@@ -455,39 +443,31 @@ TEST(RemoteEmitTable, EachI1SlotReachesRequireSessionUnderItsOwnName) {
     // MemoryBarrier arm below then finds Fatal{UnmigratedVerb, "MemoryBarrier"} instead.
     const ChildResult barrier = RunInChild([] { RemoteEmitTable().GL.MemoryBarrier(0x2000); });
     ASSERT_TRUE(DiedOfAbort(barrier)) << DescribeStatus(barrier) << "\n" << barrier.Log;
-    EXPECT_NE(barrier.Log.find("Fatal{NoClientSession, \"MemoryBarrier\"}"), std::string::npos)
-        << barrier.Log;
+    EXPECT_NE(barrier.Log.find("Fatal{NoClientSession, \"MemoryBarrier\"}"), std::string::npos) << barrier.Log;
     EXPECT_EQ(barrier.Log.find("Fatal{UnmigratedVerb"), std::string::npos)
         << "MemoryBarrier is class B from P5b i1 on:\n"
         << barrier.Log;
 
     const ChildResult dispatch = RunInChild([] { RemoteEmitTable().GL.DispatchCompute(1, 1, 1); });
     ASSERT_TRUE(DiedOfAbort(dispatch)) << DescribeStatus(dispatch) << "\n" << dispatch.Log;
-    EXPECT_NE(dispatch.Log.find("Fatal{NoClientSession, \"DispatchCompute\"}"), std::string::npos)
-        << dispatch.Log;
+    EXPECT_NE(dispatch.Log.find("Fatal{NoClientSession, \"DispatchCompute\"}"), std::string::npos) << dispatch.Log;
 
-    const ChildResult bind = RunInChild(
-        [] { RemoteEmitTable().GL.BindImageTexture(0, 1, 0, GL_FALSE, 0, 0x88BA, 0x8058); });
+    const ChildResult bind =
+        RunInChild([] { RemoteEmitTable().GL.BindImageTexture(0, 1, 0, GL_FALSE, 0, 0x88BA, 0x8058); });
     ASSERT_TRUE(DiedOfAbort(bind)) << DescribeStatus(bind) << "\n" << bind.Log;
-    EXPECT_NE(bind.Log.find("Fatal{NoClientSession, \"BindImageTexture\"}"), std::string::npos)
-        << bind.Log;
+    EXPECT_NE(bind.Log.find("Fatal{NoClientSession, \"BindImageTexture\"}"), std::string::npos) << bind.Log;
 
-    const ChildResult ssbo = RunInChild(
-        [] { RemoteEmitTable().GL.ShaderStorageBlockBinding(1, "Blk", 2); });
+    const ChildResult ssbo = RunInChild([] { RemoteEmitTable().GL.ShaderStorageBlockBinding(1, "Blk", 2); });
     ASSERT_TRUE(DiedOfAbort(ssbo)) << DescribeStatus(ssbo) << "\n" << ssbo.Log;
-    EXPECT_NE(ssbo.Log.find("Fatal{NoClientSession, \"ShaderStorageBlockBinding\"}"),
-              std::string::npos)
-        << ssbo.Log;
+    EXPECT_NE(ssbo.Log.find("Fatal{NoClientSession, \"ShaderStorageBlockBinding\"}"), std::string::npos) << ssbo.Log;
 
     const ChildResult copy = RunInChild([] {
         const MG_Backend::CopyImageEndpoint src{};
         const MG_Backend::CopyImageEndpoint dst{};
-        RemoteEmitTable().GL.CopyImageSubData(src, 0x0DE1, 0, 0, 0, 0, dst, 0x0DE1, 0, 0, 0, 0, 1,
-                                              1, 1);
+        RemoteEmitTable().GL.CopyImageSubData(src, 0x0DE1, 0, 0, 0, 0, dst, 0x0DE1, 0, 0, 0, 0, 1, 1, 1);
     });
     ASSERT_TRUE(DiedOfAbort(copy)) << DescribeStatus(copy) << "\n" << copy.Log;
-    EXPECT_NE(copy.Log.find("Fatal{NoClientSession, \"CopyImageSubData\"}"), std::string::npos)
-        << copy.Log;
+    EXPECT_NE(copy.Log.find("Fatal{NoClientSession, \"CopyImageSubData\"}"), std::string::npos) << copy.Log;
 }
 #endif // MGTEST_HAVE_FORK
 
@@ -569,9 +549,7 @@ TEST(CapsMirrorTest, TheParallelShaderCompileEntryIsTheClientsCompileSwitchNotTh
     // AsyncOff.ExtensionStringMatchesTheConfiguration, whose fixture server compiles
     // asynchronously while the client does not. Red once by removing the reconcile call from
     // CapsMirror::Adopt: the first two expectations below fail.
-    auto count = [](const Vector<GLExtension>& list, GLExtension e) {
-        return std::count(list.begin(), list.end(), e);
-    };
+    auto count = [](const Vector<GLExtension>& list, GLExtension e) { return std::count(list.begin(), list.end(), e); };
     Snapshot s = MakeSnapshot(kMGPipeSubsystemResources, 0);
     {
         // The server compiles asynchronously and says so; this client compiles inline.
@@ -690,14 +668,12 @@ TEST(CapsMirrorTest, APlaceholderMirrorRefusesToAnswerAndNamesTheFamily) {
         ::_exit(0);
     });
     ASSERT_TRUE(DiedOfAbort(result)) << DescribeStatus(result) << "\n" << result.Log;
-    EXPECT_NE(result.Log.find("Fatal{CapsBeforeFirstSnapshot, \"TextureResources\"}"),
-              std::string::npos)
+    EXPECT_NE(result.Log.find("Fatal{CapsBeforeFirstSnapshot, \"TextureResources\"}"), std::string::npos)
         << "the refusal must name the family that asked; a death with no word is invisible to "
            "the census, to run_trace_case.cmake and to every red-once:\n"
         << result.Log;
-    EXPECT_NE(result.Log.find("0x400"), std::string::npos)
-        << "the subsystem bit belongs in the line beside its word:\n"
-        << result.Log;
+    EXPECT_NE(result.Log.find("0x400"), std::string::npos) << "the subsystem bit belongs in the line beside its word:\n"
+                                                           << result.Log;
 #else
     GTEST_SKIP() << "the Fatal arm is only observable through a fork";
 #endif
@@ -745,9 +721,8 @@ TEST(CapsMirrorTest, ThePlaceholderWaitsForASnapshotAnotherThreadIsFetching) {
         reader.join();
 
         EXPECT_TRUE(answered.load()) << "the reader never returned from ServerConsumes";
-        EXPECT_TRUE(consumes.load())
-            << "a reader that asked DURING the bring-up must get the server's real answer - "
-               "Magma publishes the resource family - rather than the placeholder's false";
+        EXPECT_TRUE(consumes.load()) << "a reader that asked DURING the bring-up must get the server's real answer - "
+                                        "Magma publishes the resource family - rather than the placeholder's false";
         EXPECT_GT(PublishedCapsGeneration(), 0u);
         ClientSessionInstance().Stop();
         MG_Remote::Server::ServerLoopInstance().Stop();
@@ -873,8 +848,9 @@ TEST(CapsMirrorTest, MagmaTransportPublishesRealBufferConsumersWithoutRunAhead) 
             EXPECT_NE(ops->Readback, nullptr);
             EXPECT_NE(ops->Destroy, nullptr);
             EXPECT_NE(ops->MapPersistent, nullptr);
-            if (ops->MapPersistent) EXPECT_EQ(ops->MapPersistent({7, 1}, 64, nullptr), nullptr)
-                << "Magma must not donate a server address as a client persistent map";
+            if (ops->MapPersistent)
+                EXPECT_EQ(ops->MapPersistent({7, 1}, 64, nullptr), nullptr)
+                    << "Magma must not donate a server address as a client persistent map";
             // P7 wave 2 package C, OQ-10 (CONTRACT-P7 §5.4): THE TABLE DECIDES THE BIT, and
             // this is the assertion that says so rather than asserting a constant. Magma
             // registers a SubDataResident arm (VkBufferManager.cpp's g_vulkanWireResourceOps),
@@ -912,8 +888,8 @@ TEST(CapsMirrorTest, TheConsumerBlockDoesNotCollideWithTheFeatureBits) {
     // The two halves of CallMask, asserted against each other rather than against a constant:
     // bits 0..8 are MGPCapBit and bits 32..47 are the consumer mask, and the whole reason R-8
     // became implementable is that they do not overlap.
-    AdoptSnapshot(MakeSnapshot(kMGPipeSubsystemResources | kMGPipeSubsystemPrograms,
-                               kCapTimerQuery | kCapOcclusionQuery));
+    AdoptSnapshot(
+        MakeSnapshot(kMGPipeSubsystemResources | kMGPipeSubsystemPrograms, kCapTimerQuery | kCapOcclusionQuery));
     EXPECT_TRUE(CapsMirrorInstance().HasCap(kCapTimerQuery));
     EXPECT_TRUE(CapsMirrorInstance().HasCap(kCapOcclusionQuery));
     EXPECT_FALSE(CapsMirrorInstance().HasCap(kCapXfbPrimitivesQuery));
@@ -1020,8 +996,7 @@ TEST(RemoteDrawPlan, AClientIndexArrayPlansFromIndexZeroWithNoHandle) {
 TEST(RemoteDrawPlan, AnArraysRangeIsFirstAndCountWithNoBias) {
     RemoteDrawBindings b{};
     MGPDrawRange range{};
-    ASSERT_TRUE(PlanDrawRange(b, 0, reinterpret_cast<const void*>(static_cast<std::intptr_t>(56064)),
-                              16128, 0, range));
+    ASSERT_TRUE(PlanDrawRange(b, 0, reinterpret_cast<const void*>(static_cast<std::intptr_t>(56064)), 16128, 0, range));
     EXPECT_EQ(range.Start, 56064u);
     EXPECT_EQ(range.Count, 16128u);
     EXPECT_EQ(range.IndexBias, 0);
@@ -1059,7 +1034,7 @@ TEST(RemoteDrawPlan, TheThreeIndexTypesSizeAndNothingElseDoes) {
     EXPECT_EQ(RemoteIndexSizeFor(0x1403 /*GL_UNSIGNED_SHORT*/), 2u);
     EXPECT_EQ(RemoteIndexSizeFor(0x1405 /*GL_UNSIGNED_INT*/), 4u);
     EXPECT_EQ(RemoteIndexSizeFor(0x1406 /*GL_FLOAT*/), 0u) << "not an index type: the emitter refuses "
-                                                             "\"<slot>+INDEX_TYPE\"";
+                                                              "\"<slot>+INDEX_TYPE\"";
 }
 
 TEST(RemoteEmitTable, TheNineteenDrawSlotsAreEmittersDistinctFromEveryStub) {
@@ -1106,8 +1081,7 @@ TEST(RemoteEmitTable, TheE2DropSwitchStartsDisarmed) {
     EXPECT_EQ(DroppedClearEmissions(), 0u);
     SetDropClearEmissionForNegativeControl(true);
     SetDropClearEmissionForNegativeControl(false);
-    EXPECT_EQ(DroppedClearEmissions(), 0u)
-        << "arming and disarming the control must not, by itself, drop anything";
+    EXPECT_EQ(DroppedClearEmissions(), 0u) << "arming and disarming the control must not, by itself, drop anything";
 }
 
 // =====================================================================================
@@ -1193,7 +1167,8 @@ TEST(RemoteReadback, TheTightRowsAreScatteredWhereThePackStateSaysAndTheGapsAreL
     // THE INPUT, not the state under test: every source byte is distinct, so a scatter that
     // wrote the right COUNT of bytes from the wrong offset cannot look correct.
     std::vector<Uint8> tight(static_cast<size_t>(kW) * kH * kBpp);
-    for (size_t i = 0; i < tight.size(); ++i) tight[i] = static_cast<Uint8>(i);
+    for (size_t i = 0; i < tight.size(); ++i)
+        tight[i] = static_cast<Uint8>(i);
 
     std::vector<Uint8> destination(512, kSentinel);
     ScatterTightReadbackIntoPackState(tight.data(), destination.data(), kW, kH, kBpp, pack);
@@ -1202,8 +1177,7 @@ TEST(RemoteReadback, TheTightRowsAreScatteredWhereThePackStateSaysAndTheGapsAreL
     const size_t first = 1 * stride + 2 * 4;
     for (size_t row = 0; row < static_cast<size_t>(kH); ++row) {
         for (size_t byte = 0; byte < static_cast<size_t>(kW) * kBpp; ++byte) {
-            EXPECT_EQ(destination[first + row * stride + byte],
-                      tight[row * static_cast<size_t>(kW) * kBpp + byte])
+            EXPECT_EQ(destination[first + row * stride + byte], tight[row * static_cast<size_t>(kW) * kBpp + byte])
                 << "row " << row << " byte " << byte << " landed somewhere else";
         }
     }
@@ -1214,9 +1188,8 @@ TEST(RemoteReadback, TheTightRowsAreScatteredWhereThePackStateSaysAndTheGapsAreL
     // here; widening the per-row copy to the stride passes both loops above and fails here.
     size_t touched = 0;
     for (size_t i = 0; i < destination.size(); ++i) {
-        const bool inWrittenRow =
-            i >= first && ((i - first) % stride) < static_cast<size_t>(kW) * kBpp &&
-            ((i - first) / stride) < static_cast<size_t>(kH);
+        const bool inWrittenRow = i >= first && ((i - first) % stride) < static_cast<size_t>(kW) * kBpp &&
+                                  ((i - first) / stride) < static_cast<size_t>(kH);
         if (!inWrittenRow) {
             EXPECT_EQ(destination[i], kSentinel)
                 << "byte " << i << " is outside the rectangle GL names and was overwritten";
@@ -1241,11 +1214,12 @@ TEST(RemoteReadback, PackSkipImagesIsIgnoredForATwoDimensionalRead) {
     constexpr Uint8 kSentinel = 0xEE;
 
     PixelStoreParameters pack{};
-    pack.SkipImages = 1;      // the parameter under test
-    pack.ImageHeight = kH;    // and its companion; both must be ignored
+    pack.SkipImages = 1;   // the parameter under test
+    pack.ImageHeight = kH; // and its companion; both must be ignored
 
     std::vector<Uint8> tight(static_cast<size_t>(kW) * kH * kBpp);
-    for (size_t i = 0; i < tight.size(); ++i) tight[i] = static_cast<Uint8>(i + 1);
+    for (size_t i = 0; i < tight.size(); ++i)
+        tight[i] = static_cast<Uint8>(i + 1);
 
     std::vector<Uint8> destination(96, kSentinel);
     ScatterTightReadbackIntoPackState(tight.data(), destination.data(), kW, kH, kBpp, pack);
@@ -1253,9 +1227,9 @@ TEST(RemoteReadback, PackSkipImagesIsIgnoredForATwoDimensionalRead) {
     for (size_t i = 0; i < tight.size(); ++i)
         EXPECT_EQ(destination[i], tight[i]) << "byte " << i << " should hold the reply at offset 0";
     for (size_t i = tight.size(); i < destination.size(); ++i)
-        EXPECT_EQ(destination[i], kSentinel)
-            << "byte " << i << " is past the read's own extent and SKIP_IMAGES must not have moved "
-               "the write there";
+        EXPECT_EQ(destination[i], kSentinel) << "byte " << i
+                                             << " is past the read's own extent and SKIP_IMAGES must not have moved "
+                                                "the write there";
     // And the fast path takes it: an otherwise-neutral read with only SKIP_IMAGES set is tight.
     EXPECT_TRUE(ReadbackPackStateIsTightForTest(kW, kBpp, pack))
         << "SKIP_IMAGES alone must not force the bounce path for a 2-D read";
@@ -1271,7 +1245,8 @@ TEST(RemoteReadback, TheFastPathIsTakenExactlyWhenTheScatterWouldChangeNothing) 
     constexpr GLsizei kW = 5;
     constexpr GLsizei kH = 3;
     std::vector<Uint8> tight(static_cast<size_t>(kW) * kH * kBpp);
-    for (size_t i = 0; i < tight.size(); ++i) tight[i] = static_cast<Uint8>(i * 7 + 1);
+    for (size_t i = 0; i < tight.size(); ++i)
+        tight[i] = static_cast<Uint8>(i * 7 + 1);
 
     // Six layouts, chosen so both answers appear: a bare default, an explicit equal row
     // length, an alignment the row already satisfies, an alignment it does not, a skip, and a
@@ -1279,8 +1254,8 @@ TEST(RemoteReadback, TheFastPathIsTakenExactlyWhenTheScatterWouldChangeNothing) 
     // count of each answer is asserted too.
     std::vector<PixelStoreParameters> layouts(6);
     layouts[1].RowLength = kW;
-    layouts[2].Alignment = 4;   // 5*4 = 20, already a multiple of 4
-    layouts[3].Alignment = 8;   // 20 is not a multiple of 8 - the rows gain padding
+    layouts[2].Alignment = 4; // 5*4 = 20, already a multiple of 4
+    layouts[3].Alignment = 8; // 20 is not a multiple of 8 - the rows gain padding
     layouts[4].SkipPixels = 1;
     layouts[5].RowLength = 8;
 
@@ -1291,8 +1266,7 @@ TEST(RemoteReadback, TheFastPathIsTakenExactlyWhenTheScatterWouldChangeNothing) 
         ScatterTightReadbackIntoPackState(tight.data(), destination.data(), kW, kH, kBpp, pack);
         destination.resize(tight.size());
         const bool scatterChangedNothing = (destination == tight);
-        const bool predicateSaysTight =
-            ReadbackPackStateIsTightForTest(kW, kBpp, pack) != 0;
+        const bool predicateSaysTight = ReadbackPackStateIsTightForTest(kW, kBpp, pack) != 0;
         EXPECT_EQ(predicateSaysTight, scatterChangedNothing)
             << "layout " << i << ": the fast-path predicate and the scatter disagree";
         if (predicateSaysTight) ++tightCount;
@@ -1337,9 +1311,9 @@ TEST(RemoteReadback, TheCtsReadOfExactlyTwoMiBIsTwoBandsThatEachFitASlot) {
     for (const ReadbackBand& band : bands) {
         EXPECT_EQ(band.FirstColumn, 0u);
         EXPECT_EQ(band.Columns, 256u);
-        EXPECT_LE(TightReadbackByteCount(static_cast<GLsizei>(band.Columns), static_cast<GLsizei>(band.Rows),
-                                         0x1908, 0x1406),
-                  kCap);
+        EXPECT_LE(
+            TightReadbackByteCount(static_cast<GLsizei>(band.Columns), static_cast<GLsizei>(band.Rows), 0x1908, 0x1406),
+            kCap);
     }
     // A read that already fits is ONE record, unchanged from before: exactly the cap, and E2's
     // 640x480 RGBA8 snapshot.
@@ -1353,16 +1327,18 @@ TEST(RemoteReadback, EveryPlanCoversTheReadOnceInRowMajorOrderWithBandsThatFitAn
     // The plan's invariants over a sweep that includes both shapes - whole-width row bands and,
     // for a row wider than a reply, single-row column pieces - at small caps so every boundary is
     // hit: the cap exactly one row, one byte short of a row, one pixel, one pixel short of two.
-    struct Shape { Uint64 w, h, bpp, cap; };
+    struct Shape {
+        Uint64 w, h, bpp, cap;
+    };
     const Shape shapes[] = {
-        {7, 5, 4, 28},   {7, 5, 4, 27},  {7, 5, 4, 4},   {7, 5, 4, 7},   {7, 5, 16, 1000},
-        {20, 3, 16, 100}, {1, 9, 3, 3},  {9, 1, 3, 26},  {256, 512, 16, 2097136}, {5, 5, 8, 8},
-        {33, 17, 4, 131}, {1024, 513, 4, 2097136},
+        {7, 5, 4, 28},           {7, 5, 4, 27},    {7, 5, 4, 4},     {7, 5, 4, 7},
+        {7, 5, 16, 1000},        {20, 3, 16, 100}, {1, 9, 3, 3},     {9, 1, 3, 26},
+        {256, 512, 16, 2097136}, {5, 5, 8, 8},     {33, 17, 4, 131}, {1024, 513, 4, 2097136},
     };
     int rowShapes = 0, pieceShapes = 0;
     for (const Shape& s : shapes) {
-        SCOPED_TRACE(std::to_string(s.w) + "x" + std::to_string(s.h) + " bpp " + std::to_string(s.bpp) +
-                     " cap " + std::to_string(s.cap));
+        SCOPED_TRACE(std::to_string(s.w) + "x" + std::to_string(s.h) + " bpp " + std::to_string(s.bpp) + " cap " +
+                     std::to_string(s.cap));
         Bool planned = false;
         const auto bands = CollectReadbackBands(s.w, s.h, s.bpp, s.cap, &planned);
         ASSERT_TRUE(planned);
@@ -1386,7 +1362,8 @@ TEST(RemoteReadback, EveryPlanCoversTheReadOnceInRowMajorOrderWithBandsThatFitAn
                     ++covered[static_cast<size_t>((band.FirstRow + r) * s.w + band.FirstColumn + c)];
         }
         EXPECT_EQ(previousTightEnd, s.w * s.h);
-        for (size_t i = 0; i < covered.size(); ++i) ASSERT_EQ(covered[i], 1) << "pixel " << i;
+        for (size_t i = 0; i < covered.size(); ++i)
+            ASSERT_EQ(covered[i], 1) << "pixel " << i;
         // AS FEW RECORDS AS THE SHAPE ALLOWS: a whole-width band takes every row a reply holds.
         if (!pieces) {
             const Uint64 rowsPerReply = s.cap / (s.w * s.bpp);
@@ -1428,7 +1405,8 @@ TEST(RemoteReadback, ABandedScatterWritesExactlyTheBytesTheWholeScatterWrites) {
     constexpr Uint8 kSentinel = 0xEE;
     for (const Uint64 bpp : {Uint64{3}, Uint64{4}, Uint64{16}}) {
         std::vector<Uint8> tight(static_cast<size_t>(kW) * kH * bpp);
-        for (size_t i = 0; i < tight.size(); ++i) tight[i] = static_cast<Uint8>(i * 13 + 5);
+        for (size_t i = 0; i < tight.size(); ++i)
+            tight[i] = static_cast<Uint8>(i * 13 + 5);
         std::vector<PixelStoreParameters> layouts(6);
         layouts[1].Alignment = 8;
         layouts[2].RowLength = kW + 3;
@@ -1649,8 +1627,7 @@ TEST(PipeRouting, TheInstalledClientArmIsWireAndNotMonolithAndEveryRoutedRowMove
            "thread under split) or an unrouted row was overwritten";
 
     const SizeT movedEscapes = CountDifferingCells(gMGPipeRouteEscapes, MGPipeMonolithEscapes());
-    EXPECT_EQ(movedEscapes, 5u)
-        << "the five escape routes must move off the monolith escapes too";
+    EXPECT_EQ(movedEscapes, 5u) << "the five escape routes must move off the monolith escapes too";
 
     // Restore the monolith arm for the sibling cases that assert it (and for a clean binary).
     MGPipeInstallMonolithTables();
@@ -1714,8 +1691,7 @@ TEST(RemoteReadback, AReplyIsScatteredOnlyWhenItIsOkAndExactlyTheReadsExtent) {
     EXPECT_FALSE(ReadbackReplyIsComplete(kOk, tight - 16, tight))
         << "a SHORT OK reply (one row missing) must not be scattered - the missing rows would be "
            "whatever the destination held";
-    EXPECT_FALSE(ReadbackReplyIsComplete(kDeclined, 0, tight))
-        << "a DECLINED reply carries no pixels";
+    EXPECT_FALSE(ReadbackReplyIsComplete(kDeclined, 0, tight)) << "a DECLINED reply carries no pixels";
     EXPECT_FALSE(ReadbackReplyIsComplete(kError, 0, tight)) << "an ERROR reply carries no pixels";
     EXPECT_FALSE(ReadbackReplyIsComplete(kOk, 0, tight)) << "an OK reply of zero bytes is not the extent";
 }
@@ -1729,38 +1705,59 @@ TEST(RemoteReadback, AReplyIsScatteredOnlyWhenItIsOkAndExactlyTheReadsExtent) {
 // f1: the installed emitters are decoded by a peer on the apply thread.
 #if MGTEST_HAVE_FORK
 namespace {
-struct F1Peer : Codec::WireVerbSink {
-    MGPClear clear{};
-    MGPCopyFromFramebuffer copy{};
-    MGPMipPlan mip{};
-    MGPBlit blit{};
-    unsigned calls = 0;
-    Bool OnClear(const MGPClear& v) override { clear = v; ++calls; return true; }
-    Bool OnCopyFramebufferToTexture(const MGPCopyFromFramebuffer& v) override { copy = v; ++calls; return true; }
-    Bool OnGenerateMipmap(const MGPMipPlan& v) override { mip = v; ++calls; return true; }
-    Bool OnBlit(const MGPBlit& v) override { blit = v; ++calls; return true; }
-    void Install() {
-        if (Srv::ServerLoopInstance().RunProbeOnApplyThreadForTesting([](void* self) {
-            auto& decoder = Srv::ServerSessionInstance().Applier().*PeerMember(DecoderTag{});
-            decoder.SetVerbSink(static_cast<F1Peer*>(self));
-            return MOBILEGL_OK;
-        }, this) != MOBILEGL_OK) ::_exit(82);
-    }
-};
-}
+    struct F1Peer : Codec::WireVerbSink {
+        MGPClear clear{};
+        MGPCopyFromFramebuffer copy{};
+        MGPMipPlan mip{};
+        MGPBlit blit{};
+        unsigned calls = 0;
+        Bool OnClear(const MGPClear& v) override {
+            clear = v;
+            ++calls;
+            return true;
+        }
+        Bool OnCopyFramebufferToTexture(const MGPCopyFromFramebuffer& v) override {
+            copy = v;
+            ++calls;
+            return true;
+        }
+        Bool OnGenerateMipmap(const MGPMipPlan& v) override {
+            mip = v;
+            ++calls;
+            return true;
+        }
+        Bool OnBlit(const MGPBlit& v) override {
+            blit = v;
+            ++calls;
+            return true;
+        }
+        void Install() {
+            if (Srv::ServerLoopInstance().RunProbeOnApplyThreadForTesting(
+                    [](void* self) {
+                        auto& decoder = Srv::ServerSessionInstance().Applier().*PeerMember(DecoderTag{});
+                        decoder.SetVerbSink(static_cast<F1Peer*>(self));
+                        return MOBILEGL_OK;
+                    },
+                    this) != MOBILEGL_OK)
+                ::_exit(82);
+        }
+    };
+} // namespace
 
 TEST(RemoteF1, ClearBufferfvFieldsCross) {
     // Red once (executed, reverted): zero the emitted clear values; F1.ClearBufferfv.fields fails.
     const auto child = RunInChild([] {
         StartControlSession();
-        F1Peer peer; peer.Install();
+        F1Peer peer;
+        peer.Install();
         const GLfloat value[4] = {1, 7, 13, 23};
 
         RemoteEmitTable().GL.ClearBufferfv(GL_COLOR, 3, value);
         const auto& r = peer.clear;
         if (peer.calls != 1 || r.Kind != kMGPipeClearKindColor || r.ValueClass != kMGPipeClearValueClassFloat ||
             r.DrawBufferIndex != 3 || std::memcmp(r.ColorValue, value, sizeof(value)) != 0 ||
-            !MGPipeHandleIsNull(r.Fbo)) ::_exit(101);
+            !MGPipeHandleIsNull(r.Fbo))
+            ::_exit(101);
         ClientSessionInstance().Stop();
     });
     EXPECT_TRUE(WIFEXITED(child.Status) && WEXITSTATUS(child.Status) == 0)
@@ -1771,14 +1768,16 @@ TEST(RemoteF1, ClearNamedFramebufferfvFieldsCross) {
     // Red once (executed, reverted): zero the emitted clear values; F1.ClearNamedFramebufferfv.fields fails.
     const auto child = RunInChild([] {
         StartControlSession();
-        F1Peer peer; peer.Install();
+        F1Peer peer;
+        peer.Install();
         const GLfloat value[4] = {1, 7, 13, 23};
         const auto fbo = MakeShared<MG_State::GLState::FramebufferObject>(73);
         RemoteEmitTable().GL.ClearNamedFramebufferfv(fbo, GL_COLOR, 3, value);
         const auto& r = peer.clear;
         if (peer.calls != 1 || r.Kind != kMGPipeClearKindColor || r.ValueClass != kMGPipeClearValueClassFloat ||
             r.DrawBufferIndex != 3 || std::memcmp(r.ColorValue, value, sizeof(value)) != 0 ||
-            r.Fbo != MGPipeFramebufferEmitter::HandleFor(*fbo)) ::_exit(101);
+            r.Fbo != MGPipeFramebufferEmitter::HandleFor(*fbo))
+            ::_exit(101);
         ClientSessionInstance().Stop();
     });
     EXPECT_TRUE(WIFEXITED(child.Status) && WEXITSTATUS(child.Status) == 0)
@@ -1789,14 +1788,16 @@ TEST(RemoteF1, ClearBufferivFieldsCross) {
     // Red once (executed, reverted): zero the emitted clear values; F1.ClearBufferiv.fields fails.
     const auto child = RunInChild([] {
         StartControlSession();
-        F1Peer peer; peer.Install();
+        F1Peer peer;
+        peer.Install();
         const GLint value[4] = {1, 7, 13, 23};
 
         RemoteEmitTable().GL.ClearBufferiv(GL_COLOR, 3, value);
         const auto& r = peer.clear;
         if (peer.calls != 1 || r.Kind != kMGPipeClearKindColor || r.ValueClass != kMGPipeClearValueClassInt ||
             r.DrawBufferIndex != 3 || std::memcmp(r.ColorValue, value, sizeof(value)) != 0 ||
-            !MGPipeHandleIsNull(r.Fbo)) ::_exit(101);
+            !MGPipeHandleIsNull(r.Fbo))
+            ::_exit(101);
         ClientSessionInstance().Stop();
     });
     EXPECT_TRUE(WIFEXITED(child.Status) && WEXITSTATUS(child.Status) == 0)
@@ -1807,14 +1808,16 @@ TEST(RemoteF1, ClearNamedFramebufferivFieldsCross) {
     // Red once (executed, reverted): zero the emitted clear values; F1.ClearNamedFramebufferiv.fields fails.
     const auto child = RunInChild([] {
         StartControlSession();
-        F1Peer peer; peer.Install();
+        F1Peer peer;
+        peer.Install();
         const GLint value[4] = {1, 7, 13, 23};
         const auto fbo = MakeShared<MG_State::GLState::FramebufferObject>(73);
         RemoteEmitTable().GL.ClearNamedFramebufferiv(fbo, GL_COLOR, 3, value);
         const auto& r = peer.clear;
         if (peer.calls != 1 || r.Kind != kMGPipeClearKindColor || r.ValueClass != kMGPipeClearValueClassInt ||
             r.DrawBufferIndex != 3 || std::memcmp(r.ColorValue, value, sizeof(value)) != 0 ||
-            r.Fbo != MGPipeFramebufferEmitter::HandleFor(*fbo)) ::_exit(101);
+            r.Fbo != MGPipeFramebufferEmitter::HandleFor(*fbo))
+            ::_exit(101);
         ClientSessionInstance().Stop();
     });
     EXPECT_TRUE(WIFEXITED(child.Status) && WEXITSTATUS(child.Status) == 0)
@@ -1825,14 +1828,16 @@ TEST(RemoteF1, ClearBufferuivFieldsCross) {
     // Red once (executed, reverted): zero the emitted clear values; F1.ClearBufferuiv.fields fails.
     const auto child = RunInChild([] {
         StartControlSession();
-        F1Peer peer; peer.Install();
+        F1Peer peer;
+        peer.Install();
         const GLuint value[4] = {1, 7, 13, 23};
 
         RemoteEmitTable().GL.ClearBufferuiv(GL_COLOR, 3, value);
         const auto& r = peer.clear;
         if (peer.calls != 1 || r.Kind != kMGPipeClearKindColor || r.ValueClass != kMGPipeClearValueClassUint ||
             r.DrawBufferIndex != 3 || std::memcmp(r.ColorValue, value, sizeof(value)) != 0 ||
-            !MGPipeHandleIsNull(r.Fbo)) ::_exit(101);
+            !MGPipeHandleIsNull(r.Fbo))
+            ::_exit(101);
         ClientSessionInstance().Stop();
     });
     EXPECT_TRUE(WIFEXITED(child.Status) && WEXITSTATUS(child.Status) == 0)
@@ -1843,14 +1848,16 @@ TEST(RemoteF1, ClearNamedFramebufferuivFieldsCross) {
     // Red once (executed, reverted): zero the emitted clear values; F1.ClearNamedFramebufferuiv.fields fails.
     const auto child = RunInChild([] {
         StartControlSession();
-        F1Peer peer; peer.Install();
+        F1Peer peer;
+        peer.Install();
         const GLuint value[4] = {1, 7, 13, 23};
         const auto fbo = MakeShared<MG_State::GLState::FramebufferObject>(73);
         RemoteEmitTable().GL.ClearNamedFramebufferuiv(fbo, GL_COLOR, 3, value);
         const auto& r = peer.clear;
         if (peer.calls != 1 || r.Kind != kMGPipeClearKindColor || r.ValueClass != kMGPipeClearValueClassUint ||
             r.DrawBufferIndex != 3 || std::memcmp(r.ColorValue, value, sizeof(value)) != 0 ||
-            r.Fbo != MGPipeFramebufferEmitter::HandleFor(*fbo)) ::_exit(101);
+            r.Fbo != MGPipeFramebufferEmitter::HandleFor(*fbo))
+            ::_exit(101);
         ClientSessionInstance().Stop();
     });
     EXPECT_TRUE(WIFEXITED(child.Status) && WEXITSTATUS(child.Status) == 0)
@@ -1860,13 +1867,15 @@ TEST(RemoteF1, ClearNamedFramebufferuivFieldsCross) {
 TEST(RemoteF1, ClearBufferfiFieldsCross) {
     // Red once (executed, reverted): zero the emitted clear values; F1.ClearBufferfi.fields fails.
     const auto child = RunInChild([] {
-        StartControlSession(); F1Peer peer; peer.Install();
+        StartControlSession();
+        F1Peer peer;
+        peer.Install();
 
         RemoteEmitTable().GL.ClearBufferfi(GL_DEPTH_STENCIL, 0, 0.375f, 91);
         const auto& r = peer.clear;
         if (peer.calls != 1 || r.Kind != kMGPipeClearKindDepthStencil || r.DrawBufferIndex != 0 ||
-            r.DepthValue != 0.375f || r.StencilValue != 91 ||
-            !MGPipeHandleIsNull(r.Fbo)) ::_exit(101);
+            r.DepthValue != 0.375f || r.StencilValue != 91 || !MGPipeHandleIsNull(r.Fbo))
+            ::_exit(101);
         ClientSessionInstance().Stop();
     });
     EXPECT_TRUE(WIFEXITED(child.Status) && WEXITSTATUS(child.Status) == 0)
@@ -1876,13 +1885,15 @@ TEST(RemoteF1, ClearBufferfiFieldsCross) {
 TEST(RemoteF1, ClearNamedFramebufferfiFieldsCross) {
     // Red once (executed, reverted): zero the emitted clear values; F1.ClearNamedFramebufferfi.fields fails.
     const auto child = RunInChild([] {
-        StartControlSession(); F1Peer peer; peer.Install();
+        StartControlSession();
+        F1Peer peer;
+        peer.Install();
         const auto fbo = MakeShared<MG_State::GLState::FramebufferObject>(73);
         RemoteEmitTable().GL.ClearNamedFramebufferfi(fbo, GL_DEPTH_STENCIL, 0, 0.375f, 91);
         const auto& r = peer.clear;
         if (peer.calls != 1 || r.Kind != kMGPipeClearKindDepthStencil || r.DrawBufferIndex != 0 ||
-            r.DepthValue != 0.375f || r.StencilValue != 91 ||
-            r.Fbo != MGPipeFramebufferEmitter::HandleFor(*fbo)) ::_exit(101);
+            r.DepthValue != 0.375f || r.StencilValue != 91 || r.Fbo != MGPipeFramebufferEmitter::HandleFor(*fbo))
+            ::_exit(101);
         ClientSessionInstance().Stop();
     });
     EXPECT_TRUE(WIFEXITED(child.Status) && WEXITSTATUS(child.Status) == 0)
@@ -1890,32 +1901,36 @@ TEST(RemoteF1, ClearNamedFramebufferfiFieldsCross) {
 }
 
 namespace {
-SharedPtr<MG_State::GLState::TextureObject2D> F1Texture() {
-    MG_State::pGLContext = MakeUnique<MG_State::GLState::GLContext>();
-    auto tex = MakeShared<MG_State::GLState::TextureObject2D>(91);
-    tex->SetInternalFormat(TextureInternalFormat::RGBA8);
-    for (Uint level = 0; level != 3; ++level) {
-        const Int size = 8 >> level;
-        tex->AllocateStorage(TextureUploadTarget::Texture2D, level,
-            MG_State::GLState::MipmapInput{IntVec3{size, size, 1}, static_cast<SizeT>(size * size * 4)});
+    SharedPtr<MG_State::GLState::TextureObject2D> F1Texture() {
+        MG_State::pGLContext = MakeUnique<MG_State::GLState::GLContext>();
+        auto tex = MakeShared<MG_State::GLState::TextureObject2D>(91);
+        tex->SetInternalFormat(TextureInternalFormat::RGBA8);
+        for (Uint level = 0; level != 3; ++level) {
+            const Int size = 8 >> level;
+            tex->AllocateStorage(
+                TextureUploadTarget::Texture2D, level,
+                MG_State::GLState::MipmapInput{IntVec3{size, size, 1}, static_cast<SizeT>(size * size * 4)});
+        }
+        tex->SetBaseLevel(1);
+        MGPipeTextureEmitterInstance().AcquireTexture(tex->GetLifetimeId(), tex.get());
+        MG_State::pGLContext->GetTextureUnitObject(0).GetBindingSlot(TextureTarget::Texture2D).Bind(tex);
+        return tex;
     }
-    tex->SetBaseLevel(1);
-    MGPipeTextureEmitterInstance().AcquireTexture(tex->GetLifetimeId(), tex.get());
-    MG_State::pGLContext->GetTextureUnitObject(0).GetBindingSlot(TextureTarget::Texture2D).Bind(tex);
-    return tex;
-}
-}
+} // namespace
 
 TEST(RemoteF1, CopyTexImage2DFieldsCross) {
     // Red once (executed, reverted): increment the emitted copy level; F1.CopyTexImage2D.fields fails.
     const auto child = RunInChild([] {
-        StartControlSession(); F1Peer peer; peer.Install(); const auto tex = F1Texture();
+        StartControlSession();
+        F1Peer peer;
+        peer.Install();
+        const auto tex = F1Texture();
         RemoteEmitTable().GL.CopyTexImage2D(GL_TEXTURE_2D, 2, GL_RGBA8, -3, 4, 11, 13, 0);
         const auto& r = peer.copy;
-        if (peer.calls != 1 || r.Dst != MGPipeTextureEmitterInstance().FindTexture(*tex) ||
-            MGPipeHandleIsNull(r.Dst) || r.Target != GL_TEXTURE_2D || r.Level != 2 ||
-            r.InternalFormat != GL_RGBA8 || r.X != -3 || r.Y != 4 || r.Width != 11 || r.Height != 13 ||
-            r.XOffset != 0 || r.YOffset != 0 || r.SubImage != 0) ::_exit(101);
+        if (peer.calls != 1 || r.Dst != MGPipeTextureEmitterInstance().FindTexture(*tex) || MGPipeHandleIsNull(r.Dst) ||
+            r.Target != GL_TEXTURE_2D || r.Level != 2 || r.InternalFormat != GL_RGBA8 || r.X != -3 || r.Y != 4 ||
+            r.Width != 11 || r.Height != 13 || r.XOffset != 0 || r.YOffset != 0 || r.SubImage != 0)
+            ::_exit(101);
         ClientSessionInstance().Stop();
     });
     EXPECT_TRUE(WIFEXITED(child.Status) && WEXITSTATUS(child.Status) == 0)
@@ -1925,13 +1940,16 @@ TEST(RemoteF1, CopyTexImage2DFieldsCross) {
 TEST(RemoteF1, CopyTexSubImage2DFieldsCross) {
     // Red once (executed, reverted): increment the emitted copy level; F1.CopyTexSubImage2D.fields fails.
     const auto child = RunInChild([] {
-        StartControlSession(); F1Peer peer; peer.Install(); const auto tex = F1Texture();
+        StartControlSession();
+        F1Peer peer;
+        peer.Install();
+        const auto tex = F1Texture();
         RemoteEmitTable().GL.CopyTexSubImage2D(GL_TEXTURE_2D, 2, 5, 7, -3, 4, 11, 13);
         const auto& r = peer.copy;
-        if (peer.calls != 1 || r.Dst != MGPipeTextureEmitterInstance().FindTexture(*tex) ||
-            MGPipeHandleIsNull(r.Dst) || r.Target != GL_TEXTURE_2D || r.Level != 2 ||
-            r.InternalFormat != 0 || r.X != -3 || r.Y != 4 || r.Width != 11 || r.Height != 13 ||
-            r.XOffset != 5 || r.YOffset != 7 || r.SubImage != 1) ::_exit(101);
+        if (peer.calls != 1 || r.Dst != MGPipeTextureEmitterInstance().FindTexture(*tex) || MGPipeHandleIsNull(r.Dst) ||
+            r.Target != GL_TEXTURE_2D || r.Level != 2 || r.InternalFormat != 0 || r.X != -3 || r.Y != 4 ||
+            r.Width != 11 || r.Height != 13 || r.XOffset != 5 || r.YOffset != 7 || r.SubImage != 1)
+            ::_exit(101);
         ClientSessionInstance().Stop();
     });
     EXPECT_TRUE(WIFEXITED(child.Status) && WEXITSTATUS(child.Status) == 0)
@@ -1941,7 +1959,10 @@ TEST(RemoteF1, CopyTexSubImage2DFieldsCross) {
 TEST(RemoteF1, GenerateMipmapFieldsCross) {
     // Red once (executed, reverted): increment the emitted base level; F1.GenerateMipmap.fields fails.
     const auto child = RunInChild([] {
-        StartControlSession(); F1Peer peer; peer.Install(); const auto tex = F1Texture();
+        StartControlSession();
+        F1Peer peer;
+        peer.Install();
+        const auto tex = F1Texture();
         RemoteEmitTable().GL.GenerateMipmap(GL_TEXTURE_2D);
         // THE FENCE. Under MOBILEGL_IPC_BATCH_WAITS (default on) GenerateMipmap is kCtxObject -
         // a value-class record whose emit no longer waits for its own apply (production-safe:
@@ -1952,8 +1973,8 @@ TEST(RemoteF1, GenerateMipmapFieldsCross) {
         const GLfloat fence[4] = {0, 0, 0, 0};
         RemoteEmitTable().GL.ClearBufferfv(GL_COLOR, 0, fence);
         const auto& r = peer.mip;
-        if (peer.calls != 2 || r.Res != MGPipeTextureEmitterInstance().FindTexture(*tex) ||
-            MGPipeHandleIsNull(r.Res) || r.Target != GL_TEXTURE_2D || r.BaseLevel != 1 || r.LevelCount != 3)
+        if (peer.calls != 2 || r.Res != MGPipeTextureEmitterInstance().FindTexture(*tex) || MGPipeHandleIsNull(r.Res) ||
+            r.Target != GL_TEXTURE_2D || r.BaseLevel != 1 || r.LevelCount != 3)
             ::_exit(101);
         ClientSessionInstance().Stop();
     });
@@ -1961,8 +1982,6 @@ TEST(RemoteF1, GenerateMipmapFieldsCross) {
         << "F1.GenerateMipmap.fields: " << DescribeStatus(child) << child.Log;
 }
 #endif
-
-
 
 #if MGTEST_HAVE_FORK
 
@@ -2032,39 +2051,45 @@ namespace {
         clear.DepthValue = 0.375f;
         clear.StencilValue = 91;
         if (!sink.OnClear(clear) || observedNamedClearCalls != 1) ::_exit(101);
-        if (observedNamedClear != clear.Fbo || !observedNamedClearRecord ||
-            observedNamedClearRead != originalRead) ::_exit(102);
-        if (MGPipeApplier().BoundFramebuffer[0] != originalDraw ||
-            MGPipeApplier().BoundFramebuffer[1] != originalRead) ::_exit(103);
+        if (observedNamedClear != clear.Fbo || !observedNamedClearRecord || observedNamedClearRead != originalRead)
+            ::_exit(102);
+        if (MGPipeApplier().BoundFramebuffer[0] != originalDraw || MGPipeApplier().BoundFramebuffer[1] != originalRead)
+            ::_exit(103);
         if (observedNamedClearIndex != clear.DrawBufferIndex) ::_exit(104);
         if (kind == kMGPipeClearKindDepthStencil) {
             if (observedNamedClearTarget != GL_DEPTH_STENCIL || observedNamedClearDepth != clear.DepthValue ||
-                observedNamedClearStencil != clear.StencilValue) ::_exit(105);
+                observedNamedClearStencil != clear.StencilValue)
+                ::_exit(105);
         } else if (observedNamedClearTarget != GL_COLOR ||
-                   std::memcmp(observedNamedClearValues, clear.ColorValue, sizeof(bits))) ::_exit(106);
+                   std::memcmp(observedNamedClearValues, clear.ColorValue, sizeof(bits)))
+            ::_exit(106);
         MGPipeSetResourceOps(nullptr);
         sink.SetBackend(nullptr);
     }
-}
+} // namespace
 
 TEST(RemoteF1, UnboundNamedfvRefusesByName) {
     // Historical name retained; a named target now reaches the native clear hook.
-    const auto child = RunInChild([] { CheckNamedClearScopedTarget(kMGPipeClearKindColor, kMGPipeClearValueClassFloat); });
+    const auto child =
+        RunInChild([] { CheckNamedClearScopedTarget(kMGPipeClearKindColor, kMGPipeClearValueClassFloat); });
     ExpectChildSuccess(child);
 }
 
 TEST(RemoteF1, UnboundNamedivRefusesByName) {
-    const auto child = RunInChild([] { CheckNamedClearScopedTarget(kMGPipeClearKindColor, kMGPipeClearValueClassInt); });
+    const auto child =
+        RunInChild([] { CheckNamedClearScopedTarget(kMGPipeClearKindColor, kMGPipeClearValueClassInt); });
     ExpectChildSuccess(child);
 }
 
 TEST(RemoteF1, UnboundNameduivRefusesByName) {
-    const auto child = RunInChild([] { CheckNamedClearScopedTarget(kMGPipeClearKindColor, kMGPipeClearValueClassUint); });
+    const auto child =
+        RunInChild([] { CheckNamedClearScopedTarget(kMGPipeClearKindColor, kMGPipeClearValueClassUint); });
     ExpectChildSuccess(child);
 }
 
 TEST(RemoteF1, UnboundNamedfiRefusesByName) {
-    const auto child = RunInChild([] { CheckNamedClearScopedTarget(kMGPipeClearKindDepthStencil, kMGPipeClearValueClassFloat); });
+    const auto child =
+        RunInChild([] { CheckNamedClearScopedTarget(kMGPipeClearKindDepthStencil, kMGPipeClearValueClassFloat); });
     ExpectChildSuccess(child);
 }
 #endif
@@ -2096,19 +2121,20 @@ TEST(RemoteF1, BlitNamedCarriesHandlesAndLeavesTheClientBindingsAlone) {
         MG_State::pGLContext->GetFramebufferBindingSlot(MobileGL::FramebufferTarget::Read).Bind(boundRead);
         MG_State::pGLContext->GetFramebufferBindingSlot(MobileGL::FramebufferTarget::Draw).Bind(boundDraw);
 
-        RemoteEmitTable().GL.BlitNamedFramebuffer(namedRead, namedDraw, 0, 0, 8, 8, 0, 0, 8, 8,
-                                                  GL_COLOR_BUFFER_BIT, GL_NEAREST);
+        RemoteEmitTable().GL.BlitNamedFramebuffer(namedRead, namedDraw, 0, 0, 8, 8, 0, 0, 8, 8, GL_COLOR_BUFFER_BIT,
+                                                  GL_NEAREST);
         const auto& r = peer.blit;
         if (peer.calls != 1 || r.ReadFbo != MGPipeFramebufferEmitter::HandleFor(*namedRead) ||
-            r.DrawFbo != MGPipeFramebufferEmitter::HandleFor(*namedDraw)) ::_exit(101);
+            r.DrawFbo != MGPipeFramebufferEmitter::HandleFor(*namedDraw))
+            ::_exit(101);
         // The client's own bindings are untouched: the server resolves the named pair from the
         // record, not from a staged binding override (T3).
-        if (MG_State::pGLContext->GetFramebufferBindingSlot(MobileGL::FramebufferTarget::Read)
-                .GetBoundObject()
-                .get() != boundRead.get()) ::_exit(102);
-        if (MG_State::pGLContext->GetFramebufferBindingSlot(MobileGL::FramebufferTarget::Draw)
-                .GetBoundObject()
-                .get() != boundDraw.get()) ::_exit(103);
+        if (MG_State::pGLContext->GetFramebufferBindingSlot(MobileGL::FramebufferTarget::Read).GetBoundObject().get() !=
+            boundRead.get())
+            ::_exit(102);
+        if (MG_State::pGLContext->GetFramebufferBindingSlot(MobileGL::FramebufferTarget::Draw).GetBoundObject().get() !=
+            boundDraw.get())
+            ::_exit(103);
         ClientSessionInstance().Stop();
     });
     ExpectChildSuccess(child);
@@ -2124,8 +2150,8 @@ namespace {
         g_observedBlitRead = st.VerbBlitReadFbo;
         g_observedBlitDraw = st.VerbBlitDrawFbo;
     }
-    void StubBlitFramebufferConsuming(GLint x0, GLint y0, GLint x1, GLint y1, GLint dx0, GLint dy0,
-                                      GLint dx1, GLint dy1, GLbitfield mask, GLenum filter) {
+    void StubBlitFramebufferConsuming(GLint x0, GLint y0, GLint x1, GLint y1, GLint dx0, GLint dy0, GLint dx1,
+                                      GLint dy1, GLbitfield mask, GLenum filter) {
         StubBlitFramebuffer(x0, y0, x1, y1, dx0, dy0, dx1, dy1, mask, filter);
         MG_Pipe::MGPipeApplier().VerbBlitNamedConsumed = true;
     }
@@ -2135,7 +2161,9 @@ namespace {
         g_observedCopyDst = MG_Pipe::MGPipeApplier().VerbCopyTexDst;
     }
     MGPipeHandle g_observedMipRes = kMGPipeNullHandle;
-    void StubGenerateMipmap(GLenum) { g_observedMipRes = MG_Pipe::MGPipeApplier().VerbMipRes; }
+    void StubGenerateMipmap(GLenum) {
+        g_observedMipRes = MG_Pipe::MGPipeApplier().VerbMipRes;
+    }
     MGPipeHandle g_observedIndirect = kMGPipeNullHandle;
     MGPipeHandle g_observedParameter = kMGPipeNullHandle;
     void StubMultiDrawArraysIndirectCount(GLenum, const void*, GLintptr, GLsizei, GLsizei) {
@@ -2202,8 +2230,7 @@ TEST(RemoteF1, BoundBlitCarriesNoHandlesAndIsAppliedAsBefore) {
         r.Mask = GL_COLOR_BUFFER_BIT;
         r.Filter = GL_NEAREST;
         if (!sink.OnBlit(r)) ::_exit(101);
-        if (!MGPipeHandleIsNull(g_observedBlitRead) || !MGPipeHandleIsNull(g_observedBlitDraw))
-            ::_exit(102);
+        if (!MGPipeHandleIsNull(g_observedBlitRead) || !MGPipeHandleIsNull(g_observedBlitDraw)) ::_exit(102);
         ::_exit(0);
     });
     ExpectChildSuccess(child);
@@ -2269,8 +2296,7 @@ TEST(RemoteF1, AnIndirectDrawStashesTheCommandAndParameterBuffers) {
         indirect.DrawCount = 3;
         indirect.Stride = 16;
         if (!sink.OnDrawVbo(info, nullptr, nullptr, &indirect)) ::_exit(101);
-        if (g_observedIndirect != indirect.Buffer || g_observedParameter != indirect.ParameterBuffer)
-            ::_exit(102);
+        if (g_observedIndirect != indirect.Buffer || g_observedParameter != indirect.ParameterBuffer) ::_exit(102);
         ::_exit(0);
     });
     ExpectChildSuccess(child);
@@ -2301,10 +2327,12 @@ TEST(RemoteF1, DispatchIndirectStashesTheCommandBuffer) {
 TEST(RemoteGuards, AllocatorAcquireFromTheApplyThreadIsFatalByName) {
     const auto child = RunInChild([] {
         StartControlSession();
-        Srv::ServerLoopInstance().RunProbeOnApplyThreadForTesting([](void*) {
-            MGPipeSlots().Acquire(MGPipeKind::Texture, 424242);
-            return MOBILEGL_OK;
-        }, nullptr);
+        Srv::ServerLoopInstance().RunProbeOnApplyThreadForTesting(
+            [](void*) {
+                MGPipeSlots().Acquire(MGPipeKind::Texture, 424242);
+                return MOBILEGL_OK;
+            },
+            nullptr);
         ClientSessionInstance().Stop();
     });
     ExpectNamedAbort(child, "Fatal{RoleViolation, \"MGPipeSlots\"}");
@@ -2313,10 +2341,12 @@ TEST(RemoteGuards, AllocatorAcquireFromTheApplyThreadIsFatalByName) {
 TEST(RemoteGuards, AllocatorFindByLifetimeIdFromTheApplyThreadIsFatalByName) {
     const auto child = RunInChild([] {
         StartControlSession();
-        Srv::ServerLoopInstance().RunProbeOnApplyThreadForTesting([](void*) {
-            MGPipeSlots().FindByLifetimeId(MGPipeKind::Texture, 424242);
-            return MOBILEGL_OK;
-        }, nullptr);
+        Srv::ServerLoopInstance().RunProbeOnApplyThreadForTesting(
+            [](void*) {
+                MGPipeSlots().FindByLifetimeId(MGPipeKind::Texture, 424242);
+                return MOBILEGL_OK;
+            },
+            nullptr);
         ClientSessionInstance().Stop();
     });
     ExpectNamedAbort(child, "Fatal{RoleViolation, \"MGPipeSlots\"}");
@@ -2325,10 +2355,12 @@ TEST(RemoteGuards, AllocatorFindByLifetimeIdFromTheApplyThreadIsFatalByName) {
 TEST(RemoteGuards, AllocatorFreeFromTheApplyThreadIsFatalByName) {
     const auto child = RunInChild([] {
         StartControlSession();
-        Srv::ServerLoopInstance().RunProbeOnApplyThreadForTesting([](void*) {
-            MGPipeSlots().Free(MGPipeKind::Texture, {7, 1});
-            return MOBILEGL_OK;
-        }, nullptr);
+        Srv::ServerLoopInstance().RunProbeOnApplyThreadForTesting(
+            [](void*) {
+                MGPipeSlots().Free(MGPipeKind::Texture, {7, 1});
+                return MOBILEGL_OK;
+            },
+            nullptr);
         ClientSessionInstance().Stop();
     });
     ExpectNamedAbort(child, "Fatal{RoleViolation, \"MGPipeSlots\"}");
@@ -2339,14 +2371,28 @@ namespace {
         int marker = 0;
     };
     using TestTextureTable =
-        MG_Backend::DirectGLES::BackendSlotTable<MG_State::GLState::TextureObject2D, FakeTwin,
-                                                 MGPipeKind::Texture>;
+        MG_Backend::DirectGLES::BackendSlotTable<MG_State::GLState::TextureObject2D, FakeTwin, MGPipeKind::Texture>;
 } // namespace
 
 // The four accessor drives share one shape: the BufferObject is constructed on the CLIENT
 // thread (its own resource_create publication is a legal client-side emit), and only the
 // accessor runs on the apply thread, where it must die at the accessor's own guard.
-#define MGL_BUFFER_GUARD_TEST(Name, Id, Call)                                                          TEST(RemoteGuards, Name) {                                                                                 const auto child = RunInChild([] {                                                                         StartControlSession();                                                                                 MG_State::GLState::BufferObject buffer(Id);                                                            Srv::ServerLoopInstance().RunProbeOnApplyThreadForTesting([](void* self) {                                                auto& buffer = *static_cast<MG_State::GLState::BufferObject*>(self);                                   Call;                                                                                                  return MOBILEGL_OK;                                                                                }, &buffer);                                                                                           ClientSessionInstance().Stop();                                                                    });                                                                                                    ExpectNamedAbort(child, "Fatal{RoleViolation, \"buffer-legacy-arm\"}");                           }
+#define MGL_BUFFER_GUARD_TEST(Name, Id, Call)                                                                          \
+    TEST(RemoteGuards, Name) {                                                                                         \
+        const auto child = RunInChild([] {                                                                             \
+            StartControlSession();                                                                                     \
+            MG_State::GLState::BufferObject buffer(Id);                                                                \
+            Srv::ServerLoopInstance().RunProbeOnApplyThreadForTesting(                                                 \
+                [](void* self) {                                                                                       \
+                    auto& buffer = *static_cast<MG_State::GLState::BufferObject*>(self);                               \
+                    Call;                                                                                              \
+                    return MOBILEGL_OK;                                                                                \
+                },                                                                                                     \
+                &buffer);                                                                                              \
+            ClientSessionInstance().Stop();                                                                            \
+        });                                                                                                            \
+        ExpectNamedAbort(child, "Fatal{RoleViolation, \"buffer-legacy-arm\"}");                                        \
+    }
 MGL_BUFFER_GUARD_TEST(BufferMappedDataFromTheApplyThreadIsFatalByName, 703, (void)buffer.MappedData())
 MGL_BUFFER_GUARD_TEST(BufferIsMappedFromTheApplyThreadIsFatalByName, 704, (void)buffer.IsMapped())
 MGL_BUFFER_GUARD_TEST(BufferChangeSerialFromTheApplyThreadIsFatalByName, 705, (void)buffer.GetChangeSerial())
@@ -2378,13 +2424,15 @@ TEST(RemoteGuards, BarrieredLegacyScopesCannotExemptAllocator) {
         const auto child = RunInChild([backend] {
             StartControlSession();
             auto selectedBackend = backend;
-            Srv::ServerLoopInstance().RunProbeOnApplyThreadForTesting(+[](void* self) -> MobileGLResult {
-                MG_Pipe::MGPipeApplierSetCurrentRecordBarriered(true);
-                MG_Config::ActiveBackendType = *static_cast<BackendType*>(self);
-                // HighWater had no per-method guard in the old implementation.
-                (void)MGPipeSlots().HighWater(MGPipeKind::Texture);
-                return MOBILEGL_OK;
-            }, &selectedBackend);
+            Srv::ServerLoopInstance().RunProbeOnApplyThreadForTesting(
+                +[](void* self) -> MobileGLResult {
+                    MG_Pipe::MGPipeApplierSetCurrentRecordBarriered(true);
+                    MG_Config::ActiveBackendType = *static_cast<BackendType*>(self);
+                    // HighWater had no per-method guard in the old implementation.
+                    (void)MGPipeSlots().HighWater(MGPipeKind::Texture);
+                    return MOBILEGL_OK;
+                },
+                &selectedBackend);
             ClientSessionInstance().Stop();
         });
         ExpectNamedAbort(child, "Fatal{RoleViolation, \"MGPipeSlots\"}");
@@ -2394,25 +2442,27 @@ TEST(RemoteGuards, BarrieredLegacyScopesCannotExemptAllocator) {
 TEST(RemoteGuards, HandleRegistryMembersWorkOnBarrieredAndUnbarrieredApply) {
     const auto child = RunInChild([] {
         StartControlSession();
-        Srv::ServerLoopInstance().RunProbeOnApplyThreadForTesting(+[](void*) -> MobileGLResult {
-            TestTextureTable table;
-            for (const bool barriered : {true, false}) {
-                MG_Pipe::MGPipeApplierSetCurrentRecordBarriered(barriered);
-                const MGPipeHandle handle{71, barriered ? 1u : 2u};
-                auto& twin = table.GetOrCreate(handle);
-                twin = MakeShared<FakeTwin>();
-                twin->marker = 19;
-                auto* found = table.FindByHandle(handle);
-                if (!found || !*found || (*found)->marker != 19) _exit(81);
-                unsigned live = 0;
-                table.ForEachLive([&](MGPipeHandle actual, const auto& backend) {
-                    if (actual.Slot != handle.Slot || actual.Gen != handle.Gen || backend->marker != 19) _exit(82);
-                    ++live;
-                });
-                if (live != 1 || !table.ReleaseByHandle(handle) || table.FindByHandle(handle)) _exit(83);
-            }
-            return MOBILEGL_OK;
-        }, nullptr);
+        Srv::ServerLoopInstance().RunProbeOnApplyThreadForTesting(
+            +[](void*) -> MobileGLResult {
+                TestTextureTable table;
+                for (const bool barriered : {true, false}) {
+                    MG_Pipe::MGPipeApplierSetCurrentRecordBarriered(barriered);
+                    const MGPipeHandle handle{71, barriered ? 1u : 2u};
+                    auto& twin = table.GetOrCreate(handle);
+                    twin = MakeShared<FakeTwin>();
+                    twin->marker = 19;
+                    auto* found = table.FindByHandle(handle);
+                    if (!found || !*found || (*found)->marker != 19) _exit(81);
+                    unsigned live = 0;
+                    table.ForEachLive([&](MGPipeHandle actual, const auto& backend) {
+                        if (actual.Slot != handle.Slot || actual.Gen != handle.Gen || backend->marker != 19) _exit(82);
+                        ++live;
+                    });
+                    if (live != 1 || !table.ReleaseByHandle(handle) || table.FindByHandle(handle)) _exit(83);
+                }
+                return MOBILEGL_OK;
+            },
+            nullptr);
         ClientSessionInstance().Stop();
     });
     ASSERT_TRUE(WIFEXITED(child.Status)) << child.Log;
@@ -2458,25 +2508,24 @@ TEST(RemoteGuards, CapsMirrorFallbackWithNoServerBackendIsFatalByName) {
 // parked in its own wait. Still NOT in the list: GetUploadTargets / GetTarget / IsComplete,
 // which are TextureObject's own and not MipmapStorage's - their rows retire with the object
 // class in P7/P9.
-#define MGL_TEXTURE_GUARD_TEST(Name, Id, Call)                                                         \
-    TEST(RemoteGuards, Name) {                                                                         \
-        const auto child = RunInChild([] {                                                             \
-            StartControlSession();                                                                     \
-            MG_State::GLState::TextureObject2D texture(Id);                                            \
-            Srv::ServerLoopInstance().RunProbeOnApplyThreadForTesting(                                                \
-                [](void* self) {                                                                       \
-                    auto& texture = *static_cast<MG_State::GLState::TextureObject2D*>(self);           \
-                    Call;                                                                              \
-                    return MOBILEGL_OK;                                                                \
-                },                                                                                     \
-                &texture);                                                                             \
-            ClientSessionInstance().Stop();                                                            \
-        });                                                                                            \
-        ExpectNamedAbort(child, "Fatal{RoleViolation, \"texture-legacy-arm\"}");                       \
+#define MGL_TEXTURE_GUARD_TEST(Name, Id, Call)                                                                         \
+    TEST(RemoteGuards, Name) {                                                                                         \
+        const auto child = RunInChild([] {                                                                             \
+            StartControlSession();                                                                                     \
+            MG_State::GLState::TextureObject2D texture(Id);                                                            \
+            Srv::ServerLoopInstance().RunProbeOnApplyThreadForTesting(                                                 \
+                [](void* self) {                                                                                       \
+                    auto& texture = *static_cast<MG_State::GLState::TextureObject2D*>(self);                           \
+                    Call;                                                                                              \
+                    return MOBILEGL_OK;                                                                                \
+                },                                                                                                     \
+                &texture);                                                                                             \
+            ClientSessionInstance().Stop();                                                                            \
+        });                                                                                                            \
+        ExpectNamedAbort(child, "Fatal{RoleViolation, \"texture-legacy-arm\"}");                                       \
     }
 MGL_TEXTURE_GUARD_TEST(TextureAllocateStorageFromTheApplyThreadIsFatalByName, 711,
-                       texture.AllocateStorage(TextureUploadTarget::Texture2D, 0,
-                                               {{4, 4, 1}, 64}))
+                       texture.AllocateStorage(TextureUploadTarget::Texture2D, 0, {{4, 4, 1}, 64}))
 MGL_TEXTURE_GUARD_TEST(TextureTruncateMipmapLevelsFromTheApplyThreadIsFatalByName, 712,
                        texture.TruncateMipmapLevels(TextureUploadTarget::Texture2D, 1))
 MGL_TEXTURE_GUARD_TEST(TextureUpdateMipmapSubDataFromTheApplyThreadIsFatalByName, 713,
@@ -2486,19 +2535,16 @@ MGL_TEXTURE_GUARD_TEST(TextureMapMipmapDataFromTheApplyThreadIsFatalByName, 714,
 MGL_TEXTURE_GUARD_TEST(TextureMarkStorageDirtyFromTheApplyThreadIsFatalByName, 715,
                        texture.MarkStorageDirty(TextureUploadTarget::Texture2D, 0, true))
 MGL_TEXTURE_GUARD_TEST(TextureMarkStorageDirtyRegionFromTheApplyThreadIsFatalByName, 716,
-                       texture.MarkStorageDirtyRegion(TextureUploadTarget::Texture2D, 0,
-                                                      {0, 0, 0}, {1, 1, 1}))
+                       texture.MarkStorageDirtyRegion(TextureUploadTarget::Texture2D, 0, {0, 0, 0}, {1, 1, 1}))
 MGL_TEXTURE_GUARD_TEST(TextureIsStorageDirtyFromTheApplyThreadIsFatalByName, 717,
                        (void)texture.IsStorageDirty(TextureUploadTarget::Texture2D, 0))
 MGL_TEXTURE_GUARD_TEST(TextureGetStorageDirtyRegionFromTheApplyThreadIsFatalByName, 718,
                        (void)texture.GetStorageDirtyRegion(TextureUploadTarget::Texture2D, 0))
 MGL_TEXTURE_GUARD_TEST(TextureGetStorageDirtyRectsFromTheApplyThreadIsFatalByName, 719,
-                       (void)texture.GetStorageDirtyRects(TextureUploadTarget::Texture2D, 0,
-                                                          nullptr, 0))
+                       (void)texture.GetStorageDirtyRects(TextureUploadTarget::Texture2D, 0, nullptr, 0))
 // P11 M2: dev 9524c688's exact dirty footprint joins the dirty model's rows. The server's
 // footprint is the record's region list (Managers.cpp's handle arm), never this accessor.
-MGL_TEXTURE_GUARD_TEST(TextureGetStorageDirtyFootprintFromTheApplyThreadIsFatalByName, 720,
-                       ([&texture] {
+MGL_TEXTURE_GUARD_TEST(TextureGetStorageDirtyFootprintFromTheApplyThreadIsFatalByName, 720, ([&texture] {
                            Vector<MG_State::GLState::MipmapDirtyRegion> footprint;
                            texture.GetStorageDirtyFootprint(TextureUploadTarget::Texture2D, 0, footprint);
                        }()))
@@ -2590,8 +2636,7 @@ void StartRunAheadSession() {
     // The run-ahead guards below are the SHARED-block rules; the dual block (the default since
     // P15) makes a barriered fill the client's own and is covered by DualBlockScenario.
     MG_Config::Ipc.RoleSplitState = false;
-    Srv::ServerSessionInstance().SetCapabilityBits(
-        static_cast<Uint64>(MG_Pipe::kCapRunAheadApply));
+    Srv::ServerSessionInstance().SetCapabilityBits(static_cast<Uint64>(MG_Pipe::kCapRunAheadApply));
     Srv::ServerSessionInstance().SetConsumedSubsystems(kMGPipeSubsystemsMigratedAtP4a);
     // The test peer publishes the first snapshot through the real handshake.
     Srv::ServerSessionInstance().SetBackend(ControlCapsPeer());
@@ -2652,8 +2697,7 @@ TEST(RemoteRunAhead, ClearingTheVerbBarrierDisarmsRunAheadEvenWithTheCapBit) {
         MG_Config::Ipc.VerbBarrier = 0;
         ::alarm(15);
         MG_Config::Transport = MG_Config::TransportMode::InProcess;
-        Srv::ServerSessionInstance().SetCapabilityBits(
-            static_cast<Uint64>(MG_Pipe::kCapRunAheadApply));
+        Srv::ServerSessionInstance().SetCapabilityBits(static_cast<Uint64>(MG_Pipe::kCapRunAheadApply));
         Srv::ServerSessionInstance().SetConsumedSubsystems(kMGPipeSubsystemsMigratedAtP4a);
         Srv::ServerSessionInstance().SetBackend(ControlCapsPeer());
         if (ClientSessionInstance().Start(MG_Config::TransportMode::InProcess, {}) != MOBILEGL_OK) {
@@ -2689,8 +2733,7 @@ TEST(RemoteRunAhead, ACreditOneClientPaysTheCreditAtEveryPresentAfterTheFirst) {
         if (session.PresentCreditWaits() != 2) ::_exit(103);
         // ONE CREDIT PER SWAP, in the client's own 1-based space: the server returned the
         // second present's credit, so the watermark is at least 2.
-        if (session.Control() == nullptr ||
-            session.Control()->Progress.presentAckSerial.load() < 2u) {
+        if (session.Control() == nullptr || session.Control()->Progress.presentAckSerial.load() < 2u) {
             ::_exit(104);
         }
         session.Stop();
@@ -3020,7 +3063,8 @@ TEST(RemoteRunAhead, AnEventBurstBehindAnUnwaitedSequenceFlowControlsInsteadOfAb
         Srv::ServerLoopInstance().RunProbeOnApplyThreadForTesting(
             +[](void*) -> MobileGLResult {
                 MG_Pipe::MGPRange ranges[64];
-                for (Uint32 r = 0; r < 64; ++r) ranges[r] = MG_Pipe::MGPRange{r * 64ull, 64ull};
+                for (Uint32 r = 0; r < 64; ++r)
+                    ranges[r] = MG_Pipe::MGPRange{r * 64ull, 64ull};
                 for (Uint32 i = 0; i < 3000; ++i) {
                     MG_Pipe::gMGPipeCallbacks.OnGpuWritten(MG_Pipe::MGPipeHandle{7, 1}, 64, ranges);
                 }
@@ -3107,9 +3151,11 @@ TEST(RemoteRunAhead, ARepublishedServerWindowExtentResizesTheServerOwnedSurfaceA
         if (ClientSessionInstance().DrainPublishedEvents() < 1u) ::_exit(92);
         if (query(EGL_WIDTH) != 2560 || query(EGL_HEIGHT) != 1600) ::_exit(93);
         const IntVec3 colour =
-            static_cast<MG_State::GLState::TextureObject2D*>(defaultFramebuffer->colorAttachment.get())->GetMipmapTexelSize(TextureUploadTarget::Texture2D, 0);
+            static_cast<MG_State::GLState::TextureObject2D*>(defaultFramebuffer->colorAttachment.get())
+                ->GetMipmapTexelSize(TextureUploadTarget::Texture2D, 0);
         const IntVec3 depth =
-            static_cast<MG_State::GLState::TextureObject2D*>(defaultFramebuffer->depthAttachment.get())->GetMipmapTexelSize(TextureUploadTarget::Texture2D, 0);
+            static_cast<MG_State::GLState::TextureObject2D*>(defaultFramebuffer->depthAttachment.get())
+                ->GetMipmapTexelSize(TextureUploadTarget::Texture2D, 0);
         if (colour.x() != 2560 || colour.y() != 1600 || depth.x() != 2560 || depth.y() != 1600) ::_exit(94);
 
         // A format-only event (a pbuffer's, a client-named window's) says nothing about the size.
@@ -3165,9 +3211,8 @@ namespace {
     }
 
     Uint64 MillisecondsSince(std::chrono::steady_clock::time_point start) {
-        return static_cast<Uint64>(std::chrono::duration_cast<std::chrono::milliseconds>(
-                                       std::chrono::steady_clock::now() - start)
-                                       .count());
+        return static_cast<Uint64>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count());
     }
 } // namespace
 
@@ -3187,7 +3232,8 @@ TEST(RemoteRunAhead, AStonewallingClientForfeitsTheReverseChannelWithinTheWaitKn
         Srv::ServerLoopInstance().RunProbeOnApplyThreadForTesting(
             +[](void*) -> MobileGLResult {
                 MG_Pipe::MGPRange ranges[64];
-                for (Uint32 r = 0; r < 64; ++r) ranges[r] = MG_Pipe::MGPRange{r * 64ull, 64ull};
+                for (Uint32 r = 0; r < 64; ++r)
+                    ranges[r] = MG_Pipe::MGPRange{r * 64ull, 64ull};
                 for (Uint32 i = 0; i < 3000; ++i) {
                     MG_Pipe::gMGPipeCallbacks.OnGpuWritten(MG_Pipe::MGPipeHandle{7, 1}, 64, ranges);
                 }
@@ -3209,8 +3255,7 @@ TEST(RemoteRunAhead, AStonewallingClientForfeitsTheReverseChannelWithinTheWaitKn
         ClientSessionInstance().Stop();
     });
     ExpectChildSuccess(child);
-    EXPECT_NE(child.Log.find("ReverseChannelForfeit{NotDraining} - kEventGpuWritten"), std::string::npos)
-        << child.Log;
+    EXPECT_NE(child.Log.find("ReverseChannelForfeit{NotDraining} - kEventGpuWritten"), std::string::npos) << child.Log;
     EXPECT_NE(child.Log.find("mgl-srv-apply stops on ReverseChannelForfeit"), std::string::npos) << child.Log;
     EXPECT_EQ(child.Log.find("Fatal{EventRingOverflow"), std::string::npos) << child.Log;
 }
@@ -3255,7 +3300,8 @@ TEST(RemoteRunAhead, ATricklingClientGetsTheWholeWaitThenForfeitsByNameInsteadOf
                     MG_Pipe::gMGPipeCallbacks.OnGpuWritten(MG_Pipe::MGPipeHandle{7, 1}, 1, &one);
                 }
                 MG_Pipe::MGPRange ranges[64];
-                for (Uint32 r = 0; r < 64; ++r) ranges[r] = MG_Pipe::MGPRange{r * 64ull, 64ull};
+                for (Uint32 r = 0; r < 64; ++r)
+                    ranges[r] = MG_Pipe::MGPRange{r * 64ull, 64ull};
                 for (Uint32 i = 0; i < 16; ++i) {
                     MG_Pipe::gMGPipeCallbacks.OnGpuWritten(MG_Pipe::MGPipeHandle{7, 1}, 64, ranges);
                 }
@@ -3277,8 +3323,7 @@ TEST(RemoteRunAhead, ATricklingClientGetsTheWholeWaitThenForfeitsByNameInsteadOf
         ClientSessionInstance().Stop();
     });
     ExpectChildSuccess(child);
-    EXPECT_NE(child.Log.find("ReverseChannelForfeit{TooSlow} - kEventGpuWritten"), std::string::npos)
-        << child.Log;
+    EXPECT_NE(child.Log.find("ReverseChannelForfeit{TooSlow} - kEventGpuWritten"), std::string::npos) << child.Log;
     EXPECT_EQ(child.Log.find("Fatal{EventRingOverflow"), std::string::npos) << child.Log;
 }
 
@@ -3301,7 +3346,8 @@ TEST(RemoteRunAhead, AStopWhileTheServerWaitsForADrainEndsTheWaitByNameInsteadOf
             (void)Srv::ServerLoopInstance().RunProbeOnApplyThreadForTesting(
                 +[](void*) -> MobileGLResult {
                     MG_Pipe::MGPRange ranges[64];
-                    for (Uint32 r = 0; r < 64; ++r) ranges[r] = MG_Pipe::MGPRange{r * 64ull, 64ull};
+                    for (Uint32 r = 0; r < 64; ++r)
+                        ranges[r] = MG_Pipe::MGPRange{r * 64ull, 64ull};
                     for (Uint32 i = 0; i < 3000; ++i) {
                         MG_Pipe::gMGPipeCallbacks.OnGpuWritten(MG_Pipe::MGPipeHandle{7, 1}, 64, ranges);
                     }
@@ -3329,8 +3375,7 @@ TEST(RemoteRunAhead, AStopWhileTheServerWaitsForADrainEndsTheWaitByNameInsteadOf
         ClientSessionInstance().Stop();
     });
     ExpectChildSuccess(child);
-    EXPECT_NE(child.Log.find("ReverseChannelForfeit{Stopped} - kEventGpuWritten"), std::string::npos)
-        << child.Log;
+    EXPECT_NE(child.Log.find("ReverseChannelForfeit{Stopped} - kEventGpuWritten"), std::string::npos) << child.Log;
     EXPECT_EQ(child.Log.find("Fatal{ApplyThreadJoinTimeout"), std::string::npos) << child.Log;
     EXPECT_EQ(child.Log.find("Fatal{EventRingOverflow"), std::string::npos) << child.Log;
 }
@@ -3344,8 +3389,7 @@ TEST(RemoteGuards, ADeferredDestroyFromAnUnbarrieredApplyIsFatalUnderStrict) {
         Srv::ServerLoopInstance().RunProbeOnApplyThreadForTesting(
             +[](void*) -> MobileGLResult {
                 MG_Pipe::MGPipeApplierSetCurrentRecordBarriered(false);
-                (void)MG_Pipe::MGPipeDeferDestroyAndFreeIfOnApplyThread(MG_Pipe::MGPipeKind::Texture,
-                                                                        4242);
+                (void)MG_Pipe::MGPipeDeferDestroyAndFreeIfOnApplyThread(MG_Pipe::MGPipeKind::Texture, 4242);
                 return MOBILEGL_OK;
             },
             nullptr);
@@ -3364,8 +3408,7 @@ TEST(RemoteGuards, ADeferredDestroyFromABarrieredApplyIsStillServed) {
         Srv::ServerLoopInstance().RunProbeOnApplyThreadForTesting(
             +[](void*) -> MobileGLResult {
                 MG_Pipe::MGPipeApplierSetCurrentRecordBarriered(true);
-                if (!MG_Pipe::MGPipeDeferDestroyAndFreeIfOnApplyThread(MG_Pipe::MGPipeKind::Texture,
-                                                                        4243)) {
+                if (!MG_Pipe::MGPipeDeferDestroyAndFreeIfOnApplyThread(MG_Pipe::MGPipeKind::Texture, 4243)) {
                     ::_exit(101);
                 }
                 return MOBILEGL_OK;
@@ -3389,12 +3432,10 @@ TEST(RemoteRunAhead, OnlyTheTextureHalfOfResourceSubDataWantsItsReply) {
     EXPECT_FALSE(MG_Pipe::MGPipeSubDataWantsItsReply(buffer));
 
     MG_Pipe::MGPSubData texture{};
-    texture.Target = MG_Pipe::MGPipePackSubDataTarget(
-        static_cast<Uint32>(MG_Pipe::MGPipeResourceTarget::Tex2D),
-        static_cast<Uint32>(TextureUploadTarget::Texture2D));
+    texture.Target = MG_Pipe::MGPipePackSubDataTarget(static_cast<Uint32>(MG_Pipe::MGPipeResourceTarget::Tex2D),
+                                                      static_cast<Uint32>(TextureUploadTarget::Texture2D));
     EXPECT_TRUE(MG_Pipe::MGPipeSubDataWantsItsReply(texture));
 }
-
 
 #include "RemoteClientE1Controls.inc"
 

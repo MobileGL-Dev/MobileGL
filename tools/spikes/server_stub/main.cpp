@@ -33,31 +33,31 @@
 
 namespace {
 
-// The single fact that makes this spike conclusive rather than suggestive: the exec'd
-// child reports the domain it is running in. `u:r:untrusted_app:s0:...` means an ordinary
-// application process really did exec this file; anything else (shell, adb, a platform
-// domain) means the test was run the wrong way and its verdict does not transfer.
-void ReadSelinuxContext(char* out, size_t size) {
-    out[0] = '\0';
-    FILE* file = std::fopen("/proc/self/attr/current", "r");
-    if (file == nullptr) {
-        std::snprintf(out, size, "<unreadable>");
-        return;
-    }
-    const size_t read = std::fread(out, 1, size - 1, file);
-    std::fclose(file);
-    out[read] = '\0';
-    // The kernel returns the context NUL-terminated inside the read; trim anything after.
-    for (size_t index = 0; index < read; ++index) {
-        if (out[index] == '\n' || out[index] == '\0') {
-            out[index] = '\0';
-            break;
+    // The single fact that makes this spike conclusive rather than suggestive: the exec'd
+    // child reports the domain it is running in. `u:r:untrusted_app:s0:...` means an ordinary
+    // application process really did exec this file; anything else (shell, adb, a platform
+    // domain) means the test was run the wrong way and its verdict does not transfer.
+    void ReadSelinuxContext(char* out, size_t size) {
+        out[0] = '\0';
+        FILE* file = std::fopen("/proc/self/attr/current", "r");
+        if (file == nullptr) {
+            std::snprintf(out, size, "<unreadable>");
+            return;
+        }
+        const size_t read = std::fread(out, 1, size - 1, file);
+        std::fclose(file);
+        out[read] = '\0';
+        // The kernel returns the context NUL-terminated inside the read; trim anything after.
+        for (size_t index = 0; index < read; ++index) {
+            if (out[index] == '\n' || out[index] == '\0') {
+                out[index] = '\0';
+                break;
+            }
+        }
+        if (out[0] == '\0') {
+            std::snprintf(out, size, "<empty>");
         }
     }
-    if (out[0] == '\0') {
-        std::snprintf(out, size, "<empty>");
-    }
-}
 
 } // namespace
 
@@ -69,9 +69,8 @@ int main(int argc, char** argv) {
     std::snprintf(line, sizeof(line),
                   "MobileGLServer-spike ok argv0=%s pid=%d ppid=%d uid=%d gid=%d argc=%d "
                   "selinux=%s\n",
-                  argc > 0 && argv[0] != nullptr ? argv[0] : "<null>",
-                  static_cast<int>(getpid()), static_cast<int>(getppid()),
-                  static_cast<int>(getuid()), static_cast<int>(getgid()), argc, context);
+                  argc > 0 && argv[0] != nullptr ? argv[0] : "<null>", static_cast<int>(getpid()),
+                  static_cast<int>(getppid()), static_cast<int>(getuid()), static_cast<int>(getgid()), argc, context);
 
     std::fputs(line, stdout);
     std::fflush(stdout);
@@ -83,14 +82,12 @@ int main(int argc, char** argv) {
 
     FILE* marker = std::fopen(argv[1], "w");
     if (marker == nullptr) {
-        std::fprintf(stderr, "MobileGLServer-spike: cannot open marker %s: %s\n", argv[1],
-                     std::strerror(errno));
+        std::fprintf(stderr, "MobileGLServer-spike: cannot open marker %s: %s\n", argv[1], std::strerror(errno));
         return 3;
     }
     std::fputs(line, marker);
     if (std::fclose(marker) != 0) {
-        std::fprintf(stderr, "MobileGLServer-spike: cannot write marker %s: %s\n", argv[1],
-                     std::strerror(errno));
+        std::fprintf(stderr, "MobileGLServer-spike: cannot write marker %s: %s\n", argv[1], std::strerror(errno));
         return 4;
     }
     return 0;

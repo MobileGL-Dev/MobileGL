@@ -30,8 +30,8 @@ namespace MobileGL::MG_Remote::Client {
     };
 
     struct ServerProbeTarget {
-        std::string endpoint;     // SocketTransport form: a path, "@name", or "tcp://host:port"
-        Uint32 timeoutMs = 0;     // 0: probing disabled
+        std::string endpoint; // SocketTransport form: a path, "@name", or "tcp://host:port"
+        Uint32 timeoutMs = 0; // 0: probing disabled
     };
 
     // What the configuration says to probe; false when it names nothing probeable (NotApplicable).

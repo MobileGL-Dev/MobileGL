@@ -34,8 +34,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         //
         // The IBO half lives in SyncNeccessaryBuffers beside the legacy one, for the reason it
         // always did: the index slot is not part of the configuration (D5).
-        void SyncVaoAttributeBuffersByRecord(
-            VertexArrayImpl::BackendVertexArrayObject::ResolvedDrawBuffers* memo, Uint64 bufferEpoch) {
+        void SyncVaoAttributeBuffersByRecord(VertexArrayImpl::BackendVertexArrayObject::ResolvedDrawBuffers* memo,
+                                             Uint64 bufferEpoch) {
             const auto& st = MG_Pipe::MGPipeApplier();
             const MG_Pipe::MGPipeHandle elements = st.BoundVertexElements;
             Uint64 elementsSerial = 0;
@@ -164,8 +164,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // absent `possibleIBO` is below: SyncToBackendFromApplier is what binds
                 // GL_ELEMENT_ARRAY_BUFFER back to 0 for such a draw, and it keys on the same
                 // serial.
-                const DrawIndexBufferRequest request =
-                    ResolveDrawIndexBufferFromRecord(MG_Pipe::MGPipeApplier());
+                const DrawIndexBufferRequest request = ResolveDrawIndexBufferFromRecord(MG_Pipe::MGPipeApplier());
                 const MG_Pipe::MGPipeHandle iboHandle = request.Res;
                 const Uint64 iboSerial = request.Serial;
                 if (!MG_Pipe::MGPipeHandleIsNull(iboHandle)) {
@@ -173,8 +172,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         memo != nullptr && memo->iboHandle == iboHandle && memo->iboSerial == iboSerial;
                     if (identityHolds && memo->iboCleanEpoch == bufferEpoch) {
                         // probed fully clean at this epoch; nothing can have dirtied it
-                    } else if (identityHolds &&
-                               IsBufferDrawCleanByHandle(iboHandle, memo->iboResource, nullptr)) {
+                    } else if (identityHolds && IsBufferDrawCleanByHandle(iboHandle, memo->iboResource, nullptr)) {
                         memo->iboCleanEpoch = bufferEpoch;
                     } else {
                         auto* resource = EnsureBufferResourceForHandle(nullptr, iboHandle);
@@ -217,8 +215,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // binder (e.g. Flywheel's indirect vertex shaders pull instance data from storage buffers).
             // P5e (sb, §5.6): the record arm, selected by transport + bit 13. Same `if (…) else`
             // shape the indirect buffer above already uses.
-            SyncBufferBindingPointsByRecord(MG_Pipe::kMGPipeShaderBufferClassShaderStorage,
-                                            GL_SHADER_STORAGE_BUFFER);
+            SyncBufferBindingPointsByRecord(MG_Pipe::kMGPipeShaderBufferClassShaderStorage, GL_SHADER_STORAGE_BUFFER);
         }
     } // namespace BufferImpl
 
@@ -306,11 +303,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 if (!resource || resource->id == 0) continue;
                 xfb.targets.push_back({nullptr, resource->id, static_cast<SizeT>(range.Offset),
                                        static_cast<SizeT>(range.Offset + range.Size), i, range.Res});
-                BufferImpl::BindBufferRangeCached(GL_TRANSFORM_FEEDBACK_BUFFER, static_cast<GLuint>(i),
-                    resource->id, static_cast<GLintptr>(range.Offset), static_cast<GLsizeiptr>(range.Size));
+                BufferImpl::BindBufferRangeCached(GL_TRANSFORM_FEEDBACK_BUFFER, static_cast<GLuint>(i), resource->id,
+                                                  static_cast<GLintptr>(range.Offset),
+                                                  static_cast<GLsizeiptr>(range.Size));
                 continue;
             }
-
 
             // A layout with holes or several interleaved buffers is not expressible on ES:
             // capture gap-free into scratch storage and place the records at End instead.
@@ -386,9 +383,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                              "program %u, %zu capture buffer(s), %zu target(s), mode=%s.",
                              MG_Util::ConvertGLEnumToString(xfb.primitiveMode).c_str(),
                              static_cast<unsigned>(xfb.primitiveMode),
-                             MG_Util::ConvertGLEnumToString(beginError).c_str(),
-                             PrgramImpl::g_lastUsedBackendProgramId, bufferCount,
-                             xfb.targets.size(),
+                             MG_Util::ConvertGLEnumToString(beginError).c_str(), PrgramImpl::g_lastUsedBackendProgramId,
+                             bufferCount, xfb.targets.size(),
                              MG_Util::ConvertGLEnumToString(program->GetTransformFeedbackBufferMode()).c_str());
             }
             xfb.started = true;
@@ -442,8 +438,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Uint64 elementsSerial = 0;
             const auto& st = MG_Pipe::MGPipeApplier();
             elementsHandle = st.BoundVertexElements;
-            if (!MG_Pipe::MGPipeHandleIsNull(elementsHandle) &&
-                elementsHandle.Slot < st.VertexElementsCsos.size()) {
+            if (!MG_Pipe::MGPipeHandleIsNull(elementsHandle) && elementsHandle.Slot < st.VertexElementsCsos.size()) {
                 const auto& record = st.VertexElementsCsos[elementsHandle.Slot];
                 if (record.Live && record.Gen == elementsHandle.Gen) {
                     elementsRecord = &record;
@@ -475,8 +470,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // client re-emits create_vertex_elements on the same handle for it, and the
             // applier ++s ContentSerial - so this key opens exactly when the old one did
             // and never wraps (Managers.h states the strictly-stronger argument).
-            if (!memo.valid || !(memo.elementsHandle == elementsHandle) ||
-                memo.elementsSerial != elementsSerial || activeAttribMask != memo.activeMask) {
+            if (!memo.valid || !(memo.elementsHandle == elementsHandle) || memo.elementsSerial != elementsSerial ||
+                activeAttribMask != memo.activeMask) {
                 Uint32 pending = 0;
                 for (Uint32 remaining = activeAttribMask; remaining != 0; remaining &= remaining - 1) {
                     const Uint32 location = static_cast<Uint32>(std::countr_zero(remaining));
@@ -485,8 +480,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     // (MGPipeApplyCreateVertexElements), so a location past AttributeCount
                     // reads Enabled = 0, which is the same answer the frontend's cold
                     // attribute slot gave.
-                    if (location >= MG_Pipe::kMGPipeMaxVertexAttribs ||
-                        !elementsRecord->Attributes[location].Enabled) {
+                    if (location >= MG_Pipe::kMGPipeMaxVertexAttribs || !elementsRecord->Attributes[location].Enabled) {
                         pending |= (1u << location);
                     }
                 }
@@ -516,9 +510,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     g_GLESFuncs.glVertexAttribI4uiv(location, currentValue.uintValue.data());
                     break;
                 case MG_State::GLState::VertexAttribBaseType::Unsupported:
-                    MGLOG_E_ONCE("SyncCurrentVertexAttributeValues: program=%u location=%u has no enabled array and its "
-                            "shader input type 0x%x is not supported as a current generic vertex attribute",
-                            program->GetExternalIndex(), location, program->GetAttribType(location));
+                    MGLOG_E_ONCE(
+                        "SyncCurrentVertexAttributeValues: program=%u location=%u has no enabled array and its "
+                        "shader input type 0x%x is not supported as a current generic vertex attribute",
+                        program->GetExternalIndex(), location, program->GetAttribType(location));
                     break;
                 }
             }
@@ -591,8 +586,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Uint64 elementsSerial = 0;
             const auto& st = MG_Pipe::MGPipeApplier();
             elementsHandle = st.BoundVertexElements;
-            if (!MG_Pipe::MGPipeHandleIsNull(elementsHandle) &&
-                elementsHandle.Slot < st.VertexElementsCsos.size()) {
+            if (!MG_Pipe::MGPipeHandleIsNull(elementsHandle) && elementsHandle.Slot < st.VertexElementsCsos.size()) {
                 const auto& elements = st.VertexElementsCsos[elementsHandle.Slot];
                 if (elements.Live && elements.Gen == elementsHandle.Gen) {
                     elementsRecord = &elements;
@@ -618,13 +612,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (activeAttribMask == 0) return;
 
             auto& memo = vaoTwin->GetPendingAttribValueMaskMemo();
-            if (!memo.valid || !(memo.elementsHandle == elementsHandle) ||
-                memo.elementsSerial != elementsSerial || activeAttribMask != memo.activeMask) {
+            if (!memo.valid || !(memo.elementsHandle == elementsHandle) || memo.elementsSerial != elementsSerial ||
+                activeAttribMask != memo.activeMask) {
                 Uint32 pending = 0;
                 for (Uint32 remaining = activeAttribMask; remaining != 0; remaining &= remaining - 1) {
                     const Uint32 location = static_cast<Uint32>(std::countr_zero(remaining));
-                    if (location >= MG_Pipe::kMGPipeMaxVertexAttribs ||
-                        !elementsRecord->Attributes[location].Enabled) {
+                    if (location >= MG_Pipe::kMGPipeMaxVertexAttribs || !elementsRecord->Attributes[location].Enabled) {
                         pending |= (1u << location);
                     }
                 }
@@ -646,8 +639,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // artefacts instance, and here the two vectors arrived over a wire. A short tail
                 // is an archive whose halves disagree; 0 classifies as Unsupported and says so
                 // below rather than reading past the end.
-                const GLenum attribType =
-                    location < link.attribTypes.size() ? link.attribTypes[location] : 0;
+                const GLenum attribType = location < link.attribTypes.size() ? link.attribTypes[location] : 0;
                 const auto& currentValue = MG_Pipe::gPipeInputs->GetCurrentVertexAttribute(location);
                 const auto typeInfo = MG_State::GLState::ClassifyVertexAttribType(attribType);
                 switch (typeInfo.baseType) {
@@ -665,9 +657,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     // names and must not learn them (ProgramArchiveSource::Identity states the
                     // same rule for the twin's log lines).
                     MGLOG_E_ONCE("SyncCurrentVertexAttributeValues: ShaderCso {%u, %u} location=%u has no "
-                            "enabled array and its shader input type 0x%x is not supported as a current "
-                            "generic vertex attribute",
-                            cso.Slot, cso.Gen, location, attribType);
+                                 "enabled array and its shader input type 0x%x is not supported as a current "
+                                 "generic vertex attribute",
+                                 cso.Slot, cso.Gen, location, attribType);
                     break;
                 }
             }
@@ -784,8 +776,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             if (g_imageSweepValid && g_imageSweepShaderImagesSerial == st.ShaderImagesSerial &&
                 g_imageSweepTextureShutterSerial == st.TextureShutterSerial &&
                 g_imageSweepContextSerial == st.ContextSerial &&
-                g_imageSweepBackendContextGeneration == g_backendContextGeneration &&
-                ImageSweepContentUnchanged(st)) {
+                g_imageSweepBackendContextGeneration == g_backendContextGeneration && ImageSweepContentUnchanged(st)) {
                 return;
             }
             SyncImageTextureBindings();
@@ -842,10 +833,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     if (twinEntry && *twinEntry) {
                         (*twinEntry)->Bind(target);
                     } else {
-                        MGLOG_E_ONCE(
-                            "No backend FBO found (maybe not synced) for the current %s FBO record, "
-                            "cannot bind FBO.",
-                            (target == FramebufferTarget::Read ? "READ" : "DRAW"));
+                        MGLOG_E_ONCE("No backend FBO found (maybe not synced) for the current %s FBO record, "
+                                     "cannot bind FBO.",
+                                     (target == FramebufferTarget::Read ? "READ" : "DRAW"));
                     }
                 } else {
                     MGLOG_D("Binding default framebuffer as %s FBO",
@@ -914,13 +904,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // say so or the phase's own "accessor calls per draw" number would keep counting
             // reads that no longer happen. Two independent bits, so it is a sum and not a
             // three-way pick.
-            MG_Util::PipeStats::AddCalls(MG_Util::PipeStats::CallClass::AccessorCalls,
-                                         (0) + (0));
+            MG_Util::PipeStats::AddCalls(MG_Util::PipeStats::CallClass::AccessorCalls, (0) + (0));
         }
         const TextureImpl::DrawTextureSyncKeys textureKeys = TextureImpl::CaptureDrawTextureSyncKeys();
 
-        BufferImpl::SyncNeccessaryBuffers(currentVAO, vaoTwin, vaoConfigVersion,
-                                          syncBit & DrawSyncBit::IndexBuffer,
+        BufferImpl::SyncNeccessaryBuffers(currentVAO, vaoTwin, vaoConfigVersion, syncBit & DrawSyncBit::IndexBuffer,
                                           syncBit & DrawSyncBit::IndirectBuffer);
         VertexArrayImpl::SyncCurrentVAOFromRecords(vaoTwin);
         TextureImpl::SyncNeccessaryTextures(textureKeys);
@@ -962,9 +950,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         VertexArrayImpl::SyncCurrentVertexAttributeValues(vaoTwin, MG_Pipe::MGPipeApplier().DrawProgram);
 
         BindCurrentTextures(textureKeys, currentProgram);
-        BindCurrentProgramWithResources(currentProgram, textureKeys,
-                                        MG_Pipe::MGPipeApplier().DrawProgram
-        );
+        BindCurrentProgramWithResources(currentProgram, textureKeys, MG_Pipe::MGPipeApplier().DrawProgram);
 
         // Last: opening the capture span needs the program current and the capture
         // buffers bound, and ES rejects most binding changes once it is open.
@@ -1014,15 +1000,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     // resolved this unit against - not a second derivation from the texture's
                     // descriptor, which would be a second authority for one value.
                     const auto* viewRecord = PipeSamplerViewRecordForHandle(view.View);
-                    const auto target = viewRecord != nullptr
-                                            ? static_cast<TextureTarget>(viewRecord->View.Target)
-                                            : TextureTarget::Unknown;
+                    const auto target = viewRecord != nullptr ? static_cast<TextureTarget>(viewRecord->View.Target)
+                                                              : TextureTarget::Unknown;
                     if (viewRecord == nullptr) {
                         MGLOG_E_ONCE("MGPipe: unit %d's sampler view {%u, %u} has no applier record, "
                                      "so the target to bind texture {%u, %u} at is unknown; the unit "
                                      "keeps what it holds",
-                                     static_cast<int>(unit), view.View.Slot, view.View.Gen,
-                                     view.Texture.Slot, view.Texture.Gen);
+                                     static_cast<int>(unit), view.View.Slot, view.View.Gen, view.Texture.Slot,
+                                     view.Texture.Gen);
                         fullyResolved = false;
                     } else if (!TextureImpl::IsSupportedTextureTarget(target)) {
                         MGLOG_D("    Texture target %s is not supported, skipping.",
@@ -1030,8 +1015,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     } else if (auto* twin = TextureImpl::ResolveTextureTwin(view.Texture)) {
                         const GLenum targetGL = TextureImpl::ConvertTextureTargetToBackendGLEnum(target);
                         twin->Bind(targetGL, unit);
-                        boundBackendTargets[static_cast<SizeT>(
-                            TextureImpl::MapToBackendTextureTarget(target))] = true;
+                        boundBackendTargets[static_cast<SizeT>(TextureImpl::MapToBackendTextureTarget(target))] = true;
                     } else {
                         // No twin yet: the sync pass that would have built it declined and
                         // named why. Not memoisable - a later draw would bind it without any
@@ -1046,8 +1030,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             for (SizeT t = 0; t < (SizeT)TextureTarget::TextureTargetCount; ++t) {
                 const auto target = static_cast<TextureTarget>(t);
                 if (!TextureImpl::IsSupportedTextureTarget(target)) continue;
-                const auto backendTargetIndex =
-                    static_cast<SizeT>(TextureImpl::MapToBackendTextureTarget(target));
+                const auto backendTargetIndex = static_cast<SizeT>(TextureImpl::MapToBackendTextureTarget(target));
                 if (visitedBackendTargets[backendTargetIndex]) continue;
                 visitedBackendTargets[backendTargetIndex] = true;
                 if (boundBackendTargets[backendTargetIndex]) continue;
@@ -1105,8 +1088,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
     void BindCurrentUnitSamplers(const TextureImpl::DrawTextureSyncKeys& keys) {
         const Int maxTouchedUnit = keys.maxTouchedUnit;
-        const SizeT rowBytes =
-            static_cast<SizeT>(maxTouchedUnit + 1) * sizeof(SamplerImpl::g_boundSamplersCache[0]);
+        const SizeT rowBytes = static_cast<SizeT>(maxTouchedUnit + 1) * sizeof(SamplerImpl::g_boundSamplersCache[0]);
         if (g_unitSamplerWalkValid && g_unitSamplerWalkContextId == keys.contextId &&
             g_unitSamplerWalkEpoch == keys.unitBindingsEpoch && g_unitSamplerWalkMaxUnit == maxTouchedUnit &&
             g_unitSamplerWalkContextGeneration == g_backendContextGeneration &&
@@ -1216,7 +1198,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // P13: no bind_sampler_states window applied, i.e. no unit holds a sampler object -
             // the record arm emits one for every unit that does. Unbind, so a sampler object
             // left on a unit by an earlier draw is not applied to this one.
-            for (Int unit = 0; unit <= maxTouchedUnit; ++unit) SamplerImpl::UnbindSampler(unit);
+            for (Int unit = 0; unit <= maxTouchedUnit; ++unit)
+                SamplerImpl::UnbindSampler(unit);
         }
         g_unitSamplerWalkContextId = keys.contextId;
         g_unitSamplerWalkEpoch = keys.unitBindingsEpoch;
@@ -1284,8 +1267,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // and keys on {DrawProgram, ShaderCso.Serial, BindingsSerial} (ruling ID-86) and never
         // looks at this value, but it was still being loaded out of the caller's SharedPtr every
         // draw - and once the caller stops holding one there is nothing there to load.
-        const void* programKey =
-            nullptr;
+        const void* programKey = nullptr;
         ResolvedTextureBindingMemo* memoSlot = nullptr;
         for (auto& candidate : g_resolvedTextureBindingMemos) {
             if (candidate.valid && candidate.drawProgram.Slot == drawProgram.Slot &&
@@ -1301,8 +1283,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             memoSlot = &g_resolvedTextureBindingMemos[g_resolvedTextureBindingMemoCursor];
         }
         auto& memo = *memoSlot;
-        const SizeT shadowBytes =
-            static_cast<SizeT>(maxTouchedUnit + 1) * sizeof(TextureImpl::g_boundTexturesCache[0]);
+        const SizeT shadowBytes = static_cast<SizeT>(maxTouchedUnit + 1) * sizeof(TextureImpl::g_boundTexturesCache[0]);
         const Uint64 unitBindingsEpoch = keys.unitBindingsEpoch;
         // P5e (ID-124): the legacy key is a LAZY LAMBDA, not an eagerly-computed Bool. It was
         // the else-arm of a ternary whose declaration sat inside `#if MOBILEGL_BUILD_DISAGGREGATED`
@@ -1312,27 +1293,24 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // arm, so the laziness the ternary gave for free is load-bearing (ID-81 / ID-110 -
         // the arm decides, and the other arm's reads must not happen at all).
         const auto legacyKeysMatch = [&]() -> Bool {
-            return (memo.valid && memo.glContextId == keys.contextId &&
-                               memo.maxTouchedUnit == maxTouchedUnit &&
-                               memo.unitBindingsEpoch == unitBindingsEpoch &&
-                               memo.samplingResolutionGeneration == keys.samplingGeneration &&
-                               memo.program == programKey &&
-                               memo.programLifetimeId == (currentProgram ? currentProgram->GetLifetimeId() : 0) &&
-                               memo.programBackendStateVersion ==
-                                   (currentProgram ? currentProgram->GetBackendStateVersion() : 0) &&
-                               memo.programLinked == (currentProgram && currentProgram->GetLinkStatus()) &&
-                               memo.contextGeneration == g_backendContextGeneration);
+            return (memo.valid && memo.glContextId == keys.contextId && memo.maxTouchedUnit == maxTouchedUnit &&
+                    memo.unitBindingsEpoch == unitBindingsEpoch &&
+                    memo.samplingResolutionGeneration == keys.samplingGeneration && memo.program == programKey &&
+                    memo.programLifetimeId == (currentProgram ? currentProgram->GetLifetimeId() : 0) &&
+                    memo.programBackendStateVersion ==
+                        (currentProgram ? currentProgram->GetBackendStateVersion() : 0) &&
+                    memo.programLinked == (currentProgram && currentProgram->GetLinkStatus()) &&
+                    memo.contextGeneration == g_backendContextGeneration);
         };
         const Bool keysMatch =
-            (memo.valid && memo.maxTouchedUnit == maxTouchedUnit &&
-                        memo.contextSerial == contextSerial && memo.samplerViewsSerial == samplerViewsSerial &&
-                        memo.drawProgram.Slot == drawProgram.Slot && memo.drawProgram.Gen == drawProgram.Gen &&
-                        memo.shaderCsoSerial == shaderCsoSerial && memo.bindingsSerial == bindingsSerial &&
-                        memo.contextGeneration == g_backendContextGeneration);
+            (memo.valid && memo.maxTouchedUnit == maxTouchedUnit && memo.contextSerial == contextSerial &&
+             memo.samplerViewsSerial == samplerViewsSerial && memo.drawProgram.Slot == drawProgram.Slot &&
+             memo.drawProgram.Gen == drawProgram.Gen && memo.shaderCsoSerial == shaderCsoSerial &&
+             memo.bindingsSerial == bindingsSerial && memo.contextGeneration == g_backendContextGeneration);
         // Short-circuited: the shadow compare is only meaningful once the key (and with it the
         // snapshotted row count) matches.
-        if (!keysMatch || std::memcmp(memo.boundTextures.data(), TextureImpl::g_boundTexturesCache.data(),
-                                      shadowBytes) != 0) {
+        if (!keysMatch ||
+            std::memcmp(memo.boundTextures.data(), TextureImpl::g_boundTexturesCache.data(), shadowBytes) != 0) {
             memo.valid = false;
             if (ResolveAndBindUnitTextures(currentProgram, maxTouchedUnit)) {
                 memo.glContextId = keys.contextId;
@@ -1368,8 +1346,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // overload next. Today that is SanityTest's unit cases, which run under monolith
         // transport and therefore take the frontend arm below unchanged.
         const SharedPtr<MG_State::GLState::ProgramObject> noFrontendProgram;
-        BindCurrentTextures(TextureImpl::CaptureDrawTextureSyncKeys(),
-                            noFrontendProgram);
+        BindCurrentTextures(TextureImpl::CaptureDrawTextureSyncKeys(), noFrontendProgram);
     }
 
     // Binds the current program's backend object and re-establishes its per-program
@@ -1394,12 +1371,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // (Desc.LinkStatus is ID-88's, Desc.SpirvStatus P4a's).
         const MG_Pipe::MGPipeShaderCsoRecord* programRecord = nullptr;
         programRecord = PrgramImpl::FindShaderCsoRecord(programCso);
-        if (programRecord != nullptr &&
-            (programRecord->Desc.LinkStatus == 0 || programRecord->Desc.SpirvStatus == 0)) {
+        if (programRecord != nullptr && (programRecord->Desc.LinkStatus == 0 || programRecord->Desc.SpirvStatus == 0)) {
             programRecord = nullptr;
         }
-        const Bool programUsable =
-            programRecord != nullptr;
+        const Bool programUsable = programRecord != nullptr;
         if (programUsable) {
 #ifdef TRACY_ENABLE
             ZoneScopedNC("BindCurrentProgram", TRACY_ZONECOLOR_BACKEND);
@@ -1409,9 +1384,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // wrote it a few lines ago in the same Prepare; the fallback is the by-handle
             // resolver, which is record-first and touches no frontend identity - so unlike
             // the frontend fallback below it is not a registry probe at all.
-            twin = PrgramImpl::g_currentDrawProgramHandle == programCso
-                       ? PrgramImpl::g_currentDrawBackendProgram
-                       : nullptr;
+            twin = PrgramImpl::g_currentDrawProgramHandle == programCso ? PrgramImpl::g_currentDrawBackendProgram
+                                                                        : nullptr;
             if (!twin) twin = PrgramImpl::ResolveProgramTwin(programCso);
             if (twin) {
                 auto& backendProgram = *twin;
@@ -1423,8 +1397,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // P5e (pg): the block's SIZE is Desc.GlobalUboSize on the handle arm. It is the
                 // same number GetUBOSize() answers - the emitter takes it from there - but it is
                 // the record's copy, which is the point.
-                const Uint globalUboSize =
-                    programRecord->Desc.GlobalUboSize;
+                const Uint globalUboSize = programRecord->Desc.GlobalUboSize;
                 if (globalUboSize > 0 && backendProgram.HasGlobalUboBlock()) {
 #ifdef TRACY_ENABLE
                     ZoneScopedNC("UpdateGlobalUBO", TRACY_ZONECOLOR_BACKEND);
@@ -1441,8 +1414,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     // block right after this one and they are P4b's (dirty bits 15-17), which
                     // is why nothing here touches them.
                     const MG_Pipe::MGPipeShaderCsoRecord* const globalConstants =
-                        PrgramImpl::ResolveGlobalConstantsRecordForHandle(programCso,
-                                                                                      globalUboSize);
+                        PrgramImpl::ResolveGlobalConstantsRecordForHandle(programCso, globalUboSize);
                     // P5e (pg), gap G-C: `MapUBO()` HAS NO RUN-AHEAD ANSWER. It returns
                     // ProgramObject::globalUboScratch - the live CPU array every glUniform*
                     // writes into - so under a transport it is a torn read of client memory by
@@ -1469,15 +1441,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                 programCso.Slot, programCso.Gen, globalUboSize);
                         std::abort();
                     }
-                    const Uint32 uboContentVersion =
-                        globalConstants ? globalConstants->GlobalConstantsVersion :
-                                        currentProgram->GetUBOContentVersion();
+                    const Uint32 uboContentVersion = globalConstants ? globalConstants->GlobalConstantsVersion
+                                                                     : currentProgram->GetUBOContentVersion();
                     const SizeT uboSize = static_cast<SizeT>(globalUboSize);
                     // Substituted at the two upload sites rather than hoisted into a local:
                     // MapUBO() is called there today and only there, and hoisting it would
                     // call it on paths that skip the upload entirely.
-#define MGB_UBO_BYTES                                                                    \
-    (globalConstants ? static_cast<const void*>(globalConstants->GlobalConstants.data()) \
+#define MGB_UBO_BYTES                                                                                                  \
+    (globalConstants ? static_cast<const void*>(globalConstants->GlobalConstants.data())                               \
                      : static_cast<const void*>(currentProgram->MapUBO()))
                     // Preferred path: write changed contents into a fresh slot of the
                     // shared persistent-mapped ring and bind it as a range. The GPU
@@ -1492,9 +1463,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         auto& ringSlot = backendProgram.GetGlobalUboRingAllocation();
                         void* write = nullptr;
                         Uint ringId = 0;
-                        const auto state = BufferImpl::UboRingPrepareSlot(ringSlot, uboContentVersion,
-                                                                          CurrentFrameSerial(), bindSize, write,
-                                                                          ringId);
+                        const auto state = BufferImpl::UboRingPrepareSlot(
+                            ringSlot, uboContentVersion, CurrentFrameSerial(), bindSize, write, ringId);
                         if (state == BufferImpl::UboRingSlotState::Allocated) {
                             std::memcpy(write, MGB_UBO_BYTES, uboSize);
                             if (MG_Util::PipeStats::Enabled()) {
@@ -1515,18 +1485,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         // failed): the original in-place upload.
                         if (backendProgram.GetLastUploadedGlobalUboVersion() != uboContentVersion) {
                             g_GLESFuncs.glBindBuffer(GL_UNIFORM_BUFFER, backendProgram.GetBackendGlobalUBOId());
-                            g_GLESFuncs.glBufferSubData(GL_UNIFORM_BUFFER, 0, globalUboSize,
-                                                        MGB_UBO_BYTES);
+                            g_GLESFuncs.glBufferSubData(GL_UNIFORM_BUFFER, 0, globalUboSize, MGB_UBO_BYTES);
                             if (MG_Util::PipeStats::Enabled()) {
-                                MG_Util::PipeStats::AddBytes(
-                                    MG_Util::PipeStats::ByteClass::StageUboGlobal,
-                                    static_cast<Uint64>(globalUboSize));
+                                MG_Util::PipeStats::AddBytes(MG_Util::PipeStats::ByteClass::StageUboGlobal,
+                                                             static_cast<Uint64>(globalUboSize));
                             }
                             g_GLESFuncs.glBindBuffer(GL_UNIFORM_BUFFER, 0);
                             backendProgram.SetLastUploadedGlobalUboVersion(uboContentVersion);
                         }
-                        BufferImpl::BindBufferBaseCached(GL_UNIFORM_BUFFER, 0,
-                                                         backendProgram.GetBackendGlobalUBOId());
+                        BufferImpl::BindBufferBaseCached(GL_UNIFORM_BUFFER, 0, backendProgram.GetBackendGlobalUBOId());
                     }
 #undef MGB_UBO_BYTES
                 }
@@ -1543,8 +1510,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     // Pre-loop epoch read; the per-resource drawCleanEpoch stamps below
                     // follow the same stamp-the-pre-read-value rule as the VAO memo
                     // (Managers.h documents the contract and the mutation-site list).
-                    const Uint64 bufferEpoch =
-                        uboCount > 0 ? BufferImpl::CurrentBufferMutationEpoch() : 0;
+                    const Uint64 bufferEpoch = uboCount > 0 ? BufferImpl::CurrentBufferMutationEpoch() : 0;
                     Uint lastUBOBinding = 0; // binding 0 is reserved for the global UBO
                     for (Int i = 0; i < uboCount; ++i) {
                         ++lastUBOBinding;
@@ -1559,8 +1525,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         // cannot answer - set_program_bindings' first tail carries it, dense in
                         // this very index space. The BINDING POINT it names is sb's row (the
                         // GetBufferBindingPoint below); this line is the boundary S4 R5 named.
-                        auto binding =
-                            PrgramImpl::ProgramBlockBindingFromRecord(*programRecord, i);
+                        auto binding = PrgramImpl::ProgramBlockBindingFromRecord(*programRecord, i);
                         // P5e (sb, §5.6): THE POINT HALF, by record. `binding` above is the
                         // PROGRAM's block binding and stays exactly where it is (it is package
                         // pg's row); what moves is the point it indexes. The index space is the
@@ -1568,13 +1533,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         // applier's window directly, and a binding at or above Count means
                         // "nothing bound", which is what the frontend array's default said too.
                         const MG_Pipe::MGPipeApplierState& st = MG_Pipe::MGPipeApplier();
-                        const Uint32 windowStart =
-                            st.ShaderBufferStart[MG_Pipe::kMGPipeShaderBufferClassUniform];
-                        const SizeT windowEnd =
-                            static_cast<SizeT>(windowStart) +
-                            st.ShaderBufferCount[MG_Pipe::kMGPipeShaderBufferClassUniform];
-                        if (static_cast<SizeT>(binding) < windowStart ||
-                            static_cast<SizeT>(binding) >= windowEnd) {
+                        const Uint32 windowStart = st.ShaderBufferStart[MG_Pipe::kMGPipeShaderBufferClassUniform];
+                        const SizeT windowEnd = static_cast<SizeT>(windowStart) +
+                                                st.ShaderBufferCount[MG_Pipe::kMGPipeShaderBufferClassUniform];
+                        if (static_cast<SizeT>(binding) < windowStart || static_cast<SizeT>(binding) >= windowEnd) {
                             continue; // nothing bound there - the frontend arm's `if (bufferObj)`
                         }
                         const MG_Pipe::MGPBufferRange& entry =
@@ -1588,12 +1550,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         // short-circuit is unchanged; it was never the point read.
                         auto* backendResource = BufferImpl::FindBufferResourceForHandle(entry.Res);
                         if (!backendResource || backendResource->drawCleanEpoch != bufferEpoch) {
-                            if (backendResource && BufferImpl::IsBufferDrawCleanByHandle(
-                                                       entry.Res, backendResource, nullptr)) {
+                            if (backendResource &&
+                                BufferImpl::IsBufferDrawCleanByHandle(entry.Res, backendResource, nullptr)) {
                                 backendResource->drawCleanEpoch = bufferEpoch;
                             } else {
-                                backendResource =
-                                    BufferImpl::EnsureBufferResourceForHandle(nullptr, entry.Res);
+                                backendResource = BufferImpl::EnsureBufferResourceForHandle(nullptr, entry.Res);
                             }
                         }
                         if (backendResource && backendResource->id != 0) {
@@ -1606,14 +1567,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                                                  backendResource->id);
                             } else {
                                 const SizeT storage = backendResource->storageSize;
-                                const SizeT rangeStart =
-                                    std::min<SizeT>(static_cast<SizeT>(entry.Offset), storage);
-                                const SizeT rangeEnd = std::min<SizeT>(
-                                    static_cast<SizeT>(entry.Offset + entry.Size), storage);
+                                const SizeT rangeStart = std::min<SizeT>(static_cast<SizeT>(entry.Offset), storage);
+                                const SizeT rangeEnd =
+                                    std::min<SizeT>(static_cast<SizeT>(entry.Offset + entry.Size), storage);
                                 BufferImpl::BindBufferRangeCached(
                                     GL_UNIFORM_BUFFER, lastUBOBinding, backendResource->id,
-                                    static_cast<GLintptr>(rangeStart),
-                                    static_cast<GLsizeiptr>(rangeEnd - rangeStart));
+                                    static_cast<GLintptr>(rangeStart), static_cast<GLsizeiptr>(rangeEnd - rangeStart));
                             }
                         } else {
                             MGLOG_E_ONCE("No backend buffer found for UBO binding, cannot bind UBO.");
@@ -1652,14 +1611,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     // set_program_bindings means. Truncated to the memo's Uint32 field, which is
                     // safe for a memo key - it is a change detector, not an ordering - and the
                     // record's serial would need four billion binding records to wrap.
-                    const Uint32 programBackendStateVersion =
-                        static_cast<Uint32>(programRecord->BindingsSerial);
-                    Bool samplerPassClean =
-                        samplerPassMemo.valid && samplerPassMemo.contextId == keys.contextId &&
-                        samplerPassMemo.unitBindingsEpoch == keys.unitBindingsEpoch &&
-                        samplerPassMemo.samplingGeneration == keys.samplingGeneration &&
-                        samplerPassMemo.backendStateVersion == programBackendStateVersion &&
-                        samplerPassMemo.textureContextGeneration == g_backendContextGeneration;
+                    const Uint32 programBackendStateVersion = static_cast<Uint32>(programRecord->BindingsSerial);
+                    Bool samplerPassClean = samplerPassMemo.valid && samplerPassMemo.contextId == keys.contextId &&
+                                            samplerPassMemo.unitBindingsEpoch == keys.unitBindingsEpoch &&
+                                            samplerPassMemo.samplingGeneration == keys.samplingGeneration &&
+                                            samplerPassMemo.backendStateVersion == programBackendStateVersion &&
+                                            samplerPassMemo.textureContextGeneration == g_backendContextGeneration;
                     if (samplerPassClean) {
                         for (Uint i = 0; i < samplerPassMemo.count; ++i) {
                             if (SamplerImpl::g_boundSamplersCache[samplerPassMemo.units[i]] !=
@@ -1679,9 +1636,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                             // P5e (pg): the unit glUniform1i put on this sampler - the second
                             // of the three post-link mutable fields, carried sparse and ascending
                             // by location in set_program_bindings' second tail.
-                            const auto unit =
-                                PrgramImpl::ProgramSamplerUnitFromRecord(
-                                          *programRecord, samplerBinding.frontendLocation);
+                            const auto unit = PrgramImpl::ProgramSamplerUnitFromRecord(*programRecord,
+                                                                                       samplerBinding.frontendLocation);
                             if (unit == -1) continue;
                             // Record the touched unit for the memo; a pass touching more
                             // units than the memo can carry (or an out-of-range unit)
@@ -1874,8 +1830,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // IS STILL `true` - a flattened batch that turns out to need per-sub-draw values is
         // unrecoverable, so "not known yet" has to count as "may need them", and a missing
         // record is the most not-known-yet a program can be.
-        const auto* const record =
-            PrgramImpl::FindShaderCsoRecord(MG_Pipe::MGPipeApplier().DrawProgram);
+        const auto* const record = PrgramImpl::FindShaderCsoRecord(MG_Pipe::MGPipeApplier().DrawProgram);
         if (record == nullptr || program->GetSyncedShaderCsoSerial() != record->Serial) {
             return true;
         }

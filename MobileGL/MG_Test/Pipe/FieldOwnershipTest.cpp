@@ -110,7 +110,9 @@ namespace {
         SharedPtr<GLContext> m_previous;
     };
 
-    SizeT Index(MGPipeInputField field) { return static_cast<SizeT>(field); }
+    SizeT Index(MGPipeInputField field) {
+        return static_cast<SizeT>(field);
+    }
 
 #if MGTEST_HAVE_FORK
     struct ChildResult {
@@ -139,8 +141,12 @@ namespace {
         return result;
     }
 
-    Bool DiedOfAbort(const ChildResult& r) { return WIFSIGNALED(r.Status) && WTERMSIG(r.Status) == SIGABRT; }
-    Bool ExitedWith(const ChildResult& r, int code) { return WIFEXITED(r.Status) && WEXITSTATUS(r.Status) == code; }
+    Bool DiedOfAbort(const ChildResult& r) {
+        return WIFSIGNALED(r.Status) && WTERMSIG(r.Status) == SIGABRT;
+    }
+    Bool ExitedWith(const ChildResult& r, int code) {
+        return WIFEXITED(r.Status) && WEXITSTATUS(r.Status) == code;
+    }
     std::string DescribeStatus(const ChildResult& r) {
         if (r.Status < 0) return "fork/waitpid failed";
         if (WIFEXITED(r.Status)) return "exited " + std::to_string(WEXITSTATUS(r.Status));
@@ -149,7 +155,6 @@ namespace {
     }
 #endif // MGTEST_HAVE_FORK
 } // namespace
-
 
 // ---------------------------------------------------------------------------------------
 // The arithmetic: the table partitions the field set. Runs in push, verify and split.
@@ -172,12 +177,9 @@ TEST_F(FieldOwnershipTest, TheClassSizesPartitionTheFieldSet) {
     for (SizeT i = 0; i < kMGPipeInputFieldCount; ++i) {
         ++counted[static_cast<SizeT>(kMGPipeFieldOwnership[i])];
     }
-    EXPECT_EQ(counted[static_cast<SizeT>(MGPipeFieldOwnership::kRecordSupplied)],
-              kMGPipeRecordSuppliedFieldCount);
-    EXPECT_EQ(counted[static_cast<SizeT>(MGPipeFieldOwnership::kApplierDerived)],
-              kMGPipeApplierDerivedFieldCount);
-    EXPECT_EQ(counted[static_cast<SizeT>(MGPipeFieldOwnership::kBarrierPulled)],
-              kMGPipeBarrierPulledFieldCount);
+    EXPECT_EQ(counted[static_cast<SizeT>(MGPipeFieldOwnership::kRecordSupplied)], kMGPipeRecordSuppliedFieldCount);
+    EXPECT_EQ(counted[static_cast<SizeT>(MGPipeFieldOwnership::kApplierDerived)], kMGPipeApplierDerivedFieldCount);
+    EXPECT_EQ(counted[static_cast<SizeT>(MGPipeFieldOwnership::kBarrierPulled)], kMGPipeBarrierPulledFieldCount);
     EXPECT_EQ(counted[static_cast<SizeT>(MGPipeFieldOwnership::kFatal)], kMGPipeFatalFieldCount);
     // The census's own arithmetic (scout-unmigrated-census section 2.1), updated by P5c rv
     // (CONTRACT-P5C.md §5.3): rv moved the NINE value-class rows to RECORD-SUPPLIED through
@@ -186,8 +188,7 @@ TEST_F(FieldOwnershipTest, TheClassSizesPartitionTheFieldSet) {
     // 15 BARRIER-PULLED (the object class: nine non-sticky rows plus six of the seven sticky
     // forwards), four APPLIER-DERIVED and three FATAL - and 41 are.
     EXPECT_EQ(kMGPipeRecordSuppliedFieldCount, SizeT{41});
-    EXPECT_EQ(kMGPipeApplierDerivedFieldCount + kMGPipeBarrierPulledFieldCount + kMGPipeFatalFieldCount,
-              SizeT{22});
+    EXPECT_EQ(kMGPipeApplierDerivedFieldCount + kMGPipeBarrierPulledFieldCount + kMGPipeFatalFieldCount, SizeT{22});
 }
 
 TEST_F(FieldOwnershipTest, EveryBarrierPulledRowNamesTheRetiringPhase) {
@@ -207,12 +208,18 @@ TEST_F(FieldOwnershipTest, EveryBarrierPulledRowNamesTheRetiringPhase) {
 TEST_F(FieldOwnershipTest, TheReducedPathsUnmigratedFieldsAreAllAccountedFor) {
     // Historical name retained for G14. These are retired legacy getters, not records.
     const MGPipeInputField retired[] = {
-        MGPipeInputField::GetBoundVertexArray, MGPipeInputField::GetBufferBindingSlot,
-        MGPipeInputField::GetBufferBindingPoint, MGPipeInputField::GetFramebufferBindingSlot,
-        MGPipeInputField::GetImageTextureBinding, MGPipeInputField::GetTextureUnitObject,
-        MGPipeInputField::GetProgramForDraw, MGPipeInputField::GetProgramForDispatch,
-        MGPipeInputField::GetTransformFeedbackProgram, MGPipeInputField::GetProgramObject,
-        MGPipeInputField::GetTextureObject, MGPipeInputField::ValidateProgramName,
+        MGPipeInputField::GetBoundVertexArray,
+        MGPipeInputField::GetBufferBindingSlot,
+        MGPipeInputField::GetBufferBindingPoint,
+        MGPipeInputField::GetFramebufferBindingSlot,
+        MGPipeInputField::GetImageTextureBinding,
+        MGPipeInputField::GetTextureUnitObject,
+        MGPipeInputField::GetProgramForDraw,
+        MGPipeInputField::GetProgramForDispatch,
+        MGPipeInputField::GetTransformFeedbackProgram,
+        MGPipeInputField::GetProgramObject,
+        MGPipeInputField::GetTextureObject,
+        MGPipeInputField::ValidateProgramName,
         MGPipeInputField::RecordError,
     };
     for (const auto field : retired)
@@ -222,23 +229,17 @@ TEST_F(FieldOwnershipTest, TheReducedPathsUnmigratedFieldsAreAllAccountedFor) {
     EXPECT_EQ(kMGPipeAdmittedPullPairCount, SizeT{0});
     EXPECT_EQ(MGPipeFieldOwnershipOf(MGPipeInputField::GetPixelStoreParameters, 0),
               MGPipeFieldOwnership::kApplierDerived);
-    EXPECT_EQ(MGPipeFieldOwnershipOf(MGPipeInputField::GetPixelStoreParameters, 1),
-              MGPipeFieldOwnership::kFatal);
+    EXPECT_EQ(MGPipeFieldOwnershipOf(MGPipeInputField::GetPixelStoreParameters, 1), MGPipeFieldOwnership::kFatal);
     for (const auto field : {MGPipeInputField::GetBufferBindingPointCount,
-                            MGPipeInputField::HasOpenTransformFeedbackSpan,
-                            MGPipeInputField::GetTextureBindGeneration,
-                            MGPipeInputField::GetSamplingResolutionGeneration,
-                            MGPipeInputField::GetTextureContextId})
+                             MGPipeInputField::HasOpenTransformFeedbackSpan, MGPipeInputField::GetTextureBindGeneration,
+                             MGPipeInputField::GetSamplingResolutionGeneration, MGPipeInputField::GetTextureContextId})
         EXPECT_EQ(MGPipeFieldOwnershipOf(field), MGPipeFieldOwnership::kApplierDerived);
-    for (const auto field : {MGPipeInputField::GetActiveTextureUnit,
-                            MGPipeInputField::GetMaxTouchedTextureUnit,
-                            MGPipeInputField::GetTouchedBufferBindingPointCount,
-                            MGPipeInputField::IsTransformFeedbackActive,
-                            MGPipeInputField::IsTransformFeedbackPaused,
-                            MGPipeInputField::GetTransformFeedbackGeneration,
-                            MGPipeInputField::GetBoundTransformFeedbackLifetimeId,
-                            MGPipeInputField::GetTransformFeedbackCapturedVertices,
-                            MGPipeInputField::GetCurrentVertexAttribute})
+    for (const auto field :
+         {MGPipeInputField::GetActiveTextureUnit, MGPipeInputField::GetMaxTouchedTextureUnit,
+          MGPipeInputField::GetTouchedBufferBindingPointCount, MGPipeInputField::IsTransformFeedbackActive,
+          MGPipeInputField::IsTransformFeedbackPaused, MGPipeInputField::GetTransformFeedbackGeneration,
+          MGPipeInputField::GetBoundTransformFeedbackLifetimeId, MGPipeInputField::GetTransformFeedbackCapturedVertices,
+          MGPipeInputField::GetCurrentVertexAttribute})
         EXPECT_EQ(MGPipeFieldOwnershipOf(field), MGPipeFieldOwnership::kRecordSupplied);
 }
 
@@ -271,7 +272,8 @@ TEST_F(FieldOwnershipTest, EveryVerbsRecordOpIsStampedAsAVerbOfTheSameFillClass)
         const MGPipeVerb stamped = MGPipeVerbForWireOp(op);
         ASSERT_NE(stamped, MGPipeVerb::kVerbCount) << kMGPipeVerbNames[i] << ": its record op stamps no verb";
         EXPECT_EQ(kMGPipeVerbClass[static_cast<SizeT>(stamped)], kMGPipeVerbClass[i])
-            << kMGPipeVerbNames[i] << " publishes a record stamped as " << kMGPipeVerbNames[static_cast<SizeT>(stamped)];
+            << kMGPipeVerbNames[i] << " publishes a record stamped as "
+            << kMGPipeVerbNames[static_cast<SizeT>(stamped)];
     }
     // GetIntegeri_v and IsTimerQuerySupported, answered from the caps mirror.
     EXPECT_EQ(noRecord, 2u);
@@ -306,8 +308,7 @@ TEST_F(FieldOwnershipTest, VerbBoundaryOpsCoverEveryVerbShapedCall) {
     EXPECT_EQ(MGPipeVerbForWireOp(MGPWireOp::BindShaderImage), MGPipeVerb::BindImageTexture);
     EXPECT_EQ(MGPipeVerbForWireOp(MGPWireOp::PatchParameter), MGPipeVerb::PatchParameteri);
     EXPECT_EQ(MGPipeVerbForWireOp(MGPWireOp::BindStreamOutput), MGPipeVerb::BindTransformFeedback);
-    EXPECT_EQ(MGPipeVerbForWireOp(MGPWireOp::SetStorageBlockBinding),
-              MGPipeVerb::ShaderStorageBlockBinding);
+    EXPECT_EQ(MGPipeVerbForWireOp(MGPWireOp::SetStorageBlockBinding), MGPipeVerb::ShaderStorageBlockBinding);
     EXPECT_EQ(MGPipeVerbForWireOp(MGPWireOp::CopyFramebufferToTexture), MGPipeVerb::CopyTexImage2D);
     EXPECT_EQ(MGPipeVerbForWireOp(MGPWireOp::FenceCreate), MGPipeVerb::FenceSync);
     EXPECT_EQ(MGPipeVerbForWireOp(MGPWireOp::FenceStatus), MGPipeVerb::GetSyncStatus);
@@ -352,11 +353,9 @@ TEST_F(FieldOwnershipTest, TheAdmittedPullTableIsID84sDerivationAndNotAList) {
     EXPECT_EQ(kMGPipeAdmittedPullPairCount, SizeT{0});
     for (SizeT v = 0; v < kMGPipeVerbCount; ++v)
         for (SizeT f = 0; f < kMGPipeInputFieldCount; ++f)
-            EXPECT_FALSE(MGPipeBarrierPullAdmitted(static_cast<MGPipeInputField>(f),
-                                                   static_cast<MGPipeVerb>(v)))
+            EXPECT_FALSE(MGPipeBarrierPullAdmitted(static_cast<MGPipeInputField>(f), static_cast<MGPipeVerb>(v)))
                 << kMGPipeInputFieldNames[f] << "@" << kMGPipeVerbNames[v];
-    EXPECT_FALSE(MGPipeBarrierPullAdmitted(MGPipeInputField::GetFramebufferBindingSlot,
-                                          MGPipeVerb::kVerbCount));
+    EXPECT_FALSE(MGPipeBarrierPullAdmitted(MGPipeInputField::GetFramebufferBindingSlot, MGPipeVerb::kVerbCount));
 }
 
 // ---------------------------------------------------------------------------------------
@@ -395,31 +394,27 @@ TEST_F(FieldOwnershipTest, TheResidualFillsSuppliedMemoReKeysOnEveryInputThatMov
     //    applier writes it without deriving, so at a mask that carries the render-state bit the
     //    fill skips it - and at 0, which is what a unit lane runs at (Features.PipePush defaults
     //    to 0), nothing is emitted and every field is pulled.
-    EXPECT_FALSE(MGPipeResidualFillSuppliesField(MGPipeInputField::GetRenderStateParameters,
-                                                 kNoSubsystems, true, false));
-    EXPECT_TRUE(MGPipeResidualFillSuppliesField(MGPipeInputField::GetRenderStateParameters,
-                                                kEverySubsystem, true, false));
-    EXPECT_FALSE(MGPipeResidualFillSuppliesField(MGPipeInputField::GetRenderStateParameters,
-                                                 kNoSubsystems, true, false))
+    EXPECT_FALSE(
+        MGPipeResidualFillSuppliesField(MGPipeInputField::GetRenderStateParameters, kNoSubsystems, true, false));
+    EXPECT_TRUE(
+        MGPipeResidualFillSuppliesField(MGPipeInputField::GetRenderStateParameters, kEverySubsystem, true, false));
+    EXPECT_FALSE(
+        MGPipeResidualFillSuppliesField(MGPipeInputField::GetRenderStateParameters, kNoSubsystems, true, false))
         << "the memo answered the previous mask: MOBILEGL_PIPE_PUSH is not in its key, and a "
            "per-subsystem A/B would then fill from the wrong subsystem set";
 
     // 2. THE DERIVATION LATCH. GetViewport reaches PipeInputs only through
     //    MGPipeDeriveRenderStateFields, so a build whose derivation is a stub must keep PULLING
     //    it - skipping it there leaves the mirror unwritten and the backend reading a default.
-    EXPECT_TRUE(MGPipeResidualFillSuppliesField(MGPipeInputField::GetViewport, kEverySubsystem,
-                                                true, false));
-    EXPECT_FALSE(MGPipeResidualFillSuppliesField(MGPipeInputField::GetViewport, kEverySubsystem,
-                                                 false, false))
+    EXPECT_TRUE(MGPipeResidualFillSuppliesField(MGPipeInputField::GetViewport, kEverySubsystem, true, false));
+    EXPECT_FALSE(MGPipeResidualFillSuppliesField(MGPipeInputField::GetViewport, kEverySubsystem, false, false))
         << "the memo answered the previous latch: ApplierDerivesRenderStateFields is not in its key";
 
     // 3. P5c rv's WIRE GATE (CONTRACT-P5C.md §5.3). set_context_values has no producer without a
     //    live wire, so its eight value-class fields keep being pulled under monolith - G1's
     //    byte-for-byte rule - and are skipped only when the record really crosses.
-    EXPECT_FALSE(MGPipeResidualFillSuppliesField(MGPipeInputField::GetActiveTextureUnit,
-                                                 kEverySubsystem, true, false));
-    EXPECT_TRUE(MGPipeResidualFillSuppliesField(MGPipeInputField::GetActiveTextureUnit,
-                                                kEverySubsystem, true, true))
+    EXPECT_FALSE(MGPipeResidualFillSuppliesField(MGPipeInputField::GetActiveTextureUnit, kEverySubsystem, true, false));
+    EXPECT_TRUE(MGPipeResidualFillSuppliesField(MGPipeInputField::GetActiveTextureUnit, kEverySubsystem, true, true))
         << "the memo answered the previous wire state: contextValuesWireLive is not in its key, "
            "and the emission's half of the gate and the fill's half would then disagree";
 
@@ -441,8 +436,7 @@ TEST_F(FieldOwnershipTest, TheResidualFillsSuppliedMemoReKeysOnEveryInputThatMov
         ASSERT_NE(MGPipeGetResourceOps(), nullptr)
             << "the fixture did not move the signal it names, so this step observes nothing";
         for (SizeT i = 0; i < kMGPipeInputFieldCount; ++i) {
-            if (MGPipeResidualFillSuppliesField(static_cast<MGPipeInputField>(i), kEverySubsystem,
-                                                true, true)) {
+            if (MGPipeResidualFillSuppliesField(static_cast<MGPipeInputField>(i), kEverySubsystem, true, true)) {
                 withConsumer.Words[i / 64] |= (Uint64{1} << (i % 64));
             }
         }
@@ -450,8 +444,7 @@ TEST_F(FieldOwnershipTest, TheResidualFillsSuppliedMemoReKeysOnEveryInputThatMov
         MGPipeSetResourceOps(nullptr);
         ASSERT_EQ(MGPipeGetResourceOps(), nullptr);
         for (SizeT i = 0; i < kMGPipeInputFieldCount; ++i) {
-            if (MGPipeResidualFillSuppliesField(static_cast<MGPipeInputField>(i), kEverySubsystem,
-                                                true, true)) {
+            if (MGPipeResidualFillSuppliesField(static_cast<MGPipeInputField>(i), kEverySubsystem, true, true)) {
                 withoutConsumer.Words[i / 64] |= (Uint64{1} << (i % 64));
             }
         }
@@ -461,13 +454,11 @@ TEST_F(FieldOwnershipTest, TheResidualFillsSuppliedMemoReKeysOnEveryInputThatMov
         // and so rides the framebuffer family's consumer gate - and is pulled regardless, because
         // its storage is a BindingSlot<FramebufferObject> no payload can carry.
         EXPECT_FALSE(MGPipeFieldMaskHas(withConsumer, MGPipeInputField::GetFramebufferBindingSlot));
-        EXPECT_FALSE(
-            MGPipeFieldMaskHas(withoutConsumer, MGPipeInputField::GetFramebufferBindingSlot));
+        EXPECT_FALSE(MGPipeFieldMaskHas(withoutConsumer, MGPipeInputField::GetFramebufferBindingSlot));
 
         for (SizeT i = 0; i < kMGPipeInputFieldCount; ++i) {
             const auto field = static_cast<MGPipeInputField>(i);
-            EXPECT_EQ(MGPipeFieldMaskHas(withConsumer, field),
-                      MGPipeFieldMaskHas(withoutConsumer, field))
+            EXPECT_EQ(MGPipeFieldMaskHas(withConsumer, field), MGPipeFieldMaskHas(withoutConsumer, field))
                 << kMGPipeInputFieldNames[i]
                 << "'s supplied answer moved with the P4a consumer signal. That is CORRECT "
                    "behaviour and this assertion is a trip wire, not a defect report: the "
@@ -488,8 +479,8 @@ TEST_F(FieldOwnershipTest, AServerStampMakesRecordSuppliedFieldsFreshAndWithdraw
     MGPipeServerStampVerbBoundary(MGPipeVerb::Clear);
     EXPECT_TRUE(gPipeInputs->ServerStampedVerb());
     EXPECT_EQ(gPipeInputs->CurrentVerb(), MGPipeVerb::Clear);
-    const MGPipeFieldMask& mask = kMGPipeClassFieldMask[static_cast<SizeT>(
-        kMGPipeVerbClass[static_cast<SizeT>(MGPipeVerb::Clear)])];
+    const MGPipeFieldMask& mask =
+        kMGPipeClassFieldMask[static_cast<SizeT>(kMGPipeVerbClass[static_cast<SizeT>(MGPipeVerb::Clear)])];
     SizeT stamped = 0;
     for (SizeT i = 0; i < kMGPipeInputFieldCount; ++i) {
         const auto field = static_cast<MGPipeInputField>(i);
@@ -497,12 +488,12 @@ TEST_F(FieldOwnershipTest, AServerStampMakesRecordSuppliedFieldsFreshAndWithdraw
         // The stamp respects the verb's own may-read table for the client fill's reason: a
         // field outside the class was never copied for this verb, so answering it would hand
         // the server the previous verb's value.
-        const Bool answerable = MGPipeFieldMaskHas(mask, field) &&
-                                (kMGPipeFieldOwnership[i] == MGPipeFieldOwnership::kRecordSupplied ||
-                                 kMGPipeFieldOwnership[i] == MGPipeFieldOwnership::kApplierDerived);
-        EXPECT_EQ(fresh, answerable)
-            << kMGPipeInputFieldNames[i] << " is " << MGPipeFieldOwnershipName(kMGPipeFieldOwnership[i])
-            << " and the stamp answered " << (fresh ? "fresh" : "stale");
+        const Bool answerable =
+            MGPipeFieldMaskHas(mask, field) && (kMGPipeFieldOwnership[i] == MGPipeFieldOwnership::kRecordSupplied ||
+                                                kMGPipeFieldOwnership[i] == MGPipeFieldOwnership::kApplierDerived);
+        EXPECT_EQ(fresh, answerable) << kMGPipeInputFieldNames[i] << " is "
+                                     << MGPipeFieldOwnershipName(kMGPipeFieldOwnership[i]) << " and the stamp answered "
+                                     << (fresh ? "fresh" : "stale");
         stamped += fresh ? 1 : 0;
     }
     // Not vacuous: kClear really does have record-supplied fields to stamp.
@@ -513,10 +504,10 @@ TEST_F(FieldOwnershipTest, AServerStampMakesRecordSuppliedFieldsFreshAndWithdraw
     // with the table - never a table that is wrong. These four say what the stamp must do for
     // four fields whose class is an argument of this package rather than a lookup.
     const MGPipeFilledState& filled = gPipeInputs->FilledState();
-    EXPECT_TRUE(MGPipeInputFieldIsFresh(filled, MGPipeInputField::GetClearColor));         // supplied
+    EXPECT_TRUE(MGPipeInputFieldIsFresh(filled, MGPipeInputField::GetClearColor)); // supplied
     EXPECT_TRUE(MGPipeInputFieldIsFresh(filled, MGPipeInputField::GetRenderStateParameters));
     EXPECT_FALSE(MGPipeInputFieldIsFresh(filled, MGPipeInputField::GetFramebufferBindingSlot)); // pulled
-    EXPECT_FALSE(MGPipeInputFieldIsFresh(filled, MGPipeInputField::RecordError));           // sticky
+    EXPECT_FALSE(MGPipeInputFieldIsFresh(filled, MGPipeInputField::RecordError));               // sticky
 }
 
 // THE STICKY EXEMPTION, CANCELLED. generated/PipeFilled.inc answers "fresh" for a sticky field
@@ -540,8 +531,7 @@ TEST_F(FieldOwnershipTest, TheStickyExemptionIsCancelledByTheServerStamp) {
 // E4's NEGATIVE CONTROL. Move one field from RECORD-SUPPLIED to FATAL in FieldOwnership.def
 // and this case goes red by name: the read below aborts instead of completing.
 TEST_F(FieldOwnershipTest, ARecordSuppliedFieldIsReadableAfterAServerStamp) {
-    ASSERT_EQ(MGPipeFieldOwnershipOf(MGPipeInputField::GetClearColor),
-              MGPipeFieldOwnership::kRecordSupplied);
+    ASSERT_EQ(MGPipeFieldOwnershipOf(MGPipeInputField::GetClearColor), MGPipeFieldOwnership::kRecordSupplied);
     MGPipeServerStampVerbBoundary(MGPipeVerb::Clear);
     (void)gPipeInputs->GetClearColor();
     (void)gPipeInputs->GetRenderStateParameters();
@@ -610,7 +600,6 @@ TEST_F(FieldOwnershipTest, ABarrierPulledReadAfterAServerStampIsCountedNotFatal)
 #if MGTEST_HAVE_FORK
     // Historical name retained for G14: the formerly admitted read is now forbidden.
     const ChildResult r = RunInChild([] {
-
         MGPipeServerStampVerbBoundary(MGPipeVerb::DrawArrays);
         (void)gPipeInputs->GetBoundVertexArray();
     });
@@ -627,7 +616,6 @@ TEST_F(FieldOwnershipTest, AStickyForwardIsCountedAsAResidualPull) {
 #if MGTEST_HAVE_FORK
     // Historical name retained for G14: the formerly admitted read is now forbidden.
     const ChildResult r = RunInChild([] {
-
         MGPipeServerStampVerbBoundary(MGPipeVerb::Clear);
         (void)gPipeInputs->ValidateProgramName(1u);
     });
@@ -680,8 +668,7 @@ TEST_F(FieldOwnershipTest, ABarrierPulledFieldOutsideTheVerbsClassIsStillFatal) 
         (void)gPipeInputs->GetProgramForDraw(); // retired accessor, outside kClear too
     });
     ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
-    EXPECT_NE(r.Log.find("Fatal{UnmigratedPipeInput, \"GetProgramForDraw@Clear\"}"), std::string::npos)
-        << r.Log;
+    EXPECT_NE(r.Log.find("Fatal{UnmigratedPipeInput, \"GetProgramForDraw@Clear\"}"), std::string::npos) << r.Log;
     EXPECT_EQ(r.Log.find("BARRIER-PULLED"), std::string::npos) << r.Log;
 #else
     GTEST_SKIP() << "needs fork";
@@ -730,8 +717,7 @@ namespace {
         }
         void Arm(Bool arm) {
             MG_Config::Ipc.RoleSplitState = arm;
-            MG_Config::Transport = arm ? MG_Config::TransportMode::InProcess
-                                       : MG_Config::TransportMode::Monolith;
+            MG_Config::Transport = arm ? MG_Config::TransportMode::InProcess : MG_Config::TransportMode::Monolith;
         }
         MG_Config::TransportMode m_previousTransport;
         Bool m_previousKnob;
@@ -872,8 +858,7 @@ TEST_F(FieldOwnershipTest, RoleSplitGivesTheFillSideADistinctBlockTheStampNeverT
     // which is CONTRACT-P5E §3.2's "the server's stamp is server-private" as a fact rather
     // than as a comment.
     MGPipeClientClearVerbBoundary();
-    EXPECT_TRUE(gPipeInputs->ServerStampedVerb())
-        << "the client-role clear withdrew the SERVER's stamp";
+    EXPECT_TRUE(gPipeInputs->ServerStampedVerb()) << "the client-role clear withdrew the SERVER's stamp";
     MGPipeServerClearVerbBoundary();
     EXPECT_FALSE(gPipeInputs->ServerStampedVerb());
 
@@ -914,8 +899,7 @@ TEST_F(FieldOwnershipTest, AClientFreshStampCannotReviveARetiredServerGetter) {
         (void)gPipeInputs->GetBoundVertexArray();
     });
     ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
-    EXPECT_NE(r.Log.find("Fatal{UnmigratedPipeInput, \"GetBoundVertexArray@DrawArrays\"}"),
-              std::string::npos) << r.Log;
+    EXPECT_NE(r.Log.find("Fatal{UnmigratedPipeInput, \"GetBoundVertexArray@DrawArrays\"}"), std::string::npos) << r.Log;
 }
 
 TEST_F(FieldOwnershipTest, StrictErrorsTurnsABarrierPulledReadIntoANamedAbort) {
@@ -1000,12 +984,12 @@ TEST_F(FieldOwnershipTest, AFatalClassReadAbortsEvenWithoutStrictErrors) {
 TEST_F(FieldOwnershipTest, TheComputeProgramIsServedUnderADispatchStampFromP5bOn) {
     // Historical name retained for G14: the formerly admitted read is now forbidden.
     const ChildResult r = RunInChild([] {
-
         MGPipeServerStampVerbBoundary(MGPipeVerb::DispatchCompute);
         (void)gPipeInputs->GetProgramForDispatch();
     });
     ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
-    EXPECT_NE(r.Log.find("Fatal{UnmigratedPipeInput, \"GetProgramForDispatch@DispatchCompute\"}"), std::string::npos) << r.Log;
+    EXPECT_NE(r.Log.find("Fatal{UnmigratedPipeInput, \"GetProgramForDispatch@DispatchCompute\"}"), std::string::npos)
+        << r.Log;
     EXPECT_EQ(r.Log.find("Admitted{"), std::string::npos) << r.Log;
 }
 
@@ -1019,15 +1003,13 @@ TEST_F(FieldOwnershipTest, TheUnpackHalfOfThePixelStoreAbortsWhileThePackHalfDoe
         (void)gPipeInputs->GetPixelStoreParameters(true);
     });
     ASSERT_TRUE(DiedOfAbort(fatal)) << DescribeStatus(fatal) << "\n" << fatal.Log;
-    EXPECT_NE(fatal.Log.find("Fatal{UnmigratedPipeInput, \"GetPixelStoreParameters@ReadPixels\"}"),
-              std::string::npos)
+    EXPECT_NE(fatal.Log.find("Fatal{UnmigratedPipeInput, \"GetPixelStoreParameters@ReadPixels\"}"), std::string::npos)
         << fatal.Log;
     // The line must say WHICH HALF. Without this the message is byte-identical to what a
     // genuinely stale read of the pack half would print, and the whole case for narrowing by
     // argument instead of by a second field id is that the reader is told which half they
     // asked for.
-    EXPECT_NE(fatal.Log.find("argument 0 = 1 is FATAL while the field is APPLIER-DERIVED"),
-              std::string::npos)
+    EXPECT_NE(fatal.Log.find("argument 0 = 1 is FATAL while the field is APPLIER-DERIVED"), std::string::npos)
         << fatal.Log;
 
     const ChildResult ok = RunInChild([] {
@@ -1055,8 +1037,7 @@ TEST_F(FieldOwnershipTest, AnUnmigratedEmulationIsFatalUnderARealTransportAndIne
         MGPipeUnmigratedEmulation("get-tex-image-shadow");
     });
     ASSERT_TRUE(DiedOfAbort(split)) << DescribeStatus(split) << "\n" << split.Log;
-    EXPECT_NE(split.Log.find("Fatal{UnmigratedEmulation, \"get-tex-image-shadow\"}"), std::string::npos)
-        << split.Log;
+    EXPECT_NE(split.Log.find("Fatal{UnmigratedEmulation, \"get-tex-image-shadow\"}"), std::string::npos) << split.Log;
 }
 
 // P5f terminal contract; the historical registration name is retained for G14.

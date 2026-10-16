@@ -123,16 +123,14 @@ namespace MobileGL::MG_Impl::GLXImpl::X11Present {
                     void* xfixes = OpenLibrary("libxcb-xfixes.so.0");
                     a->xfixesId =
                         xfixes != nullptr ? static_cast<xcb_extension_t*>(dlsym(xfixes, "xcb_xfixes_id")) : nullptr;
-                    a->xfixes = a->xfixesId != nullptr && R(xfixes, xcb_xfixes_query_version) &
-                                                              R(xfixes, xcb_xfixes_query_version_reply) &
-                                                              R(xfixes, xcb_xfixes_create_region) &
-                                                              R(xfixes, xcb_xfixes_destroy_region);
+                    a->xfixes = a->xfixesId != nullptr &&
+                                R(xfixes, xcb_xfixes_query_version) & R(xfixes, xcb_xfixes_query_version_reply) &
+                                    R(xfixes, xcb_xfixes_create_region) & R(xfixes, xcb_xfixes_destroy_region);
                     void* shm = OpenLibrary("libxcb-shm.so.0");
                     a->shmId = shm != nullptr ? static_cast<xcb_extension_t*>(dlsym(shm, "xcb_shm_id")) : nullptr;
-                    a->shm = a->shmId != nullptr && R(shm, xcb_shm_query_version) &
-                                                        R(shm, xcb_shm_query_version_reply) &
-                                                        R(shm, xcb_shm_attach_fd_checked) & R(shm, xcb_shm_detach) &
-                                                        R(shm, xcb_shm_put_image);
+                    a->shm = a->shmId != nullptr &&
+                             R(shm, xcb_shm_query_version) & R(shm, xcb_shm_query_version_reply) &
+                                 R(shm, xcb_shm_attach_fd_checked) & R(shm, xcb_shm_detach) & R(shm, xcb_shm_put_image);
                 }
 #undef R
                 return a;
@@ -140,7 +138,9 @@ namespace MobileGL::MG_Impl::GLXImpl::X11Present {
             return *api;
         }
 
-        xcb_connection_t* Xcb(void* connection) { return static_cast<xcb_connection_t*>(connection); }
+        xcb_connection_t* Xcb(void* connection) {
+            return static_cast<xcb_connection_t*>(connection);
+        }
 
         Bool ExtensionPresent(xcb_connection_t* c, xcb_extension_t* id) {
             const XcbApi& api = Api();
@@ -196,7 +196,8 @@ namespace MobileGL::MG_Impl::GLXImpl::X11Present {
             }
             // XFixes demands its version be asked before any other request of it.
             if (api.xfixes && ExtensionPresent(c, api.xfixesId)) {
-                if (auto* reply = api.xcb_xfixes_query_version_reply(c, api.xcb_xfixes_query_version(c, 5, 0), nullptr)) {
+                if (auto* reply =
+                        api.xcb_xfixes_query_version_reply(c, api.xcb_xfixes_query_version(c, 5, 0), nullptr)) {
                     result.XFixes = reply->major_version >= 2;
                     std::free(reply);
                 }
@@ -295,8 +296,9 @@ namespace MobileGL::MG_Impl::GLXImpl::X11Present {
                 if (m_buffers12 && api.xcb_dri3_pixmap_from_buffers_checked != nullptr) {
                     int32_t fds[1] = {fd};
                     cookie = api.xcb_dri3_pixmap_from_buffers_checked(
-                        m_c, pixmap, m_window, 1, static_cast<uint16_t>(image.Width), static_cast<uint16_t>(image.Height),
-                        image.Stride, image.Offset, 0, 0, 0, 0, 0, 0, static_cast<uint8_t>(depth), 32, image.Modifier, fds);
+                        m_c, pixmap, m_window, 1, static_cast<uint16_t>(image.Width),
+                        static_cast<uint16_t>(image.Height), image.Stride, image.Offset, 0, 0, 0, 0, 0, 0,
+                        static_cast<uint8_t>(depth), 32, image.Modifier, fds);
                 } else {
                     if (image.Offset != 0 || image.Stride > 0xffffu) {
                         ::close(fd);
@@ -308,8 +310,9 @@ namespace MobileGL::MG_Impl::GLXImpl::X11Present {
                         static_cast<uint8_t>(depth), 32, fd);
                 }
                 if (xcb_generic_error_t* error = api.xcb_request_check(m_c, cookie)) {
-                    MGLOG_I("glx: the X server refused a %ux%u shared image as a pixmap (X error %u, major %u minor %u)",
-                            image.Width, image.Height, error->error_code, error->major_code, error->minor_code);
+                    MGLOG_I(
+                        "glx: the X server refused a %ux%u shared image as a pixmap (X error %u, major %u minor %u)",
+                        image.Width, image.Height, error->error_code, error->major_code, error->minor_code);
                     std::free(error);
                     return 0;
                 }
@@ -339,9 +342,8 @@ namespace MobileGL::MG_Impl::GLXImpl::X11Present {
                 }
                 // An earlier present whose answer never came is given up on, not left queued.
                 if (m_hasPendingPresent) api.xcb_discard_reply(m_c, m_pendingPresent);
-                const xcb_void_cookie_t cookie =
-                    api.xcb_present_pixmap_checked(m_c, m_window, pixmap, serial, 0, region, 0, 0, 0, 0, 0, options,
-                                                   targetMsc, 0, 0, 0, nullptr);
+                const xcb_void_cookie_t cookie = api.xcb_present_pixmap_checked(
+                    m_c, m_window, pixmap, serial, 0, region, 0, 0, 0, 0, 0, options, targetMsc, 0, 0, 0, nullptr);
                 m_pendingPresent = cookie.sequence;
                 m_hasPendingPresent = true;
                 if (region != 0) api.xcb_xfixes_destroy_region(m_c, region);
@@ -412,7 +414,8 @@ namespace MobileGL::MG_Impl::GLXImpl::X11Present {
         public:
             explicit XcbShmPresenter(xcb_connection_t* c) : m_c(c) {}
             ~XcbShmPresenter() override {
-                for (Segment& segment : m_segments) Release(segment);
+                for (Segment& segment : m_segments)
+                    Release(segment);
                 Api().xcb_flush(m_c);
             }
 
@@ -492,7 +495,9 @@ namespace MobileGL::MG_Impl::GLXImpl::X11Present {
         };
     } // namespace
 
-    ConnectionCaps QueryConnectionCaps(void* xcbConnection) { return Query(xcbConnection).Caps; }
+    ConnectionCaps QueryConnectionCaps(void* xcbConnection) {
+        return Query(xcbConnection).Caps;
+    }
 
     UniquePtr<Connection> CreateXcbConnection(void* xcbConnection, Uint32 window, const ConnectionCaps& caps) {
         const XcbApi& api = Api();
@@ -514,9 +519,15 @@ namespace MobileGL::MG_Impl::GLXImpl::X11Present {
 #else // !MOBILEGL_GLX_XCB_PRESENT
 
 namespace MobileGL::MG_Impl::GLXImpl::X11Present {
-    ConnectionCaps QueryConnectionCaps(void*) { return {}; }
-    UniquePtr<Connection> CreateXcbConnection(void*, Uint32, const ConnectionCaps&) { return nullptr; }
-    UniquePtr<ShmPresenter> CreateShmPresenter(void*) { return nullptr; }
+    ConnectionCaps QueryConnectionCaps(void*) {
+        return {};
+    }
+    UniquePtr<Connection> CreateXcbConnection(void*, Uint32, const ConnectionCaps&) {
+        return nullptr;
+    }
+    UniquePtr<ShmPresenter> CreateShmPresenter(void*) {
+        return nullptr;
+    }
 } // namespace MobileGL::MG_Impl::GLXImpl::X11Present
 
 #endif

@@ -174,8 +174,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         static Bool IsSuppressBlendedDepthWriteEnabled() { return s_suppressBlendedDepthWrite; }
         // Device gate for the quirk: ForceOn/ForceOff bypass detection, Auto enables it on
         // the known-affected vendor (Qualcomm).
-        static Bool ShouldSuppressBlendedDepthWriteForDevice(MG_Config::QuirkOverride quirkOverride,
-                                                             Uint32 vendorId);
+        static Bool ShouldSuppressBlendedDepthWriteForDevice(MG_Config::QuirkOverride quirkOverride, Uint32 vendorId);
         // Pure per-pipeline strip decision (exempts gl_FragDepth writers, masked-out and
         // non-accumulation blends); combined with the device flag in CreatePipeline. Static
         // and payload-only so tests can pin the contract without a VkDevice.

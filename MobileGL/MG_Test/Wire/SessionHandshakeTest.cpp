@@ -97,8 +97,7 @@ namespace {
     // table->Verify(*this)`.
     std::vector<Uint8> BuildNullUnionFrame(::MobileGL::Wire::CtrlMsg tag) {
         ::flatbuffers::FlatBufferBuilder builder(256);
-        auto envelope =
-            ::MobileGL::Wire::CreateCtrlEnvelope(builder, tag, ::flatbuffers::Offset<void>());
+        auto envelope = ::MobileGL::Wire::CreateCtrlEnvelope(builder, tag, ::flatbuffers::Offset<void>());
         ::MobileGL::Wire::FinishCtrlEnvelopeBuffer(builder, envelope);
         const Uint8* begin = builder.GetBufferPointer();
         return std::vector<Uint8>(begin, begin + builder.GetSize());
@@ -134,9 +133,8 @@ TEST(SessionHandshakeTest, TheAbiFingerprintChangesWhenAnyOfItsInputsDoes) {
     EXPECT_EQ(inputs.ProgramArtifactsSchema, MG_State::GLState::ProgramArtifactsSchemaFingerprint());
     EXPECT_EQ(inputs.OpCount, static_cast<Uint64>(MG_Pipe::MGPWireOp::kOpCount));
 #if MOBILEGL_BUILD_DISAGGREGATED
-    EXPECT_EQ(inputs.ControlSchemaRevision,
-              (static_cast<Uint64>(MOBILEGL_PROTOCOL_CONTROL_REVISION) << 32) |
-                  MG_Pipe::kMGPipeResourceRespecifyExtentCarrierRevision);
+    EXPECT_EQ(inputs.ControlSchemaRevision, (static_cast<Uint64>(MOBILEGL_PROTOCOL_CONTROL_REVISION) << 32) |
+                                                MG_Pipe::kMGPipeResourceRespecifyExtentCarrierRevision);
 #else
     EXPECT_EQ(inputs.ControlSchemaRevision, static_cast<Uint64>(MOBILEGL_PROTOCOL_CONTROL_REVISION));
 #endif
@@ -153,9 +151,11 @@ TEST(SessionHandshakeTest, TheAbiFingerprintChangesWhenAnyOfItsInputsDoes) {
     EXPECT_NE(production, perturbed([](auto& i) { ++i.RenderStateLayout; })) << "RenderStateLayout";
     EXPECT_NE(production, perturbed([](auto& i) { ++i.FormatCapabilityTargets; })) << "FormatCapabilityTargets";
     EXPECT_NE(production, perturbed([](auto& i) { ++i.FormatCapabilityFormats; })) << "FormatCapabilityFormats";
-    EXPECT_NE(production, perturbed([](auto& i) { ++i.FormatCapabilitiesCodecVersion; })) << "FormatCapabilitiesCodecVersion";
+    EXPECT_NE(production, perturbed([](auto& i) { ++i.FormatCapabilitiesCodecVersion; }))
+        << "FormatCapabilitiesCodecVersion";
     EXPECT_NE(production, perturbed([](auto& i) { ++i.RendererInfoCodecVersion; })) << "RendererInfoCodecVersion";
-    EXPECT_NE(production, perturbed([](auto& i) { ++i.ProgramArtifactsCodecVersion; })) << "ProgramArtifactsCodecVersion";
+    EXPECT_NE(production, perturbed([](auto& i) { ++i.ProgramArtifactsCodecVersion; }))
+        << "ProgramArtifactsCodecVersion";
     EXPECT_NE(production, perturbed([](auto& i) { ++i.ProgramArtifactsSchema; })) << "ProgramArtifactsSchema";
     EXPECT_NE(production, perturbed([](auto& i) { ++i.OpCount; })) << "OpCount";
     EXPECT_NE(production, perturbed([](auto& i) { ++i.ControlSchemaRevision; })) << "ControlSchemaRevision";
@@ -166,8 +166,7 @@ TEST(SessionHandshakeTest, TheAbiFingerprintChangesWhenAnyOfItsInputsDoes) {
 
 TEST(SessionHandshakeTest, SameWidthFieldReorderingChangesTheWireDigestWithoutABuildStamp) {
     using namespace MG_Pipe;
-    std::vector<WireLayoutMember> fields(std::begin(kMGPipeWireLayoutMembers),
-                                       std::end(kMGPipeWireLayoutMembers));
+    std::vector<WireLayoutMember> fields(std::begin(kMGPipeWireLayoutMembers), std::end(kMGPipeWireLayoutMembers));
     // MGPRange.Offset and Size have the same width: sizeof-only checks cannot see this.
     SizeT offsetIndex = 0, sizeIndex = 0;
     for (SizeT i = 0; i < fields.size(); ++i) {
@@ -194,12 +193,16 @@ namespace {
             Set(value);
         }
         ~ScopedHandshakeEnvironment() { Set(m_present ? m_previous.c_str() : nullptr); }
+
     private:
         void Set(const char* value) {
 #if defined(_WIN32)
             ::_putenv_s(m_name, value == nullptr ? "" : value);
 #else
-            if (value == nullptr) ::unsetenv(m_name); else ::setenv(m_name, value, 1);
+            if (value == nullptr)
+                ::unsetenv(m_name);
+            else
+                ::setenv(m_name, value, 1);
 #endif
         }
         const char* m_name;
@@ -215,22 +218,24 @@ namespace {
         return frame;
     }
 
-    void CheckHandshake(Uint32 major, Uint64 wire, const char* build,
-                        ::MobileGL::Wire::DialMode dial, ::MobileGL::Wire::RefuseCode expected) {
+    void CheckHandshake(Uint32 major, Uint64 wire, const char* build, ::MobileGL::Wire::DialMode dial,
+                        ::MobileGL::Wire::RefuseCode expected) {
         using namespace ::MobileGL::Wire;
         std::unique_ptr<Transport::InProcessTransport> client, server;
         Transport::InProcessTransport::CreatePair(client, server);
         ::flatbuffers::FlatBufferBuilder builder(512);
         auto terms = CreateLinkTerms(builder);
-        auto hello = CreateHelloDirect(builder, major, MOBILEGL_PROTOCOL_ABI_MINOR, build,
-                                       0, 1, nullptr, wire, wire, terms, nullptr, dial);
+        auto hello = CreateHelloDirect(builder, major, MOBILEGL_PROTOCOL_ABI_MINOR, build, 0, 1, nullptr, wire, wire,
+                                       terms, nullptr, dial);
         auto root = CreateCtrlEnvelope(builder, CtrlMsg::Hello, hello.Union());
         FinishCtrlEnvelopeBuffer(builder, root);
         std::vector<Uint8> first(builder.GetBufferPointer(), builder.GetBufferPointer() + builder.GetSize());
         Server::ServerSession session;
         Transport::SessionSegmentSizes sizes;
-        sizes.CmdRingBytes = 4096; sizes.StageBytes = 4096;
-        sizes.ReplyBytes = 4096; sizes.EventRingBytes = 4096;
+        sizes.CmdRingBytes = 4096;
+        sizes.StageBytes = 4096;
+        sizes.ReplyBytes = 4096;
+        sizes.EventRingBytes = 4096;
         session.SetSegmentSizes(sizes);
         const auto result = session.Accept(*server, &first);
         EXPECT_EQ(result, expected == RefuseCode::None ? MOBILEGL_OK : MOBILEGL_ERR_PROTOCOL_MISMATCH);
@@ -251,7 +256,7 @@ namespace {
         }
         session.Close();
     }
-}
+} // namespace
 
 TEST(SessionHandshakeTest, WireMajorMismatchReturnsNamedRefuseWithoutAborting) {
     CheckHandshake(99, WireFingerprint(), BuildFingerprint(), ::MobileGL::Wire::DialMode::No,
@@ -272,7 +277,8 @@ TEST(SessionHandshakeTest, ARevisionFivePeerIsRefusedByNameAtRevisionSix) {
     static_assert(MOBILEGL_PROTOCOL_CONTROL_REVISION == 6, "S1 bumped the control revision 5 -> 6");
     auto inputs = CapsAbiFingerprintInputs();
 #if MOBILEGL_BUILD_DISAGGREGATED
-    inputs.ControlSchemaRevision = (static_cast<Uint64>(5) << 32) | MG_Pipe::kMGPipeResourceRespecifyExtentCarrierRevision;
+    inputs.ControlSchemaRevision =
+        (static_cast<Uint64>(5) << 32) | MG_Pipe::kMGPipeResourceRespecifyExtentCarrierRevision;
 #else
     inputs.ControlSchemaRevision = 5;
 #endif
@@ -294,16 +300,18 @@ TEST(SessionHandshakeTest, AHelloAskingAnAdoptTierThatIsNotAnAskIsRefusedByName)
         Transport::InProcessTransport::CreatePair(client, server);
         ::flatbuffers::FlatBufferBuilder builder(512);
         auto terms = CreateLinkTerms(builder, DataPlane::SharedSegments, WireForm::StructImage, 0, 0, 0, 0, ask);
-        auto hello = CreateHelloDirect(builder, MOBILEGL_PROTOCOL_ABI_MAJOR, MOBILEGL_PROTOCOL_ABI_MINOR,
-                                       BuildFingerprint(), 0, 1, nullptr, WireFingerprint(), WireFingerprint(),
-                                       terms, nullptr, DialMode::No);
+        auto hello =
+            CreateHelloDirect(builder, MOBILEGL_PROTOCOL_ABI_MAJOR, MOBILEGL_PROTOCOL_ABI_MINOR, BuildFingerprint(), 0,
+                              1, nullptr, WireFingerprint(), WireFingerprint(), terms, nullptr, DialMode::No);
         auto root = CreateCtrlEnvelope(builder, CtrlMsg::Hello, hello.Union());
         FinishCtrlEnvelopeBuffer(builder, root);
         std::vector<Uint8> first(builder.GetBufferPointer(), builder.GetBufferPointer() + builder.GetSize());
         Server::ServerSession session;
         Transport::SessionSegmentSizes sizes;
-        sizes.CmdRingBytes = 4096; sizes.StageBytes = 4096;
-        sizes.ReplyBytes = 4096; sizes.EventRingBytes = 4096;
+        sizes.CmdRingBytes = 4096;
+        sizes.StageBytes = 4096;
+        sizes.ReplyBytes = 4096;
+        sizes.EventRingBytes = 4096;
         session.SetSegmentSizes(sizes);
         const Bool legal = ask == 0 || ask == 2 || ask == 0x80;
         EXPECT_EQ(session.Accept(*server, &first), legal ? MOBILEGL_OK : MOBILEGL_ERR_PROTOCOL_MISMATCH);
@@ -331,8 +339,8 @@ TEST(SessionHandshakeTest, ConnectAcceptsDifferentBuildWithIdenticalWire) {
                    ::MobileGL::Wire::DialMode::Connect, ::MobileGL::Wire::RefuseCode::None);
 }
 TEST(SessionHandshakeTest, ForkRefusesDifferentBuildWithIdenticalWire) {
-    CheckHandshake(MOBILEGL_PROTOCOL_ABI_MAJOR, WireFingerprint(), "different-commit",
-                   ::MobileGL::Wire::DialMode::Fork, ::MobileGL::Wire::RefuseCode::BuildFingerprint);
+    CheckHandshake(MOBILEGL_PROTOCOL_ABI_MAJOR, WireFingerprint(), "different-commit", ::MobileGL::Wire::DialMode::Fork,
+                   ::MobileGL::Wire::RefuseCode::BuildFingerprint);
 }
 // PH-8. THE SERVER SIZES THE SESSION; THE CLIENT'S HELLO ONLY ASKS.
 //
@@ -359,23 +367,26 @@ TEST(SessionHandshakeTest, AHelloAskingFor64GiBIsClampedToTheServersTermsAndAllo
     Transport::InProcessTransport::CreatePair(client, server);
     ::flatbuffers::FlatBufferBuilder builder(512);
     auto terms = CreateLinkTerms(builder, DataPlane::SharedSegments, WireForm::StructImage, kAsk, kAsk, kAsk, kAsk);
-    auto hello = CreateHelloDirect(builder, MOBILEGL_PROTOCOL_ABI_MAJOR, MOBILEGL_PROTOCOL_ABI_MINOR,
-                                   BuildFingerprint(), 0, 1, nullptr, WireFingerprint(), WireFingerprint(),
-                                   terms, nullptr, DialMode::No);
+    auto hello =
+        CreateHelloDirect(builder, MOBILEGL_PROTOCOL_ABI_MAJOR, MOBILEGL_PROTOCOL_ABI_MINOR, BuildFingerprint(), 0, 1,
+                          nullptr, WireFingerprint(), WireFingerprint(), terms, nullptr, DialMode::No);
     auto root = CreateCtrlEnvelope(builder, CtrlMsg::Hello, hello.Union());
     FinishCtrlEnvelopeBuffer(builder, root);
     std::vector<Uint8> first(builder.GetBufferPointer(), builder.GetBufferPointer() + builder.GetSize());
     Server::ServerSession session;
     Transport::SessionSegmentSizes sizes;
-    sizes.CmdRingBytes = 4096; sizes.StageBytes = 4096;
-    sizes.ReplyBytes = 4096; sizes.EventRingBytes = 4096;
+    sizes.CmdRingBytes = 4096;
+    sizes.StageBytes = 4096;
+    sizes.ReplyBytes = 4096;
+    sizes.EventRingBytes = 4096;
     session.SetSegmentSizes(sizes);
     const std::string before = ReadLog();
     ASSERT_EQ(session.Accept(*server, &first), MOBILEGL_OK);
     const std::string delta = ReadLog().substr(before.size());
     EXPECT_TRUE(Contains(delta, "MG_Remote server: Hello asked for windows the server does not grant"))
         << "the 64 GiB ask was ignored silently; an operator comparing the client's configured "
-           "windows with the server's would see no line. Log delta:\n" << delta;
+           "windows with the server's would see no line. Log delta:\n"
+        << delta;
     const auto reply = ReadHandshakeFrame(*client);
     ASSERT_FALSE(reply.empty());
     ::flatbuffers::Verifier verifier(reply.data(), reply.size());
@@ -386,8 +397,8 @@ TEST(SessionHandshakeTest, AHelloAskingFor64GiBIsClampedToTheServersTermsAndAllo
     EXPECT_EQ(welcome->linkTerms()->cmdWindowBytes(), 4096u) << "the command window echoed the Hello";
     EXPECT_EQ(welcome->linkTerms()->stageWindowBytes(), 4096u) << "the stage window echoed the Hello";
     EXPECT_EQ(welcome->linkTerms()->eventWindowBytes(), 4096u) << "the event window echoed the Hello";
-    EXPECT_EQ(welcome->linkTerms()->maxReplyBytes(),
-              4096u / sizes.ReplySlotCount - sizeof(Transport::ReplySlotHeader)) << "the reply bound echoed the Hello";
+    EXPECT_EQ(welcome->linkTerms()->maxReplyBytes(), 4096u / sizes.ReplySlotCount - sizeof(Transport::ReplySlotHeader))
+        << "the reply bound echoed the Hello";
     // The segments that EXIST are the server's: each announced size is a few pages at most, never
     // the ask. A 64 GiB request that had been honoured would show here even if Welcome's terms
     // had been rewritten afterwards.
@@ -424,16 +435,18 @@ TEST(SessionHandshakeTest, AnUnauthenticatedHelloLearnsNeitherTheFingerprintNorT
     ASSERT_EQ(Transport::SocketTransport::CreatePair(client, server), MOBILEGL_OK);
     ::flatbuffers::FlatBufferBuilder builder(512);
     auto terms = CreateLinkTerms(builder);
-    auto hello = CreateHelloDirect(builder, 99, MOBILEGL_PROTOCOL_ABI_MINOR, "some-other-build", 0, 1, nullptr,
-                                   WireFingerprint() ^ 1, WireFingerprint() ^ 1, terms, "not-the-servers-token",
-                                   DialMode::Fork);
+    auto hello =
+        CreateHelloDirect(builder, 99, MOBILEGL_PROTOCOL_ABI_MINOR, "some-other-build", 0, 1, nullptr,
+                          WireFingerprint() ^ 1, WireFingerprint() ^ 1, terms, "not-the-servers-token", DialMode::Fork);
     auto root = CreateCtrlEnvelope(builder, CtrlMsg::Hello, hello.Union());
     FinishCtrlEnvelopeBuffer(builder, root);
     std::vector<Uint8> first(builder.GetBufferPointer(), builder.GetBufferPointer() + builder.GetSize());
     Server::ServerSession session;
     Transport::SessionSegmentSizes sizes;
-    sizes.CmdRingBytes = 4096; sizes.StageBytes = 4096;
-    sizes.ReplyBytes = 4096; sizes.EventRingBytes = 4096;
+    sizes.CmdRingBytes = 4096;
+    sizes.StageBytes = 4096;
+    sizes.ReplyBytes = 4096;
+    sizes.EventRingBytes = 4096;
     session.SetSegmentSizes(sizes);
     EXPECT_EQ(session.Accept(*server, &first), MOBILEGL_ERR_PROTOCOL_MISMATCH);
     EXPECT_FALSE(session.Accepted());
@@ -511,8 +524,7 @@ TEST(SessionHandshakeTest, ANullUnionWelcomeIsRefusedByStartRatherThanDereferenc
     ASSERT_FALSE(serverSession.Accepted());
 
     const std::string before = ReadLog();
-    EXPECT_EQ(session.StartOverTransportPair(std::move(client), std::move(server)),
-              MOBILEGL_ERR_PROTOCOL_MISMATCH)
+    EXPECT_EQ(session.StartOverTransportPair(std::move(client), std::move(server)), MOBILEGL_ERR_PROTOCOL_MISMATCH)
         << "a null-union Welcome was not refused by the handshake";
     EXPECT_FALSE(session.Started());
     EXPECT_EQ(Client::ClientSession::Active(), nullptr);
@@ -522,9 +534,8 @@ TEST(SessionHandshakeTest, ANullUnionWelcomeIsRefusedByStartRatherThanDereferenc
     EXPECT_EQ(Server::ServerSession::Active(), nullptr);
 
     const std::string delta = ReadLog().substr(before.size());
-    EXPECT_TRUE(Contains(delta,
-                         "MG_Remote client: the server's first control frame is not a verifiable "
-                         "Welcome"))
+    EXPECT_TRUE(Contains(delta, "MG_Remote client: the server's first control frame is not a verifiable "
+                                "Welcome"))
         << "Start refused, but not with the guard's own line. Log delta:\n"
         << delta;
     EXPECT_FALSE(Contains(delta, "Fatal{AbiMismatch"))
@@ -543,8 +554,8 @@ int main(int argc, char** argv) {
     // write, and caches the FILE*. The name carries this process's pid, because
     // gtest_discover_tests runs every case as its own process, in parallel under ctest -j.
     namespace fs = std::filesystem;
-    const fs::path path = fs::temp_directory_path() /
-                          ("mobilegl-sessionhandshake-test-" + std::to_string(ProcessId()) + ".log");
+    const fs::path path =
+        fs::temp_directory_path() / ("mobilegl-sessionhandshake-test-" + std::to_string(ProcessId()) + ".log");
     std::error_code ec;
     fs::remove(path, ec);
     g_logPath = path.string();

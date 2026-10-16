@@ -32,7 +32,9 @@ namespace MGITest {
         return false;
     }
 #else
-    bool PeekWireDeclineCount(const char*, unsigned long long*) { return false; }
+    bool PeekWireDeclineCount(const char*, unsigned long long*) {
+        return false;
+    }
 #endif
 
 } // namespace MGITest

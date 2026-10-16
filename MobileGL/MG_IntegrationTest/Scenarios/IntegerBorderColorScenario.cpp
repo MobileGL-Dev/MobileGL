@@ -90,10 +90,11 @@ void main()
                 if (!Ready()) return;
 
                 // 2x2 RGBA32I. Integer textures are not filterable, so NEAREST is mandatory.
-                const std::int32_t texels[4][4] = {{kInsideTexel[0], kInsideTexel[1], kInsideTexel[2], kInsideTexel[3]},
-                                                  {kInsideTexel[0], kInsideTexel[1], kInsideTexel[2], kInsideTexel[3]},
-                                                  {kInsideTexel[0], kInsideTexel[1], kInsideTexel[2], kInsideTexel[3]},
-                                                  {kInsideTexel[0], kInsideTexel[1], kInsideTexel[2], kInsideTexel[3]}};
+                const std::int32_t texels[4][4] = {
+                    {kInsideTexel[0], kInsideTexel[1], kInsideTexel[2], kInsideTexel[3]},
+                    {kInsideTexel[0], kInsideTexel[1], kInsideTexel[2], kInsideTexel[3]},
+                    {kInsideTexel[0], kInsideTexel[1], kInsideTexel[2], kInsideTexel[3]},
+                    {kInsideTexel[0], kInsideTexel[1], kInsideTexel[2], kInsideTexel[3]}};
                 glGenTextures(1, &m_sourceTexture);
                 glBindTexture(GL_TEXTURE_2D, m_sourceTexture);
                 glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA32I, 2, 2);
@@ -198,8 +199,8 @@ void main()
 
             // A narrow-format source built on demand, for the clamp cases. Returns the texture, which
             // the caller owns until TearDown deletes it through m_narrowTexture.
-            void MakeNarrowSource(GLenum internalFormat, GLenum clientFormat, const void* texels,
-                                  const GLint* border, bool borderIsUnsigned) {
+            void MakeNarrowSource(GLenum internalFormat, GLenum clientFormat, const void* texels, const GLint* border,
+                                  bool borderIsUnsigned) {
                 glGenTextures(1, &m_narrowTexture);
                 glBindTexture(GL_TEXTURE_2D, m_narrowTexture);
                 glTexStorage2D(GL_TEXTURE_2D, 1, internalFormat, 2, 2);
@@ -222,10 +223,10 @@ void main()
             // The narrow sources are single-channel, so only component 0 carries anything, and the
             // sampler declaration has to match the format's signedness.
             std::vector<std::int32_t> RenderNarrowBorder(bool isUnsignedSampler) {
-                const std::string fragment =
-                    std::string("#version 330 core\n\nuniform ") + (isUnsignedSampler ? "usampler2D" : "isampler2D") +
-                    " smp;\nuniform vec2 uCoord;\n\nout int out_color;\n\nvoid main()\n{\n"
-                    "    out_color = int(texture(smp, uCoord).x);\n}\n";
+                const std::string fragment = std::string("#version 330 core\n\nuniform ") +
+                                             (isUnsignedSampler ? "usampler2D" : "isampler2D") +
+                                             " smp;\nuniform vec2 uCoord;\n\nout int out_color;\n\nvoid main()\n{\n"
+                                             "    out_color = int(texture(smp, uCoord).x);\n}\n";
                 std::string error;
                 const unsigned int program = CompileProgram(kVertexSource, fragment.c_str(), &error);
                 if (program == 0) {

@@ -95,10 +95,11 @@ namespace {
     }
 
     void RunGlamor(GlamorReport& r) {
-        r.platformGbmExtension = HasToken(EGL::QueryString(EGL_NO_DISPLAY, EGL_EXTENSIONS), "EGL_MESA_platform_gbm") ||
-                                         HasToken(EGL::QueryString(EGL_NO_DISPLAY, EGL_EXTENSIONS), "EGL_KHR_platform_gbm")
-                                     ? 1
-                                     : 0;
+        r.platformGbmExtension =
+            HasToken(EGL::QueryString(EGL_NO_DISPLAY, EGL_EXTENSIONS), "EGL_MESA_platform_gbm") ||
+                    HasToken(EGL::QueryString(EGL_NO_DISPLAY, EGL_EXTENSIONS), "EGL_KHR_platform_gbm")
+                ? 1
+                : 0;
         // Any gbm_device* will do: this process has no GBM loader to ask its backend's name, and the
         // display's frames come from the server, never from the device.
         static int fakeGbmDevice[16] = {};
@@ -113,8 +114,13 @@ namespace {
             HasToken(exts, "EGL_EXT_image_dma_buf_import") && HasToken(exts, "EGL_EXT_image_dma_buf_import_modifiers");
 
         (void)EGL::BindAPI(EGL_OPENGL_API);
-        const EGLint core31[] = {EGL_CONTEXT_OPENGL_PROFILE_MASK, EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT,
-                                 EGL_CONTEXT_MAJOR_VERSION, 3, EGL_CONTEXT_MINOR_VERSION, 1, EGL_NONE};
+        const EGLint core31[] = {EGL_CONTEXT_OPENGL_PROFILE_MASK,
+                                 EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT,
+                                 EGL_CONTEXT_MAJOR_VERSION,
+                                 3,
+                                 EGL_CONTEXT_MINOR_VERSION,
+                                 1,
+                                 EGL_NONE};
         const EGLContext ctx = EGL::CreateContext(dpy, EGL_NO_CONFIG_KHR, EGL_NO_CONTEXT, core31);
         r.noConfigCoreContext = ctx != EGL_NO_CONTEXT ? 1 : 0;
         if (!r.noConfigCoreContext) {
@@ -142,7 +148,8 @@ namespace {
             if (std::sscanf(version, "%d.%d", &vmaj, &vmin) == 2) r.glVersion = vmaj * 10 + vmin;
         }
         r.coreProfile = !HasGlExtension("GL_ARB_compatibility");
-        r.vertexArrayObject = HasGlExtension("GL_ARB_vertex_array_object") || HasGlExtension("GL_OES_vertex_array_object");
+        r.vertexArrayObject =
+            HasGlExtension("GL_ARB_vertex_array_object") || HasGlExtension("GL_OES_vertex_array_object");
         r.oesEglImage = HasGlExtension("GL_OES_EGL_image");
 
         EGLint formats[16] = {};
@@ -159,10 +166,19 @@ namespace {
         auto* backend = MG_Backend::pActiveBackendObject.get();
         MG_Backend::SharedImageExport image;
         if (backend != nullptr && backend->AllocateSharedImage(64, 32, kXrgb8888, &image) && image.Fd >= 0) {
-            const EGLAttrib attribs[] = {EGL_WIDTH, 64, EGL_HEIGHT, 32, EGL_LINUX_DRM_FOURCC_EXT, kXrgb8888,
-                                         EGL_DMA_BUF_PLANE0_FD_EXT, image.Fd, EGL_DMA_BUF_PLANE0_OFFSET_EXT,
-                                         static_cast<EGLAttrib>(image.Offset), EGL_DMA_BUF_PLANE0_PITCH_EXT,
-                                         static_cast<EGLAttrib>(image.Stride), EGL_NONE};
+            const EGLAttrib attribs[] = {EGL_WIDTH,
+                                         64,
+                                         EGL_HEIGHT,
+                                         32,
+                                         EGL_LINUX_DRM_FOURCC_EXT,
+                                         kXrgb8888,
+                                         EGL_DMA_BUF_PLANE0_FD_EXT,
+                                         image.Fd,
+                                         EGL_DMA_BUF_PLANE0_OFFSET_EXT,
+                                         static_cast<EGLAttrib>(image.Offset),
+                                         EGL_DMA_BUF_PLANE0_PITCH_EXT,
+                                         static_cast<EGLAttrib>(image.Stride),
+                                         EGL_NONE};
             const EGLImage eglImage = EGL::CreateImage(dpy, EGL_NO_CONTEXT, EGL_LINUX_DMA_BUF_EXT, nullptr, attribs);
             r.imageCreated = eglImage != EGL_NO_IMAGE ? 1 : 0;
             if (eglImage != EGL_NO_IMAGE) (void)EGL::DestroyImage(dpy, eglImage);
@@ -276,10 +292,19 @@ namespace {
         const auto clearColor = reinterpret_cast<ClearColorFn>(EGL::GetProcAddress("glClearColor"));
         const auto clear = reinterpret_cast<ClearFn>(EGL::GetProcAddress("glClear"));
         if (backend != nullptr && backend->AllocateSharedImage(64, 32, kArgb8888, &image) && image.Fd >= 0) {
-            const EGLAttrib attribs[] = {EGL_WIDTH, 64, EGL_HEIGHT, 32, EGL_LINUX_DRM_FOURCC_EXT, kArgb8888,
-                                         EGL_DMA_BUF_PLANE0_FD_EXT, image.Fd, EGL_DMA_BUF_PLANE0_OFFSET_EXT,
-                                         static_cast<EGLAttrib>(image.Offset), EGL_DMA_BUF_PLANE0_PITCH_EXT,
-                                         static_cast<EGLAttrib>(image.Stride), EGL_NONE};
+            const EGLAttrib attribs[] = {EGL_WIDTH,
+                                         64,
+                                         EGL_HEIGHT,
+                                         32,
+                                         EGL_LINUX_DRM_FOURCC_EXT,
+                                         kArgb8888,
+                                         EGL_DMA_BUF_PLANE0_FD_EXT,
+                                         image.Fd,
+                                         EGL_DMA_BUF_PLANE0_OFFSET_EXT,
+                                         static_cast<EGLAttrib>(image.Offset),
+                                         EGL_DMA_BUF_PLANE0_PITCH_EXT,
+                                         static_cast<EGLAttrib>(image.Stride),
+                                         EGL_NONE};
             eglImage = EGL::CreateImage(dpy, EGL_NO_CONTEXT, EGL_LINUX_DMA_BUF_EXT, nullptr, attribs);
         }
         if (eglImage != EGL_NO_IMAGE && genTextures && bindTexture && imageTarget && genFramebuffers &&
@@ -358,8 +383,13 @@ namespace {
         r.dmabufImport = HasToken(exts, "EGL_EXT_image_dma_buf_import") ? 1 : 0;
         r.nativeFence = HasToken(exts, "EGL_ANDROID_native_fence_sync") ? 1 : 0;
         (void)EGL::BindAPI(EGL_OPENGL_API);
-        const EGLint core33[] = {EGL_CONTEXT_OPENGL_PROFILE_MASK, EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT,
-                                 EGL_CONTEXT_MAJOR_VERSION, 3, EGL_CONTEXT_MINOR_VERSION, 3, EGL_NONE};
+        const EGLint core33[] = {EGL_CONTEXT_OPENGL_PROFILE_MASK,
+                                 EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT,
+                                 EGL_CONTEXT_MAJOR_VERSION,
+                                 3,
+                                 EGL_CONTEXT_MINOR_VERSION,
+                                 3,
+                                 EGL_NONE};
         const EGLContext ctx = EGL::CreateContext(dpy, EGL_NO_CONFIG_KHR, EGL_NO_CONTEXT, core33);
         r.current = ctx != EGL_NO_CONTEXT && EGL::MakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, ctx) == EGL_TRUE;
         if (!r.current) {
@@ -489,8 +519,8 @@ TEST(GlamorEglSequence, ChromesGpuProcessGetsANativeFenceOfItsDmaBufWrites) {
     ASSERT_EQ(r.entryPoints, 1) << "eglCreateSyncKHR & co. or eglDupNativeFenceFDANDROID did not resolve";
     EXPECT_EQ(r.noContextRefused, 1);
     ASSERT_EQ(r.current, 1) << "error 0x" << std::hex << r.eglError;
-    std::printf("[ chrome ] image bound %d, framebuffer complete %d, fence descriptor %d (error 0x%x)\n",
-                r.imageBound, r.framebufferComplete, r.dupFd, r.dupError);
+    std::printf("[ chrome ] image bound %d, framebuffer complete %d, fence descriptor %d (error 0x%x)\n", r.imageBound,
+                r.framebufferComplete, r.dupFd, r.dupError);
     // The fence command reaches the server, which publishes the context's image writes and answers.
     ASSERT_EQ(r.fenceCreated, 1) << "the native fence was refused, error 0x" << std::hex << r.eglError;
     EXPECT_EQ(r.fenceType, EGL_SYNC_NATIVE_FENCE_ANDROID);

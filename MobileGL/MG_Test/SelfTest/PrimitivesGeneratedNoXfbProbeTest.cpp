@@ -40,8 +40,8 @@ using MobileGL::Bool;
 using MobileGL::Uint32;
 using MobileGL::Uint64;
 using MobileGL::MG_Config::QuirkOverride;
-using MobileGL::MG_Util::SelfTest::EvaluatePrimitivesGeneratedNoXfbVerdict;
 using MobileGL::MG_Util::SelfTest::ChoosePrimitivesGeneratedReroute;
+using MobileGL::MG_Util::SelfTest::EvaluatePrimitivesGeneratedNoXfbVerdict;
 using MobileGL::MG_Util::SelfTest::PrimGenRerouteKind;
 using MobileGL::MG_Util::SelfTest::PrimitivesGeneratedNoXfbMeasurement;
 using MobileGL::MG_Util::SelfTest::PrimitivesGeneratedNoXfbProbeContext;
@@ -97,19 +97,16 @@ namespace {
 // Controls agreeing changes nothing - health is decided by the subject.
 TEST(PrimitivesGeneratedNoXfbVerdictTest, AConformingDriverReadsStreamCounts) {
     const auto measurement = Measurement(Shape(kHealthy), Shape(kHealthy), Shape(kHealthy));
-    EXPECT_EQ(EvaluatePrimitivesGeneratedNoXfbVerdict(measurement),
-              PrimitivesGeneratedNoXfbVerdict::StreamCounts);
+    EXPECT_EQ(EvaluatePrimitivesGeneratedNoXfbVerdict(measurement), PrimitivesGeneratedNoXfbVerdict::StreamCounts);
 }
 
 // ...and stays healthy with no tessellation stage to draw the patches shape with,
 // and with no control at all - a control is only required to QUALIFY a
 // substitute, never to certify health.
 TEST(PrimitivesGeneratedNoXfbVerdictTest, HealthNeedsNeitherTessellationNorAControl) {
-    EXPECT_EQ(EvaluatePrimitivesGeneratedNoXfbVerdict(
-                  Measurement(Shape(kHealthy), Shape(kHealthy), NotDrawn())),
+    EXPECT_EQ(EvaluatePrimitivesGeneratedNoXfbVerdict(Measurement(Shape(kHealthy), Shape(kHealthy), NotDrawn())),
               PrimitivesGeneratedNoXfbVerdict::StreamCounts);
-    EXPECT_EQ(EvaluatePrimitivesGeneratedNoXfbVerdict(
-                  Measurement(Shape({1}), Shape({1}), Shape({1}))),
+    EXPECT_EQ(EvaluatePrimitivesGeneratedNoXfbVerdict(Measurement(Shape({1}), Shape({1}), Shape({1}))),
               PrimitivesGeneratedNoXfbVerdict::StreamCounts);
 }
 
@@ -118,8 +115,7 @@ TEST(PrimitivesGeneratedNoXfbVerdictTest, HealthNeedsNeitherTessellationNorACont
 // included), the statistics control dead under discard. The dedicated query must
 // win - it is the only substitute that covers the CTS shape there.
 TEST(PrimitivesGeneratedNoXfbVerdictTest, LavapipeShapedMeasurementTakesTheDedicatedQuery) {
-    const auto measurement =
-        Measurement(Shape(kLavapipePlain), Shape(kLavapipeDiscard), Shape(kLavapipeDiscard));
+    const auto measurement = Measurement(Shape(kLavapipePlain), Shape(kLavapipeDiscard), Shape(kLavapipeDiscard));
     EXPECT_EQ(EvaluatePrimitivesGeneratedNoXfbVerdict(measurement),
               PrimitivesGeneratedNoXfbVerdict::PrimitivesGeneratedExtSubstitute);
 }
@@ -127,8 +123,8 @@ TEST(PrimitivesGeneratedNoXfbVerdictTest, LavapipeShapedMeasurementTakesTheDedic
 // The affected-device hypothesis with no dedicated query: statistics exact on
 // every shape, the CTS's discarded shapes included.
 TEST(PrimitivesGeneratedNoXfbVerdictTest, StatisticsExactEverywhereIsTheFullStatisticsSubstitute) {
-    const auto measurement = Measurement(Shape({0, false, 0, true, 1}), Shape({0, false, 0, true, 1}),
-                                         Shape({0, false, 0, true, 1}));
+    const auto measurement =
+        Measurement(Shape({0, false, 0, true, 1}), Shape({0, false, 0, true, 1}), Shape({0, false, 0, true, 1}));
     EXPECT_EQ(EvaluatePrimitivesGeneratedNoXfbVerdict(measurement),
               PrimitivesGeneratedNoXfbVerdict::StatisticsSubstitute);
 }
@@ -136,8 +132,8 @@ TEST(PrimitivesGeneratedNoXfbVerdictTest, StatisticsExactEverywhereIsTheFullStat
 // A dedicated query that is silent in the same way the stream query is must not
 // be armed - the statistics tier decides instead.
 TEST(PrimitivesGeneratedNoXfbVerdictTest, ASilentDedicatedQueryFallsThroughToStatistics) {
-    const auto measurement = Measurement(Shape({0, true, 0, true, 1}), Shape({0, true, 0, true, 1}),
-                                         Shape({0, true, 0, true, 1}));
+    const auto measurement =
+        Measurement(Shape({0, true, 0, true, 1}), Shape({0, true, 0, true, 1}), Shape({0, true, 0, true, 1}));
     EXPECT_EQ(EvaluatePrimitivesGeneratedNoXfbVerdict(measurement),
               PrimitivesGeneratedNoXfbVerdict::StatisticsSubstitute);
 }
@@ -146,8 +142,8 @@ TEST(PrimitivesGeneratedNoXfbVerdictTest, ASilentDedicatedQueryFallsThroughToSta
 // the plain shape, dead under discard. Repairs undiscarded queries only, and the
 // verdict must say so.
 TEST(PrimitivesGeneratedNoXfbVerdictTest, StatisticsDeadUnderDiscardIsThePlainOnlySubstitute) {
-    const auto measurement = Measurement(Shape({0, false, 0, true, 1}), Shape({0, false, 0, true, 0}),
-                                         Shape({0, false, 0, true, 0}));
+    const auto measurement =
+        Measurement(Shape({0, false, 0, true, 1}), Shape({0, false, 0, true, 0}), Shape({0, false, 0, true, 0}));
     EXPECT_EQ(EvaluatePrimitivesGeneratedNoXfbVerdict(measurement),
               PrimitivesGeneratedNoXfbVerdict::StatisticsSubstitutePlainOnly);
 }
@@ -159,20 +155,18 @@ TEST(PrimitivesGeneratedNoXfbVerdictTest, StatisticsDeadUnderDiscardIsThePlainOn
 // whose silence is selective) and whose statistics read 0 - rerouting would turn
 // that correct 1 into a 0, so the honest verdict is that nothing may be armed.
 TEST(PrimitivesGeneratedNoXfbVerdictTest, ASubstituteWorseThanTheStreamOnAnyShapeIsRefused) {
-    const auto measurement = Measurement(Shape({1, false, 0, true, 1}), Shape({1, false, 0, true, 0}),
-                                         Shape({0, false, 0, true, 0}));
-    EXPECT_EQ(EvaluatePrimitivesGeneratedNoXfbVerdict(measurement),
-              PrimitivesGeneratedNoXfbVerdict::Unfixable);
+    const auto measurement =
+        Measurement(Shape({1, false, 0, true, 1}), Shape({1, false, 0, true, 0}), Shape({0, false, 0, true, 0}));
+    EXPECT_EQ(EvaluatePrimitivesGeneratedNoXfbVerdict(measurement), PrimitivesGeneratedNoXfbVerdict::Unfixable);
     // The same shape with the statistics slot MISSING on the stream-exact shape is
     // the same trade: an unmeasured control cannot be assumed to answer.
-    const auto unmeasured = Measurement(Shape({1, false, 0, true, 1}), Shape({1, false, 0, false, 0}),
-                                        Shape({0, false, 0, true, 0}));
-    EXPECT_EQ(EvaluatePrimitivesGeneratedNoXfbVerdict(unmeasured),
-              PrimitivesGeneratedNoXfbVerdict::Unfixable);
+    const auto unmeasured =
+        Measurement(Shape({1, false, 0, true, 1}), Shape({1, false, 0, false, 0}), Shape({0, false, 0, true, 0}));
+    EXPECT_EQ(EvaluatePrimitivesGeneratedNoXfbVerdict(unmeasured), PrimitivesGeneratedNoXfbVerdict::Unfixable);
     // ...while the same selective silence WITH a substitute that covers the shapes
     // it must still qualifies: every shape the statistics miss read 0 anyway.
-    const auto dominating = Measurement(Shape({1, false, 0, true, 1}), Shape({0, false, 0, true, 1}),
-                                        Shape({0, false, 0, true, 0}));
+    const auto dominating =
+        Measurement(Shape({1, false, 0, true, 1}), Shape({0, false, 0, true, 1}), Shape({0, false, 0, true, 0}));
     EXPECT_EQ(EvaluatePrimitivesGeneratedNoXfbVerdict(dominating),
               PrimitivesGeneratedNoXfbVerdict::StatisticsSubstitutePlainOnly);
 }
@@ -181,16 +175,13 @@ TEST(PrimitivesGeneratedNoXfbVerdictTest, ASubstituteWorseThanTheStreamOnAnyShap
 // OVERCOUNTS the plain shape (as disqualifying as one that reads 0 - an exact
 // match is what qualifies a substitute).
 TEST(PrimitivesGeneratedNoXfbVerdictTest, StreamSilentWithoutAWorkingPlainControlIsUnfixable) {
-    EXPECT_EQ(EvaluatePrimitivesGeneratedNoXfbVerdict(
-                  Measurement(Shape({0}), Shape({0}), Shape({0}))),
+    EXPECT_EQ(EvaluatePrimitivesGeneratedNoXfbVerdict(Measurement(Shape({0}), Shape({0}), Shape({0}))),
               PrimitivesGeneratedNoXfbVerdict::Unfixable);
-    EXPECT_EQ(EvaluatePrimitivesGeneratedNoXfbVerdict(
-                  Measurement(Shape({0, true, 0, true, 0}), Shape({0, true, 0, true, 0}),
-                              Shape({0, true, 0, true, 0}))),
+    EXPECT_EQ(EvaluatePrimitivesGeneratedNoXfbVerdict(Measurement(
+                  Shape({0, true, 0, true, 0}), Shape({0, true, 0, true, 0}), Shape({0, true, 0, true, 0}))),
               PrimitivesGeneratedNoXfbVerdict::Unfixable);
-    EXPECT_EQ(EvaluatePrimitivesGeneratedNoXfbVerdict(
-                  Measurement(Shape({0, true, 2, true, 2}), Shape({0, true, 1, true, 1}),
-                              Shape({0, true, 1, true, 1}))),
+    EXPECT_EQ(EvaluatePrimitivesGeneratedNoXfbVerdict(Measurement(
+                  Shape({0, true, 2, true, 2}), Shape({0, true, 1, true, 1}), Shape({0, true, 1, true, 1}))),
               PrimitivesGeneratedNoXfbVerdict::Unfixable);
 }
 
@@ -198,19 +189,16 @@ TEST(PrimitivesGeneratedNoXfbVerdictTest, StreamSilentWithoutAWorkingPlainContro
 // defect (exact silence) nor health (the exact count), whichever shape carries
 // it; and a probe that never ran, or lost its mandatory shapes, says nothing.
 TEST(PrimitivesGeneratedNoXfbVerdictTest, AnswersFittingNeitherHealthNorTheDefectAreInconclusive) {
-    EXPECT_EQ(EvaluatePrimitivesGeneratedNoXfbVerdict(
-                  Measurement(Shape({2, true, 1, true, 1}), Shape({0, true, 1, true, 1}),
-                              Shape({0, true, 1, true, 1}))),
+    EXPECT_EQ(EvaluatePrimitivesGeneratedNoXfbVerdict(Measurement(
+                  Shape({2, true, 1, true, 1}), Shape({0, true, 1, true, 1}), Shape({0, true, 1, true, 1}))),
               PrimitivesGeneratedNoXfbVerdict::Inconclusive);
-    EXPECT_EQ(EvaluatePrimitivesGeneratedNoXfbVerdict(
-                  Measurement(Shape({0, true, 1, true, 1}), Shape({3, true, 1, true, 1}),
-                              Shape({0, true, 1, true, 1}))),
+    EXPECT_EQ(EvaluatePrimitivesGeneratedNoXfbVerdict(Measurement(
+                  Shape({0, true, 1, true, 1}), Shape({3, true, 1, true, 1}), Shape({0, true, 1, true, 1}))),
               PrimitivesGeneratedNoXfbVerdict::Inconclusive);
 
     PrimitivesGeneratedNoXfbMeasurement neverRan;
     neverRan.ran = false;
-    EXPECT_EQ(EvaluatePrimitivesGeneratedNoXfbVerdict(neverRan),
-              PrimitivesGeneratedNoXfbVerdict::Inconclusive);
+    EXPECT_EQ(EvaluatePrimitivesGeneratedNoXfbVerdict(neverRan), PrimitivesGeneratedNoXfbVerdict::Inconclusive);
 
     const auto missingMandatoryShape = Measurement(Shape({0, true, 1, true, 1}), NotDrawn(), NotDrawn());
     EXPECT_EQ(EvaluatePrimitivesGeneratedNoXfbVerdict(missingMandatoryShape),
@@ -221,8 +209,8 @@ TEST(PrimitivesGeneratedNoXfbVerdictTest, AnswersFittingNeitherHealthNorTheDefec
 // ones read 0 (a driver that gates the stream counter on rasterization rather
 // than on the capture). With a whole control the substitute is whole.
 TEST(PrimitivesGeneratedNoXfbVerdictTest, SilenceOnOnlyTheDiscardShapesIsStillTheDefect) {
-    const auto measurement = Measurement(Shape({1, true, 1, true, 1}), Shape({0, true, 1, true, 1}),
-                                         Shape({0, true, 1, true, 1}));
+    const auto measurement =
+        Measurement(Shape({1, true, 1, true, 1}), Shape({0, true, 1, true, 1}), Shape({0, true, 1, true, 1}));
     EXPECT_EQ(EvaluatePrimitivesGeneratedNoXfbVerdict(measurement),
               PrimitivesGeneratedNoXfbVerdict::PrimitivesGeneratedExtSubstitute);
 }
@@ -242,14 +230,13 @@ namespace {
         PrimitivesGeneratedNoXfbVerdict::StatisticsSubstitutePlainOnly,
         PrimitivesGeneratedNoXfbVerdict::Unfixable,
     };
-}
+} // namespace
 
 TEST(PrimitivesGeneratedNoXfbArmingTest, ForceOffNeverReroutes) {
     for (const auto verdict : kAllVerdicts) {
         for (const Bool pgqUsable : {false, true}) {
             for (const Bool statsUsable : {false, true}) {
-                EXPECT_EQ(ChoosePrimitivesGeneratedReroute(QuirkOverride::ForceOff, verdict, pgqUsable,
-                                                           statsUsable),
+                EXPECT_EQ(ChoosePrimitivesGeneratedReroute(QuirkOverride::ForceOff, verdict, pgqUsable, statsUsable),
                           PrimGenRerouteKind::None);
             }
         }
@@ -274,34 +261,30 @@ TEST(PrimitivesGeneratedNoXfbArmingTest, ForceOnBypassesTheVerdictButNeverTheStr
 
 TEST(PrimitivesGeneratedNoXfbArmingTest, AutoFollowsExactlyTheSubstituteVerdicts) {
     EXPECT_EQ(ChoosePrimitivesGeneratedReroute(
-                  QuirkOverride::Auto, PrimitivesGeneratedNoXfbVerdict::PrimitivesGeneratedExtSubstitute,
-                  true, true),
+                  QuirkOverride::Auto, PrimitivesGeneratedNoXfbVerdict::PrimitivesGeneratedExtSubstitute, true, true),
               PrimGenRerouteKind::PrimitivesGeneratedExt);
-    EXPECT_EQ(ChoosePrimitivesGeneratedReroute(
-                  QuirkOverride::Auto, PrimitivesGeneratedNoXfbVerdict::StatisticsSubstitute, false, true),
+    EXPECT_EQ(ChoosePrimitivesGeneratedReroute(QuirkOverride::Auto,
+                                               PrimitivesGeneratedNoXfbVerdict::StatisticsSubstitute, false, true),
               PrimGenRerouteKind::ClippingStatistics);
     EXPECT_EQ(ChoosePrimitivesGeneratedReroute(
-                  QuirkOverride::Auto, PrimitivesGeneratedNoXfbVerdict::StatisticsSubstitutePlainOnly,
-                  false, true),
+                  QuirkOverride::Auto, PrimitivesGeneratedNoXfbVerdict::StatisticsSubstitutePlainOnly, false, true),
               PrimGenRerouteKind::ClippingStatistics);
     // The statistics verdicts never take the dedicated pool: that verdict only
     // exists when the dedicated query did NOT qualify.
-    EXPECT_EQ(ChoosePrimitivesGeneratedReroute(
-                  QuirkOverride::Auto, PrimitivesGeneratedNoXfbVerdict::StatisticsSubstitute, true, true),
+    EXPECT_EQ(ChoosePrimitivesGeneratedReroute(QuirkOverride::Auto,
+                                               PrimitivesGeneratedNoXfbVerdict::StatisticsSubstitute, true, true),
               PrimGenRerouteKind::ClippingStatistics);
     for (const auto verdict :
          {PrimitivesGeneratedNoXfbVerdict::Inconclusive, PrimitivesGeneratedNoXfbVerdict::StreamCounts,
           PrimitivesGeneratedNoXfbVerdict::Unfixable}) {
-        EXPECT_EQ(ChoosePrimitivesGeneratedReroute(QuirkOverride::Auto, verdict, true, true),
-                  PrimGenRerouteKind::None);
+        EXPECT_EQ(ChoosePrimitivesGeneratedReroute(QuirkOverride::Auto, verdict, true, true), PrimGenRerouteKind::None);
     }
     // The structural checks bind Auto too.
     EXPECT_EQ(ChoosePrimitivesGeneratedReroute(
-                  QuirkOverride::Auto, PrimitivesGeneratedNoXfbVerdict::PrimitivesGeneratedExtSubstitute,
-                  false, true),
+                  QuirkOverride::Auto, PrimitivesGeneratedNoXfbVerdict::PrimitivesGeneratedExtSubstitute, false, true),
               PrimGenRerouteKind::None);
-    EXPECT_EQ(ChoosePrimitivesGeneratedReroute(
-                  QuirkOverride::Auto, PrimitivesGeneratedNoXfbVerdict::StatisticsSubstitute, false, false),
+    EXPECT_EQ(ChoosePrimitivesGeneratedReroute(QuirkOverride::Auto,
+                                               PrimitivesGeneratedNoXfbVerdict::StatisticsSubstitute, false, false),
               PrimGenRerouteKind::None);
 }
 
@@ -358,7 +341,9 @@ namespace {
     VKAPI_ATTR VkResult VKAPI_CALL FakeBeginCommandBuffer(VkCommandBuffer, const VkCommandBufferBeginInfo*) {
         return VK_SUCCESS;
     }
-    VKAPI_ATTR VkResult VKAPI_CALL FakeEndCommandBuffer(VkCommandBuffer) { return VK_SUCCESS; }
+    VKAPI_ATTR VkResult VKAPI_CALL FakeEndCommandBuffer(VkCommandBuffer) {
+        return VK_SUCCESS;
+    }
     VKAPI_ATTR VkResult VKAPI_CALL FakeCreateQueryPool(VkDevice, const VkQueryPoolCreateInfo*,
                                                        const VkAllocationCallbacks*, VkQueryPool* out) {
         *out = FakeHandle<VkQueryPool>();
@@ -370,8 +355,8 @@ namespace {
     VKAPI_ATTR void VKAPI_CALL FakeCmdResetQueryPool(VkCommandBuffer, VkQueryPool, uint32_t, uint32_t) {}
     VKAPI_ATTR void VKAPI_CALL FakeCmdBeginQuery(VkCommandBuffer, VkQueryPool, uint32_t, VkQueryControlFlags) {}
     VKAPI_ATTR void VKAPI_CALL FakeCmdEndQuery(VkCommandBuffer, VkQueryPool, uint32_t) {}
-    VKAPI_ATTR void VKAPI_CALL FakeCmdBeginQueryIndexedEXT(VkCommandBuffer, VkQueryPool, uint32_t,
-                                                           VkQueryControlFlags, uint32_t) {}
+    VKAPI_ATTR void VKAPI_CALL FakeCmdBeginQueryIndexedEXT(VkCommandBuffer, VkQueryPool, uint32_t, VkQueryControlFlags,
+                                                           uint32_t) {}
     VKAPI_ATTR void VKAPI_CALL FakeCmdEndQueryIndexedEXT(VkCommandBuffer, VkQueryPool, uint32_t, uint32_t) {}
     VKAPI_ATTR VkResult VKAPI_CALL FakeCreateRenderPass(VkDevice, const VkRenderPassCreateInfo*,
                                                         const VkAllocationCallbacks*, VkRenderPass* out) {
@@ -401,13 +386,11 @@ namespace {
         ++g_fake.destroyCalls;
     }
     VKAPI_ATTR VkResult VKAPI_CALL FakeCreatePipelineLayout(VkDevice, const VkPipelineLayoutCreateInfo*,
-                                                            const VkAllocationCallbacks*,
-                                                            VkPipelineLayout* out) {
+                                                            const VkAllocationCallbacks*, VkPipelineLayout* out) {
         *out = FakeHandle<VkPipelineLayout>();
         return VK_SUCCESS;
     }
-    VKAPI_ATTR void VKAPI_CALL FakeDestroyPipelineLayout(VkDevice, VkPipelineLayout,
-                                                         const VkAllocationCallbacks*) {
+    VKAPI_ATTR void VKAPI_CALL FakeDestroyPipelineLayout(VkDevice, VkPipelineLayout, const VkAllocationCallbacks*) {
         ++g_fake.destroyCalls;
     }
     VKAPI_ATTR VkResult VKAPI_CALL FakeCreateGraphicsPipelines(VkDevice, VkPipelineCache, uint32_t count,
@@ -423,8 +406,8 @@ namespace {
     }
     VKAPI_ATTR void VKAPI_CALL FakeCmdBindPipeline(VkCommandBuffer, VkPipelineBindPoint, VkPipeline) {}
     VKAPI_ATTR void VKAPI_CALL FakeCmdDraw(VkCommandBuffer, uint32_t, uint32_t, uint32_t, uint32_t) {}
-    VKAPI_ATTR VkResult VKAPI_CALL FakeCreateFence(VkDevice, const VkFenceCreateInfo*,
-                                                   const VkAllocationCallbacks*, VkFence* out) {
+    VKAPI_ATTR VkResult VKAPI_CALL FakeCreateFence(VkDevice, const VkFenceCreateInfo*, const VkAllocationCallbacks*,
+                                                   VkFence* out) {
         *out = FakeHandle<VkFence>();
         return VK_SUCCESS;
     }
@@ -438,9 +421,8 @@ namespace {
     VKAPI_ATTR VkResult VKAPI_CALL FakeWaitForFences(VkDevice, uint32_t, const VkFence*, VkBool32, uint64_t) {
         return g_fake.fenceWaitResult;
     }
-    VKAPI_ATTR VkResult VKAPI_CALL FakeGetQueryPoolResults(VkDevice, VkQueryPool, uint32_t, uint32_t,
-                                                           size_t dataSize, void* data, VkDeviceSize,
-                                                           VkQueryResultFlags) {
+    VKAPI_ATTR VkResult VKAPI_CALL FakeGetQueryPoolResults(VkDevice, VkQueryPool, uint32_t, uint32_t, size_t dataSize,
+                                                           void* data, VkDeviceSize, VkQueryResultFlags) {
         // The stream pool's {primitivesWritten, primitivesNeeded} pair; the probe
         // reads primitivesNeeded, and this fake device counts capture-less draws.
         if (data == nullptr || dataSize < 2 * sizeof(Uint64)) {
@@ -523,8 +505,7 @@ TEST(PrimitivesGeneratedNoXfbProbeTeardownTest, AFenceTimeoutLeaksEverythingAndR
         << "vkDeviceWaitIdle on a queue that missed a 5 s deadline is the hang the bound exists to "
            "prevent";
     // The verdict must not read a timed-out probe as anything but "no verdict".
-    EXPECT_EQ(EvaluatePrimitivesGeneratedNoXfbVerdict(measurement),
-              PrimitivesGeneratedNoXfbVerdict::Inconclusive);
+    EXPECT_EQ(EvaluatePrimitivesGeneratedNoXfbVerdict(measurement), PrimitivesGeneratedNoXfbVerdict::Inconclusive);
 }
 
 // The control: a driver that signals normally gets the ordinary teardown - idle
@@ -541,6 +522,5 @@ TEST(PrimitivesGeneratedNoXfbProbeTeardownTest, ASignalledFenceTearsDownNormally
     EXPECT_FALSE(measurement.fenceWaitTimedOut);
     EXPECT_EQ(g_fake.deviceWaitIdleCalls, 1u);
     EXPECT_GT(g_fake.destroyCalls, 0u);
-    EXPECT_EQ(EvaluatePrimitivesGeneratedNoXfbVerdict(measurement),
-              PrimitivesGeneratedNoXfbVerdict::StreamCounts);
+    EXPECT_EQ(EvaluatePrimitivesGeneratedNoXfbVerdict(measurement), PrimitivesGeneratedNoXfbVerdict::StreamCounts);
 }

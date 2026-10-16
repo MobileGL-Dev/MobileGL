@@ -157,13 +157,17 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
     namespace {
         std::atomic<Uint64> g_perNativeContextEpoch{1};
+    } // namespace
+    Uint64 PerNativeContextEpoch() {
+        return g_perNativeContextEpoch.load(std::memory_order_acquire);
     }
-    Uint64 PerNativeContextEpoch() { return g_perNativeContextEpoch.load(std::memory_order_acquire); }
-    void BumpPerNativeContextEpoch() { g_perNativeContextEpoch.fetch_add(1, std::memory_order_acq_rel); }
+    void BumpPerNativeContextEpoch() {
+        g_perNativeContextEpoch.fetch_add(1, std::memory_order_acq_rel);
+    }
 
     namespace {
         std::atomic<Uint32> g_perNativeContextCacheSlots{0};
-    }
+    } // namespace
 
     PerNativeContextBase::PerNativeContextBase()
         : m_cacheSlot(g_perNativeContextCacheSlots.fetch_add(1, std::memory_order_relaxed) %
@@ -182,7 +186,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
     void ForgetNativeContextObjects(Uint64 serial) {
         if (serial == 0) return;
         const std::lock_guard<std::mutex> lock(PerNativeContextRegistryMutex());
-        for (PerNativeContextBase* holder : PerNativeContextRegistry()) holder->ForgetContext(serial);
+        for (PerNativeContextBase* holder : PerNativeContextRegistry())
+            holder->ForgetContext(serial);
     }
 
     // The tuple the calling thread works on, created on first use. Lazy creation is what keeps the
@@ -316,8 +321,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         EGLint width = 0;
         EGLint height = 0;
         if (!g_EGLFuncs.eglQuerySurface(g_Display, surface, EGL_WIDTH, &width) ||
-            !g_EGLFuncs.eglQuerySurface(g_Display, surface, EGL_HEIGHT, &height) ||
-            width <= 0 || height <= 0) {
+            !g_EGLFuncs.eglQuerySurface(g_Display, surface, EGL_HEIGHT, &height) || width <= 0 || height <= 0) {
             return false;
         }
 
@@ -376,9 +380,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                                           GL_FRAMEBUFFER_ATTACHMENT_DEPTH_SIZE, &depthBits);
         g_GLESFuncs.glGetFramebufferAttachmentParameteriv(GL_DRAW_FRAMEBUFFER, GL_STENCIL,
                                                           GL_FRAMEBUFFER_ATTACHMENT_STENCIL_SIZE, &stencilBits);
-        g_GLESFuncs.glGetFramebufferAttachmentParameteriv(GL_DRAW_FRAMEBUFFER, GL_DEPTH,
-                                                          GL_FRAMEBUFFER_ATTACHMENT_COMPONENT_TYPE,
-                                                          &depthComponentType);
+        g_GLESFuncs.glGetFramebufferAttachmentParameteriv(
+            GL_DRAW_FRAMEBUFFER, GL_DEPTH, GL_FRAMEBUFFER_ATTACHMENT_COMPONENT_TYPE, &depthComponentType);
         ClearGLErrors();
 
         if (previousDrawFramebuffer != 0) {
@@ -428,9 +431,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                                          : TextureInternalFormat::Depth24Stencil8;
             stencilFormat = depthFormat;
         } else if (depthBits > 0) {
-            depthFormat = floatDepth              ? TextureInternalFormat::DepthComponent32F
-                          : (depthBits <= 16)     ? TextureInternalFormat::DepthComponent16
-                                                  : TextureInternalFormat::DepthComponent24;
+            depthFormat = floatDepth          ? TextureInternalFormat::DepthComponent32F
+                          : (depthBits <= 16) ? TextureInternalFormat::DepthComponent16
+                                              : TextureInternalFormat::DepthComponent24;
             stencilFormat = depthFormat;
         } else {
             depthFormat = TextureInternalFormat::StencilIndex8;
@@ -472,8 +475,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
 #endif
             MG_Pipe::gMGPipeCallbacks.OnSurfaceChanged(&info);
-        } else
-        {
+        } else {
             if (depthTexture) depthTexture->SetInternalFormat(depthFormat);
             if (stencilTexture) stencilTexture->SetInternalFormat(stencilFormat);
         }
@@ -558,8 +560,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         using XCloseDisplayFn = int (*)(Display*);
 
         auto* xOpenDisplay = reinterpret_cast<XOpenDisplayFn>(dlsym(x11Lib, "XOpenDisplay"));
-        auto* xGetWindowAttributes =
-            reinterpret_cast<XGetWindowAttributesFn>(dlsym(x11Lib, "XGetWindowAttributes"));
+        auto* xGetWindowAttributes = reinterpret_cast<XGetWindowAttributesFn>(dlsym(x11Lib, "XGetWindowAttributes"));
         auto* xVisualIDFromVisual = reinterpret_cast<XVisualIDFromVisualFn>(dlsym(x11Lib, "XVisualIDFromVisual"));
         auto* xCloseDisplay = reinterpret_cast<XCloseDisplayFn>(dlsym(x11Lib, "XCloseDisplay"));
         if (!xOpenDisplay || !xGetWindowAttributes || !xVisualIDFromVisual || !xCloseDisplay) {
@@ -629,19 +630,27 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // matches an alpha-0 config; keep those as a second candidate tier
             // for the visual match or eglCreateWindowSurface hits BAD_CONFIG.
             Vector<EGLConfig> alphaFreeConfigs;
-            const EGLint alphaFreeAttribs[] = {EGL_SURFACE_TYPE, surfaceBit, EGL_RENDERABLE_TYPE,
+            const EGLint alphaFreeAttribs[] = {EGL_SURFACE_TYPE,
+                                               surfaceBit,
+                                               EGL_RENDERABLE_TYPE,
                                                EGL_OPENGL_ES3_BIT,
-                                               EGL_RED_SIZE,     8,          EGL_GREEN_SIZE,
+                                               EGL_RED_SIZE,
                                                8,
-                                               EGL_BLUE_SIZE,    8,          EGL_DEPTH_SIZE,
+                                               EGL_GREEN_SIZE,
+                                               8,
+                                               EGL_BLUE_SIZE,
+                                               8,
+                                               EGL_DEPTH_SIZE,
                                                24,
-                                               EGL_STENCIL_SIZE, 8,          EGL_NONE};
+                                               EGL_STENCIL_SIZE,
+                                               8,
+                                               EGL_NONE};
             EGLint numAlphaFree = 0;
             if (g_EGLFuncs.eglChooseConfig(g_Display, alphaFreeAttribs, nullptr, 0, &numAlphaFree) &&
                 numAlphaFree > 0) {
                 alphaFreeConfigs.resize(static_cast<SizeT>(numAlphaFree));
-                if (!g_EGLFuncs.eglChooseConfig(g_Display, alphaFreeAttribs, alphaFreeConfigs.data(),
-                                                numAlphaFree, &numAlphaFree)) {
+                if (!g_EGLFuncs.eglChooseConfig(g_Display, alphaFreeAttribs, alphaFreeConfigs.data(), numAlphaFree,
+                                                &numAlphaFree)) {
                     numAlphaFree = 0;
                 }
                 alphaFreeConfigs.resize(static_cast<SizeT>(numAlphaFree));
@@ -713,13 +722,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // EGL_EXT_create_context_robustness (eglext.h is not part of this file's include set).
         constexpr EGLint kEglResetNotificationStrategyExt = 0x3138;
         constexpr EGLint kEglLoseContextOnResetExt = 0x31BF;
-        enum class ResetNotification : Uint8 { Undecided, On, Off };
+        enum class ResetNotification : Uint8 {
+            Undecided,
+            On,
+            Off
+        };
         std::atomic<ResetNotification> g_resetNotification{ResetNotification::Undecided};
 
         Bool ResetNotificationWanted() {
             const ResetNotification decided = g_resetNotification.load(std::memory_order_acquire);
             if (decided != ResetNotification::Undecided) return decided == ResetNotification::On;
-            if (const char* value = std::getenv("MOBILEGL_ESPRYT_RESET_NOTIFICATION"); value != nullptr && value[0] == '0')
+            if (const char* value = std::getenv("MOBILEGL_ESPRYT_RESET_NOTIFICATION");
+                value != nullptr && value[0] == '0')
                 return false;
             if (g_Display == EGL_NO_DISPLAY || !g_EGLFuncs.eglQueryString) return false;
             const char* extensions = g_EGLFuncs.eglQueryString(g_Display, EGL_EXTENSIONS);
@@ -734,7 +748,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         void NoteResetNotificationRefused() {
             ResetNotification expected = ResetNotification::Undecided;
-            if (g_resetNotification.compare_exchange_strong(expected, ResetNotification::Off, std::memory_order_acq_rel))
+            if (g_resetNotification.compare_exchange_strong(expected, ResetNotification::Off,
+                                                            std::memory_order_acq_rel))
                 MGLOG_W("DirectGLES: the driver refused EGL_LOSE_CONTEXT_ON_RESET; a context that hangs the GPU is "
                         "not told, and its session cannot be ended for it");
         }
@@ -772,9 +787,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // by CreateNativeContextFor before this runs; a tuple nobody named a group for starts one.
         EGLContext share = EGL_NO_CONTEXT;
         for (auto* other : NativeContexts()) {
-            if (other != &tuple && other->SessionKey == tuple.SessionKey &&
-                other->Context != EGL_NO_CONTEXT && tuple.ShareGroupToken != 0 &&
-                other->ShareGroupToken == tuple.ShareGroupToken) {
+            if (other != &tuple && other->SessionKey == tuple.SessionKey && other->Context != EGL_NO_CONTEXT &&
+                tuple.ShareGroupToken != 0 && other->ShareGroupToken == tuple.ShareGroupToken) {
                 share = other->Context;
                 break;
             }
@@ -812,8 +826,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // must agree on the strategy, so it is decided once, by the first context, and kept.
         for (const EGLint minorVersion : {2, 1, 0}) {
             const Bool notify = ResetNotificationWanted();
-            const EGLint contextAttribs[] = {EGL_CONTEXT_MAJOR_VERSION, 3,
-                                             EGL_CONTEXT_MINOR_VERSION, minorVersion,
+            const EGLint contextAttribs[] = {EGL_CONTEXT_MAJOR_VERSION,
+                                             3,
+                                             EGL_CONTEXT_MINOR_VERSION,
+                                             minorVersion,
                                              notify ? kEglResetNotificationStrategyExt : EGL_NONE,
                                              kEglLoseContextOnResetExt,
                                              EGL_NONE};
@@ -912,7 +928,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // its surfaceless stand-in) bound a surface the driver no longer had. The session's own
         // teardown terminates the display once its surfaces are gone (DestroyNativeStateOfSession).
         Bool surfacesRemain = false;
-        for (const auto* session : NativeSessions()) surfacesRemain = surfacesRemain || !session->Surfaces.empty();
+        for (const auto* session : NativeSessions())
+            surfacesRemain = surfacesRemain || !session->Surfaces.empty();
         if (g_displayUsers == 0 && !surfacesRemain && g_Display != EGL_NO_DISPLAY && g_EGLFuncs.eglTerminate) {
             g_EGLFuncs.eglTerminate(g_Display);
             NoteDisplayTerminated();
@@ -956,9 +973,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
         return MakeCurrent();
     }
 
-    EGLSurface CurrentSessionDrawSurface() { return ActiveNativeSession().Draw; }
+    EGLSurface CurrentSessionDrawSurface() {
+        return ActiveNativeSession().Draw;
+    }
 
-    EGLSurface CurrentContextDrawSurface() { return ActiveNativeContext().Draw; }
+    EGLSurface CurrentContextDrawSurface() {
+        return ActiveNativeContext().Draw;
+    }
 
     namespace {
         // Whether the driver of `display` has EGL_EXT_buffer_age (or EGL_KHR_partial_update, which
@@ -1001,13 +1022,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
     } // namespace
 
-        // The window surface whose age the driver was asked in the frame being drawn on this (the
-        // session's apply) thread; the present ends the frame.
-        thread_local EGLSurface t_ageAskedSurface = EGL_NO_SURFACE;
+    // The window surface whose age the driver was asked in the frame being drawn on this (the
+    // session's apply) thread; the present ends the frame.
+    thread_local EGLSurface t_ageAskedSurface = EGL_NO_SURFACE;
 
-        // Whether the frame being drawn on this thread has had its flush ahead of the window
-        // buffer (FlushAheadOfWindowBufferUse); the present ends the frame.
-        thread_local Bool t_windowBufferFlushIssued = false;
+    // Whether the frame being drawn on this thread has had its flush ahead of the window
+    // buffer (FlushAheadOfWindowBufferUse); the present ends the frame.
+    thread_local Bool t_windowBufferFlushIssued = false;
 
     namespace {
         // A WINDOW SURFACE'S BUFFER AGE, on unless MOBILEGL_ESPRYT_WINDOW_AGE=0 (or, on Android, the
@@ -1099,7 +1120,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
         EGLint rects[MG_Util::Damage::kMaxRects * 4] = {};
         const EGLint count =
-            region.IsFull() ? 0 : static_cast<EGLint>(MG_Util::Damage::PackRects(region, rects, MG_Util::Damage::kMaxRects));
+            region.IsFull()
+                ? 0
+                : static_cast<EGLint>(MG_Util::Damage::PackRects(region, rects, MG_Util::Damage::kMaxRects));
         if (support.SetDamageRegion(g_Display, surface, count > 0 ? rects : nullptr, count) != EGL_TRUE) {
             MGLOG_W_ONCE("DirectGLES: eglSetDamageRegionKHR refused a %d-rectangle region (EGL error 0x%x)", count,
                          g_EGLFuncs.eglGetError ? static_cast<unsigned>(g_EGLFuncs.eglGetError()) : 0u);
@@ -1151,10 +1174,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 if (tuple->Read == previous) tuple->Read = replacement;
             }
             auto& entries = session.Surfaces;
-            entries.erase(std::remove_if(entries.begin(), entries.end(),
-                                         [&](const NativeSessionState::SurfaceEntry& entry) {
-                                             return entry.Surface == previous;
-                                         }),
+            entries.erase(std::remove_if(
+                              entries.begin(), entries.end(),
+                              [&](const NativeSessionState::SurfaceEntry& entry) { return entry.Surface == previous; }),
                           entries.end());
             g_nativeRegistryEpoch.fetch_add(1, std::memory_order_acq_rel);
         }
@@ -1166,7 +1188,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // The calling thread drew to the old one: draw to the new one from here (the old is then
         // no longer current, and its destruction below is immediate).
         if (t_native.boundDraw == previous && ActiveNativeContext().Context != EGL_NO_CONTEXT) (void)MakeCurrent();
-        if (g_EGLFuncs.eglDestroySurface && g_Display != EGL_NO_DISPLAY) g_EGLFuncs.eglDestroySurface(g_Display, previous);
+        if (g_EGLFuncs.eglDestroySurface && g_Display != EGL_NO_DISPLAY)
+            g_EGLFuncs.eglDestroySurface(g_Display, previous);
     }
 
     void DestroySessionSurface(EGLSurface surface) {
@@ -1175,8 +1198,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
         {
             const std::lock_guard<std::mutex> lock(g_nativeRegistryMutex);
             auto& entries = session.Surfaces;
-            const auto it = std::find_if(entries.begin(), entries.end(),
-                                         [&](const NativeSessionState::SurfaceEntry& entry) { return entry.Surface == surface; });
+            const auto it =
+                std::find_if(entries.begin(), entries.end(),
+                             [&](const NativeSessionState::SurfaceEntry& entry) { return entry.Surface == surface; });
             if (it == entries.end()) return;
             entries.erase(it);
             for (auto* tuple : NativeContexts()) {
@@ -1199,7 +1223,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
         // A surface still current on this thread is destroyed by EGL once it is not (EGL 1.5
         // 3.5.6), so this needs no unbind first.
-        if (g_EGLFuncs.eglDestroySurface && g_Display != EGL_NO_DISPLAY) g_EGLFuncs.eglDestroySurface(g_Display, surface);
+        if (g_EGLFuncs.eglDestroySurface && g_Display != EGL_NO_DISPLAY)
+            g_EGLFuncs.eglDestroySurface(g_Display, surface);
         if (t_native.boundDraw == surface && session.Draw == EGL_NO_SURFACE) t_native.boundDraw = EGL_NO_SURFACE;
     }
 
@@ -1214,8 +1239,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             const EGLSurface surface = ActiveNativeSession().Draw;
             if (!g_EGLFuncs.eglSwapInterval || g_Display == EGL_NO_DISPLAY || surface == EGL_NO_SURFACE) return;
             const EGLBoolean ok = g_EGLFuncs.eglSwapInterval(g_Display, g_requestedSwapInterval);
-            MGLOG_D("DirectGLES: applied native swap interval %d (%s)", g_requestedSwapInterval,
-                    ok ? "ok" : "failed");
+            MGLOG_D("DirectGLES: applied native swap interval %d (%s)", g_requestedSwapInterval, ok ? "ok" : "failed");
         }
     } // namespace
 
@@ -1225,7 +1249,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
     }
 
 #if MOBILEGL_BUILD_DISAGGREGATED
-    void ForgetRequestedSwapInterval() { g_requestedSwapInterval = -1; }
+    void ForgetRequestedSwapInterval() {
+        g_requestedSwapInterval = -1;
+    }
 #endif
 
     // A crashed predecessor session may have left its surface bound to this window (the
@@ -1394,32 +1420,32 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 surface, tuple.Context, width, height);
         return true;
     }
-        // The single backend ES context migrates between app threads (FCL/pojav-style
-        // LWJGL hands the EGL context from JVM thread to JVM thread). Ownership must
-        // live in ONE global slot: a per-thread flag can never be cleared on the
-        // LOSING thread when another thread takes (or destroys/releases) the context,
-        // leaving a stale "current" claim behind. A stale claim makes buffer ops issue
-        // GL calls that silently no-op (no context is current on that thread) while
-        // still updating shadow bookkeeping (bind cache, synced serials), permanently
-        // desynchronizing backend buffer state.
-        std::atomic<std::thread::id> g_backendContextOwnerThread{};
+    // The single backend ES context migrates between app threads (FCL/pojav-style
+    // LWJGL hands the EGL context from JVM thread to JVM thread). Ownership must
+    // live in ONE global slot: a per-thread flag can never be cleared on the
+    // LOSING thread when another thread takes (or destroys/releases) the context,
+    // leaving a stale "current" claim behind. A stale claim makes buffer ops issue
+    // GL calls that silently no-op (no context is current on that thread) while
+    // still updating shadow bookkeeping (bind cache, synced serials), permanently
+    // desynchronizing backend buffer state.
+    std::atomic<std::thread::id> g_backendContextOwnerThread{};
 
-        // Bumped whenever the backend ES context is destroyed; fence and
-        // timer-query handles created under an older generation belong to a
-        // dead context and must never be passed back to GL (mirrors
-        // BufferImpl's context tracking).
-        Uint g_syncContextGeneration = 1;
+    // Bumped whenever the backend ES context is destroyed; fence and
+    // timer-query handles created under an older generation belong to a
+    // dead context and must never be passed back to GL (mirrors
+    // BufferImpl's context tracking).
+    Uint g_syncContextGeneration = 1;
 
-        // One-fence-per-frame ring driving the buffer-storage pool's recycle gate.
-        // A buffer retired during frame N is safe to reuse once frame N's fence has
-        // signaled. Touched only in Present()/DestroyEGLContext() on the owning
-        // thread -> no lock. Each fence carries the sync generation so a dead-context
-        // GLsync is never polled/deleted. Depth 4 >> the 2-3 frames Adreno keeps in
-        // flight; wrap-before-signal only happens during a stall and just degrades to
-        // the allocate path.
-        std::atomic<Uint64> g_currentFrameSerial{0};
-        std::atomic<Uint64> g_completedFrameSerial{0};
-        FrameFence g_frameFenceRing[kFrameFenceRingDepth];
+    // One-fence-per-frame ring driving the buffer-storage pool's recycle gate.
+    // A buffer retired during frame N is safe to reuse once frame N's fence has
+    // signaled. Touched only in Present()/DestroyEGLContext() on the owning
+    // thread -> no lock. Each fence carries the sync generation so a dead-context
+    // GLsync is never polled/deleted. Depth 4 >> the 2-3 frames Adreno keeps in
+    // flight; wrap-before-signal only happens during a stall and just degrades to
+    // the allocate path.
+    std::atomic<Uint64> g_currentFrameSerial{0};
+    std::atomic<Uint64> g_completedFrameSerial{0};
+    FrameFence g_frameFenceRing[kFrameFenceRingDepth];
 
     // Defined next to the stamp globals below; every owner-id writer must reset the
     // EGL verification stamp BEFORE publishing the new owner.
@@ -1479,8 +1505,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             MGLOG_E_ONCE("DirectGLES::MakeCurrent failed: native eglMakeCurrent returned error 0x%04x", error);
             return false;
         }
-        g_EGLFuncs.eglSwapBuffersWithDamageEXT =
-            MG_Util::BackendLoader::ResolveSwapBuffersWithDamage(g_EGLFuncs);
+        g_EGLFuncs.eglSwapBuffersWithDamageEXT = MG_Util::BackendLoader::ResolveSwapBuffersWithDamage(g_EGLFuncs);
         InvalidateEglVerifiedStamp();
         t_native.boundContext = tuple.Context;
         t_native.boundDraw = session.Draw;
@@ -1557,8 +1582,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
     void DestroyEGLContext() {
 #if MOBILEGL_BUILD_DISAGGREGATED
-        if (MG_Config::Transport != MG_Config::TransportMode::Monolith)
-            MG_Pipe::MGPipeServerSetContextLive(false);
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith) MG_Pipe::MGPipeServerSetContextLive(false);
 #endif
         // P14: ANOTHER SESSION'S CONTEXT STILL LIVES. Every native context is in one share group, so
         // the buffers, textures and syncs this process's backend holds outlive this session's
@@ -1603,9 +1627,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // The frame-fence ring's syncs belong to the dead context too; abandon them
         // (the context reclaims its syncs) and floor the completed watermark to the
         // current serial so buffers retired under the old context read as GPU-idle.
-        for (FrameFence& slot : g_frameFenceRing) slot = {};
-        g_completedFrameSerial.store(g_currentFrameSerial.load(std::memory_order_relaxed),
-                                     std::memory_order_relaxed);
+        for (FrameFence& slot : g_frameFenceRing)
+            slot = {};
+        g_completedFrameSerial.store(g_currentFrameSerial.load(std::memory_order_relaxed), std::memory_order_relaxed);
 
         DestroyNativeStateOfSession(CurrentNativeSessionKey());
     }

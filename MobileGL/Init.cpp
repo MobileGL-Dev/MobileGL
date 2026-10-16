@@ -124,7 +124,7 @@ namespace MobileGL {
 
             // TODO: add and use Destroy functions for other subsystems
         }
-    }
+    } // namespace
 
     void Initialize() {
         if (g_isInitialized) {

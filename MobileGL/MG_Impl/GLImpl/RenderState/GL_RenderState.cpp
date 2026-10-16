@@ -46,12 +46,12 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
 
         if (index >= limit) {
-            MG_State::pGLContext->RecordError(
-                ErrorCode::InvalidValue,
-                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", functionName,
-                                             String(indexName) + " index " + std::to_string(index) +
-                                                 " is out of range. Max supported is " + std::to_string(limit - 1) +
-                                                 "."));
+            MG_State::pGLContext->RecordError(ErrorCode::InvalidValue,
+                                              MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", functionName,
+                                                                           String(indexName) + " index " +
+                                                                               std::to_string(index) +
+                                                                               " is out of range. Max supported is " +
+                                                                               std::to_string(limit - 1) + "."));
             return false;
         }
 
@@ -89,8 +89,8 @@ namespace MobileGL::MG_Impl::GLImpl {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidValue,
                 MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", functionName,
-                                             "first (" + std::to_string(first) + ") + count (" +
-                                                 std::to_string(count) + ") exceeds GL_MAX_VIEWPORTS (" +
+                                             "first (" + std::to_string(first) + ") + count (" + std::to_string(count) +
+                                                 ") exceeds GL_MAX_VIEWPORTS (" +
                                                  std::to_string(RenderStateParameters::MAX_VIEWPORTS) + ")."));
             return false;
         }
@@ -133,16 +133,15 @@ namespace MobileGL::MG_Impl::GLImpl {
         return false;
     }
 
-    static Bool TryConvertBlendEquation(GLenum mode, const char* functionName,
-                                        ::MobileGL::BlendEquation& outEquation) {
+    static Bool TryConvertBlendEquation(GLenum mode, const char* functionName, ::MobileGL::BlendEquation& outEquation) {
         outEquation = MG_Util::ConvertGLEnumToBlendEquation(mode);
         if (outEquation != ::MobileGL::BlendEquation::Unknown) return true;
 
-        MG_State::pGLContext->RecordError(
-            ErrorCode::InvalidEnum,
-            MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", functionName,
-                                         "Blend equation enum " + MG_Util::ConvertGLEnumToString(mode) +
-                                             " is not supported."));
+        MG_State::pGLContext->RecordError(ErrorCode::InvalidEnum,
+                                          MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", functionName,
+                                                                       "Blend equation enum " +
+                                                                           MG_Util::ConvertGLEnumToString(mode) +
+                                                                           " is not supported."));
         return false;
     }
 
@@ -161,11 +160,11 @@ namespace MobileGL::MG_Impl::GLImpl {
             applyBack = true;
             return true;
         default:
-            MG_State::pGLContext->RecordError(
-                ErrorCode::InvalidEnum,
-                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", functionName,
-                                             "Stencil face enum " + MG_Util::ConvertGLEnumToString(face) +
-                                                 " is not supported."));
+            MG_State::pGLContext->RecordError(ErrorCode::InvalidEnum,
+                                              MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", functionName,
+                                                                           "Stencil face enum " +
+                                                                               MG_Util::ConvertGLEnumToString(face) +
+                                                                               " is not supported."));
             return false;
         }
     }
@@ -175,11 +174,11 @@ namespace MobileGL::MG_Impl::GLImpl {
         outOperation = MG_Util::ConvertGLEnumToStencilOperation(value);
         if (outOperation != StencilOperation::Unknown) return true;
 
-        MG_State::pGLContext->RecordError(
-            ErrorCode::InvalidEnum,
-            MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", functionName,
-                                         String(paramName) + " enum " + MG_Util::ConvertGLEnumToString(value) +
-                                             " is not supported."));
+        MG_State::pGLContext->RecordError(ErrorCode::InvalidEnum,
+                                          MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", functionName,
+                                                                       String(paramName) + " enum " +
+                                                                           MG_Util::ConvertGLEnumToString(value) +
+                                                                           " is not supported."));
         return false;
     }
 
@@ -234,10 +233,9 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (!ValidateNonNullArray(v, "DepthRangeArrayv_State")) return;
 
         for (GLsizei i = 0; i < count; ++i) {
-            MG_State::pGLContext->SetDepthRangeIndexed(
-                first + static_cast<GLuint>(i),
-                FloatVec2(ClampUnitFloat(static_cast<GLfloat>(v[i * 2 + 0])),
-                          ClampUnitFloat(static_cast<GLfloat>(v[i * 2 + 1]))));
+            MG_State::pGLContext->SetDepthRangeIndexed(first + static_cast<GLuint>(i),
+                                                       FloatVec2(ClampUnitFloat(static_cast<GLfloat>(v[i * 2 + 0])),
+                                                                 ClampUnitFloat(static_cast<GLfloat>(v[i * 2 + 1]))));
         }
     }
 
@@ -455,10 +453,9 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     void PointSize_State(GLfloat size) {
         if (size <= 0.0f) {
-            MG_State::pGLContext->RecordError(
-                ErrorCode::InvalidValue,
-                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "PointSize_State",
-                                             "Point size must be greater than zero."));
+            MG_State::pGLContext->RecordError(ErrorCode::InvalidValue,
+                                              MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "PointSize_State",
+                                                                           "Point size must be greater than zero."));
             return;
         }
 
@@ -502,7 +499,9 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
     }
 
-    void PointParameterf_State(GLenum pname, GLfloat param) { PointParameter_State(pname, param); }
+    void PointParameterf_State(GLenum pname, GLfloat param) {
+        PointParameter_State(pname, param);
+    }
 
     void PointParameteri_State(GLenum pname, GLint param) {
         PointParameter_State(pname, static_cast<GLfloat>(param));
@@ -547,11 +546,11 @@ namespace MobileGL::MG_Impl::GLImpl {
     void LogicOp_State(GLenum opcode) {
         LogicOperation logicOp = MG_Util::ConvertGLEnumToLogicOperation(opcode);
         if (logicOp == LogicOperation::Unknown) {
-            MG_State::pGLContext->RecordError(
-                ErrorCode::InvalidEnum,
-                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "LogicOp_State",
-                                             "Logic op enum " + MG_Util::ConvertGLEnumToString(opcode) +
-                                                 " is not supported."));
+            MG_State::pGLContext->RecordError(ErrorCode::InvalidEnum,
+                                              MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "LogicOp_State",
+                                                                           "Logic op enum " +
+                                                                               MG_Util::ConvertGLEnumToString(opcode) +
+                                                                               " is not supported."));
             return;
         }
 
@@ -560,10 +559,9 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     void LineWidth_State(GLfloat width) {
         if (width <= 0.0f) {
-            MG_State::pGLContext->RecordError(
-                ErrorCode::InvalidValue,
-                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "LineWidth_State",
-                                             "Line width must be greater than zero."));
+            MG_State::pGLContext->RecordError(ErrorCode::InvalidValue,
+                                              MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "LineWidth_State",
+                                                                           "Line width must be greater than zero."));
             return;
         }
 
@@ -592,8 +590,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (!data) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidValue,
-                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "GetBooleani_v_State",
-                                             "data pointer cannot be null."));
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "GetBooleani_v_State", "data pointer cannot be null."));
             return;
         }
 
@@ -601,11 +598,11 @@ namespace MobileGL::MG_Impl::GLImpl {
             // Indexed per-draw-buffer color writemask writes 4 booleans (R,G,B,A) for draw buffer
             // `index`. The non-indexed glGetBooleanv(GL_COLOR_WRITEMASK) reports draw buffer 0.
             if (index >= MG_State::GLState::FramebufferObject::MAX_DRAW_BUFFERS) {
-                MG_State::pGLContext->RecordError(
-                    ErrorCode::InvalidValue,
-                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "GetBooleani_v_State",
-                                                 "Color writemask draw buffer index " + std::to_string(index) +
-                                                     " is out of range."));
+                MG_State::pGLContext->RecordError(ErrorCode::InvalidValue,
+                                                  MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "GetBooleani_v_State",
+                                                                               "Color writemask draw buffer index " +
+                                                                                   std::to_string(index) +
+                                                                                   " is out of range."));
                 return;
             }
             const BoolVec4 mask = MG_State::pGLContext->GetColorMaskIndexed(index);
@@ -629,9 +626,8 @@ namespace MobileGL::MG_Impl::GLImpl {
         GetIntegeri_v(target, index, values);
         // The ARB_viewport_array rectangles are the only multi-component indexed state that
         // reaches here; writing element 0 alone would leave the caller's other three untouched.
-        const GLsizei components = target == GL_VIEWPORT || target == GL_SCISSOR_BOX
-            ? 4
-            : (target == GL_DEPTH_RANGE ? 2 : 1);
+        const GLsizei components =
+            target == GL_VIEWPORT || target == GL_SCISSOR_BOX ? 4 : (target == GL_DEPTH_RANGE ? 2 : 1);
         for (GLsizei i = 0; i < components; ++i) {
             data[i] = values[i] != 0 ? GL_TRUE : GL_FALSE;
         }
@@ -927,8 +923,8 @@ namespace MobileGL::MG_Impl::GLImpl {
         BlendFactor dstRGBM = MG_Util::ConvertGLEnumToBlendFactor(dstRGB);
         BlendFactor srcAlphaM = MG_Util::ConvertGLEnumToBlendFactor(srcAlpha);
         BlendFactor dstAlphaM = MG_Util::ConvertGLEnumToBlendFactor(dstAlpha);
-        if (srcRGBM == BlendFactor::Unknown || dstRGBM == BlendFactor::Unknown ||
-            srcAlphaM == BlendFactor::Unknown || dstAlphaM == BlendFactor::Unknown) {
+        if (srcRGBM == BlendFactor::Unknown || dstRGBM == BlendFactor::Unknown || srcAlphaM == BlendFactor::Unknown ||
+            dstAlphaM == BlendFactor::Unknown) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidEnum,
                 MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", "BlendFuncSeparatei_State",

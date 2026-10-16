@@ -79,8 +79,8 @@ namespace MGITest {
                 }
                 registered = true;
             }
-            return CreateWindowExW(0, kClassName, L"MobileGL Integration Test", WS_OVERLAPPEDWINDOW,
-                                   CW_USEDEFAULT, CW_USEDEFAULT, kSurfaceWidth, kSurfaceHeight, nullptr, nullptr,
+            return CreateWindowExW(0, kClassName, L"MobileGL Integration Test", WS_OVERLAPPEDWINDOW, CW_USEDEFAULT,
+                                   CW_USEDEFAULT, kSurfaceWidth, kSurfaceHeight, nullptr, nullptr,
                                    GetModuleHandleW(nullptr), nullptr);
         }
 #elif defined(__ANDROID__)
@@ -99,8 +99,8 @@ namespace MGITest {
             constexpr int kMaxImages = 4;
             const media_status_t status = AImageReader_newWithUsage(
                 kSurfaceWidth, kSurfaceHeight, AIMAGE_FORMAT_RGBA_8888,
-                AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE | AHARDWAREBUFFER_USAGE_GPU_COLOR_OUTPUT,
-                kMaxImages, &g_imageReader);
+                AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE | AHARDWAREBUFFER_USAGE_GPU_COLOR_OUTPUT, kMaxImages,
+                &g_imageReader);
             if (status != AMEDIA_OK || g_imageReader == nullptr) return false;
 
             AImageReader_ImageListener listener = {nullptr, DrainImageReader};
@@ -241,9 +241,9 @@ namespace MGITest {
             EGLConfig config = nullptr;
             EGLint configCount = 0;
             if (eglChooseConfig(display, configAttribs, &config, 1, &configCount) != EGL_TRUE || configCount < 1) {
-                outReason = WithEglError(useWindowSurface
-                                             ? "eglChooseConfig found no window-capable RGBA8/D24 config"
-                                             : "eglChooseConfig found no pbuffer-capable RGBA8/D24 config");
+                outReason =
+                    WithEglError(useWindowSurface ? "eglChooseConfig found no window-capable RGBA8/D24 config"
+                                                  : "eglChooseConfig found no pbuffer-capable RGBA8/D24 config");
                 return 4;
             }
 
@@ -281,8 +281,8 @@ namespace MGITest {
 #if defined(__ANDROID__)
                 DestroyImageReaderWindow();
 #endif
-                outReason = WithEglError(useWindowSurface ? "eglCreateWindowSurface failed"
-                                                         : "eglCreatePbufferSurface failed");
+                outReason =
+                    WithEglError(useWindowSurface ? "eglCreateWindowSurface failed" : "eglCreatePbufferSurface failed");
                 return 6;
             }
             // The step that brings the whole backend up (DirectVulkan creates its
@@ -536,13 +536,12 @@ namespace MGITest {
     }
 
     ::testing::AssertionResult RegionIsMostly(const Image& image, int x0, int x1, int y0, int y1,
-                                              const char* expectedColor, double tolerance,
-                                              const std::string& when) {
+                                              const char* expectedColor, double tolerance, const std::string& when) {
         const RegionScan scan = ScanRegion(image, x0, x1, y0, y1, expectedColor);
         if (scan.total == 0) {
             return ::testing::AssertionFailure()
-                   << when << ": region x[" << x0 << "," << x1 << "] y[" << y0 << "," << y1
-                   << "] is empty against a " << image.Width() << "x" << image.Height() << " readback";
+                   << when << ": region x[" << x0 << "," << x1 << "] y[" << y0 << "," << y1 << "] is empty against a "
+                   << image.Width() << "x" << image.Height() << " readback";
         }
         const double offendingFraction = static_cast<double>(scan.offenders) / scan.total;
         if (offendingFraction <= tolerance) {
@@ -599,8 +598,8 @@ namespace MGITest {
             // means something is different between the two attempts (a leaked
             // exclusive device, an environment the child did not have).
             m_skipReason = reason + (RemoteConnectRequested()
-                ? " - remote TCP bring-up failed"
-                : " - although an identical bring-up in a forked pre-flight child succeeded");
+                                         ? " - remote TCP bring-up failed"
+                                         : " - although an identical bring-up in a forked pre-flight child succeeded");
             return false;
         }
 

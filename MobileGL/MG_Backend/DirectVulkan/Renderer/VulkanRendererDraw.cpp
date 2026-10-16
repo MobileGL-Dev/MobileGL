@@ -101,13 +101,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     Bool VulkanRenderer::BeginXfbCaptureWithBuffers(FrameContext::FrameData& frame, Uint32 bufferCount,
-            const VkBuffer* buffers, const VkDeviceSize* offsets, const VkDeviceSize* sizes) {
+                                                    const VkBuffer* buffers, const VkDeviceSize* offsets,
+                                                    const VkDeviceSize* sizes) {
         if (!m_xfbCounterBuffer.IsValid()) {
             if (!m_xfbCounterBuffer.Create({
                     .allocator = m_allocator,
                     .size = 16 * kXfbCounterObjectSlots,
-                    .usage = VK_BUFFER_USAGE_TRANSFORM_FEEDBACK_COUNTER_BUFFER_BIT_EXT |
-                             VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                    .usage =
+                        VK_BUFFER_USAGE_TRANSFORM_FEEDBACK_COUNTER_BUFFER_BIT_EXT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                     .memoryUsage = VMA_MEMORY_USAGE_AUTO,
                 })) {
                 MGLOG_E_ONCE("BeginXfbCaptureForDraw: failed to create the counter buffer");
@@ -119,8 +120,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         for (Uint32 i = 0; i < bufferCount; ++i) {
             if (buffers[i] == VK_NULL_HANDLE) continue;
             m_currentDrawXfbBufferMask |= 1u << i;
-            s_vkCmdBindTransformFeedbackBuffersEXT(frame.commandBuffer, i, 1, buffers + i,
-                                                   offsets + i, sizes + i);
+            s_vkCmdBindTransformFeedbackBuffersEXT(frame.commandBuffer, i, 1, buffers + i, offsets + i, sizes + i);
         }
 
         const Uint32 counterSlot = CurrentXfbCounterSlot();
@@ -136,8 +136,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             counterOffsets[i] = static_cast<VkDeviceSize>(counterSlot) * 16 + static_cast<VkDeviceSize>(i) * 4;
         }
         if (resume) {
-            s_vkCmdBeginTransformFeedbackEXT(frame.commandBuffer, 0, static_cast<Uint32>(bufferCount),
-                                             counterBuffers, counterOffsets);
+            s_vkCmdBeginTransformFeedbackEXT(frame.commandBuffer, 0, static_cast<Uint32>(bufferCount), counterBuffers,
+                                             counterOffsets);
         } else {
             s_vkCmdBeginTransformFeedbackEXT(frame.commandBuffer, 0, 0, nullptr, nullptr);
         }
@@ -186,15 +186,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         VkMemoryBarrier memoryBarrier{};
         memoryBarrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
         memoryBarrier.srcAccessMask =
-                VK_ACCESS_TRANSFORM_FEEDBACK_WRITE_BIT_EXT | VK_ACCESS_TRANSFORM_FEEDBACK_COUNTER_WRITE_BIT_EXT;
+            VK_ACCESS_TRANSFORM_FEEDBACK_WRITE_BIT_EXT | VK_ACCESS_TRANSFORM_FEEDBACK_COUNTER_WRITE_BIT_EXT;
         // Every way a captured buffer can be read back: replayed as vertex attributes or indices
         // by glDrawTransformFeedback, sampled through a uniform or storage binding, sourced as an
         // indirect command, copied out, or mapped.
         memoryBarrier.dstAccessMask =
-                VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT | VK_ACCESS_INDEX_READ_BIT | VK_ACCESS_UNIFORM_READ_BIT |
-                VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_INDIRECT_COMMAND_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT |
-                VK_ACCESS_HOST_READ_BIT | VK_ACCESS_MEMORY_READ_BIT |
-                VK_ACCESS_TRANSFORM_FEEDBACK_COUNTER_READ_BIT_EXT;
+            VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT | VK_ACCESS_INDEX_READ_BIT | VK_ACCESS_UNIFORM_READ_BIT |
+            VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_INDIRECT_COMMAND_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT |
+            VK_ACCESS_HOST_READ_BIT | VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_TRANSFORM_FEEDBACK_COUNTER_READ_BIT_EXT;
         vkCmdPipelineBarrier(frame.commandBuffer, VK_PIPELINE_STAGE_TRANSFORM_FEEDBACK_BIT_EXT,
                              VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 1, &memoryBarrier, 0, nullptr, 0, nullptr);
     }
@@ -213,11 +212,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         const Bool xfbActive = BeginXfbCaptureForDraw(frame);
         BeginXfbQueryForDraw(commandBuffer, xfbActive);
         const Bool occlusionActive = BeginOcclusionForDraw(commandBuffer);
-        vkCmdDraw(commandBuffer,
-            payload.params.vertexCount,
-            payload.params.instanceCount,
-            payload.params.firstVertex,
-            payload.params.firstInstance);
+        vkCmdDraw(commandBuffer, payload.params.vertexCount, payload.params.instanceCount, payload.params.firstVertex,
+                  payload.params.firstInstance);
         EndOcclusionForDraw(commandBuffer, occlusionActive);
         EndXfbCaptureForDraw(frame, xfbActive);
         EndXfbQueryForDraw(commandBuffer);
@@ -348,8 +344,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return rerouteArmed || m_primGenStreamCountsXfbInactiveDraws;
     }
 
-    void VulkanRenderer::StopXfbQueryCapture(Uint32 kind, Vector<Uint32>& outSlots,
-                                             Vector<Uint32>& outRerouteSlots) {
+    void VulkanRenderer::StopXfbQueryCapture(Uint32 kind, Vector<Uint32>& outSlots, Vector<Uint32>& outRerouteSlots) {
         if (kind > 1) {
             return;
         }
@@ -369,8 +364,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         const Bool haveStreamSlots = !slots.empty() && m_xfbQueryPool != VK_NULL_HANDLE;
         // Reroute slots only ever accumulate the GENERATED target (see
         // BeginXfbQueryForDraw); WRITTEN never opens one.
-        const Bool haveRerouteSlots =
-            wantGenerated && !rerouteSlots.empty() && m_primGenReroutePool != VK_NULL_HANDLE;
+        const Bool haveRerouteSlots = wantGenerated && !rerouteSlots.empty() && m_primGenReroutePool != VK_NULL_HANDLE;
         if (!haveStreamSlots && !haveRerouteSlots) {
             return true;
         }
@@ -398,9 +392,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             for (const Uint32 slot : rerouteSlots) {
                 // Both reroute pool kinds answer one 64-bit primitive count per slot.
                 Uint64 generated = 0;
-                const VkResult result = vkGetQueryPoolResults(
-                    m_device, m_primGenReroutePool, slot, 1, sizeof(generated), &generated,
-                    sizeof(generated), VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
+                const VkResult result =
+                    vkGetQueryPoolResults(m_device, m_primGenReroutePool, slot, 1, sizeof(generated), &generated,
+                                          sizeof(generated), VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT);
                 if (result == VK_SUCCESS) {
                     outPrimitives += generated;
                 }
@@ -435,8 +429,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // and for GENERATED wherever this draw is not rerouted - so one GL query span
         // may accumulate stream slots (XFB-active draws) and reroute slots
         // (XFB-inactive draws) side by side.
-        const Bool wantStreamSlot =
-            m_xfbQueryCaptureActive[0] || (m_xfbQueryCaptureActive[1] && !rerouteGenerated);
+        const Bool wantStreamSlot = m_xfbQueryCaptureActive[0] || (m_xfbQueryCaptureActive[1] && !rerouteGenerated);
         if (wantStreamSlot) {
             const Uint32 slot = m_xfbQuerySlotCursor;
             m_xfbQuerySlotCursor = (m_xfbQuerySlotCursor + 1) % kXfbQuerySlots;
@@ -459,8 +452,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // CI runs compile INFO in.
             MGLOG_I_ONCE("PRIMITIVES_GENERATED reroute engaged: an XFB-inactive draw accumulates "
                          "through the %s pool",
-                         m_primGenRerouteKind ==
-                                 MG_Util::SelfTest::PrimGenRerouteKind::PrimitivesGeneratedExt
+                         m_primGenRerouteKind == MG_Util::SelfTest::PrimGenRerouteKind::PrimitivesGeneratedExt
                              ? "VK_QUERY_TYPE_PRIMITIVES_GENERATED_EXT"
                              : "clipping-invocations statistics");
             const Uint32 slot = m_primGenRerouteSlotCursor;
@@ -513,9 +505,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         auto& frame = m_frameContext.GetCurrent();
 
         DrawCmdParam vertexRange{};
-        vertexRange.vertexCount = payload.params.indexCount + (payload.params.vertexOffset > 0
-                                                                   ? static_cast<Uint32>(payload.params.vertexOffset)
-                                                                   : 0);
+        vertexRange.vertexCount =
+            payload.params.indexCount +
+            (payload.params.vertexOffset > 0 ? static_cast<Uint32>(payload.params.vertexOffset) : 0);
         vertexRange.instanceCount = payload.params.instanceCount;
         vertexRange.firstVertex = 0;
         vertexRange.firstInstance = static_cast<Uint32>(payload.params.firstInstance);
@@ -524,8 +516,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // conversion may bound its work by scanning them.
         vertexRange.indexRangeIsExactView = true;
 
-        if (!SetupDraw(frame, payload.mode, DrawSetupAspect::IndexBuffer, vertexRange,
-                       &payload.indexBufferView)) {
+        if (!SetupDraw(frame, payload.mode, DrawSetupAspect::IndexBuffer, vertexRange, &payload.indexBufferView)) {
             return;
         }
 
@@ -536,12 +527,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         const Bool xfbActive = BeginXfbCaptureForDraw(frame);
         BeginXfbQueryForDraw(commandBuffer, xfbActive);
         const Bool occlusionActive = BeginOcclusionForDraw(commandBuffer);
-        vkCmdDrawIndexed(commandBuffer,
-            payload.params.indexCount,
-            payload.params.instanceCount,
-            payload.params.firstIndex,
-            payload.params.vertexOffset,
-            payload.params.firstInstance);
+        vkCmdDrawIndexed(commandBuffer, payload.params.indexCount, payload.params.instanceCount,
+                         payload.params.firstIndex, payload.params.vertexOffset, payload.params.firstInstance);
         EndOcclusionForDraw(commandBuffer, occlusionActive);
         EndXfbCaptureForDraw(frame, xfbActive);
         EndXfbQueryForDraw(commandBuffer);
@@ -573,16 +560,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     // renderer's draw-parameter structs are exactly Vulkan's indirect command layouts, and
     // vkCmdDraw(Indexed)Indirect accepts any 4-aligned stride >= the command size, so the
     // trailing CPU-side metadata rides along unread instead of forcing a repack.
-    static_assert(sizeof(DrawIndexedCmdParam) == sizeof(VkDrawIndexedIndirectCommand) &&
-                      offsetof(DrawIndexedCmdParam, indexCount) == offsetof(VkDrawIndexedIndirectCommand, indexCount) &&
-                      offsetof(DrawIndexedCmdParam, instanceCount) ==
-                          offsetof(VkDrawIndexedIndirectCommand, instanceCount) &&
-                      offsetof(DrawIndexedCmdParam, firstIndex) == offsetof(VkDrawIndexedIndirectCommand, firstIndex) &&
-                      offsetof(DrawIndexedCmdParam, vertexOffset) ==
-                          offsetof(VkDrawIndexedIndirectCommand, vertexOffset) &&
-                      offsetof(DrawIndexedCmdParam, firstInstance) ==
-                          offsetof(VkDrawIndexedIndirectCommand, firstInstance),
-                  "DrawIndexedCmdParam must alias VkDrawIndexedIndirectCommand for the tier-2 multi-draw upload");
+    static_assert(
+        sizeof(DrawIndexedCmdParam) == sizeof(VkDrawIndexedIndirectCommand) &&
+            offsetof(DrawIndexedCmdParam, indexCount) == offsetof(VkDrawIndexedIndirectCommand, indexCount) &&
+            offsetof(DrawIndexedCmdParam, instanceCount) == offsetof(VkDrawIndexedIndirectCommand, instanceCount) &&
+            offsetof(DrawIndexedCmdParam, firstIndex) == offsetof(VkDrawIndexedIndirectCommand, firstIndex) &&
+            offsetof(DrawIndexedCmdParam, vertexOffset) == offsetof(VkDrawIndexedIndirectCommand, vertexOffset) &&
+            offsetof(DrawIndexedCmdParam, firstInstance) == offsetof(VkDrawIndexedIndirectCommand, firstInstance),
+        "DrawIndexedCmdParam must alias VkDrawIndexedIndirectCommand for the tier-2 multi-draw upload");
     static_assert(sizeof(DrawCmdParam) % 4 == 0 && sizeof(DrawCmdParam) >= sizeof(VkDrawIndirectCommand) &&
                       offsetof(DrawCmdParam, vertexCount) == offsetof(VkDrawIndirectCommand, vertexCount) &&
                       offsetof(DrawCmdParam, instanceCount) == offsetof(VkDrawIndirectCommand, instanceCount) &&
@@ -645,15 +630,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             const Uint32 maxIndirectCount = m_physicalDevice.properties.limits.maxDrawIndirectCount;
             if (firstInstanceLegal && maxIndirectCount > 0) {
                 BufferSlice commandSlice{};
-                if (m_bufferManager.UploadTransient(BufferKind::Indirect, m_frameContext.GetCurrentFrameIndex(),
-                                                    pParams,
-                                                    static_cast<VkDeviceSize>(drawCount) * sizeof(DrawCmdParam),
-                                                    sizeof(Uint32), commandSlice)) {
+                if (m_bufferManager.UploadTransient(
+                        BufferKind::Indirect, m_frameContext.GetCurrentFrameIndex(), pParams,
+                        static_cast<VkDeviceSize>(drawCount) * sizeof(DrawCmdParam), sizeof(Uint32), commandSlice)) {
                     for (Uint32 base = 0; base < drawCount; base += maxIndirectCount) {
                         const Uint32 chunk = std::min(drawCount - base, maxIndirectCount);
                         vkCmdDrawIndirect(commandBuffer, commandSlice.buffer,
-                                          commandSlice.offset +
-                                              static_cast<VkDeviceSize>(base) * sizeof(DrawCmdParam),
+                                          commandSlice.offset + static_cast<VkDeviceSize>(base) * sizeof(DrawCmdParam),
                                           chunk, sizeof(DrawCmdParam));
                     }
                     return;
@@ -704,8 +687,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 }
                 for (Uint32 base = 0; base < drawCount; base += m_maxMultiDrawCount) {
                     const Uint32 chunk = std::min(drawCount - base, m_maxMultiDrawCount);
-                    s_vkCmdDrawMultiIndexedEXT(commandBuffer, chunk, infos.data() + base,
-                                               pParams[0].instanceCount,
+                    s_vkCmdDrawMultiIndexedEXT(commandBuffer, chunk, infos.data() + base, pParams[0].instanceCount,
                                                static_cast<Uint32>(pParams[0].firstInstance),
                                                sizeof(VkMultiDrawIndexedInfoEXT), nullptr);
                 }
@@ -731,8 +713,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 BufferSlice commandSlice{};
                 if (m_bufferManager.UploadTransient(BufferKind::Indirect, m_frameContext.GetCurrentFrameIndex(),
                                                     pParams,
-                                                    static_cast<VkDeviceSize>(drawCount) *
-                                                        sizeof(DrawIndexedCmdParam),
+                                                    static_cast<VkDeviceSize>(drawCount) * sizeof(DrawIndexedCmdParam),
                                                     sizeof(Uint32), commandSlice)) {
                     for (Uint32 base = 0; base < drawCount; base += maxIndirectCount) {
                         const Uint32 chunk = std::min(drawCount - base, maxIndirectCount);
@@ -761,12 +742,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         for (Uint32 idraw = 0; idraw < payload.drawCount; ++idraw) {
             vertexRange.vertexCount = std::max(vertexRange.vertexCount, payload.pParams[idraw].indexCount);
             vertexRange.instanceCount = std::max(vertexRange.instanceCount, payload.pParams[idraw].instanceCount);
-            vertexRange.firstInstance = std::max(vertexRange.firstInstance,
-                                                 static_cast<Uint32>(payload.pParams[idraw].firstInstance));
+            vertexRange.firstInstance =
+                std::max(vertexRange.firstInstance, static_cast<Uint32>(payload.pParams[idraw].firstInstance));
         }
 
-        if (!SetupDraw(frame, payload.mode, DrawSetupAspect::IndexBuffer, vertexRange,
-                  &payload.indexBufferView)) {
+        if (!SetupDraw(frame, payload.mode, DrawSetupAspect::IndexBuffer, vertexRange, &payload.indexBufferView)) {
             return;
         }
 
@@ -792,10 +772,17 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         //    merged range fetches exactly the two sub-draws' indices in order.
         Uint32 mergeGranularity = 0;
         switch (payload.mode) {
-            case GL_POINTS:    mergeGranularity = 1; break;
-            case GL_LINES:     mergeGranularity = 2; break;
-            case GL_TRIANGLES: mergeGranularity = 3; break;
-            default: break;
+        case GL_POINTS:
+            mergeGranularity = 1;
+            break;
+        case GL_LINES:
+            mergeGranularity = 2;
+            break;
+        case GL_TRIANGLES:
+            mergeGranularity = 3;
+            break;
+        default:
+            break;
         }
         if (mergeGranularity != 0) {
             const RenderStateParameters& rsp = MG_Pipe::gPipeInputs->GetRenderStateParameters();
@@ -823,10 +810,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                             ++idraw;
                             continue;
                         }
-                        if (head.indexCount % mergeGranularity != 0 ||
-                            next.instanceCount != 1 ||
-                            next.vertexOffset != head.vertexOffset ||
-                            next.firstInstance != head.firstInstance ||
+                        if (head.indexCount % mergeGranularity != 0 || next.instanceCount != 1 ||
+                            next.vertexOffset != head.vertexOffset || next.firstInstance != head.firstInstance ||
                             next.firstIndex != head.firstIndex + head.indexCount ||
                             head.indexCount + next.indexCount < head.indexCount) {
                             break;

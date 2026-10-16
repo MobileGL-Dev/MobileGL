@@ -118,7 +118,8 @@ namespace {
 
         inline Uint32 Count(const std::string& haystack, const std::string& needle) {
             Uint32 n = 0;
-            for (auto at = haystack.find(needle); at != std::string::npos; at = haystack.find(needle, at + 1)) ++n;
+            for (auto at = haystack.find(needle); at != std::string::npos; at = haystack.find(needle, at + 1))
+                ++n;
             return n;
         }
 
@@ -205,7 +206,8 @@ namespace {
         // every session, so a session that ends - a device loss among them - leaves it serving.
         // ------------------------------------------------------------------------------------
 
-        [[noreturn]] inline void RunUnixInProcessServerProcess(const std::string& endpoint, const std::string& logBase) {
+        [[noreturn]] inline void RunUnixInProcessServerProcess(const std::string& endpoint,
+                                                               const std::string& logBase) {
             ::setenv("MOBILEGL_LOG_FILE_PATH", logBase.c_str(), 1);
             ::setenv("MOBILEGL_IPC_ROLE", "server", 1);
             ::setenv("MOBILEGL_IPC_DIAL", "no", 1);
@@ -275,7 +277,9 @@ namespace {
             char note[256] = {};
         };
 
-        inline void Note(PeerReport& r, const char* text) { std::snprintf(r.note, sizeof(r.note), "%s", text); }
+        inline void Note(PeerReport& r, const char* text) {
+            std::snprintf(r.note, sizeof(r.note), "%s", text);
+        }
 
         using PeerBody = std::function<void(Remote::Client::ClientSession&, PeerReport&)>;
 
@@ -304,8 +308,10 @@ namespace {
                 const MobileGLResult started = client.StartSpawned();
                 r.started = started == MOBILEGL_OK ? 1 : 0;
                 r.serverPid = client.PeerServerPid();
-                if (r.started) body(client, r);
-                else std::snprintf(r.note, sizeof(r.note), "start rc=%d", static_cast<int>(started));
+                if (r.started)
+                    body(client, r);
+                else
+                    std::snprintf(r.note, sizeof(r.note), "start rc=%d", static_cast<int>(started));
                 if (stopCleanly && r.started) client.Stop();
                 const ssize_t wrote = ::write(fds[1], &r, sizeof(r));
                 (void)wrote;
@@ -378,16 +384,24 @@ namespace {
         }
 
         // The client's virtual EGL handles (EGLImpl mints small integers; ServerLoopEglTest's shape).
-        inline EGLDisplay Dpy() { return reinterpret_cast<EGLDisplay>(static_cast<std::uintptr_t>(0x1)); }
-        inline EGLSurface Surf() { return reinterpret_cast<EGLSurface>(static_cast<std::uintptr_t>(0x1)); }
-        inline EGLContext Ctx() { return reinterpret_cast<EGLContext>(static_cast<std::uintptr_t>(0x1)); }
+        inline EGLDisplay Dpy() {
+            return reinterpret_cast<EGLDisplay>(static_cast<std::uintptr_t>(0x1));
+        }
+        inline EGLSurface Surf() {
+            return reinterpret_cast<EGLSurface>(static_cast<std::uintptr_t>(0x1));
+        }
+        inline EGLContext Ctx() {
+            return reinterpret_cast<EGLContext>(static_cast<std::uintptr_t>(0x1));
+        }
 
         inline bool BringUpEgl(PeerReport& r) {
             EGLint major = -1;
             EGLint minor = -1;
-            if (!Remote::Server::ServerInitializeEGLDisplay(Dpy(), &major, &minor)) return Note(r, "no EGL display"), false;
+            if (!Remote::Server::ServerInitializeEGLDisplay(Dpy(), &major, &minor))
+                return Note(r, "no EGL display"), false;
             if (!Remote::Server::ServerCreateEGLPbufferSurface(Surf(), 8, 8)) return Note(r, "no pbuffer"), false;
-            if (!Remote::Server::ServerMakeEGLCurrent(Dpy(), Surf(), Surf(), Ctx())) return Note(r, "no make-current"), false;
+            if (!Remote::Server::ServerMakeEGLCurrent(Dpy(), Surf(), Surf(), Ctx()))
+                return Note(r, "no make-current"), false;
             r.egl = 1;
             return true;
         }
@@ -402,8 +416,7 @@ namespace {
         // texel little-endian in a Uint32, which is how PeerReport::pixel comes back and how every
         // expectation on it is written (green (0,1,0,1) is 0xFF00FF00). Decoding it in the other
         // order would clear the complement of the colour the caller asked for.
-        inline void HealthySessionWithColor(Remote::Client::ClientSession& client, PeerReport& r,
-                                            Uint32 rgba) {
+        inline void HealthySessionWithColor(Remote::Client::ClientSession& client, PeerReport& r, Uint32 rgba) {
             P::MGPMemoryBarrier barrier{};
             barrier.Bits = 0x2000u;
             r.applied = Emit(client, P::MGPWireOp::MemoryBarrier, &barrier, sizeof(barrier)) ? 1 : 0;
@@ -416,7 +429,8 @@ namespace {
             framebuffer.Width = framebuffer.Height = 8;
             framebuffer.Layers = framebuffer.Samples = 1;
             framebuffer.FixedSampleLocations = 1;
-            for (auto& drawBuffer : framebuffer.DrawBuffers) drawBuffer = -1;
+            for (auto& drawBuffer : framebuffer.DrawBuffers)
+                drawBuffer = -1;
             framebuffer.DrawBuffers[0] = 0;
             framebuffer.ContentHash = 1;
             P::MGPPixelPackState pack{};
@@ -429,7 +443,8 @@ namespace {
             const P::MGPipeHandle unboundSampler = P::kMGPipeNullHandle;
             const P::MGPContextValues context{};
             MobileGL::RenderStateParameters params{};
-            for (auto& mask : params.ColorMasks) mask = MobileGL::BoolVec4(true, true, true, true);
+            for (auto& mask : params.ColorMasks)
+                mask = MobileGL::BoolVec4(true, true, true, true);
             std::vector<Uint8> pipelineBytes(P::kMGPipePipelineChunkBytes, 0);
             P::MGPipeGatherPipelineBytes(params, pipelineBytes.data());
             P::MGPRenderStateDesc cso{};
@@ -446,7 +461,8 @@ namespace {
                 return Note(r, "the render state was not applied");
             if (!Emit(client, P::MGPWireOp::SetFramebufferState, &framebuffer, sizeof(framebuffer)) ||
                 !Emit(client, P::MGPWireOp::SetPixelPackState, &pack, sizeof(pack)) ||
-                !Emit(client, P::MGPWireOp::SetSamplerViews, &views, sizeof(views), &unboundView, sizeof(unboundView)) ||
+                !Emit(client, P::MGPWireOp::SetSamplerViews, &views, sizeof(views), &unboundView,
+                      sizeof(unboundView)) ||
                 !Emit(client, P::MGPWireOp::BindSamplerStates, &samplers, sizeof(samplers), &unboundSampler,
                       sizeof(unboundSampler)) ||
                 !Emit(client, P::MGPWireOp::SetContextValues, &context, sizeof(context)))
@@ -457,10 +473,9 @@ namespace {
             clear.DrawBufferIndex = 0;
             clear.BufferMask = GL_COLOR_BUFFER_BIT;
             clear.ValueClass = P::kMGPipeClearValueClassFloat;
-            const float color[4] = {static_cast<float>(rgba & 0xFFu) / 255.0f,
-                                    static_cast<float>((rgba >> 8) & 0xFFu) / 255.0f,
-                                    static_cast<float>((rgba >> 16) & 0xFFu) / 255.0f,
-                                    static_cast<float>((rgba >> 24) & 0xFFu) / 255.0f};
+            const float color[4] = {
+                static_cast<float>(rgba & 0xFFu) / 255.0f, static_cast<float>((rgba >> 8) & 0xFFu) / 255.0f,
+                static_cast<float>((rgba >> 16) & 0xFFu) / 255.0f, static_cast<float>((rgba >> 24) & 0xFFu) / 255.0f};
             std::memcpy(clear.ColorValue, color, sizeof(color));
             if (!Emit(client, P::MGPWireOp::Clear, &clear, sizeof(clear))) return Note(r, "clear not applied");
             P::MGPReadbackInfo read{};

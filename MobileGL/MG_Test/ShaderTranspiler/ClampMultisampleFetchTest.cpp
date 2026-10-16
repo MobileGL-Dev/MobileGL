@@ -74,8 +74,7 @@ namespace {
         EXPECT_TRUE(programResult) << (programResult ? String{} : programResult.error().log);
         if (!programResult) return {};
 
-        ProgramBinaryAttrib binaryAttrib{.shaderTypes = {GL_FRAGMENT_SHADER},
-                                         .program = *programResult.value()};
+        ProgramBinaryAttrib binaryAttrib{.shaderTypes = {GL_FRAGMENT_SHADER}, .program = *programResult.value()};
         auto binaryResult = ShaderCompiler::GetSpirvBinaryFromProgram(binaryAttrib);
         EXPECT_TRUE(binaryResult) << (binaryResult ? String{} : binaryResult.error().log);
         if (!binaryResult || binaryResult->empty()) return {};
@@ -275,9 +274,9 @@ TEST_F(ClampMultisampleFetchTest, LeavesAModuleWithoutAMultisampledImageUntouche
     ASSERT_FALSE(input.empty());
 
     Vector<Uint32> output;
-    ASSERT_TRUE(ShaderCompiler::ClampMultisampleFetchesForEssl(
-        input, output, /*maxColorSamples=*/4, /*maxIntegerSamples=*/1, /*maxDepthSamples=*/4,
-        kAdvertisedMaxSamples, true));
+    ASSERT_TRUE(ShaderCompiler::ClampMultisampleFetchesForEssl(input, output, /*maxColorSamples=*/4,
+                                                               /*maxIntegerSamples=*/1, /*maxDepthSamples=*/4,
+                                                               kAdvertisedMaxSamples, true));
     EXPECT_EQ(output, input) << Disassemble(output);
 }
 
@@ -299,9 +298,9 @@ TEST_F(ClampMultisampleFetchTest, ReplacesAnOutOfRangeIntegerSampleWithZero) {
     EXPECT_EQ(constantsBefore.at(sampleBefore->maskOperandIds.front()), 3u);
 
     Vector<Uint32> output;
-    ASSERT_TRUE(ShaderCompiler::ClampMultisampleFetchesForEssl(
-        input, output, /*maxColorSamples=*/4, /*maxIntegerSamples=*/1, /*maxDepthSamples=*/4,
-        kAdvertisedMaxSamples, true));
+    ASSERT_TRUE(ShaderCompiler::ClampMultisampleFetchesForEssl(input, output, /*maxColorSamples=*/4,
+                                                               /*maxIntegerSamples=*/1, /*maxDepthSamples=*/4,
+                                                               kAdvertisedMaxSamples, true));
     ASSERT_FALSE(output.empty());
     const String dis = Disassemble(output);
     ASSERT_TRUE(Validates(output)) << dis;
@@ -335,9 +334,9 @@ TEST_F(ClampMultisampleFetchTest, LeavesTheFetchAloneWhenTheCategoryReachesTheAd
     ASSERT_FALSE(input.empty());
 
     Vector<Uint32> output;
-    ASSERT_TRUE(ShaderCompiler::ClampMultisampleFetchesForEssl(
-        input, output, /*maxColorSamples=*/4, /*maxIntegerSamples=*/4, /*maxDepthSamples=*/4,
-        kAdvertisedMaxSamples, true));
+    ASSERT_TRUE(ShaderCompiler::ClampMultisampleFetchesForEssl(input, output, /*maxColorSamples=*/4,
+                                                               /*maxIntegerSamples=*/4, /*maxDepthSamples=*/4,
+                                                               kAdvertisedMaxSamples, true));
     EXPECT_EQ(output, input) << Disassemble(output);
 }
 
@@ -353,9 +352,9 @@ TEST_F(ClampMultisampleFetchTest, ClampsAColorSampleWithAMinimum) {
     const Uint32 originalSampleId = before.front().maskOperandIds.front();
 
     Vector<Uint32> output;
-    ASSERT_TRUE(ShaderCompiler::ClampMultisampleFetchesForEssl(
-        input, output, /*maxColorSamples=*/2, /*maxIntegerSamples=*/4, /*maxDepthSamples=*/4,
-        kAdvertisedMaxSamples, true));
+    ASSERT_TRUE(ShaderCompiler::ClampMultisampleFetchesForEssl(input, output, /*maxColorSamples=*/2,
+                                                               /*maxIntegerSamples=*/4, /*maxDepthSamples=*/4,
+                                                               kAdvertisedMaxSamples, true));
     ASSERT_FALSE(output.empty());
     const String dis = Disassemble(output);
     ASSERT_TRUE(Validates(output)) << dis;
@@ -422,8 +421,8 @@ TEST_F(ClampMultisampleFetchTest, DefersADirectUnsignedFetchToTheRuntimeBound) {
 
     Vector<Uint32> output;
     ASSERT_TRUE(ShaderCompiler::ClampMultisampleFetchesForEssl(
-        input, output, /*maxColorSamples=*/4, /*maxIntegerSamples=*/1, /*maxDepthSamples=*/4,
-        kAdvertisedMaxSamples, true, /*deferDirectUnsignedFetches=*/true));
+        input, output, /*maxColorSamples=*/4, /*maxIntegerSamples=*/1, /*maxDepthSamples=*/4, kAdvertisedMaxSamples,
+        true, /*deferDirectUnsignedFetches=*/true));
     ASSERT_FALSE(output.empty());
     const String dis = Disassemble(output);
     ASSERT_TRUE(Validates(output)) << dis;
@@ -437,9 +436,9 @@ TEST_F(ClampMultisampleFetchTest, WithoutTheRuntimeBoundEveryIntegerFetchKeepsTh
     ASSERT_FALSE(input.empty());
 
     Vector<Uint32> output;
-    ASSERT_TRUE(ShaderCompiler::ClampMultisampleFetchesForEssl(
-        input, output, /*maxColorSamples=*/4, /*maxIntegerSamples=*/1, /*maxDepthSamples=*/4,
-        kAdvertisedMaxSamples, true));
+    ASSERT_TRUE(ShaderCompiler::ClampMultisampleFetchesForEssl(input, output, /*maxColorSamples=*/4,
+                                                               /*maxIntegerSamples=*/1, /*maxDepthSamples=*/4,
+                                                               kAdvertisedMaxSamples, true));
     ASSERT_FALSE(output.empty());
     const String dis = Disassemble(output);
     EXPECT_EQ(CountSampleOperandsEqualTo(output, 3u), 0u) << dis;

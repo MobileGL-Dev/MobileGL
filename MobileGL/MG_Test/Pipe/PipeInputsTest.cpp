@@ -85,16 +85,19 @@ namespace {
     };
 
 #if MOBILEGL_PIPE_POISON
-    Bool Fresh(MGPipeInputField field) { return MGPipeInputFieldIsFresh(gPipeInputs->FilledState(), field); }
+    Bool Fresh(MGPipeInputField field) {
+        return MGPipeInputFieldIsFresh(gPipeInputs->FilledState(), field);
+    }
 #endif
 
-    [[maybe_unused]] constexpr const char* kOmittedFatal ="Fatal{UnmigratedPipeInput, \"GetActiveTextureUnit@GenerateMipmap\"}";
+    [[maybe_unused]] constexpr const char* kOmittedFatal =
+        "Fatal{UnmigratedPipeInput, \"GetActiveTextureUnit@GenerateMipmap\"}";
     [[maybe_unused]] constexpr const char* kOmissionKnob = "GenerateMipmap:GetActiveTextureUnit";
 
 #if MGTEST_HAVE_FORK
     struct ChildResult {
-        int Status = -1;   // waitpid's status; -1 when fork or waitpid failed
-        std::string Log;   // the lines the child appended to the log file
+        int Status = -1; // waitpid's status; -1 when fork or waitpid failed
+        std::string Log; // the lines the child appended to the log file
     };
 
     // Runs `body` in a forked child and returns its wait status and log delta. The child
@@ -118,8 +121,12 @@ namespace {
         return result;
     }
 
-    Bool DiedOfAbort(const ChildResult& r) { return WIFSIGNALED(r.Status) && WTERMSIG(r.Status) == SIGABRT; }
-    Bool ExitedWith(const ChildResult& r, int code) { return WIFEXITED(r.Status) && WEXITSTATUS(r.Status) == code; }
+    Bool DiedOfAbort(const ChildResult& r) {
+        return WIFSIGNALED(r.Status) && WTERMSIG(r.Status) == SIGABRT;
+    }
+    Bool ExitedWith(const ChildResult& r, int code) {
+        return WIFEXITED(r.Status) && WEXITSTATUS(r.Status) == code;
+    }
     std::string DescribeStatus(const ChildResult& r) {
         if (r.Status < 0) return "fork/waitpid failed";
         if (WIFEXITED(r.Status)) return "exited " + std::to_string(WEXITSTATUS(r.Status));
@@ -128,7 +135,6 @@ namespace {
     }
 #endif // MGTEST_HAVE_FORK
 } // namespace
-
 
 // Negative control B, layer 1 (P1 brief D6 / G5): the omitted (verb, field) pair is the
 // ONLY thing that goes stale - every other bit of the verb class's mask is fresh, every
@@ -190,7 +196,7 @@ TEST_F(PipeInputsTest, ReadingAnOmittedFieldAbortsNamingTheVerb) {
         MGPipeValidateForVerb(MGPipeVerb::GenerateMipmap);
         (void)gPipeInputs->GetTextureUnitObject(0); // the sibling field: filled, must not abort
         (void)gPipeInputs->GetActiveTextureUnit();  // the omitted field: Fatal
-        ::_exit(3);                                // reached only if the poison failed
+        ::_exit(3);                                 // reached only if the poison failed
     });
     ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
     EXPECT_NE(r.Log.find(kOmittedFatal), std::string::npos) << r.Log;
@@ -357,8 +363,8 @@ TEST_F(PipeInputsTest, MutatedFieldIsNamedAtRead) {
     EXPECT_NE(r.Log.find("MGPipe: verify read of GetLineWidth (index 0, 0) differs from the live context"),
               std::string::npos)
         << r.Log;
-    const std::string expected = "Fatal{PipeVerifyDiffer, \"GetLineWidth@DrawArrays\", verb=" + std::to_string(serial) +
-                                 ", where=read}";
+    const std::string expected =
+        "Fatal{PipeVerifyDiffer, \"GetLineWidth@DrawArrays\", verb=" + std::to_string(serial) + ", where=read}";
     EXPECT_NE(r.Log.find(expected), std::string::npos) << "expected " << expected << " in\n" << r.Log;
     EXPECT_EQ(r.Log.find("where=entry"), std::string::npos) << r.Log;
 #endif
@@ -385,8 +391,9 @@ TEST_F(PipeInputsTest, VerifyCorruptKnobNamesTheFieldAtEntry) {
     ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
     EXPECT_NE(r.Log.find("MGPipe: verify armed - 63 fields, 69 verbs, fatal=1"), std::string::npos) << r.Log;
     EXPECT_NE(r.Log.find("MGPipe: verify corruption armed - GetRenderStateParameters"), std::string::npos) << r.Log;
-    const std::string expected = "Fatal{PipeVerifyDiffer, \"GetRenderStateParameters@DrawArrays\", verb=" +
-                                 std::to_string(serial) + ", where=entry}";
+    const std::string expected =
+        "Fatal{PipeVerifyDiffer, \"GetRenderStateParameters@DrawArrays\", verb=" + std::to_string(serial) +
+        ", where=entry}";
     EXPECT_NE(r.Log.find(expected), std::string::npos) << "expected " << expected << " in\n" << r.Log;
 #endif
 }
@@ -442,10 +449,12 @@ TEST_F(PipeInputsTest, VerifyFatalOffLogsTheDivergenceAndContinues) {
     EXPECT_NE(r.Log.find("MGPipe: verify summary - 2 divergence(s) survived MOBILEGL_PIPE_VERIFY_FATAL=0"),
               std::string::npos)
         << r.Log;
-    const std::string first = "Fatal{PipeVerifyDiffer, \"GetRenderStateParameters@DrawArrays\", verb=" +
-                              std::to_string(serial) + ", where=entry}";
-    const std::string second = "Fatal{PipeVerifyDiffer, \"GetRenderStateParameters@DrawElements\", verb=" +
-                               std::to_string(serial + 1) + ", where=entry}";
+    const std::string first =
+        "Fatal{PipeVerifyDiffer, \"GetRenderStateParameters@DrawArrays\", verb=" + std::to_string(serial) +
+        ", where=entry}";
+    const std::string second =
+        "Fatal{PipeVerifyDiffer, \"GetRenderStateParameters@DrawElements\", verb=" + std::to_string(serial + 1) +
+        ", where=entry}";
     EXPECT_NE(r.Log.find(first), std::string::npos) << "expected " << first << " in\n" << r.Log;
     EXPECT_NE(r.Log.find(second), std::string::npos) << "expected " << second << " in\n" << r.Log;
 #endif
@@ -490,7 +499,7 @@ TEST_F(PipeInputsTest, AFrontendMutationInsideAVerbRefreshesThePushedField) {
     const Uint64 samplingBefore = ctx.GetSamplingResolutionGeneration();
     auto sampler = MakeShared<MG_State::GLState::SamplerObject>(0u);
     sampler->SetMinFilter(sampler->GetMinFilter() == SamplerFilterMode::Nearest ? SamplerFilterMode::Linear
-                                                                               : SamplerFilterMode::Nearest);
+                                                                                : SamplerFilterMode::Nearest);
     ASSERT_NE(ctx.GetSamplingResolutionGeneration(), samplingBefore) << "the mutation did not move the counter";
     EXPECT_EQ(gPipeInputs->GetSamplingResolutionGeneration(), ctx.GetSamplingResolutionGeneration());
 
@@ -567,7 +576,6 @@ TEST_F(PipeInputsTest, AFrontendMutationInsideAVerbDoesNotDivergeAtRead) {
     EXPECT_EQ(r.Log.find("PipeVerifyDiffer"), std::string::npos) << r.Log;
 #endif
 }
-
 
 int main(int argc, char** argv) {
     // Before anything logs: MG_Util::Debug::InitFile() reads the variable once, on the first

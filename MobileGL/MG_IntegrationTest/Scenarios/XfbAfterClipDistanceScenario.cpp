@@ -143,17 +143,20 @@ namespace MGITest {
                 break;
             case 1:
                 source += "float f(int i)\n{\n    return 0.25 + 0.75 * (float(i) + 1.0) * (float(gl_VertexID) + 1.0)"
-                          " / (float(" + count + ") * float(" + std::to_string(vertexCount) + "));\n}\n";
+                          " / (float(" +
+                          count + ") * float(" + std::to_string(vertexCount) + "));\n}\n";
                 break;
             default:
                 source += "float f(int i)\n{\n    return - 0.25 - 0.75 * (float(i) + 1.0) * (float(gl_VertexID) + 1.0)"
-                          " / (float(" + count + ") * float(" + std::to_string(vertexCount) + "));\n}\n";
+                          " / (float(" +
+                          count + ") * float(" + std::to_string(vertexCount) + "));\n}\n";
                 break;
             }
             source += "\nin vec4 position;\n\nvoid main()\n{\n";
             if (redeclaration) {
                 // Dynamic array setter.
-                source += "    for(int i = 0; i < " + count + "; i++)\n    {\n"
+                source += "    for(int i = 0; i < " + count +
+                          "; i++)\n    {\n"
                           "        gl_ClipDistance[i] = f(i);\n    }\n";
             } else {
                 // Static array setter, at the highest index this iteration enables.
@@ -210,14 +213,12 @@ void main()
                 glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, colorBuffer);
                 glViewport(0, 0, framebufferSize, framebufferSize);
 
-                const unsigned lastFunction =
-                    (primitiveIndex == stop.primitiveIndex) ? stop.clipFunction : 2u;
+                const unsigned lastFunction = (primitiveIndex == stop.primitiveIndex) ? stop.clipFunction : 2u;
                 for (unsigned clipFunction = 0; clipFunction <= lastFunction; ++clipFunction) {
                     const bool atStopFunction =
                         primitiveIndex == stop.primitiveIndex && clipFunction == stop.clipFunction;
                     for (unsigned redeclaration = 0; redeclaration < 2; ++redeclaration) {
-                        const bool atStopRedeclaration =
-                            atStopFunction && (redeclaration != 0) == stop.redeclaration;
+                        const bool atStopRedeclaration = atStopFunction && (redeclaration != 0) == stop.redeclaration;
                         const unsigned lastCount = atStopRedeclaration ? stop.clipCount : 8u;
                         for (unsigned clipCount = 1; clipCount <= lastCount; ++clipCount) {
                             std::string log;
@@ -239,14 +240,12 @@ void main()
                             glBindVertexArray(vao);
                             glGenBuffers(1, &vbo);
                             glBindBuffer(GL_ARRAY_BUFFER, vbo);
-                            glBufferData(GL_ARRAY_BUFFER,
-                                         static_cast<GLsizeiptr>(sizeof(float) * 4 * vertexCount),
+                            glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(sizeof(float) * 4 * vertexCount),
                                          kPositions[primitiveIndex], GL_STATIC_DRAW);
                             const GLint location = glGetAttribLocation(program, "position");
                             if (location >= 0) {
                                 glEnableVertexAttribArray(static_cast<GLuint>(location));
-                                glVertexAttribPointer(static_cast<GLuint>(location), 4, GL_FLOAT, GL_FALSE, 0,
-                                                      nullptr);
+                                glVertexAttribPointer(static_cast<GLuint>(location), 4, GL_FLOAT, GL_FALSE, 0, nullptr);
                             }
 
                             glDrawArrays(primitiveType, 0, vertexCount);
@@ -324,8 +323,16 @@ void main (void)
 
         // The skip_components capture layout, verbatim.
         std::vector<const char*> SkipComponentsVaryings() {
-            return {"gl_SkipComponents1", "value1",  "gl_SkipComponents2", "gl_SkipComponents1", "value2",
-                    "gl_SkipComponents3", "gl_SkipComponents2", "value3", "gl_SkipComponents4", "value4"};
+            return {"gl_SkipComponents1",
+                    "value1",
+                    "gl_SkipComponents2",
+                    "gl_SkipComponents1",
+                    "value2",
+                    "gl_SkipComponents3",
+                    "gl_SkipComponents2",
+                    "value3",
+                    "gl_SkipComponents4",
+                    "value4"};
         }
 
         constexpr unsigned kSkipComponentCount = 4 * 4 + (1 + 2 + 3 + 4 + 1 + 2); // 16 values + 13 skipped
@@ -389,8 +396,8 @@ void main (void)
             glUseProgram(program);
 
             const std::vector<float> vertices = {
-                -1.0f, -1.0f, -1.0f, 1.0f, 1.0f,  -1.0f, -2.0f, 1.0f, -1.0f, 1.0f, -3.0f, 1.0f,
-                1.0f,  1.0f,  4.0f,  1.0f, -1.0f, 1.0f,  5.0f,  1.0f, 1.0f,  -1.0f, 6.0f, 1.0f,
+                -1.0f, -1.0f, -1.0f, 1.0f, 1.0f,  -1.0f, -2.0f, 1.0f, -1.0f, 1.0f,  -3.0f, 1.0f,
+                1.0f,  1.0f,  4.0f,  1.0f, -1.0f, 1.0f,  5.0f,  1.0f, 1.0f,  -1.0f, 6.0f,  1.0f,
             };
 
             GLuint vao = 0;
@@ -435,8 +442,8 @@ void main (void)
                 // The streaming idiom: orphan the store, then upload only the part the
                 // application cares about keeping.
                 glBufferData(GL_ARRAY_BUFFER, storeSize, nullptr, GL_STATIC_DRAW);
-                glBufferSubData(GL_ARRAY_BUFFER, 0,
-                                static_cast<GLsizeiptr>(sizeof(float) * kOrphanStagedFloats), prefill.data());
+                glBufferSubData(GL_ARRAY_BUFFER, 0, static_cast<GLsizeiptr>(sizeof(float) * kOrphanStagedFloats),
+                                prefill.data());
                 break;
             case CaptureStoreShape::OrphanedWhole:
                 glBufferData(GL_ARRAY_BUFFER, storeSize, nullptr, GL_STATIC_DRAW);
@@ -476,8 +483,8 @@ void main (void)
         // pre-fill, the 16 captured ones carry |vertex| * n.
         std::vector<float> SkipComponentsExpected() {
             const std::vector<float> vertices = {
-                -1.0f, -1.0f, -1.0f, 1.0f, 1.0f,  -1.0f, -2.0f, 1.0f, -1.0f, 1.0f, -3.0f, 1.0f,
-                1.0f,  1.0f,  4.0f,  1.0f, -1.0f, 1.0f,  5.0f,  1.0f, 1.0f,  -1.0f, 6.0f, 1.0f,
+                -1.0f, -1.0f, -1.0f, 1.0f, 1.0f,  -1.0f, -2.0f, 1.0f, -1.0f, 1.0f,  -3.0f, 1.0f,
+                1.0f,  1.0f,  4.0f,  1.0f, -1.0f, 1.0f,  5.0f,  1.0f, 1.0f,  -1.0f, 6.0f,  1.0f,
             };
             const unsigned floatCount = kSkipVertexCount * kSkipComponentCount;
             std::vector<float> expected(floatCount);
@@ -524,10 +531,11 @@ void main (void)
             }
             for (std::size_t i = 0; i < expected.size(); ++i) {
                 if (std::fabs(captured[i] - expected[i]) > 0.0125f) {
-                    return ::testing::AssertionFailure()
-                           << "capture mismatch at index " << i << ": got " << captured[i] << ", expected "
-                           << expected[i] << (anyWritten ? "" : " (the whole buffer is still the pre-fill: "
-                                                               "NOTHING was captured)");
+                    return ::testing::AssertionFailure() << "capture mismatch at index " << i << ": got " << captured[i]
+                                                         << ", expected " << expected[i]
+                                                         << (anyWritten ? ""
+                                                                        : " (the whole buffer is still the pre-fill: "
+                                                                          "NOTHING was captured)");
                 }
             }
             return ::testing::AssertionSuccess();
@@ -545,15 +553,14 @@ void main (void)
         // wrong number, it is the pre-fill surviving where a varying belongs - the capture target
         // silently dropped and the buffer left holding its pre-draw bytes under GL_NO_ERROR.
         ::testing::AssertionResult CheckSkipComponentsOrphaned(const std::vector<float>& captured,
-                                                              unsigned stagedFloats) {
+                                                               unsigned stagedFloats) {
             const std::vector<float> expected = SkipComponentsExpected();
             if (captured.size() != expected.size()) {
                 return ::testing::AssertionFailure()
                        << "readback size " << captured.size() << " != " << expected.size();
             }
             for (std::size_t i = 0; i < expected.size(); ++i) {
-                const bool isCaptured =
-                    SkipComponentsIndexIsCaptured(static_cast<unsigned>(i) % kSkipComponentCount);
+                const bool isCaptured = SkipComponentsIndexIsCaptured(static_cast<unsigned>(i) % kSkipComponentCount);
                 if (i >= stagedFloats && !isCaptured) continue;
                 if (std::fabs(captured[i] - expected[i]) > 0.0125f) {
                     ::testing::AssertionResult failure = ::testing::AssertionFailure();
@@ -581,14 +588,14 @@ void main (void)
         // whole store, which is what the writeback crosses.
         void RunPlainCaptureIntoLargeRange(std::vector<float>& outCaptured, std::string* buildLog) {
             outCaptured.clear();
-            const GLuint program = BuildProgram(kXfbVertexSource, kXfbFragmentSource, {"value1"},
-                                                GL_INTERLEAVED_ATTRIBS, buildLog);
+            const GLuint program =
+                BuildProgram(kXfbVertexSource, kXfbFragmentSource, {"value1"}, GL_INTERLEAVED_ATTRIBS, buildLog);
             ASSERT_NE(program, 0u) << "plain capture program failed to link: " << (buildLog ? *buildLog : "");
             glUseProgram(program);
 
             const std::vector<float> vertices = {
-                -1.0f, -1.0f, -1.0f, 1.0f, 1.0f,  -1.0f, -2.0f, 1.0f, -1.0f, 1.0f, -3.0f, 1.0f,
-                1.0f,  1.0f,  4.0f,  1.0f, -1.0f, 1.0f,  5.0f,  1.0f, 1.0f,  -1.0f, 6.0f, 1.0f,
+                -1.0f, -1.0f, -1.0f, 1.0f, 1.0f,  -1.0f, -2.0f, 1.0f, -1.0f, 1.0f,  -3.0f, 1.0f,
+                1.0f,  1.0f,  4.0f,  1.0f, -1.0f, 1.0f,  5.0f,  1.0f, 1.0f,  -1.0f, 6.0f,  1.0f,
             };
 
             GLuint vao = 0;
@@ -608,7 +615,8 @@ void main (void)
             const unsigned capturedFloats = kSkipVertexCount * 4;
             const unsigned storeFloats = static_cast<unsigned>(kLargeCaptureRangeBytes / sizeof(float));
             std::vector<float> prefill(storeFloats);
-            for (unsigned i = 0; i < storeFloats; ++i) prefill[i] = -1.0f - static_cast<float>(i);
+            for (unsigned i = 0; i < storeFloats; ++i)
+                prefill[i] = -1.0f - static_cast<float>(i);
 
             GLuint captureBuffer = 0;
             glGenBuffers(1, &captureBuffer);
@@ -646,8 +654,8 @@ void main (void)
         // value1 == |vertex| * 1, one tight vec4 record per vertex.
         ::testing::AssertionResult CheckPlainCapture(const std::vector<float>& captured) {
             const std::vector<float> vertices = {
-                -1.0f, -1.0f, -1.0f, 1.0f, 1.0f,  -1.0f, -2.0f, 1.0f, -1.0f, 1.0f, -3.0f, 1.0f,
-                1.0f,  1.0f,  4.0f,  1.0f, -1.0f, 1.0f,  5.0f,  1.0f, 1.0f,  -1.0f, 6.0f, 1.0f,
+                -1.0f, -1.0f, -1.0f, 1.0f, 1.0f,  -1.0f, -2.0f, 1.0f, -1.0f, 1.0f,  -3.0f, 1.0f,
+                1.0f,  1.0f,  4.0f,  1.0f, -1.0f, 1.0f,  5.0f,  1.0f, 1.0f,  -1.0f, 6.0f,  1.0f,
             };
             if (captured.size() != vertices.size()) {
                 return ::testing::AssertionFailure()

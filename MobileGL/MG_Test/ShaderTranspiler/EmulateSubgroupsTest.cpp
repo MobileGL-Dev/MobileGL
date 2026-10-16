@@ -68,8 +68,7 @@ namespace {
         ForEachInstruction(spirv, [&](spv::Op opcode, const Uint32* words, Uint32 wordCount) {
             if (opcode != spv::Op::OpCapability || wordCount < 2u) return;
             const auto capability = static_cast<spv::Capability>(words[1]);
-            if (capability >= spv::Capability::GroupNonUniform &&
-                capability <= spv::Capability::GroupNonUniformQuad) {
+            if (capability >= spv::Capability::GroupNonUniform && capability <= spv::Capability::GroupNonUniformQuad) {
                 ++count;
             }
         });
@@ -97,10 +96,10 @@ namespace {
 
     bool Validates(const Vector<Uint32>& spirv) {
         spvtools::SpirvTools tools(SPV_ENV_VULKAN_1_1);
-        tools.SetMessageConsumer([](spv_message_level_t, const char*, const spv_position_t& position,
-                                    const char* message) {
-            ADD_FAILURE() << "spirv-val at word " << position.index << ": " << message;
-        });
+        tools.SetMessageConsumer(
+            [](spv_message_level_t, const char*, const spv_position_t& position, const char* message) {
+                ADD_FAILURE() << "spirv-val at word " << position.index << ": " << message;
+            });
         return tools.Validate(spirv);
     }
 

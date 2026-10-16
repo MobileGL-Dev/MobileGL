@@ -114,8 +114,10 @@ static int ScanPids(const char* pkg, int* pids) {
 
 static void Push(long long t, int index, long long cpu) {
     struct Sample* s = &ring[(ringHead + ringSize) % ringCap];
-    if (ringSize == ringCap) ringHead = (ringHead + 1) % ringCap;
-    else ++ringSize;
+    if (ringSize == ringCap)
+        ringHead = (ringHead + 1) % ringCap;
+    else
+        ++ringSize;
     s->t = t;
     s->index = index;
     s->cpu = cpu;

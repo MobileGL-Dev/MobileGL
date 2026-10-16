@@ -74,11 +74,11 @@ void main() { oColor = vec4(0.0, 1.0, 0.0, 1.0); }
         // indexed draws). Vertices 8..13 and 14..19: the same two quads as six vertices each
         // (for the arrays draws). x spans [-0.9, -0.1] and [0.1, 0.9]; y spans [-0.8, 0.8].
         constexpr Vertex kVertices[20] = {
-            {-0.9f, -0.8f}, {-0.1f, -0.8f}, {-0.1f, 0.8f}, {-0.9f, 0.8f}, // 0..3 left
-            {0.1f, -0.8f},  {0.9f, -0.8f},  {0.9f, 0.8f},  {0.1f, 0.8f},  // 4..7 right
+            {-0.9f, -0.8f}, {-0.1f, -0.8f}, {-0.1f, 0.8f},  {-0.9f, 0.8f}, // 0..3 left
+            {0.1f, -0.8f},  {0.9f, -0.8f},  {0.9f, 0.8f},   {0.1f, 0.8f},  // 4..7 right
             {-0.9f, -0.8f}, {-0.1f, -0.8f}, {-0.1f, 0.8f},                 // 8..13 left, arrays
-            {-0.1f, 0.8f},  {-0.9f, 0.8f},  {-0.9f, -0.8f},
-            {0.1f, -0.8f},  {0.9f, -0.8f},  {0.9f, 0.8f},                  // 14..19 right, arrays
+            {-0.1f, 0.8f},  {-0.9f, 0.8f},  {-0.9f, -0.8f}, {0.1f, -0.8f},
+            {0.9f, -0.8f},  {0.9f, 0.8f}, // 14..19 right, arrays
             {0.9f, 0.8f},   {0.1f, 0.8f},   {0.1f, -0.8f},
         };
 
@@ -149,14 +149,14 @@ void main() { oColor = vec4(0.0, 1.0, 0.0, 1.0); }
             void ExpectLeft(const Image& image, const char* color, const std::string& when) {
                 const int w = image.Width();
                 const int h = image.Height();
-                EXPECT_TRUE(RegionIsMostly(image, (w * 20) / 100, (w * 30) / 100, (h * 40) / 100,
-                                           (h * 60) / 100, color, 0.0, when + " (left quad)"));
+                EXPECT_TRUE(RegionIsMostly(image, (w * 20) / 100, (w * 30) / 100, (h * 40) / 100, (h * 60) / 100, color,
+                                           0.0, when + " (left quad)"));
             }
             void ExpectRight(const Image& image, const char* color, const std::string& when) {
                 const int w = image.Width();
                 const int h = image.Height();
-                EXPECT_TRUE(RegionIsMostly(image, (w * 70) / 100, (w * 80) / 100, (h * 40) / 100,
-                                           (h * 60) / 100, color, 0.0, when + " (right quad)"));
+                EXPECT_TRUE(RegionIsMostly(image, (w * 70) / 100, (w * 80) / 100, (h * 40) / 100, (h * 60) / 100, color,
+                                           0.0, when + " (right quad)"));
             }
             void ExpectCorner(const Image& image, const char* color, const std::string& when) {
                 const int w = image.Width();
@@ -180,8 +180,7 @@ void main() { oColor = vec4(0.0, 1.0, 0.0, 1.0); }
     TEST_F(IndexedDrawFamilyScenario, AnElementBufferDrawElementsOffsetSelectsTheRightQuad) {
         if (!Ready() || IsSkipped()) return;
         const Image image = ClearThenDrawThenRead([] {
-            glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT,
-                           reinterpret_cast<const void*>(kRightRunByteOffset));
+            glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, reinterpret_cast<const void*>(kRightRunByteOffset));
         });
         EXPECT_EQ(FirstGLError(), 0u);
         ExpectRight(image, "green", "glDrawElements at byte offset 12");
@@ -212,9 +211,8 @@ void main() { oColor = vec4(0.0, 1.0, 0.0, 1.0); }
     // the picture to the right quad.
     TEST_F(IndexedDrawFamilyScenario, DrawElementsBaseVertexMovesTheSameIndicesToTheOtherQuad) {
         if (!Ready() || IsSkipped()) return;
-        const Image image = ClearThenDrawThenRead([] {
-            glDrawElementsBaseVertex(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, nullptr, 4);
-        });
+        const Image image =
+            ClearThenDrawThenRead([] { glDrawElementsBaseVertex(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, nullptr, 4); });
         EXPECT_EQ(FirstGLError(), 0u);
         ExpectRight(image, "green", "glDrawElementsBaseVertex(basevertex = 4)");
         ExpectLeft(image, "blue", "a base vertex of 4 must not paint the left quad");
@@ -237,17 +235,15 @@ void main() { oColor = vec4(0.0, 1.0, 0.0, 1.0); }
     // second onto the right box, so an InstanceCount that did not cross paints one quad.
     TEST_F(IndexedDrawFamilyScenario, DrawElementsInstancedBaseVertexPaintsOneQuadPerInstance) {
         if (!Ready() || IsSkipped()) return;
-        const Image two = ClearThenDrawThenRead([] {
-            glDrawElementsInstancedBaseVertex(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, nullptr, 2, 0);
-        });
+        const Image two = ClearThenDrawThenRead(
+            [] { glDrawElementsInstancedBaseVertex(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, nullptr, 2, 0); });
         EXPECT_EQ(FirstGLError(), 0u);
         ExpectLeft(two, "green", "instance 0 of the left quad");
         ExpectRight(two, "green", "instance 1 of the left quad, shifted by gl_InstanceID");
         ExpectCorner(two, "blue", "instanced draw");
 
-        const Image one = ClearThenDrawThenRead([] {
-            glDrawElementsInstancedBaseVertex(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, nullptr, 1, 0);
-        });
+        const Image one = ClearThenDrawThenRead(
+            [] { glDrawElementsInstancedBaseVertex(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, nullptr, 1, 0); });
         ExpectLeft(one, "green", "one instance");
         ExpectRight(one, "blue", "one instance must not paint the right quad");
     }
@@ -292,9 +288,8 @@ void main() { oColor = vec4(0.0, 1.0, 0.0, 1.0); }
         glBindBuffer(GL_DRAW_INDIRECT_BUFFER, m_indirect);
         glBufferData(GL_DRAW_INDIRECT_BUFFER, GLsizeiptr(sizeof(commands)), commands, GL_STATIC_DRAW);
         ASSERT_EQ(FirstGLError(), 0u) << "building the indirect buffer";
-        const Image both = ClearThenDrawThenRead([] {
-            glMultiDrawElementsIndirect(GL_TRIANGLES, GL_UNSIGNED_SHORT, nullptr, 2, 0);
-        });
+        const Image both =
+            ClearThenDrawThenRead([] { glMultiDrawElementsIndirect(GL_TRIANGLES, GL_UNSIGNED_SHORT, nullptr, 2, 0); });
         EXPECT_EQ(FirstGLError(), 0u);
         ExpectLeft(both, "green", "indirect command 0");
         ExpectRight(both, "green", "indirect command 1 (firstIndex 6)");

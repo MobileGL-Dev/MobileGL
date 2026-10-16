@@ -169,9 +169,9 @@ namespace {
         // live" - which is checkable in whichever configuration this was built in,
         // and is what makes the renumbering safe.
         const Emitted e = EmitAndRead();
-        EXPECT_EQ(kAssertsLive, e.debug)
-            << "MOBILEGL_ASSERT liveness (" << kAssertsLive << ") disagrees with MGLOG_D liveness ("
-            << e.debug << "). The Defines.h assert gate and the Log.h MGLOG_D gate have drifted.";
+        EXPECT_EQ(kAssertsLive, e.debug) << "MOBILEGL_ASSERT liveness (" << kAssertsLive
+                                         << ") disagrees with MGLOG_D liveness (" << e.debug
+                                         << "). The Defines.h assert gate and the Log.h MGLOG_D gate have drifted.";
     }
 
     TEST(LogLevel, AssertIsCompiledOutOfProductionBuilds) {
@@ -218,8 +218,7 @@ int main(int argc, char** argv) {
     // main thread (client role), so the read path is the client-derived one; a pull build has
     // no split and keeps the base. The env keeps the base either way.
 #if MOBILEGL_BUILD_DISAGGREGATED
-    g_logPath = MobileGL::MG_Util::Debug::RoleLogPath(g_logPath.c_str(),
-                                                      MobileGL::MG_Util::Debug::LogRole::Client);
+    g_logPath = MobileGL::MG_Util::Debug::RoleLogPath(g_logPath.c_str(), MobileGL::MG_Util::Debug::LogRole::Client);
 #endif
 
     ::testing::InitGoogleTest(&argc, argv);

@@ -67,8 +67,8 @@ namespace MGITest {
     namespace {
 
         constexpr int kViewportCount = 16;
-        constexpr int kGridSide = 4;   // 4x4 grid of viewports
-        constexpr int kCellSize = 32;  // ... each 32x32
+        constexpr int kGridSide = 4;  // 4x4 grid of viewports
+        constexpr int kCellSize = 32; // ... each 32x32
         constexpr int kSurfaceSide = kGridSide * kCellSize;
         constexpr GLint kUnwritten = -1;
 
@@ -168,8 +168,7 @@ void main() { fragColor = gl_FragCoord.z; }
                 if (m_vao != 0) glDeleteVertexArrays(1, &m_vao);
                 if (m_program != 0) glDeleteProgram(m_program);
                 glBindFramebuffer(GL_FRAMEBUFFER, 0);
-                while (glGetError() != GL_NO_ERROR) {
-                }
+                while (glGetError() != GL_NO_ERROR) {}
             }
 
             // Every case starts from the same slate: this fixture shares its context with every
@@ -474,7 +473,7 @@ void main() { fragColor = vec4(float(gsIndex) * 16.0 / 255.0, 0.0, 0.0, 1.0); }
             const GLint uViewport = glGetUniformLocation(singleProgram, "uViewport");
             ASSERT_NE(uViewport, -1);
 
-            constexpr GLint kProbeIndex = 6;  // grid cell (2, 1)
+            constexpr GLint kProbeIndex = 6; // grid cell (2, 1)
             constexpr int kProbeX = kProbeIndex % kGridSide;
             constexpr int kProbeY = kProbeIndex / kGridSide;
 
@@ -640,8 +639,7 @@ void main() { fragColor = 7; }
                 glBindTexture(GL_TEXTURE_2D, m_texture);
                 glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
                 glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-                glTexImage2D(GL_TEXTURE_2D, 0, GL_R32I, kSurfaceSide, kSurfaceSide, 0, GL_RED_INTEGER, GL_INT,
-                             nullptr);
+                glTexImage2D(GL_TEXTURE_2D, 0, GL_R32I, kSurfaceSide, kSurfaceSide, 0, GL_RED_INTEGER, GL_INT, nullptr);
                 glGenFramebuffers(1, &m_fbo);
                 glBindFramebuffer(GL_FRAMEBUFFER, m_fbo);
                 glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m_texture, 0);
@@ -666,8 +664,7 @@ void main() { fragColor = 7; }
                 glBindFramebuffer(GL_FRAMEBUFFER, 0);
                 if (m_fbo != 0) glDeleteFramebuffers(1, &m_fbo);
                 if (m_texture != 0) glDeleteTextures(1, &m_texture);
-                while (glGetError() != GL_NO_ERROR) {
-                }
+                while (glGetError() != GL_NO_ERROR) {}
             }
 
             static void ResetScissorState() {
@@ -769,7 +766,8 @@ void main() { fragColor = 7; }
                 const std::vector<GLint> pixels = ReadTarget();
                 for (size_t i = 0; i < pixels.size(); ++i) {
                     ASSERT_EQ(pixels[i], kUnwritten)
-                        << "texel " << i << " was painted through a 0x0 scissor box: the empty rectangle was "
+                        << "texel " << i
+                        << " was painted through a 0x0 scissor box: the empty rectangle was "
                            "substituted with the whole surface, inverting 'clip everything' into 'clip nothing'";
                 }
             }
@@ -800,8 +798,9 @@ void main() { fragColor = 7; }
 
             const std::vector<GLint> pixels = ReadTarget();
             for (size_t i = 0; i < pixels.size(); ++i) {
-                ASSERT_EQ(pixels[i], kUnwritten) << "texel " << i << " was painted through a zero-extent indexed "
-                                                                     "scissor box";
+                ASSERT_EQ(pixels[i], kUnwritten) << "texel " << i
+                                                 << " was painted through a zero-extent indexed "
+                                                    "scissor box";
             }
         }
 

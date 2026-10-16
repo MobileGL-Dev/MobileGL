@@ -72,13 +72,10 @@ namespace MobileGL {
                 // The three backend-REAL per-category ceilings, plus the count the GL frontend
                 // advertises (GL_Getter's GetAdvertisedMaxSamples). A category whose real ceiling
                 // already reaches the advertised one is left completely alone.
-                ClampMultisampleFetchPass(Int32 maxColorSamples, Int32 maxIntegerSamples,
-                                          Int32 maxDepthSamples, Int32 advertisedMaxSamples,
-                                          bool deferDirectUnsignedFetches = false)
-                    : m_maxColorSamples(maxColorSamples),
-                      m_maxIntegerSamples(maxIntegerSamples),
-                      m_maxDepthSamples(maxDepthSamples),
-                      m_advertisedMaxSamples(advertisedMaxSamples),
+                ClampMultisampleFetchPass(Int32 maxColorSamples, Int32 maxIntegerSamples, Int32 maxDepthSamples,
+                                          Int32 advertisedMaxSamples, bool deferDirectUnsignedFetches = false)
+                    : m_maxColorSamples(maxColorSamples), m_maxIntegerSamples(maxIntegerSamples),
+                      m_maxDepthSamples(maxDepthSamples), m_advertisedMaxSamples(advertisedMaxSamples),
                       m_deferDirectUnsignedFetches(deferDirectUnsignedFetches) {}
 
                 const char* name() const override { return "clamp-multisample-fetch"; }
@@ -95,8 +92,8 @@ namespace MobileGL {
                 static bool DeclaresMultisampledImage(spvtools::opt::IRContext* context);
 
                 static spvtools::Optimizer::PassToken CreateClampMultisampleFetchPass(
-                    Int32 maxColorSamples, Int32 maxIntegerSamples, Int32 maxDepthSamples,
-                    Int32 advertisedMaxSamples, bool deferDirectUnsignedFetches = false);
+                    Int32 maxColorSamples, Int32 maxIntegerSamples, Int32 maxDepthSamples, Int32 advertisedMaxSamples,
+                    bool deferDirectUnsignedFetches = false);
 
             private:
                 Int32 m_maxColorSamples;

@@ -174,7 +174,9 @@ namespace MobileGL::MG_Pipe {
         RecordDeath(family, line);
     }
 
-    bool MGPipeRecordLatched() { return g_recordLatchedHook != nullptr && g_recordLatchedHook(); }
+    bool MGPipeRecordLatched() {
+        return g_recordLatchedHook != nullptr && g_recordLatchedHook();
+    }
 
     void MGPipeProtocolFatal(const char* what, const char* detail) {
         MGPipeRecordFail(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"%s\"} %s", what,
@@ -182,25 +184,38 @@ namespace MobileGL::MG_Pipe {
     }
 
     void MGPipeProtocolFatalAt(const char* what, Uint64 got, Uint64 expected) {
-        MGPipeRecordFail(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"%s\"} got=%llu expected=%llu",
-                         what, static_cast<unsigned long long>(got), static_cast<unsigned long long>(expected));
+        MGPipeRecordFail(MGFatalFamily::ProtocolCorruption,
+                         "MGPipe: Fatal{ProtocolCorruption, \"%s\"} got=%llu expected=%llu", what,
+                         static_cast<unsigned long long>(got), static_cast<unsigned long long>(expected));
     }
 
-    MGPipeRecordFailHook MGPipeRecordFailHookInstalled() { return g_recordFailHook; }
-    MGPipeRecordLatchHook MGPipeRecordLatchHookInstalled() { return g_recordLatchHook; }
-    MGPipeRecordLatchedHook MGPipeRecordLatchedHookInstalled() { return g_recordLatchedHook; }
+    MGPipeRecordFailHook MGPipeRecordFailHookInstalled() {
+        return g_recordFailHook;
+    }
+    MGPipeRecordLatchHook MGPipeRecordLatchHookInstalled() {
+        return g_recordLatchHook;
+    }
+    MGPipeRecordLatchedHook MGPipeRecordLatchedHookInstalled() {
+        return g_recordLatchedHook;
+    }
 
     // P13 W5: the client session's device-loss answer (PipeClientSeam.h). Constant-initialized for
     // the same static-init reason as the hooks above.
     namespace {
         constinit MGPipeClientDeviceLostProbe g_clientDeviceLostProbe = nullptr;
     } // namespace
-    void MGPipeSetClientDeviceLostProbe(MGPipeClientDeviceLostProbe probe) { g_clientDeviceLostProbe = probe; }
-    Bool MGPipeClientDeviceLost() { return g_clientDeviceLostProbe != nullptr && g_clientDeviceLostProbe(); }
+    void MGPipeSetClientDeviceLostProbe(MGPipeClientDeviceLostProbe probe) {
+        g_clientDeviceLostProbe = probe;
+    }
+    Bool MGPipeClientDeviceLost() {
+        return g_clientDeviceLostProbe != nullptr && g_clientDeviceLostProbe();
+    }
     namespace {
         constinit MGPipeClientLossConfirmer g_clientLossConfirmer = nullptr;
     } // namespace
-    void MGPipeSetClientLossConfirmer(MGPipeClientLossConfirmer confirmer) { g_clientLossConfirmer = confirmer; }
+    void MGPipeSetClientLossConfirmer(MGPipeClientLossConfirmer confirmer) {
+        g_clientLossConfirmer = confirmer;
+    }
     Bool MGPipeClientConfirmLossAfterDecline(Uint32 waitMs) {
         return g_clientLossConfirmer != nullptr && g_clientLossConfirmer(waitMs);
     }
@@ -219,9 +234,13 @@ namespace MobileGL::MG_Pipe {
         MGPipeSessionFailHook g_sessionFailHook = nullptr;
     } // namespace
 
-    void MGPipeInstallSessionFailHook(MGPipeSessionFailHook hook) { g_sessionFailHook = hook; }
+    void MGPipeInstallSessionFailHook(MGPipeSessionFailHook hook) {
+        g_sessionFailHook = hook;
+    }
 
-    MGPipeSessionFailHook MGPipeSessionFailHookInstalled() { return g_sessionFailHook; }
+    MGPipeSessionFailHook MGPipeSessionFailHookInstalled() {
+        return g_sessionFailHook;
+    }
 
     void MGPipeSessionFail(MGPipeFatalFamily family, const char* fmt, ...) {
         // The same 512-byte buffer and the same fallback SessionFail and WireLogFatal use, so a
@@ -232,8 +251,7 @@ namespace MobileGL::MG_Pipe {
         const int written = std::vsnprintf(line, sizeof(line), fmt, args);
         va_end(args);
         if (written < 0) {
-            std::snprintf(line, sizeof(line),
-                          "MGPipe: unformattable Fatal diagnostic (format=%s)", fmt);
+            std::snprintf(line, sizeof(line), "MGPipe: unformattable Fatal diagnostic (format=%s)", fmt);
         }
         if (g_sessionFailHook != nullptr) g_sessionFailHook(family, line);
         // NO HOOK: exactly what the three funnels did before this seam existed - the line, then
@@ -245,7 +263,6 @@ namespace MobileGL::MG_Pipe {
         std::abort();
     }
 
-
     namespace {
         MGPipeSessionLatchHook g_sessionLatchHook = nullptr;
         MGPipeSessionLatchArmedHook g_sessionLatchArmedHook = nullptr;
@@ -256,10 +273,13 @@ namespace MobileGL::MG_Pipe {
         g_sessionLatchArmedHook = armed;
     }
 
-    MGPipeSessionLatchHook MGPipeSessionLatchHookInstalled() { return g_sessionLatchHook; }
+    MGPipeSessionLatchHook MGPipeSessionLatchHookInstalled() {
+        return g_sessionLatchHook;
+    }
 
-    bool MGPipeSessionLatchArmed() { return g_sessionLatchArmedHook != nullptr && g_sessionLatchArmedHook(); }
-
+    bool MGPipeSessionLatchArmed() {
+        return g_sessionLatchArmedHook != nullptr && g_sessionLatchArmedHook();
+    }
 
 #if MOBILEGL_BUILD_DISAGGREGATED
     bool MGPipeDebugDeviceLossDue() {
@@ -348,8 +368,7 @@ namespace MobileGL::MG_Pipe {
         const int written = std::vsnprintf(line, sizeof(line), fmt, args);
         va_end(args);
         if (written < 0) {
-            std::snprintf(line, sizeof(line),
-                          "MGPipe: unformattable Fatal diagnostic (format=%s)", fmt);
+            std::snprintf(line, sizeof(line), "MGPipe: unformattable Fatal diagnostic (format=%s)", fmt);
         }
         if (g_sessionLatchHook != nullptr) return g_sessionLatchHook(family, line);
         // NO HOOK: no session to latch, so the death the fail seam would have given.
@@ -384,8 +403,7 @@ namespace MobileGL::MG_Pipe {
         // DeriveCapability's sources: the 25 plain bools, plus the three masks/arrays the
         // three special arms read.
 #define MGP_CAPABILITY_CHUNKS(capability) | MGP_CHUNKS_OF(capability##Enabled)
-        constexpr Uint32 kChunksCapabilityWalk = MGP_CHUNKS_OF(BlendStates) |
-                                                 MGP_CHUNKS_OF(ScissorTestEnabledMask) |
+        constexpr Uint32 kChunksCapabilityWalk = MGP_CHUNKS_OF(BlendStates) | MGP_CHUNKS_OF(ScissorTestEnabledMask) |
                                                  MGP_CHUNKS_OF(ClipDistanceEnabledMask)
                                                      MGP_PLAIN_CAPABILITY_LIST(MGP_CAPABILITY_CHUNKS);
 #undef MGP_CAPABILITY_CHUNKS
@@ -393,8 +411,7 @@ namespace MobileGL::MG_Pipe {
         // The patch trio's chunk, which is what arms the set_patch_state trip wire: the
         // question that wire asks is whether the chunk-P0 bytes in the working block are the
         // APPLIER'S, and only a scatter puts them there.
-        constexpr Uint32 kChunksPatchTrio = MGP_CHUNKS_OF(PatchVertices) |
-                                            MGP_CHUNKS_OF(PatchDefaultOuterLevel) |
+        constexpr Uint32 kChunksPatchTrio = MGP_CHUNKS_OF(PatchVertices) | MGP_CHUNKS_OF(PatchDefaultOuterLevel) |
                                             MGP_CHUNKS_OF(PatchDefaultInnerLevel);
 
         // Which chunks ONE capability's answer is read out of - the same sources
@@ -458,8 +475,7 @@ namespace MobileGL::MG_Pipe {
         static void SetRenderStateParametersVersion(PipeInputs& inputs, Uint parameters) {
             inputs.m_renderStateParametersVersion = parameters;
         }
-        static void SetPatchState(PipeInputs& inputs, Uint vertices, const FloatVec4& outer,
-                                  const FloatVec2& inner) {
+        static void SetPatchState(PipeInputs& inputs, Uint vertices, const FloatVec4& outer, const FloatVec2& inner) {
             inputs.m_patchVertices = vertices;
             inputs.m_patchDefaultOuterLevel = outer;
             inputs.m_patchDefaultInnerLevel = inner;
@@ -472,8 +488,7 @@ namespace MobileGL::MG_Pipe {
             inputs.m_activeTextureUnit = static_cast<Int>(values.ActiveTextureUnit);
             inputs.m_maxTouchedTextureUnit = static_cast<Int>(values.MaxTouchedTextureUnit);
             for (SizeT i = 0; i < PipeInputs::kBufferTargetCount; ++i) {
-                inputs.m_touchedBindingPointCount[i] =
-                    static_cast<SizeT>(values.TouchedBufferBindingPointCount[i]);
+                inputs.m_touchedBindingPointCount[i] = static_cast<SizeT>(values.TouchedBufferBindingPointCount[i]);
             }
             inputs.m_transformFeedbackActive = values.IsTransformFeedbackActive != 0;
             inputs.m_transformFeedbackPaused = values.IsTransformFeedbackPaused != 0;
@@ -777,7 +792,7 @@ namespace MobileGL::MG_Pipe {
 
     namespace {
         std::atomic<MGPipeCompileEnvChangedHook> g_compileEnvChangedHook{nullptr};
-    }
+    } // namespace
 
     void MGPipeSetCompileEnvChangedHook(MGPipeCompileEnvChangedHook hook) {
         g_compileEnvChangedHook.store(hook, std::memory_order_release);
@@ -905,8 +920,7 @@ namespace MobileGL::MG_Pipe {
             return &record;
         }
 
-        constexpr Uint32 kAllPipelineChunks =
-            static_cast<Uint32>((Uint64{1} << kMGPipePipelineChunkCount) - 1);
+        constexpr Uint32 kAllPipelineChunks = static_cast<Uint32>((Uint64{1} << kMGPipePipelineChunkCount) - 1);
 
         // ----------------------------------------------------------------------------
         // P3a: resolving a handle, growing a slot table, and the bounds gate.
@@ -1033,8 +1047,7 @@ namespace MobileGL::MG_Pipe {
             if (stored.Target != next.Target) return false;
             if (stored.StorageKind != next.StorageKind) return false;
             if (stored.InternalFormat != next.InternalFormat) return false;
-            if (stored.Width != next.Width || stored.Height != next.Height ||
-                stored.Depth != next.Depth) {
+            if (stored.Width != next.Width || stored.Height != next.Height || stored.Depth != next.Depth) {
                 return false;
             }
             if (stored.ArrayLayers != next.ArrayLayers || stored.Levels != next.Levels ||
@@ -1080,7 +1093,7 @@ namespace MobileGL::MG_Pipe {
         // buffer's do; the object counter beside it is for the five families that have no
         // resource call at all (framebuffer, sampler, sampler view, program, texture params).
         MGPipeResourceRecord* ResolveResourceIn(Vector<MGPipeResourceRecord>& table, const char* call,
-                                               MGPipeHandle res) {
+                                                MGPipeHandle res) {
             MGPipeResourceRecord* record = FindIn(table, res);
             MOBILEGL_ASSERT(record != nullptr, "%s named {slot=%u, gen=%u}: %s", call, res.Slot, res.Gen,
                             kResourceRefusalNote);
@@ -1095,8 +1108,8 @@ namespace MobileGL::MG_Pipe {
         template <class Record>
         Record* ResolveObject(Vector<Record>& table, const char* call, MGPipeHandle handle) {
             Record* record = FindIn(table, handle);
-            MOBILEGL_ASSERT(record != nullptr, "%s named {slot=%u, gen=%u}: %s", call, handle.Slot,
-                            handle.Gen, kResourceRefusalNote);
+            MOBILEGL_ASSERT(record != nullptr, "%s named {slot=%u, gen=%u}: %s", call, handle.Slot, handle.Gen,
+                            kResourceRefusalNote);
             if (record == nullptr) ++MGPipeApplier().RefusedObjectCalls;
             return record;
         }
@@ -1160,7 +1173,9 @@ namespace MobileGL::MG_Pipe {
 
         // A box is EMPTY when any extent is zero, and an empty box unions to nothing. Written
         // once because the accumulation below needs it in three places.
-        Bool BoxIsEmpty(const MGPBox& box) { return box.W == 0 || box.H == 0 || box.D == 0; }
+        Bool BoxIsEmpty(const MGPBox& box) {
+            return box.W == 0 || box.H == 0 || box.D == 0;
+        }
 
         // A box stays inside the range one record can encode: the origin is a signed Int32 and
         // the extent an unsigned Uint32, so an origin plus an extent that leaves the positive
@@ -1172,8 +1187,7 @@ namespace MobileGL::MG_Pipe {
         }
 
         Bool BoxIsEncodable(const MGPBox& box) {
-            return BoxIsEncodable(box.X, box.W) && BoxIsEncodable(box.Y, box.H) &&
-                   BoxIsEncodable(box.Z, box.D);
+            return BoxIsEncodable(box.X, box.W) && BoxIsEncodable(box.Y, box.H) && BoxIsEncodable(box.Z, box.D);
         }
 
         Bool AxisContains(Int32 outerOrigin, Uint32 outerExtent, Int32 innerOrigin, Uint32 innerExtent) {
@@ -1237,8 +1251,8 @@ namespace MobileGL::MG_Pipe {
             const Int64 xEnd = std::max(static_cast<Int64>(a.X) + a.W, static_cast<Int64>(b.X) + b.W);
             const Int64 yEnd = std::max(static_cast<Int64>(a.Y) + a.H, static_cast<Int64>(b.Y) + b.H);
             const Int64 zEnd = std::max(static_cast<Int64>(a.Z) + a.D, static_cast<Int64>(b.Z) + b.D);
-            return MGPBox{x, y, z, static_cast<Uint32>(xEnd - x), static_cast<Uint32>(yEnd - y),
-                          static_cast<Uint32>(zEnd - z)};
+            return MGPBox{
+                x, y, z, static_cast<Uint32>(xEnd - x), static_cast<Uint32>(yEnd - y), static_cast<Uint32>(zEnd - z)};
         }
 
         // The server-side pending-upload set (ARCHITECTURE.md §6.1). The client clears a level's
@@ -1300,30 +1314,27 @@ namespace MobileGL::MG_Pipe {
         // the wrong key; both show up only as missing pixels. One-directional: in-process emission
         // (MG_Impl/Pipe/TextureEmit.h) leaves the carrier clear and states the scope in the
         // pointer alone, which is legal.
-        void PinRespecifyScopeCoversItsDeclaration(const MGPResourceDesc& desc,
-                                                   const MGPRespecifiedLevel* level, MGPipeHandle res,
-                                                   const char* call) {
+        void PinRespecifyScopeCoversItsDeclaration(const MGPResourceDesc& desc, const MGPRespecifiedLevel* level,
+                                                   MGPipeHandle res, const char* call) {
             if (MGPipeRespecifyIsWholeResource(desc)) return;
             const Uint16 declaredTarget = MGPipeRespecifiedUploadTargetOf(desc);
             const Uint16 declaredLevel = MGPipeRespecifiedLevelOf(desc);
-            if (level != nullptr && level->UploadTarget == declaredTarget &&
-                level->Level == declaredLevel) {
+            if (level != nullptr && level->UploadTarget == declaredTarget && level->Level == declaredLevel) {
                 return;
             }
-            MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG("PipeRespecifyScope")
-                                 " %s {slot=%u, gen=%u}: the descriptor declares a per-level respecify "
-                                 "scope (target=%u, level=%u) and this call covers %s(target=%u, "
-                                 "level=%u), so a per-level producer is not covering the range it "
-                                 "declares",
-                                 call, res.Slot, res.Gen, static_cast<unsigned>(declaredTarget),
-                                 static_cast<unsigned>(declaredLevel),
-                                 level == nullptr ? "NOTHING " : "",
-                                 level == nullptr ? 0u : static_cast<unsigned>(level->UploadTarget),
-                                 level == nullptr ? 0u : static_cast<unsigned>(level->Level));
+            MGP_TRIP_WIRE_REPORT(
+                "MGPipe: " MGP_TRIP_WIRE_TAG(
+                    "PipeRespecifyScope") " %s {slot=%u, gen=%u}: the descriptor declares a per-level respecify "
+                                          "scope (target=%u, level=%u) and this call covers %s(target=%u, "
+                                          "level=%u), so a per-level producer is not covering the range it "
+                                          "declares",
+                call, res.Slot, res.Gen, static_cast<unsigned>(declaredTarget), static_cast<unsigned>(declaredLevel),
+                level == nullptr ? "NOTHING " : "", level == nullptr ? 0u : static_cast<unsigned>(level->UploadTarget),
+                level == nullptr ? 0u : static_cast<unsigned>(level->Level));
         }
 #else
-        void PinRespecifyScopeCoversItsDeclaration(const MGPResourceDesc&, const MGPRespecifiedLevel*,
-                                                   MGPipeHandle, const char*) {}
+        void PinRespecifyScopeCoversItsDeclaration(const MGPResourceDesc&, const MGPRespecifiedLevel*, MGPipeHandle,
+                                                   const char*) {}
 #endif
 
 #if MOBILEGL_PIPE_VERIFY
@@ -1342,11 +1353,12 @@ namespace MobileGL::MG_Pipe {
         // can actually be non-zero.
         void PinLiveHostWritesNamesABuffer(const MGPSubData& record, const char* call) {
             if (record.HasLiveHostWrites == 0) return;
-            MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG("PipeLiveHostWritesTarget")
-                                 " %s {slot=%u, gen=%u}: a record whose resource target is not a "
-                                 "buffer (target=%u) declares live host writes, and only the buffer "
-                                 "family has any",
-                                 call, record.Res.Slot, record.Res.Gen, record.Target);
+            MGP_TRIP_WIRE_REPORT(
+                "MGPipe: " MGP_TRIP_WIRE_TAG(
+                    "PipeLiveHostWritesTarget") " %s {slot=%u, gen=%u}: a record whose resource target is not a "
+                                                "buffer (target=%u) declares live host writes, and only the buffer "
+                                                "family has any",
+                call, record.Res.Slot, record.Res.Gen, record.Target);
         }
 #else
         void PinLiveHostWritesNamesABuffer(const MGPSubData&, const char*) {}
@@ -1372,12 +1384,12 @@ namespace MobileGL::MG_Pipe {
                 fault = "a non-empty write carries no bytes";
             }
             if (fault != nullptr) {
-                MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG("ProtocolCorruption")
-                                     " %s {slot=%u, gen=%u, glName=%u}: %s (offset=%llu, size=%llu, "
-                                     "storage=%u bytes)",
-                                     call, record.Res.Slot, record.Res.Gen, stored->Desc.GlNameForDiag,
-                                     fault, static_cast<unsigned long long>(offset),
-                                     static_cast<unsigned long long>(size), stored->Desc.Width);
+                MGP_TRIP_WIRE_REPORT(
+                    "MGPipe: " MGP_TRIP_WIRE_TAG(
+                        "ProtocolCorruption") " %s {slot=%u, gen=%u, glName=%u}: %s (offset=%llu, size=%llu, "
+                                              "storage=%u bytes)",
+                    call, record.Res.Slot, record.Res.Gen, stored->Desc.GlNameForDiag, fault,
+                    static_cast<unsigned long long>(offset), static_cast<unsigned long long>(size), stored->Desc.Width);
                 return false;
             }
             PinNoLiveHostWrites(*stored, record.Res, call);
@@ -1419,7 +1431,7 @@ namespace MobileGL::MG_Pipe {
         // Their staged bytes still belong to the server before SEG_STAGE retires. Keep the
         // existing backend hooks authoritative when present, and use this fallback otherwise.
         void AdoptTextureWithoutBackendHook(const MGPipeResourceRecord& stored, const MGPSubData& upload,
-                                           const void* bytes, const MGPSubRegion* regions) {
+                                            const void* bytes, const MGPSubRegion* regions) {
             if (!bytes || upload.Blob.Size == 0) return;
             auto& store = MG_Record::ServerStagedTexture();
             const auto& desc = stored.Desc;
@@ -1433,13 +1445,12 @@ namespace MobileGL::MG_Pipe {
             // A client record's run: on monolith's record arm it is the frontend level shadow, which
             // an aliasing store keeps by address (P13 W4).
             if (upload.RegionCount == 0) {
-                store.Adopt(key, target, upload.Level, extent, bytes,
-                            static_cast<SizeT>(upload.Blob.Size), /*frontendShadow=*/true);
+                store.Adopt(key, target, upload.Level, extent, bytes, static_cast<SizeT>(upload.Blob.Size),
+                            /*frontendShadow=*/true);
                 return;
             }
-            store.AdoptRun(key, target, upload.Level, extent,
-                           MG_Record::StagedTextureRunImageOffset(upload, regions), bytes,
-                           static_cast<SizeT>(upload.Blob.Size), /*frontendShadow=*/true);
+            store.AdoptRun(key, target, upload.Level, extent, MG_Record::StagedTextureRunImageOffset(upload, regions),
+                           bytes, static_cast<SizeT>(upload.Blob.Size), /*frontendShadow=*/true);
         }
 
         void DefineTextureWithoutBackendHook(const MGPResourceDesc& desc, const MGPRespecifiedLevel* level) {
@@ -1459,26 +1470,46 @@ namespace MobileGL::MG_Pipe {
             const auto defineChain = [&](TextureUploadTarget target) {
                 for (Uint32 mip = 0; mip < desc.Levels; ++mip)
                     define(static_cast<Uint16>(target), static_cast<Uint16>(mip),
-                           MG_Record::StagedTextureMipExtent(desc.Target, desc.Width,
-                                                                    desc.Height, desc.Depth, mip));
+                           MG_Record::StagedTextureMipExtent(desc.Target, desc.Width, desc.Height, desc.Depth, mip));
             };
             switch (static_cast<MGPipeResourceTarget>(desc.Target)) {
-            case MGPipeResourceTarget::Tex1D: defineChain(TextureUploadTarget::Texture1D); break;
-            case MGPipeResourceTarget::Tex2D: defineChain(TextureUploadTarget::Texture2D); break;
-            case MGPipeResourceTarget::Tex3D: defineChain(TextureUploadTarget::Texture3D); break;
-            case MGPipeResourceTarget::Tex1DArray: defineChain(TextureUploadTarget::Texture1DArray); break;
-            case MGPipeResourceTarget::Tex2DArray: defineChain(TextureUploadTarget::Texture2DArray); break;
+            case MGPipeResourceTarget::Tex1D:
+                defineChain(TextureUploadTarget::Texture1D);
+                break;
+            case MGPipeResourceTarget::Tex2D:
+                defineChain(TextureUploadTarget::Texture2D);
+                break;
+            case MGPipeResourceTarget::Tex3D:
+                defineChain(TextureUploadTarget::Texture3D);
+                break;
+            case MGPipeResourceTarget::Tex1DArray:
+                defineChain(TextureUploadTarget::Texture1DArray);
+                break;
+            case MGPipeResourceTarget::Tex2DArray:
+                defineChain(TextureUploadTarget::Texture2DArray);
+                break;
             case MGPipeResourceTarget::TexCube:
                 for (Uint32 face = static_cast<Uint32>(TextureUploadTarget::CubeMapPositiveX);
                      face <= static_cast<Uint32>(TextureUploadTarget::CubeMapNegativeZ); ++face)
                     defineChain(static_cast<TextureUploadTarget>(face));
                 break;
-            case MGPipeResourceTarget::TexCubeArray: defineChain(TextureUploadTarget::CubeMapArray); break;
-            case MGPipeResourceTarget::Tex2DMS: defineChain(TextureUploadTarget::Texture2DMultisample); break;
-            case MGPipeResourceTarget::Tex2DMSArray: defineChain(TextureUploadTarget::Texture2DMultisampleArray); break;
-            case MGPipeResourceTarget::TexRect: defineChain(TextureUploadTarget::TextureRectangle); break;
-            case MGPipeResourceTarget::TexBuffer: defineChain(TextureUploadTarget::TextureBuffer); break;
-            default: break;
+            case MGPipeResourceTarget::TexCubeArray:
+                defineChain(TextureUploadTarget::CubeMapArray);
+                break;
+            case MGPipeResourceTarget::Tex2DMS:
+                defineChain(TextureUploadTarget::Texture2DMultisample);
+                break;
+            case MGPipeResourceTarget::Tex2DMSArray:
+                defineChain(TextureUploadTarget::Texture2DMultisampleArray);
+                break;
+            case MGPipeResourceTarget::TexRect:
+                defineChain(TextureUploadTarget::TextureRectangle);
+                break;
+            case MGPipeResourceTarget::TexBuffer:
+                defineChain(TextureUploadTarget::TextureBuffer);
+                break;
+            default:
+                break;
             }
         }
 
@@ -1505,22 +1536,22 @@ namespace MobileGL::MG_Pipe {
                 fault = "a texture upload carries no bytes";
             }
             if (fault != nullptr) {
-                MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG("ProtocolCorruption")
-                                     " resource_subdata {slot=%u, gen=%u, glName=%u}: %s (target=%u, "
-                                     "level=%u, box=%d,%d,%d %ux%ux%u, regions=%u)",
-                                     record.Res.Slot, record.Res.Gen, stored->Desc.GlNameForDiag, fault,
-                                     record.Target, record.Level, record.UnionBox.X, record.UnionBox.Y,
-                                     record.UnionBox.Z, record.UnionBox.W, record.UnionBox.H,
-                                     record.UnionBox.D, record.RegionCount);
+                MGP_TRIP_WIRE_REPORT(
+                    "MGPipe: " MGP_TRIP_WIRE_TAG(
+                        "ProtocolCorruption") " resource_subdata {slot=%u, gen=%u, glName=%u}: %s (target=%u, "
+                                              "level=%u, box=%d,%d,%d %ux%ux%u, regions=%u)",
+                    record.Res.Slot, record.Res.Gen, stored->Desc.GlNameForDiag, fault, record.Target, record.Level,
+                    record.UnionBox.X, record.UnionBox.Y, record.UnionBox.Z, record.UnionBox.W, record.UnionBox.H,
+                    record.UnionBox.D, record.RegionCount);
                 return false;
             }
             if (!AccumulatePendingUpload(*stored, record, regions)) {
-                MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG("ProtocolCorruption")
-                                     " resource_subdata {slot=%u, gen=%u, glName=%u}: the resource names "
-                                     "more distinct (upload target, level) pairs than any texture can "
-                                     "have (%u)",
-                                     record.Res.Slot, record.Res.Gen, stored->Desc.GlNameForDiag,
-                                     kMGPipeMaxPendingUploads);
+                MGP_TRIP_WIRE_REPORT(
+                    "MGPipe: " MGP_TRIP_WIRE_TAG(
+                        "ProtocolCorruption") " resource_subdata {slot=%u, gen=%u, glName=%u}: the resource names "
+                                              "more distinct (upload target, level) pairs than any texture can "
+                                              "have (%u)",
+                    record.Res.Slot, record.Res.Gen, stored->Desc.GlNameForDiag, kMGPipeMaxPendingUploads);
                 return false;
             }
             // The serial moves for the buffer half's reason: the twin stamps its own synced
@@ -1555,9 +1586,8 @@ namespace MobileGL::MG_Pipe {
         // checked; the destination is start + i and the field is only the client's label, as
         // with MGPVertexBuffer::BindingIndex.
         template <class Entry, class ArrayT>
-        Bool ApplyUnitWindow(const char* call, Uint32 start, Uint32 count, Uint64 contentHash,
-                             const Entry* tail, ArrayT& destination, Uint32& destinationStart,
-                             Uint32& destinationCount) {
+        Bool ApplyUnitWindow(const char* call, Uint32 start, Uint32 count, Uint64 contentHash, const Entry* tail,
+                             ArrayT& destination, Uint32& destinationStart, Uint32& destinationCount) {
             const Uint64 capacity = destination.size();
             const Uint64 end = Uint64{start} + Uint64{count};
             const char* fault = nullptr;
@@ -1567,11 +1597,12 @@ namespace MobileGL::MG_Pipe {
                 fault = "a non-empty set carries no entries";
             }
             if (fault != nullptr) {
-                MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG("ProtocolCorruption")
-                                     " %s {start=%u, count=%u, hash=%llu}: %s (the applier holds %llu "
-                                     "entries)",
-                                     call, start, count, static_cast<unsigned long long>(contentHash),
-                                     fault, static_cast<unsigned long long>(capacity));
+                MGP_TRIP_WIRE_REPORT(
+                    "MGPipe: " MGP_TRIP_WIRE_TAG(
+                        "ProtocolCorruption") " %s {start=%u, count=%u, hash=%llu}: %s (the applier holds %llu "
+                                              "entries)",
+                    call, start, count, static_cast<unsigned long long>(contentHash), fault,
+                    static_cast<unsigned long long>(capacity));
                 return false;
             }
             for (Uint32 i = 0; i < count; ++i) {
@@ -1632,8 +1663,7 @@ namespace MobileGL::MG_Pipe {
         // skips in BOTH directions round-trips perfectly, which is why the unit suite reads the
         // members back explicitly; what THIS adds is that it runs over every real program the
         // verify lane links rather than over one hand-built instance.
-        void PinProgramArchiveRoundTrip(const MGPProgramDesc& desc,
-                                        const MG_State::GLState::LinkArtifacts& link,
+        void PinProgramArchiveRoundTrip(const MGPProgramDesc& desc, const MG_State::GLState::LinkArtifacts& link,
                                         const MG_State::GLState::SpirvArtifacts& spirv) {
             Vector<Uint8> encoded;
             MG_State::GLState::EncodeProgramArtifacts(link, spirv, encoded);
@@ -1643,8 +1673,8 @@ namespace MobileGL::MG_Pipe {
             const char* fault = nullptr;
             if (encoded.empty()) {
                 fault = "the encoder produced no bytes for a program that has artefacts";
-            } else if (!MG_State::GLState::DecodeProgramArtifacts(encoded.data(), encoded.size(),
-                                                                  decodedLink, decodedSpirv)) {
+            } else if (!MG_State::GLState::DecodeProgramArtifacts(encoded.data(), encoded.size(), decodedLink,
+                                                                  decodedSpirv)) {
                 fault = "the archive this client would put on the wire does not decode";
             } else {
                 MG_State::GLState::EncodeProgramArtifacts(decodedLink, decodedSpirv, reencoded);
@@ -1658,12 +1688,12 @@ namespace MobileGL::MG_Pipe {
                 }
             }
             if (fault == nullptr) return;
-            MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG("PipeVerifyDiffer")
-                                 " program-archive create_shader_state {slot=%u, gen=%u}: %s (%llu bytes "
-                                 "encoded, %llu re-encoded)",
-                                 desc.Cso.Slot, desc.Cso.Gen, fault,
-                                 static_cast<unsigned long long>(encoded.size()),
-                                 static_cast<unsigned long long>(reencoded.size()));
+            MGP_TRIP_WIRE_REPORT(
+                "MGPipe: " MGP_TRIP_WIRE_TAG(
+                    "PipeVerifyDiffer") " program-archive create_shader_state {slot=%u, gen=%u}: %s (%llu bytes "
+                                        "encoded, %llu re-encoded)",
+                desc.Cso.Slot, desc.Cso.Gen, fault, static_cast<unsigned long long>(encoded.size()),
+                static_cast<unsigned long long>(reencoded.size()));
         }
 #endif
     } // namespace
@@ -1673,12 +1703,22 @@ namespace MobileGL::MG_Pipe {
 
     // P5c (rv, CONTRACT-P5C.md §5.3): the three texture shutters' server-side answers. See
     // MGPipeApplierState::TextureShutterSerial / ContextSerial for the bump rule.
-    Uint64 MGPipeApplierTextureShutterSerial() { return MGPipeApplier().TextureShutterSerial; }
-    Uint64 MGPipeApplierContextSerial() { return MGPipeApplier().ContextSerial; }
-    void MGPipeApplierNoteTextureStateMoved() { ++MGPipeApplier().TextureShutterSerial; }
+    Uint64 MGPipeApplierTextureShutterSerial() {
+        return MGPipeApplier().TextureShutterSerial;
+    }
+    Uint64 MGPipeApplierContextSerial() {
+        return MGPipeApplier().ContextSerial;
+    }
+    void MGPipeApplierNoteTextureStateMoved() {
+        ++MGPipeApplier().TextureShutterSerial;
+    }
 
-    void MGPipeSetResourceOps(const MGPipeResourceOps* ops) { g_resourceOps = ops; }
-    const MGPipeResourceOps* MGPipeGetResourceOps() { return g_resourceOps; }
+    void MGPipeSetResourceOps(const MGPipeResourceOps* ops) {
+        g_resourceOps = ops;
+    }
+    const MGPipeResourceOps* MGPipeGetResourceOps() {
+        return g_resourceOps;
+    }
 
     namespace {
         // True (and counted in MGPipeApplierState::RefusedNoConsumer) when nothing in this
@@ -1693,8 +1733,9 @@ namespace MobileGL::MG_Pipe {
 #if MOBILEGL_BUILD_DISAGGREGATED
             if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
                 const auto* session = MG_Remote::Server::ServerSession::Active();
-                if (session && session->CallMaskIsSet() && MG_Remote::MGCapsServerConsumes(
-                        session->CallMask(), kMGPipeSubsystemTextureResources)) return false;
+                if (session && session->CallMaskIsSet() &&
+                    MG_Remote::MGCapsServerConsumes(session->CallMask(), kMGPipeSubsystemTextureResources))
+                    return false;
             }
 #endif
             if (g_resourceOps != nullptr) return false;
@@ -1920,8 +1961,7 @@ namespace MobileGL::MG_Pipe {
     }
 
     void MGPipeApplyCreateRenderState(const MGPRenderStateDesc& desc, const void* chunkBytes) {
-        MOBILEGL_ASSERT(desc.Cso.Slot >= kMGPipeFirstAllocatableSlot,
-                        "create_render_state named the reserved slot 0");
+        MOBILEGL_ASSERT(desc.Cso.Slot >= kMGPipeFirstAllocatableSlot, "create_render_state named the reserved slot 0");
         MGPipeRenderStateCsoRecord* recordAt =
             RecordAt(MGPipeApplier().RenderStateCsos, desc.Cso.Slot, kMGPipeMaxRenderStateCsoSlots);
         if (recordAt == nullptr) {
@@ -1931,9 +1971,10 @@ namespace MobileGL::MG_Pipe {
                               "create_render_state {slot=%u, gen=%u} is outside the record table bound (%u)",
                               desc.Cso.Slot, desc.Cso.Gen, kMGPipeMaxRenderStateCsoSlots);
 #else
-            MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG("ProtocolCorruption")
-                                 " create_render_state {slot=%u, gen=%u} is outside the record table bound (%u)",
-                                 desc.Cso.Slot, desc.Cso.Gen, kMGPipeMaxRenderStateCsoSlots);
+            MGP_TRIP_WIRE_REPORT(
+                "MGPipe: " MGP_TRIP_WIRE_TAG("ProtocolCorruption") " create_render_state {slot=%u, gen=%u} is outside "
+                                                                   "the record table bound (%u)",
+                desc.Cso.Slot, desc.Cso.Gen, kMGPipeMaxRenderStateCsoSlots);
 #endif
             return;
         }
@@ -1951,22 +1992,22 @@ namespace MobileGL::MG_Pipe {
             // inherit the unnamed chunks from.
             record.PipelineBytes = {};
             if ((desc.ChunkMask & kAllPipelineChunks) != kAllPipelineChunks) {
-                MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG("PipeIncompleteCso")
-                                     " create_render_state {slot=%u, gen=%u} with no BaseCso named chunks "
-                                     "0x%x, not the whole pipeline half 0x%x; the rest is zeroed",
-                                     desc.Cso.Slot, desc.Cso.Gen, desc.ChunkMask,
-                                     static_cast<Uint32>(kAllPipelineChunks));
+                MGP_TRIP_WIRE_REPORT(
+                    "MGPipe: " MGP_TRIP_WIRE_TAG(
+                        "PipeIncompleteCso") " create_render_state {slot=%u, gen=%u} with no BaseCso named chunks "
+                                             "0x%x, not the whole pipeline half 0x%x; the rest is zeroed",
+                    desc.Cso.Slot, desc.Cso.Gen, desc.ChunkMask, static_cast<Uint32>(kAllPipelineChunks));
             }
         } else {
             const MGPipeRenderStateCsoRecord* base = FindCso(desc.BaseCso);
-            record.PipelineBytes =
-                base != nullptr ? base->PipelineBytes : Array<Uint8, kMGPipePipelineChunkBytes>{};
+            record.PipelineBytes = base != nullptr ? base->PipelineBytes : Array<Uint8, kMGPipePipelineChunkBytes>{};
             if (base == nullptr) {
-                MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG("PipeDeadBaseCso")
-                                     " create_render_state {slot=%u, gen=%u} named a dead BaseCso "
-                                     "{slot=%u, gen=%u}; the delta chunks land on zeroed bytes, not on "
-                                     "the recycled slot's previous occupant",
-                                     desc.Cso.Slot, desc.Cso.Gen, desc.BaseCso.Slot, desc.BaseCso.Gen);
+                MGP_TRIP_WIRE_REPORT(
+                    "MGPipe: " MGP_TRIP_WIRE_TAG(
+                        "PipeDeadBaseCso") " create_render_state {slot=%u, gen=%u} named a dead BaseCso "
+                                           "{slot=%u, gen=%u}; the delta chunks land on zeroed bytes, not on "
+                                           "the recycled slot's previous occupant",
+                    desc.Cso.Slot, desc.Cso.Gen, desc.BaseCso.Slot, desc.BaseCso.Gen);
             }
         }
 
@@ -1983,13 +2024,12 @@ namespace MobileGL::MG_Pipe {
 
     void MGPipeApplyBindRenderState(const MGPBindRenderState& bind) {
         const MGPipeRenderStateCsoRecord* record = FindCso(bind.Cso);
-        MOBILEGL_ASSERT(record != nullptr, "bind_render_state named a dead CSO {slot=%u, gen=%u}",
-                        bind.Cso.Slot, bind.Cso.Gen);
+        MOBILEGL_ASSERT(record != nullptr, "bind_render_state named a dead CSO {slot=%u, gen=%u}", bind.Cso.Slot,
+                        bind.Cso.Gen);
         if (record == nullptr) return;
 
         PipeInputs& inputs = gPipeInputs;
-        MGPipeScatterPipelineBytes(record->PipelineBytes.data(),
-                                   MGPipeApplyAccess::RenderState(inputs));
+        MGPipeScatterPipelineBytes(record->PipelineBytes.data(), MGPipeApplyAccess::RenderState(inputs));
         MGPipeApplyAccess::SetRenderStateVersions(inputs, bind.Version, bind.PipelineVersion);
         MGPipeApplier().BoundRenderStateCso = bind.Cso;
         // A bind scatters the WHOLE pipeline half - the record is always a complete one,
@@ -2070,19 +2110,20 @@ namespace MobileGL::MG_Pipe {
                                 std::memcmp(&working.PatchDefaultInnerLevel, &inner, sizeof(inner)) == 0;
             if (!agrees) {
                 ++MGPipeApplier().PatchCarrierDivergences;
-                MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG("PipePatchCarriersDiffer")
-                                     " set_patch_state says vertices=%u outer=(%g,%g,%g,%g) inner=(%g,%g); "
-                                     "chunk P0 delivered vertices=%u outer=(%g,%g,%g,%g) inner=(%g,%g)",
-                                     patch.Vertices, static_cast<double>(outer.x()),
-                                     static_cast<double>(outer.y()), static_cast<double>(outer.z()),
-                                     static_cast<double>(outer.w()), static_cast<double>(inner.x()),
-                                     static_cast<double>(inner.y()), working.PatchVertices,
-                                     static_cast<double>(working.PatchDefaultOuterLevel.x()),
-                                     static_cast<double>(working.PatchDefaultOuterLevel.y()),
-                                     static_cast<double>(working.PatchDefaultOuterLevel.z()),
-                                     static_cast<double>(working.PatchDefaultOuterLevel.w()),
-                                     static_cast<double>(working.PatchDefaultInnerLevel.x()),
-                                     static_cast<double>(working.PatchDefaultInnerLevel.y()));
+                MGP_TRIP_WIRE_REPORT(
+                    "MGPipe: " MGP_TRIP_WIRE_TAG(
+                        "PipePatchCarriersDiffer") " set_patch_state says vertices=%u outer=(%g,%g,%g,%g) "
+                                                   "inner=(%g,%g); "
+                                                   "chunk P0 delivered vertices=%u outer=(%g,%g,%g,%g) inner=(%g,%g)",
+                    patch.Vertices, static_cast<double>(outer.x()), static_cast<double>(outer.y()),
+                    static_cast<double>(outer.z()), static_cast<double>(outer.w()), static_cast<double>(inner.x()),
+                    static_cast<double>(inner.y()), working.PatchVertices,
+                    static_cast<double>(working.PatchDefaultOuterLevel.x()),
+                    static_cast<double>(working.PatchDefaultOuterLevel.y()),
+                    static_cast<double>(working.PatchDefaultOuterLevel.z()),
+                    static_cast<double>(working.PatchDefaultOuterLevel.w()),
+                    static_cast<double>(working.PatchDefaultInnerLevel.x()),
+                    static_cast<double>(working.PatchDefaultInnerLevel.y()));
             }
         }
 
@@ -2093,8 +2134,7 @@ namespace MobileGL::MG_Pipe {
                                          working.PatchDefaultInnerLevel);
     }
 
-    void MGPipeApplySetVertexAttribDefaults(const MGPVertexAttribDefaults& hdr,
-                                            const MGPAttribValue* tail) {
+    void MGPipeApplySetVertexAttribDefaults(const MGPVertexAttribDefaults& hdr, const MGPAttribValue* tail) {
         PipeInputs& inputs = gPipeInputs;
         PipeInputs::CurrentVertexAttributeValue* slots = MGPipeApplyAccess::VertexAttribDefaults(inputs);
         // The loop walks the MASK's 32 bits, not the slot array, and every named bit consumes
@@ -2138,9 +2178,10 @@ namespace MobileGL::MG_Pipe {
             fault = "Count does not match the attributes Mask names";
         }
         if (fault != nullptr) {
-            MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG("PipeAttribTailMalformed")
-                                 " set_vertex_attrib_defaults: %s (Mask=0x%x, Count=%u, consumed=%u)",
-                                 fault, hdr.Mask, hdr.Count, consumed);
+            MGP_TRIP_WIRE_REPORT(
+                "MGPipe: " MGP_TRIP_WIRE_TAG(
+                    "PipeAttribTailMalformed") " set_vertex_attrib_defaults: %s (Mask=0x%x, Count=%u, consumed=%u)",
+                fault, hdr.Mask, hdr.Count, consumed);
         }
     }
 
@@ -2163,8 +2204,7 @@ namespace MobileGL::MG_Pipe {
             MGP_TRIP_WIRE_REPORT("MGPipe: Fatal{ProtocolCorruption, \"ResourceCreate.BufferRange\"} - "
                                  "only a texture-buffer resource may carry BufOffset/BufSize");
         }
-        MOBILEGL_ASSERT(desc.Resource.Slot >= kMGPipeFirstAllocatableSlot,
-                        "resource_create named the reserved slot 0");
+        MOBILEGL_ASSERT(desc.Resource.Slot >= kMGPipeFirstAllocatableSlot, "resource_create named the reserved slot 0");
         if (desc.Resource.Slot < kMGPipeFirstAllocatableSlot) return false;
 
         // P4a: THE TABLE IS CHOSEN BY THE DESCRIPTOR'S TARGET, and getting that wrong is the one
@@ -2172,10 +2212,11 @@ namespace MobileGL::MG_Pipe {
         // Texture and a live Renderbuffer at the same time, in three independent slot spaces.
         Vector<MGPipeResourceRecord>* table = ResourceTableForTarget(desc.Target);
         if (table == nullptr) {
-            MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG("ProtocolCorruption")
-                                 " resource_create {slot=%u, gen=%u, glName=%u}: the descriptor names no "
-                                 "resource target (%u)",
-                                 desc.Resource.Slot, desc.Resource.Gen, desc.GlNameForDiag, desc.Target);
+            MGP_TRIP_WIRE_REPORT(
+                "MGPipe: " MGP_TRIP_WIRE_TAG(
+                    "ProtocolCorruption") " resource_create {slot=%u, gen=%u, glName=%u}: the descriptor names no "
+                                          "resource target (%u)",
+                desc.Resource.Slot, desc.Resource.Gen, desc.GlNameForDiag, desc.Target);
             return false;
         }
 
@@ -2187,11 +2228,11 @@ namespace MobileGL::MG_Pipe {
         // from the handle and nothing else survives.
         MGPipeResourceRecord* record = RecordAt(*table, desc.Resource.Slot, kMGPipeMaxResourceSlots);
         if (record == nullptr) {
-            MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG("ProtocolCorruption")
-                                 " resource_create {slot=%u, gen=%u, glName=%u}: the slot is outside the "
-                                 "record table's bound (%u)",
-                                 desc.Resource.Slot, desc.Resource.Gen, desc.GlNameForDiag,
-                                 kMGPipeMaxResourceSlots);
+            MGP_TRIP_WIRE_REPORT(
+                "MGPipe: " MGP_TRIP_WIRE_TAG(
+                    "ProtocolCorruption") " resource_create {slot=%u, gen=%u, glName=%u}: the slot is outside the "
+                                          "record table's bound (%u)",
+                desc.Resource.Slot, desc.Resource.Gen, desc.GlNameForDiag, kMGPipeMaxResourceSlots);
             return false;
         }
         // P4a's belt, and only over the P4a half of this call: the BUFFER row is P3a's and its
@@ -2237,10 +2278,11 @@ namespace MobileGL::MG_Pipe {
                                       const MGPRespecifiedLevel* level) {
         Vector<MGPipeResourceRecord>* table = ResourceTableForTarget(desc.Target);
         if (table == nullptr) {
-            MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG("ProtocolCorruption")
-                                 " resource_respecify {slot=%u, gen=%u, glName=%u}: the descriptor names "
-                                 "no resource target (%u)",
-                                 desc.Resource.Slot, desc.Resource.Gen, desc.GlNameForDiag, desc.Target);
+            MGP_TRIP_WIRE_REPORT(
+                "MGPipe: " MGP_TRIP_WIRE_TAG(
+                    "ProtocolCorruption") " resource_respecify {slot=%u, gen=%u, glName=%u}: the descriptor names "
+                                          "no resource target (%u)",
+                desc.Resource.Slot, desc.Resource.Gen, desc.GlNameForDiag, desc.Target);
             return false;
         }
         // P4a's belt, for MGPipeApplyResourceCreate's reason and in front of the resolution
@@ -2253,15 +2295,13 @@ namespace MobileGL::MG_Pipe {
         if (record == nullptr) return false;
         PinNoLiveHostWrites(*record, desc.Resource, "resource_respecify");
         PinRespecifyScopeCoversItsDeclaration(desc, level, desc.Resource, "resource_respecify");
-        if (level != nullptr &&
-            (desc.Target == kMGPipeResourceTargetBuffer ||
-             desc.Target == static_cast<Uint8>(MGPipeResourceTarget::Renderbuffer) ||
-             desc.Target == static_cast<Uint8>(MGPipeResourceTarget::TexBuffer))) {
+        if (level != nullptr && (desc.Target == kMGPipeResourceTargetBuffer ||
+                                 desc.Target == static_cast<Uint8>(MGPipeResourceTarget::Renderbuffer) ||
+                                 desc.Target == static_cast<Uint8>(MGPipeResourceTarget::TexBuffer))) {
             MGP_TRIP_WIRE_REPORT("MGPipe: Fatal{ProtocolCorruption, \"ResourceRespecify.Target\"} - "
                                  "this resource target cannot name a texture mip level");
         }
-        if (!MGPipeRespecifyIsWholeResource(desc) &&
-            !MGPipeRespecifiedExtentCarrierIsCanonical(desc)) {
+        if (!MGPipeRespecifyIsWholeResource(desc) && !MGPipeRespecifiedExtentCarrierIsCanonical(desc)) {
             MGP_TRIP_WIRE_REPORT("MGPipe: Fatal{ProtocolCorruption, \"ResourceRespecify.ExtentCarrier\"} - "
                                  "a named image level's depth word must fit in 32 bits (no high BufSize bits)");
         }
@@ -2356,8 +2396,7 @@ namespace MobileGL::MG_Pipe {
         return true;
     }
 
-    Bool MGPipeApplyResourceSubData(const MGPSubData& record, const void* bytes,
-                                    const MGPSubRegion* regions) {
+    Bool MGPipeApplyResourceSubData(const MGPSubData& record, const void* bytes, const MGPSubRegion* regions) {
         // ONE CALL, TWO HALVES, and the branch is one comparison. For a buffer the applier
         // stores NOTHING per record - the contents are the backend's, and the range is the
         // backend's to land - so its whole job is the gate and the serial. For a texture there
@@ -2384,13 +2423,13 @@ namespace MobileGL::MG_Pipe {
             // BOTH HALVES GO IN THE LINE. The packed field alone leaves a reader doing the
             // arithmetic the encoding exists to stop anyone doing by hand, and the upload half
             // is what says whether the emitter packed the pair the wrong way round.
-            MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG("ProtocolCorruption")
-                                 " resource_subdata {slot=%u, gen=%u}: the record's resource target names "
-                                 "no texture to upload into (target=%u, resource target=%u, upload "
-                                 "target=%u)",
-                                 record.Res.Slot, record.Res.Gen, record.Target,
-                                 static_cast<Uint32>(resourceTarget),
-                                 static_cast<Uint32>(MGPipeSubDataUploadTargetOf(record.Target)));
+            MGP_TRIP_WIRE_REPORT(
+                "MGPipe: " MGP_TRIP_WIRE_TAG(
+                    "ProtocolCorruption") " resource_subdata {slot=%u, gen=%u}: the record's resource target names "
+                                          "no texture to upload into (target=%u, resource target=%u, upload "
+                                          "target=%u)",
+                record.Res.Slot, record.Res.Gen, record.Target, static_cast<Uint32>(resourceTarget),
+                static_cast<Uint32>(MGPipeSubDataUploadTargetOf(record.Target)));
             return false;
         }
         // P4a's belt, AFTER the target fault above and before the upload is accumulated: this
@@ -2437,9 +2476,9 @@ namespace MobileGL::MG_Pipe {
             fault = "a non-empty flush carries no bytes";
         }
         if (fault != nullptr) {
-            MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG("ProtocolCorruption")
-                                 " resource_flush_range {slot=%u, gen=%u, glName=%u}: %s "
-                                 "(offset=%llu, size=%llu, storage=%u bytes)",
+            MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG(
+                                     "ProtocolCorruption") " resource_flush_range {slot=%u, gen=%u, glName=%u}: %s "
+                                                           "(offset=%llu, size=%llu, storage=%u bytes)",
                                  record.Res.Slot, record.Res.Gen, stored->Desc.GlNameForDiag, fault,
                                  static_cast<unsigned long long>(record.Offset),
                                  static_cast<unsigned long long>(record.Size), stored->Desc.Width);
@@ -2463,9 +2502,9 @@ namespace MobileGL::MG_Pipe {
 
         const char* fault = BufferRangeFault(record.Offset, record.Size, stored->Desc.Width);
         if (fault != nullptr) {
-            MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG("ProtocolCorruption")
-                                 " resource_readback {slot=%u, gen=%u, glName=%u}: %s "
-                                 "(offset=%llu, size=%llu, storage=%u bytes)",
+            MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG(
+                                     "ProtocolCorruption") " resource_readback {slot=%u, gen=%u, glName=%u}: %s "
+                                                           "(offset=%llu, size=%llu, storage=%u bytes)",
                                  record.Res.Slot, record.Res.Gen, stored->Desc.GlNameForDiag, fault,
                                  static_cast<unsigned long long>(record.Offset),
                                  static_cast<unsigned long long>(record.Size), stored->Desc.Width);
@@ -2501,10 +2540,11 @@ namespace MobileGL::MG_Pipe {
         // record of a live object of another kind that happens to hold the same slot.
         Vector<MGPipeResourceRecord>* table = ResourceTableForKind(handle.Kind);
         if (table == nullptr) {
-            MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG("ProtocolCorruption")
-                                 " resource_destroy {slot=%u, gen=%u}: the handle names no resource kind "
-                                 "(%u)",
-                                 handle.Handle.Slot, handle.Handle.Gen, handle.Kind);
+            MGP_TRIP_WIRE_REPORT(
+                "MGPipe: " MGP_TRIP_WIRE_TAG(
+                    "ProtocolCorruption") " resource_destroy {slot=%u, gen=%u}: the handle names no resource kind "
+                                          "(%u)",
+                handle.Handle.Slot, handle.Handle.Gen, handle.Kind);
             return;
         }
         MGPipeResourceRecord* record = ResolveResourceIn(*table, "resource_destroy", handle.Handle);
@@ -2538,8 +2578,9 @@ namespace MobileGL::MG_Pipe {
         if (static_cast<MGPipeKind>(handle.Kind) == MGPipeKind::Texture) {
             if (g_resourceOps != nullptr && g_resourceOps->TextureDestroy != nullptr)
                 g_resourceOps->TextureDestroy(handle.Handle);
-            else { MG_Record::ServerStagedTexture().Drop(
-                    MG_Record::StagedTextureStore::KeyForHandle(handle.Handle)); }
+            else {
+                MG_Record::ServerStagedTexture().Drop(MG_Record::StagedTextureStore::KeyForHandle(handle.Handle));
+            }
         }
         if (static_cast<MGPipeKind>(handle.Kind) != MGPipeKind::Buffer) return;
         if (g_resourceOps != nullptr && g_resourceOps->Destroy != nullptr) {
@@ -2578,8 +2619,7 @@ namespace MobileGL::MG_Pipe {
         // trip as a mint.
         //
         // The frontend already tolerates a decline in all three places, and has since P3a.
-        if (MG_Config::Transport != MG_Config::TransportMode::Monolith &&
-            MG_Remote::Client::AdoptTierIsEmulate()) {
+        if (MG_Config::Transport != MG_Config::TransportMode::Monolith && MG_Remote::Client::AdoptTierIsEmulate()) {
             return nullptr;
         }
 #endif
@@ -2611,10 +2651,11 @@ namespace MobileGL::MG_Pipe {
         // ResourceTableForKind Fatal exists to stop. Acting on another kind's storage is the
         // corrupt-record verdict, not the dropped-call one, so it moves no refusal counter.
         if (static_cast<MGPipeKind>(handle.Kind) != MGPipeKind::Buffer) {
-            MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG("ProtocolCorruption")
-                                 " unmap_persistent {slot=%u, gen=%u}: the persistent donation is the "
-                                 "buffer family's and the handle names another kind (%u)",
-                                 handle.Handle.Slot, handle.Handle.Gen, handle.Kind);
+            MGP_TRIP_WIRE_REPORT(
+                "MGPipe: " MGP_TRIP_WIRE_TAG(
+                    "ProtocolCorruption") " unmap_persistent {slot=%u, gen=%u}: the persistent donation is the "
+                                          "buffer family's and the handle names another kind (%u)",
+                handle.Handle.Slot, handle.Handle.Gen, handle.Kind);
             return;
         }
         MGPipeResourceRecord* record = ResolveResource("unmap_persistent", handle.Handle);
@@ -2632,10 +2673,11 @@ namespace MobileGL::MG_Pipe {
     Bool MGPipeApplyAdoptExternal(const MGPHandleOnly& handle, void* ahb, Uint64 size) {
         // The same kind verdict unmap_persistent gives: a store is the buffer family's.
         if (static_cast<MGPipeKind>(handle.Kind) != MGPipeKind::Buffer) {
-            MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG("ProtocolCorruption")
-                                 " adopt_external {slot=%u, gen=%u}: a T0 store is the buffer family's "
-                                 "and the handle names another kind (%u)",
-                                 handle.Handle.Slot, handle.Handle.Gen, handle.Kind);
+            MGP_TRIP_WIRE_REPORT(
+                "MGPipe: " MGP_TRIP_WIRE_TAG(
+                    "ProtocolCorruption") " adopt_external {slot=%u, gen=%u}: a T0 store is the buffer family's "
+                                          "and the handle names another kind (%u)",
+                handle.Handle.Slot, handle.Handle.Gen, handle.Kind);
             return false;
         }
         MGPipeResourceRecord* record = ResolveResource("adopt_external", handle.Handle);
@@ -2655,10 +2697,11 @@ namespace MobileGL::MG_Pipe {
 
     void* MGPipeApplyDonateInProcess(const MGPHandleOnly& handle) {
         if (static_cast<MGPipeKind>(handle.Kind) != MGPipeKind::Buffer) {
-            MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG("ProtocolCorruption")
-                                 " donate_in_process {slot=%u, gen=%u}: a T0 store is the buffer family's "
-                                 "and the handle names another kind (%u)",
-                                 handle.Handle.Slot, handle.Handle.Gen, handle.Kind);
+            MGP_TRIP_WIRE_REPORT(
+                "MGPipe: " MGP_TRIP_WIRE_TAG(
+                    "ProtocolCorruption") " donate_in_process {slot=%u, gen=%u}: a T0 store is the buffer family's "
+                                          "and the handle names another kind (%u)",
+                handle.Handle.Slot, handle.Handle.Gen, handle.Kind);
             return nullptr;
         }
         MGPipeResourceRecord* record = ResolveResource("donate_in_process", handle.Handle);
@@ -2706,22 +2749,23 @@ namespace MobileGL::MG_Pipe {
             fault = "a non-empty blob carries no bytes";
         }
         if (fault != nullptr) {
-            MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG("ProtocolCorruption")
-                                 " create_vertex_elements {slot=%u, gen=%u}: %s (attributes=%u, "
-                                 "bindingPoints=%u, that describes %llu bytes, blob declares %llu)",
-                                 desc.Cso.Slot, desc.Cso.Gen, fault, desc.AttributeCount,
-                                 desc.BindingPointCount, static_cast<unsigned long long>(declared),
-                                 static_cast<unsigned long long>(desc.Blob.Size));
+            MGP_TRIP_WIRE_REPORT(
+                "MGPipe: " MGP_TRIP_WIRE_TAG(
+                    "ProtocolCorruption") " create_vertex_elements {slot=%u, gen=%u}: %s (attributes=%u, "
+                                          "bindingPoints=%u, that describes %llu bytes, blob declares %llu)",
+                desc.Cso.Slot, desc.Cso.Gen, fault, desc.AttributeCount, desc.BindingPointCount,
+                static_cast<unsigned long long>(declared), static_cast<unsigned long long>(desc.Blob.Size));
             return;
         }
 
         MGPipeVertexElementsRecord* recordAt =
             RecordAt(MGPipeApplier().VertexElementsCsos, desc.Cso.Slot, kMGPipeMaxVertexElementsSlots);
         if (recordAt == nullptr) {
-            MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG("ProtocolCorruption")
-                                 " create_vertex_elements {slot=%u, gen=%u}: the slot is outside the record "
-                                 "table's bound (%u)",
-                                 desc.Cso.Slot, desc.Cso.Gen, kMGPipeMaxVertexElementsSlots);
+            MGP_TRIP_WIRE_REPORT(
+                "MGPipe: " MGP_TRIP_WIRE_TAG(
+                    "ProtocolCorruption") " create_vertex_elements {slot=%u, gen=%u}: the slot is outside the record "
+                                          "table's bound (%u)",
+                desc.Cso.Slot, desc.Cso.Gen, kMGPipeMaxVertexElementsSlots);
             return;
         }
         MGPipeVertexElementsRecord& record = *recordAt;
@@ -2783,7 +2827,8 @@ namespace MobileGL::MG_Pipe {
         auto& applier = MGPipeApplier();
         if (record->StoredBuffersValid) {
             const MGPVertexBuffers& header = record->StoredBuffersHeader;
-            for (Uint32 i = 0; i < header.Count; ++i) applier.VertexBuffers[header.Start + i] = record->StoredBuffers[i];
+            for (Uint32 i = 0; i < header.Count; ++i)
+                applier.VertexBuffers[header.Start + i] = record->StoredBuffers[i];
             applier.VertexBufferStart = header.Start;
             applier.VertexBufferCount = header.Count;
             applier.VertexFetchBaseInstance = header.BaseInstance;
@@ -2831,11 +2876,11 @@ namespace MobileGL::MG_Pipe {
             fault = "a non-empty set carries no entries";
         }
         if (fault != nullptr) {
-            MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG("ProtocolCorruption")
-                                 " set_vertex_buffers {start=%u, count=%u, hash=%llu}: %s (the applier holds "
-                                 "%u entries)",
-                                 hdr.Start, hdr.Count, static_cast<unsigned long long>(hdr.ContentHash),
-                                 fault, kMGPipeMaxVertexAttribs);
+            MGP_TRIP_WIRE_REPORT(
+                "MGPipe: " MGP_TRIP_WIRE_TAG(
+                    "ProtocolCorruption") " set_vertex_buffers {start=%u, count=%u, hash=%llu}: %s (the applier holds "
+                                          "%u entries)",
+                hdr.Start, hdr.Count, static_cast<unsigned long long>(hdr.ContentHash), fault, kMGPipeMaxVertexAttribs);
             return;
         }
 
@@ -2869,7 +2914,8 @@ namespace MobileGL::MG_Pipe {
             bound->StoredBuffersValid = hdr.Start == 0 && hdr.Count <= kMGPipeVaoStoredVertexBuffers;
             if (bound->StoredBuffersValid) {
                 bound->StoredBuffersHeader = hdr;
-                for (Uint32 i = 0; i < hdr.Count; ++i) bound->StoredBuffers[i] = tail[i];
+                for (Uint32 i = 0; i < hdr.Count; ++i)
+                    bound->StoredBuffers[i] = tail[i];
             }
         }
     }
@@ -2951,17 +2997,16 @@ namespace MobileGL::MG_Pipe {
         // clamped to it, and a truncated record arriving here as a plausible index is exactly
         // what the framebuffer subsystem's cap refusal exists to prevent upstream.
         for (Uint32 i = 0; fault == nullptr && i < kMGPipeMaxColorAttachments; ++i) {
-            if (state.DrawBuffers[i] < -1 ||
-                state.DrawBuffers[i] >= static_cast<Int8>(kMGPipeMaxColorAttachments)) {
+            if (state.DrawBuffers[i] < -1 || state.DrawBuffers[i] >= static_cast<Int8>(kMGPipeMaxColorAttachments)) {
                 fault = "a draw-buffer entry names a colour attachment outside the record's own array";
             }
         }
         if (fault != nullptr) {
-            MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG("ProtocolCorruption")
-                                 " set_framebuffer_state {slot=%u, gen=%u, target=%u}: %s (the record "
-                                 "carries %u colour attachments)",
-                                 state.Fbo.Slot, state.Fbo.Gen, state.Target, fault,
-                                 kMGPipeMaxColorAttachments);
+            MGP_TRIP_WIRE_REPORT(
+                "MGPipe: " MGP_TRIP_WIRE_TAG(
+                    "ProtocolCorruption") " set_framebuffer_state {slot=%u, gen=%u, target=%u}: %s (the record "
+                                          "carries %u colour attachments)",
+                state.Fbo.Slot, state.Fbo.Gen, state.Target, fault, kMGPipeMaxColorAttachments);
             return;
         }
 
@@ -3050,8 +3095,7 @@ namespace MobileGL::MG_Pipe {
     // ================================================================================
 
     void MGPipeApplyCreateSamplerState(const MGPSamplerDesc& desc, const SamplerParameters* parameters) {
-        MOBILEGL_ASSERT(desc.Cso.Slot >= kMGPipeFirstAllocatableSlot,
-                        "create_sampler_state named the reserved slot 0");
+        MOBILEGL_ASSERT(desc.Cso.Slot >= kMGPipeFirstAllocatableSlot, "create_sampler_state named the reserved slot 0");
         if (desc.Cso.Slot < kMGPipeFirstAllocatableSlot) return;
 
         // THE ONE BLOB RULE, on the family's own blob: a non-zero Parameters.Size must be
@@ -3067,22 +3111,23 @@ namespace MobileGL::MG_Pipe {
             fault = "the record declares no parameters and carries none";
         }
         if (fault != nullptr) {
-            MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG("ProtocolCorruption")
-                                 " create_sampler_state {slot=%u, gen=%u}: %s (one SamplerParameters is "
-                                 "%llu bytes, the blob declares %llu)",
-                                 desc.Cso.Slot, desc.Cso.Gen, fault,
-                                 static_cast<unsigned long long>(sizeof(SamplerParameters)),
-                                 static_cast<unsigned long long>(desc.Parameters.Size));
+            MGP_TRIP_WIRE_REPORT(
+                "MGPipe: " MGP_TRIP_WIRE_TAG(
+                    "ProtocolCorruption") " create_sampler_state {slot=%u, gen=%u}: %s (one SamplerParameters is "
+                                          "%llu bytes, the blob declares %llu)",
+                desc.Cso.Slot, desc.Cso.Gen, fault, static_cast<unsigned long long>(sizeof(SamplerParameters)),
+                static_cast<unsigned long long>(desc.Parameters.Size));
             return;
         }
 
         MGPipeSamplerCsoRecord* recordAt =
             RecordAt(MGPipeApplier().SamplerCsos, desc.Cso.Slot, kMGPipeMaxSamplerCsoSlots);
         if (recordAt == nullptr) {
-            MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG("ProtocolCorruption")
-                                 " create_sampler_state {slot=%u, gen=%u}: the slot is outside the record "
-                                 "table's bound (%u)",
-                                 desc.Cso.Slot, desc.Cso.Gen, kMGPipeMaxSamplerCsoSlots);
+            MGP_TRIP_WIRE_REPORT(
+                "MGPipe: " MGP_TRIP_WIRE_TAG(
+                    "ProtocolCorruption") " create_sampler_state {slot=%u, gen=%u}: the slot is outside the record "
+                                          "table's bound (%u)",
+                desc.Cso.Slot, desc.Cso.Gen, kMGPipeMaxSamplerCsoSlots);
             return;
         }
         // P4a's belt, after the blob rule and the slot bound and before the record moves.
@@ -3111,8 +3156,8 @@ namespace MobileGL::MG_Pipe {
     }
 
     void MGPipeApplyDeleteSamplerState(const MGPHandleOnly& handle) {
-        MOBILEGL_ASSERT(handle.Kind == static_cast<Uint32>(MGPipeKind::SamplerCso),
-                        "delete_sampler_state on kind %u", handle.Kind);
+        MOBILEGL_ASSERT(handle.Kind == static_cast<Uint32>(MGPipeKind::SamplerCso), "delete_sampler_state on kind %u",
+                        handle.Kind);
         // A SAMPLER CSO IS ONE VALUE FOR THE WHOLE SESSION, and its delete drops it from every
         // share group that holds it. The client's cache is content-addressed and process-wide:
         // one handle names one canonical value, published into each group that uses it (a
@@ -3152,17 +3197,17 @@ namespace MobileGL::MG_Pipe {
     }
 
     void MGPipeApplyCreateSamplerView(const MGPSamplerView& view) {
-        MOBILEGL_ASSERT(view.Cso.Slot >= kMGPipeFirstAllocatableSlot,
-                        "create_sampler_view named the reserved slot 0");
+        MOBILEGL_ASSERT(view.Cso.Slot >= kMGPipeFirstAllocatableSlot, "create_sampler_view named the reserved slot 0");
         if (view.Cso.Slot < kMGPipeFirstAllocatableSlot) return;
 
         MGPipeSamplerViewRecord* recordAt =
             RecordAt(MGPipeApplier().SamplerViewCsos, view.Cso.Slot, kMGPipeMaxSamplerViewSlots);
         if (recordAt == nullptr) {
-            MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG("ProtocolCorruption")
-                                 " create_sampler_view {slot=%u, gen=%u}: the slot is outside the record "
-                                 "table's bound (%u)",
-                                 view.Cso.Slot, view.Cso.Gen, kMGPipeMaxSamplerViewSlots);
+            MGP_TRIP_WIRE_REPORT(
+                "MGPipe: " MGP_TRIP_WIRE_TAG(
+                    "ProtocolCorruption") " create_sampler_view {slot=%u, gen=%u}: the slot is outside the record "
+                                          "table's bound (%u)",
+                view.Cso.Slot, view.Cso.Gen, kMGPipeMaxSamplerViewSlots);
             return;
         }
         // P4a's belt, after the slot bound and before the record moves.
@@ -3233,10 +3278,11 @@ namespace MobileGL::MG_Pipe {
         // pushes it onto the TEXTURE with glTexParameter*, so this handle is the only thing
         // that says which values those are.
         if (MGPipeHandleIsNull(params.BuiltinSampler)) {
-            MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG("ProtocolCorruption")
-                                 " set_texture_params {slot=%u, gen=%u, glName=%u}: the record names no "
-                                 "built-in sampler CSO, and every texture object owns one",
-                                 params.Res.Slot, params.Res.Gen, record->Desc.GlNameForDiag);
+            MGP_TRIP_WIRE_REPORT(
+                "MGPipe: " MGP_TRIP_WIRE_TAG(
+                    "ProtocolCorruption") " set_texture_params {slot=%u, gen=%u, glName=%u}: the record names no "
+                                          "built-in sampler CSO, and every texture object owns one",
+                params.Res.Slot, params.Res.Gen, record->Desc.GlNameForDiag);
             return false;
         }
         // AND THE CSO IT NAMES IS NOT RESOLVED. The sampler subsystem is its own bit and may be
@@ -3326,21 +3372,21 @@ namespace MobileGL::MG_Pipe {
     // latches only its set-hash suppressor.
     void MGPipeApplySetShaderBuffers(const MGPShaderBuffers& hdr, const MGPBufferRange* tail) {
         if (hdr.Class >= kMGPipeShaderBufferClassCount) {
-            MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG("ProtocolCorruption")
-                                 " SetShaderBuffers.Class - class %u names no binding-point "
-                                 "array; the three are Uniform=0, ShaderStorage=1, "
-                                 "AtomicCounter=2",
+            MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG(
+                                     "ProtocolCorruption") " SetShaderBuffers.Class - class %u names no binding-point "
+                                                           "array; the three are Uniform=0, ShaderStorage=1, "
+                                                           "AtomicCounter=2",
                                  hdr.Class);
             return;
         }
         const Uint64 end = Uint64{hdr.Start} + Uint64{hdr.Count};
         if (end > kMGPipeMaxBufferBindingPoints || (hdr.Count != 0 && tail == nullptr)) {
-            MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG("ProtocolCorruption")
-                                 " SetShaderBuffers.Count {class=%u, start=%u, count=%u}: the "
-                                 "window runs past the %u binding points the wire carries, or a "
-                                 "non-empty set carries no ranges",
-                                 hdr.Class, hdr.Start, hdr.Count,
-                                 static_cast<unsigned>(kMGPipeMaxBufferBindingPoints));
+            MGP_TRIP_WIRE_REPORT(
+                "MGPipe: " MGP_TRIP_WIRE_TAG(
+                    "ProtocolCorruption") " SetShaderBuffers.Count {class=%u, start=%u, count=%u}: the "
+                                          "window runs past the %u binding points the wire carries, or a "
+                                          "non-empty set carries no ranges",
+                hdr.Class, hdr.Start, hdr.Count, static_cast<unsigned>(kMGPipeMaxBufferBindingPoints));
             return;
         }
         // THE WINDOW IS THE BOUND AND ENTRIES OUTSIDE IT ARE NOT CLEARED, exactly as the three
@@ -3348,7 +3394,8 @@ namespace MobileGL::MG_Pipe {
         // a binding at or above Count means "nothing bound" to every reader (the frontend
         // array's default says the same thing, which is what makes the two pictures agree).
         auto& destination = MGPipeApplier().BoundShaderBuffers[hdr.Class];
-        for (Uint32 i = 0; i < hdr.Count; ++i) destination[hdr.Start + i] = tail[i];
+        for (Uint32 i = 0; i < hdr.Count; ++i)
+            destination[hdr.Start + i] = tail[i];
         MGPipeApplier().ShaderBufferStart[hdr.Class] = hdr.Start;
         MGPipeApplier().ShaderBufferCount[hdr.Class] = hdr.Count;
         for (Uint32 w = 0; w < kMGPipeShaderBufferWritableMaskWords; ++w) {
@@ -3376,21 +3423,26 @@ namespace MobileGL::MG_Pipe {
         // validation a record ever gets is the one the applier does itself, which is the rule
         // every sibling in this file already keeps.
         const char* fault = nullptr;
-        if (hdr.BlockBindingCount > kMGPipeMaxProgramBlockBindings) fault = "BlockBindingCount";
-        else if (hdr.SamplerUnitCount > kMGPipeMaxProgramSamplerUnits) fault = "SamplerUnitCount";
-        else if (hdr.StorageOverrideCount > kMGPipeMaxProgramStorageOverrides) fault = "StorageOverrideCount";
-        else if (hdr.BlockBindingCount != 0 && blockBindings == nullptr) fault = "BlockBindings";
-        else if (hdr.SamplerUnitCount != 0 && samplerUnits == nullptr) fault = "SamplerUnits";
-        else if (hdr.StorageOverrideCount != 0 &&
-                 (storageOverrides == nullptr || storageOverrideNames == nullptr)) {
+        if (hdr.BlockBindingCount > kMGPipeMaxProgramBlockBindings)
+            fault = "BlockBindingCount";
+        else if (hdr.SamplerUnitCount > kMGPipeMaxProgramSamplerUnits)
+            fault = "SamplerUnitCount";
+        else if (hdr.StorageOverrideCount > kMGPipeMaxProgramStorageOverrides)
+            fault = "StorageOverrideCount";
+        else if (hdr.BlockBindingCount != 0 && blockBindings == nullptr)
+            fault = "BlockBindings";
+        else if (hdr.SamplerUnitCount != 0 && samplerUnits == nullptr)
+            fault = "SamplerUnits";
+        else if (hdr.StorageOverrideCount != 0 && (storageOverrides == nullptr || storageOverrideNames == nullptr)) {
             fault = "StorageOverrides";
         }
         if (fault != nullptr) {
-            MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG("ProtocolCorruption")
-                                 " set_program_bindings {slot=%u, gen=%u}: %s is out of range or "
-                                 "its tail is absent (%u/%u/%u declared)",
-                                 hdr.Cso.Slot, hdr.Cso.Gen, fault, hdr.BlockBindingCount,
-                                 hdr.SamplerUnitCount, hdr.StorageOverrideCount);
+            MGP_TRIP_WIRE_REPORT(
+                "MGPipe: " MGP_TRIP_WIRE_TAG(
+                    "ProtocolCorruption") " set_program_bindings {slot=%u, gen=%u}: %s is out of range or "
+                                          "its tail is absent (%u/%u/%u declared)",
+                hdr.Cso.Slot, hdr.Cso.Gen, fault, hdr.BlockBindingCount, hdr.SamplerUnitCount,
+                hdr.StorageOverrideCount);
             return;
         }
         // P4a's belt, for MGPipeApplyBindShaderState's reason: with no consumer this applier
@@ -3476,7 +3528,9 @@ namespace MobileGL::MG_Pipe {
         thread_local Bool g_currentRecordBarrieredByEscalation = false;
     } // namespace
 
-    Bool MGPipeApplierCurrentRecordIsBarriered() { return g_currentRecordBarriered; }
+    Bool MGPipeApplierCurrentRecordIsBarriered() {
+        return g_currentRecordBarriered;
+    }
 
     void MGPipeApplierSetCurrentRecordBarriered(Bool barriered) {
         g_currentRecordBarriered = barriered;
@@ -3499,12 +3553,10 @@ namespace MobileGL::MG_Pipe {
     // binding signature, image formats, patch parameters) arrive through other records.
     // ================================================================================
 
-    void MGPipeApplyCreateShaderState(const MGPProgramDesc& desc,
-                                      const MG_State::GLState::LinkArtifacts* link,
+    void MGPipeApplyCreateShaderState(const MGPProgramDesc& desc, const MG_State::GLState::LinkArtifacts* link,
                                       const MG_State::GLState::SpirvArtifacts* spirv,
                                       SharedPtr<const MG_State::GLState::ProgramArchive> archive) {
-        MOBILEGL_ASSERT(desc.Cso.Slot >= kMGPipeFirstAllocatableSlot,
-                        "create_shader_state named the reserved slot 0");
+        MOBILEGL_ASSERT(desc.Cso.Slot >= kMGPipeFirstAllocatableSlot, "create_shader_state named the reserved slot 0");
         if (desc.Cso.Slot < kMGPipeFirstAllocatableSlot) return;
 
         // THE ONE BLOB RULE, over seven blob refs at once. All seven are declared with Size 0 in
@@ -3522,9 +3574,9 @@ namespace MobileGL::MG_Pipe {
             fault = "the default uniform block is larger than any program may declare";
         }
         if (fault != nullptr) {
-            MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG("ProtocolCorruption")
-                                 " create_shader_state {slot=%u, gen=%u}: %s (stages=0x%x, "
-                                 "globalUboSize=%u, bound %u)",
+            MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG(
+                                     "ProtocolCorruption") " create_shader_state {slot=%u, gen=%u}: %s (stages=0x%x, "
+                                                           "globalUboSize=%u, bound %u)",
                                  desc.Cso.Slot, desc.Cso.Gen, fault, desc.StageMask, desc.GlobalUboSize,
                                  kMGPipeMaxGlobalConstantsBytes);
             return;
@@ -3532,10 +3584,11 @@ namespace MobileGL::MG_Pipe {
 
         MGPipeShaderCsoRecord* recordAt = ShaderCsoRecordAt(desc.Cso.Slot);
         if (recordAt == nullptr) {
-            MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG("ProtocolCorruption")
-                                 " create_shader_state {slot=%u, gen=%u}: the slot is outside the record "
-                                 "table's bound (%u)",
-                                 desc.Cso.Slot, desc.Cso.Gen, kMGPipeMaxShaderCsoSlots);
+            MGP_TRIP_WIRE_REPORT(
+                "MGPipe: " MGP_TRIP_WIRE_TAG(
+                    "ProtocolCorruption") " create_shader_state {slot=%u, gen=%u}: the slot is outside the record "
+                                          "table's bound (%u)",
+                desc.Cso.Slot, desc.Cso.Gen, kMGPipeMaxShaderCsoSlots);
             return;
         }
 
@@ -3603,8 +3656,8 @@ namespace MobileGL::MG_Pipe {
     }
 
     void MGPipeApplyBindShaderState(const MGPHandleOnly& handle) {
-        MOBILEGL_ASSERT(handle.Kind == static_cast<Uint32>(MGPipeKind::ShaderCso),
-                        "bind_shader_state on kind %u", handle.Kind);
+        MOBILEGL_ASSERT(handle.Kind == static_cast<Uint32>(MGPipeKind::ShaderCso), "bind_shader_state on kind %u",
+                        handle.Kind);
         // P4a's belt, and first for set_texture_params' reason: with no consumer this applier
         // holds no shader CSO record, so the resolution below would report the designed state
         // as RefusedObjectCalls. The null-handle unbind is behind it too - a binding this
@@ -3625,8 +3678,8 @@ namespace MobileGL::MG_Pipe {
     }
 
     void MGPipeApplyDeleteShaderState(const MGPHandleOnly& handle) {
-        MOBILEGL_ASSERT(handle.Kind == static_cast<Uint32>(MGPipeKind::ShaderCso),
-                        "delete_shader_state on kind %u", handle.Kind);
+        MOBILEGL_ASSERT(handle.Kind == static_cast<Uint32>(MGPipeKind::ShaderCso), "delete_shader_state on kind %u",
+                        handle.Kind);
         // A COMPOSITE'S SLOT HAS TWO INDEPENDENT RELEASE PATHS - the pipeline cache's eviction
         // and the composite program's own destructor - and both arrive here through one client
         // helper. The second is a refusal: the record is already gone, so it is counted and
@@ -3664,8 +3717,8 @@ namespace MobileGL::MG_Pipe {
     // draw resolves GetProgramForDraw and a dispatch resolves GetProgramForDispatch, and a
     // pipeline object flattened into a composite is the first of those and never the second.
     void MGPipeApplySetDrawProgram(const MGPHandleOnly& handle) {
-        MOBILEGL_ASSERT(handle.Kind == static_cast<Uint32>(MGPipeKind::ShaderCso),
-                        "set_draw_program on kind %u", handle.Kind);
+        MOBILEGL_ASSERT(handle.Kind == static_cast<Uint32>(MGPipeKind::ShaderCso), "set_draw_program on kind %u",
+                        handle.Kind);
         if (NoP4aConsumer()) return; // P4a's belt, for MGPipeApplyBindShaderState's reason.
         if (MGPipeHandleIsNull(handle.Handle)) {
             MGPipeApplier().DrawProgram = kMGPipeNullHandle;
@@ -3679,8 +3732,8 @@ namespace MobileGL::MG_Pipe {
     }
 
     void MGPipeApplySetDispatchProgram(const MGPHandleOnly& handle) {
-        MOBILEGL_ASSERT(handle.Kind == static_cast<Uint32>(MGPipeKind::ShaderCso),
-                        "set_dispatch_program on kind %u", handle.Kind);
+        MOBILEGL_ASSERT(handle.Kind == static_cast<Uint32>(MGPipeKind::ShaderCso), "set_dispatch_program on kind %u",
+                        handle.Kind);
         if (NoP4aConsumer()) return; // P4a's belt, for MGPipeApplyBindShaderState's reason.
         if (MGPipeHandleIsNull(handle.Handle)) {
             MGPipeApplier().DispatchProgram = kMGPipeNullHandle;
@@ -3732,11 +3785,12 @@ namespace MobileGL::MG_Pipe {
             fault = "a non-empty block carries no bytes";
         }
         if (fault != nullptr) {
-            MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG("ProtocolCorruption")
-                                 " set_global_constants {slot=%u, gen=%u}: %s (version=%u, the program "
-                                 "declares %u bytes, the blob declares %llu)",
-                                 record.ShaderCso.Slot, record.ShaderCso.Gen, fault, record.Version, size,
-                                 static_cast<unsigned long long>(record.Blob.Size));
+            MGP_TRIP_WIRE_REPORT(
+                "MGPipe: " MGP_TRIP_WIRE_TAG(
+                    "ProtocolCorruption") " set_global_constants {slot=%u, gen=%u}: %s (version=%u, the program "
+                                          "declares %u bytes, the blob declares %llu)",
+                record.ShaderCso.Slot, record.ShaderCso.Gen, fault, record.Version, size,
+                static_cast<unsigned long long>(record.Blob.Size));
             return;
         }
 
@@ -3765,11 +3819,15 @@ namespace MobileGL::MG_Pipe {
         thread_local Bool tl_serverOriginatedWrite = false;
     } // namespace
 
-    Bool MGPipeApplyingServerOriginatedWrite() { return tl_serverOriginatedWrite; }
+    Bool MGPipeApplyingServerOriginatedWrite() {
+        return tl_serverOriginatedWrite;
+    }
     MGPipeServerOriginatedWriteScope::MGPipeServerOriginatedWriteScope() : m_previous(tl_serverOriginatedWrite) {
         tl_serverOriginatedWrite = true;
     }
-    MGPipeServerOriginatedWriteScope::~MGPipeServerOriginatedWriteScope() { tl_serverOriginatedWrite = m_previous; }
+    MGPipeServerOriginatedWriteScope::~MGPipeServerOriginatedWriteScope() {
+        tl_serverOriginatedWrite = m_previous;
+    }
 
     void MGPipeUnmigratedEmulation(const char* name) {
 #if MOBILEGL_BUILD_DISAGGREGATED

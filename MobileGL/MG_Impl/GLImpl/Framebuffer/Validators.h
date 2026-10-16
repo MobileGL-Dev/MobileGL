@@ -29,6 +29,5 @@ namespace MobileGL::MG_Impl::GLImpl::FramebufferImpl {
     // of the contract: a name outside the table is INVALID_ENUM, and only then is a name that the
     // DEFAULT framebuffer does not answer INVALID_OPERATION. Testing the framebuffer kind first
     // would turn GL_FRAMEBUFFER_DEFAULT_WIDTH on framebuffer zero into the wrong error.
-    Bool ValidateFramebufferParameterPname(GLenum pname, Bool isDefaultFramebuffer, Bool forSetter,
-                                           const char* caller);
+    Bool ValidateFramebufferParameterPname(GLenum pname, Bool isDefaultFramebuffer, Bool forSetter, const char* caller);
 } // namespace MobileGL::MG_Impl::GLImpl::FramebufferImpl

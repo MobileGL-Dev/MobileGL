@@ -21,7 +21,7 @@
 
 namespace MobileGL::MG_Backend::DirectGLES {
     SamplerImpl::BackendSamplerObject* GetRawDepthFetchSampler();
-}
+} // namespace MobileGL::MG_Backend::DirectGLES
 #endif
 
 using namespace MobileGL;
@@ -31,11 +31,21 @@ namespace {
 #if MOBILEGL_BUILD_DISAGGREGATED
     Uint unpackCalls = 0, samplerParameters = 0, nextNativeId = 100, boundXfb = 0;
     Vector<GLenum> unpackNames;
-    void GL_APIENTRY PixelStore(GLenum name, GLint) { ++unpackCalls; unpackNames.push_back(name); }
-    void GL_APIENTRY GenNames(GLsizei count, GLuint* names) { while (count-- > 0) *names++ = ++nextNativeId; }
+    void GL_APIENTRY PixelStore(GLenum name, GLint) {
+        ++unpackCalls;
+        unpackNames.push_back(name);
+    }
+    void GL_APIENTRY GenNames(GLsizei count, GLuint* names) {
+        while (count-- > 0)
+            *names++ = ++nextNativeId;
+    }
     void GL_APIENTRY DeleteNames(GLsizei, const GLuint*) {}
-    void GL_APIENTRY SamplerParam(GLuint, GLenum, GLint) { ++samplerParameters; }
-    void GL_APIENTRY BindXfb(GLenum, GLuint id) { boundXfb = id; }
+    void GL_APIENTRY SamplerParam(GLuint, GLenum, GLint) {
+        ++samplerParameters;
+    }
+    void GL_APIENTRY BindXfb(GLenum, GLuint id) {
+        boundXfb = id;
+    }
     void GL_APIENTRY NoArgs() {}
     void GL_APIENTRY BeginXfb(GLenum) {}
     void GL_APIENTRY XfbVaryings(GLuint, GLsizei, const GLchar* const*, GLenum) {}
@@ -66,7 +76,7 @@ namespace {
         }
     };
 #endif
-}
+} // namespace
 
 TEST(ContextEpochTest, UnpackDefaultIsRepublishedForANewNativeContextOrRole) {
 #if MOBILEGL_BUILD_DISAGGREGATED
@@ -109,7 +119,6 @@ TEST(ContextEpochTest, RawDepthSamplerOwnsANativeIdForEachContextGeneration) {
     GTEST_SKIP() << "native server sampler exists only in the disaggregated build";
 #endif
 }
-
 
 TEST(ContextEpochTest, SameXfbNameInTwoServedContextsDoesNotAliasThePausedSpan) {
 #if MOBILEGL_BUILD_DISAGGREGATED
@@ -187,10 +196,12 @@ TEST(ContextEpochTest, DualBlockApplierDiagnosticIsRoleLocalWhileSharedControlRe
             Session::NoteApplyThreadEnteredApplier();
             serverSawItself = Session::ApplyThreadIsInsideApplier();
             entered.store(true, std::memory_order_release);
-            while (!leave.load(std::memory_order_acquire)) std::this_thread::yield();
+            while (!leave.load(std::memory_order_acquire))
+                std::this_thread::yield();
             Session::NoteApplyThreadLeftApplier();
         });
-        while (!entered.load(std::memory_order_acquire)) std::this_thread::yield();
+        while (!entered.load(std::memory_order_acquire))
+            std::this_thread::yield();
         const Bool clientSawServer = Session::ApplyThreadIsInsideApplier();
         leave.store(true, std::memory_order_release);
         server.join();
@@ -215,8 +226,12 @@ TEST(ContextEpochTest, DualBlockApplierDiagnosticIsRoleLocalWhileSharedControlRe
 namespace {
     Bool fakeScissor = false;
     Uint isEnabledCalls = 0;
-    void GL_APIENTRY FakeEnable(GLenum cap) { if (cap == GL_SCISSOR_TEST) fakeScissor = true; }
-    void GL_APIENTRY FakeDisable(GLenum cap) { if (cap == GL_SCISSOR_TEST) fakeScissor = false; }
+    void GL_APIENTRY FakeEnable(GLenum cap) {
+        if (cap == GL_SCISSOR_TEST) fakeScissor = true;
+    }
+    void GL_APIENTRY FakeDisable(GLenum cap) {
+        if (cap == GL_SCISSOR_TEST) fakeScissor = false;
+    }
     GLboolean GL_APIENTRY FakeIsEnabled(GLenum cap) {
         ++isEnabledCalls;
         return cap == GL_SCISSOR_TEST && fakeScissor ? GL_TRUE : GL_FALSE;
@@ -233,8 +248,7 @@ namespace {
     // The driver's scissor as the copy inside the guard sees it.
     Bool ScissorDuringGuard() {
         Bool seen = true;
-        RenderStateImpl::RunScissorDisabledForTesting([](void* out) { *static_cast<Bool*>(out) = fakeScissor; },
-                                                      &seen);
+        RenderStateImpl::RunScissorDisabledForTesting([](void* out) { *static_cast<Bool*>(out) = fakeScissor; }, &seen);
         return seen;
     }
 } // namespace

@@ -110,8 +110,8 @@ namespace MobileGL {
                 return Status::SuccessWithChange;
             }
 
-            spvtools::Optimizer::PassToken
-            StripUboMemberRelaxedPrecisionPass::CreateStripUboMemberRelaxedPrecisionPass() {
+            spvtools::Optimizer::PassToken StripUboMemberRelaxedPrecisionPass::
+                CreateStripUboMemberRelaxedPrecisionPass() {
                 return spvtools::Optimizer::PassToken(MakeUnique<StripUboMemberRelaxedPrecisionPass>());
             }
         } // namespace ShaderTranspiler

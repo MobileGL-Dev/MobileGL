@@ -198,7 +198,10 @@ namespace MobileGL {
             // THREAD-SCOPED, NOT PROCESS-SCOPED, for the case that is easy to miss: under inproc
             // the server role is the mgl-srv-apply THREAD, so a process-wide flag would file its
             // lines under whichever role set it last.
-            enum class LogRole { Client, Server };
+            enum class LogRole {
+                Client,
+                Server
+            };
 
             // Called by the apply thread when it starts (inproc), and once by ServerMain for a
             // whole spawned server process. Without it a thread defaults to the process role,
@@ -252,7 +255,10 @@ namespace MobileGL {
             // byte-identical to the baseline, so these may not become library symbols. Nothing
             // inside the library calls them - only tests and harnesses do - so an inline
             // definition emits code into those readers and nothing at all into libMobileGL.so.
-            enum class LogRole { Client, Server };
+            enum class LogRole {
+                Client,
+                Server
+            };
 
             // No roles to separate, so nothing to record. Present so that a harness may say which
             // role a thread is without asking which build it is in.
@@ -267,8 +273,12 @@ namespace MobileGL {
             // one role in this build, so "which role is this thread" has exactly one true answer
             // and no state to read - but a caller must still compile and mean the right thing in
             // both flavours rather than wrapping these in an `#if` it might get wrong once.
-            inline LogRole CurrentThreadRole() { return LogRole::Client; }
-            inline bool CurrentProcessIsSpawnedServer() { return false; }
+            inline LogRole CurrentThreadRole() {
+                return LogRole::Client;
+            }
+            inline bool CurrentProcessIsSpawnedServer() {
+                return false;
+            }
 
             inline std::string ReadRoleLogs(const char* basePath) {
                 std::string all;

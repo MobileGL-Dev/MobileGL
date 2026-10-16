@@ -25,10 +25,14 @@ namespace MobileGL::MG_Backend::DirectGLES::MultiDrawImpl {
 
         SizeT IndexTypeSize(GLenum type) {
             switch (type) {
-            case GL_UNSIGNED_BYTE: return 1;
-            case GL_UNSIGNED_SHORT: return 2;
-            case GL_UNSIGNED_INT: return 4;
-            default: return 0;
+            case GL_UNSIGNED_BYTE:
+                return 1;
+            case GL_UNSIGNED_SHORT:
+                return 2;
+            case GL_UNSIGNED_INT:
+                return 4;
+            default:
+                return 0;
             }
         }
 
@@ -60,12 +64,18 @@ namespace MobileGL::MG_Backend::DirectGLES::MultiDrawImpl {
         // first) and for GL_PATCHES, whose primitive size is dynamic tessellation state.
         Uint32 ConcatenablePrimitiveSize(GLenum mode) {
             switch (mode) {
-            case GL_POINTS: return 1;
-            case GL_LINES: return 2;
-            case GL_TRIANGLES: return 3;
-            case GL_LINES_ADJACENCY: return 4;
-            case GL_TRIANGLES_ADJACENCY: return 6;
-            default: return 0;
+            case GL_POINTS:
+                return 1;
+            case GL_LINES:
+                return 2;
+            case GL_TRIANGLES:
+                return 3;
+            case GL_LINES_ADJACENCY:
+                return 4;
+            case GL_TRIANGLES_ADJACENCY:
+                return 6;
+            default:
+                return 0;
             }
         }
 
@@ -112,10 +122,10 @@ namespace MobileGL::MG_Backend::DirectGLES::MultiDrawImpl {
         // value is exactly the work its original call site did, in its original order, so the
         // monolith arm makes the same calls in the same sequence it made before this package.
         enum class IndexBufferQuestion {
-            Presence,         // is an element array buffer bound at all
-            DriverName,       // + the GL name currently bound to GL_ELEMENT_ARRAY_BUFFER
-            DriverNameAndSize,// + the store's size in bytes (the compute tier's source)
-            HostBytes,        // a CPU-readable copy of the whole store, and its size
+            Presence,          // is an element array buffer bound at all
+            DriverName,        // + the GL name currently bound to GL_ELEMENT_ARRAY_BUFFER
+            DriverNameAndSize, // + the store's size in bytes (the compute tier's source)
+            HostBytes,         // a CPU-readable copy of the whole store, and its size
         };
 
         struct BoundIndexBufferView {
@@ -150,8 +160,7 @@ namespace MobileGL::MG_Backend::DirectGLES::MultiDrawImpl {
         // the other buffer target: a missing record on the handle arm aborts by name and never
         // falls back to the frontend binding slot, which answers for whatever the CLIENT has
         // bound NOW - a later verb than the one being applied.
-        [[noreturn]] void RefuseMissingIndirectBufferRecord(const char* entry,
-                                                            MG_Pipe::MGPipeHandle res) {
+        [[noreturn]] void RefuseMissingIndirectBufferRecord(const char* entry, MG_Pipe::MGPipeHandle res) {
             MGLOG_F("MGPipe: Fatal{RoleViolation, \"multidraw-indirect-buffer-arm\"} - %s found no "
                     "backend resource for the indirect buffer {%u, %u} this verb's record named. "
                     "The indirect buffer of this family is MGPipeApplier().VerbIndirectBuffer "
@@ -167,8 +176,7 @@ namespace MobileGL::MG_Backend::DirectGLES::MultiDrawImpl {
         // server shadow is a missing record and Fatal by name; for one the application ORPHANED
         // the gap is its own undefined content, and reading the shadow's zero-fill is exactly
         // what the monolith arm's MappedData() hands back.
-        Bool IndexBufferRecordHasDefinedContent(const MG_Pipe::MGPipeApplierState& st,
-                                                MG_Pipe::MGPipeHandle res) {
+        Bool IndexBufferRecordHasDefinedContent(const MG_Pipe::MGPipeApplierState& st, MG_Pipe::MGPipeHandle res) {
             if (res.Slot >= st.Resources.size()) return false;
             const auto& candidate = st.Resources[res.Slot];
             if (!candidate.Live || candidate.Gen != res.Gen) return false;
@@ -323,7 +331,8 @@ namespace MobileGL::MG_Backend::DirectGLES::MultiDrawImpl {
             BufferImpl::BindBufferId(BufferImpl::TempBufferTarget, buffer.id);
             // Grow in powers of two so a batch that creeps up in size stops respecifying.
             SizeT capacity = buffer.capacity == 0 ? bytes : buffer.capacity;
-            while (capacity < bytes) capacity *= 2;
+            while (capacity < bytes)
+                capacity *= 2;
             g_GLESFuncs.glBufferData(BufferImpl::TempBufferTarget, static_cast<GLsizeiptr>(capacity), nullptr,
                                      GL_STREAM_DRAW);
             buffer.capacity = capacity;
@@ -357,7 +366,8 @@ namespace MobileGL::MG_Backend::DirectGLES::MultiDrawImpl {
             const SizeT aligned = (bytes + kRingAlignment - 1) & ~(kRingAlignment - 1);
             if (buffer.capacity < aligned) {
                 SizeT capacity = buffer.capacity == 0 ? kMinRingBytes : buffer.capacity;
-                while (capacity < aligned) capacity *= 2;
+                while (capacity < aligned)
+                    capacity *= 2;
                 g_GLESFuncs.glBufferData(BufferImpl::TempBufferTarget, static_cast<GLsizeiptr>(capacity), nullptr,
                                          GL_STREAM_DRAW);
                 buffer.capacity = capacity;
@@ -422,9 +432,8 @@ namespace MobileGL::MG_Backend::DirectGLES::MultiDrawImpl {
         void ResolveTierOnce() {
             if (g_tierResolved) return;
             g_tierResolved = true;
-            g_resolvedTier =
-                ResolveTier(g_GLESCapabilities, g_GLESFuncs, MG_Config::Features.EsprytMultiDrawMode,
-                            &g_tierResolution);
+            g_resolvedTier = ResolveTier(g_GLESCapabilities, g_GLESFuncs, MG_Config::Features.EsprytMultiDrawMode,
+                                         &g_tierResolution);
             MGLOG_D("DirectGLES multi-draw: %s", g_tierResolution.c_str());
         }
 
@@ -447,8 +456,8 @@ namespace MobileGL::MG_Backend::DirectGLES::MultiDrawImpl {
         // the batch's own shape - not the driver - rules it out; the compute tier keeps
         // its remaining feasibility checks inside its implementation, where the data it
         // has to walk is already in hand.
-        GLESMultiDrawMode ResolveTierForBatch(Bool programReadsDrawID, Bool perSubDrawBaseVertex,
-                                              Bool hasIndexBuffer, Bool arbitraryRestart) {
+        GLESMultiDrawMode ResolveTierForBatch(Bool programReadsDrawID, Bool perSubDrawBaseVertex, Bool hasIndexBuffer,
+                                              Bool arbitraryRestart) {
             ResolveTierOnce();
             GLESMultiDrawMode tier = g_resolvedTier;
 
@@ -480,8 +489,7 @@ namespace MobileGL::MG_Backend::DirectGLES::MultiDrawImpl {
             // The indirect tiers describe each sub-draw as an element offset into the
             // bound element array buffer. A client-memory index array has no such buffer,
             // and indirect draws are not defined without one.
-            if (!hasIndexBuffer &&
-                (tier == GLESMultiDrawMode::MultiIndirect || tier == GLESMultiDrawMode::Indirect)) {
+            if (!hasIndexBuffer && (tier == GLESMultiDrawMode::MultiIndirect || tier == GLESMultiDrawMode::Indirect)) {
                 tier = SupportsTier(GLESMultiDrawMode::BaseVertex) ? GLESMultiDrawMode::BaseVertex
                                                                    : GLESMultiDrawMode::DrawElements;
             }
@@ -503,14 +511,18 @@ namespace MobileGL::MG_Backend::DirectGLES::MultiDrawImpl {
             for (SizeT i = 0; i < sourceIndexCount; ++i) {
                 Uint32 value = 0;
                 switch (indexSize) {
-                case 1: value = source[i]; break;
+                case 1:
+                    value = source[i];
+                    break;
                 case 2: {
                     Uint16 narrow = 0;
                     std::memcpy(&narrow, source + i * 2, sizeof(narrow));
                     value = narrow;
                     break;
                 }
-                default: std::memcpy(&value, source + i * 4, sizeof(value)); break;
+                default:
+                    std::memcpy(&value, source + i * 4, sizeof(value));
+                    break;
                 }
                 // Unsigned wraparound is the defined behaviour for a negative base vertex.
                 out[i] = (restartActive && value == restartSentinel) ? 0xFFFFFFFFu : value + baseVertexBits;
@@ -525,9 +537,8 @@ namespace MobileGL::MG_Backend::DirectGLES::MultiDrawImpl {
         // P5e (mv): `hasIndexBuffer` is a Bool and not the frontend object it used to be,
         // because presence is the only thing this function ever asked of it - and on the record
         // arm there is no such object on this side to hand it.
-        const Uint8* ResolveSubDrawIndices(Bool hasIndexBuffer, const Uint8* indexBufferBytes,
-                                           SizeT indexBufferSize, const void* indices, SizeT indexCount,
-                                           SizeT indexSize) {
+        const Uint8* ResolveSubDrawIndices(Bool hasIndexBuffer, const Uint8* indexBufferBytes, SizeT indexBufferSize,
+                                           const void* indices, SizeT indexCount, SizeT indexSize) {
             if (!hasIndexBuffer) {
                 return static_cast<const Uint8*>(indices);
             }
@@ -610,7 +621,8 @@ namespace MobileGL::MG_Backend::DirectGLES::MultiDrawImpl {
                 for (GLsizei i = 0; i < drawcount; ++i) {
                     if (feedDrawID) SetCurrentDrawID(static_cast<Uint32>(i));
                     if (feedBaseVertex) SetCurrentBaseVertex(basevertex ? basevertex[i] : 0);
-                    const SizeT commandOffset = commandBase + static_cast<SizeT>(i) * sizeof(DrawElementsIndirectCommand);
+                    const SizeT commandOffset =
+                        commandBase + static_cast<SizeT>(i) * sizeof(DrawElementsIndirectCommand);
                     ForEachViewportRoutingPass([&] {
                         g_GLESFuncs.glDrawElementsIndirect(mode, type, reinterpret_cast<const void*>(commandOffset));
                     });
@@ -650,8 +662,7 @@ namespace MobileGL::MG_Backend::DirectGLES::MultiDrawImpl {
         // ---------------------------------------------------------------------------
 
         Bool RunRebasedDrawElements(GLenum mode, const GLsizei* count, GLenum type, const GLvoid* const* indices,
-                                    GLsizei drawcount, const GLint* basevertex, Bool feedDrawID,
-                                    Bool feedBaseVertex) {
+                                    GLsizei drawcount, const GLint* basevertex, Bool feedDrawID, Bool feedBaseVertex) {
             const SizeT indexSize = IndexTypeSize(type);
             if (indexSize == 0) return false;
 
@@ -688,8 +699,8 @@ namespace MobileGL::MG_Backend::DirectGLES::MultiDrawImpl {
                                                             indices[i], subDrawCount, indexSize);
                 if (!source) {
                     MGLOG_E_ONCE("DirectGLES multi-draw (drawelements tier): sub-draw %d reads outside the bound index "
-                            "buffer; skipping the batch",
-                            i);
+                                 "buffer; skipping the batch",
+                                 i);
                     return false;
                 }
                 RebaseIndices(source, subDrawCount, indexSize, basevertex ? basevertex[i] : 0, restartActive,
@@ -807,7 +818,8 @@ void main() {
             if (status != GL_TRUE) {
                 char log[1024] = {};
                 g_GLESFuncs.glGetShaderInfoLog(shader, sizeof(log) - 1, nullptr, log);
-                MGLOG_E_ONCE("DirectGLES multi-draw (compute tier): index-flattening shader failed to compile: %s", log);
+                MGLOG_E_ONCE("DirectGLES multi-draw (compute tier): index-flattening shader failed to compile: %s",
+                             log);
                 g_GLESFuncs.glDeleteShader(shader);
                 return false;
             }
@@ -1016,13 +1028,20 @@ void main() {
 
     const char* TierName(GLESMultiDrawMode tier) {
         switch (tier) {
-        case GLESMultiDrawMode::Auto: return "auto";
-        case GLESMultiDrawMode::Ext: return "ext";
-        case GLESMultiDrawMode::MultiIndirect: return "multiindirect";
-        case GLESMultiDrawMode::Indirect: return "indirect";
-        case GLESMultiDrawMode::BaseVertex: return "basevertex";
-        case GLESMultiDrawMode::DrawElements: return "drawelements";
-        case GLESMultiDrawMode::Compute: return "compute";
+        case GLESMultiDrawMode::Auto:
+            return "auto";
+        case GLESMultiDrawMode::Ext:
+            return "ext";
+        case GLESMultiDrawMode::MultiIndirect:
+            return "multiindirect";
+        case GLESMultiDrawMode::Indirect:
+            return "indirect";
+        case GLESMultiDrawMode::BaseVertex:
+            return "basevertex";
+        case GLESMultiDrawMode::DrawElements:
+            return "drawelements";
+        case GLESMultiDrawMode::Compute:
+            return "compute";
         }
         return "unknown";
     }
@@ -1061,8 +1080,7 @@ void main() {
         const Bool arbitraryRestart = restartKind == RestartSubstitutionKind::RewriteIndices;
         const ScopedSuppressedPrimitiveRestart restartCapOverride(restartKind);
 
-        const Bool hasIndexBuffer =
-            ResolveBoundIndexBuffer(IndexBufferQuestion::Presence, "DrawElementsBatch").Present;
+        const Bool hasIndexBuffer = ResolveBoundIndexBuffer(IndexBufferQuestion::Presence, "DrawElementsBatch").Present;
 
         // The compute tier dispatches BEFORE the draw state is established: doing it
         // afterwards would mean unpicking the program, SSBO and index bindings
@@ -1116,8 +1134,8 @@ void main() {
             drawn = RunBaseVertexLoop(mode, count, type, indices, drawcount, basevertex, feedDrawID, feedBaseVertex);
             break;
         case GLESMultiDrawMode::DrawElements:
-            drawn = RunRebasedDrawElements(mode, count, type, indices, drawcount, basevertex, feedDrawID,
-                                           feedBaseVertex);
+            drawn =
+                RunRebasedDrawElements(mode, count, type, indices, drawcount, basevertex, feedDrawID, feedBaseVertex);
             break;
         case GLESMultiDrawMode::Compute:
             // Its pre-pass ran above; reaching here means it declined this batch's shape.
@@ -1136,13 +1154,13 @@ void main() {
             drawn = RunBaseVertexLoop(mode, count, type, indices, drawcount, basevertex, feedDrawID, feedBaseVertex);
         }
         if (!drawn) {
-            drawn = RunRebasedDrawElements(mode, count, type, indices, drawcount, basevertex, feedDrawID,
-                                           feedBaseVertex);
+            drawn =
+                RunRebasedDrawElements(mode, count, type, indices, drawcount, basevertex, feedDrawID, feedBaseVertex);
         }
         if (!drawn) {
             MGLOG_E_ONCE("DirectGLES multi-draw: no usable tier for a %d sub-draw batch (mode 0x%x, type 0x%x); "
-                    "the batch was dropped",
-                    drawcount, mode, type);
+                         "the batch was dropped",
+                         drawcount, mode, type);
         }
     }
 } // namespace MobileGL::MG_Backend::DirectGLES::MultiDrawImpl

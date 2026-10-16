@@ -21,10 +21,8 @@ namespace MobileGL::MG_Util::PixelStoreProcessor {
                                        TextureInternalFormat srcInternalFormat, TexturePixelDataType srcDataType,
                                        TextureInputFormat dstInputFormat, TexturePixelDataType dstDataType,
                                        IntVec3 dimension, Bool isBitmap, SizeT& outSize);
-    Bool ConvertOnePixelToInternal(TextureInternalFormat targetInternalFormat,
-                                   TextureInputFormat textureInputFormat,
-                                   TexturePixelDataType inputDataType,
-                                   const void* inputPixel,
+    Bool ConvertOnePixelToInternal(TextureInternalFormat targetInternalFormat, TextureInputFormat textureInputFormat,
+                                   TexturePixelDataType inputDataType, const void* inputPixel,
                                    Vector<Uint8>& outputPixel);
 
     void ProcessColorSwizzle(void* data, SizeT pixelCount, const Vector<TextureSwizzleParam>& swizzle);

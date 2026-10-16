@@ -100,8 +100,10 @@ namespace {
             ::setenv(key, value.c_str(), 1);
         }
         ~ScopedEnvironment() {
-            if (hadOldValue) ::setenv(name.c_str(), oldValue.c_str(), 1);
-            else ::unsetenv(name.c_str());
+            if (hadOldValue)
+                ::setenv(name.c_str(), oldValue.c_str(), 1);
+            else
+                ::unsetenv(name.c_str());
         }
     };
 
@@ -110,16 +112,13 @@ namespace {
     // valid; selected payload fields bypass the encoder's client-side checks.
     template <class Payload, class Mutator>
     bool EncodeThenMutateHeaderAndPublish(Client::ClientSession& session, MobileGL::MG_Pipe::MGPWireOp op,
-                                           const Payload& payload, Mutator&& mutate,
-                                           std::uint64_t* outSeq = nullptr,
-                                           const Wire::WireTail* tails = nullptr,
-                                           MobileGL::Uint32 tailCount = 0) {
+                                          const Payload& payload, Mutator&& mutate, std::uint64_t* outSeq = nullptr,
+                                          const Wire::WireTail* tails = nullptr, MobileGL::Uint32 tailCount = 0) {
         if (outSeq != nullptr) *outSeq = Wire::kInvalidSeq;
         auto* link = session.DataLink();
         if (link == nullptr || !link->Attached()) return false;
         Wire::WireRecordLayout layout{};
-        if (!Wire::MGPipeWireRecordLayout(op, &payload, layout) ||
-            layout.PayloadBytes != sizeof(payload)) return false;
+        if (!Wire::MGPipeWireRecordLayout(op, &payload, layout) || layout.PayloadBytes != sizeof(payload)) return false;
         auto& encoder = session.Encoder();
         const std::uint64_t seq = tailCount == 0
                                       ? encoder.EncodeRecord(op, &payload, sizeof(payload))
@@ -128,13 +127,12 @@ namespace {
         auto& commands = link->CommandsOut();
         const auto* arena = link->RecordArena();
         const std::uint64_t head = commands.LocalHead();
-        if (arena == nullptr || arena->Base == nullptr || arena->Capacity == 0 ||
-            head < layout.TotalBytes) return false;
+        if (arena == nullptr || arena->Base == nullptr || arena->Capacity == 0 || head < layout.TotalBytes)
+            return false;
         const std::uint64_t start = head - layout.TotalBytes;
         auto* bytes = static_cast<std::uint8_t*>(arena->Base) + (start & arena->Mask);
         auto* header = reinterpret_cast<Transport::RingRecordHeader*>(bytes);
-        if (header->kind != static_cast<std::uint16_t>(op) || header->size != layout.TotalBytes)
-            return false;
+        if (header->kind != static_cast<std::uint16_t>(op) || header->size != layout.TotalBytes) return false;
         mutate(*header, bytes + sizeof(Transport::RingRecordHeader));
         // Use the real session publisher after mutation so both the ring head
         // and the producer-owned submittedSeq stay monotone and teardown knows
@@ -157,27 +155,24 @@ namespace {
         return session.WaitForApplied(seq, 5000) == Transport::SessionWait::Reached;
     }
 
-    MobileGL::MG_Pipe::MGPFramebufferState RawColorAttachmentFramebuffer(
-        MobileGL::MG_Pipe::MGPipeHandle fbo, MobileGL::MG_Pipe::MGPipeHandle texture,
-        MobileGL::Uint64 contentHash) {
+    MobileGL::MG_Pipe::MGPFramebufferState RawColorAttachmentFramebuffer(MobileGL::MG_Pipe::MGPipeHandle fbo,
+                                                                         MobileGL::MG_Pipe::MGPipeHandle texture,
+                                                                         MobileGL::Uint64 contentHash) {
         MobileGL::MG_Pipe::MGPFramebufferState state{};
         state.Fbo = fbo;
-        state.Target = static_cast<MobileGL::Uint8>(
-            MobileGL::MG_Pipe::MGPipeFramebufferTarget::Both);
+        state.Target = static_cast<MobileGL::Uint8>(MobileGL::MG_Pipe::MGPipeFramebufferTarget::Both);
         state.IsDefault = 0;
         state.Complete = 1;
         state.Width = state.Height = state.Layers = state.Samples = 1;
         state.FixedSampleLocations = 1;
-        for (auto& drawBuffer : state.DrawBuffers) drawBuffer = -1;
+        for (auto& drawBuffer : state.DrawBuffers)
+            drawBuffer = -1;
         state.DrawBuffers[0] = 0;
         state.Color[0].Res = texture;
-        state.Color[0].InternalFormat =
-            static_cast<MobileGL::Uint32>(MobileGL::TextureInternalFormat::RGBA8);
+        state.Color[0].InternalFormat = static_cast<MobileGL::Uint32>(MobileGL::TextureInternalFormat::RGBA8);
         state.Color[0].Kind = MobileGL::MG_Pipe::kMGPipeSurfaceKindTexture;
-        state.Color[0].UploadTarget =
-            static_cast<MobileGL::Uint16>(MobileGL::TextureUploadTarget::Texture2D);
-        state.Color[0].TextureTarget =
-            static_cast<MobileGL::Uint16>(MobileGL::TextureTarget::Texture2D);
+        state.Color[0].UploadTarget = static_cast<MobileGL::Uint16>(MobileGL::TextureUploadTarget::Texture2D);
+        state.Color[0].TextureTarget = static_cast<MobileGL::Uint16>(MobileGL::TextureTarget::Texture2D);
         state.ContentHash = contentHash;
         return state;
     }
@@ -262,10 +257,8 @@ namespace {
         return Client::ClientSessionInstance().StartOverSocket(std::move(session.client));
     }
 
-    std::string Exchange(Transport::ITransport& transport, const std::string& message,
-                         std::uint32_t timeoutMs = 4000) {
-        const MobileGLResult sent =
-            transport.SendFrame(MobileGLByteSpan{message.data(), message.size()});
+    std::string Exchange(Transport::ITransport& transport, const std::string& message, std::uint32_t timeoutMs = 4000) {
+        const MobileGLResult sent = transport.SendFrame(MobileGLByteSpan{message.data(), message.size()});
         if (sent != MOBILEGL_OK) {
             return "<send-failed>";
         }
@@ -276,8 +269,7 @@ namespace {
         if (got != MOBILEGL_OK) {
             return std::string("<result=") + std::to_string(static_cast<int>(got)) + ">";
         }
-        return std::string(reinterpret_cast<const char*>(buffer.data()),
-                           static_cast<std::size_t>(size));
+        return std::string(reinterpret_cast<const char*>(buffer.data()), static_cast<std::size_t>(size));
     }
 
 } // namespace
@@ -322,8 +314,7 @@ TEST(ServerSpawnTest, ARawPeerMutatesARecordAfterTheClientEncoderAcceptedIt) {
     const std::string log = MobileGL::MG_Util::Debug::ReadRoleLogs(logBase.c_str());
     EXPECT_NE(log.find("Fatal{ProtocolCorruption, \"opcode\"} got=65535"), std::string::npos)
         << "the server process exited without the named opcode fault";
-    EXPECT_NE(log.find("SessionLatch{ProtocolCorruption}"), std::string::npos)
-        << "the fault was not latched";
+    EXPECT_NE(log.find("SessionLatch{ProtocolCorruption}"), std::string::npos) << "the fault was not latched";
     EXPECT_EQ(log.find("protocol corruption applying"), std::string::npos)
         << "the record reached the generated gate's unnamed death";
     client.Stop();
@@ -351,7 +342,8 @@ TEST(ServerSpawnTest, RawPeerOutOfRangeRenderStateCsoSlotGetsNamedProtocolCorrup
         [](Transport::RingRecordHeader&, std::uint8_t* payloadBytes) {
             auto* wireDesc = reinterpret_cast<MobileGL::MG_Pipe::MGPRenderStateDesc*>(payloadBytes);
             wireDesc->Cso.Slot = MobileGL::MG_Pipe::kMGPipeMaxRenderStateCsoSlots;
-        })) << "the test peer failed to mutate and publish the encoder-accepted record bytes";
+        }))
+        << "the test peer failed to mutate and publish the encoder-accepted record bytes";
     EXPECT_LT(encoderAcceptedSlot, MobileGL::MG_Pipe::kMGPipeMaxRenderStateCsoSlots);
 
     int exitCode = -1;
@@ -366,8 +358,7 @@ TEST(ServerSpawnTest, RawPeerOutOfRangeRenderStateCsoSlotGetsNamedProtocolCorrup
     ASSERT_EQ(reaped, MOBILEGL_OK) << "server did not reject the mutated record promptly";
     EXPECT_EQ(exitCode, -SIGABRT) << "the malformed CSO slot did not reach the server applier";
     const std::string log = MobileGL::MG_Util::Debug::ReadRoleLogs(logBase.c_str());
-    EXPECT_NE(log.find("Fatal{ProtocolCorruption, \"CreateRenderState.Cso.Slot\"}"),
-              std::string::npos)
+    EXPECT_NE(log.find("Fatal{ProtocolCorruption, \"CreateRenderState.Cso.Slot\"}"), std::string::npos)
         << "the server process exited without the named protocol corruption diagnostic";
     client.Stop();
 }
@@ -400,7 +391,9 @@ TEST(ServerSpawnTest, RawPeerOversizedReadbackGetsErrorAndSessionContinues) {
             wireInfo->Box.W = width;
             wireInfo->Box.H = 1;
             wireInfo->DstSize = static_cast<std::uint64_t>(width) * 4;
-        }, &readSeq)) << "the peer failed to mutate and publish the encoder-accepted readback";
+        },
+        &readSeq))
+        << "the peer failed to mutate and publish the encoder-accepted readback";
     ASSERT_NE(readSeq, Wire::kInvalidSeq);
     ASSERT_EQ(client.WaitForApplied(readSeq, 5000), Transport::SessionWait::Reached);
 
@@ -414,9 +407,8 @@ TEST(ServerSpawnTest, RawPeerOversizedReadbackGetsErrorAndSessionContinues) {
     // server session or stranding the command consumer.
     MobileGL::MG_Pipe::MGPMemoryBarrier barrier{};
     barrier.Bits = 0x2000u;
-    const auto followupSeq = client.EmitAndWait(
-        MobileGL::MG_Pipe::MGPWireOp::MemoryBarrier, &barrier, sizeof(barrier),
-        nullptr, 0, nullptr, 0, nullptr);
+    const auto followupSeq = client.EmitAndWait(MobileGL::MG_Pipe::MGPWireOp::MemoryBarrier, &barrier, sizeof(barrier),
+                                                nullptr, 0, nullptr, 0, nullptr);
     ASSERT_NE(followupSeq, Wire::kInvalidSeq);
     EXPECT_EQ(client.WaitForApplied(followupSeq, 5000), Transport::SessionWait::Reached);
     Client::ClientSessionInstance().Stop();
@@ -448,8 +440,8 @@ TEST(ServerSpawnTest, RawPeerTextureRunPastDeclaredLevelBoundIsNamedProtocolCorr
     desc.Samples = 1;
 
     MobileGL::Int32 status = Wire::ReplySink::kStatusError;
-    auto seq = client.EmitAndWait(MobileGL::MG_Pipe::MGPWireOp::ResourceCreate, &desc, sizeof(desc),
-                                  nullptr, 0, nullptr, 0, &status);
+    auto seq = client.EmitAndWait(MobileGL::MG_Pipe::MGPWireOp::ResourceCreate, &desc, sizeof(desc), nullptr, 0,
+                                  nullptr, 0, &status);
     ASSERT_NE(seq, Wire::kInvalidSeq);
     ASSERT_EQ(status, Wire::ReplySink::kStatusOk);
     ASSERT_EQ(client.WaitForApplied(seq, 5000), Transport::SessionWait::Reached);
@@ -457,12 +449,13 @@ TEST(ServerSpawnTest, RawPeerTextureRunPastDeclaredLevelBoundIsNamedProtocolCorr
     MobileGL::MG_Pipe::MGPResourceDesc respecify = desc;
     respecify.HasDefinedContent = 1;
     MobileGL::MG_Pipe::MGPipeSetRespecifiedLevel(
-        respecify, MobileGL::MG_Pipe::MGPipePackSubDataTarget(
-                       static_cast<MobileGL::Uint32>(respecify.Target),
-                       static_cast<MobileGL::Uint32>(MobileGL::TextureUploadTarget::Texture2D)),
+        respecify,
+        MobileGL::MG_Pipe::MGPipePackSubDataTarget(
+            static_cast<MobileGL::Uint32>(respecify.Target),
+            static_cast<MobileGL::Uint32>(MobileGL::TextureUploadTarget::Texture2D)),
         0, 4, 4, 1);
-    seq = client.EmitAndWait(MobileGL::MG_Pipe::MGPWireOp::ResourceRespecify, &respecify,
-                             sizeof(respecify), nullptr, 0, nullptr, 0, &status);
+    seq = client.EmitAndWait(MobileGL::MG_Pipe::MGPWireOp::ResourceRespecify, &respecify, sizeof(respecify), nullptr, 0,
+                             nullptr, 0, &status);
     ASSERT_NE(seq, Wire::kInvalidSeq);
     ASSERT_EQ(status, Wire::ReplySink::kStatusOk);
     ASSERT_EQ(client.WaitForApplied(seq, 5000), Transport::SessionWait::Reached);
@@ -502,7 +495,8 @@ TEST(ServerSpawnTest, RawPeerTextureRunPastDeclaredLevelBoundIsNamedProtocolCorr
                 payloadBytes + sizeof(MobileGL::MG_Pipe::MGPSubData));
             wireRegion->SrcRowStride = 32;
             wireRegion->SrcSliceStride = 96;
-        }, &uploadSeq, &tail, 1))
+        },
+        &uploadSeq, &tail, 1))
         << "the peer failed to publish the encoder-accepted texture run";
     ASSERT_NE(uploadSeq, Wire::kInvalidSeq);
 
@@ -520,10 +514,8 @@ TEST(ServerSpawnTest, RawPeerTextureRunPastDeclaredLevelBoundIsNamedProtocolCorr
     const std::string log = MobileGL::MG_Util::Debug::ReadRoleLogs(logBase.c_str());
     const auto firstProtocolFatal = log.find("Fatal{ProtocolCorruption");
     const auto boundFatal = log.find("Fatal{ProtocolCorruption, \"StagedTextureStore.CopyRunInto\"}");
-    EXPECT_NE(boundFatal, std::string::npos)
-        << "the server did not reject the run at the declared level byte bound";
-    EXPECT_EQ(firstProtocolFatal, boundFatal)
-        << "the run was refused before it reached the staged-level byte bound";
+    EXPECT_NE(boundFatal, std::string::npos) << "the server did not reject the run at the declared level byte bound";
+    EXPECT_EQ(firstProtocolFatal, boundFatal) << "the run was refused before it reached the staged-level byte bound";
     client.Stop();
 }
 
@@ -549,8 +541,8 @@ TEST(ServerSpawnTest, RawPeerTextureSubDataMustMatchTheAcceptedMutableLevelExten
     desc.Levels = 1;
     desc.Samples = 1;
     MobileGL::Int32 status = Wire::ReplySink::kStatusError;
-    auto seq = client.EmitAndWait(MobileGL::MG_Pipe::MGPWireOp::ResourceCreate, &desc, sizeof(desc),
-                                  nullptr, 0, nullptr, 0, &status);
+    auto seq = client.EmitAndWait(MobileGL::MG_Pipe::MGPWireOp::ResourceCreate, &desc, sizeof(desc), nullptr, 0,
+                                  nullptr, 0, &status);
     ASSERT_NE(seq, Wire::kInvalidSeq);
     ASSERT_EQ(status, Wire::ReplySink::kStatusOk);
     ASSERT_EQ(client.WaitForApplied(seq, 5000), Transport::SessionWait::Reached);
@@ -558,12 +550,13 @@ TEST(ServerSpawnTest, RawPeerTextureSubDataMustMatchTheAcceptedMutableLevelExten
     MobileGL::MG_Pipe::MGPResourceDesc respecify = desc;
     respecify.HasDefinedContent = 1;
     MobileGL::MG_Pipe::MGPipeSetRespecifiedLevel(
-        respecify, MobileGL::MG_Pipe::MGPipePackSubDataTarget(
-                       static_cast<MobileGL::Uint32>(respecify.Target),
-                       static_cast<MobileGL::Uint32>(MobileGL::TextureUploadTarget::Texture2D)),
+        respecify,
+        MobileGL::MG_Pipe::MGPipePackSubDataTarget(
+            static_cast<MobileGL::Uint32>(respecify.Target),
+            static_cast<MobileGL::Uint32>(MobileGL::TextureUploadTarget::Texture2D)),
         0, 4, 4, 1);
-    seq = client.EmitAndWait(MobileGL::MG_Pipe::MGPWireOp::ResourceRespecify, &respecify,
-                             sizeof(respecify), nullptr, 0, nullptr, 0, &status);
+    seq = client.EmitAndWait(MobileGL::MG_Pipe::MGPWireOp::ResourceRespecify, &respecify, sizeof(respecify), nullptr, 0,
+                             nullptr, 0, &status);
     ASSERT_NE(seq, Wire::kInvalidSeq);
     ASSERT_EQ(status, Wire::ReplySink::kStatusOk);
     ASSERT_EQ(client.WaitForApplied(seq, 5000), Transport::SessionWait::Reached);
@@ -588,7 +581,8 @@ TEST(ServerSpawnTest, RawPeerTextureSubDataMustMatchTheAcceptedMutableLevelExten
             // Still within the device limit and still contains the dirty box; the server must
             // refuse it because ResourceRespecify accepted 4x4 for this exact level.
             wireUpload->LevelWidth = 8;
-        }, &uploadSeq))
+        },
+        &uploadSeq))
         << "the peer failed to publish the encoder-accepted texture record";
     ASSERT_NE(uploadSeq, Wire::kInvalidSeq);
 
@@ -608,8 +602,7 @@ TEST(ServerSpawnTest, RawPeerTextureSubDataMustMatchTheAcceptedMutableLevelExten
     const auto extentFatal = log.find("Fatal{ProtocolCorruption, \"StagedTextureStore.LevelExtent\"}");
     EXPECT_NE(extentFatal, std::string::npos)
         << "server did not refuse the upload extent that disagreed with ResourceRespecify";
-    EXPECT_EQ(firstProtocolFatal, extentFatal)
-        << "the record was refused before staged-level extent matching";
+    EXPECT_EQ(firstProtocolFatal, extentFatal) << "the record was refused before staged-level extent matching";
     client.Stop();
 }
 
@@ -636,16 +629,16 @@ TEST(ServerSpawnTest, RawPeerMultisampleTextureSubDataIsNamedProtocolCorruption)
     desc.Samples = 4;
     desc.Immutable = 1;
     MobileGL::Int32 status = Wire::ReplySink::kStatusError;
-    auto seq = client.EmitAndWait(MobileGL::MG_Pipe::MGPWireOp::ResourceCreate, &desc, sizeof(desc),
-                                  nullptr, 0, nullptr, 0, &status);
+    auto seq = client.EmitAndWait(MobileGL::MG_Pipe::MGPWireOp::ResourceCreate, &desc, sizeof(desc), nullptr, 0,
+                                  nullptr, 0, &status);
     ASSERT_NE(seq, Wire::kInvalidSeq);
     ASSERT_EQ(status, Wire::ReplySink::kStatusOk);
     ASSERT_EQ(client.WaitForApplied(seq, 5000), Transport::SessionWait::Reached);
 
     MobileGL::MG_Pipe::MGPResourceDesc respecify = desc;
     respecify.HasDefinedContent = 1;
-    seq = client.EmitAndWait(MobileGL::MG_Pipe::MGPWireOp::ResourceRespecify, &respecify,
-                             sizeof(respecify), nullptr, 0, nullptr, 0, &status);
+    seq = client.EmitAndWait(MobileGL::MG_Pipe::MGPWireOp::ResourceRespecify, &respecify, sizeof(respecify), nullptr, 0,
+                             nullptr, 0, &status);
     ASSERT_NE(seq, Wire::kInvalidSeq);
     ASSERT_EQ(status, Wire::ReplySink::kStatusOk);
     ASSERT_EQ(client.WaitForApplied(seq, 5000), Transport::SessionWait::Reached);
@@ -684,8 +677,7 @@ TEST(ServerSpawnTest, RawPeerMultisampleTextureSubDataIsNamedProtocolCorruption)
     const auto targetFatal = log.find("Fatal{ProtocolCorruption, \"StagedTextureStore.Target\"}");
     EXPECT_NE(targetFatal, std::string::npos)
         << "server did not refuse multisample bytes through the staged texture target gate";
-    EXPECT_EQ(firstProtocolFatal, targetFatal)
-        << "multisample record was refused before the staged target gate";
+    EXPECT_EQ(firstProtocolFatal, targetFatal) << "multisample record was refused before the staged target gate";
     client.Stop();
 }
 
@@ -711,8 +703,8 @@ TEST(ServerSpawnTest, RawPeerNoncanonicalMutableExtentCarrierIsRefused) {
     desc.Levels = 1;
     desc.Samples = 1;
     MobileGL::Int32 status = Wire::ReplySink::kStatusError;
-    auto seq = client.EmitAndWait(MobileGL::MG_Pipe::MGPWireOp::ResourceCreate, &desc, sizeof(desc),
-                                  nullptr, 0, nullptr, 0, &status);
+    auto seq = client.EmitAndWait(MobileGL::MG_Pipe::MGPWireOp::ResourceCreate, &desc, sizeof(desc), nullptr, 0,
+                                  nullptr, 0, &status);
     ASSERT_NE(seq, Wire::kInvalidSeq);
     ASSERT_EQ(status, Wire::ReplySink::kStatusOk);
     ASSERT_EQ(client.WaitForApplied(seq, 5000), Transport::SessionWait::Reached);
@@ -720,9 +712,10 @@ TEST(ServerSpawnTest, RawPeerNoncanonicalMutableExtentCarrierIsRefused) {
     MobileGL::MG_Pipe::MGPResourceDesc respecify = desc;
     respecify.HasDefinedContent = 1;
     MobileGL::MG_Pipe::MGPipeSetRespecifiedLevel(
-        respecify, MobileGL::MG_Pipe::MGPipePackSubDataTarget(
-                       static_cast<MobileGL::Uint32>(respecify.Target),
-                       static_cast<MobileGL::Uint32>(MobileGL::TextureUploadTarget::Texture2D)),
+        respecify,
+        MobileGL::MG_Pipe::MGPipePackSubDataTarget(
+            static_cast<MobileGL::Uint32>(respecify.Target),
+            static_cast<MobileGL::Uint32>(MobileGL::TextureUploadTarget::Texture2D)),
         0, 4, 4, 1);
     std::uint64_t respecifySeq = Wire::kInvalidSeq;
     ASSERT_TRUE(EncodeThenMutateHeaderAndPublish(
@@ -730,7 +723,8 @@ TEST(ServerSpawnTest, RawPeerNoncanonicalMutableExtentCarrierIsRefused) {
         [](Transport::RingRecordHeader&, std::uint8_t* payloadBytes) {
             auto* wireDesc = reinterpret_cast<MobileGL::MG_Pipe::MGPResourceDesc*>(payloadBytes);
             wireDesc->BufSize |= (std::uint64_t{1} << 32);
-        }, &respecifySeq));
+        },
+        &respecifySeq));
     ASSERT_NE(respecifySeq, Wire::kInvalidSeq);
 
     int exitCode = -1;
@@ -749,8 +743,7 @@ TEST(ServerSpawnTest, RawPeerNoncanonicalMutableExtentCarrierIsRefused) {
     const auto carrierFatal = log.find("Fatal{ProtocolCorruption, \"ResourceRespecify.ExtentCarrier\"}");
     EXPECT_NE(carrierFatal, std::string::npos)
         << "server did not reject high BufSize bits in the mutable extent carrier";
-    EXPECT_EQ(firstProtocolFatal, carrierFatal)
-        << "carrier was refused before the canonicality gate";
+    EXPECT_EQ(firstProtocolFatal, carrierFatal) << "carrier was refused before the canonicality gate";
     client.Stop();
 }
 
@@ -776,8 +769,8 @@ TEST(ServerSpawnTest, RawPeerWholeImageRespecifyCannotSmuggleBufferRangeFields) 
     desc.Levels = 1;
     desc.Samples = 1;
     MobileGL::Int32 status = Wire::ReplySink::kStatusError;
-    auto seq = client.EmitAndWait(MobileGL::MG_Pipe::MGPWireOp::ResourceCreate, &desc, sizeof(desc),
-                                  nullptr, 0, nullptr, 0, &status);
+    auto seq = client.EmitAndWait(MobileGL::MG_Pipe::MGPWireOp::ResourceCreate, &desc, sizeof(desc), nullptr, 0,
+                                  nullptr, 0, &status);
     ASSERT_NE(seq, Wire::kInvalidSeq);
     ASSERT_EQ(status, Wire::ReplySink::kStatusOk);
     ASSERT_EQ(client.WaitForApplied(seq, 5000), Transport::SessionWait::Reached);
@@ -790,7 +783,8 @@ TEST(ServerSpawnTest, RawPeerWholeImageRespecifyCannotSmuggleBufferRangeFields) 
         [](Transport::RingRecordHeader&, std::uint8_t* payloadBytes) {
             auto* wireDesc = reinterpret_cast<MobileGL::MG_Pipe::MGPResourceDesc*>(payloadBytes);
             wireDesc->BufOffset = 1;
-        }, &respecifySeq));
+        },
+        &respecifySeq));
     ASSERT_NE(respecifySeq, Wire::kInvalidSeq);
 
     int exitCode = -1;
@@ -807,10 +801,8 @@ TEST(ServerSpawnTest, RawPeerWholeImageRespecifyCannotSmuggleBufferRangeFields) 
     const std::string log = MobileGL::MG_Util::Debug::ReadRoleLogs(logBase.c_str());
     const auto firstProtocolFatal = log.find("Fatal{ProtocolCorruption");
     const auto rangeFatal = log.find("Fatal{ProtocolCorruption, \"ResourceRespecify.BufferRange\"}");
-    EXPECT_NE(rangeFatal, std::string::npos)
-        << "server did not reject BufOffset/BufSize on the whole image descriptor";
-    EXPECT_EQ(firstProtocolFatal, rangeFatal)
-        << "descriptor was refused before the canonical buffer-range gate";
+    EXPECT_NE(rangeFatal, std::string::npos) << "server did not reject BufOffset/BufSize on the whole image descriptor";
+    EXPECT_EQ(firstProtocolFatal, rangeFatal) << "descriptor was refused before the canonical buffer-range gate";
     client.Stop();
 }
 
@@ -827,13 +819,12 @@ TEST(ServerSpawnTest, RawPeerFramebufferAttachmentPastBackendSlotLimitIsNamedPro
     const MobileGL::MG_Pipe::MGPipeHandle fbo{20u, 1u};
     const MobileGL::MG_Pipe::MGPipeHandle outOfRange{1u << 20, 1u};
     const auto framebuffer = RawColorAttachmentFramebuffer(fbo, outOfRange, 1);
-    ASSERT_TRUE(PublishRawRecordAndWait(client, MobileGL::MG_Pipe::MGPWireOp::SetFramebufferState,
-                                        framebuffer));
+    ASSERT_TRUE(PublishRawRecordAndWait(client, MobileGL::MG_Pipe::MGPWireOp::SetFramebufferState, framebuffer));
     const auto clear = RawColorClear(fbo);
     std::uint64_t clearSeq = Wire::kInvalidSeq;
     ASSERT_TRUE(EncodeThenMutateHeaderAndPublish(
-        client, MobileGL::MG_Pipe::MGPWireOp::Clear, clear,
-        [](Transport::RingRecordHeader&, std::uint8_t*) {}, &clearSeq));
+        client, MobileGL::MG_Pipe::MGPWireOp::Clear, clear, [](Transport::RingRecordHeader&, std::uint8_t*) {},
+        &clearSeq));
     ASSERT_NE(clearSeq, Wire::kInvalidSeq);
     // This final clear is expected to kill the server, so there is no applied watermark to wait on.
 
@@ -853,8 +844,7 @@ TEST(ServerSpawnTest, RawPeerFramebufferAttachmentPastBackendSlotLimitIsNamedPro
     const auto firstProtocolFatal = log.find("Fatal{ProtocolCorruption");
     const auto slotFatal = log.find("Fatal{ProtocolCorruption, \"BackendSlotTable.HandleSlot\"}");
     EXPECT_NE(slotFatal, std::string::npos) << "server did not name the backend texture slot bound";
-    EXPECT_EQ(firstProtocolFatal, slotFatal)
-        << "the peer record was refused before the backend twin adoption guard";
+    EXPECT_EQ(firstProtocolFatal, slotFatal) << "the peer record was refused before the backend twin adoption guard";
     client.Stop();
 }
 
@@ -878,16 +868,15 @@ TEST(ServerSpawnTest, RawPeerFramebufferAttachmentBackwardGenerationIsNamedProto
     desc.Width = desc.Height = desc.Depth = 1;
     desc.ArrayLayers = desc.Levels = desc.Samples = 1;
     MobileGL::Int32 status = Wire::ReplySink::kStatusError;
-    auto seq = client.EmitAndWait(MobileGL::MG_Pipe::MGPWireOp::ResourceCreate, &desc, sizeof(desc),
-                                  nullptr, 0, nullptr, 0, &status);
+    auto seq = client.EmitAndWait(MobileGL::MG_Pipe::MGPWireOp::ResourceCreate, &desc, sizeof(desc), nullptr, 0,
+                                  nullptr, 0, &status);
     ASSERT_NE(seq, Wire::kInvalidSeq);
     ASSERT_EQ(status, Wire::ReplySink::kStatusOk);
     ASSERT_EQ(client.WaitForApplied(seq, 5000), Transport::SessionWait::Reached);
 
     const MobileGL::MG_Pipe::MGPipeHandle fbo{20u, 1u};
     auto current = RawColorAttachmentFramebuffer(fbo, texture, 1);
-    ASSERT_TRUE(PublishRawRecordAndWait(client, MobileGL::MG_Pipe::MGPWireOp::SetFramebufferState,
-                                        current));
+    ASSERT_TRUE(PublishRawRecordAndWait(client, MobileGL::MG_Pipe::MGPWireOp::SetFramebufferState, current));
     const auto clear = RawColorClear(fbo);
     ASSERT_TRUE(PublishRawRecordAndWait(client, MobileGL::MG_Pipe::MGPWireOp::Clear, clear));
 
@@ -895,12 +884,11 @@ TEST(ServerSpawnTest, RawPeerFramebufferAttachmentBackwardGenerationIsNamedProto
     // the only fact that lets the apply-side adoption guard identify the stale generation.
     current.Color[0].Res.Gen = 1;
     current.ContentHash = 2;
-    ASSERT_TRUE(PublishRawRecordAndWait(client, MobileGL::MG_Pipe::MGPWireOp::SetFramebufferState,
-                                        current));
+    ASSERT_TRUE(PublishRawRecordAndWait(client, MobileGL::MG_Pipe::MGPWireOp::SetFramebufferState, current));
     std::uint64_t badClearSeq = Wire::kInvalidSeq;
     ASSERT_TRUE(EncodeThenMutateHeaderAndPublish(
-        client, MobileGL::MG_Pipe::MGPWireOp::Clear, clear,
-        [](Transport::RingRecordHeader&, std::uint8_t*) {}, &badClearSeq));
+        client, MobileGL::MG_Pipe::MGPWireOp::Clear, clear, [](Transport::RingRecordHeader&, std::uint8_t*) {},
+        &badClearSeq));
     ASSERT_NE(badClearSeq, Wire::kInvalidSeq);
 
     int exitCode = -1;
@@ -912,14 +900,12 @@ TEST(ServerSpawnTest, RawPeerFramebufferAttachmentBackwardGenerationIsNamedProto
             (void)Server::ReapServer(session.server, 5000, &exitCode);
         }
     }
-    ASSERT_EQ(reaped, MOBILEGL_OK)
-        << "server did not reject the FBO attachment whose generation moved backwards";
+    ASSERT_EQ(reaped, MOBILEGL_OK) << "server did not reject the FBO attachment whose generation moved backwards";
     EXPECT_EQ(exitCode, -SIGABRT);
     const std::string log = MobileGL::MG_Util::Debug::ReadRoleLogs(logBase.c_str());
     const auto firstProtocolFatal = log.find("Fatal{ProtocolCorruption");
     const auto generationFatal = log.find("Fatal{ProtocolCorruption, \"BackendSlotTable.Generation\"}");
-    EXPECT_NE(generationFatal, std::string::npos)
-        << "server did not name the stale attachment generation";
+    EXPECT_NE(generationFatal, std::string::npos) << "server did not name the stale attachment generation";
     EXPECT_EQ(firstProtocolFatal, generationFatal)
         << "the peer record was refused before the backend twin generation guard";
     client.Stop();
@@ -932,8 +918,7 @@ TEST(ServerSpawnTest, StartsAServerProcessAndHandshakesAcrossIt) {
     Session session;
     ASSERT_TRUE(Bring("handshake", &session));
     ASSERT_GT(session.server.pid, 0);
-    EXPECT_NE(session.server.pid, static_cast<int>(::getpid()))
-        << "that is this process, not a separate one";
+    EXPECT_NE(session.server.pid, static_cast<int>(::getpid())) << "that is this process, not a separate one";
     EXPECT_EQ(Server::CountOwnChildren(), before + 1);
 
     // THE WHOLE POINT. Hello crosses, Welcome comes back with four SegmentRefs,
@@ -1046,8 +1031,7 @@ namespace {
     }
 
     long long MillisecondsSince(std::chrono::steady_clock::time_point start) {
-        return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start)
-            .count();
+        return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
     }
 } // namespace
 
@@ -1083,10 +1067,9 @@ TEST(ServerSpawnTest, AColdBringUpThatOutlastsTheReplyBudgetIsWaitedForBecauseTh
 
     // THE ROUND TRIP, not the EGL answer: whether a headless runner can make a pbuffer is not
     // this case's question (`ok` is whatever the driver said); whether the reply was WAITED FOR is.
-    EXPECT_EQ(rc, MOBILEGL_OK)
-        << "the op came back rc=" << static_cast<int>(rc) << " after " << elapsedMs
-        << " ms: the client gave up on a server that was still running it - the retrace-split "
-           "failure (\"ALIVE BUT SILENT - no SurfaceReply for CreatePbufferSurface seq 2\")";
+    EXPECT_EQ(rc, MOBILEGL_OK) << "the op came back rc=" << static_cast<int>(rc) << " after " << elapsedMs
+                               << " ms: the client gave up on a server that was still running it - the retrace-split "
+                                  "failure (\"ALIVE BUT SILENT - no SurfaceReply for CreatePbufferSurface seq 2\")";
     if (rc == MOBILEGL_OK) {
         EXPECT_GE(elapsedMs, 3000)
             << "the reply came back before the server's lever released the op, so the lever did not "
@@ -1115,11 +1098,10 @@ TEST(ServerSpawnTest, AFrozenServerReportsNoProgressAndTheOpStillTimesOutAtTheBu
     const long long elapsedMs = MillisecondsSince(start);
     (void)::kill(session.server.pid, SIGCONT);
 
-    EXPECT_EQ(rc, MOBILEGL_ERR_TIMEOUT)
-        << "a frozen server was not timed out (rc=" << static_cast<int>(rc) << ")";
-    EXPECT_LT(elapsedMs, 10000)
-        << "took " << elapsedMs << " ms against a 1000 ms budget: something other than a progress "
-           "report restarted the wait";
+    EXPECT_EQ(rc, MOBILEGL_ERR_TIMEOUT) << "a frozen server was not timed out (rc=" << static_cast<int>(rc) << ")";
+    EXPECT_LT(elapsedMs, 10000) << "took " << elapsedMs
+                                << " ms against a 1000 ms budget: something other than a progress "
+                                   "report restarted the wait";
     EXPECT_FALSE(Client::ClientSession::DeviceLost()) << "a frozen server is not a lost device (5.4)";
 }
 
@@ -1198,8 +1180,7 @@ TEST(ServerSpawnTest, AKilledServerLatchesDeviceLostFromTheHangupAndNotFromADead
     Session session;
     ASSERT_TRUE(Bring("devicelost", &session));
     ASSERT_EQ(Handshake(session), MOBILEGL_OK);
-    EXPECT_FALSE(Client::ClientSession::DeviceLost())
-        << "a healthy session must not read as a lost device";
+    EXPECT_FALSE(Client::ClientSession::DeviceLost()) << "a healthy session must not read as a lost device";
 
     Transport::Doorbell* bell = Client::ClientSessionInstance().SelfDoorbellForTest();
     ASSERT_NE(bell, nullptr);
@@ -1214,16 +1195,16 @@ TEST(ServerSpawnTest, AKilledServerLatchesDeviceLostFromTheHangupAndNotFromADead
     for (int attempt = 0; attempt < 200 && !bell->PeerHungUp(); ++attempt) {
         (void)bell->Park(10);
     }
-    const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
-                               std::chrono::steady_clock::now() - start).count();
+    const auto elapsedMs =
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
 
     EXPECT_TRUE(bell->PeerHungUp())
         << "the witness never reported the hangup; the bell is watching a descriptor this side "
            "also holds, which is the exact defect D5c names";
     EXPECT_TRUE(bell->Dead()) << "a peer that hung up is a dead bell";
-    EXPECT_LT(elapsedMs, 3000)
-        << "took " << elapsedMs << " ms: too slow to be a hangup and fast enough only for a "
-           "descriptor, so this assertion is what separates the two mechanisms";
+    EXPECT_LT(elapsedMs, 3000) << "took " << elapsedMs
+                               << " ms: too slow to be a hangup and fast enough only for a "
+                                  "descriptor, so this assertion is what separates the two mechanisms";
 
     // AND THE LATCH ITSELF. PeerHungUp is the cause; DeviceLost is the session-scoped
     // consequence, and it is what glGetGraphicsResetStatus reports.
@@ -1248,7 +1229,8 @@ TEST(ServerSpawnTest, AReadbackOnALostDeviceWritesNothingAndDoesNotAbort) {
     Transport::Doorbell* bell = Client::ClientSessionInstance().SelfDoorbellForTest();
     ASSERT_NE(bell, nullptr);
     ASSERT_EQ(::kill(session.server.pid, SIGKILL), 0);
-    for (int attempt = 0; attempt < 200 && !bell->PeerHungUp(); ++attempt) (void)bell->Park(10);
+    for (int attempt = 0; attempt < 200 && !bell->PeerHungUp(); ++attempt)
+        (void)bell->Park(10);
     ASSERT_TRUE(bell->PeerHungUp());
     Client::ClientSessionInstance().LatchDeviceLost("the test killed the server");
     ASSERT_TRUE(Client::ClientSession::DeviceLost());
@@ -1284,8 +1266,7 @@ TEST(ServerSpawnTest, AnOrderlyStopIsNotADeviceLoss) {
     ASSERT_EQ(Server::ReapServer(session.server, 5000, &exitCode), MOBILEGL_OK);
     EXPECT_EQ(exitCode, 0) << "the server must have exited cleanly, not been killed";
 
-    EXPECT_FALSE(bell->PeerHungUp())
-        << "an orderly Stop() must not look like a peer that died";
+    EXPECT_FALSE(bell->PeerHungUp()) << "an orderly Stop() must not look like a peer that died";
     EXPECT_FALSE(Client::ClientSession::DeviceLost())
         << "a clean teardown armed the device-lost latch; every exit would report a reset";
 }
@@ -1337,15 +1318,13 @@ TEST(ServerSpawnTest, AnAbstractEndpointNeedsNoWritableDirectoryAndLeavesNoFile)
     Session session;
     ASSERT_EQ(Server::LaunchServer(ServerImage(), endpoint, &session.server), MOBILEGL_OK);
     ASSERT_EQ(Transport::SocketTransport::ConnectTo(endpoint, 10000, session.client), MOBILEGL_OK);
-    ASSERT_EQ(Handshake(session), MOBILEGL_OK)
-        << "an abstract endpoint carried the connection but not the session";
+    ASSERT_EQ(Handshake(session), MOBILEGL_OK) << "an abstract endpoint carried the connection but not the session";
 
     // A leading '@' is a NAME, not a path. If FillAddress had treated it as one, the
     // bind would have created a file literally called "@mgl-..." in the working
     // directory - which would still have worked here, and would have failed on the
     // one platform this exists for.
-    EXPECT_NE(::access(endpoint.c_str(), F_OK), 0)
-        << "an abstract name must leave no filesystem node: " << endpoint;
+    EXPECT_NE(::access(endpoint.c_str(), F_OK), 0) << "an abstract name must leave no filesystem node: " << endpoint;
 
     Client::ClientSessionInstance().Stop();
     int exitCode = -1;
@@ -1360,8 +1339,7 @@ TEST(ServerSpawnTest, AnUnresolvableImageIsANamedRefusalAndStartsNothing) {
     // ConfigLoader.cpp names in its own comment: a lane that asked for spawn,
     // silently got monolith, and went green on the wrong arm.
     Server::LaunchedServer server;
-    EXPECT_EQ(Server::LaunchServer("/nonexistent/libMobileGLServer.so", Endpoint("missing"),
-                                   &server),
+    EXPECT_EQ(Server::LaunchServer("/nonexistent/libMobileGLServer.so", Endpoint("missing"), &server),
               MOBILEGL_ERR_INVALID_ARGUMENT);
     EXPECT_EQ(server.pid, -1);
     EXPECT_EQ(Server::CountOwnChildren(), before) << "a refused launch must leave no process";
@@ -1375,9 +1353,7 @@ TEST(ServerSpawnTest, ConnectingToNothingIsANamedRefusalNotAHang) {
     const auto start = std::chrono::steady_clock::now();
     EXPECT_NE(Transport::SocketTransport::ConnectTo(Endpoint("nobody"), 300, client), MOBILEGL_OK);
     EXPECT_FALSE(client);
-    EXPECT_LT(std::chrono::duration_cast<std::chrono::milliseconds>(
-                  std::chrono::steady_clock::now() - start)
-                  .count(),
+    EXPECT_LT(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count(),
               4000);
 }
 
@@ -1397,9 +1373,7 @@ TEST(ServerSpawnTest, ADescriptorCrossesBetweenTheTwoProcesses) {
     int pipeFds[2] = {-1, -1};
     ASSERT_EQ(::pipe(pipeFds), 0);
     const std::string sideband = "SegmentRef{id=1,kind=Cmd}";
-    EXPECT_EQ(session.client->ShareFd(pipeFds[0],
-                                      MobileGLByteSpan{sideband.data(), sideband.size()}),
-              MOBILEGL_OK);
+    EXPECT_EQ(session.client->ShareFd(pipeFds[0], MobileGLByteSpan{sideband.data(), sideband.size()}), MOBILEGL_OK);
 
     ::close(pipeFds[0]);
     ::close(pipeFds[1]);

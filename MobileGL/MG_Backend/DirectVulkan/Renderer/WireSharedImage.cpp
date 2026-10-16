@@ -77,7 +77,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                                              const MG_Util::Damage::Region& region) {
         if (m_device == VK_NULL_HANDLE || view.Width == 0 || view.Height == 0) return false;
         // The debug knob's device check (MGPipeDebugDeviceLossDue) rides the frame boundary here.
-        if (MG_Pipe::MGPipeDebugDeviceLossDue()) NoteDeviceLoss(VK_ERROR_DEVICE_LOST, "the debug knob (shared-image present)");
+        if (MG_Pipe::MGPipeDebugDeviceLossDue())
+            NoteDeviceLoss(VK_ERROR_DEVICE_LOST, "the debug knob (shared-image present)");
         if (m_deviceLost && LatchWireDeviceLoss("shared-image-present")) return false;
         DestroySharedImagePresentTargets(true);
 
@@ -210,8 +211,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         acquire.dstQueueFamilyIndex = destination.queueFamily;
         acquire.image = destination.image;
         acquire.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-        vkCmdPipelineBarrier(frame.commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
-                             0, nullptr, 0, nullptr, 1, &acquire);
+        vkCmdPipelineBarrier(frame.commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0,
+                             nullptr, 0, nullptr, 1, &acquire);
 
         const VkImageSubresourceLayers layers{VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
         if (partial) {
@@ -267,11 +268,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             region.dstSubresource = layers;
             region.dstOffsets[0] = halfTurn ? VkOffset3D{width, height, 0} : VkOffset3D{0, 0, 0};
             region.dstOffsets[1] = halfTurn ? VkOffset3D{0, 0, 1} : VkOffset3D{width, height, 1};
-            const VkFilter filter =
-                !sameExtent && (sourceProperties.optimalTilingFeatures &
-                                VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT) != 0
-                    ? VK_FILTER_LINEAR
-                    : VK_FILTER_NEAREST;
+            const VkFilter filter = !sameExtent && (sourceProperties.optimalTilingFeatures &
+                                                    VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT) != 0
+                                        ? VK_FILTER_LINEAR
+                                        : VK_FILTER_NEAREST;
             vkCmdBlitImage(frame.commandBuffer, source.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, destination.image,
                            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region, filter);
         }
@@ -455,9 +455,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             }
         }
         if (done != 0) {
-            m_sharedImageSemaphoresInFlight.erase(
-                m_sharedImageSemaphoresInFlight.begin(),
-                m_sharedImageSemaphoresInFlight.begin() + static_cast<std::ptrdiff_t>(done));
+            m_sharedImageSemaphoresInFlight.erase(m_sharedImageSemaphoresInFlight.begin(),
+                                                  m_sharedImageSemaphoresInFlight.begin() +
+                                                      static_cast<std::ptrdiff_t>(done));
         }
     }
 
@@ -467,15 +467,19 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             if (semaphore != VK_NULL_HANDLE && m_device != VK_NULL_HANDLE)
                 vkDestroySemaphore(m_device, semaphore, nullptr);
         };
-        for (const auto& entry : m_sharedImageSemaphoresInFlight) destroy(entry.semaphore);
+        for (const auto& entry : m_sharedImageSemaphoresInFlight)
+            destroy(entry.semaphore);
         m_sharedImageSemaphoresInFlight.clear();
-        for (const auto& wait : m_sharedImageWaits) destroy(wait.semaphore);
+        for (const auto& wait : m_sharedImageWaits)
+            destroy(wait.semaphore);
         m_sharedImageWaits.clear();
         destroy(std::exchange(m_sharedImageSignal, VK_NULL_HANDLE));
         m_sharedImageSignalSubmitted = VK_NULL_HANDLE;
-        for (const VkSemaphore semaphore : m_freeSharedImageWaitSemaphores) destroy(semaphore);
+        for (const VkSemaphore semaphore : m_freeSharedImageWaitSemaphores)
+            destroy(semaphore);
         m_freeSharedImageWaitSemaphores.clear();
-        for (const VkSemaphore semaphore : m_freeSharedImageSignalSemaphores) destroy(semaphore);
+        for (const VkSemaphore semaphore : m_freeSharedImageSignalSemaphores)
+            destroy(semaphore);
         m_freeSharedImageSignalSemaphores.clear();
         m_sharedImagesHeld.clear();
         m_sharedImageReads.PublishFrame(-1); // drops the frame's references; publishes nothing
@@ -528,7 +532,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // A session that writes images (implicit sync by flush) may be about to overwrite what
         // another session still samples: those reads go first.
         if (m_sharedImageImplicitSync && !resource.sharedImageHeld) {
-            for (const int read : SI::DupPendingReadFences(*image)) StageSharedImageWait(read, kSharedImageUseStages);
+            for (const int read : SI::DupPendingReadFences(*image))
+                StageSharedImageWait(read, kSharedImageUseStages);
         }
 
         const Uint32 family = static_cast<Uint32>(m_physicalDevice.queueFamilies.graphicsFamily);
@@ -655,8 +660,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (m_sharedImageSyncFd && m_sharedImageSignal == VK_NULL_HANDLE)
             m_sharedImageSignal = TakeSharedImageSemaphore(/*exportable=*/true);
         m_sharedImageSignalSubmitted = VK_NULL_HANDLE;
-        if (!HasPendingRecordedWork() && m_sharedImageSignal != VK_NULL_HANDLE)
-            m_frameContext.BeginCommandRecording();
+        if (!HasPendingRecordedWork() && m_sharedImageSignal != VK_NULL_HANDLE) m_frameContext.BeginCommandRecording();
         const Bool submitted = HasPendingRecordedWork() && FlushPendingCommands();
         if (HasPendingRecordedWork()) MGLOG_E_ONCE("Magma: a native fence's commands could not be submitted");
         const VkSemaphore signal =
@@ -707,13 +711,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 m_sharedImagesHeld[kept++] = hold;
                 continue;
             }
-            if (auto* resource = m_textureManager->FindWireTextureResource(hold.key))
-                resource->sharedImageHeld = false;
+            if (auto* resource = m_textureManager->FindWireTextureResource(hold.key)) resource->sharedImageHeld = false;
         }
         m_sharedImagesHeld.resize(kept);
         // Its waits and signal were never submitted. A wait semaphore's unconsumed temporary
         // payload is replaced by its next import; the signal semaphore was never signaled.
-        for (const auto& wait : m_sharedImageWaits) m_freeSharedImageWaitSemaphores.push_back(wait.semaphore);
+        for (const auto& wait : m_sharedImageWaits)
+            m_freeSharedImageWaitSemaphores.push_back(wait.semaphore);
         m_sharedImageWaits.clear();
         if (m_sharedImageSignal != VK_NULL_HANDLE)
             m_freeSharedImageSignalSemaphores.push_back(std::exchange(m_sharedImageSignal, VK_NULL_HANDLE));

@@ -65,10 +65,10 @@ namespace {
     constexpr Uint32 kRed = 0xFF0000FFu;
 
     enum PeerOp : Uint32 {
-        kOpApplyRecord = 1, // one record through the applier (no GL)
-        kOpCreateContext = 2, // ServerCreateEGLContext(arg) - the session's context token table
+        kOpApplyRecord = 1,    // one record through the applier (no GL)
+        kOpCreateContext = 2,  // ServerCreateEGLContext(arg) - the session's context token table
         kOpHealthySession = 3, // the rig's whole healthy session, `arg` = the clear colour
-        kOpStop = 4,          // ClientSession::Stop, then the child leaves
+        kOpStop = 4,           // ClientSession::Stop, then the child leaves
         // P14 S5: mint context `arg` in share group `aux` (a real frontend share-group token, so
         // two contexts that pass different ones are a NON-shared pair and two that pass the same
         // one are a sharing pair).
@@ -186,14 +186,13 @@ namespace {
                     break;
                 case kOpCreateContext:
                     report.context = Remote::Server::ServerCreateEGLContext(command.arg, /*shareGroupToken=*/0,
-                                                                           /*flags=*/0)
+                                                                            /*flags=*/0)
                                          ? 1
                                          : 0;
                     break;
                 case kOpCreateContextInGroup:
-                    report.context = Remote::Server::ServerCreateEGLContext(command.arg, command.aux, /*flags=*/0)
-                                         ? 1
-                                         : 0;
+                    report.context =
+                        Remote::Server::ServerCreateEGLContext(command.arg, command.aux, /*flags=*/0) ? 1 : 0;
                     break;
                 case kOpBindContext: {
                     P::MGPBindContext bind{};
@@ -228,8 +227,7 @@ namespace {
         peer.fromChild = reports[0];
         // The handshake's report, taken HERE so that no Step can read it and mistake it for its
         // own answer.
-        if (::read(peer.fromChild, &peer.ready, sizeof(peer.ready)) !=
-            static_cast<ssize_t>(sizeof(peer.ready))) {
+        if (::read(peer.fromChild, &peer.ready, sizeof(peer.ready)) != static_cast<ssize_t>(sizeof(peer.ready))) {
             peer.ready = StepReport{};
             std::snprintf(peer.ready.note, sizeof(peer.ready.note), "peer died during its handshake");
         }
@@ -258,7 +256,8 @@ namespace {
 // THE HEADLINE. Two clients, one server process, both served at once.
 TEST_F(MultiSessionFixture, TwoShmSessionsInOneProcessAreServedAtOnce) {
     ServerProcess server;
-    ASSERT_TRUE(LaunchUnixInProcessServer(&server, "two")) << "the in-process unix server did not start:\n" << server.Log();
+    ASSERT_TRUE(LaunchUnixInProcessServer(&server, "two")) << "the in-process unix server did not start:\n"
+                                                           << server.Log();
     const auto serverPid = static_cast<Uint32>(server.pid);
 
     Peer a = StartPeer(server.endpoint);
@@ -280,9 +279,11 @@ TEST_F(MultiSessionFixture, TwoShmSessionsInOneProcessAreServedAtOnce) {
 
     // Both sessions really were started, in this process, and neither latched.
     EXPECT_NE(SessionStartedLine(server, 1).find("pid=" + std::to_string(server.pid)), std::string::npos)
-        << SessionStartedLine(server, 1) << "\n" << server.Log();
+        << SessionStartedLine(server, 1) << "\n"
+        << server.Log();
     EXPECT_NE(SessionStartedLine(server, 2).find("pid=" + std::to_string(server.pid)), std::string::npos)
-        << SessionStartedLine(server, 2) << "\n" << server.Log();
+        << SessionStartedLine(server, 2) << "\n"
+        << server.Log();
     EXPECT_EQ(Count(server.Log(), "SessionLatch{"), 0u) << "a session latched a fault: " << server.Log();
 
     // THE RENDER HALF, one session at a time, BOTH STILL LIVE: each session's clear colour travels
@@ -366,7 +367,8 @@ TEST_F(MultiSessionFixture, ClosingOneSessionLeavesTheOtherServing) {
 
     a.Close();
     ASSERT_TRUE(WaitFor([&] { return server.Log().find("reaped exit=0") != std::string::npos; }, 5000))
-        << "session A did not end cleanly:\n" << server.Log();
+        << "session A did not end cleanly:\n"
+        << server.Log();
     EXPECT_EQ(::kill(static_cast<pid_t>(b.pid), 0), 0) << "closing A killed session B's peer";
 
     // B IS STILL SERVED: its records keep reaching its own applier and the server keeps answering.
@@ -375,7 +377,8 @@ TEST_F(MultiSessionFixture, ClosingOneSessionLeavesTheOtherServing) {
     for (int record = 0; record < 3; ++record) {
         const StepReport after = b.Step(kOpApplyRecord);
         ASSERT_EQ(after.applied, 1) << "session B stopped applying after session A closed (record " << record
-                                    << "): " << after.note << "\n" << server.Log();
+                                    << "): " << after.note << "\n"
+                                    << server.Log();
     }
     EXPECT_EQ(Count(server.Log(), "SessionLatch{"), 0u) << "a session latched: " << server.Log();
 
@@ -408,16 +411,15 @@ TEST_F(MultiSessionFixture, ClosingOneSessionLeavesTheOtherServing) {
 // one session share one applier and one of the two clears lands on top of the other.
 TEST_F(MultiSessionFixture, TwoSessionsInterleaveTwoContextsEachWithoutCrossTalk) {
     ServerProcess server;
-    ASSERT_TRUE(LaunchUnixInProcessServer(&server, "interleave"))
-        << "the in-process unix server did not start:\n" << server.Log();
+    ASSERT_TRUE(LaunchUnixInProcessServer(&server, "interleave")) << "the in-process unix server did not start:\n"
+                                                                  << server.Log();
 
     Peer a = StartPeer(server.endpoint);
     Peer b = StartPeer(server.endpoint);
     ASSERT_GT(a.pid, 0);
     ASSERT_GT(b.pid, 0);
     ASSERT_EQ(a.ready.started, 1) << a.ready.note << "\n" << server.Log();
-    ASSERT_EQ(b.ready.started, 1) << "a second session was refused (" << b.ready.note << ")\n"
-                                  << server.Log();
+    ASSERT_EQ(b.ready.started, 1) << "a second session was refused (" << b.ready.note << ")\n" << server.Log();
 
     // THE SAME TWO TOKENS AND THE SAME TWO GROUP TOKENS IN BOTH SESSIONS, on purpose: a name is a
     // name in a session, and the two group tokens say the two contexts of one session do NOT
@@ -445,18 +447,17 @@ TEST_F(MultiSessionFixture, TwoSessionsInterleaveTwoContextsEachWithoutCrossTalk
             << "round " << round << ": " << aGl.session.note;
         ASSERT_EQ(bGl.session.status, Remote::Wire::ReplySink::kStatusOk)
             << "round " << round << ": " << bGl.session.note;
-        EXPECT_EQ(aGl.session.pixel, kGreen) << "round " << round << ": session A read back "
-                                             << std::hex << aGl.session.pixel;
-        EXPECT_EQ(bGl.session.pixel, kRed) << "round " << round << ": session B read back "
-                                           << std::hex << bGl.session.pixel;
+        EXPECT_EQ(aGl.session.pixel, kGreen)
+            << "round " << round << ": session A read back " << std::hex << aGl.session.pixel;
+        EXPECT_EQ(bGl.session.pixel, kRed)
+            << "round " << round << ": session B read back " << std::hex << bGl.session.pixel;
     }
     if (reportedNoEgl) {
-        GTEST_SKIP() << "the context/session routing is proven; the render half needs headless EGL ("
-                     << a.ready.note << ")";
+        GTEST_SKIP() << "the context/session routing is proven; the render half needs headless EGL (" << a.ready.note
+                     << ")";
     }
 
-    EXPECT_EQ(Count(server.Log(), "SessionLatch{"), 0u)
-        << "a session latched during the interleave: " << server.Log();
+    EXPECT_EQ(Count(server.Log(), "SessionLatch{"), 0u) << "a session latched during the interleave: " << server.Log();
 
     b.Close();
     a.Close();
@@ -494,14 +495,16 @@ TEST_F(MultiSessionFixture, ADeviceLossEndsOnlyItsOwnSession) {
 
     // Check #1: B's read-back is answered.
     const StepReport bFirst = b.Step(kOpHealthySession, kGreen);
-    ASSERT_EQ(bFirst.session.egl, 1) << "no headless EGL for session B: " << bFirst.session.note << "\n" << server.Log();
+    ASSERT_EQ(bFirst.session.egl, 1) << "no headless EGL for session B: " << bFirst.session.note << "\n"
+                                     << server.Log();
     ASSERT_EQ(bFirst.session.pixel, kGreen) << bFirst.session.note << "\n" << server.Log();
 
     // Check #2: A's device is "lost" at its read-back. A's session latches and ends.
     const StepReport aLost = a.Step(kOpHealthySession, kRed);
     EXPECT_NE(aLost.session.pixel, kRed) << "session A read back a frame from a lost device";
     ASSERT_TRUE(WaitFor([&] { return server.Log().find("reaped exit=75") != std::string::npos; }, 5000))
-        << "session A did not end on a latched fault:\n" << server.Log();
+        << "session A did not end on a latched fault:\n"
+        << server.Log();
     const std::string log = server.Log();
     EXPECT_NE(log.find("Fatal{BackendDeviceLost, \"Espryt:read-pixels\"}"), std::string::npos) << log;
     EXPECT_NE(log.find("SessionLatch{BackendDeviceLost}"), std::string::npos) << log;
@@ -510,8 +513,9 @@ TEST_F(MultiSessionFixture, ADeviceLossEndsOnlyItsOwnSession) {
     // B IS STILL SERVED, records and read-backs alike.
     for (int record = 0; record < 3; ++record) {
         const StepReport after = b.Step(kOpApplyRecord);
-        ASSERT_EQ(after.applied, 1) << "session B stopped applying after session A's device loss (record "
-                                    << record << "): " << after.note << "\n" << server.Log();
+        ASSERT_EQ(after.applied, 1) << "session B stopped applying after session A's device loss (record " << record
+                                    << "): " << after.note << "\n"
+                                    << server.Log();
     }
     const StepReport bAgain = b.Step(kOpHealthySession, kGreen);
     EXPECT_EQ(bAgain.session.pixel, kGreen) << bAgain.session.note << "\n" << server.Log();

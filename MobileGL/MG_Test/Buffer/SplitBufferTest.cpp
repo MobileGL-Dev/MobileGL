@@ -38,9 +38,9 @@ using namespace MobileGL;
 namespace {
 
 #if MOBILEGL_BUILD_DISAGGREGATED
-    using MG_State::GLState::BufferObject;
     using MG_Record::GpuWriteProducer;
     using MG_Record::PersistentMapTracker;
+    using MG_State::GLState::BufferObject;
 
     // A backend that MINTS a persistent mapping, for the one case that needs the adopted arm
     // (TheAdoptedArmIsNotAMemberAndItIsTheChainRowThatSaysSo): a resource op table (P13: the
@@ -48,7 +48,9 @@ namespace {
     // CASE's, not this table's - AdoptPersistentMap keeps the pointer and never owns it - so the
     // base travels through a file-scope variable the case sets and clears.
     void* g_mintedPersistentBase = nullptr;
-    void* MintPersistentMap(MG_Pipe::MGPipeHandle, Uint64, const void*) { return g_mintedPersistentBase; }
+    void* MintPersistentMap(MG_Pipe::MGPipeHandle, Uint64, const void*) {
+        return g_mintedPersistentBase;
+    }
     const MG_Pipe::MGPipeResourceOps g_mintingResourceOps = [] {
         MG_Pipe::MGPipeResourceOps ops{};
         ops.MapPersistent = &MintPersistentMap;
@@ -126,10 +128,10 @@ namespace {
     };
 #endif
 
-#define MGL_SPLIT_ONLY_OR_SKIP()                                                                   \
-    do {                                                                                           \
-        GTEST_SKIP() << "the client-side GPU-write set and the persistent-map push exist only in "  \
-                        "a MOBILEGL_BUILD_DISAGGREGATED build";                                    \
+#define MGL_SPLIT_ONLY_OR_SKIP()                                                                                       \
+    do {                                                                                                               \
+        GTEST_SKIP() << "the client-side GPU-write set and the persistent-map push exist only in "                     \
+                        "a MOBILEGL_BUILD_DISAGGREGATED build";                                                        \
     } while (0)
 
 } // namespace
@@ -170,8 +172,7 @@ TEST_F(SplitBufferSet, Row1EveryBoundAtomicCounterIsMarkedByADraw) {
 // a byte of it.
 TEST_F(SplitBufferSet, Row2OnlyAWritableImageBufferTextureCounts) {
     MG_State::GLState::ImageTextureBinding empty{};
-    EXPECT_FALSE(MG_Record::ImageUnitIsAWritableBufferTexture(empty))
-        << "an unbound image unit is not a GPU write";
+    EXPECT_FALSE(MG_Record::ImageUnitIsAWritableBufferTexture(empty)) << "an unbound image unit is not a GPU write";
 
     auto texture = MakeShared<MG_State::GLState::TextureObjectBuffer>(7u);
     auto backing = MakeBuffer(13u, 128);
@@ -286,7 +287,6 @@ TEST_F(SplitBufferSet, Row5EndTransformFeedbackMarksTheCaptureTargets) {
     EXPECT_EQ(MG_Record::ProducerMarkCount(GpuWriteProducer::EndTransformFeedbackCapture), 1u);
 }
 
-
 // =====================================================================================
 // The persistent-map push
 // =====================================================================================
@@ -298,8 +298,7 @@ TEST_F(SplitBufferSet, MembershipIsSyncPersistentMappedRangesOwnEarlyOutChain) {
     auto buffer = MakeBuffer(20u, 4096);
     EXPECT_FALSE(PersistentMapTracker::IsLivePersistentMap(*buffer)) << "not mapped";
 
-    buffer->AcquireMemoryRange(Range1D{0, 4096},
-                               BufferMappingAccessBit::Write | BufferMappingAccessBit::Persistent);
+    buffer->AcquireMemoryRange(Range1D{0, 4096}, BufferMappingAccessBit::Write | BufferMappingAccessBit::Persistent);
     ASSERT_FALSE(buffer->IsBackendPersistentMapped())
         << "the acquisition was minted, so this is the adopted arm and not the one under test";
     EXPECT_TRUE(PersistentMapTracker::IsLivePersistentMap(*buffer));
@@ -311,8 +310,7 @@ TEST_F(SplitBufferSet, MembershipIsSyncPersistentMappedRangesOwnEarlyOutChain) {
 
     // FLUSH_EXPLICIT is the early-out that is easiest to lose: the application announces its
     // own writes with glFlushMappedBufferRange, which already crosses as resource_flush_range.
-    buffer->AcquireMemoryRange(Range1D{0, 4096}, BufferMappingAccessBit::Write |
-                                                     BufferMappingAccessBit::Persistent |
+    buffer->AcquireMemoryRange(Range1D{0, 4096}, BufferMappingAccessBit::Write | BufferMappingAccessBit::Persistent |
                                                      BufferMappingAccessBit::FlushExplicit);
     EXPECT_FALSE(PersistentMapTracker::IsLivePersistentMap(*buffer));
     EXPECT_EQ(PersistentMapTracker::Instance().MemberCount(), 0u);
@@ -353,8 +351,7 @@ TEST_F(SplitBufferSet, TheAdoptedArmIsNotAMemberAndItIsTheChainRowThatSaysSo) {
     auto declined = MakeBuffer(28u, kSize);
 
     // The declined twin first, with no backend ops at all: same flags, same size, same call.
-    declined->AcquireMemoryRange(Range1D{0, kSize},
-                                 BufferMappingAccessBit::Write | BufferMappingAccessBit::Persistent);
+    declined->AcquireMemoryRange(Range1D{0, kSize}, BufferMappingAccessBit::Write | BufferMappingAccessBit::Persistent);
     ASSERT_FALSE(declined->IsBackendPersistentMapped());
     ASSERT_TRUE(PersistentMapTracker::IsLivePersistentMap(*declined))
         << "the emulated arm IS a member - if this fails the two halves are not comparable and the "
@@ -413,8 +410,7 @@ TEST_F(SplitBufferSet, TheAdoptedArmIsNotAMemberAndItIsTheChainRowThatSaysSo) {
 TEST_F(SplitBufferSet, ThePushCutsTheMappedSpanIntoBlocksAndMovesPmap) {
     constexpr SizeT kSize = 4u * 64u * 1024u; // exactly four 64 KiB blocks
     auto buffer = MakeBuffer(21u, kSize);
-    buffer->AcquireMemoryRange(Range1D{0, kSize},
-                               BufferMappingAccessBit::Write | BufferMappingAccessBit::Persistent);
+    buffer->AcquireMemoryRange(Range1D{0, kSize}, BufferMappingAccessBit::Write | BufferMappingAccessBit::Persistent);
     ASSERT_TRUE(PersistentMapTracker::IsLivePersistentMap(*buffer));
 
     const Uint64 before = MG_Util::PipeStats::TotalBytes(MG_Util::PipeStats::ByteClass::PersistentMapPush);
@@ -435,8 +431,7 @@ TEST_F(SplitBufferSet, ThePushCutsTheMappedSpanIntoBlocksAndMovesPmap) {
 TEST_F(SplitBufferSet, TheLastBlockIsTheRemainderAndNotAWholeBlock) {
     constexpr SizeT kSize = 64u * 1024u + 7u;
     auto buffer = MakeBuffer(22u, kSize);
-    buffer->AcquireMemoryRange(Range1D{0, kSize},
-                               BufferMappingAccessBit::Write | BufferMappingAccessBit::Persistent);
+    buffer->AcquireMemoryRange(Range1D{0, kSize}, BufferMappingAccessBit::Write | BufferMappingAccessBit::Persistent);
     MG_Record::PushPersistentMapsBeforeVerb();
     EXPECT_EQ(PersistentMapTracker::Instance().BlocksPushed(), 2u);
     EXPECT_EQ(PersistentMapTracker::Instance().BytesPushed(), static_cast<Uint64>(kSize));
@@ -454,8 +449,7 @@ TEST_F(SplitBufferSet, BothEdgesOfAWriteMapPublishOneStateRecord) {
     EXPECT_FALSE(buffer->HasLiveHostWritesForWire());
 
     const Uint64 beforeMap = buffer->GetChangeSerial();
-    buffer->AcquireMemoryRange(Range1D{0, kSize},
-                               BufferMappingAccessBit::Write | BufferMappingAccessBit::Persistent);
+    buffer->AcquireMemoryRange(Range1D{0, kSize}, BufferMappingAccessBit::Write | BufferMappingAccessBit::Persistent);
     EXPECT_TRUE(buffer->HasLiveHostWritesForWire());
     EXPECT_EQ(buffer->GetChangeSerial(), beforeMap + 1)
         << "the rising edge published nothing, so the server cannot know a host writer is live "
@@ -479,11 +473,9 @@ TEST_F(SplitBufferSet, AZeroBlockSizeTurnsThePushOffRatherThanMakingItUnlimited)
     auto buffer = MakeBuffer(23u, kSize);
 
     const Uint64 beforeMap = buffer->GetChangeSerial();
-    buffer->AcquireMemoryRange(Range1D{0, kSize},
-                               BufferMappingAccessBit::Write | BufferMappingAccessBit::Persistent);
+    buffer->AcquireMemoryRange(Range1D{0, kSize}, BufferMappingAccessBit::Write | BufferMappingAccessBit::Persistent);
     ASSERT_TRUE(PersistentMapTracker::IsLivePersistentMap(*buffer));
-    EXPECT_EQ(buffer->GetChangeSerial(), beforeMap)
-        << "the rising-edge state record went out with the push disabled";
+    EXPECT_EQ(buffer->GetChangeSerial(), beforeMap) << "the rising-edge state record went out with the push disabled";
 
     const Uint64 before = MG_Util::PipeStats::TotalBytes(MG_Util::PipeStats::ByteClass::PersistentMapPush);
     MG_Record::PushPersistentMapsBeforeVerb();
@@ -788,10 +780,9 @@ TEST_F(SplitBufferSet, AFaultedMapTheDrawDidNotBindStillShipsBeforeTheDrawThatDo
     constexpr SizeT kSize = 4096; // one page, one block each
     auto a = MakeBuffer(29u, kSize);
     auto b = MakeBuffer(30u, kSize);
-    auto* aMapped = static_cast<Uint8*>(a->AcquireMemoryRange(
-        Range1D{0, kSize}, BufferMappingAccessBit::Write | BufferMappingAccessBit::Persistent));
-    b->AcquireMemoryRange(Range1D{0, kSize},
-                          BufferMappingAccessBit::Write | BufferMappingAccessBit::Persistent);
+    auto* aMapped = static_cast<Uint8*>(
+        a->AcquireMemoryRange(Range1D{0, kSize}, BufferMappingAccessBit::Write | BufferMappingAccessBit::Persistent));
+    b->AcquireMemoryRange(Range1D{0, kSize}, BufferMappingAccessBit::Write | BufferMappingAccessBit::Persistent);
     ASSERT_NE(aMapped, nullptr);
     ASSERT_NE(PersistentMapTracker::TrackedSlotForTest(*a), nullptr)
         << "both maps must be on the mprotect arm, or the epoch is not what decides";
@@ -840,32 +831,70 @@ TEST_F(SplitBufferSet, AFaultedMapTheDrawDidNotBindStillShipsBeforeTheDrawThatDo
 // pull and push name lists line for line and G14 allows build-split to ADD names but never to
 // remove one, so a case that exists only where it can run would break both gates for a reason
 // that has nothing to do with what it tests. It skips instead, and says why.
-TEST(SplitBufferSet, Row0EverySsboBindingPointIsMarkedByADraw) { MGL_SPLIT_ONLY_OR_SKIP(); }
-TEST(SplitBufferSet, Row1EveryBoundAtomicCounterIsMarkedByADraw) { MGL_SPLIT_ONLY_OR_SKIP(); }
-TEST(SplitBufferSet, Row2OnlyAWritableImageBufferTextureCounts) { MGL_SPLIT_ONLY_OR_SKIP(); }
-TEST(SplitBufferSet, Row2AWritableImageBufferTextureIsMarkedByADraw) { MGL_SPLIT_ONLY_OR_SKIP(); }
-TEST(SplitBufferSet, Row2TheSweepIsBoundedByTheImageUnitHighWaterMark) { MGL_SPLIT_ONLY_OR_SKIP(); }
+TEST(SplitBufferSet, Row0EverySsboBindingPointIsMarkedByADraw) {
+    MGL_SPLIT_ONLY_OR_SKIP();
+}
+TEST(SplitBufferSet, Row1EveryBoundAtomicCounterIsMarkedByADraw) {
+    MGL_SPLIT_ONLY_OR_SKIP();
+}
+TEST(SplitBufferSet, Row2OnlyAWritableImageBufferTextureCounts) {
+    MGL_SPLIT_ONLY_OR_SKIP();
+}
+TEST(SplitBufferSet, Row2AWritableImageBufferTextureIsMarkedByADraw) {
+    MGL_SPLIT_ONLY_OR_SKIP();
+}
+TEST(SplitBufferSet, Row2TheSweepIsBoundedByTheImageUnitHighWaterMark) {
+    MGL_SPLIT_ONLY_OR_SKIP();
+}
 TEST(SplitBufferSet, Row3TransformFeedbackTargetsAreOnlyMarkedWhileACaptureIsActive) {
     MGL_SPLIT_ONLY_OR_SKIP();
 }
-TEST(SplitBufferSet, Row4AReadPixelsIntoAPackPboMarksThePbo) { MGL_SPLIT_ONLY_OR_SKIP(); }
-TEST(SplitBufferSet, Row5EndTransformFeedbackMarksTheCaptureTargets) { MGL_SPLIT_ONLY_OR_SKIP(); }
+TEST(SplitBufferSet, Row4AReadPixelsIntoAPackPboMarksThePbo) {
+    MGL_SPLIT_ONLY_OR_SKIP();
+}
+TEST(SplitBufferSet, Row5EndTransformFeedbackMarksTheCaptureTargets) {
+    MGL_SPLIT_ONLY_OR_SKIP();
+}
 
-TEST(SplitBufferSet, MembershipIsSyncPersistentMappedRangesOwnEarlyOutChain) { MGL_SPLIT_ONLY_OR_SKIP(); }
-TEST(SplitBufferSet, TheAdoptedArmIsNotAMemberAndItIsTheChainRowThatSaysSo) { MGL_SPLIT_ONLY_OR_SKIP(); }
-TEST(SplitBufferSet, ThePushCutsTheMappedSpanIntoBlocksAndMovesPmap) { MGL_SPLIT_ONLY_OR_SKIP(); }
-TEST(SplitBufferSet, TheLastBlockIsTheRemainderAndNotAWholeBlock) { MGL_SPLIT_ONLY_OR_SKIP(); }
-TEST(SplitBufferSet, BothEdgesOfAWriteMapPublishOneStateRecord) { MGL_SPLIT_ONLY_OR_SKIP(); }
-TEST(SplitBufferSet, AZeroBlockSizeTurnsThePushOffRatherThanMakingItUnlimited) { MGL_SPLIT_ONLY_OR_SKIP(); }
-TEST(SplitBufferSet, ADestroyedBufferLeavesTheSet) { MGL_SPLIT_ONLY_OR_SKIP(); }
-TEST(SplitBufferSet, UnderSplitTheWritebackClearsThePendingFlagAndNotTheRequest) { MGL_SPLIT_ONLY_OR_SKIP(); }
-TEST(SplitBufferSet, AnOlderWritebackCannotRetireANewerGpuWriteMark) { MGL_SPLIT_ONLY_OR_SKIP(); }
-TEST(SplitBufferSet, TheAdoptTierIsSettledAtTheHandshakeAndNeverFatal) { MGL_SPLIT_ONLY_OR_SKIP(); }
-TEST(SplitBufferSet, ASubPageMapIsOneProtectedPageAndAWriteThroughItFaults) { MGL_SPLIT_ONLY_OR_SKIP(); }
+TEST(SplitBufferSet, MembershipIsSyncPersistentMappedRangesOwnEarlyOutChain) {
+    MGL_SPLIT_ONLY_OR_SKIP();
+}
+TEST(SplitBufferSet, TheAdoptedArmIsNotAMemberAndItIsTheChainRowThatSaysSo) {
+    MGL_SPLIT_ONLY_OR_SKIP();
+}
+TEST(SplitBufferSet, ThePushCutsTheMappedSpanIntoBlocksAndMovesPmap) {
+    MGL_SPLIT_ONLY_OR_SKIP();
+}
+TEST(SplitBufferSet, TheLastBlockIsTheRemainderAndNotAWholeBlock) {
+    MGL_SPLIT_ONLY_OR_SKIP();
+}
+TEST(SplitBufferSet, BothEdgesOfAWriteMapPublishOneStateRecord) {
+    MGL_SPLIT_ONLY_OR_SKIP();
+}
+TEST(SplitBufferSet, AZeroBlockSizeTurnsThePushOffRatherThanMakingItUnlimited) {
+    MGL_SPLIT_ONLY_OR_SKIP();
+}
+TEST(SplitBufferSet, ADestroyedBufferLeavesTheSet) {
+    MGL_SPLIT_ONLY_OR_SKIP();
+}
+TEST(SplitBufferSet, UnderSplitTheWritebackClearsThePendingFlagAndNotTheRequest) {
+    MGL_SPLIT_ONLY_OR_SKIP();
+}
+TEST(SplitBufferSet, AnOlderWritebackCannotRetireANewerGpuWriteMark) {
+    MGL_SPLIT_ONLY_OR_SKIP();
+}
+TEST(SplitBufferSet, TheAdoptTierIsSettledAtTheHandshakeAndNeverFatal) {
+    MGL_SPLIT_ONLY_OR_SKIP();
+}
+TEST(SplitBufferSet, ASubPageMapIsOneProtectedPageAndAWriteThroughItFaults) {
+    MGL_SPLIT_ONLY_OR_SKIP();
+}
 TEST(SplitBufferSet, AShadowThatFailsThePageGranularTestKeepsTheInwardAlignmentAndItsEdges) {
     MGL_SPLIT_ONLY_OR_SKIP();
 }
-TEST(SplitBufferSet, AFaultedMapTheDrawDidNotBindStillShipsBeforeTheDrawThatDoes) { MGL_SPLIT_ONLY_OR_SKIP(); }
+TEST(SplitBufferSet, AFaultedMapTheDrawDidNotBindStillShipsBeforeTheDrawThatDoes) {
+    MGL_SPLIT_ONLY_OR_SKIP();
+}
 
 #endif // MOBILEGL_BUILD_DISAGGREGATED
 
@@ -916,8 +945,7 @@ TEST(EsprytFlushLadder, AMapWiderThanTheQueuedRangeRefusesTierOne) {
            "rewrite, and overwrites whatever the GPU put there";
     // And narrower, which is the same corruption read the other way round: bytes left
     // unwritten inside a range that has just been declared dead.
-    EXPECT_EQ(InvalidateFlushAccessFor(queuedStart, queuedEnd, queuedStart, queuedEnd - 8, kStore, kStore, false),
-              0u);
+    EXPECT_EQ(InvalidateFlushAccessFor(queuedStart, queuedEnd, queuedStart, queuedEnd - 8, kStore, kStore, false), 0u);
 }
 
 TEST(EsprytFlushLadder, AnEmptyRangeIsNeverTierOne) {
@@ -965,8 +993,8 @@ TEST(EsprytFlushLadder, ARenameThatWouldMoveTooManyUnaskedBytesKeepsItsQueuedRan
     // The 1.21.5 trace's other shape: 128 bytes into a 53 KiB index store.
     EXPECT_FALSE(WholeStoreRenameApplies(53824, 53824, 128, true, false, true))
         << "rewriting 53 KiB for a 128-byte write moves more bytes than the copy job it saves";
-    EXPECT_FALSE(WholeStoreRenameApplies(16384, 16384, 16384 - kEsprytWholeStoreRenameMaxExtraBytes - 1, true,
-                                         false, true));
+    EXPECT_FALSE(
+        WholeStoreRenameApplies(16384, 16384, 16384 - kEsprytWholeStoreRenameMaxExtraBytes - 1, true, false, true));
     EXPECT_FALSE(WholeStoreRenameApplies(0, 0, 0, true, false, true));
     EXPECT_FALSE(WholeStoreRenameApplies(288, 288, 0, true, false, true)) << "nothing queued, nothing to rename";
 }

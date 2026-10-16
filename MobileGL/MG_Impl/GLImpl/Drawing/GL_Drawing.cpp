@@ -34,9 +34,8 @@ namespace MobileGL::MG_Impl::GLImpl {
 
         if (!currentProgram->GetLinkStatus()) {
             MG_State::pGLContext->RecordError(
-                ErrorCode::InvalidOperation,
-                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", functionName,
-                                             "The current program object is not linked."));
+                ErrorCode::InvalidOperation, MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", functionName,
+                                                                          "The current program object is not linked."));
             return false;
         }
 
@@ -165,13 +164,19 @@ namespace MobileGL::MG_Impl::GLImpl {
     static Uint64 CountPrimitivesForDraw(GLenum mode, GLsizei count) {
         if (count <= 0) return 0;
         switch (mode) {
-        case GL_POINTS: return static_cast<Uint64>(count);
-        case GL_LINES: return static_cast<Uint64>(count / 2);
-        case GL_LINE_STRIP: return count >= 2 ? static_cast<Uint64>(count - 1) : 0;
-        case GL_LINE_LOOP: return count >= 2 ? static_cast<Uint64>(count) : 0;
-        case GL_TRIANGLES: return static_cast<Uint64>(count / 3);
+        case GL_POINTS:
+            return static_cast<Uint64>(count);
+        case GL_LINES:
+            return static_cast<Uint64>(count / 2);
+        case GL_LINE_STRIP:
+            return count >= 2 ? static_cast<Uint64>(count - 1) : 0;
+        case GL_LINE_LOOP:
+            return count >= 2 ? static_cast<Uint64>(count) : 0;
+        case GL_TRIANGLES:
+            return static_cast<Uint64>(count / 3);
         case GL_TRIANGLE_STRIP:
-        case GL_TRIANGLE_FAN: return count >= 3 ? static_cast<Uint64>(count - 2) : 0;
+        case GL_TRIANGLE_FAN:
+            return count >= 3 ? static_cast<Uint64>(count - 2) : 0;
         // Adjacency primitives (GL 4.6 core table 10.1). Only a geometry stage can consume
         // them, and it is the ADJACENT-free primitive count that reaches it: 4 vertices per
         // line, 6 per triangle, one per step for the strips. Answering 0 here - which is what
@@ -179,14 +184,19 @@ namespace MobileGL::MG_Impl::GLImpl {
         // recorded anything, so an adjacency capture advanced neither the captured-vertex
         // counter the scattered-capture path is bounded by nor the geometry-capture-draw flag
         // that routes the transform feedback queries to the driver's own counter.
-        case GL_LINES_ADJACENCY: return static_cast<Uint64>(count / 4);
-        case GL_LINE_STRIP_ADJACENCY: return count >= 4 ? static_cast<Uint64>(count - 3) : 0;
-        case GL_TRIANGLES_ADJACENCY: return static_cast<Uint64>(count / 6);
-        case GL_TRIANGLE_STRIP_ADJACENCY: return count >= 6 ? static_cast<Uint64>((count - 4) / 2) : 0;
+        case GL_LINES_ADJACENCY:
+            return static_cast<Uint64>(count / 4);
+        case GL_LINE_STRIP_ADJACENCY:
+            return count >= 4 ? static_cast<Uint64>(count - 3) : 0;
+        case GL_TRIANGLES_ADJACENCY:
+            return static_cast<Uint64>(count / 6);
+        case GL_TRIANGLE_STRIP_ADJACENCY:
+            return count >= 6 ? static_cast<Uint64>((count - 4) / 2) : 0;
         // GL_PATCHES is deliberately absent: the tessellator's amplification is not knowable
         // on the CPU, and answering 0 is what defers GL_TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN
         // to the driver's own counter, which is the only correct source for a patch capture.
-        default: return 0;
+        default:
+            return 0;
         }
     }
 
@@ -242,8 +252,8 @@ namespace MobileGL::MG_Impl::GLImpl {
             for (SizeT i = 0; i < program->GetTransformFeedbackBufferCount(); ++i) {
                 const Uint32 stride = program->GetTransformFeedbackStride(static_cast<Uint32>(i));
                 if (stride == 0) continue;
-                const auto& point = MG_State::pGLContext->GetBufferBindingPoint(BufferTarget::TransformFeedback,
-                                                                                static_cast<Uint>(i));
+                const auto& point =
+                    MG_State::pGLContext->GetBufferBindingPoint(BufferTarget::TransformFeedback, static_cast<Uint>(i));
                 const Range1D range = point.GetRange();
                 const Uint64 bytes = range.end > range.start ? static_cast<Uint64>(range.end - range.start) : 0;
                 capacityVertices = std::min<Uint64>(capacityVertices, bytes / stride);
@@ -317,8 +327,9 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (vao && vao->GetExternalIndex() == 0 && !MG_State::IsRelaxedSemanticsActive()) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,
-                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", functionName,
-                                             "Default vertex array object cannot be used for drawing in core profile."));
+                MakeUnique<GenericErrorInfo>(
+                    "MG_Impl/GLImpl", functionName,
+                    "Default vertex array object cannot be used for drawing in core profile."));
             return false;
         }
 
@@ -419,8 +430,8 @@ namespace MobileGL::MG_Impl::GLImpl {
         const Bool feedbackModeIsProgramDriven =
             feedbackProgram && (feedbackProgram->HasLinkedShaderStage(ShaderStage::Geometry) ||
                                 feedbackProgram->HasLinkedShaderStage(ShaderStage::TessEval));
-        if (MG_State::pGLContext->IsTransformFeedbackActive() &&
-            !MG_State::pGLContext->IsTransformFeedbackPaused() && !feedbackModeIsProgramDriven) {
+        if (MG_State::pGLContext->IsTransformFeedbackActive() && !MG_State::pGLContext->IsTransformFeedbackPaused() &&
+            !feedbackModeIsProgramDriven) {
             const GLenum feedbackMode = MG_State::pGLContext->GetTransformFeedbackPrimitiveMode();
             Bool compatible = false;
             switch (feedbackMode) {
@@ -469,10 +480,9 @@ namespace MobileGL::MG_Impl::GLImpl {
     static Bool ValidateIndirectDrawSource(const char* functionName, const void* indirect, SizeT commandBytes) {
         const auto offset = reinterpret_cast<uintptr_t>(indirect);
         if (offset % 4 != 0) {
-            MG_State::pGLContext->RecordError(
-                ErrorCode::InvalidValue,
-                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", functionName,
-                                             "indirect offset must be a multiple of 4."));
+            MG_State::pGLContext->RecordError(ErrorCode::InvalidValue,
+                                              MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", functionName,
+                                                                           "indirect offset must be a multiple of 4."));
             return false;
         }
 
@@ -518,9 +528,8 @@ namespace MobileGL::MG_Impl::GLImpl {
     static Bool ValidateNonNegativeDrawArgument(const char* functionName, const char* argumentName, GLsizei value) {
         if (value >= 0) return true;
         MG_State::pGLContext->RecordError(
-            ErrorCode::InvalidValue,
-            MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", functionName,
-                                         String(argumentName) + " must be non-negative."));
+            ErrorCode::InvalidValue, MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", functionName,
+                                                                  String(argumentName) + " must be non-negative."));
         return false;
     }
 
@@ -857,9 +866,8 @@ namespace MobileGL::MG_Impl::GLImpl {
         GetIntegerv(GL_MAX_PATCH_VERTICES, &maxPatchVertices);
         if (value <= 0 || value > maxPatchVertices) {
             MG_State::pGLContext->RecordError(
-                ErrorCode::InvalidValue,
-                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
-                                             "value must be in [1, GL_MAX_PATCH_VERTICES]."));
+                ErrorCode::InvalidValue, MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                                                      "value must be in [1, GL_MAX_PATCH_VERTICES]."));
             return;
         }
         MG_State::pGLContext->SetPatchVertices(static_cast<Uint>(value));
@@ -893,8 +901,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             return;
         }
         if (pname == GL_PATCH_DEFAULT_OUTER_LEVEL) {
-            MG_State::pGLContext->SetPatchDefaultOuterLevel(
-                FloatVec4(values[0], values[1], values[2], values[3]));
+            MG_State::pGLContext->SetPatchDefaultOuterLevel(FloatVec4(values[0], values[1], values[2], values[3]));
         } else {
             MG_State::pGLContext->SetPatchDefaultInnerLevel(FloatVec2(values[0], values[1]));
         }
@@ -1007,8 +1014,8 @@ namespace MobileGL::MG_Impl::GLImpl {
     //     lies past its end                                                 INVALID_OPERATION
     //   * maxdrawcount commands from `indirect` run past the end of the
     //     buffer bound to DRAW_INDIRECT_BUFFER                              INVALID_OPERATION
-    static Bool ValidateIndirectCountDraw(GLintptr indirect, GLintptr drawcount, GLsizei maxdrawcount,
-                                          GLsizei stride, SizeT commandSize, const char* funcName) {
+    static Bool ValidateIndirectCountDraw(GLintptr indirect, GLintptr drawcount, GLsizei maxdrawcount, GLsizei stride,
+                                          SizeT commandSize, const char* funcName) {
         if (drawcount < 0 || (drawcount % 4) != 0) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidValue,
@@ -1018,8 +1025,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
         const auto& parameterBuffer =
             MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::Parameter).GetBoundObject();
-        if (!parameterBuffer ||
-            static_cast<SizeT>(drawcount) + sizeof(Uint32) > parameterBuffer->GetSize()) {
+        if (!parameterBuffer || static_cast<SizeT>(drawcount) + sizeof(Uint32) > parameterBuffer->GetSize()) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,
                 MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", funcName,
@@ -1039,9 +1045,9 @@ namespace MobileGL::MG_Impl::GLImpl {
             MG_State::pGLContext->GetBufferBindingSlot(BufferTarget::DrawIndirect).GetBoundObject();
         // A zero maxdrawcount sources nothing, so it cannot run past anything.
         const SizeT requiredBytes =
-            maxdrawcount == 0 ? 0
-                              : static_cast<SizeT>(indirect) +
-                                    static_cast<SizeT>(maxdrawcount - 1) * effectiveStride + commandSize;
+            maxdrawcount == 0
+                ? 0
+                : static_cast<SizeT>(indirect) + static_cast<SizeT>(maxdrawcount - 1) * effectiveStride + commandSize;
         if (!indirectBuffer || requiredBytes > indirectBuffer->GetSize()) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,
@@ -1083,8 +1089,8 @@ namespace MobileGL::MG_Impl::GLImpl {
         MultiDrawElementsIndirectCount_Backend(mode, type, indirect, drawcount, maxdrawcount, stride);
     }
 
-    void MultiDrawArraysIndirectCount(GLenum mode, const void* indirect, GLintptr drawcount,
-                                      GLsizei maxdrawcount, GLsizei stride) {
+    void MultiDrawArraysIndirectCount(GLenum mode, const void* indirect, GLintptr drawcount, GLsizei maxdrawcount,
+                                      GLsizei stride) {
         // Argument validation before the backend-availability check: see DispatchComputeIndirect.
         // DrawArraysIndirectCommand: count, instanceCount, first, baseInstance.
         if (!ValidateIndirectCountDraw(reinterpret_cast<GLintptr>(indirect), drawcount, maxdrawcount, stride,
@@ -1279,9 +1285,8 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (!program || !program->GetLinkStatus() || program->GetTransformFeedbackVaryingCount() == 0) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,
-                MakeUnique<GenericErrorInfo>(
-                    "MG_Impl/GLImpl", __func__,
-                    "No program with transform feedback varyings is active."));
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                             "No program with transform feedback varyings is active."));
             return;
         }
         // Every capture buffer slot the program's mode uses must have a buffer bound. A slot
@@ -1290,14 +1295,14 @@ namespace MobileGL::MG_Impl::GLImpl {
         const SizeT usedBufferCount = program->GetTransformFeedbackBufferCount();
         for (SizeT i = 0; i < usedBufferCount; ++i) {
             if (program->GetTransformFeedbackStride(static_cast<Uint32>(i)) == 0) continue;
-            const auto& point = MG_State::pGLContext->GetBufferBindingPoint(BufferTarget::TransformFeedback,
-                                                                            static_cast<Uint>(i));
+            const auto& point =
+                MG_State::pGLContext->GetBufferBindingPoint(BufferTarget::TransformFeedback, static_cast<Uint>(i));
             if (point.GetBoundObject() == nullptr) {
                 MG_State::pGLContext->RecordError(
                     ErrorCode::InvalidOperation,
-                    MakeUnique<GenericErrorInfo>(
-                        "MG_Impl/GLImpl", __func__,
-                        "Transform feedback buffer binding point " + std::to_string(i) + " has no buffer bound."));
+                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                                 "Transform feedback buffer binding point " + std::to_string(i) +
+                                                     " has no buffer bound."));
                 return;
             }
         }
@@ -1352,9 +1357,8 @@ namespace MobileGL::MG_Impl::GLImpl {
         for (SizeT bufferIndex = 0; bufferIndex < program->GetTransformFeedbackBufferCount(); ++bufferIndex) {
             const Uint32 stride = program->GetTransformFeedbackStride(static_cast<Uint32>(bufferIndex));
             if (stride == 0) continue;
-            const auto& bindingPoint =
-                MG_State::pGLContext->GetBufferBindingPoint(BufferTarget::TransformFeedback,
-                                                            static_cast<Uint>(bufferIndex));
+            const auto& bindingPoint = MG_State::pGLContext->GetBufferBindingPoint(BufferTarget::TransformFeedback,
+                                                                                   static_cast<Uint>(bufferIndex));
             const auto& buffer = bindingPoint.GetBoundObject();
             if (buffer == nullptr) continue;
             // This fixup READS the captured bytes back through the shadow, so it is the one
@@ -1426,8 +1430,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         // shape a verb barrier cannot make cheap, because it is the driver's wait and not the
         // barrier's.
         auto& backendGL = MG_Backend::gBackendFunctionsTable.GL;
-        const Bool waitForTheCapture =
-            MG_Config::Transport == MG_Config::TransportMode::Monolith;
+        const Bool waitForTheCapture = MG_Config::Transport == MG_Config::TransportMode::Monolith;
         if (waitForTheCapture && backendGL.FenceSync && backendGL.ClientWaitSync) {
             MGP_FILL(FenceSync);
             if (auto sync = backendGL.FenceSync()) {
@@ -1443,8 +1446,7 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     void PauseTransformFeedback(void) {
-        if (!MG_State::pGLContext->IsTransformFeedbackActive() ||
-            MG_State::pGLContext->IsTransformFeedbackPaused()) {
+        if (!MG_State::pGLContext->IsTransformFeedbackActive() || MG_State::pGLContext->IsTransformFeedbackPaused()) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,
                 MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
@@ -1459,8 +1461,7 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     void ResumeTransformFeedback(void) {
-        if (!MG_State::pGLContext->IsTransformFeedbackActive() ||
-            !MG_State::pGLContext->IsTransformFeedbackPaused()) {
+        if (!MG_State::pGLContext->IsTransformFeedbackActive() || !MG_State::pGLContext->IsTransformFeedbackPaused()) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,
                 MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "Transform feedback is not paused."));
@@ -1542,7 +1543,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
 
         SharedPtr<MG_State::GLState::BufferObject> ResolveTransformFeedbackBuffer(GLuint buffer,
-                                                                                 const char* functionName) {
+                                                                                  const char* functionName) {
             if (buffer == 0) return nullptr;
             if (!MG_State::pGLContext->ValidateBufferName(buffer)) {
                 MG_State::pGLContext->RecordError(
@@ -1566,9 +1567,8 @@ namespace MobileGL::MG_Impl::GLImpl {
                                              std::to_string(buffer) + " is not a buffer object."));
             return;
         }
-        MG_State::pGLContext->SetNamedTransformFeedbackBinding(xfb, index,
-                                                               ResolveTransformFeedbackBuffer(buffer, __func__), {},
-                                                               false);
+        MG_State::pGLContext->SetNamedTransformFeedbackBinding(
+            xfb, index, ResolveTransformFeedbackBuffer(buffer, __func__), {}, false);
     }
 
     void TransformFeedbackBufferRange(GLuint xfb, GLuint index, GLuint buffer, GLintptr offset, GLsizeiptr size) {
@@ -1689,8 +1689,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             return;
         }
         // A running capture pins its object; only a paused one may be swapped out.
-        if (MG_State::pGLContext->IsTransformFeedbackActive() &&
-            !MG_State::pGLContext->IsTransformFeedbackPaused()) {
+        if (MG_State::pGLContext->IsTransformFeedbackActive() && !MG_State::pGLContext->IsTransformFeedbackPaused()) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,
                 MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,

@@ -283,8 +283,7 @@ void main() { gl_Position = u_vsOnly; }
     UseProgramStages(pipeline, GL_FRAGMENT_SHADER_BIT, fs);
     ASSERT_EQ(GetError(), GL_NO_ERROR);
     UseProgramStages(pipeline, GL_VERTEX_SHADER_BIT, vs);
-    ASSERT_EQ(GetError(), GL_INVALID_OPERATION)
-        << "a program not linked as separable is not a legal pipeline stage";
+    ASSERT_EQ(GetError(), GL_INVALID_OPERATION) << "a program not linked as separable is not a legal pipeline stage";
     {
         const auto& pipelineObject = MG_State::pGLContext->MaterializeProgramPipelineObject(pipeline);
         ASSERT_NE(pipelineObject, nullptr);
@@ -454,8 +453,7 @@ TEST_F(ProgramPipelineCompositeTest, ASamplerWritePerDrawDoesNotRebuildTheCompos
         Uniform1i(sampler, unit);
         const auto composite = DrawProgram();
         ASSERT_NE(composite, nullptr);
-        EXPECT_EQ(composite.get(), first.get())
-            << "the composite was rebuilt by a sampler-unit write at unit " << unit;
+        EXPECT_EQ(composite.get(), first.get()) << "the composite was rebuilt by a sampler-unit write at unit " << unit;
         EXPECT_EQ(composite->GetLifetimeId(), firstLifetime) << "the composite's identity changed at unit " << unit;
         // The value still has to ARRIVE - the whole point is that the mirror carries it now that
         // the rebuild no longer does.
@@ -555,20 +553,17 @@ void main() { gl_Position = vec4(0.0); EmitVertex(); EndPrimitive(); }
     ASSERT_FALSE(composite->HasLinkedShaderStage(ShaderStage::Vertex));
 
     DrawArrays(GL_POINTS, 0, 1);
-    EXPECT_EQ(GetError(), GL_INVALID_OPERATION)
-        << "a geometry stage with no vertex stage must refuse the draw";
+    EXPECT_EQ(GetError(), GL_INVALID_OPERATION) << "a geometry stage with no vertex stage must refuse the draw";
 
     // A dispatch shares the same "is there a program, did it link" helper and legitimately has no
     // vertex stage; the rule must not have leaked onto it. There is no compute stage here, so the
     // error is the compute check's own - what matters is that the draw rule did not fire first
     // with a different meaning.
-    for (Int drained = 0; drained < 16 && GetError() != GL_NO_ERROR; ++drained) {
-    }
+    for (Int drained = 0; drained < 16 && GetError() != GL_NO_ERROR; ++drained) {}
 
     BindProgramPipeline(0);
     DeleteProgramPipelines(1, &pipeline);
-    for (Int drained = 0; drained < 16 && GetError() != GL_NO_ERROR; ++drained) {
-    }
+    for (Int drained = 0; drained < 16 && GetError() != GL_NO_ERROR; ++drained) {}
 }
 
 // GL 4.6 core 7.3: only a SEPARABLE program may have a geometry (or tessellation) stage without a
@@ -616,7 +611,8 @@ void main() { gl_Position = vec4(0.0); }
     // One separable program carrying BOTH the vertex and the fragment stage.
     const GLuint both = CreateProgram();
     ProgramParameteri(both, GL_PROGRAM_SEPARABLE, GL_TRUE);
-    for (const auto& [stage, source] : {std::pair{GL_VERTEX_SHADER, kVf}, std::pair{GL_FRAGMENT_SHADER, kSharedUniformFs}}) {
+    for (const auto& [stage, source] :
+         {std::pair{GL_VERTEX_SHADER, kVf}, std::pair{GL_FRAGMENT_SHADER, kSharedUniformFs}}) {
         const GLuint shader = CreateShader(stage);
         ShaderSource(shader, 1, &source, nullptr);
         CompileShader(shader);
@@ -669,8 +665,7 @@ void main() { gl_Position = vec4(0.0); }
 
     BindProgramPipeline(0);
     DeleteProgramPipelines(1, &pipeline);
-    for (Int drained = 0; drained < 16 && GetError() != GL_NO_ERROR; ++drained) {
-    }
+    for (Int drained = 0; drained < 16 && GetError() != GL_NO_ERROR; ++drained) {}
 }
 
 // KHR-GL4x.geometry_shader.api.program_pipeline_vs_gs_capture: a vertex-only separable program
@@ -710,8 +705,7 @@ void main() { color = vec4(vertexID[0]); gl_Position = vec4(0.0); EmitVertex(); 
 
     BindProgramPipeline(0);
     DeleteProgramPipelines(1, &pipeline);
-    for (Int drained = 0; drained < 16 && GetError() != GL_NO_ERROR; ++drained) {
-    }
+    for (Int drained = 0; drained < 16 && GetError() != GL_NO_ERROR; ++drained) {}
 }
 
 // ---------------------------------------------------------------------------------------------

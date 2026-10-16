@@ -37,12 +37,10 @@
 
 // Defined in Definitions.cpp; eglext.h declares them only under EGL_EGLEXT_PROTOTYPES.
 extern "C" EGLImage eglCreateImageKHR(EGLDisplay dpy, EGLContext ctx, EGLenum target, EGLClientBuffer buffer,
-                                         const EGLint* attrib_list);
+                                      const EGLint* attrib_list);
 extern "C" EGLBoolean eglDestroyImageKHR(EGLDisplay dpy, EGLImage image);
-extern "C" EGLBoolean eglSwapBuffersWithDamageKHR(EGLDisplay dpy, EGLSurface draw, const EGLint* rects,
-                                                  EGLint n_rects);
-extern "C" EGLBoolean eglSwapBuffersWithDamageEXT(EGLDisplay dpy, EGLSurface draw, const EGLint* rects,
-                                                  EGLint n_rects);
+extern "C" EGLBoolean eglSwapBuffersWithDamageKHR(EGLDisplay dpy, EGLSurface draw, const EGLint* rects, EGLint n_rects);
+extern "C" EGLBoolean eglSwapBuffersWithDamageEXT(EGLDisplay dpy, EGLSurface draw, const EGLint* rects, EGLint n_rects);
 extern "C" EGLBoolean eglSetDamageRegionKHR(EGLDisplay dpy, EGLSurface surface, EGLint* rects, EGLint n_rects);
 extern "C" EGLSyncKHR eglCreateSyncKHR(EGLDisplay dpy, EGLenum type, const EGLint* attrib_list);
 extern "C" EGLBoolean eglDestroySyncKHR(EGLDisplay dpy, EGLSyncKHR sync);
@@ -147,7 +145,9 @@ namespace {
 
     // One device, one identity.  A pointer to a private object rather than a number, so that a
     // device from somewhere else cannot compare equal to this one by accident.
-    struct DeviceToken { int unused; };
+    struct DeviceToken {
+        int unused;
+    };
     DeviceToken g_deviceToken;
 
     EGLBoolean EGLAPIENTRY VendorQueryDevicesEXT(EGLint max_devices, EGLDeviceEXT* devices, EGLint* num_devices) {
@@ -227,7 +227,8 @@ namespace {
         return EGL_FALSE;
     }
 
-    EGLint EGLAPIENTRY VendorLabelObjectKHR(EGLDisplay dpy, EGLenum objectType, EGLObjectKHR object, EGLLabelKHR label) {
+    EGLint EGLAPIENTRY VendorLabelObjectKHR(EGLDisplay dpy, EGLenum objectType, EGLObjectKHR object,
+                                            EGLLabelKHR label) {
         (void)dpy;
         (void)objectType;
         (void)object;
@@ -333,7 +334,9 @@ namespace {
         return reinterpret_cast<void*>(MG_Impl::EGLImpl::GetProcAddress(procName));
     }
 
-    void* EGLAPIENTRY VendorGetProcAddress(const char* procName) { return LookupEntryPoint(procName); }
+    void* EGLAPIENTRY VendorGetProcAddress(const char* procName) {
+        return LookupEntryPoint(procName);
+    }
 
     // glvnd hands a vendor the index each EGL entry point occupies in its dispatch table, so that a
     // vendor whose entry points are thin wrappers around glvnd can call back into the right slot.
@@ -345,8 +348,10 @@ namespace {
         (void)index;
     }
 
-    void* EGLAPIENTRY VendorGetDispatchAddress(const char* procName) { return LookupEntryPoint(procName); }
-}  // namespace
+    void* EGLAPIENTRY VendorGetDispatchAddress(const char* procName) {
+        return LookupEntryPoint(procName);
+    }
+} // namespace
 
 // libeglabi.h has already declared this prototype without an export attribute, and MSVC refuses a
 // redeclaration that adds dllexport. Windows has no glvnd to look the symbol up, so it is a plain
@@ -356,8 +361,8 @@ namespace {
 #else
 #define MOBILEGL_GLVND_EGL_MAIN MOBILEGL_EGL_API
 #endif
-MOBILEGL_GLVND_EGL_MAIN EGLBoolean __egl_Main(uint32_t version, const __EGLapiExports* exports,
-                                              __EGLvendorInfo* vendor, __EGLapiImports* imports) {
+MOBILEGL_GLVND_EGL_MAIN EGLBoolean __egl_Main(uint32_t version, const __EGLapiExports* exports, __EGLvendorInfo* vendor,
+                                              __EGLapiImports* imports) {
     (void)vendor;
     if (EGL_VENDOR_ABI_GET_MAJOR_VERSION(version) != EGL_VENDOR_ABI_MAJOR_VERSION) {
         // A vendor that does not know the ABI it is being handed must say so, not guess: the

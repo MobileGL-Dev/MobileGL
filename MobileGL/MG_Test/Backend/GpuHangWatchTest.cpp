@@ -83,7 +83,8 @@ TEST(GpuHangDetectorTest, TheBudgetRunsFromTheFirstSampleThatSawItRunning) {
 
 TEST(GpuHangDetectorTest, AZeroBudgetNamesNothing) {
     Watch::Detector detector(0);
-    for (Uint64 now = 0; now <= 60000; now += 1000) EXPECT_EQ(detector.Observe(One(1, true, false), now), 0u);
+    for (Uint64 now = 0; now <= 60000; now += 1000)
+        EXPECT_EQ(detector.Observe(One(1, true, false), now), 0u);
 }
 
 namespace {
@@ -137,7 +138,7 @@ TEST(GpuHangWatchThreadTest, TheHangingDeviceIsNamedOnceAndTheOneWaitingBehindIt
     const ScopedWatchTiming timing(20, 200);
     FakeDevice guilty;
     FakeDevice innocent;
-    guilty.started = true;   // the GPU runs it and it never ends
+    guilty.started = true;    // the GPU runs it and it never ends
     innocent.started = false; // queued behind it for the whole stall
     const Uint64 a = Watch::Register(&guilty, &FakeDevice::Sample, &FakeDevice::Hung);
     const Uint64 b = Watch::Register(&innocent, &FakeDevice::Sample, &FakeDevice::Hung);
@@ -145,7 +146,8 @@ TEST(GpuHangWatchThreadTest, TheHangingDeviceIsNamedOnceAndTheOneWaitingBehindIt
     ASSERT_NE(b, 0u);
     const auto start = std::chrono::steady_clock::now();
     EXPECT_TRUE(PollUntil([&] { return guilty.named.load() > 0; }, 3000));
-    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
+    const auto ms =
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
     EXPECT_GE(ms, 180) << "named before the budget ran out";
     EXPECT_LE(ms, 1500) << "named far past budget + interval";
     EXPECT_EQ(guilty.namedId.load(), 42u);

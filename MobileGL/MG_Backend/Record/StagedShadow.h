@@ -164,8 +164,7 @@ namespace MobileGL::MG_Record {
         // Fatal when a drain reaches bytes no record staged. It fires ONLY for a base that is
         // this key's server shadow: the legacy arm passes the frontend object's own
         // MappedData(), which is valid for the whole store and is not this rule's subject.
-        void RequireCoverage(const void* key, const Uint8* hostBase, SizeT start, SizeT end,
-                             const char* site) const {
+        void RequireCoverage(const void* key, const Uint8* hostBase, SizeT start, SizeT end, const char* site) const {
             if (!m_any.load(std::memory_order_acquire) || hostBase == nullptr) return;
             const std::lock_guard<std::mutex> lock(m_mutex);
             const auto it = m_shadows.find(key);

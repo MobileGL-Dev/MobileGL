@@ -43,46 +43,47 @@
 #include <condition_variable>
 #include <mutex>
 
-extern "C" {
-void glTexStorage2D(GLenum target, GLsizei levels, GLenum internalformat, GLsizei width, GLsizei height);
-const GLubyte* glGetString(GLenum name);
-const GLubyte* glGetStringi(GLenum name, GLuint index);
-void glGetIntegerv(GLenum pname, GLint* data);
-void glGetnUniformfv(GLuint program, GLint location, GLsizei bufSize, GLfloat* params);
-void glUniform4f(GLint location, GLfloat v0, GLfloat v1, GLfloat v2, GLfloat v3);
-void glClearColor(GLfloat red, GLfloat green, GLfloat blue, GLfloat alpha);
-void glClear(GLbitfield mask);
-void glReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, void* pixels);
-GLenum glGetError(void);
-GLenum glGetGraphicsResetStatus(void);
-void glGenTextures(GLsizei n, GLuint* textures);
-void glBindTexture(GLenum target, GLuint texture);
-void glActiveTexture(GLenum texture);
-void glTexImage2D(GLenum target, GLint level, GLint internalformat, GLsizei width, GLsizei height, GLint border,
-                  GLenum format, GLenum type, const void* pixels);
-void glTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLsizei width, GLsizei height,
-                     GLenum format, GLenum type, const void* pixels);
-void glTexParameteri(GLenum target, GLenum pname, GLint param);
-GLboolean glIsTexture(GLuint texture);
-void glGenFramebuffers(GLsizei n, GLuint* framebuffers);
-void glBindFramebuffer(GLenum target, GLuint framebuffer);
-void glFramebufferTexture2D(GLenum target, GLenum attachment, GLenum textarget, GLuint texture, GLint level);
-GLenum glCheckFramebufferStatus(GLenum target);
-GLuint glCreateShader(GLenum type);
-void glShaderSource(GLuint shader, GLsizei count, const GLchar* const* string, const GLint* length);
-void glCompileShader(GLuint shader);
-void glGetShaderiv(GLuint shader, GLenum pname, GLint* params);
-GLuint glCreateProgram(void);
-void glAttachShader(GLuint program, GLuint shader);
-void glLinkProgram(GLuint program);
-void glGetProgramiv(GLuint program, GLenum pname, GLint* params);
-void glUseProgram(GLuint program);
-GLint glGetUniformLocation(GLuint program, const GLchar* name);
-void glUniform1i(GLint location, GLint v0);
-void glGenVertexArrays(GLsizei n, GLuint* arrays);
-void glBindVertexArray(GLuint array);
-void glViewport(GLint x, GLint y, GLsizei width, GLsizei height);
-void glDrawArrays(GLenum mode, GLint first, GLsizei count);
+extern "C"
+{
+    void glTexStorage2D(GLenum target, GLsizei levels, GLenum internalformat, GLsizei width, GLsizei height);
+    const GLubyte* glGetString(GLenum name);
+    const GLubyte* glGetStringi(GLenum name, GLuint index);
+    void glGetIntegerv(GLenum pname, GLint* data);
+    void glGetnUniformfv(GLuint program, GLint location, GLsizei bufSize, GLfloat* params);
+    void glUniform4f(GLint location, GLfloat v0, GLfloat v1, GLfloat v2, GLfloat v3);
+    void glClearColor(GLfloat red, GLfloat green, GLfloat blue, GLfloat alpha);
+    void glClear(GLbitfield mask);
+    void glReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, void* pixels);
+    GLenum glGetError(void);
+    GLenum glGetGraphicsResetStatus(void);
+    void glGenTextures(GLsizei n, GLuint* textures);
+    void glBindTexture(GLenum target, GLuint texture);
+    void glActiveTexture(GLenum texture);
+    void glTexImage2D(GLenum target, GLint level, GLint internalformat, GLsizei width, GLsizei height, GLint border,
+                      GLenum format, GLenum type, const void* pixels);
+    void glTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLsizei width, GLsizei height,
+                         GLenum format, GLenum type, const void* pixels);
+    void glTexParameteri(GLenum target, GLenum pname, GLint param);
+    GLboolean glIsTexture(GLuint texture);
+    void glGenFramebuffers(GLsizei n, GLuint* framebuffers);
+    void glBindFramebuffer(GLenum target, GLuint framebuffer);
+    void glFramebufferTexture2D(GLenum target, GLenum attachment, GLenum textarget, GLuint texture, GLint level);
+    GLenum glCheckFramebufferStatus(GLenum target);
+    GLuint glCreateShader(GLenum type);
+    void glShaderSource(GLuint shader, GLsizei count, const GLchar* const* string, const GLint* length);
+    void glCompileShader(GLuint shader);
+    void glGetShaderiv(GLuint shader, GLenum pname, GLint* params);
+    GLuint glCreateProgram(void);
+    void glAttachShader(GLuint program, GLuint shader);
+    void glLinkProgram(GLuint program);
+    void glGetProgramiv(GLuint program, GLenum pname, GLint* params);
+    void glUseProgram(GLuint program);
+    GLint glGetUniformLocation(GLuint program, const GLchar* name);
+    void glUniform1i(GLint location, GLint v0);
+    void glGenVertexArrays(GLsizei n, GLuint* arrays);
+    void glBindVertexArray(GLuint array);
+    void glViewport(GLint x, GLint y, GLsizei width, GLsizei height);
+    void glDrawArrays(GLenum mode, GLint first, GLsizei count);
 }
 
 using namespace MobileGL;
@@ -182,9 +183,10 @@ namespace {
         GLuint texture = 0;
 
         Bool Build(RecoveryReport& r, Uint32 rgba) {
-            static const char* kVertex = "#version 330 core\n"
-                                         "const vec2 corners[3] = vec2[3](vec2(-1.0, -1.0), vec2(3.0, -1.0), vec2(-1.0, 3.0));\n"
-                                         "void main() { gl_Position = vec4(corners[gl_VertexID], 0.0, 1.0); }\n";
+            static const char* kVertex =
+                "#version 330 core\n"
+                "const vec2 corners[3] = vec2[3](vec2(-1.0, -1.0), vec2(3.0, -1.0), vec2(-1.0, 3.0));\n"
+                "void main() { gl_Position = vec4(corners[gl_VertexID], 0.0, 1.0); }\n";
             static const char* kFragment = "#version 330 core\n"
                                            "uniform sampler2D image;\n"
                                            "out vec4 color;\n"
@@ -469,8 +471,8 @@ namespace {
         RecoveryReport built{};
         if (!old.Build(built, kGreen)) return Note(r, built.note);
         old.Draw();
-        (void)ReadPixel();                       // device check #1
-        (void)ClearAndRead(0.0f, 0.0f, 1.0f);    // device check #2: lost
+        (void)ReadPixel();                    // device check #1
+        (void)ClearAndRead(0.0f, 0.0f, 1.0f); // device check #2: lost
         (void)WaitFor([] { return glGetGraphicsResetStatus() != GL_NO_ERROR; }, 5000);
         (void)EGL::MakeCurrent(egl.dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
         (void)EGL::DestroyContext(egl.dpy, working);
@@ -496,7 +498,7 @@ namespace {
         if (EGL::MakeCurrent(egl.dpy, egl.surface, egl.surface, second) != EGL_TRUE)
             return Note(r, "the second replacement did not go current");
         r.textureSeenAcross = glIsTexture(shared.texture) == GL_TRUE ? 1 : 0;
-        GLuint vertexArray = 0;  // a vertex array is per context
+        GLuint vertexArray = 0; // a vertex array is per context
         glGenVertexArrays(1, &vertexArray);
         shared.vertexArray = vertexArray;
         shared.Draw();
@@ -593,8 +595,8 @@ namespace {
             if (!old.Build(built, kGreen)) return Note(r, built.note);
             r.initialized = 1;
             old.Draw();
-            r.firstPixel = ReadPixel();                        // device check #1
-            (void)ClearAndRead(0.0f, 0.0f, 1.0f);              // device check #2: lost
+            r.firstPixel = ReadPixel();           // device check #1
+            (void)ClearAndRead(0.0f, 0.0f, 1.0f); // device check #2: lost
             (void)WaitFor([] { return glGetGraphicsResetStatus() != GL_NO_ERROR; }, 5000);
         });
         if (!r.initialized) return;
@@ -697,8 +699,8 @@ namespace {
             return Note(r, "the contexts did not go current");
         r.initialized = 1;
         glGetIntegerv(GL_RESET_NOTIFICATION_STRATEGY, &r.coreStrategy);
-        r.firstPixel = ClearAndRead(0.0f, 1.0f, 0.0f);   // device check #1
-        (void)ClearAndRead(0.0f, 0.0f, 1.0f);            // device check #2: lost
+        r.firstPixel = ClearAndRead(0.0f, 1.0f, 0.0f); // device check #1
+        (void)ClearAndRead(0.0f, 0.0f, 1.0f);          // device check #2: lost
         r.lossSeen = WaitFor([] { return Remote::Client::ClientSession::SessionLatchedLost(); }, 5000) ? 1 : 0;
 
         r.coreStatus = glGetGraphicsResetStatus();
@@ -716,7 +718,8 @@ namespace {
         if (r.coreAgain == EGL_TRUE) (void)EGL::MakeCurrent(egl.dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
 
         const EGLContext fresh = egl.Context();
-        r.freshCurrent = fresh != EGL_NO_CONTEXT && EGL::MakeCurrent(egl.dpy, egl.surface, egl.surface, fresh) == EGL_TRUE;
+        r.freshCurrent =
+            fresh != EGL_NO_CONTEXT && EGL::MakeCurrent(egl.dpy, egl.surface, egl.surface, fresh) == EGL_TRUE;
         if (!r.freshCurrent) return Note(r, "no fresh context went current");
         r.freshStatus = glGetGraphicsResetStatus();
         r.freshPixel = ClearAndRead(0.0f, 0.0f, 1.0f);
@@ -816,7 +819,8 @@ namespace {
         (void)EGL::MakeCurrent(egl.dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
         const EGLContext fresh = egl.Context();
         (void)EGL::DestroyContext(egl.dpy, lost);
-        r.freshCurrent = fresh != EGL_NO_CONTEXT && EGL::MakeCurrent(egl.dpy, egl.surface, egl.surface, fresh) == EGL_TRUE;
+        r.freshCurrent =
+            fresh != EGL_NO_CONTEXT && EGL::MakeCurrent(egl.dpy, egl.surface, egl.surface, fresh) == EGL_TRUE;
         if (!r.freshCurrent) return Note(r, "no fresh context went current");
         const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
         while (std::chrono::steady_clock::now() < until) {
@@ -979,10 +983,9 @@ namespace {
                       reinterpret_cast<const char*>(glGetString(GL_SHADING_LANGUAGE_VERSION)));
         glGetIntegerv(GL_MAJOR_VERSION, &r.esMajor);
         glGetIntegerv(GL_MINOR_VERSION, &r.esMinor);
-        r.bgraAdvertised = HasToken(reinterpret_cast<const char*>(glGetString(GL_EXTENSIONS)),
-                                    "GL_EXT_texture_format_BGRA8888")
-                               ? 1
-                               : 0;
+        r.bgraAdvertised =
+            HasToken(reinterpret_cast<const char*>(glGetString(GL_EXTENSIONS)), "GL_EXT_texture_format_BGRA8888") ? 1
+                                                                                                                  : 0;
         GLint count = 0;
         glGetIntegerv(GL_NUM_EXTENSIONS, &count);
         r.bgraIndexed = 0;
@@ -990,8 +993,7 @@ namespace {
             const auto* name = reinterpret_cast<const char*>(glGetStringi(GL_EXTENSIONS, static_cast<GLuint>(i)));
             if (name != nullptr && std::string(name) == "GL_EXT_texture_format_BGRA8888") r.bgraIndexed = 1;
         }
-        while (glGetError() != GL_NO_ERROR) {
-        }
+        while (glGetError() != GL_NO_ERROR) {}
         // BGRA as EXT_texture_format_BGRA8888 spells it: GL_BGRA_EXT as the internal format, and
         // GL_BGRA8_EXT through glTexStorage2D; a BGRA texel reads back in RGBA order.
         const Uint8 bgra[4] = {0x10, 0x20, 0x30, 0xFF}; // B, G, R, A
@@ -1061,8 +1063,10 @@ namespace {
         // What every route has to show from the application's side, before and after the loss.
         static void ExpectLossReportedAndRecovered(const RecoveryReport& r, const std::string& diagnostics) {
             ASSERT_EQ(r.initialized, 1) << r.note << "\n" << diagnostics;
-            ASSERT_EQ(r.firstPixel, kGreen) << "the first draw (device check #1) did not read back: " << std::hex
-                                            << r.firstPixel << "\n" << r.note << "\n" << diagnostics;
+            ASSERT_EQ(r.firstPixel, kGreen)
+                << "the first draw (device check #1) did not read back: " << std::hex << r.firstPixel << "\n"
+                << r.note << "\n"
+                << diagnostics;
             EXPECT_NE(r.lostPixel, kBlue) << "a read-back on the lost device returned a frame";
             // What the application checked before it asked to be told (ANGLE mirrors the EGL
             // extension onto its own display; Chrome checks that and GL_*_robustness), and what
@@ -1070,8 +1074,8 @@ namespace {
             EXPECT_EQ(r.eglRobustnessAdvertised, 1) << "EGL_EXT_create_context_robustness is not advertised";
             EXPECT_EQ(r.glRobustnessAdvertised, 1) << "GL_KHR_robustness is not in glGetString(GL_EXTENSIONS)";
             EXPECT_EQ(r.glRobustnessIndexed, 1) << "GL_KHR_robustness is not in glGetStringi(GL_EXTENSIONS, i)";
-            EXPECT_EQ(r.strategyBefore, GL_LOSE_CONTEXT_ON_RESET) << "GL_RESET_NOTIFICATION_STRATEGY: 0x" << std::hex
-                                                                 << r.strategyBefore;
+            EXPECT_EQ(r.strategyBefore, GL_LOSE_CONTEXT_ON_RESET)
+                << "GL_RESET_NOTIFICATION_STRATEGY: 0x" << std::hex << r.strategyBefore;
             EXPECT_EQ(r.robustAccess, GL_FALSE);
             // The loss is reported.
             EXPECT_TRUE(r.resetStatusLost == GL_UNKNOWN_CONTEXT_RESET || r.resetStatusLost == GL_GUILTY_CONTEXT_RESET)
@@ -1083,23 +1087,27 @@ namespace {
             // LOSE_CONTEXT_ON_RESET: the context stays lost, so the status does not go back to
             // GL_NO_ERROR (that would read as a reset that completed in place), and the KHR name
             // an ES application looks up answers the same.
-            EXPECT_EQ(r.resetStatusRepeat, r.resetStatusLost) << "the reset status of a lost context went back to 0x"
-                                                             << std::hex << r.resetStatusRepeat;
-            EXPECT_EQ(r.resetStatusKhr, r.resetStatusLost) << "glGetGraphicsResetStatusKHR: 0x" << std::hex
-                                                          << r.resetStatusKhr;
+            EXPECT_EQ(r.resetStatusRepeat, r.resetStatusLost)
+                << "the reset status of a lost context went back to 0x" << std::hex << r.resetStatusRepeat;
+            EXPECT_EQ(r.resetStatusKhr, r.resetStatusLost)
+                << "glGetGraphicsResetStatusKHR: 0x" << std::hex << r.resetStatusKhr;
             EXPECT_EQ(r.swapLost, EGL_FALSE) << "eglSwapBuffers on the lost context succeeded";
-            EXPECT_EQ(r.swapLostError, EGL_CONTEXT_LOST) << "eglSwapBuffers on the lost context: 0x" << std::hex
-                                                         << r.swapLostError;
+            EXPECT_EQ(r.swapLostError, EGL_CONTEXT_LOST)
+                << "eglSwapBuffers on the lost context: 0x" << std::hex << r.swapLostError;
             EXPECT_EQ(r.releaseOk, 1) << "releasing the lost context failed";
             EXPECT_EQ(r.oldCurrent, EGL_FALSE) << "the lost context was made current again";
-            EXPECT_EQ(r.oldCurrentError, EGL_CONTEXT_LOST) << "eglMakeCurrent of the lost context: 0x" << std::hex
-                                                           << r.oldCurrentError;
+            EXPECT_EQ(r.oldCurrentError, EGL_CONTEXT_LOST)
+                << "eglMakeCurrent of the lost context: 0x" << std::hex << r.oldCurrentError;
             EXPECT_EQ(r.destroyOldOk, 1) << "the lost context could not be destroyed";
             // A fresh session, and the new context renders.
             ASSERT_EQ(r.newContextOk, 1) << "no context could be created after the loss (EGL error 0x" << std::hex
-                                         << r.newContextError << ")\n" << r.note << "\n" << diagnostics;
+                                         << r.newContextError << ")\n"
+                                         << r.note << "\n"
+                                         << diagnostics;
             ASSERT_EQ(r.newCurrentOk, 1) << "the new context did not go current (EGL error 0x" << std::hex
-                                         << r.newCurrentError << ")\n" << r.note << "\n" << diagnostics;
+                                         << r.newCurrentError << ")\n"
+                                         << r.note << "\n"
+                                         << diagnostics;
             EXPECT_EQ(r.serverPidAfter, r.serverPidBefore) << "the new session is not on the same server process";
             EXPECT_EQ(r.resetStatusNew, static_cast<Uint32>(GL_NO_ERROR)) << "the new context reports a reset";
             EXPECT_EQ(r.strategyNew, GL_LOSE_CONTEXT_ON_RESET) << "the replacement is not told of resets";
@@ -1114,13 +1122,15 @@ namespace {
             EXPECT_EQ(r.oldTexturePublishedAfter, 0) << "the fresh session's client still believes it holds the "
                                                         "lost texture's record";
             EXPECT_EQ(r.oldTextureOwedAfter, 0) << "an upload owed to the lost session is queued for the fresh one";
-            EXPECT_EQ(r.drawnPixel, kRed) << "the new context's textured draw did not read back: " << std::hex
-                                          << r.drawnPixel << "\n" << r.note << "\n" << diagnostics;
-            EXPECT_EQ(r.secondPixel, kBlue) << "the new context's clear did not read back: " << std::hex
-                                            << r.secondPixel;
+            EXPECT_EQ(r.drawnPixel, kRed)
+                << "the new context's textured draw did not read back: " << std::hex << r.drawnPixel << "\n"
+                << r.note << "\n"
+                << diagnostics;
+            EXPECT_EQ(r.secondPixel, kBlue)
+                << "the new context's clear did not read back: " << std::hex << r.secondPixel;
             EXPECT_EQ(r.fboStatus, static_cast<Uint32>(GL_FRAMEBUFFER_COMPLETE)) << std::hex << r.fboStatus;
-            EXPECT_EQ(r.fboPixel, kYellow) << "the new context's texture framebuffer did not read back: " << std::hex
-                                           << r.fboPixel;
+            EXPECT_EQ(r.fboPixel, kYellow)
+                << "the new context's texture framebuffer did not read back: " << std::hex << r.fboPixel;
             EXPECT_EQ(r.swapNew, EGL_TRUE) << "eglSwapBuffers on the new context failed";
             EXPECT_EQ(r.resetStatusEnd, static_cast<Uint32>(GL_NO_ERROR)) << "the new session was lost too";
         }
@@ -1129,10 +1139,12 @@ namespace {
         // second session started and ended cleanly; nothing from the first reached it.
         static void ExpectOneLossAndACleanSecondSession(ServerProcess& server) {
             ASSERT_TRUE(WaitFor([&] { return Count(server.Log(), "in-process unix session #2 started") == 1; }, 5000))
-                << "the client never opened a second session:\n" << server.Log();
+                << "the client never opened a second session:\n"
+                << server.Log();
             // Both sessions' ends: the lost one's latched exit and the fresh one's clean one.
             ASSERT_TRUE(WaitFor([&] { return Count(server.Log(), "reaped exit=") == 2; }, 10000))
-                << "the second session did not end:\n" << server.Log();
+                << "the second session did not end:\n"
+                << server.Log();
             const std::string log = server.Log();
             EXPECT_NE(log.find("SessionLatch{BackendDeviceLost}"), std::string::npos) << log;
             EXPECT_EQ(Count(log, "reaped exit=75"), 1u) << "the lost session did not end latched:\n" << log;
@@ -1142,7 +1154,8 @@ namespace {
             // never created, a create or bind it cannot parse - each Fatal{ProtocolCorruption}.
             EXPECT_EQ(Count(log, "SessionLatch{"), 1u) << "the recovered session latched too:\n" << log;
             EXPECT_EQ(log.find("Fatal{ProtocolCorruption"), std::string::npos)
-                << "the recovered session was sent something it never created:\n" << log;
+                << "the recovered session was sent something it never created:\n"
+                << log;
             EXPECT_TRUE(server.pid > 0 && ::kill(server.pid, 0) == 0) << "the server died";
         }
     };
@@ -1245,7 +1258,8 @@ TEST_F(ClientRecovery, AThreadStillOnTheLostContextReachesNothingOfTheFreshSessi
     EXPECT_EQ(r.recordsByStaleThread, 0) << "the thread on the lost context published records on the fresh session";
     EXPECT_EQ(r.destroyOldOk, 1);
     EXPECT_EQ(r.pixelAfterStale, kRed) << "the fresh context stopped rendering: " << std::hex << r.pixelAfterStale
-                                       << "\n" << diagnostics;
+                                       << "\n"
+                                       << diagnostics;
     EXPECT_EQ(r.resetStatusAfterStale, static_cast<Uint32>(GL_NO_ERROR)) << "the fresh session was lost too";
     ExpectOneLossAndACleanSecondSession(server);
     server.Stop();
@@ -1263,13 +1277,16 @@ TEST_F(ClientRecovery, ContextsNamingALostShareContextShareOneNewGroup) {
     const std::string diagnostics = "server:\n" + server.Log() + "\nclient:\n" + client.Text();
     ASSERT_EQ(r.initialized, 1) << r.note << "\n" << diagnostics;
     ASSERT_EQ(r.firstOk, 1) << "eglCreateContext naming the lost share context failed (0x" << std::hex << r.firstError
-                            << ")\n" << r.note;
+                            << ")\n"
+                            << r.note;
     ASSERT_EQ(r.secondOk, 1) << r.note;
     EXPECT_EQ(r.sameGroup, 1) << "the replacements landed in separate share groups";
     EXPECT_EQ(r.lostGroupReused, 0) << "a replacement joined the lost share group";
     EXPECT_EQ(r.textureSeenAcross, 1) << "a texture of one replacement is not the other's";
     EXPECT_EQ(r.drawnAcross, kRed) << "the shared texture did not draw on the other replacement: " << std::hex
-                                   << r.drawnAcross << "\n" << r.note << "\n" << diagnostics;
+                                   << r.drawnAcross << "\n"
+                                   << r.note << "\n"
+                                   << diagnostics;
     ExpectOneLossAndACleanSecondSession(server);
     server.Stop();
 }
@@ -1293,11 +1310,10 @@ TEST_F(ClientRecovery, ThePidTargetedKnobLosesOnlyThatClientAndOnlyOnce) {
     }
 
     ClientLog bystanderLog("pid-bystander");
-    const BystanderReport bystander =
-        RunInClient<BystanderReport>(server, bystanderLog.base, &RunBystanderClient);
+    const BystanderReport bystander = RunInClient<BystanderReport>(server, bystanderLog.base, &RunBystanderClient);
     const TargetedReport r = target.Release(server.endpoint);
-    const std::string diagnostics = "server:\n" + server.Log() + "\ntarget:\n" + targetLog.Text() +
-                                    "\nbystander:\n" + bystanderLog.Text();
+    const std::string diagnostics =
+        "server:\n" + server.Log() + "\ntarget:\n" + targetLog.Text() + "\nbystander:\n" + bystanderLog.Text();
 
     ASSERT_EQ(bystander.initialized, 1) << bystander.note << "\n" << diagnostics;
     EXPECT_GT(bystander.frames, 5);

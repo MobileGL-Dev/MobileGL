@@ -231,7 +231,8 @@ void main() { o_color = texture(uTex, vec2(0.5)); }
                     glBindTexture(GL_TEXTURE_2D, 0);
                     BindDefaultFramebuffer();
                     if (m_program != 0) glDeleteProgram(m_program);
-                    if (!m_textures.empty()) glDeleteTextures(static_cast<GLsizei>(m_textures.size()), m_textures.data());
+                    if (!m_textures.empty())
+                        glDeleteTextures(static_cast<GLsizei>(m_textures.size()), m_textures.data());
                     if (m_vbo != 0) glDeleteBuffers(1, &m_vbo);
                     if (m_vao != 0) glDeleteVertexArrays(1, &m_vao);
                     DestroyColorFbo(m_target);
@@ -267,7 +268,8 @@ void main() { o_color = texture(uTex, vec2(0.5)); }
             // The burst: every pixel, one draw and one descriptor set each.
             void DrawBurst() {
                 ClearTo(0.0f, 0.0f, 0.0f, 0.0f);
-                for (int i = 0; i < kDraws; ++i) Draw(i);
+                for (int i = 0; i < kDraws; ++i)
+                    Draw(i);
             }
 
             static bool IsVulkan() { return Gl().BackendName() == std::string("DirectVulkan"); }
@@ -364,8 +366,8 @@ void main() { o_color = texture(uTex, vec2(0.5)); }
             << "the burst did not allocate one descriptor set per draw: " << Describe(afterBurst);
         EXPECT_GT(afterQuiet.slotTrims, afterBurst.slotTrims)
             << quietFrames << " frames of one draw each followed a " << kDraws << "-set frame, but no frame slot was "
-            << "trimmed (MOBILEGL_MAGMA_DESCRIPTOR_TRIM_FRAMES=" << trimFrames << "). After the burst: "
-            << Describe(afterBurst) << "; after the quiet frames: " << Describe(afterQuiet);
+            << "trimmed (MOBILEGL_MAGMA_DESCRIPTOR_TRIM_FRAMES=" << trimFrames
+            << "). After the burst: " << Describe(afterBurst) << "; after the quiet frames: " << Describe(afterQuiet);
         EXPECT_LE(afterQuiet.cachedSets + held / 2, afterBurst.cachedSets)
             << "the trim did not give the burst's sets back. After the burst: " << Describe(afterBurst)
             << "; after the quiet frames: " << Describe(afterQuiet);

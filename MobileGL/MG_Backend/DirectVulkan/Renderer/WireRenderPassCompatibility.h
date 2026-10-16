@@ -29,9 +29,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 hash ^= static_cast<SizeT>(value) + 0x9e3779b97f4a7c15ull + (hash << 6) + (hash >> 2);
             };
             mix(key.attachmentFormatsAndSamples.size());
-            for (const auto value : key.attachmentFormatsAndSamples) mix(value);
+            for (const auto value : key.attachmentFormatsAndSamples)
+                mix(value);
             mix(key.colorReferences.size());
-            for (const auto value : key.colorReferences) mix(value);
+            for (const auto value : key.colorReferences)
+                mix(value);
             mix(key.depthReference);
             return hash;
         }
@@ -48,8 +50,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             m_ids.emplace(key, id);
             return id;
         }
+
     private:
         UnorderedMap<WireRenderPassCompatibilityKey, Uint64, WireRenderPassCompatibilityHash> m_ids;
         Uint64 m_nextId = 1; // zero selects the native-handle pipeline domain
     };
-}
+} // namespace MobileGL::MG_Backend::DirectVulkan

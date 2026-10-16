@@ -25,7 +25,7 @@
 // library but never constructs one.
 namespace MobileGL::MG_Backend {
     extern UniquePtr<BackendObject>& pActiveBackendObject;
-}
+} // namespace MobileGL::MG_Backend
 
 namespace MobileGL::MG_Remote::Client {
 
@@ -134,7 +134,9 @@ namespace MobileGL::MG_Remote::Client {
         return true;
     }
 
-    Bool BackendObject_Remote::InitPbufferSurface(EGLint, EGLint) { return true; }
+    Bool BackendObject_Remote::InitPbufferSurface(EGLint, EGLint) {
+        return true;
+    }
 
     const RendererInfo& BackendObject_Remote::GetRendererInfo() const {
         // TRAP 1: a reference, so the storage is the mirror's and not a temporary's.
@@ -192,8 +194,7 @@ namespace MobileGL::MG_Remote::Client {
         return MG_Backend::BackendObject::InitializeEGLDisplay(dpy, major, minor);
     }
 
-    Bool BackendObject_Remote::CreateEGLWindowSurface(EGLSurface surface,
-                                                      const MG_Backend::WindowHandle& handle) {
+    Bool BackendObject_Remote::CreateEGLWindowSurface(EGLSurface surface, const MG_Backend::WindowHandle& handle) {
         // The handle first: the server's backend has to know which window it is about to make
         // a surface for, and ServerSetWindowHandle is the only way to tell it.
         WaitForApplyBeforeEglForwarder("CreateEGLWindowSurface");
@@ -237,7 +238,8 @@ namespace MobileGL::MG_Remote::Client {
             if (!reply.ok) {
                 MGLOG_E("MG_Remote client: the server could not resize the server-owned window surface to %ux%u "
                         "(channel rc=%d, refusal %s)",
-                        width, height, static_cast<int>(reply.transport), Server::SurfaceRefusalCodeName(reply.refusal));
+                        width, height, static_cast<int>(reply.transport),
+                        Server::SurfaceRefusalCodeName(reply.refusal));
                 return false;
             }
             NoteServerOwnedRequest(surface, width, height);
@@ -384,8 +386,7 @@ namespace MobileGL::MG_Remote::Client {
         return true;
     }
 
-    Bool BackendObject_Remote::MakeEGLCurrent(EGLDisplay dpy, EGLSurface draw, EGLSurface read,
-                                              EGLContext ctx) {
+    Bool BackendObject_Remote::MakeEGLCurrent(EGLDisplay dpy, EGLSurface draw, EGLSurface read, EGLContext ctx) {
         // FORWARD FIRST, THEN RUN THE BASE. The server has to own the context before the base
         // class latches "the surface is initialised" and calls InitCapabilities, because
         // InitCapabilities' answer comes from a snapshot the server can only publish once its
@@ -492,7 +493,8 @@ namespace MobileGL::MG_Remote::Client {
         const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
         ResetEGLRuntimeState();
         m_homedSurfaces.clear();
-        for (const auto& [id, references] : m_sessionSharedImages) m_lostSessionSharedImages.insert(id);
+        for (const auto& [id, references] : m_sessionSharedImages)
+            m_lostSessionSharedImages.insert(id);
         m_sessionSharedImages.clear();
         // The display the application initialized is initialized on the new server too: its
         // surfaces and contexts are created against it from here on.
@@ -634,7 +636,8 @@ namespace MobileGL::MG_Remote::Client {
         op.Damage[MG_Pipe::kMGPImportPlane1Pitch] = static_cast<Int32>(layout.Pitch[1]);
         op.Damage[MG_Pipe::kMGPImportYuvColorSpace] = static_cast<Int32>(layout.ColorSpace);
         op.Damage[MG_Pipe::kMGPImportYuvRange] = static_cast<Int32>(layout.Range);
-        op.Damage[MG_Pipe::kMGPImportYuvSiting] = static_cast<Int32>((layout.SitingX & 0xffffu) | (layout.SitingY << 16));
+        op.Damage[MG_Pipe::kMGPImportYuvSiting] =
+            static_cast<Int32>((layout.SitingX & 0xffffu) | (layout.SitingY << 16));
         op.Damage[MG_Pipe::kMGPImportModifierLo] = static_cast<Int32>(static_cast<Uint32>(layout.Modifier));
         op.Damage[MG_Pipe::kMGPImportModifierHi] = static_cast<Int32>(static_cast<Uint32>(layout.Modifier >> 32));
         op.Damage[MG_Pipe::kMGPImportHasModifier] = layout.HasModifier ? 1 : 0;

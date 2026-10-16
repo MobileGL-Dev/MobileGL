@@ -89,7 +89,11 @@ namespace MobileGL::MG_State::GLState {
         virtual Uint64 GetLifetimeId() const = 0;
         // P15: the pipe client's last handles for this texture, one per kind it is looked up under
         // (MGPipeSlotAllocator::AcquireHinted). Only hints: checked against the allocator on use.
-        enum class PipeHintKind : Uint8 { Texture = 0, SamplerView = 1, Count = 2 };
+        enum class PipeHintKind : Uint8 {
+            Texture = 0,
+            SamplerView = 1,
+            Count = 2
+        };
         virtual Uint64& PipeHandleHint(PipeHintKind kind) const = 0;
         // Which aspect of a packed depth/stencil texture a sampler reads (GL 4.6 core 8.10).
         // DEPTH_COMPONENT until set, and meaningless for every other format.
@@ -352,8 +356,8 @@ namespace MobileGL::MG_State::GLState {
         // stays uncompressed and correctly sized, so nothing in the backend upload path has to know
         // these exist; only glGetCompressedTexImage, glGetCompressedTextureImage and the
         // GL_TEXTURE_COMPRESSED* level queries read them.
-        virtual void SetMipmapCompressedImage(TextureUploadTarget uploadTarget, Uint mipmapLevel,
-                                              GLenum internalFormat, const void* data, SizeT size) = 0;
+        virtual void SetMipmapCompressedImage(TextureUploadTarget uploadTarget, Uint mipmapLevel, GLenum internalFormat,
+                                              const void* data, SizeT size) = 0;
         // GL_NONE when this level is not stored compressed.
         virtual GLenum GetMipmapCompressedFormat(TextureUploadTarget uploadTarget, Uint mipmapLevel) const = 0;
         virtual SizeT GetMipmapCompressedByteSize(TextureUploadTarget uploadTarget, Uint mipmapLevel) const = 0;
@@ -365,8 +369,7 @@ namespace MobileGL::MG_State::GLState {
         virtual void SetMipmapRequestedCompressedFormat(TextureUploadTarget uploadTarget, Uint mipmapLevel,
                                                         GLenum internalFormat) = 0;
         // GL_NONE when the level was not requested with a compressed internalformat.
-        virtual GLenum GetMipmapRequestedCompressedFormat(TextureUploadTarget uploadTarget,
-                                                          Uint mipmapLevel) const = 0;
+        virtual GLenum GetMipmapRequestedCompressedFormat(TextureUploadTarget uploadTarget, Uint mipmapLevel) const = 0;
     };
 
     // Cheap replacement for dynamic_cast on the hot path: TextureObjectMipmap is the

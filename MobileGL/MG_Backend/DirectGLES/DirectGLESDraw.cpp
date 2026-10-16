@@ -39,9 +39,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 MGLOG_E_ONCE("%s skipped: invalid GL_DRAW_INDIRECT_BUFFER binding or range", label);
                 return nullptr;
             }
-            BufferImpl::RequireStagedCoverage(*resource, base, commandOffset,
-                                              commandOffset + requiredBytes, "indirect_command_bytes");
-            return base + commandOffset;            }
+            BufferImpl::RequireStagedCoverage(*resource, base, commandOffset, commandOffset + requiredBytes,
+                                              "indirect_command_bytes");
+            return base + commandOffset;
+        }
         // No buffer was bound: the frontend already raised the GL error; keep the old
         // fall-through shape (a null indirect pointer is the same skip it was).
         if (!indirect) {
@@ -157,10 +158,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Uint32 indexMask = 0;
         };
 
-        static constexpr Uint32 kAllViewportsMask =
-            (RenderStateParameters::MAX_VIEWPORTS >= 32)
-                ? 0xFFFFFFFFu
-                : ((1u << RenderStateParameters::MAX_VIEWPORTS) - 1u);
+        static constexpr Uint32 kAllViewportsMask = (RenderStateParameters::MAX_VIEWPORTS >= 32)
+                                                        ? 0xFFFFFFFFu
+                                                        : ((1u << RenderStateParameters::MAX_VIEWPORTS) - 1u);
 
         // The plan for the draw currently being issued. A file-scope buffer rather than a return
         // value because Begin/Apply/End are three calls around a draw the caller writes, and a
@@ -185,20 +185,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // Resolving them here rather than deferring to SyncRenderState is what makes the grouping
         // below correct: two indices that differ only in a field that resolves to the same
         // rectangle really do rasterize identically and must share one pass.
-        static RoutingPass ResolveIndexState(const RenderStateParameters& parameters, Uint index,
-                                             Int surfaceWidth, Int surfaceHeight) {
+        static RoutingPass ResolveIndexState(const RenderStateParameters& parameters, Uint index, Int surfaceWidth,
+                                             Int surfaceHeight) {
             RoutingPass pass;
             const FloatVec4& viewport = parameters.Viewports[index];
-            pass.viewport = IntVec4(static_cast<Int>(std::lround(viewport.x())),
-                                    static_cast<Int>(std::lround(viewport.y())),
-                                    static_cast<Int>(std::lround(viewport.z())),
-                                    static_cast<Int>(std::lround(viewport.w())));
+            pass.viewport =
+                IntVec4(static_cast<Int>(std::lround(viewport.x())), static_cast<Int>(std::lround(viewport.y())),
+                        static_cast<Int>(std::lround(viewport.z())), static_cast<Int>(std::lround(viewport.w())));
             if ((pass.viewport.z() <= 0 || pass.viewport.w() <= 0) && surfaceWidth > 0 && surfaceHeight > 0) {
                 pass.viewport = IntVec4(0, 0, surfaceWidth, surfaceHeight);
             }
             pass.scissorBox = parameters.ScissorBoxes[index];
-            if ((parameters.ScissorBoxWrittenMask & (1u << index)) == 0 && surfaceWidth > 0 &&
-                surfaceHeight > 0) {
+            if ((parameters.ScissorBoxWrittenMask & (1u << index)) == 0 && surfaceWidth > 0 && surfaceHeight > 0) {
                 pass.scissorBox = IntVec4(0, 0, surfaceWidth, surfaceHeight);
             }
             pass.depthRange = parameters.DepthRanges[index];
@@ -207,8 +205,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
 
         static Bool SameState(const RoutingPass& a, const RoutingPass& b) {
-            return a.viewport == b.viewport && a.scissorBox == b.scissorBox &&
-                   a.depthRange == b.depthRange && a.scissorTest == b.scissorTest;
+            return a.viewport == b.viewport && a.scissorBox == b.scissorBox && a.depthRange == b.depthRange &&
+                   a.scissorTest == b.scissorTest;
         }
     } // namespace ViewportRoutingImpl
 
@@ -256,8 +254,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         Uint count = 0;
         for (Uint index = 0; index < RenderStateParameters::MAX_VIEWPORTS; ++index) {
-            const RoutingPass resolved =
-                ResolveIndexState(parameters, index, surfaceWidth, surfaceHeight);
+            const RoutingPass resolved = ResolveIndexState(parameters, index, surfaceWidth, surfaceHeight);
             Uint existing = 0;
             for (; existing < count; ++existing) {
                 if (SameState(g_passes[existing], resolved)) break;
@@ -287,10 +284,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return;
         }
         const RoutingPass& entry = g_passes[pass];
-        g_GLESFuncs.glViewport(entry.viewport.x(), entry.viewport.y(), entry.viewport.z(),
-                               entry.viewport.w());
-        g_GLESFuncs.glScissor(entry.scissorBox.x(), entry.scissorBox.y(), entry.scissorBox.z(),
-                              entry.scissorBox.w());
+        g_GLESFuncs.glViewport(entry.viewport.x(), entry.viewport.y(), entry.viewport.z(), entry.viewport.w());
+        g_GLESFuncs.glScissor(entry.scissorBox.x(), entry.scissorBox.y(), entry.scissorBox.z(), entry.scissorBox.w());
         // ES has one scissor-test enable where GL has sixteen, so the per-index bit becomes a
         // per-pass glEnable/glDisable. This is the half DirectVulkan cannot do at all (Vulkan has
         // no per-viewport scissor toggle either and has to widen a disabled index's rectangle to
@@ -382,10 +377,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // handle the verb record carried (MGPipeApplier's verb stash) and the SSBO view's
         // resource resolves from it by handle - the frontend binding slot and the client slot
         // allocator are never read (T2).
-        const MG_Pipe::MGPipeHandle verbBufferHandle =
-            MG_Pipe::MGPipeApplier().VerbIndirectBuffer;
-        const Bool useNative =
-            !MG_Pipe::MGPipeHandleIsNull(verbBufferHandle) && SupportsNativeIndirectDraws();
+        const MG_Pipe::MGPipeHandle verbBufferHandle = MG_Pipe::MGPipeApplier().VerbIndirectBuffer;
+        const Bool useNative = !MG_Pipe::MGPipeHandleIsNull(verbBufferHandle) && SupportsNativeIndirectDraws();
         commandBytes = CurrentIndirectCommandBytes(verbBufferHandle, commandBytes, commandOffset, useNative,
                                                    /*indexed=*/true);
         if (useNative) {
@@ -394,8 +387,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             const auto backendProgram = GetCurrentBackendProgram();
             const Int paramsBinding = backendProgram ? backendProgram->GetIndirectParamsBinding() : -1;
             if (paramsBinding >= 0) {
-                auto* resource =
-                    BufferImpl::EnsureBufferResourceForHandle(nullptr, verbBufferHandle);
+                auto* resource = BufferImpl::EnsureBufferResourceForHandle(nullptr, verbBufferHandle);
                 if (resource && resource->id != 0) {
                     BufferImpl::BindBufferBaseCached(GL_SHADER_STORAGE_BUFFER, static_cast<GLuint>(paramsBinding),
                                                      resource->id);
@@ -468,18 +460,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
         SetCurrentBaseVertex(0);
         // P5c (hd, CONTRACT-P5C §3.5): see ExecuteIndexedIndirectCommands - the verb's handle,
         // never the frontend binding slot or the client allocator.
-        const MG_Pipe::MGPipeHandle verbBufferHandle =
-            MG_Pipe::MGPipeApplier().VerbIndirectBuffer;
-        const Bool useNative =
-            !MG_Pipe::MGPipeHandleIsNull(verbBufferHandle) && SupportsNativeIndirectDraws();
+        const MG_Pipe::MGPipeHandle verbBufferHandle = MG_Pipe::MGPipeApplier().VerbIndirectBuffer;
+        const Bool useNative = !MG_Pipe::MGPipeHandleIsNull(verbBufferHandle) && SupportsNativeIndirectDraws();
         commandBytes = CurrentIndirectCommandBytes(verbBufferHandle, commandBytes, commandOffset, useNative,
                                                    /*indexed=*/false);
         if (useNative) {
             const auto backendProgram = GetCurrentBackendProgram();
             const Int paramsBinding = backendProgram ? backendProgram->GetIndirectParamsBinding() : -1;
             if (paramsBinding >= 0) {
-                auto* resource =
-                    BufferImpl::EnsureBufferResourceForHandle(nullptr, verbBufferHandle);
+                auto* resource = BufferImpl::EnsureBufferResourceForHandle(nullptr, verbBufferHandle);
                 if (resource && resource->id != 0) {
                     BufferImpl::BindBufferBaseCached(GL_SHADER_STORAGE_BUFFER, static_cast<GLuint>(paramsBinding),
                                                      resource->id);
@@ -497,8 +486,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     SetCurrentBaseInstance(cmd.baseInstance);
                 }
                 ForEachViewportRoutingPass([&] {
-                    if (!VertexArrayImpl::SyncClientSideVertexArraysForIndirectFetch(
-                            commandBytes, commandOffset, stride, i, 0, drawIndirectBuffer))
+                    if (!VertexArrayImpl::SyncClientSideVertexArraysForIndirectFetch(commandBytes, commandOffset,
+                                                                                     stride, i, 0, drawIndirectBuffer))
                         return;
                     g_GLESFuncs.glDrawArraysIndirect(mode, reinterpret_cast<const void*>(cmdByteOffset));
                 });
@@ -513,8 +502,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 SetCurrentDrawID(static_cast<Uint32>(i));
                 SetCurrentBaseInstance(cmd.baseInstance);
                 ForEachViewportRoutingPass([&] {
-                    if (!VertexArrayImpl::SyncClientSideVertexArraysForIndirectFetch(
-                            commandBytes, commandOffset, stride, i, 0, drawIndirectBuffer))
+                    if (!VertexArrayImpl::SyncClientSideVertexArraysForIndirectFetch(commandBytes, commandOffset,
+                                                                                     stride, i, 0, drawIndirectBuffer))
                         return;
                     g_GLESFuncs.glDrawArraysInstanced(mode, static_cast<GLint>(cmd.first),
                                                       static_cast<GLsizei>(cmd.count),
@@ -525,7 +514,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
         SetCurrentDrawID(0);
         SetCurrentBaseInstance(0);
     }
-
 
     void Clear(GLbitfield mask) {
 #if MOBILEGL_LOG_ACTIVE_LEVEL <= MOBILEGL_LOG_LEVEL_DEBUG && MOBILEGL_ENABLE_SCOPE_MARKER
@@ -559,7 +547,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 g_GLESFuncs.glGetIntegerv(GL_SCISSOR_BOX, box);
                 g_GLESFuncs.glGetBooleanv(GL_COLOR_WRITEMASK, cmask);
                 g_GLESFuncs.glGetFloatv(GL_COLOR_CLEAR_VALUE, cc);
-                MGLOG_D("CLEAR fbo=%d color0=%d depth=%d mask=0x%x scissor=%d box=(%d,%d,%d,%d) cmask=%d%d%d%d cc=(%g,%g,%g,%g)",
+                MGLOG_D("CLEAR fbo=%d color0=%d depth=%d mask=0x%x scissor=%d box=(%d,%d,%d,%d) cmask=%d%d%d%d "
+                        "cc=(%g,%g,%g,%g)",
                         fboId, color0, depthName, mask, (int)scissor, box[0], box[1], box[2], box[3], (int)cmask[0],
                         (int)cmask[1], (int)cmask[2], (int)cmask[3], cc[0], cc[1], cc[2], cc[3]);
             }
@@ -637,8 +626,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         // under a transport the same four numbers come off the draw record -
                         // the external index has no record counterpart and stays 0, which reads
                         // as "the record did not say".
-                        if (const auto* rec = BoundFramebufferRecord(
-                                FramebufferTarget::Draw)) {
+                        if (const auto* rec = BoundFramebufferRecord(FramebufferTarget::Draw)) {
                             feVer = static_cast<Uint>(rec->ContentHash);
                             feDb0 = (int)rec->DrawBuffers[0];
                             feDb1 = (int)rec->DrawBuffers[1];
@@ -695,15 +683,19 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // spell 0xFFFF cannot collide with a 16-bit sentinel, and likewise 8 -> 16.
         GLenum WiderIndexType(GLenum indexType) {
             switch (indexType) {
-            case GL_UNSIGNED_BYTE: return GL_UNSIGNED_SHORT;
-            case GL_UNSIGNED_SHORT: return GL_UNSIGNED_INT;
-            default: return 0;
+            case GL_UNSIGNED_BYTE:
+                return GL_UNSIGNED_SHORT;
+            case GL_UNSIGNED_SHORT:
+                return GL_UNSIGNED_INT;
+            default:
+                return 0;
             }
         }
 
         Uint32 ReadIndex(const Uint8* source, SizeT i, SizeT indexSize) {
             switch (indexSize) {
-            case 1: return source[i];
+            case 1:
+                return source[i];
             case 2: {
                 Uint16 narrow = 0;
                 std::memcpy(&narrow, source + i * 2, sizeof(narrow));
@@ -719,21 +711,24 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         void WriteIndex(Uint8* destination, SizeT i, SizeT indexSize, Uint32 value) {
             switch (indexSize) {
-            case 1: destination[i] = static_cast<Uint8>(value); break;
+            case 1:
+                destination[i] = static_cast<Uint8>(value);
+                break;
             case 2: {
                 const Uint16 narrow = static_cast<Uint16>(value);
                 std::memcpy(destination + i * 2, &narrow, sizeof(narrow));
                 break;
             }
-            default: std::memcpy(destination + i * 4, &value, sizeof(value)); break;
+            default:
+                std::memcpy(destination + i * 4, &value, sizeof(value));
+                break;
             }
         }
 
         // True when any index in the range already holds the type's all-ones value, i.e. when
         // that value is doing double duty as a real vertex index and so cannot also be the
         // restart sentinel. Only asked on the rare substitution path.
-        Bool ContainsFixedRestartIndex(const Uint8* source, SizeT indexCount, SizeT indexSize,
-                                       Uint32 fixedMax) {
+        Bool ContainsFixedRestartIndex(const Uint8* source, SizeT indexCount, SizeT indexSize, Uint32 fixedMax) {
             for (SizeT i = 0; i < indexCount; ++i) {
                 if (ReadIndex(source, i, indexSize) == fixedMax) return true;
             }
@@ -781,7 +776,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
             BufferImpl::BindBufferId(BufferImpl::TempBufferTarget, g_restartIndices.id);
             SizeT capacity = g_restartIndices.capacity == 0 ? bytes : g_restartIndices.capacity;
-            while (capacity < bytes) capacity *= 2;
+            while (capacity < bytes)
+                capacity *= 2;
             g_GLESFuncs.glBufferData(BufferImpl::TempBufferTarget, static_cast<GLsizeiptr>(capacity), nullptr,
                                      GL_STREAM_DRAW);
             g_restartIndices.capacity = capacity;
@@ -836,8 +832,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         g_GLESFuncs.glEnable(GL_PRIMITIVE_RESTART_FIXED_INDEX);
     }
 
-    ScopedRestartIndexSubstitution::ScopedRestartIndexSubstitution(GLenum indexType, GLsizei count,
-                                                                   const void* indices)
+    ScopedRestartIndexSubstitution::ScopedRestartIndexSubstitution(GLenum indexType, GLsizei count, const void* indices)
         : m_kind(ResolveRestartSubstitution(indexType)), m_capOverride(m_kind), m_indices(indices),
           m_indexType(indexType) {
         if (m_kind != RestartSubstitutionKind::RewriteIndices) {
@@ -893,8 +888,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // GL buffer first - no writeback ever reaches the server's copy.
             const Uint8* hostBytes =
                 elementResource
-                    ? BufferImpl::SplitHostBytesForCpuRead(*elementResource, elements,
-                                                           "primitive_restart_substitution")
+                    ? BufferImpl::SplitHostBytesForCpuRead(*elementResource, elements, "primitive_restart_substitution")
                     : nullptr;
             if (hostBytes == nullptr) {
                 MGLOG_E_ONCE("Draw skipped: GL_PRIMITIVE_RESTART with restart index %u needs a CPU-readable copy of "
@@ -1004,9 +998,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         PrepareForDraw(syncBit);
         const ScopedRestartIndexSubstitution restart(type, count, indices);
         if (!restart.DrawIsValid()) return;
-        ForEachViewportRoutingPass([&] {
-            g_GLESFuncs.glDrawElements(mode, count, restart.IndexType(), restart.Indices());
-        });
+        ForEachViewportRoutingPass(
+            [&] { g_GLESFuncs.glDrawElements(mode, count, restart.IndexType(), restart.Indices()); });
     }
 
     void DrawArrays(GLenum mode, GLint first, GLsizei count) {
@@ -1016,9 +1009,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         DrawSyncFlags syncBit = DrawSyncBit::None;
         PrepareForDraw(syncBit);
         VertexArrayImpl::SyncClientSideVertexArraysForDrawArrays(first, count);
-        ForEachViewportRoutingPass([&] {
-            g_GLESFuncs.glDrawArrays(mode, first, count);
-        });
+        ForEachViewportRoutingPass([&] { g_GLESFuncs.glDrawArrays(mode, first, count); });
     }
 
     void DrawElementsBaseVertex(GLenum mode, GLsizei count, GLenum type, const GLvoid* indices, GLint basevertex) {
@@ -1053,9 +1044,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // Client-side arrays are uploaded per sub-draw range, like the single DrawArrays path.
             VertexArrayImpl::SyncClientSideVertexArraysForDrawArrays(first[i], count[i]);
             if (feedDrawID) SetCurrentDrawID(static_cast<Uint32>(i));
-            ForEachViewportRoutingPass([&] {
-                g_GLESFuncs.glDrawArrays(mode, first[i], count[i]);
-            });
+            ForEachViewportRoutingPass([&] { g_GLESFuncs.glDrawArrays(mode, first[i], count[i]); });
         }
         if (feedDrawID) SetCurrentDrawID(0);
     }
@@ -1079,8 +1068,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             stride = sizeof(DrawElementsIndirectCommand);
         }
         if (stride < static_cast<GLsizei>(sizeof(DrawElementsIndirectCommand))) {
-            MGLOG_E_ONCE("MultiDrawElementsIndirect skipped: stride %d is smaller than command size %zu",
-                    stride, sizeof(DrawElementsIndirectCommand));
+            MGLOG_E_ONCE("MultiDrawElementsIndirect skipped: stride %d is smaller than command size %zu", stride,
+                         sizeof(DrawElementsIndirectCommand));
             return;
         }
 
@@ -1122,8 +1111,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             stride = sizeof(DrawElementsIndirectCommand);
         }
         if (stride < static_cast<GLsizei>(sizeof(DrawElementsIndirectCommand))) {
-            MGLOG_E_ONCE("MultiDrawElementsIndirectCount skipped: stride %d is smaller than command size %zu",
-                    stride, sizeof(DrawElementsIndirectCommand));
+            MGLOG_E_ONCE("MultiDrawElementsIndirectCount skipped: stride %d is smaller than command size %zu", stride,
+                         sizeof(DrawElementsIndirectCommand));
             return;
         }
 
@@ -1144,18 +1133,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
         const auto& applierState = MG_Pipe::MGPipeApplier();
         const SizeT commandOffset = reinterpret_cast<SizeT>(indirect);
         const SizeT commandBytes = commandOffset + static_cast<SizeT>(stride) * static_cast<SizeT>(maxdrawcount - 1) +
-            sizeof(DrawElementsIndirectCommand);
+                                   sizeof(DrawElementsIndirectCommand);
         auto* drawResource = BufferImpl::FindBufferResourceForHandle(applierState.VerbIndirectBuffer);
-        auto* paramResource =
-            BufferImpl::FindBufferResourceForHandle(applierState.VerbIndirectParameterBuffer);
+        auto* paramResource = BufferImpl::FindBufferResourceForHandle(applierState.VerbIndirectParameterBuffer);
         // P8-C: the count is CONSUMED here, so the parameter buffer is made current first
         // (a store a shader wrote on this side is read back); the command buffer only gets a
         // first copy when it has none - its fields are made current by the executor, and
         // only when it consumes them (CurrentIndirectCommandBytes).
         const Uint8* const parameterBytes =
-            paramResource ? BufferImpl::SplitHostBytesForCpuRead(*paramResource,
-                                                                 applierState.VerbIndirectParameterBuffer,
-                                                                 "indirect_count_parameter")
+            paramResource ? BufferImpl::SplitHostBytesForCpuRead(
+                                *paramResource, applierState.VerbIndirectParameterBuffer, "indirect_count_parameter")
                           : nullptr;
         const Uint8* drawBytes = drawResource ? BufferImpl::SplitHostBytes(*drawResource) : nullptr;
         if (drawBytes == nullptr && drawResource != nullptr) {
@@ -1175,7 +1162,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // own rule for a buffer with no CPU shadow.
         if (parameterBytes == nullptr || drawBytes == nullptr) {
             MGLOG_E_ONCE("MultiDrawElementsIndirectCount skipped: CPU fallback cannot read the parameter or "
-                    "draw-indirect buffer");
+                         "draw-indirect buffer");
             return;
         }
         BufferImpl::RequireStagedCoverage(*drawResource, drawBytes, commandOffset, commandBytes,
@@ -1186,9 +1173,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         Uint32 actualDrawCount = 0;
         std::memcpy(&actualDrawCount, parameterBytes + drawcount, sizeof(actualDrawCount));
         actualDrawCount = std::min<Uint32>(actualDrawCount, static_cast<Uint32>(maxdrawcount));
-        ExecuteIndexedIndirectCommands(mode, type, indexSize, drawBytes + commandOffset, commandOffset,
-                                       nullptr, static_cast<GLsizei>(actualDrawCount), stride,
-                                       "MultiDrawElementsIndirectCount");
+        ExecuteIndexedIndirectCommands(mode, type, indexSize, drawBytes + commandOffset, commandOffset, nullptr,
+                                       static_cast<GLsizei>(actualDrawCount), stride, "MultiDrawElementsIndirectCount");
         return;
     }
 
@@ -1203,8 +1189,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             stride = sizeof(DrawArraysIndirectCommand);
         }
         if (stride < static_cast<GLsizei>(sizeof(DrawArraysIndirectCommand))) {
-            MGLOG_E_ONCE("MultiDrawArraysIndirect skipped: stride %d is smaller than command size %zu",
-                    stride, sizeof(DrawArraysIndirectCommand));
+            MGLOG_E_ONCE("MultiDrawArraysIndirect skipped: stride %d is smaller than command size %zu", stride,
+                         sizeof(DrawArraysIndirectCommand));
             return;
         }
 
@@ -1246,8 +1232,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             stride = sizeof(DrawArraysIndirectCommand);
         }
         if (stride < static_cast<GLsizei>(sizeof(DrawArraysIndirectCommand))) {
-            MGLOG_E_ONCE("MultiDrawArraysIndirectCount skipped: stride %d is smaller than command size %zu",
-                    stride, sizeof(DrawArraysIndirectCommand));
+            MGLOG_E_ONCE("MultiDrawArraysIndirectCount skipped: stride %d is smaller than command size %zu", stride,
+                         sizeof(DrawArraysIndirectCommand));
             return;
         }
 
@@ -1259,18 +1245,16 @@ namespace MobileGL::MG_Backend::DirectGLES {
         const auto& applierState = MG_Pipe::MGPipeApplier();
         const SizeT commandOffset = reinterpret_cast<SizeT>(indirect);
         const SizeT commandBytes = commandOffset + static_cast<SizeT>(stride) * static_cast<SizeT>(maxdrawcount - 1) +
-            sizeof(DrawArraysIndirectCommand);
+                                   sizeof(DrawArraysIndirectCommand);
         auto* drawResource = BufferImpl::FindBufferResourceForHandle(applierState.VerbIndirectBuffer);
-        auto* paramResource =
-            BufferImpl::FindBufferResourceForHandle(applierState.VerbIndirectParameterBuffer);
+        auto* paramResource = BufferImpl::FindBufferResourceForHandle(applierState.VerbIndirectParameterBuffer);
         // P8-C: the count is CONSUMED here, so the parameter buffer is made current first
         // (a store a shader wrote on this side is read back); the command buffer only gets a
         // first copy when it has none - its fields are made current by the executor, and
         // only when it consumes them (CurrentIndirectCommandBytes).
         const Uint8* const parameterBytes =
-            paramResource ? BufferImpl::SplitHostBytesForCpuRead(*paramResource,
-                                                                 applierState.VerbIndirectParameterBuffer,
-                                                                 "indirect_count_parameter")
+            paramResource ? BufferImpl::SplitHostBytesForCpuRead(
+                                *paramResource, applierState.VerbIndirectParameterBuffer, "indirect_count_parameter")
                           : nullptr;
         const Uint8* drawBytes = drawResource ? BufferImpl::SplitHostBytes(*drawResource) : nullptr;
         if (drawBytes == nullptr && drawResource != nullptr) {
@@ -1288,7 +1272,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
         if (parameterBytes == nullptr || drawBytes == nullptr) {
             MGLOG_E_ONCE("MultiDrawArraysIndirectCount skipped: CPU fallback cannot read the parameter or "
-                    "draw-indirect buffer");
+                         "draw-indirect buffer");
             return;
         }
         BufferImpl::RequireStagedCoverage(*drawResource, drawBytes, commandOffset, commandBytes,
@@ -1300,8 +1284,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         std::memcpy(&actualDrawCount, parameterBytes + drawcount, sizeof(actualDrawCount));
         actualDrawCount = std::min<Uint32>(actualDrawCount, static_cast<Uint32>(maxdrawcount));
         ExecuteArraysIndirectCommands(mode, drawBytes + commandOffset, commandOffset, nullptr,
-                                      static_cast<GLsizei>(actualDrawCount), stride,
-                                      "MultiDrawArraysIndirectCount");
+                                      static_cast<GLsizei>(actualDrawCount), stride, "MultiDrawArraysIndirectCount");
         return;
     }
 
@@ -1326,9 +1309,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         PrepareForDraw(syncBit);
         const ScopedRestartIndexSubstitution restart(type, count, indices);
         if (!restart.DrawIsValid()) return;
-        ForEachViewportRoutingPass([&] {
-            g_GLESFuncs.glDrawRangeElements(mode, start, end, count, restart.IndexType(), restart.Indices());
-        });
+        ForEachViewportRoutingPass(
+            [&] { g_GLESFuncs.glDrawRangeElements(mode, start, end, count, restart.IndexType(), restart.Indices()); });
     }
 
     // True when the driver will apply baseInstance to the vertex fetch itself, in which case the
@@ -1355,7 +1337,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
     void DrawElementsInstancedBaseVertexBaseInstance(GLenum mode, GLsizei count, GLenum type, const void* indices,
                                                      GLsizei instancecount, GLint basevertex, GLuint baseinstance) {
         if (!VertexArrayImpl::SyncClientSideVertexArraysForIndexedFetch(type, count, indices, instancecount, basevertex,
-                                                                       baseinstance)) return;
+                                                                        baseinstance))
+            return;
         DrawSyncFlags syncBit = DrawSyncBit::IndexBuffer | DrawSyncBit::Instancing;
         MGL_SCOPED_FETCH_BASE_INSTANCE(fetchScope, EmulatedFetchBaseInstance(baseinstance));
         PrepareForDraw(syncBit);
@@ -1365,9 +1348,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         SetCurrentBaseVertex(basevertex);
         ForEachViewportRoutingPass([&] {
             if (UseNativeBaseInstance()) {
-                g_GLESFuncs.glDrawElementsInstancedBaseVertexBaseInstanceEXT(mode, count, restart.IndexType(),
-                                                                            restart.Indices(), instancecount,
-                                                                            basevertex, baseinstance);
+                g_GLESFuncs.glDrawElementsInstancedBaseVertexBaseInstanceEXT(
+                    mode, count, restart.IndexType(), restart.Indices(), instancecount, basevertex, baseinstance);
             } else {
                 g_GLESFuncs.glDrawElementsInstancedBaseVertex(mode, count, restart.IndexType(), restart.Indices(),
                                                               instancecount, basevertex);
@@ -1380,7 +1362,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
     void DrawElementsInstancedBaseVertex(GLenum mode, GLsizei count, GLenum type, const void* indices,
                                          GLsizei instancecount, GLint basevertex) {
         if (!VertexArrayImpl::SyncClientSideVertexArraysForIndexedFetch(type, count, indices, instancecount, basevertex,
-                                                                       0)) return;
+                                                                        0))
+            return;
         DrawSyncFlags syncBit = DrawSyncBit::IndexBuffer | DrawSyncBit::Instancing;
         PrepareForDraw(syncBit);
         const ScopedRestartIndexSubstitution restart(type, count, indices);
@@ -1396,7 +1379,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
     void DrawElementsInstancedBaseInstance(GLenum mode, GLsizei count, GLenum type, const void* indices,
                                            GLsizei instancecount, GLuint baseinstance) {
         if (!VertexArrayImpl::SyncClientSideVertexArraysForIndexedFetch(type, count, indices, instancecount, 0,
-                                                                       baseinstance)) return;
+                                                                        baseinstance))
+            return;
         DrawSyncFlags syncBit = DrawSyncBit::IndexBuffer | DrawSyncBit::Instancing;
         MGL_SCOPED_FETCH_BASE_INSTANCE(fetchScope, EmulatedFetchBaseInstance(baseinstance));
         PrepareForDraw(syncBit);
@@ -1406,7 +1390,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         ForEachViewportRoutingPass([&] {
             if (UseNativeBaseInstance()) {
                 g_GLESFuncs.glDrawElementsInstancedBaseInstanceEXT(mode, count, restart.IndexType(), restart.Indices(),
-                                                                  instancecount, baseinstance);
+                                                                   instancecount, baseinstance);
             } else {
                 g_GLESFuncs.glDrawElementsInstanced(mode, count, restart.IndexType(), restart.Indices(), instancecount);
             }
@@ -1471,9 +1455,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     void DrawArraysInstanced(GLenum mode, GLint first, GLsizei count, GLsizei instancecount) {
         DrawSyncFlags syncBit = DrawSyncBit::Instancing;
         PrepareForDraw(syncBit);
-        ForEachViewportRoutingPass([&] {
-            g_GLESFuncs.glDrawArraysInstanced(mode, first, count, instancecount);
-        });
+        ForEachViewportRoutingPass([&] { g_GLESFuncs.glDrawArraysInstanced(mode, first, count, instancecount); });
     }
 
     void DrawArraysIndirect(GLenum mode, const void* indirect) {

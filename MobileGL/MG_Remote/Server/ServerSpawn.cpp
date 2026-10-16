@@ -18,17 +18,17 @@
 #include <vector>
 
 #if defined(__unix__) || defined(__APPLE__) || defined(__ANDROID__)
-#    define MOBILEGL_SERVER_SPAWN_POSIX 1
-#    include <dirent.h>
-#    include <fcntl.h>
-#    include <dlfcn.h>
-#    include <sys/socket.h>
-#    include <sys/stat.h>
-#    include <sys/types.h>
-#    include <sys/wait.h>
-#    include <unistd.h>
+#define MOBILEGL_SERVER_SPAWN_POSIX 1
+#include <dirent.h>
+#include <fcntl.h>
+#include <dlfcn.h>
+#include <sys/socket.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h>
 #else
-#    define MOBILEGL_SERVER_SPAWN_POSIX 0
+#define MOBILEGL_SERVER_SPAWN_POSIX 0
 #endif
 
 namespace MobileGL::MG_Remote::Server {
@@ -46,7 +46,7 @@ namespace MobileGL::MG_Remote::Server {
             if (path.empty()) {
                 return false;
             }
-            struct stat st {};
+            struct stat st{};
             if (::stat(path.c_str(), &st) != 0) {
                 return false;
             }
@@ -66,8 +66,7 @@ namespace MobileGL::MG_Remote::Server {
                 return configured;
             }
             Dl_info info{};
-            if (::dladdr(reinterpret_cast<void*>(&ResolveImage), &info) != 0 &&
-                info.dli_fname != nullptr) {
+            if (::dladdr(reinterpret_cast<void*>(&ResolveImage), &info) != 0 && info.dli_fname != nullptr) {
                 const std::string self(info.dli_fname);
                 const std::size_t slash = self.find_last_of('/');
                 if (slash != std::string::npos) {
@@ -86,8 +85,9 @@ namespace MobileGL::MG_Remote::Server {
         // MOBILEGL_IPC_ADOPT_TIER is scrubbed: the client's ask travels in its Hello.
         bool ShouldScrub(const char* entry) {
             static constexpr const char* kServerOwned[] = {
-                "MOBILEGL_IPC_WIRE_DEFERRED_MB=", "MOBILEGL_IPC_SPIN_US=", "MOBILEGL_IPC_SERVER_AFFINITY=",
-                "MOBILEGL_IPC_AUDIT=", "MOBILEGL_IPC_EVENT_WAIT_MS=", "MOBILEGL_IPC_ALLOW_ADOPT_T0=",
+                "MOBILEGL_IPC_WIRE_DEFERRED_MB=", "MOBILEGL_IPC_SPIN_US=",
+                "MOBILEGL_IPC_SERVER_AFFINITY=",  "MOBILEGL_IPC_AUDIT=",
+                "MOBILEGL_IPC_EVENT_WAIT_MS=",    "MOBILEGL_IPC_ALLOW_ADOPT_T0=",
             };
             for (const char* kept : kServerOwned) {
                 if (std::strncmp(entry, kept, std::strlen(kept)) == 0) {
@@ -184,14 +184,12 @@ namespace MobileGL::MG_Remote::Server {
         return children;
     }
 
-    MobileGLResult LaunchServer(const std::string& imagePath, const std::string& endpoint,
-                                LaunchedServer* out) {
+    MobileGLResult LaunchServer(const std::string& imagePath, const std::string& endpoint, LaunchedServer* out) {
         return LaunchServerWithArgs(imagePath, endpoint, {}, out);
     }
 
     MobileGLResult LaunchServerWithArgs(const std::string& imagePath, const std::string& endpoint,
-                                        const std::vector<std::string>& extraArgs,
-                                        LaunchedServer* out) {
+                                        const std::vector<std::string>& extraArgs, LaunchedServer* out) {
         if (out == nullptr || endpoint.empty()) {
             return MOBILEGL_ERR_INVALID_ARGUMENT;
         }
@@ -202,27 +200,27 @@ namespace MobileGL::MG_Remote::Server {
             // NAMED, never a fallback. ConfigLoader.cpp's own comment names the
             // accident this prevents: a lane that asked for spawn, silently got
             // monolith, and went green on the wrong arm.
-            Transport::WireLogError(
-                "MG_Remote spawn: the server image is not executable: \"%s\" - refusing. Set "
-                "MOBILEGL_IPC_SERVER_PATH, or place libMobileGLServer.so beside libMobileGL.so. "
-                "There is NO monolith fallback from here.",
-                image.empty() ? "<unresolved>" : image.c_str());
+            Transport::WireLogError("MG_Remote spawn: the server image is not executable: \"%s\" - refusing. Set "
+                                    "MOBILEGL_IPC_SERVER_PATH, or place libMobileGLServer.so beside libMobileGL.so. "
+                                    "There is NO monolith fallback from here.",
+                                    image.empty() ? "<unresolved>" : image.c_str());
             return MOBILEGL_ERR_INVALID_ARGUMENT;
         }
 
         // The image's directory, which is where its libMobileGL.so is.
         const std::string::size_type slash = image.find_last_of('/');
-        ScrubbedEnv env =
-            BuildChildEnv(slash == std::string::npos ? std::string() : image.substr(0, slash));
+        ScrubbedEnv env = BuildChildEnv(slash == std::string::npos ? std::string() : image.substr(0, slash));
         // Built before the fork: the child may only make async-signal-safe calls until execve.
         std::vector<std::string> args;
         args.reserve(2 + extraArgs.size());
         args.push_back(image);
         args.push_back(endpoint);
-        for (const std::string& arg : extraArgs) args.push_back(arg);
+        for (const std::string& arg : extraArgs)
+            args.push_back(arg);
         std::vector<char*> argvStorage;
         argvStorage.reserve(args.size() + 1);
-        for (std::string& arg : args) argvStorage.push_back(arg.data());
+        for (std::string& arg : args)
+            argvStorage.push_back(arg.data());
         argvStorage.push_back(nullptr);
         char** argv = argvStorage.data();
 
@@ -266,8 +264,8 @@ namespace MobileGL::MG_Remote::Server {
         const ssize_t got = ::read(report[0], &childErrno, sizeof(childErrno));
         ::close(report[0]);
         if (got == static_cast<ssize_t>(sizeof(childErrno))) {
-            Transport::WireLogError("MG_Remote spawn: execve(\"%s\") failed in the child: %s",
-                                    image.c_str(), std::strerror(childErrno));
+            Transport::WireLogError("MG_Remote spawn: execve(\"%s\") failed in the child: %s", image.c_str(),
+                                    std::strerror(childErrno));
             int status = 0;
             ::waitpid(pid, &status, 0);
             return MOBILEGL_ERR_INVALID_ARGUMENT;
@@ -281,8 +279,7 @@ namespace MobileGL::MG_Remote::Server {
         return MOBILEGL_OK;
     }
 
-    MobileGLResult ReapServer(LaunchedServer& server, std::uint32_t timeoutMs,
-                              int* outExitCode) {
+    MobileGLResult ReapServer(LaunchedServer& server, std::uint32_t timeoutMs, int* outExitCode) {
         if (server.pid < 0) {
             return MOBILEGL_ERR_INVALID_ARGUMENT;
         }
@@ -318,7 +315,7 @@ namespace MobileGL::MG_Remote::Server {
 
     MobileGLResult LaunchServer(const std::string&, const std::string&, LaunchedServer*) {
         Transport::WireLogError("MG_Remote spawn: unsupported on this platform - P6 lands POSIX only "
-                     "(CONTRACT-P6 §2.6); there is no fork() to build a second process from");
+                                "(CONTRACT-P6 §2.6); there is no fork() to build a second process from");
         return MOBILEGL_ERR_UNSUPPORTED;
     }
     MobileGLResult LaunchServerWithArgs(const std::string& imagePath, const std::string& endpoint,
@@ -328,7 +325,9 @@ namespace MobileGL::MG_Remote::Server {
     MobileGLResult ReapServer(LaunchedServer&, std::uint32_t, int*) {
         return MOBILEGL_ERR_UNSUPPORTED;
     }
-    int CountOwnChildren() { return -1; }
+    int CountOwnChildren() {
+        return -1;
+    }
 
 #endif
 

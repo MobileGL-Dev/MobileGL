@@ -137,7 +137,9 @@ namespace {
         return result;
     }
 
-    Bool DiedOfAbort(const ChildResult& r) { return WIFSIGNALED(r.Status) && WTERMSIG(r.Status) == SIGABRT; }
+    Bool DiedOfAbort(const ChildResult& r) {
+        return WIFSIGNALED(r.Status) && WTERMSIG(r.Status) == SIGABRT;
+    }
     std::string DescribeStatus(const ChildResult& r) {
         if (r.Status < 0) return "fork/waitpid failed";
         if (WIFEXITED(r.Status)) return "exited " + std::to_string(WEXITSTATUS(r.Status));
@@ -242,10 +244,8 @@ namespace {
             // content-addressed cache) and bit 10 requires bit 7 (a buffer texture's
             // BufferForTexBuffer names a Buffer handle, D-D1). Bit 7 changes nothing else here:
             // this file constructs no BufferObject.
-            MG_Config::Features.PipePush |= kMGPipeSubsystemResources |
-                                            kMGPipeSubsystemFramebuffer |
-                                            kMGPipeSubsystemTextureResources |
-                                            kMGPipeSubsystemSamplers;
+            MG_Config::Features.PipePush |= kMGPipeSubsystemResources | kMGPipeSubsystemFramebuffer |
+                                            kMGPipeSubsystemTextureResources | kMGPipeSubsystemSamplers;
             m_previousContext = MG_State::pGLContext.Take();
             MG_State::pGLContext = MakeUnique<GLContext>();
             MGPipeFramebufferEmitterInstance().ResetForTest();
@@ -275,17 +275,21 @@ namespace {
         Uint64 m_previousPush = 0;
     };
 
-    MGPipeFramebufferEmitter& Framebuffers() { return MGPipeFramebufferEmitterInstance(); }
-    GLContext& Ctx() { return *MG_State::pGLContext; }
+    MGPipeFramebufferEmitter& Framebuffers() {
+        return MGPipeFramebufferEmitterInstance();
+    }
+    GLContext& Ctx() {
+        return *MG_State::pGLContext;
+    }
 
     SharedPtr<TextureObject2D> MakeColorTexture(Uint name, Int size, Uint levels = 1) {
         auto texture = MakeShared<TextureObject2D>(name);
         texture->SetInternalFormat(TextureInternalFormat::RGBA8);
         for (Uint level = 0; level < levels; ++level) {
             const Int extent = std::max<Int>(size >> level, 1);
-            texture->AllocateStorage(TextureUploadTarget::Texture2D, level,
-                                     MipmapInput{IntVec3{extent, extent, 1},
-                                                 static_cast<SizeT>(extent) * static_cast<SizeT>(extent) * 4});
+            texture->AllocateStorage(
+                TextureUploadTarget::Texture2D, level,
+                MipmapInput{IntVec3{extent, extent, 1}, static_cast<SizeT>(extent) * static_cast<SizeT>(extent) * 4});
         }
         return texture;
     }
@@ -362,8 +366,7 @@ TEST(FramebufferEmit, OneObjectBoundToBothTargetsEmitsOneRecordWithTargetBoth) {
     Framebuffers().EmitFramebufferState(Ctx());
     EXPECT_EQ(Framebuffers().EmissionCount(), 1u) << "one object on both targets is ONE record";
     EXPECT_EQ(Framebuffers().LastDraw().Target, static_cast<Uint8>(MGPipeFramebufferTarget::Both));
-    const MGPipeHandle color1Handle =
-        MGPipeSlots().FindByLifetimeId(MGPipeKind::Texture, color1->GetLifetimeId());
+    const MGPipeHandle color1Handle = MGPipeSlots().FindByLifetimeId(MGPipeKind::Texture, color1->GetLifetimeId());
     EXPECT_TRUE(Framebuffers().LastDraw().ReadSurface.Res == color1Handle)
         << "the shared-FBO record's ReadSurface is not that object's own read buffer";
 }
@@ -445,10 +448,10 @@ TEST(FramebufferEmit, EveryAttachmentFieldSurvivesTheSurfaceConversion) {
         colors.push_back(MakeColorTexture(static_cast<Uint>(20 + i), 32, 2));
         // Distinct level, layer and layered flag per point, so a conversion that dropped one
         // field could not be masked by another point's value.
-        fbo->AttachTexture(static_cast<FramebufferAttachmentType>(
-                               static_cast<Int>(FramebufferAttachmentType::Color0) + static_cast<Int>(i)),
-                           colors.back(), TextureUploadTarget::Texture2D,
-                           static_cast<int>(i % 2), static_cast<int>(i), (i % 2) == 0);
+        fbo->AttachTexture(static_cast<FramebufferAttachmentType>(static_cast<Int>(FramebufferAttachmentType::Color0) +
+                                                                  static_cast<Int>(i)),
+                           colors.back(), TextureUploadTarget::Texture2D, static_cast<int>(i % 2), static_cast<int>(i),
+                           (i % 2) == 0);
     }
     const auto depth = MakeShared<RenderbufferObject>(2);
     depth->SetInternalFormat(TextureInternalFormat::Depth24Stencil8);
@@ -463,8 +466,8 @@ TEST(FramebufferEmit, EveryAttachmentFieldSurvivesTheSurfaceConversion) {
     const MGPFramebufferState& record = Framebuffers().LastDraw();
 
     for (SizeT i = 0; i < kMGPipeMaxColorAttachments; ++i) {
-        const auto type = static_cast<FramebufferAttachmentType>(
-            static_cast<Int>(FramebufferAttachmentType::Color0) + static_cast<Int>(i));
+        const auto type = static_cast<FramebufferAttachmentType>(static_cast<Int>(FramebufferAttachmentType::Color0) +
+                                                                 static_cast<Int>(i));
         const auto& attachment = fbo->GetAttachment(type);
         const MGPSurface& surface = record.Color[i];
         const MGPipeHandle expected =
@@ -477,29 +480,25 @@ TEST(FramebufferEmit, EveryAttachmentFieldSurvivesTheSurfaceConversion) {
             << "MGPSurface::Level at colour point " << i;
         EXPECT_EQ(surface.Layer, static_cast<Uint32>(attachment.GetTextureLayer()))
             << "MGPSurface::Layer at colour point " << i;
-        EXPECT_EQ(surface.Layered, attachment.IsLayered() ? 1 : 0)
-            << "MGPSurface::Layered at colour point " << i;
+        EXPECT_EQ(surface.Layered, attachment.IsLayered() ? 1 : 0) << "MGPSurface::Layered at colour point " << i;
         EXPECT_EQ(surface.UploadTarget, static_cast<Uint16>(TextureUploadTarget::Texture2D))
             << "MGPSurface::UploadTarget at colour point " << i;
         // ID-12 DV-5: three of the four cross-object masks reduce to (format, TEXTURE TARGET)
         // and no TextureUploadTarget -> TextureTarget inverse exists anywhere in the tree.
-        EXPECT_EQ(surface.TextureTarget,
-                  static_cast<Uint16>(attachment.GetTexture()->GetTarget()))
+        EXPECT_EQ(surface.TextureTarget, static_cast<Uint16>(attachment.GetTexture()->GetTarget()))
             << "MGPSurface::TextureTarget at colour point " << i;
     }
 
     EXPECT_EQ(record.Depth.Kind, kMGPipeSurfaceKindRenderbuffer) << "MGPSurface::Kind on the depth point";
     EXPECT_EQ(record.Depth.InternalFormat, static_cast<Uint32>(depth->GetInternalFormat()))
         << "MGPSurface::InternalFormat on the depth point";
-    EXPECT_TRUE(record.Depth.Res ==
-                MGPipeSlots().FindByLifetimeId(MGPipeKind::Renderbuffer, depth->GetLifetimeId()))
+    EXPECT_TRUE(record.Depth.Res == MGPipeSlots().FindByLifetimeId(MGPipeKind::Renderbuffer, depth->GetLifetimeId()))
         << "MGPSurface::Res on the depth point";
     EXPECT_EQ(record.Depth.Layered, 0) << "MGPSurface::Layered on the depth point";
     EXPECT_EQ(record.Depth.TextureTarget, kMGPipeSurfaceNoTextureTarget)
         << "MGPSurface::TextureTarget on the RENDERBUFFER point must be the Unknown sentinel";
     EXPECT_EQ(record.Stencil.Kind, kMGPipeSurfaceKindTexture) << "MGPSurface::Kind on the stencil point";
-    EXPECT_TRUE(record.Stencil.Res ==
-                MGPipeSlots().FindByLifetimeId(MGPipeKind::Texture, stencil->GetLifetimeId()))
+    EXPECT_TRUE(record.Stencil.Res == MGPipeSlots().FindByLifetimeId(MGPipeKind::Texture, stencil->GetLifetimeId()))
         << "MGPSurface::Res on the stencil point";
 
     EXPECT_EQ(record.Width, 32u) << "MGPFramebufferState::Width";
@@ -520,8 +519,7 @@ TEST(FramebufferEmit, EveryAttachmentFieldSurvivesTheSurfaceConversion) {
     // BOTH TARGET FIELDS CARRY THE SENTINEL, not 0 (m6 / ID-12 DV-5): a Uint16 zero is
     // TextureUploadTarget::Texture1D and TextureTarget::Texture1D, so a reader that forgot to
     // gate on Kind would read a plausible wrong answer instead of a nonsense one.
-    EXPECT_EQ(Framebuffers().LastDraw().Color[1].UploadTarget,
-              static_cast<Uint16>(TextureUploadTarget::Unknown));
+    EXPECT_EQ(Framebuffers().LastDraw().Color[1].UploadTarget, static_cast<Uint16>(TextureUploadTarget::Unknown));
     EXPECT_EQ(Framebuffers().LastDraw().Color[1].TextureTarget, kMGPipeSurfaceNoTextureTarget);
 }
 
@@ -540,9 +538,8 @@ TEST(FramebufferEmit, AnAttachmentPointAboveTheWireWidthIsRefusedNotTruncated) {
     // MGPFramebufferState::Color[] is eight wide and MaxColorAttachments is the driver's raw ES
     // cap, not clamped to eight on the GLES path. Truncating silently is the bug class this
     // phase is closing, so the record is REFUSED and the legacy arm runs.
-    fbo->AttachTexture(static_cast<FramebufferAttachmentType>(
-                           static_cast<Int>(FramebufferAttachmentType::Color0) +
-                           static_cast<Int>(kMGPipeMaxColorAttachments)),
+    fbo->AttachTexture(static_cast<FramebufferAttachmentType>(static_cast<Int>(FramebufferAttachmentType::Color0) +
+                                                              static_cast<Int>(kMGPipeMaxColorAttachments)),
                        beyond, TextureUploadTarget::Texture2D);
     Framebuffers().EmitFramebufferState(Ctx());
     EXPECT_EQ(Framebuffers().EmissionCount(), 1u)
@@ -576,8 +573,8 @@ TEST(FramebufferEmit, TheRecordsElevenSurfacesAreTheWholePointSetTheServerReads)
     Vector<SharedPtr<TextureObject2D>> colors;
     for (Uint i = 0; i < kMGPipeMaxColorAttachments; ++i) {
         colors.push_back(MakeColorTexture(70 + i, 32));
-        fbo->AttachTexture(static_cast<FramebufferAttachmentType>(
-                               static_cast<Int>(FramebufferAttachmentType::Color0) + static_cast<Int>(i)),
+        fbo->AttachTexture(static_cast<FramebufferAttachmentType>(static_cast<Int>(FramebufferAttachmentType::Color0) +
+                                                                  static_cast<Int>(i)),
                            colors.back(), TextureUploadTarget::Texture2D);
     }
     const auto depth = MakeShared<RenderbufferObject>(21);
@@ -599,11 +596,9 @@ TEST(FramebufferEmit, TheRecordsElevenSurfacesAreTheWholePointSetTheServerReads)
     const MGPFramebufferState* const applied = MGPipeApplier().DrawFramebuffer();
     ASSERT_NE(applied, nullptr);
     for (Uint i = 0; i < kMGPipeMaxColorAttachments; ++i) {
-        const MGPipeHandle expected =
-            MGPipeSlots().FindByLifetimeId(MGPipeKind::Texture, colors[i]->GetLifetimeId());
+        const MGPipeHandle expected = MGPipeSlots().FindByLifetimeId(MGPipeKind::Texture, colors[i]->GetLifetimeId());
         EXPECT_FALSE(MGPipeHandleIsNull(expected)) << "colour point " << i << " minted no handle";
-        EXPECT_TRUE(applied->Color[i].Res == expected)
-            << "colour point " << i << " did not reach the server's record";
+        EXPECT_TRUE(applied->Color[i].Res == expected) << "colour point " << i << " did not reach the server's record";
         EXPECT_EQ(applied->Color[i].Kind, kMGPipeSurfaceKindTexture) << "at colour point " << i;
     }
     EXPECT_EQ(applied->Depth.Kind, kMGPipeSurfaceKindRenderbuffer) << "the Depth point";
@@ -614,9 +609,8 @@ TEST(FramebufferEmit, TheRecordsElevenSurfacesAreTheWholePointSetTheServerReads)
     const Uint64 hashBefore = applied->ContentHash;
     const Uint64 serialBefore = MGPipeApplier().FramebufferSerial;
     const auto beyond = MakeColorTexture(90, 32);
-    fbo->AttachTexture(static_cast<FramebufferAttachmentType>(
-                           static_cast<Int>(FramebufferAttachmentType::Color0) +
-                           static_cast<Int>(kMGPipeMaxColorAttachments)),
+    fbo->AttachTexture(static_cast<FramebufferAttachmentType>(static_cast<Int>(FramebufferAttachmentType::Color0) +
+                                                              static_cast<Int>(kMGPipeMaxColorAttachments)),
                        beyond, TextureUploadTarget::Texture2D);
     Framebuffers().EmitFramebufferState(Ctx());
     EXPECT_GE(Framebuffers().RefusedCount(), 1u) << "the over-wide framebuffer was not refused";
@@ -730,8 +724,7 @@ TEST(FramebufferEmit, ARestoragedAttachedRenderbufferPublishesItsNewExtent) {
     BindDrawAndRead(fbo, fbo);
     Framebuffers().EmitFramebufferState(Ctx());
 
-    const MGPipeHandle handle =
-        MGPipeSlots().FindByLifetimeId(MGPipeKind::Renderbuffer, renderbuffer->GetLifetimeId());
+    const MGPipeHandle handle = MGPipeSlots().FindByLifetimeId(MGPipeKind::Renderbuffer, renderbuffer->GetLifetimeId());
     ASSERT_FALSE(MGPipeHandleIsNull(handle));
     const Uint64 respecifiesBefore = MGPipeTextureEmitterInstance().RespecifyCount();
 
@@ -785,18 +778,15 @@ TEST(FramebufferEmit, AFramebufferHandedOverByNameGetsANamedRecordWithoutMovingA
     EXPECT_EQ(Framebuffers().LastNamed().Target, static_cast<Uint8>(MGPipeFramebufferTarget::Named));
     EXPECT_GT(MGPipeApplier().FramebufferSerial, serialBefore) << "a Named record must publish";
 
-    const MGPFramebufferState* stored =
-        MGPipeApplier().FramebufferRecordFor(Framebuffers().LastNamed().Fbo);
+    const MGPFramebufferState* stored = MGPipeApplier().FramebufferRecordFor(Framebuffers().LastNamed().Fbo);
     ASSERT_NE(stored, nullptr) << "the framebuffer the server is about to receive by name has no record";
     EXPECT_EQ(stored->Width, 16u) << "the Named record does not describe the object it names";
 
     // AND IT MOVED NEITHER BINDING.
     ASSERT_NE(MGPipeApplier().DrawFramebuffer(), nullptr);
-    EXPECT_TRUE(MGPipeApplier().DrawFramebuffer()->Fbo == boundHandle)
-        << "a Named record took the draw binding";
+    EXPECT_TRUE(MGPipeApplier().DrawFramebuffer()->Fbo == boundHandle) << "a Named record took the draw binding";
     ASSERT_NE(MGPipeApplier().ReadFramebuffer(), nullptr);
-    EXPECT_TRUE(MGPipeApplier().ReadFramebuffer()->Fbo == boundHandle)
-        << "a Named record took the read binding";
+    EXPECT_TRUE(MGPipeApplier().ReadFramebuffer()->Fbo == boundHandle) << "a Named record took the read binding";
 }
 
 TEST(FramebufferEmit, ANamedRecordIsSuppressedPerObjectAndNeverAgainstABoundRecord) {
@@ -842,9 +832,8 @@ TEST(FramebufferEmit, ADrawBufferTokenAboveTheWireWidthIsRefusedNotTruncated) {
     // A LEGAL STATE THE ATTACHMENT SCAN CANNOT SEE: nothing is attached at the point the token
     // names, so D-C3's attachment loop passes, and MGPipeDrawBufferIndex would write an index of
     // 8 or more into an 8-wide array.
-    fbo->SetDrawBuffer(0, static_cast<FramebufferAttachmentType>(
-                              static_cast<Int>(FramebufferAttachmentType::Color0) +
-                              static_cast<Int>(kMGPipeMaxColorAttachments) + 2));
+    fbo->SetDrawBuffer(0, static_cast<FramebufferAttachmentType>(static_cast<Int>(FramebufferAttachmentType::Color0) +
+                                                                 static_cast<Int>(kMGPipeMaxColorAttachments) + 2));
     Framebuffers().EmitFramebufferState(Ctx());
     EXPECT_EQ(Framebuffers().EmissionCount(), 1u)
         << "a draw-buffer token naming a colour point at or above the wire width was truncated "
@@ -873,12 +862,10 @@ TEST(FramebufferEmit, ALayeredCubeAttachmentDoesNotAssertAFaceItCannotKnow) {
     Framebuffers().EmitFramebufferState(Ctx());
     ASSERT_EQ(Framebuffers().EmissionCount(), 1u);
     EXPECT_EQ(Framebuffers().LastDraw().Color[0].Layered, 1);
-    EXPECT_EQ(Framebuffers().LastDraw().Color[0].UploadTarget,
-              static_cast<Uint16>(TextureUploadTarget::Unknown))
+    EXPECT_EQ(Framebuffers().LastDraw().Color[0].UploadTarget, static_cast<Uint16>(TextureUploadTarget::Unknown))
         << "a layered cube attachment resolved to one face, so the record asserts a face the "
            "attachment does not name";
-    EXPECT_EQ(Framebuffers().LastDraw().Color[0].TextureTarget,
-              static_cast<Uint16>(TextureTarget::TextureCubeMap))
+    EXPECT_EQ(Framebuffers().LastDraw().Color[0].TextureTarget, static_cast<Uint16>(TextureTarget::TextureCubeMap))
         << "MGPSurface::TextureTarget is what a cross-object mask reads instead";
 }
 
@@ -958,8 +945,7 @@ TEST(FramebufferEmit, ADrawRecordAndAReadRecordAreKeptApartAndBothWritesBoth) {
     EXPECT_EQ(MGPipeApplier().DrawFramebuffer()->Width, 100u);
     EXPECT_EQ(MGPipeApplier().DrawFramebuffer()->Color[0].InternalFormat, 0x8058u);
     EXPECT_EQ(MGPipeApplier().DrawFramebuffer()->DrawBuffers[0], 0);
-    EXPECT_EQ(MGPipeApplier().ReadFramebuffer(), nullptr)
-        << "a Draw record landed in the read binding as well";
+    EXPECT_EQ(MGPipeApplier().ReadFramebuffer(), nullptr) << "a Draw record landed in the read binding as well";
     const Uint64 afterDraw = MGPipeApplier().FramebufferSerial;
     EXPECT_GT(afterDraw, serialAtStart) << "an applied record must move the serial the twin memoises";
 
@@ -1011,8 +997,7 @@ TEST(FramebufferEmit, ATargetOutsideTheThreeBindingsIsRefusedNamingTheRecord) {
     EXPECT_EQ(MGPipeApplier().ReadFramebuffer(), nullptr);
     EXPECT_EQ(MGPipeApplier().FramebufferRecordFor(MGPipeHandle{7, 4}), nullptr)
         << "a refused record was written into the per-object table anyway";
-    EXPECT_EQ(MGPipeApplier().FramebufferSerial, serialBefore)
-        << "a refused record must not move the serial";
+    EXPECT_EQ(MGPipeApplier().FramebufferSerial, serialBefore) << "a refused record must not move the serial";
 }
 
 // The draw-buffer array is an INDEX into this record's own Color[], and -1 is NONE. An entry
@@ -1163,7 +1148,8 @@ TEST(FramebufferEmit, ANamedRecordDescribesTheFramebufferItNamesWithoutMovingEit
            "clears into a driver framebuffer with no attachments";
     EXPECT_EQ(MGPipeApplier().FramebufferRecordFor(MGPipeHandle{6, 3})->Width, 300u);
     EXPECT_EQ(MGPipeApplier().FramebufferRecordFor(MGPipeHandle{6, 3})->Color[0].Res, (MGPipeHandle{21, 1}));
-    EXPECT_EQ(MGPipeApplier().FramebufferRecordFor(MGPipeHandle{6, 3})->Target, static_cast<Uint8>(MGPipeFramebufferTarget::Named));
+    EXPECT_EQ(MGPipeApplier().FramebufferRecordFor(MGPipeHandle{6, 3})->Target,
+              static_cast<Uint8>(MGPipeFramebufferTarget::Named));
 
     // (b) AND NEITHER BINDING MOVED.
     ASSERT_NE(MGPipeApplier().DrawFramebuffer(), nullptr);
@@ -1236,8 +1222,7 @@ TEST(FramebufferEmit, AFramebufferRecordThatNamesNoUsableHandleIsRefusedRatherTh
     ApplierGuard guard;
     // The positive control first: the DEFAULT framebuffer is slot 0 at generation 1 and is
     // perfectly legal, so what follows refuses the null handle and not slot 0.
-    MGPipeApplySetFramebufferState(
-        FramebufferRecord(kMGPipeDefaultFramebuffer, MGPipeFramebufferTarget::Both, 128));
+    MGPipeApplySetFramebufferState(FramebufferRecord(kMGPipeDefaultFramebuffer, MGPipeFramebufferTarget::Both, 128));
     ASSERT_NE(MGPipeApplier().FramebufferRecordFor(kMGPipeDefaultFramebuffer), nullptr);
     EXPECT_EQ(MGPipeApplier().FramebufferRecordFor(kMGPipeDefaultFramebuffer)->Width, 128u);
     const Uint64 serialBefore = MGPipeApplier().FramebufferSerial;
@@ -1247,20 +1232,18 @@ TEST(FramebufferEmit, AFramebufferRecordThatNamesNoUsableHandleIsRefusedRatherTh
                         "framebuffer handle",
                         [&nullHandle]() { MGPipeApplySetFramebufferState(nullHandle); });
 
-    MGPFramebufferState pastTheBound = FramebufferRecord(
-        MGPipeHandle{kMGPipeMaxFramebufferSlots, 1}, MGPipeFramebufferTarget::Draw, 400);
+    MGPFramebufferState pastTheBound =
+        FramebufferRecord(MGPipeHandle{kMGPipeMaxFramebufferSlots, 1}, MGPipeFramebufferTarget::Draw, 400);
     ExpectRefusedNaming("set_framebuffer_state {slot=65536, gen=1, target=0}: the framebuffer slot is "
                         "outside the record table's bound",
                         [&pastTheBound]() { MGPipeApplySetFramebufferState(pastTheBound); });
-    static_assert(kMGPipeMaxFramebufferSlots == 65536u,
-                  "the refusal line above names the bound; move both together");
+    static_assert(kMGPipeMaxFramebufferSlots == 65536u, "the refusal line above names the bound; move both together");
 
     EXPECT_EQ(MGPipeApplier().FramebufferSerial, serialBefore) << "a refused record moved the serial";
     ASSERT_NE(MGPipeApplier().DrawFramebuffer(), nullptr);
     EXPECT_EQ(MGPipeApplier().DrawFramebuffer()->Fbo, kMGPipeDefaultFramebuffer)
         << "a refused record took the draw binding";
-    EXPECT_LT(MGPipeApplier().FramebufferRecords.size(),
-              static_cast<SizeT>(kMGPipeMaxFramebufferSlots))
+    EXPECT_LT(MGPipeApplier().FramebufferRecords.size(), static_cast<SizeT>(kMGPipeMaxFramebufferSlots))
         << "an out-of-range slot resized the table instead of being refused";
 }
 

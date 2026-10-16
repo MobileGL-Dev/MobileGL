@@ -57,10 +57,10 @@ void main() { o_color = gl_FrontFacing ? vec4(1.0, 0.0, 0.0, 1.0) : vec4(0.0, 1.
 
         // Left half of clip space counter-clockwise, right half clockwise.
         constexpr float kWoundHalves[] = {
-            -1.0f, -1.0f, 0.0f, 0.0f, -1.0f, 0.0f, -1.0f, 1.0f, 0.0f, //
-            0.0f,  -1.0f, 0.0f, 0.0f, 1.0f,  0.0f, -1.0f, 1.0f, 0.0f, //
+            -1.0f, -1.0f, 0.0f, 0.0f, -1.0f, 0.0f, -1.0f, 1.0f,  0.0f, //
+            0.0f,  -1.0f, 0.0f, 0.0f, 1.0f,  0.0f, -1.0f, 1.0f,  0.0f, //
             0.0f,  -1.0f, 0.0f, 0.0f, 1.0f,  0.0f, 1.0f,  -1.0f, 0.0f, //
-            1.0f,  -1.0f, 0.0f, 0.0f, 1.0f,  0.0f, 1.0f,  1.0f, 0.0f,
+            1.0f,  -1.0f, 0.0f, 0.0f, 1.0f,  0.0f, 1.0f,  1.0f,  0.0f,
         };
 
         bool ExtensionAdvertised(const char* name) {
@@ -94,14 +94,14 @@ void main() { o_color = gl_FrontFacing ? vec4(1.0, 0.0, 0.0, 1.0) : vec4(0.0, 1.
 
         // The lower half of clip space (y in [-1, 0]) as two triangles at depth z.
         void DrawLowerHalf(unsigned int program, float z = 0.0f) {
-            const float quad[] = {-1.0f, -1.0f, z, 1.0f, -1.0f, z, 1.0f, 0.0f, z,
+            const float quad[] = {-1.0f, -1.0f, z, 1.0f, -1.0f, z, 1.0f,  0.0f, z,
                                   -1.0f, -1.0f, z, 1.0f, 0.0f,  z, -1.0f, 0.0f, z};
             DrawTriangles(program, quad, 6);
         }
 
         // The whole of clip space at depth z.
         void DrawEverything(unsigned int program, float z) {
-            const float quad[] = {-1.0f, -1.0f, z, 1.0f, -1.0f, z, 1.0f, 1.0f, z,
+            const float quad[] = {-1.0f, -1.0f, z, 1.0f, -1.0f, z, 1.0f,  1.0f, z,
                                   -1.0f, -1.0f, z, 1.0f, 1.0f,  z, -1.0f, 1.0f, z};
             DrawTriangles(program, quad, 6);
         }
@@ -248,8 +248,8 @@ void main() { o_color = gl_FrontFacing ? vec4(1.0, 0.0, 0.0, 1.0) : vec4(0.0, 1.
                     const char* cwColor = frontFace == GL_CCW ? "green" : "red";
                     EXPECT_TRUE(RegionIsMostly(image, w / 8, w / 2 - 1 - w / 8, h / 8, h - 1 - h / 8, ccwColor, 0.0,
                                                when + ": counter-clockwise half"));
-                    EXPECT_TRUE(RegionIsMostly(image, w / 2 + w / 8, w - 1 - w / 8, h / 8, h - 1 - h / 8, cwColor,
-                                               0.0, when + ": clockwise half"));
+                    EXPECT_TRUE(RegionIsMostly(image, w / 2 + w / 8, w - 1 - w / 8, h / 8, h - 1 - h / 8, cwColor, 0.0,
+                                               when + ": clockwise half"));
                 }
             }
         }

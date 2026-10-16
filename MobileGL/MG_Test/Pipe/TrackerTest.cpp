@@ -71,7 +71,7 @@ namespace {
     }
 
     using GLContext = MG_State::GLState::GLContext;
-    
+
     using MG_State::GLState::TextureObjectBase;
     using MobileGL::TextureTarget;
 
@@ -128,7 +128,8 @@ namespace {
 
     TEST_F(TrackerAggregates, EveryAggregateStartsAtZero) {
         const Snapshot s = Snap();
-        for (SizeT i = 0; i < kAggregateCount; ++i) EXPECT_EQ(s.Values[i], 0ull);
+        for (SizeT i = 0; i < kAggregateCount; ++i)
+            EXPECT_EQ(s.Values[i], 0ull);
     }
 
     TEST_F(TrackerAggregates, AVertexArrayAttributeMovesOnlyTheVaoAggregate) {
@@ -295,12 +296,10 @@ namespace {
                 ++m_binds;
             }
             if (dirty & MGPipeDirtyBit(MGPipeDirty::NewRenderState)) {
-                m_lastDynamicMask = m_tracker.FreshlyPrimed()
-                                        ? ~0u
-                                        : MGPipeDynamicChunksThatMoved(live, m_tracker.Staged());
+                m_lastDynamicMask =
+                    m_tracker.FreshlyPrimed() ? ~0u : MGPipeDynamicChunksThatMoved(live, m_tracker.Staged());
             }
-            if (dirty & (MGPipeDirtyBit(MGPipeDirty::NewPipelineState) |
-                         MGPipeDirtyBit(MGPipeDirty::NewRenderState))) {
+            if (dirty & (MGPipeDirtyBit(MGPipeDirty::NewPipelineState) | MGPipeDirtyBit(MGPipeDirty::NewRenderState))) {
                 m_tracker.Staged() = live;
             }
             return dirty;
@@ -356,22 +355,17 @@ namespace {
         // escalation, docs/archive/contracts/CONTRACT-P5E.md §5.7) and still names the subsystem, for the
         // same reason: the bit answers "which A/B switch owns this family's legacy arm", not
         // "is there a record on the wire for me today".
-        EXPECT_EQ(MGPipeSubsystemForDirty(MGPipeDirty::NewConstBuffers),
-                  kMGPipeSubsystemBufferBindings);
-        EXPECT_EQ(MGPipeSubsystemForDirty(MGPipeDirty::NewShaderBuffers),
-                  kMGPipeSubsystemBufferBindings);
-        EXPECT_EQ(MGPipeSubsystemForDirty(MGPipeDirty::NewSoTargets),
-                  kMGPipeSubsystemBufferBindings);
+        EXPECT_EQ(MGPipeSubsystemForDirty(MGPipeDirty::NewConstBuffers), kMGPipeSubsystemBufferBindings);
+        EXPECT_EQ(MGPipeSubsystemForDirty(MGPipeDirty::NewShaderBuffers), kMGPipeSubsystemBufferBindings);
+        EXPECT_EQ(MGPipeSubsystemForDirty(MGPipeDirty::NewSoTargets), kMGPipeSubsystemBufferBindings);
         // AND THE PHASE CONSTANT IS NOW THE WHOLE BIT SET: after P5e every dirty bit names a
         // subsystem, so the loop above has no "names none" case left to exercise, and this is
         // what says so rather than leaving the loop looking stronger than it is.
-        EXPECT_EQ(kMGPipeDirtyEmittedAtP5e,
-                  static_cast<Uint32>((Uint64{1} << kMGPipeDirtyCount) - 1u));
+        EXPECT_EQ(kMGPipeDirtyEmittedAtP5e, static_cast<Uint32>((Uint64{1} << kMGPipeDirtyCount) - 1u));
         EXPECT_EQ(MGPipeSubsystemForDirty(MGPipeDirty::NewRenderState), kMGPipeSubsystemRenderState);
         EXPECT_EQ(MGPipeSubsystemForDirty(MGPipeDirty::NewPixelPack), kMGPipeSubsystemPixelPack);
         EXPECT_EQ(MGPipeSubsystemForDirty(MGPipeDirty::NewPatchState), kMGPipeSubsystemPatchState);
-        EXPECT_EQ(MGPipeSubsystemForDirty(MGPipeDirty::NewVertexAttribDefaults),
-                  kMGPipeSubsystemVertexAttribDefaults);
+        EXPECT_EQ(MGPipeSubsystemForDirty(MGPipeDirty::NewVertexAttribDefaults), kMGPipeSubsystemVertexAttribDefaults);
         // P3a's three, one subsystem: an operator who clears bit 8 gets the whole legacy
         // vertex-input arm rather than two thirds of it.
         EXPECT_EQ(MGPipeSubsystemForDirty(MGPipeDirty::NewVertexElements), kMGPipeSubsystemVertexInput);
@@ -393,8 +387,7 @@ namespace {
         // that started naming it would gate the emission twice and the two gates would
         // disagree the first time one of them was edited.
         for (SizeT i = 0; i < kMGPipeDirtyCount; ++i) {
-            EXPECT_NE(MGPipeSubsystemForDirty(static_cast<MGPipeDirty>(i)),
-                      kMGPipeSubsystemTextureResources)
+            EXPECT_NE(MGPipeSubsystemForDirty(static_cast<MGPipeDirty>(i)), kMGPipeSubsystemTextureResources)
                 << kMGPipeDirtyNames[i];
         }
     }
@@ -414,7 +407,8 @@ namespace {
         Walk();
         const Uint64 mintsAfterFirst = m_cache.GetCounters().Mints;
         const Uint64 bindsAfterFirst = m_binds;
-        for (int i = 0; i < 8; ++i) EXPECT_EQ(Walk(), 0u) << "walk " << i << " fired with nothing moved";
+        for (int i = 0; i < 8; ++i)
+            EXPECT_EQ(Walk(), 0u) << "walk " << i << " fired with nothing moved";
         EXPECT_EQ(m_cache.GetCounters().Mints, mintsAfterFirst);
         EXPECT_EQ(m_binds, bindsAfterFirst);
     }
@@ -466,7 +460,7 @@ namespace {
     // RenderState's two shutters are Uint16 and the tracker widens them in its OWN state,
     // never in MG_State. A wrap must cost an extra re-push at worst and never a missed one.
     TEST_F(TrackerWalk, WrapAroundRePushesButNeverMisses) {
-        Walk(); // prime
+        Walk();                       // prime
         constexpr int kMoves = 70000; // past 65535 with room to spare
         Uint64 fired = 0;
         for (int i = 0; i < kMoves; ++i) {
@@ -475,8 +469,7 @@ namespace {
             Ctx().SetLineWidth((i & 1) ? 2.0f : 3.0f);
             if (Walk() & MGPipeDirtyBit(MGPipeDirty::NewRenderState)) ++fired;
         }
-        EXPECT_EQ(fired, static_cast<Uint64>(kMoves))
-            << "a Uint16 wrap swallowed a render-state change";
+        EXPECT_EQ(fired, static_cast<Uint64>(kMoves)) << "a Uint16 wrap swallowed a render-state change";
         m_cache.Reset();
     }
 
@@ -502,8 +495,7 @@ namespace {
     // itself, which float equality does not do and a byte compare does.
     TEST_F(TrackerWalk, ANaNPatchLevelEqualsItselfAndDoesNotFireForever) {
         Walk(); // prime
-        Ctx().SetPatchDefaultOuterLevel(
-            FloatVec4(std::numeric_limits<Float>::quiet_NaN(), 1.0f, 1.0f, 1.0f));
+        Ctx().SetPatchDefaultOuterLevel(FloatVec4(std::numeric_limits<Float>::quiet_NaN(), 1.0f, 1.0f, 1.0f));
         EXPECT_NE(Walk() & MGPipeDirtyBit(MGPipeDirty::NewPatchState), 0u);
         EXPECT_EQ(Walk() & MGPipeDirtyBit(MGPipeDirty::NewPatchState), 0u)
             << "a NaN patch level re-fired against itself";
@@ -518,8 +510,7 @@ namespace {
         EXPECT_EQ(Walk() & MGPipeDirtyBit(MGPipeDirty::NewPixelPack), 0u);
         // The UNPACK half has no carrier at all, so it must not move the pack shutter.
         Ctx().SetPixelStoreParam(PixelStoreParam::UnpackAlignment, 8);
-        EXPECT_EQ(Walk() & MGPipeDirtyBit(MGPipeDirty::NewPixelPack), 0u)
-            << "an unpack write moved the PACK shutter";
+        EXPECT_EQ(Walk() & MGPipeDirtyBit(MGPipeDirty::NewPixelPack), 0u) << "an unpack write moved the PACK shutter";
         m_cache.Reset();
     }
 
@@ -600,8 +591,7 @@ namespace {
         Walk();
         Walk();
         const Uint32 family = MGPipeDirtyBit(MGPipeDirty::NewConstBuffers) |
-                              MGPipeDirtyBit(MGPipeDirty::NewShaderBuffers) |
-                              MGPipeDirtyBit(MGPipeDirty::NewSoTargets);
+                              MGPipeDirtyBit(MGPipeDirty::NewShaderBuffers) | MGPipeDirtyBit(MGPipeDirty::NewSoTargets);
         ASSERT_EQ(m_tracker.LastDirty() & family, 0u)
             << "the steady state must be quiet before the interesting half of this case";
 
@@ -656,7 +646,8 @@ namespace {
     TEST_F(TrackerWalk, TheIndexBufferBitFiresWhenTheSlotVersionWrapsOntoADifferentBuffer) {
         const SharedPtr<MG_State::GLState::BufferObject> objects[3] = {
             Ctx().CreateBufferObject(1), Ctx().CreateBufferObject(2), Ctx().CreateBufferObject(3)};
-        for (const auto& object : objects) object->Respecify(64, nullptr);
+        for (const auto& object : objects)
+            object->Respecify(64, nullptr);
         auto& slot = Ctx().GetBoundVertexArray()->GetIndexBufferBindingSlot();
 
         slot.Bind(objects[0]);
@@ -673,7 +664,8 @@ namespace {
         // the version and the bound object share a parity - 65536 changes always land back on
         // the object they started from, and the wrap is unobservable. Cycling three lands on
         // objects[65536 % 3] == objects[1] at exactly the same raw version.
-        for (Uint32 i = 1; i <= 65536u; ++i) slot.Bind(objects[i % 3]);
+        for (Uint32 i = 1; i <= 65536u; ++i)
+            slot.Bind(objects[i % 3]);
         ASSERT_EQ(slot.GetVersion(), versionAtStart) << "the version did not come back round";
         ASSERT_EQ(slot.GetBoundObject(), objects[1]) << "the binding did not land on a different buffer";
 
@@ -962,8 +954,7 @@ namespace {
         // frontend's converted int view travels too - 1.5f's int VIEW is 1, and the carrier
         // that used to send the float bits into all three views would be sending 0x3FC00000
         // where the frontend holds 1.
-        EXPECT_EQ(value.IntView[0],
-                  static_cast<Uint32>(Ctx().GetCurrentVertexAttribute(3).intValue[0]));
+        EXPECT_EQ(value.IntView[0], static_cast<Uint32>(Ctx().GetCurrentVertexAttribute(3).intValue[0]));
         EXPECT_NE(value.FloatView[0], value.IntView[0]);
     }
 
@@ -1039,16 +1030,16 @@ namespace {
     };
 
     TEST_F(TrackerShippedEmitter, CollidingVaoShuttersStillPublishTheCurrentElementsAndBufferWindow) {
-        MG_Config::Features.PipePush = kMGPipeSubsystemsMigratedAtP2 | kMGPipeSubsystemResources |
-                                       kMGPipeSubsystemVertexInput;
+        MG_Config::Features.PipePush =
+            kMGPipeSubsystemsMigratedAtP2 | kMGPipeSubsystemResources | kMGPipeSubsystemVertexInput;
         using MG_State::GLState::VertexArrayObject;
         const SharedPtr<VertexArrayObject> a = Ctx().CreateVertexArrayObject(1);
         const SharedPtr<VertexArrayObject> b = Ctx().CreateVertexArrayObject(2);
         const auto buffer = Ctx().CreateBufferObject(1);
         buffer->Respecify(256, nullptr);
         for (Uint location : {0u, 1u}) {
-            a->SetAttributeFormat(location, location == 0 ? 3 : 2, DataType::Float32, false, 20,
-                                  location == 0 ? 0 : 12, false);
+            a->SetAttributeFormat(location, location == 0 ? 3 : 2, DataType::Float32, false, 20, location == 0 ? 0 : 12,
+                                  false);
             a->BindAttributeBuffer(location, buffer);
             a->EnableAttribute(location);
         }
@@ -1070,8 +1061,8 @@ namespace {
         const Uint32 firstB = b->GetConfigVersion() + 1;
         for (Uint32 candidate = firstA; candidate < firstA + 4096; ++candidate) {
             const Uint64 hash = oldMix(a->GetLifetimeId(), candidate);
-            const Uint64 other = (hash ^ b->GetLifetimeId()) - kCombine -
-                                  (b->GetLifetimeId() << 6) - (b->GetLifetimeId() >> 2);
+            const Uint64 other =
+                (hash ^ b->GetLifetimeId()) - kCombine - (b->GetLifetimeId() << 6) - (b->GetLifetimeId() >> 2);
             if (other < firstB || other >= firstB + 4096) continue;
             versionA = candidate;
             versionB = static_cast<Uint32>(other);
@@ -1082,8 +1073,7 @@ namespace {
             // Change a disabled attribute, leaving the enabled 0/1 versus 0
             // windows intact. No private lifetime/version field is overwritten.
             while (vao.GetConfigVersion() < version) {
-                vao.SetAttributeFormat(31, 4, DataType::Float32, !vao.GetAttribute(31).Normalized,
-                                       16, 0, false);
+                vao.SetAttributeFormat(31, 4, DataType::Float32, !vao.GetAttribute(31).Normalized, 16, 0, false);
             }
         };
         advanceConfig(*a, versionA);
@@ -1099,8 +1089,7 @@ namespace {
         // shutter leaves A bound with attribute 1 still enabled: the phone's
         // exact "buffer-window location=1 window=0+1" mismatch.
         advanceConfig(*b, versionB);
-        ASSERT_EQ(oldMix(a->GetLifetimeId(), a->GetConfigVersion()),
-                  oldMix(b->GetLifetimeId(), b->GetConfigVersion()));
+        ASSERT_EQ(oldMix(a->GetLifetimeId(), a->GetConfigVersion()), oldMix(b->GetLifetimeId(), b->GetConfigVersion()));
         Ctx().BindVertexArray(2);
         Draw();
         const MGPipeHandle handleB = MGPipeApplier().BoundVertexElements;
@@ -1225,9 +1214,8 @@ namespace {
         MG_State::pGLContext = MakeUnique<GLContext>();
         Draw();
         const MGPVertexAttribDefaults header = MGPipeVertexAttribDefaultsLastHeader();
-        EXPECT_EQ(header.Count, 32u)
-            << "a fresh context published " << header.Count
-            << " attribute defaults; the server's mirror still holds the previous context's";
+        EXPECT_EQ(header.Count, 32u) << "a fresh context published " << header.Count
+                                     << " attribute defaults; the server's mirror still holds the previous context's";
         EXPECT_EQ(header.Mask, 0xFFFFFFFFu);
     }
 
@@ -1273,8 +1261,8 @@ namespace {
     // BaseInstance in, or the SECOND draw at a different base instance over the same buffer
     // set would be suppressed as unchanged and the server would keep the first one's shift.
     TEST_F(TrackerShippedEmitter, ABaseInstancedDrawAfterAMakeCurrentPublishesItsOwnBaseInstance) {
-        MG_Config::Features.PipePush = kMGPipeSubsystemsMigratedAtP2 | kMGPipeSubsystemResources |
-                                       kMGPipeSubsystemVertexInput;
+        MG_Config::Features.PipePush =
+            kMGPipeSubsystemsMigratedAtP2 | kMGPipeSubsystemResources | kMGPipeSubsystemVertexInput;
         Draw(); // prime this context, so the switch below is a real make-current
         ASSERT_EQ(MGPipeApplier().VertexFetchBaseInstance, 0u);
 
@@ -1296,8 +1284,7 @@ namespace {
         EXPECT_EQ(MGPipeApplier().VertexBufferCount, 1u);
         const Uint64 hashAtSeven = MGPipeVertexInputEmitterInstance().LastVertexBuffers().ContentHash;
         EXPECT_EQ(hashAtSeven,
-                  MGPipeVertexBufferSetContentHash(MGPipeVertexInputEmitterInstance().LastEntries().data(), 0,
-                                                   1, 7))
+                  MGPipeVertexBufferSetContentHash(MGPipeVertexInputEmitterInstance().LastEntries().data(), 0, 1, 7))
             << "the emitted set's ContentHash does not include the base instance it went out with";
 
         // CONSUMED by the verb that carried it: the next plain draw sees 0 again, and the

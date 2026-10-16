@@ -74,8 +74,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     entry->Why = "the loader has no eglGetProcAddress/eglQueryString/glGetString";
                     return *entry;
                 }
-                const char* egl = g_Display != EGL_NO_DISPLAY ? g_EGLFuncs.eglQueryString(g_Display, EGL_EXTENSIONS)
-                                                              : nullptr;
+                const char* egl =
+                    g_Display != EGL_NO_DISPLAY ? g_EGLFuncs.eglQueryString(g_Display, EGL_EXTENSIONS) : nullptr;
                 const char* gl = reinterpret_cast<const char*>(g_GLESFuncs.glGetString(GL_EXTENSIONS));
                 if (egl == nullptr || gl == nullptr) {
                     entry->Why = "no current display and context to read the extension strings from";
@@ -133,8 +133,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
 
             void DrainErrors() {
-                for (Uint guard = 0; guard < 16 && g_GLESFuncs.glGetError() != GL_NO_ERROR; ++guard) {
-                }
+                for (Uint guard = 0; guard < 16 && g_GLESFuncs.glGetError() != GL_NO_ERROR; ++guard) {}
             }
         } // namespace
 #endif
@@ -432,7 +431,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // A session that renders into images (it ends frames with a publishing flush) may be
                 // about to overwrite this one: what other sessions still sample goes first.
                 if (frame.ImplicitSync) {
-                    for (const int read : SI::DupPendingReadFences(*state.Image)) WaitForFenceBeforeLaterCommands(read);
+                    for (const int read : SI::DupPendingReadFences(*state.Image))
+                        WaitForFenceBeforeLaterCommands(read);
                 }
                 frame.Tracker.NoteRead(state.Image);
                 state.NotedFrame = frame.Id;
@@ -620,7 +620,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 g_GLESFuncs.glDrawArrays(GL_TRIANGLES, 0, 3);
                 const GLenum error = g_GLESFuncs.glGetError();
                 if (error != GL_NO_ERROR) {
-                    MGLOG_E_ONCE("Shared images: the YUV conversion draw failed (0x%04x)", static_cast<unsigned>(error));
+                    MGLOG_E_ONCE("Shared images: the YUV conversion draw failed (0x%04x)",
+                                 static_cast<unsigned>(error));
                 }
             } else {
                 MGLOG_E_ONCE("Shared images: a YUV conversion target is not renderable (0x%04x)",
@@ -721,7 +722,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // the driver has no fence to queue. Outside the targets' lock, which every session's
             // present takes.
             if (ResolvedEntryPoints().FencesUsable) {
-                for (const int fence : SI::DupPendingReadFences(*image)) WaitForFenceBeforeLaterCommands(fence);
+                for (const int fence : SI::DupPendingReadFences(*image))
+                    WaitForFenceBeforeLaterCommands(fence);
             } else if (!SI::WaitForReads(*image, kFenceCpuWaitMs)) {
                 MGLOG_E_ONCE("Shared image present: image %llu's readers did not finish within %u ms",
                              static_cast<unsigned long long>(view.Id), static_cast<unsigned>(kFenceCpuWaitMs));
@@ -820,8 +822,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     if (readBuffer != GL_BACK) g_GLESFuncs.glReadBuffer(static_cast<GLenum>(readBuffer));
                     if (!copied) {
                         MGLOG_E_ONCE("Shared image present: glBlitFramebuffer %dx%d -> %ux%u failed (0x%04x)",
-                                     sourceWidth, sourceHeight, view.Width, view.Height,
-                                     static_cast<unsigned>(error));
+                                     sourceWidth, sourceHeight, view.Width, view.Height, static_cast<unsigned>(error));
                     }
                 } else {
                     MGLOG_E_ONCE("Shared image present: image %llu's framebuffer is incomplete (0x%04x)",
@@ -847,7 +848,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             auto& targets = Targets();
             const std::lock_guard<std::mutex> lock(targets.Mutex);
             // TargetIsCurrent is already false for every entry, so nothing reaches the driver.
-            for (auto& entry : targets.ById) DeleteTarget(entry.second);
+            for (auto& entry : targets.ById)
+                DeleteTarget(entry.second);
             targets.ById.clear();
         }
 #else
@@ -864,7 +866,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
             (void)view, (void)region;
             return false;
         }
-        void AcquireForSampling(const EglImageRef& image) { (void)image; }
+        void AcquireForSampling(const EglImageRef& image) {
+            (void)image;
+        }
 
         Bool IsYuv(const EglImageRef& image) {
             (void)image;
@@ -875,7 +879,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
             (void)image, (void)target, (void)width, (void)height;
         }
         void PublishPendingReads() {}
-        Bool PublishPendingAccesses() { return true; }
+        Bool PublishPendingAccesses() {
+            return true;
+        }
         Bool ExportNativeFence(int* fence) {
             *fence = -1;
             return true;

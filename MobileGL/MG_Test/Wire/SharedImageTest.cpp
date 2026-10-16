@@ -224,13 +224,15 @@ TEST(SharedImageSync, PendingReadsAreWaitedForAndSignaledOnesAreDropped) {
     SI::PublishRead(*image, second.Dup());
     Vector<int> pending = SI::DupPendingReadFences(*image);
     EXPECT_EQ(pending.size(), 2u);
-    for (const int fd : pending) ::close(fd);
+    for (const int fd : pending)
+        ::close(fd);
     EXPECT_FALSE(SI::WaitForReads(*image, 10));
 
     first.Signal();
     pending = SI::DupPendingReadFences(*image);
     EXPECT_EQ(pending.size(), 1u);
-    for (const int fd : pending) ::close(fd);
+    for (const int fd : pending)
+        ::close(fd);
     second.Signal();
     EXPECT_TRUE(SI::WaitForReads(*image, 10));
     EXPECT_TRUE(SI::DupPendingReadFences(*image).empty());
@@ -309,9 +311,15 @@ namespace {
         SI::PlaneLayout Layout;
         SizeT Size = 0;
     };
-    Uint8 LumaAt(Uint32 x, Uint32 y) { return static_cast<Uint8>(x * 3 + y * 7); }
-    Uint8 CbAt(Uint32 x, Uint32 y) { return static_cast<Uint8>(100 + x + y * 5); }
-    Uint8 CrAt(Uint32 x, Uint32 y) { return static_cast<Uint8>(200 - x - y * 3); }
+    Uint8 LumaAt(Uint32 x, Uint32 y) {
+        return static_cast<Uint8>(x * 3 + y * 7);
+    }
+    Uint8 CbAt(Uint32 x, Uint32 y) {
+        return static_cast<Uint8>(100 + x + y * 5);
+    }
+    Uint8 CrAt(Uint32 x, Uint32 y) {
+        return static_cast<Uint8>(200 - x - y * 3);
+    }
 
     ForeignFrame MakeForeignNv12(Uint32 width, Uint32 height, Uint8 bias) {
         ForeignFrame frame;
@@ -351,7 +359,8 @@ namespace {
                 wrong += map[y * image.Stride + x] != static_cast<Uint8>(LumaAt(x, y) + bias);
         for (Uint32 y = 0; y < (image.Height + 1) / 2; ++y) {
             for (Uint32 x = 0; x < (image.Width + 1) / 2; ++x) {
-                wrong += map[image.Plane1Offset + y * image.Plane1Stride + 2 * x] != static_cast<Uint8>(CbAt(x, y) + bias);
+                wrong +=
+                    map[image.Plane1Offset + y * image.Plane1Stride + 2 * x] != static_cast<Uint8>(CbAt(x, y) + bias);
                 wrong += map[image.Plane1Offset + y * image.Plane1Stride + 2 * x + 1] !=
                          static_cast<Uint8>(CrAt(x, y) + bias);
             }
@@ -396,7 +405,8 @@ TEST(SharedImageYuv, AForeignBufferIsCopiedIntoAnImageOfItsOwn) {
     {
         ForeignFrame next = MakeForeignNv12(48, 30, 9);
         auto* source = static_cast<Uint8*>(::mmap(nullptr, next.Size, PROT_READ, MAP_SHARED, next.Fd, 0));
-        auto* target = static_cast<Uint8*>(::mmap(nullptr, frame.Size, PROT_READ | PROT_WRITE, MAP_SHARED, frame.Fd, 0));
+        auto* target =
+            static_cast<Uint8*>(::mmap(nullptr, frame.Size, PROT_READ | PROT_WRITE, MAP_SHARED, frame.Fd, 0));
         std::memcpy(target, source, frame.Size);
         ::munmap(source, next.Size);
         ::munmap(target, frame.Size);
@@ -439,7 +449,8 @@ TEST(SharedImageYuv, ThePlaneCopyFillsEveryDestinationLayout) {
     constexpr Uint32 W = 6, H = 4;
     Uint8 y[H][W], cbcr[H / 2][W];
     for (Uint32 r = 0; r < H; ++r)
-        for (Uint32 c = 0; c < W; ++c) y[r][c] = static_cast<Uint8>(r * 10 + c);
+        for (Uint32 c = 0; c < W; ++c)
+            y[r][c] = static_cast<Uint8>(r * 10 + c);
     for (Uint32 r = 0; r < H / 2; ++r)
         for (Uint32 c = 0; c < W / 2; ++c) {
             cbcr[r][2 * c] = static_cast<Uint8>(100 + r * 10 + c);
@@ -447,7 +458,8 @@ TEST(SharedImageYuv, ThePlaneCopyFillsEveryDestinationLayout) {
         }
     const auto check = [&](const SI::Yuv::PlanarLayout& dst) {
         for (Uint32 r = 0; r < H; ++r)
-            for (Uint32 c = 0; c < W; ++c) EXPECT_EQ(dst.Y.Data[r * dst.Y.RowStride + c * dst.Y.PixelStride], y[r][c]);
+            for (Uint32 c = 0; c < W; ++c)
+                EXPECT_EQ(dst.Y.Data[r * dst.Y.RowStride + c * dst.Y.PixelStride], y[r][c]);
         for (Uint32 r = 0; r < H / 2; ++r)
             for (Uint32 c = 0; c < W / 2; ++c) {
                 EXPECT_EQ(dst.Cb.Data[r * dst.Cb.RowStride + c * dst.Cb.PixelStride], cbcr[r][2 * c]);
@@ -471,9 +483,11 @@ TEST(SharedImageYuv, ThePlaneCopyFillsEveryDestinationLayout) {
     // 16-bit samples (P010): two bytes each, Cb Cr pairs of four.
     Uint16 y16[H][W], c16[H / 2][W];
     for (Uint32 r = 0; r < H; ++r)
-        for (Uint32 c = 0; c < W; ++c) y16[r][c] = static_cast<Uint16>((r * 10 + c) << 6);
+        for (Uint32 c = 0; c < W; ++c)
+            y16[r][c] = static_cast<Uint16>((r * 10 + c) << 6);
     for (Uint32 r = 0; r < H / 2; ++r)
-        for (Uint32 c = 0; c < W; ++c) c16[r][c] = static_cast<Uint16>((500 + r * 10 + c) << 6);
+        for (Uint32 c = 0; c < W; ++c)
+            c16[r][c] = static_cast<Uint16>((500 + r * 10 + c) << 6);
     std::vector<Uint16> luma16(16 * H), chroma16(16 * H);
     SI::Yuv::PlanarLayout p010{{reinterpret_cast<Uint8*>(luma16.data()), 32, 2},
                                {reinterpret_cast<Uint8*>(chroma16.data()), 32, 4},
@@ -481,9 +495,11 @@ TEST(SharedImageYuv, ThePlaneCopyFillsEveryDestinationLayout) {
     ASSERT_TRUE(SI::Yuv::CopySemiPlanar(reinterpret_cast<const Uint8*>(&y16[0][0]), W * 2,
                                         reinterpret_cast<const Uint8*>(&c16[0][0]), W * 2, W, H, 2, p010));
     for (Uint32 r = 0; r < H; ++r)
-        for (Uint32 c = 0; c < W; ++c) EXPECT_EQ(luma16[r * 16 + c], y16[r][c]);
+        for (Uint32 c = 0; c < W; ++c)
+            EXPECT_EQ(luma16[r * 16 + c], y16[r][c]);
     for (Uint32 r = 0; r < H / 2; ++r)
-        for (Uint32 c = 0; c < W; ++c) EXPECT_EQ(chroma16[r * 16 + c], c16[r][c]);
+        for (Uint32 c = 0; c < W; ++c)
+            EXPECT_EQ(chroma16[r * 16 + c], c16[r][c]);
 }
 
 // The conversion an import's hints select: BT.709 narrow-range codes of saturated colours decode
@@ -493,7 +509,8 @@ TEST(SharedImageYuv, TheConversionDecodesTheHintedColourSpace) {
         const double in[3] = {y / max - c.Offset[0], cb / max - c.Offset[1], cr / max - c.Offset[2]};
         std::array<double, 3> rgb{};
         for (int row = 0; row < 3; ++row)
-            for (int col = 0; col < 3; ++col) rgb[row] += c.Matrix[col * 3 + row] * in[col];
+            for (int col = 0; col < 3; ++col)
+                rgb[row] += c.Matrix[col * 3 + row] * in[col];
         return rgb;
     };
     SI::Yuv::Hints bt709;
@@ -505,14 +522,16 @@ TEST(SharedImageYuv, TheConversionDecodesTheHintedColourSpace) {
     const double want[4][3] = {{1, 0, 0}, {0, 1, 0}, {0, 0, 1}, {1, 1, 1}};
     for (int i = 0; i < 4; ++i) {
         const auto rgb = decode(c709, codes[i][0], codes[i][1], codes[i][2], 255.0);
-        for (int k = 0; k < 3; ++k) EXPECT_NEAR(rgb[k], want[i][k], 0.02) << "colour " << i << " channel " << k;
+        for (int k = 0; k < 3; ++k)
+            EXPECT_NEAR(rgb[k], want[i][k], 0.02) << "colour " << i << " channel " << k;
     }
     // Full range: Y passes through.
     SI::Yuv::Hints full;
     full.Range = SI::Yuv::kEglYuvFullRange;
     const auto cFull = SI::Yuv::ConversionFor(full, 255.0);
     const auto grey = decode(cFull, 128, 128, 128, 255.0);
-    for (int k = 0; k < 3; ++k) EXPECT_NEAR(grey[k], 128.0 / 255.0, 0.005);
+    for (int k = 0; k < 3; ++k)
+        EXPECT_NEAR(grey[k], 128.0 / 255.0, 0.005);
     EXPECT_EQ(SI::Yuv::Hints{}.EffectiveColorSpace(), SI::Yuv::kEglItuRec601);
     EXPECT_FALSE(SI::Yuv::Hints{}.FullRange());
 }

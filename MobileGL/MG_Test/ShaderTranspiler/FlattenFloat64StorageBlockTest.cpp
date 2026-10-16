@@ -75,7 +75,8 @@ namespace {
         Vector<Uint32> members;
         ForEachInstruction(spirv, [&](Uint32 opcode, const Uint32* words, Uint32 wordCount) {
             if (opcode != kOpTypeStruct || wordCount < 2 || words[1] != structId) return;
-            for (Uint32 i = 2; i < wordCount; ++i) members.push_back(words[i]);
+            for (Uint32 i = 2; i < wordCount; ++i)
+                members.push_back(words[i]);
         });
         return members;
     }
@@ -88,7 +89,8 @@ namespace {
             byMember[words[2]] = words[4];
         });
         Vector<Uint32> offsets;
-        for (const auto& [member, offset] : byMember) offsets.push_back(offset);
+        for (const auto& [member, offset] : byMember)
+            offsets.push_back(offset);
         return offsets;
     }
 
@@ -284,8 +286,7 @@ TEST_F(FlattenFloat64StorageBlockTest, AStorageBlockWithDoublesBecomesOneWordArr
     // Before: seven members, at the std140 offsets the standard requires WITH the doubles.
     const Uint32 inputStructId = StructIdNamed(input, "Wide");
     ASSERT_NE(inputStructId, 0u) << Disassemble(input);
-    EXPECT_EQ(MemberOffsetsOf(input, inputStructId),
-              (Vector<Uint32>{0, 16, 64, 112, 128, 160, 192}))
+    EXPECT_EQ(MemberOffsetsOf(input, inputStructId), (Vector<Uint32>{0, 16, 64, 112, 128, 160, 192}))
         << Disassemble(input);
 
     const Vector<Uint32> output = Sanitize(input);
@@ -294,8 +295,7 @@ TEST_F(FlattenFloat64StorageBlockTest, AStorageBlockWithDoublesBecomesOneWordArr
     const Uint32 structId = StructIdNamed(output, "Wide");
     ASSERT_NE(structId, 0u) << Disassemble(output);
     const Vector<Uint32> members = MemberTypesOf(output, structId);
-    ASSERT_EQ(members.size(), 1u) << "the block should have collapsed to one member\n"
-                                  << Disassemble(output);
+    ASSERT_EQ(members.size(), 1u) << "the block should have collapsed to one member\n" << Disassemble(output);
     EXPECT_EQ(MemberOffsetsOf(output, structId), (Vector<Uint32>{0}));
 
     const auto [elementTypeId, length] = ArrayShapeOf(output, members[0]);
@@ -336,8 +336,7 @@ void main() {
     const Uint32 structId = StructIdNamed(output, "Plain");
     ASSERT_NE(structId, 0u) << Disassemble(output);
     EXPECT_EQ(MemberTypesOf(output, structId).size(), 4u) << Disassemble(output);
-    EXPECT_EQ(MemberOffsetsOf(output, structId), (Vector<Uint32>{0, 16, 64, 112}))
-        << Disassemble(output);
+    EXPECT_EQ(MemberOffsetsOf(output, structId), (Vector<Uint32>{0, 16, 64, 112})) << Disassemble(output);
 }
 
 // A plain UNIFORM block is deliberately NOT flattened, however many doubles it holds: the
@@ -366,9 +365,8 @@ void main() {
 
     const Uint32 structId = StructIdNamed(output, "Params");
     ASSERT_NE(structId, 0u) << Disassemble(output);
-    EXPECT_EQ(MemberTypesOf(output, structId).size(), 3u)
-        << "a uniform block must not be flattened\n"
-        << Disassemble(output);
+    EXPECT_EQ(MemberTypesOf(output, structId).size(), 3u) << "a uniform block must not be flattened\n"
+                                                          << Disassemble(output);
     // The demotion's re-derived std140 layout for `int, float, int`, which is what the frontend
     // reflects and what glUniform*d then writes into.
     EXPECT_EQ(MemberOffsetsOf(output, structId), (Vector<Uint32>{0, 4, 8})) << Disassemble(output);
@@ -689,8 +687,7 @@ void main() {
     const Vector<Uint32> input = CompileToSpirv(GL_COMPUTE_SHADER, source);
     ASSERT_FALSE(input.empty());
     // The premise: glslang really did mark the member row-major.
-    EXPECT_EQ(CountLinesWith(Disassemble(input), "OpMemberDecorate %Data 0 RowMajor", ""), 1u)
-        << Disassemble(input);
+    EXPECT_EQ(CountLinesWith(Disassemble(input), "OpMemberDecorate %Data 0 RowMajor", ""), 1u) << Disassemble(input);
 
     const Vector<Uint32> output = Sanitize(input);
     ASSERT_FALSE(output.empty());
@@ -703,9 +700,7 @@ void main() {
     EXPECT_NE(DecorationValueOf(output, members[0], kDecorationArrayStride), 4u)
         << "a row-major matrix element must not have been flattened into words\n"
         << text;
-    EXPECT_EQ(CountLinesWith(text, "OpIMul %uint", ""), 0u)
-        << "nothing should have been re-addressed\n"
-        << text;
+    EXPECT_EQ(CountLinesWith(text, "OpIMul %uint", ""), 0u) << "nothing should have been re-addressed\n" << text;
 }
 
 TEST_F(FlattenFloat64StorageBlockTest, AColumnMajorMatrixRuntimeArrayStepsByItsColumnStride) {
@@ -805,15 +800,11 @@ TEST_F(FlattenFloat64StorageBlockTest, TheNativePathLeavesAnOpenEndedBlockAndIts
     ASSERT_NE(structId, 0u) << text;
     const Vector<Uint32> members = MemberTypesOf(output, structId);
     ASSERT_EQ(members.size(), 1u) << text;
-    EXPECT_NE(RuntimeArrayElementOf(output, members[0]), 0u)
-        << "the member should still be a runtime array\n"
-        << text;
+    EXPECT_NE(RuntimeArrayElementOf(output, members[0]), 0u) << "the member should still be a runtime array\n" << text;
     EXPECT_EQ(DecorationValueOf(output, members[0], kDecorationArrayStride), 8u)
         << "the array must keep the 8-byte stride the application bound\n"
         << text;
-    EXPECT_GT(CountFloatTypesOfWidth(output, 64), 0u)
-        << "nothing narrows here, so the doubles must survive\n"
-        << text;
+    EXPECT_GT(CountFloatTypesOfWidth(output, 64), 0u) << "nothing narrows here, so the doubles must survive\n" << text;
 }
 
 // The other backend prints the flattened module through SPIRV-Cross: an open-ended `uint[]`
@@ -980,9 +971,7 @@ TEST_F(FlattenFloat64StorageBlockTest, ARuntimeArrayThatIsNotTheBlocksLastMember
         ASSERT_NE(structId, 0u) << text;
         EXPECT_EQ(MemberTypesOf(output, structId).size(), 2u) << text;
         EXPECT_EQ(CountFloatTypesOfWidth(output, 64), 0u) << text;
-        EXPECT_EQ(CountLinesWith(text, "OpIMul %uint", ""), 0u)
-            << "nothing should have been re-addressed\n"
-            << text;
+        EXPECT_EQ(CountLinesWith(text, "OpIMul %uint", ""), 0u) << "nothing should have been re-addressed\n" << text;
     }
 }
 
@@ -1036,8 +1025,7 @@ void main() {
     ASSERT_NE(inputStructId, 0u);
     const Uint32 inputUintId = Uint32TypeIdOf(input);
     // The premise: the module's uint really is declared after the block (or not at all).
-    ASSERT_TRUE(inputUintId == 0 ||
-                DeclarationIndexOf(input, inputUintId) > DeclarationIndexOf(input, inputStructId))
+    ASSERT_TRUE(inputUintId == 0 || DeclarationIndexOf(input, inputUintId) > DeclarationIndexOf(input, inputStructId))
         << "this shader was meant to declare the block before any uint\n"
         << Disassemble(input);
 
@@ -1074,8 +1062,7 @@ void main() {
     const Uint32 inputStructId = StructIdNamed(input, "Wide");
     ASSERT_NE(inputStructId, 0u);
     const Uint32 inputUintId = Uint32TypeIdOf(input);
-    ASSERT_TRUE(inputUintId == 0 ||
-                DeclarationIndexOf(input, inputUintId) > DeclarationIndexOf(input, inputStructId))
+    ASSERT_TRUE(inputUintId == 0 || DeclarationIndexOf(input, inputUintId) > DeclarationIndexOf(input, inputStructId))
         << "this shader was meant to declare the block before any uint\n"
         << Disassemble(input);
 
@@ -1087,7 +1074,5 @@ void main() {
     EXPECT_EQ(MemberTypesOf(output, structId).size(), 2u)
         << "a bounded block in this position must keep the decline it shipped with\n"
         << text;
-    EXPECT_EQ(CountLinesWith(text, "OpIMul %uint", ""), 0u)
-        << "nothing should have been re-addressed\n"
-        << text;
+    EXPECT_EQ(CountLinesWith(text, "OpIMul %uint", ""), 0u) << "nothing should have been re-addressed\n" << text;
 }

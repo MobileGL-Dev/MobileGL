@@ -45,9 +45,8 @@ namespace MobileGL::MG_State::GLState {
         // "no backend" arm is not a detail - it is what the GPU-free test binary runs under, and
         // it has to keep matching what glGetIntegerv answers there.
         limits.MaxShaderStorageBufferBindings =
-            env.HasBackend()
-                ? std::min<Int>(bindingPoints, std::max<Int>(env.params.MaxShaderStorageBufferBindings, 0))
-                : bindingPoints;
+            env.HasBackend() ? std::min<Int>(bindingPoints, std::max<Int>(env.params.MaxShaderStorageBufferBindings, 0))
+                             : bindingPoints;
         if (!env.HasBackend()) {
             // The two genuinely per-DEVICE ceilings have nothing to be measured against here, and
             // zero means "do not enforce this kind" rather than "reject everything".

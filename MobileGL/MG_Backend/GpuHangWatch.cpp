@@ -107,7 +107,8 @@ namespace MobileGL::MG_Backend::GpuHangWatch {
     } // namespace
 
     Uint32 BudgetMs() {
-        if (g_budgetOverridden.load(std::memory_order_acquire)) return g_budgetOverrideMs.load(std::memory_order_acquire);
+        if (g_budgetOverridden.load(std::memory_order_acquire))
+            return g_budgetOverrideMs.load(std::memory_order_acquire);
         static const Uint32 budget = ReadBudgetMs();
         return budget;
     }
@@ -117,7 +118,9 @@ namespace MobileGL::MG_Backend::GpuHangWatch {
         return overrideMs != 0 ? overrideMs : kDefaultPollMs;
     }
 
-    void SetPollIntervalForTesting(Uint32 ms) { g_pollOverrideMs.store(ms, std::memory_order_release); }
+    void SetPollIntervalForTesting(Uint32 ms) {
+        g_pollOverrideMs.store(ms, std::memory_order_release);
+    }
 
     void SetBudgetForTesting(Uint32 ms) {
         g_budgetOverrideMs.store(ms, std::memory_order_release);

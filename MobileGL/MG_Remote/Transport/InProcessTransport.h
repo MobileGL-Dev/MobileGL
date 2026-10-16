@@ -39,8 +39,8 @@ namespace MobileGL::MG_Remote::Transport {
                                     std::uint32_t timeoutMs) override;
         std::uint64_t PeekFrameSize() override;
         MobileGLResult ShareFd(int fd, MobileGLByteSpan sideband) override;
-        MobileGLResult ReceiveFd(int* outFd, MobileGLMutableByteSpan sideband,
-                                 std::uint64_t* outSidebandSize, std::uint32_t timeoutMs) override;
+        MobileGLResult ReceiveFd(int* outFd, MobileGLMutableByteSpan sideband, std::uint64_t* outSidebandSize,
+                                 std::uint32_t timeoutMs) override;
         void Shutdown() override;
         TransportRole Role() const override { return TransportRole::InProcess; }
 

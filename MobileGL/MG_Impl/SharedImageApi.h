@@ -33,7 +33,8 @@
 #include <stdint.h>
 
 #ifdef __cplusplus
-extern "C" {
+extern "C"
+{
 #endif
 
 /* 2: YUV images (NV12, P010), the plane-1 fields of mobilegl_shared_image, and
@@ -55,73 +56,73 @@ extern "C" {
 #define MOBILEGL_SHARED_IMAGE_FOURCC_NV12 0x3231564Eu /* 'NV12' */
 #define MOBILEGL_SHARED_IMAGE_FOURCC_P010 0x30313050u /* 'P010' */
 
-/* One allocated image. VERSIONED BY SIZE: the caller sets struct_size to the sizeof it was built
- * against and the library writes no byte past it, so fields are only ever appended. */
-struct mobilegl_shared_image {
-    uint32_t struct_size;
-    uint32_t width;
-    uint32_t height;
-    uint32_t fourcc;
-    uint64_t id;       /* the server's name for the image; pass to release */
-    int32_t fd;        /* the exported dma-buf, owned by the caller; -1 on failure */
-    uint32_t stride;   /* plane 0, bytes */
-    uint32_t offset;   /* plane 0, bytes */
-    uint32_t reserved; /* zero */
-    uint64_t modifier; /* DRM format modifier of the layout (DRM_FORMAT_MOD_INVALID today) */
-    /* ABI 2: a YUV image's plane 1 (same fd); zero for the one-plane formats. */
-    uint32_t plane1_stride;
-    uint32_t plane1_offset;
-};
+    /* One allocated image. VERSIONED BY SIZE: the caller sets struct_size to the sizeof it was built
+     * against and the library writes no byte past it, so fields are only ever appended. */
+    struct mobilegl_shared_image {
+        uint32_t struct_size;
+        uint32_t width;
+        uint32_t height;
+        uint32_t fourcc;
+        uint64_t id;       /* the server's name for the image; pass to release */
+        int32_t fd;        /* the exported dma-buf, owned by the caller; -1 on failure */
+        uint32_t stride;   /* plane 0, bytes */
+        uint32_t offset;   /* plane 0, bytes */
+        uint32_t reserved; /* zero */
+        uint64_t modifier; /* DRM format modifier of the layout (DRM_FORMAT_MOD_INVALID today) */
+        /* ABI 2: a YUV image's plane 1 (same fd); zero for the one-plane formats. */
+        uint32_t plane1_stride;
+        uint32_t plane1_offset;
+    };
 
-/* Where an imported two-plane buffer's planes are (ABI 2). */
-struct mobilegl_shared_image_planes {
-    uint32_t struct_size;
-    uint32_t plane_count; /* 2 */
-    uint32_t offset[2];
-    uint32_t pitch[2];
-    uint64_t modifier;    /* DRM_FORMAT_MOD_INVALID when none was given */
-};
+    /* Where an imported two-plane buffer's planes are (ABI 2). */
+    struct mobilegl_shared_image_planes {
+        uint32_t struct_size;
+        uint32_t plane_count; /* 2 */
+        uint32_t offset[2];
+        uint32_t pitch[2];
+        uint64_t modifier; /* DRM_FORMAT_MOD_INVALID when none was given */
+    };
 
-/* MOBILEGL_SHARED_IMAGE_ABI_VERSION of the library. */
-uint32_t mobilegl_shared_image_abi_version(void);
+    /* MOBILEGL_SHARED_IMAGE_ABI_VERSION of the library. */
+    uint32_t mobilegl_shared_image_abi_version(void);
 
-/* The fourccs images can be allocated in. Writes min(capacity, total) entries and returns the
- * total (formats may be null when capacity is 0). */
-int mobilegl_shared_image_formats(uint32_t* formats, uint32_t capacity);
+    /* The fourccs images can be allocated in. Writes min(capacity, total) entries and returns the
+     * total (formats may be null when capacity is 0). */
+    int mobilegl_shared_image_formats(uint32_t* formats, uint32_t capacity);
 
-/* A new width x height image. Brings the process's MobileGL client session up if no EGL/GLX entry
- * point has yet (exactly as the first eglGetDisplay would). */
-int mobilegl_shared_image_allocate(uint32_t width, uint32_t height, uint32_t fourcc,
-                                   struct mobilegl_shared_image* out);
+    /* A new width x height image. Brings the process's MobileGL client session up if no EGL/GLX entry
+     * point has yet (exactly as the first eglGetDisplay would). */
+    int mobilegl_shared_image_allocate(uint32_t width, uint32_t height, uint32_t fourcc,
+                                       struct mobilegl_shared_image* out);
 
-/* Names the image `fd` was exported from (the caller keeps `fd`), taking a reference to it.
- * -EIO: not one of the server's images, or the size/format disagree. */
-int mobilegl_shared_image_import(int fd, uint32_t width, uint32_t height, uint32_t fourcc, uint64_t* out_id);
+    /* Names the image `fd` was exported from (the caller keeps `fd`), taking a reference to it.
+     * -EIO: not one of the server's images, or the size/format disagree. */
+    int mobilegl_shared_image_import(int fd, uint32_t width, uint32_t height, uint32_t fourcc, uint64_t* out_id);
 
-/* The same for a YUV fourcc whose two planes are in `fd` as `planes` says (ABI 2). A YUV buffer the
- * server did not allocate is taken too, read through the server's CPU-copy fallback. */
-int mobilegl_shared_image_import_planes(int fd, uint32_t width, uint32_t height, uint32_t fourcc,
-                                        const struct mobilegl_shared_image_planes* planes, uint64_t* out_id);
+    /* The same for a YUV fourcc whose two planes are in `fd` as `planes` says (ABI 2). A YUV buffer the
+     * server did not allocate is taken too, read through the server's CPU-copy fallback. */
+    int mobilegl_shared_image_import_planes(int fd, uint32_t width, uint32_t height, uint32_t fourcc,
+                                            const struct mobilegl_shared_image_planes* planes, uint64_t* out_id);
 
-/* Drops this process's reference (an allocation's or an import's). */
-int mobilegl_shared_image_release(uint64_t id);
+    /* Drops this process's reference (an allocation's or an import's). */
+    int mobilegl_shared_image_release(uint64_t id);
 
-/* 1 when this process can be served: its session is up, or the server it is configured to dial
- * answers (one bounded non-blocking connect, cached once true); 0 when not. Never brings the
- * session up. A component that a system loader picked on MobileGL's behalf (the GBM backend) asks
- * this first and declines, so the loader moves on to another implementation. Optional: a library
- * without it is assumed available. */
-int mobilegl_server_available(void);
+    /* 1 when this process can be served: its session is up, or the server it is configured to dial
+     * answers (one bounded non-blocking connect, cached once true); 0 when not. Never brings the
+     * session up. A component that a system loader picked on MobileGL's behalf (the GBM backend) asks
+     * this first and declines, so the loader moves on to another implementation. Optional: a library
+     * without it is assumed available. */
+    int mobilegl_server_available(void);
 
-/* dlsym-friendly signatures. */
-typedef int (*PFN_mobilegl_server_available)(void);
-typedef uint32_t (*PFN_mobilegl_shared_image_abi_version)(void);
-typedef int (*PFN_mobilegl_shared_image_formats)(uint32_t*, uint32_t);
-typedef int (*PFN_mobilegl_shared_image_allocate)(uint32_t, uint32_t, uint32_t, struct mobilegl_shared_image*);
-typedef int (*PFN_mobilegl_shared_image_import)(int, uint32_t, uint32_t, uint32_t, uint64_t*);
-typedef int (*PFN_mobilegl_shared_image_release)(uint64_t);
-typedef int (*PFN_mobilegl_shared_image_import_planes)(int, uint32_t, uint32_t, uint32_t,
-                                                       const struct mobilegl_shared_image_planes*, uint64_t*);
+    /* dlsym-friendly signatures. */
+    typedef int (*PFN_mobilegl_server_available)(void);
+    typedef uint32_t (*PFN_mobilegl_shared_image_abi_version)(void);
+    typedef int (*PFN_mobilegl_shared_image_formats)(uint32_t*, uint32_t);
+    typedef int (*PFN_mobilegl_shared_image_allocate)(uint32_t, uint32_t, uint32_t, struct mobilegl_shared_image*);
+    typedef int (*PFN_mobilegl_shared_image_import)(int, uint32_t, uint32_t, uint32_t, uint64_t*);
+    typedef int (*PFN_mobilegl_shared_image_release)(uint64_t);
+    typedef int (*PFN_mobilegl_shared_image_import_planes)(int, uint32_t, uint32_t, uint32_t,
+                                                           const struct mobilegl_shared_image_planes*, uint64_t*);
 
 #ifdef __cplusplus
 }

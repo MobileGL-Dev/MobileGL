@@ -82,8 +82,7 @@ namespace {
     }
 
     void ClearErrors() {
-        for (int i = 0; i < 32 && GetError() != GL_NO_ERROR; ++i) {
-        }
+        for (int i = 0; i < 32 && GetError() != GL_NO_ERROR; ++i) {}
     }
 
     // The CTS shader, narrowed to two elements so the expectations stay readable.

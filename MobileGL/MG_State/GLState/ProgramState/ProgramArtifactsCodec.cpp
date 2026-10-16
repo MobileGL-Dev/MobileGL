@@ -107,9 +107,10 @@ namespace MobileGL::MG_State::GLState {
                     SchemaName(hash, "enum");
                     DescribeWireType<std::underlying_type_t<T>>(hash);
                 } else {
-                    SchemaName(hash, std::is_same_v<T, bool> ? "bool" :
-                                     std::is_floating_point_v<T> ? "ieee-float" :
-                                     std::is_signed_v<T> ? "signed" : "unsigned");
+                    SchemaName(hash, std::is_same_v<T, bool>       ? "bool"
+                                     : std::is_floating_point_v<T> ? "ieee-float"
+                                     : std::is_signed_v<T>         ? "signed"
+                                                                   : "unsigned");
                     SchemaWord(hash, sizeof(T));
                     if constexpr (std::is_floating_point_v<T>) {
                         static_assert(std::numeric_limits<T>::is_iec559);
@@ -144,8 +145,10 @@ namespace MobileGL::MG_State::GLState {
                     SchemaName(hash, name);
                     DescribeWireType<std::remove_cvref_t<decltype(member)>>(hash);
                 };
-                if constexpr (ArchiveUniformInitializer<T>) VisitUniformInitializer(value, field);
-                else VisitFields(value, field);
+                if constexpr (ArchiveUniformInitializer<T>)
+                    VisitUniformInitializer(value, field);
+                else
+                    VisitFields(value, field);
                 SchemaWord(hash, fields);
                 SchemaName(hash, "end-record");
             }
@@ -171,7 +174,8 @@ namespace MobileGL::MG_State::GLState {
         template <class T>
         void WriteSequence(Vector<Uint8>& out, const T& value) {
             PutCount(out, value.size());
-            for (const auto& element : value) WriteValue(out, element);
+            for (const auto& element : value)
+                WriteValue(out, element);
         }
 
         template <class T>
@@ -194,13 +198,12 @@ namespace MobileGL::MG_State::GLState {
             } else if constexpr (ArchiveFixedArray<T>) {
                 // No count: the width is part of the type, and writing one would let a reader
                 // believe a stream that disagrees with the struct.
-                for (const auto& element : value) WriteValue(out, element);
+                for (const auto& element : value)
+                    WriteValue(out, element);
             } else if constexpr (ArchiveVector<T>) {
                 WriteSequence(out, value);
             } else if constexpr (ArchiveUniformInitializer<T>) {
-                VisitUniformInitializer(value, [&out](const char*, const auto& member) {
-                    WriteValue(out, member);
-                });
+                VisitUniformInitializer(value, [&out](const char*, const auto& member) { WriteValue(out, member); });
             } else {
                 // The archive's own structs: TypeFacts, ResourceReflection, XfbVarying. ONE
                 // table serves both directions, so a member added to any of them is carried by
@@ -258,8 +261,10 @@ namespace MobileGL::MG_State::GLState {
                 const auto field = [&bytes](const char*, const auto& member) {
                     bytes += MinEncodedBytesOf<std::remove_cvref_t<decltype(member)>>();
                 };
-                if constexpr (ArchiveUniformInitializer<T>) VisitUniformInitializer(value, field);
-                else VisitFields(value, field);
+                if constexpr (ArchiveUniformInitializer<T>)
+                    VisitUniformInitializer(value, field);
+                else
+                    VisitFields(value, field);
                 return bytes;
             }
         }
@@ -381,8 +386,7 @@ namespace MobileGL::MG_State::GLState {
         return fingerprint;
     }
 
-    void EncodeProgramArtifacts(const LinkArtifacts& link, const SpirvArtifacts& spirv,
-                                Vector<Uint8>& out) {
+    void EncodeProgramArtifacts(const LinkArtifacts& link, const SpirvArtifacts& spirv, Vector<Uint8>& out) {
         PutRaw(out, kProgramArtifactsCodecVersion);
         PutRaw(out, ProgramArtifactsSchemaFingerprint());
         // `link` is walked through its own VisitFields table, which omits the live
@@ -393,8 +397,7 @@ namespace MobileGL::MG_State::GLState {
         WriteValue(out, spirv);
     }
 
-    Bool DecodeProgramArtifacts(const Uint8* bytes, SizeT size, LinkArtifacts& link,
-                                SpirvArtifacts& spirv) {
+    Bool DecodeProgramArtifacts(const Uint8* bytes, SizeT size, LinkArtifacts& link, SpirvArtifacts& spirv) {
         // Both outputs are left in a DEFINED state on every exit, including every failure:
         // a caller that ignores the return value gets an empty archive rather than half of a
         // truncated one.
@@ -443,7 +446,8 @@ namespace MobileGL::MG_State::GLState {
     void EncodeProgramArchive(const LinkArtifacts& link, const SpirvArtifacts& spirv,
                               const Vector<Uint32>& linkedStages, Vector<Uint8>& out) {
         PutRaw(out, static_cast<Uint32>(linkedStages.size()));
-        for (const Uint32 stage : linkedStages) PutRaw(out, stage);
+        for (const Uint32 stage : linkedStages)
+            PutRaw(out, stage);
         EncodeProgramArtifacts(link, spirv, out);
     }
 
@@ -463,8 +467,7 @@ namespace MobileGL::MG_State::GLState {
 
         out.LinkedStages.resize(stageCount);
         for (Uint32 i = 0; i < stageCount; ++i) {
-            std::memcpy(&out.LinkedStages[i], bytes + sizeof(Uint32) + i * sizeof(Uint32),
-                        sizeof(Uint32));
+            std::memcpy(&out.LinkedStages[i], bytes + sizeof(Uint32) + i * sizeof(Uint32), sizeof(Uint32));
         }
         if (!DecodeProgramArtifacts(bytes + framed, size - framed, out.Link, out.Spirv)) {
             out = ProgramArchive{};

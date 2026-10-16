@@ -53,7 +53,12 @@ namespace {
     // contains "/*" one byte in, and a naive search for that opener treats the rest of the file as
     // an unterminated comment.
     MobileGL::String MaskCommentsAndQuotedText(const MobileGL::String& source) {
-        enum class Region { Code, SingleLineComment, MultiLineComment, QuotedText };
+        enum class Region {
+            Code,
+            SingleLineComment,
+            MultiLineComment,
+            QuotedText
+        };
 
         MobileGL::String masked = source;
         Region region = Region::Code;
@@ -216,13 +221,26 @@ namespace {
     // desktop and ES version) so the normalizer never starts rejecting a form it used to accept.
     bool IsRecognizedGlslVersion(unsigned version) {
         switch (version) {
-            case 100: case 110: case 120: case 130: case 140: case 150:
-            case 300: case 310: case 320:
-            case 330: case 400: case 410: case 420: case 430:
-            case 440: case 450: case 460:
-                return true;
-            default:
-                return false;
+        case 100:
+        case 110:
+        case 120:
+        case 130:
+        case 140:
+        case 150:
+        case 300:
+        case 310:
+        case 320:
+        case 330:
+        case 400:
+        case 410:
+        case 420:
+        case 430:
+        case 440:
+        case 450:
+        case 460:
+            return true;
+        default:
+            return false;
         }
     }
 
@@ -396,8 +414,7 @@ namespace {
                 if (info.hasValidVersionDirective && probe < lineEnd) {
                     const void* hash = std::memchr(code.data() + probe, '#', lineEnd - probe);
                     if (hash != nullptr) {
-                        recordIfRedundant(static_cast<SizeT>(static_cast<const char*>(hash) - code.data()),
-                                          lineEnd);
+                        recordIfRedundant(static_cast<SizeT>(static_cast<const char*>(hash) - code.data()), lineEnd);
                     }
                 }
             } else {
@@ -427,10 +444,9 @@ namespace {
                         probe++;
                         SkipDirectiveWhitespace(code, probe, lineEnd);
                         const MobileGL::String behavior = ReadDirectiveIdentifier(code, probe, lineEnd);
-                        const bool isGpuShader5 = extension == "GL_ARB_gpu_shader5" ||
-                                                  extension == "GL_NV_gpu_shader5";
-                        const bool enablesExtension = behavior == "enable" || behavior == "require" ||
-                                                      behavior == "warn";
+                        const bool isGpuShader5 = extension == "GL_ARB_gpu_shader5" || extension == "GL_NV_gpu_shader5";
+                        const bool enablesExtension =
+                            behavior == "enable" || behavior == "require" || behavior == "warn";
                         if (!extension.empty()) {
                             info.namedExtensions.insert(extension);
                             if (enablesExtension) info.enabledExtensions.insert(extension);
@@ -493,8 +509,7 @@ namespace {
             return "#version " + std::to_string(info.version) + " core\n";
         }
 
-        const bool useLegacyDesktopVersion =
-            info.version < 400 && !info.enablesGpuShader5;
+        const bool useLegacyDesktopVersion = info.version < 400 && !info.enablesGpuShader5;
         // The trailing marker records that this 330 came from a legacy declaration
         // (or none at all), so the compile-failure retry may re-raise it to 460.
         // An application's own "#version 330" never carries it and keeps strict
@@ -641,10 +656,9 @@ namespace {
     bool IsInDirectiveLine(const Vector<std::pair<SizeT, SizeT>>& ranges, SizeT offset) {
         // Ranges are disjoint and sorted, so the only candidate is the last one starting at or
         // before the offset.
-        const auto next = std::upper_bound(ranges.begin(), ranges.end(), offset,
-                                           [](SizeT value, const std::pair<SizeT, SizeT>& range) {
-                                               return value < range.first;
-                                           });
+        const auto next =
+            std::upper_bound(ranges.begin(), ranges.end(), offset,
+                             [](SizeT value, const std::pair<SizeT, SizeT>& range) { return value < range.first; });
         return next != ranges.begin() && offset < std::prev(next)->second;
     }
 
@@ -657,8 +671,8 @@ namespace {
     };
 
     bool IsStatementKeywordToken(const CodeToken& token) {
-        return std::binary_search(std::begin(kStatementKeywordsBeforeCall),
-                                  std::end(kStatementKeywordsBeforeCall), std::string_view(token.text));
+        return std::binary_search(std::begin(kStatementKeywordsBeforeCall), std::end(kStatementKeywordsBeforeCall),
+                                  std::string_view(token.text));
     }
 
     // A brace counter over raw tokens is preprocessor-blind: it counts the braces of BOTH arms of
@@ -856,7 +870,8 @@ namespace {
             if (lastLine) lineEnd = source.size();
 
             SizeT probe = lineStart;
-            while (probe < lineEnd && (source[probe] == ' ' || source[probe] == '\t')) probe++;
+            while (probe < lineEnd && (source[probe] == ' ' || source[probe] == '\t'))
+                probe++;
 
             const bool isLineDirective = masked.compare(probe, 5, "#line") == 0 &&
                                          (probe + 5 >= lineEnd || !IsIdentifierChar(source[probe + 5]));
@@ -890,7 +905,6 @@ namespace {
         source = std::move(result);
     }
 
-
     MobileGL::String TrimDirectiveToken(const MobileGL::String& token) {
         SizeT start = 0;
         while (start < token.size() && std::isspace(static_cast<unsigned char>(token[start]))) {
@@ -907,13 +921,20 @@ namespace {
     // GL_SHADER_STAGE bit of a stage, as GL_SUBGROUP_SUPPORTED_STAGES_KHR spells it.
     GLbitfield SubgroupStageBit(MobileGL::ShaderStage stage) {
         switch (MobileGL::MG_Util::ConvertShaderStageToGLEnum(stage)) {
-        case GL_VERTEX_SHADER: return GL_VERTEX_SHADER_BIT;
-        case GL_TESS_CONTROL_SHADER: return GL_TESS_CONTROL_SHADER_BIT;
-        case GL_TESS_EVALUATION_SHADER: return GL_TESS_EVALUATION_SHADER_BIT;
-        case GL_GEOMETRY_SHADER: return GL_GEOMETRY_SHADER_BIT;
-        case GL_FRAGMENT_SHADER: return GL_FRAGMENT_SHADER_BIT;
-        case GL_COMPUTE_SHADER: return GL_COMPUTE_SHADER_BIT;
-        default: return 0;
+        case GL_VERTEX_SHADER:
+            return GL_VERTEX_SHADER_BIT;
+        case GL_TESS_CONTROL_SHADER:
+            return GL_TESS_CONTROL_SHADER_BIT;
+        case GL_TESS_EVALUATION_SHADER:
+            return GL_TESS_EVALUATION_SHADER_BIT;
+        case GL_GEOMETRY_SHADER:
+            return GL_GEOMETRY_SHADER_BIT;
+        case GL_FRAGMENT_SHADER:
+            return GL_FRAGMENT_SHADER_BIT;
+        case GL_COMPUTE_SHADER:
+            return GL_COMPUTE_SHADER_BIT;
+        default:
+            return 0;
         }
     }
 
@@ -986,7 +1007,8 @@ namespace {
             const SizeT replaceLen = lineEnd - lineStart + (hasLineBreak ? 1 : 0);
             SizeT probe = 0;
             const auto skipSpace = [&] {
-                while (probe < line.size() && std::isspace(static_cast<unsigned char>(line[probe]))) probe++;
+                while (probe < line.size() && std::isspace(static_cast<unsigned char>(line[probe])))
+                    probe++;
             };
             skipSpace();
             if (probe < line.size() && line[probe] == '#') {
@@ -999,15 +1021,17 @@ namespace {
                     probe += extensionLen;
                     skipSpace();
                     const SizeT nameStart = probe;
-                    while (probe < line.size() && IsIdentifierChar(line[probe])) probe++;
+                    while (probe < line.size() && IsIdentifierChar(line[probe]))
+                        probe++;
                     const MobileGL::String name = line.substr(nameStart, probe - nameStart);
                     skipSpace();
                     if (!name.empty() && probe < line.size() && line[probe] == ':' &&
                         IsUnavailableShaderExtension(env, stage, name)) {
                         const MobileGL::String behavior = TrimDirectiveToken(line.substr(probe + 1));
                         if (behavior == "require") {
-                            edits.push_back({lineStart, replaceLen,
-                                             "#error " + name + " is not available to this shader stage in MobileGL\n"});
+                            edits.push_back(
+                                {lineStart, replaceLen,
+                                 "#error " + name + " is not available to this shader stage in MobileGL\n"});
                         } else if (behavior == "enable" || behavior == "warn") {
                             edits.push_back({lineStart, replaceLen, "\n"});
                         }
@@ -1057,9 +1081,8 @@ namespace {
         }
 
         const auto isDecimalInteger = [](const String& text) {
-            return !text.empty() && std::all_of(text.begin(), text.end(), [](char ch) {
-                       return ch >= '0' && ch <= '9';
-                   });
+            return !text.empty() &&
+                   std::all_of(text.begin(), text.end(), [](char ch) { return ch >= '0' && ch <= '9'; });
         };
 
         const Vector<CodeToken> tokens = TokenizeCode(source);
@@ -1185,17 +1208,17 @@ namespace {
 
     bool IsParameterQualifierKeyword(const String& text) {
         static constexpr std::string_view kQualifiers[] = {
-            "const",    "in",       "out",      "inout",     "highp",     "mediump", "lowp",
-            "precise",  "coherent", "volatile", "restrict",  "readonly",  "writeonly",
+            "const",   "in",       "out",      "inout",    "highp",    "mediump",   "lowp",
+            "precise", "coherent", "volatile", "restrict", "readonly", "writeonly",
         };
         return std::find(std::begin(kQualifiers), std::end(kQualifiers), std::string_view(text)) !=
-            std::end(kQualifiers);
+               std::end(kQualifiers);
     }
 
     // The #if/#ifdef/#ifndef nesting in effect at each offset, as (offset, depth) marks. Every
     // mark takes effect at the END of the directive line that changed the depth.
     Vector<std::pair<SizeT, int>> BuildConditionalDepthMarks(const MobileGL::String& source,
-                                                            const Vector<std::pair<SizeT, SizeT>>& ranges) {
+                                                             const Vector<std::pair<SizeT, SizeT>>& ranges) {
         Vector<std::pair<SizeT, int>> marks;
         marks.emplace_back(static_cast<SizeT>(0), 0);
         int depth = 0;
@@ -1219,10 +1242,9 @@ namespace {
     }
 
     int ConditionalDepthAt(const Vector<std::pair<SizeT, int>>& marks, SizeT offset) {
-        const auto next = std::upper_bound(marks.begin(), marks.end(), offset,
-                                           [](SizeT value, const std::pair<SizeT, int>& mark) {
-                                               return value < mark.first;
-                                           });
+        const auto next =
+            std::upper_bound(marks.begin(), marks.end(), offset,
+                             [](SizeT value, const std::pair<SizeT, int>& mark) { return value < mark.first; });
         return next == marks.begin() ? 0 : std::prev(next)->second;
     }
 
@@ -1346,8 +1368,7 @@ namespace {
         if (count < 4 || !HasBalancedBraces(tokens)) return;
 
         const Vector<std::pair<SizeT, SizeT>> directiveRanges = FindDirectiveLineRanges(source);
-        const Vector<std::pair<SizeT, int>> conditionalDepth =
-            BuildConditionalDepthMarks(source, directiveRanges);
+        const Vector<std::pair<SizeT, int>> conditionalDepth = BuildConditionalDepthMarks(source, directiveRanges);
 
         struct SubroutineType {
             String returnText; // empty until the type declaration itself is seen
@@ -1519,7 +1540,7 @@ namespace {
                 const String signature = type.returnText + " " + variable + "(" + parameterList + ")";
                 text += signature + "; ";
                 appended += signature + " {\n    " + (type.returnText == "void" ? "" : "return ") +
-                    type.implementations.front() + "(" + arguments + ");\n}\n";
+                            type.implementations.front() + "(" + arguments + ");\n}\n";
             }
             prototypes.emplace_back(site.begin, std::move(text));
         }
@@ -1533,10 +1554,9 @@ namespace {
         for (const UniformSite& site : uniformSites) {
             BlankSpan(source, site.begin, site.end);
         }
-        std::sort(prototypes.begin(), prototypes.end(),
-                  [](const std::pair<SizeT, String>& a, const std::pair<SizeT, String>& b) {
-                      return a.first < b.first;
-                  });
+        std::sort(
+            prototypes.begin(), prototypes.end(),
+            [](const std::pair<SizeT, String>& a, const std::pair<SizeT, String>& b) { return a.first < b.first; });
         for (auto it = prototypes.rbegin(); it != prototypes.rend(); ++it) {
             source.insert(it->first, it->second);
         }
@@ -1593,8 +1613,8 @@ namespace {
                         identifierEnd++;
                     }
                     const SizeT identifierLen = identifierEnd - cursor;
-                    if (identifierLen == 6 && (source.compare(cursor, 6, "packed") == 0 ||
-                                               source.compare(cursor, 6, "shared") == 0)) {
+                    if (identifierLen == 6 &&
+                        (source.compare(cursor, 6, "packed") == 0 || source.compare(cursor, 6, "shared") == 0)) {
                         source.replace(cursor, 6, "std140");
                     }
                     cursor = identifierEnd;
@@ -1610,8 +1630,7 @@ namespace {
     // tracker rather than a bare offset because this pass rewrites identifiers first, and those
     // rewrites are raw text: a leading comment banner mentioning `varying` or `texture2D` moves the
     // anchor, and the tracker notices.
-    void ModernizeLegacyGLSL(MobileGL::ShaderStage stage, MobileGL::String& source,
-                             AfterVersionAnchor& afterVersion) {
+    void ModernizeLegacyGLSL(MobileGL::ShaderStage stage, MobileGL::String& source, AfterVersionAnchor& afterVersion) {
         // Precision qualifiers (highp/mediump/lowp and default-precision statements) are legal and
         // ignored in the normalized desktop core profiles, so glslang handles them natively.
 
@@ -1781,11 +1800,10 @@ namespace {
         // and defines the ES macros regardless of behavior, so `all` adds no information - and
         // emitting all thirty-five for a source that named nothing is exactly the broad rewrite
         // the named-extensions-only policy exists to avoid.
-        const bool hasMacroToRestore =
-            std::any_of(info.namedExtensions.begin(), info.namedExtensions.end(),
-                        [&info](const MobileGL::String& extension) {
-                            return IsEsOnlyPreambleExtensionMacro(extension, info.version);
-                        });
+        const bool hasMacroToRestore = std::any_of(info.namedExtensions.begin(), info.namedExtensions.end(),
+                                                   [&info](const MobileGL::String& extension) {
+                                                       return IsEsOnlyPreambleExtensionMacro(extension, info.version);
+                                                   });
         // Nothing the desktop preamble is missing: leave the source byte-identical.
         if (!hasMacroToRestore) return;
 
@@ -1857,9 +1875,8 @@ namespace {
             return;
         }
 
-        constexpr const char* shim =
-            "uniform int mg_NumSamples;\n"
-            "#define gl_NumSamples mg_NumSamples\n";
+        constexpr const char* shim = "uniform int mg_NumSamples;\n"
+                                     "#define gl_NumSamples mg_NumSamples\n";
         source.insert(afterVersion.Get(source), shim);
     }
 
@@ -1873,8 +1890,8 @@ namespace {
             if (tokens[i].text != "uniform") continue;
             // The type is the first identifier after `uniform` that is not a precision qualifier.
             SizeT type = i + 1;
-            while (type < tokens.size() && (tokens[type].text == "lowp" || tokens[type].text == "mediump" ||
-                                            tokens[type].text == "highp"))
+            while (type < tokens.size() &&
+                   (tokens[type].text == "lowp" || tokens[type].text == "mediump" || tokens[type].text == "highp"))
                 ++type;
             if (type >= tokens.size() || !IsIdentifierToken(tokens[type])) continue;
             const bool isExternal = tokens[type].text == "samplerExternalOES";
@@ -1887,7 +1904,8 @@ namespace {
                         into->push_back(tokens[j].text);
                     ++j;
                     if (j < tokens.size() && tokens[j].text == "[") {
-                        while (j < tokens.size() && tokens[j].text != "]") ++j;
+                        while (j < tokens.size() && tokens[j].text != "]")
+                            ++j;
                         ++j;
                     }
                     continue;
@@ -1910,7 +1928,8 @@ namespace {
     // refuse the source, a name declared both ways is left out - a 2D binding is the safe reading.
     constexpr const char* kExternalSamplerMarkerPrefix = "/*mobilegl-external-samplers:";
 
-    void LowerExternalSamplers(MobileGL::ShaderStage stage, MobileGL::String& source, AfterVersionAnchor& afterVersion) {
+    void LowerExternalSamplers(MobileGL::ShaderStage stage, MobileGL::String& source,
+                               AfterVersionAnchor& afterVersion) {
         if (source.find("samplerExternalOES") == MobileGL::String::npos) return;
         Vector<MobileGL::String> names;
         MobileGL::String preprocessed;
@@ -2001,7 +2020,6 @@ namespace MobileGL {
                 ModernizeLegacyGLSL(stage, source, afterVersion);
                 InjectDepthRangeBuiltinShim(stage, source, afterVersion);
                 InjectNumSamplesBuiltinShim(stage, originalLanguage, source, afterVersion);
-
             }
 
             Vector<String> ExternalSamplerUniformNames(const String& preprocessedSource) {
@@ -2042,8 +2060,8 @@ namespace MobileGL {
                 const ShaderLanguageInfo info = InspectShaderLanguage(preprocessedSource);
                 EsOrigin origin;
                 origin.version = esVersion;
-                origin.gpuShader5 = ExtensionTurnedOn(info, "GL_EXT_gpu_shader5") ||
-                                    ExtensionTurnedOn(info, "GL_OES_gpu_shader5");
+                origin.gpuShader5 =
+                    ExtensionTurnedOn(info, "GL_EXT_gpu_shader5") || ExtensionTurnedOn(info, "GL_OES_gpu_shader5");
                 return origin;
             }
 
@@ -2119,18 +2137,20 @@ namespace MobileGL {
 
                 const SizeT length = source.size();
                 SizeT i = 0;
-                Int layoutParenDepth = 0;   // >0 while inside layout(...)
+                Int layoutParenDepth = 0;        // >0 while inside layout(...)
                 Bool pendingLayoutParen = false; // saw "layout", awaiting its '('
                 while (i < length) {
                     const char c = source[i];
                     // Comments.
                     if (c == '/' && i + 1 < length && source[i + 1] == '/') {
-                        while (i < length && source[i] != '\n') ++i;
+                        while (i < length && source[i] != '\n')
+                            ++i;
                         continue;
                     }
                     if (c == '/' && i + 1 < length && source[i + 1] == '*') {
                         i += 2;
-                        while (i + 1 < length && !(source[i] == '*' && source[i + 1] == '/')) ++i;
+                        while (i + 1 < length && !(source[i] == '*' && source[i + 1] == '/'))
+                            ++i;
                         i = (i + 1 < length) ? i + 2 : length;
                         continue;
                     }
@@ -2165,7 +2185,8 @@ namespace MobileGL {
                     }
                     if (isIdentChar(c) && !(c >= '0' && c <= '9')) {
                         const SizeT start = i;
-                        while (i < length && isIdentChar(source[i])) ++i;
+                        while (i < length && isIdentChar(source[i]))
+                            ++i;
                         const StringView word(source.data() + start, i - start);
                         if (word == "layout") {
                             pendingLayoutParen = true;
@@ -2181,14 +2202,15 @@ namespace MobileGL {
                             for (const char* keyword : kLayoutOnlyKeywords) {
                                 if (word == keyword) {
                                     return String("ERROR: '") + keyword +
-                                        "' is a keyword and may not be used as an identifier.";
+                                           "' is a keyword and may not be used as an identifier.";
                                 }
                             }
                         }
                         continue;
                     }
                     if (isIdentChar(c)) { // digit-led token: skip the whole number/identifier tail
-                        while (i < length && isIdentChar(source[i])) ++i;
+                        while (i < length && isIdentChar(source[i]))
+                            ++i;
                         pendingLayoutParen = false;
                         continue;
                     }
@@ -2201,9 +2223,9 @@ namespace MobileGL {
             namespace {
                 bool IsNonLayoutQualifierKeyword(const String& text) {
                     static const char* kQualifiers[] = {
-                        "highp",    "mediump",  "lowp",     "precise",  "const",    "flat",
-                        "noperspective", "smooth", "centroid", "sample", "patch",   "invariant",
-                        "coherent", "volatile", "restrict", "readonly", "writeonly", "subroutine",
+                        "highp",         "mediump",  "lowp",     "precise",  "const",     "flat",
+                        "noperspective", "smooth",   "centroid", "sample",   "patch",     "invariant",
+                        "coherent",      "volatile", "restrict", "readonly", "writeonly", "subroutine",
                     };
                     for (const char* qualifier : kQualifiers) {
                         if (text == qualifier) return true;
@@ -2239,8 +2261,7 @@ namespace MobileGL {
                 // form, which declares no block at all); the element count for an instance array,
                 // whose elements take base, base+1, ... (GLSL 4.30 4.4.5). -1 means "the grammar
                 // here is outside this scanner's narrow subset", i.e. do not judge this one.
-                long long StorageBlockBindingPointCount(const Vector<CodeToken>& tokens, SizeT bufferPos,
-                                                        SizeT count) {
+                long long StorageBlockBindingPointCount(const Vector<CodeToken>& tokens, SizeT bufferPos, SizeT count) {
                     SizeT k = bufferPos + 1;
                     if (k < count && IsIdentifierToken(tokens[k])) ++k; // block type name
                     if (k >= count || tokens[k].text != "{") return 1;

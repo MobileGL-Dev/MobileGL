@@ -39,13 +39,12 @@
 using namespace MobileGL;
 
 namespace {
-    class RenderStateTest: public ::testing::Test {
+    class RenderStateTest : public ::testing::Test {
     protected:
         // GL error flags are sticky per code and the context outlives an individual test in this
         // binary, so a pending error from an earlier case would be handed to the next GetError().
         static void DrainPendingGlErrors() {
-            for (Int drained = 0; drained < 16 && MG_Impl::GLImpl::GetError() != GL_NO_ERROR; ++drained) {
-            }
+            for (Int drained = 0; drained < 16 && MG_Impl::GLImpl::GetError() != GL_NO_ERROR; ++drained) {}
         }
 
         static void ExpectSingleGlError(GLenum expected) {
@@ -675,19 +674,22 @@ TEST_F(RenderStateTest, ClearColorStartsAtTransparentBlack) {
     const GLenum error = MG_Impl::GLImpl::GetError();
     MG_State::pGLContext = previous;
     EXPECT_EQ(error, GL_NO_ERROR);
-    for (const GLfloat channel : clear) EXPECT_FLOAT_EQ(channel, 0.0f);
+    for (const GLfloat channel : clear)
+        EXPECT_FLOAT_EQ(channel, 0.0f);
 }
 
 TEST_F(RenderStateTest, PatchDefaultLevelsStartAtTheGLDefault) {
     GLfloat outer[4] = {-1.0f, -1.0f, -1.0f, -1.0f};
     MG_Impl::GLImpl::GetFloatv(GL_PATCH_DEFAULT_OUTER_LEVEL, outer);
     ExpectSingleGlError(GL_NO_ERROR);
-    for (const GLfloat level : outer) EXPECT_FLOAT_EQ(level, 1.0f);
+    for (const GLfloat level : outer)
+        EXPECT_FLOAT_EQ(level, 1.0f);
 
     GLfloat inner[2] = {-1.0f, -1.0f};
     MG_Impl::GLImpl::GetFloatv(GL_PATCH_DEFAULT_INNER_LEVEL, inner);
     ExpectSingleGlError(GL_NO_ERROR);
-    for (const GLfloat level : inner) EXPECT_FLOAT_EQ(level, 1.0f);
+    for (const GLfloat level : inner)
+        EXPECT_FLOAT_EQ(level, 1.0f);
 }
 
 TEST_F(RenderStateTest, PatchDefaultLevelsRoundTripThroughEveryGetter) {
@@ -820,8 +822,7 @@ TEST_F(RenderStateTest, ARedundantNaNPatchLevelWriteSettlesInsteadOfBumpingForev
     const Uint afterFirst = state.GetPipelineStateVersion();
 
     state.SetPatchDefaultOuterLevel(FloatVec4(notANumber, 1.0f, 1.0f, 1.0f));
-    EXPECT_EQ(state.GetPipelineStateVersion(), afterFirst)
-        << "the identical NaN tuple is not a state change";
+    EXPECT_EQ(state.GetPipelineStateVersion(), afterFirst) << "the identical NaN tuple is not a state change";
 
     state.SetPatchDefaultInnerLevel(FloatVec2(notANumber, 1.0f));
     const Uint afterInner = state.GetPipelineStateVersion();
@@ -1100,9 +1101,10 @@ namespace {
 
     class ScopedFragmentShadingRateBackend {
     public:
-        ScopedFragmentShadingRateBackend(Bool primitive, Bool attachment, Bool nonTrivial):
-            m_previous(Move(MG_Backend::pActiveBackendObject)) {
-            MG_Backend::pActiveBackendObject = MakeUnique<FragmentShadingRateBackend>(primitive, attachment, nonTrivial);
+        ScopedFragmentShadingRateBackend(Bool primitive, Bool attachment, Bool nonTrivial)
+            : m_previous(Move(MG_Backend::pActiveBackendObject)) {
+            MG_Backend::pActiveBackendObject =
+                MakeUnique<FragmentShadingRateBackend>(primitive, attachment, nonTrivial);
         }
         ~ScopedFragmentShadingRateBackend() {
             // Leave the context at the extension's initial state for whichever test runs next.

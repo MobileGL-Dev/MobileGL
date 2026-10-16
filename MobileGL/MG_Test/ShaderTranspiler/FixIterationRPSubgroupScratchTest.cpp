@@ -59,10 +59,10 @@ namespace {
 
     // The declared lengths of every Workgroup-storage array variable, sorted.
     std::vector<Uint32> WorkgroupArrayLengths(const Vector<Uint32>& spirv) {
-        std::map<Uint32, Uint32> constantValues;      // constant id -> value
-        std::map<Uint32, Uint32> arrayLengthIds;      // array type id -> length constant id
-        std::map<Uint32, Uint32> pointerPointees;     // pointer type id -> pointee type id
-        std::vector<Uint32> workgroupPointerTypes;    // type ids of Workgroup variables
+        std::map<Uint32, Uint32> constantValues;   // constant id -> value
+        std::map<Uint32, Uint32> arrayLengthIds;   // array type id -> length constant id
+        std::map<Uint32, Uint32> pointerPointees;  // pointer type id -> pointee type id
+        std::vector<Uint32> workgroupPointerTypes; // type ids of Workgroup variables
         ForEachInstruction(spirv, [&](spv::Op opcode, const Uint32* words, Uint32 wordCount) {
             switch (opcode) {
             case spv::Op::OpConstant:
@@ -72,14 +72,12 @@ namespace {
                 if (wordCount >= 4u) arrayLengthIds[words[1]] = words[3];
                 break;
             case spv::Op::OpTypePointer:
-                if (wordCount >= 4u &&
-                    static_cast<spv::StorageClass>(words[2]) == spv::StorageClass::Workgroup) {
+                if (wordCount >= 4u && static_cast<spv::StorageClass>(words[2]) == spv::StorageClass::Workgroup) {
                     pointerPointees[words[1]] = words[3];
                 }
                 break;
             case spv::Op::OpVariable:
-                if (wordCount >= 4u &&
-                    static_cast<spv::StorageClass>(words[3]) == spv::StorageClass::Workgroup) {
+                if (wordCount >= 4u && static_cast<spv::StorageClass>(words[3]) == spv::StorageClass::Workgroup) {
                     workgroupPointerTypes.push_back(words[1]);
                 }
                 break;
@@ -102,10 +100,10 @@ namespace {
 
     bool Validates(const Vector<Uint32>& spirv) {
         spvtools::SpirvTools tools(SPV_ENV_VULKAN_1_1);
-        tools.SetMessageConsumer([](spv_message_level_t, const char*, const spv_position_t& position,
-                                    const char* message) {
-            ADD_FAILURE() << "spirv-val at word " << position.index << ": " << message;
-        });
+        tools.SetMessageConsumer(
+            [](spv_message_level_t, const char*, const spv_position_t& position, const char* message) {
+                ADD_FAILURE() << "spirv-val at word " << position.index << ": " << message;
+            });
         return tools.Validate(spirv);
     }
 
@@ -282,16 +280,16 @@ TEST(FixIterationRPSubgroupScratchPass, LeavesPackWidthAssumptionsAloneOnWideDev
         ASSERT_FALSE(input.empty());
         for (const Uint32 nativeSize : {16u, 32u, 64u, 128u}) {
             Vector<Uint32> output;
-            ASSERT_TRUE(ShaderCompiler::FixIterationRPSubgroupScratchForVulkan(
-                input, output, nativeSize, 32768u, true));
+            ASSERT_TRUE(
+                ShaderCompiler::FixIterationRPSubgroupScratchForVulkan(input, output, nativeSize, 32768u, true));
             EXPECT_EQ(output, input) << "native width " << nativeSize;
         }
     }
 }
 
 TEST(FixIterationRPSubgroupScratchPass, RefusesAModuleOutsideTheIdiom) {
-    for (const char* source : {kInvocationIndexedSource, kNonFloatScratchSource,
-                               kSubgroupFreeSource, kMaskedSubgroupIndexSource}) {
+    for (const char* source :
+         {kInvocationIndexedSource, kNonFloatScratchSource, kSubgroupFreeSource, kMaskedSubgroupIndexSource}) {
         const Vector<Uint32> input = CompileCompute(source);
         ASSERT_FALSE(input.empty());
         Vector<Uint32> output;
@@ -309,8 +307,7 @@ TEST(FixIterationRPSubgroupScratchPass, LeavesEveryModuleAloneAtThePacksAssumedW
     ASSERT_FALSE(input.empty());
     for (const Uint32 nativeSize : {16u, 32u, 64u}) {
         Vector<Uint32> output;
-        ASSERT_TRUE(ShaderCompiler::FixIterationRPSubgroupScratchForVulkan(
-            input, output, nativeSize, 32768u, true));
+        ASSERT_TRUE(ShaderCompiler::FixIterationRPSubgroupScratchForVulkan(input, output, nativeSize, 32768u, true));
         EXPECT_EQ(output, input) << "native width " << nativeSize;
     }
 }

@@ -135,17 +135,18 @@ void main() { o0 = uColor; o1 = uColor; }
         glDisable(GL_BLEND);
         glDisable(GL_SCISSOR_TEST);
 
-        Quad(1.0f, 0.0f, 0.0f, 1.0f);                         // red everywhere
+        Quad(1.0f, 0.0f, 0.0f, 1.0f); // red everywhere
         glEnable(GL_SCISSOR_TEST);
-        glScissor(0, 0, kSize / 2, kSize);                    // left half
+        glScissor(0, 0, kSize / 2, kSize); // left half
         glClearColor(0.0f, 1.0f, 0.0f, 1.0f);
-        glClear(GL_COLOR_BUFFER_BIT);                         // green, left half
-        glScissor(0, 0, kSize, kSize / 4);                    // bottom quarter
-        Quad(0.0f, 0.0f, 1.0f, 1.0f);                         // blue, bottom quarter (scissor clips the draw)
+        glClear(GL_COLOR_BUFFER_BIT);      // green, left half
+        glScissor(0, 0, kSize, kSize / 4); // bottom quarter
+        Quad(0.0f, 0.0f, 1.0f, 1.0f);      // blue, bottom quarter (scissor clips the draw)
         glDisable(GL_SCISSOR_TEST);
         EXPECT_EQ(FirstGLError(), 0u);
 
-        EXPECT_TRUE(Near(ReadAt(GL_COLOR_ATTACHMENT0, kSize / 4, kSize * 3 / 4), 0, 255, 0, 255)) << "left top: the clear";
+        EXPECT_TRUE(Near(ReadAt(GL_COLOR_ATTACHMENT0, kSize / 4, kSize * 3 / 4), 0, 255, 0, 255))
+            << "left top: the clear";
         EXPECT_TRUE(Near(ReadAt(GL_COLOR_ATTACHMENT0, kSize * 3 / 4, kSize * 3 / 4), 255, 0, 0, 255))
             << "right top: the first draw, outside the clear's scissor box";
         EXPECT_TRUE(Near(ReadAt(GL_COLOR_ATTACHMENT0, kSize / 4, kSize / 8), 0, 0, 255, 255))

@@ -31,8 +31,7 @@ namespace MobileGL::MG_Impl::GLImpl {
     // specifies), and a label written with glObjectLabel comes back from glGetObjectLabel.
     void PushDebugGroup(GLenum source, GLuint id, GLsizei length, const GLchar* message);
     void PopDebugGroup();
-    void DebugMessageInsert(GLenum source, GLenum type, GLuint id, GLenum severity, GLsizei length,
-                            const GLchar* buf);
+    void DebugMessageInsert(GLenum source, GLenum type, GLuint id, GLenum severity, GLsizei length, const GLchar* buf);
     void ObjectLabel(GLenum identifier, GLuint name, GLsizei length, const GLchar* label);
     void GetObjectLabel(GLenum identifier, GLuint name, GLsizei bufSize, GLsizei* length, GLchar* label);
 

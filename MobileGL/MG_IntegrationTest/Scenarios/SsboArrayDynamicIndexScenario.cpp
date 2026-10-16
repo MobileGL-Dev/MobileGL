@@ -120,9 +120,8 @@ void main() {
                 GLuint buffer = 0;
                 glGenBuffers(1, &buffer);
                 glBindBuffer(GL_SHADER_STORAGE_BUFFER, buffer);
-                glBufferData(GL_SHADER_STORAGE_BUFFER,
-                             static_cast<GLsizeiptr>(contents.size() * sizeof(unsigned int)), contents.data(),
-                             GL_DYNAMIC_COPY);
+                glBufferData(GL_SHADER_STORAGE_BUFFER, static_cast<GLsizeiptr>(contents.size() * sizeof(unsigned int)),
+                             contents.data(), GL_DYNAMIC_COPY);
                 m_buffers.push_back(buffer);
                 return buffer;
             }

@@ -32,55 +32,55 @@
 #include <EGL/egl.h>
 
 namespace MGITest {
-namespace {
+    namespace {
 
-class DefaultScissorFollowsSurfaceScenario : public ScenarioTest {};
+        class DefaultScissorFollowsSurfaceScenario : public ScenarioTest {};
 
-TEST_F(DefaultScissorFollowsSurfaceScenario, AClearOnALargerSurfaceMadeCurrentReachesItsFarCorner) {
-    if (!Ready() || IsSkipped()) return;
-    const EGLDisplay display = eglGetCurrentDisplay();
-    const EGLSurface first = eglGetCurrentSurface(EGL_DRAW);
-    const EGLContext context = eglGetCurrentContext();
-    ASSERT_NE(display, EGL_NO_DISPLAY);
-    ASSERT_NE(first, EGL_NO_SURFACE);
-    EGLint width = 0, height = 0, configId = 0, configs = 0;
-    ASSERT_TRUE(eglQuerySurface(display, first, EGL_WIDTH, &width));
-    ASSERT_TRUE(eglQuerySurface(display, first, EGL_HEIGHT, &height));
-    ASSERT_TRUE(eglQueryContext(display, context, EGL_CONFIG_ID, &configId));
-    const EGLint pick[] = {EGL_CONFIG_ID, configId, EGL_NONE};
-    EGLConfig config = nullptr;
-    ASSERT_TRUE(eglChooseConfig(display, pick, &config, 1, &configs));
-    ASSERT_EQ(configs, 1);
+        TEST_F(DefaultScissorFollowsSurfaceScenario, AClearOnALargerSurfaceMadeCurrentReachesItsFarCorner) {
+            if (!Ready() || IsSkipped()) return;
+            const EGLDisplay display = eglGetCurrentDisplay();
+            const EGLSurface first = eglGetCurrentSurface(EGL_DRAW);
+            const EGLContext context = eglGetCurrentContext();
+            ASSERT_NE(display, EGL_NO_DISPLAY);
+            ASSERT_NE(first, EGL_NO_SURFACE);
+            EGLint width = 0, height = 0, configId = 0, configs = 0;
+            ASSERT_TRUE(eglQuerySurface(display, first, EGL_WIDTH, &width));
+            ASSERT_TRUE(eglQuerySurface(display, first, EGL_HEIGHT, &height));
+            ASSERT_TRUE(eglQueryContext(display, context, EGL_CONFIG_ID, &configId));
+            const EGLint pick[] = {EGL_CONFIG_ID, configId, EGL_NONE};
+            EGLConfig config = nullptr;
+            ASSERT_TRUE(eglChooseConfig(display, pick, &config, 1, &configs));
+            ASSERT_EQ(configs, 1);
 
-    // The first surface's size goes into the memo: a clear with the scissor test on and no box.
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    glDisable(GL_CULL_FACE);
-    glEnable(GL_SCISSOR_TEST);
-    glClearColor(1.0f, 0.0f, 0.0f, 1.0f);
-    glClear(GL_COLOR_BUFFER_BIT);
-    glFinish();
+            // The first surface's size goes into the memo: a clear with the scissor test on and no box.
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            glDisable(GL_CULL_FACE);
+            glEnable(GL_SCISSOR_TEST);
+            glClearColor(1.0f, 0.0f, 0.0f, 1.0f);
+            glClear(GL_COLOR_BUFFER_BIT);
+            glFinish();
 
-    const EGLint attribs[] = {EGL_WIDTH, width * 2, EGL_HEIGHT, height * 2, EGL_NONE};
-    const EGLSurface second = eglCreatePbufferSurface(display, config, attribs);
-    if (second == EGL_NO_SURFACE) GTEST_SKIP() << "no second pbuffer surface on this platform";
-    ASSERT_TRUE(eglMakeCurrent(display, second, second, context));
-    glViewport(0, 0, width * 2, height * 2);
-    glEnable(GL_CULL_FACE); // a capability change, so the render state is synced again for the clear
-    glClearColor(0.0f, 1.0f, 0.0f, 1.0f);
-    glClear(GL_COLOR_BUFFER_BIT);
-    std::array<GLubyte, 4> corner{};
-    glReadPixels(width * 2 - 1, height * 2 - 1, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, corner.data());
-    EXPECT_EQ(int(corner[0]), 0) << "the clear reaches the larger surface's far corner";
-    EXPECT_EQ(int(corner[1]), 255) << "the clear reaches the larger surface's far corner";
+            const EGLint attribs[] = {EGL_WIDTH, width * 2, EGL_HEIGHT, height * 2, EGL_NONE};
+            const EGLSurface second = eglCreatePbufferSurface(display, config, attribs);
+            if (second == EGL_NO_SURFACE) GTEST_SKIP() << "no second pbuffer surface on this platform";
+            ASSERT_TRUE(eglMakeCurrent(display, second, second, context));
+            glViewport(0, 0, width * 2, height * 2);
+            glEnable(GL_CULL_FACE); // a capability change, so the render state is synced again for the clear
+            glClearColor(0.0f, 1.0f, 0.0f, 1.0f);
+            glClear(GL_COLOR_BUFFER_BIT);
+            std::array<GLubyte, 4> corner{};
+            glReadPixels(width * 2 - 1, height * 2 - 1, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, corner.data());
+            EXPECT_EQ(int(corner[0]), 0) << "the clear reaches the larger surface's far corner";
+            EXPECT_EQ(int(corner[1]), 255) << "the clear reaches the larger surface's far corner";
 
-    glDisable(GL_CULL_FACE);
-    glDisable(GL_SCISSOR_TEST);
-    glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
-    ASSERT_TRUE(eglMakeCurrent(display, first, first, context));
-    glViewport(0, 0, width, height);
-    eglDestroySurface(display, second);
-    EXPECT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
-}
+            glDisable(GL_CULL_FACE);
+            glDisable(GL_SCISSOR_TEST);
+            glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+            ASSERT_TRUE(eglMakeCurrent(display, first, first, context));
+            glViewport(0, 0, width, height);
+            eglDestroySurface(display, second);
+            EXPECT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
+        }
 
-} // namespace
+    } // namespace
 } // namespace MGITest

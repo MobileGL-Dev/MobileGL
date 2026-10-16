@@ -23,7 +23,7 @@ namespace MobileGL::MG_State::GLState {
     class ITextureObject;
     class ProgramObject;
     class SamplerObject;
-}
+} // namespace MobileGL::MG_State::GLState
 
 namespace MobileGL::MG_Backend::DirectVulkan {
     class UniformManager {
@@ -40,10 +40,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // an unbound texel-buffer binding has to be built from a format the DEVICE accepts as a
         // texel buffer, and there is no other route to that answer from here.
         Bool Initialize(VkDevice device, VkPhysicalDevice physicalDevice, VkBufferManager* bufferManager,
-                        ProgramFactory* programFactory,
-                        VkDeviceSize minUniformBufferOffsetAlignment, Uint32 frameCount,
-                        Uint32 maxBindings = 16, Uint32 setsPerFrame = 64,
-                        VkTextureManager* textureManager = nullptr, VkSamplerManager* samplerManager = nullptr);
+                        ProgramFactory* programFactory, VkDeviceSize minUniformBufferOffsetAlignment, Uint32 frameCount,
+                        Uint32 maxBindings = 16, Uint32 setsPerFrame = 64, VkTextureManager* textureManager = nullptr,
+                        VkSamplerManager* samplerManager = nullptr);
         void Shutdown();
 
         void BeginFrame(Uint32 frameIndex);
@@ -95,17 +94,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             Uint64 textureLifetimeId = 0;
             Uint64 samplerLifetimeId = 0;
         };
-        static Bool SamplerOverlapsWritableImageSubresource(Int samplerBaseLevel, Int samplerMaxLevel,
-                                                             GLint imageLevel, GLenum imageAccess);
+        static Bool SamplerOverlapsWritableImageSubresource(Int samplerBaseLevel, Int samplerMaxLevel, GLint imageLevel,
+                                                            GLenum imageAccess);
         // Resolve lazy texture uploads/promotions before the caller captures the
         // command buffer passed to BindProgramUniformBuffers. Preparation may
         // submit older work, but descriptor recording must never rotate it.
         Bool PrepareWireTextureResources(const MagmaProgramSource& program,
-                                          const ProgramFactory::VkProgramObject& programObj);
-        Bool BindProgramUniformBuffers(VkCommandBuffer commandBuffer,
-                                       const MagmaProgramSource& program,
-                                       const ProgramFactory::VkProgramObject& programObj,
-                                       Uint32 frameIndex,
+                                         const ProgramFactory::VkProgramObject& programObj);
+        Bool BindProgramUniformBuffers(VkCommandBuffer commandBuffer, const MagmaProgramSource& program,
+                                       const ProgramFactory::VkProgramObject& programObj, Uint32 frameIndex,
                                        VkPipelineBindPoint bindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS);
 
         // Pure format-policy helper kept public for host regression tests. Formatted storage
@@ -154,7 +151,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         DescriptorPoolCensus GetDescriptorPoolCensus() const;
 
     private:
-
         // A cached descriptor set together with the pool it was allocated from, so a
         // layout-destroyed purge can vkFreeDescriptorSets it back and credit the
         // owning bucket's accounting.
@@ -188,8 +184,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                        components.r == other.components.r && components.g == other.components.g &&
                        components.b == other.components.b && components.a == other.components.a &&
                        range.aspectMask == other.range.aspectMask && range.baseMipLevel == other.range.baseMipLevel &&
-                       range.levelCount == other.range.levelCount && range.baseArrayLayer == other.range.baseArrayLayer &&
-                       range.layerCount == other.range.layerCount;
+                       range.levelCount == other.range.levelCount &&
+                       range.baseArrayLayer == other.range.baseArrayLayer && range.layerCount == other.range.layerCount;
             }
         };
 
@@ -222,8 +218,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // (GL 4.6 core 8.26); UNDEFINED keeps the numeric-domain R32 default. `unit` is the image
         // unit of a storage binding (what its private placeholder is private to); unused for a sampler.
         Bool ResolveWirePlaceholderImage(VkCommandBuffer commandBuffer, const MagmaProgramSource& program,
-            const ProgramFactory::VkProgramObject& programObj, Uint32 binding, Bool storage,
-            VkDescriptorImageInfo& out, VkFormat boundStorageFormat = VK_FORMAT_UNDEFINED, Uint32 unit = ~0u) const;
+                                         const ProgramFactory::VkProgramObject& programObj, Uint32 binding,
+                                         Bool storage, VkDescriptorImageInfo& out,
+                                         VkFormat boundStorageFormat = VK_FORMAT_UNDEFINED, Uint32 unit = ~0u) const;
         void DestroyWirePlaceholderImage(WirePlaceholderImage& image) const;
 
         // descriptorSetCacheByLayout is the per-frame set cache: BeginFrame rewinds every cursor, so
@@ -264,9 +261,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         VkBufferView AcquireUnboundTexelBufferView(VkFormat declaredFormat, SamplerNumericDomain numericDomain,
                                                    Bool storage);
         Bool ResolveWireImageDescriptor(VkCommandBuffer commandBuffer, const MagmaProgramSource& program,
-                                       const ProgramFactory::VkProgramObject& programObj, Uint32 binding,
-                                       Uint32 element, Bool storage, VkDescriptorImageInfo& out,
-                                       VkTextureManager::TextureResource** outResource = nullptr) const;
+                                        const ProgramFactory::VkProgramObject& programObj, Uint32 binding,
+                                        Uint32 element, Bool storage, VkDescriptorImageInfo& out,
+                                        VkTextureManager::TextureResource** outResource = nullptr) const;
         // P14: THE WIRE DESCRIPTOR REBIND. A draw whose image descriptors cannot have changed since
         // the last full resolve of the same program in the same frame - same applier context, same
         // unit / sampler / image / buffer-binding serials, same texture shutter, no texture image
@@ -301,8 +298,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                         const ProgramFactory::VkProgramObject& programObj, Uint32 frameIndex,
                                         VkPipelineBindPoint bindPoint);
         Bool ResolveWireTexelBufferDescriptor(const MagmaProgramSource& program,
-                                             const ProgramFactory::VkProgramObject& programObj, Uint32 binding,
-                                             Uint32 frameIndex, Bool storage, VkBufferView& out);
+                                              const ProgramFactory::VkProgramObject& programObj, Uint32 binding,
+                                              Uint32 frameIndex, Bool storage, VkBufferView& out);
         Uint32 m_wireFrameIndex = 0;
         VkDeviceSize m_wireStorageOffsetAlignment = 1;
         VkDeviceSize m_wireTexelOffsetAlignment = 1;
@@ -328,8 +325,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                             Uint32 element, VkDescriptorBufferInfo& outBufferInfo) const;
         // `element` indexes an image ARRAY inside one binding; each element carries its own
         // independently assigned GL image unit.
-        Bool ResolveStorageImageDescriptor(VkCommandBuffer commandBuffer,
-                                           const MagmaProgramSource& program,
+        Bool ResolveStorageImageDescriptor(VkCommandBuffer commandBuffer, const MagmaProgramSource& program,
                                            const ProgramFactory::VkProgramObject& programObj, Uint32 binding,
                                            Uint32 element, VkDescriptorImageInfo& outImageInfo) const;
         // Result of resolving a UBO binding: either a zero-copy direct bind to the app's resident
@@ -342,8 +338,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             const void* payload = nullptr;  // fallback UploadTransient path
             VkDeviceSize payloadSize = 0;
         };
-        Bool ResolveWireUniformBufferPayload(const MagmaProgramSource& program, Uint32 blockIndex,
-                                             Uint32 bindingPoint, UboBindResult& out) const;
+        Bool ResolveWireUniformBufferPayload(const MagmaProgramSource& program, Uint32 blockIndex, Uint32 bindingPoint,
+                                             UboBindResult& out) const;
         Bool ResolveUniformBufferPayload(const MagmaProgramSource& program,
                                          const ProgramFactory::VkProgramObject& programObj, Uint32 binding,
                                          Uint32 arrayElement, UboBindResult& out) const;
@@ -386,10 +382,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         void TrimFrameDescriptorPools(FrameResources& frame, Uint32 frameIndex);
         // Drops every handle this class holds to a descriptor set outside the per-layout caches.
         void InvalidateDescriptorSetMemos();
-        VkResult AllocateDescriptorSetsFromActivePool(
-            Uint32 frameIndex, const ProgramFactory::VkProgramObject& programObj, VkDescriptorSet& outDescriptorSet);
-        VkResult AcquireDescriptorSet(Uint32 frameIndex,
-                                      const ProgramFactory::VkProgramObject& programObj,
+        VkResult AllocateDescriptorSetsFromActivePool(Uint32 frameIndex,
+                                                      const ProgramFactory::VkProgramObject& programObj,
+                                                      VkDescriptorSet& outDescriptorSet);
+        VkResult AcquireDescriptorSet(Uint32 frameIndex, const ProgramFactory::VkProgramObject& programObj,
                                       VkDescriptorSet& outDescriptorSet);
 
         VkDevice m_device = VK_NULL_HANDLE;

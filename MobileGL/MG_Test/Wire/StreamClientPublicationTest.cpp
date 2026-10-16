@@ -256,8 +256,8 @@ namespace {
                     const auto flushed = peer->FlushProgress();
                     if (posted != MOBILEGL_OK || flushed != MOBILEGL_OK) {
                         std::printf("servo stopped: record=%llu post=%d flush=%d\n",
-                                    static_cast<unsigned long long>(applied),
-                                    static_cast<int>(posted), static_cast<int>(flushed));
+                                    static_cast<unsigned long long>(applied), static_cast<int>(posted),
+                                    static_cast<int>(flushed));
                         std::fflush(nullptr);
                         return;
                     }
@@ -303,8 +303,8 @@ namespace {
             MG_Pipe::MGPTextureParams params{};
             params.Res = MG_Pipe::MGPipeHandle{static_cast<Uint32>(100 + i), 1};
             Int32 status = 0;
-            (void)client.EmitAndWaitTails(MG_Pipe::MGPWireOp::SetTextureParams, &params,
-                                          sizeof params, nullptr, 0, nullptr, 0, &status, nullptr,
+            (void)client.EmitAndWaitTails(MG_Pipe::MGPWireOp::SetTextureParams, &params, sizeof params, nullptr, 0,
+                                          nullptr, 0, &status, nullptr,
                                           /*wantReply=*/false, /*willReadReply=*/true);
         }
         // DELIVER THEM. A published record reaches the peer on a flush, not on PublishAndNotify -
@@ -316,12 +316,12 @@ namespace {
         // be behind. The servo posts them synchronously, and the reader is a thread on a socketpair,
         // so the settlement is a wait on the servo's own count plus one scheduling slice.
         const auto settled = std::chrono::steady_clock::now() + std::chrono::seconds(2);
-        while (answered.load(std::memory_order_acquire) < 13 &&
-               std::chrono::steady_clock::now() < settled)
+        while (answered.load(std::memory_order_acquire) < 13 && std::chrono::steady_clock::now() < settled)
             std::this_thread::yield();
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
         ASSERT_GE(answered.load(), 13u) << "the peer did not answer the crowding records";
-        for (Int32 i = 1; i < kCreates; ++i) create(i);
+        for (Int32 i = 1; i < kCreates; ++i)
+            create(i);
         const std::uint64_t taken = Client::ClientCreateWindowTaken() - takenBefore;
         const Uint32 pending = Client::ClientCreateWindowPending();
         // THE PROPERTY THE DEVICE MEASURED AS BROKEN: `Taken` counts the answers the drain has

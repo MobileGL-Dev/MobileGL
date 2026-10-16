@@ -139,10 +139,10 @@ namespace MobileGL {
                     return TextureInternalFormat::RGBA16;
                 default:
                     MGLOG_W_ONCE("%s: Can't infer sized internal format from internalformat=%s, format=%s, type=%s, "
-                            "returning original.",
-                            __func__, MG_Util::ConvertTextureInternalFormatToString(internalformat).c_str(),
-                            MG_Util::ConvertTextureInputFormatToString(format).c_str(),
-                            MG_Util::ConvertTexturePixelDataTypeToString(type).c_str());
+                                 "returning original.",
+                                 __func__, MG_Util::ConvertTextureInternalFormatToString(internalformat).c_str(),
+                                 MG_Util::ConvertTextureInputFormatToString(format).c_str(),
+                                 MG_Util::ConvertTexturePixelDataTypeToString(type).c_str());
                     return internalformat;
                 }
             }
@@ -152,10 +152,10 @@ namespace MobileGL {
                     return TextureInternalFormat::RGB8;
                 default:
                     MGLOG_W_ONCE("%s: Can't infer sized internal format from internalformat=%s, format=%s, type=%s, "
-                            "returning original.",
-                            __func__, MG_Util::ConvertTextureInternalFormatToString(internalformat).c_str(),
-                            MG_Util::ConvertTextureInputFormatToString(format).c_str(),
-                            MG_Util::ConvertTexturePixelDataTypeToString(type).c_str());
+                                 "returning original.",
+                                 __func__, MG_Util::ConvertTextureInternalFormatToString(internalformat).c_str(),
+                                 MG_Util::ConvertTextureInputFormatToString(format).c_str(),
+                                 MG_Util::ConvertTexturePixelDataTypeToString(type).c_str());
                     return internalformat;
                 }
             }
@@ -167,10 +167,10 @@ namespace MobileGL {
                     return TextureInternalFormat::RG16;
                 default:
                     MGLOG_W_ONCE("%s: Can't infer sized internal format from internalformat=%s, format=%s, type=%s, "
-                            "returning original.",
-                            __func__, MG_Util::ConvertTextureInternalFormatToString(internalformat).c_str(),
-                            MG_Util::ConvertTextureInputFormatToString(format).c_str(),
-                            MG_Util::ConvertTexturePixelDataTypeToString(type).c_str());
+                                 "returning original.",
+                                 __func__, MG_Util::ConvertTextureInternalFormatToString(internalformat).c_str(),
+                                 MG_Util::ConvertTextureInputFormatToString(format).c_str(),
+                                 MG_Util::ConvertTexturePixelDataTypeToString(type).c_str());
                     return internalformat;
                 }
             }
@@ -182,10 +182,10 @@ namespace MobileGL {
                     return TextureInternalFormat::R16;
                 default:
                     MGLOG_W_ONCE("%s: Can't infer sized internal format from internalformat=%s, format=%s, type=%s, "
-                            "returning original.",
-                            __func__, MG_Util::ConvertTextureInternalFormatToString(internalformat).c_str(),
-                            MG_Util::ConvertTextureInputFormatToString(format).c_str(),
-                            MG_Util::ConvertTexturePixelDataTypeToString(type).c_str());
+                                 "returning original.",
+                                 __func__, MG_Util::ConvertTextureInternalFormatToString(internalformat).c_str(),
+                                 MG_Util::ConvertTextureInputFormatToString(format).c_str(),
+                                 MG_Util::ConvertTexturePixelDataTypeToString(type).c_str());
                     return internalformat;
                 }
             }
@@ -217,11 +217,12 @@ namespace MobileGL {
                 }
             }
             default: {
-                MGLOG_W_ONCE("%s: Can't infer sized internal format from internalformat=%s, format=%s, type=%s, returning "
-                        "original.",
-                        __func__, MG_Util::ConvertTextureInternalFormatToString(internalformat).c_str(),
-                        MG_Util::ConvertTextureInputFormatToString(format).c_str(),
-                        MG_Util::ConvertTexturePixelDataTypeToString(type).c_str());
+                MGLOG_W_ONCE(
+                    "%s: Can't infer sized internal format from internalformat=%s, format=%s, type=%s, returning "
+                    "original.",
+                    __func__, MG_Util::ConvertTextureInternalFormatToString(internalformat).c_str(),
+                    MG_Util::ConvertTextureInputFormatToString(format).c_str(),
+                    MG_Util::ConvertTexturePixelDataTypeToString(type).c_str());
                 return internalformat;
             }
             }
@@ -311,7 +312,7 @@ namespace MobileGL {
                 return TextureInternalFormat::DepthStencil;
             default:
                 MGLOG_W_ONCE("%s: Unknown or unhandled internal format %s, returning original.", __func__,
-                        MG_Util::ConvertTextureInternalFormatToString(internalformat).c_str());
+                             MG_Util::ConvertTextureInternalFormatToString(internalformat).c_str());
                 return internalformat;
             }
         }

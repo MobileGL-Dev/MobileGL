@@ -121,7 +121,11 @@ namespace MobileGL::MG_Remote::Client {
     // (before ClientSession::Start, or on the server role's own thread) means keep the context on
     // the client's books alone. Refused is a server answer: eglCreateContext then returns
     // EGL_NO_CONTEXT, because the server would refuse that context's first bind_context.
-    enum class ContextFrameEmit : Uint8 { Sent, NoWire, Refused };
+    enum class ContextFrameEmit : Uint8 {
+        Sent,
+        NoWire,
+        Refused
+    };
     ContextFrameEmit SendCreateContextFrame(Uint64 clientContextToken, Uint64 shareGroupToken, Uint32 flags);
     // A destroy has the same three answers; the client's EGL book is dropped either way (that is
     // the caller's own state machine), and what a refusal changes is only what the server holds.
@@ -153,7 +157,11 @@ namespace MobileGL::MG_Remote::Client {
     // third is NOT folded into the second: a server role with no wire at all - a ServerLoop
     // fixture's shape, never a real split's - still has a server loop the caller delivers to,
     // where a handle that never existed has nothing to deliver.
-    enum class ObjectDeathEmit : Uint8 { Emitted, NoHandle, NoSession };
+    enum class ObjectDeathEmit : Uint8 {
+        Emitted,
+        NoHandle,
+        NoSession
+    };
     ObjectDeathEmit EmitObjectDeathRecord(MG_Pipe::MGPipeKind kind, Uint64 lifetimeId);
 
 } // namespace MobileGL::MG_Remote::Client

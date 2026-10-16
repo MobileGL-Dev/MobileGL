@@ -36,9 +36,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         VkBufferObject& operator=(VkBufferObject&& other) noexcept;
 
         Bool Create(const VkBufferObjectDesc& desc);
-        Bool Create(VmaAllocator allocator, VkDeviceSize size, VkBufferUsageFlags usage,
-                    VmaMemoryUsage memoryUsage, VmaAllocationCreateFlags allocationFlags = 0,
-                    VkMemoryPropertyFlags requiredFlags = 0);
+        Bool Create(VmaAllocator allocator, VkDeviceSize size, VkBufferUsageFlags usage, VmaMemoryUsage memoryUsage,
+                    VmaAllocationCreateFlags allocationFlags = 0, VkMemoryPropertyFlags requiredFlags = 0);
         void Destroy();
 
         void* Map();
@@ -76,8 +75,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // the memory and drops `ahb` - which is why the store goes through the wire arm's
         // serial-gated deferred release like every other: the AHardwareBuffer is let go only once
         // no submission can still name it. `coherent` = the memory type is HOST_COHERENT.
-        void AdoptExternal(VkDevice device, VkBuffer buffer, VkDeviceMemory memory, VkDeviceSize size,
-                           void* mapped, Bool coherent, void* ahb);
+        void AdoptExternal(VkDevice device, VkBuffer buffer, VkDeviceMemory memory, VkDeviceSize size, void* mapped,
+                           Bool coherent, void* ahb);
         Bool IsExternal() const { return m_externalMemory != VK_NULL_HANDLE; }
 
     private:

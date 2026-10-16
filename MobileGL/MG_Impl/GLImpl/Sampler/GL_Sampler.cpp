@@ -119,8 +119,8 @@ namespace MobileGL::MG_Impl::GLImpl {
     // both to the same setter - which is what this file used to do - meant glSamplerParameteriv
     // stored raw integers (so a border of 255 became float 255.0 instead of the spec's ~1.19e-7)
     // and glSamplerParameterIiv lost the fact that it was ever an integer at all.
-    void SetSamplerParam_State(GLuint sampler, GLenum pname, const void* param, bool isFloat,
-                               bool isUnsignedInteger, bool isIntegerCommand) {
+    void SetSamplerParam_State(GLuint sampler, GLenum pname, const void* param, bool isFloat, bool isUnsignedInteger,
+                               bool isIntegerCommand) {
         if (param == nullptr) return;
         if (!SamplerImpl::ValidateSamplerName(sampler)) return;
 
@@ -203,8 +203,8 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
     }
 
-    void GetSamplerParam_State(GLuint sampler, GLenum pname, void* params, bool isFloat,
-                               bool isUnsignedInteger, bool isIntegerCommand) {
+    void GetSamplerParam_State(GLuint sampler, GLenum pname, void* params, bool isFloat, bool isUnsignedInteger,
+                               bool isIntegerCommand) {
         if (params == nullptr) return;
         if (!SamplerImpl::ValidateSamplerName(sampler)) return;
 
@@ -239,14 +239,14 @@ namespace MobileGL::MG_Impl::GLImpl {
                              MG_Util::ConvertSamplerWrapModeToGLEnum(samplerObj->GetWrapR()));
             break;
         case GL_TEXTURE_MIN_FILTER:
-            StoreSamplerEnum(params, isFloat, isUnsignedInteger,
-                             MG_Util::ConvertSamplerFilterModeToGLEnum(samplerObj->GetMinFilter(),
-                                                                       samplerObj->GetMipmapMode()));
+            StoreSamplerEnum(
+                params, isFloat, isUnsignedInteger,
+                MG_Util::ConvertSamplerFilterModeToGLEnum(samplerObj->GetMinFilter(), samplerObj->GetMipmapMode()));
             break;
         case GL_TEXTURE_MAG_FILTER:
-            StoreSamplerEnum(params, isFloat, isUnsignedInteger,
-                             MG_Util::ConvertSamplerFilterModeToGLEnum(samplerObj->GetMagFilter(),
-                                                                       SamplerMipmapMode::None));
+            StoreSamplerEnum(
+                params, isFloat, isUnsignedInteger,
+                MG_Util::ConvertSamplerFilterModeToGLEnum(samplerObj->GetMagFilter(), SamplerMipmapMode::None));
             break;
         case GL_TEXTURE_MIN_LOD:
             StoreSamplerScalar(params, isFloat, isUnsignedInteger, samplerObj->GetMinLod());

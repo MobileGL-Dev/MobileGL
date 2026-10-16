@@ -65,13 +65,18 @@ void main() { o0 = vColor; }
                                                  << "), want (" << r << ", " << g << ", " << b << ")";
         }
 
-        Rgba8 At(int x, int y) { return ReadPixelsRect(x, y, 1, 1).At(0, 0); }
+        Rgba8 At(int x, int y) {
+            return ReadPixelsRect(x, y, 1, 1).At(0, 0);
+        }
 
         // Quad positions (x0..x1 by full height) as a triangle strip.
-        std::vector<float> Quad(float x0, float x1) { return {x0, 0.0f, x1, 0.0f, x0, 1.0f, x1, 1.0f}; }
+        std::vector<float> Quad(float x0, float x1) {
+            return {x0, 0.0f, x1, 0.0f, x0, 1.0f, x1, 1.0f};
+        }
         std::vector<float> Colors(float r, float g, float b) {
             std::vector<float> c;
-            for (int i = 0; i < 4; ++i) c.insert(c.end(), {r, g, b, 1.0f});
+            for (int i = 0; i < 4; ++i)
+                c.insert(c.end(), {r, g, b, 1.0f});
             return c;
         }
 
@@ -104,7 +109,8 @@ void main() { o0 = vColor; }
             GLuint b = 0;
             glGenBuffers(1, &b);
             glBindBuffer(GL_ARRAY_BUFFER, b);
-            glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(data.size() * sizeof(float)), data.data(), GL_STATIC_DRAW);
+            glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(data.size() * sizeof(float)), data.data(),
+                         GL_STATIC_DRAW);
             return b;
         }
 
@@ -211,7 +217,9 @@ void main() { o0 = vColor; }
         const GLuint pos = Buffer(Quad(0.0f, 0.5f));
         // Per-vertex: 4 x red. Per-instance (divisor 1): instance 0 red, instance 1 green.
         std::vector<float> c = Colors(1.0f, 0.0f, 0.0f);
-        c[4] = 0.0f; c[5] = 1.0f; c[6] = 0.0f; // second element green
+        c[4] = 0.0f;
+        c[5] = 1.0f;
+        c[6] = 0.0f; // second element green
         const GLuint colors = Buffer(c);
         glBindBuffer(GL_ARRAY_BUFFER, pos);
         glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, nullptr);

@@ -43,12 +43,11 @@ using namespace MobileGL;
 using namespace MobileGL::MG_Impl::GLImpl;
 
 namespace {
-    class TessellationLinkTest: public ::testing::Test {
+    class TessellationLinkTest : public ::testing::Test {
     protected:
         void SetUp() override {
             MobileGL::Initialize();
-            for (int i = 0; i < 32 && GetError() != GL_NO_ERROR; ++i) {
-            }
+            for (int i = 0; i < 32 && GetError() != GL_NO_ERROR; ++i) {}
         }
     };
 
@@ -77,7 +76,7 @@ namespace {
         if (separable) {
             ProgramParameteri(program, GL_PROGRAM_SEPARABLE, GL_TRUE);
         }
-        for (const auto& [type, source]: stages) {
+        for (const auto& [type, source] : stages) {
             const GLuint shader = CreateShader(type);
             ShaderSource(shader, 1, &source, nullptr);
             CompileShader(shader);
@@ -157,8 +156,7 @@ void main() { color = vec4(1.0); }
         LinkProgram(program);
         EXPECT_EQ(Programiv(program, GL_LINK_STATUS), GL_FALSE);
         EXPECT_NE(LinkLog(program).find("no vertex-processing stage"), std::string::npos) << LinkLog(program);
-        for (int i = 0; i < 32 && GetError() != GL_NO_ERROR; ++i) {
-        }
+        for (int i = 0; i < 32 && GetError() != GL_NO_ERROR; ++i) {}
     }
 
     constexpr const char* kPassthroughVs = R"(#version 460 core
@@ -217,8 +215,7 @@ void main() {
             LinkProgram(program);
             EXPECT_EQ(Programiv(program, GL_LINK_STATUS), GL_FALSE) << LinkLog(program);
         }
-        for (int i = 0; i < 32 && GetError() != GL_NO_ERROR; ++i) {
-        }
+        for (int i = 0; i < 32 && GetError() != GL_NO_ERROR; ++i) {}
     }
 
     // A patch-qualified SCALAR crosses the TCS/TES boundary today. It is the control for the
@@ -270,10 +267,9 @@ void main() {
     gl_Position = gl_in[0].gl_Position;
 }
 )";
-        const GLuint program = MakeProgram({{GL_VERTEX_SHADER, kPassthroughVs},
-                                            {GL_TESS_CONTROL_SHADER, tcs},
-                                            {GL_TESS_EVALUATION_SHADER, tes}},
-                                           /*separable=*/true);
+        const GLuint program = MakeProgram(
+            {{GL_VERTEX_SHADER, kPassthroughVs}, {GL_TESS_CONTROL_SHADER, tcs}, {GL_TESS_EVALUATION_SHADER, tes}},
+            /*separable=*/true);
         LinkProgram(program);
         const std::string log = LinkLog(program);
         ASSERT_EQ(Programiv(program, GL_LINK_STATUS), GL_TRUE)

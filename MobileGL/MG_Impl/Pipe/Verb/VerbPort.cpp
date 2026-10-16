@@ -55,7 +55,8 @@ namespace MobileGL::MG_Record {
         // The same shape as MGPipeInputPoisonFatal (generated/PipeFilled.inc:407-413): names the
         // slot, live at every log level, aborts. Deliberately NOT MOBILEGL_ASSERT, which is
         // inert in an INFO build - and INFO is what every device lane runs.
-        MG_Pipe::MGPipeRecordFail(MG_Pipe::MGFatalFamily::UnmigratedVerb, "MGPipe: Fatal{UnmigratedVerb, \"%s\"}", slot);
+        MG_Pipe::MGPipeRecordFail(MG_Pipe::MGFatalFamily::UnmigratedVerb, "MGPipe: Fatal{UnmigratedVerb, \"%s\"}",
+                                  slot);
     }
 
     // A verb that reads buffers but starts no shader: clear, blit, readback, present. The
@@ -122,8 +123,7 @@ namespace MobileGL::MG_Record {
         // whole strides plus SKIP_PIXELS pixels, and only `width * bytesPerPixel` bytes of each
         // stride are written - the gaps belong to the application and are never touched. That
         // last clause is what the control checks with a sentinel.
-        Bool ReadbackPackStateIsTight(GLsizei width, Uint64 bytesPerPixel,
-                                      const PixelStoreParameters& pack) {
+        Bool ReadbackPackStateIsTight(GLsizei width, Uint64 bytesPerPixel, const PixelStoreParameters& pack) {
             // SKIP_IMAGES (and IMAGE_HEIGHT) are NOT consulted: glReadPixels is a 2-D read and GL
             // ignores the image-level pack parameters for it, exactly as the monolith conversion
             // path does in ReadPixels (DirectGLESReadback.cpp, honorPackImageParams=false). A non-zero
@@ -161,7 +161,6 @@ namespace MobileGL::MG_Record {
             }
             return g_verbSessionResolver(slot);
         }
-
 
         // ---- P13 W4: THE MONOLITH VERB PORT ----------------------------------------------
         //
@@ -304,9 +303,9 @@ namespace MobileGL::MG_Record {
         public:
             explicit VerbChannel(VerbSession* session) : m_session(session) {}
 
-            Uint64 EmitAndWait(MG_Pipe::MGPWireOp op, const void* payload, Uint64 payloadBytes,
-                               const void* varTail, Uint64 varTailBytes, void* replyOut, Uint64 replyBytes,
-                               Int32* statusOut, Uint64* replySizeOut = nullptr) {
+            Uint64 EmitAndWait(MG_Pipe::MGPWireOp op, const void* payload, Uint64 payloadBytes, const void* varTail,
+                               Uint64 varTailBytes, void* replyOut, Uint64 replyBytes, Int32* statusOut,
+                               Uint64* replySizeOut = nullptr) {
                 if (m_session != nullptr) {
                     return m_session->EmitAndWait(op, payload, payloadBytes, varTail, varTailBytes, replyOut,
                                                   replyBytes, statusOut, replySizeOut);
@@ -316,8 +315,8 @@ namespace MobileGL::MG_Record {
                 return 0;
             }
             Uint64 EmitAndWaitTails(MG_Pipe::MGPWireOp op, const void* payload, Uint64 payloadBytes,
-                                    const MG_Pipe::MGPipeVerbTail* tails, Uint32 tailCount, void* replyOut, Uint64 replyBytes,
-                                    Int32* statusOut, Uint64* replySizeOut = nullptr) {
+                                    const MG_Pipe::MGPipeVerbTail* tails, Uint32 tailCount, void* replyOut,
+                                    Uint64 replyBytes, Int32* statusOut, Uint64* replySizeOut = nullptr) {
                 if (m_session != nullptr) {
                     return m_session->EmitAndWaitTails(op, payload, payloadBytes, tails, tailCount, replyOut,
                                                        replyBytes, statusOut, replySizeOut);
@@ -341,15 +340,15 @@ namespace MobileGL::MG_Record {
             }
 
         private:
-            void Port(MG_Pipe::MGPWireOp op, const void* payload, const MG_Pipe::MGPipeVerbTail* tails, Uint32 tailCount,
-                      void* replyOut, Uint64 replyBytes, Int32* statusOut, Uint64* replySizeOut) {
+            void Port(MG_Pipe::MGPWireOp op, const void* payload, const MG_Pipe::MGPipeVerbTail* tails,
+                      Uint32 tailCount, void* replyOut, Uint64 replyBytes, Int32* statusOut, Uint64* replySizeOut) {
                 MonolithReplySink replies(replyOut, replyBytes);
                 const Bool applied = ApplyOnMonolithPort(op, payload, tails, tailCount, &replies);
                 // A sink that declined without answering is the decoder's DECLINED; an answer it
                 // posted is the answer, whatever the return.
-                const Int32 status = replies.Posted()
-                                         ? replies.Status()
-                                         : (applied ? MG_Pipe::MGPipeReplySink::kStatusOk : MG_Pipe::MGPipeReplySink::kStatusDeclined);
+                const Int32 status = replies.Posted() ? replies.Status()
+                                                      : (applied ? MG_Pipe::MGPipeReplySink::kStatusOk
+                                                                 : MG_Pipe::MGPipeReplySink::kStatusDeclined);
                 if (statusOut != nullptr) *statusOut = status;
                 if (replySizeOut != nullptr) *replySizeOut = replies.Posted() ? replies.Size() : 0;
                 if (!applied && replyOut == nullptr) {
@@ -397,15 +396,12 @@ namespace MobileGL::MG_Record {
             record.DrawBufferIndex = -1;
             record.BufferMask = static_cast<Uint32>(mask);
             record.ValueClass = 0;
-            session.EmitAndWait(MG_Pipe::MGPWireOp::Clear, &record, sizeof(record), nullptr, 0,
-                                nullptr, 0, nullptr);
+            session.EmitAndWait(MG_Pipe::MGPWireOp::Clear, &record, sizeof(record), nullptr, 0, nullptr, 0, nullptr);
         }
 
-
         // ---- f1: verbatim clear/copy/mipmap records (CONTRACT-P5B §2) ----
-        void EmitF1Clear(const char* slot, MG_Pipe::MGPipeHandle fbo, GLenum buffer,
-                         GLint drawbuffer, Uint8 valueClass, const void* value,
-                         GLfloat depth = 0, GLint stencil = 0) {
+        void EmitF1Clear(const char* slot, MG_Pipe::MGPipeHandle fbo, GLenum buffer, GLint drawbuffer, Uint8 valueClass,
+                         const void* value, GLfloat depth = 0, GLint stencil = 0) {
             VerbChannel session = ChannelFor(slot);
             BeforeReadOnlyVerb();
             MG_Pipe::MGPClear record{};
@@ -430,58 +426,59 @@ namespace MobileGL::MG_Record {
                 record.DepthValue = depth;
                 record.StencilValue = stencil;
                 break;
-            default: UnmigratedVerbFatal(slot);
+            default:
+                UnmigratedVerbFatal(slot);
             }
-            session.EmitAndWait(MG_Pipe::MGPWireOp::Clear, &record, sizeof(record),
-                                nullptr, 0, nullptr, 0, nullptr);
+            session.EmitAndWait(MG_Pipe::MGPWireOp::Clear, &record, sizeof(record), nullptr, 0, nullptr, 0, nullptr);
         }
 
         void EmitClearBufferfv(GLenum buffer, GLint drawbuffer, const GLfloat* value) {
             EmitF1Clear("ClearBufferfv", MG_Pipe::kMGPipeNullHandle, buffer, drawbuffer,
                         MG_Pipe::kMGPipeClearValueClassFloat, value);
         }
-        void EmitClearNamedFramebufferfv(const SharedPtr<MG_State::GLState::FramebufferObject>& fbo,
-                                               GLenum buffer, GLint drawbuffer, const GLfloat* value) {
-            EmitF1Clear("ClearNamedFramebufferfv", MG_Pipe::MGPipeFramebufferEmitter::HandleFor(*fbo),
-                        buffer, drawbuffer, MG_Pipe::kMGPipeClearValueClassFloat, value);
+        void EmitClearNamedFramebufferfv(const SharedPtr<MG_State::GLState::FramebufferObject>& fbo, GLenum buffer,
+                                         GLint drawbuffer, const GLfloat* value) {
+            EmitF1Clear("ClearNamedFramebufferfv", MG_Pipe::MGPipeFramebufferEmitter::HandleFor(*fbo), buffer,
+                        drawbuffer, MG_Pipe::kMGPipeClearValueClassFloat, value);
         }
 
         void EmitClearBufferiv(GLenum buffer, GLint drawbuffer, const GLint* value) {
             EmitF1Clear("ClearBufferiv", MG_Pipe::kMGPipeNullHandle, buffer, drawbuffer,
                         MG_Pipe::kMGPipeClearValueClassInt, value);
         }
-        void EmitClearNamedFramebufferiv(const SharedPtr<MG_State::GLState::FramebufferObject>& fbo,
-                                               GLenum buffer, GLint drawbuffer, const GLint* value) {
-            EmitF1Clear("ClearNamedFramebufferiv", MG_Pipe::MGPipeFramebufferEmitter::HandleFor(*fbo),
-                        buffer, drawbuffer, MG_Pipe::kMGPipeClearValueClassInt, value);
+        void EmitClearNamedFramebufferiv(const SharedPtr<MG_State::GLState::FramebufferObject>& fbo, GLenum buffer,
+                                         GLint drawbuffer, const GLint* value) {
+            EmitF1Clear("ClearNamedFramebufferiv", MG_Pipe::MGPipeFramebufferEmitter::HandleFor(*fbo), buffer,
+                        drawbuffer, MG_Pipe::kMGPipeClearValueClassInt, value);
         }
 
         void EmitClearBufferuiv(GLenum buffer, GLint drawbuffer, const GLuint* value) {
             EmitF1Clear("ClearBufferuiv", MG_Pipe::kMGPipeNullHandle, buffer, drawbuffer,
                         MG_Pipe::kMGPipeClearValueClassUint, value);
         }
-        void EmitClearNamedFramebufferuiv(const SharedPtr<MG_State::GLState::FramebufferObject>& fbo,
-                                               GLenum buffer, GLint drawbuffer, const GLuint* value) {
-            EmitF1Clear("ClearNamedFramebufferuiv", MG_Pipe::MGPipeFramebufferEmitter::HandleFor(*fbo),
-                        buffer, drawbuffer, MG_Pipe::kMGPipeClearValueClassUint, value);
+        void EmitClearNamedFramebufferuiv(const SharedPtr<MG_State::GLState::FramebufferObject>& fbo, GLenum buffer,
+                                          GLint drawbuffer, const GLuint* value) {
+            EmitF1Clear("ClearNamedFramebufferuiv", MG_Pipe::MGPipeFramebufferEmitter::HandleFor(*fbo), buffer,
+                        drawbuffer, MG_Pipe::kMGPipeClearValueClassUint, value);
         }
 
         void EmitClearBufferfi(GLenum buffer, GLint drawbuffer, GLfloat depth, GLint stencil) {
             EmitF1Clear("ClearBufferfi", MG_Pipe::kMGPipeNullHandle, buffer, drawbuffer,
                         MG_Pipe::kMGPipeClearValueClassFloat, nullptr, depth, stencil);
         }
-        void EmitClearNamedFramebufferfi(const SharedPtr<MG_State::GLState::FramebufferObject>& fbo,
-                                         GLenum buffer, GLint drawbuffer, GLfloat depth, GLint stencil) {
-            EmitF1Clear("ClearNamedFramebufferfi", MG_Pipe::MGPipeFramebufferEmitter::HandleFor(*fbo),
-                        buffer, drawbuffer, MG_Pipe::kMGPipeClearValueClassFloat, nullptr, depth, stencil);
+        void EmitClearNamedFramebufferfi(const SharedPtr<MG_State::GLState::FramebufferObject>& fbo, GLenum buffer,
+                                         GLint drawbuffer, GLfloat depth, GLint stencil) {
+            EmitF1Clear("ClearNamedFramebufferfi", MG_Pipe::MGPipeFramebufferEmitter::HandleFor(*fbo), buffer,
+                        drawbuffer, MG_Pipe::kMGPipeClearValueClassFloat, nullptr, depth, stencil);
         }
         const SharedPtr<MG_State::GLState::ITextureObject>& F1BoundTexture(GLenum target) {
             auto& ctx = *MG_State::pGLContext;
             return ctx.GetTextureUnitObject(ctx.GetActiveTextureUnit())
-                .GetBindingSlot(MG_Util::ConvertGLEnumToTextureTarget(target)).GetBoundObject();
+                .GetBindingSlot(MG_Util::ConvertGLEnumToTextureTarget(target))
+                .GetBoundObject();
         }
-        void EmitF1Copy(GLenum target, GLint level, GLenum format, GLint x, GLint y,
-                        GLsizei width, GLsizei height, GLint xoffset, GLint yoffset, Bool subImage) {
+        void EmitF1Copy(GLenum target, GLint level, GLenum format, GLint x, GLint y, GLsizei width, GLsizei height,
+                        GLint xoffset, GLint yoffset, Bool subImage) {
             VerbChannel session = ChannelFor(subImage ? "CopyTexSubImage2D" : "CopyTexImage2D");
             BeforeReadOnlyVerb();
             MG_Pipe::MGPCopyFromFramebuffer record{};
@@ -489,19 +486,22 @@ namespace MobileGL::MG_Record {
             record.Target = static_cast<Uint32>(target);
             record.Level = level;
             record.InternalFormat = format;
-            record.X = x; record.Y = y;
-            record.Width = width; record.Height = height;
-            record.XOffset = xoffset; record.YOffset = yoffset;
+            record.X = x;
+            record.Y = y;
+            record.Width = width;
+            record.Height = height;
+            record.XOffset = xoffset;
+            record.YOffset = yoffset;
             record.SubImage = subImage;
-            session.EmitAndWait(MG_Pipe::MGPWireOp::CopyFramebufferToTexture, &record, sizeof(record),
-                                nullptr, 0, nullptr, 0, nullptr);
+            session.EmitAndWait(MG_Pipe::MGPWireOp::CopyFramebufferToTexture, &record, sizeof(record), nullptr, 0,
+                                nullptr, 0, nullptr);
         }
-        void EmitCopyTexImage2D(GLenum target, GLint level, GLenum format, GLint x, GLint y,
-                                GLsizei width, GLsizei height, GLint) {
+        void EmitCopyTexImage2D(GLenum target, GLint level, GLenum format, GLint x, GLint y, GLsizei width,
+                                GLsizei height, GLint) {
             EmitF1Copy(target, level, format, x, y, width, height, 0, 0, false);
         }
-        void EmitCopyTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset,
-                                   GLint x, GLint y, GLsizei width, GLsizei height) {
+        void EmitCopyTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint x, GLint y,
+                                   GLsizei width, GLsizei height) {
             EmitF1Copy(target, level, 0, x, y, width, height, xoffset, yoffset, true);
         }
         void EmitGenerateMipmap(GLenum target) {
@@ -514,20 +514,20 @@ namespace MobileGL::MG_Record {
             record.BaseLevel = texture->GetLevelRange().x();
             const auto* mipmap = dynamic_cast<const MG_State::GLState::TextureObjectMipmap*>(texture.get());
             if (mipmap && !texture->GetUploadTargets().empty()) {
-                const auto plan = MG_Impl::GLImpl::ComputeMipmapGenerationRange(*mipmap, texture->GetUploadTargets()[0]);
+                const auto plan =
+                    MG_Impl::GLImpl::ComputeMipmapGenerationRange(*mipmap, texture->GetUploadTargets()[0]);
                 // LevelCount is the logical end-exclusive, not the number of
                 // levels following BaseLevel. Preserve that existing carrier.
                 record.LevelCount = static_cast<Uint16>(std::min<Uint>(plan.End, mipmap->GetMipmapLevelCount()));
             }
-            session.EmitAndWait(MG_Pipe::MGPWireOp::GenerateMipmap, &record, sizeof(record),
-                                nullptr, 0, nullptr, 0, nullptr);
+            session.EmitAndWait(MG_Pipe::MGPWireOp::GenerateMipmap, &record, sizeof(record), nullptr, 0, nullptr, 0,
+                                nullptr);
         }
 
         // All draw entry points share the owned-input preparation and emission below.
         [[noreturn]] void RefuseDrawByName(const char* slot, const char* qualifier);
-        void EmitDrawRecord(const char* slot, MG_Pipe::MGPDrawInfo& info,
-                            const MG_Pipe::MGPDrawRange* ranges, Uint32 numDraws,
-                            const void* clientIndices, Uint64 clientIndexBytes,
+        void EmitDrawRecord(const char* slot, MG_Pipe::MGPDrawInfo& info, const MG_Pipe::MGPDrawRange* ranges,
+                            Uint32 numDraws, const void* clientIndices, Uint64 clientIndexBytes,
                             const MG_Pipe::MGPDrawIndirect* indirect);
 
         // Does the bound VAO fetch any ENABLED attribute out of the application's own memory.
@@ -638,9 +638,8 @@ namespace MobileGL::MG_Record {
         // The one emission for all nineteen. `clientIndices`/`clientIndexBytes` name a client
         // index array to stage (no element buffer bound); `indirect` is the kDrawIsIndirect
         // block. The two are exclusive by construction here and by the layout on both sides.
-        void EmitDrawRecord(const char* slot, MG_Pipe::MGPDrawInfo& info,
-                            const MG_Pipe::MGPDrawRange* ranges, Uint32 numDraws,
-                            const void* clientIndices, Uint64 clientIndexBytes,
+        void EmitDrawRecord(const char* slot, MG_Pipe::MGPDrawInfo& info, const MG_Pipe::MGPDrawRange* ranges,
+                            Uint32 numDraws, const void* clientIndices, Uint64 clientIndexBytes,
                             const MG_Pipe::MGPDrawIndirect* indirect) {
             VerbChannel session = ChannelFor(slot);
             MG_Record::PersistentMapTracker::Instance().PushDrawConsumers();
@@ -652,8 +651,10 @@ namespace MobileGL::MG_Record {
                 if (MG_State::pGLContext == nullptr) RefuseDrawByName(slot, "NO_CONTEXT");
                 ownedInputs = MakeUnique<MG_Pipe::MGPipeOwnedDrawInputs>(*MG_State::pGLContext);
                 if (!ownedInputs->Prepare(info, ranges, numDraws, clientIndices, clientIndexBytes, indirect)) {
-                    MG_State::pGLContext->RecordError(ErrorCode::InvalidOperation,
-                        MakeUnique<GenericErrorInfo>("MG_Remote/Client", slot,
+                    MG_State::pGLContext->RecordError(
+                        ErrorCode::InvalidOperation,
+                        MakeUnique<GenericErrorInfo>(
+                            "MG_Remote/Client", slot,
                             "the client vertex/index fetch range cannot be represented by its storage"));
                     return;
                 }
@@ -670,27 +671,26 @@ namespace MobileGL::MG_Record {
 
             info.NumDraws = numDraws;
             MG_Pipe::MGPipeVerbTail tails[2] = {{ranges, static_cast<Uint64>(numDraws) * sizeof(MG_Pipe::MGPDrawRange)},
-                                       {nullptr, 0}};
+                                                {nullptr, 0}};
             Uint32 tailCount = 1;
             if (indirect != nullptr) {
                 info.Flags |= MG_Pipe::kDrawIsIndirect;
                 tails[1] = {indirect, sizeof(*indirect)};
                 tailCount = 2;
             }
-            session.EmitAndWaitTails(MG_Pipe::MGPWireOp::DrawVbo, &info, sizeof(info), tails,
-                                     tailCount, nullptr, 0, nullptr);
+            session.EmitAndWaitTails(MG_Pipe::MGPWireOp::DrawVbo, &info, sizeof(info), tails, tailCount, nullptr, 0,
+                                     nullptr);
         }
 
         // ---- the single-draw indexed family: DrawElements, DrawElementsBaseVertex, the two
         // DrawRangeElements*, the four DrawElementsInstanced* -------------------------------
-        void EmitIndexedDraw(const char* slot, GLenum mode, GLsizei count, GLenum type,
-                             const void* indices, GLint baseVertex, GLsizei instanceCount,
-                             GLuint baseInstance, Bool hasRange, GLuint start, GLuint end) {
+        void EmitIndexedDraw(const char* slot, GLenum mode, GLsizei count, GLenum type, const void* indices,
+                             GLint baseVertex, GLsizei instanceCount, GLuint baseInstance, Bool hasRange, GLuint start,
+                             GLuint end) {
             const RemoteDrawBindings bindings = ReadDrawBindings();
             const Uint8 indexSize = RemoteIndexSizeFor(type);
             if (indexSize == 0) RefuseDrawByName(slot, "INDEX_TYPE");
-            MG_Pipe::MGPDrawInfo info =
-                PlanDrawInfo(mode, indexSize, instanceCount, baseInstance, 1, bindings);
+            MG_Pipe::MGPDrawInfo info = PlanDrawInfo(mode, indexSize, instanceCount, baseInstance, 1, bindings);
             if (hasRange) {
                 info.Flags |= MG_Pipe::kDrawHasIndexRange;
                 info.MinIndex = start;
@@ -714,62 +714,57 @@ namespace MobileGL::MG_Record {
         }
         void EmitDrawElementsBaseVertex(GLenum mode, GLsizei count, GLenum type, const void* indices,
                                         GLint basevertex) {
-            EmitIndexedDraw("DrawElementsBaseVertex", mode, count, type, indices, basevertex, 1, 0,
-                            false, 0, 0);
+            EmitIndexedDraw("DrawElementsBaseVertex", mode, count, type, indices, basevertex, 1, 0, false, 0, 0);
         }
         void EmitDrawRangeElements(GLenum mode, GLuint start, GLuint end, GLsizei count, GLenum type,
                                    const void* indices) {
             EmitIndexedDraw("DrawRangeElements", mode, count, type, indices, 0, 1, 0, true, start, end);
         }
-        void EmitDrawRangeElementsBaseVertex(GLenum mode, GLuint start, GLuint end, GLsizei count,
-                                             GLenum type, const void* indices, GLint basevertex) {
-            EmitIndexedDraw("DrawRangeElementsBaseVertex", mode, count, type, indices, basevertex, 1,
-                            0, true, start, end);
+        void EmitDrawRangeElementsBaseVertex(GLenum mode, GLuint start, GLuint end, GLsizei count, GLenum type,
+                                             const void* indices, GLint basevertex) {
+            EmitIndexedDraw("DrawRangeElementsBaseVertex", mode, count, type, indices, basevertex, 1, 0, true, start,
+                            end);
         }
         void EmitDrawElementsInstanced(GLenum mode, GLsizei count, GLenum type, const void* indices,
                                        GLsizei instancecount) {
-            EmitIndexedDraw("DrawElementsInstanced", mode, count, type, indices, 0, instancecount, 0,
+            EmitIndexedDraw("DrawElementsInstanced", mode, count, type, indices, 0, instancecount, 0, false, 0, 0);
+        }
+        void EmitDrawElementsInstancedBaseVertex(GLenum mode, GLsizei count, GLenum type, const void* indices,
+                                                 GLsizei instancecount, GLint basevertex) {
+            EmitIndexedDraw("DrawElementsInstancedBaseVertex", mode, count, type, indices, basevertex, instancecount, 0,
                             false, 0, 0);
         }
-        void EmitDrawElementsInstancedBaseVertex(GLenum mode, GLsizei count, GLenum type,
-                                                 const void* indices, GLsizei instancecount,
-                                                 GLint basevertex) {
-            EmitIndexedDraw("DrawElementsInstancedBaseVertex", mode, count, type, indices, basevertex,
-                            instancecount, 0, false, 0, 0);
-        }
-        void EmitDrawElementsInstancedBaseInstance(GLenum mode, GLsizei count, GLenum type,
-                                                   const void* indices, GLsizei instancecount,
-                                                   GLuint baseinstance) {
-            EmitIndexedDraw("DrawElementsInstancedBaseInstance", mode, count, type, indices, 0,
-                            instancecount, baseinstance, false, 0, 0);
+        void EmitDrawElementsInstancedBaseInstance(GLenum mode, GLsizei count, GLenum type, const void* indices,
+                                                   GLsizei instancecount, GLuint baseinstance) {
+            EmitIndexedDraw("DrawElementsInstancedBaseInstance", mode, count, type, indices, 0, instancecount,
+                            baseinstance, false, 0, 0);
         }
         void EmitDrawElementsInstancedBaseVertexBaseInstance(GLenum mode, GLsizei count, GLenum type,
                                                              const void* indices, GLsizei instancecount,
                                                              GLint basevertex, GLuint baseinstance) {
-            EmitIndexedDraw("DrawElementsInstancedBaseVertexBaseInstance", mode, count, type, indices,
-                            basevertex, instancecount, baseinstance, false, 0, 0);
+            EmitIndexedDraw("DrawElementsInstancedBaseVertexBaseInstance", mode, count, type, indices, basevertex,
+                            instancecount, baseinstance, false, 0, 0);
         }
 
         // ---- the instanced array draws ------------------------------------------------
-        void EmitArraysDraw(const char* slot, GLenum mode, GLint first, GLsizei count,
-                            GLsizei instanceCount, GLuint baseInstance) {
+        void EmitArraysDraw(const char* slot, GLenum mode, GLint first, GLsizei count, GLsizei instanceCount,
+                            GLuint baseInstance) {
             const RemoteDrawBindings bindings = ReadDrawBindings();
             MG_Pipe::MGPDrawInfo info = PlanDrawInfo(mode, 0, instanceCount, baseInstance, 1, bindings);
             MG_Pipe::MGPDrawRange range{};
-            PlanDrawRange(bindings, 0, reinterpret_cast<const void*>(static_cast<std::intptr_t>(first)),
-                          count, 0, range);
+            PlanDrawRange(bindings, 0, reinterpret_cast<const void*>(static_cast<std::intptr_t>(first)), count, 0,
+                          range);
             EmitDrawRecord(slot, info, &range, 1, nullptr, 0, nullptr);
         }
         void EmitDrawArraysInstanced(GLenum mode, GLint first, GLsizei count, GLsizei instancecount) {
             EmitArraysDraw("DrawArraysInstanced", mode, first, count, instancecount, 0);
         }
-        void EmitDrawArraysInstancedBaseInstance(GLenum mode, GLint first, GLsizei count,
-                                                 GLsizei instancecount, GLuint baseinstance) {
+        void EmitDrawArraysInstancedBaseInstance(GLenum mode, GLint first, GLsizei count, GLsizei instancecount,
+                                                 GLuint baseinstance) {
             // The vertex-FETCH base instance already crossed in set_vertex_buffers::BaseInstance
             // at validate (D-H1: MGP_SET_BASE_INSTANCE runs before MGP_FILL); StartInstance is
             // gl_BaseInstance's value and feeds the GL call.
-            EmitArraysDraw("DrawArraysInstancedBaseInstance", mode, first, count, instancecount,
-                           baseinstance);
+            EmitArraysDraw("DrawArraysInstancedBaseInstance", mode, first, count, instancecount, baseinstance);
         }
 
         // ---- the multi-draws: MGPDrawRange[drawcount] is exactly their shape -------------
@@ -791,16 +786,14 @@ namespace MobileGL::MG_Record {
             MG_Pipe::MGPDrawInfo info = PlanDrawInfo(mode, 0, 1, 0, n, bindings);
             Vector<MG_Pipe::MGPDrawRange>& ranges = MultiDrawScratch(n);
             for (Uint32 i = 0; i < n; ++i) {
-                PlanDrawRange(bindings, 0,
-                              reinterpret_cast<const void*>(static_cast<std::intptr_t>(first[i])),
+                PlanDrawRange(bindings, 0, reinterpret_cast<const void*>(static_cast<std::intptr_t>(first[i])),
                               count[i], 0, ranges[i]);
             }
             EmitDrawRecord("MultiDrawArrays", info, ranges.data(), n, nullptr, 0, nullptr);
         }
 
         void EmitMultiIndexedDraw(const char* slot, GLenum mode, const GLsizei* count, GLenum type,
-                                  const GLvoid* const* indices, GLsizei drawcount,
-                                  const GLint* basevertex) {
+                                  const GLvoid* const* indices, GLsizei drawcount, const GLint* basevertex) {
             if (drawcount <= 0 || count == nullptr || indices == nullptr) return;
             const RemoteDrawBindings bindings = ReadDrawBindings();
             const Uint8 indexSize = RemoteIndexSizeFor(type);
@@ -810,15 +803,16 @@ namespace MobileGL::MG_Record {
             Vector<MG_Pipe::MGPDrawRange>& ranges = MultiDrawScratch(n);
             Vector<Uint8> ownedIndices;
             for (Uint32 i = 0; i < n; ++i) {
-                if (!PlanDrawRange(bindings, indexSize, indices[i], count[i],
-                                   basevertex != nullptr ? basevertex[i] : 0, ranges[i])) {
+                if (!PlanDrawRange(bindings, indexSize, indices[i], count[i], basevertex != nullptr ? basevertex[i] : 0,
+                                   ranges[i])) {
                     RefuseDrawByName(slot, "INDEX_OFFSET");
                 }
                 if (!bindings.ElementBufferBound) {
                     const Uint64 byteCount = static_cast<Uint64>(ranges[i].Count) * indexSize;
                     if (byteCount > std::numeric_limits<Uint32>::max() - ownedIndices.size() ||
                         (byteCount != 0 && indices[i] == nullptr)) {
-                        MG_State::pGLContext->RecordError(ErrorCode::InvalidOperation,
+                        MG_State::pGLContext->RecordError(
+                            ErrorCode::InvalidOperation,
                             MakeUnique<GenericErrorInfo>("MG_Remote/Client", slot, "invalid client index span"));
                         return;
                     }
@@ -831,21 +825,18 @@ namespace MobileGL::MG_Record {
             EmitDrawRecord(slot, info, ranges.data(), n, ownedIndices.empty() ? nullptr : ownedIndices.data(),
                            ownedIndices.size(), nullptr);
         }
-        void EmitMultiDrawElements(GLenum mode, const GLsizei* count, GLenum type,
-                                   const GLvoid* const* indices, GLsizei drawcount) {
+        void EmitMultiDrawElements(GLenum mode, const GLsizei* count, GLenum type, const GLvoid* const* indices,
+                                   GLsizei drawcount) {
             EmitMultiIndexedDraw("MultiDrawElements", mode, count, type, indices, drawcount, nullptr);
         }
         void EmitMultiDrawElementsBaseVertex(GLenum mode, const GLsizei* count, GLenum type,
-                                             const GLvoid* const* indices, GLsizei drawcount,
-                                             const GLint* basevertex) {
-            EmitMultiIndexedDraw("MultiDrawElementsBaseVertex", mode, count, type, indices, drawcount,
-                                 basevertex);
+                                             const GLvoid* const* indices, GLsizei drawcount, const GLint* basevertex) {
+            EmitMultiIndexedDraw("MultiDrawElementsBaseVertex", mode, count, type, indices, drawcount, basevertex);
         }
 
         // ---- the indirect family: the block is the second tail, NumDraws is 0 -------------
-        void EmitIndirectDraw(const char* slot, GLenum mode, GLenum type, const void* indirect,
-                              GLsizei drawcount, GLsizei stride, GLintptr parameterOffset,
-                              Bool hasParameterBuffer) {
+        void EmitIndirectDraw(const char* slot, GLenum mode, GLenum type, const void* indirect, GLsizei drawcount,
+                              GLsizei stride, GLintptr parameterOffset, Bool hasParameterBuffer) {
             const RemoteDrawBindings bindings = ReadDrawBindings();
             const Uint8 indexSize = type != 0 ? RemoteIndexSizeFor(type) : 0;
             if (type != 0 && indexSize == 0) RefuseDrawByName(slot, "INDEX_TYPE");
@@ -856,8 +847,8 @@ namespace MobileGL::MG_Record {
                 RefuseDrawByName(slot, "UNBOUND_PARAMETER");
             }
             MG_Pipe::MGPDrawInfo info = PlanDrawInfo(mode, indexSize, 1, 0, 0, bindings);
-            const MG_Pipe::MGPDrawIndirect block = PlanDrawIndirect(bindings, indirect, drawcount, stride,
-                                                                    parameterOffset, hasParameterBuffer);
+            const MG_Pipe::MGPDrawIndirect block =
+                PlanDrawIndirect(bindings, indirect, drawcount, stride, parameterOffset, hasParameterBuffer);
             EmitDrawRecord(slot, info, nullptr, 0, nullptr, 0, &block);
         }
         void EmitDrawArraysIndirect(GLenum mode, const void* indirect) {
@@ -866,30 +857,25 @@ namespace MobileGL::MG_Record {
         void EmitDrawElementsIndirect(GLenum mode, GLenum type, const void* indirect) {
             EmitIndirectDraw("DrawElementsIndirect", mode, type, indirect, 1, 0, 0, false);
         }
-        void EmitMultiDrawArraysIndirect(GLenum mode, const void* indirect, GLsizei drawcount,
-                                         GLsizei stride) {
+        void EmitMultiDrawArraysIndirect(GLenum mode, const void* indirect, GLsizei drawcount, GLsizei stride) {
             EmitIndirectDraw("MultiDrawArraysIndirect", mode, 0, indirect, drawcount, stride, 0, false);
         }
-        void EmitMultiDrawElementsIndirect(GLenum mode, GLenum type, const void* indirect,
-                                           GLsizei drawcount, GLsizei stride) {
-            EmitIndirectDraw("MultiDrawElementsIndirect", mode, type, indirect, drawcount, stride, 0,
-                             false);
+        void EmitMultiDrawElementsIndirect(GLenum mode, GLenum type, const void* indirect, GLsizei drawcount,
+                                           GLsizei stride) {
+            EmitIndirectDraw("MultiDrawElementsIndirect", mode, type, indirect, drawcount, stride, 0, false);
         }
         void EmitMultiDrawArraysIndirectCount(GLenum mode, const void* indirect, GLintptr drawcount,
                                               GLsizei maxdrawcount, GLsizei stride) {
-            EmitIndirectDraw("MultiDrawArraysIndirectCount", mode, 0, indirect, maxdrawcount, stride,
-                             drawcount, true);
+            EmitIndirectDraw("MultiDrawArraysIndirectCount", mode, 0, indirect, maxdrawcount, stride, drawcount, true);
         }
-        void EmitMultiDrawElementsIndirectCount(GLenum mode, GLenum type, const void* indirect,
-                                                GLintptr drawcount, GLsizei maxdrawcount,
-                                                GLsizei stride) {
-            EmitIndirectDraw("MultiDrawElementsIndirectCount", mode, type, indirect, maxdrawcount,
-                             stride, drawcount, true);
+        void EmitMultiDrawElementsIndirectCount(GLenum mode, GLenum type, const void* indirect, GLintptr drawcount,
+                                                GLsizei maxdrawcount, GLsizei stride) {
+            EmitIndirectDraw("MultiDrawElementsIndirectCount", mode, type, indirect, maxdrawcount, stride, drawcount,
+                             true);
         }
 
-        void EmitBlitFramebuffer(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1, GLint dstX0,
-                                 GLint dstY0, GLint dstX1, GLint dstY1, GLbitfield mask,
-                                 GLenum filter) {
+        void EmitBlitFramebuffer(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1, GLint dstX0, GLint dstY0,
+                                 GLint dstX1, GLint dstY1, GLbitfield mask, GLenum filter) {
             VerbChannel session = ChannelFor("BlitFramebuffer");
             BeforeReadOnlyVerb();
 
@@ -909,15 +895,13 @@ namespace MobileGL::MG_Record {
             record.DstY1 = dstY1;
             record.Mask = static_cast<Uint32>(mask);
             record.Filter = static_cast<Uint32>(filter);
-            session.EmitAndWait(MG_Pipe::MGPWireOp::Blit, &record, sizeof(record), nullptr, 0,
-                                nullptr, 0, nullptr);
+            session.EmitAndWait(MG_Pipe::MGPWireOp::Blit, &record, sizeof(record), nullptr, 0, nullptr, 0, nullptr);
         }
 
-        void EmitBlitNamedFramebuffer(
-            const SharedPtr<MG_State::GLState::FramebufferObject>& read,
-            const SharedPtr<MG_State::GLState::FramebufferObject>& draw,
-            GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1, GLint dstX0,
-            GLint dstY0, GLint dstX1, GLint dstY1, GLbitfield mask, GLenum filter) {
+        void EmitBlitNamedFramebuffer(const SharedPtr<MG_State::GLState::FramebufferObject>& read,
+                                      const SharedPtr<MG_State::GLState::FramebufferObject>& draw, GLint srcX0,
+                                      GLint srcY0, GLint srcX1, GLint srcY1, GLint dstX0, GLint dstY0, GLint dstX1,
+                                      GLint dstY1, GLbitfield mask, GLenum filter) {
             VerbChannel session = ChannelFor("BlitNamedFramebuffer");
             // P5c (hd, CONTRACT-P5C §3.3): the scoped rebind of the client's own read/draw
             // binding slots is DELETED. It existed only to stage values for the server's
@@ -931,14 +915,17 @@ namespace MobileGL::MG_Record {
             MG_Pipe::MGPBlit record{};
             record.ReadFbo = MG_Pipe::MGPipeFramebufferEmitter::HandleFor(*read);
             record.DrawFbo = MG_Pipe::MGPipeFramebufferEmitter::HandleFor(*draw);
-            record.SrcX0 = srcX0; record.SrcY0 = srcY0;
-            record.SrcX1 = srcX1; record.SrcY1 = srcY1;
-            record.DstX0 = dstX0; record.DstY0 = dstY0;
-            record.DstX1 = dstX1; record.DstY1 = dstY1;
+            record.SrcX0 = srcX0;
+            record.SrcY0 = srcY0;
+            record.SrcX1 = srcX1;
+            record.SrcY1 = srcY1;
+            record.DstX0 = dstX0;
+            record.DstY0 = dstY0;
+            record.DstX1 = dstX1;
+            record.DstY1 = dstY1;
             record.Mask = static_cast<Uint32>(mask);
             record.Filter = static_cast<Uint32>(filter);
-            session.EmitAndWait(MG_Pipe::MGPWireOp::Blit, &record, sizeof(record), nullptr, 0,
-                                nullptr, 0, nullptr);
+            session.EmitAndWait(MG_Pipe::MGPWireOp::Blit, &record, sizeof(record), nullptr, 0, nullptr, 0, nullptr);
         }
 
         // Bytes per pixel of a glReadPixels format/type pair, for the tight extent. The pack
@@ -947,26 +934,25 @@ namespace MobileGL::MG_Record {
         // application's GL_PACK_* state (ARCHITECTURE.md §13.1.3). The rule is about layout,
         // so depth and depth-stencil reads need no special case.
         Uint64 ReadbackBytesPerPixel(GLenum format, GLenum type) {
-            const TextureInputFormat inputFormat =
-                MG_Util::ConvertGLEnumToTextureInputFormat(format);
+            const TextureInputFormat inputFormat = MG_Util::ConvertGLEnumToTextureInputFormat(format);
             const TexturePixelDataType dataType = MG_Util::ConvertGLEnumToTexturePixelDataType(type);
             const SizeT bytesPerPixel = MG_Util::GetInputBytesPerPixel(inputFormat, dataType);
             if (bytesPerPixel == 0) {
                 // NOT a guess and not a zero-length reply. A format this build cannot size is a
                 // readback whose answer would be silently truncated, which is the one failure a
                 // picture comparison cannot see.
-                MG_Pipe::MGPipeRecordFail(MG_Pipe::MGFatalFamily::UnsizedReadback, "MGPipe: Fatal{UnsizedReadback, \"read_pixels\"} format=0x%04x type=0x%04x "
-                        "- the client must declare MGPReadbackInfo::DstSize and cannot size this "
-                        "pair; P5's reduced path reads RGBA/UNSIGNED_BYTE",
-                        static_cast<unsigned>(format), static_cast<unsigned>(type));
+                MG_Pipe::MGPipeRecordFail(MG_Pipe::MGFatalFamily::UnsizedReadback,
+                                          "MGPipe: Fatal{UnsizedReadback, \"read_pixels\"} format=0x%04x type=0x%04x "
+                                          "- the client must declare MGPReadbackInfo::DstSize and cannot size this "
+                                          "pair; P5's reduced path reads RGBA/UNSIGNED_BYTE",
+                                          static_cast<unsigned>(format), static_cast<unsigned>(type));
             }
             return static_cast<Uint64>(bytesPerPixel);
         }
 
         Uint64 TightReadbackBytes(GLsizei width, GLsizei height, GLenum format, GLenum type) {
             if (width <= 0 || height <= 0) return 0;
-            return static_cast<Uint64>(width) * static_cast<Uint64>(height) *
-                   ReadbackBytesPerPixel(format, type);
+            return static_cast<Uint64>(width) * static_cast<Uint64>(height) * ReadbackBytesPerPixel(format, type);
         }
 
         // GL_PACK_SWAP_BYTES as the width of the byte group it reverses for `type`, 0 when there
@@ -982,8 +968,7 @@ namespace MobileGL::MG_Record {
             return group <= 1 ? 0 : static_cast<Uint32>(group);
         }
 
-        void ApplyReadbackByteSwap(void* pixels, Uint64 bytes, GLenum type,
-                                   const PixelStoreParameters& pack) {
+        void ApplyReadbackByteSwap(void* pixels, Uint64 bytes, GLenum type, const PixelStoreParameters& pack) {
             const SizeT group = ReadbackSwapGroup(type, pack);
             if (group == 0 || pixels == nullptr) return;
             auto* data = static_cast<Uint8*>(pixels);
@@ -1029,40 +1014,45 @@ namespace MobileGL::MG_Record {
                 if (MG_Pipe::MGPipeClientConfirmLossAfterDecline(kDeclineVerdictMs)) return false;
             }
             if (status == MG_Pipe::MGPipeReplySink::kStatusError) {
-                MG_Pipe::MGPipeRecordFail(MG_Pipe::MGFatalFamily::ReplyError, "MGPipe: Fatal{ReplyError, \"ReadPixels\"} - the readback answered ERROR; "
-                        "the destination is left untouched rather than filled with stale bytes");
+                MG_Pipe::MGPipeRecordFail(MG_Pipe::MGFatalFamily::ReplyError,
+                                          "MGPipe: Fatal{ReplyError, \"ReadPixels\"} - the readback answered ERROR; "
+                                          "the destination is left untouched rather than filled with stale bytes");
             }
             if (status == MG_Pipe::MGPipeReplySink::kStatusDeclined) {
-                MG_Pipe::MGPipeRecordFail(MG_Pipe::MGFatalFamily::ReadbackDeclined, "MGPipe: Fatal{ReadbackDeclined, \"ReadPixels\"} - the server has no "
-                        "GL.ReadPixels and DECLINED; a decline is a real answer for an acceptance "
-                        "row (R-5) but a blocking readback has no pixels to return, so it is a "
-                        "Fatal here rather than a buffer of stale bytes");
+                MG_Pipe::MGPipeRecordFail(MG_Pipe::MGFatalFamily::ReadbackDeclined,
+                                          "MGPipe: Fatal{ReadbackDeclined, \"ReadPixels\"} - the server has no "
+                                          "GL.ReadPixels and DECLINED; a decline is a real answer for an acceptance "
+                                          "row (R-5) but a blocking readback has no pixels to return, so it is a "
+                                          "Fatal here rather than a buffer of stale bytes");
             }
             if (status != MG_Pipe::MGPipeReplySink::kStatusOk) {
-                MG_Pipe::MGPipeRecordFail(MG_Pipe::MGFatalFamily::ReplyStatusInvalid, "MGPipe: Fatal{ReplyStatusInvalid, \"ReadPixels\"} - unknown reply status %d", status);
+                MG_Pipe::MGPipeRecordFail(MG_Pipe::MGFatalFamily::ReplyStatusInvalid,
+                                          "MGPipe: Fatal{ReplyStatusInvalid, \"ReadPixels\"} - unknown reply status %d",
+                                          status);
             }
             if (replySize != expected) {
-                MG_Pipe::MGPipeRecordFail(MG_Pipe::MGFatalFamily::ReadbackReplyShort, "MGPipe: Fatal{ReadbackReplyShort, \"ReadPixels %llu < %llu\"} - the OK "
-                        "reply carried fewer bytes than the read's own DstSize (CONTRACT-P5 row "
-                        "23's exact extent); the missing rows would otherwise be scattered as "
-                        "whatever the destination held",
-                        static_cast<unsigned long long>(replySize),
-                        static_cast<unsigned long long>(expected));
+                MG_Pipe::MGPipeRecordFail(MG_Pipe::MGFatalFamily::ReadbackReplyShort,
+                                          "MGPipe: Fatal{ReadbackReplyShort, \"ReadPixels %llu < %llu\"} - the OK "
+                                          "reply carried fewer bytes than the read's own DstSize (CONTRACT-P5 row "
+                                          "23's exact extent); the missing rows would otherwise be scattered as "
+                                          "whatever the destination held",
+                                          static_cast<unsigned long long>(replySize),
+                                          static_cast<unsigned long long>(expected));
             }
             return true;
         }
 
 #include "TextureReadbackEmit.inc"
 
-        void EmitReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format,
-                            GLenum type, void* pixels) {
+        void EmitReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, void* pixels) {
             VerbChannel session = ChannelFor("ReadPixels");
 
             // A bound PACK buffer makes pixels an offset. The owned reply is
             // packed on this thread and only the requested rows are uploaded.
-            const auto pbo = MG_State::pGLContext != nullptr
-                ? MG_State::pGLContext->GetBufferBindingSlot(::MobileGL::BufferTarget::PixelPack).GetBoundObject()
-                : SharedPtr<MG_State::GLState::BufferObject>{};
+            const auto pbo =
+                MG_State::pGLContext != nullptr
+                    ? MG_State::pGLContext->GetBufferBindingSlot(::MobileGL::BufferTarget::PixelPack).GetBoundObject()
+                    : SharedPtr<MG_State::GLState::BufferObject>{};
 
             BeforeReadOnlyVerb();
 
@@ -1088,16 +1078,16 @@ namespace MobileGL::MG_Record {
             // is an ordinary read_pixels record - its own box, and a DstSize that IS its tight
             // w*h*bpp extent (ID-49) - so every answer still fits one slot (ID-47) and the
             // server's PH-3 bound (its tight answer against its own LinkTerms.maxReplyBytes,
-            // PipeApplier.cpp OnReadPixels) holds unchanged: no reply is chunked, the READ is. The cap is the link's own, read live, exactly as
-            // before, so a different SEG_REPLY geometry or a stream link needs no edit here.
+            // PipeApplier.cpp OnReadPixels) holds unchanged: no reply is chunked, the READ is. The cap is the link's
+            // own, read live, exactly as before, so a different SEG_REPLY geometry or a stream link needs no edit here.
             ReadbackBandPlan plan;
-            if (!PlanReadbackBands(static_cast<Uint64>(width), static_cast<Uint64>(height),
-                                   bytesPerPixel, session.MaxReplyBytes(), plan)) {
+            if (!PlanReadbackBands(static_cast<Uint64>(width), static_cast<Uint64>(height), bytesPerPixel,
+                                   session.MaxReplyBytes(), plan)) {
                 // NOT EVEN ONE PIXEL FITS (or there is no reply pool at all). That is the only
                 // read no banding can answer, and ID-47's named refusal is kept for it - for the
                 // one-pixel piece that cannot be sent, so the message names what was impossible.
-                session.RequireReadPixelsReplyFits(1, 1, static_cast<Uint32>(format),
-                                                   static_cast<Uint32>(type), bytesPerPixel);
+                session.RequireReadPixelsReplyFits(1, 1, static_cast<Uint32>(format), static_cast<Uint32>(type),
+                                                   bytesPerPixel);
                 return;
             }
 
@@ -1105,10 +1095,9 @@ namespace MobileGL::MG_Record {
             const auto bandInfo = [&](const ReadbackBand& band, Uint64 bandBytes) {
                 MG_Pipe::MGPReadbackInfo info{};
                 info.Res = MG_Pipe::kMGPipeNullHandle; // "the bound read surface answers"
-                info.Box = MG_Pipe::MGPBox{ReadbackBandOrigin(x, band.FirstColumn),
-                                           ReadbackBandOrigin(y, band.FirstRow), 0,
-                                           static_cast<Uint32>(band.Columns),
-                                           static_cast<Uint32>(band.Rows), 1};
+                info.Box =
+                    MG_Pipe::MGPBox{ReadbackBandOrigin(x, band.FirstColumn), ReadbackBandOrigin(y, band.FirstRow), 0,
+                                    static_cast<Uint32>(band.Columns),       static_cast<Uint32>(band.Rows),       1};
                 info.Format = static_cast<Uint32>(format);
                 info.Type = static_cast<Uint32>(type);
                 info.Target = 0;
@@ -1132,21 +1121,21 @@ namespace MobileGL::MG_Record {
                 if (!MG_Pipe::MGPipeHandleIsNull(target)) {
                     MarkReadPixelsPackBuffer();
                     const Uint32 swapGroup = ReadbackSwapGroup(type, pack);
-                    ForEachReadbackBand(static_cast<Uint64>(width), static_cast<Uint64>(height), plan,
-                                        [&](const ReadbackBand& band) {
-                        MG_Pipe::MGPReadbackToBuffer record{};
-                        record.Src = bandInfo(band, TightReadbackBytes(static_cast<GLsizei>(band.Columns),
-                                                                       static_cast<GLsizei>(band.Rows),
-                                                                       format, type));
-                        record.Dst = target;
-                        record.DstBase = pboOffset + layout.Start + band.FirstRow * layout.RowStride +
-                                         band.FirstColumn * bytesPerPixel;
-                        record.RowStride = layout.RowStride;
-                        record.ImageStride = 0;
-                        record.SwapGroup = swapGroup;
-                        session.EmitAndWait(MG_Pipe::MGPWireOp::ReadPixelsToBuffer, &record,
-                                            sizeof(record), nullptr, 0, nullptr, 0, nullptr);
-                    });
+                    ForEachReadbackBand(
+                        static_cast<Uint64>(width), static_cast<Uint64>(height), plan, [&](const ReadbackBand& band) {
+                            MG_Pipe::MGPReadbackToBuffer record{};
+                            record.Src =
+                                bandInfo(band, TightReadbackBytes(static_cast<GLsizei>(band.Columns),
+                                                                  static_cast<GLsizei>(band.Rows), format, type));
+                            record.Dst = target;
+                            record.DstBase = pboOffset + layout.Start + band.FirstRow * layout.RowStride +
+                                             band.FirstColumn * bytesPerPixel;
+                            record.RowStride = layout.RowStride;
+                            record.ImageStride = 0;
+                            record.SwapGroup = swapGroup;
+                            session.EmitAndWait(MG_Pipe::MGPWireOp::ReadPixelsToBuffer, &record, sizeof(record),
+                                                nullptr, 0, nullptr, 0, nullptr);
+                        });
                     return;
                 }
                 // P15: the validate point answered "pack buffer, fire-and-forget" and the reply
@@ -1166,72 +1155,67 @@ namespace MobileGL::MG_Record {
             // this returns: R-11's rule one level out, nothing here outlives the call.
             Vector<Uint8> bounce;
             Bool pboSynced = false;
-            ForEachReadbackBand(static_cast<Uint64>(width), static_cast<Uint64>(height), plan,
-                                [&](const ReadbackBand& band) {
-                // ONE tight-size function for production AND the control (M3 / codex 10a): the
-                // number the server allocates and the number the test asserts come from the
-                // same body, per band now.
-                const Uint64 bandBytes = TightReadbackBytes(static_cast<GLsizei>(band.Columns),
-                                                            static_cast<GLsizei>(band.Rows),
-                                                            format, type);
-                MG_Pipe::MGPReadbackInfo info = bandInfo(band, bandBytes);
+            ForEachReadbackBand(
+                static_cast<Uint64>(width), static_cast<Uint64>(height), plan, [&](const ReadbackBand& band) {
+                    // ONE tight-size function for production AND the control (M3 / codex 10a): the
+                    // number the server allocates and the number the test asserts come from the
+                    // same body, per band now.
+                    const Uint64 bandBytes = TightReadbackBytes(static_cast<GLsizei>(band.Columns),
+                                                                static_cast<GLsizei>(band.Rows), format, type);
+                    MG_Pipe::MGPReadbackInfo info = bandInfo(band, bandBytes);
 
-                // CHECKED BEFORE THE EMISSION, not after the answer (ID-47), through S1's
-                // helper, for every record. The plan makes it true by construction; it stays
-                // because it is the one check that names the read at the call site if the plan
-                // and the pool ever disagree, where the server's PH-3 refusal would only answer
-                // ERROR on the apply thread.
-                session.RequireReadPixelsReplyFits(static_cast<Uint32>(band.Columns),
-                                                   static_cast<Uint32>(band.Rows),
-                                                   static_cast<Uint32>(format),
-                                                   static_cast<Uint32>(type), bandBytes);
+                    // CHECKED BEFORE THE EMISSION, not after the answer (ID-47), through S1's
+                    // helper, for every record. The plan makes it true by construction; it stays
+                    // because it is the one check that names the read at the call site if the plan
+                    // and the pool ever disagree, where the server's PH-3 refusal would only answer
+                    // ERROR on the apply thread.
+                    session.RequireReadPixelsReplyFits(static_cast<Uint32>(band.Columns),
+                                                       static_cast<Uint32>(band.Rows), static_cast<Uint32>(format),
+                                                       static_cast<Uint32>(type), bandBytes);
 
-                Int32 status = 0;
-                Uint64 replySize = 0;
-                if (direct) {
-                    Uint8* at = pixels == nullptr
-                        ? nullptr
-                        : static_cast<Uint8*>(pixels) +
-                              (band.FirstRow * static_cast<Uint64>(width) + band.FirstColumn) *
-                                  bytesPerPixel;
-                    session.EmitAndWait(MG_Pipe::MGPWireOp::ReadPixels, &info, sizeof(info),
-                                        nullptr, 0, at, bandBytes, &status, &replySize);
-                    // M2 / codex 11: an OK reply that arrived short, or a DECLINE/ERROR, must not
-                    // be handed back as pixels. The Fatal aborts before the application reads the
-                    // buffer, so the bytes EmitAndWait already copied are never observed.
+                    Int32 status = 0;
+                    Uint64 replySize = 0;
+                    if (direct) {
+                        Uint8* at =
+                            pixels == nullptr
+                                ? nullptr
+                                : static_cast<Uint8*>(pixels) +
+                                      (band.FirstRow * static_cast<Uint64>(width) + band.FirstColumn) * bytesPerPixel;
+                        session.EmitAndWait(MG_Pipe::MGPWireOp::ReadPixels, &info, sizeof(info), nullptr, 0, at,
+                                            bandBytes, &status, &replySize);
+                        // M2 / codex 11: an OK reply that arrived short, or a DECLINE/ERROR, must not
+                        // be handed back as pixels. The Fatal aborts before the application reads the
+                        // buffer, so the bytes EmitAndWait already copied are never observed.
+                        if (!RequireReadbackReplyComplete(status, replySize, bandBytes)) return;
+                        ApplyReadbackByteSwap(at, bandBytes, type, pack);
+                        return;
+                    }
+
+                    if (bounce.size() < bandBytes) bounce.resize(static_cast<SizeT>(bandBytes));
+                    session.EmitAndWait(MG_Pipe::MGPWireOp::ReadPixels, &info, sizeof(info), nullptr, 0, bounce.data(),
+                                        bandBytes, &status, &replySize);
+                    // BEFORE THE SCATTER, so a short or non-OK reply never reaches the application's
+                    // pointer at all (the bounce is the only thing that held the partial bytes).
                     if (!RequireReadbackReplyComplete(status, replySize, bandBytes)) return;
-                    ApplyReadbackByteSwap(at, bandBytes, type, pack);
-                    return;
-                }
-
-                if (bounce.size() < bandBytes) bounce.resize(static_cast<SizeT>(bandBytes));
-                session.EmitAndWait(MG_Pipe::MGPWireOp::ReadPixels, &info, sizeof(info), nullptr,
-                                    0, bounce.data(), bandBytes, &status, &replySize);
-                // BEFORE THE SCATTER, so a short or non-OK reply never reaches the application's
-                // pointer at all (the bounce is the only thing that held the partial bytes).
-                if (!RequireReadbackReplyComplete(status, replySize, bandBytes)) return;
-                ApplyReadbackByteSwap(bounce.data(), bandBytes, type, pack);
-                if (pbo) {
-                    // pixels is an offset, never a host pointer. Upload only the requested
-                    // rows so PACK padding and untouched bytes survive; the offsets are the
-                    // overflow-checked layout's, the same numbers the range check accepted.
-                    if (!pboSynced) {
-                        pbo->SyncGpuWrites();
-                        pboSynced = true;
+                    ApplyReadbackByteSwap(bounce.data(), bandBytes, type, pack);
+                    if (pbo) {
+                        // pixels is an offset, never a host pointer. Upload only the requested
+                        // rows so PACK padding and untouched bytes survive; the offsets are the
+                        // overflow-checked layout's, the same numbers the range check accepted.
+                        if (!pboSynced) {
+                            pbo->SyncGpuWrites();
+                            pboSynced = true;
+                        }
+                        const Uint64 bandRowBytes = band.Columns * bytesPerPixel;
+                        for (Uint64 row = 0; row < band.Rows; ++row) {
+                            pbo->UploadSubData({bounce.data() + row * bandRowBytes, static_cast<SizeT>(bandRowBytes)},
+                                               pboOffset + layout.Start + (band.FirstRow + row) * layout.RowStride +
+                                                   band.FirstColumn * bytesPerPixel);
+                        }
+                        return;
                     }
-                    const Uint64 bandRowBytes = band.Columns * bytesPerPixel;
-                    for (Uint64 row = 0; row < band.Rows; ++row) {
-                        pbo->UploadSubData({bounce.data() + row * bandRowBytes,
-                                            static_cast<SizeT>(bandRowBytes)},
-                                           pboOffset + layout.Start +
-                                               (band.FirstRow + row) * layout.RowStride +
-                                               band.FirstColumn * bytesPerPixel);
-                    }
-                    return;
-                }
-                ScatterReadbackBandIntoPackState(bounce.data(), pixels, width, band, bytesPerPixel,
-                                                 pack);
-            });
+                    ScatterReadbackBandIntoPackState(bounce.data(), pixels, width, band, bytesPerPixel, pack);
+                });
         }
 
         // ---- Image bind, compute, barriers, copy-image, storage-block binding ----
@@ -1242,11 +1226,9 @@ namespace MobileGL::MG_Record {
         // object the server has never seen. A null Res/Src/Dst/ShaderCso means none is
         // published yet.
 
-        MG_Pipe::MGPipeHandle PublishedTextureHandle(
-            const SharedPtr<MG_State::GLState::ITextureObject>& texture) {
+        MG_Pipe::MGPipeHandle PublishedTextureHandle(const SharedPtr<MG_State::GLState::ITextureObject>& texture) {
             if (!texture) return MG_Pipe::kMGPipeNullHandle;
-            return MG_Pipe::MGPipeSlots().FindByLifetimeId(MG_Pipe::MGPipeKind::Texture,
-                                                           texture->GetLifetimeId());
+            return MG_Pipe::MGPipeSlots().FindByLifetimeId(MG_Pipe::MGPipeKind::Texture, texture->GetLifetimeId());
         }
 
         // glBindImageTexture. Emitted AT THE CALL, after the frontend has written the unit's
@@ -1261,8 +1243,8 @@ namespace MobileGL::MG_Record {
         // A bind starts no shader and reads no buffer; the dispatch that later reads this image
         // is the verb that carries both hooks, and running them here as well would push the
         // same maps twice per dispatch and inflate b1's per-row counters.
-        void EmitBindImageTexture(GLuint unit, GLuint texture, GLint level, GLboolean layered,
-                                  GLint layer, GLenum access, GLenum format) {
+        void EmitBindImageTexture(GLuint unit, GLuint texture, GLint level, GLboolean layered, GLint layer,
+                                  GLenum access, GLenum format) {
             VerbChannel session = ChannelFor("BindImageTexture");
 
             MG_Pipe::MGPImageBind record{};
@@ -1286,8 +1268,8 @@ namespace MobileGL::MG_Record {
             record.Access = static_cast<Uint32>(access);
             record.Format = static_cast<Uint32>(format);
             record.Layered = layered != GL_FALSE ? 1 : 0;
-            session.EmitAndWait(MG_Pipe::MGPWireOp::BindShaderImage, &record, sizeof(record),
-                                nullptr, 0, nullptr, 0, nullptr);
+            session.EmitAndWait(MG_Pipe::MGPWireOp::BindShaderImage, &record, sizeof(record), nullptr, 0, nullptr, 0,
+                                nullptr);
         }
 
         // glDispatchCompute. THE HOOK ORDER IS b1's AND IS INHERITED FROM THE CLASS-C STUB
@@ -1310,8 +1292,8 @@ namespace MobileGL::MG_Record {
             record.IndirectBuffer = MG_Pipe::kMGPipeNullHandle;
             record.IndirectOffset = 0;
             record.IsIndirect = 0;
-            session.EmitAndWait(MG_Pipe::MGPWireOp::LaunchGrid, &record, sizeof(record), nullptr, 0,
-                                nullptr, 0, nullptr);
+            session.EmitAndWait(MG_Pipe::MGPWireOp::LaunchGrid, &record, sizeof(record), nullptr, 0, nullptr, 0,
+                                nullptr);
         }
 
         void EmitDispatchComputeIndirect(GLintptr indirect) {
@@ -1328,16 +1310,15 @@ namespace MobileGL::MG_Record {
             record.IndirectBuffer = MG_Pipe::kMGPipeNullHandle;
             if (MG_State::pGLContext != nullptr) {
                 const auto& bound =
-                    MG_State::pGLContext
-                        ->GetBufferBindingSlot(::MobileGL::BufferTarget::DispatchIndirect)
+                    MG_State::pGLContext->GetBufferBindingSlot(::MobileGL::BufferTarget::DispatchIndirect)
                         .GetBoundObject();
                 if (bound) {
-                    record.IndirectBuffer = MG_Pipe::MGPipeSlots().FindByLifetimeId(
-                        MG_Pipe::MGPipeKind::Buffer, bound->GetLifetimeId());
+                    record.IndirectBuffer =
+                        MG_Pipe::MGPipeSlots().FindByLifetimeId(MG_Pipe::MGPipeKind::Buffer, bound->GetLifetimeId());
                 }
             }
-            session.EmitAndWait(MG_Pipe::MGPWireOp::LaunchGrid, &record, sizeof(record), nullptr, 0,
-                                nullptr, 0, nullptr);
+            session.EmitAndWait(MG_Pipe::MGPWireOp::LaunchGrid, &record, sizeof(record), nullptr, 0, nullptr, 0,
+                                nullptr);
         }
 
         // glMemoryBarrier / glMemoryBarrierByRegion. The bits cross VERBATIM: the frontend has
@@ -1354,8 +1335,8 @@ namespace MobileGL::MG_Record {
             MG_Pipe::MGPMemoryBarrier record{};
             record.Bits = static_cast<Uint32>(barriers);
             record.ByRegion = 0;
-            session.EmitAndWait(MG_Pipe::MGPWireOp::MemoryBarrier, &record, sizeof(record), nullptr,
-                                0, nullptr, 0, nullptr);
+            session.EmitAndWait(MG_Pipe::MGPWireOp::MemoryBarrier, &record, sizeof(record), nullptr, 0, nullptr, 0,
+                                nullptr);
         }
 
         void EmitMemoryBarrierByRegion(GLbitfield barriers) {
@@ -1363,16 +1344,15 @@ namespace MobileGL::MG_Record {
             MG_Pipe::MGPMemoryBarrier record{};
             record.Bits = static_cast<Uint32>(barriers);
             record.ByRegion = 1;
-            session.EmitAndWait(MG_Pipe::MGPWireOp::MemoryBarrier, &record, sizeof(record), nullptr,
-                                0, nullptr, 0, nullptr);
+            session.EmitAndWait(MG_Pipe::MGPWireOp::MemoryBarrier, &record, sizeof(record), nullptr, 0, nullptr, 0,
+                                nullptr);
         }
 
         // glCopyImageSubData -> resource_copy_region (53), which P5b rules is glCopyImageSubData
         // ONLY (contract §6.4; the framebuffer-sourced copies are f1's row 76).
-        void EmitCopyImageSubData(const MG_Backend::CopyImageEndpoint& src, GLenum srcTarget,
-                                  GLint srcLevel, GLint srcX, GLint srcY, GLint srcZ,
-                                  const MG_Backend::CopyImageEndpoint& dst, GLenum dstTarget,
-                                  GLint dstLevel, GLint dstX, GLint dstY, GLint dstZ,
+        void EmitCopyImageSubData(const MG_Backend::CopyImageEndpoint& src, GLenum srcTarget, GLint srcLevel,
+                                  GLint srcX, GLint srcY, GLint srcZ, const MG_Backend::CopyImageEndpoint& dst,
+                                  GLenum dstTarget, GLint dstLevel, GLint dstX, GLint dstY, GLint dstZ,
                                   GLsizei srcWidth, GLsizei srcHeight, GLsizei srcDepth) {
             VerbChannel session = ChannelFor("CopyImageSubData");
 
@@ -1380,9 +1360,9 @@ namespace MobileGL::MG_Record {
             MG_Pipe::MGPCopyRegion record{};
             const auto handle = [](const MG_Backend::CopyImageEndpoint& endpoint) {
                 return endpoint.IsRenderbuffer()
-                    ? MG_Pipe::MGPipeSlots().FindByLifetimeId(MG_Pipe::MGPipeKind::Renderbuffer,
-                                                              endpoint.Renderbuffer->GetLifetimeId())
-                    : PublishedTextureHandle(endpoint.Texture);
+                           ? MG_Pipe::MGPipeSlots().FindByLifetimeId(MG_Pipe::MGPipeKind::Renderbuffer,
+                                                                     endpoint.Renderbuffer->GetLifetimeId())
+                           : PublishedTextureHandle(endpoint.Texture);
             };
             record.Src = handle(src);
             record.Dst = handle(dst);
@@ -1400,22 +1380,24 @@ namespace MobileGL::MG_Record {
             record.DstLevel = static_cast<Uint16>(dstLevel);
             // SrcBox is {srcX, srcY, srcZ, w, h, d}: the source origin AND the extent, which is
             // one extent for both endpoints (GL spells the copy's size once).
-            record.SrcBox = MG_Pipe::MGPBox{srcX, srcY, srcZ, static_cast<Uint32>(srcWidth),
+            record.SrcBox = MG_Pipe::MGPBox{srcX,
+                                            srcY,
+                                            srcZ,
+                                            static_cast<Uint32>(srcWidth),
                                             static_cast<Uint32>(srcHeight),
                                             static_cast<Uint32>(srcDepth)};
             record.DstX = dstX;
             record.DstY = dstY;
             record.DstZ = dstZ;
-            session.EmitAndWait(MG_Pipe::MGPWireOp::ResourceCopyRegion, &record, sizeof(record),
-                                nullptr, 0, nullptr, 0, nullptr);
+            session.EmitAndWait(MG_Pipe::MGPWireOp::ResourceCopyRegion, &record, sizeof(record), nullptr, 0, nullptr, 0,
+                                nullptr);
         }
 
         // glShaderStorageBlockBinding -> set_storage_block_binding (75), the ONE content-carrying
         // row P5b adds. The block is NAMED, not indexed, because the application's index is the
         // frontend interface-query enumeration's and no backend shares that index space
         // (GLFunctionsTable::ShaderStorageBlockBinding) - the name is the one coordinate all three agree on.
-        void EmitShaderStorageBlockBinding(GLuint program, const GLchar* storageBlockName,
-                                           GLuint storageBlockBinding) {
+        void EmitShaderStorageBlockBinding(GLuint program, const GLchar* storageBlockName, GLuint storageBlockBinding) {
             VerbChannel session = ChannelFor("ShaderStorageBlockBinding");
             // The backend slot's own first line (ShaderStorageBlockBinding, DirectGLESCopy.cpp), kept
             // here so a null name never becomes a zero-size blob - which rule A forbids spelling at all.
@@ -1444,8 +1426,8 @@ namespace MobileGL::MG_Record {
             // not NUL, so the two sides agree on where the name ends.
             const Uint64 nameBytes = static_cast<Uint64>(std::strlen(storageBlockName)) + 1ull;
             record.Name = session.StageBytes(storageBlockName, nameBytes);
-            session.EmitAndWait(MG_Pipe::MGPWireOp::SetStorageBlockBinding, &record, sizeof(record),
-                                nullptr, 0, nullptr, 0, nullptr);
+            session.EmitAndWait(MG_Pipe::MGPWireOp::SetStorageBlockBinding, &record, sizeof(record), nullptr, 0,
+                                nullptr, 0, nullptr);
         }
 
         // ---- Transform-feedback spans, XFB object bind, patch parameter ----
@@ -1483,8 +1465,8 @@ namespace MobileGL::MG_Record {
                 record.Targets[i] = {MG_Pipe::MGPipeResourceTrackerInstance().Find(*buffer), start,
                                      end > start ? end - start : 0};
             }
-            session.EmitAndWait(MG_Pipe::MGPWireOp::BeginStreamOutput, &record, sizeof(record),
-                                nullptr, 0, nullptr, 0, nullptr);
+            session.EmitAndWait(MG_Pipe::MGPWireOp::BeginStreamOutput, &record, sizeof(record), nullptr, 0, nullptr, 0,
+                                nullptr);
         }
 
         void EmitEndTransformFeedback() {
@@ -1503,8 +1485,8 @@ namespace MobileGL::MG_Record {
             record.CapturedVertices = context.GetTransformFeedbackCapturedVertices();
             record.PrimitivesWritten = context.GetTransformFeedbackPrimitiveCounter();
             record.PrimitiveMode = static_cast<Uint32>(context.GetTransformFeedbackPrimitiveMode());
-            session.EmitAndWait(MG_Pipe::MGPWireOp::EndStreamOutput, &record, sizeof(record),
-                                nullptr, 0, nullptr, 0, nullptr);
+            session.EmitAndWait(MG_Pipe::MGPWireOp::EndStreamOutput, &record, sizeof(record), nullptr, 0, nullptr, 0,
+                                nullptr);
         }
 
         void EmitPauseTransformFeedback() {
@@ -1516,8 +1498,8 @@ namespace MobileGL::MG_Record {
             // sink runs - not to carry anything.
             MG_Pipe::MGPStreamOutputControl record{};
             record.Reserved = 0;
-            session.EmitAndWait(MG_Pipe::MGPWireOp::PauseStreamOutput, &record, sizeof(record),
-                                nullptr, 0, nullptr, 0, nullptr);
+            session.EmitAndWait(MG_Pipe::MGPWireOp::PauseStreamOutput, &record, sizeof(record), nullptr, 0, nullptr, 0,
+                                nullptr);
         }
 
         void EmitResumeTransformFeedback() {
@@ -1526,8 +1508,8 @@ namespace MobileGL::MG_Record {
 
             MG_Pipe::MGPStreamOutputControl record{};
             record.Reserved = 0;
-            session.EmitAndWait(MG_Pipe::MGPWireOp::ResumeStreamOutput, &record, sizeof(record),
-                                nullptr, 0, nullptr, 0, nullptr);
+            session.EmitAndWait(MG_Pipe::MGPWireOp::ResumeStreamOutput, &record, sizeof(record), nullptr, 0, nullptr, 0,
+                                nullptr);
         }
 
         void EmitBindTransformFeedback(GLuint name) {
@@ -1545,8 +1527,8 @@ namespace MobileGL::MG_Record {
             // recycling a name. Read AFTER GLContext::BindTransformFeedbackObject at the call
             // site, so it is the id of the object being bound and not of the previous one.
             record.LifetimeId = MG_State::pGLContext->GetBoundTransformFeedbackLifetimeId();
-            session.EmitAndWait(MG_Pipe::MGPWireOp::BindStreamOutput, &record, sizeof(record),
-                                nullptr, 0, nullptr, 0, nullptr);
+            session.EmitAndWait(MG_Pipe::MGPWireOp::BindStreamOutput, &record, sizeof(record), nullptr, 0, nullptr, 0,
+                                nullptr);
         }
 
         void EmitPatchParameteri(GLenum pname, GLint value) {
@@ -1565,8 +1547,8 @@ namespace MobileGL::MG_Record {
             // duplicate: it is the applier's working-block copy, this is the driver push Espryt
             // does AT THE CALL (PatchParameteri, DirectGLESCopy.cpp), and both pushes happen today on the
             // monolith path too (CONTRACT-P5B.md §2 t2).
-            session.EmitAndWait(MG_Pipe::MGPWireOp::PatchParameter, &record, sizeof(record),
-                                nullptr, 0, nullptr, 0, nullptr);
+            session.EmitAndWait(MG_Pipe::MGPWireOp::PatchParameter, &record, sizeof(record), nullptr, 0, nullptr, 0,
+                                nullptr);
         }
 
         void EmitDeleteTransformFeedback(GLuint name) {
@@ -1574,12 +1556,12 @@ namespace MobileGL::MG_Record {
             BeforeReadOnlyVerb();
             const auto& context = *MG_State::pGLContext;
             const MG_Pipe::MGPStreamOutputBind object{name, 0, context.GetTransformFeedbackLifetimeId(name)};
-            session.EmitAndWait(MG_Pipe::MGPWireOp::DeleteStreamOutput, &object, sizeof(object),
-                                nullptr, 0, nullptr, 0, nullptr);
+            session.EmitAndWait(MG_Pipe::MGPWireOp::DeleteStreamOutput, &object, sizeof(object), nullptr, 0, nullptr, 0,
+                                nullptr);
             if (context.GetBoundTransformFeedbackName() == name) {
                 const MG_Pipe::MGPStreamOutputBind fallback{0, 0, context.GetTransformFeedbackLifetimeId(0)};
-                session.EmitAndWait(MG_Pipe::MGPWireOp::BindStreamOutput, &fallback, sizeof(fallback),
-                                    nullptr, 0, nullptr, 0, nullptr);
+                session.EmitAndWait(MG_Pipe::MGPWireOp::BindStreamOutput, &fallback, sizeof(fallback), nullptr, 0,
+                                    nullptr, 0, nullptr);
             }
         }
 
@@ -1602,14 +1584,19 @@ namespace MobileGL::MG_Record {
                 static_cast<unsigned long long>(frameOrdinal));
     }
 
-
-    void ArmVerbControlKnobs() { ArmControlKnobs(); }
+    void ArmVerbControlKnobs() {
+        ArmControlKnobs();
+    }
 
 #if MOBILEGL_PIPE_VERIFY
-    Bool MonolithPortApplyingForVerify() { return t_portApplying; }
+    Bool MonolithPortApplyingForVerify() {
+        return t_portApplying;
+    }
 #endif
 
-    void SetVerbSessionResolver(VerbSessionResolver resolver) { g_verbSessionResolver = resolver; }
+    void SetVerbSessionResolver(VerbSessionResolver resolver) {
+        g_verbSessionResolver = resolver;
+    }
 
     void AssignVerbEmitters(MG_Backend::GlobalBackendFunctionsTable& table) {
         table.GL.DeleteTransformFeedback = &EmitDeleteTransformFeedback;
@@ -1726,7 +1713,9 @@ namespace MobileGL::MG_Record {
         g_monolithVerbPort = true;
     }
 
-    Bool MonolithVerbPortInstalled() { return g_monolithVerbPort; }
+    Bool MonolithVerbPortInstalled() {
+        return g_monolithVerbPort;
+    }
 
     Bool SetMonolithVerbPortRoutingForTesting(Bool viaPort) {
         const Bool previous = g_monolithVerbPort;
@@ -1734,14 +1723,21 @@ namespace MobileGL::MG_Record {
         return previous;
     }
 
-    void SetDropClearEmissionForNegativeControl(Bool drop) { g_dropClearEmission = drop; }
-    Uint64 DroppedClearEmissions() { return g_droppedClearEmissions; }
+    void SetDropClearEmissionForNegativeControl(Bool drop) {
+        g_dropClearEmission = drop;
+    }
+    Uint64 DroppedClearEmissions() {
+        return g_droppedClearEmissions;
+    }
 
-    void SetDropDrawEmissionForNegativeControl(Bool drop) { g_dropDrawEmission = drop; }
-    Uint64 DroppedDrawEmissions() { return g_droppedDrawEmissions; }
+    void SetDropDrawEmissionForNegativeControl(Bool drop) {
+        g_dropDrawEmission = drop;
+    }
+    Uint64 DroppedDrawEmissions() {
+        return g_droppedDrawEmissions;
+    }
 
-    Bool ReadbackPackStateIsTightForTest(GLsizei width, Uint64 bytesPerPixel,
-                                         const PixelStoreParameters& pack) {
+    Bool ReadbackPackStateIsTightForTest(GLsizei width, Uint64 bytesPerPixel, const PixelStoreParameters& pack) {
         return ReadbackPackStateIsTight(width, bytesPerPixel, pack);
     }
 
@@ -1783,18 +1779,14 @@ namespace MobileGL::MG_Record {
     // ID-49's scatter, for one band of a banded read (g5-readback). The whole-read scatter below
     // is this function over the single band {0, height, 0, width}, so there is one copy of
     // 8.4.4's arithmetic and the control drives it.
-    void ScatterReadbackBandIntoPackState(const void* band, void* destination, GLsizei width,
-                                          const ReadbackBand& where, Uint64 bytesPerPixel,
-                                          const PixelStoreParameters& pack) {
-        if (band == nullptr || destination == nullptr || width <= 0 || where.Rows == 0 ||
-            where.Columns == 0) {
+    void ScatterReadbackBandIntoPackState(const void* band, void* destination, GLsizei width, const ReadbackBand& where,
+                                          Uint64 bytesPerPixel, const PixelStoreParameters& pack) {
+        if (band == nullptr || destination == nullptr || width <= 0 || where.Rows == 0 || where.Columns == 0) {
             return;
         }
-        const Uint64 rowPixels =
-            pack.RowLength > 0 ? static_cast<Uint64>(pack.RowLength) : static_cast<Uint64>(width);
+        const Uint64 rowPixels = pack.RowLength > 0 ? static_cast<Uint64>(pack.RowLength) : static_cast<Uint64>(width);
         const Uint64 alignment = pack.Alignment > 0 ? static_cast<Uint64>(pack.Alignment) : 1ull;
-        const Uint64 strideBytes =
-            ((rowPixels * bytesPerPixel + alignment - 1) / alignment) * alignment;
+        const Uint64 strideBytes = ((rowPixels * bytesPerPixel + alignment - 1) / alignment) * alignment;
         // m6: the client re-derives GL 4.6 8.4.4's pack layout, so it honours GL_PACK_ROW_LENGTH
         // VERBATIM - including the ill-formed 0 < ROW_LENGTH < width, where the row stride is
         // narrower than a written row and consecutive rows overlap. GL leaves that case to the
@@ -1816,21 +1808,18 @@ namespace MobileGL::MG_Record {
                     (static_cast<Uint64>(pack.SkipPixels) + where.FirstColumn) * bytesPerPixel;
         const auto* in = static_cast<const Uint8*>(band);
         for (Uint64 row = 0; row < where.Rows; ++row) {
-            std::memcpy(out + row * strideBytes, in + row * writtenPerRow,
-                        static_cast<SizeT>(writtenPerRow));
+            std::memcpy(out + row * strideBytes, in + row * writtenPerRow, static_cast<SizeT>(writtenPerRow));
         }
     }
 
     // ID-49's scatter. Exported for the same reason as the refusal above: the control drives
     // THIS, which is what the emitter calls, rather than a second copy of 8.4.4's arithmetic.
-    void ScatterTightReadbackIntoPackState(const void* tight, void* destination, GLsizei width,
-                                           GLsizei height, Uint64 bytesPerPixel,
-                                           const PixelStoreParameters& pack) {
+    void ScatterTightReadbackIntoPackState(const void* tight, void* destination, GLsizei width, GLsizei height,
+                                           Uint64 bytesPerPixel, const PixelStoreParameters& pack) {
         if (tight == nullptr || destination == nullptr || width <= 0 || height <= 0) return;
-        ScatterReadbackBandIntoPackState(
-            tight, destination, width,
-            ReadbackBand{0, static_cast<Uint64>(height), 0, static_cast<Uint64>(width)},
-            bytesPerPixel, pack);
+        ScatterReadbackBandIntoPackState(tight, destination, width,
+                                         ReadbackBand{0, static_cast<Uint64>(height), 0, static_cast<Uint64>(width)},
+                                         bytesPerPixel, pack);
     }
 
     // =============================================================================
@@ -1840,16 +1829,19 @@ namespace MobileGL::MG_Record {
 
     Uint8 RemoteIndexSizeFor(GLenum indexType) {
         switch (indexType) {
-        case GL_UNSIGNED_BYTE: return 1;
-        case GL_UNSIGNED_SHORT: return 2;
-        case GL_UNSIGNED_INT: return 4;
-        default: return 0;
+        case GL_UNSIGNED_BYTE:
+            return 1;
+        case GL_UNSIGNED_SHORT:
+            return 2;
+        case GL_UNSIGNED_INT:
+            return 4;
+        default:
+            return 0;
         }
     }
 
-    MG_Pipe::MGPDrawInfo PlanDrawInfo(GLenum mode, Uint8 indexSize, GLsizei instanceCount,
-                                      GLuint baseInstance, Uint32 numDraws,
-                                      const RemoteDrawBindings& bindings) {
+    MG_Pipe::MGPDrawInfo PlanDrawInfo(GLenum mode, Uint8 indexSize, GLsizei instanceCount, GLuint baseInstance,
+                                      Uint32 numDraws, const RemoteDrawBindings& bindings) {
         MG_Pipe::MGPDrawInfo info{};
         info.Mode = static_cast<Uint32>(mode);
         info.IndexSize = indexSize;
@@ -1874,8 +1866,8 @@ namespace MobileGL::MG_Record {
         // The handle beside the call (rule D): the VAO's element buffer for an indexed draw,
         // the same handle set_index_buffer (32) carried at validate; null for arrays and for a
         // client index array.
-        info.IndexResource = (indexSize != 0 && bindings.ElementBufferBound) ? bindings.ElementBuffer
-                                                                             : MG_Pipe::kMGPipeNullHandle;
+        info.IndexResource =
+            (indexSize != 0 && bindings.ElementBufferBound) ? bindings.ElementBuffer : MG_Pipe::kMGPipeNullHandle;
         info.MinIndex = ~0u; // "unknown" (MGPipeTypes.h); the DrawRangeElements* callers fill it
         info.MaxIndex = ~0u;
         info.XfbCpuCapturedVertices = 0;
@@ -1883,8 +1875,8 @@ namespace MobileGL::MG_Record {
         return info;
     }
 
-    Bool PlanDrawRange(const RemoteDrawBindings& bindings, Uint8 indexSize, const void* indicesOrFirst,
-                       GLsizei count, GLint baseVertex, MG_Pipe::MGPDrawRange& out) {
+    Bool PlanDrawRange(const RemoteDrawBindings& bindings, Uint8 indexSize, const void* indicesOrFirst, GLsizei count,
+                       GLint baseVertex, MG_Pipe::MGPDrawRange& out) {
         out = MG_Pipe::MGPDrawRange{};
         out.Count = count > 0 ? static_cast<Uint32>(count) : 0u;
         if (indexSize == 0) {
@@ -1915,8 +1907,8 @@ namespace MobileGL::MG_Record {
     }
 
     MG_Pipe::MGPDrawIndirect PlanDrawIndirect(const RemoteDrawBindings& bindings, const void* indirect,
-                                              GLsizei drawCount, GLsizei stride,
-                                              GLintptr parameterOffset, Bool hasParameterBuffer) {
+                                              GLsizei drawCount, GLsizei stride, GLintptr parameterOffset,
+                                              Bool hasParameterBuffer) {
         MG_Pipe::MGPDrawIndirect block{};
         block.Buffer = bindings.DrawIndirectBuffer;
         block.ParameterBuffer = hasParameterBuffer ? bindings.ParameterBuffer : MG_Pipe::kMGPipeNullHandle;

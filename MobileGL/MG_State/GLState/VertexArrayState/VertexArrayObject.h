@@ -90,7 +90,7 @@ namespace MobileGL {
                 }
                 Uint GetAttributeBindingIndex(Uint attribIndex) const {
                     return attribIndex < m_attributeBindingIndex.size() ? m_attributeBindingIndex[attribIndex]
-                                                                       : attribIndex;
+                                                                        : attribIndex;
                 }
                 const VertexBufferBindingPoint& GetBindingPoint(Uint bindingIndex) const {
                     static const VertexBufferBindingPoint kEmpty{};
@@ -108,7 +108,6 @@ namespace MobileGL {
                 // That is everything a vertex-elements record (formats, offsets, strides,
                 // enables, divisors) can see, so the record's emitter keys on it.
                 Uint32 GetElementsVersion() const { return m_elementsVersion; }
-
 
             private:
                 void BumpAttributeFormatVersion(Uint index);

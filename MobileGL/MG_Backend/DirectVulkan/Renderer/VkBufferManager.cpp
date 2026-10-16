@@ -88,9 +88,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // its mapped pointer), and may be bound to any role, so it carries every usage.
         // TRANSFER_DST is added by CreateResidentStorage.
         constexpr VkBufferUsageFlags kPersistentBackedUsage =
-            VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT |
-            VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-            VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT |
+            VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT |
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
+            VK_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT |
             // "Every usage" has to mean every usage: a buffer texture reached through an IMAGE
             // unit takes a VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER descriptor, and the write is
             // invalid unless the buffer was created with this bit. Nothing asked for it until
@@ -98,8 +98,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             VK_BUFFER_USAGE_STORAGE_TEXEL_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
         // Appended to kPersistentBackedUsage when VK_EXT_transform_feedback is enabled
         // (see VkBufferManagerInitInfo::transformFeedbackUsageEnabled).
-        constexpr VkBufferUsageFlags kTransformFeedbackUsage =
-            VK_BUFFER_USAGE_TRANSFORM_FEEDBACK_BUFFER_BIT_EXT;
+        constexpr VkBufferUsageFlags kTransformFeedbackUsage = VK_BUFFER_USAGE_TRANSFORM_FEEDBACK_BUFFER_BIT_EXT;
         // The app writes into the persistent map with no explicit flush, so its memory must
         // be host-coherent (Adreno host-visible memory is; requiring it keeps us portable).
         constexpr VkMemoryPropertyFlags kPersistentBackedRequiredFlags =
@@ -108,7 +107,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         using MG_State::GLState::BufferObject;
 
         // The manager owned by the active VulkanRenderer; immediate ops route here.
-        SessionLocal<VkBufferManager*> g_activeBufferManager;  // per Magma session (MagmaSession.h)
+        SessionLocal<VkBufferManager*> g_activeBufferManager; // per Magma session (MagmaSession.h)
 
         // The session's manager, or null once its renderer is gone - a client's records can still
         // arrive after its eglTerminate released it (or, surfaceless, before its first surface built
@@ -122,27 +121,38 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
 
         const MG_Pipe::MGPipeResourceOps g_vulkanWireResourceOps = {
-            .Create = [](auto res, const auto& desc) { if (auto* m = WireManager("create")) m->CreateWireBuffer(res, desc); },
-            .Respecify = [](auto res, const auto& desc, const void* bytes) {
-                if (auto* m = WireManager("respecify")) m->RespecifyWireBuffer(res, desc, bytes);
-            },
-            .SubData = [](auto res, const auto& record, const void* bytes) {
-                if (auto* m = WireManager("write"))
-                    m->WriteWireBuffer(res, MG_Pipe::MGPipeSubDataBufferOffset(record),
-                                       MG_Pipe::MGPipeSubDataBufferSize(record), bytes);
-            },
-            .SubDataResident = [](auto res, const auto& record, const void* bytes) {
-                if (auto* m = WireManager("write"))
-                    m->WriteWireBuffer(res, MG_Pipe::MGPipeSubDataBufferOffset(record),
-                                       MG_Pipe::MGPipeSubDataBufferSize(record), bytes);
-            },
-            .FlushRange = [](auto res, const auto& record, const void* bytes) {
-                if (auto* m = WireManager("flush")) m->FlushWireBuffer(res, record.Offset, record.Size, bytes);
-            },
-            .Readback = [](auto res, const auto& record) {
-                if (auto* m = WireManager("readback")) m->ReadbackWireBuffer(res, record.Offset, record.Size);
-            },
-            .Destroy = [](auto res) { if (auto* m = WireManager("destroy")) m->DestroyWireBuffer(res); },
+            .Create =
+                [](auto res, const auto& desc) {
+                    if (auto* m = WireManager("create")) m->CreateWireBuffer(res, desc);
+                },
+            .Respecify =
+                [](auto res, const auto& desc, const void* bytes) {
+                    if (auto* m = WireManager("respecify")) m->RespecifyWireBuffer(res, desc, bytes);
+                },
+            .SubData =
+                [](auto res, const auto& record, const void* bytes) {
+                    if (auto* m = WireManager("write"))
+                        m->WriteWireBuffer(res, MG_Pipe::MGPipeSubDataBufferOffset(record),
+                                           MG_Pipe::MGPipeSubDataBufferSize(record), bytes);
+                },
+            .SubDataResident =
+                [](auto res, const auto& record, const void* bytes) {
+                    if (auto* m = WireManager("write"))
+                        m->WriteWireBuffer(res, MG_Pipe::MGPipeSubDataBufferOffset(record),
+                                           MG_Pipe::MGPipeSubDataBufferSize(record), bytes);
+                },
+            .FlushRange =
+                [](auto res, const auto& record, const void* bytes) {
+                    if (auto* m = WireManager("flush")) m->FlushWireBuffer(res, record.Offset, record.Size, bytes);
+                },
+            .Readback =
+                [](auto res, const auto& record) {
+                    if (auto* m = WireManager("readback")) m->ReadbackWireBuffer(res, record.Offset, record.Size);
+                },
+            .Destroy =
+                [](auto res) {
+                    if (auto* m = WireManager("destroy")) m->DestroyWireBuffer(res);
+                },
             // Split mapping remains T2: the client owns its map and pushes exact
             // modified ranges. A server pointer is never donated across the wire. Monolith's record
             // arm (P13 W4) is one process: there the store IS handed over, as the legacy arm's
@@ -206,8 +216,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     void VkBufferManager::CreateWireBuffer(MG_Pipe::MGPipeHandle res, const MG_Pipe::MGPResourceDesc& desc) {
         if (FindWireBuffer(res) != nullptr) {
-            MGLOG_F("Magma: Fatal{ProtocolCorruption, \"duplicate-buffer-create\"} {slot=%u, gen=%u}",
-                    res.Slot, res.Gen);
+            MGLOG_F("Magma: Fatal{ProtocolCorruption, \"duplicate-buffer-create\"} {slot=%u, gen=%u}", res.Slot,
+                    res.Gen);
             std::abort();
         }
         m_wireBuffers.try_emplace(WireBufferKey(res));
@@ -219,11 +229,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     void VkBufferManager::RespecifyWireBuffer(MG_Pipe::MGPipeHandle res, const MG_Pipe::MGPResourceDesc& desc,
-                                               const void* initialBytes) {
+                                              const void* initialBytes) {
         auto* resource = FindWireBuffer(res);
         if (!resource) {
-            MGLOG_F("Magma: Fatal{ProtocolCorruption, \"unknown-buffer-respecify\"} {slot=%u, gen=%u}",
-                    res.Slot, res.Gen);
+            MGLOG_F("Magma: Fatal{ProtocolCorruption, \"unknown-buffer-respecify\"} {slot=%u, gen=%u}", res.Slot,
+                    res.Gen);
             std::abort();
         }
         // THE SERIAL IS READ BEFORE THE RESET BELOW ZEROES IT. Whether it is zero - whether any
@@ -240,7 +250,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         resource->imported = false;
         resource->size = desc.Width;
         resource->lastUseSerial = 0;
-        resource->lastUseSubmitIndex = 0;  // M2 r2: the new store carries no submission yet (B3's stamp is per store)
+        resource->lastUseSubmitIndex = 0; // M2 r2: the new store carries no submission yet (B3's stamp is per store)
         resource->gpuWritesPending = false;
         resource->indirectReadBarrierPending = false;
         resource->stagedCoverage.clear();
@@ -249,8 +259,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (resource->size == 0) return;
 
         if (!CreateWireStoreBuffer(*resource)) {
-            MGLOG_F("Magma: Fatal{ResourceUnavailable, \"buffer-storage\"} {slot=%u, gen=%u, size=%llu}",
-                    res.Slot, res.Gen, static_cast<unsigned long long>(resource->size));
+            MGLOG_F("Magma: Fatal{ResourceUnavailable, \"buffer-storage\"} {slot=%u, gen=%u, size=%llu}", res.Slot,
+                    res.Gen, static_cast<unsigned long long>(resource->size));
             std::abort();
         }
         ++m_wireStoreCount;
@@ -378,8 +388,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         barrier.srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
         barrier.dstAccessMask = VK_ACCESS_HOST_READ_BIT | VK_ACCESS_HOST_WRITE_BIT;
         EndActiveRenderPassOn(commands);
-        vkCmdPipelineBarrier(commands, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_HOST_BIT,
-                             0, 1, &barrier, 0, nullptr, 0, nullptr);
+        vkCmdPipelineBarrier(commands, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 1, &barrier,
+                             0, nullptr, 0, nullptr);
         // P8-D: counted here, past the idle early-out, so `whw` is waits TAKEN, not calls.
         ++m_wireHostWaits;
         const Bool timed = MG_Util::PipeStats::Enabled();
@@ -389,8 +399,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (timed) {
             MG_Util::PipeStats::AddCalls(MG_Util::PipeStats::CallClass::WireHostWaits, 1);
             MG_Util::PipeStats::AddCalls(MG_Util::PipeStats::CallClass::WireHostWaitMicros,
-                static_cast<Uint64>(std::chrono::duration_cast<std::chrono::microseconds>(
-                    std::chrono::steady_clock::now() - waitStart).count()));
+                                         static_cast<Uint64>(std::chrono::duration_cast<std::chrono::microseconds>(
+                                                                 std::chrono::steady_clock::now() - waitStart)
+                                                                 .count()));
         }
         if (!waited) {
             return false;
@@ -403,18 +414,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return true;
     }
 
-    void VkBufferManager::WriteWireBuffer(MG_Pipe::MGPipeHandle res, Uint64 offset, Uint64 size,
-                                           const void* bytes) {
+    void VkBufferManager::WriteWireBuffer(MG_Pipe::MGPipeHandle res, Uint64 offset, Uint64 size, const void* bytes) {
         auto* resource = FindWireBuffer(res);
         if (!resource || offset > resource->size || size > resource->size - offset || (size && !bytes)) {
-            MGLOG_F("Magma: Fatal{ProtocolCorruption, \"buffer-write-range\"} {slot=%u, gen=%u}",
-                    res.Slot, res.Gen);
+            MGLOG_F("Magma: Fatal{ProtocolCorruption, \"buffer-write-range\"} {slot=%u, gen=%u}", res.Slot, res.Gen);
             std::abort();
         }
         if (size == 0) return;
         resource->contentSerial = ++m_wireContentSerial;
-        if (!resource->shadow.empty())
-            Memcpy(resource->shadow.data() + offset, bytes, static_cast<SizeT>(size));
+        if (!resource->shadow.empty()) Memcpy(resource->shadow.data() + offset, bytes, static_cast<SizeT>(size));
         Bool uploaded = false;
         const Uint64 probeLastUse = resource->lastUseSerial;
         const Uint64 probeCompleted = GetCompletedSerial();
@@ -468,8 +476,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // byte update waits, then writes only the exact range; rounding it
             // from a CPU shadow could overwrite neighbouring GPU-written bytes.
             if (((offset | size) & 3u) == 0) {
-                uploaded = StagedWireRangeCopy(*resource, bytes, static_cast<SizeT>(offset),
-                                                static_cast<SizeT>(size));
+                uploaded = StagedWireRangeCopy(*resource, bytes, static_cast<SizeT>(offset), static_cast<SizeT>(size));
             }
             if (!uploaded && !WaitForWireBufferHostAccess(*resource)) {
                 if (LatchedOnDeviceLoss("buffer-host-write")) return;
@@ -490,32 +497,27 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (WireBufProbeEnabled()) {
             MGLOG_I("WBUF write slot=%u gen=%u off=%llu size=%llu branch=%s bySerial=%d bySubmit=%d "
                     "lastUse=%llu completed=%llu frameSerial=%llu floor=%llu lastUseSubmit=%llu",
-                    res.Slot, res.Gen, static_cast<unsigned long long>(offset),
-                    static_cast<unsigned long long>(size),
-                    (busyBySerial || busyBySubmission) ? "STAGED-or-WAIT" : "HOST-IMMEDIATE",
-                    busyBySerial ? 1 : 0, busyBySubmission ? 1 : 0,
-                    static_cast<unsigned long long>(probeLastUse), static_cast<unsigned long long>(probeCompleted),
-                    static_cast<unsigned long long>(m_frameSerial),
+                    res.Slot, res.Gen, static_cast<unsigned long long>(offset), static_cast<unsigned long long>(size),
+                    (busyBySerial || busyBySubmission) ? "STAGED-or-WAIT" : "HOST-IMMEDIATE", busyBySerial ? 1 : 0,
+                    busyBySubmission ? 1 : 0, static_cast<unsigned long long>(probeLastUse),
+                    static_cast<unsigned long long>(probeCompleted), static_cast<unsigned long long>(m_frameSerial),
                     static_cast<unsigned long long>(m_completedSerialFloor),
                     static_cast<unsigned long long>(resource->lastUseSubmitIndex));
         }
-        MG_Record::StagedShadowStore::CoverageAdd(resource->stagedCoverage,
-                                                         static_cast<SizeT>(offset),
-                                                         static_cast<SizeT>(offset + size));
+        MG_Record::StagedShadowStore::CoverageAdd(resource->stagedCoverage, static_cast<SizeT>(offset),
+                                                  static_cast<SizeT>(offset + size));
     }
 
-    void VkBufferManager::FlushWireBuffer(MG_Pipe::MGPipeHandle res, Uint64 offset, Uint64 size,
-                                           const void* bytes) {
+    void VkBufferManager::FlushWireBuffer(MG_Pipe::MGPipeHandle res, Uint64 offset, Uint64 size, const void* bytes) {
         if (bytes != nullptr) {
             WriteWireBuffer(res, offset, size, bytes);
             return;
         }
         const auto* resource = FindWireBuffer(res);
         if (!resource || offset > resource->size || size > resource->size - offset ||
-            !MG_Record::StagedShadowStore::CoverageHas(resource->stagedCoverage,
-                static_cast<SizeT>(offset), static_cast<SizeT>(offset + size))) {
-            MGLOG_F("Magma: Fatal{StageSnapshotTooNarrow, \"buffer-flush\"} {slot=%u, gen=%u}",
-                    res.Slot, res.Gen);
+            !MG_Record::StagedShadowStore::CoverageHas(resource->stagedCoverage, static_cast<SizeT>(offset),
+                                                       static_cast<SizeT>(offset + size))) {
+            MGLOG_F("Magma: Fatal{StageSnapshotTooNarrow, \"buffer-flush\"} {slot=%u, gen=%u}", res.Slot, res.Gen);
             std::abort();
         }
         // SubData has already copied the owned record bytes into GPU storage,
@@ -567,7 +569,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         while (!m_convertedStreams.empty() && m_convertedStreamBytes + size > kConvertedStreamBudget) {
             SizeT oldest = 0;
             for (SizeT i = 1; i < m_convertedStreams.size(); ++i)
-                if (m_convertedStreams[i].lastUseFrameSerial < m_convertedStreams[oldest].lastUseFrameSerial) oldest = i;
+                if (m_convertedStreams[i].lastUseFrameSerial < m_convertedStreams[oldest].lastUseFrameSerial)
+                    oldest = i;
             RetireConvertedStream(oldest);
         }
         ConvertedStream entry;
@@ -582,7 +585,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 .memoryUsage = VMA_MEMORY_USAGE_AUTO,
                 .allocationFlags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT,
                 .requiredFlags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-            }) || entry.buffer.Map() == nullptr || !entry.buffer.Upload(bytes, static_cast<VkDeviceSize>(size), 0))
+            }) ||
+            entry.buffer.Map() == nullptr || !entry.buffer.Upload(bytes, static_cast<VkDeviceSize>(size), 0))
             return false;
         m_convertedStreamBytes += size;
         outSlice = entry.buffer.GetSlice();
@@ -614,8 +618,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // path) can submit this index without the draw. This stamp is the defence term's input
         // (see WriteWireBuffer); the floor behind lastUseSerial is the guarantee. Read off the
         // owning renderer's counter (its GetWireNextSubmitIndex()) when it was handed one.
-        if (m_submitCounter != nullptr) resource->lastUseSubmitIndex = *m_submitCounter + 1;
-        else if (pVulkanRenderer) resource->lastUseSubmitIndex = pVulkanRenderer->GetWireNextSubmitIndex();
+        if (m_submitCounter != nullptr)
+            resource->lastUseSubmitIndex = *m_submitCounter + 1;
+        else if (pVulkanRenderer)
+            resource->lastUseSubmitIndex = pVulkanRenderer->GetWireNextSubmitIndex();
         outSlice = resource->buffer.GetSlice(0, resource->size);
         outSlice.mapped = nullptr;
         if (WireBufProbeEnabled()) {
@@ -674,15 +680,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         after.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
         after.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
         EndActiveRenderPassOn(commands);
-        vkCmdPipelineBarrier(commands, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-                             0, 1, &after, 0, nullptr, 0, nullptr);
+        vkCmdPipelineBarrier(commands, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 1, &after,
+                             0, nullptr, 0, nullptr);
         resource->lastUseSerial = m_frameSerial;
         return true;
     }
 
-    Bool VkBufferManager::CopyWireBufferSubWordRangeToSlice(MG_Pipe::MGPipeHandle res, Uint64 offset,
-                                                            Uint64 size, Uint32 frameIndex,
-                                                            const BufferSlice& dst, Uint64 dstSkip) {
+    Bool VkBufferManager::CopyWireBufferSubWordRangeToSlice(MG_Pipe::MGPipeHandle res, Uint64 offset, Uint64 size,
+                                                            Uint32 frameIndex, const BufferSlice& dst, Uint64 dstSkip) {
         auto* resource = FindWireBuffer(res);
         if (!resource || offset > resource->size || size > resource->size - offset) return false;
         if (dstSkip > dst.size || size > dst.size - dstSkip) return false;
@@ -703,8 +708,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // already name - see BufferArena::EnsureCapacity - so the two slices are allowed to
         // sit in different VkBuffers and the copy names each slice's own handle.
         BufferSlice staging{};
-        if (!m_transientUploadArena.Allocate(frameIndex, stagedSize, 4, staging) || !staging.IsValid())
-            return false;
+        if (!m_transientUploadArena.Allocate(frameIndex, stagedSize, 4, staging) || !staging.IsValid()) return false;
 
         const VkCommandBuffer commands = m_copyProvider->AcquireBufferCopyCommandBuffer();
         if (commands == VK_NULL_HANDLE) return false;
@@ -723,8 +727,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         staged.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
         staged.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
         EndActiveRenderPassOn(commands);
-        vkCmdPipelineBarrier(commands, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                             0, 1, &staged, 0, nullptr, 0, nullptr);
+        vkCmdPipelineBarrier(commands, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &staged, 0,
+                             nullptr, 0, nullptr);
         const VkBufferCopy shift{staging.offset + headPad, dst.offset + dstSkip, size};
         EndActiveRenderPassOn(commands);
         vkCmdCopyBuffer(commands, staging.buffer, dst.buffer, 1, &shift);
@@ -732,8 +736,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         after.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
         after.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
         EndActiveRenderPassOn(commands);
-        vkCmdPipelineBarrier(commands, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-                             0, 1, &after, 0, nullptr, 0, nullptr);
+        vkCmdPipelineBarrier(commands, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 1, &after,
+                             0, nullptr, 0, nullptr);
         resource->lastUseSerial = m_frameSerial;
         return true;
     }
@@ -763,8 +767,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
         // The reverse producer synchronously copies into SEG_EVENT before
         // this owned vector is released; no mapped Vulkan pointer crosses roles.
-        MG_Pipe::gMGPipeCallbacks.OnBufferWriteback(res, offset,
-            {reinterpret_cast<Uint64>(bytes.data()), size, MG_Pipe::kMGHostSpanSegNone, 0});
+        MG_Pipe::gMGPipeCallbacks.OnBufferWriteback(
+            res, offset, {reinterpret_cast<Uint64>(bytes.data()), size, MG_Pipe::kMGHostSpanSegNone, 0});
     }
 
     void VkBufferManager::MarkWireBufferGpuWritten(MG_Pipe::MGPipeHandle res, Uint64 offset, Uint64 size) {
@@ -809,8 +813,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
 #if defined(__ANDROID__)
     namespace {
-        Int32 T0PickMemoryType(const VkPhysicalDeviceMemoryProperties& props, Uint32 bits,
-                               VkMemoryPropertyFlags want) {
+        Int32 T0PickMemoryType(const VkPhysicalDeviceMemoryProperties& props, Uint32 bits, VkMemoryPropertyFlags want) {
             for (Uint32 i = 0; i < props.memoryTypeCount; ++i) {
                 if ((bits & (1u << i)) != 0 && (props.memoryTypes[i].propertyFlags & want) == want)
                     return static_cast<Int32>(i);
@@ -874,7 +877,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             }
             VkMemoryDedicatedAllocateInfo dedicated{VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO};
             dedicated.buffer = out.buffer;
-            VkImportAndroidHardwareBufferInfoANDROID import{VK_STRUCTURE_TYPE_IMPORT_ANDROID_HARDWARE_BUFFER_INFO_ANDROID};
+            VkImportAndroidHardwareBufferInfoANDROID import{
+                VK_STRUCTURE_TYPE_IMPORT_ANDROID_HARDWARE_BUFFER_INFO_ANDROID};
             import.buffer = static_cast<AHardwareBuffer*>(ahb);
             import.pNext = &dedicated;
             VkMemoryAllocateInfo allocateInfo{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
@@ -991,11 +995,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (pVulkanRenderer == nullptr || !pVulkanRenderer->GetWireAhbImport(ctx))
             return answer(false, "the device did not take VK_ANDROID_external_memory_android_hardware_buffer");
         constexpr Uint64 kBytes = 64 * 1024;
-        constexpr Uint32 kWords = 1024;          // one 4 KiB region
-        constexpr Uint64 kFillAt = 4 * 4096;     // region 4
+        constexpr Uint32 kWords = 1024;      // one 4 KiB region
+        constexpr Uint64 kFillAt = 4 * 4096; // region 4
         constexpr Uint32 kFillWord = 0x6C0FFEE0u;
         Vector<Uint32> pattern(kBytes / 4);
-        for (SizeT i = 0; i < pattern.size(); ++i) pattern[i] = 0x5A000000u ^ static_cast<Uint32>(i * 2654435761u);
+        for (SizeT i = 0; i < pattern.size(); ++i)
+            pattern[i] = 0x5A000000u ^ static_cast<Uint32>(i * 2654435761u);
         MG_Remote::Transport::AdoptT0::HeldStore held;
         String why;
         if (!MG_Remote::Transport::AdoptT0::AllocateHeld(kBytes, pattern.data(), held, why))
@@ -1035,12 +1040,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             }
             VkMemoryRequirements requirements{};
             vkGetBufferMemoryRequirements(ctx.device, staging.buffer, &requirements);
-            const Int32 stagingType = T0PickMemoryType(ctx.memory, requirements.memoryTypeBits,
-                VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+            const Int32 stagingType =
+                T0PickMemoryType(ctx.memory, requirements.memoryTypeBits,
+                                 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
             VkMemoryAllocateInfo stagingAlloc{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
             stagingAlloc.allocationSize = requirements.size;
             stagingAlloc.memoryTypeIndex = static_cast<Uint32>(stagingType < 0 ? 0 : stagingType);
-            if (stagingType < 0 || vkAllocateMemory(ctx.device, &stagingAlloc, nullptr, &staging.memory) != VK_SUCCESS ||
+            if (stagingType < 0 ||
+                vkAllocateMemory(ctx.device, &stagingAlloc, nullptr, &staging.memory) != VK_SUCCESS ||
                 vkBindBufferMemory(ctx.device, staging.buffer, staging.memory, 0) != VK_SUCCESS ||
                 vkMapMemory(ctx.device, staging.memory, 0, VK_WHOLE_SIZE, 0, &staging.mapped) != VK_SUCCESS) {
                 verdict = "staging memory";
@@ -1084,8 +1091,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             toHost.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
             toHost.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
             EndActiveRenderPassOn(commands);
-            vkCmdPipelineBarrier(commands, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 1, &toHost,
-                                 0, nullptr, 0, nullptr);
+            vkCmdPipelineBarrier(commands, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 1, &toHost, 0,
+                                 nullptr, 0, nullptr);
             vkEndCommandBuffer(commands);
             VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
             submit.commandBufferCount = 1;
@@ -1105,8 +1112,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             ok = gpuRead == kWords && heldSaw == kWords;
             verdict = "64 KiB AHB, lock held throughout: host map read ok (" +
                       String(imported.coherent ? "coherent" : "non-coherent") + " memory), GPU read " +
-                      std::to_string(gpuRead) + "/1024 words of the CPU's pattern, GPU write seen through the "
-                      "held lock " + std::to_string(heldSaw) + "/1024 words";
+                      std::to_string(gpuRead) +
+                      "/1024 words of the CPU's pattern, GPU write seen through the "
+                      "held lock " +
+                      std::to_string(heldSaw) + "/1024 words";
             if (!ok) break;
 
             // STEADY STATE. The round above reads bytes the CPU wrote BEFORE the import, and an import
@@ -1142,8 +1151,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             EndActiveRenderPassOn(commands);
             vkCmdFillBuffer(commands, imported.buffer, kFillAt, kWords * 4, kSteadyFillWord);
             EndActiveRenderPassOn(commands);
-            vkCmdPipelineBarrier(commands, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 1, &toHost,
-                                 0, nullptr, 0, nullptr);
+            vkCmdPipelineBarrier(commands, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 1, &toHost, 0,
+                                 nullptr, 0, nullptr);
             vkEndCommandBuffer(commands);
             if (vkQueueSubmit(ctx.queue, 1, &submit, fence) != VK_SUCCESS ||
                 vkWaitForFences(ctx.device, 1, &fence, VK_TRUE, 2'000'000'000ull) != VK_SUCCESS) {
@@ -1172,17 +1181,22 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 #endif
     }
 
-
     void VkBufferManager::DescribeWireBufferHistory(MG_Pipe::MGPipeHandle res) const {
         const auto& history = *g_wireBufferHistory;
         Int createdAgo = -1, destroyedAgo = -1;
         for (SizeT i = 0; i < std::min(history.createdCount, WireBufferHistory::kDepth); ++i) {
             const auto& h = history.created[(history.createdCount - 1 - i) % WireBufferHistory::kDepth];
-            if (h.Slot == res.Slot && h.Gen == res.Gen) { createdAgo = static_cast<Int>(i); break; }
+            if (h.Slot == res.Slot && h.Gen == res.Gen) {
+                createdAgo = static_cast<Int>(i);
+                break;
+            }
         }
         for (SizeT i = 0; i < std::min(history.destroyedCount, WireBufferHistory::kDepth); ++i) {
             const auto& h = history.destroyed[(history.destroyedCount - 1 - i) % WireBufferHistory::kDepth];
-            if (h.Slot == res.Slot && h.Gen == res.Gen) { destroyedAgo = static_cast<Int>(i); break; }
+            if (h.Slot == res.Slot && h.Gen == res.Gen) {
+                destroyedAgo = static_cast<Int>(i);
+                break;
+            }
         }
         MGLOG_E("Magma wire buffer {slot=%u, gen=%u}: live stores %zu; created %d creates ago, destroyed %d "
                 "destroys ago (-1 = not in the last %zu); %zu creates, %zu destroys in this session",
@@ -1466,8 +1480,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return std::max(completed, m_completedSerialFloor);
     }
 
-    Bool VkBufferManager::UploadTransient(BufferKind kind, Uint32 frameIndex, const void* data,
-                                          VkDeviceSize size, VkDeviceSize alignment, BufferSlice& outSlice) {
+    Bool VkBufferManager::UploadTransient(BufferKind kind, Uint32 frameIndex, const void* data, VkDeviceSize size,
+                                          VkDeviceSize alignment, BufferSlice& outSlice) {
         if (!m_transientUploadArena.Upload(frameIndex, data, size, alignment, outSlice)) {
             return false;
         }
@@ -1492,8 +1506,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 break;
             case BufferKind::TextureBuffer:
             case BufferKind::ShaderStorage:
-                MG_Util::PipeStats::AddBytes(MG_Util::PipeStats::ByteClass::StageBuffer,
-                                             static_cast<Uint64>(size));
+                MG_Util::PipeStats::AddBytes(MG_Util::PipeStats::ByteClass::StageBuffer, static_cast<Uint64>(size));
                 break;
             case BufferKind::Uniform:
                 break;
@@ -1508,8 +1521,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             .frameCount = m_initInfo.frameCount,
             .usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT |
                      VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT |
-                     (VkBufferUsageFlags{VK_BUFFER_USAGE_TRANSFER_DST_BIT}) |
-                     VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                     (VkBufferUsageFlags{VK_BUFFER_USAGE_TRANSFER_DST_BIT}) | VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
             .memoryUsage = m_initInfo.transientMemoryUsage,
             .allocationFlags = m_initInfo.transientAllocationFlags,
             .minBufferSize = m_initInfo.minUploadBytes,
@@ -1517,14 +1529,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         });
     }
 
-    Bool VkBufferManager::StagedWireRangeCopy(WireBufferResource& resource, const void* data,
-                                          SizeT offset, SizeT size) {
+    Bool VkBufferManager::StagedWireRangeCopy(WireBufferResource& resource, const void* data, SizeT offset,
+                                              SizeT size) {
         if (!m_copyProvider) {
             return false;
         }
         BufferSlice staging{};
-        if (!m_transientUploadArena.Upload(m_currentFrameIndex, data,
-                                           static_cast<VkDeviceSize>(size), 16, staging)) {
+        if (!m_transientUploadArena.Upload(m_currentFrameIndex, data, static_cast<VkDeviceSize>(size), 16, staging)) {
             return false;
         }
         if (MG_Util::PipeStats::Enabled()) {
@@ -1569,7 +1580,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return true;
     }
 
-
     void VkBufferManager::CollectDeferredReleases(Uint32 frameIndex) {
         MOBILEGL_ASSERT(frameIndex < m_deferredBufferReleases.size(),
                         "VkBufferManager::CollectDeferredReleases frame index out of range");
@@ -1595,8 +1605,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 .size = kUnboundStorageDescriptorBytes,
                 .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                 .memoryUsage = VMA_MEMORY_USAGE_AUTO,
-                .allocationFlags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
-                                   VMA_ALLOCATION_CREATE_MAPPED_BIT,
+                .allocationFlags =
+                    VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT,
                 .requiredFlags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
             });
             if (!created) {
@@ -1628,8 +1638,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 .usage = VK_BUFFER_USAGE_UNIFORM_TEXEL_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_TEXEL_BUFFER_BIT |
                          VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                 .memoryUsage = VMA_MEMORY_USAGE_AUTO,
-                .allocationFlags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
-                                   VMA_ALLOCATION_CREATE_MAPPED_BIT,
+                .allocationFlags =
+                    VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT,
                 .requiredFlags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
             });
             if (!created) {
@@ -1647,7 +1657,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     void VkBufferManager::DestroyAllDeferredReleases() {
         // Both callers (Shutdown, RecreateTransientArenas) have proven the device idle.
         DestroyAllDeferredWireReleases();
-        for (auto& stream : m_convertedStreams) stream.buffer.Destroy();
+        for (auto& stream : m_convertedStreams)
+            stream.buffer.Destroy();
         m_convertedStreams.clear();
         m_convertedStreamBytes = 0;
         for (auto& releases : m_deferredBufferReleases) {

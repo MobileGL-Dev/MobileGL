@@ -58,8 +58,7 @@ namespace MGITest {
 
         // A texel that names its own position, so a misplaced band cannot match.
         std::array<GLubyte, 4> PatternRgba8(int x, int y) {
-            return {static_cast<GLubyte>(x & 0xFF),
-                    static_cast<GLubyte>(((x >> 8) & 0x0F) | (((y >> 8) & 0x0F) << 4)),
+            return {static_cast<GLubyte>(x & 0xFF), static_cast<GLubyte>(((x >> 8) & 0x0F) | (((y >> 8) & 0x0F) << 4)),
                     static_cast<GLubyte>(y & 0xFF), static_cast<GLubyte>((x * 3 + y * 5) & 0xFF)};
         }
 
@@ -115,8 +114,10 @@ namespace MGITest {
                 if (m_pbo != 0) glDeleteBuffers(1, &m_pbo);
                 glBindFramebuffer(GL_FRAMEBUFFER, 0);
                 if (m_fbo != 0) glDeleteFramebuffers(1, &m_fbo);
-                for (GLuint texture : m_textures) glDeleteTextures(1, &texture);
-                for (GLuint renderbuffer : m_renderbuffers) glDeleteRenderbuffers(1, &renderbuffer);
+                for (GLuint texture : m_textures)
+                    glDeleteTextures(1, &texture);
+                for (GLuint renderbuffer : m_renderbuffers)
+                    glDeleteRenderbuffers(1, &renderbuffer);
                 m_pbo = 0;
                 m_fbo = 0;
                 m_textures.clear();
@@ -135,8 +136,7 @@ namespace MGITest {
             }
 
             static void DrainErrors() {
-                for (int i = 0; i < 16 && glGetError() != GL_NO_ERROR; ++i) {
-                }
+                for (int i = 0; i < 16 && glGetError() != GL_NO_ERROR; ++i) {}
             }
 
             // A texture holding the position pattern, attached as COLOR_ATTACHMENT0 and read.
@@ -250,9 +250,8 @@ namespace MGITest {
                 const auto expected = stripeColour(x, y);
                 const GLfloat* got = pixels.data() + (static_cast<std::size_t>(y) * kWidth + x) * 4;
                 if (std::memcmp(got, expected.data(), sizeof(expected)) != 0 && bad++ == 0) {
-                    first = "(" + std::to_string(x) + "," + std::to_string(y) + ") = " + std::to_string(got[0]) +
-                            "," + std::to_string(got[1]) + "," + std::to_string(got[2]) + "," +
-                            std::to_string(got[3]);
+                    first = "(" + std::to_string(x) + "," + std::to_string(y) + ") = " + std::to_string(got[0]) + "," +
+                            std::to_string(got[1]) + "," + std::to_string(got[2]) + "," + std::to_string(got[3]);
                 }
             }
         }
@@ -420,8 +419,7 @@ namespace MGITest {
                 const int y = static_cast<int>(i / kWidth);
                 if (std::fabs(depth[i] - depthAt(y)) > 1.0f / 4096.0f && bad++ == 0) firstBad = i;
             }
-            EXPECT_EQ(bad, 0u) << bad << " depth values wrong, first at pixel " << firstBad << " = "
-                               << depth[firstBad];
+            EXPECT_EQ(bad, 0u) << bad << " depth values wrong, first at pixel " << firstBad << " = " << depth[firstBad];
         }
         {
             struct D32fS8 {
@@ -442,9 +440,8 @@ namespace MGITest {
                     firstBad = i;
                 }
             }
-            EXPECT_EQ(bad, 0u) << bad << " packed depth/stencil pairs wrong, first at pixel " << firstBad
-                               << " = depth " << packed[firstBad].depth << " stencil "
-                               << (packed[firstBad].stencil & 0xFFu);
+            EXPECT_EQ(bad, 0u) << bad << " packed depth/stencil pairs wrong, first at pixel " << firstBad << " = depth "
+                               << packed[firstBad].depth << " stencil " << (packed[firstBad].stencil & 0xFFu);
         }
     }
 

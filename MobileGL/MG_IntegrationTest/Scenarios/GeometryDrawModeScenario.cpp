@@ -90,8 +90,8 @@ void main()
                 glGenVertexArrays(1, &m_vao);
                 glBindVertexArray(m_vao);
                 if (!BackendHostsGeometry()) {
-                    GTEST_SKIP() << "no geometry stage on " << Gl().BackendName() << " ("
-                                 << Gl().RendererString() << "); there is no input primitive to validate";
+                    GTEST_SKIP() << "no geometry stage on " << Gl().BackendName() << " (" << Gl().RendererString()
+                                 << "); there is no input primitive to validate";
                 }
             }
 
@@ -118,15 +118,13 @@ void main()
             }
 
             static void DrainErrors() {
-                for (int i = 0; i < 16 && glGetError() != GL_NO_ERROR; ++i) {
-                }
+                for (int i = 0; i < 16 && glGetError() != GL_NO_ERROR; ++i) {}
             }
 
             GLuint BuildProgram(const char* geometrySource, const char* capturedVarying = nullptr) {
-                const std::vector<std::pair<GLenum, const char*>> stages = {
-                    {GL_VERTEX_SHADER, kVertexSource},
-                    {GL_GEOMETRY_SHADER, geometrySource},
-                    {GL_FRAGMENT_SHADER, kFragmentSource}};
+                const std::vector<std::pair<GLenum, const char*>> stages = {{GL_VERTEX_SHADER, kVertexSource},
+                                                                            {GL_GEOMETRY_SHADER, geometrySource},
+                                                                            {GL_FRAGMENT_SHADER, kFragmentSource}};
 
                 std::vector<GLuint> shaders;
                 bool ok = true;
@@ -144,19 +142,22 @@ void main()
                     }
                 }
                 if (!ok) {
-                    for (const GLuint shader : shaders) glDeleteShader(shader);
+                    for (const GLuint shader : shaders)
+                        glDeleteShader(shader);
                     return 0;
                 }
 
                 const GLuint program = glCreateProgram();
-                for (const GLuint shader : shaders) glAttachShader(program, shader);
+                for (const GLuint shader : shaders)
+                    glAttachShader(program, shader);
                 if (capturedVarying != nullptr) {
                     glTransformFeedbackVaryings(program, 1, &capturedVarying, GL_INTERLEAVED_ATTRIBS);
                 }
                 glLinkProgram(program);
                 GLint linked = 0;
                 glGetProgramiv(program, GL_LINK_STATUS, &linked);
-                for (const GLuint shader : shaders) glDeleteShader(shader);
+                for (const GLuint shader : shaders)
+                    glDeleteShader(shader);
                 if (!linked) {
                     m_buildLog = InfoLog(program, false);
                     glDeleteProgram(program);
@@ -199,9 +200,8 @@ void main()
             glUseProgram(program);
             DrainErrors();
 
-            for (const GLenum mode :
-                 {static_cast<GLenum>(GL_LINES), static_cast<GLenum>(GL_LINE_STRIP),
-                  static_cast<GLenum>(GL_TRIANGLES), static_cast<GLenum>(GL_TRIANGLE_STRIP)}) {
+            for (const GLenum mode : {static_cast<GLenum>(GL_LINES), static_cast<GLenum>(GL_LINE_STRIP),
+                                      static_cast<GLenum>(GL_TRIANGLES), static_cast<GLenum>(GL_TRIANGLE_STRIP)}) {
                 glDrawArrays(mode, 0, 3);
                 EXPECT_EQ(glGetError(), static_cast<GLenum>(GL_INVALID_OPERATION))
                     << "mode " << mode << " does not decompose into the geometry shader's points input";
@@ -311,9 +311,8 @@ void main()
             // Deliberately NOT BuildProgram: the executable under test has no geometry stage.
             const GLuint program = glCreateProgram();
             m_programs.push_back(program);
-            for (const auto& [stage, source] :
-                 std::vector<std::pair<GLenum, const char*>>{{GL_VERTEX_SHADER, kVertexSource},
-                                                             {GL_FRAGMENT_SHADER, kFragmentSource}}) {
+            for (const auto& [stage, source] : std::vector<std::pair<GLenum, const char*>>{
+                     {GL_VERTEX_SHADER, kVertexSource}, {GL_FRAGMENT_SHADER, kFragmentSource}}) {
                 const GLuint shader = glCreateShader(stage);
                 glShaderSource(shader, 1, &source, nullptr);
                 glCompileShader(shader);
@@ -372,9 +371,8 @@ void main()
 
             const GLuint program = glCreateProgram();
             m_programs.push_back(program);
-            for (const auto& [stage, source] :
-                 std::vector<std::pair<GLenum, const char*>>{{GL_VERTEX_SHADER, kVertexSource},
-                                                             {GL_FRAGMENT_SHADER, kFragmentSource}}) {
+            for (const auto& [stage, source] : std::vector<std::pair<GLenum, const char*>>{
+                     {GL_VERTEX_SHADER, kVertexSource}, {GL_FRAGMENT_SHADER, kFragmentSource}}) {
                 const GLuint shader = glCreateShader(stage);
                 glShaderSource(shader, 1, &source, nullptr);
                 glCompileShader(shader);

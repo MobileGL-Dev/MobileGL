@@ -132,12 +132,12 @@ namespace MobileGL::MG_Pipe {
     class MGPipeSamplerCsoCache {
     public:
         struct Counters {
-            Uint64 Mints = 0;       // create_sampler_state emissions
+            Uint64 Mints = 0; // create_sampler_state emissions
             Uint64 Acquisitions = 0;
-            Uint64 Hits = 0;        // a probe that found a live entry and passed the memcmp
-            Uint64 Collisions = 0;  // a hash hit the memcmp REJECTED - the reason it exists
-            Uint64 Evictions = 0;   // LRU evictions, each one a delete_sampler_state
-            Uint64 Releases = 0;    // reference drops
+            Uint64 Hits = 0;       // a probe that found a live entry and passed the memcmp
+            Uint64 Collisions = 0; // a hash hit the memcmp REJECTED - the reason it exists
+            Uint64 Evictions = 0;  // LRU evictions, each one a delete_sampler_state
+            Uint64 Releases = 0;   // reference drops
             // Mints made with the cache already full and EVERY entry referenced. A recorded
             // number and not a gate (ID-17): growing past 256 is the safe direction, and this
             // is what makes it visible instead of silent.
@@ -327,8 +327,7 @@ namespace MobileGL::MG_Pipe {
             NotePublishedIn(entry, MGPipeCurrentShareGroupToken());
             payloadBytes += sizeof(MGPSamplerDesc) + sizeof(SamplerParameters);
             if (MG_Util::PipeStats::Enabled()) {
-                MG_Util::PipeStats::AddBytes(MG_Util::PipeStats::ByteClass::CsoBlobBytes,
-                                             sizeof(SamplerParameters));
+                MG_Util::PipeStats::AddBytes(MG_Util::PipeStats::ByteClass::CsoBlobBytes, sizeof(SamplerParameters));
             }
         }
 
@@ -431,8 +430,7 @@ namespace MobileGL::MG_Pipe {
             ++m_counters.Mints;
             payloadBytes += sizeof(MGPSamplerDesc) + sizeof(SamplerParameters);
             if (MG_Util::PipeStats::Enabled()) {
-                MG_Util::PipeStats::AddBytes(MG_Util::PipeStats::ByteClass::CsoBlobBytes,
-                                             sizeof(SamplerParameters));
+                MG_Util::PipeStats::AddBytes(MG_Util::PipeStats::ByteClass::CsoBlobBytes, sizeof(SamplerParameters));
             }
             return cso;
         }
@@ -619,8 +617,7 @@ namespace MobileGL::MG_Pipe {
                         if (unit > m_resolution.MaxImageUnit) m_resolution.MaxImageUnit = unit;
                         continue;
                     }
-                    const TextureTarget target =
-                        MGPipeSamplerUniformTextureTarget(program->GetUniformType(location));
+                    const TextureTarget target = MGPipeSamplerUniformTextureTarget(program->GetUniformType(location));
                     if (target == TextureTarget::Unknown) continue;
                     // FIRST WRITER WINS, which is DirectGLES' arbitration read forwards: when
                     // two sampler uniforms of different types share a unit the binding placed
@@ -700,8 +697,7 @@ namespace MobileGL::MG_Pipe {
         Uint64 EmitSamplerViews(GLContext& ctx) {
             const Int maxTouched = ctx.GetMaxTouchedTextureUnit();
             const Uint32 count =
-                maxTouched < 0 ? 0u
-                               : Min(static_cast<Uint32>(maxTouched) + 1u, kMGPipeMaxTextureUnits);
+                maxTouched < 0 ? 0u : Min(static_cast<Uint32>(maxTouched) + 1u, kMGPipeMaxTextureUnits);
 
             // The join is the EMITTER's, deliberately, and it is the same GetProgramForDraw()
             // the verb is about to make anyway: the tracker's own shutters read
@@ -731,13 +727,12 @@ namespace MobileGL::MG_Pipe {
                 // the completeness answer depends on which one applies - a mipmap mode of None
                 // makes a single-level texture complete that would otherwise sample black.
                 const auto& unitSampler = textureUnit.GetSamplerObject();
-                const SamplerObject* effective =
-                    unitSampler ? unitSampler.get() : texture->GetSamplerObject().get();
+                const SamplerObject* effective = unitSampler ? unitSampler.get() : texture->GetSamplerObject().get();
                 if (MG_State::GLState::SamplesAsIncompleteTexture(texture.get(), effective)) continue;
 
-                entry.Texture = MGPipeSlots().AcquireHinted(
-                    MGPipeKind::Texture, texture->GetLifetimeId(),
-                    texture->PipeHandleHint(ITextureObject::PipeHintKind::Texture));
+                entry.Texture =
+                    MGPipeSlots().AcquireHinted(MGPipeKind::Texture, texture->GetLifetimeId(),
+                                                texture->PipeHandleHint(ITextureObject::PipeHintKind::Texture));
                 // D-A4: a texture the sampler-view resolution names in an emitted MGPBoundView
                 // is SAMPLER-bound from then on (sticky; the texture emitter's contract door,
                 // since this header is included BY TextureEmit.h). One early-out per unit per
@@ -773,15 +768,13 @@ namespace MobileGL::MG_Pipe {
         Uint64 EmitSamplerStates(GLContext& ctx) {
             const Int maxTouched = ctx.GetMaxTouchedTextureUnit();
             const Uint32 count =
-                maxTouched < 0 ? 0u
-                               : Min(static_cast<Uint32>(maxTouched) + 1u, kMGPipeMaxTextureUnits);
+                maxTouched < 0 ? 0u : Min(static_cast<Uint32>(maxTouched) + 1u, kMGPipeMaxTextureUnits);
 
             Uint64 bytes = 0;
             MGPipeSamplerCsoCache& cache = MGPipeSamplerCsoCacheInstance();
             for (Uint32 unit = 0; unit < count; ++unit) {
                 const auto& sampler = ctx.GetTextureUnitObject(static_cast<Int>(unit)).GetSamplerObject();
-                m_states[unit] =
-                    sampler ? cache.Acquire(sampler->GetAllSamplerParameters(), bytes) : kMGPipeNullHandle;
+                m_states[unit] = sampler ? cache.Acquire(sampler->GetAllSamplerParameters(), bytes) : kMGPipeNullHandle;
             }
             for (Uint32 unit = 0; unit < kMGPipeMaxTextureUnits; ++unit) {
                 const MGPipeHandle held = m_stateRefs[unit];
@@ -900,8 +893,7 @@ namespace MobileGL::MG_Pipe {
         // because a birth is not a validate-point emission and has no payload budget to report.
         void EmitSamplerView(ITextureObject& texture) {
             Uint64 bytes = 0;
-            const MGPipeHandle textureHandle =
-                MGPipeSlots().Acquire(MGPipeKind::Texture, texture.GetLifetimeId());
+            const MGPipeHandle textureHandle = MGPipeSlots().Acquire(MGPipeKind::Texture, texture.GetLifetimeId());
             AcquireSamplerView(texture, textureHandle, bytes);
         }
 
@@ -966,9 +958,7 @@ namespace MobileGL::MG_Pipe {
         const MGPSamplerViews& LastSamplerViews() const { return m_lastViews; }
         const Array<MGPBoundView, kMGPipeMaxTextureUnits>& LastBoundViews() const { return m_views; }
         const MGPSamplerStates& LastSamplerStates() const { return m_lastStates; }
-        const Array<MGPipeHandle, kMGPipeMaxTextureUnits>& LastSamplerStateHandles() const {
-            return m_states;
-        }
+        const Array<MGPipeHandle, kMGPipeMaxTextureUnits>& LastSamplerStateHandles() const { return m_states; }
         const MGPSamplerView& LastCreatedView() const { return m_lastView; }
         Uint64 ViewSetCount() const { return m_viewSets; }
         Uint64 StateSetCount() const { return m_stateSets; }

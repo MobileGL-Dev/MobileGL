@@ -31,8 +31,8 @@ layout(location = 0) in vec2 position;
 void main() { gl_Position = vec4(position, 0.0, 1.0); }
 )";
         Vector<SharedPtr<glslang::TShader>> shaders;
-        for (const auto& [stage, source] : Vector<Pair<GLenum, const char*>>{{GL_VERTEX_SHADER, kVertex},
-                                                                           {GL_FRAGMENT_SHADER, fragment}}) {
+        for (const auto& [stage, source] :
+             Vector<Pair<GLenum, const char*>>{{GL_VERTEX_SHADER, kVertex}, {GL_FRAGMENT_SHADER, fragment}}) {
             ShaderAttrib attrib{.shaderType = stage, .sourceStr = source};
             auto shader = ShaderCompiler::CompileShader(attrib);
             EXPECT_TRUE(shader) << (shader ? String{} : shader.error().log);
@@ -63,14 +63,16 @@ void main() { gl_Position = vec4(position, 0.0, 1.0); }
     String ValidationError(const Vector<Uint32>& spirv) {
         spvtools::SpirvTools tools(SPV_ENV_VULKAN_1_1);
         String error;
-        tools.SetMessageConsumer([&](spv_message_level_t, const char*, const spv_position_t&,
-                                     const char* message) { error += message != nullptr ? message : ""; });
+        tools.SetMessageConsumer([&](spv_message_level_t, const char*, const spv_position_t&, const char* message) {
+            error += message != nullptr ? message : "";
+        });
         return tools.Validate(spirv) ? String{} : (error.empty() ? String{"invalid"} : error);
     }
 
     SizeT CountOccurrences(const String& text, const String& needle) {
         SizeT count = 0;
-        for (SizeT at = text.find(needle); at != String::npos; at = text.find(needle, at + needle.size())) ++count;
+        for (SizeT at = text.find(needle); at != String::npos; at = text.find(needle, at + needle.size()))
+            ++count;
         return count;
     }
 } // namespace
@@ -94,8 +96,7 @@ void main() { color = texelFetch(data, ivec2(gl_FragCoord.xy), 0); }
     const String text = Disassemble(output);
     EXPECT_EQ(text.find("PixelCenterInteger"), String::npos) << text;
     EXPECT_EQ(CountOccurrences(text, "OpFSub"), 1u) << text;
-    EXPECT_NE(text.find("OpConstantComposite %v4float %float_0_5 %float_0_5 %float_0 %float_0"), String::npos)
-        << text;
+    EXPECT_NE(text.find("OpConstantComposite %v4float %float_0_5 %float_0_5 %float_0 %float_0"), String::npos) << text;
 }
 
 // Single components arrive through an access chain: x and y move, z and w keep their values.

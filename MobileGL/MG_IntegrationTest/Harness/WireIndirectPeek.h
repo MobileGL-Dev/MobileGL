@@ -16,11 +16,11 @@
 namespace MGITest {
 
     struct WireIndirectCounters {
-        unsigned long long nativeDraws = 0;    // wire-indirect-native-draws (`wind`)
-        unsigned long long cpuExpansions = 0;  // wire-indirect-cpu-expansions (`wixp`)
-        unsigned long long barriers = 0;       // wire-indirect-barriers (`wibar`)
-        unsigned long long hostWaits = 0;      // wire-host-waits (`whw`)
-        unsigned long long indirectWaits = 0;  // wire-host-waits-indirect (`whwi`)
+        unsigned long long nativeDraws = 0;       // wire-indirect-native-draws (`wind`)
+        unsigned long long cpuExpansions = 0;     // wire-indirect-cpu-expansions (`wixp`)
+        unsigned long long barriers = 0;          // wire-indirect-barriers (`wibar`)
+        unsigned long long hostWaits = 0;         // wire-host-waits (`whw`)
+        unsigned long long indirectWaits = 0;     // wire-host-waits-indirect (`whwi`)
         unsigned long long nativeDispatches = 0;  // P8-SV: wire-indirect-native-dispatches (`wdsp`)
         unsigned long long resourceReadbacks = 0; // P13 W4a: resource-readbacks (client emissions)
     };

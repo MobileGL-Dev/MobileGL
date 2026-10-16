@@ -49,8 +49,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             CGRect frame = {{0.0, 0.0}, {surfaceWidth, surfaceHeight}};
             id window = SendId(windowClass, "alloc");
             window = ObjcMsgSend<id (*)(id, SEL, CGRect, unsigned long, unsigned long, bool)>()(
-                window, sel_registerName("initWithContentRect:styleMask:backing:defer:"),
-                frame, kNSWindowStyleMaskBorderless, kNSBackingStoreBuffered, true);
+                window, sel_registerName("initWithContentRect:styleMask:backing:defer:"), frame,
+                kNSWindowStyleMaskBorderless, kNSBackingStoreBuffered, true);
             MOBILEGL_ASSERT(window, "Failed to create hidden NSWindow for DirectVulkan pbuffer");
 
             id contentView = SendId(window, "contentView");
@@ -248,8 +248,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     static VKAPI_ATTR VkBool32 VKAPI_CALL DebugReportCallback(VkDebugReportFlagsEXT flags, VkDebugReportObjectTypeEXT,
-                                                              Uint64, size_t, Int32 messageCode, const char* pLayerPrefix,
-                                                              const char* pMessage, void*) {
+                                                              Uint64, size_t, Int32 messageCode,
+                                                              const char* pLayerPrefix, const char* pMessage, void*) {
         if ((flags & (VK_DEBUG_REPORT_ERROR_BIT_EXT | VK_DEBUG_REPORT_WARNING_BIT_EXT |
                       VK_DEBUG_REPORT_PERFORMANCE_WARNING_BIT_EXT)) != 0) {
             // MGLOG_F, unlatched, on purpose: a validation-layer report means MobileGL fed
@@ -275,8 +275,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     void VulkanRenderer::DestroyDebugReportCallback() {
         if (m_debugReportCallback == VK_NULL_HANDLE) return;
-        auto func = (PFN_vkDestroyDebugReportCallbackEXT)vkGetInstanceProcAddr(m_instance,
-                                                                               "vkDestroyDebugReportCallbackEXT");
+        auto func =
+            (PFN_vkDestroyDebugReportCallbackEXT)vkGetInstanceProcAddr(m_instance, "vkDestroyDebugReportCallbackEXT");
         if (func != nullptr) func(m_instance, m_debugReportCallback, nullptr);
         m_debugReportCallback = VK_NULL_HANDLE;
     }
@@ -512,9 +512,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // out-of-range fetches; arbitrary GL vertex strides/offsets still need the explicit tight
         // repack in VertexInputStateFactory when they violate Vulkan's address-alignment rules.
         // MOBILEGL_MAGMA_DISABLE_ROBUST_BUFFER_ACCESS leaves it off to measure or dodge its GPU cost.
-        deviceFeatures.robustBufferAccess = MG_Config::Features.MagmaDisableRobustBufferAccess
-                                                ? VK_FALSE
-                                                : supportedDeviceFeatures.robustBufferAccess;
+        deviceFeatures.robustBufferAccess =
+            MG_Config::Features.MagmaDisableRobustBufferAccess ? VK_FALSE : supportedDeviceFeatures.robustBufferAccess;
         deviceFeatures.geometryShader = supportedDeviceFeatures.geometryShader;
         deviceFeatures.tessellationShader = supportedDeviceFeatures.tessellationShader;
         // gl_PointSize is an ORDINARY per-vertex output in desktop GL - a tessellation
@@ -532,8 +531,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // Sampled-read barriers may only name the shader stages whose device feature is
         // actually enabled (VUID-vkCmdPipelineBarrier-srcStageMask-04090/-04091), so the
         // mask is assembled here, next to the feature decision, and handed to consumers.
-        m_sampledReadStageMask = VK_PIPELINE_STAGE_VERTEX_SHADER_BIT |
-                                 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+        m_sampledReadStageMask = VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
                                  VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
         if (deviceFeatures.geometryShader == VK_TRUE) {
             m_sampledReadStageMask |= VK_PIPELINE_STAGE_GEOMETRY_SHADER_BIT;
@@ -598,11 +596,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // Required for desktop GL image load/store semantics. iterationRP writes storage
         // images from vertex and fragment stages and uses formats outside Vulkan's small
         // mandatory storage-image set.
-        deviceFeatures.vertexPipelineStoresAndAtomics =
-            supportedDeviceFeatures.vertexPipelineStoresAndAtomics;
+        deviceFeatures.vertexPipelineStoresAndAtomics = supportedDeviceFeatures.vertexPipelineStoresAndAtomics;
         deviceFeatures.fragmentStoresAndAtomics = supportedDeviceFeatures.fragmentStoresAndAtomics;
-        deviceFeatures.shaderStorageImageExtendedFormats =
-            supportedDeviceFeatures.shaderStorageImageExtendedFormats;
+        deviceFeatures.shaderStorageImageExtendedFormats = supportedDeviceFeatures.shaderStorageImageExtendedFormats;
         // The formatless float-storage compatibility path must be all-or-nothing: transformed
         // modules declare both capabilities and image bindings may be read, written, or both.
         m_unformattedFloatStorageImagesEnabled =
@@ -672,8 +668,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (m_imageFormatListExtensionEnabled) {
             enabledDeviceExtensions.push_back(VK_KHR_IMAGE_FORMAT_LIST_EXTENSION_NAME);
         }
-        MGLOG_I("VK_KHR_image_format_list enabled: %s",
-                m_imageFormatListExtensionEnabled ? "true" : "false");
+        MGLOG_I("VK_KHR_image_format_list enabled: %s", m_imageFormatListExtensionEnabled ? "true" : "false");
         MGLOG_I("VK_KHR_draw_indirect_count enabled: %s", m_drawIndirectCountExtensionEnabled ? "true" : "false");
 
         m_indexTypeUint8ExtensionEnabled = false;
@@ -725,7 +720,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             m_physicalDevice.properties.apiVersion >= VK_API_VERSION_1_1 &&
             IsExtensionSupported(availableExtensions, VK_KHR_CREATE_RENDERPASS_2_EXTENSION_NAME) &&
             IsExtensionSupported(availableExtensions, VK_KHR_DEPTH_STENCIL_RESOLVE_EXTENSION_NAME);
-        const Bool wireDepthResolveEnabled = getPhysicalDeviceProperties2 && (wireDepthResolveCore || wireDepthResolveExtensions);
+        const Bool wireDepthResolveEnabled =
+            getPhysicalDeviceProperties2 && (wireDepthResolveCore || wireDepthResolveExtensions);
         m_wireCreateRenderPass2 = nullptr;
         m_wireDepthResolveModes = m_wireStencilResolveModes = 0;
         if (wireDepthResolveEnabled) {
@@ -748,7 +744,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // write the stencil aspect without it. Enabled on the same terms as the resolve
         // extensions above - wire arms only - and the arm declines stencil where it is absent
         // rather than producing an undefined aspect.
-        m_wireShaderStencilExport = IsExtensionSupported(availableExtensions, VK_EXT_SHADER_STENCIL_EXPORT_EXTENSION_NAME);
+        m_wireShaderStencilExport =
+            IsExtensionSupported(availableExtensions, VK_EXT_SHADER_STENCIL_EXPORT_EXTENSION_NAME);
         if (m_wireShaderStencilExport)
             EnableOptionalDeviceExtension(availableExtensions, enabledDeviceExtensions,
                                           VK_EXT_SHADER_STENCIL_EXPORT_EXTENSION_NAME);
@@ -765,15 +762,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         m_sharedImageSyncFd = false;
 #if defined(__ANDROID__)
         if (m_physicalDevice.properties.apiVersion >= VK_API_VERSION_1_1 &&
-            IsExtensionSupported(availableExtensions, VK_ANDROID_EXTERNAL_MEMORY_ANDROID_HARDWARE_BUFFER_EXTENSION_NAME) &&
+            IsExtensionSupported(availableExtensions,
+                                 VK_ANDROID_EXTERNAL_MEMORY_ANDROID_HARDWARE_BUFFER_EXTENSION_NAME) &&
             IsExtensionSupported(availableExtensions, VK_EXT_QUEUE_FAMILY_FOREIGN_EXTENSION_NAME)) {
             m_wireAhbImport = true;
-            for (const char* name : {VK_ANDROID_EXTERNAL_MEMORY_ANDROID_HARDWARE_BUFFER_EXTENSION_NAME,
-                                     VK_EXT_QUEUE_FAMILY_FOREIGN_EXTENSION_NAME, VK_KHR_EXTERNAL_MEMORY_EXTENSION_NAME,
-                                     VK_KHR_SAMPLER_YCBCR_CONVERSION_EXTENSION_NAME,
-                                     VK_KHR_DEDICATED_ALLOCATION_EXTENSION_NAME,
-                                     VK_KHR_GET_MEMORY_REQUIREMENTS_2_EXTENSION_NAME,
-                                     VK_KHR_BIND_MEMORY_2_EXTENSION_NAME, VK_KHR_MAINTENANCE_1_EXTENSION_NAME}) {
+            for (const char* name :
+                 {VK_ANDROID_EXTERNAL_MEMORY_ANDROID_HARDWARE_BUFFER_EXTENSION_NAME,
+                  VK_EXT_QUEUE_FAMILY_FOREIGN_EXTENSION_NAME, VK_KHR_EXTERNAL_MEMORY_EXTENSION_NAME,
+                  VK_KHR_SAMPLER_YCBCR_CONVERSION_EXTENSION_NAME, VK_KHR_DEDICATED_ALLOCATION_EXTENSION_NAME,
+                  VK_KHR_GET_MEMORY_REQUIREMENTS_2_EXTENSION_NAME, VK_KHR_BIND_MEMORY_2_EXTENSION_NAME,
+                  VK_KHR_MAINTENANCE_1_EXTENSION_NAME}) {
                 if (IsExtensionSupported(availableExtensions, name))
                     EnableOptionalDeviceExtension(availableExtensions, enabledDeviceExtensions, name);
             }
@@ -781,11 +779,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // device waits on and signals through SYNC_FD binary semaphores - imported for a wait,
             // exported for a signal. Both directions, or the CPU fallback.
             if (IsExtensionSupported(availableExtensions, VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME)) {
-                auto getExternalSemaphoreProperties = reinterpret_cast<PFN_vkGetPhysicalDeviceExternalSemaphoreProperties>(
-                    vkGetInstanceProcAddr(m_instance, "vkGetPhysicalDeviceExternalSemaphoreProperties"));
+                auto getExternalSemaphoreProperties =
+                    reinterpret_cast<PFN_vkGetPhysicalDeviceExternalSemaphoreProperties>(
+                        vkGetInstanceProcAddr(m_instance, "vkGetPhysicalDeviceExternalSemaphoreProperties"));
                 if (getExternalSemaphoreProperties == nullptr) {
-                    getExternalSemaphoreProperties = reinterpret_cast<PFN_vkGetPhysicalDeviceExternalSemaphoreProperties>(
-                        vkGetInstanceProcAddr(m_instance, "vkGetPhysicalDeviceExternalSemaphorePropertiesKHR"));
+                    getExternalSemaphoreProperties =
+                        reinterpret_cast<PFN_vkGetPhysicalDeviceExternalSemaphoreProperties>(
+                            vkGetInstanceProcAddr(m_instance, "vkGetPhysicalDeviceExternalSemaphorePropertiesKHR"));
                 }
                 VkExternalSemaphoreProperties properties{VK_STRUCTURE_TYPE_EXTERNAL_SEMAPHORE_PROPERTIES};
                 if (getExternalSemaphoreProperties != nullptr) {
@@ -798,8 +798,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     VK_EXTERNAL_SEMAPHORE_FEATURE_EXPORTABLE_BIT | VK_EXTERNAL_SEMAPHORE_FEATURE_IMPORTABLE_BIT;
                 if ((properties.externalSemaphoreFeatures & both) == both) {
                     m_sharedImageSyncFd = true;
-                    for (const char* name : {VK_KHR_EXTERNAL_SEMAPHORE_EXTENSION_NAME,
-                                             VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME}) {
+                    for (const char* name :
+                         {VK_KHR_EXTERNAL_SEMAPHORE_EXTENSION_NAME, VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME}) {
                         if (IsExtensionSupported(availableExtensions, name))
                             EnableOptionalDeviceExtension(availableExtensions, enabledDeviceExtensions, name);
                     }
@@ -834,9 +834,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 descriptorIndexingFeatures.descriptorBindingStorageTexelBufferUpdateAfterBind == VK_TRUE &&
                 (!deviceFeatures.robustBufferAccess || descriptorIndexingProperties.robustBufferAccessUpdateAfterBind);
             if (allUpdateAfterBindFeatures) {
-                if (!descriptorIndexingCore && !IsExtensionAlreadyEnabled(
-                                                   enabledDeviceExtensions,
-                                                   VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME)) {
+                if (!descriptorIndexingCore &&
+                    !IsExtensionAlreadyEnabled(enabledDeviceExtensions, VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME)) {
                     enabledDeviceExtensions.push_back(VK_EXT_DESCRIPTOR_INDEXING_EXTENSION_NAME);
                 }
                 descriptorIndexingFeatures.pNext = const_cast<void*>(deviceCreateInfo.pNext);
@@ -883,11 +882,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 deviceCreateInfo.pNext = &indexTypeUint8Features;
                 MGLOG_I("Enabled optional device extension: %s", indexTypeUint8ExtensionName);
             } else {
-                MGLOG_W("%s is advertised, but indexTypeUint8 feature is unavailable; uint8 index buffers will stay disabled",
+                MGLOG_W("%s is advertised, but indexTypeUint8 feature is unavailable; uint8 index buffers will stay "
+                        "disabled",
                         indexTypeUint8ExtensionName);
             }
         } else {
-            MGLOG_W("VK_KHR_index_type_uint8 / VK_EXT_index_type_uint8 not supported; uint8 index buffers will stay disabled");
+            MGLOG_W("VK_KHR_index_type_uint8 / VK_EXT_index_type_uint8 not supported; uint8 index buffers will stay "
+                    "disabled");
         }
 
         m_shaderDrawParametersFeatureEnabled = false;
@@ -931,8 +932,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 listRestartFeatures.pNext = const_cast<void*>(deviceCreateInfo.pNext);
                 deviceCreateInfo.pNext = &listRestartFeatures;
                 m_primitiveTopologyListRestartFeatureEnabled = true;
-                MGLOG_I("Enabled optional device extension: %s",
-                        VK_EXT_PRIMITIVE_TOPOLOGY_LIST_RESTART_EXTENSION_NAME);
+                MGLOG_I("Enabled optional device extension: %s", VK_EXT_PRIMITIVE_TOPOLOGY_LIST_RESTART_EXTENSION_NAME);
             }
         }
 
@@ -958,8 +958,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             getPhysicalDeviceFeatures2(m_physicalDevice.handle, &featureQuery);
             if (customBorderColorFeatures.customBorderColors == VK_TRUE &&
                 customBorderColorFeatures.customBorderColorWithoutFormat == VK_TRUE) {
-                if (!IsExtensionAlreadyEnabled(enabledDeviceExtensions,
-                                               VK_EXT_CUSTOM_BORDER_COLOR_EXTENSION_NAME)) {
+                if (!IsExtensionAlreadyEnabled(enabledDeviceExtensions, VK_EXT_CUSTOM_BORDER_COLOR_EXTENSION_NAME)) {
                     enabledDeviceExtensions.push_back(VK_EXT_CUSTOM_BORDER_COLOR_EXTENSION_NAME);
                 }
                 customBorderColorFeatures.pNext = const_cast<void*>(deviceCreateInfo.pNext);
@@ -1004,18 +1003,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             getPhysicalDeviceProperties2(m_physicalDevice.handle, &subgroupPropertyQuery);
             // Mirrors the loader's HasUsableShaderSubgroupSupport gate, so the module lowerings
             // can never disagree with the advertised capabilities.
-            const Bool usableSubgroups =
-                subgroupProperties.subgroupSize > 0 &&
-                (subgroupProperties.supportedStages & VK_SHADER_STAGE_COMPUTE_BIT) != 0 &&
-                (subgroupProperties.supportedOperations & VK_SUBGROUP_FEATURE_BASIC_BIT) != 0;
+            const Bool usableSubgroups = subgroupProperties.subgroupSize > 0 &&
+                                         (subgroupProperties.supportedStages & VK_SHADER_STAGE_COMPUTE_BIT) != 0 &&
+                                         (subgroupProperties.supportedOperations & VK_SUBGROUP_FEATURE_BASIC_BIT) != 0;
             if (usableSubgroups) {
                 m_nativeSubgroupSize = subgroupProperties.subgroupSize;
                 m_nativeSubgroupSupported = true;
             }
         }
         VkPhysicalDeviceSubgroupSizeControlFeaturesEXT subgroupSizeControlFeatures{};
-        subgroupSizeControlFeatures.sType =
-            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_FEATURES_EXT;
+        subgroupSizeControlFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_FEATURES_EXT;
         m_maxComputeWorkgroupSubgroups = 0;
         if (m_nativeSubgroupSupported &&
             IsExtensionSupported(availableExtensions, VK_EXT_SUBGROUP_SIZE_CONTROL_EXTENSION_NAME) &&
@@ -1032,12 +1029,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 propertyQuery.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
                 propertyQuery.pNext = &subgroupSizeControlProperties;
                 getPhysicalDeviceProperties2(m_physicalDevice.handle, &propertyQuery);
-                m_maxComputeWorkgroupSubgroups =
-                    subgroupSizeControlProperties.maxComputeWorkgroupSubgroups;
+                m_maxComputeWorkgroupSubgroups = subgroupSizeControlProperties.maxComputeWorkgroupSubgroups;
             }
             if (subgroupSizeControlFeatures.computeFullSubgroups == VK_TRUE) {
-                if (!IsExtensionAlreadyEnabled(enabledDeviceExtensions,
-                                               VK_EXT_SUBGROUP_SIZE_CONTROL_EXTENSION_NAME)) {
+                if (!IsExtensionAlreadyEnabled(enabledDeviceExtensions, VK_EXT_SUBGROUP_SIZE_CONTROL_EXTENSION_NAME)) {
                     enabledDeviceExtensions.push_back(VK_EXT_SUBGROUP_SIZE_CONTROL_EXTENSION_NAME);
                 }
                 // Only the full-subgroups guarantee is wanted; required/varying subgroup
@@ -1100,8 +1095,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 deviceCreateInfo.pNext = &primitivesGeneratedQueryFeatures;
                 m_primitivesGeneratedQueryFeatureEnabled = true;
                 m_primitivesGeneratedQueryDiscardFeatureEnabled = true;
-                MGLOG_I("Enabled optional device extension: %s",
-                        VK_EXT_PRIMITIVES_GENERATED_QUERY_EXTENSION_NAME);
+                MGLOG_I("Enabled optional device extension: %s", VK_EXT_PRIMITIVES_GENERATED_QUERY_EXTENSION_NAME);
             }
         }
         // VK_EXT_provoking_vertex. Two independent features live behind one extension:
@@ -1186,8 +1180,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // collapses to 1 and an attribute meant to change every N instances changes every one.
         m_vertexAttributeDivisorEnabled = false;
         VkPhysicalDeviceVertexAttributeDivisorFeaturesEXT vertexAttributeDivisorFeatures{};
-        vertexAttributeDivisorFeatures.sType =
-            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VERTEX_ATTRIBUTE_DIVISOR_FEATURES_EXT;
+        vertexAttributeDivisorFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VERTEX_ATTRIBUTE_DIVISOR_FEATURES_EXT;
         if (IsExtensionSupported(availableExtensions, VK_EXT_VERTEX_ATTRIBUTE_DIVISOR_EXTENSION_NAME) &&
             getPhysicalDeviceFeatures2 != nullptr) {
             VkPhysicalDeviceFeatures2 featureQuery{};
@@ -1288,9 +1281,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 }
                 // Spec minimum is 1024; a driver reporting 0 through a failed query must not
                 // zero out every batch, so fall back to the spec minimum.
-                m_maxMultiDrawCount = multiDrawProperties.maxMultiDrawCount != 0
-                                          ? multiDrawProperties.maxMultiDrawCount
-                                          : 1024;
+                m_maxMultiDrawCount =
+                    multiDrawProperties.maxMultiDrawCount != 0 ? multiDrawProperties.maxMultiDrawCount : 1024;
                 MGLOG_I("Enabled optional device extension: %s (maxMultiDrawCount=%u)",
                         VK_EXT_MULTI_DRAW_EXTENSION_NAME, m_maxMultiDrawCount);
             } else {
@@ -1360,7 +1352,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     rateCount, VkPhysicalDeviceFragmentShadingRateKHR{
                                    VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADING_RATE_KHR});
                 getFragmentShadingRates(m_physicalDevice.handle, &rateCount, rates.data());
-                const auto log2Of = [](Uint32 size) -> Int { return size == 1 ? 0 : size == 2 ? 1 : size == 4 ? 2 : -1; };
+                const auto log2Of = [](Uint32 size) -> Int {
+                    return size == 1 ? 0 : size == 2 ? 1 : size == 4 ? 2 : -1;
+                };
                 for (Uint32 r = 0; r < rateCount; ++r) {
                     const Int w = log2Of(rates[r].fragmentSize.width);
                     const Int h = log2Of(rates[r].fragmentSize.height);
@@ -1387,12 +1381,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         m_wireNullDescriptor = false;
         VkPhysicalDeviceRobustness2FeaturesEXT robustness2Features{};
         robustness2Features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ROBUSTNESS_2_FEATURES_EXT;
-        const char* robustness2Name =
-            IsExtensionSupported(availableExtensions, VK_EXT_ROBUSTNESS_2_EXTENSION_NAME) ? VK_EXT_ROBUSTNESS_2_EXTENSION_NAME
-            : IsExtensionSupported(availableExtensions, VK_KHR_ROBUSTNESS_2_EXTENSION_NAME) ? VK_KHR_ROBUSTNESS_2_EXTENSION_NAME
-                                                                                            : nullptr;
-        if (robustness2Name != nullptr &&
-            getPhysicalDeviceFeatures2 != nullptr) {
+        const char* robustness2Name = IsExtensionSupported(availableExtensions, VK_EXT_ROBUSTNESS_2_EXTENSION_NAME)
+                                          ? VK_EXT_ROBUSTNESS_2_EXTENSION_NAME
+                                      : IsExtensionSupported(availableExtensions, VK_KHR_ROBUSTNESS_2_EXTENSION_NAME)
+                                          ? VK_KHR_ROBUSTNESS_2_EXTENSION_NAME
+                                          : nullptr;
+        if (robustness2Name != nullptr && getPhysicalDeviceFeatures2 != nullptr) {
             VkPhysicalDeviceFeatures2 featureQuery{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
             featureQuery.pNext = &robustness2Features;
             getPhysicalDeviceFeatures2(m_physicalDevice.handle, &featureQuery);
@@ -1410,47 +1404,46 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         deviceCreateInfo.enabledExtensionCount = static_cast<Uint32>(enabledDeviceExtensions.size());
         deviceCreateInfo.ppEnabledExtensionNames = enabledDeviceExtensions.data();
-        MGLOG_I("Device feature support: robustBufferAccess=%s geometryShader=%s independentBlend=%s logicOp=%s shaderClipDistance=%s "
+        MGLOG_I("Device feature support: robustBufferAccess=%s geometryShader=%s independentBlend=%s logicOp=%s "
+                "shaderClipDistance=%s "
                 "shaderCullDistance=%s wideLines=%s shaderInt64=%s vertexStoresAtomics=%s "
                 "fragmentStoresAtomics=%s storageImageExtendedFormats=%s storageImageReadWithoutFormat=%s "
                 "storageImageWriteWithoutFormat=%s drawIndirectFirstInstance=%s "
                 "multiDrawIndirect=%s",
-            supportedDeviceFeatures.robustBufferAccess ? "true" : "false",
-            supportedDeviceFeatures.geometryShader ? "true" : "false",
-            supportedDeviceFeatures.independentBlend ? "true" : "false",
-            supportedDeviceFeatures.logicOp ? "true" : "false",
-            supportedDeviceFeatures.shaderClipDistance ? "true" : "false",
-            supportedDeviceFeatures.shaderCullDistance ? "true" : "false",
-            supportedDeviceFeatures.wideLines ? "true" : "false",
-            supportedDeviceFeatures.shaderInt64 ? "true" : "false",
-            supportedDeviceFeatures.vertexPipelineStoresAndAtomics ? "true" : "false",
-            supportedDeviceFeatures.fragmentStoresAndAtomics ? "true" : "false",
-            supportedDeviceFeatures.shaderStorageImageExtendedFormats ? "true" : "false",
-            supportedDeviceFeatures.shaderStorageImageReadWithoutFormat ? "true" : "false",
-            supportedDeviceFeatures.shaderStorageImageWriteWithoutFormat ? "true" : "false",
-            supportedDeviceFeatures.drawIndirectFirstInstance ? "true" : "false",
-            supportedDeviceFeatures.multiDrawIndirect ? "true" : "false");
-        MGLOG_I("Device feature enabled: robustBufferAccess=%s geometryShader=%s independentBlend=%s logicOp=%s shaderClipDistance=%s "
+                supportedDeviceFeatures.robustBufferAccess ? "true" : "false",
+                supportedDeviceFeatures.geometryShader ? "true" : "false",
+                supportedDeviceFeatures.independentBlend ? "true" : "false",
+                supportedDeviceFeatures.logicOp ? "true" : "false",
+                supportedDeviceFeatures.shaderClipDistance ? "true" : "false",
+                supportedDeviceFeatures.shaderCullDistance ? "true" : "false",
+                supportedDeviceFeatures.wideLines ? "true" : "false",
+                supportedDeviceFeatures.shaderInt64 ? "true" : "false",
+                supportedDeviceFeatures.vertexPipelineStoresAndAtomics ? "true" : "false",
+                supportedDeviceFeatures.fragmentStoresAndAtomics ? "true" : "false",
+                supportedDeviceFeatures.shaderStorageImageExtendedFormats ? "true" : "false",
+                supportedDeviceFeatures.shaderStorageImageReadWithoutFormat ? "true" : "false",
+                supportedDeviceFeatures.shaderStorageImageWriteWithoutFormat ? "true" : "false",
+                supportedDeviceFeatures.drawIndirectFirstInstance ? "true" : "false",
+                supportedDeviceFeatures.multiDrawIndirect ? "true" : "false");
+        MGLOG_I("Device feature enabled: robustBufferAccess=%s geometryShader=%s independentBlend=%s logicOp=%s "
+                "shaderClipDistance=%s "
                 "shaderCullDistance=%s wideLines=%s shaderInt64=%s vertexStoresAtomics=%s "
                 "fragmentStoresAtomics=%s storageImageExtendedFormats=%s storageImageReadWithoutFormat=%s "
                 "storageImageWriteWithoutFormat=%s drawIndirectFirstInstance=%s "
                 "multiDrawIndirect=%s shaderDrawParameters=%s",
-            deviceFeatures.robustBufferAccess ? "true" : "false",
-            deviceFeatures.geometryShader ? "true" : "false",
-            deviceFeatures.independentBlend ? "true" : "false",
-            deviceFeatures.logicOp ? "true" : "false",
-            deviceFeatures.shaderClipDistance ? "true" : "false",
-            deviceFeatures.shaderCullDistance ? "true" : "false",
-            deviceFeatures.wideLines ? "true" : "false",
-            deviceFeatures.shaderInt64 ? "true" : "false",
-            deviceFeatures.vertexPipelineStoresAndAtomics ? "true" : "false",
-            deviceFeatures.fragmentStoresAndAtomics ? "true" : "false",
-            deviceFeatures.shaderStorageImageExtendedFormats ? "true" : "false",
-            deviceFeatures.shaderStorageImageReadWithoutFormat ? "true" : "false",
-            deviceFeatures.shaderStorageImageWriteWithoutFormat ? "true" : "false",
-            deviceFeatures.drawIndirectFirstInstance ? "true" : "false",
-            deviceFeatures.multiDrawIndirect ? "true" : "false",
-            m_shaderDrawParametersFeatureEnabled ? "true" : "false");
+                deviceFeatures.robustBufferAccess ? "true" : "false", deviceFeatures.geometryShader ? "true" : "false",
+                deviceFeatures.independentBlend ? "true" : "false", deviceFeatures.logicOp ? "true" : "false",
+                deviceFeatures.shaderClipDistance ? "true" : "false",
+                deviceFeatures.shaderCullDistance ? "true" : "false", deviceFeatures.wideLines ? "true" : "false",
+                deviceFeatures.shaderInt64 ? "true" : "false",
+                deviceFeatures.vertexPipelineStoresAndAtomics ? "true" : "false",
+                deviceFeatures.fragmentStoresAndAtomics ? "true" : "false",
+                deviceFeatures.shaderStorageImageExtendedFormats ? "true" : "false",
+                deviceFeatures.shaderStorageImageReadWithoutFormat ? "true" : "false",
+                deviceFeatures.shaderStorageImageWriteWithoutFormat ? "true" : "false",
+                deviceFeatures.drawIndirectFirstInstance ? "true" : "false",
+                deviceFeatures.multiDrawIndirect ? "true" : "false",
+                m_shaderDrawParametersFeatureEnabled ? "true" : "false");
         VK_VERIFY(vkCreateDevice(m_physicalDevice.handle, &deviceCreateInfo, nullptr, &m_device), "vkCreateDevice");
 
         if (wireDepthResolveEnabled) {
@@ -1483,7 +1476,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 vkGetDeviceProcAddr(m_device, "vkCmdDrawIndexedIndirectCount"));
         }
         if (m_drawIndirectCountExtensionEnabled && s_vkCmdDrawIndexedIndirectCount == nullptr) {
-            MGLOG_W("VK_KHR_draw_indirect_count enabled but vkCmdDrawIndexedIndirectCount entry point is missing, will continue as if VK_KHR_draw_indirect_count is not supported!");
+            MGLOG_W("VK_KHR_draw_indirect_count enabled but vkCmdDrawIndexedIndirectCount entry point is missing, will "
+                    "continue as if VK_KHR_draw_indirect_count is not supported!");
             m_drawIndirectCountExtensionEnabled = false;
         }
         // P8-D: the wire arm's glMultiDrawArraysIndirectCount. Null = that verb reads its count on
@@ -1578,8 +1572,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (m_transformFeedbackFeatureEnabled) {
             s_vkCmdBeginQueryIndexedEXT = reinterpret_cast<PFN_vkCmdBeginQueryIndexedEXT>(
                 vkGetDeviceProcAddr(m_device, "vkCmdBeginQueryIndexedEXT"));
-            s_vkCmdEndQueryIndexedEXT = reinterpret_cast<PFN_vkCmdEndQueryIndexedEXT>(
-                vkGetDeviceProcAddr(m_device, "vkCmdEndQueryIndexedEXT"));
+            s_vkCmdEndQueryIndexedEXT =
+                reinterpret_cast<PFN_vkCmdEndQueryIndexedEXT>(vkGetDeviceProcAddr(m_device, "vkCmdEndQueryIndexedEXT"));
             VkPhysicalDeviceTransformFeedbackPropertiesEXT xfbProperties{};
             xfbProperties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TRANSFORM_FEEDBACK_PROPERTIES_EXT;
             VkPhysicalDeviceProperties2 properties2{};
@@ -1597,7 +1591,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 getPhysicalDeviceProperties2(m_physicalDevice.handle, &properties2);
             }
             m_xfbQueriesSupported = xfbProperties.transformFeedbackQueries == VK_TRUE &&
-                s_vkCmdBeginQueryIndexedEXT != nullptr && s_vkCmdEndQueryIndexedEXT != nullptr;
+                                    s_vkCmdBeginQueryIndexedEXT != nullptr && s_vkCmdEndQueryIndexedEXT != nullptr;
         }
         MGLOG_I("index type uint8 enabled: %s", m_indexTypeUint8ExtensionEnabled ? "true" : "false");
         MGLOG_I("Logical device created.");
@@ -1654,7 +1648,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // ResolveWireDepthStencil's own test for the render-pass arm, less its per-format half
         // (the probe asks that per format): without it the shader pass is the only arm.
         const Bool renderPassArmAvailable = !MagmaWireForcedShaderDepthResolve() && m_wireCreateRenderPass2 &&
-            (m_wireDepthResolveModes & VK_RESOLVE_MODE_SAMPLE_ZERO_BIT) != 0;
+                                            (m_wireDepthResolveModes & VK_RESOLVE_MODE_SAMPLE_ZERO_BIT) != 0;
         const char* knobValue = std::getenv("MGITEST_MAGMA_DEPTH_RESOLVE_PROBE");
         const WireDepthResolveProbeKnob knob = ParseWireDepthResolveProbeKnob(knobValue);
         // Memoized per DEVICE IDENTITY, not per process (codex closeout finding 7; see
@@ -1665,7 +1659,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         const WireDepthResolveArmChoice resolved = s_choices.Resolve(identity, [&]() {
             if (knob == WireDepthResolveProbeKnob::Unrecognised)
                 MGLOG_W("DirectVulkan: MGITEST_MAGMA_DEPTH_RESOLVE_PROBE=%s is not `bug`, `clean` or "
-                        "`elide-subject`; the resolve probe runs as if it were unset", knobValue);
+                        "`elide-subject`; the resolve probe runs as if it were unset",
+                        knobValue);
             WireDepthResolveArmChoice choice = ChooseWireDepthResolveArm(knob, renderPassArmAvailable, [&]() {
                 WireDepthResolveProbeContext context;
                 context.physicalDevice = m_physicalDevice.handle;
@@ -1702,8 +1697,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     : (renderPassArmAvailable || choice.measurement.fromKnob)
                         ? "the VK_KHR_depth_stencil_resolve render pass resolves first"
                         : "the shader pass is the only arm",
-                    choice.measurement.failureReason.empty() ? "" : "; ",
-                    choice.measurement.failureReason.c_str());
+                    choice.measurement.failureReason.empty() ? "" : "; ", choice.measurement.failureReason.c_str());
             for (const WireDepthResolveFormatReading& reading : choice.measurement.formats)
                 MGLOG_I("DirectVulkan: depth/stencil resolve probe %s",
                         DescribeWireDepthResolveFormat(reading).c_str());
@@ -1767,8 +1761,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             }
         }
         m_wireE5RawReads = armed;
-        MGLOG_I("DirectVulkan: E5B9G9R9 reads %s",
-                armed ? "go through the raw shader route" : "use plain transfers");
+        MGLOG_I("DirectVulkan: E5B9G9R9 reads %s", armed ? "go through the raw shader route" : "use plain transfers");
     }
 
     // THE PER-SLICE SPLIT IS ARMED BY MEASUREMENT (WireCopySliceProbe.h), once per device identity,
@@ -1873,8 +1866,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 PrimitivesGeneratedNoXfbProbeContext probeContext;
                 probeContext.device = m_device;
                 probeContext.queue = m_graphicsQueue;
-                probeContext.queueFamilyIndex =
-                    static_cast<Uint32>(m_physicalDevice.queueFamilies.graphicsFamily);
+                probeContext.queueFamilyIndex = static_cast<Uint32>(m_physicalDevice.queueFamilies.graphicsFamily);
                 probeContext.transformFeedbackQueriesUsable = m_xfbQueriesSupported;
                 probeContext.primitivesGeneratedQueryUsable = primitivesGeneratedQueryUsable;
                 probeContext.pipelineStatisticsEnabled = m_pipelineStatisticsQueryFeatureEnabled;
@@ -1925,18 +1917,18 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 // the process's life; a device this sick has bigger problems.
                 MGLOG_W("PRIMITIVES_GENERATED probe timed out waiting on its own submission (%s); its "
                         "Vulkan objects are deliberately leaked and XFB-inactive draws keep the stream "
-                        "query", s_measurement.failureReason.c_str());
+                        "query",
+                        s_measurement.failureReason.c_str());
             } else if (!s_measurement.ran) {
                 MGLOG_W("PRIMITIVES_GENERATED probe did not run (%s); XFB-inactive draws keep the "
-                        "stream query", s_measurement.failureReason.c_str());
+                        "stream query",
+                        s_measurement.failureReason.c_str());
             } else {
                 const auto logShape = [](const char* name,
-                                         const MG_Util::SelfTest::PrimitivesGeneratedNoXfbShapeMeasurement&
-                                             shape) {
+                                         const MG_Util::SelfTest::PrimitivesGeneratedNoXfbShapeMeasurement& shape) {
                     MGLOG_I("PRIMITIVES_GENERATED probe %s: drawn=%d stream=%llu/%llu pgq=%llu(%d) "
                             "stat=%llu(%d)",
-                            name, shape.drawn ? 1 : 0,
-                            static_cast<unsigned long long>(shape.streamGenerated),
+                            name, shape.drawn ? 1 : 0, static_cast<unsigned long long>(shape.streamGenerated),
                             static_cast<unsigned long long>(shape.expectedPrimitives),
                             static_cast<unsigned long long>(shape.primitivesGeneratedExt),
                             shape.primitivesGeneratedExtMeasured ? 1 : 0,
@@ -2038,10 +2030,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // and a renderer created for a WINDOW never enabled the headless extension - asking its
             // instance for vkCreateHeadlessSurfaceEXT answers null, and calling that crashed the server
             // the first time such a renderer needed an offscreen target.
-            auto* createHeadlessSurface =
-                m_headlessSurfaceSupported ? reinterpret_cast<PFN_vkCreateHeadlessSurfaceEXT>(
-                                                 vkGetInstanceProcAddr(m_instance, "vkCreateHeadlessSurfaceEXT"))
-                                           : nullptr;
+            auto* createHeadlessSurface = m_headlessSurfaceSupported
+                                              ? reinterpret_cast<PFN_vkCreateHeadlessSurfaceEXT>(
+                                                    vkGetInstanceProcAddr(m_instance, "vkCreateHeadlessSurfaceEXT"))
+                                              : nullptr;
             const OffscreenSurfaceRoute route = ChooseOffscreenSurfaceRoute(
                 m_headlessSurfaceSupported, createHeadlessSurface != nullptr, m_androidSurfaceEnabled);
             if (route == OffscreenSurfaceRoute::Headless) {
@@ -2113,9 +2105,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // system. CreateInstance() has already refused the bring-up if the loader
             // lacks the extension, so reaching here without it is a broken invariant
             // rather than a platform limitation - report it and fail, do not continue.
-            auto* createHeadlessSurface =
-                reinterpret_cast<PFN_vkCreateHeadlessSurfaceEXT>(
-                    vkGetInstanceProcAddr(m_instance, "vkCreateHeadlessSurfaceEXT"));
+            auto* createHeadlessSurface = reinterpret_cast<PFN_vkCreateHeadlessSurfaceEXT>(
+                vkGetInstanceProcAddr(m_instance, "vkCreateHeadlessSurfaceEXT"));
             if (!m_headlessSurfaceSupported || createHeadlessSurface == nullptr) {
                 MGLOG_F("vkCreateHeadlessSurfaceEXT is unavailable (%s reported as %s) while creating an "
                         "offscreen DirectVulkan surface",
@@ -2128,9 +2119,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                       "vkCreateHeadlessSurfaceEXT failed");
             return true;
 #else
-            auto* createHeadlessSurface =
-                reinterpret_cast<PFN_vkCreateHeadlessSurfaceEXT>(
-                    vkGetInstanceProcAddr(m_instance, "vkCreateHeadlessSurfaceEXT"));
+            auto* createHeadlessSurface = reinterpret_cast<PFN_vkCreateHeadlessSurfaceEXT>(
+                vkGetInstanceProcAddr(m_instance, "vkCreateHeadlessSurfaceEXT"));
             if (createHeadlessSurface == nullptr) {
                 // Same class as the Xlib branch above: a null entry point behind
                 // MOBILEGL_ASSERT is a segv on the next line in every INFO-level build.
@@ -2191,8 +2181,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             x11Lib = dlopen("libX11.so", RTLD_LOCAL | RTLD_NOW);
         }
         if (x11Lib == nullptr) {
-            MGLOG_F("Failed to open libX11 (.so.6 and .so) while creating a Vulkan Xlib window surface: %s",
-                    dlerror());
+            MGLOG_F("Failed to open libX11 (.so.6 and .so) while creating a Vulkan Xlib window surface: %s", dlerror());
             throw RuntimeError("libX11 is unavailable for the Vulkan Xlib window surface");
         }
         using XOpenDisplayFn = Display* (*)(const char*);
@@ -2290,8 +2279,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             if (extensionCount == 0) {
                 return extensions;
             }
-            const VkResult result =
-                vkEnumerateInstanceExtensionProperties(nullptr, &extensionCount, extensions.data());
+            const VkResult result = vkEnumerateInstanceExtensionProperties(nullptr, &extensionCount, extensions.data());
             if (result == VK_SUCCESS) {
                 extensions.resize(extensionCount);
                 return extensions;
@@ -2351,9 +2339,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                                          Vector<const char*>& inOutEnabledExtensions) {
         m_drawIndirectCountExtensionEnabled = EnableOptionalDeviceExtension(availableExtensions, inOutEnabledExtensions,
                                                                             VK_KHR_DRAW_INDIRECT_COUNT_EXTENSION_NAME);
-        m_shaderDrawParametersExtensionEnabled =
-            EnableOptionalDeviceExtension(availableExtensions, inOutEnabledExtensions,
-                                          VK_KHR_SHADER_DRAW_PARAMETERS_EXTENSION_NAME);
+        m_shaderDrawParametersExtensionEnabled = EnableOptionalDeviceExtension(
+            availableExtensions, inOutEnabledExtensions, VK_KHR_SHADER_DRAW_PARAMETERS_EXTENSION_NAME);
 #ifdef VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME
         EnableOptionalDeviceExtension(availableExtensions, inOutEnabledExtensions,
                                       VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME);

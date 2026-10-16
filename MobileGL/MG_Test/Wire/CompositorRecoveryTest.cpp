@@ -38,15 +38,16 @@
 #include <fcntl.h>
 #include <sys/uio.h>
 
-extern "C" {
-void glClearColor(GLfloat red, GLfloat green, GLfloat blue, GLfloat alpha);
-void glClear(GLbitfield mask);
-void glReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, void* pixels);
-GLenum glGetError(void);
-GLenum glGetGraphicsResetStatus(void);
-void glGenTextures(GLsizei n, GLuint* textures);
-void glBindTexture(GLenum target, GLuint texture);
-void glFlush(void);
+extern "C"
+{
+    void glClearColor(GLfloat red, GLfloat green, GLfloat blue, GLfloat alpha);
+    void glClear(GLbitfield mask);
+    void glReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, void* pixels);
+    GLenum glGetError(void);
+    GLenum glGetGraphicsResetStatus(void);
+    void glGenTextures(GLsizei n, GLuint* textures);
+    void glBindTexture(GLenum target, GLuint texture);
+    void glFlush(void);
 }
 
 using namespace MobileGL;
@@ -236,8 +237,10 @@ namespace {
         ::setenv("MOBILEGL_LOG_FILE_PATH", logBase.c_str(), 1);
         ::setenv("MOBILEGL_TRANSPORT", "spawn", 1);
         ::setenv("MOBILEGL_IPC_CONTROL", endpoint.c_str(), 1);
-        if (serverWindow) ::setenv("MOBILEGL_IPC_SURFACE", "server", 1);
-        else ::unsetenv("MOBILEGL_IPC_SURFACE");
+        if (serverWindow)
+            ::setenv("MOBILEGL_IPC_SURFACE", "server", 1);
+        else
+            ::unsetenv("MOBILEGL_IPC_SURFACE");
         ::unsetenv("MOBILEGL_BACKEND_TYPE");
         ::unsetenv("MOBILEGL_DEBUG_INJECT_DEVICE_LOST_AT");
         ::unsetenv("MOBILEGL_DEBUG_INJECT_DEVICE_LOST_PID");
@@ -265,8 +268,7 @@ namespace {
         using TargetFn = void (*)(GLenum, void*);
         const auto target = reinterpret_cast<TargetFn>(EGL::GetProcAddress("glEGLImageTargetTexture2DOES"));
         if (target == nullptr) return 0xFFFFFFFFu;
-        while (glGetError() != GL_NO_ERROR) {
-        }
+        while (glGetError() != GL_NO_ERROR) {}
         GLuint texture = 0;
         glGenTextures(1, &texture);
         glBindTexture(GL_TEXTURE_2D, texture);
@@ -398,9 +400,18 @@ namespace {
         EGLint major = 0;
         EGLint minor = 0;
         if (dpy == EGL_NO_DISPLAY || EGL::Initialize(dpy, &major, &minor) != EGL_TRUE) return Note(r, "no display");
-        const EGLint configAttribs[] = {EGL_SURFACE_TYPE, EGL_WINDOW_BIT, EGL_RENDERABLE_TYPE, EGL_OPENGL_BIT,
-                                        EGL_RED_SIZE,     8,              EGL_GREEN_SIZE,      8,
-                                        EGL_BLUE_SIZE,    8,              EGL_ALPHA_SIZE,      8,
+        const EGLint configAttribs[] = {EGL_SURFACE_TYPE,
+                                        EGL_WINDOW_BIT,
+                                        EGL_RENDERABLE_TYPE,
+                                        EGL_OPENGL_BIT,
+                                        EGL_RED_SIZE,
+                                        8,
+                                        EGL_GREEN_SIZE,
+                                        8,
+                                        EGL_BLUE_SIZE,
+                                        8,
+                                        EGL_ALPHA_SIZE,
+                                        8,
                                         EGL_NONE};
         EGLConfig config = nullptr;
         EGLint count = 0;
@@ -610,8 +621,8 @@ TEST(CompositorRecovery, ACompositorOnTheServerWindowRecoversOnAFreshSessionAndR
     compositor.Go(server.endpoint);
     const CompositorReport c = compositor.Wait();
     const OwnerReport o = owner.Wait();
-    const std::string diagnostics = "server:\n" + server.Log() + "\ncompositor:\n" + compositorLog.Text() +
-                                    "\nowner:\n" + ownerLog.Text();
+    const std::string diagnostics =
+        "server:\n" + server.Log() + "\ncompositor:\n" + compositorLog.Text() + "\nowner:\n" + ownerLog.Text();
 
     // The compositor, before the loss: the server's window, an imported client image, a frame.
     ASSERT_EQ(c.received, 1) << c.note << "\n" << o.note << "\n" << diagnostics;

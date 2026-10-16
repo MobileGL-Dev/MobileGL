@@ -104,9 +104,12 @@ namespace MobileGL {
                                 // which is correct: `x == -0.0` and `x == 0.0` are the same
                                 // predicate in IEEE, and abs() maps both zeroes onto +0.
                                 switch (floatType->width()) {
-                                case 32: return floatConstant->GetFloatValue() == 0.0f;
-                                case 64: return floatConstant->GetDoubleValue() == 0.0;
-                                default: return false;
+                                case 32:
+                                    return floatConstant->GetFloatValue() == 0.0f;
+                                case 64:
+                                    return floatConstant->GetDoubleValue() == 0.0;
+                                default:
+                                    return false;
                                 }
                             };
 

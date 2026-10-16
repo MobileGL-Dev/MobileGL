@@ -105,8 +105,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         static Bool SyncedFramebufferSerialIsCurrent(FramebufferTarget target, Uint64 serial) {
             const auto& memo = g_fboSyncedSerials[SizeT(target)];
-            return memo.valid && memo.serial == serial &&
-                   memo.backendIdGeneration == g_attachmentBackendIdGeneration &&
+            return memo.valid && memo.serial == serial && memo.backendIdGeneration == g_attachmentBackendIdGeneration &&
                    memo.contextGeneration == g_backendContextGeneration;
         }
 
@@ -158,23 +157,19 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                  "binding has no record while %s names {slot %u, gen %u} - a "
                                  "half-described applier; running the pre-handle framebuffer sync.",
                                  drawUnrecorded ? "DRAW" : "READ", drawUnrecorded ? "READ" : "DRAW",
-                                 static_cast<unsigned>(described.Fbo.Slot),
-                                 static_cast<unsigned>(described.Fbo.Gen));
+                                 static_cast<unsigned>(described.Fbo.Slot), static_cast<unsigned>(described.Fbo.Gen));
                 } else {
-                    MGLOG_E_ONCE("A framebuffer record does not describe the binding it names: NEITHER "
-                                 "the DRAW nor the READ binding has one while the framebuffer "
-                                 "subsystem bit is set (bound handles {slot %u, gen %u} / "
-                                 "{slot %u, gen %u}, %llu stale-generation lookup(s) so far); "
-                                 "running the pre-handle framebuffer sync.",
-                                 static_cast<unsigned>(
-                                     st.BoundFramebuffer[SizeT(MG_Pipe::MGPipeFramebufferTarget::Draw)].Slot),
-                                 static_cast<unsigned>(
-                                     st.BoundFramebuffer[SizeT(MG_Pipe::MGPipeFramebufferTarget::Draw)].Gen),
-                                 static_cast<unsigned>(
-                                     st.BoundFramebuffer[SizeT(MG_Pipe::MGPipeFramebufferTarget::Read)].Slot),
-                                 static_cast<unsigned>(
-                                     st.BoundFramebuffer[SizeT(MG_Pipe::MGPipeFramebufferTarget::Read)].Gen),
-                                 static_cast<unsigned long long>(st.StaleFramebufferRecordLookups));
+                    MGLOG_E_ONCE(
+                        "A framebuffer record does not describe the binding it names: NEITHER "
+                        "the DRAW nor the READ binding has one while the framebuffer "
+                        "subsystem bit is set (bound handles {slot %u, gen %u} / "
+                        "{slot %u, gen %u}, %llu stale-generation lookup(s) so far); "
+                        "running the pre-handle framebuffer sync.",
+                        static_cast<unsigned>(st.BoundFramebuffer[SizeT(MG_Pipe::MGPipeFramebufferTarget::Draw)].Slot),
+                        static_cast<unsigned>(st.BoundFramebuffer[SizeT(MG_Pipe::MGPipeFramebufferTarget::Draw)].Gen),
+                        static_cast<unsigned>(st.BoundFramebuffer[SizeT(MG_Pipe::MGPipeFramebufferTarget::Read)].Slot),
+                        static_cast<unsigned>(st.BoundFramebuffer[SizeT(MG_Pipe::MGPipeFramebufferTarget::Read)].Gen),
+                        static_cast<unsigned long long>(st.StaleFramebufferRecordLookups));
                 }
                 return false;
             }
@@ -249,10 +244,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                  "table (live generation %u); running the pre-handle framebuffer "
                                  "sync.",
                                  target == FramebufferTarget::Read ? "READ" : "DRAW",
-                                 static_cast<unsigned>(record.Fbo.Slot),
-                                 static_cast<unsigned>(record.Fbo.Gen),
-                                 static_cast<unsigned>(
-                                     g_backendFramebufferObjects.LiveGenAt(record.Fbo.Slot)));
+                                 static_cast<unsigned>(record.Fbo.Slot), static_cast<unsigned>(record.Fbo.Gen),
+                                 static_cast<unsigned>(g_backendFramebufferObjects.LiveGenAt(record.Fbo.Slot)));
                     g_fboRecordsTrusted = false;
                     return false;
                 }
@@ -285,10 +278,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // out of MGPFramebufferState::ReadSurface, which was already the record's
                 // answer, and the by-handle entry is what reaches it here.
                 const auto& boundHandles = st.BoundFramebuffer;
-                const Bool sameObjectOnBothBindings =
-                    target == FramebufferTarget::Read &&
-                    boundHandles[SizeT(MG_Pipe::MGPipeFramebufferTarget::Draw)] ==
-                        boundHandles[SizeT(MG_Pipe::MGPipeFramebufferTarget::Read)];
+                const Bool sameObjectOnBothBindings = target == FramebufferTarget::Read &&
+                                                      boundHandles[SizeT(MG_Pipe::MGPipeFramebufferTarget::Draw)] ==
+                                                          boundHandles[SizeT(MG_Pipe::MGPipeFramebufferTarget::Read)];
 
                 if (sameObjectOnBothBindings) {
                     backendObj->SyncReadBufferToBackendByHandle(record.Fbo);
@@ -485,7 +477,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // struct, i.e. in the tail span.
             if (tailSpanDirty) {
 #define SYNC_CAPABILITY(cap_mg, cap_gl)                                                                                \
-    if (forceFullPush || parameters.cap_mg##Enabled != g_syncedRenderStateParameters.cap_mg##Enabled) {                                 \
+    if (forceFullPush || parameters.cap_mg##Enabled != g_syncedRenderStateParameters.cap_mg##Enabled) {                \
         if (parameters.cap_mg##Enabled) {                                                                              \
             g_GLESFuncs.glEnable(cap_gl);                                                                              \
         } else {                                                                                                       \
@@ -515,8 +507,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // why the multi-viewport half of KHR-GL43.viewport_array stays red on Espryt.
                 {
                     const Bool scissorTest = (parameters.ScissorTestEnabledMask & 1u) != 0;
-                    const Bool syncedScissorTest =
-                        (g_syncedRenderStateParameters.ScissorTestEnabledMask & 1u) != 0;
+                    const Bool syncedScissorTest = (g_syncedRenderStateParameters.ScissorTestEnabledMask & 1u) != 0;
                     if (forceFullPush || scissorTest != syncedScissorTest) {
                         scissorTest ? g_GLESFuncs.glEnable(GL_SCISSOR_TEST) : g_GLESFuncs.glDisable(GL_SCISSOR_TEST);
                     }
@@ -553,15 +544,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 const Bool srgbWrites = MG_Pipe::gPipeInputs->IsCapabilityEnabled(CapabilityInput::FramebufferSrgb);
                 if (g_GLESCapabilities.SupportsSrgbWriteControl &&
                     (forceFullPush || srgbWrites != g_syncedSrgbFramebufferWrites)) {
-                    srgbWrites ? g_GLESFuncs.glEnable(GL_FRAMEBUFFER_SRGB)
-                               : g_GLESFuncs.glDisable(GL_FRAMEBUFFER_SRGB);
+                    srgbWrites ? g_GLESFuncs.glEnable(GL_FRAMEBUFFER_SRGB) : g_GLESFuncs.glDisable(GL_FRAMEBUFFER_SRGB);
                     g_syncedSrgbFramebufferWrites = srgbWrites;
                 }
             }
 
             if (tailSpanDirty) { // Primitive restart. GLES core has only GL_PRIMITIVE_RESTART_FIXED_INDEX (fixed
-              // all-ones value); both the fixed cap and the (fixed-valued) arbitrary GL_PRIMITIVE_RESTART map to
-              // it. An arbitrary non-fixed restart index is rejected at draw time (see DrawElements).
+                // all-ones value); both the fixed cap and the (fixed-valued) arbitrary GL_PRIMITIVE_RESTART map to
+                // it. An arbitrary non-fixed restart index is rejected at draw time (see DrawElements).
                 const Bool restart = parameters.PrimitiveRestartFixedIndexEnabled || parameters.PrimitiveRestartEnabled;
                 const Bool syncedRestart = g_syncedRenderStateParameters.PrimitiveRestartFixedIndexEnabled ||
                                            g_syncedRenderStateParameters.PrimitiveRestartEnabled;
@@ -621,14 +611,13 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         // in the first mask but not the second had blending off anyway, so nothing
                         // was blended and nothing was dropped - only the unusable enum was kept out
                         // of the driver.
-                        MGLOG_E_ONCE(
-                            "SyncRenderState: a GL_SRC1_* (dual-source) blend factor was set on draw buffer "
-                            "mask 0x%x, but the GLES driver does not expose GL_EXT_blend_func_extended (see "
-                            "the dual-source blend row in the driver POST). Those draw buffers are pushed "
-                            "with neutral One/Zero factors instead. Blending was actually ENABLED on mask "
-                            "0x%x, and only there is anything lost: the fragment's first output is written "
-                            "unblended and the second source is dropped.",
-                            dualSourceDeclinedMask, declinedWithBlendingOnMask);
+                        MGLOG_E_ONCE("SyncRenderState: a GL_SRC1_* (dual-source) blend factor was set on draw buffer "
+                                     "mask 0x%x, but the GLES driver does not expose GL_EXT_blend_func_extended (see "
+                                     "the dual-source blend row in the driver POST). Those draw buffers are pushed "
+                                     "with neutral One/Zero factors instead. Blending was actually ENABLED on mask "
+                                     "0x%x, and only there is anything lost: the fragment's first output is written "
+                                     "unblended and the second source is dropped.",
+                                     dualSourceDeclinedMask, declinedWithBlendingOnMask);
                         g_dualSourceDeclinedBlendStates = parameters.BlendStates;
                         for (Uint i = 0; i < FBO::MAX_DRAW_BUFFERS; ++i) {
                             if ((dualSourceDeclinedMask & (1u << i)) == 0) continue;
@@ -730,8 +719,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                             auto& syn = syncedStates[i];
 
                             if (forceFullPush || cur.SrcFactorRGB != syn.SrcFactorRGB ||
-                                cur.DstFactorRGB != syn.DstFactorRGB ||
-                                cur.SrcFactorAlpha != syn.SrcFactorAlpha ||
+                                cur.DstFactorRGB != syn.DstFactorRGB || cur.SrcFactorAlpha != syn.SrcFactorAlpha ||
                                 cur.DstFactorAlpha != syn.DstFactorAlpha) {
                                 syn.SrcFactorRGB = cur.SrcFactorRGB;
                                 syn.DstFactorRGB = cur.DstFactorRGB;
@@ -814,9 +802,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
                     if (forceFullPush || current.Func != synced.Func || current.Ref != synced.Ref ||
                         current.ValueMask != synced.ValueMask) {
-                        g_GLESFuncs.glStencilFuncSeparate(
-                            glFace, MG_Util::ConvertDepthTestFuncToGLEnum(current.Func), current.Ref,
-                            current.ValueMask);
+                        g_GLESFuncs.glStencilFuncSeparate(glFace, MG_Util::ConvertDepthTestFuncToGLEnum(current.Func),
+                                                          current.Ref, current.ValueMask);
                     }
                     if (forceFullPush || current.WriteMask != synced.WriteMask) {
                         g_GLESFuncs.glStencilMaskSeparate(glFace, current.WriteMask);
@@ -833,9 +820,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
 
             if (tailSpanDirty || colorMaskWidenDirty) { // Color mask. Uniform masks use the non-indexed glColorMask
-              // (works everywhere); divergent per-draw-buffer masks use the indexed glColorMaski when
-              // draw_buffers_indexed is available, otherwise fall back to broadcasting draw buffer 0.
-              // Mirrors the blend block.
+                // (works everywhere); divergent per-draw-buffer masks use the indexed glColorMaski when
+                // draw_buffers_indexed is available, otherwise fall back to broadcasting draw buffer 0.
+                // Mirrors the blend block.
                 using FBO = MG_State::GLState::FramebufferObject;
                 const auto& targetMasks = parameters.ColorMasks;
                 const auto& syncedMasks = g_syncedRenderStateParameters.ColorMasks;
@@ -889,8 +876,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 g_syncedColorMaskAlphaWidenMask = appliedWidenMask;
             }
 
-            if (tailSpanDirty) { // Polygon mode. GLES core has no glPolygonMode; use NV/ANGLE_polygon_mode when present.
-              // Without the extension the mode stays FILL and non-FILL requests are dropped.
+            if (tailSpanDirty) { // Polygon mode. GLES core has no glPolygonMode; use NV/ANGLE_polygon_mode when
+                                 // present.
+                                 // Without the extension the mode stays FILL and non-FILL requests are dropped.
                 if ((forceFullPush || parameters.PolygonModeFront != g_syncedRenderStateParameters.PolygonModeFront) &&
                     g_GLESCapabilities.SupportsPolygonMode) {
                     const auto polygonModeFn =
@@ -917,41 +905,43 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
 
             if (tailSpanDirty) { // Cull face mode
-                if (forceFullPush || parameters.CullFaceModeSetting != g_syncedRenderStateParameters.CullFaceModeSetting) {
+                if (forceFullPush ||
+                    parameters.CullFaceModeSetting != g_syncedRenderStateParameters.CullFaceModeSetting) {
                     const CullFaceMode& cfm = parameters.CullFaceModeSetting;
                     g_GLESFuncs.glCullFace(MG_Util::ConvertCullFaceModeToGLEnum(cfm));
                 }
-                if (forceFullPush || parameters.FrontFaceModeSetting != g_syncedRenderStateParameters.FrontFaceModeSetting) {
+                if (forceFullPush ||
+                    parameters.FrontFaceModeSetting != g_syncedRenderStateParameters.FrontFaceModeSetting) {
                     const FrontFaceMode& ffm = parameters.FrontFaceModeSetting;
                     g_GLESFuncs.glFrontFace(MG_Util::ConvertFrontFaceModeToGLEnum(ffm));
                 }
             }
 
             if (tailSpanDirty) { // Scissor box. Resolved and shadowed like the viewport above, and
-              // for the same reason: what has to reach the driver is NOT simply the parameter
-              // field. RenderStateParameters::ScissorBoxes starts all-zero, which means "the
-              // application has never called glScissor" - it is not a GL scissor box. GL's
-              // initial box is the whole window, which the frontend has no way to spell before a
-              // surface exists. The pre-resync code got away with pushing the field verbatim only
-              // by accident: the shadow held the same default, the field never compared unequal,
-              // and the ES context kept its own correct default. Under the forced full push that
-              // accident is gone, glScissor(0,0,0,0) shrinks the scissor to an EMPTY rectangle,
-              // and everything drawn with GL_SCISSOR_TEST enabled before the app's first
-              // glScissor is clipped away - Minecraft 26.2 keeps only its unscissored sky and
-              // hand and loses the terrain and the whole GUI.
-              //
-              // The condition is the WRITTEN FLAG, not the extent. An empty rectangle is a
-              // perfectly legal thing to ask for - glScissor(0,0,0,0) means "the scissor test
-              // rejects every fragment" - so testing `width <= 0 || height <= 0` substituted the
-              // whole surface for a deliberately empty box and inverted the request into "accept
-              // every fragment", no matter how many times the application had already called
-              // glScissor. KHR-GL43.viewport_array.scissor_zero_dimension is exactly that: all 16
-              // boxes zero-sized with the test enabled, requiring the draw to be clipped away
-              // entirely. Reading the flag preserves the Minecraft protection bit-for-bit - before
-              // the first glScissor the bit is clear and the surface size is still substituted -
-              // while an explicit empty box now reaches the driver verbatim. Negative extents
-              // cannot arrive here at all: all three entry points reject them with
-              // GL_INVALID_VALUE before storing (GL_RenderState.cpp's ValidateNonNegativeExtent).
+                                 // for the same reason: what has to reach the driver is NOT simply the parameter
+                                 // field. RenderStateParameters::ScissorBoxes starts all-zero, which means "the
+                                 // application has never called glScissor" - it is not a GL scissor box. GL's
+                                 // initial box is the whole window, which the frontend has no way to spell before a
+                                 // surface exists. The pre-resync code got away with pushing the field verbatim only
+                                 // by accident: the shadow held the same default, the field never compared unequal,
+                                 // and the ES context kept its own correct default. Under the forced full push that
+                                 // accident is gone, glScissor(0,0,0,0) shrinks the scissor to an EMPTY rectangle,
+                                 // and everything drawn with GL_SCISSOR_TEST enabled before the app's first
+                                 // glScissor is clipped away - Minecraft 26.2 keeps only its unscissored sky and
+                                 // hand and loses the terrain and the whole GUI.
+                                 //
+                                 // The condition is the WRITTEN FLAG, not the extent. An empty rectangle is a
+                                 // perfectly legal thing to ask for - glScissor(0,0,0,0) means "the scissor test
+                                 // rejects every fragment" - so testing `width <= 0 || height <= 0` substituted the
+                                 // whole surface for a deliberately empty box and inverted the request into "accept
+                                 // every fragment", no matter how many times the application had already called
+                                 // glScissor. KHR-GL43.viewport_array.scissor_zero_dimension is exactly that: all 16
+                                 // boxes zero-sized with the test enabled, requiring the draw to be clipped away
+                                 // entirely. Reading the flag preserves the Minecraft protection bit-for-bit - before
+                                 // the first glScissor the bit is clear and the surface size is still substituted -
+                                 // while an explicit empty box now reaches the driver verbatim. Negative extents
+                                 // cannot arrive here at all: all three entry points reject them with
+                                 // GL_INVALID_VALUE before storing (GL_RenderState.cpp's ValidateNonNegativeExtent).
                 IntVec4 backendScissorBox = parameters.ScissorBoxes[0];
                 if ((parameters.ScissorBoxWrittenMask & 1u) == 0) {
                     Int surfaceWidth = 0;
@@ -970,10 +960,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
 
             if (tailSpanDirty) { // Logic op (first field of the tail span)
-              // glLogicOp is GLES 1.x / EXT only - eglGetProcAddress returns null for it on a
-              // plain ES 3.x driver. Before the forced resync it was reached only when an app
-              // actually set a logic op; now every MakeCurrent would call it, so the null check
-              // is mandatory rather than defensive.
+                                 // glLogicOp is GLES 1.x / EXT only - eglGetProcAddress returns null for it on a
+                                 // plain ES 3.x driver. Before the forced resync it was reached only when an app
+                                 // actually set a logic op; now every MakeCurrent would call it, so the null check
+                                 // is mandatory rather than defensive.
                 if (g_GLESFuncs.glLogicOp &&
                     (forceFullPush || parameters.LogicOp != g_syncedRenderStateParameters.LogicOp)) {
                     g_GLESFuncs.glLogicOp(MG_Util::ConvertLogicOperationToGLEnum(parameters.LogicOp));
@@ -981,7 +971,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
 
             if (headSpanDirty) { // Polygon offset (head-span scalars, like line width / point size below)
-                if (forceFullPush || parameters.PolygonOffsetFactor != g_syncedRenderStateParameters.PolygonOffsetFactor ||
+                if (forceFullPush ||
+                    parameters.PolygonOffsetFactor != g_syncedRenderStateParameters.PolygonOffsetFactor ||
                     parameters.PolygonOffsetUnits != g_syncedRenderStateParameters.PolygonOffsetUnits ||
                     parameters.PolygonOffsetClamp != g_syncedRenderStateParameters.PolygonOffsetClamp) {
                     // glPolygonOffset IS glPolygonOffsetClampEXT(factor, units, 0), so where the
@@ -998,7 +989,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
 
             if (headSpanDirty) { // Clip control. GL_ARB_clip_control is only advertised where the
-              // driver has GL_EXT_clip_control, so without it the state can only be the default.
+                                 // driver has GL_EXT_clip_control, so without it the state can only be the default.
                 if (g_GLESCapabilities.SupportsClipControl &&
                     (forceFullPush || parameters.ClipOrigin != g_syncedRenderStateParameters.ClipOrigin ||
                      parameters.ClipDepthMode != g_syncedRenderStateParameters.ClipDepthMode)) {
@@ -1013,7 +1004,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
 
             if (headSpanDirty) { // Point size (GLES 1.x only - ES 2+ sets it from gl_PointSize,
-              // so the entry point is absent on most drivers; see the glLogicOp note above)
+                                 // so the entry point is absent on most drivers; see the glLogicOp note above)
                 if (g_GLESFuncs.glPointSize &&
                     (forceFullPush || parameters.PointSize != g_syncedRenderStateParameters.PointSize)) {
                     g_GLESFuncs.glPointSize(parameters.PointSize);
@@ -1021,10 +1012,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
 
             if (tailSpanDirty) { // Sample coverage
-                if (forceFullPush || parameters.SampleCoverageValue != g_syncedRenderStateParameters.SampleCoverageValue ||
+                if (forceFullPush ||
+                    parameters.SampleCoverageValue != g_syncedRenderStateParameters.SampleCoverageValue ||
                     parameters.SampleCoverageInvert != g_syncedRenderStateParameters.SampleCoverageInvert) {
                     g_GLESFuncs.glSampleCoverage(parameters.SampleCoverageValue,
-                                                ToGLBoolean(parameters.SampleCoverageInvert));
+                                                 ToGLBoolean(parameters.SampleCoverageInvert));
                 }
             }
 
@@ -1051,8 +1043,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                             g_GLESFuncs.glDisable(GL_SAMPLE_SHADING);
                         }
                     }
-                    if (forceFullPush || parameters.MinSampleShadingValue !=
-                                             g_syncedRenderStateParameters.MinSampleShadingValue) {
+                    if (forceFullPush ||
+                        parameters.MinSampleShadingValue != g_syncedRenderStateParameters.MinSampleShadingValue) {
                         g_GLESFuncs.glMinSampleShading(parameters.MinSampleShadingValue);
                     }
                 }
@@ -1069,8 +1061,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 if (forceFullPush ||
                     parameters.ShadingRateCombinerOp0 != g_syncedRenderStateParameters.ShadingRateCombinerOp0 ||
                     parameters.ShadingRateCombinerOp1 != g_syncedRenderStateParameters.ShadingRateCombinerOp1) {
-                    g_GLESFuncs.glShadingRateCombinerOpsEXT(MGShadingRateCombinerOpEnum(parameters.ShadingRateCombinerOp0),
-                                                            MGShadingRateCombinerOpEnum(parameters.ShadingRateCombinerOp1));
+                    g_GLESFuncs.glShadingRateCombinerOpsEXT(
+                        MGShadingRateCombinerOpEnum(parameters.ShadingRateCombinerOp0),
+                        MGShadingRateCombinerOpEnum(parameters.ShadingRateCombinerOp1));
                 }
             }
 
@@ -1199,8 +1192,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                  "composite table holds %llu - the band base or the decode is wrong, "
                                  "not the emission; running the frontend's own uniform block.",
                                  static_cast<unsigned>(handle.Slot), static_cast<unsigned>(handle.Gen),
-                                 static_cast<unsigned>(index),
-                                 static_cast<unsigned long long>(table->size()));
+                                 static_cast<unsigned>(index), static_cast<unsigned long long>(table->size()));
                 } else {
                     MGLOG_E_ONCE("A program record does not describe the binding it names: ShaderCso "
                                  "{slot %u, gen %u} is above the applier's table of %llu record(s), so "
@@ -1271,8 +1263,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                              "record at {slot %u, gen %u} names {slot %u, gen %u} in its own "
                              "descriptor; running the frontend's own uniform block.",
                              static_cast<unsigned>(handle.Slot), static_cast<unsigned>(handle.Gen),
-                             static_cast<unsigned>(record->Desc.Cso.Slot),
-                             static_cast<unsigned>(record->Desc.Cso.Gen));
+                             static_cast<unsigned>(record->Desc.Cso.Slot), static_cast<unsigned>(record->Desc.Cso.Gen));
                 return nullptr;
             }
             // P4a decline-site P6: M, then S - FLIPPED AT THE VERIFICATION ROUND, and the
@@ -1350,7 +1341,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
         //                      untrusted here and a refusal would abort a correct program. The
         //                      previous resolution stands, which is what the monolith arm
         //                      effectively does too when nothing rebound between the two calls.
-        enum class BroadcastCountPolicy { FrontendFallback, RefuseFallback, RecordOnly };
+        enum class BroadcastCountPolicy {
+            FrontendFallback,
+            RefuseFallback,
+            RecordOnly
+        };
 
         static void ResolveFragColorBroadcastCount(BroadcastCountPolicy policy) {
             Bool broadcastCountResolved = false;
@@ -1358,8 +1353,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // SyncCurrentFBO immediately before this, so the records have just been
             // checked against the two bindings.
             if (FramebufferImpl::g_fboRecordsTrusted) {
-                const MG_Pipe::MGPFramebufferState* const recordPtr =
-                    BoundFramebufferRecord(FramebufferTarget::Draw);
+                const MG_Pipe::MGPFramebufferState* const recordPtr = BoundFramebufferRecord(FramebufferTarget::Draw);
                 // P4a decline-site F7: FLIPPED AT THE VERIFICATION ROUND from a silent
                 //   decline to an assertion, because it is unreachable and a silent decline
                 //   here is indistinguishable from a legitimate one. g_fboRecordsTrusted
@@ -1407,8 +1401,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 const Uint16 slotVersion = drawSlot.GetVersion();
                 const Uint16 objectVersion = drawFBO ? drawFBO->GetObjectVersion() : 0;
                 if (!g_broadcastMemoValid || g_broadcastMemoFbo != drawFBO.get() ||
-                    g_broadcastMemoSlotVersion != slotVersion ||
-                    g_broadcastMemoObjectVersion != objectVersion) {
+                    g_broadcastMemoSlotVersion != slotVersion || g_broadcastMemoObjectVersion != objectVersion) {
                     Uint enabledDrawBuffers = 0;
                     if (drawFBO) {
                         const auto& drawBuffers = drawFBO->GetDrawBuffers();
@@ -1475,8 +1468,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 g_lastUsedBackendProgramId = 0;
                 return;
             }
-            if (!twin->GetBackendProgramId() ||
-                twin->GetSyncedShaderCsoSerial() != record->Serial ||
+            if (!twin->GetBackendProgramId() || twin->GetSyncedShaderCsoSerial() != record->Serial ||
                 twin->GetSyncedBindingsSerial() != record->BindingsSerial ||
                 twin->GetSnormFallbackClampOutputMask() != g_snormFallbackClampOutputMask ||
                 twin->GetUnormFallbackClampOutputMask() != g_unormFallbackClampOutputMask ||

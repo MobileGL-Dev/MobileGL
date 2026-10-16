@@ -86,7 +86,9 @@ namespace MobileGL::MG_Pipe {
     // is a transition between a run of BumpVersions()-written members and a run of
     // ++m_version-only members, so two adjacent chunks of the same half would mean a boundary
     // that separates nothing.
-    constexpr Bool MGPipeRenderStateChunkIsPipeline(SizeT index) { return (index % 2) == 1; }
+    constexpr Bool MGPipeRenderStateChunkIsPipeline(SizeT index) {
+        return (index % 2) == 1;
+    }
 
     constexpr MGPStateChunk MGPipeRenderStateChunkAt(SizeT index) {
         return MGPStateChunk{static_cast<Uint16>(kMGPipeRenderStateChunkBoundaries[index]),
@@ -145,8 +147,7 @@ namespace MobileGL::MG_Pipe {
     // ---- the trip wires. A mistake in the table is a build break, here. ----
     static_assert(kMGPipeRenderStateChunkBoundaries[0] == 0,
                   "the chunk table must start at byte 0 of RenderStateParameters");
-    static_assert(kMGPipeRenderStateChunkBoundaries[kMGPipeRenderStateChunkCount] ==
-                      sizeof(RenderStateParameters),
+    static_assert(kMGPipeRenderStateChunkBoundaries[kMGPipeRenderStateChunkCount] == sizeof(RenderStateParameters),
                   "the chunk table must cover RenderStateParameters to its last byte");
     static_assert(kMGPipePipelineChunkCount == 7);
     static_assert(kMGPipeDynamicChunkCount == 8);
@@ -218,16 +219,14 @@ namespace MobileGL::MG_Pipe {
     namespace MGPipeRenderStateChunkDetail {
         inline constexpr Uint32 kAllPipelineHalfBits =
             static_cast<Uint32>((Uint64{1} << kMGPipePipelineChunkCount) - 1);
-        inline constexpr Uint32 kAllDynamicHalfBits =
-            static_cast<Uint32>((Uint64{1} << kMGPipeDynamicChunkCount) - 1);
+        inline constexpr Uint32 kAllDynamicHalfBits = static_cast<Uint32>((Uint64{1} << kMGPipeDynamicChunkCount) - 1);
         inline constexpr Uint32 kWidenedPipeline = MGPipeGlobalChunkBitsOfPipelineMask(kAllPipelineHalfBits);
         inline constexpr Uint32 kWidenedDynamic = MGPipeGlobalChunkBitsOfDynamicMask(kAllDynamicHalfBits);
     } // namespace MGPipeRenderStateChunkDetail
-    static_assert((MGPipeRenderStateChunkDetail::kWidenedPipeline &
-                   MGPipeRenderStateChunkDetail::kWidenedDynamic) == 0,
+    static_assert((MGPipeRenderStateChunkDetail::kWidenedPipeline & MGPipeRenderStateChunkDetail::kWidenedDynamic) == 0,
                   "the two half-local -> global widenings must not overlap");
-    static_assert((MGPipeRenderStateChunkDetail::kWidenedPipeline |
-                   MGPipeRenderStateChunkDetail::kWidenedDynamic) == kMGPipeAllGlobalChunks,
+    static_assert((MGPipeRenderStateChunkDetail::kWidenedPipeline | MGPipeRenderStateChunkDetail::kWidenedDynamic) ==
+                      kMGPipeAllGlobalChunks,
                   "the two half-local -> global widenings must cover the whole chunk table");
     static_assert(MGPipeRenderStateChunkBitsCovering(0, sizeof(RenderStateParameters)) == kMGPipeAllGlobalChunks,
                   "every chunk must be covered by the whole block");

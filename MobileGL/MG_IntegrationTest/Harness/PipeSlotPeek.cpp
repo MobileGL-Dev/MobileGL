@@ -24,16 +24,22 @@ namespace MGITest {
         // it never looked at. The trailing return is the unreachable one the compiler needs.
         MobileGL::MG_Pipe::MGPipeKind Translate(PipeSlotKind kind) {
             switch (kind) {
-                case PipeSlotKind::Buffer: return MobileGL::MG_Pipe::MGPipeKind::Buffer;
-                case PipeSlotKind::VertexElementsCso:
-                    return MobileGL::MG_Pipe::MGPipeKind::VertexElementsCso;
-                case PipeSlotKind::Texture: return MobileGL::MG_Pipe::MGPipeKind::Texture;
-                case PipeSlotKind::Renderbuffer: return MobileGL::MG_Pipe::MGPipeKind::Renderbuffer;
-                case PipeSlotKind::Framebuffer: return MobileGL::MG_Pipe::MGPipeKind::Framebuffer;
-                case PipeSlotKind::SamplerCso: return MobileGL::MG_Pipe::MGPipeKind::SamplerCso;
-                case PipeSlotKind::SamplerViewCso:
-                    return MobileGL::MG_Pipe::MGPipeKind::SamplerViewCso;
-                case PipeSlotKind::ShaderCso: return MobileGL::MG_Pipe::MGPipeKind::ShaderCso;
+            case PipeSlotKind::Buffer:
+                return MobileGL::MG_Pipe::MGPipeKind::Buffer;
+            case PipeSlotKind::VertexElementsCso:
+                return MobileGL::MG_Pipe::MGPipeKind::VertexElementsCso;
+            case PipeSlotKind::Texture:
+                return MobileGL::MG_Pipe::MGPipeKind::Texture;
+            case PipeSlotKind::Renderbuffer:
+                return MobileGL::MG_Pipe::MGPipeKind::Renderbuffer;
+            case PipeSlotKind::Framebuffer:
+                return MobileGL::MG_Pipe::MGPipeKind::Framebuffer;
+            case PipeSlotKind::SamplerCso:
+                return MobileGL::MG_Pipe::MGPipeKind::SamplerCso;
+            case PipeSlotKind::SamplerViewCso:
+                return MobileGL::MG_Pipe::MGPipeKind::SamplerViewCso;
+            case PipeSlotKind::ShaderCso:
+                return MobileGL::MG_Pipe::MGPipeKind::ShaderCso;
             }
             return MobileGL::MG_Pipe::MGPipeKind::None;
         }
@@ -70,11 +76,21 @@ namespace MGITest {
         return true;
     }
 #else
-    bool PeekPipeSlotLiveCount(PipeSlotKind, unsigned*) { return false; }
-    bool PeekPipeSlotHighWater(PipeSlotKind, unsigned*) { return false; }
-    bool PeekPipeCompositeSlotLiveCount(unsigned*) { return false; }
-    bool PeekPipeCompositeSlotHighWater(unsigned*) { return false; }
-    bool PeekPipeCompositeSlotBandBase(unsigned*) { return false; }
+    bool PeekPipeSlotLiveCount(PipeSlotKind, unsigned*) {
+        return false;
+    }
+    bool PeekPipeSlotHighWater(PipeSlotKind, unsigned*) {
+        return false;
+    }
+    bool PeekPipeCompositeSlotLiveCount(unsigned*) {
+        return false;
+    }
+    bool PeekPipeCompositeSlotHighWater(unsigned*) {
+        return false;
+    }
+    bool PeekPipeCompositeSlotBandBase(unsigned*) {
+        return false;
+    }
 #endif
 
 } // namespace MGITest

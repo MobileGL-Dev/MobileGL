@@ -107,9 +107,9 @@ namespace MobileGL {
                     return std::min(std::max(limit, 0), storageBindings);
                 };
                 const Int stageStorageBlocks[ATOMIC_COUNTER_STAGE_COUNT] = {
-                    p.MaxVertexShaderStorageBlocks,   p.MaxTessControlShaderStorageBlocks,
+                    p.MaxVertexShaderStorageBlocks,         p.MaxTessControlShaderStorageBlocks,
                     p.MaxTessEvaluationShaderStorageBlocks, p.MaxGeometryShaderStorageBlocks,
-                    p.MaxFragmentShaderStorageBlocks, p.MaxComputeShaderStorageBlocks};
+                    p.MaxFragmentShaderStorageBlocks,       p.MaxComputeShaderStorageBlocks};
                 AtomicCounterLimits limits;
                 Int bufferSum = 0;
                 for (SizeT stage = 0; stage < ATOMIC_COUNTER_STAGE_COUNT; ++stage) {
@@ -217,11 +217,11 @@ namespace MobileGL {
             // Zero or negative means "no ceiling to enforce for this kind" - a backendless
             // environment, which every unit test and the pre-init preload path run in.
             struct ResourceBindingLimits {
-                Int MaxSamplerBindings = 0;              // GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS
-                Int MaxImageBindings = 0;                // GL_MAX_IMAGE_UNITS
-                Int MaxUniformBufferBindings = 0;        // GL_MAX_UNIFORM_BUFFER_BINDINGS
-                Int MaxShaderStorageBufferBindings = 0;  // GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS
-                Int MaxAtomicCounterBufferBindings = 0;  // GL_MAX_ATOMIC_COUNTER_BUFFER_BINDINGS
+                Int MaxSamplerBindings = 0;             // GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS
+                Int MaxImageBindings = 0;               // GL_MAX_IMAGE_UNITS
+                Int MaxUniformBufferBindings = 0;       // GL_MAX_UNIFORM_BUFFER_BINDINGS
+                Int MaxShaderStorageBufferBindings = 0; // GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS
+                Int MaxAtomicCounterBufferBindings = 0; // GL_MAX_ATOMIC_COUNTER_BUFFER_BINDINGS
             };
 
             struct ProgramAttrib {

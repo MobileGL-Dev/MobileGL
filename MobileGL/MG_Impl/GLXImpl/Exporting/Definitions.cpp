@@ -64,8 +64,7 @@ MOBILEGL_GLX_API void** glXGetFBConfigs(Display* dpy, int screen, int* nelements
     return GLXImpl::GetFBConfigs(dpy, screen, nelements);
 }
 
-MOBILEGL_GLX_API void** glXChooseFBConfig(Display* dpy, int screen, const int* attribList,
-                                          int* nelements) {
+MOBILEGL_GLX_API void** glXChooseFBConfig(Display* dpy, int screen, const int* attribList, int* nelements) {
     GLXStreamLock streamLock;
     return GLXImpl::ChooseFBConfig(dpy, screen, attribList, nelements);
 }
@@ -95,14 +94,13 @@ MOBILEGL_GLX_API void* glXCreateContext(Display* dpy, void* visualInfo, void* sh
     return GLXImpl::CreateContext(dpy, visualInfo, shareList, direct);
 }
 
-MOBILEGL_GLX_API void* glXCreateNewContext(Display* dpy, void* config, int renderType,
-                                           void* shareList, int direct) {
+MOBILEGL_GLX_API void* glXCreateNewContext(Display* dpy, void* config, int renderType, void* shareList, int direct) {
     GLXStreamLock streamLock;
     return GLXImpl::CreateNewContext(dpy, config, renderType, shareList, direct);
 }
 
-MOBILEGL_GLX_API void* glXCreateContextAttribsARB(Display* dpy, void* config, void* shareContext,
-                                                  int direct, const int* attribList) {
+MOBILEGL_GLX_API void* glXCreateContextAttribsARB(Display* dpy, void* config, void* shareContext, int direct,
+                                                  const int* attribList) {
     GLXStreamLock streamLock;
     return GLXImpl::CreateContextAttribsARB(dpy, config, shareContext, direct, attribList);
 }
@@ -117,8 +115,7 @@ MOBILEGL_GLX_API int glXMakeCurrent(Display* dpy, unsigned long drawable, void* 
     return GLXImpl::MakeCurrent(dpy, drawable, context);
 }
 
-MOBILEGL_GLX_API int glXMakeContextCurrent(Display* dpy, unsigned long draw, unsigned long read,
-                                           void* context) {
+MOBILEGL_GLX_API int glXMakeContextCurrent(Display* dpy, unsigned long draw, unsigned long read, void* context) {
     GLXStreamLock streamLock;
     return GLXImpl::MakeContextCurrent(dpy, draw, read, context);
 }
@@ -179,8 +176,7 @@ MOBILEGL_GLX_API int glXQueryContext(Display* dpy, void* context, int attribute,
     return GLXImpl::QueryContext(dpy, context, attribute, value);
 }
 
-MOBILEGL_GLX_API void glXQueryDrawable(Display* dpy, unsigned long drawable, int attribute,
-                                       unsigned int* value) {
+MOBILEGL_GLX_API void glXQueryDrawable(Display* dpy, unsigned long drawable, int attribute, unsigned int* value) {
     GLXStreamLock streamLock;
     GLXImpl::QueryDrawable(dpy, drawable, attribute, value);
 }

@@ -151,7 +151,9 @@ namespace {
         return result;
     }
 
-    Bool DiedOfAbort(const ChildResult& r) { return WIFSIGNALED(r.Status) && WTERMSIG(r.Status) == SIGABRT; }
+    Bool DiedOfAbort(const ChildResult& r) {
+        return WIFSIGNALED(r.Status) && WTERMSIG(r.Status) == SIGABRT;
+    }
     std::string DescribeStatus(const ChildResult& r) {
         if (r.Status < 0) return "fork/waitpid failed";
         if (WIFEXITED(r.Status)) return "exited " + std::to_string(WEXITSTATUS(r.Status));
@@ -194,8 +196,7 @@ TEST(SamplerEmit, TheEmitterIsOneNeverDestroyedProcessSingleton) {
     // One bit for the whole sampler family - the CSO, the view and all three unit sets,
     // including set_shader_images, whose emitter lives in ImageEmit.h. An operator switching
     // samplers off has to get the whole family's legacy arm, not two thirds of it.
-    EXPECT_TRUE(kMGPipeWiredSamplerSubsystem == 0 ||
-                kMGPipeWiredSamplerSubsystem == kMGPipeSubsystemSamplers);
+    EXPECT_TRUE(kMGPipeWiredSamplerSubsystem == 0 || kMGPipeWiredSamplerSubsystem == kMGPipeSubsystemSamplers);
 }
 
 // =========================================================================================
@@ -520,7 +521,6 @@ TEST(SamplerEmit, AMakeCurrentTakesTheUnitSetsAndLeavesTheCsoAndViewRecordsStand
     EXPECT_GT(MGPipeApplier().SamplerStatesSerial, statesSerial);
 }
 
-
 namespace {
     using GLContext = MG_State::GLState::GLContext;
     using MG_State::GLState::ITextureObject;
@@ -549,9 +549,15 @@ namespace {
         }
     };
 
-    GLContext& Ctx() { return *MG_State::pGLContext; }
-    MGPipeSamplerEmitter& Emitter() { return MGPipeSamplerEmitterInstance(); }
-    MGPipeSamplerCsoCache& Cache() { return MGPipeSamplerCsoCacheInstance(); }
+    GLContext& Ctx() {
+        return *MG_State::pGLContext;
+    }
+    MGPipeSamplerEmitter& Emitter() {
+        return MGPipeSamplerEmitterInstance();
+    }
+    MGPipeSamplerCsoCache& Cache() {
+        return MGPipeSamplerCsoCacheInstance();
+    }
 
     // Every field of SamplerParameters set to a value that is not its default, so a conversion
     // that dropped one is caught by the field's own EXPECT rather than by a count.
@@ -591,9 +597,7 @@ namespace {
     }
 
     void BindTextureToUnit(Uint32 unit, const SharedPtr<ITextureObject>& texture) {
-        Ctx().GetTextureUnitObject(static_cast<Int>(unit))
-            .GetBindingSlot(TextureTarget::Texture2D)
-            .Bind(texture);
+        Ctx().GetTextureUnitObject(static_cast<Int>(unit)).GetBindingSlot(TextureTarget::Texture2D).Bind(texture);
         Ctx().NoteTextureUnitTouched(static_cast<Int>(unit));
     }
 
@@ -641,7 +645,8 @@ namespace {
         auto* bytes = reinterpret_cast<Uint8*>(&dirty);
         // Written THROUGH A BYTE POINTER, past the last member and inside the object, which is
         // the only way to make the difference this case is about.
-        for (SizeT i = 97; i < sizeof(SamplerParameters); ++i) bytes[i] = static_cast<Uint8>(0xA5 + i);
+        for (SizeT i = 97; i < sizeof(SamplerParameters); ++i)
+            bytes[i] = static_cast<Uint8>(0xA5 + i);
 
         SamplerParameters canonClean;
         SamplerParameters canonDirty;
@@ -821,7 +826,8 @@ namespace {
         EXPECT_EQ(Cache().GetCounters().GroupPublishes, 1u);
         EXPECT_NE(BoundGroupSamplerRecord(back), nullptr);
 
-        for (const MGPipeHandle held : {first, second, again, back}) Cache().Release(held);
+        for (const MGPipeHandle held : {first, second, again, back})
+            Cache().Release(held);
         EXPECT_EQ(Cache().GetCounters().UnknownReleases + Cache().GetCounters().UnderflowedReleases, 0u);
     }
 
@@ -934,11 +940,10 @@ namespace {
     Uint MakeSamplerProgram() {
         namespace GL = MobileGL::MG_Impl::GLImpl;
         static const char* kVs = "#version 330 core\nvoid main(){ gl_Position = vec4(0.0); }\n";
-        static const char* kFs =
-            "#version 330 core\n"
-            "uniform sampler2D sampled;\n"
-            "out vec4 color;\n"
-            "void main(){ color = texture(sampled, vec2(0.0)); }\n";
+        static const char* kFs = "#version 330 core\n"
+                                 "uniform sampler2D sampled;\n"
+                                 "out vec4 color;\n"
+                                 "void main(){ color = texture(sampled, vec2(0.0)); }\n";
         const Uint program = GL::CreateProgram();
         const Uint vs = GL::CreateShader(GL_VERTEX_SHADER);
         GL::ShaderSource(vs, 1, &kVs, nullptr);
@@ -1098,8 +1103,7 @@ namespace {
         EXPECT_EQ(Cache().GetCounters().OverCapacityMints, 0u)
             << "there were unreferenced entries to take, so nothing had to grow";
 
-        EXPECT_TRUE(Cache().RecordIsPublished(pinned))
-            << "a handle a standing record names is not the LRU's to take";
+        EXPECT_TRUE(Cache().RecordIsPublished(pinned)) << "a handle a standing record names is not the LRU's to take";
         Uint64 second = 0;
         EXPECT_EQ(Cache().Acquire(pinnedParams, second), pinned);
         EXPECT_EQ(second, 0u) << "and it was a hit, not a re-mint under the same value";
@@ -1239,8 +1243,7 @@ int main(int argc, char** argv) {
     // raised by the encoder on THIS thread - the client role. So g_logPath, which is the read
     // path from here on, becomes the client-derived name; the env keeps the base. The rule is
     // the library's own, not a copy.
-    g_logPath = MobileGL::MG_Util::Debug::RoleLogPath(g_logPath.c_str(),
-                                                      MobileGL::MG_Util::Debug::LogRole::Client);
+    g_logPath = MobileGL::MG_Util::Debug::RoleLogPath(g_logPath.c_str(), MobileGL::MG_Util::Debug::LogRole::Client);
     // ONE process-wide context for the whole suite, because half these cases need a really
     // linked program and glslang lives behind this call. Each case uses GL names of its own.
     MobileGL::Initialize();

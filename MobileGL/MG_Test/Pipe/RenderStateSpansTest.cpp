@@ -108,7 +108,7 @@ namespace {
         SizeT Size;
     };
 
-#define MGP_RS_MEMBER_ROW(name) \
+#define MGP_RS_MEMBER_ROW(name)                                                                                        \
     Member{#name, offsetof(RenderStateParameters, name), sizeof(RenderStateParameters::name)},
     constexpr Member kMembers[] = {MGP_FIELDS_RenderStateParameters(MGP_RS_MEMBER_ROW)};
 #undef MGP_RS_MEMBER_ROW
@@ -134,7 +134,9 @@ namespace {
         return OverlapWith(kMGPipeDynamicChunks, kMGPipeDynamicChunkCount, offset, size) == size;
     }
 
-    Bool IsWhollyPipeline(SizeT offset, SizeT size) { return PipelineBytesOf(offset, size) == size; }
+    Bool IsWhollyPipeline(SizeT offset, SizeT size) {
+        return PipelineBytesOf(offset, size) == size;
+    }
 
     // ---------------------------------------------------------------------------------
     // D5's 25 kDraw derivations against the frontend getters they were transcribed from.
@@ -280,12 +282,12 @@ namespace {
                 }
                 EXPECT_TRUE(IsWhollyPipeline(member.Offset, member.Size))
                     << member.Name << " is named as pipeline state but only " << pipelineBytes << " of its "
-                    << member.Size << " bytes are in the pipeline half - the rest have silently left the "
-                                      "CSO's identity";
+                    << member.Size
+                    << " bytes are in the pipeline half - the rest have silently left the "
+                       "CSO's identity";
             } else {
-                EXPECT_EQ(pipelineBytes, SizeT{0})
-                    << member.Name << " is not named as pipeline state but " << pipelineBytes
-                    << " of its bytes are in the pipeline half";
+                EXPECT_EQ(pipelineBytes, SizeT{0}) << member.Name << " is not named as pipeline state but "
+                                                   << pipelineBytes << " of its bytes are in the pipeline half";
                 EXPECT_TRUE(IsWhollyDynamic(member.Offset, member.Size))
                     << member.Name << " is neither wholly pipeline nor wholly dynamic";
             }
@@ -378,7 +380,7 @@ namespace {
         // ---- Capabilities: every SET_CAPABILITY name, D3's three new ones included ----
 #define MGP_CHECK_CAPABILITY(cap)                                                                                      \
     check("SetCapability(" #cap ")", [](RenderState& s) {                                                              \
-        s.SetCapability(CapabilityInput::cap, !s.IsCapabilityEnabled(CapabilityInput::cap));                            \
+        s.SetCapability(CapabilityInput::cap, !s.IsCapabilityEnabled(CapabilityInput::cap));                           \
     });
         MGP_CHECK_CAPABILITY(ColorLogicOp)
         MGP_CHECK_CAPABILITY(DebugOutput)
@@ -451,8 +453,8 @@ namespace {
                                   BlendFactor::SrcAlpha);
         });
         check("SetBlendFuncIndexed(0)", [](RenderState& s) {
-            s.SetBlendFuncIndexed(0, BlendFactor::ConstantColor, BlendFactor::ConstantAlpha, BlendFactor::OneMinusDstColor,
-                                  BlendFactor::OneMinusDstAlpha);
+            s.SetBlendFuncIndexed(0, BlendFactor::ConstantColor, BlendFactor::ConstantAlpha,
+                                  BlendFactor::OneMinusDstColor, BlendFactor::OneMinusDstAlpha);
         });
         check("SetBlendEquation",
               [](RenderState& s) { s.SetBlendEquation(BlendEquation::Subtract, BlendEquation::Min); });
@@ -503,7 +505,8 @@ namespace {
 
         // ---- Colour mask, clear state, sampling ----
         check("SetColorMask", [](RenderState& s) { s.SetColorMask(BoolVec4(true, false, true, false)); });
-        check("SetColorMaskIndexed", [](RenderState& s) { s.SetColorMaskIndexed(6, BoolVec4(false, false, true, true)); });
+        check("SetColorMaskIndexed",
+              [](RenderState& s) { s.SetColorMaskIndexed(6, BoolVec4(false, false, true, true)); });
         check("SetColorMaskIndexed(0)",
               [](RenderState& s) { s.SetColorMaskIndexed(0, BoolVec4(false, true, false, true)); });
         check("SetClearColor", [](RenderState& s) { s.SetClearColor(FloatVec4(0.1f, 0.2f, 0.3f, 0.4f)); });
@@ -609,68 +612,68 @@ namespace {
         // below is driven afterwards, so a field that still agrees with the context at the
         // end can only have got there through the applier's derivation.
         {
-        MG_Test::ScopedPipeVerb verb(MGPipeVerb::DrawArrays);
+            MG_Test::ScopedPipeVerb verb(MGPipeVerb::DrawArrays);
 
-        ctx.SetViewportIndexed(0, FloatVec4(1.5f, 2.5f, 63.5f, 32.25f));
-        ctx.SetViewportIndexed(7, FloatVec4(8.f, 9.f, 10.f, 11.f));
-        ctx.SetLineWidth(3.5f);
-        ctx.SetPatchVertices(4);
-        ctx.SetPatchDefaultOuterLevel(FloatVec4(2.f, 3.f, 4.f, 5.f));
-        ctx.SetPatchDefaultInnerLevel(FloatVec2(6.f, 7.f));
-        ctx.SetPolygonOffsetClamped(1.5f, 2.5f, 0.25f);
-        ctx.SetClampReadColor(GL_TRUE);
-        ctx.SetPolygonMode(GL_LINE, GL_POINT);
-        ctx.SetPrimitiveRestartIndex(0xabcdu);
-        ctx.SetBlendFuncIndexed(2, BlendFactor::DstColor, BlendFactor::SrcColor, BlendFactor::DstAlpha,
-                                BlendFactor::SrcAlpha);
-        ctx.SetBlendEquationIndexed(4, BlendEquation::ReverseSubtract, BlendEquation::Max);
-        ctx.SetCapabilityIndexed(CapabilityInput::Blend, 3, true);
-        ctx.SetCapabilityIndexed(CapabilityInput::ScissorTest, 5, true);
-        ctx.SetLogicOp(LogicOperation::Xor);
-        ctx.SetDepthFunc(DepthTestFunc::GreaterEqual);
-        ctx.SetDepthMask(false);
-        ctx.SetStencilFunc(StencilFace::Front, DepthTestFunc::Equal, 7, 0xf0u);
-        ctx.SetStencilOp(StencilFace::Back, StencilOperation::Replace, StencilOperation::IncrementClamp,
-                         StencilOperation::DecrementWrap);
-        ctx.SetStencilMask(StencilFace::Back, 0x0fu);
-        ctx.SetColorMaskIndexed(6, BoolVec4(false, false, true, true));
-        ctx.SetClearColor(FloatVec4(0.1f, 0.2f, 0.3f, 0.4f));
-        ctx.SetClearDepth(0.75f);
-        ctx.SetClearStencil(9);
-        ctx.SetBlendColor(FloatVec4(0.5f, 0.6f, 0.7f, 0.8f));
-        ctx.SetDepthRangeIndexed(9, FloatVec2(0.1f, 0.9f));
-        ctx.SetMinSampleShadingValue(0.625f);
-        ctx.SetCullFaceMode(CullFaceMode::Front);
-        ctx.SetProvokingVertexMode(ProvokingVertexMode::FirstVertex);
-        ctx.SetScissorBox(IntVec4(1, 2, 3, 4));
-        // One capability out of every arm of the 35-way switch: plain bools (the three D3
-        // gave storage to among them), the two indexed ones through their non-indexed entry
-        // point, and a clip distance.
-        ctx.SetCapability(CapabilityInput::DepthTest, true);
-        ctx.SetCapability(CapabilityInput::FramebufferSrgb, true);
-        ctx.SetCapability(CapabilityInput::DepthClamp, true);
-        ctx.SetCapability(CapabilityInput::TextureCubeMapSeamless, true);
-        ctx.SetCapability(CapabilityInput::Blend, true);
-        ctx.SetCapability(CapabilityInput::ClipDistance3, true);
+            ctx.SetViewportIndexed(0, FloatVec4(1.5f, 2.5f, 63.5f, 32.25f));
+            ctx.SetViewportIndexed(7, FloatVec4(8.f, 9.f, 10.f, 11.f));
+            ctx.SetLineWidth(3.5f);
+            ctx.SetPatchVertices(4);
+            ctx.SetPatchDefaultOuterLevel(FloatVec4(2.f, 3.f, 4.f, 5.f));
+            ctx.SetPatchDefaultInnerLevel(FloatVec2(6.f, 7.f));
+            ctx.SetPolygonOffsetClamped(1.5f, 2.5f, 0.25f);
+            ctx.SetClampReadColor(GL_TRUE);
+            ctx.SetPolygonMode(GL_LINE, GL_POINT);
+            ctx.SetPrimitiveRestartIndex(0xabcdu);
+            ctx.SetBlendFuncIndexed(2, BlendFactor::DstColor, BlendFactor::SrcColor, BlendFactor::DstAlpha,
+                                    BlendFactor::SrcAlpha);
+            ctx.SetBlendEquationIndexed(4, BlendEquation::ReverseSubtract, BlendEquation::Max);
+            ctx.SetCapabilityIndexed(CapabilityInput::Blend, 3, true);
+            ctx.SetCapabilityIndexed(CapabilityInput::ScissorTest, 5, true);
+            ctx.SetLogicOp(LogicOperation::Xor);
+            ctx.SetDepthFunc(DepthTestFunc::GreaterEqual);
+            ctx.SetDepthMask(false);
+            ctx.SetStencilFunc(StencilFace::Front, DepthTestFunc::Equal, 7, 0xf0u);
+            ctx.SetStencilOp(StencilFace::Back, StencilOperation::Replace, StencilOperation::IncrementClamp,
+                             StencilOperation::DecrementWrap);
+            ctx.SetStencilMask(StencilFace::Back, 0x0fu);
+            ctx.SetColorMaskIndexed(6, BoolVec4(false, false, true, true));
+            ctx.SetClearColor(FloatVec4(0.1f, 0.2f, 0.3f, 0.4f));
+            ctx.SetClearDepth(0.75f);
+            ctx.SetClearStencil(9);
+            ctx.SetBlendColor(FloatVec4(0.5f, 0.6f, 0.7f, 0.8f));
+            ctx.SetDepthRangeIndexed(9, FloatVec2(0.1f, 0.9f));
+            ctx.SetMinSampleShadingValue(0.625f);
+            ctx.SetCullFaceMode(CullFaceMode::Front);
+            ctx.SetProvokingVertexMode(ProvokingVertexMode::FirstVertex);
+            ctx.SetScissorBox(IntVec4(1, 2, 3, 4));
+            // One capability out of every arm of the 35-way switch: plain bools (the three D3
+            // gave storage to among them), the two indexed ones through their non-indexed entry
+            // point, and a clip distance.
+            ctx.SetCapability(CapabilityInput::DepthTest, true);
+            ctx.SetCapability(CapabilityInput::FramebufferSrgb, true);
+            ctx.SetCapability(CapabilityInput::DepthClamp, true);
+            ctx.SetCapability(CapabilityInput::TextureCubeMapSeamless, true);
+            ctx.SetCapability(CapabilityInput::Blend, true);
+            ctx.SetCapability(CapabilityInput::ClipDistance3, true);
 
-        // The vacuity guard: the block still holds what the fill copied out of the DEFAULT
-        // context, so it must currently DISAGREE with the live one. If this ever passes, the
-        // comparisons below would be checking the filler against itself.
-        ASSERT_NE(gPipeInputs->GetLineWidth(), ctx.GetLineWidth());
+            // The vacuity guard: the block still holds what the fill copied out of the DEFAULT
+            // context, so it must currently DISAGREE with the live one. If this ever passes, the
+            // comparisons below would be checking the filler against itself.
+            ASSERT_NE(gPipeInputs->GetLineWidth(), ctx.GetLineWidth());
 
-        applyWholeBlock();
+            applyWholeBlock();
 
-        // ---- the 25 kDraw fields ----
-        ExpectDerivedDrawFieldsMatch(ctx, "whole block, kDraw");
-        // ...and the ~25 members that have NO derived field, which only a byte compare of the
-        // whole block reaches.
-        ExpectAssembledBlockIsTheLiveBlock(ctx, "whole block, kDraw");
-        // The rounding half of GetViewport, exercised on purpose: viewport 0 is
-        // (1.5, 2.5, 63.5, 32.25), so a transcription that truncated instead of rounding
-        // would hand the backends a 63-wide rectangle where 64 was asked for. The literal
-        // is std::lround's answer - round half AWAY FROM ZERO, so 1.5 -> 2 and 2.5 -> 3,
-        // not the banker's rounding a nearbyint() transcription would give.
-        EXPECT_EQ(gPipeInputs->GetViewport(), IntVec4(2, 3, 64, 32));
+            // ---- the 25 kDraw fields ----
+            ExpectDerivedDrawFieldsMatch(ctx, "whole block, kDraw");
+            // ...and the ~25 members that have NO derived field, which only a byte compare of the
+            // whole block reaches.
+            ExpectAssembledBlockIsTheLiveBlock(ctx, "whole block, kDraw");
+            // The rounding half of GetViewport, exercised on purpose: viewport 0 is
+            // (1.5, 2.5, 63.5, 32.25), so a transcription that truncated instead of rounding
+            // would hand the backends a 63-wide rectangle where 64 was asked for. The literal
+            // is std::lround's answer - round half AWAY FROM ZERO, so 1.5 -> 2 and 2.5 -> 3,
+            // not the banker's rounding a nearbyint() transcription would give.
+            EXPECT_EQ(gPipeInputs->GetViewport(), IntVec4(2, 3, 64, 32));
         } // phase 1, kDraw
 
         // Phase 2, kClear: the three clear values. The verb's own fill runs FIRST and copies
@@ -792,12 +795,10 @@ namespace {
 
         const auto push = [&](const char* tag) {
             const RenderStateParameters& live = ctx.GetRenderStateParameters();
-            const Uint32 movedPipeline =
-                firstPush ? static_cast<Uint32>((Uint64{1} << kMGPipePipelineChunkCount) - 1)
-                          : MGPipePipelineChunksThatMoved(staged, live);
-            const Uint32 movedDynamic =
-                firstPush ? static_cast<Uint32>((Uint64{1} << kMGPipeDynamicChunkCount) - 1)
-                          : MGPipeDynamicChunksThatMoved(staged, live);
+            const Uint32 movedPipeline = firstPush ? static_cast<Uint32>((Uint64{1} << kMGPipePipelineChunkCount) - 1)
+                                                   : MGPipePipelineChunksThatMoved(staged, live);
+            const Uint32 movedDynamic = firstPush ? static_cast<Uint32>((Uint64{1} << kMGPipeDynamicChunkCount) - 1)
+                                                  : MGPipeDynamicChunksThatMoved(staged, live);
 
             if (movedPipeline != 0) {
                 Vector<Uint8> blob(MGPipePipelineChunkBlobBytes(movedPipeline));
@@ -1018,7 +1019,9 @@ namespace {
         return result;
     }
 
-    Bool DiedOfAbort(const ChildResult& r) { return WIFSIGNALED(r.Status) && WTERMSIG(r.Status) == SIGABRT; }
+    Bool DiedOfAbort(const ChildResult& r) {
+        return WIFSIGNALED(r.Status) && WTERMSIG(r.Status) == SIGABRT;
+    }
     std::string DescribeStatus(const ChildResult& r) {
         if (r.Status < 0) return "fork/waitpid failed";
         if (WIFEXITED(r.Status)) return "exited " + std::to_string(WEXITSTATUS(r.Status));

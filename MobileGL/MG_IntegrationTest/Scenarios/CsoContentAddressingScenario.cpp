@@ -177,8 +177,7 @@ void main() { oColor = vec4(0.0, 1.0, 0.0, 1.0); }
                 m_program = CompileProgram(kVS, kFS, &error);
                 ASSERT_NE(m_program, 0u) << error;
 
-                const float quad[12] = {-1.0f, -1.0f, 1.0f, -1.0f, 1.0f, 1.0f,
-                                        -1.0f, -1.0f, 1.0f, 1.0f,  -1.0f, 1.0f};
+                const float quad[12] = {-1.0f, -1.0f, 1.0f, -1.0f, 1.0f, 1.0f, -1.0f, -1.0f, 1.0f, 1.0f, -1.0f, 1.0f};
                 glGenVertexArrays(1, &m_vao);
                 glBindVertexArray(m_vao);
                 glGenBuffers(1, &m_vbo);
@@ -303,8 +302,7 @@ void main() { oColor = vec4(0.0, 1.0, 0.0, 1.0); }
                        "reuse them. It reported: "
                     << window.line;
                 EXPECT_LT(window.mints, window.binds)
-                    << "with content addressing on the cache must be answering binds it did not mint. "
-                    << window.line;
+                    << "with content addressing on the cache must be answering binds it did not mint. " << window.line;
             } else if (m_lane == kLaneNoContentAddressing) {
                 EXPECT_EQ(window.mints, window.binds)
                     << "kMGPipeBehaviourNoCsoContentAddressing (bit 63 of MOBILEGL_PIPE_PUSH) must make every "
@@ -319,12 +317,12 @@ void main() { oColor = vec4(0.0, 1.0, 0.0, 1.0); }
 
             // ... and the picture is the same in both arms and after every toggle. The quad is
             // opaque, so the blended and unblended draws agree by construction.
-            EXPECT_TRUE(RegionIsMostly(first, kInset, first.Width() - kInset, kInset, first.Height() - kInset,
-                                       "green", 0.0, "the blend-toggle frame [" + m_lane + "]"));
+            EXPECT_TRUE(RegionIsMostly(first, kInset, first.Width() - kInset, kInset, first.Height() - kInset, "green",
+                                       0.0, "the blend-toggle frame [" + m_lane + "]"));
             const Image second = RunBlendToggleFrame();
-            EXPECT_TRUE(second == first)
-                << "the second toggle frame does not match the first: " << second.ByteDiffCount(first)
-                << " bytes differ. The CSO path must not change what is drawn.";
+            EXPECT_TRUE(second == first) << "the second toggle frame does not match the first: "
+                                         << second.ByteDiffCount(first)
+                                         << " bytes differ. The CSO path must not change what is drawn.";
         }
 
     } // namespace

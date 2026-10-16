@@ -86,31 +86,28 @@ namespace MGITest::WireLedger {
         // which satisfies `< cap` perfectly and is the exact shape of an emit table that
         // resolved the transport and then fell through to the driver.
         EXPECT_GT(state.maxRecordBytes, 0u)
-            << where << ": the largest record this session wrote is 0 bytes, so nothing crossed "
-                        "SEG_CMD. R-10's proof obligation has no subject and the lane did not go "
-                        "through the wire";
+            << where
+            << ": the largest record this session wrote is 0 bytes, so nothing crossed "
+               "SEG_CMD. R-10's proof obligation has no subject and the lane did not go "
+               "through the wire";
         EXPECT_LT(state.maxRecordBytes, state.maxRecordBytesCap)
             << where << ": R-10 - the largest record this session wrote is " << state.maxRecordBytes
-            << " bytes and RingProducer::MaxRecordBytes() is " << state.maxRecordBytesCap
-            << " (half of a " << (state.maxRecordBytesCap * 2)
+            << " bytes and RingProducer::MaxRecordBytes() is " << state.maxRecordBytesCap << " (half of a "
+            << (state.maxRecordBytesCap * 2)
             << " byte SEG_CMD, i.e. MOBILEGL_IPC_RING_MB). The content rows cut their blobs at "
                "the stage chunk budget, so nothing cuts this record: one at or above the cap is "
                "Fatal{RingOverrun} at the encoder, and a maximum that has climbed to it is the "
                "proof obligation failing. Report it to the integrator, who decides between a "
                "cut for that row and a bigger default ring";
-        ::testing::Test::RecordProperty("max_record_bytes",
-                                        static_cast<int>(state.maxRecordBytes));
-        ::testing::Test::RecordProperty("max_record_bytes_cap",
-                                        static_cast<int>(state.maxRecordBytesCap));
+        ::testing::Test::RecordProperty("max_record_bytes", static_cast<int>(state.maxRecordBytes));
+        ::testing::Test::RecordProperty("max_record_bytes_cap", static_cast<int>(state.maxRecordBytesCap));
     }
 
     // E3(e)'s reading. The CALLER drives the workload; this only reads the result, so that the
     // thing being asserted about is the workload and not this header.
-    inline void ExpectSmallRingWrappedAtLeastOnce(const char* where,
-                                                  unsigned long long bytesDriven) {
+    inline void ExpectSmallRingWrappedAtLeastOnce(const char* where, unsigned long long bytesDriven) {
         const SplitRuntimeState state = PeekSplitRuntime();
-        ASSERT_TRUE(state.sessionActive)
-            << "the wire ledger was read in a process with no client session";
+        ASSERT_TRUE(state.sessionActive) << "the wire ledger was read in a process with no client session";
         const unsigned long long capacity = state.maxRecordBytesCap * 2; // MaxRecordBytes == cap/2
         // THE WRAP FIRST, AND THE DENOMINATOR RIGHT BEHIND IT, both as EXPECT so that a red
         // carries both sentences. Order matters for what the failure SAYS: the thing this gate
@@ -120,8 +117,7 @@ namespace MGITest::WireLedger {
         // is how the red-once line for this control was measured, and why it is written this
         // way round.
         EXPECT_GE(state.cmdWraps, 1u)
-            << where << ": exit gate E3(e) - " << bytesDriven << " bytes were written into a "
-            << capacity
+            << where << ": exit gate E3(e) - " << bytesDriven << " bytes were written into a " << capacity
             << " byte SEG_CMD and the producer's head NEVER WENT ROUND: no wrap, so this entry "
                "exercised exactly what the default lane exercises and the word SmallRing in its "
                "name asserts nothing. That is what the joint gate recorded as 'SmallRing entries "
@@ -131,15 +127,15 @@ namespace MGITest::WireLedger {
                "proved to be load-bearing (R-16), by re-running this entry's own command with "
                "MOBILEGL_IPC_RING_MB=8 and nothing else changed";
         EXPECT_GT(bytesDriven, capacity)
-            << where << ": and the reason is the denominator - the drive loop pushed only "
-            << bytesDriven << " bytes through a " << capacity
+            << where << ": and the reason is the denominator - the drive loop pushed only " << bytesDriven
+            << " bytes through a " << capacity
             << " byte SEG_CMD, which cannot reach a wrap boundary at all. The loop stops at "
                "kSmallRingLaneCmdByteTarget, which is sized for the 1 MiB ring this lane "
                "declares (MGL_ITEST_GLES_SPLIT_SMALL_RING_ENVIRONMENT); a larger ring needs a "
                "larger workload and is not what this lane is for";
-        EXPECT_GE(state.stageReclaimWaits, 1u)
-            << where << ": exit gate E3(e) - producer NEVER WAITED for staging retirement; "
-               "lazy reclamation of already-retired bytes is not back-pressure";
+        EXPECT_GE(state.stageReclaimWaits, 1u) << where
+                                               << ": exit gate E3(e) - producer NEVER WAITED for staging retirement; "
+                                                  "lazy reclamation of already-retired bytes is not back-pressure";
         ::testing::Test::RecordProperty("ring_wraps", static_cast<int>(state.cmdWraps));
         ::testing::Test::RecordProperty("ring_wrap_pads", static_cast<int>(state.cmdWrapPads));
         ::testing::Test::RecordProperty("ring_waits", static_cast<int>(state.stageReclaimWaits));
@@ -147,6 +143,8 @@ namespace MGITest::WireLedger {
     }
 
     // Bytes the producer has written so far, or 0 outside a split process.
-    inline unsigned long long CmdBytesWritten() { return PeekSplitRuntime().cmdBytesWritten; }
+    inline unsigned long long CmdBytesWritten() {
+        return PeekSplitRuntime().cmdBytesWritten;
+    }
 
 } // namespace MGITest::WireLedger

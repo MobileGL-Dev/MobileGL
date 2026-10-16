@@ -25,13 +25,13 @@
 #include <MG_Pipe/MGPipeTypes.h>
 #include <MG_Remote/Client/CapsMirror.h>
 
-#define MGL_BACKEND_SLOT_CAP(Slot, CapBit)                                                         \
-    (::MobileGL::MG_Config::Transport != ::MobileGL::MG_Config::TransportMode::Monolith             \
-         ? ::MobileGL::MG_Remote::Client::CapsMirrorInstance().HasCap(CapBit)                       \
+#define MGL_BACKEND_SLOT_CAP(Slot, CapBit)                                                                             \
+    (::MobileGL::MG_Config::Transport != ::MobileGL::MG_Config::TransportMode::Monolith                                \
+         ? ::MobileGL::MG_Remote::Client::CapsMirrorInstance().HasCap(CapBit)                                          \
          : ::MobileGL::MG_Backend::gBackendFunctionsTable.GL.Slot != nullptr)
 
-#define MGL_BACKEND_SLOT_LOCAL(Slot)                                                               \
-    (::MobileGL::MG_Config::Transport == ::MobileGL::MG_Config::TransportMode::Monolith &&          \
+#define MGL_BACKEND_SLOT_LOCAL(Slot)                                                                                   \
+    (::MobileGL::MG_Config::Transport == ::MobileGL::MG_Config::TransportMode::Monolith &&                             \
      ::MobileGL::MG_Backend::gBackendFunctionsTable.GL.Slot != nullptr)
 
 // The POINTER-valued forms, for the several sites shaped `if (const auto f = TABLE.GL.Slot)`.
@@ -41,27 +41,23 @@
 // GL_Getter.cpp's GetInteger64v by -150 bytes and GetIntegerv by +2, which is two "resized"
 // symbols and a red G1. In a pull build these two expand to the slot expression ITSELF, so the
 // init-statement survives verbatim and the pull build's code generation cannot move.
-#define MGL_BACKEND_SLOT_PTR_CAP(Slot, CapBit)                                                     \
-    (::MobileGL::MG_Config::Transport != ::MobileGL::MG_Config::TransportMode::Monolith             \
-         ? (::MobileGL::MG_Remote::Client::CapsMirrorInstance().HasCap(CapBit)                      \
-                ? ::MobileGL::MG_Backend::gBackendFunctionsTable.GL.Slot                            \
-                : nullptr)                                                                          \
+#define MGL_BACKEND_SLOT_PTR_CAP(Slot, CapBit)                                                                         \
+    (::MobileGL::MG_Config::Transport != ::MobileGL::MG_Config::TransportMode::Monolith                                \
+         ? (::MobileGL::MG_Remote::Client::CapsMirrorInstance().HasCap(CapBit)                                         \
+                ? ::MobileGL::MG_Backend::gBackendFunctionsTable.GL.Slot                                               \
+                : nullptr)                                                                                             \
          : ::MobileGL::MG_Backend::gBackendFunctionsTable.GL.Slot)
 
-#define MGL_BACKEND_SLOT_PTR_LOCAL(Slot)                                                           \
-    (::MobileGL::MG_Config::Transport != ::MobileGL::MG_Config::TransportMode::Monolith             \
-         ? nullptr                                                                                  \
+#define MGL_BACKEND_SLOT_PTR_LOCAL(Slot)                                                                               \
+    (::MobileGL::MG_Config::Transport != ::MobileGL::MG_Config::TransportMode::Monolith                                \
+         ? nullptr                                                                                                     \
          : ::MobileGL::MG_Backend::gBackendFunctionsTable.GL.Slot)
 
 #else
 
-#define MGL_BACKEND_SLOT_CAP(Slot, CapBit)                                                         \
-    (::MobileGL::MG_Backend::gBackendFunctionsTable.GL.Slot != nullptr)
-#define MGL_BACKEND_SLOT_LOCAL(Slot)                                                               \
-    (::MobileGL::MG_Backend::gBackendFunctionsTable.GL.Slot != nullptr)
-#define MGL_BACKEND_SLOT_PTR_CAP(Slot, CapBit)                                                     \
-    (::MobileGL::MG_Backend::gBackendFunctionsTable.GL.Slot)
-#define MGL_BACKEND_SLOT_PTR_LOCAL(Slot)                                                           \
-    (::MobileGL::MG_Backend::gBackendFunctionsTable.GL.Slot)
+#define MGL_BACKEND_SLOT_CAP(Slot, CapBit) (::MobileGL::MG_Backend::gBackendFunctionsTable.GL.Slot != nullptr)
+#define MGL_BACKEND_SLOT_LOCAL(Slot) (::MobileGL::MG_Backend::gBackendFunctionsTable.GL.Slot != nullptr)
+#define MGL_BACKEND_SLOT_PTR_CAP(Slot, CapBit) (::MobileGL::MG_Backend::gBackendFunctionsTable.GL.Slot)
+#define MGL_BACKEND_SLOT_PTR_LOCAL(Slot) (::MobileGL::MG_Backend::gBackendFunctionsTable.GL.Slot)
 
 #endif

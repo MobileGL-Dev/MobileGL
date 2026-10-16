@@ -61,7 +61,9 @@ namespace MobileGL::MG_Remote::Client {
     // thread an emitter runs the server's code directly, as the decoder does. Under spawn the
     // answer is constant per process. Declared in WireTables.h because PipeFill.cpp and
     // EGLImpl.cpp need it too; kept out of line so that header includes no server header.
-    Bool RunsAsTheServerRole() { return Server::ServerLoop::OnApplyThread(); }
+    Bool RunsAsTheServerRole() {
+        return Server::ServerLoop::OnApplyThread();
+    }
 
     namespace {
 
@@ -92,10 +94,11 @@ namespace MobileGL::MG_Remote::Client {
             if (session == nullptr) {
                 // @Ph-declined (ID-P7-1): returns ClientSession& and runs in the CLIENT - no
                 // session to hand back, no peer bytes, and the latch is a server-session idea.
-                SessionFail(MGFatalFamily::NoClientSession, "MGPipe: Fatal{NoClientSession, \"%s\"} - the client wire tables are "
-                        "installed but no ClientSession is active. A row may not fall through to "
-                        "a driver this role does not have",
-                        row);
+                SessionFail(MGFatalFamily::NoClientSession,
+                            "MGPipe: Fatal{NoClientSession, \"%s\"} - the client wire tables are "
+                            "installed but no ClientSession is active. A row may not fall through to "
+                            "a driver this role does not have",
+                            row);
             }
             return *session;
         }
@@ -104,14 +107,14 @@ namespace MobileGL::MG_Remote::Client {
         // record declared no blob" and "the record declared an empty blob" must not be spelled
         // the same way on a wire), so a row whose decoder calls RequireDeclaredBlob or
         // ResolveOrFatal is checked HERE, on the producing side, where the row has a name.
-        MG_Pipe::MGPBlobRef StageRequired(ClientSession& session, const char* row,
-                                          const void* bytes, Uint64 count) {
+        MG_Pipe::MGPBlobRef StageRequired(ClientSession& session, const char* row, const void* bytes, Uint64 count) {
             if (bytes == nullptr || count == 0) {
-                SessionFail(MGFatalFamily::BlobMissing, "MGPipe: Fatal{BlobMissing, \"%s\"} - the row's decoder requires a "
-                        "declared blob and the call site handed over %llu bytes at %p. Under "
-                        "monolith the companion pointer carries them; under split they have to "
-                        "be staged, and there is nothing to stage",
-                        row, static_cast<unsigned long long>(count), bytes);
+                SessionFail(MGFatalFamily::BlobMissing,
+                            "MGPipe: Fatal{BlobMissing, \"%s\"} - the row's decoder requires a "
+                            "declared blob and the call site handed over %llu bytes at %p. Under "
+                            "monolith the companion pointer carries them; under split they have to "
+                            "be staged, and there is nothing to stage",
+                            row, static_cast<unsigned long long>(count), bytes);
             }
             return session.Encoder().StageBytes(bytes, count);
         }
@@ -128,41 +131,40 @@ namespace MobileGL::MG_Remote::Client {
         // The three regular shapes
         // ---------------------------------------------------------------------------------
 
-#define MGP_WIRE_PLAIN(Name, Payload, Table)                                                       \
-    void Wire_##Name(const MG_Pipe::Payload* payload) {                                            \
-        if (RunsAsTheServerRole()) { MG_Pipe::MGPipeMonolith##Table().Name(payload); return; }      \
-        ClientSession& session = RequireSession(#Name);                                            \
-        session.EmitAndWait(MGPWireOp::Name, payload, sizeof(*payload), nullptr, 0, nullptr, 0,    \
-                            nullptr);                                                              \
-        ++g_emitted;                                                                               \
+#define MGP_WIRE_PLAIN(Name, Payload, Table)                                                                           \
+    void Wire_##Name(const MG_Pipe::Payload* payload) {                                                                \
+        if (RunsAsTheServerRole()) {                                                                                   \
+            MG_Pipe::MGPipeMonolith##Table().Name(payload);                                                            \
+            return;                                                                                                    \
+        }                                                                                                              \
+        ClientSession& session = RequireSession(#Name);                                                                \
+        session.EmitAndWait(MGPWireOp::Name, payload, sizeof(*payload), nullptr, 0, nullptr, 0, nullptr);              \
+        ++g_emitted;                                                                                                   \
     }
 
-#define MGP_WIRE_BLOB(Name, Payload, BlobMember)                                                   \
-    void Wire_##Name(const MG_Pipe::Payload* payload, const void* blobBytes,                       \
-                     Uint64 blobByteCount) {                                                       \
-        if (RunsAsTheServerRole()) {                                                               \
-            MG_Pipe::MGPipeMonolithContext().Name(payload, blobBytes, blobByteCount);              \
-            return;                                                                                \
-        }                                                                                          \
-        ClientSession& session = RequireSession(#Name);                                            \
-        MG_Pipe::Payload record = *payload;                                                        \
-        record.BlobMember = StageRequired(session, #Name, blobBytes, blobByteCount);               \
-        session.EmitAndWait(MGPWireOp::Name, &record, sizeof(record), nullptr, 0, nullptr, 0,      \
-                            nullptr);                                                              \
-        ++g_emitted;                                                                               \
+#define MGP_WIRE_BLOB(Name, Payload, BlobMember)                                                                       \
+    void Wire_##Name(const MG_Pipe::Payload* payload, const void* blobBytes, Uint64 blobByteCount) {                   \
+        if (RunsAsTheServerRole()) {                                                                                   \
+            MG_Pipe::MGPipeMonolithContext().Name(payload, blobBytes, blobByteCount);                                  \
+            return;                                                                                                    \
+        }                                                                                                              \
+        ClientSession& session = RequireSession(#Name);                                                                \
+        MG_Pipe::Payload record = *payload;                                                                            \
+        record.BlobMember = StageRequired(session, #Name, blobBytes, blobByteCount);                                   \
+        session.EmitAndWait(MGPWireOp::Name, &record, sizeof(record), nullptr, 0, nullptr, 0, nullptr);                \
+        ++g_emitted;                                                                                                   \
     }
 
-#define MGP_WIRE_TAIL(Name, Payload, TailType)                                                     \
-    void Wire_##Name(const MG_Pipe::Payload* payload, const void* varTail, Uint32 varTailCount) {   \
-        if (RunsAsTheServerRole()) {                                                               \
-            MG_Pipe::MGPipeMonolithContext().Name(payload, varTail, varTailCount);                 \
-            return;                                                                                \
-        }                                                                                          \
-        ClientSession& session = RequireSession(#Name);                                            \
-        session.EmitAndWait(MGPWireOp::Name, payload, sizeof(*payload), varTail,                   \
-                            static_cast<Uint64>(varTailCount) * sizeof(MG_Pipe::TailType),         \
-                            nullptr, 0, nullptr);                                                  \
-        ++g_emitted;                                                                               \
+#define MGP_WIRE_TAIL(Name, Payload, TailType)                                                                         \
+    void Wire_##Name(const MG_Pipe::Payload* payload, const void* varTail, Uint32 varTailCount) {                      \
+        if (RunsAsTheServerRole()) {                                                                                   \
+            MG_Pipe::MGPipeMonolithContext().Name(payload, varTail, varTailCount);                                     \
+            return;                                                                                                    \
+        }                                                                                                              \
+        ClientSession& session = RequireSession(#Name);                                                                \
+        session.EmitAndWait(MGPWireOp::Name, payload, sizeof(*payload), varTail,                                       \
+                            static_cast<Uint64>(varTailCount) * sizeof(MG_Pipe::TailType), nullptr, 0, nullptr);       \
+        ++g_emitted;                                                                                                   \
     }
 
         // -- screen -------------------------------------------------------------------
@@ -170,10 +172,12 @@ namespace MobileGL::MG_Remote::Client {
         // store is released by this client after the record is out (the server's import holds its
         // own reference until its fence for the store's last use; CONTRACT-P11.md B2).
         void Wire_ResourceDestroy(const MG_Pipe::MGPHandleOnly* payload) {
-            if (RunsAsTheServerRole()) { MG_Pipe::MGPipeMonolithScreen().ResourceDestroy(payload); return; }
+            if (RunsAsTheServerRole()) {
+                MG_Pipe::MGPipeMonolithScreen().ResourceDestroy(payload);
+                return;
+            }
             ClientSession& session = RequireSession("ResourceDestroy");
-            session.EmitAndWait(MGPWireOp::ResourceDestroy, payload, sizeof(*payload), nullptr, 0, nullptr, 0,
-                                nullptr);
+            session.EmitAndWait(MGPWireOp::ResourceDestroy, payload, sizeof(*payload), nullptr, 0, nullptr, 0, nullptr);
             ++g_emitted;
             if (static_cast<MG_Pipe::MGPipeKind>(payload->Kind) == MG_Pipe::MGPipeKind::Buffer)
                 session.ReleaseT0Store(payload->Handle);
@@ -248,8 +252,7 @@ namespace MobileGL::MG_Remote::Client {
             ClientSession& session = RequireSession("SetDynamicState");
             MG_Pipe::MGPDynamicState record = *payload;
             record.Blob = StageOptional(session, blobBytes, blobByteCount);
-            session.EmitAndWait(MGPWireOp::SetDynamicState, &record, sizeof(record), nullptr, 0,
-                                nullptr, 0, nullptr);
+            session.EmitAndWait(MGPWireOp::SetDynamicState, &record, sizeof(record), nullptr, 0, nullptr, 0, nullptr);
             ++g_emitted;
         }
 
@@ -258,7 +261,9 @@ namespace MobileGL::MG_Remote::Client {
         void Wire_SetResidualValueState(const MG_Pipe::MGPResidualValueState*, const void*, Uint64) {
             SessionFail(MGFatalFamily::ResidualBlockSize,
                         "MGPipe: Fatal{ResidualBlockSize} - set_residual_value_state reached the wire table, "
-                        "but %s", "the residual value block was deleted in P13 W3c (op 46 is a retired row; the verify comparator owns the capability cross-check)");
+                        "but %s",
+                        "the residual value block was deleted in P13 W3c (op 46 is a retired row; the verify "
+                        "comparator owns the capability cross-check)");
         }
 
         // resource_readback. kReplySlot, and the answer is COMPLETION only: the bytes travel
@@ -267,12 +272,14 @@ namespace MobileGL::MG_Remote::Client {
         // row 22). So the reply buffer is deliberately {nullptr, 0} and the wait is what makes
         // the writeback already drained by the time this returns.
         void Wire_ResourceReadback(const MG_Pipe::MGPReadback* payload, MG_Pipe::MGPReplySlot* reply) {
-            if (RunsAsTheServerRole()) { MG_Pipe::MGPipeMonolithContext().ResourceReadback(payload, reply); return; }
+            if (RunsAsTheServerRole()) {
+                MG_Pipe::MGPipeMonolithContext().ResourceReadback(payload, reply);
+                return;
+            }
             ClientSession& session = RequireSession("ResourceReadback");
             Int32 status = 0;
-            const Uint64 seq = session.EmitAndWait(MGPWireOp::ResourceReadback, payload,
-                                                   sizeof(*payload), nullptr, 0, nullptr, 0,
-                                                   &status);
+            const Uint64 seq = session.EmitAndWait(MGPWireOp::ResourceReadback, payload, sizeof(*payload), nullptr, 0,
+                                                   nullptr, 0, &status);
             // Cancellation has no wire ordinal; retain the caller's nonzero local ticket.
             if (seq != Wire::kInvalidSeq) reply->Id = seq;
             MG_Pipe::MGPipePostReply(*reply, status, 0);
@@ -313,14 +320,12 @@ namespace MobileGL::MG_Remote::Client {
         // constant having drifted apart. 1 (and anything below it) is the pre-window shape.
         Uint32 CreateWindowEffective() {
             if (MG_Config::Ipc.CreateWindow <= 1) return 1;
-            return MG_Config::Ipc.CreateWindow < kCreateWindowMax ? MG_Config::Ipc.CreateWindow
-                                                                  : kCreateWindowMax;
+            return MG_Config::Ipc.CreateWindow < kCreateWindowMax ? MG_Config::Ipc.CreateWindow : kCreateWindowMax;
         }
         struct PendingCreate {
             Uint64 Seq = 0;
             MG_Pipe::MGPipeKind Kind = MG_Pipe::MGPipeKind::None;
             MG_Pipe::MGPipeHandle Handle{};
-
         };
         PendingCreate g_createWindow[kCreateWindowMax];
         Uint32 g_createWindowHead = 0;
@@ -342,8 +347,8 @@ namespace MobileGL::MG_Remote::Client {
         // out to be LATENCY-bound, not throughput-bound (the server applies all 103,097 records in
         // 1.95 s of a 9.64 s frame, and the client's 1,161 blocking takes at ~4.9 ms are 5.7 s of
         // it) - so the way to make it faster is fewer blocks, not a faster apply.
-        Uint64 g_blockNoWindow = 0, g_blockSuspectsFull = 0, g_blockSuspectObject = 0,
-               g_blockWindowStillFull = 0, g_blockTotal = 0;
+        Uint64 g_blockNoWindow = 0, g_blockSuspectsFull = 0, g_blockSuspectObject = 0, g_blockWindowStillFull = 0,
+               g_blockTotal = 0;
         void NoteCreateBlocked(Uint64& reason) {
             ++reason;
             ++g_blockTotal;
@@ -352,8 +357,7 @@ namespace MobileGL::MG_Remote::Client {
             if (g_blockTotal % 256 == 0) {
                 MGLOG_I("P12 create blocks: total=%llu no-window=%llu suspects-full=%llu "
                         "suspect-object=%llu window-still-full=%llu",
-                        static_cast<unsigned long long>(g_blockTotal),
-                        static_cast<unsigned long long>(g_blockNoWindow),
+                        static_cast<unsigned long long>(g_blockTotal), static_cast<unsigned long long>(g_blockNoWindow),
                         static_cast<unsigned long long>(g_blockSuspectsFull),
                         static_cast<unsigned long long>(g_blockSuspectObject),
                         static_cast<unsigned long long>(g_blockWindowStillFull));
@@ -386,8 +390,7 @@ namespace MobileGL::MG_Remote::Client {
         }
         void ClearCreateSuspect(MG_Pipe::MGPipeHandle handle) {
             for (SizeT i = 0; i < g_createSuspects.size(); ++i) {
-                if (g_createSuspects[i].Slot != handle.Slot || g_createSuspects[i].Gen != handle.Gen)
-                    continue;
+                if (g_createSuspects[i].Slot != handle.Slot || g_createSuspects[i].Gen != handle.Gen) continue;
                 for (SizeT j = i + 1; j < g_createSuspects.size(); ++j)
                     g_createSuspects[j - 1] = g_createSuspects[j];
                 g_createSuspects.pop_back();
@@ -399,9 +402,12 @@ namespace MobileGL::MG_Remote::Client {
         // rather than defaulted, so a target added later cannot silently borrow the texture latch.
         MG_Pipe::MGPipeKind CreateRecordKind(const MG_Pipe::MGPResourceDesc& desc) {
             switch (static_cast<MG_Pipe::MGPipeResourceTarget>(desc.Target)) {
-            case MG_Pipe::MGPipeResourceTarget::Buffer: return MG_Pipe::MGPipeKind::Buffer;
-            case MG_Pipe::MGPipeResourceTarget::Renderbuffer: return MG_Pipe::MGPipeKind::Renderbuffer;
-            default: return MG_Pipe::MGPipeKind::Texture;
+            case MG_Pipe::MGPipeResourceTarget::Buffer:
+                return MG_Pipe::MGPipeKind::Buffer;
+            case MG_Pipe::MGPipeResourceTarget::Renderbuffer:
+                return MG_Pipe::MGPipeKind::Renderbuffer;
+            default:
+                return MG_Pipe::MGPipeKind::Texture;
             }
         }
 
@@ -420,11 +426,10 @@ namespace MobileGL::MG_Remote::Client {
                 // blocking take only: the poll is not a round trip, and it is the blocking take
                 // that is the thing MOBILEGL_IPC_CREATE_WINDOW divides (4,536 -> creates/window).
                 const Uint64 metricStart =
-                    blocking ? Transport::LinkMetricsBeginReply(
-                                   true, static_cast<std::uint32_t>(MGPWireOp::ResourceCreate))
-                             : 0;
-                const Transport::SessionWait wait =
-                    session.WaitForApplied(head.Seq, blocking ? 120000u : 0u);
+                    blocking
+                        ? Transport::LinkMetricsBeginReply(true, static_cast<std::uint32_t>(MGPWireOp::ResourceCreate))
+                        : 0;
+                const Transport::SessionWait wait = session.WaitForApplied(head.Seq, blocking ? 120000u : 0u);
                 if (blocking) Transport::LinkMetricsReplyApplied(metricStart);
                 if (wait != Transport::SessionWait::Reached) return;
                 Int32 status = Wire::ReplySink::kStatusError;
@@ -451,9 +456,10 @@ namespace MobileGL::MG_Remote::Client {
                 // ERROR IS NOT A DECLINE (M4 / R-5), and a deferred answer does not change that:
                 // the same named Fatal the blocking take raises.
                 if (status == Wire::ReplySink::kStatusError) {
-                    SessionFail(MGFatalFamily::ReplyError, "MGPipe: Fatal{ReplyError, \"resource_create\"} - the row answered "
-                            "ERROR, which is not an acceptance answer; folding it into accepted or "
-                            "refused would make a transport fault look like a resource decision");
+                    SessionFail(MGFatalFamily::ReplyError,
+                                "MGPipe: Fatal{ReplyError, \"resource_create\"} - the row answered "
+                                "ERROR, which is not an acceptance answer; folding it into accepted or "
+                                "refused would make a transport fault look like a resource decision");
                 }
                 if (status == Wire::ReplySink::kStatusDeclined) {
                     MG_Pipe::MGPipeNoteHandleUnpublished(head.Kind, head.Handle);
@@ -483,9 +489,8 @@ namespace MobileGL::MG_Remote::Client {
         void EmitCreateBlocking(ClientSession& session, const MG_Pipe::MGPResourceDesc* payload,
                                 MG_Pipe::MGPReplySlot* reply) {
             Int32 status = Wire::ReplySink::kStatusError;
-            const Uint64 seq = session.EmitAndWait(MGPWireOp::ResourceCreate, payload,
-                                                   sizeof(*payload), nullptr, 0, nullptr, 0,
-                                                   &status);
+            const Uint64 seq = session.EmitAndWait(MGPWireOp::ResourceCreate, payload, sizeof(*payload), nullptr, 0,
+                                                   nullptr, 0, &status);
             // Cancellation has no wire ordinal; retain the caller's nonzero local ticket.
             if (seq != Wire::kInvalidSeq) reply->Id = seq;
             MG_Pipe::MGPipePostReply(*reply, status, status == 0 ? 1u : 0u);
@@ -498,7 +503,10 @@ namespace MobileGL::MG_Remote::Client {
         // emissions, so a budget counted here fires too late. The window defers only where the
         // link retains answers, and the store bounds it (docs/Performance/ipc-create-window.md).
         void Wire_ResourceCreate(const MG_Pipe::MGPResourceDesc* payload, MG_Pipe::MGPReplySlot* reply) {
-            if (RunsAsTheServerRole()) { MG_Pipe::MGPipeMonolithScreen().ResourceCreate(payload, reply); return; }
+            if (RunsAsTheServerRole()) {
+                MG_Pipe::MGPipeMonolithScreen().ResourceCreate(payload, reply);
+                return;
+            }
             ClientSession& session = RequireSession("ResourceCreate");
             // THE WINDOW MAY ONLY DEFER WHERE THE LINK RETAINS ANSWERS (P12). On one that does
             // not - the shared pool, whose slot is seq % slotCount and is reused - the answer the
@@ -519,14 +527,13 @@ namespace MobileGL::MG_Remote::Client {
             // defers the answer and reads it later; this is the arm without one (the shared pool).
             if (window <= 1 && session.RunAheadArmed() && !CreateIsSuspect(payload->Resource)) {
                 Int32 status = Wire::ReplySink::kStatusError;
-                const Uint64 seq = session.EmitAndWaitTails(
-                    MGPWireOp::ResourceCreate, payload, sizeof(*payload), nullptr, 0, nullptr, 0,
-                    &status, nullptr, /*wantReply=*/false, /*willReadReply=*/false);
+                const Uint64 seq =
+                    session.EmitAndWaitTails(MGPWireOp::ResourceCreate, payload, sizeof(*payload), nullptr, 0, nullptr,
+                                             0, &status, nullptr, /*wantReply=*/false, /*willReadReply=*/false);
                 if (seq != Wire::kInvalidSeq) reply->Id = seq;
-                MG_Pipe::MGPipePostReply(*reply,
-                                         seq == Wire::kInvalidSeq ? Wire::ReplySink::kStatusDeclined
-                                                                  : Wire::ReplySink::kStatusOk,
-                                         seq == Wire::kInvalidSeq ? 0u : 1u);
+                MG_Pipe::MGPipePostReply(
+                    *reply, seq == Wire::kInvalidSeq ? Wire::ReplySink::kStatusDeclined : Wire::ReplySink::kStatusOk,
+                    seq == Wire::kInvalidSeq ? 0u : 1u);
                 ++g_emitted;
                 if (seq == Wire::kInvalidSeq) ++g_declined;
                 return;
@@ -543,8 +550,7 @@ namespace MobileGL::MG_Remote::Client {
             } else if (CreateIsSuspect(payload->Resource)) {
                 NoteCreateBlocked(g_blockSuspectObject);
             }
-            if (window <= 1 || g_createSuspects.size() >= kCreateSuspectMax ||
-                CreateIsSuspect(payload->Resource)) {
+            if (window <= 1 || g_createSuspects.size() >= kCreateSuspectMax || CreateIsSuspect(payload->Resource)) {
                 // THE WINDOW RETIRES HERE, AND IT MAY BE HOLDING ANSWERS (P12). This branch is
                 // taken when the window is off, when the suspect list is full, or for a refused
                 // object - and in the last two cases entries already emitted are still in flight.
@@ -579,9 +585,9 @@ namespace MobileGL::MG_Remote::Client {
             // not wait for its answer, and the drain above reads it later. A P12 no-reply bit
             // keyed on wantReply would tell the server to skip the very answer this row comes
             // back for (docs/.../p12/CREATE-WINDOW-MEASURED.md section 7).
-            const Uint64 seq = session.EmitAndWaitTails(
-                MGPWireOp::ResourceCreate, payload, sizeof(*payload), nullptr, 0, nullptr, 0,
-                &status, nullptr, /*wantReply=*/false, /*willReadReply=*/true);
+            const Uint64 seq =
+                session.EmitAndWaitTails(MGPWireOp::ResourceCreate, payload, sizeof(*payload), nullptr, 0, nullptr, 0,
+                                         &status, nullptr, /*wantReply=*/false, /*willReadReply=*/true);
             if (seq == Wire::kInvalidSeq) {
                 // Cancelled: there is no ordinal to read an answer from, and the caller must NOT
                 // latch an object the record never described.
@@ -605,21 +611,22 @@ namespace MobileGL::MG_Remote::Client {
         // waits, so a refusal reaches the caller as a refusal. EmitTextureParams pays the
         // confirming create at the texture's first use (HealUnpublishedRecord).
         void Wire_SetTextureParams(const MG_Pipe::MGPTextureParams* payload, MG_Pipe::MGPReplySlot* reply) {
-            if (RunsAsTheServerRole()) { MG_Pipe::MGPipeMonolithContext().SetTextureParams(payload, reply); return; }
+            if (RunsAsTheServerRole()) {
+                MG_Pipe::MGPipeMonolithContext().SetTextureParams(payload, reply);
+                return;
+            }
             ClientSession& session = RequireSession("SetTextureParams");
-            const Bool confirmed = MG_Pipe::MGPipeHandleIsPublished(MG_Pipe::MGPipeKind::Texture,
-                                                                   payload->Res);
+            const Bool confirmed = MG_Pipe::MGPipeHandleIsPublished(MG_Pipe::MGPipeKind::Texture, payload->Res);
             Int32 status = Wire::ReplySink::kStatusError;
             Uint64 seq = Wire::kInvalidSeq;
             if (confirmed) {
-                seq = session.EmitAndWaitTails(MGPWireOp::SetTextureParams, payload, sizeof(*payload),
-                                               nullptr, 0, nullptr, 0, &status, nullptr,
+                seq = session.EmitAndWaitTails(MGPWireOp::SetTextureParams, payload, sizeof(*payload), nullptr, 0,
+                                               nullptr, 0, &status, nullptr,
                                                /*wantReply=*/false, /*willReadReply=*/false);
-                status = seq == Wire::kInvalidSeq ? Wire::ReplySink::kStatusDeclined
-                                                  : Wire::ReplySink::kStatusOk;
+                status = seq == Wire::kInvalidSeq ? Wire::ReplySink::kStatusDeclined : Wire::ReplySink::kStatusOk;
             } else {
-                seq = session.EmitAndWait(MGPWireOp::SetTextureParams, payload, sizeof(*payload),
-                                          nullptr, 0, nullptr, 0, &status);
+                seq = session.EmitAndWait(MGPWireOp::SetTextureParams, payload, sizeof(*payload), nullptr, 0, nullptr,
+                                          0, &status);
             }
             // Cancellation has no wire ordinal; retain the caller's nonzero local ticket.
             if (seq != Wire::kInvalidSeq) reply->Id = seq;
@@ -628,12 +635,11 @@ namespace MobileGL::MG_Remote::Client {
             if (status == 1) ++g_declined;
         }
 
-        void Wire_ResourceSubData(const MG_Pipe::MGPSubData* payload, const void* blobBytes,
-                                  Uint64 blobByteCount, const void* varTail, Uint32 varTailCount,
-                                  MG_Pipe::MGPReplySlot* reply) {
+        void Wire_ResourceSubData(const MG_Pipe::MGPSubData* payload, const void* blobBytes, Uint64 blobByteCount,
+                                  const void* varTail, Uint32 varTailCount, MG_Pipe::MGPReplySlot* reply) {
             if (RunsAsTheServerRole()) {
-                MG_Pipe::MGPipeMonolithContext().ResourceSubData(payload, blobBytes, blobByteCount,
-                                                                 varTail, varTailCount, reply);
+                MG_Pipe::MGPipeMonolithContext().ResourceSubData(payload, blobBytes, blobByteCount, varTail,
+                                                                 varTailCount, reply);
                 return;
             }
             ClientSession& session = RequireSession("ResourceSubData");
@@ -655,12 +661,10 @@ namespace MobileGL::MG_Remote::Client {
             // may never take this path - R-5 has not moved.
             const Bool wantReply = MG_Pipe::MGPipeSubDataWantsItsReply(record);
             Int32 status = 0;
-            const Wire::WireTail tail{varTail, static_cast<Uint64>(varTailCount) *
-                                                   sizeof(MG_Pipe::MGPSubRegion)};
+            const Wire::WireTail tail{varTail, static_cast<Uint64>(varTailCount) * sizeof(MG_Pipe::MGPSubRegion)};
             const Uint64 seq = session.EmitAndWaitTails(
-                MGPWireOp::ResourceSubData, &record, sizeof(record),
-                varTail != nullptr ? &tail : nullptr, varTail != nullptr ? 1u : 0u, nullptr, 0,
-                &status, nullptr, wantReply,
+                MGPWireOp::ResourceSubData, &record, sizeof(record), varTail != nullptr ? &tail : nullptr,
+                varTail != nullptr ? 1u : 0u, nullptr, 0, &status, nullptr, wantReply,
                 // ONE ANSWER TO BOTH QUESTIONS, and on this row that is not a shortcut: the
                 // wire arm's MGPipeSubDataWantsItsReply is false for the whole texture half
                 // (PipeRoute.h), the caller discards the Bool either way, and the record's own
@@ -671,7 +675,8 @@ namespace MobileGL::MG_Remote::Client {
             if (seq != Wire::kInvalidSeq) reply->Id = seq;
             const Int32 postedStatus = (seq == Wire::kInvalidSeq || status == Wire::ReplySink::kStatusDeclined)
                                            ? Wire::ReplySink::kStatusDeclined
-                                           : wantReply ? status : Wire::ReplySink::kStatusOk;
+                                       : wantReply ? status
+                                                   : Wire::ReplySink::kStatusOk;
             MG_Pipe::MGPipePostReply(*reply, postedStatus, postedStatus == Wire::ReplySink::kStatusOk ? 1u : 0u);
             if (seq != Wire::kInvalidSeq) ++g_emitted;
             if (postedStatus == Wire::ReplySink::kStatusDeclined) ++g_declined;
@@ -680,15 +685,14 @@ namespace MobileGL::MG_Remote::Client {
         void Wire_BufferSubDataResident(const MG_Pipe::MGPSubData* payload, const void* blobBytes,
                                         Uint64 blobByteCount) {
             if (RunsAsTheServerRole()) {
-                MG_Pipe::MGPipeMonolithContext().BufferSubDataResident(payload, blobBytes,
-                                                                       blobByteCount);
+                MG_Pipe::MGPipeMonolithContext().BufferSubDataResident(payload, blobBytes, blobByteCount);
                 return;
             }
             ClientSession& session = RequireSession("BufferSubDataResident");
             MG_Pipe::MGPSubData record = *payload;
             record.Blob = StageOptional(session, blobBytes, blobByteCount);
-            session.EmitAndWait(MGPWireOp::BufferSubDataResident, &record, sizeof(record), nullptr,
-                                0, nullptr, 0, nullptr);
+            session.EmitAndWait(MGPWireOp::BufferSubDataResident, &record, sizeof(record), nullptr, 0, nullptr, 0,
+                                nullptr);
             ++g_emitted;
         }
 
@@ -701,19 +705,19 @@ namespace MobileGL::MG_Remote::Client {
         // (MGPipeForEachSubDataRecordRange) lives there. What this emitter owes is the REFUSAL:
         // a non-null pointer arriving here means the call site was not converted, and silently
         // ignoring it would lose exactly the bytes R-13.3 promised would follow.
-        Bool Wire_Escape_ResourceRespecify(const MG_Pipe::MGPResourceDesc* desc,
-                                           const void* initialBytes,
+        Bool Wire_Escape_ResourceRespecify(const MG_Pipe::MGPResourceDesc* desc, const void* initialBytes,
                                            const MG_Pipe::MGPRespecifiedLevel* level) {
             if (RunsAsTheServerRole()) {
                 return MG_Pipe::MGPipeMonolithEscapes().ResourceRespecify(desc, initialBytes, level);
             }
             ClientSession& session = RequireSession("ResourceRespecify");
             if (initialBytes != nullptr) {
-                SessionFail(MGFatalFamily::UncarriedInitialBytes, "MGPipe: Fatal{UncarriedInitialBytes, \"resource_respecify\"} - a call "
-                        "site handed initial content to a split respecify. R-13.3 rules that "
-                        "initialBytes never crosses and that the content follows as "
-                        "resource_subdata; a caller that still passes it has bytes nothing will "
-                        "carry");
+                SessionFail(MGFatalFamily::UncarriedInitialBytes,
+                            "MGPipe: Fatal{UncarriedInitialBytes, \"resource_respecify\"} - a call "
+                            "site handed initial content to a split respecify. R-13.3 rules that "
+                            "initialBytes never crosses and that the content follows as "
+                            "resource_subdata; a caller that still passes it has bytes nothing will "
+                            "carry");
             }
             // Scope and exact mutable mip extent travel together through the descriptor helper.
             // It temporarily reuses BufOffset/BufSize on non-buffer image targets; the server
@@ -721,8 +725,8 @@ namespace MobileGL::MG_Remote::Client {
             MG_Pipe::MGPResourceDesc record = *desc;
             if (level != nullptr) {
 #if MOBILEGL_BUILD_DISAGGREGATED
-                MG_Pipe::MGPipeSetRespecifiedLevel(record, level->UploadTarget, level->Level,
-                                                   level->Width, level->Height, level->Depth);
+                MG_Pipe::MGPipeSetRespecifiedLevel(record, level->UploadTarget, level->Level, level->Width,
+                                                   level->Height, level->Depth);
 #else
                 MG_Pipe::MGPipeSetRespecifiedLevel(record, level->UploadTarget, level->Level);
 #endif
@@ -738,14 +742,13 @@ namespace MobileGL::MG_Remote::Client {
             const Bool wantsReply = MG_Pipe::MGPipeResourceRespecifyWantsItsReply(record);
             Int32 status = Wire::ReplySink::kStatusError;
             if (!wantsReply) {
-                const Uint64 seq = session.EmitAndWaitTails(
-                    MGPWireOp::ResourceRespecify, &record, sizeof(record), nullptr, 0, nullptr, 0,
-                    &status, nullptr, /*wantReply=*/false, /*willReadReply=*/false);
-                status = seq == Wire::kInvalidSeq ? Wire::ReplySink::kStatusDeclined
-                                                  : Wire::ReplySink::kStatusOk;
+                const Uint64 seq =
+                    session.EmitAndWaitTails(MGPWireOp::ResourceRespecify, &record, sizeof(record), nullptr, 0, nullptr,
+                                             0, &status, nullptr, /*wantReply=*/false, /*willReadReply=*/false);
+                status = seq == Wire::kInvalidSeq ? Wire::ReplySink::kStatusDeclined : Wire::ReplySink::kStatusOk;
             } else {
-                (void)session.EmitAndWait(MGPWireOp::ResourceRespecify, &record, sizeof(record),
-                                          nullptr, 0, nullptr, 0, &status);
+                (void)session.EmitAndWait(MGPWireOp::ResourceRespecify, &record, sizeof(record), nullptr, 0, nullptr, 0,
+                                          &status);
             }
             ++g_emitted;
             // P11 B2: A RESPECIFIED BUFFER'S T0 STORE IS DONE FOR THIS CLIENT. The frontend has
@@ -761,9 +764,10 @@ namespace MobileGL::MG_Remote::Client {
             // - the generated acceptance rows through MGPipeTakeReplyBool, and now these two
             // escapes - answers ERROR with the same named Fatal.
             if (status == 2) {
-                SessionFail(MGFatalFamily::ReplyError, "MGPipe: Fatal{ReplyError, \"resource_respecify\"} - the row answered "
-                        "ERROR, which is not an acceptance answer; folding it into accepted or "
-                        "refused would make a transport fault look like a resource decision");
+                SessionFail(MGFatalFamily::ReplyError,
+                            "MGPipe: Fatal{ReplyError, \"resource_respecify\"} - the row answered "
+                            "ERROR, which is not an acceptance answer; folding it into accepted or "
+                            "refused would make a transport fault look like a resource decision");
             }
             if (status == 1) ++g_declined;
             return status == 0;
@@ -773,16 +777,15 @@ namespace MobileGL::MG_Remote::Client {
         // {range, AccessFlags} control record and the bytes of exactly that range arrive ahead
         // of it as resource_subdata. Same refusal as above, for the same reason: a blobref here
         // would be "a second, forgeable way to say the same thing".
-        void Wire_Escape_ResourceFlushRange(const MG_Pipe::MGPFlushRange* record,
-                                            const void* bytes) {
+        void Wire_Escape_ResourceFlushRange(const MG_Pipe::MGPFlushRange* record, const void* bytes) {
             if (RunsAsTheServerRole()) {
                 MG_Pipe::MGPipeMonolithEscapes().ResourceFlushRange(record, bytes);
                 return;
             }
             ClientSession& session = RequireSession("ResourceFlushRange");
             (void)bytes; // ruled uncarried; the emitter in PipeFill.cpp sends the range first
-            session.EmitAndWait(MGPWireOp::ResourceFlushRange, record, sizeof(*record), nullptr, 0,
-                                nullptr, 0, nullptr);
+            session.EmitAndWait(MGPWireOp::ResourceFlushRange, record, sizeof(*record), nullptr, 0, nullptr, 0,
+                                nullptr);
             ++g_emitted;
         }
 
@@ -791,8 +794,7 @@ namespace MobileGL::MG_Remote::Client {
         // MapPersistentRoundtrips counter is defined as "one per storage definition in both
         // modes" and a client that answered locally would zero it. `size` and `seedBytes` have
         // no carrier (MGPHandleOnly is {Handle, Kind}) and need none: nothing is minted.
-        void* Wire_Escape_MapPersistent(const MG_Pipe::MGPHandleOnly* handle, Uint64 size,
-                                        const void* seedBytes) {
+        void* Wire_Escape_MapPersistent(const MG_Pipe::MGPHandleOnly* handle, Uint64 size, const void* seedBytes) {
             if (RunsAsTheServerRole()) {
                 return MG_Pipe::MGPipeMonolithEscapes().MapPersistent(handle, size, seedBytes);
             }
@@ -810,27 +812,28 @@ namespace MobileGL::MG_Remote::Client {
             (void)size;
             (void)seedBytes;
             Int32 status = 0;
-            session.EmitAndWait(MGPWireOp::MapPersistent, handle, sizeof(*handle), nullptr, 0,
-                                nullptr, 0, &status);
+            session.EmitAndWait(MGPWireOp::MapPersistent, handle, sizeof(*handle), nullptr, 0, nullptr, 0, &status);
             ++g_emitted;
             // ERROR IS NOT A DECLINE (M4 / codex 5 / R-5), the same rule the respecify escape and
             // the generated acceptance rows obey: status 2 is a transport fault, and returning
             // nullptr for it would make it indistinguishable from R-6's legitimate decline.
             if (status == 2) {
-                SessionFail(MGFatalFamily::ReplyError, "MGPipe: Fatal{ReplyError, \"map_persistent\"} - the row answered ERROR, "
-                        "which is not an acceptance answer; a transport fault is not a resource "
-                        "decision and may not be folded into the decline R-6 predicts");
+                SessionFail(MGFatalFamily::ReplyError,
+                            "MGPipe: Fatal{ReplyError, \"map_persistent\"} - the row answered ERROR, "
+                            "which is not an acceptance answer; a transport fault is not a resource "
+                            "decision and may not be folded into the decline R-6 predicts");
             }
             if (status == 1) ++g_declined;
             // NOT "always nullptr": the answer is READ. R-6 says the server declines, and the
             // day it stops declining this returns what it actually said rather than what the
             // ruling predicted.
             if (status == 0) {
-                SessionFail(MGFatalFamily::UnexpectedMapAccept, "MGPipe: Fatal{UnexpectedMapAccept, \"map_persistent\"} - the server "
-                        "accepted a persistent map under split. R-6 makes the split answer a "
-                        "constant decline because there is no way to hand a host pointer across "
-                        "a process boundary in P5; a pointer arriving here is one this client "
-                        "cannot dereference");
+                SessionFail(MGFatalFamily::UnexpectedMapAccept,
+                            "MGPipe: Fatal{UnexpectedMapAccept, \"map_persistent\"} - the server "
+                            "accepted a persistent map under split. R-6 makes the split answer a "
+                            "constant decline because there is no way to hand a host pointer across "
+                            "a process boundary in P5; a pointer arriving here is one this client "
+                            "cannot dereference");
             }
             return nullptr;
         }
@@ -843,20 +846,20 @@ namespace MobileGL::MG_Remote::Client {
         // Spirv[i] is Fatal on the far side rather than ignored.
         void Wire_Escape_CreateShaderState(const MG_Pipe::MGPProgramDesc* desc,
                                            const MG_State::GLState::LinkArtifacts* link,
-                                           const MG_State::GLState::SpirvArtifacts* spirv,
-                                           const Uint32* linkedStages, Uint32 linkedStageCount) {
+                                           const MG_State::GLState::SpirvArtifacts* spirv, const Uint32* linkedStages,
+                                           Uint32 linkedStageCount) {
             if (RunsAsTheServerRole()) {
-                MG_Pipe::MGPipeMonolithEscapes().CreateShaderState(desc, link, spirv, linkedStages,
-                                                                   linkedStageCount);
+                MG_Pipe::MGPipeMonolithEscapes().CreateShaderState(desc, link, spirv, linkedStages, linkedStageCount);
                 return;
             }
             ClientSession& session = RequireSession("CreateShaderState");
             if (link == nullptr || spirv == nullptr) {
-                SessionFail(MGFatalFamily::ArtefactsMissing, "MGPipe: Fatal{ArtefactsMissing, \"create_shader_state\"} - the record's "
-                        "two typed companions are null. Under monolith the applier reads the "
-                        "modules out of spirv->generatedSpirv; under split there is nothing to "
-                        "serialise, and emitting the record anyway would create a CSO with no "
-                        "code");
+                SessionFail(MGFatalFamily::ArtefactsMissing,
+                            "MGPipe: Fatal{ArtefactsMissing, \"create_shader_state\"} - the record's "
+                            "two typed companions are null. Under monolith the applier reads the "
+                            "modules out of spirv->generatedSpirv; under split there is nothing to "
+                            "serialise, and emitting the record anyway would create a CSO with no "
+                            "code");
             }
             // EncodeProgramArchive APPENDS and never fails - everything it walks is owned
             // plain data - so an empty archive means the two structs themselves were empty,
@@ -876,14 +879,15 @@ namespace MobileGL::MG_Remote::Client {
                                              static_cast<Uint64>(archive.size()));
             }
             if (archive.empty()) {
-                SessionFail(MGFatalFamily::ArchiveEmpty, "MGPipe: Fatal{ArchiveEmpty, \"create_shader_state\"} - the program's "
-                        "artefacts serialised to nothing");
+                SessionFail(MGFatalFamily::ArchiveEmpty,
+                            "MGPipe: Fatal{ArchiveEmpty, \"create_shader_state\"} - the program's "
+                            "artefacts serialised to nothing");
             }
             MG_Pipe::MGPProgramDesc record = *desc;
-            for (Uint32 i = 0; i < 6; ++i) record.Spirv[i] = MG_Pipe::MGPBlobRef{};
+            for (Uint32 i = 0; i < 6; ++i)
+                record.Spirv[i] = MG_Pipe::MGPBlobRef{};
             record.Reflection = session.Encoder().StageBytes(archive.data(), archive.size());
-            session.EmitAndWait(MGPWireOp::CreateShaderState, &record, sizeof(record), nullptr, 0,
-                                nullptr, 0, nullptr);
+            session.EmitAndWait(MGPWireOp::CreateShaderState, &record, sizeof(record), nullptr, 0, nullptr, 0, nullptr);
             ++g_emitted;
         }
 
@@ -896,14 +900,12 @@ namespace MobileGL::MG_Remote::Client {
         // already is. Staged rather than packed into one run with offsets, because the honesty
         // pass the decoder runs is per span and a packed run would have to be re-split there
         // against arithmetic nothing on the wire declares.
-        void Wire_Escape_SetProgramBindings(const MG_Pipe::MGPProgramBindings* hdr,
-                                            const Int32* blockBindings,
+        void Wire_Escape_SetProgramBindings(const MG_Pipe::MGPProgramBindings* hdr, const Int32* blockBindings,
                                             const MG_Pipe::MGPProgramSamplerUnit* samplerUnits,
                                             const MG_Pipe::MGPProgramStorageOverride* storageOverrides,
                                             const char* const* storageOverrideNames) {
             if (RunsAsTheServerRole()) {
-                MG_Pipe::MGPipeMonolithEscapes().SetProgramBindings(hdr, blockBindings, samplerUnits,
-                                                                    storageOverrides,
+                MG_Pipe::MGPipeMonolithEscapes().SetProgramBindings(hdr, blockBindings, samplerUnits, storageOverrides,
                                                                     storageOverrideNames);
                 return;
             }
@@ -938,17 +940,15 @@ namespace MobileGL::MG_Remote::Client {
 
             const Wire::WireTail tails[3] = {
                 {blockBindings, static_cast<Uint64>(record.BlockBindingCount) * sizeof(Int32)},
-                {samplerUnits, static_cast<Uint64>(record.SamplerUnitCount) *
-                                   sizeof(MG_Pipe::MGPProgramSamplerUnit)},
+                {samplerUnits, static_cast<Uint64>(record.SamplerUnitCount) * sizeof(MG_Pipe::MGPProgramSamplerUnit)},
                 {overrides.empty() ? nullptr : overrides.data(),
-                 static_cast<Uint64>(record.StorageOverrideCount) *
-                     sizeof(MG_Pipe::MGPProgramStorageOverride)},
+                 static_cast<Uint64>(record.StorageOverrideCount) * sizeof(MG_Pipe::MGPProgramStorageOverride)},
             };
             // ALWAYS THREE, even when a count is 0 - the decoder derives the third tail's
             // offset from the first two, so declaring fewer would put the same bytes somewhere
             // else (PipeWireCodec.cpp's layout arm says this from the other side).
-            session.EmitAndWaitTails(MGPWireOp::SetProgramBindings, &record, sizeof(record), tails, 3,
-                                     nullptr, 0, nullptr);
+            session.EmitAndWaitTails(MGPWireOp::SetProgramBindings, &record, sizeof(record), tails, 3, nullptr, 0,
+                                     nullptr);
             ++g_emitted;
         }
 
@@ -990,13 +990,12 @@ namespace MobileGL::MG_Remote::Client {
     ContextFrameEmit SendCreateContextFrame(Uint64 clientContextToken, Uint64 shareGroupToken, Uint32 flags) {
         if (!ContextFramesCanCross()) return ContextFrameEmit::NoWire;
         return Server::ServerCreateEGLContext(clientContextToken, shareGroupToken, flags) ? ContextFrameEmit::Sent
-                                                                                         : ContextFrameEmit::Refused;
+                                                                                          : ContextFrameEmit::Refused;
     }
 
     ContextFrameEmit SendDestroyContextFrame(Uint64 clientContextToken) {
         if (!ContextFramesCanCross()) return ContextFrameEmit::NoWire;
-        return Server::ServerDestroyEGLContext(clientContextToken) ? ContextFrameEmit::Sent
-                                                                   : ContextFrameEmit::Refused;
+        return Server::ServerDestroyEGLContext(clientContextToken) ? ContextFrameEmit::Sent : ContextFrameEmit::Refused;
     }
 
     // P14 S1: bind_context. The same four windows as EmitApplierResetRecord below answer false,
@@ -1010,8 +1009,8 @@ namespace MobileGL::MG_Remote::Client {
         if (g_clientTablesUninstalled.load(std::memory_order_acquire)) return false;
         MG_Pipe::MGPBindContext record{};
         record.ClientContextToken = clientContextToken;
-        const Uint64 seq = session->EmitAndWait(MGPWireOp::BindContext, &record, sizeof(record), nullptr, 0,
-                                                nullptr, 0, nullptr);
+        const Uint64 seq =
+            session->EmitAndWait(MGPWireOp::BindContext, &record, sizeof(record), nullptr, 0, nullptr, 0, nullptr);
         ++g_emitted;
         // A DECLINED binding moved nothing on the server (a lost session, or a thread whose
         // context is from an ended one), so the caller must not believe the session is bound to
@@ -1031,8 +1030,8 @@ namespace MobileGL::MG_Remote::Client {
         if (g_clientTablesUninstalled.load(std::memory_order_acquire)) return false;
         MG_Pipe::MGPApplierReset record{};
         record.ContextSerial = g_applierResetContextSerial;
-        const Uint64 seq = session->EmitAndWait(MGPWireOp::ApplierReset, &record, sizeof(record), nullptr, 0,
-                                                nullptr, 0, nullptr);
+        const Uint64 seq =
+            session->EmitAndWait(MGPWireOp::ApplierReset, &record, sizeof(record), nullptr, 0, nullptr, 0, nullptr);
         // THE SERIAL COUNTS RESETS THE SERVER WAS SENT, not resets this client primed: a declined
         // record (a lost session, a thread on an ended session's context) never reached the
         // server's count, and moving ours past it would latch the next session that hears one.
@@ -1059,8 +1058,7 @@ namespace MobileGL::MG_Remote::Client {
     // can never disagree about who supplies the eight fields.
     Bool ContextValuesWireLive() {
         ClientSession* session = ClientSession::Active();
-        return session != nullptr && session->Started() &&
-               !g_clientTablesUninstalled.load(std::memory_order_acquire);
+        return session != nullptr && session->Started() && !g_clientTablesUninstalled.load(std::memory_order_acquire);
     }
 
     ObjectDeathEmit EmitObjectDeathRecord(MG_Pipe::MGPipeKind kind, Uint64 lifetimeId) {
@@ -1098,29 +1096,29 @@ namespace MobileGL::MG_Remote::Client {
         // The WAIT is the only property the blocking mailbox hop provided and the only one P5c
         // keeps (§5.2 step 3): it orders the death against in-flight verbs that name the
         // handle, so the server's twin cannot be released underneath a verb that is using it.
-        session->EmitAndWait(MGPWireOp::ObjectDeath, &record, sizeof(record), nullptr, 0, nullptr,
-                             0, nullptr);
+        session->EmitAndWait(MGPWireOp::ObjectDeath, &record, sizeof(record), nullptr, 0, nullptr, 0, nullptr);
         ++g_emitted;
         return ObjectDeathEmit::Emitted;
     }
 
     void RequireClientTablesInstalled(const char* row) {
         if (g_clientTablesUninstalled.load(std::memory_order_acquire)) {
-            SessionFail(MGFatalFamily::ClientTablesUninstalled, "MGPipe: Fatal{ClientTablesUninstalled, \"%s\"} - the client tables are "
-                    "being torn down; refusing before session or ring access", row);
+            SessionFail(MGFatalFamily::ClientTablesUninstalled,
+                        "MGPipe: Fatal{ClientTablesUninstalled, \"%s\"} - the client tables are "
+                        "being torn down; refusing before session or ring access",
+                        row);
         }
     }
 
     namespace {
-        void WireStateObjectDestroyed(MG_Pipe::MGPipeKind kind, Uint64 lifetimeId,
-                                      MG_Pipe::MGPipeHandle /*handle*/) {
+        void WireStateObjectDestroyed(MG_Pipe::MGPipeKind kind, Uint64 lifetimeId, MG_Pipe::MGPipeHandle /*handle*/) {
             (void)EmitObjectDeathRecord(kind, lifetimeId);
         }
 
         const MG_State::GLState::StateObjectDeathOps kClientStateObjectDeathOps = {
             .OnDestroyed = &WireStateObjectDestroyed,
         };
-    }
+    } // namespace
 
     void InstallClientWireTables() {
         using namespace MG_Pipe;
@@ -1218,8 +1216,12 @@ namespace MobileGL::MG_Remote::Client {
         g_clientTablesUninstalled.store(false, std::memory_order_release);
     }
 
-    Uint64 ClientWireRecordsEmitted() { return g_emitted; }
-    Uint64 ClientWireRecordsDeclined() { return g_declined; }
+    Uint64 ClientWireRecordsEmitted() {
+        return g_emitted;
+    }
+    Uint64 ClientWireRecordsDeclined() {
+        return g_declined;
+    }
 
     // ---- P12: the CREATE WINDOW, as numbers a test can read ---------------------------------
     //
@@ -1230,21 +1232,33 @@ namespace MobileGL::MG_Remote::Client {
     // ceiling - it would REPLACE the oldest confirmation and leave the count where it was. Read it
     // against the effective ceiling and the array size, which are the two numbers the guard itself
     // is written in terms of, and not against a literal repeated in the test.
-    Uint32 ClientCreateWindowPending() { return g_createWindowCount; }
+    Uint32 ClientCreateWindowPending() {
+        return g_createWindowCount;
+    }
     // Taken + Pending is every create the window ever accepted: the answers it has read back and
     // the ones still outstanding. A create the window accepted and then LOST would break that
     // sum, which is the failure a provisional accept makes possible and a count cannot show.
-    Uint64 ClientCreateWindowTaken() { return g_createWindowTaken; }
+    Uint64 ClientCreateWindowTaken() {
+        return g_createWindowTaken;
+    }
     // P12: RetainedOutstanding / SkippedUnwanted / UnansweredWanted live on the LINK, where the
     // store is (StreamLink::RetainedOutstanding and friends). They are what says whether the
     // declared-answer store is bounded by the CLIENT (SkippedUnwanted grows, outstanding does
     // not) rather than by the server's answer rate - which is the property the capacity rests on.
-    Uint32 ClientCreateWindowEffective() { return CreateWindowEffective(); }
-    Uint32 ClientCreateWindowArraySize() { return kCreateWindowMax; }
+    Uint32 ClientCreateWindowEffective() {
+        return CreateWindowEffective();
+    }
+    Uint32 ClientCreateWindowArraySize() {
+        return kCreateWindowMax;
+    }
     // Objects whose create came back DECLINED: out of the window, next create blocking, and back
     // in the moment a blocking create lands.
-    Uint32 ClientCreateWindowSuspects() { return static_cast<Uint32>(g_createSuspects.size()); }
-    Uint64 ClientCreateWindowRefusals() { return g_createRefusals; }
+    Uint32 ClientCreateWindowSuspects() {
+        return static_cast<Uint32>(g_createSuspects.size());
+    }
+    Uint64 ClientCreateWindowRefusals() {
+        return g_createRefusals;
+    }
 
 } // namespace MobileGL::MG_Remote::Client
 

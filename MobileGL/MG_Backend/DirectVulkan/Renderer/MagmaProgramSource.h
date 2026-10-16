@@ -34,21 +34,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         MG_Pipe::MGPipeHandle Handle() const { return m_handle; }
         Uint GetExternalIndex() const { return m_handle.Slot; }
-        Uint64 GetLifetimeId() const {
-            return (Uint64(m_handle.Gen) << 32) | m_handle.Slot;
-        }
+        Uint64 GetLifetimeId() const { return (Uint64(m_handle.Gen) << 32) | m_handle.Slot; }
         Bool GetLinkStatus() const { return m_record->Desc.LinkStatus != 0; }
         Bool GetSpirvStatus() const { return m_record->Desc.SpirvStatus != 0; }
         Bool PointSizeDemoted() const { return m_record->Desc.PointSizeDemoted != 0; }
-        Bool GetSpirvValidationEnabled() const {
-            return m_record->Desc.EnableSpirvValidation != 0;
-        }
-        const Vector<Vector<Uint>>& GetGeneratedSpirv() const {
-            return m_record->Archive->Spirv.generatedSpirv;
-        }
+        Bool GetSpirvValidationEnabled() const { return m_record->Desc.EnableSpirvValidation != 0; }
+        const Vector<Vector<Uint>>& GetGeneratedSpirv() const { return m_record->Archive->Spirv.generatedSpirv; }
         Vector<ShaderStage> GetLinkedShaderStages() const {
             Vector<ShaderStage> result;
-            for (const auto stage : m_record->Archive->LinkedStages) result.push_back(static_cast<ShaderStage>(stage));
+            for (const auto stage : m_record->Archive->LinkedStages)
+                result.push_back(static_cast<ShaderStage>(stage));
             return result;
         }
         Bool HasLinkedShaderStage(ShaderStage stage) const {
@@ -85,12 +80,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         const void* GetUBOData() const { return m_record->GlobalConstants.data(); }
         Uint GetUBOSize() const { return static_cast<Uint>(m_record->GlobalConstants.size()); }
         Uint32 GetUBOContentVersion() const { return m_record->GlobalConstantsVersion; }
-        Int GetActiveUniformBlocksCount() const {
-            return static_cast<Int>(Link().glBlockIndexToTProgram.size());
-        }
+        Int GetActiveUniformBlocksCount() const { return static_cast<Int>(Link().glBlockIndexToTProgram.size()); }
         Uint GetUniformBlockIndex(const char* name) const {
             auto found = Link().uniformBlockIndexByName.find(name);
-            if (found == Link().uniformBlockIndexByName.end()) found = Link().uniformBlockIndexByName.find(String(name) + "[0]");
+            if (found == Link().uniformBlockIndexByName.end())
+                found = Link().uniformBlockIndexByName.find(String(name) + "[0]");
             return found == Link().uniformBlockIndexByName.end() ? GL_INVALID_INDEX : found->second;
         }
         Uint GetUniformBlockBinding(Uint index) const {
@@ -105,20 +99,20 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             const auto* block = Block(index);
             return block ? (static_cast<Uint>(block->size) + 15u) & ~15u : 0;
         }
-        Bool IsValidUniformLocation(Int location) const {
-            return Program::IsValidUniformLocation(Link(), location);
-        }
+        Bool IsValidUniformLocation(Int location) const { return Program::IsValidUniformLocation(Link(), location); }
         Bool UniformLocationsAliasSameUniform(Int a, Int b) const {
             return IsValidUniformLocation(a) && IsValidUniformLocation(b) &&
-                Link().uniformIndexInTProgram[a] == Link().uniformIndexInTProgram[b];
+                   Link().uniformIndexInTProgram[a] == Link().uniformIndexInTProgram[b];
         }
         GLenum GetUniformType(Uint location) const {
             return IsValidUniformLocation(static_cast<Int>(location))
-                ? Program::UniformAtIn(Link(), Link().uniformIndexInTProgram[location]).glDefineType : 0;
+                       ? Program::UniformAtIn(Link(), Link().uniformIndexInTProgram[location]).glDefineType
+                       : 0;
         }
         Int GetUniformSamplerOrImageUnitIndex(Uint location) const {
             const auto& units = m_record->SamplerUnits;
-            const auto found = std::lower_bound(units.begin(), units.end(), location,
+            const auto found = std::lower_bound(
+                units.begin(), units.end(), location,
                 [](const MG_Pipe::MGPProgramSamplerUnit& unit, Uint value) { return unit.Location < value; });
             return found != units.end() && found->Location == location ? found->Unit : -1;
         }
@@ -145,22 +139,19 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             if (!IsValidUniformLocation(base)) return -1;
             const Int tIndex = Link().uniformIndexInTProgram[base];
             if (!Program::UniformAtIn(Link(), tIndex).type.isArray ||
-                static_cast<GLint>(element) >= Program::GetUniformArraySizeByTIndex(Link(), tIndex)) return -1;
+                static_cast<GLint>(element) >= Program::GetUniformArraySizeByTIndex(Link(), tIndex))
+                return -1;
             const Int location = base + static_cast<Int>(element);
             return UniformLocationsAliasSameUniform(base, location) ? location : -1;
         }
 
         SizeT GetTransformFeedbackVaryingCount() const { return Link().xfbVaryings.size(); }
-        const Vector<MG_State::GLState::XfbVarying>& GetTransformFeedbackVaryings() const {
-            return Link().xfbVaryings;
-        }
+        const Vector<MG_State::GLState::XfbVarying>& GetTransformFeedbackVaryings() const { return Link().xfbVaryings; }
         SizeT GetTransformFeedbackBufferCount() const { return Link().xfbStrides.size(); }
         Uint32 GetTransformFeedbackStride(Uint index) const {
             return index < Link().xfbStrides.size() ? Link().xfbStrides[index] : 0;
         }
-        GLenum GetTransformFeedbackBufferMode() const {
-            return Link().xfbBufferMode;
-        }
+        GLenum GetTransformFeedbackBufferMode() const { return Link().xfbBufferMode; }
         // P7 wave 2 package C, OQ-8 (CONTRACT-P7 §5.3): READ OUT OF THE ARCHIVE.
         //
         // What stood here re-ran spvReflectCreateShaderModule over EVERY stage module of the
@@ -177,18 +168,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // ProgramFactory::ReflectLayout looks up. A caller that still holds a GL-style
             // "Foo[2]" gets the same second chance it always had.
             const auto find = [&blocks](const String& key) {
-                return std::find_if(blocks.begin(), blocks.end(),
-                    [&](const MG_State::GLState::StorageBlockReflection& block) {
-                        return block.name == key;
-                    });
+                return std::find_if(
+                    blocks.begin(), blocks.end(),
+                    [&](const MG_State::GLState::StorageBlockReflection& block) { return block.name == key; });
             };
             auto found = find(name);
             if (found == blocks.end() && !name.empty() && name.back() == ']') {
                 const auto bracket = name.rfind('[');
                 if (bracket != String::npos) found = find(name.substr(0, bracket));
             }
-            return found == blocks.end() ? GL_INVALID_INDEX
-                                         : static_cast<Uint>(found - blocks.begin());
+            return found == blocks.end() ? GL_INVALID_INDEX : static_cast<Uint>(found - blocks.begin());
         }
         Uint GetShaderStorageBlockBinding(Uint index) const {
             const auto& blocks = Link().storageBlocks;
@@ -210,7 +199,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             if (index >= Link().glBlockIndexToTProgram.size()) return nullptr;
             const Int tIndex = Link().glBlockIndexToTProgram[index];
             return tIndex >= 0 && static_cast<SizeT>(tIndex) < Link().blockReflection.size()
-                ? &Link().blockReflection[tIndex] : nullptr;
+                       ? &Link().blockReflection[tIndex]
+                       : nullptr;
         }
         MG_Pipe::MGPipeHandle m_handle = MG_Pipe::kMGPipeNullHandle;
         const MG_Pipe::MGPipeShaderCsoRecord* m_record = nullptr;
@@ -219,4 +209,4 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // also why they never helped: a view lives for one draw, so the latch was cold every
         // time it was read.
     };
-}
+} // namespace MobileGL::MG_Backend::DirectVulkan

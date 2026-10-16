@@ -34,16 +34,16 @@ namespace MobileGL::MG_Remote::Client {
         // `dl` (CONTRACT-P6 5.2): the family word every death here carries.
         if (tier <= 1) {
             SessionFail(MGFatalFamily::UnimplementedAdoptTier,
-                    "MGPipe: Fatal{UnimplementedAdoptTier, \"T%u\"} - MOBILEGL_IPC_ADOPT_TIER=%u "
-                    "reached a map_persistent that no handshake settled; T0 and T1 are not "
-                    "implemented and only T2 (emulate) runs.",
-                    static_cast<unsigned>(tier), static_cast<unsigned>(tier));
+                        "MGPipe: Fatal{UnimplementedAdoptTier, \"T%u\"} - MOBILEGL_IPC_ADOPT_TIER=%u "
+                        "reached a map_persistent that no handshake settled; T0 and T1 are not "
+                        "implemented and only T2 (emulate) runs.",
+                        static_cast<unsigned>(tier), static_cast<unsigned>(tier));
         } else {
             SessionFail(MGFatalFamily::UnimplementedAdoptTier,
-                    "MGPipe: Fatal{UnimplementedAdoptTier, \"%u\"} - MOBILEGL_IPC_ADOPT_TIER=%u is "
-                    "not an adoption tier; the only values are 0 and 1 (P11) and 2 (emulate, the "
-                    "P5 default).",
-                    static_cast<unsigned>(tier), static_cast<unsigned>(tier));
+                        "MGPipe: Fatal{UnimplementedAdoptTier, \"%u\"} - MOBILEGL_IPC_ADOPT_TIER=%u is "
+                        "not an adoption tier; the only values are 0 and 1 (P11) and 2 (emulate, the "
+                        "P5 default).",
+                        static_cast<unsigned>(tier), static_cast<unsigned>(tier));
         }
     }
 } // namespace MobileGL::MG_Remote::Client

@@ -260,8 +260,8 @@ void main() {
                 RunSpan();
 
                 std::vector<float> readback(floats, kPoison);
-                glGetBufferSubData(GL_TRANSFORM_FEEDBACK_BUFFER, 0,
-                                   static_cast<GLsizeiptr>(floats * sizeof(float)), readback.data());
+                glGetBufferSubData(GL_TRANSFORM_FEEDBACK_BUFFER, 0, static_cast<GLsizeiptr>(floats * sizeof(float)),
+                                   readback.data());
                 EXPECT_TRUE(CapturedIs(readback.data(), value)) << "span " << span;
                 // The bytes past the one point the draw produced must still be the
                 // poison the respecification put there, not whatever the previous

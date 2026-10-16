@@ -27,5 +27,5 @@ namespace MobileGL::MG_Backend::DirectGLES {
         const Bool server = MG_Config::Transport != MG_Config::TransportMode::Monolith;
         return {g_backendContextGeneration, server ? MG_Pipe::MGPipeApplierContextSerial() : 0, server};
     }
-}
+} // namespace MobileGL::MG_Backend::DirectGLES
 #endif

@@ -182,17 +182,14 @@ void main() {
             static DrawParams ParamsAt(const Image& image, int half) {
                 const int x = image.Width() * (1 + 2 * half) / 4;
                 const Rgba8 pixel = image.At(x, image.Height() / 2);
-                const auto decode = [](std::uint8_t channel) {
-                    return (static_cast<int>(channel) - 16 + 4) / 8;
-                };
+                const auto decode = [](std::uint8_t channel) { return (static_cast<int>(channel) - 16 + 4) / 8; };
                 return {decode(pixel.r), decode(pixel.g), decode(pixel.b)};
             }
 
             static void ExpectParams(const Image& image, int half, const DrawParams& expected,
                                      const std::string& what) {
                 const DrawParams actual = ParamsAt(image, half);
-                EXPECT_EQ(actual.baseVertex, expected.baseVertex)
-                    << what << ": gl_BaseVertex (half " << half << ")";
+                EXPECT_EQ(actual.baseVertex, expected.baseVertex) << what << ": gl_BaseVertex (half " << half << ")";
                 EXPECT_EQ(actual.baseInstance, expected.baseInstance)
                     << what << ": gl_BaseInstance (half " << half << ")";
                 EXPECT_EQ(actual.drawId, expected.drawId) << what << ": gl_DrawID (half " << half << ")";
@@ -220,9 +217,8 @@ void main() {
 
         TEST_F(DrawParametersScenario, DrawArraysInstancedBaseInstanceReportsItsBaseInstance) {
             if (!Ready()) return;
-            const Image image = Render([&] {
-                glDrawArraysInstancedBaseInstance(GL_TRIANGLES, kLeftFirst, 2 * kHalfCount, 1, 5);
-            });
+            const Image image =
+                Render([&] { glDrawArraysInstancedBaseInstance(GL_TRIANGLES, kLeftFirst, 2 * kHalfCount, 1, 5); });
             EXPECT_EQ(FirstGLError(), GLenum(GL_NO_ERROR));
             ExpectParams(image, 0, {0, 5, 0}, "glDrawArraysInstancedBaseInstance(baseInstance=5)");
         }
@@ -245,7 +241,8 @@ void main() {
         TEST_F(DrawParametersScenario, DrawElementsBaseVertexReportsItsBaseVertex) {
             if (!Ready()) return;
             std::vector<std::uint32_t> indices;
-            for (std::uint32_t i = 0; i < 2 * kHalfCount; ++i) indices.push_back(i);
+            for (std::uint32_t i = 0; i < 2 * kHalfCount; ++i)
+                indices.push_back(i);
             FillBuffer(m_ebo, GL_ELEMENT_ARRAY_BUFFER, indices);
 
             const Image image = Render([&] {
@@ -266,8 +263,10 @@ void main() {
         TEST_F(DrawParametersScenario, DrawElementsAfterABaseVertexDrawReportsZeroAgain) {
             if (!Ready()) return;
             std::vector<std::uint32_t> indices;
-            for (std::uint32_t i = 0; i < 2 * kHalfCount; ++i) indices.push_back(i);
-            for (std::uint32_t i = 0; i < 2 * kHalfCount; ++i) indices.push_back(i + kLeftFirst);
+            for (std::uint32_t i = 0; i < 2 * kHalfCount; ++i)
+                indices.push_back(i);
+            for (std::uint32_t i = 0; i < 2 * kHalfCount; ++i)
+                indices.push_back(i + kLeftFirst);
             FillBuffer(m_ebo, GL_ELEMENT_ARRAY_BUFFER, indices);
             const auto rebasedRun = reinterpret_cast<const void*>(2 * kHalfCount * sizeof(std::uint32_t));
 
@@ -301,7 +300,8 @@ void main() {
         TEST_F(DrawParametersScenario, MultiDrawElementsIndirectCarriesEveryCommandsParameters) {
             if (!Ready()) return;
             std::vector<std::uint32_t> indices;
-            for (std::uint32_t i = 0; i < kHalfCount; ++i) indices.push_back(i);
+            for (std::uint32_t i = 0; i < kHalfCount; ++i)
+                indices.push_back(i);
             FillBuffer(m_ebo, GL_ELEMENT_ARRAY_BUFFER, indices);
 
             const std::vector<ElementsCommand> commands = {

@@ -97,8 +97,7 @@ void main() { o_color = texture(u_texture, vec2(0.5, 0.5)); }
             }
 
             static void DrainErrors() {
-                for (int i = 0; i < 16 && glGetError() != GL_NO_ERROR; ++i) {
-                }
+                for (int i = 0; i < 16 && glGetError() != GL_NO_ERROR; ++i) {}
             }
 
             static GLuint Compile(GLenum stage, const char* source) {

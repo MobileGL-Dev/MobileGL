@@ -60,7 +60,11 @@ namespace MobileGL::MG_Remote::Server {
     // nor are refused. The mode is a loop member reset by ServerLoop::Start, so each session
     // latches on its own; it is not read from MOBILEGL_IPC_SURFACE, because one process's
     // environment cannot speak for every session a unified server runs.
-    enum class SessionSurfaceMode : Uint8 { None, OnScreen, Offscreen };
+    enum class SessionSurfaceMode : Uint8 {
+        None,
+        OnScreen,
+        Offscreen
+    };
     const char* SessionSurfaceModeName(SessionSurfaceMode mode);
     // The decision, pure, so a unit case can drive all six pairs without a backend.
     Bool SessionSurfaceModeAdmits(SessionSurfaceMode current, Bool serverOwnedWindow);
@@ -242,8 +246,8 @@ namespace MobileGL::MG_Remote::Server {
             Bool ok = false;            // the request was honoured
             Bool boundNatively = false; // a native eglMakeCurrent ran (=> republish caps)
         };
-        MakeCurrentOutcome ApplyMakeCurrent(MG_Backend::BackendObject* backend, EGLDisplay dpy,
-                                            EGLSurface draw, EGLSurface read, EGLContext ctx);
+        MakeCurrentOutcome ApplyMakeCurrent(MG_Backend::BackendObject* backend, EGLDisplay dpy, EGLSurface draw,
+                                            EGLSurface read, EGLContext ctx);
 
         // N-3: forget the tuple ApplyMakeCurrent last bound. Apply thread only, like the tuple
         // itself (the forwarders that call these run their Args::Run there). Called on every
@@ -281,8 +285,8 @@ namespace MobileGL::MG_Remote::Server {
         // (NoServerWindow). The ServerOwned arm of the dispatch is its production caller; a test
         // reaches it through RunProbeOnApplyThreadForTesting. The lease is held until the backend
         // has let go of the window: ServerDisplay::Detach's lost hook (D6) or the session's end.
-        MobileGLResult AcquireServerWindow(Uint32 width, Uint32 height, Uint32 timeoutMs,
-                                           ServerWindowLease* out, SurfaceRefusalCode* refusal);
+        MobileGLResult AcquireServerWindow(Uint32 width, Uint32 height, Uint32 timeoutMs, ServerWindowLease* out,
+                                           SurfaceRefusalCode* refusal);
         // APPLY THREAD ONLY: this session's surface mode (D4).
         SessionSurfaceMode SurfaceMode() const { return m_surfaceMode; }
         // How many times this loop released a lost server window and latched ServerWindowLost (D6) -
@@ -396,8 +400,8 @@ namespace MobileGL::MG_Remote::Server {
         // The dispatch, on the apply thread (or inline for a re-entrant post): executes the
         // frame's op against the private backend and fills the frame's reply half. The eleven
         // wire+inproc op bodies from the old forwarder Args structs live here now.
-        MobileGLResult ApplySurfaceControlFrame(SurfaceControlFrame& frame,
-                                                 ControlProbeHook probeHook = nullptr, void* probeUser = nullptr);
+        MobileGLResult ApplySurfaceControlFrame(SurfaceControlFrame& frame, ControlProbeHook probeHook = nullptr,
+                                                void* probeUser = nullptr);
         // The caller already holds m_callerMutex; shared by normal and test-probe posting so
         // the probe's metadata is protected for the same lifetime as its frame.
         MobileGLResult PostSurfaceControlFrameWithCallerLock(SurfaceControlFrame& frame);
@@ -515,10 +519,14 @@ namespace MobileGL::MG_Remote::Server {
     // (the native bind itself needs the joint lane). Given the tuple currently held on the apply
     // thread and the request, is this a native bind, an identical no-op repeat, or a client
     // release-current the server must record without forwarding?
-    enum class EglBindAction { NativeBind, RepeatNoOp, ClientRelease };
-    EglBindAction ClassifyEglMakeCurrent(Bool haveCurrent, EGLDisplay curDpy, EGLSurface curDraw,
-                                         EGLSurface curRead, EGLContext curCtx, EGLDisplay dpy,
-                                         EGLSurface draw, EGLSurface read, EGLContext ctx);
+    enum class EglBindAction {
+        NativeBind,
+        RepeatNoOp,
+        ClientRelease
+    };
+    EglBindAction ClassifyEglMakeCurrent(Bool haveCurrent, EGLDisplay curDpy, EGLSurface curDraw, EGLSurface curRead,
+                                         EGLContext curCtx, EGLDisplay dpy, EGLSurface draw, EGLSurface read,
+                                         EGLContext ctx);
 
     // P11 B1 (CONTRACT-P11 B1): the cpu core this process's `auto` policy reserves for a dialled-in
     // shared-segment client's apply thread (ApplyThreadPolicy.h ReservedApplyCoreForConfig over this

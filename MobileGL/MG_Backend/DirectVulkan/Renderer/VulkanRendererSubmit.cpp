@@ -49,14 +49,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // OnSubmitsCompletedUpTo erases records, so copy fields and restart the
         // search after every wait instead of continuing an invalidated iterator.
         for (;;) {
-            const auto record = std::find_if(m_inFlightSubmits.begin(), m_inFlightSubmits.end(),
-                [serial](const auto& candidate) {
+            const auto record =
+                std::find_if(m_inFlightSubmits.begin(), m_inFlightSubmits.end(), [serial](const auto& candidate) {
                     return candidate.frameSerial >= serial && candidate.fence != VK_NULL_HANDLE;
                 });
             if (record == m_inFlightSubmits.end()) break;
             const Uint64 submitIndex = record->submitIndex;
-            if (!WaitForSubmitsUpTo(submitIndex, UINT64_MAX))
-                break; // fall through to the queue drain below
+            if (!WaitForSubmitsUpTo(submitIndex, UINT64_MAX)) break; // fall through to the queue drain below
             TryDrainFrameTransients();
             if (IsFrameSerialComplete(serial)) return true;
         }
@@ -88,8 +87,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return false;
         }
         const auto& frame = m_frameContext.GetCurrent();
-        return frame.isCommandRecording || frame.hasCommandBufferRecorded ||
-               frame.isPreCommandRecording || frame.hasPreCommandBufferRecorded;
+        return frame.isCommandRecording || frame.hasCommandBufferRecorded || frame.isPreCommandRecording ||
+               frame.hasPreCommandBufferRecorded;
     }
 
     Bool VulkanRenderer::RewindWireDescriptorSetsIfDue() {
@@ -117,12 +116,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             }
             OnSubmitsCompletedUpTo(through);
         }
-        if (HasPendingRecordedWork() || m_completedSubmitCounter < through)
-            MagmaWireFatal("descriptor-rewind-proof");
+        if (HasPendingRecordedWork() || m_completedSubmitCounter < through) MagmaWireFatal("descriptor-rewind-proof");
         const SizeT cachedSets = m_uniformManager->RewindWireDescriptorSets(frameIndex);
-        MGLOG_I("Magma descriptor rewind: frame=%u retiredSubmit=%llu budget=%u cached=%zu",
-                frameIndex, static_cast<unsigned long long>(through),
-                UniformManager::kWireDescriptorSetBudget, cachedSets);
+        MGLOG_I("Magma descriptor rewind: frame=%u retiredSubmit=%llu budget=%u cached=%zu", frameIndex,
+                static_cast<unsigned long long>(through), UniformManager::kWireDescriptorSetBudget, cachedSets);
         return true;
     }
 
@@ -138,8 +135,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // treats "not yet" as "still busy" - rename, defer, report unsignaled - so a late "yes" costs
         // at most kUnsignaledPollQuietNs of extra caution, never correctness.
         constexpr Uint64 kUnsignaledPollQuietNs = 50000;
-        const Uint64 now = static_cast<Uint64>(std::chrono::duration_cast<std::chrono::nanoseconds>(
-            std::chrono::steady_clock::now().time_since_epoch()).count());
+        const Uint64 now = static_cast<Uint64>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch())
+                .count());
         if (!m_inFlightSubmits.empty() && m_unsignaledPollFront == m_inFlightSubmits.front().submitIndex &&
             now - m_unsignaledPollNs < kUnsignaledPollQuietNs) {
             return false;
@@ -179,17 +177,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (submitIndex <= m_completedSubmitCounter) return true;
         if (submitIndex > m_submitCounter || m_device == VK_NULL_HANDLE) return false;
         Vector<VkFence> fences;
-        if (!CollectSubmitFencePrefix(m_inFlightSubmits, submitIndex, VkFence{}, fences))
-            return false;
-        const VkResult result = vkWaitForFences(m_device, static_cast<Uint32>(fences.size()),
-                                                fences.data(), VK_TRUE, timeoutNs);
+        if (!CollectSubmitFencePrefix(m_inFlightSubmits, submitIndex, VkFence{}, fences)) return false;
+        const VkResult result =
+            vkWaitForFences(m_device, static_cast<Uint32>(fences.size()), fences.data(), VK_TRUE, timeoutNs);
         if (result == VK_SUCCESS) {
             OnSubmitsCompletedUpTo(submitIndex);
             return true;
         }
         NoteDeviceLoss(result, "WaitForSubmitsUpTo vkWaitForFences");
-        if (result != VK_TIMEOUT)
-            MGLOG_E_ONCE("WaitForSubmitsUpTo: vkWaitForFences returned %d", result);
+        if (result != VK_TIMEOUT) MGLOG_E_ONCE("WaitForSubmitsUpTo: vkWaitForFences returned %d", result);
         return false;
     }
 
@@ -266,11 +262,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 }();
                 if (probe) {
                     Uint64 minRemaining = ~Uint64{0};
-                    for (const auto& r : m_inFlightSubmits) minRemaining = std::min(minRemaining, r.frameSerial);
+                    for (const auto& r : m_inFlightSubmits)
+                        minRemaining = std::min(minRemaining, r.frameSerial);
                     MGLOG_I("FLOOR retire upTo=%llu advanceTo=%llu remaining=%zu minRemainingSerial=%lld "
                             "frameSerial=%llu",
-                            static_cast<unsigned long long>(submitIndex),
-                            static_cast<unsigned long long>(advanceTo), m_inFlightSubmits.size(),
+                            static_cast<unsigned long long>(submitIndex), static_cast<unsigned long long>(advanceTo),
+                            m_inFlightSubmits.size(),
                             m_inFlightSubmits.empty() ? -1LL : static_cast<long long>(minRemaining),
                             static_cast<unsigned long long>(m_bufferManager.GetFrameSerial()));
                 }
@@ -453,8 +450,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         AttachSharedImageSync(submitInfo, sharedImageSync);
         const GpuProgressMarkers::Bracket bracket = m_progressMarkers.Acquire(m_completedSubmitCounter);
         const VkResult result = GpuProgressMarkers::SubmitBracketed(m_graphicsQueue, submitInfo, fence, bracket);
-        if (result == VK_SUCCESS) m_progressMarkers.Submitted(bracket, m_submitCounter + 1); // RegisterSubmit below
-        else m_progressMarkers.Abandon(bracket);
+        if (result == VK_SUCCESS)
+            m_progressMarkers.Submitted(bracket, m_submitCounter + 1); // RegisterSubmit below
+        else
+            m_progressMarkers.Abandon(bracket);
 #else
         const VkResult result = vkQueueSubmit(m_graphicsQueue, 1, &submitInfo, fence);
 #endif
@@ -483,8 +482,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // pooled fences and mid-frame command buffers.
         RefreshCompletedSubmits();
         auto& frame = m_frameContext.GetCurrent();
-        if (!frame.isCommandRecording && !frame.hasCommandBufferRecorded &&
-            !frame.isPreCommandRecording && !frame.hasPreCommandBufferRecorded) {
+        if (!frame.isCommandRecording && !frame.hasCommandBufferRecorded && !frame.isPreCommandRecording &&
+            !frame.hasPreCommandBufferRecorded) {
             // GL flush semantics still demand batched texture uploads start
             // executing in finite time even when no draw was recorded.
             if (m_textureManager) {
@@ -526,7 +525,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // draining this submission so reusing the buffer stays legal.
         const VkResult retireResult = m_frameContext.RetireCurrentCommandBuffer(submittingPreCommandBuffer);
         if (retireResult != VK_SUCCESS) {
-            MGLOG_E_ONCE("FlushPendingCommands: RetireCurrentCommandBuffer returned %d; draining submission", retireResult);
+            MGLOG_E_ONCE("FlushPendingCommands: RetireCurrentCommandBuffer returned %d; draining submission",
+                         retireResult);
             if (WaitForSubmitsUpTo(m_submitCounter, UINT64_MAX)) {
                 // Every registered fence through this submission was waited.
             } else if (vkQueueWaitIdle(m_graphicsQueue) == VK_SUCCESS) {
@@ -606,8 +606,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             m_deviceLost = true;
             MGLOG_E("DirectVulkan: the GPU hang watch named this session's VkDevice (a submission ran %llu ms "
                     "without finishing, at %s); the device is treated as LOST and nothing more is submitted",
-                    static_cast<unsigned long long>(m_progressMarkers.HungRunningMs()),
-                    site != nullptr ? site : "?");
+                    static_cast<unsigned long long>(m_progressMarkers.HungRunningMs()), site != nullptr ? site : "?");
         }
         // Where no session latch is armed (no served session) the device only stays "lost".
         if (!m_deviceLossLatched && MG_Pipe::MGPipeSessionLatchArmed()) {

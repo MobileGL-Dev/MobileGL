@@ -29,7 +29,9 @@ namespace MGITest {
         // on Magma no ES entry point was ever resolved and every member of g_GLESFuncs is null.
         // It is asked BEFORE SamplerSubsystemEnabled(), which is Espryt's own latch and must not
         // be resolved on a process whose backend is not Espryt.
-        bool EsprytIsRunning() { return MGB::g_GLESFuncs.glBindSampler != nullptr; }
+        bool EsprytIsRunning() {
+            return MGB::g_GLESFuncs.glBindSampler != nullptr;
+        }
     } // namespace
 
     bool PeekEsprytSamplerHandleArmIsLive(bool* outLive) {
@@ -74,8 +76,8 @@ namespace MGITest {
         const MGP::MGPipeHandle cso = applier.BoundSamplerStates[unit];
         out->CsoHandleSlot = static_cast<unsigned>(cso.Slot);
         out->CsoHandleGen = static_cast<unsigned>(cso.Gen);
-        out->UnitInsideWindow = unit >= applier.SamplerStateStart &&
-                                unit - applier.SamplerStateStart < applier.SamplerStateCount;
+        out->UnitInsideWindow =
+            unit >= applier.SamplerStateStart && unit - applier.SamplerStateStart < applier.SamplerStateCount;
         // The twin AT THE CSO HANDLE, asked of the same table Espryt asks (FindByHandle): a null
         // here with a live handle is the F-4 shape - a content-addressed handle looked up in a
         // table that only ever held identity-minted slots.
@@ -87,8 +89,8 @@ namespace MGITest {
 
         // And the twin keyed on the frontend OBJECT, which is what the pre-handle program pass
         // used to mint and bind, so a scenario can say which of the two the driver holds.
-        const auto& object = MobileGL::MG_State::pGLContext->GetSamplerObject(
-            static_cast<MobileGL::Uint>(glSamplerName));
+        const auto& object =
+            MobileGL::MG_State::pGLContext->GetSamplerObject(static_cast<MobileGL::Uint>(glSamplerName));
         if (object) {
             // Resolved the client's way (the harness is the client): the object's identity handle,
             // if one was ever minted, then the twin at it.
@@ -101,10 +103,18 @@ namespace MGITest {
         return true;
     }
 #else
-    bool PeekEsprytSamplerHandleArmIsLive(bool*) { return false; }
-    bool PeekEsprytFramebufferHandleArmIsLive(bool*) { return false; }
-    bool PeekPipeShaderImageWindow(PipeShaderImageWindowPeek*) { return false; }
-    bool PeekEsprytUnitSampler(unsigned, unsigned, EsprytUnitSamplerPeek*) { return false; }
+    bool PeekEsprytSamplerHandleArmIsLive(bool*) {
+        return false;
+    }
+    bool PeekEsprytFramebufferHandleArmIsLive(bool*) {
+        return false;
+    }
+    bool PeekPipeShaderImageWindow(PipeShaderImageWindowPeek*) {
+        return false;
+    }
+    bool PeekEsprytUnitSampler(unsigned, unsigned, EsprytUnitSamplerPeek*) {
+        return false;
+    }
 #endif
 
 } // namespace MGITest

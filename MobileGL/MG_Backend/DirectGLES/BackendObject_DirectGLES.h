@@ -15,8 +15,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // Populates the same format-capability cache used by backend startup. The caller
     // must keep the supplied GLES context current for the duration of this call.
     void PopulateFormatCapabilities(const MG_External::GLESFunctionsTable& gl,
-                                    const MG_External::GLESCapabilities& capabilities,
-                                    FormatCapabilityCache& cache);
+                                    const MG_External::GLESCapabilities& capabilities, FormatCapabilityCache& cache);
 
     // Clamps a requested sample count down to what the ES driver can really deliver for this
     // format on this format-capability target: the probed per-format list when there is one, the
@@ -118,8 +117,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // plus the feature set in `features`. The MOBILEGL_DISABLE_TIMERQUERY escape hatch is applied
     // inside.
     Vector<GLExtension> BuildAdvertisedExtensions(Bool timerQueriesSupported, Bool anisotropicFilteringSupported,
-                                                  Bool drawIndirectSupported,
-                                                  Bool nonZeroIndirectBaseInstanceSupported,
+                                                  Bool drawIndirectSupported, Bool nonZeroIndirectBaseInstanceSupported,
                                                   Bool textureViewSupported, Bool cubeMapArraySupported,
                                                   const AdvertisedFeatureSupport& features = {});
 

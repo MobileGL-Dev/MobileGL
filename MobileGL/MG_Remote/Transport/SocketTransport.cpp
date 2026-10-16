@@ -24,22 +24,22 @@
 #include <cstdio>
 
 #if defined(__unix__) || defined(__APPLE__) || defined(__ANDROID__)
-#    define MOBILEGL_SOCKET_TRANSPORT_POSIX 1
-#    include <poll.h>
-#    include <sys/stat.h>
-#    include <sys/un.h>
-#    include <sys/socket.h>
-#    include <sys/types.h>
-#    include <unistd.h>
-#    include <fcntl.h>
-#    include <netdb.h>
-#    include <netinet/in.h>
-#    include <netinet/tcp.h>
-#    if defined(__linux__)
-#        include <sys/syscall.h>
-#    endif
+#define MOBILEGL_SOCKET_TRANSPORT_POSIX 1
+#include <poll.h>
+#include <sys/stat.h>
+#include <sys/un.h>
+#include <sys/socket.h>
+#include <sys/types.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <netdb.h>
+#include <netinet/in.h>
+#include <netinet/tcp.h>
+#if defined(__linux__)
+#include <sys/syscall.h>
+#endif
 #else
-#    define MOBILEGL_SOCKET_TRANSPORT_POSIX 0
+#define MOBILEGL_SOCKET_TRANSPORT_POSIX 0
 #endif
 
 namespace MobileGL::MG_Remote::Transport {
@@ -49,7 +49,9 @@ namespace MobileGL::MG_Remote::Transport {
     namespace {
         constexpr std::uint64_t kPumpChunkBytes = 64ull * 1024;
 
-        bool TcpName(const std::string& name) { return name.compare(0, 6, "tcp://") == 0; }
+        bool TcpName(const std::string& name) {
+            return name.compare(0, 6, "tcp://") == 0;
+        }
 
         bool TcpAddress(const std::string& name, addrinfo** result) {
             *result = nullptr;
@@ -57,19 +59,16 @@ namespace MobileGL::MG_Remote::Transport {
             std::string host, port;
             if (!address.empty() && address[0] == '[') {
                 const auto end = address.find(']');
-                if (end == std::string::npos || end + 1 >= address.size() || address[end + 1] != ':')
-                    return false;
+                if (end == std::string::npos || end + 1 >= address.size() || address[end + 1] != ':') return false;
                 host = address.substr(1, end - 1);
                 port = address.substr(end + 2);
             } else {
                 const auto colon = address.find(':');
-                if (colon == std::string::npos || address.find(':', colon + 1) != std::string::npos)
-                    return false;
+                if (colon == std::string::npos || address.find(':', colon + 1) != std::string::npos) return false;
                 host = address.substr(0, colon);
                 port = address.substr(colon + 1);
             }
-            if (host.empty() || port.empty() || port.find_first_not_of("0123456789") != std::string::npos)
-                return false;
+            if (host.empty() || port.empty() || port.find_first_not_of("0123456789") != std::string::npos) return false;
             char* end = nullptr;
             const auto number = std::strtoul(port.c_str(), &end, 10);
             if (*end || number == 0 || number > 65535) return false;
@@ -99,7 +98,8 @@ namespace MobileGL::MG_Remote::Transport {
         bool ConfigureTcp(int fd) {
             const int one = 1, idle = 2, interval = 1, count = 3, timeout = 5000;
             if (::setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one)) != 0 ||
-                ::setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &one, sizeof(one)) != 0) return false;
+                ::setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &one, sizeof(one)) != 0)
+                return false;
 #if defined(TCP_KEEPIDLE)
             if (::setsockopt(fd, IPPROTO_TCP, TCP_KEEPIDLE, &idle, sizeof(idle)) != 0) return false;
 #endif
@@ -118,8 +118,7 @@ namespace MobileGL::MG_Remote::Transport {
         MobileGLResult ConnectTcp(const std::string& name, std::uint32_t timeoutMs, int* outFd) {
             addrinfo* addresses = nullptr;
             if (!TcpAddress(name, &addresses)) return MOBILEGL_ERR_INVALID_ARGUMENT;
-            const auto deadline = std::chrono::steady_clock::now() +
-                std::chrono::milliseconds(std::max(1u, timeoutMs));
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(std::max(1u, timeoutMs));
             do {
                 for (auto* address = addresses; address; address = address->ai_next) {
                     const int fd = ::socket(address->ai_family, SOCK_STREAM, IPPROTO_TCP);
@@ -129,14 +128,17 @@ namespace MobileGL::MG_Remote::Transport {
                     bool connected = ::connect(fd, address->ai_addr, address->ai_addrlen) == 0;
                     if (!connected && errno == EINPROGRESS) {
                         const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
-                            deadline - std::chrono::steady_clock::now()).count();
+                                                   deadline - std::chrono::steady_clock::now())
+                                                   .count();
                         pollfd pfd{fd, POLLOUT, 0};
                         int rc;
-                        do { rc = ::poll(&pfd, 1, static_cast<int>(std::max<std::int64_t>(0, remaining))); }
-                        while (rc < 0 && errno == EINTR && std::chrono::steady_clock::now() < deadline);
+                        do {
+                            rc = ::poll(&pfd, 1, static_cast<int>(std::max<std::int64_t>(0, remaining)));
+                        } while (rc < 0 && errno == EINTR && std::chrono::steady_clock::now() < deadline);
                         int error = 0;
                         socklen_t length = sizeof(error);
-                        connected = rc > 0 && ::getsockopt(fd, SOL_SOCKET, SO_ERROR, &error, &length) == 0 && error == 0;
+                        connected =
+                            rc > 0 && ::getsockopt(fd, SOL_SOCKET, SO_ERROR, &error, &length) == 0 && error == 0;
                     }
                     if (connected && ConfigureTcp(fd)) {
                         ::fcntl(fd, F_SETFL, flags);
@@ -218,11 +220,10 @@ namespace MobileGL::MG_Remote::Transport {
         // SIGCHLD by construction).
         int WaitReadable(int fd, std::uint32_t timeoutMs) {
             for (;;) {
-                struct pollfd pfd {};
+                struct pollfd pfd{};
                 pfd.fd = fd;
                 pfd.events = POLLIN;
-                const int timeout =
-                    timeoutMs == kWaitForever ? -1 : static_cast<int>(timeoutMs);
+                const int timeout = timeoutMs == kWaitForever ? -1 : static_cast<int>(timeoutMs);
                 const int rc = ::poll(&pfd, 1, timeout);
                 if (rc < 0 && errno == EINTR) {
                     continue;
@@ -281,8 +282,7 @@ namespace MobileGL::MG_Remote::Transport {
             for (std::uint32_t waited = 0;; waited += 5) {
                 const int fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
                 if (fd < 0) {
-                    WireLogError("MG_Remote SocketTransport: socket() failed: %s",
-                                 std::strerror(errno));
+                    WireLogError("MG_Remote SocketTransport: socket() failed: %s", std::strerror(errno));
                     return MOBILEGL_ERR_UNSUPPORTED;
                 }
                 if (::connect(fd, reinterpret_cast<sockaddr*>(&address), length) == 0) {
@@ -312,7 +312,10 @@ namespace MobileGL::MG_Remote::Transport {
             std::size_t written = 0;
             while (written < framed.size()) {
                 const ssize_t n = ::send(fd, framed.data() + written, framed.size() - written, MSG_NOSIGNAL);
-                if (n > 0) { written += static_cast<std::size_t>(n); continue; }
+                if (n > 0) {
+                    written += static_cast<std::size_t>(n);
+                    continue;
+                }
                 if (n < 0 && errno == EINTR) continue;
                 WireLogError("MG_Remote SocketTransport: the %s could not be sent (%zu of %zu bytes): %s", what,
                              written, framed.size(), std::strerror(errno));
@@ -349,8 +352,7 @@ namespace MobileGL::MG_Remote::Transport {
             if (type != SOCK_STREAM) return "is not a stream socket";
             sockaddr_storage local{};
             socklen_t localSize = sizeof(local);
-            if (::getsockname(fd, reinterpret_cast<sockaddr*>(&local), &localSize) != 0 ||
-                local.ss_family != AF_UNIX)
+            if (::getsockname(fd, reinterpret_cast<sockaddr*>(&local), &localSize) != 0 || local.ss_family != AF_UNIX)
                 return "is not an AF_UNIX socket (a TCP pair has no descriptor channel; use tcp:// instead)";
             sockaddr_storage peer{};
             socklen_t peerSize = sizeof(peer);
@@ -387,8 +389,7 @@ namespace MobileGL::MG_Remote::Transport {
             return MOBILEGL_ERR_UNSUPPORTED;
         }
         if (::bind(listenFd, reinterpret_cast<sockaddr*>(&address), length) != 0) {
-            WireLogError("MG_Remote SocketTransport: bind(\"%s\") failed: %s", path.c_str(),
-                         std::strerror(errno));
+            WireLogError("MG_Remote SocketTransport: bind(\"%s\") failed: %s", path.c_str(), std::strerror(errno));
             ::close(listenFd);
             return MOBILEGL_ERR_UNSUPPORTED;
         }
@@ -400,8 +401,7 @@ namespace MobileGL::MG_Remote::Transport {
             ::chmod(path.c_str(), 0600);
         }
         if (::listen(listenFd, 4) != 0) {
-            WireLogError("MG_Remote SocketTransport: listen(\"%s\") failed: %s", path.c_str(),
-                         std::strerror(errno));
+            WireLogError("MG_Remote SocketTransport: listen(\"%s\") failed: %s", path.c_str(), std::strerror(errno));
             ::close(listenFd);
             if (!abstractEndpoint) {
                 ::unlink(path.c_str());
@@ -423,9 +423,8 @@ namespace MobileGL::MG_Remote::Transport {
         if (minted != MOBILEGL_OK) return minted;
         const auto controlBind = EncodePairBind(nonce, false);
         int control = -1;
-        const MobileGLResult first =
-            ConnectPresenting(path, timeoutMs, controlBind.data(), controlBind.size(), "control connection's PairBind",
-                              &control);
+        const MobileGLResult first = ConnectPresenting(path, timeoutMs, controlBind.data(), controlBind.size(),
+                                                       "control connection's PairBind", &control);
         if (first != MOBILEGL_OK) {
             return first;
         }
@@ -452,7 +451,8 @@ namespace MobileGL::MG_Remote::Transport {
         // instead of writing a PairBind into something that is not the server.
         if (controlFd == auxFd) {
             WireLogError("MG_Remote: Refuse{ProtocolMismatch} fd: endpoint names descriptor %d twice; the control "
-                         "and aux connections are two sockets", controlFd);
+                         "and aux connections are two sockets",
+                         controlFd);
             return MOBILEGL_ERR_INVALID_ARGUMENT;
         }
         const int fds[2] = {controlFd, auxFd};
@@ -482,8 +482,8 @@ namespace MobileGL::MG_Remote::Transport {
         MobileGLResult result = MintNonce(nonce, sizeof(nonce));
         if (result == MOBILEGL_OK) {
             const auto controlBind = EncodePairBind(nonce, false);
-            result = SendFirstFrame(controlFd, controlBind.data(), controlBind.size(),
-                                    "fd: control connection's PairBind");
+            result =
+                SendFirstFrame(controlFd, controlBind.data(), controlBind.size(), "fd: control connection's PairBind");
         }
         if (result == MOBILEGL_OK) {
             const auto auxBind = EncodePairBind(nonce, true);
@@ -514,7 +514,8 @@ namespace MobileGL::MG_Remote::Transport {
                 int rc;
                 do {
                     const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
-                        deadline - std::chrono::steady_clock::now()).count();
+                                               deadline - std::chrono::steady_clock::now())
+                                               .count();
                     rc = ::poll(&pfd, 1, static_cast<int>(std::max<std::int64_t>(0, remaining)));
                 } while (rc < 0 && errno == EINTR);
                 int error = 0;
@@ -603,8 +604,9 @@ namespace MobileGL::MG_Remote::Transport {
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
         const auto readExactly = [&](std::uint8_t* into, std::size_t size) -> MobileGLResult {
             while (size != 0) {
-                const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(
-                    deadline - std::chrono::steady_clock::now()).count();
+                const auto left =
+                    std::chrono::duration_cast<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now())
+                        .count();
                 if (left <= 0) return MOBILEGL_ERR_TIMEOUT;
                 const int ready = WaitReadable(fd, static_cast<std::uint32_t>(left));
                 if (ready == 0) return MOBILEGL_ERR_TIMEOUT;
@@ -636,7 +638,10 @@ namespace MobileGL::MG_Remote::Transport {
 #if defined(__linux__) && defined(SYS_getrandom)
         while (filled < size) {
             const long n = ::syscall(SYS_getrandom, out + filled, size - filled, 0);
-            if (n > 0) { filled += static_cast<std::size_t>(n); continue; }
+            if (n > 0) {
+                filled += static_cast<std::size_t>(n);
+                continue;
+            }
             if (n < 0 && errno == EINTR) continue;
             break; // ENOSYS on an old kernel: the device file below is the same pool.
         }
@@ -645,7 +650,10 @@ namespace MobileGL::MG_Remote::Transport {
             const int source = ::open("/dev/urandom", O_RDONLY | O_CLOEXEC);
             while (source >= 0 && filled < size) {
                 const ssize_t n = ::read(source, out + filled, size - filled);
-                if (n > 0) { filled += static_cast<std::size_t>(n); continue; }
+                if (n > 0) {
+                    filled += static_cast<std::size_t>(n);
+                    continue;
+                }
                 if (n < 0 && errno == EINTR) continue;
                 break;
             }
@@ -653,7 +661,8 @@ namespace MobileGL::MG_Remote::Transport {
         }
         if (filled == size) return MOBILEGL_OK;
         WireLogError("MG_Remote SocketTransport: the kernel CSPRNG gave %zu of %zu bytes; a data "
-                     "nonce is not minted from anything weaker", filled, size);
+                     "nonce is not minted from anything weaker",
+                     filled, size);
         return MOBILEGL_ERR_UNSUPPORTED;
     }
 
@@ -670,8 +679,7 @@ namespace MobileGL::MG_Remote::Transport {
         // Framing.h is what makes a stream safe: the message boundary is in the
         // payload, not in the socket.
         if (::socketpair(AF_UNIX, SOCK_STREAM, 0, stream) != 0) {
-            WireLogError("MG_Remote SocketTransport: socketpair(SOCK_STREAM) failed: %s",
-                         std::strerror(errno));
+            WireLogError("MG_Remote SocketTransport: socketpair(SOCK_STREAM) failed: %s", std::strerror(errno));
             return MOBILEGL_ERR_UNSUPPORTED;
         }
 
@@ -711,7 +719,9 @@ namespace MobileGL::MG_Remote::Transport {
         return ::shutdown(m_streamFd, SHUT_WR) == 0 ? MOBILEGL_OK : MOBILEGL_ERR_TRANSPORT_CLOSED;
     }
 
-    SocketTransport::~SocketTransport() { Shutdown(); }
+    SocketTransport::~SocketTransport() {
+        Shutdown();
+    }
 
     MobileGLResult SocketTransport::SendFrame(MobileGLByteSpan bytes) {
         if (bytes.size > kMaxFramePayloadSize) {
@@ -741,8 +751,7 @@ namespace MobileGL::MG_Remote::Transport {
         std::uint64_t written = 0;
         while (written < framed.size()) {
             const ssize_t n = ::send(m_streamFd, framed.data() + written,
-                                     static_cast<std::size_t>(framed.size() - written),
-                                     MSG_NOSIGNAL);
+                                     static_cast<std::size_t>(framed.size() - written), MSG_NOSIGNAL);
             if (n > 0) {
                 written += static_cast<std::uint64_t>(n);
                 continue;
@@ -759,8 +768,8 @@ namespace MobileGL::MG_Remote::Transport {
             }
             // SendFrame is also the log sink: do not recurse into the logger.
             std::fprintf(stderr, "MG_Remote SocketTransport: send failed after %llu of %llu bytes: %s\n",
-                         static_cast<unsigned long long>(written),
-                         static_cast<unsigned long long>(framed.size()), std::strerror(errno));
+                         static_cast<unsigned long long>(written), static_cast<unsigned long long>(framed.size()),
+                         std::strerror(errno));
             m_closed = true;
             return MOBILEGL_ERR_TRANSPORT_CLOSED;
         }
@@ -789,8 +798,7 @@ namespace MobileGL::MG_Remote::Transport {
         for (;;) {
             const ssize_t n = ::recv(m_streamFd, chunk, sizeof(chunk), 0);
             if (n > 0) {
-                const MobileGLResult fed =
-                    m_reader.Feed(chunk, static_cast<std::uint64_t>(n));
+                const MobileGLResult fed = m_reader.Feed(chunk, static_cast<std::uint64_t>(n));
                 if (fed != MOBILEGL_OK) {
                     // Bad magic or an over-long length. FrameReader latches
                     // itself failed and never recovers; mirror that here so a
@@ -824,8 +832,7 @@ namespace MobileGL::MG_Remote::Transport {
         }
     }
 
-    MobileGLResult SocketTransport::ReceiveFrame(MobileGLMutableByteSpan buffer,
-                                                 std::uint64_t* outSize,
+    MobileGLResult SocketTransport::ReceiveFrame(MobileGLMutableByteSpan buffer, std::uint64_t* outSize,
                                                  std::uint32_t timeoutMs) {
         if (outSize == nullptr) {
             return MOBILEGL_ERR_INVALID_ARGUMENT;
@@ -893,8 +900,7 @@ namespace MobileGL::MG_Remote::Transport {
     }
 
     MobileGLResult SocketTransport::ReceiveFd(int* outFd, MobileGLMutableByteSpan sideband,
-                                              std::uint64_t* outSidebandSize,
-                                              std::uint32_t timeoutMs) {
+                                              std::uint64_t* outSidebandSize, std::uint32_t timeoutMs) {
         if (m_tcp || m_auxFd < 0) {
             return MOBILEGL_ERR_UNSUPPORTED;
         }
@@ -926,8 +932,7 @@ namespace MobileGL::MG_Remote::Transport {
     // POSIX only (CONTRACT-P6 §2.6). The refusal is NAMED at construction rather
     // than at first use: a transport that accepts a connection and then fails
     // every operation is the silent-fallback shape this project forbids.
-    MobileGLResult SocketTransport::CreatePair(std::unique_ptr<SocketTransport>&,
-                                               std::unique_ptr<SocketTransport>&) {
+    MobileGLResult SocketTransport::CreatePair(std::unique_ptr<SocketTransport>&, std::unique_ptr<SocketTransport>&) {
         WireLogError("MG_Remote SocketTransport: unsupported on this platform - P6 lands POSIX "
                      "only (CONTRACT-P6 §2.6); `unix:` and `pipe:` stay named refusals");
         return MOBILEGL_ERR_UNSUPPORTED;
@@ -939,30 +944,44 @@ namespace MobileGL::MG_Remote::Transport {
         return MOBILEGL_ERR_UNSUPPORTED;
     }
 
-    bool SocketTransport::Probe(const std::string&, std::uint32_t) { return false; }
+    bool SocketTransport::Probe(const std::string&, std::uint32_t) {
+        return false;
+    }
 
     SocketTransport::SocketTransport(int, int, TransportRole role) : m_role(role) {}
     SocketTransport::~SocketTransport() = default;
-    int SocketTransport::TakeDataFd() { return -1; }
+    int SocketTransport::TakeDataFd() {
+        return -1;
+    }
     void SocketTransport::CloseLocalCopy() {}
-    MobileGLResult SocketTransport::ShutdownSend() { return MOBILEGL_ERR_UNSUPPORTED; }
-
-    MobileGLResult SocketTransport::SendFrame(MobileGLByteSpan) { return MOBILEGL_ERR_UNSUPPORTED; }
-    MobileGLResult SocketTransport::ReceiveFrame(MobileGLMutableByteSpan, std::uint64_t*,
-                                                 std::uint32_t) {
+    MobileGLResult SocketTransport::ShutdownSend() {
         return MOBILEGL_ERR_UNSUPPORTED;
     }
-    std::uint64_t SocketTransport::PeekFrameSize() { return 0; }
-    std::uint64_t SocketTransport::BufferedBytes() { return 0; }
+
+    MobileGLResult SocketTransport::SendFrame(MobileGLByteSpan) {
+        return MOBILEGL_ERR_UNSUPPORTED;
+    }
+    MobileGLResult SocketTransport::ReceiveFrame(MobileGLMutableByteSpan, std::uint64_t*, std::uint32_t) {
+        return MOBILEGL_ERR_UNSUPPORTED;
+    }
+    std::uint64_t SocketTransport::PeekFrameSize() {
+        return 0;
+    }
+    std::uint64_t SocketTransport::BufferedBytes() {
+        return 0;
+    }
     MobileGLResult SocketTransport::ShareFd(int, MobileGLByteSpan) {
         return MOBILEGL_ERR_UNSUPPORTED;
     }
-    MobileGLResult SocketTransport::ReceiveFd(int*, MobileGLMutableByteSpan, std::uint64_t*,
-                                              std::uint32_t) {
+    MobileGLResult SocketTransport::ReceiveFd(int*, MobileGLMutableByteSpan, std::uint64_t*, std::uint32_t) {
         return MOBILEGL_ERR_UNSUPPORTED;
     }
-    MobileGLResult SocketTransport::PumpOnce(std::uint32_t) { return MOBILEGL_ERR_UNSUPPORTED; }
-    void SocketTransport::Shutdown() { m_closed = true; }
+    MobileGLResult SocketTransport::PumpOnce(std::uint32_t) {
+        return MOBILEGL_ERR_UNSUPPORTED;
+    }
+    void SocketTransport::Shutdown() {
+        m_closed = true;
+    }
 
 #endif
 

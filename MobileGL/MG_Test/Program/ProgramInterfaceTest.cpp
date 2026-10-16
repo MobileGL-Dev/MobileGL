@@ -97,10 +97,11 @@ namespace {
         return Props(program, iface, index, props);
     }
 
-    GLenum TakeError() { return GetError(); }
+    GLenum TakeError() {
+        return GetError();
+    }
     void ClearErrors() {
-        for (int i = 0; i < 32 && TakeError() != GL_NO_ERROR; ++i) {
-        }
+        for (int i = 0; i < 32 && TakeError() != GL_NO_ERROR; ++i) {}
     }
 
     const char* kSimpleVs = R"(#version 430
@@ -221,12 +222,9 @@ void main(void)
                                            GL_REFERENCED_BY_VERTEX_SHADER,
                                            GL_LOCATION,
                                            GL_IS_PER_PATCH};
-        EXPECT_EQ(PropsOf(p, GL_PROGRAM_INPUT, "a", props),
-                  (std::vector<GLint>{2, GL_FLOAT_MAT4, 1, 0, 0, 1, 0, 0}));
-        EXPECT_EQ(PropsOf(p, GL_PROGRAM_INPUT, "c[0]", props),
-                  (std::vector<GLint>{5, GL_FLOAT, 2, 0, 0, 1, 5, 0}));
-        EXPECT_EQ(PropsOf(p, GL_PROGRAM_INPUT, "d", props),
-                  (std::vector<GLint>{5, GL_FLOAT_MAT2x3, 2, 0, 0, 1, 7, 0}));
+        EXPECT_EQ(PropsOf(p, GL_PROGRAM_INPUT, "a", props), (std::vector<GLint>{2, GL_FLOAT_MAT4, 1, 0, 0, 1, 0, 0}));
+        EXPECT_EQ(PropsOf(p, GL_PROGRAM_INPUT, "c[0]", props), (std::vector<GLint>{5, GL_FLOAT, 2, 0, 0, 1, 5, 0}));
+        EXPECT_EQ(PropsOf(p, GL_PROGRAM_INPUT, "d", props), (std::vector<GLint>{5, GL_FLOAT_MAT2x3, 2, 0, 0, 1, 7, 0}));
         EXPECT_EQ(TakeError(), GL_NO_ERROR);
     }
 
@@ -271,10 +269,10 @@ void main() {
             EXPECT_EQ(GetProgramResourceLocationIndex(p, GL_PROGRAM_OUTPUT, name), 0) << name;
         }
 
-        const std::vector<GLenum> props = {GL_NAME_LENGTH, GL_TYPE,     GL_ARRAY_SIZE, GL_REFERENCED_BY_FRAGMENT_SHADER,
-                                           GL_LOCATION,    GL_IS_PER_PATCH, GL_LOCATION_INDEX};
-        EXPECT_EQ(PropsOf(p, GL_PROGRAM_OUTPUT, "a", props),
-                  (std::vector<GLint>{5, GL_FLOAT_VEC3, 2, 1, 0, 0, 0}));
+        const std::vector<GLenum> props = {
+            GL_NAME_LENGTH, GL_TYPE,         GL_ARRAY_SIZE,    GL_REFERENCED_BY_FRAGMENT_SHADER,
+            GL_LOCATION,    GL_IS_PER_PATCH, GL_LOCATION_INDEX};
+        EXPECT_EQ(PropsOf(p, GL_PROGRAM_OUTPUT, "a", props), (std::vector<GLint>{5, GL_FLOAT_VEC3, 2, 1, 0, 0, 0}));
         EXPECT_EQ(PropsOf(p, GL_PROGRAM_OUTPUT, "d", props), (std::vector<GLint>{5, GL_INT, 2, 1, 5, 0, 0}));
         EXPECT_EQ(TakeError(), GL_NO_ERROR);
     }
@@ -299,8 +297,8 @@ void main(void) { gl_FragDepth = 0.1; gl_SampleMask[0] = 1; }
         EXPECT_EQ(GetProgramResourceLocationIndex(p, GL_PROGRAM_OUTPUT, "gl_FragDepth"), -1);
         EXPECT_EQ(GetProgramResourceLocationIndex(p, GL_PROGRAM_OUTPUT, "gl_SampleMask[0]"), -1);
 
-        const std::vector<GLenum> props = {GL_NAME_LENGTH, GL_TYPE, GL_ARRAY_SIZE, GL_REFERENCED_BY_FRAGMENT_SHADER,
-                                           GL_LOCATION,    GL_LOCATION_INDEX};
+        const std::vector<GLenum> props = {
+            GL_NAME_LENGTH, GL_TYPE, GL_ARRAY_SIZE, GL_REFERENCED_BY_FRAGMENT_SHADER, GL_LOCATION, GL_LOCATION_INDEX};
         EXPECT_EQ(PropsOf(p, GL_PROGRAM_OUTPUT, "gl_FragDepth", props),
                   (std::vector<GLint>{13, GL_FLOAT, 1, 1, -1, -1}));
         EXPECT_EQ(PropsOf(p, GL_PROGRAM_OUTPUT, "gl_SampleMask[0]", props),
@@ -377,9 +375,9 @@ void main() { color = vec4(0, 1, 0, 1) + recolor; }
                                            GL_REFERENCED_BY_FRAGMENT_SHADER,
                                            GL_REFERENCED_BY_VERTEX_SHADER,
                                            GL_LOCATION};
-        EXPECT_EQ(PropsOf(p, GL_UNIFORM, "repos", props),
-                  (std::vector<GLint>{6, GL_FLOAT_VEC4, 1, -1, -1, -1, -1, 0, -1, 0, 0, 1,
-                                      GetUniformLocation(p, "repos")}));
+        EXPECT_EQ(
+            PropsOf(p, GL_UNIFORM, "repos", props),
+            (std::vector<GLint>{6, GL_FLOAT_VEC4, 1, -1, -1, -1, -1, 0, -1, 0, 0, 1, GetUniformLocation(p, "repos")}));
         EXPECT_EQ(PropsOf(p, GL_UNIFORM, "recolor", props),
                   (std::vector<GLint>{8, GL_FLOAT_VEC4, 1, -1, -1, -1, -1, 0, -1, 0, 1, 0,
                                       GetUniformLocation(p, "recolor")}));
@@ -439,9 +437,9 @@ void main(void) {
                                            GL_ATOMIC_COUNTER_BUFFER_INDEX,
                                            GL_REFERENCED_BY_VERTEX_SHADER,
                                            GL_LOCATION};
-        EXPECT_EQ(PropsOf(p, GL_UNIFORM, "a[2][1]", props),
-                  (std::vector<GLint>{11, GL_FLOAT_VEC4, 5, -1, -1, -1, -1, 0, -1, 1,
-                                      GetUniformLocation(p, "a[2][1]")}));
+        EXPECT_EQ(
+            PropsOf(p, GL_UNIFORM, "a[2][1]", props),
+            (std::vector<GLint>{11, GL_FLOAT_VEC4, 5, -1, -1, -1, -1, 0, -1, 1, GetUniformLocation(p, "a[2][1]")}));
         EXPECT_EQ(TakeError(), GL_NO_ERROR);
     }
 
@@ -1089,7 +1087,8 @@ void main() {
             const std::string n = std::to_string(count);
             const std::string source = std::string(R"(#version 430
 out vec4 color;
-layout(r32i) uniform iimage2D u_image[)") + n + R"(];
+layout(r32i) uniform iimage2D u_image[)") +
+                                       n + R"(];
 void main() {
     int value = 1;
     for (int i = 0; i < )" + n + R"(; ++i) {
@@ -1245,7 +1244,8 @@ void main() {
 )";
             const std::string tes = std::string(R"(#version 430
 layout(triangles) in;
-layout(r32i) uniform iimage2D u_tesImage[)") + n + R"(];
+layout(r32i) uniform iimage2D u_tesImage[)") +
+                                    n + R"(];
 void main() {
     int value = 1;
     for (int i = 0; i < )" + n + R"(; ++i) {
@@ -1358,8 +1358,8 @@ void main() {
         for (GLuint index = 0; index < static_cast<GLuint>(bufferCount); ++index) {
             const std::vector<GLint> viaInterface =
                 Props(p, GL_ATOMIC_COUNTER_BUFFER, index,
-                      {GL_BUFFER_BINDING, GL_BUFFER_DATA_SIZE, GL_NUM_ACTIVE_VARIABLES,
-                       GL_REFERENCED_BY_VERTEX_SHADER, GL_REFERENCED_BY_FRAGMENT_SHADER});
+                      {GL_BUFFER_BINDING, GL_BUFFER_DATA_SIZE, GL_NUM_ACTIVE_VARIABLES, GL_REFERENCED_BY_VERTEX_SHADER,
+                       GL_REFERENCED_BY_FRAGMENT_SHADER});
             ASSERT_EQ(viaInterface.size(), 5u);
             EXPECT_EQ(activeBufferiv(index, GL_ATOMIC_COUNTER_BUFFER_BINDING), viaInterface[0]);
             EXPECT_EQ(activeBufferiv(index, GL_ATOMIC_COUNTER_BUFFER_DATA_SIZE), viaInterface[1]);
@@ -1412,16 +1412,15 @@ void main(void) {
 
         EXPECT_EQ(Interfaceiv(p, GL_TRANSFORM_FEEDBACK_VARYING, GL_ACTIVE_RESOURCES), 6);
         EXPECT_EQ(Interfaceiv(p, GL_TRANSFORM_FEEDBACK_VARYING, GL_MAX_NAME_LENGTH), 5);
-        for (const char* name : varyings) ExpectResource(p, GL_TRANSFORM_FEEDBACK_VARYING, name, name);
+        for (const char* name : varyings)
+            ExpectResource(p, GL_TRANSFORM_FEEDBACK_VARYING, name, name);
 
         const std::vector<GLenum> props = {GL_NAME_LENGTH, GL_TYPE, GL_ARRAY_SIZE};
-        EXPECT_EQ(PropsOf(p, GL_TRANSFORM_FEEDBACK_VARYING, "a", props),
-                  (std::vector<GLint>{2, GL_INT_VEC4, 1}));
+        EXPECT_EQ(PropsOf(p, GL_TRANSFORM_FEEDBACK_VARYING, "a", props), (std::vector<GLint>{2, GL_INT_VEC4, 1}));
         EXPECT_EQ(PropsOf(p, GL_TRANSFORM_FEEDBACK_VARYING, "b[0]", props), (std::vector<GLint>{5, GL_FLOAT, 1}));
         EXPECT_EQ(PropsOf(p, GL_TRANSFORM_FEEDBACK_VARYING, "c", props),
                   (std::vector<GLint>{2, GL_UNSIGNED_INT_VEC2, 1}));
-        EXPECT_EQ(PropsOf(p, GL_TRANSFORM_FEEDBACK_VARYING, "e", props),
-                  (std::vector<GLint>{2, GL_FLOAT_VEC3, 2}));
+        EXPECT_EQ(PropsOf(p, GL_TRANSFORM_FEEDBACK_VARYING, "e", props), (std::vector<GLint>{2, GL_FLOAT_VEC3, 2}));
         EXPECT_EQ(TakeError(), GL_NO_ERROR);
     }
 
@@ -1447,7 +1446,8 @@ void main(void) {
         EXPECT_EQ(Interfaceiv(p, GL_TRANSFORM_FEEDBACK_VARYING, GL_MAX_NAME_LENGTH), 19);
 
         std::vector<std::string> names;
-        for (GLuint i = 0; i < 11; ++i) names.push_back(ResourceName(p, GL_TRANSFORM_FEEDBACK_VARYING, i));
+        for (GLuint i = 0; i < 11; ++i)
+            names.push_back(ResourceName(p, GL_TRANSFORM_FEEDBACK_VARYING, i));
         const auto indexOf = [&names](const std::string& name) -> GLuint {
             for (GLuint i = 0; i < names.size(); ++i) {
                 if (names[i] == name) return i;
@@ -1608,17 +1608,16 @@ void main() {
         // A non-fragment stage's outputs are varyings: no color number, so no color index.
         EXPECT_EQ(PropsOf(p, GL_PROGRAM_OUTPUT, "gl_Position", {GL_LOCATION_INDEX}), (std::vector<GLint>{-1}));
 
-        const std::vector<GLenum> stageProps = {
-            GL_NAME_LENGTH,
-            GL_TYPE,
-            GL_ARRAY_SIZE,
-            GL_REFERENCED_BY_COMPUTE_SHADER,
-            GL_REFERENCED_BY_FRAGMENT_SHADER,
-            GL_REFERENCED_BY_GEOMETRY_SHADER,
-            GL_REFERENCED_BY_TESS_CONTROL_SHADER,
-            GL_REFERENCED_BY_TESS_EVALUATION_SHADER,
-            GL_REFERENCED_BY_VERTEX_SHADER,
-            GL_IS_PER_PATCH};
+        const std::vector<GLenum> stageProps = {GL_NAME_LENGTH,
+                                                GL_TYPE,
+                                                GL_ARRAY_SIZE,
+                                                GL_REFERENCED_BY_COMPUTE_SHADER,
+                                                GL_REFERENCED_BY_FRAGMENT_SHADER,
+                                                GL_REFERENCED_BY_GEOMETRY_SHADER,
+                                                GL_REFERENCED_BY_TESS_CONTROL_SHADER,
+                                                GL_REFERENCED_BY_TESS_EVALUATION_SHADER,
+                                                GL_REFERENCED_BY_VERTEX_SHADER,
+                                                GL_IS_PER_PATCH};
         EXPECT_EQ(PropsOf(p, GL_PROGRAM_INPUT, "gl_PerVertex.gl_Position", stageProps),
                   (std::vector<GLint>{25, GL_FLOAT_VEC4, 1, 0, 0, 1, 0, 0, 0, 0}));
         EXPECT_EQ(PropsOf(p, GL_PROGRAM_OUTPUT, "gl_Position", stageProps),
@@ -1937,9 +1936,9 @@ void main() { color = u + v; }
         ASSERT_NE(neverLinked, 0u);
         ClearErrors();
 
-        for (const GLenum pname : {GL_ACTIVE_ATTRIBUTES, GL_ACTIVE_ATTRIBUTE_MAX_LENGTH, GL_ACTIVE_UNIFORMS,
-                                   GL_ACTIVE_UNIFORM_MAX_LENGTH, GL_ACTIVE_UNIFORM_BLOCKS,
-                                   GL_ACTIVE_ATOMIC_COUNTER_BUFFERS}) {
+        for (const GLenum pname :
+             {GL_ACTIVE_ATTRIBUTES, GL_ACTIVE_ATTRIBUTE_MAX_LENGTH, GL_ACTIVE_UNIFORMS, GL_ACTIVE_UNIFORM_MAX_LENGTH,
+              GL_ACTIVE_UNIFORM_BLOCKS, GL_ACTIVE_ATOMIC_COUNTER_BUFFERS}) {
             GLint value = -1;
             GetProgramiv(neverLinked, pname, &value);
             ClearErrors();
@@ -1967,8 +1966,8 @@ void main() { color = u + v; }
         GetProgramiv(brokenSource, GL_COMPUTE_WORK_GROUP_SIZE, localSize);
         const GLenum computeError = TakeError();
         ClearErrors();
-        EXPECT_TRUE(computeError == GL_INVALID_OPERATION || (localSize[0] == 0 && localSize[1] == 0 &&
-                                                             localSize[2] == 0))
+        EXPECT_TRUE(computeError == GL_INVALID_OPERATION ||
+                    (localSize[0] == 0 && localSize[1] == 0 && localSize[2] == 0))
             << "either the query is refused, or it answers the initial value - never both untouched "
                "and unreported";
     }
@@ -1998,8 +1997,8 @@ void main() { color = u + v; }
         const GLenum compatibleSubroutinesProp = GL_COMPATIBLE_SUBROUTINES;
         const GLenum notAProp = GL_TEXTURE_2D;
 
-        const auto lengthAfter = [&](GLuint program, GLenum iface, GLuint index, GLsizei propCount,
-                                     const GLenum* props, GLsizei bufSize, GLint* out) {
+        const auto lengthAfter = [&](GLuint program, GLenum iface, GLuint index, GLsizei propCount, const GLenum* props,
+                                     GLsizei bufSize, GLint* out) {
             GLsizei length = kPoison;
             GetProgramResourceiv(program, iface, index, propCount, props, bufSize, &length, out);
             ClearErrors();

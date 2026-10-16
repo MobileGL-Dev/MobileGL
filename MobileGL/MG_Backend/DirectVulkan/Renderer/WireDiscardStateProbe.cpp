@@ -45,15 +45,22 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             VkFence fence = VK_NULL_HANDLE;
 
             void Destroy() {
-                for (VkPipeline pipeline : pipelines) vkDestroyPipeline(device, pipeline, nullptr);
-                for (VkShaderModule module : modules) vkDestroyShaderModule(device, module, nullptr);
+                for (VkPipeline pipeline : pipelines)
+                    vkDestroyPipeline(device, pipeline, nullptr);
+                for (VkShaderModule module : modules)
+                    vkDestroyShaderModule(device, module, nullptr);
                 vkDestroyPipelineLayout(device, pipelineLayout, nullptr);
-                for (VkFramebuffer framebuffer : framebuffers) vkDestroyFramebuffer(device, framebuffer, nullptr);
+                for (VkFramebuffer framebuffer : framebuffers)
+                    vkDestroyFramebuffer(device, framebuffer, nullptr);
                 vkDestroyRenderPass(device, pass, nullptr);
-                for (VkImageView view : views) vkDestroyImageView(device, view, nullptr);
-                for (VkImage image : images) vkDestroyImage(device, image, nullptr);
-                for (VkBuffer buffer : buffers) vkDestroyBuffer(device, buffer, nullptr);
-                for (VkDeviceMemory memory : memories) vkFreeMemory(device, memory, nullptr);
+                for (VkImageView view : views)
+                    vkDestroyImageView(device, view, nullptr);
+                for (VkImage image : images)
+                    vkDestroyImage(device, image, nullptr);
+                for (VkBuffer buffer : buffers)
+                    vkDestroyBuffer(device, buffer, nullptr);
+                for (VkDeviceMemory memory : memories)
+                    vkFreeMemory(device, memory, nullptr);
                 vkDestroyCommandPool(device, commandPool, nullptr);
                 vkDestroyFence(device, fence, nullptr);
             }
@@ -106,8 +113,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 PickMemoryType(memoryProperties, requirements.memoryTypeBits, wanted, required);
             if (!type) return false;
             if (coherent)
-                *coherent = (memoryProperties.memoryTypes[*type].propertyFlags &
-                             VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) != 0;
+                *coherent =
+                    (memoryProperties.memoryTypes[*type].propertyFlags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) != 0;
             VkMemoryAllocateInfo info{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
             info.allocationSize = requirements.size;
             info.memoryTypeIndex = *type;
@@ -242,7 +249,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
             stages[1].module = fragment;
             VkPipelineVertexInputStateCreateInfo vertexInput{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
-            VkPipelineInputAssemblyStateCreateInfo assembly{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
+            VkPipelineInputAssemblyStateCreateInfo assembly{
+                VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
             assembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP;
             VkPipelineViewportStateCreateInfo viewportState{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
             viewportState.viewportCount = viewportState.scissorCount = 1;
@@ -378,8 +386,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         PFN_vkGetInstanceProcAddr getInstanceProcAddr, VkInstance instance, VkPhysicalDevice physicalDevice,
         Uint32 graphicsQueueFamilyIndex) {
         WireDiscardStateProbeMeasurement measurement;
-        const auto createDevice =
-            reinterpret_cast<PFN_vkCreateDevice>(getInstanceProcAddr(instance, "vkCreateDevice"));
+        const auto createDevice = reinterpret_cast<PFN_vkCreateDevice>(getInstanceProcAddr(instance, "vkCreateDevice"));
         if (createDevice == nullptr) {
             measurement.failureReason = "no vkCreateDevice";
             return measurement;

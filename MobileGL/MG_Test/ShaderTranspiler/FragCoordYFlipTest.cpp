@@ -29,8 +29,8 @@ namespace {
         using namespace MG_Util::ShaderTranspiler;
         Vector<SharedPtr<glslang::TShader>> shaders;
         Vector<GLenum> types;
-        for (const auto& [stage, source] : Vector<Pair<GLenum, const char*>>{{GL_VERTEX_SHADER, vertex},
-                                                                           {GL_FRAGMENT_SHADER, fragment}}) {
+        for (const auto& [stage, source] :
+             Vector<Pair<GLenum, const char*>>{{GL_VERTEX_SHADER, vertex}, {GL_FRAGMENT_SHADER, fragment}}) {
             ShaderAttrib attrib{.shaderType = stage, .sourceStr = source};
             auto shader = ShaderCompiler::CompileShader(attrib);
             EXPECT_TRUE(shader) << (shader ? String{} : shader.error().log);
@@ -63,8 +63,9 @@ namespace {
     String ValidationError(const Vector<Uint32>& spirv) {
         spvtools::SpirvTools tools(SPV_ENV_VULKAN_1_1);
         String error;
-        tools.SetMessageConsumer([&](spv_message_level_t, const char*, const spv_position_t&,
-                                     const char* message) { error += message != nullptr ? message : ""; });
+        tools.SetMessageConsumer([&](spv_message_level_t, const char*, const spv_position_t&, const char* message) {
+            error += message != nullptr ? message : "";
+        });
         return tools.Validate(spirv) ? String{} : (error.empty() ? String{"invalid"} : error);
     }
 
@@ -125,8 +126,7 @@ TEST(ClipControlTransformFlags, OriginTogglesTheFlipAndDepthModeDropsTheRemap) {
     EXPECT_EQ(apply(fbo, GL_LOWER_LEFT, GL_NEGATIVE_ONE_TO_ONE), fbo);
     EXPECT_EQ(apply(window, GL_LOWER_LEFT, GL_NEGATIVE_ONE_TO_ONE), window);
     EXPECT_EQ(apply(fbo, GL_UPPER_LEFT, GL_NEGATIVE_ONE_TO_ONE), fbo | static_cast<Uint32>(Bit::PositionYFlip));
-    EXPECT_EQ(apply(window, GL_UPPER_LEFT, GL_NEGATIVE_ONE_TO_ONE),
-              window & ~static_cast<Uint32>(Bit::PositionYFlip));
+    EXPECT_EQ(apply(window, GL_UPPER_LEFT, GL_NEGATIVE_ONE_TO_ONE), window & ~static_cast<Uint32>(Bit::PositionYFlip));
     EXPECT_EQ(apply(fbo, GL_LOWER_LEFT, GL_ZERO_TO_ONE), 0u);
     EXPECT_EQ(apply(window, GL_UPPER_LEFT, GL_ZERO_TO_ONE),
               static_cast<Uint32>(Bit::FragCoordYFlip) | static_cast<Uint32>(Bit::SurfaceRotate90));

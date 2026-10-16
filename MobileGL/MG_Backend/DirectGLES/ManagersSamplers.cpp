@@ -51,9 +51,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             m_backendSamplerId = 0;
         }
 
-        void BackendSamplerObject::SyncToBackend(
-            const SharedPtr<MG_State::GLState::SamplerObject>& stateSamplerObject,
-            MG_Pipe::MGPipeHandle pushedCso) {
+        void BackendSamplerObject::SyncToBackend(const SharedPtr<MG_State::GLState::SamplerObject>& stateSamplerObject,
+                                                 MG_Pipe::MGPipeHandle pushedCso) {
 #ifdef TRACY_ENABLE
             ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
@@ -64,8 +63,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // not the pre-P4a error. Everything below that names the object is guarded on
                 // it; the pull build's text is the three lines the #if brackets.
                 if (MG_Pipe::MGPipeHandleIsNull(pushedCso)) {
-                MGLOG_E_ONCE("State sampler object is null, cannot sync to backend.");
-                return;
+                    MGLOG_E_ONCE("State sampler object is null, cannot sync to backend.");
+                    return;
                 }
             }
 
@@ -107,8 +106,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     return;
                 }
                 if (m_isInitialized && m_syncedSamplerSerial != 0 && m_syncedSamplerSerial == record->Serial) {
-                    MGLOG_D("Sampler parameters have not changed for sampler ID: %u, skipping sync.",
-                            samplerName);
+                    MGLOG_D("Sampler parameters have not changed for sampler ID: %u, skipping sync.", samplerName);
                     return;
                 }
                 m_syncedSamplerSerial = record->Serial;
@@ -133,10 +131,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
             if (m_cacheSamplerParameters.minFilter != samplerParams.minFilter ||
                 m_cacheSamplerParameters.mipmapMode != samplerParams.mipmapMode) {
-                g_GLESFuncs.glSamplerParameteri(m_backendSamplerId, GL_TEXTURE_MIN_FILTER,
-                                                (GLint)ResolveBackendMinFilter(
-                                                    samplerParams,
-                                                    ShouldAvoidSamplerMipmapMinFilterOnAngleLlvmpipe()));
+                g_GLESFuncs.glSamplerParameteri(
+                    m_backendSamplerId, GL_TEXTURE_MIN_FILTER,
+                    (GLint)ResolveBackendMinFilter(samplerParams, ShouldAvoidSamplerMipmapMinFilterOnAngleLlvmpipe()));
                 m_cacheSamplerParameters.minFilter = samplerParams.minFilter;
                 m_cacheSamplerParameters.mipmapMode = samplerParams.mipmapMode;
             }
@@ -176,8 +173,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // glSamplerParameterIiv/Iuiv or an integer sampler reads the float's bit pattern
                 // back instead of the value.
                 if (g_GLESCapabilities.SupportsTextureBorderClamp) {
-                    if (samplerParams.borderColorForm == BorderColorForm::Int &&
-                        g_GLESFuncs.glSamplerParameterIiv) {
+                    if (samplerParams.borderColorForm == BorderColorForm::Int && g_GLESFuncs.glSamplerParameterIiv) {
                         const GLint borderColorArray[4] = {
                             samplerParams.borderColorI.x(), samplerParams.borderColorI.y(),
                             samplerParams.borderColorI.z(), samplerParams.borderColorI.w()};
@@ -192,10 +188,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                                            borderColorArray);
                     } else if (g_GLESFuncs.glSamplerParameterfv) {
                         const GLfloat borderColorArray[4] = {
-                            samplerParams.borderColor.x(), samplerParams.borderColor.y(),
-                            samplerParams.borderColor.z(), samplerParams.borderColor.w()};
-                        g_GLESFuncs.glSamplerParameterfv(m_backendSamplerId, GL_TEXTURE_BORDER_COLOR,
-                                                         borderColorArray);
+                            samplerParams.borderColor.x(), samplerParams.borderColor.y(), samplerParams.borderColor.z(),
+                            samplerParams.borderColor.w()};
+                        g_GLESFuncs.glSamplerParameterfv(m_backendSamplerId, GL_TEXTURE_BORDER_COLOR, borderColorArray);
                     }
                 }
                 m_cacheSamplerParameters.borderColor = samplerParams.borderColor;
@@ -232,7 +227,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
 
         Array<BackendSamplerObject*, MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS> g_boundSamplersCache;
-        TwinRegistry<MG_State::GLState::SamplerObject, BackendSamplerObject, MG_Pipe::MGPipeKind::SamplerCso> g_backendSamplerObjects;
+        TwinRegistry<MG_State::GLState::SamplerObject, BackendSamplerObject, MG_Pipe::MGPipeKind::SamplerCso>
+            g_backendSamplerObjects;
 
         // P4a fable seam F-4. THE TWIN FOR A CONTENT-ADDRESSED SamplerCso HANDLE, keyed by that
         // handle and synced from its record - see the declaration for why the identity-keyed

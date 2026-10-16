@@ -47,9 +47,9 @@ namespace {
         ::setenv("MOBILEGL_IPC_ROLE", "server", 1);
         ::setenv("MOBILEGL_IPC_DIAL", "no", 1);
         ::setenv("MOBILEGL_IPC_ADOPT_TIER", adoptTier, 1);
-        for (const char* name : {"MOBILEGL_TRANSPORT", "MOBILEGL_IPC_SERVER_PATH", "MOBILEGL_IPC_RING_MB",
-                                 "MOBILEGL_IPC_STAGE_MB", "MOBILEGL_IPC_CONTROL", "MOBILEGL_IPC_SURFACE",
-                                 "MOBILEGL_BACKEND_TYPE"})
+        for (const char* name :
+             {"MOBILEGL_TRANSPORT", "MOBILEGL_IPC_SERVER_PATH", "MOBILEGL_IPC_RING_MB", "MOBILEGL_IPC_STAGE_MB",
+              "MOBILEGL_IPC_CONTROL", "MOBILEGL_IPC_SURFACE", "MOBILEGL_BACKEND_TYPE"})
             ::unsetenv(name);
         sigset_t stop;
         sigemptyset(&stop);
@@ -77,8 +77,8 @@ namespace {
     // this process exports for the forks): a peer writes the lines the server forwards into
     // `<its base>.server.log`, opened "w", so sharing one base truncates the server's own file under
     // it (measured: NUL holes and the handshake's lines gone).
-    bool LaunchInProcessServerWithAdoptTier(const std::string& label, const char* adoptTier, const std::string& peerBase,
-                                            ServerProcess* server) {
+    bool LaunchInProcessServerWithAdoptTier(const std::string& label, const char* adoptTier,
+                                            const std::string& peerBase, ServerProcess* server) {
         server->logBase = "/tmp/mgl-p11-" + label + "-server-" + std::to_string(::getpid()) + ".log";
         ::setenv("MOBILEGL_LOG_FILE_PATH", peerBase.c_str(), 1);
         Debug::TruncateRoleLogs(peerBase.c_str());
@@ -136,18 +136,21 @@ TEST(AdoptTierStream, AClientNamingT0OrT1IsRefusedOnceAndItsMapPersistentIsDecli
     ASSERT_TRUE(LaunchSupervisor("adopt-client", &server)) << server.Log();
     for (Uint32 tier : {0u, 1u}) {
         SCOPED_TRACE(tier);
-        const PeerReport r = RunPeer(server.endpoint, MapPersistentThenARecord, /*stopCleanly=*/true, 30000, 0,
-                                     nullptr, [tier] { MG_Config::Ipc.AdoptTier = tier; });
+        const PeerReport r = RunPeer(server.endpoint, MapPersistentThenARecord, /*stopCleanly=*/true, 30000, 0, nullptr,
+                                     [tier] { MG_Config::Ipc.AdoptTier = tier; });
         const std::string client = ClientLog(server);
         ASSERT_EQ(r.started, 1) << "the session did not come up: " << r.note << "\n" << client;
         EXPECT_EQ(r.status, Remote::Wire::ReplySink::kStatusDeclined)
-            << "map_persistent was not DECLINED on a stream session\n" << client;
+            << "map_persistent was not DECLINED on a stream session\n"
+            << client;
         EXPECT_EQ(r.applied, 1) << "the session stopped applying after the map_persistent\n" << client;
         EXPECT_EQ(Count(client, RefusalLine(tier)), 1u)
-            << "a stream session names T" << tier << " exactly once, at the handshake\n" << client;
+            << "a stream session names T" << tier << " exactly once, at the handshake\n"
+            << client;
         EXPECT_EQ(Count(client, "Fatal{"), 0u) << client;
         EXPECT_EQ(Count(server.Log(), "AdoptTierOnStream"), 0u)
-            << "the server's own knob is 2; the line is the client's\n" << server.Log();
+            << "the server's own knob is 2; the line is the client's\n"
+            << server.Log();
     }
 }
 
@@ -187,15 +190,16 @@ TEST(AdoptTierStream, AServerNamingT0RefusesOncePerSessionAndServesT2) {
     const auto serverLog = [&server] { return Debug::ReadRoleLogs(server.logBase.c_str()); };
     for (Uint32 session = 1; session <= 2; ++session) {
         SCOPED_TRACE(session);
-        const PeerReport r = RunPeer(server.endpoint, MapPersistentThenARecord, /*stopCleanly=*/true, 30000, 0,
-                                     nullptr, [] { MG_Config::Ipc.AdoptTier = 2u; });
+        const PeerReport r = RunPeer(server.endpoint, MapPersistentThenARecord, /*stopCleanly=*/true, 30000, 0, nullptr,
+                                     [] { MG_Config::Ipc.AdoptTier = 2u; });
         const std::string client = ReadFile(Debug::RoleLogPath(peerBase.c_str(), Debug::LogRole::Client));
         ASSERT_EQ(r.started, 1) << r.note << "\n" << serverLog();
         EXPECT_EQ(r.status, Remote::Wire::ReplySink::kStatusDeclined) << serverLog();
         EXPECT_EQ(r.applied, 1) << serverLog();
         EXPECT_EQ(Count(client, "AdoptTierOnStream"), 0u) << "the client's knob is 2\n" << client;
         EXPECT_EQ(Count(serverLog(), RefusalLine(0)), session)
-            << "one refusal line per server session, at its handshake\n" << serverLog();
+            << "one refusal line per server session, at its handshake\n"
+            << serverLog();
     }
     EXPECT_EQ(Count(serverLog(), "Fatal{UnimplementedAdoptTier"), 0u) << serverLog();
     if (!::testing::Test::HasFailure()) {

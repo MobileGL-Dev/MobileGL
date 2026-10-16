@@ -18,14 +18,18 @@ namespace {
 
     int DetachResult(ServerWindowDetach result) {
         switch (result) {
-        case ServerWindowDetach::NoWindow: return MOBILEGL_SERVER_WINDOW_NO_WINDOW;
-        case ServerWindowDetach::Released: return MOBILEGL_SERVER_WINDOW_RELEASED;
-        case ServerWindowDetach::ReleasedBySession: return MOBILEGL_SERVER_WINDOW_RELEASED_BY_SESSION;
-        case ServerWindowDetach::TimedOut: return MOBILEGL_SERVER_WINDOW_TIMED_OUT;
+        case ServerWindowDetach::NoWindow:
+            return MOBILEGL_SERVER_WINDOW_NO_WINDOW;
+        case ServerWindowDetach::Released:
+            return MOBILEGL_SERVER_WINDOW_RELEASED;
+        case ServerWindowDetach::ReleasedBySession:
+            return MOBILEGL_SERVER_WINDOW_RELEASED_BY_SESSION;
+        case ServerWindowDetach::TimedOut:
+            return MOBILEGL_SERVER_WINDOW_TIMED_OUT;
         }
         return MOBILEGL_SERVER_WINDOW_TIMED_OUT;
     }
-}
+} // namespace
 
 extern "C" int mobilegl_server_display_install(const struct mobilegl_server_display_hooks* hooks) {
     if (hooks == nullptr || hooks->acquire == nullptr || hooks->release == nullptr)
@@ -45,8 +49,8 @@ extern "C" int mobilegl_server_display_install(const struct mobilegl_server_disp
 extern "C" int mobilegl_server_display_install_android(mobilegl_server_geometry_callback request_geometry, void* user) {
 #if defined(__ANDROID__)
     const auto androidHooks = AndroidNativeWindowHooks(request_geometry, user);
-    const mobilegl_server_display_hooks hooks{androidHooks.acquire, androidHooks.release,
-                                             androidHooks.requestGeometry, androidHooks.user};
+    const mobilegl_server_display_hooks hooks{androidHooks.acquire, androidHooks.release, androidHooks.requestGeometry,
+                                              androidHooks.user};
     return mobilegl_server_display_install(&hooks);
 #else
     (void)request_geometry;

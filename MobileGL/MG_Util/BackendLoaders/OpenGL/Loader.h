@@ -614,11 +614,9 @@ namespace MobileGL {
             // suffixed spellings instead, and a strict eglGetProcAddress returns NULL for the core
             // one there - so resolving only the core name makes both extension tiers look absent.
             GL_FUNC_TYPEDEF(void, glTextureViewEXT, GLuint texture, GLenum target, GLuint origtexture,
-                            GLenum internalformat, GLuint minlevel, GLuint numlevels, GLuint minlayer,
-                            GLuint numlayers)
+                            GLenum internalformat, GLuint minlevel, GLuint numlevels, GLuint minlayer, GLuint numlayers)
             GL_FUNC_TYPEDEF(void, glTextureViewOES, GLuint texture, GLenum target, GLuint origtexture,
-                            GLenum internalformat, GLuint minlevel, GLuint numlevels, GLuint minlayer,
-                            GLuint numlayers)
+                            GLenum internalformat, GLuint minlevel, GLuint numlevels, GLuint minlayer, GLuint numlayers)
             // GL_EXT_fragment_shading_rate (+ _attachment). Extension-only in every ES version.
             GL_FUNC_TYPEDEF(void, glShadingRateEXT, GLenum rate)
             GL_FUNC_TYPEDEF(void, glShadingRateCombinerOpsEXT, GLenum combinerOp0, GLenum combinerOp1)
@@ -1165,8 +1163,8 @@ namespace MobileGL {
             // neither cannot compile such a shader at all. Gate on this, never on the entry point:
             // eglGetProcAddress hands back live-looking stubs (see AcquireGLESFunctions).
             enum class TextureBufferTier : Uint8 {
-                None = 0,  // no core support and neither extension; glTexBuffer is unusable
-                CoreEs32,  // ES >= 3.2, buffer textures are core and ESSL 320 needs no directive
+                None = 0,     // no core support and neither extension; glTexBuffer is unusable
+                CoreEs32,     // ES >= 3.2, buffer textures are core and ESSL 320 needs no directive
                 ExtensionEXT, // GL_EXT_texture_buffer; ESSL below 320 must say GL_EXT_texture_buffer
                 ExtensionOES, // GL_OES_texture_buffer; ESSL below 320 must say GL_OES_texture_buffer
             };
@@ -1457,8 +1455,8 @@ namespace MobileGL {
         // caller presents with plain eglSwapBuffers, which a zero-rectangle call to either
         // spelling is defined to be equivalent to anyway. Exposed so MG_Test can pin the
         // preference order without a driver.
-        MG_External::EGL::eglSwapBuffersWithDamageEXT_PTR
-        ResolveSwapBuffersWithDamage(const MG_External::EGLFunctionsTable& funcs);
+        MG_External::EGL::eglSwapBuffersWithDamageEXT_PTR ResolveSwapBuffersWithDamage(
+            const MG_External::EGLFunctionsTable& funcs);
         Bool FillInGLESCapabilities(MG_External::GLESCapabilities& caps,
                                     const MG_External::GLESFunctionsTable& glesFuncs);
         // Detects whether indirect draws leak the command's baseInstance word into

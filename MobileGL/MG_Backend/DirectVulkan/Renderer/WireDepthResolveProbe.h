@@ -69,9 +69,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                              VkImageAspectFlags aspect, VkPipeline* pipeline);
     // Records the draw: the render area and the scissor are `rect`, the viewport is the WHOLE
     // attachment (gl_FragCoord is what the fragment stage fetches by), one triangle.
-    void RecordWireShaderResolveDraw(VkCommandBuffer commandBuffer, const WireShaderResolveKit& kit,
-                                     VkRenderPass pass, VkPipeline pipeline, VkFramebuffer framebuffer,
-                                     VkDescriptorSet descriptorSet, VkExtent2D attachmentExtent, VkRect2D rect);
+    void RecordWireShaderResolveDraw(VkCommandBuffer commandBuffer, const WireShaderResolveKit& kit, VkRenderPass pass,
+                                     VkPipeline pipeline, VkFramebuffer framebuffer, VkDescriptorSet descriptorSet,
+                                     VkExtent2D attachmentExtent, VkRect2D rect);
 
     // What the probe runs on. The device must have been created with VK_KHR_create_renderpass2 and
     // VK_KHR_depth_stencil_resolve (or Vulkan 1.2 core), and with VK_EXT_shader_stencil_export where

@@ -53,895 +53,913 @@
 #endif
 
 namespace {
-using namespace MobileGL::MG_Remote;
-using namespace MobileGL::MG_Remote::Transport;
-namespace Protocol = ::MobileGL::Wire;
+    using namespace MobileGL::MG_Remote;
+    using namespace MobileGL::MG_Remote::Transport;
+    namespace Protocol = ::MobileGL::Wire;
 
-void Refuse(SocketTransport& transport, Protocol::RefuseCode code, const char* detail) {
-    flatbuffers::FlatBufferBuilder builder(256);
-    auto refusal = Protocol::CreateRefuseDirect(builder, code, detail);
-    auto envelope = Protocol::CreateCtrlEnvelope(builder, Protocol::CtrlMsg::Refuse, refusal.Union());
-    Protocol::FinishCtrlEnvelopeBuffer(builder, envelope);
-    transport.SendFrame({builder.GetBufferPointer(), builder.GetSize()});
-    WireLogError("MG_Remote server: Refuse{%s} %s", Protocol::EnumNameRefuseCode(code), detail);
-}
-
-// P9 W3. The log forward's unblock hook (LogForward.h, Close): the channel's sender is still inside a
-// write to a client that has not read for the whole close budget, at the end of the session. Cutting
-// the control socket is what returns that write (EPIPE) so the thread can be joined - the session is
-// over by then (every caller is on RunSession's way out), and the socket is closed right after anyway.
-// Not through SocketTransport::Shutdown: that takes the send mutex the blocked write holds.
-void UnblockControlSend(void* user) {
-    const int fd = static_cast<SocketTransport*>(user)->StreamFd();
-    if (fd >= 0) (void)::shutdown(fd, SHUT_RDWR);
-}
-
-// The forward's counters, once, into the server's OWN log - the forwarder is already gone by the time
-// they are final, so this line is local; what the client saw of the same story is the in-stream
-// LogForward{Dropped} / {Coalesced} lines at each gap. WARN when anything was lost, delayed past a
-// deadline or cut, so it survives a production build; otherwise a D line.
-void LogForwardSummary(const Transport::LogForwardCounters& counters) {
-    const bool eventful = counters.lossyDropped != 0 || counters.errorsCoalesced != 0 || counters.abandoned != 0 ||
-                          counters.fatalFlushTimeouts != 0 || counters.transportFailed;
-    if (eventful) {
-        MGLOG_W("MG_Remote server: log forwarding ended - forwarded=%llu dropped(<=WARN)=%llu (%llu bytes) "
-                "coalesced(ERROR)=%llu paced(ERROR)=%llu notices=%llu abandoned=%llu fatal-flush-timeouts=%llu "
-                "transport-failed=%d max-offer-us=%llu",
-                static_cast<unsigned long long>(counters.forwarded),
-                static_cast<unsigned long long>(counters.lossyDropped),
-                static_cast<unsigned long long>(counters.lossyDroppedBytes),
-                static_cast<unsigned long long>(counters.errorsCoalesced),
-                static_cast<unsigned long long>(counters.errorsPaced),
-                static_cast<unsigned long long>(counters.notices),
-                static_cast<unsigned long long>(counters.abandoned),
-                static_cast<unsigned long long>(counters.fatalFlushTimeouts), counters.transportFailed ? 1 : 0,
-                static_cast<unsigned long long>(counters.maxOfferNs / 1000));
-    } else {
-        MGLOG_D("MG_Remote server: log forwarding ended - forwarded=%llu paced(ERROR)=%llu max-offer-us=%llu",
-                static_cast<unsigned long long>(counters.forwarded),
-                static_cast<unsigned long long>(counters.errorsPaced),
-                static_cast<unsigned long long>(counters.maxOfferNs / 1000));
+    void Refuse(SocketTransport& transport, Protocol::RefuseCode code, const char* detail) {
+        flatbuffers::FlatBufferBuilder builder(256);
+        auto refusal = Protocol::CreateRefuseDirect(builder, code, detail);
+        auto envelope = Protocol::CreateCtrlEnvelope(builder, Protocol::CtrlMsg::Refuse, refusal.Union());
+        Protocol::FinishCtrlEnvelopeBuffer(builder, envelope);
+        transport.SendFrame({builder.GetBufferPointer(), builder.GetSize()});
+        WireLogError("MG_Remote server: Refuse{%s} %s", Protocol::EnumNameRefuseCode(code), detail);
     }
-}
 
-// p7/spawnhang. THE PROGRESS REPORT: Wire::SurfaceProgress, sent by the thread that posted the op
-// - RunSession's control pump, waiting in ServerApplyWireSurfaceOp - after each
-// ServerLoop::kControlProgressIntervalMs that mgl-srv-apply has spent running it
-// (ServerLoop::SetControlProgressSink). The client's reply budget restarts on each one, so a cold
-// native bring-up that outruns MOBILEGL_IPC_COLD_START_MS is waited for instead of being reported
-// ALIVE BUT SILENT (retrace-split run 35912252677). A send failure is left to the reply's send,
-// which already ends the session on it.
-void SendSurfaceProgress(void* user, Server::SurfaceControlOp, std::uint64_t seq, std::uint32_t elapsedMs) {
-    auto& transport = *static_cast<SocketTransport*>(user);
-    flatbuffers::FlatBufferBuilder builder(64);
-    auto progress = Protocol::CreateSurfaceProgress(builder, seq, elapsedMs);
-    auto envelope = Protocol::CreateCtrlEnvelope(builder, Protocol::CtrlMsg::SurfaceProgress, progress.Union());
-    Protocol::FinishCtrlEnvelopeBuffer(builder, envelope);
-    (void)transport.SendFrame({builder.GetBufferPointer(), builder.GetSize()});
-}
-
-void RefuseBusy(SocketTransport& transport, const char* detail) {
-    // Unread Hello bytes can make close send RST and discard our Refuse.
-    std::uint64_t bytes = 0;
-    if (transport.ReceiveFrame({nullptr, 0}, &bytes, 2000) == MOBILEGL_ERR_BUFFER_TOO_SMALL &&
-        bytes <= 1024 * 1024) {
-        std::vector<std::uint8_t> hello(static_cast<std::size_t>(bytes));
-        (void)transport.ReceiveFrame({hello.data(), hello.size()}, &bytes, 0);
+    // P9 W3. The log forward's unblock hook (LogForward.h, Close): the channel's sender is still inside a
+    // write to a client that has not read for the whole close budget, at the end of the session. Cutting
+    // the control socket is what returns that write (EPIPE) so the thread can be joined - the session is
+    // over by then (every caller is on RunSession's way out), and the socket is closed right after anyway.
+    // Not through SocketTransport::Shutdown: that takes the send mutex the blocked write holds.
+    void UnblockControlSend(void* user) {
+        const int fd = static_cast<SocketTransport*>(user)->StreamFd();
+        if (fd >= 0) (void)::shutdown(fd, SHUT_RDWR);
     }
-    Refuse(transport, Protocol::RefuseCode::Busy, detail);
-}
 
-// P11 B1 (CONTRACT-P11 B1): HOW LONG A PAIRED UNIX SESSION WAITS FOR ITS HELLO - FOR EVER; ITS END
-// IS THE PEER'S EOF. The pair's identity is settled before this wait (PairAcceptor paired the two
-// connections by the nonce each presented), and a unix endpoint is reachable only by this user / this
-// app (SELinux on Android, 0600 on a path). Since B1 the server app's broker presents the PairBinds at
-// hand-off, the moment it connects, while the program it is for may still be loading - a Termux program
-// can spend many seconds on its assets before its first EGL call sends the Hello. The old 10 s (the
-// same budget as TCP's pre-auth) refused such a program by name; there is no bound here that is long
-// enough for every program, so there is none: a program that exits (or closes the descriptors) ends
-// the wait with EOF ("control peer closed before sending a first frame"), and while it lives it holds
-// the one session slot, as a rendering session would. TCP keeps its pre-auth deadline (PreAuthKnobs),
-// and the in-process display server keeps 10 s (its stop waits for the session thread).
-constexpr std::uint32_t kPairedUnixHelloWaitMs = Transport::kWaitForever;
-
-// The single-session TCP shape's wait for its data connection's DataBind (ListenerSource).
-constexpr std::uint32_t kFirstFrameWaitMs = 2000;
-constexpr std::uint64_t kFirstFrameMaxBytes = Server::kPreAuthFirstFrameMaxBytes;
-// The one detail both ends of the hand-off use for a data connection the live session will not
-// take: the supervisor when the send fails, and the child for the ones queued before it closed
-// its end (CloseHandoffRefusingQueued).
-constexpr const char* kHandoffRefused = "data connection could not be handed to the live session";
-
-// Whatever the peer has already sent, read and dropped (non-blocking, at most 1 MiB), so a close
-// with bytes still unread does not become an RST that discards the refusal in flight - the
-// reason RefuseBusy reads the Hello before refusing.
-void DrainUnread(int fd) {
-    char sink[4096];
-    for (int rounds = 0; rounds < 256; ++rounds) {
-        if (::recv(fd, sink, sizeof(sink), MSG_DONTWAIT) <= 0) return;
+    // The forward's counters, once, into the server's OWN log - the forwarder is already gone by the time
+    // they are final, so this line is local; what the client saw of the same story is the in-stream
+    // LogForward{Dropped} / {Coalesced} lines at each gap. WARN when anything was lost, delayed past a
+    // deadline or cut, so it survives a production build; otherwise a D line.
+    void LogForwardSummary(const Transport::LogForwardCounters& counters) {
+        const bool eventful = counters.lossyDropped != 0 || counters.errorsCoalesced != 0 || counters.abandoned != 0 ||
+                              counters.fatalFlushTimeouts != 0 || counters.transportFailed;
+        if (eventful) {
+            MGLOG_W("MG_Remote server: log forwarding ended - forwarded=%llu dropped(<=WARN)=%llu (%llu bytes) "
+                    "coalesced(ERROR)=%llu paced(ERROR)=%llu notices=%llu abandoned=%llu fatal-flush-timeouts=%llu "
+                    "transport-failed=%d max-offer-us=%llu",
+                    static_cast<unsigned long long>(counters.forwarded),
+                    static_cast<unsigned long long>(counters.lossyDropped),
+                    static_cast<unsigned long long>(counters.lossyDroppedBytes),
+                    static_cast<unsigned long long>(counters.errorsCoalesced),
+                    static_cast<unsigned long long>(counters.errorsPaced),
+                    static_cast<unsigned long long>(counters.notices),
+                    static_cast<unsigned long long>(counters.abandoned),
+                    static_cast<unsigned long long>(counters.fatalFlushTimeouts), counters.transportFailed ? 1 : 0,
+                    static_cast<unsigned long long>(counters.maxOfferNs / 1000));
+        } else {
+            MGLOG_D("MG_Remote server: log forwarding ended - forwarded=%llu paced(ERROR)=%llu max-offer-us=%llu",
+                    static_cast<unsigned long long>(counters.forwarded),
+                    static_cast<unsigned long long>(counters.errorsPaced),
+                    static_cast<unsigned long long>(counters.maxOfferNs / 1000));
+        }
     }
-}
 
-// Refuses a connection the supervisor still holds as a bare descriptor, and closes it.
-void RefuseAndClose(int fd, Protocol::RefuseCode code, const char* detail) {
-    SocketTransport connection(fd, -1, TransportRole::Server);
-    DrainUnread(fd);
-    Refuse(connection, code, detail);
-}
+    // p7/spawnhang. THE PROGRESS REPORT: Wire::SurfaceProgress, sent by the thread that posted the op
+    // - RunSession's control pump, waiting in ServerApplyWireSurfaceOp - after each
+    // ServerLoop::kControlProgressIntervalMs that mgl-srv-apply has spent running it
+    // (ServerLoop::SetControlProgressSink). The client's reply budget restarts on each one, so a cold
+    // native bring-up that outruns MOBILEGL_IPC_COLD_START_MS is waited for instead of being reported
+    // ALIVE BUT SILENT (retrace-split run 35912252677). A send failure is left to the reply's send,
+    // which already ends the session on it.
+    void SendSurfaceProgress(void* user, Server::SurfaceControlOp, std::uint64_t seq, std::uint32_t elapsedMs) {
+        auto& transport = *static_cast<SocketTransport*>(user);
+        flatbuffers::FlatBufferBuilder builder(64);
+        auto progress = Protocol::CreateSurfaceProgress(builder, seq, elapsedMs);
+        auto envelope = Protocol::CreateCtrlEnvelope(builder, Protocol::CtrlMsg::SurfaceProgress, progress.Union());
+        Protocol::FinishCtrlEnvelopeBuffer(builder, envelope);
+        (void)transport.SendFrame({builder.GetBufferPointer(), builder.GetSize()});
+    }
 
-// The numeric address of a TCP peer, without its port: the backoff's key. A peer whose address
-// cannot be read is keyed "?", so it is still counted, just not on its own.
-std::string PeerAddress(int fd) {
-    sockaddr_storage address{};
-    socklen_t size = sizeof(address);
-    if (::getpeername(fd, reinterpret_cast<sockaddr*>(&address), &size) != 0) return "?";
-    char text[INET6_ADDRSTRLEN] = {};
-    const void* raw = nullptr;
-    if (address.ss_family == AF_INET) raw = &reinterpret_cast<const sockaddr_in*>(&address)->sin_addr;
-    else if (address.ss_family == AF_INET6) raw = &reinterpret_cast<const sockaddr_in6*>(&address)->sin6_addr;
-    if (raw == nullptr || ::inet_ntop(address.ss_family, raw, text, sizeof(text)) == nullptr) return "?";
-    return text;
-}
+    void RefuseBusy(SocketTransport& transport, const char* detail) {
+        // Unread Hello bytes can make close send RST and discard our Refuse.
+        std::uint64_t bytes = 0;
+        if (transport.ReceiveFrame({nullptr, 0}, &bytes, 2000) == MOBILEGL_ERR_BUFFER_TOO_SMALL &&
+            bytes <= 1024 * 1024) {
+            std::vector<std::uint8_t> hello(static_cast<std::size_t>(bytes));
+            (void)transport.ReceiveFrame({hello.data(), hello.size()}, &bytes, 0);
+        }
+        Refuse(transport, Protocol::RefuseCode::Busy, detail);
+    }
 
-// True when the control peer has closed (EOF or error); false while it is open, readable or not.
-bool ControlPeerGone(int controlFd) {
-    char byte = 0;
-    const auto peeked = ::recv(controlFd, &byte, 1, MSG_PEEK | MSG_DONTWAIT);
-    return peeked == 0 || (peeked < 0 && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR);
-}
+    // P11 B1 (CONTRACT-P11 B1): HOW LONG A PAIRED UNIX SESSION WAITS FOR ITS HELLO - FOR EVER; ITS END
+    // IS THE PEER'S EOF. The pair's identity is settled before this wait (PairAcceptor paired the two
+    // connections by the nonce each presented), and a unix endpoint is reachable only by this user / this
+    // app (SELinux on Android, 0600 on a path). Since B1 the server app's broker presents the PairBinds at
+    // hand-off, the moment it connects, while the program it is for may still be loading - a Termux program
+    // can spend many seconds on its assets before its first EGL call sends the Hello. The old 10 s (the
+    // same budget as TCP's pre-auth) refused such a program by name; there is no bound here that is long
+    // enough for every program, so there is none: a program that exits (or closes the descriptors) ends
+    // the wait with EOF ("control peer closed before sending a first frame"), and while it lives it holds
+    // the one session slot, as a rendering session would. TCP keeps its pre-auth deadline (PreAuthKnobs),
+    // and the in-process display server keeps 10 s (its stop waits for the session thread).
+    constexpr std::uint32_t kPairedUnixHelloWaitMs = Transport::kWaitForever;
 
-// The session child's source: descriptors the supervisor forwarded, each with the nonce its
-// DataBind presented. Watching the control connection too, so a client that went away after
-// Welcome ends the wait at once instead of holding the supervisor Busy for the whole deadline.
-Server::ServerSession::DataConnectionSource HandoffSource(int handoff, int controlFd) {
-    return [handoff, controlFd](std::uint32_t timeoutMs, int* outFd, std::uint8_t* outNonce) -> MobileGLResult {
-        pollfd fds[2] = {{handoff, POLLIN, 0}, {controlFd, POLLIN, 0}};
-        // A control connection with bytes waiting is not a hang-up and must not spin this loop:
-        // after the first look it is only asked again once per slice.
-        const int rc = ::poll(fds, 2, static_cast<int>(std::min<std::uint32_t>(timeoutMs, 50)));
-        if (rc < 0) return errno == EINTR ? MOBILEGL_ERR_TIMEOUT : MOBILEGL_ERR_TRANSPORT_CLOSED;
-        if ((fds[1].revents & (POLLIN | POLLHUP | POLLERR)) != 0 && ControlPeerGone(controlFd))
-            return MOBILEGL_ERR_TRANSPORT_CLOSED;
-        if ((fds[0].revents & (POLLIN | POLLHUP | POLLERR)) == 0) {
-            if ((fds[1].revents & POLLIN) != 0) {
-                pollfd only{handoff, POLLIN, 0};
-                if (::poll(&only, 1, static_cast<int>(std::min<std::uint32_t>(timeoutMs, 50))) <= 0)
+    // The single-session TCP shape's wait for its data connection's DataBind (ListenerSource).
+    constexpr std::uint32_t kFirstFrameWaitMs = 2000;
+    constexpr std::uint64_t kFirstFrameMaxBytes = Server::kPreAuthFirstFrameMaxBytes;
+    // The one detail both ends of the hand-off use for a data connection the live session will not
+    // take: the supervisor when the send fails, and the child for the ones queued before it closed
+    // its end (CloseHandoffRefusingQueued).
+    constexpr const char* kHandoffRefused = "data connection could not be handed to the live session";
+
+    // Whatever the peer has already sent, read and dropped (non-blocking, at most 1 MiB), so a close
+    // with bytes still unread does not become an RST that discards the refusal in flight - the
+    // reason RefuseBusy reads the Hello before refusing.
+    void DrainUnread(int fd) {
+        char sink[4096];
+        for (int rounds = 0; rounds < 256; ++rounds) {
+            if (::recv(fd, sink, sizeof(sink), MSG_DONTWAIT) <= 0) return;
+        }
+    }
+
+    // Refuses a connection the supervisor still holds as a bare descriptor, and closes it.
+    void RefuseAndClose(int fd, Protocol::RefuseCode code, const char* detail) {
+        SocketTransport connection(fd, -1, TransportRole::Server);
+        DrainUnread(fd);
+        Refuse(connection, code, detail);
+    }
+
+    // The numeric address of a TCP peer, without its port: the backoff's key. A peer whose address
+    // cannot be read is keyed "?", so it is still counted, just not on its own.
+    std::string PeerAddress(int fd) {
+        sockaddr_storage address{};
+        socklen_t size = sizeof(address);
+        if (::getpeername(fd, reinterpret_cast<sockaddr*>(&address), &size) != 0) return "?";
+        char text[INET6_ADDRSTRLEN] = {};
+        const void* raw = nullptr;
+        if (address.ss_family == AF_INET)
+            raw = &reinterpret_cast<const sockaddr_in*>(&address)->sin_addr;
+        else if (address.ss_family == AF_INET6)
+            raw = &reinterpret_cast<const sockaddr_in6*>(&address)->sin6_addr;
+        if (raw == nullptr || ::inet_ntop(address.ss_family, raw, text, sizeof(text)) == nullptr) return "?";
+        return text;
+    }
+
+    // True when the control peer has closed (EOF or error); false while it is open, readable or not.
+    bool ControlPeerGone(int controlFd) {
+        char byte = 0;
+        const auto peeked = ::recv(controlFd, &byte, 1, MSG_PEEK | MSG_DONTWAIT);
+        return peeked == 0 || (peeked < 0 && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR);
+    }
+
+    // The session child's source: descriptors the supervisor forwarded, each with the nonce its
+    // DataBind presented. Watching the control connection too, so a client that went away after
+    // Welcome ends the wait at once instead of holding the supervisor Busy for the whole deadline.
+    Server::ServerSession::DataConnectionSource HandoffSource(int handoff, int controlFd) {
+        return [handoff, controlFd](std::uint32_t timeoutMs, int* outFd, std::uint8_t* outNonce) -> MobileGLResult {
+            pollfd fds[2] = {{handoff, POLLIN, 0}, {controlFd, POLLIN, 0}};
+            // A control connection with bytes waiting is not a hang-up and must not spin this loop:
+            // after the first look it is only asked again once per slice.
+            const int rc = ::poll(fds, 2, static_cast<int>(std::min<std::uint32_t>(timeoutMs, 50)));
+            if (rc < 0) return errno == EINTR ? MOBILEGL_ERR_TIMEOUT : MOBILEGL_ERR_TRANSPORT_CLOSED;
+            if ((fds[1].revents & (POLLIN | POLLHUP | POLLERR)) != 0 && ControlPeerGone(controlFd))
+                return MOBILEGL_ERR_TRANSPORT_CLOSED;
+            if ((fds[0].revents & (POLLIN | POLLHUP | POLLERR)) == 0) {
+                if ((fds[1].revents & POLLIN) != 0) {
+                    pollfd only{handoff, POLLIN, 0};
+                    if (::poll(&only, 1, static_cast<int>(std::min<std::uint32_t>(timeoutMs, 50))) <= 0)
+                        return MOBILEGL_ERR_TIMEOUT;
+                } else {
                     return MOBILEGL_ERR_TIMEOUT;
-            } else {
+                }
+            }
+            std::uint8_t sideband[FdPassing::kMaxSidebandBytes] = {};
+            std::uint64_t size = 0;
+            const auto received =
+                FdPassing::ReceiveFd(handoff, outFd, MobileGLMutableByteSpan{sideband, sizeof(sideband)}, &size, 0);
+            if (received != MOBILEGL_OK) return received;
+            // The supervisor always sends exactly the presented nonce; a short sideband compares as
+            // zeros, which no minted nonce is going to equal by accident.
+            std::memcpy(outNonce, sideband, kDataNonceBytes);
+            return MOBILEGL_OK;
+        };
+    }
+
+    // The single-session (no --serve) source: this process still owns the listener, so it accepts
+    // the data connection itself and reads its DataBind the same way the supervisor would.
+    Server::ServerSession::DataConnectionSource ListenerSource(int listener, int controlFd) {
+        return [listener, controlFd](std::uint32_t timeoutMs, int* outFd, std::uint8_t* outNonce) -> MobileGLResult {
+            if (ControlPeerGone(controlFd)) return MOBILEGL_ERR_TRANSPORT_CLOSED;
+            int fd = -1;
+            const auto accepted = SocketTransport::AcceptOne(listener, std::min<std::uint32_t>(timeoutMs, 250), &fd);
+            if (accepted != MOBILEGL_OK) return accepted;
+            std::vector<std::uint8_t> frame;
+            std::uint8_t presented[kDataNonceBytes] = {};
+            const auto read = SocketTransport::ReceiveOneFrame(fd, kFirstFrameWaitMs, kFirstFrameMaxBytes, &frame);
+            if (read != MOBILEGL_OK || !DecodeDataBind(frame, presented)) {
+                SocketTransport stray(fd, -1, TransportRole::Server);
+                Refuse(stray, Protocol::RefuseCode::Authentication, "data connection's first frame is not a DataBind");
                 return MOBILEGL_ERR_TIMEOUT;
             }
-        }
-        std::uint8_t sideband[FdPassing::kMaxSidebandBytes] = {};
-        std::uint64_t size = 0;
-        const auto received = FdPassing::ReceiveFd(handoff, outFd, MobileGLMutableByteSpan{sideband, sizeof(sideband)},
-                                                   &size, 0);
-        if (received != MOBILEGL_OK) return received;
-        // The supervisor always sends exactly the presented nonce; a short sideband compares as
-        // zeros, which no minted nonce is going to equal by accident.
-        std::memcpy(outNonce, sideband, kDataNonceBytes);
-        return MOBILEGL_OK;
-    };
-}
-
-// The single-session (no --serve) source: this process still owns the listener, so it accepts
-// the data connection itself and reads its DataBind the same way the supervisor would.
-Server::ServerSession::DataConnectionSource ListenerSource(int listener, int controlFd) {
-    return [listener, controlFd](std::uint32_t timeoutMs, int* outFd, std::uint8_t* outNonce) -> MobileGLResult {
-        if (ControlPeerGone(controlFd)) return MOBILEGL_ERR_TRANSPORT_CLOSED;
-        int fd = -1;
-        const auto accepted = SocketTransport::AcceptOne(listener, std::min<std::uint32_t>(timeoutMs, 250), &fd);
-        if (accepted != MOBILEGL_OK) return accepted;
-        std::vector<std::uint8_t> frame;
-        std::uint8_t presented[kDataNonceBytes] = {};
-        const auto read = SocketTransport::ReceiveOneFrame(fd, kFirstFrameWaitMs, kFirstFrameMaxBytes, &frame);
-        if (read != MOBILEGL_OK || !DecodeDataBind(frame, presented)) {
-            SocketTransport stray(fd, -1, TransportRole::Server);
-            Refuse(stray, Protocol::RefuseCode::Authentication, "data connection's first frame is not a DataBind");
-            return MOBILEGL_ERR_TIMEOUT;
-        }
-        std::memcpy(outNonce, presented, kDataNonceBytes);
-        *outFd = fd;
-        return MOBILEGL_OK;
-    };
-}
-
-// `forward` is the session's log forward when there is one (P9 W3). The ack then goes out THROUGH it,
-// queued behind every line forwarded before the flush, because a forwarded line is no longer on the
-// wire when its MGLOG returns - sending the ack directly could overtake lines still queued, and
-// MGPipeSyncPeerLog's promise is that they are in the client's file when the ack arrives.
-struct FlushAck { ITransport* transport; Transport::LogForwardChannel* forward; std::uint64_t seq; };
-void SendLogAck(void* pointer) {
-    auto& ack = *static_cast<FlushAck*>(pointer);
-    flatbuffers::FlatBufferBuilder builder(64);
-    auto flush = Protocol::CreateLogFlush(builder, ack.seq, true);
-    auto envelope = Protocol::CreateCtrlEnvelope(builder, Protocol::CtrlMsg::LogFlush, flush.Union());
-    Protocol::FinishCtrlEnvelopeBuffer(builder, envelope);
-    if (ack.forward != nullptr) {
-        ack.forward->OfferControlFrame(
-            std::vector<std::uint8_t>(builder.GetBufferPointer(), builder.GetBufferPointer() + builder.GetSize()));
-        return;
+            std::memcpy(outNonce, presented, kDataNonceBytes);
+            *outFd = fd;
+            return MOBILEGL_OK;
+        };
     }
-    (void)ack.transport->SendFrame({builder.GetBufferPointer(), builder.GetSize()});
-}
 
-// What `sourceFd` is, so RunSession knows how to let go of it (ID-P7-44).
-enum class DataSource { None, Handoff, Listener };
-
-// ID-P7-44. THE HAND-OFF CLOSES WITHOUT A WINDOW.
-//
-// The F fix round closed the child's end of the hand-off the moment Accept returned, so that a
-// DataBind arriving after the session bound fails to send and the supervisor refuses it by name.
-// Between BindDataConnection taking the matching descriptor and that close, though, the
-// supervisor could still queue one more - and a close with datagrams queued drops their
-// descriptors in the kernel: the peer saw its connection end with no frame at all. So the end is
-// cut for reading FIRST (after shutdown(SHUT_RD) every further sendmsg to it fails with EPIPE, which
-// FdPassing reports as "peer gone" and the supervisor answers by name), and then whatever was
-// queued before the cut is received here and refused with the supervisor's own words. No
-// DataBind can be in neither place - on the way out after Accept here, and on every way out
-// before it through ExitBeforeAccept below; only a crashed child still drops them.
-void CloseHandoffRefusingQueued(int handoff) {
-    (void)::shutdown(handoff, SHUT_RD);
-    for (;;) {
-        int fd = -1;
-        std::uint8_t sideband[FdPassing::kMaxSidebandBytes] = {};
-        std::uint64_t size = 0;
-        if (FdPassing::ReceiveFd(handoff, &fd, MobileGLMutableByteSpan{sideband, sizeof(sideband)}, &size, 0) !=
-                MOBILEGL_OK ||
-            fd < 0)
-            break;
-        RefuseAndClose(fd, Protocol::RefuseCode::Authentication, kHandoffRefused);
+    // `forward` is the session's log forward when there is one (P9 W3). The ack then goes out THROUGH it,
+    // queued behind every line forwarded before the flush, because a forwarded line is no longer on the
+    // wire when its MGLOG returns - sending the ack directly could overtake lines still queued, and
+    // MGPipeSyncPeerLog's promise is that they are in the client's file when the ack arrives.
+    struct FlushAck {
+        ITransport* transport;
+        Transport::LogForwardChannel* forward;
+        std::uint64_t seq;
+    };
+    void SendLogAck(void* pointer) {
+        auto& ack = *static_cast<FlushAck*>(pointer);
+        flatbuffers::FlatBufferBuilder builder(64);
+        auto flush = Protocol::CreateLogFlush(builder, ack.seq, true);
+        auto envelope = Protocol::CreateCtrlEnvelope(builder, Protocol::CtrlMsg::LogFlush, flush.Union());
+        Protocol::FinishCtrlEnvelopeBuffer(builder, envelope);
+        if (ack.forward != nullptr) {
+            ack.forward->OfferControlFrame(
+                std::vector<std::uint8_t>(builder.GetBufferPointer(), builder.GetBufferPointer() + builder.GetSize()));
+            return;
+        }
+        (void)ack.transport->SendFrame({builder.GetBufferPointer(), builder.GetSize()});
     }
-    ::close(handoff);
-}
 
-// ID-P7-44, f2-auth fix round. EVERY WAY OUT OF A SESSION CHILD BEFORE ACCEPT LETS GO OF THE
-// HAND-OFF THE WAY THE WAY OUT AFTER IT DOES. The supervisor forwards DataBinds to a child from the
-// moment it forks it, so a child that refused its Hello at ValidatePeerHandshake, refused its
-// backend, or could not bring one up used to `_exit` with DataBinds queued on the hand-off - and an
-// exit drops queued descriptors exactly as a close does: those peers saw their connections end
-// with no frame. On any other source (the single-session listener, the unix endpoint's none) there
-// is nothing queued to refuse, and this is the `fflush` + `_exit` it replaces.
-//
-// P12 (D5): RunSession RETURNS its exit code now instead of `_exit`ing, so the in-process display
-// server can run one session after another on a thread. This is the part of the old
-// ExitBeforeAccept that belongs to the session; the `fflush` + `_exit` belong to the process and
-// moved to the fork sites, which are `ExitSessionProcess(RunSession(...))` - the forked shapes end
-// exactly as before.
-int LeaveBeforeAccept(int sourceFd, DataSource sourceKind, int code) {
-    if (sourceFd >= 0 && sourceKind == DataSource::Handoff) CloseHandoffRefusingQueued(sourceFd);
-    return code;
-}
+    // What `sourceFd` is, so RunSession knows how to let go of it (ID-P7-44).
+    enum class DataSource {
+        None,
+        Handoff,
+        Listener
+    };
 
-// P12 (D5). A forked session child (and the single-session shapes, whose process IS the session)
-// ends here, with RunSession's code, exactly as RunSession's own `_exit`s used to end it.
-[[noreturn]] void ExitSessionProcess(int code) {
-    std::fflush(nullptr);
-    ::_exit(code);
-}
+    // ID-P7-44. THE HAND-OFF CLOSES WITHOUT A WINDOW.
+    //
+    // The F fix round closed the child's end of the hand-off the moment Accept returned, so that a
+    // DataBind arriving after the session bound fails to send and the supervisor refuses it by name.
+    // Between BindDataConnection taking the matching descriptor and that close, though, the
+    // supervisor could still queue one more - and a close with datagrams queued drops their
+    // descriptors in the kernel: the peer saw its connection end with no frame at all. So the end is
+    // cut for reading FIRST (after shutdown(SHUT_RD) every further sendmsg to it fails with EPIPE, which
+    // FdPassing reports as "peer gone" and the supervisor answers by name), and then whatever was
+    // queued before the cut is received here and refused with the supervisor's own words. No
+    // DataBind can be in neither place - on the way out after Accept here, and on every way out
+    // before it through ExitBeforeAccept below; only a crashed child still drops them.
+    void CloseHandoffRefusingQueued(int handoff) {
+        (void)::shutdown(handoff, SHUT_RD);
+        for (;;) {
+            int fd = -1;
+            std::uint8_t sideband[FdPassing::kMaxSidebandBytes] = {};
+            std::uint64_t size = 0;
+            if (FdPassing::ReceiveFd(handoff, &fd, MobileGLMutableByteSpan{sideband, sizeof(sideband)}, &size, 0) !=
+                    MOBILEGL_OK ||
+                fd < 0)
+                break;
+            RefuseAndClose(fd, Protocol::RefuseCode::Authentication, kHandoffRefused);
+        }
+        ::close(handoff);
+    }
 
-// P12 (D8). A FORKED SESSION CHILD DIES WITH ITS SUPERVISOR. The child used to outlive a supervisor
-// that was killed (MobileGLServerService.onDestroy destroys only the supervisor), holding its client
-// and its GPU context until that client went away (docs/archive/notes/p65/code-review-findings.md:9). With the
-// parent-death signal the kernel SIGKILLs it the moment the supervisor goes - and the getppid()
-// check closes the race of a supervisor that died between fork() and the prctl. Linux (and Android)
-// only; the signal fires when the THREAD that forked exits, and both fork sites run on the
-// supervisor's main thread, which is the process.
-void DieWithSupervisor(pid_t supervisor) {
+    // ID-P7-44, f2-auth fix round. EVERY WAY OUT OF A SESSION CHILD BEFORE ACCEPT LETS GO OF THE
+    // HAND-OFF THE WAY THE WAY OUT AFTER IT DOES. The supervisor forwards DataBinds to a child from the
+    // moment it forks it, so a child that refused its Hello at ValidatePeerHandshake, refused its
+    // backend, or could not bring one up used to `_exit` with DataBinds queued on the hand-off - and an
+    // exit drops queued descriptors exactly as a close does: those peers saw their connections end
+    // with no frame. On any other source (the single-session listener, the unix endpoint's none) there
+    // is nothing queued to refuse, and this is the `fflush` + `_exit` it replaces.
+    //
+    // P12 (D5): RunSession RETURNS its exit code now instead of `_exit`ing, so the in-process display
+    // server can run one session after another on a thread. This is the part of the old
+    // ExitBeforeAccept that belongs to the session; the `fflush` + `_exit` belong to the process and
+    // moved to the fork sites, which are `ExitSessionProcess(RunSession(...))` - the forked shapes end
+    // exactly as before.
+    int LeaveBeforeAccept(int sourceFd, DataSource sourceKind, int code) {
+        if (sourceFd >= 0 && sourceKind == DataSource::Handoff) CloseHandoffRefusingQueued(sourceFd);
+        return code;
+    }
+
+    // P12 (D5). A forked session child (and the single-session shapes, whose process IS the session)
+    // ends here, with RunSession's code, exactly as RunSession's own `_exit`s used to end it.
+    [[noreturn]] void ExitSessionProcess(int code) {
+        std::fflush(nullptr);
+        ::_exit(code);
+    }
+
+    // P12 (D8). A FORKED SESSION CHILD DIES WITH ITS SUPERVISOR. The child used to outlive a supervisor
+    // that was killed (MobileGLServerService.onDestroy destroys only the supervisor), holding its client
+    // and its GPU context until that client went away (docs/archive/notes/p65/code-review-findings.md:9). With the
+    // parent-death signal the kernel SIGKILLs it the moment the supervisor goes - and the getppid()
+    // check closes the race of a supervisor that died between fork() and the prctl. Linux (and Android)
+    // only; the signal fires when the THREAD that forked exits, and both fork sites run on the
+    // supervisor's main thread, which is the process.
+    void DieWithSupervisor(pid_t supervisor) {
 #if defined(__linux__)
-    (void)::prctl(PR_SET_PDEATHSIG, SIGKILL);
-    if (::getppid() != supervisor) ::_exit(0);
+        (void)::prctl(PR_SET_PDEATHSIG, SIGKILL);
+        if (::getppid() != supervisor) ::_exit(0);
 #else
-    (void)supervisor;
+        (void)supervisor;
 #endif
-}
+    }
 
-// P12 (D5): THE IN-PROCESS DISPLAY SERVER'S PROCESS-WIDE STATE. One server per process, sessions
-// one at a time (TcpSupervisor's thread hand-off). `g_inProcessStop` is raised by
-// mobilegl_server_stop_inprocess and read by the supervisor's loop and by a live session's control
-// loop; `g_inProcessBackendPin` is the backend the first session chose when no MOBILEGL_BACKEND_TYPE
-// pins one - Espryt and Magma never share a process (BenchService.java's rule), so a later session
-// asking for the other is refused like a pinned-backend mismatch.
-std::atomic<bool> g_inProcessServing{false};
-std::atomic<bool> g_inProcessStop{false};
-std::atomic<int> g_inProcessBackendPin{-1};
+    // P12 (D5): THE IN-PROCESS DISPLAY SERVER'S PROCESS-WIDE STATE. One server per process, sessions
+    // one at a time (TcpSupervisor's thread hand-off). `g_inProcessStop` is raised by
+    // mobilegl_server_stop_inprocess and read by the supervisor's loop and by a live session's control
+    // loop; `g_inProcessBackendPin` is the backend the first session chose when no MOBILEGL_BACKEND_TYPE
+    // pins one - Espryt and Magma never share a process (BenchService.java's rule), so a later session
+    // asking for the other is refused like a pinned-backend mismatch.
+    std::atomic<bool> g_inProcessServing{false};
+    std::atomic<bool> g_inProcessStop{false};
+    std::atomic<int> g_inProcessBackendPin{-1};
 
-// A TEST-ONLY lever (f2-auth fix round, ID-P7-44): MOBILEGL_TEST_DELAY_SESSION_HANDSHAKE_MS holds a
-// session child for that many milliseconds before it looks at its Hello, so a control can queue
-// DataBinds on the hand-off of a child that is about to refuse that Hello - a window of
-// microseconds otherwise. Like MOBILEGL_TEST_DELAY_FIRST_CAPS_MS (ServerSession.cpp) it exists only
-// in the disaggregated server, does nothing unless set, and says so when it is.
-void DelaySessionHandshakeForTest() {
-    const char* text = std::getenv("MOBILEGL_TEST_DELAY_SESSION_HANDSHAKE_MS");
-    if (text == nullptr || text[0] == 0) return;
-    const long ms = std::strtol(text, nullptr, 10);
-    if (ms <= 0) return;
-    WireLogError("MG_Remote server: pid=%d MOBILEGL_TEST_DELAY_SESSION_HANDSHAKE_MS=%ld - this session child "
-                 "waits that long before its handshake. A test-only lever; never set it in a measured run",
-                 static_cast<int>(::getpid()), ms);
-    std::this_thread::sleep_for(std::chrono::milliseconds(std::min<long>(ms, 60000)));
-}
+    // A TEST-ONLY lever (f2-auth fix round, ID-P7-44): MOBILEGL_TEST_DELAY_SESSION_HANDSHAKE_MS holds a
+    // session child for that many milliseconds before it looks at its Hello, so a control can queue
+    // DataBinds on the hand-off of a child that is about to refuse that Hello - a window of
+    // microseconds otherwise. Like MOBILEGL_TEST_DELAY_FIRST_CAPS_MS (ServerSession.cpp) it exists only
+    // in the disaggregated server, does nothing unless set, and says so when it is.
+    void DelaySessionHandshakeForTest() {
+        const char* text = std::getenv("MOBILEGL_TEST_DELAY_SESSION_HANDSHAKE_MS");
+        if (text == nullptr || text[0] == 0) return;
+        const long ms = std::strtol(text, nullptr, 10);
+        if (ms <= 0) return;
+        WireLogError("MG_Remote server: pid=%d MOBILEGL_TEST_DELAY_SESSION_HANDSHAKE_MS=%ld - this session child "
+                     "waits that long before its handshake. A test-only lever; never set it in a measured run",
+                     static_cast<int>(::getpid()), ms);
+        std::this_thread::sleep_for(std::chrono::milliseconds(std::min<long>(ms, 60000)));
+    }
 
-// Runs one served session; the supervisor never creates a backend or EGL context. `dataSource` is
-// set on TCP and empty on a unix endpoint, whose aux connection PairAcceptor already paired.
-// `sourceFd` (the hand-off socketpair end under --serve, the listener in the single-session shape,
-// or -1) is released when Accept returns and on every earlier exit (LeaveBeforeAccept).
-// `helloFrame` holds the first frame if the caller already read and authenticated it; otherwise it
-// is read here within `helloWaitMs`. Returns the session's exit code and never exits; with
-// `inProcess` (a session thread of the in-process display server) every way out cleans up by hand
-// what a process exit would, and the supervisor resets the latch between sessions.
-int RunSession(std::unique_ptr<SocketTransport> control, std::vector<std::uint8_t> helloFrame,
-               Server::ServerSession::DataConnectionSource dataSource, int sourceFd, DataSource sourceKind,
-               std::uint32_t helloWaitMs, bool inProcess = false) {
-    const int selfPid = static_cast<int>(::getpid());
-    const bool tcp = control->IsTcp();
-    if (helloFrame.empty()) {
-        // Every way this read can go wrong is the PEER's (silence, a stream that is not ours, a
-        // close), so each is answered by name where the peer is still there to read it and is a
-        // clean exit rather than a counted fault (PH-7 (5)).
-        std::uint64_t bytes = 0;
-        const auto received = control->ReceiveFrame({nullptr, 0}, &bytes, helloWaitMs);
-        if (received == MOBILEGL_ERR_TIMEOUT) {
-            Refuse(*control, Protocol::RefuseCode::Authentication, Server::kPreAuthDeadline);
-            return LeaveBeforeAccept(sourceFd, sourceKind, 0);
-        }
-        if (received == MOBILEGL_ERR_PROTOCOL_MISMATCH ||
-            (received == MOBILEGL_ERR_BUFFER_TOO_SMALL && bytes > Server::kPreAuthFirstFrameMaxBytes)) {
-            DrainUnread(control->StreamFd());
-            Refuse(*control, Protocol::RefuseCode::MalformedHello, Server::kFirstFrameNotAFrame);
-            return LeaveBeforeAccept(sourceFd, sourceKind, 0);
-        }
-        if (received == MOBILEGL_ERR_TRANSPORT_CLOSED) {
-            // Fix round: this used to be a bare `_exit(0)` whatever had arrived. A close INSIDE
-            // the frame is answered by name, as the TCP supervisor answers it (the peer may have
-            // closed only its write side); a close before any byte has nobody to answer, and the
-            // log says which of the two it was.
-            if (control->BufferedBytes() != 0)
-                Refuse(*control, Protocol::RefuseCode::MalformedHello, Server::kFirstFrameTruncated);
-            else
-                WireLogError("MG_Remote server: pid=%d control peer closed before sending a first frame", selfPid);
-            return LeaveBeforeAccept(sourceFd, sourceKind, 0);
-        }
-        if (received == MOBILEGL_ERR_BUFFER_TOO_SMALL) {
-            // The reassembler holds the whole frame already; this second call copies it out.
-            helloFrame.resize(static_cast<std::size_t>(bytes));
-            if (control->ReceiveFrame({helloFrame.data(), helloFrame.size()}, &bytes, 0) != MOBILEGL_OK) {
-                WireLogError("MG_Remote server: pid=%d first frame of %llu bytes could not be copied out", selfPid,
-                             static_cast<unsigned long long>(helloFrame.size()));
+    // Runs one served session; the supervisor never creates a backend or EGL context. `dataSource` is
+    // set on TCP and empty on a unix endpoint, whose aux connection PairAcceptor already paired.
+    // `sourceFd` (the hand-off socketpair end under --serve, the listener in the single-session shape,
+    // or -1) is released when Accept returns and on every earlier exit (LeaveBeforeAccept).
+    // `helloFrame` holds the first frame if the caller already read and authenticated it; otherwise it
+    // is read here within `helloWaitMs`. Returns the session's exit code and never exits; with
+    // `inProcess` (a session thread of the in-process display server) every way out cleans up by hand
+    // what a process exit would, and the supervisor resets the latch between sessions.
+    int RunSession(std::unique_ptr<SocketTransport> control, std::vector<std::uint8_t> helloFrame,
+                   Server::ServerSession::DataConnectionSource dataSource, int sourceFd, DataSource sourceKind,
+                   std::uint32_t helloWaitMs, bool inProcess = false) {
+        const int selfPid = static_cast<int>(::getpid());
+        const bool tcp = control->IsTcp();
+        if (helloFrame.empty()) {
+            // Every way this read can go wrong is the PEER's (silence, a stream that is not ours, a
+            // close), so each is answered by name where the peer is still there to read it and is a
+            // clean exit rather than a counted fault (PH-7 (5)).
+            std::uint64_t bytes = 0;
+            const auto received = control->ReceiveFrame({nullptr, 0}, &bytes, helloWaitMs);
+            if (received == MOBILEGL_ERR_TIMEOUT) {
+                Refuse(*control, Protocol::RefuseCode::Authentication, Server::kPreAuthDeadline);
                 return LeaveBeforeAccept(sourceFd, sourceKind, 0);
             }
-        } else if (received != MOBILEGL_OK) {
-            WireLogError("MG_Remote server: pid=%d first frame could not be read (rc=%d)", selfPid,
-                         static_cast<int>(received));
+            if (received == MOBILEGL_ERR_PROTOCOL_MISMATCH ||
+                (received == MOBILEGL_ERR_BUFFER_TOO_SMALL && bytes > Server::kPreAuthFirstFrameMaxBytes)) {
+                DrainUnread(control->StreamFd());
+                Refuse(*control, Protocol::RefuseCode::MalformedHello, Server::kFirstFrameNotAFrame);
+                return LeaveBeforeAccept(sourceFd, sourceKind, 0);
+            }
+            if (received == MOBILEGL_ERR_TRANSPORT_CLOSED) {
+                // Fix round: this used to be a bare `_exit(0)` whatever had arrived. A close INSIDE
+                // the frame is answered by name, as the TCP supervisor answers it (the peer may have
+                // closed only its write side); a close before any byte has nobody to answer, and the
+                // log says which of the two it was.
+                if (control->BufferedBytes() != 0)
+                    Refuse(*control, Protocol::RefuseCode::MalformedHello, Server::kFirstFrameTruncated);
+                else
+                    WireLogError("MG_Remote server: pid=%d control peer closed before sending a first frame", selfPid);
+                return LeaveBeforeAccept(sourceFd, sourceKind, 0);
+            }
+            if (received == MOBILEGL_ERR_BUFFER_TOO_SMALL) {
+                // The reassembler holds the whole frame already; this second call copies it out.
+                helloFrame.resize(static_cast<std::size_t>(bytes));
+                if (control->ReceiveFrame({helloFrame.data(), helloFrame.size()}, &bytes, 0) != MOBILEGL_OK) {
+                    WireLogError("MG_Remote server: pid=%d first frame of %llu bytes could not be copied out", selfPid,
+                                 static_cast<unsigned long long>(helloFrame.size()));
+                    return LeaveBeforeAccept(sourceFd, sourceKind, 0);
+                }
+            } else if (received != MOBILEGL_OK) {
+                WireLogError("MG_Remote server: pid=%d first frame could not be read (rc=%d)", selfPid,
+                             static_cast<int>(received));
+                return LeaveBeforeAccept(sourceFd, sourceKind, 0);
+            }
+            // MOBILEGL_OK with nothing copied is a ZERO-LENGTH frame. It was the one complete frame
+            // this read exited on without a word (fix round); `helloFrame` stays empty and the
+            // classification below names it, as the TCP supervisor's does ("no identifier").
+        }
+        DelaySessionHandshakeForTest();
+        // THE FIRST FRAME, CLASSIFIED BY THE SAME FUNCTION THE TCP SUPERVISOR USES (plan §1.1, fuzz
+        // arm 1 row: add CtrlEnvelopeBufferHasIdentifier to this first-frame read). The identifier is asked
+        // first, and every malformed shape is refused BY NAME - this read used to `_exit(67)` on all
+        // of them, so a peer that sent garbage got a bare close and the supervisor counted a fault.
+        const auto shape = Server::ClassifyFirstFrame(helloFrame.data(), helloFrame.size());
+        // PH-7 (4). A DataBind with no live session to join: the supervisor routes a data connection
+        // to a child only while one is live, so this is a stale connection (its session already
+        // ended) or one that never had a session. Refused by name, and the child is a clean exit -
+        // it is a refusal, not a fault. (On TCP --serve the supervisor answers this itself now; this
+        // arm is the single-session shape's.)
+        if (shape == Server::FirstFrameShape::DataBind) {
+            Refuse(*control, Protocol::RefuseCode::Authentication, "data connection names no live session");
             return LeaveBeforeAccept(sourceFd, sourceKind, 0);
         }
-        // MOBILEGL_OK with nothing copied is a ZERO-LENGTH frame. It was the one complete frame
-        // this read exited on without a word (fix round); `helloFrame` stays empty and the
-        // classification below names it, as the TCP supervisor's does ("no identifier").
-    }
-    DelaySessionHandshakeForTest();
-    // THE FIRST FRAME, CLASSIFIED BY THE SAME FUNCTION THE TCP SUPERVISOR USES (plan §1.1, fuzz
-    // arm 1 row: add CtrlEnvelopeBufferHasIdentifier to this first-frame read). The identifier is asked
-    // first, and every malformed shape is refused BY NAME - this read used to `_exit(67)` on all
-    // of them, so a peer that sent garbage got a bare close and the supervisor counted a fault.
-    const auto shape = Server::ClassifyFirstFrame(helloFrame.data(), helloFrame.size());
-    // PH-7 (4). A DataBind with no live session to join: the supervisor routes a data connection
-    // to a child only while one is live, so this is a stale connection (its session already
-    // ended) or one that never had a session. Refused by name, and the child is a clean exit -
-    // it is a refusal, not a fault. (On TCP --serve the supervisor answers this itself now; this
-    // arm is the single-session shape's.)
-    if (shape == Server::FirstFrameShape::DataBind) {
-        Refuse(*control, Protocol::RefuseCode::Authentication, "data connection names no live session");
-        return LeaveBeforeAccept(sourceFd, sourceKind, 0);
-    }
-    if (shape != Server::FirstFrameShape::Hello) {
-        Refuse(*control, Protocol::RefuseCode::MalformedHello, Server::FirstFrameRefusalDetail(shape));
-        return LeaveBeforeAccept(sourceFd, sourceKind, 0);
-    }
-    const auto* hello = Protocol::GetCtrlEnvelope(helloFrame.data())->msg_as_Hello();
-    // PH-7 (1). The SAME policy ServerSession::Accept applies, from Handshake.h, so the
-    // supervisor's pre-fork answer and the session's post-fork answer cannot drift. What went:
-    // a `std::string` comparison (byte-at-a-time, early-returning) that ALSO refused a peer for
-    // presenting a token to a server that had configured none, and a `tcp` guard that made the
-    // unix control socket exempt by construction rather than by the policy's own reasoning.
-    // RefuseHandshake logs `Refuse{Authentication}` and sends the peer the frame; the supervisor's
-    // local Refuse() helper stays for the refusals that are its own (Busy, backend).
-    //
-    // PH-7 (5) (ph-f.md §6.4 (b)): the token is asked FIRST. ValidatePeerHandshake used to run
-    // before it, so an unauthenticated peer with a wrong fingerprint was answered
-    // Refuse{WireFingerprint} carrying this build's wire fingerprint - and Refuse{BuildFingerprint}
-    // this build's stamp. An unauthenticated peer now learns only Refuse{Authentication}. On TCP
-    // --serve the supervisor has already asked (the answer is the same; it is asked again so this
-    // function holds the rule on its own for the unix and single-session shapes).
-    if (AuthenticatePeerToken(*control, hello->token()) != MOBILEGL_OK) return LeaveBeforeAccept(sourceFd, sourceKind, 0);
-    // Reject incompatible wire before backend bring-up can obscure the cause.
-    if (ValidatePeerHandshake(*control, hello->abiMajor(), hello->abiMinor(),
-            hello->wireFingerprint(), hello->buildFingerprint() ? hello->buildFingerprint()->c_str() : nullptr,
-            hello->dialMode()) != MOBILEGL_OK) return LeaveBeforeAccept(sourceFd, sourceKind, 0);
-    // ONCE PER PROCESS, NOT PER SESSION. The configuration is the process's environment, the same
-    // for every session it serves, and re-reading it is not a no-op: Init() rewrites the globals
-    // in place - Transport first falls back to Monolith before the line below puts Spawn back - so
-    // a second session accepted while the first is applying showed that session's apply thread a
-    // monolith process for a moment. It then skipped the server stamp on a draw and died on
-    // Fatal{UnmigratedPipeInput}, taking every session in the process with it.
-    static std::once_flag s_serverConfigured;
-    std::call_once(s_serverConfigured, [] {
-        MobileGL::MG_ConfigLoader::Init();
-        MobileGL::MG_Config::Transport = MobileGL::MG_Config::TransportMode::Spawn;
-        MobileGL::MG_Pipe::MGPipeSetServerProcessRole(true);
-    });
-    // A served session's process (or in-process thread) is the session, so a named fault on the
-    // peer's bytes may end it cleanly instead of aborting (FatalFunnel.h's latch); inproc keeps
-    // every Fatal, and the supervisor applies no record. SessionRuntime holds this session's
-    // session object, apply loop and PipeInputs block; the scope binds this thread's
-    // ServerSessionInstance(), ServerLoopInstance(), gPipeInputs, latch domain and segment
-    // resolver to it, so ArmSessionLatch arms this session's domain only. The apply thread opens
-    // the same scope first (ServerLoop::ApplyThreadMain).
-    auto runtime = std::make_unique<Server::SessionRuntime>();
-    Server::Detail::ThreadSessionScope threadScope(*runtime);
-    ArmSessionLatch();
-    // The child bypasses MobileGL::Initialize: arm its own role counters.
-    MobileGL::MG_Util::PipeStats::Init();
-    auto& session = runtime->Session();
-    auto& loop = runtime->Loop();
-    // P12 (D5): WHAT A PROCESS EXIT CLEANED UP FOR FREE, THE IN-PROCESS SHAPE CLEANS UP BY HAND,
-    // on every way out from here - so the next session in this process starts where a fresh
-    // session child would. A no-op for every forked / single-session shape: those `_exit` with the
-    // code, exactly as before.
-    bool backendBuilt = false;
-    bool acceptTried = false;
-    // P9 W3: the TCP session's log forward (LogForward.h), made where forwarding is switched on below.
-    // Declared up here because every way out has to take it down the same way: the logger stops
-    // calling it FIRST (so no line is offered to a channel being destroyed), then the channel drains
-    // within its close budget and its sender is joined, then its counters are said locally. Every
-    // shape, forked or not: a forked child's early return destroys the channel with this frame, and a
-    // forwarder left pointing at it would be a dangling pointer for however many lines remain.
-    std::unique_ptr<Transport::LogForwardChannel> logForward;
-    const auto stopLogForwarding = [&] {
-        MobileGL::MG_Util::Debug::SetLogForwarder(nullptr, nullptr);
-        if (!logForward) return;
-        const auto counters = logForward->Close();
-        logForward.reset();
-        LogForwardSummary(counters);
-    };
-    const auto endSession = [&](int code) -> int {
-        stopLogForwarding();
-        if (!inProcess) return code;
-        // Points at `control`, which dies with this frame (the log forwarder did too, above).
-        loop.SetControlProgressSink(nullptr, nullptr);
-        if (backendBuilt) {
-            // Stop() joins a running apply thread (it destroys the backend on it), or - never
-            // started - drops the backend here; either way the display lease goes with it.
-            if (g_inProcessStop.load(std::memory_order_acquire)) loop.AbandonQueuedRecords();
-            loop.Stop();
-            session.SetBackend(nullptr);
+        if (shape != Server::FirstFrameShape::Hello) {
+            Refuse(*control, Protocol::RefuseCode::MalformedHello, Server::FirstFrameRefusalDetail(shape));
+            return LeaveBeforeAccept(sourceFd, sourceKind, 0);
         }
-        if (acceptTried) session.Close();
-        MobileGL::MG_Util::PipeStats::Shutdown();
-        return code;
-    };
-    const auto backend = static_cast<MobileGL::BackendType>(hello->backendType());
-    if (backend != MobileGL::BackendType::DirectGLES && backend != MobileGL::BackendType::DirectVulkan) {
-        Refuse(*control, Protocol::RefuseCode::Backend, "unsupported Hello.backendType");
-        return endSession(LeaveBeforeAccept(sourceFd, sourceKind, 0));
-    }
-    const char* pinned = std::getenv("MOBILEGL_BACKEND_TYPE");
-    if (pinned && *pinned && backend != MobileGL::MG_Config::ActiveBackendType) {
-        Refuse(*control, Protocol::RefuseCode::Backend, "Hello.backendType disagrees with pinned backend");
-        return endSession(LeaveBeforeAccept(sourceFd, sourceKind, 0));
-    }
-    if (inProcess) {
-        // P12 (D5): THE BACKEND IS PINNED FOR THE PROCESS'S LIFETIME. With no MOBILEGL_BACKEND_TYPE
-        // the first session's backend becomes the pin: Espryt and Magma must never share a process
-        // (BenchService.java:12-17), and here every session shares this one. The refusal is the
-        // pinned-backend refusal above, word for word.
-        int pin = g_inProcessBackendPin.load(std::memory_order_acquire);
-        if (pin < 0 && g_inProcessBackendPin.compare_exchange_strong(pin, static_cast<int>(backend),
-                                                                     std::memory_order_acq_rel)) {
-            // Which pin it is, said as it is: the environment's (the display Activity's `backend`
-            // extra, already enforced by the refusal above) or the first session's.
-            WireLogError("MG_Remote server: pid=%d in-process display server pinned backend type %u for the "
-                         "process lifetime (%s)",
-                         selfPid, static_cast<unsigned>(backend),
-                         pinned && *pinned ? "MOBILEGL_BACKEND_TYPE" : "the first session's; MOBILEGL_BACKEND_TYPE unset");
-            pin = static_cast<int>(backend);
+        const auto* hello = Protocol::GetCtrlEnvelope(helloFrame.data())->msg_as_Hello();
+        // PH-7 (1). The SAME policy ServerSession::Accept applies, from Handshake.h, so the
+        // supervisor's pre-fork answer and the session's post-fork answer cannot drift. What went:
+        // a `std::string` comparison (byte-at-a-time, early-returning) that ALSO refused a peer for
+        // presenting a token to a server that had configured none, and a `tcp` guard that made the
+        // unix control socket exempt by construction rather than by the policy's own reasoning.
+        // RefuseHandshake logs `Refuse{Authentication}` and sends the peer the frame; the supervisor's
+        // local Refuse() helper stays for the refusals that are its own (Busy, backend).
+        //
+        // PH-7 (5) (ph-f.md §6.4 (b)): the token is asked FIRST. ValidatePeerHandshake used to run
+        // before it, so an unauthenticated peer with a wrong fingerprint was answered
+        // Refuse{WireFingerprint} carrying this build's wire fingerprint - and Refuse{BuildFingerprint}
+        // this build's stamp. An unauthenticated peer now learns only Refuse{Authentication}. On TCP
+        // --serve the supervisor has already asked (the answer is the same; it is asked again so this
+        // function holds the rule on its own for the unix and single-session shapes).
+        if (AuthenticatePeerToken(*control, hello->token()) != MOBILEGL_OK)
+            return LeaveBeforeAccept(sourceFd, sourceKind, 0);
+        // Reject incompatible wire before backend bring-up can obscure the cause.
+        if (ValidatePeerHandshake(*control, hello->abiMajor(), hello->abiMinor(), hello->wireFingerprint(),
+                                  hello->buildFingerprint() ? hello->buildFingerprint()->c_str() : nullptr,
+                                  hello->dialMode()) != MOBILEGL_OK)
+            return LeaveBeforeAccept(sourceFd, sourceKind, 0);
+        // ONCE PER PROCESS, NOT PER SESSION. The configuration is the process's environment, the same
+        // for every session it serves, and re-reading it is not a no-op: Init() rewrites the globals
+        // in place - Transport first falls back to Monolith before the line below puts Spawn back - so
+        // a second session accepted while the first is applying showed that session's apply thread a
+        // monolith process for a moment. It then skipped the server stamp on a draw and died on
+        // Fatal{UnmigratedPipeInput}, taking every session in the process with it.
+        static std::once_flag s_serverConfigured;
+        std::call_once(s_serverConfigured, [] {
+            MobileGL::MG_ConfigLoader::Init();
+            MobileGL::MG_Config::Transport = MobileGL::MG_Config::TransportMode::Spawn;
+            MobileGL::MG_Pipe::MGPipeSetServerProcessRole(true);
+        });
+        // A served session's process (or in-process thread) is the session, so a named fault on the
+        // peer's bytes may end it cleanly instead of aborting (FatalFunnel.h's latch); inproc keeps
+        // every Fatal, and the supervisor applies no record. SessionRuntime holds this session's
+        // session object, apply loop and PipeInputs block; the scope binds this thread's
+        // ServerSessionInstance(), ServerLoopInstance(), gPipeInputs, latch domain and segment
+        // resolver to it, so ArmSessionLatch arms this session's domain only. The apply thread opens
+        // the same scope first (ServerLoop::ApplyThreadMain).
+        auto runtime = std::make_unique<Server::SessionRuntime>();
+        Server::Detail::ThreadSessionScope threadScope(*runtime);
+        ArmSessionLatch();
+        // The child bypasses MobileGL::Initialize: arm its own role counters.
+        MobileGL::MG_Util::PipeStats::Init();
+        auto& session = runtime->Session();
+        auto& loop = runtime->Loop();
+        // P12 (D5): WHAT A PROCESS EXIT CLEANED UP FOR FREE, THE IN-PROCESS SHAPE CLEANS UP BY HAND,
+        // on every way out from here - so the next session in this process starts where a fresh
+        // session child would. A no-op for every forked / single-session shape: those `_exit` with the
+        // code, exactly as before.
+        bool backendBuilt = false;
+        bool acceptTried = false;
+        // P9 W3: the TCP session's log forward (LogForward.h), made where forwarding is switched on below.
+        // Declared up here because every way out has to take it down the same way: the logger stops
+        // calling it FIRST (so no line is offered to a channel being destroyed), then the channel drains
+        // within its close budget and its sender is joined, then its counters are said locally. Every
+        // shape, forked or not: a forked child's early return destroys the channel with this frame, and a
+        // forwarder left pointing at it would be a dangling pointer for however many lines remain.
+        std::unique_ptr<Transport::LogForwardChannel> logForward;
+        const auto stopLogForwarding = [&] {
+            MobileGL::MG_Util::Debug::SetLogForwarder(nullptr, nullptr);
+            if (!logForward) return;
+            const auto counters = logForward->Close();
+            logForward.reset();
+            LogForwardSummary(counters);
+        };
+        const auto endSession = [&](int code) -> int {
+            stopLogForwarding();
+            if (!inProcess) return code;
+            // Points at `control`, which dies with this frame (the log forwarder did too, above).
+            loop.SetControlProgressSink(nullptr, nullptr);
+            if (backendBuilt) {
+                // Stop() joins a running apply thread (it destroys the backend on it), or - never
+                // started - drops the backend here; either way the display lease goes with it.
+                if (g_inProcessStop.load(std::memory_order_acquire)) loop.AbandonQueuedRecords();
+                loop.Stop();
+                session.SetBackend(nullptr);
+            }
+            if (acceptTried) session.Close();
+            MobileGL::MG_Util::PipeStats::Shutdown();
+            return code;
+        };
+        const auto backend = static_cast<MobileGL::BackendType>(hello->backendType());
+        if (backend != MobileGL::BackendType::DirectGLES && backend != MobileGL::BackendType::DirectVulkan) {
+            Refuse(*control, Protocol::RefuseCode::Backend, "unsupported Hello.backendType");
+            return endSession(LeaveBeforeAccept(sourceFd, sourceKind, 0));
         }
-        if (pin != static_cast<int>(backend)) {
+        const char* pinned = std::getenv("MOBILEGL_BACKEND_TYPE");
+        if (pinned && *pinned && backend != MobileGL::MG_Config::ActiveBackendType) {
             Refuse(*control, Protocol::RefuseCode::Backend, "Hello.backendType disagrees with pinned backend");
             return endSession(LeaveBeforeAccept(sourceFd, sourceKind, 0));
         }
-    }
-    MobileGL::MG_Config::ActiveBackendType = backend;
-    backendBuilt = true; // InitServerRoleForSpawn may build it and then fail: Stop() drops either way
-    if (!MobileGL::MG_Backend::InitServerRoleForSpawn()) return endSession(LeaveBeforeAccept(sourceFd, sourceKind, 66));
-    int serverBell[2] = {-1, -1}, clientBell[2] = {-1, -1};
-    std::unique_ptr<SocketDoorbell> selfBell, peerBell;
-    if (!tcp) {
-        if (::socketpair(AF_UNIX, SOCK_STREAM, 0, serverBell) != 0 ||
-            ::socketpair(AF_UNIX, SOCK_STREAM, 0, clientBell) != 0)
-            return endSession(LeaveBeforeAccept(sourceFd, sourceKind, 74));
-        selfBell = std::make_unique<SocketDoorbell>(serverBell[0], serverBell[1], 1, true);
-        peerBell = std::make_unique<SocketDoorbell>(-1, clientBell[1], 1, true);
-        session.SetExternalDoorbells(selfBell.get(), peerBell.get());
-    }
-    if (tcp) session.SetDataConnectionSource(std::move(dataSource));
-    acceptTried = true;
-    const auto accepted = session.Accept(*control, &helloFrame);
-    // THE SOURCE IS DONE WHEN ACCEPT IS, whichever way Accept went (F fix round). Under --serve
-    // this is the child's end of the hand-off pair: closing it turns every later DataBind the
-    // supervisor would have queued here into a send failure the supervisor refuses by name on
-    // that connection ("data connection could not be handed to the live session"), instead of a
-    // descriptor nobody will read holding a peer's connection open and, past max_dgram_qlen,
-    // holding the supervisor itself. In the single-session shape it is the listener: kept open
-    // only until the data connection arrived on it, and closed here so a second client or a
-    // retry is refused at connect (ECONNREFUSED, as before PH-7 (4)) rather than completing a
-    // TCP handshake this process would never accept and waiting out its whole connect budget.
-    // The source object goes with it, so no later call can poll a descriptor number the kernel
-    // may have reused. The hand-off is cut before it is closed, and what was already queued on
-    // it is refused by name rather than dropped (ID-P7-44, CloseHandoffRefusingQueued).
-    if (sourceFd >= 0) {
-        if (sourceKind == DataSource::Handoff) CloseHandoffRefusingQueued(sourceFd);
-        else ::close(sourceFd);
-        session.SetDataConnectionSource({});
-    }
-    if (accepted != MOBILEGL_OK) {
-        WireLogError("MG_Remote server: pid=%d Accept failed (rc=%d)", selfPid, static_cast<int>(accepted));
-        // A refusal and a peer that went away before its data connection bound (PH-7 (4): the
-        // client closed after Welcome) are outcomes, not faults; the supervisor counts only 67.
-        return endSession(accepted == MOBILEGL_ERR_PROTOCOL_MISMATCH || accepted == MOBILEGL_ERR_TRANSPORT_CLOSED ? 0
-                                                                                                             : 67);
-    }
-    if (!tcp)
-    {
-        struct Sideband {
-            std::uint32_t slot;
-            std::uint64_t bytes;
-        };
-        using Slot = SessionSegmentSlot;
-        static constexpr Slot kSlots[4] = {Slot::Cmd, Slot::Stage, Slot::Reply, Slot::Event};
-        for (const Slot slot : kSlots) {
-            const std::uint32_t tag = static_cast<std::uint32_t>(slot);
-            const int fd = session.Shm().DescriptorFor(slot);
-            if (fd < 0) {
-                std::fprintf(stderr, "MG_Remote server: pid=%d segment %u has no descriptor\n",
-                             selfPid, tag);
-                return endSession(68);
+        if (inProcess) {
+            // P12 (D5): THE BACKEND IS PINNED FOR THE PROCESS'S LIFETIME. With no MOBILEGL_BACKEND_TYPE
+            // the first session's backend becomes the pin: Espryt and Magma must never share a process
+            // (BenchService.java:12-17), and here every session shares this one. The refusal is the
+            // pinned-backend refusal above, word for word.
+            int pin = g_inProcessBackendPin.load(std::memory_order_acquire);
+            if (pin < 0 && g_inProcessBackendPin.compare_exchange_strong(pin, static_cast<int>(backend),
+                                                                         std::memory_order_acq_rel)) {
+                // Which pin it is, said as it is: the environment's (the display Activity's `backend`
+                // extra, already enforced by the refusal above) or the first session's.
+                WireLogError("MG_Remote server: pid=%d in-process display server pinned backend type %u for the "
+                             "process lifetime (%s)",
+                             selfPid, static_cast<unsigned>(backend),
+                             pinned && *pinned ? "MOBILEGL_BACKEND_TYPE"
+                                               : "the first session's; MOBILEGL_BACKEND_TYPE unset");
+                pin = static_cast<int>(backend);
             }
-            Sideband sideband{tag, session.Shm().AnnouncedSize(slot)};
-            if (control->ShareFd(fd, MobileGLByteSpan{&sideband, sizeof(sideband)}) !=
-                MOBILEGL_OK) {
-                std::fprintf(stderr, "MG_Remote server: pid=%d could not share segment %u\n",
-                             selfPid, tag);
-                return endSession(69);
+            if (pin != static_cast<int>(backend)) {
+                Refuse(*control, Protocol::RefuseCode::Backend, "Hello.backendType disagrees with pinned backend");
+                return endSession(LeaveBeforeAccept(sourceFd, sourceKind, 0));
             }
         }
-        // SLOTS 4, 5 AND 6 ARE THE BELLS - three, not two, and the third is the
-        // one the two-fd form above forces:
-        //   4  serverBell[1]  the client's handle to RING THE SERVER
-        //   5  clientBell[0]  the client's PARK end
-        //   6  clientBell[1]  the client's handle to ring ITSELF, for the same
-        //                     reason the server needs serverBell[1]
-        // Sharing DUPs, so the descriptors these bells own stay valid here.
-        const int bellFds[3] = {serverBell[1], clientBell[0], clientBell[1]};
-        for (std::uint32_t index = 0; index < 3; ++index) {
-            Sideband sideband{4 + index, 0};
-            if (control->ShareFd(bellFds[index], MobileGLByteSpan{&sideband, sizeof(sideband)}) !=
-                MOBILEGL_OK) {
-                std::fprintf(stderr, "MG_Remote server: pid=%d could not share bell %u\n", selfPid,
-                             index);
-                return endSession(69);
+        MobileGL::MG_Config::ActiveBackendType = backend;
+        backendBuilt = true; // InitServerRoleForSpawn may build it and then fail: Stop() drops either way
+        if (!MobileGL::MG_Backend::InitServerRoleForSpawn())
+            return endSession(LeaveBeforeAccept(sourceFd, sourceKind, 66));
+        int serverBell[2] = {-1, -1}, clientBell[2] = {-1, -1};
+        std::unique_ptr<SocketDoorbell> selfBell, peerBell;
+        if (!tcp) {
+            if (::socketpair(AF_UNIX, SOCK_STREAM, 0, serverBell) != 0 ||
+                ::socketpair(AF_UNIX, SOCK_STREAM, 0, clientBell) != 0)
+                return endSession(LeaveBeforeAccept(sourceFd, sourceKind, 74));
+            selfBell = std::make_unique<SocketDoorbell>(serverBell[0], serverBell[1], 1, true);
+            peerBell = std::make_unique<SocketDoorbell>(-1, clientBell[1], 1, true);
+            session.SetExternalDoorbells(selfBell.get(), peerBell.get());
+        }
+        if (tcp) session.SetDataConnectionSource(std::move(dataSource));
+        acceptTried = true;
+        const auto accepted = session.Accept(*control, &helloFrame);
+        // THE SOURCE IS DONE WHEN ACCEPT IS, whichever way Accept went (F fix round). Under --serve
+        // this is the child's end of the hand-off pair: closing it turns every later DataBind the
+        // supervisor would have queued here into a send failure the supervisor refuses by name on
+        // that connection ("data connection could not be handed to the live session"), instead of a
+        // descriptor nobody will read holding a peer's connection open and, past max_dgram_qlen,
+        // holding the supervisor itself. In the single-session shape it is the listener: kept open
+        // only until the data connection arrived on it, and closed here so a second client or a
+        // retry is refused at connect (ECONNREFUSED, as before PH-7 (4)) rather than completing a
+        // TCP handshake this process would never accept and waiting out its whole connect budget.
+        // The source object goes with it, so no later call can poll a descriptor number the kernel
+        // may have reused. The hand-off is cut before it is closed, and what was already queued on
+        // it is refused by name rather than dropped (ID-P7-44, CloseHandoffRefusingQueued).
+        if (sourceFd >= 0) {
+            if (sourceKind == DataSource::Handoff)
+                CloseHandoffRefusingQueued(sourceFd);
+            else
+                ::close(sourceFd);
+            session.SetDataConnectionSource({});
+        }
+        if (accepted != MOBILEGL_OK) {
+            WireLogError("MG_Remote server: pid=%d Accept failed (rc=%d)", selfPid, static_cast<int>(accepted));
+            // A refusal and a peer that went away before its data connection bound (PH-7 (4): the
+            // client closed after Welcome) are outcomes, not faults; the supervisor counts only 67.
+            return endSession(
+                accepted == MOBILEGL_ERR_PROTOCOL_MISMATCH || accepted == MOBILEGL_ERR_TRANSPORT_CLOSED ? 0 : 67);
+        }
+        if (!tcp) {
+            struct Sideband {
+                std::uint32_t slot;
+                std::uint64_t bytes;
+            };
+            using Slot = SessionSegmentSlot;
+            static constexpr Slot kSlots[4] = {Slot::Cmd, Slot::Stage, Slot::Reply, Slot::Event};
+            for (const Slot slot : kSlots) {
+                const std::uint32_t tag = static_cast<std::uint32_t>(slot);
+                const int fd = session.Shm().DescriptorFor(slot);
+                if (fd < 0) {
+                    std::fprintf(stderr, "MG_Remote server: pid=%d segment %u has no descriptor\n", selfPid, tag);
+                    return endSession(68);
+                }
+                Sideband sideband{tag, session.Shm().AnnouncedSize(slot)};
+                if (control->ShareFd(fd, MobileGLByteSpan{&sideband, sizeof(sideband)}) != MOBILEGL_OK) {
+                    std::fprintf(stderr, "MG_Remote server: pid=%d could not share segment %u\n", selfPid, tag);
+                    return endSession(69);
+                }
             }
-        }
-        // clientBell[0] is the CLIENT's park end and no bell here owns it; the
-        // other three belong to selfBell and peerBell and are closed with them.
-        ::close(clientBell[0]);
-        // PH-6 fix round: THE SERVER'S BELL GETS A DEATH WITNESS TOO (CONTRACT-P6 D5c, mirrored).
-        // selfBell parks on serverBell[0] and this process rings itself through serverBell[1], so
-        // it holds both ends of that pair and the pair can never hang up, however dead the client
-        // is: Dead() stayed false for the life of a shm session, and ReserveEventOrBlock's "dead
-        // first" check could only ever report a peer killed mid-wait as NotDraining after the
-        // whole MOBILEGL_IPC_EVENT_WAIT_MS. The control socket's far end is the client's alone, so
-        // its hangup IS the death; the bell polls it for hangup only and never reads from it, so
-        // SocketTransport's reassembler below keeps every byte. Set before loop.Start(): the apply
-        // thread is the one that parks on this bell. (The stream plane's bell is the data socket
-        // itself and dies with the peer already.)
-        selfBell->SetDeathWitness(control->StreamFd());
-    }
-
-    const char* forwarding = std::getenv("MOBILEGL_IPC_LOG_FORWARD");
-    if (tcp && (!forwarding || std::strcmp(forwarding, "0") != 0)) {
-        // F2 fault injection: bound the kernel queue as well as the log queue so a
-        // non-reading peer reliably blocks the sender, regardless of host autotuning.
-        if (const char* stalled = std::getenv("MOBILEGL_TEST_LOG_SMALL_SNDBUF");
-            stalled && std::strcmp(stalled, "1") == 0) {
-            const int bytes = 16 * 1024;
-            if (::setsockopt(control->StreamFd(), SOL_SOCKET, SO_SNDBUF, &bytes, sizeof(bytes)) != 0) {
-                WireLogError("MG_Remote server: could not set F2 control send buffer");
-                return endSession(70);
+            // SLOTS 4, 5 AND 6 ARE THE BELLS - three, not two, and the third is the
+            // one the two-fd form above forces:
+            //   4  serverBell[1]  the client's handle to RING THE SERVER
+            //   5  clientBell[0]  the client's PARK end
+            //   6  clientBell[1]  the client's handle to ring ITSELF, for the same
+            //                     reason the server needs serverBell[1]
+            // Sharing DUPs, so the descriptors these bells own stay valid here.
+            const int bellFds[3] = {serverBell[1], clientBell[0], clientBell[1]};
+            for (std::uint32_t index = 0; index < 3; ++index) {
+                Sideband sideband{4 + index, 0};
+                if (control->ShareFd(bellFds[index], MobileGLByteSpan{&sideband, sizeof(sideband)}) != MOBILEGL_OK) {
+                    std::fprintf(stderr, "MG_Remote server: pid=%d could not share bell %u\n", selfPid, index);
+                    return endSession(69);
+                }
             }
+            // clientBell[0] is the CLIENT's park end and no bell here owns it; the
+            // other three belong to selfBell and peerBell and are closed with them.
+            ::close(clientBell[0]);
+            // PH-6 fix round: THE SERVER'S BELL GETS A DEATH WITNESS TOO (CONTRACT-P6 D5c, mirrored).
+            // selfBell parks on serverBell[0] and this process rings itself through serverBell[1], so
+            // it holds both ends of that pair and the pair can never hang up, however dead the client
+            // is: Dead() stayed false for the life of a shm session, and ReserveEventOrBlock's "dead
+            // first" check could only ever report a peer killed mid-wait as NotDraining after the
+            // whole MOBILEGL_IPC_EVENT_WAIT_MS. The control socket's far end is the client's alone, so
+            // its hangup IS the death; the bell polls it for hangup only and never reads from it, so
+            // SocketTransport's reassembler below keeps every byte. Set before loop.Start(): the apply
+            // thread is the one that parks on this bell. (The stream plane's bell is the data socket
+            // itself and dies with the peer already.)
+            selfBell->SetDeathWitness(control->StreamFd());
         }
-        // P9 W3: the forward is a queue with a sender thread of its own, graded by severity
-        // (LogForward.h): a client that stops reading control no longer holds any logging thread -
-        // the apply thread above all - inside a socket write.
-        logForward = std::make_unique<Transport::LogForwardChannel>(*control, &UnblockControlSend, control.get());
-        // P12 review fix: in-process, only THIS session's threads (this one and its apply thread)
-        // forward, and outside the log mutex - the UI thread, the listener and the next session's
-        // refusals share this process and must neither reach this client nor wait on it.
-        if (inProcess)
-            MobileGL::MG_Util::Debug::SetSessionLogForwarder(&Transport::LogForwardChannel::ForwardThunk,
-                                                             logForward.get());
-        else
-            MobileGL::MG_Util::Debug::SetLogForwarder(&Transport::LogForwardChannel::ForwardThunk, logForward.get());
-    }
-    // p7/spawnhang: this thread posts every surface op the client sends (ServerApplyWireSurfaceOp,
-    // below) and is the one that says "still running" while the apply thread runs it. Cleared
-    // after the loop, on this same thread, so no post can be in flight when it goes.
-    loop.SetControlProgressSink(&SendSurfaceProgress, control.get());
-    // P14 S2: the apply thread opens the same scope this thread is on, so its reads of the
-    // session, this loop and the PipeInputs block resolve to THIS session's.
-    loop.SetRuntime(*runtime);
-    if (loop.Start(session) != MOBILEGL_OK) return endSession(70);
-    WireLogError("MG_Remote server: pid=%d transport=spawn role=server ready control=%s data=%s",
-                 selfPid, tcp ? "tcp" : "unix", tcp ? "stream" : "shm");
-    std::vector<std::uint8_t> buffer(64 * 1024);
-    // The control wait is sliced so a session can end from the server's side. Each turn first asks
-    // whether the session latched (a fault on the apply thread, which also stops that thread, so
-    // the latch is asked first and names the end), then whether the apply thread still runs (it
-    // stops on a forfeited reverse channel or a dead data bell). Both are asked every turn, not
-    // only on timeout, so a peer that keeps sending frames cannot hold the supervisor's session
-    // slot. ReceiveFrame keeps a partial frame across a timeout, so slicing loses no bytes.
-    constexpr std::uint32_t kControlSliceMs = 100;
-    for (;;) {
-        if (SessionLatched()) break;
-        // P12 (D5): the in-process display server is stopping (mobilegl_server_stop_inprocess).
-        // The session ends by the same orderly path as a peer's EOF, within one slice.
-        if (inProcess && g_inProcessStop.load(std::memory_order_acquire)) {
-            WireLogError("MG_Remote server: pid=%d the in-process display server is stopping; ending the session",
-                         selfPid);
-            break;
-        }
-        if (!loop.Running()) {
-            WireLogError("MG_Remote server: pid=%d the apply thread has stopped (%s, %llu event(s) dropped); "
-                         "ending the session",
-                         selfPid, session.ReverseChannelForfeited() ? "ReverseChannelForfeit" : "its bell died",
-                         static_cast<unsigned long long>(session.ForfeitDrops()));
-            break;
-        }
-        std::uint64_t size = 0;
-        const auto result = control->ReceiveFrame({buffer.data(), buffer.size()}, &size, kControlSliceMs);
-        if (result == MOBILEGL_ERR_TIMEOUT) continue;
-        if (result == MOBILEGL_ERR_BUFFER_TOO_SMALL) { buffer.resize(static_cast<std::size_t>(size)); continue; }
-        if (result != MOBILEGL_OK) {
-            // EOF or a transport error: the peer is gone. Said to the session BEFORE loop.Stop()
-            // below, so an apply thread that the stop wakes inside ReserveEventOrBlock names the
-            // hangup (PeerGone) rather than the stop (PH-6 fix round).
-            session.NoteControlStreamEnded();
-            // Fuzz arm 1, steady state. A bad magic or an over-cap length has already been named
-            // by the framing latch (Framing.h) as it latched; a clean close is the client's normal
-            // end and says nothing. The one silent case was a close INSIDE a frame - a truncated
-            // length prefix or payload - which ended the session exactly like a clean close.
-            if (result == MOBILEGL_ERR_TRANSPORT_CLOSED && control->BufferedBytes() != 0)
-                WireLogError("MG_Remote server: control connection closed inside a frame (%llu bytes of it "
-                             "received); ending the session",
-                             static_cast<unsigned long long>(control->BufferedBytes()));
-            break;
-        }
-        // The identifier is checked before the verifier, which would also reject a wrong one, so
-        // the log names the specific cause; every refusal here is logged, because a silent end
-        // cannot be told apart from a crashed child. BufferHasIdentifier reads bytes [4, 8),
-        // hence the length guard.
-        if (size < 8) {
-            WireLogError("MG_Remote server: control frame is %llu bytes, too short to carry a "
-                         "CtrlEnvelope root and identifier; ending the session",
-                         static_cast<unsigned long long>(size));
-            break;
-        }
-        if (!Protocol::CtrlEnvelopeBufferHasIdentifier(buffer.data())) {
-            WireLogError("MG_Remote server: control frame carries no CtrlEnvelope identifier "
-                         "(size=%llu); ending the session rather than reading its union tag",
-                         static_cast<unsigned long long>(size));
-            break;
-        }
-        flatbuffers::Verifier check(buffer.data(), static_cast<std::size_t>(size));
-        if (!Protocol::VerifyCtrlEnvelopeBuffer(check)) {
-            WireLogError("MG_Remote server: control frame did not verify as a CtrlEnvelope "
-                         "(size=%llu); ending the session", static_cast<unsigned long long>(size));
-            break;
-        }
-        const auto* envelope = Protocol::GetCtrlEnvelope(buffer.data());
-        if (const auto* flush = envelope->msg_as_LogFlush()) {
-            if (flush->ack()) break;
-            if (const char* inspect = std::getenv("MOBILEGL_TEST_SERVER_COUNTERS");
-                inspect && std::strcmp(inspect, "1") == 0) {
-                // SyncPeerLog has fenced the client's complete command prefix.
-                // Acquire the applier's publication before reading its counters;
-                // this serial client sends no more records until this ack.
-                const auto applied = session.DataLink()->Progress()->appliedSeq.load(std::memory_order_acquire);
-                const auto& verbs = session.Applier().Verbs();
-                MGLOG_I("MGPipe server counters: applied=%llu resets=%llu reset-serial=%llu deaths=%llu",
-                        static_cast<unsigned long long>(applied),
-                        static_cast<unsigned long long>(verbs.ApplierResets()),
-                        static_cast<unsigned long long>(verbs.ExpectedApplierResetSerial()),
-                        static_cast<unsigned long long>(verbs.ObjectDeaths()));
+
+        const char* forwarding = std::getenv("MOBILEGL_IPC_LOG_FORWARD");
+        if (tcp && (!forwarding || std::strcmp(forwarding, "0") != 0)) {
+            // F2 fault injection: bound the kernel queue as well as the log queue so a
+            // non-reading peer reliably blocks the sender, regardless of host autotuning.
+            if (const char* stalled = std::getenv("MOBILEGL_TEST_LOG_SMALL_SNDBUF");
+                stalled && std::strcmp(stalled, "1") == 0) {
+                const int bytes = 16 * 1024;
+                if (::setsockopt(control->StreamFd(), SOL_SOCKET, SO_SNDBUF, &bytes, sizeof(bytes)) != 0) {
+                    WireLogError("MG_Remote server: could not set F2 control send buffer");
+                    return endSession(70);
+                }
             }
-            FlushAck ack{control.get(), logForward.get(), flush->seq()};
-            MobileGL::MG_Util::Debug::WithLogBarrier(&SendLogAck, &ack);
-            continue;
+            // P9 W3: the forward is a queue with a sender thread of its own, graded by severity
+            // (LogForward.h): a client that stops reading control no longer holds any logging thread -
+            // the apply thread above all - inside a socket write.
+            logForward = std::make_unique<Transport::LogForwardChannel>(*control, &UnblockControlSend, control.get());
+            // P12 review fix: in-process, only THIS session's threads (this one and its apply thread)
+            // forward, and outside the log mutex - the UI thread, the listener and the next session's
+            // refusals share this process and must neither reach this client nor wait on it.
+            if (inProcess)
+                MobileGL::MG_Util::Debug::SetSessionLogForwarder(&Transport::LogForwardChannel::ForwardThunk,
+                                                                 logForward.get());
+            else
+                MobileGL::MG_Util::Debug::SetLogForwarder(&Transport::LogForwardChannel::ForwardThunk,
+                                                          logForward.get());
         }
-        const auto* operation = envelope->msg_as_SurfaceOp();
-        if (!operation) {
-            // Fuzz arm 1, steady state: a well-formed envelope of a type this loop does not take
-            // (or a SurfaceOp tag with no table behind it) ended the session without a word.
-            WireLogError("MG_Remote server: control frame of type %u (%s) is not a LogFlush or SurfaceOp "
-                         "(size=%llu); ending the session",
-                         static_cast<unsigned>(envelope->msg_type()), Protocol::EnumNameCtrlMsg(envelope->msg_type()),
-                         static_cast<unsigned long long>(size));
-            break;
-        }
-        Server::SurfaceControlFrame reply{};
-        (void)ServerApplyWireSurfaceOp(*operation, &reply);
-        // PH-1 (3): an op that latched (its own bytes, or a record the apply thread was on) is
-        // answered by the SessionFault already sent and the close below, not by a reply.
-        if (SessionLatched()) break;
-        session.FlushDataProgress();
-        if (session.DataLink()) reply.eventHead = session.DataLink()->EventPublishedHead();
-        flatbuffers::FlatBufferBuilder builder(256);
-        EncodeSurfaceReplyFrame(reply, &builder);
-        if (control->SendFrame({builder.GetBufferPointer(), builder.GetSize()}) != MOBILEGL_OK) {
-            session.NoteControlStreamEnded();
-            break;
-        }
-    }
-    loop.SetControlProgressSink(nullptr, nullptr);
-    // P12 review fix: A STOPPING SERVER DOES NOT DRAIN A STREAMING CLIENT. The session ends because
-    // the display server is going away, not because its client finished - and a client still
-    // streaming would keep the apply thread's final drain going past Stop()'s bounded join, whose
-    // Fatal{ApplyThreadJoinTimeout} aborts this (the display Activity's) process.
-    if (inProcess && g_inProcessStop.load(std::memory_order_acquire)) loop.AbandonQueuedRecords();
-    loop.Stop();
-    // Publish the final server window while log forwarding is still attached.
-    MobileGL::MG_Util::PipeStats::Shutdown();
-    // PH-1 (3): a latched session ends HERE, by the same orderly path as a peer's EOF - the apply
-    // thread has already left its loop and destroyed the backend on its own thread (loop.Stop()
-    // joined it), the session closes, and the exit status names the latch so the supervisor
-    // counts it. The first fault's line was logged (and sent as a SessionFault) when it latched.
-    const bool latched = SessionLatched();
-    if (latched) {
-        WireLogError("MG_Remote server: pid=%d session closed on a latched fault (%s; %llu named "
-                     "fault(s) latched or declined); exiting %d for the supervisor to reap - PH-1",
-                     selfPid, FatalFamilyName(SessionLatchedFamily()),
-                     static_cast<unsigned long long>(SessionLatchCount()), kSessionLatchedExitCode);
-    }
-    session.Close();
-    // P9 W3: the forwarder is cleared, the forward drains (bounded) and its counters are logged.
-    stopLogForwarding();
-    // P12 (D5): the backend loop.Stop() destroyed is not this session's to point at any more.
-    if (inProcess) session.SetBackend(nullptr);
-    // The caller's exit (a forked child's ExitSessionProcess) closes control after cleanup/flush -
-    // or, in-process, `control` is destroyed on the way out; peer EOF is the client's fence.
-    return latched ? kSessionLatchedExitCode : 0;
-}
-
-// P7 wave 0, Ph slice (1) (ID-P7-1). THE SUPERVISOR OBSERVES AND NAMES A SESSION'S DEATH.
-//
-// Three `waitpid(active, nullptr, WNOHANG)` calls threw the status away, so a child that died of
-// SIGABRT inside SessionFail and one that returned from its control loop and _exit(0)'d were the
-// SAME EVENT to the supervisor: `active = -1`, no line, nothing to count. ID-P7-1 declines the
-// literal 98-site latch translation and asks for this instead, because P6.5's fork-per-session
-// already delivers "the next connection is served as usual" (:302) - what was missing is that
-// anybody could tell a faulted session from a finished one, which is the half of PH-1 an
-// operator, a fuzz arm and a flake triage all actually need.
-//
-// One function where there were three call sites, so the three cannot drift on what a reap means.
-// Returns true when `active` was reaped. `sessionsFaulted` is the SUPERVISOR's lifetime count,
-// not this child's: a supervisor that has served twenty sessions can say how many ended badly.
-bool ReapActiveSession(pid_t& active, unsigned long& sessionsFaulted) {
-    if (active <= 0) return false;
-    int status = 0;
-    if (::waitpid(active, &status, WNOHANG) != active) return false;
-    const int reaped = static_cast<int>(active);
-    active = -1;
-    // WIFEXITED / WIFSIGNALED / WTERMSIG, the same three questions ReapServer (ServerSpawn.cpp) asks of
-    // the same kind of child - but logged rather than folded into one signed integer, because
-    // this side has nobody to return the answer to.
-    if (WIFEXITED(status)) {
-        const int code = WEXITSTATUS(status);
-        if (code != 0) ++sessionsFaulted;
-        // PH-1 (3): a latched session is a named, orderly end - still a fault (counted), and said
-        // as one so the reap line alone tells it from a crash or a refused bring-up.
-        WireLogError("MG_Remote server: session pid=%d reaped exit=%d%s sessionsFaulted=%lu",
-                     reaped, code, code == kSessionLatchedExitCode ? " (latched fault)" : "",
-                     sessionsFaulted);
-    } else if (WIFSIGNALED(status)) {
-        ++sessionsFaulted;
-        WireLogError("MG_Remote server: session pid=%d reaped signal=%d sessionsFaulted=%lu",
-                     reaped, WTERMSIG(status), sessionsFaulted);
-    } else {
-        // Neither exited nor signalled: WUNTRACED/WCONTINUED are not passed, so this is a status
-        // this build does not understand. Counted as a fault rather than silently ignored.
-        ++sessionsFaulted;
-        WireLogError("MG_Remote server: session pid=%d reaped status=0x%x sessionsFaulted=%lu",
-                     reaped, status, sessionsFaulted);
-    }
-    return true;
-}
-
-// The lifetime figure, once, on the way out. Every reap also prints the running total, so a
-// supervisor taken down by SIGTERM (which is how the fixtures end it) still leaves the number
-// behind - this line is for the exits the supervisor chooses.
-void LogSupervisorSummary(unsigned long sessionsFaulted) {
-    WireLogError("MG_Remote server: supervisor pid=%d shutting down sessionsFaulted=%lu",
-                 static_cast<int>(::getpid()), sessionsFaulted);
-}
-
-// The TCP supervisor reads every new connection's first frame itself without blocking on any
-// one peer, authenticates a Hello (token first) and only then hands the session off (fork or
-// thread); it routes DataBinds to the live session and backs off failing addresses
-// (ARCHITECTURE.md §15.1.1, PreAuthGate.h). One session at a time: an authenticated second Hello
-// is answered Busy.
-class TcpSupervisor {
-public:
-    using Clock = std::chrono::steady_clock;
-
-    // P12 (D5): HOW AN AUTHENTICATED SESSION IS HANDED OFF. `Fork` is the exec'd supervisor's shape
-    // (a session child per session, crash isolation, D9's eglTerminate isolation). `Thread` is the
-    // in-process display server's: the session runs on a thread of THIS process, because the window
-    // it renders into lives here and nowhere else (an ANativeWindow does not survive fork or exec).
-    // Everything before the hand-off - pre-auth, the backoff, Busy for an authenticated second
-    // Hello, DataBind routing over the socketpair - is the same code for both. What differs is what
-    // a separate fd table used to do for free: the thread shape closes neither the listener nor the
-    // other pending peers (they are the supervisor's, and still in use), keeps the session's end of
-    // the hand-off (the session closes it), and "reaps" by joining the thread.
-    enum class Handoff { Fork, Thread };
-
-    TcpSupervisor(int listener, const Server::PreAuthKnobs& knobs, unsigned long& sessionsFaulted,
-                  Handoff handoff = Handoff::Fork, const std::atomic<bool>* stop = nullptr)
-        : m_listener(listener), m_knobs(knobs), m_backoff(knobs), m_sessionsFaulted(sessionsFaulted),
-          m_handoffShape(handoff), m_stop(stop) {}
-
-    ~TcpSupervisor() {
-        // A session thread is never left running behind its supervisor: Run() only returns after
-        // StopServing joined it, but a listener failure (73) returns from the loop directly.
-        if (m_sessionThread.joinable()) m_sessionThread.join();
-    }
-
-    // Returns only on a failure of the listener itself (73, as the old loop did) - or, with a stop
-    // flag (the in-process display server), 0 once the flag is raised and the live session ended.
-    int Run() {
-        WireLogError("MG_Remote server: pre-auth deadline=%u ms, at most %u pending, backoff after %u failures "
-                     "from %u ms (0 = off)",
-                     m_knobs.deadlineMs, m_knobs.maxPending, m_knobs.backoffAfter, m_knobs.backoffBaseMs);
-        std::vector<pollfd> fds;
+        // p7/spawnhang: this thread posts every surface op the client sends (ServerApplyWireSurfaceOp,
+        // below) and is the one that says "still running" while the apply thread runs it. Cleared
+        // after the loop, on this same thread, so no post can be in flight when it goes.
+        loop.SetControlProgressSink(&SendSurfaceProgress, control.get());
+        // P14 S2: the apply thread opens the same scope this thread is on, so its reads of the
+        // session, this loop and the PipeInputs block resolve to THIS session's.
+        loop.SetRuntime(*runtime);
+        if (loop.Start(session) != MOBILEGL_OK) return endSession(70);
+        WireLogError("MG_Remote server: pid=%d transport=spawn role=server ready control=%s data=%s", selfPid,
+                     tcp ? "tcp" : "unix", tcp ? "stream" : "shm");
+        std::vector<std::uint8_t> buffer(64 * 1024);
+        // The control wait is sliced so a session can end from the server's side. Each turn first asks
+        // whether the session latched (a fault on the apply thread, which also stops that thread, so
+        // the latch is asked first and names the end), then whether the apply thread still runs (it
+        // stops on a forfeited reverse channel or a dead data bell). Both are asked every turn, not
+        // only on timeout, so a peer that keeps sending frames cannot hold the supervisor's session
+        // slot. ReceiveFrame keeps a partial frame across a timeout, so slicing loses no bytes.
+        constexpr std::uint32_t kControlSliceMs = 100;
         for (;;) {
-            if (m_stop != nullptr && m_stop->load(std::memory_order_acquire)) return StopServing();
-            Reap();
-            auto now = Clock::now();
-            // While accepting is paused (out of descriptors, AcceptNew) the listener sits out the
-            // poll - it stays readable, and would spin the loop - and the pause's end is a wakeup.
-            const bool acceptPaused = now < m_acceptResumeAt;
-            fds.clear();
-            fds.push_back({acceptPaused ? -1 : m_listener, POLLIN, 0});
-            for (const auto& peer : m_pending) fds.push_back({peer.fd, POLLIN, 0});
-            // 250 ms is the old accept timeout, i.e. how often a finished child is reaped while
-            // nothing arrives; a pending deadline that falls sooner shortens it.
-            std::int64_t timeout = 250;
-            for (const auto& peer : m_pending)
-                timeout = std::clamp<std::int64_t>(
-                    std::chrono::duration_cast<std::chrono::milliseconds>(peer.deadline - now).count(), 0, timeout);
-            if (acceptPaused)
-                timeout = std::clamp<std::int64_t>(
-                    std::chrono::duration_cast<std::chrono::milliseconds>(m_acceptResumeAt - now).count() + 1, 0,
-                    timeout);
-            const int polled = ::poll(fds.data(), static_cast<nfds_t>(fds.size()), static_cast<int>(timeout));
-            if (polled < 0 && errno != EINTR) {
-                WireLogError("MG_Remote server: supervisor poll failed: %s", std::strerror(errno));
-                return 73;
+            if (SessionLatched()) break;
+            // P12 (D5): the in-process display server is stopping (mobilegl_server_stop_inprocess).
+            // The session ends by the same orderly path as a peer's EOF, within one slice.
+            if (inProcess && g_inProcessStop.load(std::memory_order_acquire)) {
+                WireLogError("MG_Remote server: pid=%d the in-process display server is stopping; ending the session",
+                             selfPid);
+                break;
             }
-            now = Clock::now();
-            std::vector<PendingPeer> waiting;
-            for (std::size_t index = 0; index < m_pending.size(); ++index) {
-                PendingPeer& peer = m_pending[index];
-                if (polled > 0 && fds[index + 1].revents != 0) {
-                    switch (peer.frame.Pump(peer.fd)) {
+            if (!loop.Running()) {
+                WireLogError("MG_Remote server: pid=%d the apply thread has stopped (%s, %llu event(s) dropped); "
+                             "ending the session",
+                             selfPid, session.ReverseChannelForfeited() ? "ReverseChannelForfeit" : "its bell died",
+                             static_cast<unsigned long long>(session.ForfeitDrops()));
+                break;
+            }
+            std::uint64_t size = 0;
+            const auto result = control->ReceiveFrame({buffer.data(), buffer.size()}, &size, kControlSliceMs);
+            if (result == MOBILEGL_ERR_TIMEOUT) continue;
+            if (result == MOBILEGL_ERR_BUFFER_TOO_SMALL) {
+                buffer.resize(static_cast<std::size_t>(size));
+                continue;
+            }
+            if (result != MOBILEGL_OK) {
+                // EOF or a transport error: the peer is gone. Said to the session BEFORE loop.Stop()
+                // below, so an apply thread that the stop wakes inside ReserveEventOrBlock names the
+                // hangup (PeerGone) rather than the stop (PH-6 fix round).
+                session.NoteControlStreamEnded();
+                // Fuzz arm 1, steady state. A bad magic or an over-cap length has already been named
+                // by the framing latch (Framing.h) as it latched; a clean close is the client's normal
+                // end and says nothing. The one silent case was a close INSIDE a frame - a truncated
+                // length prefix or payload - which ended the session exactly like a clean close.
+                if (result == MOBILEGL_ERR_TRANSPORT_CLOSED && control->BufferedBytes() != 0)
+                    WireLogError("MG_Remote server: control connection closed inside a frame (%llu bytes of it "
+                                 "received); ending the session",
+                                 static_cast<unsigned long long>(control->BufferedBytes()));
+                break;
+            }
+            // The identifier is checked before the verifier, which would also reject a wrong one, so
+            // the log names the specific cause; every refusal here is logged, because a silent end
+            // cannot be told apart from a crashed child. BufferHasIdentifier reads bytes [4, 8),
+            // hence the length guard.
+            if (size < 8) {
+                WireLogError("MG_Remote server: control frame is %llu bytes, too short to carry a "
+                             "CtrlEnvelope root and identifier; ending the session",
+                             static_cast<unsigned long long>(size));
+                break;
+            }
+            if (!Protocol::CtrlEnvelopeBufferHasIdentifier(buffer.data())) {
+                WireLogError("MG_Remote server: control frame carries no CtrlEnvelope identifier "
+                             "(size=%llu); ending the session rather than reading its union tag",
+                             static_cast<unsigned long long>(size));
+                break;
+            }
+            flatbuffers::Verifier check(buffer.data(), static_cast<std::size_t>(size));
+            if (!Protocol::VerifyCtrlEnvelopeBuffer(check)) {
+                WireLogError("MG_Remote server: control frame did not verify as a CtrlEnvelope "
+                             "(size=%llu); ending the session",
+                             static_cast<unsigned long long>(size));
+                break;
+            }
+            const auto* envelope = Protocol::GetCtrlEnvelope(buffer.data());
+            if (const auto* flush = envelope->msg_as_LogFlush()) {
+                if (flush->ack()) break;
+                if (const char* inspect = std::getenv("MOBILEGL_TEST_SERVER_COUNTERS");
+                    inspect && std::strcmp(inspect, "1") == 0) {
+                    // SyncPeerLog has fenced the client's complete command prefix.
+                    // Acquire the applier's publication before reading its counters;
+                    // this serial client sends no more records until this ack.
+                    const auto applied = session.DataLink()->Progress()->appliedSeq.load(std::memory_order_acquire);
+                    const auto& verbs = session.Applier().Verbs();
+                    MGLOG_I("MGPipe server counters: applied=%llu resets=%llu reset-serial=%llu deaths=%llu",
+                            static_cast<unsigned long long>(applied),
+                            static_cast<unsigned long long>(verbs.ApplierResets()),
+                            static_cast<unsigned long long>(verbs.ExpectedApplierResetSerial()),
+                            static_cast<unsigned long long>(verbs.ObjectDeaths()));
+                }
+                FlushAck ack{control.get(), logForward.get(), flush->seq()};
+                MobileGL::MG_Util::Debug::WithLogBarrier(&SendLogAck, &ack);
+                continue;
+            }
+            const auto* operation = envelope->msg_as_SurfaceOp();
+            if (!operation) {
+                // Fuzz arm 1, steady state: a well-formed envelope of a type this loop does not take
+                // (or a SurfaceOp tag with no table behind it) ended the session without a word.
+                WireLogError("MG_Remote server: control frame of type %u (%s) is not a LogFlush or SurfaceOp "
+                             "(size=%llu); ending the session",
+                             static_cast<unsigned>(envelope->msg_type()),
+                             Protocol::EnumNameCtrlMsg(envelope->msg_type()), static_cast<unsigned long long>(size));
+                break;
+            }
+            Server::SurfaceControlFrame reply{};
+            (void)ServerApplyWireSurfaceOp(*operation, &reply);
+            // PH-1 (3): an op that latched (its own bytes, or a record the apply thread was on) is
+            // answered by the SessionFault already sent and the close below, not by a reply.
+            if (SessionLatched()) break;
+            session.FlushDataProgress();
+            if (session.DataLink()) reply.eventHead = session.DataLink()->EventPublishedHead();
+            flatbuffers::FlatBufferBuilder builder(256);
+            EncodeSurfaceReplyFrame(reply, &builder);
+            if (control->SendFrame({builder.GetBufferPointer(), builder.GetSize()}) != MOBILEGL_OK) {
+                session.NoteControlStreamEnded();
+                break;
+            }
+        }
+        loop.SetControlProgressSink(nullptr, nullptr);
+        // P12 review fix: A STOPPING SERVER DOES NOT DRAIN A STREAMING CLIENT. The session ends because
+        // the display server is going away, not because its client finished - and a client still
+        // streaming would keep the apply thread's final drain going past Stop()'s bounded join, whose
+        // Fatal{ApplyThreadJoinTimeout} aborts this (the display Activity's) process.
+        if (inProcess && g_inProcessStop.load(std::memory_order_acquire)) loop.AbandonQueuedRecords();
+        loop.Stop();
+        // Publish the final server window while log forwarding is still attached.
+        MobileGL::MG_Util::PipeStats::Shutdown();
+        // PH-1 (3): a latched session ends HERE, by the same orderly path as a peer's EOF - the apply
+        // thread has already left its loop and destroyed the backend on its own thread (loop.Stop()
+        // joined it), the session closes, and the exit status names the latch so the supervisor
+        // counts it. The first fault's line was logged (and sent as a SessionFault) when it latched.
+        const bool latched = SessionLatched();
+        if (latched) {
+            WireLogError("MG_Remote server: pid=%d session closed on a latched fault (%s; %llu named "
+                         "fault(s) latched or declined); exiting %d for the supervisor to reap - PH-1",
+                         selfPid, FatalFamilyName(SessionLatchedFamily()),
+                         static_cast<unsigned long long>(SessionLatchCount()), kSessionLatchedExitCode);
+        }
+        session.Close();
+        // P9 W3: the forwarder is cleared, the forward drains (bounded) and its counters are logged.
+        stopLogForwarding();
+        // P12 (D5): the backend loop.Stop() destroyed is not this session's to point at any more.
+        if (inProcess) session.SetBackend(nullptr);
+        // The caller's exit (a forked child's ExitSessionProcess) closes control after cleanup/flush -
+        // or, in-process, `control` is destroyed on the way out; peer EOF is the client's fence.
+        return latched ? kSessionLatchedExitCode : 0;
+    }
+
+    // P7 wave 0, Ph slice (1) (ID-P7-1). THE SUPERVISOR OBSERVES AND NAMES A SESSION'S DEATH.
+    //
+    // Three `waitpid(active, nullptr, WNOHANG)` calls threw the status away, so a child that died of
+    // SIGABRT inside SessionFail and one that returned from its control loop and _exit(0)'d were the
+    // SAME EVENT to the supervisor: `active = -1`, no line, nothing to count. ID-P7-1 declines the
+    // literal 98-site latch translation and asks for this instead, because P6.5's fork-per-session
+    // already delivers "the next connection is served as usual" (:302) - what was missing is that
+    // anybody could tell a faulted session from a finished one, which is the half of PH-1 an
+    // operator, a fuzz arm and a flake triage all actually need.
+    //
+    // One function where there were three call sites, so the three cannot drift on what a reap means.
+    // Returns true when `active` was reaped. `sessionsFaulted` is the SUPERVISOR's lifetime count,
+    // not this child's: a supervisor that has served twenty sessions can say how many ended badly.
+    bool ReapActiveSession(pid_t& active, unsigned long& sessionsFaulted) {
+        if (active <= 0) return false;
+        int status = 0;
+        if (::waitpid(active, &status, WNOHANG) != active) return false;
+        const int reaped = static_cast<int>(active);
+        active = -1;
+        // WIFEXITED / WIFSIGNALED / WTERMSIG, the same three questions ReapServer (ServerSpawn.cpp) asks of
+        // the same kind of child - but logged rather than folded into one signed integer, because
+        // this side has nobody to return the answer to.
+        if (WIFEXITED(status)) {
+            const int code = WEXITSTATUS(status);
+            if (code != 0) ++sessionsFaulted;
+            // PH-1 (3): a latched session is a named, orderly end - still a fault (counted), and said
+            // as one so the reap line alone tells it from a crash or a refused bring-up.
+            WireLogError("MG_Remote server: session pid=%d reaped exit=%d%s sessionsFaulted=%lu", reaped, code,
+                         code == kSessionLatchedExitCode ? " (latched fault)" : "", sessionsFaulted);
+        } else if (WIFSIGNALED(status)) {
+            ++sessionsFaulted;
+            WireLogError("MG_Remote server: session pid=%d reaped signal=%d sessionsFaulted=%lu", reaped,
+                         WTERMSIG(status), sessionsFaulted);
+        } else {
+            // Neither exited nor signalled: WUNTRACED/WCONTINUED are not passed, so this is a status
+            // this build does not understand. Counted as a fault rather than silently ignored.
+            ++sessionsFaulted;
+            WireLogError("MG_Remote server: session pid=%d reaped status=0x%x sessionsFaulted=%lu", reaped, status,
+                         sessionsFaulted);
+        }
+        return true;
+    }
+
+    // The lifetime figure, once, on the way out. Every reap also prints the running total, so a
+    // supervisor taken down by SIGTERM (which is how the fixtures end it) still leaves the number
+    // behind - this line is for the exits the supervisor chooses.
+    void LogSupervisorSummary(unsigned long sessionsFaulted) {
+        WireLogError("MG_Remote server: supervisor pid=%d shutting down sessionsFaulted=%lu",
+                     static_cast<int>(::getpid()), sessionsFaulted);
+    }
+
+    // The TCP supervisor reads every new connection's first frame itself without blocking on any
+    // one peer, authenticates a Hello (token first) and only then hands the session off (fork or
+    // thread); it routes DataBinds to the live session and backs off failing addresses
+    // (ARCHITECTURE.md §15.1.1, PreAuthGate.h). One session at a time: an authenticated second Hello
+    // is answered Busy.
+    class TcpSupervisor {
+    public:
+        using Clock = std::chrono::steady_clock;
+
+        // P12 (D5): HOW AN AUTHENTICATED SESSION IS HANDED OFF. `Fork` is the exec'd supervisor's shape
+        // (a session child per session, crash isolation, D9's eglTerminate isolation). `Thread` is the
+        // in-process display server's: the session runs on a thread of THIS process, because the window
+        // it renders into lives here and nowhere else (an ANativeWindow does not survive fork or exec).
+        // Everything before the hand-off - pre-auth, the backoff, Busy for an authenticated second
+        // Hello, DataBind routing over the socketpair - is the same code for both. What differs is what
+        // a separate fd table used to do for free: the thread shape closes neither the listener nor the
+        // other pending peers (they are the supervisor's, and still in use), keeps the session's end of
+        // the hand-off (the session closes it), and "reaps" by joining the thread.
+        enum class Handoff {
+            Fork,
+            Thread
+        };
+
+        TcpSupervisor(int listener, const Server::PreAuthKnobs& knobs, unsigned long& sessionsFaulted,
+                      Handoff handoff = Handoff::Fork, const std::atomic<bool>* stop = nullptr)
+            : m_listener(listener), m_knobs(knobs), m_backoff(knobs), m_sessionsFaulted(sessionsFaulted),
+              m_handoffShape(handoff), m_stop(stop) {}
+
+        ~TcpSupervisor() {
+            // A session thread is never left running behind its supervisor: Run() only returns after
+            // StopServing joined it, but a listener failure (73) returns from the loop directly.
+            if (m_sessionThread.joinable()) m_sessionThread.join();
+        }
+
+        // Returns only on a failure of the listener itself (73, as the old loop did) - or, with a stop
+        // flag (the in-process display server), 0 once the flag is raised and the live session ended.
+        int Run() {
+            WireLogError("MG_Remote server: pre-auth deadline=%u ms, at most %u pending, backoff after %u failures "
+                         "from %u ms (0 = off)",
+                         m_knobs.deadlineMs, m_knobs.maxPending, m_knobs.backoffAfter, m_knobs.backoffBaseMs);
+            std::vector<pollfd> fds;
+            for (;;) {
+                if (m_stop != nullptr && m_stop->load(std::memory_order_acquire)) return StopServing();
+                Reap();
+                auto now = Clock::now();
+                // While accepting is paused (out of descriptors, AcceptNew) the listener sits out the
+                // poll - it stays readable, and would spin the loop - and the pause's end is a wakeup.
+                const bool acceptPaused = now < m_acceptResumeAt;
+                fds.clear();
+                fds.push_back({acceptPaused ? -1 : m_listener, POLLIN, 0});
+                for (const auto& peer : m_pending)
+                    fds.push_back({peer.fd, POLLIN, 0});
+                // 250 ms is the old accept timeout, i.e. how often a finished child is reaped while
+                // nothing arrives; a pending deadline that falls sooner shortens it.
+                std::int64_t timeout = 250;
+                for (const auto& peer : m_pending)
+                    timeout = std::clamp<std::int64_t>(
+                        std::chrono::duration_cast<std::chrono::milliseconds>(peer.deadline - now).count(), 0, timeout);
+                if (acceptPaused)
+                    timeout = std::clamp<std::int64_t>(
+                        std::chrono::duration_cast<std::chrono::milliseconds>(m_acceptResumeAt - now).count() + 1, 0,
+                        timeout);
+                const int polled = ::poll(fds.data(), static_cast<nfds_t>(fds.size()), static_cast<int>(timeout));
+                if (polled < 0 && errno != EINTR) {
+                    WireLogError("MG_Remote server: supervisor poll failed: %s", std::strerror(errno));
+                    return 73;
+                }
+                now = Clock::now();
+                std::vector<PendingPeer> waiting;
+                for (std::size_t index = 0; index < m_pending.size(); ++index) {
+                    PendingPeer& peer = m_pending[index];
+                    if (polled > 0 && fds[index + 1].revents != 0) {
+                        switch (peer.frame.Pump(peer.fd)) {
                         case Step::NeedMore:
                             break;
                         case Step::Complete:
@@ -967,500 +985,511 @@ public:
                             RefuseAndClose(peer.fd, Protocol::RefuseCode::MalformedHello, Server::kFirstFrameTruncated);
                             NoteFailure(peer.address, "truncated first frame");
                             continue;
+                        }
                     }
+                    if (now >= peer.deadline) {
+                        RefuseAndClose(peer.fd, Protocol::RefuseCode::Authentication, Server::kPreAuthDeadline);
+                        NoteFailure(peer.address, "pre-auth deadline");
+                        continue;
+                    }
+                    waiting.push_back(std::move(peer));
                 }
-                if (now >= peer.deadline) {
-                    RefuseAndClose(peer.fd, Protocol::RefuseCode::Authentication, Server::kPreAuthDeadline);
-                    NoteFailure(peer.address, "pre-auth deadline");
-                    continue;
+                m_pending.swap(waiting);
+                for (auto& peer : m_ready)
+                    Judge(peer);
+                m_ready.clear();
+                if (polled > 0 && (fds[0].revents & (POLLIN | POLLERR | POLLHUP)) != 0) {
+                    const int failed = AcceptNew(now);
+                    if (failed != 0) return failed;
                 }
-                waiting.push_back(std::move(peer));
-            }
-            m_pending.swap(waiting);
-            for (auto& peer : m_ready) Judge(peer);
-            m_ready.clear();
-            if (polled > 0 && (fds[0].revents & (POLLIN | POLLERR | POLLHUP)) != 0) {
-                const int failed = AcceptNew(now);
-                if (failed != 0) return failed;
             }
         }
-    }
 
-private:
-    using Step = Server::FirstFrameAssembler::Step;
+    private:
+        using Step = Server::FirstFrameAssembler::Step;
 
-    struct PendingPeer {
-        int fd = -1;
-        std::string address;
-        Clock::time_point accepted{};
-        Clock::time_point deadline{};
-        Server::FirstFrameAssembler frame;
-    };
-
-    bool Reap() {
-        const bool reaped = m_handoffShape == Handoff::Thread ? ReapSessionThread()
-                                                               : ReapActiveSession(m_active, m_sessionsFaulted);
-        if (m_active <= 0 && m_handoff >= 0) { ::close(m_handoff); m_handoff = -1; }
-        return reaped;
-    }
-
-    // P12 (D5): the thread shape's reap - the same line a forked child's reap prints, and the same
-    // count, then the latch put back for the next session (ResetSessionLatch: the thread took no
-    // process with it, so the latch it armed and maybe latched is still this process's).
-    bool ReapSessionThread() {
-        if (m_active <= 0 || !m_sessionDone.load(std::memory_order_acquire)) return false;
-        if (m_sessionThread.joinable()) m_sessionThread.join();
-        const int code = m_sessionExit.load(std::memory_order_acquire);
-        m_active = -1;
-        if (code != 0) ++m_sessionsFaulted;
-        ResetSessionLatch();
-        WireLogError("MG_Remote server: in-process session #%lu pid=%d reaped exit=%d%s sessionsFaulted=%lu",
-                     m_sessionOrdinal, static_cast<int>(::getpid()), code,
-                     code == kSessionLatchedExitCode ? " (latched fault)" : "", m_sessionsFaulted);
-        return true;
-    }
-
-    // P12 (D5): the in-process server is stopping. Nobody new is served (every pending peer is told
-    // so by name), the live session - which reads the same flag each control slice - is waited out
-    // and reaped, and the supervisor returns 0.
-    int StopServing() {
-        for (auto& peer : m_pending) {
-            if (peer.fd >= 0) RefuseAndClose(peer.fd, Protocol::RefuseCode::Busy, "the server is stopping");
-            peer.fd = -1;
-        }
-        m_pending.clear();
-        while (m_active > 0) {
-            if (!Reap()) ::usleep(10000);
-        }
-        if (m_handoff >= 0) { ::close(m_handoff); m_handoff = -1; }
-        WireLogError("MG_Remote server: pid=%d in-process display server stopped", static_cast<int>(::getpid()));
-        return 0;
-    }
-
-    // exit_group closes files just before waitpid can observe the exit. Allow that small
-    // scheduling window before deciding whether a session is live - the old loop gave it to every
-    // connection it accepted while a child existed; this gives it to the one decision that
-    // depends on the answer: an AUTHENTICATED Hello's Busy (a client reconnecting the moment its
-    // last session ended must not be told Busy by a zombie). Only a peer holding the token can
-    // make the loop wait here; a DataBind's routing takes one look (Judge, fix round).
-    void WaitOutAnExitingSession() {
-        const auto reapDeadline = Clock::now() + std::chrono::milliseconds(50);
-        while (m_active > 0 && Clock::now() < reapDeadline) {
-            if (Reap()) break;
-            ::usleep(1000);
-        }
-    }
-
-    void NoteFailure(const std::string& address, const char* why) {
-        const std::uint32_t window = m_backoff.NoteFailure(address, Clock::now());
-        if (window != 0)
-            WireLogError("MG_Remote server: %s failed pre-auth %u times (last: %s); refusing it at accept for %u ms",
-                         address.c_str(), m_backoff.Failures(address), why, window);
-    }
-
-    // Accepts everything the listener has, deciding at accept what can be decided without reading.
-    int AcceptNew(Clock::time_point now) {
-        for (int burst = 0; burst < 64; ++burst) {
+        struct PendingPeer {
             int fd = -1;
-            const auto accepted = SocketTransport::AcceptOne(m_listener, 0, &fd);
-            if (accepted == MOBILEGL_ERR_TIMEOUT) return 0;
-            if (accepted == MOBILEGL_ERR_OUT_OF_MEMORY) {
-                // f2-auth fix round. Out of descriptors (or memory) is not a dead listener: the
-                // connection waits in the backlog, and pending connections give descriptors back
-                // as they are judged or reach their deadline. The first cut returned 73 here, so
-                // a connection flood against a low RLIMIT_NOFILE (or a large pending cap) took the
-                // supervisor down. Now accepting pauses for kAcceptPauseMs and the loop goes on.
-                m_acceptResumeAt = now + std::chrono::milliseconds(kAcceptPauseMs);
-                WireLogError("MG_Remote server: accept paused for %u ms: out of descriptors or memory with %zu "
-                             "connections awaiting authentication",
-                             kAcceptPauseMs, m_pending.size());
-                return 0;
+            std::string address;
+            Clock::time_point accepted{};
+            Clock::time_point deadline{};
+            Server::FirstFrameAssembler frame;
+        };
+
+        bool Reap() {
+            const bool reaped = m_handoffShape == Handoff::Thread ? ReapSessionThread()
+                                                                  : ReapActiveSession(m_active, m_sessionsFaulted);
+            if (m_active <= 0 && m_handoff >= 0) {
+                ::close(m_handoff);
+                m_handoff = -1;
             }
-            if (accepted != MOBILEGL_OK) return 73;
-            std::string address = PeerAddress(fd);
-            if (const std::uint32_t retry = m_backoff.RetryAfterMs(address, now); retry != 0) {
-                WireLogError("MG_Remote server: connection from %s refused at accept: authentication backoff, "
-                             "%u ms left", address.c_str(), retry);
-                RefuseAndClose(fd, Protocol::RefuseCode::Authentication, Server::kAuthBackoffRefusal);
-                continue;
-            }
-            if (m_pending.size() >= m_knobs.maxPending) {
-                // Full. The queue is shared between addresses (PreAuthGate.h
-                // ChoosePendingToDisplace): the newcomer takes the busiest address's oldest slot,
-                // unless its own address is the busiest - then it is the one refused.
-                std::vector<std::string> holders;
-                holders.reserve(m_pending.size());
-                for (const auto& peer : m_pending) holders.push_back(peer.address);
-                const std::size_t victim = Server::ChoosePendingToDisplace(holders, address);
-                if (victim >= m_pending.size()) {
-                    WireLogError("MG_Remote server: connection from %s refused at accept: %zu connections are "
-                                 "already awaiting authentication", address.c_str(), m_pending.size());
-                    RefuseAndClose(fd, Protocol::RefuseCode::Busy, Server::kPreAuthFull);
-                    continue;
-                }
-                PendingPeer displaced = std::move(m_pending[victim]);
-                m_pending.erase(m_pending.begin() + static_cast<std::ptrdiff_t>(victim));
-                WireLogError("MG_Remote server: pending connection from %s displaced by one from %s: the pre-auth "
-                             "queue is full and %s holds the most of it", displaced.address.c_str(), address.c_str(),
-                             displaced.address.c_str());
-                RefuseAndClose(displaced.fd, Protocol::RefuseCode::Busy, Server::kPreAuthDisplaced);
-                // A displaced connection that had already held its slot past the grace is a silent
-                // holder like one that closed; otherwise displacement would be a free way out.
-                if (now - displaced.accepted >= std::chrono::milliseconds(Server::kPreAuthProbeGraceMs))
-                    NoteFailure(displaced.address, "held a pre-auth slot until displaced");
-            }
-            PendingPeer peer;
-            peer.fd = fd;
-            peer.address = std::move(address);
-            peer.accepted = now;
-            peer.deadline = now + std::chrono::milliseconds(m_knobs.deadlineMs);
-            m_pending.push_back(std::move(peer));
+            return reaped;
         }
-        return 0;
-    }
 
-    // A complete first frame. Every refusal here is by name; only an authenticated Hello forks.
-    void Judge(PendingPeer& peer) {
-        auto connection = std::make_unique<SocketTransport>(peer.fd, -1, TransportRole::Server);
-        const int fd = peer.fd;
-        peer.fd = -1; // `connection` owns it now
-        const auto& payload = peer.frame.Payload();
-        const auto shape = Server::ClassifyFirstFrame(payload.data(), payload.size());
-        if (shape == Server::FirstFrameShape::DataBind) {
-            // PH-7 (4). While a session is live, its data connection goes to its child with the
-            // nonce it presented (the child compares, once); with none live there is nobody it
-            // could belong to. Neither is an authentication failure: a data connection left over
-            // from a session that just ended is a legitimate client's.
-            std::uint8_t nonce[kDataNonceBytes] = {};
-            (void)DecodeDataBind(payload, nonce);
-            // One look, not WaitOutAnExitingSession's 50 ms (fix round): DataBinds are
-            // unauthenticated and never counted, so waiting for each would let any peer stall this
-            // loop 50 ms per connection. Nothing needs the wait here - a child that is exiting
-            // either has cut its hand-off already (the send below fails and is refused by name) or
-            // refuses what is queued on its way out (ExitBeforeAccept / CloseHandoffRefusingQueued).
-            Reap();
-            if (m_active <= 0) {
-                // StreamLink's frames may already follow the DataBind; read them away so the close
-                // does not become an RST that discards the refusal.
-                DrainUnread(fd);
-                Refuse(*connection, Protocol::RefuseCode::Authentication, "data connection names no live session");
-                return;
-            }
-            // The send is MSG_DONTWAIT and the child cuts its end the moment its own data
-            // connection is bound (CloseHandoffRefusingQueued), so this either queues the
-            // descriptor for a child that will read or refuse it, or fails and is refused here.
-            if (m_handoff >= 0 && FdPassing::SendFd(m_handoff, fd, MobileGLByteSpan{nonce, sizeof(nonce)},
-                                                    /*dontWait=*/true) == MOBILEGL_OK) {
-                // The child holds its own descriptor now; ours goes without a shutdown(2), which
-                // would disconnect the child's too.
-                connection->CloseLocalCopy();
-                return;
-            }
-            DrainUnread(fd);
-            Refuse(*connection, Protocol::RefuseCode::Authentication, kHandoffRefused);
-            return;
-        }
-        if (shape != Server::FirstFrameShape::Hello) {
-            DrainUnread(fd);
-            Refuse(*connection, Protocol::RefuseCode::MalformedHello, Server::FirstFrameRefusalDetail(shape));
-            NoteFailure(peer.address, "malformed first frame");
-            return;
-        }
-        const auto* hello = Protocol::GetCtrlEnvelope(payload.data())->msg_as_Hello();
-        // The token FIRST, and the only answer an unauthenticated peer gets is this one
-        // (RefuseHandshake: Refuse{Authentication} "token mismatch", no fingerprint, no stamp).
-        if (AuthenticatePeerToken(*connection, hello->token()) != MOBILEGL_OK) {
-            // Anything the peer sent after its Hello is read away before the close, so the close
-            // cannot become an RST that discards the refusal already in flight.
-            DrainUnread(fd);
-            WireLogError("MG_Remote server: unauthenticated Hello from %s refused before any session work",
-                         peer.address.c_str());
-            NoteFailure(peer.address, "token mismatch");
-            return;
-        }
-        m_backoff.NoteSuccess(peer.address);
-        WaitOutAnExitingSession();
-        if (m_active > 0) {
-            // The frame is consumed, so closing cannot RST the refusal away.
-            Refuse(*connection, Protocol::RefuseCode::Busy, "one session is already active");
-            return;
-        }
-        Fork(std::move(connection), payload);
-    }
-
-    void Fork(std::unique_ptr<SocketTransport> connection, const std::vector<std::uint8_t>& hello) {
-        int pair[2] = {-1, -1};
-        if (FdPassing::CreateSocketPair(pair) != MOBILEGL_OK) {
-            Refuse(*connection, Protocol::RefuseCode::Busy, "could not create the data-connection hand-off");
-            return;
-        }
-        if (m_handoffShape == Handoff::Thread) {
-            StartSessionThread(std::move(connection), hello, pair);
-            return;
-        }
-        std::fflush(nullptr);
-        const pid_t supervisor = ::getpid();
-        const pid_t child = ::fork();
-        if (child == 0) {
-            // P12 (D8): the child dies with this supervisor, not after its client has gone.
-            DieWithSupervisor(supervisor);
-            // The child owns this one connection and its end of the hand-off. Every OTHER pending
-            // peer's descriptor is closed here, or the supervisor's refusal of that peer would not
-            // end its connection while this session lives.
-            ::close(m_listener);
-            ::close(pair[0]);
-            for (const auto& other : m_pending)
-                if (other.fd >= 0) ::close(other.fd);
-            for (const auto& other : m_ready)
-                if (other.fd >= 0) ::close(other.fd);
-            const int controlFd = connection->StreamFd();
-            ExitSessionProcess(RunSession(std::move(connection), hello, HandoffSource(pair[1], controlFd), pair[1],
-                                          DataSource::Handoff, 0));
-        }
-        if (child < 0) {
-            ::close(pair[0]);
-            ::close(pair[1]);
-            Refuse(*connection, Protocol::RefuseCode::Busy, "could not create session child");
-            return;
-        }
-        m_active = child;
-        ::close(pair[1]);
-        m_handoff = pair[0];
-        connection->CloseLocalCopy();
-    }
-
-    // P12 (D5): THE THREAD HAND-OFF. The session thread owns the connection (moved in) and the
-    // hand-off's session end (pair[1]; RunSession cuts and closes it when Accept returns); this
-    // thread keeps pair[0] to route DataBinds, exactly as the fork shape's parent does. There is no
-    // CloseLocalCopy: nothing was duplicated. `m_active` is this process's pid while the session
-    // lives - "a session is live" is all the rest of the supervisor asks of it.
-    void StartSessionThread(std::unique_ptr<SocketTransport> connection, const std::vector<std::uint8_t>& hello,
-                            const int (&pair)[2]) {
-        if (m_sessionThread.joinable()) m_sessionThread.join(); // reaped already; never live here
-        const int controlFd = connection->StreamFd();
-        const int sessionEnd = pair[1];
-        m_sessionDone.store(false, std::memory_order_release);
-        m_sessionExit.store(0, std::memory_order_release);
-        ++m_sessionOrdinal;
-        try {
-            m_sessionThread = std::thread(
-                [this, controlFd, sessionEnd, hello, conn = std::move(connection)]() mutable {
-                    const int code = RunSession(std::move(conn), hello, HandoffSource(sessionEnd, controlFd), sessionEnd,
-                                                DataSource::Handoff, 0, /*inProcess=*/true);
-                    m_sessionExit.store(code, std::memory_order_release);
-                    m_sessionDone.store(true, std::memory_order_release);
-                });
-        } catch (...) {
-            ::close(pair[0]);
-            ::close(pair[1]);
-            WireLogError("MG_Remote server: could not start the in-process session thread; the connection is "
-                         "closed (it cannot be refused: it moved into the failed thread)");
-            return;
-        }
-        m_active = ::getpid();
-        m_handoff = pair[0];
-        WireLogError("MG_Remote server: in-process session #%lu started on a thread (pid=%d)", m_sessionOrdinal,
-                     static_cast<int>(::getpid()));
-    }
-
-    int m_listener;
-    Server::PreAuthKnobs m_knobs;
-    Server::AuthBackoff m_backoff;
-    unsigned long& m_sessionsFaulted;
-    Handoff m_handoffShape = Handoff::Fork;
-    const std::atomic<bool>* m_stop = nullptr;
-    std::thread m_sessionThread;
-    std::atomic<bool> m_sessionDone{false};
-    std::atomic<int> m_sessionExit{0};
-    unsigned long m_sessionOrdinal = 0;
-    pid_t m_active = -1;
-    // The supervisor's end of the live child's data-connection hand-off (PH-7 (4)); -1 while no
-    // session is live. It goes with the child: a reaped session can be handed nothing.
-    int m_handoff = -1;
-    std::vector<PendingPeer> m_pending;
-    std::vector<PendingPeer> m_ready;
-    // Accepting resumes at this time after accept(2) ran out of descriptors or memory.
-    static constexpr std::uint32_t kAcceptPauseMs = 100;
-    Clock::time_point m_acceptResumeAt{};
-};
-
-// THE UNIX SHAPE OF THE IN-PROCESS DISPLAY SERVER (P12 D5 extended to unix endpoints). The
-// endpoint is an @abstract name or a filesystem path. A client's control AND aux connections
-// pair by the nonce each presents first (PairAcceptor, P11 PAIR - never by arrival order) and the
-// shm segments' descriptors cross by SCM_RIGHTS, so there is no DataBind to route and no pre-auth
-// gate - both are TCP exposure machinery, and a unix peer is local by construction (the forked
-// unix supervisor runs without either). Sessions take the TCP in-process shape's thread hand-off:
-// a thread per session, up to MOBILEGL_IPC_INPROC_MAX_SESSIONS (default 16) and Refuse{Busy}
-// over it, the latch per session, stop by
-// g_inProcessStop. P14 S2: THE SESSIONS ARE CONCURRENT - each one owns its ServerSession, its
-// ServerLoop and its PipeInputs block through its own ThreadSessionScope (SessionRuntime.h), so a
-// session's close, latch or fault reaches no other, and the server's own stop waits for all of
-// them rather than for the one.
-class UnixInProcessSupervisor {
-public:
-    // P14 S2: MAX SESSIONS AT ONCE. Each live session is one control thread (RunSession) plus its
-    // own mgl-srv-apply, both carrying their own ServerSession/ServerLoop/PipeInputs block, so the
-    // cap is a resource limit and not a correctness one. The default is the display server's
-    // (mobilegl_server_serve_inprocess), which is where this class is used.
-    static constexpr unsigned kDefaultMaxSessions = 16;
-
-    // MOBILEGL_IPC_INPROC_MAX_SESSIONS, capped, 0/unset/invalid = the default. An environment
-    // knob rather than a new argument to mobilegl_server_serve_inprocess: the embedded ABI has one
-    // parameter (the endpoint) and the display server passes none of this, exactly as it passes
-    // none of the transport knobs.
-    static unsigned MaxSessionsFromEnvironment() {
-        const char* text = std::getenv("MOBILEGL_IPC_INPROC_MAX_SESSIONS");
-        if (text == nullptr || text[0] == 0) return kDefaultMaxSessions;
-        char* end = nullptr;
-        const long parsed = std::strtol(text, &end, 10);
-        if (end == text || parsed <= 0) return kDefaultMaxSessions;
-        return static_cast<unsigned>(std::min<long>(parsed, 256));
-    }
-
-    UnixInProcessSupervisor(int listener, unsigned long& sessionsFaulted,
-                            unsigned maxSessions = kDefaultMaxSessions)
-        : m_listener(listener), m_pairs(listener), m_sessionsFaulted(sessionsFaulted),
-          m_maxSessions(maxSessions == 0 ? kDefaultMaxSessions : maxSessions) {}
-
-    ~UnixInProcessSupervisor() {
-        // Run() only returns with every session thread joined; a listener failure (73) is the one
-        // way out with one live, and a session is never left running behind the supervisor.
-        for (auto& session : m_live) {
-            if (session->thread.joinable()) session->thread.join();
-        }
-    }
-
-    int Run() {
-        for (;;) {
-            if (g_inProcessStop.load(std::memory_order_acquire)) return StopServing();
-            Reap();
-            std::unique_ptr<SocketTransport> control;
-            const auto accepted = m_pairs.Accept(250, control);
-            if (accepted == MOBILEGL_ERR_TIMEOUT) continue;
-            if (accepted != MOBILEGL_OK) {
-                WireLogError("MG_Remote server: the in-process unix listener failed (rc=%d)",
-                             static_cast<int>(accepted));
-                return 73;
-            }
-            // P14 S2: THE CAP, NOT "ONE AT A TIME". A peer over the limit is refused by the same
-            // words the forked `--max-sessions` supervisor uses, and is not a latch: the sessions
-            // already running carry on and the connection is simply closed.
-            if (m_live.size() >= m_maxSessions) {
-                RefuseBusy(*control, "the session limit is reached");
-                continue;
-            }
-            StartSessionThread(std::move(control));
-        }
-    }
-
-private:
-    // One live session: its control thread, and the two facts the reap needs from it. The session
-    // itself (its ServerSession, its apply thread, its PipeInputs block) is owned by RunSession's
-    // own frame, on that thread - nothing here reaches into it.
-    struct LiveSession {
-        std::thread thread;
-        std::atomic<bool> done{false};
-        std::atomic<int> exit{0};
-        unsigned long long ordinal = 0;
-    };
-
-    // The same reap as the TCP shape's ReapSessionThread: join, count faults, reset the latch for
-    // the next session in this process. Every finished session is reaped, in whatever order they
-    // finished.
-    void Reap() {
-        for (auto session = m_live.begin(); session != m_live.end();) {
-            LiveSession& live = **session;
-            if (!live.done.load(std::memory_order_acquire)) {
-                ++session;
-                continue;
-            }
-            if (live.thread.joinable()) live.thread.join();
-            const int code = live.exit.load(std::memory_order_acquire);
+        // P12 (D5): the thread shape's reap - the same line a forked child's reap prints, and the same
+        // count, then the latch put back for the next session (ResetSessionLatch: the thread took no
+        // process with it, so the latch it armed and maybe latched is still this process's).
+        bool ReapSessionThread() {
+            if (m_active <= 0 || !m_sessionDone.load(std::memory_order_acquire)) return false;
+            if (m_sessionThread.joinable()) m_sessionThread.join();
+            const int code = m_sessionExit.load(std::memory_order_acquire);
+            m_active = -1;
             if (code != 0) ++m_sessionsFaulted;
             ResetSessionLatch();
-            WireLogError("MG_Remote server: in-process unix session #%llu pid=%d reaped exit=%d%s "
-                         "sessionsFaulted=%lu (live %zu)",
-                         static_cast<unsigned long long>(live.ordinal),
-                         static_cast<int>(::getpid()), code,
-                         code == kSessionLatchedExitCode ? " (latched fault)" : "", m_sessionsFaulted,
-                         m_live.size() - 1);
-            session = m_live.erase(session);
+            WireLogError("MG_Remote server: in-process session #%lu pid=%d reaped exit=%d%s sessionsFaulted=%lu",
+                         m_sessionOrdinal, static_cast<int>(::getpid()), code,
+                         code == kSessionLatchedExitCode ? " (latched fault)" : "", m_sessionsFaulted);
+            return true;
         }
-    }
 
-    void StartSessionThread(std::unique_ptr<SocketTransport> connection) {
-        // No hand-off pair and no pre-read Hello: the session reads its own first frame and binds
-        // its shm segments from the fds the pair's second connection carries.
-        auto live = std::make_unique<LiveSession>();
-        live->ordinal = ++m_sessionOrdinal;
-        try {
-            live->thread = std::thread([live = live.get(), conn = std::move(connection)]() mutable {
-                const int code = RunSession(std::move(conn), {}, {}, -1, DataSource::None, 10000,
-                                            /*inProcess=*/true);
-                live->exit.store(code, std::memory_order_release);
-                live->done.store(true, std::memory_order_release);
-            });
-        } catch (...) {
-            WireLogError("MG_Remote server: could not start the in-process unix session thread; the "
-                         "connection is closed (it cannot be refused: it moved into the failed thread)");
-            return;
+        // P12 (D5): the in-process server is stopping. Nobody new is served (every pending peer is told
+        // so by name), the live session - which reads the same flag each control slice - is waited out
+        // and reaped, and the supervisor returns 0.
+        int StopServing() {
+            for (auto& peer : m_pending) {
+                if (peer.fd >= 0) RefuseAndClose(peer.fd, Protocol::RefuseCode::Busy, "the server is stopping");
+                peer.fd = -1;
+            }
+            m_pending.clear();
+            while (m_active > 0) {
+                if (!Reap()) ::usleep(10000);
+            }
+            if (m_handoff >= 0) {
+                ::close(m_handoff);
+                m_handoff = -1;
+            }
+            WireLogError("MG_Remote server: pid=%d in-process display server stopped", static_cast<int>(::getpid()));
+            return 0;
         }
-        m_live.push_back(std::move(live));
-        WireLogError("MG_Remote server: in-process unix session #%llu started on a thread (pid=%d, "
-                     "%zu live of at most %u; %u accepted in this process)",
-                     static_cast<unsigned long long>(m_sessionOrdinal),
-                     static_cast<int>(::getpid()), m_live.size(), m_maxSessions,
-                     Server::LiveServerSessionCount());
-    }
 
-    int StopServing() {
-        // P14 S2: EVERY live session, not one. Each reads g_inProcessStop on its own control
-        // slice, so this is the same orderly end the single-session shape had, N times over.
-        while (!m_live.empty()) {
-            Reap();
-            if (!m_live.empty()) ::usleep(10000);
+        // exit_group closes files just before waitpid can observe the exit. Allow that small
+        // scheduling window before deciding whether a session is live - the old loop gave it to every
+        // connection it accepted while a child existed; this gives it to the one decision that
+        // depends on the answer: an AUTHENTICATED Hello's Busy (a client reconnecting the moment its
+        // last session ended must not be told Busy by a zombie). Only a peer holding the token can
+        // make the loop wait here; a DataBind's routing takes one look (Judge, fix round).
+        void WaitOutAnExitingSession() {
+            const auto reapDeadline = Clock::now() + std::chrono::milliseconds(50);
+            while (m_active > 0 && Clock::now() < reapDeadline) {
+                if (Reap()) break;
+                ::usleep(1000);
+            }
         }
-        WireLogError("MG_Remote server: pid=%d in-process display server stopped", static_cast<int>(::getpid()));
+
+        void NoteFailure(const std::string& address, const char* why) {
+            const std::uint32_t window = m_backoff.NoteFailure(address, Clock::now());
+            if (window != 0)
+                WireLogError(
+                    "MG_Remote server: %s failed pre-auth %u times (last: %s); refusing it at accept for %u ms",
+                    address.c_str(), m_backoff.Failures(address), why, window);
+        }
+
+        // Accepts everything the listener has, deciding at accept what can be decided without reading.
+        int AcceptNew(Clock::time_point now) {
+            for (int burst = 0; burst < 64; ++burst) {
+                int fd = -1;
+                const auto accepted = SocketTransport::AcceptOne(m_listener, 0, &fd);
+                if (accepted == MOBILEGL_ERR_TIMEOUT) return 0;
+                if (accepted == MOBILEGL_ERR_OUT_OF_MEMORY) {
+                    // f2-auth fix round. Out of descriptors (or memory) is not a dead listener: the
+                    // connection waits in the backlog, and pending connections give descriptors back
+                    // as they are judged or reach their deadline. The first cut returned 73 here, so
+                    // a connection flood against a low RLIMIT_NOFILE (or a large pending cap) took the
+                    // supervisor down. Now accepting pauses for kAcceptPauseMs and the loop goes on.
+                    m_acceptResumeAt = now + std::chrono::milliseconds(kAcceptPauseMs);
+                    WireLogError("MG_Remote server: accept paused for %u ms: out of descriptors or memory with %zu "
+                                 "connections awaiting authentication",
+                                 kAcceptPauseMs, m_pending.size());
+                    return 0;
+                }
+                if (accepted != MOBILEGL_OK) return 73;
+                std::string address = PeerAddress(fd);
+                if (const std::uint32_t retry = m_backoff.RetryAfterMs(address, now); retry != 0) {
+                    WireLogError("MG_Remote server: connection from %s refused at accept: authentication backoff, "
+                                 "%u ms left",
+                                 address.c_str(), retry);
+                    RefuseAndClose(fd, Protocol::RefuseCode::Authentication, Server::kAuthBackoffRefusal);
+                    continue;
+                }
+                if (m_pending.size() >= m_knobs.maxPending) {
+                    // Full. The queue is shared between addresses (PreAuthGate.h
+                    // ChoosePendingToDisplace): the newcomer takes the busiest address's oldest slot,
+                    // unless its own address is the busiest - then it is the one refused.
+                    std::vector<std::string> holders;
+                    holders.reserve(m_pending.size());
+                    for (const auto& peer : m_pending)
+                        holders.push_back(peer.address);
+                    const std::size_t victim = Server::ChoosePendingToDisplace(holders, address);
+                    if (victim >= m_pending.size()) {
+                        WireLogError("MG_Remote server: connection from %s refused at accept: %zu connections are "
+                                     "already awaiting authentication",
+                                     address.c_str(), m_pending.size());
+                        RefuseAndClose(fd, Protocol::RefuseCode::Busy, Server::kPreAuthFull);
+                        continue;
+                    }
+                    PendingPeer displaced = std::move(m_pending[victim]);
+                    m_pending.erase(m_pending.begin() + static_cast<std::ptrdiff_t>(victim));
+                    WireLogError("MG_Remote server: pending connection from %s displaced by one from %s: the pre-auth "
+                                 "queue is full and %s holds the most of it",
+                                 displaced.address.c_str(), address.c_str(), displaced.address.c_str());
+                    RefuseAndClose(displaced.fd, Protocol::RefuseCode::Busy, Server::kPreAuthDisplaced);
+                    // A displaced connection that had already held its slot past the grace is a silent
+                    // holder like one that closed; otherwise displacement would be a free way out.
+                    if (now - displaced.accepted >= std::chrono::milliseconds(Server::kPreAuthProbeGraceMs))
+                        NoteFailure(displaced.address, "held a pre-auth slot until displaced");
+                }
+                PendingPeer peer;
+                peer.fd = fd;
+                peer.address = std::move(address);
+                peer.accepted = now;
+                peer.deadline = now + std::chrono::milliseconds(m_knobs.deadlineMs);
+                m_pending.push_back(std::move(peer));
+            }
+            return 0;
+        }
+
+        // A complete first frame. Every refusal here is by name; only an authenticated Hello forks.
+        void Judge(PendingPeer& peer) {
+            auto connection = std::make_unique<SocketTransport>(peer.fd, -1, TransportRole::Server);
+            const int fd = peer.fd;
+            peer.fd = -1; // `connection` owns it now
+            const auto& payload = peer.frame.Payload();
+            const auto shape = Server::ClassifyFirstFrame(payload.data(), payload.size());
+            if (shape == Server::FirstFrameShape::DataBind) {
+                // PH-7 (4). While a session is live, its data connection goes to its child with the
+                // nonce it presented (the child compares, once); with none live there is nobody it
+                // could belong to. Neither is an authentication failure: a data connection left over
+                // from a session that just ended is a legitimate client's.
+                std::uint8_t nonce[kDataNonceBytes] = {};
+                (void)DecodeDataBind(payload, nonce);
+                // One look, not WaitOutAnExitingSession's 50 ms (fix round): DataBinds are
+                // unauthenticated and never counted, so waiting for each would let any peer stall this
+                // loop 50 ms per connection. Nothing needs the wait here - a child that is exiting
+                // either has cut its hand-off already (the send below fails and is refused by name) or
+                // refuses what is queued on its way out (ExitBeforeAccept / CloseHandoffRefusingQueued).
+                Reap();
+                if (m_active <= 0) {
+                    // StreamLink's frames may already follow the DataBind; read them away so the close
+                    // does not become an RST that discards the refusal.
+                    DrainUnread(fd);
+                    Refuse(*connection, Protocol::RefuseCode::Authentication, "data connection names no live session");
+                    return;
+                }
+                // The send is MSG_DONTWAIT and the child cuts its end the moment its own data
+                // connection is bound (CloseHandoffRefusingQueued), so this either queues the
+                // descriptor for a child that will read or refuse it, or fails and is refused here.
+                if (m_handoff >= 0 && FdPassing::SendFd(m_handoff, fd, MobileGLByteSpan{nonce, sizeof(nonce)},
+                                                        /*dontWait=*/true) == MOBILEGL_OK) {
+                    // The child holds its own descriptor now; ours goes without a shutdown(2), which
+                    // would disconnect the child's too.
+                    connection->CloseLocalCopy();
+                    return;
+                }
+                DrainUnread(fd);
+                Refuse(*connection, Protocol::RefuseCode::Authentication, kHandoffRefused);
+                return;
+            }
+            if (shape != Server::FirstFrameShape::Hello) {
+                DrainUnread(fd);
+                Refuse(*connection, Protocol::RefuseCode::MalformedHello, Server::FirstFrameRefusalDetail(shape));
+                NoteFailure(peer.address, "malformed first frame");
+                return;
+            }
+            const auto* hello = Protocol::GetCtrlEnvelope(payload.data())->msg_as_Hello();
+            // The token FIRST, and the only answer an unauthenticated peer gets is this one
+            // (RefuseHandshake: Refuse{Authentication} "token mismatch", no fingerprint, no stamp).
+            if (AuthenticatePeerToken(*connection, hello->token()) != MOBILEGL_OK) {
+                // Anything the peer sent after its Hello is read away before the close, so the close
+                // cannot become an RST that discards the refusal already in flight.
+                DrainUnread(fd);
+                WireLogError("MG_Remote server: unauthenticated Hello from %s refused before any session work",
+                             peer.address.c_str());
+                NoteFailure(peer.address, "token mismatch");
+                return;
+            }
+            m_backoff.NoteSuccess(peer.address);
+            WaitOutAnExitingSession();
+            if (m_active > 0) {
+                // The frame is consumed, so closing cannot RST the refusal away.
+                Refuse(*connection, Protocol::RefuseCode::Busy, "one session is already active");
+                return;
+            }
+            Fork(std::move(connection), payload);
+        }
+
+        void Fork(std::unique_ptr<SocketTransport> connection, const std::vector<std::uint8_t>& hello) {
+            int pair[2] = {-1, -1};
+            if (FdPassing::CreateSocketPair(pair) != MOBILEGL_OK) {
+                Refuse(*connection, Protocol::RefuseCode::Busy, "could not create the data-connection hand-off");
+                return;
+            }
+            if (m_handoffShape == Handoff::Thread) {
+                StartSessionThread(std::move(connection), hello, pair);
+                return;
+            }
+            std::fflush(nullptr);
+            const pid_t supervisor = ::getpid();
+            const pid_t child = ::fork();
+            if (child == 0) {
+                // P12 (D8): the child dies with this supervisor, not after its client has gone.
+                DieWithSupervisor(supervisor);
+                // The child owns this one connection and its end of the hand-off. Every OTHER pending
+                // peer's descriptor is closed here, or the supervisor's refusal of that peer would not
+                // end its connection while this session lives.
+                ::close(m_listener);
+                ::close(pair[0]);
+                for (const auto& other : m_pending)
+                    if (other.fd >= 0) ::close(other.fd);
+                for (const auto& other : m_ready)
+                    if (other.fd >= 0) ::close(other.fd);
+                const int controlFd = connection->StreamFd();
+                ExitSessionProcess(RunSession(std::move(connection), hello, HandoffSource(pair[1], controlFd), pair[1],
+                                              DataSource::Handoff, 0));
+            }
+            if (child < 0) {
+                ::close(pair[0]);
+                ::close(pair[1]);
+                Refuse(*connection, Protocol::RefuseCode::Busy, "could not create session child");
+                return;
+            }
+            m_active = child;
+            ::close(pair[1]);
+            m_handoff = pair[0];
+            connection->CloseLocalCopy();
+        }
+
+        // P12 (D5): THE THREAD HAND-OFF. The session thread owns the connection (moved in) and the
+        // hand-off's session end (pair[1]; RunSession cuts and closes it when Accept returns); this
+        // thread keeps pair[0] to route DataBinds, exactly as the fork shape's parent does. There is no
+        // CloseLocalCopy: nothing was duplicated. `m_active` is this process's pid while the session
+        // lives - "a session is live" is all the rest of the supervisor asks of it.
+        void StartSessionThread(std::unique_ptr<SocketTransport> connection, const std::vector<std::uint8_t>& hello,
+                                const int (&pair)[2]) {
+            if (m_sessionThread.joinable()) m_sessionThread.join(); // reaped already; never live here
+            const int controlFd = connection->StreamFd();
+            const int sessionEnd = pair[1];
+            m_sessionDone.store(false, std::memory_order_release);
+            m_sessionExit.store(0, std::memory_order_release);
+            ++m_sessionOrdinal;
+            try {
+                m_sessionThread =
+                    std::thread([this, controlFd, sessionEnd, hello, conn = std::move(connection)]() mutable {
+                        const int code = RunSession(std::move(conn), hello, HandoffSource(sessionEnd, controlFd),
+                                                    sessionEnd, DataSource::Handoff, 0, /*inProcess=*/true);
+                        m_sessionExit.store(code, std::memory_order_release);
+                        m_sessionDone.store(true, std::memory_order_release);
+                    });
+            }
+            catch (...) {
+                ::close(pair[0]);
+                ::close(pair[1]);
+                WireLogError("MG_Remote server: could not start the in-process session thread; the connection is "
+                             "closed (it cannot be refused: it moved into the failed thread)");
+                return;
+            }
+            m_active = ::getpid();
+            m_handoff = pair[0];
+            WireLogError("MG_Remote server: in-process session #%lu started on a thread (pid=%d)", m_sessionOrdinal,
+                         static_cast<int>(::getpid()));
+        }
+
+        int m_listener;
+        Server::PreAuthKnobs m_knobs;
+        Server::AuthBackoff m_backoff;
+        unsigned long& m_sessionsFaulted;
+        Handoff m_handoffShape = Handoff::Fork;
+        const std::atomic<bool>* m_stop = nullptr;
+        std::thread m_sessionThread;
+        std::atomic<bool> m_sessionDone{false};
+        std::atomic<int> m_sessionExit{0};
+        unsigned long m_sessionOrdinal = 0;
+        pid_t m_active = -1;
+        // The supervisor's end of the live child's data-connection hand-off (PH-7 (4)); -1 while no
+        // session is live. It goes with the child: a reaped session can be handed nothing.
+        int m_handoff = -1;
+        std::vector<PendingPeer> m_pending;
+        std::vector<PendingPeer> m_ready;
+        // Accepting resumes at this time after accept(2) ran out of descriptors or memory.
+        static constexpr std::uint32_t kAcceptPauseMs = 100;
+        Clock::time_point m_acceptResumeAt{};
+    };
+
+    // THE UNIX SHAPE OF THE IN-PROCESS DISPLAY SERVER (P12 D5 extended to unix endpoints). The
+    // endpoint is an @abstract name or a filesystem path. A client's control AND aux connections
+    // pair by the nonce each presents first (PairAcceptor, P11 PAIR - never by arrival order) and the
+    // shm segments' descriptors cross by SCM_RIGHTS, so there is no DataBind to route and no pre-auth
+    // gate - both are TCP exposure machinery, and a unix peer is local by construction (the forked
+    // unix supervisor runs without either). Sessions take the TCP in-process shape's thread hand-off:
+    // a thread per session, up to MOBILEGL_IPC_INPROC_MAX_SESSIONS (default 16) and Refuse{Busy}
+    // over it, the latch per session, stop by
+    // g_inProcessStop. P14 S2: THE SESSIONS ARE CONCURRENT - each one owns its ServerSession, its
+    // ServerLoop and its PipeInputs block through its own ThreadSessionScope (SessionRuntime.h), so a
+    // session's close, latch or fault reaches no other, and the server's own stop waits for all of
+    // them rather than for the one.
+    class UnixInProcessSupervisor {
+    public:
+        // P14 S2: MAX SESSIONS AT ONCE. Each live session is one control thread (RunSession) plus its
+        // own mgl-srv-apply, both carrying their own ServerSession/ServerLoop/PipeInputs block, so the
+        // cap is a resource limit and not a correctness one. The default is the display server's
+        // (mobilegl_server_serve_inprocess), which is where this class is used.
+        static constexpr unsigned kDefaultMaxSessions = 16;
+
+        // MOBILEGL_IPC_INPROC_MAX_SESSIONS, capped, 0/unset/invalid = the default. An environment
+        // knob rather than a new argument to mobilegl_server_serve_inprocess: the embedded ABI has one
+        // parameter (the endpoint) and the display server passes none of this, exactly as it passes
+        // none of the transport knobs.
+        static unsigned MaxSessionsFromEnvironment() {
+            const char* text = std::getenv("MOBILEGL_IPC_INPROC_MAX_SESSIONS");
+            if (text == nullptr || text[0] == 0) return kDefaultMaxSessions;
+            char* end = nullptr;
+            const long parsed = std::strtol(text, &end, 10);
+            if (end == text || parsed <= 0) return kDefaultMaxSessions;
+            return static_cast<unsigned>(std::min<long>(parsed, 256));
+        }
+
+        UnixInProcessSupervisor(int listener, unsigned long& sessionsFaulted,
+                                unsigned maxSessions = kDefaultMaxSessions)
+            : m_listener(listener), m_pairs(listener), m_sessionsFaulted(sessionsFaulted),
+              m_maxSessions(maxSessions == 0 ? kDefaultMaxSessions : maxSessions) {}
+
+        ~UnixInProcessSupervisor() {
+            // Run() only returns with every session thread joined; a listener failure (73) is the one
+            // way out with one live, and a session is never left running behind the supervisor.
+            for (auto& session : m_live) {
+                if (session->thread.joinable()) session->thread.join();
+            }
+        }
+
+        int Run() {
+            for (;;) {
+                if (g_inProcessStop.load(std::memory_order_acquire)) return StopServing();
+                Reap();
+                std::unique_ptr<SocketTransport> control;
+                const auto accepted = m_pairs.Accept(250, control);
+                if (accepted == MOBILEGL_ERR_TIMEOUT) continue;
+                if (accepted != MOBILEGL_OK) {
+                    WireLogError("MG_Remote server: the in-process unix listener failed (rc=%d)",
+                                 static_cast<int>(accepted));
+                    return 73;
+                }
+                // P14 S2: THE CAP, NOT "ONE AT A TIME". A peer over the limit is refused by the same
+                // words the forked `--max-sessions` supervisor uses, and is not a latch: the sessions
+                // already running carry on and the connection is simply closed.
+                if (m_live.size() >= m_maxSessions) {
+                    RefuseBusy(*control, "the session limit is reached");
+                    continue;
+                }
+                StartSessionThread(std::move(control));
+            }
+        }
+
+    private:
+        // One live session: its control thread, and the two facts the reap needs from it. The session
+        // itself (its ServerSession, its apply thread, its PipeInputs block) is owned by RunSession's
+        // own frame, on that thread - nothing here reaches into it.
+        struct LiveSession {
+            std::thread thread;
+            std::atomic<bool> done{false};
+            std::atomic<int> exit{0};
+            unsigned long long ordinal = 0;
+        };
+
+        // The same reap as the TCP shape's ReapSessionThread: join, count faults, reset the latch for
+        // the next session in this process. Every finished session is reaped, in whatever order they
+        // finished.
+        void Reap() {
+            for (auto session = m_live.begin(); session != m_live.end();) {
+                LiveSession& live = **session;
+                if (!live.done.load(std::memory_order_acquire)) {
+                    ++session;
+                    continue;
+                }
+                if (live.thread.joinable()) live.thread.join();
+                const int code = live.exit.load(std::memory_order_acquire);
+                if (code != 0) ++m_sessionsFaulted;
+                ResetSessionLatch();
+                WireLogError("MG_Remote server: in-process unix session #%llu pid=%d reaped exit=%d%s "
+                             "sessionsFaulted=%lu (live %zu)",
+                             static_cast<unsigned long long>(live.ordinal), static_cast<int>(::getpid()), code,
+                             code == kSessionLatchedExitCode ? " (latched fault)" : "", m_sessionsFaulted,
+                             m_live.size() - 1);
+                session = m_live.erase(session);
+            }
+        }
+
+        void StartSessionThread(std::unique_ptr<SocketTransport> connection) {
+            // No hand-off pair and no pre-read Hello: the session reads its own first frame and binds
+            // its shm segments from the fds the pair's second connection carries.
+            auto live = std::make_unique<LiveSession>();
+            live->ordinal = ++m_sessionOrdinal;
+            try {
+                live->thread = std::thread([live = live.get(), conn = std::move(connection)]() mutable {
+                    const int code = RunSession(std::move(conn), {}, {}, -1, DataSource::None, 10000,
+                                                /*inProcess=*/true);
+                    live->exit.store(code, std::memory_order_release);
+                    live->done.store(true, std::memory_order_release);
+                });
+            }
+            catch (...) {
+                WireLogError("MG_Remote server: could not start the in-process unix session thread; the "
+                             "connection is closed (it cannot be refused: it moved into the failed thread)");
+                return;
+            }
+            m_live.push_back(std::move(live));
+            WireLogError("MG_Remote server: in-process unix session #%llu started on a thread (pid=%d, "
+                         "%zu live of at most %u; %u accepted in this process)",
+                         static_cast<unsigned long long>(m_sessionOrdinal), static_cast<int>(::getpid()), m_live.size(),
+                         m_maxSessions, Server::LiveServerSessionCount());
+        }
+
+        int StopServing() {
+            // P14 S2: EVERY live session, not one. Each reads g_inProcessStop on its own control
+            // slice, so this is the same orderly end the single-session shape had, N times over.
+            while (!m_live.empty()) {
+                Reap();
+                if (!m_live.empty()) ::usleep(10000);
+            }
+            WireLogError("MG_Remote server: pid=%d in-process display server stopped", static_cast<int>(::getpid()));
+            return 0;
+        }
+
+        int m_listener;
+        // The connections that have not been paired yet live here between Accept calls.
+        Server::PairAcceptor m_pairs;
+        unsigned long& m_sessionsFaulted;
+        unsigned m_maxSessions;
+        // P14 S2: every live session, not one. Reaped by Run()'s Reap and by StopServing.
+        std::vector<std::unique_ptr<LiveSession>> m_live;
+        unsigned long long m_sessionOrdinal = 0;
+    };
+
+    // The server's environment preconditions, shared by the exec'd supervisor and the in-process
+    // display server (P12 D5: "same env preconditions as mobilegl_server_main"). 0 when they hold.
+    int CheckServerEnvironment() {
+        // The supervisor and every forked session child log under the server role.
+        // Set it here rather than trusting the launcher to have done so: log role is
+        // resolved from this env at first use, and a launcher that omits it would
+        // silently misfile this process's main-thread server lines as the client
+        // role and never forward them. Done before any logging so the value is cached
+        // as server and inherited by the fork children. DIAL/scrub stay hard checks.
+        if (const char* role = std::getenv("MOBILEGL_IPC_ROLE"); !role || std::strcmp(role, "server") != 0) {
+            ::setenv("MOBILEGL_IPC_ROLE", "server", 1);
+        }
+        const char* dial = std::getenv("MOBILEGL_IPC_DIAL");
+        if (!dial || std::strcmp(dial, "no") != 0) {
+            std::fprintf(stderr, "MG_Remote server: MOBILEGL_IPC_DIAL=no anti-recursion catch (a) missing\n");
+            return 64;
+        }
+        for (const char* name :
+             {"MOBILEGL_TRANSPORT", "MOBILEGL_IPC_SERVER_PATH", "MOBILEGL_IPC_RING_MB", "MOBILEGL_IPC_STAGE_MB"}) {
+            if (std::getenv(name)) {
+                std::fprintf(stderr, "MG_Remote server: envp scrub FAILED, catch (b): %s\n", name);
+                return 65;
+            }
+        }
         return 0;
     }
-
-    int m_listener;
-    // The connections that have not been paired yet live here between Accept calls.
-    Server::PairAcceptor m_pairs;
-    unsigned long& m_sessionsFaulted;
-    unsigned m_maxSessions;
-    // P14 S2: every live session, not one. Reaped by Run()'s Reap and by StopServing.
-    std::vector<std::unique_ptr<LiveSession>> m_live;
-    unsigned long long m_sessionOrdinal = 0;
-};
-
-// The server's environment preconditions, shared by the exec'd supervisor and the in-process
-// display server (P12 D5: "same env preconditions as mobilegl_server_main"). 0 when they hold.
-int CheckServerEnvironment() {
-    // The supervisor and every forked session child log under the server role.
-    // Set it here rather than trusting the launcher to have done so: log role is
-    // resolved from this env at first use, and a launcher that omits it would
-    // silently misfile this process's main-thread server lines as the client
-    // role and never forward them. Done before any logging so the value is cached
-    // as server and inherited by the fork children. DIAL/scrub stay hard checks.
-    if (const char* role = std::getenv("MOBILEGL_IPC_ROLE");
-        !role || std::strcmp(role, "server") != 0) {
-        ::setenv("MOBILEGL_IPC_ROLE", "server", 1);
-    }
-    const char* dial = std::getenv("MOBILEGL_IPC_DIAL");
-    if (!dial || std::strcmp(dial, "no") != 0) {
-        std::fprintf(stderr, "MG_Remote server: MOBILEGL_IPC_DIAL=no anti-recursion catch (a) missing\n");
-        return 64;
-    }
-    for (const char* name : {"MOBILEGL_TRANSPORT", "MOBILEGL_IPC_SERVER_PATH", "MOBILEGL_IPC_RING_MB", "MOBILEGL_IPC_STAGE_MB"}) {
-        if (std::getenv(name)) {
-            std::fprintf(stderr, "MG_Remote server: envp scrub FAILED, catch (b): %s\n", name);
-            return 65;
-        }
-    }
-    return 0;
-}
-}
+} // namespace
 
 extern "C" __attribute__((visibility("default"))) int mobilegl_server_main(int argc, char** argv) {
     if (const int refused = CheckServerEnvironment(); refused != 0) return refused;
@@ -1469,7 +1498,8 @@ extern "C" __attribute__((visibility("default"))) int mobilegl_server_main(int a
     unsigned long maxSessions = 1;
     for (int i = 1; i < argc; ++i) {
         const std::string arg(argv[i]);
-        if (arg == "--serve") serve = true;
+        if (arg == "--serve")
+            serve = true;
         else if (arg == "--max-sessions" && i + 1 < argc) {
             char* end = nullptr;
             const auto count = std::strtoul(argv[++i], &end, 10);
@@ -1477,10 +1507,13 @@ extern "C" __attribute__((visibility("default"))) int mobilegl_server_main(int a
             // a process and independent backend state. In-process displays remain singleton.
             if (*end || count < 1 || count > 64) return 71;
             maxSessions = count;
-        } else if (endpoint.empty() && arg.compare(0, 2, "--") != 0) endpoint = arg;
-        else return 71;
+        } else if (endpoint.empty() && arg.compare(0, 2, "--") != 0)
+            endpoint = arg;
+        else
+            return 71;
     }
-    if (endpoint.empty()) if (const char* value = std::getenv("MOBILEGL_IPC_ENDPOINT")) endpoint = value;
+    if (endpoint.empty())
+        if (const char* value = std::getenv("MOBILEGL_IPC_ENDPOINT")) endpoint = value;
     if (endpoint.empty()) return 71;
     const bool tcpEndpoint = endpoint.compare(0, 6, "tcp://") == 0;
     if (maxSessions > 1 && (!serve || tcpEndpoint)) return 71;
@@ -1494,7 +1527,8 @@ extern "C" __attribute__((visibility("default"))) int mobilegl_server_main(int a
         // off the core THIS server picks rather than a Java re-derivation of the rule.
         const char* rule = "";
         const auto reserved = static_cast<unsigned long long>(Server::ReservedApplyCoreForThisProcess(&rule));
-        std::fprintf(stdout, "MG_Remote server: apply core reserved for dialled-in shared-segment clients: 0x%llx (%s)\n",
+        std::fprintf(stdout,
+                     "MG_Remote server: apply core reserved for dialled-in shared-segment clients: 0x%llx (%s)\n",
                      reserved, rule);
         std::fflush(stdout);
         WireLogError("MG_Remote server: apply core reserved for dialled-in shared-segment clients: 0x%llx (%s)",
@@ -1541,7 +1575,12 @@ extern "C" __attribute__((visibility("default"))) int mobilegl_server_main(int a
             accepted = pairs->Accept(serve ? 250 : 30000, control);
         }
         if (accepted == MOBILEGL_ERR_TIMEOUT && serve) continue;
-        if (accepted != MOBILEGL_OK) { pairs.reset(); LogSupervisorSummary(sessionsFaulted); ::close(listener); return 73; }
+        if (accepted != MOBILEGL_OK) {
+            pairs.reset();
+            LogSupervisorSummary(sessionsFaulted);
+            ::close(listener);
+            return 73;
+        }
         if (!serve) {
             // The process IS this one session: whatever else is waiting to be paired is let go of by
             // name now, not held for the session's lifetime.
@@ -1611,7 +1650,8 @@ extern "C" __attribute__((visibility("default"))) int mobilegl_server_serve_inpr
     bool idle = false;
     if (!g_inProcessServing.compare_exchange_strong(idle, true, std::memory_order_acq_rel)) {
         WireLogError("MG_Remote server: an in-process display server is already serving in this process; "
-                     "refusing a second one on %s", endpoint);
+                     "refusing a second one on %s",
+                     endpoint);
         return 74;
     }
     // The stop flag is NOT cleared here: a stop asked for before this thread got going still

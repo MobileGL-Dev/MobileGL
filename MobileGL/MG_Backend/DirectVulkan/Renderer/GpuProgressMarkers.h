@@ -80,9 +80,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             VkCommandBuffer Begin = VK_NULL_HANDLE;
             VkCommandBuffer End = VK_NULL_HANDLE;
             Uint64 Id = 0;
-            Bool InFlight = false; // submitted and not yet seen finished
-            Bool Claimed = false;  // handed out by Acquire, not yet submitted or abandoned
-            Bool Dirty = false;    // its events were set by a past submission: reset before reuse
+            Bool InFlight = false;  // submitted and not yet seen finished
+            Bool Claimed = false;   // handed out by Acquire, not yet submitted or abandoned
+            Bool Dirty = false;     // its events were set by a past submission: reset before reuse
             Uint64 SubmitIndex = 0; // the renderer submit index of the submission it last bracketed
         };
         static constexpr Uint32 kMaxSlots = 16;

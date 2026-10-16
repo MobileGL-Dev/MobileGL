@@ -219,19 +219,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     }
                 }
                 for (Uint32 i = 0; i < 2; ++i) {
-                    if (depthRange[i] != other.depthRange[i] ||
-                        stencilValueMask[i] != other.stencilValueMask[i] ||
-                        stencilWriteMask[i] != other.stencilWriteMask[i] ||
-                        stencilRef[i] != other.stencilRef[i]) {
+                    if (depthRange[i] != other.depthRange[i] || stencilValueMask[i] != other.stencilValueMask[i] ||
+                        stencilWriteMask[i] != other.stencilWriteMask[i] || stencilRef[i] != other.stencilRef[i]) {
                         return false;
                     }
                 }
                 return polygonOffsetFactor == other.polygonOffsetFactor &&
                        polygonOffsetUnits == other.polygonOffsetUnits &&
                        polygonOffsetClamp == other.polygonOffsetClamp && lineWidth == other.lineWidth &&
-                       extentX == other.extentX && extentY == other.extentY &&
-                       preTransform == other.preTransform && scissorEnabled == other.scissorEnabled &&
-                       isDefaultFbo == other.isDefaultFbo;
+                       extentX == other.extentX && extentY == other.extentY && preTransform == other.preTransform &&
+                       scissorEnabled == other.scissorEnabled && isDefaultFbo == other.isDefaultFbo;
             }
         };
         DynamicTailKey dynamicTailKey{};
@@ -270,43 +267,43 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         static void GetImageTransitionSourceState(VkImageLayout oldLayout, VkPipelineStageFlags& outSrcStageMask,
                                                   VkAccessFlags& outSrcAccessMask) {
             switch (oldLayout) {
-                case VK_IMAGE_LAYOUT_UNDEFINED:
-                case VK_IMAGE_LAYOUT_PRESENT_SRC_KHR:
-                    outSrcStageMask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
-                    outSrcAccessMask = 0;
-                    break;
-                case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL:
-                    outSrcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-                    outSrcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-                    break;
-                case VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL:
-                    outSrcStageMask = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
-                                      VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
-                    outSrcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
-                                       VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-                    break;
-                case VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL:
-                case VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_STENCIL_ATTACHMENT_OPTIMAL:
-                case VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_STENCIL_READ_ONLY_OPTIMAL:
-                    outSrcStageMask = VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT;
-                    outSrcAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
-                    break;
-                case VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL:
-                    outSrcStageMask = VK_PIPELINE_STAGE_TRANSFER_BIT;
-                    outSrcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-                    break;
-                case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL:
-                    outSrcStageMask = VK_PIPELINE_STAGE_TRANSFER_BIT;
-                    outSrcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-                    break;
-                case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
-                    outSrcStageMask = VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT;
-                    outSrcAccessMask = VK_ACCESS_SHADER_READ_BIT;
-                    break;
-                default:
-                    outSrcStageMask = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
-                    outSrcAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
-                    break;
+            case VK_IMAGE_LAYOUT_UNDEFINED:
+            case VK_IMAGE_LAYOUT_PRESENT_SRC_KHR:
+                outSrcStageMask = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+                outSrcAccessMask = 0;
+                break;
+            case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL:
+                outSrcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+                outSrcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+                break;
+            case VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL:
+                outSrcStageMask =
+                    VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+                outSrcAccessMask =
+                    VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+                break;
+            case VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL:
+            case VK_IMAGE_LAYOUT_DEPTH_READ_ONLY_STENCIL_ATTACHMENT_OPTIMAL:
+            case VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_STENCIL_READ_ONLY_OPTIMAL:
+                outSrcStageMask = VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT;
+                outSrcAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
+                break;
+            case VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL:
+                outSrcStageMask = VK_PIPELINE_STAGE_TRANSFER_BIT;
+                outSrcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+                break;
+            case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL:
+                outSrcStageMask = VK_PIPELINE_STAGE_TRANSFER_BIT;
+                outSrcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+                break;
+            case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
+                outSrcStageMask = VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT;
+                outSrcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+                break;
+            default:
+                outSrcStageMask = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+                outSrcAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+                break;
             }
         }
     } // namespace
@@ -324,24 +321,43 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         const Bool stencilOnly = format == GL_STENCIL_INDEX;
         const auto readDepth = [&](SizeT i) -> Float {
             if (sourceFormat == VK_FORMAT_D16_UNORM) {
-                Uint16 word{}; Memcpy(&word, depth + i * 2, sizeof(word));
+                Uint16 word{};
+                Memcpy(&word, depth + i * 2, sizeof(word));
                 return static_cast<Float>(word) / 65535.0f;
             }
             if (sourceFormat == VK_FORMAT_X8_D24_UNORM_PACK32 || sourceFormat == VK_FORMAT_D24_UNORM_S8_UINT) {
-                Uint32 word{}; Memcpy(&word, depth + i * 4, sizeof(word));
+                Uint32 word{};
+                Memcpy(&word, depth + i * 4, sizeof(word));
                 return static_cast<Float>(word & 0xffffffu) / 16777215.0f;
             }
-            Float value{}; Memcpy(&value, depth + i * sizeof(value), sizeof(value));
+            Float value{};
+            Memcpy(&value, depth + i * sizeof(value), sizeof(value));
             return value;
         };
         SizeT size = 0;
         switch (type) {
-        case GL_BYTE: case GL_UNSIGNED_BYTE: size = 1; break;
-        case GL_SHORT: case GL_UNSIGNED_SHORT: case GL_HALF_FLOAT: size = 2; break;
-        case GL_INT: case GL_UNSIGNED_INT: case GL_FLOAT: size = 4; break;
-        case GL_UNSIGNED_INT_24_8: size = 4; break;
-        case GL_FLOAT_32_UNSIGNED_INT_24_8_REV: size = 8; break;
-        default: return false;
+        case GL_BYTE:
+        case GL_UNSIGNED_BYTE:
+            size = 1;
+            break;
+        case GL_SHORT:
+        case GL_UNSIGNED_SHORT:
+        case GL_HALF_FLOAT:
+            size = 2;
+            break;
+        case GL_INT:
+        case GL_UNSIGNED_INT:
+        case GL_FLOAT:
+            size = 4;
+            break;
+        case GL_UNSIGNED_INT_24_8:
+            size = 4;
+            break;
+        case GL_FLOAT_32_UNSIGNED_INT_24_8_REV:
+            size = 8;
+            break;
+        default:
+            return false;
         }
         const Bool packed = type == GL_UNSIGNED_INT_24_8 || type == GL_FLOAT_32_UNSIGNED_INT_24_8_REV;
         if ((format == GL_DEPTH_STENCIL) != packed) return false;
@@ -353,11 +369,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             switch (type) {
             case GL_FLOAT: {
                 const Float value = stencilOnly ? static_cast<Float>(s) : d;
-                Memcpy(dst, &value, sizeof(value)); break;
+                Memcpy(dst, &value, sizeof(value));
+                break;
             }
             case GL_HALF_FLOAT: {
                 const Uint16 value = MG_Util::EncodeFloatToHalfBits(stencilOnly ? static_cast<Float>(s) : d);
-                Memcpy(dst, &value, sizeof(value)); break;
+                Memcpy(dst, &value, sizeof(value));
+                break;
             }
             case GL_UNSIGNED_INT_24_8: {
                 Uint32 depth24 = 0;
@@ -368,17 +386,22 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                     depth24 = static_cast<Uint32>(std::llround(std::clamp<double>(d, 0.0, 1.0) * 16777215.0));
                 }
                 const Uint32 value = (depth24 << 8) | s;
-                Memcpy(dst, &value, sizeof(value)); break;
+                Memcpy(dst, &value, sizeof(value));
+                break;
             }
             case GL_FLOAT_32_UNSIGNED_INT_24_8_REV:
-                Memcpy(dst, &d, sizeof(d)); Memcpy(dst + 4, &s, sizeof(s)); break;
+                Memcpy(dst, &d, sizeof(d));
+                Memcpy(dst + 4, &s, sizeof(s));
+                break;
             default: {
                 const Bool signedType = type == GL_BYTE || type == GL_SHORT || type == GL_INT;
-                const Uint64 maximum = signedType ? ((Uint64{1} << (size * 8 - 1)) - 1)
-                                                 : ((Uint64{1} << (size * 8)) - 1);
-                const Uint32 value = stencilOnly ? s : static_cast<Uint32>(
-                    std::llround(std::clamp<double>(d, 0.0, 1.0) * static_cast<double>(maximum)));
-                Memcpy(dst, &value, size); break;
+                const Uint64 maximum =
+                    signedType ? ((Uint64{1} << (size * 8 - 1)) - 1) : ((Uint64{1} << (size * 8)) - 1);
+                const Uint32 value = stencilOnly ? s
+                                                 : static_cast<Uint32>(std::llround(std::clamp<double>(d, 0.0, 1.0) *
+                                                                                    static_cast<double>(maximum)));
+                Memcpy(dst, &value, size);
+                break;
             }
             }
         }

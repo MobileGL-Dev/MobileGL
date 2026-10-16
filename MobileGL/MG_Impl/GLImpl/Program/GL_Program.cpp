@@ -41,14 +41,13 @@ namespace MobileGL::MG_Impl::GLImpl {
             // entry point handed a program name reported INVALID_VALUE; the conformance suite
             // reads exactly that code back from glSpecializeShader.
             const ErrorCode error = (shader != 0 && MG_State::pGLContext->ValidateProgramName(shader))
-                ? ErrorCode::InvalidOperation
-                : ErrorCode::InvalidValue;
+                                        ? ErrorCode::InvalidOperation
+                                        : ErrorCode::InvalidValue;
             MG_State::pGLContext->RecordError(
-                error,
-                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
-                                             std::to_string(shader) +
-                                                 (error == ErrorCode::InvalidOperation ? " is not a shader object."
-                                                                                       : " is not a valid name.")));
+                error, MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                                    std::to_string(shader) + (error == ErrorCode::InvalidOperation
+                                                                                  ? " is not a shader object."
+                                                                                  : " is not a valid name.")));
             return false;
         }
         return true;
@@ -74,15 +73,13 @@ namespace MobileGL::MG_Impl::GLImpl {
             // Programs and shaders share one name space: a name that exists but
             // belongs to a shader is INVALID_OPERATION, a name GL never handed
             // out is INVALID_VALUE (GL 3.3 core 2.11.x).
-            const ErrorCode error = MG_State::pGLContext->ValidateShaderName(program)
-                ? ErrorCode::InvalidOperation
-                : ErrorCode::InvalidValue;
+            const ErrorCode error = MG_State::pGLContext->ValidateShaderName(program) ? ErrorCode::InvalidOperation
+                                                                                      : ErrorCode::InvalidValue;
             MG_State::pGLContext->RecordError(
-                error,
-                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
-                                             std::to_string(program) +
-                                                 (error == ErrorCode::InvalidOperation ? " is not a program object."
-                                                                                       : " is not a valid name.")));
+                error, MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                                    std::to_string(program) + (error == ErrorCode::InvalidOperation
+                                                                                   ? " is not a program object."
+                                                                                   : " is not a valid name.")));
             return false;
         }
         return true;
@@ -103,17 +100,15 @@ namespace MobileGL::MG_Impl::GLImpl {
         return programObject;
     }
 
-    static const SharedPtr<MG_State::GLState::ProgramObject>& TryToGetLinkedProgramForInterfaceQuery(GLuint program,
-                                                                                                     const char* caller) {
+    static const SharedPtr<MG_State::GLState::ProgramObject>& TryToGetLinkedProgramForInterfaceQuery(
+        GLuint program, const char* caller) {
         static const SharedPtr<MG_State::GLState::ProgramObject> nullProgramObject = nullptr;
         if (!MG_State::pGLContext->ValidateProgramName(program)) {
-            const ErrorCode error = MG_State::pGLContext->ValidateShaderName(program)
-                ? ErrorCode::InvalidOperation
-                : ErrorCode::InvalidValue;
+            const ErrorCode error = MG_State::pGLContext->ValidateShaderName(program) ? ErrorCode::InvalidOperation
+                                                                                      : ErrorCode::InvalidValue;
             MG_State::pGLContext->RecordError(
-                error,
-                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
-                                             std::to_string(program) + " is not a linked program object."));
+                error, MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
+                                                    std::to_string(program) + " is not a linked program object."));
             return nullProgramObject;
         }
 
@@ -137,13 +132,11 @@ namespace MobileGL::MG_Impl::GLImpl {
                                                                                                const char* caller) {
         static const SharedPtr<MG_State::GLState::ProgramObject> nullProgramObject = nullptr;
         if (!MG_State::pGLContext->ValidateProgramName(program)) {
-            const ErrorCode error = MG_State::pGLContext->ValidateShaderName(program)
-                ? ErrorCode::InvalidOperation
-                : ErrorCode::InvalidValue;
+            const ErrorCode error = MG_State::pGLContext->ValidateShaderName(program) ? ErrorCode::InvalidOperation
+                                                                                      : ErrorCode::InvalidValue;
             MG_State::pGLContext->RecordError(
-                error,
-                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
-                                             std::to_string(program) + " is not a program object."));
+                error, MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
+                                                    std::to_string(program) + " is not a program object."));
             return nullProgramObject;
         }
         auto& programObject = MG_State::pGLContext->GetProgramObject(program);
@@ -189,8 +182,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             break;
         case GL_MAX_NUM_ACTIVE_VARIABLES:
             valid = programInterface == GL_UNIFORM_BLOCK || programInterface == GL_ATOMIC_COUNTER_BUFFER ||
-                    programInterface == GL_SHADER_STORAGE_BLOCK ||
-                    programInterface == GL_TRANSFORM_FEEDBACK_BUFFER;
+                    programInterface == GL_SHADER_STORAGE_BLOCK || programInterface == GL_TRANSFORM_FEEDBACK_BUFFER;
             break;
         case GL_MAX_NUM_COMPATIBLE_SUBROUTINES:
             valid = IsSubroutineUniformInterface(programInterface);
@@ -202,8 +194,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (!valid) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,
-                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
-                                             "Unsupported program interface query."));
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "Unsupported program interface query."));
         }
         return valid;
     }
@@ -211,9 +202,8 @@ namespace MobileGL::MG_Impl::GLImpl {
     static bool ValidateNamedProgramResourceInterface(GLenum programInterface, const char* caller) {
         if (!ProgramInterface::IsNamedInterface(programInterface)) {
             MG_State::pGLContext->RecordError(
-                ErrorCode::InvalidEnum,
-                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
-                                             "Unsupported named program resource interface."));
+                ErrorCode::InvalidEnum, MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", caller,
+                                                                     "Unsupported named program resource interface."));
             return false;
         }
         return true;
@@ -253,8 +243,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (unit < 0 || unit >= limit) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidValue,
-                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", functionName,
-                                             "Opaque uniform unit is out of range."));
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", functionName, "Opaque uniform unit is out of range."));
             return false;
         }
         return true;
@@ -298,8 +287,7 @@ namespace MobileGL::MG_Impl::GLImpl {
 
         MG_State::pGLContext->RecordError(
             ErrorCode::InvalidValue,
-            MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
-                                         "Shader storage block binding is out of range."));
+            MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "Shader storage block binding is out of range."));
         return false;
     }
 
@@ -409,10 +397,9 @@ namespace MobileGL::MG_Impl::GLImpl {
         for (GLsizei i = 0; i < count; ++i) {
             if (!seen.insert(shaders[i]).second) {
                 MG_State::pGLContext->RecordError(
-                    ErrorCode::InvalidValue,
-                    MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
-                                                 "shader " + std::to_string(shaders[i]) +
-                                                     " appears more than once in `shaders`."));
+                    ErrorCode::InvalidValue, MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                                                          "shader " + std::to_string(shaders[i]) +
+                                                                              " appears more than once in `shaders`."));
                 return;
             }
             if (!MG_State::pGLContext->ValidateShaderName(shaders[i])) {
@@ -433,8 +420,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         // they reach SPIRV-Cross, which parses rather than validates. ARB_gl_spirv lets an
         // implementation reject an invalid module at either call; rejecting at the earlier one
         // means the application's error is reported next to the data that caused it.
-        if (const auto validated = MG_Util::ShaderTranspiler::ShaderCompiler::ValidateSpirvModule(module);
-            !validated) {
+        if (const auto validated = MG_Util::ShaderTranspiler::ShaderCompiler::ValidateSpirvModule(module); !validated) {
             MGLOG_D("%s: rejected SPIR-V module: %s", __func__, validated.error().log.c_str());
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidValue,
@@ -514,8 +500,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         auto specialized = MG_Util::ShaderTranspiler::ShaderCompiler::SpecializeAndDecompileSpirvModule(
             shaderObject->GetSpirvBinary(), shaderType, entryPoint, constantIds, constantValues, failure);
         if (!specialized) {
-            MGLOG_D("%s: specialization failed for shader %u: %s", __func__, shader,
-                    specialized.error().log.c_str());
+            MGLOG_D("%s: specialization failed for shader %u: %s", __func__, shader, specialized.error().log.c_str());
             // The two conditions ARB_gl_spirv ENUMERATES are GL errors, and an erroring GL command
             // must have no other effect - so the shader object is left exactly as it was rather
             // than being pushed into a failed-compile state. Anything else is a genuine compile
@@ -999,10 +984,18 @@ namespace MobileGL::MG_Impl::GLImpl {
                 return;
             }
             switch (pname) {
-            case GL_GEOMETRY_VERTICES_OUT: *params = programObject->GetGeometryVerticesOut(); break;
-            case GL_GEOMETRY_INPUT_TYPE: *params = static_cast<GLint>(programObject->GetGeometryInputType()); break;
-            case GL_GEOMETRY_OUTPUT_TYPE: *params = static_cast<GLint>(programObject->GetGeometryOutputType()); break;
-            default: *params = programObject->GetGeometryShaderInvocations(); break;
+            case GL_GEOMETRY_VERTICES_OUT:
+                *params = programObject->GetGeometryVerticesOut();
+                break;
+            case GL_GEOMETRY_INPUT_TYPE:
+                *params = static_cast<GLint>(programObject->GetGeometryInputType());
+                break;
+            case GL_GEOMETRY_OUTPUT_TYPE:
+                *params = static_cast<GLint>(programObject->GetGeometryOutputType());
+                break;
+            default:
+                *params = programObject->GetGeometryShaderInvocations();
+                break;
             }
             MGLOG_D("%s: %s = %d", __func__, MG_Util::ConvertGLEnumToString(pname).c_str(), *params);
             break;
@@ -1035,12 +1028,18 @@ namespace MobileGL::MG_Impl::GLImpl {
                 return;
             }
             switch (pname) {
-            case GL_TESS_GEN_MODE: *params = static_cast<GLint>(programObject->GetTessGenMode()); break;
-            case GL_TESS_GEN_SPACING: *params = static_cast<GLint>(programObject->GetTessGenSpacing()); break;
+            case GL_TESS_GEN_MODE:
+                *params = static_cast<GLint>(programObject->GetTessGenMode());
+                break;
+            case GL_TESS_GEN_SPACING:
+                *params = static_cast<GLint>(programObject->GetTessGenSpacing());
+                break;
             case GL_TESS_GEN_VERTEX_ORDER:
                 *params = static_cast<GLint>(programObject->GetTessGenVertexOrder());
                 break;
-            default: *params = programObject->GetTessGenPointMode() ? GL_TRUE : GL_FALSE; break;
+            default:
+                *params = programObject->GetTessGenPointMode() ? GL_TRUE : GL_FALSE;
+                break;
             }
             MGLOG_D("%s: %s = %d", __func__, MG_Util::ConvertGLEnumToString(pname).c_str(), *params);
             break;
@@ -1254,8 +1253,8 @@ namespace MobileGL::MG_Impl::GLImpl {
             const SizeT span = UniformStorageSpanInBytes(ttype, size, nativeFloat64);
             if (pUBO == nullptr || offset == MG_State::GLState::ProgramObject::kInvalidUniformOffset ||
                 offset + span > programObject->GetUBOSize()) {
-                MGLOG_E_ONCE("%s: uniform at program %u location %d has no backing storage; returning nothing", __func__,
-                        program, location);
+                MGLOG_E_ONCE("%s: uniform at program %u location %d has no backing storage; returning nothing",
+                             __func__, program, location);
                 return;
             }
 
@@ -1310,7 +1309,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (pUBO == nullptr || offset == MG_State::GLState::ProgramObject::kInvalidUniformOffset ||
             offset + span > programObject->GetUBOSize()) {
             MGLOG_E_ONCE("%s: uniform at program %u location %d has no backing storage; returning nothing", __func__,
-                    program, location);
+                         program, location);
             return;
         }
 
@@ -1332,8 +1331,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         // glUniform*d that stored it and not here.
         if (ttype.isDouble) {
             const Int columns = ttype.isMatrix ? ttype.matrixCols : 1;
-            const Int rows = ttype.isMatrix ? ttype.matrixRows
-                                               : (ttype.isVector ? ttype.vectorSize : 1);
+            const Int rows = ttype.isMatrix ? ttype.matrixRows : (ttype.isVector ? ttype.vectorSize : 1);
             // A non-matrix is one tightly packed run and never reaches the stride at all.
             const SizeT columnStride =
                 MG_State::GLState::ProgramObject::UniformMatrixColumnStride(ttype, nativeFloat64);
@@ -1346,8 +1344,7 @@ namespace MobileGL::MG_Impl::GLImpl {
                                sizeof(GLdouble));
                     } else {
                         GLfloat narrow = 0.0f;
-                        Memcpy(&narrow, pUBO + offset + column * columnStride + row * componentSize,
-                               sizeof(narrow));
+                        Memcpy(&narrow, pUBO + offset + column * columnStride + row * componentSize, sizeof(narrow));
                         component = static_cast<GLdouble>(narrow);
                     }
                     if constexpr (std::is_integral_v<T>) {
@@ -1438,9 +1435,8 @@ namespace MobileGL::MG_Impl::GLImpl {
             MG_State::pGLContext->GetTransformFeedbackProgram().get() == programObject.get()) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,
-                MakeUnique<GenericErrorInfo>(
-                    "MG_Impl/GLImpl", __func__,
-                    "The program used by active transform feedback cannot be relinked."));
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                             "The program used by active transform feedback cannot be relinked."));
             return;
         }
 
@@ -1489,8 +1485,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         // The program in use may not change while transform feedback is active - unless
         // the capture is paused, which is exactly what ARB_transform_feedback2 added the
         // pause for (GL 4.6 core 7.3).
-        if (MG_State::pGLContext->IsTransformFeedbackActive() &&
-            !MG_State::pGLContext->IsTransformFeedbackPaused()) {
+        if (MG_State::pGLContext->IsTransformFeedbackActive() && !MG_State::pGLContext->IsTransformFeedbackPaused()) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidOperation,
                 MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
@@ -1538,9 +1533,10 @@ namespace MobileGL::MG_Impl::GLImpl {
             SizeT writeSize = ItemCount * sizeof(T);
             if (size < writeSize) {
                 // Metadata bug: degrade to a clamped copy instead of killing the process.
-                MGLOG_E_ONCE("%s: uniform size mismatch at program %u location %u: expected at least %zu bytes, got %zu "
-                        "bytes; clamping",
-                        __func__, programObject.GetExternalIndex(), location, ItemCount * sizeof(T), size);
+                MGLOG_E_ONCE(
+                    "%s: uniform size mismatch at program %u location %u: expected at least %zu bytes, got %zu "
+                    "bytes; clamping",
+                    __func__, programObject.GetExternalIndex(), location, ItemCount * sizeof(T), size);
                 writeSize = size;
             }
             // The uniform shadow's LAYOUT is phase-B data, so a write that lands while the
@@ -1560,9 +1556,9 @@ namespace MobileGL::MG_Impl::GLImpl {
                 // Should not happen: linking gives every settable uniform backing
                 // storage. Log and drop the write instead of faulting.
                 MGLOG_E_ONCE("%s: uniform at program %u location %u has no backing storage (ubo=%p offset=%u size=%zu "
-                        "uboSize=%zu); dropping write",
-                        __func__, programObject.GetExternalIndex(), location, static_cast<void*>(pUBO), offset,
-                        writeSize, uboSize);
+                             "uboSize=%zu); dropping write",
+                             __func__, programObject.GetExternalIndex(), location, static_cast<void*>(pUBO), offset,
+                             writeSize, uboSize);
                 return;
             }
             MGLOG_D("%s: program = %d, location = %d, byteOffset = %d", __func__, programObject.GetExternalIndex(),
@@ -1659,8 +1655,7 @@ namespace MobileGL::MG_Impl::GLImpl {
                 break;
             }
             if (!programObject->IsValidUniformLocation(location + offset)) {
-                RecordInvalidUniformLocationError(__func__, location + offset,
-                                                  "program " + std::to_string(program));
+                RecordInvalidUniformLocationError(__func__, location + offset, "program " + std::to_string(program));
                 return;
             }
             Uniform_State<ItemCount>(*programObject, location + offset, value + offset * ItemCount);
@@ -1719,7 +1714,8 @@ namespace MobileGL::MG_Impl::GLImpl {
             return;
         }
         Vector<GLfloat> narrowed(static_cast<SizeT>(count) * ItemCount);
-        for (SizeT i = 0; i < narrowed.size(); ++i) narrowed[i] = static_cast<GLfloat>(value[i]);
+        for (SizeT i = 0; i < narrowed.size(); ++i)
+            narrowed[i] = static_cast<GLfloat>(value[i]);
         Uniformv_State<ItemCount>(location, count, narrowed.data());
     }
 
@@ -1734,7 +1730,8 @@ namespace MobileGL::MG_Impl::GLImpl {
             return;
         }
         Vector<GLfloat> narrowed(static_cast<SizeT>(count) * ItemCount);
-        for (SizeT i = 0; i < narrowed.size(); ++i) narrowed[i] = static_cast<GLfloat>(value[i]);
+        for (SizeT i = 0; i < narrowed.size(); ++i)
+            narrowed[i] = static_cast<GLfloat>(value[i]);
         ProgramUniformv_State<ItemCount>(program, location, count, narrowed.data());
     }
 
@@ -1776,9 +1773,15 @@ namespace MobileGL::MG_Impl::GLImpl {
                 }
                 const SizeT byteOffset = static_cast<SizeT>(c) * kColumnStride;
                 switch (rows) {
-                case 2: Uniform_State<2>(programObject, location + matrix, column, byteOffset); break;
-                case 3: Uniform_State<3>(programObject, location + matrix, column, byteOffset); break;
-                default: Uniform_State<4>(programObject, location + matrix, column, byteOffset); break;
+                case 2:
+                    Uniform_State<2>(programObject, location + matrix, column, byteOffset);
+                    break;
+                case 3:
+                    Uniform_State<3>(programObject, location + matrix, column, byteOffset);
+                    break;
+                default:
+                    Uniform_State<4>(programObject, location + matrix, column, byteOffset);
+                    break;
                 }
             }
         }
@@ -1793,8 +1796,7 @@ namespace MobileGL::MG_Impl::GLImpl {
     // Minecraft calls thousands of times a frame for a case no shader pack ever takes.
     template <typename Program>
     void UniformMatrixdvNative_Object(Program& programObject, GLint location, GLsizei count, GLboolean transpose,
-                                      const GLdouble* value, Int columns, Int rows,
-                                      const String& ownerDescription) {
+                                      const GLdouble* value, Int columns, Int rows, const String& ownerDescription) {
         const SizeT columnStride = rows <= 2 ? 2 * sizeof(GLdouble) : 4 * sizeof(GLdouble);
         const SizeT componentCount = static_cast<SizeT>(columns) * static_cast<SizeT>(rows);
         GLdouble column[4] = {};
@@ -1818,9 +1820,15 @@ namespace MobileGL::MG_Impl::GLImpl {
                 }
                 const SizeT byteOffset = static_cast<SizeT>(c) * columnStride;
                 switch (rows) {
-                case 2: Uniform_State<2>(programObject, location + matrix, column, byteOffset); break;
-                case 3: Uniform_State<3>(programObject, location + matrix, column, byteOffset); break;
-                default: Uniform_State<4>(programObject, location + matrix, column, byteOffset); break;
+                case 2:
+                    Uniform_State<2>(programObject, location + matrix, column, byteOffset);
+                    break;
+                case 3:
+                    Uniform_State<3>(programObject, location + matrix, column, byteOffset);
+                    break;
+                default:
+                    Uniform_State<4>(programObject, location + matrix, column, byteOffset);
+                    break;
                 }
             }
         }
@@ -1843,9 +1851,10 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
         const SizeT componentCount = static_cast<SizeT>(columns) * static_cast<SizeT>(rows);
         Vector<GLfloat> narrowed(static_cast<SizeT>(count) * componentCount);
-        for (SizeT i = 0; i < narrowed.size(); ++i) narrowed[i] = static_cast<GLfloat>(value[i]);
-        UniformMatrixfv_Object(programObject, "glUniformMatrixdv", location, count, transpose, narrowed.data(),
-                               columns, rows, "the current program object");
+        for (SizeT i = 0; i < narrowed.size(); ++i)
+            narrowed[i] = static_cast<GLfloat>(value[i]);
+        UniformMatrixfv_Object(programObject, "glUniformMatrixdv", location, count, transpose, narrowed.data(), columns,
+                               rows, "the current program object");
     }
 
     // Helper function to transpose a 2x2 matrix
@@ -2267,13 +2276,11 @@ namespace MobileGL::MG_Impl::GLImpl {
             MGLOG_D("%s: GL_UNIFORM_BLOCK_REFERENCED_BY_VERTEX_SHADER = %d", __func__, *params);
             break;
         case GL_UNIFORM_BLOCK_REFERENCED_BY_TESS_CONTROL_SHADER:
-            *params =
-                BoolToGLInt(programObject->IsUniformBlockReferencedByStage(blockIndex, EShLangTessControl));
+            *params = BoolToGLInt(programObject->IsUniformBlockReferencedByStage(blockIndex, EShLangTessControl));
             MGLOG_D("%s: GL_UNIFORM_BLOCK_REFERENCED_BY_TESS_CONTROL_SHADER = %d", __func__, *params);
             break;
         case GL_UNIFORM_BLOCK_REFERENCED_BY_TESS_EVALUATION_SHADER:
-            *params =
-                BoolToGLInt(programObject->IsUniformBlockReferencedByStage(blockIndex, EShLangTessEvaluation));
+            *params = BoolToGLInt(programObject->IsUniformBlockReferencedByStage(blockIndex, EShLangTessEvaluation));
             MGLOG_D("%s: GL_UNIFORM_BLOCK_REFERENCED_BY_TESS_EVALUATION_SHADER = %d", __func__, *params);
             break;
         case GL_UNIFORM_BLOCK_REFERENCED_BY_GEOMETRY_SHADER:
@@ -2367,8 +2374,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         const auto& dynamicParameters = MG_Backend::pActiveBackendObject->GetDynamicParameters();
         // colorNumber is bounded by GL_MAX_DRAW_BUFFERS for index 0, and by
         // GL_MAX_DUAL_SOURCE_DRAW_BUFFERS (which MobileGL reports as 1) for index 1.
-        const GLuint colorNumberLimit =
-            (index == 0) ? static_cast<GLuint>(dynamicParameters.MaxDrawBuffers) : 1u;
+        const GLuint colorNumberLimit = (index == 0) ? static_cast<GLuint>(dynamicParameters.MaxDrawBuffers) : 1u;
         if (colorNumber >= colorNumberLimit) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidValue,
@@ -2771,7 +2777,7 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     void ProgramUniformMatrix2dv(GLuint program, GLint location, GLsizei count, GLboolean transpose,
-                                      const GLdouble* value) {
+                                 const GLdouble* value) {
         auto& programObject = TryToGetProgramObject(program);
         if (!programObject) return;
         if (!programObject->GetLinkStatus()) {
@@ -2797,7 +2803,7 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     void ProgramUniformMatrix3dv(GLuint program, GLint location, GLsizei count, GLboolean transpose,
-                                      const GLdouble* value) {
+                                 const GLdouble* value) {
         auto& programObject = TryToGetProgramObject(program);
         if (!programObject) return;
         if (!programObject->GetLinkStatus()) {
@@ -2823,7 +2829,7 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     void ProgramUniformMatrix4dv(GLuint program, GLint location, GLsizei count, GLboolean transpose,
-                                      const GLdouble* value) {
+                                 const GLdouble* value) {
         auto& programObject = TryToGetProgramObject(program);
         if (!programObject) return;
         if (!programObject->GetLinkStatus()) {
@@ -2849,7 +2855,7 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     void ProgramUniformMatrix2x3dv(GLuint program, GLint location, GLsizei count, GLboolean transpose,
-                                      const GLdouble* value) {
+                                   const GLdouble* value) {
         auto& programObject = TryToGetProgramObject(program);
         if (!programObject) return;
         if (!programObject->GetLinkStatus()) {
@@ -2875,7 +2881,7 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     void ProgramUniformMatrix2x4dv(GLuint program, GLint location, GLsizei count, GLboolean transpose,
-                                      const GLdouble* value) {
+                                   const GLdouble* value) {
         auto& programObject = TryToGetProgramObject(program);
         if (!programObject) return;
         if (!programObject->GetLinkStatus()) {
@@ -2901,7 +2907,7 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     void ProgramUniformMatrix3x2dv(GLuint program, GLint location, GLsizei count, GLboolean transpose,
-                                      const GLdouble* value) {
+                                   const GLdouble* value) {
         auto& programObject = TryToGetProgramObject(program);
         if (!programObject) return;
         if (!programObject->GetLinkStatus()) {
@@ -2927,7 +2933,7 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     void ProgramUniformMatrix3x4dv(GLuint program, GLint location, GLsizei count, GLboolean transpose,
-                                      const GLdouble* value) {
+                                   const GLdouble* value) {
         auto& programObject = TryToGetProgramObject(program);
         if (!programObject) return;
         if (!programObject->GetLinkStatus()) {
@@ -2953,7 +2959,7 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     void ProgramUniformMatrix4x2dv(GLuint program, GLint location, GLsizei count, GLboolean transpose,
-                                      const GLdouble* value) {
+                                   const GLdouble* value) {
         auto& programObject = TryToGetProgramObject(program);
         if (!programObject) return;
         if (!programObject->GetLinkStatus()) {
@@ -2979,7 +2985,7 @@ namespace MobileGL::MG_Impl::GLImpl {
     }
 
     void ProgramUniformMatrix4x3dv(GLuint program, GLint location, GLsizei count, GLboolean transpose,
-                                      const GLdouble* value) {
+                                   const GLdouble* value) {
         auto& programObject = TryToGetProgramObject(program);
         if (!programObject) return;
         if (!programObject->GetLinkStatus()) {
@@ -3335,10 +3341,10 @@ namespace MobileGL::MG_Impl::GLImpl {
             return;
         }
         if (propCount <= 0 || bufSize < 0) {
-            MG_State::pGLContext->RecordError(
-                ErrorCode::InvalidValue, MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
-                                                                      "propCount must be positive and bufSize "
-                                                                      "non-negative."));
+            MG_State::pGLContext->RecordError(ErrorCode::InvalidValue,
+                                              MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                                                           "propCount must be positive and bufSize "
+                                                                           "non-negative."));
             return;
         }
         if (props == nullptr) return;
@@ -3372,7 +3378,8 @@ namespace MobileGL::MG_Impl::GLImpl {
         }
         if (params == nullptr) return;
         const GLsizei written = static_cast<GLsizei>(std::min<SizeT>(values.size(), static_cast<SizeT>(bufSize)));
-        for (GLsizei i = 0; i < written; ++i) params[i] = values[i];
+        for (GLsizei i = 0; i < written; ++i)
+            params[i] = values[i];
         if (length) *length = written;
     }
 
@@ -3384,8 +3391,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (!ProgramInterface::InterfaceHasLocations(programInterface)) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidEnum,
-                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
-                                             "Program interface has no locations."));
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__, "Program interface has no locations."));
             return -1;
         }
         return ProgramInterface::GetResourceLocation(*programObject, programInterface, name);
@@ -3468,7 +3474,8 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (params == nullptr) return;
         // GL_ATOMIC_COUNTER_BUFFER_ACTIVE_ATOMIC_COUNTER_INDICES is the only multi-value property
         // here, and the caller sized its array from _ACTIVE_ATOMIC_COUNTERS.
-        for (SizeT i = 0; i < values.size(); ++i) params[i] = values[i];
+        for (SizeT i = 0; i < values.size(); ++i)
+            params[i] = values[i];
     }
 
     // GL 4.6 §7.6.2: <storageBlockIndex> is an active shader storage block index of <program>
@@ -3482,8 +3489,7 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (!programObject || !programObject->GetLinkStatus()) return;
         if (!ValidateShaderStorageBlockBinding(storageBlockBinding)) return;
         String blockName;
-        if (!ProgramInterface::GetResourceName(*programObject, GL_SHADER_STORAGE_BLOCK, storageBlockIndex,
-                                               blockName)) {
+        if (!ProgramInterface::GetResourceName(*programObject, GL_SHADER_STORAGE_BLOCK, storageBlockIndex, blockName)) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidValue,
                 MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
@@ -3689,9 +3695,8 @@ namespace MobileGL::MG_Impl::GLImpl {
         if (varying == nullptr) {
             MG_State::pGLContext->RecordError(
                 ErrorCode::InvalidValue,
-                MakeUnique<GenericErrorInfo>(
-                    "MG_Impl/GLImpl", __func__,
-                    "index is not an active transform feedback varying of the program."));
+                MakeUnique<GenericErrorInfo>("MG_Impl/GLImpl", __func__,
+                                             "index is not an active transform feedback varying of the program."));
             return;
         }
         if (size != nullptr) *size = varying->size;

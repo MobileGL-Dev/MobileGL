@@ -104,17 +104,19 @@ namespace MobileGL::MG_Remote::Client {
         // one outcome the reverse channel exists to prevent: stale bytes that look like a
         // successful read. It is the reply form's ReadbackDeclined, arriving one call later.
         if (ClientSession::DeviceLost()) {
-            SessionFail(MGFatalFamily::ReadbackDeclined, "MGPipe: Fatal{ReadbackDeclined, \"buffer-writeback\"} - buffer %u "
-                    "still owes a GPU write (a pack-buffer read or a shader store) and the device is "
-                    "lost, so its readback was declined; its shadow holds the bytes from before the "
-                    "write and is not returned as the GPU's",
-                    buffer.GetExternalIndex());
+            SessionFail(MGFatalFamily::ReadbackDeclined,
+                        "MGPipe: Fatal{ReadbackDeclined, \"buffer-writeback\"} - buffer %u "
+                        "still owes a GPU write (a pack-buffer read or a shader store) and the device is "
+                        "lost, so its readback was declined; its shadow holds the bytes from before the "
+                        "write and is not returned as the GPU's",
+                        buffer.GetExternalIndex());
         }
-        SessionFail(MGFatalFamily::UnimplementedWritebackWait, "MGPipe: Fatal{UnimplementedWritebackWait} - a ClientSession is active and buffer %u "
-                "still has an outstanding GPU write after its readback was emitted. The wait is "
-                "ClientSession::EmitAndWait's (R-3: the reply slot id IS the record seq); P5 package "
-                "b1 landed the third state and s1/c1 own the wait itself.",
-                buffer.GetExternalIndex());
+        SessionFail(MGFatalFamily::UnimplementedWritebackWait,
+                    "MGPipe: Fatal{UnimplementedWritebackWait} - a ClientSession is active and buffer %u "
+                    "still has an outstanding GPU write after its readback was emitted. The wait is "
+                    "ClientSession::EmitAndWait's (R-3: the reply slot id IS the record seq); P5 package "
+                    "b1 landed the third state and s1/c1 own the wait itself.",
+                    buffer.GetExternalIndex());
     }
 
 } // namespace MobileGL::MG_Remote::Client

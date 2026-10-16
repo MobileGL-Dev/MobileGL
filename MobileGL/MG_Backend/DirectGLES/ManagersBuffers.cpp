@@ -28,9 +28,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Bool g_boundPixelUnpackBufferKnown = false;
         } // namespace
 
-            // Bumped whenever the backend ES context is destroyed; resources with
-            // an older generation hold ids from a dead context.
-            Uint g_bufferContextGeneration = 1;
+        // Bumped whenever the backend ES context is destroyed; resources with
+        // an older generation hold ids from a dead context.
+        Uint g_bufferContextGeneration = 1;
 
         namespace {
             // Buffer-mutation epoch backing store (contract, mutation-site list and
@@ -88,10 +88,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
             Bool IsPoolable(const GLESBufferResource& r) {
                 // Require working fences: recycling is gated on the frame-completion
                 // watermark, which only advances if Present can insert/poll fences.
-                return g_GLESFuncs.glFenceSync != nullptr && g_GLESFuncs.glGetSynciv != nullptr &&
-                       r.id != 0 && !r.persistentMapped && !r.immutableStorage &&
-                       r.contextGeneration == g_bufferContextGeneration && r.storageInitialized &&
-                       r.storageSize > 0 && r.storageSize <= kMaxPoolableBufferBytes;
+                return g_GLESFuncs.glFenceSync != nullptr && g_GLESFuncs.glGetSynciv != nullptr && r.id != 0 &&
+                       !r.persistentMapped && !r.immutableStorage && r.contextGeneration == g_bufferContextGeneration &&
+                       r.storageInitialized && r.storageSize > 0 && r.storageSize <= kMaxPoolableBufferBytes;
             }
 
             // Retire a buffer id into the pool (owning thread; caller verified IsPoolable).
@@ -117,8 +116,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // +1: Present increments the serial at frame END, so during the frame
                 // now being built CurrentFrameSerial() reads (frame-1). A buffer used
                 // this frame is only GPU-done once THIS frame's fence (serial+1) signals.
-                bucket.push_back(
-                    {r.id, r.storageSize, r.contextGeneration, DirectGLES::CurrentFrameSerial() + 1});
+                bucket.push_back({r.id, r.storageSize, r.contextGeneration, DirectGLES::CurrentFrameSerial() + 1});
                 g_pooledBytes += r.storageSize;
                 r.id = 0;
             }
@@ -167,31 +165,37 @@ namespace MobileGL::MG_Backend::DirectGLES {
             std::atomic<Uint32> g_ringGenerationBases{0};
         } // namespace
 
-            RingSet::RingSet() {
-                const Uint32 base = (g_ringGenerationBases.fetch_add(1, std::memory_order_relaxed) + 1) << 12;
-                ubo.store.generation = base;
-                unpack.store.generation = base;
-                upload.store.generation = base;
-            }
+        RingSet::RingSet() {
+            const Uint32 base = (g_ringGenerationBases.fetch_add(1, std::memory_order_relaxed) + 1) << 12;
+            ubo.store.generation = base;
+            unpack.store.generation = base;
+            upload.store.generation = base;
+        }
 
-            RingSet::~RingSet() {
-                const std::lock_guard<std::mutex> lock(g_orphanRingBuffersMutex);
-                for (const PersistentRing* ring : {&ubo, &unpack, &upload}) {
-                    if (ring->store.id != 0) {
-                        OrphanRingBuffers().push_back({ring->store.id, ring->store.contextGeneration});
-                    }
-                    for (const auto& retired : ring->retired) {
-                        if (retired.id != 0) OrphanRingBuffers().push_back({retired.id, retired.contextGeneration});
-                    }
+        RingSet::~RingSet() {
+            const std::lock_guard<std::mutex> lock(g_orphanRingBuffersMutex);
+            for (const PersistentRing* ring : {&ubo, &unpack, &upload}) {
+                if (ring->store.id != 0) {
+                    OrphanRingBuffers().push_back({ring->store.id, ring->store.contextGeneration});
+                }
+                for (const auto& retired : ring->retired) {
+                    if (retired.id != 0) OrphanRingBuffers().push_back({retired.id, retired.contextGeneration});
                 }
             }
+        }
 
-            DirectGLES::PerNativeContext<RingSet> g_ringSets;
+        DirectGLES::PerNativeContext<RingSet> g_ringSets;
 
         namespace {
-            PersistentRing& UboRing() { return g_ringSets.Current().ubo; }
-            PersistentRing& UnpackRing() { return g_ringSets.Current().unpack; }
-            PersistentRing& UploadRing() { return g_ringSets.Current().upload; }
+            PersistentRing& UboRing() {
+                return g_ringSets.Current().ubo;
+            }
+            PersistentRing& UnpackRing() {
+                return g_ringSets.Current().unpack;
+            }
+            PersistentRing& UploadRing() {
+                return g_ringSets.Current().upload;
+            }
 
             // The ES context the ring's id/map belonged to is gone (or was never
             // seen): drop every handle without GL calls and re-arm creation. The
@@ -231,8 +235,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // off the applier's stored descriptor and the shadow base the call carried; nothing
             // else in here differs, so there is ONE glBufferData and one extent rule rather
             // than two that can drift apart.
-            void RespecifyStorageWith(GLESBufferResource& resource, SizeT size, GLenum usage,
-                                      const void* initialData, Uint64 syncedSerial) {
+            void RespecifyStorageWith(GLESBufferResource& resource, SizeT size, GLenum usage, const void* initialData,
+                                      Uint64 syncedSerial) {
 #ifdef TRACY_ENABLE
                 ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
@@ -245,8 +249,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 if (MG_Util::PipeStats::Enabled() && initialData != nullptr) {
                     // An ORPHANING respecify passes NULL and moves nothing, which is exactly
                     // why the test is on initialData rather than on size.
-                    MG_Util::PipeStats::AddBytes(MG_Util::PipeStats::ByteClass::StageBuffer,
-                                                 static_cast<Uint64>(size));
+                    MG_Util::PipeStats::AddBytes(MG_Util::PipeStats::ByteClass::StageBuffer, static_cast<Uint64>(size));
                 }
                 resource.storageSize = size;
                 resource.storageInitialized = true;
@@ -289,26 +292,25 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
         } // namespace
 
-            // -------------------------------------------------------------------------------
-            // R-11 - THE SERVER'S OWN COPY OF THE STAGED BYTES. Package v1.
-            //
-            // The rule, the evidence and the reason the storage is a side table rather than a
-            // member of GLESBufferResource are all in MG_Remote/Server/StagedShadow.h. This is
-            // only the instance and the four call sites.
-            //
-            // ONE PER PROCESS, and its copying arm is decided ONCE at first use: the two arms
-            // hold the authoritative bytes in DIFFERENT places, so an answer that changed
-            // mid-run would strand every resource already staged - the same reason
-            // ResolveResourceSubsystemArm latches (Managers.h). Leaked at exit like every other
-            // MG_Remote singleton (ID-8): ~BufferObject reaches the destroy path from exit
-            // handlers, after this TU's globals would already be gone.
-            // -------------------------------------------------------------------------------
-            MG_Record::StagedShadowStore& ServerStaged() {
-                static MG_Record::StagedShadowStore& store =
-                    *new MG_Record::StagedShadowStore(
-                        MG_Config::Transport != MG_Config::TransportMode::Monolith);
-                return store;
-            }
+        // -------------------------------------------------------------------------------
+        // R-11 - THE SERVER'S OWN COPY OF THE STAGED BYTES. Package v1.
+        //
+        // The rule, the evidence and the reason the storage is a side table rather than a
+        // member of GLESBufferResource are all in MG_Remote/Server/StagedShadow.h. This is
+        // only the instance and the four call sites.
+        //
+        // ONE PER PROCESS, and its copying arm is decided ONCE at first use: the two arms
+        // hold the authoritative bytes in DIFFERENT places, so an answer that changed
+        // mid-run would strand every resource already staged - the same reason
+        // ResolveResourceSubsystemArm latches (Managers.h). Leaked at exit like every other
+        // MG_Remote singleton (ID-8): ~BufferObject reaches the destroy path from exit
+        // handlers, after this TU's globals would already be gone.
+        // -------------------------------------------------------------------------------
+        MG_Record::StagedShadowStore& ServerStaged() {
+            static MG_Record::StagedShadowStore& store =
+                *new MG_Record::StagedShadowStore(MG_Config::Transport != MG_Config::TransportMode::Monolith);
+            return store;
+        }
 
         namespace {
 #if MOBILEGL_BUILD_DISAGGREGATED
@@ -345,10 +347,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
             void SweepT0Retired(Bool contextGone) {
                 for (SizeT i = 0; i < g_t0Retired.size();) {
                     T0RetiredImport& retired = g_t0Retired[i];
-                    const Bool sameContext = !contextGone && retired.generation == g_bufferContextGeneration &&
-                                             CanTouchGLNow();
-                    Bool done = contextGone || retired.generation != g_bufferContextGeneration ||
-                                retired.fence == nullptr;
+                    const Bool sameContext =
+                        !contextGone && retired.generation == g_bufferContextGeneration && CanTouchGLNow();
+                    Bool done =
+                        contextGone || retired.generation != g_bufferContextGeneration || retired.fence == nullptr;
                     if (!done && sameContext && g_GLESFuncs.glClientWaitSync) {
                         const GLenum status = g_GLESFuncs.glClientWaitSync(retired.fence, 0, 0);
                         done = status == GL_ALREADY_SIGNALED || status == GL_CONDITION_SATISFIED ||
@@ -433,100 +435,98 @@ namespace MobileGL::MG_Backend::DirectGLES {
         void FlushPendingRangesFrom(GLESBufferResource& resource, const Uint8* hostBase, SizeT frontendSize,
                                     SizeT hostBaseFrom, SizeT hostBaseTo) {
 #ifdef TRACY_ENABLE
-                ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
+            ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
-                VecRange1D ranges;
-                {
-                    const std::lock_guard<std::mutex> lock(resource.pendingMutex);
-                    if (resource.pendingRanges.empty()) return;
-                    ranges = std::move(resource.pendingRanges);
-                    resource.pendingRanges.clear();
+            VecRange1D ranges;
+            {
+                const std::lock_guard<std::mutex> lock(resource.pendingMutex);
+                if (resource.pendingRanges.empty()) return;
+                ranges = std::move(resource.pendingRanges);
+                resource.pendingRanges.clear();
+            }
+            // No shadow to read from: only reachable on the handle arm, where the base
+            // arrives with the call, and only for a resource that queued a range before any
+            // content-carrying call named one. The queue is already drained, so the next
+            // full re-upload is what puts the store right.
+            if (hostBase == nullptr) return;
+            // Clamp against BOTH extents: the readback flush may run while the
+            // frontend size and the backend store disagree (a pending respecify
+            // resolves that later; bytes past either end have nowhere to land).
+            const SizeT limit = std::min(frontendSize, resource.storageSize);
+            const Bool mapUsable = !MG_Config::Features.EsprytDisableInvalidateFlush && g_GLESFuncs.glMapBufferRange &&
+                                   g_GLESFuncs.glUnmapBuffer;
+            const Bool ringUsable = UploadRingUsableNow();
+            for (const auto& range : ranges) {
+                const SizeT end = std::min(range.end, limit);
+                const SizeT start = std::min(range.start, end);
+                const SizeT size = end - start;
+                if (size == 0) continue;
+                if (MG_Util::PipeStats::Enabled()) {
+                    // Counted once per queued range, before the three delivery shapes
+                    // below diverge: all three move exactly these bytes, and it is the
+                    // byte count - not the shape - that sizes SEG_STAGE.
+                    MG_Util::PipeStats::AddBytes(MG_Util::PipeStats::ByteClass::StageBuffer, static_cast<Uint64>(size));
                 }
-                // No shadow to read from: only reachable on the handle arm, where the base
-                // arrives with the call, and only for a resource that queued a range before any
-                // content-carrying call named one. The queue is already drained, so the next
-                // full re-upload is what puts the store right.
-                if (hostBase == nullptr) return;
-                // Clamp against BOTH extents: the readback flush may run while the
-                // frontend size and the backend store disagree (a pending respecify
-                // resolves that later; bytes past either end have nowhere to land).
-                const SizeT limit = std::min(frontendSize, resource.storageSize);
-                const Bool mapUsable = !MG_Config::Features.EsprytDisableInvalidateFlush &&
-                                       g_GLESFuncs.glMapBufferRange && g_GLESFuncs.glUnmapBuffer;
-                const Bool ringUsable = UploadRingUsableNow();
-                for (const auto& range : ranges) {
-                    const SizeT end = std::min(range.end, limit);
-                    const SizeT start = std::min(range.start, end);
-                    const SizeT size = end - start;
-                    if (size == 0) continue;
-                    if (MG_Util::PipeStats::Enabled()) {
-                        // Counted once per queued range, before the three delivery shapes
-                        // below diverge: all three move exactly these bytes, and it is the
-                        // byte count - not the shape - that sizes SEG_STAGE.
-                        MG_Util::PipeStats::AddBytes(MG_Util::PipeStats::ByteClass::StageBuffer,
-                                                     static_cast<Uint64>(size));
-                    }
-                    // The invalidating map's fast path is SHAPE-dependent on this Mali
-                    // driver: a whole-buffer invalidation renames the store outright,
-                    // and a large range gets fresh pages - but a small unaligned range
-                    // of a busy store makes the map WAIT (osup_sync_object_wait, ~9%
-                    // of a Minecraft 26.3 replay). So: whole buffer -> orphan-map;
-                    // large range -> range-invalidating map; small range -> the staged
-                    // ring copy, whose worst case (a whole-destination ghost) is only
-                    // ever the small destination itself.
-                    //
-                    // The map covers EXACTLY the queued range: only those bytes are the
-                    // shadow's to rewrite. Widening to page bounds looked free and was
-                    // not - the widened bytes clobbered GPU-written data (an SSBO
-                    // counter beside the app's SubData) with the stale shadow.
-                    // The extent the bytes behind `hostBase` are actually good for, clamped
-                    // to the store. With the default it IS [start, end), so the refusal below
-                    // cannot fire and the ladder is unchanged; with a real SEG_STAGE snapshot
-                    // it is the snapshot's window and a disagreement drops this range to the
-                    // staging ring instead of letting a widened INVALIDATE_RANGE declare bytes
-                    // dead that nothing is about to rewrite.
-                    const SizeT coveredFrom = hostBaseFrom > start ? hostBaseFrom : start;
-                    const SizeT coveredTo = hostBaseTo < end ? hostBaseTo : end;
+                // The invalidating map's fast path is SHAPE-dependent on this Mali
+                // driver: a whole-buffer invalidation renames the store outright,
+                // and a large range gets fresh pages - but a small unaligned range
+                // of a busy store makes the map WAIT (osup_sync_object_wait, ~9%
+                // of a Minecraft 26.3 replay). So: whole buffer -> orphan-map;
+                // large range -> range-invalidating map; small range -> the staged
+                // ring copy, whose worst case (a whole-destination ghost) is only
+                // ever the small destination itself.
+                //
+                // The map covers EXACTLY the queued range: only those bytes are the
+                // shadow's to rewrite. Widening to page bounds looked free and was
+                // not - the widened bytes clobbered GPU-written data (an SSBO
+                // counter beside the app's SubData) with the stale shadow.
+                // The extent the bytes behind `hostBase` are actually good for, clamped
+                // to the store. With the default it IS [start, end), so the refusal below
+                // cannot fire and the ladder is unchanged; with a real SEG_STAGE snapshot
+                // it is the snapshot's window and a disagreement drops this range to the
+                // staging ring instead of letting a widened INVALIDATE_RANGE declare bytes
+                // dead that nothing is about to rewrite.
+                const SizeT coveredFrom = hostBaseFrom > start ? hostBaseFrom : start;
+                const SizeT coveredTo = hostBaseTo < end ? hostBaseTo : end;
 #if MOBILEGL_PIPE_VERIFY
-                    if (coveredFrom != start || coveredTo != end) {
-                        MGLOG_E_ONCE("MGPipe: Fatal{StageSnapshotTooNarrow} flush_pending_ranges: the "
-                                     "staged bytes cover [%zu, %zu) and the queued range is [%zu, %zu) "
-                                     "- tiers 2 and 3 would copy from outside the snapshot",
-                                     hostBaseFrom, hostBaseTo, start, end);
-                    }
+                if (coveredFrom != start || coveredTo != end) {
+                    MGLOG_E_ONCE("MGPipe: Fatal{StageSnapshotTooNarrow} flush_pending_ranges: the "
+                                 "staged bytes cover [%zu, %zu) and the queued range is [%zu, %zu) "
+                                 "- tiers 2 and 3 would copy from outside the snapshot",
+                                 hostBaseFrom, hostBaseTo, start, end);
+                }
 #endif
-                    // Read per range, like the pull arm: a ring copy staged for an earlier range of
-                    // this same drain puts every later partial range of the store behind it
-                    // (InvalidateFlushAccessFor's queued-copy rule, dev f973008c).
-                    const Bool ringCopyInFlight = resource.ringCopyRetireSerial > DirectGLES::CompletedFrameSerial();
-                    const GLbitfield access =
-                        mapUsable ? InvalidateFlushAccessFor(start, end, coveredFrom, coveredTo, limit,
-                                                             resource.storageSize, ringCopyInFlight)
-                                  : 0u;
-                    if (access != 0) {
-                        BindBufferId(TempBufferTarget, resource.id);
-                        void* dst = g_GLESFuncs.glMapBufferRange(TempBufferTarget, (GLintptr)start,
-                                                                 (GLsizeiptr)size, access);
-                        if (dst) {
-                            Memcpy(dst, hostBase + start, size);
-                            g_GLESFuncs.glUnmapBuffer(TempBufferTarget);
-                            continue;
-                        }
-                    }
-                    SizeT ringOffset = 0;
-                    if (ringUsable && size <= kUploadRingMaxBytes &&
-                        RingAllocate(UploadRing(), size, ringOffset)) {
-                        Memcpy(UploadRing().store.mappedPtr + ringOffset, hostBase + start, size);
-                        BindBufferId(GL_COPY_READ_BUFFER, UploadRing().store.id);
-                        BindBufferId(GL_COPY_WRITE_BUFFER, resource.id);
-                        g_GLESFuncs.glCopyBufferSubData(GL_COPY_READ_BUFFER, GL_COPY_WRITE_BUFFER,
-                                                        (GLintptr)ringOffset, (GLintptr)start, (GLsizeiptr)size);
-                        // Commands recorded now retire with the fence the next Present inserts.
-                        resource.ringCopyRetireSerial = DirectGLES::CurrentFrameSerial() + 1;
-                    } else {
-                        UploadRangeFrom(resource, hostBase, start, end);
+                // Read per range, like the pull arm: a ring copy staged for an earlier range of
+                // this same drain puts every later partial range of the store behind it
+                // (InvalidateFlushAccessFor's queued-copy rule, dev f973008c).
+                const Bool ringCopyInFlight = resource.ringCopyRetireSerial > DirectGLES::CompletedFrameSerial();
+                const GLbitfield access = mapUsable
+                                              ? InvalidateFlushAccessFor(start, end, coveredFrom, coveredTo, limit,
+                                                                         resource.storageSize, ringCopyInFlight)
+                                              : 0u;
+                if (access != 0) {
+                    BindBufferId(TempBufferTarget, resource.id);
+                    void* dst =
+                        g_GLESFuncs.glMapBufferRange(TempBufferTarget, (GLintptr)start, (GLsizeiptr)size, access);
+                    if (dst) {
+                        Memcpy(dst, hostBase + start, size);
+                        g_GLESFuncs.glUnmapBuffer(TempBufferTarget);
+                        continue;
                     }
                 }
+                SizeT ringOffset = 0;
+                if (ringUsable && size <= kUploadRingMaxBytes && RingAllocate(UploadRing(), size, ringOffset)) {
+                    Memcpy(UploadRing().store.mappedPtr + ringOffset, hostBase + start, size);
+                    BindBufferId(GL_COPY_READ_BUFFER, UploadRing().store.id);
+                    BindBufferId(GL_COPY_WRITE_BUFFER, resource.id);
+                    g_GLESFuncs.glCopyBufferSubData(GL_COPY_READ_BUFFER, GL_COPY_WRITE_BUFFER, (GLintptr)ringOffset,
+                                                    (GLintptr)start, (GLsizeiptr)size);
+                    // Commands recorded now retire with the fence the next Present inserts.
+                    resource.ringCopyRetireSerial = DirectGLES::CurrentFrameSerial() + 1;
+                } else {
+                    UploadRangeFrom(resource, hostBase, start, end);
+                }
+            }
         }
 
         namespace {
@@ -589,56 +589,53 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
         } // namespace
 
-            // Land the app bytes queued for an ADOPTED store on the GPU timeline: staged
-            // into the upload ring and delivered by glCopyBufferSubData. The destination
-            // is the IMMUTABLE persistent store, which the driver can neither rename nor
-            // ghost, so the copy is plain job ordering - after every in-flight reader,
-            // before the next consumer - which is exactly glBufferSubData's contract.
-            // (The in-place host write these bytes replaced tore the frames still
-            // reading the old vertex data: one-frame wrong geometry during fast camera
-            // movement.) Fallback: direct glBufferSubData - the adopted store carries
-            // DYNAMIC_STORAGE, and immutability again forbids the whole-store ghost.
-            //
-            // It never read the frontend object (the bytes are on the resource's own queue and
-            // the extent is the backend store's), so it takes none: the handle arm calls exactly
-            // this function with exactly these semantics.
-            void DrainResidentWritesNow(GLESBufferResource& resource) {
+        // Land the app bytes queued for an ADOPTED store on the GPU timeline: staged
+        // into the upload ring and delivered by glCopyBufferSubData. The destination
+        // is the IMMUTABLE persistent store, which the driver can neither rename nor
+        // ghost, so the copy is plain job ordering - after every in-flight reader,
+        // before the next consumer - which is exactly glBufferSubData's contract.
+        // (The in-place host write these bytes replaced tore the frames still
+        // reading the old vertex data: one-frame wrong geometry during fast camera
+        // movement.) Fallback: direct glBufferSubData - the adopted store carries
+        // DYNAMIC_STORAGE, and immutability again forbids the whole-store ghost.
+        //
+        // It never read the frontend object (the bytes are on the resource's own queue and
+        // the extent is the backend store's), so it takes none: the handle arm calls exactly
+        // this function with exactly these semantics.
+        void DrainResidentWritesNow(GLESBufferResource& resource) {
 #ifdef TRACY_ENABLE
-                ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
+            ZoneScopedC(TRACY_ZONECOLOR_BACKEND);
 #endif
-                Vector<GLESBufferResource::PendingResidentWrite> writes;
-                {
-                    const std::lock_guard<std::mutex> lock(resource.pendingMutex);
-                    if (resource.pendingResidentWrites.empty()) return;
-                    writes = std::move(resource.pendingResidentWrites);
-                    resource.pendingResidentWrites.clear();
+            Vector<GLESBufferResource::PendingResidentWrite> writes;
+            {
+                const std::lock_guard<std::mutex> lock(resource.pendingMutex);
+                if (resource.pendingResidentWrites.empty()) return;
+                writes = std::move(resource.pendingResidentWrites);
+                resource.pendingResidentWrites.clear();
+            }
+            const SizeT limit = resource.storageSize;
+            const Bool ringUsable = UploadRingUsableNow();
+            for (const auto& write : writes) {
+                if (write.offset >= limit) continue;
+                const SizeT size = std::min(write.bytes.size(), limit - write.offset);
+                if (size == 0) continue;
+                if (MG_Util::PipeStats::Enabled()) {
+                    MG_Util::PipeStats::AddBytes(MG_Util::PipeStats::ByteClass::StageBuffer, static_cast<Uint64>(size));
                 }
-                const SizeT limit = resource.storageSize;
-                const Bool ringUsable = UploadRingUsableNow();
-                for (const auto& write : writes) {
-                    if (write.offset >= limit) continue;
-                    const SizeT size = std::min(write.bytes.size(), limit - write.offset);
-                    if (size == 0) continue;
-                    if (MG_Util::PipeStats::Enabled()) {
-                        MG_Util::PipeStats::AddBytes(MG_Util::PipeStats::ByteClass::StageBuffer,
-                                                     static_cast<Uint64>(size));
-                    }
-                    SizeT ringOffset = 0;
-                    if (ringUsable && size <= kUploadRingMaxBytes &&
-                        RingAllocate(UploadRing(), size, ringOffset)) {
-                        Memcpy(UploadRing().store.mappedPtr + ringOffset, write.bytes.data(), size);
-                        BindBufferId(GL_COPY_READ_BUFFER, UploadRing().store.id);
-                        BindBufferId(GL_COPY_WRITE_BUFFER, resource.id);
-                        g_GLESFuncs.glCopyBufferSubData(GL_COPY_READ_BUFFER, GL_COPY_WRITE_BUFFER,
-                                                        (GLintptr)ringOffset, (GLintptr)write.offset,
-                                                        (GLsizeiptr)size);
-                    } else {
-                        BindBufferId(TempBufferTarget, resource.id);
-                        g_GLESFuncs.glBufferSubData(TempBufferTarget, (GLintptr)write.offset, (GLsizeiptr)size,
-                                                    write.bytes.data());
-                    }
+                SizeT ringOffset = 0;
+                if (ringUsable && size <= kUploadRingMaxBytes && RingAllocate(UploadRing(), size, ringOffset)) {
+                    Memcpy(UploadRing().store.mappedPtr + ringOffset, write.bytes.data(), size);
+                    BindBufferId(GL_COPY_READ_BUFFER, UploadRing().store.id);
+                    BindBufferId(GL_COPY_WRITE_BUFFER, resource.id);
+                    g_GLESFuncs.glCopyBufferSubData(GL_COPY_READ_BUFFER, GL_COPY_WRITE_BUFFER, (GLintptr)ringOffset,
+                                                    (GLintptr)write.offset, (GLsizeiptr)size);
+                } else {
+                    BindBufferId(TempBufferTarget, resource.id);
+                    g_GLESFuncs.glBufferSubData(TempBufferTarget, (GLintptr)write.offset, (GLsizeiptr)size,
+                                                write.bytes.data());
                 }
             }
+        }
 
         namespace {
             // EXT_buffer_storage bit values (same numeric values as the desktop ARB
@@ -652,7 +649,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 if (!resource) return;
                 auto* glesResource = static_cast<GLESBufferResource*>(resource.get());
                 if (glesResource->contextGeneration != g_bufferContextGeneration) {
-                    glesResource->id = 0; // id belonged to a destroyed context
+                    glesResource->id = 0;          // id belonged to a destroyed context
                     RetireT0Import(*glesResource); // P11 B2: its GL store died with that context
                     return;
                 }
@@ -732,8 +729,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         // resource_subdata records right behind this record), so in practice
                         // this arm is the monolith one and the else arm is the split one.
                         resource->hostBytes = MGL_SERVER_STAGED_ADOPT(*resource, static_cast<SizeT>(desc.Width),
-                                                                      initialBytes, 0,
-                                                                      static_cast<SizeT>(desc.Width));
+                                                                      initialBytes, 0, static_cast<SizeT>(desc.Width));
                     } else {
                         MGL_SERVER_STAGED_DROP(*resource);
                         resource->hostBytes = nullptr;
@@ -771,8 +767,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     resource->pendingResidentWrites.clear();
                     return;
                 }
-                if (!CanTouchGLNow() || resource->id == 0 ||
-                    resource->contextGeneration != g_bufferContextGeneration) {
+                if (!CanTouchGLNow() || resource->id == 0 || resource->contextGeneration != g_bufferContextGeneration) {
                     resource->pendingRespecify = true;
                     resource->pendingRanges.clear();
                     resource->pendingResidentWrites.clear();
@@ -842,9 +837,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     // applier has already counted THIS write into the record's serial, so the ensure
                     // of a built store would read it as an untracked mutation and re-upload the
                     // shadow over the runs this landing wrote before it.
-                    if (CanTouchGLNow() && (resource->id == 0 || !resource->storageInitialized ||
-                                            resource->pendingRespecify ||
-                                            resource->contextGeneration != g_bufferContextGeneration)) {
+                    if (CanTouchGLNow() &&
+                        (resource->id == 0 || !resource->storageInitialized || resource->pendingRespecify ||
+                         resource->contextGeneration != g_bufferContextGeneration)) {
                         resource = EnsureBufferResourceForHandle(nullptr, res);
                     }
                     if (resource != nullptr && CanTouchGLNow() && resource->id != 0 && resource->storageInitialized &&
@@ -889,13 +884,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     // into server-owned storage and points hostBytes at that. Inside the SAME
                     // lock as the queued range, because the base and the range are one fact
                     // ("these bytes, at this base") and the drain takes this mutex to lift them.
-                    resource->hostBytes =
-                        MGL_SERVER_STAGED_ADOPT(*resource, ResourceWidthOf(res), bytes, offset, size);
+                    resource->hostBytes = MGL_SERVER_STAGED_ADOPT(*resource, ResourceWidthOf(res), bytes, offset, size);
                     if (size != 0) resource->contentSinceRespecify = true;
                 }
                 if (resource->pendingRespecify) return; // full re-upload pending anyway
-                if (!CanTouchGLNow() || resource->id == 0 ||
-                    resource->contextGeneration != g_bufferContextGeneration ||
+                if (!CanTouchGLNow() || resource->id == 0 || resource->contextGeneration != g_bufferContextGeneration ||
                     !StorageMatchesSize(*resource, ResourceWidthOf(res))) {
                     const std::lock_guard<std::mutex> lock(resource->pendingMutex);
                     resource->pendingRanges.Add({offset, offset + size});
@@ -934,8 +927,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 write.bytes.assign(source, source + size);
             }
 
-            void Ops_H_FlushRange(MG_Pipe::MGPipeHandle res, const MG_Pipe::MGPFlushRange& record,
-                                  const void* bytes) {
+            void Ops_H_FlushRange(MG_Pipe::MGPipeHandle res, const MG_Pipe::MGPFlushRange& record, const void* bytes) {
                 auto* resource = FindBufferResourceForHandle(res);
                 if (!resource) return;
                 const SizeT start = static_cast<SizeT>(record.Offset);
@@ -950,13 +942,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // exactly what the ladder must read.
                 if (bytes != nullptr) {
                     const std::lock_guard<std::mutex> lock(resource->pendingMutex);
-                    resource->hostBytes = MGL_SERVER_STAGED_ADOPT(*resource, ResourceWidthOf(res), bytes,
-                                                                  start, end - start);
+                    resource->hostBytes =
+                        MGL_SERVER_STAGED_ADOPT(*resource, ResourceWidthOf(res), bytes, start, end - start);
                     if (end > start) resource->contentSinceRespecify = true;
                 }
                 if (resource->pendingRespecify) return;
-                if (!CanTouchGLNow() || resource->id == 0 ||
-                    resource->contextGeneration != g_bufferContextGeneration ||
+                if (!CanTouchGLNow() || resource->id == 0 || resource->contextGeneration != g_bufferContextGeneration ||
                     !StorageMatchesSize(*resource, ResourceWidthOf(res))) {
                     const std::lock_guard<std::mutex> lock(resource->pendingMutex);
                     resource->pendingRanges.Add({start, end});
@@ -987,13 +978,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     // GL_MAP_INVALIDATE_RANGE_BIT - i.e. the one that tells the driver the old
                     // bytes are dead. Bytes outside the staged coverage are exactly the ones
                     // that claim is false for.
-                    MGL_SERVER_STAGED_REQUIRE(*resource, resource->hostBytes, start, end,
-                                              "flush_range_invalidate_map");
+                    MGL_SERVER_STAGED_REQUIRE(*resource, resource->hostBytes, start, end, "flush_range_invalidate_map");
                     BindBufferId(TempBufferTarget, resource->id);
-                    void* mappedData = g_GLESFuncs.glMapBufferRange(
-                        TempBufferTarget, (GLintptr)start, (GLsizeiptr)(end - start),
-                        GL_MAP_WRITE_BIT | (invalidate ? GL_MAP_INVALIDATE_RANGE_BIT : 0) |
-                            (unsynchronized ? GL_MAP_UNSYNCHRONIZED_BIT : 0));
+                    void* mappedData =
+                        g_GLESFuncs.glMapBufferRange(TempBufferTarget, (GLintptr)start, (GLsizeiptr)(end - start),
+                                                     GL_MAP_WRITE_BIT | (invalidate ? GL_MAP_INVALIDATE_RANGE_BIT : 0) |
+                                                         (unsynchronized ? GL_MAP_UNSYNCHRONIZED_BIT : 0));
                     if (mappedData) {
                         Memcpy(mappedData, resource->hostBytes + start, end - start);
                         g_GLESFuncs.glUnmapBuffer(TempBufferTarget);
@@ -1031,8 +1021,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // backend has not applied yet) would otherwise be mapped past its end.
                 const SizeT readOffset = static_cast<SizeT>(record.Offset);
                 if (readOffset >= resource->storageSize) return;
-                const SizeT size =
-                    std::min<SizeT>(static_cast<SizeT>(record.Size), resource->storageSize - readOffset);
+                const SizeT size = std::min<SizeT>(static_cast<SizeT>(record.Size), resource->storageSize - readOffset);
                 if (size == 0) return;
 
                 // Queued app writes must land in the backend store before it is read back, or
@@ -1067,10 +1056,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 //                    draw-clean memo re-probed by the bump can never observe a
                 //                    half-reconciled resource. The bump must NEVER move earlier.
                 if (MG_Pipe::gMGPipeCallbacks.OnBufferWriteback != nullptr) {
-                    MG_Pipe::gMGPipeCallbacks.OnBufferWriteback(
-                        res, record.Offset,
-                        MG_Pipe::MGPBlobRef{reinterpret_cast<Uint64>(mapped), static_cast<Uint64>(size),
-                                            MG_Pipe::kMGHostSpanSegNone, 0});
+                    MG_Pipe::gMGPipeCallbacks.OnBufferWriteback(res, record.Offset,
+                                                                MG_Pipe::MGPBlobRef{reinterpret_cast<Uint64>(mapped),
+                                                                                    static_cast<Uint64>(size),
+                                                                                    MG_Pipe::kMGHostSpanSegNone, 0});
                 } else {
                     MGLOG_E_ONCE("Ops_H_Readback: no reverse channel is installed, so the GPU-written bytes of "
                                  "buffer %u cannot reach the client shadow",
@@ -1214,8 +1203,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 Ops_H_Respecify(res, desc, initialBytes);
                 BumpBufferMutationEpoch();
             }
-            void Ops_H_SubDataTracked(MG_Pipe::MGPipeHandle res, const MG_Pipe::MGPSubData& record,
-                                      const void* bytes) {
+            void Ops_H_SubDataTracked(MG_Pipe::MGPipeHandle res, const MG_Pipe::MGPSubData& record, const void* bytes) {
                 Ops_H_SubData(res, record, bytes);
                 BumpBufferMutationEpoch();
             }
@@ -1303,8 +1291,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
             void DrainGLErrors() {
                 if (!g_GLESFuncs.glGetError) return;
-                for (Uint guard = 0; guard < 16 && g_GLESFuncs.glGetError() != GL_NO_ERROR; ++guard) {
-                }
+                for (Uint guard = 0; guard < 16 && g_GLESFuncs.glGetError() != GL_NO_ERROR; ++guard) {}
             }
 
             // A fresh GL buffer whose storage IS `ahb`, mapped persistent + coherent. 0 on failure
@@ -1326,14 +1313,17 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     return 0;
                 }
                 DrainGLErrors();
-                if (throwaway) g_GLESFuncs.glBindBuffer(TempBufferTarget, id);
-                else BindBufferId(TempBufferTarget, id);
+                if (throwaway)
+                    g_GLESFuncs.glBindBuffer(TempBufferTarget, id);
+                else
+                    BindBufferId(TempBufferTarget, id);
                 g_t0BufferStorageExternal(TempBufferTarget, 0, static_cast<GLsizeiptr>(size), clientBuffer,
                                           kT0StorageFlags);
                 const GLenum stored = g_GLESFuncs.glGetError ? g_GLESFuncs.glGetError() : GL_NO_ERROR;
-                void* ptr = stored == GL_NO_ERROR
-                    ? g_GLESFuncs.glMapBufferRange(TempBufferTarget, 0, static_cast<GLsizeiptr>(size), kT0MapFlags)
-                    : nullptr;
+                void* ptr =
+                    stored == GL_NO_ERROR
+                        ? g_GLESFuncs.glMapBufferRange(TempBufferTarget, 0, static_cast<GLsizeiptr>(size), kT0MapFlags)
+                        : nullptr;
                 if (ptr == nullptr) {
                     char text[160];
                     std::snprintf(text, sizeof(text), "glBufferStorageExternalEXT -> 0x%04x, map %s", stored,
@@ -1410,8 +1400,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 MGL_SERVER_STAGED_DROP(*resource);
                 resource->hostBytes = nullptr;
                 resource->syncedChangeSerial = ResourceSerialOf(res);
-                MGLOG_D("Espryt T0: imported {slot=%u, gen=%u} as buffer %u (%llu bytes); %llu live imports",
-                        res.Slot, res.Gen, id, static_cast<unsigned long long>(size),
+                MGLOG_D("Espryt T0: imported {slot=%u, gen=%u} as buffer %u (%llu bytes); %llu live imports", res.Slot,
+                        res.Gen, id, static_cast<unsigned long long>(size),
                         static_cast<unsigned long long>(g_t0ImportsLive));
                 return true;
             }
@@ -1437,16 +1427,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     cached ^= held[kFillAtWord + i];
                 }
                 (void)cached;
-                static const char* kSource =
-                    "#version 310 es\n"
-                    "layout(local_size_x = 64) in;\n"
-                    "layout(std430, binding = 0) buffer Ext { uint w[]; } ext;\n"
-                    "layout(std430, binding = 1) buffer Out { uint w[]; } outb;\n"
-                    "void main() {\n"
-                    "  uint i = gl_GlobalInvocationID.x;\n"
-                    "  outb.w[i] = ext.w[1024u + i];\n"
-                    "  ext.w[4096u + i] = 0x3D5EA11Eu ^ i;\n"
-                    "}\n";
+                static const char* kSource = "#version 310 es\n"
+                                             "layout(local_size_x = 64) in;\n"
+                                             "layout(std430, binding = 0) buffer Ext { uint w[]; } ext;\n"
+                                             "layout(std430, binding = 1) buffer Out { uint w[]; } outb;\n"
+                                             "void main() {\n"
+                                             "  uint i = gl_GlobalInvocationID.x;\n"
+                                             "  outb.w[i] = ext.w[1024u + i];\n"
+                                             "  ext.w[4096u + i] = 0x3D5EA11Eu ^ i;\n"
+                                             "}\n";
                 const GLuint program = g_GLESFuncs.glCreateShaderProgramv(GL_COMPUTE_SHADER, 1, &kSource);
                 GLint linked = 0;
                 if (program != 0) g_GLESFuncs.glGetProgramiv(program, GL_LINK_STATUS, &linked);
@@ -1520,10 +1509,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     return answer(false, "no ES3 pbuffer config for the throwaway context");
                 const EGLint surfaceAttribs[] = {EGL_WIDTH, 1, EGL_HEIGHT, 1, EGL_NONE};
                 const EGLSurface surface = g_EGLFuncs.eglCreatePbufferSurface(display, config, surfaceAttribs);
-                const EGLint contextAttribs[] = {0x3098 /*EGL_CONTEXT_MAJOR_VERSION*/, 3, 0x30FB /*MINOR*/, 1, EGL_NONE};
-                const EGLContext context = surface != EGL_NO_SURFACE
-                    ? g_EGLFuncs.eglCreateContext(display, config, EGL_NO_CONTEXT, contextAttribs)
-                    : EGL_NO_CONTEXT;
+                const EGLint contextAttribs[] = {0x3098 /*EGL_CONTEXT_MAJOR_VERSION*/, 3, 0x30FB /*MINOR*/, 1,
+                                                 EGL_NONE};
+                const EGLContext context =
+                    surface != EGL_NO_SURFACE
+                        ? g_EGLFuncs.eglCreateContext(display, config, EGL_NO_CONTEXT, contextAttribs)
+                        : EGL_NO_CONTEXT;
                 const auto restore = [&] {
                     g_EGLFuncs.eglMakeCurrent(display, savedDraw, savedRead, savedContext);
                     if (context != EGL_NO_CONTEXT) g_EGLFuncs.eglDestroyContext(display, context);
@@ -1535,11 +1526,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
 
                 constexpr Uint64 kBytes = 64 * 1024;
-                constexpr Uint32 kWords = 1024;          // one 4 KiB region
+                constexpr Uint32 kWords = 1024;            // one 4 KiB region
                 constexpr Uint32 kFillAtWord = 4 * kWords; // region 4
                 MG_Remote::Transport::AdoptT0::HeldStore held;
                 Vector<Uint32> pattern(kBytes / 4);
-                for (SizeT i = 0; i < pattern.size(); ++i) pattern[i] = 0x5A000000u ^ static_cast<Uint32>(i * 2654435761u);
+                for (SizeT i = 0; i < pattern.size(); ++i)
+                    pattern[i] = 0x5A000000u ^ static_cast<Uint32>(i * 2654435761u);
                 if (!MG_Remote::Transport::AdoptT0::AllocateHeld(kBytes, pattern.data(), held, why)) {
                     restore();
                     return answer(false, "hold: %s", why.c_str());
@@ -1552,19 +1544,19 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 if (imported == 0) {
                     std::snprintf(detail, sizeof(detail), "import: %s", why.c_str());
                 } else if (std::memcmp(hostMap, pattern.data(), kWords * 4) != 0) {
-                    std::snprintf(detail, sizeof(detail), "read: the server's host map of the import does not "
-                                                          "hold the CPU's pattern");
+                    std::snprintf(detail, sizeof(detail),
+                                  "read: the server's host map of the import does not "
+                                  "hold the CPU's pattern");
                 } else {
-                    static const char* kSource =
-                        "#version 310 es\n"
-                        "layout(local_size_x = 64) in;\n"
-                        "layout(std430, binding = 0) buffer Ext { uint w[]; } ext;\n"
-                        "layout(std430, binding = 1) buffer Out { uint w[]; } outb;\n"
-                        "void main() {\n"
-                        "  uint i = gl_GlobalInvocationID.x;\n"
-                        "  outb.w[i] = ext.w[i];\n"
-                        "  ext.w[4096u + i] = 0x6C0FFEE0u ^ i;\n"
-                        "}\n";
+                    static const char* kSource = "#version 310 es\n"
+                                                 "layout(local_size_x = 64) in;\n"
+                                                 "layout(std430, binding = 0) buffer Ext { uint w[]; } ext;\n"
+                                                 "layout(std430, binding = 1) buffer Out { uint w[]; } outb;\n"
+                                                 "void main() {\n"
+                                                 "  uint i = gl_GlobalInvocationID.x;\n"
+                                                 "  outb.w[i] = ext.w[i];\n"
+                                                 "  ext.w[4096u + i] = 0x6C0FFEE0u ^ i;\n"
+                                                 "}\n";
                     program = g_GLESFuncs.glCreateShaderProgramv(GL_COMPUTE_SHADER, 1, &kSource);
                     GLint linked = 0;
                     if (program != 0) g_GLESFuncs.glGetProgramiv(program, GL_LINK_STATUS, &linked);
@@ -1586,8 +1578,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                         for (Uint32 i = 0; i < kWords; ++i)
                             if (heldWords[kFillAtWord + i] == (0x6C0FFEE0u ^ i)) ++heldSaw;
                         g_GLESFuncs.glBindBuffer(GL_SHADER_STORAGE_BUFFER, out);
-                        const auto* copied = static_cast<const Uint32*>(g_GLESFuncs.glMapBufferRange(
-                            GL_SHADER_STORAGE_BUFFER, 0, kWords * 4, GL_MAP_READ_BIT));
+                        const auto* copied = static_cast<const Uint32*>(
+                            g_GLESFuncs.glMapBufferRange(GL_SHADER_STORAGE_BUFFER, 0, kWords * 4, GL_MAP_READ_BIT));
                         if (copied != nullptr) {
                             for (Uint32 i = 0; i < kWords; ++i)
                                 if (copied[i] == pattern[i]) ++gpuRead;
@@ -1612,86 +1604,110 @@ namespace MobileGL::MG_Backend::DirectGLES {
 #endif // MOBILEGL_BUILD_DISAGGREGATED && __ANDROID__
         } // namespace
 
-            // ---- P5c (tx): the TEXTURE half of the resource family, staged server-side --------
-            //
-            // The buffer half's R-11 pattern (ServerStaged() above), for texture levels: the
-            // staged bytes of resource_subdata's texture half are adopted into the server's
-            // StagedTextureStore AT APPLY TIME, because `bytes` names SEG_STAGE and is dead the
-            // moment the record retires (rule C). The store, its ownership and its coverage
-            // rules are documented in MG_Remote/Server/StagedTextureStore.h; these are only the
-            // three hook bodies. All three are no-ops in monolith (CopiesIntoServerStorage()
-            // false), which is what keeps the monolith expression character for character.
-            //
-            // NOTHING here mints or reads a texture twin: the store is keyed by the wire handle
-            // the record carried (StagedTextureStore.h explains why not the twin address), so
-            // adoption needs no GL call and no frontend object.
+        // ---- P5c (tx): the TEXTURE half of the resource family, staged server-side --------
+        //
+        // The buffer half's R-11 pattern (ServerStaged() above), for texture levels: the
+        // staged bytes of resource_subdata's texture half are adopted into the server's
+        // StagedTextureStore AT APPLY TIME, because `bytes` names SEG_STAGE and is dead the
+        // moment the record retires (rule C). The store, its ownership and its coverage
+        // rules are documented in MG_Remote/Server/StagedTextureStore.h; these are only the
+        // three hook bodies. All three are no-ops in monolith (CopiesIntoServerStorage()
+        // false), which is what keeps the monolith expression character for character.
+        //
+        // NOTHING here mints or reads a texture twin: the store is keyed by the wire handle
+        // the record carried (StagedTextureStore.h explains why not the twin address), so
+        // adoption needs no GL call and no frontend object.
 
-            // GetUploadTargets() answered from the descriptor's Target: one static list per
-            // target, matching the frontend classes' own lists member for member
-            // (TextureObject*.h / TextureObjectStubs.h: a cube is six faces, a cube array is
-            // the single CubeMapArray target, everything else its own one).
-            const Vector<TextureUploadTarget>& StagedUploadTargetsForPipeTarget(Uint8 pipeResourceTarget) {
-                static const Vector<TextureUploadTarget> kUnknown{};
-                static const Vector<TextureUploadTarget> kTex1D{TextureUploadTarget::Texture1D};
-                static const Vector<TextureUploadTarget> kTex2D{TextureUploadTarget::Texture2D};
-                static const Vector<TextureUploadTarget> kTex3D{TextureUploadTarget::Texture3D};
-                static const Vector<TextureUploadTarget> kTex1DArray{TextureUploadTarget::Texture1DArray};
-                static const Vector<TextureUploadTarget> kTex2DArray{TextureUploadTarget::Texture2DArray};
-                static const Vector<TextureUploadTarget> kTexCube{
-                    TextureUploadTarget::CubeMapPositiveX, TextureUploadTarget::CubeMapNegativeX,
-                    TextureUploadTarget::CubeMapPositiveY, TextureUploadTarget::CubeMapNegativeY,
-                    TextureUploadTarget::CubeMapPositiveZ, TextureUploadTarget::CubeMapNegativeZ};
-                static const Vector<TextureUploadTarget> kTexCubeArray{TextureUploadTarget::CubeMapArray};
-                static const Vector<TextureUploadTarget> kTex2DMS{TextureUploadTarget::Texture2DMultisample};
-                static const Vector<TextureUploadTarget> kTex2DMSArray{TextureUploadTarget::Texture2DMultisampleArray};
-                static const Vector<TextureUploadTarget> kTexRect{TextureUploadTarget::TextureRectangle};
-                static const Vector<TextureUploadTarget> kTexBuffer{TextureUploadTarget::TextureBuffer};
-                switch (static_cast<MG_Pipe::MGPipeResourceTarget>(pipeResourceTarget)) {
-                case MG_Pipe::MGPipeResourceTarget::Tex1D: return kTex1D;
-                case MG_Pipe::MGPipeResourceTarget::Tex2D: return kTex2D;
-                case MG_Pipe::MGPipeResourceTarget::Tex3D: return kTex3D;
-                case MG_Pipe::MGPipeResourceTarget::Tex1DArray: return kTex1DArray;
-                case MG_Pipe::MGPipeResourceTarget::Tex2DArray: return kTex2DArray;
-                case MG_Pipe::MGPipeResourceTarget::TexCube: return kTexCube;
-                case MG_Pipe::MGPipeResourceTarget::TexCubeArray: return kTexCubeArray;
-                case MG_Pipe::MGPipeResourceTarget::Tex2DMS: return kTex2DMS;
-                case MG_Pipe::MGPipeResourceTarget::Tex2DMSArray: return kTex2DMSArray;
-                case MG_Pipe::MGPipeResourceTarget::TexRect: return kTexRect;
-                case MG_Pipe::MGPipeResourceTarget::TexBuffer: return kTexBuffer;
-                default: return kUnknown;
-                }
+        // GetUploadTargets() answered from the descriptor's Target: one static list per
+        // target, matching the frontend classes' own lists member for member
+        // (TextureObject*.h / TextureObjectStubs.h: a cube is six faces, a cube array is
+        // the single CubeMapArray target, everything else its own one).
+        const Vector<TextureUploadTarget>& StagedUploadTargetsForPipeTarget(Uint8 pipeResourceTarget) {
+            static const Vector<TextureUploadTarget> kUnknown{};
+            static const Vector<TextureUploadTarget> kTex1D{TextureUploadTarget::Texture1D};
+            static const Vector<TextureUploadTarget> kTex2D{TextureUploadTarget::Texture2D};
+            static const Vector<TextureUploadTarget> kTex3D{TextureUploadTarget::Texture3D};
+            static const Vector<TextureUploadTarget> kTex1DArray{TextureUploadTarget::Texture1DArray};
+            static const Vector<TextureUploadTarget> kTex2DArray{TextureUploadTarget::Texture2DArray};
+            static const Vector<TextureUploadTarget> kTexCube{
+                TextureUploadTarget::CubeMapPositiveX, TextureUploadTarget::CubeMapNegativeX,
+                TextureUploadTarget::CubeMapPositiveY, TextureUploadTarget::CubeMapNegativeY,
+                TextureUploadTarget::CubeMapPositiveZ, TextureUploadTarget::CubeMapNegativeZ};
+            static const Vector<TextureUploadTarget> kTexCubeArray{TextureUploadTarget::CubeMapArray};
+            static const Vector<TextureUploadTarget> kTex2DMS{TextureUploadTarget::Texture2DMultisample};
+            static const Vector<TextureUploadTarget> kTex2DMSArray{TextureUploadTarget::Texture2DMultisampleArray};
+            static const Vector<TextureUploadTarget> kTexRect{TextureUploadTarget::TextureRectangle};
+            static const Vector<TextureUploadTarget> kTexBuffer{TextureUploadTarget::TextureBuffer};
+            switch (static_cast<MG_Pipe::MGPipeResourceTarget>(pipeResourceTarget)) {
+            case MG_Pipe::MGPipeResourceTarget::Tex1D:
+                return kTex1D;
+            case MG_Pipe::MGPipeResourceTarget::Tex2D:
+                return kTex2D;
+            case MG_Pipe::MGPipeResourceTarget::Tex3D:
+                return kTex3D;
+            case MG_Pipe::MGPipeResourceTarget::Tex1DArray:
+                return kTex1DArray;
+            case MG_Pipe::MGPipeResourceTarget::Tex2DArray:
+                return kTex2DArray;
+            case MG_Pipe::MGPipeResourceTarget::TexCube:
+                return kTexCube;
+            case MG_Pipe::MGPipeResourceTarget::TexCubeArray:
+                return kTexCubeArray;
+            case MG_Pipe::MGPipeResourceTarget::Tex2DMS:
+                return kTex2DMS;
+            case MG_Pipe::MGPipeResourceTarget::Tex2DMSArray:
+                return kTex2DMSArray;
+            case MG_Pipe::MGPipeResourceTarget::TexRect:
+                return kTexRect;
+            case MG_Pipe::MGPipeResourceTarget::TexBuffer:
+                return kTexBuffer;
+            default:
+                return kUnknown;
             }
+        }
 
-// P5e (ID-124): OUT OF THE DISAGGREGATED BLOCK ON PURPOSE. This is a pure
-// MGPipeResourceTarget -> TextureTarget switch with no wire, no record and no role in it, but
-// it sat inside the nested `#if MOBILEGL_BUILD_DISAGGREGATED` below while its only caller,
-// MGB_TEXPARAM_TARGET, is guarded by `#if MOBILEGL_PIPE_PUSH` alone - so a push build without
-// disaggregation did not compile. The narrower fix (guarding the macro block too) is wrong:
-// that block also carries TextureDiagName and MGB_TEXTURE_RECORD_ARM_SELECTED, which the push
-// flavour does need. Caught by the `flavours` gate step; see ID-124.
-            // The inverse of MG_Pipe::MGPipeResourceTargetForTextureTarget, for the sync's
-            // target reads (ConvertTextureTargetToBackendGLEnum and MapToBackendTextureTarget
-            // both want the frontend enum).
-            TextureTarget StagedTextureTargetForPipeTarget(Uint8 pipeResourceTarget) {
-                switch (static_cast<MG_Pipe::MGPipeResourceTarget>(pipeResourceTarget)) {
-                case MG_Pipe::MGPipeResourceTarget::Tex1D: return TextureTarget::Texture1D;
-                case MG_Pipe::MGPipeResourceTarget::Tex2D: return TextureTarget::Texture2D;
-                case MG_Pipe::MGPipeResourceTarget::Tex3D: return TextureTarget::Texture3D;
-                case MG_Pipe::MGPipeResourceTarget::Tex1DArray: return TextureTarget::Texture1DArray;
-                case MG_Pipe::MGPipeResourceTarget::Tex2DArray: return TextureTarget::Texture2DArray;
-                case MG_Pipe::MGPipeResourceTarget::TexCube: return TextureTarget::TextureCubeMap;
-                case MG_Pipe::MGPipeResourceTarget::TexCubeArray: return TextureTarget::TextureCubeMapArray;
-                case MG_Pipe::MGPipeResourceTarget::Tex2DMS: return TextureTarget::Texture2DMultisample;
-                case MG_Pipe::MGPipeResourceTarget::Tex2DMSArray: return TextureTarget::Texture2DMultisampleArray;
-                case MG_Pipe::MGPipeResourceTarget::TexRect: return TextureTarget::TextureRectangle;
-                case MG_Pipe::MGPipeResourceTarget::TexBuffer: return TextureTarget::TextureBuffer;
-                default: return TextureTarget::Unknown;
-                }
+        // P5e (ID-124): OUT OF THE DISAGGREGATED BLOCK ON PURPOSE. This is a pure
+        // MGPipeResourceTarget -> TextureTarget switch with no wire, no record and no role in it, but
+        // it sat inside the nested `#if MOBILEGL_BUILD_DISAGGREGATED` below while its only caller,
+        // MGB_TEXPARAM_TARGET, is guarded by `#if MOBILEGL_PIPE_PUSH` alone - so a push build without
+        // disaggregation did not compile. The narrower fix (guarding the macro block too) is wrong:
+        // that block also carries TextureDiagName and MGB_TEXTURE_RECORD_ARM_SELECTED, which the push
+        // flavour does need. Caught by the `flavours` gate step; see ID-124.
+        // The inverse of MG_Pipe::MGPipeResourceTargetForTextureTarget, for the sync's
+        // target reads (ConvertTextureTargetToBackendGLEnum and MapToBackendTextureTarget
+        // both want the frontend enum).
+        TextureTarget StagedTextureTargetForPipeTarget(Uint8 pipeResourceTarget) {
+            switch (static_cast<MG_Pipe::MGPipeResourceTarget>(pipeResourceTarget)) {
+            case MG_Pipe::MGPipeResourceTarget::Tex1D:
+                return TextureTarget::Texture1D;
+            case MG_Pipe::MGPipeResourceTarget::Tex2D:
+                return TextureTarget::Texture2D;
+            case MG_Pipe::MGPipeResourceTarget::Tex3D:
+                return TextureTarget::Texture3D;
+            case MG_Pipe::MGPipeResourceTarget::Tex1DArray:
+                return TextureTarget::Texture1DArray;
+            case MG_Pipe::MGPipeResourceTarget::Tex2DArray:
+                return TextureTarget::Texture2DArray;
+            case MG_Pipe::MGPipeResourceTarget::TexCube:
+                return TextureTarget::TextureCubeMap;
+            case MG_Pipe::MGPipeResourceTarget::TexCubeArray:
+                return TextureTarget::TextureCubeMapArray;
+            case MG_Pipe::MGPipeResourceTarget::Tex2DMS:
+                return TextureTarget::Texture2DMultisample;
+            case MG_Pipe::MGPipeResourceTarget::Tex2DMSArray:
+                return TextureTarget::Texture2DMultisampleArray;
+            case MG_Pipe::MGPipeResourceTarget::TexRect:
+                return TextureTarget::TextureRectangle;
+            case MG_Pipe::MGPipeResourceTarget::TexBuffer:
+                return TextureTarget::TextureBuffer;
+            default:
+                return TextureTarget::Unknown;
             }
+        }
 
         namespace {
-            void Ops_H_TextureSubData(MG_Pipe::MGPipeHandle res, const MG_Pipe::MGPSubData& record,
-                                      const void* bytes, const MG_Pipe::MGPSubRegion* regions) {
+            void Ops_H_TextureSubData(MG_Pipe::MGPipeHandle res, const MG_Pipe::MGPSubData& record, const void* bytes,
+                                      const MG_Pipe::MGPSubRegion* regions) {
                 // The region set is the upload planner's shape and stays in the applier's
                 // pending set; the store's coverage is the staged run itself
                 // (StagedTextureStore.h's coverage ruling). It is ALSO what places that run in
@@ -1728,8 +1744,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                             boxes.push_back({region.X, region.Y, region.Z, region.W, region.H, region.D});
                         }
                     }
-                    const Uint64 imageOffset = record.RegionCount == 0
-                        ? 0 : MG_Record::StagedTextureRunImageOffset(record, regions);
+                    const Uint64 imageOffset =
+                        record.RegionCount == 0 ? 0 : MG_Record::StagedTextureRunImageOffset(record, regions);
                     if (store.AdoptClientBoxes(key, uploadTarget, record.Level, extent, imageOffset, bytes, runBytes,
                                                boxes.data(), boxes.size())) {
                         return;
@@ -1746,8 +1762,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     return;
                 }
                 store.AdoptRun(key, uploadTarget, record.Level, extent,
-                               MG_Record::StagedTextureRunImageOffset(record, regions), bytes,
-                               runBytes, /*frontendShadow=*/true);
+                               MG_Record::StagedTextureRunImageOffset(record, regions), bytes, runBytes,
+                               /*frontendShadow=*/true);
             }
 
             void Ops_H_TextureRespecify(MG_Pipe::MGPipeHandle res, const MG_Pipe::MGPResourceDesc& desc,
@@ -1758,11 +1774,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 if (level != nullptr) {
                     // ONE glTexImage*D redefined one level: its exact extent crossed with the
                     // accepted scope carrier, including a legal noncanonical mutable mip.
-                    store.NoteLevelDefined(
-                        key, MG_Pipe::MGPipeSubDataUploadTargetOf(level->UploadTarget), level->Level,
-                        IntVec3{static_cast<Int>(level->Width), static_cast<Int>(level->Height),
-                                static_cast<Int>(level->Depth)},
-                        desc.Target, desc.InternalFormat);
+                    store.NoteLevelDefined(key, MG_Pipe::MGPipeSubDataUploadTargetOf(level->UploadTarget), level->Level,
+                                           IntVec3{static_cast<Int>(level->Width), static_cast<Int>(level->Height),
+                                                   static_cast<Int>(level->Depth)},
+                                           desc.Target, desc.InternalFormat);
                     return;
                 }
                 // A whole-resource redefinition: every level's old coordinate system is gone.
@@ -1774,11 +1789,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 if (desc.Immutable == 0 || desc.Levels == 0) return;
                 for (const auto& uploadTarget : StagedUploadTargetsForPipeTarget(desc.Target)) {
                     for (Uint32 levelIndex = 0; levelIndex < desc.Levels; ++levelIndex) {
-                        store.NoteLevelDefined(
-                            key, static_cast<Uint16>(uploadTarget), static_cast<Uint16>(levelIndex),
-                            MG_Record::StagedTextureMipExtent(desc.Target, desc.Width, desc.Height,
-                                                                      desc.Depth, levelIndex),
-                            desc.Target, desc.InternalFormat);
+                        store.NoteLevelDefined(key, static_cast<Uint16>(uploadTarget), static_cast<Uint16>(levelIndex),
+                                               MG_Record::StagedTextureMipExtent(desc.Target, desc.Width, desc.Height,
+                                                                                 desc.Depth, levelIndex),
+                                               desc.Target, desc.InternalFormat);
                     }
                 }
             }
@@ -1787,8 +1801,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // Deliberately NOT gated on CopiesIntoServerStorage(): Drop's own m_any gate
                 // makes the monolith call one acquire load, and an unconditional drop cannot
                 // strand a key the latch state was misread for.
-                MG_Record::ServerStagedTexture().Drop(
-                    MG_Record::StagedTextureStore::KeyForHandle(res));
+                MG_Record::ServerStagedTexture().Drop(MG_Record::StagedTextureStore::KeyForHandle(res));
             }
 
             const MG_Pipe::MGPipeResourceOps g_glesResourceOps = {
@@ -1865,8 +1878,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // call them from the test thread beside a started loop) are the server role without
             // being the apply thread, and taking those down would be this pin policing a
             // fixture rather than the draw path.
-            const Uint64 applyThreadKey =
-                MG_Remote::Server::Detail::g_applyThreadKey.load(std::memory_order_relaxed);
+            const Uint64 applyThreadKey = MG_Remote::Server::Detail::g_applyThreadKey.load(std::memory_order_relaxed);
             if (MG_Config::Transport != MG_Config::TransportMode::Monolith && applyThreadKey != 0 &&
                 !MG_Remote::Server::ServerLoop::OnApplyThread()) {
                 g_bufferMutationEpochBumpsOffTheApplyThread.fetch_add(1, std::memory_order_relaxed);
@@ -1941,8 +1953,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return twin ? twin->get() : nullptr;
         }
 
-        void RequireStagedCoverage(GLESBufferResource& resource, const Uint8* hostBase, SizeT start,
-                                   SizeT end, const char* site) {
+        void RequireStagedCoverage(GLESBufferResource& resource, const Uint8* hostBase, SizeT start, SizeT end,
+                                   const char* site) {
             ServerStaged().RequireCoverage(&resource, hostBase, start, end, site);
         }
 
@@ -1978,9 +1990,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
             resource.hostBytes = MGL_SERVER_STAGED_ADOPT(resource, ResourceWidthOf(res), bytes, offset, size);
         }
 
-        SizeT ResourceWidthForHandle(MG_Pipe::MGPipeHandle res) { return ResourceWidthOf(res); }
-        Uint64 ResourceSerialForHandle(MG_Pipe::MGPipeHandle res) { return ResourceSerialOf(res); }
-        Uint CurrentBufferContextGeneration() { return g_bufferContextGeneration; }
+        SizeT ResourceWidthForHandle(MG_Pipe::MGPipeHandle res) {
+            return ResourceWidthOf(res);
+        }
+        Uint64 ResourceSerialForHandle(MG_Pipe::MGPipeHandle res) {
+            return ResourceSerialOf(res);
+        }
+        Uint CurrentBufferContextGeneration() {
+            return g_bufferContextGeneration;
+        }
 
         // See the declaration: re-mints of a live resource's driver id. Written only on
         // the context thread (all re-mint sites run there), read only by the VAO sync.
@@ -1988,10 +2006,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         void RegisterBufferBackendOps() {
             // P3a: the handle-shaped resource table (P13: the only one - the legacy
-            // BufferBackendOps table is deleted). Registration is UNCONDITIONAL: the subsystem bit is the FRONTEND's dispatch predicate
-            // (MGPipeResourceSubsystemEnabled reads the bit AND this table's presence), so a
-            // build with bit 7 clear registers a table nobody calls and the A/B stays a pure
-            // configuration question rather than a bring-up-order one.
+            // BufferBackendOps table is deleted). Registration is UNCONDITIONAL: the subsystem bit is the FRONTEND's
+            // dispatch predicate (MGPipeResourceSubsystemEnabled reads the bit AND this table's presence), so a build
+            // with bit 7 clear registers a table nobody calls and the A/B stays a pure configuration question rather
+            // than a bring-up-order one.
             MG_Pipe::MGPipeSetResourceOps(&g_glesResourceOps);
             // Frontend writes issued while ops were unregistered advanced change
             // serials with no per-op bump; re-open every draw-clean memo. Advanced directly,
@@ -2114,7 +2132,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 }
                 g_hasT0DeferredDestroys.store(!g_t0DeferredDestroys.empty(), std::memory_order_release);
             }
-            for (auto& resource : ready) RetireT0Import(*static_cast<GLESBufferResource*>(resource.get()));
+            for (auto& resource : ready)
+                RetireT0Import(*static_cast<GLESBufferResource*>(resource.get()));
         }
 #endif
 
@@ -2186,8 +2205,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // ROADMAP/D-N explicitly keeps where it is for P3a (the per-site attribution table is
         // P8's to execute). Every other line here is handle-shaped. When P8 moves that call to
         // the client this signature loses its last frontend argument.
-        GLESBufferResource* EnsureBufferResourceForHandle(const SharedPtr<MG_State::GLState::BufferObject>& bufferObject,
-                                                          MG_Pipe::MGPipeHandle res) {
+        GLESBufferResource* EnsureBufferResourceForHandle(
+            const SharedPtr<MG_State::GLState::BufferObject>& bufferObject, MG_Pipe::MGPipeHandle res) {
             auto* resource = GetOrCreateBufferResourceForHandle(res);
             if (!resource) return nullptr;
 
@@ -2240,8 +2259,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // run on every twin's first ensure - harmless there only because liveHostBase()
                 // prefers MappedData() under monolith, and "under monolith nothing changes" should
                 // be true by construction rather than by luck.
-                if (ServerStaged().CopiesIntoServerStorage() &&
-                    !ServerStaged().HasShadow(resource)) {
+                if (ServerStaged().CopiesIntoServerStorage() && !ServerStaged().HasShadow(resource)) {
                     resource->hostBytes = nullptr;
                 }
 #if defined(__ANDROID__) && MOBILEGL_BUILD_DISAGGREGATED
@@ -2253,8 +2271,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     String why;
                     void* ptr = nullptr;
                     const Uint64 size = ResourceWidthOf(res);
-                    const Uint id = ResolveT0EntryPoints(why) ? ImportAhbAsBuffer(resource->externalAhb, size, &ptr, why)
-                                                              : 0;
+                    const Uint id =
+                        ResolveT0EntryPoints(why) ? ImportAhbAsBuffer(resource->externalAhb, size, &ptr, why) : 0;
                     if (id != 0) {
                         InstallT0Store(*resource, id, ptr, size);
                         MGLOG_I("Espryt T0: store {slot=%u, gen=%u} re-imported on the new context (%llu bytes)",
@@ -2294,8 +2312,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 // a buffer recycling pool ids - a change to D-F's pool behaviour, not to "the
                 // source of bytes" the conversion is allowed to move, and one that moves
                 // AcquireFromPool call counts StreamedArenaScenario observes.
-                const Uint reused =
-                    (poolSize > 0 && !resource->persistentMapped) ? AcquireFromPool(poolSize) : 0;
+                const Uint reused = (poolSize > 0 && !resource->persistentMapped) ? AcquireFromPool(poolSize) : 0;
                 if (reused != 0) {
                     resource->id = reused;
                     resource->storageSize = poolSize;
@@ -2311,8 +2328,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
                     // legal (ResourceContentIsDeclared, above). RequireCoverage is a no-op for the
                     // legacy arm's MappedData() and for a non-copying store.
                     if (ResourceContentIsDeclared(res)) {
-                        MGL_SERVER_STAGED_REQUIRE(*resource, liveHostBase(), 0, poolSize,
-                                                  "pool_reuse_whole_store");
+                        MGL_SERVER_STAGED_REQUIRE(*resource, liveHostBase(), 0, poolSize, "pool_reuse_whole_store");
                     }
                     g_GLESFuncs.glBufferSubData(TempBufferTarget, 0, (GLsizeiptr)poolSize, liveHostBase());
                     if (MG_Util::PipeStats::Enabled()) {
@@ -2387,8 +2403,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // application's own declaration and the upload stays a pure NULL reallocation.
             const Bool shadowHasContent =
                 (record->Desc.HasDefinedContent != 0 ||
-                       (ServerStaged().CopiesIntoServerStorage() ? ServerStaged().CoveredRunCount(resource) != 0
-                                                                 : resource->contentSinceRespecify));
+                 (ServerStaged().CopiesIntoServerStorage() ? ServerStaged().CoveredRunCount(resource) != 0
+                                                           : resource->contentSinceRespecify));
             const void* initialData = shadowHasContent ? hostBase : nullptr;
             // M-3 / codex 4: a RespecifyStorageWith(..., initialData != nullptr) is a WHOLE-STORE
             // [0, size) upload from the base, so it owes the same coverage the pending-range drain
@@ -2403,8 +2419,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // ResourceContentIsDeclared. Round 2 refused that idiom and aborted six joint entries.
             const auto requireWholeStoreCoverage = [&]() {
                 if (initialData != nullptr && record->Desc.HasDefinedContent != 0) {
-                    MGL_SERVER_STAGED_REQUIRE(*resource, static_cast<const Uint8*>(initialData), 0,
-                                              size, "respecify_whole_store");
+                    MGL_SERVER_STAGED_REQUIRE(*resource, static_cast<const Uint8*>(initialData), 0, size,
+                                              "respecify_whole_store");
                 }
             };
 
@@ -2566,7 +2582,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // are whatever the newly bound object holds, which is NOT necessarily base(0), and
         // scrubbing would let a later bind of 0 be false-skipped.
         void InvalidateTransformFeedbackBindingShadows() {
-            for (auto& binding : g_indexedXFBBindings) binding.known = false;
+            for (auto& binding : g_indexedXFBBindings)
+                binding.known = false;
         }
 
         void BindBufferBaseCached(GLenum glTarget, Uint index, Uint id) {
@@ -2584,9 +2601,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
 
         void InvalidateIndexedBufferBindingCache() {
-            for (auto& b : g_indexedUBOBindings) b = {};
-            for (auto& b : g_indexedSSBOBindings) b = {};
-            for (auto& b : g_indexedXFBBindings) b = {};
+            for (auto& b : g_indexedUBOBindings)
+                b = {};
+            for (auto& b : g_indexedSSBOBindings)
+                b = {};
+            for (auto& b : g_indexedXFBBindings)
+                b = {};
         }
 
         void TrimBufferPool() {
@@ -2629,67 +2649,68 @@ namespace MobileGL::MG_Backend::DirectGLES {
         }
 
         // --- Persistent-mapped bump rings (see Managers.h) ------------------------
-            // (Re)create the ring store with room for at least minBytes. Any live
-            // store is retired (deleted once the GPU finished the last frame that
-            // could reference its slots), never deleted in place. Returns false and
-            // leaves the current store untouched when minBytes cannot fit under the
-            // size cap; a GL failure loses the store and latches creationFailed so
-            // later uses stop retrying under this context.
-            Bool CreateRingStorage(PersistentRing& ring, SizeT minBytes) {
-                SizeT newSize = ring.initialBytes;
-                while (newSize < minBytes) newSize *= 2;
-                if (newSize > ring.maxBytes) return false;
+        // (Re)create the ring store with room for at least minBytes. Any live
+        // store is retired (deleted once the GPU finished the last frame that
+        // could reference its slots), never deleted in place. Returns false and
+        // leaves the current store untouched when minBytes cannot fit under the
+        // size cap; a GL failure loses the store and latches creationFailed so
+        // later uses stop retrying under this context.
+        Bool CreateRingStorage(PersistentRing& ring, SizeT minBytes) {
+            SizeT newSize = ring.initialBytes;
+            while (newSize < minBytes)
+                newSize *= 2;
+            if (newSize > ring.maxBytes) return false;
 
-                if (ring.store.id != 0) {
-                    ring.retired.push_back(
-                        {ring.store.id, ring.store.contextGeneration, DirectGLES::CurrentFrameSerial() + 1});
-                }
-                const Uint32 nextGeneration = ring.store.generation + 1;
-                ring.store.id = 0;
-                ring.store.mappedPtr = nullptr;
-
-                Uint id = 0;
-                g_GLESFuncs.glGenBuffers(1, &id);
-                if (id != 0) {
-                    BindBufferId(TempBufferTarget, id);
-                    g_GLESFuncs.glBufferStorageEXT(TempBufferTarget, static_cast<GLsizeiptr>(newSize), nullptr,
-                                                   GL_MAP_WRITE_BIT | kMapPersistentBit | kMapCoherentBit);
-                    void* ptr = g_GLESFuncs.glMapBufferRange(TempBufferTarget, 0, static_cast<GLsizeiptr>(newSize),
-                                                             GL_MAP_WRITE_BIT | kMapPersistentBit | kMapCoherentBit);
-                    if (!ptr) {
-                        // The dying id is what the array-buffer cache has recorded as
-                        // bound; a later buffer recycling the name would false-skip.
-                        InvalidateArrayBufferBindingCache();
-                        g_GLESFuncs.glDeleteBuffers(1, &id);
-                        id = 0;
-                    } else {
-                        ring.store.mappedPtr = static_cast<Uint8*>(ptr);
-                    }
-                }
-                if (id == 0) {
-                    MGLOG_E_ONCE("%s: persistent storage creation failed (%zu bytes); falling back to the "
-                                 "client-memory upload path.",
-                                 ring.label, newSize);
-                    ring.store.creationFailed = true;
-                    return false;
-                }
-
-                SizeT alignment = ring.fixedAlignment;
-                if (alignment == 0) {
-                    const GLint capsAlignment = g_GLESCapabilities.UniformBufferOffsetAlignment;
-                    alignment = capsAlignment > 0 ? static_cast<SizeT>(capsAlignment) : 256;
-                }
-                ring.store.id = id;
-                ring.store.size = newSize;
-                ring.store.head = 0;
-                ring.store.tail = 0;
-                ring.store.generation = nextGeneration;
-                ring.store.alignment = alignment;
-                ring.frameMarks.clear();
-                MGLOG_D("%s: %zu MiB persistent store ready (id %u, gen %u, align %zu).", ring.label,
-                        newSize / (1024u * 1024u), id, nextGeneration, alignment);
-                return true;
+            if (ring.store.id != 0) {
+                ring.retired.push_back(
+                    {ring.store.id, ring.store.contextGeneration, DirectGLES::CurrentFrameSerial() + 1});
             }
+            const Uint32 nextGeneration = ring.store.generation + 1;
+            ring.store.id = 0;
+            ring.store.mappedPtr = nullptr;
+
+            Uint id = 0;
+            g_GLESFuncs.glGenBuffers(1, &id);
+            if (id != 0) {
+                BindBufferId(TempBufferTarget, id);
+                g_GLESFuncs.glBufferStorageEXT(TempBufferTarget, static_cast<GLsizeiptr>(newSize), nullptr,
+                                               GL_MAP_WRITE_BIT | kMapPersistentBit | kMapCoherentBit);
+                void* ptr = g_GLESFuncs.glMapBufferRange(TempBufferTarget, 0, static_cast<GLsizeiptr>(newSize),
+                                                         GL_MAP_WRITE_BIT | kMapPersistentBit | kMapCoherentBit);
+                if (!ptr) {
+                    // The dying id is what the array-buffer cache has recorded as
+                    // bound; a later buffer recycling the name would false-skip.
+                    InvalidateArrayBufferBindingCache();
+                    g_GLESFuncs.glDeleteBuffers(1, &id);
+                    id = 0;
+                } else {
+                    ring.store.mappedPtr = static_cast<Uint8*>(ptr);
+                }
+            }
+            if (id == 0) {
+                MGLOG_E_ONCE("%s: persistent storage creation failed (%zu bytes); falling back to the "
+                             "client-memory upload path.",
+                             ring.label, newSize);
+                ring.store.creationFailed = true;
+                return false;
+            }
+
+            SizeT alignment = ring.fixedAlignment;
+            if (alignment == 0) {
+                const GLint capsAlignment = g_GLESCapabilities.UniformBufferOffsetAlignment;
+                alignment = capsAlignment > 0 ? static_cast<SizeT>(capsAlignment) : 256;
+            }
+            ring.store.id = id;
+            ring.store.size = newSize;
+            ring.store.head = 0;
+            ring.store.tail = 0;
+            ring.store.generation = nextGeneration;
+            ring.store.alignment = alignment;
+            ring.frameMarks.clear();
+            MGLOG_D("%s: %zu MiB persistent store ready (id %u, gen %u, align %zu).", ring.label,
+                    newSize / (1024u * 1024u), id, nextGeneration, alignment);
+            return true;
+        }
 
         namespace {
             // Shared half of the availability gate (the per-ring kill switch sits in
@@ -2719,120 +2740,119 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
         } // namespace
 
-            // Bump-allocate `size` bytes out of `ring`.
-            //
-            // Fast path: a live store under the current context with room before both
-            // the wrap boundary and the in-flight tail. Touches no GL and probes no
-            // frame marks - callers sit behind the ring's availability gate, so the
-            // context checks have already run for this draw/upload. `tail` may be stale
-            // here (marks are only retired on Present and on the slow path); staleness
-            // is conservative - the in-flight span reads too large, the check fails,
-            // and the slow path retires marks and re-tries.
-            Bool RingAllocate(PersistentRing& ring, SizeT size, SizeT& outOffset) {
-                if (size == 0) return false;
-                auto& store = ring.store;
-                if (store.id != 0 && store.contextGeneration == g_bufferContextGeneration) {
-                    const SizeT alignedSize = RingAlignUp(size, store.alignment);
-                    // Ring sizes are the ring's initial size (a power of two) doubled
-                    // some number of times, so the offset modulo reduces to a mask.
-                    static_assert((kUboRingInitialBytes & (kUboRingInitialBytes - 1)) == 0,
-                                  "ring offset mask below requires power-of-two ring sizes");
-                    static_assert((kUnpackRingInitialBytes & (kUnpackRingInitialBytes - 1)) == 0,
-                                  "ring offset mask below requires power-of-two ring sizes");
-                    static_assert((kUploadRingInitialBytes & (kUploadRingInitialBytes - 1)) == 0,
-                                  "ring offset mask below requires power-of-two ring sizes");
-                    const SizeT offset = static_cast<SizeT>(store.head & (store.size - 1));
-                    if (offset + alignedSize <= store.size && store.head + alignedSize - store.tail <= store.size) {
-                        store.head += alignedSize;
-                        outOffset = offset;
-                        return true;
-                    }
+        // Bump-allocate `size` bytes out of `ring`.
+        //
+        // Fast path: a live store under the current context with room before both
+        // the wrap boundary and the in-flight tail. Touches no GL and probes no
+        // frame marks - callers sit behind the ring's availability gate, so the
+        // context checks have already run for this draw/upload. `tail` may be stale
+        // here (marks are only retired on Present and on the slow path); staleness
+        // is conservative - the in-flight span reads too large, the check fails,
+        // and the slow path retires marks and re-tries.
+        Bool RingAllocate(PersistentRing& ring, SizeT size, SizeT& outOffset) {
+            if (size == 0) return false;
+            auto& store = ring.store;
+            if (store.id != 0 && store.contextGeneration == g_bufferContextGeneration) {
+                const SizeT alignedSize = RingAlignUp(size, store.alignment);
+                // Ring sizes are the ring's initial size (a power of two) doubled
+                // some number of times, so the offset modulo reduces to a mask.
+                static_assert((kUboRingInitialBytes & (kUboRingInitialBytes - 1)) == 0,
+                              "ring offset mask below requires power-of-two ring sizes");
+                static_assert((kUnpackRingInitialBytes & (kUnpackRingInitialBytes - 1)) == 0,
+                              "ring offset mask below requires power-of-two ring sizes");
+                static_assert((kUploadRingInitialBytes & (kUploadRingInitialBytes - 1)) == 0,
+                              "ring offset mask below requires power-of-two ring sizes");
+                const SizeT offset = static_cast<SizeT>(store.head & (store.size - 1));
+                if (offset + alignedSize <= store.size && store.head + alignedSize - store.tail <= store.size) {
+                    store.head += alignedSize;
+                    outOffset = offset;
+                    return true;
                 }
-                return RingAllocateSlow(ring, size, outOffset);
+            }
+            return RingAllocateSlow(ring, size, outOffset);
+        }
+
+        Bool RingAllocateSlow(PersistentRing& ring, SizeT size, SizeT& outOffset) {
+            if (!RingAvailable(ring)) return false;
+            auto& store = ring.store;
+            // Sizing the store first, so the request is rounded with the alignment
+            // the live store actually carries rather than the pre-creation default.
+            if (store.id == 0 && !CreateRingStorage(ring, RingAlignUp(size, store.alignment))) {
+                return false;
+            }
+            const SizeT alignedSize = RingAlignUp(size, store.alignment);
+
+            // Advance tail past every frame the GPU provably finished.
+            const Uint64 completed = DirectGLES::CompletedFrameSerial();
+            SizeT retiredMarks = 0;
+            for (const auto& mark : ring.frameMarks) {
+                if (mark.frameSerial > completed) break;
+                if (mark.headAtPresent > store.tail) store.tail = mark.headAtPresent;
+                ++retiredMarks;
+            }
+            if (retiredMarks > 0) {
+                ring.frameMarks.erase(ring.frameMarks.begin(),
+                                      ring.frameMarks.begin() + static_cast<std::ptrdiff_t>(retiredMarks));
             }
 
-            Bool RingAllocateSlow(PersistentRing& ring, SizeT size, SizeT& outOffset) {
-                if (!RingAvailable(ring)) return false;
-                auto& store = ring.store;
-                // Sizing the store first, so the request is rounded with the alignment
-                // the live store actually carries rather than the pre-creation default.
-                if (store.id == 0 && !CreateRingStorage(ring, RingAlignUp(size, store.alignment))) {
-                    return false;
-                }
-                const SizeT alignedSize = RingAlignUp(size, store.alignment);
+            // A slot may not straddle the ring end; pad the cursor to the boundary.
+            SizeT offset = static_cast<SizeT>(store.head % store.size);
+            if (offset + alignedSize > store.size) {
+                store.head += store.size - offset;
+                offset = 0;
+            }
 
-                // Advance tail past every frame the GPU provably finished.
-                const Uint64 completed = DirectGLES::CompletedFrameSerial();
-                SizeT retiredMarks = 0;
-                for (const auto& mark : ring.frameMarks) {
-                    if (mark.frameSerial > completed) break;
-                    if (mark.headAtPresent > store.tail) store.tail = mark.headAtPresent;
-                    ++retiredMarks;
-                }
-                if (retiredMarks > 0) {
-                    ring.frameMarks.erase(ring.frameMarks.begin(),
-                                          ring.frameMarks.begin() + static_cast<std::ptrdiff_t>(retiredMarks));
-                }
-
-                // A slot may not straddle the ring end; pad the cursor to the boundary.
-                SizeT offset = static_cast<SizeT>(store.head % store.size);
-                if (offset + alignedSize > store.size) {
-                    store.head += store.size - offset;
+            if (store.head + alignedSize - store.tail > store.size) {
+                // In-flight span would overrun live slots: grow instead of overwrite.
+                if (CreateRingStorage(ring, std::max(store.size * 2, alignedSize))) {
                     offset = 0;
-                }
-
-                if (store.head + alignedSize - store.tail > store.size) {
-                    // In-flight span would overrun live slots: grow instead of overwrite.
-                    if (CreateRingStorage(ring, std::max(store.size * 2, alignedSize))) {
-                        offset = 0;
-                    } else if (store.creationFailed) {
-                        return false; // store lost; callers fall back to their legacy path
-                    } else {
-                        // At the size cap (>maxBytes in flight). First try to free room
-                        // by waiting for the OLDEST in-flight frames to retire - a
-                        // bounded wait that ends as soon as enough tail space exists,
-                        // instead of draining the entire queue.
-                        constexpr Uint64 kFrameWaitNs = 50ull * 1000 * 1000; // 50ms per frame
-                        while (!ring.frameMarks.empty() &&
-                               store.head + alignedSize - store.tail > store.size) {
-                            const auto& oldest = ring.frameMarks.front();
-                            if (!DirectGLES::WaitForFrameSerialCompleted(oldest.frameSerial, kFrameWaitNs)) {
-                                break;
-                            }
-                            if (oldest.headAtPresent > store.tail) store.tail = oldest.headAtPresent;
-                            ring.frameMarks.erase(ring.frameMarks.begin());
+                } else if (store.creationFailed) {
+                    return false; // store lost; callers fall back to their legacy path
+                } else {
+                    // At the size cap (>maxBytes in flight). First try to free room
+                    // by waiting for the OLDEST in-flight frames to retire - a
+                    // bounded wait that ends as soon as enough tail space exists,
+                    // instead of draining the entire queue.
+                    constexpr Uint64 kFrameWaitNs = 50ull * 1000 * 1000; // 50ms per frame
+                    while (!ring.frameMarks.empty() && store.head + alignedSize - store.tail > store.size) {
+                        const auto& oldest = ring.frameMarks.front();
+                        if (!DirectGLES::WaitForFrameSerialCompleted(oldest.frameSerial, kFrameWaitNs)) {
+                            break;
                         }
-                        if (store.head + alignedSize - store.tail <= store.size) {
-                            offset = static_cast<SizeT>(store.head % store.size);
-                            if (offset + alignedSize > store.size) {
-                                store.head += store.size - offset;
-                                offset = 0;
-                            }
-                            store.head += alignedSize;
-                            outOffset = offset;
-                            return true;
-                        }
-                        // No usable fence covers the oldest frames: drain once rather than
-                        // corrupt live slots.
-                        if (g_GLESFuncs.glFinish) g_GLESFuncs.glFinish();
-                        store.tail = store.head;
-                        ring.frameMarks.clear();
-                        // Same-frame slots written before the drain may now be recycled by
-                        // the very next allocations; a generation bump keeps later draws
-                        // from rebinding those cached offsets.
-                        ++store.generation;
+                        if (oldest.headAtPresent > store.tail) store.tail = oldest.headAtPresent;
+                        ring.frameMarks.erase(ring.frameMarks.begin());
+                    }
+                    if (store.head + alignedSize - store.tail <= store.size) {
                         offset = static_cast<SizeT>(store.head % store.size);
                         if (offset + alignedSize > store.size) {
                             store.head += store.size - offset;
                             offset = 0;
                         }
+                        store.head += alignedSize;
+                        outOffset = offset;
+                        return true;
+                    }
+                    // No usable fence covers the oldest frames: drain once rather than
+                    // corrupt live slots.
+                    if (g_GLESFuncs.glFinish) g_GLESFuncs.glFinish();
+                    store.tail = store.head;
+                    ring.frameMarks.clear();
+                    // Same-frame slots written before the drain may now be recycled by
+                    // the very next allocations; a generation bump keeps later draws
+                    // from rebinding those cached offsets.
+                    ++store.generation;
+                    offset = static_cast<SizeT>(store.head % store.size);
+                    if (offset + alignedSize > store.size) {
+                        store.head += store.size - offset;
+                        offset = 0;
                     }
                 }
-
-                store.head += alignedSize;
-                outOffset = offset;
-                return true;
             }
+
+            store.head += alignedSize;
+            outOffset = offset;
+            return true;
+        }
 
         namespace {
             void DeleteOrphanRingBuffers() {
@@ -2899,7 +2919,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return RingAvailable(UboRing());
         }
 
-        Bool UboRingAllocate(SizeT size, SizeT& outOffset) { return RingAllocate(UboRing(), size, outOffset); }
+        Bool UboRingAllocate(SizeT size, SizeT& outOffset) {
+            return RingAllocate(UboRing(), size, outOffset);
+        }
 
         UboRingSlotState UboRingPrepareSlot(UboRingAllocation& slot, Uint32 contentVersion, Uint64 frameSerial,
                                             SizeT bindSize, void*& outWrite, Uint& outBufferId) {
@@ -2920,11 +2942,19 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return UboRingSlotState::Allocated;
         }
 
-        void* UboRingMappedPtr() { return UboRing().store.mappedPtr; }
-        Uint UboRingBufferId() { return UboRing().store.id; }
-        Uint32 UboRingGeneration() { return UboRing().store.generation; }
+        void* UboRingMappedPtr() {
+            return UboRing().store.mappedPtr;
+        }
+        Uint UboRingBufferId() {
+            return UboRing().store.id;
+        }
+        Uint32 UboRingGeneration() {
+            return UboRing().store.generation;
+        }
 
-        void UboRingOnPresent() { RingOnPresent(UboRing()); }
+        void UboRingOnPresent() {
+            RingOnPresent(UboRing());
+        }
 
         Bool UnpackRingAvailable() {
             if (MG_Config::Features.EsprytDisableUnpackRing) return false;
@@ -2938,12 +2968,22 @@ namespace MobileGL::MG_Backend::DirectGLES {
             return RingAllocate(UnpackRing(), size, outOffset);
         }
 
-        void* UnpackRingMappedPtr() { return UnpackRing().store.mappedPtr; }
-        Uint UnpackRingBufferId() { return UnpackRing().store.id; }
-        SizeT UnpackRingMaxBytes() { return kUnpackRingMaxBytes; }
+        void* UnpackRingMappedPtr() {
+            return UnpackRing().store.mappedPtr;
+        }
+        Uint UnpackRingBufferId() {
+            return UnpackRing().store.id;
+        }
+        SizeT UnpackRingMaxBytes() {
+            return kUnpackRingMaxBytes;
+        }
 
-        void UnpackRingOnPresent() { RingOnPresent(UnpackRing()); }
+        void UnpackRingOnPresent() {
+            RingOnPresent(UnpackRing());
+        }
 
-        void UploadRingOnPresent() { RingOnPresent(UploadRing()); }
+        void UploadRingOnPresent() {
+            RingOnPresent(UploadRing());
+        }
     } // namespace BufferImpl
 } // namespace MobileGL::MG_Backend::DirectGLES

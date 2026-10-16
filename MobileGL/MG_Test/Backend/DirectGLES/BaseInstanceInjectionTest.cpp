@@ -37,7 +37,7 @@ namespace {
     // The capability block is a process-global the backend fills in at init; restore whatever
     // was there so ordering between this suite and any other that touches it cannot matter.
     struct ScopedGLESCapabilitiesOverride {
-        ScopedGLESCapabilitiesOverride(): saved(g_GLESCapabilities) {}
+        ScopedGLESCapabilitiesOverride() : saved(g_GLESCapabilities) {}
         ~ScopedGLESCapabilitiesOverride() { g_GLESCapabilities = saved; }
         ScopedGLESCapabilitiesOverride(const ScopedGLESCapabilitiesOverride&) = delete;
         ScopedGLESCapabilitiesOverride& operator=(const ScopedGLESCapabilitiesOverride&) = delete;
@@ -80,8 +80,7 @@ TEST(BaseInstanceInjectionGate, DriverWithVertexStorageBlocksGetsTheIndirectView
     g_GLESCapabilities.MaxShaderStorageBufferBindings = 13;
     g_GLESCapabilities.MaxVertexShaderStorageBlocks = 1;
 
-    const String rewritten =
-        PromoteDrawParameterGlobalsToUniforms(kLoweredBaseInstanceVertexShader, GL_VERTEX_SHADER);
+    const String rewritten = PromoteDrawParameterGlobalsToUniforms(kLoweredBaseInstanceVertexShader, GL_VERTEX_SHADER);
 
     EXPECT_TRUE(Contains(rewritten, "layout(std430, binding = 12) readonly buffer mg_IndirectParams"));
     EXPECT_TRUE(Contains(rewritten, "uniform highp int mg_BaseInstanceWordIndex;"));
@@ -99,8 +98,7 @@ TEST(BaseInstanceInjectionGate, DriverWithoutVertexStorageBlocksDeclaresNoBlockA
     g_GLESCapabilities.MaxShaderStorageBufferBindings = 13;
     g_GLESCapabilities.MaxVertexShaderStorageBlocks = 0;
 
-    const String rewritten =
-        PromoteDrawParameterGlobalsToUniforms(kLoweredBaseInstanceVertexShader, GL_VERTEX_SHADER);
+    const String rewritten = PromoteDrawParameterGlobalsToUniforms(kLoweredBaseInstanceVertexShader, GL_VERTEX_SHADER);
 
     EXPECT_FALSE(Contains(rewritten, "mg_IndirectParams")) << rewritten;
     EXPECT_FALSE(Contains(rewritten, "buffer"));
@@ -118,8 +116,7 @@ TEST(BaseInstanceInjectionGate, WithoutTheBlockBaseInstanceFallsBackToThePlainUn
     g_GLESCapabilities.MaxShaderStorageBufferBindings = 13;
     g_GLESCapabilities.MaxVertexShaderStorageBlocks = 0;
 
-    const String rewritten =
-        PromoteDrawParameterGlobalsToUniforms(kLoweredBaseInstanceVertexShader, GL_VERTEX_SHADER);
+    const String rewritten = PromoteDrawParameterGlobalsToUniforms(kLoweredBaseInstanceVertexShader, GL_VERTEX_SHADER);
 
     EXPECT_TRUE(Contains(rewritten, "uniform highp int mg_BaseInstance;")) << rewritten;
     EXPECT_TRUE(Contains(rewritten, "#define mg_BaseInstanceLowered (mg_BaseInstance)")) << rewritten;
@@ -136,8 +133,7 @@ TEST(BaseInstanceInjectionGate, WithoutTheBlockInstanceIdRebaseCollapsesToIdenti
     g_GLESCapabilities.MaxShaderStorageBufferBindings = 13;
     g_GLESCapabilities.MaxVertexShaderStorageBlocks = 0;
 
-    const String rewritten =
-        PromoteDrawParameterGlobalsToUniforms(kLoweredBaseInstanceVertexShader, GL_VERTEX_SHADER);
+    const String rewritten = PromoteDrawParameterGlobalsToUniforms(kLoweredBaseInstanceVertexShader, GL_VERTEX_SHADER);
 
     EXPECT_TRUE(Contains(rewritten, "#define mg_ZeroBasedInstanceID gl_InstanceID")) << rewritten;
     EXPECT_FALSE(Contains(rewritten, "gl_InstanceID - ("));

@@ -70,8 +70,8 @@ void main() {
         // window would then be asserting that nothing happened. They GROW, which is the scenario's
         // subject: each glBufferData is a new storage definition, so each is one acquisition.
         constexpr int kAdoptedDefinitions = 3;
-        constexpr int kAdoptedBaseElements = 5 * 1024 * 1024;  // 20 MiB of uint
-        constexpr int kAdoptedGrowthElements = 1024 * 1024;    // + 4 MiB per definition
+        constexpr int kAdoptedBaseElements = 5 * 1024 * 1024; // 20 MiB of uint
+        constexpr int kAdoptedGrowthElements = 1024 * 1024;   // + 4 MiB per definition
         // Enough dispatches per definition that "one per definition" and "one per dispatch" are
         // different numbers by a wide margin (3 vs 12), and few enough to stay cheap.
         constexpr int kDispatchesPerDefinition = 4;
@@ -138,9 +138,8 @@ void main() {
             void RespecifyTo(int elements) {
                 const std::vector<unsigned int> zeros(static_cast<std::size_t>(elements), 0u);
                 glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_buffer);
-                glBufferData(GL_SHADER_STORAGE_BUFFER,
-                             static_cast<GLsizeiptr>(zeros.size() * sizeof(unsigned int)), zeros.data(),
-                             GL_DYNAMIC_COPY);
+                glBufferData(GL_SHADER_STORAGE_BUFFER, static_cast<GLsizeiptr>(zeros.size() * sizeof(unsigned int)),
+                             zeros.data(), GL_DYNAMIC_COPY);
             }
 
             std::vector<unsigned int> DispatchAndRead(int elements) {
@@ -236,8 +235,7 @@ void main() {
         for (int i = 0; i < kLargeElements; ++i) {
             EXPECT_EQ(large[static_cast<std::size_t>(i)], static_cast<unsigned int>(i + 1))
                 << "element " << i << " (byte " << i * 4 << ") of the grown store came back as "
-                << large[static_cast<std::size_t>(i)]
-                << "; zero from element " << kSmallElements
+                << large[static_cast<std::size_t>(i)] << "; zero from element " << kSmallElements
                 << " on means the shader still saw the pre-growth extent";
         }
 
@@ -274,8 +272,8 @@ void main() {
         // assertion over a workload that silently stopped functioning would be measuring nothing.
         std::vector<unsigned int> values(static_cast<std::size_t>(kDispatchedElements), 0xDEADBEEFu);
         glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_buffer);
-        glGetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0,
-                           static_cast<GLsizeiptr>(values.size() * sizeof(unsigned int)), values.data());
+        glGetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, static_cast<GLsizeiptr>(values.size() * sizeof(unsigned int)),
+                           values.data());
         EXPECT_EQ(FirstGLError(), 0u);
         for (int i = 0; i < kDispatchedElements; ++i) {
             EXPECT_EQ(values[static_cast<std::size_t>(i)], static_cast<unsigned int>(i + 1))
@@ -292,9 +290,9 @@ void main() {
         RecordProperty("stats_line", window.line.c_str());
 
         const long long roundtrips = PipeStatsWindow::CounterOrAbsent(window, "mpr");
-        ASSERT_GE(roundtrips, 0)
-            << "the summary line carries no mpr= field, so this build's PipeStats has no "
-               "map-persistent-roundtrips counter to read: " << window.line;
+        ASSERT_GE(roundtrips, 0) << "the summary line carries no mpr= field, so this build's PipeStats has no "
+                                    "map-persistent-roundtrips counter to read: "
+                                 << window.line;
         EXPECT_EQ(roundtrips, static_cast<long long>(kAdoptedDefinitions))
             << "an adopted store costs ONE map_persistent per STORAGE DEFINITION "
                "(ARCHITECTURE.md §12). This window defined the store "

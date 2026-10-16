@@ -92,7 +92,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     } // namespace
 
     SwapchainObject::SwapchainCapabilities SwapchainObject::GetSwapchainCapabilities(VkPhysicalDevice physicalDevice,
-                                                                                      VkSurfaceKHR surface) {
+                                                                                     VkSurfaceKHR surface) {
         SwapchainCapabilities swapchainCapabilities{};
 
         VK_VERIFY(
@@ -102,17 +102,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         VK_VERIFY(vkGetPhysicalDeviceSurfaceFormatsKHR(physicalDevice, surface, &formatCount, nullptr));
         if (formatCount != 0) {
             swapchainCapabilities.surfaceFormats.resize(formatCount);
-            VK_VERIFY(vkGetPhysicalDeviceSurfaceFormatsKHR(
-                physicalDevice, surface, &formatCount, swapchainCapabilities.surfaceFormats.data()));
+            VK_VERIFY(vkGetPhysicalDeviceSurfaceFormatsKHR(physicalDevice, surface, &formatCount,
+                                                           swapchainCapabilities.surfaceFormats.data()));
         }
 
         Uint32 presentModeCount = 0;
-        VK_VERIFY(
-            vkGetPhysicalDeviceSurfacePresentModesKHR(physicalDevice, surface, &presentModeCount, nullptr));
+        VK_VERIFY(vkGetPhysicalDeviceSurfacePresentModesKHR(physicalDevice, surface, &presentModeCount, nullptr));
         if (presentModeCount != 0) {
             swapchainCapabilities.presentModes.resize(presentModeCount);
-            VK_VERIFY(vkGetPhysicalDeviceSurfacePresentModesKHR(
-                physicalDevice, surface, &presentModeCount, swapchainCapabilities.presentModes.data()));
+            VK_VERIFY(vkGetPhysicalDeviceSurfacePresentModesKHR(physicalDevice, surface, &presentModeCount,
+                                                                swapchainCapabilities.presentModes.data()));
         }
 
         return swapchainCapabilities;
@@ -139,13 +138,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return availableFormats[0];
     }
 
-    VkPresentModeKHR SwapchainObject::ChooseSwapchainPresentMode(
-        const Vector<VkPresentModeKHR>& availablePresentModes, Optional<Int> swapInterval) {
+    VkPresentModeKHR SwapchainObject::ChooseSwapchainPresentMode(const Vector<VkPresentModeKHR>& availablePresentModes,
+                                                                 Optional<Int> swapInterval) {
         static constexpr VkPresentModeKHR s_unthrottledPresentModes[]{
             VK_PRESENT_MODE_IMMEDIATE_KHR, VK_PRESENT_MODE_MAILBOX_KHR, VK_PRESENT_MODE_FIFO_KHR};
         static constexpr VkPresentModeKHR s_vsyncPresentModes[]{VK_PRESENT_MODE_FIFO_KHR};
         static constexpr VkPresentModeKHR s_adaptiveVsyncPresentModes[]{VK_PRESENT_MODE_FIFO_RELAXED_KHR,
-                                                                         VK_PRESENT_MODE_FIFO_KHR};
+                                                                        VK_PRESENT_MODE_FIFO_KHR};
         std::span<const VkPresentModeKHR> ranked = s_desiredPresentModes;
         if (swapInterval) {
             if (*swapInterval == 0) {
@@ -200,8 +199,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         const auto& swapchainCaps = swapchainCapabilities.capabilities;
         // The extra images count from the surface's own minimum: that is how many the platform
         // keeps for itself and the application, so only images beyond it delay a buffer's reuse.
-        Uint32 targetImageCount =
-            std::max<Uint32>(minImageCountHint, swapchainCaps.minImageCount + extraImageCount);
+        Uint32 targetImageCount = std::max<Uint32>(minImageCountHint, swapchainCaps.minImageCount + extraImageCount);
         if (swapchainCaps.maxImageCount != 0) {
             targetImageCount = std::min(targetImageCount, swapchainCaps.maxImageCount);
         }
@@ -217,11 +215,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         createInfo.imageColorSpace = pickedSurfaceFormat.colorSpace;
         createInfo.imageExtent = swapchainCaps.currentExtent;
         if (createInfo.imageExtent.width == UINT32_MAX || createInfo.imageExtent.height == UINT32_MAX) {
-            createInfo.imageExtent.width = std::clamp(desiredExtent.width,
-                                                      swapchainCaps.minImageExtent.width,
-                                                      swapchainCaps.maxImageExtent.width);
-            createInfo.imageExtent.height = std::clamp(desiredExtent.height,
-                                                       swapchainCaps.minImageExtent.height,
+            createInfo.imageExtent.width =
+                std::clamp(desiredExtent.width, swapchainCaps.minImageExtent.width, swapchainCaps.maxImageExtent.width);
+            createInfo.imageExtent.height = std::clamp(desiredExtent.height, swapchainCaps.minImageExtent.height,
                                                        swapchainCaps.maxImageExtent.height);
         }
         const VkExtent2D defaultFramebufferExtent = createInfo.imageExtent;
@@ -258,11 +254,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         createInfo.preTransform = swapchainCaps.currentTransform;
         MGLOG_I("Set swapchain preTransform = %s", string_VkSurfaceTransformFlagBitsKHR(createInfo.preTransform));
         const VkCompositeAlphaFlagBitsKHR compositeAlphaCandidates[] = {
-            VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
-            VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR,
-            VK_COMPOSITE_ALPHA_POST_MULTIPLIED_BIT_KHR,
-            VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR
-        };
+            VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR, VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR,
+            VK_COMPOSITE_ALPHA_POST_MULTIPLIED_BIT_KHR, VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR};
         createInfo.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
         for (auto candidate : compositeAlphaCandidates) {
             if ((swapchainCaps.supportedCompositeAlpha & candidate) != 0) {
@@ -312,24 +305,23 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         auto& defaultFBOInfo = MG_Impl::GLImpl::FramebufferImpl::pDefaultFramebufferInfo;
         const Int extentWidth = static_cast<Int>(defaultFramebufferExtent.width);
         const Int extentHeight = static_cast<Int>(defaultFramebufferExtent.height);
-        const SizeT defaultAttachmentByteSize =
-            static_cast<SizeT>(defaultFramebufferExtent.width) *
-            static_cast<SizeT>(defaultFramebufferExtent.height) * 4;
+        const SizeT defaultAttachmentByteSize = static_cast<SizeT>(defaultFramebufferExtent.width) *
+                                                static_cast<SizeT>(defaultFramebufferExtent.height) * 4;
 
         TextureInternalFormat depthFormat = TextureInternalFormat::Depth24Stencil8;
         switch (m_depthStencilFormat) {
-            case VK_FORMAT_D24_UNORM_S8_UINT:
-                depthFormat = TextureInternalFormat::Depth24Stencil8;
-                break;
-            case VK_FORMAT_D32_SFLOAT_S8_UINT:
-                depthFormat = TextureInternalFormat::Depth32FStencil8;
-                break;
-            case VK_FORMAT_D32_SFLOAT:
-                depthFormat = TextureInternalFormat::DepthComponent32F;
-                break;
-            default:
-                depthFormat = TextureInternalFormat::Depth24Stencil8;
-                break;
+        case VK_FORMAT_D24_UNORM_S8_UINT:
+            depthFormat = TextureInternalFormat::Depth24Stencil8;
+            break;
+        case VK_FORMAT_D32_SFLOAT_S8_UINT:
+            depthFormat = TextureInternalFormat::Depth32FStencil8;
+            break;
+        case VK_FORMAT_D32_SFLOAT:
+            depthFormat = TextureInternalFormat::DepthComponent32F;
+            break;
+        default:
+            depthFormat = TextureInternalFormat::Depth24Stencil8;
+            break;
         }
 
         // The default FBO's stencil attachment must track the swapchain extent:
@@ -339,16 +331,16 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // GL_INVALID_FRAMEBUFFER_OPERATION on DirectVulkan.
         TextureInternalFormat stencilFormat = TextureInternalFormat::Depth24Stencil8;
         switch (m_depthStencilFormat) {
-            case VK_FORMAT_D32_SFLOAT_S8_UINT:
-                stencilFormat = TextureInternalFormat::Depth32FStencil8;
-                break;
-            case VK_FORMAT_D24_UNORM_S8_UINT:
-                stencilFormat = TextureInternalFormat::Depth24Stencil8;
-                break;
-            default:
-                // No stencil plane; mirror the depth format for consistency.
-                stencilFormat = depthFormat;
-                break;
+        case VK_FORMAT_D32_SFLOAT_S8_UINT:
+            stencilFormat = TextureInternalFormat::Depth32FStencil8;
+            break;
+        case VK_FORMAT_D24_UNORM_S8_UINT:
+            stencilFormat = TextureInternalFormat::Depth24Stencil8;
+            break;
+        default:
+            // No stencil plane; mirror the depth format for consistency.
+            stencilFormat = depthFormat;
+            break;
         }
 
         if (MG_Pipe::gMGPipeCallbacks.OnSurfaceChanged != nullptr) {
@@ -367,26 +359,24 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             info.Layers = 1;
             info.IsDefault = 1;
             MG_Pipe::gMGPipeCallbacks.OnSurfaceChanged(&info);
-        } else
-        {
+        } else {
             auto* colorTex = static_cast<MG_State::GLState::TextureObject2D*>(defaultFBOInfo->colorAttachment.get());
             colorTex->AllocateStorage(
-                TextureUploadTarget::Texture2D, 0, {
-                    {extentWidth, extentHeight, 1},
-                    defaultAttachmentByteSize}); // TODO: 4 is format size
+                TextureUploadTarget::Texture2D, 0,
+                {{extentWidth, extentHeight, 1}, defaultAttachmentByteSize}); // TODO: 4 is format size
             auto* depthTex = static_cast<MG_State::GLState::TextureObject2D*>(defaultFBOInfo->depthAttachment.get());
             depthTex->SetInternalFormat(depthFormat);
-            depthTex->AllocateStorage(TextureUploadTarget::Texture2D, 0, {
-                {extentWidth, extentHeight, 1},
-                defaultAttachmentByteSize}); // TODO: 4 is format size
+            depthTex->AllocateStorage(
+                TextureUploadTarget::Texture2D, 0,
+                {{extentWidth, extentHeight, 1}, defaultAttachmentByteSize}); // TODO: 4 is format size
 
-            auto* stencilTex = static_cast<MG_State::GLState::TextureObject2D*>(defaultFBOInfo->stencilAttachment.get());
+            auto* stencilTex =
+                static_cast<MG_State::GLState::TextureObject2D*>(defaultFBOInfo->stencilAttachment.get());
             stencilTex->SetInternalFormat(stencilFormat);
-            stencilTex->AllocateStorage(TextureUploadTarget::Texture2D, 0, {
-                {extentWidth, extentHeight, 1},
-                defaultAttachmentByteSize}); // TODO: 4 is format size
+            stencilTex->AllocateStorage(
+                TextureUploadTarget::Texture2D, 0,
+                {{extentWidth, extentHeight, 1}, defaultAttachmentByteSize}); // TODO: 4 is format size
         }
-
     }
 
     void SwapchainObject::CreateDepthStencilResources(VkDevice device, VkPhysicalDevice physicalDevice) {

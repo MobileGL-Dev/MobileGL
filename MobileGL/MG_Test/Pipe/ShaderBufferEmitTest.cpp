@@ -81,7 +81,6 @@ namespace {
     }
 } // namespace
 
-
 namespace {
     namespace GL = MobileGL::MG_Impl::GLImpl;
     using GLContext = MG_State::GLState::GLContext;
@@ -111,8 +110,12 @@ namespace {
         }
     };
 
-    GLContext& Ctx() { return *MG_State::pGLContext; }
-    MGPipeShaderBufferEmitter& Emitter() { return MGPipeShaderBufferEmitterInstance(); }
+    GLContext& Ctx() {
+        return *MG_State::pGLContext;
+    }
+    MGPipeShaderBufferEmitter& Emitter() {
+        return MGPipeShaderBufferEmitterInstance();
+    }
 
     // ---- driving a refusal, in ImageEmitTest's shape and for its reason ------------------
     //
@@ -181,8 +184,7 @@ namespace {
         const ChildResult child = RunInChild(body);
         EXPECT_TRUE(DiedOfAbort(child)) << DescribeStatus(child) << "; log: " << child.Log;
         EXPECT_NE(child.Log.find(tagged), std::string::npos)
-            << "the gate fired without naming what it refused; wanted \"" << tagged
-            << "\"; log: " << child.Log;
+            << "the gate fired without naming what it refused; wanted \"" << tagged << "\"; log: " << child.Log;
 #else
         (void)needle;
         (void)body; // no fork on this platform; the verdict here is std::abort()
@@ -262,8 +264,7 @@ namespace {
 
         // And the record reached the applier through the monolith adapter this route installs.
         EXPECT_EQ(MGPipeApplier().ShaderBufferCount[kMGPipeShaderBufferClassUniform], header.Count);
-        EXPECT_EQ(MGPipeApplier().BoundShaderBuffers[kMGPipeShaderBufferClassUniform][0].Size,
-                  kMGPipeWholeBuffer);
+        EXPECT_EQ(MGPipeApplier().BoundShaderBuffers[kMGPipeShaderBufferClassUniform][0].Size, kMGPipeWholeBuffer);
     }
 
     // ID-104's case. The mask is what replaces the backend's own GPU-write walk, and until this
@@ -288,8 +289,7 @@ namespace {
         GL::BindBufferBase(GL_UNIFORM_BUFFER, 0, uniform);
 
         ASSERT_NE(Emitter().EmitShaderBuffers(Ctx()), 0u);
-        const MGPShaderBuffers& storageHeader =
-            Emitter().LastHeader(kMGPipeShaderBufferClassShaderStorage);
+        const MGPShaderBuffers& storageHeader = Emitter().LastHeader(kMGPipeShaderBufferClassShaderStorage);
         ASSERT_EQ(storageHeader.Count, top + 1u)
             << "the window is the touched high-water mark, so binding the top point describes "
                "every point below it too";
@@ -299,8 +299,7 @@ namespace {
             << "nothing is bound at storage point 0, so nothing is writable there";
 
         ASSERT_NE(Emitter().EmitConstBuffers(Ctx()), 0u);
-        const MGPShaderBuffers& uniformHeader =
-            Emitter().LastHeader(kMGPipeShaderBufferClassUniform);
+        const MGPShaderBuffers& uniformHeader = Emitter().LastHeader(kMGPipeShaderBufferClassUniform);
         for (Uint32 w = 0; w < kMGPipeShaderBufferWritableMaskWords; ++w) {
             EXPECT_EQ(uniformHeader.WritableMask[w], 0u)
                 << "a UBO is read-only to the shader by definition (word " << w << ")";
@@ -308,8 +307,8 @@ namespace {
         // And the applier carries the mask by class, not by record.
         EXPECT_TRUE(MGPipeShaderBufferMaskHas(
             MGPipeApplier().ShaderBufferWritableMask[kMGPipeShaderBufferClassShaderStorage], top));
-        EXPECT_FALSE(MGPipeShaderBufferMaskHas(
-            MGPipeApplier().ShaderBufferWritableMask[kMGPipeShaderBufferClassUniform], top));
+        EXPECT_FALSE(
+            MGPipeShaderBufferMaskHas(MGPipeApplier().ShaderBufferWritableMask[kMGPipeShaderBufferClassUniform], top));
 
         // THE WIRE FIELD's OWN HALF (ID-104): a mask bit at the LAST point the window may
         // describe survives the record and the applier. A Uint32 field could not have carried
@@ -345,8 +344,7 @@ namespace {
         ASSERT_NE(Emitter().EmitConstBuffers(Ctx()), 0u);
         ASSERT_NE(Emitter().EmitShaderBuffers(Ctx()), 0u);
         const Uint64 uniformEmissions = Emitter().EmissionCount(kMGPipeShaderBufferClassUniform);
-        const Uint64 storageEmissions =
-            Emitter().EmissionCount(kMGPipeShaderBufferClassShaderStorage);
+        const Uint64 storageEmissions = Emitter().EmissionCount(kMGPipeShaderBufferClassShaderStorage);
 
         // Nothing moved: both classes must be suppressed, and each on its OWN latch.
         EXPECT_EQ(Emitter().EmitConstBuffers(Ctx()), 0u);
@@ -358,8 +356,7 @@ namespace {
         // re-sent, and the case would pass for the wrong reason if it only asserted the mover.
         GL::BindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, 0);
         EXPECT_NE(Emitter().EmitShaderBuffers(Ctx()), 0u);
-        EXPECT_EQ(Emitter().EmissionCount(kMGPipeShaderBufferClassShaderStorage),
-                  storageEmissions + 1u);
+        EXPECT_EQ(Emitter().EmissionCount(kMGPipeShaderBufferClassShaderStorage), storageEmissions + 1u);
         EXPECT_EQ(Emitter().EmitConstBuffers(Ctx()), 0u)
             << "the uniform class did not move and must not be re-sent on the storage class's "
                "account";
@@ -386,8 +383,7 @@ namespace {
         MGPipeApplySetShaderBuffers(header, ranges);
 
         EXPECT_EQ(MGPipeApplier().ShaderBufferCount[kMGPipeShaderBufferClassShaderStorage], 2u);
-        EXPECT_EQ(MGPipeApplier().BoundShaderBuffers[kMGPipeShaderBufferClassShaderStorage][1].Offset,
-                  64u);
+        EXPECT_EQ(MGPipeApplier().BoundShaderBuffers[kMGPipeShaderBufferClassShaderStorage][1].Offset, 64u);
         EXPECT_EQ(MGPipeApplier().ShaderBuffersSerial, before + 1u);
         // THE OTHER TWO CLASSES ARE UNTOUCHED, which is the whole reason Class is a field: one
         // record describes one array and says nothing about the other two.
@@ -446,19 +442,17 @@ namespace {
         applier.ShaderBufferStart[kMGPipeShaderBufferClassUniform] = 0;
         applier.ShaderBufferCount[kMGPipeShaderBufferClassUniform] = 7;
         applier.BoundShaderBuffers[kMGPipeShaderBufferClassUniform][0].Res = MGPipeHandle{31, 1};
-        MGPipeShaderBufferMaskSet(
-            applier.ShaderBufferWritableMask[kMGPipeShaderBufferClassShaderStorage],
-            kMGPipeMaxBufferBindingPoints - 1);
+        MGPipeShaderBufferMaskSet(applier.ShaderBufferWritableMask[kMGPipeShaderBufferClassShaderStorage],
+                                  kMGPipeMaxBufferBindingPoints - 1);
         applier.ShaderBuffersSerial = 99;
 
         MGPipeApplierReset();
 
         EXPECT_EQ(MGPipeApplier().ShaderBufferCount[kMGPipeShaderBufferClassUniform], 0u);
-        EXPECT_TRUE(MGPipeHandleIsNull(
-            MGPipeApplier().BoundShaderBuffers[kMGPipeShaderBufferClassUniform][0].Res));
-        EXPECT_FALSE(MGPipeShaderBufferMaskHas(
-            MGPipeApplier().ShaderBufferWritableMask[kMGPipeShaderBufferClassShaderStorage],
-            kMGPipeMaxBufferBindingPoints - 1));
+        EXPECT_TRUE(MGPipeHandleIsNull(MGPipeApplier().BoundShaderBuffers[kMGPipeShaderBufferClassUniform][0].Res));
+        EXPECT_FALSE(
+            MGPipeShaderBufferMaskHas(MGPipeApplier().ShaderBufferWritableMask[kMGPipeShaderBufferClassShaderStorage],
+                                      kMGPipeMaxBufferBindingPoints - 1));
         EXPECT_EQ(MGPipeApplier().ShaderBuffersSerial, 100u);
         EXPECT_GT(MGPipeApplier().ShaderBuffersSerial, 99u)
             << "ADVANCED, never zeroed: no value this counter has handed a twin may come back";
@@ -467,8 +461,8 @@ namespace {
 
 int main(int argc, char** argv) {
     namespace fs = std::filesystem;
-    const fs::path path = fs::temp_directory_path() /
-                          ("mobilegl-shaderbufferemit-test-" + std::to_string(ProcessId()) + ".log");
+    const fs::path path =
+        fs::temp_directory_path() / ("mobilegl-shaderbufferemit-test-" + std::to_string(ProcessId()) + ".log");
     std::error_code ec;
     fs::remove(path, ec);
     g_logPath = path.string();
@@ -482,8 +476,7 @@ int main(int argc, char** argv) {
     // raised by the encoder on THIS thread - the client role. So g_logPath, which is the read
     // path from here on, becomes the client-derived name; the env keeps the base. The rule is
     // the library's own, not a copy.
-    g_logPath = MobileGL::MG_Util::Debug::RoleLogPath(g_logPath.c_str(),
-                                                      MobileGL::MG_Util::Debug::LogRole::Client);
+    g_logPath = MobileGL::MG_Util::Debug::RoleLogPath(g_logPath.c_str(), MobileGL::MG_Util::Debug::LogRole::Client);
     MobileGL::Initialize();
     ::testing::InitGoogleTest(&argc, argv);
     const int rc = RUN_ALL_TESTS();

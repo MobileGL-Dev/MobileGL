@@ -24,23 +24,21 @@ namespace MobileGL {
                     if (annotation.opcode() != spv::Op::OpDecorate) {
                         continue;
                     }
-                    if (annotation.GetSingleWordInOperand(1) !=
-                        static_cast<uint32_t>(spv::Decoration::Location)) {
+                    if (annotation.GetSingleWordInOperand(1) != static_cast<uint32_t>(spv::Decoration::Location)) {
                         continue;
                     }
-                    Instruction* target =
-                        get_def_use_mgr()->GetDef(annotation.GetSingleWordInOperand(0));
+                    Instruction* target = get_def_use_mgr()->GetDef(annotation.GetSingleWordInOperand(0));
                     if (target == nullptr || target->opcode() != spv::Op::OpVariable) {
                         continue;
                     }
                     switch (spv::StorageClass(target->GetSingleWordInOperand(0))) {
-                        case spv::StorageClass::UniformConstant:
-                        case spv::StorageClass::Uniform:
-                        case spv::StorageClass::StorageBuffer:
-                            toKill.push_back(&annotation);
-                            break;
-                        default:
-                            break;
+                    case spv::StorageClass::UniformConstant:
+                    case spv::StorageClass::Uniform:
+                    case spv::StorageClass::StorageBuffer:
+                        toKill.push_back(&annotation);
+                        break;
+                    default:
+                        break;
                     }
                 }
 
@@ -51,8 +49,7 @@ namespace MobileGL {
             }
 
             spvtools::Optimizer::PassToken StripUniformLocationsPass::CreateStripUniformLocationsPass() {
-                return spvtools::Optimizer::PassToken(
-                    spvtools::MakeUnique<StripUniformLocationsPass>());
+                return spvtools::Optimizer::PassToken(spvtools::MakeUnique<StripUniformLocationsPass>());
             }
         } // namespace ShaderTranspiler
     } // namespace MG_Util

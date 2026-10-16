@@ -96,8 +96,7 @@ namespace {
 TEST(PersistentMapFaultOwnership, AKernelsUntaggedFaultAddressIsOwnedByATaggedShadowsSlot) {
     SizeT pageIndex = ~static_cast<SizeT>(0);
     EXPECT_TRUE(PersistentMapTracker::OwnershipProbeForTest(
-        kDeviceTaggedShadowBase, kDeviceTaggedShadowBase + kDeviceMappedBytes,
-        kDeviceKernelFaultAddress, &pageIndex))
+        kDeviceTaggedShadowBase, kDeviceTaggedShadowBase + kDeviceMappedBytes, kDeviceKernelFaultAddress, &pageIndex))
         << "the handler compared si_addr (untagged, as the kernel delivers it) against a base "
            "carrying bionic's 0xb4 heap tag, so it owned nothing and chained every fault";
     EXPECT_EQ(pageIndex, 0u) << "the fault is on the first page of the mapped range";
@@ -110,30 +109,28 @@ TEST(PersistentMapFaultOwnership, TheOwnershipRowNormalisesBothSidesBeforeItComp
     SizeT pageIndex = ~static_cast<SizeT>(0);
     const uintptr_t base = PersistentMapTracker::UntagAddressForTest(kDeviceTaggedShadowBase);
     // Untagged base against untagged fault: owned, on this host and on the device alike.
-    EXPECT_TRUE(PersistentMapTracker::OwnershipProbeForTest(
-        base, base + kDeviceMappedBytes, kDeviceKernelFaultAddress, &pageIndex));
+    EXPECT_TRUE(PersistentMapTracker::OwnershipProbeForTest(base, base + kDeviceMappedBytes, kDeviceKernelFaultAddress,
+                                                            &pageIndex));
     EXPECT_EQ(pageIndex, 0u);
     // A fault one page in is owned, and names that page.
-    EXPECT_TRUE(PersistentMapTracker::OwnershipProbeForTest(
-        base, base + kDeviceMappedBytes, kDeviceKernelFaultAddress + kPageBytes + 7, &pageIndex));
+    EXPECT_TRUE(PersistentMapTracker::OwnershipProbeForTest(base, base + kDeviceMappedBytes,
+                                                            kDeviceKernelFaultAddress + kPageBytes + 7, &pageIndex));
     EXPECT_EQ(pageIndex, 1u);
     // And the narrow claim stays narrow: a byte before the base and the first byte past the
     // end are both foreign, so a genuinely broken access still crashes honestly.
-    EXPECT_FALSE(PersistentMapTracker::OwnershipProbeForTest(
-        base, base + kDeviceMappedBytes, kDeviceKernelFaultAddress - 1, nullptr));
-    EXPECT_FALSE(PersistentMapTracker::OwnershipProbeForTest(
-        base, base + kDeviceMappedBytes, kDeviceKernelFaultAddress + kDeviceMappedBytes, nullptr));
+    EXPECT_FALSE(PersistentMapTracker::OwnershipProbeForTest(base, base + kDeviceMappedBytes,
+                                                             kDeviceKernelFaultAddress - 1, nullptr));
+    EXPECT_FALSE(PersistentMapTracker::OwnershipProbeForTest(base, base + kDeviceMappedBytes,
+                                                             kDeviceKernelFaultAddress + kDeviceMappedBytes, nullptr));
     // A free slot (base 0) and one mid-setup (base 1) own nothing, whatever the address.
     EXPECT_FALSE(PersistentMapTracker::OwnershipProbeForTest(0, 0, kDeviceKernelFaultAddress, nullptr));
     EXPECT_FALSE(PersistentMapTracker::OwnershipProbeForTest(1, 0, kDeviceKernelFaultAddress, nullptr));
 }
 
 TEST(PersistentMapFaultOwnership, UntagAddressClearsTheTopByteAndNothingBelowIt) {
-    EXPECT_EQ(PersistentMapTracker::UntagAddressForTest(kDeviceTaggedShadowBase),
-              kDeviceKernelFaultAddress)
+    EXPECT_EQ(PersistentMapTracker::UntagAddressForTest(kDeviceTaggedShadowBase), kDeviceKernelFaultAddress)
         << "bionic's 0xb4 heap tag must come off, or the table and the kernel disagree";
-    EXPECT_EQ(PersistentMapTracker::UntagAddressForTest(kDeviceKernelFaultAddress),
-              kDeviceKernelFaultAddress)
+    EXPECT_EQ(PersistentMapTracker::UntagAddressForTest(kDeviceKernelFaultAddress), kDeviceKernelFaultAddress)
         << "normalising an already-normal address is the identity, or the handler would move "
            "a legitimate fault out of its own slot";
     // Bit 55 is ADDRESS, not tag: userspace lives in TTBR0 on arm64 and below TASK_SIZE_MAX
@@ -177,8 +174,8 @@ namespace {
             if (hi <= first || lo > last) continue;
             if (perms[1] != 'w') {
                 writable = false;
-                detail = std::string("range [") + std::to_string(lo) + "," + std::to_string(hi) +
-                         ") is '" + perms + "'";
+                detail =
+                    std::string("range [") + std::to_string(lo) + "," + std::to_string(hi) + ") is '" + perms + "'";
                 break;
             }
             if (lo <= covered && hi > covered) covered = hi;
@@ -208,8 +205,8 @@ TEST(PersistentMapWritability, AMapHandsBackARangeWritableWithoutTheFaultHandler
     MapAlignedData store(kBytes);
     ASSERT_EQ(reinterpret_cast<uintptr_t>(store.data()) % kPageBytes, 0u);
     constexpr Uint64 kId = ~0ull - 21u;
-    const auto* slot = PersistentMapTracker::TrackForTest(kId, store.data(), 0, kBytes,
-                                                          ShadowAllocationBytesFor(store.capacity()));
+    const auto* slot =
+        PersistentMapTracker::TrackForTest(kId, store.data(), 0, kBytes, ShadowAllocationBytesFor(store.capacity()));
     ASSERT_NE(slot, nullptr) << "a page-aligned, page-granular shadow registers on the mprotect arm";
     ASSERT_EQ(slot->pageCount, 8u);
 
@@ -218,7 +215,7 @@ TEST(PersistentMapWritability, AMapHandsBackARangeWritableWithoutTheFaultHandler
     if (child == 0) {
         // No handler can rescue this process: the disposition is the default and the signal
         // is blocked in this thread, so a fault here is a kill, not a fault.
-        struct sigaction dfl {};
+        struct sigaction dfl{};
         dfl.sa_handler = SIG_DFL;
         ::sigemptyset(&dfl.sa_mask);
         ::sigaction(SIGSEGV, &dfl, nullptr);
@@ -257,8 +254,8 @@ TEST(PersistentMapWritability, RegistrationLeavesEveryPageOfTheRangeReadWrite) {
     constexpr SizeT kBytes = 8u * kPageBytes;
     MapAlignedData store(kBytes);
     constexpr Uint64 kId = ~0ull - 22u;
-    const auto* slot = PersistentMapTracker::TrackForTest(kId, store.data(), 0, kBytes,
-                                                          ShadowAllocationBytesFor(store.capacity()));
+    const auto* slot =
+        PersistentMapTracker::TrackForTest(kId, store.data(), 0, kBytes, ShadowAllocationBytesFor(store.capacity()));
     ASSERT_NE(slot, nullptr);
     std::string detail;
     EXPECT_TRUE(EveryPageIsWritable(store.data(), kBytes, detail))
@@ -277,8 +274,8 @@ TEST(PersistentMapWritability, AnArmedPageIsStillAnsweredByTheHandlerAndMadeWrit
     constexpr SizeT kBytes = 2u * kPageBytes;
     MapAlignedData store(kBytes);
     constexpr Uint64 kId = ~0ull - 23u;
-    const auto* slot = PersistentMapTracker::TrackForTest(kId, store.data(), 0, kBytes,
-                                                          ShadowAllocationBytesFor(store.capacity()));
+    const auto* slot =
+        PersistentMapTracker::TrackForTest(kId, store.data(), 0, kBytes, ShadowAllocationBytesFor(store.capacity()));
     ASSERT_NE(slot, nullptr);
     // Arm the first page the way the push does, and write through it: the fault must be
     // answered (the epoch moves) rather than chained (which would kill this process).
@@ -301,9 +298,8 @@ int main(int argc, char** argv) {
     // Before anything logs, for StagedTextureStoreTest's reason: the file sink caches its
     // FILE* on the first write and gtest_discover_tests runs every case as its own process.
     namespace fs = std::filesystem;
-    const fs::path path =
-        fs::temp_directory_path() /
-        ("mobilegl-persistentmapfault-test-" + std::to_string(static_cast<long long>(::getpid())) + ".log");
+    const fs::path path = fs::temp_directory_path() / ("mobilegl-persistentmapfault-test-" +
+                                                       std::to_string(static_cast<long long>(::getpid())) + ".log");
     std::error_code ec;
     fs::remove(path, ec);
     const std::string logPath = path.string();

@@ -88,8 +88,7 @@ namespace MobileGL::MG_Pipe {
         // shadow leaves them null and keeps the pre-tx shape.
         void (*TextureSubData)(MGPipeHandle res, const MGPSubData& record, const void* bytes,
                                const MGPSubRegion* regions);
-        void (*TextureRespecify)(MGPipeHandle res, const MGPResourceDesc& desc,
-                                 const MGPRespecifiedLevel* level);
+        void (*TextureRespecify)(MGPipeHandle res, const MGPResourceDesc& desc, const MGPRespecifiedLevel* level);
         void (*TextureDestroy)(MGPipeHandle res);
         // P11 B2 (T0, docs/archive/contracts/CONTRACT-P11.md B2): the two members a backend that can take a
         // client's AHardwareBuffer as a store registers. Both null = this backend has no T0 and
@@ -374,8 +373,8 @@ namespace MobileGL::MG_Pipe {
         // GlobalConstants: a relink replaces the archive these index into, so a surviving tail
         // would name block indices and uniform locations of a program that no longer exists.
         // The client re-emits set_program_bindings before the create that describes the relink.
-        Vector<Int32> BlockBindings;                        // dense, GL uniform-block index order
-        Vector<MGPProgramSamplerUnit> SamplerUnits;         // sparse, ascending Location
+        Vector<Int32> BlockBindings;                           // dense, GL uniform-block index order
+        Vector<MGPProgramSamplerUnit> SamplerUnits;            // sparse, ascending Location
         Vector<MGPipeProgramStorageOverride> StorageOverrides; // name-keyed by design
         // The client's commutative hash of the override MAP, so the twin's "must I rebuild the
         // storage-block bindings" clause is one Uint64 compare and the name tail is touched only
@@ -541,8 +540,8 @@ namespace MobileGL::MG_Pipe {
         // go red for the reason it exists (ROADMAP.md), and only a poison or verify build
         // aborts: the shipped push build counts and logs, so these counters are how a unit
         // case sees the wire fire in EVERY build rather than in one.
-        Uint32 PatchCarrierComparisons = 0;      // cumulative, armed set_patch_state calls only
-        Uint32 PatchCarrierDivergences = 0;      // cumulative
+        Uint32 PatchCarrierComparisons = 0; // cumulative, armed set_patch_state calls only
+        Uint32 PatchCarrierDivergences = 0; // cumulative
 
         // Every call this applier REFUSED because it named a record this applier does not
         // have: an unknown slot, a slot that is not live, or a generation that has moved on
@@ -692,8 +691,7 @@ namespace MobileGL::MG_Pipe {
         // Start is 0 by contract, Count is the touched high-water mark, and a binding at or
         // above Count means "nothing bound" - which is what the frontend array's default says
         // too, so the server does not have to clear entries outside the window to be right.
-        Array<MGPBufferRange, kMGPipeMaxBufferBindingPoints>
-            BoundShaderBuffers[kMGPipeShaderBufferClassCount]{};
+        Array<MGPBufferRange, kMGPipeMaxBufferBindingPoints> BoundShaderBuffers[kMGPipeShaderBufferClassCount]{};
         Uint32 ShaderBufferStart[kMGPipeShaderBufferClassCount] = {0, 0, 0};
         Uint32 ShaderBufferCount[kMGPipeShaderBufferClassCount] = {0, 0, 0};
         // Which entries of classes 1 and 2 the shader may WRITE through. It is what replaces
@@ -706,8 +704,7 @@ namespace MobileGL::MG_Pipe {
         // point 32 or above read as read-only here while the record said nothing was wrong.
         // Always through MGPipeShaderBufferMaskHas / ...Set (MGPipeTypes.h), which is the same
         // arithmetic the payload's own mask goes through - one table, both sides.
-        Uint32 ShaderBufferWritableMask[kMGPipeShaderBufferClassCount]
-                                       [kMGPipeShaderBufferWritableMaskWords] = {};
+        Uint32 ShaderBufferWritableMask[kMGPipeShaderBufferClassCount][kMGPipeShaderBufferWritableMaskWords] = {};
         // ONE serial for all three classes, ++ on every applied record and ADVANCED (never
         // zeroed) by MGPipeApplierReset, for VertexBuffersSerial's reason - and the emitter's
         // latch resets with it, or the first emission after a make-current is suppressed as
@@ -775,7 +772,6 @@ namespace MobileGL::MG_Pipe {
         // context's applier first would be asking a harder question than the one it needs
         // answered. The integrator resolved the two packages' duplicate here (ID-103).
 
-
         // Every verb's writer calls this FIRST and then sets its own fields, so no field ever
         // outlives the verb that wrote it and a reader can treat non-null as "this verb's".
         void ClearVerbHandles() {
@@ -791,7 +787,6 @@ namespace MobileGL::MG_Pipe {
             VerbIndirectParameterBuffer = kMGPipeNullHandle;
             VerbDispatchIndirectBuffer = kMGPipeNullHandle;
         }
-
     };
 
     // P14: where a new applier's working-state serials start. Each applier (one per served context)
@@ -1085,9 +1080,8 @@ namespace MobileGL::MG_Pipe {
         Uint32 Depth = 0;
     };
 
-    inline MGPRespecifiedLevel MGPipeMakeRespecifiedLevel(Uint16 uploadTarget, Uint16 level,
-                                                          Uint32 width = 0, Uint32 height = 0,
-                                                          Uint32 depth = 0) {
+    inline MGPRespecifiedLevel MGPipeMakeRespecifiedLevel(Uint16 uploadTarget, Uint16 level, Uint32 width = 0,
+                                                          Uint32 height = 0, Uint32 depth = 0) {
         MGPRespecifiedLevel value{};
         value.UploadTarget = uploadTarget;
         value.Level = level;
@@ -1153,8 +1147,7 @@ namespace MobileGL::MG_Pipe {
         Bool m_previous;
     };
 
-    Bool MGPipeApplyResourceSubData(const MGPSubData& record, const void* bytes,
-                                    const MGPSubRegion* regions = nullptr);
+    Bool MGPipeApplyResourceSubData(const MGPSubData& record, const void* bytes, const MGPSubRegion* regions = nullptr);
     // buffer_subdata_resident: same shape; `bytes` is the application's staging store and is
     // valid for the duration of the call only. The op-table entry may be null.
     void MGPipeApplyBufferSubDataResident(const MGPSubData& record, const void* bytes);
@@ -1302,8 +1295,7 @@ namespace MobileGL::MG_Pipe {
     // codec. The verify build round-trips the artefacts through the codec before storing, and a
     // mismatch is Fatal{PipeVerifyDiffer, "program-archive"}. `archive` has no default so that a
     // caller holding one cannot silently omit it.
-    void MGPipeApplyCreateShaderState(const MGPProgramDesc& desc,
-                                      const MG_State::GLState::LinkArtifacts* link,
+    void MGPipeApplyCreateShaderState(const MGPProgramDesc& desc, const MG_State::GLState::LinkArtifacts* link,
                                       const MG_State::GLState::SpirvArtifacts* spirv,
                                       SharedPtr<const MG_State::GLState::ProgramArchive> archive);
     void MGPipeApplyBindShaderState(const MGPHandleOnly& handle);

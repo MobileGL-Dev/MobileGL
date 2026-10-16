@@ -39,38 +39,36 @@ namespace {
     // Shared by both modules: a fragment shader whose default uniform block holds a vec4 and,
     // in the invalid one, a sampler2D next to it.
     String UniformBlockFragment(Bool withSampler) {
-        String text =
-            "OpCapability Shader\n"
-            "OpMemoryModel Logical GLSL450\n"
-            "OpEntryPoint Fragment %main \"main\" %out\n"
-            "OpExecutionMode %main OriginUpperLeft\n"
-            "OpDecorate %out Location 0\n"
-            "OpDecorate %Block Block\n"
-            "OpMemberDecorate %Block 0 Offset 0\n"
-            "OpDecorate %ubo DescriptorSet 0\n"
-            "OpDecorate %ubo Binding 0\n"
-            "%void = OpTypeVoid\n"
-            "%fn = OpTypeFunction %void\n"
-            "%float = OpTypeFloat 32\n"
-            "%v4 = OpTypeVector %float 4\n"
-            "%int = OpTypeInt 32 1\n"
-            "%zero = OpConstant %int 0\n"
-            "%img = OpTypeImage %float 2D 0 0 0 1 Unknown\n"
-            "%simg = OpTypeSampledImage %img\n";
+        String text = "OpCapability Shader\n"
+                      "OpMemoryModel Logical GLSL450\n"
+                      "OpEntryPoint Fragment %main \"main\" %out\n"
+                      "OpExecutionMode %main OriginUpperLeft\n"
+                      "OpDecorate %out Location 0\n"
+                      "OpDecorate %Block Block\n"
+                      "OpMemberDecorate %Block 0 Offset 0\n"
+                      "OpDecorate %ubo DescriptorSet 0\n"
+                      "OpDecorate %ubo Binding 0\n"
+                      "%void = OpTypeVoid\n"
+                      "%fn = OpTypeFunction %void\n"
+                      "%float = OpTypeFloat 32\n"
+                      "%v4 = OpTypeVector %float 4\n"
+                      "%int = OpTypeInt 32 1\n"
+                      "%zero = OpConstant %int 0\n"
+                      "%img = OpTypeImage %float 2D 0 0 0 1 Unknown\n"
+                      "%simg = OpTypeSampledImage %img\n";
         text += withSampler ? "%Block = OpTypeStruct %v4 %simg\n" : "%Block = OpTypeStruct %v4\n";
-        text +=
-            "%pBlock = OpTypePointer Uniform %Block\n"
-            "%ubo = OpVariable %pBlock Uniform\n"
-            "%pv4u = OpTypePointer Uniform %v4\n"
-            "%pv4o = OpTypePointer Output %v4\n"
-            "%out = OpVariable %pv4o Output\n"
-            "%main = OpFunction %void None %fn\n"
-            "%entry = OpLabel\n"
-            "%ptr = OpAccessChain %pv4u %ubo %zero\n"
-            "%color = OpLoad %v4 %ptr\n"
-            "OpStore %out %color\n"
-            "OpReturn\n"
-            "OpFunctionEnd\n";
+        text += "%pBlock = OpTypePointer Uniform %Block\n"
+                "%ubo = OpVariable %pBlock Uniform\n"
+                "%pv4u = OpTypePointer Uniform %v4\n"
+                "%pv4o = OpTypePointer Output %v4\n"
+                "%out = OpVariable %pv4o Output\n"
+                "%main = OpFunction %void None %fn\n"
+                "%entry = OpLabel\n"
+                "%ptr = OpAccessChain %pv4u %ubo %zero\n"
+                "%color = OpLoad %v4 %ptr\n"
+                "OpStore %out %color\n"
+                "OpReturn\n"
+                "OpFunctionEnd\n";
         return text;
     }
 

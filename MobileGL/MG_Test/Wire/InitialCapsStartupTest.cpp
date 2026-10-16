@@ -82,8 +82,8 @@ namespace {
             int peerControlFd = -1;
             const auto accepted = Transport::SocketTransport::AcceptOne(listener, 2000, &peerControlFd);
             if (accepted == MOBILEGL_OK)
-                controlPeer = std::make_unique<Transport::SocketTransport>(peerControlFd, -1,
-                                                                           Transport::TransportRole::Server);
+                controlPeer =
+                    std::make_unique<Transport::SocketTransport>(peerControlFd, -1, Transport::TransportRole::Server);
             ASSERT_EQ(connected, MOBILEGL_OK);
             ASSERT_EQ(accepted, MOBILEGL_OK);
             ASSERT_TRUE(controlClient->IsTcp());
@@ -111,9 +111,9 @@ namespace {
             sizes.EventRingBytes = 4096;
             sizes.ReplyBytes = 4096;
             ASSERT_EQ(client.AttachStreamLink(clientDataFd, sizes), MOBILEGL_OK);
-            ASSERT_EQ(Transport::CreateStreamLink(peerDataFd, sizes, Transport::TransportRoleTag::ServerConsumer,
-                                                  dataPeer),
-                      MOBILEGL_OK);
+            ASSERT_EQ(
+                Transport::CreateStreamLink(peerDataFd, sizes, Transport::TransportRoleTag::ServerConsumer, dataPeer),
+                MOBILEGL_OK);
             dataPeer->InitializeEndpoints();
             client.*StartupPeerMember(StartupControlTag{}) = controlClient.get();
             client.*StartupPeerMember(StartupInboxTag{}) = std::make_unique<Transport::ControlInbox>(*controlClient);

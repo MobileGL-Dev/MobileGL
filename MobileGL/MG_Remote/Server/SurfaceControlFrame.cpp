@@ -12,23 +12,40 @@ namespace MobileGL::MG_Remote::Server {
 
     const char* SurfaceControlOpName(SurfaceControlOp op) {
         switch (op) {
-        case SurfaceControlOp::None: return "None";
-        case SurfaceControlOp::InitializeDisplay: return "InitializeDisplay";
-        case SurfaceControlOp::CreateWindowSurface: return "CreateWindowSurface";
-        case SurfaceControlOp::CreatePbufferSurface: return "CreatePbufferSurface";
-        case SurfaceControlOp::ResizeWindowSurface: return "ResizeWindowSurface";
-        case SurfaceControlOp::ReleaseSurface: return "ReleaseSurface";
-        case SurfaceControlOp::MakeCurrent: return "MakeCurrent";
-        case SurfaceControlOp::ReleaseCurrent: return "ReleaseCurrent";
-        case SurfaceControlOp::SetSwapInterval: return "SetSwapInterval";
-        case SurfaceControlOp::ReleaseResources: return "ReleaseResources";
-        case SurfaceControlOp::SetWindowHandle: return "SetWindowHandle";
-        case SurfaceControlOp::InitCapabilities: return "InitCapabilities";
-        case SurfaceControlOp::CreateContext: return "CreateContext";
-        case SurfaceControlOp::DestroyContext: return "DestroyContext";
-        case SurfaceControlOp::SwapBuffersInprocOnly: return "SwapBuffersInprocOnly";
-        case SurfaceControlOp::InitWindowSurfaceInprocOnly: return "InitWindowSurfaceInprocOnly";
-        case SurfaceControlOp::ProbeForTesting: return "ProbeForTesting";
+        case SurfaceControlOp::None:
+            return "None";
+        case SurfaceControlOp::InitializeDisplay:
+            return "InitializeDisplay";
+        case SurfaceControlOp::CreateWindowSurface:
+            return "CreateWindowSurface";
+        case SurfaceControlOp::CreatePbufferSurface:
+            return "CreatePbufferSurface";
+        case SurfaceControlOp::ResizeWindowSurface:
+            return "ResizeWindowSurface";
+        case SurfaceControlOp::ReleaseSurface:
+            return "ReleaseSurface";
+        case SurfaceControlOp::MakeCurrent:
+            return "MakeCurrent";
+        case SurfaceControlOp::ReleaseCurrent:
+            return "ReleaseCurrent";
+        case SurfaceControlOp::SetSwapInterval:
+            return "SetSwapInterval";
+        case SurfaceControlOp::ReleaseResources:
+            return "ReleaseResources";
+        case SurfaceControlOp::SetWindowHandle:
+            return "SetWindowHandle";
+        case SurfaceControlOp::InitCapabilities:
+            return "InitCapabilities";
+        case SurfaceControlOp::CreateContext:
+            return "CreateContext";
+        case SurfaceControlOp::DestroyContext:
+            return "DestroyContext";
+        case SurfaceControlOp::SwapBuffersInprocOnly:
+            return "SwapBuffersInprocOnly";
+        case SurfaceControlOp::InitWindowSurfaceInprocOnly:
+            return "InitWindowSurfaceInprocOnly";
+        case SurfaceControlOp::ProbeForTesting:
+            return "ProbeForTesting";
         }
         return "<unknown SurfaceControlOp>";
     }
@@ -62,11 +79,16 @@ namespace MobileGL::MG_Remote::Server {
 
     const char* SurfaceRefusalCodeName(SurfaceRefusalCode code) {
         switch (code) {
-        case SurfaceRefusalCode::None: return "None";
-        case SurfaceRefusalCode::NoServerDisplay: return "NoServerDisplay";
-        case SurfaceRefusalCode::NoServerWindow: return "NoServerWindow";
-        case SurfaceRefusalCode::SurfaceModeMismatch: return "SurfaceModeMismatch";
-        case SurfaceRefusalCode::ServerOwnedOnSetWindowHandle: return "ServerOwnedOnSetWindowHandle";
+        case SurfaceRefusalCode::None:
+            return "None";
+        case SurfaceRefusalCode::NoServerDisplay:
+            return "NoServerDisplay";
+        case SurfaceRefusalCode::NoServerWindow:
+            return "NoServerWindow";
+        case SurfaceRefusalCode::SurfaceModeMismatch:
+            return "SurfaceModeMismatch";
+        case SurfaceRefusalCode::ServerOwnedOnSetWindowHandle:
+            return "ServerOwnedOnSetWindowHandle";
         }
         return "<unknown SurfaceRefusalCode>";
     }

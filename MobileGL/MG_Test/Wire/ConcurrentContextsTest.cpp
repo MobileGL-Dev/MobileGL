@@ -31,33 +31,34 @@
 
 #include <thread>
 
-extern "C" {
-void glClearColor(GLfloat red, GLfloat green, GLfloat blue, GLfloat alpha);
-void glClear(GLbitfield mask);
-void glReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, void* pixels);
-void glGenTextures(GLsizei n, GLuint* textures);
-void glDeleteTextures(GLsizei n, const GLuint* textures);
-void glBindTexture(GLenum target, GLuint texture);
-void glActiveTexture(GLenum texture);
-void glTexImage2D(GLenum target, GLint level, GLint internalformat, GLsizei width, GLsizei height, GLint border,
-                  GLenum format, GLenum type, const void* pixels);
-void glTexParameteri(GLenum target, GLenum pname, GLint param);
-GLuint glCreateShader(GLenum type);
-void glShaderSource(GLuint shader, GLsizei count, const GLchar* const* string, const GLint* length);
-void glCompileShader(GLuint shader);
-GLuint glCreateProgram(void);
-void glAttachShader(GLuint program, GLuint shader);
-void glLinkProgram(GLuint program);
-void glGetProgramiv(GLuint program, GLenum pname, GLint* params);
-void glGetProgramInfoLog(GLuint program, GLsizei bufSize, GLsizei* length, GLchar* infoLog);
-void glGetShaderiv(GLuint shader, GLenum pname, GLint* params);
-void glUseProgram(GLuint program);
-GLint glGetUniformLocation(GLuint program, const GLchar* name);
-void glUniform1i(GLint location, GLint v0);
-void glGenVertexArrays(GLsizei n, GLuint* arrays);
-void glBindVertexArray(GLuint array);
-void glViewport(GLint x, GLint y, GLsizei width, GLsizei height);
-void glDrawArrays(GLenum mode, GLint first, GLsizei count);
+extern "C"
+{
+    void glClearColor(GLfloat red, GLfloat green, GLfloat blue, GLfloat alpha);
+    void glClear(GLbitfield mask);
+    void glReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, void* pixels);
+    void glGenTextures(GLsizei n, GLuint* textures);
+    void glDeleteTextures(GLsizei n, const GLuint* textures);
+    void glBindTexture(GLenum target, GLuint texture);
+    void glActiveTexture(GLenum texture);
+    void glTexImage2D(GLenum target, GLint level, GLint internalformat, GLsizei width, GLsizei height, GLint border,
+                      GLenum format, GLenum type, const void* pixels);
+    void glTexParameteri(GLenum target, GLenum pname, GLint param);
+    GLuint glCreateShader(GLenum type);
+    void glShaderSource(GLuint shader, GLsizei count, const GLchar* const* string, const GLint* length);
+    void glCompileShader(GLuint shader);
+    GLuint glCreateProgram(void);
+    void glAttachShader(GLuint program, GLuint shader);
+    void glLinkProgram(GLuint program);
+    void glGetProgramiv(GLuint program, GLenum pname, GLint* params);
+    void glGetProgramInfoLog(GLuint program, GLsizei bufSize, GLsizei* length, GLchar* infoLog);
+    void glGetShaderiv(GLuint shader, GLenum pname, GLint* params);
+    void glUseProgram(GLuint program);
+    GLint glGetUniformLocation(GLuint program, const GLchar* name);
+    void glUniform1i(GLint location, GLint v0);
+    void glGenVertexArrays(GLsizei n, GLuint* arrays);
+    void glBindVertexArray(GLuint array);
+    void glViewport(GLint x, GLint y, GLsizei width, GLsizei height);
+    void glDrawArrays(GLenum mode, GLint first, GLsizei count);
 }
 
 using namespace MobileGL;
@@ -90,8 +91,8 @@ namespace {
         Int32 firstBadFrame = -1;
         Int32 vertexCompiled = -1;
         Int32 fragmentCompiled = -1;
-        Int32 rebinds = 0;      // ReleaseOnly: mid-run release + make-current that succeeded
-        Int32 cycles = 0;       // ReadbackRace churners: contexts created, used and destroyed
+        Int32 rebinds = 0; // ReleaseOnly: mid-run release + make-current that succeeded
+        Int32 cycles = 0;  // ReadbackRace churners: contexts created, used and destroyed
         Int32 cycleFailures = 0;
         // DestroyWhileCurrent: what eglDestroyContext answered on the OTHER thread, and what
         // binding the destroyed context again after this thread released it answered.
@@ -110,12 +111,14 @@ namespace {
     };
 
     // A<<24|B<<16|G<<8|R of the texel each thread draws.
-    Uint32 ColourOf(int index) { return 0xFF000000u | (0x40u + 0x50u * static_cast<Uint32>(index % 3)) << 8 |
-                                        (0x20u + 0x30u * static_cast<Uint32>(index / 3)); }
+    Uint32 ColourOf(int index) {
+        return 0xFF000000u | (0x40u + 0x50u * static_cast<Uint32>(index % 3)) << 8 |
+               (0x20u + 0x30u * static_cast<Uint32>(index / 3));
+    }
     // The clear colour of a churn cycle (ReadbackRace): a different one per thread and cycle.
     Uint32 ChurnColourOf(int index, int cycle) {
-        return 0xFF000000u | (0x10u * static_cast<Uint32>(index)) << 16 | (static_cast<Uint32>(cycle * 7) & 0xFFu) << 8 |
-               0x80u;
+        return 0xFF000000u | (0x10u * static_cast<Uint32>(index)) << 16 |
+               (static_cast<Uint32>(cycle * 7) & 0xFFu) << 8 | 0x80u;
     }
 
     struct Rig {
@@ -123,8 +126,8 @@ namespace {
         EGLConfig config = nullptr;
         Shape shape = Shape::Unshared;
         Report* report = nullptr;
-        EGLContext share = EGL_NO_CONTEXT;       // SharedRoot's root
-        EGLContext given[kThreads] = {};         // contexts made on the main thread (Siblings)
+        EGLContext share = EGL_NO_CONTEXT;                // SharedRoot's root
+        EGLContext given[kThreads] = {};                  // contexts made on the main thread (Siblings)
         std::atomic<EGLContext> published[kThreads] = {}; // DestroyWhileCurrent: each thread's own
         std::atomic<Int32> halfway[kThreads] = {};
         std::atomic<Int32> destroyed[kThreads] = {};
@@ -153,9 +156,10 @@ namespace {
 
     // The thread's program, vertex array and one-texel texture of its own colour.
     Drawing BuildDrawing(int index, ThreadReport* out) {
-        static const char* kVertex = "#version 330 core\n"
-                                     "const vec2 corners[3] = vec2[3](vec2(-1.0, -1.0), vec2(3.0, -1.0), vec2(-1.0, 3.0));\n"
-                                     "void main() { gl_Position = vec4(corners[gl_VertexID], 0.0, 1.0); }\n";
+        static const char* kVertex =
+            "#version 330 core\n"
+            "const vec2 corners[3] = vec2[3](vec2(-1.0, -1.0), vec2(3.0, -1.0), vec2(-1.0, 3.0));\n"
+            "void main() { gl_Position = vec4(corners[gl_VertexID], 0.0, 1.0); }\n";
         static const char* kFragment = "#version 330 core\n"
                                        "uniform sampler2D image;\n"
                                        "out vec4 color;\n"
@@ -230,9 +234,15 @@ namespace {
         const EGLSurface surface = eglCreatePbufferSurface(dpy, rig->config, kPbufferAttribs);
         EGLContext context = EGL_NO_CONTEXT;
         switch (rig->shape) {
-        case Shape::SharedRoot: context = eglCreateContext(dpy, rig->config, rig->share, kContextAttribs); break;
-        case Shape::Siblings: context = rig->given[index]; break;
-        default: context = eglCreateContext(dpy, rig->config, EGL_NO_CONTEXT, kContextAttribs); break;
+        case Shape::SharedRoot:
+            context = eglCreateContext(dpy, rig->config, rig->share, kContextAttribs);
+            break;
+        case Shape::Siblings:
+            context = rig->given[index];
+            break;
+        default:
+            context = eglCreateContext(dpy, rig->config, EGL_NO_CONTEXT, kContextAttribs);
+            break;
         }
         if (surface == EGL_NO_SURFACE || context == EGL_NO_CONTEXT ||
             eglMakeCurrent(dpy, surface, surface, context) != EGL_TRUE) {
@@ -269,7 +279,8 @@ namespace {
             // Released, so the destroy the main thread asked for has happened: the handle is gone.
             out->rebindAnswer = eglMakeCurrent(dpy, surface, surface, context);
             out->rebindError = eglGetError();
-            if (out->rebindAnswer == EGL_TRUE) (void)eglMakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+            if (out->rebindAnswer == EGL_TRUE)
+                (void)eglMakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
             break;
         default:
             (void)eglDestroyContext(dpy, context);
@@ -287,7 +298,8 @@ namespace {
             eglMakeCurrent(rig->dpy, surface, surface, context) == EGL_TRUE) {
             out->current = 1;
             const Drawing drawing = BuildDrawing(index, out);
-            for (int frame = 0; frame < kRaceReaderFrames; ++frame) DrawFrame(drawing, frame, out);
+            for (int frame = 0; frame < kRaceReaderFrames; ++frame)
+                DrawFrame(drawing, frame, out);
             (void)eglMakeCurrent(rig->dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
             (void)eglDestroyContext(rig->dpy, context);
         }
@@ -321,7 +333,8 @@ namespace {
             glBindVertexArray(vertexArray);
             const Uint32 colour = ChurnColourOf(index, cycle);
             glViewport(0, 0, 8, 8);
-            glClearColor(static_cast<float>(colour & 0xFFu) / 255.0f, static_cast<float>((colour >> 8) & 0xFFu) / 255.0f,
+            glClearColor(static_cast<float>(colour & 0xFFu) / 255.0f,
+                         static_cast<float>((colour >> 8) & 0xFFu) / 255.0f,
                          static_cast<float>((colour >> 16) & 0xFFu) / 255.0f, 1.0f);
             glClear(GL_COLOR_BUFFER_BIT);
             Uint32 pixel = 0x5A5A5A5Au;
@@ -339,8 +352,10 @@ namespace {
         std::thread threads[kThreads];
         if (rig.shape == Shape::ReadbackRace) {
             threads[0] = std::thread(ReadWithoutPause, &rig, 0);
-            for (int i = 1; i <= kRaceChurners; ++i) threads[i] = std::thread(ChurnContexts, &rig, i);
-            for (int i = 0; i <= kRaceChurners; ++i) threads[i].join();
+            for (int i = 1; i <= kRaceChurners; ++i)
+                threads[i] = std::thread(ChurnContexts, &rig, i);
+            for (int i = 0; i <= kRaceChurners; ++i)
+                threads[i].join();
             return;
         }
         if (rig.shape == Shape::SharedRoot) {
@@ -352,7 +367,8 @@ namespace {
             for (int i = 1; i < kThreads; ++i)
                 rig.given[i] = eglCreateContext(rig.dpy, rig.config, rig.given[0], kContextAttribs);
         }
-        for (int i = 0; i < kThreads; ++i) threads[i] = std::thread(RenderOnThread, &rig, i);
+        for (int i = 0; i < kThreads; ++i)
+            threads[i] = std::thread(RenderOnThread, &rig, i);
         if (rig.shape == Shape::DestroyWhileCurrent) {
             // Each context is destroyed from HERE while its own thread still has it current. EGL
             // answers EGL_TRUE and destroys it once that thread releases it.
@@ -368,7 +384,8 @@ namespace {
                 rig.destroyed[i].store(1);
             }
         }
-        for (auto& thread : threads) thread.join();
+        for (auto& thread : threads)
+            thread.join();
         if (rig.shape == Shape::ReleaseOnly) {
             for (int i = 0; i < kThreads; ++i) {
                 const EGLContext context = rig.published[i].load();
@@ -433,12 +450,18 @@ namespace {
 
     const char* NameOf(Shape shape) {
         switch (shape) {
-        case Shape::SharedRoot: return "concurrent-shared";
-        case Shape::Unshared: return "concurrent-unshared";
-        case Shape::ReleaseOnly: return "concurrent-release";
-        case Shape::Siblings: return "concurrent-siblings";
-        case Shape::DestroyWhileCurrent: return "concurrent-destroy-current";
-        case Shape::ReadbackRace: return "concurrent-race";
+        case Shape::SharedRoot:
+            return "concurrent-shared";
+        case Shape::Unshared:
+            return "concurrent-unshared";
+        case Shape::ReleaseOnly:
+            return "concurrent-release";
+        case Shape::Siblings:
+            return "concurrent-siblings";
+        case Shape::DestroyWhileCurrent:
+            return "concurrent-destroy-current";
+        case Shape::ReadbackRace:
+            return "concurrent-race";
         }
         return "concurrent";
     }
@@ -488,16 +511,26 @@ namespace {
 
 } // namespace
 
-TEST(ConcurrentContexts, ThreadsSharingOneRootContextEachDrawTheirOwnTexture) { Check(Shape::SharedRoot); }
+TEST(ConcurrentContexts, ThreadsSharingOneRootContextEachDrawTheirOwnTexture) {
+    Check(Shape::SharedRoot);
+}
 
-TEST(ConcurrentContexts, ThreadsInSeparateShareGroupsEachDrawTheirOwnTexture) { Check(Shape::Unshared); }
+TEST(ConcurrentContexts, ThreadsInSeparateShareGroupsEachDrawTheirOwnTexture) {
+    Check(Shape::Unshared);
+}
 
-TEST(ConcurrentContexts, ReleasingWithoutDestroyingLeavesTheOtherThreadsDrawing) { Check(Shape::ReleaseOnly); }
+TEST(ConcurrentContexts, ReleasingWithoutDestroyingLeavesTheOtherThreadsDrawing) {
+    Check(Shape::ReleaseOnly);
+}
 
-TEST(ConcurrentContexts, ShareGroupSiblingsOutliveTheGroupsFirstContext) { Check(Shape::Siblings); }
+TEST(ConcurrentContexts, ShareGroupSiblingsOutliveTheGroupsFirstContext) {
+    Check(Shape::Siblings);
+}
 
 TEST(ConcurrentContexts, DestroyingAContextCurrentOnAnotherThreadIsDeferredUntilItsRelease) {
     Check(Shape::DestroyWhileCurrent);
 }
 
-TEST(ConcurrentContexts, AReadBackRacingOtherThreadsContextTeardownsIsNotLost) { Check(Shape::ReadbackRace); }
+TEST(ConcurrentContexts, AReadBackRacingOtherThreadsContextTeardownsIsNotLost) {
+    Check(Shape::ReadbackRace);
+}

@@ -115,7 +115,8 @@ namespace MobileGL::MG_ConfigLoader {
                     continue;
                 }
                 String value = Trimmed(line.substr(equals + 1));
-                if (value.size() >= 2 && (value.front() == '"' || value.front() == '\'') && value.back() == value.front()) {
+                if (value.size() >= 2 && (value.front() == '"' || value.front() == '\'') &&
+                    value.back() == value.front()) {
                     value = value.substr(1, value.size() - 2);
                 }
                 out.emplace(key, value);
@@ -262,8 +263,7 @@ namespace MobileGL::MG_ConfigLoader {
         if (lowered.empty() || lowered == "auto") return MG_Config::QuirkOverride::Auto;
         if (lowered == "forceon" || lowered == "on") return MG_Config::QuirkOverride::ForceOn;
         if (lowered == "forceoff" || lowered == "off" || lowered == "no") return MG_Config::QuirkOverride::ForceOff;
-        return IsTruthyValue(it->second) ? MG_Config::QuirkOverride::ForceOn
-                                         : MG_Config::QuirkOverride::ForceOff;
+        return IsTruthyValue(it->second) ? MG_Config::QuirkOverride::ForceOn : MG_Config::QuirkOverride::ForceOff;
     }
 
     // Multi-draw mode is a named-value preference: unset keeps Auto (best supported tier),
@@ -394,8 +394,7 @@ namespace MobileGL::MG_ConfigLoader {
         features.MagmaMaxDrawsPerCommandBuffer =
             QueryEnvUint32("MOBILEGL_MAGMA_MAX_DRAWS_PER_COMMAND_BUFFER", 16384, 0, 1u << 24);
         features.MagmaDescriptorTrimFrames = QueryEnvUint32("MOBILEGL_MAGMA_DESCRIPTOR_TRIM_FRAMES", 120, 0, 1u << 20);
-        features.EsprytAvoidSamplerMipmapMinFilter =
-            QueryEnvFlag("MOBILEGL_ESPRYT_AVOID_SAMPLER_MIPMAP_MIN_FILTER");
+        features.EsprytAvoidSamplerMipmapMinFilter = QueryEnvFlag("MOBILEGL_ESPRYT_AVOID_SAMPLER_MIPMAP_MIN_FILTER");
         features.EsprytAvoidExplicitLodBias = QueryEnvFlag("MOBILEGL_ESPRYT_AVOID_EXPLICIT_LOD_BIAS");
         features.EsprytUnlocatedIoBlocks = QueryEnvQuirkOverride("MOBILEGL_ESPRYT_UNLOCATED_IO_BLOCKS");
         features.EsprytDeferGeometryEmits = QueryEnvQuirkOverride("MOBILEGL_ESPRYT_DEFER_GEOMETRY_EMITS");
@@ -409,8 +408,7 @@ namespace MobileGL::MG_ConfigLoader {
         features.EsprytDisableUploadRing = QueryEnvFlag("MOBILEGL_ESPRYT_DISABLE_UPLOAD_RING");
         features.EsprytDisableInvalidateFlush = QueryEnvFlag("MOBILEGL_ESPRYT_DISABLE_INVALIDATE_FLUSH");
         features.DisableLargeBufferAdoption = QueryEnvFlag("MOBILEGL_DISABLE_LARGE_BUFFER_ADOPTION");
-        features.EsprytForceDepthStencilReadbackEmulation =
-            QueryEnvFlag("MOBILEGL_ESPRYT_FORCE_DS_READBACK_EMULATION");
+        features.EsprytForceDepthStencilReadbackEmulation = QueryEnvFlag("MOBILEGL_ESPRYT_FORCE_DS_READBACK_EMULATION");
         features.RelaxedSemantics = QueryEnvFlag("MOBILEGL_RELAXED_SEMANTICS");
         features.MagmaDisableBlendedDepthWriteQuirk =
             QueryEnvQuirkOverride("MOBILEGL_MAGMA_DISABLE_BLENDED_DEPTH_WRITE");
@@ -419,13 +417,10 @@ namespace MobileGL::MG_ConfigLoader {
         features.EsprytMultiDrawMode = QueryEnvGLESMultiDrawMode("MOBILEGL_ESPRYT_MULTIDRAW_MODE");
         features.AsyncShaderCompile = QueryEnvQuirkOverride("MOBILEGL_ASYNC_SHADER_COMPILE");
         features.AsyncShaderCompileThreads = QueryEnvUint32("MOBILEGL_ASYNC_SHADER_COMPILE_THREADS", 0, 0, 64);
-        features.AsyncOptimisticShaderStatus =
-            QueryEnvQuirkOverride("MOBILEGL_ASYNC_OPTIMISTIC_SHADER_STATUS");
+        features.AsyncOptimisticShaderStatus = QueryEnvQuirkOverride("MOBILEGL_ASYNC_OPTIMISTIC_SHADER_STATUS");
         features.ShaderTranslationCache = QueryEnvQuirkOverride("MOBILEGL_SHADER_CACHE");
-        features.EsprytViewportArrayEmulation =
-            QueryEnvQuirkOverride("MOBILEGL_ESPRYT_FORCE_VIEWPORT_ARRAY_EMULATION");
-        features.EsprytWidenPacked16Storage =
-            QueryEnvQuirkOverride("MOBILEGL_ESPRYT_WIDEN_PACKED16_STORAGE");
+        features.EsprytViewportArrayEmulation = QueryEnvQuirkOverride("MOBILEGL_ESPRYT_FORCE_VIEWPORT_ARRAY_EMULATION");
+        features.EsprytWidenPacked16Storage = QueryEnvQuirkOverride("MOBILEGL_ESPRYT_WIDEN_PACKED16_STORAGE");
         features.MagmaPrimGenQueryReroute = QueryEnvQuirkOverride("MOBILEGL_MAGMA_PRIMGEN_QUERY_REROUTE");
         features.MagmaE5RawReads = QueryEnvQuirkOverride("MOBILEGL_MAGMA_E5_RAW_READS");
         features.MagmaSplitSliceCopies = QueryEnvQuirkOverride("MOBILEGL_MAGMA_SPLIT_SLICE_COPIES");
@@ -444,14 +439,12 @@ namespace MobileGL::MG_ConfigLoader {
         // nothing to run; it is refused here, by name, before any backend is brought up, rather
         // than discovered as an armless subsystem at its first draw. Bit 63 (CSO content
         // addressing off) stays a switch.
-        if ((features.PipePush & MG_Pipe::kMGPipeSubsystemsMigratedAtP5e) !=
-            MG_Pipe::kMGPipeSubsystemsMigratedAtP5e) {
+        if ((features.PipePush & MG_Pipe::kMGPipeSubsystemsMigratedAtP5e) != MG_Pipe::kMGPipeSubsystemsMigratedAtP5e) {
             MGLOG_F("MGPipe: Fatal{PipeSubsystemsFixedOn, \"MOBILEGL_PIPE_PUSH=0x%llx clears subsystem "
                     "bit(s) 0x%llx; bits 0-13 are fixed on since P13 - only bit 63 may be set or "
                     "cleared\"}",
                     static_cast<unsigned long long>(features.PipePush),
-                    static_cast<unsigned long long>(MG_Pipe::kMGPipeSubsystemsMigratedAtP5e &
-                                                    ~features.PipePush));
+                    static_cast<unsigned long long>(MG_Pipe::kMGPipeSubsystemsMigratedAtP5e & ~features.PipePush));
             std::abort();
         }
         features.PipeVerify = QueryEnvFlag("MOBILEGL_PIPE_VERIFY");
@@ -629,9 +622,9 @@ namespace MobileGL::MG_ConfigLoader {
         // P15: derived from MOBILEGL_FRAMES_IN_FLIGHT (Config.h states the mapping); the explicit
         // knob stays as an override for experiments.
         {
-            const Uint32 derived = std::max<Uint32>(1u, std::min<Uint32>(8u, MG_Config::Features.FramesInFlight > 2
-                                                                                 ? MG_Config::Features.FramesInFlight - 2
-                                                                                 : 1u));
+            const Uint32 derived = std::max<Uint32>(
+                1u, std::min<Uint32>(8u, MG_Config::Features.FramesInFlight > 2 ? MG_Config::Features.FramesInFlight - 2
+                                                                                : 1u));
             ipc.PresentCredit = QueryEnvUint32("MOBILEGL_IPC_PRESENT_CREDIT", derived, 1, 8);
         }
         // CONTRACT-P6 D5b's reply bound and P7's cold-start budget (Config.h has the semantics).
@@ -650,7 +643,8 @@ namespace MobileGL::MG_ConfigLoader {
         // and the dual-block census is empty (no apply reads a client-filled field), so the
         // shipped arm now matches what is tested - and with two blocks the client's fill is its
         // own and needs no applier quiesce. 0 still turns it off (the negative control does).
-        ipc.RoleSplitState = QueryEnvQuirkOverride("MOBILEGL_IPC_ROLE_SPLIT_STATE") != MG_Config::QuirkOverride::ForceOff;
+        ipc.RoleSplitState =
+            QueryEnvQuirkOverride("MOBILEGL_IPC_ROLE_SPLIT_STATE") != MG_Config::QuirkOverride::ForceOff;
         if (MG_Config::Features.PipeVerify && ipc.RoleSplitState) {
             MGLOG_W("Config: MOBILEGL_IPC_ROLE_SPLIT_STATE=1 is incompatible with "
                     "MOBILEGL_PIPE_VERIFY (the comparator owns the single fill block); "
@@ -725,10 +719,12 @@ namespace MobileGL::MG_ConfigLoader {
                 "cold-start=%ums strict=%d audit=%d role-split-state=%d affinity='%s' surface=%s",
                 ipc.RingMb, ipc.StageMb, MG_Config::RecordArm.WireDeferredMb, ipc.SpinUs, ipc.EventWaitMs,
                 MG_Config::RecordArm.PersistentBlockKb, ipc.CreateWindow, ipc.PboReadbackSync, ipc.PollEscalate,
-                ipc.AdoptTier == 0 ? "0" : ipc.AdoptTier == 1 ? "1" : ipc.AdoptTier == 2 ? "2" : "unset(T0)",
-                ipc.AllowAdoptT0,
-                ipc.VerbBarrier, ipc.RunAhead, ipc.PresentCredit, ipc.ControlTimeoutMs, ipc.ColdStartMs,
-                static_cast<int>(ipc.StrictErrors), static_cast<int>(ipc.Audit),
+                ipc.AdoptTier == 0   ? "0"
+                : ipc.AdoptTier == 1 ? "1"
+                : ipc.AdoptTier == 2 ? "2"
+                                     : "unset(T0)",
+                ipc.AllowAdoptT0, ipc.VerbBarrier, ipc.RunAhead, ipc.PresentCredit, ipc.ControlTimeoutMs,
+                ipc.ColdStartMs, static_cast<int>(ipc.StrictErrors), static_cast<int>(ipc.Audit),
                 static_cast<int>(ipc.RoleSplitState), ipc.ServerAffinity.c_str(),
                 MG_Config::ServerOwnedWindowSurfaces() ? "server" : "offscreen");
         if (ipc.VerbBarrier == 0) {

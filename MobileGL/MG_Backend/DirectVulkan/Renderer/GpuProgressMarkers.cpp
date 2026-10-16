@@ -189,7 +189,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         VkCommandBuffer buffers[kMaxOwn + 2];
         Uint32 count = 0;
         buffers[count++] = bracket.Begin;
-        for (Uint32 i = 0; i < info.commandBufferCount; ++i) buffers[count++] = info.pCommandBuffers[i];
+        for (Uint32 i = 0; i < info.commandBufferCount; ++i)
+            buffers[count++] = info.pCommandBuffers[i];
         buffers[count++] = bracket.End;
         const VkCommandBuffer* own = info.pCommandBuffers;
         const Uint32 ownCount = info.commandBufferCount;

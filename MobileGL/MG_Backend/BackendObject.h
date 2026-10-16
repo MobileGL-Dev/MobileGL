@@ -18,7 +18,7 @@ namespace MobileGL {
         class FramebufferObject;
         class ITextureObject;
         class RenderbufferObject;
-    }
+    } // namespace MG_State::GLState
 
     namespace MG_Backend {
         // One endpoint of a glCopyImageSubData. GL 4.6 core 18.3.2 accepts GL_RENDERBUFFER
@@ -66,8 +66,8 @@ namespace MobileGL {
             void (*MultiDrawElementsIndirect)(GLenum mode, GLenum type, const void* indirect, GLsizei drawcount,
                                               GLsizei stride);
             void (*MultiDrawArraysIndirect)(GLenum mode, const void* indirect, GLsizei drawcount, GLsizei stride);
-            void (*MultiDrawElementsIndirectCount)(GLenum mode, GLenum type, const void* indirect,
-                                                   GLintptr drawcount, GLsizei maxdrawcount, GLsizei stride);
+            void (*MultiDrawElementsIndirectCount)(GLenum mode, GLenum type, const void* indirect, GLintptr drawcount,
+                                                   GLsizei maxdrawcount, GLsizei stride);
             void (*MultiDrawArraysIndirectCount)(GLenum mode, const void* indirect, GLintptr drawcount,
                                                  GLsizei maxdrawcount, GLsizei stride);
             void (*DrawRangeElementsBaseVertex)(GLenum mode, GLuint start, GLuint end, GLsizei count, GLenum type,
@@ -105,18 +105,16 @@ namespace MobileGL {
                                     GLint dstX1, GLint dstY1, GLbitfield mask, GLenum filter);
             void (*BlitNamedFramebuffer)(const SharedPtr<MG_State::GLState::FramebufferObject>& readFramebuffer,
                                          const SharedPtr<MG_State::GLState::FramebufferObject>& drawFramebuffer,
-                                         GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1,
-                                         GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1,
-                                         GLbitfield mask, GLenum filter);
+                                         GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1, GLint dstX0, GLint dstY0,
+                                         GLint dstX1, GLint dstY1, GLbitfield mask, GLenum filter);
             void (*CopyTexImage2D)(GLenum target, GLint level, GLenum internalformat, GLint x, GLint y, GLsizei width,
                                    GLsizei height, GLint border);
             void (*CopyTexSubImage2D)(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint x, GLint y,
                                       GLsizei width, GLsizei height);
-            void (*CopyImageSubData)(const CopyImageEndpoint& src,
-                                     GLenum srcTarget, GLint srcLevel, GLint srcX, GLint srcY, GLint srcZ,
-                                     const CopyImageEndpoint& dst,
-                                     GLenum dstTarget, GLint dstLevel, GLint dstX, GLint dstY, GLint dstZ,
-                                     GLsizei srcWidth, GLsizei srcHeight, GLsizei srcDepth);
+            void (*CopyImageSubData)(const CopyImageEndpoint& src, GLenum srcTarget, GLint srcLevel, GLint srcX,
+                                     GLint srcY, GLint srcZ, const CopyImageEndpoint& dst, GLenum dstTarget,
+                                     GLint dstLevel, GLint dstX, GLint dstY, GLint dstZ, GLsizei srcWidth,
+                                     GLsizei srcHeight, GLsizei srcDepth);
             void (*GenerateMipmap)(GLenum target);
             void (*ReadPixels)(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type,
                                void* pixels);
@@ -463,7 +461,8 @@ namespace MobileGL {
             virtual Bool SwapEGLBuffers(EGLDisplay dpy, EGLSurface draw);
             // eglSwapBuffersWithDamage: `damage` (GL window coordinates) is a hint for the native
             // present. A backend with nothing to hand it to swaps as SwapEGLBuffers does.
-            virtual Bool SwapEGLBuffersWithDamage(EGLDisplay dpy, EGLSurface draw, const MG_Util::Damage::Region& damage) {
+            virtual Bool SwapEGLBuffersWithDamage(EGLDisplay dpy, EGLSurface draw,
+                                                  const MG_Util::Damage::Region& damage) {
                 (void)damage;
                 return SwapEGLBuffers(dpy, draw);
             }

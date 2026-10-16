@@ -139,8 +139,8 @@ void main() {
 
             ::testing::AssertionResult WholeViewportIs(const Image& image, const char* expected,
                                                        const std::string& when) {
-                return RegionIsMostly(image, kInset, image.Width() - kInset, kInset,
-                                      image.Height() - kInset, expected, 0.0, when);
+                return RegionIsMostly(image, kInset, image.Width() - kInset, kInset, image.Height() - kInset, expected,
+                                      0.0, when);
             }
 
             GLuint m_program = 0;

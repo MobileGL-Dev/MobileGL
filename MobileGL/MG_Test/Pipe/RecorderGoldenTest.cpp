@@ -118,24 +118,41 @@ namespace {
         Scrub(p.RendererInfo);
     }
     template <>
-    void Normalize(MGPRenderStateDesc& p) { Scrub(p.Blob); }
+    void Normalize(MGPRenderStateDesc& p) {
+        Scrub(p.Blob);
+    }
     template <>
-    void Normalize(MGPDynamicState& p) { Scrub(p.Blob); }
+    void Normalize(MGPDynamicState& p) {
+        Scrub(p.Blob);
+    }
     template <>
-    void Normalize(MGPVertexElements& p) { Scrub(p.Blob); }
+    void Normalize(MGPVertexElements& p) {
+        Scrub(p.Blob);
+    }
     template <>
-    void Normalize(MGPSamplerDesc& p) { Scrub(p.Parameters); }
+    void Normalize(MGPSamplerDesc& p) {
+        Scrub(p.Parameters);
+    }
     template <>
-    void Normalize(MGPGlobalConstants& p) { Scrub(p.Blob); }
+    void Normalize(MGPGlobalConstants& p) {
+        Scrub(p.Blob);
+    }
     template <>
-    void Normalize(MGPResidualValueState& p) { Scrub(p.Blob); }
+    void Normalize(MGPResidualValueState& p) {
+        Scrub(p.Blob);
+    }
     template <>
-    void Normalize(MGPSubData& p) { Scrub(p.Blob); }
+    void Normalize(MGPSubData& p) {
+        Scrub(p.Blob);
+    }
     template <>
-    void Normalize(MGPStorageBlockBinding& p) { Scrub(p.Name); }
+    void Normalize(MGPStorageBlockBinding& p) {
+        Scrub(p.Name);
+    }
     template <>
     void Normalize(MGPProgramDesc& p) {
-        for (auto& stage : p.Spirv) Scrub(stage);
+        for (auto& stage : p.Spirv)
+            Scrub(stage);
         Scrub(p.Reflection);
     }
 
@@ -168,8 +185,12 @@ namespace {
     }
 
     // The six argument shapes PipeTables.inc generates after the payload.
-    Uint64 HashRest(Fnv&, const char*) { return 0; }
-    Uint64 HashRest(Fnv&, const char*, MGPReplySlot*) { return 0; }
+    Uint64 HashRest(Fnv&, const char*) {
+        return 0;
+    }
+    Uint64 HashRest(Fnv&, const char*, MGPReplySlot*) {
+        return 0;
+    }
     Uint64 HashRest(Fnv& hash, const char*, const void* blob, Uint64 blobBytes) {
         hash.AddU64(blobBytes);
         if (blob != nullptr && blobBytes != 0) hash.Add(blob, static_cast<SizeT>(blobBytes));
@@ -226,13 +247,13 @@ namespace {
 #undef MGL_REC_NAME
 
     void InstallTableRecorders() {
-#define MGL_REC_INSTALL(Name, Payload, Class, Flags, Wait)                                                   \
+#define MGL_REC_INSTALL(Name, Payload, Class, Flags, Wait)                                                             \
     Wrap<kRecName_##Name, decltype(MGL_REC_TABLE_##Class.Name)>::Install(MGL_REC_TABLE_##Class.Name);
         MGP_CALL_LIST(MGL_REC_INSTALL)
 #undef MGL_REC_INSTALL
     }
     void UninstallTableRecorders() {
-#define MGL_REC_UNINSTALL(Name, Payload, Class, Flags, Wait)                                                 \
+#define MGL_REC_UNINSTALL(Name, Payload, Class, Flags, Wait)                                                           \
     Wrap<kRecName_##Name, decltype(MGL_REC_TABLE_##Class.Name)>::Uninstall(MGL_REC_TABLE_##Class.Name);
         MGP_CALL_LIST(MGL_REC_UNINSTALL)
 #undef MGL_REC_UNINSTALL
@@ -299,8 +320,8 @@ namespace {
 
     const char* WireOpName(MGPWireOp op) {
         switch (op) {
-#define MGL_REC_OP_NAME(Name, Payload, Class, Flags, Wait)                                                   \
-    case MGPWireOp::Name:                                                                                     \
+#define MGL_REC_OP_NAME(Name, Payload, Class, Flags, Wait)                                                             \
+    case MGPWireOp::Name:                                                                                              \
         return #Name;
             MGP_CALL_LIST(MGL_REC_OP_NAME)
 #undef MGL_REC_OP_NAME
@@ -326,7 +347,8 @@ namespace {
             Uint64 bytes = payloadBytes;
             for (Uint32 i = 0; i < tailCount; ++i) {
                 hash.AddU64(tails[i].Size);
-                if (tails[i].Bytes != nullptr && tails[i].Size != 0) hash.Add(tails[i].Bytes, static_cast<SizeT>(tails[i].Size));
+                if (tails[i].Bytes != nullptr && tails[i].Size != 0)
+                    hash.Add(tails[i].Bytes, static_cast<SizeT>(tails[i].Size));
                 bytes += tails[i].Size;
             }
             Note(WireOpName(op), hash, bytes);
@@ -363,7 +385,9 @@ namespace {
     };
 
     RecordingVerbSession* g_session = nullptr;
-    MG_Record::VerbSession& ResolveRecordingSession(const char*) { return *g_session; }
+    MG_Record::VerbSession& ResolveRecordingSession(const char*) {
+        return *g_session;
+    }
 
     // ---- the scope a fixture runs in -------------------------------------------------------------
 
@@ -599,7 +623,9 @@ void main() { o_color = texture(u_texture, vec2(0.5)); }
         return stream;
     }
 
-    Bool FirstCaptureInProcess() { return g_captures == 0; }
+    Bool FirstCaptureInProcess() {
+        return g_captures == 0;
+    }
 
     // Index of the first record whose op is `op` in a golden, or -1.
     Int64 FirstGoldenRecordOf(const char* fixture, const char* op) {
@@ -617,13 +643,15 @@ void main() { o_color = texture(u_texture, vec2(0.5)); }
 } // namespace
 
 TEST(RecorderGolden, BufferVertexArrayDraw) {
-    if (!FirstCaptureInProcess()) GTEST_SKIP() << "compare the first capture of a process only (ctest runs each case alone)";
+    if (!FirstCaptureInProcess())
+        GTEST_SKIP() << "compare the first capture of a process only (ctest runs each case alone)";
     const std::vector<Record> stream = Capture([] { RunBufferVertexArrayDraw(); });
     CheckAgainstGolden("BufferVertexArrayDraw", stream);
 }
 
 TEST(RecorderGolden, TextureFramebufferClearBlit) {
-    if (!FirstCaptureInProcess()) GTEST_SKIP() << "compare the first capture of a process only (ctest runs each case alone)";
+    if (!FirstCaptureInProcess())
+        GTEST_SKIP() << "compare the first capture of a process only (ctest runs each case alone)";
     const std::vector<Record> stream = Capture(&RunTextureFramebufferClearBlit);
     CheckAgainstGolden("TextureFramebufferClearBlit", stream);
 }
@@ -644,7 +672,8 @@ TEST(RecorderGolden, TheSameCallsRecordTheSameStreamTwice) {
 // differently produces - must turn the comparison red AT that record, and nowhere before it.
 TEST(RecorderGolden, APerturbedRecordFieldIsCaughtAtThatRecord) {
     if (WriteRequested()) GTEST_SKIP() << "goldens are being rewritten";
-    if (!FirstCaptureInProcess()) GTEST_SKIP() << "compare the first capture of a process only (ctest runs each case alone)";
+    if (!FirstCaptureInProcess())
+        GTEST_SKIP() << "compare the first capture of a process only (ctest runs each case alone)";
     // The first draw: a verb record, i.e. the session half of the recorder rather than the tables.
     const Int64 victim = FirstGoldenRecordOf("BufferVertexArrayDraw", "DrawVbo");
     ASSERT_GE(victim, 0) << "the golden has no DrawVbo record to perturb";
@@ -661,7 +690,8 @@ TEST(RecorderGolden, APerturbedRecordFieldIsCaughtAtThatRecord) {
 // enters the stream.
 TEST(RecorderGolden, AChangedGlInputChangesTheStream) {
     if (WriteRequested()) GTEST_SKIP() << "goldens are being rewritten";
-    if (!FirstCaptureInProcess()) GTEST_SKIP() << "compare the first capture of a process only (ctest runs each case alone)";
+    if (!FirstCaptureInProcess())
+        GTEST_SKIP() << "compare the first capture of a process only (ctest runs each case alone)";
     const std::vector<Record> stream = Capture([] { RunBufferVertexArrayDraw(4); });
     const String difference = Compare("BufferVertexArrayDraw", stream);
     ASSERT_FALSE(difference.empty())

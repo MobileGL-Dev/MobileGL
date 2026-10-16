@@ -528,8 +528,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
         const Bool ok = BackendObject::MakeEGLCurrent(dpy, draw, read, ctx);
         if (ok && UsesSurfaceTargets() && ctx != EGL_NO_CONTEXT && draw != EGL_NO_SURFACE) {
-            m_contextBindings[ctx] = EGLCurrentState{.Display = dpy, .DrawSurface = draw, .ReadSurface = read,
-                                                     .Context = ctx};
+            m_contextBindings[ctx] =
+                EGLCurrentState{.Display = dpy, .DrawSurface = draw, .ReadSurface = read, .Context = ctx};
         }
         return ok;
     }
@@ -791,26 +791,23 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     Vector<GLExtension> BuildAdvertisedExtensions(Bool shaderSubgroupSupported, Bool timerQueriesSupported,
                                                   Bool anisotropicFilteringSupported,
-                                                  Bool nonZeroIndirectBaseInstanceSupported,
-                                                  Bool cubeMapArraySupported,
+                                                  Bool nonZeroIndirectBaseInstanceSupported, Bool cubeMapArraySupported,
                                                   const AdvertisedFeatureSupport& features) {
         Vector<GLExtension> extensions = {
             // The version tokens have to reach the version the backend actually claims:
             // TargetGLVersion is {4,6,0}, and a list that stopped at OpenGL40 told an
             // application feature-detecting off these tokens the opposite of what
             // GL_MAJOR_VERSION / GL_MINOR_VERSION told it.
-            V_OpenGL30, V_OpenGL31, V_OpenGL32, V_OpenGL33, V_OpenGL40, V_OpenGL41, V_OpenGL42, V_OpenGL43,
-            V_OpenGL44, V_OpenGL45, V_OpenGL46,
-            E_GL_ARB_draw_buffers_blend,
+            V_OpenGL30, V_OpenGL31, V_OpenGL32, V_OpenGL33, V_OpenGL40, V_OpenGL41, V_OpenGL42, V_OpenGL43, V_OpenGL44,
+            V_OpenGL45, V_OpenGL46, E_GL_ARB_draw_buffers_blend,
             // The GLSL 1.00/1.10-era ARB trio plus NPOT textures: all core since GL 2.0 and
             // trivially true for every context this backend claims (4.6). KWin 6's
             // EglContext::checkSupported() gates desktop-GL compositing on exactly these four
             // strings, so withholding them fails its renderer bring-up. Same block as DirectGLES.
             E_GL_ARB_shader_objects, E_GL_ARB_vertex_shader, E_GL_ARB_fragment_shader,
-            E_GL_ARB_texture_non_power_of_two,
-            E_GL_ARB_compute_shader, E_GL_ARB_shader_storage_buffer_object, E_GL_ARB_shader_image_load_store,
-            E_GL_ARB_clear_buffer_object, E_GL_ARB_program_interface_query, E_GL_ARB_framebuffer_object, E_GL_ARB_draw_indirect,
-            E_GL_ARB_multi_draw_indirect,
+            E_GL_ARB_texture_non_power_of_two, E_GL_ARB_compute_shader, E_GL_ARB_shader_storage_buffer_object,
+            E_GL_ARB_shader_image_load_store, E_GL_ARB_clear_buffer_object, E_GL_ARB_program_interface_query,
+            E_GL_ARB_framebuffer_object, E_GL_ARB_draw_indirect, E_GL_ARB_multi_draw_indirect,
             E_GL_ARB_indirect_parameters, E_GL_EXT_framebuffer_object, E_GL_ARB_depth_texture, E_GL_ARB_buffer_storage,
             E_GL_ARB_texture_storage, E_GL_ARB_texture_storage_multisample, E_GL_ARB_texture_multisample,
             E_GL_ARB_clear_texture, E_GL_ARB_direct_state_access, E_GL_ARB_shader_draw_parameters,
@@ -1116,8 +1113,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             pVulkanRenderer && pVulkanRenderer->IsNonZeroIndirectBaseInstanceSupported(),
             m_vulkanCaps.SupportsImageCubeArray,
             AdvertisedFeatureSupport{.TessellationShader = m_vulkanCaps.SupportsTessellationShader,
-                                     .CullDistance = m_vulkanCaps.SupportsShaderCullDistance &&
-                                                     m_vulkanCaps.MaxCullDistances > 0});
+                                     .CullDistance =
+                                         m_vulkanCaps.SupportsShaderCullDistance && m_vulkanCaps.MaxCullDistances > 0});
         // GL_EXT_fragment_shading_rate rides on VK_KHR_fragment_shading_rate's pipeline rate, and
         // its _primitive companion on the primitive rate; both only when the renderer enabled them.
         // _attachment is not advertised: no framebuffer carries a rate attachment to this backend.
@@ -1214,9 +1211,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                                    0.3125f, 0.1875f, 0.1875f, 0.8125f, 0.0625f, 0.4375f,
                                                    0.6875f, 0.9375f, 0.9375f, 0.0625f};
             static constexpr Float kStandard16[] = {
-                0.5625f, 0.5625f, 0.4375f, 0.3125f, 0.3125f, 0.625f,  0.75f,   0.4375f, 0.1875f, 0.375f, 0.625f,
-                0.8125f, 0.8125f, 0.6875f, 0.6875f, 0.1875f, 0.375f,  0.875f,  0.5f,    0.0625f, 0.25f,  0.125f,
-                0.125f,  0.75f,   0.0f,    0.5f,    0.9375f, 0.25f,   0.875f,  0.9375f, 0.0625f, 0.0f};
+                0.5625f, 0.5625f, 0.4375f, 0.3125f, 0.3125f, 0.625f, 0.75f,  0.4375f, 0.1875f, 0.375f, 0.625f,
+                0.8125f, 0.8125f, 0.6875f, 0.6875f, 0.1875f, 0.375f, 0.875f, 0.5f,    0.0625f, 0.25f,  0.125f,
+                0.125f,  0.75f,   0.0f,    0.5f,    0.9375f, 0.25f,  0.875f, 0.9375f, 0.0625f, 0.0f};
             const Float* const tables[] = {kStandard2, kStandard4, kStandard8, kStandard16};
             for (Int samples = 2, row = 0; samples <= decltype(m_dynamicParameters)::kMaxSamplePositionCount &&
                                            samples <= m_vulkanCaps.MaxSamples;
@@ -1275,9 +1272,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         m_dynamicParameters.MaxCombinedShaderStorageBlocks =
             clampLimit("GL_MAX_COMBINED_SHADER_STORAGE_BLOCKS", m_vulkanCaps.MaxCombinedShaderStorageBlocks,
                        kMaxAdvertisedBufferBlocks);
-        m_dynamicParameters.MaxComputeUniformBlocks =
-            clampLimit("GL_MAX_COMPUTE_UNIFORM_BLOCKS", m_vulkanCaps.MaxComputeUniformBlocks,
-                       kMaxAdvertisedBufferBlocks);
+        m_dynamicParameters.MaxComputeUniformBlocks = clampLimit(
+            "GL_MAX_COMPUTE_UNIFORM_BLOCKS", m_vulkanCaps.MaxComputeUniformBlocks, kMaxAdvertisedBufferBlocks);
         m_dynamicParameters.MaxComputeWorkGroupInvocations = m_vulkanCaps.MaxComputeWorkGroupInvocations;
         // The six per-axis compute limits, from the same VkPhysicalDeviceLimits fields
         // GLFunctionsTable::GetIntegeri_v (DirectVulkan.cpp) reads live. Carried here so that
@@ -1544,8 +1540,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // The attachment rate stays off (see UpdateAdvertisedExtensions), and with it every limit
         // that only describes the attachment.
         {
-            const FragmentShadingRateSupport fsr =
-                pVulkanRenderer != nullptr ? pVulkanRenderer->GetFragmentShadingRateSupport() : FragmentShadingRateSupport{};
+            const FragmentShadingRateSupport fsr = pVulkanRenderer != nullptr
+                                                       ? pVulkanRenderer->GetFragmentShadingRateSupport()
+                                                       : FragmentShadingRateSupport{};
             m_dynamicParameters.SupportsFragmentShadingRate = fsr.Pipeline;
             m_dynamicParameters.SupportsPrimitiveFragmentShadingRate = fsr.Pipeline && fsr.Primitive;
             m_dynamicParameters.SupportsAttachmentFragmentShadingRate = false;

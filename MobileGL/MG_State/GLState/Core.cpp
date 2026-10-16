@@ -33,11 +33,15 @@ namespace MobileGL::MG_State {
 #if MOBILEGL_BUILD_DISAGGREGATED
         std::atomic<Uint64> g_wireEpoch{0};
 #endif
-    }
+    } // namespace
 
 #if MOBILEGL_BUILD_DISAGGREGATED
-    Uint64 CurrentWireEpoch() { return g_wireEpoch.load(std::memory_order_acquire); }
-    void AdvanceWireEpoch() { g_wireEpoch.fetch_add(1, std::memory_order_acq_rel); }
+    Uint64 CurrentWireEpoch() {
+        return g_wireEpoch.load(std::memory_order_acquire);
+    }
+    void AdvanceWireEpoch() {
+        g_wireEpoch.fetch_add(1, std::memory_order_acq_rel);
+    }
 
     SharedPtr<GLState::GLContext> ReplaceProcessDefaultGLContext() {
         auto& slot = DefaultGLContextSlot();
@@ -246,19 +250,32 @@ namespace MobileGL::MG_State {
 
         VertexAttribTypeInfo ClassifyVertexAttribType(GLenum glType) {
             switch (glType) {
-            case GL_FLOAT: return {VertexAttribBaseType::Float, 1};
-            case GL_FLOAT_VEC2: return {VertexAttribBaseType::Float, 2};
-            case GL_FLOAT_VEC3: return {VertexAttribBaseType::Float, 3};
-            case GL_FLOAT_VEC4: return {VertexAttribBaseType::Float, 4};
-            case GL_INT: return {VertexAttribBaseType::Int, 1};
-            case GL_INT_VEC2: return {VertexAttribBaseType::Int, 2};
-            case GL_INT_VEC3: return {VertexAttribBaseType::Int, 3};
-            case GL_INT_VEC4: return {VertexAttribBaseType::Int, 4};
-            case GL_UNSIGNED_INT: return {VertexAttribBaseType::Uint, 1};
-            case GL_UNSIGNED_INT_VEC2: return {VertexAttribBaseType::Uint, 2};
-            case GL_UNSIGNED_INT_VEC3: return {VertexAttribBaseType::Uint, 3};
-            case GL_UNSIGNED_INT_VEC4: return {VertexAttribBaseType::Uint, 4};
-            default: return {};
+            case GL_FLOAT:
+                return {VertexAttribBaseType::Float, 1};
+            case GL_FLOAT_VEC2:
+                return {VertexAttribBaseType::Float, 2};
+            case GL_FLOAT_VEC3:
+                return {VertexAttribBaseType::Float, 3};
+            case GL_FLOAT_VEC4:
+                return {VertexAttribBaseType::Float, 4};
+            case GL_INT:
+                return {VertexAttribBaseType::Int, 1};
+            case GL_INT_VEC2:
+                return {VertexAttribBaseType::Int, 2};
+            case GL_INT_VEC3:
+                return {VertexAttribBaseType::Int, 3};
+            case GL_INT_VEC4:
+                return {VertexAttribBaseType::Int, 4};
+            case GL_UNSIGNED_INT:
+                return {VertexAttribBaseType::Uint, 1};
+            case GL_UNSIGNED_INT_VEC2:
+                return {VertexAttribBaseType::Uint, 2};
+            case GL_UNSIGNED_INT_VEC3:
+                return {VertexAttribBaseType::Uint, 3};
+            case GL_UNSIGNED_INT_VEC4:
+                return {VertexAttribBaseType::Uint, 4};
+            default:
+                return {};
             }
         }
 
@@ -280,7 +297,7 @@ namespace MobileGL::MG_State {
             // The two views above are CONVERSIONS, not bit copies, so which one was written
             // is part of the value; set_vertex_attrib_defaults carries it.
             m_currentVertexAttributeClasses[index] = kVertexAttribValueClassFloat;
-        MGP_NOTE_AGGREGATE(VertexAttribDefault);
+            MGP_NOTE_AGGREGATE(VertexAttribDefault);
         }
 
         void GLContext::SetCurrentVertexAttributeInt(Uint index, const Array<Int32, 4>& value) {
@@ -296,7 +313,7 @@ namespace MobileGL::MG_State {
                 current.uintValue[component] = static_cast<Uint32>(value[component]);
             }
             m_currentVertexAttributeClasses[index] = kVertexAttribValueClassInt;
-        MGP_NOTE_AGGREGATE(VertexAttribDefault);
+            MGP_NOTE_AGGREGATE(VertexAttribDefault);
         }
 
         void GLContext::SetCurrentVertexAttributeUint(Uint index, const Array<Uint32, 4>& value) {
@@ -312,7 +329,7 @@ namespace MobileGL::MG_State {
                 current.intValue[component] = static_cast<Int32>(value[component]);
             }
             m_currentVertexAttributeClasses[index] = kVertexAttribValueClassUint;
-        MGP_NOTE_AGGREGATE(VertexAttribDefault);
+            MGP_NOTE_AGGREGATE(VertexAttribDefault);
         }
 
         const CurrentVertexAttributeValue& GLContext::GetCurrentVertexAttribute(Uint index) const {
@@ -656,7 +673,8 @@ namespace MobileGL::MG_State {
         // programs hold and it does not: uniform values, and interface block bindings. Runs on
         // every draw through a pipeline, so the common case is the version compare below and
         // nothing else.
-        static void RefreshCompositeUniforms(ProgramPipelineObject& pipeline, const SharedPtr<ProgramObject>& composite) {
+        static void RefreshCompositeUniforms(ProgramPipelineObject& pipeline,
+                                             const SharedPtr<ProgramObject>& composite) {
             if (!composite) return;
             const auto versions = pipeline.ComputeUniformMirrorVersions();
             if (versions == pipeline.GetMirroredUniformVersions()) return;
@@ -810,9 +828,8 @@ namespace MobileGL::MG_State {
             // the last one in a pipeline that has a TCS but no evaluation or geometry stage,
             // which is why it sits after TessEval. Same four stages, same order, as
             // ProgramLinkTask::ResolveTransformFeedbackVaryings - see rule (2).
-            for (const ShaderStage captureStage:
-                 {ShaderStage::Geometry, ShaderStage::TessEval, ShaderStage::TessControl,
-                  ShaderStage::Vertex}) {
+            for (const ShaderStage captureStage :
+                 {ShaderStage::Geometry, ShaderStage::TessEval, ShaderStage::TessControl, ShaderStage::Vertex}) {
                 if (!compositeHasStage[static_cast<SizeT>(captureStage)]) continue;
                 const auto& captureProgram = pipeline->GetStageProgram(captureStage);
                 if (!captureProgram) continue;
@@ -1563,7 +1580,6 @@ namespace MobileGL::MG_State {
             return GetProgramPipelineObject(m_boundProgramPipeline);
         }
 
-
         Bool GLContext::ValidateTransformFeedbackName(Uint index) const {
             return index == 0 || m_transformFeedbackNames.IsValid(index);
         }
@@ -1693,7 +1709,7 @@ namespace MobileGL::MG_State {
     };
     namespace {
         thread_local CurrentGLContextOwner tCurrentGLContextOwner;
-    }
+    } // namespace
 
     const SharedPtr<GLState::GLContext>& CurrentGLContextSlot::Shared() const {
         return tCurrentGLContextOwner.context;

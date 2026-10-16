@@ -34,8 +34,7 @@ namespace {
     class DebugTest : public ::testing::Test {
     protected:
         static void DrainPendingGlErrors() {
-            for (Int drained = 0; drained < 16 && MG_Impl::GLImpl::GetError() != GL_NO_ERROR; ++drained) {
-            }
+            for (Int drained = 0; drained < 16 && MG_Impl::GLImpl::GetError() != GL_NO_ERROR; ++drained) {}
         }
 
         static void ExpectSingleGlError(GLenum expected) {

@@ -28,8 +28,8 @@ namespace MobileGL::MG_Impl::GLImpl {
     void GenRenderbuffers(GLsizei n, GLuint* renderbuffers);
     void CreateRenderbuffers(GLsizei n, GLuint* renderbuffers);
     void NamedRenderbufferStorage(GLuint renderbuffer, GLenum internalformat, GLsizei width, GLsizei height);
-    void NamedRenderbufferStorageMultisample(GLuint renderbuffer, GLsizei samples, GLenum internalformat,
-                                             GLsizei width, GLsizei height);
+    void NamedRenderbufferStorageMultisample(GLuint renderbuffer, GLsizei samples, GLenum internalformat, GLsizei width,
+                                             GLsizei height);
     void GetNamedRenderbufferParameteriv(GLuint renderbuffer, GLenum pname, GLint* params);
     void FramebufferRenderbuffer(GLenum target, GLenum attachment, GLenum renderbuffertarget, GLuint renderbuffer);
     void NamedFramebufferRenderbuffer(GLuint framebuffer, GLenum attachment, GLenum renderbuffertarget,
@@ -48,8 +48,10 @@ namespace MobileGL::MG_Impl::GLImpl {
     void FramebufferTexture1D(GLenum target, GLenum attachment, GLenum textarget, GLuint texture, GLint level);
     void FramebufferTexture(GLenum target, GLenum attachment, GLuint texture, GLint level);
     void NamedFramebufferTexture(GLuint framebuffer, GLenum attachment, GLuint texture, GLint level);
-    void NamedFramebufferTexture1D(GLuint framebuffer, GLenum attachment, GLenum textarget, GLuint texture, GLint level);
-    void NamedFramebufferTexture2D(GLuint framebuffer, GLenum attachment, GLenum textarget, GLuint texture, GLint level);
+    void NamedFramebufferTexture1D(GLuint framebuffer, GLenum attachment, GLenum textarget, GLuint texture,
+                                   GLint level);
+    void NamedFramebufferTexture2D(GLuint framebuffer, GLenum attachment, GLenum textarget, GLuint texture,
+                                   GLint level);
     void NamedFramebufferTexture3D(GLuint framebuffer, GLenum attachment, GLenum textarget, GLuint texture, GLint level,
                                    GLint zoffset);
     void NamedFramebufferTextureLayer(GLuint framebuffer, GLenum attachment, GLuint texture, GLint level, GLint layer);

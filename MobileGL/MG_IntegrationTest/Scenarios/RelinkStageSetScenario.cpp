@@ -122,9 +122,11 @@ void main()
             void TearDown() override {
                 if (!Ready()) return;
                 glUseProgram(0);
-                for (const GLuint program : m_programs) glDeleteProgram(program);
+                for (const GLuint program : m_programs)
+                    glDeleteProgram(program);
                 m_programs.clear();
-                for (const GLuint shader : m_shaders) glDeleteShader(shader);
+                for (const GLuint shader : m_shaders)
+                    glDeleteShader(shader);
                 m_shaders.clear();
                 BindDefaultFramebuffer();
                 DestroyColorFbo(m_target);
@@ -135,8 +137,7 @@ void main()
             }
 
             static void DrainErrors() {
-                for (int i = 0; i < 16 && glGetError() != GL_NO_ERROR; ++i) {
-                }
+                for (int i = 0; i < 16 && glGetError() != GL_NO_ERROR; ++i) {}
             }
 
             // The same real-backend probes the other stage-gated scenarios use: 0 on a

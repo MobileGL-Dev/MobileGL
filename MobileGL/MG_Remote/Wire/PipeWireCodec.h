@@ -120,12 +120,10 @@ namespace MobileGL::MG_Remote::Wire {
     // RequireDeclaredBlob, called by the decoder where the payload implies content.
     // Returns true when honest; false when a fault was latched (armed session child only;
     // elsewhere the check does not return). Decode-path callers return on false.
-    Bool CheckBlobIsHonest(MG_Pipe::MGPWireOp op, const MG_Pipe::MGPBlobRef& blob,
-                           const SegmentTable& segments);
+    Bool CheckBlobIsHonest(MG_Pipe::MGPWireOp op, const MG_Pipe::MGPBlobRef& blob, const SegmentTable& segments);
     // R-2.3 arm 2: the record's other fields say it carries content, so the blob must be
     // declared. Fatal on an absent blob, then CheckBlobIsHonest on a present one.
-    Bool RequireDeclaredBlob(MG_Pipe::MGPWireOp op, const MG_Pipe::MGPBlobRef& blob,
-                             const SegmentTable& segments);
+    Bool RequireDeclaredBlob(MG_Pipe::MGPWireOp op, const MG_Pipe::MGPBlobRef& blob, const SegmentTable& segments);
     // R-2.3 arms 1 and 3 for MGHostSpan. Our client produces ZERO host spans
     // (kCapNeedsHostIndexBytes / kCapNeedsHostUboBytes are RESERVED since P8-F, never set), so
     // this firing at all is a finding, not just a corruption check.
@@ -145,8 +143,7 @@ namespace MobileGL::MG_Remote::Wire {
     // A legal segment run must also contain every index the draw will consume. Shared by
     // the encoder, decoder and sink so a direct sink call cannot bypass the extent gate.
     // PH-1 (3): answers like the arms above (false = latched).
-    Bool CheckDrawUserIndices(const MG_Pipe::MGPDrawInfo& info,
-                              const MG_Pipe::MGPDrawRange* ranges,
+    Bool CheckDrawUserIndices(const MG_Pipe::MGPDrawInfo& info, const MG_Pipe::MGPDrawRange* ranges,
                               const MG_Pipe::MGHostSpan& span);
 
     // ---- one record's shape, computed once and read by both sides ----------------------
@@ -160,7 +157,7 @@ namespace MobileGL::MG_Remote::Wire {
     inline constexpr Uint32 kMaxWireRecordTails = 3;
 
     struct WireRecordLayout {
-        Uint64 PayloadBytes = 0;   // sizeof the op's payload struct
+        Uint64 PayloadBytes = 0;                            // sizeof the op's payload struct
         Uint64 TailOffset[kMaxWireRecordTails] = {0, 0, 0}; // from the START of the record,
                                                             // header included
         Uint64 TailBytes[kMaxWireRecordTails] = {0, 0, 0};
@@ -196,8 +193,8 @@ namespace MobileGL::MG_Remote::Wire {
     public:
         PipeWireEncoder() = default;
         PipeWireEncoder(Transport::ILink* link, SegmentTable* segments);
-        PipeWireEncoder(Transport::RingControl* control, Transport::RingProducer* cmd,
-                        Transport::RingProducer* stage, SegmentTable* segments);
+        PipeWireEncoder(Transport::RingControl* control, Transport::RingProducer* cmd, Transport::RingProducer* stage,
+                        SegmentTable* segments);
 
         Bool Valid() const;
 
@@ -231,8 +228,8 @@ namespace MobileGL::MG_Remote::Wire {
         // tail holds 8 bytes is Fatal HERE, on the producing side, rather than on a peer that
         // can only report a corrupt stream. That is the same arithmetic the decoder runs, so
         // the check is real rather than a restatement of the caller's own belief.
-        Uint64 EncodeRecord(MG_Pipe::MGPWireOp op, const void* payload, Uint64 payloadBytes,
-                            const WireTail* tails, Uint32 tailCount, Bool noReply = false);
+        Uint64 EncodeRecord(MG_Pipe::MGPWireOp op, const void* payload, Uint64 payloadBytes, const WireTail* tails,
+                            Uint32 tailCount, Bool noReply = false);
 
         // `noReply` (P12) stamps Transport::kRecNoReply, which tells the server it may SKIP the
         // answer for this record. IT IS NOT "the caller is not waiting" - that is `wantReply` on
@@ -302,7 +299,9 @@ namespace MobileGL::MG_Remote::Wire {
         void SetStageRetirementDoorbell(Transport::Doorbell* bell) { m_stageRetirementBell = bell; }
         using CancellationHook = Bool (*)(void* self);
         void SetCancellationState(const std::atomic<bool>* lost, CancellationHook hook, void* self) {
-            m_sessionLost = lost; m_cancellationHook = hook; m_cancellationSelf = self;
+            m_sessionLost = lost;
+            m_cancellationHook = hook;
+            m_cancellationSelf = self;
         }
         // The fast check is used on encode; the doorbell probe only runs while
         // staging or at an unsuccessful wait boundary.
@@ -311,7 +310,6 @@ namespace MobileGL::MG_Remote::Wire {
         }
         Bool CheckCancellation();
         void SetStageWaitTimeoutMs(Uint32 timeoutMs) { m_stageWaitTimeoutMs = timeoutMs; }
-
 
         // P5e (ra, CONTRACT-P5E §2.6): THE STAGE BELL IS A CLIENT WAIT, so it has to drain the
         // reverse channel like every other one. The encoder cannot drain it itself - SEG_EVENT
@@ -402,8 +400,7 @@ namespace MobileGL::MG_Remote::Wire {
     public:
         PipeWireDecoder() = default;
         PipeWireDecoder(Transport::ILink* link, SegmentTable* segments, ReplySink* replies);
-        PipeWireDecoder(Transport::RingControl* control, SegmentTable* segments,
-                        ReplySink* replies);
+        PipeWireDecoder(Transport::RingControl* control, SegmentTable* segments, ReplySink* replies);
 
         Bool Valid() const;
 
@@ -518,8 +515,7 @@ namespace MobileGL::MG_Remote::Wire {
         void PoisonResolvedRuns();
         // The ONLY way this class answers a record. Fatals if `op` carries no kReplySlot -
         // see LastAcceptanceKnown() for why that is a Fatal and not a log line.
-        void PostReply(MG_Pipe::MGPWireOp op, Uint64 seq, Int32 status, const void* bytes,
-                       Uint64 size);
+        void PostReply(MG_Pipe::MGPWireOp op, Uint64 seq, Int32 status, const void* bytes, Uint64 size);
 
         friend Bool MGPipeWireRecordApplyThunk(MG_Pipe::MGPWireOp, const void*, Uint64, Uint64);
 
@@ -545,7 +541,6 @@ namespace MobileGL::MG_Remote::Wire {
 
     // The hook MGPipeApplyWireRecord dispatches to once its generated per-opcode bounds gate
     // has passed. Inert unless a decoder is active on the calling thread.
-    Bool MGPipeWireRecordApplyThunk(MG_Pipe::MGPWireOp op, const void* record, Uint64 size,
-                                    Uint64 remaining);
+    Bool MGPipeWireRecordApplyThunk(MG_Pipe::MGPWireOp op, const void* record, Uint64 size, Uint64 remaining);
 
 } // namespace MobileGL::MG_Remote::Wire

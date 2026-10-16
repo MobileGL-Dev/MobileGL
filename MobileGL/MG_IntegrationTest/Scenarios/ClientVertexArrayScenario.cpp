@@ -177,8 +177,7 @@ void main() { o_color = vec4(0.0, 1.0, 0.0, 1.0); }
         // Two strips out of one client array: the left half and the right half, so a
         // MultiDrawArrays that uploaded only the FIRST sub-draw's range leaves one side blue.
         static const float kTwoHalves[] = {
-            -1.0f, -1.0f, 0.0f, -1.0f, -1.0f, 1.0f, 0.0f, 1.0f,
-            0.0f,  -1.0f, 1.0f, -1.0f, 0.0f,  1.0f, 1.0f, 1.0f,
+            -1.0f, -1.0f, 0.0f, -1.0f, -1.0f, 1.0f, 0.0f, 1.0f, 0.0f, -1.0f, 1.0f, -1.0f, 0.0f, 1.0f, 1.0f, 1.0f,
         };
         ClientArrayQuad quad;
         quad.Bind(kTwoHalves);
@@ -220,7 +219,8 @@ void main() { o_color = vec4(0.0, 1.0, 0.0, 1.0); }
         quad.Bind(positions.data());
         glUseProgram(program);
         glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, indices.data());
-        for (size_t i = 0; i < positions.size(); i += 2) positions[i] += 1;
+        for (size_t i = 0; i < positions.size(); i += 2)
+            positions[i] += 1;
         glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, indices.data());
         // No readback or Finish between the draws and the host writes.
         std::fill(positions.begin(), positions.end(), -100.0f);
@@ -287,8 +287,7 @@ void main() {
         glDisable(GL_DEPTH_TEST);
         glDisable(GL_SCISSOR_TEST);
         ClearTo(0, 0, 1, 1);
-        const float positions[]{100, 100, 100, 100, 100, 100, 100, 100,
-                                -1, -1, 1, -1, -1, 1, 1, 1};
+        const float positions[]{100, 100, 100, 100, 100, 100, 100, 100, -1, -1, 1, -1, -1, 1, 1, 1};
         ClientArrayQuad quad;
         quad.Bind(positions);
         GLuint ebo = 0;
@@ -333,8 +332,7 @@ void main() { gl_Position = vec4(aPos + aOffset, 0.0, 1.0); }
         glDisable(GL_DEPTH_TEST);
         glDisable(GL_SCISSOR_TEST);
         ClearTo(0, 0, 1, 1);
-        const float positions[]{100, 100, 100, 100, 100, 100, 100, 100,
-                                -1, -1, 1, -1, -1, 1, 1, 1};
+        const float positions[]{100, 100, 100, 100, 100, 100, 100, 100, -1, -1, 1, -1, -1, 1, 1, 1};
         const float offsets[]{100, 100, 0, 0};
         ClientArrayQuad quad;
         quad.Bind(positions);

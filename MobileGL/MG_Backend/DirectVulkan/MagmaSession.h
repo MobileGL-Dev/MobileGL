@@ -104,9 +104,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         SessionLocal(const SessionLocal&) = delete;
         SessionLocal& operator=(const SessionLocal&) = delete;
 
-        T& Get() const {
-            return *static_cast<T*>(Detail::SessionLocalSlot(Detail::CurrentMagmaSession(), m_index));
-        }
+        T& Get() const { return *static_cast<T*>(Detail::SessionLocalSlot(Detail::CurrentMagmaSession(), m_index)); }
         T& operator*() const { return Get(); }
         T* operator->() const { return &Get(); }
 

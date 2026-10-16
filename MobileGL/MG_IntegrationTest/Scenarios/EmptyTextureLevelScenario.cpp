@@ -44,8 +44,7 @@ namespace MGITest {
                 if (m_fbo != 0) glDeleteFramebuffers(1, &m_fbo);
                 if (m_texture != 0) glDeleteTextures(1, &m_texture);
                 m_fbo = m_texture = 0;
-                while (glGetError() != GL_NO_ERROR) {
-                }
+                while (glGetError() != GL_NO_ERROR) {}
             }
 
             // Every target resetStateGLCore empties, in its order, on the default textures.

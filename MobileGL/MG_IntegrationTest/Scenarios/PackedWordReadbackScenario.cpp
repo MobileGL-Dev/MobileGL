@@ -76,8 +76,7 @@ namespace MGITest {
             }
 
             static void DrainErrors() {
-                for (int i = 0; i < 16 && glGetError() != GL_NO_ERROR; ++i) {
-                }
+                for (int i = 0; i < 16 && glGetError() != GL_NO_ERROR; ++i) {}
             }
 
             void DeleteObjects() {
@@ -123,8 +122,7 @@ namespace MGITest {
             // back, and there are none to compare if the copy never happened.
             GLenum CopyWholeImage(GLuint srcName, GLenum srcTarget, GLuint dstName, GLenum dstTarget) {
                 DrainErrors();
-                glCopyImageSubData(srcName, srcTarget, 0, 0, 0, 0, dstName, dstTarget, 0, 0, 0, 0, kExtent, kExtent,
-                                   1);
+                glCopyImageSubData(srcName, srcTarget, 0, 0, 0, 0, dstName, dstTarget, 0, 0, 0, 0, kExtent, kExtent, 1);
                 const GLenum error = glGetError();
                 EXPECT_EQ(glGetError(), static_cast<GLenum>(GL_NO_ERROR)) << "the copy recorded more than one error";
                 return error;
@@ -133,8 +131,7 @@ namespace MGITest {
             static void ExpectEveryTexel(const std::vector<GLuint>& words, GLuint expected, const char* what) {
                 for (std::size_t i = 0; i < words.size(); ++i) {
                     ASSERT_EQ(words[i], expected)
-                        << what << ": texel " << i << " read 0x" << std::hex << words[i] << ", expected 0x"
-                        << expected;
+                        << what << ": texel " << i << " read 0x" << std::hex << words[i] << ", expected 0x" << expected;
                 }
             }
 

@@ -37,12 +37,10 @@ namespace {
                 constexpr const char* surfaceKind = "pbuffer";
 #endif
                 std::fprintf(stderr, "  renderer: %s\n  surface:  %dx%d %s (headless, EGL_PLATFORM=%s)\n",
-                             gl.RendererString().c_str(), gl.Width(), gl.Height(),
-                             surfaceKind,
+                             gl.RendererString().c_str(), gl.Width(), gl.Height(), surfaceKind,
                              eglPlatform != nullptr ? eglPlatform : "<unset>");
             } else if (MGITest::RequireGpu()) {
-                std::fprintf(stderr,
-                             "  FAILING every scenario (MOBILEGL_ITEST_REQUIRE_GPU is set): %s\n",
+                std::fprintf(stderr, "  FAILING every scenario (MOBILEGL_ITEST_REQUIRE_GPU is set): %s\n",
                              gl.SkipReason().c_str());
             } else {
                 std::fprintf(stderr,

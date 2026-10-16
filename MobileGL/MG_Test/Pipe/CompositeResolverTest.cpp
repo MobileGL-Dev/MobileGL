@@ -148,7 +148,9 @@ namespace {
         return result;
     }
 
-    Bool DiedOfAbort(const ChildResult& r) { return WIFSIGNALED(r.Status) && WTERMSIG(r.Status) == SIGABRT; }
+    Bool DiedOfAbort(const ChildResult& r) {
+        return WIFSIGNALED(r.Status) && WTERMSIG(r.Status) == SIGABRT;
+    }
     std::string DescribeStatus(const ChildResult& r) {
         if (r.Status < 0) return "fork/waitpid failed";
         if (WIFEXITED(r.Status)) return "exited " + std::to_string(WEXITSTATUS(r.Status));
@@ -356,7 +358,6 @@ TEST(CompositeResolver, ASlotAtTheShaderCsoLimitIsRefusedWhileTheLastBandSlotIsN
         << "an ordinary slot below the band resolved against a record nobody created";
 }
 
-
 namespace {
     namespace GL = MobileGL::MG_Impl::GLImpl;
     using GLContext = MG_State::GLState::GLContext;
@@ -380,7 +381,9 @@ namespace {
         }
     };
 
-    GLContext& Ctx() { return *MG_State::pGLContext; }
+    GLContext& Ctx() {
+        return *MG_State::pGLContext;
+    }
 
     const char* kVs = R"(#version 430 core
 out gl_PerVertex { vec4 gl_Position; };
@@ -589,8 +592,7 @@ void main() { o_color = vec4(0.5); }
         EXPECT_EQ(MGPipeProgramEmitterInstance().DrawCso(), first)
             << "the same stage set is the same composite and the same handle";
         EXPECT_GE(MGPipeCompositeResolverInstance().GetCounters().Reuses, 1u);
-        EXPECT_EQ(MGPipeCompositeResolverInstance().GetCounters().Releases, 0u)
-            << "a reuse releases nothing";
+        EXPECT_EQ(MGPipeCompositeResolverInstance().GetCounters().Releases, 0u) << "a reuse releases nothing";
 
         // NOW THE STAGE SET REALLY MOVES: a different fragment stage program is a different
         // lifetime id, so ComputeDrawProgramSignature moves and the frontend builds a second
@@ -712,8 +714,7 @@ void main() { o_color = vec4(0.5); }
         EXPECT_FALSE(MGPipeHandleIsPublished(MGPipeKind::ShaderCso, handle))
             << "and it took the publication latch with the delete";
         EXPECT_EQ(MGPipeSlots().LiveCount(MGPipeKind::ShaderCso), liveBefore) << "exactly once";
-        EXPECT_EQ(resolver.GetCounters().Releases, releasesBefore)
-            << "the resolver spoke no release of its own for it";
+        EXPECT_EQ(resolver.GetCounters().Releases, releasesBefore) << "the resolver spoke no release of its own for it";
 
         // THE NEXT CONTEXT's FIRST VERB. The stranded entry is dropped, not released.
         MGPipeProgramEmitterInstance().Reset();
@@ -742,8 +743,7 @@ int main(int argc, char** argv) {
     // raised by the encoder on THIS thread - the client role. So g_logPath, which is the read
     // path from here on, becomes the client-derived name; the env keeps the base. The rule is
     // the library's own, not a copy.
-    g_logPath = MobileGL::MG_Util::Debug::RoleLogPath(g_logPath.c_str(),
-                                                      MobileGL::MG_Util::Debug::LogRole::Client);
+    g_logPath = MobileGL::MG_Util::Debug::RoleLogPath(g_logPath.c_str(), MobileGL::MG_Util::Debug::LogRole::Client);
     MobileGL::Initialize();
     ::testing::InitGoogleTest(&argc, argv);
     const int rc = RUN_ALL_TESTS();

@@ -146,8 +146,8 @@ namespace MobileGL::MG_Impl::GLImpl {
     GLint GetFragDataIndex(GLuint program, const char* name);
     void GetProgramInterfaceiv(GLuint program, GLenum programInterface, GLenum pname, GLint* params);
     GLuint GetProgramResourceIndex(GLuint program, GLenum programInterface, const GLchar* name);
-    void GetProgramResourceName(GLuint program, GLenum programInterface, GLuint index, GLsizei bufSize,
-                                GLsizei* length, GLchar* name);
+    void GetProgramResourceName(GLuint program, GLenum programInterface, GLuint index, GLsizei bufSize, GLsizei* length,
+                                GLchar* name);
     void GetProgramResourceiv(GLuint program, GLenum programInterface, GLuint index, GLsizei propCount,
                               const GLenum* props, GLsizei bufSize, GLsizei* length, GLint* params);
     GLint GetProgramResourceLocation(GLuint program, GLenum programInterface, const GLchar* name);
@@ -171,23 +171,32 @@ namespace MobileGL::MG_Impl::GLImpl {
     void ProgramUniform4d(GLuint program, GLint location, GLdouble v0, GLdouble v1, GLdouble v2, GLdouble v3);
     void ProgramUniform4dv(GLuint program, GLint location, GLsizei count, const GLdouble* value);
     void UniformMatrix2dv(GLint location, GLsizei count, GLboolean transpose, const GLdouble* value);
-    void ProgramUniformMatrix2dv(GLuint program, GLint location, GLsizei count, GLboolean transpose, const GLdouble* value);
+    void ProgramUniformMatrix2dv(GLuint program, GLint location, GLsizei count, GLboolean transpose,
+                                 const GLdouble* value);
     void UniformMatrix3dv(GLint location, GLsizei count, GLboolean transpose, const GLdouble* value);
-    void ProgramUniformMatrix3dv(GLuint program, GLint location, GLsizei count, GLboolean transpose, const GLdouble* value);
+    void ProgramUniformMatrix3dv(GLuint program, GLint location, GLsizei count, GLboolean transpose,
+                                 const GLdouble* value);
     void UniformMatrix4dv(GLint location, GLsizei count, GLboolean transpose, const GLdouble* value);
-    void ProgramUniformMatrix4dv(GLuint program, GLint location, GLsizei count, GLboolean transpose, const GLdouble* value);
+    void ProgramUniformMatrix4dv(GLuint program, GLint location, GLsizei count, GLboolean transpose,
+                                 const GLdouble* value);
     void UniformMatrix2x3dv(GLint location, GLsizei count, GLboolean transpose, const GLdouble* value);
-    void ProgramUniformMatrix2x3dv(GLuint program, GLint location, GLsizei count, GLboolean transpose, const GLdouble* value);
+    void ProgramUniformMatrix2x3dv(GLuint program, GLint location, GLsizei count, GLboolean transpose,
+                                   const GLdouble* value);
     void UniformMatrix2x4dv(GLint location, GLsizei count, GLboolean transpose, const GLdouble* value);
-    void ProgramUniformMatrix2x4dv(GLuint program, GLint location, GLsizei count, GLboolean transpose, const GLdouble* value);
+    void ProgramUniformMatrix2x4dv(GLuint program, GLint location, GLsizei count, GLboolean transpose,
+                                   const GLdouble* value);
     void UniformMatrix3x2dv(GLint location, GLsizei count, GLboolean transpose, const GLdouble* value);
-    void ProgramUniformMatrix3x2dv(GLuint program, GLint location, GLsizei count, GLboolean transpose, const GLdouble* value);
+    void ProgramUniformMatrix3x2dv(GLuint program, GLint location, GLsizei count, GLboolean transpose,
+                                   const GLdouble* value);
     void UniformMatrix3x4dv(GLint location, GLsizei count, GLboolean transpose, const GLdouble* value);
-    void ProgramUniformMatrix3x4dv(GLuint program, GLint location, GLsizei count, GLboolean transpose, const GLdouble* value);
+    void ProgramUniformMatrix3x4dv(GLuint program, GLint location, GLsizei count, GLboolean transpose,
+                                   const GLdouble* value);
     void UniformMatrix4x2dv(GLint location, GLsizei count, GLboolean transpose, const GLdouble* value);
-    void ProgramUniformMatrix4x2dv(GLuint program, GLint location, GLsizei count, GLboolean transpose, const GLdouble* value);
+    void ProgramUniformMatrix4x2dv(GLuint program, GLint location, GLsizei count, GLboolean transpose,
+                                   const GLdouble* value);
     void UniformMatrix4x3dv(GLint location, GLsizei count, GLboolean transpose, const GLdouble* value);
-    void ProgramUniformMatrix4x3dv(GLuint program, GLint location, GLsizei count, GLboolean transpose, const GLdouble* value);
+    void ProgramUniformMatrix4x3dv(GLuint program, GLint location, GLsizei count, GLboolean transpose,
+                                   const GLdouble* value);
     void GetUniformdv(GLuint program, GLint location, GLdouble* params);
     void ValidateProgram(GLuint program);
     void ProgramParameteri(GLuint program, GLenum pname, GLint value);

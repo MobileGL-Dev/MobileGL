@@ -56,13 +56,19 @@ namespace MGITest::SplitLane {
         return (value != nullptr) ? std::string(value) : std::string();
     }
 
-    inline bool MarkerIsOne(const char* name) { return MarkerValue(name) == "1"; }
+    inline bool MarkerIsOne(const char* name) {
+        return MarkerValue(name) == "1";
+    }
 
     // True in the DirectGLES.Split.* entries only.
-    inline bool IsSplitLane() { return MarkerIsOne("MGITEST_SPLIT_LANE"); }
+    inline bool IsSplitLane() {
+        return MarkerIsOne("MGITEST_SPLIT_LANE");
+    }
 
     // True in exit gate E3(e)'s small-ring lane.
-    inline bool IsSmallRingLane() { return MarkerIsOne("MGITEST_SMALL_RING_LANE"); }
+    inline bool IsSmallRingLane() {
+        return MarkerIsOne("MGITEST_SMALL_RING_LANE");
+    }
 
     // Empty when this case may assert; otherwise the reason to GTEST_SKIP() with. The reason is
     // spelled out rather than summarised because a skip line is the only thing anyone reads when
@@ -79,6 +85,8 @@ namespace MGITest::SplitLane {
     }
 
     // "adopted", "emulated", or empty when the lane declared nothing.
-    inline std::string DeclaredPersistentMapArm() { return MarkerValue("MGITEST_PERSISTENT_MAP_ARM"); }
+    inline std::string DeclaredPersistentMapArm() {
+        return MarkerValue("MGITEST_PERSISTENT_MAP_ARM");
+    }
 
 } // namespace MGITest::SplitLane
