@@ -89,6 +89,10 @@ SOURCE_DIRS = ("MobileGL/", "scripts/", "tools/")
 # Files whose exact bytes are pinned elsewhere: changing them, even a comment, means a protocol
 # revision bump (scripts/ci/protocol_revision_pins.json), so only the UTF-8 rule applies to them.
 FROZEN = {"MobileGL/MG_Remote/Protocol/protocol.fbs"}
+# Left unformatted: its export table's HEAD/END macro pairs end no statement, so clang-format reads
+# the whole table as one expression and needs minutes and gigabytes to wrap it, even under
+# `clang-format off`.
+FORMAT_SKIP = {"MobileGL/MG_Impl/GLImpl/Exporting/Definitions.cpp"}
 NOTES_DIR = "docs/Disaggregated/notes/"
 # The archived planning notes and agent contracts. The commit that adds ARCHIVE_MARKER fills the
 # archive; every later commit leaves it alone.
@@ -110,6 +114,12 @@ def git(*args, check=True, repo=ROOT, data=None):
 
 def is_generated(path):
     return "/generated/" in path or "/gen/" in path or os.path.basename(path).startswith("generated_")
+
+
+def is_formatted(path):
+    """Whether clang-format owns the file's layout: the format check and format_code.sh cover it."""
+    return (path.startswith(SOURCE_DIRS) and path.endswith(FORMAT_EXT) and not is_generated(path)
+            and path not in FORMAT_SKIP)
 
 
 def submodule_paths(repo=ROOT):
@@ -595,7 +605,7 @@ def check_format(rev_range):
         if is_merge(sha) or not git("rev-parse", "--verify", "--quiet", sha + "^", check=False).strip():
             continue
         for path, ranges in unmoved_ranges(git("diff", "-U0", "-M", "--no-color", sha + "^", sha)).items():
-            if not (path.endswith(FORMAT_EXT) and path.startswith(SOURCE_DIRS)) or is_generated(path):
+            if not is_formatted(path):
                 continue
             checked += 1
             content = subprocess.run(["git", "-C", ROOT, "show", "%s:%s" % (sha, path)], stdout=subprocess.PIPE).stdout
