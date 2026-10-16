@@ -1,4 +1,4 @@
-// MobileGL - MobileGL/MG_Backend/DirectVulkan/Renderer/WireYuvImage.inc
+// MobileGL - MobileGL/MG_Backend/DirectVulkan/Renderer/WireYuvImage.cpp
 // Copyright (c) 2025-2026 MobileGL-Dev
 // Licensed under the GNU Lesser General Public License v3.0:
 //   https://www.gnu.org/licenses/gpl-3.0.txt
@@ -6,20 +6,24 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// Included by VulkanRenderer.cpp inside the backend namespace, after WireSharedImage.inc.
-//
-// YUV SHARED IMAGES (NV12, P010; MG_Remote/Server/SharedImageYuv.h). A YUV image is never a
-// texture's image: the texture keeps its own RGBA8 level 0 (VkTextureManager::SyncWireTextureShape)
-// and, at its first use in each frame, the image is CONVERTED into it here - the image's
-// AHardwareBuffer imported with its external format, sampled through an immutable sampler that
-// carries a VkSamplerYcbcrConversion built from the import's colour hints, one triangle over the
-// target. Zero CPU copies for an image this server allocated; a foreign one (a video decoder's
-// buffer) is first brought up to date by the registry's labelled CPU copy (RefreshForeign).
-//
-// Why converted rather than sampled in place: a Y'CbCr conversion is an immutable sampler, which
-// lives in the descriptor set layout and therefore in every application pipeline that samples the
-// texture. A conversion pass keeps those pipelines exactly what they are for an RGBA texture, at
-// the cost of one small pass per new frame of the video.
+#include "VulkanRendererInternal.h"
+
+namespace MobileGL::MG_Backend::DirectVulkan {
+    // A YUV image is WireSharedImage.cpp's reading side, converted on the way.
+    //
+    // YUV SHARED IMAGES (NV12, P010; MG_Remote/Server/SharedImageYuv.h). A YUV image is never a
+    // texture's image: the texture keeps its own RGBA8 level 0 (VkTextureManager::SyncWireTextureShape)
+    // and, at its first use in each frame, the image is CONVERTED into it here - the image's
+    // AHardwareBuffer imported with its external format, sampled through an immutable sampler that
+    // carries a VkSamplerYcbcrConversion built from the import's colour hints, one triangle over the
+    // target. Zero CPU copies for an image this server allocated; a foreign one (a video decoder's
+    // buffer) is first brought up to date by the registry's labelled CPU copy (RefreshForeign).
+    //
+    // Why converted rather than sampled in place: a Y'CbCr conversion is an immutable sampler, which
+    // lives in the descriptor set layout and therefore in every application pipeline that samples the
+    // texture. A conversion pass keeps those pipelines exactly what they are for an RGBA texture, at
+    // the cost of one small pass per new frame of the video.
+
 #if MOBILEGL_BUILD_DISAGGREGATED
 #include "WireYuvConvertSpirv.h"
 
@@ -521,3 +525,4 @@
 #endif
     }
 #endif // MOBILEGL_BUILD_DISAGGREGATED
+} // namespace MobileGL::MG_Backend::DirectVulkan

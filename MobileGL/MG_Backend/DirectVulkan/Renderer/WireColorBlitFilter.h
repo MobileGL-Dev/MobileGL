@@ -15,7 +15,7 @@
 //
 // GL applies a blit's `filter` only where the image is STRETCHED (GL 4.6 core 18.3.1). A blit whose
 // source and destination rectangles are the same size is a copy, whatever `filter` says, and so is
-// a mirrored one. The wire arm's shader blit (WireColorBlit.inc, BlitWireColorImage) draws a quad
+// a mirrored one. The wire arm's shader blit (WireColorBlit.cpp, BlitWireColorImage) draws a quad
 // and samples `textureLod(sourceImage, texCoord, 0)` at interpolated coordinates, and it used the
 // LINEAR sampler for every GL_LINEAR blit. At 1:1 every fragment centre maps to a texel centre, so
 // in exact arithmetic linear filtering reads the same single texel. Adreno 830 quantises the

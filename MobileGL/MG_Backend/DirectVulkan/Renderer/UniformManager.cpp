@@ -65,7 +65,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         return hash;
     }
 
-    // P7 wave 0, the descriptor half of WireFramebuffer.inc's MagmaWireFatal - same message,
+    // P7 wave 0, the descriptor half of WireFramebuffer.cpp's MagmaWireFatal - same message,
     // same seam, same reason. Four of the fifteen P7-marked refusals die here.
     [[noreturn]] static void WireDescriptorFatal(const char* detail) {
         MG_Pipe::MGPipeSessionFail(MG_Pipe::MGPipeFatalFamily::UnmigratedVerb,
@@ -939,7 +939,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // MarkWireBufferGpuWritten below already assumes any binding here may be
             // written. A correct copy needs a post-dispatch copy-back from the transient
             // slice to the unaligned source, ordered with a barrier - and the place to
-            // record that is the draw/dispatch tail in VulkanRenderer.cpp / WireDraw.inc,
+            // record that is the draw/dispatch tail in VulkanRenderer.cpp / WireDraw.cpp,
             // which belong to wave-2 packages B and C, not to this file. Losing the
             // dispatch with a named line in the role log beats returning stale counters
             // with no error at all. docs/archive/notes/p7/magma-a.md carries the recipe.

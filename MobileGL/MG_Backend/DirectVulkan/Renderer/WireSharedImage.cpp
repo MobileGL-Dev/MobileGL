@@ -1,4 +1,4 @@
-// MobileGL - MobileGL/MG_Backend/DirectVulkan/Renderer/WireSharedImage.inc
+// MobileGL - MobileGL/MG_Backend/DirectVulkan/Renderer/WireSharedImage.cpp
 // Copyright (c) 2025-2026 MobileGL-Dev
 // Licensed under the GNU Lesser General Public License v3.0:
 //   https://www.gnu.org/licenses/gpl-3.0.txt
@@ -6,29 +6,32 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// SHARED IMAGES (docs/archive/notes/anland/plan-ahb-dmabuf.md). Included by VulkanRenderer.cpp
-// inside the backend namespace, after WireFramebuffer.inc, whose readback the present side's copy
-// is modelled on: the same flush, the same write-visibility barrier, the same transition of the
-// default framebuffer's image.
-//
-// OWNERSHIP. The image lives on more than one device: a client session writes it, the
-// compositor's session (another VulkanRenderer, another VkDevice) samples it. Each present
-// acquires it from VK_QUEUE_FAMILY_FOREIGN_EXT (UNDEFINED: the copy overwrites every texel) and
-// releases it back in GENERAL. A reader acquires it (GENERAL) before the first use of a frame and
-// again whenever the write generation moved, and releases it back at its frame boundary, so every
-// acquire on either side matches a release on the other.
-//
-// ORDER (MG_Remote/Server/SharedImageRegistry.h). Every fence is a sync_file. The writer's copy
-// waits on its GPU for the read fences still pending, signals a semaphore exported as the write
-// fence, and the present returns without waiting. A reader's use waits on its GPU for the write
-// fence of the generation it acquires; its frame's submission signals a semaphore exported as the
-// read fence of every image the frame used. A device without SYNC_FD semaphore import and export
-// waits on the CPU instead where it would have waited on the GPU - before the writer's copy, after
-// it, and before the reader's use - and exports nothing for its reads: there is no fence to give,
-// and waiting for the frame on the CPU only to say it is over would stall every frame of the
-// compositor. The writer's next copy is then ordered after the reads by nothing but the client's
-// own buffer rotation (a Wayland client writes a buffer only after its release) - which is all
-// this path had before - on a device Android's Vulkan 1.1 requirements leave rare.
+#include "VulkanRendererInternal.h"
+
+namespace MobileGL::MG_Backend::DirectVulkan {
+    // SHARED IMAGES (docs/archive/notes/anland/plan-ahb-dmabuf.md). The present side's copy is
+    // WireFramebuffer.cpp's readback, into an image: the same flush, the same write-visibility
+    // barrier, the same transition of the default framebuffer's image.
+    //
+    // OWNERSHIP. The image lives on more than one device: a client session writes it, the
+    // compositor's session (another VulkanRenderer, another VkDevice) samples it. Each present
+    // acquires it from VK_QUEUE_FAMILY_FOREIGN_EXT (UNDEFINED: the copy overwrites every texel) and
+    // releases it back in GENERAL. A reader acquires it (GENERAL) before the first use of a frame and
+    // again whenever the write generation moved, and releases it back at its frame boundary, so every
+    // acquire on either side matches a release on the other.
+    //
+    // ORDER (MG_Remote/Server/SharedImageRegistry.h). Every fence is a sync_file. The writer's copy
+    // waits on its GPU for the read fences still pending, signals a semaphore exported as the write
+    // fence, and the present returns without waiting. A reader's use waits on its GPU for the write
+    // fence of the generation it acquires; its frame's submission signals a semaphore exported as the
+    // read fence of every image the frame used. A device without SYNC_FD semaphore import and export
+    // waits on the CPU instead where it would have waited on the GPU - before the writer's copy, after
+    // it, and before the reader's use - and exports nothing for its reads: there is no fence to give,
+    // and waiting for the frame on the CPU only to say it is over would stall every frame of the
+    // compositor. The writer's next copy is then ordered after the reads by nothing but the client's
+    // own buffer rotation (a Wayland client writes a buffer only after its release) - which is all
+    // this path had before - on a device Android's Vulkan 1.1 requirements leave rare.
+
 #if MOBILEGL_BUILD_DISAGGREGATED
     // A CPU wait on another session's fence is a fallback, and bounded: a peer that never signals
     // costs a frame's worth of stall, not a hang.
@@ -499,7 +502,7 @@
 
     void VulkanRenderer::AcquireSharedImage(VkTextureManager::TextureResource& resource) {
         namespace SI = MG_Remote::Server::SharedImages;
-        // A YUV image is converted into the texture's own image instead (WireYuvImage.inc).
+        // A YUV image is converted into the texture's own image instead (WireYuvImage.cpp).
         if (resource.yuvImageId != 0) {
             (void)ConvertYuvSharedImage(resource);
             return;
@@ -716,3 +719,4 @@
             m_freeSharedImageSignalSemaphores.push_back(std::exchange(m_sharedImageSignal, VK_NULL_HANDLE));
     }
 #endif // MOBILEGL_BUILD_DISAGGREGATED
+} // namespace MobileGL::MG_Backend::DirectVulkan

@@ -185,13 +185,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // queue submission order already puts every earlier draw's access to the old texels
         // ahead of the copy. The preserve arm keeps the wait: it retires the old image.
         // (rd12 Magma: the wait was ~1.8 ms/frame of fence stall, one per lightmap update.)
-        // P15 (WireFramebuffer.inc): runs an image's deferred clears now, outside any pass.
+        // P15 (WireFramebuffer.cpp): runs an image's deferred clears now, outside any pass.
         void MaterializeWirePendingClears(VkTextureManager::TextureResource& resource);
         Bool FlushWirePendingCommandsForTextureUpload() {
             return !HasPendingRecordedWork() || FlushPendingCommands();
         }
         // P7 wave 2 package B3: the submission that will carry whatever is recorded NEXT.
-        // RetireWireObjects (WireDraw.inc) already tags future objects with exactly this, and
+        // RetireWireObjects (WireDraw.cpp) already tags future objects with exactly this, and
         // for the same reason: a draw being set up now is not in any submission yet, so the
         // index that names it is one past the counter. Deliberately NOT
         // GetSyncPointSubmitIndex(), which answers m_submitCounter when nothing is recorded -
@@ -201,7 +201,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // from the wire stores MGPipeApplier().VerbIndirectBuffer / VerbIndirectParameterBuffer
         // name. `offset` / `countOffset` are byte offsets into those stores; `stride` 0 means
         // tightly packed. FALSE = this device cannot issue the COUNT form natively (the monolith
-        // arm's own condition, see the definition in WireDraw.inc) and the caller must read the
+        // arm's own condition, see the definition in WireDraw.cpp) and the caller must read the
         // words on the CPU; TRUE = issued, or declined by name.
         Bool DrawWireIndirectNative(GLenum mode, GLenum type, Uint64 offset, GLsizei drawcount, GLsizei stride,
                                     Bool indexed, Bool counted, Uint64 countOffset);
@@ -236,7 +236,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // submission's sync_file in `*fence` (-1: none, and the work is waited out here), and - for
         // a session that writes images - the boundary PublishSharedImageAccesses makes.
         Bool ExportNativeFence(int* fence);
-        // The reading side's per-use hook (WireSharedImage.inc): every shared-image texture the
+        // The reading side's per-use hook (WireSharedImage.cpp): every shared-image texture the
         // wire draw or dispatch being set up samples (VkTextureManager::NoteSharedImageUse) is
         // acquired from the foreign family before it, when it moved or is not held.
         void AcquireNotedSharedImages() {
@@ -538,7 +538,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
         // P7 wave 2-B2, CONTRACT-P7 §5.2 (B'): THE FRONTEND MEMBERS ARE PULL-BUILD ONLY. In a
         // disaggregated build the monolith arm blits and generates depth mips with the baked
-        // modules (WireColorBlit.inc, WireDepthMipmap.inc), so no DirectVulkan object holds a
+        // modules (WireColorBlit.cpp, WireDepthMipmap.cpp), so no DirectVulkan object holds a
         // ProgramObject, a ShaderObject or a SamplerObject any more - which is what takes
         // ProgramObject::{AllocateLifetimeId, AttachShader, Link, ~ProgramObject},
         // ShaderObject::{SetShaderSource, Compile, JoinPendingCompile, ReleaseCompileNode,
@@ -614,7 +614,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                    const MG_Pipe::MGPSurface& surface, VkImageAspectFlags aspect,
                                    Bool isWriteTarget = false);
         void TransitionWireImage(WireImage& image, VkImageLayout layout, Bool coalesceWithLastFullBarrier = false);
-        // P15: WIRE DEFERRED CLEARS (WireFramebuffer.inc). A clear of images the open pass
+        // P15: WIRE DEFERRED CLEARS (WireFramebuffer.cpp). A clear of images the open pass
         // holds is recorded inside it; a whole-image clear of others waits on the image
         // (WirePendingClear) for the next pass that draws into it (LOAD_OP_CLEAR) or the first
         // other use (MaterializeWirePendingClears).
@@ -674,7 +674,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // P7 wave 2-B2, CONTRACT-P7 §3.2 (`multisample-blit-aspect`): the SECOND arm of the
         // multisample depth/stencil resolve, for the device that does not carry
         // VK_KHR_depth_stencil_resolve. One baked pass per aspect, sample zero, no frontend
-        // object - see WireMultisampleResolve.inc. `resolved` must be a single-sample image of
+        // object - see WireMultisampleResolve.cpp. `resolved` must be a single-sample image of
         // the source's format and extent; the rect is expressed by the scissor.
         Bool ResolveWireDepthStencilWithShader(WireImage source, WireImage resolved,
                                                VkImageAspectFlags aspect, GLint sx0, GLint sy0,
@@ -695,7 +695,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // one entry point the import needs (PFN_vkGetAndroidHardwareBufferPropertiesANDROID).
         Bool m_wireAhbImport = false;
         void* m_wireGetAhbProperties = nullptr;
-        // YUV shared images (WireYuvImage.inc): the device enabled samplerYcbcrConversion, and the
+        // YUV shared images (WireYuvImage.cpp): the device enabled samplerYcbcrConversion, and the
         // conversion pipelines made so far (one per buffer format and colour conversion).
         Bool m_samplerYcbcrConversion = false;
         struct WireYuvResources;
@@ -718,13 +718,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         UnorderedMap<Uint64, SharedImagePresentTarget> m_sharedImagePresentTargets;
         void DestroySharedImagePresentTargets(Bool onlyDead);
 
-        // SHARED-IMAGE SYNCHRONISATION (WireSharedImage.inc). The sync_file fences other sessions
+        // SHARED-IMAGE SYNCHRONISATION (WireSharedImage.cpp). The sync_file fences other sessions
         // publish become binary semaphores: a temporary SYNC_FD import is a WAIT, an exportable
         // semaphore a SIGNAL, of the next frame submission - whichever of SubmitPendingCommandBuffer
         // and Present's submit comes first, which is the one carrying what was recorded since.
         // Each semaphore is recycled once the submission that used it has completed.
         // m_sharedImageSyncFd: the device imports and exports SYNC_FD binary semaphores; without
-        // it the waits happen on the CPU and nothing is exported (see WireSharedImage.inc).
+        // it the waits happen on the CPU and nothing is exported (see WireSharedImage.cpp).
         Bool m_sharedImageSyncFd = false;
         // The session writes images - it ends frames at publishing flushes
         // (PublishSharedImageAccesses), or it reached one through a framebuffer (ResolveWireImage):
@@ -832,7 +832,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         void DestroyWireColorBlitResources();
         void ResetWireColorBlitFramePool(Uint32 frameIndex);
         void RetireWireColorBlitTargets(Bool all);
-        // P7 wave 2-B, CONTRACT-P7 §5.1 (A): the baked depth-mip program (WireDepthMipmap.inc).
+        // P7 wave 2-B, CONTRACT-P7 §5.1 (A): the baked depth-mip program (WireDepthMipmap.cpp).
         // One level of a depth chain, source and destination being two depth subresources of
         // the same image; the caller loops. It owns no frontend object, which is what the
         // monolith arm's GenerateDepthMipmapWithShader cannot say.
@@ -841,7 +841,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         WireDepthMipmapResources* m_wireDepthMipmapResources = nullptr;
         void DestroyWireDepthMipmapResources();
         // P7 wave 2-B (exit gate 3): the readback's own write-visibility barrier, recorded before
-        // the copy instead of inferred from the image's tracked layout. See WireFramebuffer.inc.
+        // the copy instead of inferred from the image's tracked layout. See WireFramebuffer.cpp.
         void RecordWireReadbackWriteBarrier();
         void ReadWirePixels(GLint x, GLint y, GLsizei width, GLsizei height,
                             GLenum format, GLenum type, void* pixels);
@@ -905,7 +905,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         void DestroyWireDrawPassCacheEntry(WireDrawPassCacheEntry& entry);
         Vector<WireDrawPassCacheEntry> m_wireDrawPassCache;
         WireDrawPassKey m_wireDrawPassKey;
-        // P15: the open pass's attachment that is `image` (WireFramebuffer.inc's deferred clears).
+        // P15: the open pass's attachment that is `image` (WireFramebuffer.cpp's deferred clears).
         static Uint32 OpenPassAttachmentOf(const WireImage& image, const Vector<WireDrawAttachmentKey>& attachments);
         WireRenderPassCompatibilityTable m_wireRenderPassCompatibility;
         // The interned compatibility id of m_wireDrawPass's attachments, or 0 when not known yet.
@@ -914,7 +914,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Uint64 m_wireDrawPassCompatibilityId = 0;
         // P14: SetupWireDraw's per-draw containers, cleared and refilled every draw instead of
         // allocated and freed (the heap was ~10% of a Minecraft frame on the wire arm). A nested
-        // SetupWireDraw - nothing does that today - would use a local set (WireDraw.inc).
+        // SetupWireDraw - nothing does that today - would use a local set (WireDraw.cpp).
         struct WireDrawScratch {
             VertexInputStateFactory::BackendVertexInputState input;
             Vector<BufferSlice> vertexSlices;
@@ -989,7 +989,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         Bool m_wireNativeIndirectDraw = false;
         void DispatchWireCompute(GLuint x, GLuint y, GLuint z);
         // P8-SV: glDispatchComputeIndirect on the wire arm - vkCmdDispatchIndirect from the
-        // dispatch-indirect store, as the monolith arm issues it (WireDraw.inc).
+        // dispatch-indirect store, as the monolith arm issues it (WireDraw.cpp).
         void DispatchWireComputeIndirect(GLintptr offset);
         // False: the device was lost and the session latched; the caller drops its draw/dispatch.
         Bool RewindWireDescriptorSetsIfDue();

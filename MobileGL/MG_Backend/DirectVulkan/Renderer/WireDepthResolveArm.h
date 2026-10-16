@@ -15,9 +15,9 @@
 
 // P7 gate 5 (g5-msrbo, g5-msprobe): WHICH ARM RESOLVES A MULTISAMPLE DEPTH/STENCIL ASPECT FIRST.
 //
-// The wire arm has two (WireFramebuffer.inc, ResolveWireDepthStencil): a render pass that carries
+// The wire arm has two (WireFramebuffer.cpp, ResolveWireDepthStencil): a render pass that carries
 // a VK_KHR_depth_stencil_resolve attachment and no draw, and the baked shader pass of
-// WireMultisampleResolve.inc, which draws. P7 wave 2-B2 took the render pass wherever the
+// WireMultisampleResolve.cpp, which draws. P7 wave 2-B2 took the render pass wherever the
 // extension exists. On the Redmi (Adreno 830, Vulkan 1.3.284, driver 512.800.71) that pass left
 // its resolve target unwritten - KHR-GL46.direct_state_access.renderbuffers_storage_multisample
 // read every resolved depth and stencil value back as 0 on the inproc arm while the monolith arm

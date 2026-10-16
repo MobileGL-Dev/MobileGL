@@ -145,11 +145,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             Uint32 baseInstance = 0;
         };
 
-
-
         // The verb's handles identify server stores; never inspect a client binding.
         //
-        // P8-D: THE GPU READS THE WORDS (VulkanRenderer::DrawWireIndirectNative, WireDraw.inc), as
+        // P8-D: THE GPU READS THE WORDS (VulkanRenderer::DrawWireIndirectNative, WireDraw.cpp), as
         // on the monolith arm. The CPU expansion below is kept for the one shape the monolith arm
         // also expands - a COUNT form the device cannot issue natively (no VK_KHR_draw_indirect_count,
         // or maxdrawcount > 1 without multiDrawIndirect: VulkanRenderer.cpp's
@@ -432,7 +430,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     void DispatchComputeIndirect(GLintptr indirect) {
         // P8-SV: THE GPU READS THE GROUP COUNTS on the wire arm too - VulkanRenderer's
         // DispatchComputeIndirect takes its transport branch into DispatchWireComputeIndirect
-        // (WireDraw.inc), which issues vkCmdDispatchIndirect from the verb's store. The CPU read
+        // (WireDraw.cpp), which issues vkCmdDispatchIndirect from the verb's store. The CPU read
         // that was here (ReadWireBuffer, a whole-GPU wait once a shader had written the store) is gone.
         pVulkanRenderer->DispatchComputeIndirect(indirect);
         return;

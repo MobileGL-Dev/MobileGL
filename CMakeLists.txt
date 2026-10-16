@@ -510,6 +510,19 @@ set(SOURCE_FILES
     MobileGL/MG_Backend/DirectVulkan/MagmaSession.cpp
     MobileGL/MG_Backend/DirectVulkan/VmaImpl.cpp
     MobileGL/MG_Backend/DirectVulkan/Renderer/VulkanRenderer.cpp
+    MobileGL/MG_Backend/DirectVulkan/Renderer/VulkanRendererCopy.cpp
+    MobileGL/MG_Backend/DirectVulkan/Renderer/VulkanRendererDevice.cpp
+    MobileGL/MG_Backend/DirectVulkan/Renderer/VulkanRendererDraw.cpp
+    MobileGL/MG_Backend/DirectVulkan/Renderer/VulkanRendererPipeline.cpp
+    MobileGL/MG_Backend/DirectVulkan/Renderer/VulkanRendererPresent.cpp
+    MobileGL/MG_Backend/DirectVulkan/Renderer/VulkanRendererSubmit.cpp
+    MobileGL/MG_Backend/DirectVulkan/Renderer/WireColorBlit.cpp
+    MobileGL/MG_Backend/DirectVulkan/Renderer/WireDepthMipmap.cpp
+    MobileGL/MG_Backend/DirectVulkan/Renderer/WireDraw.cpp
+    MobileGL/MG_Backend/DirectVulkan/Renderer/WireFramebuffer.cpp
+    MobileGL/MG_Backend/DirectVulkan/Renderer/WireMultisampleResolve.cpp
+    MobileGL/MG_Backend/DirectVulkan/Renderer/WireSharedImage.cpp
+    MobileGL/MG_Backend/DirectVulkan/Renderer/WireYuvImage.cpp
     MobileGL/MG_Backend/DirectVulkan/Renderer/SwapchainObject.cpp
     MobileGL/MG_Backend/DirectVulkan/Renderer/FrameContext.cpp
     MobileGL/MG_Backend/DirectVulkan/Renderer/PipelineFactory.cpp

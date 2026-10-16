@@ -352,7 +352,7 @@ public:
         Uint64 sharedImageKey = 0;
         // A YUV shared image (NV12/P010) is never the texture's image: the texture keeps its own
         // RGBA8 level 0, into which the renderer converts the image at its first use in each frame
-        // (WireYuvImage.inc) - `yuvSource` being that conversion's import of the buffer, made on
+        // (WireYuvImage.cpp) - `yuvSource` being that conversion's import of the buffer, made on
         // first use, and `yuvConvertedFrame` the frame it last ran in. `yuvOwner` holds the
         // registry's image for as long as the texture names it.
         Uint64 yuvImageId = 0;

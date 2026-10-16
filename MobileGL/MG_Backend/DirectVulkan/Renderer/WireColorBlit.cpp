@@ -1,4 +1,4 @@
-// MobileGL - MobileGL/MG_Backend/DirectVulkan/Renderer/WireColorBlit.inc
+// MobileGL - MobileGL/MG_Backend/DirectVulkan/Renderer/WireColorBlit.cpp
 // Copyright (c) 2025-2026 MobileGL-Dev
 // Licensed under the GNU Lesser General Public License v3.0:
 //   https://www.gnu.org/licenses/gpl-3.0.txt
@@ -6,7 +6,31 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// Included by VulkanRenderer.cpp inside the backend namespace, after WireFramebuffer.inc.
+#include "VulkanRendererInternal.h"
+
+namespace MobileGL::MG_Backend::DirectVulkan {
+    namespace {
+        enum class BlitSurfaceTransform : Uint32 {
+            Identity = 0,
+            Rotate90 = 1,
+            Rotate180 = 2,
+            Rotate270 = 3,
+        };
+
+        static BlitSurfaceTransform ToBlitSurfaceTransform(VkSurfaceTransformFlagBitsKHR preTransform) {
+            switch (preTransform) {
+                case VK_SURFACE_TRANSFORM_ROTATE_90_BIT_KHR:
+                    return BlitSurfaceTransform::Rotate90;
+                case VK_SURFACE_TRANSFORM_ROTATE_180_BIT_KHR:
+                    return BlitSurfaceTransform::Rotate180;
+                case VK_SURFACE_TRANSFORM_ROTATE_270_BIT_KHR:
+                    return BlitSurfaceTransform::Rotate270;
+                default:
+                    return BlitSurfaceTransform::Identity;
+            }
+        }
+    } // namespace
+
 // The native blit owns no frontend object and never invokes the GL shader compiler.
 #include "WireColorBlitSpirv.h"
 
@@ -540,3 +564,4 @@
         if (destination.isDefault) m_swapchainObject.SetImageContentDefined(destination.swapchainImageIndex, true);
         return true;
     }
+} // namespace MobileGL::MG_Backend::DirectVulkan

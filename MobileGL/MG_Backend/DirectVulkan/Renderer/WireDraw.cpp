@@ -1,10 +1,113 @@
-// MobileGL - MobileGL/MG_Backend/DirectVulkan/Renderer/WireDraw.inc
+// MobileGL - MobileGL/MG_Backend/DirectVulkan/Renderer/WireDraw.cpp
 // Copyright (c) 2025-2026 MobileGL-Dev
 // Licensed under the GNU Lesser General Public License v3.0:
 //   https://www.gnu.org/licenses/gpl-3.0.txt
 //   https://www.gnu.org/licenses/lgpl-3.0.txt
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
+
+#include "VulkanRendererInternal.h"
+
+namespace MobileGL::MG_Backend::DirectVulkan {
+    // GL_EXT_fragment_shading_rate's pipeline rate and combiner ops for the draw about to be
+    // recorded. The packed rate is log2(width) << 2 | log2(height), which is exactly the extent
+    // VK_KHR_fragment_shading_rate takes, and the combiner op indices follow
+    // VkFragmentShadingRateCombinerOpKHR's order. Combiner op 1 combines with the attachment rate,
+    // which this backend does not enable, so it stays KEEP whatever the GL state holds.
+    static void ShadowedSetFragmentShadingRate(VkCommandBuffer commandBuffer,
+                                               PFN_vkCmdSetFragmentShadingRateKHR setFragmentShadingRate) {
+        const RenderStateParameters& p = MG_Pipe::gPipeInputs->GetRenderStateParameters();
+        auto& shadow = *g_dynamicStateShadow;
+        if (shadow.fragmentShadingRateValid && shadow.fragmentShadingRate == p.ShadingRate &&
+            shadow.fragmentShadingRateCombinerOp0 == p.ShadingRateCombinerOp0 &&
+            shadow.fragmentShadingRateCombinerOp1 == p.ShadingRateCombinerOp1) {
+            return;
+        }
+        shadow.fragmentShadingRateValid = true;
+        shadow.fragmentShadingRate = p.ShadingRate;
+        shadow.fragmentShadingRateCombinerOp0 = p.ShadingRateCombinerOp0;
+        shadow.fragmentShadingRateCombinerOp1 = p.ShadingRateCombinerOp1;
+        const Uint8 rate = p.ShadingRate == kMGInvalidShadingRateEncoding ? 0 : p.ShadingRate;
+        const VkExtent2D fragmentSize{1u << ((rate >> 2) & 3u), 1u << (rate & 3u)};
+        const VkFragmentShadingRateCombinerOpKHR combinerOps[2] = {
+            p.ShadingRateCombinerOp0 <= VK_FRAGMENT_SHADING_RATE_COMBINER_OP_MUL_KHR
+                ? static_cast<VkFragmentShadingRateCombinerOpKHR>(p.ShadingRateCombinerOp0)
+                : VK_FRAGMENT_SHADING_RATE_COMBINER_OP_KEEP_KHR,
+            VK_FRAGMENT_SHADING_RATE_COMBINER_OP_KEEP_KHR};
+        setFragmentShadingRate(commandBuffer, &fragmentSize, combinerOps);
+    }
+
+    static Bool TryGetCurrentVertexAttributeUploadPayload(
+        const MG_State::GLState::CurrentVertexAttributeValue& currentValue,
+        GLenum glType,
+        VkFormat& outFormat,
+        const void*& outData,
+        VkDeviceSize& outSize) {
+        switch (glType) {
+        case GL_FLOAT:
+            outFormat = VK_FORMAT_R32_SFLOAT;
+            outData = currentValue.floatValue.data();
+            outSize = sizeof(Float);
+            return true;
+        case GL_FLOAT_VEC2:
+            outFormat = VK_FORMAT_R32G32_SFLOAT;
+            outData = currentValue.floatValue.data();
+            outSize = sizeof(Float) * 2;
+            return true;
+        case GL_FLOAT_VEC3:
+            outFormat = VK_FORMAT_R32G32B32_SFLOAT;
+            outData = currentValue.floatValue.data();
+            outSize = sizeof(Float) * 3;
+            return true;
+        case GL_FLOAT_VEC4:
+            outFormat = VK_FORMAT_R32G32B32A32_SFLOAT;
+            outData = currentValue.floatValue.data();
+            outSize = sizeof(Float) * 4;
+            return true;
+        case GL_INT:
+            outFormat = VK_FORMAT_R32_SINT;
+            outData = currentValue.intValue.data();
+            outSize = sizeof(Int32);
+            return true;
+        case GL_INT_VEC2:
+            outFormat = VK_FORMAT_R32G32_SINT;
+            outData = currentValue.intValue.data();
+            outSize = sizeof(Int32) * 2;
+            return true;
+        case GL_INT_VEC3:
+            outFormat = VK_FORMAT_R32G32B32_SINT;
+            outData = currentValue.intValue.data();
+            outSize = sizeof(Int32) * 3;
+            return true;
+        case GL_INT_VEC4:
+            outFormat = VK_FORMAT_R32G32B32A32_SINT;
+            outData = currentValue.intValue.data();
+            outSize = sizeof(Int32) * 4;
+            return true;
+        case GL_UNSIGNED_INT:
+            outFormat = VK_FORMAT_R32_UINT;
+            outData = currentValue.uintValue.data();
+            outSize = sizeof(Uint32);
+            return true;
+        case GL_UNSIGNED_INT_VEC2:
+            outFormat = VK_FORMAT_R32G32_UINT;
+            outData = currentValue.uintValue.data();
+            outSize = sizeof(Uint32) * 2;
+            return true;
+        case GL_UNSIGNED_INT_VEC3:
+            outFormat = VK_FORMAT_R32G32B32_UINT;
+            outData = currentValue.uintValue.data();
+            outSize = sizeof(Uint32) * 3;
+            return true;
+        case GL_UNSIGNED_INT_VEC4:
+            outFormat = VK_FORMAT_R32G32B32A32_UINT;
+            outData = currentValue.uintValue.data();
+            outSize = sizeof(Uint32) * 4;
+            return true;
+        default:
+            return false;
+        }
+    }
 
 // Server-owned draw/dispatch setup. The legacy setup remains the monolith implementation.
     static MagmaProgramSource WireProgramSource(MG_Pipe::MGPipeHandle handle) {
@@ -322,7 +425,7 @@
 
     // P15: the draw pass for `fbo`, continued (passContinues: the WirePassMemo holds) or
     // looked up / built from a full attachment walk. Shared by SetupWireDraw and the in-pass
-    // clear (WireFramebuffer.inc): a clear into the attachments of the open pass is recorded
+    // clear (WireFramebuffer.cpp): a clear into the attachments of the open pass is recorded
     // inside it instead of closing it and building a pass of its own. Leaves m_wireDrawPass and
     // m_wireDrawPassKey describing the pass, `continuing` true when it is the open one.
     Bool VulkanRenderer::PrepareWireDrawPass(FrameContext::FrameData& frame,
@@ -368,7 +471,7 @@
         m_wirePassMemo.attachments.clear();
         const auto add = [&](const MG_Pipe::MGPSurface& surface, VkImageAspectFlags aspect) -> Uint32 {
             // An attachment resolve: its deferred clears stay pending, to become this pass's load
-            // op (BeginWireDrawPassFolding) - WireFramebuffer.inc's deferred-clear section.
+            // op (BeginWireDrawPassFolding) - WireFramebuffer.cpp's deferred-clear section.
             WireImage image;
             {
                 VkTextureManager::PendingClearHold hold(*m_textureManager);
@@ -385,8 +488,10 @@
                 VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_GENERAL;
             // Already in its attachment layout: its barrier (which closes any open pass) waits until
             // it is known whether the open pass continues with this very attachment.
-            if (image.layout == layout) sameLayoutAttachments.push_back(image);
-            else TransitionWireImage(image, layout);
+            if (image.layout == layout)
+                sameLayoutAttachments.push_back(image);
+            else
+                TransitionWireImage(image, layout);
             VkImageViewCreateInfo info{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
             info.image = image.image;
             info.viewType = image.viewType;
@@ -418,8 +523,10 @@
             if (!image.isDefault && surface.Kind == MG_Pipe::kMGPipeSurfaceKindTexture)
                 scratch.gpuWriteMarks.push_back({image.storage, image.level, image.layer, image.layers});
             if (image.isDefault) {
-                if (aspect == VK_IMAGE_ASPECT_COLOR_BIT) m_swapchainObject.SetImageContentDefined(image.swapchainImageIndex, true);
-                else m_swapchainObject.SetDepthStencilContentDefined(image.swapchainImageIndex, true);
+                if (aspect == VK_IMAGE_ASPECT_COLOR_BIT)
+                    m_swapchainObject.SetImageContentDefined(image.swapchainImageIndex, true);
+                else
+                    m_swapchainObject.SetDepthStencilContentDefined(image.swapchainImageIndex, true);
             }
             return static_cast<Uint32>(attachments.size() - 1);
         };
@@ -629,7 +736,7 @@
             return false;
         }
         // Shared images another session writes: acquired ahead of the recording that samples them
-        // (WireSharedImage.inc).
+        // (WireSharedImage.cpp).
         AcquireNotedSharedImages();
         // Lazy image uploads/promotions can submit the old recording. Resolve
         // ALL attachments before descriptor binding captures the current cmd - unless the open
@@ -1453,7 +1560,7 @@
             MGL_WIRE_DECLINE_AT(ComputeTextureResourcesUnprepared, "a sampled/storage image could not be made ready for the dispatch");
             return;
         }
-        AcquireNotedSharedImages(); // shared images another session writes (WireSharedImage.inc)
+        AcquireNotedSharedImages(); // shared images another session writes (WireSharedImage.cpp)
         const auto pipeline = GetOrCreateComputePipeline(programObj);
         if (!pipeline) {
             MGL_WIRE_DECLINE_AT(ComputePipelineUnavailable, "no compute pipeline could be created for this dispatch");
@@ -1530,7 +1637,7 @@
             MGL_WIRE_DECLINE_AT(ComputeTextureResourcesUnprepared, "a sampled/storage image could not be made ready for the dispatch");
             return;
         }
-        AcquireNotedSharedImages(); // shared images another session writes (WireSharedImage.inc)
+        AcquireNotedSharedImages(); // shared images another session writes (WireSharedImage.cpp)
         const auto pipeline = GetOrCreateComputePipeline(programObj);
         if (!pipeline) {
             MGL_WIRE_DECLINE_AT(ComputePipelineUnavailable, "no compute pipeline could be created for this dispatch");
@@ -1551,3 +1658,4 @@
         if (MG_Util::PipeStats::Enabled())
             MG_Util::PipeStats::AddCalls(MG_Util::PipeStats::CallClass::WireIndirectNativeDispatches, 1);
     }
+} // namespace MobileGL::MG_Backend::DirectVulkan

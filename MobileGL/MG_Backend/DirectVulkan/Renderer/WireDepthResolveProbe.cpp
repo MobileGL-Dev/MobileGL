@@ -473,7 +473,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             objects.framebuffers.push_back(out);
             return true;
         };
-        // The wire's clear (WireFramebuffer.inc, ClearWireFramebuffer): a LOAD/STORE pass over every
+        // The wire's clear (WireFramebuffer.cpp, ClearWireFramebuffer): a LOAD/STORE pass over every
         // aspect of the format with vkCmdClearAttachments inside it. Recorded later; built now.
         struct ClearPass {
             VkRenderPass pass = VK_NULL_HANDLE;

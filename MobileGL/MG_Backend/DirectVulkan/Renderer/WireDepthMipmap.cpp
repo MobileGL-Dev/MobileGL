@@ -1,4 +1,4 @@
-// MobileGL - MobileGL/MG_Backend/DirectVulkan/Renderer/WireDepthMipmap.inc
+// MobileGL - MobileGL/MG_Backend/DirectVulkan/Renderer/WireDepthMipmap.cpp
 // Copyright (c) 2025-2026 MobileGL-Dev
 // Licensed under the GNU Lesser General Public License v3.0:
 //   https://www.gnu.org/licenses/gpl-3.0.txt
@@ -6,8 +6,11 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// Included by VulkanRenderer.cpp inside the backend namespace, after WireColorBlit.inc.
-// The native depth mip owns no frontend object and never invokes the GL shader compiler.
+#include "VulkanRendererInternal.h"
+
+namespace MobileGL::MG_Backend::DirectVulkan {
+// The native depth mip owns no frontend object and never invokes the GL shader compiler. It
+// reuses WireColorBlit.cpp's window-Y convention and is written to be read beside it.
 //
 // WHY THIS FILE EXISTS AT ALL. vkCmdBlitImage is the ordinary way to halve a mip, and for a
 // depth format it is often not available: VK_FORMAT_FEATURE_BLIT_DST is optional for depth,
@@ -333,3 +336,4 @@
         RetireWireObjects(Move(retired));
         return true;
     }
+} // namespace MobileGL::MG_Backend::DirectVulkan

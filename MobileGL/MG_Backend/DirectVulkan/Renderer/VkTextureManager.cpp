@@ -981,7 +981,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         const MG_Pipe::MGPResourceDesc& desc = record.Desc;
         // A YUV shared image is converted INTO the texture's own RGBA8 storage, which the rest of
         // this function defines as for any texture; the image is only named here, and the
-        // renderer converts it at its first use in each frame (WireYuvImage.inc).
+        // renderer converts it at its first use in each frame (WireYuvImage.cpp).
         if (record.SharedImageId != resource.yuvImageId && !m_syncingYuvTextureStorage) {
             // Respecified away from (or to another) YUV image: its source goes with it, once the
             // GPU is done with it (a released resource's Reset is deferred).
@@ -1847,7 +1847,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // the image to VK_QUEUE_FAMILY_FOREIGN_EXT in GENERAL - also the layout every wire
         // descriptor samples in - once per frame it writes. Each use acquires it again when the
         // write generation moved, waiting for that write's fence on the GPU, and the frame boundary
-        // releases it back (VulkanRenderer::AcquireSharedImage, WireSharedImage.inc).
+        // releases it back (VulkanRenderer::AcquireSharedImage, WireSharedImage.cpp).
 
         TextureResource replacement;
         replacement.image = imported.image;

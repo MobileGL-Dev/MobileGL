@@ -1,4 +1,4 @@
-// MobileGL - MobileGL/MG_Backend/DirectVulkan/Renderer/WireMultisampleResolve.inc
+// MobileGL - MobileGL/MG_Backend/DirectVulkan/Renderer/WireMultisampleResolve.cpp
 // Copyright (c) 2025-2026 MobileGL-Dev
 // Licensed under the GNU Lesser General Public License v3.0:
 //   https://www.gnu.org/licenses/gpl-3.0.txt
@@ -6,23 +6,26 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// Included by VulkanRenderer.cpp inside the backend namespace, after WireDepthMipmap.inc.
-// The native multisample depth/stencil resolve owns no frontend object and never invokes the
-// GL shader compiler.
-//
-// WHY THIS FILE EXISTS. vkCmdResolveImage is COLOUR ONLY. The one way Vulkan resolves a depth
-// or stencil aspect without a shader is a render pass with a depth/stencil resolve attachment,
-// which needs VK_KHR_create_renderpass2 and VK_KHR_depth_stencil_resolve - and until this
-// package a device without either killed the session at
-// `Magma:multisample-depth-resolve-capability` the first time an application resolved a
-// multisample depth buffer, which is what glBlitFramebuffer(GL_DEPTH_BUFFER_BIT) from a
-// multisampled read framebuffer IS. CONTRACT-P7 §3.2's `multisample-blit-aspect` row names both
-// arms; this is the second one.
-//
-// SAMPLE ZERO IN BOTH ARMS. The extension arm asks for VK_RESOLVE_MODE_SAMPLE_ZERO_BIT, so the
-// shader arm fetches sample 0 - not an average. Two arms that answer differently on two devices
-// would make "the wire arm is observably the monolith's" untestable, and GL 4.6 core 18.3.1
-// requires a SELECTED sample for stencil anyway.
+#include "VulkanRendererInternal.h"
+
+namespace MobileGL::MG_Backend::DirectVulkan {
+    // The native multisample depth/stencil resolve owns no frontend object and never invokes the
+    // GL shader compiler. It is WireDepthMipmap.cpp's pass with the box filter taken out and a
+    // sample index put in.
+    //
+    // WHY THIS FILE EXISTS. vkCmdResolveImage is COLOUR ONLY. The one way Vulkan resolves a depth
+    // or stencil aspect without a shader is a render pass with a depth/stencil resolve attachment,
+    // which needs VK_KHR_create_renderpass2 and VK_KHR_depth_stencil_resolve - and until this
+    // package a device without either killed the session at
+    // `Magma:multisample-depth-resolve-capability` the first time an application resolved a
+    // multisample depth buffer, which is what glBlitFramebuffer(GL_DEPTH_BUFFER_BIT) from a
+    // multisampled read framebuffer IS. CONTRACT-P7 §3.2's `multisample-blit-aspect` row names both
+    // arms; this is the second one.
+    //
+    // SAMPLE ZERO IN BOTH ARMS. The extension arm asks for VK_RESOLVE_MODE_SAMPLE_ZERO_BIT, so the
+    // shader arm fetches sample 0 - not an average. Two arms that answer differently on two devices
+    // would make "the wire arm is observably the monolith's" untestable, and GL 4.6 core 18.3.1
+    // requires a SELECTED sample for stencil anyway.
     // The pass's modules, layouts, render passes and pipeline, and the draw it records, are
     // WireDepthResolveProbe.cpp's (g5-msprobe): the multisample depth/stencil resolve probe runs
     // this exact arm as its CONTROL, so it is defined once for both.
@@ -171,3 +174,4 @@
         RetireWireObjects(Move(retired));
         return true;
     }
+} // namespace MobileGL::MG_Backend::DirectVulkan

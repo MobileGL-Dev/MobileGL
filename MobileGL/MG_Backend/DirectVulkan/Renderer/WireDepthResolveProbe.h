@@ -18,8 +18,8 @@
 // THE ARMS LIVE HERE, NOT ONLY IN THE RENDERER. A probe that rebuilt "something like" the wire's
 // render pass would measure its own copy; the render-pass description, the shader pass's modules,
 // pipeline and draw, and the view shapes both arms attach are defined once below and called by
-// ResolveWireDepthStencil (WireFramebuffer.inc), ResolveWireDepthStencilWithShader
-// (WireMultisampleResolve.inc) and the probe alike.
+// ResolveWireDepthStencil (WireFramebuffer.cpp), ResolveWireDepthStencilWithShader
+// (WireMultisampleResolve.cpp) and the probe alike.
 //
 // Two callers: the Magma renderer at device bring-up (server side, once per process, only where
 // the render-pass arm exists at all - VulkanRenderer::ArmWireDepthResolveOrder) and the POST's

@@ -165,7 +165,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         //
         // What stood here re-ran spvReflectCreateShaderModule over EVERY stage module of the
         // program, and it did so PER DRAW: a MagmaProgramSource is a borrowed view that
-        // WireDraw.inc's WireProgramSource constructs afresh for each wire draw, so the lazy
+        // WireDraw.cpp's WireProgramSource constructs afresh for each wire draw, so the lazy
         // `m_storageBlocksReady` latch could never outlive one. The list it rebuilt is a pure
         // function of the linked program, so it is now built once at link time and travels in
         // the archive (LinkArtifacts::storageBlocks), which takes the SPIR-V reflector off the

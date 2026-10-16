@@ -1,4 +1,4 @@
-// MobileGL - MobileGL/MG_Backend/DirectVulkan/Renderer/WireFramebuffer.inc
+// MobileGL - MobileGL/MG_Backend/DirectVulkan/Renderer/WireFramebuffer.cpp
 // Copyright (c) 2025-2026 MobileGL-Dev
 // Licensed under the GNU Lesser General Public License v3.0:
 //   https://www.gnu.org/licenses/gpl-3.0.txt
@@ -6,19 +6,468 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// P5f fm: included by VulkanRenderer.cpp inside the backend namespace. All inputs here
-// belong to the applier; no frontend object, lifetime-id lookup or allocator is used.
-    // P7 wave 0. THE MESSAGE IS UNCHANGED; where it goes is not. This funnel is how eleven of
-    // the fifteen P7-marked refusals die (the other four are WireDescriptorFatal's), and until now
-    // every one of them raised its own abort: no SessionFault frame for the peer, no
-    // SessionFaultCount() for exit gate S8, and nothing tying the hand-typed word to
-    // FatalFamilies.def. MGPipeSessionFail hands the line to the hook MG_Remote installs at
-    // server-role init, whose arm for UnmigratedVerb is SessionFail(MGFatalFamily::
-    // UnmigratedVerb, ...) - and with no hook installed it logs and aborts exactly as this did.
-    [[noreturn]] static void MagmaWireFatal(const char* detail) {
-        MG_Pipe::MGPipeSessionFail(MG_Pipe::MGPipeFatalFamily::UnmigratedVerb,
-                                   "MGPipe: Fatal{UnmigratedVerb, \"Magma:%s\"}", detail);
+#include "VulkanRendererInternal.h"
+
+namespace MobileGL::MG_Backend::DirectVulkan {
+    // The wire arm's framebuffer verbs and texture readback. All inputs here belong to the
+    // applier; no frontend object, lifetime-id lookup or allocator is used.
+    static void RecordTextureCopyError(const char* func, ErrorCode code, const char* message) {
+        MG_Pipe::gPipeInputs->RecordError(code, MakeUnique<GenericErrorInfo>("DirectVulkan", func, message));
     }
+
+    namespace {
+        // Generic VkFormat texel decode into the wide RGBA row layouts the shared readback
+        // store expects: GL_FLOAT rows for normalized/float sources, GL_INT / GL_UNSIGNED_INT
+        // rows for integer sources. Missing channels take GL defaults (0,0,0,1).
+        enum class ReadbackSourceClass : Uint8 { Unsupported, Float, SignedInt, UnsignedInt };
+
+        struct ReadbackSourceDesc {
+            ReadbackSourceClass sourceClass = ReadbackSourceClass::Unsupported;
+            Int channels = 0;       // component count stored per texel
+            Int componentBits = 0;  // per-component bits for regular formats; 0 for special packed
+            Bool isSnorm = false;
+            Bool isSrgb = false;
+            Bool bgraSwizzle = false;
+            VkFormat special = VK_FORMAT_UNDEFINED; // set for packed/special formats
+        };
+
+        static Bool GetReadbackSourceDesc(VkFormat format, ReadbackSourceDesc& out) {
+            out = ReadbackSourceDesc{};
+            switch (format) {
+                // --- regular UNORM ---
+                case VK_FORMAT_R8_UNORM:              out = {ReadbackSourceClass::Float, 1, 8};  return true;
+                case VK_FORMAT_R8G8_UNORM:            out = {ReadbackSourceClass::Float, 2, 8};  return true;
+                case VK_FORMAT_R8G8B8A8_UNORM:        out = {ReadbackSourceClass::Float, 4, 8};  return true;
+                case VK_FORMAT_B8G8R8A8_UNORM:        out = {ReadbackSourceClass::Float, 4, 8, false, false, true}; return true;
+                case VK_FORMAT_R16_UNORM:             out = {ReadbackSourceClass::Float, 1, 16}; return true;
+                case VK_FORMAT_R16G16_UNORM:          out = {ReadbackSourceClass::Float, 2, 16}; return true;
+                case VK_FORMAT_R16G16B16A16_UNORM:    out = {ReadbackSourceClass::Float, 4, 16}; return true;
+                // --- SRGB (decode to linear like GL readback of sRGB textures) ---
+                // GL GetTexImage/ReadPixels of sRGB textures return the raw sRGB-encoded
+                // bytes (GL 3.3 has no FRAMEBUFFER_SRGB read decode) - do NOT linearize.
+                case VK_FORMAT_R8G8B8A8_SRGB:         out = {ReadbackSourceClass::Float, 4, 8}; return true;
+                case VK_FORMAT_B8G8R8A8_SRGB:         out = {ReadbackSourceClass::Float, 4, 8, false, false, true}; return true;
+                // --- SNORM ---
+                case VK_FORMAT_R8_SNORM:              out = {ReadbackSourceClass::Float, 1, 8, true};  return true;
+                case VK_FORMAT_R8G8_SNORM:            out = {ReadbackSourceClass::Float, 2, 8, true};  return true;
+                case VK_FORMAT_R8G8B8A8_SNORM:        out = {ReadbackSourceClass::Float, 4, 8, true};  return true;
+                case VK_FORMAT_R16_SNORM:             out = {ReadbackSourceClass::Float, 1, 16, true}; return true;
+                case VK_FORMAT_R16G16_SNORM:          out = {ReadbackSourceClass::Float, 2, 16, true}; return true;
+                case VK_FORMAT_R16G16B16A16_SNORM:    out = {ReadbackSourceClass::Float, 4, 16, true}; return true;
+                // --- SFLOAT ---
+                case VK_FORMAT_R16_SFLOAT:            out = {ReadbackSourceClass::Float, 1, 16}; out.special = format; return true;
+                case VK_FORMAT_R16G16_SFLOAT:         out = {ReadbackSourceClass::Float, 2, 16}; out.special = format; return true;
+                case VK_FORMAT_R16G16B16A16_SFLOAT:   out = {ReadbackSourceClass::Float, 4, 16}; out.special = format; return true;
+                case VK_FORMAT_R32_SFLOAT:            out = {ReadbackSourceClass::Float, 1, 32}; out.special = format; return true;
+                case VK_FORMAT_R32G32_SFLOAT:         out = {ReadbackSourceClass::Float, 2, 32}; out.special = format; return true;
+                case VK_FORMAT_R32G32B32A32_SFLOAT:   out = {ReadbackSourceClass::Float, 4, 32}; out.special = format; return true;
+                // --- UINT ---
+                case VK_FORMAT_R8_UINT:               out = {ReadbackSourceClass::UnsignedInt, 1, 8};  return true;
+                case VK_FORMAT_R8G8_UINT:             out = {ReadbackSourceClass::UnsignedInt, 2, 8};  return true;
+                case VK_FORMAT_R8G8B8A8_UINT:         out = {ReadbackSourceClass::UnsignedInt, 4, 8};  return true;
+                case VK_FORMAT_R16_UINT:              out = {ReadbackSourceClass::UnsignedInt, 1, 16}; return true;
+                case VK_FORMAT_R16G16_UINT:           out = {ReadbackSourceClass::UnsignedInt, 2, 16}; return true;
+                case VK_FORMAT_R16G16B16A16_UINT:     out = {ReadbackSourceClass::UnsignedInt, 4, 16}; return true;
+                case VK_FORMAT_R32_UINT:              out = {ReadbackSourceClass::UnsignedInt, 1, 32}; return true;
+                case VK_FORMAT_R32G32_UINT:           out = {ReadbackSourceClass::UnsignedInt, 2, 32}; return true;
+                case VK_FORMAT_R32G32B32A32_UINT:     out = {ReadbackSourceClass::UnsignedInt, 4, 32}; return true;
+                // --- SINT ---
+                case VK_FORMAT_R8_SINT:               out = {ReadbackSourceClass::SignedInt, 1, 8};  return true;
+                case VK_FORMAT_R8G8_SINT:             out = {ReadbackSourceClass::SignedInt, 2, 8};  return true;
+                case VK_FORMAT_R8G8B8A8_SINT:         out = {ReadbackSourceClass::SignedInt, 4, 8};  return true;
+                case VK_FORMAT_R16_SINT:              out = {ReadbackSourceClass::SignedInt, 1, 16}; return true;
+                case VK_FORMAT_R16G16_SINT:           out = {ReadbackSourceClass::SignedInt, 2, 16}; return true;
+                case VK_FORMAT_R16G16B16A16_SINT:     out = {ReadbackSourceClass::SignedInt, 4, 16}; return true;
+                case VK_FORMAT_R32_SINT:              out = {ReadbackSourceClass::SignedInt, 1, 32}; return true;
+                case VK_FORMAT_R32G32_SINT:           out = {ReadbackSourceClass::SignedInt, 2, 32}; return true;
+                case VK_FORMAT_R32G32B32A32_SINT:     out = {ReadbackSourceClass::SignedInt, 4, 32}; return true;
+                // --- packed / special ---
+                case VK_FORMAT_A2B10G10R10_UNORM_PACK32:
+                case VK_FORMAT_A2B10G10R10_UINT_PACK32:
+                case VK_FORMAT_A2R10G10B10_UNORM_PACK32:
+                case VK_FORMAT_A2R10G10B10_UINT_PACK32:
+                case VK_FORMAT_B10G11R11_UFLOAT_PACK32:
+                case VK_FORMAT_E5B9G9R9_UFLOAT_PACK32:
+                case VK_FORMAT_R5G6B5_UNORM_PACK16:
+                case VK_FORMAT_B5G6R5_UNORM_PACK16:
+                case VK_FORMAT_A1R5G5B5_UNORM_PACK16:
+                case VK_FORMAT_R5G5B5A1_UNORM_PACK16:
+                case VK_FORMAT_B5G5R5A1_UNORM_PACK16:
+                case VK_FORMAT_R4G4B4A4_UNORM_PACK16:
+                case VK_FORMAT_B4G4R4A4_UNORM_PACK16:
+                    out.sourceClass = (format == VK_FORMAT_A2B10G10R10_UINT_PACK32 ||
+                                       format == VK_FORMAT_A2R10G10B10_UINT_PACK32) ?
+                        ReadbackSourceClass::UnsignedInt : ReadbackSourceClass::Float;
+                    out.special = format;
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        static Float SrgbToLinear(Float value) {
+            if (value <= 0.04045f) {
+                return value / 12.92f;
+            }
+            return std::pow((value + 0.055f) / 1.055f, 2.4f);
+        }
+
+        static Float DecodeUnsignedF11(Uint32 bits) {
+            const Uint32 exponent = (bits >> 6) & 0x1F;
+            const Uint32 mantissa = bits & 0x3F;
+            if (exponent == 0) {
+                return static_cast<Float>(mantissa) / 64.0f * std::pow(2.0f, -14.0f);
+            }
+            if (exponent == 31) {
+                return mantissa == 0 ? std::numeric_limits<Float>::infinity()
+                                     : std::numeric_limits<Float>::quiet_NaN();
+            }
+            return (1.0f + static_cast<Float>(mantissa) / 64.0f) *
+                   std::pow(2.0f, static_cast<Float>(static_cast<Int>(exponent)) - 15.0f);
+        }
+
+        static Float DecodeUnsignedF10(Uint32 bits) {
+            const Uint32 exponent = (bits >> 5) & 0x1F;
+            const Uint32 mantissa = bits & 0x1F;
+            if (exponent == 0) {
+                return static_cast<Float>(mantissa) / 32.0f * std::pow(2.0f, -14.0f);
+            }
+            if (exponent == 31) {
+                return mantissa == 0 ? std::numeric_limits<Float>::infinity()
+                                     : std::numeric_limits<Float>::quiet_NaN();
+            }
+            return (1.0f + static_cast<Float>(mantissa) / 32.0f) *
+                   std::pow(2.0f, static_cast<Float>(static_cast<Int>(exponent)) - 15.0f);
+        }
+
+        static void DecodeReadbackTexelSpecialFloat(const Uint8* source, VkFormat format, Float* rgba) {
+            rgba[0] = 0.0f; rgba[1] = 0.0f; rgba[2] = 0.0f; rgba[3] = 1.0f;
+            switch (format) {
+                case VK_FORMAT_R16_SFLOAT:
+                case VK_FORMAT_R16G16_SFLOAT:
+                case VK_FORMAT_R16G16B16A16_SFLOAT: {
+                    const Int channels = format == VK_FORMAT_R16_SFLOAT ? 1 :
+                                         (format == VK_FORMAT_R16G16_SFLOAT ? 2 : 4);
+                    for (Int c = 0; c < channels; ++c) {
+                        Uint16 bits = 0;
+                        Memcpy(&bits, source + static_cast<SizeT>(c) * sizeof(bits), sizeof(bits));
+                        rgba[c] = MG_Util::DecodeHalfBitsToFloat(bits);
+                    }
+                    return;
+                }
+                case VK_FORMAT_R32_SFLOAT:
+                case VK_FORMAT_R32G32_SFLOAT:
+                case VK_FORMAT_R32G32B32A32_SFLOAT: {
+                    const Int channels = format == VK_FORMAT_R32_SFLOAT ? 1 :
+                                         (format == VK_FORMAT_R32G32_SFLOAT ? 2 : 4);
+                    Memcpy(rgba, source, static_cast<SizeT>(channels) * sizeof(Float));
+                    return;
+                }
+                case VK_FORMAT_A2B10G10R10_UNORM_PACK32: {
+                    Uint32 word = 0;
+                    Memcpy(&word, source, sizeof(word));
+                    rgba[0] = static_cast<Float>(word & 0x3FFu) / 1023.0f;
+                    rgba[1] = static_cast<Float>((word >> 10) & 0x3FFu) / 1023.0f;
+                    rgba[2] = static_cast<Float>((word >> 20) & 0x3FFu) / 1023.0f;
+                    rgba[3] = static_cast<Float>((word >> 30) & 0x3u) / 3.0f;
+                    return;
+                }
+                case VK_FORMAT_A2R10G10B10_UNORM_PACK32: {
+                    Uint32 word = 0;
+                    Memcpy(&word, source, sizeof(word));
+                    rgba[2] = static_cast<Float>(word & 0x3FFu) / 1023.0f;
+                    rgba[1] = static_cast<Float>((word >> 10) & 0x3FFu) / 1023.0f;
+                    rgba[0] = static_cast<Float>((word >> 20) & 0x3FFu) / 1023.0f;
+                    rgba[3] = static_cast<Float>((word >> 30) & 0x3u) / 3.0f;
+                    return;
+                }
+                case VK_FORMAT_B10G11R11_UFLOAT_PACK32: {
+                    Uint32 word = 0;
+                    Memcpy(&word, source, sizeof(word));
+                    rgba[0] = DecodeUnsignedF11(word & 0x7FFu);
+                    rgba[1] = DecodeUnsignedF11((word >> 11) & 0x7FFu);
+                    rgba[2] = DecodeUnsignedF10((word >> 22) & 0x3FFu);
+                    return;
+                }
+                case VK_FORMAT_E5B9G9R9_UFLOAT_PACK32: {
+                    Uint32 word = 0;
+                    Memcpy(&word, source, sizeof(word));
+                    const Int exponent = static_cast<Int>((word >> 27) & 0x1Fu) - 15 - 9;
+                    const Float scale = std::pow(2.0f, static_cast<Float>(exponent));
+                    rgba[0] = static_cast<Float>(word & 0x1FFu) * scale;
+                    rgba[1] = static_cast<Float>((word >> 9) & 0x1FFu) * scale;
+                    rgba[2] = static_cast<Float>((word >> 18) & 0x1FFu) * scale;
+                    return;
+                }
+                case VK_FORMAT_R5G6B5_UNORM_PACK16:
+                case VK_FORMAT_B5G6R5_UNORM_PACK16: {
+                    Uint16 word = 0;
+                    Memcpy(&word, source, sizeof(word));
+                    const Float c0 = static_cast<Float>((word >> 11) & 0x1Fu) / 31.0f;
+                    const Float c1 = static_cast<Float>((word >> 5) & 0x3Fu) / 63.0f;
+                    const Float c2 = static_cast<Float>(word & 0x1Fu) / 31.0f;
+                    const Bool bgr = format == VK_FORMAT_B5G6R5_UNORM_PACK16;
+                    rgba[0] = bgr ? c2 : c0;
+                    rgba[1] = c1;
+                    rgba[2] = bgr ? c0 : c2;
+                    return;
+                }
+                case VK_FORMAT_A1R5G5B5_UNORM_PACK16: {
+                    Uint16 word = 0;
+                    Memcpy(&word, source, sizeof(word));
+                    rgba[3] = static_cast<Float>((word >> 15) & 0x1u);
+                    rgba[0] = static_cast<Float>((word >> 10) & 0x1Fu) / 31.0f;
+                    rgba[1] = static_cast<Float>((word >> 5) & 0x1Fu) / 31.0f;
+                    rgba[2] = static_cast<Float>(word & 0x1Fu) / 31.0f;
+                    return;
+                }
+                case VK_FORMAT_R5G5B5A1_UNORM_PACK16: {
+                    Uint16 word = 0;
+                    Memcpy(&word, source, sizeof(word));
+                    rgba[0] = static_cast<Float>((word >> 11) & 0x1Fu) / 31.0f;
+                    rgba[1] = static_cast<Float>((word >> 6) & 0x1Fu) / 31.0f;
+                    rgba[2] = static_cast<Float>((word >> 1) & 0x1Fu) / 31.0f;
+                    rgba[3] = static_cast<Float>(word & 0x1u);
+                    return;
+                }
+                case VK_FORMAT_B5G5R5A1_UNORM_PACK16: {
+                    Uint16 word = 0;
+                    Memcpy(&word, source, sizeof(word));
+                    rgba[2] = static_cast<Float>((word >> 11) & 0x1Fu) / 31.0f;
+                    rgba[1] = static_cast<Float>((word >> 6) & 0x1Fu) / 31.0f;
+                    rgba[0] = static_cast<Float>((word >> 1) & 0x1Fu) / 31.0f;
+                    rgba[3] = static_cast<Float>(word & 0x1u);
+                    return;
+                }
+                case VK_FORMAT_R4G4B4A4_UNORM_PACK16: {
+                    Uint16 word = 0;
+                    Memcpy(&word, source, sizeof(word));
+                    rgba[0] = static_cast<Float>((word >> 12) & 0xFu) / 15.0f;
+                    rgba[1] = static_cast<Float>((word >> 8) & 0xFu) / 15.0f;
+                    rgba[2] = static_cast<Float>((word >> 4) & 0xFu) / 15.0f;
+                    rgba[3] = static_cast<Float>(word & 0xFu) / 15.0f;
+                    return;
+                }
+                case VK_FORMAT_B4G4R4A4_UNORM_PACK16: {
+                    Uint16 word = 0;
+                    Memcpy(&word, source, sizeof(word));
+                    rgba[2] = static_cast<Float>((word >> 12) & 0xFu) / 15.0f;
+                    rgba[1] = static_cast<Float>((word >> 8) & 0xFu) / 15.0f;
+                    rgba[0] = static_cast<Float>((word >> 4) & 0xFu) / 15.0f;
+                    rgba[3] = static_cast<Float>(word & 0xFu) / 15.0f;
+                    return;
+                }
+                default:
+                    return;
+            }
+        }
+
+        static Bool DecodeReadbackRowsToWide(const Uint8* srcPixels, VkFormat srcFormat, GLsizei width,
+                                             GLsizei height, Vector<Uint8>& outWide, GLenum& outWideType) {
+            ReadbackSourceDesc desc{};
+            if (!GetReadbackSourceDesc(srcFormat, desc)) {
+                return false;
+            }
+            const SizeT texelSize = VulkanRenderer::GetReadbackTexelSize(srcFormat);
+            if (texelSize == 0) {
+                return false;
+            }
+            const SizeT pixelCount = static_cast<SizeT>(width) * static_cast<SizeT>(height);
+            outWide.assign(pixelCount * 4 * sizeof(Uint32), 0);
+
+            if (desc.sourceClass == ReadbackSourceClass::Float) {
+                outWideType = GL_FLOAT;
+                Float* wide = reinterpret_cast<Float*>(outWide.data());
+                for (SizeT i = 0; i < pixelCount; ++i) {
+                    const Uint8* source = srcPixels + i * texelSize;
+                    Float rgba[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+                    if (desc.special != VK_FORMAT_UNDEFINED) {
+                        DecodeReadbackTexelSpecialFloat(source, desc.special, rgba);
+                    } else {
+                        for (Int c = 0; c < desc.channels; ++c) {
+                            Float value = 0.0f;
+                            if (desc.componentBits == 8) {
+                                if (desc.isSnorm) {
+                                    Int8 raw = 0;
+                                    Memcpy(&raw, source + c, sizeof(raw));
+                                    value = std::max(static_cast<Float>(raw) / 127.0f, -1.0f);
+                                } else {
+                                    value = static_cast<Float>(source[c]) / 255.0f;
+                                }
+                            } else { // 16
+                                if (desc.isSnorm) {
+                                    Int16 raw = 0;
+                                    Memcpy(&raw, source + static_cast<SizeT>(c) * 2, sizeof(raw));
+                                    value = std::max(static_cast<Float>(raw) / 32767.0f, -1.0f);
+                                } else {
+                                    Uint16 raw = 0;
+                                    Memcpy(&raw, source + static_cast<SizeT>(c) * 2, sizeof(raw));
+                                    value = static_cast<Float>(raw) / 65535.0f;
+                                }
+                            }
+                            if (desc.isSrgb && c < 3) {
+                                value = SrgbToLinear(value);
+                            }
+                            rgba[c] = value;
+                        }
+                        if (desc.bgraSwizzle) {
+                            std::swap(rgba[0], rgba[2]);
+                        }
+                    }
+                    Memcpy(wide + i * 4, rgba, sizeof(rgba));
+                }
+                return true;
+            }
+
+            // Integer classes: decode to 4 x (U)Int32 per texel; missing alpha reads 1.
+            outWideType = desc.sourceClass == ReadbackSourceClass::SignedInt ? GL_INT : GL_UNSIGNED_INT;
+            Uint32* wide = reinterpret_cast<Uint32*>(outWide.data());
+            for (SizeT i = 0; i < pixelCount; ++i) {
+                const Uint8* source = srcPixels + i * texelSize;
+                Uint32 rgba[4] = {0, 0, 0, 1};
+                if (srcFormat == VK_FORMAT_A2B10G10R10_UINT_PACK32) {
+                    Uint32 word = 0;
+                    Memcpy(&word, source, sizeof(word));
+                    rgba[0] = word & 0x3FFu;
+                    rgba[1] = (word >> 10) & 0x3FFu;
+                    rgba[2] = (word >> 20) & 0x3FFu;
+                    rgba[3] = (word >> 30) & 0x3u;
+                } else if (srcFormat == VK_FORMAT_A2R10G10B10_UINT_PACK32) {
+                    Uint32 word = 0;
+                    Memcpy(&word, source, sizeof(word));
+                    rgba[2] = word & 0x3FFu;
+                    rgba[1] = (word >> 10) & 0x3FFu;
+                    rgba[0] = (word >> 20) & 0x3FFu;
+                    rgba[3] = (word >> 30) & 0x3u;
+                } else {
+                    for (Int c = 0; c < desc.channels; ++c) {
+                        if (desc.componentBits == 8) {
+                            if (desc.sourceClass == ReadbackSourceClass::SignedInt) {
+                                Int8 raw = 0;
+                                Memcpy(&raw, source + c, sizeof(raw));
+                                rgba[c] = static_cast<Uint32>(static_cast<Int32>(raw));
+                            } else {
+                                rgba[c] = source[c];
+                            }
+                        } else if (desc.componentBits == 16) {
+                            if (desc.sourceClass == ReadbackSourceClass::SignedInt) {
+                                Int16 raw = 0;
+                                Memcpy(&raw, source + static_cast<SizeT>(c) * 2, sizeof(raw));
+                                rgba[c] = static_cast<Uint32>(static_cast<Int32>(raw));
+                            } else {
+                                Uint16 raw = 0;
+                                Memcpy(&raw, source + static_cast<SizeT>(c) * 2, sizeof(raw));
+                                rgba[c] = raw;
+                            }
+                        } else {
+                            Memcpy(&rgba[c], source + static_cast<SizeT>(c) * 4, sizeof(Uint32));
+                        }
+                    }
+                }
+                Memcpy(wide + i * 4, rgba, sizeof(rgba));
+            }
+            return true;
+        }
+
+        // True floating-point color formats are exempt from GL_FIXED_ONLY read clamping.
+        static Bool IsFloatingPointReadbackFormat(VkFormat format) {
+            switch (format) {
+            case VK_FORMAT_R16_SFLOAT:
+            case VK_FORMAT_R16G16_SFLOAT:
+            case VK_FORMAT_R16G16B16_SFLOAT:
+            case VK_FORMAT_R16G16B16A16_SFLOAT:
+            case VK_FORMAT_R32_SFLOAT:
+            case VK_FORMAT_R32G32_SFLOAT:
+            case VK_FORMAT_R32G32B32_SFLOAT:
+            case VK_FORMAT_R32G32B32A32_SFLOAT:
+            case VK_FORMAT_B10G11R11_UFLOAT_PACK32:
+            case VK_FORMAT_E5B9G9R9_UFLOAT_PACK32:
+                return true;
+            default:
+                return false;
+            }
+        }
+
+        // The GL internal format a packed VkFormat stores, for the raw-word readback test below.
+        // Only the packed 32-bit layouts MobileGL keeps natively need an entry; anything else takes
+        // the wide decode path.
+        static TextureInternalFormat GetPackedReadbackInternalFormat(VkFormat format) {
+            switch (format) {
+            case VK_FORMAT_E5B9G9R9_UFLOAT_PACK32:
+                return TextureInternalFormat::RGB9E5;
+            case VK_FORMAT_B10G11R11_UFLOAT_PACK32:
+                return TextureInternalFormat::R11FG11FB10F;
+            case VK_FORMAT_A2B10G10R10_UNORM_PACK32:
+                return TextureInternalFormat::RGB10A2;
+            case VK_FORMAT_A2B10G10R10_UINT_PACK32:
+                return TextureInternalFormat::RGB10A2UI;
+            default:
+                return TextureInternalFormat::Unknown;
+            }
+        }
+
+        static Bool PackReadbackToClientOrPbo(const Uint8* srcPixels, VkFormat srcFormat, GLsizei width,
+                                              GLsizei sliceHeight, GLsizei sliceCount, GLenum format, GLenum type,
+                                              void* pixels, Bool applyPackImageParams,
+                                              Bool applyReadColorClamp = false) {
+            if (width <= 0 || sliceHeight <= 0 || sliceCount <= 0) {
+                return true;
+            }
+
+            ClientReadback::ReadbackChannelMapping mapping{};
+            if (!ClientReadback::GetReadbackChannelMapping(format, mapping) ||
+                ClientReadback::GetReadbackDstPixelSize(mapping, type) == 0) {
+                MGLOG_E_ONCE("DirectVulkan readback skipped: unsupported format=0x%x type=0x%x", format, type);
+                return false;
+            }
+
+            // A packed image read with the matching client type hands back its own words: the
+            // decode-to-float / re-encode round trip is lossy in the bits (it canonicalizes an
+            // RGB9_E5 shared exponent), which glGetTexImage must not do. Left to the wide path when
+            // GL_CLAMP_READ_COLOR may still have to act, i.e. for glReadPixels.
+            if (!applyReadColorClamp &&
+                MG_Util::PixelStoreProcessor::IsRawPackedPixelTransfer(
+                    GetPackedReadbackInternalFormat(srcFormat), MG_Util::ConvertGLEnumToTextureInputFormat(format),
+                    MG_Util::ConvertGLEnumToTexturePixelDataType(type))) {
+                return ClientReadback::StorePackedWordsToClient(srcPixels, width, sliceHeight, sliceCount, type, pixels,
+                                                                applyPackImageParams);
+            }
+
+            Vector<Uint8> wide;
+            GLenum wideType = GL_FLOAT;
+            if (!DecodeReadbackRowsToWide(srcPixels, srcFormat, width,
+                                          sliceHeight * sliceCount, wide, wideType)) {
+                MGLOG_E_ONCE("DirectVulkan readback skipped: unsupported source format=%d",
+                        static_cast<Int>(srcFormat));
+                return false;
+            }
+
+            // glReadPixels final conversion: GL_CLAMP_READ_COLOR defaults to GL_FIXED_ONLY,
+            // clamping fixed-point (normalized) buffers to [0,1] - visible for SNORM reads.
+            if (applyReadColorClamp && wideType == GL_FLOAT) {
+                const GLenum clampMode = MG_Pipe::gPipeInputs->GetClampReadColor();
+                const Bool clamp = clampMode == GL_TRUE ||
+                    (clampMode == GL_FIXED_ONLY && !IsFloatingPointReadbackFormat(srcFormat));
+                if (clamp) {
+                    Float* values = reinterpret_cast<Float*>(wide.data());
+                    const SizeT count = wide.size() / sizeof(Float);
+                    for (SizeT i = 0; i < count; ++i) {
+                        values[i] = std::min(std::max(values[i], 0.0f), 1.0f);
+                    }
+                }
+            }
+
+            const Bool sourceIsInteger = wideType == GL_INT || wideType == GL_UNSIGNED_INT;
+            if (sourceIsInteger != mapping.isInteger) {
+                MGLOG_E_ONCE("DirectVulkan readback skipped: integerness mismatch (format=0x%x source=%d)",
+                        format, static_cast<Int>(srcFormat));
+                return false;
+            }
+
+            return ClientReadback::StoreWideRowsToClient(wide.data(), wideType, width, sliceHeight, sliceCount, mapping,
+                                                         type, pixels, applyPackImageParams);
+        }
+    } // namespace
 
     // P7 wave 2-B. THE NAME STAYS FIRST AND THE DRIVER'S ANSWER FOLLOWS IT. Two Iris cases
     // died on the Redmi (Adreno 830v2) with `Fatal{UnmigratedVerb, "Magma:mipmap-shader-
@@ -110,21 +559,6 @@
         return forced;
     }
 
-    // AND THE SAME PROBLEM AGAIN FOR THE SHADER MULTISAMPLE RESOLVE (P7 wave 2-B2). lavapipe
-    // carries VK_KHR_create_renderpass2 AND VK_KHR_depth_stencil_resolve, so the extension arm
-    // is taken for every depth/stencil resolve this host can run and the shader arm - the one
-    // that exists for the device WITHOUT them, which is where the session used to die at
-    // `Magma:multisample-depth-resolve-capability` - would never execute under any lane. The
-    // knob drops the extension arm. It does not pretend the extension is missing anywhere else:
-    // nothing but the arm choice reads it. Inline, so the renderer reads the variable once.
-    inline Bool MagmaWireForcedShaderDepthResolve() {
-        static const Bool forced = [] {
-            const char* value = std::getenv("MGITEST_MAGMA_FORCE_SHADER_DEPTH_RESOLVE");
-            return value && *value && value[0] != '0';
-        }();
-        return forced;
-    }
-
     static Bool WireFormatIsPackedDepthStencil(VkFormat format) {
         return format == VK_FORMAT_D16_UNORM_S8_UINT || format == VK_FORMAT_D24_UNORM_S8_UINT ||
                format == VK_FORMAT_D32_SFLOAT_S8_UINT;
@@ -170,7 +604,7 @@
         if (MG_Pipe::MGPipeHandleIsNull(out.storage)) MagmaWireFatal("framebuffer-view-record");
         auto* resource = m_textureManager->SyncTextureResourceByHandle(out.storage, renderbuffer);
         if (!resource) MagmaWireFatal("framebuffer-resource");
-        // Another session writes it: acquired (WireSharedImage.inc) before the layout is read below.
+        // Another session writes it: acquired (WireSharedImage.cpp) before the layout is read below.
         // An image reached through a framebuffer is one this session renders into (or copies
         // through), which makes it a writer of images from now on.
         if (resource->sharedImageId != 0) {
@@ -586,7 +1020,7 @@
         // any of the clear's paths (in-pass, deferred, standalone) records or resolves anything.
         if (fbo.IsDefault) SubmitAheadOfAcquiredImage();
         // P15 S0: what the draw pass can take is cleared inside it (ClearWireFramebufferInPass,
-        // WireDraw.inc); only the buffers it hands back take the standalone pass below.
+        // WireDraw.cpp); only the buffers it hands back take the standalone pass below.
         // P15: in the open pass when it is this framebuffer's (the in-pass clear) or merely holds
         // its images (another framebuffer's), deferred on the images when it covers them whole,
         // and only then a pass of its own (the in-pass clear again, which begins one) or the
@@ -1158,7 +1592,7 @@
         // first because the probe measured the render pass leaving its target unwritten here,
         // so a shader decline (a stencil aspect without VK_EXT_shader_stencil_export, a format
         // that is not SAMPLED_IMAGE + DEPTH_STENCIL_ATTACHMENT, a failed pipeline create -
-        // WireMultisampleResolve.inc) that lands on the render pass is the resolve most likely
+        // WireMultisampleResolve.cpp) that lands on the render pass is the resolve most likely
         // to read back as zeroes with no GL error. A recorded debt (docs/archive/notes/p7/g5-msrbo.md §4).
         if (resolvedByShader) {
             MGLOG_I_ONCE("DirectVulkan::ResolveWireDepthStencil: resolved by the shader pass "
@@ -1659,7 +2093,7 @@
                     // ResolveWireDepthStencil's: a multisample depth or stencil SOURCE now
                     // reaches a single-sample destination on every device, through
                     // VK_KHR_depth_stencil_resolve where it exists and through the baked pass in
-                    // WireMultisampleResolve.inc where it does not. This is the half with none -
+                    // WireMultisampleResolve.cpp where it does not. This is the half with none -
                     // the sample counts differ and the DESTINATION is the multisampled side, so
                     // it is either one sample fanned out to N or N reduced to M.
                     //
@@ -1841,7 +2275,7 @@
         const Bool planar = resource->viewType != VK_IMAGE_VIEW_TYPE_1D &&
                             resource->viewType != VK_IMAGE_VIEW_TYPE_1D_ARRAY &&
                             resource->viewType != VK_IMAGE_VIEW_TYPE_3D;
-        // The depth arm's shape: the layer window, and what WireDepthMipmap.inc's pass refuses
+        // The depth arm's shape: the layer window, and what WireDepthMipmap.cpp's pass refuses
         // for an image this function hands it (the view type is passed to it below) - a 1D,
         // 1D-array or 3D view type, and a format that does not both sample and attach as depth.
         // Its other refusals, multisample and a default image, are never built here. P8-SV: the
@@ -1891,7 +2325,7 @@
             // texture reached `mipmap-shader-format-or-shape` on its very first disjunction
             // while the monolith arm quietly generated the chain with a shader.
             //
-            // The per-level pass is WireDepthMipmap.inc's, which is the monolith's fragment
+            // The per-level pass is WireDepthMipmap.cpp's, which is the monolith's fragment
             // shader with the monolith's arithmetic on a baked pipeline that owns no frontend
             // object - §3.2's "observably the monolith's" without the GL program the monolith
             // needs to get there. Its layer window and format were checked before the growth.
@@ -2096,3 +2530,258 @@
             }
         }
     }
+
+    // Server-owned texture readback. Image layout tracking and frame retirement are the same as
+    // every other wire verb's.
+    static Bool PackWireColorTight(const Uint8* source, SizeT sourceBytes, VkFormat format,
+                                   TextureInternalFormat logicalFormat, const MG_Pipe::MGPReadbackInfo& info,
+                                   Vector<Uint8>& result) {
+        using namespace ClientReadback;
+        ReadbackChannelMapping mapping{};
+        if (!GetReadbackChannelMapping(info.Format, mapping)) return false;
+        const SizeT sourcePixelSize = VulkanRenderer::GetReadbackTexelSize(format);
+        const SizeT pixelBytes = GetReadbackDstPixelSize(mapping, info.Type);
+        const Uint64 rows64 = Uint64(info.Box.H) * info.Box.D;
+        if (!info.Box.W || !rows64 || rows64 > std::numeric_limits<GLsizei>::max() ||
+            rows64 > std::numeric_limits<SizeT>::max() / 16 / info.Box.W) return false;
+        const SizeT pixels = static_cast<SizeT>(info.Box.W) * static_cast<SizeT>(rows64);
+        if (!sourcePixelSize || !pixelBytes || sourceBytes != pixels * sourcePixelSize ||
+            info.DstSize != pixels * pixelBytes) return false;
+        if (MG_Util::PixelStoreProcessor::IsRawPackedPixelTransfer(GetPackedReadbackInternalFormat(format),
+                MG_Util::ConvertGLEnumToTextureInputFormat(info.Format),
+                MG_Util::ConvertGLEnumToTexturePixelDataType(info.Type))) {
+            if (pixelBytes != sourcePixelSize) return false;
+            result.assign(source, source + sourceBytes);
+            return true;
+        }
+        Vector<Uint8> wide;
+        GLenum wideType = GL_NONE;
+        const GLsizei rows = static_cast<GLsizei>(Uint64(info.Box.H) * info.Box.D);
+        if (!DecodeReadbackRowsToWide(source, format, info.Box.W, rows, wide, wideType) ||
+            mapping.isInteger != (wideType == GL_INT || wideType == GL_UNSIGNED_INT)) return false;
+        if (ResolveTextureFormatInfo(logicalFormat).expandRgbToRgba) {
+            const Float floatOne = 1.0f;
+            const Uint32 integerOne = 1;
+            const void* alpha = wideType == GL_FLOAT ? static_cast<const void*>(&floatOne) : &integerOne;
+            for (SizeT i = 0; i < pixels; ++i)
+                Memcpy(wide.data() + (i * 4 + 3) * sizeof(Uint32), alpha, sizeof(Uint32));
+        }
+        result.resize(info.DstSize);
+        for (GLsizei row = 0; row < rows; ++row)
+            ConvertWideReadbackRow(wide.data() + row * static_cast<SizeT>(info.Box.W) * 16,
+                result.data() + row * static_cast<SizeT>(info.Box.W) * pixelBytes,
+                info.Box.W, wideType, mapping, info.Type);
+        return true;
+    }
+
+    Bool VulkanRenderer::ReadTextureImageWire(const MG_Pipe::MGPReadbackInfo& info,
+                                               Vector<Uint8>& ownedBytes) {
+        ownedBytes.clear();
+        const auto& box = info.Box;
+        if (box.X || box.Y || box.Z || !box.W || !box.H || !box.D ||
+            box.W > static_cast<Uint32>(std::numeric_limits<GLsizei>::max()) ||
+            Uint64(box.H) * box.D > static_cast<Uint64>(std::numeric_limits<GLsizei>::max())) return false;
+        const auto& state = MG_Pipe::MGPipeApplier();
+        if (MG_Pipe::MGPipeHandleIsNull(info.Res) || info.Res.Slot >= state.TextureResources.size()) return false;
+        const auto& record = state.TextureResources[info.Res.Slot];
+        if (!record.Live || record.Gen != info.Res.Gen) return false;
+
+        using Target = MG_Pipe::MGPipeResourceTarget;
+        const auto target = static_cast<Target>(record.Desc.Target);
+        const Bool oneDArray = target == Target::Tex1DArray;
+        const Bool volume = target == Target::Tex3D;
+        Uint32 level = info.Level, layer = 0, layerCount = 1, availableLayers = 1;
+        VkExtent3D extent{box.W, box.H, 1};
+        if (oneDArray) {
+            if (info.Target != GL_TEXTURE_1D_ARRAY || box.D != 1) return false;
+            layerCount = box.H; extent.height = 1;
+        } else if (volume) {
+            if (info.Target != GL_TEXTURE_3D) return false;
+            extent.depth = box.D;
+        } else if (target == Target::Tex2DArray || target == Target::TexCubeArray) {
+            if (info.Target != (target == Target::Tex2DArray ? GL_TEXTURE_2D_ARRAY : GL_TEXTURE_CUBE_MAP_ARRAY)) return false;
+            layerCount = box.D;
+        } else if (target == Target::TexCube) {
+            if (info.Target == GL_TEXTURE_CUBE_MAP) {
+                if (box.D != 6) return false;
+                layerCount = 6;
+            } else if (info.Target >= GL_TEXTURE_CUBE_MAP_POSITIVE_X && info.Target <= GL_TEXTURE_CUBE_MAP_NEGATIVE_Z) {
+                if (box.D != 1) return false;
+                layer = info.Target - GL_TEXTURE_CUBE_MAP_POSITIVE_X;
+            } else return false;
+        } else {
+            if (box.D != 1) return false;
+            const GLenum expected = target == Target::Tex1D ? GL_TEXTURE_1D :
+                                    target == Target::Tex2D ? GL_TEXTURE_2D :
+                                    target == Target::TexRect ? GL_TEXTURE_RECTANGLE : GL_NONE;
+            if (!expected || info.Target != expected || (target == Target::Tex1D && box.H != 1)) return false;
+        }
+        VkFormat viewFormat = VK_FORMAT_UNDEFINED;
+        const auto storage = m_textureManager->ResolveWireTextureStorage(info.Res, level, layer, &viewFormat, &availableLayers);
+        if (MG_Pipe::MGPipeHandleIsNull(storage)) return false;
+        const Uint64 pixels64 = Uint64(box.W) * box.H * box.D;
+        if (pixels64 > std::numeric_limits<SizeT>::max() / 16) return false;
+        const auto readUnbacked = [&]() {
+            // Only a level the VkImage cannot represent may use its owned,
+            // non-GPU-dirty staging bytes. A failed GPU read never falls back.
+            if (storage != info.Res || info.Target == GL_TEXTURE_CUBE_MAP) return false;
+            Vector<Uint8> raw;
+            VkFormat nativeFormat = VK_FORMAT_UNDEFINED;
+            if (!m_textureManager->ReadUnbackedWireLevel(storage,
+                    MG_Util::ConvertGLEnumToTextureUploadTarget(info.Target), info.Level,
+                    IntVec3{static_cast<Int>(box.W), static_cast<Int>(box.H), static_cast<Int>(box.D)},
+                    nativeFormat, raw)) return false;
+            // A depth-only level's shadow holds the format's own depth words, which the
+            // depth packer reads exactly as it reads them off a Vulkan copy.
+            if (nativeFormat == VK_FORMAT_D16_UNORM || nativeFormat == VK_FORMAT_D32_SFLOAT ||
+                nativeFormat == VK_FORMAT_X8_D24_UNORM_PACK32) {
+                if (info.Format != GL_DEPTH_COMPONENT) return false;
+                const SizeT texels = static_cast<SizeT>(Uint64(box.W) * box.H * box.D);
+                const SizeT wordBytes = nativeFormat == VK_FORMAT_D16_UNORM ? 2 : 4;
+                if (raw.size() < texels * wordBytes) return false;
+                Vector<Uint8> packed;
+                if (!PackDepthStencilTight(raw.data(), nullptr, nativeFormat, texels, info.Format, info.Type, packed) ||
+                    packed.size() != info.DstSize) return false;
+                ownedBytes = Move(packed);
+                return true;
+            }
+            return PackWireColorTight(raw.data(), raw.size(), nativeFormat,
+                static_cast<TextureInternalFormat>(record.Desc.InternalFormat), info, ownedBytes);
+        };
+        RetireWireDrawPass();
+        MakeXfbWritesVisible();
+        auto* resource = m_textureManager->SyncTextureResourceByHandle(storage);
+        if (!resource || !resource->image || level >= resource->mipLevels) return readUnbacked();
+        if (resource->sampleCount != VK_SAMPLE_COUNT_1_BIT) return false;
+        m_textureManager->FlushPendingUploads();
+        const Bool nativeVolume = resource->viewType == VK_IMAGE_VIEW_TYPE_3D;
+        const Uint32 nativeDepth = nativeVolume ? std::max(resource->depth >> level, 1u) : resource->arrayLayers;
+        if (extent.width != std::max(resource->extent.width >> level, 1u) ||
+            extent.height != std::max(resource->extent.height >> level, 1u) ||
+            layer >= nativeDepth || (nativeVolume ? extent.depth : layerCount) > nativeDepth - layer ||
+            (!nativeVolume && layerCount > availableLayers)) return readUnbacked();
+        // A view can reinterpret the same native words. Decode using the outer
+        // view format, while Vulkan copies the storage allocation's bytes.
+        const VkFormat format = viewFormat == VK_FORMAT_UNDEFINED ? resource->format : viewFormat;
+        const Bool depth = info.Format == GL_DEPTH_COMPONENT || info.Format == GL_DEPTH_STENCIL;
+        const Bool stencil = info.Format == GL_STENCIL_INDEX || info.Format == GL_DEPTH_STENCIL;
+        const Bool depthStencil = depth || stencil;
+        const VkImageAspectFlags aspects = depthStencil ?
+            ((depth ? VK_IMAGE_ASPECT_DEPTH_BIT : 0) | (stencil ? VK_IMAGE_ASPECT_STENCIL_BIT : 0)) : VK_IMAGE_ASPECT_COLOR_BIT;
+        if ((resource->aspect & aspects) != aspects) return false;
+        const SizeT pixels = static_cast<SizeT>(pixels64);
+        const SizeT destinationPixelSize = MG_Util::GetInputBytesPerPixel(
+            MG_Util::ConvertGLEnumToTextureInputFormat(info.Format), MG_Util::ConvertGLEnumToTexturePixelDataType(info.Type));
+        if (!destinationPixelSize || pixels64 * destinationPixelSize != info.DstSize) return false;
+        SizeT sourcePixelSize = GetReadbackTexelSize(resource->format);
+        if (depthStencil) {
+            switch (resource->format) {
+            case VK_FORMAT_D16_UNORM: sourcePixelSize = 2; break;
+            case VK_FORMAT_D24_UNORM_S8_UINT: case VK_FORMAT_X8_D24_UNORM_PACK32:
+            case VK_FORMAT_D32_SFLOAT: case VK_FORMAT_D32_SFLOAT_S8_UINT: sourcePixelSize = 4; break;
+            case VK_FORMAT_S8_UINT: sourcePixelSize = 0; break;
+            default: return false;
+            }
+        } else if (!sourcePixelSize || sourcePixelSize != GetReadbackTexelSize(format)) return false;
+        const VkDeviceSize firstBytes = pixels * (depthStencil ? (depth ? sourcePixelSize : 0) : sourcePixelSize);
+        const VkDeviceSize stencilOffset = (firstBytes + 3) & ~VkDeviceSize{3};
+        const VkDeviceSize copyBytes = depthStencil ? stencilOffset + (stencil ? pixels : 0) : firstBytes;
+        if (!copyBytes) return false;
+        VkBufferObject readback;
+        if (!readback.Create({.allocator = m_allocator, .size = copyBytes, .usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                .memoryUsage = VMA_MEMORY_USAGE_AUTO, .allocationFlags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT})) return false;
+        WireImage image{};
+        image.image = resource->image; image.format = resource->format; image.aspect = resource->aspect;
+        image.layout = resource->layout; image.trackedLayout = &resource->layout; image.levels = resource->mipLevels;
+        const auto restore = image.layout == VK_IMAGE_LAYOUT_UNDEFINED ? VK_IMAGE_LAYOUT_GENERAL : image.layout;
+        auto& frame = m_frameContext.GetCurrent();
+        VkBufferImageCopy regions[2]{};
+        Uint32 regionCount = 0;
+        const auto addCopy = [&](VkImageAspectFlags aspect, VkDeviceSize offset) {
+            auto& copy = regions[regionCount++];
+            copy.bufferOffset = offset;
+            copy.imageSubresource = {aspect, level, nativeVolume ? 0u : layer, nativeVolume ? 1u : layerCount};
+            copy.imageOffset = {0, 0, nativeVolume ? static_cast<Int32>(layer) : 0};
+            copy.imageExtent = extent;
+        };
+        if (!depthStencil) addCopy(VK_IMAGE_ASPECT_COLOR_BIT, 0);
+        if (depth) addCopy(VK_IMAGE_ASPECT_DEPTH_BIT, 0);
+        if (stencil) addCopy(VK_IMAGE_ASPECT_STENCIL_BIT, stencilOffset);
+        // E5B9G9R9 on a device whose transfer reads canonicalize it: the words leave through a
+        // shader into a twin (WireE5RawCopy.h), which is what the buffer copy then reads.
+        VkImage copySource = image.image;
+        if (!depthStencil && m_textureManager->WireE5RawReadApplies(*resource)) {
+            TransitionWireImage(image, VK_IMAGE_LAYOUT_GENERAL);
+            WireE5RawCopyRegion region;
+            region.source = image.image;
+            region.volume = nativeVolume;
+            region.level = level;
+            region.baseLayer = nativeVolume ? 0u : layer;
+            region.layerCount = nativeVolume ? 1u : layerCount;
+            region.offset = regions[0].imageOffset;
+            region.extent = extent;
+            auto twin = MakeUnique<VkTextureManager::TextureResource>();
+            WireE5RawCopyObjects objects;
+            if (m_textureManager->RecordWireE5RawTwin(frame.commandBuffer, region, VK_IMAGE_LAYOUT_GENERAL, *twin,
+                                                      objects)) {
+                copySource = twin->image;
+                regions[0].imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, region.layerCount};
+                regions[0].imageOffset = {0, 0, 0};
+                WireRetiredObjects retired{};
+                retired.textures.push_back(Move(twin));
+                retired.imageViews = {objects.sourceView, objects.twinView};
+                retired.descriptorPools = {objects.descriptorPool};
+                RetireWireObjects(Move(retired));
+            }
+        }
+        if (copySource == image.image) TransitionWireImage(image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+        vkCmdCopyImageToBuffer(frame.commandBuffer, copySource, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                              readback.GetHandle(), regionCount, regions);
+        TransitionWireImage(image, restore);
+        VkMemoryBarrier host{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+        host.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT; host.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+        vkCmdPipelineBarrier(frame.commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT,
+                             0, 1, &host, 0, nullptr, 0, nullptr);
+        if (!SubmitReadbackCommandsAndWait(frame)) return false;
+        const auto* mapped = static_cast<const Uint8*>(readback.Map());
+        if (!mapped || !readback.Invalidate(copyBytes)) return false;
+        Vector<Uint8> result;
+        if (depthStencil) {
+            if (!PackDepthStencilTight(depth ? mapped : nullptr, stencil ? mapped + stencilOffset : nullptr,
+                                       resource->format, pixels, info.Format, info.Type, result)) return false;
+        } else {
+            using namespace ClientReadback;
+            ReadbackChannelMapping mapping{};
+            if (!GetReadbackChannelMapping(info.Format, mapping) ||
+                GetReadbackDstPixelSize(mapping, info.Type) != destinationPixelSize) return false;
+            if (MG_Util::PixelStoreProcessor::IsRawPackedPixelTransfer(GetPackedReadbackInternalFormat(format),
+                    MG_Util::ConvertGLEnumToTextureInputFormat(info.Format),
+                    MG_Util::ConvertGLEnumToTexturePixelDataType(info.Type))) {
+                if (destinationPixelSize != sourcePixelSize) return false;
+                result.assign(mapped, mapped + firstBytes);
+            } else {
+                Vector<Uint8> wide;
+                GLenum wideType = GL_NONE;
+                const GLsizei rows = static_cast<GLsizei>(Uint64(box.H) * box.D);
+                if (!DecodeReadbackRowsToWide(mapped, format, box.W, rows, wide, wideType) ||
+                    mapping.isInteger != (wideType == GL_INT || wideType == GL_UNSIGNED_INT)) return false;
+                if (ResolveTextureFormatInfo(static_cast<TextureInternalFormat>(record.Desc.InternalFormat)).expandRgbToRgba) {
+                    const Float floatOne = 1.0f;
+                    const Uint32 integerOne = 1;
+                    const void* alpha = wideType == GL_FLOAT ? static_cast<const void*>(&floatOne) : &integerOne;
+                    for (SizeT i = 0; i < pixels; ++i)
+                        Memcpy(wide.data() + (i * 4 + 3) * sizeof(Uint32), alpha, sizeof(Uint32));
+                }
+                result.resize(pixels * destinationPixelSize);
+                const SizeT srcRow = static_cast<SizeT>(box.W) * 4 * sizeof(Uint32);
+                const SizeT dstRow = static_cast<SizeT>(box.W) * destinationPixelSize;
+                for (GLsizei row = 0; row < rows; ++row)
+                    ConvertWideReadbackRow(wide.data() + row * srcRow, result.data() + row * dstRow,
+                                           box.W, wideType, mapping, info.Type);
+            }
+        }
+        if (result.size() != info.DstSize) return false;
+        ownedBytes = Move(result);
+        return true;
+    }
+} // namespace MobileGL::MG_Backend::DirectVulkan
