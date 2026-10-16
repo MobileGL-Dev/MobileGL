@@ -25,6 +25,19 @@ MobileGL/MG_Remote/          仅 MOBILEGL_BUILD_DISAGGREGATED：CONTRACT-*.md、
 - 测试接线：ctest `ENVIRONMENT` 用 `mgl_itest_join_environment(...)` 构造；每条 split / spawn / tcp 条目带独立日志路径，日志按角色分文件（`<base>.client.log` / `<base>.server.log`）；spawn、tcp 车道与 split 名集合一致（`scripts/ci/spawn_lane_parity.py`），每条目记 arm 证明。
 - CI（`.github/workflows/test.yml`、`apk.yml`）：`pipe-gates`（G1–G8、生成器 self-test、符号报告、dirty-surface、字段归属、G5、文档引用 lint）、`flatc-check`、include 闭包、各 flavour 的 build / integration / retrace 车道、APK + AVD。两份 workflow 里的 `feat/disaggregated` 触发器是临时的，合入 `dev` 前移除。
 
+### 16.1 集成测试车道的接线规则
+
+`MG_IntegrationTest/CMakeLists.txt` 的每条车道都要能因它存在的理由变红（§13.2），接线规则：
+- 读库日志的用例必须独占日志：库以 `fopen(path, "w")` 打开日志，同一路径上的每个进程启动时都截断它，`ctest -j` 下读者会读到邻居截断后的文件，症状与「计数从未发出」相同。条目因此带私有 `MOBILEGL_LOG_FILE_PATH`，过滤器只选这一个用例；车道必须跑整个 scenario（重新过滤会改测试名）时，加以日志命名的 `RESOURCE_LOCK`，ctest 不会同时运行持同一把锁的条目。
+- 选臂的每个变量都写成条目自己的 ctest `ENVIRONMENT` 属性：属性只覆盖它写出的变量，其余从 job 环境漏进来（job 级 `MOBILEGL_TRANSPORT=inproc` 会把没钉 `monolith` 的 monolith 条目悄悄变成又一条 split）。
+- ctest 不把 SKIP 算失败，跳光的车道和全过的车道一样绿：必须真跑的车道钉 `MOBILEGL_ITEST_REQUIRE_GPU=1`，让不可用的 harness 变成失败；功能 opt-in（如 `MOBILEGL_ESPRYT_ENABLE_TEXTURE_VIEW=1`）必须到达每个臂里读它的进程，tcp 臂的 server 由 `TcpServer.Start` fixture 预先启动、不继承 client 条目的环境，所以也要设在 fixture 上。
+- `ctest -L` 按正则子串匹配：新标签不得包含任何被不加锚点选择的已有标签，所以限定词放在中间（`integration-magma-all-spawn` 不含 `integration-magma-spawn`，`integration-magma-spawn-buffers` 不含 `integration-magma-buffers`）；只选一个标签时写 `'^label$'`。
+- 门控车道带一个私有的第二标签并以 `--no-tests=error` 运行：构建缺少该选项时匹配为空即失败，而不是零条目的绿。
+- 三条传输臂：`Split.` 为 inproc，server 是测试进程里的 apply 线程；`Spawn.` 的 server 子进程继承 `::environ`（`ServerSpawn.cpp` 只去掉 `MOBILEGL_TRANSPORT` 与非 server 自有的 `MOBILEGL_IPC_*`）；`Tcp.` 的 server 是整条车道共享的 `TcpServer.Start` fixture，由 `scripts/ci/tcp_server_fixture.py` 以它自己的环境启动一次，每个 Hello fork 一个 session 子进程。
+- 条目 ctest `ENVIRONMENT` 里由 server 读取的旋钮只到达 inproc 与 spawn 的 server；tcp 副本会以默认臂运行却顶着声称旋钮的名字，永远不会红。这类条目只注册 split + spawn（Magma 的列入 `scripts/ci/spawn_lane_parity.py` 的 `MAGMA_SERVER_ENV_KNOB_NO_TCP`），旋钮取默认值的孪生条目保留三条臂；要 tcp 臂就得让 fixture 带上旋钮：对整条车道无害的追加到 `TcpServer.Start` 的 `ENVIRONMENT`，否则另起一个带旋钮的 supervisor（`P8Coverage.cmake`）。只能在本进程读取的探针（描述符池普查、server loop 挂钩、server 缓存窥视、验证层输出）只注册 inproc（`MAGMA_INPROC_ONLY`）。
+- Magma 分三层：门控的 `integration-magma-{split,spawn,tcp}` 是手工布置、各带 flavour（strict + 双块、adopt 档、run-ahead credit、cache 钉定）的车道，测绿后才进 CI 门；`integration-magma-all-*` 重放每次 `mgl_itest_register_split_arms` 调用；`integration-magma-full-*` 跑整个集成二进制减去 `MGL_ITEST_MONOLITH_MECHANISM_FILTER` 与 `DualBlockScenario`。后两层不进任何 CI 门，用例随修复其阻塞点的提交升入门控层。
+- `MGITEST_SPLIT_LANE=1` 武装 `ScenarioFixture` 的析构断言：case 必须推进 client 编码器的记录序号，tcp 臂还要证明没有本地 server 子进程。它只适合每条都绘制的精选车道；整二进制集合（`integration-magma-full-*`、`integration-verify-split`）不设它，因为纯查询 case 由 `CapsMirror` 回答、不产生记录，代价是这些集合不证明记录过了线。
+
 ## 附 A：开关
 
 CMake：`MOBILEGL_BUILD_DISAGGREGATED`（OFF）、`MOBILEGL_BUILD_DISAGGREGATED_INPROC`（OFF，隐含前者）、`MOBILEGL_PIPE_VERIFY`（OFF，永不出货）、`MOBILEGL_BUILD_SERVER_SPIKE`（仅 Android spike）、`MOBILEGL_FLATC_EXECUTABLE`（只服务 `flatc-check`）。`MOBILEGL_PIPE_PUSH` 与 `MOBILEGL_PIPE_LEGACY_MEMOS` 在 P13 删除（旧缓存里的 OFF 只告警并忽略）。

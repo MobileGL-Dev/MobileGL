@@ -107,6 +107,12 @@ shader 看见哪个纹理取决于 sampler uniform 类型、mipmap 完备性与�
 - `RegionCount == 0` 只表示整 level 写；其余写入一律带盒子（只有一个也带），所以 applier 的累积不会因为某一侧「只有 box」而把精确贡献放宽成并集盒。
 - 例外：足迹超过一条记录能带的 `kMGPipeMaxPendingUploadRegions` 个盒子时，退回存储的 rect 列表（只保证覆盖，日志记一次）；该列表又被扣下（rect 填满并集盒的 3/4）时，0 是一个**不精确**的部分盒。把「只有 box」读作「client 拥有盒内每个纹素」的读者（`AdoptDriverLevelIntoShadow` 的覆盖盒规则）只在这种情况下不精确。
 
+#### 6.1.2 纹理视图的上传记在存储属主上
+
+`glTextureView` 与源纹理共用纹素，所以 client 把经视图或经属主名字做的每次上传都记在**存储属主**上：`TextureObjectView` 把 dirty 标记换算成属主坐标（`ToOwnerLevel` / `ToOwnerUploadTarget` / `ToOwnerRegionOffset`）转给属主，`TextureEmit.h` 的排空列表按（存储属主, upload target, level）键控，每条纹理 `resource_subdata` 都指向属主句柄；applier 因此只推进属主记录的 `Serial` 与 `PendingUploads`。
+- Espryt 的逐纹理 clean 门 `BackendTextureObject::IsDrawSyncCleanByRecord` 对两个存储条款读 `Desc.ViewOf` 指向的属主记录（`PipeTextureStorageRecordForRecord`），三个参数条款仍读视图自己的记录：视图有自己的纹理参数与内建 sampler。这与前端 `TextureObjectView::GetContentVersion()` 转发给属主是同一条规则。
+- 若存储条款读视图自己的记录，视图第一次被采样之后，经属主名字的上传在视图上永不可见。门是 `TextureViewAliasScenario.TheOwnerUploadDrainRunsAgainAfterADrawBoundary`，monolith 与三个传输臂都跑。
+
 ## 7. Shader state = SPIR-V + 反射归档
 
 - `CreateShaderState` 过线的是逐 stage SPIR-V + 反射归档，**不是源码**：glslang 全在 client、SPIRV-Cross 全在 server，文件级切割；server 侧无编译池。归档序列化器 `ProgramArtifactsCodec`，monolith 只在 verify 构建里调它（D-H3）。

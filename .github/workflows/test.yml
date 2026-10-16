@@ -780,78 +780,22 @@ jobs:
             ctest --output-on-failure -L integration-verify --no-tests=error --output-junit "${RUNNER_TEMP}/verify.xml"
           fi
 
-      # The push-only unit tests, on the verify runtime.
-      #
-      # WHY HERE AND NOT IN `test`. The entries themselves are registered in EVERY build - they
-      # have to be, or `ctest -N` would stop matching name-for-name between the pull and the push
-      # build (gate G2). What is push-only is what they assert about: MGPipeRenderStateSpans.cpp
-      # and PipeApply.cpp are appended to SOURCE_FILES inside the `if (MOBILEGL_PIPE_PUSH)` block,
-      # which is exactly how the pull build stays symbol-identical, so in a pull build each case
-      # opens with `#if !MOBILEGL_PIPE_PUSH GTEST_SKIP() << "push not compiled in"`. The `test`
-      # job therefore runs G6's chunk-table walk and G10's residual assertions as a column of
-      # skips: CI executes the NAMES and never one of the assertions. This job unpacks a build
-      # that compiled them, so it is the first place in CI where they actually run.
-      #
-      # This artifact already carries them - the packaging step above tars
-      # ${BUILD_DIR}/MobileGL/MG_Test whole - so the whole cost is the run, which is ~14 s for
-      # ~1490 entries. --no-tests=error, because a packaging change that stopped shipping the
-      # unit binaries would otherwise report a green run of nothing.
+      # The unit suite again, on the verify library: cases compiled only under MOBILEGL_PIPE_VERIFY
+      # skip in the `test` job's build and assert only here, as do poison-gated cases on branches
+      # where that build is a monolith. The packaging step above ships MG_Test whole, so the cost
+      # is the run itself. --no-tests=error, so a packaging change that dropped the unit binaries
+      # fails here instead of passing with nothing run.
       - name: Unit tests on the verify runtime (G6, G10)
         working-directory: build-verify
         run: ctest --output-on-failure -L unit --no-tests=error -j "$(nproc)" --output-junit "${RUNNER_TEMP}/unit-verify.xml"
 
-      # The always-on P2 and P3a negative controls (G8, G10, G12), which are labelled
-      # integration-gpu and not integration-verify - they are about the handle key, the subsystem
-      # switch and the map-persistent counter, not about the comparator - so the lane above does
-      # not reach them. They are run HERE because this is the only CI job that unpacks a
-      # MOBILEGL_PIPE_PUSH build: every one of them reads a counter out of the library's summary
-      # line, and both the counters and their brackets are #if MOBILEGL_PIPE_PUSH, so in the pull
-      # `integration` job the entries exist (gate G2 requires the same names in both builds) but
-      # have nothing to assert.
-      #
-      # An arm whose subsystem has not landed on this tree SKIPS with the reason (never absent,
-      # never a green that asserted nothing), so this step is green through the P2 and P3a landing
-      # orders and starts asserting as each package arrives.
-      #
-      # The environment is the sibling step's, deliberately and in full: these entries run the
-      # same DirectVulkan binary through the same runner, so the three MOBILEGL_MAGMA_* fixes it
-      # needs apply here too, and a crash here has to leave a core for the same black-box flow.
-      # The step above is the only reason those lines exist in this job; a control that crashed
-      # without one would be the hardest failure in the job to diagnose.
-      #
-      # THE -R ALTERNATIVES ARE TEST-NAME PREFIXES, NOT LANE LABELS, and each one is deliberately
-      # the SHORTEST string that still selects only what it means to. `ResourceSubsystem` (not
-      # `ResourceSubsystemControl`) is what reaches the eight
-      # DirectGLES.ResourceSubsystemOn./Off.LargeArenaAdoptionScenario.* entries - the A/B lanes
-      # whose entire purpose is that the handle path and the legacy BufferBackendOps path must
-      # agree about an adopted store - as well as the two ResourceSubsystemControl. entries.
-      # `MapPersistentRoundtrip` is singular because LargeArenaAdoptionScenario's case is
-      # `AnAdoptionCostsExactlyOneMapPersistentRoundtrip`; the plural matched only the lane PREFIX
-      # of the other one. Both mistakes were silent: this is the only CI job that unpacks a push
-      # build, so an entry the filter misses is either never run under the P3a bits at all or runs
-      # only in the pull `integration` job, where a MOBILEGL_PIPE_PUSH value steers nothing
-      # (Config.h declares the field inside the push guard) and both arms are the same legacy path.
-      # A lane that cannot go red where it is installed is not a gate (ARCHITECTURE.md §13.2).
-      # P4a ADDS THREE ALTERNATIVES, and each one is here because this is the only CI job that
-      # unpacks a push build:
-      #   * `ObjectSubsystem` reaches the three DirectGLES.ObjectSubsystemControl. entries - the
-      #     0x1fff-vs-0x1ff A/B and the 0x9ff dependency refusal (G12). `ResourceSubsystem` does
-      #     NOT match it: the two families are named apart on purpose, because they are different
-      #     phases' switches and a filter that merged them would hide one behind the other.
-      #   * `TextureParamsWithoutASamplerView` reaches G9's four cases, the scenario the phase's acceptance gate
-      #     names by hand. It runs in the ambient lanes, which the label already selects - but this
-      #     step is where those cases run against a PUSH library, and G9's whole claim is about the
-      #     push path. All four cases are green on the contract commit - including the one D-E3
-      #     expected to be red, for the reason the scenario's header records - so this row is green
-      #     from the day it lands and goes red only if a reachability path stops syncing texture
-      #     parameters at all, which is the coupling ARCHITECTURE.md §3.2 exists to remove.
-      #   * `TextureUploadShape` is RECORDED, not gated (D-D4): it asserts that the two upload-shape
-      #     counters could be read and that they agree, and prints the shape for MEASUREMENTS.md. It
-      #     is in the filter so that the number is actually collected on every run - an unmeasured
-      #     shape is not a recorded one - and because its own assertions can go red.
-      # As with the four before them, each alternative is the SHORTEST string that selects only what
-      # it means to.
-      # Handle-ABA, CSO, subsystem and texture-parameter controls (G8, G8b, G9, G10, G12).
+      # Handle-ABA, CSO, subsystem-mask and texture-parameter controls, rerun on the verify library.
+      # They carry integration-gpu, not integration-verify, so the verify lane misses them.
+      # Each -R alternative is a test-name substring, the shortest that selects only its family:
+      # `ResourceSubsystem` also reaches the LargeArenaAdoption lanes and the mask refusals,
+      # `MapPersistentRoundtrip` is singular so it matches the case name as well as the lane prefix,
+      # and `ObjectSubsystem` and `ResourceSubsystem` stay distinct families. TextureUploadShape
+      # records the upload shape; it fails only when its two counters are unreadable or disagree.
       - name: Push-build controls (G8, G8b, G9, G10, G12)
         working-directory: build-verify
         env:
@@ -1143,34 +1087,14 @@ jobs:
           fi
           echo "the corrupted field turned ${matched} selected split entries red, as it must"
 
-      # NEGATIVE CONTROL A ON THE OTHER COMPARATOR (P7 wave 3, V1). The step above proves the
-      # ENTRY compare - client thread, verb boundary, `where=entry`. The compare-at-read hook runs
-      # on the SERVER's apply thread at every backend read and is the only comparator that arm ever
-      # runs, and until MG_Impl/Pipe/PipeFill.cpp's hook honoured MOBILEGL_PIPE_VERIFY_CORRUPT it
-      # had no control at all: a hook that had stopped comparing was indistinguishable from a hook
-      # with nothing to report.
-      #
-      # NOT THE "ctest MUST FAIL" SHAPE, and the reason is mechanical rather than a preference:
-      # GetPixelStoreParameters is in kReadback's fill mask, so with MOBILEGL_PIPE_VERIFY_FATAL at
-      # its default the client's entry compare aborts the process at the ReadPixels boundary and
-      # the server never reaches the read. The entries therefore pin FATAL=0, survive their own
-      # divergence, and each asserts from inside the process that the SERVER role's half of its
-      # private log carries the report. This step re-reads those logs from outside, so the claim
-      # does not rest only on the assertion that produced them.
-      #
-      # AND IT COUNTS, NEEDING TWO (V1 fix round 2). The server reads the pack field twice inside
-      # the ReadPixels window - PipeApplier::read_pixels saves the application's pack before it
-      # installs the neutral one, the backend's ReadPixels reads it after - and the hook perturbs
-      # its oracle once per read, because the ID-49 overwrite inside the window wipes the first
-      # perturbation before the second read's compare. A step satisfied by ONE line was satisfied
-      # by either perturbation alone and falsified neither. Measured at landing: 3 (DirectGLES,
-      # whose backend reads the field twice after the install) / 2 (DirectVulkan); without the
-      # re-applied perturbation both drop to 1, without the first one DirectVulkan drops to 1
-      # while DirectGLES stays at 2 - so BOTH backends are required, and the first perturbation's
-      # falsifier is the DirectVulkan entry.
-      #
-      # THE GREEN HALF is the lane run above: the same hook, the same window, with no corruption
-      # armed, across 1070 entries at zero divergences.
+      # Negative control for the compare-at-read hook, which the server's apply thread runs at each
+      # backend read; the step above covers only the client's entry compare. The entries pin
+      # MOBILEGL_PIPE_VERIFY_FATAL=0, or the client's entry compare would abort at the ReadPixels
+      # boundary before the server reads. This step re-reads each server log and needs two
+      # `where=read` reports per backend: the server reads the pack field twice in the ReadPixels
+      # window (the saved pack, then the backend's read under the neutral pack), and each read must
+      # catch its own perturbation. PipeVerifyArmingScenario.CorruptedFieldIsReportedOnTheServerRead
+      # has the details, including why both backends are needed.
       - name: Negative control A (server-side read)
         working-directory: build-verify-split
         env:
@@ -1408,26 +1332,13 @@ jobs:
           fi
           echo "libMobileGL.so defines ${remote} MG_Remote symbol(s) and the MGPipe applier (${defined} defined symbols)"
 
-      # The link-closure ratchet (CONTRACT-P6.md 12.1, ID-P7-7): the set of frontend symbols a
-      # server-only image would still have to link, recomputed from the per-object partition in
-      # scripts/link_ratchet.py and compared against the stored LIST.
-      #
-      # THIS job and not `build-linux`: build-linux passes the same three options from
-      # ${MOBILEGL_CI_DISAGGREGATED}, which is ON only on feat/disaggregated, cleanup and
-      # codex/fix-github-ci, so on every other branch it builds a monolith - MG_Remote would not
-      # be compiled at all, the SERVER half of the partition would be empty, and the gate would
-      # go green having measured nothing. This job turns the three options on unconditionally,
-      # and the nm step immediately above has just proved they took. The script re-reads them
-      # from CMakeCache.txt anyway and refuses the run if they are not all ON.
-      #
-      # Only NEW symbols fail. A symbol that has DISAPPEARED is the ratchet turning and is
-      # printed with an instruction to re-baseline in the same commit - the baseline stores the
-      # list rather than a count precisely so that clearing one symbol while adding another does
-      # not walk through at an unchanged total (ID-P7-7).
-      #
-      # It reads the per-object output of the MobileGL target, so it must run before anything
-      # that cleans the build tree; the packaging step below excludes *.o from the tarball but
-      # does not delete them.
+      # Server link-closure ratchet (ARCHITECTURE.md §13.2): scripts/link_ratchet.py recomputes
+      # from the per-object partition the frontend symbols a server-only image still has to link
+      # and compares the list with the stored baseline. Only new symbols fail; a vanished one is
+      # printed with a request to re-baseline in the same commit. The baseline is a list, not a
+      # count, so swapping one symbol for another fails. It runs here, not in build-linux, because
+      # this job always builds MG_Remote (the script re-checks CMakeCache.txt), and before anything
+      # deletes the *.o files it reads.
       - name: Server link-closure ratchet
         run: |
           mkdir -p ci-artifacts
@@ -1567,23 +1478,11 @@ jobs:
           MOBILEGL_ITEST_REQUIRE_GPU: "1"
         run: ctest --output-on-failure -L unit --no-tests=error -j "$(nproc)" --output-junit "${RUNNER_TEMP}/unit-split.xml"
 
-      # P7 wave 2-F, PH-7 (1). THE TCP SUPERVISOR LANE NEEDS flatc, AND CI HAD NONE.
-      #
-      # `TcpLane.SupervisorProtocolControls` carries LABELS integration-tcp, so it has been in the
-      # selection below since wave 0 - as a SKIP, every run. The script builds the protocol's
-      # Python bindings with flatc, flatc is deliberately absent from the build graph
-      # (gen_protocol.py's header says why), and with none found it exits 77 and ctest reports
-      # the entry skipped. Skipped is what the entry looked like for the whole time it did not
-      # exist, which is the failure mode the plan's own row named ("referenced by NOTHING").
-      #
-      # So the job builds the SAME pinned flatc that flatc-check builds, from the same submodule,
-      # and the lane step below names the entry to junit_tally.py --require-entry-passed. If the
-      # build ever stops producing one, the lane reds by name rather than going green having run
-      # the supervisor's Busy / token / listen / version / build-policy / reap controls zero times.
-      # --check is passed so this step cannot quietly regenerate a different committed header;
-      # keeping that honest is flatc-check's job and this step must not overlap with it.
-      # P7 F2: `TcpLane.ControlFrameFuzz` (Ph fuzz arm 1, scripts/ci/ph_fuzz_control_frames.py)
-      # needs the same flatc and is required PASSED by name on the same junit_tally line.
+      # TcpLane.SupervisorProtocolControls and TcpLane.ControlFrameFuzz build the protocol's Python
+      # bindings with flatc, and without one they exit 77 and ctest reports a skip. flatc is not in
+      # the build graph (see gen_protocol.py), so this builds the same pinned flatc as flatc-check,
+      # and the lane step requires both entries PASSED by name through junit_tally.py. --check keeps
+      # this step from regenerating the committed header; checking that header is flatc-check's job.
       - name: Check out FlatBuffers (TCP lane)
         run: git submodule update --init 3rdparty/flatbuffers
 
@@ -1692,36 +1591,12 @@ jobs:
           fi
           echo "the split lane resolved MOBILEGL_TRANSPORT=inproc"
 
-      # EXIT GATE E1's NEGATIVE CONTROL and EXIT GATE E3(a)'s, in one step because they have the
-      # same two-state shape and the same reason for it.
-      #
-      # Both controls turn a knob that MUST make a split scenario red: MOBILEGL_IPC_VERB_BARRIER=0
-      # removes the lockstep fence R-1 rests on, and MOBILEGL_IPC_PERSISTENT_BLOCK_KB=0 turns the
-      # persistent-map push off. A control of the verify lane's shape - "this step passes when
-      # ctest FAILS" - cannot be written yet, because while packages c1/s1/v1 are landing the
-      # Split entries SKIP and ctest reports green whatever the knob says, so an unconditional
-      # control would be red for the whole of P5 for a reason that is not a defect.
-      #
-      # So the expected state is DERIVED FROM BEHAVIOUR rather than assumed. The first version read
-      # MGITEST_REMOTE_CLIENT_PRESENT out of the generated *_tests.cmake, which was a restatement of
-      # the CMake source probe review finding M-1 falsified; the arming condition is a runtime fact
-      # inside each test process (MG_Config::Transport, ClientSession::Active() and
-      # ImplementedVerbCount(), read by Harness/SplitRuntimePeek), so the only honest way to ask it
-      # from a shell is to look at what the entries DID. When entries passed, the controls MUST
-      # fire; when every one of them skipped, the step says so loudly and does not pretend.
-      #
-      # THE BODY OF THIS STEP IS scripts/ci/split_negative_controls.sh, and the move is the point
-      # rather than tidiness. A `run:` block executes nowhere but on a runner, so these lines were
-      # unreviewable and untestable: when the wave-1 cross-family review said they were broken,
-      # CONFIRMING it needed a hand-made copy of them (wave1-codex-verify.md 8), and a copy is not
-      # the thing. scripts/ci/control_smoke_test.sh now drives the very file this step runs.
-      #
-      # What that smoke test pins, and what ID-46 finding 8 found missing: each control asserts its
-      # OWN failure reason. A non-zero ctest exit used to be enough, so a timeout, a setup abort or
-      # any unrelated assertion printed "turned N selected entries red, as it must" and this step
-      # went green. The arming run's `|| true` had the matching defect - it counted a case that ran
-      # and FAILED as evidence the lane was live, so the controls could be measured against a
-      # baseline that was already red.
+      # Negative controls for the verb barrier (MOBILEGL_IPC_VERB_BARRIER=0) and the persistent-map
+      # push (MOBILEGL_IPC_PERSISTENT_BLOCK_KB=0): each knob must turn its selected entries red.
+      # The body is scripts/ci/split_negative_controls.sh, so scripts/ci/control_smoke_test.sh can
+      # run the same lines off a runner. It needs a green baseline with at least one passed entry,
+      # and accepts a red only when it carries the control's own diagnostic, so a timeout, a setup
+      # abort or an unrelated failure never counts.
       - name: Negative controls (barrier, map push)
         if: ${{ !cancelled() }}
         working-directory: build-split
@@ -1821,23 +1696,14 @@ jobs:
           MOBILEGL_IPC_STRICT_ERRORS: "1"
         run: ctest --output-on-failure -L unit --no-tests=error -j "$(nproc)" --output-junit "${RUNNER_TEMP}/unit-strict.xml"
 
-      # ---- P5e (ra), docs/archive/contracts/CONTRACT-P5E.md §7: ONE STEP, TWO ARMS, AND THE TREE PICKS ----
+      # ---- Strict split lane: residual pulls under MOBILEGL_IPC_STRICT_ERRORS=1 ----
       #
-      # This lane was written as an EXPECTED-RED control: under strict every integration-split
-      # entry aborts on its first BARRIER-PULLED read, so the step gated on the run failing and
-      # on the strict marker being the reason. P5e turns it into a HARD GREEN GATE - once the
-      # client runs ahead, an unbarriered record's pull is a Fatal whatever this knob says
-      # (§3.3), so what strict adds is only the BARRIERED rows' pulls, and those are a short,
-      # named list. A revert of any handle arm in vi/sb/pg/tx2/fb then goes red HERE, by field
-      # and verb, instead of in a picture nobody diffs.
-      #
-      # THE ARM IS CHOSEN BY THE TREE, NOT BY A SECOND EDIT. kMGPipeP5eRunAheadReady in
-      # MG_Backend/Init.cpp is the one constant the integration commit flips, and it is exactly
-      # the fact this lane's expectation depends on: with it false no server publishes
-      # kCapRunAheadApply, every record is barriered, every scenario still aborts on its first
-      # pull and the expected-red control is the honest gate. Reading it here means the lane
-      # changes meaning in the same commit the runtime does - a lane whose flip is a separate
-      # human step is a lane that is wrong for as long as that step is outstanding.
+      # An unbarriered pull is always fatal, and strict also stops any barriered pull that is not
+      # admitted (ARCHITECTURE.md §9.2.1). The arm comes from kMGPipeP5eRunAheadReady in
+      # MG_Backend/Init.cpp, so the expectation changes in the commit that changes the runtime. When
+      # true (run-ahead), the lane must be green and its markers must match the admitted list and
+      # strict-expected-markers.txt; when false, every record is barriered, the lane must be red
+      # (strict aborts every drawing entry), and only the marker census is checked.
       - name: Strict split lane
         working-directory: build-split
         env:
@@ -1912,64 +1778,23 @@ jobs:
             exit 1
           fi
 
-          # THE ADMITTED MARKERS COME FROM THE GENERATOR, NOT FROM THIS FILE (ID-116).
-          #
-          # A hand-kept copy of §7 lived here for one round and was wrong in BOTH directions at
-          # once: it omitted GetFramebufferBindingSlot@ReadPixels - 21 entries, the largest
-          # survivor in the lane - and it carried GetTextureObject@CopyImageSubData, which
-          # nothing made safe, because resource_copy_region is kWaitNone. Neither error is
-          # visible by reading the list; both are obvious the moment the list is DERIVED.
-          #
-          # The rule is ID-84 said in tables that already exist (ID-116, refined by ID-125): a
-          # <field>@<verb> pull is admitted iff the field's ownership row is BARRIER_PULLED, the
-          # verb has a stamp row, the field is inside the verb class's may-read mask, and EITHER
-          # the verb's wire op is statically barriered (kMGPipeWaitClasses != kWaitNone, i.e. the
-          # client really is parked behind the record) OR the field's retiring phase does not
-          # name P5e. The second disjunct is the honest reading of ID-84: this comparison only
-          # ever sees pulls on records the server stamped BARRIERED - an unbarriered one aborts
-          # before any of this - so the pull is legal by construction and the only question left
-          # is whether THIS phase still owes the migration. Without it the lane would go red on
-          # GetTransformFeedbackProgram@DrawArrays, a row CONTRACT-P5E §5.7 rules out of P5e
-          # entirely and no package here is allowed to touch.
-          # `--print-admitted` prints exactly the table MGPipeBarrierPullAdmitted() answers
-          # from, so this shell and the C++ cannot drift: retiring a verb's wait class narrows
-          # the lane with no edit here, and a new BARRIER_PULLED row widens it only on verbs
-          # that wait.
-          # THE RATCHET, BOTH SIDES (ID-119). `no-fatal` is what makes this arm the hard gate:
-          #   - any Fatal marker fails;
-          #   - an ADMITTED marker outside the generated allowlist fails, which can only mean the
-          #     committed PipeFieldOwnership.inc and the generator disagree;
-          #   - a pair that appears and is not in strict-expected-markers.txt fails: it is a debt
-          #     somebody now owes and it gets written down with the phase that retires it;
-          #   - AND a pair in that file that no longer appears fails, so the lane CANNOT ROT
-          #     GREEN. Without that half, a retired debt leaves its row behind as a permanent
-          #     licence and the next regression to re-introduce the read reads as "expected".
-          # ADMITTED-ESCALATED markers are checked against the expected set but NOT against the
-          # allowlist: they are a runtime fact about the record's payload (an open XFB span, a
-          # draw carrying client vertex arrays) that no table indexed by (field, verb) can carry,
-          # and widening the static list to hold them would forgive the ordinary draw path too.
+          # The admitted pairs come from gen_pipe_field_ownership.py --print-admitted, the table
+          # MGPipeBarrierPullAdmitted() reads, so this list and the C++ cannot drift. A pair is
+          # admitted when its verb has a stamp row, the field is BARRIER_PULLED and in the verb's
+          # may-read mask, and either every wire op stamping the verb waits or the field's retiring
+          # phase is not the generator's THIS_PHASE. The census fails on an admitted marker outside
+          # that list and on any difference from strict-expected-markers.txt in either direction;
+          # `no-fatal` adds any Fatal marker. Escalated markers depend on the record's payload (an
+          # open XFB span, client vertex arrays), so they are checked only against the expected set.
           python3 "${helper}" markers "${RUNNER_TEMP}/lane.json" '.' \
             "${RUNNER_TEMP}/allowed.txt" "${expected}" no-fatal
 
-          # `rsp`, AND THE PIN THAT REPLACED A VACUOUS ONE (ID-119). What stood here was a grep
-          # for `rsp=` over split-logs/ - a counter no entry in that directory emits, because
-          # PipeStats is off unless a lane asks for it - testing a sentence that was true of every
-          # possible implementation: CountBarrierPull's unbarriered arm is [[noreturn]] and runs
-          # BEFORE ++g_residualPulls, so an unbarriered pull can never reach the counter whatever
-          # the code does. It has been replaced by an assertion inside a lane entry that actually
-          # counts: DirectGLES.Split.StrictArming., which runs with MOBILEGL_PIPE_STATS=1,
-          # MOBILEGL_PIPE_STATS_PERIOD=1 and a private log path of its own (a whole-lane env flip
-          # races under -j, since the library opens that path "w"), and asserts
-          #   vbs > 0    - the server stamped a verb boundary on a DRAWING inproc entry, which is
-          #                ID-115's positive control: everything strict checks is downstream of
-          #                that stamp, and before it existed "the lane is green" and "strict was
-          #                never armed" were the same observation;
-          #   rsp == 0 or rsp >= draws - the checkable shape of the debt. While the draw path's
-          #                pull is unretired every draw pulls, so rsp scales with draws; the
-          #                retirement is visible as rsp ceasing to scale. That is what the device
-          #                measured (rsp ~= the draw count under inproc, 0 under monolith).
-          # So the assertion lives where the counter is, and this step only has to insist the
-          # entry RAN - a positive control that can be skipped away is not one.
+          # Arming proof: DirectGLES.Split.StrictArming. runs with MOBILEGL_PIPE_STATS=1 and a
+          # private log and asserts, over one drawing frame, that the server stamped a verb
+          # boundary (vbs > 0) and that no residual pull happened (rsp == 0). Only that entry
+          # enables PipeStats, so the counters are checked there, not grepped from these logs; rsp
+          # counts only barriered pulls, as an unbarriered one aborts before CountBarrierPull.
+          # This step only requires that the entry ran: a skipped positive control proves nothing.
           if ! grep -q 'DirectGLES\.Split\.StrictArming\.' "${RUNNER_TEMP}/strict-split.txt"; then
             echo "::error::the strict lane did not run DirectGLES.Split.StrictArming., so nothing in this run proves the server ever stamped a verb boundary. A green lane without it is indistinguishable from a lane where strict was never armed (ID-115)."
             exit 1
@@ -2091,26 +1916,12 @@ jobs:
         run: |
           ctest -L integration-magma-split --no-tests=error -j 2 --output-on-failure
 
-      # ---- P7 PACKAGE L: THE SAME MAGMA CASES IN TWO PROCESSES -----------------------------
-      #
-      # EXIT GATE 1's FIRST HALF, and until this package there was nothing to run: every arm of
-      # the split registration macro hardcoded MOBILEGL_BACKEND_TYPE=DirectGLES, so the shared
-      # `integration-split` / `-spawn` / `-tcp` labels held ZERO DirectVulkan entries and
-      # `integration-magma-split` was inproc by construction. These two lanes are the same
-      # scenarios the step above runs, with the transport as their one difference - so a red
-      # here that the step above did not see is a TWO-PROCESS fact and not a Magma one.
-      #
-      # THEY ARE GATED BECAUSE THEY MEASURED GREEN, and only for that reason: 52 of 52 entries
-      # on each arm, with the two ClipDistance cases skipping for the reason the inproc arm's
-      # allowlist already names. The 21 entries the inproc arm has and these do not are
-      # MagmaRunAheadScenario and MagmaWireCacheScenario, which are inproc-only BY
-      # CONSTRUCTION (they hold and peek THIS process's server loop); the CMakeLists and
-      # spawn_lane_parity.py both name them rather than widening a tolerance.
-      #
-      # THE INFORMATIONAL TIER - `integration-magma-all-{split,spawn,tcp}`, every scenario the
-      # split arms run, on Magma - IS DELIBERATELY NOT HERE. Its job is to be able to go red
-      # while CI stays green; a case moves into a gating step with the commit that retires its
-      # blocker.
+      # The Magma scenarios of the step above over the spawn and TCP transports, so a failure here
+      # that the inproc step did not show is a two-process fact, not a Magma one. Entries that can
+      # run only inproc (such as those that peek this process's server loop) are listed in
+      # spawn_lane_parity.py's MAGMA_INPROC_ONLY. The informational tier,
+      # integration-magma-all-{split,spawn,tcp}, is not gated: it may go red while CI stays green,
+      # and a case moves into a gating step once its blocker is fixed.
       - name: Magma spawn and TCP lanes
         working-directory: build-split
         env:
@@ -3190,29 +3001,13 @@ jobs:
             build-retrace/tools/trace_replay/${{ matrix.case }}/${{ matrix.backend }}/output/**
           if-no-files-found: warn
 
-  # The retrace arm of the split shape: retrace-verify with MOBILEGL_PIPE_VERIFY=1 swapped for
-  # MOBILEGL_TRANSPORT and the comparator's symbol swapped for an MG_Remote one. Exit gate E2 is
-  # one row - OpenRA at SSIM >= 0.99 - but the lane is no longer one row: as of P6 it is
-  # {backend, case, transport} over the whole CI matrix, both backends, inproc AND spawn.
-  #
-  # inproc IS THE CONTROL AND SPAWN IS THE CLAIM. Same library, same codec, same applier, same
-  # picture; the only difference is which PROCESS the server role runs in. Running only spawn
-  # would leave "did the transport break it?" and "did the phase break it?" answerable only
-  # together, which is the question every failure in this phase turned out to hinge on.
-  #
-  # IT RUNS THE UNCHANGED CTEST NAMES with the transport exported in the JOB environment, rather
-  # than the SPLIT-suffixed variant entries. build-retrace configures without
-  # -DMOBILEGL_BUILD_DISAGGREGATED, so the variant entries are deliberately not registered there
-  # (a name that says SPLIT in a build that cannot be one is worse than no name), and the
-  # unchanged names are what retrace-verify already proves this shape works with. The variant
-  # entries exist for a build that DOES configure the option - a local build-split with trace
-  # replay on - where `ctest -L retrace-split` is self-describing and needs no environment ritual.
-  #
-  # WHAT MAKES IT FALSIFIABLE is not the SSIM. A monolith run of OpenRA also scores 1.000: measured
-  # on this branch, a pull library under MOBILEGL_TRANSPORT=inproc produced ssim=1.0 and was caught
-  # only by run_trace_case.cmake's transport-resolution assertion. So there are two guards, and the
-  # SSIM is neither of them: the nm check below (this library carries MG_Remote) and the
-  # transport-resolution line in the library's own log (this PROCESS resolved inproc).
+  # Trace retrace on the split library: the retrace-verify shape with MOBILEGL_TRANSPORT set
+  # instead of MOBILEGL_PIPE_VERIFY, over {backend, case, transport} with inproc and spawn.
+  # inproc is the control and spawn the claim: same library and picture, only the server role's
+  # process differs, so a spawn-only failure is a transport fact. It runs the unchanged ctest
+  # names with MOBILEGL_TRANSPORT exported around ctest, since build-retrace does not register the
+  # split variant entries. SSIM cannot catch a monolith run (OpenRA scores 1.000 either way); the
+  # guards are the nm check for MG_Remote and run_trace_case.cmake's transport-resolution check.
   retrace-split:
     name: retrace split (${{ matrix.backend }} / ${{ matrix.transport }}, ${{ matrix.case }})
     runs-on: ubuntu-latest
@@ -3400,39 +3195,13 @@ jobs:
           ctest -V --no-tests=error --timeout 10800 \
             -R '^MobileGLTraceReplay\.${{ matrix.case }}\.${{ matrix.backend }}$'
 
-      # THE RETRACE LANE'S OWN ALWAYS-ON NEGATIVE CONTROL, and its absence was review finding M-6:
-      # this job was a clone of retrace-verify with the one step removed that makes the lane mean
-      # anything. retrace-verify's "Negative control (corrupted snapshot)" step requires a corrupted
-      # snapshot field to red the retrace, so that "79 traces, zero divergences" is not a statement
-      # about a comparator nobody watched; the same reasoning applies here word for word.
-      #
-      # The control swaps the PULL library into the frozen path and requires the SAME replay to
-      # fail. It is the sharpest one available, because OpenRA scores ssim 1.000000 either way -
-      # measured - so this step fails if and only if run_trace_case.cmake's transport-resolution
-      # assertion has stopped working, which is the single thing standing between this job and a
-      # green that ran monolith end to end.
-      #
-      # NOT the control BRIEF 7 E2 names ("patch the Clear emitter to drop one emission; SSIM must
-      # fall below threshold"). That one needs an emitter, i.e. package c1, and it is carried as an
-      # explicit debt in t1-v1.md rather than silently substituted - which is what the first
-      # version of this package did.
-      #
-      # The rerun replays into the same case directory, so the good run's images are put aside and
-      # restored whichever way the control goes; "Upload actual image" below runs `if: always()`
-      # and would otherwise ship the deliberately-wrong run's output under the good run's name.
-      # THE BODY OF THIS STEP IS scripts/ci/retrace_transport_control.sh, for the reason the
-      # split lane's control gives: a `run:` block cannot be executed off a runner, so these lines
-      # could not be tested until they ran in CI. scripts/ci/control_smoke_test.sh drives that file.
-      #
-      # Two holes ID-46 finding 8(b) found in this block, both CONFIRMED against the REAL ctest in a
-      # REAL build tree, both closed in the script: it had NO selection guard at all - unlike the
-      # split lane's run_control - so a case/backend regex matching nothing exited 8 through
-      # `--no-tests=error` and was read as "the pull library turned it red"; and only "non-zero
-      # ctest" was checked after the nm identity check, so a loader failure, a missing fixture or a
-      # timeout passed it. The red must now carry run_trace_case.cmake's own sentence.
-      # P13 W2: THE LIBRARY IS THE PUSH MONOLITH WITHOUT MG_Remote (the shape FCL embeds); until W2 it
-      # was the pull build, run side by side with this one for a wave (W1) to show both red here for
-      # the same sentence. What makes the library red is that it has no transport, not that it pulls.
+      # Negative control: copy a library without MG_Remote (the push monolith FCL embeds) over the
+      # frozen path and require the same replay to fail. OpenRA scores ssim 1.000 either way, so
+      # the picture cannot catch the swap; this proves that run_trace_case.cmake's
+      # transport-resolution check still does. The body is scripts/ci/retrace_transport_control.sh,
+      # which control_smoke_test.sh runs off a runner. It counts the selection first, requires the
+      # red to carry run_trace_case.cmake's own sentence, and restores the split library and the
+      # good run's images, since "Upload actual image" runs `if: always()`.
       - name: Negative control (library without a transport)
         working-directory: build-retrace/tools/trace_replay
         env:
@@ -3447,23 +3216,12 @@ jobs:
           bash "${GITHUB_WORKSPACE}/scripts/ci/retrace_transport_control.sh"
           '${{ matrix.case }}' '${{ matrix.backend }}'
 
-      # EXIT GATE E2's OTHER HALF, and the one BRIEF-P5 §7 E2 actually names: "drop an emission
-      # and the SSIM must fall below the threshold". The control above proves the lane runs a
-      # SPLIT library; it cannot prove the PICTURE came through the wire, because OpenRA scores
-      # ssim 1.000000 against a monolith library too and the transport assertion is what reds it.
-      #
-      # It drops the DRAWS and not the clears, and that is a measurement rather than a
-      # preference: with MOBILEGL_IPC_E2_DROP_CLEAR=1 armed, read, and all 29 of OpenRA's Clear
-      # records dropped, the retrace still scored ssim=1.000000 / mismatchPixels=0 - OpenRA
-      # overdraws every pixel it clears before the snapshot (joint-v1.md §3 found the green;
-      # scripts/ci/retrace_drop_draw_control.sh's header has the trace census that explains it).
-      # With the DrawVbo records dropped instead: 758 dropped, ssim=0.000036,
-      # mismatchPixels=295296.
-      #
-      # THE BODY IS A SCRIPT for the reason the two steps above give: a `run:` block cannot be
-      # executed off a runner, and scripts/ci/control_smoke_test.sh drives this file against a
-      # stubbed ctest in seven modes - including the two that matter most, a red whose SSIM never
-      # fell and a knob that armed and dropped nothing.
+      # Negative control for the picture: the step above cannot show that the image came through
+      # the wire, because OpenRA also scores ssim 1.000 on a monolith library. This drops the
+      # DrawVbo records and requires the SSIM to fall. Dropping clears does not work: OpenRA
+      # overdraws every pixel it clears (retrace_drop_draw_control.sh's header has the census).
+      # The body is a script so control_smoke_test.sh can run it against a stubbed ctest, including
+      # a red whose SSIM never fell and a knob that armed but dropped nothing.
       - name: Negative control (dropped draws)
         working-directory: build-retrace/tools/trace_replay
         env:
@@ -3682,66 +3440,32 @@ jobs:
           fi
           echo "no fprintf(stderr/stdout / printf( / puts( / std::cout|cerr under MobileGL/MG_Backend or MobileGL/MG_State"
 
-      # A GATE as of P2, which is when MG_Pipe/DirtySurface.def exists to diff the scan against
-      # (the first mapping round was part of that phase's deliverable). --check fails BOTH directions: a
-      # mutator the scanner finds with no row in the def, and a row naming a mutator the scan no
-      # longer finds - so a deleted mutator cannot leave a stale row behind claiming coverage.
-      #
-      # --self-test is the half that keeps --check honest, and it is not optional. A completeness
-      # check that silently stopped checking produces exactly the same green as a complete
-      # mapping; the self-test feeds it two canned negative controls (a mutator withheld from the
-      # def, a row naming a function that does not exist) and fails if either fails to trip. Same
-      # shape as gen_pipe.py --self-test and check_include_closure.py above.
-      #
-      # What this gate does NOT cover is written into DirtySurface.def's header rather than left
-      # implicit: the scanner attributes a mutation inside a lambda to the enclosing function,
-      # reads a mutation published through a helper as deferred, and scans only MG_Impl/GLImpl -
-      # so the four MGP_NOTE_MUTATION sites in MG_State are outside it entirely. This is a
-      # completeness gate over what the scanner can see; the semantic proof is the verify lane.
+      # Dirty-surface completeness (ARCHITECTURE.md §5.2.1). --check fails in both directions: a
+      # mutator the scanner finds with no row in MG_Pipe/DirtySurface.def, and a row naming a
+      # mutator the scan no longer finds. --self-test feeds canned negative controls and fails if
+      # one does not trip, so a check that stopped checking cannot stay green. The scanner matches
+      # text; the semantic proof is the verify lane.
       - name: Dirty-surface mapping complete (G9)
         run: |
           python3 scripts/gen_pipe_dirty_surface.py --check
           python3 scripts/gen_pipe_dirty_surface.py --self-test
 
-      # A GATE as of P5 (R-7.1, CONTRACT-P5.md table 2). The eighth generator, and the only one
-      # whose output the step above cannot cover: `gen_pipe.py` does not write
-      # PipeFieldOwnership.inc, so regenerating the seven and diffing MG_Pipe/generated leaves a
-      # drifted ownership table green. The build-level static_assert only catches an
-      # UNCLASSIFIED row; a hand edit that CHANGES a class compiles clean, and --check is the
-      # only thing in the tree that catches it.
-      #
-      # NO BRANCH GUARD, deliberately, unlike the two G5 steps below: this asks "does the
-      # committed table still follow from the .def files", which is a question every branch can
-      # answer and every branch wants answered. The table outlives feat/disaggregated.
-      #
-      # --self-test is not optional, for the reason the two gates above give and for one this
-      # generator learned the hard way: its first version counted eleven trips when one control
-      # was a silent duplicate of another, because the harness asked "did something exit" rather
-      # than "did THIS exit". Every control now asserts its own message, and a harness control
-      # asserts that the harness still rejects someone else's exit.
+      # PipeFieldOwnership.inc is written by gen_pipe_field_ownership.py, not gen_pipe.py, so the
+      # gen_pipe.py regenerate-and-diff step above does not cover it. The build's static_assert
+      # catches only an unclassified row; --check also catches a changed class. No branch guard:
+      # every branch needs the committed table to follow from the .def files. Each --self-test
+      # control asserts its own message, and a harness control checks that one control's exit is
+      # never credited to another.
       - name: Field-ownership table complete (R-7.1)
         run: |
           python3 scripts/gen_pipe_field_ownership.py --check
           python3 scripts/gen_pipe_field_ownership.py --self-test
 
-      # R-16 APPLIED TO THE NEGATIVE CONTROLS THEMSELVES. The split lane's E1/E3(a) controls and the
-      # retrace lane's pull-library control are gates, and until ID-46 finding 8 neither could be
-      # made red by anyone: their bodies were `run:` blocks, which execute only on a runner. Both
-      # bodies now live in scripts/ci/, and this step runs them against a stubbed ctest that
-      # reproduces the finding - a NON-EMPTY selection failing with UNRELATED_CONTROL_FAILURE, and a
-      # case/backend regex matching no tests - and requires each control to report FAILED. The same
-      # stub, failing with the diagnostics the scenarios really emit, must make them report PASSED.
-      #
-      # NO BRANCH GUARD: this asks "do the negative controls still reject a red that is not theirs",
-      # which is a question every branch can answer and none of which depends on the TEMPORARY
-      # feat/disaggregated trigger at the top of this file. It costs a couple of seconds and needs
-      # no build.
-      # P7 adds the last two. THE DEVICE MATRIX DRIVER HAD NO CI STEP AT ALL: its 12 stub
-      # regressions (now 18, with the DirectVulkan half) were run by hand in WSL and recorded in
-      # a note, which is the same "a gate nobody can make red" shape the paragraph above is
-      # about - and it guards the tool that decides whether a device golden run PASSED.
-      # compare_actuals is the new half of that evidence (actual-vs-actual SSIM between
-      # repeats); both are stub/synthetic-only, need no build, no GPU and no device.
+      # Negative controls must themselves be able to go red (ARCHITECTURE.md §13.2).
+      # control_smoke_test.sh runs the split and retrace control scripts against a stubbed ctest:
+      # an unrelated failure or an empty selection must make each report FAILED, and the
+      # scenarios' real diagnostics must make it report PASSED. The Python tests run the trace and
+      # TCP lane tooling on stubs and synthetic data. No branch guard; no build, GPU or device.
       - name: Control and trace-tool smoke tests (R-16)
         run: |
           bash scripts/ci/control_smoke_test.sh

@@ -8,22 +8,13 @@
 
 cmake_minimum_required(VERSION 3.24)
 
-# MobileGL headless GPU integration tests.
-#
-# These are not unit tests: each scenario brings up a real EGL context on a
-# pbuffer, renders real frames through a real backend and asserts on
-# glReadPixels output. They need a GPU, so the module is OFF by default
-# (MOBILEGL_BUILD_INTEGRATION_TEST) and every scenario skips cleanly - never
-# fails, never hangs - on a machine without one. "Cleanly" is not a hope: the
-# harness runs the whole bring-up in a forked child first, because MobileGL
-# ABORTS rather than returning an error on an unusable platform (HeadlessGL.cpp).
-#
-# A clean skip is also indistinguishable from a pass, so set
-# MOBILEGL_ITEST_REQUIRE_GPU wherever the machine is supposed to have a GPU.
-#
-# Backend selection is latched at initialization from MOBILEGL_BACKEND_TYPE, so
-# one process is one backend: the same binary is registered twice, once per
-# backend, under the `integration-gpu` label.
+# MobileGL headless GPU integration tests. Each scenario brings up a real EGL pbuffer context,
+# renders through a real backend and asserts on glReadPixels output. The module is OFF by default
+# (MOBILEGL_BUILD_INTEGRATION_TEST). Without a GPU every scenario skips: the harness runs bring-up
+# in a forked child first, because MobileGL aborts on an unusable platform (HeadlessGL.cpp).
+# A skip looks like a pass, so set MOBILEGL_ITEST_REQUIRE_GPU where a GPU is expected.
+# MOBILEGL_BACKEND_TYPE is latched at initialization, so one process is one backend and each
+# scenario is registered once per backend under the `integration-gpu` label.
 
 message(STATUS "Generating build files for MobileGL Integration Test...")
 
@@ -447,31 +438,13 @@ function(mgl_itest_lane prefix filter)
     endif()
 endfunction()
 
-# --- what THIS TREE implements, answered by the build rather than by a person ----------
+# --- capability markers: what this tree implements, answered at configure time ----------
 #
-# Two P2 entries assert something that only EXISTS once another P2 package has landed:
-# HandleRecycleScenario's Handles arm needs a backend keyed on {slot, gen} (packages C and D),
-# its AbaControl arm needs a consumer for MOBILEGL_PIPE_HANDLE_ABA_CONTROL (package D), and
-# CsoContentAddressingScenario needs the client-side tracker that mints CSOs at all (package B).
-# The gates package is written and merged FIRST, against the P2 contract commit, precisely so
-# that the AbaControl red is on the record before either backend is touched - so for a while
-# those entries have nothing to assert.
-#
-# The honest report for that is a SKIP naming what is missing, never a deleted registration and
-# never a green that means "the thing I test does not exist yet". What decides the skip is
-# THIS block, so that nobody has to remember to remove a hand-written guard:
-#
-#   * two of the three answers are pure EXISTENCE checks, through file(GLOB CONFIGURE_DEPENDS).
-#     Ninja re-evaluates such a glob before every build and reconfigures only when the RESULT
-#     changes, so these cost nothing until the file appears - and then they arm themselves.
-#   * the third has to read a file's CONTENTS, because package D re-keys inside an existing
-#     source rather than adding one. VertexInputStateFactory.cpp is the one file both of D's
-#     answers live in (ComputeHash's buffer key is what the re-key changes AND what the ABA
-#     knob reverts), it is small, and it is watched by name - so an edit to it reconfigures and
-#     an edit anywhere else in the backend does not.
-#
-# Every verdict is printed at configure time: a marker that silently answered "no" for a tree
-# that does implement the thing would turn a real gate into a permanent skip.
+# Some scenarios assert on a mechanism a backend may not implement (a {slot, gen} key, a consumer
+# of MOBILEGL_PIPE_HANDLE_ABA_CONTROL, a counter's emitter). The probes below add an MGITEST_*
+# marker to MGL_ITEST_CAPABILITY_ENV for each one found; a scenario without its marker skips and
+# names what is missing, instead of being unregistered or passing vacuously. Every verdict is
+# printed at configure time, so a probe that wrongly answers "no" is visible.
 set(MGL_ITEST_CAPABILITY_ENV "")
 
 # Whether the library under test compiled the push arm. Passed in rather than inferred, because
@@ -486,34 +459,12 @@ set(MGL_ITEST_CAPABILITY_ENV "")
 # outcome than four entries that skip. P13 W3b: every build pushes, so the marker is unconditional.
 list(APPEND MGL_ITEST_CAPABILITY_ENV "MGITEST_PIPE_PUSH_BUILD=1")
 
-# THE THREE MARKERS BELOW ANSWER A QUESTION ABOUT THE SOURCE TREE, so each is only a true
-# statement about THIS LIBRARY while this build compiles the arm the source implements - and all
-# three arms are `#if MOBILEGL_PIPE_PUSH`. A pull build has no {slot, gen} key (the slot tables
-# and the re-keyed memos are push-only) and no Features.PipeHandleAbaControl at all (Config.h
-# declares the field inside `#if MOBILEGL_PIPE_PUSH` and ConfigLoader parses it in the same arm).
-# A source-only probe would therefore arm the PULL build's lanes the moment packages C and D
-# land: the AbaControl lane would go hard red on a gate G2 requires green (the guards it means to
-# defeat are still in force, so the scenario's "expect the stale pixels" assertion fails), and the
-# Handles lane would report green against a library that contains no re-key at all - the
-# "test that cannot fail" this scenario exists to avoid.
-#
-# So the whole block sits under the same `if (MOBILEGL_PIPE_PUSH)` as MGITEST_PIPE_PUSH_BUILD, and
-# HandleRecycleScenario re-checks that marker before either arm asserts, so a hand-forced
-# environment cannot arm an arm this build does not have either.
-#
-# ALL FOUR MARKERS ARE CONTENT PROBES, AND NONE OF THEM NAMES A FILE. A probe for a filename asks
-# the wrong question: the owning package chooses its own file layout, so the moment it moves the
-# code the probe answers "no" forever and the arm skips with a reason that has become false - a
-# test quietly measuring nothing, which is the one outcome this whole scenario exists to prevent.
-# The CSO probe was rewritten for exactly that reason once already; the magma probe still read one
-# hard-coded .cpp, and package D already keeps one of its two Features.PipeHandleAbaControl
-# consumers in a different file of the same directory (Renderer/VulkanRenderer.cpp), so it was one
-# refactor away from a permanent AbaControl skip. So all four now ask "does any source in the
-# directory the owning package owns name this symbol?", which is the thing each arm actually needs.
-#
-# Staleness cannot creep in from either side: the GLOB is CONFIGURE_DEPENDS (a file added or
-# removed re-runs it) and every file it finds is appended to CMAKE_CONFIGURE_DEPENDS (an edit to
-# one re-runs it).
+# mgl_itest_probe_for_symbol: outVar is the first source under `directory` with a line matching
+# symbolRegex, or "" when none has one. Markers probe content, never a file name: the owning code
+# picks its own file layout, and a file probe would answer "no" forever after a move, leaving its
+# arm skipping for a reason that is no longer true. The glob is CONFIGURE_DEPENDS (adding or
+# removing a file reconfigures) and every file found joins CMAKE_CONFIGURE_DEPENDS (editing one
+# reconfigures).
 function(mgl_itest_probe_for_symbol outVar directory symbolRegex)
     file(GLOB_RECURSE mglItestProbeSources CONFIGURE_DEPENDS
         "${directory}/*.h" "${directory}/*.hpp" "${directory}/*.cpp" "${directory}/*.c")
@@ -528,33 +479,13 @@ function(mgl_itest_probe_for_symbol outVar directory symbolRegex)
     set(${outVar} "${mglItestProbeHit}" PARENT_SCOPE)
 endfunction()
 
-# The same probe, over a CONJUNCTION: BOTH regexes matched ANYWHERE UNDER the directory, not
-# necessarily in the same file. outVar is set to "<file matching A> + <file matching B>" when both
-# were found and to the empty string otherwise.
-#
-# P4a needs it for exactly one question and the question cannot be asked any other way. "Does
-# MOBILEGL_PIPE_HANDLE_ABA_CONTROL defeat the identity of P4a's OBJECT kinds on this backend?" is
-# not answered by "some source reads Features.PipeHandleAbaControl" - MagmaPipeArms.h does, and its
-# consumers are Magma's VERTEX-INPUT keys, so a single-regex probe would arm the six P4a ABA
-# controls on a backend where the knob cannot reach a texture, a framebuffer, a sampler, a view or a
-# program, and every one of them would assert a corruption nothing on the tree can produce - a hard
-# red on an always-on integration-gpu lane. Nor is it answered by "some source names a P4a subsystem
-# bit", which will become true for a backend that honours the mask long before anyone wires the
-# knob. What the arm needs is BOTH FACTS TO BE TRUE OF THE BACKEND.
-#
-# DIRECTORY-WIDE RATHER THAN PER FILE, and that is review finding F-M5 rather than a preference.
-# Requiring one file to carry both makes the arming depend on the FILE LAYOUT a later package
-# chooses: a backend that wires the knob in Managers.cpp while its P4a subsystem constants live in
-# SlotTables.h satisfies the question and fails the probe, the six controls keep printing wired=0
-# and asserting the correct pixels, and NOTHING fails, warns or records that the expected flip did
-# not happen - the one failure mode a control whose flip is in the future has. The false-positive
-# this trades against is a backend that reads the knob somewhere and names a P4a bit somewhere else
-# without connecting them; that costs a red lane an engineer must look at, which is the direction
-# that gets noticed. Both spellings of the answer are printed, so the configure log says which file
-# supplied which half.
-#
-# Same staleness guarantees as the single-regex probe: CONFIGURE_DEPENDS on the glob, and every file
-# it finds appended to CMAKE_CONFIGURE_DEPENDS.
+# mgl_itest_probe_for_two_symbols: the same probe over a conjunction. outVar is
+# "<file matching A> + <file matching B>" when both regexes match somewhere under the directory,
+# not necessarily in one file, and "" otherwise. It decides whether the ABA knob steers a
+# backend's object keys: reading Features.PipeHandleAbaControl alone is not enough (a backend may
+# consume it for other keys only), and requiring one file to hold both would tie the answer to
+# file layout and leave the controls unarmed without notice; a false positive shows up as a red
+# lane. Staleness is handled as in mgl_itest_probe_for_symbol.
 function(mgl_itest_probe_for_two_symbols outVar directory symbolRegexA symbolRegexB)
     file(GLOB_RECURSE mglItestProbeSources CONFIGURE_DEPENDS
         "${directory}/*.h" "${directory}/*.hpp" "${directory}/*.cpp" "${directory}/*.c")
@@ -778,23 +709,12 @@ mgl_itest_join_environment(MGL_ITEST_VULKAN_ASYNC_ENVIRONMENT
 mgl_itest_join_environment(MGL_ITEST_GLES_FORCED_DS_ENVIRONMENT
     "MOBILEGL_BACKEND_TYPE=DirectGLES" "MOBILEGL_ESPRYT_FORCE_DS_READBACK_EMULATION=1" ${MGL_ITEST_COMMON_ENV})
 
-# The shader-compiler configurations AsyncCompileScenario needs, and the one
-# ViewportArrayScenario's negative control needs.
-#
-# These used to be poked into MG_Config::Features from inside the test bodies. They
-# cannot be any more - on Android this module links the SHIPPING libMobileGL.so, which
-# exports nothing internal - and they should not have been anyway: half of what each of
-# them decides is latched before the first GL call (the compile pool and its threads;
-# the advertised extension list, which a backend builds once from the configuration in
-# force at its first use), so an in-process write could only ever have moved the other
-# half. Every one of them is a whole-process property, and a whole-process property is
-# spelled with an environment variable and a ctest entry of its own.
-#
-# Note the shape of every list here: it APPENDS to MGL_ITEST_COMMON_ENV /
-# MGL_ITEST_VULKAN_ENV rather than standing alone. A ctest ENVIRONMENT property REPLACES
-# the job environment rather than adding to it, so an entry that lists only its mode
-# variable would silently lose the EGL vendor and Vulkan ICD pinning and run against
-# whatever the loader found first.
+# Environments for AsyncCompileScenario's compiler configurations and ViewportArrayScenario's
+# negative control. Each setting is per process: part of what it decides is latched before the
+# first GL call (the compile pool, the advertised extension list), and on Android this module
+# links the shipping library, which exports no MG_Config, so each is an environment variable on
+# a ctest entry of its own. Every list appends MGL_ITEST_COMMON_ENV / MGL_ITEST_VULKAN_ENV; an
+# entry naming only its own variable would lose the EGL vendor and Vulkan ICD pinning.
 mgl_itest_join_environment(MGL_ITEST_GLES_ASYNC_ON_ENVIRONMENT
     "MOBILEGL_BACKEND_TYPE=DirectGLES" "MOBILEGL_ASYNC_SHADER_COMPILE=1" ${MGL_ITEST_COMMON_ENV})
 mgl_itest_join_environment(MGL_ITEST_GLES_ASYNC_OFF_ENVIRONMENT
@@ -940,27 +860,13 @@ mgl_itest_lane("DirectVulkan.AsyncCompile." "XfbAfterClipDistanceScenario.*"
 mgl_itest_lane("DirectGLES.ForcedDepthStencilEmulation." "DepthStencilReadback*Scenario.*"
     ENV "${MGL_ITEST_GLES_FORCED_DS_ENVIRONMENT}")
 
-# UnlocatedIoBlockScenario with the interface-block location strip PINNED ON, for the same
-# reason the depth/stencil entry above pins its emulation: without it this scenario is
-# UNFALSIFIABLE on the machines this suite runs on. llvmpipe carries a located interface block
-# correctly, so the driver POST that arms the strip on Mali answers "healthy" here and the
-# emulation never runs - the ambient registration would be exercising the un-stripped path
-# twice and calling it coverage. With the variable set, the blocks really are emitted with no
-# location and the assertion is about the spelling the device gets.
-# RESOURCE_LOCK, on this lane and on the three below it, and it is a bug fix rather than a
-# precaution. Each of these lanes gives a WHOLE SCENARIO one MOBILEGL_LOG_FILE_PATH, and one case
-# in each reads that log back to prove the pinned emulation actually armed. The library opens the
-# log fopen(path, "w"), so every process in the lane TRUNCATES it - and under `ctest -j` a sibling
-# case of the same lane can truncate it while the arming case is reading, which reads back as "the
-# log carries no arming line" and fails a healthy lane. Measured on this tree: three runs of the
-# full integration-gpu label at -j 8 produced 4 failures, 0 and 2, always one of these arming
-# cases, never the same set twice.
-#
-# The rule stated above the verify block - a case that reads the log needs a lane whose filter
-# selects it alone - would fix it by re-filtering, but that would RENAME the arming entries, and
-# an existing ctest name may never disappear (gate G14). A ctest RESOURCE_LOCK named after the log
-# is the same guarantee without touching a name: ctest never runs two entries holding the same lock
-# at once, so the only processes that can truncate a lane's log are ones nobody is reading it for.
+# UnlocatedIoBlockScenario with the interface-block location strip pinned on. llvmpipe handles
+# located interface blocks, so the driver check that arms the strip on Mali passes here and the
+# ambient entry never runs the strip. This lane, and each lane below that reads its log back,
+# holds a RESOURCE_LOCK named after the log: every process in a lane truncates the shared
+# MOBILEGL_LOG_FILE_PATH (fopen "w"), so under ctest -j a sibling could empty it while the
+# arming case reads it. A narrower filter would also work but would rename entries, and ctest
+# names must not disappear (ARCHITECTURE.md §13.2).
 mgl_itest_lane("DirectGLES.UnlocatedIoBlocks." "UnlocatedIoBlockScenario.*"
     LOCK unlocated-io-blocks.log ENV "${MGL_ITEST_GLES_UNLOCATED_IO_BLOCKS_ENVIRONMENT}")
 
@@ -1087,116 +993,14 @@ mgl_itest_lane("DirectGLES.PointSizeDemotion." "PointSizeDemotionScenario.*"
 mgl_itest_lane("DirectVulkan.PointSizeDemotion." "PointSizeDemotionScenario.*"
     LOCK point-size-demotion-vulkan.log ENV "${MGL_ITEST_VULKAN_POINT_SIZE_DEMOTION_ENVIRONMENT}")
 
-# --- the third CI mode: MOBILEGL_PIPE_VERIFY -----------------------------------
-#
-# ARCHITECTURE.md 13.2-(2) asks for a THIRD build mode next to pull and push: two state models in
-# one address space, compared field by field at every verb boundary and again at every accessor
-# read, 5-10x slower and never shipped. These entries are that mode's lane. They exist only when
-# the library was configured with -DMOBILEGL_PIPE_VERIFY=ON, which is deliberate and is half of
-# what makes the lane falsifiable: `ctest -L integration-verify --no-tests=error` in a build that
-# forgot the option matches NO tests and fails, instead of reporting a green run of nothing.
-#
-# The other half is PipeVerifyArmingScenario.Armed, which asserts the library's own arming line -
-# because MOBILEGL_PIPE_VERIFY=1 in the environment of a library that never compiled the
-# comparator in is a silent no-op that looks exactly like a clean pass.
-#
-# Three things about the ENVIRONMENT properties below, each of which has already gone wrong once
-# in this file:
-#   * every list APPENDS ${MGL_ITEST_COMMON_ENV} / ${MGL_ITEST_VULKAN_ENV}. A ctest ENVIRONMENT
-#     entry overrides the job environment for the names it lists, so an entry that named only its
-#     own knobs would lose the EGL vendor and Vulkan ICD pinning and run against whichever driver
-#     the loader found first.
-#   * the ambient Verify. entries name NEITHER MOBILEGL_PIPE_VERIFY_CORRUPT NOR
-#     MOBILEGL_PIPE_POISON_OMIT. That is what lets CI's two always-on negative-control steps
-#     export those knobs in the JOB environment and have them reach the test processes; a
-#     property entry of the same name would silently win and the controls would prove nothing.
-#   * MOBILEGL_LOG_FILE_PATH is per lane, and "per lane" is the exact limit of what it proves. It
-#     is the only channel a test process has for reading the library's own report (MG_Config is not
-#     reachable from this module), but the log is opened fopen(path, "w"), so every process in a
-#     lane TRUNCATES it: after an ambient lane of 400-odd entries the file holds the LAST process
-#     and nothing else. Reading it is therefore only sound in a filtered, one-entry lane - which is
-#     why the arming case has a lane and a log of its own below, and why neither this file nor CI
-#     may read the ambient logs as evidence about the entries that ran before the last one. The
-#     ambient path is kept for post-mortems (and to keep library chatter out of ctest's capture).
-# --- G8: the handle ABA, three always-on arms -----------------------------------------
-#
-# ALWAYS ON, in every build mode, which is deliberate: the Legacy arm asserts today's
-# lifetimeId + weak_ptr guards and is meaningful in a pull build, and `ctest -R HandleRecycle`
-# has to name the same entries whichever build directory it is pointed at (P2 brief G8 runs it
-# against build-verify; D.3 part 1 runs it again as part of the interface-purity gate).
-#
-# One lane per arm, and each lane names MGITEST_HANDLE_ARM: the arm is not a property of the
-# test body, it is the (MOBILEGL_PIPE_PUSH, MOBILEGL_PIPE_LEGACY_MEMOS, MOBILEGL_PIPE_HANDLE_ABA_CONTROL)
-# triple the process was launched with, and the scenario skips in the ambient entries because
-# none of that is configured there.
-#
-# Every list APPENDS the common/Vulkan environment for the reason spelled out above the verify
-# block: a ctest ENVIRONMENT property REPLACES the job environment for the names it lists, so an
-# entry naming only its own knobs would lose the EGL vendor and Vulkan ICD pinning.
-#
-# The AbaControl arm is DirectVulkan only. The knob defeats the object-identity half of
-# DirectVulkan's vertex-input memo keys (VertexInputStateFactory::ComputeHash, its per-VAO memo
-# table, and LookupVaoDrawMemo); it steers nothing on DirectGLES, and a lane that configured it
-# there would be a permanent skip claiming to be a control.
-#
-# SO THE BUFFER ABA's CORRUPTION EVIDENCE IS MAGMA-ONLY, AND THAT IS RECORDED RATHER THAN LEFT
-# AS AN ABSENCE (gates m10, closed here as a statement rather than as a lane). P3a re-keys the
-# BUFFER on DirectGLES - resource_* now dispatches by handle - so the obvious next move is a
-# DirectGLES `.AbaControl` lane over ABufferAtARecycledAddressDoesNotInheritItsPredecessorsContents.
-# It is not a registration-only change and it is therefore not made here: the knob has exactly
-# one consumer in the tree (MG_Backend/DirectVulkan/Renderer/MagmaPipeArms.h's
-# MagmaPipeAbaControlDefeatsIdentity, which is what the MGL_ITEST_MAGMA_ABA probe above looks
-# for), so a DirectGLES lane would run with the knob inert, fail to reproduce the corruption it
-# asserts, and go RED in an always-on integration-gpu lane - the exact failure mode the header
-# of HandleRecycleScenario.cpp records this file already having had once.
-#
-# What that costs, stated so the next reader does not have to re-derive it: on DirectGLES the
-# buffer case's Handles arm proves the re-key does NOT alias, and nothing proves the reproducer
-# could still see an aliasing that was reintroduced there. The positive control for that is a
-# Features.PipeHandleAbaControl consumer over Espryt's resource slot table - one `if` in
-# GetOrCreate / FindByHandle, the way MagmaPipeClaimSlotMemos is Magma's - and it belongs with
-# whoever next touches that table, not with a lane registration.
-#
-# It gets TWO lanes, because there are two arms and the control has to reach the one P2 SHIPS.
-# `AbaControl` is D18's lane verbatim (MOBILEGL_PIPE_PUSH=0, the pre-handle arm) and defeats the
-# lifetime-id/address guards; `AbaControlHandles` runs the handle arm (MOBILEGL_PIPE_LEGACY_MEMOS=0,
-# the default push mask) and defeats the object identity that SELECTS THE SLOT - the key the handle
-# arm ships. With only the first lane the control says nothing at all about the re-key: the handle
-# arm is not executed under MOBILEGL_PIPE_PUSH=0, so every guard it would have to defeat is in
-# another branch.
-#
-# NEITHER lane exercises the GENERATION half of {slot, gen}, and no lane of this shape can. Magma's
-# mint has no death notification and returns a slot only through its age sweep (256/1024 boundaries,
-# MagmaPipeArms.h), so the five frame boundaries this scenario issues always hand the replacement a
-# brand-new slot at Gen 1; a real reuse needs >= 1024 idle boundaries, which puts the two draws in
-# different frames - where the only pixel-visible memo declines by design. The generation is covered
-# by the unit suite MG_Test/Pipe/MagmaPipeIdentityTest.cpp instead, which drives a real
-# retire -> reuse; MagmaPipeAbaControlDefeatsIdentity carries the measurement.
-#
-# The two PUSH-ONLY knobs of those arms are set only in a push build, and the lane NAMES are
-# unaffected by that (an ENVIRONMENT property is not part of a test's name, so G2 still sees the
-# same list in both builds). MOBILEGL_PIPE_LEGACY_MEMOS=0 says "never enter the legacy arm"; in a
-# pull build the legacy arm is the ONLY arm and every Track-H subsystem bit is clear, which is
-# precisely D14's startup Fatal{PipeLegacyMemosDisabled} condition - so a lane that set it there
-# would abort the process before the scenario could report its skip. MOBILEGL_PIPE_HANDLE_ABA_CONTROL
-# has no field to parse into in a pull build at all (Config.h declares it under #if MOBILEGL_PIPE_PUSH).
-# A lane that needs an arm pins EVERY knob that selects it. A ctest ENVIRONMENT property overrides
-# only the variables it names; the rest leak in from the job. The five-part gate's all-pull control
-# arm runs `MOBILEGL_PIPE_PUSH=0 ctest -L integration-gpu` over the whole label, and without the
-# explicit bitmask below that leaked PUSH=0 turned this lane's LEGACY_MEMOS=0 into D14's armless
-# combination: the bring-up aborted, on purpose, and the lane went red for a reason that was never
-# about handles. The mask is the PHASE default, not a hand-picked bit, so the lane keeps measuring
-# the shape that ships: it was kMGPipeSubsystemsMigratedAtP2 (0x7f), then
-# kMGPipeSubsystemsMigratedAtP3a (0x1ff), and is now kMGPipeSubsystemsMigratedAtP4a (0x1fff,
-# MG_Pipe/MGPipe.h), which adds bits 9-12 - framebuffer, texture resources, samplers and programs.
-# Pinning it at 0x1ff after P4a would leave the Handles arm asserting the P3a shape while the six
-# OBJECT handles it is now also about stayed switched off - a lane that still passes and no longer
-# measures the key that ships. Each phase's constant survives as the NEXT phase's A/B control, which
-# is what ResourceSubsystemControl's Off lane uses 0x7f for and ObjectSubsystemControl's uses 0x1ff.
-# P13 W3b (ID-P13-3): the pre-handle arm is no longer compiled, so the Handles arm needs neither
-# MOBILEGL_PIPE_LEGACY_MEMOS=0 nor a mask that switches anything off: it runs the default mask.
-# The Legacy and AbaControl lanes (MOBILEGL_PIPE_PUSH=0, the pre-handle arm) went with that arm;
-# AbaControlHandles went with the frontend arm in P13 W6.
+# --- MOBILEGL_PIPE_VERIFY lanes (ARCHITECTURE.md §13.2), under `if (MOBILEGL_PIPE_VERIFY)` below
+# They exist only in a -DMOBILEGL_PIPE_VERIFY=ON build, so `ctest -L integration-verify
+# --no-tests=error` fails when the option is lost. The ambient Verify. entries must not set
+# MOBILEGL_PIPE_VERIFY_CORRUPT or MOBILEGL_PIPE_POISON_OMIT: CI's negative controls export them
+# in the job environment, and a property of the same name would override them.
+# --- handle ABA: one always-on monolith HandleRecycle.Handles lane per backend -------------
+# MGITEST_HANDLE_ARM selects the arm (the scenario skips in the ambient entries). The lanes run
+# the default subsystem mask, so they measure the {slot, gen} key that ships.
 set(MGL_ITEST_HANDLES_ARM_KNOBS "")
 
 mgl_itest_join_environment(MGL_ITEST_GLES_HANDLE_HANDLES_ENVIRONMENT
@@ -1214,40 +1018,12 @@ mgl_itest_lane("DirectGLES.HandleRecycle.Handles." "HandleRecycleScenario.*"
     LABELS "integration-gpu\;integration-monolith-control" ENV "${MGL_ITEST_GLES_HANDLE_HANDLES_ENVIRONMENT}")
 mgl_itest_lane("DirectVulkan.HandleRecycle.Handles." "HandleRecycleScenario.*"
     LABELS "integration-gpu\;integration-monolith-control" ENV "${MGL_ITEST_VULKAN_HANDLE_HANDLES_ENVIRONMENT}")
-# --- G12: the CSO content-addressing negative control ---------------------------------
-#
-# PUSH BUILDS ONLY, and that is the honest scope rather than a convenience: the two counters the
-# control reads (CallClass::RenderStateCsoMints / RenderStateCsoBinds) and the `cso[...]` bracket
-# of the summary line are both `#if MOBILEGL_PIPE_PUSH` (PipeStats.h, PipeStats.cpp), so in a pull
-# build there is no channel to read and an entry here would be a permanent skip.
-#
-# Each arm gets a LOG PATH OF ITS OWN. The library opens its log fopen(path, "w") - every process
-# in a lane truncates it - and these two cases READ that log, so a shared path would have them
-# reading a neighbour's bring-up under `ctest -j 4`. Same rule as the arming lane below.
-#
-# MOBILEGL_PIPE_STATS_PERIOD=1 makes one summary line per eglSwapBuffers, which is what lets the
-# workload be bracketed by two swaps and read back as a window covering exactly itself.
-#
-# Registered in EVERY build, including the pull build where there is no CSO at all, so that
-# `ctest -L integration-gpu` stays name-for-name identical between pull and push (gate G2). In a
-# pull build MGITEST_PIPE_PUSH_BUILD is absent and both cases skip saying so.
-#
-# THE MASK IS THE PHASE DEFAULT AND THE CONTROL IS BIT 63, and the two must not be confused. The
-# only thing these four lanes are an A/B about is `no CSO content addressing` (bit 63,
-# kMGPipeBehaviourNoCsoContentAddressing), which is what separates the On lane from the Off lane.
-# Every
-# other bit is the build's shipping mask, so it moves with the phase: 0x7f
-# (kMGPipeSubsystemsMigratedAtP2), then 0x1ff (kMGPipeSubsystemsMigratedAtP3a), now 0x1fff
-# (kMGPipeSubsystemsMigratedAtP4a) for the same reason MGL_ITEST_HANDLES_ARM_KNOBS above moved. Left
-# pinned at 0x1ff after P4a these lanes would keep passing while running on a configuration nothing
-# ships - bits 9-12 (framebuffer, texture resources, samplers, programs) cleared - which is the
-# "still green, no longer measuring the shape that ships" failure the Handles-arm comment above
-# rejects. NOTE THAT THE OFF LANE'S MASK MOVED TOO, from 0x80000000000001ff to
-# 0x8000000000001fff: the mask moves with the phase, the control is bit 63, and the two must not be
-# confused. The counters they read (csom / csob) are render-state and
-# are steered by neither bit, so raising the mask is behaviour-preserving for what they assert;
-# what it buys is that a CSO regression that only shows up with the P3a subsystems on can reach
-# them. (contract-review-v1.md item 11, closed here for all three lane families.)
+# --- CSO content-addressing negative control ----------------------------------------------
+# The On and Off masks differ only in bit 63 of MOBILEGL_PIPE_PUSH
+# (kMGPipeBehaviourNoCsoContentAddressing); the rest of each mask is the default 0x3fff, because
+# subsystem bits 0-13 are fixed on. The cases read the csom / csob counters from the library log,
+# so each lane has a private log path (ARCHITECTURE.md §16.1). MOBILEGL_PIPE_STATS_PERIOD=1 writes
+# one summary line per eglSwapBuffers, so two swaps bracket exactly the workload.
 mgl_itest_join_environment(MGL_ITEST_GLES_CSO_ON_ENVIRONMENT
     "MOBILEGL_TRANSPORT=monolith"
     "MOBILEGL_BACKEND_TYPE=DirectGLES" "MGITEST_CSO_LANE=content-addressed"
@@ -1313,35 +1089,12 @@ function(mgl_itest_add_refused_mask_control name mask gtestFilter environment)
         ENVIRONMENT "${environment}")
 endfunction()
 
-# --- G12: the P3a subsystem A/B, and G10's map-persistent-roundtrips lanes ------------
-#
-# THE MASKS ARE PHASE CONSTANTS, not hand-picked bits: 0x1fff is
-# kMGPipeSubsystemsMigratedAtP4a (the push build's default as of P4a) and 0x7f is
-# kMGPipeSubsystemsMigratedAtP2, which is that default with bits 7 (resources), 8 (vertex input)
-# and 9-12 (P4a's four object families) cleared. MGPipe.h keeps each phase's constant alive as the
-# next phase's A/B control for this reason, and a lane that spelled its own bit pattern would stop
-# being the shape that ships the first time the default moved. THE ON LANE MOVED TO 0x1fff WITH THE
-# PHASE and the OFF LANE'S 0x7f DID NOT: this A/B is about bit 7, and pinning its On arm at 0x1ff
-# after P4a would measure the resource emitter on a configuration nothing ships. P4a's own A/B -
-# 0x1fff against 0x1ff - is ObjectSubsystemControl's, further down.
-#
-# DirectGLES only. P3a migrates Espryt's buffer and VAO paths; Magma's buffer path is P7 and
-# registers no MGPipeResourceOps, so a DirectVulkan arm would be measuring the client emitter
-# against a backend nobody asked to change.
-#
-# Each reading entry gets a LOG PATH OF ITS OWN, and its ctest entry selects ONE case: the library
-# opens the log fopen(path, "w") - every process in a lane truncates it - and these cases READ it.
-# Two readers in one lane race under `ctest -j`, and the failure looks exactly like "the counter
-# was never emitted". Same rule as the CSO lanes above and the verify arming lane below.
-#
-# MOBILEGL_PIPE_STATS_PERIOD=1 makes one summary line per eglSwapBuffers, which is what lets a
-# workload be bracketed by two swaps and read back as a window covering exactly itself.
-#
-# Registered in EVERY build, including the pull build where none of the counters exists, so that
-# `ctest -L integration-gpu` stays name-for-name identical between pull and push (gate G2). In a
-# pull build MGITEST_PIPE_PUSH_BUILD is absent and every one of these cases skips saying so; a
-# MOBILEGL_PIPE_PUSH value in the environment of a pull library steers nothing (Config.h declares
-# the field inside the push guard), exactly as the HandleRecycle Legacy lanes already rely on.
+# --- Resource subsystem control and the map-persistent-roundtrip counting lanes ------------
+# DirectGLES only, as ResourceSubsystemControlScenario.cpp explains. The On lane runs the default
+# mask; 0x7f clears fixed-on subsystem bits, so it is registered as a refused-mask control
+# (mgl_itest_add_refused_mask_control above). Each log-reading entry has a private log path and a
+# single-case filter (ARCHITECTURE.md §16.1). MOBILEGL_PIPE_STATS_PERIOD=1 writes one summary line
+# per eglSwapBuffers, so two swaps bracket exactly the workload.
 mgl_itest_join_environment(MGL_ITEST_GLES_RESOURCE_SUBSYSTEM_ON_ENVIRONMENT
     "MOBILEGL_TRANSPORT=monolith"
     "MOBILEGL_BACKEND_TYPE=DirectGLES" "MGITEST_RESOURCE_SUBSYSTEM_LANE=on"
@@ -1416,58 +1169,14 @@ mgl_itest_add_refused_mask_control("DirectGLES.SubsystemMaskRefusal.ResourceSubs
 mgl_itest_lane("DirectVulkan.ArenaArm." "LargeArenaAdoptionScenario.TheArenaLandsInTheTierItsLaneDeclares"
     LABELS "integration-gpu\;integration-monolith-control" ENV "${MGL_ITEST_VULKAN_ARENA_ARM_ENVIRONMENT}")
 
-# --- G12: the P4a subsystem A/B, and its dependency refusal ---------------------------
-#
-# THE MASKS ARE THE TWO PHASE CONSTANTS, exactly as the P3a block above: 0x1fff is
-# kMGPipeSubsystemsMigratedAtP4a (the push build's default) and 0x1ff is
-# kMGPipeSubsystemsMigratedAtP3a, which is that default with bits 9 (framebuffer), 10 (texture
-# resources), 11 (samplers) and 12 (programs) cleared. THIS is the phase's "new 0x1ff off-lane": the
-# constant P3a shipped survives as P4a's A/B control, and a lane that spelled its own bit pattern
-# would stop being the shape that ships the first time the default moved.
-#
-# THE THIRD AND FOURTH LANES ARE THE DEPENDENCY REFUSALS (D-K2) and they are the entries in this
-# family that are not vacuous before the emitters land, because both are decisions made from the
-# bitmask alone. A half-honoured mask is invisible in the pixels by construction, which is why each
-# needs an entry rather than a code comment.
-#
-#   0x9ff sets the sampler subsystem (bit 11) WITHOUT the texture resource subsystem (bit 10) that
-#         every MGPBoundView::Texture and MGPImageView::Res depends on.
-#   0x5ff sets the texture resource subsystem (bit 10) WITHOUT the sampler subsystem (bit 11):
-#         D-K2's fourth row (ID-15). MGPTextureParams::BuiltinSampler is a SamplerCso handle and
-#         only bit 11 mints sampler CSOs, so bit 10 alone would emit a null there and the applier's
-#         Fatal is the next thing that happens. The brief called this pair harmless; P4a as built
-#         says otherwise, and the refusal belongs in the texture family's arm resolver.
-#
-# In both, the bring-up must log ONE error naming both bits and run the legacy arm.
-#
-# ONE CASE PER LANE, through TEST_FILTER, and it is a constraint rather than a preference: each case
-# READS the library's log and the log is a per-LANE resource (the library opens it fopen(path, "w"),
-# so every process in a lane truncates it). Two entries in one lane race under `ctest -j` with a
-# failure indistinguishable from "the counter was never emitted". Same rule as the CSO lanes, the
-# map-persistent lanes and the verify arming lane.
-#
-# THE FIRST FOUR LANES ARE DirectGLES ONLY. P4a migrates Espryt's framebuffer, texture, sampler
-# and program paths; Magma's are P7 and register nothing here, so a DirectVulkan lane that measured
-# the emit[] bracket would be measuring the client emitters against a backend nobody asked to
-# change.
-#
-# THE FIFTH AND SIXTH LANES INVERT THAT, and the inversion is the point (c0f, ID-39/ID-40). "Magma
-# registers no consumer" stopped being a reason to have no lane the moment it became a THING THE
-# CLIENT MUST CHECK: P4a's families were wired without P3a's "a backend registered
-# MGPipeResourceOps" conjunct, so on Magma the client emitted, the applier ACCEPTED, the client
-# cleared its dirty flags on that acceptance and Magma's legacy path found nothing to upload - 66
-# DirectVulkan cases red, every one of them texture-upload shaped, every one of them green at
-# 0x1ff. The fix's belt (the applier refusing and counting RefusedNoConsumer) is invisible in
-# pixels and invisible in the emit[] bracket, so it needs its own entry, and it needs it on the
-# backend WITHOUT the consumer. The DirectGLES twin is the control that keeps the assertion from
-# being vacuously true of a tree where nothing emits anywhere.
-#
-# Both run at the PHASE DEFAULT (0x1fff) rather than a hand-picked mask, for the reason the whole
-# block gives: the shape that ships is the shape worth measuring.
-#
-# Registered in EVERY build, including the pull build where none of the counters exists, so that
-# `ctest -L integration-gpu` stays name-for-name identical between pull and push (gate G2). In a
-# pull build MGITEST_PIPE_PUSH_BUILD is absent and every one of these cases skips saying so.
+# --- Object subsystem control, its refused masks and the no-consumer check -----------------
+# The On lane runs the default mask. 0x1ff, 0x9ff (samplers without texture resources) and 0x5ff
+# (texture resources without samplers) clear fixed-on subsystem bits, so they are refused-mask
+# controls. The Consumer (DirectGLES) and NoConsumer (DirectVulkan) lanes run the default mask and
+# assert that MGPipeApplierState::RefusedNoConsumer never moves: a count there means the client
+# emitted an object record no backend consumes, and an accepted one would clear dirty flags that
+# nothing uploads. The DirectGLES lane keeps the check from passing on a tree that emits nothing.
+# Each log-reading lane has a private log path and one case (ARCHITECTURE.md §16.1).
 mgl_itest_join_environment(MGL_ITEST_GLES_OBJECT_SUBSYSTEM_ON_ENVIRONMENT
     "MOBILEGL_TRANSPORT=monolith"
     "MOBILEGL_BACKEND_TYPE=DirectGLES" "MGITEST_OBJECT_SUBSYSTEM_LANE=on"
@@ -1518,28 +1227,13 @@ mgl_itest_lane("DirectGLES.ObjectSubsystemControl.Consumer." "ObjectSubsystemCon
 mgl_itest_lane("DirectVulkan.ObjectSubsystemControl.NoConsumer." "ObjectSubsystemControlScenario.TheAppliersNoConsumerBeltNeverFiresBehindTheClientsGate"
     LABELS "integration-gpu\;integration-monolith-control" ENV "${MGL_ITEST_VULKAN_OBJECT_SUBSYSTEM_NO_CONSUMER_ENVIRONMENT}")
 
-# --- The texture upload shape: A GATE as of P3b/P4b R-11 (D-D4) -----------------------
-#
-# SSIM is blind to the box-versus-rect upload shape and the Mali cliff it hides is ~+6 ms/frame, so
-# the shape needs a number - two numbers, in fact, the server's tex[emit= box= rect= jobs=] and the
-# client's emit[ctu=], which agreeing is the whole reason both are published (D-L).
-#
-# P4a RECORDED those numbers rather than gating them, because the per-storage-owner emission cursor
-# with view/owner index remapping - what actually decides the shape for a texture uploaded through a
-# VIEW - was the next phase's and gating an unfinished shape pins a non-answer. THAT WORK LANDED
-# (MG_Impl/Pipe/TextureEmit.h's owner-keyed drain list; TextureObjectView::ToOwner*), so this lane's
-# RecordProperty block is now EXPECT_EQ against a gold row measured on this cursor, and the workload
-# carries a third texture written through a glTextureView so the remap is inside the counted window.
-#
-# MOBILEGL_ESPRYT_ENABLE_TEXTURE_VIEW=1 IS THEREFORE MANDATORY HERE, not decorative: without it the
-# case SKIPS rather than dropping the third texture, because a conditional workload behind a fixed
-# gold row is a gate that passes by shrinking.
-#
-# THE MALI FRAME-TIME DELTA D-D4 asks for beside the gold is NOT SCHEDULABLE in this phase - one
-# Redmi, an Adreno, no Mali part - and is recorded as a declared deviation in the scenario header
-# and in docs/Disaggregated/MEASUREMENTS.md rather than modelled.
-#
-# Its own log path and its own single-case filter, for the per-lane-log reason above.
+# --- Texture upload shape gate (ARCHITECTURE.md §6) ----------------------------------------
+# SSIM cannot tell one union box from many rects, so TextureUploadShapeScenario checks the
+# server's tex[emit= box= rect= jobs=] and the client's emit[ctu=] against a measured gold row.
+# One texture in the counted window is written through a glTextureView, so
+# MOBILEGL_ESPRYT_ENABLE_TEXTURE_VIEW=1 is required; without it the case skips rather than run a
+# smaller workload against the same gold row. Private log path and single-case filter:
+# ARCHITECTURE.md §16.1.
 mgl_itest_join_environment(MGL_ITEST_GLES_TEXTURE_UPLOAD_SHAPE_ENVIRONMENT
     "MOBILEGL_BACKEND_TYPE=DirectGLES" "MGITEST_TEXTURE_UPLOAD_SHAPE_LANE=1"
     "MOBILEGL_PIPE_PUSH=0x3fff" "MOBILEGL_PIPE_STATS=1" "MOBILEGL_PIPE_STATS_PERIOD=1"
@@ -1550,24 +1244,11 @@ mgl_itest_join_environment(MGL_ITEST_GLES_TEXTURE_UPLOAD_SHAPE_ENVIRONMENT
 mgl_itest_lane("DirectGLES.TextureUploadShape." "TextureUploadShapeScenario.TheEmittedUploadShapeIsRecordedAndTheTwoSidesAgree"
     LOCK texture-upload-shape-DirectGLES.log ENV "${MGL_ITEST_GLES_TEXTURE_UPLOAD_SHAPE_ENVIRONMENT}")
 
-# --- G9: the mandatory red-before scenario -------------------------------------------
-#
-# TextureParamsWithoutASamplerViewScenario needs NO lane of its own, and that is deliberate rather
-# than an omission. It reads no counter and no log - its observable is a sampled colour - and its
-# claim is about the SHIPPING configuration, so the two ambient registrations at the top of this
-# file (which run at the build's default mask) are exactly the arms it wants. A lane here would pin
-# a mask and make the entry stop describing what ships the next time the default moved. The
-# DirectVulkan ambient entries skip in the scenario's SetUp, naming the backend: the gap it is about
-# is Espryt's SyncAttachmentObject / SyncNeccessaryTextures pair and P4a touches no DirectVulkan
-# source but MagmaPipeArms.h (D-Q).
-#
-# D-E3 expects its second case, AReadAttachmentOnlyTexturesDepthStencilModeReachesTheDriver, to be
-# RED until package esprytobj lands. MEASURED ON THE CONTRACT COMMIT IT IS GREEN, and the scenario's
-# header carries the mechanism: a texture parameter's only public-GL observable is a sample, and the
-# sample repairs the state it was meant to catch (the unit sync list re-syncs whenever the params
-# version moved). Nothing about any of that is expressed in this file - a registration that
-# "expected" a red would be a gate that could never go green - and the ruling on the missing
-# artefact is the integrator's, recorded in the gates result document.
+# --- TextureParamsWithoutASamplerViewScenario needs no lane of its own ---------------------
+# Its observable is a sampled colour, not a counter or a log, and its claim is about the shipping
+# configuration, so the ambient DirectGLES. / DirectVulkan. registrations at the default mask are
+# the arms it needs. The DirectVulkan entries skip in SetUp: the scenario covers Espryt's
+# SyncAttachmentObject / SyncNeccessaryTextures pair.
 
 if (MOBILEGL_PIPE_VERIFY)
     # 900s, not the ambient 120: the comparator re-reads every field of the fill mask at the verb
@@ -1682,41 +1363,14 @@ if (MOBILEGL_PIPE_VERIFY)
         LABELS "integration-gpu\;integration-verify\;integration-monolith-control" TIMEOUT ${MGL_ITEST_VERIFY_TIMEOUT} ENV "${MGL_ITEST_VULKAN_POISON_OMIT_ENVIRONMENT}")
 endif()
 
-# --- P5: the DirectGLES.Split. lanes and the persistent-map ARM lanes ------------------------
-#
-# THE PRIVATE SECOND LABEL IS WHAT MAKES THE LANE FALSIFIABLE, and it is the verify block above
-# copied verbatim for the same argument: `ctest -L integration-split --no-tests=error` in a build
-# that forgot -DMOBILEGL_BUILD_DISAGGREGATED=ON matches NOTHING and FAILS, instead of reporting a
-# green run of zero entries. Keeping `integration-gpu` as well is why "a split build's
-# `ctest -L integration-gpu` still describes the whole registration set" stays true.
-#
-# REGISTERED INSIDE `if (MOBILEGL_BUILD_DISAGGREGATED)`, and that is what keeps gate G2 (pull and
-# push name-for-name identical) untouched: neither of those two builds sets the option, so the
-# Split family is absent from BOTH of them rather than present in one. The two SCENARIO FILES the
-# lanes point at are added to the source list unconditionally, so their cases DO appear in the
-# ambient DirectGLES./DirectVulkan. registrations of every build - they are ordinary GL scenarios
-# and their monolith behaviour is the baseline the split arm is compared against.
-#
-# WHAT ARMS THE SPLIT LANES, AND WHY IT IS NOT A PROBE OVER SOURCE TEXT.
-#
-# Until a real client session exists, MOBILEGL_TRANSPORT=inproc is parsed (CONTRACT-P5 5) and then
-# nothing consumes it, so a Split entry would go green having run monolith end to end - the exact
-# failure the lane exists to prevent. The first version of this file answered "has the client
-# landed" with a CMake conjunction over c0's stub files: the c1 symbols present AND no
-# `Fatal.Unimplemented` surviving. REVIEW FINDING M-1 FALSIFIED IT BY PERFORMING IT - a
-# `sed -i 's/Fatal{Unimplemented/Fatal{NotYetImplemented/'` over c0's six stubs, with every entry
-# point still aborting and ImplementedVerbCount() still 0, armed all eleven lanes and EIGHT WENT
-# GREEN. A single comment line carrying the marker did the opposite and would keep them dark
-# forever (M-2), and two stub files outside the two probed directories allowed a partial arm (M-3).
-#
-# A statement about source text can always be falsified by editing source text, and the people
-# most likely to edit it are the ones landing the packages the probe watches for. So the arming
-# condition moved into the PROCESS: Harness/SplitRuntimePeek.cpp reads MG_Config::Transport,
-# ClientSession::Active() and ImplementedVerbCount() - three values c0 shipped and documented,
-# none of which a message edit can move - and every Split case skips, naming the first one that is
-# not true. All this file has to decide now is whether that peek can be COMPILED, which is exactly
-# "did this build compile MG_Remote", which is exactly the build option.
-# P13 W5: the record arm's half of the peek (dataArmIsRecord) needs no transport.
+# --- Split lanes and the persistent-map arm lanes ------------------------------------------
+# Split entries are registered only in a MOBILEGL_BUILD_DISAGGREGATED build and carry a second
+# label, so `ctest -L integration-split --no-tests=error` fails in any other build instead of
+# passing with no entries (ARCHITECTURE.md §16.1). A Split case arms from the running process,
+# not from source text that an edit could change: Harness/SplitRuntimePeek.cpp reads
+# MG_Config::Transport, ClientSession::Active() and ImplementedVerbCount(), and the case skips
+# naming the first that does not hold. The record-arm half of the peek (dataArmIsRecord) needs no
+# transport, so it is compiled in every build.
 target_compile_definitions(MobileGLIntegrationTest PRIVATE -DMGITEST_RECORD_ARM_PEEK=1)
 if (MOBILEGL_BUILD_DISAGGREGATED)
     target_compile_definitions(MobileGLIntegrationTest PRIVATE -DMGITEST_SPLIT_RUNTIME_PEEK=1)
@@ -1765,53 +1419,25 @@ endif()
 # generated ctest include file verbatim and never expanded.
 set(MGL_ITEST_SPLIT_SERVER_PATH "${CMAKE_BINARY_DIR}/libMobileGLServer.so")
 
-# P3b/P4b wave 2-D package D2: MOBILEGL_ESPRYT_ENABLE_TEXTURE_VIEW=1 IS ON THE SHARED GLES
-# SPLIT/SPAWN/TCP LISTS, not on a private entry, and that is the deliberate reading of the plan
-# row. The knob is Espryt's FEATURE opt-in (ConfigLoader.cpp:213), independent of transport: it
-# advertises GL_ARB_texture_view and nothing else. Without it TextureViewAliasScenario - and
-# TextureViewScenario, if it is ever registered here - green-skips in all three arms and the
-# gate is a name in a list. The monolith DirectGLES lane has carried it on its own view entry
-# since P4a for exactly this reason; the split arms had no equivalent.
-#
-# It is NOT added to MGL_ITEST_VULKAN_{SPLIT,SPAWN,TCP}_ENVIRONMENT below: the variable is read
-# only by ConfigLoader's Espryt feature block, so on DirectVulkan it would be a parsed-and-
-# ignored name, and tier 2's informational Magma replay of these registrations wants the two
-# backends' arms to differ only where the product differs.
-#
-# P11 B2: MOBILEGL_ITEST_REQUIRE_GPU=1 IS PINNED here and on the SPAWN list below, as the Magma
-# split/spawn lists and the Espryt TCP list already pin it. Without it a handshake-time Fatal in
-# the harness's forked pre-flight turns every case into a SKIP, which ctest counts as a pass in
-# `-L integration-split` / `-L integration-spawn` (only the gate's integration-gpu passes, which
-# export it job-wide, caught one - and entries without that label were never covered at all).
+# The shared GLES split, spawn and tcp environments carry MOBILEGL_ESPRYT_ENABLE_TEXTURE_VIEW=1:
+# Espryt advertises GL_ARB_texture_view only with it, and without it the texture-view scenarios
+# skip on every arm. The DirectVulkan lists leave it out because only Espryt reads it.
+# MOBILEGL_ITEST_REQUIRE_GPU=1 makes a failed harness pre-flight (such as a handshake-time Fatal)
+# fail every case instead of skipping it, since ctest counts a skip as a pass
+# (ARCHITECTURE.md §16.1).
 mgl_itest_join_environment(MGL_ITEST_GLES_SPLIT_ENVIRONMENT
     "MOBILEGL_BACKEND_TYPE=DirectGLES" "MOBILEGL_TRANSPORT=inproc"
     "MOBILEGL_IPC_SERVER_PATH=${MGL_ITEST_SPLIT_SERVER_PATH}" "MGITEST_SPLIT_LANE=1"
     "MOBILEGL_ESPRYT_ENABLE_TEXTURE_VIEW=1" "MOBILEGL_ITEST_REQUIRE_GPU=1"
     ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
 
-# The two counting lanes, one per transport, and they are a PAIR: exit gate E3(c) asks that the
-# split arm's `mpr` equal the monolith arm's, and one test process can only ever see its own. So
-# both lanes run the same workload and assert the same constant, and the equality holds by
-# construction with each half able to fail on its own.
-#
-# Each gets a LOG PATH OF ITS OWN and a TEST_FILTER that selects ONE case, for the reason
-# PipeStatsWindow.h gives: the library opens its log fopen(path, "w"), so every process in a lane
-# truncates it, and two readers in one lane race under `ctest -j`. RESOURCE_LOCK on top of that,
-# for the reason the UnlocatedIoBlocks lane gives - measured on this tree, three runs of the full
-# integration-gpu label at -j 8 produced 4, 0 and 2 spurious failures of the log-reading cases
-# without it.
-#
-# The monolith lane declares NO arm: which arm AcquireMemoryRange takes for a sub-16-MiB
-# PERSISTENT|WRITE|COHERENT map is a property of the driver and the build, so the case RECORDS it
-# there and skips the assertion. Only the split lane - where R-6 pins the adopt tier at T2 -
-# declares one.
-# MOBILEGL_TRANSPORT=monolith IS NAMED HERE ON PURPOSE, and it is review finding N-6. This entry
-# is the MONOLITH half of a pair; without the property a job-level or gate-level
-# `MOBILEGL_TRANSPORT=inproc` export reaches it (observed: its own log then carried
-# `Config: MOBILEGL_TRANSPORT=inproc`) and, in the inproc arm of the three-arm A/B, BOTH halves of
-# the pair were inproc. Nothing failed - each half asserts the same constant - but the pair was
-# not the pair its name describes. A ctest ENVIRONMENT property overrides the job environment,
-# which is the one case where that is what you want.
+# The persistent-map counting pair: this monolith entry and DirectGLES.Split.PersistentMapArm.
+# further down run the same workload and assert the same mpr constant, so the split arm's count
+# equals the monolith arm's while each half can fail on its own. The monolith entry declares no
+# arm (which arm a small coherent map takes depends on driver and build; the case records it);
+# the split entry declares the emulated one. MOBILEGL_TRANSPORT=monolith is pinned so a job-level
+# transport export cannot turn this half into a split entry. Private log, single case and
+# RESOURCE_LOCK: ARCHITECTURE.md §16.1.
 mgl_itest_join_environment(MGL_ITEST_GLES_PMAP_ARM_ENVIRONMENT
     "MOBILEGL_BACKEND_TYPE=DirectGLES" "MGITEST_PMAP_LANE=1" "MOBILEGL_TRANSPORT=monolith"
     "MOBILEGL_PIPE_STATS=1" "MOBILEGL_PIPE_STATS_PERIOD=1"
@@ -1822,31 +1448,12 @@ mgl_itest_lane("DirectGLES.PersistentMapArm." "PersistentCoherentMapScenario.The
     LOCK persistent-map-arm-DirectGLES.log ENV "${MGL_ITEST_GLES_PMAP_ARM_ENVIRONMENT}")
 
 if (MOBILEGL_BUILD_DISAGGREGATED)
-    # One block per scenario, following the DirectGLES.MapPersistentRoundtrips. precedent: a
-    # `:`-separated multi-pattern TEST_FILTER is not used anywhere in this file, so its escaping
-    # through gtest_discover_tests' flat PROPERTIES forwarding is unproven, and three blocks cost
-    # nothing.
-    #
-    # ClearThenReadPixelsScenario is target A of the reduced path and already existed; Triangle is
-    # target B and PersistentCoherentMap is target C, both new in P5.
-    # ---- P6 `t6`: THE SPAWN ARM, beside the inproc one and never instead of it --------------
-    #
-    # EXIT GATES 9.2 AND 9.3: `integration-spawn`'s case-name set must be IDENTICAL to
-    # `integration-split`'s, and it must be green at the same count.
-    #
-    # THAT IDENTITY IS MADE STRUCTURAL RATHER THAN MAINTAINED. Registering the spawn arm as a
-    # second copy of each block would make the two sets agree today and drift the first time
-    # somebody adds a scenario to one of them - and a spawn lane covering LESS than the split
-    # lane goes green while proving less, with nothing to say so. One macro emits both arms from
-    # one filter, so a case added to either is added to both or to neither.
-    #
-    # ONE ENVIRONMENT DIFFERENCE, AND IT IS THE SUBJECT OF THE LANE. MOBILEGL_TRANSPORT=spawn
-    # makes the test process the CLIENT and has it launch a server from MOBILEGL_IPC_SERVER_PATH
-    # - the same path the inproc arm already carries, because under inproc the library reads it
-    # and decides it does not need one.
-    # D2: the texture-view opt-in, for the reason stated over the SPLIT list above. Under spawn
-    # the variable has to reach BOTH processes; it does, because the server is spawned from this
-    # process's environment.
+    # The spawn arm. mgl_itest_register_split_arms emits the inproc, spawn and tcp arms from one
+    # filter, so their case-name sets stay identical (scripts/ci/spawn_lane_parity.py checks it).
+    # MOBILEGL_TRANSPORT=spawn makes the test process the client and has it launch the server from
+    # MOBILEGL_IPC_SERVER_PATH. The server inherits this environment minus the transport and IPC
+    # keys (ServerSpawn.cpp), so the texture-view opt-in (see MGL_ITEST_GLES_SPLIT_ENVIRONMENT)
+    # reaches both processes.
     mgl_itest_join_environment(MGL_ITEST_GLES_SPAWN_ENVIRONMENT
         "MOBILEGL_BACKEND_TYPE=DirectGLES" "MOBILEGL_TRANSPORT=spawn"
         "MOBILEGL_IPC_SERVER_PATH=${MGL_ITEST_SPLIT_SERVER_PATH}" "MGITEST_SPLIT_LANE=1"
@@ -1869,24 +1476,12 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         --state "${MGL_TCP_STATE}")
     add_test(NAME TcpServer.Stop COMMAND "${Python3_EXECUTABLE}" "${MGL_TCP_FIXTURE}"
         stop --state "${MGL_TCP_STATE}")
-    # P3b/P4b wave 2-D package D2: THE TCP LANE'S SERVER IS PRE-STARTED BY THIS FIXTURE, not
-    # spawned from a client that already carries the lane environment, so a FEATURE opt-in has to
-    # be set here as well as on MGL_ITEST_GLES_TCP_ENVIRONMENT. tcp_server_fixture.py builds the
-    # supervisor's environment from os.environ (:60) and strips only the transport keys (:63-65),
-    # so a ctest ENVIRONMENT property on this entry reaches the server process.
-    #
-    # Measured, not assumed: without it every TextureViewAliasScenario case SKIPPED in the Tcp
-    # arm with "GL_ARB_texture_view not advertised" while the identical Split and Spawn arms ran
-    # - because under inproc and spawn the server inherits the client's environment and under tcp
-    # it does not. A feature knob that reaches two of three arms is the worst of the three states:
-    # the lane is green and tests nothing.
-    #
-    # P8-A: THE VULKAN PINS FOR THE SAME REASON - the ICD and, on lavapipe, the three iterationRP
-    # repairs every DirectVulkan entry carries (MGL_ITEST_VULKAN_ENV above). Magma reads them in
-    # the SERVER. Measured: DirectVulkan.Tcp.IterationRPProgram203Scenario and its Tcp.Full. twin
-    # missed the golden output by one texel while the Split and Spawn copies passed - the
-    # unrepaired shape that block describes. All four are Vulkan-only, so Espryt's server is
-    # unchanged.
+    # TcpServer.Start pre-starts the tcp arm's server, so it does not inherit a client entry's
+    # environment. tcp_server_fixture.py passes ctest's environment to the supervisor minus its
+    # transport and backend keys, so every knob the server reads is set on this entry: the
+    # texture-view opt-in and the MGL_ITEST_VULKAN_ENV pins (ICD, lavapipe repair) that Magma reads
+    # in the server. Without them the Tcp arm skips texture-view cases or misses goldens that the
+    # Split and Spawn arms pass. Espryt's server ignores the Vulkan pins.
     set(mglItestTcpServerEnvironment "MOBILEGL_ESPRYT_ENABLE_TEXTURE_VIEW=1")
     foreach(mglItestVulkanPin IN LISTS MGL_ITEST_VULKAN_ENV)
         if(NOT mglItestVulkanPin IN_LIST MGL_ITEST_COMMON_ENV)
@@ -1991,25 +1586,11 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         "MOBILEGL_ESPRYT_ENABLE_TEXTURE_VIEW=1"
         ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
 
-    # ---- P7 package L: THE SAME THREE ARMS FOR MAGMA ----------------------------------------
-    #
-    # The three lists above are the DirectGLES half of a dimension that had only one value. P7
-    # exit gate 1 asks for integration AND trace green "under Magma push and split", and until
-    # this package the shared labels `integration-split` / `-spawn` / `-tcp` held ZERO
-    # DirectVulkan entries: every arm of mgl_itest_register_split_arms hardcoded
-    # MOBILEGL_BACKEND_TYPE=DirectGLES and MGL_ITEST_MAGMA_WIRE_ENVIRONMENT hardcoded
-    # MOBILEGL_TRANSPORT=inproc, so the gate was not merely unmet, it was UNMEASURABLE.
-    #
-    # THE ONE DIFFERENCE FROM THE GLES TRIO IS ${MGL_ITEST_VULKAN_ENV}, AND IT IS NOT COSMETIC.
-    # That list carries VK_ICD_FILENAMES and, on lavapipe, the three iterationRP repairs the
-    # monolith `DirectVulkan.` arm has been pinned to since they were added (see its definition
-    # near the top of this file). A DirectVulkan lane that appended ${MGL_ITEST_COMMON_ENV}
-    # instead would run against whatever ICD the loader found first, which is exactly how a lane
-    # measures a different driver from the one the gate it mirrors measures.
-    #
-    # MOBILEGL_ITEST_REQUIRE_GPU=1 IS PINNED, as the existing Magma lanes pin it: on a host with
-    # no usable Vulkan every one of these entries would otherwise SKIP, and a lane that skipped
-    # everything and a lane that passed everything are the same green in ctest.
+    # ---- The same three arms for Magma ----------------------------------------------------
+    # They append ${MGL_ITEST_VULKAN_ENV} rather than the common list, so they run on the same ICD
+    # and lavapipe repair as the monolith DirectVulkan. arm instead of whatever ICD the loader
+    # finds first. MOBILEGL_ITEST_REQUIRE_GPU=1 makes a host without usable Vulkan fail rather than
+    # skip every entry (ARCHITECTURE.md §16.1).
     mgl_itest_join_environment(MGL_ITEST_VULKAN_SPLIT_ENVIRONMENT
         "MOBILEGL_BACKEND_TYPE=DirectVulkan" "MOBILEGL_TRANSPORT=inproc"
         "MOBILEGL_IPC_SERVER_PATH=${MGL_ITEST_SPLIT_SERVER_PATH}" "MGITEST_SPLIT_LANE=1"
@@ -2040,29 +1621,14 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         "MOBILEGL_IPC_REQUIRE_SAME_BUILD=1" "MOBILEGL_IPC_LOG_FORWARD=1" "MOBILEGL_IPC_TOKEN="
         "MGITEST_TCP_LANE=1")
 
-    # ---- P7 package L: ONE SHAPE FOR EVERY MAGMA LANE'S THREE ARMS --------------------------
-    #
-    # The gated Magma tier is six hand-laid blocks (Fm, Buffers, RunAhead, Caches, NamedBlit,
-    # P5fRsp) because each carries a flavour of its own. What they share is the ARM: the same
-    # three transports, the same tcp fixture, the same label and log-name arithmetic. This macro
-    # is that shared half, so a seventh block gets its arms right by calling one line.
-    #
-    # Sets, for the arm it is given:
-    #   mglItestArmLower          split | spawn | tcp
-    #   mglItestArmLogTag         "" on the inproc arm, "-spawn"/"-tcp" on the others - THE
-    #                             INPROC ARM'S PRIVATE LOG PATHS DO NOT MOVE. magma_cache_checks
-    #                             and magma_runahead_checks name entries and re-derive their logs
-    #                             from discovery, and P6.5's device evidence cites these paths.
-    #   mglItestArmProperties     the tcp fixture + resource lock; empty otherwise
-    #   mglItestArmTransportEnv   the arm's transport pins, to append to the lane's flavour
-    #   mglItestMagmaLabels       "integration-magma-<arm>" plus one label per WORD in ARGN
-    #
-    # THE SUB-LABEL SPELLING IS ASYMMETRIC ON PURPOSE. On the inproc arm a word keeps its
-    # historical name (`integration-magma-buffers`); on the others the ARM comes first
-    # (`integration-magma-spawn-buffers`). `ctest -L` is a regex, so the obvious
-    # `integration-magma-buffers-spawn` would be SELECTED by the CI step that runs
-    # `-L integration-magma-buffers` and require_greens its twenty-one inproc entries by name -
-    # the lane would red on "required green entries differ" the day this package landed.
+    # mgl_itest_magma_arm_shape(<Split|Spawn|Tcp> [words...]) sets, for a hand-laid Magma lane:
+    #   mglItestArmLower         split | spawn | tcp
+    #   mglItestArmLogTag        "" on Split, "-spawn" / "-tcp" otherwise, for private log names
+    #   mglItestArmProperties    the tcp fixture and resource lock; empty otherwise
+    #   mglItestArmTransportEnv  the arm's transport pins, appended to the lane's own environment
+    #   mglItestMagmaLabels      integration-magma-<arm> plus one label per word: Split keeps
+    #                            integration-magma-<word>, the others integration-magma-<arm>-<word>
+    #                            with the arm first (ARCHITECTURE.md §16.1)
     macro(mgl_itest_magma_arm_shape mglItestArm)
         string(TOLOWER "${mglItestArm}" mglItestArmLower)
         set(mglItestArmProperties)
@@ -2102,40 +1668,14 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     set(MGL_SPLIT_ARM_TEST_LISTS "")
     set(MGL_SPLIT_ARM_INDEX 0)
     set(MGL_SPLIT_ARM_CALLS "")
-    # ---- P7 package L: THE BACKEND IS NOW A PARAMETER, AND THE TWO TIERS IT REGISTERS -------
-    #
-    # TIER 1, GATED. DirectGLES keeps every label it had - `integration-gpu`,
-    # `integration-{split,spawn,tcp,tcp-device}` and the caller's extra stems - so the sets CI
-    # gates on and the names G14 ratchets are byte-for-byte what they were. Magma's own gated
-    # tier is `integration-magma-{split,spawn,tcp}`, laid out by hand further down this file
-    # because each of those lanes carries a FLAVOUR (strict + dual-block state, run-ahead
-    # credits, cache pinning) that no shared filter can express.
-    #
-    # TIER 2, INFORMATIONAL, AND THAT IS THE POINT. DirectVulkan through THIS macro registers
-    # `integration-magma-all-{split,spawn,tcp}`: every scenario the split arms run, on Magma, on
-    # all three transports. It is deliberately in NO CI gating step. P7's exit gate 1 needs a
-    # lane that can be RED - the first run's red list IS the work list wave 2 clusters A/B/C
-    # divide up - and a red list is worthless if the only way to record it is to break the
-    # build's green. When a cluster retires its share, its cases move from this tier into the
-    # gated one, and CI stays honest at every step in between.
-    #
-    # THE LABEL SPELLINGS ARE CHOSEN AGAINST `ctest -L`'s REGEX MATCH (ID-131's rule, which this
-    # file has paid for twice). `-L integration-magma-spawn` must NOT select this tier, so the
-    # tier's word goes in the MIDDLE - `integration-magma-all-spawn` does not contain
-    # `integration-magma-spawn` as a substring, while the obvious `integration-magma-spawn-all`
-    # does and would have quietly pulled ~100 expected-red entries into the gated lane. Checked
-    # in both directions for all six spellings.
-    #
-    # NO `integration-gpu` ON THE MAGMA ARMS, deliberately: that label is a hard CI gate and the
-    # existing Magma split entries do not carry it either. NO EXTRA LABEL STEMS either - a stem
-    # like `integration-clientarrays` would produce `integration-clientarrays-spawn`, which is
-    # the label the DirectGLES spawn arm already owns, and one `ctest -L` would then run two
-    # backends under one name.
-    #
-    # NO TcpDevice ARM ON MAGMA: the device endpoint is one phone, run serially, and doubling
-    # its matrix before the host lane is even green buys nothing. Stated rather than implied.
-    # Generic transport entries exercise ordinary behavior. Configuration-specific
-    # assertions run only in their pinned entries below, where CI requires a pass.
+    # mgl_itest_register_split_arms_for_backend registers one filter on every transport arm.
+    # DirectGLES entries carry the gated labels: integration-gpu, integration-<arm> and the
+    # caller's stems suffixed with the arm. DirectVulkan entries carry only
+    # integration-magma-all-<arm>, an informational tier outside every CI gate, with no extra stems
+    # (they would collide with the DirectGLES labels) and no TcpDevice arm; Magma's gated lanes are
+    # laid out by hand below. `all` sits mid-label so `ctest -L integration-magma-<arm>` cannot
+    # select this tier (ARCHITECTURE.md §16.1). mgl_itest_generic_split_filter leaves out
+    # configuration-specific cases, which run only in their pinned entries.
     function(mgl_itest_generic_split_filter input backend output)
         set(excluded
             LargeArenaAdoptionScenario.AnAdoptionCostsExactlyOneMapPersistentRoundtrip
@@ -2314,26 +1854,12 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     list(APPEND MGL_SPLIT_ARM_TEST_LISTS "MGL_SPLIT_ARM_TESTS_${MGL_SPLIT_ARM_INDEX}")
     math(EXPR MGL_SPLIT_ARM_INDEX "${MGL_SPLIT_ARM_INDEX} + 1")
 
-    # ---- P3b/P4b espryt D1 slice 1: THE ORPHANED XFB CAPTURE TARGET -------------------------
-    #
-    # The two cases whose whole subject is the split arm. A scattered capture is a
-    # read-modify-write of the destination's pre-capture bytes, and under a transport those bytes
-    # are the SERVER's staged shadow - so a buffer the application orphaned
-    # (glBufferData(size, NULL)) and only partly uploaded is the one shape where the shadow
-    # legitimately cannot answer for the whole range. The scatter used to read that as "discard
-    # this target": silently for a wholly orphaned store, and as
-    # Fatal{StageSnapshotTooNarrow, "xfb_scatter_pre_capture"} for a partly uploaded one.
-    #
-    # ---- P3b/P4b espryt D1 slice 2: THE WHOLE XFB FAMILY, once the writeback is sliced -------
-    #
-    # Slice 1 registered only OrphanedCaptureTarget* here, because the rest of these two files
-    # could not survive a transport: both writeback producers posted the WHOLE bound range as one
-    # SEG_EVENT record, and a record above half the ring (128 KiB at the 256 KiB default) is
-    # refused outright, which the server answers with Fatal{EventRingOverflow}. With the event
-    # sliced, the two scenarios go on in full - including the megabyte-range pair whose whole
-    # subject is that slicing, and XfbRepeatedCaptureScenario's gl_NextBuffer compacted-target
-    # shape, which is the first thing outside the census to exercise the archive-served stride
-    # and varyings (ProgramArchive->Link's xfb fields) on the server.
+    # ---- Transform feedback on the split arms (ARCHITECTURE.md §8.5) ----------------------
+    # The scatter reads the destination's pre-capture bytes from the server's staged shadow, so
+    # the OrphanedCaptureTarget cases (glBufferData(size, NULL), then a partial or no upload) cover
+    # a target the shadow cannot fully answer for. The writeback crosses SEG_EVENT in slices, which
+    # the megabyte-range cases exercise, and XfbRepeatedCaptureScenario's gl_NextBuffer case checks
+    # the stride and varyings the server takes from the program archive.
     mgl_itest_register_split_arms("XfbAfterClipDistanceScenario.*" "Xfb.")
     mgl_itest_register_split_arms("XfbRepeatedCaptureScenario.*" "Xfb.")
 
@@ -2404,30 +1930,14 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         math(EXPR MGL_SPLIT_ARM_INDEX "${MGL_SPLIT_ARM_INDEX} + 1")
     endforeach()
 
-    # ---- P10 B: AsyncCompileScenario ON THE SPLIT ARMS, IN ITS THREE PINNED CONFIGURATIONS ----
-    #
-    # ITS OWN BLOCK, for the ForcedDs block's reason: every case needs a whole-process compiler
-    # configuration (MOBILEGL_ASYNC_SHADER_COMPILE, MOBILEGL_ASYNC_OPTIMISTIC_SHADER_STATUS) and
-    # the registration macro hands every arm the shared environment. The three monolith entries
-    # near the top of this file - AsyncOn. (the whole scenario), AsyncOff. (the one case that
-    # has anything to say with compilation inline) and OptimisticShaderStatus. (the Iris shape)
-    # - are mirrored per arm, with one filter change: AsyncOn. leaves out the Iris case, which
-    # skips without MOBILEGL_ASYNC_OPTIMISTIC_SHADER_STATUS and runs in its own entry, so every
-    # entry here runs its case. The AMBIENT configuration is not registered here, for the
-    # monolith block's own reason: it runs whatever the shipped default is, and the day that
-    # flips it would stop covering the asynchronous half with nothing red.
-    #
-    # WHAT THE SPLIT ARM ADDS: the artifacts a worker built are shipped as program archives and
-    # linked and drawn by the SERVER's backend, so a worker-built archive the server mis-binds is
-    # a wrong quadrant here and nowhere in the monolith entries.
-    #
-    # THE SWITCH IS THE CLIENT'S ON ALL THREE ARMS, THE TCP ONE INCLUDED. The pool, its threads,
-    # glMaxShaderCompilerThreadsKHR and GL_MAX_SHADER_COMPILER_THREADS_KHR are frontend state,
-    # and the advertised GL_KHR_parallel_shader_compile is re-derived on the client from the same
-    # switch (CapsMirror.cpp, ReconcileClientCompileExtensions). So unlike an MGITEST_MAGMA_FORCE_*
-    # knob, the tcp fixture server not seeing the variable is exactly what that arm tests. Red
-    # before that fix: AsyncOff.ExtensionStringMatchesTheConfiguration on the Tcp arm, both
-    # backends - the string came from the default (async-on) fixture server.
+    # ---- AsyncCompileScenario on the split arms, in its three pinned configurations ---------
+    # Each case needs a whole-process compiler configuration (MOBILEGL_ASYNC_SHADER_COMPILE,
+    # MOBILEGL_ASYNC_OPTIMISTIC_SHADER_STATUS), so the monolith AsyncOn. / AsyncOff. /
+    # OptimisticShaderStatus. entries are mirrored per arm; AsyncOn. leaves out the Iris case, which
+    # has its own entry. Only pinned configurations are registered, so a change of the shipped
+    # default cannot drop either half. On these arms the server links and draws the worker-built
+    # program archives. The switch is client state (ReconcileClientCompileExtensions in
+    # CapsMirror.cpp), so the tcp fixture server not seeing it is part of what the Tcp arm checks.
     foreach(mglItestAsyncArm IN LISTS MGL_ITEST_MAGMA_ARMS)
         mgl_itest_magma_arm_shape(${mglItestAsyncArm})
         string(TOUPPER "${mglItestAsyncArm}" mglItestAsyncArmUpper)
@@ -2452,55 +1962,26 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     endforeach()
 
 
-    # ---- P5e fix1: THE PUSH-MONOLITH ARM, INSIDE THE GATED SET (ID-107) ----------------------
-    #
-    # WHY A MONOLITH LANE CARRIES THE `integration-split` LABEL. That label does not mean "runs
-    # inproc" - it means "the set the disaggregation gate runs", which is exactly why it is
-    # registered inside this `if (MOBILEGL_BUILD_DISAGGREGATED)` and why the block above argues
-    # that a build without the option must match NOTHING under it. ID-81 gives the push build TWO
-    # server arms, selected at runtime by MG_Config::Transport, and until now only one of them had
-    # a gated entry: every Split block above exports MOBILEGL_TRANSPORT=inproc, and every
-    # split-only scenario skips itself the moment the runtime is not split (SplitRuntimeSkipReason
-    # in their SetUp), so the ambient monolith registration of those files runs zero cases. The
-    # arm the phone actually ships on was therefore ungated, and P5e landed a null dereference on
-    # it under 2250 green unit entries and 113 green split entries (ID-107: the game died in
-    # Lightmap.<init> -> clearColorTexture -> glClear). A second arm needs a second lane, in the
-    # same set, or "the gate is green" keeps meaning "one of the two arms is green".
-    #
-    # MOBILEGL_TRANSPORT=monolith IS NAMED, for review finding N-6's reason exactly as the
-    # PersistentMapArm pair above names it: a ctest ENVIRONMENT property overrides the job
-    # environment, and without it a gate-level `MOBILEGL_TRANSPORT=inproc` export would quietly
-    # turn this block into a fourth copy of the split lane - the one failure mode a lane whose
-    # whole purpose is to be the OTHER arm cannot survive.
-    #
-    # The scenario is registered ambiently as well (its source is in the list above), so
-    # `DirectGLES.MonolithAttachmentClearScenario.*` and `DirectVulkan.…` still exist in
-    # integration-gpu; this block is the copy the gate can see, under a prefix that says which arm
-    # it pins.
+    # ---- The monolith arm inside the gated set --------------------------------------------
+    # integration-split names the set the disaggregation gate runs, not "runs inproc". A
+    # disaggregated build serves either arm, chosen at runtime by MG_Config::Transport; the Split
+    # blocks above all pin inproc and split-only scenarios skip under monolith, so this entry is
+    # the monolith arm's case in that set. MOBILEGL_TRANSPORT=monolith is pinned so a job-level
+    # transport export cannot turn it into another split entry (ARCHITECTURE.md §16.1). The
+    # ambient MonolithAttachmentClearScenario entries stay in integration-gpu.
     mgl_itest_join_environment(MGL_ITEST_GLES_PUSH_MONOLITH_ENVIRONMENT
         "MOBILEGL_BACKEND_TYPE=DirectGLES" "MOBILEGL_TRANSPORT=monolith"
         ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
     mgl_itest_lane("DirectGLES.PushMonolithArm." "MonolithAttachmentClearScenario.*"
         LABELS "integration-gpu\;integration-split" TEST_LIST MGL_PUSH_MONOLITH_ATTACHMENT_TESTS ENV "${MGL_ITEST_GLES_PUSH_MONOLITH_ENVIRONMENT}")
 
-    # ---- P5b d1: the indexed / instanced / multi-draw / indirect draw family under inproc ----
-    #
-    # One block per scenario, the precedent above. IndexedDrawFamilyScenario is d1's own lane
-    # case: every case's picture depends on a d1 draw (an element-buffer glDrawElements, a
-    # client index array, a base vertex, the Minecraft trace's DrawElementsInstancedBaseVertex,
-    # the two multi-draws, an indirect draw), so a record that did not cross is a wrong picture
-    # and not a green. MultiDrawScenario, DrawParametersScenario and PrimitiveRestartScenario are
-    # the census's own DrawElements / MultiDrawElementsBaseVertex / DrawArraysInstancedBaseInstance
-    # / MultiDraw*Indirect* first-blocker scenarios, now at their pictures. The whole of
-    # MultiDrawScenario is here since P8-A: its ClientSideIndicesBatchMatchesUnrolledDraws was
-    # excluded while a multi-draw with client-side indices was refused BY NAME under split
-    # (Fatal{UnmigratedVerb, "MultiDrawElementsBaseVertex+CLIENT_INDICES"}), and the client now
-    # flattens every sub-draw's client indices into one owned element buffer before the record is
-    # emitted (EmitTables.cpp's EmitMultiIndexedDraw, OwnedDrawInputs.h), so the
-    # server's CLIENT_INDICES latch is unreachable from our client and this case is the entry that
-    # would see it come back. GuiBatchScenario (the census's other DrawElements scenario) waited
-    # on Fatal{UnmigratedVerb, "MemoryBarrier"}; that verb has crossed since i1 and class C is
-    # empty, so P8Coverage.cmake registers it with the other monolith-only cases.
+    # ---- Indexed, instanced, multi-draw and indirect draws on the split arms ----------------
+    # Every IndexedDrawFamilyScenario case's picture depends on one of these draws, so a record
+    # that did not cross shows as a wrong picture. MultiDrawScenario runs whole: the client
+    # flattens every sub-draw's client indices into one owned element buffer before emitting
+    # (EmitMultiIndexedDraw in MG_Impl/Pipe/Verb/VerbPort.cpp, OwnedDrawInputs.h), and
+    # ClientSideIndicesBatchMatchesUnrolledDraws fails if a multi-draw with client indices reaches
+    # the server again (the +CLIENT_INDICES latch in RecordVerbSink.cpp).
     set(MGL_SPLIT_D1_SCENARIOS IndexedDrawFamilyScenario MultiDrawScenario DrawParametersScenario
                                PrimitiveRestartScenario)
     set(MGL_SPLIT_D1_FILTER_IndexedDrawFamilyScenario "IndexedDrawFamilyScenario.*")
@@ -2511,53 +1992,14 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         mgl_itest_register_split_arms("${MGL_SPLIT_D1_FILTER_${mglItestD1Scenario}}" "")
     endforeach()
 
-    # ---- P5e mv: THE MULTI-DRAW TIERS, INSIDE THE GATED SET (ID-109's rule, one level down) --
-    #
-    # WHY FIVE MORE LANES FOR ONE FILE. MultiDrawImpl asks the bound index buffer three questions
-    # and P5e (mv) moved all three onto the applier's record. Five of this driver's six tiers ask
-    # them from a DIFFERENT place in the batch - `RunIndirect` before any GL work, the rebased
-    # tier from the CPU shadow, `FlattenWithCompute` before PrepareForDraw has even run - and the
-    # resolved tier is ONE process-wide read of MOBILEGL_ESPRYT_MULTIDRAW_MODE (MultiDraw.cpp's
-    # ResolveTierOnce). The d1 block above leaves it at `auto`, and on every driver this gate has
-    # run against, `auto` lands on `ext` - a real multi-draw entry point that asks the index
-    # buffer nothing at all. Three of the five migrated sites therefore had no gated entry.
-    #
-    # That is ID-107's shape exactly one level down: code on a real arm, with no entry in the set
-    # the gate runs. The phase already paid 137 SEGFAULTs across 38 scenarios for the version of
-    # this that lived at the transport level, and the lesson ID-109 drew - "the gate runs the SET,
-    # so put the second arm in the set" - does not stop being true because the selector is an env
-    # knob rather than MG_Config::Transport. A manual sweep run once by one package decays to
-    # nothing by the next one.
-    #
-    # MOBILEGL_ESPRYT_MULTIDRAW_MODE IS A ctest ENVIRONMENT PROPERTY, not a job-level export, for
-    # review finding N-6's reason and the PushMonolithArm block's: the property overrides the job
-    # environment, so a gate that exported a mode of its own could not silently collapse these
-    # five lanes into five more copies of the `auto` one - the single failure mode a lane whose
-    # whole purpose is to pin a tier cannot survive.
-    #
-    # `ext` IS NOT REGISTERED HERE, deliberately: it is what `auto` already resolves to, so the
-    # d1 block above IS the ext lane and a sixth block would only run it twice. Every other tier
-    # was confirmed to resolve to ITSELF on this driver rather than falling back
-    # (`ResolveTier`'s "MOBILEGL_ESPRYT_MULTIDRAW_MODE=<x> -> <x> (driver supports: ext,
-    # basevertex, multiindirect, indirect, drawelements, compute (opt-in))"); a tier the driver
-    # refuses would resolve to `ext` and register an entry that quietly proves nothing, so if this
-    # list ever runs somewhere poorer, drop the refused tier rather than keeping a green that
-    # means "ext again".
-    #
-    # THE FILTER IS THE TIER-SENSITIVE WORKLOAD and nothing else, which is this file's own rule
-    # for an armed Split entry: MultiDrawScenario (its whole point is that a batch matches the
-    # unrolled draws, which is precisely what a wrong index buffer breaks quietly) and
-    # IndexedDrawFamilyScenario's three MultiDraw cases. The client-side-indices case joined with
-    # the d1 block's (P8-A): its flattened indices arrive as one owned element buffer, which is
-    # exactly the bound index buffer each tier asks its questions of.
-    #
-    # NOTE FOR THE STRICT-MARKER CENSUS (PREAMBLE-ADDENDUM-WAVE3 §4): these entries carry a THIRD
-    # name segment, so `strict_census2.sh` re-derives their gtest filter from the last two
-    # components and re-runs them WITHOUT the mode this block pins - which for these lanes is the
-    # whole point of the entry. They join Ct. / F1. / SmallRing. / PersistentMapArm. / NamedBlit.
-    # in that blind spot, so SplitLogPaths.cmake.in gives each of them a private log path: read
-    # the marker out of `build-split/MobileGL/MG_IntegrationTest/split-logs/<entry>.log`, which
-    # the LANE wrote under its own pin, instead of out of a re-run that lost it.
+    # ---- Multi-draw tiers pinned on the split arm -----------------------------------------
+    # MultiDrawImpl asks the bound index buffer three questions, and five of the six Espryt tiers
+    # ask them from a different point in the batch. MOBILEGL_ESPRYT_MULTIDRAW_MODE is read once per
+    # process (ResolveTierOnce in MultiDraw.cpp) and `auto` resolves to `ext` on the CI drivers,
+    # which the lanes above cover, so each other tier gets an entry with the mode pinned as a ctest
+    # ENVIRONMENT property (ARCHITECTURE.md §16.1). Drop a tier the driver refuses: it would run
+    # `ext` again. Each entry gets a private log under split-logs/ (SplitLogPaths.cmake.in), so the
+    # tier marker is read from the run that pinned it.
     set(MGL_SPLIT_MULTIDRAW_TIERS basevertex multiindirect indirect drawelements compute)
     set(MGL_SPLIT_MULTIDRAW_TIER_PREFIX_basevertex "BaseVertex")
     set(MGL_SPLIT_MULTIDRAW_TIER_PREFIX_multiindirect "MultiIndirect")
@@ -2576,33 +2018,13 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
             LABELS "integration-gpu\;integration-split" TEST_LIST "MGL_SPLIT_MULTIDRAW_${mglItestMultiDrawTier}_TESTS" ENV "${MGL_ITEST_GLES_SPLIT_MULTIDRAW_ENVIRONMENT}")
     endforeach()
 
-    # ---- P5b package i1 (docs/archive/contracts/CONTRACT-P5B.md §2 i1) --------------------------------
-    #
-    # THE LANE CASE THAT PROVES THE RECORDS CROSSED, and it is a RESULT and not a probe (R-16:
-    # a probe may not arm against a stub). Each of these four scenarios asserts a value that
-    # only exists if the verb ran on the apply thread - the texel a compute shader stored
-    # through an image unit, the word glCopyImageSubData moved, the counter an atomic add left
-    # behind, the block a program pipeline rebound - so a sink that DECLINED, or a client that
-    # fell through to the driver, is red by the number it reads back and not by a tally.
-    #
-    # Before i1 every one of these aborted at the client's Fatal{UnmigratedVerb} on the first
-    # glBindImageTexture / glDispatchCompute / glCopyImageSubData / glShaderStorageBlockBinding;
-    # all four are green under inproc now (the census: 13 + 6 + 11 + 3 DirectGLES entries).
-    # RED ONCE BY DOING X: return false from ServerVerbSink::OnLaunchGrid before the
-    # gl.DispatchCompute call and UnboundImageDescriptor / AtomicCounter / ProgramPipeline all
-    # read back their initial values.
-    #
-    # THE FILTERS ARE NARROWED TO THE CASES THAT ACTUALLY EMIT, and that is ScenarioFixture's
-    # rule rather than a convenience: an armed `DirectGLES.Split.` case must move the client
-    # encoder's record ordinal (ScenarioFixture.h:86), because a lane whose workload produced no
-    # record is the "resolved the transport and then fell through to the driver" shape that
-    # every pixel assertion is blind to. ProgramPipelineScenario's other nine cases are pure
-    # name/state cases that draw nothing, so the whole-scenario filter would arm them and they
-    # would be red for having nothing to say. The two named here are the ones that were
-    # Fatal{UnmigratedVerb, "ShaderStorageBlockBinding"} on the c0b head.
-    #
-    # One block per scenario, following the three above: a `:`-separated multi-pattern
-    # TEST_FILTER is unproven through gtest_discover_tests' flat PROPERTIES forwarding.
+    # ---- Image units, compute, copy-image, atomic counters and storage-block bindings -------
+    # Each scenario asserts a value that exists only if its verb ran on the apply thread (a texel
+    # stored through an image unit, a word glCopyImageSubData moved, an atomic counter, a rebound
+    # storage block), so a declined record or a client that fell through to the driver reads back
+    # the wrong number. Filters keep only cases that emit records: an armed DirectGLES.Split. case
+    # must move the client encoder's record ordinal (ScenarioFixture.h), and the other
+    # ProgramPipelineScenario cases draw nothing.
     set(MGL_SPLIT_I1_SCENARIOS
         UnboundImageDescriptorScenario   # bind_shader_image (72) + launch_grid (60), 13 cases
         CopyImageLayeredScenario         # resource_copy_region (53), 6 cases
@@ -2687,51 +2109,24 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     mgl_itest_register_split_arms("WindowPassGateScenario.*" "")
     mgl_itest_register_split_arms("DescriptorPoolGrowthScenario.*" "")
 
-    # ---- P5b t2: the transform-feedback spans, the XFB object bind, the patch parameter -------
-    #
-    # docs/archive/contracts/CONTRACT-P5B.md §2 t2. The three P5 lanes above are the REDUCED PATH's targets
-    # (a clear, a triangle, a persistent map); these two are the first lane entries whose GREEN
-    # DEPENDS ON A t2 RECORD HAVING CROSSED AND BEEN APPLIED BY THE BACKEND, which is the only
-    # statement a package flipping a verb can make that a unit case cannot:
-    #
-    #   TessellationXfbCaptureScenario  covers BOTH halves of t2 in one workload. Every case
-    #       calls glPatchParameteri(GL_PATCH_VERTICES, n) and then draws GL_PATCHES into a
-    #       transform-feedback capture, and asserts the CAPTURED BYTES. A patch_parameter (73)
-    #       that did not reach the server tessellates at the previous patch size and the capture
-    #       is the wrong length; a begin/end_stream_output (62/63) that did not reach it leaves
-    #       the buffer holding the scenario's poison value, which is what those cases print.
-    #   XfbCaptureBufferReuseScenario   is the span family alone, across four buffer lifetimes
-    #       (a buffer per span, one immutable-storage buffer, one respecified buffer, a
-    #       respecification that changes the capture size). It is the case that would notice a
-    #       span whose END crossed but whose BEGIN did not, because the second span's bytes
-    #       would be the first span's.
-    #
-    # Both are DirectGLES only, deliberately, and the reason is measured rather than assumed:
-    # under Magma the capture is written into the server's resident slice and there is no route
-    # back, because MG_Backend/Init.cpp's ConsumedSubsystemsFor(DirectVulkan) withholds
-    # kMGPipeSubsystemResources, so BufferObject::SyncGpuWrites() emits no resource_readback.
-    # Every DirectVulkan XFB capture entry in the inproc census fails on exactly that (t2-v1.md
-    # §"the 51"), and it retires with P7 (Magma's resource family) / P9 (the readback carrier) -
-    # not here. A DirectVulkan arm of this lane would be red for a reason t2 cannot fix.
+    # ---- Transform-feedback spans, the XFB object bind and the patch parameter --------------
+    # Both scenarios pass only if those records crossed and the backend applied them.
+    # TessellationXfbCaptureScenario sets GL_PATCH_VERTICES, draws GL_PATCHES into a capture and
+    # checks the captured bytes: a lost patch parameter changes the capture length, a lost span
+    # leaves the scenario's poison value. XfbCaptureBufferReuseScenario runs spans over four buffer
+    # lifetimes, so a span whose end crossed without its begin shows the previous span's bytes.
+    # On Magma's split arms they run only in the informational integration-magma-all-* and
+    # integration-magma-full-* tiers.
     mgl_itest_register_split_arms("TessellationXfbCaptureScenario.*" "")
     mgl_itest_register_split_arms("XfbCaptureBufferReuseScenario.*" "")
 
-    # ---- P10 B: THE TWO XFB QUERY TARGETS ON ONE SPAN ---------------------------------------
-    #
-    # XfbPrimitiveQueryScenario asks GL_PRIMITIVES_GENERATED and GL_TRANSFORM_FEEDBACK_PRIMITIVES_
-    # WRITTEN about one vertex-only capture, once with room for every point and once overflowing
-    # (4 generated, 3 written), and reads the captured records back. Under a transport both
-    # answers are query replies from the server and the records a readback of the server's
-    # capture, so a WRITTEN that crossed as the GENERATED count, or a result read before the
-    # span's end record was applied, is a wrong number here. The Magma arms are the
-    # `DirectVulkan.<arm>.XfbQuery.` block after the Remint block.
-    #
-    # PrimitivesGeneratedNoXfbScenario IS NOT REGISTERED ON THESE ARMS, by name: every case in it
-    # skips in SetUp on DirectGLES ("the stream-query defect and its reroute are DirectVulkan's"),
-    # because ES has no GENERATED counter for a draw with no capture span and Espryt's CPU
-    # accounting is a different mechanism. Three arms of guaranteed skips would be a green that
-    # ran nothing. Its Magma arms are the `PrimGen.` / `PrimGenReroute.` entries in the same
-    # block as the XfbQuery. ones.
+    # ---- GL_PRIMITIVES_GENERATED and GL_TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN on one span ----
+    # XfbPrimitiveQueryScenario captures with and without overflow (4 generated, 3 written) and
+    # reads the records back. Under a transport both answers are server query replies, so a swapped
+    # count or a result read before the span's end was applied shows as a wrong number.
+    # PrimitivesGeneratedNoXfbScenario is not registered here: every case skips on DirectGLES.
+    # The Magma arms of both are the DirectVulkan.<arm>.XfbQuery. / PrimGen. / PrimGenReroute.
+    # entries further down.
     mgl_itest_register_split_arms("XfbPrimitiveQueryScenario.*" "")
 
     # ---- P5e package vi (docs/archive/contracts/CONTRACT-P5E.md §5.1, ID-82 / ruling 2) --------------------
@@ -2743,63 +2138,22 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
 
     mgl_itest_register_split_arms("SyncWireScenario.*" "")
 
-    # =========================================================================================
-    # P3b/P4b WAVE 2-D PACKAGE D2 - OWN BLOCK. Package D1 (XFB / readback) registers its arms in
-    # its own block elsewhere in this file; keep the two apart so the integrator can merge both.
-    # =========================================================================================
-    #
-    # THE OWNER-KEYED EMISSION CURSOR, under all three transports. The claim is about WHICH
-    # emission cursor an upload through a texture VIEW lands on, and it is only interesting where
-    # the record actually crosses a wire: under monolith the drain's SubDataCount still moves but
-    # nothing downstream can disagree with the client's own dirty model, because there is one
-    # address space and one MipmapStorage. Under split the applier holds its own per-record
-    # pending-upload set, so a cursor that cleared the wrong flag produces a server-side level
-    # that never receives the texels - which is the failure this registration exists to reach.
-    #
-    # Every case draws and reads pixels, so each moves the client encoder's record ordinal and
-    # satisfies ScenarioFixture's armed-lane rule. The three GLES arm environments carry
-    # MOBILEGL_ESPRYT_ENABLE_TEXTURE_VIEW=1 (above); without it every case green-skips through
-    # TextureViewUsable() rather than failing - which is what the Tcp arm did until the fixture
-    # entry below got the same knob.
-    #
-    # ALL FOUR CASES RUN ON ALL THREE ARMS. TheOwnerUploadDrainRunsAgainAfterADrawBoundary was
-    # EXCLUDED BY NAME here by package D2, which found the defect but could not fix it inside its
-    # own footprint:
-    #
-    #   after a view has been SAMPLED once, a later glTexSubImage through the OWNER's own name
-    #   never becomes visible through the view.
-    #
-    # Package D3 fixed it and this is its red-once (rule J): the case is red on Split, Spawn AND
-    # Tcp at D2's head a7c06f4f with this exclusion lifted and nothing else changed, and green on
-    # all three with the fix. The client half was never at fault - the case's own counter
-    # assertions pass on the red run, so the records were emitted and the applier accepted them.
-    # The server's per-texture clean gate BackendTextureObject::IsDrawSyncCleanByRecord
-    # (MG_Backend/DirectGLES/Managers.cpp) compared the VIEW's record.Serial and
-    # record.PendingUploads, while an owner-side resource_subdata moves only the OWNER's
-    # (MG_Pipe/PipeApply.cpp ApplyTextureUpload). The gate now RESOLVES THROUGH Desc.ViewOf to the
-    # storage owner's record for those two clauses, which is the split equivalent of the monolith
-    # gate's GetContentVersion() forwarding (TextureObjectView.cpp:100-102). CONTRACT-P5E.md §5.2
-    # states the rule the code now implements.
+    # ---- TextureViewAliasScenario: uploads through a texture view, on all three transports --
+    # The client keys every texture upload on the view's storage owner, and the applier keeps a
+    # pending-upload set per record, so a flag cleared on the wrong record leaves a server-side
+    # level without its texels. The server's clean gate reads the owner's record for a view
+    # (ARCHITECTURE.md §6.1.2), which TheOwnerUploadDrainRunsAgainAfterADrawBoundary checks on
+    # every arm. Every case draws, so each moves the record ordinal; the arm environments carry
+    # the texture-view opt-in.
     mgl_itest_register_split_arms("TextureViewAliasScenario.*" "")
 
-    # ---- D2: THE UPLOAD-SHAPE GOLD, UNDER ALL THREE TRANSPORTS ------------------------------
-    #
-    # WRITTEN OUT PER ARM RATHER THAN THROUGH mgl_itest_register_split_arms, and the reason is
-    # structural rather than stylistic: the macro hands every arm the SHARED
-    # MGL_ITEST_GLES_<ARM>_ENVIRONMENT, and this case needs four things no shared list carries -
-    # MGITEST_TEXTURE_UPLOAD_SHAPE_LANE=1 (without it the case skips), MOBILEGL_PIPE_STATS=1 with
-    # PERIOD=1, MOBILEGL_PIPE_PUSH=0x1fff, and a MOBILEGL_LOG_FILE_PATH PRIVATE TO THE ARM. That
-    # last one is not negotiable: the library opens the log fopen(path, "w"), so two entries
-    # sharing a path truncate each other under `ctest -j` and the failure looks exactly like "the
-    # counter was never emitted". The PersistentMapArm pair above is the same shape for the same
-    # reason. A macro call here would produce three entries that all green-skip.
-    #
-    # WHAT THE SPLIT ARMS ADD OVER THE MONOLITH LANE. The monolith lane reads one log, because
-    # there is one role. Under SPAWN and TCP the client and the server are two PROCESSES with two
-    # independent counter sets - the client's line carries ctu= and the server's carries tex[] -
-    # and the `ctu == emit` comparison the whole scenario exists for is only a real comparison
-    # there. Under inproc it is one process with two log FILES, which is the arm that proves the
-    # role-derived path reading without needing two counter sets.
+    # ---- TextureUploadShapeScenario on the three transports -------------------------------
+    # Written out per arm rather than through mgl_itest_register_split_arms: the case needs
+    # MGITEST_TEXTURE_UPLOAD_SHAPE_LANE=1, the stats switches and a log path private to the arm,
+    # which the shared arm environments do not carry (ARCHITECTURE.md §16.1). Under spawn and tcp
+    # the client's emission count and the server's tex[] come from two processes with their own
+    # counters, so their agreement is a real comparison there; under inproc one process writes two
+    # role logs, which checks that each role's line is read from its own file.
     set(MGL_D2_TUS_FILTER "TextureUploadShapeScenario.TheEmittedUploadShapeIsRecordedAndTheTwoSidesAgree")
     foreach(mglD2Arm Split Spawn Tcp)
         string(TOLOWER "${mglD2Arm}" mglD2ArmLower)
@@ -2839,33 +2193,14 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
             LABELS "integration-gpu\;integration-${mglD2ArmLower}" LOCK "${mglD2Locks}" PROPERTIES ${mglD2Extra} ENV "${MGL_D2_TUS_ENV_${mglD2Arm}}")
     endforeach()
 
-    # ---- P7 CI: THE SPAWN CLIENT'S COLD-START BUDGET ----------------------------------------
-    #
-    # A spawned server brings its native backend up lazily, inside the first surface creation
-    # (Espryt) or the first MakeCurrent (Magma). On loaded CI runners that took longer than the
-    # client's 5 s steady reply bound, and retrace-split's spawn legs died on "no SurfaceReply for
-    # CreatePbufferSurface seq 2" / "for MakeCurrent seq 3" while the server was about to answer.
-    # ClientSession now gives those two kinds of op MOBILEGL_IPC_COLD_START_MS (default 20 s)
-    # until the session's first MakeCurrent is answered ok.
-    #
-    # These two entries are that rule's red-once: the server's test lever
-    # MOBILEGL_TEST_DELAY_FIRST_BRINGUP_MS holds the first surface creation and the first
-    # MakeCurrent back by 6 s each - past the steady bound, which stays at its 5 s default. With
-    # the cold-start budget both ops land inside 20 s and the case is green. Against the client as
-    # it was before (every op on a hard-coded 5 s), with the budget selection removed, or with the
-    # cold-start default lowered to the old 5 s, the first one times out and the case reds on
-    # "remote spawn bring-up failed" - the CI failure in miniature. A 3 s lever under a 2 s steady
-    # knob was faster but proved less: the pre-fix client never read MOBILEGL_IPC_CONTROL_TIMEOUT_MS,
-    # so its 5 s bound outlasted the lever and the entries were green at 14e1c8b9 (measured).
-    # SINCE p7/spawnhang THEY ARE NO LONGER THE BUDGET SELECTION'S RED-ONCE: a 20 s bring-up outran
-    # the cold-start budget too (run 35912252677), so both budgets now bound SILENCE - the server
-    # reports Wire::SurfaceProgress every 250 ms while it runs the op, and each report restarts the
-    # client's budget. These entries stay as the end-to-end check that a held bring-up is waited
-    # for on both backends; the mechanism's red-once is ServerSpawnTest's cold-bring-up case (unit).
-    # Each entry takes ~25 s, because the harness's pre-flight child brings a server up as well.
-    # NOT on integration-spawn: this is not a copy of the split lane (spawn_lane_parity.py). The
-    # DirectVulkan entry does carry integration-gpu, unlike the Magma arms' informational tiers
-    # below: it is one expected-GREEN case, and Magma's bring-up is the MakeCurrent half.
+    # Cold-start bring-up on the spawn arm. A spawned server brings its native backend up lazily,
+    # inside the first surface creation (Espryt) or the first MakeCurrent (Magma).
+    # MOBILEGL_TEST_DELAY_FIRST_BRINGUP_MS holds both ops 6 s, past the 5 s steady reply bound;
+    # the client must wait them out (those ops run under MOBILEGL_IPC_COLD_START_MS, and each
+    # Wire::SurfaceProgress report restarts the budget). Unit check: ServerSpawnTest's
+    # cold-bring-up case. Both entries are expected green, so the Magma one carries integration-gpu
+    # too; ~25 s each, as the harness's pre-flight child brings a server up as well. Not on
+    # integration-spawn, whose name set must equal the split lane's (spawn_lane_parity.py).
     set(MGL_COLDSTART_FILTER "ClearThenReadPixelsScenario.ClearWithNoDrawIsVisibleToDefaultFramebufferReadPixels")
     foreach(mglColdBackend DirectGLES DirectVulkan)
         if(mglColdBackend STREQUAL "DirectVulkan")
@@ -2883,23 +2218,12 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
             LABELS "integration-gpu\;integration-cold-start" ENV "${MGL_COLDSTART_ENV_${mglColdBackend}}")
     endforeach()
 
-    # ---- D2: THE TEXTURE / PROGRAM SPLIT-SCENARIO CENSUS ------------------------------------
-    #
-    # PLAN-PH-P34B-P7.md 1.2, "门：纹理 / program 场景 split 覆盖". Each candidate was run once
-    # under MOBILEGL_TRANSPORT=inproc on build-split and its FIRST BLOCKER recorded; the row per
-    # scenario x backend x blocker is in docs/archive/notes/p34b/split-scenario-census.md. What follows is the
-    # result of that census, not a guess: every scenario listed here passed, and every case that
-    # did not is excluded BY NAME below with its blocker.
-    #
-    # D1 owns PixelStoreSweep, DepthStencilReadbackMatrix, PackedWordReadback and
-    # LayeredTextureReadback - they are not here.
-    #
-    # DIRECTVULKAN ARMS DEFAULT TO NONE, and that is not an omission. The macro records every
-    # call and the informational tier-2 block at the end of this file replays all of them on
-    # DirectVulkan under integration-magma-all-{split,spawn,tcp} - so these scenarios DO get a
-    # Magma reading, just not a gating one. Gating them there would be asserting P7 wave 2's
-    # exit gate 1 from inside a P3b/P4b package, on a backend whose own @P7 named refusals are
-    # still being retired in waves A/B/C.
+    # Texture and program scenarios on the DirectGLES split arms. Every scenario listed passes on
+    # those arms whole; cases that do not are left out and named in the comments below. The
+    # readback scenarios (PixelStoreSweep, DepthStencilReadbackMatrix, PackedWordReadback,
+    # LayeredTextureReadback) are registered with the readback blocks above. Their DirectVulkan
+    # split arms are only the ungated Magma census lanes (integration-magma-all-* replays this
+    # call, integration-magma-full-* runs the whole binary).
     set(MGL_SPLIT_D2_SCENARIOS
         TextureViewScenario                       # glTextureView end to end, 10 cases
         TextureParamsWithoutASamplerViewScenario  # G9's four cases; also settles the debt-table row
@@ -2999,24 +2323,11 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     mgl_itest_lane("DirectGLES.Split.PersistentMapArm." "PersistentCoherentMapScenario.TheMapLandsInTheArmItsLaneDeclares"
         LABELS "integration-gpu\;integration-split" LOCK persistent-map-arm-split-DirectGLES.log ENV "${MGL_ITEST_GLES_SPLIT_PMAP_ARM_ENVIRONMENT}")
 
-    # --- EXIT GATE E3(e): the same checks with a ring small enough to force back-pressure -----
-    #
-    # BRIEF 7 E3(e) - "以上五条再跑一遍 ring 小到足以至少发生一次背压等待的配置" - was missing from
-    # the first cut of this package and missing from its report (review finding M-7). It is a
-    # LANE, not a new scenario: the same three split scenarios with SEG_CMD and SEG_STAGE at their
-    # floor, so a workload that fits comfortably in the 8 MiB / 32 MiB defaults has to wrap and
-    # wait at least once.
-    #
-    # 1 MiB is ConfigLoader's minimum for both (Config.h / ConfigLoader.cpp:363-364, floors of 1
-    # rather than 0 because a ring caps ONE record at half its size). That caps a record at 512
-    # KiB, which every record on the reduced path is far under, so the ring is legal and small
-    # rather than unusable.
-    #
-    # WHAT THIS LANE DOES NOT YET ASSERT, stated rather than implied: that a back-pressure wait
-    # ACTUALLY happened. That needs a counter only package s1 can publish (a producer-parked or
-    # ring-full tally on RingControl); until it exists this lane proves the five checks survive a
-    # small ring, not that the small ring bit. The gap is named in t1-v1.md's debts rather than
-    # left for someone to discover from a green.
+    # Small-ring lane: the same split scenarios with SEG_CMD and SEG_STAGE at ConfigLoader's 1 MiB
+    # floor (defaults 8 / 32 MiB), so the workload has to wrap the ring and wait for staging space.
+    # A ring caps one record at half its size, and 512 KiB is far above any record on these paths.
+    # Under MGITEST_SMALL_RING_LANE, TriangleScenario drives past the ring size and asserts a
+    # SEG_CMD wrap and a staging back-pressure wait (WireLedger::ExpectSmallRingWrappedAtLeastOnce).
     mgl_itest_join_environment(MGL_ITEST_GLES_SPLIT_SMALL_RING_ENVIRONMENT
         "MOBILEGL_BACKEND_TYPE=DirectGLES" "MOBILEGL_TRANSPORT=inproc" "MOBILEGL_ITEST_REQUIRE_GPU=1"
         "MOBILEGL_IPC_SERVER_PATH=${MGL_ITEST_SPLIT_SERVER_PATH}" "MGITEST_SPLIT_LANE=1"
@@ -3030,32 +2341,12 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
             LABELS "integration-gpu\;integration-split" TEST_LIST "MGL_SPLIT_SMALL_${mglItestSmallRingScenario}_TESTS" ENV "${MGL_ITEST_GLES_SPLIT_SMALL_RING_ENVIRONMENT}")
     endforeach()
 
-    # ---- P5e package pa: THE STRICT LANE GETS ENTRIES OF ITS OWN ------------------------------
-    #
-    # pa retired the two per-draw program rows - Fatal{UnmigratedPipeInput,
-    # "GetProgramForDraw@DrawArrays"} and "...GetProgramForDispatch@DispatchCompute", 69 of the
-    # 109 entries the strict lane was red on. NOTHING GATED THEM. MOBILEGL_IPC_STRICT_ERRORS=1 is
-    # a knob the phase's gate driver sets by hand, no REGISTERED entry exports it, and package
-    # pg's declared red-once for this exact marker never landed - so the row could come back and
-    # every gate would stay green. That is ID-109's finding in miniature: the gap was never a
-    # missing test case, it was a missing gated ENTRY for a whole reading.
-    #
-    # WHICH SCENARIOS MAY JOIN is decided by the knob itself: under it every BARRIER-PULLED read
-    # is Fatal, and most split scenarios end in a readback, whose GetFramebufferBindingSlot@ReadPixels
-    # is an allowlisted row that only P7 retires. So a scenario is eligible exactly when it
-    # reaches PrepareForDraw / PrepareForCompute and then does NOT read pixels back. Two do, one
-    # per half of pa, and both were red with pa's own marker before it landed:
-    #   * MultiDrawScenario.BaseVertexDrawsRejectMalformedArguments - the DRAW half; it prepares a
-    #     draw and then asserts on GL errors rather than on pixels.
-    #   * AtomicCounterScenario.* - the DISPATCH half, and all three cases were
-    #     GetProgramForDispatch@DispatchCompute entries.
-    #
-    # LABELS IS integration-split ALONE, deliberately, and it is not the hole ID-109 names. That
-    # hole was a runtime ARM with no entry anywhere; here the monolith arm of these same scenarios
-    # is registered under DirectGLES. already and this knob is a no-op on it - a monolith client
-    # fills and stamps all 63 fields at every verb, so no read is unfresh and nothing can trip.
-    # An entry that cannot fail for the reason it exists is worse than none (R-16), so this lane
-    # names the arm it is for in its own prefix. The F1. lane sets the same precedent.
+    # Strict-errors entries for the per-draw and per-dispatch program reads. Under
+    # MOBILEGL_IPC_STRICT_ERRORS=1 a barrier-pulled pipe-input read is Fatal{UnmigratedPipeInput},
+    # so these go red if GetProgramForDraw@DrawArrays or GetProgramForDispatch@DispatchCompute is
+    # pulled again. The MultiDrawScenario case prepares a draw and checks GL errors, not pixels;
+    # AtomicCounterScenario dispatches. Labelled integration-split only: on the monolith arm the
+    # knob cannot trip, because the client fills every field at every verb.
     mgl_itest_join_environment(MGL_ITEST_GLES_SPLIT_STRICT_ENVIRONMENT
         "MOBILEGL_BACKEND_TYPE=DirectGLES" "MOBILEGL_TRANSPORT=inproc" "MOBILEGL_ITEST_REQUIRE_GPU=1"
         "MOBILEGL_IPC_SERVER_PATH=${MGL_ITEST_SPLIT_SERVER_PATH}" "MGITEST_SPLIT_LANE=1"
@@ -3161,23 +2452,11 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         "F1WireScenario.TextureAndFramebufferReadsPreservePackBufferPadding" "F1.")
     mgl_itest_register_split_arms(
         "F1WireScenario.TextureReadbackRejectsPackedDestinationOverflowBeforeWriting" "F1.")
-    # P5f fm: the framebuffer/copy/mipmap verbs now consume server records on Magma too.
-    #
-    # P7 package L: THE SAME CASES ON ALL THREE TRANSPORTS. The flavour is everything this lane
-    # is except the transport, which the arm now supplies - so the inproc arm is byte-for-byte
-    # the lane P6.5 left green (same names, same labels, same log paths) and the two new arms
-    # differ from it in exactly one dimension. That is what makes a red here readable: it is a
-    # TRANSPORT fact, because nothing else changed.
-    #
-    # ${MGL_ITEST_VULKAN_ENV} AND NOT ${MGL_ITEST_COMMON_ENV} (P7 package L, integrator ruling).
-    # Until this ruling the six Magma lanes appended the COMMON list, so the monolith
-    # `DirectVulkan.` arm ran with VK_ICD_FILENAMES pinned and the three lavapipe iterationRP
-    # repairs forced on while these 73 entries ran against whatever ICD the loader happened to
-    # find first, with the repairs at their device auto-detection default. That is not a
-    # semantic difference between two lanes, it is a latent flake: the day a runner or a
-    # workstation grows a second ICD, this lane measures a different driver from the gate it
-    # mirrors and nothing in its output says so. Consistency over "meaning unchanged" - and the
-    # re-run after the change is part of the ruling: integration-magma-split stayed 71/0/2.
+    # Magma's framebuffer, copy and mipmap verbs on the three transports (the Fm lane). The flavour
+    # is fixed and only the arm supplies the transport, so a red on one arm alone is a transport
+    # fact. The flavour appends ${MGL_ITEST_VULKAN_ENV}, not ${MGL_ITEST_COMMON_ENV}: it pins
+    # VK_ICD_FILENAMES and the lavapipe iterationRP repairs, so this lane measures the same driver
+    # as the monolith `DirectVulkan.` arm instead of whatever ICD the loader finds first.
     set(MGL_ITEST_MAGMA_WIRE_FLAVOUR_ENV
         "MOBILEGL_BACKEND_TYPE=DirectVulkan" "MOBILEGL_ITEST_REQUIRE_GPU=1" "MGITEST_SPLIT_LANE=1"
         ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_VULKAN_ENV})
@@ -3212,52 +2491,14 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
             mgl_itest_lane("DirectVulkan.${mglItestArm}.Fm." "EmptyTextureLevelScenario.${emptyLevelCase}"
                 LABELS "${mglItestMagmaLabels}" PROPERTIES ${mglItestArmProperties} ENV "${mglItestMagmaWireEnvironment}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p7-emptylevel${mglItestArmLogTag}-${emptyLevelCase}.log")
         endforeach()
-        # ---- P7 wave 2-B: THE TWO SHADER MIP ARMS, FORCED ------------------------------------
-        #
-        # WHY A KNOB AND NOT A FORMAT. The refusal these two entries cover
-        # (`Magma:mipmap-shader-format-or-shape`) killed two Iris cases on an Adreno 830v2 and
-        # has never once fired on this host, because lavapipe reports BLIT_SRC|BLIT_DST for
-        # every colour format the integration binary can create - so GenerateWireMipmap takes
-        # its NATIVE arm for all of them and neither shader arm is reachable by choosing a
-        # format. `GenerateMipmapPackedFloatPixels` next door looks like it covers the shader
-        # arm and does not: R11F_G11F_B10F blits natively here too.
-        # MGITEST_MAGMA_FORCE_SHADER_MIPMAP drops that arm instead, one tier per shape, so the
-        # host lane exercises the code the device actually runs.
-        #
-        # ITS OWN ENTRIES RATHER THAN A LANE-WIDE FLIP, for the reason the strict-arming entry
-        # gives: the knob changes how EVERY mipmap in the process is generated, so putting it in
-        # the shared Fm environment would silently retarget GenerateMipmapPixels,
-        # GenerateMipmapPackedFloatPixels, GenerateMipmapDepthPixels and the two base/view cases
-        # as well - four green entries that would stop measuring the arm they were written for.
-        # ---- P7 wave 2-B2: A SERVER-SIDE KNOB HAS NO TCP ARM, AND THAT IS STRUCTURAL ---------
-        #
-        # Every MGITEST_MAGMA_FORCE_* knob in this block is read BY THE SERVER
-        # (WireFramebuffer.inc's three `std::getenv` readers run on the apply thread). A ctest
-        # ENVIRONMENT property reaches the process ctest starts - the CLIENT - and the two arms
-        # differ in where the server comes from:
-        #   inproc  the server is a thread of that same process, so it sees the knob;
-        #   spawn   ServerSpawn.cpp copies ::environ into the child, so it sees the knob;
-        #   tcp     the server is the LANE-WIDE TcpServer.Start fixture, started once from the
-        #           fixture's own os.environ (scripts/ci/tcp_server_fixture.py) long before any
-        #           case runs, and it forks a session child per Hello. Nothing a per-test
-        #           ENVIRONMENT says can reach it.
-        #
-        # So a tcp copy of a knob entry does not exercise the arm it names - it runs the
-        # DEFAULT arm under a name that claims otherwise, which for ShaderMip is precisely what
-        # that case's own skip message says must not happen ("this case would assert the native
-        # blit twice over"). MEASURED, not deduced: a temporary fatal in each of the three
-        # readers killed all five knob=1 entries on split and on spawn and left ALL FIVE GREEN
-        # on tcp.
-        #
-        # Registering them on split+spawn only is therefore a coverage statement, not a gap, and
-        # it is NAMED in scripts/ci/spawn_lane_parity.py (MAGMA_SERVER_ENV_KNOB_NO_TCP) the way
-        # MAGMA_INPROC_ONLY and MONOLITH_ONLY are, so the parity gate keeps its teeth for
-        # everything else. The knob=0 twins (DefaultBlitShape0, MsResolve0) DO stay on tcp: zero
-        # is the default, so those entries mean the same thing on all three arms.
-        #
-        # Making the tcp lane able to carry these would need the fixture to take a per-case
-        # server environment - a supervisor control, not a ctest property - and that is a debt,
-        # recorded in docs/archive/notes/p7/magma-b2.md §6.
+        # ShaderMip<tier>: MGITEST_MAGMA_FORCE_SHADER_MIPMAP makes GenerateWireMipmap skip its
+        # native blit (tier 1) and also treat the level as not attachable (tier 2), the arms
+        # devices take. Lavapipe blits every colour format this binary creates, R11F_G11F_B10F
+        # included, so no format choice reaches them. Own entries: the knob retargets every mipmap
+        # in the process. A server-read knob set per entry never reaches the shared tcp fixture's
+        # server, so knob entries skip the Tcp arm (mglItestServerEnvKnobArm) and are listed in
+        # spawn_lane_parity.py's MAGMA_SERVER_ENV_KNOB_NO_TCP; knob=0 twins keep all three arms.
+        # ARCHITECTURE.md §16.1.
         set(mglItestServerEnvKnobArm TRUE)
         if(mglItestArm STREQUAL "Tcp")
             set(mglItestServerEnvKnobArm FALSE)
@@ -3282,27 +2523,14 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         # is asked, so the plain Fm environment reaches it on every driver.
         mgl_itest_lane("DirectVulkan.${mglItestArm}.Fm." "F1WireScenario.GenerateMipmapDepthStencilDeclinesAndKeepsTheSession"
             LABELS "${mglItestMagmaLabels}" PROPERTIES ${mglItestArmProperties} ENV "${mglItestMagmaWireEnvironment}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p7-dsmipdecline${mglItestArmLogTag}.log")
-        # `copy-image-in-place@P7`'s retirement and its one surviving decline. SPLIT-ONLY in the
-        # strongest sense: the monolith arm declines every in-place copy, so there is no
-        # DirectVulkan. entry to register these beside - the wire arm is the one that performs
-        # them, which is what §3.2 asks for.
-        # ---- P7 wave 2-B, EXIT GATE 3: the readback must not depend on how long a pipeline
-        # takes to create. --------------------------------------------------------------------
-        #
-        # The Redmi's OpenRA divergence reproduces only with a COLD driver pipeline cache (three
-        # cleared-cache runs: a bit-identical ssim 0.976494 / 14658 mismatched pixels; warm:
-        # 1.000000 from the second run on). What a cold cache changes is how long
-        # vkCreateGraphicsPipelines takes on the apply thread, and
-        # MOBILEGL_TEST_PIPELINE_CREATE_DELAY_MS buys that time on a host whose cache is warm.
-        #
-        # THESE ENTRIES ARE A REGRESSION GATE, NOT THE REPRODUCTION. The delay alone does NOT
-        # make lavapipe diverge, and the reason is in WireFramebuffer.inc's
-        # RecordWireReadbackWriteBarrier: the host's default framebuffer is tracked as
-        # VK_IMAGE_LAYOUT_GENERAL at the readback, which takes GetImageTransitionSourceState's
-        # `default:` arm (ALL_COMMANDS / MEMORY_WRITE) and orders the copy by accident. What these
-        # entries do pin is that a readback which follows a draw still returns that draw's pixels
-        # when every pipeline creation on the path costs 25 ms - i.e. that the answer does not
-        # move with timing.
+        # The CopyInPlace. entries further down have no monolith `DirectVulkan.` twin: the monolith
+        # arm declines every in-place copy, the wire arm performs them.
+        # PipelineDelay: MOBILEGL_TEST_PIPELINE_CREATE_DELAY_MS=25 adds 25 ms to every pipeline the
+        # server creates, as a cold driver cache does (OpenRA's split readback diverged on a device
+        # only with a cold cache); the Tcp copy runs undelayed, its server being the lane fixture.
+        # They pin that a readback after a draw returns its pixels. A regression gate, not a
+        # reproduction: lavapipe does not diverge even without RecordWireReadbackWriteBarrier, as
+        # its default framebuffer is tracked GENERAL and that transition waits on ALL_COMMANDS.
         foreach(pipelineDelayCase VertexIdSamplerAndScalarUniformPixels
                                   ComputeImageStoreFramebufferPixels
                                   GenerateMipmapPixels)
@@ -3367,26 +2595,13 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
             mgl_itest_lane("DirectVulkan.${mglItestArm}.MsBlit." "F1WireScenario.${multisampleBlitCase}"
                 LABELS "${mglItestMagmaLabels}" PROPERTIES ${mglItestArmProperties} ENV "${mglItestMagmaWireEnvironment}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p7-msblit${mglItestArmLogTag}-${multisampleBlitCase}.log")
         endforeach()
-        # ---- P7 wave 2-B2: `multisample-blit-aspect@P7`'s retirement, BOTH ARMS ---------------
-        #
-        # THE CASE IS PROMOTED, NOT WRITTEN. DepthStencilReadbackMatrixScenario already owns the
-        # observable - clear a 4x multisample DEPTH24_STENCIL8 renderbuffer, resolve it into a
-        # single-sampled framebuffer with glBlitFramebuffer, read both aspects back, and check
-        # that a depth-only resolve left the destination's stencil alone and vice versa - and it
-        # already ran on these three arms in the INFORMATIONAL tier (`…Full.`). What it did not
-        # have was a gated entry, which is what CONTRACT-P7 §3.2's aspect row needs.
-        #
-        # TWO ENTRIES OVER ONE CASE, and the second is the only way its arm is reachable here:
-        # lavapipe carries VK_KHR_create_renderpass2 AND VK_KHR_depth_stencil_resolve, so the
-        # extension arm answers every resolve on this host and the shader pass - which exists FOR
-        # the device that has neither, where the session used to end at
-        # `Magma:multisample-depth-resolve-capability` - would never execute.
-        # MGITEST_MAGMA_FORCE_SHADER_DEPTH_RESOLVE drops the extension arm, and the two entries
-        # then assert the same depth values and the same stencil indices, which is the whole
-        # claim: sample zero either way.
-        #
-        # ITS OWN ENTRIES RATHER THAN A LANE-WIDE FLIP, the shader-mip block's reason: the knob
-        # changes how EVERY depth/stencil resolve in the process is performed.
+        # MsResolve<0|1>: a 4x multisample DEPTH24_STENCIL8 renderbuffer resolved with
+        # glBlitFramebuffer and both aspects read back; a one-aspect resolve must leave the other
+        # aspect of the destination alone. Lavapipe has VK_KHR_create_renderpass2 and
+        # VK_KHR_depth_stencil_resolve, so only MGITEST_MAGMA_FORCE_SHADER_DEPTH_RESOLVE=1 reaches
+        # the shader resolve that devices without them take; both entries expect sample zero.
+        # Separate entries rather than a lane-wide flip: the knob changes every depth/stencil
+        # resolve in the process.
         foreach(shaderDepthResolve 0 1)
             # Same split+spawn restriction, same reason, same parity exception: the knob is read
             # on the server and the tcp server is the lane fixture. MsResolve0 stays everywhere.
@@ -3432,27 +2647,14 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
             mgl_itest_lane("DirectVulkan.${mglItestArm}.MsFlip1." "DepthStencilReadbackMatrixScenario.AFlippedMultisampleResolveMirrorsTheBandsAndAScaleDeclines"
                 LABELS "${mglItestMagmaLabels}" PROPERTIES ${mglItestArmProperties} ENV "${mglItestMagmaWireEnvironment}\;MGITEST_MAGMA_FORCE_SHADER_DEPTH_RESOLVE=1\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p7-msflip${mglItestArmLogTag}-shader1.log")
         endif()
-        # ---- P7 gate 5 (g5-msrbo review round, g5-msprobe): THE DEFECT'S ARM ORDER, ON A HOST --
-        #
-        # What made KHR-GL46.direct_state_access.renderbuffers_storage_multisample pass on the
-        # Redmi is an arm ORDER: where the server's resolve probe measures the no-draw
-        # VK_KHR_depth_stencil_resolve render pass leaving its target unwritten (the Adreno 830's
-        # does) ResolveWireDepthStencil takes the shader pass first. Lavapipe resolves correctly
-        # through both arms - its probe verdict is clean, which MsResolve0 above pins - so no
-        # pixel on this host can see the order. MGITEST_MAGMA_DEPTH_RESOLVE_PROBE=bug replaces the
-        # probe's MEASUREMENT with a canned "the render pass wrote nothing, the shader control
-        # resolved" one (VulkanRenderer::ArmWireDepthResolveOrder) - nothing else reads it - and the
-        # two resolve cases then assert their pixels AND that the server's private log says the
-        # verdict was the defect, the shader pass resolved and the render pass never did
-        # (DepthStencilReadbackMatrixScenario::ExpectTheResolveArmWhereTheLaneAsks, which asserts
-        # the same of the MsResolve1./MsFlip1. entries above).
-        #
-        # Split+spawn only, the server-side-knob reason above, named in spawn_lane_parity.py's
-        # MAGMA_SERVER_ENV_KNOB_NO_TCP.
-        #
-        # Red once (executed, reverted): EvaluateWireDepthResolveProbe (WireDepthResolveArm.h)
-        # answering Clean for every measurement - the probe's detection switched off - fails all
-        # four entries on the arm assertions with their pixels green.
+        # MsResolveBug / MsFlipBug: the resolve arm order on a defective device. Where the server's
+        # resolve probe finds the no-draw VK_KHR_depth_stencil_resolve pass leaving its target
+        # unwritten (Adreno 830), ResolveWireDepthStencil tries the shader pass first. Lavapipe
+        # resolves through both arms, so MGITEST_MAGMA_DEPTH_RESOLVE_PROBE=bug hands the arm choice
+        # a canned defect measurement (VulkanRenderer::ArmWireDepthResolveOrder). The cases assert
+        # their pixels and, from the server log, that the shader pass resolved
+        # (DepthStencilReadbackMatrixScenario::ExpectTheResolveArmWhereTheLaneAsks).
+        # Server-read knob: split and spawn only (ARCHITECTURE.md §16.1).
         if(mglItestServerEnvKnobArm)
             foreach(probeBugCase MsResolveBug:AResolvedMultisampleDepthReadsBackFromTheDestination
                                  MsFlipBug:AFlippedMultisampleResolveMirrorsTheBandsAndAScaleDeclines)
@@ -3464,25 +2666,12 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
                     LABELS "${mglItestMagmaLabels}" PROPERTIES ${mglItestArmProperties} ENV "${mglItestMagmaWireEnvironment}\;MGITEST_MAGMA_DEPTH_RESOLVE_PROBE=bug\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p7-${probeBugLog}${mglItestArmLogTag}.log")
             endforeach()
         endif()
-        # ---- P7 gate 5 (g5-msprobe critic): THE REAL PROBE'S NEGATIVE CONTROL ------------------
-        #
-        # The Bug entries above hand the arm choice a CANNED measurement, and MsResolve0 only pins
-        # lavapipe's clean answer, so no entry could see the REAL probe (WireDepthResolveProbe.cpp -
-        # its recording, readback and tally) stop detecting a render pass that writes nothing.
-        # MGITEST_MAGMA_DEPTH_RESOLVE_PROBE=elide-subject runs the real probe with its render-pass
-        # resolve left unrecorded - the subject's target keeps the sentinel, the Adreno 830's
-        # reading - while the shader control runs as always. The entry asserts the case's pixels,
-        # that the real measurement reports verdict=render-pass-resolve-broken with a reading whose
-        # render pass kept the sentinel beside a resolving control, and that the shader pass
-        # resolved and the render pass never did
-        # (DepthStencilReadbackMatrixScenario::ExpectTheResolveArmWhereTheLaneAsks).
-        #
-        # Split+spawn only, the server-side-knob reason above, named in spawn_lane_parity.py's
-        # MAGMA_SERVER_ENV_KNOB_NO_TCP.
-        #
-        # Red once (executed, reverted): EvaluateWireDepthResolveProbe answering Clean for every
-        # measurement fails both entries; the probe's subject tally counting every texel as
-        # resolved fails both entries while the four Bug entries stay green.
+        # MsResolveElide: negative control for the real probe (WireDepthResolveProbe.cpp), whose
+        # recording, readback and tally the canned Bug measurement never exercises.
+        # MGITEST_MAGMA_DEPTH_RESOLVE_PROBE=elide-subject runs it with the render-pass resolve left
+        # unrecorded, so the subject keeps its sentinel as on the Adreno 830 while the shader
+        # control resolves. The entry requires verdict=render-pass-resolve-broken and the shader
+        # arm (ExpectTheResolveArmWhereTheLaneAsks). Server-read knob: split and spawn only.
         if(mglItestServerEnvKnobArm)
             mgl_itest_lane("DirectVulkan.${mglItestArm}.MsResolveElide." "DepthStencilReadbackMatrixScenario.AResolvedMultisampleDepthReadsBackFromTheDestination"
                 LABELS "${mglItestMagmaLabels}" PROPERTIES ${mglItestArmProperties} ENV "${mglItestMagmaWireEnvironment}\;MGITEST_MAGMA_DEPTH_RESOLVE_PROBE=elide-subject\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p7-msresolveelide${mglItestArmLogTag}.log")
@@ -3730,27 +2919,14 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     endforeach()
 endif()
 
-# P11 M2: DEV'S TWO MAGMA SCENARIOS ON MAGMA'S ARMS, GATED, in the band flavour. Every entry gets a
-# private log through MGL_SPLIT_ARM_TEST_LISTS.
-#
-#   Oversized.  OversizedRecordingSplitScenario under the default draw budget (16384), all three
-#       arms: every case's pixels, unsplit - dev's control. Its arming is not checked here (no
-#       budget pinned).
-#   SplitRecording64.  The same cases with MOBILEGL_MAGMA_MAX_DRAWS_PER_COMMAND_BUFFER=64, so every
-#       case splits (d20c2d01's SplitOversizedRecording, which runs ahead of the wire arm's draw and
-#       dispatch too) and asserts the renderer's latched MGLOG_I. SPLIT AND SPAWN ONLY, one entry per
-#       case. The budget and the log line are the SERVER renderer's - the apply thread inproc, the
-#       spawned server (which copies this entry's environment, log base included) under spawn - and
-#       the scenario reads both role logs of its base (PipeStatsWindow). The tcp arm's server is
-#       the lane fixture, which no per-entry property reaches: a tcp copy would run the default
-#       budget under a name claiming 64 and its arming would find nothing (spawn_lane_parity.py,
-#       MAGMA_SERVER_ENV_KNOB_NO_TCP). The line is latched once per process, hence one per case.
-#   DescPool.  DescriptorPoolGrowthScenario, SPLIT ONLY. Both cases read the pool census
-#       (DirectVulkan::GetDescriptorPoolCensus), which is in-process: inproc it is taken on the
-#       apply thread (the test probe, between drain batches); on spawn and tcp the pools live in the
-#       server process and the census answers unavailable, so a copy there would check pixels
-#       under a name claiming the pools (spawn_lane_parity.py, MAGMA_INPROC_ONLY). Those pixels run
-#       on every arm in the Espryt entries above and in the Magma informational and full-suite tiers.
+# Magma's oversized-recording split and descriptor pool growth on the gated arms (band flavour);
+# every entry gets a private log through MGL_SPLIT_ARM_TEST_LISTS.
+#   Oversized.  OversizedRecordingSplitScenario at the default draw budget (16384), all arms:
+#       the unsplit control.
+#   SplitRecording64.  MOBILEGL_MAGMA_MAX_DRAWS_PER_COMMAND_BUFFER=64 (server-read) makes every
+#       case split and assert the server's once-per-process log line: one entry per case, no tcp.
+#   DescPool.  DescriptorPoolGrowthScenario, split only: GetDescriptorPoolCensus reads in process
+#       and answers unavailable when the server is another process (ARCHITECTURE.md §16.1).
 if (MOBILEGL_BUILD_DISAGGREGATED)
     set(MGL_ITEST_OVERSIZED_CASES
         EveryDrawOfTheFrameLandsAcrossCommandBufferSplits
@@ -3786,26 +2962,14 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     endforeach()
 endif()
 
-# P10 B: ASYNC COMPILATION, THE XFB QUERY PAIR AND GL_PRIMITIVES_GENERATED ON MAGMA, all three
-# arms, GATED, in the band flavour (role-split state, strict errors, run-ahead). The DirectGLES
-# half of the first two is registered beside the other Espryt arms; the third is Magma's alone.
-# One registration per arm and shape, and every entry gets a private log through
-# MGL_SPLIT_ARM_TEST_LISTS (no name there matches a lane marker SplitLogPaths arms).
-#
-#   AsyncOn. / AsyncOff. / OptimisticShaderStatus.  AsyncCompileScenario, the monolith entries'
-#       three configurations (AsyncOn. without the Iris case, which has its own entry), for the
-#       reason the Espryt block states - including why the tcp arm keeps all three: the switch is
-#       the client's, and so is the extension since this package.
-#   XfbQuery.  XfbPrimitiveQueryScenario, both cases.
-#   PrimGen.  PrimitivesGeneratedNoXfbScenario under the bring-up probe's Auto verdict, minus the
-#       arming case, which skips unless the reroute is pinned (a guaranteed skip is not coverage).
-#   PrimGenReroute.  The same scenario with MOBILEGL_MAGMA_PRIMGEN_QUERY_REROUTE=1, arming case
-#       included. SPLIT AND SPAWN ONLY: the renderer reads the knob on the SERVER, and the tcp
-#       arm's server is the lane fixture, which no per-entry property reaches - a tcp copy would
-#       run the Auto verdict under a name claiming the pin (spawn_lane_parity.py,
-#       MAGMA_SERVER_ENV_KNOB_NO_TCP). One entry per case, as ctest runs every discovered case:
-#       the arming line is LATCHED once per process, so a process that ran an earlier rerouted
-#       case first reads nothing new (measured, running the scenario as one process).
+# Async compilation, the XFB primitive query pair and GL_PRIMITIVES_GENERATED on Magma's gated
+# arms (band flavour: role-split state, strict errors, run-ahead); every entry gets a private log
+# through MGL_SPLIT_ARM_TEST_LISTS. AsyncOn./AsyncOff./OptimisticShaderStatus. are the monolith
+# entries' three AsyncCompileScenario configurations and keep tcp, as the switch is client-side.
+# PrimGen. uses the bring-up probe's Auto verdict and leaves out the arming case, which only runs
+# with the reroute pinned. PrimGenReroute. pins MOBILEGL_MAGMA_PRIMGEN_QUERY_REROUTE=1, which the
+# server reads, so it has no tcp arm (ARCHITECTURE.md §16.1); each case is its own ctest process,
+# which the once-per-process arming log line needs.
 if (MOBILEGL_BUILD_DISAGGREGATED)
     foreach(mglItestArm IN LISTS MGL_ITEST_MAGMA_ARMS)
         mgl_itest_magma_arm_shape(${mglItestArm})
@@ -4014,21 +3178,13 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
 endif()
 
 # =====================================================================================
-# P7 WAVE 4 PACKAGE M2: THE WIRE ARM RECLAIMS ORPHANED BUFFER STORES INSIDE A FRAME
+# Magma wire arm: orphaned buffer stores are reclaimed inside a frame
 # =====================================================================================
-#
-# ID-P7-27 / ID-P7-32: bsl-esc-menu-854 delivers one present per replay, and the split server
-# held every orphaned VkBuffer until a frame boundary that never came. The three cases read the
-# server's own wbuf[] gauges (PipeStats.h) off its `MGPipe stats:` line, so the flavour pins the
-# stats channel at one line per swap, and MOBILEGL_IPC_WIRE_DEFERRED_MB=8 keeps the watermark
-# case at 48 MiB of traffic instead of 400.
-#
-# INPROC AND SPAWN ONLY - the ID-P7-14 shape, named in scripts/ci/spawn_lane_parity.py
-# (MAGMA_SERVER_ENV_KNOB_NO_TCP, one tail per case). Both knobs the lane depends on are SERVER-process environment: under inproc
-# and spawn the server inherits this entry's ENVIRONMENT, under tcp the server is the
-# TcpServer.Start supervisor's session child, started once for the whole lane with the fixture's
-# environment - setting the stats channel and an 8 MiB watermark there would change every other
-# tcp entry's server - and its log is not this entry's private server log to read.
+# A replay with one present never reaches a frame boundary, so the server must reclaim orphaned
+# VkBuffers inside the frame. The cases read the server's wbuf[] gauges (PipeStats.h) off its
+# `MGPipe stats:` line, so the flavour logs stats every swap; MOBILEGL_IPC_WIRE_DEFERRED_MB=8
+# keeps the watermark case at 48 MiB of traffic instead of 400. Split and spawn only: both knobs
+# are server-process environment (ARCHITECTURE.md §16.1).
 if (MOBILEGL_BUILD_DISAGGREGATED)
     target_sources(MobileGLIntegrationTest PRIVATE Scenarios/MagmaWireReclaimScenario.cpp)
     set(MGL_ITEST_MAGMA_RECLAIM_FLAVOUR_ENV
@@ -4125,32 +3281,13 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
 endif()
 
 # =====================================================================================
-# P5e (gl), ID-115 / ID-119: THE STRICT LANE'S POSITIVE CONTROL, AND THE ONE COUNTING ENTRY
+# Positive control for the strict-errors run of integration-split
 # =====================================================================================
-#
-# ONE ENTRY, TWO JOBS, AND BOTH NEED THE SAME THING - a drawing split scenario that can read its
-# own PipeStats window.
-#
-#   ID-115: prove strict was ARMED. Of the seven entries that passed the strict lane before this
-#   phase, three were monolith transport (where nothing stamps a verb boundary and the whole
-#   mechanism is structurally unreachable), two self-skipped, one was a death test and one was a
-#   Python check - so "116/116" and "strict never ran on anything that draws" were the same
-#   observation. `vbs` on the summary line is the arming proof and this entry is where it is read.
-#
-#   ID-119: the `rsp` pin. The old wording ("rsp = 0 on unbarriered records") was true of every
-#   possible implementation, because CountBarrierPull's unbarriered arm is [[noreturn]] and runs
-#   BEFORE the counter. The checkable statement is the relation to `draws`, which is what the
-#   device measured (rsp ~= the draw count under inproc, 0 under monolith).
-#
-# IT IS ITS OWN ENTRY WITH ITS OWN LOG PATH, NOT A WHOLE-LANE ENV FLIP. The library opens
-# MOBILEGL_LOG_FILE_PATH with "w", so every process in a lane TRUNCATES it; two entries sharing
-# one path under `ctest -j` race into an empty read that looks exactly like "the counter was
-# never emitted" (Harness/PipeStatsWindow.h:19-24 has the long version). RESOURCE_LOCK is the
-# same belt as the PersistentMapArm entry's.
-#
-# BLOCK PLACED AT THE END OF THE FILE ON PURPOSE (wave-3 integration): `pa`'s
-# DirectGLES.Split.StrictProgramArm. block and `mv`'s multi-draw tiers are added inside the big
-# disaggregated section above, so keeping this one textually apart lets all three merge cleanly.
+# A drawing split entry that reads its own PipeStats window (TriangleScenario.cpp): `vbs` > 0
+# proves the server stamped verb boundaries, so strict was armed, and `rsp` must be 0 or scale
+# with `draws`; test.yml's strict split step requires it to run. It has its own log path and a
+# RESOURCE_LOCK on it, because the library opens MOBILEGL_LOG_FILE_PATH with "w" and entries
+# sharing a path under `ctest -j` truncate each other's logs (Harness/PipeStatsWindow.h).
 if (MOBILEGL_BUILD_DISAGGREGATED)
     mgl_itest_join_environment(MGL_ITEST_GLES_SPLIT_STRICT_ARMING_ENVIRONMENT
         "MOBILEGL_BACKEND_TYPE=DirectGLES" "MOBILEGL_TRANSPORT=inproc" "MOBILEGL_ITEST_REQUIRE_GPU=1"
@@ -4165,41 +3302,13 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
 endif()
 
 # =====================================================================================
-# P5f (f1), P5F-WIRE-COMPLETENESS.md §4/§6: THE DUAL-BLOCK REHEARSAL'S OWN LANE
+# Dual-block negative control (integration-dualblock-split)
 # =====================================================================================
-#
-# The lane has TWO halves, and only one of them registers entries here:
-#
-#   - the CENSUS half is an environment-variable lane, exactly like strict: the gate runs the
-#     EXISTING `integration-split` entries under MOBILEGL_IPC_ROLE_SPLIT_STATE=1 +
-#     MOBILEGL_IPC_STRICT_ERRORS=1, and every BARRIER-PULLED read there aborts with a named
-#     Fatal{UnmigratedPipeInput, "<field>@<verb>"} - the red IS the census, collected and
-#     ratcheted against Harness/dualblock-expected-fatals.txt by split_log_paths.py's
-#     `expect-fatal` mode. Re-registering the whole set under a second prefix would double the
-#     discovered test count for zero new information.
-#
-#   - the CONTROL half is the one entry below: DualBlockScenario is the mechanism's negative
-#     control (§6: turning the knob OFF must turn a named case from green to red), so it needs
-#     an entry of its own, under a label of its own.
-#
-# THE LABEL IS `integration-dualblock-split`, and the spelling is load-bearing twice over
-# (ID-131): `ctest -L` is a REGEX, so a label CONTAINING `integration-split` as a substring
-# would be selected by the main lane's runs - and this one is expected-red there, which must
-# never poison the hard-green gate. Checked both directions: `-L integration-split` does not
-# match it (`dualblock` stands between the two words), and `-L integration-dualblock-split`
-# matches nothing else in the tree. It does not carry `integration-gpu` either: that label must
-# be able to go green, and this entry goes green only under the armed knob.
-#
-# THE KNOB IS NOT PINNED IN THE ENTRY'S ENVIRONMENT, deliberately, and that is the ONE deviation
-# from the N-6 pinning rule every other split entry follows: a ctest ENVIRONMENT property
-# overrides the process environment, so pinning MOBILEGL_IPC_ROLE_SPLIT_STATE=1 here would make
-# the knob=0 form - which IS the negative control - unreachable through ctest. The failure
-# direction is safe: a bare `-L integration-dualblock-split` run without the knob is RED by
-# name, never silently green.
-#
-# MOBILEGL_IPC_RUN_AHEAD=0 IS pinned: the serial-separation half asserts on the fill side's
-# behaviour per verb boundary, and under run-ahead an unbarriered verb fills nothing, which
-# would make the assertion timing-dependent instead of deterministic.
+# DualBlockScenario asserts that the two roles fill distinct PipeInputs blocks. The entry leaves
+# MOBILEGL_IPC_ROLE_SPLIT_STATE unpinned, since a ctest ENVIRONMENT property would override it:
+# scripts/ci/dualblock_negative_control.sh runs it with the knob on (green) and off (red on its own
+# assertion). Label spelling: ARCHITECTURE.md §16.1. MOBILEGL_IPC_RUN_AHEAD=0 makes every verb
+# boundary fill, so the assertion is deterministic.
 if (MOBILEGL_BUILD_DISAGGREGATED)
     target_sources(MobileGLIntegrationTest PRIVATE
         Scenarios/DualBlockScenario.cpp Harness/DualBlockPeek.cpp)
@@ -4407,39 +3516,13 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
 endif()
 
 # =====================================================================================
-# P7 PACKAGE L: THE INFORMATIONAL MAGMA CENSUS - TIER 2 OF TWO
+# Informational Magma census: every split-arm scenario on DirectVulkan
 # =====================================================================================
-#
-# THE TWO TIERS, STATED ONCE AND IN ONE PLACE.
-#
-#   TIER 1 - GATED. `integration-magma-split` (inproc, and its meaning is unchanged: the same
-#   73 entries, names, labels and private log paths P6.5 left green), plus the two arms this
-#   package adds beside it, `integration-magma-spawn` and `integration-magma-tcp`. They run the
-#   SIX HAND-LAID MAGMA LANES - Fm, Buffers, RunAhead, Caches, NamedBlit, P5fRsp - because each
-#   carries a flavour (strict + dual-block state, adopt tier, run-ahead credits, cache pinning)
-#   that a shared scenario filter cannot express. A label here may enter a CI gating step only
-#   after it has been measured green.
-#
-#   TIER 2 - INFORMATIONAL, THIS BLOCK. Every scenario the DirectGLES split arms run, on
-#   DirectVulkan, on all three transports: `integration-magma-all-split` / `-spawn` / `-tcp`.
-#   It is in NO CI gating step and must not be added to one wholesale. Its first run's RED LIST
-#   IS THE P7 WORK LIST - the cases wave 2's clusters A (UniformManager alignment), B
-#   (blit/copy/mip) and C (vertex / death ops / resident subdata / reflection) divide between
-#   them - and a red list you cannot record without breaking the build's green is a red list
-#   nobody writes down. As a cluster retires its share, its cases move UP into tier 1 with the
-#   commit that retires them, and the gate is honest at every step in between.
-#
-# WHY IT REPLAYS A RECORDED LIST INSTEAD OF NAMING SCENARIOS. The same argument the spawn arm
-# won in P6 (`t6`), one dimension over: a hand-written second list agrees with the first today
-# and drifts the first time somebody adds a scenario to one of them, and a Magma census covering
-# LESS than the Espryt lane looks exactly like a Magma census covering all of it. The
-# registration macro records every call it is given; this replays them, so a scenario added to
-# the split arms tomorrow joins the Magma census the same day.
-#
-# THE THREE ARMS INCLUDE INPROC, and that is the block's diagnostic half: a case red on spawn
-# and tcp but GREEN on inproc is a two-process defect (plumbing, a death notice, a reply that
-# never crossed), while a case red on all three is Magma's own missing verb and belongs to a
-# wave 2 cluster. Without the inproc arm every red would need a hand re-run to tell those apart.
+# Replays every mgl_itest_register_split_arms call on DirectVulkan under
+# integration-magma-all-{split,spawn,tcp}. No CI step gates on these labels; the gated Magma lanes
+# are the hand-laid integration-magma-{split,spawn,tcp} ones (ARCHITECTURE.md §16.1). Replaying
+# the recorded calls keeps this set in step with the Espryt split arms. A case red on spawn and
+# tcp but green on inproc is a two-process defect; red on all three, a Magma one.
 if (MOBILEGL_BUILD_DISAGGREGATED)
     list(LENGTH MGL_SPLIT_ARM_CALLS mglItestSplitArmCallCount)
     message(STATUS "Integration tests: P7 package L replays ${mglItestSplitArmCallCount} split-arm "
@@ -4460,62 +3543,13 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
 endif()
 
 # =====================================================================================
-# P7 PACKAGE L: THE WHOLE INTEGRATION BINARY UNDER MAGMA SPLIT - TIER 3, INFORMATIONAL
+# Whole integration binary on Magma split (informational, no CI gate)
 # =====================================================================================
-#
-# WHY A THIRD TIER, AND WHY IT IS THE ONE THAT ANSWERS THE EXIT GATE. Tier 2 above replays the
-# split-arm registrations, which is ~100 scenarios - the set Espryt's disaggregation work has
-# been carrying since P5. It measured GREEN on Magma, all three transports, and that is a real
-# result but it is NOT exit gate 1. The gate says the INTEGRATION BINARY is green under Magma
-# split, and the set that phrase names is the one the monolith `DirectVulkan.` arm runs: the
-# whole suite minus MGL_ITEST_MONOLITH_MECHANISM_FILTER (the mechanism oracles, which toggle
-# process-local push masks, pointer-key ABA, direct persistent adoption or synchronous stats
-# slots and therefore must not inherit a transport). 511 cases, against tier 2's 102.
-#
-# THIS IS WHERE THE @P7 REFUSALS LIVE. None of tier 2's scenarios reaches one; the readback
-# matrices, the same-texture copy shapes and the odd-offset uniform ranges do, and they are in
-# this set and nowhere else in the disaggregated registry. THE FIRST RUN'S RED LIST IS WHAT
-# WAVE 2's CLUSTERS ARE SCHEDULED FROM - see docs/archive/notes/p7/magma-two-process-first-run.md.
-#
-# IN NO CI GATING STEP, and that is the whole design: a lane that must be green cannot carry a
-# census. A case leaves this tier for a gated one with the commit that retires its blocker.
-# The label spelling follows tier 2's rule (`ctest -L` is a regex, ID-131): the tier word goes
-# in the MIDDLE, so `-L integration-magma-split` and `-L integration-magma-all-split` cannot
-# reach `integration-magma-full-split` and vice versa.
-#
-# THE SAME PRIVATE-LOG DISCIPLINE as every other split-family entry, through a list of its own
-# rather than the shared MGL_SPLIT_ARM_TEST_LISTS: that list ALSO carries the per-entry lane
-# markers (strict-arming, pmap, server counters) and applying them to a census would arm three
-# unrelated oracles on cases that are here to be read, not to assert. SplitLogPaths.cmake.in
-# walks this list for the log path alone.
-#
-# PLACED AFTER TIER 2 AND BEFORE THE configure_file, for that file's stated reason.
-#
-# TWO DIFFERENCES FROM TIERS 1 AND 2's ENVIRONMENT, BOTH MEASURED RATHER THAN ASSUMED.
-#
-#   1. NO MGITEST_SPLIT_LANE=1. That marker arms ScenarioFixture's destructor assertion
-#      (ScenarioFixture.h:85-100): a case in an armed split lane must have MOVED the client
-#      encoder's record ordinal, because "the workload drew, cleared and read pixels, so
-#      records were due". That is exactly right for a CURATED lane, where every entry draws.
-#      It is wrong for a whole-binary census, which also contains query-only cases: the first
-#      run of this tier with the marker set produced 13 reds - AdvertisedLimitsScenario (8),
-#      SpirvShaderBinaryScenario (4) and ProgramPipelineScenario.AReservedName… - every one of
-#      them `EmitSeq was 20 at SetUp and is 20 now`, because a limits query is answered from
-#      the client's CapsMirror and a shader-binary error surface never reaches a verb. Those
-#      13 would red on a DirectGLES census too; they are a property of the census, not of
-#      Magma, and leaving them in would have buried the real list under noise.
-#      WHAT THIS GIVES UP, stated rather than discovered later: this tier does not prove its
-#      records crossed the wire, and the tcp arm's "Dial=Connect created no local server child"
-#      topology proof (ScenarioFixture.h:160-171, inside the same armed block) is inert here.
-#      Tiers 1 and 2 keep both, and they are the tiers that gate. MGITEST_TCP_LANE is still in
-#      the shared tcp fragment - it simply has no reader in this tier.
-#   2. DualBlockScenario.* IS FILTERED OUT. Its green REQUIRES MOBILEGL_IPC_ROLE_SPLIT_STATE=1,
-#      and a census must not set that knob - under it every barrier-pulled read aborts, which
-#      would replace this tier's subject with a different experiment. Without the knob the case
-#      is RED BY NAME (`MGPipeRoleSplitRehearsalActive() is false`), which is its documented
-#      negative-control behaviour and not a finding. The monolith `DirectVulkan.` arm has the
-#      same case and it SKIPS there, because that runtime is not split at all. Its own lane,
-#      `integration-dualblock-split`, is where it is read.
+# The set the monolith `DirectVulkan.` arm runs (all but MGL_ITEST_MONOLITH_MECHANISM_FILTER,
+# oracles that must not inherit a transport), minus DualBlockScenario (its own lane). No
+# MGITEST_SPLIT_LANE: query-only cases emit no record (ARCHITECTURE.md §16.1). Private log paths
+# come through MGL_MAGMA_FULL_TEST_LISTS, not MGL_SPLIT_ARM_TEST_LISTS, whose entries also get
+# lane markers that would arm unrelated oracles here; SplitLogPaths.cmake.in walks both.
 if (MOBILEGL_BUILD_DISAGGREGATED)
     set(MGL_MAGMA_FULL_TEST_LISTS "")
     foreach(mglItestArm IN LISTS MGL_ITEST_MAGMA_ARMS)
@@ -4534,69 +3568,13 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
 endif()
 
 # =====================================================================================
-# P7 WAVE 3 (V1): integration-verify-split - THE COMPARATOR ON THE SPLIT ARM
+# integration-verify-split: the verify comparator on the split (inproc) arm
 # =====================================================================================
-#
-# CONTRACT-P7 §6, exit gate 2: "verify x {monolith, split(inproc)} x Magma, zero divergence".
-# Until this block the verify block near the top of this file registered `MOBILEGL_TRANSPORT=
-# monolith` on every one of its 1136 entries, so the gate's second column had no entries at all
-# - not merely unmet, UNMEASURABLE, exactly as package L found exit gate 1's Magma column.
-#
-# IT HAD A PREREQUISITE AND THE PREREQUISITE IS PAID. A verify build under `inproc` used to die
-# on the server apply thread before one case could arm:
-#
-#   Fatal{PipeRespecifyScope} resource_respecify {slot=12, gen=0}: the descriptor carries a
-#   per-level respecify scope (target=258, level=0), and no path in this phase may set one
-#
-# That pin is now "a per-level producer must cover the range it declares"
-# (MG_Pipe/PipeApply.cpp), which is the invariant it was actually guarding.
-#
-# BOTH BACKENDS, AND THE MAGMA HALF IS THE HALF THE GATE NAMES. `${MGL_ITEST_VULKAN_ENV}` and
-# not `${MGL_ITEST_COMMON_ENV}` on the DirectVulkan entries, for package L's reason: that list
-# carries VK_ICD_FILENAMES and the three lavapipe iterationRP repairs the monolith `DirectVulkan.`
-# arm has been pinned to, and a lane that appended the common list would measure a different
-# driver from the gate it is compared against. `MOBILEGL_ITEST_REQUIRE_GPU=1` is pinned for the
-# same reason every split-family lane pins it: a lane that skipped everything and a lane that
-# passed everything are the same green in ctest, and this lane is here to be an ARM.
-#
-# THE CASE SET IS THE MONOLITH VERIFY LANE'S, MINUS THREE THINGS, the first two because
-# this arm carries a TRANSPORT and that lane does not:
-#
-#   1. ${MGL_ITEST_MONOLITH_MECHANISM_FILTER}. Those oracles toggle process-local push masks,
-#      pointer-key ABA, direct persistent adoption or synchronous stats slots and must not
-#      inherit a transport - which is why the ambient DirectGLES./DirectVulkan. registrations
-#      subtract them too and re-register them with MOBILEGL_TRANSPORT=monolith pinned. The
-#      monolith verify lane keeps them because there the pin and the lane agree. NOTE that the
-#      filter names PipeVerifyArmingScenario.* and PoisonOmissionScenario.*, which is why the
-#      arming entry and the two negative controls below are registered by hand, one per backend,
-#      exactly as the monolith verify block registers its own.
-#   2. DualBlockScenario.*. Its green REQUIRES MOBILEGL_IPC_ROLE_SPLIT_STATE=1, and pinning that
-#      knob here would replace this lane's subject (the comparator) with a different experiment;
-#      without it the case is red by name. Tier 3 above filters it for the same reason and says
-#      so at more length. Its own lane, `integration-dualblock-split`, is where it is read.
-#   3. On the DirectGLES half only, four Magma wire-arm decline cases that are red on DirectGLES
-#      x inproc with the comparator OFF (MGL_ITEST_VERIFY_SPLIT_GLES_MAGMA_DECLINE_FILTER below
-#      says which and why).
-#
-# NO MGITEST_SPLIT_LANE=1, AND THIS IS THE ONE PLACE THAT COSTS SOMETHING, so it is stated
-# rather than discovered. That marker arms ScenarioFixture's destructor assertion "this case
-# must have MOVED the client encoder's record ordinal", which is right for a curated lane where
-# every entry draws and wrong for a whole-binary set: tier 3 measured 13 reds from it
-# (AdvertisedLimitsScenario x8, SpirvShaderBinaryScenario x4, ProgramPipelineScenario's reserved
-# name), every one of them a query answered from the client's CapsMirror without a verb. They
-# would red on a DirectGLES set too - a property of the census, not of the transport.
-#
-# WHAT REPLACES IT IS STRONGER HERE THAN IT IS IN TIER 3, and it is why this lane is armed
-# rather than green-skipping: EVERY ENTRY GETS A PRIVATE LOG PATH (below, through
-# MGL_VERIFY_SPLIT_TEST_LISTS), and `.github/workflows/test.yml`'s integration-verify-split job
-# reads all of them: ConfigLoader's resolved `MOBILEGL_TRANSPORT=inproc` line is required in EVERY
-# client log, so a lane that silently ran monolith fails that step by name. The comparator's
-# `MGPipe: verify armed` line is latched at a process's FIRST FILL, so it is absent - honestly -
-# from the processes that never reach a verb (limits queries, CapsMirror answers, the poison
-# parent that only forks; 155 of 1064 on the landing run, 99 of them skips); the step therefore
-# requires it in both VerifySplitArming. logs and holds the per-entry count to a stated floor.
-# The VerifySplitArming. entries assert it from inside the process as well, which is the shape
-# the monolith lane's VerifyArming. entries already have.
+# Both backends run the monolith verify lane's cases minus MGL_ITEST_MONOLITH_MECHANISM_FILTER
+# (arming entry and negative controls are re-registered below), DualBlockScenario (verify turns
+# the dual-block rehearsal off) and, on DirectGLES, four Magma decline cases. No MGITEST_SPLIT_LANE
+# (ARCHITECTURE.md §16.1): each entry has a private log (MGL_VERIFY_SPLIT_TEST_LISTS), in which
+# test.yml's integration-verify-split job checks the inproc transport and the comparator arming.
 if (MOBILEGL_BUILD_DISAGGREGATED AND MOBILEGL_PIPE_VERIFY)
     # The transport half, joined onto each backend's own list. One place says what "the verify
     # split arm" means, as MGL_ITEST_SPLIT_ARM_TRANSPORT_ENV does for the Magma lanes.
@@ -4610,23 +3588,11 @@ if (MOBILEGL_BUILD_DISAGGREGATED AND MOBILEGL_PIPE_VERIFY)
         "MOBILEGL_BACKEND_TYPE=DirectVulkan" ${MGL_ITEST_VERIFY_SPLIT_ARM_ENV}
         ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_VULKAN_ENV})
 
-    # THE FOUR MAGMA DECLINE CASES ARE SUBTRACTED FROM THE DirectGLES HALF ONLY, and not because
-    # of the comparator. They assert Magma's wire-arm decline contract (`@P7` retirements: the
-    # depth-stencil mip decline, the two multisample blit declines, the overlapping in-place copy)
-    # and skip on every monolith arm, so the only arm that registers them is DirectVulkan's
-    # split family. On DirectGLES x inproc they are RED WITH THE COMPARATOR OFF - measured on
-    # this build with MOBILEGL_PIPE_VERIFY=0 in the same environment, the same four assertions
-    # (GL error 0x0502 where the decline promises none, or none where it promises one; the
-    # overlap copy writes the level the decline leaves alone) - because Espryt does not decline
-    # those shapes at all. That is a finding about the DirectGLES whole-binary set on split, not
-    # about verify, and it is recorded in docs/archive/notes/p7/verify-split.md rather than hidden in a green.
-    # This lane was NOT the only DirectGLES split lane to reach them: the primary integration job
-    # runs every integration-gpu entry under MOBILEGL_TRANSPORT=inproc, and there the same four
-    # were red in CI (the depth-stencil and overlap pair from run 35781886930, the two blits from
-    # 35793903365). Each case now skips by backend name at its top (F1WireScenario.cpp,
-    # "Magma wire-arm decline"), in every DirectGLES lane; this subtraction is therefore
-    # redundant, and kept so the verify-split registration and its counts do not move. The
-    # DirectVulkan half keeps them.
+    # The four Magma wire-arm decline cases are left out of the DirectGLES half. They assert
+    # Magma's declines (depth-stencil mip, two multisample blits, overlapping in-place copy),
+    # which Espryt does not make, and they skip by backend name in every DirectGLES lane
+    # (F1WireScenario.cpp, "Magma wire-arm decline"); the subtraction is redundant and kept so the
+    # lane's counts do not move. The DirectVulkan half runs them.
     set(MGL_ITEST_VERIFY_SPLIT_GLES_MAGMA_DECLINE_FILTER
         "F1WireScenario.GenerateMipmapDepthStencilDeclinesAndKeepsTheSession:F1WireScenario.MultisampleBlitOntoAMultisampleDestinationDeclinesAndKeepsTheSession:F1WireScenario.MultisampleBlitFromASingleSampleSourceDeclinesAndKeepsTheSession:F1WireScenario.CopyImageInPlaceOverlapDeclinesAndLeavesTheLevelAlone")
 
@@ -4711,23 +3677,12 @@ if (MOBILEGL_BUILD_DISAGGREGATED AND MOBILEGL_PIPE_VERIFY)
         list(APPEND MGL_VERIFY_SPLIT_TEST_LISTS "MGL_VERIFY_SPLIT_TESTS_POISON_${mglItestVerifyBackend}")
     endforeach()
 
-    # NOT ON SPAWN, AND THIS IS A PROPERTY OF THE INSTRUMENT, NOT A GAP IN THE REGISTRATION. The
-    # comparator is a same-address-space oracle: its two arms are the applier-written gPipeInputs
-    # and the frontend GLContext, and only inproc puts them in one process. Measured on this build
-    # (VerifySplitArming's DirectGLES entry with MOBILEGL_TRANSPORT=spawn): the client's entry
-    # compare aborts at the first verb with Fatal{PipeVerifyDiffer, "GetClearColor@Clear", verb=1,
-    # where=entry}, because the fill leaves every record-supplied field to the applier and the
-    # applier now writes ANOTHER process's block; and the server process runs no compare at all.
-    #
-    # THE SECOND HALF IS NOT "MG_Impl IS NOT IN THE SERVER" - it is, and saying otherwise sent a
-    # reader looking for a link-time gap that does not exist. MobileGLServer is an executable over
-    # ServerEntry.cpp linked against the WHOLE library (top-level CMakeLists.txt), PipeFill.cpp
-    # included, so MGPipeVerifyReadHook is present in that process and is called on every backend
-    # read. What is absent is its ORACLE: the server image's main reaches
-    # MG_Backend::InitServerRoleForSpawn() and never MG_State::Init(), so MG_State::pGLContext is
-    # null and the hook returns at its `ctx == nullptr` line before comparing anything. Same
-    # conclusion, different mechanism, and the difference matters because the fix is a cross-
-    # process compare shape (CONTRACT-P7 §12) rather than a link edit.
+    # Not on spawn: the comparator compares the applier-written gPipeInputs with the frontend
+    # GLContext, which only inproc puts in one process. Under spawn the client's entry compare
+    # fails at the first verb (the applier fills the other process's block), and the server's
+    # MGPipeVerifyReadHook returns early: the server runs MG_Backend::InitServerRoleForSpawn(),
+    # never MG_State::Init(), so it has no GLContext. Spawn needs a cross-process compare, not a
+    # link change.
 
     message(STATUS "Integration tests: P7 wave 3 - the verify comparator on the split (inproc) arm, "
                    "both backends, under integration-verify-split")
