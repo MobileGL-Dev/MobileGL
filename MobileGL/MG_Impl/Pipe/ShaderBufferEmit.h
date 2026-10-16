@@ -9,45 +9,14 @@
 #pragma once
 #include <Includes.h>
 
-// The CLIENT side of set_shader_buffers - the INDEXED BUFFER BINDING POINTS (P5e package sb,
-// docs/archive/contracts/CONTRACT-P5E.md §5.6, rulings 10 and 11). The call has been in the catalogue since
-// P4a with no emitter, no route and no applier; this file is the emitter half.
-//
-// ONE RECORD PER CLASS, THREE CLASSES. MGPShaderBuffers::Class names which binding-point array
-// the record describes - Uniform=0, ShaderStorage=1, AtomicCounter=2 - so the three are three
-// emissions through one route and one applier, not one record with three tails. That is also
-// why the suppressor has THREE SLOTS (ruling 11): a single slot would let a uniform set cancel
-// the previous storage set, and the shader-storage bindings would be suppressed as "unchanged"
-// by a record that described something else entirely.
-//
-// XFB IS NOT ONE OF THEM (§5.7). The transform-feedback capture points are span-scoped state
-// latched at glBeginTransformFeedback, and set_stream_output_targets carries a Generation this
-// payload has no field for - so the catalogue's split between the two rows stays, XFB keeps its
-// lockstep escalation, and dirty bit 17 fires for a family that emits nothing this phase.
-//
-// TWO INVARIANTS THAT MUST SURVIVE INTO THE BODY:
-//   1. THE HIGH-WATER-ZERO EARLY-OUT. A class whose touched high-water mark is 0 emits nothing,
-//      BEFORE any hash and before any walk. Minecraft's touched SSBO and atomic-counter counts
-//      are both 0, so the whole family costs one integer read per class per validate point on
-//      the workload this phase exists for.
-//   2. A BASE BINDING TRAVELS AS kMGPipeWholeBuffer AND NEVER AS A RESOLVED EXTENT (§5.6,
-//      table 0). glBindBufferBase does not freeze anything: GL resolves the range against the
-//      object's size at every USE, and BindingSlotRange1D::GetRange() reproduces that by asking
-//      the bound object. Resolving it HERE would freeze the size as of the emission, and under
-//      run-ahead a glBufferData issued between the emission and the apply would then bind the
-//      OLD extent - silently, with the right handle. So Offset/Size are copied only for an
-//      EXPLICIT range (glBindBufferRange), and a base binding says "whole buffer" and lets the
-//      server re-resolve against its own descriptor.
-//
-// THE WINDOW IS THE TOUCHED HIGH-WATER MARK (ruling 10), the same value the backend's own walk
-// has used since P2 and the same value MGPContextValues already carries. A program-derived
-// window would be narrower for the uniform class - Minecraft reaches UBOs through the program's
-// block bindings, so a program binding block 0 at GL point 83 pays a 84-entry record - but that
-// is a NARROWING and this package is a correctness landing; BRIEF-P5E §5 lists it as trailing.
-//
-// HEADER-ONLY, and the wired constant below is what switches the family on, for the ownership
-// reason PipeFill.cpp states in full: that file belongs to the contract package for the whole
-// phase, so the bit that turns an emitter on is a constant in the emitter's OWN header.
+// Client side of set_shader_buffers, the indexed buffer binding points. One record per class
+// (MGPShaderBuffers::Class: Uniform, ShaderStorage, AtomicCounter) through one route and applier,
+// with one suppressor slot per class so one class's record cannot mask another's. Transform
+// feedback capture points are not in this family; they ride the begin_stream_output record.
+// Invariant 1: a class whose touched high-water mark is 0 emits nothing, before any hash or
+// walk; that mark is also the record's window. Invariant 2: a base binding travels as
+// kMGPipeWholeBuffer, never a resolved extent: GL resolves it at each use, so the server resolves
+// it against its own descriptor, and a glBufferData between emission and apply binds the new size.
 #include <MG_Impl/Pipe/ResourceTracker.h>
 #include <MG_Impl/Pipe/SetHashSuppressor.h>
 #include <MG_Impl/Pipe/SlotAllocator.h>
@@ -63,22 +32,12 @@
 
 namespace MobileGL::MG_Pipe {
 
-    // WHICH SUBSYSTEM BIT THIS BUILD ACTUALLY EMITS FOR. PipeFill.cpp ORs the per-family
-    // constants into kMGPipeWiredSubsystems, so the bit is added by the commit that gives this
-    // emitter its body and no file is touched twice.
-    //
-    // IT MUST MOVE WITH MG_Backend/Init.cpp's CONSUMER BIT (ID-106). c0e deliberately withheld
-    // bit 13 from ConsumedSubsystemsFor because no emitter existed and withholding is the safe
-    // direction; the client's R-8 liveness gate (PipeFill.cpp's P5eFamilyIsLive) asks the server
-    // for THIS bit in particular, so a build that set the constant here and left the server's
-    // mask alone would emit nothing at all and look exactly like a build that had not landed.
-    //
-    // TURNING IT ON DOES NOT RETIRE A PULL. GetBufferBindingPoint is the family's Coverage.def
-    // emitted row and PipeFill.cpp's EmittedCallSuppliesTheWholeField answers FALSE for it: the
-    // field is four raw bases into the frontend's binding-point table and the record carries
-    // resolved {handle, offset, size} triples, so the residual fill keeps writing the mirror and
-    // the verify comparator keeps proving it. What retires the pull is the four Espryt consumers
-    // reading the applier's window instead, which is the other half of this package.
+    // The subsystem bit this build emits for; PipeFill.cpp ORs it into kMGPipeWiredSubsystems.
+    // It must change together with MG_Backend/Init.cpp's consumer bit 13: P5eFamilyIsLive asks
+    // the server for that bit, so setting only this constant emits nothing. Emitting does not
+    // retire a pull: GetBufferBindingPoint holds raw frontend table bases while the record
+    // carries resolved {handle, offset, size} ranges, so EmittedCallSuppliesTheWholeField
+    // answers false and the residual fill keeps writing that mirror.
     inline constexpr Uint64 kMGPipeWiredBufferBindingSubsystem = kMGPipeSubsystemBufferBindings;
 
     // The BufferTarget each wire class names. One table, because the class is a wire value and

@@ -49,3 +49,10 @@ client 的回绕 `Uint16` 版本计数器永远不是新鲜度的唯一证明：
 - CSO（render state、vertex elements、sampler、sampler view、shader）在 **client 侧内容寻址**（Mesa `cso_cache` 先例），LRU 淘汰时发 `delete_*`；render-state 容量 64（P13 重调）、sampler state 256。
 - Buffer / Texture / Renderbuffer 走 create / respecify / subdata / destroy；Framebuffer / Xfb 是 per-context 身份 + `set_*` payload。
 - 两条偏离：**D-G1** Espryt 的 vertex-elements 按 VAO 身份寻址（twin 持驱动 VAO 名，不能共享）；**D-F2** Espryt 的 sampler view 按纹理身份寻址，sampler state 内容寻址且带引用计数（被 `BuiltinSampler` 指着的项不许被 LRU 挤掉）。
+
+#### 2.3.1 sampler state 缓存：引用计数与值生命周期
+
+sampler state 在 client 侧按值寻址（`MGPipeSamplerCsoCache`，容量 256）：哈希、探测、再 memcmp 确认；只凭 64 位哈希相等会把两种状态并进一个 CSO，造成没有门看得见的错误过滤。
+- 活句柄躲开 LRU 靠引用计数而不是容量：已发布的 `MGPTextureParams` 在纹理参数不动时一直指着它的 `BuiltinSampler`，applier 不解析这个句柄，而淘汰不算参数变化，既不会重发也没人拒绝。所以每次 `Acquire` 取一个引用、`Release` 还一个；LRU 只考虑引用为 0 的项；全被钉住时超容量铸造并计入 `OverCapacityMints`（多一个槽费内存，句柄被抽走费正确性）。
+- 持有引用的是纹理的内建 sampler（纹理死亡或参数变化重取时释放）和 `bind_sampler_states` 当前绑定的每个 CSO；凡在返回后还会指名该句柄的调用方都必须持有。容量大于 `kMGPipeMaxTextureUnits` 只是尺寸界：装不下一整轮发射的缓存会每轮都超容量铸造。
+- 槽不带 lifetime id：CSO 属于值而不属于前端对象（别的 `SamplerObject` 可能持有同值），`~SamplerObject` 不释放任何槽，唯一死亡路径是 client 侧的 LRU 淘汰。因此来自 `~SamplerObject` 的 `NotifyStateObjectDestroyed(SamplerCso, lifetimeId)` 背后永远没有句柄；后端不得按 `SamplerObject` 的 lifetime id 键控 sampler twin，twin 的生命只是 `create_sampler_state` 到 LRU 发出的 `delete_sampler_state`。

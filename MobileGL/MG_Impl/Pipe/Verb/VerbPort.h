@@ -81,23 +81,12 @@ namespace MobileGL::MG_Record {
     // Returns the previous routing.
     Bool SetMonolithVerbPortRoutingForTesting(Bool viaPort);
 
-    // THE E2 NEGATIVE CONTROLS (t1's debt against c1, BRIEF §7). When set, the named emitter
-    // SKIPS its record - it still runs the pre-verb hooks and still returns - so a replay that
-    // is really going through the wire loses that verb while a replay that fell through to the
-    // driver is unaffected. They are functions rather than knobs in Config.h for two reasons:
-    // a control has to be settable from a test process that has already started, and a knob
-    // would be a MOBILEGL_IPC_-shaped name for something no operator may ever set.
-    //
-    // Emissions actually skipped, so a control can assert that it DID something rather than
-    // that a picture changed - a control that silently never fired is the third shape of R-16's
-    // "a gate that cannot go red for its own reason".
-    //
-    // WHICH ONE E2'S RETRACE USES, and it is not the clear. Measured on the joint head: with
-    // MOBILEGL_IPC_E2_DROP_CLEAR=1 armed and its WARN in the library's own log, the OpenRA
-    // retrace under inproc still scored ssim=1.000000 / mismatchPixels=0 (joint-v1.md §3),
-    // because OpenRA covers every pixel it clears before the snapshot. Dropping the DRAWS is
-    // the control whose observable the golden is actually made of. See VerbPort.cpp's
-    // ArmControlKnobs for the trace census that settled it.
+    // Negative controls for the retrace lanes. When set, the named emitter skips its record but
+    // still runs the pre-verb hooks, so a replay that really goes through the wire loses the
+    // verb while one that fell through to the driver does not. Functions rather than Config.h
+    // knobs: a running test process sets them, and no operator may. The counts let a control
+    // assert that it fired. The OpenRA retrace uses the draw drop: OpenRA overdraws every pixel
+    // it clears, so dropping the clear leaves SSIM at 1.0 (see ArmControlKnobs in VerbPort.cpp).
     void SetDropClearEmissionForNegativeControl(Bool drop);
     Uint64 DroppedClearEmissions();
     void SetDropDrawEmissionForNegativeControl(Bool drop);
@@ -126,29 +115,13 @@ namespace MobileGL::MG_Record {
                                            GLsizei height, Uint64 bytesPerPixel,
                                            const PixelStoreParameters& pack);
 
-    // P7 gate 5 (g5-readback). A glReadPixels whose tight answer is larger than one reply slot
-    // is NOT one record: the client splits the w*h rectangle into BANDS, emits each band as an
-    // ordinary read_pixels record with its own box and its own tight DstSize (so every answer
-    // still fits one slot, ID-47, and the server's PH-3 bound - its tight answer against its own
-    // LinkTerms.maxReplyBytes - holds unchanged), and scatters each band into the application's destination under its
-    // own GL_PACK_* state. No reply is chunked; the READ is.
-    //
-    // THE SHAPE. Whole-width row bands of floor(maxReplyBytes / rowBytes) rows when a row fits
-    // a reply; otherwise every row is cut into column pieces of floor(maxReplyBytes / bpp)
-    // pixels. Both shapes are contiguous in the tight layout, which is what lets the neutral-
-    // pack fast path keep reading straight into the application's pointer. Bands are in
-    // row-major order and cover the rectangle exactly once.
-    //
-    // NO PLAN exactly when not even ONE pixel fits a reply (maxReplyBytes < bytesPerPixel,
-    // including a link with no reply pool at all); the emitter then refuses BY NAME through
-    // ID-47's unchanged helper rather than emitting anything. That is the only ReadPixels shape
-    // left that ends in Fatal{ReplyTooLarge}: CONTRACT-P5 row 23 makes an answer that cannot fit
-    // a slot a named Fatal, not a GL error, and no pixel can be returned in pieces smaller than
-    // itself.
-    //
-    // THE PLAN IS TWO NUMBERS AND THE BANDS ARE WALKED, NOT LISTED: a band list would be one
-    // allocation per read that grows with the read, and the walk below is the only place the
-    // order and the coverage are decided - the emitter and the unit control both call it.
+    // A glReadPixels whose tight answer exceeds one reply slot is split into bands, each an
+    // ordinary read_pixels record with its own box and tight DstSize, scattered under the
+    // application's pack state (ARCHITECTURE.md §13.1.2). Bands are whole-width row runs when a
+    // row fits a reply, else column pieces of one row; they go in row-major order and cover the
+    // rectangle once. No plan means not even one pixel fits, and the emitter refuses by name
+    // (Fatal{ReplyTooLarge}). The plan is two numbers and bands are walked, not listed, so a
+    // read allocates nothing and the emitter and its unit test share one walk.
     struct ReadbackBand {
         Uint64 FirstRow = 0;
         Uint64 Rows = 0;

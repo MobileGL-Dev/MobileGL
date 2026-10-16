@@ -377,31 +377,14 @@ namespace MobileGL::MG_Pipe {
             return session != nullptr && session->RunAheadArmed();
         }
 
-        // CONTRACT-P5E §2.1's predicate, ASKED AT THE VALIDATE POINT - which is before the
-        // record exists, so it is asked of the verb and the live context rather than of the
-        // payload. The two halves must agree with MGPipeBarriered(op, payload, applierState),
-        // which is what the server computes, so each clause is the same clause:
-        //
-        //   1. the static WaitClass column          - of the op the verb's emitter publishes,
-        //      named by MGP_VERB_RECORD_OP_LIST (MG_Pipe/VerbRecordOps.h);
-        //   2. kCtxVerb inside an open XFB span     - ctx.IsTransformFeedbackActive() here,
-        //      the applied MGPContextValues mirror there, and set_context_values precedes the
-        //      verb on the ring, so the two read the same value (§2.1);
-        //   3. a draw carrying kDrawClientArrays    - NOT asked here, because under run-ahead
-        //      such a draw never reaches a record at all: vi refuses it on this very thread in
-        //      EmitDrawRecord's array arm (§5.1, ruling 2).
-        //
-        // P15: THERE IS NO FALLBACK. The answer used to come from inverting MGP_VERB_OP_LIST
-        // (op -> verb, many-to-one), and a verb the inverse missed answered BARRIERED - which
-        // the draw family and then the blit family each paid for until a special case named
-        // them (the blit: one applier quiesce per frame on FCL). The verb -> record table has a
-        // row for every verb by static_assert, so async is the default and a verb syncs only
-        // because the record it publishes says so.
-        //
-        // `ctx` MAY BE NULL: the validate point asks this question BEFORE it has decided
-        // whether there is anything to fill. A null context has no open transform-feedback
-        // span, so clause 2 is false for it - and the verb is a no-op below either way.
-        // MGPipeValidateForVerbBarriered's switch: the next ClientVerbIsBarriered answers true.
+        // ClientVerbIsBarriered (below) evaluates the clauses of MGPipeBarriered at the validate
+        // point, before the record exists, from the verb and the live context; the two sides must
+        // agree (ARCHITECTURE.md §11.6.1). The clauses: the WaitClass of the op that
+        // MGP_VERB_RECORD_OP_LIST maps the verb to, and a kCtxVerb inside an open transform
+        // feedback span, which the server reads from the set_context_values record applied ahead
+        // of the verb. The client-arrays clause is not needed: EmitDrawRecord moves client arrays
+        // into owned buffers before it publishes. A null `ctx` means no open span.
+        // MGPipeValidateForVerbBarriered sets g_forceBarrieredFill so the next call answers true.
         Bool g_forceBarrieredFill = false;
 
         // P15: A PACK-BUFFER READBACK IS FIRE-AND-FORGET, decided per call. With a pack buffer
@@ -436,34 +419,13 @@ namespace MobileGL::MG_Pipe {
             return false;
         }
 
-        // ---- P5e (ra2), CONTRACT-P5E §3.5 AMENDED: A BARRIERED FILL MAKES ITSELF QUIESCENT ----
-        //
-        // §3.5 exempted the residual fill of a BARRIERED record from the single-writer rule on
-        // the ground that "this thread is about to park behind it". That is a claim about the
-        // FUTURE, and the write is in the PRESENT: the order at the validate point is fill,
-        // then emit, then park, and between the fill and the park the apply thread is still
-        // draining the UNBARRIERED records the client ran ahead of. The claim was therefore
-        // never an argument about this instant, and the guard that took it - the
-        // `if (isBarrieredFill) return;` arm of RefusePipeInputsTouchWhileApplierOwnsIt - could
-        // not fire however wrong the fill was.
-        //
-        // This makes the claim TRUE instead of asserting it. §2.5's forced wait is exactly
-        // "publish nothing, wait for the applier to reach LastPublishedSeq, drain the reverse
-        // channel", which is the definition of the window the fill needs, and it already exists
-        // for glFinish and for BackendObject_Remote's forwarders.
-        //
-        // IT IS CALLED AT EVERY GL-THREAD WRITE INTO THE BLOCK, not once per verb, because the
-        // validate point writes the block in TWO phases that straddle record publication: the
-        // serial bump / stamp withdrawal / verb rename run BEFORE the emitters, and the 63-field
-        // walk of step 4 runs AFTER them - and the records the emitters published are records
-        // whose apply READS the block. One wait cannot cover both halves.
-        //
-        // THE ARM IS STATED, NOT INFERRED (ID-81): WaitForApplyToCatchUp's own first test is
-        // `m_runAheadArmed && m_started`, and m_runAheadArmed is the latch of
-        // `Transport != Monolith && Ipc.RunAhead && kMGPipeP5eRunAheadReady && the caps bit`. So
-        // on the monolith arm, on the pull build and under MOBILEGL_IPC_RUN_AHEAD=0 this is a
-        // call that returns, and the lockstep client's behaviour is unchanged byte for byte
-        // (G1) - under lockstep appliedSeq is already at LastPublishedSeq by construction.
+        // Under run-ahead a barriered fill still overlaps the apply thread, which is draining the
+        // unbarriered records published earlier (the order is fill, emit, park), so every GL-thread
+        // write into the block first waits for the applier to reach the last published record.
+        // Call it before each write, not once per verb: the validate point writes the block before
+        // the emitters run and again after them, and the records they publish read the block.
+        // WaitForApplyToCatchUp returns at once unless run-ahead is armed; under lockstep the
+        // applier has already caught up. See ARCHITECTURE.md §9.2.2.
         void QuiesceApplierBeforeFill(const char* surface) {
             // P15: WITH TWO BLOCKS THE FILL IS THE CLIENT'S OWN. The applier reads the server
             // block, so a GL-thread write to the client block races nothing and needs no wait -
@@ -932,26 +894,13 @@ namespace MobileGL::MG_Pipe {
         const MGPipeHandle handle = tracker.Acquire(buffer);
         Uint16 bindMask = tracker.BindMask(handle);
         if (auto* ctx = LiveContext()) bindMask = tracker.RefreshBindMask(*ctx, buffer, handle);
-        // M-1: THE CREATE FIRST, IF THIS HANDLE NEVER PUBLISHED ONE - which makes the
-        // create/destroy latch self-healing in both directions instead of only one.
-        //
-        // The constructor's create is gated on MGPipeResourceSubsystemEnabled(), which is bit 7
-        // AND "a backend registered MGPipeResourceOps"; the CONSUMER's gate is bit 7 alone. The
-        // two disagree across a register/unregister boundary, and there is a real window:
-        // UnregisterBufferBackendOps nulls the table from OnBackendContextDestroyed
-        // (DestroyEGLContext) and the re-register happens at the next MakeCurrent, while D-A2
-        // deliberately keeps NotifySubData reachable off the render thread. A buffer born in
-        // that window latched Published = false, so the applier had no record for it and every
-        // later respecify was REFUSED - after which EnsureBufferResourceForHandle read
-        // ResourceRecordOf == nullptr, took size 0, returned a twin with no store and drew
-        // through id 0, with no diagnostic anywhere. The legacy arm recovers from the same
-        // window by twinning lazily off the frontend object and full-uploading from the shadow;
-        // this is the handle arm's equivalent, and it costs one bool compare per respecify.
-        //
-        // A create rather than a respecify because that is what the record's absence means: the
-        // applier starts the record over on a create (it does not edit one), so this cannot
-        // resurrect a field from a recycled slot, and the respecify below then defines the
-        // storage exactly as it would have.
+        // A handle that never published a create gets one first, so the create/destroy latch heals
+        // in both directions. The constructor's create needs MGPipeResourceSubsystemEnabled()
+        // (bit 7 and a consumer) while the applier's gate is bit 7 alone: a buffer born between
+        // UnregisterBufferBackendOps at context teardown and the re-register at the next
+        // MakeCurrent has no applier record, every later respecify would be refused, and the
+        // backend would draw from a twin with no store. A create rather than a respecify: the
+        // applier starts a record over on a create, so nothing from a recycled slot survives.
         if (!tracker.WasPublished(handle)) {
             const MGPResourceDesc createDesc =
                 MGPipeBuildResourceDesc(buffer, handle, bindMask, /*storageDefined=*/false);
@@ -961,25 +910,13 @@ namespace MobileGL::MG_Pipe {
         }
         const MGPResourceDesc desc = MGPipeBuildResourceDesc(buffer, handle, bindMask, true);
         tracker.NoteDesc(desc, false);
-        // initialBytes is the client's own shadow base - zero copy, and null is a real answer
-        // for the orphaning idiom (a NULL-data respecify leaves the store undefined and the
-        // backend must not upload the stale bytes).
-        //
-        // THE SIZE TEST IS NOT REDUNDANT. A zero-byte store is DEFINED content - glBufferData's
-        // `size == 0` arm sets HasDefinedContent (BufferObject.cpp:242) because the store exists
-        // and is empty - and MappedData() answers a NON-NULL pointer for it, since the shadow
-        // reserves one byte whatever the size (PipeResource.h:140-143). Reading MappedData()
-        // alone therefore answered "bytes to carry" for a store that has none, which sent the
-        // split branch below down the respecify(nullptr)-plus-follow-up shape; the follow-up
-        // walk emits nothing for a zero-length range (ResourceTracker.h:253), so the
-        // InitialBytesNotCarried self-check aborted by name on the first
-        // glBufferData(target, 0, NULL, usage) of the bsl-esc-menu trace. `GetSize() > 0` is
-        // what makes the answer mean "there are bytes here" rather than "the store is defined".
-        //
-        // P13 W4a: ON MONOLITH'S RECORD ARM THE BASE RIDES AN ORPHANING RESPECIFY TOO. That arm's
-        // twin aliases this shadow and has no object to re-read it from, and an orphan is exactly
-        // the call that reallocates it; the backend still uploads nothing for it, because its
-        // upload is gated on the descriptor's HasDefinedContent and not on the pointer.
+        // initialBytes is the client's shadow base (zero copy); null means no bytes, which an
+        // orphaning respecify (NULL data) needs so the backend uploads nothing stale. The
+        // GetSize() > 0 test is needed: a zero-byte store has defined content and MappedData() is
+        // still non-null (the shadow reserves one byte), so without it the split branch below would
+        // expect follow-up bytes the subdata walk never emits and abort as UncarriedInitialBytes.
+        // On monolith's record arm the base also rides an orphaning respecify, because that arm's
+        // twin aliases this shadow; the backend uploads only when HasDefinedContent is set.
         const Bool carryBase = desc.HasDefinedContent != 0 || MG_Config::RecordArmAliasesFrontend();
         const void* initialBytes = (carryBase && buffer.GetSize() > 0) ? buffer.MappedData() : nullptr;
         // kNeedsAck rides on the CALL and MGPipeResourceRespecifyNeedsAck(desc) decides per
@@ -988,33 +925,12 @@ namespace MobileGL::MG_Pipe {
         // ((void)0), because the applier is one function call away and has already run by
         // the time this returns; the transport wires the doorbell to that same predicate.
 #if MOBILEGL_BUILD_DISAGGREGATED
-        // R-13.3's MISSING PRODUCER, and it is the reason the first joint inproc run died.
-        // CONTRACT-P5 §2 row 19 rules that `initialBytes` is ALWAYS nullptr under split and
-        // that "initial content arrives as ResourceSubData records immediately after this
-        // one" - but nothing emitted those records, so the split arm's refusal
-        // (Fatal{UncarriedInitialBytes}) fired on the first glBufferData with data, which is
-        // the first thing every scenario does.
-        //
-        // IT IS THE CONTRACT'S OWN PRESCRIBED ROUTE, not a new one: "the chosen route reuses a
-        // path that is already chunked (MGPipeForEachSubDataRecordRange) and already
-        // acceptance-gated; it costs one extra record". So the respecify defines the storage
-        // and the walk below ships the bytes, through the same emitter every later
-        // glBufferSubData uses - which also means the HasLiveHostWrites bit and the
-        // acceptance latch are computed in exactly one place instead of two.
-        //
-        // SPLIT-ONLY, and that is load-bearing for G2: under monolith the applier reads
-        // `initialBytes` directly and a second upload would be a real behaviour change in the
-        // arm the split arm is measured against.
-        //
-        // ROLE-AWARE (M5). Under inproc the apply thread reaches this very emitter when the
-        // server's own backend respecifies a buffer (c1-v2 §4 R-17.3: that is where
-        // Fatal{BarrierTimeout, "ResourceRespecify"} from mgl-srv-apply came from). On that
-        // thread this branch would emit CLIENT wire records - which the server role does not
-        // produce, so ClientWireRecordsEmitted() would not move and the self-check below would
-        // abort the SERVER by name; it would also run the respecify(nullptr)+follow-up shape,
-        // giving the server role a path monolith does not have. So the server role takes the
-        // ELSE below, exactly as monolith does. RunsAsTheServerRole() is v1's
-        // ServerLoop::OnApplyThread(), false on the GL thread that owns this fill.
+        // Under a transport the respecify carries no bytes: it defines the storage, and the initial
+        // content follows as resource_subdata records from MGPipeEmitResourceSubData, the chunked
+        // emitter glBufferSubData uses, so HasLiveHostWrites and acceptance are decided in one
+        // place. Monolith keeps initialBytes on the record; its applier reads them directly. The
+        // apply thread (RunsAsTheServerRole()) also takes the plain route: it emits no client wire
+        // records, so the follow-up's self-check would abort the server.
         if (MG_Config::Transport != MG_Config::TransportMode::Monolith &&
             !MG_Remote::Client::RunsAsTheServerRole() && initialBytes != nullptr) {
             MGPipeRouteResourceRespecify(desc, nullptr);
@@ -1156,24 +1072,12 @@ namespace MobileGL::MG_Pipe {
         // between a map+memcpy+unmap and an upload, so merging them here would change which.
         record.AccessFlags = accessFlags;
 #if MOBILEGL_BUILD_DISAGGREGATED
-        // R-13.2's MISSING PRODUCER, the twin of the respecify one above, and the cause of the
-        // seven PersistentCoherentMapScenario aborts on the first joint inproc run:
-        //     Fatal{ProtocolCorruption} resource_flush_range {slot=1, gen=0, glName=1}:
-        //     a non-empty flush carries no bytes (offset=0, size=120, storage=120 bytes)
-        //
-        // CONTRACT-P5 §2 row 20 rules that this record carries NO bytes under split - it is a
-        // {range, AccessFlags} control record, and a blobref here "would be a second,
-        // forgeable way to say the same thing" - and that "the bytes of [Offset, Offset+Size)
-        // arrive AHEAD of it as ResourceSubData records covering exactly that range". Nothing
-        // emitted those records, so v1's StagedShadowStore had nothing staged for the range
-        // the flush names, which is precisely the refusal ID-37 asked it to make rather than
-        // silently reading the bytes again.
-        //
-        // EXACTLY THAT RANGE, not the whole buffer: the flush's own [offset, size) is what
-        // the ladder rewrites, and staging more would be the coverage WIDENING ID-37 forbids.
-        // Split-only, for the respecify's G2 reason - and ROLE-AWARE for M5's reason, the twin of
-        // the respecify branch above: the apply thread flushing the server's own buffer emits no
-        // client wire records, so it takes the plain route below rather than this split follow-up.
+        // Under a transport resource_flush_range carries no bytes: it is a {range, AccessFlags}
+        // control record, and the bytes of [offset, offset + size) must reach the server first as
+        // resource_subdata records, or its staged shadow has nothing for the flush and refuses it.
+        // Only that range: staging bytes outside it would write stale shadow bytes over server
+        // data the flush does not cover, such as GPU writes. The apply thread takes the plain
+        // route, as in MGPipeEmitResourceRespecify.
         if (MG_Config::Transport != MG_Config::TransportMode::Monolith &&
             !MG_Remote::Client::RunsAsTheServerRole() && size != 0) {
             MGPipeEmitResourceSubData(buffer, offset, size);
@@ -1455,40 +1359,14 @@ namespace MobileGL::MG_Pipe {
             kMGPipeSubsystemFramebuffer | kMGPipeSubsystemTextureResources |
             kMGPipeSubsystemSamplers | kMGPipeSubsystemPrograms;
 
-        // AND THE THIRD HALF, WHICH IS P3a's SECOND ONE: HAS A BACKEND REGISTERED THE CONSUMER?
-        //
-        // `MGPipeResourceSubsystemEnabled()` (above, ~:612) is bit 7 AND
-        // `MGPipeGetResourceOps() != nullptr`, and the second conjunct is not decoration - it is
-        // what keeps P3a's buffers on the legacy pull path under a backend that registers no
-        // table. DirectVulkan (Magma) is exactly that backend: it registers no
-        // MGPipeResourceOps and has none of P4a's twins. Without this conjunct the four P4a
-        // families emitted there anyway, the applier ACCEPTED every record, the emitters cleared
-        // their per-level dirty flags on that acceptance (D-D5 as amended by ID-18 M3), and
-        // Magma's legacy upload path then found nothing left to upload: 66 texture-upload-shaped
-        // DirectVulkan integration-gpu cases red on the push build at the default mask, with the
-        // pull build 966/966 green (ID-39).
-        //
-        // ALL FOUR FAMILIES RIDE THE ONE SIGNAL, and the reason is D-D1: a texture and a
-        // renderbuffer are RESOURCE rows - they travel on P3a's own resource_create /
-        // resource_respecify / resource_subdata catalogue, whose consumer IS this table - so the
-        // texture family's gate is P3a's gate by construction. The other three name texture
-        // handles and cannot be live without it (MGPSurface::Res is a texture or renderbuffer
-        // handle, MGPBoundView::Texture and MGPImageView::Res are texture handles, and
-        // MGPTextureParams is addressed by one), so they follow. There is no fifth signal to
-        // invent and no per-family registration to add: a backend that consumes P4a records
-        // consumes resource rows first.
-        //
-        // A BACKEND THAT REGISTERS ONE IS UNAFFECTED. DirectGLES (Espryt) registers the table
-        // at RegisterBufferBackendOps, unconditionally and at bring-up, so every predicate
-        // below answers exactly what it answered before this commit.
-        //
-        // THE REGISTER/UNREGISTER WINDOW IS THE SAME ONE P3a LIVES WITH, and it is closed the
-        // same way: UnregisterBufferBackendOps nulls the table at context teardown and the
-        // re-register happens at the next MakeCurrent, so an object born in that window never
-        // publishes a create and latches Published = false - after which the family's own
-        // self-healing create on the next respecify (TextureEmit.h ~:576 / ~:709, the shape
-        // MGPipeEmitResourceRespecify above uses for buffers) publishes it. Nothing here needs
-        // to remember the window.
+        // A handle family (framebuffer, texture resources, samplers, programs) emits only when
+        // something consumes its records; otherwise it emits nothing and the legacy path runs. An
+        // unconsumed emission is not harmless: the applier accepts it, the emitters clear their
+        // dirty flags on that acceptance, and the backend then finds nothing left to upload. Under
+        // monolith the four families share one signal, a registered MGPipeResourceOps table:
+        // textures and renderbuffers are resource rows, and the other three name texture handles.
+        // Under a transport each family asks the server's consumer bit. An object born while the
+        // table is unregistered is published by its family's self-healing create on next respecify.
         Bool P4aFamilyHasItsConsumer(Uint64 subsystem) {
             if ((subsystem & kMGPipeP4aFamilySubsystems) == 0) return true;
 #if MOBILEGL_BUILD_DISAGGREGATED
@@ -1509,51 +1387,14 @@ namespace MobileGL::MG_Pipe {
             return MGPipeGetResourceOps() != nullptr;
         }
 
-        // ================================================================================
-        // AND THE FOURTH HALF: D-K2's DEPENDENCY TABLE, ON THE CLIENT (S-3, ID-41)
-        // ================================================================================
-        //
-        // THE DEFECT THIS CLOSES. Espryt's four `Resolve<Family>SubsystemArm()` functions
-        // (Managers.cpp ~:3595-3745) REFUSE a family whose D-K2 dependency bit is clear and run
-        // the legacy arm instead - the shape ResolveVertexInputSubsystemArm's bit-8-requires-
-        // bit-7 refusal set as the precedent. That refusal is a BACKSTOP and it cannot restore a
-        // correct picture on its own, because the client's emission was gated on the operator's
-        // mask ALONE: at 0x7ff (bit 10 set, bit 11 clear) the client emitted the whole texture
-        // family, the applier accepted it, the emitter cleared each level's per-level dirty flag
-        // on that acceptance (D-D5 as amended by ID-18 M3) - and then the server refused bit 10
-        // and ran the legacy path, which found nothing left to upload. 438/491 on the DirectGLES
-        // integration lane, the same 47 texture-upload failures ID-39 saw on Magma for the
-        // consumer-less version of exactly this mistake.
-        //
-        // So the rule is the SAME "nothing at all, not less" rule as the consumer conjunct
-        // above: with a dependency unmet the client emits NOTHING for that family and the legacy
-        // pull path runs untouched, on both sides of the boundary.
-        //
-        // THE TABLE IS WRITTEN ONCE, IN MG_Pipe/SubsystemDeps.def, and every one of its rows is
-        // the client mirror of the refusal Espryt already implements, bit for bit and
-        // non-transitively - the two must say the SAME thing, because a client that withheld more
-        // than the server refuses would leave the server's handle arm live with no records to
-        // read, and a client that withheld less is the defect above.
-        //
-        // THIS FILE USED TO HOLD ITS OWN COPY of the four P4a rows (P3b/P4b R-5 found six
-        // statements of one rule and two of them drifted). The rows moved to the .def with R-5
-        // and this reader was left pointing at the copy deliberately, because PipeFill.cpp is the
-        // contract package's file for the phase; wave 2-D package D3 switches it over.
-        //
-        // THE ARGUMENT IS MASKED TO kMGPipeP4aFamilySubsystems, AND THAT IS THE WHOLE DIFFERENCE
-        // BETWEEN A REWRITE AND A BEHAVIOUR CHANGE. The .def carries SIX rows; the table deleted
-        // from here carried FOUR, and this predicate is `wants()`'s fourth conjunct for P4a's
-        // families only. Reading all six unmasked would make the CLIENT withhold bit 8's
-        // vertex-input emissions at a mask with bit 7 clear - P3a's own rule, which this gate has
-        // never narrowed and which TextureEmitTest's
-        // EveryDKTwoDependencyRowGatesItsOwnFamilyAndTheMirrorPairsStayLive pins by name ("bit 8
-        // alone, with bit 7 clear: P3a's own rule, which this table must not touch"). Bit 13 is
-        // not narrowed here either; it asks the table for itself in P5eFamilyIsLive below,
-        // because bit 13's conjunct is bit 13's own. So the ROWS now come from one place and WHO
-        // each gate speaks for is still each gate's.
-        //
-        // The P4a-specific COVERAGE assertion stays for the same reason: a fifth P4a family
-        // without a row in the .def has to be a compile error, not a silent "depends on nothing".
+        // Client half of the dependency rows in MG_Pipe/SubsystemDeps.def: a family whose required
+        // bits are not all in the push mask emits nothing. Espryt's Resolve<Family>SubsystemArm
+        // refuses that family and runs its legacy arm, and records the applier had accepted would
+        // already have cleared dirty flags the legacy arm needs (ARCHITECTURE.md §9.6). Both sides
+        // must read the same rows; a client that withheld more would leave the server's handle arm
+        // without records. Only the four handle-family rows are read here: the client does not
+        // withhold vertex input on its row (TextureEmitTest pins that), and P5eFamilyIsLive reads
+        // the buffer-binding row itself.
         constexpr Uint64 P4aFamilyDependencyBits(Uint64 subsystem) {
             return MGPipeSubsystemRequires(subsystem & kMGPipeP4aFamilySubsystems);
         }
@@ -1604,33 +1445,13 @@ namespace MobileGL::MG_Pipe {
             return (pushMask & required) == required;
         }
 
-        // THE SAME QUADRUPLE `wants()` APPLIES TO EVERY EMISSION at the validate point, and it is
-        // deliberately the same predicate rather than a second copy of it: the operator's
-        // per-subsystem A/B bit in MOBILEGL_PIPE_PUSH, this build having WIRED the family
-        // at all, AND - for a P4a family - a backend having registered the consumer and every
-        // D-K2 dependency bit of the family being set. The second half is the family's own
-        // kMGPipeWired*Subsystem constant, which lives in the family's emit header and is 0 until
-        // the commit that gives the emitter its body - so a client path that lands before its
-        // emitter does is inert by construction rather than by everyone remembering to check; the
-        // third is P4aFamilyHasItsConsumer above and the fourth is P4aFamilyDependenciesAreSet.
-        // P5e (sb, ID-106 and CONTRACT-P5E.md §1). THE BINDING-POINT FAMILY's TWO EXTRA
-        // CONJUNCTS, kept beside P4a's rather than folded into them, because it asks a
-        // DIFFERENT consumer question. P4a's four families all ride the resource family's one
-        // signal (P4aFamilyHasItsConsumer says why); bit 13's consumer question is bit 13's
-        // own - MG_Backend/Init.cpp publishes it in the same commit that sets
-        // ShaderBufferEmit.h's wired constant, and a server that does not publish it is a
-        // server whose four binding-point walks still read the frontend, so a record sent to it
-        // would be stored and never looked at while the client latched its suppressor.
-        //
-        // AND BIT 13'S OWN DEPENDENCY ROW IS READ FROM MG_Pipe/SubsystemDeps.def, exactly as
-        // P4a's four are (P3b/P4b R-5, switched over by wave 2-D package D3). It used to be the
-        // hand-coded `(pushMask & kMGPipeSubsystemResources) == 0` below - the sixth statement of
-        // the rule, and the one that sat fifteen lines from the block stating the other three,
-        // which is how "THREE OF THEM" survived two phases. Its reason is the table's: every
-        // MGPBufferRange::Res names a Buffer handle and only bit 7 puts one in the resource slot
-        // table, so without it every EnsureBufferResourceForHandle on the server would mint a
-        // twin with no record behind it. Withholding the whole family is the safe direction - the
-        // legacy frontend walk runs untouched on both sides.
+        // Birth hooks (FamilyIsLive) and the validate walk (ComputeLiveDirtyBits) gate on the same
+        // conjuncts: the subsystem bit in MOBILEGL_PIPE_PUSH, the family's kMGPipeWired*Subsystem
+        // constant, and for a handle family a consumer and its dependency bits. This predicate adds
+        // the buffer-binding family's own two: its SubsystemDeps.def row (every MGPBufferRange::Res
+        // names a Buffer handle, which needs bit 7) and its own consumer, because a server that
+        // does not consume bit 13 still reads binding points from the frontend and would store
+        // records it never reads. Withholding the whole family is the safe direction.
         Bool P5eFamilyIsLive(Uint64 subsystem, Uint64 pushMask) {
             if ((subsystem & kMGPipeSubsystemBufferBindings) == 0) return true;
             if (!MGPipeSubsystemDependenciesAreSet(kMGPipeSubsystemBufferBindings, pushMask)) return false;
@@ -1654,24 +1475,12 @@ namespace MobileGL::MG_Pipe {
                    P5eFamilyIsLive(subsystem, pushMask);
         }
 
-        // ---- THE FAMILY SEAM ----
-        //
-        // The forwarding from a birth hook to its family's emitter has to be written HERE,
-        // once, against an emitter whose entry point does not exist yet: A owns this file for
-        // the whole phase and B/C own the five emit headers, and neither may edit the other's.
-        // A plain call would not compile against the stub emitter and a runtime `if` would not
-        // link. So the call is made from a TEMPLATE whose `if constexpr` condition is the
-        // family's own wired constant, passed as a template ARGUMENT so the condition is
-        // value-dependent: while the constant is 0 the statement is discarded and never
-        // instantiated, so this tree compiles against the stubs; the moment a family sets its
-        // constant the statement instantiates and a missing or misspelled entry point is a
-        // COMPILE ERROR in that family's own commit rather than a surprise at the merge. That
-        // is the same property the four `kMGPipeWired*Subsystem == 0 || == its own bit`
-        // asserts below give, one level further in.
-        //
-        // `call` must be a GENERIC lambda - `[&](auto& emitter) { ... }` - so its body is
-        // checked at instantiation and not at definition. A non-generic one would be checked
-        // here and would defeat the whole seam.
+        // ---- The family seam: a birth hook forwards to its family's emitter ----
+        // ForwardWhenWired calls `call(emitter)` only when kWired is non-zero. The condition is a
+        // template argument, so for a constant of 0 the call is discarded and never instantiated,
+        // and the emitter entry point it names need not exist; once the constant is set, a missing
+        // or misspelled entry point is a compile error. `call` must be a generic lambda
+        // (`[&](auto& emitter) { ... }`) so its body is checked at instantiation, not definition.
         template <Uint64 kWired, class Emitter, class Fn>
         constexpr void ForwardWhenWired(Emitter& emitter, Fn&& call) {
             if constexpr (kWired != 0) {
@@ -1704,25 +1513,14 @@ namespace MobileGL::MG_Pipe {
         static_assert(SeamForwardsExactlyWhenWired(),
                       "the family seam must forward exactly when its wired constant is non-zero");
 
-        // ---- THE PUBLICATION LATCH (D-I1) ----
-        //
-        // "Did a create for exactly this handle actually go out?" - asked by the six death
-        // helpers below and answered by whatever emitted the create. It exists because the
-        // create is gated at its call site and the destroy inside the helper, so the two ask
-        // the same question at two different moments; and because A SLOT IS NOT EVIDENCE OF A
-        // RECORD - a backend twin table mints one through MGPipeSlots().Acquire whether or not
-        // the subsystem ever asked this client to emit anything, which is exactly what a
-        // MOBILEGL_PIPE_PUSH lane with P4a's bits clear runs, and a delete_* on such a handle
-        // is a refused call the applier asserts on in a verify build.
-        //
-        // KEYED BY {kind, slot, gen}, so a recycled slot cannot inherit its predecessor's
-        // answer - the same reason the identity carries a generation at all.
-        //
-        // THE ShaderCso COMPOSITE BAND GETS A TABLE OF ITS OWN, exactly as the allocator's
-        // does and for the same arithmetic: the band's base is 983040, so a single composite
-        // in a slot-indexed vector would allocate ~983k entries. Anything that indexes a
-        // ShaderCso slot must test MGPipeIsCompositeShaderSlot(slot) FIRST; this is the
-        // client-side worked example of that rule.
+        // Whether a create for exactly this handle went out; the death helpers below ask it before
+        // emitting a delete. A slot is not evidence of a record: the client mints slots through
+        // MGPipeSlots().Acquire at object birth and whenever an emitter names an object, whether
+        // or not a create was emitted, and the applier refuses (verify builds assert on) a delete
+        // for a handle it never saw. Keyed by {kind, slot, gen}, so a recycled slot does not
+        // inherit its predecessor's answer. Composite ShaderCso slots (base 983040) get their own
+        // table, or a slot-indexed vector would grow that large; code that indexes a ShaderCso
+        // slot must test MGPipeIsCompositeShaderSlot first.
         class MGPipePublicationLatch {
         public:
             void NotePublished(MGPipeKind kind, MGPipeHandle handle) {
@@ -1922,43 +1720,14 @@ namespace MobileGL::MG_Pipe {
             MGPipeProgramEmitterInstance(), [&](auto& emitter) { emitter.EmitShaderCso(program); });
     }
 
-    // ================================================================================
-    // P4a: one client-side death helper per kind P4a mints (D-I1)
-    // ================================================================================
+    // ---- Client-side death helpers, one per handle kind minted above ----
     //
-    // BACKEND-NEUTRAL FROM THE FIRST COMMIT, which is the whole point: before P3a's C-1 fix
-    // the only thing that ever returned a VertexElementsCso slot was DirectGLES'
-    // StateObjectDeathOps table, so under a backend that installed none every VAO leaked a slot
-    // and a ~1.3 KB applier record for the life of the process. It stays the point now that
-    // BOTH backends install one (P7 wave 2 package C gives Magma its own, CONTRACT-P7 §5.5):
-    // Magma's table EMITS the death record and frees nothing, so the slot still comes back
-    // from here and from nowhere else. P4a mints SIX kinds and there
-    // is no intermediate state in which a backend table is the only path for any of them.
-    //
-    // THE THREE-STEP ORDER IS FIXED and each position is load-bearing (see PipeMutation.h):
-    // wire delete, then the death notice, then the slot free. Each helper returns whether its
-    // delete actually went out, which is the LATCH taken at the object's create - asking a
-    // live predicate twice pairs a create emitted under one registration with a destroy gated
-    // on another, and either direction leaks.
-    //
-    // EVERY ONE OF THEM IS PUBLISHED-GATED RATHER THAN SLOT-GATED. A slot is not evidence of a
-    // record: a backend twin table mints one through MGPipeSlots().Acquire whether or not the
-    // subsystem ever asked this client to emit a create - which is exactly what a
-    // MOBILEGL_PIPE_PUSH lane with P4a's bits clear runs - and a delete_* on such a handle is
-    // a refused call the applier counts and asserts on. So the PUBLICATION LATCH above is
-    // asked before any delete goes out, and it is the SAME latch whatever emitted the create
-    // wrote - one answer per {kind, slot, gen}, not a second reading of a live predicate.
-    //
-    // THE LATCH RATHER THAN A PER-EMITTER RecordIsPublished(handle), deliberately, and it is
-    // the one place P4a's shape differs from P3a's: P3a had one kind and one emitter, so the
-    // emitter could hold the latch. P4a has six kinds behind FOUR emitters and one kind -
-    // SamplerViewCso - with no frontend object at all, and a ShaderCso whose composite band
-    // has two independent release paths. A latch this file owns is then the only thing all
-    // six can read, and it keeps the answer out of the emit headers B and C are writing.
-    //
-    // AT THE CONTRACT COMMIT nothing latches a publication, because every family emitter is a
-    // stub, so every helper here answers false and the legacy path runs unchanged - which is
-    // what makes this commit behaviourally inert while the SHAPE is already the final one.
+    // No backend death table frees these kinds' slots; the client does, here (or, for a cached
+    // CSO, in the cache that minted it). The order is fixed (PipeMutation.h): wire delete, death
+    // notice, slot free. A delete goes out only when the publication latch says the create did,
+    // and the helper returns that answer; re-asking a live gate at death could pair a create and
+    // a destroy decided under different conditions, and either mismatch leaks. One latch serves
+    // all six kinds, which share four emitters.
     namespace {
         // Steps 2 and 3, shared: raise the notice while the handle still resolves, then return
         // the slot. Raised UNCONDITIONALLY, exactly as the five destructors raised it before
@@ -2052,32 +1821,13 @@ namespace MobileGL::MG_Pipe {
         ForwardWhenWired<kMGPipeWiredTextureSubsystem>(
             MGPipeTextureEmitterInstance(), [&](auto& emitter) { emitter.NoteTextureDied(handle); });
         NotifyAndFree(MGPipeKind::Texture, lifetimeId, handle);
-        // THE SAMPLER VIEW DIES WITH ITS TEXTURE, because it is minted off the same lifetime
-        // id: one SamplerViewCso per ITextureObject (D-F2), re-issued on the same handle
-        // whenever the restrictions move. Released AFTER the texture's own record, so a server
-        // that reads the view to answer "what is this texture" still can while the texture is
-        // being dropped.
-        //
-        // THE BUILT-IN SAMPLER IS NOT RELEASED HERE, and that is a correction to the design
-        // table rather than an omission: the SamplerObject every ITextureObject owns is a real
-        // frontend object with its OWN lifetime id and its own #if MOBILEGL_PIPE_PUSH
-        // destructor, so freeing it from the texture's lifetime id would resolve the wrong slot
-        // (or, worse, a live one belonging to another object). Its release therefore rides
-        // ~SamplerObject and MGPipeEmitSamplerCsoDestroyAndFree below - the same helper, the
-        // same three-step order, idempotent.
-        //
-        // WHEN that runs is NOT ordered against this body and nothing here may assume it is.
-        // m_sampler is a SharedPtr, so a texture unit slot or a sampler-view resolution that
-        // took a reference delays ~SamplerObject arbitrarily; "a member's destructor follows
-        // its owner's body" would be true of a by-value member and is not true of this one.
-        // The conclusion above does not depend on the timing - the two ids are different, so
-        // the two releases are independent whichever order they happen in - but a package must
-        // not build an ordering on it.
-        //
-        // AND THE VIEW'S ANSWER IS OR-ED IN, not dropped: a texture whose ResourceDestroy was
-        // suppressed (nothing ever published it) but whose DeleteSamplerView did go out has
-        // already spoken on the wire for this object, and reporting false would run the legacy
-        // path for both halves.
+        // The texture's SamplerViewCso shares its lifetime id and is released here, after the
+        // texture's own record, so a server reading the view while the texture is dropped still
+        // can. The built-in SamplerObject has its own lifetime id and is released by
+        // ~SamplerObject through MGPipeEmitSamplerCsoDestroyAndFree; that destructor is not ordered
+        // against this body (m_sampler is a SharedPtr others may hold), and the two releases are
+        // independent. The view's answer is OR-ed in: a delete for either half means the object
+        // already spoke on the wire.
         const Bool viewPublished = MGPipeEmitSamplerViewCsoDestroyAndFree(lifetimeId);
         return published || viewPublished;
     }
@@ -2104,23 +1854,13 @@ namespace MobileGL::MG_Pipe {
             return false;
         }
 #endif
-        // NO WIRE DELETE EXISTS FOR THIS KIND, and none is invented: PipeCalls.def has
-        // resource_destroy and the five delete_* rows and no framebuffer delete, because a
-        // framebuffer is not a resource and is not a CSO - it is STATE, and
-        // set_framebuffer_state is the only call that names one. The catalogue is closed.
-        //
-        // So the handle is minted and freed entirely client-side and this helper is steps 2
-        // and 3 only. What makes a dangling Fbo unreachable is the frontend's own
-        // MarkFramebufferObjectForDeletion path, which already rebinds any slot holding the
-        // victim to framebuffer 0; and a RECYCLED framebuffer handle can never be suppressed
-        // against its predecessor's record, because Fbo carries Gen and Gen is inside the
-        // record's ContentHash.
-        //
-        // NOTHING EVER TAKES THE PUBLICATION LATCH FOR THIS KIND, by contract and not by
-        // omission: with no create there is nothing to latch, and with no delete there is
-        // nothing for a latch to gate. The answer is therefore the literal false rather than a
-        // latch read, and false is the right one - it means "the legacy path still owes
-        // whatever it owed", which for a framebuffer is the death notice this just raised.
+        // PipeCalls.def has no framebuffer delete: a framebuffer is state, named only by
+        // set_framebuffer_state, not a resource or a CSO. The handle is minted and freed
+        // client-side, so this helper skips the wire delete: it tells the emitter, raises the
+        // death notice and frees the slot. A deleted framebuffer is unreachable because
+        // MarkFramebufferObjectForDeletion rebinds slots holding it to framebuffer 0, and a
+        // recycled handle cannot match its predecessor's record because Gen is in its ContentHash.
+        // Nothing latches a framebuffer publication, so the answer is always false.
         const MGPipeHandle handle =
             MGPipeSlots().FindByLifetimeId(MGPipeKind::Framebuffer, lifetimeId);
         ForwardWhenWired<kMGPipeWiredFramebufferSubsystem>(
@@ -2447,23 +2187,10 @@ namespace MobileGL::MG_Pipe {
                           MGPipeSubsystemForDirty(MGPipeDirty::NewVertexAttribDefaults),
                       "set_vertex_attrib_defaults and NEW_VERTEX_ATTRIB_DEFAULTS must name one subsystem");
 
-        // P3a's pairing, now stated as the SAME EQUALITY the four above are (contract-review
-        // m4, closed here).
-        //
-        // It was written with an escape hatch - `MGPipeSubsystemForDirty(...) == 0 ||` - because
-        // at the contract commit Tracker.h's bit 5 / 9 / 10 arms did not exist yet and the
-        // direct form would have failed for a reason that was not a defect. That hatch was
-        // explicitly conditional on the dirty half being unmapped, and the dirty half is now
-        // mapped (Tracker.h:145-148), so it is removed: leaving it would mean a later edit that
-        // unmapped one of these bits again passed silently, which is precisely what these
-        // assertions exist to catch.
-        //
-        // AND ALL THREE COMPARE AGAINST SubsystemForEmitter, not against the constant. Two of
-        // them named kMGPipeSubsystemVertexInput directly, which asks a different and weaker
-        // question: it pins the dirty half to a constant instead of pinning the two MAPS to
-        // each other, so an emitter row moved onto another subsystem would still satisfy them
-        // while the emission gate and the residual-fill skip had begun to disagree. C.5's trap
-        // is exactly that kind of near-miss. bind_vertex_elements is the family's only
+        // The vertex-input pairings, in the same equality form and with no `== 0 ||` escape, so
+        // unmapping one of these dirty bits fails here. They compare against SubsystemForEmitter
+        // rather than kMGPipeSubsystemVertexInput to pin the two maps to each other: an emitter
+        // row moved to another subsystem must fail too. bind_vertex_elements is the family's only
         // Coverage.def emitter row, so it is the emitter side of all three.
         static_assert(SubsystemForEmitter(MGPipeFieldEmitter::BindVertexElements) ==
                           kMGPipeSubsystemVertexInput,
@@ -2576,52 +2303,14 @@ namespace MobileGL::MG_Pipe {
                           static_cast<Uint32>(MG_State::GLState::TextureState::MAX_TEXTURE_IMAGE_UNITS),
                       "the MGPipe image-unit capacity and the frontend's have drifted");
 
-        // Which of those subsystems THIS BUILD actually emits for. It grows one commit at a
-        // time, and a field whose emitter is not wired here keeps being pulled - so adding a
-        // row to Coverage.def can never silently drop a field on the floor before the call
-        // that carries it exists.
-        //
-        // P3a's two were DELIBERATELY ABSENT at the contract commit, because the emitters
-        // were stubs; each is added by the commit that gives its own emitters their bodies.
-        //
-        // NEITHER OF THEM RETIRES A PULL, and saying so is the point of adding them
-        // deliberately rather than by reflex:
-        //
-        //   kMGPipeSubsystemResources names NO emitted field at all. SubsystemForEmitter
-        //     above can never return it, because the resource family is dispatched at the GL
-        //     call that causes it rather than filled into a PipeInputs field - there is no
-        //     Coverage.def emitted row for it and there cannot be one. It is here so the
-        //     constant states what this build emits for, which is what an operator reading
-        //     a MOBILEGL_PIPE_PUSH value has to be able to trust.
-        //
-        //   kMGPipeSubsystemVertexInput names exactly one emitted field, GetBoundVertexArray
-        //     through bind_vertex_elements - and EmittedCallSuppliesTheWholeField below says
-        //     false for it, with the reason. So this bit switches the EMISSION on and
-        //     changes nothing about the fill loop.
-        //
-        // THE TWO BITS ARE NOT AN INDEPENDENT A/B IN ONE DIRECTION, and an operator turning
-        // them on one at a time has to know which: set_vertex_buffers and set_index_buffer
-        // name their buffers by {slot, gen} whether or not the resource family created a
-        // record for them, so bit 8 WITHOUT bit 7 sends the server handles it cannot resolve
-        // and every one of those calls lands in RefusedResourceCalls. Bit 7 without bit 8 is
-        // fine. Neither the P3a default (0x1ff, both on) nor G12's control (0x7f, both off)
-        // is in that arm, which is why nothing in the phase trips over it.
-        // P4a's FOUR ARE NOT WRITTEN HERE AT ALL, and that is the structural half of the
-        // ownership rule rather than a stylistic choice. This file is the contract package's
-        // for the entire phase: it carries Coverage.def's enum-coupled switch, the validate
-        // point and the death helpers, so the packages that fill the emitters in must never
-        // edit it - which is exactly the merge trap that produced a push and verify build that
-        // did not compile on the integrated tree while both branches were green apart. So each
-        // family's bit is the value of a constant DEFINED IN THAT FAMILY'S OWN EMIT HEADER,
-        // initialised to 0 there and set to the subsystem constant by the commit that gives
-        // those emitters their bodies. A mistake is then a compile error at the contract
-        // commit, not at the merge, and no file is touched twice.
-        //
-        // The sampler bit covers SamplerEmit.h AND ImageEmit.h: one family, one A/B.
-        // P5c rv: the residual subsystem joins the wired mask for set_context_values - the
-        // record's emission is NOT gated on a dirty bit (there is none for the family,
-        // NoDirtyBitOwnsTheResidualSubsystem says so), so this bit is what the residual-fill
-        // skip consults for the eight fields the record supplies.
+        // The subsystems this build emits for. A field whose emitter's subsystem is missing here
+        // keeps being pulled, so a Coverage.def row cannot drop a field before its call exists.
+        // kMGPipeSubsystemResources names no emitted field (its calls are dispatched at the GL
+        // call), and the one vertex-input field, GetBoundVertexArray, stays pulled
+        // (EmittedCallSuppliesTheWholeField). Each handle family contributes the constant from its
+        // own emit header; the sampler one covers SamplerEmit.h and ImageEmit.h. The residual
+        // subsystem is here for set_context_values, which has no dirty bit, so the residual-fill
+        // skip reads this mask for its eight fields.
         constexpr Uint64 kMGPipeWiredSubsystems = kMGPipeSubsystemRenderState |
                                                   kMGPipeSubsystemPixelPack |
                                                   kMGPipeSubsystemPatchState |
@@ -2750,30 +2439,12 @@ namespace MobileGL::MG_Pipe {
             }
         }
 
-        // DOES THIS TREE'S APPLIER ACTUALLY DERIVE?
-        //
-        // MGPipeDeriveRenderStateFields is package A's, and on the P2 contract tag it is a
-        // declared stub whose body lands in A's follow-on commit. A field that reaches
-        // PipeInputs only through that derivation must NOT be skipped by the residual fill
-        // while the derivation is a stub: skipping it would leave the mirror unwritten and
-        // the backend reading a default.
-        //
-        // Rather than hard-code which branch this is, the filler asks once: it puts a
-        // sentinel in a scratch block's working RenderStateParameters, clears the mirror the
-        // derivation is supposed to recompute, runs the derivation, and looks. The answer is
-        // latched for the process and costs one compare, once.
-        //
-        // It stays useful after A lands: if the derivation is ever deleted or gated off, the
-        // filler degrades to PULLING those fields instead of rendering a default, which is
-        // the safe direction. The verify lane and RenderStateSpansTest are what say the
-        // derivation is CORRECT; this only says it is THERE.
-        //
-        // AND IT IS A ONE-FIELD SAMPLE, deliberately: it probes m_clearStencil and nothing
-        // else, so a PARTIAL derivation - one that recomputes m_clearStencil and forgets, say,
-        // GetViewport's rounding - flips this latch to true and lets the other mirrors go
-        // unwritten. That is a real risk of a half-landed package A and the backstop for it is
-        // the verify lane (which re-reads every field at every backend read), not this probe.
-        // Widening the probe to all 29 would re-implement the derivation to check it.
+        // Probes once whether MGPipeDeriveRenderStateFields derives: it seeds a sentinel in a
+        // scratch block's RenderStateParameters, clears the derived mirror, derives and compares.
+        // Fields that reach PipeInputs only through the derivation are skipped by the residual fill
+        // only when this answers true; otherwise they are pulled, the safe direction. It samples
+        // one field (ClearStencil), so it shows the derivation exists, not that it is complete or
+        // correct; the verify lane and RenderStateSpansTest check that.
         Bool ApplierDerivesRenderStateFields() {
             static const Bool answer = [] {
                 // Leak-at-exit, for gPipeInputs' reason: a PipeInputs is never destroyed by
@@ -2796,77 +2467,22 @@ namespace MobileGL::MG_Pipe {
             return answer;
         }
 
-        // ---- the residual fill's SUPPLIED SET, computed once per environment (P5d r3, C) ----
-        //
-        // WHY THIS CACHE EXISTS, AND WHAT IT DOES NOT CHANGE. Step 4 of the validate point asks,
-        // for every one of the 63 fields and at EVERY verb, whether an emitted call already
-        // supplied it. The question is the seven-term conjunction spelled below - and it is still
-        // spelled exactly once, so there is ONE copy of it: five of its terms are constants of the
-        // FIELD, and the other two are facts about the PROCESS - which subsystems the operator's
-        // mask carries, and whether the backend consumes the P4a families - that move a handful of
-        // times in a process's life and never inside a verb. So the conjunction is evaluated per
-        // field once per distinct environment and read back as a bit. Nothing about WHICH fields
-        // are copied moves: same expression, same inputs, same answer.
-        //
-        // AND THE PROFILE IS WHY IT IS WORTH A CACHE AT ALL. The 2026-09-17 inproc profile
-        // (Minecraft 26.3-rc-3, view distance 12, ~852 draws/frame) put MGPipeValidateForVerb at
-        // 4.11% self / 10.9% inclusive of the GL thread, of which MGPipeTracker::Update is 1.46
-        // and CopyField 2.54; most of the rest is this walk's per-field predicate.
-        // P4aFamilyHasItsConsumer alone is a CapsMirror read under split, and it was taken 63
-        // times per verb for an answer that is the same 63 times.
-        //
-        // THE KEY IS THE WHOLE OF WHAT THE EXPRESSION READS BESIDE THE FIELD ID, which is what
-        // makes this a memo rather than a latch that goes stale:
-        //   - the push mask (MG_Config::Features.PipePush), which the per-subsystem A/B lanes move;
-        //   - ApplierDerivesRenderStateFields(), a one-shot probe - in the key anyway, so that a
-        //     build where it ever stopped being one-shot cannot keep a stale answer silently;
-        //   - contextValuesWireLive, which flips when a session starts, stops, or tears its tables
-        //     down (P5c rv, CONTRACT-P5C.md 5.3) - the half that must never disagree with the
-        //     emission's half at the validate point, which is why it is PASSED IN rather than
-        //     re-read here;
-        //   - P4aFamilyHasItsConsumer, which flips when the caps mirror adopts a snapshot (R-12: a
-        //     second arrival IS the invalidation) or a backend registers its resource op table.
-        //     ALL FOUR FAMILIES RIDE THE ONE SIGNAL - that is P4aFamilyHasItsConsumer's own rule,
-        //     argued where it is defined - so asking it once for the whole family mask is asking
-        //     it for every family at once, and the rebuild re-asks it per subsystem from the same
-        //     unchanged mirror. It is also the one key input that CANNOT MOVE AN ANSWER TODAY,
-        //     and the static_assert below is that fact's trip wire rather than a claim in prose.
-        //
-        // NOT THREAD-LOCAL, AND THAT IS THIS FILE'S EXISTING RULE RATHER THAN A NEW ONE:
-        // g_omission and the verify latches beside it are file-scope too, and what
-        // keeps a single writer on them is the verb barrier (ROADMAP.md's G1 row states it for
-        // gPipeInputs itself). A validate that runs on the apply thread is inside that barrier by
-        // construction.
-        //
-        // BUT THE ANSWER IS HANDED OUT BY VALUE, WHICH IS NOT THE SAME ARGUMENT (P5d r3 package C
-        // review, minor 1). Those latches are single BITS: a reader cannot observe one
-        // half-written. A 2x64-bit mask can, so the rebuild below fills a LOCAL and publishes it
-        // into the memo in one assignment, and the caller gets a copy rather than a reference into
-        // storage the next rebuild would zero under it. Sixteen bytes is cheaper at the use site
-        // than the indirection was anyway - the walk reads the copy 63 times.
+        // ---- the residual fill's supplied set, cached per environment ----
+        // Step 4 of the validate point asks, for every field at every verb, whether an emitted call
+        // supplied it. SuppliedFieldMask spells that once; its inputs besides the field move rarely
+        // and never within a verb, so the mask is rebuilt only when one moves. The key is all of
+        // them: the push mask, ApplierDerivesRenderStateFields(), contextValuesWireLive (passed in
+        // so the fill and the emission share one answer), P4aFamilyHasItsConsumer and, under a
+        // transport, the caps mirror generation. Like the other fill state it is file-scope with
+        // one writer under the verb barrier, and the mask is returned by value.
 
-        // AND THE FOURTH KEY INPUT CANNOT MOVE AN ANSWER TODAY, WHICH IS A FACT WITH A TRIP WIRE
-        // RATHER THAN A COMMENT (P5d r3 package C review, the major).
-        //
-        // The consumer conjunct sits in the expression because the expression reads it, and the
-        // key carries it because a key that omits an input the expression reads is how a memo
-        // goes stale. But every field whose emitter belongs to a P4a family - the five of them:
-        // GetFramebufferBindingSlot, GetImageTextureBinding, GetTextureUnitObject,
-        // GetProgramForDraw, GetProgramForDispatch - is ALSO a field
-        // EmittedCallSuppliesTheWholeField() answers `false` for: their storage
-        // is a frontend heap reference (a BindingSlot, an ImageTextureBinding, a TextureUnit,
-        // two SharedPtr<ProgramObject>) that a payload cannot carry, so the fill pulls them
-        // whatever the consumer says. The consumer conjunct is therefore DOMINATED: no motion of
-        // the caps mirror or of MGPipeGetResourceOps() can change one bit of the mask, and no
-        // unit case can distinguish a key that carries it from one that does not.
-        //
-        // WHEN THIS FIRES, that stopped being true - P3b/P4b/P7/P8 gave one of those rows a twin
-        // the applier can write - and the consumer signal became observable through
-        // MGPipeResidualFillSuppliesField. At that point the memo's key needs the same
-        // move-it-and-read-it-back pair steps 1-3 of
-        // FieldOwnershipTest.TheResidualFillsSuppliedMemoReKeysOnEveryInputThatMovesAnAnswer
-        // give the other three inputs, and that case's step 4 (which today pins the domination
-        // instead) has to become it. Do that rather than deleting this line.
+        // The consumer signal is in the memo key because the expression reads it, but it cannot
+        // change the mask today: every field emitted by a handle family (framebuffer, texture,
+        // sampler, program) is one EmittedCallSuppliesTheWholeField answers false for, so it is
+        // pulled whatever the consumer says. If this fires, that stopped being true: give the
+        // consumer input a move-and-read-back step in FieldOwnershipTest's
+        // TheResidualFillsSuppliedMemoReKeysOnEveryInputThatMovesAnAnswer, replacing step 4,
+        // which pins the current domination.
         constexpr Bool NoP4aFamilyFieldIsWhollySupplied() {
             for (SizeT i = 0; i < kMGPipeInputFieldCount; ++i) {
                 const auto field = static_cast<MGPipeInputField>(i);
@@ -2883,29 +2499,13 @@ namespace MobileGL::MG_Pipe {
                       "memo can now answer differently for the consumer signal, so that key input "
                       "needs the unit case the paragraph above names");
 
-        // ---- P5e (gl), ID-112: THE SAME TRIP WIRE FOR THE TWO ROWS THAT ONE CANNOT SEE ------
-        //
-        // The assertion above is keyed on the EMITTER'S SUBSYSTEM, so it covers exactly the five
-        // P4a-family rows. GetBoundVertexArray (P3a's, emitted by BindVertexElements) and
-        // GetBufferBindingPoint (P5e sb's, emitted by SetShaderBuffers) sit outside
-        // kMGPipeP4aFamilySubsystems and had therefore no compile-time protection at all.
-        //
-        // WHY THAT IS A DEVICE CRASH AND NOT A STYLE POINT. This residual fill is MAGMA'S ONLY
-        // SOURCE for all seven pointer-backed rows, and Magma dereferences them on its first
-        // draw: it is in lockstep for the whole of P5e (ID-90) and reads them through
-        // MagmaP7AllocatorDebtScope. A package retiring a DirectGLES consumer that "tidied up"
-        // by deleting one of these two rows from EmittedCallSuppliesTheWholeField would not
-        // break the build - it would SIGSEGV Magma on a phone, which is the exact shape that
-        // cost this phase 38 scenarios once already (ID-107). So the seven are NAMED, and the
-        // naming is the deliverable: it converts the most likely mistake of every remaining
-        // package from a device crash into a build break.
-        //
-        // IF THIS ASSERTION FIRED ON YOU: the answer for each row is argued above
-        // EmittedCallSuppliesTheWholeField and it is the same argument every time - the field's
-        // storage is a frontend heap reference and no payload may carry a pointer. What retires
-        // a row is the phase where the BACKEND stops reading a frontend object (P7 for the
-        // texture/framebuffer/program mirrors, P8 for the VAO), never a consumer-side cleanup
-        // in the package you are writing.
+        // ---- the same check for all seven pointer-backed rows ----
+        // The assertion above sees only the handle-family rows; this one also covers
+        // GetBoundVertexArray and GetBufferBindingPoint. Each row stores a frontend heap reference
+        // no payload can carry, so the residual fill is the only writer of that mirror, and
+        // DirectGLES still dereferences some of them in-process. Without this check, marking one
+        // wholly supplied would build and then crash at the first read. A row leaves this list
+        // only once no backend reads that frontend object.
         constexpr MGPipeInputField kMGPipePointerBackedResidualRows[] = {
             MGPipeInputField::GetBoundVertexArray,       MGPipeInputField::GetBufferBindingPoint,
             MGPipeInputField::GetFramebufferBindingSlot, MGPipeInputField::GetImageTextureBinding,
@@ -3072,38 +2672,14 @@ namespace MobileGL::MG_Pipe {
             return sizeof(MGPPatchState);
         }
 
-        // set_vertex_attrib_defaults, behind D11's set-hash suppressor: the RESOLVED set - all
-        // 32 values, all three views - is hashed on the client and the call does not go out
-        // when the hash has not moved. That is coalescing rule 4, and this is its one wired
-        // consumer in P2.
-        //
-        // THE PAYLOAD, SINCE P5c rv (CONTRACT-P5C.md §5.3). A CurrentVertexAttributeValue is
-        // one value in three views, and GLContext CONVERTS between them numerically, so "the
-        // bytes of one view" is not the value: glVertexAttrib4f(loc, 1.5f, ...) leaves 1 in
-        // intValue and 0x3FC00000 in floatValue, and every glVertexAttribI4i/ui is a different
-        // pair again. MGPAttribValue now carries all three views VERBATIM
-        // (FloatView/IntView/UintView) plus the class the frontend actually wrote
-        // (GLContext::GetCurrentVertexAttributeClass), and MGPipeApplySetVertexAttribDefaults
-        // writes each view from its own array - the cross-view conversion's authoritative
-        // answer is the client's, and the applier no longer reconverts anything. The pre-rv
-        // shape (one Data[4] memcpied into all three views, ValueClass ignored) is exactly
-        // what kept this row EMITTED-AND-STILL-PULLED in EmittedCallSuppliesTheWholeField;
-        // with the applier fixed, the field is RECORD_SUPPLIED outright.
-        //
-        // The suppressing memcmp below is over the three VIEWS only, and that is not an
-        // oversight: the class decides how the views are REBUILT, so two writes that leave
-        // the three views identical rebuild identically whichever class they carried, and a
-        // class that moved without moving any view has nothing to publish.
-        //
-        // So the emitter CHECKS rather than assumes, the same self-healing shape as
-        // ApplierDerivesRenderStateFields: after the call it compares the mirror the applier
-        // wrote against the frontend's value, and when they differ it copies the field itself
-        // and says so once. That is what keeps the block correct in the window this call used
-        // to corrupt - a glVertexAttrib4f followed by a non-kDraw verb, where the residual
-        // fill does not run for this field and nothing else would have put the value back.
-        // Since rv the applier writes all three views verbatim, so the compare below is
-        // expected to pass on every emission; it stays armed because it is the one observable
-        // of that write being verbatim in a window no other gate looks at.
+        // set_vertex_attrib_defaults is suppressed by the set-hash suppressor over all 32 resolved
+        // attributes. GLContext converts each value numerically between its float, int and uint
+        // views, so MGPAttribValue carries all three views verbatim plus the class the frontend
+        // wrote, and the applier copies each view without reconverting. The per-attribute diff
+        // compares views only: identical views rebuild identically whatever their class. Outside
+        // run-ahead the emitter then compares the applier's mirror with the frontend value and on
+        // a mismatch copies the field itself and counts it here, because the residual fill skips
+        // this record-supplied field and nothing else would repair it.
         Uint64 g_attribDefaultRepairs = 0;
 
         // The header of the last set_vertex_attrib_defaults that actually went out. Count == 0
@@ -3338,23 +2914,12 @@ namespace MobileGL::MG_Pipe {
                 payloadBytes += sizeof(MGPDynamicState) + blobBytes;
             }
 
-            // The staging mirror is what set_dynamic_state diffs against, so it may only be
-            // advanced by the branch that actually SENT dynamic bytes. Latching it whenever
-            // either bit fired would, if NEW_PIPELINE_STATE could ever fire alone, claim the
-            // server holds chunks it never received - and the chunk-level suppressor would
-            // then never resend them, which is a permanently stale answer with no gate on it.
-            //
-            // It cannot fire alone today because BumpVersions() moves both counters
-            // (RenderState.h), but that is an invariant of ANOTHER package's file. So it is
-            // asserted here rather than assumed, and the assignment is narrowed to the one
-            // bit that owns the mirror.
-            //
-            // MOBILEGL_ASSERT compiles out in Release/INFO, which is the G1/G3
-            // configuration, so the assert itself is a debug/verify-only alarm. THE
-            // BEHAVIOUR IS SAFE IN EVERY BUILD REGARDLESS, and it is the narrowing below
-            // rather than the assert that makes it so: if the invariant ever broke in a
-            // shipping build the mirror would simply not advance, which costs a re-send of
-            // chunks the server already has and never claims it holds chunks it does not.
+            // tracker.Staged() is what set_dynamic_state diffs against, so only the branch that
+            // sent dynamic chunks may advance it; advancing it on NEW_PIPELINE_STATE alone would
+            // claim the server holds chunks it never received, and those would never be resent.
+            // RenderState's BumpVersions() moves both counters, so that cannot happen today. The
+            // assert (debug and verify builds only) checks it; the narrowed condition below keeps
+            // release builds safe if it breaks, at the cost of a resend.
             MOBILEGL_ASSERT((dirty & MGPipeDirtyBit(MGPipeDirty::NewPipelineState)) == 0 ||
                                 (dirty & MGPipeDirtyBit(MGPipeDirty::NewRenderState)) != 0,
                             "NEW_PIPELINE_STATE fired without NEW_RENDER_STATE: RenderState's "
@@ -3525,23 +3090,13 @@ namespace MobileGL::MG_Pipe {
         const Bool fillOwed = barriered;
         g_lastFillWasBarriered = fillOwed;
         if (fillOwed) {
-            // P5c (gt, CONTRACT-P5C §6 layer 2) / P5e §3.5: the residual fill is THE
-            // client-side write into gPipeInputs. Under lockstep it is legal because it runs
-            // before the record is published - the apply thread's in-applier flag is provably
-            // down here. Under run-ahead it is legal because this record is BARRIERED: this
-            // thread is about to park behind it. The second argument is which of the two
-            // claims the caller is making, and a fill that made the second one falsely is the
-            // named abort.
-            //
-            // P5e (ra2): AND IT IS MADE TRUE FIRST. Phase 1 of the block write is three lines
-            // below - the serial bump, MGPipeServerClearVerbBoundary() and SetVerb - and every
-            // one of them is a scalar the apply thread reads at each field access inside the
-            // record it is currently applying. Withdrawing the server's own stamp from under it
-            // is what produced `Fatal{UnmigratedPipeInput, "<RECORD-SUPPLIED field>@<this
-            // thread's verb>"}` on the apply thread (report §2). THE RED-ONCE IS THIS LINE:
-            // delete it and the guard below aborts with Fatal{RoleViolation, "gPipeInputs"}
-            // naming MGPipeValidateForVerb, because the guard now tests the fact rather than
-            // taking the claim.
+            // The residual fill writes the pipe-input block from the GL thread. Under lockstep that
+            // is legal because the record is not yet published; under run-ahead only because this
+            // verb is barriered, and that must hold now: QuiesceApplierBeforeFill waits for the
+            // applier, since the serial bump, MGPipeClientClearVerbBoundary() and SetVerb below
+            // change scalars the apply thread reads inside the record it is applying. The guard
+            // then checks the fact and aborts with Fatal{RoleViolation, "gPipeInputs"} if the wait
+            // is missing. See ARCHITECTURE.md §9.2.2.
             if (runAhead) MG_Remote::Client::ClientSession::NoteBarrieredVerbForStats(kMGPipeVerbNames[static_cast<SizeT>(verb)]);
             QuiesceApplierBeforeFill("MGPipeValidateForVerb");
             MG_Remote::Client::ClientSession::RefusePipeInputsTouchWhileApplierOwnsIt(
@@ -3557,24 +3112,13 @@ namespace MobileGL::MG_Pipe {
             // Fatal{UnmigratedPipeInput, "<Field>@<none>"} rather than default storage.
             ++MGPipeFillAccess::Filled(inputs).CurrentVerbSerial;
 #endif
-            // The client is filling, so whatever the server stamped at its last verb boundary
-            // is withdrawn: the stamps below are the CLIENT's again and a stale read is a
-            // defect, not a residual pull. Disarming here rather than at the end of the
-            // applier's work is what makes the arming flag say "the current stamps are the
-            // server's" no matter which of the two roles ran last.
-            //
-            // P5e (§3.2): under run-ahead this runs only inside a barriered fill, which is the
-            // whole of the E note's hazard (b.4) - a GL thread withdrawing the SERVER's stamp
-            // while the apply thread is inside a record that depends on it. For an unbarriered
-            // verb the stamp is not touched at all, and the applier's own LeaveApplier is then
-            // its only writer.
-            //
-            // P5f (f1): this is now the CLIENT block's flag (MGPipeClientClearVerbBoundary).
-            // With the rehearsal off both names denote the one shared block and the semantics
-            // above are unchanged; with it on the client block's flag is never raised and the
-            // clear is a no-op, and withdrawing the SERVER's stamp is the applier's job alone
-            // (PipeApplier::LeaveApplier) - which is CONTRACT-P5E §3.2's per-role stamp
-            // ownership, landed as the dual block rather than as moved fields.
+            // The client is filling, so the server's stamps from its last verb boundary are
+            // withdrawn and the stamps below are the client's. Clearing here rather than when the
+            // applier finishes keeps the flag meaning "the current stamps are the server's"
+            // whichever role ran last. Under run-ahead this runs only inside a barriered fill that
+            // has waited for the applier. With distinct client and server blocks the client block's
+            // flag is never raised, so this is a no-op and PipeApplier::LeaveApplier alone clears
+            // the server's.
             MGPipeClientClearVerbBoundary();
             MGPipeFillAccess::SetVerb(inputs, verb);
         }
@@ -3601,36 +3145,13 @@ namespace MobileGL::MG_Pipe {
         const Uint32 dirty = tracker.Update(*ctx, verbClass);
 
         // ---- step 3: emission ----
-        // Every gate below goes through MGPipeSubsystemForDirty, the ONE map from a dirty bit
-        // to the runtime subsystem that owns it. Naming the subsystem constants here instead
-        // would be a second copy of that map in the only path that runs, and mis-gating a bit
-        // in it would pass every test the map has.
-        //
-        // FIVE CONDITIONS, AND THE WIRED MASK IS ONE OF THEM. `kMGPipeWiredSubsystems` is the
-        // OR of the per-family constants each emit header defines, and the whole ownership
-        // design rests on it MEANING what the headers, this file and the result files all say
-        // it means: an emitter runs only once the commit that gave it a body set its family's
-        // constant. Without this condition a family whose header still says 0 would be CALLED
-        // at every verb whose bit fires under the shipped default mask, so the commit that
-        // lands the body would go live one commit early and every gate run in between would
-        // measure an arm nobody thinks is on - and the mirror error is worse: a family that
-        // lands its body and forgets the constant would emit nothing and look broken. The
-        // P2/P3a bits are all in the mask, so nothing that emits today changes.
-        //
-        // AND THE FIFTH IS P4aFamilyHasItsConsumer (ID-39), the same conjunct FamilyIsLive
-        // applies to every birth hook: a P4a family whose records nothing on this backend
-        // consumes emits NOTHING, so the legacy pull path runs exactly as it does on the pull
-        // build. It is written here rather than folded into kMGPipeWiredSubsystems because the
-        // wired mask is a property of the BUILD - a constexpr an emit header sets - and this is
-        // a property of the RUNNING BACKEND, and collapsing the two would make a bisect that
-        // lands between them unreadable. The P2/P3a bits are outside kMGPipeP4aFamilySubsystems,
-        // so the conjunct is true for every one of them and nothing that emits today changes.
-        //
-        // AND THE SIXTH IS P4aFamilyDependenciesAreSet (S-3 / ID-41), the client half of D-K2:
-        // a family one of whose dependency bits the operator left clear emits NOTHING here for
-        // the same reason - the server REFUSES that family and runs its legacy arm, and an
-        // emission the server refuses is an emission whose acceptance already cleared a frontend
-        // dirty flag the legacy arm still owed. Same table, same four families, one place.
+        // Each dirty-bit gate maps its bit to a subsystem through MGPipeSubsystemForDirty, the one
+        // map; naming subsystem constants here would be a second copy no test of the map covers.
+        // LiveDirtyBits keeps a bit only when its family is live: its bit in the push mask and in
+        // kMGPipeWiredSubsystems, and the family's consumer and dependency checks (see
+        // ComputeLiveDirtyBits). A family with no consumer or an unmet dependency emits nothing,
+        // because acceptance would clear dirty flags the legacy arm still needs
+        // (ARCHITECTURE.md §9.6).
         const Uint64 pushMask = MG_Config::Features.PipePush;
 #if MOBILEGL_BUILD_DISAGGREGATED
         // P5c rv (CONTRACT-P5C.md §5.3): set_context_values is the carrier for the eight
@@ -3675,24 +3196,12 @@ namespace MobileGL::MG_Pipe {
         //   - and the residual block owes a fresh publication whatever else moved.
         if (tracker.FreshlyPrimed()) {
 #if MOBILEGL_BUILD_DISAGGREGATED
-            // P5c (ct), CONTRACT-P5C.md §5.1: with an active transport the server's reset
-            // crosses AS A RECORD, ahead of every reset below - the client-side ones (the CSO
-            // cache, the hash suppressor, the vertex-input emitter) and the emitters' latches
-            // - because the record's barrier is what orders the server's MGPipeApplierReset()
-            // against every verb that follows. The GL-thread direct call it replaces is
-            // Fatal{RoleViolation, "g_applier"} inside MGPipeApplierReset itself (§6 layer 2),
-            // so reverting this arm to the direct call goes red by name rather than rendering
-            // stale. Monolith keeps the direct call, byte for byte (G1).
-            //
-            // THE APPLY THREAD IS EXCLUDED (M5's rule): a validate running on the server's own
-            // thread produces no client record - EmitAndWait there would wait on the thread
-            // that has to apply the record - and the direct call is exactly what the apply
-            // thread is allowed to make (the sink's own path runs it there).
-            //
-            // AND A CONFIGURED-BUT-WIRELESS TRANSPORT TAKES THE DIRECT CALL TOO:
-            // EmitApplierResetRecord answers false when no live session could carry the
-            // record (the pre-Start bring-up window, a ServerLoop fixture with no client at
-            // all), and in that shape this process IS the only place the reset can run.
+            // With an active transport the server's applier reset crosses as a record, ahead of
+            // the client-side resets below, so ring order sequences it before every later verb;
+            // calling MGPipeApplierReset() directly from the GL thread aborts with
+            // Fatal{RoleViolation, "g_applier"}. Monolith, the apply thread (where EmitAndWait
+            // would wait on itself) and a transport with no live session (EmitApplierResetRecord
+            // returns false) make the direct call instead.
             const Bool transportActive =
                 MG_Config::Transport != MG_Config::TransportMode::Monolith &&
                 !MG_Remote::Client::RunsAsTheServerRole();

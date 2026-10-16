@@ -11,29 +11,13 @@
 
 #include <MG_Pipe/MGPipeHandles.h>
 
-// The CLIENT's slot allocator: the thing that mints every MGPipeHandle in the system
-// (ARCHITECTURE.md 4.2 - no create_* call in the catalogue returns a server-cast handle,
-// which is what lets the whole catalogue be remoted with zero creation round trips).
-//
-// Per kind: a free list plus a high-water mark, so slots stay DENSE and the server's object
-// table is an array rather than a hash map. It has nothing to do with MG_State's
-// IndexGenerator - that container's LIFO GL-name reuse is the very problem {slot, gen}
-// exists to close, and the whole point of the identity is that an ABA on the GL name, on
-// the heap address or on the lifetime id cannot reproduce a handle.
-//
-// Gen increments ONLY when a slot is reused, never on a respecify: a glBufferData on a live
-// buffer keeps the same {slot, gen}, because the object is the same object. Two generations
-// exist in the design and they are strictly separate - this is the client's answer to "is
-// this still the same GL object"; MGGen is the server's epoch for "did I recast my driver
-// object", and no MGPipe call may require the client to know it.
-//
-// The lifetimeId -> slot map is what keeps a GL NAME out of every key (ARCHITECTURE.md 4.2):
-// the frontend object's lifetime id is the client's own identity for it, so the backend key
-// is the handle and the frontend key is the lifetime id, and neither is a recyclable name.
-//
-// Lives in MG_Impl (the client side, unrestricted) and is compiled only under
-// MOBILEGL_PIPE_PUSH. It is in the P2 CONTRACT commit rather than in a Track H package
-// because both Track H slices - Espryt 0b and Magma subsystem 4 - key off it.
+// The client's slot allocator: it mints every MGPipeHandle, so no create_* call needs a round
+// trip (ARCHITECTURE.md §2.1). A free list plus a high-water mark per kind keeps slots dense,
+// so the server's object table is an array. Unrelated to MG_State's IndexGenerator, whose LIFO
+// GL-name reuse is the ABA {slot, gen} exists to prevent. Gen increments only when a slot is
+// reused, never on a respecify; it is separate from the server's MGGen epoch, which no MGPipe
+// call may require the client to know (§2.2). The lifetimeId -> slot map keeps GL names out of
+// every key: the frontend key is the lifetime id, the backend key is the handle.
 namespace MobileGL::MG_Pipe {
 
     class MGPipeSlotAllocator {
@@ -48,23 +32,14 @@ namespace MobileGL::MG_Pipe {
         // Allocate and remember `lifetimeId` as this handle's frontend identity.
         MGPipeHandle AllocateFor(MGPipeKind kind, Uint64 lifetimeId);
 
-        // P4a, D-H7: THE ONE ENTRY POINT INTO THE ShaderCso COMPOSITE BAND, and the only one
-        // there will ever be. Allocate() above refuses that band on purpose, so a program
-        // pipeline's flattened composite - minted client-side from the stage programs bound to
-        // the pipeline object, and indistinguishable from an ordinary program to the server -
-        // needs a door of its own rather than a flag on the handle. The kind is implied: only
-        // ShaderCso has a band.
-        //
-        // It behaves exactly like AllocateFor in every other respect (free list first, then
-        // the band's own high-water mark; Gen moves only on reuse; the lifetimeId -> slot map
-        // is written) and it carries the band's own exhaustion assert, so exhausting the
-        // composite space is a NAMED Fatal rather than silent slot theft from ordinary
-        // programs. Returns kMGPipeNullHandle when the band is full.
-        //
-        // Freed through the ordinary Free(MGPipeKind::ShaderCso, handle): a composite's slot
-        // has two independent release paths - the pipeline cache's LRU eviction and the
-        // composite ProgramObject's own destructor - and Free refusing a slot that is not live
-        // at that generation is what makes the second one a proven no-op.
+        // The only way into the ShaderCso composite band, which Allocate() refuses: a program
+        // pipeline's flattened composite is minted client-side and looks like an ordinary
+        // program to the server, so it gets its own entry point rather than a flag on the
+        // handle. Otherwise it behaves like AllocateFor (free list first, Gen moves only on
+        // reuse, the lifetimeId map is written). Returns kMGPipeNullHandle, after a named
+        // assert, when the band is full. Freed through Free(ShaderCso, handle): of its two
+        // release paths (the pipeline cache's LRU and ~ProgramObject), the second finds the
+        // slot no longer live at that generation and is a no-op.
         MGPipeHandle AllocateComposite(Uint64 lifetimeId);
         // The handle a lifetime id was allocated for, or kMGPipeNullHandle. A recycled heap
         // address does NOT reproduce a mapping: MG_State hands out a fresh lifetime id per
@@ -89,22 +64,12 @@ namespace MobileGL::MG_Pipe {
         // otherwise, live or not.
         Uint32 GenOfSlot(MGPipeKind kind, Uint32 slot) const;
         Uint64 LifetimeIdOfSlot(MGPipeKind kind, Uint32 slot) const;
-        // One past the highest ORDINARY slot ever handed out of this kind. For every kind but
-        // ShaderCso that is the whole story; for ShaderCso the composite band is a second,
-        // separately dense space and CompositeHighWater() below answers it.
-        //
-        // THE TWO SPACES ARE REPORTED SEPARATELY, and that is the point rather than a detail.
-        // Folding the band into this number pins it at ~983k from the first composite mint
-        // onward, and every later assertion of the "the high-water mark did not move over N
-        // churn rounds" shape - the one that catches a dense table that never shrinks, which
-        // is the ~1.3 KB-per-record leak C-1 produced - becomes vacuously true for ordinary
-        // ShaderCso slots for the rest of the process. A leak case per space is two real
-        // assertions; one merged number is one real assertion and one that cannot go red.
-        //
-        // It is also NOT a table size for kind ShaderCso even now: the band is sparse against
-        // the ordinary space by design, so a consumer indexing by slot must test
-        // MGPipeIsCompositeShaderSlot(slot) first and keep the band in a table of its own,
-        // exactly as this allocator does.
+        // One past the highest ordinary slot ever handed out of this kind. For ShaderCso the
+        // composite band is a separate dense space, answered by CompositeHighWater(): folded
+        // in, this number would sit at ~983k after the first composite, and a leak test
+        // asserting it stays put over churn could no longer fail for ordinary slots. Nor is it
+        // a table size for ShaderCso: a consumer indexing by slot tests
+        // MGPipeIsCompositeShaderSlot(slot) first and keeps the band in a table of its own.
         Uint32 HighWater(MGPipeKind kind) const;
         // One past the highest COMPOSITE slot ever handed out, i.e.
         // kMGPipeShaderCsoCompositeSlotBase + (band slots ever handed out), and exactly the

@@ -6,53 +6,13 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// THE CLIENT-SIDE CONSERVATIVE GPU-WRITE SET (ARCHITECTURE.md §16 names this component;
-// CONTRACT-P5.md section 3, table 2's first set). Owner: package b1.
-//
-// WHY IT HAS TO MOVE SIDES. `BufferObject::SyncGpuWrites` (BufferObject.cpp:369) runs
-// synchronously, on the application's thread, the moment the application calls glMapBuffer or
-// glGetBufferSubData. It has to answer "did the GPU write this buffer since I last read it?"
-// - and the six backend sites that rows 0-3 below mirror are all on the server's side of a split
-// (DirectGLES.cpp's SyncBufferBindingPointsByRecord, SyncAtomicCounterBuffers and
-// MarkWritableImageBufferTexturesGpuWritten; UniformManager.cpp's ResolveStorageTexelBufferDescriptor
-// and ResolveStorageBufferDescriptor; WireDraw.inc's BeginWireXfbCaptureForDraw). Asking the server
-// is a round trip the design forbids in steady state, so the
-// client must build the set itself, from state it already owns: the SSBO and atomic-counter
-// binding points, the image units whose Access is not GL_READ_ONLY, and the transform-feedback
-// capture targets.
-//
-// CONSERVATIVE MEANS OVER-APPROXIMATE, AND THAT IS THE WHOLE DESIGN. The reverse channel's
-// OnGpuWritten is a NARROWING channel (ResourceTracker.h:577-581): the client marks
-// everything a shader COULD have written and the server only ever removes entries. So a row
-// here that fires too often costs a readback; a row that fires too rarely reads a stale shadow
-// and is silent. Every row below therefore mirrors its backend twin exactly, including the two
-// places the twin is deliberately NARROW - a GL_READ_ONLY image binding is left alone, and the
-// image walk runs from draw preparation rather than from glBindImageTexture's eager sync.
-//
-// NO NARROWING IN P5. ResourceTracker.h:587-592's `rangeCount == 1` assertion STAYS. Zero
-// ranges will mean "a fully narrowed set - nothing is dirty" at P8/P9, and a package that
-// reads ResourceTracker.h:577-581 alone will think it owns that already. It does not.
-//
-// THE TWO NEW PRODUCERS. Rows 4 and 5 have no backend twin: they are behaviour P5 ADDS
-// (ARCHITECTURE.md §13.1), and both are strictly better than what monolith does.
-//   * glReadPixels into a pack PBO becomes fire-and-forget plus a client-side mark. Monolith
-//     maps the PBO and copies it into the shadow inside the call (DirectGLES.cpp:10983-10993),
-//     which is an unconditional stall on every glReadPixels whether or not anyone reads the
-//     shadow; marking instead defers the cost to the first read that actually wants it.
-//   * glEndTransformFeedback drops its unbounded ClientWaitSync (GL_Drawing.cpp:1367, timeout
-//     ~0ull) and marks the capture targets, for the same reason: the wait exists only so that
-//     a later MapBuffer sees real results, which is precisely what the flag is for.
-//
-// WHAT NO ROW COVERS, WRITTEN DOWN SO THE NEXT READER DOES NOT HAVE TO ASK. The set is built
-// from the APPLICATION's bindings, so it says nothing about a backend's own scratch buffers -
-// Espryt's converted-vertex-stream and primitive-restart substitution buffers, Magma's UBO
-// ring. None of those has a MarkGpuWritten today either, so the client set is no NARROWER than
-// monolith's and this is not a regression; it is a standing hole in both, and it stays one
-// until the phase that migrates the backend's own allocations.
-//
-// GATED ON THE TRANSPORT, like everything else in this package: on the monolith path the six
-// backend sites still run and a second marker would be new behaviour (D-J), and rows 4 and 5
-// would remove a stall monolith is entitled to keep.
+// Client-side conservative GPU-write set (ARCHITECTURE.md §13.1.2). glMapBuffer and
+// glGetBufferSubData ask BufferObject::SyncGpuWrites, on the application thread, whether the GPU
+// may have written a buffer; the backend's marking sites run on the server, so the client marks
+// from its own bindings before each draw or dispatch record goes out. The set over-approximates:
+// a missed mark reads a stale shadow silently, while an extra one costs a readback. Rows with a
+// backend twin mirror it, including where the twin is deliberately narrow; the atomic-counter
+// row is wider, in the safe direction. Backend-owned scratch buffers are not covered.
 
 // P13 W5: moved from MG_Remote/Client/GpuWritePending.h - the record arm owns this set in a
 // library without a transport too. The session's waits stay there.

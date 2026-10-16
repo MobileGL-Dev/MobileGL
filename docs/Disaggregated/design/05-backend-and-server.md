@@ -22,6 +22,15 @@ client 的残余填充在自己的 verb 边界给全部字段盖戳，server 读
 - 非边界记录（如两次 draw 之间的 `set_dynamic_state`）不盖戳，沿用前一边界的序号、掩码与 verb 名，但盖戳标志已在上一条记录后清除，读检查按盖戳之外处理；20 个 draw 入口都盖成 `DrawArrays`，掩码正确，Fatal 里的名字是泛称。
 - 读检查只在 server 盖戳的 verb 内按归属类（§3.1 的 G8）分流：`RECORD_SUPPLIED` / `APPLIER_DERIVED` 读到旧值是 `Fatal{RoleViolation}`，`FATAL` 直接中止，`BARRIER_PULLED`（仅供生成器对照，没有生产行）在该 verb 类内计入 `rsp`，由 `CountBarrierPull` 决定何时改为中止（记录未 barrier、两角色用不同块、strict 下未准入）。盖戳之外一律是普通 poison `Fatal{UnmigratedPipeInput}`。
 - 盖戳标志由 `PipeApplier::LeaveApplier` 在每条记录之后清除；server 进程里没有 client 半边替它清，漏清会让之后的读都按上一个 verb 的掩码判定。
+
+#### 9.2.2 run-ahead 下 client 对 `PipeInputs` 的写
+
+run-ahead 下，unbarriered 记录 apply 期间 `PipeInputs` 是 server 角色内存：对这类 verb，client 不填充、不盖戳、不撤 server 的戳，只跑 tracker 与 emitter（`MGPipeValidateForVerb` 的 `fillOwed`）。GL 线程唯一合法的写是 barriered verb 的填充，而且写的那一刻就得成立：
+
+- 验证点的顺序是填充 → 发射 → park，填充时 apply 线程可能还在执行先前发布的 unbarriered 记录，所以每次写之前 `QuiesceApplierBeforeFill` 先等 applier 追上最后发布的序号（`ClientSession::WaitForApplyToCatchUp`，与 `glFinish` 同一种强制等待）。
+- 块的写分两段、夹着记录发布：发射前写 verb 序号、撤 server 戳与 verb 名，发射后做残余字段遍历；发出的记录 apply 时要读这块，一次等待盖不住两段。
+- `ClientSession::RefusePipeInputsTouchWhileApplierOwnsIt` 查的是事实（apply 线程不在 applier 内），不采信调用方的声明；漏掉等待即 `Fatal{RoleViolation, "gPipeInputs"}`。
+- lockstep 下 `appliedSeq` 已在最后发布的序号上，等待立即返回。client 与 server 用不同块时（`MGPipeBlocksAreDistinct`：分角色演练或 spawn），client 只写自己的块、不必等待，server 块的戳只由 `PipeApplier::LeaveApplier` 清除。
 #  define MGB_CTX (&::MobileGL::MG_Pipe::gPipeInputs)
 #else
 #  define MGB_CTX (::MG_State::pGLContext)

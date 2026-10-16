@@ -9,35 +9,14 @@
 #pragma once
 #include <Includes.h>
 
-// The CLIENT side of P3a's resource family (brief D-A, D-B, D-C, D-D).
-//
-// WHERE IT RUNS, and it is the ONE exception to push-at-validate (ARCHITECTURE.md 5.1):
-// the seven BufferBackendOps hooks already dispatch at the GL call that causes them, so
-// their pipe calls are emitted from the same BufferObject dispatchers - not from
-// MGPipeValidateForVerb. Nothing about buffers moves to validate time in P3a.
-//
-// WHAT LIVES HERE
-//   * the sticky BindMask, one constexpr BufferTarget -> bit table with a static_assert
-//     that it covers every enumerator, so a new target cannot be silently unmapped;
-//   * the lifetimeId -> {slot, gen} mint (through MGPipeSlots(), the one allocator) and
-//     the slot -> BufferObject* INVERSE the reverse channel resolves a writeback through;
-//   * the nine MGPipeEmitResource* bodies, declared in MG_Pipe/PipeMutation.h so that
-//     MG_State sees a declaration and never this file (the same layering PipeMutation.h
-//     already has for MGP_NOTE_MUTATION: declare in MG_Pipe, define in MG_Impl);
-//   * the MGPSubData range splitter, because one record's box caps the destination at a
-//     2^31-1 offset and a 2^32-1 size;
-//   * the map-persistent-roundtrips counting site.
-//
-// HEADER-ONLY, for the ownership reason Tracker.h states in full: the root CMakeLists.txt
-// that would name a new .cpp belongs to the contract package and is frozen behind the tag.
-// MG_Impl/Pipe/PipeFill.cpp is the one translation unit that includes it in the library.
-//
-// NO TIMER, and no per-call record copy on a HOT path. The two observables a unit case
-// needs - the last emitted descriptor and the per-call counts - are written only by
-// resource_create and resource_respecify, which run once per glBufferData rather than per
-// upload; resource_subdata, the hot one, is observed through the pure builders below
-// instead (MGPipeBuildSubDataRecord / MGPipeForEachSubDataRecordRange), which is also what
-// lets a test drive the splitter at both of its bounds without a 4 GiB buffer.
+// Client side of the buffer resource family. Its records go out at the GL call that causes the
+// change, from the BufferObject dispatchers that already run the BufferBackendOps hooks, not at
+// the validate point (ARCHITECTURE.md §5.1). This file holds the sticky BindMask table, the pure
+// record builders and the MGPSubData range splitter, the lifetime id -> {slot, gen} mint, the
+// slot -> BufferObject* inverse that writebacks resolve through, and the reverse-channel
+// consumers. The MGPipeEmitResource* bodies are in PipeFill.cpp and declared in
+// MG_Pipe/PipeMutation.h, so MG_State never includes this file. resource_subdata, the hot path,
+// records no test observables; tests drive MGPipeBuildSubDataRecord and the splitter directly.
 #include <MG_Impl/Pipe/SlotAllocator.h>
 #include <MG_Pipe/MGPipe.h>
 #include <MG_Pipe/PipeApply.h>
@@ -195,24 +174,13 @@ namespace MobileGL::MG_Pipe {
         return desc;
     }
 
-    // The buffer half of MGPSubData: the destination range rides in the box's first
-    // coordinate and first extent, and MGPipeSetSubDataBufferRange is the ONLY spelling of
-    // that convention. Returns false, with the record untouched, when the range does not fit
-    // one record - which is where MGPipeForEachSubDataRecordRange comes in.
-    //
-    // `sourceIsVerbatimLevelShadow` is the record's own question - "are these bytes an
-    // untransformed level shadow?" - and it is a PARAMETER because the answer differs by
-    // caller: resource_subdata hands over the client's own shadow at an offset into it and
-    // says yes; buffer_subdata_resident hands over the application's staging store, or the
-    // locally expanded pattern FillSubData built, and both say no. Nothing reads it on the
-    // buffer path today, which is exactly why it must not be a hard-coded 1 that becomes
-    // wrong the moment something does.
-    //
-    // Blob is FILLED, exactly: Seg is kMGHostSpanSegNone (monolith - the bytes travel beside
-    // the record through the entry point's companion pointer) and Size is the piece's own
-    // byte length, which is what the applier's ONE Blob rule holds a non-zero declaration to
-    // (PipeApply.cpp's SubDataBoxFault: != 0 && != MGPipeSubDataBufferSize is refused).
-    // Leaving it 0 would be legal too; declaring it correctly is the stronger of the two.
+    // The buffer half of MGPSubData: the destination range rides in the box's first coordinate
+    // and extent, written only through MGPipeSetSubDataBufferRange. Returns false when the range
+    // does not fit one record (see MGPipeForEachSubDataRecordRange). The verbatim-shadow flag is
+    // a parameter because callers differ: resource_subdata passes the client's own shadow (true),
+    // buffer_subdata_resident a staging store or a FillSubData pattern (false). Blob.Seg is
+    // kMGHostSpanSegNone (the bytes travel through the entry point's companion pointer) and
+    // Blob.Size is the piece's byte length, the only non-zero size SubDataBoxFault accepts.
     inline Bool MGPipeBuildSubDataRecord(MGPipeHandle res, Uint64 offset, Uint64 size, MGPSubData& out,
                                          Bool sourceIsVerbatimLevelShadow) {
         out = MGPSubData{};
@@ -372,37 +340,14 @@ namespace MobileGL::MG_Pipe {
             m_bySlot[slot].BindMask |= static_cast<Uint16>(MGPipeBindMaskForBufferTarget(target));
         }
 
-        // Accumulates into the sticky mask every target `buffer` is bound to RIGHT NOW, and
-        // returns the accumulated value.
-        //
-        // [DEVIATION, recorded in client-v2.md] D-A3 asks for the OR at every glBindBuffer /
-        // glBindBufferBase / glBindBufferRange / VAO element-slot bind, and C.1 points at
-        // MG_State/GLState/BufferState/BufferState.{h,cpp} for it - a file this package DOES
-        // own. The brief is wrong about where the entry points are: BufferState only VENDS
-        // BindingSlot<BufferObject>& / BindingSlotRange1D&, and the .Bind() calls are
-        // MG_Impl/GLImpl/Buffer/GL_Buffer.cpp's (BindBuffer_State, BindBufferBase_State,
-        // BindBufferRange_State), which C.5 assigns to no package. So the mask is accumulated
-        // by SAMPLING the frontend's live binding state instead - here, at every create and
-        // respecify, which is where the value is PUBLISHED - and ORed into a per-slot sticky
-        // field that is never cleared.
-        //
-        // WHAT SAMPLING ALONE CANNOT SEE is not "a bind after the last respecify" (which the
-        // specified design misses too) but a TRANSIENT bind: bind an EBO, draw, unbind, then
-        // define it through DSA - the respecify's sample sees no binding at all, and the DSA
-        // idiom makes that the common case rather than a corner (TryAdoptLargeStorage's own
-        // comment names glNamedBufferSubData as what MC 26.3 streams with). That hole is
-        // closed for the two bits anything keys on by NoteBoundAs above, called from
-        // EmitVertexBuffers / EmitIndexBuffer at every draw. What is left unpublished is a
-        // buffer that is bound, never drawn from, and never re-specified afterwards; the
-        // remaining fix is one line in each of GL_Buffer.cpp's three *_State binders, for the
-        // seven bits nothing keys on yet, and it stays handed to whoever owns that file.
-        //
-        // The scan is skipped unless a binding-slot version moved since the last one, which
-        // is one Uint16 load per global target and none per binding point. It is NOT called
-        // from the content emitters, deliberately: it walks the whole context's binding state
-        // and writes the tracker, and one of those emitters (resource_subdata) is on the path
-        // D-A2 preserves as reachable off the render thread. Extra sampling could only widen
-        // a sticky union, but not at the price of a context-wide read from the wrong thread.
+        // ORs into the sticky mask every target `buffer` is bound to right now and returns the
+        // result. The bind entry points (GL_Buffer.cpp's *_State binders) do not record targets,
+        // so the mask is sampled here, at create and respecify where it is published. Sampling
+        // misses a transient bind (bind, draw, unbind, then define through DSA); NoteBoundAs at
+        // every draw covers the vertex and element-array bits, but other bits of a buffer never
+        // drawn from or respecified after its bind stay unpublished. The scan runs only when
+        // BindEpoch moved, and never from the content emitters: it reads the whole context, and
+        // resource_subdata can run off the render thread.
         Uint16 RefreshBindMask(GLContext& ctx, const BufferObject& buffer, MGPipeHandle handle) {
             const SizeT slot = handle.Slot;
             if (slot >= m_bySlot.size()) return 0;
@@ -461,34 +406,13 @@ namespace MobileGL::MG_Pipe {
         void NoteDestroy() { ++m_destroys; }
         void NoteMapPersistent() { ++m_mapPersistents; }
 
-        // A unit fixture's per-case reset, and the library never calls it. THE RULE, stated
-        // rather than left as an absence, because "nothing resets this" is not a reason:
-        //
-        //   A buffer handle and the applier record it names are SHARE-GROUP OBJECT STATE.
-        //   A GL object lives in a share group, not in a context, so a make-current changes
-        //   neither. The applier's MGPipeApplierReset() is a make-current and deliberately
-        //   keeps its Resources / VertexElementsCsos (PipeApply.h says so beside them); the
-        //   ONLY things that drop a record are the object's own death signal -
-        //   resource_destroy, which ~BufferObject raises through
-        //   MGPipeEmitResourceDestroyAndFree, and delete_vertex_elements - and
-        //   MGPipeApplierReleaseObjectRecords(), which is the SERVED CONTEXT's teardown and
-        //   is deliberately wired to nothing in the monolith (there is one applier behind
-        //   every context, so calling it on one context's destruction would drop every other
-        //   context's records).
-        //
-        // So this tracker needs no re-publication path on a fresh context and must not have
-        // one: re-emitting resource_create for a record the applier still holds would move
-        // its Serial for nothing. What the client owes instead is the destroy - which
-        // ~BufferObject already emits, in the fixed emit-then-free order (D-L) - and that is
-        // the whole of the client's side of the record lifecycle.
-        //
-        // The vertex-input emitter's latches are the OTHER half and are genuinely per
-        // context: MGPipeVertexInputEmitter::Reset() is called from the FreshlyPrimed arm
-        // because the applier's vertex-input WORKING state (the bound handle, the window, the
-        // fetch shift) IS cleared there. Its vertex-elements RECORDS are not, which is why
-        // the emitter's Reset drops the "already published" latches but no create is lost:
-        // the latch is what says "re-publish", and re-publishing an unchanged configuration
-        // is a bounded over-fire, not a dropped write.
+        // Per-case reset for unit fixtures; the library never calls it. Buffer handles and the
+        // applier records they name are share-group state: MGPipeApplierReset (a make-current)
+        // keeps them, and only the object's own death (resource_destroy from ~BufferObject,
+        // delete_vertex_elements) or MGPipeApplierReleaseObjectRecords drops one. So this tracker
+        // has no re-publication path on a fresh context; a second resource_create would move the
+        // record's Serial for nothing. Per-context latches live in the emitters instead, such as
+        // MGPipeVertexInputEmitter::Reset(), which the fresh-context path calls.
         void ResetForTest() {
             m_bySlot.clear();
             m_bindEpoch = 0;
@@ -569,26 +493,13 @@ namespace MobileGL::MG_Pipe {
     // D-D: the client's half of the reverse channel
     // ---------------------------------------------------------------------------------
 
-    // The backend produced the bytes of a readback and hands them back through the channel.
-    // The client resolves the handle to its own object and writes the shadow; the epoch bump
-    // stays SERVER-side and happens AFTER this returns, never before (ARCHITECTURE.md 7.4:
-    // the reverse channel needs the same ordering guarantee as the forward one).
-    //
-    // THE BLOBREF'S THREE ARMS (CONTRACT-P5C §4.3, replacing the P3a monolith guard that
-    // rejected every Seg != kMGHostSpanSegNone and would have dropped every writeback EVENT
-    // on arrival):
-    //   Seg == kSegEvent          -> the wire shape (CONTRACT-P5C §1's reverse-channel row):
-    //                                Offset is the byte offset of the inline payload inside
-    //                                SEG_EVENT, resolved through the client session's OWN
-    //                                SegmentTable, bounds-checked against the announced size;
-    //   Seg == kMGHostSpanSegNone -> monolith only: Offset IS the backend's mapped address
-    //                                (MGPipeTypes.h says so in as many words). With an active
-    //                                transport this is rule B in the reverse direction and is
-    //                                Fatal{ProtocolCorruption, "OnBufferWriteback.Seg"};
-    //   anything else             -> the same Fatal.
-    //
-    // `producedAtSeq` is the event's ProducedAtSeq (the record the server read the bytes back
-    // at); 0 for the monolith callback, whose answer is synchronous with its request.
+    // Writes the bytes of a backend readback into the client's shadow of the buffer `res` names.
+    // The server bumps its epoch only after this returns (ARCHITECTURE.md §8.2). With
+    // Seg == kSegEvent, `bytes` is an offset into SEG_EVENT, resolved and bounds-checked through
+    // the client session; with Seg == kMGHostSpanSegNone it is a backend address, legal only in
+    // the monolith. Anything else, or a host address under an active transport, is
+    // Fatal{ProtocolCorruption} (a build without a transport drops it with an error).
+    // `producedAtSeq` is the record the server read the bytes back at, 0 for the monolith.
     inline void MGPipeClientOnBufferWritebackAt(MGPipeHandle res, Uint64 offset, MGPBlobRef bytes,
                                                 Uint64 producedAtSeq) {
         auto* buffer = MGPipeResourceTrackerInstance().Resolve(res);

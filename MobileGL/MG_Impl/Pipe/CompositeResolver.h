@@ -9,78 +9,14 @@
 #pragma once
 #include <Includes.h>
 
-// P4a's PROGRAM-PIPELINE COMPOSITE, on the client side.
-//
-// GLContext::GetProgramForDraw() already flattens a bound pipeline into one hidden composite
-// ProgramObject entirely in the frontend - it joins every graphics stage, computes the
-// pipeline's draw-program signature, looks it up in the pipeline's own cache and, on a miss,
-// attaches each stage's LINKED SNAPSHOT into a fresh ProgramObject and links it. All of that
-// is frontend work and none of it moves. What this file adds is the one thing the wire needs:
-// the composite gets ONE handle, out of the ShaderCso reserved high band, and
-// create_shader_state goes out for it exactly as for an ordinary program. THE SERVER NEVER
-// LEARNS IT IS A COMPOSITE and needs no "resolved draw program" hook at all.
-//
-// WHY A BAND RATHER THAN A FLAG ON THE HANDLE: a flag would have to be carried, honoured and
-// masked off by every consumer of a ShaderCso handle, on both sides; a reserved slot range is
-// a property of the allocator instead, so "an ordinary program can never be handed a composite
-// slot" is true by construction. MGPipeSlotAllocator::Allocate refuses the band outright and
-// AllocateComposite is the only door in.
-//
-// WHAT THIS FILE IS ACTUALLY FOR: the composite's slot has TWO INDEPENDENT RELEASE PATHS and
-// either order has to free it exactly once.
-//   * the pipeline cache drops the composite when the draw-program signature moves. In the
-//     frontend that overwrite drops the last SharedPtr, so the composite's own destructor
-//     usually runs first; the resolver still speaks the release, because "usually" is not a
-//     contract and a client that only reacted to destructors would leak a slot the moment the
-//     frontend started holding a second reference.
-//   * the composite ProgramObject's own ~ProgramObject, which is an ordinary program's death
-//     path and takes the same helper.
-// Both go through MGPipeEmitShaderCsoDestroyAndFree, and whichever runs second is a PROVEN
-// no-op: MGPipeSlotAllocator::Free refuses a slot that is not live at that generation and
-// bumps no generation of its own, so a double release cannot skip a generation either.
-//
-// THE MEMO's KEY IS (CONTEXT ID, PIPELINE GL NAME) AND THE CONTEXT HALF IS NOT OPTIONAL.
-// This resolver is a PROCESS singleton while a pipeline's GL name is per context: GLContext
-// owns m_programPipelines AND its own name generator m_programPipelineNames (Core.h), so name
-// N names two different ProgramPipelineObjects in two contexts, each with its own composite
-// and its own handle. Keyed on the name alone, the first emission after a make-current found
-// the OTHER context's entry, matched nothing - two composites are two ProgramObjects with two
-// lifetime ids, so the handles differ even when the stage set and the signature are identical
-// - and released it: a delete_shader_state and a cleared publication latch for a composite
-// whose frontend ProgramObject is alive, its band slot handed back and re-issued at gen + 1,
-// and the server rebuilding that program (glslang + SPIR-V + spirv-opt, the very cost the
-// signature below exists to avoid) once per context switch.
-//
-// THE CONTEXT ID IS GLContext::GetTextureContextId() AND NOTHING ELSE - the tree's existing
-// never-reused per-context id (TextureState::AllocateContextId; PipeInputs carries it as
-// m_textureContextId at seven fill points and the backends' own per-context memos key on it).
-// Deliberately NOT the GLContext ADDRESS that gPipeInputs and MGPipeTracker::m_context
-// compare, because Core.h states the reason that id exists at all: a context freed and remade
-// lands on the old heap address, which would put this same defect back one context recreation
-// later.
-//
-// WHAT RELEASES A DESTROYED CONTEXT's ENTRIES: nothing in this file, and that is the correct
-// answer rather than an omission. Destroying a context drops m_programPipelines, which drops
-// each ProgramPipelineObject, which drops the composite it cached; ~ProgramObject then runs
-// MGPipeEmitShaderCsoDestroyAndFree - the composite's OWN release path, the second of the two
-// above - and the slot goes back exactly once. The entries those composites leave behind can
-// never be found again (no future Observe can carry a dead context id) and could not release
-// anything if they were (the allocator erases the lifetime-id mapping on Free), so Reset()
-// DROPS them instead of releasing them. That is also what bounds the vector; see Reset().
-//
-// THE SIGNATURE IS ComputeDrawProgramSignature(), the per-graphics-stage {lifetimeId,
-// GetLinkVersion()} array - and DELIBERATELY NOT GetBackendStateVersion(), which is what made
-// the SSO conformance loop rebuild the composite (glslang + SPIR-V + spirv-opt) on every draw,
-// because a glUniform1i to a sampler moves it.
-//
-// HEADER-ONLY, for the ownership reason Tracker.h states: a new .cpp would need the root
-// CMakeLists.txt, which is the contract package's.
-//
-// IT IS INCLUDED BY ProgramEmit.h AND NOT THE OTHER WAY ROUND, deliberately: the composite is
-// a special case of the program family's own emission, so the family header depends on this
-// one and this one depends on nothing of the family's. The reverse arrangement would make the
-// resolver reachable only from a translation unit that had already decided to use it, i.e.
-// dead in the build that matters and live only in the tests.
+// Client side of the program-pipeline composite. GLContext::GetProgramForDraw() builds the
+// composite in the frontend, and the program emitter gives it one ShaderCso handle from the
+// allocator's reserved band (AllocateComposite), so the server never learns it is a composite.
+// This resolver remembers each (context, pipeline)'s composite and releases the old slot when
+// the draw-program signature moves; the composite's ~ProgramObject is the other release path,
+// both go through MGPipeEmitShaderCsoDestroyAndFree, and the later one is a no-op. Entries are
+// keyed on (GLContext::GetTextureContextId(), pipeline GL name); see ARCHITECTURE.md §5.6.1.
+// Included by ProgramEmit.h; it depends on nothing of the program family.
 #include <MG_Impl/Pipe/SlotAllocator.h>
 #include <MG_Pipe/MGPipe.h>
 #include <MG_Pipe/PipeMutation.h>
@@ -162,28 +98,12 @@ namespace MobileGL::MG_Pipe {
             return handle;
         }
 
-        // A make-current, and it RELEASES NOTHING. The entries name composites that belong to
-        // the frontend objects of the context being left, those objects outlive the switch, and
-        // releasing them would emit a delete for a live program.
-        //
-        // NOR IS ANY MEMO INVALIDATED, and that is what the context key bought. This used to
-        // clear a per-entry `Fresh` flag beside `Live`, because with a name-only key an entry
-        // could not say whether it described "my own pipeline before the switch" or "another
-        // context's pipeline of the same name" - and exactly one of those two properties could
-        // hold at a time. The key answers the question directly now, so the freshness flag and
-        // its one reader (a HandleFor() accessor that had no caller anywhere in the tree) are
-        // both gone rather than left as scaffolding: `Live`, the release obligation, is the
-        // entry's only state and nothing but ReleaseEntry may clear it.
-        //
-        // WHAT IS LEFT TO DO HERE IS RECLAMATION, and this is the one moment the client is told
-        // that a context boundary was crossed. An entry whose composite slot is no longer live
-        // has had its obligation discharged elsewhere - by that composite's own ~ProgramObject,
-        // which is precisely what happened to EVERY entry of a context that has just been
-        // destroyed - so it is DROPPED rather than released: a release would resolve nothing
-        // anyway (the allocator erases the lifetime-id mapping on Free) and no reader is left.
-        // Without this the vector would grow by one per (context, pipeline name) pair the
-        // process ever used, where the name-only key bounded it by the highest pipeline name;
-        // with it, it is bounded by the pairs whose composite slot is actually live.
+        // Called at a make-current. It releases nothing, since the entries' composites still
+        // belong to live frontend objects, and invalidates nothing, since entries are keyed by
+        // context. It only drops entries already released or whose composite slot is no longer
+        // live, freed by the composite's ~ProgramObject (every entry of a destroyed context ends
+        // this way); releasing those again would resolve nothing. This bounds the vector by the
+        // (context, pipeline) pairs whose composite is still live.
         void Reset() {
             SizeT kept = 0;
             for (SizeT i = 0; i < m_entries.size(); ++i) {
@@ -208,24 +128,12 @@ namespace MobileGL::MG_Pipe {
 
     private:
         struct Entry {
-            // NO FRONTEND SharedPtr, and that is the exit-order rule rather than a style
-            // choice: a static that held one would put a frontend destructor on an exit
-            // handler's path into a torn-down pipe. A GL name, a signature of plain integers,
-            // a handle and a lifetime id are all this needs.
-            // KEYED ON (CONTEXT ID, GL NAME), and the name half is the GL name because a
-            // ProgramPipelineObject has no lifetime id - ComputeDrawProgramSignature reads the
-            // STAGE programs' ids and the pipeline itself carries none. The context half is
-            // GLContext::GetTextureContextId(); see the file header for why the name alone was
-            // wrong and why the context ADDRESS would be too.
-            //
-            // WITHIN ONE CONTEXT glGenProgramPipelines recycles names, so a deleted-and-
-            // recreated pipeline can still inherit its predecessor's entry; that is bounded and
-            // self-correcting rather than a hazard. The first Observe on the new object finds a
-            // signature and a handle that do not match and releases the old entry, and that
-            // release resolves NOTHING - the allocator erases the lifetime-id mapping on Free,
-            // so a stale CompositeLifetimeId emits no delete and frees no slot; all it costs is
-            // one redundant, idempotent death notice, which is the same shape the composite's
-            // own second release path already has.
+            // Holds no frontend SharedPtr: the resolver is a never-destroyed static, and a
+            // frontend destructor must not run at exit into a torn-down pipe. Keyed on
+            // (context id, pipeline GL name) because a ProgramPipelineObject has no lifetime
+            // id; see the file header. A name recycled within one context can inherit its
+            // predecessor's entry; the first Observe then releases it, a no-op because the old
+            // composite's ~ProgramObject already freed the slot and its lifetime-id mapping.
             Uint64 ContextId = 0;
             Uint PipelineName = 0;
             DrawProgramSignature Signature{};

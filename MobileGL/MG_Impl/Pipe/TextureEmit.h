@@ -9,49 +9,14 @@
 #pragma once
 #include <Includes.h>
 
-// The CLIENT side of P4a's texture and renderbuffer family: resource_create from the object's
+// Client side of the texture and renderbuffer family: resource_create from the object's
 // constructor, resource_respecify from every storage-defining entry point, set_texture_params
-// from the parameter mutators, and resource_subdata from the DRAIN LIST at the validate point.
-//
-// THE THREE OBJECT CALLS ARE NOT EMITTED FROM HERE'S CALLER, they are emitted from MG_State's
-// own mutators - a constructor, a storage definition, a glTexParameter - exactly as P3a's
-// buffer family is, because that is where the event happens. Only the sub-data drain runs at
-// the validate point, which is the explicit exception ARCHITECTURE.md 5.1 makes for texture
-// upload: walking every live texture per verb is the cost the drain list exists to avoid.
-//
-// THIS FILE IS CREATED BY THE CONTRACT COMMIT AND FILLED BY THE PACKAGE THAT OWNS IT - see
-// FramebufferEmit.h for why, in full: PipeFill.cpp is the contract package's for the whole
-// phase, so the emitter package edits this header and the value of
-// kMGPipeWiredTextureSubsystem below, and never that file.
-//
-// HEADER-ONLY, for the ownership reason Tracker.h and ResourceTracker.h both state.
-//
-// ---------------------------------------------------------------------------------------
-// HOW MG_State REACHES THIS FILE: IT DOES NOT, AND THAT IS THE POINT (c0b, ID-13).
-//
-// v1 of this package shipped a deviation - six free functions here, called from
-// TextureObject.cpp and RenderbufferObject.cpp - because at the contract TAG
-// MG_Pipe/PipeMutation.h declared only the six DEATH helpers and this package may not edit
-// A's files. c0b landed the BIRTH half, so the deviation is retired rather than carried:
-// MG_State now calls MGPipeMintTextureHandle / MGPipeEmitTextureResourceCreate /
-// ...ResourceRespecify / MGPipeEmitTextureParams / MGPipeNoteTextureLevelDirty and the two
-// renderbuffer twins, all DECLARED in MG_Pipe/PipeMutation.h and DEFINED in
-// MG_Impl/Pipe/PipeFill.cpp, which forwards to the entry points below through
-// ForwardWhenWired<kMGPipeWiredTextureSubsystem>. No MG_State translation unit includes this
-// header any more, which is the property check_include_closure.py's mutation-header probe
-// exists to keep.
-//
-// WHAT THIS FILE OWES THAT SEAM, and a mismatch is a compile error in this package's own
-// commit rather than a surprise at the merge (that is what the wired constant buys):
-//
-//   EmitResourceCreate(ITextureObject&)      EmitResourceRespecify(ITextureObject&)
-//   EmitTextureParams(ITextureObject&)       NoteLevelDirty(ITextureObject&, Uint32, Uint32)
-//   EmitRenderbufferCreate(RenderbufferObject&)
-//   EmitRenderbufferRespecify(RenderbufferObject&)
-//
-// and the PUBLICATION LATCH is A's too: MGPipeNoteHandlePublished is called where a create
-// actually goes out and MGPipeHandleIsPublished is what the death helpers read, so this file
-// keeps no Published flag of its own.
+// from the parameter mutators, and resource_subdata from the drain list at the validate point.
+// Like the buffer resource ops (ARCHITECTURE.md §5.1), the object calls go out from MG_State's
+// mutators, where the event happens; texels accumulate and drain at the validate point (§6),
+// from a list of dirty levels so no verb walks every live texture. MG_State never includes this
+// header: it calls the hooks in MG_Pipe/PipeMutation.h, which PipeFill.cpp forwards here through
+// ForwardWhenWired. The publication latch is PipeFill.cpp's; this file keeps no flag of its own.
 #include <MG_Impl/Pipe/SamplerEmit.h>
 #include <MG_Impl/Pipe/SlotAllocator.h>
 #include <MG_Pipe/MGPipe.h>
@@ -79,30 +44,13 @@
 
 namespace MobileGL::MG_Pipe {
 
-    // WHICH SUBSYSTEM BIT THIS BUILD ACTUALLY EMITS FOR. PipeFill.cpp ORs the four per-family
-    // constants into kMGPipeWiredSubsystems, so the bit is added by the commit that gives the
-    // emitters their bodies, with no file touched twice - and a Coverage.def row can never
-    // silently drop a field on the floor before the call that carries it exists.
-    //
-    // IT WAS 0 IN v1, AND THE THING THAT BLOCKED IT IS NOW IN THE TREE. Unlike the other three
-    // P4a families this one gets no fresh apply entry points - the catalogue is closed and a
-    // texture rides P3a's OWN resource_create / resource_respecify / resource_subdata /
-    // resource_destroy rows - so on a base without the wire package's per-kind record vectors
-    // and its texture branch, two properties made a texture record actively harmful rather than
-    // merely ignored: MGPipeApplierState::Resources was ONE slot-indexed vector, so a texture
-    // create at slot 12 overwrote the BUFFER record at slot 12; and SubDataBoxFault validated
-    // every record as the buffer half of MGPSubData, so a texture sub-data record was
-    // Fatal{ProtocolCorruption} on `record.Level != 0` alone. Both are closed on this base
-    // (three per-kind vectors, ApplyTextureUpload, SubDataTextureFault, and C1's level-scoped
-    // PendingUploads clear), so the constant is its own bit and the family is live.
-    //
-    // THE FLIP IS THE WHOLE SWITCH AND NOTHING ELSE MOVES: PipeFill.cpp ORs this constant into
-    // kMGPipeWiredSubsystems, static_asserts it is 0-or-its-own-bit, gates every birth hook on
-    // FamilyIsLive(kMGPipeSubsystemTextureResources, this), and gates DrainTextureSubData on
-    // the same OR. D-K2's rows - including bit 9's dependency on this family - are in
-    // MG_Pipe/SubsystemDeps.def, once (P3b/P4b R-5), and are not restated here; what this
-    // comment still has to say is the consequence for INTEGRATION ORDER, which no table can
-    // carry: this package may never be integrated with only one of the two constants set.
+    // The subsystem bit this build emits for. PipeFill.cpp ORs it into kMGPipeWiredSubsystems,
+    // gates every texture birth hook on FamilyIsLive and DrainTextureSubData on the same mask;
+    // 0 compiles the family out. Textures share the resource_* rows with buffers, which is safe
+    // because the applier keeps one record vector per kind and checks texture sub-data on its own
+    // (SubDataTextureFault). The rows of MG_Pipe/SubsystemDeps.def are checked against
+    // MOBILEGL_PIPE_PUSH, not the wired constants, so this constant and the sampler one are set
+    // together, and the framebuffer constant is never set without this one.
     inline constexpr Uint64 kMGPipeWiredTextureSubsystem = kMGPipeSubsystemTextureResources;
     static_assert(kMGPipeWiredTextureSubsystem == 0 ||
                       kMGPipeWiredTextureSubsystem == kMGPipeSubsystemTextureResources,
@@ -407,30 +355,14 @@ namespace MobileGL::MG_Pipe {
         return region;
     }
 
-    // ---------------------------------------------------------------------------------
-    // THE STAGE-CHUNK SLAB SPLIT (fix A2)
-    // ---------------------------------------------------------------------------------
-    //
-    // ONE RECORD'S BLOB IS STAGED WHOLE IN SEG_STAGE, a linear arena, so a level shadow larger
-    // than that arena is Fatal{RingOverrun, "SEG_STAGE"} at the encoder rather than a split
-    // (PipeWireCodec.cpp:856-864) - the same wall PipeFill.cpp's content walks are cut at. It is
-    // not hypothetical: measured on the CI traces, a 512x128x33 GL_RGBA32F level is 34,603,008
-    // bytes and a 192-cube GL_RGBA16 level is 56,623,104, both against the default 32 MiB
-    // segment, so those glTexImage3D calls aborted their replays at the emitter.
-    //
-    // THE SPLIT IS INTO WHOLE-WIDTH SLABS. A piece is a set of CONSECUTIVE ROWS OF THE LEVEL
-    // SHADOW - {x0, y0, z0, w, dy, dz} in level coordinates - because that is the one shape whose
-    // box names both its texels and its byte run: the run begins at
-    // z0 * sliceStride + y0 * rowStride + x0 * bpp and is exactly the box's own byte extent. So
-    // the run's placement is derivable from the strides and box the record carries, and the far
-    // side never has to know the level's format or pixel size. Whole slices are the coarsest cut
-    // and the two CI blobs take it; a slice bigger than the cap falls back to whole rows, and a
-    // ROW bigger than the cap to whole texels inside one row - still one box exactly matching its
-    // own run, which is the property everything downstream depends on.
-    //
-    // THE PIECES ARE CONTIGUOUS AND ASCENDING, and their union is the level exactly once: the
-    // server assembles one level image out of them (StagedTextureStore::AdoptRun), so a gap would
-    // lose texels and an overlap would place them twice.
+    // ---- Stage-chunk slab split (ARCHITECTURE.md §4) ----
+    // One record's blob is staged whole in SEG_STAGE, so a level larger than the chunk cap goes
+    // out as several records (a 512x128x33 GL_RGBA32F level is 33 MiB, over the whole default
+    // segment). A piece is whole slices, else whole rows of one slice, else texels of one row:
+    // the only shapes whose byte run starts at z0*sliceStride + y0*rowStride + x0*bpp and is
+    // exactly the box's extent, so the server places it without knowing the format. Pieces
+    // ascend, touch and cover the level exactly once; StagedTextureStore::AdoptRun assembles one
+    // level image from them, so a gap loses texels and an overlap places them twice.
     struct MGPipeTextureSlab {
         MGPBox Box{};         // level coordinates
         Uint64 RunOffset = 0; // the run's first byte, as an offset into the level shadow
@@ -690,27 +622,14 @@ namespace MobileGL::MG_Pipe {
             entry = Entry{};
         }
 
-        // ---- the sticky bind mask (D-A4) ----
-        //
-        // ORed, never cleared, and emitted on BOTH resource_create and every
-        // resource_respecify, exactly as P3a's buffer mask is. The four bits nothing set before
-        // P4a get their producers here and in the framebuffer emitter: RENDER_TARGET and
-        // DEPTH_STENCIL from an attachment point (FramebufferEmit.h), SAMPLER from a resolved
-        // sampler view (SamplerEmit.h) and SHADER_IMAGE from glBindImageTexture's state setter
-        // and the resolved image unit (TextureState.h, ImageEmit.h) - the last two through the
-        // contract's MGPipeNoteTextureBoundAs door, since neither may include this header
-        // (final review M-A: before the fix round nothing produced them and the hint was dead).
-        // A MASK CHANGE AFTER THE ALLOCATION IS A METADATA RESPECIFY (ID-18 M4), and without it
-        // the sticky half of D-A4 is a no-op for exactly the textures it was written for. The
-        // mask rides resource_create and every resource_respecify - and an IMMUTABLE texture has
-        // no further respecify, that being what immutable means - so for the canonical order
-        // `glTexStorage2D(...); glBindImageTexture(...)` the applier's record kept
-        // ImageBindableHint = 0 for ever and the re-mint PREVENTION never fired. So a mask that actually MOVES re-emits the stored descriptor with
-        // the new mask: every storage-defining field is byte-identical to what the applier
-        // holds, which is exactly the shape wire applies as a METADATA UPDATE - the descriptor
-        // is replaced, no reallocation is acked, and NO pending upload is dropped, so a mask
-        // change arriving between a glTexSubImage2D and the sync that consumes it cannot eat
-        // the texels.
+        // ---- Sticky bind mask ----
+        // ORed, never cleared, and carried on resource_create and every resource_respecify.
+        // Producers: FramebufferEmit.h (RENDER_TARGET, DEPTH_STENCIL), SamplerEmit.h (SAMPLER),
+        // ImageEmit.h and glBindImageTexture's setter in TextureState.h (SHADER_IMAGE); the
+        // last three use the MGPipeNote* hooks in PipeMutation.h, as they cannot include this
+        // header. An immutable texture is never respecified again, so a mask that moves later
+        // re-sends the stored descriptor with the new mask (RepublishMask), which the applier
+        // takes as a metadata update that drops no pending upload (ARCHITECTURE.md §6.1).
         void NoteTextureBoundAs(MGPipeHandle handle, Uint16 bit) {
             if (MGPipeHandleIsNull(handle)) return;
             Entry& entry = EntryFor(m_textures, handle);
@@ -770,34 +689,14 @@ namespace MobileGL::MG_Pipe {
             PublishCreate(MGPipeKind::Texture, handle, entry, desc);
         }
 
-        // resource_respecify, from every storage-defining entry point, WITH THE SCOPE OF THE
-        // STORAGE IT REPLACES (P4a final review C-1; the scopes are PipeMutation.h's).
-        //
-        // THE LEVEL IS PASSED, AND IT IS WIRE'S KEY. The applier keeps a pending-upload set per
-        // (uploadTarget, level) - the client's dirty flags, inverted - and a respecify drops the
-        // entries against the storage it REPLACES: with a null MGPRespecifiedLevel every entry,
-        // with a level exactly that one. v2 passed null at every call, so a level the applier
-        // had ACCEPTED at one verb (the client flag already clear, D-D5 step 1) and that the
-        // next verb's glTexImage2D(level 1) or glGenerateMipmap grow defined AROUND was dropped
-        // with nobody owing its texels: `L0; draw(other); L1; draw(T)` read a black level 0.
-        // The key is built from the SAME packed MGPSubData::Target the drain puts in that
-        // level's record (wire-v3 §5 item 5), so what this drops is what that emission made.
-        //
-        // THREE SCOPES, one call each for the first two and one call PER REMOVED LEVEL for the
-        // chain cut: the applier's key is one (uploadTarget, level), so "every level from N"
-        // is spelled as N.., each after the first landing on an unchanged descriptor - which
-        // the applier classifies as a metadata update that drops nothing but the level it
-        // names. That is the refinement wire's W11 clause takes this round.
-        //
-        // DEDUPED ON THE DESCRIPTOR ITSELF for the whole-resource form only: the entry points
-        // that reach it move the SHAPE and several of them do not move the descriptor at all
-        // (glTexParameter TEXTURE_BASE_LEVEL bumps the shape version and changes no field this
-        // record carries), and a byte compare of an 88-byte POD is cheaper than the emission
-        // it avoids. A PER-LEVEL form is never deduped: the level it redefines is not in the
-        // descriptor (a non-base level's extent moves no field), so an unchanged descriptor
-        // cannot say whether the applier still holds a box against the OLD level - and a box
-        // kept across a shrink is uploaded past the end of the new one. One applier call per
-        // level definition is the cost, and the sub-data that follows moves the serial anyway.
+        // resource_respecify, from every storage-defining entry point, with the scope of the
+        // storage it replaces (MGPipeTextureRespecifyScope). The applier drops pending uploads
+        // per (uploadTarget, level), only against the replaced storage (ARCHITECTURE.md §6.1);
+        // the key packs the same MGPSubData::Target the drain writes. A chain cut sends one call
+        // per removed level. A whole-resource call is deduped on the descriptor, since some
+        // entry points (glTexParameter BASE_LEVEL) move no descriptor field; a OneLevel call
+        // never is: a non-base level's extent moves no descriptor field, and a pending box kept
+        // across a shrink would upload past the end of the new level.
         void EmitResourceRespecify(ITextureObject& texture, MGPipeTextureRespecifyScope scope,
                                    Uint32 uploadTarget, Uint32 level) {
             const MGPipeHandle handle = AcquireTexture(texture.GetLifetimeId(), &texture);
@@ -1131,32 +1030,14 @@ namespace MobileGL::MG_Pipe {
             NoteRespecified(entry, desc, accepted);
         }
 
-        // ---- the drain list (D-D4) ----
-        //
-        // Appended ONCE, on the first dirty mark of a level, and cleared at emission. Keyed on
-        // the STORAGE OWNER from day one and for free: TextureObjectView forwards
-        // MarkStorageDirty / MarkStorageDirtyRegion to the OWNER's methods after remapping the
-        // level and the region, so an upload through a view and an upload through the owner
-        // reach this function with the same object and the same owner-side coordinates.
-        //
-        // The per-slot key list is a short linear scan rather than a hash: a level count is
-        // ~15, the cap on the rect list behind it is 96, and this runs on the glTexSubImage
-        // path which has just memcpy'd texels.
-        // THE PARAMETER TYPES ARE THE CONTRACT'S (PipeMutation.h): Uint32 rather than
-        // MobileGL::TextureUploadTarget and Uint, because that declaration is the one door
-        // MG_State has into the client and it may not name a frontend enumeration.
-        //
-        // THERE IS NO CLEAN ARM, and that is a DECLARED DEVIATION rather than a dropped half.
-        // v1 carried a second entry point for MarkStorageDirty(..., false); the contract's hook
-        // has no `dirty` parameter, and asking A to widen it would put a second signature in
-        // MG_Pipe/PipeMutation.h for something the drain already collects. A level that goes
-        // clean stays on the list until the NEXT drain walks it, where
-        // `!mipmap->IsStorageDirty(...)` is the first test EmitOneLevel makes and returns
-        // "nothing owed", so the entry is dropped from both lists there. The cost is one
-        // IsStorageDirty call per cleaned level per drain, the list is bounded by the (texture,
-        // level) pairs dirtied since the last validate point, and a re-dirty before that drain
-        // is already covered by the entry still standing. What it must NOT be confused with is
-        // dropping the level's TEXELS: nothing here clears a dirty flag.
+        // ---- Drain list ----
+        // A (storage owner, upload target, level) is appended on its first dirty mark and
+        // removed when emitted. TextureObjectView forwards dirty marks to its owner in owner
+        // coordinates, so view and owner uploads share one entry. The per-slot key list is a
+        // linear scan (about 15 levels, on a path that has just copied texels). The hook takes
+        // Uint32s because PipeMutation.h may not name frontend enums. There is no "went clean"
+        // hook: a level cleaned before the drain is dropped there when EmitOneLevel finds it
+        // clean. Nothing here clears a dirty flag.
         void NoteLevelDirty(ITextureObject& texture, Uint32 uploadTarget, Uint32 level) {
             if (m_draining) return;
             const MGPipeHandle handle = AcquireTexture(texture.GetLifetimeId(), &texture);
@@ -1499,29 +1380,14 @@ namespace MobileGL::MG_Pipe {
             const MGPBox unionBox = MGPipeBoxOfDirtyRegion(mipmap->GetStorageDirtyRegion(uploadTarget, level));
             if (unionBox.W == 0 || unionBox.H == 0 || unionBox.D == 0) return false;
 
-            // THE REGION LIST BEHIND THE BOX IS THE LEVEL'S EXACT DIRTY FOOTPRINT (P11 M2, dev
-            // 9524c688): disjoint boxes holding every texel written since the level was last
-            // clean and no other. The storage's rect list this used to carry only COVERS the
-            // writes - it merges touching rects into their bounding box, folds when full and is
-            // withheld (0) past 3/4 of the union box - and once the far side's image may hold GPU
-            // writes, whatever it uploads beyond the writes goes up over them. Both servers read
-            // the list as the texels to upload: Magma always, Espryt once its driver texture may
-            // hold GPU writes (and otherwise it re-applies the storage's box-or-rects choice
-            // itself, so the Mali job count is the server's call as before).
-            //
-            // 0 IS NOW THE WHOLE-LEVEL SPELLING - a footprint that is the whole level - with one
-            // exception (below). Every other write carries its boxes, a single one included, so the
-            // applier's accumulation (boxes union, lists concatenate, "0 regions" makes the entry
-            // box only) never widens two exact contributions into their union box. THE EXCEPTION:
-            // a footprint larger than one record may carry (kMGPipeMaxPendingUploadRegions) falls
-            // back to the storage's rect list - a COVER, stated once in the log - and when that list
-            // is withheld (0: its rects fill 3/4 of the union box) this 0 is a PARTIAL, INEXACT
-            // box. A reader that takes "box only" as "the client owns every texel of the box"
-            // (AdoptDriverLevelIntoShadow's covering-box rule) is exact everywhere but here.
-            //
-            // READ AS BOXES, ONCE, because both shapes below want them in that form: the
-            // whole-level record converts each one straight back through MGPipeBuildSubRegion,
-            // and a piece clips each one to its own slab.
+            // The region list is the level's exact dirty footprint: disjoint boxes holding
+            // every texel written since the level was last clean and no other, because a server
+            // image that may hold GPU writes must not be uploaded over outside them. 0 regions
+            // means a whole-level write, except when the footprint exceeds
+            // kMGPipeMaxPendingUploadRegions: the storage's covering rect list goes out instead,
+            // and when that list is withheld the box is inexact (ARCHITECTURE.md §6.1.1). Read
+            // as boxes once: the whole-level record converts each through MGPipeBuildSubRegion,
+            // and a piece clips each to its slab.
             mipmap->GetStorageDirtyFootprint(uploadTarget, level, m_footprint);
             m_rectBoxes.clear();
             const Bool wholeLevelWrite =
@@ -1656,23 +1522,13 @@ namespace MobileGL::MG_Pipe {
                 accepted = emitRecord(shadow, static_cast<Uint64>(levelBytes));
             }
 
-            // THE CLIENT CLEARS ITS OWN FLAG ONLY FOR A LEVEL THE APPLIER ACCEPTED (D-D5 step 1
-            // read literally; ID-18 M3). v1 cleared on DISPATCH - and, with the wired constant
-            // still 0, even on a call the `if constexpr` had discarded - so any refusal left the
-            // server with nothing and the client with a clean flag, and since MG_Impl contains
-            // no reader of a texture's dirty state the level simply stopped updating for the
-            // life of the texture. The two refusal paths are invisible from here without this
-            // answer: a dead or stale handle is a counted no-op and a corrupt record is a Fatal
-            // that deliberately moves no counter.
-            //
-            // A REFUSED LEVEL STAYS DIRTY AND STAYS ON THE DRAIN LIST, which is the safe
-            // direction and self-heals: the ordinary cause is a record the applier does not
-            // hold, and the next respecify's self-healing create gives it one. It is LOUD
-            // because a permanently refused level would otherwise re-emit once per verb for
-            // ever with nothing to show for it. WITH PIECES IN FLIGHT it is the same rule one
-            // level up: every piece is still emitted, so a refusal leaves the server with a
-            // partial image and the WHOLE level dirty, and the next drain re-sends every piece -
-            // an adoption of the same bytes twice is idempotent.
+            // The dirty flag is cleared only for a level the applier accepted (ARCHITECTURE.md
+            // §6): nothing else in MG_Impl reads a texture's dirty state, so clearing it on a
+            // refused record would stop the level updating for the texture's lifetime. A refused
+            // level stays dirty and on the drain list; the usual cause is a missing applier
+            // record, which the next respecify's self-healing create supplies. It is logged
+            // because a level refused for good re-emits every verb. A refused split level
+            // re-sends every piece; adopting the same bytes twice is idempotent.
             if (dispatched && !accepted) {
                 ++m_refusedSubDatas;
                 MGLOG_E_ONCE("MGPipe: resource_subdata for texture {slot=%u, gen=%u} level %u was refused; "
@@ -1725,31 +1581,4 @@ namespace MobileGL::MG_Pipe {
                (MG_Config::Features.PipePush & kMGPipeSubsystemTextureResources) != 0;
     }
 
-    // ---------------------------------------------------------------------------------
-    // WHAT USED TO BE HERE, AND WHY IT IS NOT (c0b, ID-13)
-    // ---------------------------------------------------------------------------------
-    //
-    // v1 carried eight free functions - MGPipeMintAndCreateTexture, MGPipeEmitTextureRespecify,
-    // MGPipeEmitTextureParams, MGPipeNoteTextureLevelDirty, MGPipeMintAndCreateRenderbuffer,
-    // MGPipeEmitRenderbufferRespecify and the two ...ResourceDestroy halves - because at the
-    // contract tag MG_Pipe/PipeMutation.h declared no texture birth hook and
-    // MG_Impl/Pipe/PipeFill.cpp's death helpers hard-coded `published = false`. Every one of
-    // them is now A's:
-    //
-    //   * the four MINTS and the nine EMISSIONS are declared in PipeMutation.h and defined in
-    //     PipeFill.cpp, which gates them on FamilyIsLive(bit, kMGPipeWiredTextureSubsystem) and
-    //     forwards to this class through ForwardWhenWired. MGPipeEmitTextureParams in
-    //     particular was a NAME COLLISION - the contract declares that exact signature - so
-    //     keeping the inline definition here would not have compiled at all;
-    //   * step 1 of the death order is inside MGPipeEmitTextureDestroyAndFree /
-    //     ...RenderbufferDestroyAndFree, which read MGPipeHandleIsPublished and emit the
-    //     resource_destroy themselves, so the destructors call ONE helper and not two - and
-    //     since the final review's C-2 the helper then forwards to NoteTextureDied /
-    //     NoteRenderbufferDied above, so no ITextureObject* survives its object in this table
-    //     and no dead level survives on the drain list;
-    //   * the publication latch is PipeFill.cpp's {kind, slot, gen} table, written by
-    //     PublishCreate above and read by those helpers.
-    //
-    // The self-healing create in EmitResourceRespecify stays this file's: c0b provides no such
-    // path and it is what repairs a texture born while the subsystem bit was clear.
 } // namespace MobileGL::MG_Pipe

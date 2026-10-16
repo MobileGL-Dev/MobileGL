@@ -25,6 +25,22 @@ per-setter 推送会把 Blaze3D 每个 batch 的冗余 `glEnable/glDisable` 变�
 
 位答案由脚本推导：RenderState 族与 `RenderState.cpp` 双向比对（`BumpVersions()` 动两个计数器，裸 `++m_version` 只动 `NEW_RENDER_STATE`）；其余位把快门读的成员 / 字段与 mutator 传递写入的成员 / 字段求交，只能查出"该位的快门在任何路径上都不动"这一种错答，证明不了每条路径都动。写入根定位不了的函数被污染，依赖它的答案为 UNDECIDED，须列入 `MGP_DIRTY_SURFACE_UNDECIDED_LIST`，列了却已可判定同样报红。散文答案不经推导（`kPulledPartialShutter` 所附的位除外）；扫描器按文本匹配函数体，lambda 里的 mutator 记到外层函数上，经 helper 发布的修改读作延迟发布，语义证明仍是 `MOBILEGL_PIPE_VERIFY`。
 
+#### 5.2.2 记录字段 → setter → 快门对照表
+
+由 `Tracker.h` 的 dirty 位触发的每条记录，其每个字段只能经由会推动该位快门输入的 setter 改变，否则必须在 setter 处无条件发射（`resource_*` 族、`set_texture_params`）。`DirtySurface.def` 只把 mutator 映射到位，看不出派生字段依赖另一族的 mutator，所以下表手工维护；记录新增字段时在此加一行。
+
+| 位 | 记录与字段 | 改变字段的 setter | 快门输入 |
+|---|---|---|---|
+| 6 | `create/bind_shader_state`、`set_draw/dispatch_program`：Cso、StageMask、GlobalUboSize、artefact blob ref、两个已绑定句柄 | `glUseProgram`、`glLinkProgram`、`glBindProgramPipeline`、`glUseProgramStages` | lifetime id × link version；pipeline 下为 `stageLinks`（pipeline 名 × 各 stage 的 lifetime id 与 link version） |
+| 7 | program 绑定：image unit、block binding、uniform 写集合 | opaque uniform 上的 `glUniform1i`、`glUniformBlockBinding`、`glShaderStorageBlockBinding`、任意 `glUniform*` | 四个 per-program 计数器；pipeline 下再混入 `stageLinks` |
+| 8 | `set_global_constants`：ShaderCso、Version、默认 uniform 块镜像 | 默认块上的 `glUniform*`、`glUseProgram` | lifetime id × UBO content version；pipeline 下为 `stageState` |
+| 11 | `set_framebuffer_state`：Fbo、Color[8]/Depth/Stencil/ReadSurface（Res、Kind、InternalFormat、TextureTarget、Layered、Level、Layer、UploadTarget）、DrawBuffers[8]、Width/Height/Layers/Samples/FixedSampleLocations、IsDefault、Complete、Target | `glFramebufferTexture*`、`glFramebufferRenderbuffer`、`glDrawBuffer(s)`、`glReadBuffer`、`glFramebufferParameteri`、`glBindFramebuffer`；已挂接纹理或 renderbuffer 的存储重定义（格式、纹理目标、尺寸、采样数、完备性在发射时内联，所以 `PipePublishDescriptor` bump attachment 聚合） | attachment 聚合 × draw / read 绑定槽版本 |
+| 12 | `set_sampler_views`：每单元 {View, Texture} | `glBindTexture`、`glActiveTexture`、纹理或 sampler 参数、定义 level 的上传、默认纹理出现；在用 program（`glUseProgram`、relink、sampler uniform 的 `glUniform1i`） | content × params × bind generation × `opaqueUnits` |
+| 13 | `bind_sampler_states`：每单元 sampler CSO 句柄 | `glBindSampler`、`glDeleteSamplers`、`glSamplerParameter*`、`glTexParameter*` | params × sampling resolution × bind generation |
+| 14 | `set_shader_images`：program image-unit 窗口内每单元 {Res, InternalFormat, Layer, Level, Layered, Access} | `glBindImageTexture`、纹理 content / params、image uniform 的 `glUniform1i`；在用 program（`glUseProgram`、relink） | content × params × bind generation × `programImages` |
+
+位 11–14 还在 share group 的孪生聚合时钟变化时触发（setter 经兄弟 context 调用）；最大触及纹理单元变化时 12、13 也触发。
+
 ### 5.3 渲染状态：整块 blob 过线，身份只取 pipeline 子集（D-B1）
 
 ```
@@ -49,6 +65,14 @@ shader 看见哪个纹理取决于 sampler uniform 类型、mipmap 完备性与�
 
 - `resource_create` 在前端对象构造时发，存储由 `resource_respecify` 惰性定义，`resource_destroy` 在析构时发；死亡转发给每个 emitter（只释放 slot 曾导致 UAF）。view 先于存储属主销毁、FBO attachment 钉住纹理、buffer texture 钉住 buffer。
 - program pipeline 合成体（`CompositeResolver`）完全在前端合成、推一个句柄；释放恰好一次（resolver 换掉或 `~ProgramObject`，D-H7）；记忆按 `(ContextId, 管线 GL 名)` 键控。
+
+#### 5.6.1 program pipeline 合成体的句柄、释放与记忆键
+
+- 合成体由 `GLContext::GetProgramForDraw()` 在前端合成、缓存在各自的 `ProgramPipelineObject` 里；program 发射器按合成体自己的 lifetime id 从 `ShaderCso` 保留高段（§2.1）给它一个句柄，照普通 program 发 `create_shader_state`，server 不知道它是合成体。`MGPipeSlotAllocator::Allocate` 拒绝该段，`AllocateComposite` 是唯一入口；用保留段而不用句柄 flag，是因为 flag 要被两侧每个 `ShaderCso` 消费者携带和屏蔽，而保留段让"普通 program 拿不到合成体 slot"由分配器保证。
+- slot 有两条释放路径：签名变化时 `MGPipeCompositeResolver::Observe` 释放旧合成体，以及合成体自己的 `~ProgramObject`。两条都走 `MGPipeEmitShaderCsoDestroyAndFree`，后到的一条是空操作（`MGPipeSlotAllocator::Free` 拒绝不在该世代 live 的 slot，也不推进世代）。只靠析构不够：前端一旦多持一份引用，签名变化时析构就不会先到。
+- 签名取 `ComputeDrawProgramSignature()`（每个图形 stage 的 lifetime id 与 link version），不含 `GetBackendStateVersion()`：后者在 sampler uniform 的 `glUniform1i` 时也会变，会让合成体每次 draw 都重新编译。`Tracker.h` 的位 6 快门读同一组值。
+- 记忆键是 `(GLContext::GetTextureContextId(), 管线 GL 名)`：resolver 是进程单例，而 pipeline 名按 context 分配，只按名键控会在 make-current 后命中另一 context 的同名项、释放一个仍活着的合成体，每次切换都重建 program；context 地址也不行，销毁重建的 context 会落在旧地址上，而这个 id 永不复用。
+- context 销毁时其合成体经 `~ProgramObject` 释放，残留项再也查不到；make-current 时的 `Reset()` 丢弃它们而不释放，表长因此只受合成体 slot 仍 live 的项限制。
 
 ### 5.7 emulation 的归属
 
@@ -76,6 +100,12 @@ shader 看见哪个纹理取决于 sampler uniform 类型、mipmap 完备性与�
   - 具名 level = 一次 `glTexImage*D`，只丢该 `(uploadTarget, level)`，与描述符是否变化无关。整体清空会丢掉别的 level 已被接受、尚未上传的纹素：`glTexImage2D(0)` → draw（纹理不完备，后端 bail）→ `glTexImage2D(1)`；
   - 只换元数据（`RespecifyRedefinesNoStorage`：sticky 的 `BindMask` / `ImageBindableHint` 变化时重发的描述符）不丢任何项。
 - buffer 没有待上传项，也永远不算只换元数据。
+
+#### 6.1.1 region 列表是精确脏足迹
+
+纹理 `resource_subdata` 的 region 列表是该 level 自上次变干净以来的**精确脏足迹**：互不相交的盒子，覆盖每个写过的纹素，不多一个（`MGPipeTextureEmitter::EmitOneLevel`）。原因：server 端图像一旦可能含 GPU 写入，超出应用写入范围的上传就会盖掉它们。Magma 总把列表当作要上传的纹素；Espryt 在驱动纹理可能含 GPU 写入时同样如此，否则仍自己在 box 与 rect 之间选上传形状（Mali 作业数照旧由 server 决定）。
+- `RegionCount == 0` 只表示整 level 写；其余写入一律带盒子（只有一个也带），所以 applier 的累积不会因为某一侧「只有 box」而把精确贡献放宽成并集盒。
+- 例外：足迹超过一条记录能带的 `kMGPipeMaxPendingUploadRegions` 个盒子时，退回存储的 rect 列表（只保证覆盖，日志记一次）；该列表又被扣下（rect 填满并集盒的 3/4）时，0 是一个**不精确**的部分盒。把「只有 box」读作「client 拥有盒内每个纹素」的读者（`AdoptDriverLevelIntoShadow` 的覆盖盒规则）只在这种情况下不精确。
 
 ## 7. Shader state = SPIR-V + 反射归档
 

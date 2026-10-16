@@ -9,34 +9,13 @@
 #pragma once
 #include <Includes.h>
 
-// Coalescing rule 4 (ARCHITECTURE.md 5.4, P2 brief D11): every kVarTail set_* hashes the
-// RESOLVED set on the client and does not emit when the hash has not moved.
-//
-// This is the carrier for the ~175 lines of debounce that move off the backends in P3b and
-// P4b - Espryt's UnitBindingsSnapshot / CaptureUnitBindings / UnitBindingsUnchanged and
-// Magma's equivalents all answer "is this set the same set as last time", and every one of
-// them answers it against a shape the backend rediscovered. P2 lands the MECHANISM and ONE
-// real consumer (SetVertexAttribDefaults) so the shape is pinned by a test rather than by a
-// plan; the other six slots exist, are unit-tested, and are wired by the phase that moves
-// the set they name. P3a wires the second, SetVertexBuffers. P4a wires SetSamplerViews,
-// BindSamplerStates and SetShaderImages, and APPENDS an eighth slot, SetFramebufferState -
-// which leaves only SetShaderBuffers and SetStreamOutputTargets unwired, both P4b's.
-//
-// A WIRED SLOT PUTS A REQUIREMENT ON ITS HASH, and SetVertexBuffers is where that first
-// bites: the hash has to cover EVERY input the record carries, not only the set. Its
-// baseInstance is DRAW state and moves without the buffer set moving, so a hash over the
-// entries alone would suppress a record whose one changed field is the fetch shift and the
-// server would keep the previous one. MG_Impl/Pipe/VertexInputEmit.h's
-// MGPipeVertexBufferSetContentHash mixes Start, Count and BaseInstance in for exactly that
-// reason, and VertexInputEmit's base-instance pair is the test that says so.
-//
-// A hash of 0 is reserved for "never emitted", so the first emission always goes out; a
-// computed 0 is remapped to 1, which costs one collision in 2^64 an extra emission and
-// never a missed one.
-//
-// Header-only for the same ownership reason as Tracker.h and CsoCache.h: the root
-// CMakeLists.txt that would name a new .cpp belongs to package A and is frozen behind the
-// p2/contract tag.
+// Set-hash suppression (ARCHITECTURE.md §5.4): every kVarTail set_* hashes the resolved set on
+// the client and is not emitted while the hash is unchanged, in place of the backends' own
+// "same set as last time" debounce. A slot's hash must cover every input its record carries,
+// not only the set: MGPipeVertexBufferSetContentHash mixes in BaseInstance, which is draw state
+// that moves without the buffer set, or a changed fetch shift would be suppressed. A latched 0
+// means "never emitted", so the first emission always goes out; a computed 0 is latched as 1,
+// costing at worst one extra emission, never a missed one.
 #include <MG_Pipe/MGPipe.h>
 
 namespace MobileGL::MG_Pipe {

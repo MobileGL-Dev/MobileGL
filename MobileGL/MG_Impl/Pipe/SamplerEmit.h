@@ -9,34 +9,13 @@
 #pragma once
 #include <Includes.h>
 
-// The CLIENT side of P4a's sampler family: the content-addressed sampler CSO cache, the
-// identity-addressed sampler view per texture object, and the two unit sets
-// set_sampler_views and bind_sampler_states. The third unit set, set_shader_images, is
-// ImageEmit.h's - the same subsystem bit, a different resolution.
-//
-// TWO THINGS THIS FILE OWNS THAT ARE EASY TO GET WRONG, both stated where the body will go:
-//   * SamplerParameters is 100 bytes with THREE BYTES OF TRAILING PADDING, so the CSO cache
-//     hashes and memcmp-confirms over a ZERO-INITIALISED canonical copy built field by field,
-//     never over the object's own bytes. Without that the 256-entry cache's hit rate is zero
-//     and nobody notices, because the pixels are right.
-//   * every emission goes through a VERSION-FIRST SKIP before it hashes anything: the sampler
-//     view latches (params version, shape version) per handle, and the two sets latch their
-//     SetHashSuppressor slots. A 192-entry walk per verb without a latch is not affordable.
-//
-// THIS FILE IS CREATED BY THE CONTRACT COMMIT AND FILLED BY THE PACKAGE THAT OWNS IT - see
-// FramebufferEmit.h for why, in full. kMGPipeWiredSamplerSubsystem below covers this file AND
-// ImageEmit.h: the three unit sets, the sampler CSO and the sampler view are ONE family and
-// one subsystem bit, because an operator switching samplers off has to get the whole family's
-// legacy arm rather than two thirds of it.
-//
-// WHAT THIS FILE IS THE CLIENT HALF OF, named so a reader can check it against the oracle:
-// DirectGLES' ResolveAndBindUnitTextures (the per-unit sampler-view resolution),
-// BindCurrentUnitSamplers (the per-unit sampler-object walk) and the program pass' sampler
-// override. TWO BACKEND POST-PROCESSINGS DELIBERATELY STAY ON THE SERVER and act on the
-// RESOLVED set: Espryt's raw-depth-fetch sampler substitution and Magma's feedback-loop
-// detection. Neither is reproduced here and neither may be.
-//
-// HEADER-ONLY, for the ownership reason Tracker.h and ResourceTracker.h both state.
+// Client side of the sampler family: the content-addressed sampler CSO cache, one sampler view
+// per texture object (addressed by identity), and the unit sets set_sampler_views and
+// bind_sampler_states. set_shader_images is ImageEmit.h's, under the same subsystem bit.
+// It is the client half of DirectGLES' ResolveAndBindUnitTextures, BindCurrentUnitSamplers
+// and the program pass' sampler override (ARCHITECTURE.md §5.5). Espryt's raw-depth-fetch
+// sampler substitution and Magma's feedback-loop detection act on the resolved set and stay on
+// the server. Every emitter checks version latches before hashing anything.
 #include <MG_Impl/EGLImpl/EGLImpl.h>
 #include <MG_Impl/Pipe/SetHashSuppressor.h>
 #include <MG_Impl/Pipe/SlotAllocator.h>
@@ -59,60 +38,23 @@
 
 namespace MobileGL::MG_Pipe {
 
-    // WIRED. The sampler CSO, the sampler view and all three unit sets - set_shader_images
-    // included, whose emitter lives in ImageEmit.h - have bodies, so this file's family
-    // contributes its bit to kMGPipeWiredSubsystems. ONE bit for the whole family, because an
-    // operator switching samplers off has to get the whole family's legacy arm rather than two
-    // thirds of it.
-    //
-    // WHAT THE BIT DOES, and it really is a gate - c0b changed this and the note that used to
-    // say the opposite was true only against the contract commit. The validate point's
-    // `wants()` (PipeFill.cpp) now asks FOUR things: the bit maps to a subsystem, the
-    // operator's MOBILEGL_PIPE_PUSH mask carries it, `kMGPipeWiredSubsystems` carries it -
-    // i.e. this constant is non-zero - and the dirty bit fired. The birth hooks' own gate
-    // (`FamilyIsLive`) is the same pair one level in, so the client paths and the validate
-    // point cannot disagree. So an emitter with a body and this constant still 0 is called by
-    // nothing and emits nothing, and flipping the constant is what switches the family on.
-    //
-    // IT IS ALSO A COMPILE-TIME CONTRACT. While it is non-zero, PipeFill.cpp's `if constexpr`
-    // seam instantiates the forward to this family's entry points - EmitSamplerCso and
-    // EmitSamplerView below - so a missing or misspelled one is a build error in this file's
-    // own commit rather than a surprise at the merge.
-    //
-    // The A/B that switches this family off at RUNTIME is still the mask; this constant is
-    // what a build declares it emits for, and it feeds EmittedCallSuppliesTheWholeField's
-    // guard. ONE bit for the whole family, for the reason above.
+    // The subsystem bit this build emits for, covering the sampler CSO, the sampler view and all
+    // three unit sets (set_shader_images in ImageEmit.h included): one bit, so switching samplers
+    // off returns the whole family to the legacy path. PipeFill.cpp ORs it into
+    // kMGPipeWiredSubsystems, which the validate point's `wants()` tests; the birth hooks'
+    // FamilyIsLive tests this constant. While it is non-zero the ForwardWhenWired seam calls
+    // EmitSamplerCso / EmitSamplerView, so a misspelled entry point fails to build. The runtime
+    // switch is the MOBILEGL_PIPE_PUSH mask. Set it together with kMGPipeWiredTextureSubsystem.
     inline constexpr Uint64 kMGPipeWiredSamplerSubsystem = kMGPipeSubsystemSamplers;
 
-    // ---------------------------------------------------------------------------------
-    // D-F1: the canonical SamplerParameters copy, and why it is not a memcpy
-    // ---------------------------------------------------------------------------------
-    //
-    // sizeof(SamplerParameters) == 100 and its members occupy 97 of those bytes: six 4-byte
-    // enums, four Floats, two more 4-byte enums, three 16-byte colour vectors and the one-byte
-    // borderColorForm. Bytes 97, 98 and 99 are PADDING and no writer ever touches them.
-    //
-    // A cache that hashed or memcmp'd the object's own bytes would therefore read
-    // uninitialised memory. In practice SamplerObject value-initialises its member and never
-    // rewrites it, so in practice those bytes are stable - and "in practice" is not a
-    // contract. The whole point of a content-addressed cache is that a false MISS mints a
-    // fresh CSO per call: a 256-entry cache with a hit rate of zero, on a path nobody looks
-    // at, because the pixels are right either way.
-    //
-    // So every hash and every confirm runs over a copy that is memset to zero FIRST and then
-    // assigned field by field, which makes the padding deterministically zero on both sides of
-    // the comparison. The field list is MGP_FIELDS_SamplerParameters', in its order, and the
-    // verify build compares the same sixteen fields one at a time - without that
-    // PipeFields.def row the blob would be compared as bytes and G4 would be a coin flip.
-    //
-    // ONE COPY PER MINT ATTEMPT, never per draw: the version-first skip in the two emitters
-    // below decides whether to come here at all.
-    // THE PRIMITIVE TAKES AN OUT-PARAMETER, and that is not a style preference either. A
-    // returned SamplerParameters is copied, and a copy of a trivially copyable type leaves the
-    // padding UNSPECIFIED - so a canonicaliser that returned by value would hand its caller a
-    // value whose three trailing bytes are whatever the copy left there, which is the very
-    // thing this function exists to make deterministic. Every producer of canonical bytes in
-    // this file, and every consumer that stores them, goes through this and through memcpy.
+    // ---- Canonical SamplerParameters copy ----
+    // SamplerParameters is 100 bytes with 3 bytes of trailing padding no writer touches, so the
+    // CSO cache never hashes or compares an object's own bytes: a padding mismatch is a silent
+    // false miss (correct pixels, a fresh CSO per call). The copy is memset to zero, then
+    // assigned field by field in MGP_FIELDS_SamplerParameters' order. It is an out-parameter
+    // because returning by value copies and leaves the padding unspecified; canonical bytes are
+    // stored only with memcpy. It runs once per mint attempt; the emitters' version checks keep
+    // it off the per-draw path.
     inline void MGPipeCanonicaliseSamplerParameters(const SamplerParameters& src, SamplerParameters& canon) {
         static_assert(std::is_trivially_copyable_v<SamplerParameters>,
                       "the canonical copy is memset and then assigned field by field");
@@ -151,59 +93,13 @@ namespace MobileGL::MG_Pipe {
         return MGPipeHashSamplerParameters(canon);
     }
 
-    // ---------------------------------------------------------------------------------
-    // D-F1: the content-addressed sampler CSO cache, capacity 256
-    // ---------------------------------------------------------------------------------
-    //
-    // Unlike P3a's vertex-elements CSO, content addressing is RIGHT here: a SamplerObject is a
-    // pure 100-byte value with no driver-side per-object binding state, two identical samplers
-    // can share one CSO with no extra work on either side, and Espryt's BackendSamplerObject
-    // is a driver name plus a parameter shadow - nothing a second frontend object would have
-    // to re-establish.
-    //
-    // THE LOOKUP IS CsoCache.h's, one for one: hash, probe, and CONFIRM WITH A MEMCMP before
-    // reusing a handle, because a bare 64-bit equality would alias two different sampler
-    // states onto one CSO and that is silent wrong filtering with no gate that can see it.
-    //
-    // WHAT KEEPS A LIVE HANDLE OUT OF THE LRU's REACH IS A REFERENCE COUNT, not the capacity
-    // (ID-17). The capacity argument - "one pass acquires at most kMGPipeMaxTextureUnits == 192
-    // CSOs and touches every one of them, so LRU can only evict an entry from an EARLIER pass"
-    // - closes the INTRA-PASS case only, and the case that matters is the other one: a
-    // MGPTextureParams record published in an earlier pass names its texture's BuiltinSampler
-    // for as long as that texture's parameters do not move, the applier deliberately does not
-    // resolve that handle, and an eviction is not a parameter change, so nothing re-emits and
-    // nobody refuses. With more than 256 distinct live sampler values - a CTS sampler sweep, a
-    // scene with many filter/wrap/border combinations - the rarely-touched built-in samplers
-    // are the FIRST victims.
-    //
-    // So every Acquire takes a REFERENCE and Release drops one; LRU considers only entries
-    // whose count is 0; and when every entry is pinned the cache MINTS BEYOND CAPACITY and
-    // counts it (Counters::OverCapacityMints). Growing is the safe direction - a slot too many
-    // costs memory, a handle pulled out from under a live record costs correctness - and the
-    // count is a recorded number rather than a gate, so a workload that pins more than 256
-    // values is visible instead of being wrong.
-    //
-    // WHO HOLDS A REFERENCE: package B's EmitTextureParams for a texture's built-in sampler
-    // (released when the texture dies or when a parameter change makes it re-acquire), and
-    // this file's own bind_sampler_states for every CSO a unit is currently bound to. Anything
-    // that acquires a handle it will still name after it returns must hold one.
-    //
-    // THE CAPACITY ITSELF IS STILL A SIZING BOUND worth asserting: a cache that could not hold
-    // one whole emission pass would over-capacity-mint on every single pass, which is a
-    // silently unbounded cache rather than a 256-entry one.
-    //
-    // THE SLOT IS ALLOCATED WITHOUT A LIFETIME ID, deliberately: a content-addressed CSO
-    // belongs to a VALUE and not to a frontend object, so ~SamplerObject must not free it -
-    // another live SamplerObject may hold the same value. MGPipeEmitSamplerCsoDestroyAndFree
-    // resolves nothing for such an id and correctly frees nothing; the only death path for
-    // these slots is the LRU eviction below, which is client-side and therefore
-    // backend-neutral on day one.
-    //
-    // PACKAGE D MUST BE TOLD, and it is the one consequence of that choice that reaches the
-    // server: NotifyStateObjectDestroyed(SamplerCso, lifetimeId) arrives from ~SamplerObject
-    // with NO HANDLE BEHIND IT, every time. A backend must NOT key a sampler twin on a
-    // SamplerObject's lifetime id. The twin's life is create_sampler_state -> the LRU's
-    // delete_sampler_state and nothing else.
+    // ---- Content-addressed sampler CSO cache ----
+    // A SamplerObject is a pure value with no per-object driver binding state, so equal samplers
+    // share one CSO. Lookup is CsoCache.h's: hash, probe, then memcmp before reusing a handle.
+    // Eviction safety comes from reference counts, not capacity: LRU evicts only unreferenced
+    // entries and the cache mints past capacity when all are pinned. Slots carry no lifetime id,
+    // so ~SamplerObject frees nothing and a backend must not key a sampler twin on a
+    // SamplerObject's lifetime id. Holders and the full rule: ARCHITECTURE.md §2.3.1.
     inline constexpr SizeT kMGPipeSamplerCsoCacheCapacity = 256;
     static_assert(kMGPipeSamplerCsoCacheCapacity > kMGPipeMaxTextureUnits,
                   "a cache that cannot hold one whole emission pass would mint over capacity on "
@@ -273,24 +169,13 @@ namespace MobileGL::MG_Pipe {
             Uint64 GroupPublishes = 0;
         };
 
-        // The handle for `params`' value, AND A REFERENCE ON IT. Mints and emits
-        // create_sampler_state on a miss and emits delete_sampler_state for whatever it evicts
-        // to make room. `payloadBytes` accumulates what went on the wire.
-        //
-        // EVERY Acquire TAKES A REFERENCE and every caller owes exactly one Release for it
-        // (ID-17). A caller that only wants a transient handle still has to release it, and a
-        // caller that keeps naming the handle in a published record must hold its reference for
-        // as long as that record stands - that is what stops the LRU pulling the handle out
-        // from under it, because an eviction is not a parameter change and nothing re-emits.
-        //
-        // THIS IS ALSO PACKAGE B's SEAM. MGPTextureParams::BuiltinSampler names the CSO that
-        // carries the SamplerParameters of the SamplerObject every ITextureObject owns, and a
-        // null handle there is Fatal{ProtocolCorruption} rather than "no sampler". TextureEmit.h
-        // acquires it from here - taking a reference it holds until the texture dies or a
-        // parameter change makes it re-acquire, at which point it releases the previous handle -
-        // so the texture's built-in sampler and a glBindSampler'd sampler object with the same
-        // value share one CSO and one server-side twin, which is exactly the sharing that makes
-        // content addressing the right answer for this kind.
+        // The handle for `params`' value, with a reference on it. On a miss it mints and emits
+        // create_sampler_state, and emits delete_sampler_state for any entry it evicts;
+        // `payloadBytes` accumulates the wire bytes. Every Acquire owes exactly one Release, and
+        // a caller that names the handle in a published record holds it for as long as the
+        // record stands. TextureEmit.h acquires MGPTextureParams::BuiltinSampler here (a null
+        // handle there is Fatal{ProtocolCorruption}), so a texture's built-in sampler and a
+        // bound sampler object with the same value share one CSO and one server twin.
         MGPipeHandle Acquire(const SamplerParameters& params, Uint64& payloadBytes) {
             SamplerParameters canon;
             MGPipeCanonicaliseSamplerParameters(params, canon);
@@ -805,22 +690,13 @@ namespace MobileGL::MG_Pipe {
         using ITextureObject = MG_State::GLState::ITextureObject;
         using SamplerObject = MG_State::GLState::SamplerObject;
 
-        // set_sampler_views: the PROGRAM-RESOLVED set only, one entry per unit, no stage
-        // dimension. Start is 0 and Count is GetMaxTouchedTextureUnit() + 1 clamped to the
-        // wire bound - the high-water mark is directly the count argument and is not
-        // re-derived.
-        //
-        // WHAT A UNIT'S ENTRY MEANS, and all three cases are legal rather than holes:
-        //   the program resolves no target here   -> View and Texture both null
-        //   it resolves one, nothing is bound     -> View and Texture both null
-        //   it resolves one and a texture is bound-> Texture is that object's handle and View
-        //                                            is its sampler-view CSO
-        // An UNDEFINED DEFAULT texture (name 0 with no image) and a texture that
-        // SAMPLES AS INCOMPLETE are both dropped to null here, which is the resolution
-        // DirectGLES performs by leaving the native target unbound: an incomplete texture
-        // samples (0,0,0,1) and the driver cannot work that out for itself, because the
-        // backend storage is immutable and never saw the level the application redefined at
-        // the wrong size.
+        // set_sampler_views: the program-resolved set, one entry per unit, no stage dimension.
+        // Start is 0; Count is GetMaxTouchedTextureUnit() + 1, clamped to the wire bound. An
+        // entry is null when the program samples nothing at the unit, nothing is bound, the
+        // bound texture is the undefined default texture, or it samples as incomplete;
+        // otherwise it names the texture and its sampler-view CSO. Nulling an incomplete
+        // texture matches DirectGLES leaving the native target unbound: it must sample
+        // (0,0,0,1), and the backend's immutable storage never saw the redefined level.
         Uint64 EmitSamplerViews(GLContext& ctx) {
             const Int maxTouched = ctx.GetMaxTouchedTextureUnit();
             const Uint32 count =
@@ -886,38 +762,14 @@ namespace MobileGL::MG_Pipe {
             return bytes + sizeof(MGPSamplerViews) + static_cast<Uint64>(count) * sizeof(MGPBoundView);
         }
 
-        // bind_sampler_states: the unit's sampler CSO, or the null handle when the unit has no
-        // sampler object - the texture's built-in sampler then applies, exactly as today.
-        //
-        // NOT program-resolved, and that asymmetry with the view set above is deliberate: a
-        // sampler object is bound to a UNIT and applies to whatever the unit holds, so its set
-        // is the plain per-unit walk BindCurrentUnitSamplers already does. A redundant re-bind
-        // of the same sampler object emits nothing at all, which is the whole point of the
-        // suppressor slot: GetTextureBindGeneration() bumps on a redundant re-bind - 26.2
-        // rebinds the same sampler at every texture-unit switch - so without it this would be
-        // a several-hundred-byte variable-length record per batch.
-        // A BOUND SAMPLER STATE HOLDS A REFERENCE ON ITS CSO FOR AS LONG AS IT IS BOUND
-        // (ID-17). The set the applier holds is "the last set as received" and outlives the
-        // pass that sent it, so a handle in it must not become the LRU's victim; the reference
-        // is what makes that true. The reconciliation below walks the unit array once: Acquire
-        // has already taken a reference for every unit in the new set, so a unit whose handle
-        // did not move gives that duplicate back, a unit whose handle moved gives back the one
-        // it used to hold, and a unit that fell outside the window gives back its own.
-        //
-        // ITS COST IS NOT "ONE EXTRA ARRAY WALK" and the ID-19 budget entry says so. Each
-        // Release of a NON-NULL handle is itself a linear scan of the whole cache, sitting
-        // beside an Acquire probe that is another, so a pass in which K units hold sampler CSOs
-        // costs 2 * K * O(cacheSize) handle comparisons - up to ~98 000 at K == 192 with a full
-        // cache, and unbounded above that because the over-capacity path lets the cache grow
-        // past 256. In Minecraft-shaped workloads K is typically 0: no unit has a SamplerObject
-        // bound, so Acquire is never called and Release(null) returns immediately. The workload
-        // that has both a large K and a large cache is a CTS sampler sweep. c0d moved the
-        // firing rate underneath this as well - bit 13's shutter now mixes
-        // GetTextureBindGeneration(), so this runs on EVERY texture bind at any unit and not
-        // only on a parameter change, and the set-hash suppressor below stops the record going
-        // out but not these two scans, which happen first. The per-unit (sampler lifetime id,
-        // ctx.GetSamplingResolutionGeneration()) latch recorded under ID-19 as C-m2 removes
-        // BOTH scans, not one.
+        // bind_sampler_states: each unit's sampler CSO, or null when the unit has no sampler
+        // object and the texture's built-in sampler applies. Not program-resolved: a sampler
+        // object applies to whatever its unit holds, as in BindCurrentUnitSamplers. A bound
+        // handle keeps a cache reference while bound, because the applier's set outlives this
+        // pass. Cost: Acquire and each non-null Release scan the whole cache, 2 * K * cache size
+        // per pass for K units with sampler objects (usually 0 in Minecraft, large in CTS sampler
+        // sweeps), on every texture bind; the set-hash suppressor skips only the record. A
+        // per-unit (sampler lifetime id, sampling resolution generation) latch would avoid both.
         Uint64 EmitSamplerStates(GLContext& ctx) {
             const Int maxTouched = ctx.GetMaxTouchedTextureUnit();
             const Uint32 count =
@@ -1028,27 +880,12 @@ namespace MobileGL::MG_Pipe {
             return handle;
         }
 
-        // ---- THE TWO CONTRACT ENTRY POINTS THIS FAMILY OWES (contract-v2 §3.4) ----
-        //
-        // PipeFill.cpp's birth hooks forward here through an `if constexpr` seam keyed on
-        // kMGPipeWiredSamplerSubsystem, so while that constant is non-zero these two must
-        // exist and be spelled exactly like this or the build fails in this file's own commit.
-        // The hook has already applied BOTH gates (the operator's mask and the wired constant);
-        // what belongs here is the family's HANDLE RULE and its publication, which the contract
-        // deliberately does not pick for us because the three families disagree about identity.
-        //
-        // MINTING A SAMPLER CSO AT CONSTRUCTION TIME CONTENT-ADDRESSES THE DEFAULT PARAMETERS,
-        // and that is correct rather than wasteful: the cache dedupes, so a thousand
-        // freshly-created SamplerObjects share ONE create_sampler_state, and the moment the
-        // application sets a parameter the next acquire content-addresses the new value and
-        // this object simply stops naming the default entry. It is one create_sampler_state per
-        // distinct default-valued sampler, not one per object.
-        //
-        // THE REFERENCE THIS TAKES IS DROPPED IMMEDIATELY. A birth is not a standing record: no
-        // MGPTextureParams and no bind_sampler_states names this handle yet, so pinning the
-        // entry here would keep the default-parameter value un-evictable for the life of the
-        // process for no reader's benefit. Whoever later names the handle in a record takes its
-        // own reference through its own Acquire.
+        // ---- Birth hooks, forwarded from PipeFill.cpp ----
+        // ForwardWhenWired calls these after FamilyIsLive passes, so the names must match.
+        // EmitSamplerCso content-addresses the new object's default parameters, so all
+        // default-valued samplers share one create_sampler_state. Its reference is released at
+        // once: a birth names the handle in no record, and pinning it would keep the default
+        // value unevictable; whoever later names the handle takes its own reference.
         void EmitSamplerCso(SamplerObject& sampler) {
             Uint64 bytes = 0;
             MGPipeSamplerCsoCache& cache = MGPipeSamplerCsoCacheInstance();

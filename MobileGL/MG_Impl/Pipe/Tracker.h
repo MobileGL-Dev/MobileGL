@@ -9,54 +9,14 @@
 #pragma once
 #include <Includes.h>
 
-// The frontend state tracker (ARCHITECTURE.md 5.2, P2 brief D4).
+// The frontend state tracker (ARCHITECTURE.md §5.2).
 //
-// WHERE IT RUNS. Not above MGP_FILL and not in the GL setter: MGPipeValidateForVerb, the
-// one statement MGP_FILL already expands to before every gBackendFunctionsTable.GL call
-// (PipeFill.h). Blaze3D brackets every batch with glEnable/glDisable(GL_BLEND), so a
-// setter that pushed would push twice per batch for a state the batch may not even read;
-// the validate point coalesces the whole bracket into the two draws that observe it
-// (ARCHITECTURE.md 5.1).
-//
-// WHAT IT DOES. One Uint32 dirty mask per verb, one bit per row of ARCHITECTURE.md 5.2,
-// computed by comparing a shutter against what the tracker last pushed. P2 emitted for bits
-// 0..4 (the value-class ones); P3a adds bits 5, 9 and 10 - the vertex-input family - and P4a
-// adds SEVEN: 6, 7 and 8 (the program family), 11 (the framebuffer) and 12, 13 and 14 (the
-// three unit sets). Only bits 15, 16 and 17 - the const-buffer, shader-buffer and
-// stream-output sets - are still computed, latched and counted without an emitter, so the
-// per-bit fire rate is a measurement rather than a plan and their fields go through the
-// residual fill until P4b.
-//
-// P4a NARROWS NOTHING AND WIDENS THREE THINGS, and every one of them was an UNDER-FIRE that
-// only became reachable once the bit gained an emitter:
-//   (1) bit 11's shutter gains the READ framebuffer binding slot's version, because
-//       set_framebuffer_state is emitted per bound TARGET and a glBindFramebuffer(
-//       GL_READ_FRAMEBUFFER, ...) moved no shutter at all before;
-//   (2) bit 13's gains the TEXTURE BIND generation, because glBindSampler moves that one and
-//       not the sampling-resolution one, so bind_sampler_states could not see a sampler bind;
-//   (3) bits 6/7/8 - and with them bit 14's program half - read the EFFECTIVE program source
-//       instead of GetCurrentProgram() alone, which is null for the whole life of a bound
-//       separable program pipeline, so a re-composited pipeline reached no program emitter.
-// Over-firing is free; all three of those were the other direction.
-//
-// WHY EVERY SHUTTER OVER-FIRES. A bit that fires too often costs one extra push. A bit
-// that fires too rarely renders stale, and ARCHITECTURE.md 13.2 names that as the
-// dangerous direction precisely because the P1 verify comparator cannot see it for
-// object-class state (it compares those by identity only). So each shutter below is
-// deliberately coarser than the state it guards - five bits share one buffer aggregate,
-// the framebuffer bit fires on any attachment write anywhere - and the narrowing is P3's
-// work, paid for with the fire rates this file publishes.
-//
-// NO TIMER LIVES HERE. ROADMAP.md forbids committing hot-path instrumentation; the
-// absolute ns/draw comes from DriverBench, which times whole frames from outside the
-// library (P2 brief D17). The only counting is the per-bit fire tally, behind
-// PipeStats::Enabled() like every other counting site in the tree.
-//
-// HEADER-ONLY, and that is an ownership decision rather than a design one: the P2 brief
-// asks for Tracker.{h,cpp}, but the root CMakeLists.txt that would have to name a new .cpp
-// belongs to package A and is frozen behind the p2/contract tag. Everything here is
-// included by exactly one translation unit in the library (MG_Impl/Pipe/PipeFill.cpp) plus
-// the unit tests, so inline costs nothing. Splitting it back out is one list(APPEND) line.
+// Update() runs at the validate point, MGPipeValidateForVerb, which MGP_FILL expands to before
+// every backend call (PipeFill.h), not in the GL setters: a glEnable/glDisable bracket around a
+// batch then costs one push at the draws that observe it (ARCHITECTURE.md §5.1). It returns one
+// MGPipeDirty bit per shutter that moved since the last push. A shutter may over-fire (one extra
+// push) but must never under-fire (silently stale state, ARCHITECTURE.md §5.2.1), so each is
+// coarser than the state it guards. Bit 17 is computed and counted but has no emitter.
 #include <MG_Pipe/MGPipe.h>
 #include <MG_Pipe/MGPipeValueTypes.h>
 #include <MG_State/GLState/Core.h>
@@ -239,27 +199,13 @@ namespace MobileGL::MG_Pipe {
         }
     }
 
-    // A COMPOSITE shutter, for the bits whose "did anything move" is more than one counter.
-    // It is a hash, so two different states can in principle collide and cost a MISSED fire.
-    // The five bits P2 emits for are never composed - they are widened counters and byte
-    // compares, neither of which can collide.
-    //
-    // P3a's three ARE composed, so the risk is now real rather than academic, and it is
-    // accepted with its size stated: two DIFFERENT states collide with probability ~2^-64 per
-    // pair, and the inputs are monotone lifetime ids, versions and generations - none of which
-    // an application can steer. The alternative, comparing the whole 32-attribute configuration
-    // byte for byte on every verb, is the per-draw cost the shutter exists to avoid. The
-    // narrowing that removes the composition for bit 10 - its own slot version plus the bound
-    // object's identity - is what this phase already did to the one shutter that was composed
-    // over an unrelated aggregate.
-    //
-    // That bound needs a mix that avalanches. The hash_combine step this used to be
-    // (acc ^= value + k + (acc << 6) + (acc >> 2)) does not: small neighbouring counters collide
-    // outright - (1, 64) and (2, 1) mix to the same value - and bit 12 missed a fire on exactly
-    // such a pair, so a draw sampled the previous set's texture
-    // (KHR-GL46.internalformat.copy_tex_image.rgb10_a2ui after a run of earlier cases). Each
-    // step here is a bijection of either argument with the other fixed, so a change to one
-    // input alone always moves the result, and the 64-bit finalizer spreads a change to both.
+    // The mix for composite shutters, built from several counters. It is a hash, so two states
+    // can collide and miss a fire; over lifetime ids, versions and generations an application
+    // cannot steer, that is about 2^-64 per pair, accepted instead of comparing the whole state
+    // on every verb. The mix must avalanche: a hash_combine-style step collides outright on small
+    // neighbouring counters ((1, 64) and (2, 1)), and a missed bit-12 fire then leaves a draw
+    // sampling the previous texture set. Each step is a bijection in either argument with the
+    // other fixed, so a change to one input alone always changes the result.
     inline constexpr Uint64 MGPipeShutterAvalanche(Uint64 value) {
         value ^= value >> 30;
         value *= 0xbf58476d1ce4e5b9ull;
@@ -348,53 +294,14 @@ namespace MobileGL::MG_Pipe {
                 vao ? MGPipeMixShutter(vaoLifetime, vaoConfig) : 0;
             now[Index(MGPipeDirty::NewVertexElements)] = vaoIdentity;
 
-            // Deliberately NOT GetProgramForDraw: that joins a pending link, and the tracker
-            // must not force a compile just to answer "did the shader move". These version
-            // counters are plain members and are exactly what the backends already read
-            // without joining (Core.cpp, the glUseProgram half of join site J1).
-            //
-            // BUT GetCurrentProgram() ALONE IS NOT THE PROGRAM SOURCE, AND AT P4a THAT IS AN
-            // UNDER-FIRE. Under GL_ARB_separate_shader_objects an application drives
-            // `glUseProgram(0); glBindProgramPipeline(P)`, and m_currentProgram is then null
-            // for the whole life of that pipeline (Core.cpp, GetProgramForDraw's second half):
-            // all three of these shutters read 0 == 0 forever, so after the first walk on a
-            // fresh context - the one !m_primed fires unconditionally - bits 6, 7 and 8 never
-            // fire again however the pipeline is restaged.
-            //
-            // WHILE NOTHING WAS EMITTED FOR THEM THAT WAS INVISIBLE, which is how it survived
-            // to P4a: GetProgramForDraw is emitted-and-still-pulled, the residual fill copies
-            // it at every verb, and DirtySurface.def rules BindProgramPipelineObject
-            // kPulledEveryVerb for exactly that reason - the backend still receives the right
-            // SharedPtr and nothing renders wrong. The moment P4a emits off these bits it
-            // stops being invisible: glUseProgramStages rebuilds the composite, EmitShaderState
-            // is never called again, so the new composite gets no ShaderCso handle and no
-            // create_shader_state while set_draw_program keeps naming the previous one - a
-            // program the handle protocol never announced, which is exactly the seam-defect
-            // class P3a spent a phase closing. And bit 8 never firing means
-            // set_global_constants is never sent for a pipeline draw at all, where the pull
-            // rescues nothing.
-            //
-            // SO THE SHUTTER READS THE EFFECTIVE SOURCE: the program in use when there is one,
-            // and the bound pipeline when there is not. What it reads OF that pipeline is the
-            // pair ComputeDrawProgramSignature() is built from - each stage program's lifetime
-            // id and LINK version - so bit 6 fires exactly when GetProgramForDraw would hand
-            // back a different composite, which is exactly when a new ShaderCso handle has to
-            // be minted. Those are the same non-artefact fields the plain-program arm above
-            // reads, and the ones Core.cpp calls out as not passing through ProgramObject's
-            // join gate, so the "must not force a compile" rule survives intact: no join, no
-            // flatten, no Link().
-            //
-            // THE PIPELINE NAME IS MIXED IN because two pipelines can carry the same stage set
-            // and each caches its OWN composite object, so the signature alone would let a
-            // glBindProgramPipeline between two such pipelines pass without a fire. What that
-            // does NOT close is a name RECYCLED (glDeleteProgramPipelines +
-            // glGenProgramPipelines) back onto the same stage programs at the same link
-            // versions with no other program-family change in between: a ProgramPipelineObject
-            // has no lifetime id and no wire object at all - DirtySurface.def says so where it
-            // rules MarkProgramPipelineForDeletion kUnpublishedDestroy - so there is nothing
-            // else here to mix it with. Recorded rather than quietly left: closing it needs a
-            // generation counter on the frontend object, which is an MG_State change and not
-            // this file's to make.
+            // Reads plain version counters, never GetProgramForDraw(): that joins a pending
+            // link, and the tracker must not force a compile. The source is the program in use
+            // or, when there is none (glUseProgram(0) with a separable pipeline bound), the bound
+            // pipeline's stage programs' {lifetime id, link version}, the pairs
+            // ComputeDrawProgramSignature() packs, so bit 6 fires exactly when the composite
+            // changes. The pipeline name is mixed in because two pipelines with the same stages
+            // cache separate composites. Known gap: a deleted pipeline name regenerated onto the
+            // same stages is not seen, since ProgramPipelineObject has no lifetime id to mix in.
             const auto& program = ctx.GetCurrentProgram();
             Uint64 shader = 0;
             Uint64 bindings = 0;
@@ -453,23 +360,14 @@ namespace MobileGL::MG_Pipe {
                               "bits 7 and 8 read the four counters per graphics stage that "
                               "ComputeUniformMirrorVersions packs");
 
-                // Bit 6 is the pipeline's identity plus the composite cache key. Bits 7 and 8
-                // add the per-program state, which under a pipeline is written to the STAGE
-                // programs - glUniform* addresses the pipeline's active program,
-                // glProgramUniform* and the two block-binding calls address a named one - and
-                // only reaches the composite through RefreshCompositeUniforms. Bit 14's half
-                // takes the image-unit generation, which is its own counter for the reason
-                // ProgramObject gives (ES forbids glUniform1i on an image uniform, so Espryt
-                // BAKES the unit into the ESSL it generates and only a regeneration honours a
-                // change) and which D-G4 asks this shutter to keep reading as a FRONTEND
-                // counter rather than any server-side epoch.
-                //
-                // STAGELINKS IS MIXED INTO ALL THREE OF THE OTHERS, ON PURPOSE. A composite
-                // REBUILD hands back a brand-new ProgramObject with an empty default uniform
-                // block and no backend state at all - SetCachedDrawProgram clears the mirror
-                // versions with it - so a shutter watching only the per-stage state counters
-                // would let a rebuilt composite inherit the bindings, the constants and the
-                // image units of the one it replaced.
+                // Bit 6 is the pipeline identity plus the composite cache key. Bits 7 and 8
+                // add the stage programs' own state (glUniform* reaches the active program,
+                // glProgramUniform* and the block-binding calls a named one), which reaches
+                // the composite only through RefreshCompositeUniforms. Bit 14 reads the image
+                // unit version, a separate counter because Espryt bakes image units into the
+                // ESSL it generates (see ProgramObject). stageLinks is mixed into all of them:
+                // a rebuilt composite is a new ProgramObject with no uniforms or backend state
+                // and must not inherit the old one's bindings, constants or image units.
                 Uint64 stageLinks = static_cast<Uint64>(ctx.GetBoundProgramPipelineName());
                 Uint64 stageState = 0;
                 Uint64 stageImages = 0;
@@ -501,76 +399,11 @@ namespace MobileGL::MG_Pipe {
             now[Index(MGPipeDirty::NewShaderBindings)] = bindings;
             now[Index(MGPipeDirty::NewGlobalConstants)] = constants;
 
-            // ===========================================================================
-            // THE RECORD-FIELD -> SETTER -> SHUTTER TABLE FOR THE SEVEN P4a BITS.
-            //
-            // THE RULE (P4a fable seam audit, section C.1): every field of every emitted
-            // record names the frontend setter that changes it, and that setter moves a
-            // counter the emitting bit's shutter reads - or the emission is unconditional at
-            // the setter (the resource_* family, set_texture_params). A record field whose
-            // setter moves no shutter input is a stale record with nothing to refuse: c0d
-            // (bit 13 without the bind generation), SD-0 (an image re-bind), F-1 (the
-            // program behind the view set), F-2 (the program behind the image window) and
-            // F-3 (an attached object's storage) were all this one class. DirtySurface.def
-            // cannot catch it - it maps MUTATORS to bits and cannot see that a DERIVED field
-            // depends on a mutator whose row is another family's - so the table lives here,
-            // beside the shutters, and a row is added whenever a record gains a field.
-            //
-            // bit 6  create/bind_shader_state, set_draw/dispatch_program (ProgramEmit.h)
-            //        fields: Cso, StageMask, GlobalUboSize, the artefact blob refs, the two
-            //                bound handles
-            //        setters: glUseProgram (m_currentProgram), glLinkProgram (link version),
-            //                glBindProgramPipeline / glUseProgramStages (pipeline name +
-            //                per-stage {lifetime id, link version})
-            //        shutter: lifetime id x link version, or stageLinks under a pipeline
-            // bit 7  the program's bindings (image units, block bindings, uniform write set)
-            //        setters: glUniform1i on an opaque uniform (backend state version, image
-            //                unit version), glUniformBlockBinding / glShaderStorageBlockBinding
-            //                (block binding version), any glUniform* (uniform write set)
-            //        shutter: the four per-program counters, x stageLinks under a pipeline
-            // bit 8  set_global_constants: ShaderCso, Version, the default-block image
-            //        setters: any glUniform* on the default block (UBO content version),
-            //                glUseProgram (lifetime id)
-            //        shutter: lifetime id x UBO content version, or stageState
-            // bit 11 set_framebuffer_state: Fbo, Color[8]/Depth/Stencil/ReadSurface
-            //        (Res, Kind, InternalFormat, TextureTarget, Layered, Level, Layer,
-            //        UploadTarget), DrawBuffers[8], Width/Height/Layers/Samples/
-            //        FixedSampleLocations, IsDefault, Complete, Target
-            //        setters: glFramebufferTexture*/glFramebufferRenderbuffer, glDrawBuffer(s),
-            //                glReadBuffer, glFramebufferParameteri (the attachment
-            //                aggregate); glBindFramebuffer (the two binding slot versions);
-            //                AND a storage redefinition of an ATTACHED texture or
-            //                renderbuffer - glTexImage*/glTexStorage*/glTexBuffer/
-            //                glTextureView/glRenderbufferStorage* - because InternalFormat,
-            //                TextureTarget, the extent, Samples and Complete are INLINED at
-            //                emission (D-C1): those bump the attachment aggregate from the
-            //                object's PipePublishDescriptor (F-3)
-            //        shutter: attachment aggregate x draw bind version x read bind version
-            // bit 12 set_sampler_views: per unit {View, Texture}
-            //        setters: glBindTexture / glActiveTexture (bind generation), a texture's
-            //                or a sampler object's parameters (SamplesAsIncompleteTexture -
-            //                the params aggregate), an upload that defines a level (content
-            //                aggregate), the default texture's image appearing (bind
-            //                generation, TextureObject.cpp); AND the program in use -
-            //                glUseProgram, a relink, glUniform1i on a sampler uniform (which
-            //                unit a uniform's TYPE resolves) - F-1
-            //        shutter: content x params x bind generation x opaqueUnits
-            // bit 13 bind_sampler_states: per unit the sampler CSO handle
-            //        setters: glBindSampler (bind generation, c0d), glSamplerParameter* /
-            //                glTexParameter* (params aggregate + sampling resolution),
-            //                glDeleteSamplers (bind generation)
-            //        shutter: params x sampling resolution x bind generation
-            // bit 14 set_shader_images: per unit {Res, InternalFormat, Layer, Level,
-            //        Layered, Access} over the program's image-unit window
-            //        setters: glBindImageTexture (bind generation, SD-0), a texture's
-            //                content/params, glUniform1i on an image uniform (image unit
-            //                version); AND the program in use - glUseProgram, a relink -
-            //                F-2
-            //        shutter: content x params x bind generation x programImages
-            //                (lifetime id x link version x image unit version)
-            // bits 11-14 ALSO fire on the share group's twins of the aggregates they read, for
-            //        a setter called through a sibling context (C8, after the dirty loop)
-            // ===========================================================================
+            // Every field of an emitted record must change only through setters that move an
+            // input of the emitting bit's shutter, or be emitted unconditionally at its setter
+            // (resource_*, set_texture_params). DirtySurface.def cannot check derived fields,
+            // so the record-field -> setter -> shutter table for bits 6-8 and 11-14 is kept by
+            // hand in ARCHITECTURE.md §5.2.2; add a row there when a record gains a field.
 
             // ---- the object-class bits 9..17 ----
             const Uint64 textureContent = ctx.GetAnyTextureContentGeneration();
@@ -614,40 +447,14 @@ namespace MobileGL::MG_Pipe {
                                                 indexObject ? indexObject->GetLifetimeId() : 0);
             }
             now[Index(MGPipeDirty::NewIndexBuffer)] = MGPipeMixShutter(vaoIdentity, indexShutter);
-            // Bit 11, WIDENED AT P4a AND THIS IS A REQUIREMENT RATHER THAN AN OPTION. The
-            // shutter observed the DRAW binding slot only, so glBindFramebuffer(
-            // GL_READ_FRAMEBUFFER, ...) moved nothing at all - which was harmless while
-            // nothing was emitted for the bit and is an UNDER-FIRE the moment P4a emits
-            // set_framebuffer_state per bound target (D-C2): the read record would never be
-            // sent and the server's ReadSurface would stay the previous framebuffer's. Over-
-            // firing costs one extra push; under-firing renders stale, and this file's own
-            // rule is that under-firing is the dangerous direction.
-            //
-            // A STORAGE REDEFINITION OF AN ATTACHED OBJECT MOVES THIS SHUTTER (P4a fable seam
-            // F-3), and the sentence that stood here - "a renderbuffer respecify is still
-            // invisible here, and deliberately so ... closed by emitting resource_respecify
-            // straight from the storage entry point" - was true of the RESOURCE record only.
-            // set_framebuffer_state inlines each attachment's InternalFormat, TextureTarget,
-            // extent, Samples and Complete (D-C1: "so the four cross-object masks fall out at
-            // push time with no lookup"), so `glTexImage2D(tex, RGB8); attach; draw;
-            // glTexImage2D(tex, RGBA8); draw` left the FRAMEBUFFER record saying RGB8 while the
-            // resource record said RGBA8, and the handle arm answered its alpha-widening,
-            // snorm-clamp and integer masks from the stale copy where the legacy arm re-read
-            // the frontend at the same re-sync - a proven arm divergence on a public-GL
-            // sequence. The fix is at the SETTER, not here: TextureObjectBase::PipePublish
-            // Descriptor and RenderbufferObject::PipePublishDescriptor - the one funnel every
-            // storage-defining entry point of either object takes, push-only - bump the
-            // attachment aggregate this shutter already reads. No counter is added to either
-            // object (G1), nothing widens this shutter onto the texture-content aggregate (which
-            // would fire the 304-byte record build on every glTexSubImage2D), and a storage
-            // definition of an UNATTACHED object over-fires it exactly once at load time.
-            //
-            // AND A TRAP THE NEXT NARROWING WOULD WALK INTO, recorded here because it is
-            // invisible from the shutter: FramebufferObject::SetDrawBuffer versions the VALUE
-            // being written rather than the index being written TO - it calls
-            // BumpAttachmentVersion(buffer). The object version and the aggregate still move,
-            // so THIS shutter is safe; a narrower one built on m_attachmentVersions would not
-            // be, and P4a must not build one.
+            // Bit 11 reads the draw and the read binding-slot versions, since the record is
+            // emitted per bound target. It inlines each attachment's format, target, extent,
+            // samples and completeness, so a storage redefinition of an attached object must fire
+            // it too: TextureObjectBase's and RenderbufferObject's PipePublishDescriptor bump the
+            // attachment aggregate (an unattached object over-fires once). The texture-content
+            // aggregate stays out; it would rebuild the record on every glTexSubImage*. Do not
+            // narrow this onto m_attachmentVersions: FramebufferObject::SetDrawBuffer bumps the
+            // version of the value written, not of the index.
             now[Index(MGPipeDirty::NewFramebuffer)] = MGPipeMixShutter(
                 MGPipeMixShutter(
                     ctx.GetAnyFramebufferAttachmentGeneration(),
@@ -665,67 +472,27 @@ namespace MobileGL::MG_Pipe {
             now[Index(MGPipeDirty::NewSamplerViews)] = MGPipeMixShutter(
                 MGPipeMixShutter(MGPipeMixShutter(textureContent, textureParams), ctx.GetTextureBindGeneration()),
                 opaqueUnits);
-            // Bit 13, WIDENED AT P4a FOR BIT 11's REASON and found the same way. glBindSampler
-            // moves NEITHER half of what this used to read: GL_Sampler.cpp's BindSampler_State
-            // goes through NoteTextureUnitTouched and TextureUnit::SetSamplerObject, and both
-            // of those bump the TEXTURE BIND generation - bit 12's. The only two writers of
-            // BumpSamplingResolutionGeneration are PARAMETER changes (SamplerObject.cpp,
-            // TextureObject.cpp). So `glBindSampler(3, a); draw; glBindSampler(3, b); draw`
-            // fired bit 12 twice and bit 13 not once, and the server's BoundSamplerStates[3]
-            // went on naming a's CSO: wrong filtering, with nothing able to see it, because
-            // bind_sampler_states has no pulled twin to fall back on the way the view set does.
-            //
-            // MIXING THE GENERATION IN IS THE FIX RATHER THAN A SECOND GATE ON THE EMITTER,
-            // because that generation is what the unit SET is derived from: a sampler bind
-            // changes which sampler state applies at a unit, and a texture bind changes it too
-            // whenever the unit carries no sampler object and the texture's BUILT-IN sampler is
-            // what applies. Keeping it one shutter per bit is also what keeps the per-subsystem
-            // A/B and the per-bit fire tallies meaning what they say - a bit gated on another
-            // bit's shutter measures neither. The extra fires a plain texture bind now costs
-            // are swallowed by the emitter's own set-hash suppressor, which MGPipeTypes.h makes
-            // mandatory for every kVarTail set for this exact traffic.
+            // Bit 13 mixes in the texture bind generation because glBindSampler moves only that
+            // one (through NoteTextureUnitTouched and TextureUnit::SetSamplerObject); the
+            // sampling-resolution generation moves only on parameter changes. A texture bind can
+            // change the applied sampler too, when the unit has no sampler object. Mixing it in,
+            // rather than gating the emitter on bit 12, keeps the per-bit fire tallies meaningful;
+            // the extra fires are absorbed by the emitter's set-hash suppressor. A missed fire
+            // here means wrong filtering, since bind_sampler_states has no pulled fallback.
             now[Index(MGPipeDirty::NewSamplers)] = MGPipeMixShutter(
                 MGPipeMixShutter(textureParams, ctx.GetSamplingResolutionGeneration()),
                 ctx.GetTextureBindGeneration());
             now[Index(MGPipeDirty::NewShaderImages)] = MGPipeMixShutter(
             MGPipeMixShutter(MGPipeMixShutter(textureContent, textureParams), programImages),
             ctx.GetTextureBindGeneration());
-            // ---- bits 15/16/17, REWRITTEN AT P5e (sb, docs/archive/contracts/CONTRACT-P5E.md §5.6) ----
-            //
-            // ALL THREE USED TO READ `buffers` - the buffer CONTENT aggregate - AND THAT WAS
-            // WRONG IN BOTH DIRECTIONS AT ONCE. Over: any glBufferSubData anywhere fired all
-            // three, which is the same width bit 10 was narrowed out of at P3a. Under, and this
-            // is the half that mattered: glBindBufferBase / glBindBufferRange mutate a binding
-            // point through a returned reference, which moves the slot's own Uint16 version and
-            // NOTHING the content aggregate reads - so
-            // `glBindBufferBase(UNIFORM,1,A); draw; glBindBufferBase(UNIFORM,1,B); draw` fired
-            // no bit at all. Harmless while nothing was emitted for these three; an
-            // under-fire the moment set_shader_buffers is, and under-firing renders stale,
-            // which this file's own rule calls the dangerous direction. Same defect class as
-            // P4a's glBindSampler hole (c0d), closed the same way: the shutter reads the
-            // generation the mutator actually moves (BufferState::NoteBindPointChanged).
-            //
-            // THE CONTENT AGGREGATE LEAVES ALL THREE and is not replaced by anything: whether
-            // the BYTES behind a bound buffer moved is the resource family's question, answered
-            // server-side by the resource record's own Serial, and the record these bits emit
-            // carries {handle, offset, size} - none of which a glBufferSubData changes. A base
-            // binding's extent is the one thing that could, and it does not travel resolved:
-            // Size is kMGPipeWholeBuffer and the server re-resolves it at use (§5.6).
-            //
-            // BIT 15 MIXES THE PROGRAM IDENTITY IN, for bit 12's and bit 14's reason one family
-            // over (fable seams F-1/F-2): the uniform window is resolved FOR THE PROGRAM IN USE
-            // - the UBO loop indexes it by the program's own block bindings - so a glUseProgram
-            // alone must re-open it. `shader` is that identity in both arms (lifetime id x link
-            // version, or stageLinks under a pipeline).
-            //
-            // BIT 16 IS TWO TARGETS, one bit: a storage-buffer bind and an atomic-counter bind
-            // are both "the shader's writable binding points moved", they are emitted together
-            // at the same validate point, and splitting them would buy one suppressed record on
-            // a workload that binds one without the other.
-            //
-            // BIT 17 KEEPS THE TRANSFORM-FEEDBACK GENERATION beside the new bind-point one:
-            // the capture points are span-scoped state latched at Begin, so when a span opens
-            // matters as much as what is bound. Nothing is emitted for it this phase (§5.7).
+            // Bits 15-17 read the buffer bind-point generations that glBindBufferBase/Range move
+            // (BufferState::NoteBindPointChanged), not the buffer content aggregate: the records
+            // carry {handle, offset, size}, a base binding's size travels as kMGPipeWholeBuffer
+            // and is resolved by the server at use, and content is the resource records' job.
+            // Bit 15 mixes in the program identity (`shader`) because the uniform window is
+            // indexed by the program's block bindings. Bit 16 covers storage and atomic-counter
+            // points, which are emitted together. Bit 17 adds the transform-feedback generation
+            // (capture points latch at Begin) and has no emitter.
             now[Index(MGPipeDirty::NewConstBuffers)] = MGPipeMixShutter(
                 ctx.GetBufferBindPointGeneration(BufferTarget::Uniform), shader);
             now[Index(MGPipeDirty::NewShaderBuffers)] = MGPipeMixShutter(
@@ -916,22 +683,12 @@ namespace MobileGL::MG_Pipe {
         AttribDefaults& StagedAttribDefaults() { return m_stagedAttribs; }
         const AttribDefaults& StagedAttribDefaults() const { return m_stagedAttribs; }
 
-        // ---- P3a D-H2: the draw's vertex-FETCH base instance ----
-        //
-        // It lives HERE rather than in a file static because bit 9's shutter has to see it:
-        // an ambient process global cannot cross a pushed boundary, and the value is now an
-        // explicit field of set_vertex_buffers and an input to its content hash, so a draw
-        // whose only change is its base instance has to reach the emitter. Set immediately
-        // before the fill at the three *BaseInstance draw entry points; CONSUMED and cleared
-        // by the validate point once it has been emitted, so a plain draw that follows one
-        // sees 0 again.
-        //
-        // THE CLEAR THAT ACTUALLY RUNS IN PRODUCTION IS THE VALIDATE POINT'S. MGPipeLeaveVerb
-        // clears it too, but no GL entry point calls MGPipeLeaveVerb - only MG_Test's
-        // ScopedPipeVerb and TrackerTest do - so the production guarantee is entirely
-        // PipeFill.cpp's, on BOTH of its exits: the end of step 3, and the no-live-context
-        // early return that skips step 3 altogether. Reset() deliberately does not clear it
-        // (see there): it is this call's argument, not a latch.
+        // The draw's vertex-fetch base instance, held here because bit 9's shutter mixes it in:
+        // it is a field of set_vertex_buffers and an input to its content hash. The three
+        // *BaseInstance draw entry points set it just before the fill. In production only the
+        // validate point clears it, on both exits of PipeFill.cpp (after emission and on the
+        // no-live-context early return); MGPipeLeaveVerb also clears it, but only tests call
+        // that. Reset() must not clear it: it is the current call's argument, not a latch.
         void SetPendingBaseInstance(Uint32 baseInstance) { m_pendingBaseInstance = baseInstance; }
         Uint32 PendingBaseInstance() const { return m_pendingBaseInstance; }
         void ClearPendingBaseInstance() { m_pendingBaseInstance = 0; }

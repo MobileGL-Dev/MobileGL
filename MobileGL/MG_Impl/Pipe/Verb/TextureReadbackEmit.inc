@@ -52,22 +52,13 @@
                     "Pixel packing exceeds the destination or its addressable range."));
         }
 
-        // P9 (W1, docs/archive/contracts/CONTRACT-P9.md §1): MAY A READ INTO THIS PACK BUFFER GO WITHOUT A
-        // REPLY? The answer is the buffer's handle when it may - the read then crosses as
-        // read_pixels_to_buffer / get_texture_image_to_buffer, lands server-side, and the buffer
-        // is marked GPU-written - and the null handle when the reply-slot form has to carry it.
-        // `end` is the last byte past the application's offset the read touches.
-        //
-        // Each refusal is a case the mark cannot keep its promise in, not a preference:
-        //   - MOBILEGL_IPC_PBO_READBACK_SYNC=1, the A/B and red-once arm;
-        //   - no readback route (BufferWritebackIsReachable: no size, or the resource family
-        //     is not on the wire), so SyncGpuWrites would clear the mark with nothing fetched;
-        //   - a MAPPED buffer. Only a persistent mapping can be live across a read, and its
-        //     reader takes the bytes straight from the pointer through no call this side sees:
-        //     no SyncGpuWrites would ever run for it, and the pixels would never arrive;
-        //   - a range MGPSubData cannot name (a buffer offset stops at 2^31-1);
-        //   - a buffer that never crossed: it has no handle for the server to write into, and
-        //     the reply form's UploadSubData is what creates it.
+        // Returns the pack buffer's handle when a read into it may skip the reply: the read
+        // then crosses as read_pixels_to_buffer / get_texture_image_to_buffer, lands
+        // server-side, and the buffer is marked GPU-written. Returns null, selecting the
+        // reply-slot form, when that mark could not be honoured: MOBILEGL_IPC_PBO_READBACK_SYNC=1;
+        // no readback route (BufferWritebackIsReachable); a mapped buffer, whose persistent
+        // reader never goes through SyncGpuWrites; an `end` (last byte past the application
+        // offset) above MGPSubData's 2^31-1 offset limit; or a buffer with no handle yet.
         MG_Pipe::MGPipeHandle PackBufferReadbackTarget(const SharedPtr<MG_State::GLState::BufferObject>& pbo,
                                                        Uint64 end) {
             if (!pbo) return MG_Pipe::kMGPipeNullHandle;

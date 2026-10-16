@@ -9,35 +9,14 @@
 #pragma once
 #include <Includes.h>
 
-// The render-state CSO cache (ARCHITECTURE.md 4.5.2 / 5.3, P2 brief D7).
-//
-// THE LOOKUP, and the first step is the whole point:
-//   1. m_pipelineStateVersion (widened) did not move -> reuse the last handle. ZERO hashing,
-//      zero probing, and nothing is emitted unless m_version also moved. That is the steady
-//      state of every frame, and it is why the tracker asks the cache at all only when the
-//      dirty walk says the pipeline version moved.
-//   2. moved -> hash the 396 pipeline bytes, probe, and on a hit CONFIRM WITH A MEMCMP
-//      before reusing the handle. ARCHITECTURE.md 4.1 says content addressing on an
-//      xxHash; a bare 64-bit equality would let a collision alias two different render
-//      states onto one CSO, which is silent wrong pixels with no gate that can see it.
-//      Hashed constant-state caches confirm a hit with a full-key memcmp for the same reason.
-//      The memcmp only ever runs on a pipeline-version change, i.e. never in the steady state.
-//   3. miss -> mint a slot, emit create_render_state with every pipeline chunk, then bind.
-//
-// CAPACITY 64 (ROADMAP.md P2). 64 x (8 + 8 + 396 + 8) = about 26 KB per context. ROADMAP.md
-// open question 4 says 64 is provisional and the counters retune it at P13; this ships 64
-// and publishes the mint / bind / evict counters that retune reads.
-//
-// THE NEGATIVE CONTROL. kMGPipeBehaviourNoCsoContentAddressing (bit 63 of the runtime
-// MOBILEGL_PIPE_PUSH bitmask) turns off the PROBE and the handle reuse, not the records:
-// every pipeline-version change then mints a fresh CSO, binds it and evicts, which is
-// precisely "whole-block content addressing" and reproduces the regression
-// RenderState.h records. It is what separates "push is slower" from "the CSO design is
-// slower", and CsoContentAddressingScenario (package E) is the always-on ctest that stops
-// the switch from rotting.
-//
-// Header-only for the same ownership reason as Tracker.h: the root CMakeLists.txt that
-// would name a new .cpp is package A's and is frozen behind the p2/contract tag.
+// The render-state CSO cache (ARCHITECTURE.md §2.3, §5.3). EmitRenderState calls Acquire only
+// when the pipeline-state version moved, so the steady state does no hashing. Acquire hashes the
+// 396 pipeline bytes, probes, and confirms a hit with a memcmp: a bare 64-bit match could alias
+// two render states onto one CSO, which is silently wrong pixels. A miss mints a slot and emits
+// create_render_state with every pipeline chunk. 64 entries, LRU, about 26 KB per context; the
+// counters give the hit rate. kMGPipeBehaviourNoCsoContentAddressing (bit 63 of
+// MOBILEGL_PIPE_PUSH) disables reuse as a negative control, which CsoContentAddressingScenario
+// keeps exercised.
 #include <Config.h>
 #include <MG_Impl/Pipe/SlotAllocator.h>
 #include <MG_Pipe/MGPipe.h>

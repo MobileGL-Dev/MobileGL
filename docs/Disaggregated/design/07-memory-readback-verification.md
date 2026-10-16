@@ -29,6 +29,22 @@ T2 下 client 侧推送三件套：不做 map/unmap 命令对（payload 带 `has
 - `resource_respecify`（`MGPipeResourceRespecifyWantsItsReply`）：wire 臂上 buffer 那半不等；纹理那半等到对象的 create 被接受（`MGPipeHandleIsPublished`），之后 acceptance 已是 client 知道的事实，首次使用时付一次阻塞的 create；create 被拒则闩不置位，后续照常等真答案，代价是吞吐而不是静默。
 - monolith 下答案在调用线程上直接返回、没有代价，谓词保持原答案（纹理那半照收）。
 
+#### 13.1.2 client 侧保守 GPU 写集合
+
+`BufferObject::SyncGpuWrites` 在应用线程上、于 `glMapBuffer` / `glGetBufferSubData` 时回答"GPU 是否可能写过这块 buffer"。后端的标记点在 server 侧，逐次去问是稳态禁止的 roundtrip，所以 client 在每条 draw / dispatch 记录发出之前，从自己持有的绑定构建这个集合（`MG_Impl/Pipe/Verb/GpuWriteSet.h`）。
+
+- 宁多勿少：多标一次的代价是一次回读，漏标则静默读到陈旧 shadow。每个生产者有计数器（`ProducerMarkCount`），单元用例断言它确实触发。
+- 前四个生产者对应后端标记点：SSBO 绑定点、atomic counter 绑定点（标全部 touched 点，比后端宽）、`Access != GL_READ_ONLY` 的 image buffer texture、XFB 捕获目标。后端故意窄的两处照搬：只读 image 绑定不标；image 遍历在 draw 准备时做，不在 `glBindImageTexture` 时做。
+- 后端没有的两个生产者：读进 pack PBO 的 `glReadPixels` 发出即返回、只做标记，拷贝推迟到第一次真要读时；传输下 `glEndTransformFeedback` 不再无界等 fence，只标记捕获目标（monolith 仍等）。
+- 收窄尚未实现：`MGPipeClientOnGpuWritten` 只接受一个整 buffer 范围；零个范围留给将来的"已完全收窄"，不能当作整块已写。
+- 不覆盖后端自己的 scratch buffer（Espryt 的转换顶点流与 primitive-restart 替换 buffer、Magma 的 UBO ring）：后端那边同样没有 `MarkGpuWritten`，是两边共有的洞。
+
+#### 13.1.3 glReadPixels：线上只有矩形，pack 状态留在 client
+
+`read_pixels` 记录带的是矩形而不是布局：`MGPReadbackInfo::DstSize` 是紧凑的 `w*h*bytesPerPixel`，server 用中性 pack 状态读进这段紧凑行（就是 reply payload），client——唯一持有应用 pack 状态的一侧——再按应用的 `GL_PACK_*` 把各行散射到应用指针，行间空隙不写。若 `DstSize` 取打包后的尺寸，server 按它分配、后端又按实时 pack 状态写，就会越界（4x3 RGBA8、`PACK_ROW_LENGTH=8`、`SKIP_ROWS=1`、`SKIP_PIXELS=2`：分配 80 B，驱动写到第 120 B）。规则只关乎布局，深度与深度模板读同样适用。
+- 紧凑答案大于一个 reply slot（`LinkTerms.maxReplyBytes`）时切的是读，不是 reply：一行放得下就切成 `floor(maxReplyBytes / rowBytes)` 行的整宽行带，否则把每行切成 `floor(maxReplyBytes / bpp)` 像素的列段。每段是一条普通 `read_pixels` 记录，带自己的框与紧凑 `DstSize`，各自按 pack 状态散射；段按行主序恰好覆盖矩形一次，且在紧凑布局里连续，中性 pack 的快路径因此仍可直接读进应用指针（`PlanReadbackBands` / `ForEachReadbackBand`）。
+- 只有连一个像素都放不进 reply（含没有 reply 池的链路）时，client 才在发射前具名拒绝为 `Fatal{ReplyTooLarge}`：像素不能拆得比自身更小。
+
 ### 13.2 五部分验证门（取代 monolith 的字节一致门）
 
 1. **接口纯度**：A 门 include 图（`scripts/check_include_closure.py`）、B 门 server 镜像不引用 `MG_State::GLState` 与 glslang（P6 的 a6 实测 server 仍链 `MG_Impl`，由 `scripts/link_ratchet.py` 的下行棘轮追踪；P13 把 172 条降到 27 条具名债务、`# P13` 注解清零并由脚本拒绝回潮，W7 的 `MobileGL_server_linkcheck` 把它变成真链接）、C 门 `MG_Backend` 里零 `pGLContext`；外加"每个后端 memo 键都是 `{slot, gen}`"（`HandleRecycleScenario`）。

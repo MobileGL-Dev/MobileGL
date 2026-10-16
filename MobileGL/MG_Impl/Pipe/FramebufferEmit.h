@@ -9,22 +9,9 @@
 #pragma once
 #include <Includes.h>
 
-// The CLIENT side of P4a's framebuffer family: set_framebuffer_state, emitted at the validate
-// point once per bound TARGET that moved, or once with Target = Both when the two bindings
-// name the same object.
-//
-// THIS FILE IS CREATED BY THE CONTRACT COMMIT AND FILLED BY THE PACKAGE THAT OWNS IT, and the
-// split is the whole reason it exists this early. MG_Impl/Pipe/PipeFill.cpp is the contract
-// package's for the entire phase - it carries Coverage.def's enum-coupled block, the validate
-// point and the death helpers - so the emitter package must not edit it. What it edits instead
-// is this header: the emitter's BODY, and the value of kMGPipeWiredFramebufferSubsystem below.
-// That is what makes "no file is touched twice by two packages" structural rather than a
-// convention, and it is what the bb2a236d semantic-merge trap taught (two branches green
-// separately, the integrated tree not compiling).
-//
-// HEADER-ONLY, for the ownership reason Tracker.h and ResourceTracker.h both state: the root
-// CMakeLists.txt that would name a new .cpp is the contract package's and is frozen behind the
-// tag. MG_Impl/Pipe/PipeFill.cpp is the one translation unit that includes it in the library.
+// Client side of the framebuffer family: set_framebuffer_state, emitted at the validate point
+// once per bound target that moved, or once with Target = Both when both bindings name the
+// same object, and before a DSA call that names a framebuffer (EmitFramebufferByName).
 #include <MG_Impl/Pipe/SetHashSuppressor.h>
 #include <MG_Impl/Pipe/SlotAllocator.h>
 #include <MG_Impl/Pipe/TextureEmit.h>
@@ -179,24 +166,13 @@ namespace MobileGL::MG_Pipe {
     }
 
     // ---------------------------------------------------------------------------------
-    // D-C4: ContentHash, and the one input it must not swallow
+    // ContentHash
     // ---------------------------------------------------------------------------------
-    //
-    // XXH64 over the WHOLE record with ContentHash itself zeroed, computed field-wise into a
-    // zero-initialised staging copy so that no padding byte can enter the hash. Two jobs: the
-    // server's render-pass memo key, and this client's emission suppressor.
-    //
-    // IT MUST COVER Fbo. A recycled framebuffer handle whose successor happens to carry an
-    // identical attachment set would otherwise be suppressed against its predecessor; Fbo
-    // carries Gen, so it cannot be.
-    //
-    // IT MUST COVER DrawBuffers[8], and this is the trap worth naming. The backend derives the
-    // fragColor BROADCAST COUNT from the draw-buffer array, and it does that at the verb, from
-    // the framebuffer state it then holds, precisely so a program can relink inside the same
-    // draw. A hash that did not cover the array would let a suppressed set_framebuffer_state
-    // mean "the draw buffers did not move" when they had, and the shader would be specialised
-    // for the previous output shape. With the array in the hash, a suppression provably means
-    // the array did not move, which provably means the broadcast count did not move.
+    // XXH64 over the whole record with ContentHash zeroed, copied field by field into a zeroed
+    // staging record so padding never enters it. It keys the server's render-pass memo and this
+    // client's suppressor, so it must cover Fbo (its Gen separates a recycled handle with the
+    // same attachments) and DrawBuffers (the backend derives the fragColor broadcast count from
+    // them at the verb, so a suppressed record must mean that count did not move).
     inline void MGPipeCopySurfaceForHash(MGPSurface& dst, const MGPSurface& src) {
         dst.Res = src.Res;
         dst.InternalFormat = src.InternalFormat;
@@ -319,23 +295,12 @@ namespace MobileGL::MG_Pipe {
             return bytes;
         }
 
-        // ID-19(c): EVERY DSA ENTRY POINT THAT HANDS A FRAMEBUFFER TO THE SERVER BY NAME IS
-        // PRECEDED BY A RECORD FOR IT, and that is the phase's main correction rather than a
-        // nicety. With only the two BOUND-target records, glClearNamedFramebufferfv(fbo) on an
-        // unbound fbo made the backend mint a fresh driver framebuffer with NO ATTACHMENTS,
-        // find no record for it, decline, and issue the clear against it anyway -
-        // GL_INVALID_FRAMEBUFFER_OPERATION and nothing cleared, where the legacy arm cleared
-        // correctly (esprytobj C-1).
-        //
-        // THE TARGET IS Named ONLY WHEN THE OBJECT IS BOUND TO NEITHER BINDING. A record always
-        // writes FramebufferRecords[Fbo.Slot]; Draw/Read/Both ADDITIONALLY set the bound
-        // handle(s). So handing a currently-bound framebuffer a Named record would overwrite
-        // the bound record's Target with one that says "no binding" while BoundFramebuffer
-        // still names it, and the server would read a record whose Target contradicts the
-        // binding it is resolved through. Re-asserting the binding the object already has is
-        // free (the content hash suppresses it) and keeps the two consistent.
-        //
-        // Returns the bytes that went on the wire.
+        // Emits a record for `fbo` before a DSA call hands it to the server by name; without
+        // it, a named clear of an unbound framebuffer would find no record and run against an
+        // empty driver framebuffer. Target is Named only when `fbo` is bound to neither binding:
+        // every record writes FramebufferRecords[Fbo.Slot], and a Named record for a bound
+        // object would leave a Target that contradicts BoundFramebuffer. Re-asserting the
+        // existing binding is suppressed by the content hash. Returns the bytes sent.
         Uint64 EmitFramebufferByName(const FramebufferObject& fbo) {
             if (!MGPipeFramebufferSubsystemEnabled()) return 0;
             MGPipeFramebufferTarget target = MGPipeFramebufferTarget::Named;

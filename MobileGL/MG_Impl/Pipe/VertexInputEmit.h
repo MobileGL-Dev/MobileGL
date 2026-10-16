@@ -10,33 +10,13 @@
 #include <Includes.h>
 #include <Config.h>
 
-// The CLIENT side of P3a's vertex-input family (brief D-G, D-H, D-I): the bound VAO's
-// format as create/bind_vertex_elements, its buffers as set_vertex_buffers with an explicit
-// baseInstance, and its element binding as set_index_buffer.
-//
-// UNLIKE THE RESOURCE FAMILY, these three emit at the VALIDATE POINT, from
-// MGPipeValidateForVerb's step 3 in the fixed order elements -> buffers -> index. That is
-// the ordinary rule (ARCHITECTURE.md 5.1); the resource family is the one exception to it.
-//
-// THE CSO IS IDENTITY-ADDRESSED, NOT CONTENT-ADDRESSED (D-G1, a recorded deviation from
-// ARCHITECTURE.md's 1024-entry content-addressed scheme). One handle per frontend
-// VertexArrayObject, minted off its lifetime id, and create_vertex_elements is RE-ISSUED on
-// the same handle whenever the configuration moves - legal, because MGPipeHandle::Gen
-// increments only on slot reuse and never on a respecify. Espryt has no vertex-elements CSO
-// to share: its twin owns one driver VAO name plus 64 scratch buffer ids, which two frontend
-// VAOs cannot share, so content addressing would be strictly slower on the only backend this
-// phase touches. P7 adds the hash-probe-memcmp layer above these same three calls when
-// Magma's VertexInputStateFactory takes the CSO over.
-//
-// WHAT THE UNIT GATE READS. G6 is "the emitted blob + set + index record reproduce exactly
-// what the backend's VAO twin reads from the frontend today, field by field, for all 32
-// slots", and G7 is a scripted control that stops the conversion copying ONE field and
-// expects the suite to go red NAMING it. So the conversion is a pure function per field
-// (MGPipeBuildVertexAttribWire / MGPipeBuildVertexBindingPointWire) and the staging buffers
-// the emitter builds into are readable afterwards - the emitter passes m_blob and m_entries
-// straight to the applier, so "what was emitted" costs no copy at all.
-//
-// HEADER-ONLY, for the ownership reason Tracker.h states in full.
+// Client side of the vertex-input family: the bound VAO's format as create/bind_vertex_elements,
+// its buffers as set_vertex_buffers (with an explicit baseInstance) and its element binding as
+// set_index_buffer, emitted at the validate point in that order. The vertex-elements CSO is
+// addressed by VAO identity, not content (ARCHITECTURE.md §2.3): one handle per VAO lifetime id,
+// with create_vertex_elements re-issued on it when the configuration moves, because Espryt's
+// twin owns a driver VAO that two VAOs cannot share. The wire conversion is one pure function
+// per view, and the emitter builds into members tests can read back without a copy.
 #include <MG_Impl/Pipe/ResourceTracker.h>
 #include <MG_Impl/Pipe/SetHashSuppressor.h>
 #include <MG_Impl/Pipe/SlotAllocator.h>
@@ -57,25 +37,14 @@ namespace MobileGL::MG_Pipe {
     // D-G2: the wire conversion, one pure function per view
     // ---------------------------------------------------------------------------------
 
-    // EVERY FIELD OF VertexAttribute THE WIRE FORM CARRIES, and nothing else:
-    //
-    //   Divisor is deliberately absent - it is resolved per binding point and travels in
-    //     MGPVertexBuffer::Divisor, which is where the backend's glVertexAttribDivisor reads
-    //     it. Carrying it twice would let a malformed record disagree with itself.
-    //   LegacyStride / LegacyPointer are deliberately absent - they are the
-    //     glGetVertexAttrib* query answers and nothing but the query path reads them, so
-    //     they stay client-side.
-    //   Buffer is deliberately absent - identity travels in set_vertex_buffers, which is
-    //     what keeps this record stable while the buffers under it change.
-    //   Stride is the RESOLVED distance and a surviving 0 is MEANINGFUL: a pointer call's 0
-    //     was already resolved to the element size by the frontend, so a 0 here can only
-    //     have come from the binding model, where it means every vertex reads the SAME
-    //     element. Collapsing it back into the element size is what made
-    //     KHR-GL43.vertex_attrib_binding.basic-input-case7/8 read past the buffer.
-    //   IsLong travels SEPARATELY from Type == Float64: VertexAttribFormat(GL_DOUBLE) reads
-    //     doubles and asks for them converted to float, VertexAttribLFormat keeps all 64
-    //     bits, and the backend's fp64 narrowing and its Adreno disabled-attribute
-    //     workaround both key on telling the two apart.
+    // The wire form carries every VertexAttribute field except Divisor (sent once, per binding
+    // point, in MGPVertexBuffer::Divisor), LegacyStride/LegacyPointer (query answers, client-only)
+    // and Buffer (identity travels in set_vertex_buffers, so this record stays stable while the
+    // buffers change). Stride is the resolved distance: a 0 here comes only from the binding
+    // model and means every vertex reads the same element, so it must not become the element
+    // size. IsLong is separate from Type == Float64: VertexAttribFormat(GL_DOUBLE) converts to
+    // float, VertexAttribLFormat keeps 64 bits, and the backend's fp64 narrowing and Adreno
+    // disabled-attribute workaround tell the two apart.
     inline MGPVertexAttribWire MGPipeBuildVertexAttribWire(const MG_State::GLState::VertexAttribute& attrib,
                                                            Uint32 bindingIndex) {
         // ASSERT RATHER THAN ASSUME, in both directions, because the three narrowing casts
@@ -425,22 +394,12 @@ namespace MobileGL::MG_Pipe {
         Uint64 VertexBufferSetCount() const { return m_bufferSets; }
         Uint64 IndexBufferSetCount() const { return m_indexSets; }
 
-        // ---- C-1: "does the applier hold a record for exactly this handle?" ----
-        //
-        // The CSO's death path (MGPipeEmitVertexElementsDestroyAndFree) needs that answer and
-        // MUST NOT GUESS IT FROM THE SLOT. A VertexElementsCso slot can exist with no record
-        // behind it, because a backend that keys its twins on the handle mints the slot itself
-        // (DirectGLES' BackendSlotTable::GetOrCreate -> MGPipeSlots().Acquire) whether or not
-        // bit 8 ever asked this client to emit anything - which is exactly what a
-        // MOBILEGL_PIPE_PUSH=0x7f lane runs. delete_vertex_elements on such a handle is a
-        // REFUSED call, and the applier's resolver asserts on a refusal
-        // (PipeApply.cpp's ResolveVertexElements), i.e. a stop in a verify build.
-        //
-        // Kept OUT of Reset(), unlike the create/bind latch beside it, and for the mirror
-        // image of Reset()'s own reason: "a fresh context is a fresh server" is true of the
-        // per-context half of this table, and object RECORDS are precisely what
-        // MGPipeApplierReset does not clear (PipeApply.h's two halves). This half tracks those
-        // records, so it lives exactly as long as they do.
+        // Whether the applier holds a vertex-elements record for exactly `handle`. The death
+        // path (MGPipeEmitVertexElementsDestroyAndFree) must ask this instead of inferring it
+        // from the slot: a backend that keys its twins on handles (DirectGLES'
+        // BackendSlotTable) can mint a VertexElementsCso slot with no record behind it, and
+        // delete_vertex_elements on such a handle is refused, which the applier asserts on.
+        // This half of the latch survives Reset(), because MGPipeApplierReset keeps records.
         Bool RecordIsPublished(MGPipeHandle handle) const {
             if (MGPipeHandleIsNull(handle)) return false;
             const SizeT slot = handle.Slot;

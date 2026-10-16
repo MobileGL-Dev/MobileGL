@@ -88,30 +88,12 @@ namespace MobileGL::MG_Record {
             return value != nullptr && value[0] == '1' && value[1] == '\0';
         }
 
-        // ---- WHY THERE ARE TWO OF THESE KNOBS, measured rather than assumed -----------------
-        //
-        // MOBILEGL_IPC_E2_DROP_CLEAR came first and it does exactly what it says: every glClear
-        // stops at the client and no Clear record reaches the ring. It STILL COULD NOT TURN THE
-        // E2 RETRACE RED (joint-v1.md 3: SSIM 1.000000, mismatchPixels=0 with the knob armed and
-        // the arming WARN in the library's own log). That is not a broken knob, it is OpenRA:
-        // `apitrace dump` of openra.trace over the 31249 replayed calls counts 30 glClear, 30
-        // glXSwapBuffers and 788 glDrawArrays, and the final frame issues its clear at call
-        // 30197 and then covers the surface four times over with a terrain layer
-        // (`glDrawArrays(GL_TRIANGLES, first=56064, count=16128)` x4, under a scissor of
-        // -24,-24,688x528 over a 640x480 surface) before the snapshot at 31249. A frame that
-        // overdraws every pixel it clears has a picture that does not depend on the clear, so
-        // "drop the clear" is a control whose observable is invisible to THIS trace - R-16's
-        // exact defect, a gate that cannot go red for its own reason.
-        //
-        // MOBILEGL_IPC_E2_DROP_DRAW is the honest form of the same statement for a trace lane:
-        // drop every DrawVbo record and the picture can only be the clear colour. It is the
-        // control that makes "the wire carried the frame" falsifiable, because the thing it
-        // removes is the thing the golden is made of.
-        //
-        // DROP_CLEAR IS KEPT rather than retired: it drops a real record, it now publishes the
-        // count it dropped (below), and a scenario whose picture DOES depend on its clear -
-        // ClearThenReadPixelsScenario is the reduced path's target A - is where it is
-        // observable. What it is no longer allowed to be is E2's retrace control.
+        // Two negative controls. MOBILEGL_IPC_E2_DROP_DRAW drops every DrawVbo record, so a
+        // frame that really crosses the wire can show only the clear colour; it is the OpenRA
+        // retrace's control. MOBILEGL_IPC_E2_DROP_CLEAR cannot be: OpenRA's last frame clears,
+        // then covers the whole 640x480 surface four times before the snapshot, so dropping the
+        // clear leaves SSIM at 1.0 (measured). It stays for scenarios whose picture depends on
+        // the clear, such as ClearThenReadPixelsScenario.
         void ArmControlKnobs() {
             g_dropClearEmission = ReadControlKnob("MOBILEGL_IPC_E2_DROP_CLEAR");
             g_dropDrawEmission = ReadControlKnob("MOBILEGL_IPC_E2_DROP_DRAW");
@@ -591,29 +573,14 @@ namespace MobileGL::MG_Record {
             EmitDrawRecord("DrawArrays", info, &range, 1, nullptr, 0, nullptr);
         }
 
-        // =============================================================================
-        // P5b d1 - the nineteen indexed / instanced / multi-draw / indirect draw slots
-        // (docs/archive/contracts/CONTRACT-P5B.md §2 d1). ONE ROW, draw_vbo (59): the record carries the GL
-        // call verbatim (rule D) beside the handle the P8 form will dispatch on, and the sink
-        // reproduces the backend call the monolith makes.
-        // =============================================================================
-        //
-        // Every entry point below is: read the bindings, plan the head and the ranges (the pure
-        // functions the unit cases drive), then EmitDrawRecord - which runs the SAME pre-verb
-        // hooks in the SAME order as EmitDrawArrays (push, then mark walk, then the record;
-        // ID-18), honours the E2 draw-drop control for every draw record and not only the P5
-        // one, stages a client index array into SEG_STAGE when there is one, and emits.
-        //
-        // Client arrays and client indices become owned ordinary buffer resources.
-        // Remaining invalid/unrepresentable draw shapes are named before encoding:
-        //   +CLIENT_COMMANDS   an indirect draw with no GL_DRAW_INDIRECT_BUFFER bound: `indirect`
-        //                      would be a host pointer, which rule B forbids on the wire.
-        //   +UNBOUND_PARAMETER an *IndirectCount with no GL_PARAMETER_BUFFER (the frontend has
-        //                      already raised INVALID_OPERATION for it; stated so the emitter
-        //                      cannot send a null handle where the sink dereferences one).
-        //   +INDEX_OFFSET      an element-buffer byte offset that is not a whole number of
-        //                      indices (or past 2^32 of them): the record spells Start in
-        //                      indices, and rounding would draw from the wrong element.
+        // ---- Indexed, instanced, multi-draw and indirect draws ----
+        // All nineteen slots emit one draw_vbo record, the GL call verbatim beside the handles,
+        // which the server's sink turns into the backend call the monolith makes. Each entry
+        // point reads the bindings, plans the head and ranges, then calls EmitDrawRecord: the
+        // pre-verb hooks in EmitDrawArrays' order (push, mark walk, record), the drop-draw
+        // control, client arrays and indices as owned buffers. Refused by name: +CLIENT_COMMANDS
+        // (no indirect buffer), +UNBOUND_PARAMETER (no parameter buffer; the sink dereferences
+        // it) and +INDEX_OFFSET (a byte offset that is not whole indices; Start counts indices).
 
         [[noreturn]] void RefuseDrawByName(const char* slot, const char* qualifier) {
             char name[96];
@@ -974,28 +941,11 @@ namespace MobileGL::MG_Record {
                                 nullptr, 0, nullptr);
         }
 
-        // How many bytes glReadPixels will pack for this rectangle, from the PACK half of the
-        // pixel-store state.
-        //
-        // ID-49: THE PACK STATE NEVER CROSSES FOR A READ, AND DstSize IS THE TIGHT EXTENT.
-        // The first version of this computed GL 4.6 8.4.4's PACKED size - row length, skips,
-        // alignment - and handed it over as DstSize. v1's server allocates exactly DstSize and
-        // the real backend honours the live pack state, so a 4x3 RGBA8 read with
-        // PACK_ROW_LENGTH=8, SKIP_ROWS=1, SKIP_PIXELS=2 allocated 80 bytes and the driver wrote
-        // to byte 120. That is the shape of the joint inproc lane's two
-        // DepthReadbackHonoursThePackPixelStoreParameters SEGFAULTs, on both backends.
-        //
-        // So the wire carries a RECTANGLE and not a layout: the server reads with NEUTRAL pack
-        // state into a tight w*h*bytesPerPixel run that IS the reply payload, and the CLIENT -
-        // which is the side that holds the application's pack state, and the only side that
-        // can - scatters those rows into the application's pointer. "OnReadPixels writes
-        // exactly DstSize bytes" still holds; DstSize is now a number both sides derive from
-        // the same three values instead of one side deriving it from state the other cannot
-        // see.
-        //
-        // IT IS FORMAT-AGNOSTIC ON PURPOSE. The depth and depth-stencil reads the 21 split
-        // entries touch take the same rule with no special case, because the rule is about the
-        // LAYOUT and not about the component: bytesPerPixel is whatever the format sizes to.
+        // Bytes per pixel of a glReadPixels format/type pair, for the tight extent. The pack
+        // state never crosses for a read: DstSize is the tight w * h * bytesPerPixel run the
+        // server reads with neutral pack state, and the client scatters it under the
+        // application's GL_PACK_* state (ARCHITECTURE.md §13.1.3). The rule is about layout,
+        // so depth and depth-stencil reads need no special case.
         Uint64 ReadbackBytesPerPixel(GLenum format, GLenum type) {
             const TextureInputFormat inputFormat =
                 MG_Util::ConvertGLEnumToTextureInputFormat(format);
@@ -1284,27 +1234,13 @@ namespace MobileGL::MG_Record {
             });
         }
 
-        // =============================================================================
-        // CLASS B - P5b package i1: image bind, compute, barriers, copy-image, SSBO block
-        // (docs/archive/contracts/CONTRACT-P5B.md §2 i1). Seven slots, five wire rows.
-        // =============================================================================
-        //
-        // RULE D, WHICH IS WHY THESE ARE SHORT. A P5b verb crosses AS THE CALL: the record
-        // carries the GL arguments verbatim - the enums as tokens, the GL names the backend
-        // keys on - beside the handle the P7/P8 form will dispatch on instead, and the server's
-        // ServerVerbSink reproduces the backend call the monolith makes. The backend keeps
-        // reading the frontend state it reads today through the BARRIER-PULLED fields of its
-        // verb class, which the record's own verb stamp is what makes legal. So a migration is
-        // one emitter here plus one sink body there, and nothing in the backend moves.
-        //
-        // THE HANDLES ARE LOOKED UP, NEVER MINTED, and that is a ruling (i1-v1 §4). The sinks
-        // below dispatch on the GL NAME - that is the whole point of carrying it - so a handle
-        // is carried for P7's sake only. FindByLifetimeId answers the handle the resource
-        // subsystem has already published for this object and kMGPipeNullHandle when it has
-        // published none; Acquire would MINT one here instead, at a call site that emits no
-        // create record, and the server would then be handed an identity it has never seen.
-        // A null Res/Src/Dst/ShaderCso therefore means "no handle published yet", which is a
-        // true statement, rather than a slot nobody allocated.
+        // ---- Image bind, compute, barriers, copy-image, storage-block binding ----
+        // Each verb crosses as the call: the record carries the GL arguments verbatim (enum
+        // tokens, GL names) beside the objects' handles, and the server's verb sink makes the
+        // backend call the monolith makes. Handles are looked up with FindByLifetimeId, never
+        // minted: this call site emits no create record, so a minted handle would name an
+        // object the server has never seen. A null Res/Src/Dst/ShaderCso means none is
+        // published yet.
 
         MG_Pipe::MGPipeHandle PublishedTextureHandle(
             const SharedPtr<MG_State::GLState::ITextureObject>& texture) {
@@ -1512,27 +1448,14 @@ namespace MobileGL::MG_Record {
                                 nullptr, 0, nullptr, 0, nullptr);
         }
 
-        // CLASS B - P5b package t2: the transform-feedback spans, the XFB object bind and the
-        // tessellation patch parameter (docs/archive/contracts/CONTRACT-P5B.md §2 t2).
-        // =============================================================================
-        //
-        // SIX SLOTS, SIX ROWS, AND NOT ONE OF THEM STARTS A SHADER. Every one of the six is a
-        // control call - it opens, closes, pauses, resumes or re-targets a capture span, or sets
-        // the patch size the next tessellation draw uses - so each takes BeforeReadOnlyVerb(),
-        // which is CONTRACT-P5B.md §4's rule for "a verb that reads buffers but starts no
-        // shader" naming the XFB and patch controls by hand. The GPU-WRITE MARK FOR THE CAPTURE
-        // TARGETS IS NOT TAKEN HERE and that is deliberate: it belongs at the END of the span,
-        // after the record and before GLContext::EndTransformFeedback clears the live bindings,
-        // which is exactly where b1 already put it (GL_Drawing.cpp's
-        // MarkEndTransformFeedbackCaptureTargets). Taking it here as well would mark the same
-        // buffers twice and taking it INSTEAD of there would mark nothing.
-        //
-        // P5f fe extends Begin with the immutable capture snapshot: program CSO handle,
-        // XFB object lifetime id, and four buffer handle/range pairs. Buffer resource records
-        // precede this verb through BeforeReadOnlyVerb; AcquireShaderCso below publishes the
-        // program archive before Begin. Deferred driver Begin and End therefore need no
-        // frontend program or binding-point lookup. set_stream_output_targets stays unused:
-        // this state changes at the capture-span boundary, so it rides Begin itself.
+        // ---- Transform-feedback spans, XFB object bind, patch parameter ----
+        // These six start no shader (they open, close, pause, resume or retarget a capture
+        // span, or set the patch size), so each takes BeforeReadOnlyVerb(). The capture
+        // targets' GPU-write mark belongs at the end of the span, where GL_Drawing.cpp calls
+        // MarkEndTransformFeedbackCaptureTargets before the bindings are cleared; marking here
+        // too would mark twice. Begin carries the capture snapshot (program CSO, XFB lifetime
+        // id, four buffer ranges), so the deferred driver Begin/End need no frontend lookup;
+        // the state changes only at span boundaries, so set_stream_output_targets is unused.
 
         void EmitBeginTransformFeedback(GLenum primitiveMode) {
             VerbChannel session = ChannelFor("BeginTransformFeedback");

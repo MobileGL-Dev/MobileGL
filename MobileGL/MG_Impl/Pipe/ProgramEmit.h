@@ -9,32 +9,14 @@
 #pragma once
 #include <Includes.h>
 
-// The CLIENT side of P4a's program family: create/bind/delete_shader_state,
-// set_draw_program, set_dispatch_program and set_global_constants.
-//
-// WHERE create_shader_state IS EMITTED FROM, and why it is not the tracker's business: the
-// tracker's bit-6 shutter reads GetCurrentProgram() and DELIBERATELY NOT GetProgramForDraw(),
-// because the tracker must not force a compile just to answer "did the shader move". So the
-// tracker keeps its shutter and the EMITTER joins - from the same GetProgramForDraw() /
-// GetProgramForDispatch() call the verb is about to make anyway, so no join happens that would
-// not have happened. Emitting from the compile pool's terminal continuation is a real
-// asynchronous win and is a LATER phase's: in monolith the applier is one function call away,
-// so it is unmeasurable here.
-//
-// WHAT THE SERVER STILL SPECIALISES, so nobody reads create_shader_state as self-contained
-// and produces a per-draw rebuild: the draw-FBO clamp masks, the fragColor broadcast count,
-// the storage-block binding signature, the atomic-counter set, the live image formats and the
-// patch parameters are all inputs a backend program depends on BEYOND the artefacts. This call
-// publishes the ARTEFACTS; the server specialises at the verb from the state it holds. The
-// clause count does not shrink - its inputs move.
-//
-// THE ARTEFACTS DO NOT TRAVEL IN MONOLITH. All seven of MGPProgramDesc's blob refs are
-// declared with Size 0 and the LinkArtifacts / SpirvArtifacts ride beside the record through
-// MGPipeApplyCreateShaderState's companion pointers, so the codec is never called on the hot
-// path; the verify build is where it is exercised.
-//
-// THIS FILE IS CREATED BY THE CONTRACT COMMIT AND FILLED BY THE PACKAGE THAT OWNS IT - see
-// FramebufferEmit.h for why, in full.
+// Client side of the program family: create/bind/delete_shader_state, set_draw_program,
+// set_dispatch_program and set_global_constants. create_shader_state is emitted from the
+// GetProgramForDraw() / GetProgramForDispatch() join the verb makes anyway; the tracker's
+// shutter reads GetCurrentProgram() so asking "did the shader move" never forces a compile.
+// The record carries the artifacts only; the server specialises at the verb for the draw-FBO
+// clamp masks, fragColor broadcast, storage-block bindings, atomic counters, image formats and
+// patch parameters (ARCHITECTURE.md §7). In monolith the artifacts ride beside the record as
+// companion pointers with Size 0 blob refs, so the codec runs only in the verify build.
 #include <MG_Impl/Pipe/CompositeResolver.h>
 #include <MG_Impl/Pipe/SlotAllocator.h>
 #include <MG_Pipe/MGPipe.h>
@@ -72,24 +54,14 @@ namespace MobileGL::MG_Pipe {
         return version != kMGPipeGlobalConstantsNeverUploaded;
     }
 
-    // A program's identity for the wire, out of the SNAPSHOT the last link consumed and never
-    // out of the live attach list: glAttachShader and glCompileShader take effect only at the
-    // NEXT link and neither moves m_linkVersion, so a stage mask built from GetAttachedShaders
-    // would describe a program that does not exist yet. GetLinkedShaderStages() is also what
-    // indexes GetGeneratedSpirv(), so the two halves of this descriptor are guaranteed to agree
-    // by construction rather than by care.
-    // P5e (pg). ONE ENTRY OF THE STORAGE-OVERRIDE SIGNATURE, and it is a VERBATIM copy of the
-    // mix in `MG_Backend/DirectGLES/Managers.cpp`'s ComputeShaderStorageBlockBindingSignature -
-    // the function whose answer this record replaces on the handle arm. The two halves cannot
-    // share one definition today because MG_Backend includes nothing from MG_Impl (checked at
-    // this head), so they are twins with a named pointer at each other and a unit case in
-    // ProgramEmitTest that pins the number. Order-independent by construction: the source is an
-    // UnorderedMap, the combine is commutative, and the entry mixes name and binding so two
-    // entries cannot trade halves and cancel out.
-    //
-    // OVER THE VALUES, NOT OVER A CHANGE COUNTER, which is the property the pipeline composite's
-    // uniform mirror depends on: it re-sets every override every draw, and re-setting a block to
-    // the binding it already carries must produce the same signature and force no rebuild.
+    // One entry of the storage-override signature (MGPProgramBindings::Signature), the one
+    // number the server stamps on a program twin and compares on the draw path (DirectGLES'
+    // ComputeShaderStorageBlockBindingSignature takes it verbatim). The entry mixes name with
+    // binding so two entries cannot trade halves; entries are summed, so the UnorderedMap's order
+    // cannot matter. Over values, not a change counter: re-setting a block to its current binding
+    // (the pipeline composite's uniform mirror does so every draw) forces no rebuild.
+    // MGPipeStageMaskOf below reads the last link's stages, not the attach list: attach and
+    // compile take effect only at the next link, and the same stages index GetGeneratedSpirv().
     inline Uint64 MGPipeStorageOverrideSignatureEntry(const String& blockName, Int binding) {
         Uint64 entry = std::hash<String>{}(blockName);
         entry ^= (static_cast<Uint64>(static_cast<Uint32>(binding)) + 0x9e3779b97f4a7c15ull +
@@ -281,26 +253,14 @@ namespace MobileGL::MG_Pipe {
             return bytes + sizeof(MGPGlobalConstants) + size;
         }
 
-        // ---- P5e (pg): set_program_bindings, opcode 80 -----------------------------------
-        //
-        // THE THREE POST-LINK MUTABLE REFLECTION FIELDS, and why an archive alone is not an
-        // answer. `uniformBlockBinding[i]`, `uniformSamplerOrImageUnitIndex[loc]` and the
-        // name-keyed `shaderStorageBlockBinding` map are all MEMBERS OF LinkArtifacts - so the
-        // archive create_shader_state carries does hold them - but glUniformBlockBinding,
-        // glUniform1i on a sampler uniform and glShaderStorageBlockBinding all move them AFTER
-        // the link that produced that archive, without relinking. A server answering a draw
-        // from the archive alone would bind the uniform blocks the program was LINKED with
-        // rather than the ones it is BOUND with. This record is the delta carrier; the applier
-        // overlays it on the archive, and a re-issued create drops it because the indices no
-        // longer mean anything.
-        //
-        // LATCHED ON THE TWO COUNTERS THAT MOVE WHEN ANY OF THE THREE DOES, plus the handle:
-        // m_backendStateVersion (glUniformBlockBinding and glUniform1i both bump it) and
-        // m_blockBindingVersion (glUniformBlockBinding and glShaderStorageBlockBinding both
-        // bump it, and the storage setter deliberately bumps ONLY it). Neither setter moves a
-        // counter on an unchanged value - both have an equality bail-out - so an application
-        // that re-sets the same bindings every frame emits nothing, which is what the pipeline
-        // composite's uniform mirror needs (it replays every override per draw).
+        // ---- set_program_bindings ----
+        // glUniformBlockBinding, glUniform1i on a sampler uniform and glShaderStorageBlockBinding
+        // change LinkArtifacts' block bindings, sampler/image unit indices and storage-block map
+        // after the link that produced the archive, without relinking. This record carries those
+        // values; the applier overlays it on the archive, and a re-issued create drops it.
+        // Latched on the handle plus m_backendStateVersion and m_blockBindingVersion, which
+        // together move on any of the three setters but not on an unchanged value, so re-setting
+        // the same bindings every draw (the pipeline composite's uniform mirror) emits nothing.
         Uint64 EmitProgramBindings(const ProgramObject& program, MGPipeHandle cso) {
             if (MGPipeHandleIsNull(cso)) return 0;
             const Uint32 backendStateVersion = program.GetBackendStateVersion();

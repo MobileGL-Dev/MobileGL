@@ -9,29 +9,14 @@
 #pragma once
 #include <Includes.h>
 
-// The CLIENT side of set_shader_images, the third of P4a's kVarTail unit sets. It rides
-// SamplerEmit.h's subsystem bit (kMGPipeWiredSamplerSubsystem): one family, one A/B.
-//
-// TWO INVARIANTS THAT MUST SURVIVE INTO THE BODY, and they are the kind an optimisation
-// deletes:
-//   1. THE HIGH-WATER-ZERO EARLY-OUT. An image high-water mark of 0 emits nothing, BEFORE any
-//      hash - that is what makes every Minecraft draw pay one integer test for a feature it
-//      does not use.
-//   2. THE SWEEP'S GATE IS KEYED ON FRONTEND GENERATIONS AND DELIBERATELY NOT ON A BACKEND
-//      RE-MINT COUNTER. A texture bound ONLY to an image unit is re-minted INSIDE the sweep,
-//      so a server-side epoch would be bumped after the gate had already declined. The
-//      client's bit-14 shutter is Mix(Mix(textureContent, textureParams), programImageUnitVersion)
-//      - all three FRONTEND counters - so the property is preserved by construction, and it is
-//      written here because it is invisible from the shutter itself.
-//
-// The record carries the APPLICATION's format and access; the bind-format recast (a GL_RG32F
-// bind is INVALID_VALUE on 19 of 26 non-core formats on Adreno) and the buffer-texture split
-// view stay SERVER-side and unchanged. ContentHash therefore has to cover InternalFormat and
-// Access as well as the binding, because the format the shader was built against is live
-// glBindImageTexture state and the format-less image bake keys on it.
-//
-// THIS FILE IS CREATED BY THE CONTRACT COMMIT AND FILLED BY THE PACKAGE THAT OWNS IT - see
-// FramebufferEmit.h for why, in full.
+// Client side of set_shader_images, under SamplerEmit.h's subsystem bit (one family, one A/B).
+// Two invariants an optimisation must keep. An image window of 0 emits nothing before any hash,
+// so a draw that uses no images pays one integer test. The shutter gating the sweep mixes only
+// frontend counters (texture content and params, program image units, texture binds), never a
+// backend re-mint counter: a texture bound only to an image unit is re-minted inside the sweep,
+// after the gate has decided. The record carries the application's format and access; the
+// bind-format recast and buffer-texture split view stay on the server, so the content hash
+// covers InternalFormat and Access too.
 #include <MG_Impl/Pipe/SamplerEmit.h>
 #include <MG_Impl/Pipe/SetHashSuppressor.h>
 #include <MG_Impl/Pipe/SlotAllocator.h>
@@ -118,32 +103,13 @@ namespace MobileGL::MG_Pipe {
     public:
         using GLContext = MG_State::GLState::GLContext;
 
-        // set_shader_images. Start is 0 and Count is the image-unit window described below.
-        //
-        // WHERE THE HIGH-WATER MARK COMES FROM, because this is the one place a reader will look
-        // for it. DirectGLES keeps g_imageUnitHighWaterMark, but that is written from inside its
-        // own per-unit sync and lives on the far side of the boundary.
-        //
-        // AND IT IS STILL NOT TextureState's MARK, EVEN THOUGH ONE NOW EXISTS. P5d round 3
-        // (package C) added TextureState::NoteImageUnitTouched - a push-build-only image-unit
-        // high-water mark, fed by glBindImageTexture - for the split client's per-draw
-        // GPU-write sweep. That mark answers "which units could hold a binding"; the window
-        // below answers the strictly narrower "which units could a SHADER READ", which is what
-        // makes the zero early-out fire for an application that binds an image no shader names.
-        // Swapping one for the other would widen this emitter for no record's benefit, and the
-        // paragraph that used to stand here - "adding a counter to TextureState would resize the
-        // pull build's object, which G1 forbids outright" - is answered by that mark being
-        // compiled only into push builds, where the object is already a different size.
-        //
-        // So the window is derived instead, from the one thing that decides whether an image
-        // unit can matter at all: the highest image unit the CURRENT PROGRAM names, memoised
-        // per program state in SamplerEmit.h's shared inversion, UNIONED with a sticky mark of
-        // every unit this emitter has already described. A program with no image uniforms
-        // gives MaxImageUnit == -1 and, with nothing sticky yet, a window of 0 - which is the
-        // zero early-out, taken BEFORE any hash and before any 192-entry walk, exactly as
-        // property 1 requires. The mark is sticky so that a program which stops naming a unit
-        // does not silently stop describing it: the window only grows, and shrinking it is how
-        // a stale binding would become invisible to the server.
+        // set_shader_images. Start is 0; Count is the image-unit window: the highest image unit
+        // the current draw program names (memoised in SamplerEmit.h's program inversion),
+        // unioned with a sticky mark of every unit already described. TextureState's
+        // touched-unit mark is not used: it counts units holding a binding, not units a shader
+        // reads, and would defeat the zero early-out for an application that binds an image no
+        // shader names. The window only grows, so a unit a later program stops naming is still
+        // described and a stale binding stays visible to the server.
         Uint64 EmitShaderImages(GLContext& ctx) {
             const auto& program = ctx.GetProgramForDraw();
             const auto& resolution = MGPipeProgramOpaqueUnitsShared().For(program.get());

@@ -47,86 +47,34 @@ namespace MobileGL::MG_Pipe {
     // stop where it says it stops (MG_Test/ScopedPipeVerb.h).
     void MGPipeLeaveVerb();
 
-    // PipeFill.cpp. DOES THIS BUILD, ON THIS BACKEND, AT THIS MASK, EMIT FOR THIS P4a FAMILY?
-    // (ID-39, widened by S-3 / ID-41.) The four conjuncts are the operator's per-subsystem bit
-    // in MOBILEGL_PIPE_PUSH, the family's own kMGPipeWired*Subsystem constant (`wired`, which
-    // the caller passes because it lives in the family's emit header and this header may not
-    // include one), and - for the four families P4a migrates - a backend having registered
-    // MGPipeResourceOps (the same per-backend signal `MGPipeResourceSubsystemEnabled()` has
-    // applied to P3a's buffers since the phase began) and every D-K2 dependency bit of the
-    // family being set in the same mask.
-    //
-    // THE LAST TWO CONJUNCTS ARE THE ONES THIS DECLARATION EXISTS FOR, and they are the same
-    // defect twice. Magma (DirectVulkan) registers no table and has no P4a twins; at a mask like
-    // 0x7ff Espryt REFUSES the texture family server-side because D-K2's fourth row says bit 10
-    // requires bit 11. In both cases the client emitted anyway, the applier accepted, the
-    // emitters cleared their per-level dirty flags on that acceptance, and the legacy upload
-    // path that still owed those texels found nothing to upload (66 DirectVulkan cases at ID-39,
-    // 47 DirectGLES cases at ID-41). With them the four families emit NOTHING in that state and
-    // the legacy pull path runs exactly as it does on a pull build.
-    //
-    // D-K2's ROWS ARE IN MG_Pipe/SubsystemDeps.def, ONCE (P3b/P4b R-5), and this comment no
-    // longer restates them - restating them here is half of how the rule ended up with six
-    // statements, two of which were wrong. PipeFill.cpp's kMGPipeP4aFamilyDependencies is still
-    // the client's own copy and is still the bit-for-bit mirror of the four
-    // `Resolve<Family>SubsystemArm()` refusals in DirectGLES/Managers.cpp; switching it to read
-    // the .def is the integrator's one-line change (PipeFill.cpp is the contract package's file
-    // for the whole phase, so the emitter packages do not edit it).
-    // MG_Test/Backend/DirectGLES/SubsystemDepsTest.cpp drives BOTH readers at every interesting
-    // mask and compares them against the .def, so the two cannot drift in the meantime.
-    //
-    // It is exported for the unit gate and for no other caller: the gate itself is
-    // FamilyIsLive() inside PipeFill.cpp, every birth hook and every `wants()` row resolves
-    // through it, and this returns that same expression rather than a second copy of it.
+    // PipeFill.cpp. Whether this build, backend and MOBILEGL_PIPE_PUSH mask emit for `subsystem`:
+    // the FamilyIsLive() expression every birth hook and `wants()` row uses, exported only for
+    // unit tests. It needs the subsystem bit, the family's kMGPipeWired*Subsystem constant
+    // (`wired`; this header cannot include the emit headers), a backend consumer for the family
+    // and its dependency bits from MG_Pipe/SubsystemDeps.def. Without the last two the texture
+    // emitters clear dirty levels on acceptance that nothing then uploads.
+    // MG_Test/Backend/DirectGLES/SubsystemDepsTest.cpp checks this and Espryt's
+    // Resolve<Family>SubsystemArm() refusals against the .def.
     Bool MGPipeP4aFamilyEmits(Uint64 subsystem, Uint64 wired);
 
-    // PipeFill.cpp. DOES AN EMITTED CALL SUPPLY THIS FIELD at the environment named, i.e. would
-    // the validate point's residual fill SKIP it? This is step 4's own predicate, which P5d
-    // round 3 (package C) turned from a per-field-per-verb conjunction into a memo keyed on the
-    // three arguments plus the P4a consumer signal it reads for itself - the profile had it at
-    // 63 CapsMirror reads per verb for one answer.
-    //
-    // IT IS EXPORTED FOR THE UNIT GATE AND FOR NO OTHER CALLER, for MGPipeP4aFamilyEmits'
-    // reason and one of its own: which fields the fill copies has NO other observable, because
-    // in a push build every emission this predicate asks about is routed straight into the
-    // applier, which writes the same storage the fill would have written. So the only way to
-    // state "the memo's key is complete" - the one thing a memo can get wrong that the
-    // expression it replaced could not - is to ask it directly. A call re-keys the memo, which
-    // is exactly what the case is for.
-    //
-    // AND A STALE ANSWER IS SILENT, WHICH IS WHY THAT CASE IS THE ONLY GUARD. It is tempting to
-    // say a wrongly-skipped field aborts as Fatal{UnmigratedPipeInput}; it does not. The walk
-    // stamps FilledGen from the verb serial whether or not it copied (PipeFill.cpp, step 4), so
-    // a field the fill skips reads FRESH with the PREVIOUS verb's value - a stale binding slot
-    // rendered without a word, caught only by the verify lane's comparison. Poison catches an
-    // UNSTAMPED read, not a stamped-but-uncopied one.
+    // PipeFill.cpp. Whether an emitted call supplies `field` in this environment, i.e. whether
+    // the residual fill (step 4) skips it. Memoized on the last three arguments plus what it reads
+    // itself (the consumer signal, the caps-mirror generation); uncached it cost 63 caps-mirror
+    // reads per verb. Exported only for unit tests, the sole check that the memo key is complete,
+    // since emissions write the same storage the fill would. A wrong answer is silent: step 4
+    // stamps FilledGen whether or not it copied, so a skipped field reads as fresh with the
+    // previous verb's value. Poison only catches unstamped reads; the verify comparison is the
+    // other net.
     Bool MGPipeResidualFillSuppliesField(MGPipeInputField field, Uint64 pushMask, Bool applierDerives,
                                          Bool contextValuesWireLive);
 
-    // PipeFill.cpp. P3a D-H2.1: the DRAW's raw vertex-fetch base instance, which
-    // set_vertex_buffers now carries as an explicit field.
-    //
-    // It replaces an ambient process global the backend read at VAO sync time, which is a
-    // shape that cannot cross a pushed boundary. The client sends the raw value and never a
-    // pre-shifted offset: whether to emulate the fetch shift or let GL_EXT_base_instance do
-    // it is the SERVER's decision. It is also an input to set_vertex_buffers' content hash
-    // and to the tracker's bit-9 shutter, so a draw whose only change is its base instance
-    // still reaches the emitter and still goes out.
-    //
-    // DO NOT CALL IT DIRECTLY FROM A GL ENTRY POINT - use MGP_SET_BASE_INSTANCE below. This
-    // whole declaration block is inside #if MOBILEGL_PIPE_PUSH, so a bare call would not even
-    // compile in a pull build, and the three call sites are in a file that is compiled in
-    // both. The macro is the same shape MGP_FILL already has, for the same reason.
-    //
-    // The validate point consumes and clears it - on both of its exits - and MGPipeLeaveVerb
-    // clears it too, so a plain draw that follows a base-instanced one sees 0 again. The
-    // tracker's Reset() deliberately does NOT clear it (Tracker.h): a make-current happens
-    // BETWEEN the setter and the fill that reads it.
-    //
-    // The three GL entry points that make this call (ID-10's grant) are
-    // MG_Impl/GLImpl/Drawing/GL_Drawing.cpp's DrawElementsInstancedBaseVertexBaseInstance,
-    // DrawElementsInstancedBaseInstance and DrawArraysInstancedBaseInstance - one line each,
-    // immediately above the MGP_FILL, carrying the RAW baseinstance argument.
+    // PipeFill.cpp. The draw's raw vertex-fetch base instance for the next set_vertex_buffers,
+    // which carries it explicitly; the server decides whether to emulate the fetch shift or use
+    // GL_EXT_base_instance. It also feeds that record's content hash and the tracker's bit-9
+    // shutter, so a draw that changes only its base instance still goes out. GL entry points
+    // call it through MGP_SET_BASE_INSTANCE, one line above MGP_FILL in GL_Drawing.cpp's three
+    // *BaseInstance draws. The validate point clears it on both exits; the tracker's Reset()
+    // must not, because Update() resets on a context switch, after the setter and before use.
     void MGPipeSetPendingBaseInstance(Uint32 baseInstance);
     // What the next set_vertex_buffers will carry. The unit gate reads it to pin that a
     // make-current between the setter and the fill does not eat it

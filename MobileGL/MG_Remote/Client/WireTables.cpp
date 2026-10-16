@@ -738,8 +738,8 @@ namespace MobileGL::MG_Remote::Client {
         // this handle". That is a fact about the SERVER's table, and the client already keeps its
         // own copy of exactly that fact - MGPipeHandleIsPublished, set when the object's create was
         // ACCEPTED and never cleared while the record lives (the applier keeps texture records
-        // across a make-current: PipeFill.cpp:3756-3759). So the wait is asking the server a
-        // question the client has already answered.
+        // across a make-current: MGPipeApplierReset clears only MGPipeWorkingState). So the wait
+        // is asking the server a question the client has already answered.
         //
         // WHAT REPLACES IT, on the device run's numbers: this row paid 18,056 of one frame's
         // 43,232 round trips at ~5 ms each, for records carrying a few hundred bytes. The object's

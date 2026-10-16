@@ -4,33 +4,13 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 //
-// WHICH ELEMENTS OF A CLIENT-MEMORY ARRAY A DRAW ACTUALLY FETCHES.
-//
-// A client-memory vertex array has no extent the object could report, so "how much of it
-// has to exist before this draw can run" is a question only the DRAW can answer: the
-// index bytes it will read, the instance count and base instance it shifts by, and - for
-// the indirect forms - the command block a shader may have written moments earlier.
-//
-// Two roles ask it and for the same reason. The wire arm asks it to snapshot the fetched
-// elements into owned buffers before the draw crosses (MGPipeOwnedDrawInputs), and the
-// monolith arm asks it to size the per-draw upload the backend has always done from the
-// application's own pointer (DirectGLES' SyncClientSideAttributesForDraw*, Magma's
-// UploadAndBindVertexBuffers). The question is identical, so the answer lives here once:
-// two copies of this arithmetic would be two chances to disagree about which vertices a
-// draw reads, and disagreeing is a wrong picture rather than an error.
-//
-// WHAT IT DELIBERATELY DOES NOT DO: dereference application memory. The plan names element
-// INDICES; reading the bytes behind them is the caller's, because only the caller knows
-// whether the elements are read from the client's own array or out of a store the server
-// owns.
-//
-// COMPILED IN EVERY FLAVOR, and the guard it used to carry (`MOBILEGL_BUILD_DISAGGREGATED &&
-// MOBILEGL_PIPE_PUSH`) was the same mistake the monolith arm's callers carried: the
-// MONOLITH arm is not a split-arm fallback, it is the arm the pull build runs. An indexed or
-// indirect draw over a client-memory array staged nothing there either, so the question has
-// to be answerable - and answered - in the transport-free library too. The plan itself is
-// pure arithmetic over the draw's own words; what changes per flavor is only who reads the
-// bytes (the caller's reader), never the answer.
+// Which elements of a client-memory vertex array a draw fetches. Only the draw can say: the
+// index bytes it reads, its instance count and base instance, and for indirect forms the
+// command block. The wire arm snapshots those elements into owned buffers
+// (MGPipeOwnedDrawInputs); the monolith arm sizes the backend's per-draw upload from the
+// application pointer. One copy of the arithmetic keeps the two from disagreeing about which
+// vertices a draw reads. The plan names element indices only; the caller's reader dereferences
+// memory. It is built in every configuration, since the monolith arm needs it too.
 #pragma once
 
 #include <MG_Pipe/MGPipeTypes.h>
