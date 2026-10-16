@@ -398,6 +398,55 @@ function(mgl_itest_join_environment outVar)
     set(${outVar} "${joined}" PARENT_SCOPE)
 endfunction()
 
+# One lane of the integration binary: the cases FILTER selects, registered as PREFIX<suite.case>
+# with the environment ENV (a list joined by mgl_itest_join_environment). LABELS defaults to
+# integration-gpu and TIMEOUT to the scenario timeout. LOCK serialises lanes that share a resource
+# such as a log file; TEST_LIST names the ctest-time variable listing the lane's tests; FAIL_REGEX
+# and FIXTURES set those properties; PROPERTIES passes further property pairs through.
+function(mgl_itest_lane prefix filter)
+    cmake_parse_arguments(PARSE_ARGV 2 lane "" "ENV;LABELS;TIMEOUT;LOCK;TEST_LIST;FAIL_REGEX;FIXTURES"
+        "PROPERTIES")
+    set(labels integration-gpu)
+    if (DEFINED lane_LABELS)
+        set(labels "${lane_LABELS}")
+    endif()
+    set(timeout ${MGL_ITEST_TIMEOUT})
+    if (DEFINED lane_TIMEOUT)
+        set(timeout ${lane_TIMEOUT})
+    endif()
+    # A value may itself be a list (two resource locks); escaped, it stays one argument when the
+    # optional pair is expanded into the call below.
+    set(listArgs "")
+    if (lane_TEST_LIST)
+        set(listArgs TEST_LIST "${lane_TEST_LIST}")
+    endif()
+    set(lockArgs "")
+    if (lane_LOCK)
+        string(REPLACE ";" "\;" lock "${lane_LOCK}")
+        set(lockArgs RESOURCE_LOCK "${lock}")
+    endif()
+    set(fixtureArgs "")
+    if (lane_FIXTURES)
+        string(REPLACE ";" "\;" fixtures "${lane_FIXTURES}")
+        set(fixtureArgs FIXTURES_REQUIRED "${fixtures}")
+    endif()
+    if (DEFINED lane_FAIL_REGEX)
+        gtest_discover_tests(MobileGLIntegrationTest
+            TEST_PREFIX "${prefix}" ${listArgs}
+            TEST_FILTER "${filter}"
+            DISCOVERY_TIMEOUT 30
+            PROPERTIES LABELS "${labels}" TIMEOUT ${timeout} ${lockArgs} ${fixtureArgs}
+                FAIL_REGULAR_EXPRESSION "${lane_FAIL_REGEX}" ${lane_PROPERTIES} ENVIRONMENT "${lane_ENV}")
+    else()
+        gtest_discover_tests(MobileGLIntegrationTest
+            TEST_PREFIX "${prefix}" ${listArgs}
+            TEST_FILTER "${filter}"
+            DISCOVERY_TIMEOUT 30
+            PROPERTIES LABELS "${labels}" TIMEOUT ${timeout} ${lockArgs} ${fixtureArgs}
+                ${lane_PROPERTIES} ENVIRONMENT "${lane_ENV}")
+    endif()
+endfunction()
+
 # --- what THIS TREE implements, answered by the build rather than by a person ----------
 #
 # Two P2 entries assert something that only EXISTS once another P2 package has landed:
@@ -826,25 +875,11 @@ set(MGL_ITEST_MONOLITH_MECHANISM_FILTER
 set(MGL_ITEST_GLES_VIEW_FILTER
     "TextureViewScenario.*:TextureViewAliasScenario.*:F1WireScenario.ComputeImageStoreThroughViewPreservesOtherRootLayer:F1WireScenario.TextureViewClearTargetsItsRootMipAndLayer:F1WireScenario.GenerateMipmapThroughViewKeepsOwnerLevelsAndLayersOutsideItsWindow:InvalidImageUnitScenario.ALevelPastATextureViewsWindowReadsZero")
 
-gtest_discover_tests(MobileGLIntegrationTest
-    TEST_PREFIX "DirectGLES."
-    TEST_FILTER "-${MGL_ITEST_MONOLITH_MECHANISM_FILTER}:${MGL_ITEST_GLES_VIEW_FILTER}"
-    DISCOVERY_TIMEOUT 30
-    PROPERTIES
-        LABELS integration-gpu
-        TIMEOUT ${MGL_ITEST_TIMEOUT}
-        ENVIRONMENT "${MGL_ITEST_GLES_ENVIRONMENT}"
-)
+mgl_itest_lane("DirectGLES." "-${MGL_ITEST_MONOLITH_MECHANISM_FILTER}:${MGL_ITEST_GLES_VIEW_FILTER}"
+    ENV "${MGL_ITEST_GLES_ENVIRONMENT}")
 
-gtest_discover_tests(MobileGLIntegrationTest
-    TEST_PREFIX "DirectVulkan."
-    TEST_FILTER "-${MGL_ITEST_MONOLITH_MECHANISM_FILTER}"
-    DISCOVERY_TIMEOUT 30
-    PROPERTIES
-        LABELS integration-gpu
-        TIMEOUT ${MGL_ITEST_TIMEOUT}
-        ENVIRONMENT "${MGL_ITEST_VULKAN_ENVIRONMENT}"
-)
+mgl_itest_lane("DirectVulkan." "-${MGL_ITEST_MONOLITH_MECHANISM_FILTER}"
+    ENV "${MGL_ITEST_VULKAN_ENVIRONMENT}")
 
 # ScenarioIsolationScenario's two cases in ONE process: the first leaves a deleted program current
 # and an error unread, the second asserts ScenarioTest::SetUp cleared both. The entries above run
@@ -871,23 +906,14 @@ foreach(backend DirectGLES DirectVulkan)
     else()
         set(mechanism_environment "${MGL_ITEST_VULKAN_ENVIRONMENT}")
     endif()
-    gtest_discover_tests(MobileGLIntegrationTest
-        TEST_PREFIX "${backend}."
-        TEST_FILTER "${MGL_ITEST_MONOLITH_MECHANISM_FILTER}"
-        DISCOVERY_TIMEOUT 30
-        PROPERTIES LABELS "integration-gpu\;integration-monolith-control"
-            TIMEOUT ${MGL_ITEST_TIMEOUT}
-            ENVIRONMENT "${mechanism_environment}\;MOBILEGL_TRANSPORT=monolith")
+    mgl_itest_lane("${backend}." "${MGL_ITEST_MONOLITH_MECHANISM_FILTER}"
+        LABELS "integration-gpu\;integration-monolith-control" ENV "${mechanism_environment}\;MOBILEGL_TRANSPORT=monolith")
 endforeach()
 
 # This is Espryt's existing feature opt-in, independent of transport. Exercise
 # the actual view implementation instead of inheriting its default-off skip.
-gtest_discover_tests(MobileGLIntegrationTest
-    TEST_PREFIX "DirectGLES."
-    TEST_FILTER "${MGL_ITEST_GLES_VIEW_FILTER}"
-    DISCOVERY_TIMEOUT 30
-    PROPERTIES LABELS integration-gpu TIMEOUT ${MGL_ITEST_TIMEOUT}
-        ENVIRONMENT "${MGL_ITEST_GLES_ENVIRONMENT}\;MOBILEGL_ESPRYT_ENABLE_TEXTURE_VIEW=1")
+mgl_itest_lane("DirectGLES." "${MGL_ITEST_GLES_VIEW_FILTER}"
+    ENV "${MGL_ITEST_GLES_ENVIRONMENT}\;MOBILEGL_ESPRYT_ENABLE_TEXTURE_VIEW=1")
 
 # A third registration, of ONE scenario, with asynchronous shader compilation
 # pinned on. Not a second code path in the renderer: a second ALLOCATION pattern.
@@ -900,15 +926,8 @@ gtest_discover_tests(MobileGLIntegrationTest
 # (the ENVIRONMENT property), not an in-process scope: the compile pool and its
 # threads are stood up at initialization, and their allocations are half the
 # point. DirectVulkan only - the memo this pins is DirectVulkan's.
-gtest_discover_tests(MobileGLIntegrationTest
-    TEST_PREFIX "DirectVulkan.AsyncCompile."
-    TEST_FILTER "XfbAfterClipDistanceScenario.*"
-    DISCOVERY_TIMEOUT 30
-    PROPERTIES
-        LABELS integration-gpu
-        TIMEOUT ${MGL_ITEST_TIMEOUT}
-        ENVIRONMENT "${MGL_ITEST_VULKAN_ASYNC_ENVIRONMENT}"
-)
+mgl_itest_lane("DirectVulkan.AsyncCompile." "XfbAfterClipDistanceScenario.*"
+    ENV "${MGL_ITEST_VULKAN_ASYNC_ENVIRONMENT}")
 
 # A fourth registration, of the depth/stencil readback scenarios, with the ES
 # shader-sampling emulation forced on. Not paranoia - without it these scenarios are
@@ -918,15 +937,8 @@ gtest_discover_tests(MobileGLIntegrationTest
 # entire emulation left all of them passing. With the flag the native spellings are off
 # the table and only the path the device actually takes remains. DirectGLES only - the
 # emulation is DirectGLES's.
-gtest_discover_tests(MobileGLIntegrationTest
-    TEST_PREFIX "DirectGLES.ForcedDepthStencilEmulation."
-    TEST_FILTER "DepthStencilReadback*Scenario.*"
-    DISCOVERY_TIMEOUT 30
-    PROPERTIES
-        LABELS integration-gpu
-        TIMEOUT ${MGL_ITEST_TIMEOUT}
-        ENVIRONMENT "${MGL_ITEST_GLES_FORCED_DS_ENVIRONMENT}"
-)
+mgl_itest_lane("DirectGLES.ForcedDepthStencilEmulation." "DepthStencilReadback*Scenario.*"
+    ENV "${MGL_ITEST_GLES_FORCED_DS_ENVIRONMENT}")
 
 # UnlocatedIoBlockScenario with the interface-block location strip PINNED ON, for the same
 # reason the depth/stencil entry above pins its emulation: without it this scenario is
@@ -949,16 +961,8 @@ gtest_discover_tests(MobileGLIntegrationTest
 # an existing ctest name may never disappear (gate G14). A ctest RESOURCE_LOCK named after the log
 # is the same guarantee without touching a name: ctest never runs two entries holding the same lock
 # at once, so the only processes that can truncate a lane's log are ones nobody is reading it for.
-gtest_discover_tests(MobileGLIntegrationTest
-    TEST_PREFIX "DirectGLES.UnlocatedIoBlocks."
-    TEST_FILTER "UnlocatedIoBlockScenario.*"
-    DISCOVERY_TIMEOUT 30
-    PROPERTIES
-        LABELS integration-gpu
-        TIMEOUT ${MGL_ITEST_TIMEOUT}
-        RESOURCE_LOCK unlocated-io-blocks.log
-        ENVIRONMENT "${MGL_ITEST_GLES_UNLOCATED_IO_BLOCKS_ENVIRONMENT}"
-)
+mgl_itest_lane("DirectGLES.UnlocatedIoBlocks." "UnlocatedIoBlockScenario.*"
+    LOCK unlocated-io-blocks.log ENV "${MGL_ITEST_GLES_UNLOCATED_IO_BLOCKS_ENVIRONMENT}")
 
 # P4a final review C-2: the dirty-then-delete case, with the allocator SCRIBBLING every freed
 # block. The defect this pins was a client emitter resolving a dead-but-not-recycled texture
@@ -971,24 +975,10 @@ mgl_itest_join_environment(MGL_ITEST_GLES_MALLOC_PERTURB_ENVIRONMENT
     "MOBILEGL_BACKEND_TYPE=DirectGLES" "MALLOC_PERTURB_=165" ${MGL_ITEST_COMMON_ENV})
 mgl_itest_join_environment(MGL_ITEST_VULKAN_MALLOC_PERTURB_ENVIRONMENT
     "MOBILEGL_BACKEND_TYPE=DirectVulkan" "MALLOC_PERTURB_=165" ${MGL_ITEST_VULKAN_ENV})
-gtest_discover_tests(MobileGLIntegrationTest
-    TEST_PREFIX "DirectGLES.MallocPerturb."
-    TEST_FILTER "P4aFinalFixScenario.ADirtyTextureDeletedBeforeAnyVerbIsWalkedByTheNextDrain"
-    DISCOVERY_TIMEOUT 30
-    PROPERTIES
-        LABELS integration-gpu
-        TIMEOUT ${MGL_ITEST_TIMEOUT}
-        ENVIRONMENT "${MGL_ITEST_GLES_MALLOC_PERTURB_ENVIRONMENT}"
-)
-gtest_discover_tests(MobileGLIntegrationTest
-    TEST_PREFIX "DirectVulkan.MallocPerturb."
-    TEST_FILTER "P4aFinalFixScenario.ADirtyTextureDeletedBeforeAnyVerbIsWalkedByTheNextDrain"
-    DISCOVERY_TIMEOUT 30
-    PROPERTIES
-        LABELS integration-gpu
-        TIMEOUT ${MGL_ITEST_TIMEOUT}
-        ENVIRONMENT "${MGL_ITEST_VULKAN_MALLOC_PERTURB_ENVIRONMENT}"
-)
+mgl_itest_lane("DirectGLES.MallocPerturb." "P4aFinalFixScenario.ADirtyTextureDeletedBeforeAnyVerbIsWalkedByTheNextDrain"
+    ENV "${MGL_ITEST_GLES_MALLOC_PERTURB_ENVIRONMENT}")
+mgl_itest_lane("DirectVulkan.MallocPerturb." "P4aFinalFixScenario.ADirtyTextureDeletedBeforeAnyVerbIsWalkedByTheNextDrain"
+    ENV "${MGL_ITEST_VULKAN_MALLOC_PERTURB_ENVIRONMENT}")
 
 # AsyncCompileScenario, with asynchronous compilation PINNED ON per backend.
 #
@@ -1000,24 +990,9 @@ gtest_discover_tests(MobileGLIntegrationTest
 # advertised - the case derives its expectation from this variable and nothing else, and
 # skips where it is unset, precisely so that it is not asserting the implementation
 # against itself.
-gtest_discover_tests(MobileGLIntegrationTest
-    TEST_PREFIX "DirectGLES.AsyncOn."
-    TEST_FILTER "AsyncCompileScenario.*"
-    DISCOVERY_TIMEOUT 30
-    PROPERTIES
-        LABELS integration-gpu
-        TIMEOUT ${MGL_ITEST_TIMEOUT}
-        ENVIRONMENT "${MGL_ITEST_GLES_ASYNC_ON_ENVIRONMENT}"
-)
-gtest_discover_tests(MobileGLIntegrationTest
-    TEST_PREFIX "DirectVulkan.AsyncOn."
-    TEST_FILTER "AsyncCompileScenario.*"
-    DISCOVERY_TIMEOUT 30
-    PROPERTIES
-        LABELS integration-gpu
-        TIMEOUT ${MGL_ITEST_TIMEOUT}
-        ENVIRONMENT "${MGL_ITEST_VULKAN_ASYNC_ON_ENVIRONMENT}"
-)
+mgl_itest_lane("DirectGLES.AsyncOn." "AsyncCompileScenario.*" ENV "${MGL_ITEST_GLES_ASYNC_ON_ENVIRONMENT}")
+mgl_itest_lane("DirectVulkan.AsyncOn." "AsyncCompileScenario.*"
+    ENV "${MGL_ITEST_VULKAN_ASYNC_ON_ENVIRONMENT}")
 
 # The other side of the same switch: asynchronous compilation OFF, so
 # GL_KHR_parallel_shader_compile must be WITHDRAWN from both spellings of the extension
@@ -1027,24 +1002,10 @@ gtest_discover_tests(MobileGLIntegrationTest
 # none - so registering the whole scenario would buy four guaranteed skips per backend.
 # Together with the AsyncOn. entries above, one ctest run still covers both flag states,
 # which is what the in-process forcing used to be for.
-gtest_discover_tests(MobileGLIntegrationTest
-    TEST_PREFIX "DirectGLES.AsyncOff."
-    TEST_FILTER "AsyncCompileScenario.ExtensionStringMatchesTheConfiguration"
-    DISCOVERY_TIMEOUT 30
-    PROPERTIES
-        LABELS integration-gpu
-        TIMEOUT ${MGL_ITEST_TIMEOUT}
-        ENVIRONMENT "${MGL_ITEST_GLES_ASYNC_OFF_ENVIRONMENT}"
-)
-gtest_discover_tests(MobileGLIntegrationTest
-    TEST_PREFIX "DirectVulkan.AsyncOff."
-    TEST_FILTER "AsyncCompileScenario.ExtensionStringMatchesTheConfiguration"
-    DISCOVERY_TIMEOUT 30
-    PROPERTIES
-        LABELS integration-gpu
-        TIMEOUT ${MGL_ITEST_TIMEOUT}
-        ENVIRONMENT "${MGL_ITEST_VULKAN_ASYNC_OFF_ENVIRONMENT}"
-)
+mgl_itest_lane("DirectGLES.AsyncOff." "AsyncCompileScenario.ExtensionStringMatchesTheConfiguration"
+    ENV "${MGL_ITEST_GLES_ASYNC_OFF_ENVIRONMENT}")
+mgl_itest_lane("DirectVulkan.AsyncOff." "AsyncCompileScenario.ExtensionStringMatchesTheConfiguration"
+    ENV "${MGL_ITEST_VULKAN_ASYNC_OFF_ENVIRONMENT}")
 
 # The optimistic-status quirk's end-to-end shape. Its own entries and not part of the
 # AsyncOn. ones because the quirk is not neutral for the rest of the scenario: with it in
@@ -1053,39 +1014,18 @@ gtest_discover_tests(MobileGLIntegrationTest
 # default and never advertised, so - unlike asynchronous compilation, which announces
 # itself through the extension string - the variable is the only thing that can tell the
 # case it is in force.
-gtest_discover_tests(MobileGLIntegrationTest
-    TEST_PREFIX "DirectGLES.OptimisticShaderStatus."
-    TEST_FILTER "AsyncCompileScenario.IrisShapedTwoPhaseBatchRendersCorrectly"
-    DISCOVERY_TIMEOUT 30
-    PROPERTIES
-        LABELS integration-gpu
-        TIMEOUT ${MGL_ITEST_TIMEOUT}
-        ENVIRONMENT "${MGL_ITEST_GLES_OPTIMISTIC_ENVIRONMENT}"
-)
-gtest_discover_tests(MobileGLIntegrationTest
-    TEST_PREFIX "DirectVulkan.OptimisticShaderStatus."
-    TEST_FILTER "AsyncCompileScenario.IrisShapedTwoPhaseBatchRendersCorrectly"
-    DISCOVERY_TIMEOUT 30
-    PROPERTIES
-        LABELS integration-gpu
-        TIMEOUT ${MGL_ITEST_TIMEOUT}
-        ENVIRONMENT "${MGL_ITEST_VULKAN_OPTIMISTIC_ENVIRONMENT}"
-)
+mgl_itest_lane("DirectGLES.OptimisticShaderStatus." "AsyncCompileScenario.IrisShapedTwoPhaseBatchRendersCorrectly"
+    ENV "${MGL_ITEST_GLES_OPTIMISTIC_ENVIRONMENT}")
+mgl_itest_lane("DirectVulkan.OptimisticShaderStatus." "AsyncCompileScenario.IrisShapedTwoPhaseBatchRendersCorrectly"
+    ENV "${MGL_ITEST_VULKAN_OPTIMISTIC_ENVIRONMENT}")
 
 # The negative control for the DirectGLES gl_ViewportIndex emulation, in a process that
 # has it switched off. One case, because it is the only one the switch may touch: with
 # the emulation off the three positive cases in the same fixture describe behaviour the
 # backend does not have, so a whole-scenario registration would be three guaranteed reds.
 # DirectGLES only - the flag steers nothing on DirectVulkan, which routes natively.
-gtest_discover_tests(MobileGLIntegrationTest
-    TEST_PREFIX "DirectGLES.NoViewportArrayEmulation."
-    TEST_FILTER "ViewportArrayScenario.WithoutTheEmulationEveryIndexCollapsesOntoViewportZero"
-    DISCOVERY_TIMEOUT 30
-    PROPERTIES
-        LABELS integration-gpu
-        TIMEOUT ${MGL_ITEST_TIMEOUT}
-        ENVIRONMENT "${MGL_ITEST_GLES_NO_VIEWPORT_EMULATION_ENVIRONMENT}"
-)
+mgl_itest_lane("DirectGLES.NoViewportArrayEmulation." "ViewportArrayScenario.WithoutTheEmulationEveryIndexCollapsesOntoViewportZero"
+    ENV "${MGL_ITEST_GLES_NO_VIEWPORT_EMULATION_ENVIRONMENT}")
 
 # PrimitivesGeneratedNoXfbScenario again, with the GL_PRIMITIVES_GENERATED statistics
 # reroute PINNED ON. The ambient DirectVulkan registration runs the same cases under the
@@ -1096,16 +1036,8 @@ gtest_discover_tests(MobileGLIntegrationTest
 # silently-disarmed reroute (an inverted override mapping, a lost gate) fails here
 # instead of leaving every equality case vacuously green. DirectVulkan only - the flag
 # steers nothing on DirectGLES.
-gtest_discover_tests(MobileGLIntegrationTest
-    TEST_PREFIX "DirectVulkan.PrimGenReroute."
-    TEST_FILTER "PrimitivesGeneratedNoXfbScenario.*"
-    DISCOVERY_TIMEOUT 30
-    PROPERTIES
-        LABELS integration-gpu
-        TIMEOUT ${MGL_ITEST_TIMEOUT}
-        RESOURCE_LOCK primgen-query-reroute.log
-        ENVIRONMENT "${MGL_ITEST_VULKAN_PRIMGEN_REROUTE_ENVIRONMENT}"
-)
+mgl_itest_lane("DirectVulkan.PrimGenReroute." "PrimitivesGeneratedNoXfbScenario.*"
+    LOCK primgen-query-reroute.log ENV "${MGL_ITEST_VULKAN_PRIMGEN_REROUTE_ENVIRONMENT}")
 
 # OversizedRecordingSplitScenario with the command-buffer draw budget PINNED to 64. The ambient
 # registrations run its cases under the default budget, which never splits them; this entry
@@ -1120,32 +1052,16 @@ gtest_discover_tests(MobileGLIntegrationTest
 # lane's one log back, and the library truncates it at each process's start, so under `ctest -j` a
 # sibling case wipes the line a reading case is looking for (measured on this tree: 5 of 8 red at
 # -j 6, a different five on the monolith and inproc runs).
-gtest_discover_tests(MobileGLIntegrationTest
-    TEST_PREFIX "DirectVulkan.SplitRecording."
-    TEST_FILTER "OversizedRecordingSplitScenario.*"
-    DISCOVERY_TIMEOUT 30
-    PROPERTIES
-        LABELS integration-gpu
-        TIMEOUT ${MGL_ITEST_TIMEOUT}
-        RESOURCE_LOCK oversized-recording-split.log
-        ENVIRONMENT "${MGL_ITEST_VULKAN_SPLIT_RECORDING_ENVIRONMENT}"
-)
+mgl_itest_lane("DirectVulkan.SplitRecording." "OversizedRecordingSplitScenario.*"
+    LOCK oversized-recording-split.log ENV "${MGL_ITEST_VULKAN_SPLIT_RECORDING_ENVIRONMENT}")
 
 # P15 present wait: WindowPassGateScenario with its arming assertion on. The ambient entries run
 # its cases for the pixels; this one also reads the renderer's latched MGLOG_I back, which a
 # renderer that submits each frame as one batch behind the acquire wait never writes. DirectVulkan
 # only: Espryt's flush ahead of the window buffer needs a window surface, which this harness does
 # not have. RESOURCE_LOCK for SplitRecording's reason: every case reads the lane's one log back.
-gtest_discover_tests(MobileGLIntegrationTest
-    TEST_PREFIX "DirectVulkan.WindowPassGate."
-    TEST_FILTER "WindowPassGateScenario.*"
-    DISCOVERY_TIMEOUT 30
-    PROPERTIES
-        LABELS integration-gpu
-        TIMEOUT ${MGL_ITEST_TIMEOUT}
-        RESOURCE_LOCK window-pass-gate.log
-        ENVIRONMENT "${MGL_ITEST_VULKAN_WINDOW_PASS_GATE_ENVIRONMENT}"
-)
+mgl_itest_lane("DirectVulkan.WindowPassGate." "WindowPassGateScenario.*"
+    LOCK window-pass-gate.log ENV "${MGL_ITEST_VULKAN_WINDOW_PASS_GATE_ENVIRONMENT}")
 
 # The packed16 copy scenarios again, with the 8-bit storage widening PINNED ON. The ambient
 # registrations above cover the narrow storage - on every CI driver the widening's POST
@@ -1155,15 +1071,8 @@ gtest_discover_tests(MobileGLIntegrationTest
 # is client-invisible (same packed words in and out on every leg the 18 failing CTS bodies
 # used, the renderbuffer one included). DirectGLES only - the flag steers nothing on
 # DirectVulkan, which has always stored these formats widened.
-gtest_discover_tests(MobileGLIntegrationTest
-    TEST_PREFIX "DirectGLES.WidenedPacked16."
-    TEST_FILTER "CopyImagePacked16Scenario.*"
-    DISCOVERY_TIMEOUT 30
-    PROPERTIES
-        LABELS integration-gpu
-        TIMEOUT ${MGL_ITEST_TIMEOUT}
-        ENVIRONMENT "${MGL_ITEST_GLES_WIDENED_PACKED16_ENVIRONMENT}"
-)
+mgl_itest_lane("DirectGLES.WidenedPacked16." "CopyImagePacked16Scenario.*"
+    ENV "${MGL_ITEST_GLES_WIDENED_PACKED16_ENVIRONMENT}")
 
 # PointSizeDemotionScenario with the demotion PINNED ON, per backend, for the reason every
 # pinned lane above exists: llvmpipe and lavapipe both HOST gl_PointSize in tessellation and
@@ -1172,27 +1081,11 @@ gtest_discover_tests(MobileGLIntegrationTest
 # The ambient runs stay the negative control: same scenario, same CPU-computed bytes, native
 # path. Both backends, because the demotion is shared phase-B work with two different
 # consumers (the ESSL capture respelling vs the SPIR-V Xfb carrier binding).
-gtest_discover_tests(MobileGLIntegrationTest
-    TEST_PREFIX "DirectGLES.PointSizeDemotion."
-    TEST_FILTER "PointSizeDemotionScenario.*"
-    DISCOVERY_TIMEOUT 30
-    PROPERTIES
-        LABELS integration-gpu
-        TIMEOUT ${MGL_ITEST_TIMEOUT}
-        RESOURCE_LOCK point-size-demotion-gles.log
-        ENVIRONMENT "${MGL_ITEST_GLES_POINT_SIZE_DEMOTION_ENVIRONMENT}"
-)
+mgl_itest_lane("DirectGLES.PointSizeDemotion." "PointSizeDemotionScenario.*"
+    LOCK point-size-demotion-gles.log ENV "${MGL_ITEST_GLES_POINT_SIZE_DEMOTION_ENVIRONMENT}")
 
-gtest_discover_tests(MobileGLIntegrationTest
-    TEST_PREFIX "DirectVulkan.PointSizeDemotion."
-    TEST_FILTER "PointSizeDemotionScenario.*"
-    DISCOVERY_TIMEOUT 30
-    PROPERTIES
-        LABELS integration-gpu
-        TIMEOUT ${MGL_ITEST_TIMEOUT}
-        RESOURCE_LOCK point-size-demotion-vulkan.log
-        ENVIRONMENT "${MGL_ITEST_VULKAN_POINT_SIZE_DEMOTION_ENVIRONMENT}"
-)
+mgl_itest_lane("DirectVulkan.PointSizeDemotion." "PointSizeDemotionScenario.*"
+    LOCK point-size-demotion-vulkan.log ENV "${MGL_ITEST_VULKAN_POINT_SIZE_DEMOTION_ENVIRONMENT}")
 
 # --- the third CI mode: MOBILEGL_PIPE_VERIFY -----------------------------------
 #
@@ -1317,24 +1210,10 @@ mgl_itest_join_environment(MGL_ITEST_VULKAN_HANDLE_HANDLES_ENVIRONMENT
 # P13 W6: the AbaControlHandles lane pinned the frontend arm (its knob defeats the identity half
 # of Magma's frontend-arm keys); that arm is deleted, and the record arm keys every object on the
 # applier's {slot, gen}, which the knob does not reach. Removed (docs/ci/ci-cleanup-log.md).
-gtest_discover_tests(MobileGLIntegrationTest
-    TEST_PREFIX "DirectGLES.HandleRecycle.Handles."
-    TEST_FILTER "HandleRecycleScenario.*"
-    DISCOVERY_TIMEOUT 30
-    PROPERTIES
-        LABELS "integration-gpu\;integration-monolith-control"
-        TIMEOUT ${MGL_ITEST_TIMEOUT}
-        ENVIRONMENT "${MGL_ITEST_GLES_HANDLE_HANDLES_ENVIRONMENT}"
-)
-gtest_discover_tests(MobileGLIntegrationTest
-    TEST_PREFIX "DirectVulkan.HandleRecycle.Handles."
-    TEST_FILTER "HandleRecycleScenario.*"
-    DISCOVERY_TIMEOUT 30
-    PROPERTIES
-        LABELS "integration-gpu\;integration-monolith-control"
-        TIMEOUT ${MGL_ITEST_TIMEOUT}
-        ENVIRONMENT "${MGL_ITEST_VULKAN_HANDLE_HANDLES_ENVIRONMENT}"
-)
+mgl_itest_lane("DirectGLES.HandleRecycle.Handles." "HandleRecycleScenario.*"
+    LABELS "integration-gpu\;integration-monolith-control" ENV "${MGL_ITEST_GLES_HANDLE_HANDLES_ENVIRONMENT}")
+mgl_itest_lane("DirectVulkan.HandleRecycle.Handles." "HandleRecycleScenario.*"
+    LABELS "integration-gpu\;integration-monolith-control" ENV "${MGL_ITEST_VULKAN_HANDLE_HANDLES_ENVIRONMENT}")
 # --- G12: the CSO content-addressing negative control ---------------------------------
 #
 # PUSH BUILDS ONLY, and that is the honest scope rather than a convenience: the two counters the
@@ -1394,42 +1273,14 @@ mgl_itest_join_environment(MGL_ITEST_VULKAN_CSO_OFF_ENVIRONMENT
     "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/cso-no-content-addressing-DirectVulkan.log"
     ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_VULKAN_ENV})
 
-gtest_discover_tests(MobileGLIntegrationTest
-    TEST_PREFIX "DirectGLES.CsoContentAddressing.On."
-    TEST_FILTER "CsoContentAddressingScenario.*"
-    DISCOVERY_TIMEOUT 30
-    PROPERTIES
-        LABELS "integration-gpu\;integration-monolith-control"
-        TIMEOUT ${MGL_ITEST_TIMEOUT}
-        ENVIRONMENT "${MGL_ITEST_GLES_CSO_ON_ENVIRONMENT}"
-)
-gtest_discover_tests(MobileGLIntegrationTest
-    TEST_PREFIX "DirectGLES.CsoContentAddressing.Off."
-    TEST_FILTER "CsoContentAddressingScenario.*"
-    DISCOVERY_TIMEOUT 30
-    PROPERTIES
-        LABELS "integration-gpu\;integration-monolith-control"
-        TIMEOUT ${MGL_ITEST_TIMEOUT}
-        ENVIRONMENT "${MGL_ITEST_GLES_CSO_OFF_ENVIRONMENT}"
-)
-gtest_discover_tests(MobileGLIntegrationTest
-    TEST_PREFIX "DirectVulkan.CsoContentAddressing.On."
-    TEST_FILTER "CsoContentAddressingScenario.*"
-    DISCOVERY_TIMEOUT 30
-    PROPERTIES
-        LABELS "integration-gpu\;integration-monolith-control"
-        TIMEOUT ${MGL_ITEST_TIMEOUT}
-        ENVIRONMENT "${MGL_ITEST_VULKAN_CSO_ON_ENVIRONMENT}"
-)
-gtest_discover_tests(MobileGLIntegrationTest
-    TEST_PREFIX "DirectVulkan.CsoContentAddressing.Off."
-    TEST_FILTER "CsoContentAddressingScenario.*"
-    DISCOVERY_TIMEOUT 30
-    PROPERTIES
-        LABELS "integration-gpu\;integration-monolith-control"
-        TIMEOUT ${MGL_ITEST_TIMEOUT}
-        ENVIRONMENT "${MGL_ITEST_VULKAN_CSO_OFF_ENVIRONMENT}"
-)
+mgl_itest_lane("DirectGLES.CsoContentAddressing.On." "CsoContentAddressingScenario.*"
+    LABELS "integration-gpu\;integration-monolith-control" ENV "${MGL_ITEST_GLES_CSO_ON_ENVIRONMENT}")
+mgl_itest_lane("DirectGLES.CsoContentAddressing.Off." "CsoContentAddressingScenario.*"
+    LABELS "integration-gpu\;integration-monolith-control" ENV "${MGL_ITEST_GLES_CSO_OFF_ENVIRONMENT}")
+mgl_itest_lane("DirectVulkan.CsoContentAddressing.On." "CsoContentAddressingScenario.*"
+    LABELS "integration-gpu\;integration-monolith-control" ENV "${MGL_ITEST_VULKAN_CSO_ON_ENVIRONMENT}")
+mgl_itest_lane("DirectVulkan.CsoContentAddressing.Off." "CsoContentAddressingScenario.*"
+    LABELS "integration-gpu\;integration-monolith-control" ENV "${MGL_ITEST_VULKAN_CSO_OFF_ENVIRONMENT}")
 
 # P13 W3b (ID-P13-3): THE NAMED-REFUSAL CONTROLS that replace the Off / Refused A/B lanes. Subsystem
 # bits 0-13 are fixed on: their pre-handle arms are gone, so a mask that clears one has nothing to
@@ -1504,15 +1355,8 @@ mgl_itest_join_environment(MGL_ITEST_GLES_RESOURCE_SUBSYSTEM_OFF_ENVIRONMENT
     "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/resource-subsystem-off-DirectGLES.log"
     ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
 
-gtest_discover_tests(MobileGLIntegrationTest
-    TEST_PREFIX "DirectGLES.ResourceSubsystemControl.On."
-    TEST_FILTER "ResourceSubsystemControlScenario.*"
-    DISCOVERY_TIMEOUT 30
-    PROPERTIES
-        LABELS "integration-gpu\;integration-monolith-control"
-        TIMEOUT ${MGL_ITEST_TIMEOUT}
-        ENVIRONMENT "${MGL_ITEST_GLES_RESOURCE_SUBSYSTEM_ON_ENVIRONMENT}"
-)
+mgl_itest_lane("DirectGLES.ResourceSubsystemControl.On." "ResourceSubsystemControlScenario.*"
+    LABELS "integration-gpu\;integration-monolith-control" ENV "${MGL_ITEST_GLES_RESOURCE_SUBSYSTEM_ON_ENVIRONMENT}")
 mgl_itest_add_refused_mask_control("DirectGLES.SubsystemMaskRefusal.ResourceSubsystemControlOff" "0x7f" "ResourceSubsystemControlScenario.*"
     "${MGL_ITEST_GLES_RESOURCE_SUBSYSTEM_OFF_ENVIRONMENT}")
 
@@ -1533,24 +1377,10 @@ mgl_itest_join_environment(MGL_ITEST_GLES_MPR_ARENA_ENVIRONMENT
     "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/mpr-large-arena-adoption-DirectGLES.log"
     ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
 
-gtest_discover_tests(MobileGLIntegrationTest
-    TEST_PREFIX "DirectGLES.MapPersistentRoundtrips."
-    TEST_FILTER "StorageBufferRegrowScenario.NStorageDefinitionsCostNMapPersistentRoundtripsNotOnePerDraw"
-    DISCOVERY_TIMEOUT 30
-    PROPERTIES
-        LABELS "integration-gpu\;integration-monolith-control"
-        TIMEOUT ${MGL_ITEST_TIMEOUT}
-        ENVIRONMENT "${MGL_ITEST_GLES_MPR_REGROW_ENVIRONMENT}"
-)
-gtest_discover_tests(MobileGLIntegrationTest
-    TEST_PREFIX "DirectGLES.MapPersistentRoundtrips."
-    TEST_FILTER "LargeArenaAdoptionScenario.AnAdoptionCostsExactlyOneMapPersistentRoundtrip"
-    DISCOVERY_TIMEOUT 30
-    PROPERTIES
-        LABELS "integration-gpu\;integration-monolith-control"
-        TIMEOUT ${MGL_ITEST_TIMEOUT}
-        ENVIRONMENT "${MGL_ITEST_GLES_MPR_ARENA_ENVIRONMENT}"
-)
+mgl_itest_lane("DirectGLES.MapPersistentRoundtrips." "StorageBufferRegrowScenario.NStorageDefinitionsCostNMapPersistentRoundtripsNotOnePerDraw"
+    LABELS "integration-gpu\;integration-monolith-control" ENV "${MGL_ITEST_GLES_MPR_REGROW_ENVIRONMENT}")
+mgl_itest_lane("DirectGLES.MapPersistentRoundtrips." "LargeArenaAdoptionScenario.AnAdoptionCostsExactlyOneMapPersistentRoundtrip"
+    LABELS "integration-gpu\;integration-monolith-control" ENV "${MGL_ITEST_GLES_MPR_ARENA_ENVIRONMENT}")
 
 # LargeArenaAdoption's three behavioural cases under BOTH arms of the same A/B. This file is where
 # an adopted store's whole life is exercised - the NULL-data definition that adopts it, an
@@ -1579,26 +1409,12 @@ mgl_itest_join_environment(MGL_ITEST_VULKAN_ARENA_ARM_ENVIRONMENT
     "MOBILEGL_BACKEND_TYPE=DirectVulkan" "MOBILEGL_ITEST_REQUIRE_GPU=1"
     ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_VULKAN_ENV})
 
-gtest_discover_tests(MobileGLIntegrationTest
-    TEST_PREFIX "DirectGLES.ResourceSubsystemOn."
-    TEST_FILTER "LargeArenaAdoptionScenario.*"
-    DISCOVERY_TIMEOUT 30
-    PROPERTIES
-        LABELS "integration-gpu\;integration-monolith-control"
-        TIMEOUT ${MGL_ITEST_TIMEOUT}
-        ENVIRONMENT "${MGL_ITEST_GLES_ARENA_SUBSYSTEM_ON_ENVIRONMENT}"
-)
+mgl_itest_lane("DirectGLES.ResourceSubsystemOn." "LargeArenaAdoptionScenario.*"
+    LABELS "integration-gpu\;integration-monolith-control" ENV "${MGL_ITEST_GLES_ARENA_SUBSYSTEM_ON_ENVIRONMENT}")
 mgl_itest_add_refused_mask_control("DirectGLES.SubsystemMaskRefusal.ResourceSubsystemOff" "0x7f" "LargeArenaAdoptionScenario.*"
     "${MGL_ITEST_GLES_ARENA_SUBSYSTEM_OFF_ENVIRONMENT}")
-gtest_discover_tests(MobileGLIntegrationTest
-    TEST_PREFIX "DirectVulkan.ArenaArm."
-    TEST_FILTER "LargeArenaAdoptionScenario.TheArenaLandsInTheTierItsLaneDeclares"
-    DISCOVERY_TIMEOUT 30
-    PROPERTIES
-        LABELS "integration-gpu\;integration-monolith-control"
-        TIMEOUT ${MGL_ITEST_TIMEOUT}
-        ENVIRONMENT "${MGL_ITEST_VULKAN_ARENA_ARM_ENVIRONMENT}"
-)
+mgl_itest_lane("DirectVulkan.ArenaArm." "LargeArenaAdoptionScenario.TheArenaLandsInTheTierItsLaneDeclares"
+    LABELS "integration-gpu\;integration-monolith-control" ENV "${MGL_ITEST_VULKAN_ARENA_ARM_ENVIRONMENT}")
 
 # --- G12: the P4a subsystem A/B, and its dependency refusal ---------------------------
 #
@@ -1689,39 +1505,18 @@ mgl_itest_join_environment(MGL_ITEST_VULKAN_OBJECT_SUBSYSTEM_NO_CONSUMER_ENVIRON
     "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/object-subsystem-no-consumer-DirectVulkan.log"
     ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_VULKAN_ENV})
 
-gtest_discover_tests(MobileGLIntegrationTest
-    TEST_PREFIX "DirectGLES.ObjectSubsystemControl.On."
-    TEST_FILTER "ObjectSubsystemControlScenario.ClearingTheP4aBitsStopsTheEmissionsAndNotThePixels"
-    DISCOVERY_TIMEOUT 30
-    PROPERTIES
-        LABELS "integration-gpu\;integration-monolith-control"
-        TIMEOUT ${MGL_ITEST_TIMEOUT}
-        ENVIRONMENT "${MGL_ITEST_GLES_OBJECT_SUBSYSTEM_ON_ENVIRONMENT}"
-)
+mgl_itest_lane("DirectGLES.ObjectSubsystemControl.On." "ObjectSubsystemControlScenario.ClearingTheP4aBitsStopsTheEmissionsAndNotThePixels"
+    LABELS "integration-gpu\;integration-monolith-control" ENV "${MGL_ITEST_GLES_OBJECT_SUBSYSTEM_ON_ENVIRONMENT}")
 mgl_itest_add_refused_mask_control("DirectGLES.SubsystemMaskRefusal.ObjectSubsystemControlOff" "0x1ff" "ObjectSubsystemControlScenario.ClearingTheP4aBitsStopsTheEmissionsAndNotThePixels"
     "${MGL_ITEST_GLES_OBJECT_SUBSYSTEM_OFF_ENVIRONMENT}")
 mgl_itest_add_refused_mask_control("DirectGLES.SubsystemMaskRefusal.ObjectSubsystemControlRefused" "0x9ff" "ObjectSubsystemControlScenario.ASamplerBitWithoutTheTextureBitIsRefusedAndNamed"
     "${MGL_ITEST_GLES_OBJECT_SUBSYSTEM_REFUSED_ENVIRONMENT}")
 mgl_itest_add_refused_mask_control("DirectGLES.SubsystemMaskRefusal.ObjectSubsystemControlRefusedTexture" "0x5ff" "ObjectSubsystemControlScenario.ATextureBitWithoutTheSamplerBitIsRefusedAndNamed"
     "${MGL_ITEST_GLES_OBJECT_SUBSYSTEM_REFUSED_TEXTURE_ENVIRONMENT}")
-gtest_discover_tests(MobileGLIntegrationTest
-    TEST_PREFIX "DirectGLES.ObjectSubsystemControl.Consumer."
-    TEST_FILTER "ObjectSubsystemControlScenario.TheAppliersNoConsumerBeltNeverFiresBehindTheClientsGate"
-    DISCOVERY_TIMEOUT 30
-    PROPERTIES
-        LABELS "integration-gpu\;integration-monolith-control"
-        TIMEOUT ${MGL_ITEST_TIMEOUT}
-        ENVIRONMENT "${MGL_ITEST_GLES_OBJECT_SUBSYSTEM_CONSUMER_ENVIRONMENT}"
-)
-gtest_discover_tests(MobileGLIntegrationTest
-    TEST_PREFIX "DirectVulkan.ObjectSubsystemControl.NoConsumer."
-    TEST_FILTER "ObjectSubsystemControlScenario.TheAppliersNoConsumerBeltNeverFiresBehindTheClientsGate"
-    DISCOVERY_TIMEOUT 30
-    PROPERTIES
-        LABELS "integration-gpu\;integration-monolith-control"
-        TIMEOUT ${MGL_ITEST_TIMEOUT}
-        ENVIRONMENT "${MGL_ITEST_VULKAN_OBJECT_SUBSYSTEM_NO_CONSUMER_ENVIRONMENT}"
-)
+mgl_itest_lane("DirectGLES.ObjectSubsystemControl.Consumer." "ObjectSubsystemControlScenario.TheAppliersNoConsumerBeltNeverFiresBehindTheClientsGate"
+    LABELS "integration-gpu\;integration-monolith-control" ENV "${MGL_ITEST_GLES_OBJECT_SUBSYSTEM_CONSUMER_ENVIRONMENT}")
+mgl_itest_lane("DirectVulkan.ObjectSubsystemControl.NoConsumer." "ObjectSubsystemControlScenario.TheAppliersNoConsumerBeltNeverFiresBehindTheClientsGate"
+    LABELS "integration-gpu\;integration-monolith-control" ENV "${MGL_ITEST_VULKAN_OBJECT_SUBSYSTEM_NO_CONSUMER_ENVIRONMENT}")
 
 # --- The texture upload shape: A GATE as of P3b/P4b R-11 (D-D4) -----------------------
 #
@@ -1752,16 +1547,8 @@ mgl_itest_join_environment(MGL_ITEST_GLES_TEXTURE_UPLOAD_SHAPE_ENVIRONMENT
     "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/texture-upload-shape-DirectGLES.log"
     ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
 
-gtest_discover_tests(MobileGLIntegrationTest
-    TEST_PREFIX "DirectGLES.TextureUploadShape."
-    TEST_FILTER "TextureUploadShapeScenario.TheEmittedUploadShapeIsRecordedAndTheTwoSidesAgree"
-    DISCOVERY_TIMEOUT 30
-    PROPERTIES
-        LABELS integration-gpu
-        TIMEOUT ${MGL_ITEST_TIMEOUT}
-        RESOURCE_LOCK texture-upload-shape-DirectGLES.log
-        ENVIRONMENT "${MGL_ITEST_GLES_TEXTURE_UPLOAD_SHAPE_ENVIRONMENT}"
-)
+mgl_itest_lane("DirectGLES.TextureUploadShape." "TextureUploadShapeScenario.TheEmittedUploadShapeIsRecordedAndTheTwoSidesAgree"
+    LOCK texture-upload-shape-DirectGLES.log ENV "${MGL_ITEST_GLES_TEXTURE_UPLOAD_SHAPE_ENVIRONMENT}")
 
 # --- G9: the mandatory red-before scenario -------------------------------------------
 #
@@ -1860,22 +1647,10 @@ if (MOBILEGL_PIPE_VERIFY)
     # from the live context at the verb boundary - which is what "the 742 integration entries
     # prove push equals pull" means. Labelled integration-gpu as well so a verify build's
     # `ctest -L integration-gpu` still describes the whole registration set.
-    gtest_discover_tests(MobileGLIntegrationTest
-        TEST_PREFIX "DirectGLES.Verify."
-        TEST_FILTER "-${MGL_ITEST_GLES_VIEW_FILTER}"
-        DISCOVERY_TIMEOUT 30
-        PROPERTIES
-            LABELS "integration-gpu\;integration-verify\;integration-monolith-control"
-            TIMEOUT ${MGL_ITEST_VERIFY_TIMEOUT}
-            ENVIRONMENT "${MGL_ITEST_GLES_VERIFY_ENVIRONMENT}"
-    )
-    gtest_discover_tests(MobileGLIntegrationTest
-        TEST_PREFIX "DirectGLES.Verify."
-        TEST_FILTER "${MGL_ITEST_GLES_VIEW_FILTER}"
-        DISCOVERY_TIMEOUT 30
-        PROPERTIES LABELS "integration-verify\;integration-monolith-control"
-            TIMEOUT ${MGL_ITEST_VERIFY_TIMEOUT}
-            ENVIRONMENT "${MGL_ITEST_GLES_VERIFY_ENVIRONMENT}\;MOBILEGL_ESPRYT_ENABLE_TEXTURE_VIEW=1")
+    mgl_itest_lane("DirectGLES.Verify." "-${MGL_ITEST_GLES_VIEW_FILTER}"
+        LABELS "integration-gpu\;integration-verify\;integration-monolith-control" TIMEOUT ${MGL_ITEST_VERIFY_TIMEOUT} ENV "${MGL_ITEST_GLES_VERIFY_ENVIRONMENT}")
+    mgl_itest_lane("DirectGLES.Verify." "${MGL_ITEST_GLES_VIEW_FILTER}"
+        LABELS "integration-verify\;integration-monolith-control" TIMEOUT ${MGL_ITEST_VERIFY_TIMEOUT} ENV "${MGL_ITEST_GLES_VERIFY_ENVIRONMENT}\;MOBILEGL_ESPRYT_ENABLE_TEXTURE_VIEW=1")
     gtest_discover_tests(MobileGLIntegrationTest
         TEST_PREFIX "DirectVulkan.Verify."
         DISCOVERY_TIMEOUT 30
@@ -1889,64 +1664,22 @@ if (MOBILEGL_PIPE_VERIFY)
     # never armed: it runs the same library and the same MOBILEGL_PIPE_VERIFY=1 as the ambient
     # entries above, but unlike them it cannot be green against a library with no comparator
     # compiled in. Its log is its own, so `-j 4` cannot make it flake.
-    gtest_discover_tests(MobileGLIntegrationTest
-        TEST_PREFIX "DirectGLES.VerifyArming."
-        TEST_FILTER "PipeVerifyArmingScenario.Armed"
-        DISCOVERY_TIMEOUT 30
-        PROPERTIES
-            LABELS "integration-gpu\;integration-verify\;integration-monolith-control"
-            TIMEOUT ${MGL_ITEST_VERIFY_TIMEOUT}
-            ENVIRONMENT "${MGL_ITEST_GLES_VERIFY_ARMING_ENVIRONMENT}"
-    )
-    gtest_discover_tests(MobileGLIntegrationTest
-        TEST_PREFIX "DirectVulkan.VerifyArming."
-        TEST_FILTER "PipeVerifyArmingScenario.Armed"
-        DISCOVERY_TIMEOUT 30
-        PROPERTIES
-            LABELS "integration-gpu\;integration-verify\;integration-monolith-control"
-            TIMEOUT ${MGL_ITEST_VERIFY_TIMEOUT}
-            ENVIRONMENT "${MGL_ITEST_VULKAN_VERIFY_ARMING_ENVIRONMENT}"
-    )
+    mgl_itest_lane("DirectGLES.VerifyArming." "PipeVerifyArmingScenario.Armed"
+        LABELS "integration-gpu\;integration-verify\;integration-monolith-control" TIMEOUT ${MGL_ITEST_VERIFY_TIMEOUT} ENV "${MGL_ITEST_GLES_VERIFY_ARMING_ENVIRONMENT}")
+    mgl_itest_lane("DirectVulkan.VerifyArming." "PipeVerifyArmingScenario.Armed"
+        LABELS "integration-gpu\;integration-verify\;integration-monolith-control" TIMEOUT ${MGL_ITEST_VERIFY_TIMEOUT} ENV "${MGL_ITEST_VULKAN_VERIFY_ARMING_ENVIRONMENT}")
 
     # One case each: the knobs are process-wide, so a corrupted or poisoned process cannot also be
     # running the ambient assertions. These four entries are the ones that assert the RED - they
     # pass when the comparator and the poison report, and go red when either stops.
-    gtest_discover_tests(MobileGLIntegrationTest
-        TEST_PREFIX "DirectGLES.VerifyCorrupted."
-        TEST_FILTER "PipeVerifyArmingScenario.CorruptedFieldIsReported"
-        DISCOVERY_TIMEOUT 30
-        PROPERTIES
-            LABELS "integration-gpu\;integration-verify\;integration-monolith-control"
-            TIMEOUT ${MGL_ITEST_VERIFY_TIMEOUT}
-            ENVIRONMENT "${MGL_ITEST_GLES_VERIFY_CORRUPT_ENVIRONMENT}"
-    )
-    gtest_discover_tests(MobileGLIntegrationTest
-        TEST_PREFIX "DirectVulkan.VerifyCorrupted."
-        TEST_FILTER "PipeVerifyArmingScenario.CorruptedFieldIsReported"
-        DISCOVERY_TIMEOUT 30
-        PROPERTIES
-            LABELS "integration-gpu\;integration-verify\;integration-monolith-control"
-            TIMEOUT ${MGL_ITEST_VERIFY_TIMEOUT}
-            ENVIRONMENT "${MGL_ITEST_VULKAN_VERIFY_CORRUPT_ENVIRONMENT}"
-    )
-    gtest_discover_tests(MobileGLIntegrationTest
-        TEST_PREFIX "DirectGLES.PoisonOmitted."
-        TEST_FILTER "PoisonOmissionScenario.OmittedFieldAbortsOnThatVerb"
-        DISCOVERY_TIMEOUT 30
-        PROPERTIES
-            LABELS "integration-gpu\;integration-verify\;integration-monolith-control"
-            TIMEOUT ${MGL_ITEST_VERIFY_TIMEOUT}
-            ENVIRONMENT "${MGL_ITEST_GLES_POISON_OMIT_ENVIRONMENT}"
-    )
-    gtest_discover_tests(MobileGLIntegrationTest
-        TEST_PREFIX "DirectVulkan.PoisonOmitted."
-        TEST_FILTER "PoisonOmissionScenario.OmittedFieldAbortsOnThatVerb"
-        DISCOVERY_TIMEOUT 30
-        PROPERTIES
-            LABELS "integration-gpu\;integration-verify\;integration-monolith-control"
-            TIMEOUT ${MGL_ITEST_VERIFY_TIMEOUT}
-            ENVIRONMENT "${MGL_ITEST_VULKAN_POISON_OMIT_ENVIRONMENT}"
-    )
+    mgl_itest_lane("DirectGLES.VerifyCorrupted." "PipeVerifyArmingScenario.CorruptedFieldIsReported"
+        LABELS "integration-gpu\;integration-verify\;integration-monolith-control" TIMEOUT ${MGL_ITEST_VERIFY_TIMEOUT} ENV "${MGL_ITEST_GLES_VERIFY_CORRUPT_ENVIRONMENT}")
+    mgl_itest_lane("DirectVulkan.VerifyCorrupted." "PipeVerifyArmingScenario.CorruptedFieldIsReported"
+        LABELS "integration-gpu\;integration-verify\;integration-monolith-control" TIMEOUT ${MGL_ITEST_VERIFY_TIMEOUT} ENV "${MGL_ITEST_VULKAN_VERIFY_CORRUPT_ENVIRONMENT}")
+    mgl_itest_lane("DirectGLES.PoisonOmitted." "PoisonOmissionScenario.OmittedFieldAbortsOnThatVerb"
+        LABELS "integration-gpu\;integration-verify\;integration-monolith-control" TIMEOUT ${MGL_ITEST_VERIFY_TIMEOUT} ENV "${MGL_ITEST_GLES_POISON_OMIT_ENVIRONMENT}")
+    mgl_itest_lane("DirectVulkan.PoisonOmitted." "PoisonOmissionScenario.OmittedFieldAbortsOnThatVerb"
+        LABELS "integration-gpu\;integration-verify\;integration-monolith-control" TIMEOUT ${MGL_ITEST_VERIFY_TIMEOUT} ENV "${MGL_ITEST_VULKAN_POISON_OMIT_ENVIRONMENT}")
 endif()
 
 # --- P5: the DirectGLES.Split. lanes and the persistent-map ARM lanes ------------------------
@@ -2085,16 +1818,8 @@ mgl_itest_join_environment(MGL_ITEST_GLES_PMAP_ARM_ENVIRONMENT
     "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/persistent-map-arm-DirectGLES.log"
     ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
 
-gtest_discover_tests(MobileGLIntegrationTest
-    TEST_PREFIX "DirectGLES.PersistentMapArm."
-    TEST_FILTER "PersistentCoherentMapScenario.TheMapLandsInTheArmItsLaneDeclares"
-    DISCOVERY_TIMEOUT 30
-    PROPERTIES
-        LABELS integration-gpu
-        TIMEOUT ${MGL_ITEST_TIMEOUT}
-        RESOURCE_LOCK persistent-map-arm-DirectGLES.log
-        ENVIRONMENT "${MGL_ITEST_GLES_PMAP_ARM_ENVIRONMENT}"
-)
+mgl_itest_lane("DirectGLES.PersistentMapArm." "PersistentCoherentMapScenario.TheMapLandsInTheArmItsLaneDeclares"
+    LOCK persistent-map-arm-DirectGLES.log ENV "${MGL_ITEST_GLES_PMAP_ARM_ENVIRONMENT}")
 
 if (MOBILEGL_BUILD_DISAGGREGATED)
     # One block per scenario, following the DirectGLES.MapPersistentRoundtrips. precedent: a
@@ -2479,17 +2204,8 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
             # IT MATTERS MORE ON THE SPAWN ARM: there TWO PROCESSES append to the path, so two
             # entries sharing one file is not merely ambiguous, it interleaves two sessions.
             mgl_itest_generic_split_filter("${scenarioFilter}" "${mglItestBackend}" mglItestGenericFilter)
-            gtest_discover_tests(MobileGLIntegrationTest
-                TEST_PREFIX "${mglItestBackend}.${mglItestArm}.${prefixTail}"
-                TEST_LIST "MGL_SPLIT_ARM_TESTS_${MGL_SPLIT_ARM_INDEX}"
-                TEST_FILTER "${mglItestGenericFilter}"
-                DISCOVERY_TIMEOUT 30
-                PROPERTIES
-                    LABELS "${mglItestArmLabels}"
-                    TIMEOUT ${MGL_ITEST_TIMEOUT}
-                    ENVIRONMENT "${MGL_ITEST_${mglItestEnvStem}_${mglItestArmUpper}_ENVIRONMENT}"
-                    ${mglItestArmProperties}
-            )
+            mgl_itest_lane("${mglItestBackend}.${mglItestArm}.${prefixTail}" "${mglItestGenericFilter}"
+                LABELS "${mglItestArmLabels}" TEST_LIST "MGL_SPLIT_ARM_TESTS_${MGL_SPLIT_ARM_INDEX}" PROPERTIES ${mglItestArmProperties} ENV "${MGL_ITEST_${mglItestEnvStem}_${mglItestArmUpper}_ENVIRONMENT}")
             list(APPEND MGL_SPLIT_ARM_TEST_LISTS "MGL_SPLIT_ARM_TESTS_${MGL_SPLIT_ARM_INDEX}")
             math(EXPR MGL_SPLIT_ARM_INDEX "${MGL_SPLIT_ARM_INDEX} + 1")
         endforeach()
@@ -2567,17 +2283,8 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     # construction: over shared segments (split, spawn) the same knob dies at the handshake, which
     # is the unit gate RemoteClientControls.AdoptTier*OverSharedSegments*. The `.AdoptTier0.` tail is
     # what keeps these names out of spawn_lane_parity.py's case set (see MAGMA_TCP_ONLY there).
-    gtest_discover_tests(MobileGLIntegrationTest
-        TEST_PREFIX "DirectGLES.Tcp.AdoptTier0."
-        TEST_LIST "MGL_SPLIT_ARM_TESTS_${MGL_SPLIT_ARM_INDEX}"
-        TEST_FILTER "LargeArenaAdoptionScenario.*-LargeArenaAdoptionScenario.AnAdoptionCostsExactlyOneMapPersistentRoundtrip:LargeArenaAdoptionScenario.ASessionThatCannotRunT0FallsBackToT2OnceByName"
-        DISCOVERY_TIMEOUT 30
-        PROPERTIES
-            LABELS "integration-gpu\;integration-tcp"
-            TIMEOUT ${MGL_ITEST_TIMEOUT}
-            ENVIRONMENT "${MGL_ITEST_GLES_TCP_ENVIRONMENT}\;MOBILEGL_IPC_ADOPT_TIER=0\;MGITEST_ADOPT_TIER_REFUSAL=T0"
-            FIXTURES_REQUIRED mobilegl-tcp RESOURCE_LOCK mobilegl-tcp
-    )
+    mgl_itest_lane("DirectGLES.Tcp.AdoptTier0." "LargeArenaAdoptionScenario.*-LargeArenaAdoptionScenario.AnAdoptionCostsExactlyOneMapPersistentRoundtrip:LargeArenaAdoptionScenario.ASessionThatCannotRunT0FallsBackToT2OnceByName"
+        LABELS "integration-gpu\;integration-tcp" LOCK mobilegl-tcp FIXTURES mobilegl-tcp TEST_LIST "MGL_SPLIT_ARM_TESTS_${MGL_SPLIT_ARM_INDEX}" ENV "${MGL_ITEST_GLES_TCP_ENVIRONMENT}\;MOBILEGL_IPC_ADOPT_TIER=0\;MGITEST_ADOPT_TIER_REFUSAL=T0")
     list(APPEND MGL_SPLIT_ARM_TEST_LISTS "MGL_SPLIT_ARM_TESTS_${MGL_SPLIT_ARM_INDEX}")
     math(EXPR MGL_SPLIT_ARM_INDEX "${MGL_SPLIT_ARM_INDEX} + 1")
     # P11 B2 (CONTRACT-P11 B2): THE SHARED-SEGMENT ARMS WITH MOBILEGL_IPC_ADOPT_TIER=0, which A1 made
@@ -2597,29 +2304,13 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         else()
             set(mglT0Fallback "no AHardwareBuffer")
         endif()
-        gtest_discover_tests(MobileGLIntegrationTest
-            TEST_PREFIX "DirectGLES.${mglT0Arm}.AdoptTier0."
-            TEST_LIST "MGL_SPLIT_ARM_TESTS_${MGL_SPLIT_ARM_INDEX}"
-            TEST_FILTER "LargeArenaAdoptionScenario.*-LargeArenaAdoptionScenario.AnAdoptionCostsExactlyOneMapPersistentRoundtrip:LargeArenaAdoptionScenario.AStreamSessionRefusesTheAdoptTierOnceByName"
-            DISCOVERY_TIMEOUT 30
-            PROPERTIES
-                LABELS "integration-gpu\;integration-${mglT0ArmLower}"
-                TIMEOUT ${MGL_ITEST_TIMEOUT}
-                ENVIRONMENT "${MGL_ITEST_GLES_${mglT0ArmUpper}_ENVIRONMENT}\;MOBILEGL_IPC_ADOPT_TIER=0\;MGITEST_ADOPT_T0_FALLBACK=${mglT0Fallback}"
-        )
+        mgl_itest_lane("DirectGLES.${mglT0Arm}.AdoptTier0." "LargeArenaAdoptionScenario.*-LargeArenaAdoptionScenario.AnAdoptionCostsExactlyOneMapPersistentRoundtrip:LargeArenaAdoptionScenario.AStreamSessionRefusesTheAdoptTierOnceByName"
+            LABELS "integration-gpu\;integration-${mglT0ArmLower}" TEST_LIST "MGL_SPLIT_ARM_TESTS_${MGL_SPLIT_ARM_INDEX}" ENV "${MGL_ITEST_GLES_${mglT0ArmUpper}_ENVIRONMENT}\;MOBILEGL_IPC_ADOPT_TIER=0\;MGITEST_ADOPT_T0_FALLBACK=${mglT0Fallback}")
         list(APPEND MGL_SPLIT_ARM_TEST_LISTS "MGL_SPLIT_ARM_TESTS_${MGL_SPLIT_ARM_INDEX}")
         math(EXPR MGL_SPLIT_ARM_INDEX "${MGL_SPLIT_ARM_INDEX} + 1")
     endforeach()
-    gtest_discover_tests(MobileGLIntegrationTest
-        TEST_PREFIX "DirectGLES.Spawn.AdoptT0Disallowed."
-        TEST_LIST "MGL_SPLIT_ARM_TESTS_${MGL_SPLIT_ARM_INDEX}"
-        TEST_FILTER "LargeArenaAdoptionScenario.ASessionThatCannotRunT0FallsBackToT2OnceByName:LargeArenaAdoptionScenario.TheArenaLandsInTheTierItsLaneDeclares"
-        DISCOVERY_TIMEOUT 30
-        PROPERTIES
-            LABELS "integration-gpu\;integration-spawn"
-            TIMEOUT ${MGL_ITEST_TIMEOUT}
-            ENVIRONMENT "${MGL_ITEST_GLES_SPAWN_ENVIRONMENT}\;MOBILEGL_IPC_ADOPT_TIER=0\;MOBILEGL_IPC_ALLOW_ADOPT_T0=0\;MGITEST_ADOPT_T0_FALLBACK=disallowed"
-    )
+    mgl_itest_lane("DirectGLES.Spawn.AdoptT0Disallowed." "LargeArenaAdoptionScenario.ASessionThatCannotRunT0FallsBackToT2OnceByName:LargeArenaAdoptionScenario.TheArenaLandsInTheTierItsLaneDeclares"
+        LABELS "integration-gpu\;integration-spawn" TEST_LIST "MGL_SPLIT_ARM_TESTS_${MGL_SPLIT_ARM_INDEX}" ENV "${MGL_ITEST_GLES_SPAWN_ENVIRONMENT}\;MOBILEGL_IPC_ADOPT_TIER=0\;MOBILEGL_IPC_ALLOW_ADOPT_T0=0\;MGITEST_ADOPT_T0_FALLBACK=disallowed")
     list(APPEND MGL_SPLIT_ARM_TEST_LISTS "MGL_SPLIT_ARM_TESTS_${MGL_SPLIT_ARM_INDEX}")
     math(EXPR MGL_SPLIT_ARM_INDEX "${MGL_SPLIT_ARM_INDEX} + 1")
 
@@ -2705,17 +2396,8 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
             "MOBILEGL_BACKEND_TYPE=DirectGLES" "MGITEST_SPLIT_LANE=1" "MOBILEGL_ITEST_REQUIRE_GPU=1"
             "MOBILEGL_ESPRYT_FORCE_DS_READBACK_EMULATION=1"
             ${mglItestArmTransportEnv} ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
-        gtest_discover_tests(MobileGLIntegrationTest
-            TEST_PREFIX "DirectGLES.${mglItestDsArm}.ForcedDs."
-            TEST_LIST "MGL_SPLIT_ARM_TESTS_${MGL_SPLIT_ARM_INDEX}"
-            TEST_FILTER "DepthStencilReadbackMatrixScenario.*"
-            DISCOVERY_TIMEOUT 30
-            PROPERTIES
-                LABELS "integration-gpu\;integration-${mglItestDsArmLower}"
-                TIMEOUT ${MGL_ITEST_TIMEOUT}
-                ENVIRONMENT "${mglItestDsEnvironment}"
-                ${mglItestArmProperties}
-        )
+        mgl_itest_lane("DirectGLES.${mglItestDsArm}.ForcedDs." "DepthStencilReadbackMatrixScenario.*"
+            LABELS "integration-gpu\;integration-${mglItestDsArmLower}" TEST_LIST "MGL_SPLIT_ARM_TESTS_${MGL_SPLIT_ARM_INDEX}" PROPERTIES ${mglItestArmProperties} ENV "${mglItestDsEnvironment}")
         # Into the accumulated list like every other arm entry, so SplitLogPaths gives each of
         # these a private MOBILEGL_LOG_FILE_PATH too - two processes append on the spawn arm.
         list(APPEND MGL_SPLIT_ARM_TEST_LISTS "MGL_SPLIT_ARM_TESTS_${MGL_SPLIT_ARM_INDEX}")
@@ -2762,17 +2444,8 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
                 set(mglItestAsyncKnobs
                     "MOBILEGL_ASYNC_SHADER_COMPILE=1\;MOBILEGL_ASYNC_OPTIMISTIC_SHADER_STATUS=1")
             endif()
-            gtest_discover_tests(MobileGLIntegrationTest
-                TEST_PREFIX "DirectGLES.${mglItestAsyncArm}.${mglItestAsyncShape}."
-                TEST_LIST "MGL_SPLIT_ARM_TESTS_${MGL_SPLIT_ARM_INDEX}"
-                TEST_FILTER "${mglItestAsyncFilter}"
-                DISCOVERY_TIMEOUT 30
-                PROPERTIES
-                    LABELS "integration-gpu\;integration-${mglItestArmLower}"
-                    TIMEOUT ${MGL_ITEST_TIMEOUT}
-                    ENVIRONMENT "${MGL_ITEST_GLES_${mglItestAsyncArmUpper}_ENVIRONMENT}\;${mglItestAsyncKnobs}"
-                    ${mglItestArmProperties}
-            )
+            mgl_itest_lane("DirectGLES.${mglItestAsyncArm}.${mglItestAsyncShape}." "${mglItestAsyncFilter}"
+                LABELS "integration-gpu\;integration-${mglItestArmLower}" TEST_LIST "MGL_SPLIT_ARM_TESTS_${MGL_SPLIT_ARM_INDEX}" PROPERTIES ${mglItestArmProperties} ENV "${MGL_ITEST_GLES_${mglItestAsyncArmUpper}_ENVIRONMENT}\;${mglItestAsyncKnobs}")
             list(APPEND MGL_SPLIT_ARM_TEST_LISTS "MGL_SPLIT_ARM_TESTS_${MGL_SPLIT_ARM_INDEX}")
             math(EXPR MGL_SPLIT_ARM_INDEX "${MGL_SPLIT_ARM_INDEX} + 1")
         endforeach()
@@ -2807,16 +2480,8 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     mgl_itest_join_environment(MGL_ITEST_GLES_PUSH_MONOLITH_ENVIRONMENT
         "MOBILEGL_BACKEND_TYPE=DirectGLES" "MOBILEGL_TRANSPORT=monolith"
         ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
-    gtest_discover_tests(MobileGLIntegrationTest
-        TEST_PREFIX "DirectGLES.PushMonolithArm."
-        TEST_LIST MGL_PUSH_MONOLITH_ATTACHMENT_TESTS
-        TEST_FILTER "MonolithAttachmentClearScenario.*"
-        DISCOVERY_TIMEOUT 30
-        PROPERTIES
-            LABELS "integration-gpu\;integration-split"
-            TIMEOUT ${MGL_ITEST_TIMEOUT}
-            ENVIRONMENT "${MGL_ITEST_GLES_PUSH_MONOLITH_ENVIRONMENT}"
-    )
+    mgl_itest_lane("DirectGLES.PushMonolithArm." "MonolithAttachmentClearScenario.*"
+        LABELS "integration-gpu\;integration-split" TEST_LIST MGL_PUSH_MONOLITH_ATTACHMENT_TESTS ENV "${MGL_ITEST_GLES_PUSH_MONOLITH_ENVIRONMENT}")
 
     # ---- P5b d1: the indexed / instanced / multi-draw / indirect draw family under inproc ----
     #
@@ -2907,17 +2572,8 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
             "MOBILEGL_IPC_SERVER_PATH=${MGL_ITEST_SPLIT_SERVER_PATH}" "MGITEST_SPLIT_LANE=1"
             "MOBILEGL_ESPRYT_MULTIDRAW_MODE=${mglItestMultiDrawTier}"
             ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
-        gtest_discover_tests(MobileGLIntegrationTest
-            TEST_PREFIX
-                "DirectGLES.Split.MultiDrawTier${MGL_SPLIT_MULTIDRAW_TIER_PREFIX_${mglItestMultiDrawTier}}."
-            TEST_LIST "MGL_SPLIT_MULTIDRAW_${mglItestMultiDrawTier}_TESTS"
-            TEST_FILTER "${MGL_SPLIT_MULTIDRAW_TIER_FILTER}"
-            DISCOVERY_TIMEOUT 30
-            PROPERTIES
-                LABELS "integration-gpu\;integration-split"
-                TIMEOUT ${MGL_ITEST_TIMEOUT}
-                ENVIRONMENT "${MGL_ITEST_GLES_SPLIT_MULTIDRAW_ENVIRONMENT}"
-        )
+        mgl_itest_lane("DirectGLES.Split.MultiDrawTier${MGL_SPLIT_MULTIDRAW_TIER_PREFIX_${mglItestMultiDrawTier}}." "${MGL_SPLIT_MULTIDRAW_TIER_FILTER}"
+            LABELS "integration-gpu\;integration-split" TEST_LIST "MGL_SPLIT_MULTIDRAW_${mglItestMultiDrawTier}_TESTS" ENV "${MGL_ITEST_GLES_SPLIT_MULTIDRAW_ENVIRONMENT}")
     endforeach()
 
     # ---- P5b package i1 (docs/archive/contracts/CONTRACT-P5B.md §2 i1) --------------------------------
@@ -2999,14 +2655,8 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
                                    AWidenedFormatsUploadSurvivesTheCarrierRemint
                                    AnRgba8SnormUploadSurvivesTheImageBind
                                    AnRgba16SnormImmutableUploadSurvivesTheCarrierRemint)
-            gtest_discover_tests(MobileGLIntegrationTest
-                TEST_PREFIX "DirectGLES.${mglItestArm}.RemintFallback."
-                TEST_FILTER "TextureRemintPullScenario.${remintFallbackCase}"
-                DISCOVERY_TIMEOUT 30
-                PROPERTIES
-                    LABELS "integration-gpu\\;integration-remint-fallback-${mglItestArmLower}"
-                    TIMEOUT ${MGL_ITEST_TIMEOUT}
-                    ENVIRONMENT "${MGL_ITEST_GLES_${mglItestArmUpper}_ENVIRONMENT}\;MGITEST_ESPRYT_FORCE_REMINT_READBACK_FAILURE=1\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p9-remint-fallback-${mglItestArmLower}-${remintFallbackCase}.log")
+            mgl_itest_lane("DirectGLES.${mglItestArm}.RemintFallback." "TextureRemintPullScenario.${remintFallbackCase}"
+                LABELS "integration-gpu\\;integration-remint-fallback-${mglItestArmLower}" ENV "${MGL_ITEST_GLES_${mglItestArmUpper}_ENVIRONMENT}\;MGITEST_ESPRYT_FORCE_REMINT_READBACK_FAILURE=1\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p9-remint-fallback-${mglItestArmLower}-${remintFallbackCase}.log")
         endforeach()
     endforeach()
 
@@ -3185,17 +2835,8 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
             "MOBILEGL_ESPRYT_ENABLE_TEXTURE_VIEW=1"
             "MOBILEGL_LOG_FILE_PATH=${mglD2Log}"
             ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
-        gtest_discover_tests(MobileGLIntegrationTest
-            TEST_PREFIX "DirectGLES.${mglD2Arm}.TextureUploadShape."
-            TEST_FILTER "${MGL_D2_TUS_FILTER}"
-            DISCOVERY_TIMEOUT 30
-            PROPERTIES
-                LABELS "integration-gpu\;integration-${mglD2ArmLower}"
-                TIMEOUT ${MGL_ITEST_TIMEOUT}
-                RESOURCE_LOCK "${mglD2Locks}"
-                ${mglD2Extra}
-                ENVIRONMENT "${MGL_D2_TUS_ENV_${mglD2Arm}}"
-        )
+        mgl_itest_lane("DirectGLES.${mglD2Arm}.TextureUploadShape." "${MGL_D2_TUS_FILTER}"
+            LABELS "integration-gpu\;integration-${mglD2ArmLower}" LOCK "${mglD2Locks}" PROPERTIES ${mglD2Extra} ENV "${MGL_D2_TUS_ENV_${mglD2Arm}}")
     endforeach()
 
     # ---- P7 CI: THE SPAWN CLIENT'S COLD-START BUDGET ----------------------------------------
@@ -3238,15 +2879,8 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
             "MOBILEGL_TEST_DELAY_FIRST_BRINGUP_MS=6000"
             "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/cold-start-spawn-${mglColdBackend}.log"
             ${MGL_ITEST_CAPABILITY_ENV} ${mglColdDriverEnv})
-        gtest_discover_tests(MobileGLIntegrationTest
-            TEST_PREFIX "${mglColdBackend}.Spawn.ColdStart."
-            TEST_FILTER "${MGL_COLDSTART_FILTER}"
-            DISCOVERY_TIMEOUT 30
-            PROPERTIES
-                LABELS "integration-gpu\;integration-cold-start"
-                TIMEOUT ${MGL_ITEST_TIMEOUT}
-                ENVIRONMENT "${MGL_COLDSTART_ENV_${mglColdBackend}}"
-        )
+        mgl_itest_lane("${mglColdBackend}.Spawn.ColdStart." "${MGL_COLDSTART_FILTER}"
+            LABELS "integration-gpu\;integration-cold-start" ENV "${MGL_COLDSTART_ENV_${mglColdBackend}}")
     endforeach()
 
     # ---- D2: THE TEXTURE / PROGRAM SPLIT-SCENARIO CENSUS ------------------------------------
@@ -3330,17 +2964,8 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
                               ACopiedWindowReadsBackOverTheUpload
                               ACopiedWindowReadsBackFromAnImmutableLevel
                               APartialUploadAfterTheCopyKeepsTheCopiedWindow)
-            gtest_discover_tests(MobileGLIntegrationTest
-                TEST_PREFIX "DirectGLES.${mglItestArm}.StoreRead."
-                TEST_LIST "MGL_SPLIT_ARM_TESTS_${MGL_SPLIT_ARM_INDEX}"
-                TEST_FILTER "CopyImageStoreReadbackScenario.${storeReadCase}"
-                DISCOVERY_TIMEOUT 30
-                PROPERTIES
-                    LABELS "integration-gpu\\;integration-${mglItestArmLower}"
-                    TIMEOUT ${MGL_ITEST_TIMEOUT}
-                    ENVIRONMENT "${MGL_ITEST_GLES_${mglItestArmUpper}_ENVIRONMENT}\;MGITEST_ESPRYT_REFUSE_TEXTURE_READBACK_EXTENT=${MGL_P8E_REFUSE_EXTENT}"
-                    ${mglItestStoreReadProperties}
-            )
+            mgl_itest_lane("DirectGLES.${mglItestArm}.StoreRead." "CopyImageStoreReadbackScenario.${storeReadCase}"
+                LABELS "integration-gpu\\;integration-${mglItestArmLower}" TEST_LIST "MGL_SPLIT_ARM_TESTS_${MGL_SPLIT_ARM_INDEX}" PROPERTIES ${mglItestStoreReadProperties} ENV "${MGL_ITEST_GLES_${mglItestArmUpper}_ENVIRONMENT}\;MGITEST_ESPRYT_REFUSE_TEXTURE_READBACK_EXTENT=${MGL_P8E_REFUSE_EXTENT}")
             # Into the accumulated list, so SplitLogPaths gives each entry a private log: the
             # store-route assertion reads the server's half of it.
             list(APPEND MGL_SPLIT_ARM_TEST_LISTS "MGL_SPLIT_ARM_TESTS_${MGL_SPLIT_ARM_INDEX}")
@@ -3352,17 +2977,8 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         if(mglItestArm STREQUAL "Tcp")
             set(mglItestMagmaCopyStoreProperties FIXTURES_REQUIRED mobilegl-tcp RESOURCE_LOCK mobilegl-tcp)
         endif()
-        gtest_discover_tests(MobileGLIntegrationTest
-            TEST_PREFIX "DirectVulkan.${mglItestArm}.CopyStore."
-            TEST_LIST "MGL_SPLIT_ARM_TESTS_${MGL_SPLIT_ARM_INDEX}"
-            TEST_FILTER "CopyImageStoreReadbackScenario.*"
-            DISCOVERY_TIMEOUT 30
-            PROPERTIES
-                LABELS "integration-magma-${mglItestArmLower}"
-                TIMEOUT ${MGL_ITEST_TIMEOUT}
-                ENVIRONMENT "${MGL_ITEST_VULKAN_${mglItestArmUpper}_ENVIRONMENT}"
-                ${mglItestMagmaCopyStoreProperties}
-        )
+        mgl_itest_lane("DirectVulkan.${mglItestArm}.CopyStore." "CopyImageStoreReadbackScenario.*"
+            LABELS "integration-magma-${mglItestArmLower}" TEST_LIST "MGL_SPLIT_ARM_TESTS_${MGL_SPLIT_ARM_INDEX}" PROPERTIES ${mglItestMagmaCopyStoreProperties} ENV "${MGL_ITEST_VULKAN_${mglItestArmUpper}_ENVIRONMENT}")
         list(APPEND MGL_SPLIT_ARM_TEST_LISTS "MGL_SPLIT_ARM_TESTS_${MGL_SPLIT_ARM_INDEX}")
         math(EXPR MGL_SPLIT_ARM_INDEX "${MGL_SPLIT_ARM_INDEX} + 1")
     endforeach()
@@ -3380,16 +2996,8 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/persistent-map-arm-split-DirectGLES.log"
         ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
 
-    gtest_discover_tests(MobileGLIntegrationTest
-        TEST_PREFIX "DirectGLES.Split.PersistentMapArm."
-        TEST_FILTER "PersistentCoherentMapScenario.TheMapLandsInTheArmItsLaneDeclares"
-        DISCOVERY_TIMEOUT 30
-        PROPERTIES
-            LABELS "integration-gpu\;integration-split"
-            TIMEOUT ${MGL_ITEST_TIMEOUT}
-            RESOURCE_LOCK persistent-map-arm-split-DirectGLES.log
-            ENVIRONMENT "${MGL_ITEST_GLES_SPLIT_PMAP_ARM_ENVIRONMENT}"
-    )
+    mgl_itest_lane("DirectGLES.Split.PersistentMapArm." "PersistentCoherentMapScenario.TheMapLandsInTheArmItsLaneDeclares"
+        LABELS "integration-gpu\;integration-split" LOCK persistent-map-arm-split-DirectGLES.log ENV "${MGL_ITEST_GLES_SPLIT_PMAP_ARM_ENVIRONMENT}")
 
     # --- EXIT GATE E3(e): the same checks with a ring small enough to force back-pressure -----
     #
@@ -3418,16 +3026,8 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     set(MGL_SPLIT_SMALL_RING_SCENARIOS ClearThenReadPixelsScenario TriangleScenario
                                       PersistentCoherentMapScenario)
     foreach(mglItestSmallRingScenario IN LISTS MGL_SPLIT_SMALL_RING_SCENARIOS)
-        gtest_discover_tests(MobileGLIntegrationTest
-            TEST_PREFIX "DirectGLES.Split.SmallRing."
-            TEST_LIST "MGL_SPLIT_SMALL_${mglItestSmallRingScenario}_TESTS"
-            TEST_FILTER "${mglItestSmallRingScenario}.*"
-            DISCOVERY_TIMEOUT 30
-            PROPERTIES
-                LABELS "integration-gpu\;integration-split"
-                TIMEOUT ${MGL_ITEST_TIMEOUT}
-                ENVIRONMENT "${MGL_ITEST_GLES_SPLIT_SMALL_RING_ENVIRONMENT}"
-        )
+        mgl_itest_lane("DirectGLES.Split.SmallRing." "${mglItestSmallRingScenario}.*"
+            LABELS "integration-gpu\;integration-split" TEST_LIST "MGL_SPLIT_SMALL_${mglItestSmallRingScenario}_TESTS" ENV "${MGL_ITEST_GLES_SPLIT_SMALL_RING_ENVIRONMENT}")
     endforeach()
 
     # ---- P5e package pa: THE STRICT LANE GETS ENTRIES OF ITS OWN ------------------------------
@@ -3462,26 +3062,10 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         "MOBILEGL_IPC_STRICT_ERRORS=1"
         ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
 
-    gtest_discover_tests(MobileGLIntegrationTest
-        TEST_PREFIX "DirectGLES.Split.StrictProgramArm."
-        TEST_LIST MGL_SPLIT_PA_STRICT_DRAW_TESTS
-        TEST_FILTER "MultiDrawScenario.BaseVertexDrawsRejectMalformedArguments"
-        DISCOVERY_TIMEOUT 30
-        PROPERTIES
-            LABELS "integration-split"
-            TIMEOUT ${MGL_ITEST_TIMEOUT}
-            ENVIRONMENT "${MGL_ITEST_GLES_SPLIT_STRICT_ENVIRONMENT}"
-    )
-    gtest_discover_tests(MobileGLIntegrationTest
-        TEST_PREFIX "DirectGLES.Split.StrictProgramArm."
-        TEST_LIST MGL_SPLIT_PA_STRICT_DISPATCH_TESTS
-        TEST_FILTER "AtomicCounterScenario.*"
-        DISCOVERY_TIMEOUT 30
-        PROPERTIES
-            LABELS "integration-split"
-            TIMEOUT ${MGL_ITEST_TIMEOUT}
-            ENVIRONMENT "${MGL_ITEST_GLES_SPLIT_STRICT_ENVIRONMENT}"
-    )
+    mgl_itest_lane("DirectGLES.Split.StrictProgramArm." "MultiDrawScenario.BaseVertexDrawsRejectMalformedArguments"
+        LABELS "integration-split" TEST_LIST MGL_SPLIT_PA_STRICT_DRAW_TESTS ENV "${MGL_ITEST_GLES_SPLIT_STRICT_ENVIRONMENT}")
+    mgl_itest_lane("DirectGLES.Split.StrictProgramArm." "AtomicCounterScenario.*"
+        LABELS "integration-split" TEST_LIST MGL_SPLIT_PA_STRICT_DISPATCH_TESTS ENV "${MGL_ITEST_GLES_SPLIT_STRICT_ENVIRONMENT}")
 
     # P8-B: glGenerateMipmap ON ESPRYT'S SERVER (docs/archive/notes/p8/B.md). The window a record names (B1) and
     # RGB16F / RGB32F (B2) on the three Espryt arms; the Magma control is the gated
@@ -3499,14 +3083,8 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
                            Rgb16fRenderTargetBaseGeneratesFromTheGpuWrittenLevel
                            Rgb32fUploadedBaseGeneratesItsChain
                            Rgb32fRenderTargetBaseGeneratesFromTheGpuWrittenLevel)
-            gtest_discover_tests(MobileGLIntegrationTest
-                TEST_PREFIX "DirectGLES.${mglItestArm}.CpuMip."
-                TEST_FILTER "GenerateMipmapServerScenario.${cpuMipCase}"
-                DISCOVERY_TIMEOUT 30
-                PROPERTIES
-                    LABELS "integration-gpu\\;integration-cpu-mip-${mglItestArmLower}"
-                    TIMEOUT ${MGL_ITEST_TIMEOUT}
-                    ENVIRONMENT "${MGL_ITEST_GLES_${mglItestArmUpper}_ENVIRONMENT}\;MGITEST_ESPRYT_FORCE_CPU_MIPMAP=1\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p8b-cpu-mip-${mglItestArmLower}-${cpuMipCase}.log")
+            mgl_itest_lane("DirectGLES.${mglItestArm}.CpuMip." "GenerateMipmapServerScenario.${cpuMipCase}"
+                LABELS "integration-gpu\\;integration-cpu-mip-${mglItestArmLower}" ENV "${MGL_ITEST_GLES_${mglItestArmUpper}_ENVIRONMENT}\;MGITEST_ESPRYT_FORCE_CPU_MIPMAP=1\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p8b-cpu-mip-${mglItestArmLower}-${cpuMipCase}.log")
         endforeach()
     endforeach()
     # P13 W4b: MONOLITH TAKES THE SAME KNOBS. On the record arm the monolith runs the server's
@@ -3516,27 +3094,15 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
                        Rgb16fRenderTargetBaseGeneratesFromTheGpuWrittenLevel
                        Rgb32fUploadedBaseGeneratesItsChain
                        Rgb32fRenderTargetBaseGeneratesFromTheGpuWrittenLevel)
-        gtest_discover_tests(MobileGLIntegrationTest
-            TEST_PREFIX "DirectGLES.Monolith.CpuMip."
-            TEST_FILTER "GenerateMipmapServerScenario.${cpuMipCase}"
-            DISCOVERY_TIMEOUT 30
-            PROPERTIES
-                LABELS "integration-gpu"
-                TIMEOUT ${MGL_ITEST_TIMEOUT}
-                ENVIRONMENT "${MGL_ITEST_GLES_ENVIRONMENT}\;MGITEST_ESPRYT_FORCE_CPU_MIPMAP=1\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p13-cpu-mip-monolith-${cpuMipCase}.log")
+        mgl_itest_lane("DirectGLES.Monolith.CpuMip." "GenerateMipmapServerScenario.${cpuMipCase}"
+            ENV "${MGL_ITEST_GLES_ENVIRONMENT}\;MGITEST_ESPRYT_FORCE_CPU_MIPMAP=1\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p13-cpu-mip-monolith-${cpuMipCase}.log")
     endforeach()
     foreach(storeReadCase AnUploadedLevelReadsBackExactly
                           ACopiedWindowReadsBackOverTheUpload
                           ACopiedWindowReadsBackFromAnImmutableLevel
                           APartialUploadAfterTheCopyKeepsTheCopiedWindow)
-        gtest_discover_tests(MobileGLIntegrationTest
-            TEST_PREFIX "DirectGLES.Monolith.StoreRead."
-            TEST_FILTER "CopyImageStoreReadbackScenario.${storeReadCase}"
-            DISCOVERY_TIMEOUT 30
-            PROPERTIES
-                LABELS "integration-gpu"
-                TIMEOUT ${MGL_ITEST_TIMEOUT}
-                ENVIRONMENT "${MGL_ITEST_GLES_ENVIRONMENT}\;MGITEST_ESPRYT_REFUSE_TEXTURE_READBACK_EXTENT=${MGL_P8E_REFUSE_EXTENT}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p13-store-read-monolith-${storeReadCase}.log")
+        mgl_itest_lane("DirectGLES.Monolith.StoreRead." "CopyImageStoreReadbackScenario.${storeReadCase}"
+            ENV "${MGL_ITEST_GLES_ENVIRONMENT}\;MGITEST_ESPRYT_REFUSE_TEXTURE_READBACK_EXTENT=${MGL_P8E_REFUSE_EXTENT}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p13-store-read-monolith-${storeReadCase}.log")
     endforeach()
 
     # P8-C: draw inputs a compute shader wrote, read on the CPU by the side that applies the draw
@@ -3573,13 +3139,8 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         mgl_itest_join_environment(mglItestP8fMipEnvironment
             "MOBILEGL_BACKEND_TYPE=DirectVulkan" "MOBILEGL_ITEST_REQUIRE_GPU=1" "MGITEST_SPLIT_LANE=1"
             ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_VULKAN_ENV} ${mglItestArmTransportEnv})
-        gtest_discover_tests(MobileGLIntegrationTest
-            TEST_PREFIX "DirectVulkan.${mglItestArm}.ShaderMipDecline."
-            TEST_FILTER "F1WireScenario.GenerateMipmapWithoutAShaderArmShapeDeclinesAndKeepsTheSession"
-            DISCOVERY_TIMEOUT 30
-            PROPERTIES LABELS "${mglItestMagmaLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
-                ${mglItestArmProperties}
-                ENVIRONMENT "${mglItestP8fMipEnvironment}\;MGITEST_MAGMA_FORCE_SHADER_MIPMAP=1\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p8f-shadermip-decline${mglItestArmLogTag}.log")
+        mgl_itest_lane("DirectVulkan.${mglItestArm}.ShaderMipDecline." "F1WireScenario.GenerateMipmapWithoutAShaderArmShapeDeclinesAndKeepsTheSession"
+            LABELS "${mglItestMagmaLabels}" PROPERTIES ${mglItestArmProperties} ENV "${mglItestP8fMipEnvironment}\;MGITEST_MAGMA_FORCE_SHADER_MIPMAP=1\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p8f-shadermip-decline${mglItestArmLogTag}.log")
     endforeach()
 endif()
 
@@ -3628,15 +3189,8 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         mgl_itest_join_environment(mglItestMagmaWireEnvironment
             ${MGL_ITEST_MAGMA_WIRE_FLAVOUR_ENV} ${mglItestArmTransportEnv})
         foreach(fmSlot ComputeImageStoreThroughViewPreservesOtherRootLayer EnabledVertexBufferDrawKeepsNamedP7Fatal SrgbDrawTracksFramebufferConversion Texture1DFramebufferClearPixels VertexIdSamplerAndScalarUniformPixels ComputeImageStoreFramebufferPixels PartialTextureUploadPreservesGpuClearPixels TextureViewClearTargetsItsRootMipAndLayer ClearBufferfiPixels ClearBufferfvPixels ClearBufferivPixels ClearBufferuivPixels ClearNamedFramebufferfiPixels ClearNamedFramebufferfvPixels ClearNamedFramebufferivPixels ClearNamedFramebufferuivPixels CopyTexImage2DPixels CopyTexSubImage2DPixels GenerateMipmapPixels GenerateMipmapPackedFloatPixels GenerateMipmapDepthPixels)
-            gtest_discover_tests(MobileGLIntegrationTest
-                TEST_PREFIX "DirectVulkan.${mglItestArm}.Fm."
-                TEST_FILTER "F1WireScenario.${fmSlot}"
-                DISCOVERY_TIMEOUT 30
-                PROPERTIES
-                    LABELS "${mglItestMagmaLabels}"
-                    TIMEOUT ${MGL_ITEST_TIMEOUT}
-                    ${mglItestArmProperties}
-                    ENVIRONMENT "${mglItestMagmaWireEnvironment}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p5f-fm${mglItestArmLogTag}-${fmSlot}.log")
+            mgl_itest_lane("DirectVulkan.${mglItestArm}.Fm." "F1WireScenario.${fmSlot}"
+                LABELS "${mglItestMagmaLabels}" PROPERTIES ${mglItestArmProperties} ENV "${mglItestMagmaWireEnvironment}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p5f-fm${mglItestArmLogTag}-${fmSlot}.log")
         endforeach()
         foreach(fmCase ClipDistanceScenario.AnEnabledClipDistanceRemovesTheNegativeHalf
                        ClipDistanceScenario.ADisabledClipDistanceRemovesNothing
@@ -3647,26 +3201,16 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
                        CopyImageLayeredScenario.VolumeToVolumeAtNonZeroMipLevel
                        CopyImageLayeredScenario.ArrayToVolumeCopiesEverySlice
                        CopyImageLayeredScenario.VolumeToArrayCopiesEverySlice)
-            gtest_discover_tests(MobileGLIntegrationTest
-                TEST_PREFIX "DirectVulkan.${mglItestArm}.Fm."
-                TEST_FILTER "${fmCase}"
-                DISCOVERY_TIMEOUT 30
-                PROPERTIES LABELS "${mglItestMagmaLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
-                    ${mglItestArmProperties}
-                    ENVIRONMENT "${mglItestMagmaWireEnvironment}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p5f-fm${mglItestArmLogTag}-${fmCase}.log")
+            mgl_itest_lane("DirectVulkan.${mglItestArm}.Fm." "${fmCase}"
+                LABELS "${mglItestMagmaLabels}" PROPERTIES ${mglItestArmProperties} ENV "${mglItestMagmaWireEnvironment}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p5f-fm${mglItestArmLogTag}-${fmCase}.log")
         endforeach()
         # P7 gate 5 (g5-msrbo): the empty-level pair, on the gated Magma lanes as well - the CTS
         # arm gate 5 measures is inproc x DirectVulkan, and every one of its cases ends in the
         # empty-level reset this scenario reproduces.
         foreach(emptyLevelCase TheCtsStateResetDefinesEveryDefaultTargetEmpty
                                ALevelDefinedEmptyThenRedefinedCarriesTheNewTexels)
-            gtest_discover_tests(MobileGLIntegrationTest
-                TEST_PREFIX "DirectVulkan.${mglItestArm}.Fm."
-                TEST_FILTER "EmptyTextureLevelScenario.${emptyLevelCase}"
-                DISCOVERY_TIMEOUT 30
-                PROPERTIES LABELS "${mglItestMagmaLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
-                    ${mglItestArmProperties}
-                    ENVIRONMENT "${mglItestMagmaWireEnvironment}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p7-emptylevel${mglItestArmLogTag}-${emptyLevelCase}.log")
+            mgl_itest_lane("DirectVulkan.${mglItestArm}.Fm." "EmptyTextureLevelScenario.${emptyLevelCase}"
+                LABELS "${mglItestMagmaLabels}" PROPERTIES ${mglItestArmProperties} ENV "${mglItestMagmaWireEnvironment}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p7-emptylevel${mglItestArmLogTag}-${emptyLevelCase}.log")
         endforeach()
         # ---- P7 wave 2-B: THE TWO SHADER MIP ARMS, FORCED ------------------------------------
         #
@@ -3722,13 +3266,8 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
             if(NOT mglItestServerEnvKnobArm)
                 continue()
             endif()
-            gtest_discover_tests(MobileGLIntegrationTest
-                TEST_PREFIX "DirectVulkan.${mglItestArm}.ShaderMip${shaderMipTier}."
-                TEST_FILTER "F1WireScenario.GenerateMipmapWithoutNativeBlitPixels"
-                DISCOVERY_TIMEOUT 30
-                PROPERTIES LABELS "${mglItestMagmaLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
-                    ${mglItestArmProperties}
-                    ENVIRONMENT "${mglItestMagmaWireEnvironment}\;MGITEST_MAGMA_FORCE_SHADER_MIPMAP=${shaderMipTier}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p7-shadermip${mglItestArmLogTag}-tier${shaderMipTier}.log")
+            mgl_itest_lane("DirectVulkan.${mglItestArm}.ShaderMip${shaderMipTier}." "F1WireScenario.GenerateMipmapWithoutNativeBlitPixels"
+                LABELS "${mglItestMagmaLabels}" PROPERTIES ${mglItestArmProperties} ENV "${mglItestMagmaWireEnvironment}\;MGITEST_MAGMA_FORCE_SHADER_MIPMAP=${shaderMipTier}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p7-shadermip${mglItestArmLogTag}-tier${shaderMipTier}.log")
         endforeach()
         # The DEPTH half of the same knob (CONTRACT-P7 §5.1 (A)). ONE TIER, not two: the depth
         # pass renders into a depth ATTACHMENT view of the destination level, which a depth
@@ -3736,23 +3275,13 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         # tier 2 would register a second copy of tier 1's run. Split+spawn only, for the
         # server-side-knob reason above.
         if(mglItestServerEnvKnobArm)
-        gtest_discover_tests(MobileGLIntegrationTest
-            TEST_PREFIX "DirectVulkan.${mglItestArm}.DepthMip."
-            TEST_FILTER "F1WireScenario.GenerateMipmapDepthWithoutNativeBlitPixels"
-            DISCOVERY_TIMEOUT 30
-            PROPERTIES LABELS "${mglItestMagmaLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
-                ${mglItestArmProperties}
-                ENVIRONMENT "${mglItestMagmaWireEnvironment}\;MGITEST_MAGMA_FORCE_SHADER_MIPMAP=1\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p7-depthmip${mglItestArmLogTag}.log")
+        mgl_itest_lane("DirectVulkan.${mglItestArm}.DepthMip." "F1WireScenario.GenerateMipmapDepthWithoutNativeBlitPixels"
+            LABELS "${mglItestMagmaLabels}" PROPERTIES ${mglItestArmProperties} ENV "${mglItestMagmaWireEnvironment}\;MGITEST_MAGMA_FORCE_SHADER_MIPMAP=1\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p7-depthmip${mglItestArmLogTag}.log")
         endif()
         # NO KNOB on the decline: it is decided on the aspect before the blit-support question
         # is asked, so the plain Fm environment reaches it on every driver.
-        gtest_discover_tests(MobileGLIntegrationTest
-            TEST_PREFIX "DirectVulkan.${mglItestArm}.Fm."
-            TEST_FILTER "F1WireScenario.GenerateMipmapDepthStencilDeclinesAndKeepsTheSession"
-            DISCOVERY_TIMEOUT 30
-            PROPERTIES LABELS "${mglItestMagmaLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
-                ${mglItestArmProperties}
-                ENVIRONMENT "${mglItestMagmaWireEnvironment}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p7-dsmipdecline${mglItestArmLogTag}.log")
+        mgl_itest_lane("DirectVulkan.${mglItestArm}.Fm." "F1WireScenario.GenerateMipmapDepthStencilDeclinesAndKeepsTheSession"
+            LABELS "${mglItestMagmaLabels}" PROPERTIES ${mglItestArmProperties} ENV "${mglItestMagmaWireEnvironment}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p7-dsmipdecline${mglItestArmLogTag}.log")
         # `copy-image-in-place@P7`'s retirement and its one surviving decline. SPLIT-ONLY in the
         # strongest sense: the monolith arm declines every in-place copy, so there is no
         # DirectVulkan. entry to register these beside - the wire arm is the one that performs
@@ -3777,13 +3306,8 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         foreach(pipelineDelayCase VertexIdSamplerAndScalarUniformPixels
                                   ComputeImageStoreFramebufferPixels
                                   GenerateMipmapPixels)
-            gtest_discover_tests(MobileGLIntegrationTest
-                TEST_PREFIX "DirectVulkan.${mglItestArm}.PipelineDelay."
-                TEST_FILTER "F1WireScenario.${pipelineDelayCase}"
-                DISCOVERY_TIMEOUT 30
-                PROPERTIES LABELS "${mglItestMagmaLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
-                    ${mglItestArmProperties}
-                    ENVIRONMENT "${mglItestMagmaWireEnvironment}\;MOBILEGL_TEST_PIPELINE_CREATE_DELAY_MS=25\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p7-pipelinedelay${mglItestArmLogTag}-${pipelineDelayCase}.log")
+            mgl_itest_lane("DirectVulkan.${mglItestArm}.PipelineDelay." "F1WireScenario.${pipelineDelayCase}"
+                LABELS "${mglItestMagmaLabels}" PROPERTIES ${mglItestArmProperties} ENV "${mglItestMagmaWireEnvironment}\;MOBILEGL_TEST_PIPELINE_CREATE_DELAY_MS=25\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p7-pipelinedelay${mglItestArmLogTag}-${pipelineDelayCase}.log")
         endforeach()
         # ---- P7 wave 2 package B3, EXIT GATE 3: the streamed `glBufferSubData -> draw` pair.
         #
@@ -3799,13 +3323,8 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         # ITS OWN ENTRY RATHER THAN A LANE-WIDE FLIP: the knob changes how EVERY streamed buffer
         # write in the process is answered, so putting it in the shared Fm environment would
         # retarget every other draw case in this lane.
-        gtest_discover_tests(MobileGLIntegrationTest
-            TEST_PREFIX "DirectVulkan.${mglItestArm}.Fm."
-            TEST_FILTER "F1WireScenario.StreamedBufferSubDataBeforeEachDrawIsOrdered"
-            DISCOVERY_TIMEOUT 30
-            PROPERTIES LABELS "${mglItestMagmaLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
-                ${mglItestArmProperties}
-                ENVIRONMENT "${mglItestMagmaWireEnvironment}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p7-streamedsubdata${mglItestArmLogTag}.log")
+        mgl_itest_lane("DirectVulkan.${mglItestArm}.Fm." "F1WireScenario.StreamedBufferSubDataBeforeEachDrawIsOrdered"
+            LABELS "${mglItestMagmaLabels}" PROPERTIES ${mglItestArmProperties} ENV "${mglItestMagmaWireEnvironment}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p7-streamedsubdata${mglItestArmLogTag}.log")
         # SPLIT AND SPAWN ONLY - a parity exception, named in scripts/ci/spawn_lane_parity.py
         # (MAGMA_SERVER_ENV_KNOB_NO_TCP, the same list as the B2 knobs above), not an omission.
         # The knob is read by the SERVER, and the tcp arm's server is the lane fixture
@@ -3815,13 +3334,8 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         # hosts the server in the test process and the spawn arm's server inherits the client's
         # environment, so on those two the knob is real.
         if(mglItestServerEnvKnobArm)
-            gtest_discover_tests(MobileGLIntegrationTest
-                TEST_PREFIX "DirectVulkan.${mglItestArm}.StaleSerial."
-                TEST_FILTER "F1WireScenario.StreamedBufferSubDataBeforeEachDrawIsOrdered"
-                DISCOVERY_TIMEOUT 30
-                PROPERTIES LABELS "${mglItestMagmaLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
-                    ${mglItestArmProperties}
-                    ENVIRONMENT "${mglItestMagmaWireEnvironment}\;MGITEST_MAGMA_FORCE_STALE_BUFFER_SERIAL=1\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p7-streamedsubdata-stale${mglItestArmLogTag}.log")
+            mgl_itest_lane("DirectVulkan.${mglItestArm}.StaleSerial." "F1WireScenario.StreamedBufferSubDataBeforeEachDrawIsOrdered"
+                LABELS "${mglItestMagmaLabels}" PROPERTIES ${mglItestArmProperties} ENV "${mglItestMagmaWireEnvironment}\;MGITEST_MAGMA_FORCE_STALE_BUFFER_SERIAL=1\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p7-streamedsubdata-stale${mglItestArmLogTag}.log")
         endif()
         # `default-color-blit-shape@P7`'s retirement. TWO ENTRIES OVER ONE CASE, and the second
         # is the only way its arm is reachable here: every surface this lane creates reports
@@ -3834,13 +3348,8 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
             if(defaultBlitScratch AND NOT mglItestServerEnvKnobArm)
                 continue()
             endif()
-            gtest_discover_tests(MobileGLIntegrationTest
-                TEST_PREFIX "DirectVulkan.${mglItestArm}.DefaultBlitShape${defaultBlitScratch}."
-                TEST_FILTER "F1WireScenario.ColorBlitToDefaultFromANonSampleableSourceDegrades"
-                DISCOVERY_TIMEOUT 30
-                PROPERTIES LABELS "${mglItestMagmaLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
-                    ${mglItestArmProperties}
-                    ENVIRONMENT "${mglItestMagmaWireEnvironment}\;MGITEST_MAGMA_FORCE_DEFAULT_BLIT_SCRATCH=${defaultBlitScratch}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p7-defaultblit${mglItestArmLogTag}-scratch${defaultBlitScratch}.log")
+            mgl_itest_lane("DirectVulkan.${mglItestArm}.DefaultBlitShape${defaultBlitScratch}." "F1WireScenario.ColorBlitToDefaultFromANonSampleableSourceDegrades"
+                LABELS "${mglItestMagmaLabels}" PROPERTIES ${mglItestArmProperties} ENV "${mglItestMagmaWireEnvironment}\;MGITEST_MAGMA_FORCE_DEFAULT_BLIT_SCRATCH=${defaultBlitScratch}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p7-defaultblit${mglItestArmLogTag}-scratch${defaultBlitScratch}.log")
         endforeach()
         # ---- P7 wave 2-B2: `multisample-blit-shape@P7`'s retirement and its decline ----------
         #
@@ -3855,13 +3364,8 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         foreach(multisampleBlitCase MultisampleColorBlitScalesAndFlipsThroughTheResolveScratch
                                     MultisampleBlitOntoAMultisampleDestinationDeclinesAndKeepsTheSession
                                     MultisampleBlitFromASingleSampleSourceDeclinesAndKeepsTheSession)
-            gtest_discover_tests(MobileGLIntegrationTest
-                TEST_PREFIX "DirectVulkan.${mglItestArm}.MsBlit."
-                TEST_FILTER "F1WireScenario.${multisampleBlitCase}"
-                DISCOVERY_TIMEOUT 30
-                PROPERTIES LABELS "${mglItestMagmaLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
-                    ${mglItestArmProperties}
-                    ENVIRONMENT "${mglItestMagmaWireEnvironment}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p7-msblit${mglItestArmLogTag}-${multisampleBlitCase}.log")
+            mgl_itest_lane("DirectVulkan.${mglItestArm}.MsBlit." "F1WireScenario.${multisampleBlitCase}"
+                LABELS "${mglItestMagmaLabels}" PROPERTIES ${mglItestArmProperties} ENV "${mglItestMagmaWireEnvironment}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p7-msblit${mglItestArmLogTag}-${multisampleBlitCase}.log")
         endforeach()
         # ---- P7 wave 2-B2: `multisample-blit-aspect@P7`'s retirement, BOTH ARMS ---------------
         #
@@ -3899,13 +3403,8 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
             if(NOT shaderDepthResolve AND mglItestServerEnvKnobArm)
                 set(msResolveProbeMarker "\;MGITEST_EXPECT_DEPTH_RESOLVE_PROBE=clean")
             endif()
-            gtest_discover_tests(MobileGLIntegrationTest
-                TEST_PREFIX "DirectVulkan.${mglItestArm}.MsResolve${shaderDepthResolve}."
-                TEST_FILTER "DepthStencilReadbackMatrixScenario.AResolvedMultisampleDepthReadsBackFromTheDestination"
-                DISCOVERY_TIMEOUT 30
-                PROPERTIES LABELS "${mglItestMagmaLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
-                    ${mglItestArmProperties}
-                    ENVIRONMENT "${mglItestMagmaWireEnvironment}\;MGITEST_MAGMA_FORCE_SHADER_DEPTH_RESOLVE=${shaderDepthResolve}${msResolveProbeMarker}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p7-msresolve${mglItestArmLogTag}-shader${shaderDepthResolve}.log")
+            mgl_itest_lane("DirectVulkan.${mglItestArm}.MsResolve${shaderDepthResolve}." "DepthStencilReadbackMatrixScenario.AResolvedMultisampleDepthReadsBackFromTheDestination"
+                LABELS "${mglItestMagmaLabels}" PROPERTIES ${mglItestArmProperties} ENV "${mglItestMagmaWireEnvironment}\;MGITEST_MAGMA_FORCE_SHADER_DEPTH_RESOLVE=${shaderDepthResolve}${msResolveProbeMarker}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p7-msresolve${mglItestArmLogTag}-shader${shaderDepthResolve}.log")
         endforeach()
         # ---- P7 gate 5 (g5-msrbo): the SINGLE-SAMPLED depth/stencil blit ----------------------
         #
@@ -3916,37 +3415,22 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         # on lavapipe). NO KNOB: the packed-aspect leg is red on lavapipe without the copy arm
         # (measured there only - a driver whose one-aspect blit keeps the other aspect stays green
         # without it), and nothing in it is read on the server, so all three arms carry it.
-        gtest_discover_tests(MobileGLIntegrationTest
-            TEST_PREFIX "DirectVulkan.${mglItestArm}.DsBlit."
-            TEST_FILTER "DepthStencilReadbackMatrixScenario.ASingleSampledDepthStencilBlitCopiesEveryAspect"
-            DISCOVERY_TIMEOUT 30
-            PROPERTIES LABELS "${mglItestMagmaLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
-                ${mglItestArmProperties}
-                ENVIRONMENT "${mglItestMagmaWireEnvironment}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p7-dsblit${mglItestArmLogTag}.log")
+        mgl_itest_lane("DirectVulkan.${mglItestArm}.DsBlit." "DepthStencilReadbackMatrixScenario.ASingleSampledDepthStencilBlitCopiesEveryAspect"
+            LABELS "${mglItestMagmaLabels}" PROPERTIES ${mglItestArmProperties} ENV "${mglItestMagmaWireEnvironment}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p7-dsblit${mglItestArmLogTag}.log")
         # P7 wave 2-B2 (review round): a FLIPPED multisample depth/stencil resolve is a legal blit
         # that used to end the session, and a SCALED one is INVALID_OPERATION that used to end it
         # too. Both shapes are decided on the rectangles, before any capability question, so this
         # entry needs NO knob and runs on all three arms.
-        gtest_discover_tests(MobileGLIntegrationTest
-            TEST_PREFIX "DirectVulkan.${mglItestArm}.MsFlip."
-            TEST_FILTER "DepthStencilReadbackMatrixScenario.AFlippedMultisampleResolveMirrorsTheBandsAndAScaleDeclines"
-            DISCOVERY_TIMEOUT 30
-            PROPERTIES LABELS "${mglItestMagmaLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
-                ${mglItestArmProperties}
-                ENVIRONMENT "${mglItestMagmaWireEnvironment}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p7-msflip${mglItestArmLogTag}.log")
+        mgl_itest_lane("DirectVulkan.${mglItestArm}.MsFlip." "DepthStencilReadbackMatrixScenario.AFlippedMultisampleResolveMirrorsTheBandsAndAScaleDeclines"
+            LABELS "${mglItestMagmaLabels}" PROPERTIES ${mglItestArmProperties} ENV "${mglItestMagmaWireEnvironment}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p7-msflip${mglItestArmLogTag}.log")
         # ITS KNOB TWIN (review round 2). Knob-free, lavapipe answers every resolve through the
         # VK_KHR_depth_stencil_resolve arm, so the shader arm's min-corner rectangle under a
         # flip - the device WITHOUT the extension - never ran. MsFlip1 forces it. Split+spawn
         # only, the server-side-knob reason above, named in spawn_lane_parity.py's
         # MAGMA_SERVER_ENV_KNOB_NO_TCP; the knob-free MsFlip. keeps all three arms.
         if(mglItestServerEnvKnobArm)
-            gtest_discover_tests(MobileGLIntegrationTest
-                TEST_PREFIX "DirectVulkan.${mglItestArm}.MsFlip1."
-                TEST_FILTER "DepthStencilReadbackMatrixScenario.AFlippedMultisampleResolveMirrorsTheBandsAndAScaleDeclines"
-                DISCOVERY_TIMEOUT 30
-                PROPERTIES LABELS "${mglItestMagmaLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
-                    ${mglItestArmProperties}
-                    ENVIRONMENT "${mglItestMagmaWireEnvironment}\;MGITEST_MAGMA_FORCE_SHADER_DEPTH_RESOLVE=1\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p7-msflip${mglItestArmLogTag}-shader1.log")
+            mgl_itest_lane("DirectVulkan.${mglItestArm}.MsFlip1." "DepthStencilReadbackMatrixScenario.AFlippedMultisampleResolveMirrorsTheBandsAndAScaleDeclines"
+                LABELS "${mglItestMagmaLabels}" PROPERTIES ${mglItestArmProperties} ENV "${mglItestMagmaWireEnvironment}\;MGITEST_MAGMA_FORCE_SHADER_DEPTH_RESOLVE=1\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p7-msflip${mglItestArmLogTag}-shader1.log")
         endif()
         # ---- P7 gate 5 (g5-msrbo review round, g5-msprobe): THE DEFECT'S ARM ORDER, ON A HOST --
         #
@@ -3976,13 +3460,8 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
                 list(GET probeBugPair 0 probeBugTail)
                 list(GET probeBugPair 1 probeBugTest)
                 string(TOLOWER "${probeBugTail}" probeBugLog)
-                gtest_discover_tests(MobileGLIntegrationTest
-                    TEST_PREFIX "DirectVulkan.${mglItestArm}.${probeBugTail}."
-                    TEST_FILTER "DepthStencilReadbackMatrixScenario.${probeBugTest}"
-                    DISCOVERY_TIMEOUT 30
-                    PROPERTIES LABELS "${mglItestMagmaLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
-                        ${mglItestArmProperties}
-                        ENVIRONMENT "${mglItestMagmaWireEnvironment}\;MGITEST_MAGMA_DEPTH_RESOLVE_PROBE=bug\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p7-${probeBugLog}${mglItestArmLogTag}.log")
+                mgl_itest_lane("DirectVulkan.${mglItestArm}.${probeBugTail}." "DepthStencilReadbackMatrixScenario.${probeBugTest}"
+                    LABELS "${mglItestMagmaLabels}" PROPERTIES ${mglItestArmProperties} ENV "${mglItestMagmaWireEnvironment}\;MGITEST_MAGMA_DEPTH_RESOLVE_PROBE=bug\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p7-${probeBugLog}${mglItestArmLogTag}.log")
             endforeach()
         endif()
         # ---- P7 gate 5 (g5-msprobe critic): THE REAL PROBE'S NEGATIVE CONTROL ------------------
@@ -4005,23 +3484,13 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         # measurement fails both entries; the probe's subject tally counting every texel as
         # resolved fails both entries while the four Bug entries stay green.
         if(mglItestServerEnvKnobArm)
-            gtest_discover_tests(MobileGLIntegrationTest
-                TEST_PREFIX "DirectVulkan.${mglItestArm}.MsResolveElide."
-                TEST_FILTER "DepthStencilReadbackMatrixScenario.AResolvedMultisampleDepthReadsBackFromTheDestination"
-                DISCOVERY_TIMEOUT 30
-                PROPERTIES LABELS "${mglItestMagmaLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
-                    ${mglItestArmProperties}
-                    ENVIRONMENT "${mglItestMagmaWireEnvironment}\;MGITEST_MAGMA_DEPTH_RESOLVE_PROBE=elide-subject\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p7-msresolveelide${mglItestArmLogTag}.log")
+            mgl_itest_lane("DirectVulkan.${mglItestArm}.MsResolveElide." "DepthStencilReadbackMatrixScenario.AResolvedMultisampleDepthReadsBackFromTheDestination"
+                LABELS "${mglItestMagmaLabels}" PROPERTIES ${mglItestArmProperties} ENV "${mglItestMagmaWireEnvironment}\;MGITEST_MAGMA_DEPTH_RESOLVE_PROBE=elide-subject\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p7-msresolveelide${mglItestArmLogTag}.log")
         endif()
         foreach(inPlaceCase CopyImageInPlaceAcrossLevelsAndLayers
                             CopyImageInPlaceOverlapDeclinesAndLeavesTheLevelAlone)
-            gtest_discover_tests(MobileGLIntegrationTest
-                TEST_PREFIX "DirectVulkan.${mglItestArm}.CopyInPlace."
-                TEST_FILTER "F1WireScenario.${inPlaceCase}"
-                DISCOVERY_TIMEOUT 30
-                PROPERTIES LABELS "${mglItestMagmaLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
-                    ${mglItestArmProperties}
-                    ENVIRONMENT "${mglItestMagmaWireEnvironment}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p7-copyinplace${mglItestArmLogTag}-${inPlaceCase}.log")
+            mgl_itest_lane("DirectVulkan.${mglItestArm}.CopyInPlace." "F1WireScenario.${inPlaceCase}"
+                LABELS "${mglItestMagmaLabels}" PROPERTIES ${mglItestArmProperties} ENV "${mglItestMagmaWireEnvironment}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p7-copyinplace${mglItestArmLogTag}-${inPlaceCase}.log")
         endforeach()
         # ---- P7 gate 5 (g5-imgwin): the image-unit window ------------------------------------
         #
@@ -4044,13 +3513,8 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
                                 ALevelPastATextureViewsWindowReadsZero
                                 AStoreThroughAnInvalidUnitIsLoadedThroughNeitherAnotherInvalidUnitNorItself
                                 AStoreThroughAnEmptyUnitIsLoadedThroughNeitherAnotherEmptyUnitNorItself)
-            gtest_discover_tests(MobileGLIntegrationTest
-                TEST_PREFIX "DirectVulkan.${mglItestArm}.ImageUnitWindow."
-                TEST_FILTER "InvalidImageUnitScenario.${imageWindowCase}"
-                DISCOVERY_TIMEOUT 30
-                PROPERTIES LABELS "${mglItestMagmaLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
-                    ${mglItestArmProperties}
-                    ENVIRONMENT "${mglItestMagmaWireEnvironment}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p7-imagewindow${mglItestArmLogTag}-${imageWindowCase}.log")
+            mgl_itest_lane("DirectVulkan.${mglItestArm}.ImageUnitWindow." "InvalidImageUnitScenario.${imageWindowCase}"
+                LABELS "${mglItestMagmaLabels}" PROPERTIES ${mglItestArmProperties} ENV "${mglItestMagmaWireEnvironment}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p7-imagewindow${mglItestArmLogTag}-${imageWindowCase}.log")
         endforeach()
         # ---- Codex closeout finding 2 (cf-magma): THE ARM WITHOUT A NULL DESCRIPTOR -----------
         #
@@ -4067,13 +3531,8 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         if(mglItestServerEnvKnobArm)
             foreach(privateCase AStoreThroughAnInvalidUnitIsLoadedThroughNeitherAnotherInvalidUnitNorItself
                                 AStoreThroughAnEmptyUnitIsLoadedThroughNeitherAnotherEmptyUnitNorItself)
-                gtest_discover_tests(MobileGLIntegrationTest
-                    TEST_PREFIX "DirectVulkan.${mglItestArm}.ImageUnitPrivate."
-                    TEST_FILTER "InvalidImageUnitScenario.${privateCase}"
-                    DISCOVERY_TIMEOUT 30
-                    PROPERTIES LABELS "${mglItestMagmaLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
-                        ${mglItestArmProperties}
-                        ENVIRONMENT "${mglItestMagmaWireEnvironment}\;MGITEST_MAGMA_FORCE_PRIVATE_IMAGE_PLACEHOLDER=1\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p7-imageprivate${mglItestArmLogTag}-${privateCase}.log")
+                mgl_itest_lane("DirectVulkan.${mglItestArm}.ImageUnitPrivate." "InvalidImageUnitScenario.${privateCase}"
+                    LABELS "${mglItestMagmaLabels}" PROPERTIES ${mglItestArmProperties} ENV "${mglItestMagmaWireEnvironment}\;MGITEST_MAGMA_FORCE_PRIVATE_IMAGE_PLACEHOLDER=1\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p7-imageprivate${mglItestArmLogTag}-${privateCase}.log")
             endforeach()
         endif()
     endforeach()
@@ -4119,13 +3578,8 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
                          BandedReadIntoAPixelPackBufferKeepsItsPadding
                          BandedDepthAndDepthStencilReads
                          GetTexImageLargerThanAReplySlotIsWindowed)
-            gtest_discover_tests(MobileGLIntegrationTest
-                TEST_PREFIX "DirectVulkan.${mglItestArm}.Band."
-                TEST_FILTER "BandedReadbackScenario.${bandCase}"
-                DISCOVERY_TIMEOUT 30
-                PROPERTIES LABELS "${mglItestMagmaLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
-                    ${mglItestArmProperties}
-                    ENVIRONMENT "${mglItestMagmaBandEnvironment}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/g5-band${mglItestArmLogTag}-${bandCase}.log")
+            mgl_itest_lane("DirectVulkan.${mglItestArm}.Band." "BandedReadbackScenario.${bandCase}"
+                LABELS "${mglItestMagmaLabels}" PROPERTIES ${mglItestArmProperties} ENV "${mglItestMagmaBandEnvironment}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/g5-band${mglItestArmLogTag}-${bandCase}.log")
         endforeach()
         # P9 (W1): the pack-buffer readback on Magma. The server half is backend-neutral - the
         # reply form's read, then the applier's buffer-write gate (WriteWireBuffer here) - so the
@@ -4137,38 +3591,23 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
                         APackBufferReadFeedsAnUploadFromTheSameBuffer
                         ALaterBufferSubDataWinsOverThePackReadWhereTheyOverlap
                         APackBufferReadPostsNoReplyAndMarksTheBuffer)
-            gtest_discover_tests(MobileGLIntegrationTest
-                TEST_PREFIX "DirectVulkan.${mglItestArm}.Pbo."
-                TEST_FILTER "PackBufferReadbackScenario.${pboCase}"
-                DISCOVERY_TIMEOUT 30
-                PROPERTIES LABELS "${mglItestMagmaLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
-                    ${mglItestArmProperties}
-                    ENVIRONMENT "${mglItestMagmaBandEnvironment}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p9-pbo${mglItestArmLogTag}-${pboCase}.log")
+            mgl_itest_lane("DirectVulkan.${mglItestArm}.Pbo." "PackBufferReadbackScenario.${pboCase}"
+                LABELS "${mglItestMagmaLabels}" PROPERTIES ${mglItestArmProperties} ENV "${mglItestMagmaBandEnvironment}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p9-pbo${mglItestArmLogTag}-${pboCase}.log")
         endforeach()
         # P10 (A): the fence polls on Magma. The server half is backend-neutral (the backend
         # table's FenceSync / GetSyncStatus / ClientWaitSync), so the same three cases.
         foreach(fenceCase ZeroTimeoutPollLoopsEndInBoundedTime
                           PollsOfASignaledFenceCrossNothing
                           AFenceThatFinishesWhileTheClientOnlyPollsIsReported)
-            gtest_discover_tests(MobileGLIntegrationTest
-                TEST_PREFIX "DirectVulkan.${mglItestArm}.Fence."
-                TEST_FILTER "FencePollScenario.${fenceCase}"
-                DISCOVERY_TIMEOUT 30
-                PROPERTIES LABELS "${mglItestMagmaLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
-                    ${mglItestArmProperties}
-                    ENVIRONMENT "${mglItestMagmaBandEnvironment}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p10-fence${mglItestArmLogTag}-${fenceCase}.log")
+            mgl_itest_lane("DirectVulkan.${mglItestArm}.Fence." "FencePollScenario.${fenceCase}"
+                LABELS "${mglItestMagmaLabels}" PROPERTIES ${mglItestArmProperties} ENV "${mglItestMagmaBandEnvironment}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p10-fence${mglItestArmLogTag}-${fenceCase}.log")
         endforeach()
         # P11 A2 (docs/archive/contracts/CONTRACT-P11.md §2): the >= 16 MiB arena on Magma's three arms, in the
         # same flavour, declared per arm (mglItestArenaArm above); DirectVulkan.ArenaArm. is its
         # monolith (adopted) half.
         foreach(arenaCase IN LISTS MGL_ITEST_ARENA_CASES)
-            gtest_discover_tests(MobileGLIntegrationTest
-                TEST_PREFIX "DirectVulkan.${mglItestArm}.Arena."
-                TEST_FILTER "LargeArenaAdoptionScenario.${arenaCase}"
-                DISCOVERY_TIMEOUT 30
-                PROPERTIES LABELS "${mglItestMagmaLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
-                    ${mglItestArmProperties}
-                    ENVIRONMENT "${mglItestMagmaBandEnvironment}\;MGITEST_PERSISTENT_MAP_ARM=${mglItestArenaArm}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p11-arena${mglItestArmLogTag}-${arenaCase}.log")
+            mgl_itest_lane("DirectVulkan.${mglItestArm}.Arena." "LargeArenaAdoptionScenario.${arenaCase}"
+                LABELS "${mglItestMagmaLabels}" PROPERTIES ${mglItestArmProperties} ENV "${mglItestMagmaBandEnvironment}\;MGITEST_PERSISTENT_MAP_ARM=${mglItestArenaArm}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p11-arena${mglItestArmLogTag}-${arenaCase}.log")
         endforeach()
         # P11 B2 addendum: DeletedBoundBufferScenario on Magma's three arms, same flavour (the
         # Espryt arms come from mgl_itest_register_split_arms). Before the frontend fix Magma did
@@ -4178,13 +3617,8 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
                             AUniformBufferDeletedWhileBoundLeavesNoStaleBinding
                             AnAtomicCounterBufferDeletedWhileBoundLeavesNoStaleBinding
                             ATransformFeedbackBufferDeletedWhileBoundLeavesNoStaleBinding)
-            gtest_discover_tests(MobileGLIntegrationTest
-                TEST_PREFIX "DirectVulkan.${mglItestArm}.DeletedBound."
-                TEST_FILTER "DeletedBoundBufferScenario.${deletedCase}"
-                DISCOVERY_TIMEOUT 30
-                PROPERTIES LABELS "${mglItestMagmaLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
-                    ${mglItestArmProperties}
-                    ENVIRONMENT "${mglItestMagmaBandEnvironment}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p11-deleted-bound${mglItestArmLogTag}-${deletedCase}.log")
+            mgl_itest_lane("DirectVulkan.${mglItestArm}.DeletedBound." "DeletedBoundBufferScenario.${deletedCase}"
+                LABELS "${mglItestMagmaLabels}" PROPERTIES ${mglItestArmProperties} ENV "${mglItestMagmaBandEnvironment}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p11-deleted-bound${mglItestArmLogTag}-${deletedCase}.log")
         endforeach()
         # ...and the one-process arena pair (the Espryt half is beside mgl_itest_register_split_arms).
         string(REPLACE "\\;" ";" mglItestPairEnv "${mglItestMagmaBandEnvironment}")
@@ -4218,13 +3652,8 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
             set(mglItestAdoptTier0Case ASessionThatCannotRunT0FallsBackToT2OnceByName)
         endif()
         foreach(arenaCase IN LISTS MGL_ITEST_ARENA_CASES ITEMS ${mglItestAdoptTier0Case})
-            gtest_discover_tests(MobileGLIntegrationTest
-                TEST_PREFIX "DirectVulkan.${mglItestArm}.AdoptTier0."
-                TEST_FILTER "LargeArenaAdoptionScenario.${arenaCase}"
-                DISCOVERY_TIMEOUT 30
-                PROPERTIES LABELS "${mglItestMagmaLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
-                    ${mglItestArmProperties}
-                    ENVIRONMENT "${mglItestMagmaBandEnvironment}\;MOBILEGL_IPC_ADOPT_TIER=0\;${mglItestAdoptTier0Env}\;MGITEST_PERSISTENT_MAP_ARM=${mglItestArenaArm}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p11-adopt-tier0${mglItestArmLogTag}-${arenaCase}.log")
+            mgl_itest_lane("DirectVulkan.${mglItestArm}.AdoptTier0." "LargeArenaAdoptionScenario.${arenaCase}"
+                LABELS "${mglItestMagmaLabels}" PROPERTIES ${mglItestArmProperties} ENV "${mglItestMagmaBandEnvironment}\;MOBILEGL_IPC_ADOPT_TIER=0\;${mglItestAdoptTier0Env}\;MGITEST_PERSISTENT_MAP_ARM=${mglItestArenaArm}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p11-adopt-tier0${mglItestArmLogTag}-${arenaCase}.log")
         endforeach()
     endforeach()
 endif()
@@ -4252,13 +3681,8 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
                            AWidenedFormatsUploadSurvivesTheCarrierRemint
                            AnRgba8SnormUploadSurvivesTheImageBind
                            AnRgba16SnormImmutableUploadSurvivesTheCarrierRemint)
-            gtest_discover_tests(MobileGLIntegrationTest
-                TEST_PREFIX "DirectVulkan.${mglItestArm}.Remint."
-                TEST_FILTER "TextureRemintPullScenario.${remintCase}"
-                DISCOVERY_TIMEOUT 30
-                PROPERTIES LABELS "${mglItestMagmaLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
-                    ${mglItestArmProperties}
-                    ENVIRONMENT "${mglItestMagmaRemintEnvironment}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p9-remint${mglItestArmLogTag}-${remintCase}.log")
+            mgl_itest_lane("DirectVulkan.${mglItestArm}.Remint." "TextureRemintPullScenario.${remintCase}"
+                LABELS "${mglItestMagmaLabels}" PROPERTIES ${mglItestArmProperties} ENV "${mglItestMagmaRemintEnvironment}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p9-remint${mglItestArmLogTag}-${remintCase}.log")
         endforeach()
     endforeach()
 endif()
@@ -4281,13 +3705,8 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
                         Rgb16fRenderTargetBaseGeneratesFromTheGpuWrittenLevel
                         Rgb32fUploadedBaseGeneratesItsChain
                         Rgb32fRenderTargetBaseGeneratesFromTheGpuWrittenLevel)
-            gtest_discover_tests(MobileGLIntegrationTest
-                TEST_PREFIX "DirectVulkan.${mglItestArm}.Mip."
-                TEST_FILTER "GenerateMipmapServerScenario.${mipCase}"
-                DISCOVERY_TIMEOUT 30
-                PROPERTIES LABELS "${mglItestMagmaLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
-                    ${mglItestArmProperties}
-                    ENVIRONMENT "${mglItestMagmaMipEnvironment}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p8b-mip${mglItestArmLogTag}-${mipCase}.log")
+            mgl_itest_lane("DirectVulkan.${mglItestArm}.Mip." "GenerateMipmapServerScenario.${mipCase}"
+                LABELS "${mglItestMagmaLabels}" PROPERTIES ${mglItestArmProperties} ENV "${mglItestMagmaMipEnvironment}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p8b-mip${mglItestArmLogTag}-${mipCase}.log")
         endforeach()
     endforeach()
 endif()
@@ -4303,14 +3722,8 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         mgl_itest_join_environment(mglItestMagmaGpuContentEnvironment
             ${MGL_ITEST_MAGMA_BAND_FLAVOUR_ENV} ${mglItestArmTransportEnv})
         foreach(mglItestGpuContentScenario ImageBindableRemintScenario PartialUploadOverGpuContentScenario)
-            gtest_discover_tests(MobileGLIntegrationTest
-                TEST_PREFIX "DirectVulkan.${mglItestArm}.GpuContent."
-                TEST_LIST "MGL_SPLIT_ARM_TESTS_${MGL_SPLIT_ARM_INDEX}"
-                TEST_FILTER "${mglItestGpuContentScenario}.*"
-                DISCOVERY_TIMEOUT 30
-                PROPERTIES LABELS "${mglItestMagmaLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
-                    ${mglItestArmProperties}
-                    ENVIRONMENT "${mglItestMagmaGpuContentEnvironment}")
+            mgl_itest_lane("DirectVulkan.${mglItestArm}.GpuContent." "${mglItestGpuContentScenario}.*"
+                LABELS "${mglItestMagmaLabels}" TEST_LIST "MGL_SPLIT_ARM_TESTS_${MGL_SPLIT_ARM_INDEX}" PROPERTIES ${mglItestArmProperties} ENV "${mglItestMagmaGpuContentEnvironment}")
             list(APPEND MGL_SPLIT_ARM_TEST_LISTS "MGL_SPLIT_ARM_TESTS_${MGL_SPLIT_ARM_INDEX}")
             math(EXPR MGL_SPLIT_ARM_INDEX "${MGL_SPLIT_ARM_INDEX} + 1")
         endforeach()
@@ -4352,39 +3765,21 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         mgl_itest_magma_arm_shape(${mglItestArm})
         mgl_itest_join_environment(mglItestMagmaM2Environment
             ${MGL_ITEST_MAGMA_BAND_FLAVOUR_ENV} ${mglItestArmTransportEnv})
-        gtest_discover_tests(MobileGLIntegrationTest
-            TEST_PREFIX "DirectVulkan.${mglItestArm}.Oversized."
-            TEST_LIST "MGL_SPLIT_ARM_TESTS_${MGL_SPLIT_ARM_INDEX}"
-            TEST_FILTER "OversizedRecordingSplitScenario.*"
-            DISCOVERY_TIMEOUT 30
-            PROPERTIES LABELS "${mglItestMagmaLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
-                ${mglItestArmProperties}
-                ENVIRONMENT "${mglItestMagmaM2Environment}")
+        mgl_itest_lane("DirectVulkan.${mglItestArm}.Oversized." "OversizedRecordingSplitScenario.*"
+            LABELS "${mglItestMagmaLabels}" TEST_LIST "MGL_SPLIT_ARM_TESTS_${MGL_SPLIT_ARM_INDEX}" PROPERTIES ${mglItestArmProperties} ENV "${mglItestMagmaM2Environment}")
         list(APPEND MGL_SPLIT_ARM_TEST_LISTS "MGL_SPLIT_ARM_TESTS_${MGL_SPLIT_ARM_INDEX}")
         math(EXPR MGL_SPLIT_ARM_INDEX "${MGL_SPLIT_ARM_INDEX} + 1")
         if(NOT mglItestArm STREQUAL "Tcp")
             foreach(mglItestOversizedCase IN LISTS MGL_ITEST_OVERSIZED_CASES)
-                gtest_discover_tests(MobileGLIntegrationTest
-                    TEST_PREFIX "DirectVulkan.${mglItestArm}.SplitRecording64."
-                    TEST_LIST "MGL_SPLIT_ARM_TESTS_${MGL_SPLIT_ARM_INDEX}"
-                    TEST_FILTER "OversizedRecordingSplitScenario.${mglItestOversizedCase}"
-                    DISCOVERY_TIMEOUT 30
-                    PROPERTIES LABELS "${mglItestMagmaLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
-                        ${mglItestArmProperties}
-                        ENVIRONMENT "${mglItestMagmaM2Environment}\;MOBILEGL_MAGMA_MAX_DRAWS_PER_COMMAND_BUFFER=64")
+                mgl_itest_lane("DirectVulkan.${mglItestArm}.SplitRecording64." "OversizedRecordingSplitScenario.${mglItestOversizedCase}"
+                    LABELS "${mglItestMagmaLabels}" TEST_LIST "MGL_SPLIT_ARM_TESTS_${MGL_SPLIT_ARM_INDEX}" PROPERTIES ${mglItestArmProperties} ENV "${mglItestMagmaM2Environment}\;MOBILEGL_MAGMA_MAX_DRAWS_PER_COMMAND_BUFFER=64")
                 list(APPEND MGL_SPLIT_ARM_TEST_LISTS "MGL_SPLIT_ARM_TESTS_${MGL_SPLIT_ARM_INDEX}")
                 math(EXPR MGL_SPLIT_ARM_INDEX "${MGL_SPLIT_ARM_INDEX} + 1")
             endforeach()
         endif()
         if(mglItestArm STREQUAL "Split")
-            gtest_discover_tests(MobileGLIntegrationTest
-                TEST_PREFIX "DirectVulkan.Split.DescPool."
-                TEST_LIST "MGL_SPLIT_ARM_TESTS_${MGL_SPLIT_ARM_INDEX}"
-                TEST_FILTER "DescriptorPoolGrowthScenario.*"
-                DISCOVERY_TIMEOUT 30
-                PROPERTIES LABELS "${mglItestMagmaLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
-                    ${mglItestArmProperties}
-                    ENVIRONMENT "${mglItestMagmaM2Environment}")
+            mgl_itest_lane("DirectVulkan.Split.DescPool." "DescriptorPoolGrowthScenario.*"
+                LABELS "${mglItestMagmaLabels}" TEST_LIST "MGL_SPLIT_ARM_TESTS_${MGL_SPLIT_ARM_INDEX}" PROPERTIES ${mglItestArmProperties} ENV "${mglItestMagmaM2Environment}")
             list(APPEND MGL_SPLIT_ARM_TEST_LISTS "MGL_SPLIT_ARM_TESTS_${MGL_SPLIT_ARM_INDEX}")
             math(EXPR MGL_SPLIT_ARM_INDEX "${MGL_SPLIT_ARM_INDEX} + 1")
         endif()
@@ -4442,14 +3837,8 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
                 set(mglItestP10bFilter "PrimitivesGeneratedNoXfbScenario.*")
                 set(mglItestP10bKnobs "\;MOBILEGL_MAGMA_PRIMGEN_QUERY_REROUTE=1")
             endif()
-            gtest_discover_tests(MobileGLIntegrationTest
-                TEST_PREFIX "DirectVulkan.${mglItestArm}.${mglItestP10bShape}."
-                TEST_LIST "MGL_SPLIT_ARM_TESTS_${MGL_SPLIT_ARM_INDEX}"
-                TEST_FILTER "${mglItestP10bFilter}"
-                DISCOVERY_TIMEOUT 30
-                PROPERTIES LABELS "${mglItestMagmaLabels}" TIMEOUT ${MGL_ITEST_TIMEOUT}
-                    ${mglItestArmProperties}
-                    ENVIRONMENT "${mglItestMagmaP10bEnvironment}${mglItestP10bKnobs}")
+            mgl_itest_lane("DirectVulkan.${mglItestArm}.${mglItestP10bShape}." "${mglItestP10bFilter}"
+                LABELS "${mglItestMagmaLabels}" TEST_LIST "MGL_SPLIT_ARM_TESTS_${MGL_SPLIT_ARM_INDEX}" PROPERTIES ${mglItestArmProperties} ENV "${mglItestMagmaP10bEnvironment}${mglItestP10bKnobs}")
             list(APPEND MGL_SPLIT_ARM_TEST_LISTS "MGL_SPLIT_ARM_TESTS_${MGL_SPLIT_ARM_INDEX}")
             math(EXPR MGL_SPLIT_ARM_INDEX "${MGL_SPLIT_ARM_INDEX} + 1")
         endforeach()
@@ -4500,14 +3889,8 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
             LargeArenaAdoptionScenario.ReadbackSeesTheLatestCpuWrite
             LargeArenaAdoptionScenario.GpuWriteIntoTheArenaIsReadBack
             LargeArenaAdoptionScenario.TheArenaLandsInTheTierItsLaneDeclares)
-        gtest_discover_tests(MobileGLIntegrationTest
-            TEST_PREFIX "DirectVulkan.${mglItestArm}.Buffers."
-            TEST_FILTER "${bufferCase}"
-            DISCOVERY_TIMEOUT 30
-            PROPERTIES LABELS "${mglItestMagmaLabels}"
-                TIMEOUT ${MGL_ITEST_TIMEOUT}
-                ${mglItestArmProperties}
-                ENVIRONMENT "${MGL_ITEST_MAGMA_BUFFER_ENVIRONMENT}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/magma-buffers${mglItestArmLogTag}-${bufferCase}.log")
+        mgl_itest_lane("DirectVulkan.${mglItestArm}.Buffers." "${bufferCase}"
+            LABELS "${mglItestMagmaLabels}" PROPERTIES ${mglItestArmProperties} ENV "${MGL_ITEST_MAGMA_BUFFER_ENVIRONMENT}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/magma-buffers${mglItestArmLogTag}-${bufferCase}.log")
     endforeach()
     endforeach()
 endif()
@@ -4550,14 +3933,8 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
                 TextureUploadCannotOvertakeThePreviouslyQueuedDraw
                 GpuClearSurvivesTheFirstStorageImageUpgrade
                 PresentCreditActuallyParksTheClientAtItsConfiguredLimit)
-            gtest_discover_tests(MobileGLIntegrationTest
-                TEST_PREFIX "DirectVulkan.${mglItestArm}.RunAhead.Credit${credit}."
-                TEST_FILTER "MagmaRunAheadScenario.${runAheadCase}"
-                DISCOVERY_TIMEOUT 30
-                PROPERTIES LABELS "${mglItestMagmaLabels}"
-                    TIMEOUT ${MGL_ITEST_TIMEOUT}
-                    ${mglItestArmProperties}
-                    ENVIRONMENT "${MGL_ITEST_MAGMA_RUNAHEAD_ENVIRONMENT}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/magma-runahead${mglItestArmLogTag}-credit${credit}-${runAheadCase}.log")
+            mgl_itest_lane("DirectVulkan.${mglItestArm}.RunAhead.Credit${credit}." "MagmaRunAheadScenario.${runAheadCase}"
+                LABELS "${mglItestMagmaLabels}" PROPERTIES ${mglItestArmProperties} ENV "${MGL_ITEST_MAGMA_RUNAHEAD_ENVIRONMENT}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/magma-runahead${mglItestArmLogTag}-credit${credit}-${runAheadCase}.log")
         endforeach()
       endforeach()
     endforeach()
@@ -4593,14 +3970,8 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
             FramebufferReattachmentDistinguishesMipAndLayer
             FramebufferSrgbPolicyAtoBtoAUsesDistinctFormats
             FramebufferRespecifyRebindsTheNewNativeImage)
-        gtest_discover_tests(MobileGLIntegrationTest
-            TEST_PREFIX "DirectVulkan.${mglItestArm}.Caches."
-            TEST_FILTER "MagmaWireCacheScenario.${cacheCase}"
-            DISCOVERY_TIMEOUT 30
-            PROPERTIES LABELS "${mglItestMagmaLabels}"
-                TIMEOUT ${MGL_ITEST_TIMEOUT}
-                ${mglItestArmProperties}
-                ENVIRONMENT "${MGL_ITEST_MAGMA_CACHES_ENVIRONMENT}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/magma-caches${mglItestArmLogTag}-${cacheCase}.log")
+        mgl_itest_lane("DirectVulkan.${mglItestArm}.Caches." "MagmaWireCacheScenario.${cacheCase}"
+            LABELS "${mglItestMagmaLabels}" PROPERTIES ${mglItestArmProperties} ENV "${MGL_ITEST_MAGMA_CACHES_ENVIRONMENT}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/magma-caches${mglItestArmLogTag}-${cacheCase}.log")
     endforeach()
     endforeach()
 endif()
@@ -4636,14 +4007,8 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     foreach(vertexLayoutCase
             AnUnmappableVertexFormatDeclinesTheDrawInsteadOfEndingTheSession
             AnUnreadUnmappableArrayDoesNotStopTheRestOfTheDraw)
-        gtest_discover_tests(MobileGLIntegrationTest
-            TEST_PREFIX "DirectVulkan.${mglItestArm}.VertexLayout."
-            TEST_FILTER "MagmaVertexLayoutScenario.${vertexLayoutCase}"
-            DISCOVERY_TIMEOUT 30
-            PROPERTIES LABELS "${mglItestMagmaLabels}"
-                TIMEOUT ${MGL_ITEST_TIMEOUT}
-                ${mglItestArmProperties}
-                ENVIRONMENT "${MGL_ITEST_MAGMA_VERTEXLAYOUT_ENVIRONMENT}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/magma-vertexlayout${mglItestArmLogTag}-${vertexLayoutCase}.log")
+        mgl_itest_lane("DirectVulkan.${mglItestArm}.VertexLayout." "MagmaVertexLayoutScenario.${vertexLayoutCase}"
+            LABELS "${mglItestMagmaLabels}" PROPERTIES ${mglItestArmProperties} ENV "${MGL_ITEST_MAGMA_VERTEXLAYOUT_ENVIRONMENT}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/magma-vertexlayout${mglItestArmLogTag}-${vertexLayoutCase}.log")
     endforeach()
     endforeach()
 endif()
@@ -4686,14 +4051,8 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
             ManySmallRespecifyAndDrawRoundsStayUnderTheStoreCountCeiling
             ADrawAfterTheEarlyReclaimFollowsTheNewStoreNotTheMemoizedHandle
             DescriptorSetsRewindInsideOneLongFrameAfterTheirSubmitRetires)
-        gtest_discover_tests(MobileGLIntegrationTest
-            TEST_PREFIX "DirectVulkan.${mglItestArm}.Reclaim."
-            TEST_FILTER "MagmaWireReclaimScenario.${reclaimCase}"
-            DISCOVERY_TIMEOUT 30
-            PROPERTIES LABELS "${mglItestMagmaLabels}"
-                TIMEOUT ${MGL_ITEST_TIMEOUT}
-                ${mglItestArmProperties}
-                ENVIRONMENT "${MGL_ITEST_MAGMA_RECLAIM_ENVIRONMENT}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/magma-reclaim${mglItestArmLogTag}-${reclaimCase}.log")
+        mgl_itest_lane("DirectVulkan.${mglItestArm}.Reclaim." "MagmaWireReclaimScenario.${reclaimCase}"
+            LABELS "${mglItestMagmaLabels}" PROPERTIES ${mglItestArmProperties} ENV "${MGL_ITEST_MAGMA_RECLAIM_ENVIRONMENT}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/magma-reclaim${mglItestArmLogTag}-${reclaimCase}.log")
     endforeach()
     endforeach()
 endif()
@@ -4758,15 +4117,8 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
             set(MGL_ITEST_NAMED_BLIT_LABELS "integration-split")
         endif()
         foreach(namedBlitCase NamedBlitPreservesBindingsAndRestoresNextVerbsPixels NamedBlitDefaultEndpointPixels)
-            gtest_discover_tests(MobileGLIntegrationTest
-                TEST_PREFIX "${namedBlitBackend}.${mglItestArm}.NamedBlit."
-                TEST_FILTER "F1WireScenario.${namedBlitCase}"
-                DISCOVERY_TIMEOUT 30
-                PROPERTIES
-                    LABELS "${MGL_ITEST_NAMED_BLIT_LABELS}"
-                    TIMEOUT ${MGL_ITEST_TIMEOUT}
-                    ${mglItestArmProperties}
-                    ENVIRONMENT "${MGL_ITEST_NAMED_BLIT_ENVIRONMENT}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p5b-${namedBlitBackend}${mglItestArmLogTag}-${namedBlitCase}.log")
+            mgl_itest_lane("${namedBlitBackend}.${mglItestArm}.NamedBlit." "F1WireScenario.${namedBlitCase}"
+                LABELS "${MGL_ITEST_NAMED_BLIT_LABELS}" PROPERTIES ${mglItestArmProperties} ENV "${MGL_ITEST_NAMED_BLIT_ENVIRONMENT}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p5b-${namedBlitBackend}${mglItestArmLogTag}-${namedBlitCase}.log")
         endforeach()
         endforeach()
     endforeach()
@@ -4808,16 +4160,8 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p5e-strict-arming-DirectGLES.log"
         ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
 
-    gtest_discover_tests(MobileGLIntegrationTest
-        TEST_PREFIX "DirectGLES.Split.StrictArming."
-        TEST_FILTER "TriangleScenario.TheServerStampedAVerbBoundaryOnThisDrawingFrame"
-        DISCOVERY_TIMEOUT 30
-        PROPERTIES
-            LABELS "integration-gpu\;integration-split"
-            TIMEOUT ${MGL_ITEST_TIMEOUT}
-            RESOURCE_LOCK p5e-strict-arming-DirectGLES.log
-            ENVIRONMENT "${MGL_ITEST_GLES_SPLIT_STRICT_ARMING_ENVIRONMENT}"
-    )
+    mgl_itest_lane("DirectGLES.Split.StrictArming." "TriangleScenario.TheServerStampedAVerbBoundaryOnThisDrawingFrame"
+        LABELS "integration-gpu\;integration-split" LOCK p5e-strict-arming-DirectGLES.log ENV "${MGL_ITEST_GLES_SPLIT_STRICT_ARMING_ENVIRONMENT}")
 endif()
 
 # =====================================================================================
@@ -4864,15 +4208,8 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         "MOBILEGL_IPC_SERVER_PATH=${MGL_ITEST_SPLIT_SERVER_PATH}" "MGITEST_SPLIT_LANE=1"
         "MOBILEGL_IPC_RUN_AHEAD=0"
         ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_COMMON_ENV})
-    gtest_discover_tests(MobileGLIntegrationTest
-        TEST_PREFIX "DirectGLES.Split.DualBlock."
-        TEST_FILTER "DualBlockScenario.*"
-        DISCOVERY_TIMEOUT 30
-        PROPERTIES
-            LABELS "integration-dualblock-split"
-            TIMEOUT ${MGL_ITEST_TIMEOUT}
-            ENVIRONMENT "${MGL_ITEST_GLES_DUALBLOCK_ENVIRONMENT}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/split-logs/DirectGLES.Split.DualBlock.TheTwoRolesHaveDistinctBlocks.log"
-    )
+    mgl_itest_lane("DirectGLES.Split.DualBlock." "DualBlockScenario.*"
+        LABELS "integration-dualblock-split" ENV "${MGL_ITEST_GLES_DUALBLOCK_ENVIRONMENT}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/split-logs/DirectGLES.Split.DualBlock.TheTwoRolesHaveDistinctBlocks.log")
 endif()
 
 # P5f exit: observe every one of three real drawing frames on both backend roles.
@@ -4902,15 +4239,8 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
             "MGITEST_P5F_RSP_LANE=1" "MOBILEGL_PIPE_STATS=1" "MOBILEGL_PIPE_STATS_PERIOD=1"
             "MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p5f-rsp-${backend}${mglItestArmLogTag}.log"
             ${MGL_ITEST_CAPABILITY_ENV} ${p5f_rsp_base_env} ${mglItestArmTransportEnv})
-        gtest_discover_tests(MobileGLIntegrationTest
-            TEST_PREFIX "${backend}.${mglItestArm}.P5fRsp."
-            TEST_FILTER "F1WireScenario.EachWireFrameHasZeroResidualPulls"
-            DISCOVERY_TIMEOUT 30
-            PROPERTIES LABELS "${p5f_rsp_label}"
-                TIMEOUT ${MGL_ITEST_TIMEOUT}
-                RESOURCE_LOCK "p5f-rsp-${backend}${mglItestArmLogTag}.log"
-                ${mglItestArmProperties}
-                ENVIRONMENT "${p5f_rsp_environment}")
+        mgl_itest_lane("${backend}.${mglItestArm}.P5fRsp." "F1WireScenario.EachWireFrameHasZeroResidualPulls"
+            LABELS "${p5f_rsp_label}" LOCK "p5f-rsp-${backend}${mglItestArmLogTag}.log" PROPERTIES ${mglItestArmProperties} ENV "${p5f_rsp_environment}")
         endforeach()
     endforeach()
 endif()
@@ -4943,14 +4273,8 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
                 ComputeWrittenCommandsDrawWithoutAHostWait
                 ComputeWrittenCountWordIsTheOneTheGpuReads
                 ShaderWrittenCommandsWithoutAnApplicationBarrierAreOrdered)
-            gtest_discover_tests(MobileGLIntegrationTest
-                TEST_PREFIX "DirectVulkan.${mglItestArm}.Indirect."
-                TEST_FILTER "WireIndirectDrawScenario.${indirectCase}"
-                DISCOVERY_TIMEOUT 30
-                PROPERTIES LABELS "${mglItestMagmaLabels}"
-                    TIMEOUT ${MGL_ITEST_TIMEOUT}
-                    ${mglItestArmProperties}
-                    ENVIRONMENT "${MGL_ITEST_MAGMA_INDIRECT_ENVIRONMENT}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/magma-indirect${mglItestArmLogTag}-${indirectCase}.log")
+            mgl_itest_lane("DirectVulkan.${mglItestArm}.Indirect." "WireIndirectDrawScenario.${indirectCase}"
+                LABELS "${mglItestMagmaLabels}" PROPERTIES ${mglItestArmProperties} ENV "${MGL_ITEST_MAGMA_INDIRECT_ENVIRONMENT}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/magma-indirect${mglItestArmLogTag}-${indirectCase}.log")
         endforeach()
     endforeach()
 endif()
@@ -4971,14 +4295,8 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         string(TOLOWER "${mglItestArm}" mglItestArmLower)
         foreach(cpuMipCase Rgb16fDrawnBaseWithARefusedReadbackDeclinesByName
                            Rgb16fUploadedBaseWithARefusedReadbackIsFilteredFromTheStore)
-            gtest_discover_tests(MobileGLIntegrationTest
-                TEST_PREFIX "DirectGLES.${mglItestArm}.CpuMipRefused."
-                TEST_FILTER "GenerateMipmapServerScenario.${cpuMipCase}"
-                DISCOVERY_TIMEOUT 30
-                PROPERTIES
-                    LABELS "integration-gpu\\;integration-cpu-mip-${mglItestArmLower}"
-                    TIMEOUT ${MGL_ITEST_TIMEOUT}
-                    ENVIRONMENT "${MGL_ITEST_GLES_${mglItestArmUpper}_ENVIRONMENT}\;MGITEST_ESPRYT_FORCE_CPU_MIPMAP=1\;MGITEST_ESPRYT_REFUSE_TEXTURE_READBACK_EXTENT=16x16\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p8se-cpu-mip-refused-${mglItestArmLower}-${cpuMipCase}.log")
+            mgl_itest_lane("DirectGLES.${mglItestArm}.CpuMipRefused." "GenerateMipmapServerScenario.${cpuMipCase}"
+                LABELS "integration-gpu\\;integration-cpu-mip-${mglItestArmLower}" ENV "${MGL_ITEST_GLES_${mglItestArmUpper}_ENVIRONMENT}\;MGITEST_ESPRYT_FORCE_CPU_MIPMAP=1\;MGITEST_ESPRYT_REFUSE_TEXTURE_READBACK_EXTENT=16x16\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/p8se-cpu-mip-refused-${mglItestArmLower}-${cpuMipCase}.log")
         endforeach()
     endforeach()
     # PipeCatalogueTest's unmigrated-emulation list against the call sites in the tree (a source
@@ -5022,49 +4340,25 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         mgl_itest_magma_arm_shape(${mglItestArm})
         mgl_itest_join_environment(MGL_ITEST_MAGMA_SV_ENVIRONMENT
             ${MGL_ITEST_MAGMA_SV_FLAVOUR_ENV} ${mglItestArmTransportEnv})
-        gtest_discover_tests(MobileGLIntegrationTest
-            TEST_PREFIX "DirectVulkan.${mglItestArm}.Mip3D."
-            TEST_FILTER "WireMipShapeScenario.VolumeChainIsGeneratedAlongItsDepth"
-            DISCOVERY_TIMEOUT 30
-            PROPERTIES LABELS "${mglItestMagmaLabels}"
-                TIMEOUT ${MGL_ITEST_TIMEOUT}
-                ${mglItestArmProperties}
-                ENVIRONMENT "${MGL_ITEST_MAGMA_SV_ENVIRONMENT}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/magma-sv-mip3d${mglItestArmLogTag}.log")
+        mgl_itest_lane("DirectVulkan.${mglItestArm}.Mip3D." "WireMipShapeScenario.VolumeChainIsGeneratedAlongItsDepth"
+            LABELS "${mglItestMagmaLabels}" PROPERTIES ${mglItestArmProperties} ENV "${MGL_ITEST_MAGMA_SV_ENVIRONMENT}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/magma-sv-mip3d${mglItestArmLogTag}.log")
         foreach(dispatchCase
                 CpuWrittenGroupCountsAreReadByTheGpuAtTheirOffsets
                 ComputeWrittenGroupCountsDispatchWithoutAHostWait
                 ShaderWrittenGroupCountsWithoutAnApplicationBarrierAreOrdered)
-            gtest_discover_tests(MobileGLIntegrationTest
-                TEST_PREFIX "DirectVulkan.${mglItestArm}.IndirectDispatch."
-                TEST_FILTER "WireIndirectDispatchScenario.${dispatchCase}"
-                DISCOVERY_TIMEOUT 30
-                PROPERTIES LABELS "${mglItestMagmaLabels}"
-                    TIMEOUT ${MGL_ITEST_TIMEOUT}
-                    ${mglItestArmProperties}
-                    ENVIRONMENT "${MGL_ITEST_MAGMA_SV_ENVIRONMENT}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/magma-sv-dispatch${mglItestArmLogTag}-${dispatchCase}.log")
+            mgl_itest_lane("DirectVulkan.${mglItestArm}.IndirectDispatch." "WireIndirectDispatchScenario.${dispatchCase}"
+                LABELS "${mglItestMagmaLabels}" PROPERTIES ${mglItestArmProperties} ENV "${MGL_ITEST_MAGMA_SV_ENVIRONMENT}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/magma-sv-dispatch${mglItestArmLogTag}-${dispatchCase}.log")
         endforeach()
         if (NOT mglItestArm STREQUAL "Tcp")
-            gtest_discover_tests(MobileGLIntegrationTest
-                TEST_PREFIX "DirectVulkan.${mglItestArm}.ShaderMipDepth1D."
-                TEST_FILTER "WireMipShapeScenario.Depth1DChainWithoutANativeBlitDeclinesByName"
-                DISCOVERY_TIMEOUT 30
-                PROPERTIES LABELS "${mglItestMagmaLabels}"
-                    TIMEOUT ${MGL_ITEST_TIMEOUT}
-                    ${mglItestArmProperties}
-                    ENVIRONMENT "${MGL_ITEST_MAGMA_SV_ENVIRONMENT}\;MGITEST_MAGMA_FORCE_SHADER_MIPMAP=1\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/magma-sv-depth1d${mglItestArmLogTag}.log")
+            mgl_itest_lane("DirectVulkan.${mglItestArm}.ShaderMipDepth1D." "WireMipShapeScenario.Depth1DChainWithoutANativeBlitDeclinesByName"
+                LABELS "${mglItestMagmaLabels}" PROPERTIES ${mglItestArmProperties} ENV "${MGL_ITEST_MAGMA_SV_ENVIRONMENT}\;MGITEST_MAGMA_FORCE_SHADER_MIPMAP=1\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/magma-sv-depth1d${mglItestArmLogTag}.log")
         endif()
     endforeach()
     mgl_itest_magma_arm_shape(Split)
     mgl_itest_join_environment(MGL_ITEST_MAGMA_SV_ENVIRONMENT
         ${MGL_ITEST_MAGMA_SV_FLAVOUR_ENV} ${mglItestArmTransportEnv})
-    gtest_discover_tests(MobileGLIntegrationTest
-        TEST_PREFIX "DirectVulkan.Split.Mip3DValidation."
-        TEST_FILTER "WireMipShapeScenario.VolumeChainIsGeneratedAlongItsDepth"
-        DISCOVERY_TIMEOUT 30
-        PROPERTIES LABELS "${mglItestMagmaLabels}"
-            TIMEOUT ${MGL_ITEST_TIMEOUT}
-            FAIL_REGULAR_EXPRESSION "VUID-vkCmdBlitImage-"
-            ENVIRONMENT "${MGL_ITEST_MAGMA_SV_ENVIRONMENT}\;VK_INSTANCE_LAYERS=VK_LAYER_KHRONOS_validation\;MGITEST_REQUIRE_VK_VALIDATION_LAYER=1\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/magma-sv-mip3d-validation.log")
+    mgl_itest_lane("DirectVulkan.Split.Mip3DValidation." "WireMipShapeScenario.VolumeChainIsGeneratedAlongItsDepth"
+        LABELS "${mglItestMagmaLabels}" FAIL_REGEX "VUID-vkCmdBlitImage-" ENV "${MGL_ITEST_MAGMA_SV_ENVIRONMENT}\;VK_INSTANCE_LAYERS=VK_LAYER_KHRONOS_validation\;MGITEST_REQUIRE_VK_VALIDATION_LAYER=1\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/magma-sv-mip3d-validation.log")
 endif()
 
 # P14: texture texels uploaded BETWEEN two draws of one frame that sample the texture, with no wait in
@@ -5090,14 +4384,8 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         mgl_itest_join_environment(MGL_ITEST_MAGMA_UPLOAD_ENVIRONMENT
             ${MGL_ITEST_MAGMA_SV_FLAVOUR_ENV} ${mglItestArmTransportEnv})
         foreach(uploadCase IN LISTS MGL_ITEST_UPLOAD_BETWEEN_DRAWS_CASES)
-            gtest_discover_tests(MobileGLIntegrationTest
-                TEST_PREFIX "DirectVulkan.${mglItestArm}.UploadBetweenDraws."
-                TEST_FILTER "TextureUploadBetweenDrawsScenario.${uploadCase}"
-                DISCOVERY_TIMEOUT 30
-                PROPERTIES LABELS "${mglItestMagmaLabels}"
-                    TIMEOUT ${MGL_ITEST_TIMEOUT}
-                    ${mglItestArmProperties}
-                    ENVIRONMENT "${MGL_ITEST_MAGMA_UPLOAD_ENVIRONMENT}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/magma-upload-between-draws${mglItestArmLogTag}-${uploadCase}.log")
+            mgl_itest_lane("DirectVulkan.${mglItestArm}.UploadBetweenDraws." "TextureUploadBetweenDrawsScenario.${uploadCase}"
+                LABELS "${mglItestMagmaLabels}" PROPERTIES ${mglItestArmProperties} ENV "${MGL_ITEST_MAGMA_UPLOAD_ENVIRONMENT}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/magma-upload-between-draws${mglItestArmLogTag}-${uploadCase}.log")
         endforeach()
     endforeach()
     # The synchronization-validation entries: inproc, where the server's Vulkan instance is this
@@ -5113,14 +4401,8 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         "MGITEST_REQUIRE_VK_VALIDATION_LAYER=1")
     mgl_itest_join_environment(MGL_ITEST_SYNC_VALIDATION_ENVIRONMENT ${MGL_ITEST_SYNC_VALIDATION_ENV})
     foreach(uploadCase IN LISTS MGL_ITEST_UPLOAD_BETWEEN_DRAWS_CASES)
-        gtest_discover_tests(MobileGLIntegrationTest
-            TEST_PREFIX "DirectVulkan.Split.SyncValidation."
-            TEST_FILTER "TextureUploadBetweenDrawsScenario.${uploadCase}"
-            DISCOVERY_TIMEOUT 30
-            PROPERTIES LABELS "${mglItestMagmaLabels}"
-                TIMEOUT ${MGL_ITEST_TIMEOUT}
-                FAIL_REGULAR_EXPRESSION "SYNC-HAZARD"
-                ENVIRONMENT "${MGL_ITEST_MAGMA_UPLOAD_ENVIRONMENT}\;${MGL_ITEST_SYNC_VALIDATION_ENVIRONMENT}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/magma-upload-between-draws-syncval-${uploadCase}.log")
+        mgl_itest_lane("DirectVulkan.Split.SyncValidation." "TextureUploadBetweenDrawsScenario.${uploadCase}"
+            LABELS "${mglItestMagmaLabels}" FAIL_REGEX "SYNC-HAZARD" ENV "${MGL_ITEST_MAGMA_UPLOAD_ENVIRONMENT}\;${MGL_ITEST_SYNC_VALIDATION_ENVIRONMENT}\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/magma-upload-between-draws-syncval-${uploadCase}.log")
     endforeach()
 endif()
 
@@ -5242,17 +4524,8 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
         mgl_itest_join_environment(mglItestMagmaFullEnvironment
             "MOBILEGL_BACKEND_TYPE=DirectVulkan" "MOBILEGL_ITEST_REQUIRE_GPU=1"
             ${MGL_ITEST_CAPABILITY_ENV} ${MGL_ITEST_VULKAN_ENV} ${mglItestArmTransportEnv})
-        gtest_discover_tests(MobileGLIntegrationTest
-            TEST_PREFIX "DirectVulkan.${mglItestArm}.Full."
-            TEST_LIST "MGL_MAGMA_FULL_TESTS_${mglItestArmUpper}"
-            TEST_FILTER "-${MGL_ITEST_MONOLITH_MECHANISM_FILTER}:DualBlockScenario.*"
-            DISCOVERY_TIMEOUT 30
-            PROPERTIES
-                LABELS "integration-magma-full-${mglItestArmLower}"
-                TIMEOUT ${MGL_ITEST_TIMEOUT}
-                ${mglItestArmProperties}
-                ENVIRONMENT "${mglItestMagmaFullEnvironment}"
-        )
+        mgl_itest_lane("DirectVulkan.${mglItestArm}.Full." "-${MGL_ITEST_MONOLITH_MECHANISM_FILTER}:DualBlockScenario.*"
+            LABELS "integration-magma-full-${mglItestArmLower}" TEST_LIST "MGL_MAGMA_FULL_TESTS_${mglItestArmUpper}" PROPERTIES ${mglItestArmProperties} ENV "${mglItestMagmaFullEnvironment}")
         list(APPEND MGL_MAGMA_FULL_TEST_LISTS "MGL_MAGMA_FULL_TESTS_${mglItestArmUpper}")
     endforeach()
     message(STATUS "Integration tests: P7 package L tier 3 - the whole integration binary on "
@@ -5363,36 +4636,12 @@ if (MOBILEGL_BUILD_DISAGGREGATED AND MOBILEGL_PIPE_VERIFY)
     # MOBILEGL_ESPRYT_ENABLE_TEXTURE_VIEW=1 or DirectGLES withholds GL_ARB_texture_view and they
     # green-skip, so they are subtracted from the first registration and re-registered with the
     # knob. "Every existing verify case on the split arm" is false without the second block.
-    gtest_discover_tests(MobileGLIntegrationTest
-        TEST_PREFIX "DirectGLES.VerifySplit."
-        TEST_LIST MGL_VERIFY_SPLIT_TESTS_GLES
-        TEST_FILTER "-${MGL_ITEST_MONOLITH_MECHANISM_FILTER}:${MGL_ITEST_GLES_VIEW_FILTER}:DualBlockScenario.*:${MGL_ITEST_VERIFY_SPLIT_GLES_MAGMA_DECLINE_FILTER}"
-        DISCOVERY_TIMEOUT 30
-        PROPERTIES
-            LABELS "integration-verify-split"
-            TIMEOUT ${MGL_ITEST_VERIFY_TIMEOUT}
-            ENVIRONMENT "${MGL_ITEST_GLES_VERIFY_SPLIT_ENVIRONMENT}"
-    )
-    gtest_discover_tests(MobileGLIntegrationTest
-        TEST_PREFIX "DirectGLES.VerifySplit."
-        TEST_LIST MGL_VERIFY_SPLIT_TESTS_GLES_VIEW
-        TEST_FILTER "${MGL_ITEST_GLES_VIEW_FILTER}"
-        DISCOVERY_TIMEOUT 30
-        PROPERTIES
-            LABELS "integration-verify-split"
-            TIMEOUT ${MGL_ITEST_VERIFY_TIMEOUT}
-            ENVIRONMENT "${MGL_ITEST_GLES_VERIFY_SPLIT_ENVIRONMENT}\;MOBILEGL_ESPRYT_ENABLE_TEXTURE_VIEW=1"
-    )
-    gtest_discover_tests(MobileGLIntegrationTest
-        TEST_PREFIX "DirectVulkan.VerifySplit."
-        TEST_LIST MGL_VERIFY_SPLIT_TESTS_VULKAN
-        TEST_FILTER "-${MGL_ITEST_MONOLITH_MECHANISM_FILTER}:DualBlockScenario.*"
-        DISCOVERY_TIMEOUT 30
-        PROPERTIES
-            LABELS "integration-verify-split"
-            TIMEOUT ${MGL_ITEST_VERIFY_TIMEOUT}
-            ENVIRONMENT "${MGL_ITEST_VULKAN_VERIFY_SPLIT_ENVIRONMENT}"
-    )
+    mgl_itest_lane("DirectGLES.VerifySplit." "-${MGL_ITEST_MONOLITH_MECHANISM_FILTER}:${MGL_ITEST_GLES_VIEW_FILTER}:DualBlockScenario.*:${MGL_ITEST_VERIFY_SPLIT_GLES_MAGMA_DECLINE_FILTER}"
+        LABELS "integration-verify-split" TIMEOUT ${MGL_ITEST_VERIFY_TIMEOUT} TEST_LIST MGL_VERIFY_SPLIT_TESTS_GLES ENV "${MGL_ITEST_GLES_VERIFY_SPLIT_ENVIRONMENT}")
+    mgl_itest_lane("DirectGLES.VerifySplit." "${MGL_ITEST_GLES_VIEW_FILTER}"
+        LABELS "integration-verify-split" TIMEOUT ${MGL_ITEST_VERIFY_TIMEOUT} TEST_LIST MGL_VERIFY_SPLIT_TESTS_GLES_VIEW ENV "${MGL_ITEST_GLES_VERIFY_SPLIT_ENVIRONMENT}\;MOBILEGL_ESPRYT_ENABLE_TEXTURE_VIEW=1")
+    mgl_itest_lane("DirectVulkan.VerifySplit." "-${MGL_ITEST_MONOLITH_MECHANISM_FILTER}:DualBlockScenario.*"
+        LABELS "integration-verify-split" TIMEOUT ${MGL_ITEST_VERIFY_TIMEOUT} TEST_LIST MGL_VERIFY_SPLIT_TESTS_VULKAN ENV "${MGL_ITEST_VULKAN_VERIFY_SPLIT_ENVIRONMENT}")
     list(APPEND MGL_VERIFY_SPLIT_TEST_LISTS MGL_VERIFY_SPLIT_TESTS_GLES
          MGL_VERIFY_SPLIT_TESTS_GLES_VIEW MGL_VERIFY_SPLIT_TESTS_VULKAN)
 
@@ -5411,16 +4660,8 @@ if (MOBILEGL_BUILD_DISAGGREGATED AND MOBILEGL_PIPE_VERIFY)
         else()
             set(mglItestVerifyArmEnv "${MGL_ITEST_VULKAN_VERIFY_SPLIT_ENVIRONMENT}")
         endif()
-        gtest_discover_tests(MobileGLIntegrationTest
-            TEST_PREFIX "${mglItestVerifyBackend}.VerifySplitArming."
-            TEST_FILTER "PipeVerifyArmingScenario.Armed"
-            DISCOVERY_TIMEOUT 30
-            PROPERTIES
-                LABELS "integration-verify-split"
-                TIMEOUT ${MGL_ITEST_VERIFY_TIMEOUT}
-                ENVIRONMENT "${mglItestVerifyArmEnv}\;MGITEST_PIPE_ARMING_LANE=1\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/pipe-verify-split-arming-${mglItestVerifyBackend}.log"
-                RESOURCE_LOCK "pipe-verify-split-arming-${mglItestVerifyBackend}.log"
-        )
+        mgl_itest_lane("${mglItestVerifyBackend}.VerifySplitArming." "PipeVerifyArmingScenario.Armed"
+            LABELS "integration-verify-split" TIMEOUT ${MGL_ITEST_VERIFY_TIMEOUT} LOCK "pipe-verify-split-arming-${mglItestVerifyBackend}.log" ENV "${mglItestVerifyArmEnv}\;MGITEST_PIPE_ARMING_LANE=1\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/pipe-verify-split-arming-${mglItestVerifyBackend}.log")
 
         # THE TWO NEGATIVE CONTROLS ON THIS ARM (CONTRACT-P7 §6), the monolith verify block's
         # four entries with the split environment underneath and nothing else changed: each is
@@ -5431,16 +4672,8 @@ if (MOBILEGL_BUILD_DISAGGREGATED AND MOBILEGL_PIPE_VERIFY)
         #
         # A (G4): the corruption perturbs the snapshot arm at the CLIENT's entry compare, so the
         # report lands in the client role's log, which is the half LibraryLog() reads.
-        gtest_discover_tests(MobileGLIntegrationTest
-            TEST_PREFIX "${mglItestVerifyBackend}.VerifySplitCorrupted."
-            TEST_FILTER "PipeVerifyArmingScenario.CorruptedFieldIsReported"
-            DISCOVERY_TIMEOUT 30
-            PROPERTIES
-                LABELS "integration-verify-split"
-                TIMEOUT ${MGL_ITEST_VERIFY_TIMEOUT}
-                ENVIRONMENT "${mglItestVerifyArmEnv}\;MOBILEGL_PIPE_VERIFY_CORRUPT=GetRenderStateParameters\;MOBILEGL_PIPE_VERIFY_FATAL=0\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/pipe-verify-split-corrupt-${mglItestVerifyBackend}.log"
-                RESOURCE_LOCK "pipe-verify-split-corrupt-${mglItestVerifyBackend}.log"
-        )
+        mgl_itest_lane("${mglItestVerifyBackend}.VerifySplitCorrupted." "PipeVerifyArmingScenario.CorruptedFieldIsReported"
+            LABELS "integration-verify-split" TIMEOUT ${MGL_ITEST_VERIFY_TIMEOUT} LOCK "pipe-verify-split-corrupt-${mglItestVerifyBackend}.log" ENV "${mglItestVerifyArmEnv}\;MOBILEGL_PIPE_VERIFY_CORRUPT=GetRenderStateParameters\;MOBILEGL_PIPE_VERIFY_FATAL=0\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/pipe-verify-split-corrupt-${mglItestVerifyBackend}.log")
         # A ON THE OTHER ARM (P7 wave 3, V1). Control A above perturbs EntryCompare's snapshot,
         # which runs on the CLIENT thread at a verb boundary and reports `where=entry`; the
         # compare-at-read hook, which runs on the SERVER's apply thread at every backend read and
@@ -5453,16 +4686,8 @@ if (MOBILEGL_BUILD_DISAGGREGATED AND MOBILEGL_PIPE_VERIFY)
         # mask (FillPoints.def), so the client's entry compare fires first and with FATAL at its
         # default the process would die before the server reached the read. The case reads the
         # SERVER role's half of its private log and nothing else.
-        gtest_discover_tests(MobileGLIntegrationTest
-            TEST_PREFIX "${mglItestVerifyBackend}.VerifySplitReadCorrupted."
-            TEST_FILTER "PipeVerifyArmingScenario.CorruptedFieldIsReportedOnTheServerRead"
-            DISCOVERY_TIMEOUT 30
-            PROPERTIES
-                LABELS "integration-verify-split"
-                TIMEOUT ${MGL_ITEST_VERIFY_TIMEOUT}
-                ENVIRONMENT "${mglItestVerifyArmEnv}\;MOBILEGL_PIPE_VERIFY_CORRUPT=GetPixelStoreParameters\;MOBILEGL_PIPE_VERIFY_FATAL=0\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/pipe-verify-split-read-corrupt-${mglItestVerifyBackend}.log"
-                RESOURCE_LOCK "pipe-verify-split-read-corrupt-${mglItestVerifyBackend}.log"
-        )
+        mgl_itest_lane("${mglItestVerifyBackend}.VerifySplitReadCorrupted." "PipeVerifyArmingScenario.CorruptedFieldIsReportedOnTheServerRead"
+            LABELS "integration-verify-split" TIMEOUT ${MGL_ITEST_VERIFY_TIMEOUT} LOCK "pipe-verify-split-read-corrupt-${mglItestVerifyBackend}.log" ENV "${mglItestVerifyArmEnv}\;MOBILEGL_PIPE_VERIFY_CORRUPT=GetPixelStoreParameters\;MOBILEGL_PIPE_VERIFY_FATAL=0\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/pipe-verify-split-read-corrupt-${mglItestVerifyBackend}.log")
         # B (G5): the child brings up its own inproc session from the inherited environment, and
         # PoisonOmissionScenario's ReadChildLog reads BOTH role halves of the child's log, because
         # under a transport the poisoned read can fire on either side of the seam.
@@ -5474,31 +4699,15 @@ if (MOBILEGL_BUILD_DISAGGREGATED AND MOBILEGL_PIPE_VERIFY)
         # ReadPixels:GetPixelStoreParameters is read on the server under the server's stamp,
         # which is the stamp the knob has to withhold on this arm (PipeInputs.cpp's
         # ServerPoisonOmission). PoisonOmissionScenario.cpp's kOmittedPairs carries both.
-        gtest_discover_tests(MobileGLIntegrationTest
-            TEST_PREFIX "${mglItestVerifyBackend}.VerifySplitPoisonOmitted."
-            TEST_FILTER "PoisonOmissionScenario.OmittedFieldAbortsOnThatVerb"
-            DISCOVERY_TIMEOUT 30
-            PROPERTIES
-                LABELS "integration-verify-split"
-                TIMEOUT ${MGL_ITEST_VERIFY_TIMEOUT}
-                ENVIRONMENT "${mglItestVerifyArmEnv}\;MOBILEGL_PIPE_POISON_OMIT=ReadPixels:GetPixelStoreParameters\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/pipe-poison-omit-split-${mglItestVerifyBackend}.log"
-                RESOURCE_LOCK "pipe-poison-omit-split-${mglItestVerifyBackend}.log"
-        )
+        mgl_itest_lane("${mglItestVerifyBackend}.VerifySplitPoisonOmitted." "PoisonOmissionScenario.OmittedFieldAbortsOnThatVerb"
+            LABELS "integration-verify-split" TIMEOUT ${MGL_ITEST_VERIFY_TIMEOUT} LOCK "pipe-poison-omit-split-${mglItestVerifyBackend}.log" ENV "${mglItestVerifyArmEnv}\;MOBILEGL_PIPE_POISON_OMIT=ReadPixels:GetPixelStoreParameters\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/pipe-poison-omit-split-${mglItestVerifyBackend}.log")
         # B's AMBIENT TARGET. The monolith verify lane's control-B step aims its knob at
         # `Verify.PoisonOmissionScenario.WithoutOmissionCompletes`, the one integration entry that
         # calls glGenerateMipmap at all - and the mechanism filter took that entry out of the
         # ambient set above along with the rest of the scenario. Registered back by hand, with no
         # knob, so the CI step has an entry on THIS arm to turn red.
-        gtest_discover_tests(MobileGLIntegrationTest
-            TEST_PREFIX "${mglItestVerifyBackend}.VerifySplit."
-            TEST_LIST "MGL_VERIFY_SPLIT_TESTS_POISON_${mglItestVerifyBackend}"
-            TEST_FILTER "PoisonOmissionScenario.WithoutOmissionCompletes"
-            DISCOVERY_TIMEOUT 30
-            PROPERTIES
-                LABELS "integration-verify-split"
-                TIMEOUT ${MGL_ITEST_VERIFY_TIMEOUT}
-                ENVIRONMENT "${mglItestVerifyArmEnv}"
-        )
+        mgl_itest_lane("${mglItestVerifyBackend}.VerifySplit." "PoisonOmissionScenario.WithoutOmissionCompletes"
+            LABELS "integration-verify-split" TIMEOUT ${MGL_ITEST_VERIFY_TIMEOUT} TEST_LIST "MGL_VERIFY_SPLIT_TESTS_POISON_${mglItestVerifyBackend}" ENV "${mglItestVerifyArmEnv}")
         list(APPEND MGL_VERIFY_SPLIT_TEST_LISTS "MGL_VERIFY_SPLIT_TESTS_POISON_${mglItestVerifyBackend}")
     endforeach()
 
