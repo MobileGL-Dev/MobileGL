@@ -52,8 +52,9 @@ Example:
 
 ## Code
 
-- Format the lines you change with `.clang-format`, using clang-format 23. Install it with `pip install 'clang-format==23.1.3'`; `git clang-format <base>` from the same package formats only the lines changed since `<base>`. `scripts/format_code.sh` reformats whole files, so do not use it on files you only touched.
-- `.inc` files are fragments included in the middle of a `.cpp` file, inside a namespace, or are generated tables. clang-format cannot format them on their own, so the check skips them. Match the indentation of the file that includes them.
+- C and C++ sources are formatted with `.clang-format`, using clang-format 23. Install it with `pip install 'clang-format==23.1.3'`. `git clang-format <base>` from the same package formats the lines changed since `<base>`, and `scripts/format_code.sh` formats every file the check covers. The tree is already formatted, so neither touches lines you did not change.
+- The commit that reformatted the whole tree is listed in `.git-blame-ignore-revs`. Run `git config blame.ignoreRevsFile .git-blame-ignore-revs` once so that `git blame` looks past it.
+- `.inc` files are fragments included in the middle of a `.cpp` file, inside a namespace, or are generated tables. clang-format cannot format them on their own, so the check skips them. Match the indentation of the file that includes them. The check also skips generated files and the GL export table, `MG_Impl/GLImpl/Exporting/Definitions.cpp`.
 - Text files are UTF-8.
 - These source files under `MobileGL/`, `scripts/` and `tools/` start with the license header:
   - C, C++, `.inc`, GLSL, Java and JavaScript modules, with `//` comments;
