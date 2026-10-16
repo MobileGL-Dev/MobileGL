@@ -99,6 +99,9 @@ namespace MobileGL::MG_State::GLState {
         // DEPTH_COMPONENT until set, and meaningless for every other format.
         virtual GLenum GetDepthStencilTextureMode() const = 0;
         virtual void SetDepthStencilTextureMode(GLenum mode) = 0;
+        // GENERATE_MIPMAP: level 0 uploads regenerate the chain. Frontend-only, so no version moves.
+        virtual Bool GetAutoGenerateMipmap() const = 0;
+        virtual void SetAutoGenerateMipmap(Bool enabled) = 0;
 
         // ---- Texture views (ARB_texture_view / GL 4.6 core 8.18) ----
         // The texture object whose immutable storage this one's texels actually live in, or
@@ -206,6 +209,8 @@ namespace MobileGL::MG_State::GLState {
             // set_texture_params is addressed by resource and is independent of every binding.
             PipePublishParams();
         }
+        Bool GetAutoGenerateMipmap() const override { return m_autoGenerateMipmap; }
+        void SetAutoGenerateMipmap(Bool enabled) override { m_autoGenerateMipmap = enabled; }
 
     protected:
         static Uint64 AllocateLifetimeId();
@@ -290,6 +295,7 @@ namespace MobileGL::MG_State::GLState {
         Uint m_viewNumLayers = 0;
         Int m_samples = 0;
         Bool m_fixedSampleLocations = true;
+        Bool m_autoGenerateMipmap = false;
     };
 
     class TextureObjectMipmap : public TextureObjectBase {

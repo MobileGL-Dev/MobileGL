@@ -59,7 +59,6 @@
 
 namespace MobileGL::MG_Impl::GLImpl {
     static SharedPtr<MG_State::GLState::ITextureObject> nullTextureObject;
-    static UnorderedMap<Uint, Bool> g_autoGenerateMipmapByTextureId;
 
     namespace {
         void SetTextureBorderColorFromFloats(const SharedPtr<MG_State::GLState::ITextureObject>& textureObject,
@@ -1321,7 +1320,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             textureObject->GetSamplerObject()->SetMaxAnisotropy(static_cast<GLfloat>(param));
             break;
         case GL_GENERATE_MIPMAP:
-            g_autoGenerateMipmapByTextureId[textureObject->GetExternalIndex()] = (param != GL_FALSE);
+            textureObject->SetAutoGenerateMipmap(param != GL_FALSE);
             break;
         case GL_DEPTH_STENCIL_TEXTURE_MODE:
             if (param != GL_DEPTH_COMPONENT && param != GL_STENCIL_INDEX) {
@@ -1435,7 +1434,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             textureObject->GetSamplerObject()->SetMaxAnisotropy(param);
             break;
         case GL_GENERATE_MIPMAP:
-            g_autoGenerateMipmapByTextureId[textureObject->GetExternalIndex()] = (param != 0.0f);
+            textureObject->SetAutoGenerateMipmap(param != 0.0f);
             break;
         case GL_DEPTH_STENCIL_TEXTURE_MODE:
             if (param != GL_DEPTH_COMPONENT && param != GL_STENCIL_INDEX) {
@@ -1599,11 +1598,7 @@ namespace MobileGL::MG_Impl::GLImpl {
 
     void MaybeAutoGenerateMipmap(const SharedPtr<MG_State::GLState::ITextureObject>& textureObject, Bool isProxy,
                                  GLint level) {
-        if (isProxy || level != 0 || !textureObject) {
-            return;
-        }
-        const auto it = g_autoGenerateMipmapByTextureId.find(textureObject->GetExternalIndex());
-        if (it == g_autoGenerateMipmapByTextureId.end() || !it->second) {
+        if (isProxy || level != 0 || !textureObject || !textureObject->GetAutoGenerateMipmap()) {
             return;
         }
         GenerateMipmap_Backend(textureObject);

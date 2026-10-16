@@ -392,3 +392,29 @@ TEST_F(TextureByNameTest, MipmapGenerationChecksTheTargetOfBothForms) {
     MG_Impl::GLImpl::GenerateMipmap(GL_TEXTURE_RECTANGLE);
     ExpectSingleGlError(GL_INVALID_ENUM);
 }
+
+// GENERATE_MIPMAP belongs to the texture it was set on. GL names are recycled, so the next texture
+// created under a deleted texture's name must start without the flag.
+TEST_F(TextureByNameTest, AutoMipmapFlagDoesNotOutliveItsTexture) {
+    const ScopedBackendStubs stubs;
+    static Int generated;
+    generated = 0;
+    MG_Backend::gBackendFunctionsTable.GL.GenerateTextureMipmap =
+        [](const SharedPtr<MG_State::GLState::ITextureObject>&, GLenum) { ++generated; };
+    const Uint8 pixels[4 * 4 * 4] = {};
+
+    const GLuint deleted = CreateTexture(GL_TEXTURE_2D);
+    MG_Impl::GLImpl::TextureParameteri(deleted, GL_GENERATE_MIPMAP, GL_TRUE);
+    MG_Impl::GLImpl::TextureStorage2D(deleted, 3, GL_RGBA8, 4, 4);
+    MG_Impl::GLImpl::TextureSubImage2D(deleted, 0, 0, 0, 4, 4, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+    ASSERT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    ASSERT_EQ(generated, 1) << "the flag did not generate mipmaps on its own texture";
+    MG_Impl::GLImpl::DeleteTextures(1, &deleted);
+
+    const GLuint recycled = CreateTexture(GL_TEXTURE_2D);
+    ASSERT_EQ(recycled, deleted) << "the name was not recycled, so nothing here is tested";
+    MG_Impl::GLImpl::TextureStorage2D(recycled, 3, GL_RGBA8, 4, 4);
+    MG_Impl::GLImpl::TextureSubImage2D(recycled, 0, 0, 0, 4, 4, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+    EXPECT_EQ(MG_Impl::GLImpl::GetError(), GL_NO_ERROR);
+    EXPECT_EQ(generated, 1) << "the new texture inherited the deleted texture's GENERATE_MIPMAP";
+}
