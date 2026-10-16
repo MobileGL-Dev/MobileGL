@@ -514,6 +514,13 @@ set(SOURCE_FILES
     MobileGL/MG_Backend/DirectGLES/BackendObject_DirectGLES.cpp
     MobileGL/MG_Backend/DirectGLES/Utils.cpp
     MobileGL/MG_Backend/DirectGLES/Managers.cpp
+    MobileGL/MG_Backend/DirectGLES/ManagersBuffers.cpp
+    MobileGL/MG_Backend/DirectGLES/ManagersFramebuffers.cpp
+    MobileGL/MG_Backend/DirectGLES/ManagersPrograms.cpp
+    MobileGL/MG_Backend/DirectGLES/ManagersSamplers.cpp
+    MobileGL/MG_Backend/DirectGLES/ManagersTextureSync.cpp
+    MobileGL/MG_Backend/DirectGLES/ManagersTextures.cpp
+    MobileGL/MG_Backend/DirectGLES/ManagersVertexArrays.cpp
     MobileGL/MG_Backend/DirectGLES/MultiDraw.cpp
 
     MobileGL/MG_Backend/DirectVulkan/DirectVulkan.cpp
