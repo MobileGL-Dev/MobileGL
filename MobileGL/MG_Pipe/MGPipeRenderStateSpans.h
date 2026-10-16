@@ -12,30 +12,14 @@
 #include "MGPipeTypes.h"
 #include "MGPipeValueTypes.h"
 
-// G7: the pipeline/dynamic split of RenderStateParameters, written in EXACTLY ONE PLACE
-// (ARCHITECTURE.md 5.3, D-B1).
-//
-// The rule that decides the split, and it is the only rule:
-//
-//     A byte of RenderStateParameters is in the PIPELINE half if and only if some public
-//     RenderState setter that calls BumpVersions() writes it. Every other byte is in the
-//     DYNAMIC half. There is no third set.
-//
-// That makes the G7 invariant - the pipeline-subset hash moves IF AND ONLY IF
-// m_pipelineStateVersion moves - true by CONSTRUCTION rather than by inspection, and it is
-// what MG_Test/Pipe/RenderStateSpansTest.cpp walks every setter to confirm.
-//
-// The chunks alternate: chunk 0 is dynamic, chunk 1 is pipeline, and so on, so the whole
-// table is 16 BOUNDARIES rather than 15 hand-written ranges. Every boundary is an offsetof
-// or a sizeof - never a literal - because a python guess at a layout it cannot see is
-// exactly the drift the setter-consistency test exists to catch. 8 dynamic chunks + 7
-// pipeline chunks = 15, and both counts fit the Uint32 ChunkMask of MGPRenderStateDesc and
-// MGPDynamicState with room to spare.
-//
-// Note the two splits are ORTHOGONAL and coexist (ARCHITECTURE.md 5.3): DirectGLES'
-// head [0, 312) / blend [312, 536) / tail [536, 1168) spans cut ACROSS this table, and
-// nothing about them changes. StencilFaceState is deliberately NOT reordered - reordering
-// would move Espryt's shadow bytes for no gain.
+// The pipeline/dynamic split of RenderStateParameters, written only here (ARCHITECTURE.md §5.3).
+// Rule: a byte is in the pipeline half if and only if some public RenderState setter that calls
+// BumpVersions() writes it; every other byte is dynamic. So the pipeline-subset hash moves
+// exactly when m_pipelineStateVersion moves; MG_Test/Pipe/RenderStateSpansTest.cpp checks every
+// setter. Chunks alternate dynamic/pipeline from chunk 0, so 16 boundaries describe 15 chunks
+// (8 dynamic, 7 pipeline; each count fits the Uint32 ChunkMask), every one an offsetof or
+// sizeof, never a literal. DirectGLES' head/blend/tail spans cut across this table
+// independently; StencilFaceState is not reordered, as that would move Espryt's shadow bytes.
 namespace MobileGL::MG_Pipe {
 
     namespace MGPipeRenderStateChunkDetail {

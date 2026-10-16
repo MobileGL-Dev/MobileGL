@@ -56,7 +56,7 @@ namespace MGITest {
         SamplerCso,
         SamplerViewCso,
         // ShaderCso covers BOTH the ordinary program slots and the program-pipeline COMPOSITES
-        // minted out of the reserved high band (MGPipeHandles.h:86-107, D-H7). One kind, because
+        // minted out of the reserved high band (kMGPipeShaderCsoCompositeSlotBase). One kind, because
         // that is what the allocator has: the band is a second dense table inside the same kind
         // and LiveCount counts both.
         //

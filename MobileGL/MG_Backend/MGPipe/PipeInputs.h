@@ -51,26 +51,12 @@ namespace MobileGL::MG_Pipe {
     Optional<MGPipeInputField> MGPipeFindInputField(const char* name);
     Optional<MGPipeVerb> MGPipeFindVerb(const char* name);
 
-    // ---- P5: the split arm of the read check (R-7.2, R-7.3) ------------------------------
-    //
-    // A stale read stops being one answer and becomes FOUR, keyed on the field's table-2 class
-    // - which is what turns the generated table from a document into a runtime mechanism:
-    //
-    //   RECORD-SUPPLIED / APPLIER-DERIVED  the server could answer it and did not: a real
-    //                                      defect. Fatal, exactly as today.
-    //   BARRIER-PULLED                     the server is reading the value the client's
-    //                                      residual fill left in gPipeInputs while the verb
-    //                                      barrier holds both threads apart (R-1). LEGAL, and
-    //                                      COUNTED: PipeStats::CallClass::ResidualPulls. Under
-    //                                      MOBILEGL_IPC_STRICT_ERRORS=1 it is Fatal instead.
-    //   FATAL                              no carrier and the reduced path never reads it.
-    //
-    // AND IT IS ARMED ONLY INSIDE A SERVER-STAMPED VERB (PipeInputs::ServerStampedVerb).
-    // A split BUILD running monolith transport - which is every unit and integration-gpu lane
-    // of build-split - has a client that fills and stamps all 63 fields at every verb, so a
-    // stale read there is the same defect it is in a verify build and gets the same Fatal.
-    // Without that condition the leniency would apply to lanes whose stamps are the client's,
-    // and 1842 unit cases would quietly stop being able to go red.
+    // The server-side read check (ARCHITECTURE.md §9.2.1). Inside a server-stamped verb
+    // (PipeInputs::ServerStampedVerb) a stale read is judged by the field's ownership class:
+    // RECORD_SUPPLIED or APPLIER_DERIVED is a role violation, FATAL aborts, and BARRIER_PULLED
+    // (no production row) inside the verb's class counts as a residual pull unless
+    // CountBarrierPull (PipeInputs.cpp) aborts it. Outside such a verb every stale read is the
+    // plain poison Fatal, because there the client stamped every field itself.
     void MGPipeInputUnfreshRead(MGPipeInputField field, MGPipeVerb verb, Bool serverStamped);
     // The same decision for an accessor that takes an argument the table narrows on
     // (kMGPipeFieldArgumentOwnership). Called BEFORE the freshness test, because the narrowed
@@ -194,25 +180,14 @@ namespace MobileGL::MG_Pipe {
     static_assert(kMGPipeForwardedFieldCount == kMGPipeInputStickyFieldCount,
                   "the forwarded (F-class) fields and the sticky fields of PipeFields.def are the same seven rows");
 
-    // The block the backends read instead of GLContext (ARCHITECTURE.md 9.2 phase A, P1 brief
-    // D4). One struct, three storage classes, and every accessor keeps the NAME, PARAMETERS
-    // and RETURN TYPE of its GLContext counterpart (MG_State/GLState/Core.h) so the strangler
-    // sed is type-neutral:
-    //
-    //   V (value)            copied out of GLContext at fill time by calling the same accessor;
-    //                        no derivation logic is re-implemented here, which is what keeps the
-    //                        copy semantically identical by construction.
-    //   O (object reference) a SharedPtr copy, or a raw pointer to the live GLContext-owned
-    //                        slot/array for the accessors that return a non-const reference into
-    //                        the context. Identity is what phase C turns into a handle.
-    //   F (forwarded)        argument-keyed lookups and reverse-channel calls, defined out of
-    //                        line in MG_Impl/Pipe/PipeFill.cpp (the client side, where the live
-    //                        context may be spelled). Sticky: stamped once by the first fill that
-    //                        sees a live context.
-    //
-    // Every non-forwarded accessor is MGP_INPUT_CHECK (poison) -> MGP_INPUT_VERIFY_READ
-    // (compare-at-read) -> the storage. Both macros expand to nothing when their switch is
-    // off, so a plain MOBILEGL_PIPE_PUSH build's accessor is a load.
+    // The block the backends read instead of GLContext (ARCHITECTURE.md §9.2). Each accessor
+    // keeps the name, parameters and return type of its GLContext counterpart (Core.h).
+    //   V (value)    copied from GLContext at fill time through the same accessor, so no
+    //                derivation is re-implemented here.
+    //   O (object)   a SharedPtr copy, or a raw pointer into a GLContext-owned slot or array.
+    //   F (forward)  argument-keyed lookups and reverse-channel calls, defined in PipeFill.cpp
+    //                (MG_Impl/Pipe); sticky, stamped by the first fill that sees a live context.
+    // Other accessors run MGP_INPUT_CHECK then MGP_INPUT_VERIFY_READ; both compile away when off.
     struct PipeInputs {
         using GLContext = MG_State::GLState::GLContext;
         using BufferObject = MG_State::GLState::BufferObject;
@@ -252,23 +227,12 @@ namespace MobileGL::MG_Pipe {
 #if MOBILEGL_PIPE_POISON
         const MGPipeFilledState& FilledState() const { return m_filled; }
 #endif
-        // TRUE between the server's verb-boundary stamp and whoever clears it. It is the
-        // arming condition of the whole split read path: only inside a server-stamped verb is
-        // a BARRIER-PULLED read counted rather than Fatal, and only there is a sticky forward
-        // a residual pull rather than an ordinary monolith call. A split build running
-        // monolith transport never sets it, which is why build-split's unit and integration
-        // cases behave exactly as a verify build's do.
-        //
-        // CLEARING IT IS THE APPLIER'S JOB AND NOT THE CLIENT'S, even though the client also
-        // does it. MGPipeValidateForVerb and MGPipeLeaveVerb both call
-        // MGPipeServerClearVerbBoundary, which is sufficient for inproc, where both roles share
-        // one process and one gPipeInputs - and misleading for P6, where MG_Impl is not in the
-        // server at all. There this flag would latch TRUE for the life of the server after the
-        // first stamp, every later read anywhere would be judged against the last verb's mask,
-        // and MGPipeStickyForwardPull would stop being a no-op outside a verb - so
-        // InvalidateCompileEnv reached from a later context's backend initialisation, the exact
-        // case the sticky exemption was written for, would be counted and, under strict, would
-        // abort. So: PipeApplier clears on leaving the applier. Not optional.
+        // True between the server's verb-boundary stamp and the applier clearing it. Only inside
+        // such a verb is a BARRIER_PULLED read counted rather than Fatal, and only there is a
+        // sticky forward a residual pull. PipeApplier::LeaveApplier must clear it after every
+        // record: a server process has no client half to do it, so the flag would stay set and
+        // later reads (InvalidateCompileEnv during another context's backend initialisation)
+        // would be judged against the last verb's mask.
         Bool ServerStampedVerb() const { return m_serverStampedVerb; }
 
         // ---- V: values ----
@@ -799,63 +763,22 @@ namespace MobileGL::MG_Pipe {
         TextureUnit* m_textureUnitBase = nullptr;
     };
 
-    // The single global the backends read through gPipeInputs (ARCHITECTURE.md 9.2). An inline
-    // variable: no .cpp is needed for the definition.
-    //
-    // P14 S2: IT IS THE PROCESS-WIDE BLOCK, and `gPipeInputs` below is the name every reader
-    // spells - now one reference per THREAD, resolving to a served session's own block when the
-    // calling thread belongs to one. See the block after it.
-    //
-    // LEAK-AT-EXIT STORAGE, and it is the same rule Init.cpp and GlobalObjects.cpp state for
-    // pGLContext and pActiveBackendObject: "a process that exits without eglTerminate simply
-    // leaks the global singletons to the OS instead of running destructors during static
-    // teardown". This block breaks that rule if it is a value, because its O-class members
-    // are SharedPtrs to FRONTEND objects: a VertexArrayObject that the application deleted
-    // while it was bound has its last reference here, and destroying this block from
-    // __run_exit_handlers therefore runs ~VertexArrayObject -> ~BufferObject at exit. Those
-    // destructors are not exit-safe and cannot be made so - they reach the client's slot
-    // allocator, the resource tracker, the vertex-input emitter, the applier AND, through
-    // MGPipeApplyResourceDestroy, the backend's own twin tables, deferred-release queue,
-    // buffer pool and driver entry points, every one of which is either already destroyed or
-    // about to be. So the reference is never dropped: nothing here can start such a chain.
-    // A live context releases these SharedPtrs the ordinary way, at the fill point.
-    // (P3a; the exit-time heap corruption this closes is p3a-results/exit-order-v1.md.)
+    // The process-wide block, used by every thread outside a served session (see gPipeInputs
+    // below). Deliberately leaked at exit, like pGLContext and pActiveBackendObject: its O-class
+    // members can hold the last reference to frontend objects (a deleted but still bound VAO),
+    // and destroying them from exit handlers would reach the slot allocator, emitters, applier
+    // and backend twin tables after they are gone. A live context releases these references at
+    // the fill point.
     inline PipeInputs& gPipeInputsDefault = *new PipeInputs();
 
     // ============================================================================
-    // P14 S2: WHOSE BLOCK IS `gPipeInputs`?
+    // Which block `gPipeInputs` names
     // ============================================================================
-    //
-    // ONE PROCESS, SEVERAL SERVED SESSIONS. The applier writes this block and the backend reads it
-    // through gPipeInputs, both on the SAME apply thread - the block IS "the state the record in hand
-    // carries". Two sessions applying concurrently on two apply threads through one block would
-    // read each other's render state, which is the cross-talk a multi-session server must not
-    // have. Nothing about the block's contents changed; what changed is that the name resolves to
-    // the SESSION'S block on a thread that belongs to one.
-    //
-    // WHY A THREAD-LOCAL SLOT, AND NOT SOMETHING CLEVERER. gPipeInputs is spelled at ~380
-    // sites in MG_Backend/MG_Impl (they read `MG_Pipe::gPipeInputs->` directly since P13 retired the
-    // pull/push switch macro); a name whose TARGET varies with the calling thread is the only
-    // shape that keeps all of them compiling and all of them correct.
-    //
-    // P15: A POINTER SLOT, NOT A REFERENCE. It used to be a `thread_local PipeInputs&` bound by a
-    // dynamic initializer, and a thread_local with a dynamic initializer is reached through its
-    // TLS init function, which tests two more thread_local guards on every read: three TLS
-    // address calls per access in a dlopen'ed library, at every API level. The slot below is
-    // constant-initialized and trivially destructible, so an access is one TLS address
-    // computation, a load and a null test; the binding itself is unchanged - once per thread, at
-    // its first use, through the same resolver.
-    //
-    // THE RESOLVER IS A HOOK because this header may not know about sessions (MG_Remote/Server
-    // owns them and includes THIS header, not the other way round). It is installed once by the
-    // server's session registry and never replaced; null - the client process, the pull build, a
-    // unit case - makes every thread resolve to gPipeInputsDefault, which is the old behaviour
-    // byte for byte.
-    //
-    // BINDING IS PER THREAD AND HAPPENS AT FIRST USE, so a thread must be inside its session's
-    // scope before it touches the block. Both of a session's threads are: the control thread opens
-    // its scope before it reads a byte of the Hello, and the apply thread opens it as its first
-    // act (ServerLoop::ApplyThreadMain).
+    // Each served session applies on its own thread, so gPipeInputs resolves per thread through
+    // g_pipeInputsThreadResolver, installed once by the server's session registry (null in a
+    // client: every thread gets gPipeInputsDefault). The slot is a constant-initialized pointer
+    // (no TLS init call per access) bound at first use, so a thread enters its session's scope
+    // first: the control thread before the Hello, the apply thread in ServerLoop::ApplyThreadMain.
     using PipeInputsThreadResolver = PipeInputs* (*)();
     inline PipeInputsThreadResolver g_pipeInputsThreadResolver = nullptr;
 
@@ -891,26 +814,13 @@ namespace MobileGL::MG_Pipe {
 
 #if MOBILEGL_BUILD_DISAGGREGATED
     // ============================================================================
-    // P5f (f1), P5F-WIRE-COMPLETENESS.md §4: THE DUAL-BLOCK REHEARSAL
+    // The client block (MOBILEGL_IPC_ROLE_SPLIT_STATE)
     // ============================================================================
-    //
-    // One gPipeInputs served both roles because the verb barrier (R-1) made "the client filled
-    // it" and "the server is reading it" mutually exclusive in TIME on the same object. The
-    // rehearsal removes the same-object half of that sentence: under
-    // MOBILEGL_IPC_ROLE_SPLIT_STATE=1 the client's residual fill writes the CLIENT block below
-    // and the backend/applier keep reading gPipeInputs, which is the SERVER block. Every path
-    // that worked only because the two were one object - a BARRIER-PULLED field, a sticky
-    // forward's read of the fill side's stamps - then has no value to read, and the read
-    // becomes a NAMED Fatal{UnmigratedPipeInput, "<field>@<verb>"} (CountBarrierPull's
-    // dual-block arm, PipeInputs.cpp) instead of a silent cross-role answer.
-    //
-    // THE READ SIDE'S SPELLING DOES NOT MOVE. gPipeInputs remains the server-role block, so the
-    // 379 gPipeInputs sites and PipeApply.cpp's applier writes are untouched; the only new spelling
-    // is on the fill side (MG_Impl/Pipe/PipeFill.cpp), which asks MGPipeClientInputs(). Under
-    // monolith transport - every unit and integration-gpu lane of a split build - the selection
-    // folds back to the single shared block and behaviour is byte-for-byte the old one.
-    //
-    // Same leak-at-exit storage as gPipeInputs above, for the same reason.
+    // With the knob on and a real transport, the client's residual fill writes this block
+    // (MGPipeClientInputs) while the applier and backend read gPipeInputs, the server block; a
+    // read that relied on one shared object then aborts by name (CountBarrierPull) instead of
+    // returning a cross-role value. Otherwise both roles use the one shared block. Leaked at
+    // exit like gPipeInputsDefault.
     inline PipeInputs& gPipeInputsClientBlock = *new PipeInputs();
 
     // PipeInputs.cpp. Whether the REHEARSAL is armed: the knob AND a real transport (and not
@@ -1023,52 +933,13 @@ namespace MobileGL::MG_Pipe {
     static_assert(sizeof(PipeInputs) < 20 * 1024, "PipeInputs outgrew its budget");
 
     // ============================================================================
-    // P5: the server-side verb stamp, and the counter that sizes what it leaves behind
+    // The server-side verb stamp
     // ============================================================================
-    //
-    // THE PREREQUISITE NOBODY ELSE OWNS (CONTRACT-P5.md section 3). Nothing stamps the poison
-    // generations on the applier side today and that is deliberate (see MGPipeApplyAccess'
-    // comment above: a stamp is the filler's statement, not the applier's). Under split the
-    // filler is in the other role, so without this every FilledGen[] would stay 0,
-    // MGPipeInputFieldIsFresh would answer false for EVERYTHING, and a purely server-side read
-    // would abort on the first field inside SyncRenderState - before any interesting case.
-    //
-    // THE RULE, in three lines, and the third one is the load-bearing one:
-    //
-    //   1. bump CurrentVerbSerial and set the verb, so a Fatal names it instead of "<none>";
-    //   2. stamp every RECORD-SUPPLIED and APPLIER-DERIVED field with the new serial - those
-    //      are exactly the fields the records this verb carried can answer;
-    //   3. ZERO every BARRIER-PULLED and FATAL field's stamp.
-    //
-    // (3) is what makes the instrumentation real. The client's residual fill stamps ALL 63
-    // fields at its own verb boundary (PipeFill.cpp step 4), so without the zeroing every
-    // field would read fresh on the server, `rsp` would be identically 0, and the gate would
-    // be decoration - the precise "an inproc implementation proves nothing" failure R-2
-    // exists to prevent. Zeroing also cancels the sticky exemption for free: generated/
-    // PipeFilled.inc tests "never filled" BEFORE it tests sticky, so gen == 0 wins.
-    //
-    // The value a BARRIER-PULLED read then gets is still the client's residual fill's, and it
-    // is still CORRECT - because the verb barrier (R-1) leaves exactly one of the two threads
-    // runnable. That is the debt, not a bug; `rsp` is its size.
-    //
-    // v1 calls this from Server/PipeApplier::StampVerbBoundary. MGPipeVerbForWireOp maps the
-    // record's op onto a verb and answers kVerbCount for an op that is not verb-shaped, which
-    // is the case the applier must NOT stamp on: a set_dynamic_state between two draws is not
-    // a new verb, and stamping there would retire the previous verb's answers early.
-    //
-    // TWO THINGS THE CALLER INHERITS AND SHOULD NOT REDISCOVER:
-    //
-    //   (a) The records BETWEEN two boundaries apply under the earlier boundary's stamp - its
-    //       serial, its class mask and its verb NAME. That is correct today because every
-    //       MGPipeApply* entry point touches gPipeInputs through MGPipeApplyAccess, which
-    //       carries no MGP_INPUT_CHECK; the day one of them calls back into the backend, its
-    //       reads will be judged against a verb they do not belong to.
-    //   (b) The verb a draw record stamps is MGPipeVerb::DrawArrays for ALL TWENTY draw verbs.
-    //       The class mask is right (FillPoints.def puts all twenty in kDraw) and the NAME in a
-    //       Fatal is not: a glDrawElements that aborts will say "@DrawArrays". draw_vbo carries
-    //       no verb id, so fixing it means either a field on the record or a second argument
-    //       here; it is cosmetic for the verdict and misleading for the reader, and it belongs
-    //       with whatever phase widens draw_vbo to the multi-draw family (P8).
+    // Called by PipeApplier::StampVerbBoundary for each op MGPipeVerbForWireOp maps to a verb.
+    // Bumps CurrentVerbSerial, sets the verb, stamps the RECORD_SUPPLIED and APPLIER_DERIVED
+    // fields in the verb's class and zeroes every other stamp; without the zeroing every read
+    // would look fresh, since the client's fill stamped all fields. Records between boundaries
+    // apply under the earlier stamp; all draws stamp as DrawArrays (ARCHITECTURE.md §9.2.1).
     void MGPipeServerStampVerbBoundary(MGPipeVerb verb);
     // MANDATORY for the applier when it leaves the verb. The client's own MGPipeValidateForVerb
     // and MGPipeLeaveVerb call it too, which is enough for inproc and NOT enough for a spawned

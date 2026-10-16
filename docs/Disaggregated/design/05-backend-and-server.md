@@ -13,6 +13,15 @@ Espryt 的 persistent ring、buffer pool、fallback-repack、scratch FBO、驱�
 ```cpp
 // MG_Backend/MGPipe/PipeInputs.h —— 按 memo 键组织，访问器类型与后端原来读到的完全一致
 #if MOBILEGL_PIPE_PUSH
+
+#### 9.2.1 server 侧的 verb 戳与读检查
+
+client 的残余填充在自己的 verb 边界给全部字段盖戳，server 读 `PipeInputs` 前必须换成自己的戳：与 client 共用一块时，不清零则每次读都“新鲜”、`rsp` 恒为 0，门形同虚设；两块分开时，没有戳则第一次读就中止。
+
+- 盖戳点：`PipeApplier::StampVerbBoundary` 只在 `MGPipeVerbForWireOp`（`FieldOwnership.def` 的 `MGP_VERB_OP_LIST`）映到 verb 的 op 上调用 `MGPipeServerStampVerbBoundary`：递增 `CurrentVerbSerial`、记下 verb，给该 verb 类可读掩码（`FillPoints.def`）内的 `RECORD_SUPPLIED` / `APPLIER_DERIVED` 字段盖新戳，其余字段戳清零（“从未填充”先于 sticky 判定，所以清零也取消 sticky 豁免）。
+- 非边界记录（如两次 draw 之间的 `set_dynamic_state`）不盖戳，沿用前一边界的序号、掩码与 verb 名，但盖戳标志已在上一条记录后清除，读检查按盖戳之外处理；20 个 draw 入口都盖成 `DrawArrays`，掩码正确，Fatal 里的名字是泛称。
+- 读检查只在 server 盖戳的 verb 内按归属类（§3.1 的 G8）分流：`RECORD_SUPPLIED` / `APPLIER_DERIVED` 读到旧值是 `Fatal{RoleViolation}`，`FATAL` 直接中止，`BARRIER_PULLED`（仅供生成器对照，没有生产行）在该 verb 类内计入 `rsp`，由 `CountBarrierPull` 决定何时改为中止（记录未 barrier、两角色用不同块、strict 下未准入）。盖戳之外一律是普通 poison `Fatal{UnmigratedPipeInput}`。
+- 盖戳标志由 `PipeApplier::LeaveApplier` 在每条记录之后清除；server 进程里没有 client 半边替它清，漏清会让之后的读都按上一个 verb 的掩码判定。
 #  define MGB_CTX (&::MobileGL::MG_Pipe::gPipeInputs)
 #else
 #  define MGB_CTX (::MG_State::pGLContext)

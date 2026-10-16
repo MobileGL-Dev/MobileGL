@@ -54,22 +54,13 @@ namespace MobileGL::MG_Pipe {
         kOptional = 1u << 5,
     };
 
-    // P5e (docs/archive/contracts/CONTRACT-P5E.md §2.2). THE FIFTH COLUMN OF PipeCalls.def: what the client
-    // does after publishing a record of this call, on a server that publishes
-    // kCapRunAheadApply. Unscoped for MGPipeCallClass's reason - PipeCalls.def spells these as
-    // bare tokens so the same file can be read by the C++ preprocessor and by
-    // scripts/gen_pipe.py, which generates MGPipeWaitClassFor(op) from it.
-    //
-    // IT IS A VALUE, NOT AN OPCODE AND NOT A FLAG. The wire carries the opcode and both roles
-    // recover the class from it, exactly as they recover the flags - which is the whole reason
-    // MGPipeBarriered(op, payload, applierState) can be one function computed identically by
-    // the emit table and by the sink instead of two copies that agree until they do not.
-    //
-    // kWaitNone is 0 so that an uninitialised read is the SAFE direction in exactly one sense
-    // and the dangerous one in the other, which is why nothing reads this table without an
-    // opcode that came out of the catalogue: MGPipeWaitClassFor answers kWaitClassCount for an
-    // opcode it does not know, and a caller holding bytes off a stream must reach its own
-    // Fatal{ProtocolCorruption} rather than a wait decision.
+    // The fifth column of PipeCalls.def: what the client does after publishing a record of this
+    // call to a server that publishes kCapRunAheadApply (ARCHITECTURE.md §11.6). Unscoped so the
+    // .def can use bare tokens for both the preprocessor and scripts/gen_pipe.py, which generates
+    // MGPipeWaitClassFor(op). Both roles recover the class from the opcode, so
+    // MGPipeBarriered(op, payload, applierState) is one function for the emit table and the sink.
+    // MGPipeWaitClassFor answers kWaitClassCount for an unknown opcode; a caller holding stream
+    // bytes must raise its own Fatal{ProtocolCorruption} rather than make a wait decision.
     enum MGPipeWaitClass : Uint8 {
         kWaitNone = 0,
         kWaitApplied,
@@ -107,35 +98,9 @@ namespace MobileGL::MG_Pipe {
     // the other.
     inline constexpr Uint64 kMGPipeSubsystemResources = 1ull << 7;
     inline constexpr Uint64 kMGPipeSubsystemVertexInput = 1ull << 8;
-    // P4a's four. FOUR AND NOT ONE, for P3a's reason one level out: a framebuffer path that
-    // regressed, a texture path that regressed, a sampler path that regressed and a program
-    // path that regressed are four different findings, and clearing one must not disarm the
-    // other three.
-    //
-    // FOUR OF THE SIX FAMILIES CARRY A DEPENDENCY and it is diagnosed at the first use, never
-    // half-run - one Resolve<Family>SubsystemArm per family beside the backend's existing
-    // ResolveResourceSubsystemArm, and lazy rather than at bring-up because a pre-flight child
-    // dying on a signal makes a whole lane SKIP green.
-    //
-    // THE ROWS ARE IN SubsystemDeps.def, ONCE (P3b/P4b R-5), and this comment no longer
-    // restates them. It used to, and it was WRONG in two ways that nothing could fail: it said
-    // "THREE OF THEM" when there are six rows, and it said "the mirror pairs (10 without 11,
-    // 10 without 9, 7 without 10) are all fine" when 10-without-11 is precisely D-K2's FOURTH
-    // row (ID-14/ID-15) - refused by the server and withheld by the client, with PipeFill.cpp
-    // saying so out loud: "The brief's original 'bit 10 without 11 is fine' is WITHDRAWN for
-    // P4a as built." The audit found the same pair of defects repeated in
-    // MG_Backend/DirectGLES/Managers.h's header, i.e. in the header of the file that
-    // implements the refusal.
-    //
-    // THE MIRROR PAIRS THAT REALLY ARE FINE, said out loud rather than left as an absence,
-    // because a table is only trustworthy if what it does NOT contain was decided:
-    //   - bit 10 set, bit 9 clear: FINE. The legacy FBO sync reaches the texture twin through
-    //     SyncTextureObjectToBackend, which dispatches to the handle arm by itself.
-    //   - bit 11 set, bit 9 clear: FINE, for the same reason - a sampler view names a texture,
-    //     never a framebuffer.
-    //   - bit 7 set, bit 10 clear: FINE, and it is P3a's shipped configuration.
-    //   - bit 12 set with any or none of 9/10/11: FINE, per its own row.
-    //   - bit 10 set, bit 11 clear and its mirror are NOT fine; that is the fourth row.
+    // One bit each for the framebuffer, texture-resource, sampler and program families. Bits
+    // 0-13 are fixed on (ConfigLoader.cpp refuses a cleared one at startup); the dependencies
+    // between bits are in SubsystemDeps.def.
     inline constexpr Uint64 kMGPipeSubsystemFramebuffer = 1ull << 9;       // set_framebuffer_state
     inline constexpr Uint64 kMGPipeSubsystemTextureResources = 1ull << 10; // texture + renderbuffer
                                                                           // resource_*, set_texture_params

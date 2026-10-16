@@ -12,24 +12,14 @@
 #include "MGPipeHandles.h"
 #include "MGPipeHostSpan.h"
 
-// Every MGPipe payload (plan B section 4.5). Each one is a flat POD with explicit padding,
-// carries a static_assert on trivial copyability and one on its exact size, and never
-// contains a pointer: MGHostSpan, the one shape that changes with the transport, only ever
-// rides in a variable tail (draw_vbo's user indices, set_shader_buffers' named-UBO bytes),
-// never inline in a fixed payload.
-//
-// Sizes are asserted rather than merely documented because the wire records generated from
-// these structs (generated/PipeWire.inc) are memcpy'd; a field silently changing width is a
-// protocol break that no test would otherwise see.
-//
-// P0.5 DEBT, half repaid. The MG_State half is gone: the (since deleted) ResidualValueBlock's
-// RenderStateParameters and PixelStoreParameters now come from MGPipeValueTypes.h, so
-// this header no longer reaches RenderState.h (its closure still touches TextureEnum.h,
-// through BackendObject.h, for the reason in the next sentence). What remains is MGPCaps embedding
-// MG_Backend's DynamicBackendParameters - deliberate, the caps block IS that struct
-// (section 4.4.1) - and that one include is what still keeps purity gate A (section
-// 10.3) off this header; the gate asserts MGPipeValueTypes.h instead. The caps block
-// needs fixed-width members before it can move (a type change, not a move): P1/P7.
+// Every MGPipe payload (ARCHITECTURE.md §4). Each is a flat POD with explicit padding, a
+// static_assert on trivial copyability and one on its exact size, and never contains a pointer:
+// MGHostSpan, the one shape that changes with the transport, rides only in a variable tail.
+// Sizes are asserted because the generated wire records (generated/PipeWire.inc) are memcpy'd,
+// so a field changing width is a protocol break no other test would see.
+// BackendObject.h supplies DynamicBackendParameters (embedded in MGPCaps), BackendType and,
+// through TextureEnum.h, the texture enums; that reach into MG_Backend is why the include-purity
+// gate (scripts/check_include_closure.py) checks MGPipeValueTypes.h rather than this header.
 #include <MG_Backend/BackendObject.h>
 #include "MGPipeValueTypes.h"
 
@@ -133,22 +123,13 @@ namespace MobileGL::MG_Pipe {
         // buffer. So the answer is the SERVER's table, published as a bit and read through
         // MGL_BACKEND_SLOT_CAP. The first of the "XFB span family" bits SlotCaps.h predicted.
         kCapBackendOwnsXfbCapture = 1ull << 9,
-        // P5e (docs/archive/contracts/CONTRACT-P5E.md §1, §6). THE SERVER APPLIES AN UNBARRIERED RECORD
-        // WITHOUT READING CLIENT MEMORY: every object it needs is resolved from a handle the
-        // record or the applier state carries, so the client may publish and move on instead
-        // of waiting for appliedSeq at every verb (rule F).
-        //
-        // It is set in the DirectGLES arm of the server's CallMask and NEVER in the
-        // DirectVulkan one - Magma keeps the lockstep for the whole of P5e (§6), its
-        // apply-thread allocator debt is real, and a bit published there would turn that debt
-        // into torn reads rather than into the accounted pulls it is today. On Espryt the arm
-        // is gated on kMGPipeP5eRunAheadReady (MG_Backend/Init.cpp), false until the P5e
-        // integration commit, so every package lands with the wait rule inert.
-        //
-        // The client latches RunAheadArmed() = m_barrierArmed && Ipc.RunAhead &&
-        // Caps().HasCap(kCapRunAheadApply) at the first caps adoption after Start; a later
-        // snapshot may only turn it OFF, because a caps re-run must not be able to make a
-        // lockstep server run-ahead in the middle of a frame.
+        // The server applies an unbarriered record without reading client memory: every object
+        // it needs is resolved from a handle in the record or the applier state, so the client
+        // may publish and move on instead of waiting for appliedSeq (ARCHITECTURE.md §11.6).
+        // Published through MGPipeRunAheadCapBitsFor, gated per backend by a readiness constant
+        // in MG_Backend/Init.cpp. ClientSession::LatchRunAheadFromCaps arms run-ahead at the first
+        // caps adoption after Start; a later snapshot may only disarm it, because records already
+        // published without a wait cannot be taken back.
         kCapRunAheadApply = 1ull << 10,
         // P11 B2 (docs/archive/contracts/CONTRACT-P11.md B2). THIS SESSION MAY RUN T0: the client asked for
         // it in its Hello (LinkTerms.adoptTier = 0) on a shared-segment plane, the server's
@@ -358,31 +339,14 @@ namespace MobileGL::MG_Pipe {
         Uint32 StorageFlags; // glBufferStorage flags
         Uint8 HasDefinedContent;  // false after a NULL-data respecify - STORAGE-DEFINING
         Uint8 ImageBindableHint;  // client-side everImageBound; pre-emptive allocation
-        // THE SCOPE OF A RESPECIFY (P5 R-13.3b, CONTRACT-P5.md table 1 row 19b). Zero means
-        // "this respecify redefines the WHOLE resource"; non-zero means it redefines exactly
-        // the (RespecifiedUploadTarget, RespecifiedLevel) pair below and nothing else.
-        //
-        // It exists because the applier ALREADY takes that scope - as a trailing
-        // const MGPRespecifiedLevel* (PipeApply.h:792-795) - and MGPResourceDesc could not
-        // express it, so it was the second of resource_respecify's two companions with no wire
-        // carrier. PH-4 extends that carrier with exact W/H/D for the named level, which the
-        // server validates before staging bytes. The difference is not cosmetic: a null scope drops EVERY pending upload,
-        // because every level's coordinate system has just been replaced, while a per-level
-        // one drops only that key. Crossing without the scope would make every mutable
-        // per-level glTexImage*D on the far side look like a whole-resource redefinition and
-        // silently eat the texels of every other level - exactly the loss the server-side
-        // pending-upload set exists to prevent.
-        //
-        // READ IT THROUGH THE HELPERS BELOW, never by touching the fields: the presence byte,
-        // target/level pair and exact per-level extent form one value. For a named image level,
-        // BufOffset/BufSize temporarily carry W/H/D; the target makes this safe because a
-        // texture-buffer range cannot legally name a mip level. The applier clears that carrier
-        // before storing the descriptor.
-        //
-        // NOT STORAGE-DEFINING, and not metadata either: it does not describe the resource at
-        // all, it describes what this CALL replaces. MGPipeResourceRespecifyNeedsAck and the
-        // storage-defining field set below are unaffected by it, which is why it is not named
-        // in either.
+        // The scope of this respecify. Zero: it redefines the whole resource and the applier
+        // drops every pending upload. Non-zero: it redefines only the (RespecifiedUploadTarget,
+        // RespecifiedLevel) pair below and drops only that level's uploads, so a per-level
+        // glTexImage*D keeps the other levels' texels. Use the helpers below: the presence byte,
+        // the pair and the level's exact extent are one value, and for a named level
+        // BufOffset/BufSize carry W/H/D (a texture buffer cannot name a level) until the applier
+        // clears them. It describes what the call replaces, not the resource, so it is neither
+        // storage-defining nor metadata (see MGPipeResourceRespecifyNeedsAck below).
         Uint8 HasRespecifiedLevel;
         Uint8 Pad0;
         // ImageBindableHint and BindMask above are the two METADATA fields the rule exists
@@ -558,23 +522,14 @@ namespace MobileGL::MG_Pipe {
     };
     MGP_ASSERT_POD(MGPDynamicState, 32);
 
-    // Both views travel, and neither is derivable from the other: the resolved
-    // VertexAttribute[32] AND the binding points, because a pointer-call stride of 0 means
-    // "element size" while a binding-model stride of 0 means "every vertex reads the same
-    // element" (section 4.5.3). IsLong and Type == Float64 are carried separately.
-    //
-    // THE BLOB RULE - ONE RULE FOR EVERY RECORD IN THIS HEADER THAT CARRIES AN MGPBlobRef,
-    // and MGPSubData below is the other one. `Blob.Size` is the record's own statement of how
-    // many bytes its blob holds, and the applier holds the record to that statement WHENEVER
-    // THE RECORD MAKES IT: a non-zero Blob.Size that disagrees with the byte length the
-    // record's other fields describe is Fatal{ProtocolCorruption} and the call is refused. A
-    // ZERO Blob.Size means "this record does not declare its blob", which is what a monolith
-    // emission is - the bytes travel beside the record through the apply entry point's
-    // companion `const void*` and no MGPBlobRef is filled - and it is not a fault. Either way
-    // the bytes read are bounded by the record's OTHER fields (the two counts here, the
-    // destination range there), so the length is a cross-check and never the safety property.
-    // A transport that fills these in gets a real gate on the first record it truncates; a
-    // client that leaves them zero gets no verify-build abort for a field it never used.
+    // Both views travel and neither derives from the other: the resolved VertexAttribute[32]
+    // and the binding points, because a pointer-call stride of 0 means "element size" while a
+    // binding-model stride of 0 means "every vertex reads the same element". IsLong and
+    // Type == Float64 are carried separately.
+    // Blob rule for every record here with an MGPBlobRef: a non-zero Blob.Size must equal the
+    // length the record's other fields describe, or the applier refuses the call with
+    // Fatal{ProtocolCorruption}; zero means "not declared" (monolith passes the bytes beside the
+    // record). The other fields always bound the read; Blob.Size is only a cross-check.
     struct MGPVertexElements {
         MGPipeHandle Cso;
         Uint32 AttributeCount;
@@ -730,66 +685,24 @@ namespace MobileGL::MG_Pipe {
         Uint16 Level;
         Uint32 Layer;
         Uint16 UploadTarget; // static_cast<Uint16>(MobileGL::TextureUploadTarget)
-        // P4a, ID-12 / esprytobj DV-5: WAS Pad0, and the size did not move - the two bytes
-        // were already here. static_cast<Uint16>(MobileGL::TextureTarget), and
-        // kMGPipeSurfaceNoTextureTarget on every point that is not a texture.
-        //
-        // THE FOUR CROSS-OBJECT MASKS ARE WHY IT EXISTS. IsSnormFallbackAttachment,
-        // IsUnormFallbackAttachment and IsAlphaWidenedColorAttachment all reduce to
-        // (format, TEXTURE TARGET) - ShouldUseCaveatTextureFormat(format, target) and
-        // BackendTextureFormatAddsAlpha(format, target) - and no TextureUploadTarget ->
-        // TextureTarget inverse exists anywhere in the tree, so UploadTarget cannot answer
-        // them. Without this field D-C1's promise that the inline InternalFormat makes the
-        // masks "fall out at push time with no lookup" is unkeepable and the backend keeps
-        // reading the frontend attachment objects.
-        //
-        // CONSULTED ONLY WHEN Kind == kMGPipeSurfaceKindTexture. A zero-initialised record
-        // carries 0, which is TextureTarget::Texture1D and not the sentinel; that is not a
-        // defect, because such a record is Kind == None and names no texture at all. Gating
-        // on Kind is the reader's contract.
+        // static_cast<Uint16>(MobileGL::TextureTarget), or kMGPipeSurfaceNoTextureTarget on a
+        // point that is not a texture. The snorm/unorm-fallback and alpha-widened attachment
+        // masks depend on (format, texture target), so the backend answers them from this record
+        // instead of reading the frontend attachment objects.
+        // Read it only when Kind == kMGPipeSurfaceKindTexture: a zeroed record carries 0
+        // (Texture1D), which is harmless only because its Kind is None.
         Uint16 TextureTarget;
     };
     MGP_ASSERT_POD(MGPSurface, 24);
 
-    // P4a, D-C2/D-C3 and ID-19: THE RECORD DESCRIBES A FRAMEBUFFER OBJECT, and Target says
-    // whether it ALSO moves a binding.
-    //
-    // A `Named` record describes the framebuffer object it names (Fbo) and changes NO
-    // binding. `Draw` / `Read` / `Both` records describe the same object AND set the bound
-    // handle(s) of the target(s) they name.
-    //
-    // The applier therefore keeps records PER FRAMEBUFFER OBJECT, keyed by the handle's slot
-    // (the generation is checked on lookup and a stale one refuses; a framebuffer has no wire
-    // lifetime - D-I2, the catalogue has no framebuffer delete - so a successor's record
-    // simply OVERWRITES the slot), plus the two bound handles. And every DSA entry point that
-    // hands a framebuffer to the server BY NAME - BlitNamedFramebuffer, the four
-    // ClearNamedFramebuffer*, and the DSA attachment / draw-buffer / read-buffer setters at
-    // their validate point - is PRECEDED BY A Named RECORD, so that any framebuffer the
-    // server is about to receive by name already has one.
-    //
-    // That last rule is the phase's main correction, not a nicety. With only the two
-    // bound-target records, glClearNamedFramebufferfv(fbo) on an unbound fbo made the backend
-    // mint a fresh driver framebuffer with NO ATTACHMENTS, find no record for it, decline,
-    // and then issue the clear against it anyway - GL_INVALID_FRAMEBUFFER_OPERATION and
-    // nothing cleared, where the legacy arm cleared correctly. Writing such an object into
-    // the bound-target record instead would have been worse: the applier would then claim it
-    // is bound.
-    //
-    // GL has two independent framebuffer bindings and one record carries one Fbo, so a
-    // Draw/Read pair is two records and one object bound to both targets is one record with
-    // Both. The draw-buffer array belongs to the OBJECT the record names; it reaches the
-    // driver's bound draw framebuffer only for a record whose Target is Draw or Both -
-    // Espryt's own comment records the Minecraft 26.x OIT bug where a READ-only sync landed
-    // glDrawBuffers on the wrong framebuffer - and a Named record's draw buffers are applied
-    // when that object is next configured, never to whatever happens to be bound. ReadSurface
-    // is resolved from THAT framebuffer's own read buffer in EVERY record, Named included,
-    // which is what makes the read-buffer-shared-FBO defect class unrepresentable rather than
-    // merely fixed.
-    //
-    // Target IS A ContentHash INPUT (the hash covers the whole record), and the emitter's
-    // suppressor must be keyed by the framebuffer the record names, not by one global slot:
-    // two different objects' Named records in a row must both go out, and a Named record must
-    // never be suppressed against the same object's bound record or the reverse.
+    // Every framebuffer record describes the object named by Fbo; Target says whether it also
+    // moves a binding. Draw/Read/Both set the named binding(s), Named sets none. GL has two
+    // independent bindings, so a draw/read pair is two records and one object bound to both is
+    // one Both record. The applier stores records per framebuffer object (Fbo's slot, generation
+    // checked; a successor overwrites the slot) plus the two bound handles. Every DSA entry point
+    // that hands a framebuffer over by name is preceded by a record for it (Named when the object
+    // is bound to neither binding); without one the backend would meet an object with no record
+    // and act on an empty driver framebuffer.
     enum class MGPipeFramebufferTarget : Uint8 {
         Draw = 0,
         Read = 1,
@@ -813,37 +726,13 @@ namespace MobileGL::MG_Pipe {
     static_assert(kMGPipeMaxColorAttachments == MobileGL::kMGMaxDrawBuffers,
                   "MGPFramebufferState::Color[] and DrawBuffers[] are one array width");
 
-    // ONE RECORD DESCRIBES ONE FRAMEBUFFER OBJECT - the one named by Fbo - and Target says
-    // whether it also moves a binding (P4a, D-C2 as corrected by ID-19; see
-    // MGPipeFramebufferTarget above for the failure that forced it).
-    //
-    // A Named record describes that object and changes NO binding. Draw / Read / Both records
-    // describe that object AND set the bound handle(s) of the target(s) they name. The applier
-    // keeps these records PER FRAMEBUFFER OBJECT, keyed by Fbo's slot (generation checked on
-    // lookup; a framebuffer has no wire lifetime - D-I2 - so a successor's record simply
-    // overwrites the slot), plus the two bound handles; every DSA entry point that hands a
-    // framebuffer to the server by name is preceded by a Named record.
-    //
-    // WHAT Target CHANGES, FIELD BY FIELD. NO FIELD IN THIS RECORD REFERS TO "the currently
-    // bound framebuffer" - every one of them describes the object named by Fbo - and that is
-    // the invariant a reader depends on:
-    //
-    //   Fbo, Color[], Depth, Stencil, ReadSurface, Width/Height/Layers/Samples,
-    //   FixedSampleLocations, IsDefault, Complete
-    //       properties of the object named by Fbo, identical in meaning under every Target.
-    //       In particular ReadSurface is resolved from THAT framebuffer's own read buffer -
-    //       on a Named record too - never from whichever framebuffer is bound to GL_READ.
-    //   DrawBuffers[]
-    //       a property of the named object; it reaches the driver's bound draw framebuffer
-    //       only when Target is Draw or Both. Under Named it is stored with the object and
-    //       applied when that object is next configured.
-    //   Target
-    //       the only binding-specific field: Draw/Read/Both name the binding(s) this record
-    //       also sets, Named names none. It is a ContentHash input.
-    //   ContentHash
-    //       per RECORD, not per object, and the emitter's suppressor is keyed by the
-    //       framebuffer named: a Named record must never be suppressed against the same
-    //       object's bound record, nor one object's Named record against another's.
+    // No field here refers to "the currently bound framebuffer"; all describe the object named
+    // by Fbo (see MGPipeFramebufferTarget). ReadSurface is that object's own read buffer under
+    // every Target. DrawBuffers[] reaches the driver's bound draw framebuffer only for Draw or
+    // Both; under Named it is stored and applied when the object is next configured. Target is
+    // the only binding-specific field and a ContentHash input. The emitter's suppressor is keyed
+    // per named framebuffer, so a Named record is never suppressed against the same object's
+    // bound record or against another object's Named record.
     struct MGPFramebufferState {
         MGPipeHandle Fbo; // kMGPipeDefaultFramebuffer for the default framebuffer
         MGPSurface Color[8];
@@ -1096,25 +985,14 @@ namespace MobileGL::MG_Pipe {
     };
     MGP_ASSERT_POD(MGPStreamOutputTargets, 24);
 
-    // ---- set_program_bindings (P5e, opcode 80; CONTRACT-P5E.md §1 and §5.5) --------------
-    //
-    // THE THREE POST-LINK MUTABLE REFLECTION FIELDS. create_shader_state carries the archive
-    // as LINKED; glUniformBlockBinding, glUniform1i on a sampler and glShaderStorageBlockBinding
-    // all move a binding AFTER the link, inside the frontend's LinkArtifacts, so an archive
-    // snapshot alone is wrong and the server would answer a draw with the bindings the program
-    // was linked with rather than the ones it is bound with.
-    //
-    // Three tails, in this order, because the three live in three different index spaces:
-    //   Int32                     BlockBindings[BlockBindingCount]   dense, GL uniform-block index
-    //   MGPProgramSamplerUnit     SamplerUnits[SamplerUnitCount]     sparse, ascending Location
-    //   MGPProgramStorageOverride StorageOverrides[StorageOverrideCount]
-    // The storage-override map is NAME-keyed BY DESIGN (ProgramObject.h: three index spaces,
-    // one coordinate), so its key travels as a host span staged whole, exactly as
-    // set_storage_block_binding's single name does.
-    //
-    // Emitted BEFORE create_shader_state at the same validate point: a rebuild inside the verb
-    // must already see the bindings. A re-issued create CLEARS all three tails, for the reason
-    // GlobalConstants is cleared - a relink replaces the archive the tails index into.
+    // ---- set_program_bindings ------------------------------------------------------------
+    // glUniformBlockBinding, glUniform1i on a sampler and glShaderStorageBlockBinding change
+    // bindings after link, and create_shader_state carries only the linked archive. Three tails,
+    // in this order, one per index space: Int32 BlockBindings[] (dense block index),
+    // MGPProgramSamplerUnit SamplerUnits[] (ascending Location), MGPProgramStorageOverride
+    // StorageOverrides[] (keyed by block name, staged whole). Emitted before create_shader_state
+    // at the same validate point so a rebuild inside the verb sees them; a re-issued create
+    // clears all three, because a relink replaces the archive they index into.
     struct MGPProgramSamplerUnit {
         Uint32 Location; // the frontend uniform location
         Int32 Unit;      // the texture image unit glUniform1i put there
@@ -1278,50 +1156,14 @@ namespace MobileGL::MG_Pipe {
     };
     MGP_ASSERT_POD(MGPSubRegion, 40);
 
-    // Carries the union box AND the region list so the SERVER picks the upload shape - the
-    // decision belongs on the side that pays the GPU cost. Mali prices texture upload by
-    // JOB COUNT: ~100 sprite rects against one union box measured +6 ms/frame.
-    //
-    // `Target` IS TWO FACTS IN ONE Uint16 (P4a, D-D3 / ID-12), and MGPipePackSubDataTarget
-    // under the struct is the only spelling of the encoding - nothing may open-code a half:
-    //
-    //   low byte  = MGPipeResourceTarget          - WHICH KIND of storage the destination is.
-    //                                               The applier branches on it: a buffer
-    //                                               target dispatches into MGPipeResourceOps,
-    //                                               every other target accumulates a pending
-    //                                               upload for the texture sync to consume.
-    //   high byte = MobileGL::TextureUploadTarget - WHICH cube face / upload target the level
-    //                                               belongs to. It is NOT derivable from the
-    //                                               resource target - six faces share TexCube
-    //                                               - and 26 enumerators leave a byte ample.
-    //
-    // WHY THAT WAY ROUND, AND WHY THE ENCODING LIVES HERE RATHER THAN IN EACH EMITTER. The
-    // applier's SubDataNamesABuffer tests the WHOLE field == 0, and
-    // TextureUploadTarget::Texture1D is 0 - so a texture record carrying the bare upload
-    // enumerator is indistinguishable from a buffer record exactly when its owner is a 1D
-    // texture, and that texture's upload is dispatched into the buffer path. With the
-    // resource target in the LOW byte a buffer record's Target stays EXACTLY
-    // kMGPipeResourceTargetBuffer - P3a's buffer records are unchanged on the wire, their
-    // upload byte being zero too - while a texture record can never be zero, because no
-    // texture's MGPipeResourceTarget is. The static_assert under the struct holds that
-    // invariant, and the applier's whole-field test stays right either way.
-    //
-    // THE BUFFER HALF. With Target == Buffer there is no level and no box, so the destination
-    // byte range rides in the box's first coordinate and first extent: UnionBox.X is the byte
-    // offset, UnionBox.W the byte size, Y = Z = 0, H = D = 1, Level = 0, RegionCount = 0.
-    //
-    // THE BLOB RULE, THE SAME ONE MGPVertexElements ABOVE CARRIES: `Blob.Size` is the record's
-    // own statement of how many bytes its blob holds and the applier holds the record to that
-    // statement whenever the record makes it - a non-zero Blob.Size that is not exactly the
-    // record's own byte size (MGPipeSubDataBufferSize below) is Fatal{ProtocolCorruption} and
-    // the write is refused. A zero Blob.Size means "this record does not declare its blob",
-    // which is what a monolith emission is: the bytes travel beside the record through
-    // MGPipeApplyResourceSubData's companion `const void*`. The destination range is what
-    // bounds the write in both cases. That caps ONE record at a 2^31-1 offset and a
-    // 2^32-1 size; a range beyond either is split by the emitter - the same rule, and at
-    // SEG_STAGE's 32 MiB the far tighter one, that the ring's half-capacity bound already
-    // imposes on it. MGPipeSetSubDataBufferRange / MGPipeSubDataBufferOffset / Size below are
-    // the only spelling of this convention; nothing else reads the box for a buffer.
+    // Carries the union box and the region list so the server picks the upload shape
+    // (ARCHITECTURE.md §6). Target packs MGPipeResourceTarget in the low byte and the
+    // TextureUploadTarget (the cube face) in the high byte; use MGPipePackSubDataTarget and the
+    // accessors below. That order keeps a buffer record's Target exactly
+    // kMGPipeResourceTargetBuffer (SubDataNamesABuffer tests the whole field) and no texture
+    // record 0. For a buffer, UnionBox.X/W are the byte offset/size (MGPipeSetSubDataBufferRange);
+    // one record holds at most a 2^31-1 offset and a 2^32-1 size, and the emitter splits beyond.
+    // Blob.Size follows the blob rule at MGPVertexElements: zero or exactly that byte size.
     struct MGPSubData {
         MGPipeHandle Res;
         // Target is PACKED - see the block above, and read it only through
@@ -1330,25 +1172,12 @@ namespace MobileGL::MG_Pipe {
         // Replaces the backend's `uploadData == mipData` pointer comparison: are these
         // bytes an untransformed level shadow?
         Uint8 SourceIsVerbatimLevelShadow;
-        // P5 (b1): DOES THIS RESOURCE HAVE A LIVE HOST WRITER RIGHT NOW? One byte out of the
-        // original pad; the complete mip extent below is a separate payload extension.
-        //
-        // It is here rather than on MGPResourceDesc, and that is a ruling with a reason. The
-        // fact is CONTENT-shaped - "someone may be writing these bytes without telling you" -
-        // and MGPResourceDesc's only carrier is resource_respecify, which for a BUFFER is
-        // never classified as metadata-only (PipeApply.cpp's RespecifyRedefinesNoStorage
-        // refuses the buffer target outright, so that ID-18 M4's "no reallocation ack" is true
-        // by construction). Announcing a map on a descriptor would therefore have cost a
-        // spurious reallocation per map - precisely the failure the brief warned about - or a
-        // change to that rule, which is a P4a contract the buffer family should not be
-        // re-opening for a flag.
-        //
-        // WHO SETS IT: MGPipeEmitResourceSubData, from BufferObject::HasLiveHostWritesForWire.
-        // WHO READS IT: ApplyBufferWrite, into MGPipeResourceRecord::HasLiveHostWrites, which
-        // is what IsBufferDrawCleanByHandle asks instead of the frontend object's IsMapped().
-        // ZERO IS THE ANSWER, NOT THE ABSENCE OF ONE: a record that does not set it says "no
-        // live writer", which is what every monolith emission means and why the monolith path
-        // needs no edit at all.
+        // Whether the buffer has a live host writer (a persistent write map) right now. It rides
+        // the content record, not MGPResourceDesc: a buffer resource_respecify is never
+        // metadata-only, so announcing a map there would reallocate. Every buffer content emitter
+        // in PipeFill.cpp sets it from BufferObject::HasLiveHostWritesForWire, and ApplyBufferWrite
+        // assigns it to MGPipeResourceRecord::HasLiveHostWrites, so zero means "no live writer".
+        // IsBufferDrawCleanByHandle reads that record instead of the frontend's IsMapped().
         Uint8 HasLiveHostWrites;
         Uint8 Pad0[2];
         MGPBox UnionBox;
@@ -1411,75 +1240,24 @@ namespace MobileGL::MG_Pipe {
     }
     inline Uint64 MGPipeSubDataBufferSize(const MGPSubData& record) { return record.UnionBox.W; }
 
-    // P3a, D-A5: the per-record half of resource_respecify's kNeedsAck.
-    //
-    // Flags are a PER-CALL static property and resource_respecify serves BOTH glBufferData
-    // and glBufferStorage. A bare kNeedsAck on the call would acknowledge every glBufferData
-    // in a world upload; only glBufferStorage is a real synchronous allocation and only it is
-    // allowed a synchronous ack. So kNeedsAck on the call means "records of this call MAY
-    // require an acknowledgement" and THIS predicate decides per record. In monolith the ack
-    // is ((void)0) - the applier is one function call away - and the transport wires the
-    // doorbell to this predicate when it lands.
-    //
-    // P4a, D-A2: THE PREDICATE IS NARROWED TO NAME THE BUFFER TARGET, and that is a
-    // requirement rather than a tidy-up. glTexStorage* also sets Immutable - it is a real
-    // descriptor fact the backend reads, and the client must set it - but texture allocation
-    // is already deferred to sync time in monolith (glTexImage*/glTexStorage* only
-    // MarkStorageDirty; even glRenderbufferStorage* allocates lazily inside SyncToBackend), so
-    // splitting changes no observable behaviour and this batch must NOT ack. glBufferStorage
-    // stays the only entry point allowed a synchronous acknowledgement.
-    //
-    // PipeCatalogueTest.ResourceRespecifyAcksOnlyImmutableStorage drives glTexStorage2D and
-    // glRenderbufferStorage idioms through it, and is the negative control for a future
-    // widening.
+    // The per-record half of resource_respecify's kNeedsAck: the call flag says a record may
+    // need an acknowledgement, and this decides. Only an immutable buffer (glBufferStorage) is a
+    // synchronous allocation; glBufferData is not. glTexStorage* also sets Immutable, but texture
+    // and renderbuffer storage is allocated lazily at sync time, so neither may ack
+    // (ARCHITECTURE.md §8.3). PipeCatalogue.ResourceRespecifyAcksOnlyImmutableStorage
+    // (PipeCatalogueTest.cpp) is the negative control against widening it.
     inline Bool MGPipeResourceRespecifyNeedsAck(const MGPResourceDesc& desc) {
         return desc.Immutable != 0 && desc.Target == kMGPipeResourceTargetBuffer;
     }
 
-    // P4a, ID-18 M4: A RESPECIFY WHOSE STORAGE-DEFINING FIELDS ALL EQUAL THE STORED
-    // DESCRIPTOR IS A METADATA UPDATE, NOT A REALLOCATION.
-    //
-    // MGPResourceDesc::BindMask and ImageBindableHint are STICKY facts the client discovers
-    // AFTER allocation - a texture first bound as a shader image, first used as a render
-    // target - and they ride resource_create and every resource_respecify. An IMMUTABLE
-    // texture never has a later respecify, so without a rule those two would reach the server
-    // only by accident, or never; with one, a mask change after allocation emits a
-    // resource_respecify that REPEATS the storage the resource already has.
-    //
-    // The applier and both twins must classify such a record as a metadata update:
-    //   - NO reallocation acknowledgement. MGPipeResourceRespecifyNeedsAck above still
-    //     answers the per-record question, but a metadata update allocates nothing, so a
-    //     record it classifies as metadata is not acked even when that predicate says the
-    //     call may require one.
-    //   - NO PendingUploads clear when the call names NO level. This REFINES the whole-resource
-    //     clear: identical storage fields with a null MGPRespecifiedLevel clear NOTHING. (The
-    //     level-scoped rule exists because clearing the whole vector on a level-1 definition
-    //     silently dropped level 0's accepted texels; a metadata update must drop neither.) A
-    //     call that NAMES a level is that level's redefinition whatever the descriptor says -
-    //     a non-base level's extent is not a descriptor field - and drops exactly that level
-    //     (P4a final review C-1); the client's mask republish passes null on purpose.
-    //   - The stored descriptor's BindMask and ImageBindableHint ARE updated: the applier
-    //     replaces the descriptor WHOLE with the one the client sent (PipeApply.cpp), and the
-    //     mask in it is the CLIENT's sticky OR (TextureEmit.h's entry, never cleared), so the
-    //     replacement can never lose a bit the record once carried. The twin re-derives its
-    //     storage flags from the new mask on its next sync, recreating backend storage only
-    //     where the backend actually needs it. The record itself is not a request to recreate.
-    //
-    // THE STORAGE-DEFINING FIELD SET, named here so that neither side has to guess and a
-    // later field cannot join it by silence. It is every MGPResourceDesc member except the
-    // three metadata ones and the padding:
-    //
-    //     Target, StorageKind, InternalFormat, Width, Height, Depth, ArrayLayers, Levels,
-    //     Samples, FixedSampleLocations, Immutable, Usage, StorageFlags, HasDefinedContent,
-    //     ViewOf, BufferForTexBuffer, BufOffset, BufSize.
-    //
-    // `Resource` is the identity the stored descriptor is looked up BY, not a comparand. The
-    // three fields that may differ on a metadata update are exactly BindMask,
-    // ImageBindableHint and GlNameForDiag (diagnostics only, never an identity, never a memo
-    // key). HasDefinedContent is storage-defining ON PURPOSE: glBufferData(size, NULL) at an
-    // unchanged size is an orphaning reallocation and has to keep clearing, rather than being
-    // mistaken for a mask change. A field added to MGPResourceDesc must be placed in one of
-    // the two lists in the same commit - PipeCatalogue pins the struct's size for that.
+    // A non-buffer respecify whose storage-defining fields all equal the stored descriptor is a
+    // metadata update: it republishes a BindMask or ImageBindableHint learned after allocation
+    // (an immutable texture has no later respecify to carry them). It gets no reallocation ack
+    // and, naming no level, clears no PendingUploads; the descriptor is still replaced whole (the
+    // mask is the client's sticky OR) and the twin re-derives its storage flags at its next sync.
+    // Storage-defining is every MGPResourceDesc member but Resource, BindMask, ImageBindableHint,
+    // GlNameForDiag, the respecify scope and padding. RespecifyRedefinesNoStorage (PipeApply.cpp)
+    // compares them field by field, so a new member must be added there.
 
     // The forward terminator for a server-initiated texture pull (section 7.1). May carry
     // zero regions - that is how a pull that needs nothing is answered.
@@ -1505,29 +1283,14 @@ namespace MobileGL::MG_Pipe {
     };
     MGP_ASSERT_POD(MGPReadback, 24);
 
-    // resource_copy_region = glCopyImageSubData (P5b, CONTRACT-P5B.md i1). The record had no
-    // producer and no consumer before P5b, so its shape is settled here for the first time:
-    //
-    //   Src / Dst        the two endpoints' handles - kind Texture, or kind Renderbuffer when the
-    //                    matching *Target is GL_RENDERBUFFER. The handle is the identity.
-    //   SrcTarget /      the GL target enum the APPLICATION named, verbatim (GL_TEXTURE_2D,
-    //   DstTarget        GL_TEXTURE_CUBE_MAP, GL_RENDERBUFFER, ...); every one fits a Uint16.
-    //                    Espryt's own MakeGLESCopyImageEndpoint does the ES lowering
-    //                    (DirectGLES.cpp) and must keep seeing the enum the app passed.
-    //   SrcBox           {SrcX, SrcY, SrcZ, Width, Height, Depth} of the copied region.
-    //   SrcGlName /      THE P5b DEBT, stated rather than hidden. GLFunctionsTable::
-    //   DstGlName        CopyImageSubData takes two CopyImageEndpoints, each a frontend SharedPtr,
-    //                    and the server has none. Under inproc and the verb barrier the server
-    //                    rebuilds a TEXTURE endpoint from the GL name through the barrier-pulled
-    //                    sticky forward gPipeInputs->GetTextureObject(name) (counted in `rsp`,
-    //                    retired by P7 / P3b-P4b when the backend takes handles). A GL name is
-    //                    NEVER an identity (section 4.2.1); it is the lookup key of a pull the
-    //                    handle beside it will replace. No forward hands out a renderbuffer,
-    //                    so a RENDERBUFFER endpoint is refused by name in P5b
-    //                    (Fatal{UnmigratedVerb, "CopyImageSubData+RENDERBUFFER"}, ID-57's shape).
-    //
-    // 64 -> 72: the two names did not fit the four pad bytes, and the record had no wire history
-    // to preserve.
+    // resource_copy_region = glCopyImageSubData only; glCopyTex(Sub)Image2D use
+    // copy_framebuffer_to_texture.
+    //   Src / Dst              endpoint handles: kind Renderbuffer when the matching *Target
+    //                          is GL_RENDERBUFFER, else Texture. The handle is the identity.
+    //   SrcTarget / DstTarget  the GL target the application passed, verbatim: the backend's
+    //                          CopyImageSubData does the ES lowering and needs the original enum.
+    //   SrcBox                 source origin and the copy's extent, which GL states once for both.
+    //   SrcGlName / DstGlName  diagnostics only, never an identity.
     struct MGPCopyRegion {
         MGPipeHandle Src, Dst;
         MGPBox SrcBox;
@@ -1562,26 +1325,14 @@ namespace MobileGL::MG_Pipe {
     };
     MGP_ASSERT_POD(MGPClear, 48);
 
-    // MGPClear's two discriminants, and THE ONLY SPELLING OF THEM (P5b, CONTRACT-P5B.md f1).
-    // Through P5 the list lived in this struct's comment and both the client emitter
-    // (MG_Remote/Client/EmitTables.h) and the server sink (MG_Remote/Server/PipeApplier.h)
-    // minted their own copy of the numbers, each flagged "this belongs in MGPipeTypes.h". A
-    // disagreement between the two copies is a clear of the wrong attachment with the wrong
-    // value type, which renders plausibly - table 0's "a decoder that open-codes it is the
-    // class-1 defect". Both files now alias these.
-    //
-    // Kind is the comment's order, left to right. ValueClass reuses the numbering
-    // MG_State/GLState/Core.h gives the identical three-way split on MGPAttribValue::ValueClass.
-    //
-    // WHICH GL ENTRY POINT PRODUCES WHICH KIND, so the emitter and the sink cannot disagree:
-    //   glClear(mask)                            Whole, BufferMask = mask, DrawBufferIndex = -1
-    //   glClearBuffer{f,i,ui}v(GL_COLOR, i, v)   Color, DrawBufferIndex = i, ValueClass by suffix
-    //   glClearBufferfv(GL_DEPTH, 0, &d)          Depth, DepthValue = d
-    //   glClearBufferiv(GL_STENCIL, 0, &s)        Stencil, StencilValue = s
-    //   glClearBufferfi(GL_DEPTH_STENCIL, 0, d, s) DepthStencil, DepthValue = d, StencilValue = s
-    // The four glClearNamedFramebuffer* forms are the same rows with Fbo = the named
-    // framebuffer's handle (preceded by its MGPipeFramebufferTarget::Named record, ID-19);
-    // the bound forms carry Fbo = kMGPipeNullHandle, "the bound draw framebuffer".
+    // MGPClear's discriminants, shared by the emitter and the sink: a mismatch clears the wrong
+    // attachment with the wrong value type and still renders plausibly. ValueClass reuses the
+    // numbering of MGPAttribValue::ValueClass (MG_State/GLState/Core.h).
+    //   glClear(mask)                           Whole, BufferMask = mask, DrawBufferIndex = -1
+    //   glClearBuffer{f,i,ui}v(GL_COLOR, i, v)  Color, DrawBufferIndex = i, ValueClass by suffix
+    //   glClearBufferfv/iv/fi on GL_DEPTH, GL_STENCIL, GL_DEPTH_STENCIL give Depth, Stencil and
+    //   DepthStencil with DepthValue / StencilValue. Named-framebuffer forms set Fbo (after a
+    //   framebuffer record for it); bound forms use kMGPipeNullHandle, the bound draw framebuffer.
     inline constexpr Uint32 kMGPipeClearKindWhole = 0;
     inline constexpr Uint32 kMGPipeClearKindColor = 1;
     inline constexpr Uint32 kMGPipeClearKindDepth = 2;
@@ -1624,29 +1375,14 @@ namespace MobileGL::MG_Pipe {
     };
     MGP_ASSERT_POD(MGPReadbackInfo, 64);
 
-    // P9 (W1, docs/archive/contracts/CONTRACT-P9.md §1): read_pixels_to_buffer / get_texture_image_to_buffer,
-    // the two readbacks whose destination is a bound GL_PIXEL_PACK_BUFFER. The destination is
-    // the pack buffer's RESOURCE HANDLE (CONTRACT-P5 row 23: "a PBO destination is a resource
-    // handle and needs no Seg field"), so nothing comes back and the client does not wait: the
-    // server reads exactly the tight pixels the reply-slot form would have answered and writes
-    // them into Dst row by row through the applier's ordinary buffer-write gate, and the client
-    // marks Dst GPU-written (GpuWritePending.h row 4). A later CPU read of Dst reaches the bytes
-    // through resource_readback, like any other buffer the GPU wrote.
-    //
-    //   Src          the reply form's record, unchanged: the box, format, type, target and
-    //                level; Src.DstOffset / Src.DstSize are 0 / the tight w*h*d*bpp extent
-    //                and are checked, not used for placement.
-    //   Dst          the pack buffer.
-    //   DstBase      byte offset in Dst of the first texel of the first row of the first image:
-    //                the application's offset plus GL_PACK_SKIP_{PIXELS,ROWS,IMAGES} already
-    //                applied, because the layout arithmetic is the client's (ReadbackLayout).
-    //   RowStride    bytes between two rows in Dst (GL_PACK_ROW_LENGTH and GL_PACK_ALIGNMENT
-    //                applied). Never smaller than a tight row.
-    //   ImageStride  bytes between two images in Dst (GL_PACK_IMAGE_HEIGHT applied). Only read
-    //                when Src.Box.D > 1.
-    //   SwapGroup    GL_PACK_SWAP_BYTES as the width of the byte group to reverse (2, 4 or 8),
-    //                0 for no swap - the client's ApplyReadbackByteSwap rule, precomputed there so
-    //                the server does not re-derive the type table.
+    // read_pixels_to_buffer / get_texture_image_to_buffer read into the bound pack buffer, named
+    // by its handle Dst, so nothing comes back and the client does not wait: the server writes the
+    // tight pixels into Dst row by row through the applier's buffer-write gate, and the client
+    // marks Dst GPU-written so a later CPU read goes through resource_readback. Src is the reply
+    // form's record (DstOffset/DstSize = 0 / tight extent, checked only). DstBase includes the
+    // application offset and GL_PACK_SKIP_*; RowStride (never below a tight row) and ImageStride
+    // (read only when Src.Box.D > 1) apply row length, alignment and image height; SwapGroup is
+    // GL_PACK_SWAP_BYTES as the byte-group width to reverse (2, 4 or 8; 0 = no swap).
     struct MGPReadbackToBuffer {
         MGPReadbackInfo Src;
         MGPipeHandle Dst;
@@ -1720,22 +1456,14 @@ namespace MobileGL::MG_Pipe {
     };
     MGP_ASSERT_POD(MGPDrawRange, 12);
 
-    // Present when the draw is indirect: draw_vbo's second tail under kDrawIsIndirect (P5b,
-    // CONTRACT-P5B.md d1), 8-aligned behind the (empty) range tail exactly where the user-index
-    // span would sit. The client resolves the COUNT itself, so the server never reads an
-    // indirect command block to learn how many draws there are:
-    //   glMultiDraw*Indirect        DrawCount = drawcount, ParameterBuffer = null
-    //   glMultiDraw*IndirectCount   DrawCount = maxdrawcount, ParameterBuffer = the bound
-    //                               GL_PARAMETER_BUFFER, ParameterOffset = drawcount (the byte
-    //                               offset the GL call spells as GLintptr drawcount). The server's
-    //                               backend slot takes exactly that pair and reads the real count
-    //                               where it does today; nothing about the parameter buffer's
-    //                               CONTENT crosses. (ROADMAP P8's HostResolve.cpp is where a
-    //                               client-side count resolve would live if a backend ever needed
-    //                               the number rather than the buffer; no backend does.)
-    //   Buffer / Offset / Stride    the bound GL_DRAW_INDIRECT_BUFFER handle, the command byte
-    //                               offset the GL call passed as `indirect`, and the stride (0 =
-    //                               tightly packed, as GL spells it - the backend normalises).
+    // draw_vbo's second tail under kDrawIsIndirect, 8-aligned where the user-index span would
+    // sit. The client resolves the draw count, so the server never reads a command block for it:
+    //   glMultiDraw*Indirect       DrawCount = drawcount, ParameterBuffer = null
+    //   glMultiDraw*IndirectCount  DrawCount = maxdrawcount, ParameterBuffer = the bound
+    //                              GL_PARAMETER_BUFFER, ParameterOffset = drawcount (a byte
+    //                              offset); the backend reads the real count from that buffer
+    //   Buffer / Offset / Stride   the bound GL_DRAW_INDIRECT_BUFFER, the `indirect` byte offset
+    //                              and the stride (0 = tightly packed; the backend normalises).
     struct MGPDrawIndirect {
         MGPipeHandle Buffer;
         MGPipeHandle ParameterBuffer;
@@ -1819,25 +1547,12 @@ namespace MobileGL::MG_Pipe {
     MGP_ASSERT_POD(MGPSwapInterval, 8);
 
     // ---------------------------------------------------------------------------------
-    // P5b: the five appended rows (docs/archive/contracts/CONTRACT-P5B.md). APPENDED, never inserted:
-    // the wire opcode is a call's position in PipeCalls.def, so these sit after
-    // FenceWaitServer at opcodes 72..76 and no earlier opcode moved.
-    //
-    // Every one of them is a GLFunctionsTable VERB the class-C census measured as a first
-    // blocker and for which no existing row could carry the call. Four of the five exist
-    // because the backend slot does REAL WORK AT THE CALL rather than at the next validate,
-    // so a validate-time set record (set_shader_images, set_patch_state) cannot stand in for
-    // it: Espryt's BindImageTexture syncs the unit's binding to the driver on the spot,
-    // PatchParameteri pushes glPatchParameteri, BindTransformFeedback rebinds the driver
-    // object and invalidates the capture-binding shadows, and ShaderStorageBlockBinding
-    // pushes a rebinding onto an already-built driver program. The fifth,
-    // copy_framebuffer_to_texture, is a copy WITH the read framebuffer as its source, which
-    // resource_copy_region (resource -> resource) cannot express.
-    //
-    // NONE OF THEM HAS AN MGPipeApply* ENTRY POINT AND NONE GAINS ONE. They reach
-    // MG_Remote::Wire::WireVerbSink like the five P5 class-B verbs (the census's correction:
-    // a verb reaches the sink, not an applier), and under monolith they have no producer at
-    // all - the backend's own slot is called directly, byte for byte as today (G2/G14).
+    // Verbs whose backend slot acts at the call. bind_shader_image, patch_parameter,
+    // bind_stream_output and set_storage_block_binding cannot be validate-time set_* records,
+    // because the backend rebinds or pushes to the driver at the call itself;
+    // copy_framebuffer_to_texture copies from the read framebuffer, which resource_copy_region
+    // (resource to resource) cannot express. None has an MGPipeApply* entry point: each reaches
+    // the MGPipeVerbSink.
     // ---------------------------------------------------------------------------------
 
     // bind_shader_image = glBindImageTexture (P5b i1). The arguments VERBATIM plus the handle:
@@ -1909,23 +1624,14 @@ namespace MobileGL::MG_Pipe {
     };
     MGP_ASSERT_POD(MGPStorageBlockBinding, 40);
 
-    // copy_framebuffer_to_texture = glCopyTexImage2D / glCopyTexSubImage2D (P5b f1). The
-    // source is the READ framebuffer the server already has bound (set_framebuffer_state), so
-    // no source handle crosses; the destination is the texture bound to the active unit at
-    // Target, which the backend slot resolves through the barrier-pulled unit state exactly as
-    // generate_mipmap does. glCopyTexImage2D (SubImage = 0) also REDEFINES the level, and the
-    // frontend's own TexImage2D_State has already emitted that level's resource_respecify
-    // (GL_Texture.cpp's CopyTexImage2D validator) before the backend slot is reached, so the
-    // record carries the copy and nothing about storage.
-    //   Dst                the destination texture's handle (P8 form; the P5b sink does not
-    //                      dispatch on it).
-    //   Target             the GL texture target enum verbatim (a 2D target or a cube face).
-    //   Level              the destination level.
-    //   InternalFormat     glCopyTexImage2D's internalformat (GL enum); 0 for the sub-image form.
-    //   X, Y, Width, Height  the read-framebuffer rectangle.
-    //   XOffset, YOffset   the sub-image form's destination origin; 0 for the image form.
-    //   SubImage           0 = glCopyTexImage2D, 1 = glCopyTexSubImage2D (unmeasured; shares
-    //                      the row because the two calls differ in exactly these two fields).
+    // copy_framebuffer_to_texture = glCopyTexImage2D / glCopyTexSubImage2D. The source is the
+    // read framebuffer the server already has bound, so no source handle crosses; for
+    // glCopyTexImage2D the frontend has already emitted the level's resource_respecify.
+    //   Dst                  the destination texture, resolved by the client at the active unit
+    //   Target, Level        the GL target verbatim (a 2D target or a cube face) and the level
+    //   InternalFormat       glCopyTexImage2D's internalformat; 0 for the sub-image form
+    //   XOffset, YOffset     the sub-image destination origin; 0 for the image form
+    //   X, Y, Width, Height  the read-framebuffer rectangle; SubImage 1 = glCopyTexSubImage2D
     struct MGPCopyFromFramebuffer {
         MGPipeHandle Dst;
         Uint32 Target;
@@ -1981,47 +1687,13 @@ namespace MobileGL::MG_Pipe {
     };
     MGP_ASSERT_POD(MGPBindContext, 8);
 
-    // shared_image = opcode 85 (docs/archive/notes/anland/plan-ahb-dmabuf.md). Colour
-    // buffers the SERVER allocates and exports as dma-buf descriptors, so one client's frames
-    // reach another client's textures without leaving GPU memory. One row, five operations, all
-    // answered through the reply slot with an MGPSharedImageReply:
-    //
-    //   Allocate  a new Width x Height Format image; the reply names it, and its descriptor
-    //             reaches the client on the aux socket BEFORE the reply is posted.
-    //   Import    the descriptor the client queued on the aux socket (sideband: a
-    //             MGPSharedImageFdOffer naming this record's seq) is identified as an image this
-    //             server exported; the reply names it. Width/Height/Format must match it.
-    //   Release   the session's reference to ImageId goes.
-    //   Present   the current context's default framebuffer is copied, top row first, into
-    //             ImageId (a window frame becoming a wl_buffer's contents); the reply is posted
-    //             when the copy has completed on the GPU.
-    //   Attach    the texture Texture's storage becomes ImageId (glEGLImageTargetTexture2DOES);
-    //             it lasts until the texture's next storage-defining respecify.
-    //   QueryBufferAge  EGL_BUFFER_AGE_EXT of the current context's draw surface, answered in the
-    //             reply's BufferAge: how many presents ago the buffer the next frame draws into held
-    //             the frame then presented, 0 = unknown. Asked in the stream, so it is answered
-    //             for the buffer that frame's records will draw into. Format carries
-    //             kMGPBufferAgeDamageRegionFollows when the application declares the region it draws
-    //             (EGL_KHR_partial_update) before it draws.
-    //   SetDamageRegion eglSetDamageRegionKHR for the current draw surface: Damage is the region
-    //             the frame is about to draw (GL window coordinates; 0 rectangles = all of it).
-    //   Flush     glFlush/glFinish of a session that renders INTO images (an X server's glamor):
-    //             every image the session used since its last boundary is published as written
-    //             and read by the flush's fence (implicit sync); answered once published.
-    //   NativeFence     EGL_ANDROID_native_fence_sync's fence command: a sync_file that signals
-    //             once everything the session submitted so far has completed (and, in a session
-    //             that writes images, what Flush does)
-    //             reaches the client on the aux socket BEFORE the reply is posted, with the reply's
-    //             Format = kMGPNativeFenceFdFollows. Format = 0: the server has no descriptor to give
-    //             (it cannot export fences, and none it gave before can stand in), and the work has
-    //             completed by the time the reply is posted.
-    //
-    // A Present carries the region of the frame to copy (DamageCount rectangles of Damage, GL
-    // window coordinates, origin bottom-left; 0 = all of it): the client keeps per image what the
-    // image missed since it was last written, and sends that, so the rest of the image is already
-    // the frame.
-    //
-    // ImageId is a server-minted id, never reused within the server's life.
+    // shared_image: colour buffers the server allocates and exports as dma-buf descriptors, so
+    // one client's frames reach another client's textures without leaving GPU memory. Every op
+    // answers through the reply slot with an MGPSharedImageReply; a descriptor (Allocate,
+    // NativeFence) reaches the client on the aux socket before the reply is posted. Damage holds
+    // GL window-coordinate rectangles, origin bottom-left, 0 rectangles = the whole surface.
+    // ImageId is server-minted and never reused within the server's life. Per-op rules:
+    // ARCHITECTURE.md §15.4.
     enum MGPSharedImageOpKind : Uint32 {
         kMGPSharedImageAllocate = 1,
         kMGPSharedImageImport = 2,

@@ -14,6 +14,17 @@ per-setter 推送会把 Blaze3D 每个 batch 的冗余 `glEnable/glDisable` 变�
 - 对象类组（vertex buffers、framebuffer、sampler views / samplers / images、const / shader buffers、SO targets）靠 5 个**聚合世代**把快门降成一次 `Uint64` 比较——没有聚合就回答不了"有没有哪张已绑定纹理动了"。
 - 完整性由 `scripts/gen_pipe_dirty_surface.py` 保证（每个 mutator → 必须 bump 的世代，`--check` + `--self-test` 进 CI）。**快门看不见自己的主体**是踩过三次的坑：新增字段必须带"记录字段 → setter → 快门"一行，优先混入已有世代（新计数器会撑大 pull 对象，G1 不允许）。
 
+#### 5.2.1 dirty-surface 映射的答案（`DirtySurface.def`）
+
+`DirtySurface.def` 为每个后端可观察的前端 mutator 写明"谁发布这次修改"。漏发布不报错、只会静默渲染陈旧状态，所以清单由 `scripts/gen_pipe_dirty_surface.py` 机械枚举：扫描 `MG_Impl/GLImpl` 与 `MG_State/GLState` 里按 `MUTATOR_PREFIXES` 匹配的 `pGLContext->` 调用和 `MGP_NOTE_MUTATION` 站点（后者带字段名，行写在外层函数上），`--check` 双向核对行集。
+
+答案只列在**每条发生修改的路径**上都触发的发布者（值未变而提前返回不算修改）；只在部分路径触发的位若单列，按表构造的快门会欠触发，而欠触发是危险方向。
+- `NEW_*`：`Tracker.h` 的 dirty 位，下一个 verb 发布；`kImmediate`：同一函数体直达后端；`kReverseChannel`：后端写回前端；`kNoBackendRead`：没有后端读点。
+- `kExplicitDestroy`：最后一个引用释放时，client 的 `MGPipeEmit*DestroyAndFree` 依次做 wire 删除（该类有删除行时）、后端通知、释放 slot；`kUnpublishedDestroy`：program pipeline 与 shader 没有 wire 句柄，无从删除。
+- `kPulledEveryVerb`：没有位移动，字段在其 verb 类的 may-read 表里，残余填充每个 verb 都拷贝；`kPulledPartialShutter|NEW_*`：同样靠拉取兜底，所附的位只在部分修改路径上触发。
+
+位答案由脚本推导：RenderState 族与 `RenderState.cpp` 双向比对（`BumpVersions()` 动两个计数器，裸 `++m_version` 只动 `NEW_RENDER_STATE`）；其余位把快门读的成员 / 字段与 mutator 传递写入的成员 / 字段求交，只能查出"该位的快门在任何路径上都不动"这一种错答，证明不了每条路径都动。写入根定位不了的函数被污染，依赖它的答案为 UNDECIDED，须列入 `MGP_DIRTY_SURFACE_UNDECIDED_LIST`，列了却已可判定同样报红。散文答案不经推导（`kPulledPartialShutter` 所附的位除外）；扫描器按文本匹配函数体，lambda 里的 mutator 记到外层函数上，经 helper 发布的修改读作延迟发布，语义证明仍是 `MOBILEGL_PIPE_VERIFY`。
+
 ### 5.3 渲染状态：整块 blob 过线，身份只取 pipeline 子集（D-B1）
 
 ```
@@ -55,6 +66,16 @@ shader 看见哪个纹理取决于 sampler uniform 类型、mipmap 完备性与�
 - 因此 client 在自己的 rect 模型里累积，在下一个 validate / flush 点发**一条** `ResourceSubData`，同时携带 union box 与 region 列表，**由 server 选上传形状**（决策留在付 GPU 代价的一侧）。步长显式携带，不再靠指针比较。
 - **dirty 归属反转**：client 维护发射游标、发射后清自己的标志；清 dirty 要等 applier 的 acceptance（被拒的 level 留在脏表里）；server 自己的重新变脏是 server 的事。
 - `TextureUploadShapeScenario` 把上传形状录成金标（P3b/P4b D2 起是门；Mali 帧时增量无设备，按 Adreno 记录）。
+
+### 6.1 server 侧待上传集合
+
+- client 在 applier 接受某 level 的 `ResourceSubData` 时就清掉自己的 dirty 标志；后端的上传循环有提前返回的臂（Espryt：纹理不完备、multisample 目标只刷新），所以已接受的形状由 applier 按 `(uploadTarget, level)` 累积在 `MGPipeResourceRecord::PendingUploads`，只在后端真正上传处消费并清除，任意次 bail 都不丢纹素。
+- 累积沿用 client 的 rect 模型：union box 取并、rect 列表拼接；任一侧只有 box，或列表将超过 `kMGPipeMaxPendingUploadRegions`，该项退化为只有 box（仍覆盖全部纹素，只多传空隙）。
+- respecify 只丢弃它替换掉的那份存储上的待上传（盒子在那份存储的坐标系里，跨缩小保留会越界上传）：
+  - level 为空 = 整资源重定义（`glBufferData` / `glBufferStorage`、`glTexStorage*`、纹理视图），全部清空；
+  - 具名 level = 一次 `glTexImage*D`，只丢该 `(uploadTarget, level)`，与描述符是否变化无关。整体清空会丢掉别的 level 已被接受、尚未上传的纹素：`glTexImage2D(0)` → draw（纹理不完备，后端 bail）→ `glTexImage2D(1)`；
+  - 只换元数据（`RespecifyRedefinesNoStorage`：sticky 的 `BindMask` / `ImageBindableHint` 变化时重发的描述符）不丢任何项。
+- buffer 没有待上传项，也永远不算只换元数据。
 
 ## 7. Shader state = SPIR-V + 反射归档
 

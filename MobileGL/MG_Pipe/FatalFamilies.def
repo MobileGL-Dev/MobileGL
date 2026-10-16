@@ -6,66 +6,12 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// P6 `dl` (CONTRACT-P6 5.2, D2 ruling). THE INTERNAL FATAL VOCABULARY, and its projection onto
-// the SEVEN-value wire FatalCode.
-//
-// a6 censused 30 distinct family words against a 7-value wire enum, so Session::Fail(FatalCode,
-// detail) cannot carry the vocabulary in its first argument - the word would collapse to one of
-// seven and the log would say "ProtocolCorruption" where the code said "UnmigratedVerb". So the
-// family is an INTERNAL enum, generated from this file, and the wire keeps FatalCode. Each row
-// carries the coarse code the PEER is told when this family kills the session; the rich word
-// stays in the local log and in the SessionFault frame's `family` string.
-//
-// THE PROJECTION IS A TOTAL TABLE, NOT A SWITCH WITH A DEFAULT. This build has no -Werror
-// anywhere (measured: CMakeLists, every *.cmake, both workflows), so a gate premised on -Wswitch
-// catching a missing arm is fiction. A row here IS the arm; a family with no row does not
-// compile a call that names it.
-//
-// WHY EACH CODE. The wire FatalCode answers one question for the peer: what KIND of end was
-// this. The buckets:
-//   ProtocolCorruption - the peer sent, or the session reached, something that cannot be
-//                        honoured correctly: a malformed record, an unimplemented verb/surface,
-//                        an invariant the roles must hold, a reply that does not fit its
-//                        contract. The peer's takeaway is "we disagree about the protocol".
-//   RingOverrun        - a shared ring or event channel overran. A transport-capacity fact.
-//   SegmentMismatch    - a shared SEGMENT's geometry could not hold what a role needed to put
-//                        in it. Distinct from a ring overrun: the segment is the wrong SIZE,
-//                        not merely full this instant.
-//   AbiMismatch        - the two builds do not agree on layout or protocol version.
-//   ServerCrashed      - a liveness end the WAITING side attributes to the other: a drain that
-//                        never completed, an apply thread that is gone or never started, a native
-//                        resource the server had to have and could not obtain. The device-lost
-//                        latch is armed from the doorbell, never from these, but the peer that
-//                        was waiting is told the server is gone.
-//   DeviceLost         - reserved: set by the latch (5.3), never raised as a Fatal family, so no
-//                        row projects onto it.
-//
-// P7 WAVE 0 ADDED ELEVEN ROWS, for the eleven words the widened census gate found in the server
-// image outside MG_Remote/ (scripts/ci/fatal_census.py rule 3). Ten are ProtocolCorruption for
-// the reason that bucket already states - a record, a mask or a reply that cannot be honoured
-// correctly. The eleventh, ResourceUnavailable (Managers.cpp's three image-promotion sites and
-// VkBufferManager.cpp's eight), is ServerCrashed rather than SegmentMismatch: SegmentMismatch
-// means a SHARED SEGMENT was the wrong size, and telling a peer that when a VkBuffer allocation
-// or a native readback failed would be a lie about whose geometry was wrong. The honest thing to
-// tell a waiting peer is the one ServerCrashed already says. The wire enum has no "the server
-// could not obtain a resource" value and adding one would move `wireFingerprint`, which is a
-// protocol change no wave-0 instrument is entitled to make (recorded for the integrator).
-//
-// P12 (on-screen server window) ADDED ONE ROW, ServerWindowLost: the display server's window was
-// destroyed (surfaceDestroyed) under a live on-screen session. The session latches by name after
-// its surface is released, and the WAITING client is told what ServerCrashed already says - the
-// server-side resource its session had to have is gone - so it reads a clean device loss. Not
-// DeviceLost: that code is the latch's own, never a family's projection (see its bucket above).
-//
-// BackendDeviceLost: the GPU device (Magma's VkDevice, Espryt's EGL context) a session renders
-// with was lost to a GPU fault or hang. It is only ever LATCHED (MGPipeSessionLatch), so the one
-// session ends and the display server's other sessions keep running; the waiting client is told
-// what ServerCrashed says and reads a lost context. Not DeviceLost, for ServerWindowLost's reason.
-//
-// Two words were NOT given rows, they were collapsed instead: `InitialBytesNotCarried`
-// (MG_Impl/Pipe/PipeFill.cpp) said the same thing as `UncarriedInitialBytes` (Client/
-// WireTables.cpp) about the same record - a respecify that crossed with no initial bytes - and
-// two words for one family is exactly the drift a6 censused. PipeFill now uses the older word.
+// The internal fatal families and the coarse wire FatalCode each one reports to the peer. The
+// family word stays in the local log and in the SessionFault frame's `family` string. The table
+// is total: a family without a row does not compile (the build has no -Werror, so -Wswitch
+// cannot catch a missing arm). What each code means and how to choose one: ARCHITECTURE.md
+// §15.3.1. DeviceLost is set only by the latch, so no row projects onto it. Reuse an existing
+// family when it already describes the failure.
 //
 // clang-format off
 

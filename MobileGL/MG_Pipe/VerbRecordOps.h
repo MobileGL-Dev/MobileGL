@@ -12,24 +12,12 @@
 
 #include <MG_Pipe/MGPipe.h>
 
-// THE VERB -> RECORD TABLE (P15). Every MGPipeVerb names the record op its emitter publishes, and
-// the client's barrier decision at the validate point is that op's wait class (PipeCalls.def) and
-// nothing else. Commands are recorded and replayed asynchronously by default; a verb syncs only
-// because the record it emits has a wait class that says so.
-//
-// IT IS THE FORWARD DIRECTION. MGP_VERB_OP_LIST (FieldOwnership.def) is op -> verb, the
-// direction the SERVER needs to stamp a verb boundary, and it is many-to-one (one draw_vbo row
-// for twenty draw verbs, one blit row for two blit verbs). Inverting it verb-first answered
-// "no row" for every verb but the representative, and the old fallback turned "no row" into
-// "barriered" - a forced applier quiesce per verb (FCL: one per frame from the blit, 1.65 ms of
-// GL-thread wait). Here there is no fallback in either direction: a verb with no row, or with two,
-// is a compile error (the static_assert below).
-//
-// A verb whose emitter can publish more than one op names the one with the STRONGEST wait class
-// (the fill decision is made before the record exists, so it must cover the worst record the verb
-// may emit). kMGPipeNoRecord names a verb that publishes nothing: the client answers it from the
-// caps mirror, so no apply can read a fill for it.
-//
+// Verb -> record table: each MGPipeVerb names the record op its emitter publishes, and the
+// client's barrier decision at the validate point is that op's wait class (PipeCalls.def) alone.
+// It is the forward direction of MGP_VERB_OP_LIST (FieldOwnership.def), which is many-to-one and
+// cannot be inverted. A verb that may publish several ops names the one with the strongest wait
+// class, since the fill is decided before the record exists; kMGPipeNoRecord marks a verb
+// answered from the caps mirror. A missing or duplicate row is a compile error, never a default.
 // X(Verb, Op)
 // clang-format off
 #define MGP_VERB_RECORD_OP_LIST(X)                                                     \

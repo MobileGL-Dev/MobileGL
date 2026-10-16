@@ -6,80 +6,14 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// THE CLIENT -> WIRE ROUTING OF THE 38 MGPipeApply* ENTRY POINTS (P5, integrator ruling R-17;
-// 38 since P5c rv added set_context_values, CONTRACT-P5C.md section 5.3).
-// Owner: package c1.
-//
-// WHAT WAS MISSING. `gMGPipeWireRecordApply` is the DECODE hook and it has existed since w1:
-// a record arrives, `PipeWireCodec` picks it apart and calls `MGPipeApply<Name>`. There was no
-// encode twin. Every `MG_Impl/Pipe` emitter called `MGPipeApply<Name>` DIRECTLY, so under
-// `MOBILEGL_TRANSPORT=inproc` every resource, CSO, texture and program record still executed
-// synchronously on the GL thread against a context v1 is moving to the apply thread - where
-// all sixteen `IsBackendContextCurrentOnThisThread()` and sixteen `CanTouchGLNow()` guards
-// answer false. `ClearThenReadPixels` might have survived that; `TriangleScenario` needs a VBO
-// and a program and could not.
-//
-// The two generated tables (`gMGPipeScreen`, `gMGPipeContext`, `generated/PipeTables.inc`) are
-// the boundary this repository already had, and they were never installed - every entry null,
-// which `MGPipe.h` correctly calls "precisely the pre-migration state". R-17 installs them.
-// This header is the frontend-facing half: the names `MG_Impl/Pipe` calls, and the mechanism
-// that gets a kReplySlot row's answer back to its call site.
-//
-// ---------------------------------------------------------------------------------------
-// THE SIZE OF R-17, MEASURED RATHER THAN ESTIMATED
-// ---------------------------------------------------------------------------------------
-//
-// R-17 costed this as "37 thin client emitters over EmitAndWait". The emitters are thin. The
-// ROUTING was not, and the reason is that the generated table signature is the P2-era monolith
-// interface: `void (*Name)(const Payload* payload, ...)`, async-with-handle, no return value,
-// and NO COMPANION POINTER. Of the 37 entry points, as the tables stood:
-//
-//     24  the row could carry every argument the call site passes today
-//     13  it could not
-//
-// The thirteen split three ways, and only one of the three is a generator question:
-//
-//  (a) NINE carry a blob companion - `chunkBytes`, `blobBytes`, `parameters`, `bytes`,
-//      `initialBytes` - which is CONTRACT-P5 table 1's "companion pointer today" column. A
-//      kVarTail row already gains `const void* varTail, Uint32 varTailCount`; a kHasBlob row
-//      gained nothing. THE GENERATOR CHANGE IS THAT ONE ASYMMETRY, and nothing else: five
-//      lines in `Call.Signature` giving a kHasBlob row `const void* blobBytes, Uint64
-//      blobByteCount`. Ten rows gained the pair (the nine plus `GetCaps`, which has no applier
-//      entry point). `--check` up to date, `--self-test` 9/9 trips.
-//
-//  (b) FOUR return a value the row cannot: `ResourceCreate`, `ResourceRespecify`,
-//      `ResourceSubData` and `SetTextureParams` return Bool and `MapPersistent` returns void*.
-//      These are exactly CONTRACT-P5 §2's reply-slot rows, and R-5 forbids re-deriving any of
-//      them on the client. The answer therefore has to come back THROUGH the reply slot, which
-//      is what `MGPipeTakeReply*` below is, and it is the part of R-17 that no amount of
-//      "thin emitter" covers: `MGPReplySlot` is `{Uint64 Id;}` - an IDENTIFIER, not a value -
-//      so a reader had to exist for the identifier to be worth minting.
-//
-//  (c) FOUR CANNOT GO THROUGH A GENERATED ROW AT ALL, and each one is a contract ruling
-//      rather than an oversight. They are the ESCAPES below. Saying "four" out loud is the
-//      honest answer to "tell me if it is bigger than it looks": it is, by four rows and one
-//      reply-reading mechanism.
-//
-// ---------------------------------------------------------------------------------------
-// THE REPLY MAILBOX, AND WHY ONE ENTRY IS THE RIGHT DEPTH
-// ---------------------------------------------------------------------------------------
-//
-// `MGPReplySlot` carries an id; the answer lands beside it. The mailbox is ONE ENTRY DEEP and
-// thread-local, and that is not a simplification - it is R-1's verb barrier stated as a data
-// structure. While the barrier holds, the in-flight depth is exactly one (`ReplySlot.h`:
-// "under R-1's verb barrier the in-flight depth is one"), so a second posting before the first
-// is taken is not a capacity problem, it is a barrier that has stopped working. It Fatals.
-//
-// THE MAILBOX HAS NO DEFAULT ANSWER AND THIS IS THE WHOLE POINT. `MGPipeTakeReplyBool` on a
-// slot nothing posted to is `Fatal{ReplyMissing, "<row>"}`, not `false` and emphatically not
-// `true`. "Always accept" is ID-39's 66 lost DirectVulkan uploads with a wire in between, and
-// "always refuse" is an emitter that re-sends for ever. A row that forgets to answer is a bug
-// that must be impossible to ship, so it is impossible to READ.
-//
-// WHEN THE BARRIER RETIRES (R-1 opens family by family) this becomes a real slot pool keyed on
-// seq, which is what `Transport::ReplySlot` already is on the wire side. The mailbox is the
-// frontend-side handle onto it and nothing else; it is deliberately NOT a second id space,
-// because the split arm stamps the record's own seq into `MGPReplySlot::Id` (R-3).
+// Client-side routing of the MGPipe calls. MG_Impl/Pipe emitters call MGPipeRoute<Name>, never
+// MGPipeApply<Name>, so every record goes through the installed tables (gMGPipeScreen,
+// gMGPipeContext, gMGPipeRouteEscapes): the monolith adapters or the client wire emitters.
+// A kReplySlot answer comes back through a thread-local mailbox one entry deep: each route takes
+// its answer before returning, so a second post before the take is Fatal{ReplyOverrun}. Taking
+// an answer nothing posted is Fatal{ReplyMissing}, never a default: assuming acceptance loses
+// uploads, assuming refusal makes the emitter resend for ever. Under split the slot id is the
+// record's own sequence number, so the mailbox adds no second id space.
 
 #pragma once
 #include <Includes.h>
@@ -121,45 +55,13 @@ namespace MobileGL::MG_Pipe {
     Uint64 MGPipeRepliesDeclined();
 
     // ---------------------------------------------------------------------------------
-    // The escapes: the four rows no generated signature can express
+    // The escapes: the rows no generated signature can express
     // ---------------------------------------------------------------------------------
-    //
-    // A hand-written third table, installed and uninstalled by the same two functions as the
-    // generated pair, so there is ONE mechanism and not two. Each row's signature is the
-    // applier's own, because that is the shape the monolith arm has to reproduce byte for
-    // byte (G2), and each row is here for a ruling that is written down:
-    //
-    //   ResourceRespecify  `initialBytes` has NO kHasBlob and R-13.3 forbids giving it one
-    //                      ("initialBytes is always nullptr under split; initial content
-    //                      arrives as ResourceSubData records immediately after this one").
-    //                      So the row is correct to omit it AND monolith must still pass it.
-    //   ResourceFlushRange `bytes` likewise, by R-13.2, and for a sharper reason: a blobref
-    //                      here would be "a second, forgeable way to say the same thing".
-    //   MapPersistent      `size` and `seedBytes` have no carrier at all - `MGPHandleOnly` is
-    //                      {Handle, Kind} - and the call returns void*. R-6 makes the split
-    //                      answer a constant DECLINE, so the carrier is not needed; the
-    //                      monolith arm needs both arguments.
-    //   CreateShaderState  SEVEN blobrefs (`Spirv[6]` + `Reflection`) and TWO typed frontend
-    //                      pointers. One `blobBytes` pair cannot express seven runs, and
-    //                      serialising under monolith to un-serialise in the adapter would put
-    //                      `EncodeProgramArtifacts` on the monolith path, which `PipeApply.h`
-    //                      explicitly promises it is not ("zero serialisation cost on the
-    //                      monolith path").
-    //   SetProgramBindings THREE tails in three index spaces plus a PARALLEL NAME ARRAY
-    //                      (P5e, docs/archive/contracts/CONTRACT-P5E.md §1/§5.5). One `varTail` +
-    //                      `varTailCount` pair cannot express three runs at all, and the
-    //                      fourth argument is not a run: the storage-override key is a
-    //                      `MGHostSpan` on the wire and a plain `const char*` under monolith,
-    //                      so the applier takes the resolved names beside the tail rather
-    //                      than resolving segments itself (rule C - a span retires with the
-    //                      record that named it, and the applier copies the bytes it keeps).
-    //                      The generated `gMGPipeContext.SetProgramBindings` row therefore
-    //                      STAYS NULL, which is what PipeCatalogueTest already pins.
-    //
-    // OVERTURN CONDITIONS, one per row: give `MGPResourceDesc` and `MGPFlushRange` a blobref
-    // (overturns R-13.2/R-13.3, and c0 owns `MGPipeTypes.h`); give `MGPHandleOnly` a size
-    // (same owner) and P6 a real remote map; measure that a per-stage SPIR-V run beats one
-    // archive, at which point `CreateShaderState` needs a multi-blob row rather than this one.
+    // A hand-written third table, installed with the generated pair. Each row keeps the applier's
+    // signature because the monolith arm passes what the wire record does not carry:
+    // ResourceRespecify's `initialBytes` and ResourceFlushRange's `bytes` (sent as resource_subdata
+    // records instead), MapPersistent's `size`, `seedBytes` and void* result, CreateShaderState's
+    // seven SPIR-V/reflection blobs (monolith never serialises them), SetProgramBindings' tails.
     struct MGPipeRouteEscapes {
         Bool (*ResourceRespecify)(const MGPResourceDesc* desc, const void* initialBytes,
                                   const MGPRespecifiedLevel* level);
@@ -207,24 +109,11 @@ namespace MobileGL::MG_Pipe {
     const MGPipeRouteEscapes& MGPipeMonolithEscapes();
 
     namespace detail {
-        // THE INSTALL THAT CANNOT BE LINKED AWAY, and the first version of this WAS.
-        //
-        // It began as a static initialiser inside PipeRoute.cpp, on the reasoning that
-        // `gMGPipeScreen` and `gMGPipeContext` are inline variables with CONSTANT (zero)
-        // initialisation - sequenced before every dynamic initialiser - so an installer in
-        // dynamic init necessarily beats any GL entry point. That reasoning is correct and the
-        // mechanism still failed, because it assumed PipeRoute.o would be in the link at all:
-        // every MG_Test target is its OWN binary over a static archive, `CsoCache.h` reaches
-        // the table through an inline thunk and names no symbol from PipeRoute.o, so the
-        // linker dropped the object, the initialiser never ran, and five CsoCacheTest cases
-        // took a null function pointer. The shared library linked it and was fine, which is
-        // exactly the shape that ships.
-        //
-        // AN INLINE VARIABLE FIXES BOTH HALVES AT ONCE. Its initialiser is emitted as a COMDAT
-        // in every translation unit that includes this header, so any binary that can call a
-        // thunk has one copy of it; and naming `MGPipeInstallMonolithTables` from a header the
-        // call sites already include is an undefined reference that forces the archive member
-        // into the link. There is still exactly one install, and it still happens before main.
+        // Installs the monolith tables before main in every binary that includes this header.
+        // A static initialiser in PipeRoute.cpp is not enough: a test binary linking the static
+        // archive may drop PipeRoute.o (CsoCache.h reaches the tables only through an inline
+        // thunk), leaving the tables null. This inline variable is emitted in each including
+        // translation unit, and its call to MGPipeInstallMonolithTables pulls PipeRoute.o in.
         inline const Bool gMonolithTablesInstalled = (MGPipeInstallMonolithTables(), true);
     } // namespace detail
 
@@ -240,31 +129,13 @@ namespace MobileGL::MG_Pipe {
     void MGPipeNoteInstalledArm(MGPipeRouteArm arm);
 
     // ---------------------------------------------------------------------------------
-    // The call-site names: MGPipeRoute<Name> for each of the thirty-eight
+    // The call-site names: MGPipeRoute<Name> for each routed MGPipeApply* entry point
     // ---------------------------------------------------------------------------------
-    //
-    // EVERY ONE TAKES THE APPLIER'S OWN SIGNATURE, so converting a call site is a rename and
-    // nothing else. That is not tidiness, it is the G1 lesson from round 1 stated as a rule:
-    // rewriting `if (const auto f = TABLE.GL.Slot)` into a Bool-valued macro is semantically
-    // identical and generates DIFFERENT code (-144 bytes, two symbols resized). A wrapper that
-    // took `&expr` would force every site holding a temporary - `HandleOnly(handle)`,
-    // `BufferHandleOnly(handle)` - to grow a named local, which is a second expression shape
-    // change at forty sites. A reference parameter keeps the call site's text identical but
-    // for the name.
-    //
-    // THREE OF THE THIRTY-SEVEN TAKE ONE ARGUMENT MORE THAN THEIR APPLIER, and the extra is
-    // always the same thing: A BYTE COUNT THE RECORD DOES NOT DECLARE. CONTRACT-P5 table 1
-    // rule A requires every kHasBlob row to declare its length under split; five rows already
-    // do and the wrapper reads it back off the record, three do not and their call site is the
-    // only place the number exists:
-    //     SetGlobalConstants     declares 0 (ProgramEmit.h); the length is GetUBOSize()
-    //     ResourceSubData        buffer half declares real, TEXTURE half declares 0 on the
-    //                            grounds that the count is "the server's to compute" - which
-    //                            table 1 row 7 says "cannot be a bounds check". The level
-    //                            shadow's byte size is in scope at that call site.
-    //     BufferSubDataResident  the application's staging store, sized by the caller
-    // A defaulted argument was rejected: a default would let a site that has the number forget
-    // to pass it and still compile, and the failure would be a silently short upload.
+    // Each takes the applier's signature by reference, so converting a call site is a rename and a
+    // site passing a temporary needs no named local. Three also take a byte count the record does
+    // not declare and only the call site knows: SetGlobalConstants (GetUBOSize()), the texture half
+    // of ResourceSubData, and BufferSubDataResident. The count has no default, so a site cannot
+    // forget it and upload short.
 
     // ---- screen ------------------------------------------------------------------------
     inline Bool MGPipeRouteResourceCreate(const MGPResourceDesc& desc) {
@@ -272,27 +143,12 @@ namespace MobileGL::MG_Pipe {
         MGP_ResourceCreate(&desc, &reply);
         return MGPipeTakeReplyBool(reply, "resource_create");
     }
-    // P12: WHICH RESPECIFIES STILL WAIT - one predicate, read by the wire emitter, so the two
-    // halves of this row cannot disagree about whether an answer is owed.
-    //
-    // THE BUFFER HALF NEVER DOES. Both call sites discard its Bool outright
-    // (PipeFill.cpp:1105 and :1142: `MGPipeRouteResourceRespecify(desc, nullptr);`), so the wait
-    // bought a value that was thrown away - on the device run this row was the second largest
-    // source of round trips in one frame, at ~5 ms each.
-    //
-    // THE TEXTURE HALF WAITS EXACTLY UNTIL THE OBJECT IS CONFIRMED, and "confirmed" is
-    // MGPipeHandleIsPublished: the latch is set only when the object's create was ACCEPTED, and
-    // the applier keeps texture records across a make-current (PipeFill.cpp:3756-3759), so for a
-    // published object the acceptance this row asks for is a fact the client already holds. The
-    // confirmation itself is paid once, at first use: EmitResourceRespecify sends a create when
-    // the latch is clear (TextureEmit.h:869-879), and that create is blocking.
-    //
-    // AND WHEN THE LATCH IS CLEAR THIS RETURNS TRUE, which is the whole fallback. It also covers
-    // the one place the two ends' consumer gates are worded differently - the client asks
-    // "any bit of the family" (PipeFill.cpp:1577-1595) while the applier asks "bit 10"
-    // (PipeApply.cpp:1408-1419) - because a create refused by the narrower server gate leaves the
-    // latch clear, so every later row for that object keeps taking the real answer. The cost of
-    // that case is throughput, never silence.
+    // Whether a resource_respecify record waits for its answer; the wire emitter reads this same
+    // predicate. Off the client wire arm it always does. The buffer half never waits: its callers
+    // discard the Bool. The texture half waits until the texture's create is accepted
+    // (MGPipeHandleIsPublished; a blocking create at first use), after which acceptance is known
+    // because the applier keeps texture records across make-current. A refused create leaves the
+    // latch clear, so later records keep waiting for the real answer.
     inline Bool MGPipeResourceRespecifyWantsItsReply(const MGPResourceDesc& desc) {
         if (MGPipeInstalledArm() != MGPipeRouteArm::kClientWire) return true;
         if (static_cast<MGPipeResourceTarget>(desc.Target) == MGPipeResourceTarget::Buffer)
@@ -316,56 +172,13 @@ namespace MobileGL::MG_Pipe {
 
     // ---- resources ---------------------------------------------------------------------
 
-    // P5e (ra), CONTRACT-P5E §2.5 / ruling 15 (ID-93): DOES THIS SUB-DATA RECORD WANT ITS
-    // ANSWER? One predicate, two callers - this route and the wire emit table - because the
-    // route cannot pass a flag through the thunk (the call table's signature is the
-    // catalogue's) and two hand-written copies of "is this the buffer half" is exactly the
-    // drift that would make the client wait for an answer the emitter told the server not to
-    // bother with, or read a slot that was never posted.
-    //
-    // THE BUFFER HALF DOES NOT: its Bool is discarded at the only call site there is
-    // (MGPipeEmitResourceSubData), and because the row carries kReplySlot the client used to
-    // wait for it anyway - one full round trip per 64 KB persistent-map block, whose answer
-    // nobody looked at.
-    //
-    // THE TEXTURE HALF DOES NOT EITHER, ON THE WIRE ARM (P12, the handoff's item B), and the
-    // argument is that its answer is DERIVABLE there - not that anybody stopped reading it.
-    // DrainTextureSubData still clears the level's dirty flag on an accepted answer (D-D5), and
-    // it still gets one; what it does not get any more is a ROUND TRIP for it:
-    //
-    //   * THE EMISSION IS ALREADY GATED ON THE ANSWER'S CONTENT. A texture record is produced
-    //     only where FamilyIsLive(kMGPipeSubsystemTextureResources, ...) holds, and under split
-    //     that gate IS CapsMirrorInstance().ServerConsumes(bit 10) (PipeFill.cpp:1719-1740) - the
-    //     same published fact the applier's own acceptance belt reads (PipeApply.cpp:1408-1419,
-    //     NoP4aConsumer). So the one server-side refusal this acceptance exists to carry - "no
-    //     consumer", the ID-39 / D-D5 / ID-18 M3 case that is WHY the texture half ever asked -
-    //     cannot be the answer to a record this client emitted.
-    //   * WHAT REMAINS IS A BUG CLASS, AND IT IS LOUD ALREADY. A record whose resource target
-    //     names no texture, or that declares no texels or no bytes, is an MGP_TRIP_WIRE_REPORT on
-    //     the server (PipeApply.cpp:1201-1218, :2245-2252); a record for a handle the applier
-    //     does not hold is counted and named (ResolveResourceIn, :721-728), and the client's own
-    //     tracker prevents it by creating before it ever sends sub-data (PipeFill.cpp:1045-1051).
-    //   * AND EVERY ANSWER THE CLIENT CAN STILL GET FOR FREE, IT STILL GETS: the emitter reads
-    //     this route's Bool exactly as before, so a record the CLIENT cancelled (the device-lost
-    //     latch, an exhausted stage) still answers "not accepted" and the level stays dirty and
-    //     is retried - D-D5's safe direction, unchanged.
-    //
-    // THE WAIT DOES NOT DISAPPEAR, IT MOVES TO THE STAGE. A record whose run does not fit
-    // SEG_STAGE reclaims retired bytes and parks on the stage doorbell (PipeWireCodec.cpp
-    // StageAllocate / ReclaimStagedBytes) - the one wait a run-ahead client owes, and the one
-    // that is proportional to the WINDOW rather than to the call count. That is the whole of item
-    // B: on Minecraft 26.2's atlas frame, 55,428 reply waits at ~4.4 ms each (96 MiB of uploads
-    // through a 32 MiB window) become the handful of stage retirements those same 96 MiB need.
-    // (Measured on the host by RemoteClientControls.TextureUploadsStopOwningAReplyOnTheWireArm,
-    // which counts the reply slots the client opens for a batch of uploads: N -> 0.)
-    //
-    // MONOLITH IS UNTOUCHED, and the arm test is what says so: there the applier's answer is
-    // returned by Mono_ResourceSubData on the calling thread and costs nothing, so there is
-    // nothing to stop waiting for and the predicate keeps its old answer.
-    //
-    // The test is MGPSubData::Target == kMGPipeResourceTargetBuffer, whole field, which is the
-    // invariant MGPipeTypes.h asserts beside the packer and which the applier's own
-    // SubDataNamesABuffer already reads.
+    // Whether a resource_subdata record waits for the server's answer (ARCHITECTURE.md §13.1.1).
+    // The route and the wire emit table both read this predicate, so neither waits for a reply the
+    // other did not request. On the wire arm no record waits: MGPipeEmitResourceSubData discards
+    // the buffer half's Bool, and a texture record is emitted only when the server consumes the
+    // texture family, so acceptance is known; a record the client cancels still answers false.
+    // Monolith answers for free and keeps the texture half's answer. The test reads the whole
+    // MGPSubData::Target field, as SubDataNamesABuffer does.
     inline Bool MGPipeSubDataWantsItsReply(const MGPSubData& record) {
         // THE WIRE ARM ONLY. Everything above is an argument about a client talking to a server
         // over SEG_CMD/SEG_STAGE; a monolith run inside a split build (every unit and

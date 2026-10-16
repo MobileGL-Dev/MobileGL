@@ -6,36 +6,14 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// P7 wave 0 (plan section 1.3's P7-marked refusal row, item (0); Ph slice (2)). HOW A BACKEND DEATH REACHES
-// Session::Fail WITHOUT THE BACKEND KNOWING MG_Remote EXISTS.
+// How a backend death reaches Session::Fail without the backend naming MG_Remote.
 //
-// The three Magma wire funnels - MagmaWireFatal (Renderer/WireFramebuffer.inc),
-// WireDescriptorFatal (Renderer/UniformManager.cpp) and WireBufferLegacyFatal
-// (Renderer/WireDraw.inc) - each logged their line and raised their OWN std::abort(). Fifteen
-// P7-marked refusals (the grep key is the at-sign form, not spelled here) and two more sites die through them, and every one of those deaths:
-//
-//   * published NO SessionFault frame, so the peer read a bare EOF and could not name what
-//     ended the session (CONTRACT-P6 5.2's whole point);
-//   * bumped NO SessionFaultCount(), so exit gate S8's "zero faults over a good run" could
-//     neither confirm nor falsify them;
-//   * carried a HAND-TYPED family word with no path to FatalFamilies.def's projection, so
-//     nothing checked that `UnmigratedVerb` in the string still meant UnmigratedVerb.
-//
-// Calling SessionFail() from the .inc files directly would be the obvious fix and is the wrong
-// one: MG_Backend's renderer would then name an MG_Remote symbol on its own account rather than
-// through the two staging headers it already borrows under `#if MOBILEGL_BUILD_DISAGGREGATED`,
-// and the layering that P13's module boundaries have to establish would be one more edge worse.
-//
-// So the shape is MGP_TRIP_WIRE_REPORT's (PipeApply.cpp:66): MG_Pipe owns the entry point, the
-// DEFAULT behaviour is exactly what the site did before (same log line, same abort), and the
-// richer behaviour is a function pointer that a layer above installs. MG_Remote installs
-// InstallPipeSessionFailHook() at server-role init (MG_Backend/Init.cpp's InitServerRoleCommon,
-// which both the inproc server role and the spawn child run), and from then on these deaths go
-// through SessionFail like every other one.
-//
-// THE MESSAGE STRING IS PASSED VERBATIM, family word and all - the same rule FatalFunnel.h
-// states. The lines these three funnels write are already counted by name in the retrace refusal
-// census and in every recorded P7-refusal measurement, so they are byte-identical before and after.
+// The backend's fatal funnels (Magma's wire refusals, Espryt's slot-table refusals) call
+// MGPipeSessionFail, which by default logs the line and aborts. MG_Remote installs a hook at
+// server-role init (MG_Backend/Init.cpp's InitServerRoleCommon, run by both server roles), so the
+// death publishes a SessionFault frame, counts in SessionFaultCount() and carries a checked
+// family word. The message passes verbatim, as FatalFunnel.h requires, so refusal censuses read
+// the same line either way.
 
 #pragma once
 

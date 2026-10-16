@@ -483,21 +483,11 @@ namespace MobileGL::MG_Pipe {
         }
 
         // ----------------------------------------------------------------------------
-        // D5: the 29 PipeInputs fields that are PURE FUNCTIONS of RenderStateParameters.
-        //
-        // Once bind_render_state / set_dynamic_state have assembled the working block,
-        // copying these out of GLContext a second time would be exactly the per-verb pull
-        // P2 exists to remove - so the applier DERIVES them instead. Each line below is a
-        // transcription of the RenderState getter of the same name (RenderState.cpp);
-        // GLContext's accessors are one-line forwards to those, so this block and the pull
-        // path answer the same question from the same bytes.
-        //
-        // This departs from P1 brief D4's "no derivation logic is re-implemented in
-        // PipeInputs", deliberately and with a guard: MOBILEGL_PIPE_VERIFY's compare-at-read
-        // re-reads every one of these from the live context AT EVERY BACKEND READ and
-        // compares field-wise, so a transcription error is caught on the first draw that
-        // reads it. RenderStateSpansTest.DerivationMatchesTheFrontendGetters walks every
-        // setter and checks all 29 against GLContext on top of that.
+        // The PipeInputs fields that are pure functions of RenderStateParameters. The applier
+        // derives them from the assembled working block instead of copying them from GLContext:
+        // each line transcribes the RenderState getter of the same name (RenderState.cpp), which
+        // GLContext's accessors forward to. MOBILEGL_PIPE_VERIFY's compare-at-read and
+        // RenderStateSpans.DerivationMatchesTheFrontendGetters catch a transcription error.
         // ----------------------------------------------------------------------------
 
         // RenderState::IsCapabilityEnabled, transcribed against the assembled block. One of
@@ -1030,38 +1020,14 @@ namespace MobileGL::MG_Pipe {
         // ID-12 says it does, and c0c's own static_assert is what keeps the two readings in
         // step: a buffer record's Target is exactly kMGPipeResourceTargetBuffer.
 
-        // ID-18 M4: DOES THIS RESPECIFY REDEFINE ANY STORAGE, OR IS IT CARRYING METADATA?
-        //
-        // The question exists because a sticky BindMask / ImageBindableHint bit has exactly one
-        // way onto the wire - a respecify - and an IMMUTABLE texture has no further respecify to
-        // ride on. So B re-publishes the descriptor when the mask moves, and the applier has to
-        // tell that call apart from a real redefinition: the first must NOT drop the pending
-        // uploads standing against the storage (nothing replaced them), the second must.
-        //
-        // THE COMPARISON IS FIELD BY FIELD AND NOT A memcmp. MGPResourceDesc carries Pad0/Pad1
-        // and neither side of this comparison is guaranteed to have written them - the client
-        // fills a stack descriptor field by field - so a byte comparison of 88 bytes is a coin
-        // flip on padding, which is the defect clientsp's SamplerParameters cache already paid
-        // for once.
-        //
-        // WHAT IS NOT COMPARED IS THE SHORT LIST AND IT IS THE DEFINITION: BindMask and
-        // ImageBindableHint (the two this call exists to carry), GlNameForDiag (diagnostics, and
-        // never an identity - section 4.2.1) and the two padding words. EVERYTHING ELSE IS
-        // COMPARED, which is deliberately WIDER than "the fields that define an allocation":
-        // being wide can only mis-classify a metadata update as a redefinition, whose cost is
-        // one level's pending upload dropped by a call B does not emit; being narrow would
-        // mis-classify a REDEFINITION as metadata and keep boxes in a coordinate system that no
-        // longer exists, which is an upload past the end of the new level. The asymmetry decides
-        // the direction.
-        //
-        // A BUFFER IS NEVER METADATA-ONLY, and that is a rule rather than a consequence.
-        // glBufferData at an unchanged size is the canonical ORPHANING idiom - a real
-        // reallocation whose whole purpose is that the old store is gone - and glBufferStorage
-        // is the one entry point in the catalogue allowed a synchronous acknowledgement
-        // (MGPipeResourceRespecifyNeedsAck). Excluding the target here is what makes ID-18 M4's
-        // "no reallocation ack" true by construction instead of by a second suppression rule,
-        // and it costs nothing: the mask that M4 is about is a TEXTURE's (and a renderbuffer's),
-        // and a buffer has no pending upload for the arm to protect anyway.
+        // True when a non-buffer respecify carries only metadata: every storage-defining field
+        // (the set listed beside MGPipeResourceRespecifyNeedsAck in MGPipeTypes.h) equals the
+        // stored descriptor. The client resends the descriptor when a sticky BindMask /
+        // ImageBindableHint bit moves (for an immutable texture the only way the bit reaches the
+        // server), and that call must not drop pending uploads. Compared field by field because
+        // padding is not reliably written. The set is wide on purpose: too wide can only drop
+        // uploads on a call the client never sends, too narrow keeps boxes for a level that no
+        // longer exists. A buffer is never metadata-only: same-size glBufferData orphans its store.
         Bool RespecifyRedefinesNoStorage(const MGPResourceDesc& stored, const MGPResourceDesc& next) {
             if (next.Target == kMGPipeResourceTargetBuffer) return false;
             if (stored.Target != next.Target) return false;
@@ -1088,38 +1054,14 @@ namespace MobileGL::MG_Pipe {
             return true;
         }
 
-        // WHY A DEAD HANDLE IS NOT A TRIP WIRE HERE, and the bounds faults below are - and
-        // why it is nonetheless COUNTED rather than silently dropped.
-        //
-        // A make-current no longer takes the records with it (MGPipeApplierReset), so the
-        // shared-store case that used to arrive here every context switch does not arrive at
-        // all: a buffer that outlives a switch keeps its record and its writes keep landing.
-        // What is left is (a) a genuine protocol error - an unknown slot, a stale generation -
-        // and (b) ONE legal sequence, which is why this is still a no-op and not a wire:
-        //
-        //     the served context is torn down
-        //       -> MGPipeApplierReleaseObjectRecords()          (the applier goes away with it)
-        //       -> ~BufferObject / ~VertexArrayObject for every object the context still owns
-        //       -> resource_destroy / delete_vertex_elements, each naming a record that the
-        //          line above has already dropped.
-        //
-        // Every one of those death notices is legal, unavoidable and arrives after the
-        // records are gone, and a wire here would abort a verify lane on the ordinary shutdown
-        // of a context. So the refusal stays a DEFINED no-op - nothing stored, nothing
-        // dispatched, no serial moved, and the debug assertion names it, which is the shape
-        // bind_render_state already uses for a dead CSO.
-        //
-        // But MOBILEGL_ASSERT compiles out at INFO, which is what all three gate builds and
-        // every shipped build are, so a no-op alone would make case (a) - a dropped
-        // glBufferSubData - invisible in every build that matters. Both refusal paths
-        // therefore go through ResolveResource / ResolveVertexElements below, which COUNT into
-        // MGPipeApplierState::Refused{Resource,VertexInput}Calls. That is the observable: a
-        // legal sequence leaves it at 0 and a refused call moves it, in every build.
-        //
-        // The faults below are the other class entirely: a record that does not describe its
-        // own bytes would have the BACKEND read or write outside a store, which is memory
-        // corruption rather than a dropped call, so those get the tag ARCHITECTURE.md reserves
-        // for exactly this - Fatal{ProtocolCorruption} - and the record's identity in the line.
+        // A call naming a record this applier lacks is a defined no-op, not a trip wire, because
+        // one legal sequence produces it: context teardown runs MGPipeApplierReleaseObjectRecords,
+        // then the destructors of objects the context still owns send resource_destroy /
+        // delete_vertex_elements for records already dropped. The refusal stores, dispatches and
+        // moves nothing; MOBILEGL_ASSERT compiles out at INFO, so the resolvers below count it
+        // (MGPipeApplierState::Refused*Calls) and a dropped write stays visible in every build. A
+        // record that would make the backend touch memory outside a store is the other class:
+        // Fatal{ProtocolCorruption}, with the record's identity in the line.
         constexpr const char* kResourceRefusalNote =
             "the record is not this applier's; the call is dropped, not applied";
 
@@ -1299,22 +1241,14 @@ namespace MobileGL::MG_Pipe {
                           static_cast<Uint32>(zEnd - z)};
         }
 
-        // D-D5's SAFETY NET, and the whole reason it is server-side state. The client clears
-        // its own dirty flags AT EMISSION, for the levels whose record this applier accepted;
-        // Espryt's upload loop has bail arms - an incomplete texture returns early, a
-        // multisample target refreshes and skips - that today leave the frontend flag set, so a
-        // naive move of the clear to the client would lose exactly those texels. The emitted
-        // shape accumulates here instead, it survives any number of bails, and Espryt consumes
-        // and clears an entry only where it actually uploads.
-        //
-        // ACCUMULATION IS THE CLIENT'S OWN MODEL, ONE LEVEL UP. MipmapStorage keeps a union box
-        // and, behind it, a bounded disjoint rect list, and answers "0 rects" for everything it
-        // cannot describe that way - which means "upload the box instead" and covers every
-        // reason at once. So: boxes union; rect lists concatenate; and the moment either side
-        // says "box only", or the list would outgrow its bound, the entry becomes box only.
-        // Never a dropped region - the box still covers every texel the dropped list named.
-        // Returns false when the record names more distinct (target, level) keys than any
-        // texture can have, which the caller reports as a corrupt record.
+        // The server-side pending-upload set (ARCHITECTURE.md §6.1). The client clears a level's
+        // dirty flags when this applier accepts its record, but a backend's upload loop can bail
+        // (Espryt returns early for an incomplete texture and skips a multisample target), so the
+        // accepted shape accumulates here until the backend actually uploads it. Boxes union and
+        // rect lists concatenate; once either side is box-only or the list would exceed
+        // kMGPipeMaxPendingUploadRegions, the entry becomes box-only, which still covers every
+        // texel. Returns false when the record names more (target, level) keys than any texture
+        // can have; the caller reports that as a corrupt record.
         Bool AccumulatePendingUpload(MGPipeResourceRecord& stored, const MGPSubData& record,
                                      const MGPSubRegion* regions) {
             for (MGPipeResourceRecord::PendingUpload& entry : stored.PendingUploads) {
@@ -1358,50 +1292,14 @@ namespace MobileGL::MG_Pipe {
         void PinNoLiveHostWrites(const MGPipeResourceRecord&, MGPipeHandle, const char*) {}
 
 #if MOBILEGL_PIPE_VERIFY
-        // P5's pin, RELAXED BY P7 WAVE 3 (CONTRACT-P7 §6) - and relaxed rather than deleted,
-        // because the thing it was guarding is now reachable instead of hypothetical.
-        //
-        // WHAT IT USED TO SAY. "The respecify SCOPE has a wire carrier (MGPResourceDesc's
-        // HasRespecifiedLevel + the pair) and NO PRODUCER: every descriptor P5 builds is
-        // whole-resource, and the per-level scope still arrives the old way, as the trailing
-        // MGPRespecifiedLevel* this function does not look at." So any descriptor arriving with
-        // the carrier set was, by definition, a producer nobody had announced, and a verify
-        // build refused it.
-        //
-        // WHY THAT IS NOW WRONG, AND EXACTLY HOW FAR. The producer landed:
-        // Wire_Escape_ResourceRespecify (Client/WireTables.cpp:425-433) writes the carrier from
-        // the pointer through MGPipeSetRespecifiedLevel, and the server codec
-        // (Wire/PipeWireCodec.cpp:1677-1683) rebuilds the pointer from the carrier. So under a
-        // split transport EVERY per-level glTexImage*D arrives here with the carrier set, and
-        // the old pin made verify x split unmeasurable - it fired on the server's apply thread
-        // during bring-up, before a single verify case could arm:
-        //
-        //   Fatal{PipeRespecifyScope} resource_respecify {slot=12, gen=0}: the descriptor
-        //   carries a per-level respecify scope (target=258, level=0), and no path in this
-        //   phase may set one
-        //
-        // WHAT SURVIVES, AND IT IS THE WHOLE INVARIANT. The pin never cared that the carrier
-        // was set; it cared that THE TWO HALVES OF THE SCOPE COULD DISAGREE - "the first thing
-        // that can go wrong is exactly one of the two moving". That hazard did not go away when
-        // the producer landed, it became LIVE, and it is silent: the applier below drops pending
-        // uploads by the POINTER, so a descriptor that declares (target, level) while this call
-        // hands over a null pointer takes the WHOLE-RESOURCE arm and eats every other level's
-        // texels, and one that hands over a different pair erases the wrong key and keeps the
-        // one the client stopped owing. Neither shows up as anything but missing pixels, a
-        // frame later, on whichever level the wire dropped.
-        //
-        // So the rule becomes CONTRACT-P7 §6's: A PRODUCER OF A PER-LEVEL SCOPE MUST COVER THE
-        // RANGE IT DECLARES. Carrier set => the call passes a pointer, and that pointer names
-        // exactly the declared (uploadTarget, level).
-        //
-        // ONE-DIRECTIONAL ON PURPOSE. A whole-resource descriptor says NOTHING about the
-        // pointer, and must not: that is the monolith shape and it is still the majority of the
-        // calls in the tree. MG_Impl/Pipe/TextureEmit.h builds a value-initialized descriptor
-        // (carrier clear, by MGPipeClearRespecifiedLevel's own "the safe default") and states
-        // the scope in the trailing pointer alone, which is legal, load-bearing and untouched
-        // here. Checking that direction too would red every monolith glTexImage*D in the tree
-        // and would be asserting a convention, not an invariant - the pointer is the caller's
-        // statement, and a caller that has not been converted to the carrier has not lied.
+        // Verify builds: a per-level respecify scope declared in the descriptor must match the
+        // `level` pointer. The wire escape (MG_Remote/Client/WireTables.cpp) writes the carrier
+        // from the pointer and the codec rebuilds the pointer from it. The applier drops pending
+        // uploads by the pointer, so a declared scope with a null pointer would take the
+        // whole-resource arm and eat every other level's texels, and a different pair would drop
+        // the wrong key; both show up only as missing pixels. One-directional: in-process emission
+        // (MG_Impl/Pipe/TextureEmit.h) leaves the carrier clear and states the scope in the
+        // pointer alone, which is legal.
         void PinRespecifyScopeCoversItsDeclaration(const MGPResourceDesc& desc,
                                                    const MGPRespecifiedLevel* level, MGPipeHandle res,
                                                    const char* call) {
@@ -1649,24 +1547,13 @@ namespace MobileGL::MG_Pipe {
         }
 
         // ----------------------------------------------------------------------------
-        // P4a: the three kVarTail unit sets share one body.
+        // The body shared by the three var-tail unit sets, which differ only in the entry type.
         //
-        // They differ in exactly one thing - what an entry IS - and in nothing else: the same
-        // window rule, the same bound, the same "the entries outside the window are not
-        // cleared", the same serial discipline. set_vertex_buffers wrote this arithmetic once
-        // already; a second, third and fourth copy of it would be three more places to get the
-        // Start + Count overflow wrong.
-        //
-        // THE WINDOW IS THE BOUND AND ENTRIES OUTSIDE IT ARE NOT CLEARED. The record is "the
-        // last set as received": a set that names four units has said nothing about the other
-        // 188, and clearing them would unbind textures the client never mentioned.
-        //
-        // THE ENTRY'S OWN Unit FIELD IS NOT POLICED, deliberately and for MGPVertexBuffer::
-        // BindingIndex's reason: the DESTINATION is Start + i, which is the window this
-        // function has already bounded, and the field beside it is the client's own label for
-        // the entry. Policing it would hand the emitter a contract this applier cannot justify
-        // - the two agree by construction or the emitter is broken in a way a unit test on the
-        // emitter's side is the right place to catch.
+        // The window [start, start + count) is bounded against the destination (in 64 bits), and
+        // entries outside it are not cleared: the record is the last set as received, and a set
+        // naming four units says nothing about the other 188. An entry's own Unit field is not
+        // checked; the destination is start + i and the field is only the client's label, as
+        // with MGPVertexBuffer::BindingIndex.
         template <class Entry, class ArrayT>
         Bool ApplyUnitWindow(const char* call, Uint32 start, Uint32 count, Uint64 contentHash,
                              const Entry* tail, ArrayT& destination, Uint32& destinationStart,
@@ -1794,24 +1681,14 @@ namespace MobileGL::MG_Pipe {
     const MGPipeResourceOps* MGPipeGetResourceOps() { return g_resourceOps; }
 
     namespace {
-        // P4a's BELT (ID-39). See MGPipeApplierState::RefusedNoConsumer for the whole argument;
-        // in one line: acceptance is a contract with the client, and accepting a record on a
-        // backend that consumes none of them makes the emitter clear a dirty flag the legacy
-        // pull path still owed.
-        //
-        // IT IS THE SAME SIGNAL THE CLIENT'S GATE READS, deliberately - g_resourceOps is the
-        // table a backend installs at its own bring-up and uninstalls at teardown, and
-        // MGPipeApplierReset does NOT touch it (see there), so the gate cannot flap between a
-        // make-current and the emissions that follow it. The two therefore agree on every path
-        // except the one this exists for: an emitter called directly, without passing PipeFill.
-        //
-        // EVERY CALLER PLACES IT AFTER THE RECORD'S OWN SHAPE CHECKS AND BEFORE ANYTHING MOVES.
-        // A malformed record is Fatal{ProtocolCorruption} whether or not anything would have
-        // read it - a trip wire that fires only on some backends is a trip wire nobody can
-        // trust - so the refusal is the LAST thing asked and the first thing that stops the
-        // write. The three unit-set entry points are the exception and say so at their call
-        // site: ApplyUnitWindow validates and writes in one step, so the question has to be
-        // asked in front of it.
+        // True (and counted in MGPipeApplierState::RefusedNoConsumer) when nothing in this
+        // process consumes texture, framebuffer, sampler and program records: accepting one makes
+        // the client clear dirty flags nobody will act on. It asks what the client's gate
+        // (PipeFill.cpp's P4aFamilyHasItsConsumer) asks: the published consumer bit under a
+        // transport, the registered op table in process. MGPipeApplierReset leaves g_resourceOps
+        // alone, so the answer cannot flap across a make-current. Callers ask after the record's
+        // shape checks (a malformed record is Fatal on every backend) and before anything moves;
+        // calls that start with a resolution, and the unit sets, ask first.
         Bool NoP4aConsumer() {
 #if MOBILEGL_BUILD_DISAGGREGATED
             if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
@@ -1844,27 +1721,14 @@ namespace MobileGL::MG_Pipe {
 
     void MGPipeApplierReset() {
 #if MOBILEGL_BUILD_DISAGGREGATED
-        // P5c (ct), CONTRACT-P5C.md §5.1 / §6 layer 2. With an active transport g_applier is
-        // SERVER-PRIVATE and the GL thread's reset crosses as the applier_reset RECORD
-        // (PipeFill.cpp's FreshlyPrimed arm emits it; ServerVerbSink::OnApplierReset runs this
-        // function ON the apply thread). Reaching here from any other thread WITH A LIVE WIRE
-        // is the direct call the record replaced - a write into server memory with no wire
-        // shape, and exactly the revert the red-once gate must catch - so it is a named Fatal
-        // rather than a silent reset of state another role owns. The window the Fatal
-        // deliberately does NOT cover is a configured-but-wireless transport: before
-        // ClientSession::Start() there is no wire for a record to cross (§6 layer 2's
-        // documented bring-up exception), and a ServerLoop fixture with no client at all has
-        // none either - there this call is the only reset that exists. Monolith keeps the
-        // direct call, byte for byte (G1); in a pull build none of this is compiled at all.
-        // D10: THE MIDDLE CONJUNCT WAS ClientSession::Active() != nullptr ALONE, WHICH IS
-        // PERMANENTLY NULL IN A SERVER PROCESS - so this guard could not arm at all under
-        // spawn, in the shape where calling the reset off the apply thread is most likely and
-        // least recoverable. MGPipeSessionLive() is the same question asked in a way both roles
-        // can answer, and MGPipeServerArm() is the process-scoped half of "am I the server".
-        //
-        // BOTH ARE ADDED AS DISJUNCTS, not substituted. The originals are the only facts a
-        // fixture without a full session has, and swapping them out silently disarms every such
-        // test - measured.
+        // Under a transport the applier is server-private: the GL thread's reset crosses as the
+        // applier_reset record, and ServerVerbSink::OnApplierReset runs this on the apply thread.
+        // A direct call from a client-role thread (not the apply thread, not MGPipeServerArm())
+        // while a session is live writes server memory with no record behind it: a named Fatal.
+        // Before a session exists (before ClientSession::Start, or a ServerLoop fixture with no
+        // client) the direct call is the only reset there is. MGPipeSessionLive() and
+        // MGPipeServerArm() sit beside ClientSession::Active() and OnApplyThread(), not in their
+        // place: fixtures without a full session have only the latter two.
         if (MG_Config::Transport != MG_Config::TransportMode::Monolith &&
             (MG_Remote::Client::ClientSession::Active() != nullptr || MG_Pipe::MGPipeSessionLive()) &&
             !MG_Remote::Server::ServerLoop::OnApplyThread() && !MG_Pipe::MGPipeServerArm()) {
@@ -1879,22 +1743,13 @@ namespace MobileGL::MG_Pipe {
         MGPipeApplier().ScatteredChunkBits = 0;
         MGPipeApplier().PatchCarrierComparisons = 0;
         MGPipeApplier().PatchCarrierDivergences = 0;
-        // P3a. THIS RUNS AT EVERY CHANGE OF THE CURRENT CONTEXT, not once per fresh one:
-        // MGPipeTracker::Update resets itself whenever the context pointer moves and the
-        // emitter calls this from the walk that follows, so a make-current BACK to a context
-        // that is still alive lands here too. Everything cleared below is therefore something
-        // a returning context may not inherit, and nothing else is cleared.
-        //
-        // THE OBJECT RECORDS ARE NOT CLEARED. A GL object lives in a share group, not in a
-        // context: the buffer a returning context is about to write to is the same buffer with
-        // the same storage, and its record is where the extent and the mutation serial that
-        // D-A4 re-keys IsBufferDrawClean onto now live. Dropping them here made every
-        // glBufferSubData after a context switch resolve to nothing and be dropped, with the
-        // only trace an assertion that compiles out at INFO. They go at the object's own death
-        // (resource_destroy, delete_vertex_elements) and at MGPipeApplierReleaseObjectRecords.
-        //
-        // The OP TABLE is deliberately not cleared either - it is installed and uninstalled by
-        // the backend's own bring-up and teardown, not by a state reset.
+        // This runs at every change of the current context, including a make-current back to a
+        // live context (MGPipeTracker::Update resets whenever the current context changes), so it
+        // clears only what a returning context may not inherit. Object records stay: GL objects
+        // live in the share group, and a buffer's record holds the extent and mutation serial its
+        // later writes and IsBufferDrawClean need. They go at the object's own death and at
+        // MGPipeApplierReleaseObjectRecords. The op table stays too; the backend installs and
+        // removes it at bring-up and teardown.
         MGPipeApplier().RefusedResourceCalls = 0;
         MGPipeApplier().RefusedVertexInputCalls = 0;
         MGPipeApplier().RefusedObjectCalls = 0;
@@ -2201,28 +2056,13 @@ namespace MobileGL::MG_Pipe {
         const FloatVec4 outer(patch.Outer[0], patch.Outer[1], patch.Outer[2], patch.Outer[3]);
         const FloatVec2 inner(patch.Inner[0], patch.Inner[1]);
 
-        // THE SECOND TRIP WIRE (D6, D10). The patch trio travels TWICE - once in pipeline
-        // chunk P0, because it is pipeline state, and once as set_patch_state, because both
-        // backends bake it into the synthesized control stage from a shader-build path. The
-        // redundancy is the point: if the two carriers ever part, a stale set_patch_state
-        // silently clobbers what bind_render_state scattered and the tessellation levels a
-        // draw uses stop being the ones its CSO was minted for.
-        //
-        // Compared BITWISE, because a NaN outer level is a legal glPatchParameterfv value
-        // (ARCHITECTURE.md 5.2) and must compare equal to itself.
-        //
-        // ARMED BY THE APPLIER'S OWN SCATTER LEDGER, not by "some CSO has been bound"
-        // (PipeApply.h, MGPipeApplierState::ScatteredChunkBits). The question is whether the
-        // chunk-P0 bytes in the working block are the applier's, and that single condition
-        // covers both contracts this wire needs: the ORDERING one - a set_patch_state that
-        // legitimately precedes the first bind of a context has nothing to agree with yet -
-        // and the VERB-CLASS one - with the render-state subsystem off those bytes are the
-        // per-verb fill loop's, and FillPoints.def does not publish GetRenderStateParameters
-        // at kDispatch or kTextureOp, so they go stale there.
-        //
-        // It runs in the shipped push build too, because a wire that is compiled out of
-        // every build a device runs is not a wire. The cost is a 24-byte memcmp on a call
-        // that is emitted when the tessellation state CHANGES, i.e. about once per program.
+        // Patch carrier trip wire. The patch trio travels in pipeline chunk P0 and again as
+        // set_patch_state (both backends bake it into the synthesized control stage); if the two
+        // ever part, a stale set_patch_state overwrites what bind_render_state scattered. Compared
+        // bitwise so a NaN level equals itself. Armed only once this applier has scattered the
+        // trio's chunk itself (kChunksPatchTrio in ScatteredChunkBits): before the context's first
+        // bind there is nothing to agree with. Runs in every build; the cost is a 24-byte compare
+        // on a call emitted only when tessellation state changes.
         if ((MGPipeApplier().ScatteredChunkBits & kChunksPatchTrio) == kChunksPatchTrio) {
             ++MGPipeApplier().PatchCarrierComparisons;
             const Bool agrees = working.PatchVertices == patch.Vertices &&
@@ -2304,26 +2144,13 @@ namespace MobileGL::MG_Pipe {
         }
     }
 
-
     // ================================================================================
-    // P3a: the nine resource entry points (D-A1, D-A2).
+    // The resource entry points.
     //
-    // WHAT THE APPLIER OWNS HERE IS IDENTITY, EXTENT AND ORDER - NOT CONTENT. A buffer's
-    // bytes are the backend's; what crosses is a {slot, gen} handle, a flat descriptor and,
-    // where the call carries content, the client's own shadow base. So each body below does
-    // three things in this order: resolve the handle against this applier's record, check the
-    // record against its own declared extent, and only then move the record and hand the call
-    // to the backend.
-    //
-    // NOTHING REGISTERS MGPipeResourceOps IN THIS PACKAGE, so every dispatch below is a null
-    // check that falls through, and the tree behaves exactly as it did. That is deliberate and
-    // it is what makes this commit landable on its own: the frontend still dispatches the op
-    // table these replace, the backend that will register one is a later package, and the
-    // records these bodies keep are already correct when it does.
-    //
-    // THE THREE SERIALS ARE MGGen-CLASS: server-owned, monotone, never crossing the line. No
-    // MGPipe call may require the client to supply or know one (ARCHITECTURE.md 4.2.2), which
-    // is why they are incremented here rather than carried in a payload.
+    // The applier owns identity, extent and order, not content: a buffer's bytes are the
+    // backend's. Each body resolves the handle against this applier's record, checks the record
+    // against its own declared extent, and only then moves the record and calls the backend.
+    // Serials are server-owned and monotonic and never travel in a payload (ARCHITECTURE.md §2.2).
     // ================================================================================
 
     Bool MGPipeApplyResourceCreate(const MGPResourceDesc& desc) {
@@ -2478,44 +2305,13 @@ namespace MobileGL::MG_Pipe {
         // sampling-resolution shutter guarded - the server-side answer moves with it.
         MGPipeApplierNoteTextureStateMoved();
 
-        // A RESPECIFY REDEFINES A STORE, SO THE PENDING UPLOADS AGAINST THE STORE IT REPLACES
-        // GO WITH IT - AND ONLY THOSE. They are boxes and rects in a level's coordinate system
-        // and that space has just been replaced, so a box kept across a shrink would have
-        // Espryt upload past the end of the new level. But WHICH storage a respecify replaces
-        // is the call's to say and the descriptor's to say nothing about:
-        //
-        //   - `level == nullptr` is a WHOLE-RESOURCE redefinition - every glBufferData /
-        //     glBufferStorage, every glTexStorage* (which defines every level at once), every
-        //     texture view - and every key goes.
-        //   - a non-null `level` is ONE glTexImage*D on a mutable texture, which redefines that
-        //     (uploadTarget, level) AND NOTHING ELSE. Dropping the other keys here would lose
-        //     texels the client no longer owes: MG_State's AllocateStorage / MarkStorageDirty
-        //     are per (uploadTarget, level) too, so the re-mark this call causes covers ITS
-        //     level only, while every other level's dirty flag was cleared at its own emission
-        //     (D-D5 step 1). The canonical sequence that loses them is glTexImage2D(0, data) ->
-        //     draw (the shape is emitted and accumulated; Espryt bails because the texture is
-        //     not yet mipmap-complete, Managers.cpp's incomplete-texture early return, which is
-        //     the arm this set exists for) -> glTexImage2D(1, data), which under a blanket
-        //     clear destroys level 0's entry before anything ever uploaded it.
-        //
-        //   - and a METADATA update (ID-18 M4) with a NULL level drops NOTHING. It refines the
-        //     whole-resource arm rather than contradicting it: the rule is "the uploads against
-        //     the storage this call REPLACES go with it", and a call whose storage-defining
-        //     fields all equal the stored descriptor replaces no storage, so no level's
-        //     coordinate system has moved and every pending box is still described in the
-        //     space it was accumulated in. B re-emits the descriptor when a sticky bind bit
-        //     moves - with a null level, deliberately - which can land between a
-        //     glTexSubImage2D and the sync that consumes it; eating those texels there would be
-        //     C1's bug with a different trigger, and just as silent.
-        //
-        //   - A NAMED LEVEL IS DROPPED WHETHER OR NOT THE base descriptor moved (P4a final
-        //     review C-1). The companion scope now carries that level's exact W/H/D as well as
-        //     its (uploadTarget, level) key, so the texture twin and staged-byte store update the
-        //     same coordinate system. A metadata-only mask republish passes null and therefore
-        //     cannot consume a standing upload on its behalf.
-        //
-        // A buffer never has a pending upload at all, so all three arms are inert for P3a's
-        // half - which is also why a buffer is never classified as metadata-only (below).
+        // A respecify drops the pending uploads against the storage it replaces, and only those
+        // (ARCHITECTURE.md §6.1): a box kept across a shrink would upload past the end of the new
+        // level. A null `level` replaces the whole resource and drops every key, unless the call
+        // is metadata-only, which replaces no storage and drops nothing. A named level (one
+        // glTexImage*D) drops exactly that (uploadTarget, level), even if the descriptor did not
+        // move; the other levels' dirty flags were cleared at emission, so their keys are the only
+        // record of texels the backend still owes. Buffers never have pending uploads.
         if (level != nullptr) {
             // The keys are unique by AccumulatePendingUpload's construction - it looks for the
             // pair before it appends - so this erases at most one entry and stops.
@@ -2547,23 +2343,12 @@ namespace MobileGL::MG_Pipe {
                 DefineTextureWithoutBackendHook(desc, level);
         }
 
-        // resource_respecify is the catalogue's only kNeedsAck call, and the per-record half
-        // of that flag is MGPipeResourceRespecifyNeedsAck(desc): glBufferStorage is a real
-        // synchronous allocation and the only entry point allowed a synchronous ack, while
-        // glBufferData travels through the same call and must not acknowledge one. In monolith
-        // the acknowledgement IS the return of this function - the applier is one call away -
-        // so the predicate has nothing to gate here and is deliberately not branched on: a
-        // branch whose arms were identical would be dead code the transport would then have to
-        // find and remove. PipeCatalogueTest.ResourceRespecifyAcksOnlyImmutableStorage is what
-        // keeps the predicate honest until the doorbell reads it.
-        //
-        // ID-18 M4 ASKS FOR "NO REALLOCATION ACK" ON A METADATA UPDATE, AND IT IS TRUE HERE BY
-        // CONSTRUCTION RATHER THAN BY A BRANCH: the predicate is false for every target that is
-        // not a buffer, and RespecifyRedefinesNoStorage refuses the buffer target outright, so
-        // MGPipeResourceRespecifyNeedsAck(desc) is false for every record this applier
-        // classifies as metadata-only. That is why the classification excludes buffers rather
-        // than suppressing the ack afterwards - a suppression would have been a second rule the
-        // transport would then have to learn.
+        // resource_respecify is the only kNeedsAck call, and MGPipeResourceRespecifyNeedsAck(desc)
+        // narrows the ack to an immutable buffer, i.e. glBufferStorage (ARCHITECTURE.md §8.3). In
+        // process the ack is this function's return, so the predicate is not branched on;
+        // PipeCatalogue.ResourceRespecifyAcksOnlyImmutableStorage pins it. A metadata-only update
+        // never acks: the predicate is false for every non-buffer target, and
+        // RespecifyRedefinesNoStorage never classifies a buffer as metadata-only.
         if (desc.Target != kMGPipeResourceTargetBuffer) return true;
         if (g_resourceOps != nullptr && g_resourceOps->Respecify != nullptr) {
             g_resourceOps->Respecify(desc.Resource, desc, initialBytes);
@@ -2889,20 +2674,11 @@ namespace MobileGL::MG_Pipe {
 #endif
 
     // ================================================================================
-    // P3a: the five vertex-input entry points (D-G, D-H, D-I).
+    // The five vertex-input entry points.
     //
-    // THESE FIVE DISPATCH TO NOBODY, and that is not an omission: MGPipeResourceOps is the
-    // RESOURCE family's table, and the vertex-input calls have no backend hook because the
-    // backend does not act on them when they arrive. It reads them at its own draw-time sync,
-    // out of the state below, which is what the three serials here are for - they are what
-    // retires the twin's wrapping-Uint16-plus-identity patches, so a compare that used to ask
-    // "is my Uint16 configuration version still the frontend's?" asks "is my Uint64 serial
-    // still the server's?" instead.
-    //
-    // Nothing emits them in this package either: their dirty bits map to no subsystem, the two
-    // subsystem bits are not in MG_Impl/Pipe/PipeFill.cpp's kMGPipeWiredSubsystems, and the
-    // emitters beside them are stubs. The state below is therefore correct and unread until
-    // the packages that wire both ends land.
+    // None of them calls the backend. The backend reads this state at its own draw-time sync
+    // and compares the three Uint64 serials kept here (ContentSerial, VertexBuffersSerial,
+    // IndexBufferSerial) instead of a wrapping frontend version.
     // ================================================================================
 
     void MGPipeApplyCreateVertexElements(const MGPVertexElements& desc, const void* blobBytes) {
@@ -2910,25 +2686,12 @@ namespace MobileGL::MG_Pipe {
                         "create_vertex_elements named the reserved slot 0");
         if (desc.Cso.Slot < kMGPipeFirstAllocatableSlot) return;
 
-        // THE COUNTS ARE CHECKED BEFORE A BYTE OF THE BLOB IS TOUCHED, and the check is the
-        // record's own self-description: the blob is MGPVertexAttribWire[AttributeCount]
-        // immediately followed by MGPVertexBindingPointWire[BindingPointCount]. THIS is the
-        // reason the second view travels at all - a record that declares a BindingPointCount
-        // it does not carry would otherwise be a shape this gate had to police forever with
-        // nothing to police it against.
-        //
-        // Both counts are bounded by GL's attribute limit, which is also the size of the two
-        // arrays they are unpacked into, so the bound and the destination cannot drift apart.
-        // THE COUNTS ARE WHAT BOUNDS THE READ; the declared blob length is a cross-check.
-        //
-        // THE BLOB RULE IS THE SAME ONE resource_subdata IS HELD TO (SubDataBoxFault above,
-        // and MGPipeTypes.h states it on both records): a non-zero Blob.Size must be exactly
-        // the length the record's other fields describe, and a zero Blob.Size means "this
-        // record does not declare its blob" - which is what a monolith emission is, since the
-        // bytes travel beside the record through blobBytes and no MGPBlobRef is filled. One
-        // rule, both blob-carrying families: a transport that fills the field gets a real gate
-        // on the first truncated record, and a client that leaves it zero does not abort a
-        // verify build over a field it never used.
+        // The counts are checked before any blob byte is read, against the record's own layout:
+        // MGPVertexAttribWire[AttributeCount] then MGPVertexBindingPointWire[BindingPointCount].
+        // Both are bounded by kMGPipeMaxVertexAttribs, which also sizes the destination arrays, so
+        // the counts bound the read. Blob.Size follows resource_subdata's rule (SubDataBoxFault):
+        // non-zero must equal the length the counts describe; zero means the record does not
+        // declare its blob, as with in-process emission, which passes the bytes in blobBytes.
         const Uint64 attributeBytes = Uint64{desc.AttributeCount} * sizeof(MGPVertexAttribWire);
         const Uint64 bindingBytes = Uint64{desc.BindingPointCount} * sizeof(MGPVertexBindingPointWire);
         const Uint64 declared = attributeBytes + bindingBytes;
@@ -3143,31 +2906,13 @@ namespace MobileGL::MG_Pipe {
     }
 
     // ================================================================================
-    // P4a: the fifteen object and working-state entry points
+    // The object and working-state entry points
     // ================================================================================
     //
-    // NOT ONE OF THEM DISPATCHES TO A BACKEND FUNCTION POINTER, and that is the structural
-    // decision the whole phase rests on rather than an omission. Nothing in these families
-    // reaches the backend at GL-call time today - texture storage only marks a level dirty,
-    // texture parameters run from the draw-time sync, renderbuffer storage is allocated inside
-    // SyncToBackend, a sampler twin is created lazily from the program pass, and the
-    // framebuffer, the unit sets and the program are all resolved at PrepareForDraw - so every
-    // call below is either an OBJECT RECORD the applier stores or WORKING STATE the applier
-    // stores, and the backend reads the applier at the sync points it already has, keyed on a
-    // server-owned Serial instead of a frontend version. MGPipeResourceOps is unchanged.
-    //
-    // THE SAME THREE STEPS, IN THE SAME ORDER, AS P3a's NINE: resolve the handle against this
-    // applier's record, check the record against its own declared extent, and only then move
-    // the record. The two verdicts are the same two, and the difference between them is the
-    // whole of this file's discipline - a call naming a record this applier does not have is a
-    // DEFINED NO-OP that is COUNTED (RefusedObjectCalls), because one legal sequence produces
-    // it; a record that would make the server index or allocate outside its own storage is
-    // Fatal{ProtocolCorruption} with the record's identity in the line.
-    //
-    // NOTHING EMITS ANY OF THEM IN THIS PACKAGE. The four subsystem bits are not in
-    // kMGPipeWiredSubsystems, every client emitter beside them is still a stub, and no backend
-    // reads the records yet - so the state below is correct and unread until the packages that
-    // wire both ends land, and this tree is behaviourally identical to the contract commit's.
+    // None calls a backend function pointer: the backend reads these records at its own sync
+    // points, keyed on server-owned serials. Same order as the resource entry points: resolve,
+    // check the record against its own extent, then move it. A record this applier lacks is a
+    // counted no-op (RefusedObjectCalls); one that would index outside storage is Fatal.
 
     // ================================================================================
     // w1: the framebuffer record, per bound target
@@ -3220,24 +2965,13 @@ namespace MobileGL::MG_Pipe {
             return;
         }
 
-        // NO HANDLE IS RESOLVED HERE AND NONE MAY BE. A framebuffer has a handle but no wire
-        // lifetime - the catalogue has no framebuffer create and no framebuffer destroy,
-        // because a framebuffer is state and this call is the only one that names one - so
-        // there is nothing to look up, this entry point never counts a refusal, and the record
-        // it writes OVERWRITES whatever the slot held. That last part is the point rather than
-        // a compromise: the slot's previous occupant is dead by construction (the client frees
-        // a framebuffer's slot when the object dies and the allocator bumps the generation on
-        // reuse), and the record arriving now describes whatever holds the slot today.
-        //
-        // The surfaces' Res handles are not resolved either: an attachment PINS its texture,
-        // and in monolith the frontend's own SharedPtr is that keep-alive, so a refusal here
-        // would be enforcing a lifetime rule monolith cannot need and split has not defined.
-        // P4a's belt, after the record's own shape checks and before the table is touched. This
-        // entry point is the ONE the client can reach without passing PipeFill's gate -
-        // GL_Framebuffer.cpp's PipePublishFramebufferByName calls the emitter directly at the
-        // fifteen DSA sites - so on a backend with no consumer this is where those records
-        // stop. RefusedNoConsumer and not RefusedObjectCalls: the framebuffer family's counter
-        // contract (see the header) is that no framebuffer call ever moves that one.
+        // No handle is resolved: a framebuffer has a handle but no wire lifetime (no create or
+        // destroy record), so this record overwrites the slot; the client frees the slot when the
+        // object dies and reuse bumps the generation. Attachment Res handles are not resolved
+        // either: attachments pin their textures on the client (ARCHITECTURE.md §5.6).
+        // The consumer check follows the shape checks. This is the one entry point the client
+        // reaches without PipeFill's gate (PipePublishFramebufferByName calls the emitter
+        // directly), and it counts into RefusedNoConsumer, never RefusedObjectCalls.
         if (NoP4aConsumer()) return;
 
         MGPipeFramebufferRecord* record =
@@ -3523,24 +3257,14 @@ namespace MobileGL::MG_Pipe {
         return true;
     }
 
-    // The three of them, and NO STAGE DIMENSION on any of them: MobileGL's texture-unit space
-    // is one merged array of 192, the same unit may be sampled from two stages, and stage is
-    // derived server-side from the reflection archive only where the target API needs it.
-    //
-    // A NULL HANDLE IN A TAIL ENTRY IS LEGAL EVERYWHERE HERE and is not a refusal: a unit the
-    // program does not resolve carries a null view, a unit with no sampler object carries a
-    // null sampler CSO (the texture's built-in sampler applies then, exactly as today), and a
-    // unit with no texture carries a null resource. None of the three is resolved against a
-    // record either - a set is WORKING STATE, the records it names are OBJECT state, and the
-    // backend resolves the pair at its own sync point where both are current.
-    //
-    // P4a's belt sits IN FRONT of ApplyUnitWindow on all three, and this is the one place it
-    // is not last: ApplyUnitWindow validates the window and writes it in the same step, so
-    // there is no point between the two to stand at. The cost is that on a backend with no
-    // consumer a malformed window is declined rather than Fatal - which is the right trade the
-    // one way round it can be made, because that backend would never have been handed the
-    // window at all (the client's gate stops it) and the shipped configuration that DOES
-    // consume these still trips the wire.
+    // The three unit sets carry no stage dimension: the texture-unit space is one merged array
+    // of 192, a unit may be sampled from two stages, and the server derives stage from the
+    // reflection archive only where the target API needs it. A null handle in a tail entry is
+    // legal (unresolved unit; no sampler object, so the texture's built-in sampler applies; no
+    // texture), and nothing is resolved here: the backend pairs a set with the object records at
+    // its own sync point. The consumer check runs before ApplyUnitWindow, which validates and
+    // writes in one step, so a backend with no consumer declines a malformed window instead of
+    // tripping; the client's gate never sends it one, and a consuming backend still trips.
     void MGPipeApplySetSamplerViews(const MGPSamplerViews& hdr, const MGPBoundView* tail) {
         if (NoP4aConsumer()) return;
         if (!ApplyUnitWindow("set_sampler_views", hdr.Start, hdr.Count, hdr.ContentHash, tail,
@@ -3592,25 +3316,14 @@ namespace MobileGL::MG_Pipe {
     // quiet return: the picture would be wrong and the lane would be green, which is the one
     // failure mode this campaign spends its refusals on.
 
-    // set_shader_buffers, ONE RECORD PER CLASS (CONTRACT-P5E.md §5.6, rulings 10/11). The whole
-    // body is "validate the window, copy the tail into that class's array, take the mask, move
-    // the serial" - the binding points are WORKING STATE and the objects they name are resolved
-    // by the backend at its own sync point, from the handle each range carries.
-    //
-    // IT DOES NOT GO THROUGH ApplyUnitWindow, and the reason is worth a line rather than a
-    // diff: that helper's refusal message names "the merged texture-unit space" and the three
-    // unit sets share one capacity, while this row has THREE windows keyed by Class and two
-    // refusals of its own that the contract names by string ("SetShaderBuffers.Class" /
-    // ".Count"). A shared helper that had to grow a class parameter and a message parameter
-    // would be the same code with more ways to pass the wrong one.
-    //
-    // AND THERE IS NO NoP4aConsumer BELT HERE, deliberately. P4a's belt exists because a client
-    // clears a per-level dirty flag on ACCEPTANCE, so accepting on a backend that consumes
-    // nothing loses uploads (ID-39). This family's liveness gate is the client's own
-    // P5eFamilyIsLive (PipeFill.cpp), which asks R-8 for bit 13 in particular - a server that
-    // does not publish bit 13 never receives one of these records at all - and storing a window
-    // no backend reads costs nothing and loses nothing, because the emitter's only latch is the
-    // set-hash suppressor and the record it latched did cross.
+    // set_shader_buffers: one record per class (uniform, storage, atomic counter). The body
+    // validates the window, copies the tail into that class's array, takes the writable mask and
+    // moves the serial; the backend resolves each range's handle at its own sync point. It does
+    // not use ApplyUnitWindow, which serves the one merged texture-unit space, because this row
+    // has three windows keyed by Class and its own named refusals. There is no consumer check:
+    // the client sends these only to a server that publishes the buffer-binding consumer
+    // (PipeFill.cpp's P5eFamilyIsLive), and an unread window loses nothing because the emitter
+    // latches only its set-hash suppressor.
     void MGPipeApplySetShaderBuffers(const MGPShaderBuffers& hdr, const MGPBufferRange* tail) {
         if (hdr.Class >= kMGPipeShaderBufferClassCount) {
             MGP_TRIP_WIRE_REPORT("MGPipe: " MGP_TRIP_WIRE_TAG("ProtocolCorruption")
@@ -3734,27 +3447,12 @@ namespace MobileGL::MG_Pipe {
         if (op == MGPWireOp::DrawVbo && payload != nullptr) {
             const auto& draw = *static_cast<const MGPDrawInfo*>(payload);
             if ((draw.Flags & static_cast<Uint8>(kDrawClientArrays)) != 0) return true;
-            // ---- ESCALATION (iii) WAS HERE AND IS WITHDRAWN (P5e ra2, ID-133 then ID-136) ---
-            //
-            // ID-133 escalated a PLAIN multi-draw (`NumDraws > 1 && !kDrawIsIndirect`) so that
-            // MultiDrawImpl::RunIndirect's read of the client's GL_DRAW_INDIRECT_BUFFER binding
-            // became a legal barriered pull instead of an unbarriered Fatal. It worked, and it
-            // cost a rendezvous on EVERY plain glMultiDraw* on the DEFAULT tier: there is one
-            // draw opcode - all twenty entry points collapse onto draw_vbo - and the tier is
-            // chosen on the server per batch (MultiDraw.cpp's ResolveTierForBatch), so no
-            // predicate both roles can compute names the arm that actually needed it.
-            //
-            // THE CHECK ON AN ESCALATION IS "WHICH ARM PAYS FOR IT", NOT "WHICH LANE GOES
-            // GREEN", and that is the rule this pair of rulings exists to record. The read was
-            // a save/restore of a GL binding NAME around the tier's own scratch buffer, not a
-            // data dependency, so the answer was to ask the side that did the binding:
-            // BoundDrawIndirectBufferId now takes the handle arm its neighbour
-            // ResolveBoundIndexBuffer already had, and the pull is GONE rather than legalised.
-            //
-            // Both halves landed in ONE commit on purpose: the pull retired without this clause
-            // withdrawn is a cost with no reason, and this clause withdrawn without the pull
-            // retired puts 18 lane entries back on the unbarriered arm. Neither is a state to
-            // gate or to measure, so neither was ever a head.
+            // A plain multi-draw is not escalated. Espryt's indirect multi-draw tiers resolve the
+            // GL_DRAW_INDIRECT_BUFFER binding from a handle (MultiDraw.cpp's
+            // BoundDrawIndirectBufferId) instead of reading client state, and the tier is chosen on
+            // the server per batch, so no clause both roles can compute would name the arm that
+            // needs it. Judge a new escalation by which arm pays for it (see MGPipeBarriered's
+            // declaration in PipeApply.h).
         }
         return false;
     }
@@ -3793,20 +3491,12 @@ namespace MobileGL::MG_Pipe {
     }
 
     // ================================================================================
-    // w3: the shader CSO, the two program bindings and the default uniform block
+    // The shader CSO, the two program bindings and the default uniform block.
     //
-    // AND THE SERVER NEVER RE-LINKS. glslang lives entirely on the client and SPIRV-Cross
-    // entirely on the server, a file-level cut: what crosses is the per-stage SPIR-V and the
-    // reflection archive, never source, and there is no server-side compile pool to hand a
-    // failure back from. Link failure needs no synchronous return either - it is one error log
-    // plus a bind-program-0 empty draw today, GL_LINK_STATUS is never withdrawn, and the
-    // synchronous query is answered by the client out of its own ProgramObject.
-    //
-    // WHAT THE SERVER STILL SPECIALISES IS NOT THIS RECORD'S BUSINESS. A backend program
-    // depends on eight more inputs than the artefacts - the draw framebuffer's clamp masks and
-    // fragColor broadcast count, the storage-block binding signature, the live image formats,
-    // the patch parameters - and every one of them now arrives through ANOTHER record this
-    // applier holds. create_shader_state publishes the artefacts; the verb specialises.
+    // The server never re-links: SPIR-V and the reflection archive cross, never source, and
+    // GL_LINK_STATUS is answered by the client from its ProgramObject (ARCHITECTURE.md §7).
+    // The other inputs a backend program is specialised on (framebuffer clamp masks, storage
+    // binding signature, image formats, patch parameters) arrive through other records.
     // ================================================================================
 
     void MGPipeApplyCreateShaderState(const MGPProgramDesc& desc,
@@ -4064,27 +3754,13 @@ namespace MobileGL::MG_Pipe {
         ++stored->GlobalConstantsSerial;
     }
 
-    // THE MONOLITH BODY IS A NO-OP AND THAT IS THE WHOLE OF IT: the emulation this names still
-    // runs, exactly as it does today, on the same code path. What the call site buys is that
-    // the set of emulations a split server cannot serve is NAMED, GREPPABLE and PINNED, so P5
-    // and P8 give it teeth by editing one function instead of rediscovering five call sites.
-    //
-    // It takes a literal and does nothing with it. Not a log line, not a counter: it sits on
-    // paths a frame can reach many times, and ROADMAP.md forbids committing hot-path
-    // instrumentation.
-    // P5 GIVES IT TEETH, and this is the whole of it: ONE function edit arms FIVE call sites
-    // (Managers.cpp:5334, DirectGLES.cpp:8051, :8702, :8997, :10623), exactly as the header
-    // and P4a's comment above promised. Every one of them reaches back into the CLIENT's
-    // address space - a texture shadow, a CPU mipmap fallback, a host-side copy - and a server
-    // has no client address space to reach into, so degrading silently is the one outcome that
-    // must not happen.
-    //
-    // THE ARM IS THE TRANSPORT, NOT THE BUILD. build-split runs MOBILEGL_TRANSPORT=monolith in
-    // every unit and integration-gpu lane, and several of the five are on ordinary monolith
-    // paths that those lanes exercise (glGenerateMipmap reaches two of them); arming on the
-    // build would turn 1117 integration cases red for running code that is correct in the role
-    // they run it in. None of the five is on P5's reduced path, so under a real transport this
-    // costs nothing and catches a lot.
+    // MGPipeUnmigratedEmulation, below: a backend emulation that reads or writes client memory
+    // names itself with a literal. In process it is a no-op and the emulation runs; under a
+    // transport the server has no client memory, so it aborts with Fatal{UnmigratedEmulation}
+    // rather than degrade silently. It arms on the transport, not the build, because split
+    // builds also run in-process lanes where such code is correct. No log or counter: it may sit
+    // on hot paths. Product code has no call sites; scripts/ci/unmigrated_emulation_sites.py
+    // and PipeCatalogue.EveryUnmigratedEmulationIsNamedOnce keep the names and sites equal.
     namespace {
         thread_local Bool tl_serverOriginatedWrite = false;
     } // namespace

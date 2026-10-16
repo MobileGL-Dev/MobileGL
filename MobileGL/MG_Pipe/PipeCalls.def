@@ -6,157 +6,14 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// The single source of truth for the MGPipe call catalogue (plan B section 4.1 / 4.4 /
-// appendix A). One line per call; seven generators consume this file
-// (scripts/gen_pipe.py -> MG_Pipe/generated/*.inc) and one unit test
-// (MG_Test/Pipe/PipeCatalogueTest.cpp) pins the arithmetic.
-//
-//   X(Name, PayloadStruct, Class, Flags, WaitClass)
-//     Class : kScreen | kCtxCso | kCtxState | kCtxObject | kCtxVerb | kCtxQuery
-//             kScreen lands in struct MGPipeScreen, every other class in struct
-//             MGPipeContext (plan section 4.3).
-//     Flags : kNone | kNeedsAck | kHasBlob | kVarTail | kHostSpan | kReplySlot | kOptional
-//     WaitClass : kWaitNone | kWaitApplied | kWaitReply | kWaitPresent
-//             P5e (docs/archive/contracts/CONTRACT-P5E.md section 2.2). WHAT THE CLIENT DOES AFTER IT HAS
-//             PUBLISHED A RECORD OF THIS CALL, on a server that publishes kCapRunAheadApply.
-//             It is A VALUE AND NOT A NEW OP: the opcode order and the flag column are
-//             untouched, and gen_pipe.py emits the column beside kMGPipeCallFlags as
-//             MGPipeWaitClassFor(op) in generated/PipeWire.inc, so the emit table and the
-//             sink compute the barriered predicate from one table instead of two copies.
-//
-//             kWaitReply     the answer is not derivable and the client acts on it (R-5), so
-//                            it blocks on the reply slot. EVERY kReplySlot ROW CARRIES IT and
-//                            gen_pipe.py refuses a row where the two disagree - a reply-slot
-//                            row that did not wait would be a waiter that hangs, and a waiting
-//                            row with no slot would block on an answer nobody posts.
-//                            resource_subdata is here because the row OWNS a slot; the buffer
-//                            half's wantReply=false is a per-record ROUTE decision one level
-//                            down (CONTRACT-P5E.md section 2.5), not a second wait class.
-//             kWaitPresent   present, whose pacing is the present CREDIT taken BEFORE the
-//                            encode rather than a wait after the publish (section 2.4).
-//             kWaitApplied   the record's apply still reads a BARRIER_PULLED row or probes the
-//                            client allocator, so the client parks in its own wait and the row
-//                            keeps CONTRACT-P5C's semantics exactly: its pulls count into rsp
-//                            and its probes are legal inside a scope. This column is the
-//                            static half of MGPipeBarriered(op, payload, applierState); the
-//                            other two escalations (an open XFB span, a draw with client
-//                            vertex arrays) are payload-derived and live in that function.
-//             kWaitNone      rule F holds for this row's sink: its apply names no client
-//                            memory at all, so the client publishes and moves on.
-//
-//             THE COLUMN IS INERT UNTIL THE INTEGRATION COMMIT publishes kCapRunAheadApply
-//             (MG_Backend/Init.cpp's kMGPipeP5eRunAheadReady): with the bit unpublished the
-//             client runs today's lockstep path and never reads the table.
-//             kNeedsAck on a call means records of this call MAY require an ack; a
-//             per-record predicate decides. resource_respecify carries it for
-//             glBufferStorage - a real synchronous allocation, and the only entry point
-//             allowed a synchronous ack - and MGPipeResourceRespecifyNeedsAck(desc)
-//             (MGPipeTypes.h) is what says so, which is why the same call still carries
-//             every glBufferData without acknowledging one.
-//
-//             kHasBlob MEANS "THE PAYLOAD OWNS AN MGPBlobRef MEMBER", nothing weaker (P5
-//             R-13.1). It is not "this call carries bytes": three calls carry bytes with no
-//             MGPBlobRef at all and they are named in CONTRACT-P5.md table 1, not flagged
-//             here, because a decoder that trusts kHasBlob has to find a member to read.
-//             The flags are EXPORTED, once, as kMGPipeCallFlags[] in generated/PipeWire.inc
-//             (P5 R-13.4): before that table existed every consumer hard-coded its own copy,
-//             which is how the two carriers below came to disagree with their payloads.
-//
-// RECORD NUMBERING NEVER CHURNS. Entries that are not implemented yet still occupy their
-// line (plan section 11, P0: "the complete call catalogue, placeholders included"). A new
-// call is APPENDED to its group; a retired call keeps its slot with a comment. The wire
-// opcode is the 1-based position in this list, so reordering is a protocol break.
-//
-// ---------------------------------------------------------------------------------------
-// COUNTS. MGP_CALL_LIST_DOCUMENTED_COUNT below is the authority; PipeCatalogueTest asserts
-// that the expansion, the two generated tables and this number agree.
-//
-//   class       entries   group (as the plan tabulates it)
-//   kScreen        14     screen: caps 1 + resource 3 + persistent map 2 + fence 4, plus the
-//                         appended server-side fence wait 1 and P5c's applier_reset 1 and
-//                         P14 S1's bind_context 1 and the shared-image row 1
-//   kCtxQuery       8     query object namespace 6, plus the appended timestamp pair 2
-//   kCtxCso        13     CSO create/bind/delete
-//   kCtxState      19     16 of the 18 set_* calls + the temporary set_residual_value_state
-//                         + P5c rv's set_context_values + P5e's set_program_bindings
-//   kCtxObject     11     set_texture_params (the 17th set_*) + 8 object-scoped transfers, plus
-//                         P5c's object_death 1 and get_texture_image_to_buffer 1
-//   kCtxVerb       20     3 context-reading transfer calls + the 10 commands, plus the five
-//                         P5b-appended verbs (bind_shader_image, patch_parameter,
-//                         bind_stream_output, set_storage_block_binding,
-//                         copy_framebuffer_to_texture - docs/archive/contracts/CONTRACT-P5B.md), plus
-//                         delete_stream_output 1 and read_pixels_to_buffer 1
-//   total          85
-//
-// Reconciliation with the plan's headline numbers (section 4.4 / appendix A), because they
-// do not add up to a set of UNIQUE records and this file has to hold unique records:
-//   - "screen 14" tabulates the fence and query families together with the screen block.
-//     Section 4.3 assigns the query NAMESPACE to the context ("VAO / FBO / XFB object /
-//     query namespaces, the command stream, present"), so the six query calls carry
-//     kCtxQuery and live in MGPipeContext. Screen keeps 10 of the plan's (11 with the appended
-//     FenceWaitServer, below). The eight EGL lifecycle entry points stay virtual functions on
-//     pActiveBackendObject and are deliberately NOT calls here (section 4.4.1, last row).
-//   - "CSO 15" is create/bind/delete x 5 kinds. Two of those binds are ALSO named in the
-//     set_* catalogue as their array forms - bind_sampler_states and set_sampler_views
-//     (section 4.4.3) - and a call may only exist once, so they are emitted under
-//     kCtxState and the CSO group holds 13: create/delete x 5 plus the three remaining
-//     binds (render state, vertex elements, shader).
-//   - "transfer 12" enumerates 11 calls in section 4.4.4 plus appendix A
-//     (resource_subdata, buffer_subdata_resident, resource_flush_range, resource_readback,
-//     resource_copy_region, blit, clear, generate_mipmap, read_pixels, get_texture_image,
-//     resource_subdata_complete). Eleven is what is emitted; the twelfth is not named
-//     anywhere in the plan.
-//   - "about 74 items" in section 4.1 is the sum of those headline numbers, so it inherits
-//     the same double counting. 68 unique records was the honest total of the plan's own
-//     catalogue.
-//   - Three LIVE GLFunctionsTable entries had no carrier in it at all: GetGpuTimestampNs
-//     (glGetInteger64v(GL_TIMESTAMP), a synchronous server answer), QueryCounterTimestamp
-//     (glQueryCounter, a one-shot stamp rather than a begin/end pair) and WaitSync (the
-//     GPU-side wait, which FenceWait's client-side wait does not express). They are
-//     QueryTimestamp, QueryCounter and FenceWaitServer, APPENDED at the end of the list -
-//     not slotted into their groups - because the wire opcode is the position, so a record
-//     that arrives late goes last. 71 unique records.
-//   - P5b appended FIVE more after them (opcodes 72..76), for the same reason and by the same
-//     rule: five GLFunctionsTable verbs the class-C census measured as first blockers - the
-//     image bind, the patch parameter, the XFB object bind, the storage-block rebinding and
-//     the framebuffer-to-texture copy - for which no existing row could carry the call.
-//     76 unique records. The catalogue footer's "ShaderStorageBlockBinding is folded into the
-//     reflection archive" is CORRECTED by the row: the archive carries the bindings the
-//     program LINKED with, and glShaderStorageBlockBinding moves one AFTER link.
-//   - P5c (docs/archive/contracts/CONTRACT-P5C.md §5.1/§5.2) appended TWO more after those (opcodes 77..78),
-//     same rule: applier_reset, the make-current edge's server-side reset that used to be a
-//     GL-thread direct call into server memory, and object_death, the framebuffer family's
-//     FIRST wire delete opcode and the handle-keyed replacement for the death-notice mailbox.
-//     Neither has an MGPipeApply* entry point and neither gains one; both reach WireVerbSink.
-//   - P5c rv (§5.3) appended ONE more (opcode 79): set_context_values, the residual-value
-//     record that retires the value-class BARRIER_PULLED rows. Unlike the two control records
-//     it IS an ordinary set_* row: MGPipeApplySetContextValues writes gPipeInputs, the row is
-//     routed through gMGPipeContext like its seventeen siblings, and under monolith it has no
-//     producer at all - the fields keep coming through the residual fill, byte for byte as
-//     before (G1). 79 unique records.
-//   - P5e (docs/archive/contracts/CONTRACT-P5E.md section 1) appended ONE more (opcode 80):
-//     set_program_bindings, the three POST-LINK mutable reflection fields - the uniform-block
-//     bindings, the sampler uniform units and the name-keyed storage-block override map. They
-//     live inside the LinkArtifacts the reflection archive snapshots, and all three move AFTER
-//     the link, so no existing row can carry them: create_shader_state describes the link and
-//     this one describes what happened to it since. It lands with a NULL ROUTE and a sink that
-//     refuses it by name until package pg wires the emitter, exactly as set_shader_buffers has
-//     sat catalogued-and-dead since P4a. 80 unique records.
-//   - delete_stream_output (opcode 81) took the XFB object's deletion across; 81 records.
-//   - P9 (docs/archive/contracts/CONTRACT-P9.md §1) appended TWO more (opcodes 82..83):
-//     read_pixels_to_buffer and get_texture_image_to_buffer, the pack-buffer halves of the two
-//     readbacks, answered by nothing (ID-57's fire-and-forget). Like P5b's five they reach
-//     WireVerbSink only and have no monolith producer. 83 unique records.
-//   - P14 S1 (docs/Disaggregated/design/11-state-ownership.md) appended ONE more (opcode 84):
-//     bind_context, the in-band record that carries the client's CURRENT context token. It has
-//     the applier_reset shape - a kScreen control record, no MGPipeApply* entry point, no
-//     monolith producer - because what it moves is session attribution, not context state. The
-//     design's per-record ContextSlot was NOT taken here: the token is announced at the edge
-//     (a context change) instead of stamped on every verb, which costs one record per
-//     make-current and leaves the 71 context-family payloads untouched. 84 unique records.
-//     shared_image (85), the server-allocated colour buffers exported as dma-bufs. 85 unique
-//     records.
-// ---------------------------------------------------------------------------------------
+// The MGPipe call catalogue (ARCHITECTURE.md §3), one X(Name, PayloadStruct, Class, Flags,
+// WaitClass) per call, read by scripts/gen_pipe.py into MG_Pipe/generated/*.inc. The wire
+// opcode is the 1-based row position: append new calls at the end, keep retired rows in place.
+// MGP_CALL_LIST_DOCUMENTED_COUNT is the row count, pinned by MG_Test/Pipe/PipeCatalogueTest.cpp.
+// Class: kScreen rows go to MGPipeScreen, all others to MGPipeContext. kHasBlob means the
+// payload owns an MGPBlobRef member; kNeedsAck means a per-record predicate may ask for an ack.
+// WaitClass (MGPipeWaitClass) is what the client does after publishing under run-ahead;
+// kWaitReply goes with kReplySlot, which gen_pipe.py enforces (ARCHITECTURE.md §3.2.1).
 
 #define MGP_CALL_LIST_DOCUMENTED_COUNT 85
 
@@ -386,21 +243,11 @@
     X(SharedImage,              MGPSharedImageOp,          kScreen,    kReplySlot,                 kWaitReply)
 // clang-format on
 
-// Explicitly NOT migrated (plan 4.4.6 / appendix A "explicit deletions"):
-//   - GetIntegeri_v / GetInteger64i_v. The six backend-owned answers they carry -
-//     GL_MAX_COMPUTE_WORK_GROUP_COUNT and GL_MAX_COMPUTE_WORK_GROUP_SIZE, three axes each,
-//     the only indexed pnames the device rather than the frontend answers - live in MGPCaps
-//     as DynamicBackendParameters::MaxComputeWorkGroupCount / MaxComputeWorkGroupSize, filled
-//     by both backends at capability init (DirectGLES from glGetIntegeri_v, DirectVulkan from
-//     VkPhysicalDeviceLimits) and floored by the frontend. Every other indexed pname names
-//     frontend state and is answered before any table is consulted.
-//   - GetProgramiv. GL_COMPUTE_WORK_GROUP_SIZE is a FRONTEND link artifact
-//     (ProgramObject::GetComputeLocalSize, what GL_Program.cpp has always answered from), not
-//     a backend answer at all; nothing a backend knows about a program crosses this way.
-//   - ShaderStorageBlockBinding WAS listed here as "folded into MGPProgramDesc's reflection
-//     archive". P5b's set_storage_block_binding row (opcode 75) replaces that: the archive
-//     carries the bindings as LINKED, and the call moves one after link, which the backend
-//     applies to an already-built driver program (DirectGLES.cpp ShaderStorageBlockBinding).
-//     set_pixel_unpack_state (no such state crosses the line - plan 4.6 D5), a
-//     compressed-format concept, pipe_transfer, and the stage dimension of set_sampler_views
-//     (MobileGL's texture unit space is merged, not per stage - plan 4.4.3).
+// Not in the catalogue (ARCHITECTURE.md §3.2):
+//   - GetIntegeri_v / GetInteger64i_v: the only device-answered indexed pnames, the compute
+//     work-group count and size limits, travel in MGPCaps (DynamicBackendParameters); every
+//     other indexed pname is frontend state.
+//   - GetProgramiv: GL_COMPUTE_WORK_GROUP_SIZE is a frontend link artifact
+//     (ProgramObject::GetComputeLocalSize).
+//   - set_pixel_unpack_state, compressed-format concepts, pipe_transfer, and a stage dimension
+//     on set_sampler_views (the texture unit space is merged across stages).

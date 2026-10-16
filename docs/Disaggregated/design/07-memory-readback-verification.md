@@ -22,6 +22,13 @@ T2 下 client 侧推送三件套：不做 map/unmap 命令对（payload 带 `has
 - 不可避免（罕见）：握手；surface 生命周期；`glReadPixels` 到客户内存；GPU-write pending 的 buffer 首次 CPU 读；带超时的 sync / query 结果；`glBufferStorage` 的 ack；纹理拉取；ring / stage 耗尽与 present credit。
 - 跨机上每条 `kWaitReply`（`ResourceCreate`、`SetTextureParams`、纹理 `ResourceSubData`）都是一个 RTT：逐帧次数是 P6.5 必测数，减少它是 P9 / P10 的活。
 
+#### 13.1.1 kWaitReply 行的逐记录豁免
+
+`kWaitReply` 是行级属性；一条记录是否真的阻塞由逐记录谓词决定，route 与 wire emit 表读同一个函数，避免一边等另一边没要的回包。因此上面第三条所列的纹理 `ResourceSubData` 在 wire 臂上已不逐条付 RTT。
+- `resource_subdata`（`MGPipeSubDataWantsItsReply`）：buffer 那半的 Bool 无人读，不等。wire 臂上纹理那半也不等：纹理记录只在 server 消费纹理族时才发（caps 镜像里的 consumer 位，与 applier 的接受检查读同一事实），所以 applier 唯一的合法拒绝"无 consumer"落不到这条记录上；其余拒绝（如目标不是纹理、无纹素或无字节、未知句柄）都是 bug，server 侧会 trip wire 报告或计数具名。client 自己取消的记录（device lost、stage 耗尽）仍答"未接受"，level 留脏重试。等待由此从每条记录移到 `SEG_STAGE` 窗口回收，与窗口成正比而不是与调用数成正比（实测见 `MEASUREMENTS.md`「纹理上传的等待粒度」一条）。
+- `resource_respecify`（`MGPipeResourceRespecifyWantsItsReply`）：wire 臂上 buffer 那半不等；纹理那半等到对象的 create 被接受（`MGPipeHandleIsPublished`），之后 acceptance 已是 client 知道的事实，首次使用时付一次阻塞的 create；create 被拒则闩不置位，后续照常等真答案，代价是吞吐而不是静默。
+- monolith 下答案在调用线程上直接返回、没有代价，谓词保持原答案（纹理那半照收）。
+
 ### 13.2 五部分验证门（取代 monolith 的字节一致门）
 
 1. **接口纯度**：A 门 include 图（`scripts/check_include_closure.py`）、B 门 server 镜像不引用 `MG_State::GLState` 与 glslang（P6 的 a6 实测 server 仍链 `MG_Impl`，由 `scripts/link_ratchet.py` 的下行棘轮追踪；P13 把 172 条降到 27 条具名债务、`# P13` 注解清零并由脚本拒绝回潮，W7 的 `MobileGL_server_linkcheck` 把它变成真链接）、C 门 `MG_Backend` 里零 `pGLContext`；外加"每个后端 memo 键都是 `{slot, gen}`"（`HandleRecycleScenario`）。

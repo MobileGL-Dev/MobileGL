@@ -6,21 +6,13 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// P5f exit classification. This table describes SERVER reads, not monolith storage.
-// RECORD_SUPPLIED is still derived from Coverage.def minus the whole-field refusal set.
-// A handle record does not supply a legacy pointer-valued getter: those getters are FATAL,
-// while their migrated consumers read the server record directly. Never relabel a pointer
-// RECORD_SUPPLIED merely to make the debt count zero.
-//
-// APPLIER_DERIVED accessors answer server state. FATAL accessors must abort on any server
-// read, including barriered/escalated records and non-strict/shared-block configurations.
-// BARRIER_PULLED remains a schema class so generator controls can test debt admission,
-// but no production row may use it after P5f. Monolith getter/fill behavior is unchanged.
-//
-// EmittedCallSuppliesTheWholeField retains its eight refusals: seven legacy pointer
-// representations plus the two-sided pixel-store field. Deleting those refusals would
-// falsely derive RECORD_SUPPLIED for the retired getters; server consumers bypass them.
-//
+// Server-read class of each PipeInputs field and sticky forward; the generator requires one.
+//   RECORD_SUPPLIED  not listed: Coverage.def's emitted fields minus the refusals in PipeFill.cpp's
+//                    EmittedCallSuppliesTheWholeField (legacy pointer getters, two-sided pixel
+//                    store). Never relabel a pointer getter to zero the debt.
+//   APPLIER_DERIVED  answered from server state.
+//   FATAL            every server read aborts, whatever the record or configuration.
+//   BARRIER_PULLED   schema only, for the generator's controls; no production row uses it.
 // clang-format off
 
 // X(Field, Class, RetiringPhase, Why)
@@ -58,69 +50,24 @@
     X(InvalidateCompileEnv, FATAL, "-", "transport caps republication replaces direct frontend invalidation") \
     X(RecordError, FATAL, "-", "transport OnGlError posts an event before the legacy frontend-error-queue arm")
 
-// X(Field, Arg0, Class, Why) - ARGUMENT-KEYED EXCEPTIONS.
-//
-// A row here narrows ONE argument value of ONE field to a different class. The field keeps
-// its single row above; this is the same shape Coverage.def:62-69 already rules for
-// GetBufferBindingSlot - "THE ROW STAYS ONE ROW, and that is structural rather than a
-// shortcut: this list IS the MGPipeInputField enum and the PipeInputs field set, and the
-// field is ONE array that a second row of the same name could only duplicate".
-//
-// GetPixelStoreParameters is m_pixelStore[2] indexed by its own `isUnpack` argument, exactly
-// as GetBufferBindingSlot is m_bufferBindingSlot[15] indexed by its BufferTarget. Only [0]
-// (pack) has a carrier, and the applier writes it.
-//
-// AND THE UNPACK HALF HAS NO BACKEND READER AT ALL. Every gPipeInputs->GetPixelStoreParameters
-// call site in the tree passes `false`: DirectGLES.cpp's PackStateFromContext, StoreReadbackRowsToClient
-// and ReadPixels, Utils.cpp's StoreClientRows, VulkanRenderer::ReadDepthStencilImageToClient() and
-// RecordVerbSink::ReadBoundFramebufferTight() - six, not the five the scout named, and the
-// scout did not open them. PipeFill.cpp's own EmitPixelPackState says the same thing from
-// the other side: "PACK only, deliberately: nothing on the far side of the boundary reads
-// unpack state". So the honest class for the unpack half is FATAL, not BARRIER_PULLED: a
-// future backend read of it would otherwise be served a stale struct in silence, and this
-// way it is a named abort on the first read.
+// X(Field, Arg0, Class, Why) - argument-keyed exceptions. A row narrows one argument value of
+// one field to another class; the field keeps its single row above, because it is one array
+// (as GetBufferBindingSlot is in Coverage.def).
+// GetPixelStoreParameters(isUnpack): only the pack half has a carrier, written by the applier,
+// and every backend call site passes false. The unpack half is FATAL so a future backend read
+// aborts by name instead of reading a stale struct.
 #define MGP_FIELD_OWNERSHIP_ARG_LIST(X)                                                              \
     X(GetPixelStoreParameters, 1, FATAL,                                                             \
       "the unpack half has no carrier AND no backend reader; all six gPipeInputs sites pass false")
 
-// X(WireOp, Verb) - WHERE THE SERVER STAMPS.
-//
-// The stamp rule needs one thing the wire does not carry: which MGPipeVerb a record belongs
-// to. The two name spaces are not the same and do not line up by name - the DRAW verb is
-// `DrawArrays` and its record is `draw_vbo`, the BLIT verb is `BlitFramebuffer` and its record
-// is `blit` - so the map is written here and checked against both sources (PipeCalls.def for
-// the op, FillPoints.def for the verb) rather than believed.
-//
-// EXACTLY THE OPS THAT ARE VERB BOUNDARIES. CONTRACT-P5.md section 7 puts five slots in class
-// B (emitted in P5): Clear, DrawArrays, ReadPixels, BlitFramebuffer and Present. FOUR OF THEM
-// ARE HERE AND PRESENT IS NOT, and that is a ruling rather than an omission: FillPoints.def:21
-// says in so many words that "Present and SetSwapInterval go through BackendObject virtuals
-// and read no frontend state, so they are not verbs here". There is no MGPipeVerb::Present to
-// stamp for, MGPipeValidateForVerb is never called for it, and stamping at Present would
-// retire the previous verb's answers with nothing to put in their place.
-//
-// An op that is not in this list is NOT a verb boundary and the applier must not stamp on it:
-// a set_dynamic_state between two draws is part of the draw's verb, not a new one.
-//
-// THE GENERATOR REFUSES AN OMISSION, NOT ONLY A TYPO, and that is the half the first version of
-// this file did not have. Every call that is VERB-SHAPED must have a row here or an exemption
-// row below with a reason. "Verb-shaped" is the union of two mechanical tests, both derived:
-//   (a) PipeCalls.def gives the call kind kCtxVerb - the catalogue's own word for it;
-//   (b) the call's name is also an MGPipeVerb name in FillPoints.def.
-// Eighteen rows and three exemptions cover all twenty-one (P5: twelve and three; P5b appended
-// the five kCtxVerb rows 72..76 and settled ResourceCopyRegion). Only four of the rows could
-// arrive in P5 (CONTRACT §7 class B minus Present); the rest are Fatal{UnmigratedVerb} on the
-// client until a P5b migration package flips them and are mapped ANYWAY, because the failure
-// mode of an absent row is silent: the applier would run the record under the PREVIOUS verb's
-// serial, mask and name, and a field inside that mask would read FRESH while holding the
-// previous verb's value.
-//
-// NOT MECHANICALLY DETECTABLE, and so not claimed: a call that is a verb boundary, is not
-// kCtxVerb, and whose name differs from its verb's. `ResourceCopyRegion` WAS the one in the
-// tree (its verbs could have been CopyImageSubData / CopyTexSubImage2D / CopyTexImage2D). P5b
-// decided: resource_copy_region is glCopyImageSubData only, and the two framebuffer-sourced
-// copies have their own row (copy_framebuffer_to_texture), so the choice is a row here rather
-// than a rule in a reader's head.
+// X(WireOp, Verb) - where the server stamps a verb boundary (ARCHITECTURE.md §9.2.1). Op and
+// verb names differ (draw_vbo stamps DrawArrays, blit BlitFramebuffer), so the map is checked
+// against PipeCalls.def and FillPoints.def. An unlisted op is not a boundary: a
+// set_dynamic_state between two draws belongs to the draw's verb. The generator requires every
+// verb-shaped call (kind kCtxVerb in PipeCalls.def, or named like an MGPipeVerb in
+// FillPoints.def) to have a row here or in the exemption list, since a missing row would apply
+// the record under the previous verb's stamp. A boundary that is neither goes undetected and
+// needs a hand-written row.
 #define MGP_VERB_OP_LIST(X)                                                                          \
     /* CONTRACT §7 class B - the four that can actually arrive in P5. */                              \
     X(Clear,              Clear)                                                                     \

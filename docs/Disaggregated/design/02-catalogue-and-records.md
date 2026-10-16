@@ -28,6 +28,17 @@
 - 20 个 draw 入口塌成 `DrawVbo` 一条；`Clear` 一条判别式；sampler 集合**没有 stage 维度**（192 单元合并空间）；`SetTextureParams` 按资源寻址、与 sampler view 分开（D10）；`SetIndexBuffer` 独立于 VAO 配置（D5）。
 - 显式不移植：`GetIntegeri_v` / `GetInteger64i_v` / `GetProgramiv`、`set_pixel_unpack_state`（前端已解析）、压缩格式概念、`pipe_transfer`。
 
+#### 3.2.1 flag 与 WaitClass 的含义
+
+- `kHasBlob` 严格表示 payload 拥有一个 `MGPBlobRef` 成员，而不是"这条调用带字节"：解码器信任它就必须有成员可读。`ResourceRespecify` 的初始内容与 `ResourceFlushRange` 的字节不走 blobref，而以相邻的 `resource_subdata` 记录过线。
+- `kNeedsAck` 只表示这条调用的记录**可能**要 ack，由逐记录谓词决定（`MGPipeResourceRespecifyNeedsAck`，§8.3）。
+- `kReplySlot`：applier 返回 client 会据以动作的答案（清 level 脏标、闩参数）。flag 只导出一份 `kMGPipeCallFlags[]`（`generated/PipeWire.inc`），消费者不另抄。
+- 第五列 `WaitClass` 是值不是 opcode，生成为 `MGPipeWaitClassFor(op)`，是 `MGPipeBarriered`（§11.6）的静态一项；client 只在 run-ahead 武装（server 发布 `kCapRunAheadApply`）时据它决定等不等，否则走 lockstep：
+  - `kWaitReply`：答案不可推导且 client 要用，阻塞在 reply slot。与 `kReplySlot` 同在同缺，`gen_pipe.py` 拒绝不一致的行：不等的 reply 行会让 client 读一个没人填的 slot，没有 slot 的等待行会等一个没人发的答案。逐记录 route 谓词可再放宽（如 `MGPipeSubDataWantsItsReply`）。
+  - `kWaitPresent`：节奏由 encode 之前取的 present credit 决定，publish 之后不再等。
+  - `kWaitApplied`：client 停到记录 apply 完（今天只有 `applier_reset`）。
+  - `kWaitNone`：apply 不读 client 内存，发布即走。
+
 ### 3.3 能力位（`MGPCapBit`）
 
 `CallMask` 取代"槽位是否为 null"这一隐式能力探测；`MGPCaps` = `DynamicBackendParameters` + `CallMask` + 格式能力表与 renderer 字符串两个 blob，握手后快照、`MakeCurrent` / `InitCapabilities` 后按 generation 重发布。位包括 viewport array、fp64 顶点、`kCapResidentSubData`、XFB / query 家族、`kCapNeedsHostIndexBytes`、`kCapNeedsHostUboBytes`、`kCapBackendOwnsXfbCapture`、`kCapRunAheadApply`（`MGPipeRunAheadCapBitsFor`：Espryt 自 P5e、Magma 自 P5f 之后的 Magma run-ahead 起发布，后者契约 `docs/archive/contracts/CONTRACT-MAGMA-RUNAHEAD.md`）。**不存在"归属开关"（D-B7）**：multi-draw 分档与 restart 重写永远由 server 拥有，client 只在 caps 要求时提供索引字节。

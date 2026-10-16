@@ -5,67 +5,14 @@
 //   https://www.gnu.org/licenses/lgpl-3.0.txt
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
-//
-// D-K2's SUBSYSTEM DEPENDENCY RULE, IN ONE PLACE (P3b/P4b R-5).
-//
-// WHAT WAS WRONG. The rule "bit X requires bit Y" was stated in SIX places, and the audit found
-// two of them WRONG in the same direction:
-//
-//   * MG_Pipe/MGPipe.h's comment said "THREE OF THEM HAVE A DEPENDENCY" (there are six rows) and
-//     "The mirror pairs (10 without 11, 10 without 9, 7 without 10) are all fine" - but 10
-//     without 11 is exactly D-K2's FOURTH row, refused by the server at
-//     Managers.cpp ResolveTextureResourceSubsystemArm and withheld by the client at
-//     PipeFill.cpp's table. PipeFill.cpp says so out loud: "The brief's original
-//     'bit 10 without 11 is fine' is WITHDRAWN for P4a as built.";
-//   * MG_Backend/DirectGLES/Managers.h's header comment repeats both defects, in the header of
-//     the file that IMPLEMENTS the refusal.
-//
-// Neither wrong comment could fail anything, which is the whole argument for a table: the two
-// EXECUTABLE statements of the rule are in different link units with no shared header, and the
-// four PROSE statements drifted because nothing compared them to anything.
-//
-// WHAT THIS FILE IS. The rule, once, as rows. It is a preprocessor-only table like
-// MG_Remote/FatalFamilies.def - no generator reads it - and it carries pure bit constants, so
-// including it from MGPipe.h keeps check_include_closure.py's value-header rule satisfied.
-//
-// WHO READS IT. MGPipe.h turns it into kMGPipeSubsystemDependencies[],
-// MGPipeSubsystemRequires(), MGPipeSubsystemDependenciesAreSet() and
-// MGPipeSubsystemDependencyWhy(). The two executable statements of the rule read those, and as
-// of wave 2-D package D3 they read NOTHING ELSE - every hand-written copy is gone:
-//
-//   CLIENT dependency check   MG_Impl/Pipe/PipeFill.cpp's P4aFamilyDependencyBits /
-//                             P4aFamilyDependenciesAreSet (bits 9-12) and P5eFamilyIsLive
-//                             (bit 13). The local kMGPipeP4aFamilyDependencies[] is deleted;
-//                             what stays is the P4a-specific COVERAGE static_assert, because
-//                             that gate answers for four of these six families and a fifth P4a
-//                             family without a row here must still be a compile error.
-//   SERVER consumer gate      MG_Backend/DirectGLES/Managers.cpp's four
-//                             Resolve<Family>SubsystemArm() over PipeSubsystemDependencyMissing,
-//                             which now takes the FAMILY rather than a literal bit (bits 9-12),
-//                             plus ResolveVertexInputSubsystemArm (bit 8) and DirectGLES.cpp's
-//                             ResolveBufferBindingSubsystemArm (bit 13). The texture family's
-//                             two guarded calls collapse into one, and the refusal names
-//                             whichever required bit is actually missing instead of always the
-//                             first, because the missing set is computed from the row.
-//
-// The rows moved here one commit before the readers did (R-5 landed with PipeFill.cpp and
-// Managers.cpp belonging to packages in flight), and the anti-drift property never waited for
-// that: MG_Test/Backend/DirectGLES/SubsystemDepsTest.cpp drives BOTH readers at every
-// interesting mask and compares them against these rows - a change to either side alone reds.
-// It is now a comparison of two READERS rather than of two copies, which is strictly weaker as
-// a drift detector and strictly stronger as a guarantee; it is kept because the two sides still
-// fold in reasons of their own (the server's own family bit, D-C3's wire-caps refusal, the
-// client's consumer and wired conjuncts) and those can still disagree.
-//
-// THE ROWS ARE NOT TRANSITIVE, and that is load-bearing rather than an oversight: each reader
-// tests the required BITS against MOBILEGL_PIPE_PUSH alone, never the other family's liveness,
-// because Espryt's resolvers classify their arms from that mask alone. Making the rows
-// transitive here would make the two sides disagree at some mask, which is the failure the
-// table exists to prevent. PipeFill.cpp:1576-1581 argues this at length and
-// TextureEmitTest.cpp:1278-1283 pins it.
-//
-// THE MIRROR PAIRS THAT STAY FINE are stated in MGPipe.h beside the table rather than here,
-// because an absence is not a row.
+// The subsystem dependency rule ("bit X requires bit Y"), stated once as rows. Preprocessor
+// only (no generator reads it) and pure bit constants, so MGPipe.h may include it under
+// check_include_closure.py's value-header rule. MGPipe.h builds kMGPipeSubsystemDependencies[]
+// and the MGPipeSubsystem{Requires,DependenciesAreSet,DependencyWhy} helpers from it; the client
+// gate (MG_Impl/Pipe/PipeFill.cpp) and Espryt's Resolve<Family>SubsystemArm read only those, and
+// MG_Test/Backend/DirectGLES/SubsystemDepsTest.cpp checks both against the rows. Rows are not
+// transitive: each reader tests the required bits against MOBILEGL_PIPE_PUSH alone, as Espryt's
+// resolvers do. The bit pairs that are safe without a row are listed in MGPipe.h.
 
 // clang-format off
 

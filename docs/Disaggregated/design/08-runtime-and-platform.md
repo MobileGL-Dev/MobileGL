@@ -31,3 +31,29 @@
 
 - Linux / WSL / CI 永不开窗（`EGL_PLATFORM=surfaceless`）；Wayland 不支持。Windows / 桌面 client 在 TCP 终局下是真实形态（Windows 是第二批，开放问题 22）；macOS 不拆分；Windows 机器不是正确性门。
 - server 死：client 读到挂断 → **device-lost 闩**（GL 调用 no-op、`eglSwapBuffers` 返回 `EGL_CONTEXT_LOST`、reset status `GL_UNKNOWN_CONTEXT_RESET`）；`Session::Fail` 漏斗向对端发 `SessionFault` 帧命名家族（`FatalFamilies.def`）。闩之前创建的 context 永久丢失（`eglMakeCurrent` / `eglSwapBuffers` 返回 `EGL_CONTEXT_LOST`，`glGetError` 报一次 `GL_CONTEXT_LOST`，销毁时不往新 session 发任何记录）。**进程可恢复**（`MOBILEGL_IPC_RECOVER`，默认 1）：应用下一次 `eglCreateContext` / `eglCreate*Surface` / `eglInitialize` 拆掉丢失的 session、重新拨号得到新 session，client 侧描述旧 server 的缓存全部清空（发布闩、CSO/sampler 缓存、emitter 闩、create window、applier-reset 序号、persistent map），wire epoch 前进使旧 GLContext 一律视为丢失；surface 保留并在下次 make-current 时于新 session 重建（EGL 对 power-management 事件的语义），Wayland 窗口的 shared image 在新 session 重新分配。in-process server 与 `fd:` 对不可重拨，仍是永久丢失。`MOBILEGL_IPC_RESPAWN`（server 重启后全量重推）仍是具名拒绝。client 死：server 读到 EOF 立即销毁 context 并退出（supervisor 继续服务下一连接）。
+
+#### 15.3.1 Fatal 家族与 wire FatalCode
+
+内部 Fatal 家族（`MG_Pipe/FatalFamilies.def`）远多于 wire 上 `FatalCode` 的 7 个值，所以家族是内部枚举：对端只收到粗粒度的码，细粒度的词留在本地日志与 `SessionFault` 帧的 `family` 字符串里。码只回答「这是哪一类结束」：
+
+- `ProtocolCorruption`：无法正确执行的东西——畸形记录、未实现的 verb / surface、两个角色必须守住的不变式、不合契约的回复。对端读到的是「双方对协议的理解不一致」。
+- `RingOverrun`：共享环或事件通道溢出，是传输容量问题。
+- `SegmentMismatch`：共享段的尺寸放不下某个角色必须放进去的东西（尺寸错，不是一时满）。
+- `AbiMismatch`：两端的布局或协议版本不一致。
+- `ServerCrashed`：等待方归咎于对端的活性结束：排空未完成、apply 线程不在、server 拿不到必需的原生资源（`ResourceUnavailable`）、server 窗口被销毁（`ServerWindowLost`）、GPU 设备丢失（`BackendDeviceLost`，只闩住该 session）。拿不到资源不报 `SegmentMismatch`，那会把错归到共享段尺寸上；wire 上也没有「拿不到资源」的值，新增会改 `wireFingerprint`。
+- `DeviceLost`：只由 device-lost 闩设置，没有家族投影到它。
+
+### 15.4 共享图像（`shared_image`）
+
+server 分配并以 dma-buf 描述符导出的颜色缓冲，让一个 client 的帧不离开 GPU 内存就进入另一个 client 的纹理。一行记录（`MGPSharedImageOp`），每个操作都经 reply slot 以 `MGPSharedImageReply` 回答；server 交给 client 的描述符走 aux socket，先于 reply 到达；`ImageId` 由 server 铸造，server 生命期内不复用。`Damage` 是 GL 窗口坐标、左下原点的矩形，0 个 = 整个表面。
+
+| 操作 | 语义 |
+|---|---|
+| `Allocate` / `Release` | 新建 `Width×Height` 的 `Format` 图像，reply 给出 id，描述符经 aux socket 送达 / 会话放掉对 `ImageId` 的引用 |
+| `Import` | 认领 client 在 aux socket 上排队的描述符（`MGPSharedImageFdOffer` 带本记录的 seq）；须是本 server 导出的图像，尺寸与格式一致 |
+| `Present` | 当前 context 的默认帧缓冲按顶行在先拷进 `ImageId`（窗口帧成为 wl_buffer 的内容），只拷 `Damage`：client 按图像记录它自上次写入后缺的区域；GPU 拷完才回 reply |
+| `Attach` | 纹理 `Texture` 的存储变成 `ImageId`（`glEGLImageTargetTexture2DOES`），直到它下一次定义存储的 respecify |
+| `QueryBufferAge` | 在流中回答当前 draw surface 的 `EGL_BUFFER_AGE_EXT`（0 = 未知）；应用先声明绘制区域（`EGL_KHR_partial_update`）时 `Format = kMGPBufferAgeDamageRegionFollows` |
+| `SetDamageRegion` | `eglSetDamageRegionKHR`：本帧将画的区域 |
+| `Flush` | 往图像里渲染的会话（X server 的 glamor）的 `glFlush` / `glFinish`：自上个边界用过的图像按 flush 的 fence 发布为已写、已读（隐式同步），发布后回答 |
+| `NativeFence` | `EGL_ANDROID_native_fence_sync`：会话已提交工作完成时 signal 的 sync_file（写图像的会话同时做 `Flush` 的发布），经 aux socket 先于 reply 送达，`Format = kMGPNativeFenceFdFollows`；`Format = 0` 表示 server 给不出描述符，reply 发出时工作已完成 |

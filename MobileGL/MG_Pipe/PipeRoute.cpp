@@ -6,27 +6,14 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// The MONOLITH arm of R-17's routing: thirty-eight adapters that unpack a generated table
-// row's parameters and call the MGPipeApply* entry point the call site used to call directly.
-// Owner: package c1. See PipeRoute.h for why the arm exists and what R-17 actually cost.
-//
-// G2 IS THE WHOLE SPECIFICATION OF THIS FILE. Under monolith transport the thunks must reach
-// EXACTLY the code they reach today - so every adapter below is a parameter shuffle and
-// nothing else. There is no branch, no cache, no early return and no logging on any of them,
-// because each of those is a way for `MOBILEGL_TRANSPORT=monolith` to stop being the control
-// arm that the split arm is measured against. The one thing an adapter may do beyond calling
-// through is POST A REPLY, and only the five rows whose call site consumes a value do that.
-//
-// WHO CALLS THE INSTALL, AND WHY IT IS NOT IN THIS FILE. `gMGPipeScreen` and `gMGPipeContext`
-// are inline variables with CONSTANT initialisation, so they are zero - every entry null,
-// which is the pre-migration state - before any dynamic initialiser runs. The installer is
-// driven from an inline variable in PipeRoute.h rather than from a static initialiser here,
-// and the comment beside `detail::gMonolithTablesInstalled` says why: a static initialiser in
-// THIS file is only in the program if THIS object file is in the link, and over a static
-// archive it was not. That makes "the tables are installed" an invariant rather than a step
-// someone can forget, and it is why no MGP_* thunk needs a null check - which matters, because
-// a null check on a table slot is precisely the shape CONTRACT-P5 §7 spends the 41 call sites
-// killing.
+// The in-process arm of the call routing: adapters that unpack a generated table row's
+// parameters and call the matching MGPipeApply* entry point. An adapter is a parameter shuffle,
+// with no cache, logging or logic of its own, so the in-process arm stays the reference the split
+// arm is measured against. Three kinds of row do one thing more: rows whose call site waits for
+// an answer post a reply, the create_shader_state escape builds the record's archive, and the
+// retired set_residual_value_state row aborts. The tables are installed before main by
+// detail::gMonolithTablesInstalled in PipeRoute.h, not by a static initialiser here (a
+// static-archive link can drop this object), so no MGP_* thunk needs a null check.
 
 #include "PipeRoute.h"
 

@@ -12,43 +12,12 @@
 #include "MGPipeHandles.h"
 #include "MGPipeTypes.h"
 
-// The backend -> frontend reverse channel, named (plan B section 7.1).
-//
-// Today this traffic is 95 call sites across 17 methods poked directly into frontend
-// objects. An in-process driver interface has no vocabulary for shadow writeback, GPU-write notification or
-// default-framebuffer geometry, because in such a design the state tracker and the driver share an
-// address space. Naming them as callbacks is the deliberate deviation (D8).
-//
-// SEVEN, NOT THE TEN PLAN B WROTE. Three went, each because nothing produces it.
-//
-// OnTexturePullRequest, the server asking the client to re-send a texture's levels after
-// re-minting it (with op 50 ResourceSubDataComplete as the forward terminator). P9 W2 measured
-// that no re-mint needs the client: Espryt's server reads the GPU level back and replays its own
-// staged store, Magma copies GPU to GPU, on every arm (docs/archive/notes/p9/W2-REMINT.md). So the callback
-// went; op 50 stays in the opcode table as a retired row (opcodes only ever grow) and its decoder
-// still declines it.
-//
-// OnXfbScatterReady went with the
-// design it belonged to: plan B put the XFB scatter on the CLIENT (the server would hand
-// back the packed scratch and the client would run the patch loop over its own shadow), so
-// there had to be a callback that told the client the layout. P5c/P5f went the other way -
-// the server reads its OWN staged shadow, scatters there and returns the reconciled range
-// through OnBufferWriteback, which needs no second callback - and the declaration was left
-// behind with zero producers, zero consumers and no EventKind of its own. Deleted here
-// (P3b/P4b espryt D1 slice 3) rather than carried: an entry that cannot fire is one every
-// reader of this file has to rule out by hand, and the size assertion below made it look
-// load-bearing.
-//
-// And OnLog, deleted in P9 W3 for the same reason: zero producers, zero consumers, no
-// EventKind. Plan B pictured the server's log lines as reverse-channel records; they never
-// were. They travel the CONTROL plane as LogLine frames (protocol.fbs), written by the server's
-// logger through its log forward (MG_Remote/Transport/LogForward.h) - which is also where the
-// severity policy this entry's comment promised ("<= WARN lossy, >= ERROR lossless and rate
-// limited") now lives, on the level LogLine has always carried.
-//
-// Installed at context creation. In a monolith these are direct calls; under split they are
-// records on the reverse channel, and their ORDER is a correctness requirement rather than
-// an optimization (section 7.4).
+// The backend -> frontend reverse channel as named callbacks (ARCHITECTURE.md §8.1): shadow
+// writeback, GPU-write notification, surface geometry and the like, which an in-process driver
+// interface has no names for. Installed at context creation; direct calls in a monolith,
+// records on the reverse channel under split, where their order relative to the command stream
+// is a correctness requirement (§8.2). Server log lines travel the control plane as LogLine
+// frames (MG_Remote/Transport/LogForward.h), not this channel.
 namespace MobileGL::MG_Pipe {
     struct MGPipeCallbacks {
         // A driver-detected GL error that only the server could have seen. The text is
@@ -76,22 +45,12 @@ namespace MobileGL::MG_Pipe {
     // Null-initialized: a backend that installs nothing sends nothing.
     inline MGPipeCallbacks gMGPipeCallbacks{};
 
-    // HOW MUCH OF ITSELF ONE REVERSE-CHANNEL RECORD MAY BE, and it is not a tuning knob: a
-    // producer that ignores it kills the server process.
-    //
-    // OnBufferWriteback's bytes travel INLINE in one SEG_EVENT record, and a ring producer
-    // refuses any record above Capacity()/2 OUTRIGHT (Transport/Ring.h) - not "when full", but
-    // always, because above half a capacity a record is placeable at some head offsets and not
-    // at others, so waiting for room would be a hang. The server's answer to a refusal is
-    // Fatal{EventRingOverflow}, and SEG_EVENT defaults to 256 KiB, so ANY producer that posts a
-    // whole range wider than ~128 KiB is a server that dies on a large enough buffer.
-    //
-    // THE PRODUCERS ARE IN MG_Backend, which cannot reach MG_Remote::Client's
-    // BufferWritebackSliceBytes (that one is the CLIENT-linkage answer to the same question,
-    // for requests going the other way) and must not reach ServerSession either. So the
-    // transport publishes the one number through this hook, exactly as it publishes segment
-    // resolution through gMGPipeSegmentResolver: the SERVER role installs it at Accept and
-    // releases it at Close, and a monolith build leaves it null.
+    // Size of the SEG_EVENT ring, which bounds one reverse-channel record. OnBufferWriteback
+    // carries its bytes inline, and the ring producer always refuses a record above half its
+    // capacity (Transport/Ring.h) with Fatal{EventRingOverflow}, so producers slice wide ranges
+    // (MGPipeBufferWritebackSliceBytes). The producers live in MG_Backend and cannot reach the
+    // transport, so the server role installs this query at Accept and clears it at Close; a
+    // monolith build leaves it null.
     using MGPipeEventRingCapacityQuery = Uint64 (*)();
     inline MGPipeEventRingCapacityQuery gMGPipeEventRingCapacityBytes = nullptr;
 

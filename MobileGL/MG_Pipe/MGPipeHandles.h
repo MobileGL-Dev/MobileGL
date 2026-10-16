@@ -80,22 +80,14 @@ namespace MobileGL::MG_Pipe {
     // Framebuffer), so a real allocation starts at 1.
     inline constexpr Uint32 kMGPipeFirstAllocatableSlot = 1;
 
-    // ShaderCso slot space. The top 1/16 of it is reserved for PROGRAM PIPELINE COMPOSITES
-    // (section 5.6.3): a composite is minted client-side out of the stage programs bound to
-    // a pipeline object, and the server never learns it is a composite - it is just another
-    // ShaderCso. Reserving a band rather than a flag keeps the composite resolver's
-    // lifetime bookkeeping out of the ordinary program slot allocator.
-    //
-    // THE ONE ENTRY POINT INTO THE BAND is MGPipeSlotAllocator::AllocateComposite(lifetimeId)
-    // (MG_Impl/Pipe/SlotAllocator.h, P4a D-H7). MGPipeSlotAllocator::Allocate REFUSES the band
-    // for kind ShaderCso, which is what makes "an ordinary program can never be handed a
-    // composite slot" a property of the allocator rather than of its callers; the band carries
-    // its own exhaustion assert, so exhausting it is a named Fatal rather than silent slot
-    // theft from ordinary programs. A composite's slot has TWO independent release paths - the
-    // pipeline cache's LRU eviction and the composite ProgramObject's own destructor - and
-    // both go through one client-side death helper (MG_Pipe/PipeMutation.h's
-    // MGPipeEmitShaderCsoDestroyAndFree), whose second call is a proven no-op because Free
-    // refuses a slot that is not live at that generation.
+    // ShaderCso slot space. The top 1/16 is reserved for program pipeline composites
+    // (ARCHITECTURE.md §5.6): a composite is minted client-side from a pipeline object's stage
+    // programs and is just another ShaderCso to the server. A band rather than a flag keeps the
+    // composite resolver's lifetime bookkeeping out of the ordinary program slot allocator. The
+    // only way in is MGPipeSlotAllocator::AllocateComposite (MG_Impl/Pipe/SlotAllocator.h);
+    // Allocate refuses the band for ShaderCso, and the band has its own exhaustion check. A
+    // composite slot has two release paths (pipeline cache LRU eviction, the composite
+    // ProgramObject's destructor), both through MGPipeEmitShaderCsoDestroyAndFree (idempotent).
     inline constexpr Uint32 kMGPipeShaderCsoSlotLimit = 1u << 20;
     inline constexpr Uint32 kMGPipeShaderCsoCompositeSlotBase =
         kMGPipeShaderCsoSlotLimit - (kMGPipeShaderCsoSlotLimit >> 4);

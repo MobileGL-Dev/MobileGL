@@ -9,23 +9,13 @@
 #pragma once
 #ifndef MOBILEGL_MG_PIPE_MUTATION_H // belt and braces: reachable as <MG_Pipe/..> and <..>
 #define MOBILEGL_MG_PIPE_MUTATION_H
-// Push-on-mutation (P1 lane finding F2). MGP_FILL copies a verb's may-read set out of the
-// live GLContext at the verb boundary; the backend then reads that copy for the whole verb.
-// A backend that WRITES a frontend object inside its own verb - Magma synthesising a
-// fallback texture for an unbound sampler, materialising a queued clear, or overriding a
-// sampler's filter - moves a value the boundary already copied, and every read after that
-// point sees a block that no longer equals the live context. That is a real divergence, not
-// a harness artefact: the pull build reads the moved value and the push build does not.
-//
-// The frontend mutator that moves such a value spells MGP_NOTE_MUTATION(Field) right where
-// it moves it. The notice refreshes that ONE field in the pushed block when the field
-// belongs to the verb currently in flight, so "the pushed block equals the live context at
-// every read" stays literally true and the push build keeps pull semantics. It refreshes
-// the value only and never the poison stamp, so a withheld stamp (MOBILEGL_PIPE_POISON_OMIT,
-// negative control B) stays withheld.
-//
-// In the pull build the macro is ((void)0) and this header includes nothing, so the pull
-// build is byte-identical to a tree without it.
+// Frontend mutation notices. The verb fill (MG_Impl/Pipe/PipeFill.cpp) copies a verb's may-read
+// set out of the live GLContext at the verb boundary, and the backend reads that copy for the
+// whole verb. A frontend value written inside the verb (Magma synthesising a fallback texture,
+// materialising a queued clear, overriding a sampler's filter) would leave the copy stale, so
+// the mutator calls MGP_NOTE_MUTATION(Field) where it moves the value. The notice refreshes
+// that one field when it belongs to the verb in flight. It never touches the poison stamp, so a
+// stamp withheld by MOBILEGL_PIPE_POISON_OMIT stays withheld.
 #include <MG_Pipe/MGPipe.h>
 namespace MobileGL::MG_Pipe {
     // MG_Impl/Pipe/PipeFill.cpp (the client side, the only place that may spell pGLContext).
@@ -33,25 +23,14 @@ namespace MobileGL::MG_Pipe {
     // class's may-read mask; a forwarded (sticky) field has no storage and is never copied.
     void MGPipeNoteFrontendMutation(MGPipeInputField field);
 
-    // ---- the aggregate generations (P2 brief D4, ARCHITECTURE.md 5.2) ----
+    // ---- aggregate generations (ARCHITECTURE.md §5.2) ----
     //
-    // MGP_NOTE_MUTATION answers "a backend moved a frontend value INSIDE its own verb".
-    // MGP_NOTE_AGGREGATE answers a different question, which is why it is a second macro
-    // and not an overload: "did ANY object of this class move since the last time the
-    // tracker looked", collapsed onto one monotonic Uint64 per class so a per-verb dirty
-    // walk is a handful of compares rather than a scan over 32 attributes, 16 attachments,
-    // 32 texture units and 84 binding points.
-    //
-    // The counters are members of the owning MG_State container, all guarded by
-    // MOBILEGL_PIPE_PUSH so the pull build's state objects do not change size (G1). The
-    // bump points sit on OBJECTS, which have no back-pointer to their state, so the macro
-    // goes through a free function that finds the live GLContext - the same shape, and for
-    // the same reason, as MGP_NOTE_MUTATION (MG_Impl/Pipe/PipeFill.cpp). It costs a global
-    // load on a path that has just written object state.
-    //
-    // Monotonic and never reset: the tracker widens and compares, it never subtracts.
-    // Over-firing is free (one extra re-push); under-firing renders stale, which is why
-    // every counter here is deliberately COARSER than the state it guards.
+    // MGP_NOTE_AGGREGATE answers "did any object of this class move since the tracker last
+    // looked", one monotonic Uint64 per class, so the per-verb dirty walk is a few compares
+    // instead of a scan over attributes, attachments, texture units and binding points. The
+    // counters live in the owning MG_State container; objects have no back-pointer to it, so the
+    // note finds the live GLContext through a free function. Never reset. Over-firing costs one
+    // re-push and under-firing renders stale, so each counter is coarser than the state it guards.
     enum class MGPipeAggregate : Uint32 {
         // VertexArrayState: any VAO attribute format / buffer / enable moved.
         VaoAttribute = 0,
@@ -153,40 +132,14 @@ namespace MobileGL::MG_Pipe {
     // is asked rather than assumed.
     Bool MGPipeEmitVertexElementsDestroyAndFree(Uint64 lifetimeId);
 
-    // ---- P4a: ONE CLIENT-SIDE DEATH HELPER PER KIND P4a MINTS (brief D-I1) ----
+    // ---- client-side death helpers, one per kind the client mints ----
     //
-    // BACKEND-NEUTRAL FROM DAY ONE, and this is the P3a final-review lesson taken forward
-    // rather than repeated. Before it, the only thing that ever returned a VertexElementsCso
-    // slot was DirectGLES' StateObjectDeathOps table; under a backend that installs none -
-    // DirectVulkan/Magma, which keeps its own age-reclaimed identity table on purpose - every
-    // VAO ever created held its slot and its applier record for the life of the process, and
-    // past 65536 slots every create became a permanent Fatal{ProtocolCorruption}. P4a mints
-    // SIX kinds, so the rule is stated once and obeyed six times: whatever mints a handle owns
-    // the death of that handle, the client mints all six, and a backend death notice is a
-    // redundant SECOND path that must be idempotent - which it is, because it resolves through
-    // the same lifetimeId -> slot map these free, and MGPipeSlotAllocator::Free refuses a slot
-    // that is not live at that generation.
-    //
-    // THE ORDER INSIDE EACH IS FIXED AND IS NOT A PACKAGE'S CHOICE:
-    //   1. emit the wire delete FIRST - it drops the applier's record while the record still
-    //      exists, so a recycled slot cannot inherit a field;
-    //   2. raise NotifyStateObjectDestroyed SECOND - it resolves the handle through the
-    //      allocator, and a backend told after the Free could no longer find its twin, which
-    //      moves the leak from the client to the driver object;
-    //   3. free the slot LAST, and a double free on a stale generation is a proven no-op
-    //      because Free bumps no generation (the bump rides the next handout).
-    //
-    // ALL SIX TAKE THE LIFETIME ID rather than the object, for MGPipeEmitVertexElementsDestroy
-    // AndFree's reason: they run from a destructor, where the last SharedPtr has already
-    // dropped, and the lifetime id is what the slot allocator resolves the handle from. It is
-    // also what keeps this header a declaration-only coupling - no frontend class needs
-    // forward-declaring for any of them.
-    //
-    // Each returns whether its wire delete actually went out, which is the LATCH taken at the
-    // object's create and not a second reading of the subsystem predicate: an object born
-    // while a subsystem bit was clear and destroyed after it was set would otherwise free its
-    // slot with the applier's record still Live, on a slot about to be handed out again. The
-    // legacy path runs only when the answer is false.
+    // Whoever mints a handle owns its death, so these are backend-neutral; a backend death
+    // notice is a redundant, idempotent second path (MGPipeSlotAllocator::Free refuses a slot not
+    // live at that generation). Fixed order: emit the wire delete while the applier record
+    // exists, then NotifyStateObjectDestroyed while the allocator still resolves the handle, then
+    // free the slot. All take the lifetime id because they run from destructors. Each returns
+    // whether its delete went out, decided by the publication latch taken at create.
 
     // ResourceDestroy, and then the SamplerViewCso minted off this same lifetime id (P4a
     // D-F2: one sampler view per ITextureObject). Called from TextureObjectBase's VIRTUAL
@@ -214,33 +167,14 @@ namespace MobileGL::MG_Pipe {
     Bool MGPipeEmitShaderCsoDestroyAndFree(Uint64 lifetimeId);
 
 #if MOBILEGL_BUILD_DISAGGREGATED
-    // ---- THE DEFERRED DESTROY QUEUE (the MOBILEGL_IPC_BATCH_WAITS class) ----
+    // ---- deferred destroy queue ----
     //
-    // Every helper above speaks on the CLIENT's behalf: it resolves the handle through the
-    // client allocator, emits a client wire record and frees a client slot - so it may only
-    // ever run on the GL thread. The per-record barrier made that free: the client waited
-    // out every apply, so a server-side SharedPtr (an applier's endpoint local, a
-    // gPipeInputs entry) could never be an object's last owner. Batched waits remove the
-    // guarantee - the client races ahead, drops its own references at teardown, and the
-    // apply thread's local CopyImageEndpoint becomes a texture's last owner, whose
-    // destructor then touches the client allocator from the server role
-    // (Fatal{RoleViolation, "MGPipeSlots"}). The helpers therefore START with
-    // MGPipeDeferDestroyAndFreeIfOnApplyThread: on the apply thread it enqueues the
-    // (kind, lifetime id) pair - the only thing a death announcement needs - and the GL
-    // thread replays the helper at the next verb hook (EmitTables' BeforeDrawVerb /
-    // BeforeReadOnlyVerb) through MGPipeDrainDeferredDestroys. A delayed free is safe:
-    // slots are plentiful, reuse is delayed rather than corrupted, and the replay runs the
-    // helper itself, so every helper's own three-step order is untouched.
-    // P5e (ra), CONTRACT-P5E §2.7 / ruling 13 (ID-91): THE QUEUE STAYS LIVE, AND AN
-    // UNBARRIERED ENQUEUE IS A FINDING. After the family packages land, an unbarriered apply
-    // holds no frontend SharedPtr at all - every object is resolved from a handle - so the
-    // only apply thread that can still be a last owner is one inside a BARRIERED record (a
-    // fill's O-class rows, XFB's pinned targets). An enqueue from an unbarriered record
-    // therefore means some site still pins a frontend object across a record, which is a
-    // migration this phase believes it finished: it logs once with the kind, and is Fatal
-    // under MOBILEGL_IPC_STRICT_ERRORS so the strict lane owns the red. The queue itself is
-    // NOT removed - it is the belt that keeps the barriered case from corrupting the
-    // allocator while the finding is being read.
+    // The helpers above act for the client, so they run only on the GL thread. When the apply
+    // thread drops an object's last reference, the helper its destructor calls starts with
+    // MGPipeDeferDestroyAndFreeIfOnApplyThread, which queues (kind, lifetime id); the GL thread
+    // replays the helper at its next verb hook (MGPipeDrainDeferredDestroys), so only slot reuse
+    // is delayed. Only a barriered record should hold such a reference: an enqueue from an
+    // unbarriered one logs once, and is Fatal under MOBILEGL_IPC_STRICT_ERRORS.
     Bool MGPipeDeferDestroyAndFreeIfOnApplyThread(MGPipeKind kind, Uint64 lifetimeId);
     void MGPipeDrainDeferredDestroys();
 
@@ -305,43 +239,13 @@ namespace MobileGL::MG_Pipe {
     void* MGPipeEmitMapPersistent(MG_State::GLState::BufferObject& buffer);
 
     // ================================================================================
-    // P4a: THE BIRTH HALF, one hook per client path MG_State owns (D-C .. D-I)
+    // Birth hooks, one per client path MG_State owns
     // ================================================================================
     //
-    // The death helpers above are half a lifetime. The other half is emitted from MG_State
-    // too - a texture's create from its constructor, a renderbuffer's respecify from its
-    // storage mutators, a texture's params from glTexParameter*, a sampler CSO from the
-    // sampler object, a shader CSO from the program - because that is where the event
-    // happens, exactly as P3a's buffer family emits from BufferObject's own dispatchers
-    // (ARCHITECTURE.md 5.1 names those as the ONE exception to push-at-validate). Only the
-    // texture sub-data DRAIN runs at the validate point, and even it is fed from here: the
-    // drain list is appended on a level's first dirty mark.
-    //
-    // WHY THEY ARE DECLARED HERE. This header is the one door MG_State has into the client
-    // (check_include_closure.py's mutation-header probe pins it: reaching
-    // MG_Impl/Pipe/*Emit.h from a frontend mutator would pull the client's emitters into the
-    // state machine that calls them). So a hook a frontend mutator calls is DECLARED here and
-    // DEFINED in MG_Impl/Pipe/PipeFill.cpp, which is package A's for the whole phase - the
-    // same "declaration here, definition there" split MGPipeMintResourceHandle and
-    // MGPipeEmitResourceCreate use, and the reason no file is touched twice.
-    //
-    // WHAT EACH BODY DOES, and the division is fixed:
-    //   * PipeFill.cpp owns the GATE - the subsystem bit in MOBILEGL_PIPE_PUSH *and* the
-    //     family's own kMGPipeWired*Subsystem constant, the same pair the validate point's
-    //     `wants()` applies to every emission - and the four MINTS, which are pure allocator
-    //     work and need no family knowledge;
-    //   * the FAMILY EMITTER (MG_Impl/Pipe/<Family>Emit.h, owned by package B or C) owns the
-    //     payload build, the handle rule for its own kind and the PUBLICATION LATCH below.
-    //     PipeFill.cpp forwards to it through an entry point that is compiled only while that
-    //     family's wired constant is non-zero, so this tree links against the STUB emitters
-    //     and against the finished ones with no edit to PipeFill.cpp - and a family that sets
-    //     its constant without providing the entry point is a COMPILE ERROR in its own commit
-    //     rather than a surprise at the merge. The entry point each hook forwards to is named
-    //     beside it and spelled out in PipeFill.cpp's contract block.
-    //
-    // NOTHING CALLS ANY OF THEM AT THE CONTRACT COMMIT. B and C add the call sites in the
-    // five MG_State directories C.7 gives them, in the SAME commit that gives the emitter its
-    // body - by EDITING an existing constructor/mutator body, never by adding one (G1).
+    // Emitted from MG_State where the event happens, like the buffer family (ARCHITECTURE.md
+    // §5.1). Declared here because this header is MG_State's one door into the client
+    // (check_include_closure.py); PipeFill.cpp owns the family gate and the mints and forwards to
+    // the family emitter (MG_Impl/Pipe/<Family>Emit.h), which owns the payload and the latch.
 
     // ---- the publication latch (D-I1), and it is the ONE answer both halves read ----
     //
@@ -381,22 +285,14 @@ namespace MobileGL::MG_Pipe {
     // door into it, and it is not a frontend construction event.
     void MGPipeMintShaderCsoHandle(MG_State::GLState::ProgramObject& program);
 
-    // ---- textures and renderbuffers: MG_Impl/Pipe/TextureEmit.h, package B ----
+    // ---- textures and renderbuffers: MG_Impl/Pipe/TextureEmit.h ----
     //
-    // resource_create from ITextureObject's constructor and RenderbufferObject's;
-    // resource_respecify from every storage-defining entry point, including
-    // RenderbufferObject::{SetInternalFormat, AllocateStorage, SetSamples}, which publish
-    // nothing at all today (D-D2); set_texture_params from the parameter mutators, which is
-    // where the READ-attachment-only gap D-E3 closes.
-    //
-    // Entry points MGPipeTextureEmitter must provide, all taking the frontend object by
-    // reference and returning void:
-    //   EmitResourceCreate(ITextureObject&)
-    //   EmitResourceRespecify(ITextureObject&, MGPipeTextureRespecifyScope, Uint32 uploadTarget,
-    //                         Uint32 level)
-    //   EmitTextureParams(ITextureObject&)
-    //   NoteLevelDirty(ITextureObject& storageOwner, Uint32 uploadTarget, Uint32 level)
-    //   EmitRenderbufferCreate(RenderbufferObject&) / EmitRenderbufferRespecify(RenderbufferObject&)
+    // resource_create from the ITextureObject and RenderbufferObject constructors,
+    // resource_respecify from every storage-defining entry point (renderbuffer storage included),
+    // set_texture_params from the parameter mutators. MGPipeTextureEmitter provides, as void:
+    //   EmitResourceCreate, EmitResourceRespecify(.., scope, uploadTarget, level),
+    //   EmitTextureParams, NoteLevelDirty(storageOwner, uploadTarget, level),
+    //   EmitRenderbufferCreate, EmitRenderbufferRespecify. Each takes the object by reference.
     void MGPipeEmitTextureResourceCreate(MG_State::GLState::ITextureObject& texture);
 
     // WHICH STORAGE A TEXTURE RESPECIFY REPLACES (P4a final review C-1). The applier scopes

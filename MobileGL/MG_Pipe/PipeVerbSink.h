@@ -42,25 +42,14 @@ namespace MobileGL::MG_Pipe {
         virtual void PostReply(Uint64 seq, Int32 status, const void* bytes, Uint64 size) = 0;
     };
 
-    // ---- the verb sink: the five rows with no MGPipeApply* to delegate to ---------------
+    // ---- the verb sink: the rows with no MGPipeApply* entry point to delegate to ------------
     //
-    // The decoder owns NO semantics, so every arm ends in an existing MGPipeApply* free
-    // function - except five, and they are exactly contract §7's class B: Clear (57), Blit
-    // (56), ReadPixels (58), DrawVbo (59) and Present (67). Those are GLFunctionsTable VERBS.
-    // MG_Pipe has no applier for any of them (the 37 MGPipeApply* entry points are the object
-    // and state families), so for these five P5 writes the first consumer as well as the first
-    // producer - and the consumer is the SERVER'S backend call, which is v1's, not the codec's.
-    //
-    // So the codec does what it can prove and stops there: it bounds-checks, cross-checks the
-    // tail, resolves the segments and hands over a DECODED, VALIDATED argument list. With no
-    // sink installed those five arms return false ("this build does not implement it"), which
-    // is the same answer the other unimplemented rows give.
-    //
-    // SetShaderBuffers (38) and SetStreamOutputTargets (39) also have no applier entry point,
-    // and they deliberately get NO sink method: both are off P5's reduced path (BRIEF §4's
-    // exclusion list), so inventing a consumer for them would be building a semantics nobody
-    // can test this phase. Their arms validate both tails - which is the part a later phase
-    // must not have to re-derive - and return false.
+    // The decoder owns no semantics. A row with an applier entry point ends in its MGPipeApply*
+    // function; the GLFunctionsTable verbs, fences, queries and control records are bounds-checked,
+    // tail-checked and segment-resolved, then handed to the sink below as a validated argument
+    // list. With no sink installed those arms return false ("this build does not implement it"),
+    // as does every row with neither an entry point nor a sink method, once validated
+    // (SetStreamOutputTargets checks both its tails first).
     struct MGPipeQueryResultReply {
         Uint64 Value = 0;
         Uint32 Produced = 0;
@@ -139,22 +128,11 @@ namespace MobileGL::MG_Pipe {
             return false;
         }
 
-        // ---- P5b (docs/archive/contracts/CONTRACT-P5B.md): the rows the four migration packages consume.
+        // ---- the remaining verbs with no MGPipeApply* entry point: dispatch, barriers, copies,
+        // image and storage-block binds, transform feedback, patch parameter and mipmaps.
         //
-        // Every one below is a GLFunctionsTable verb with NO MGPipeApply* entry point - the
-        // census's correction - so, exactly like the five above, the codec validates and hands
-        // over and the SERVER'S sink (Server/PipeApplier.cpp's ServerVerbSink) makes the
-        // backend call. The default bodies return false ("this build does not implement it");
-        // ServerVerbSink's stubs die Fatal{UnmigratedVerb, "<GL slot>"} by name until the owning
-        // package lands the real body, so a client that flips a slot ahead of its server half
-        // aborts with the same line the census greps rather than rendering nothing.
-        //
-        //   i1  OnLaunchGrid, OnMemoryBarrier, OnResourceCopyRegion, OnBindShaderImage,
-        //       OnSetStorageBlockBinding
-        //   t2  OnBeginStreamOutput, OnEndStreamOutput, OnPauseStreamOutput,
-        //       OnResumeStreamOutput, OnBindStreamOutput, OnPatchParameter
-        //   f1  OnGenerateMipmap, OnCopyFramebufferToTexture (and OnClear's non-Whole kinds)
-        //   d1  OnDrawVbo's indirect tail and user-index span (above)
+        // Same hand-over as the rows above: the codec validates the record, and the backend call is
+        // made by MG_Record::RecordVerbSink, the base of the server's ServerVerbSink.
         virtual Bool OnLaunchGrid(const MGPGridInfo& grid) {
             (void)grid;
             return false;

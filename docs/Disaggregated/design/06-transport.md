@@ -41,6 +41,16 @@ Phase 1（今天）：GL 调用时刻把字节拷进 stage slot，slot 到 apply
 - **等待规则由 `WaitClass` 列决定（P5e）**：`kWaitReply` / `kWaitPresent` / `kWaitApplied` / `kWaitNone`；run-ahead 武装时 `kWaitNone` 发布即返回。barriered 谓词（`MGPipeBarriered`）client 与 server 用同一个函数、同一份数据算。
 - 强制等待点：`MapBuffer(READ)` / `GetBufferSubData` 源走 `SyncGpuWrites`；`glFinish` = 等 `appliedSeq` 追上再排空反向通道；每个 `Server*` EGL forwarder 之前等一次。`glGetError` 最多晚一个 present credit。
 
+#### 11.6.1 barriered 谓词的条款
+
+`MGPipeBarriered(op, payload, applierState)`（`MG_Pipe/PipeApply.h`）由 server 的 `ApplyOne` 计算，决定这条记录能否读 client 内存；client 不调用它，而是在发布前对同样的条款求值（`ClientSession` 的等待规则读 `WaitClass` 列，`PipeFill.cpp` 的 `ClientVerbIsBarriered` 另判 XFB）。两侧答案一旦不同，失败是静默的（client 继续跑，server 读到已经变了的值），所以条款只读线上可见的数据：静态 `WaitClass` 列、记录自身的 payload、ring 上更早的记录写进 applier 的状态。条款只有三条：
+
+1. `WaitClass != kWaitNone`；
+2. 打开的 XFB span 内的 `kCtxVerb`（XFB 保持 lockstep）；
+3. 带 `kDrawClientArrays` 的 `draw_vbo`：run-ahead 下 client 在发布前就拒绝它，此条只为 lockstep 臂而在，使谓词完备。
+
+新条款必须在同一次改动里同时加进这个函数与 client 侧的对应判断，不能只在一侧加。评判候选条款要问**哪条臂为它付代价**，而不是它让哪条车道变绿：曾为让 Espryt 间接 multi-draw 档读 `GL_DRAW_INDIRECT_BUFFER` 绑定合法化，把所有普通 multi-draw 升级为 barriered，于是默认档的每次 `glMultiDraw*` 都多一次会合，而这次读只发生在两个可选档里；最终改由做绑定的一侧按句柄回答（`MultiDraw.cpp` 的 `BoundDrawIndirectBufferId`），撤回了该条款。
+
 ### 11.7 事件回传与溢出
 
 client 在 `glGetError`、query / sync 查询、`eglSwapBuffers`、buffer 回读与每轮等待循环中排空 `SEG_EVENT`。日志有损；语义事件无损：环满时 server 置 `eventRingFull`、在记录边界停 apply、敲 client，client 排空后清标志并敲回（两半都在，才不死锁）。run-ahead 下 producer 阻塞等排空，整笔预算 `MOBILEGL_IPC_EVENT_WAIT_MS`；client 不排空 / 已走 / 会话停止 → `ReverseChannelForfeit{…}` 弃投并闩住（Ph PH-6），而不是 `Fatal` 打掉 server。不发布 `kCapRunAheadApply` 的 server（lockstep 臂）保留 P5c 的 Fatal。

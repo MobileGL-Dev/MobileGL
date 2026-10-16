@@ -6,169 +6,13 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// The dirty-surface mapping (ARCHITECTURE.md 5.2 corollary 4, P2 brief D16).
-//
-// MGPipe replaces "the backend rediscovers what changed" with "the frontend says what
-// changed", which only works if EVERY frontend mutation a backend can observe has an answer
-// to "what publishes this". The failure mode is silent and one-directional: a mutation that
-// forgets to publish renders stale, and no purity gate can see it.
-//
-// So the surface is enumerated MECHANICALLY. scripts/gen_pipe_dirty_surface.py scans
-// MG_Impl/GLImpl AND MG_State/GLState for every pGLContext-> mutator call and every
-// MGP_NOTE_MUTATION site, and, with --check, fails if a scanned mutator has no row here or a
-// row here names a mutator the scan no longer finds. Both directions, so a deleted mutator
-// cannot leave a stale row behind either.
-//
-// THE SECOND ROOT AND THE SECOND MECHANISM ARE P3a's, and they were not cosmetic: reading
-// MG_State/GLState found BumpSamplingResolutionGeneration, a mutator with no row at all
-// whose every caller lives in that directory, and reading MGP_NOTE_MUTATION brought
-// NoteUnitTouched - which no `pGLContext->` pattern can see, because every texture and
-// sampler bind routes through it rather than calling it through the context - inside the
-// gate. A notice site carries a FIELD name, so the mutator a row names is the ENCLOSING
-// function.
-//
-// ANSWERS. A row lists EVERY publisher that fires on EVERY path through that mutator,
-// and only those; several are joined with '|'. A publisher that fires on some paths but
-// not all must not appear, because a shutter built from this file would then UNDER-fire,
-// and ARCHITECTURE.md 13.2 names under-firing as the dangerous direction. The one row that
-// carries a bit which fires on only some paths says so in its answer - kPulledPartialShutter
-// joined with that bit - because the alternative, dropping the bit, tells a reader of this
-// file that a bit P2 already emits a call for has no shutter at all.
-//
-// "EVERY PATH" MEANS EVERY PATH THAT MUTATES. A setter that returns early because the value
-// did not change publishes nothing and needs to publish nothing - there is no mutation to
-// carry - so a redundant-write guard (SetColorMask's `if (changed) BumpVersions();`, the
-// BitwiseEqual guards on the patch levels) does not make its publisher conditional in the
-// sense this rule cares about. A publisher reached on only SOME of the paths that DO mutate
-// - SetCapability's ClipDistance arms, SetStencilFunc's reference-only call - is the thing
-// that must not be named.
-//
-// EVERY BIT ANSWER IN THIS FILE IS DERIVED AND CHECKED, in two families and one
-// direction. The RenderState family (45 rows) is checked both ways against RenderState.cpp,
-// below. Every other NEW_* answer is checked against the shutter Tracker.h builds for that
-// bit: gen_pipe_dirty_surface.py resolves what the shutter READS and what each mutator
-// transitively WRITES (through MGP_NOTE_AGGREGATE too, whose hop it reads out of
-// MGPipeNoteAggregate's own switch, and through the function-like macros of MG_State, which
-// it EXPANDS - sixteen of RenderState.cpp's writes exist only after the preprocessor has
-// pasted them together) to the SAME two-level token, MEM:<member> plus FIELD:<member>.<leaf>,
-// and fails a row that names a bit whose shutter its mutator moves on no path at all. That
-// half is one-directional on purpose - "it does write something the shutter reads" cannot
-// prove it does so on EVERY path - so it catches under-firing and not over-claiming.
-//
-// AN ABSENCE CLAIM IS ONLY WORTH THE READING BEHIND IT, and this gate learned that twice:
-// its write analysis first recorded a write through a member's field as the field alone
-// and never the member, so --check printed, as a fact about RenderState.cpp, that
-// SetPixelStoreParam "writes nothing NEW_PIXEL_PACK's shutter reads" about a setter whose
-// whole body is sixteen writes to exactly that member; then, once it read the member, it
-// still could not see a write through a REFERENCE (SetBlendEquation's `for (auto&
-// blendState : m_parameters.BlendStates)`) and said the same false thing about seven more
-// setters - while its reader side resolved `render.PatchVertices` to the WHOLE of
-// m_parameters, so every setter that touched any byte of it "supported" NEW_PATCH_STATE and
-// a row saying glClearColor publishes the patch state was green. So now: a reference or
-// pointer bound to a member-rooted lvalue is followed, and its writes are credited to the
-// member and the field it was bound to; a write whose root the analysis cannot place (a
-// reference parameter, a call result, a member without the m_ prefix, a token it could not
-// expand) TAINTS the function, and every answer that depends on a tainted function is
-// UNDECIDED - printed with its reason, never a verdict; a writer supports a bit only when
-// the two sides share a member AND, both resolved to fields, their field sets intersect (a
-// whole-member write or read is every field); a member in common with no field information
-// on one side is COARSE, reported and never counted. --check counts only the supported
-// answers as derived, prints the COARSE and UNDECIDED tallies, and FAILS on an UNDECIDED
-// row unless MGP_DIRTY_SURFACE_UNDECIDED_LIST at the bottom of this file marks it - a
-// mark that outlives its reason is a red gate too. What it still cannot claim: a shutter
-// member written outside MG_State/GLState + MG_Impl/Pipe is undecided in the absence
-// direction, a call is resolved by NAME to every body of that name, and a FIELD token is
-// not scoped to a type - all three only widen what a mutator is credited with, and the
-// second is also how a taint spreads.
-//
-// The prose answers (kImmediate, kExplicitDestroy, kUnpublishedDestroy, kNoBackendRead,
-// kPulledEveryVerb, kPulledPartialShutter, kReverseChannel) are statements no derivation
-// checks - except the bits a kPulledPartialShutter row names, which are checked like any
-// other bit answer. --check prints how many rows carry a prose answer, so "all mapped" can
-// never be read as "all verified".
-//
-// For the RenderState family that answer is not a matter of taste and it is CHECKED
-// rather than asserted: scripts/gen_pipe_dirty_surface.py reads RenderState.cpp and
-// derives, per setter, which of NEW_RENDER_STATE / NEW_PIPELINE_STATE moves on every
-// path - BumpVersions() moves both, a bare ++m_version moves only NEW_RENDER_STATE, and
-// a setter with both kinds of path therefore always-fires only NEW_RENDER_STATE - and
-// --check fails when a row disagrees, in either direction. That check exists because
-// this file got exactly two rows wrong: SetCapability, whose ClipDistance0..7 arms move
-// only m_version, and SetStencilFunc, whose pipeline bump is conditional on Func moving.
-// Both named NEW_PIPELINE_STATE, which does not fire for glEnable(GL_CLIP_DISTANCE0) or
-// for a reference-only glStencilFunc.
-//
-//   NEW_*            a MGPipeDirty bit (MG_Impl/Pipe/Tracker.h). The tracker's shutter for
-//                    that bit moves when this mutator runs, so the next verb publishes it.
-//   kImmediate       the mutating function also reaches the backend in the same body, so the
-//                    mutation is published inline and needs no shutter at all.
-//   kReverseChannel  not state: a write INTO the frontend from the backend's side.
-//   kNoBackendRead   no backend read point observes this state at all.
-//   kExplicitDestroy published by the delete_* / resource_destroy call the Track H slice
-//                    emits when the object's last reference drops - an object's DEATH,
-//                    which no generation shutters because there is no longer an object
-//                    to carry one. Only for a kind that HAS an identity on the wire to
-//                    destroy: the resources and CSOs of PipeCalls.def, which is what P2
-//                    brief D13 scopes Espryt 0b's explicit destroy to.
-//   kUnpublishedDestroy
-//                    the same event for a kind NOTHING publishes: a program, a program
-//                    pipeline and a shader have no per-object handle on the wire at all
-//                    in P2 - resource_destroy and the delete_* family name resources and
-//                    CSOs - so their DirectGLES twins are still reclaimed by the
-//                    backend's own registry teardown and no frontend call says they
-//                    died. Recorded as a hole rather than dressed up as a mechanism that
-//                    exists; naming kExplicitDestroy here would be the same defect the
-//                    RenderState derivation above exists to stop, one class down in
-//                    stakes. (D13's prose says 'six kinds' while the Core.cpp ranges it
-//                    cites also cover MarkProgram/MarkShaderForDeletion; the tree
-//                    decides, and the tree has no wire object for those three.)
-//   kPulledEveryVerb no shutter exists at all - no MGPipeDirty bit moves on any path through
-//                    this mutator - and none is needed yet: the PipeInputs field it writes is
-//                    in its verb class's may-read mask, so the residual fill copies it at
-//                    EVERY verb of that class. A shutter here is a P3/P4 optimisation, not a
-//                    correctness gap.
-//   kPulledPartialShutter
-//                    the same pull, but a bit DOES move - on some of the paths that mutate,
-//                    not all of them - so this row must never be read as "no shutter exists".
-//                    The bits that move are named after the '|', which is the one place this
-//                    file joins a prose answer with a bit, and the reason is exactly that a
-//                    P3a shutter builder has to be able to tell "no bit covers this" from "a
-//                    bit covers half of it". The named bits are checked the same way every
-//                    other bit answer is - a dead one is a red gate - but they are NOT a
-//                    licence to narrow: what holds on every mutating path is the pull.
-//                    Which rows need this answer is a human judgement and stays one: the
-//                    derivation's "it does move that shutter" direction over-approximates
-//                    (a call name resolves to every body of that name, a write inside an
-//                    `if` counts), so it can refute a named bit but cannot find the rows
-//                    that should have named one.
-//
-// KNOWN BLIND SPOTS OF THE SCANNER, recorded here rather than left implicit
-// (gen_pipe_dirty_surface.py's own notes plus its scan roots):
-//   1. it matches braced function bodies textually, so a mutator inside a LAMBDA is
-//      attributed to the enclosing function;
-//   2. a mutation published through a HELPER the entry point calls reads as deferred here.
-//   3. CLOSED AT P3a. The scan root was MG_Impl/GLImpl only, so the four MGP_NOTE_MUTATION
-//      sites in MG_State/GLState/TextureState/TextureState.h were outside it entirely. The
-//      root is now both directories and the notice is a recognised publish mechanism; what
-//      that found is the two rows marked "P3a" below.
-// The gate is therefore a COMPLETENESS gate over what the scanner does see. The semantic
-// proof stays the MOBILEGL_PIPE_VERIFY lane, which is blind to none of them.
-//
-// THE MUTATOR PREFIX SET WIDENS AT P4a, and what it does NOT gain is the more interesting
-// half. `pGLContext->` + Add|Set|Mark|Bump|Allocate|Truncate|Record|Notify|Begin|End could
-// not see `UseProgram`, `BindVertexArray`, `BindProgramPipelineObject` or
-// `BindTransformFeedbackObject` - four mutators that each move a field P3a or P4a pushes -
-// because none of them starts with one of those words. `Use` and `Bind` are added, and the
-// complete set the widening surfaces was enumerated by grep at the phase's base ref so it
-// cannot surprise anybody: exactly those four names, on seven call sites.
-//
-// `Create*` and `Pop*` are DELIBERATELY NOT ADDED. They create or destroy objects rather than
-// move a pushed field, and each object class's creation and destruction is already answered
-// twice over - by its own Mark*ForDeletion row below and by the constructor-time
-// resource_create - so adding them would produce rows that restate an answer this file already
-// gives, and every one of them would have to be maintained against a mechanism that is not
-// theirs. A gate whose rows do not each carry their own question is a gate nobody reads.
-//
+// Dirty-surface map: what publishes each frontend mutation a backend can observe, checked by
+// scripts/gen_pipe_dirty_surface.py --check (ARCHITECTURE.md §5.2.1). An answer joins with '|'
+// the publishers that fire on every path that mutates. NEW_*: a Tracker.h bit the next verb
+// publishes. kImmediate: the same body reaches the backend. kReverseChannel: a backend write into
+// the frontend. kNoBackendRead: no backend reads it. kExplicitDestroy / kUnpublishedDestroy: a
+// death with / without a wire handle. kPulledEveryVerb: no bit; the residual fill copies the field
+// at every verb. kPulledPartialShutter|NEW_*: the same pull; the bits move on some paths only.
 // clang-format off
 
 // X(Mutator, Answer)
@@ -300,22 +144,13 @@
     /* the paths that mutate and not all, which is exactly what this answer is for; what     */ \
     /* holds on every mutating path is still the pull through GetBufferBindingPoint.         */ \
     X(SetNamedTransformFeedbackBinding,   kPulledPartialShutter|NEW_SO_TARGETS)                 \
-    /* P5e (sb), THE ONE NAME THE `Touch` PREFIX SURFACES, on two call sites - GL_Buffer.cpp's*/ \
-    /* BindBufferBase_State and BindBufferRange_State. It moves the per-target high-water    */ \
-    /* mark that bounds every indexed-binding-point walk there is: the backend's, the        */ \
-    /* client's GPU-write sweep's, and set_shader_buffers' emitted window.                   */ \
-    /*                                                                                       */ \
-    /* kPulledEveryVerb, in GetMaxTouchedTextureUnit's exact words one family over: the      */ \
-    /* field it writes (GetTouchedBufferBindingPointCount) has no shutter of its own and     */ \
-    /* needs none - it is in kDraw's, kDispatch's and kXfbSpan's may-read masks, so the      */ \
-    /* residual fill copies it at every verb of those classes, and since P5c rv              */ \
-    /* set_context_values carries it as a value whose gate is the whole-record hash.         */ \
-    /*                                                                                       */ \
-    /* IT NAMES NO BIT, AND THAT IS NOT THE SAME AS THE MUTATION GOING UNPUBLISHED. Both     */ \
-    /* call sites bump the bind-point generation on the line below this call, so bits 15/16/ */ \
-    /* 17 fire for the bind - but they fire for the BINDING, through a different member, and */ \
-    /* a row here that named them would claim this mutator moves a shutter it does not touch */ \
-    /* (the derivation refutes exactly that, which is how the claim was tested).             */ \
+    /* Called by BindBufferBase_State / BindBufferRange_State (GL_Buffer.cpp), this mutator */  \
+    /* moves the per-target high-water mark that bounds every indexed binding-point walk.   */  \
+    /* No shutter reads it: GetTouchedBufferBindingPointCount is in the kDraw, kDispatch    */  \
+    /* and kXfbSpan may-read masks, and set_context_values carries it. Both call sites bump */  \
+    /* the target's bind-point generation, which fires that target's NEW_CONST_BUFFERS,     */  \
+    /* NEW_SHADER_BUFFERS or NEW_SO_TARGETS through a different member, so this row must    */  \
+    /* not name them.                                                                       */  \
     X(TouchBufferBindingPoint,            kPulledEveryVerb)                                     \
     /* ---- P4a, THE FOUR THE WIDENED PREFIX SET SURFACES. Every one of them moves a field */  \
     /* P3a or P4a pushes and none of them was visible to the scan before, because none     */  \
@@ -350,38 +185,13 @@
     /* the kDraw and kXfbSpan may-read masks, so the residual fill copies them at every     */  \
     /* verb of those classes. Narrowing it is P4b's, with set_stream_output_targets.        */ \
     X(BindTransformFeedbackObject,        kPulledEveryVerb)                                    \
-    /* ---- an object's death: no generation, because there is no longer an object  */          \
-    /* to carry one. Espryt 0b's delete_* / resource_destroy publishes the kinds     */         \
-    /* that have a handle on the wire; programs, program pipelines and shaders have  */         \
-    /* none in P2, so nothing publishes theirs - kUnpublishedDestroy, a known hole.  */         \
-    /* TWO OF THESE ROWS STOPPED BEING ASPIRATIONAL AT P3a, and the call that makes  */         \
-    /* each true is named rather than implied:                                       */        \
-    /*   MarkBufferObjectForDeletion -> resource_destroy (PipeCalls.def), emitted    */         \
-    /*     from ~BufferObject the moment the last reference drops - which is the     */        \
-    /*     glDelete* that only marks the name, followed by whatever unbind actually  */        \
-    /*     releases it - and followed IN THAT ORDER by the client freeing the slot.  */        \
-    /*   MarkVertexArrayForDeletion -> delete_vertex_elements, published through the */        \
-    /*     death notice ~VertexArrayObject already raises for the VertexElementsCso  */        \
-    /*     kind; the CSO handle is minted per frontend VAO off its lifetime id.      */        \
-    /*     THE PUBLISHER IS THE BACKEND'S (Managers.cpp's OnFrontendStateObject-     */        \
-    /*     Destroyed consumer, package espryt), not the client's: the client mints   */        \
-    /*     the CSO handle and emits create/bind, and the free rides with that        */        \
-    /*     consumer. Until it lands the row states the design, not the tree.         */        \
-    /* P4a CLOSES ONE OF THE THREE HOLES ABOVE AND STATES WHY THE OTHER TWO ARE NOT HOLES.  */ \
-    /*   MarkProgramForDeletion -> kExplicitDestroy. delete_shader_state exists now and     */  \
-    /*     ~ProgramObject emits it through the client-side death helper, in the fixed       */  \
-    /*     order: the wire delete first, the backend notice second, the slot free last. A   */  \
-    /*     program pipeline COMPOSITE takes the same call on the same helper - the server   */  \
-    /*     never learns it is a composite.                                                  */ \
-    /*   MarkProgramPipelineForDeletion stays kUnpublishedDestroy, and it is NOT waiting    */  \
-    /*     for a later phase: a ProgramPipelineObject has no lifetime id and no wire object */  \
-    /*     at all (its only identity is m_everBound). It never gets a handle, so there is   */  \
-    /*     nothing for a delete to name. What its cache's eviction DOES publish is the      */  \
-    /*     composite's delete_shader_state, which is the row above.                         */ \
-    /*   MarkShaderForDeletion stays kUnpublishedDestroy for the same kind of reason: a     */  \
-    /*     ShaderObject has no lifetime id and never crosses the boundary - the payload is  */  \
-    /*     per-stage SPIR-V plus the reflection archive, not source, and glslang lives      */  \
-    /*     entirely on the client.                                                          */ \
+    /* ---- an object's death: no generation, since no object is left to carry one.         */  \
+    /* kExplicitDestroy: the destructor (last reference, not glDelete*) runs the kind's     */  \
+    /* MGPipeEmit*DestroyAndFree (PipeMutation.h): the wire delete if the kind has one      */  \
+    /* (framebuffers do not), then the backend notice, then the slot free. Buffers send     */  \
+    /* resource_destroy, VAOs delete_vertex_elements, programs and pipeline composites      */  \
+    /* delete_shader_state. kUnpublishedDestroy: program pipelines and shaders have no      */  \
+    /* lifetime id and never cross the boundary, so no record names their death.            */  \
     X(MarkBufferObjectForDeletion,        kExplicitDestroy)                                     \
     X(MarkFramebufferObjectForDeletion,   kExplicitDestroy)                                     \
     X(MarkProgramForDeletion,             kExplicitDestroy)                                     \
@@ -408,48 +218,13 @@
     X(AddTransformFeedbackPausedPrimitives, kPulledEveryVerb)                                   \
     X(AddTransformFeedbackPrimitives,     kPulledEveryVerb)
 
-// X(Mutator, Bit) - the (row, bit) pairs above whose derivation is KNOWN to come out
-// UNDECIDED, each with the reason --check prints for it. Every bit answer NOT listed here
-// is marked derived: --check fails when the derivation cannot decide it, and fails again
-// when a mark here names a pair the derivation now decides, so this list can neither hide a
-// row nor outlive its reason.
-//
-// IT WAS EMPTY UNTIL P4a, and it stops being empty for a reason that is a property of the
-// SCANNER rather than of the rows. Every entry below is a bit answer that is plainly true -
-// glUseProgram is what moves the object bits 6, 12 and 14's shutters read through (the
-// program in use; bits 12 and 14 since the fable seam round, F-1 / F-2), and glBindVertexArray
-// is what moves the object bit 5's shutter reads through - and the write analysis cannot say
-// so, because each of the two mutators reaches, BY NAME, a body that writes a member with no
-// m_ prefix:
-//
-//   UseProgram      -> DestroyProgramSlot() writes `attachedShaders`
-//   BindVertexArray -> a call spelled `Bind(` resolves to every body of that name, one of
-//                      which (ImageTextureBinding::Bind) writes `Access`
-//
-// A call resolved by name to every body of that name is one of the three over-approximations
-// this analysis documents about itself, and an unplaceable write TAINTS the body it is in -
-// which is the right default, because "it does not write anything the shutter reads" must
-// never be claimed about code the script could not read. Widening the taint rule to ignore
-// non-m_ writes would weaken the one mechanism that catches a genuine under-fire, so the rows
-// are MARKED, with the tool's own reason, rather than the tool being made more permissive.
-// Control 21 is what proves every marked row still needs its mark (it reads this list, so a
-// row that gains a bit here is counted rather than assumed), and control 18 is what fails the
-// moment any of them becomes decidable and the mark outlives its reason.
-//
-// The ten mutators that reach a tainted body (--check prints the count) all carry a prose
-// answer, which no derivation checks; these two mutators are the first that carry a bit answer.
-//
-// P5e (sb) ADDS A THIRD, for the same property of the scanner and a third unplaceable write:
-//
-//   SetNamedTransformFeedbackBinding
-//                   -> MGPipeSlots().Acquire() calls GetLifetimeId() through its reference
-//                      parameter `buffer`, which the analysis cannot root in a member
-//
-// The claim it marks is plain: the bound arm of this function bumps the transform-feedback
-// target's bind-point generation (BufferState::NoteBindPointChanged), which is exactly what
-// bit 17's shutter reads since P5e. The mark is on the BIT the kPulledPartialShutter row
-// names, not on the pull, so what this list suspends is the narrowing claim and never the
-// answer that holds on every path.
+// X(Mutator, Bit): bit answers above that gen_pipe_dirty_surface.py cannot decide. --check
+// fails on an undecided pair missing here and on a listed pair it can now decide. Each answer
+// is true, but its mutator reaches by name a body with a write the analysis cannot root in a
+// member: UseProgram via DestroyProgramSlot() (`attachedShaders`), BindVertexArray via
+// ImageTextureBinding::Bind (`Access`), SetNamedTransformFeedbackBinding via
+// MGPipeSlots().Acquire() (reference parameter `buffer`). Marking keeps the taint rule strict;
+// for SetNamedTransformFeedbackBinding only the bit after kPulledPartialShutter is suspended.
 #define MGP_DIRTY_SURFACE_UNDECIDED_LIST(X)                                                     \
     X(UseProgram,      NEW_SHADER)                                                              \
     X(UseProgram,      NEW_SAMPLER_VIEWS)                                                       \

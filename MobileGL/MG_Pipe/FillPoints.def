@@ -6,72 +6,13 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// The per-verb fill points of the PipeInputs strangler (ARCHITECTURE.md 9.2, phase A; the
-// P1 brief D7). Three hand-maintained lists, read by scripts/gen_pipe.py (G5b) into
-// generated/PipeFillPoints.inc:
-//
-//   MGP_FILL_VERB_LIST   every verb the frontend calls through GLFunctionsTable, with its class
-//   MGP_FILL_CLASS_LIST  the verb classes
-//   MGP_FILL_FIELD_LIST  the may-read table: which PipeInputs fields a class of verb may read
-//
-// The verb set IS the function-pointer member set of MG_Backend::GLFunctionsTable
-// (MG_Backend/BackendObject.h), in declaration order: gen_pipe.py parses that struct and
-// refuses a row set that is not exactly its member set in that order, so the MGPipeVerb enum
-// and the table cannot drift apart. MG_Impl spells MGP_FILL(Verb) immediately before every
-// call through the table (83 statements over these 69 verbs); Present and SetSwapInterval go
-// through BackendObject virtuals and read no frontend state, so they are not verbs here.
-//
-// The seven sticky fields (Coverage.def, MGP_COVERAGE_STICKY_LIST) are implicit in every
-// class and are not listed. The verify lane is the oracle for this table: a
-// Fatal{UnmigratedPipeInput, "Field@Verb"} found there is fixed by adding the (class, field)
-// row, never by marking the field sticky.
-//
-// ---------------------------------------------------------------------------------------
-// THE VERDICT ON THE EIGHT STATICALLY OVER-APPROXIMATED ROWS (P2 brief C.1, MEASUREMENTS.md
-// section 4). Every one of them is KEPT, and the reason is the same in all three groups: the
-// row is not a guess, it names a concrete backend path, and the only evidence that could
-// retire it is DYNAMIC - a corpus that never reaches the path proves nothing, because a row
-// removed on that basis turns a rare path into Fatal{UnmigratedPipeInput} in a shipped build.
-//
-//   kReadback + IsTransformFeedbackActive / IsTransformFeedbackPaused
-//     KEPT. The depth/stencil read emulation draws (ScopedEmulationDrawState, DirectGLES.cpp)
-//     and pauses an active capture around its own draw, so a glReadPixels of a depth or
-//     stencil attachment reads the transform-feedback state exactly as a draw does. Reached
-//     only when the emulation is armed, which is a driver-shaped decision, so no desktop
-//     corpus can decide it.
-//
-//   kTextureOp + IsCapabilityEnabled, kDispatch + IsCapabilityEnabled
-//     KEPT. Magma's GenerateMipmap materialises a texture's queued clear before it blits and
-//     PrepareStorageImageTextures does the same for every storage image a dispatch writes;
-//     both go through VkClearManager::PreCompensateSrgbClearColor, which reads
-//     GL_FRAMEBUFFER_SRGB. The P2 contract gave that capability real storage for the first
-//     time, so this row went from reading a compile-time constant to reading real state -
-//     which is the opposite of a row that could be dropped.
-//
-//   kBlitOrCopy / kTextureOp + the shader blit's viewport and vertex/buffer bindings
-//     (GetViewportIndexed, GetDepthRangeIndexed, GetProvokingVertexMode, GetBufferBindingPoint)
-//     KEPT. TryBlitToDefaultFramebufferWithShader is a real draw of a backend-owned helper
-//     program: ApplyGLViewportState -> ComputeGLViewport reads viewport 0 and its depth range,
-//     GetOrCreateBlitPipeline -> SelectProvokingVertexMode reads the provoking vertex, and
-//     BindProgramUniformBuffers' block resolvers read the frontend binding points. It is taken
-//     when a blit's destination is the default framebuffer and the driver cannot do it
-//     natively - again a driver-shaped decision.
-//
-// What WOULD retire a row: the poison build already answers "was this field read at this
-// verb" exactly (MOBILEGL_PIPE_POISON_OMIT withholds one field's stamp for one verb and a
-// read of it aborts naming the pair). Turning that into a retirement gate means running the
-// omission across the full CTS caselist on both devices, not the desktop corpus.
-//
-// P3a STATUS: still not done, and deliberately not done here. P3a is one of the five
-// architecture boundaries that owe a full gl44to46 caselist run on both devices, so the
-// omission sweep rides that run rather than duplicating it - the verdict lands with the
-// caselist result at the phase exit, off the critical path, and every row above stays in
-// place until it does. A row retired on desktop evidence would be retired on evidence that
-// cannot support it, which is the reason this item exists rather than a scheduling excuse.
-// ---------------------------------------------------------------------------------------
-//
+// Per-verb fill points of PipeInputs (ARCHITECTURE.md §9.2), read by scripts/gen_pipe.py.
+// MGP_FILL_VERB_LIST: every GLFunctionsTable function pointer in declaration order, with its
+// class (gen_pipe.py refuses any other set). MGP_FILL_FIELD_LIST: the fields a class may read;
+// sticky fields (MGP_COVERAGE_STICKY_LIST) are implicit. Fix Fatal{UnmigratedPipeInput} by
+// adding a row, never by making it sticky. A row is removed only on a MOBILEGL_PIPE_POISON_OMIT
+// run of the full CTS caselist on both devices; a corpus that never reaches a path proves nothing.
 // gen_pipe.py's block regexes end at a blank line: keep the empty line after each macro.
-//
 // clang-format off
 
 // X(Verb, Class) - one row per function-pointer member of MG_Backend::GLFunctionsTable (BackendObject.h),

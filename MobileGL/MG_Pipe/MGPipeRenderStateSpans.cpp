@@ -6,49 +6,13 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// The definitions behind MGPipeRenderStateSpans.h and behind the two arrays
-// generated/PipeSpanTable.inc has declared since P0. Compiled ONLY under
-// MOBILEGL_PIPE_PUSH (CMakeLists.txt appends it to SOURCE_FILES there), which is how the
-// pull build gains no symbol from the split - a declaration emits nothing.
-//
-// PROVENANCE OF THE PIPELINE HALF. It began as the enumeration
-// VulkanRenderer::ComputePipelineStateHash carried above itself, which was the contract
-// that function had without being able to say so; it moves here because this file is now
-// that contract. Verbatim, from VulkanRenderer.cpp at feat/disaggregated@48268068:
-//
-//   Value hash over every fixed-function GL state the pipeline payload reads that
-//   the memo key's other fields (mode, program hash, vertex-input hash, render-pass
-//   hash, transform flags) do not already pin down. Enumerated against the payload
-//   build in GetOrCreatePipeline - any new GL-state read there must be added here:
-//     - capability bits: CullFace, DepthTest, PolygonOffsetFill (mode gating rides
-//       the memo's mode key), RasterizerDiscard, ColorLogicOp, StencilTest,
-//       PrimitiveRestart(+FixedIndex), SampleShading, SampleMask, plus the depth write mask
-//     - patch vertices, polygon mode, cull face mode, depth func, logic op,
-//       min sample shading, the glSampleMaski word
-//     - front/back stencil ops + compare funcs (ref/mask are dynamic state)
-//     - per draw buffer up to the render pass's colour span: indexed blend enable,
-//       blend factors/equations, indexed colour write mask (broadcast from index 0
-//       when the device lacks independentBlend - the same read the payload does)
-//   FBO-derived payload inputs (attachment presence/formats/draw-buffer gating) are
-//   pinned by the render-pass hash key, exactly as the version-keyed memo relied on.
-//
-// P2's pipeline half is a strict SUPERSET of that list. It adds SampleCoverageValue,
-// SampleCoverageInvert, FrontFaceModeSetting, ProvokingVertexModeSetting,
-// ScissorTestEnabledMask, PolygonModeBack, the eleven capability bools the hash never read
-// (DebugOutput, DebugOutputSynchronous, Dither, LineSmooth, PolygonOffsetLine,
-// PolygonOffsetPoint, PolygonSmooth, SampleAlphaToCoverage, SampleAlphaToOne, SampleCoverage,
-// ProgramPointSize) and the three capabilities P2 gave storage to (FramebufferSrgb,
-// DepthClamp, TextureCubeMapSeamless). All of them are written by a setter that calls
-// BumpVersions(), so under the header's rule they are pipeline. The alternative - demoting
-// those setters to ++m_version - would change MG_State semantics in the PULL build for the
-// sake of the push path. Growing the subset costs nothing measurable: the hash runs only
-// when m_pipelineStateVersion moves, which is exactly when Magma recomputed
-// ComputePipelineStateHash before.
-//
-// The render-pass facts are deliberately NOT here. ComputePipelineStateHash's signature is
-// (colorAttachmentCount, rasterizationSamples) and it folds ResolveEffectiveSampleMask, so
-// it was never a pure function of RenderStateParameters; a CSO handle cannot replace it on
-// its own and Magma keeps renderPassHash as a separate memo-key component.
+// Definitions behind MGPipeRenderStateSpans.h and the two chunk arrays that
+// generated/PipeSpanTable.inc declares (ARCHITECTURE.md §5.3). The pipeline half holds every
+// byte a BumpVersions() setter writes, which covers all fixed-function state Magma's pipeline
+// build reads and more; the extra bytes cost nothing because the subset is hashed only when
+// m_pipelineStateVersion moves. Render-pass facts (colour attachment count, rasterization
+// samples and the effective sample mask derived from them) are not in RenderStateParameters,
+// so Magma keeps renderPassHash beside the CSO handle in its pipeline memo key.
 #include <MG_Pipe/MGPipe.h>
 #include <MG_Pipe/MGPipeRenderStateSpans.h>
 
