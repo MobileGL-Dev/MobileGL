@@ -85,7 +85,7 @@ These fail on any violation:
 - a text file that is not UTF-8;
 - an external project name in a comment;
 - a `file:line` citation in code that points past the end of the file;
-- changed lines that clang-format would change.
+- changed lines that clang-format would change (a line moved unchanged, the same commit removing its exact text elsewhere, is not a changed line).
 
 These are ratchets: each total may only go down.
 

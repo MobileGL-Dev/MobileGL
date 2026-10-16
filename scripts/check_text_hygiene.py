@@ -26,6 +26,7 @@ them.
 """
 
 import argparse
+import collections
 import contextlib
 import importlib.util
 import io
@@ -549,6 +550,40 @@ def changed_ranges(diff_text):
     return ranges
 
 
+def unmoved_ranges(diff_text):
+    """Like changed_ranges, without the added lines that only move code: a line whose exact text
+    the same diff removes elsewhere was moved, and moving code does not mean reformatting it."""
+    removed = collections.Counter()
+    added = {}
+    path, new_line, in_hunk = None, 0, False
+    for line in diff_text.splitlines():
+        if line.startswith("diff --git "):
+            path, in_hunk = None, False
+        elif not in_hunk and line.startswith("+++ "):
+            path = line[6:] if line.startswith("+++ b/") else None
+        elif line.startswith("@@"):
+            m = HUNK_RE.match(line)
+            in_hunk, new_line = bool(m), int(m.group(1)) if m else 0
+        elif in_hunk and line.startswith("-"):
+            removed[line[1:].rstrip()] += 1
+        elif in_hunk and line.startswith("+"):
+            if path:
+                added.setdefault(path, []).append((new_line, line[1:].rstrip()))
+            new_line += 1
+    ranges = {}
+    for path, lines in added.items():
+        for lineno, text in lines:
+            if removed[text] > 0:
+                removed[text] -= 1
+                continue
+            spans = ranges.setdefault(path, [])
+            if spans and spans[-1][1] == lineno - 1:
+                spans[-1] = (spans[-1][0], lineno)
+            else:
+                spans.append((lineno, lineno))
+    return ranges
+
+
 def check_format(rev_range):
     binary = os.environ.get("CLANG_FORMAT") or shutil.which("clang-format")
     if not binary:
@@ -559,7 +594,7 @@ def check_format(rev_range):
     for sha in commits_to_check(rev_range):
         if is_merge(sha) or not git("rev-parse", "--verify", "--quiet", sha + "^", check=False).strip():
             continue
-        for path, ranges in changed_ranges(git("diff", "-U0", "-M", "--no-color", sha + "^", sha)).items():
+        for path, ranges in unmoved_ranges(git("diff", "-U0", "-M", "--no-color", sha + "^", sha)).items():
             if not (path.endswith(FORMAT_EXT) and path.startswith(SOURCE_DIRS)) or is_generated(path):
                 continue
             checked += 1
@@ -743,6 +778,10 @@ def self_test():
 
     expect("format: hunks", changed_ranges("+++ b/a.cpp\n@@ -3,0 +4,2 @@\n@@ -9 +11 @@\n@@ -20,3 +22,0 @@\n")
            == {"a.cpp": [(4, 5), (11, 11)]})
+    moved = ("diff --git a/a.cpp b/a.cpp\n--- a/a.cpp\n+++ b/a.cpp\n@@ -3,2 +2,0 @@\n-int  f();\n-- x\n"
+             "diff --git a/b.cpp b/b.cpp\n--- /dev/null\n+++ b/b.cpp\n@@ -0,0 +1,4 @@\n+int  f();\n+int  g();\n"
+             "+    int  f();\n+- x\n")
+    expect("format: moved lines are not checked", unmoved_ranges(moved) == {"b.cpp": [(2, 3)]})
     expect("range: first parent and cutoff", range_self_test())
     expect("archive: a move fills it, a later edit fails", archive_self_test())
 
