@@ -36,10 +36,9 @@ from pathlib import Path
 import re
 
 ROOT = Path(__file__).resolve().parents[2]
-SOURCES = [
-    "MobileGL/MG_Backend/DirectGLES/DirectGLES.cpp",
-    "MobileGL/MG_Backend/DirectGLES/Managers.h",
-]
+# Every source of the Espryt backend: the memo families live in its .cpp files and headers.
+SOURCES = sorted(p.relative_to(ROOT).as_posix() for p in (ROOT / "MobileGL/MG_Backend/DirectGLES").iterdir()
+                 if p.suffix in (".cpp", ".h", ".inc"))
 # The frontend object types a memo may not be keyed on. StateObject is the twin
 # registry's template parameter and is the ONLY spelling its map key ever has, so a
 # gate written in terms of the concrete names alone would read Managers.h and find
@@ -66,7 +65,7 @@ LIFETIME_KEY = r"GetLifetimeId\s*\(\s*\)"
 
 # THE MEMO FAMILIES THE PLAN ROW NAMES, each as the brace-matched body of its own
 # declaration. Scoping to the body rather than to the file is what keeps the gate from
-# firing on the hundreds of ordinary frontend pointers these two files legitimately
+# firing on the hundreds of ordinary frontend pointers these files legitimately
 # pass around.
 FAMILIES = [
     ("ResolvedTextureBindingMemo", r"struct\s+ResolvedTextureBindingMemo\s*\{"),
@@ -90,7 +89,7 @@ ALLOW = []
 #   * `const void* program` and `Uint64 programLifetimeId`, which no rule can consult -
 #     `void` is not in FRONTEND and neither line calls GetLifetimeId().
 # ResolvedTextureBindingMemo's type-erased monolith key is still there and still deliberate
-# (it is nulled under `byHandle`, DirectGLES.cpp:7369-7373, and the pull build needs it for
+# (it is nulled under `byHandle` in BindCurrentTextures, and the pull build needs it for
 # G1) - it simply never needed an exemption, and saying it did was misleading. The
 # allow-liveness check below is what stops this list growing that way again.
 
@@ -212,8 +211,8 @@ def violations(path: str, text: str) -> list[str]:
 
 
 def self_test() -> None:
-    gles = SOURCES[0]
-    managers = SOURCES[1]
+    gles = "MobileGL/MG_Backend/DirectGLES/DirectGLESBind.cpp"
+    managers = "MobileGL/MG_Backend/DirectGLES/Managers.h"
     controls = [
         (gles, "struct ResolvedTextureBindingMemo {\n"
                "    MG_State::GLState::ProgramObject* key = nullptr;\n};\n"),
@@ -281,14 +280,14 @@ def main() -> int:
     failures = [failure for name, text in sources.items() for failure in violations(name, text)]
 
     # STRUCTURAL CHECK 1: every family anchor found its declaration somewhere. Each family
-    # lives in exactly one of the two sources, so the test is over their union.
+    # lives in one of the sources, so the test is over their union.
     found_anywhere: set[str] = set()
     for text in sources.values():
         found_anywhere |= {name for name, _, _ in family_spans(code_only(text))}
     for name, anchor in FAMILIES:
         if name not in found_anywhere:
             failures.append(
-                f"{SOURCES[0]}:0: the anchor for {name} matched nothing in either source. It was "
+                f"MobileGL/MG_Backend/DirectGLES:0: the anchor for {name} matched nothing in any source. It was "
                 f"renamed, moved or reformatted, and this gate has silently stopped checking that "
                 f"family - every rule below still passes. Fix the anchor ({anchor!r}) or drop the "
                 f"family from FAMILIES with a reason.")
