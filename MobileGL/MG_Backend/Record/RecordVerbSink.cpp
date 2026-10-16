@@ -959,7 +959,7 @@ namespace MobileGL::MG_Record {
         if (table->GL.ShaderStorageBlockBinding == nullptr) return false;
         if (name == nullptr) return false;
         // The NAME is the one coordinate the application, the frontend and both backends agree
-        // on (BackendObject.h:216-221), which is why the row carries a blob rather than the
+        // on (GLFunctionsTable::ShaderStorageBlockBinding), which is why the row carries a blob rather than the
         // application's block INDEX. `name` points into the decoder's bounded local and is
         // valid for this call only (rule C); the backend slot copies what it needs.
         //

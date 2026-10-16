@@ -59,7 +59,7 @@ namespace MobileGL::MG_Remote::Client {
         // F1 (P7 wave 2): IT NEVER ANSWERS FROM A PLACEHOLDER ANY MORE. See RequireFirstSnapshot.
         Bool ServerConsumes(Uint64 subsystemBit) const;
 
-        // GLFunctionsTable::PrefersCpuXfbPrimitiveAccounting (BackendObject.h:274) does NOT
+        // GLFunctionsTable::PrefersCpuXfbPrimitiveAccounting (BackendObject.h) does NOT
         // ride in MGPCaps::Dynamic - it is a member of the function table, which is precisely
         // the thing a split client never receives. Its only non-test client reader is
         // GL_Query.cpp:221, and under split it must be answered from kCapCpuXfbPrimitiveAccounting.
@@ -91,7 +91,7 @@ namespace MobileGL::MG_Remote::Client {
     // ---- c1's addition to c0's signature block -----------------------------------------
     //
     // WHY A HOOK AND NOT A READ. BackendObject::GetFormatCapabilities() is NON-VIRTUAL
-    // (BackendObject.h:594) and returns the base class's own m_formatCapabilities member, so a
+    // (BackendObject.h) and returns the base class's own m_formatCapabilities member, so a
     // remote backend object cannot answer it lazily from the mirror - it has to PUSH the cache
     // into that member, and the only moment it can know to is when a snapshot lands. A raw
     // function pointer rather than std::function, for ID-8's reason: this can fire on paths

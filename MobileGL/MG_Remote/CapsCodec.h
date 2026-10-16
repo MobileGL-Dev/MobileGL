@@ -14,7 +14,7 @@
 // and HAVE NO SERIALIZER IN THE TREE - the header says so itself above MGPCaps::FormatCapabilities,
 // "Their serializers land with the transport (P5)". They are:
 //
-//   FormatCapabilities -> FormatCapabilityCache (MG_Backend/BackendObject.h:93-98):
+//   FormatCapabilities -> FormatCapabilityCache (BackendCaps.h):
 //       FullCaps + CaveatCaps (bitfield tables) + SampleCounts, a Vector<Int> per
 //       (target, format) pair. The Vector is why this cannot be a memcpy.
 //   RendererInfo       -> RendererInfo (MG_Util/Types.h:317): three Strings, an

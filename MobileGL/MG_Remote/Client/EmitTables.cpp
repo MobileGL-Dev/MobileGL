@@ -68,7 +68,7 @@ namespace MobileGL::MG_Remote::Client {
 
     // The slot arithmetic, asserted rather than commented. GlobalBackendFunctionsTable is
     // GLFunctionsTable plus Present plus SetSwapInterval; GLFunctionsTable is 69 function
-    // pointers plus one Bool (PrefersCpuXfbPrimitiveAccounting, BackendObject.h:274). A slot
+    // pointers plus one Bool (PrefersCpuXfbPrimitiveAccounting). A slot
     // added to either without a decision here is a build break, which is the point: R-4 forbids
     // a null slot, so a new slot needs an owner on the day it appears.
     static_assert(sizeof(MG_Backend::GlobalBackendFunctionsTable) ==
@@ -231,7 +231,7 @@ namespace MobileGL::MG_Remote::Client {
             const MG_Backend::DynamicBackendParameters& dynamic = CapsMirrorInstance().Dynamic();
             // The ONLY two indexed pnames the device owns; every other indexed pname names
             // frontend state and is answered in GL_Getter::GetIntegeri_v before any table is
-            // consulted (BackendObject.h:196-205). The existing gate is
+            // consulted (GLFunctionsTable::GetIntegeri_v). The existing gate is
             // AdvertisedLimitsScenario.ComputeWorkGroupLimitsAreTheCapsBlocksAnswer, which pins
             // that this answer and the caps copy are ONE number.
             switch (target) {

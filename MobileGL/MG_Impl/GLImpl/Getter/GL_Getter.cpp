@@ -1528,7 +1528,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             if (!MG_Config::Features.DisableTimerQuery) {
                 // glGetInteger64v(GL_TIMESTAMP). GetGpuTimestampNs is class C - a LIVE GPU
                 // timestamp is not a static property, so R-15 does not reach it - and the
-                // documented answer when it is unavailable is 0 (BackendObject.h:192), which
+                // documented answer when it is unavailable is 0 (GLFunctionsTable::GetGpuTimestampNs), which
                 // is correct rather than merely quiet. kCapTimerQuery is the published bit.
                 //
                 // The POINTER-valued macro, so the init-statement below is unchanged in a pull
@@ -2581,7 +2581,7 @@ namespace MobileGL::MG_Impl::GLImpl {
             if (!MG_Config::Features.DisableTimerQuery) {
                 // glGetInteger64v(GL_TIMESTAMP). GetGpuTimestampNs is class C - a LIVE GPU
                 // timestamp is not a static property, so R-15 does not reach it - and the
-                // documented answer when it is unavailable is 0 (BackendObject.h:192), which
+                // documented answer when it is unavailable is 0 (GLFunctionsTable::GetGpuTimestampNs), which
                 // is correct rather than merely quiet. kCapTimerQuery is the published bit.
                 //
                 // The POINTER-valued macro, so the init-statement below is unchanged in a pull

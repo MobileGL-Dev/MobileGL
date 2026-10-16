@@ -1413,7 +1413,7 @@ namespace MobileGL::MG_Record {
         // glShaderStorageBlockBinding -> set_storage_block_binding (75), the ONE content-carrying
         // row P5b adds. The block is NAMED, not indexed, because the application's index is the
         // frontend interface-query enumeration's and no backend shares that index space
-        // (BackendObject.h:216-221) - the name is the one coordinate all three agree on.
+        // (GLFunctionsTable::ShaderStorageBlockBinding) - the name is the one coordinate all three agree on.
         void EmitShaderStorageBlockBinding(GLuint program, const GLchar* storageBlockName,
                                            GLuint storageBlockBinding) {
             VerbChannel session = ChannelFor("ShaderStorageBlockBinding");
