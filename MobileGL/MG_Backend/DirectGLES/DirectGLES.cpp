@@ -14,6 +14,7 @@
 #include "Utils.h"
 #include "Managers.h"
 #include "MultiDraw.h"
+#include <MG_Backend/ClientReadback.h>
 #include <MG_Util/Converters/GLToMG/TextureEnumConverter.h>
 #include <MG_Util/Classifiers/TextureEnumClassifier.h>
 #include <MG_Util/Metrics/TextureMetrics.h>
@@ -11509,12 +11510,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // back narrower layouts (RED, RG, RGB, BGR, byte-order packed types, ...). For those we read a guaranteed
     // wide RGBA format into scratch memory and repack into the caller's (format, type) layout on the CPU,
     // honoring the client-side PACK pixel-store parameters. The pure repacking helpers live in
-    // ReadbackImpl (Utils.cpp) so unit tests can assert the exact packed words.
+    // ClientReadback (MG_Backend/ClientReadback.cpp) so unit tests can assert the exact packed words.
 
-    using ReadbackImpl::GetReadbackChannelMapping;
-    using ReadbackImpl::GetReadbackComponentSize;
-    using ReadbackImpl::GetReadbackDstPixelSize;
-    using ReadbackImpl::ReadbackChannelMapping;
+    using ClientReadback::GetReadbackChannelMapping;
+    using ClientReadback::GetReadbackComponentSize;
+    using ClientReadback::GetReadbackDstPixelSize;
+    using ClientReadback::ReadbackChannelMapping;
 
     static Bool CanDecodeWideSourceType(GLenum type) {
         switch (type) {
@@ -11904,8 +11905,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
             }
         }
 
-        if (!ReadbackImpl::StoreWideRowsToClient(wide.data(), wideType, width, height, /*sliceCount=*/1, mapping, type, pixels,
-                                   honorPackImageParams)) {
+        if (!ClientReadback::StoreWideRowsToClient(wide.data(), wideType, width, height, /*sliceCount=*/1, mapping,
+                                                   type, pixels, honorPackImageParams)) {
             return false;
         }
 

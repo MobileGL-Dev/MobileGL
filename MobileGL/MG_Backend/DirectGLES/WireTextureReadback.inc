@@ -145,7 +145,7 @@
         Vector<Uint8> converted(pixels * pixelBytes);
         const SizeT sourceRowBytes = static_cast<SizeT>(width) * 4 * GetReadbackComponentSize(wideType);
         for (GLsizei row = 0; row < height; ++row)
-            ReadbackImpl::ConvertWideReadbackRow(wide.data() + static_cast<SizeT>(row) * sourceRowBytes,
+            ClientReadback::ConvertWideReadbackRow(wide.data() + static_cast<SizeT>(row) * sourceRowBytes,
                 converted.data() + static_cast<SizeT>(row) * width * pixelBytes, width, wideType, mapping, type);
         bytes = Move(converted);
         return true;
@@ -406,7 +406,7 @@
                     const SizeT wideRowBytes = rowTexels * 4 * GetReadbackComponentSize(wideType);
                     out.resize(texels * pixelBytes);
                     for (SizeT row = 0; row < rows; ++row) {
-                        ReadbackImpl::ConvertWideReadbackRow(wide.data() + row * wideRowBytes,
+                        ClientReadback::ConvertWideReadbackRow(wide.data() + row * wideRowBytes,
                                                              out.data() + row * rowTexels * pixelBytes, rowTexels,
                                                              wideType, mapping, type);
                     }

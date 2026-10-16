@@ -18,6 +18,7 @@
 #include <MG_Backend/BackendObjects.h>
 #include <MG_Backend/DirectGLES/Managers.h>
 #include <MG_Backend/DirectGLES/Utils.h>
+#include <MG_Backend/ClientReadback.h>
 #include <MG_Impl/GLImpl/Buffer/GL_Buffer.h>
 #include <MG_Impl/GLImpl/Framebuffer/GL_Framebuffer.h>
 #include <MG_Impl/GLImpl/Getter/GL_Getter.h>
@@ -4688,7 +4689,7 @@ TEST_F(TextureTest, TexImage2DRGB9E5FromOtherPackedFloatTypeStillConverts) {
 TEST_F(TextureTest, StorePackedWordsToClientCopiesWordsVerbatimUnderPackParams) {
     // Readback direction: the raw store copies the words bit-for-bit while still honoring the
     // client-side PACK addressing (alignment, skip rows/pixels) and GL_PACK_SWAP_BYTES.
-    namespace ReadbackImpl = MG_Backend::DirectGLES::ReadbackImpl;
+    namespace ClientReadback = MG_Backend::ClientReadback;
 
     const Uint32 source[] = {0xF8FC0000u, 0x60000000u, 0x08000001u,  // row 0
                              0x0FFFFFFFu, 0xFFFFFFFFu, 0x00000000u}; // row 1
@@ -4703,10 +4704,10 @@ TEST_F(TextureTest, StorePackedWordsToClientCopiesWordsVerbatimUnderPackParams) 
     // readback verb: a test that calls it directly says so, or the block is unfilled and the
     // first read is Fatal{UnmigratedPipeInput} in a push build.
     MG_Test::ScopedPipeVerb readback(MG_Pipe::MGPipeVerb::ReadPixels);
-    ASSERT_TRUE(ReadbackImpl::StorePackedWordsToClient(reinterpret_cast<const Uint8*>(source), /*width=*/3,
-                                                       /*sliceHeight=*/2, /*sliceCount=*/1,
-                                                       GL_UNSIGNED_INT_5_9_9_9_REV, destination,
-                                                       /*applyPackImageParams=*/false));
+    ASSERT_TRUE(ClientReadback::StorePackedWordsToClient(reinterpret_cast<const Uint8*>(source), /*width=*/3,
+                                                         /*sliceHeight=*/2, /*sliceCount=*/1,
+                                                         GL_UNSIGNED_INT_5_9_9_9_REV, destination,
+                                                         /*applyPackImageParams=*/false));
     // Row 0 lands at SKIP_ROWS * 16 + SKIP_PIXELS * 4 = 20 bytes = word 5; row 1 one 16-byte
     // stride further along, at word 9.
     for (Int i = 0; i < 3; ++i) {
@@ -4727,10 +4728,10 @@ TEST_F(TextureTest, StorePackedWordsToClientCopiesWordsVerbatimUnderPackParams) 
     MG_Impl::GLImpl::PixelStorei(GL_PACK_SWAP_BYTES, GL_TRUE);
     // A second readback, after the PACK parameters moved.
     readback.Renew();
-    ASSERT_TRUE(ReadbackImpl::StorePackedWordsToClient(reinterpret_cast<const Uint8*>(source), /*width=*/3,
-                                                       /*sliceHeight=*/1, /*sliceCount=*/1,
-                                                       GL_UNSIGNED_INT_5_9_9_9_REV, destination,
-                                                       /*applyPackImageParams=*/false));
+    ASSERT_TRUE(ClientReadback::StorePackedWordsToClient(reinterpret_cast<const Uint8*>(source), /*width=*/3,
+                                                         /*sliceHeight=*/1, /*sliceCount=*/1,
+                                                         GL_UNSIGNED_INT_5_9_9_9_REV, destination,
+                                                         /*applyPackImageParams=*/false));
     EXPECT_EQ(destination[0], 0x0000FCF8u); // byte-reversed 0xF8FC0000
     EXPECT_EQ(destination[1], 0x00000060u);
 

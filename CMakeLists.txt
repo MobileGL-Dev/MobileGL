@@ -496,6 +496,7 @@ set(SOURCE_FILES
 
     MobileGL/MG_Backend/Init.cpp
     MobileGL/MG_Backend/BackendObject.cpp
+    MobileGL/MG_Backend/ClientReadback.cpp
     MobileGL/MG_Backend/GpuHangWatch.cpp
 
     MobileGL/MG_Backend/DirectGLES/DirectGLES.cpp

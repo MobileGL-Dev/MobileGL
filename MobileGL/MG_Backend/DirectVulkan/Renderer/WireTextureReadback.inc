@@ -11,7 +11,7 @@
     static Bool PackWireColorTight(const Uint8* source, SizeT sourceBytes, VkFormat format,
                                    TextureInternalFormat logicalFormat, const MG_Pipe::MGPReadbackInfo& info,
                                    Vector<Uint8>& result) {
-        using namespace DirectGLES::ReadbackImpl;
+        using namespace ClientReadback;
         ReadbackChannelMapping mapping{};
         if (!GetReadbackChannelMapping(info.Format, mapping)) return false;
         const SizeT sourcePixelSize = VulkanRenderer::GetReadbackTexelSize(format);
@@ -225,7 +225,7 @@
             if (!PackDepthStencilTight(depth ? mapped : nullptr, stencil ? mapped + stencilOffset : nullptr,
                                        resource->format, pixels, info.Format, info.Type, result)) return false;
         } else {
-            using namespace DirectGLES::ReadbackImpl;
+            using namespace ClientReadback;
             ReadbackChannelMapping mapping{};
             if (!GetReadbackChannelMapping(info.Format, mapping) ||
                 GetReadbackDstPixelSize(mapping, info.Type) != destinationPixelSize) return false;

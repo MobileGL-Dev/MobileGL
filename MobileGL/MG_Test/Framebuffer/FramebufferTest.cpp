@@ -16,6 +16,7 @@
 #include <MG_Backend/DirectGLES/DirectGLES.h>
 #include <MG_Backend/DirectGLES/Managers.h>
 #include <MG_Backend/DirectGLES/Utils.h>
+#include <MG_Backend/ClientReadback.h>
 #include <MG_Impl/GLImpl/Buffer/GL_Buffer.h>
 #include <MG_Impl/GLImpl/Framebuffer/GL_Framebuffer.h>
 #include <MG_Impl/GLImpl/Getter/GL_Getter.h>
@@ -605,26 +606,25 @@ TEST_F(FramebufferTest, BlitNamedFramebufferAllowsDefaultFramebufferZero) {
 
 // ---- Packed-type readback encoding ------------------------------------------------------------------
 // Oracle-independent guard for the DirectGLES client-format readback conversion: feeds known wide RGBA
-// rows through ReadbackImpl::ConvertWideReadbackRow and asserts the exact packed words. Field positions
+// rows through ClientReadback::ConvertWideReadbackRow and asserts the exact packed words. Field positions
 // were hand-computed from GL 3.3 table 3.6 and match the GL CTS packed_pixels comparison functions
 // (glcPackedPixelsTests.cpp pack_UNSIGNED_*): non-REV types pack the first format component from the
 // most significant bit, *_REV types from the least significant bit.
 
 namespace {
-    namespace ReadbackImpl = MG_Backend::DirectGLES::ReadbackImpl;
+    namespace ClientReadback = MG_Backend::ClientReadback;
 
     // Converts a row of wide pixels (4 components of wideType each) into `format`/`type` words.
     template <typename WordT, typename SrcT>
     Vector<WordT> ConvertWideRowToPackedWords(const Vector<SrcT>& wide, GLenum wideType, GLenum format,
                                               GLenum type) {
-        ReadbackImpl::ReadbackChannelMapping mapping{};
-        EXPECT_TRUE(ReadbackImpl::GetReadbackChannelMapping(format, mapping));
-        EXPECT_EQ(ReadbackImpl::GetReadbackDstPixelSize(mapping, type), sizeof(WordT));
+        ClientReadback::ReadbackChannelMapping mapping{};
+        EXPECT_TRUE(ClientReadback::GetReadbackChannelMapping(format, mapping));
+        EXPECT_EQ(ClientReadback::GetReadbackDstPixelSize(mapping, type), sizeof(WordT));
         const SizeT width = wide.size() / 4;
         Vector<WordT> out(width, static_cast<WordT>(0));
-        ReadbackImpl::ConvertWideReadbackRow(reinterpret_cast<const Uint8*>(wide.data()),
-                                             reinterpret_cast<Uint8*>(out.data()), width, wideType, mapping,
-                                             type);
+        ClientReadback::ConvertWideReadbackRow(reinterpret_cast<const Uint8*>(wide.data()),
+                                               reinterpret_cast<Uint8*>(out.data()), width, wideType, mapping, type);
         return out;
     }
 
@@ -767,17 +767,17 @@ TEST(PackedReadbackEncodeTest, EncodesSharedExponent5999Rev) {
 }
 
 TEST(PackedReadbackEncodeTest, RejectsMismatchedPackedFieldCounts) {
-    ReadbackImpl::ReadbackChannelMapping rgba{};
-    ASSERT_TRUE(ReadbackImpl::GetReadbackChannelMapping(GL_RGBA, rgba));
-    ReadbackImpl::ReadbackChannelMapping rgbInteger{};
-    ASSERT_TRUE(ReadbackImpl::GetReadbackChannelMapping(GL_RGB_INTEGER, rgbInteger));
+    ClientReadback::ReadbackChannelMapping rgba{};
+    ASSERT_TRUE(ClientReadback::GetReadbackChannelMapping(GL_RGBA, rgba));
+    ClientReadback::ReadbackChannelMapping rgbInteger{};
+    ASSERT_TRUE(ClientReadback::GetReadbackChannelMapping(GL_RGB_INTEGER, rgbInteger));
 
     // 3-field packed types never pair with 4-component formats and vice versa.
-    EXPECT_EQ(ReadbackImpl::GetReadbackDstPixelSize(rgba, GL_UNSIGNED_SHORT_5_6_5), 0u);
-    EXPECT_EQ(ReadbackImpl::GetReadbackDstPixelSize(rgbInteger, GL_UNSIGNED_SHORT_4_4_4_4), 0u);
+    EXPECT_EQ(ClientReadback::GetReadbackDstPixelSize(rgba, GL_UNSIGNED_SHORT_5_6_5), 0u);
+    EXPECT_EQ(ClientReadback::GetReadbackDstPixelSize(rgbInteger, GL_UNSIGNED_SHORT_4_4_4_4), 0u);
     // Packed-float RGB types never pair with integer formats.
-    EXPECT_EQ(ReadbackImpl::GetReadbackDstPixelSize(rgbInteger, GL_UNSIGNED_INT_5_9_9_9_REV), 0u);
-    EXPECT_EQ(ReadbackImpl::GetReadbackDstPixelSize(rgbInteger, GL_UNSIGNED_INT_10F_11F_11F_REV), 0u);
+    EXPECT_EQ(ClientReadback::GetReadbackDstPixelSize(rgbInteger, GL_UNSIGNED_INT_5_9_9_9_REV), 0u);
+    EXPECT_EQ(ClientReadback::GetReadbackDstPixelSize(rgbInteger, GL_UNSIGNED_INT_10F_11F_11F_REV), 0u);
 }
 
 // ---- GL CTS packed_pixels readback root-cause regressions --------------------------------------

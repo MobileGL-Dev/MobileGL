@@ -13,7 +13,7 @@
 #include "OffscreenSurfaceRoute.h"
 
 #include "MG_Backend/DirectVulkan/SubgroupSupportPolicy.h"
-#include "MG_Backend/DirectGLES/Utils.h"
+#include "MG_Backend/ClientReadback.h"
 #include "VertexInputStateFactory.h"
 #include "VertexInputStateBuilder.h"
 
@@ -1910,9 +1910,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 return true;
             }
 
-            DirectGLES::ReadbackImpl::ReadbackChannelMapping mapping{};
-            if (!DirectGLES::ReadbackImpl::GetReadbackChannelMapping(format, mapping) ||
-                DirectGLES::ReadbackImpl::GetReadbackDstPixelSize(mapping, type) == 0) {
+            ClientReadback::ReadbackChannelMapping mapping{};
+            if (!ClientReadback::GetReadbackChannelMapping(format, mapping) ||
+                ClientReadback::GetReadbackDstPixelSize(mapping, type) == 0) {
                 MGLOG_E_ONCE("DirectVulkan readback skipped: unsupported format=0x%x type=0x%x", format, type);
                 return false;
             }
@@ -1925,8 +1925,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 MG_Util::PixelStoreProcessor::IsRawPackedPixelTransfer(
                     GetPackedReadbackInternalFormat(srcFormat), MG_Util::ConvertGLEnumToTextureInputFormat(format),
                     MG_Util::ConvertGLEnumToTexturePixelDataType(type))) {
-                return DirectGLES::ReadbackImpl::StorePackedWordsToClient(srcPixels, width, sliceHeight, sliceCount,
-                                                                          type, pixels, applyPackImageParams);
+                return ClientReadback::StorePackedWordsToClient(srcPixels, width, sliceHeight, sliceCount, type, pixels,
+                                                                applyPackImageParams);
             }
 
             Vector<Uint8> wide;
@@ -1960,9 +1960,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 return false;
             }
 
-            return DirectGLES::ReadbackImpl::StoreWideRowsToClient(wide.data(), wideType, width, sliceHeight,
-                                                                   sliceCount, mapping, type, pixels,
-                                                                   applyPackImageParams);
+            return ClientReadback::StoreWideRowsToClient(wide.data(), wideType, width, sliceHeight, sliceCount, mapping,
+                                                         type, pixels, applyPackImageParams);
         }
     } // namespace
 
