@@ -414,8 +414,8 @@ void main() {
         // ------------------------------------------------------------------ sub-rect / M-1 ----
         //
         // Everything above reads the FULL extent of its target, which is the one case
-        // DirectVulkan's default-framebuffer readback ever re-oriented: the remap at
-        // VulkanRenderer.cpp:2042 had no rect parameters at all, so :8278 gated it on
+        // DirectVulkan's default-framebuffer readback ever re-oriented: the remap
+        // (RemapDefaultFramebufferReadback) had no rect parameters at all, so its caller gated it on
         // `width == swapchainExtent.width && height == swapchainExtent.height` and fell back to a
         // raw copy otherwise. Meanwhile the viewport (:422), the scissor (:506-546) and the
         // ReadPixels copy offset (:8238) all used the GL bottom-origin Y verbatim as a Vulkan

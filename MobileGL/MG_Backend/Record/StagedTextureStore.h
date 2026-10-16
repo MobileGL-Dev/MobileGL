@@ -14,7 +14,7 @@
 // the accumulation and the serial. Espryt then re-reads the client's MipmapStorage at sync
 // time (Managers.cpp:6940, :7129, :7198, :7315), reads per-level shape off the client object
 // (:6928, :6936, :7314, :7332, DirectGLES.cpp:8502-8507, :8528-8529), and Magma WRITES the
-// client's level storage outright (VulkanRenderer.cpp:1562-1609: AllocateStorage +
+// client's level storage outright (VulkanRenderer's AllocateStorage +
 // MarkStorageDirty). In monolith every one of those is correct - the bytes belong to a
 // frontend object that outlives the call. Under split the pointer names SEG_STAGE, valid
 // only until retiredSeq passes the record, and w1's MOBILEGL_IPC_AUDIT=1 fills retired
