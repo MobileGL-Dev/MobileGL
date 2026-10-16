@@ -223,7 +223,8 @@ RENDER_STATE_PATH = os.path.join(REPO_ROOT, "MobileGL", "MG_State", "GLState", "
 # An answer is one or more publishers joined with "|" - every publisher that fires on EVERY
 # path through the mutator (DirtySurface.def's header states the rule).
 ROW_RE = re.compile(r"^[ \t]*X\((\w+),\s*([\w|]+)\)\s*\\?\s*$", re.M)
-DIRTY_NAME_RE = re.compile(r'^\s*"(NEW_[A-Z0-9_]+)",\s*$', re.M)
+DIRTY_NAME_TABLE_RE = re.compile(r"kMGPipeDirtyNames\[[^\]]*\]\s*=\s*\{([^}]*)\}")
+DIRTY_NAME_RE = re.compile(r'"(NEW_[A-Z0-9_]+)"')
 # The second list of DirtySurface.def: the (mutator, bit) pairs the derivation is KNOWN to
 # leave UNDECIDED, each with the reason --check prints. Every bit answer not listed here is
 # marked derived, and --check fails when the derivation cannot decide it.
@@ -1194,7 +1195,7 @@ def shutter_readers():
 
 
 ENUM_BODY_RE = re.compile(r"enum\s+class\s+MGPipeDirty\s*:\s*Uint32\s*\{([^}]*)\}")
-ENUMERATOR_RE = re.compile(r"^\s*(\w+)\s*(?:=\s*\d+\s*)?,", re.M)
+ENUMERATOR_RE = re.compile(r"(\w+)\s*(?:=\s*\d+\s*)?(?:,|$)")
 
 
 def dirty_bit_aliases():
@@ -1207,8 +1208,8 @@ def dirty_bit_aliases():
     match = ENUM_BODY_RE.search(mask_comments_and_strings(text))
     if not match:
         return {}
-    enumerators = [name for name in ENUMERATOR_RE.findall(match.group(1)) if name != "Count"]
-    names = DIRTY_NAME_RE.findall(text)
+    enumerators = [name for name in ENUMERATOR_RE.findall(match.group(1).strip()) if name != "Count"]
+    names = dirty_name_table(text)
     if len(enumerators) != len(names):
         return {}
     return dict(zip(enumerators, names))
@@ -1236,13 +1237,19 @@ def shutter_movers(readers, bodies, aliases):
     return out
 
 
+def dirty_name_table(text):
+    """The NEW_* strings of kMGPipeDirtyNames in order, whatever the line layout."""
+    match = DIRTY_NAME_TABLE_RE.search(text)
+    return DIRTY_NAME_RE.findall(match.group(1)) if match else []
+
+
 def dirty_bit_names():
     """The MGPipeDirty bit names, read out of Tracker.h's kMGPipeDirtyNames so a row cannot
     name a bit that does not exist and a bit cannot be renamed out from under a row. Read
     from the RAW text on purpose: the names are string literals, which is exactly what
     mask_comments_and_strings blanks."""
     with open(TRACKER_PATH, "r", encoding="utf-8", errors="replace") as handle:
-        return set(DIRTY_NAME_RE.findall(handle.read()))
+        return set(dirty_name_table(handle.read()))
 
 
 def load_mapping(text=None):
