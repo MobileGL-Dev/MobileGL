@@ -500,6 +500,17 @@ set(SOURCE_FILES
     MobileGL/MG_Backend/GpuHangWatch.cpp
 
     MobileGL/MG_Backend/DirectGLES/DirectGLES.cpp
+    MobileGL/MG_Backend/DirectGLES/DirectGLESBind.cpp
+    MobileGL/MG_Backend/DirectGLES/DirectGLESBlit.cpp
+    MobileGL/MG_Backend/DirectGLES/DirectGLESBuffers.cpp
+    MobileGL/MG_Backend/DirectGLES/DirectGLESContext.cpp
+    MobileGL/MG_Backend/DirectGLES/DirectGLESCopy.cpp
+    MobileGL/MG_Backend/DirectGLES/DirectGLESDraw.cpp
+    MobileGL/MG_Backend/DirectGLES/DirectGLESReadback.cpp
+    MobileGL/MG_Backend/DirectGLES/DirectGLESSharedImage.cpp
+    MobileGL/MG_Backend/DirectGLES/DirectGLESState.cpp
+    MobileGL/MG_Backend/DirectGLES/DirectGLESSync.cpp
+    MobileGL/MG_Backend/DirectGLES/DirectGLESTextures.cpp
     MobileGL/MG_Backend/DirectGLES/BackendObject_DirectGLES.cpp
     MobileGL/MG_Backend/DirectGLES/Utils.cpp
     MobileGL/MG_Backend/DirectGLES/Managers.cpp
