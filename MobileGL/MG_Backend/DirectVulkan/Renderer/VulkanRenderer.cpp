@@ -406,8 +406,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         };
         DynamicTailKey dynamicTailKey{};
     };
-    // Per Magma session (MagmaSession.h): it shadows the session's own command buffer.
-    static SessionLocal<DynamicStateShadow> g_dynamicStateShadow;
+    // Per Magma session (MagmaSession.h): it shadows the session's own command buffer. Inline,
+    // so every file of the renderer shares the one instance.
+    inline SessionLocal<DynamicStateShadow> g_dynamicStateShadow;
 
     // ---- D12.3: DynamicTailKey's inputs against the P2 chunk table ----
     //

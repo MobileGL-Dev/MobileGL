@@ -116,8 +116,8 @@
     // that exists for the device WITHOUT them, which is where the session used to die at
     // `Magma:multisample-depth-resolve-capability` - would never execute under any lane. The
     // knob drops the extension arm. It does not pretend the extension is missing anywhere else:
-    // nothing but the arm choice reads it.
-    static Bool MagmaWireForcedShaderDepthResolve() {
+    // nothing but the arm choice reads it. Inline, so the renderer reads the variable once.
+    inline Bool MagmaWireForcedShaderDepthResolve() {
         static const Bool forced = [] {
             const char* value = std::getenv("MGITEST_MAGMA_FORCE_SHADER_DEPTH_RESOLVE");
             return value && *value && value[0] != '0';
