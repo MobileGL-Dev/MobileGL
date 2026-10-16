@@ -1021,10 +1021,10 @@ namespace MobileGL::MG_Backend::DirectGLES {
         //   Managers.cpp  RequireImageBindableStorage  - re-dirties every defined level so the
         //                 widened image carrier is replayed rather than allocated empty (LIVE,
         //                 and it is this helper's only caller);
-        //   DirectGLES.cpp:7406  GenerateThreeChannelFloatMipmapOnCpu - same shape, milder
+        //   GenerateThreeChannelFloatMipmapOnCpu, since removed - same shape, milder
         //                 outcome (package E's file; E's verification round calls this helper
         //                 there, or states why not);
-        //   DirectGLES.cpp:6735  the CLEAR half (MarkStorageDirty(..., false)) after a
+        //   the CLEAR half (MarkStorageDirty(..., false), since removed) after a
         //                 glGetTexImage shadow refresh - it clears rather than dirties, so
         //                 nothing is owed and there is nothing to re-arm.
         //

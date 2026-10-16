@@ -47,9 +47,9 @@
 #   UnpackRingAllocate             Managers.cpp: on the hot upload route
 #   RecomputeBackendColorSlots     Managers.cpp: the attachment permutation - three passes plus the
 #                                  forced ~0 version memo on every moved attachment; removing the
-#                                  empty-point detach breaks the invariant (Managers.cpp:7651-7658)
+#                                  empty-point detach breaks the invariant (SyncToBackendByHandle)
 #   DepthStencilSamplingReadImpl   DirectGLES.cpp: the D24S8 sampling-emulation core (memory
-#                                  better-clouds-fullmode), entered from :8617 and :8721
+#                                  better-clouds-fullmode), entered from its two Read*Native callers
 #   ShouldUseCaveatTextureFormat   Utils.cpp: the format handler P4a's InternalFormat descriptors
 #                                  feed; a change here silently changes what every texture is
 #                                  allocated as
@@ -60,7 +60,7 @@
 #   1. A PER-REGION SOURCE PATH. The parent's SOURCE_PATH is a single file (:85); the seventeen live
 #      in three. Each row below carries its own path and the extractor reads each file once.
 #   2. A REGION KIND. [declared deviation, see DEVIATIONS below] Sixteen of the seventeen are
-#      FUNCTIONS. `DepthStencilSamplingReadImpl` is a NAMESPACE (DirectGLES.cpp:8117-8578) - the
+#      FUNCTIONS. `DepthStencilSamplingReadImpl` is a NAMESPACE (in DirectGLESReadback.cpp) - the
 #      brief's D-N table names it as though it were a function, and the parent's extractor, which
 #      finds a definition as the one `<name> (` whose closing paren is followed by `{`, finds ZERO
 #      definitions of it and exits 2 forever. Hashing the whole namespace block is also the
@@ -330,7 +330,7 @@ def find_function(text, masked, name):
 def find_namespace(text, masked, name):
     """Every (begin, end) at which `name` is DEFINED as a namespace.
 
-    P4a's DepthStencilSamplingReadImpl is a namespace, not a function (DirectGLES.cpp:8117-8578):
+    P4a's DepthStencilSamplingReadImpl is a namespace, not a function (in DirectGLESReadback.cpp):
     the D24S8 sampling-emulation CORE is the whole block, and a function-shaped search finds no
     definition of it at all. The closing `} // namespace <name>` comment is masked away by the
     time this runs, so the extent is decided by brace matching exactly as a function's is - and a

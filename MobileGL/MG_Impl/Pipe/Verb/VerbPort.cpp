@@ -126,7 +126,7 @@ namespace MobileGL::MG_Record {
                                       const PixelStoreParameters& pack) {
             // SKIP_IMAGES (and IMAGE_HEIGHT) are NOT consulted: glReadPixels is a 2-D read and GL
             // ignores the image-level pack parameters for it, exactly as the monolith conversion
-            // path does at DirectGLES.cpp:10905 (honorPackImageParams=false). A non-zero
+            // path does in ReadPixels (DirectGLESReadback.cpp, honorPackImageParams=false). A non-zero
             // SkipImages therefore does not make the layout non-tight (codex 6).
             if (pack.SkipRows != 0 || pack.SkipPixels != 0) return false;
             if (pack.RowLength != 0 && pack.RowLength != width) return false;
@@ -1344,7 +1344,7 @@ namespace MobileGL::MG_Record {
         // already validated them and already folds glTextureBarrier onto the same field
         // (GL_Drawing.cpp:920-937), and Espryt's atomic-counter lowering - the counter bit
         // implying the storage bit - stays inside the backend where the reason for it lives
-        // (DirectGLES.cpp:8837). A client that pre-lowered would be answering a driver question
+        // (LowerAtomicCounterBarrierBits). A client that pre-lowered would be answering a driver question
         // from the wrong side and the two arms would stop being byte-identical.
         //
         // No pre-verb hook: a barrier orders memory the GPU already holds. It starts no shader
@@ -1417,8 +1417,8 @@ namespace MobileGL::MG_Record {
         void EmitShaderStorageBlockBinding(GLuint program, const GLchar* storageBlockName,
                                            GLuint storageBlockBinding) {
             VerbChannel session = ChannelFor("ShaderStorageBlockBinding");
-            // The backend slot's own first line (DirectGLES.cpp:9201), kept here so a null name
-            // never becomes a zero-size blob - which rule A forbids spelling at all.
+            // The backend slot's own first line (ShaderStorageBlockBinding, DirectGLESCopy.cpp), kept
+            // here so a null name never becomes a zero-size blob - which rule A forbids spelling at all.
             if (storageBlockName == nullptr) return;
             BeforeReadOnlyVerb();
 
@@ -1537,7 +1537,7 @@ namespace MobileGL::MG_Record {
             MG_Pipe::MGPStreamOutputBind record{};
             // THE GL NAME IS NOT AN IDENTITY (ARCHITECTURE 4.2.1) and is carried anyway, because
             // it is the key the backend has always used: Espryt indexes its driver objects by it
-            // (XfbImpl::g_xfbObjects[name], DirectGLES.cpp:1401) and generates the ES object on
+            // (XfbImpl::g_xfbObjects, DirectGLESBuffers.cpp) and generates the ES object on
             // first bind. Name 0 is the default object, which is why the field is not a handle.
             record.GlName = static_cast<Uint32>(name);
             // Beside it, the identity that WILL dispatch: the frontend's per-object lifetime id,
@@ -1563,7 +1563,7 @@ namespace MobileGL::MG_Record {
             record.Value = static_cast<Int32>(value);
             // set_patch_state (43) STILL TRAVELS, at the next validate, and that is not a
             // duplicate: it is the applier's working-block copy, this is the driver push Espryt
-            // does AT THE CALL (DirectGLES.cpp:8760), and both pushes happen today on the
+            // does AT THE CALL (PatchParameteri, DirectGLESCopy.cpp), and both pushes happen today on the
             // monolith path too (CONTRACT-P5B.md §2 t2).
             session.EmitAndWait(MG_Pipe::MGPWireOp::PatchParameter, &record, sizeof(record),
                                 nullptr, 0, nullptr, 0, nullptr);
@@ -1805,7 +1805,7 @@ namespace MobileGL::MG_Record {
         const Uint64 writtenPerRow = where.Columns * bytesPerPixel;
         // SKIP_IMAGES and IMAGE_HEIGHT ARE IGNORED (codex 6). glReadPixels is a 2-D read; GL
         // does not apply the image-level pack parameters to it, and the monolith conversion path
-        // says so explicitly with honorPackImageParams=false (DirectGLES.cpp:10905). Applying
+        // says so explicitly with honorPackImageParams=false (ReadPixels, DirectGLESReadback.cpp). Applying
         // SKIP_IMAGES here shifted a read with SKIP_IMAGES=1 by a whole image and overran an
         // application buffer sized for exactly `height` rows. Only SKIP_ROWS and SKIP_PIXELS -
         // the 2-D skips - offset the first written byte; the band's own row and column then

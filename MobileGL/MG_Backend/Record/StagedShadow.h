@@ -20,7 +20,7 @@
 // THE SNAPSHOT EXTENT IS EXACTLY WHAT THE RECORD DECLARED, NEVER WIDENED (the integrator's
 // ruling on b1's open M-6 half). Widening looked free once before and was not: a page-aligned
 // INVALIDATE_RANGE clobbered GPU-written data - an SSBO counter beside the app's SubData - with
-// stale shadow bytes (Managers.cpp:1126-1129). Tier 1's INVALIDATE_RANGE is an ASSERTION that
+// stale shadow bytes (FlushPendingRangesFrom, ManagersBuffers.cpp). Tier 1's INVALIDATE_RANGE is an ASSERTION that
 // the old bytes are dead, so declaring bytes covered that nothing staged is not a missing
 // optimisation, it is a silent data loss. The coverage set below is therefore exact, and a
 // drain that reaches outside it is Fatal rather than a re-read of whatever happens to be there.
@@ -172,16 +172,17 @@ namespace MobileGL::MG_Record {
             if (it == m_shadows.end() || it->second.Bytes.data() != hostBase) return;
             if (CoverageHas(it->second.Covered, start, end)) return;
             // Verbatim what the MGLOG_F said, through the funnel that publishes it (P7 wave 0).
-            MG_Pipe::MGPipeRecordFail(MG_Pipe::MGFatalFamily::StageSnapshotTooNarrow,
-                    "MGPipe: Fatal{StageSnapshotTooNarrow, \"%s\"} - the server's ladder wants "
-                    "[%zu, %zu) of a buffer whose staged coverage does not include it. Under "
-                    "split the authoritative shadow is SERVER-OWNED (rule C) and "
-                    "resource_subdata is the only way bytes reach it, so bytes outside a staged "
-                    "range have never existed on this side. Re-reading them would move zeroes "
-                    "into the store, and an INVALIDATE_RANGE over them would declare live "
-                    "GPU-written bytes dead (Managers.cpp:1126-1129). This is a missing record, "
-                    "not a missing widening",
-                    site, start, end);
+            MG_Pipe::MGPipeRecordFail(
+                MG_Pipe::MGFatalFamily::StageSnapshotTooNarrow,
+                "MGPipe: Fatal{StageSnapshotTooNarrow, \"%s\"} - the server's ladder wants "
+                "[%zu, %zu) of a buffer whose staged coverage does not include it. Under "
+                "split the authoritative shadow is SERVER-OWNED (rule C) and "
+                "resource_subdata is the only way bytes reach it, so bytes outside a staged "
+                "range have never existed on this side. Re-reading them would move zeroes "
+                "into the store, and an INVALIDATE_RANGE over them would declare live "
+                "GPU-written bytes dead (FlushPendingRangesFrom, ManagersBuffers.cpp). This is a missing record, "
+                "not a missing widening",
+                site, start, end);
         }
 
         // Diagnostics the unit cases read, so that a check can assert WHAT HAPPENED rather than

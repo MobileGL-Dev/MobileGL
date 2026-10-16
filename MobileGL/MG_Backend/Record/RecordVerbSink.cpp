@@ -877,8 +877,8 @@ namespace MobileGL::MG_Record {
         // THE BITS GO OVER VERBATIM AND ARE LOWERED HERE BY NOBODY. Espryt's atomic-counter
         // lowering - the counter bit implying the storage bit, because glslang lowers every
         // atomic_uint onto a storage block - lives inside its own MemoryBarrier
-        // (DirectGLES.cpp:8837) and is a statement about the DRIVER. Repeating it on this side
-        // would make the split arm and the monolith arm two different calls.
+        // (LowerAtomicCounterBarrierBits, DirectGLESCopy.cpp) and is a statement about the driver.
+        // Repeating it on this side would make the split arm and the monolith arm two different calls.
         if (barrier.ByRegion != 0) {
             if (gl.MemoryBarrierByRegion == nullptr) return false;
             gl.MemoryBarrierByRegion(static_cast<GLbitfield>(barrier.Bits));
@@ -903,7 +903,7 @@ namespace MobileGL::MG_Record {
         if (copy.DstTarget == GL_RENDERBUFFER) dst.RenderbufferHandle = copy.Dst;
         else dst.TextureHandle = copy.Dst;
         if (MG_Pipe::MGPipeHandleIsNull(copy.Src) || MG_Pipe::MGPipeHandleIsNull(copy.Dst)) {
-            // The monolith's own answer to this, in its own words (DirectGLES.cpp:9067
+            // The monolith's own answer to this, in its own words (DirectGLESCopy.cpp's CopyImageSubData,
             // "source or destination image failed to sync; declining the copy"): the frontend
             // validator is what keeps it unreachable and what reports the INVALID_VALUE the
             // application is owed. A decline here is a real answer, not a silent success.
@@ -933,8 +933,8 @@ namespace MobileGL::MG_Record {
         if (table->GL.BindImageTexture == nullptr) return false;
         // THE SAME CALL IS RIGHT FOR BOTH BACKENDS, which is why the record carries the whole
         // argument list although neither reads all of it today: Espryt ignores everything but
-        // Unit and syncs that unit from the barrier-pulled GetImageTextureBinding
-        // (DirectGLES.cpp:9154, :2471), and Magma's slot is a no-op (DirectVulkan.cpp:665). The
+        // Unit and whether a texture is named (BindImageTexture in DirectGLESCopy.cpp), leaving the bind
+        // to the next SyncImageTextureBindings sweep, and Magma's slot is a no-op (DirectVulkan.cpp:665). The
         // arguments travel because rule D says a verb crosses as the CALL, and because P7 is
         // what makes the backend read them instead of pulling.
         table->GL.BindImageTexture(static_cast<GLuint>(bind.Unit), static_cast<GLuint>(bind.GlName),
@@ -996,10 +996,10 @@ namespace MobileGL::MG_Record {
         const MG_Backend::GlobalBackendFunctionsTable* table = Table("begin_stream_output");
         if (table == nullptr) return false;
         if (table->GL.BeginTransformFeedback == nullptr) return false;
-        // Espryt's Begin only ARMS the span (DirectGLES.cpp:1212-1220: primitiveMode, pending,
+        // Espryt's Begin only arms the span (XfbImpl::BeginTransformFeedback: primitiveMode, pending,
         // targets cleared); the driver glBeginTransformFeedback happens in the tail of the next
-        // PrepareForDraw (StartPendingTransformFeedback, :1224), where the capture program and
-        // the buffer bindings are read through the pulls. So this record's effect is not
+        // PrepareForDraw (XfbImpl::StartPendingTransformFeedback), where the capture program and
+        // the buffer bindings are read from the span this record stored. So this record's effect is not
         // visible until a DRAW crosses - which is why an XFB scenario whose draw is still class
         // C moves its first blocker to that draw rather than rendering.
         table->GL.BeginTransformFeedback(static_cast<GLenum>(begin.PrimitiveMode));
@@ -1055,9 +1055,9 @@ namespace MobileGL::MG_Record {
         const MG_Backend::GlobalBackendFunctionsTable* table = Table("bind_stream_output");
         if (table == nullptr) return false;
         // THE GL NAME IS THE ARGUMENT, NOT THE LifetimeId BESIDE IT. Espryt keys its driver
-        // objects by the GL name (XfbImpl::g_xfbObjects[name], DirectGLES.cpp:1401) and creates
-        // the ES object on first bind; passing the lifetime id would index a map that has never
-        // heard of it and silently create a second driver object per bind. The lifetime id
+        // objects by the applier's BoundStreamOutputLifetimeId, which is set just below, and not by
+        // the GL name: XfbImpl::BindTransformFeedback (DirectGLESBuffers.cpp) ignores its argument
+        // and creates the ES object on first bind. The lifetime id
         // identifies the P5f capture snapshot on this side. Keeping it separate preserves
         // the backend GL-name argument while Begin/End find the right server-owned span.
         MG_Pipe::MGPipeApplier().BoundStreamOutputLifetimeId = bind.LifetimeId;

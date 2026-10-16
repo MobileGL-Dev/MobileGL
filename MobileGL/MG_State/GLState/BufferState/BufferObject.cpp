@@ -477,10 +477,10 @@ namespace MobileGL::MG_State::GLState {
         // mapped streaming arena behind a static VAO, there IS no next content record. The
         // only one is the block push, the push for a vertex/uniform/SSBO map runs inside
         // EnsureBufferResourceForHandle, and a draw-clean answer SKIPS that ensure
-        // (DirectGLES.cpp:691) and then LATCHES it (:697, vboCleanEpoch - and a coherent
+        // (SyncVaoAttributeBuffersByRecord in DirectGLESBind.cpp) and then LATCHES it (vboCleanEpoch - and a coherent
         // persistent map bumps no mutation epoch, which is its whole point). So: draw 1
         // pushes, draw 2 probes clean, draw 3 onward never probes again, and the frame draws
-        // frame 1's bytes for ever with no diagnostic. That is Managers.cpp:2650-2655's
+        // frame 1's bytes for ever with no diagnostic. That is IsBufferDrawCleanByHandle's
         // regression one layer down, and the rising-edge record is what breaks the cycle: the
         // server learns a host writer is live BEFORE the first probe, answers dirty while the
         // map lives, and the ensure - and with it the push - runs every draw.

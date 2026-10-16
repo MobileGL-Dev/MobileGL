@@ -487,7 +487,7 @@ namespace MobileGL::MG_Remote::Client {
         // DeleteTransformFeedback is the one that stays: it has NO ROW in P5b, by ruling and
         // not by omission (unmeasured; the driver object leaks on the server until P9's XFB
         // namespace work, and a bind of name 0 is what the backend does on delete of the bound
-        // one, DirectGLES.cpp:1422). It therefore still aborts by its own name.
+        // one, XfbImpl::DeleteTransformFeedback in DirectGLESBuffers.cpp). It therefore still aborts by its own name.
 #define MGR_UNMIGRATED_T2_SLOTS(X)
 
 #define MGR_UNMIGRATED_F1_SLOTS(X)

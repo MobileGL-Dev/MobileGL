@@ -86,10 +86,10 @@ namespace MobileGL::MG_Record {
 
     // ---- the row predicates, exposed so a unit case can drive one row at a time -------
 
-    // Row 2's discriminator, verbatim from DirectGLES.cpp:2354-2357. It is a function rather
-    // than three inline conditions at the call site because it is the one row whose backend
-    // twin is narrow on purpose, and a client that re-derived it slightly wider would mark
-    // read-only image bindings with nothing able to see that it had.
+    // Row 2's discriminator, verbatim from the backend's former IsWritableImageBufferTexture (now
+    // IsWritableImageBufferView, DirectGLESTextures.cpp). A function rather than three inline conditions, because
+    // it is the one row whose backend twin is narrow on purpose, and a client that re-derived it slightly wider
+    // would mark read-only image bindings with nothing able to see that it had.
     Bool ImageUnitIsAWritableBufferTexture(const MG_State::GLState::ImageTextureBinding& binding);
 
     // The one place a row actually marks. Null and duplicate marks are absorbed here so the

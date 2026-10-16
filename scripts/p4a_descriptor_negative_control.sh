@@ -28,7 +28,7 @@
 #
 #   1. MGPSurface::Layered stops being copied in MG_Impl/Pipe/FramebufferEmit.h. A layered
 #      attachment travels as a non-layered one, which is the shape that turns a whole-array render
-#      target into slice 0 - and SupportsLayeredImageBinding's rule (DirectGLES.cpp:1992-2013,
+#      target into slice 0 - and SupportsLayeredImageBinding's rule (DirectGLESTextures.cpp,
 #      D-O) forces `layer` to 0 for a non-layerable target, so the wrong answer is silently
 #      plausible rather than an error. It is also the field with the least other coverage: the
 #      surface's Res, Level and Layer are all still right, so nothing about the ATTACHMENT changes

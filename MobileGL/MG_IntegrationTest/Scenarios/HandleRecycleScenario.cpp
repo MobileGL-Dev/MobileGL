@@ -1848,8 +1848,8 @@ void main() { oColor = texture(uTex, vec2(4.0, 4.0)); }
         }
 
         // ------------------------------------------------------------------------------------
-        // 7. The program (ShaderCso). Espryt reaches a program's backend twin through
-        //    g_programTwinLookupMemo (DirectGLES.cpp:134-135), which is keyed on the frontend
+        // 7. The program (ShaderCso). Espryt used to reach a program's backend twin through
+        //    g_programTwinLookupMemo (since removed), which was keyed on the frontend
         //    ProgramObject; P4a re-keys it on the shader CSO's {slot, gen} and gives the program a
         //    create_shader_state / delete_shader_state lifetime of its own.
         //

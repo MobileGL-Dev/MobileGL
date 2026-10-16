@@ -1522,7 +1522,7 @@ TEST_F(PipeWireCodecTest, EndStreamOutputCarriesAllThreeAccountingFieldsAndNotJu
 TEST_F(PipeWireCodecTest, BindStreamOutputOfNameZeroIsTheDefaultObjectAndNotAnAbsentOne) {
     // THE ONE NAME t2 CANNOT TREAT AS "NOTHING". CONTRACT-P5B.md gives DeleteTransformFeedback
     // no row, and the backend's answer to deleting the bound object is a bind of NAME 0
-    // (DirectGLES.cpp:1422) - so a row that folded 0 into kMGPipeNullHandle, or a sink that read
+    // (XfbImpl::DeleteTransformFeedback) - so a row that folded 0 into kMGPipeNullHandle, or a sink that read
     // 0 as "no object", would silently stop rebinding the default object and leave the driver
     // bound to a deleted one. The lifetime id beside it is 0 too here, which is the frontend's
     // seed value for the default object, so this case also pins that a wholly-zero record is

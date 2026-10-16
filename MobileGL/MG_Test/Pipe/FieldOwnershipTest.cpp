@@ -1039,9 +1039,9 @@ TEST_F(FieldOwnershipTest, TheUnpackHalfOfThePixelStoreAbortsWhileThePackHalfDoe
     EXPECT_EQ(ok.Log.find("Fatal{"), std::string::npos) << ok.Log;
 }
 
-// One function edit, five call sites (Managers.cpp:5334, DirectGLES.cpp:8051, :8702, :8997,
-// :10623). The arm is the TRANSPORT, not the build: build-split's own lanes run monolith and
-// several of the five are on ordinary monolith paths they exercise.
+// One function edit, five call sites when this test was written ("texture-remint-pull", "generate-mipmap-storage",
+// "generate-mipmap-cpu-fallback", "copy-image-shadow-mirror", "get-tex-image-shadow"), all since removed. The arm
+// is the transport, not the build: build-split's own lanes run monolith and exercised several of the five.
 TEST_F(FieldOwnershipTest, AnUnmigratedEmulationIsFatalUnderARealTransportAndInertUnderMonolith) {
     const ChildResult monolith = RunInChild([] {
         MG_Config::Transport = MG_Config::TransportMode::Monolith;

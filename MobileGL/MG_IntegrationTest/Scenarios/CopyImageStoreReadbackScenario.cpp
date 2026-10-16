@@ -25,7 +25,7 @@
 // has no store route to exercise.
 //
 // THE KNOB. MGITEST_ESPRYT_REFUSE_TEXTURE_READBACK_EXTENT=<w>x<h> is read BY THE ESPRYT SERVER
-// (WireTextureReadback.inc, ReadTextureImageWire): a colour level of exactly that extent is
+// (DirectGLESReadback.cpp, ReadTextureImageWire): a colour level of exactly that extent is
 // treated as a level the driver refused to attach - what a driver without EXT_texture_norm16 /
 // EXT_render_snorm does for these formats (an Adreno 750, which has both, reads them all back
 // through the GPU; measured in P13), and what llvmpipe can be made to do no other way. The

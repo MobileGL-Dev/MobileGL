@@ -264,7 +264,7 @@ namespace MobileGL::MG_Remote::Server {
         const MG_Backend::GlobalBackendFunctionsTable* table = Table("present");
         if (table == nullptr) return false;
         if (table->Present == nullptr) return false;
-        // Present is the ONLY frame-boundary drain the backend has (DirectGLES.cpp:12424-12470:
+        // Present is the ONLY frame-boundary drain the backend has (in DirectGLESSync.cpp it runs
         // the fence poll, the four ring OnPresent hooks, TrimBufferPool, PipeStats::OnPresent),
         // which is why ARCHITECTURE.md §14 wants present <-> eglSwapBuffers to stay 1:1.
         //

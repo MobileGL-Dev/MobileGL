@@ -32,7 +32,7 @@ import sys
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-# `Managers.cpp:4340-4390`, `MobileGL/MG_State/.../RenderState.h:263`, `:12-13` is NOT
+# `File.cpp:123-456`, `MobileGL/MG_State/.../RenderState.h:263`, `:12-13` is NOT
 # matched on purpose: a citation with no file name cannot be checked, only guessed.
 CITATION_RE = re.compile(
     r"(?<![\w/.-])((?:[\w.-]+/)*[\w.-]+\.(?:h|hpp|cpp|cc|c|py|def|inc|md|json|yml|yaml|txt|fbs))"

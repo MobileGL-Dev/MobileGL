@@ -1103,7 +1103,7 @@ TEST(StagedShadowTest, ADrainOutsideTheStagedCoverageIsFatalByName) {
 
 // M-1 / codex 8: the R-11 gate that drives the PRODUCTION path - the real resource op table
 // installed by RegisterBufferBackendOps, dispatched through MGPipeGetResourceOps()->SubData, i.e.
-// the exact Managers.cpp:2118 call site R-11 changed - and NOT StagedShadowStore in isolation.
+// the exact MGL_SERVER_STAGED_ADOPT call site in Ops_H_SubData - and not StagedShadowStore in isolation.
 // StagedShadowTest stays as the container test; this is the gate that goes red under the two
 // perturbations the reviewer used (restore `hostBytes = raw - offset`, neuter the coverage clamp).
 #if !defined(_WIN32)

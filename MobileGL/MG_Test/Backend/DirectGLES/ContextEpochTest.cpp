@@ -91,8 +91,8 @@ TEST(ContextEpochTest, UnpackDefaultIsRepublishedForANewNativeContextOrRole) {
 }
 
 // THE TRANSPORT-NATIVE ARM, which is the one a served context takes. DriverScope pins
-// TransportMode::InProcess, so GetRawDepthFetchSampler() returns early at DirectGLES.cpp:343 and
-// never reaches the monolith pair below it.
+// TransportMode::InProcess, and GetRawDepthFetchSampler() (DirectGLES.cpp) now has only this
+// native arm; the monolith pair that used to follow its early return is gone.
 TEST(ContextEpochTest, RawDepthSamplerOwnsANativeIdForEachContextGeneration) {
 #if MOBILEGL_BUILD_DISAGGREGATED
     DriverScope scope;

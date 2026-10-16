@@ -33,7 +33,7 @@
 //   A texture parameter's only public-GL observable is a SAMPLE - nothing about an attachment, an
 //   image binding or a copy endpoint reads a swizzle or an aspect mode - and a sample puts the
 //   texture on SyncNeccessaryTextures' UNIT list. That walk calls SyncTextureParamsToBackend for
-//   every entry whose IsDrawSyncClean is false (DirectGLES.cpp:1896-1898), and IsDrawSyncClean is
+//   every entry whose IsDrawSyncClean is false (DirectGLESTextures.cpp), and IsDrawSyncClean is
 //   false whenever the frontend's parameter version has moved since the last sync
 //   (Managers.h:1399-1416, `m_syncedTextureParamsVersion != paramsVersion`). So the very act of
 //   observing the parameter repairs the state the observation was meant to catch: the gap between
@@ -96,7 +96,7 @@
 //   attachment of the DRAW framebuffer              SyncNeccessaryTextures' FBO list    -> synced
 //   attachment of the READ framebuffer ONLY         SyncCurrentFBO -> SyncToBackend ->
 //                                                   SyncAttachmentObject, which calls
-//                                                   SyncMipmapsToBackend at Managers.cpp:7161
+//                                                   SyncMipmapsToBackend (ManagersTextureSync.cpp)
 //                                                   and NOTHING ELSE                    -> NOT synced
 //   bound to an image unit                          SyncImageTextureBinding ->
 //                                                   SyncTextureObjectToBackend, and
@@ -105,8 +105,8 @@
 //   a glCopyImageSubData endpoint                   MakeGLESCopyImageEndpoint ->
 //                                                   SyncTextureObjectToBackend           -> synced
 //
-// SyncNeccessaryTextures' attachment list reads GetFramebufferBindingSlotChecked(Draw) only
-// (DirectGLES.cpp:1944), so a texture that is exclusively a READ attachment gets its STORAGE synced
+// SyncNeccessaryTextures' attachment list reads GetFramebufferBindingSlotChecked(Draw) only,
+// so a texture that is exclusively a READ attachment gets its STORAGE synced
 // and its PARAMETERS never. P4a closes that gap deliberately (D-E3): the record is addressed by
 // resource, and Espryt's SyncAttachmentObject applies parameters for ANY attachment, draw or read.
 // It is a behaviour change and it is the deliverable, not a drive-by dev fix (guide/discipline.md).
@@ -197,8 +197,8 @@ void main() {
                 if (Gl().BackendName() != "DirectGLES") {
                     GTEST_SKIP() << "DirectGLES only: this scenario is about Espryt's own reachability "
                                     "table - SyncNeccessaryTextures' attachment list walks the DRAW "
-                                    "slot only (DirectGLES.cpp:1944) and SyncAttachmentObject syncs "
-                                    "storage and not parameters (Managers.cpp:7161). "
+                                    "slot only and SyncAttachmentObject syncs "
+                                    "storage (SyncMipmapsToBackend) and not parameters. "
                                  << Gl().BackendName()
                                  << " answers the same GL question through a different path, so a "
                                     "verdict here would be evidence about that backend rather than "
@@ -532,7 +532,7 @@ void main() {
         //    where the application asked for stencil, and the value that comes back is not the
         //    stencil that was written. RecreateBackendTexture's own comment says exactly this -
         //    "the mode makes it visible because falling back to the default silently samples the
-        //    wrong aspect rather than merely mis-filtering" (Managers.cpp:4826-4833).
+        //    wrong aspect rather than merely mis-filtering" (ManagersTextures.cpp).
         //
         //    The framebuffer is bound to GL_READ_FRAMEBUFFER and the DRAW target is left on the
         //    default framebuffer for the whole window, which is the ONE thing that separates this
@@ -666,7 +666,7 @@ void main() {
         // 3. IMAGE UNIT ONLY, across a storage RE-MINT. Green today and green after, and the
         //    reason it is green is the thing P4a must not lose: glBindImageTexture drives
         //    RequireImageBindableStorage, which re-mints the storage in a possibly WIDENED carrier
-        //    and sets m_forceTextureParamsResync (Managers.cpp:4787) precisely because the
+        //    and sets m_forceTextureParamsResync (in RequireImageBindableStorageByHandle) precisely because the
         //    frontend's parameter version does not move across that transition. A parameter sync
         //    gated only on the frontend version would leave the driver at its defaults and sample
         //    the carrier's surplus channels raw.
@@ -713,7 +713,7 @@ void main() {
                                         "after its swizzle moved and its storage was re-minted"))
                 << "the swizzle did not survive the RequireImageBindableStorage re-mint. The re-mint "
                    "creates a new driver texture at the ES defaults without moving the frontend's "
-                   "parameter version, so the forced resync (Managers.cpp:4787) is the only thing "
+                   "parameter version, so the forced resync (m_forceTextureParamsResync) is the only thing "
                    "that puts the application's parameters back.";
 
             GLuint cleanup = texture;
@@ -721,8 +721,8 @@ void main() {
         }
 
         // ------------------------------------------------------------------------------------
-        // 4. glCopyImageSubData ENDPOINT ONLY. Green today (MakeGLESCopyImageEndpoint calls
-        //    SyncTextureObjectToBackend, DirectGLES.cpp:7588) and green after. The endpoint is the
+        // 4. glCopyImageSubData ENDPOINT ONLY. Green today (MakeGLESCopyImageEndpoint in DirectGLESCopy.cpp
+        //    calls SyncTextureObjectToBackend) and green after. The endpoint is the
         //    DESTINATION, so the case also proves the copy itself still lands: a swizzled read of
         //    the copied texel is only meaningful if the texel arrived.
         // ------------------------------------------------------------------------------------

@@ -903,8 +903,8 @@ namespace MobileGL::MG_Backend::DirectGLES {
                 m_valid = false;
                 return;
             }
-            // The M-3 rule for a whole-store reader (Managers.cpp:3238): for a store whose
-            // content the application SUPPLIED a coverage gap is a missing record and is
+            // The M-3 rule for a whole-store reader (ResourceContentIsDeclared in ManagersBuffers.cpp): for a store
+            // whose content the application SUPPLIED a coverage gap is a missing record and is
             // Fatal by name; for one it ORPHANED the gap is its own undefined content and
             // reading the shadow's zero-fill is exactly what the monolith arm's
             // MappedData() answers.

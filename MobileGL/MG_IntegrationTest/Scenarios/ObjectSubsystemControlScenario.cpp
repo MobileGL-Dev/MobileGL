@@ -44,7 +44,7 @@
 //       Texture handle and only bit 10 populates the texture slot table, so a sampler subsystem
 //       without it would miss every lookup and walk on without unbinding. The bring-up logs ONE
 //       error naming BOTH bits, refuses bit 11 and runs the legacy sampler arm - modelled on the
-//       bit-8-requires-bit-7 refusal that already ships (Managers.cpp:2393-2410). The assertion is
+//       bit-8-requires-bit-7 refusal of ResolveVertexInputSubsystemArm (since removed). The assertion is
 //       that the refusal is NAMED and that the run then produces the same pixels as any other
 //       lane: a refusal that half-ran, or that aborted, would both be failures here.
 //
@@ -617,8 +617,8 @@ void main() { oColor = texture(uTex, vUv); }
                                     "Samplers, Programs}, so this backend does not honour P4a's mask "
                                     "and cannot refuse a dependency inside it. D-K2's refusal lives "
                                     "in ResolveSamplersSubsystemArm() beside the bit-8-requires-bit-7 "
-                                    "one that already ships (Managers.cpp:2393-2410), which is P4a "
-                                    "package D's file; this control arms itself when that lands. The "
+                                    "one ResolveVertexInputSubsystemArm made (since removed), in "
+                                    "Managers.cpp; this control arms itself when that lands. The "
                                     "lane itself is not wasted: the library came up under 0x9ff, "
                                     "which on a tree with no P4a arm is P3a's mask plus one inert "
                                     "bit, and a mask that aborted a bring-up would have failed this "

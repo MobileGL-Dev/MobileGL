@@ -1231,7 +1231,7 @@ TEST(RemoteReadback, TheTightRowsAreScatteredWhereThePackStateSaysAndTheGapsAreL
 TEST(RemoteReadback, PackSkipImagesIsIgnoredForATwoDimensionalRead) {
     // codex 6: SKIP_IMAGES (and IMAGE_HEIGHT) are image-level pack parameters and GL ignores
     // them for glReadPixels, a 2-D read - the monolith conversion path says so with
-    // honorPackImageParams=false (DirectGLES.cpp:10905). The first cut applied SKIP_IMAGES as a
+    // honorPackImageParams=false (ReadPixels, DirectGLESReadback.cpp). The first cut applied SKIP_IMAGES as a
     // whole-image offset: a 4x3 RGBA8 read with SKIP_IMAGES=1 wrote bytes 48..95 of a 96-byte
     // destination sized for one image, overrunning it. With the fix the reply lands at bytes
     // 0..47 and the second image's worth of bytes keeps its sentinel.

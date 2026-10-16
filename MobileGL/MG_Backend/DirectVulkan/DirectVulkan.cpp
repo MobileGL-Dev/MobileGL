@@ -61,7 +61,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 #if MOBILEGL_BUILD_DISAGGREGATED
     namespace {
         // P7 wave 2 package C, CONTRACT-P7 §5.5: MAGMA'S MIRROR OF g_glesStateObjectDeathOps
-        // (DirectGLES/Managers.cpp:335), and the one arm of that table Magma has any work in.
+        // (in DirectGLES/Managers.cpp), and the one arm of that table Magma has any work in.
         //
         // WHAT THE NOTICE IS FOR HERE, and it is not what it is for on Espryt. Espryt's arm
         // destroys a BACKEND TWIN keyed by lifetime id; Magma keeps no such twin - its two

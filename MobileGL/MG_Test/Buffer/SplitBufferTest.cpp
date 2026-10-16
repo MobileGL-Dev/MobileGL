@@ -164,7 +164,7 @@ TEST_F(SplitBufferSet, Row1EveryBoundAtomicCounterIsMarkedByADraw) {
     EXPECT_EQ(MG_Record::ProducerMarkCount(GpuWriteProducer::AtomicCounterBinding), 1u);
 }
 
-// Row 2's DISCRIMINATOR - DirectGLES.cpp:2354-2357. This is the one row whose backend twin is
+// Row 2's DISCRIMINATOR - IsWritableImageBufferView (DirectGLESTextures.cpp). This is the one row whose backend twin is
 // narrow on purpose, so the narrowness is what the case is about: a GL_READ_ONLY image binding
 // must NOT be marked, or the next map waits on and re-reads a dispatch that cannot have changed
 // a byte of it.
@@ -901,7 +901,7 @@ TEST(EsprytFlushLadder, ASmallPartialRangeFallsThroughToTheStagingRing) {
            "substituting pages, which is the whole reason tier 2 exists";
 }
 
-// THE EDGE THAT HAS ALREADY DRAWN BLOOD (Managers.cpp:1125-1128): widening the map past the
+// THE EDGE THAT HAS ALREADY DRAWN BLOOD (FlushPendingRangesFrom, ManagersBuffers.cpp): widening the map past the
 // queued range clobbered GPU-written data - an SSBO counter beside the app's SubData - with
 // the stale shadow, SILENTLY. Under split the same shape arrives with a different cause: the
 // server may hold no pointer into the client's shadow (R-11), so `hostBase` becomes a

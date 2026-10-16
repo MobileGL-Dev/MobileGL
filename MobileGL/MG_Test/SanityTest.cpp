@@ -4427,7 +4427,7 @@ TEST(DirectGLESBufferDrawProbe, UnderSplitTheRecordAloneAnswersTheLiveHostMapQue
 
         EXPECT_TRUE(record.HasLiveHostWrites)
             << "the map published nothing the server can see. Without it the probe below answers "
-               "CLEAN, the ensure path is skipped and then latched (DirectGLES.cpp:691/:697), "
+               "CLEAN, the ensure path is skipped and then latched (SyncVaoAttributeBuffersByRecord's vboCleanEpoch), "
                "SyncPersistentMappedRange is never reached again, and the frame draws the last "
                "uploaded bytes for ever with no diagnostic";
 

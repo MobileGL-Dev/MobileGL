@@ -51,7 +51,7 @@ namespace MobileGL::MG_Record {
         void MarkShaderStorageBindings(MG_State::GLState::GLContext* context) {
             if (!context) return;
             // The TOUCHED count, exactly as the backend twin uses it
-            // (DirectGLES.cpp:559-560): the binding-point array is 84 entries wide and
+            // (SyncBufferBindingPointsByRecord, DirectGLESBuffers.cpp): the binding-point array is 84 entries wide and
             // walking all of them on every draw is what the high-water mark exists to avoid.
             const SizeT points = context->GetTouchedBufferBindingPointCount(BufferTarget::ShaderStorage);
             for (SizeT i = 0; i < points; ++i) {
@@ -63,7 +63,7 @@ namespace MobileGL::MG_Record {
         void MarkAtomicCounterBindings(MG_State::GLState::GLContext* context) {
             if (!context) return;
             // WIDER THAN ITS BACKEND TWIN, ON PURPOSE AND IN THE SAFE DIRECTION.
-            // SyncAtomicCounterBuffers (DirectGLES.cpp:578-583) walks the GL bindings the
+            // SyncAtomicCounterBuffers (DirectGLESBuffers.cpp) walks the GL bindings the
             // TRANSPILED program declared, which is a subset of what is bound; the client has
             // the bindings but not that per-program list at this point, so it marks every
             // touched atomic-counter point. Over-approximating costs a readback the narrowing
@@ -102,7 +102,7 @@ namespace MobileGL::MG_Record {
     }
 
     Bool ImageUnitIsAWritableBufferTexture(const ImageTextureBinding& binding) {
-        // Verbatim from IsWritableImageBufferTexture (DirectGLES.cpp:2354-2357). All three
+        // Verbatim from the backend's former IsWritableImageBufferTexture. All three
         // terms are client state; none of them is a driver question.
         return binding.Texture != nullptr && binding.Access != GL_READ_ONLY &&
                binding.Texture->GetStorageType() == TextureStorageType::Buffer;

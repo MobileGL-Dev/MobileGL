@@ -103,7 +103,7 @@
     /* It takes a content pointer today, but under split it CARRIES NO BYTES AT ALL: it is  */  \
     /* a {range, AccessFlags} control record, and the bytes of [Offset, Offset+Size) arrive  */  \
     /* AHEAD of it as resource_subdata records covering exactly that range. The ladder this  */  \
-    /* drives rewrites its range "from the authoritative shadow" (Managers.cpp:1047-1076),   */  \
+    /* drives rewrites its range "from the authoritative shadow" (FlushPendingRangesFrom),   */  \
     /* and under split the authoritative shadow is server-owned (R-11), so subdata is the    */  \
     /* only way bytes reach it - a blobref here would be a SECOND way to say the same thing. */  \
     X(ResourceFlushRange,       MGPFlushRange,              kCtxObject, kNone,                      kWaitNone)        \

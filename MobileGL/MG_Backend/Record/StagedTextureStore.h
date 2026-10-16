@@ -12,8 +12,8 @@
 // THE DEFECT THIS ENDS (T1/T5). resource_subdata's texture half stages the level bytes into
 // SEG_STAGE and ApplyTextureUpload (PipeApply.cpp) drops the pointer after the gate,
 // the accumulation and the serial. Espryt then re-reads the client's MipmapStorage at sync
-// time (Managers.cpp:6940, :7129, :7198, :7315), reads per-level shape off the client object
-// (:6928, :6936, :7314, :7332, DirectGLES.cpp:8502-8507, :8528-8529), and Magma WRITES the
+// time (ManagersTextureSync.cpp's SyncMipmapsToBackend), reads per-level shape off the client object
+// (the same function, and the depth and color Texture2D mipmap chains in DirectGLESCopy.cpp), and Magma writes the
 // client's level storage outright (VulkanRenderer's AllocateStorage +
 // MarkStorageDirty). In monolith every one of those is correct - the bytes belong to a
 // frontend object that outlives the call. Under split the pointer names SEG_STAGE, valid
@@ -25,8 +25,8 @@
 // WHAT A KEY IS, AND WHY IT IS NOT THE TWIN ADDRESS THE CONTRACT'S FIRST DRAFT SAID.
 // CONTRACT-P5C §2.1 rules "keyed by the texture resource twin's address". The buffer half
 // keys by twin address because the twin is minted at sub-data time under split
-// (Managers.cpp:2139-2142) and GLESBufferResource's constructor is GL-free. The texture
-// twin's constructor is NOT: BackendTextureObject() calls glGenTextures (Managers.cpp:5496),
+// (Ops_H_SubData in ManagersBuffers.cpp) and GLESBufferResource's constructor is GL-free. The texture
+// twin's constructor is not: BackendTextureObject() in ManagersTextures.cpp calls glGenTextures,
 // so minting it at sub-data time would allocate a driver name for every texture that is
 // written and never drawn, and would put a GL call into a unit test that has no context
 // (R-16's unit case, StagedTextureStoreTest, exercises the REAL ops table headless). The

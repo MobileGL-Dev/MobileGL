@@ -58,7 +58,7 @@ prose is why that map reads the way it does.
         They carry their family word today, which is the point of widening the perimeter: the
         census can SEE them now, and the ratchet makes retiring one visible.
   (iii) NAMED, BUT NOT SESSION-SCOPED - Init.cpp's ConsumerMaskLie pair, MagmaPipeArms.h's and
-        Managers.cpp's PipeLegacyMemosDisabled, DirectGLES.cpp:227's UnnamedIdentity,
+        Managers.cpp's PipeLegacyMemosDisabled, DirectGLES.cpp's former UnnamedIdentity,
         PipeFill.cpp's PipeVerify knob parser. Startup and role self-checks that predate the
         split: they die BEFORE a session exists, so routing them through SessionFail would
         publish a SessionFault to a peer that has not connected. They are named, which is what

@@ -1335,7 +1335,7 @@ TEST(TextureEmit, EveryDKTwoDependencyRowGatesItsOwnFamilyAndTheMirrorPairsStayL
     EXPECT_TRUE(emits(kMGPipeSubsystemPrograms));
 
     // ---- THE MIRROR PAIRS, said out loud: an unreachable branch that says something different
-    //      is how the reachable one drifts (Managers.cpp:2377-2381's own words) ----
+    //      is how the reachable one drifts (words Managers.cpp's arm resolvers once used) ----
     // bits 10 + 11 without bit 9: FINE, and it is the 0xdff arm.
     MG_Config::Features.PipePush = kAll & ~kMGPipeSubsystemFramebuffer;
     EXPECT_TRUE(emits(kMGPipeSubsystemTextureResources));

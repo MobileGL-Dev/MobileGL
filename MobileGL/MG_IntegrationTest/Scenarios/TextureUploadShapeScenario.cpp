@@ -69,7 +69,7 @@
 //     pin a shape for exactly the input the P3b/P4b work changed and say nothing about the input
 //     it changed it for.
 //
-// DIRECTGLES ONLY. The server-side counters are Espryt's (Managers.cpp:6360-6395); Magma's upload
+// DIRECTGLES ONLY. The server-side counters are Espryt's (BackendTextureObject::SyncMipmapsToBackend); Magma's upload
 // path is P7 and contributes nothing to them, so a DirectVulkan lane would record a bracket of
 // zeroes and call it a shape.
 //
@@ -118,7 +118,7 @@ namespace MGITest {
         // The original stride was x = ((i*7) % (kAtlasSize/kRectSize)) * kRectSize and the same
         // with 5 for y. Both are surjective onto 0..31 over 40 iterations (rect 9 lands at x=62,
         // rect 19 at y=62), so the rects' UNION BOX is the whole 64x64 level - and the server's
-        // subRectEligible (Managers.cpp:8486-8491) requires !dirtyRegion.CoversWholeLevel, a
+        // subRectEligible (ManagersTextureSync.cpp's SyncMipmapsToBackend) requires !dirtyRegion.CoversWholeLevel, a
         // BOUNDING-BOX test (MipmapStorage.h:30-33). Both scatter textures were therefore
         // rect-INELIGIBLE on every arm, before any policy about rect lists was consulted: the
         // box-versus-rect decision this scenario exists to pin was never reached, and the only
@@ -161,7 +161,7 @@ namespace MGITest {
         // texels) is far under 3/4 of the union box - so neither the 2..maxRects test nor the
         // summedArea*4 >= unionArea*3 fallback takes the box arm. The record carries all thirty.
         //
-        // THE SERVER DECIDES, and it decides BOX, at Managers.cpp:8649:
+        // THE SERVER DECIDES, and it decides BOX, in ManagersTextureSync.cpp's SyncMipmapsToBackend:
         //
         //     if (BufferImpl::UnpackRingAvailable()) dirtyRectCount = 0;
         //
@@ -174,7 +174,7 @@ namespace MGITest {
         //
         // WHAT THE FIRST VERSION GOT WRONG, because the trap is easy to fall into twice: the
         // original scatter stride reached x=62 and y=62 in a 64-px atlas, so the union box
-        // covered the whole level - and the server's subRectEligible (Managers.cpp:8486-8491)
+        // covered the whole level - and the server's subRectEligible (ManagersTextureSync.cpp's SyncMipmapsToBackend)
         // requires !dirtyRegion.CoversWholeLevel, a BOUNDING-BOX test (MipmapStorage.h:30-33).
         // Both scatter textures were rect-INELIGIBLE before the ring policy was ever consulted,
         // so the gold looked identical while measuring something else entirely, and the only
@@ -271,7 +271,8 @@ void main() { oColor = texture(uTex, vUv); }
                 }
                 if (Gl().BackendName() != "DirectGLES") {
                     GTEST_SKIP() << "DirectGLES only: the upload-shape counters are Espryt's "
-                                    "(Managers.cpp:6360-6395) and " << Gl().BackendName()
+                                    "(SyncMipmapsToBackend in ManagersTextureSync.cpp) and "
+                                 << Gl().BackendName()
                                  << " contributes nothing to them, so this lane would record a "
                                     "bracket of zeroes and call it a shape.";
                     return;

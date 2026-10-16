@@ -945,7 +945,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         //
         // `GL_MAP_INVALIDATE_RANGE_BIT` is not a hint, it is an ASSERTION THAT THE OLD BYTES
         // ARE DEAD - and it is only true of the bytes this call is about to rewrite from the
-        // authoritative shadow. Managers.cpp:1125-1128 records what happens when it is not:
+        // authoritative shadow. ManagersBuffers.cpp's FlushPendingRangesFrom records what happens when it is not:
         // widening the map to page bounds "looked free and was not - the widened bytes
         // clobbered GPU-written data (an SSBO counter beside the app's SubData) with the stale
         // shadow". It fails SILENTLY, unlike tier 3, which only stalls.
@@ -2436,7 +2436,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // makes forgetting impossible, and that call is written below.
         //
         // IT IS GATED, AND HERE IS THE HANDSHAKE, because the definition is `static` in E's file
-        // on the tree this package was built against (esprytdraw v2, DirectGLES.cpp:2789) and an
+        // on the tree this package was built against (esprytdraw v2; now in DirectGLESInternal.h) and an
         // internal-linkage function cannot be called from Managers.cpp. E's verification round
         // drops that one keyword; D's verification round flips this constant to 1, in this file,
         // one line. Neither side can do it silently: the flip has no other reader and the
@@ -3193,7 +3193,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
             // bind_sampler_states; the caller that knows the unit passes it here.
             //
             // Defaulted so a caller that has no unit - the backend's OWN raw-depth-fetch
-            // sampler (DirectGLES.cpp:217), a SamplerObject the client has never seen and for
+            // sampler (GetRawDepthFetchSampler no longer calls this), a SamplerObject the client has never seen and for
             // which no record can exist - keeps working: that arm reads the object, which is
             // the authority for server-owned state. An APPLICATION sampler reaching here
             // without a handle is the E-side call-site gap and says so once.
