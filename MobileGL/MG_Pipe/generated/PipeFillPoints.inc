@@ -52,8 +52,10 @@ enum class MGPipeVerb : Uint8 {
     BlitNamedFramebuffer,
     CopyTexImage2D,
     CopyTexSubImage2D,
+    CopyTextureSubImage2D,
     CopyImageSubData,
     GenerateMipmap,
+    GenerateTextureMipmap,
     ReadPixels,
     GetTexImage,
     GetTextureImage,
@@ -92,7 +94,7 @@ enum class MGPipeVerb : Uint8 {
 };
 
 inline constexpr SizeT kMGPipeVerbCount = static_cast<SizeT>(MGPipeVerb::kVerbCount);
-static_assert(kMGPipeVerbCount == 69, "the GLFunctionsTable verb set moved");
+static_assert(kMGPipeVerbCount == 71, "the GLFunctionsTable verb set moved");
 
 inline constexpr const char* kMGPipeVerbNames[kMGPipeVerbCount] = {
     "DrawArrays",
@@ -128,8 +130,10 @@ inline constexpr const char* kMGPipeVerbNames[kMGPipeVerbCount] = {
     "BlitNamedFramebuffer",
     "CopyTexImage2D",
     "CopyTexSubImage2D",
+    "CopyTextureSubImage2D",
     "CopyImageSubData",
     "GenerateMipmap",
+    "GenerateTextureMipmap",
     "ReadPixels",
     "GetTexImage",
     "GetTextureImage",
@@ -228,8 +232,10 @@ inline constexpr MGPipeVerbClass kMGPipeVerbClass[kMGPipeVerbCount] = {
     MGPipeVerbClass::kBlitOrCopy, // BlitNamedFramebuffer
     MGPipeVerbClass::kBlitOrCopy, // CopyTexImage2D
     MGPipeVerbClass::kBlitOrCopy, // CopyTexSubImage2D
+    MGPipeVerbClass::kBlitOrCopy, // CopyTextureSubImage2D
     MGPipeVerbClass::kBlitOrCopy, // CopyImageSubData
     MGPipeVerbClass::kTextureOp, // GenerateMipmap
+    MGPipeVerbClass::kTextureOp, // GenerateTextureMipmap
     MGPipeVerbClass::kReadback, // ReadPixels
     MGPipeVerbClass::kReadback, // GetTexImage
     MGPipeVerbClass::kReadback, // GetTextureImage

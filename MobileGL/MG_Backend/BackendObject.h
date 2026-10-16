@@ -111,11 +111,18 @@ namespace MobileGL {
                                    GLsizei height, GLint border);
             void (*CopyTexSubImage2D)(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint x, GLint y,
                                       GLsizei width, GLsizei height);
+            // The by-name form: the destination is `texture`, whatever the units hold. `target` is
+            // the one the record carries (the texture's own 2D-class target).
+            void (*CopyTextureSubImage2D)(const SharedPtr<MG_State::GLState::ITextureObject>& texture, GLenum target,
+                                          GLint level, GLint xoffset, GLint yoffset, GLint x, GLint y, GLsizei width,
+                                          GLsizei height);
             void (*CopyImageSubData)(const CopyImageEndpoint& src, GLenum srcTarget, GLint srcLevel, GLint srcX,
                                      GLint srcY, GLint srcZ, const CopyImageEndpoint& dst, GLenum dstTarget,
                                      GLint dstLevel, GLint dstX, GLint dstY, GLint dstZ, GLsizei srcWidth,
                                      GLsizei srcHeight, GLsizei srcDepth);
             void (*GenerateMipmap)(GLenum target);
+            // The by-name form, also used once the bound-target form has resolved its texture.
+            void (*GenerateTextureMipmap)(const SharedPtr<MG_State::GLState::ITextureObject>& texture, GLenum target);
             void (*ReadPixels)(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type,
                                void* pixels);
             void (*GetTexImage)(GLenum target, GLint level, GLenum format, GLenum type, GLvoid* pixels);

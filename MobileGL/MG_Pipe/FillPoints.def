@@ -51,8 +51,10 @@
     X(BlitNamedFramebuffer,                           kBlitOrCopy)     \
     X(CopyTexImage2D,                                 kBlitOrCopy)     \
     X(CopyTexSubImage2D,                              kBlitOrCopy)     \
+    X(CopyTextureSubImage2D,                          kBlitOrCopy)     \
     X(CopyImageSubData,                               kBlitOrCopy)     \
     X(GenerateMipmap,                                 kTextureOp)      \
+    X(GenerateTextureMipmap,                          kTextureOp)      \
     X(ReadPixels,                                     kReadback)       \
     X(GetTexImage,                                    kReadback)       \
     X(GetTextureImage,                                kReadback)       \

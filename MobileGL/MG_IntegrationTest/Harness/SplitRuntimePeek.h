@@ -69,7 +69,7 @@ namespace MGITest {
         bool dataArmIsRecord = false;
         // ClientSession::Active() != nullptr.
         bool sessionActive = false;
-        // ImplementedVerbCount(), out of kRemoteEmitSlotCount (71).
+        // ImplementedVerbCount(), out of kRemoteEmitSlotCount (73).
         unsigned int implementedVerbs = 0;
         unsigned int totalVerbSlots = 0;
         // The encoder's highest produced record ordinal, or 0 when there is no session.

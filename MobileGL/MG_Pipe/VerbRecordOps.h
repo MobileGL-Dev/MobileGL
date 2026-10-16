@@ -56,8 +56,10 @@
     X(BlitNamedFramebuffer,                        Blit)                               \
     X(CopyTexImage2D,                              CopyFramebufferToTexture)           \
     X(CopyTexSubImage2D,                           CopyFramebufferToTexture)           \
+    X(CopyTextureSubImage2D,                       CopyFramebufferToTexture)           \
     X(CopyImageSubData,                            ResourceCopyRegion)                 \
     X(GenerateMipmap,                              GenerateMipmap)                     \
+    X(GenerateTextureMipmap,                       GenerateMipmap)                     \
     /* read_pixels (reply) or read_pixels_to_buffer (pack buffer): the reply wins. */  \
     X(ReadPixels,                                  ReadPixels)                         \
     /* get_texture_image (reply) or its pack-buffer half: the reply wins. */           \

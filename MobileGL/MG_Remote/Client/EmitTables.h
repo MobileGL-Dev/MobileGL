@@ -69,14 +69,14 @@ namespace MobileGL::MG_Remote::Client {
     using MG_Record::TightReadbackByteCount;
     using MG_Record::UnmigratedVerbFatal;
 
-    // How many of the 71 slots have a real emitter. Reported at bring-up and asserted by the
+    // How many of the 73 slots have a real emitter. Reported at bring-up and asserted by the
     // gate: a table that silently loses an emitter should not be able to look the same as one
     // that never had it.
     Uint32 ImplementedVerbCount();
 
     // The total the count above is out of. Asserted against the struct in EmitTables.cpp, so
     // a slot added to GLFunctionsTable without a decision here is a build break.
-    inline constexpr Uint32 kRemoteEmitSlotCount = 71;
+    inline constexpr Uint32 kRemoteEmitSlotCount = 73;
 
     // The other two thirds of the census, so a case can assert the WHOLE partition rather than
     // only the half that emits. CONTRACT-P5.md §7's three classes are 2 + 5 + 64, and

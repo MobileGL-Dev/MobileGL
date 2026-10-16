@@ -6,7 +6,7 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// P5 package c1's suite: the 71-slot emit table, the caps mirror and R-8's liveness gates.
+// P5 package c1's suite: the 73-slot emit table, the caps mirror and R-8's liveness gates.
 // The helper cases below are supplemented by RemoteClientControls.inc: installed producers
 // over a live session, with adversarial peer replies and a repeated-make-current control.
 //
@@ -192,11 +192,11 @@ namespace {
 // The emit table: the partition, and that no slot is null
 // =====================================================================================
 
-TEST(RemoteEmitTable, TheThreeClassesPartitionAllSeventyOneSlots) {
-    // P5 baseline five + f1 eleven + i1 seven + t2 six emitted slots, ... and since P10 B the
+TEST(RemoteEmitTable, TheThreeClassesPartitionEverySlot) {
+    // P5 baseline five + f1 thirteen + i1 seven + t2 six emitted slots, ... and since P10 B the
     // swap interval: class C is EMPTY, every slot but the two local answers reaches the server.
     EXPECT_EQ(LocallyAnsweredSlotCount(), 2u);
-    EXPECT_EQ(ImplementedVerbCount(), 69u);
+    EXPECT_EQ(ImplementedVerbCount(), 71u);
     EXPECT_EQ(UnmigratedSlotCount(), 0u);
     EXPECT_EQ(LocallyAnsweredSlotCount() + ImplementedVerbCount() + UnmigratedSlotCount(), kRemoteEmitSlotCount);
 }
@@ -298,7 +298,7 @@ TEST(RemoteEmitTable, NoSlotIsNull) {
     const MG_Backend::GlobalBackendFunctionsTable& table = RemoteEmitTable();
     const void* const* cells = reinterpret_cast<const void* const*>(&table);
     const SizeT cellCount = sizeof(table) / sizeof(void*);
-    // The struct is 71 function pointers plus ONE cell holding the packed Bool
+    // The struct is 73 function pointers plus ONE cell holding the packed Bool
     // PrefersCpuXfbPrimitiveAccounting and its padding (EmitTables.cpp static_asserts exactly
     // that shape). That Bool is legitimately zero when the server did not publish
     // kCapCpuXfbPrimitiveAccounting, so at most one cell may read null - and this is stated as
@@ -1980,6 +1980,65 @@ TEST(RemoteF1, GenerateMipmapFieldsCross) {
     });
     EXPECT_TRUE(WIFEXITED(child.Status) && WEXITSTATUS(child.Status) == 0)
         << "F1.GenerateMipmap.fields: " << DescribeStatus(child) << child.Log;
+}
+
+namespace {
+    // A second texture for the by-name slots, acquired but NOT bound: F1Texture's stays on the unit.
+    SharedPtr<MG_State::GLState::ITextureObject> F1NamedTexture() {
+        auto tex = MakeShared<MG_State::GLState::TextureObject2D>(92);
+        tex->SetInternalFormat(TextureInternalFormat::RGBA8);
+        for (Uint level = 0; level != 2; ++level) {
+            const Int size = 4 >> level;
+            tex->AllocateStorage(
+                TextureUploadTarget::Texture2D, level,
+                MG_State::GLState::MipmapInput{IntVec3{size, size, 1}, static_cast<SizeT>(size * size * 4)});
+        }
+        MGPipeTextureEmitterInstance().AcquireTexture(tex->GetLifetimeId(), tex.get());
+        return tex;
+    }
+} // namespace
+
+// The by-name slots name their texture themselves: the record carries the named texture's handle
+// while another texture stays bound on the active unit.
+TEST(RemoteF1, CopyTextureSubImage2DNamesItsTextureNotTheBoundOne) {
+    const auto child = RunInChild([] {
+        StartControlSession();
+        F1Peer peer;
+        peer.Install();
+        const auto bound = F1Texture();
+        const auto named = F1NamedTexture();
+        RemoteEmitTable().GL.CopyTextureSubImage2D(named, GL_TEXTURE_2D, 1, 1, 0, -3, 4, 1, 2);
+        const auto& r = peer.copy;
+        if (peer.calls != 1 || r.Dst != MGPipeTextureEmitterInstance().FindTexture(*named) ||
+            MGPipeHandleIsNull(r.Dst) || r.Dst == MGPipeTextureEmitterInstance().FindTexture(*bound) ||
+            r.Target != GL_TEXTURE_2D || r.Level != 1 || r.XOffset != 1 || r.YOffset != 0 || r.X != -3 || r.Y != 4 ||
+            r.Width != 1 || r.Height != 2 || r.SubImage != 1)
+            ::_exit(101);
+        ClientSessionInstance().Stop();
+    });
+    EXPECT_TRUE(WIFEXITED(child.Status) && WEXITSTATUS(child.Status) == 0)
+        << "F1.CopyTextureSubImage2D.fields: " << DescribeStatus(child) << child.Log;
+}
+
+TEST(RemoteF1, GenerateTextureMipmapNamesItsTextureNotTheBoundOne) {
+    const auto child = RunInChild([] {
+        StartControlSession();
+        F1Peer peer;
+        peer.Install();
+        const auto bound = F1Texture();
+        const auto named = F1NamedTexture();
+        RemoteEmitTable().GL.GenerateTextureMipmap(named, GL_TEXTURE_2D);
+        const GLfloat fence[4] = {0, 0, 0, 0}; // see GenerateMipmapFieldsCross
+        RemoteEmitTable().GL.ClearBufferfv(GL_COLOR, 0, fence);
+        const auto& r = peer.mip;
+        if (peer.calls != 2 || r.Res != MGPipeTextureEmitterInstance().FindTexture(*named) ||
+            MGPipeHandleIsNull(r.Res) || r.Res == MGPipeTextureEmitterInstance().FindTexture(*bound) ||
+            r.Target != GL_TEXTURE_2D || r.BaseLevel != 0 || r.LevelCount != 2)
+            ::_exit(101);
+        ClientSessionInstance().Stop();
+    });
+    EXPECT_TRUE(WIFEXITED(child.Status) && WEXITSTATUS(child.Status) == 0)
+        << "F1.GenerateTextureMipmap.fields: " << DescribeStatus(child) << child.Log;
 }
 #endif
 

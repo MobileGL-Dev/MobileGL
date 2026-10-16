@@ -9121,7 +9121,7 @@
    "RemoteEmitTable.TheNineteenDrawSlotsAreEmittersDistinctFromEveryStub",
    "RemoteEmitTable.TheSevenI1SlotsAreClassBAndAreNotTheFatalThunk",
    "RemoteEmitTable.TheSixXfbAndPatchSlotsAreNonNullAndDistinct",
-   "RemoteEmitTable.TheThreeClassesPartitionAllSeventyOneSlots",
+   "RemoteEmitTable.TheThreeClassesPartitionEverySlot",
    "RemoteF1.AnIndirectDrawStashesTheCommandAndParameterBuffers",
    "RemoteF1.BlitNamedCarriesHandlesAndLeavesTheClientBindingsAlone",
    "RemoteF1.BoundBlitCarriesNoHandlesAndIsAppliedAsBefore",

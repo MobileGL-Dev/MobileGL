@@ -359,7 +359,7 @@ TEST_F(PipeInputsTest, MutatedFieldIsNamedAtRead) {
         ::_exit(3);
     });
     ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
-    EXPECT_NE(r.Log.find("MGPipe: verify armed - 63 fields, 69 verbs, fatal=1"), std::string::npos) << r.Log;
+    EXPECT_NE(r.Log.find("MGPipe: verify armed - 63 fields, 71 verbs, fatal=1"), std::string::npos) << r.Log;
     EXPECT_NE(r.Log.find("MGPipe: verify read of GetLineWidth (index 0, 0) differs from the live context"),
               std::string::npos)
         << r.Log;
@@ -389,7 +389,7 @@ TEST_F(PipeInputsTest, VerifyCorruptKnobNamesTheFieldAtEntry) {
         ::_exit(3);
     });
     ASSERT_TRUE(DiedOfAbort(r)) << DescribeStatus(r) << "\n" << r.Log;
-    EXPECT_NE(r.Log.find("MGPipe: verify armed - 63 fields, 69 verbs, fatal=1"), std::string::npos) << r.Log;
+    EXPECT_NE(r.Log.find("MGPipe: verify armed - 63 fields, 71 verbs, fatal=1"), std::string::npos) << r.Log;
     EXPECT_NE(r.Log.find("MGPipe: verify corruption armed - GetRenderStateParameters"), std::string::npos) << r.Log;
     const std::string expected =
         "Fatal{PipeVerifyDiffer, \"GetRenderStateParameters@DrawArrays\", verb=" + std::to_string(serial) +
@@ -445,7 +445,7 @@ TEST_F(PipeInputsTest, VerifyFatalOffLogsTheDivergenceAndContinues) {
         std::exit(0);
     });
     ASSERT_TRUE(ExitedWith(r, 0)) << DescribeStatus(r) << "\n" << r.Log;
-    EXPECT_NE(r.Log.find("MGPipe: verify armed - 63 fields, 69 verbs, fatal=0"), std::string::npos) << r.Log;
+    EXPECT_NE(r.Log.find("MGPipe: verify armed - 63 fields, 71 verbs, fatal=0"), std::string::npos) << r.Log;
     EXPECT_NE(r.Log.find("MGPipe: verify summary - 2 divergence(s) survived MOBILEGL_PIPE_VERIFY_FATAL=0"),
               std::string::npos)
         << r.Log;

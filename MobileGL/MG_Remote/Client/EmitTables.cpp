@@ -67,7 +67,7 @@ namespace MobileGL::MG_Remote::Client {
     using MG_Record::LogE2ControlLine;
 
     // The slot arithmetic, asserted rather than commented. GlobalBackendFunctionsTable is
-    // GLFunctionsTable plus Present plus SetSwapInterval; GLFunctionsTable is 69 function
+    // GLFunctionsTable plus Present plus SetSwapInterval; GLFunctionsTable is 71 function
     // pointers plus one Bool (PrefersCpuXfbPrimitiveAccounting). A slot
     // added to either without a decision here is a build break, which is the point: R-4 forbids
     // a null slot, so a new slot needs an owner on the day it appears.
@@ -76,7 +76,7 @@ namespace MobileGL::MG_Remote::Client {
                   "GlobalBackendFunctionsTable is no longer GLFunctionsTable + Present + SetSwapInterval");
     static_assert(sizeof(MG_Backend::GlobalBackendFunctionsTable) ==
                       kRemoteEmitSlotCount * sizeof(void (*)()) + sizeof(void (*)()),
-                  "the emit table's 71 slots plus the packed Bool no longer describe the table");
+                  "the emit table's 73 slots plus the packed Bool no longer describe the table");
 
     namespace {
 
@@ -558,7 +558,7 @@ namespace MobileGL::MG_Remote::Client {
         constexpr Uint32 kEmittedSlotsD1 = 19;
         constexpr Uint32 kEmittedSlotsI1 = 7;
         constexpr Uint32 kEmittedSlotsT2 = 7;
-        constexpr Uint32 kEmittedSlotsF1 = 11;
+        constexpr Uint32 kEmittedSlotsF1 = 13;
         // BlitNamedFramebuffer, both texture readbacks, and SetSwapInterval (P10 B) - the one
         // class-B slot that crosses as a surface control frame rather than a SEG_CMD record.
         constexpr Uint32 kEmittedSlotsTail = 4;
@@ -575,12 +575,12 @@ namespace MobileGL::MG_Remote::Client {
         static_assert(kUnmigratedD1 + kEmittedSlotsD1 == 19, "d1 owns the 19 draw slots");
         static_assert(kUnmigratedI1 + kEmittedSlotsI1 == 7, "i1 owns the 7 image/compute/barrier/copy/SSBO slots");
         static_assert(kUnmigratedT2 + kEmittedSlotsT2 == 7, "t2 owns the 7 XFB/tessellation slots");
-        static_assert(kUnmigratedF1 + kEmittedSlotsF1 == 11, "f1 owns the 11 clear/copy/mip slots");
+        static_assert(kUnmigratedF1 + kEmittedSlotsF1 == 13, "f1 owns the 13 clear/copy/mip slots");
         static_assert(kUnmigratedTail + kEmittedSlotsTail + kEmittedSlotsSync + kEmittedSlotsQueries == 20,
                       "the original wave-3 tail owns 20 slots");
-        static_assert(kUnmigratedSlots + kEmittedSlots == 69, "class B and C own 69 slots");
+        static_assert(kUnmigratedSlots + kEmittedSlots == 71, "class B and C own 71 slots");
         static_assert(kLocallyAnsweredSlots + kEmittedSlots + kUnmigratedSlots == kRemoteEmitSlotCount,
-                      "the three classes no longer partition the 71 slots");
+                      "the three classes no longer partition the 73 slots");
 
         MG_Backend::GlobalBackendFunctionsTable BuildRemoteEmitTable() {
             MG_Record::ArmVerbControlKnobs();

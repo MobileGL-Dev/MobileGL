@@ -471,18 +471,21 @@ namespace MobileGL::MG_Record {
             EmitF1Clear("ClearNamedFramebufferfi", MG_Pipe::MGPipeFramebufferEmitter::HandleFor(*fbo), buffer,
                         drawbuffer, MG_Pipe::kMGPipeClearValueClassFloat, nullptr, depth, stencil);
         }
+        // The target-taking slots name the texture through the active unit; the by-name slots pass
+        // it in. Both build the same record, so the server cannot tell the two apart.
         const SharedPtr<MG_State::GLState::ITextureObject>& F1BoundTexture(GLenum target) {
             auto& ctx = *MG_State::pGLContext;
             return ctx.GetTextureUnitObject(ctx.GetActiveTextureUnit())
                 .GetBindingSlot(MG_Util::ConvertGLEnumToTextureTarget(target))
                 .GetBoundObject();
         }
-        void EmitF1Copy(GLenum target, GLint level, GLenum format, GLint x, GLint y, GLsizei width, GLsizei height,
+        void EmitF1Copy(const char* slot, const SharedPtr<MG_State::GLState::ITextureObject>& destination,
+                        GLenum target, GLint level, GLenum format, GLint x, GLint y, GLsizei width, GLsizei height,
                         GLint xoffset, GLint yoffset, Bool subImage) {
-            VerbChannel session = ChannelFor(subImage ? "CopyTexSubImage2D" : "CopyTexImage2D");
+            VerbChannel session = ChannelFor(slot);
             BeforeReadOnlyVerb();
             MG_Pipe::MGPCopyFromFramebuffer record{};
-            record.Dst = MG_Pipe::MGPipeTextureEmitterInstance().FindTexture(*F1BoundTexture(target));
+            record.Dst = MG_Pipe::MGPipeTextureEmitterInstance().FindTexture(*destination);
             record.Target = static_cast<Uint32>(target);
             record.Level = level;
             record.InternalFormat = format;
@@ -498,16 +501,22 @@ namespace MobileGL::MG_Record {
         }
         void EmitCopyTexImage2D(GLenum target, GLint level, GLenum format, GLint x, GLint y, GLsizei width,
                                 GLsizei height, GLint) {
-            EmitF1Copy(target, level, format, x, y, width, height, 0, 0, false);
+            EmitF1Copy("CopyTexImage2D", F1BoundTexture(target), target, level, format, x, y, width, height, 0, 0,
+                       false);
         }
         void EmitCopyTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint x, GLint y,
                                    GLsizei width, GLsizei height) {
-            EmitF1Copy(target, level, 0, x, y, width, height, xoffset, yoffset, true);
+            EmitF1Copy("CopyTexSubImage2D", F1BoundTexture(target), target, level, 0, x, y, width, height, xoffset,
+                       yoffset, true);
         }
-        void EmitGenerateMipmap(GLenum target) {
-            VerbChannel session = ChannelFor("GenerateMipmap");
+        void EmitCopyTextureSubImage2D(const SharedPtr<MG_State::GLState::ITextureObject>& texture, GLenum target,
+                                       GLint level, GLint xoffset, GLint yoffset, GLint x, GLint y, GLsizei width,
+                                       GLsizei height) {
+            EmitF1Copy("CopyTextureSubImage2D", texture, target, level, 0, x, y, width, height, xoffset, yoffset, true);
+        }
+        void EmitMipPlan(const char* slot, const SharedPtr<MG_State::GLState::ITextureObject>& texture, GLenum target) {
+            VerbChannel session = ChannelFor(slot);
             BeforeReadOnlyVerb();
-            const auto& texture = F1BoundTexture(target);
             MG_Pipe::MGPMipPlan record{};
             record.Res = MG_Pipe::MGPipeTextureEmitterInstance().FindTexture(*texture);
             record.Target = static_cast<Uint16>(target);
@@ -522,6 +531,12 @@ namespace MobileGL::MG_Record {
             }
             session.EmitAndWait(MG_Pipe::MGPWireOp::GenerateMipmap, &record, sizeof(record), nullptr, 0, nullptr, 0,
                                 nullptr);
+        }
+        void EmitGenerateMipmap(GLenum target) {
+            EmitMipPlan("GenerateMipmap", F1BoundTexture(target), target);
+        }
+        void EmitGenerateTextureMipmap(const SharedPtr<MG_State::GLState::ITextureObject>& texture, GLenum target) {
+            EmitMipPlan("GenerateTextureMipmap", texture, target);
         }
 
         // All draw entry points share the owned-input preparation and emission below.
@@ -1639,7 +1654,9 @@ namespace MobileGL::MG_Record {
         table.GL.ClearNamedFramebufferuiv = &EmitClearNamedFramebufferuiv;
         table.GL.CopyTexImage2D = &EmitCopyTexImage2D;
         table.GL.CopyTexSubImage2D = &EmitCopyTexSubImage2D;
+        table.GL.CopyTextureSubImage2D = &EmitCopyTextureSubImage2D;
         table.GL.GenerateMipmap = &EmitGenerateMipmap;
+        table.GL.GenerateTextureMipmap = &EmitGenerateTextureMipmap;
         table.GL.GetTexImage = &EmitGetTexImage;
         table.GL.GetTextureImage = &EmitGetTextureImage;
         table.GL.BindImageTexture = &EmitBindImageTexture;
@@ -1680,8 +1697,10 @@ namespace MobileGL::MG_Record {
         // P13 W4b: the texture family - its record arm resolves the texture from the verb's own
         // handle (VerbMipRes, VerbCopyTexDst, the copy's two endpoints).
         table.GL.GenerateMipmap = &EmitGenerateMipmap;
+        table.GL.GenerateTextureMipmap = &EmitGenerateTextureMipmap;
         table.GL.CopyTexImage2D = &EmitCopyTexImage2D;
         table.GL.CopyTexSubImage2D = &EmitCopyTexSubImage2D;
+        table.GL.CopyTextureSubImage2D = &EmitCopyTextureSubImage2D;
         table.GL.CopyImageSubData = &EmitCopyImageSubData;
         table.GL.ReadPixels = &EmitReadPixels;
         table.GL.GetTexImage = &EmitGetTexImage;

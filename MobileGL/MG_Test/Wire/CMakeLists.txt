@@ -209,7 +209,7 @@ gtest_discover_tests(PipeWireCodecTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS un
 # main() of its own. All three also reach MG_Pipe, MG_Backend and MG_State, so all three carry
 # those include paths.
 #
-#   RemoteClientTest       the 71-slot emit table, the caps mirror, R-8's liveness gates, R-17's
+#   RemoteClientTest       the 73-slot emit table, the caps mirror, R-8's liveness gates, R-17's
 #                          routing and ID-47/ID-49's readback rules (c1)
 #   ServerLoopTest         the apply thread, the blocking control mailbox, the verb stamp and
 #                          R-11's server-owned staging copy (v1)

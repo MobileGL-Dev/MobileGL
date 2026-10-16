@@ -366,8 +366,10 @@ inline constexpr MGPipeFieldMask kMGPipeAdmittedPullMask[kMGPipeVerbCount] = {
     {{0x0000000000000000ull, 0x0000000000000000ull}}, // BlitNamedFramebuffer
     {{0x0000000000000000ull, 0x0000000000000000ull}}, // CopyTexImage2D
     {{0x0000000000000000ull, 0x0000000000000000ull}}, // CopyTexSubImage2D
+    {{0x0000000000000000ull, 0x0000000000000000ull}}, // CopyTextureSubImage2D
     {{0x0000000000000000ull, 0x0000000000000000ull}}, // CopyImageSubData
     {{0x0000000000000000ull, 0x0000000000000000ull}}, // GenerateMipmap
+    {{0x0000000000000000ull, 0x0000000000000000ull}}, // GenerateTextureMipmap
     {{0x0000000000000000ull, 0x0000000000000000ull}}, // ReadPixels
     {{0x0000000000000000ull, 0x0000000000000000ull}}, // GetTexImage
     {{0x0000000000000000ull, 0x0000000000000000ull}}, // GetTextureImage

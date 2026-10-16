@@ -938,10 +938,10 @@ TEST(PipeCatalogue, PipeInputFieldsStartUnfilled) {
     EXPECT_FALSE(MGPipeInputFieldIsFresh(state, MGPipeInputField::GetRenderStateParameters));
 }
 
-// G5b: the verb enum is GLFunctionsTable's member list (69 entries), every class has verbs,
+// G5b: the verb enum is GLFunctionsTable's member list (71 entries), every class has verbs,
 // and the seven sticky fields ride in every class mask (P1 brief D7).
 TEST(PipeCatalogue, VerbTableIsTheFunctionTable) {
-    EXPECT_EQ(kMGPipeVerbCount, 69u);
+    EXPECT_EQ(kMGPipeVerbCount, 71u);
     EXPECT_EQ(kMGPipeVerbClassCount, 9u);
     SizeT perClass[kMGPipeVerbClassCount] = {};
     for (SizeT v = 0; v < kMGPipeVerbCount; ++v) {
@@ -964,6 +964,7 @@ TEST(PipeCatalogue, VerbTableIsTheFunctionTable) {
     EXPECT_FALSE(MGPipeFieldMaskHas(query, MGPipeInputField::GetRenderStateParameters));
     EXPECT_TRUE(MGPipeFieldMaskHas(query, MGPipeInputField::GetTransformFeedbackPausedPrimitiveCounter));
     EXPECT_EQ(kMGPipeVerbClass[static_cast<SizeT>(MGPipeVerb::GenerateMipmap)], MGPipeVerbClass::kTextureOp);
+    EXPECT_EQ(kMGPipeVerbClass[static_cast<SizeT>(MGPipeVerb::GenerateTextureMipmap)], MGPipeVerbClass::kTextureOp);
     EXPECT_STREQ(kMGPipeVerbNames[static_cast<SizeT>(MGPipeVerb::GetGpuTimestampNs)], "GetGpuTimestampNs");
 }
 
