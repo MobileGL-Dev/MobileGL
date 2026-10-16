@@ -37,13 +37,6 @@
 #include <regex>
 
 namespace MobileGL::MG_Backend::DirectGLES {
-    // read_pixels writes server reply scratch. The client refuses PACK_BUFFER before
-    // emission, so no frontend pack binding can affect this destination.
-    static const SharedPtr<MG_State::GLState::BufferObject>& SplitReadbackPackBuffer() {
-        static const SharedPtr<MG_State::GLState::BufferObject> none;
-        return none;
-    }
-
     const FormatCapabilityCache* ActiveBackendFormatCaps() {
         // Under a live split session the SERVER's private backend is what owns the context on the
         // apply thread (and these reads all run there), so its cache is the authoritative one.
@@ -2605,8 +2598,9 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
         // Walks the client-side destination the PACK parameters describe and hands each row to
         // `fillRow(slice, row, dstRow)`, which writes width * dstPixelBytes bytes of finished client
-        // texels. Shared by the converting and the raw-word stores so both address the destination -
-        // and feed the bound pixel-pack buffer - identically.
+        // texels. Shared by the converting and the raw-word stores so both address the destination
+        // identically. The destination is always client memory: a readback into a pack buffer takes
+        // the verb path and never reaches these stores.
         // applyPackImageParams: GL_PACK_IMAGE_HEIGHT / GL_PACK_SKIP_IMAGES apply only to GetTexImage
         // of 3D/array images; ReadPixels and 2D GetTexImage ignore them (GL 3.3 sections 4.3.1, 6.1.4).
         // Per the GL addressing rules, slice k row j lands at
@@ -2615,9 +2609,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
         template <typename FillRow>
         static Bool StoreClientRows(SizeT dstPixelBytes, SizeT swapGroupSize, GLsizei width, GLsizei sliceHeight,
                                     GLsizei sliceCount, void* pixels, Bool applyPackImageParams, FillRow&& fillRow) {
-            const auto& pixelPackBufferObject =
-            SplitReadbackPackBuffer();
-
             // Destination layout is computed from the client-side PACK parameters; only the actual pixel
             // rows are written so skip regions of the destination stay untouched.
             const auto packParams = MG_Pipe::gPipeInputs->GetPixelStoreParameters(false);
@@ -2635,17 +2626,6 @@ namespace MobileGL::MG_Backend::DirectGLES {
                                         static_cast<SizeT>(std::max(packParams.SkipPixels, 0)) * dstPixelBytes;
             const SizeT dstRowBytes = static_cast<SizeT>(width) * dstPixelBytes;
 
-            const SizeT pboBaseOffset = reinterpret_cast<SizeT>(pixels); // with a PBO, `pixels` is an offset
-            if (pixelPackBufferObject) {
-                const SizeT requiredSize = pboBaseOffset + dstSkipOffset +
-                                        static_cast<SizeT>(sliceCount - 1) * dstImageStride +
-                                        static_cast<SizeT>(sliceHeight - 1) * dstRowStride + dstRowBytes;
-                if (requiredSize > pixelPackBufferObject->GetSize()) {
-                    MGLOG_E_ONCE("Readback conversion: pixel pack buffer is too small");
-                    return true;
-                }
-            }
-
             Vector<Uint8> convertedRow(dstRowBytes);
 
             for (GLsizei slice = 0; slice < sliceCount; ++slice) {
@@ -2660,24 +2640,14 @@ namespace MobileGL::MG_Backend::DirectGLES {
 
                     const SizeT dstOffset = dstSkipOffset + static_cast<SizeT>(slice) * dstImageStride +
                                          static_cast<SizeT>(row) * dstRowStride;
-                    if (pixelPackBufferObject) {
-                        pixelPackBufferObject->WritebackFromBackend({convertedRow.data(), dstRowBytes},
-                                                                 pboBaseOffset + dstOffset);
-                    } else {
-                        Memcpy(static_cast<Uint8*>(pixels) + dstOffset, convertedRow.data(), dstRowBytes);
-                    }
+                    Memcpy(static_cast<Uint8*>(pixels) + dstOffset, convertedRow.data(), dstRowBytes);
                 }
-            }
-            if (pixelPackBufferObject) {
-                // WritebackFromBackend bumps change serials with no backend op; re-open
-                // the buffer draw-clean memos (once for the whole row loop).
-                BufferImpl::BumpBufferMutationEpoch();
             }
             return true;
         }
 
         // Repacks wide RGBA(_INTEGER) rows into the client's (format, type) layout, honoring the
-        // client-side PACK parameters and the bound pixel-pack buffer. `wide` holds
+        // client-side PACK parameters. `wide` holds
         // `sliceHeight * sliceCount` rows of `width` texels (slice-major, tightly stacked),
         // 4 components x GetReadbackComponentSize(wideType) bytes each.
         Bool StoreWideRowsToClient(const Uint8* wide, GLenum wideType, GLsizei width, GLsizei sliceHeight,

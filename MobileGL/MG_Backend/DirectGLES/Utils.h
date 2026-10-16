@@ -237,18 +237,18 @@ namespace MobileGL::MG_Backend::DirectGLES {
         void ConvertWideReadbackRow(const Uint8* src, Uint8* dst, SizeT width, GLenum wideType,
                                     const ReadbackChannelMapping& mapping, GLenum type);
 
-        // Stores wide RGBA(_INTEGER) rows into the client pointer or the bound PACK pixel buffer,
-        // honoring the client-side PACK pixel-store parameters (row length, alignment, skips,
-        // swap-bytes, and - when applyPackImageParams - image height/skip images). Shared by the
-        // DirectGLES and DirectVulkan readback conversion paths.
+        // Stores wide RGBA(_INTEGER) rows into client memory, honoring the client-side PACK
+        // pixel-store parameters (row length, alignment, skips, swap-bytes, and - when
+        // applyPackImageParams - image height/skip images). Shared by the DirectGLES and DirectVulkan
+        // readback conversion paths.
         Bool StoreWideRowsToClient(const Uint8* wide, GLenum wideType, GLsizei width, GLsizei sliceHeight,
                                    GLsizei sliceCount, const ReadbackChannelMapping& mapping, GLenum type,
                                    void* pixels, Bool applyPackImageParams);
 
-        // Stores packed 32-bit source words verbatim, with the same destination addressing, PACK
-        // parameters and pixel-pack-buffer handling as StoreWideRowsToClient. For the sources whose
-        // storage word already IS the client word (MG_Util::IsRawPackedPixelTransfer): routing those
-        // through the wide float intermediate re-encodes them, and the RGB9_E5 encoder canonicalizes
+        // Stores packed 32-bit source words verbatim, with the same destination addressing and PACK
+        // parameters as StoreWideRowsToClient. For the sources whose storage word already IS the
+        // client word (MG_Util::IsRawPackedPixelTransfer): routing those through the wide float
+        // intermediate re-encodes them, and the RGB9_E5 encoder canonicalizes
         // the shared exponent, so glGetTexImage would answer with different bits than were stored.
         // `srcWords` holds sliceHeight * sliceCount tightly stacked rows of `width` 32-bit words.
         // False when `type` is not a 4-byte packed type.
