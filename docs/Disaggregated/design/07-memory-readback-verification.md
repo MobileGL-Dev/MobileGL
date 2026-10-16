@@ -14,6 +14,18 @@
 
 T2 下 client 侧推送三件套：不做 map/unmap 命令对（payload 带 `hasLiveHostWrites`）；在每个 validate 点按块（`MOBILEGL_IPC_PERSISTENT_BLOCK_KB`，默认 64）推送可达的已映射 buffer，脏页追踪 + 哈希抑制只发变化的块（P5d）；门 `PersistentCoherentMapScenario`。`mpr` 数的是每一次 `MapPersistent` 发射（铸成或拒绝都算），所以在 monolith 下也可断言。
 
+### 12.1 采纳档的握手期结算
+
+档在握手期、第一条 `map_persistent` 之前，由知道数据面的一侧结算（`MG_Remote/Transport/AdoptTier.h`）。T0 用不了从不是 `Fatal`，而是 T2 加一行：`MOBILEGL_IPC_ADOPT_TIER=0` 时是具名行，未设时只打 MGLOG_D，照样计数。
+
+| 数据面 | 一侧 | knob 0 / 未设 | knob 1 |
+|---|---|---|---|
+| stream | 两端 | 只有 T2（不共享内存）；knob 0 打 `Refuse{AdoptTierOnStream, "T0"}` | `Refuse{AdoptTierOnStream, "T1"}`，T2 |
+| 共享段 | client | 在 `Hello` 的 `LinkTerms.adoptTier` 请求 T0（0；未设为 `kAdoptAskT0Default`）；是否真跑 T0 在第一条 `map_persistent` 时读 `kCapAdoptT0`（`ClientSession::AdoptT0`） | `Refuse{AdoptTierClosed, "T1"}`，请求 T2 |
+| 共享段 | server | 不看自己的 knob：按 client 的请求，在第一次原生 bind 时批准（`ServerSession::SettleAdoptT0AtBind`，之后的 `CapsSnapshot` 带 `kCapAdoptT0`）或具名说明原因 | 同左 |
+
+T2 路径上的使用时检查 `Client::AdoptTierIsEmulate` 读回结算结果：已结算的会话照常走 T2；knob 0 / 1 下没有任何握手结算过的 `map_persistent`（无会话的调用方）具名中止为 `Fatal{UnimplementedAdoptTier}`，不静默当成 T2。
+
 ## 13. 回读、roundtrip 清单与验证
 
 ### 13.1 稳态零 roundtrip 与不可避免的阻塞点

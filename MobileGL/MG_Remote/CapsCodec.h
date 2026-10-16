@@ -32,33 +32,14 @@
 
 namespace MobileGL::MG_Remote {
 
-    // ---- CallMask's layout (c0's ruling, extending R-8) ---------------------------------
-    //
-    // R-8 requires the client's liveness gates - MGPipeResourceSubsystemEnabled() and
-    // P4aFamilyHasItsConsumer() - to answer from MGPCaps::CallMask instead of from
-    // MGPipeGetResourceOps(), because that op table is the SERVER's registration: under
-    // inproc a client reading it is right by accident, and under spawn it is null and five
-    // whole record families silently emit nothing.
-    //
-    // But CallMask as declared carries only the nine MGPCapBit FEATURE bits
-    // (MGPipeTypes.h:108-124) and has no per-family bit at all, so "read the CallMask" was
-    // not yet an implementable instruction. It is now:
-    //
-    //   bits  0..8   MGPCapBit, unchanged. kCapViewportArray (0), kCapNeedsHostIndexBytes (7)
-    //                and kCapNeedsHostUboBytes (8) are RESERVED (P8-F): never published, and
-    //                their positions are never reused, which keeps every MGHostSpan off the wire.
-    //   bits  9..31  reserved for further MGPCapBits.
-    //   bits 32..47  THE CONSUMER MASK: bit (32 + n) means "the server has a consumer for
-    //                MGPipe subsystem bit n" - i.e. the server's own subsystem mask, shifted.
-    //                Sixteen bits covers bits 0..12 allocated through P4a with room to P8.
+    // ---- CallMask's layout ---------------------------------------------------------------
+    // The client's consumer gates (MGPipeResourceSubsystemEnabled, P4aFamilyHasItsConsumer)
+    // read CallMask, never MGPipeGetResourceOps(): that op table is the server's registration.
+    //   bits  0..31  MGPCapBit. Reserved bits (kCapViewportArray, kCapNeedsHost*Bytes) are
+    //                never published and their positions are never reused.
+    //   bits 32..47  consumer mask: bit (32 + n) = the server consumes MGPipe subsystem bit n.
     //   bits 48..63  reserved.
-    //
-    // protocol.fbs:94's `tableSlotMask: ulong` is DELETED rather than renamed (R-8 offered
-    // either). Two reasons, and the second is decisive: ARCHITECTURE.md §3.3 says CallMask
-    // REPLACES "is this table slot null" as the capability probe, so a field whose comment is
-    // "which GLFunctionsTable slots the peer registered" re-introduces exactly what it
-    // replaced; and GLFunctionsTable has SIXTY-NINE function-pointer slots
-    // (BackendObject.h:117-292), so a 64-bit mask cannot address it and never could.
+    // There is no table-slot mask: CallMask replaces the null-slot probe (ARCHITECTURE.md §3.3).
     inline constexpr Uint32 kMGCapsConsumerBitShift = 32;
     inline constexpr Uint64 kMGCapsConsumerMask = 0xFFFFull << kMGCapsConsumerBitShift;
 

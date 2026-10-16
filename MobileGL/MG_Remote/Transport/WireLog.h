@@ -6,22 +6,11 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// A one-function logging shim for the wire layer's header-only code.
-//
-// MG_Util/Debug/Log.h includes <Includes.h>, the GL frontend's umbrella
-// header - 661 headers, measured with `clang++ -H`. That is fine inside a
-// .cpp, and Ring.cpp / Doorbell.cpp / the transports all do it. It is not fine
-// in a header of this layer: ITransport.h states the rule ("nothing about a
-// byte pipe needs the GL frontend's umbrella header") because these headers
-// are included by both roles and by the eventual server-side binary, and
-// because the disaggregated build's include-graph purity gate (plan section
-// 10.3, gate A) asserts on `-H` output rather than on symbols. Framing.h was
-// the one header under Transport/ that broke the rule; it now calls this
-// instead, and the umbrella stays inside WireLog.cpp.
-//
-// ERROR and FATAL only, deliberately. Everything routed here is a latched
-// protocol violation, never per-frame noise; non-critical wire lines use
-// MGLOG_D from a .cpp, where the INFO build compiles them out entirely.
+// A logging shim for the wire layer's header-only code. MG_Util/Debug/Log.h includes the GL
+// frontend's umbrella header, which headers of this layer must not (ITransport.h's rule; the
+// include-graph purity gate checks `clang++ -H` output), so the umbrella stays in WireLog.cpp.
+// ERROR and FATAL only: everything routed here is a latched protocol violation, never per-frame
+// noise; other wire lines use MGLOG_D from a .cpp, which the INFO build compiles out.
 
 #pragma once
 

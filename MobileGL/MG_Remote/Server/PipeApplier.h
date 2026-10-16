@@ -6,36 +6,14 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// The server's applier bridge. Owner: package v1, with p1 for the stamp rule. Signatures by c0.
-//
-// IT IS A BRIDGE, NOT AN APPLIER. The applier already exists and is not edited by this phase:
-// MG_Pipe/PipeApply.{h,cpp}, 37 MGPipeApply* free functions. This class owns the three things
-// that only exist once records arrive over a wire rather than by direct call:
-//
-//   1. THE VERB STAMP. This is the phase's prerequisite, and it is not in the ROADMAP row.
-//      MGPipeApplyAccess deliberately does not stamp the poison generations
-//      (PipeInputs.h:612-618): "a stamp says the filler published this for THIS verb, which is
-//      the walk's statement, not the applier's". Under split the filler is in another role, so
-//      NOTHING stamps, every FilledGen[] stays 0, MGPipeInputFieldIsFresh returns false for
-//      everything, and a pure server aborts on the FIRST read inside SyncRenderState with
-//      Fatal{UnmigratedPipeInput, "GetRenderStateParameters@<none>"} - before reaching any
-//      interesting case. So: the server stamps at the verb boundary. p1 defines what is
-//      stamped and for which verb; v1 places the call. Neither half works alone.
-//
-//   2. ACCEPTANCE. Four applier entry points return Bool - ResourceCreate, ResourceRespecify,
-//      ResourceSubData, SetTextureParams - and MapPersistent returns void*. Those returns are
-//      what the CLIENT gates destructive state changes on (clearing per-level dirty flags,
-//      latching parameters, adopting a pointer). They go back through the reply slot, id =
-//      record seq (R-3), and are collected in the barrier's existing wait (R-5). The client
-//      may not recompute any of them.
-//
-//   3. R-11, THE BORROWED-POINTER RULE. A SEG_STAGE run is valid from publish until retiredSeq
-//      passes the record naming it. NO APPLIER ENTRY POINT MAY HOLD A POINTER PAST ITS RETURN.
-//      The tree has exactly one violation and it is named: GLESBufferResource::hostBytes
-//      (Managers.h:839), written by Ops_H_SubData (Managers.cpp:1980-1983) and Ops_H_FlushRange
-//      (:2035), read by six later drains (:2000, :2062, :2080, :2111, :2741, :2843). Under split
-//      those two must copy into server-owned storage. MOBILEGL_IPC_AUDIT=1's 0xDD fill (R-2.5)
-//      is the mechanical control that says whether they did.
+// The server's applier bridge. The appliers are MG_Pipe/PipeApply's MGPipeApply* functions; this
+// class adds what exists only when records arrive over a wire:
+//  - the verb stamp: the server stamps PipeInputs itself at each verb boundary
+//    (StampVerbBoundary); the client's stamps cannot stand in for it (ARCHITECTURE.md §9.2.1);
+//  - acceptance: the Bool appliers and MapPersistent answer through the record's reply slot, and
+//    the client gates destructive state changes on that answer, never on its own guess;
+//  - borrowed pointers: a SEG_STAGE run is valid until retiredSeq passes its record, so no applier
+//    keeps a pointer past its return; MOBILEGL_IPC_AUDIT=1 poisons retired bytes to prove it.
 
 #pragma once
 #include <Includes.h>
@@ -63,22 +41,12 @@ namespace MobileGL::MG_Remote::Server {
     // action under test is the probe itself).
     Bool MGPipeServerPublishesRunAhead();
 
-    // ---- the barriered stamp, AS A PURE FUNCTION (ID-111) ---------------------------------
-    //
-    // ApplyOne stamps "is the client parked behind this record" before anything can ask
-    // (CONTRACT-P5E §2.1 / §4.4). Until the P5e integration commit the answer is `true` for
-    // every record whatever the wire says, because the client still blocks after each one
-    // (ID-103) - but the day the constant flips, the answer must ALSO ask whether this server
-    // published the run-ahead bit at all. It is `wireSaysBarriered` only when BOTH halves of
-    // the run-ahead arm are true; Magma publishes no bit 10, so a Magma server keeps stamping
-    // `true` and its lockstep client keeps being safe. Without the second conjunct a Magma
-    // server would stamp every draw_vbo / blit / clear / launch_grid UNBARRIERED (they are all
-    // kWaitNone) while its client is still parked, and CountBarrierPull aborts unconditionally
-    // on an unbarriered pull - Magma dies on its first draw, no knob involved.
-    //
-    // IT IS A PURE FUNCTION for MGPipeRunAheadCapBitsFor's reason: "Magma never runs ahead" is
-    // then something a unit case can hold AT THE POST-FLIP VALUE of the constant, rather than a
-    // claim that first becomes testable on the day the integration commit throws the switch.
+    // The barriered stamp, as a pure function: ApplyOne stamps whether the client is parked
+    // behind this record before anything can ask. The wire's answer is used only when the
+    // client's wait rule is in force and this server publishes kCapRunAheadApply; otherwise every
+    // record is barriered. A server without that bit has a lockstep client, and stamping its
+    // kWaitNone draws unbarriered while that client is parked would make CountBarrierPull abort.
+    // Pure so a unit test can pin "no run-ahead bit, never runs ahead" for any input.
     constexpr Bool MGPipeApplierStampsBarriered(Bool clientWaitRuleLanded,
                                                 Bool serverPublishesRunAhead,
                                                 Bool wireSaysBarriered) {

@@ -6,35 +6,14 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// P12 (on-screen server window), D3/D5/D6/D7. THE JNI GLUE OF THE IN-PROCESS DISPLAY SERVER.
-//
-// The APK's MobileGLDisplayActivity (android:process=":mglwin") owns a SurfaceView and runs
-// the TCP server on a thread of its own process, so a headless client (MOBILEGL_IPC_SURFACE=server)
-// renders straight onto that SurfaceView. This file is the whole native half of that Activity:
-//
-//   nativeInstallDisplay   ServerDisplayInstance().Install(): ANativeWindow acquire/release plus the
-//                          geometry up-call below. Before the server serves.
-//   nativeServe            mobilegl_server_serve_inprocess(listen) on the CALLING (Java) thread;
-//                          returns its exit code when the server stops or fails.
-//   nativeStop             mobilegl_server_stop_inprocess(): non-blocking, safe on the UI thread.
-//   nativeAttachWindow     surfaceCreated / surfaceChanged: ANativeWindow_fromSurface, Attach (which
-//                          takes its OWN reference), then this call's reference is released.
-//   nativeDetachWindow     surfaceDestroyed: ServerDisplay::Detach, which BLOCKS (bounded) until the
-//                          session rendering into the window has released its backend surface on the
-//                          apply thread. Returns the result's name for the Activity's log.
-//   nativeUninstallDisplay after the server returned: the display is gone.
-//
-// THE GEOMETRY UP-CALL. ServerDisplay calls RequestGeometry on the APPLY THREAD, from AcquireFor,
-// during a ServerOwned CreateWindowSurface, with the size the client asked for. That thread is a
-// native thread the JVM does not know, so it is attached for the call and detached after it (a
-// native thread that exits while still attached aborts the runtime). The Java side only POSTS the
-// request to the UI thread (SurfaceHolder.setFixedSize / setSizeFromLayout must run there) and
-// returns: this must not block and must not call back into ServerDisplay. The class and method are
-// resolved here, on the Java thread that installs the display, because a native thread's FindClass
-// would search the system class loader, not the app's.
-//
-// Compiled only for Android with MOBILEGL_BUILD_DISAGGREGATED (CMakeLists.txt, beside
-// DriverPostJni.cpp); the guard keeps it inert anywhere else.
+// The JNI glue of the in-process display server: the native half of MobileGLDisplayActivity
+// (process ":mglwin"), which owns a SurfaceView and runs the TCP server in its own process so a
+// headless client (MOBILEGL_IPC_SURFACE=server) renders onto it. nativeInstallDisplay and
+// nativeUninstallDisplay bracket nativeServe (blocking, on the calling Java thread); nativeStop
+// does not block; nativeDetachWindow blocks (bounded) until the session releases the window.
+// RequestGeometry runs on the apply thread, attached to the JVM for the call only, and must not
+// block or call back into ServerDisplay (Java only posts to the UI thread). Its class and method
+// are resolved at install: a native thread's FindClass would miss the app's classes.
 #ifdef __ANDROID__
 
 #include "InProcessServer.h"

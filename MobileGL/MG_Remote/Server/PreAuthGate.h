@@ -6,49 +6,13 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// PH-7 (5), CONTRACT-P7 §12, docs/archive/notes/p7/ph-f.md §6.4. THE TCP SUPERVISOR AUTHENTICATES BEFORE IT
-// FORKS, AND AN UNAUTHENTICATED PEER'S WORK IS BOUNDED.
-//
-// Two exposures were on the tree before wave 2-F and were recorded by its review:
-//   (a) the supervisor forked a session child for every accepted TCP connection and let the child
-//       read the Hello - so any peer that could reach the port cost the server a fork, and a
-//       silent one held that child for up to 10 s;
-//   (b) the child ran ValidatePeerHandshake before AuthenticatePeerToken, so an unauthenticated
-//       peer that sent a Hello with a wrong fingerprint was answered with Refuse{WireFingerprint}
-//       carrying THIS build's wire fingerprint (and Refuse{BuildFingerprint} its build stamp).
-//
-// The supervisor now reads every new connection's FIRST FRAME itself, without blocking on any one
-// peer, under a short deadline; a Hello is authenticated there, token first, and only an
-// authenticated Hello is ever forked for. The pieces that decide are here, free of I/O policy and
-// of the supervisor's loop, so they are unit-testable (PreAuthGateTest):
-//
-//   PreAuthKnobs        the four knobs, read once from the environment;
-//   ClassifyFirstFrame  what a complete first frame IS - the fuzz arm 1 malformations each land
-//                       on a named shape here, and the identifier is asked before the verifier;
-//   FirstFrameAssembler reads EXACTLY one frame off a non-blocking socket, a few bytes at a time,
-//                       and never a byte past it: a DataBind is followed on its connection by
-//                       StreamLink's own frames, which belong to the session child;
-//   AuthBackoff         failures per peer address, and the exponentially growing window during
-//                       which that address is refused at accept, before a byte of it is read.
-//
-// What a failure IS, for the backoff: a Hello whose token did not match, a first frame that is not
-// a well-formed control frame, a connection that let the deadline pass, and a connection that HELD
-// its pending slot for kPreAuthProbeGraceMs or longer and then closed (or was displaced, below)
-// without completing a frame. What it is NOT: a connection that closed within kPreAuthProbeGraceMs
-// of its accept without sending a byte (a port probe costs the server an accept and nothing else),
-// a DataBind that names no live session (a stale data connection of a session that just ended is a
-// legitimate client's), and a refusal the backoff itself issued (counting those would let anybody
-// behind a shared address keep that address locked out for ever).
-//
-// Fix round (the f2-auth critic's reproduction). The first cut counted no silent close at all, and
-// the pending slots were one pool for everybody: one address could open MOBILEGL_IPC_PREAUTH_MAX
-// silent connections, close them just before the deadline, open them again, and every Hello from
-// anywhere was refused Busy for as long as it liked - no failure counted, no backoff ever. Two
-// rules close that: a silent connection that held its slot past the grace is a failure (so the
-// holder is backed off after MOBILEGL_IPC_AUTH_BACKOFF_AFTER of them), and a full queue is SHARED
-// (ChoosePendingToDisplace): a newcomer from an address that holds fewer slots than the busiest
-// address displaces the busiest address's oldest pending connection, so no one address can keep
-// another out.
+// Pre-authentication for the TCP supervisor. It reads each new connection's first frame itself,
+// without blocking on any one peer and under a short deadline, checks the token first, and forks
+// a session child only for an authenticated Hello. The deciding pieces are free of I/O policy so
+// PreAuthGateTest can drive them: PreAuthKnobs (the environment knobs), ClassifyFirstFrame,
+// FirstFrameAssembler (reads exactly one frame and never a byte past it: a DataBind's connection
+// goes on with StreamLink frames that belong to the session child) and AuthBackoff. What counts
+// as a failure and how the pending queue is shared: ARCHITECTURE.md §15.1.1.
 
 #pragma once
 

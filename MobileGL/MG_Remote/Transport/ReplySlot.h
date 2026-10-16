@@ -6,47 +6,14 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// SEG_REPLY: the slot pool the server writes a kReplySlot answer into, and the
-// client reads it back out of. Owner: package s1.
-//
-// THE ID IS THE RECORD SEQUENCE NUMBER (P5 R-3). There is no second id space and
-// no allocator: the ten kReplySlot calls carry no MGPReplySlot in their payloads
-// (that is why the id has to be DERIVED rather than carried), the wire has no
-// per-record seq field (ARCHITECTURE.md §4), so the record's ordinal IS its
-// reply-slot id. The slot is addressed `seq % slotCount` and the server STAMPS
-// THE SEQ BACK INTO THE SLOT HEADER, which is what makes a wrong-slot read
-// detectable rather than merely plausible. Seq is 1-based; 0 means "no record".
-//
-// THE SLOT HEADER IS CONTRACT-P5 TABLE 0's ROW, verbatim:
-//     { Uint64 Seq; Int32 Status; Uint32 Size; }   // 16 bytes, then the payload
-//     Status: 0 = OK, 1 = DECLINED, 2 = ERROR
-//
-// DECLINED IS A REAL ANSWER, NOT A FAILURE. It is how MapPersistent says nullptr
-// (R-6) and how the four Bool acceptance entry points - ResourceCreate,
-// ResourceRespecify, ResourceSubData, SetTextureParams - say false (R-5). A
-// client that folds DECLINED into "the call failed" re-creates ID-39's 66 lost
-// uploads from the other side, and a client that folds it into OK accepts a
-// pointer the server never handed out.
-//
-// A REPLY LARGER THAN ONE SLOT IS FATAL, NOT CHUNKED, AND THE CLIENT SAYS SO
-// FIRST (ID-47). P5's only large answer is ReadPixels, and the client knows its
-// size before it emits the record, so it refuses an oversize ANSWER BY NAME
-// before emission (RequireReadPixelsFits: Fatal{ReplyTooLarge, "ReadPixels
-// <w>x<h> <format> <bytes> > <cap>"}); Post's own refusal is the server's last
-// line of defence, and reaching it means the two sides disagree about the frame
-// rather than that the pool is too small. The pool still has no knob and a reply
-// is still never chunked: since P7 gate 5 (g5-readback) the client splits a READ
-// larger than one slot into bands, each an ordinary read_pixels record whose
-// answer fits (EmitTables.h PlanReadbackBands), so the refusal is left for the
-// one read no banding can answer - a single pixel larger than a slot.
-//
-// ORDERING. The client only looks at a slot after it has seen
-// RingControl::appliedSeq >= its own seq with an ACQUIRE load, and the server
-// advances appliedSeq with a RELEASE store AFTER posting the reply
-// (PipeApplier::ApplyOne's order: decode -> stamp -> apply -> post -> advance).
-// That pair is what publishes the slot's bytes; the fences below are the
-// belt-and-braces for a caller - a unit test, or P9's async pool - that reads a
-// slot without going through appliedSeq first.
+// SEG_REPLY: the slot pool the server writes a kReplySlot answer into and the client reads back.
+// The slot id is the record's 1-based seq (0 means "no record"), addressed `seq % slotCount`; the
+// server stamps the seq into the 16-byte ReplySlotHeader so a wrong-slot read is detected.
+// DECLINED is a real answer, not a failure: MapPersistent's nullptr, the Bool appliers' `false`.
+// A reply never exceeds one slot and is never chunked; the client bands large reads
+// (ARCHITECTURE.md §13.1.3), so Post's refusal is a last line of defence. The server posts, then
+// advances appliedSeq (release); the client reads a slot only after an acquire load shows
+// appliedSeq >= seq. The fences in Post and Read cover readers that bypass appliedSeq.
 
 #pragma once
 
@@ -84,30 +51,11 @@ namespace MobileGL::MG_Remote::Transport {
         kReplyStatusError = 2,
     };
 
-    // Eight slots of a 16 MiB SEG_REPLY is 2 MiB per slot, and MaxReplyBytes() is
-    // 2 MiB minus the 16-byte header = 2,097,136 bytes per answer (ID-47).
-    //
-    // Why eight and not sixty-four: while the verb barrier holds (R-1) the client
-    // blocks at every verb boundary, so the in-flight depth is exactly ONE and
-    // every extra slot buys nothing but a smaller maximum answer. The trade is
-    // the other way round - fewer slots, bigger replies - and P5's only large
-    // answer is a blocking ReadPixels. P9, which is what makes the pool
-    // asynchronous, re-chooses this geometry with real depth to size it against.
-    //
-    // WHY 2 MiB AND NOT 1. The first version of this file said "1 MiB covers a
-    // 512x512 RGBA8 read", and it did not: 512*512*4 is exactly 1 MiB and the
-    // slot header takes 16 of those bytes, so Post refused it by sixteen. Worse,
-    // the E2 retrace harness's snapshot is a full-surface GL_RGBA/GL_UNSIGNED_BYTE
-    // read of OpenRA's 640x480 surface = 1,228,800 bytes through the interposer,
-    // 17% over the old cap - Post would have aborted on the first snapshot the
-    // day the client's ReadPixels emitter landed. Contract §2 row 23 says the
-    // slot is "sized from the scenario's largest read rather than guessed";
-    // 2 MiB is that size for every P5 exit-gate read (E2 is the largest at
-    // 640x480). A 2400x1080 RGBA8 device surface is ~10.4 MB and is a P6 debt
-    // (chunked readback or a dedicated readback carrier), recorded in the
-    // ROADMAP by the integrator - the geometry here is not the place it is paid.
-    // It was paid at P7 gate 5 by client-side banding (g5-readback), with this
-    // geometry unchanged.
+    // Eight slots of a 16 MiB SEG_REPLY: 2 MiB per slot, so MaxReplyBytes() is 2 MiB minus the
+    // 16-byte header (2,097,136 bytes). Few large slots, because the client never defers reading
+    // an answer from this pool (ShmLink does not retain replies), so extra slots would only shrink
+    // the largest answer. 2 MiB holds a full 640x480 RGBA8 read (1,228,800 bytes) in one answer;
+    // larger reads are split into bands by the client (PlanReadbackBands).
     inline constexpr std::uint32_t kDefaultReplySlotCount = 8;
 
     // Slot 0 exists and is used: seq is 1-based, so seq % slotCount hits slot 0

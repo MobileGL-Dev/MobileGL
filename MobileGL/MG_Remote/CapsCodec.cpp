@@ -6,31 +6,14 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// P5 package w1: MGPCaps's two blob serializers, the pair MGPipeTypes.h:134-136 defers to
-// this phase by name ("Their serializers land with the transport (P5)").
-//
-// THE FORMAT, and every part of it is a refusal rather than a guess. It is
-// ProgramArtifactsCodec's shape on purpose - that codec is the tree's one worked example of a
-// wire format that has survived a real transport, so copying it is cheaper than being
-// original and much cheaper than being wrong:
-//
-//   * a VERSION word first, and the two TABLE DIMENSIONS second, so a peer whose
-//     TextureInternalFormat enum grew is a mismatch AT READ TIME rather than a silent shear
-//     that reads one format's capabilities as another's;
-//   * length-prefixed everything, with the count checked against the bytes that REMAIN before
-//     a single element is reserved, so a corrupt count cannot become a four-billion-element
-//     resize;
-//   * SPARSE for all three capability tables. The dense form is
-//     2 * targets * formats * 8 bytes plus the sample-count lists - with 13 targets and 77
-//     internal formats that is ~16 KiB of mostly zeroes, PER CONTEXT AND PER CAPS
-//     INVALIDATION, because R-12 makes a re-arriving snapshot the invalidation rather than a
-//     once-per-process cost. The tables are overwhelmingly empty, so what crosses is
-//     (index, value) pairs and the decoder Clear()s first;
-//   * little-endian by memcpy of fixed-width scalars, which is what every other MobileGL wire
-//     struct already assumes and what the ABI fingerprint below makes checkable;
-//   * every decoder returns FALSE on truncation, a bad version, a dimension mismatch, an
-//     out-of-range index or TRAILING BYTES THE FORMAT DOES NOT ACCOUNT FOR. These bytes
-//     arrive over a wire and the outputs are left in a defined, default state on a refusal.
+// MGPCaps's two blob serializers: the format capability cache and the renderer info. Each rule
+// of the format refuses rather than guesses. A version word and the two table dimensions come
+// first, so a peer whose format enum grew fails at read time instead of shearing one format's
+// caps onto another. Every count is length-prefixed and checked against the remaining bytes
+// before anything is reserved. The three capability tables cross sparse as (index, value) pairs:
+// dense they are ~16 KiB of mostly zeroes, resent with every snapshot. Scalars are little-endian
+// by memcpy. Decoders return false on truncation, a bad version or dimension, an out-of-range
+// index or trailing bytes, and leave the outputs in a default state.
 
 #include "CapsCodec.h"
 

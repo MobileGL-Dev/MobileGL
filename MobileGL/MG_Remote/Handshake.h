@@ -49,23 +49,14 @@ namespace MobileGL::MG_Remote {
         return true;
     }
 
-    // PH-7 (1)(2), ID-P7-3. THE TOKEN POLICY, ONCE, FOR BOTH SERVER-SIDE SITES.
-    //
-    // ServerSession::Accept and ServerMain::RunSession each had their own reading of it (see
-    // Transport/AuthToken.h for what the three readings were). They now call this, so the answer
-    // to "is this peer allowed to open a session" is one function with one comparison, and it is
-    // the constant-time one.
-    //
-    // THE FOUR STATES, stated here because they were implicit and therefore different at each
-    // site:
-    //   in-process  - there is no peer; the "connection" is this process. Never authenticated.
-    //   no token    - not an empty credential: the LISTEN policy has already confined this
-    //                 server to loopback (SocketTransport.cpp's ListenTcp), so there is nothing
-    //                 left for a token to add. A peer that sends one anyway is not refused for
-    //                 it; ServerMain used to do that and no document ever said so.
+    // The one token check every server-side site uses (ServerSession::Accept, ServerMain's
+    // session and pre-auth paths, PairAcceptor), with a constant-time comparison:
+    //   in-process      - no peer; never authenticated.
+    //   no token set    - the listen policy already confines the server to loopback
+    //                     (SocketTransport.cpp's ListenTcp); a token the peer sends is not refused.
     //   token, match    - welcomed.
-    //   token, mismatch - `Refuse{Authentication}`, detail "token mismatch", and the value is
-    //                 not in the line. A missing token field is a mismatch, not a separate case.
+    //   token, mismatch - Refuse{Authentication}, detail "token mismatch", the value never logged.
+    //                     A missing token field is a mismatch.
     inline MobileGLResult AuthenticatePeerToken(Transport::ITransport& transport,
                                                 const ::flatbuffers::String* presented) {
         if (transport.Role() == Transport::TransportRole::InProcess) return MOBILEGL_OK;

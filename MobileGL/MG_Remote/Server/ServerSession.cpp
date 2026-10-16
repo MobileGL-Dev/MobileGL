@@ -46,25 +46,12 @@
 namespace MobileGL::MG_Remote::Server {
 
     namespace {
-        // F1 (P7 wave 2). THE ONLY KNOB THAT CAN MAKE THE FIRST CapsSnapshot LATE.
-        //
-        // MOBILEGL_TEST_DELAY_FIRST_CAPS_MS delays the server's FIRST publication, and only
-        // it - a re-send (R-12) is never delayed, because the question is about the window
-        // before the client has any mask at all. Read once, on the first Accept, so a lane
-        // that does not set it pays one getenv per session and nothing else.
-        //
-        // WHAT IT PROVES, AND WHERE. Under spawn / unix: / tcp:// the publication happens in
-        // the SERVER's process, so the delay is a genuinely late snapshot from the client's
-        // point of view and it exercises the client's step-7 wait (ClientSession.cpp:1284).
-        // Under inproc there is no second process: Accept runs inside ClientSession::Start on
-        // the client's own thread, so the delay simply makes Start slower - which is itself
-        // the proof that under inproc the first snapshot CANNOT be late relative to session
-        // start, and therefore that the only window in which the client could read a
-        // placeholder is the one BEFORE Start is called. That window is F1's defect, and
-        // MobileGL::Initialize closes it by ordering rather than by waiting.
-        //
-        // It is a TEST knob: it exists only in a disaggregated build and does nothing at all
-        // unless it is set, so no production path can reach a delay it did not ask for.
+        // MOBILEGL_TEST_DELAY_FIRST_CAPS_MS: a test-only knob (disaggregated builds, inert unless
+        // set) that delays the server's first CapsSnapshot only; re-sends are never delayed. Read
+        // once per process. Across processes it makes the snapshot genuinely late and exercises the
+        // client's wait for it; under inproc Accept runs inside ClientSession::Start, so it only
+        // slows Start, showing the first snapshot cannot be late relative to session start there
+        // (the window before Start is closed by ordering in MobileGL::Initialize).
         void DelayFirstCapsSnapshotForTest() {
 #if MOBILEGL_BUILD_DISAGGREGATED
             static Bool spent = false;
@@ -228,28 +215,14 @@ namespace MobileGL::MG_Remote::Server {
                     eventName, static_cast<unsigned long long>(payloadBytes));
         }
 
-        // ---- P5e (ra), CONTRACT-P5E §2.6: the ring stops being a Fatal and becomes a queue --
-        //
-        // THE FATAL'S PREMISE DIES WITH THE LOCKSTEP. "A full ring is a producer burst no
-        // workload has" was true because the client drained at EVERY verb: the ring was empty
-        // whenever the server started a record, so filling 256 KiB inside one apply meant a
-        // defect. A run-ahead client drains at its waits, which on the steady path are one
-        // present apart, so a full ring is now an ordinary backlog and aborting on it would
-        // turn the reverse channel's capacity into a workload limit.
-        //
-        // SO THE PRODUCER BLOCKS. It publishes what is already in the ring and rings the
-        // client (a client that has not yet noticed cannot drain), then parks on its own bell
-        // until the client's Drained() clears the latch and rings back. The deadlock argument
-        // is the contract's, and it needs BOTH halves: the server blocks only here, the client
-        // blocks only on watermarks the server advances, and every client park breaks on
-        // `eventRingFull` as well (SessionProducer::WaitFor*OrEventBacklog) - so a parked
-        // client is always wakeable by the server that is waiting for it.
-        //
-        // ONE NAMED REFUSAL SURVIVES, the impossible case: a single event larger than the ring
-        // can EVER hold (no amount of draining helps). The two BUSY refusals that used to sit
-        // beside it - a wait that ran out of patience, and two rounds against a ring the record
-        // fits - are the PEER's behaviour and became the forfeit latch below (PH-6, ID-P7-2).
-        // A server that does not publish kCapRunAheadApply keeps P5C's Fatal unchanged.
+        // With run-ahead the client drains SEG_EVENT only at its waits, so a full event ring is an
+        // ordinary backlog: the producer publishes what it has, rings the client and parks on its
+        // own bell until the client's Drained() clears the latch and rings back. No deadlock: the
+        // server blocks only here, and every client park also breaks on `eventRingFull`
+        // (SessionProducer::WaitFor*OrEventBacklog). One event larger than the ring can ever hold
+        // is still Fatal; a client that does not drain forfeits the reverse channel
+        // (ServerSession::ForfeitReverseChannel). A server without kCapRunAheadApply keeps the
+        // overflow Fatal. See ARCHITECTURE.md §11.7.
         Bool ServerPublishesRunAhead(const ServerSession& session) {
             if (!session.CallMaskIsSet()) return false;
             return (session.CallMask() & static_cast<Uint64>(MG_Pipe::kCapRunAheadApply)) != 0;

@@ -6,38 +6,14 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// P5f, package fc: the codec between the inproc SurfaceControlFrame and the wire's
-// ::MobileGL::Wire::SurfaceOp / ::MobileGL::Wire::SurfaceReply (protocol.fbs).
-//
-// The frame is the inproc payload (Server/SurfaceControlFrame.h); this is the ONLY place the
-// frame meets the schema. Nothing in the inproc hot path encodes - the frame crosses the one-slot
-// channel by value - but the codec is what makes "the same struct encodes under spawn" a tested
-// claim rather than a plan, and it owns the two schema seams that are NOT integer translations:
-//
-//   * SurfaceControlOp <-> ::MobileGL::Wire::SurfaceOpKind: numerically aligned for the ten framed ops and
-//     PINNED by static_asserts in the .cpp, but mapped through an explicit table. The four
-//     inproc-only kinds have no wire kind and refuse to encode by name.
-//   * MG_Backend::WindowBackend <-> ::MobileGL::Wire::WindowKind: the two enums do not agree (WindowKind's
-//     Surfaceless/Pbuffer are surface shapes, not window backends; WindowBackend's MetalLayer had
-//     no wire enumerator until fc added it), so the mapping is a table with named failures, never
-//     a cast (f0-egl census, schema gap 3).
-//
-// ERROR SEMANTICS. Decode is pure: it answers a SurfaceWireError. The FATALS live at the server
-// entry point, ServerApplyWireSurfaceOp, because "a wire op the server cannot honour" is a
-// contract violation, not a data problem: AndroidNativeWindowArrived dies
-// Fatal{UnmigratedSurface, "AndroidNativeWindow:use-MOBILEGL_IPC_SURFACE=server"} (the ANativeWindow* means nothing in the
-// server's process, permanently - a windowed client uses MOBILEGL_IPC_SURFACE=server) and everything else dies
-// Fatal{ProtocolCorruption, "SurfaceOp"}. P6's control pump is the intended caller; P5f's unit
-// tests drive it directly. MetalLayerArrived likewise dies
-// Fatal{UnmigratedSurface, "MetalLayer:use-MOBILEGL_IPC_SURFACE=server"}: CAMetalLayer* is also process-local.
-//
-// P12 (on-screen server window). WindowKind::ServerOwned is the one window kind whose window is
-// NOT the client's: the server substitutes its own (ServerLoop.cpp's ServerOwned arm). The codec
-// maps it onto the frame-local Server::kServerOwnedWindowBackend and writes/reads nativeToken 0,
-// always - so the client's window value never reaches the wire. A ServerOwned op with a non-zero
-// token is a peer's corrupt bytes (Fatal{ProtocolCorruption, "SurfaceOp.nativeToken"}, latched);
-// SetWindowHandle naming it is a named refusal (SurfaceRefusal::ServerOwnedOnSetWindowHandle),
-// answered and not latched.
+// The codec between the in-process SurfaceControlFrame and the wire's SurfaceOp / SurfaceReply
+// (protocol.fbs); the only place the frame meets the schema. Both enum seams are explicit tables
+// with named failures, never casts: SurfaceControlOp <-> SurfaceOpKind (in-process-only kinds
+// refuse to encode) and WindowBackend <-> WindowKind (Surfaceless/Pbuffer are surface shapes).
+// Decode is pure and returns a SurfaceWireError; the Fatals are in ServerApplyWireSurfaceOp: a
+// native window or Metal layer pointer is process-local (Fatal{UnmigratedSurface}; use
+// MOBILEGL_IPC_SURFACE=server). WindowKind::ServerOwned always carries nativeToken 0; a non-zero
+// token is a latched ProtocolCorruption, and ServerOwned on SetWindowHandle a named refusal.
 
 #pragma once
 #include <Includes.h>

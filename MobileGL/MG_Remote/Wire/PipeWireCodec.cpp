@@ -6,25 +6,14 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// P5 package w1: the G3 record codec.
+// The record codec: one call in, bytes out; bytes in, one MGPipeApply* call out. This file owns no
+// semantics: every decoder arm ends in an existing MGPipeApply* function or in the verb sink.
 //
-// ONE CALL IN, BYTES OUT; BYTES IN, ONE MGPipeApply* CALL OUT. This file owns NO semantics -
-// MG_Pipe/PipeApply.cpp is not edited by this package and every decoder arm ends in an
-// existing free function or in the verb sink v1 installs. An arm that "handles" a record
-// itself rather than delegating is a review failure (R-4's rule, one level down).
-//
-// THE THING THAT MOST NEARLY WENT WRONG, WRITTEN AT THE TOP BECAUSE IT IS INVISIBLE:
-// MGPWireRecHeader::Flags and Transport::RingRecordHeader::flags ARE THE SAME 16-BIT FIELD,
-// and the two flag spaces COLLIDE. MGPipeCallFlags::kVarTail is 1<<2 and
-// RingRecordFlags::kRecPad is 1<<2, so an encoder that stamped MGPipeCallFlagsFor(op) into
-// the header - which the generated comment ("MGPipeCallFlags of the call") invites - would
-// make RingConsumer::Pop skip every one of the nine kVarTail records as a WRAP FILLER.
-// Silently, with no checksum anywhere on this ring. MGPipeCallFlags::kHostSpan (1<<3) lands
-// on kRecBorrowSlot the same way and would retire those slots on the GPU timeline instead of
-// on apply. So: THE HEADER CARRIES RING FRAMING FLAGS, and the call's own flags are read from
-// the opcode through MGPipeCallFlagsFor (R-13.4), which is why that table was generated in the
-// first place. The static_asserts below pin the collision so it cannot be re-introduced by
-// someone who reads the comment and not this file.
+// MGPWireRecHeader::Flags and Transport::RingRecordHeader::flags are the same 16-bit field, and the
+// call-flag and ring-flag spaces collide (kVarTail == kRecPad, kHostSpan == kRecBorrowSlot,
+// kReplySlot == kRecVarTail). The header carries ring framing flags only; a call's own flags come
+// from the opcode through MGPipeCallFlagsFor. Stamping call flags would make RingConsumer::Pop skip
+// kVarTail records as wrap fillers. The static_asserts below pin the collision.
 
 #include <MG_Remote/Transport/LinkMetrics.h>
 #include "PipeWireCodec.h"
@@ -549,25 +538,12 @@ namespace MobileGL::MG_Remote::Wire {
                     "(R-2.3): a non-zero Size must name a real SEG_*",
                     WireOpName(op), static_cast<unsigned long long>(blob.Size));
         }
-        // R-2.3's SECOND HALF: "inside SOME segment" IS NOT THE RULE. Contract table 1 gives
-        // every client->server content blob - groups A, B and C, all nineteen rows - the ONE
-        // carrier SEG_STAGE, and R-10 sends blobs there whole. Until this arm existed the only
-        // test was that the run resolved, so `CreateSamplerState.Parameters={Seg=SEG_REPLY,...}`
-        // was accepted and APPLIED: a server-owned segment, whose reuse is the reply pool's
-        // business and has nothing to do with stage retirement, carrying bytes the applier
-        // then read. It also went unpoisoned - NoteResolvedRun skipped every non-stage carrier
-        // - so rule C's only mechanical control read zero on exactly the record that needed it.
-        //
-        // The segment is checked BEFORE the resolve, deliberately: a forged SEG_REPLY run that
-        // happens to lie inside a mapped reply pool must be refused for naming the wrong
-        // carrier, not left to pass or fail on whether that pool is mapped at all.
-        //
-        // NOT A NEW FATAL FAMILY. The review suggested `Fatal{BlobNotStaged}`; this is
-        // ProtocolCorruption like every other R-2 honesty arm, because the families are the
-        // vocabulary the operator and the CI greps share (ProtocolCorruption, AbiMismatch,
-        // UnmigratedVerb, UnmigratedPipeInput, UnsetCallMask, RingOverrun) and a one-off
-        // seventh name would be a token nothing else in the tree recognises. The SEGMENT is in
-        // the message, which is what has to be greppable.
+        // Every client->server content blob is staged whole in SEG_STAGE, so a blob naming any
+        // other segment is refused even when its run resolves: a SEG_REPLY run would be read from
+        // server-owned memory that stage retirement does not govern and the poison audit
+        // (NoteResolvedRun) does not cover. The segment is checked before Resolve, so a forged run
+        // is refused for its carrier whether or not that segment is mapped. The family stays
+        // ProtocolCorruption, shared by every honesty check; the segment number is in the message.
         if (blob.Seg != kSegStage) {
             return SessionLatch(MGFatalFamily::ProtocolCorruption, "MGPipe: Fatal{ProtocolCorruption, \"%s.blob\"} seg=%u offset=%llu "
                     "size=%llu is not SEG_STAGE(%u); every client->server content blob is "
@@ -1167,31 +1143,14 @@ namespace MobileGL::MG_Remote::Wire {
         // confirmed one, so the same opcode answers both ways and only the client knows which.
         if (noReply) ringFlags |= Transport::kRecNoReply;
 
-        // BOTH WRAP READINGS ARE TAKEN FROM THE PRODUCER'S OWN CURSOR, not from a flag Reserve
-        // does not return. The cursor is a monotonic byte count and the ring is indexed
-        // `cursor & mask`, so `cursor / capacity` is the number of times the byte area has been
-        // reused - and Reserve advances the cursor by `total` for a contiguous record and by
-        // `spaceToEnd + total` when it had to lay a kRecPad filler down to the boundary first
-        // (Ring.cpp). Everything below is exact arithmetic over those two facts, which keeps
-        // both counters in the encoder - where R-10's maximum already lives - rather than
-        // adding members to a Transport class the wire package does not own.
-        //
-        // AND THEY ARE TWO COUNTERS BECAUSE THEY ARE TWO EVENTS, which one measurement made
-        // unmissable: a workload whose records repeat at a uniform stride that DIVIDES the
-        // capacity lands on the boundary exactly, every time, for ever. Driving 1310824 bytes
-        // of clears and draws through a 1 MiB SEG_CMD produced ZERO pads - the ring went round
-        // once and a half and never straddled - so "did a pad happen" is NOT the question "did
-        // this ring wrap", and a lane that asked the first one while meaning the second would
-        // have gone red for a property of its own arithmetic.
-        //
-        //   m_cmdWraps      the head crossed a multiple of the capacity: the ring went round.
-        //                   Guaranteed once more bytes are written than the ring holds, which
-        //                   is what makes it something exit gate E3(e) can ASSERT.
-        //   m_cmdWrapPads   a kRecPad filler was laid because a record would have straddled
-        //                   the boundary. R-9's "a pad does not advance seq, both sides skip
-        //                   it and count again" is about THIS one, and it is RECORDED rather
-        //                   than asserted, because whether it ever happens is a property of
-        //                   the record sizes and not of the ring.
+        // Both wrap counters come from the producer's own monotonic head: the ring is indexed
+        // `head & mask`, and Reserve advances the head by `total`, or by `spaceToEnd + total` when
+        // it first lays a kRecPad filler up to the boundary (Ring.cpp).
+        //   m_cmdWraps     the head crossed a multiple of the capacity; guaranteed once more bytes
+        //                  are written than the ring holds.
+        //   m_cmdWrapPads  a filler was laid because a record would have straddled the boundary;
+        //                  it depends on record sizes (a stride that divides the capacity never
+        //                  pads), so it is recorded, never asserted.
         const Uint64 headBeforeReserve = m_cmd->LocalHead();
         void* slot = m_cmd->Reserve(static_cast<Uint16>(op), ringFlags,
                                     total - sizeof(MGPWireRecHeader));
@@ -1684,22 +1643,12 @@ namespace MobileGL::MG_Remote::Wire {
     }
 
     // ---------------------------------------------------------------------------------
-    // The 71 arms
+    // The decoder arms
     // ---------------------------------------------------------------------------------
-    //
-    // EVERY ARM ENDS IN AN EXISTING MGPipeApply* FREE FUNCTION, in the verb sink, or in
-    // `false`. None of them interprets a field: the packed MGPSubData::Target, the
-    // MGPImageView::Access encoding and MGPFramebufferState::DrawBuffers' -1 token are all
-    // read by the applier that already owns them, which is why table 0 could say "a decoder
-    // that open-codes it is the class-1 defect" and this file could obey.
-    //
-    // `false` means "this build deliberately does not implement it" and is the answer for the
-    // 30-odd rows off P5's reduced path (BRIEF §4's exclusion list: the fence family, the
-    // query family, compute, XFB, indirect, copy-region, GetTextureImage, GenerateMipmap,
-    // SetShaderBuffers, SetStreamOutputTargets, ResourceSubDataComplete). They are NOT
-    // unchecked: every one of them runs the same bounds gate, the same tail cross-check and
-    // the same blob honesty pass before it declines, so the phase that implements one inherits
-    // a validated record rather than a validation problem.
+    // Every arm ends in an existing MGPipeApply* function, in the verb sink, or in `false`. No arm
+    // interprets a field (the packed MGPSubData::Target, MGPImageView::Access, DrawBuffers' -1
+    // token): the applier that owns the encoding reads it. `false` declines a row this build does
+    // not implement, after the same bounds gate, tail cross-check and blob checks as every row.
     Bool PipeWireDecoder::ApplyChecked(MGPWireOp op, const void* record, Uint64 size) {
         const auto* base = static_cast<const Uint8*>(record);
         const void* payload = base + sizeof(MGPWireRecHeader);
@@ -1739,36 +1688,14 @@ namespace MobileGL::MG_Remote::Wire {
         const auto tailAt = [&](Uint32 i) -> const Uint8* {
             return layout.TailBytes[i] != 0 ? base + layout.TailOffset[i] : nullptr;
         };
-        // The four Bool-returning appliers answer ACCEPTANCE, not "applied" (R-5: the client
-        // may not re-derive it, because an if-constexpr discard, a stale handle and a refused
-        // record are all invisible from the call site).
-        //
-        // IT NOW RIDES THE REPLY SLOT, AND THAT IS THE RULING THIS COMMENT ASKED FOR. The text
-        // that stood here said the answer could not ride a slot "until the integrator rules on
-        // which half of the contract moves (table 0 says these four use DECLINED; the
-        // catalogue gives them no slot)". Both halves have since moved the same way: ID-31
-        // gave `ResourceCreate` kReplySlot and `kMGPipeCallFlags` now carries the flag on all
-        // four (PipeWire.inc rows 2, 3, 47, 48), and P5 ruling R-17 states that the acceptance
-        // answers "come back through the reply slot inside the barrier's wait". So the
-        // conflict is resolved in favour of table 0, the pool reserves these seqs like any
-        // other, and `PostReply`'s own Fatal - which trips on a row with no kReplySlot - is
-        // what keeps this honest if a flag is ever taken away again.
-        //
-        // WITHOUT THIS THE CLIENT CANNOT RUN AT ALL: `ClientSession::EmitAndWait` asks the
-        // catalogue, not the caller, whether a row owns a slot, so all four would wait for an
-        // answer nobody wrote and take `Fatal{ReplyMissing}` inside the barrier. Recording the
-        // acceptance locally as well is kept, because `LastAcceptance()` and the two counters
-        // are what the monolith-side decoder cases are asserted on.
-        //
-        // OWNERSHIP: MG_Remote/Wire/* is package w1's and w1 is not in wave 2. This hunk is
-        // four lines inside one lambda, made under R-17 by c1 because it is the server half of
-        // the routing R-17 assigns, and it is called out in c1-v2.md so the integrator can
-        // move it if the call belongs elsewhere.
-        // P12: MAY THIS RECORD'S ANSWER BE SKIPPED? Read from the RING FRAMING field, not from
-        // MGPipeCallFlagsFor(op): the client decides per CALL, and the opcode cannot answer for
-        // it (set_texture_params waits for an unconfirmed object and does not for a confirmed
-        // one). MGPWireRecHeader and RingRecordHeader are the same eight bytes, so `record` -
-        // which is the header, with the payload behind it - is where the producer's bit is.
+        // The four Bool appliers (ResourceCreate, ResourceRespecify, ResourceSubData,
+        // SetTextureParams) answer acceptance, not "applied", and the client may not re-derive it:
+        // a discarded, stale-handle or refused record looks the same from the call site. The answer
+        // goes to the record's reply slot (the rows carry kReplySlot; a waiting client that finds
+        // none takes Fatal{ReplyMissing}) unless the producer set kRecNoReply in the ring framing
+        // flags; the client decides that per call (set_texture_params waits only for an
+        // unconfirmed object), so the opcode cannot. The local tally (LastAcceptance(), the
+        // counters) is kept either way; decoder tests assert it.
         const Bool answerSkipped =
             (static_cast<const MGPWireRecHeader*>(record)->Flags &
              static_cast<Uint16>(Transport::kRecNoReply)) != 0;
@@ -1860,26 +1787,12 @@ namespace MobileGL::MG_Remote::Wire {
                 return true;
             }
         }
-            // R-6 / R-2.4: A CONSTANT DECLINE IN P5, and the applier is not called at all.
-            // Two reasons, and the second is the one worth writing down: the answer is a HOST
-            // POINTER, which cannot cross; and MGPWireRec_MapPersistent's payload is a bare
-            // MGPHandleOnly, so the record carries NEITHER the `size` NOR the `seedBytes` the
-            // entry point takes. The phase that lands a real map_persistent needs a payload
-            // change (MGPipeTypes.h, c0's file) before it can even call the applier.
-            //
-            // DECLINED is a real answer, not a failure: the three frontend sites already
-            // tolerate it (BufferObject.cpp:238, :603-606, :657-660).
-            //
-            // THE TIER IS CONSULTED HERE, AND IT IS THE SAME CONJUNCTION THE MONOLITH APPLIER
-            // USES (PipeApply.cpp's `Transport != Monolith && AdoptTierIsEmulate()`). The arm
-            // used to decline UNCONDITIONALLY and AdoptTier had no reference anywhere on the
-            // codec path, so MOBILEGL_IPC_ADOPT_TIER=0 and =1 - which contract §5 promises
-            // "parse and are Fatal at use, naming P11" - decoded as an ordinary DECLINED and
-            // the operator got a run that looked like a working T0. Since P11 A1 the tier is
-            // settled at the handshake (Transport/AdoptTier.h): a stream refused T0/T1 there by
-            // name and runs T2, shared segments died there, so a settled session answers true
-            // and only a map_persistent no handshake settled still aborts by name. The return
-            // value is deliberately not a branch: every surviving tier declines (R-6).
+            // The T2 path declines without calling the applier: the answer would be a host
+            // pointer, which cannot cross, and the payload is a bare MGPHandleOnly without the size
+            // or seed bytes the applier takes. DECLINED is a real answer the frontend tolerates.
+            // AdoptTierIsEmulate() is asked as in MGPipeApplyMapPersistent, so a T0/T1 knob with no
+            // handshake-settled tier fails by name instead of passing as a silent T2; its value is
+            // ignored because every settled tier declines here.
             if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
                 (void)MG_Remote::Client::AdoptTierIsEmulate();
             }

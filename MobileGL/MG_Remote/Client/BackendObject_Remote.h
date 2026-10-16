@@ -6,45 +6,14 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// THE CLIENT ROLE'S BackendObject. Owner: package c1.
-//
-// MG_Backend::Init() installs one of these into pActiveBackendObject when the transport
-// resolved (the hook is v1's; the object is c1's, table 3). It is NOT a backend: it owns no
-// context, no driver and no GL state. It is the frontend's single answer to four questions -
-// "what can the device do", "what backend is it", "what table do I call", and the nine EGL
-// lifecycle calls - and each of the four is answered somewhere that is not here.
-//
-// THE THREE TRAPS THE SCOUT FOUND, AND WHERE EACH IS PAID:
-//
-//  1. GetRendererInfo() RETURNS A REFERENCE (BackendObject.h:590), so the object cannot
-//     synthesise one per call. CapsMirror owns the storage; this class forwards. And
-//     LogBackendInfo() reads it at MG_Backend/Init.cpp:21, DURING MG_Backend::Init(), before
-//     any surface exists - so the mirror answers a placeholder and P5 accepts one imprecise
-//     startup log line. MG_Backend::Init() is NOT restructured (scout-caps-reply §1.2 (a)).
-//
-//  2. GetFormatCapabilities() IS NOT VIRTUAL (BackendObject.h:594). It returns the base class's
-//     own m_formatCapabilities member, so there is no accessor to override: the cache has to be
-//     PUSHED into that member, and the only moment this object can know to is when a snapshot
-//     lands. CapsMirror's adoption hook is that moment.
-//
-//  3. GetBackendType() MUST ANSWER THE SERVER'S BACKEND. There is no "Remote" enumerator and
-//     there must not be one: GL_Framebuffer.cpp:47, GL_Texture.cpp:6536 and CompileEnv.cpp:122
-//     switch on this value, and a value they do not know takes a WRONG ARM rather than failing.
-//
-// THE EGL VIRTUALS ARE BOTH FORWARDED AND KEPT. The base class runs a real state machine -
-// surface registration, per-thread current-context bookkeeping, the lazy InitCapabilities latch,
-// and SwapEGLBuffers' route into GetBackendFunctions().Present() - and the client needs all of
-// it, because Present is a class-B emitter reached through exactly that route (the verb census's
-// trap 3: Present has zero MG_Impl call sites). So each override does BOTH: it runs the real
-// EGL work on the apply thread, through ServerLoop's control-frame channel (P5f fc; v1's
-// function-pointer mailbox before it), and then lets the
-// base class keep the client-side books.
-//
-// SetEGLSwapInterval IS NOT OVERRIDDEN (P10 B). It used to be, because the base implementation
-// calls GetBackendFunctions().SetSwapInterval (BackendObject.cpp:402) and that slot was the last
-// class-C Fatal in the emit table. The slot is now the forwarder the override called
-// (Server::ServerSetEGLSwapInterval, EmitTables.cpp), so the base's route IS the forward and a
-// second spelling of it here would only be a second place for the two to drift apart.
+// The client role's BackendObject: no context, driver or GL state. Caps come from CapsMirror,
+// the function table is the remote emit table, and EGL work is forwarded to the server.
+// Trap 1: GetRendererInfo() returns a reference, so CapsMirror owns it (a placeholder until the
+// first snapshot). Trap 2: GetFormatCapabilities() is not virtual, so each adopted snapshot is
+// pushed into m_formatCapabilities. Trap 3: GetBackendType() answers the server's backend; there
+// is no Remote value, because callers switch on it and an unknown value takes a wrong arm.
+// Each EGL override runs the real work on the server, then lets the base class keep the client's
+// books (so SwapEGLBuffers reaches Present). SetEGLSwapInterval's table slot already forwards.
 
 #pragma once
 #include <Includes.h>

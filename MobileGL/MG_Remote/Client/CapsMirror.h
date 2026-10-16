@@ -6,34 +6,14 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// The client's copy of the server's capabilities. Owner: package c1. Signatures by c0.
-//
-// WHY A MIRROR AND NOT A ROUND TRIP. There are 56 client-side caps read points
-// (40 GetDynamicParameters + 7 GetRendererInfo + 4 GetFormatCapabilities + 3 GetBackendType +
-// 2 GetBackendAPIVersionString), and several of them - GL_Getter.cpp:2400 and
-// ShaderTranspiler/CompileEnv.cpp:120-124 - bind a reference and then read many members, so a
-// partial snapshot is not an option. Every one of the 56 must be answerable locally, with no
-// record on the wire.
-//
-// GetRendererInfo() RETURNS A REFERENCE (BackendObject.h:590), so the mirror must OWN a
-// RendererInfo instance to hand back - including before the first snapshot arrives, because
-// LogBackendInfo() reads it at MG_Backend/Init.cpp:21, during MG_Backend::Init(), long before
-// any context exists. Ruling (scout-caps-reply §1.2 option (a)): the mirror answers with a
-// placeholder until the first snapshot, P5 accepts one inaccurate startup log line, and
-// MG_Backend::Init() is NOT restructured.
-//
-// GetFormatCapabilities() is NON-VIRTUAL (BackendObject.h:594), so a remote backend object
-// cannot override the accessor: it must FILL BackendObject::m_formatCapabilities from this
-// mirror instead.
-//
-// INVALIDATION IS RE-ARRIVAL (R-12). DirectGLES has no OnCapsInvalidated producer at all - it
-// re-runs UpdateAdvertisedCapabilityExtensions + UpdateDynamicBackendParameters at
-// BackendObject_DirectGLES.cpp:865-871 and tells the frontend nothing, which is correct in
-// monolith and a silent bug under split. Rather than add a DirectGLES-side callback (a
-// dev-shaped backend edit), the SERVER re-sends the whole snapshot on every InitCapabilities
-// re-run and the CLIENT treats a second arrival as the invalidation. Generation() is what a
-// client-side memo keys on, and it is also the re-open signal for the server-context-death
-// case that MGPipeCallbacks has no eleventh slot for (MGPipeCallbacks.h:56-58).
+// The client's copy of the server's capabilities. Every client-side caps read is answered
+// locally, with no record on the wire, and several readers bind a reference and read many
+// members, so the mirror holds the whole snapshot. The accessors return references, so the
+// mirror owns the storage; before the first snapshot it answers a placeholder rather than abort.
+// GetFormatCapabilities() is non-virtual, so the remote backend fills
+// BackendObject::m_formatCapabilities from here (SetCapsAdoptedHook).
+// Invalidation is re-arrival: the server re-sends the whole snapshot on every InitCapabilities
+// run, and Generation() is what a client-side memo keys on.
 
 #pragma once
 #include <Includes.h>
@@ -86,25 +66,13 @@ namespace MobileGL::MG_Remote::Client {
         Bool PrefersCpuXfbPrimitiveAccounting() const;
 
     private:
-        // F1 (P7 wave 2). THE PLACEHOLDER MAY NOT ANSWER "THIS FAMILY HAS NO CONSUMER".
-        //
-        // The placeholder rule above is right for the READ accessors - one imprecise startup
-        // log line is cheaper than restructuring MG_Backend::Init() - and it was catastrophic
-        // for this one, which is not a read but a DECISION: answering it from a zeroed mask
-        // says "the server consumes nothing, emit nothing, run the legacy pull path", and
-        // under split there IS no legacy pull path on the client. Every record the caller
-        // would have emitted is simply lost, the emitter clears its dirty flags on the
-        // acceptance it never asked for, and the one R-8 warning that says so is emitted once
-        // per family for the life of the process.
-        //
-        // So: generation 0 is not an answer. This waits, bounded, for a handshake that is
-        // genuinely in flight on ANOTHER thread, and otherwise dies by name -
-        // Fatal{CapsBeforeFirstSnapshot, "<family>"} - naming the family that asked. It does
-        // NOT wait when the calling thread is the one performing the handshake: that is the
-        // shape MobileGL::Initialize used to produce (MG_State::Init() before
-        // MG_Backend::Init()), and waiting for a snapshot this thread has not yet gone to
-        // fetch is how a deadlock is spelled. The ORDER is the fix; this is the gate that
-        // makes a regression of it loud instead of silent.
+        // ServerConsumes() decides whether a record family reaches the wire, so it never answers
+        // from the placeholder: a zero mask would drop the family's records while the emitter
+        // clears their dirty flags, and the client has no pull path to fall back to. This waits,
+        // bounded by kFirstSnapshotWaitMs, for a handshake in flight on another thread, else it is
+        // Fatal{CapsBeforeFirstSnapshot, "<family>"}. It never waits on the thread running the
+        // handshake, which would deadlock; MobileGL::Initialize brings the split roles up before
+        // MG_State::Init() so no frontend object asks that early.
         void RequireFirstSnapshot(Uint64 subsystemBit) const;
 
         MG_Pipe::MGPCaps m_caps{};

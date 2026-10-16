@@ -6,30 +6,13 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// The `inproc` transport: two in-memory message queues and a pair of condvar
-// doorbells, one connected endpoint at each end.
-//
-// It is not a test double. `inproc` is a delivery mode of its own - the server
-// side is the monolith's own render thread, which is the single largest CPU
-// lever this project has, and it is also the CI form of the split build. What
-// it does NOT exercise is serialization of the byte stream, so the framing
-// codec is covered separately by FramingTest.
-//
-// It is built by MOBILEGL_BUILD_DISAGGREGATED, the one option this skeleton
-// adds, and selected at RUNTIME (plan appendix B: MOBILEGL_TRANSPORT =
-// monolith / inproc / spawn / ...). The plan also reserves a separate
-// MOBILEGL_BUILD_DISAGGREGATED_INPROC option for the role-isolation shim that
-// a single-process CI build will need; that option does not exist yet, and
-// nothing here depends on it.
-//
-// Messages are queued whole, so no framing bytes are involved; the size cap is
-// still enforced so that a payload which would be illegal on a socket is
-// illegal here too and does not pass CI only to fail after the switch to
-// `spawn`.
-//
-// Descriptor passing is a plain dup(): both ends are the same process, so
-// there is nothing to transfer, but the API stays identical so callers can be
-// written once.
+// The `inproc` transport: two in-memory message queues and a pair of condvar doorbells, one
+// connected endpoint at each end. Not a test double: inproc is a delivery mode of its own and
+// the CI form of the split build. It carries only the control plane; records use the same
+// shared-segment rings as spawn. Messages are queued whole, so framing is not exercised here
+// (FramingTest covers it), but the size cap is enforced so a payload illegal on a socket fails
+// here too. Descriptor passing is a plain dup(), since both ends are one process, behind the
+// same API as the socket transport. Selected at run time by MOBILEGL_TRANSPORT=inproc.
 
 #pragma once
 

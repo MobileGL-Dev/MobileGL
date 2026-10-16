@@ -35,23 +35,11 @@
             Int32 status = Wire::ReplySink::kStatusError;
             Uint64 returned = 0;
             session.EmitAndWait(op, request, size, nullptr, 0, &result, sizeof(result), &status, &returned);
-            // A DECLINED QUERY IS AN ANSWER TOO (P12), for ReadFenceReply's reason and on the
-            // same three-value space (PipeWireCodec.h:457-460). The server declines these three
-            // rows by design whenever it cannot answer them - QueryAvailable :1841-1847,
-            // QueryResult :1848-1854 and QueryTimestamp :1855-1859 all post kStatusDeclined with
-            // a zero-length payload - and the client produces the same status once the session
-            // stops carrying records (ClientSession.cpp:1837 is the device-lost latch, :2025 a
-            // doorbell that died during teardown). `returned != sizeof(result)` is guaranteed for
-            // such an answer, so the guard below used to abort on every one of them.
-            //
-            // THE ZEROED RESULT IS THE NO-OP EACH ROW ALREADY HAS, and it is what a query has
-            // when there is no answer YET rather than no answer ever:
-            //   - QueryAvailable -> 0 -> false, "the result is not available" (the same answer an
-            //     unfinished query gives - GL_QUERY_RESULT_AVAILABLE exists to be told that);
-            //   - QueryResult -> Produced = 0 -> the caller returns false with *value untouched
-            //     (:70 spells the healthy analogue of the same answer);
-            //   - QueryTimestamp -> 0, no timestamp to report.
-            // ERROR stays fatal below, and so does an OK reply that arrived short.
+            // A declined reply is an answer, as in ReadFenceReply: the server declines these rows
+            // when it cannot answer, and the client reports a verb that did not happen (device
+            // lost, teardown) as declined. The zeroed result is each row's "no answer yet" value:
+            // QueryAvailable false, QueryResult Produced = 0 (the caller returns false, *value
+            // untouched), QueryTimestamp 0. An error or a short OK reply stays fatal.
             if (status == Wire::ReplySink::kStatusDeclined) {
                 MGLOG_E_ONCE("MG_Remote client: the peer DECLINED a %s reply - the verb did not "
                              "happen (a lost device, or a teardown); answering the row's "

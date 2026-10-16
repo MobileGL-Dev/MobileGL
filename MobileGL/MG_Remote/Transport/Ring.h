@@ -6,90 +6,14 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// SEG_CMD / SEG_STAGE ring control and the SPSC producer/consumer over it.
-//
-// RingControl is the shared page at the head of SEG_CMD, laid out exactly as
-// the inherited transport design (plan section 8.1, referring the earlier
-// plan's section 6.2) specifies:
-//
-//   - TWO independent cursor triples, one for SEG_CMD and one for SEG_STAGE.
-//     The stage ring needs its own because "SEG_STAGE has less than a quarter
-//     left" is a publish trigger and that occupancy cannot be derived from the
-//     command ring's cursors, and because a stage slot retires on a different
-//     event than a command record does.
-//   - THREE separate sequence watermarks. Conflating them is the classic bug:
-//     appliedSeq releases *AppliedTail, submittedSeq releases staging,
-//     retiredSeq / completedFrameSerial release *RetiredTail and adopted
-//     stores.
-//   - TWO tails per ring, not one. Once the server borrows a ring slot into
-//     the GPU timeline instead of copying it out again, that slot can only be
-//     recycled after completedFrameSerial; a single tail would silently
-//     degrade to conservative reclaim the day borrowing lands.
-//   - Both park flags, because the doorbell is bidirectional: without the
-//     server->client direction every client wait degenerates into a
-//     cross-process spin on one shared cache line (a whole 16.6ms frame of a
-//     big core, on a phone, competing with the GPU and the game's JVM).
-//
-// Cursors are monotonically increasing byte counts; the ring is indexed with a
-// power-of-two mask. They are never reset, so a torn read can never look like
-// a valid earlier position. ringGeneration is bumped after a hard drain to
-// invalidate every cached offset.
-//
-// Record framing inside the ring is the 8-byte header below, which is the
-// layout the plan's RecHeader already fixes ({u16 kind, u16 flags, u32 size},
-// size including the header and a multiple of 8). The record CATALOGUE
-// (Records.def / PipeCalls.def) is a separate deliverable; the ring itself
-// only needs kind/flags/size, so it can carry the real records the day they
-// land without changing shape.
-//
-// ---------------------------------------------------------------------------
-// THE FIVE WATERMARKS (P5 R-9). Four of them are Transport::LinkProgress and
-// are reached as `control.Progress.<name>`; submittedSeq is the fifth and stays
-// at RingControl scope, on the producer's line (lk, CONTRACT-P6 §8.3).
-// One sentence each, and they are a contract:
-// every one of the five was declared here at P0 and written by nobody but
-// InitRingControl, so until P5 there was nothing to disagree with.
-//
-//   submittedSeq        Advanced by the PRODUCER after it publishes. NOBODY
-//                       WAITS ON IT - it is diagnostic, the answer to "how far
-//                       ahead of the server is the client right now". It lives
-//                       on the producer's own cache line beside cmdHead; it is
-//                       the ONE of the five that is not in LinkProgress, and
-//                       that is why LinkProgress can be single-writer.
-//   appliedSeq          Advanced by the CONSUMER for EVERY SINGLE RECORD it
-//                       applies. The client's verb barrier and every reply wait
-//                       read it, so it is the one watermark P5 FORBIDS BATCHING:
-//                       the sixty-four-record batching this ring was designed
-//                       for makes a waiter block on work that already ran, or -
-//                       far worse - resume on work that has not.
-//   retiredSeq          Advanced by the CONSUMER once it has finished with the
-//                       SEG_STAGE bytes a record referenced. The staging
-//                       allocator reclaims behind it, and nothing else may.
-//   completedFrameSerial Advanced by the SERVER when a present completes. What
-//                       recycling and ageing wait on; it trails appliedSeq by
-//                       the GPU's own depth and must never be conflated with it.
-//   presentAckSerial    Advanced by the SERVER when it returns a present credit.
-//                       The client's present throttle waits on it; it is the
-//                       only back-pressure that bounds latency rather than bytes.
-//
-// Every wait on all five is `>=`, never `==`: a waiter that tests equality
-// misses the wakeup the moment a producer or consumer moves by more than one.
-//
-// BATCHING MAY ONLY MAKE A WATERMARK LATE. All five except appliedSeq may be
-// published lazily, because a waiter that sees an old value waits longer than
-// it had to and is still correct. NONE of them may ever be published EARLY: a
-// watermark that reports more than was actually done turns every waiter into a
-// silent use of work that has not happened, and there is no checksum anywhere
-// on this ring that would catch it.
-//
-// kRecPad DOES NOT ADVANCE SEQ. A wrap filler is framing, not a record: it has
-// no opcode, no payload meaning and no reply slot. Both sides must skip it
-// BEFORE counting. If one side counts it and the other does not, the two seq
-// spaces drift by one at every wrap - and because seq IS the reply-slot id
-// (P5 R-3), a drifted seq silently reads another call's answer rather than
-// failing. Nothing on this ring would detect that, which is why the rule is
-// stated here rather than left to each side's loop.
-// ---------------------------------------------------------------------------
+// RingControl, the shared page at the head of SEG_CMD, and the SPSC producer/consumer over it
+// (ARCHITECTURE.md §11.2). Cursors are monotonic byte counts indexed with a power-of-two mask and
+// never reset, so a torn read cannot look like an earlier position; ringGeneration is bumped after
+// a hard drain. Each ring has two tails because a kRecBorrowSlot record retires only after
+// completedFrameSerial; both park flags exist because the doorbell rings in both directions.
+// The five watermarks (ARCHITECTURE.md §11.2.1, SessionRings.h's Watermark) are waited on with
+// `>=` and may be published late, never early; appliedSeq advances once per applied record.
+// kRecPad wrap fillers do not advance seq, the reply-slot id: both sides skip them before counting.
 
 #pragma once
 
@@ -119,28 +43,11 @@ namespace MobileGL::MG_Remote::Transport {
 
         // ---- SEG_STAGE cursors ------------------------------------------------
         //
-        // DEAD IN P5, DELIBERATELY, AND NOBODY MAY WIRE THEM UP HALFWAY.
-        //
-        // SEG_STAGE is NOT a ring any more. Package w1's encoder owns staging as
-        // an ENCODER-LOCAL LINEAR ALLOCATOR: a staged byte run carries no
-        // RingRecordHeader, there is no consumer walking SEG_STAGE, and the
-        // allocator reclaims on `retiredSeq` - the sequence watermark below -
-        // rather than on these three cursors. So all three stay ZERO for the
-        // whole of P5, `RingCursorSet::Stage` has no producer and no consumer,
-        // and `SessionTest.TheStageCursorTripleStaysDeadAcrossAWholeSession`
-        // pins that rather than leaving it to be noticed.
-        //
-        // They are kept rather than deleted because RingCursorSet, the three
-        // cursor accessors in Ring.cpp and RingTest's fixture are all written
-        // against a two-triple page, and P8/P11's shadow and adopt segments are
-        // the ring-shaped users this triple was reserved for. What is NOT
-        // acceptable is the middle state: a producer publishing `stageHead` with
-        // nothing advancing the two tails makes FreeBytes() fall to zero the
-        // first time the head laps the capacity and never recover, which is a
-        // guaranteed hang rather than a slow path. Five watermarks already spent
-        // a whole phase declared-and-written-by-nobody; this is the sixth, and
-        // it is declared-and-written-by-nobody ON PURPOSE, which is only
-        // different if it is written down.
+        // Unused: staging is the encoder's linear allocator, which reclaims on retiredSeq, so these
+        // stay zero and RingCursorSet::Stage has no producer or consumer (pinned by
+        // SessionTest.TheStageCursorTripleStaysDeadAcrossAWholeSession). They keep the page layout
+        // for a future ring-shaped segment. Never publish stageHead without a consumer advancing
+        // both tails: FreeBytes() would reach zero after the first lap and the producer would hang.
         alignas(64) std::atomic<std::uint64_t> stageHead;
         alignas(64) std::atomic<std::uint64_t> stageAppliedTail;
         std::atomic<std::uint64_t> stageRetiredTail;
@@ -264,33 +171,12 @@ namespace MobileGL::MG_Remote::Transport {
     };
     static_assert(sizeof(RingRecordHeader) == 8, "RecHeader is 8 bytes on the wire");
 
-    // THESE ARE RING FLAGS AND THEY ARE NOT MGPipeCallFlags, AND THREE OF THE
-    // BITS COLLIDE WITH A DIFFERENT MEANING. `MGPipeCallFlags` (MG_Pipe/MGPipe.h:
-    // 42-54) is a SEPARATE SPACE that happens to overlap this one, and an encoder
-    // that copies `MGPipeCallFlagsFor(op)` into RingRecordHeader::flags without
-    // translating puts a call's bits into a framing field:
-    //
-    //   bit 0  kNeedsAck  == kRecNeedsAck    same meaning, harmless
-    //   bit 1  kHasBlob   == kRecHasBlob     same meaning, harmless
-    //   bit 2  kVarTail   == kRecPad         WORST: a var-tail record would read
-    //                                        as a WRAP FILLER and be skipped
-    //                                        silently by Pop, losing the record
-    //                                        with nothing logged anywhere
-    //   bit 3  kHostSpan  == kRecBorrowSlot  a host-span record would read as
-    //                                        borrowed into the GPU timeline, and
-    //                                        the consumer would stop reclaiming
-    //                                        ring bytes behind it for ever
-    //   bit 4  kReplySlot == kRecVarTail     a blocking call would read as having
-    //                                        a tail it does not have
-    //   bit 5  kOptional  == (unused here)
-    //
-    // Translating is the ENCODER's job. Two things on this side make the first
-    // two of those survivable anyway rather than trusting it: `Pop` requires a
-    // filler to carry BOTH kRecPad AND kind == kRingPadRecordKind, so a real
-    // record with bit 2 set is delivered rather than eaten (a call record always
-    // has a real opcode kind, the catalogue starts at 1); and SessionConsumer
-    // counts and NAMES every kRecBorrowSlot it sees, because P5 produces no
-    // borrowed slots at all and the bit arriving means the collision did.
+    // Ring framing flags. MGPipeCallFlags (MG_Pipe/MGPipe.h) is a separate space in the same bits:
+    // kVarTail == kRecPad, kHostSpan == kRecBorrowSlot, kReplySlot == kRecVarTail. The encoder
+    // translates call flags and never copies them (PipeWireCodec.cpp's FlagSpace asserts). As a
+    // backstop, Pop skips a record as a wrap filler only if it carries kRecPad and
+    // kind == kRingPadRecordKind, and SessionConsumer names every kRecBorrowSlot it sees, since
+    // nothing produces borrowed slots.
     enum RingRecordFlags : std::uint16_t {
         kRecNone = 0,
         kRecNeedsAck = 1u << 0,
@@ -376,23 +262,14 @@ namespace MobileGL::MG_Remote::Transport {
         // Bytes still writable before the consumer has to catch up.
         std::uint64_t FreeBytes() const;
 
-        // Reserves room for one record and returns a pointer to its payload,
-        // or nullptr when the ring is full. The payload is uninitialized;
-        // alignment padding at its tail is NOT zeroed. Emits a pad record
-        // automatically when the record would straddle the wrap boundary, so
-        // every record is contiguous.
+        // Reserves room for one record and returns a pointer to its payload, or nullptr when the
+        // ring is full. The payload and its tail padding are uninitialized. A record that would
+        // straddle the wrap boundary is preceded by a pad record, so every record is contiguous.
         //
-        // A record whose total (header + payload, rounded up to 8) exceeds
-        // MaxRecordBytes() == Capacity()/2 is refused outright, with an error
-        // log and however empty the ring is: chunking it is the emitter's job
-        // (plan section 8.2, the G3 chunking rule). Half is exact, not
-        // conservative - it is the largest record EVERY head offset can place,
-        // because a wrap pad costs at most total-8 bytes on top of the record
-        // and 2*total-8 <= capacity-8 holds exactly up to capacity/2. Above it
-        // a record is placeable at some offsets and not at others, and a
-        // producer waiting for FreeBytes() >= total stalls forever on an empty
-        // ring. So: nullptr with FreeBytes() >= total never means "wait"; it
-        // can only mean "too big, chunk".
+        // A record whose total (header + payload, rounded up to 8) exceeds MaxRecordBytes() ==
+        // Capacity()/2 is refused with an error log however empty the ring is; the emitter chunks
+        // it. Half is the largest total every head offset can place (a wrap pad adds at most
+        // total-8 bytes), so nullptr with FreeBytes() >= total means "too big", never "wait".
         void* Reserve(std::uint16_t kind, std::uint16_t flags, std::uint64_t payloadBytes);
 
         // The largest header+payload total Reserve accepts: Capacity()/2. This

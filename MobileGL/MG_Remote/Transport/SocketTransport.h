@@ -6,41 +6,12 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// ITransport over a connected stream socket. Package `so` (CONTRACT-P6.md).
-//
-// WHY THIS IS THE FIRST P6 CODE THAT RUNS. It is the whole control plane for a
-// second process, and it needs NOTHING from the second process to be correct:
-// CONTRACT-P6 and the spawn plan both require it green over a plain
-// socketpair() with two threads, running the WHOLE InProcessTransportTest
-// suite, BEFORE a child is ever forked. Same discipline as SessionRings.h's
-// "the attach half is the half P6 replaces, so exercise it now" - a transport
-// first exercised on the day the process appears is a transport whose bugs all
-// arrive at once.
-//
-// WHAT IT IS NOT. It is not the data plane. The hot path bypasses ITransport
-// entirely (ITransport.h) and crosses through ILink, which is a separate seam
-// with a separate implementation. This class carries the handshake, surface
-// ops, resync, aux requests and fatals - the rare, variable-length,
-// must-evolve traffic.
-//
-// THREE THINGS IT DOES NOT REINVENT, because they are already in the tree and
-// already tested:
-//   Framing.h    - AppendFrame writes [u32 'MGLF'][u32 len][payload]; FrameReader
-//                  is a real byte-stream reassembler with the BUFFER_TOO_SMALL
-//                  keep-the-message semantics ITransport requires. A socket
-//                  hands you arbitrary fragments, which is precisely what
-//                  FrameReader was written for and what InProcessTransport's
-//                  message queue never needed.
-//   FdPassing.h  - SCM_RIGHTS over a DEDICATED SOCK_DGRAM aux socket, so an fd
-//                  offer is one datagram and cannot be half-consumed.
-//   Doorbell.h   - SocketDoorbell already exists, is unit-tested, and has NO
-//                  production construction site until now. It was written for
-//                  this and is priced as new work here, not as already paid for.
-//
-// LIFETIME. The transport owns its stream fd and its aux fd and closes both in
-// Shutdown/dtor. Shutdown is idempotent and tears down BOTH directions, which
-// is what ITransport promises and what a socket does anyway: after either end
-// calls it, the peer's reads return 0 and its sends fail.
+// ITransport over a connected stream socket: the control plane (handshake, surface ops, resync,
+// aux requests, fatals). The data plane bypasses ITransport and crosses through ILink.
+// Framing.h's FrameReader reassembles the arbitrary fragments a socket delivers; descriptors
+// travel by SCM_RIGHTS on a separate aux socket (FdPassing.h), never on the framed stream.
+// The transport owns its stream and aux fds and closes both in Shutdown and the destructor.
+// Shutdown is idempotent and closes both directions: the peer's reads return 0, its sends fail.
 
 #pragma once
 #include <atomic>
@@ -66,36 +37,13 @@ namespace MobileGL::MG_Remote::Transport {
                                          std::unique_ptr<SocketTransport>& outServer);
 
         // ---- independent processes: listen / connect -----------------------
-        //
-        // THE TWO PROCESSES ARE NOT COUPLED BY INHERITANCE. An earlier shape of
-        // this package forked the server and handed it fds 3..6; that can never
-        // be the end state, where the server is a standing application and the
-        // client connects to it from somewhere else entirely - possibly from
-        // another kernel. So the rendezvous is a NAME, and both sides are
-        // started by whoever starts them.
-        //
-        // TWO CONNECTIONS, not one. SCM_RIGHTS needs a socket of its own: an fd
-        // offer is a sendmsg whose ancillary data rides with specific BYTES, and
-        // interleaving those bytes with the framed control stream would make the
-        // frame reassembler and the descriptor receiver race for the same bytes.
-        // So the client connects twice to the same listening path - control, then
-        // aux - and each connection's first frame is a PairBind carrying one nonce
-        // and which half it is. One name, no extra configuration, and FdPassing
-        // keeps the dedicated socket it was written for.
-        //
-        // P11 PAIR: THE SERVER PAIRS THEM BY THAT NONCE, NOT BY ARRIVAL ORDER
-        // (Server/PairAcceptor.h). "First is control, second is aux" was a protocol
-        // only while nothing else could reach the listener: a readiness probe's
-        // lone connect() + close() became the next client's control connection, and
-        // two clients connecting at once could swap halves (B0-CROSS-APP.md F2).
-        //
-        // `path` is a filesystem AF_UNIX path. ARCHITECTURE.md §15.1 ruled
-        // against one for the FORK shape, where the fds were inherited and a
-        // path would have been a strictly larger attack surface for no gain.
-        // Independent processes have to name a rendezvous somehow, and a path
-        // with 0600 permissions in a private directory is the portable answer;
-        // the abstract namespace is Linux-only and TCP would be reachable off
-        // the machine.
+        // The server is a standing process reached by name; neither side inherits the other's
+        // fds. A Unix endpoint uses two connections, control then aux, because SCM_RIGHTS
+        // ancillary data must not interleave with the framed control stream. Each presents a
+        // PairBind (one shared nonce, which half) as its first frame, and the server pairs them by
+        // that nonce, never by arrival order (Server/PairAcceptor.h), so a probe's bare connect or
+        // two clients at once cannot mis-pair. `path` is a filesystem AF_UNIX path (bound 0600),
+        // '@' plus a Linux abstract name, or tcp://host:port.
         static MobileGLResult Listen(const std::string& path, int* outListenFd);
 
         // The client's half: connects twice to `path`, each connection presenting a PairBind

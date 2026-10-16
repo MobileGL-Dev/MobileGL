@@ -6,50 +6,14 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// The bidirectional doorbell: spin briefly, then park.
-//
-// Both directions exist, and that is the point (inherited design, earlier plan
-// section 6.2a):
-//   - client -> server: the consumer spins, sets consumerParked, then blocks;
-//     the producer rings only when consumerParked is set.
-//   - server -> client: the client spins MOBILEGL_IPC_SPIN_US (default 50us),
-//     sets producerParked, then blocks; the server rings after advancing any
-//     watermark, only when producerParked is set.
-// Without the second direction every client wait - present credit, a blocking
-// kNeedsAck request, a full ring - degenerates into a cross-process spin on
-// one shared cache line: up to a whole frame of a big core at full clock on a
-// phone, fighting the GPU and the game's JVM for it. MobileGL has no affinity
-// control anywhere in the tree, so it cannot even be pushed to a little core.
-//
-// Two implementations, no platform-specific wakeup primitive (no futex, no
-// eventfd, no named event):
-//   - CondVarDoorbell for `inproc` (one process, two threads),
-//   - SocketDoorbell for `spawn` (one byte on a socket; POSIX only).
-//
-// The lost-wakeup window is closed by two seq_cst FENCES, not by the ordering
-// of the park flag's own load and store:
-//   - the waiter sets the flag, executes std::atomic_thread_fence(seq_cst),
-//     and THEN re-tests the condition (Doorbell::Wait);
-//   - the notifier publishes its watermark, executes the same fence, and THEN
-//     reads the flag (NotifyIfParked).
-// Both fences sit in the single seq_cst total order, so one precedes the
-// other, and [atomics.order] then forces at least one side to observe the
-// other's store. The flag's own accesses may be relaxed: they are not what
-// closes the window.
-//
-// A seq_cst store paired with a seq_cst load would NOT be enough, which is
-// why the fences are here and why neither may be removed. That Dekker
-// argument needs all FOUR accesses in the total order, and the other two are
-// not: the watermark publish is a release store (RingProducer::Publish) and
-// the condition re-test is an acquire load. On x86 the gap is concrete rather
-// than theoretical - a release store is a plain MOV that can still sit in the
-// store buffer while the load of the park flag, also a plain MOV, reads 0, so
-// the notifier skips the ring and the waiter parks on a stale watermark
-// forever. (ARMv8 survives it only because STLR->LDAR is RCsc, i.e. by luck.)
-//
-// The other half of the contract is ordering between the caller and the
-// fence: NotifyIfParked must be called AFTER the watermark is published. A
-// fence only orders what precedes it.
+// The bidirectional doorbell: a waiter spins, sets its park flag, then blocks, and the other side
+// rings only when that flag is set (client -> server on consumerParked; server -> client on
+// producerParked, after any watermark advance). Without the server -> client direction every client
+// wait would be a long cross-process spin on one shared cache line. No platform wakeup primitive
+// (futex, eventfd, named event): CondVarDoorbell in process, SocketDoorbell across processes.
+// Two seq_cst fences close the lost-wakeup window: Doorbell::Wait's (after setting the flag, before
+// re-testing) and NotifyIfParked's (after publishing, before reading the flag). Neither may be
+// removed, and NotifyIfParked must follow the publish; why: ARCHITECTURE.md §11.3.1.
 
 #pragma once
 
@@ -83,45 +47,14 @@ namespace MobileGL::MG_Remote::Transport {
 #endif
     }
 
-    // -----------------------------------------------------------------------
-    // THE SPIN BUDGET IS COUNTED IN ITERATIONS, NOT IN CLOCK READS.
-    //
-    // WHY IT CHANGED (P5d round 3, package T item 3). Wait() used to spin until
-    // steady_clock passed `start + spinUs`, reading the clock once per 64 spins.
-    // On the workload device a steady_clock read is a real syscall (no vDSO), and
-    // simpleperf at head 56a77348 measured the GL thread paying
-    // steady_clock::now() 2.34 self / 5.91 inclusive plus __kernel_clock_gettime
-    // 2.37 and clock_gettime 1.94 - about 6.6% of the thread spent asking what
-    // time it is, at 900+ waits per frame, for a duration that is a HINT. The
-    // common case (WaitForApplied, server not yet there) paid at least two of
-    // those reads per wait even when the spin succeeded on its second iteration.
-    //
-    // WHAT REPLACES IT. Once per process the loop measures itself: how many
-    // `load(acquire)` + CpuRelax() iterations fit in a microsecond. Wait() then
-    // spins `itersPerUs * spinUs` iterations and reads no clock at all; only the
-    // park phase - which is about to block, so a syscall there is noise - computes
-    // a deadline.
-    //
-    // THE OVERSHOOT BOUND, STATED HONESTLY. The old loop overshot by at most one
-    // batch of 64 yields. This one overshoots by whatever the calibration was
-    // wrong by, and the calibration is a single reading taken on one core at one
-    // frequency:
-    //   - a later DVFS drop or a migration to a little core stretches the spin by
-    //     the frequency ratio (on the workload device's big/little spread that is
-    //     bounded by roughly 3-4x, so a 50 us budget can become ~200 us);
-    //   - a preemption inside the spin adds one scheduler slice, exactly as before;
-    //   - the calibration probe does not run the caller's `ready()`, which is one
-    //     or two acquire loads, so a real iteration is dearer than a probed one and
-    //     the spin ends EARLY rather than late by that factor;
-    //   - the clamps below cap the pathological directions: a probe that was
-    //     preempted cannot produce a budget smaller than kMinSpinItersPerUs, and a
-    //     probe that saw a broken clock cannot produce one larger than
-    //     kMaxSpinItersPerUs.
-    // None of it is a correctness bound: `ready()` is re-tested every iteration
-    // and the deadline, when there is one, is still measured against the real
-    // clock in the park phase. The cost of being wrong is CPU burnt before a park
-    // (too long) or a park that a few more spins would have avoided (too short).
-    // -----------------------------------------------------------------------
+    // The spin budget is counted in iterations, not clock reads: CalibrateSpinItersPerUs measures
+    // once per process how many acquire-load + CpuRelax() iterations fit in a microsecond, and Wait
+    // spins itersPerUs * spinUs without reading a clock (a steady_clock read can be a syscall, and
+    // Wait runs hundreds of times per frame). Only the park phase computes a deadline. The budget
+    // is a hint, not a correctness bound: `ready()` is re-tested every iteration; a DVFS drop or a
+    // move to a little core stretches the spin by the frequency ratio (roughly 3-4x); the probe
+    // omits `ready()`, so real spins end early; the clamps in CalibrateSpinItersPerUs bound bad
+    // readings.
     namespace Detail {
         // 0 until the first Wait calibrates it. Plain relaxed atomic rather than a
         // function-local static: a static's guard variable is a load and a branch on
@@ -182,29 +115,12 @@ namespace MobileGL::MG_Remote::Transport {
         // peer process, which is what makes the whole latch a no-op under inproc and monolith.
         virtual bool PeerHungUp() const { return false; }
 
-        // How many Wait() calls on this bell exhausted their spin budget and
-        // really blocked. THE WAIT LEDGER'S RAW READING: the pair (waits, parks)
-        // is what says whether the spin budget is sized for the workload, and it
-        // is the one number a wait counter cannot give - a wait that spun and a
-        // wait that blocked cost three orders of magnitude apart.
-        //
-        // ONCE PER Wait, NOT ONCE PER Park: a wait that blocks, wakes on a
-        // remembered Notify, re-tests false and blocks again is ONE wait that
-        // paid the park, and a `chunkMs == 0` Park is a poll that does not block
-        // at all. Both are counted out at the site below, so parks <= waits holds
-        // for a single waiter.
-        //
-        // PER BELL, THOUGH, NOT PER WAIT PATH. A bell belongs to an ENDPOINT and
-        // every waiter on that endpoint shares it: the client's self bell carries
-        // SessionProducer's barrier waits AND the encoder's SEG_STAGE retirement
-        // wait (PipeWireCodec's m_stageRetirementBell, which is the same object).
-        // A ledger that prints parks as the subset of ITS OWN waits must pass a
-        // `parkTally` to Wait rather than read this; this counter answers "parks
-        // on this bell", which is what a test on a private bell wants.
-        //
-        // Read from any thread; the counter is monotone and relaxed, so a reader
-        // may see a value one behind, which is exactly what a per-frame gauge
-        // wants.
+        // How many Wait() calls on this bell exhausted their spin budget and really blocked,
+        // counted once per Wait (re-parks and zero-length polls are not counted), so parks <= waits
+        // for one waiter. The count is per bell, and a bell is shared by every waiter on its
+        // endpoint (the client's self bell also carries PipeWireCodec's SEG_STAGE retirement wait);
+        // a caller that needs parks as a subset of its own waits passes `parkTally` to Wait
+        // instead. Monotone and relaxed: a reader on another thread may see a value one behind.
         std::uint64_t ParkEntries() const { return m_parkEntries.load(std::memory_order_relaxed); }
 
         // Spin `spinUs`, then park until `ready()` or the deadline.
@@ -221,24 +137,9 @@ namespace MobileGL::MG_Remote::Transport {
                 return true;
             }
 
-            // THE SPIN PHASE READS NO CLOCK AT ALL. It used to read one per 64
-            // iterations plus one before the loop - see the SpinItersPerUs block
-            // above for the measurement that made even that too dear, and for the
-            // overshoot bound the iteration budget buys instead. The duration is
-            // still a hint; what changed is that asking for it is free.
-            //
-            // spinUs == 0 NOW MEANS ZERO ITERATIONS, AND THAT IS A DELIBERATE CHANGE
-            // rather than a side effect. The old batched loop tested
-            // `(++spinBatch & 63) != 0 || now < spinEnd`, so a caller that asked for
-            // no spin still ran 63 iterations before the first clock read could end
-            // the loop. That was an artifact of the batch size, never a promise, and
-            // multiplying a budget the caller deliberately set to zero would be the
-            // wrong way to keep it. Two callers pass 0: PipeWireCodec's SEG_STAGE
-            // retirement wait (rare, already slow, and it wants the park) and any
-            // lane that sets MOBILEGL_IPC_SPIN_US=0 as a no-spin control, which now
-            // really gets no spin - which is the point of such a control. The
-            // short-circuit also keeps a zero-spin caller from paying the one-time
-            // calibration probe for a reading it will never multiply by.
+            // The spin phase reads no clock (see SpinItersPerUs). spinUs == 0 means no spin at all
+            // and skips the calibration probe: PipeWireCodec's SEG_STAGE retirement wait passes 0
+            // because it wants the park, and MOBILEGL_IPC_SPIN_US=0 is a no-spin control.
             const std::uint64_t budget =
                 spinUs == 0 ? 0ull
                             : static_cast<std::uint64_t>(SpinItersPerUs()) *
@@ -294,27 +195,12 @@ namespace MobileGL::MG_Remote::Transport {
                         std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now).count();
                     chunkMs = remaining <= 0 ? 0 : static_cast<std::uint32_t>(remaining);
                 }
-                // COUNTED HERE, at the one place a waiter stops spinning and
-                // really blocks (P5d round 3, package T item 4). Unconditional
-                // rather than behind the stats latch: it is one relaxed add on a
-                // path that is about to enter a condition variable or a poll(),
-                // and a counter that only exists when MOBILEGL_PIPE_STATS is set
-                // could not be read by a test that wants to prove the spin budget
-                // avoided the park.
-                //
-                // TWO THINGS ARE COUNTED OUT, because this number is published as
-                // the SUBSET of the waits that blocked, and a subset that can
-                // exceed its own denominator is worse than no number at all:
-                //   - RE-PARKS. One Wait can traverse this loop many times: a
-                //     CondVarDoorbell remembers a Notify delivered while nobody
-                //     was waiting, so Park returns at once, `ready()` is still
-                //     false (the peer had already drained what it published) and
-                //     the wait parks again. That is one wait that paid a park, not
-                //     two, so only the first is counted.
-                //   - POLLS. `chunkMs == 0` is the last sub-millisecond of a
-                //     finite timeout rounding down; Park(0) does not block, and
-                //     counting it would charge a park per iteration of a tight
-                //     re-test loop that never left the CPU.
+                // Counted here, where a waiter really blocks, and unconditionally (one relaxed
+                // add before a condvar wait or poll), so a test can read it without
+                // MOBILEGL_PIPE_STATS. Only the first blocking Park of a Wait counts: a
+                // CondVarDoorbell can return at once on a remembered Notify and re-park, and
+                // chunkMs == 0 is a non-blocking poll at the end of a finite timeout. That keeps
+                // parks a subset of waits.
                 if (chunkMs != 0 && !countedPark) {
                     countedPark = true;
                     m_parkEntries.fetch_add(1, std::memory_order_relaxed);
@@ -438,23 +324,13 @@ namespace MobileGL::MG_Remote::Transport {
 
         int Fd() const { return m_fd; }
 
-        // P6 `dl` (CONTRACT-P6 D5c). THE DESCRIPTOR THAT ANSWERS "IS THE PEER STILL THERE",
-        // which for this object can never be the one it parks on.
-        //
-        // The client parks on clientBell[0] and rings ITSELF through clientBell[1], so it holds
-        // BOTH ends of that socketpair. EOF arrives only when every writer closes and the client
-        // is one of them, so that descriptor cannot hang up no matter what happens to the server.
-        // A bell that can wake itself is a bell that cannot hear a death. Measured: a server that
-        // died on its first Clear left the client waiting out the full 120 s barrier and
-        // reporting Fatal{BarrierTimeout} - the wrong diagnosis, two minutes late.
-        //
-        // The witness is a descriptor whose FAR END ONLY THE PEER HOLDS - in practice the control
-        // socket. It is NOT OWNED here and is NEVER READ FROM: Park adds it to the poll set with
-        // `events` asking for hangup ALONE, so a control reply sitting unread in its queue cannot
-        // wake the bell and cannot be consumed from under SocketTransport's reassembler. What it
-        // contributes is exactly one fact, and only once: the peer is gone.
-        //
-        // -1 disables it, which is what every bell that has no peer socket uses.
+        // The death witness: a descriptor whose far end only the peer holds (in practice the
+        // control socket). The park descriptor cannot report the peer's death when this side also
+        // holds the notify end of the same socketpair (the client rings itself through
+        // clientBell[1]), so without a witness a dead server surfaces only as a barrier timeout.
+        // Not owned and never read: Park polls it for hangup only, so unread control replies
+        // neither wake the bell nor get taken from SocketTransport's reassembler. A hangup sets
+        // PeerHungUp(). -1 disables it.
         void SetDeathWitness(int fd) { m_witnessFd = fd; }
 
     private:

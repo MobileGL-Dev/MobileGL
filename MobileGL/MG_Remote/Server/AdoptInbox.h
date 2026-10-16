@@ -6,22 +6,14 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// P11 B2 (docs/archive/contracts/CONTRACT-P11.md B2): the server's end of T0's descriptor channel.
-//
-// WHO READS THE FD, AND WHY IT CANNOT DEADLOCK THE APPLY THREAD. The APPLY THREAD reads it,
-// inline, when it decodes the map_persistent record whose seq the Offer names - nothing else reads
-// a session's aux socket after the handshake, so there is no second reader to race. The wait
-// cannot deadlock because of the client's order: it queues the Offer (ShareFd returns once the
-// kernel - or the in-process queue - holds it) BEFORE it publishes the record, so when the apply
-// thread sees the record the descriptor is already there, and the wait depends on nothing the
-// client has still to do. A client emits at most one T0 map_persistent at a time (the row blocks
-// on its reply), so at most one Offer is ever outstanding and the aux queue (10 datagrams on an
-// Android kernel) cannot fill. The wait is still bounded (AdoptT0::kOfferWaitMs): an Offer that
-// never comes is a named DECLINED, never a hang.
-//
-// Offers are matched by seq, not by arrival order. One that arrives for a LATER record is kept
-// for it; one for an EARLIER record (its record already timed out and was declined) is closed
-// and counted as stale.
+// The server's end of the aux-socket descriptor channel: T0 map_persistent Offers and shared-image
+// descriptors, matched by record seq and told apart by their sideband's magic. Only the apply
+// thread reads it, inline, when it decodes the record the descriptor belongs to. It cannot
+// deadlock: the client queues the descriptor before it publishes the record, and a T0
+// map_persistent blocks on its reply, so at most one Offer is outstanding (an Android aux queue
+// holds 10). The wait is still bounded (AdoptT0::kOfferWaitMs); a missing Offer is a named
+// DECLINED. A descriptor for a later record is kept for it; one for an earlier, already declined
+// record is closed and counted as stale.
 
 #pragma once
 

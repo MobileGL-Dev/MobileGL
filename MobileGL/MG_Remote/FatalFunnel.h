@@ -6,24 +6,12 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// P6 `dl` (CONTRACT-P6 5.2). THE ONE PLACE A SESSION DIES.
-//
-// Every `Fatal{...}` under MG_Remote/ used to be an MGLOG_F followed by its own std::abort().
-// a6 counted ~92 of them. Scattered, they gave the funnel's three benefits to nobody: there was
-// no single place to publish a SessionFault to the peer before dying, no single telemetry point,
-// and no way for a census to be sure a new death was named. This is that place.
-//
-// THE MESSAGE STRING IS PASSED VERBATIM, family word and all. The contract requires the log
-// lines, the CI greps and every red-once to be byte-identical, so SessionFail does not compose
-// the line from the family - it takes the SAME string the site used to hand MGLOG_F and forwards
-// it unchanged. The family enum rides ALONGSIDE, redundantly, so the funnel knows the coarse wire
-// FatalCode without parsing the string; a test asserts the enum's name appears in the string, so
-// the redundancy cannot rot into disagreement.
-//
-// NOT in WireLog.h: that header is deliberately dependency-light (ITransport.h's rule, the
-// include-graph purity gate), and this needs FatalFamily.h, which pulls the protocol header. The
-// header-layer sites that must stay pure keep using WireLogFatal, whose own abort routes through
-// the same publisher in WireLog.cpp.
+// The one place a session dies. SessionFail logs the line, publishes a SessionFault to the peer,
+// counts it and aborts, so every Fatal under MG_Remote/ is named and counted. The message is
+// forwarded verbatim, family word included, because log greps and the fatal census match it; the
+// MGFatalFamily argument gives the wire FatalCode (ARCHITECTURE.md §15.3.1) without parsing the
+// string, and a test asserts the family's name appears in it. Header-only Transport code, which
+// must not include FatalFamily.h, uses WireLogFatal, whose abort reaches the same publisher.
 
 #pragma once
 
@@ -48,35 +36,14 @@ namespace MobileGL::MG_Remote {
     // latched fault (SessionLatch below) counts here too: it ends the session just as surely.
     ::std::uint64_t SessionFaultCount();
 
-    // ---- PH-1 (3), ID-P7-1: THE PER-SESSION LATCH ---------------------------------------
-    //
-    // WHAT IT IS. At a site whose input bytes the PEER wrote, and which already sits in a
-    // function that can say "no" (Bool / MobileGLResult), a named fault no longer has to kill the
-    // process: SessionLatch logs the SAME line SessionFail would (family word and all, so every
-    // `Fatal{` grep, the census and the SessionFault frame read exactly as before), publishes the
-    // SessionFault to the peer, records the FIRST fault (family + line), and RETURNS false. The
-    // site returns failure, the decoder declines, ServerLoop::DrainRing stops applying at its
-    // next check, the apply thread leaves its loop, and ServerMain::RunSession closes the session
-    // cleanly and exits kSessionLatchedExitCode - a named, counted end the supervisor reaps and
-    // then serves the next connection, exactly as P6.5's fork-per-session already does for a
-    // crash (ID-P7-1: "下一连接照常服务" is the supervisor's, not the latch's).
-    //
-    // WHERE IT IS ARMED, AND WHY ONLY THERE. ArmSessionLatch() is called by exactly one site:
-    // ServerMain::RunSession, i.e. a served session - the spawn / TCP session child (with or
-    // without --serve), whose process IS the session, and (P14 S2) each session the in-process
-    // display server runs, which arms ITS OWN latch domain so a fault there ends that session and
-    // no other. Unarmed, SessionLatch IS SessionFail - same line, same abort - and
-    // that is the answer everywhere else, deliberately:
-    //   * INPROC keeps Fatal. CONTRACT-P5's R-2 arms (rules A/B/C, the four honesty arms) are
-    //     Fatal{ProtocolCorruption} in the formal wording, and under inproc the client and the
-    //     server share one process: a latched-but-alive server would leave the client's GL thread
-    //     parked on a barrier in the SAME process with no EOF to wake it, and there is no
-    //     supervisor to serve a "next connection" - the process is the session. So the latch
-    //     changes nothing inproc and every death test stays a death test.
-    //   * THE CLIENT never arms it: a client-side arm of a shared helper (the encoder's honesty
-    //     pass) is a local bug, not a peer's bytes.
-    // The census (scripts/ci/fatal_census.py rule 2) checks SessionLatch calls the way it checks
-    // SessionFail calls: the string must carry its `Fatal{Word` and the word must have a .def row.
+    // ---- per-session latch ---------------------------------------------------------------
+    // At a site whose input bytes the peer wrote and that can already return failure, an armed
+    // SessionLatch logs SessionFail's line, publishes the SessionFault, records the first fault
+    // and returns false; DrainRing stops applying and RunSession ends the session with
+    // kSessionLatchedExitCode. Only ServerMain::RunSession arms it, in the session's latch domain.
+    // Unarmed it is SessionFail: inproc keeps every Fatal, since a latched server would leave the
+    // client's GL thread parked in the same process, and the client never arms it.
+    // scripts/ci/fatal_census.py checks SessionLatch strings like SessionFail's.
     void ArmSessionLatch();
     bool SessionLatchArmed();
     // P12 (D5): THE IN-PROCESS DISPLAY SERVER RUNS SESSIONS ONE AFTER ANOTHER IN ONE PROCESS, so
@@ -101,22 +68,14 @@ namespace MobileGL::MG_Remote {
     // Every fault this armed process latched or declined after the first (>= 1 once latched).
     ::std::uint64_t SessionLatchCount();
 
-    // ---- P14 S2: ONE LATCH DOMAIN PER SERVED SESSION ------------------------------------
-    //
-    // THE LATCH IS PER SESSION NOW, and that is a correctness requirement of serving several in
-    // one process, not a tidy-up. Its three readers sit on a session's own threads - the apply
-    // loop's park, DrainRing's per-pop check, ServerMain's control loop - so a latch raised by
-    // session A used to stop session B's apply thread mid-ring and end B's control loop: one
-    // peer's bad bytes took down its neighbours. ResetSessionLatch had the mirror problem: the
-    // reap of a finished session cleared the latch a live one was standing on.
-    //
-    // A DOMAIN is the latch state, and a THREAD IS BOUND TO ONE. SessionRuntime opens a domain per
-    // served session and ThreadSessionScope binds both of that session's threads to it. A thread
-    // that has bound nothing uses DOMAIN 0, the process default - which is exactly the old
-    // behaviour, and is what the client, the inproc one-process shape and every unit case get.
-    //
-    // 0 IS RESERVED FOR THE PROCESS DEFAULT and FatalLatchDomainOpen never returns it (0 on
-    // exhaustion, which degrades to "shares the default" rather than to a crash).
+    // ---- one latch domain per served session ---------------------------------------------
+    // The latch is per session so one peer's bad bytes cannot stop a neighbour in the same
+    // process: its readers (the apply loop, DrainRing, ServerMain's control loop) run on the
+    // session's own threads. SessionRuntime opens a domain per served session and
+    // ThreadSessionScope binds both of its threads to it; an unbound thread uses domain 0, the
+    // process default (client, inproc, unit tests). FatalLatchDomainOpen returns 0 only when
+    // domains run out, and the session then shares the default.
+    // See docs/Disaggregated/design/11-state-ownership.md.
     inline constexpr int kMaxLatchDomains = 64;
     int FatalLatchDomainOpen();
     // The domain's state goes; no thread may still be bound to it (the session's apply thread is

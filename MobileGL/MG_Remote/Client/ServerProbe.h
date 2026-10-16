@@ -6,22 +6,14 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// IS THE SERVER THIS PROCESS WOULD DIAL THERE AT ALL.
-//
-// Installed as the system's EGL/GLX vendor, this library is asked first by every GL process on the
-// machine, and the session bring-up behind its first display waits up to 20 s for a server that
-// may simply not be running. The loaders that ask (EGL and GLX dispatchers, the GBM loader) all
-// move on to the next implementation when one declines - so the honest, cheap answer when nobody
-// is listening is to decline before that wait starts, and this is the question that decides it.
-//
-// Only a CONNECT dial can be probed: MOBILEGL_TRANSPORT=spawn with MOBILEGL_IPC_CONTROL naming
-// `unix:<path>`, `unix:@<abstract>` or `tcp://host:port`. Everything else - monolith, inproc, a
-// fork control that launches its own server, an fd: pair somebody already connected - has no
-// remote to be absent and answers NotApplicable. Both settings are read the way the configuration
-// loader reads them (environment over the system configuration files), because the probe runs
-// before MobileGL initializes.
-//
-// MOBILEGL_IPC_PROBE_TIMEOUT_MS bounds one probe (default 250, 1..60000); 0 turns probing off.
+// Whether the server this process would dial is listening. As the system's EGL/GLX vendor this
+// library is asked first by every GL process, and session bring-up would wait up to 20 s for an
+// absent server; the EGL/GLX dispatchers and the GBM loader move on when a vendor declines, so
+// the library declines early instead. Only a connect dial is probed (MOBILEGL_TRANSPORT=spawn
+// with MOBILEGL_IPC_CONTROL = unix:<path>, unix:@<name> or tcp://host:port); anything else
+// answers NotApplicable. Settings are read as the config loader reads them (environment over
+// system files) because the probe runs before MobileGL initializes.
+// MOBILEGL_IPC_PROBE_TIMEOUT_MS bounds one probe (default 250, range 1..60000); 0 disables it.
 
 #pragma once
 

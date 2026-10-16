@@ -6,56 +6,14 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// The client's emitting function table. Owner: package c1. Signatures by c0.
-//
-// MG_Backend/Init.cpp:44 assigns gBackendFunctionsTable from the active backend object, and
-// 91 MG_Impl/GLImpl sites call through it directly. So a BackendObject_Remote has to return a
-// COMPLETE table, and "complete" is a bigger number than R-4's headline:
-//
-//   GLFunctionsTable                (BackendObject.h:117-292) = 69 function pointers
-//                                                             + Bool PrefersCpuXfbPrimitiveAccounting
-//   GlobalBackendFunctionsTable     (BackendObject.h:293-299) = the above, + Present, + SetSwapInterval
-//                                                             = 71 function pointers in total
-//
-// R-4's rule, restated over all 71: NO SLOT MAY BE NULL, and no slot may fall through to a
-// driver. A null slot is 91 potential null calls; a pass-through slot is a split lane quietly
-// running monolith and going green, which is the one outcome every gate in this phase exists
-// to prevent. A verb P5 does not implement gets a slot that raises
-// Fatal{UnmigratedVerb, "<slot>"} - the same shape as MGPipeInputPoisonFatal, live at every
-// log level, MGLOG_F + std::abort.
-//
-// WHICH SLOTS GET A REAL EMITTER IS DECIDED BY THE VERB CENSUS (R-4), not guessed here:
-// docs/archive/notes/p5/verb-census.md. CONTRACT-P5.md §7 carries the resulting THREE-CLASS SPLIT and
-// it is not to be re-derived:
-//
-//   A. ANSWERED LOCALLY from the caps mirror, never emitted and never Fatal (R-15) - two
-//      slots, GetIntegeri_v and IsTimerQuerySupported, plus the Bool member
-//      PrefersCpuXfbPrimitiveAccounting, which is not a slot. GetIntegeri_v is the one that
-//      would otherwise sink the phase: it is reached by the FIRST glCompileShader of every
-//      context (CompileEnv.cpp:134-138 <- Core.cpp:39), not by any verb, so a Fatal there
-//      aborts every scenario before it draws anything.
-//   B. EMITTED in P5 - five slots: Clear, DrawArrays, ReadPixels, BlitFramebuffer, Present.
-//      Present has ZERO MG_Impl call sites: it is reached through EGLImpl.cpp:178 ->
-//      BackendObject.cpp:396, so mirroring GLImpl will not find it.
-//   C. Fatal{UnmigratedVerb} - the remaining 64, SetSwapInterval and GetGpuTimestampNs among
-//      them. (That was P5's partition. P5b..P10 moved every one of them to B; the last,
-//      SetSwapInterval, is a forward to the server's control channel since P10, and class C is
-//      empty. UnmigratedVerbFatal below remains the named refusal of a class-B emitter's
-//      unrepresentable SHAPE - "<slot>+<QUALIFIER>".)
-//
-// AND THE RULE R-4 WOULD OTHERWISE BREAK. 41 of the 69 slots are null-checked at their call
-// site, and several of those checks are CAPABILITY PROBES, not safety checks - BeginOcclusionQuery
-// (GL_Query.cpp:481, :785), BeginXfbPrimitivesQuery (:534), SubDataResident. With no null slot
-// in this table every one of them answers "supported" and the fallback behind it silently
-// disappears. A null check on a slot may not survive into the client: it becomes a caps-mirror
-// read, which is what ARCHITECTURE.md §3.3 means by "CallMask replaces 'is this table slot null'".
-//
-// NOTE the asymmetry this table does not resolve, AND WHERE IT IS RESOLVED (R-17): the
-// resource, CSO, framebuffer, texture, sampler and program families do NOT come through here.
-// They were emitted from MG_Impl/Pipe/* by 40 direct calls to the 37 MGPipeApply* entry
-// points; those call sites now go through the two generated tables
-// (MG_Pipe/PipeRoute.h -> MG_Remote/Client/WireTables.cpp). This table covers only the verbs -
-// the draws, clears, blits, readbacks, queries, fences and present.
+// The client's emit table for the remote role: GlobalBackendFunctionsTable (the 69
+// GLFunctionsTable slots plus Present and SetSwapInterval), installed by MG_Backend::Init as
+// gBackendFunctionsTable. No slot may be null or fall through to a local driver: each emits a
+// verb record, answers from the caps mirror (GetIntegeri_v, reached by every context's first
+// glCompileShader, and IsTimerQuerySupported), or forwards to the server (SetSwapInterval).
+// UnmigratedVerbFatal names a call shape an emitter cannot represent. Sites that probed a slot
+// for null read a cap bit instead (SlotCaps.h). Resource, CSO, texture, sampler and program
+// records bypass this table and go through the routed tables (MG_Pipe/PipeRoute.h).
 
 #pragma once
 #include <Includes.h>

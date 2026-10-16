@@ -6,24 +6,14 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// P11 B2 (docs/archive/contracts/CONTRACT-P11.md B2): T0, the zero-copy adoption of a persistently mapped
-// store. The CLIENT allocates the store as an AHardwareBuffer (AHB), keeps a CPU lock on it for
-// the store's life and uses that pointer as the adopted mapping; the SERVER imports the same
-// pages as the store's resident twin (Espryt glBufferStorageExternalEXT, Magma
-// VK_ANDROID_external_memory_android_hardware_buffer).
-//
-// HOW THE HANDLE CROSSES, AND WHY IT IS ORDERED WITH THE RECORDS THAT USE THE STORE. The adoption
-// rides the data-ring map_persistent record (not a control op, which the apply thread could
-// overtake under run-ahead). Its AHB travels over the session's aux socket as ONE descriptor: a
-// fresh socketpair end (the "hop") on which AHardwareBuffer_sendHandleToUnixSocket already wrote
-// the handle, with an Offer in the sideband naming the record's seq. The hop keeps the aux channel
-// uniform (one fd + sideband per message, FdPassing's shape on every route) and the AHB's own
-// message format off it. Step 1 of B2 proved both this and the direct form on the Redmi across
-// every route (shell, another app, same app, spawned child; 64 KiB to 128 MiB).
-//
-// Every T0 map_persistent is preceded by exactly one Offer for its seq - with the handle, or with
-// flags 0 when this client could not allocate one - so the server always has something to wait
-// for and never waits for nothing.
+// T0: zero-copy adoption of a persistently mapped buffer store (ARCHITECTURE.md §12). The client
+// allocates the store as an AHardwareBuffer and keeps it CPU-locked for the store's life as its
+// mapping; the server imports the same pages as the store's resident copy. The handle travels
+// with the data-ring map_persistent record, not as a control op, which the apply thread could
+// overtake under run-ahead: one aux-socket descriptor (a socketpair end the handle was written
+// on) plus an Offer naming the record's seq. Every T0 map_persistent is preceded by exactly one
+// Offer for its seq, with the handle or with flags 0 when the client could not allocate one, so
+// the server never waits for an Offer that is not coming.
 
 #pragma once
 

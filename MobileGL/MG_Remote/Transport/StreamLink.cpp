@@ -115,51 +115,14 @@ namespace MobileGL::MG_Remote::Transport {
         std::vector<LinkSpan> stage;
         std::vector<std::uint8_t> readReply;
         std::uint64_t replySeq = 0, sentCmd = 0, receivedCmd = 0, sentEvent = 0, receivedEvent = 0;
-        // ---- THE RECENT-REPLY RING (P12) -------------------------------------------------
-        //
-        // ILink::ReadReply takes a SEQ, and until P12 that was decoration: every caller read the
-        // answer it had just waited for, which is always the newest one, so a single slot answered
-        // every question and `replySeq != seq` could stand in for "no such answer". The create
-        // window is the first caller that reads an OLDER seq - it defers up to four answers and
-        // takes them in order - and against a single slot every one of those reads fails
-        // PROTOCOL_MISMATCH for ever. What that looked like on the device, measured: the window
-        // filled to 4 and STAYED there, `refusals=0` because no answer was ever read, every one of
-        // the frame's 4,536 creates fell through to the blocking path, and the wall clock did not
-        // move (29.0 s against the 30.1 s of the same binary with the window off). The deferral
-        // was pure overhead: four answers held unread, plus one failed drain attempt per record.
-        //
-        // ---- AND THE RING WAS NOT ENOUGH, SO THE STORE IS KEYED ON A DECLARATION (P12) -------
-        //
-        // THE MEASUREMENT THAT SETTLED IT. With the ring at 8 the drain read back NOTHING:
-        // `taken=63 pushed=65 readfail=8,872` on a load frame, and the miss probe showed why -
-        // `want=310` on every miss while the ring had moved on to [1175..1504]. Between two
-        // creates this client emits on the order of a thousand records and looks at the window
-        // not once, so a deferral has to survive an unbounded amount of other traffic, and WHAT
-        // DISPLACES IT IS NOT WHAT THE CLIENT EMITS BUT WHAT THE SERVER ANSWERS - it is behind,
-        // and its late answers to the EARLIER creates fill a bounded buffer first.
-        //
-        // Ring 8 -> 1024 as a one-line experiment, and every deferred answer came back:
-        // `taken=4,499/4,500 readfail=0`, wall 27.9 s -> 23.0 s, and with the residency budget
-        // out of the way 28.66 s -> 16.80 s at window 2 and 11.45 s at window 4. So the property
-        // needed is "the answer is still there when the reader comes back", and 1024 is a
-        // STAND-IN for it, not the design: 1024 retained answers is ~2 GiB worst case, and "deep
-        // enough" is a probability rather than a bound.
-        //
-        // THE BOUND COMES FROM THE CLIENT. A seq is retained only if the wire DECLARED it will be
-        // read (ILink::DeclareReplyRead), so the outstanding set is the window's depth plus the
-        // one blocking row in flight plus whatever a retired window strands - it does not depend
-        // on how many answers the server chooses to send. Retaining on ARRIVAL instead would grow
-        // ~11.3 entries per create against a server that ignores the no-reply bit (55,903 answers
-        // a frame where this client reads 4,501), and any cap would then be reached and would
-        // evict precisely the oldest WANTED answer - the same wedge, a few hundred creates later.
-        //
-        // OVERFLOW IS FATAL AND NEVER AN EVICTION. An evicted wanted answer is unrecoverable:
-        // sending another create to re-latch the object wipes the server's record for it
-        // (PipeApply.cpp:2033) along with its PendingUploads (PipeApply.h:332), and the client
-        // cleared its dirty flags at EMISSION (PipeApply.h:298-304), so nobody re-sends those
-        // texels. The capacity is sized so that cannot be reached, and reaching it is a bug that
-        // says its own name.
-        // ONE DEFINITION, IN THE HEADER, because the client's window is bounded by this number.
+        // Declared-answer store. ReadReply takes a seq, and the create window reads answers older
+        // than the newest, after on the order of a thousand other records, so a ring of recent
+        // answers loses them. An answer is retained only if the wire declared it will be read
+        // (ILink::DeclareReplyRead), so the client, not the server's answer count, bounds the
+        // store. Overflow is a Fatal, never an eviction: a lost wanted answer is unrecoverable,
+        // since a re-sent create wipes the server's pending uploads, which nobody re-sends.
+        // Measurements: docs/Performance/ipc-create-window.md. The cap is defined in the header
+        // because the client's window is bounded by it.
         static constexpr std::size_t kRetainedCap = StreamLink::kRetainedAnswersMax;
         struct StoredReply {
             std::uint64_t seq = 0;

@@ -6,36 +6,14 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// P11 B1 (CONTRACT-P11 B1): WHERE THE APPLY THREAD RUNS AND HOW LONG IT SPINS, CHOSEN PER SESSION
-// FROM WHO THE CLIENT IS AND WHICH DATA PLANE IT USES.
-//
-// `auto` used to mean one thing for every session: the apply thread pinned to every big core
-// (DetectBigCoreMask, 0xc0 on the workload device) and spinning MOBILEGL_IPC_SPIN_US before each
-// park. That is right for inproc and the same-app fork spawn (A4's measured shapes), and for a client
-// on the stream plane, whose records an io thread feeds to the apply thread. It is wrong for a
-// client that DIALLED IN from another process over SHARED SEGMENTS - an app_process-launched
-// program (the fd: endpoint), a Termux one, a root or same-app one on `unix:`: the apply thread
-// spins on the ring that client writes directly, the client's GL thread lands on the same two prime
-// cores, and on the Redmi rd12 ran 23-26 fps over shared memory against 45-54 over tcp, 118 when the
-// two were placed apart by hand (B0-CROSS-APP.md, HSPIKE.md). So `auto` now reads the peer's Hello:
-//
-//   peer, plane                     `auto` resolves to
-//   in-process (No)                 every big core, the configured spin             - unchanged
-//   forked (Fork)                   every big core, the configured spin             - unchanged
-//   dialled in (Connect), stream    every big core, the configured spin             - unchanged
-//   dialled in, shared segments     ONE core, ReservedApplyCore's: the lowest of several prime cores,
-//                                   a big core beside a lone prime core, or none - never the only
-//                                   prime core - and kConnectedPeerSpinUs unless MOBILEGL_IPC_SPIN_US
-//
-// The lowest prime core, not the highest, by measurement (CONTRACT-P11 B1): the scheduler puts a
-// foreground app's hot GL thread on the HIGHEST prime core (cpu7 in 43 of 44 samples); pinning the
-// apply thread there shared that core with it (rd12 6.5 fps), pinning it to the lowest gave 120. A
-// client launched through ExternalClientHelper is also kept off the reserved core (the supervisor
-// announces it, the broker hands it to the helper), so a client the scheduler would otherwise place
-// on it - an adb-shell one - is not starved either.
-//
-// An explicit mask or `off` wins for every peer, exactly as before: the operator's word is the
-// policy. A pure function, so the unit suite can hold every row without a thread or a cpufreq tree.
+// Where the apply thread runs and how long it spins before parking, chosen per session from the
+// peer (the Hello's DialMode) and the data plane. With MOBILEGL_IPC_SERVER_AFFINITY=auto an
+// in-process, forked or stream-plane peer gets every big core and the configured spin; a peer
+// that dialled in over shared segments gets at most one core (ReservedApplyCore), never the only
+// prime core, and kConnectedPeerSpinUs unless MOBILEGL_IPC_SPIN_US is set, because it writes the
+// ring the apply thread spins on and its GL thread wants a prime core. An explicit mask or `off`
+// wins for every peer. Pure functions, so the unit suite covers every row; the measurements are
+// in ARCHITECTURE.md §14.1.
 
 #pragma once
 

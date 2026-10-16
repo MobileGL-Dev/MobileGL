@@ -206,22 +206,14 @@ namespace MobileGL::MG_Remote::Server {
         m_unreportedFences.clear();
     }
 
-    // P10 (CONTRACT-P10.md §1): WHICH OF THE CLIENT'S FENCES HAS THE GPU FINISHED.
-    //
-    // The client answers a poll of a fence it knows is signaled without asking - that is the
-    // whole of package A - and it learns what is signaled only from here. Walked in CREATION
-    // order and stopped at the first one still pending: one context's GPU work completes in
-    // the order it was submitted, so a later fence cannot be done while an earlier one is not,
-    // and the steady-state cost is one status query per drain batch. (Were a backend ever to
-    // finish them out of order, the later fence would only be reported late - an answer the
-    // client then gets by its own round trip - never early.)
-    //
-    // `flush`: the apply thread is about to go idle. A fence whose commands the driver still
-    // holds never signals on its own, and an idle server submits nothing more, so the first
-    // pending fence is asked through ClientWaitSync(GL_SYNC_FLUSH_COMMANDS_BIT, 0) - the one
-    // backend-neutral way both backends take to submit what they hold - instead of the plain
-    // status query. Only when idle: mid-stream the next records flush soon enough, and a
-    // submit per batch would cost Magma its command-buffer batching.
+    // Reports which of the client's fences the GPU has finished; the client answers a poll of a
+    // reported fence without a round trip. Walked in creation order and stopped at the first
+    // pending one: one context's work completes in submission order, so this costs one status
+    // query per drain batch, and an out-of-order finish would be reported late, never early.
+    // `flush`: the apply thread is about to go idle, and a fence whose commands the driver still
+    // holds never signals on its own, so the first pending fence is queried with
+    // ClientWaitSync(GL_SYNC_FLUSH_COMMANDS_BIT, 0). Only when idle: a submit per batch would
+    // break Magma's command-buffer batching.
     Uint32 ServerVerbSink::ReportSignaledFences(Bool flush) {
         if (m_unreportedFences.empty()) return 0;
         ServerSession* session = ServerSession::Active();
@@ -719,44 +711,14 @@ namespace MobileGL::MG_Remote::Server {
         // dropped before this function returns, and s1's SessionConsumer::ApplyOne publishes
         // appliedSeq only after that - so by the time the client is runnable the flag is down.
         const Client::ClientSession::ScopedApplierEntry insideApplier;
-        // P5e (id), CONTRACT-P5E §2.1 / §4.4: STAMP WHETHER THE CLIENT IS PARKED BEHIND THIS
-        // RECORD, before anything can ask. It is the input to the allocator guard's exemption
-        // (SlotAllocator.cpp) and to every frontend-keyed twin member that survives as monolith
-        // glue (SlotTables.h), and it has to be up before DecodeAndApply because the sinks those
-        // reach are exactly the askers. MGPipeBarriered answers true for every record until ra
-        // lands the wait rule, so this line changes nothing this phase and is the line ra
-        // rebases onto rather than adds.
-        //
-        // AND THE STAMP IS `true` UNTIL ra LANDS THE CLIENT'S HALF (ID-103). The predicate
-        // describes what the client WILL do once EmitAndWaitTails follows the wait classes;
-        // today it still blocks after every record, so a `false` stamp here would withdraw the
-        // §4.4 exemptions from a probe the client's own wait still makes safe - a refusal with
-        // no defect behind it. The predicate is computed on every record all the same, so it is
-        // exercised for the whole phase rather than first run on the day it starts deciding.
-        //
-        // AND THE SERVER'S OWN CAPABILITY IS THE SECOND CONJUNCT (P5e gl, ID-111). The constant
-        // above says what the CLIENT will do once ra's wait rule is live; it says nothing about
-        // which server this is. kCapRunAheadApply is never published on DirectVulkan (ID-90,
-        // MGPipeRunAheadCapBitsFor), yet draw_vbo / blit / clear / launch_grid are all
-        // kWaitNone - so a stamp that read the build constant alone would, on the day it flips,
-        // have a MAGMA server mark every draw record UNBARRIERED while its client is still
-        // lockstep. CountBarrierPull (PipeInputs.cpp) is an unconditional Fatal on an
-        // unbarriered pull, no knob involved, and Magma's residual fill is its ONLY source for
-        // the seven pointer-backed fields: Magma would die on its first draw and take
-        // MagmaP7AllocatorDebtScope's exemption with it.
-        //
-        // BOTH PREDICATES ARE COMPUTED UNCONDITIONALLY, as arguments rather than as the arms of
-        // a short-circuit, which is ID-103's reason extended to the capability probe: they are
-        // exercised on every record for the whole phase rather than first running on the day
-        // they start deciding.
-        //
-        // PH-1 (3): BUT NOT BEFORE THE RECORD HAS BEEN ADMITTED. MGPipeBarriered reads payload
-        // fields (a DrawVbo's MGPDrawInfo::Flags) and the stamps index per-opcode tables, so a
-        // record whose ring header is shorter than its own type - or names no opcode - would be
-        // read past its end here, before DecodeAndApply's pre-gate could refuse it. In an armed
-        // session child the pre-gate therefore runs FIRST: a refused record latches by name and
-        // is declined with nothing stamped (ServerLoopTest's short-record case reads the stamp).
-        // Unarmed it admits everything and the generated gate keeps its death, as before.
+        // Stamp whether the client is parked behind this record before anything can ask: the
+        // barrier-pull check (PipeInputs.cpp) and the deferred-destroy queue (PipeFill.cpp) read
+        // it from inside DecodeAndApply. It is MGPipeBarriered's answer only when this server
+        // publishes run-ahead; otherwise its client waits after every record, so every record is
+        // stamped barriered. Both inputs are computed on every record so they stay exercised.
+        // Admission runs first: MGPipeBarriered reads payload fields and the stamps index
+        // per-opcode tables, so in a session that latches faults a short or unknown record is
+        // declined before anything is stamped.
         if (!m_decoder.AdmitOrDecline(record)) return false;
         const Bool wireSaysBarriered = MG_Pipe::MGPipeBarriered(
             static_cast<MG_Pipe::MGPWireOp>(record.kind), record.payload, MG_Pipe::MGPipeApplier());
@@ -779,23 +741,10 @@ namespace MobileGL::MG_Remote::Server {
         // before it aborts on the FIRST field inside SyncRenderState.
         StampVerbBoundary(static_cast<MG_Pipe::MGPWireOp>(record.kind));
         const Bool applied = m_decoder.DecodeAndApply(record);
-        // AND THE CLEAR IS INSIDE ApplyOne, NOT AFTER THE DRAIN BATCH. That is not tidiness,
-        // it is the barrier invariant. s1's SessionConsumer::ApplyOne publishes appliedSeq the
-        // instant this returns, and publishing appliedSeq is what makes the CLIENT runnable
-        // again (R-1: the barrier waits on exactly that watermark). A clear that ran after the
-        // batch would therefore be a second writer of gPipeInputs while the client is already
-        // touching it - the one thing table 3 says may not be introduced before the barrier
-        // retires - and the first version of this file had it there. It was caught by
-        // AClearRecordCrossesAndIsStampedAsAVerbBoundary failing INTERMITTENTLY, which is what
-        // a race looks like from the outside.
-        //
-        // THE COST, STATED: a record that is NOT a verb boundary now applies with the flag
-        // disarmed, so a sticky forward pulled from inside such a record's applier is not
-        // counted in `rsp`. Closing that needs an "enter the applier" entry point beside
-        // MGPipeServerStampVerbBoundary that arms the flag WITHOUT re-stamping - re-stamping on
-        // a non-verb op is what p1 forbids outright - and PipeInputs.cpp is p1's file. Left for
-        // the integrator to sequence; it makes `rsp` larger, never smaller, so the number this
-        // phase reports is a floor.
+        // LeaveApplier runs here, inside ApplyOne, and not after the drain batch:
+        // SessionConsumer::ApplyOne publishes appliedSeq as soon as this returns, which makes the
+        // client runnable, so a later clear would write gPipeInputs while the client uses it.
+        // How a record that is not a verb boundary is read-checked: ARCHITECTURE.md §9.2.1.
         LeaveApplier();
         return applied;
     }

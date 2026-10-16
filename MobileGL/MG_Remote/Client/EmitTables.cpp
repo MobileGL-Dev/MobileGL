@@ -6,26 +6,12 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// P5 package c1: the 71-slot emit table.
-//
-// THE PARTITION IS CONTRACT-P5.md §7's AND IS NOT RE-DERIVED HERE (R-15, ID-12):
-//   class A  2 slots  answered locally from the caps mirror, never emitted, never Fatal
-//   class B 54 slots emitted; class C 15 slots name their unmigrated verb.
-// The three counts are static_asserted to sum to kRemoteEmitSlotCount below, so a slot that
-// changes class without changing the arithmetic is a build break rather than a behaviour
-// change nobody reviewed.
-//
-// P5b MOVES SLOTS FROM C TO B, ONE PACKAGE AT A TIME (docs/archive/contracts/CONTRACT-P5B.md §7). The three
-// numbers above are the partition AT THE P5b CONTRACT COMMIT and they are the ones the contract
-// states; the arithmetic below is what the tree currently has, and the per-package ownership
-// assertions say which package moved which slot. On this head t2 has landed: class B is 5 + 6
-// and class C is 58.
-//
-// THE PRE-VERB HOOKS RUN BEFORE THE RECORD, NEVER AFTER (b1, ID-18). PushPersistentMapsBeforeVerb
-// publishes the bytes an application wrote through a coherent map with no API call at all, and
-// MarkGpuWritesForDraw builds the conservative GPU-write set the client now owns. Both describe
-// the work the record is ABOUT TO START, so a hook deferred past its own record is the C-1
-// regression re-committed at the transport layer.
+// The remote emit table: one slot per function pointer of GlobalBackendFunctionsTable
+// (kRemoteEmitSlotCount). Class A slots are answered locally from the caps mirror, class B slots
+// emit a record, and class C slots abort naming their unmigrated verb. The class counts are
+// static_asserted to partition the table, so a slot that changes class without updating the
+// counts breaks the build. Pre-verb hooks (VerbPort.h) run before the record, never after: they
+// publish coherent-map bytes and the GPU-write set for the work the record is about to start.
 
 #include "EmitTables.h"
 #include <MG_Remote/FatalFunnel.h>
@@ -163,22 +149,10 @@ namespace MobileGL::MG_Remote::Client {
             ClientSession& session = RequireSession("Present");
             BeforeReadOnlyVerb();
 
-            // ---- R-10's and R-9's readings, published BEFORE the present record ------------
-            //
-            // THE FRAME BOUNDARY IS THE RIGHT PLACE and the per-record path is the wrong one:
-            // the encoder keeps all five as run totals, so this is five relaxed stores per
-            // frame rather than five per record. Guarded by Enabled() like every other counting
-            // site in the tree, so the cost with MOBILEGL_PIPE_STATS unset is a global load and
-            // a predicted branch.
-            //
-            // AND IT IS BEFORE THE EmitAndWait BELOW, WHICH IS NOT A DETAIL. PipeStats::OnPresent
-            // is called by the SERVER's Present - i.e. from inside the apply of the very record
-            // this function is about to emit - so a publish placed after it lands one frame
-            // late, and the FIRST summary line of every run then reads `maxrec=0 maxcap=0`.
-            // Measured that way once: a zero that means "not published yet" is printed in the
-            // same shape as a zero that means "nothing crossed", and the second one is a real
-            // defect (an emit table that fell through to the driver). The Present record is 24
-            // bytes and cannot be the maximum, so nothing is lost by reading one record early.
+            // Publish the encoder's run totals at the frame boundary (five stores per frame, not
+            // per record) and before the present record: PipeStats::OnPresent runs in the server's
+            // apply of that record, so publishing after it would make each run's first summary
+            // line read zero. The present record is too small to be the maximum.
             if (MG_Util::PipeStats::Enabled()) {
                 const Wire::PipeWireEncoder& encoder = session.Encoder();
                 using MG_Util::PipeStats::Gauge;
@@ -398,32 +372,11 @@ namespace MobileGL::MG_Remote::Client {
             Uint64 replyBytes = 0;
             session.EmitAndWait(op, payload, bytes, nullptr, 0, &result, sizeof(result),
                                 &status, &replyBytes);
-            // A DECLINED SYNC REPLY IS AN ANSWER, NOT A CORRUPTION (P12). ReplySink opens the
-            // three-value space with "DECLINED IS A REAL ANSWER, not a failure"
-            // (PipeWireCodec.h:457-460) and the escape rows are held to it the other way round -
-            // "ERROR IS NOT A DECLINE", an escape may not fold 2 into false
-            // (WireTables.cpp:446-450). This site folded 1 AND 2 into one abort.
-            //
-            // BOTH VALUES OF 1 ARE REACHABLE WITHOUT A BYTE OF CORRUPTION:
-            //   - the SERVER declines these two rows by design whenever it cannot answer them -
-            //     PostReply(op, seq, ok ? kStatusOk : kStatusDeclined, ok ? &result : nullptr,
-            //     ok ? sizeof(result) : 0) at PipeWireCodec.cpp:1820-1830, which is a legitimate
-            //     zero-length answer to a kWaitReply row (R-5);
-            //   - the CLIENT produces the same status itself once the session stops carrying
-            //     records: the device-lost latch (ClientSession.cpp:1837) and a doorbell that died
-            //     during teardown (ClientSession.cpp:2025, where the comment says outright that
-            //     "the verb did not happen" is reported as DECLINED and not as ERROR).
-            //
-            // AND THE NO-OP IS THE ONE THIS FRONTEND ALREADY GIVES for a fence it cannot wait on:
-            // GL_Sync.cpp:103-106 answers GL_ALREADY_SIGNALED for a sync with no backend handle,
-            // PipeApplier.cpp:175-177 answers GL_ALREADY_SIGNALED for a fence with no native
-            // object (a fence that provably did no work), and ClientWaitSync() in DirectGLES.cpp does the same
-            // for an absent sync. A lost device is that same class of fact.
-            //
-            // WHAT ABORTING HERE COSTS, MEASURED: after a clean device loss Minecraft 26.2's next
-            // glClientWaitSync - the chunk-upload fences - reached this line with DECLINED and died
-            // of Fatal{ProtocolCorruption, "Fence.reply"}, rc=134, instead of the no-op the design
-            // promises ("GL calls become no-ops", design/08-runtime-and-platform.md:33).
+            // A declined reply is an answer, not a corruption: the server declines these rows when
+            // it cannot answer them, and the client reports a verb that did not happen (the
+            // device-lost latch, a doorbell that died during teardown) as declined. It gets the
+            // frontend's answer for a fence it cannot wait on, signaled, so GL calls after a device
+            // loss are no-ops (ARCHITECTURE.md §15.3) rather than aborts.
             if (status == Wire::ReplySink::kStatusDeclined) {
                 MGLOG_E_ONCE("MG_Remote client: the peer DECLINED a %s reply - the verb did not "
                              "happen (a lost device, or a teardown); answering the no-op the "
@@ -503,31 +456,14 @@ namespace MobileGL::MG_Remote::Client {
 
 #include "QueryEmit.inc"
 
-        // CLASS C - each remaining slot names its first blocker.
+        // Class C - each remaining slot names its first blocker.
         // =============================================================================
         //
-        // PARTITIONED BY THE P5b PACKAGE THAT OWNS THE FLIP (docs/archive/contracts/CONTRACT-P5B.md,
-        // docs/archive/notes/p5b/BRIEF-P5B.md), so that four packages migrating in parallel edit four
-        // DISJOINT lists and four DISJOINT counts rather than one list and one number. To flip a
-        // slot a package (1) removes its X row from ITS list, (2) assigns the real emitter in
-        // BuildRemoteEmitTable's class-B block, (3) raises ITS kEmittedSlots* by one. The
-        // per-package ownership assertions below then still hold, the totals stay arithmetic,
-        // and a slot that changes class without changing the arithmetic is a build break. The
-        // X-macro shape is kept so the DEFINITION and the ASSIGNMENT cannot drift apart. Three
-        // slots carried a body the macro cannot (DispatchCompute, DispatchComputeIndirect,
-        // SetSwapInterval) and were written out by hand below; all three are class B now.
-        //
-        //   d1   indexed / instanced / multi-draw / indirect draws -> draw_vbo (59), its
-        //        kDrawIsIndirect tail and its kDrawHasUserIndices span
-        //   i1   image bind, compute, barriers, copy-image, storage block -> bind_shader_image
-        //        (72), launch_grid (60), memory_barrier (61), resource_copy_region (53),
-        //        set_storage_block_binding (75)
-        //   t2   the XFB spans and object bind, the patch parameter -> begin/end/pause/resume_
-        //        stream_output (62..65), bind_stream_output (74), patch_parameter (73)
-        //   f1   the clear family, the framebuffer-sourced copies, mips -> clear (57),
-        //        copy_framebuffer_to_texture (76), generate_mipmap (54)
-        //   tail the wave-3 remainder nothing measured: queries, syncs, the texture readbacks,
-        //        the DSA blit, the swap interval (census-classC.md "static cross")
+        // One X-macro list per slot group (D1 draws, I1 image/compute, T2 XFB and patch
+        // parameter, F1 clear/copy/mipmap, TAIL queries/syncs/readbacks), each paired with its
+        // kEmittedSlots* count so the ownership static_asserts below hold. A slot moves to class B
+        // by removing its row, assigning its emitter in BuildRemoteEmitTable and raising its
+        // group's count. The X-macro keeps a stub's definition and assignment in step.
 
         // d1 v1 flipped all nineteen (DrawElements, DrawElementsBaseVertex, MultiDrawArrays,
         // MultiDrawElements, MultiDrawElementsBaseVertex, MultiDrawElementsIndirect,

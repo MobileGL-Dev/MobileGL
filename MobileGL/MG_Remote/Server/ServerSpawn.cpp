@@ -77,34 +77,13 @@ namespace MobileGL::MG_Remote::Server {
             return std::string();
         }
 
-        // Every MOBILEGL_TRANSPORT and MOBILEGL_IPC_* goes. Built BEFORE fork:
-        // between fork and execve only async-signal-safe calls are allowed, and
-        // allocating a vector of strings is not one of them.
-        //
-        // EXCEPT A KNOB THE SERVER READS, named here one by one. P7 wave 4 M2's
-        // MOBILEGL_IPC_WIRE_DEFERRED_MB bounds the server's own orphaned wire buffer stores;
-        // nothing in the client reads it, so scrubbing it did not make the child safer - it made
-        // the knob mean something under inproc and silently nothing under spawn, the worst of
-        // the three states (the tcp server reads its supervisor's environment, as for every
-        // knob). It names no endpoint, no role and no segment size, so neither anti-recursion
-        // catch has anything to say about it.
-        //
-        // M2 round 2 (review): three more the server reads and that were silently defaulting in
-        // the spawned child for the same reason - MOBILEGL_IPC_SPIN_US (the doorbell spin budget,
-        // read by BOTH roles, so the child should spin as the parent was told to),
-        // MOBILEGL_IPC_SERVER_AFFINITY (the apply thread's CPU mask, read only by the server) and
-        // MOBILEGL_IPC_AUDIT (the server's 0xDD fill of retired stage bytes). Each is a tuning or
-        // audit value, none names an endpoint, a role, a path or a segment size, and ServerMain's
-        // catch (b) keeps verifying the four it verifies (TRANSPORT, SERVER_PATH, RING_MB,
-        // STAGE_MB). Everything else under the prefix still goes.
-        //
-        // PH-6 (ID-P7-2) adds MOBILEGL_IPC_EVENT_WAIT_MS on the same argument: it is the server's
-        // patience with a client that has stopped draining SEG_EVENT, nothing on the client reads
-        // it, and scrubbing it would make a spawned server wait the default whatever the lane set.
-        //
-        // P11 B2 adds MOBILEGL_IPC_ALLOW_ADOPT_T0, the server's own T0 allow switch: only the server
-        // reads it, and scrubbing it would make "allow switch off" unreachable on the spawn arm.
-        // MOBILEGL_IPC_ADOPT_TIER itself still goes - the client's ask travels in its Hello.
+        // Scrubs MOBILEGL_TRANSPORT and every MOBILEGL_IPC_* from the child's environment; built
+        // before fork, because allocating is not async-signal-safe between fork and execve.
+        // kServerOwned lists the exceptions, knobs the server itself reads (wire
+        // deferred budget, spin budget, apply-thread affinity, stage audit fill, event wait, T0
+        // allow switch): scrubbing them would silently default them under spawn. None names an
+        // endpoint, role, path or segment size, so ServerMain's environment catch is unaffected.
+        // MOBILEGL_IPC_ADOPT_TIER is scrubbed: the client's ask travels in its Hello.
         bool ShouldScrub(const char* entry) {
             static constexpr const char* kServerOwned[] = {
                 "MOBILEGL_IPC_WIRE_DEFERRED_MB=", "MOBILEGL_IPC_SPIN_US=", "MOBILEGL_IPC_SERVER_AFFINITY=",
@@ -149,26 +128,11 @@ namespace MobileGL::MG_Remote::Server {
             // §3.1 is the whole argument for why those are two axes.
             env.storage.emplace_back("MOBILEGL_IPC_ROLE=server");
             env.storage.emplace_back("MOBILEGL_IPC_DIAL=no");
-            // LD_LIBRARY_PATH, BECAUSE THE SERVER IS EXEC'd AND NOT dlopen'd.
-            //
-            // It links libMobileGL.so, and an exec'd process gets a FRESH linker
-            // namespace with the default search path - not the one the app built
-            // for its own libraries. An APK's lib/<abi>/ is not on that path, and
-            // the failure is total and immediate:
-            //
-            //   CANNOT LINK EXECUTABLE ".../libMobileGLServer.so":
-            //   library "libMobileGL.so" not found: needed by main executable
-            //
-            // It is invisible on desktop, where CMake gives build-tree targets an
-            // absolute RPATH of their own - so the WSL server had been resolving
-            // its dependency through a path no phone has.
-            //
-            // $ORIGIN WOULD BE THE TIDIER ANSWER and the target asks for it, but
-            // the NDK toolchain drops RPATH from the link: measured with readelf
-            // on the APK's own copy, which carries NEEDED libMobileGL.so and no
-            // RUNPATH at all. So the launcher states it instead - it is the one
-            // component that has already resolved where the image lives, and a
-            // pair that is not co-located is not a pair.
+            // LD_LIBRARY_PATH: the server is exec'd, not dlopen'd, so the linker uses its default
+            // search path, which lacks the APK's lib/<abi>/, and libMobileGL.so is not found.
+            // Desktop builds hide this behind CMake's absolute build-tree RPATH. $ORIGIN would be
+            // tidier, but the NDK link drops RPATH (the APK's copy has no RUNPATH), so the
+            // launcher, which already resolved the image's directory, states it.
             if (!imageDir.empty()) {
                 env.storage.emplace_back("LD_LIBRARY_PATH=" + imageDir);
             }

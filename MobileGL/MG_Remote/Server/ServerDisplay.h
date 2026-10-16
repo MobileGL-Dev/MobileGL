@@ -6,54 +6,14 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// P12 (on-screen server window), D3/D6. THE SERVER'S OWN WINDOW, AS ONE PROCESS-WIDE HOLDER.
-//
-// WHAT IT IS FOR. A client that sets MOBILEGL_IPC_SURFACE=server is headless: it asks the server to
-// create its window surface on the SERVER's window (WindowKind::ServerOwned) and learns the
-// surface's geometry back from the server. That window belongs to the in-process display server -
-// on Android the display Activity's SurfaceView, handed in through JNI (the next stage's glue) -
-// and this class is where it is held between the UI thread that owns the window's lifecycle
-// (surfaceCreated / surfaceChanged / surfaceDestroyed) and the apply thread that renders into it.
-//
-// WHO HAS A DISPLAY. Nobody, until Install(): the Linux host server, the exec'd supervisor and
-// every session child it forks never call it, so HasDisplay() is false there and a ServerOwned
-// request is refused by name (ServerLoop.cpp's ServerOwned arm, SurfaceRefusal::NoServerDisplay).
-// Only the in-process display server installs one.
-//
-// THE WINDOW IS OPAQUE HERE. It is a `void*` with three hooks - acquire and release (Android:
-// ANativeWindow_acquire / ANativeWindow_release) and a geometry request (the native -> Java
-// up-call: SurfaceHolder.setFixedSize(w, h) for w, h > 0, setSizeFromLayout() for 0/0). That is
-// what lets the host unit tests drive attach / wait / detach with a fake handle, and it keeps this
-// file free of any platform header.
-//
-// THE LEASE. The apply thread that substitutes the window into a backend takes a LEASE on it
-// (AcquireFor) and names a hook that asks it to let go. Detach() - the surfaceDestroyed path -
-// calls that hook and then BLOCKS, bounded, until the holder has released its backend surface and
-// ended the lease (EndLease); only then is the window's reference released. That ordering is the
-// GLSurfaceView contract: after surfaceDestroyed returns nothing may render into the window. A
-// holder that does not answer in time does not get the window pulled out from under it - the
-// reference is kept and released when the lease finally ends - and Detach returns TimedOut, by
-// name, so the UI thread is never held longer than its bound.
-//
-// A LEASE THAT IS ENDING IS WAITED FOR, NOT REFUSED. A holder whose session is over - it latched a
-// fault (a device loss among them) or is stopping - says so (MarkLeaseEnding) before its client can
-// learn of it; its lease still lasts until its backend has let go of the window. A client that loses
-// its session re-creates its window surface on a fresh session at once, typically while the old
-// session's apply thread is still tearing its backend down: that request waits for the old lease
-// to end, bounded by its own timeout, instead of being refused as LeasedElsewhere. A holder whose
-// session goes on keeps the window exclusively, as before.
-//
-// SUSPEND, NOT END (screen off / lock). A holder whose backend can let go of the window and keep
-// everything else - its contexts, objects and device - ends its lease with SuspendLease instead of
-// EndLease and names a second hook: the next Attach of a NEW window calls it, so the holder can
-// lease that window (AcquireFor) and rebuild its surface on it. The registration lasts until that
-// AcquireFor succeeds or the holder cancels it (CancelResume, at the session's end).
-//
-// THREADS. Every method is thread-safe. The hooks are called from the thread that called the
-// method: acquire from Attach's caller, release from Detach's / EndLease's caller, requestGeometry
-// from the apply thread (AcquireFor), the lost hook from Detach's caller and the attached hook from
-// Attach's (or SuspendLease's) caller, both WITH THIS OBJECT'S LOCK HELD - so they must not block and
-// must not call back into this object (ServerLoop's set an atomic and ring its doorbell).
+// The server's own on-screen window, held process-wide between the UI thread that owns its
+// lifecycle (Attach / Detach on surfaceCreated, surfaceChanged, surfaceDestroyed) and the apply
+// thread that renders into it under a lease (AcquireFor / EndLease). Only the in-process display
+// server calls Install(); elsewhere a ServerOwned surface is refused (NoServerDisplay). The window
+// is an opaque `void*` driven through ServerDisplayHooks, so no platform header is needed here.
+// Nothing may render into the window after surfaceDestroyed returns, so Detach asks the holder to
+// let go and waits, bounded, for EndLease; on timeout it returns TimedOut and EndLease releases
+// the window later. A lease marked ending is waited for, not refused. See ARCHITECTURE.md §15.2.
 
 #pragma once
 #include <Includes.h>

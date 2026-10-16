@@ -6,38 +6,13 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// P11 PAIR. A SOCKET CLIENT'S TWO CONNECTIONS ARE PAIRED BY WHO THEY ARE, NOT BY WHEN THEY ARRIVED.
-//
-// SocketTransport::ConnectTo opens two connections to one listener - control, then aux (the
-// SCM_RIGHTS socket; on tcp:// the data connection). The server used to take "the next two accepted
-// connections, first is control" (SocketTransport::AcceptPair). That was a protocol only while
-// nothing else could reach the listener, and on the device it was not (B0-CROSS-APP.md F2): the
-// server app's readiness probe - one connect() and close() - became the next client's control
-// connection, that session read the probe's socket and ended ("control peer closed before sending
-// a first frame"), and the client got no Welcome. Two clients connecting at the same moment could
-// just as well swap halves.
-//
-// Now each connection's first frame is a PairBind (protocol.fbs, control revision 4): the client's
-// nonce, the same on both, and which half it is. This acceptor keeps every accepted connection in a
-// small set until it has presented one, and hands out a control and an aux connection only when
-// their nonces match. What it does with everything else:
-//   - a connection that closes having sent nothing (a readiness probe) is closed, quietly;
-//   - a first frame that is not a PairBind is refused by name. A Hello is a client from before
-//     PairBind: it is asked what the session would ask, in the session's order - the token, then the
-//     wire (Handshake.h) - so it hears Refuse{WireFingerprint} as it would from any session, and one
-//     that passes both is still refused, because it cannot be paired;
-//   - a connection that has not presented a PairBind, or whose partner has not presented the same
-//     nonce, within the budget is dropped - a control connection with a refusal, an aux connection
-//     (whose client reads descriptors there, not frames) by closing it - and nobody else's
-//     connection is touched;
-//   - past kPairMaxUnpaired connections the oldest one that has not identified itself (else the
-//     oldest) is dropped the same way.
-//
-// It never reads a byte past a PairBind (FirstFrameAssembler): on control the Hello follows it, and
-// the session reads that itself; on aux the descriptors follow it.
-//
-// Stateful because pairs complete out of order: with A-control, B-control, B-aux, A-aux, B is
-// handed out first and A-control has to still be here for the call that hands out A.
+// Pairs a socket client's two connections (control, then aux: the SCM_RIGHTS socket, or the data
+// connection on tcp://) by nonce rather than arrival order, so a readiness probe or two clients
+// connecting at once cannot be mispaired. Each connection's first frame is a PairBind with the
+// client's nonce and its half; nothing past it is read. A connection that closes having sent
+// nothing is closed quietly; a Hello is checked token then wire, as a session would, then refused;
+// one unpaired after the budget, or the oldest unidentified one past kPairMaxUnpaired, is dropped
+// without touching others. Stateful because pairs complete out of order.
 
 #pragma once
 

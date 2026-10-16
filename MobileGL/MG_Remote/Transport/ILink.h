@@ -6,64 +6,13 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// The DATA-plane seam. Declared by package c6, implemented by package lk.
-// Authority: CONTRACT-P6.md §8.
-//
-// WHY THIS EXISTS AND WHY IT IS NOT ITransport. ITransport.h:16-20 says in its
-// own header that everything on the hot path bypasses it: it carries the
-// handshake, surface ops, resync, aux requests and fatals, and that scope is
-// already correct for a socket. Below it there was NO interface of any kind -
-// Ring.h, ReplySlot.h and EventRing.h each take a raw `void* base` plus a
-// capacity, so "swap the transport" had nothing to swap. This header is that
-// missing thing, and ITransport is neither extended nor changed by it.
-//
-// NOTHING INCLUDES THIS FILE IN c6. That is the whole of c6's behaviour
-// guarantee: the seam is declared, StreamLink.h is declared against it (which
-// is the adequacy proof - see below), and not one call site moves. Package lk
-// implements ShmLink by relocating today's SessionSegments / Ring /
-// ReplySlotPool / EventRing behind it, line for line, and only then rewrites
-// the call sites.
-//
-// THE SEAM IS SETUP-TIME, NOT HOT-PATH. No method here is called per record,
-// per publish, or inside a spin predicate. The producer takes a LinkArena once
-// at attach and reserves through it non-virtually; every wait predicate reads
-// LinkProgress through a raw pointer taken once. Three grounds, the second
-// decisive (CONTRACT-P6.md §8.2):
-//
-//   1. Two virtuals per record at the 4000 records/frame SEG_CMD is sized
-//      against is ~8000 indirect calls/frame, about 0.5% of the measured
-//      15.72 ms client frame - affordable, but the only lane that could
-//      measure it has +/-4% dispersion, EIGHT TIMES the effect. A gate that
-//      can only ever print "within noise" is ID-124's failure mode one level
-//      down.
-//   2. Doorbell::Wait is a non-virtual template whose spin loop calls ready()
-//      up to SpinItersPerUs() * spinUs times; at 916 waits/frame with 99.8%
-//      resolved inside the spin, the predicate runs 1e5-1e6 times per frame
-//      and reads the watermarks straight off the shared page. That is the
-//      31.58%-of-the-GL-thread path. A virtual there is not a rounding
-//      question.
-//   3. The encode path already depends on four inline accessors around its one
-//      Reserve; virtualising Reserve alone forces either four more virtuals or
-//      moving R-10's wrap counters behind the seam, and those are deliberately
-//      encoder-owned.
-//
-// So lk's gate is an objdump call-count of the encode path, not a wall clock:
-// after lk that path has no more out-of-line calls than before. That is
-// falsifiable; "within noise" is not.
-//
-// WHAT THIS HEADER DELIBERATELY DOES NOT DO.
-//   - It does not define Watermark::Reached or any other predicate that
-//     SessionRings.h already defines. One definition, one owner.
-//   - It does not relocate the bodies of RingProducer::Reserve or
-//     RingConsumer::Pop. Those log (MGLOG_E / MGLOG_D) and use Align8 and
-//     <cstring>; no header under Transport/ pulls the logger in, and this one
-//     does not start. They stay out of line and move to ShmLink.cpp in lk.
-//   - It declares no function it does not define. Every entry point here is
-//     pure virtual or a POD accessor.
-//   - It does not regroup RingControl. That regroup is real and necessary
-//     (CONTRACT-P6.md §8.3) but its rename blast radius is 109 production
-//     sites, five of them behind a non-Android #if, so it is lk's with a
-//     published per-file itemisation - not a side effect of declaring a seam.
+// The data-plane seam: record reservation and commit, watermarks, replies, events and span
+// resolution, implemented by ShmLink and StreamLink (ARCHITECTURE.md §11.9). ITransport carries
+// only the control plane and is not part of it.
+// Reserve, pop and the wait predicates never dispatch through it: callers cache the ring
+// endpoints (CommandsOut/CommandsIn) and the LinkProgress pointer once at attach. The spin
+// predicate runs up to 1e5-1e6 times a frame, where a virtual call is a measurable cost.
+// Watermark predicates such as Watermark::Reached stay in SessionRings.h.
 
 #pragma once
 
@@ -94,44 +43,13 @@ namespace MobileGL::MG_Remote::Transport {
     };
 
     // ---- the progress block -------------------------------------------------
-    //
-    // The watermarks every wait predicate reads. On ShmLink this aliases the
-    // shared control page and the loads are cross-process acquire loads; on
-    // StreamLink it is process-local and a reader thread stores into it from
-    // decoded progress messages.
-    //
-    // THE RULES SURVIVE THE MECHANISM VERBATIM, and that is the point of naming
-    // the block rather than the page: late-never-early (Ring.h's "BATCHING MAY ONLY MAKE A WATERMARK LATE"), `>=`
-    // never `==` (SessionRings.h's Watermark::Reached), monotone with a
-    // backwards move Fatal (Ring.cpp's AdvanceMonotonic). A stream link changes
-    // only HOW a value arrives, never what it means.
-    //
-    // WHY THESE FOUR AND NOT THE WHOLE PAGE, AND WHY THE EVENT FLAGS ARE NOT
-    // HERE. RingControl's watermark cache line HELD, until lk regrouped it, {appliedSeq,
-    // submittedSeq, retiredSeq, completedFrameSerial, presentAckSerial}, and
-    // submittedSeq is PRODUCER-written (Ring.h's "THE FIVE WATERMARKS" block,
-    // "Advanced by the PRODUCER after it publishes") while the other four are consumer-written - so the
-    // line has MIXED WRITERS as it stands and no single-writer block can be
-    // aliased over it. lk's regroup moves submittedSeq out to the producer's
-    // own line, beside cmdHead, which is the other thing the producer writes;
-    // what is left IS this struct, and it IS a named member of RingControl,
-    // pinned there by per-field offsetof static_asserts (Ring.h).
-    //
-    // THE TWO EVENT FLAGS ARE DELIBERATELY EXCLUDED, and an earlier draft of
-    // this header had them in and was wrong. eventRingFull has TWO writers:
-    // the server latches it with store(1) when SEG_EVENT fills
-    // (EventRing.h:140) and the CLIENT clears it with an exchange(0) on EVERY
-    // DRAIN (EventRing.h:200). Promoting it here would put a per-drain RMW by
-    // the client on the same cache line as appliedSeq - which the server
-    // release-stores every 64 records and the client's spin predicate reads
-    // 1e5-1e6 times per frame. That is new false sharing on the hottest line
-    // in the system, and it would land in exactly the numbers lk's gate has to
-    // hold constant. They stay in the doorbell/generation group, where mixed
-    // writers already live beside consumerParked/producerParked, and cross the
-    // seam through EventFlags() instead.
-    //
-    // It was free to regroup while both peers are the same binary; a wire break the day a second build exists,
-    // which is why it is booked now rather than later.
+    // The watermarks every wait predicate reads: on ShmLink an alias of the shared control page,
+    // on StreamLink process-local, stored by a reader thread from progress messages. Both keep
+    // the same rules: a watermark may arrive late, never early (Ring.h), compare with `>=`
+    // (Watermark::Reached), and a backwards move is Fatal (AdvanceMonotonic). It holds only
+    // consumer-written fields, so it is one RingControl member on its own line (ARCHITECTURE.md
+    // §11.2). The event flags stay out: the client clears eventRingFull on every drain, an RMW
+    // that would share the cache line the client's spin predicate reads for appliedSeq.
     struct LinkProgress {
         std::atomic<std::uint64_t> appliedSeq;            // records applied
         std::atomic<std::uint64_t> retiredSeq;            // GPU finished

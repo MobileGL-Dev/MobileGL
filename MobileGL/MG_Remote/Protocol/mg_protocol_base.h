@@ -6,32 +6,14 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// Shared vocabulary of the MG_Remote wire contracts (transport, framing, ring,
-// shm). Inherited from the earlier `Feat/CS-Delta-IPC` branch
-// (MobileGL/Protocol/mg_protocol_base.h) and cut down to what plan B's
-// transport actually needs: result codes, byte spans, a shm region reference
-// and the id typedefs.
-//
-// Deliberately NOT inherited: MobileGLObjectKind / MobileGLObjectScope /
-// MobileGLObjectHandle. Plan B does not put GL object identity on the wire at
-// all - the frontend allocates {slot, generation} handles in MG_Pipe
-// (PLAN-B.md section 4.2.1) and those are the only identity the backend ever
-// sees, so a second object-identity vocabulary here would be a drift surface
-// with no reader.
-//
-// This header must stay:
-//   - pure C (compilable from C and C++, no MG C++ types, no exceptions/RTTI),
-//   - dependency-free (only <stdbool.h>/<stddef.h>/<stdint.h>),
-//   - append-only within an ABI major (see versioning rules below).
-//
-// Versioning rules (contract-wide):
-//   - Every versioned struct starts with uint32_t structSize.
-//   - Appending fields at the tail is a MINOR bump; receivers must ignore
-//     bytes beyond the structSize they know.
-//   - Changing/removing/reordering existing fields is a MAJOR bump.
-//   - A major mismatch is a hard, structured failure, never an exception.
-// (Plan B keeps the structSize-first discipline as the answer to risk B-R10,
-// PLAN-B.md section 14.2.)
+// Shared vocabulary of the MG_Remote wire contracts (transport, framing, ring, shm): result
+// codes, byte spans, a shm region reference and id typedefs. No GL object identity lives here;
+// the wire's only object identity is MG_Pipe's {slot, gen} handle (ARCHITECTURE.md §2.1).
+// Keep this header pure C, dependent only on <stdbool.h>/<stddef.h>/<stdint.h>, and
+// append-only within an ABI major. Every versioned struct starts with uint32_t structSize.
+// Appending fields is a minor bump and receivers ignore bytes past the structSize they know;
+// changing, removing or reordering fields is a major bump, and a major mismatch is a hard,
+// structured failure.
 
 #ifndef MOBILEGL_REMOTE_PROTOCOL_BASE_H
 #define MOBILEGL_REMOTE_PROTOCOL_BASE_H
@@ -51,27 +33,13 @@ extern "C" {
 #define MOBILEGL_PROTOCOL_ABI_MAJOR 1
 #define MOBILEGL_PROTOCOL_ABI_MINOR 0
 
-// The CONTROL schema's revision (protocol.fbs), mixed into wireFingerprint. The fingerprint's
-// other inputs are struct sizes and codec digests of the DATA plane; nothing moved it when a
-// control message changed shape, so a peer built before a control-schema change agreed with one
-// built after it and the difference surfaced as whatever the first misread field did. Bump this
-// with every protocol.fbs change a peer must agree on.
-//
-// THE PIN. This is a hand-bumped integer, and the bump is the only thing that moves the
-// fingerprint - so a protocol.fbs edit that forgot it would put old and new peers back in
-// silent agreement. scripts/ci/protocol_revision_pin.py holds {revision -> sha256(protocol.fbs)}
-// (protocol_revision_pins.json) and refuses a schema whose digest is not the current revision's;
-// it runs as ProtocolSchema.RevisionPinsDigest (label unit) and in CI's flatc-check job. After a
-// bump: `python3 scripts/ci/protocol_revision_pin.py --write` records the new row.
-//   1  P7 wave 2-F, PH-7 (4): Welcome.dataNonce and the DataBind message.
-//   2  P7 (p7/spawnhang): the SurfaceProgress message.
-//   3  P12 (on-screen server window): WindowKind.ServerOwned, the SurfaceRefusal enum and
-//      SurfaceReply.width/height/refusal.
-//   4  P11 PAIR: the PairBind message - a socket client's control and aux connections pair by
-//      the nonce each presents first, not by arrival order.
-//   5  P11 B2: LinkTerms.adoptTier - the client's persistent-map adoption tier ask (T0 or T2).
-//   6  P14 S1 (docs/Disaggregated/design/11-state-ownership.md): SurfaceOpKind.CreateContext /
-//      DestroyContext, plus SurfaceOp.shareGroupToken and SurfaceOp.contextFlags.
+// The control schema's revision (protocol.fbs), mixed into wireFingerprint; the fingerprint's
+// other inputs cover only the data plane. Bump it with every protocol.fbs change a peer must
+// agree on, or old and new peers handshake and then misread a field.
+// scripts/ci/protocol_revision_pin.py pins each revision to sha256(protocol.fbs)
+// (protocol_revision_pins.json) and fails a schema whose digest is not the current revision's;
+// it runs as the ProtocolSchema.RevisionPinsDigest test and in CI's flatc-check job. After a
+// bump, record the new row with `python3 scripts/ci/protocol_revision_pin.py --write`.
 #define MOBILEGL_PROTOCOL_CONTROL_REVISION 6
 
 #define MOBILEGL_ABI_VERSION(major, minor) (((uint32_t)(major) << 16) | (uint32_t)(minor))

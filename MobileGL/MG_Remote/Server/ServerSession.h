@@ -6,38 +6,14 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// The server half of a session: the consumer side of the rings, the handshake reply, the caps
-// snapshot. Owner: package s1. Signatures by c0.
-//
-// The four segment sizes are already pinned by ProtocolSmokeTest.cpp:72 and are not up for
-// re-derivation here: SEG_CMD 8 MiB, SEG_STAGE 32 MiB, SEG_REPLY 8 MiB, SEG_EVENT 256 KiB.
-// MOBILEGL_IPC_RING_MB and MOBILEGL_IPC_STAGE_MB move the first two; the ring caps ONE record
-// at half its size (R-10). See SessionRings.h's header for why the ring inside SEG_CMD is 4 MiB
-// rather than 8 - the control page takes the head and the capacity must be a power of two -
-// and why that deviation from CONTRACT-P5 §5's arithmetic is in the safe direction.
-//
-// THE TWO DOORBELL ACCESSORS ARE ON THE CONCRETE CLASS, NOT ON ITransport
-// (InProcessTransport.h:64-68). P5 decides this now rather than letting P6 discover it: the
-// SESSION owns the pair and hands out references, so ITransport stays the dumb control-plane
-// interface its header says it is and SocketTransport does not have to grow two accessors it
-// has no natural home for. Discovering this in P6 would mean re-laying one package's call sites.
-//
-// WHO CREATES THE SEGMENTS: this side. Welcome announces all four SegmentRefs and Welcome is
-// server -> client, so the server allocates and the client attaches. "Client-owned" in
-// protocol.fbs's comments is about who WRITES a segment, not who allocates it.
-//
-// WHAT Accept() DOES, IN ORDER. The ABI assertion is FIRST, before a single record is decoded
-// and before any segment exists, because its whole purpose is to refuse to interpret the peer's
-// bytes at all:
-//   1. receive Hello;
-//   2. compare abiMajor/abiMinor and CapsAbiFingerprint() - Fatal{AbiMismatch} on a difference,
-//      never a downgrade;
-//   3. create and map the four segments, initialise both control pages, clear the reply pool;
-//   4. send Welcome with the four SegmentRefs;
-//   5. publish the first CapsSnapshot, IF a backend has been handed over (SetBackend). Without
-//      one the session is accepted and the snapshot is deferred with a loud line: the caps
-//      blob codecs are w1's and the server's private BackendObject is v1's, and a session that
-//      refused to exist until both landed would block every other package's bring-up.
+// The server half of a session: the consumer side of the rings, the doorbell pair (handed out
+// here, not by ITransport, which stays control-plane only), the handshake reply and the caps
+// snapshot. The server allocates the segments and the client attaches; "client-owned" in
+// protocol.fbs means who writes a segment. Accept, in order: receive Hello; authenticate the peer
+// and refuse any ABI, fingerprint or link-terms mismatch before any shared memory exists or any
+// record is decoded; create the segments; send Welcome; bind the stream data connection, if any;
+// install the segment resolver and the reverse-channel callbacks; publish the first CapsSnapshot
+// if SetBackend was called, else defer it with a warning.
 
 #pragma once
 #include "../Transport/ILink.h"
@@ -146,30 +122,14 @@ namespace MobileGL::MG_Remote::Server {
         // PublishCapsSnapshot yourself.
         void SetBackend(MG_Backend::BackendObject* backend);
 
-        // MGPCaps::CallMask's two halves. BOTH ARE MANDATORY AND NEITHER HAS A DEFAULT.
-        //
-        // The first version of this file derived a default for each. That was the phase's
-        // marquee defect committed from the server's side: the consumer default read
-        // MGPipeGetResourceOps(), a PROCESS-WIDE global (PipeApply.cpp), so under inproc the
-        // server answered with whatever the client half of the same process had registered,
-        // and under spawn it collapsed to P2's 0x7f. Either way CapsMirror::ServerConsumes
-        // then answers a client-side liveness gate with a guess: the client stops emitting
-        // five P4a families, CLEARS ITS DIRTY FLAGS ON ACCEPTANCE ANYWAY, and the lane goes
-        // green with the uploads lost - ID-39's 66 lost uploads, reflected. R-8's whole point
-        // is that a client-side gate may never be answered by a server-side fact; a
-        // server-side gate answered by a PROCESS-wide fact is the same defect one level down.
-        //
-        // So there is no derivation at all. An unset mask is a programming error and
-        // CallMask() is a named Fatal on one - loud at the first snapshot instead of silent
-        // for a phase. Flagging it in a report was not a mechanism; this is.
-        //
-        // BITS 0..8, THE MGPCapBit FEATURE BITS. What each one answers belongs to the package
-        // that owns the question (kCapTimerQuery to the query family, kCapResidentSubData to
-        // b1, and so on). `SetCapabilityBits(0)` is a legitimate and explicit answer - "this
-        // server offers no optional capability" - and is the right call while those packages
-        // land. kCapNeedsHostIndexBytes / kCapNeedsHostUboBytes / kCapViewportArray are RESERVED
-        // (P8-F; CONTRACT-P5 table 0 first held the two host-byte bits at 0): the first two are
-        // the only things that ask for an MGHostSpan, and 0 keeps every one of them off the wire.
+        // MGPCaps::CallMask's two halves; both are mandatory and neither has a default. The client
+        // decides from the consumer bits which record families to emit and still clears its dirty
+        // flags on acceptance, so a guessed mask (a process-wide registration, a fixed value) loses
+        // uploads silently; CallMask() is Fatal{UnsetCallMask} until both setters have run. This
+        // one takes the MGPCapBit feature bits, each answered by the subsystem that owns it;
+        // SetCapabilityBits(0) is an explicit "no optional capability". kCapViewportArray and the
+        // two host-byte bits (kCapNeedsHost*Bytes, the only thing that asks for an MGHostSpan) are
+        // reserved and stay 0.
         void SetCapabilityBits(Uint64 capBits);
 
         // BITS 32..47, THE CONSUMER MASK (R-8 / C-4): which MGPipe subsystems this server has
@@ -236,24 +196,13 @@ namespace MobileGL::MG_Remote::Server {
         Bool EventRingHasRoom() const;
         Transport::ITransport* Control_Plane();
 
-        // ---- PH-6 (ID-P7-2): THE REVERSE CHANNEL IS FORFEITED, NOT FATAL -------------------
-        //
-        // A run-ahead producer that finds SEG_EVENT full parks until the client drains room
-        // (CONTRACT-P5E §2.6). What a client that does not drain used to cost was two Fatals
-        // inside ReserveEventOrBlock - "waited 30000 ms", twice, and "a drained ring that still
-        // refuses a record it fits is a corrupt cursor set", which a peer that drains one slot at
-        // a time reaches in milliseconds. Both are the PEER's behaviour, not a defect of this
-        // process, so neither may abort it.
-        //
-        // What replaces them is a LATCH on this session. The first event that cannot be placed
-        // within MOBILEGL_IPC_EVENT_WAIT_MS raises it (ForfeitReverseChannel, which logs
-        // `ReverseChannelForfeit{<cause>}` once); that event and every later one is a counted
-        // drop (CountDrop on the shared page, ForfeitDrops() here) into scratch the producer may
-        // fill and forget; the apply loop's park predicate sees the latch and takes the ordinary
-        // stop path; ServerMain's control loop sees the apply thread gone and ends the session.
-        // The process exits 0 and the supervisor welcomes the next connection. The latch is
-        // set, read and reset on the apply thread's side of Accept/Close only, and read with
-        // acquire elsewhere (the control loop, tests).
+        // Reverse-channel forfeit: a client that does not drain SEG_EVENT is the peer's fault and
+        // must not abort this process. The first event that cannot be placed within
+        // MOBILEGL_IPC_EVENT_WAIT_MS raises this session's latch (ForfeitReverseChannel logs
+        // `ReverseChannelForfeit{<cause>}` once); that event and every later one is a counted drop
+        // into scratch; the apply loop sees the latch and stops, and ServerMain ends the session
+        // with status 0, not as a fault. The latch is written only on the apply thread (reset by
+        // Accept) and read with acquire elsewhere. See ARCHITECTURE.md §11.7.
         Bool ReverseChannelForfeited() const {
             return m_reverseChannelForfeit.load(std::memory_order_acquire);
         }

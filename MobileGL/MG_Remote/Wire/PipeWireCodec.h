@@ -6,37 +6,13 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// G3: the MGPipe record codec. Owner: package w1.
-//
-// This header is the CONTRACT (docs/archive/contracts/CONTRACT-P5.md) in C++ form; P5's c0 package wrote
-// it so the other seven could compile on day one against signatures that cannot then move
-// under them. Every body below is a named Fatal until w1 lands the real one.
-//
-// WHAT THIS LAYER IS, AND WHAT IT IS NOT
-//
-// It turns one MGPipe call into bytes in SEG_CMD (+ SEG_STAGE), and bytes back into ONE CALL
-// OF AN EXISTING MGPipeApply* FREE FUNCTION. It owns NO semantics: MG_Pipe/PipeApply.cpp is
-// not edited by this package, and a decoder arm that "handles" a record itself rather than
-// delegating is a review failure (R-4's rule, one level down).
-//
-// THE FIVE HONESTY RULES (R-2), because they are what make `inproc` worth running at all.
-// In the same address space every shortcut works: MGHostSpan::Ptr dereferences, a blobref
-// whose Offset is a host address resolves, and MGPipeApplyMapPersistent's return value is a
-// usable pointer. So the codec is held to the SPAWN rules even when it does not need to be:
-//   1. encoder writes MGHostSpan::Ptr == nullptr and points Seg/Offset at SEG_STAGE;
-//   2. encoder fills a real Seg, a real in-segment Offset and a NON-ZERO Size for every
-//      MGPBlobRef that carries content;
-//   3. decoder Fatal{ProtocolCorruption} on: Ptr != nullptr; a content record with
-//      Blob.Size == 0; Size != 0 with Seg == kSegNone; Offset + Size past the segment;
-//   4. MGPipeApplyMapPersistent returns nullptr under split (R-6; b1's half);
-//   5. with MOBILEGL_IPC_AUDIT=1 the server fills a retired record's SEG_STAGE bytes with
-//      0xDD, so an implementation that kept a pointer past apply reads 0xDD next frame.
-//
-// SEQ. The record ordinal IS the sequence number and IS the reply-slot id (R-3): there is no
-// per-record seq field on the wire (ARCHITECTURE.md §4) and no second id space. Seq is
-// 1-based so that 0 can mean "nothing encoded". A kRecPad wrap filler DOES NOT ADVANCE SEQ -
-// both sides must skip it before counting, or every ring wrap offsets the two sides'
-// numbering permanently and nothing checksums it (R-9, Ring.h's header).
+// The MGPipe record codec: one MGPipe call becomes a record in SEG_CMD (its blob bytes in
+// SEG_STAGE), and a decoded record becomes one call of an existing MGPipeApply* function. The
+// codec owns no semantics; a decoder arm must delegate, never handle a record itself. It follows
+// the cross-process rules even in one address space (ARCHITECTURE.md §4.2).
+// Seq is the record ordinal, 1-based (0 = nothing encoded), and also addresses the record's
+// reply; there is no seq field on the wire. A kRecPad wrap filler does not advance seq: both
+// sides skip it before counting, or their numbering drifts apart at every wrap, undetected.
 
 #pragma once
 #include <Includes.h>
@@ -136,26 +112,14 @@ namespace MobileGL::MG_Remote::Wire {
     Bool WireProtocolLatch(const char* what, const char* detail);
     Bool WireProtocolLatchAt(const char* what, Uint64 got, Uint64 expected);
 
-    // R-2.3 arms 1-4 over one record's blobref. Split only; a monolith emission is exempt by
-    // construction because it never reaches this layer.
-    //
-    // ARMS 3 AND 4 ONLY, PLUS ONE THIS FUNCTION HAD TO INVENT. A blobref is honest when it is
-    // EITHER fully declared - a real Seg, a non-zero Size and an Offset+Size inside that
-    // segment - OR fully absent, which is all three fields zero. The third shape, a Seg or an
-    // Offset with Size == 0, is neither, and it is the shape a monolith emitter produces
-    // today (Seg = None, Offset = a host address, Size = 0), so under split it has to be
-    // Fatal rather than "absent": a decoder that read it as absent would silently drop the
-    // bytes of every record an unconverted emitter sent.
-    //
-    // ARM 2 - "Blob.Size == 0 on a CONTENT record" - is NOT here and cannot be: whether a
-    // record carries content is a property of the record's OTHER fields (ChunkMask, the
-    // destination range, GlobalUboSize, the stage mask), which this signature does not see.
-    // RequireDeclaredBlob below is arm 2, and the decoder's per-op arm calls it exactly where
-    // the payload says content is implied.
-    //
-    // PH-1 (3): EVERY HONESTY ARM NOW ANSWERS. `true` = honest; `false` = a named fault latched
-    // (armed session child only - unarmed, the arm dies exactly as before and never returns
-    // false). A decode-path caller returns on false; an encoder-side caller may discard it.
+    // Checks one record's blobref (split only; monolith emissions never reach this layer).
+    // Honest is fully declared (real Seg, non-zero Size, Offset+Size inside the segment) or fully
+    // absent (all zero). A Seg or Offset with Size == 0 is the monolith emitter's shape and is
+    // rejected, since reading it as absent would drop the record's bytes (ARCHITECTURE.md §4.2).
+    // "A content record needs a declared blob" depends on the payload's other fields, so that is
+    // RequireDeclaredBlob, called by the decoder where the payload implies content.
+    // Returns true when honest; false when a fault was latched (armed session child only;
+    // elsewhere the check does not return). Decode-path callers return on false.
     Bool CheckBlobIsHonest(MG_Pipe::MGPWireOp op, const MG_Pipe::MGPBlobRef& blob,
                            const SegmentTable& segments);
     // R-2.3 arm 2: the record's other fields say it carries content, so the blob must be
@@ -185,29 +149,14 @@ namespace MobileGL::MG_Remote::Wire {
                               const MG_Pipe::MGPDrawRange* ranges,
                               const MG_Pipe::MGHostSpan& span);
 
-    // ---- one record's shape, computed ONCE and read by both sides ----------------------
-    //
-    // THE TAIL CROSS-CHECK LIVES HERE AND NOWHERE ELSE (BRIEF §5 w1, contract table 1 group
-    // B). MGP_WIRE_CHECK_BOUNDS only proves `size >= sizeof(MGPWireRec_X)` - IT CANNOT SEE
-    // THE TAIL - so a record declaring Count = 4000 while carrying 8 bytes passes it. The
-    // encoder computes this layout from the payload it is about to write and REFUSES a caller
-    // whose tails disagree; the decoder computes the same layout from the payload it just
-    // received and REFUSES a record whose MGPWireRecHeader::Size disagrees. Two readers, one
-    // arithmetic, so the two sides cannot drift.
-    //
-    // EVERY TAIL STARTS 8-BYTE ALIGNED WITHIN THE RECORD, and the encoder zero-fills the gap.
-    // Eight of the nine kVarTail rows are already aligned by construction (their payload and
-    // element sizes are multiples of 8); DrawVbo is not - MGPDrawRange is TWELVE bytes, so an
-    // odd NumDraws leaves the conditional MGHostSpan on a 4-byte boundary, and MGHostSpan
-    // holds a pointer and two Uint64s. P5 emits no host span at all, so this rule costs
-    // nothing now and is stated now because the phase that arms kDrawHasUserIndices would
-    // otherwise have to discover it as a misaligned load on a device.
-    // THREE TAILS AND NOT TWO SINCE P5e. set_program_bindings (opcode 80,
-    // docs/archive/contracts/CONTRACT-P5E.md §1) carries the uniform-block bindings, the sampler units and
-    // the storage-override map as three arrays in three different index spaces, so the array
-    // that used to be exactly "the two-tail rows plus draw_vbo's conditional second" grew by
-    // one. Every loop over TailCount below already reads the count rather than the literal 2;
-    // what changed is the storage and the assembly.
+    // ---- one record's shape, computed once and read by both sides ----------------------
+    // MGP_WIRE_CHECK_BOUNDS only proves the payload fits, not the tails: a record declaring
+    // Count = 4000 with 8 tail bytes passes it. The encoder computes this layout from the payload
+    // and refuses tails that disagree; the decoder computes it from the received payload and
+    // refuses a record whose header Size disagrees. Every tail starts 8-byte aligned within the
+    // record (the encoder zero-fills the gap): MGPDrawRange is 12 bytes, so DrawVbo's second
+    // tail, an MGHostSpan, could otherwise land on a 4-byte boundary. set_program_bindings uses
+    // three tails, hence kMaxWireRecordTails.
     inline constexpr Uint32 kMaxWireRecordTails = 3;
 
     struct WireRecordLayout {
@@ -294,26 +243,13 @@ namespace MobileGL::MG_Remote::Wire {
         // row answers both ways (set_texture_params waits for an unconfirmed object and does not
         // for a confirmed one).
 
-        // Releases every SEG_STAGE run named by a record the apply side has RETIRED
-        // (RingControl::retiredSeq, R-9, which this class only ever READS). Called from
-        // Publish() and whenever StageBytes runs short, so nothing outside this package has to
-        // remember to; the allocator reclaims behind retiredSeq and nothing else may
-        // (table 1's "retires" column, R-11).
-        //
-        // THE MARK IS HELD ON THIS SIDE, NOT ON THE WIRE. A record does not carry where its
-        // staged bytes end, so the encoder remembers {seq, stage cursor} per record and
-        // reclaims to the newest mark whose seq the server has retired. That is exact, needs
-        // no wire field, and does not depend on the verb barrier - so it keeps working when
-        // R-1's barrier retires family by family.
-        //
-        // SEG_STAGE'S CURSOR TRIPLE IN RingControl IS NOT USED BY EITHER SIDE IN P5, and this
-        // is the reason. Ring.h makes stageAppliedTail / stageRetiredTail CONSUMER-owned, the
-        // server never Pops the stage ring (the decoder resolves by offset), and a producer
-        // that wrote those cursors would be the very shape R-9 forbids one segment over. So
-        // the allocator below is entirely encoder-local and the triple is left at its
-        // InitRingControl values. **s1 must not attach a RingConsumer to
-        // RingCursorSet::Stage**: its m_localTail would never move, and PublishApplied /
-        // PublishRetired would then walk both cursors BACKWARDS under this allocator.
+        // Releases every SEG_STAGE run named by a record the apply side has retired
+        // (RingControl::retiredSeq, only read here). Called from Publish() and when StageBytes
+        // runs short; nothing else reclaims stage bytes. The encoder keeps a {seq, stage cursor}
+        // mark per record and reclaims to the newest retired mark, so no wire field is needed.
+        // RingControl's stage cursor triple is unused by both sides: never attach a RingConsumer
+        // to RingCursorSet::Stage. Its local tail would never move, so PublishApplied /
+        // PublishRetired would walk both cursors backwards under this allocator.
         void ReclaimStagedBytes();
         // Staged bytes not yet reclaimed. The number MOBILEGL_IPC_STAGE_MB has to cover.
         Uint64 StagedBytesInFlight() const;
@@ -350,27 +286,13 @@ namespace MobileGL::MG_Remote::Wire {
         // 0 when this encoder has no command ring (a default-constructed one).
         Uint64 MaxRecordBytesCap() const;
 
-        // ---- R-9's producer readings, and why they are three rather than one ---------------
-        //
-        // `CmdWraps()` counts SEG_CMD going ROUND: the number of times the producer's monotonic
-        // head crossed a multiple of the ring capacity and the byte area was reused from the
-        // start. It is what exit gate E3(e)'s small-ring lane asserts, because it is the one
-        // that is GUARANTEED once a workload writes more bytes than the ring holds, and
-        // therefore the one a lane can be red for not reaching.
-        //
-        // `CmdWrapPads()` counts the kRecPad fillers Reserve lays when a record would have
-        // STRADDLED that boundary. R-9's last clause - "a pad record does not advance seq, both
-        // sides must skip it and count again" - is about this one, and it is RECORDED rather
-        // than asserted: measured, a stream of clears and draws repeats at a stride that
-        // divides a power-of-two capacity exactly, so 1310824 bytes through a 1 MiB SEG_CMD
-        // produced one and a half trips round the ring and ZERO pads. A gate written against
-        // this number would have been red for the arithmetic of the record catalogue rather
-        // than for anything about the ring.
-        //
-        // `StageReclaimWaits()` counts allocations blocked on an outstanding retiredSeq
-        // after immediate reclamation still left insufficient space. Reclaiming bytes
-        // the consumer had already retired does not increment it. One allocation counts
-        // once even if it waits for several marks; this is staging, not command-ring pressure.
+        // ---- the producer's ring and staging counters --------------------------------------
+        // CmdWraps(): times the SEG_CMD head crossed a multiple of the ring capacity. Guaranteed
+        // once a workload writes more than the ring holds, so a test may assert it.
+        // CmdWrapPads(): kRecPad fillers laid when a record would straddle that boundary. Recorded,
+        // not asserted: a record stream whose stride divides the capacity wraps with zero pads.
+        // StageReclaimWaits(): allocations that had to wait for retiredSeq after reclaiming what
+        // was already retired; one per allocation, however many marks it waited for.
         Uint64 CmdWraps() const;
         Uint64 CmdWrapPads() const;
         Uint64 StageReclaimWaits() const;

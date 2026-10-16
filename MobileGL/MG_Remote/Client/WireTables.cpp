@@ -6,27 +6,14 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// The ENCODE TWIN of gMGPipeWireRecordApply: thirty-eight emitters that turn a table call into
-// a wire record. Owner: package c1 (P5 ruling R-17). See WireTables.h for the install order
-// and MG_Pipe/PipeRoute.h for what R-17 actually cost.
-//
-// EVERY EMITTER IS THE SAME FOUR STEPS, and the macros below exist so that a reader can check
-// thirty-eight rows against PipeTables.inc in one pass instead of reading thirty-eight bodies:
-//
-//     1. require a session - a slot that fell through to a driver this role does not have is
-//        the failure R-4 exists to prevent, and there is no fall-through here either;
-//     2. stage the blob, if the row has one, and name the SEG_STAGE run in the payload's own
-//        MGPBlobRef - which is why the payload is COPIED: the table hands it over const, and
-//        the blobref is the one field the client must write after the caller is done with it;
-//     3. EmitAndWait, which is the barrier's wait and the reply's wait at once (R-3/R-5);
-//     4. post the answer, for the rows that have one, into MG_Pipe's reply mailbox.
-//
-// WHAT IS DELIBERATELY NOT HERE. b1's `PushPersistentMapsBeforeVerb` / `MarkGpuWritesFor*` are
-// NOT called from these thirty-eight. They are pre-VERB hooks and these are not verbs: they
-// are the resource, CSO and state records that a verb is later drawn against. The five class-B
-// verbs in EmitTables.cpp call them, once each, immediately before their record, which is the
-// ordering b1's B-1 fix depends on. Calling them here as well would push a persistent map
-// before every `set_dynamic_state` - hundreds of times a frame, and each one a real record.
+// The encode twin of gMGPipeWireRecordApply: the emitters that turn a routed MGPipe table call
+// into a wire record (install order: WireTables.h). On the server role's own thread an emitter
+// runs the server's code directly; otherwise it requires a session, stages its blob (the payload
+// is copied because its MGPBlobRef must name the SEG_STAGE run), emits through EmitAndWait and
+// posts any answer into MG_Pipe's reply mailbox. The macros keep the regular rows checkable
+// against PipeTables.inc at a glance. These are state and object records, not verbs, so they
+// never call PushPersistentMapsBeforeVerb / MarkGpuWritesFor*: those are pre-verb hooks
+// (MG_Impl/Pipe/Verb/VerbPort.cpp) and must not run before every set_dynamic_state.
 
 #include "WireTables.h"
 #include <MG_Remote/FatalFunnel.h>
@@ -68,34 +55,12 @@ namespace MobileGL::MG_Remote::Client {
 
     using MG_Pipe::MGPWireOp;
 
-    // TABLE 3's ROLE SPLIT, AS A RUNTIME CHECK. gMGPipeScreen / gMGPipeContext are PROCESS
-    // globals and under `inproc` the server role is a thread in this same process, so the
-    // apply thread running the server's own backend - the EGL bring-up, InitCapabilities,
-    // the applier - reaches these very emitters. A record published there would be waited
-    // for by the thread that is supposed to apply it: `Fatal{BarrierTimeout,
-    // "ResourceRespecify"}` from `mgl-srv-apply` one barrier budget into bring-up, which is
-    // exactly how this was found.
-    //
-    // THE ANSWER IS NOT "SUPPRESS THE RECORD" - it is "run the server's own code", because
-    // on that thread this process IS the server and the applier is one call away. It is
-    // the same thing PipeWireCodec does on the decode side, where every arm calls
-    // MGPipeApply* directly and never goes through a table.
-    //
-    // Under `spawn` (P6) the predicate is constantly false in the client process and
-    // constantly true in the server's, so this costs one atomic load and changes nothing.
-    //
-    // NOT in the anonymous namespace, because M5 needs it from MG_Impl/Pipe/PipeFill.cpp too
-    // (its split-only respecify/flush branches must not run on the apply thread). Declared in
-    // WireTables.h.
-    //
-    // AND IT STAYS OUT OF LINE (P5d round 3, package D). OnApplyThread() became an inline
-    // relaxed load plus a thread-pointer compare in ServerLoop.h, so the body this forwards to
-    // is now smaller than the call that reaches it - but inlining THIS would mean including a
-    // server header from WireTables.h, and the declaration above exists precisely so PipeFill
-    // does not have to. One PLT hop per verb is the price of that boundary; the four-part
-    // predicate behind it, which was the measured cost (2.66% self on the client thread at
-    // head 56a77348), is gone either way. The "one atomic load" the paragraph above promised
-    // is now literally what it costs.
+    // True on the server role's own apply thread. Under inproc the server's backend bring-up and
+    // applier run in this process and reach these emitters; a record published there would wait
+    // for the very thread meant to apply it (Fatal{BarrierTimeout} during bring-up). So on that
+    // thread an emitter runs the server's code directly, as the decoder does. Under spawn the
+    // answer is constant per process. Declared in WireTables.h because PipeFill.cpp and
+    // EGLImpl.cpp need it too; kept out of line so that header includes no server header.
     Bool RunsAsTheServerRole() { return Server::ServerLoop::OnApplyThread(); }
 
     namespace {
@@ -322,102 +287,21 @@ namespace MobileGL::MG_Remote::Client {
         // "always accept" is ID-39's 66 lost DirectVulkan uploads and "accept if we emitted" is
         // the same bug wearing a counter.
 
-        // ---- P12: the CREATE WINDOW, AND WHY IT IS OFF ----------------------------------------
-        //
-        // THE IDEA. The create row is the last per-record round trip on the load path (4,536 of one
-        // frame's 4,543 reply waits) and the one row whose answer is not optional: PublishCreate
-        // latches "the applier holds this handle" on it, and that latch is what every converted row
-        // reads. So this row would not STOP reading its answer - it would DEFER it. Up to
-        // MOBILEGL_IPC_CREATE_WINDOW creates go out fire-and-forget, the caller reads a provisional
-        // accept (so the latch is taken), and the answers are collected IN ORDER: the oldest blocks
-        // when the window is full, and one that comes back DECLINED un-latches its object
-        // (MGPipeNoteHandleUnpublished), which sends every later row for that object back down the
-        // blocking path.
-        //
-        // IT DOES NOT WORK, AND NOT FOR A REASON THAT TUNING REACHES. MEASURED on the device (the
-        // same frame, the same binary, the same 101,421,396 B staged, axe aikjs4s8cys8ba7l):
-        //
-        //     MOBILEGL_IPC_CREATE_WINDOW=4   by_op 2 = 4,536   wall 28.64 s
-        //     MOBILEGL_IPC_CREATE_WINDOW=1   by_op 2 = 4,536   wall 28.64 s
-        //     (the handoff's own pre-window baseline was 31.3 s on this device)
-        //
-        // by_op 2 counts the creates that took the BLOCKING path, and it did not move, so no create
-        // deferred. A temporary counter in the row said why: pushed=24, blocked=4,476, took=20,
-        // readfail=8,951, pending pinned at 4. The drain READ the window's answers back and failed
-        // every time.
-        //
-        // ---- AND THE DIAGNOSIS BELOW WAS HALF WRONG; READ THIS FIRST ----------------------
-        //
-        // The arithmetic that follows is real and the no-reply bit it motivated WORKS (measured:
-        // the server skipped 50,001 answers and wrote 4,521, cutting a frame's replies by 92%).
-        // IT DID NOT FIX THE WINDOW: the drain still read back nothing (readfail 8,951 -> 8,872,
-        // -0.9%). The binding constraint is not how fast the bounded buffer is overwritten but
-        // that the drain is STRICTLY FIFO AND HAS NO WAY OUT OF A FAILED READ: it retries the
-        // same head for ever. Measured on the device (P12miss): `want=310` on every miss while
-        // `replySeq` climbed from 1,504 to 102,915 - one answer lost to a bounded buffer wedges
-        // the window permanently, and with 4,536 deferred answers that is a certainty rather
-        // than a risk. docs/archive/notes/p12/CREATE-WINDOW-MEASURED.md section 8 has the numbers and the
-        // shape of the fix (abandon the head: un-latch the object, add it to the suspect list,
-        // and pop - the DECLINE path reused for "unknown").
-        //
-        // WHY, IN THE PROTOCOL'S OWN ARITHMETIC. An answer is readable only until its reply-pool
-        // slot is reused, and the pool is kDefaultReplySlotCount = 8 slots deep. The frame posts a
-        // reply for EVERY reply-owning record - not only for the rows that wait, because the server
-        // cannot know which those are (ClientSession.cpp:1897-1900: "The server posts either way")
-        // - and that is 55,903 replies in this one frame (op 4 ResourceDestroy is NOT counted: its
-        // catalogue flags are kNone, so PostReply would Fatal on it and it never answers):
-        //
-        //     create 4,536 + respecify 20,633 + params 18,056 + sub-data 12,671 + 3,770 + 6 + 1
-        //
-        // 8 slots against 55,903 replies is a pool that churns 6,988 times per frame, i.e. 12.3
-        // replies between two creates: an answer posted at create N is overwritten after EIGHT
-        // replies, which is 0.65 of a create. There is no window depth for which the deferred
-        // answer still exists when the client comes back for it - the deferral is not slow, it is
-        // UNREADABLE. (A 1-deep "window" is the blocking path, which is what the row does.)
-        //
-        // AND THE FAILURE IS NOT NEUTRAL: with the window on, the provisional accept latches an
-        // object the applier may have refused, and the un-latch that would correct it lives in the
-        // drain - the same drain that cannot read. A refusal therefore becomes an object the client
-        // believes is published, which is exactly the silent divergence the suspect list exists to
-        // prevent. So the default is 1: the row is the pre-window shape unless someone sets
-        // MOBILEGL_IPC_CREATE_WINDOW explicitly, and the machinery below is kept as the record of
-        // what was tried and what it cost (a fix would have to make a deferred answer outlive
-        // 12.3 intervening replies, which means a deeper pool, or NOT sending the ~51,000 answers
-        // nobody will read - and that second one needs its predicate stated exactly, because
-        // "fire-and-forget" is the WRONG one: the window's own creates are fire-and-forget and
-        // the drain above reads them, so a bit keyed on wantReply disables the mechanism it is
-        // meant to enable. The bit has to mean "this answer will never be read" - which is true
-        // of respecify/params/sub-data and false of a windowed create. See
-        // docs/archive/notes/p12/CREATE-WINDOW-MEASURED.md section 7, reviewed).
-        //
-        // The gates that pin it are in MG_Test/Wire/RemoteClientControls.inc, and they still hold:
-        // the window is a coherent mechanism, it is simply unusable on a frame with this much
-        // other reply traffic.
-        // (THE NARRATIVE ABOVE PREDATES RETENTION and ends at "the default is 1". It is kept as
-        // the record of what was tried; what made the window work is the declared-answer store,
-        // and the default is now 10 - docs/Performance/ipc-create-window.md carries the device numbers.)
+        // ---- the create window (MOBILEGL_IPC_CREATE_WINDOW) ------------------------------------
+        // resource_create's answer cannot be dropped: an accepted create latches "the applier
+        // holds this handle" (PublishCreate), and every converted row reads that latch. The window
+        // defers the answer instead: up to that many creates (at most kCreateWindowMax) go out
+        // without waiting, the caller reads a provisional accept, and answers are collected in
+        // order; a declined one un-latches its object (MGPipeNoteHandleUnpublished) and marks it
+        // suspect, so its later creates block. It runs only on a link that keeps declared answers
+        // until read (ILink::RetainsReplies). Measurements: docs/Performance/ipc-create-window.md.
         constexpr Uint32 kCreateWindowMax = 12;
-        // THE POOL ARGUMENT THAT USED TO PIN THIS AT 4 IS GONE, AND WHY IT IS GONE IS THE ONE
-        // THING TO RE-CHECK BEFORE RAISING IT AGAIN. It read: the pool is kDefaultReplySlotCount
-        // slots addressed seq % count, so an answer is readable only while its slot has not been
-        // reused, and a window owning half of them would starve the rows that take their answers
-        // immediately - the change the handoff named as the one worth pinning, "someone raises
-        // kCreateWindowMax to 8 and steps on the pool". That is true of a link whose answers live
-        // in a SLOT POOL, and the window does not run on one: CreateWindowEffective() is gated on
-        // ILink::RetainsReplies, which is false for ShmLink, so on the pool-addressed transport
-        // the window is 1 and holds nothing. On the link where it does run - StreamLink - an
-        // answer is kept in the declared-answer store until its reader takes it, so depth costs
-        // STORE ENTRIES, not pool slots.
-        //
-        // SO THE SAME RULE IS RE-DERIVED AGAINST THE RIGHT OBJECT: at most half of StreamLink's
-        // kRetainedCap = 24, the other half being the one blocking row in flight and whatever a
-        // retired window has stranded. The store's overflow is a named Fatal and never an
-        // eviction, so exceeding this costs a run rather than a wrong picture - and the store
-        // logs its own peak as it crosses, which is what a future raise must be argued from.
-        //
-        // MEASURED, device load frame, three interleaved runs per arm: the curve had NOT flattened
-        // at the old cap (1->2 saved 10.29 s, 2->3 3.74 s, 3->4 1.83 s), which is why this
-        // constant moved at all.
+        // kCreateWindowMax is at most half of StreamLink's declared-answer store
+        // (kRetainedAnswersMax): the other half is for the one blocking row in flight and for
+        // answers a retired window left behind. The window never runs on the slot-pool link
+        // (ShmLink retains no replies), so depth costs store entries, not reply slots. Store
+        // overflow is a named Fatal, never an eviction, and the store logs its peak: argue any
+        // raise from that peak (docs/Performance/ipc-create-window.md).
         static_assert(kCreateWindowMax <= Transport::StreamLink::kRetainedAnswersMax / 2,
                       "the create window may hold at most half of StreamLink's declared-answer "
                       "store: the other half belongs to the one blocking row in flight and to "
@@ -609,28 +493,10 @@ namespace MobileGL::MG_Remote::Client {
             if (status == 1) ++g_declined;
             if (status == 0) ClearCreateSuspect(payload->Resource);
         }
-        // ---- P12: WHY THERE IS NO RESIDENCY BUDGET HERE ANY MORE -------------------------------
-        //
-        // There was one, and it was measured: it counted the reply-owning records this client had
-        // emitted since the oldest window entry was pushed and took that entry back when the count
-        // approached the reply buffer's depth. On the device it fired on essentially EVERY create
-        // (budget=4,451 of 4,501 calls) and the drain still read nothing back (taken=63,
-        // readfail=8,872, by_op 2 = 9,071, wall 27.9 s). The clock was wrong, structurally:
-        //
-        //   * the window only gets control WHEN A CREATE ARRIVES, and between two creates this
-        //     client emits on the order of a thousand records - at the FIRST failed read the reply
-        //     ring already spanned [1175..1504] while the head was seq 310;
-        //   * what displaces a deferred answer is not what this client emits, it is WHAT THE
-        //     SERVER ANSWERS, and the server is behind: its late answers to the earlier creates
-        //     are what fills a bounded buffer first;
-        //   * so the check fired too late by construction. Tightening it only removed the
-        //     deferral entirely, which is what pushed=65 was.
-        //
-        // Retention replaced it, and retention is where the bound now lives: a link that declares
-        // RetainsReplies keeps an answer until its reader takes it (StreamLink's declared-answer
-        // store, whose capacity is tied to the window's own depth), and the window does not defer
-        // at all on a link that does not. That removes the only thing the budget was for.
-        // ReplyPostings() stays as a measurement.
+        // The window keeps no client-side residency budget. On a link that reuses reply slots,
+        // what displaces a deferred answer is the server's reply traffic, not this client's
+        // emissions, so a budget counted here fires too late. The window defers only where the
+        // link retains answers, and the store bounds it (docs/Performance/ipc-create-window.md).
         void Wire_ResourceCreate(const MG_Pipe::MGPResourceDesc* payload, MG_Pipe::MGPReplySlot* reply) {
             if (RunsAsTheServerRole()) { MG_Pipe::MGPipeMonolithScreen().ResourceCreate(payload, reply); return; }
             ClientSession& session = RequireSession("ResourceCreate");
@@ -732,27 +598,12 @@ namespace MobileGL::MG_Remote::Client {
             ++g_emitted;
         }
 
-        // A PARAMETER CHANGE FOR AN OBJECT WHOSE EXISTENCE IS CONFIRMED OWES NO ANSWER (P12).
-        //
-        // The acceptance this row used to wait for says one thing: "the applier holds a record for
-        // this handle". That is a fact about the SERVER's table, and the client already keeps its
-        // own copy of exactly that fact - MGPipeHandleIsPublished, set when the object's create was
-        // ACCEPTED and never cleared while the record lives (the applier keeps texture records
-        // across a make-current: MGPipeApplierReset clears only MGPipeWorkingState). So the wait
-        // is asking the server a question the client has already answered.
-        //
-        // WHAT REPLACES IT, on the device run's numbers: this row paid 18,056 of one frame's
-        // 43,232 round trips at ~5 ms each, for records carrying a few hundred bytes. The object's
-        // ONE confirmation is its create, paid at its first use (the emitter sends it proactively
-        // when the latch is clear - EmitTextureParams' HealUnpublishedRecord); every parameter
-        // record after that is emitted fire-and-forget and the caller reads a PROVISIONAL accept,
-        // exactly as resource_subdata has done since item B.
-        //
-        // AND WHEN THE LATCH IS CLEAR THIS ROW STILL WAITS, which is the whole fallback: an object
-        // whose create was refused stays unpublished, so its next parameter record takes the real
-        // answer and the emitter's existing one-retry heal runs. A refusal can only reach here
-        // for an object the client thinks it never published, or for a bug - the two cases that
-        // were already the only ones the per-record wait could name.
+        // set_texture_params owes no answer once the texture is published. MGPipeHandleIsPublished
+        // is the client's copy of "the applier holds this handle": set when the create is accepted
+        // and kept while the record lives (MGPipeApplierReset keeps texture records). A published
+        // texture's record goes fire-and-forget with a provisional accept. An unpublished one still
+        // waits, so a refusal reaches the caller as a refusal. EmitTextureParams pays the
+        // confirming create at the texture's first use (HealUnpublishedRecord).
         void Wire_SetTextureParams(const MG_Pipe::MGPTextureParams* payload, MG_Pipe::MGPReplySlot* reply) {
             if (RunsAsTheServerRole()) { MG_Pipe::MGPipeMonolithContext().SetTextureParams(payload, reply); return; }
             ClientSession& session = RequireSession("SetTextureParams");
@@ -878,22 +729,12 @@ namespace MobileGL::MG_Remote::Client {
             } else {
                 MG_Pipe::MGPipeClearRespecifiedLevel(record);
             }
-            // P12: WHETHER THIS RECORD OWES AN ANSWER IS ONE PREDICATE, and it lives beside the
-            // route (PipeRoute.h, MGPipeResourceRespecifyWantsItsReply) so the emitter and the wire
-            // cannot disagree about it. The two halves are argued there; the short version is that the
-            // buffer half's Bool is discarded at both call sites, and the texture half's is owed
-            // until the object's create has been accepted - the confirmation it pays at first use.
-            //
-            // WHAT A PROVISIONAL ACCEPT DOES TO THE TEXTURE HALF, stated here because it is a
-            // deliberate trade rather than an oversight: the emitter's acceptance mirror
-            // (entry.LastDesc) now advances on an answer nobody waited for. ID-18 M3
-            // (TextureEmit.h:885-888) forbids exactly that for a record whose verdict is UNKNOWN -
-            // "the next identical call is suppressed against a record that was never stored" - and
-            // what makes it safe here is that the object is PUBLISHED: the client is not guessing,
-            // it is reading a latch the server set by accepting this handle's create. The residue
-            // is the one case where the server loses a record it had, which today has no production
-            // path (PipeApply.cpp:1593's only callers are tests), and whose guard is the
-            // invalidation notice the route's notes call ①.
+            // Whether this record waits is MGPipeResourceRespecifyWantsItsReply, shared with the
+            // route (ARCHITECTURE.md §13.1.1). On the texture half a provisional accept advances
+            // the emitter's acceptance mirror (entry.LastDesc, TextureEmit.h) without a verdict.
+            // That is safe only because the texture is published: the server accepted its create
+            // and keeps its record. The one exception, the server dropping a live record
+            // (MGPipeApplierReleaseObjectRecords), has no production caller.
             const Bool wantsReply = MG_Pipe::MGPipeResourceRespecifyWantsItsReply(record);
             Int32 status = Wire::ReplySink::kStatusError;
             if (!wantsReply) {
@@ -1284,46 +1125,14 @@ namespace MobileGL::MG_Remote::Client {
     void InstallClientWireTables() {
         using namespace MG_Pipe;
 
-        // DirectGLES normally installs this notice while creating its handle
-        // backend. An independent client never creates that backend: without a
-        // client emitter, NotifyAndFree silently drops object_death before
-        // freeing the slot. Keep inproc's existing backend dispatcher, and give
-        // the remote client the same wire delivery without a local twin table.
-        //
-        // P7 PACKAGE L: THE BACKEND TEST IS GONE, AND ITS ABSENCE IS THE POINT. P6.5 wrote
-        // `ActiveBackendType == DirectGLES` because DirectGLES was the only backend with a
-        // two-process lane, so the condition read as "the case this can happen in" rather than
-        // as a policy. Under a Magma spawn or tcp client it is a silent hole of exactly the
-        // shape P6.5 closed for Espryt: CtWireScenario's two death cases would report
-        // ObjectDeaths=0 and PASS NOTHING, because no notice was ever installed and
-        // NotifyAndFree would drop every object_death before freeing the slot - a green that
-        // means "the mechanism is absent". MEASURED on this tree: with the install site
-        // disabled, both DirectGLES spawn death cases red on CtWireScenario.cpp:187/:246 with
-        // `Expected: (afterCounters.deaths) > (deathsBefore), actual: 0 vs 0`.
-        //
-        // THE REMAINING TWO CONDITIONS STILL CARRY P6.5's INTENT, both halves of it:
-        //   * Transport == Spawn: this is the REMOTE client, the one with no local twin table.
-        //     Under inproc the server role is a thread in this process and its backend's own
-        //     dispatcher is the right one.
-        //   * GetStateObjectDeathOps() == nullptr: whoever installed first keeps the notice.
-        //     That is what "keep inproc's existing backend dispatcher" meant, and it is also
-        //     what keeps this from stomping a backend that installs ops of its own later.
-        //
-        // MAGMA NOW HAS A DEATH TABLE OF ITS OWN (P7 wave 2 package C, CONTRACT-P7 §5.5:
-        // DirectVulkan.cpp's g_magmaStateObjectDeathOps), and the two installs do NOT race,
-        // which is worth stating because the global is a bare last-writer-wins pointer with
-        // no stacking. They cannot meet: Magma's is installed from
-        // BackendObject_DirectVulkan::Initialize(), i.e. only in a process that OWNS a
-        // DirectVulkan backend, and the arm here runs only under `Transport == Spawn`, which
-        // is by construction the process that owns NO backend at all (InitSplitRoles builds a
-        // BackendObject_Remote there). So the spawn client keeps this emitter, the inproc and
-        // server-side roles keep Magma's, and `GetStateObjectDeathOps() == nullptr` below
-        // keeps meaning what P6.5 meant by it.
-        //
-        // MEASURED, both directions (package C's red-once): with Magma's install
-        // short-circuited, the two CtWireScenario death cases red on the INPROC arm alone
-        // (`deaths` 0 vs 0) and stay green on spawn and tcp - which is exactly the split of
-        // responsibility this comment claims.
+        // A remote client has no backend, so nothing else installs a state-object death notice
+        // and NotifyAndFree would free slots without emitting object_death. Install the wire
+        // emitter only under Transport == Spawn (inproc keeps its backend's dispatcher) and only
+        // when no ops are installed (the first installer keeps the notice). Magma's own ops
+        // (DirectVulkan.cpp) cannot collide with these through the last-writer-wins global: Magma
+        // installs only in a process that owns a DirectVulkan backend, and a spawn client owns
+        // none (InitSplitRoles builds a BackendObject_Remote). CtWireScenario's two death cases
+        // cover both installs.
         if (MG_Config::Transport == MG_Config::TransportMode::Spawn &&
             MG_State::GLState::GetStateObjectDeathOps() == nullptr) {
             MG_State::GLState::SetStateObjectDeathOps(&kClientStateObjectDeathOps);

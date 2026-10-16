@@ -6,24 +6,12 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// SCM_RIGHTS descriptor passing over an AF_UNIX socket pair. POSIX only.
-//
-// This is the FIRST transport commit, deliberately (inherited design, plan
-// section 8.1, "SCM_RIGHTS must be implemented in the first transport
-// commit"). The earlier branch pushed it to a later phase and hardcoded
-// `out->fd = -1` in its offer poll, so on the only platform that matters its
-// data plane could never move a byte: every segment announcement resolved to
-// "no descriptor". A transport whose shm cannot cross the process boundary is
-// not a transport.
-//
-// Channel shape: a dedicated AF_UNIX SOCK_DGRAM socketpair, NOT the control
-// byte stream. Two reasons:
-//   - SOCK_DGRAM preserves message boundaries on every POSIX (SOCK_SEQPACKET
-//     does not exist on macOS), so one sendmsg is exactly one recvmsg and the
-//     ancillary data can never be split away from its payload;
-//   - ancillary data attached to a byte stream binds to whichever ordinary
-//     byte happens to be at the front of the reader's buffer, which is
-//     unmanageable once frames are being reassembled.
+// SCM_RIGHTS descriptor passing over an AF_UNIX socket pair (POSIX only); without it the shared
+// segments cannot cross the process boundary. The channel is a dedicated SOCK_DGRAM socketpair,
+// not the control byte stream: datagrams keep message boundaries on every POSIX (macOS has no
+// SOCK_SEQPACKET), so one sendmsg is one recvmsg and ancillary data stays with its payload; on a
+// byte stream it would bind to whichever byte is at the front of the reader's buffer, which the
+// frame reassembler cannot manage.
 
 #pragma once
 

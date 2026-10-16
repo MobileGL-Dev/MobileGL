@@ -361,26 +361,14 @@ void DelaySessionHandshakeForTest() {
     std::this_thread::sleep_for(std::chrono::milliseconds(std::min<long>(ms, 60000)));
 }
 
-// Called only after fork (or, in the single-session shape, instead of it): the supervisor never
-// creates a backend or EGL context. `dataSource` is set on TCP (PH-7 (4)) and empty on a unix
-// endpoint, whose second connection is the SCM_RIGHTS socket PairAcceptor already paired.
-// `sourceFd` is the descriptor that source reads from - the child's end of the hand-off
-// socketpair under --serve, the listener itself in the single-session shape - and -1 when there
-// is none; it is let go of the moment Accept returns, and on every exit before that
-// (ExitBeforeAccept, ID-P7-44).
-//
-// `helloFrame` is the first frame when somebody has already read and authenticated it - the TCP
-// supervisor always has (PH-7 (5)) - and empty when this function reads it itself, within
-// `helloWaitMs`.
-//
-// P12 (D5): IT RETURNS THE SESSION'S EXIT CODE, and never exits. A forked child and a
-// single-session process pass the code straight to ExitSessionProcess - so every one of those shapes
-// ends with the `_exit` code it always had - while `inProcess` (the in-process display server's
-// session thread) returns it to the supervisor thread and the process lives on. What a process exit
-// used to clean up for free, `inProcess` cleans up by hand on every way out: the backend (the loop's
-// Stop drops one no thread owns), the session singleton, the stats window, the log forwarder and the
-// progress sink, both of which point at `control`. The latch is reset by the supervisor between
-// sessions (ResetSessionLatch).
+// Runs one served session; the supervisor never creates a backend or EGL context. `dataSource` is
+// set on TCP and empty on a unix endpoint, whose aux connection PairAcceptor already paired.
+// `sourceFd` (the hand-off socketpair end under --serve, the listener in the single-session shape,
+// or -1) is released when Accept returns and on every earlier exit (LeaveBeforeAccept).
+// `helloFrame` holds the first frame if the caller already read and authenticated it; otherwise it
+// is read here within `helloWaitMs`. Returns the session's exit code and never exits; with
+// `inProcess` (a session thread of the in-process display server) every way out cleans up by hand
+// what a process exit would, and the supervisor resets the latch between sessions.
 int RunSession(std::unique_ptr<SocketTransport> control, std::vector<std::uint8_t> helloFrame,
                Server::ServerSession::DataConnectionSource dataSource, int sourceFd, DataSource sourceKind,
                std::uint32_t helloWaitMs, bool inProcess = false) {
@@ -481,23 +469,13 @@ int RunSession(std::unique_ptr<SocketTransport> control, std::vector<std::uint8_
         MobileGL::MG_Config::Transport = MobileGL::MG_Config::TransportMode::Spawn;
         MobileGL::MG_Pipe::MGPipeSetServerProcessRole(true);
     });
-    // PH-1 (3), ID-P7-1: THIS PROCESS IS THE SESSION, so a named fault on the peer's bytes may end
-    // it cleanly instead of aborting it (FatalFunnel.h's latch block). Armed here and nowhere
-    // else: inproc keeps every Fatal (client and server share that process), and the supervisor
-    // that forked this child never applies a record.
-    //
-    // P12 (D5): and the in-process display server arms it for EVERY session, here, the same way.
-    // P14 S2: "IT" IS PER SESSION NOW - the scope below binds this thread to this session's latch
-    // domain (FatalFunnel.h), so the arm that follows arms THAT domain and no other: a session
-    // that latched cannot decline its neighbour, and the supervisor's ResetSessionLatch touches
-    // only its own (process-default) domain.
-    // P14 S2: THIS SESSION'S OWN RUNTIME, AND BOTH OF ITS THREADS ON IT. The object holds the
-    // session, the apply loop and the PipeInputs block; the scope makes them what this thread's
-    // reads of ServerSessionInstance()/ServerLoopInstance()/gPipeInputs resolve to, and binds this
-    // session's latch domain and segment resolver. Everything below - the backend bring-up, the
-    // arm, the EGL frames - therefore runs against THIS session, which is what lets one process
-    // serve several at once. The apply thread opens the same scope as its first act
-    // (ServerLoop::ApplyThreadMain, via SetRuntime below).
+    // A served session's process (or in-process thread) is the session, so a named fault on the
+    // peer's bytes may end it cleanly instead of aborting (FatalFunnel.h's latch); inproc keeps
+    // every Fatal, and the supervisor applies no record. SessionRuntime holds this session's
+    // session object, apply loop and PipeInputs block; the scope binds this thread's
+    // ServerSessionInstance(), ServerLoopInstance(), gPipeInputs, latch domain and segment
+    // resolver to it, so ArmSessionLatch arms this session's domain only. The apply thread opens
+    // the same scope first (ServerLoop::ApplyThreadMain).
     auto runtime = std::make_unique<Server::SessionRuntime>();
     Server::Detail::ThreadSessionScope threadScope(*runtime);
     ArmSessionLatch();
@@ -705,30 +683,12 @@ int RunSession(std::unique_ptr<SocketTransport> control, std::vector<std::uint8_
     WireLogError("MG_Remote server: pid=%d transport=spawn role=server ready control=%s data=%s",
                  selfPid, tcp ? "tcp" : "unix", tcp ? "stream" : "shm");
     std::vector<std::uint8_t> buffer(64 * 1024);
-    // PH-6 (ID-P7-2): THE CONTROL WAIT IS BOUNDED, SO A SESSION CAN END FROM THE SERVER'S SIDE.
-    // It used to be kWaitForever, which left exactly one way out: the peer closing its control
-    // connection. A peer that forfeited the reverse channel is by definition one that stopped
-    // reading, and it may well keep that connection open - so the apply thread would stop and
-    // this child would sit here, holding the supervisor's one session slot, answering every
-    // later client Busy. Now each quiet interval asks whether the apply thread is still there;
-    // when it is not (forfeit, or a dead data bell), the session takes the ordinary exit below:
-    // Stop, Close, _exit(0). (PH-6 used the supervisor's 250 ms accept poll as the interval; the
-    // PH-1 note below says why the slice is now 100 ms.)
-    //
-    // ASKED AT THE TOP OF EVERY TURN, NOT ONLY WHEN A WAIT TIMES OUT (PH-6 fix round). A peer that
-    // forfeited the reverse channel but keeps TALKING - a LogFlush or a surface op more often than
-    // every 250 ms, each of which this loop answers - never let ReceiveFrame time out, so the
-    // question was never asked and the session, with the supervisor's one slot, lived as long as
-    // the peer kept chattering.
-    //
-    // PH-1 (3): the same wait is also how a LATCH raised on the apply thread (the decoder, the
-    // applier, DrainRing) ends this loop within one slice while the peer is silent. ReceiveFrame
-    // keeps a partial frame in its reassembler across a timeout, so slicing loses no bytes; a
-    // latched session is then closed below with kSessionLatchedExitCode. The latch is asked
-    // BEFORE the apply thread's liveness because a latch also stops that thread (it leaves its
-    // loop and clears m_running), and the session must be named by its latch, not as a stopped
-    // apply thread. One slice serves both: the latch's 100 ms (PH-6 had 250 ms; the shorter wait
-    // only asks the question more often).
+    // The control wait is sliced so a session can end from the server's side. Each turn first asks
+    // whether the session latched (a fault on the apply thread, which also stops that thread, so
+    // the latch is asked first and names the end), then whether the apply thread still runs (it
+    // stops on a forfeited reverse channel or a dead data bell). Both are asked every turn, not
+    // only on timeout, so a peer that keeps sending frames cannot hold the supervisor's session
+    // slot. ReceiveFrame keeps a partial frame across a timeout, so slicing loses no bytes.
     constexpr std::uint32_t kControlSliceMs = 100;
     for (;;) {
         if (SessionLatched()) break;
@@ -765,23 +725,10 @@ int RunSession(std::unique_ptr<SocketTransport> control, std::vector<std::uint8_
                              static_cast<unsigned long long>(control->BufferedBytes()));
             break;
         }
-        // THE FILE IDENTIFIER, ASKED FIRST AND SAID OUT LOUD (P7 wave 0).
-        //
-        // The plan asked for CtrlEnvelopeBufferHasIdentifier here because ServerSession::
-        // ParseEnvelope (:109) asks it and this loop did not. MEASURED, THE PREMISE IS WRONG:
-        // the generated VerifyCtrlEnvelopeBuffer is
-        // `verifier.VerifyBuffer<CtrlEnvelope>(CtrlEnvelopeIdentifier())`
-        // (protocol_generated.h:2378), so a wrong identifier was ALREADY refused - and so is
-        // ParseEnvelope's second call. Recorded for the integrator: the gap that row names does
-        // not exist.
-        //
-        // What DID exist is that both refusals were silent. A peer whose post-Welcome frame was
-        // garbage got its session ended with no line in the log at all, which is the half of a
-        // fuzz arm that matters - an arm that cannot tell "refused, by name" from "the child
-        // went away" measures nothing. So the identifier is now asked FIRST, because it is the
-        // specific diagnosis ("that is not our schema") where the verifier's is the general one,
-        // and both say so. Asking it first needs the length guard the verifier would otherwise
-        // have provided: BufferHasIdentifier reads bytes [4, 8).
+        // The identifier is checked before the verifier, which would also reject a wrong one, so
+        // the log names the specific cause; every refusal here is logged, because a silent end
+        // cannot be told apart from a crashed child. BufferHasIdentifier reads bytes [4, 8),
+        // hence the length guard.
         if (size < 8) {
             WireLogError("MG_Remote server: control frame is %llu bytes, too short to carry a "
                          "CtrlEnvelope root and identifier; ending the session",
@@ -926,37 +873,11 @@ void LogSupervisorSummary(unsigned long sessionsFaulted) {
                  static_cast<int>(::getpid()), sessionsFaulted);
 }
 
-// PH-7 (5), ID-P7-3, ph-f.md §6.4, CONTRACT-P7 §12. THE TCP SUPERVISOR: AUTHENTICATE, THEN FORK.
-//
-// Until this package the --serve loop accepted a TCP connection and forked a session child for
-// it before a byte had been read; the child read the Hello (10 s budget), checked the wire and
-// only then the token. So anybody who could reach the port cost the server a fork per connection
-// and a child held for up to 10 s, and an unauthenticated Hello with a wrong fingerprint was
-// answered with this build's fingerprint. Now:
-//
-//   - every new connection is PENDING until its first frame is complete. The supervisor reads it
-//     itself, a few bytes per wakeup, from all pending connections at once (one poll loop - no
-//     unauthenticated peer can make it wait for another; the one wait left is up to 50 ms for an
-//     exiting session before an AUTHENTICATED Hello is told Busy), and never a byte past the frame;
-//   - a pending connection has MOBILEGL_IPC_PREAUTH_MS (default 2000) to complete it, and at most
-//     MOBILEGL_IPC_PREAUTH_MAX (default 8) are pending at once. The queue is SHARED between
-//     addresses: when it is full a newcomer displaces the oldest connection of the address holding
-//     the most slots, and is itself refused Busy only when its own address already holds as many;
-//   - a Hello is AUTHENTICATED HERE, token first; an unauthenticated one is answered
-//     Refuse{Authentication} and nothing else. Only an authenticated Hello is forked for, and the
-//     child is handed the frame it would otherwise have read;
-//   - a failure (wrong token, malformed first frame, deadline, a silent connection that held its
-//     slot past kPreAuthProbeGraceMs before it closed or was displaced) is counted against the
-//     peer's address; after MOBILEGL_IPC_AUTH_BACKOFF_AFTER (default 5) of them that address is refused
-//     at accept, before a byte is read, for MOBILEGL_IPC_AUTH_BACKOFF_MS doubling per further
-//     failure up to a minute. An authenticated Hello from the address clears it;
-//   - a DataBind is routed exactly as PH-7 (4) routed it: to the live session's child over the
-//     hand-off with the nonce as sideband (the child compares), or refused by name when there is
-//     no live session - here now, instead of in a child forked to say so.
-//
-// What is unchanged: one session at a time (an AUTHENTICATED second client is Busy), the child's
-// own ValidatePeerHandshake / Accept / BindDataConnection, the hand-off and its refusals, the
-// reap lines and sessionsFaulted.
+// The TCP supervisor reads every new connection's first frame itself without blocking on any
+// one peer, authenticates a Hello (token first) and only then hands the session off (fork or
+// thread); it routes DataBinds to the live session and backs off failing addresses
+// (ARCHITECTURE.md §15.1.1, PreAuthGate.h). One session at a time: an authenticated second Hello
+// is answered Busy.
 class TcpSupervisor {
 public:
     using Clock = std::chrono::steady_clock;

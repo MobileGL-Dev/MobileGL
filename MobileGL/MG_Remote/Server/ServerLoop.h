@@ -6,66 +6,13 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// The apply thread and the server's private backend object. Owner: package v1 - the highest
-// risk item in P5. Signatures by c0.
-//
-// WHY THE THREAD IS THE POINT. DirectGLES has 16 IsBackendContextCurrentOnThisThread() guards
-// (DirectGLES.cpp:12034..12428) and Managers.cpp has 16 CanTouchGLNow() guards (:1494..:3428);
-// every one of them DEGRADES when the answer is false - fences become always-signaled, queries
-// return null handles, Present creates no frame fence so the buffer pool's recycle watermark
-// never advances, and the two persistent-map acquisitions (Managers.cpp:1494, :2170) DECLINE,
-// which would make PersistentCoherentMapScenario unreachable. Making the apply thread the
-// context owner for life turns all 32 of those answers true on the server and removes the
-// whole degradation class at once. It is also exactly the shape P6's spawned server inherits.
-//
-// P5 BUILDS ONE THREAD, NOT TWO. No mgl-srv-io: inproc's control plane is in the same process.
-// P6 splits it.
-//
-// PARKING AND SHUTDOWN. The thread parks on Doorbell::Wait(consumerParked, ready, spinUs,
-// kWaitForever) and shuts down when Wait returns false with Dead() set. TWO things can un-park a
-// kWaitForever waiter, not one, and the difference is the whole of review m-4: for the STOP case a
-// plain Doorbell::Notify() is sufficient, because m_stopRequested is in the park predicate and
-// Stop() publishes it BEFORE it rings (Doorbell.h re-tests ready() after every Park return);
-// Doorbell::Kill() (Doorbell.h, CondVarDoorbell::Kill) is load-bearing only for a predicate
-// that has NOTHING to see, which is why the redcheck's park-predicate-loses-control entry - the one that drops the
-// control flag FROM the predicate - is the case that actually times out. Kill BEFORE join; join
-// before the client frees any emitter-owned Vector; and the join must be bounded (that test uses
-// 5 s) so a regression is a red test and not a hung CI job.
-//
-// THE EGL OWNERSHIP MOVE, AS MEASURED (ID-54; review v2 item 10 and N-3). The native
-// eglMakeCurrent for a surface runs ONCE PER CONTEXT LIFETIME on this thread and the context is
-// then held for life. That "once" lives in TWO layers, because one is not enough:
-// DirectGLES::MakeCurrent always calls native eglMakeCurrent and rewrites the owner (codex C7),
-// and it is reached twice per bring-up - once from InitPbufferSurface/InitWindowSurface when the
-// surface is CREATED, and once more from the client's first eglMakeCurrent. So (1)
-// ServerMakeEGLCurrent classifies the request against the tuple it last bound
-// (ClassifyEglMakeCurrent): an identical repeat is a no-op, and the R-12 republish decision for
-// it is "nothing to republish" (ID-67: the client's mirror generation must not move); a different
-// tuple is a real forwarded bind AND a caps republish; a client release-current is RECORDED
-// (ClientReleaseCount) and NOT forwarded. And (2) BackendObject_DirectGLES::MakeEGLCurrent, under
-// an active transport only, skips the native call when the requested draw surface is the one
-// already natively current on this thread (IsBackendContextCurrentOnThisThread, which is EGL
-// ground truth) AND the virtual tuple is the one that bind was for - or the bind is the surface's
-// own creation, which the first tuple adopts; a different virtual context onto the same surface
-// binds natively again, because MakeCurrent's invalidations describe the frontend context that
-// changed (ID-67). Measured at the EGL function
-// table by ServerLoopTest's C7 control on a real llvmpipe context: surface creation + two
-// identical make-currents + a client release + a bind after the release = ONE native
-// eglMakeCurrent, ZERO native releases, and the apply thread still the owner afterwards. So
-// DirectGLES.cpp's six cache invalidations run once per context lifetime rather than once per
-// client make-current, and the 16 IsBackendContextCurrentOnThisThread() / 16 CanTouchGLNow()
-// sites answer TRUE on the server. The tuple is FORGOTTEN (N-3) on every event after which the
-// native context it names may be gone - ReleaseEGLResources, ReleaseEGLSurface of the surface it
-// names, a surface (re)creation, backend destruction - so a recycled handle value after a destroy
-// is a real bind again and never a silent no-context-current. The client's nine EGL virtuals
-// become BLOCKING control requests executed here. ReleaseEGLResources and
-// ~BackendObject_DirectGLES MUST be blocking: MobileGL::Destroy() (MobileGL/Init.cpp:68)
-// otherwise walks on while the server still holds the context.
-//
-// THE FALLBACK IS PRE-DECLARED, NOT INVENTED UNDER PRESSURE (R-1). If the context migration is
-// still not running ClearThenReadPixels at the end of v1's fourth working day, the integrator -
-// not the package - declares `inproc-inline`: the client thread drains the ring itself, no
-// thread is created, no context migrates, and a second package picks up the thread arm.
+// The apply thread (mgl-srv-apply) and the server's private backend object. The apply thread
+// owns the backend's native EGL context for the context's whole life, so the backend's
+// IsBackendContextCurrentOnThisThread() / CanTouchGLNow() guards answer true on the server
+// instead of degrading. The client's EGL calls reach it as blocking control requests (the
+// Server* forwarders below); ARCHITECTURE.md §15.5 has the make-current dedup and teardown rules.
+// Stop() publishes m_stopRequested, which is in the park predicate, before it rings, so a plain
+// Notify un-parks the thread; the join is bounded so a lost wakeup fails instead of hanging.
 
 #pragma once
 #include <Includes.h>
@@ -85,60 +32,14 @@
 
 namespace MobileGL::MG_Remote::Server {
 
-    // ---------------------------------------------------------------------------------
-    // THE APPLY-THREAD IDENTITY, AS ONE INTEGER (P5d round 3, package D)
-    // ---------------------------------------------------------------------------------
-    //
-    // OnApplyThread() is the predicate under EVERY role guard on both hot paths -
-    // RefuseLegacyBufferArmFromApplyThread in BufferObject's accessors, MG_Record::PersistentMapTracker::
-    // OnServerRole, ClientSession::RefusePipeInputsTouchWhileApplierOwnsIt, RunsAsTheServerRole,
-    // MGPipeRefuseAllocatorFromApplyThread, RefuseLegacyTextureArmFromApplyThread. simpleperf at
-    // head 56a77348 (FCL + Minecraft, VD12, Adreno 830) measured it at 2.66% self / 3.64%
-    // inclusive ON THE CLIENT THREAD, for an answer that is "no" every single time.
-    //
-    // The old body paid five times over for that "no": ServerLoopInstance()'s function-static
-    // guard byte, an acquire load of m_running, an acquire load of an atomic<std::thread::id>,
-    // std::this_thread::get_id(), and a thread::id comparison that is an out-of-line
-    // pthread_equal through the PLT (@plt was 6.1% of the apply thread). None of it carries
-    // information the guard needs. A live thread's identity is already sitting in a
-    // register-cheap place - the thread pointer, TPIDR_EL0 on aarch64 - so the loop publishes
-    // ITS identity as a plain integer here and every caller compares one relaxed load against
-    // one register read, inline, with no call and no singleton.
-    //
-    // ZERO MEANS "NO APPLY THREAD IS RUNNING", which is exactly the answer m_running == false
-    // used to give: the key is published as the apply thread's FIRST act (ApplyThreadMain) and
-    // cleared in the same m_controlMutex critical section that clears m_running on the way out
-    // (ApplyThreadMain's C2 exit block), so "key != 0" and "m_running" move together and the
-    // window in which a live-but-exiting apply thread answers true is byte-for-byte the old
-    // one. The ServerLoop object still OWNS the key - nothing but ApplyThreadMain writes it -
-    // it simply no longer has to be reached through the singleton to be read.
-    // P14 S2: AND THE ANSWER IS PER THREAD NOW, NOT PER PROCESS. One word cannot hold N apply
-    // threads: two sessions' threads would each publish their own key and the second store would
-    // make the FIRST thread answer "no" to every role guard it owns - which is not a slower guard
-    // but a dead one (a draw would take the client arm on the apply thread, and
-    // RunSurfaceControlFrame would lose its re-entrancy shortcut and deadlock the EGL teardown).
-    // The question is "am I an apply thread", a fact about the CALLER, so it is asked in the
-    // caller's own TLS - one constant-initialized word, no guard, no atomic:
-    //
-    //   t_onApplyThread   the calling thread IS an apply thread.
-    //   g_applyThreadKey  HOW MANY are running in this process. Kept because
-    //                     MG_Backend/DirectGLES/Managers.cpp (outside this package's file set)
-    //                     reads this name `!= 0` - "an apply thread is running somewhere" - which
-    //                     is the count's zero-ness exactly. It is no longer a key and nothing on
-    //                     the hot paths reads it.
-    //
-    // ZERO MEANS "NO APPLY THREAD IS RUNNING" still: t_onApplyThread is raised as the apply
-    // thread's FIRST act and lowered in the same m_controlMutex critical section that clears
-    // m_running on the way out, so the window in which a live-but-exiting apply thread answers
-    // true is byte-for-byte the old one.
-    //
-    // WHAT WENT WITH IT, so nobody re-derives it: the aarch64 TPIDR_EL0 fast path, the
-    // std::thread::id fallback with its no-padding static_assert, the MOBILEGL_DETAIL_
-    // APPLY_THREAD_POINTER build knob and the relaxed-load argument about a recycled TLS block.
-    // They existed to make "is the process's one apply thread mine" cheap; the question is now
-    // "is the caller an apply thread", whose cheap answer is the caller's own word - and a word
-    // cannot be recycled, because the thread that inherits a dead apply thread's TLS block is
-    // not an apply thread until it runs ApplyThreadMain.
+    // The apply-thread identity. OnApplyThread() sits under every role guard on the per-draw hot
+    // paths, so it is one inline read of the caller's own TLS word: no call, atomic or singleton.
+    // It is a per-thread fact because a process runs one apply thread per served session.
+    //   t_onApplyThread   the calling thread is an apply thread. ApplyThreadMain raises it before
+    //                     it applies anything and lowers it in the m_controlMutex section that
+    //                     clears m_running.
+    //   g_applyThreadKey  how many apply threads this process runs; Managers.cpp reads `!= 0` as
+    //                     "an apply thread is running somewhere". No hot path reads it.
     namespace Detail {
         // A fresh thread's TLS word is zero-initialized, so a thread that inherits the exited
         // apply thread's TLS block - the recycling case the old relaxed-load argument was about -
@@ -152,27 +53,13 @@ namespace MobileGL::MG_Remote::Server {
         inline std::atomic<Uint64> g_applyThreadKey{0};
     } // namespace Detail
 
-    // ---------------------------------------------------------------------------------
-    // P12 (on-screen server window), D4: ONE SURFACE MODE PER SESSION
-    // ---------------------------------------------------------------------------------
-    //
-    // "Only one of the two rendering paths is active at a time, decided at context creation": a
-    // session's mode latches at its FIRST successful surface creation - a ServerOwned window makes
-    // it on-screen, a pbuffer makes it offscreen - and a later surface of the OTHER kind in the same
-    // session is refused by name (SurfaceRefusal::SurfaceModeMismatch: reply ok=false, logged, the
-    // session NOT latched). Windows the client names itself (the X11/Win32/None tokens CONTRACT-P6
-    // D8 has yet to close) are neither kind and neither latch nor are refused: nothing about them
-    // changes here. Reset by ServerLoop::Start, i.e. per session.
-    //
-    // P14 S2: AND THE LATCH IS PER SESSION, WHICH IS ALL THIS SLICE NEEDS. The mode is a member of
-    // the loop and a served session owns its loop, so two sessions in one process latch
-    // independently and neither's first surface decides the other's - the semantics above are
-    // otherwise unchanged (design/11-state-ownership.md §4.5: the latch stays at the session layer
-    // and is never hoisted to the process). A mode DECLARED before a session's first surface would
-    // have to travel on the wire - the Hello, or a SurfaceOp the client sends - because one
-    // process's MOBILEGL_IPC_SURFACE cannot speak for the several sessions a unified server runs;
-    // that is P14d's. Reading that env here instead refused a dialled-in ServerOwned client with
-    // SurfaceModeMismatch before the display was ever consulted (ServerOwnedSurfaceTest).
+    // One surface mode per session. It latches at the session's first successful surface
+    // creation: a ServerOwned window makes it on-screen, a pbuffer offscreen. A later surface of
+    // the other kind is refused with SurfaceModeMismatch (reply ok=false, nothing latched).
+    // Client-named windows (X11/Win32/None) and the surfaceless stand-in pbuffer neither latch
+    // nor are refused. The mode is a loop member reset by ServerLoop::Start, so each session
+    // latches on its own; it is not read from MOBILEGL_IPC_SURFACE, because one process's
+    // environment cannot speak for every session a unified server runs.
     enum class SessionSurfaceMode : Uint8 { None, OnScreen, Offscreen };
     const char* SessionSurfaceModeName(SessionSurfaceMode mode);
     // The decision, pure, so a unit case can drive all six pairs without a backend.
@@ -221,30 +108,14 @@ namespace MobileGL::MG_Remote::Server {
         // two files, and it is why no thread-keyed shim is needed for MOBILEGL_BUILD_DISAGGREGATED_INPROC.
         MG_Backend::BackendObject* Backend();
 
-        // Run one blocking control request on the apply thread and wait for it. This is how all
-        // nine EGL lifecycle virtuals cross; it is deliberately NOT a queue of async messages,
-        // because every one of them has a return value the caller acts on immediately.
-        //
-        // THE REQUEST IS A VALUE FRAME (P5f, package fc). It used to be a raw function pointer
-        // plus a void* to a stack-local Args struct - neither has a meaning across a process
-        // boundary, which is the whole of P5c audit row G4. Now the slot carries one
-        // SurfaceControlFrame BY VALUE: the op's identity is the frame's `kind`, its arguments
-        // are scalars, and its reply fields come back in the same value when the wait returns.
-        // What did NOT move: the blocking handshake, the one slot, and the apply-thread
-        // ownership. Under spawn the same frame is what SurfaceOpCodec encodes into a
-        // Wire::SurfaceOp - this signature is the seam both transports share.
-        // P6 `cp`: where a control frame goes when the server is ANOTHER PROCESS.
-        //
-        // All twelve Server* forwarders funnel through RunSurfaceControlFrame, so
-        // this is ONE seam rather than twelve (a6 row A4-13 counted them). The
-        // client installs a sink at handshake; with none installed the behaviour
-        // is exactly what it was - post into the one-slot mailbox, or run inline
-        // when we are already on the apply thread.
-        //
-        // A HOOK RATHER THAN A CALL INTO ClientSession, deliberately: the server
-        // half calling the client half is four of the six symbols a6 found
-        // MG_Remote owes itself (a6-link-experiment §5), and this is the one
-        // place that would have added a fifth.
+        // Runs one blocking control request on the apply thread and waits for it; every Server*
+        // EGL forwarder funnels through here. Blocking rather than async, because each caller
+        // acts on the reply at once. The frame crosses by value: `kind` names the op and the
+        // reply fields come back in the same frame; under spawn SurfaceOpCodec encodes it as a
+        // Wire::SurfaceOp. When the server is another process the client installs a
+        // RemoteControlSink at handshake; with none, the frame goes to the one-slot mailbox, or
+        // runs inline when already on the apply thread. A hook rather than a call into
+        // ClientSession, so the server half does not depend on the client half.
         using RemoteControlSink = MobileGLResult (*)(void* user, SurfaceControlFrame& frame);
         void SetRemoteControlSink(RemoteControlSink sink, void* user);
 
@@ -388,31 +259,14 @@ namespace MobileGL::MG_Remote::Server {
         void ForgetCurrentTuple();
         void ForgetCurrentTupleIfItNames(EGLSurface surface);
 
-        // Part of the apply thread's park predicate: a posted control request must be able to
-        // un-park a thread waiting on kWaitForever, which a Notify alone cannot do.
-        //
-        // IT READS ONE ATOMIC AND TAKES NO LOCK (P5d round 3, package T item 1). It used to
-        // take m_controlMutex on every call, and the idle poll calls it on every iteration -
-        // once inside the `ready` lambda and once more through PumpControlRequest - which
-        // simpleperf at head 56a77348 measured as ~49% of the whole apply thread's cycles
-        // (mutex::lock 12.4 + mutex::unlock 13.6 + the two pthread_* halves, 58-60% of them
-        // with ApplyThreadMain as the DIRECT caller). An idle poll on an empty ring must cost
-        // loads, not a futex-backed critical section. m_controlPosted is that load; the
-        // mailbox's own fields stay under the mutex and the handshake below is unchanged.
-        //
-        // PUBLIC because ServerLoopTest reads it: the clear side of the shadow has a failure
-        // mode - a shadow left set makes `ready` permanently true and the loop never parks
-        // again - that no other public surface can see.
-        //
-        // READ THE PREDICATE LITERALLY: "a request is POSTED AND NOT YET TAKEN", which is
-        // narrower than the name's "a control request is in flight". The shadow is cleared
-        // when the pump takes the work, not when the work returns, so for the whole duration
-        // of `work(user)` this answers false although m_controlPending is still true and the
-        // poster is still blocked in RunSurfaceControlFrame. That is deliberate - it is a PARK
-        // PREDICATE, and the thread that would act on it is the one running the work - but it
-        // means this is not a liveness query and must not be used as one. The only in-tree
-        // reader outside the test is the apply thread's own `ready` lambda, which by
-        // construction cannot be inside that window.
+        // Part of the apply thread's park predicate: a posted control request must un-park a
+        // thread waiting on kWaitForever, which a Notify alone cannot do. It reads only
+        // m_controlPosted, without the lock, because the idle poll calls it on every iteration and
+        // a mutex here cost about half the apply thread's cycles. It means "posted and not yet
+        // taken": the pump clears it when it takes the work, so it reads false while the work runs
+        // and the poster still waits. Not a liveness query; the only reader is the apply thread's
+        // `ready` lambda. Public so ServerLoopTest can catch a flag left set, which would stop the
+        // loop from ever parking.
         Bool ControlIsPending() const;
 
         // ---- P12 (on-screen server window), D3/D6 -------------------------------------------
@@ -672,43 +526,14 @@ namespace MobileGL::MG_Remote::Server {
     // The supervisor announces it at start-up; the server app's broker relays it to the helper.
     Uint64 ReservedApplyCoreForThisProcess(const char** outRule);
 
-    // ---------------------------------------------------------------------------------
-    // THE EGL OWNERSHIP MOVE - the part that can sink the phase, expressed as twelve calls
-    // ---------------------------------------------------------------------------------
-    //
-    // Under split the app thread must never reach the driver's eglMakeCurrent. Today it does:
-    // EGLImpl.cpp:284 -> BackendObject_DirectGLES.cpp:963 -> DirectGLES.cpp:11925, and the
-    // owner slot g_backendContextOwnerThread (DirectGLES.cpp:11865) is stamped with whatever
-    // thread got there. So BackendObject_Remote's nine EGL virtuals - package c1's - call these
-    // twelve, each of which is a BLOCKING control request that runs the SERVER's backend object
-    // on mgl-srv-apply. The native eglMakeCurrent then runs once per context lifetime on that
-    // thread (the surface's own creation binds; the client's make-currents onto that surface
-    // are deduped at both layers, header block above) and a client release is never forwarded,
-    // so g_backendContextOwnerThread is written once per context lifetime, DirectGLES.cpp's six
-    // cache invalidations run once per context lifetime rather than once per client
-    // make-current, the per-frame EGL re-verification stamp holds, and the 16
-    // IsBackendContextCurrentOnThisThread() sites plus the 16 CanTouchGLNow() sites answer TRUE
-    // on the server instead of silently degrading. Measured, not assumed: ServerLoopTest's C7
-    // control counts the driver's eglMakeCurrent calls at the EGL function table.
-    //
-    // TWO OF THEM MUST BLOCK OR THE PROCESS TEARS ITS OWN CONTEXT DOWN UNDER ITSELF:
-    // ReleaseEGLResources (reached from EGLImpl.cpp:326, which for DirectGLES runs
-    // DestroyEGLContext) and ~BackendObject_DirectGLES (reached from
-    // pActiveBackendObject.reset() at MobileGL/Init.cpp:68). Both are blocking here - the first
-    // by being one of these calls, the second because ServerLoop::Stop() destroys the private
-    // backend ON the apply thread before that thread exits and Stop() itself waits.
-    //
-    // WHY THEY ARE FREE FUNCTIONS AND NOT MEMBERS: c1 needs exactly this surface and nothing
-    // else of the server, so the seam between the two packages is a list of twelve signatures
-    // rather than a class with a lifecycle.
-    //
-    // P5f (package fc): each of the twelve packs its arguments into a SurfaceControlFrame and
-    // posts it through RunSurfaceControlFrame - the wire-shaped value channel that replaced the
-    // function-pointer mailbox (P5c audit row G4). Nine of them map onto the ten wire ops of
-    // protocol.fbs's SurfaceOp; ServerSwapEGLBuffers, ServerInitCapabilities and
-    // ServerInitWindowSurface ride the same channel as inproc-only kinds (present travels as a
-    // record, capabilities are answered by the CapsSnapshot frame, and the third has no caller -
-    // f0-egl's census, findings F8/§4.2).
+    // The EGL control forwarders. BackendObject_Remote's EGL virtuals call these, so the app
+    // thread never reaches the driver's eglMakeCurrent: each packs its arguments into a
+    // SurfaceControlFrame and blocks in RunSurfaceControlFrame while mgl-srv-apply runs it against
+    // the server's backend (ARCHITECTURE.md §15.5). ServerReleaseEGLResources must block, and so
+    // must ~BackendObject_DirectGLES, which ServerLoop::Stop() runs on the apply thread before it
+    // exits; otherwise teardown runs on while the server still holds the context. Free functions,
+    // because the client needs only these calls. SwapBuffers and InitWindowSurface are
+    // inproc-only frame kinds with no wire op: present travels as a record.
     Bool ServerInitializeEGLDisplay(EGLDisplay dpy, EGLint* major, EGLint* minor);
     Bool ServerCreateEGLWindowSurface(EGLSurface surface, const MG_Backend::WindowHandle& handle);
     Bool ServerResizeEGLWindowSurface(EGLSurface surface, Uint32 width, Uint32 height);

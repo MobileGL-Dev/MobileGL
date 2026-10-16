@@ -6,33 +6,13 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// P11 A1 + B2 (docs/archive/contracts/CONTRACT-P11.md §1 and B2): THE PERSISTENT-MAP ADOPTION TIER IS ASKED
-// AT THE HANDSHAKE, BY THE SIDE THAT KNOWS THE DATA PLANE, BEFORE THE FIRST map_persistent.
-//
-// Tier names follow docs/Disaggregated/design/07: T0 = the client allocates an AHardwareBuffer
-// and the server imports it; T1 = the server exports an opaque fd (CLOSED, ID-P11-1); T2 = the
-// resource owner declines and the client keeps the shadow and pushes.
-//
-// MOBILEGL_IPC_ADOPT_TIER IS THE SWITCH (ruling ID-P11-14). UNSET - the default since 2026-09-29,
-// the user's decision - asks for T0 and falls back to T2 QUIETLY (MGLOG_D only, still counted),
-// so a tcp session or a host session is not one line longer; 0 asks for T0 BY NAME (the table
-// below); 1 is refused by name and runs T2; 2 is T2 byte for byte. T0 that this session cannot use
-// is never a Fatal - it is T2 plus one named line (knob 0) or one D line (unset):
-//
-//   data plane      side     knob 0                                  knob 1
-//   Stream (tcp)    either   `Refuse{AdoptTierOnStream, "T0"}`, T2   `Refuse{AdoptTierOnStream, "T1"}`, T2
-//                            (A1, unchanged: a stream shares no memory, so no tier but T2 exists)
-//   SharedSegments  client   asks T0 in its Hello (LinkTerms.        `Refuse{AdoptTierClosed, "T1"}`, asks T2
-//                            adoptTier = 0); whether it runs T0 is
-//                            read at the first map_persistent from
-//                            kCapAdoptT0 (ClientSession::AdoptT0)
-//   SharedSegments  server   its own knob is not consulted: the client's ask decides, and the
-//                            server grants it at its first native bind (ServerSession::
-//                            SettleAdoptT0AtBind) or names why not
-//
-// In MG_Remote/Transport (the link-ratchet's SERVER partition) because both roles call it:
-// ServerSession::Accept and ClientSession's two Start halves. The at-use check the server's
-// applier and codec ask on the T2 path (Client::AdoptTierIsEmulate) reads the settlement back.
+// The persistent-map adoption tier is settled at the handshake, before the first map_persistent,
+// by the side that knows the data plane. T0: the client allocates an AHardwareBuffer and the
+// server imports it; T1: a server-exported fd (closed); T2: decline, the client keeps the shadow
+// and pushes. A T0 the session cannot use is never Fatal: it is T2 plus one line. The rules per
+// data plane and knob value are in ARCHITECTURE.md §12.1. Lives in Transport because both roles
+// call it (ServerSession::Accept, ClientSession::Start); Client::AdoptTierIsEmulate reads the
+// settlement back on the T2 path.
 
 #pragma once
 

@@ -64,3 +64,13 @@
 | `MGPDrawInfo` / `MGPDrawRange` | `DrawVbo`；multi-draw 范围与用户索引在变长尾，indirect 的 `DrawCount` 由 client 解析 |
 
 每条 `kVarTail` 的 `set_*` 带 `ContentHash`，hash 未变就不发（§5.4）。
+
+### 4.2 split 下的诚实规则
+
+同一地址空间里 host 指针能解引用、以 host 地址为 `Offset` 的 blobref 能解析、persistent map 返回的地址能直接用；`inproc` 若借这些捷径变绿，`spawn` 无法复现。所以 split 下编解码一律按跨进程规则执行，`inproc` 也不例外（`MG_Remote/Wire/PipeWireCodec.h`）：
+
+1. encoder 把 `MGHostSpan::Ptr` 恒写 `nullptr`，字节放进 `SEG_STAGE`，由 `Seg` / `Offset` 指名。
+2. `MGPBlobRef` 要么完整声明（真实 `Seg`、段内 `Offset`、非零 `Size`），要么三个字段全零。`Seg` 或 `Offset` 非零而 `Size == 0` 正是 monolith emitter 的形状（`Offset` 是 host 地址），split 下按损坏拒绝，不能读成"无 blob"，否则未改造 emitter 的字节会被静默丢弃。
+3. decoder 对 `Ptr != nullptr`、内容记录的 `Size == 0`、`Size != 0` 而 `Seg == kSegNone`、`Offset + Size` 越过段尾一律报 `ProtocolCorruption`（`CheckBlobIsHonest`、`RequireDeclaredBlob`、`CheckHostSpanIsHonest`）。记录是否带内容由 payload 的其他字段决定，所以"内容记录须有 blob"由 decoder 的逐 op 分支调用 `RequireDeclaredBlob` 检查。
+4. T2 档下 `MGPipeApplyMapPersistent` 在 split 下恒返回 `nullptr`（§12），client 不拿 server 的地址。
+5. `MOBILEGL_IPC_AUDIT=1` 时 server 把已退休记录的 `SEG_STAGE` 字节填成 `0xDD`，apply 之后仍持有指针的实现下一帧会读到 `0xDD`。

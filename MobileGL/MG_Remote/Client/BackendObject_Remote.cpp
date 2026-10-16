@@ -33,30 +33,12 @@ namespace MobileGL::MG_Remote::Client {
 
         // ---- the EGL seam ------------------------------------------------------------------
         //
-        // THE EGL VIRTUALS CALL v1's TWELVE FORWARDERS AND NOTHING ELSE (the swap interval's
-        // since P10 through the emit table's slot, not an override here). c1 round 1 built
-        // its own trampolines over ServerLoop's control channel and ServerLoop::Backend(),
-        // which ran the right driver call on the right thread and was still wrong, because
-        // three of the twelve do MORE than forward:
-        //
-        //   ServerMakeEGLCurrent   re-publishes the caps snapshot after the server's own
-        //                          InitCapabilities has run (R-12 arm (a))
-        //   ServerInitCapabilities the same, on the explicit path
-        //   ServerSetWindowHandle  hands the surface to the server's backend
-        //
-        // Calling `Backend()->MakeEGLCurrent(...)` skips the republish, so the client's mirror
-        // keeps the snapshot Accept() sent BEFORE any context existed - every limit, every
-        // advertised extension and the compile-env fingerprint read off an empty backend, with
-        // InitCapabilities below happily reporting success because a snapshot did arrive once.
-        // That is the failure this seam exists to make impossible: there is no second route to
-        // the server's EGL, so there is no route that can skip what the forwarder does.
-        //
-        // The forwarders pack a SurfaceControlFrame and block on mgl-srv-apply themselves (P5f
-        // fc; the channel was a function-pointer mailbox before that) and run INLINE when the
-        // caller is already on that thread, so this file needs no frame, no per-call args
-        // struct, and no null-backend check of its own - the dispatch's null-backend arm is the
-        // one place that answers "the bring-up did not complete", and it answers `false` rather
-        // than crashing or succeeding locally.
+        // The EGL virtuals call the Server* forwarders (ServerLoop.h) and nothing else, because
+        // some do more than forward: ServerMakeEGLCurrent and ServerInitCapabilities republish
+        // the caps snapshot after the server's InitCapabilities, and ServerSetWindowHandle hands
+        // the surface to the server's backend; calling the backend directly would leave the caps
+        // mirror on the pre-context snapshot. The forwarders block on mgl-srv-apply (inline when
+        // already on it) and answer false when the bring-up did not complete.
 
         // CapsMirror's adoption hook. A free function because the hook is a raw function
         // pointer (ID-8: this can fire on a path that must not allocate), and it reaches the

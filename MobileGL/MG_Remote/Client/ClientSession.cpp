@@ -167,22 +167,13 @@ namespace MobileGL::MG_Remote::Client {
         ::std::atomic<int> g_bringUpsInFlight{0};
         thread_local Bool tl_bringingUpHere = false;
 
-        // ---- P7 CI: THE COLD-START BUDGET OF A SURFACE-CONTROL REPLY -----------------------
+        // ---- cold-start budget of a surface-control reply ----------------------------------
         //
-        // A spawned (or tcp) server brings its NATIVE backend up lazily, INSIDE the first
-        // surface creation (Espryt: eglInitialize under CreatePbufferSurface/CreateWindowSurface)
-        // or the first MakeCurrent (Magma: the Vulkan instance and device) - ServerLoop.cpp's
-        // ApplySurfaceControlFrame. On a workstation that is ~100 ms; on a loaded CI runner it
-        // took longer than the 5 s steady-state bound, and the retrace-split spawn legs died on
-        // "no SurfaceReply for CreatePbufferSurface seq 2" / "for MakeCurrent seq 3" with the
-        // server still alive and about to answer (11 of 77 legs in run 35671704873, 17 of 77 in
-        // 35706183230, a different set each run). The server was never wedged; the client simply
-        // asked a cold software rasteriser for a warm one's latency.
-        //
-        // So until the session's first MakeCurrent is answered ok, those three ops wait the
-        // cold-start budget; every other op, and all three once the backend is warm, keep the
-        // steady bound. The budget is never shorter than the steady bound, and its expiry is
-        // the same non-fatal, NAMED answer (D5b) - a longer wait, not a different contract.
+        // The server brings its native backend up lazily inside the first surface creation
+        // (Espryt's eglInitialize) or the first MakeCurrent (Magma's Vulkan instance and device;
+        // ServerLoop.cpp's ApplySurfaceControlFrame). On a loaded CI runner that outlasts the
+        // steady bound, so until a MakeCurrent is answered ok these three ops wait
+        // max(steady, ColdStartMs). Expiry is the same non-fatal named answer as any timeout.
         Bool MayBringTheBackendUp(Server::SurfaceControlOp kind) {
             return kind == Server::SurfaceControlOp::CreatePbufferSurface ||
                    kind == Server::SurfaceControlOp::CreateWindowSurface ||
@@ -393,25 +384,13 @@ namespace MobileGL::MG_Remote::Client {
             return "?";
         }
 
-        // ---- c1: the reverse channel's reading end ---------------------------------------
+        // ---- the reverse channel's reading end -------------------------------------------
         //
-        // R-12's three: OnBufferWriteback (#3), OnGpuWritten (#2), OnSurfaceChanged (#7).
-        // Drained BY THE GL THREAD BETWEEN VERBS, which under the barrier means immediately
-        // after appliedSeq reaches this record - the one moment at which the apply thread is
-        // known not to be inside the applier.
-        //
-        // THE BYTES LIVE IN THE RING ITSELF, so Drained() is called only after every payload
-        // pointer popped here has been consumed: retiring earlier is R-11's violation one level
-        // down (EventRing.h:168-171 says so in as many words).
-        //
-        // THE CONSUMERS ARE CALLED BY NAME, NEVER THROUGH gMGPipeCallbacks (CONTRACT-P5C
-        // §4.1): with an active transport the global table's reverse entries are the SERVER
-        // session's producer callbacks, so routing the drain through it would call the
-        // producer back from the GL thread - the layer-2 violation the contract names.
-        //
-        // THE SURFACE-CHANGED CONSUMER IS WHERE R3's OWNERSHIP ALWAYS WAS: the backend
-        // posts the MGPSurfaceInfo, and the allocate/format writes against
-        // pDefaultFramebufferInfo happen HERE, on the GL thread, against client memory.
+        // The GL thread drains SEG_EVENT between verbs and inside client waits. The payloads live
+        // in the ring, so Drained() runs only after every popped payload has been consumed.
+        // Consumers are called by name, never through gMGPipeCallbacks: with an active transport
+        // its reverse entries are the server session's producer callbacks. The surface-changed
+        // consumer applies the server's MGPSurfaceInfo to pDefaultFramebufferInfo in client memory.
         void ApplySurfaceChangedToClient(const MG_Pipe::MGPSurfaceInfo& info) {
             auto& defaultFBOInfo = MG_Impl::GLImpl::FramebufferImpl::pDefaultFramebufferInfo;
             if (!defaultFBOInfo) return;
@@ -1955,25 +1934,14 @@ namespace MobileGL::MG_Remote::Client {
             }
         }
 
-        // ---- 9. AND ONLY NOW THE THIRTY-SEVEN WIRE EMITTERS (R-17). This is the line that
-        // arms `integration-split`: the 21 `DirectGLES.Split.*` entries skip on
-        // `ClientSession::Active() == nullptr`, and every one of the four arming facts is true
-        // at exactly this point and at no earlier one.
-        //
-        // IT IS LAST, AND EACH OF THE FOUR REASONS IS A DIFFERENT FAILURE:
-        //   - after Hello/Welcome (step 2-4), or an emitter would publish into a ring the peer
-        //     has not mapped;
-        //   - after the first CapsSnapshot (step 7), because R-8's liveness gates read the caps
-        //     mirror and a PLACEHOLDER mirror consumes nothing - a record emitted before it
-        //     would go to a server this client has not been told consumes that family;
-        //   - after ServerLoop::Start (step 8), because EmitAndWait BLOCKS on appliedSeq and
-        //     with no apply thread nothing advances it: the first resource_create would spend
-        //     the whole kBarrierTimeoutMs in the barrier and then Fatal{BarrierTimeout};
-        //   - on THIS thread, the one that called MG_Backend::Init(), because it is the GL
-        //     thread and table 3 makes gPipeInputs its to touch while the barrier holds.
-        // The publication is safe without a fence because the apply thread never reads these
-        // tables - the server decodes straight into MGPipeApply* - and this thread wrote them
-        // before it can reach any GL entry point.
+        // ---- 9. Install the wire emitters last; each earlier step is a precondition:
+        //   - after Hello/Welcome, or an emitter would publish into a ring the peer has not mapped;
+        //   - after the first CapsSnapshot: liveness gates read the caps mirror, and a placeholder
+        //     mirror says the server consumes nothing;
+        //   - after the inproc ServerLoop::Start, or EmitAndWait would wait on an idle appliedSeq;
+        //   - on the GL thread that called MG_Backend::Init(), the one that may write gPipeInputs.
+        // No fence is needed: the apply thread never reads these tables, and this thread wrote
+        // them before it can reach any GL entry point.
         InstallClientWireTables();
         return MOBILEGL_OK;
     }
@@ -2307,23 +2275,13 @@ namespace MobileGL::MG_Remote::Client {
         // will not read this one (resource_subdata's buffer half, §2.5 - the only such caller).
         // The server posts either way, so the wire is unchanged and the row keeps its flag.
 
-
-        // ---- THE P5e WAIT RULE (CONTRACT-P5E §2.3) ---------------------------------------
+        // ---- run-ahead wait rule ---------------------------------------------------------
         //
-        // IT STANDS BEFORE THE BATCH SKIP AND REPLACES IT WHOLE, rather than adding a clause to
-        // it. The batch skip is a rule about CALL CLASSES ("a set/CSO/object record carries its
-        // whole value in the payload"); the wait class is a rule about WHAT AN APPLY READS, and
-        // it is generated from the same PipeCalls.def row the class comes from
-        // (MGPipeWaitClassFor, c0e). Two rules layered would mean a row could be skipped by the
-        // class rule and waited by the column, and the column is the one the SERVER's
-        // MGPipeBarriered reads - so the two halves of the wire would disagree about whether
-        // the client is parked behind this record, which is the single fact §4.4's exemptions
-        // and §3.3's detector both rest on.
-        //
-        // WITH RUN-AHEAD DISARMED NOTHING BELOW RUNS and the file's original shape continues -
-        // Magma, a monolith transport, MOBILEGL_IPC_RUN_AHEAD=0 and every build before the
-        // integration commit take the old path byte for byte, which is what makes RUN_AHEAD=0
-        // a pure wait-rule A/B on identical server code (§5.8).
+        // With run-ahead armed, the WaitClass column (MGPipeWaitClassFor) alone decides whether a
+        // record waits, and the batch skip below is disarmed. The server's MGPipeBarriered reads
+        // the same column, so a second skip rule would let the two sides disagree about whether
+        // the client is parked behind the record (ARCHITECTURE.md §11.6.1). With run-ahead
+        // disarmed this block is skipped, so MOBILEGL_IPC_RUN_AHEAD=0 is a pure wait-rule A/B.
         if (RunAheadArmed() && !ownsReplySlot) {
             MG_Pipe::MGPipeWaitClass waitClass = MG_Pipe::MGPipeWaitClassFor(op);
             // §2.5's named relaxation, and the ONLY place a static column answer is overridden:
@@ -2357,41 +2315,13 @@ namespace MobileGL::MG_Remote::Client {
             }
         }
 
-        // MOBILEGL_IPC_BATCH_WAITS (default 1): a value-class record is published WITHOUT
-        // waiting for its own apply. The barrier's one load-bearing reader is the backend
-        // sync that pulls the object-class fields (CONTRACT-P5 table 2's remaining rows), and
-        // those reads happen only at the kCtxVerb applies - draw / clear / blit / dispatch /
-        // readback / XFB - plus the screen and query classes, and EVERY ONE OF THOSE STILL
-        // WAITS below (as does every reply-slot row, whose answer the client consumes). So
-        // the pulled fields are exactly as fresh at every read point as the per-record
-        // barrier made them: between two waits the residual fill may move a field, but no
-        // apply is reading it in between, and the next pull-verb's fill runs after the
-        // previous pull-verb's apply was waited - the R-1 fence posts are untouched, only
-        // the number of round trips between them changes. Set / CSO / object records carry
-        // their whole value in the payload and are consumed at the next (waited) sync, which
-        // the in-order ring guarantees precedes that sync's apply.
-        //
-        // WITH ONE NAMED EXCEPTION, FOUND BY ITS OWN FATAL (P5d round 3): generate_mipmap is
-        // catalogued kCtxObject, but its sink is the backend's GenerateMipmap, which reads
-        // gPipeInputs->GetActiveTextureUnit() and the unit's binding slot - residual inputs whose
-        // freshness is the CLIENT's verb serial. Published without a wait, the record sits in
-        // the ring while this thread runs the next verb's MGPipeValidateForVerb, which moves
-        // that serial and withdraws the server stamp; the apply thread then reads the unit
-        // stale and aborts Fatal{UnmigratedPipeInput, "GetActiveTextureUnit@<next verb>"}
-        // (F1WireScenario.GenerateMipmap*Pixels, reproduced on the gate tree once the round-3
-        // spin no longer read the clock). So it waits, exactly as the four stamping verbs
-        // do. The rule this encodes: a record may skip its wait only if its apply reads
-        // nothing the residual fill writes - the value carried in the payload is the whole
-        // input. No other kCtxObject row has a backend body behind it that reads gPipeInputs
-        // (set_texture_params, resource_subdata, resource_readback and get_texture_image
-        // own reply slots and wait anyway; the resource_* transfers and object_death resolve
-        // by handle).
-        //
-        // AND IT IS DISARMED WHOLE UNDER RUN-AHEAD (P5e §2.3): the wait class above is the
-        // rule there, and a second skip rule reading a different column is how the two halves
-        // of the wire end up disagreeing about whether the client is parked. Written as a
-        // conjunct here rather than left to "the classes happen not to overlap", because the
-        // classes overlapping is one PipeCalls.def row away at any time.
+        // MOBILEGL_IPC_BATCH_WAITS (default 1), lockstep only: a state, CSO or object record is
+        // published without waiting for its apply. Its payload is its whole input, and the backend
+        // reads pulled fields only in verb, screen and query applies, which still wait, so each
+        // read sees the values the per-record barrier would give. A record may skip its wait only
+        // if its apply reads nothing the residual fill writes: generate_mipmap is an object record
+        // but GenerateMipmap reads the active texture unit from gPipeInputs, so it waits.
+        // Disarmed under run-ahead, where the WaitClass rule above is the only rule.
         if (!ownsReplySlot && !RunAheadArmed() && MG_Config::Ipc.BatchWaits != 0 &&
             op != MG_Pipe::MGPWireOp::GenerateMipmap) {
             const MG_Pipe::MGPipeCallClass callClass = MG_Pipe::MGPipeCallClassFor(op);
@@ -2770,29 +2700,11 @@ namespace MobileGL::MG_Remote::Client {
         //
         // This is where a fill left standing for an unbarriered record lands, by name.
         if (ClientSessionInstance().RunAheadArmed()) {
-            // ---- P5e (ra2): THE EXEMPTION IS A FACT NOW, NOT A CLAIM ------------------------
-            //
-            // This arm used to read `if (isBarrieredFill) return;`, i.e. the caller's own
-            // sentence "this touch is the residual fill of a record this thread is about to park
-            // behind" was accepted as the whole argument. It is an argument about the FUTURE.
-            // The order at the validate point is fill, then emit, then park, so at the instant
-            // of the write the apply thread is still draining the unbarriered records the client
-            // ran ahead of - and the measured consequence was the GL thread bumping
-            // CurrentVerbSerial, withdrawing MGPipeServerClearVerbBoundary's flag and renaming
-            // m_currentVerb underneath a record the applier was inside, which surfaced as
-            // Fatal{UnmigratedPipeInput, "<field>@<the client's verb>"} on the apply thread.
-            // Because the exemption was unconditional, this guard could not fire on any of it:
-            // that is the answer to "does RefusePipeInputsTouchWhileApplierOwnsIt fire, and if
-            // not, why not".
-            //
-            // So the sentence still exempts the fill, but only once it is TRUE of this instant.
-            // The fill sites establish it by taking §2.5's forced wait first
-            // (QuiesceApplierBeforeFill, PipeFill.cpp); removing that wait is the red-once and
-            // lands here, by name, on the first barriered verb behind a run-ahead backlog.
-            //
-            // ApplyThreadIsInsideApplier() is an acquire load of the flag PipeApplier raises for
-            // the whole of ApplyOne - stamp, decode and LeaveApplier included - so "not inside"
-            // is exactly "no record is being applied" and not merely "not decoding".
+            // A barriered fill is exempt only if the applier is idle at this instant: the validate
+            // point runs fill, emit, park, so the applier may still be applying records the client
+            // ran ahead of. The fill sites wait for it first (QuiesceApplierBeforeFill), and
+            // ApplyThreadIsInsideApplier() covers the whole of PipeApplier's ApplyOne, so "not
+            // inside" means no record is being applied (ARCHITECTURE.md §9.2.2).
             if (isBarrieredFill && !ApplyThreadIsInsideApplier()) return;
             if (Server::ServerLoop::OnApplyThread()) return; // the applier owns the block
             // P15: with two blocks the GL thread's fill writes the client block, which the
@@ -3305,22 +3217,10 @@ namespace MobileGL::MG_Remote::Client {
         Transport::LogRoleMemory(phase, SampleMemory());
     }
 
-    // R-10's AND R-9's numbers IN EVERY SPLIT PRIVATE LOG, not only in the lanes that set
-    // MOBILEGL_PIPE_STATS=1.
-    //
-    // WHY IT IS HERE AND NOT ONLY ON THE STATS LINE. `MGPipe stats:` is an opt-in channel: two
-    // ctest entries out of 21 set MOBILEGL_PIPE_STATS, and neither the retrace lanes nor the
-    // 19 ordinary split entries do. R-10's proof obligation is about THE PHASE, not about the
-    // two counting lanes - "no record on the reduced path comes near half the ring" has to be
-    // readable from any split run that happened, which is what ID-53's per-entry private log
-    // is for. One line per session teardown costs nothing and cannot be missed.
-    //
-    // IT IS ALSO WHERE THE PROOF FAILS SOFTLY. A record ABOVE the cap already aborts on the
-    // spot with Fatal{RingOverrun} (PipeWireCodec.cpp), so this line's job is the other half:
-    // a maximum that is merely CLOSE to the cap is not a crash and would otherwise be
-    // invisible until the day a workload crossed it. The percentage is printed for exactly
-    // that reason, and R-10 names the integrator as the person who decides between early
-    // chunking and a bigger default ring when it climbs.
+    // Logs the wire ledger once per session teardown at INFO, so every split run's log shows the
+    // largest record against the ring's record cap whatever MOBILEGL_PIPE_STATS says. A record
+    // above the cap already aborts with Fatal{RingOverrun} (PipeWireCodec.cpp); the percentage
+    // shows a maximum creeping toward it, which calls for earlier chunking or a bigger ring.
     void ClientSession::LogWireLedger() const {
         const Uint64 maxRecord = m_encoder.MaxRecordBytesSeen();
         const Uint64 cap = m_encoder.MaxRecordBytesCap();

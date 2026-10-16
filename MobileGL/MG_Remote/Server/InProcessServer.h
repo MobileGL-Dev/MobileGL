@@ -6,27 +6,14 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// P12 (on-screen server window), D5. THE IN-PROCESS DISPLAY SERVER'S ENTRY POINTS.
-//
-// The on-screen server cannot be the exec'd supervisor that forks a child per session: the window
-// it renders into (the display Activity's SurfaceView) is an ANativeWindow in the APP's process, and
-// neither exec nor fork carries one. So the Activity's own process serves: a thread it starts calls
-// mobilegl_server_serve_inprocess, which is `libMobileGLServer.so tcp://... --serve` with THREADS
-// instead of fork - the same pre-auth, the same Busy for an authenticated second Hello while a
-// session is live, one session at a time, each session a thread of this process, the latch reset
-// between sessions and the backend pinned for the process lifetime. Crash isolation is what it
-// gives up: a session's abort (an unarmed SessionFail) takes this process - the Activity - with it.
-//
-// PRECONDITIONS, the same as mobilegl_server_main's, set in the environment BEFORE libMobileGL is
-// loaded (Os.setenv from Java): MOBILEGL_IPC_DIAL=no (else 64), none of MOBILEGL_TRANSPORT /
-// MOBILEGL_IPC_SERVER_PATH / MOBILEGL_IPC_RING_MB / MOBILEGL_IPC_STAGE_MB (else 65),
-// MOBILEGL_IPC_ROLE=server (forced if missing, as the supervisor does), MOBILEGL_IPC_TOKEN (required
-// for a non-loopback listen; >= the minimum length), optionally MOBILEGL_BACKEND_TYPE (the pin),
-// MOBILEGL_IPC_LOG_FORWARD, MOBILEGL_LOG_FILE_PATH.
-//
-// THE DISPLAY is separate: the JNI glue installs ServerDisplayInstance() (ServerDisplay.h) and
-// attaches/detaches the window from the SurfaceHolder callbacks. A server with no display installed
-// serves offscreen sessions only and refuses a ServerOwned surface by name.
+// Entry points of the in-process display server (ARCHITECTURE.md §15.2). Its window lives in the
+// app's process and survives neither fork nor exec, so a thread of that process serves, with a
+// thread per session instead of a fork: tcp:// runs the --serve supervisor (pre-auth, one session,
+// Busy), a unix endpoint up to MOBILEGL_IPC_INPROC_MAX_SESSIONS at once. Latches reset between
+// sessions, the backend is pinned for the process, and there is no crash isolation.
+// Set before libMobileGL loads: MOBILEGL_IPC_DIAL=no (else 64); none of MOBILEGL_TRANSPORT,
+// MOBILEGL_IPC_SERVER_PATH, _RING_MB or _STAGE_MB (else 65); MOBILEGL_IPC_TOKEN for a non-loopback
+// listen. The JNI glue installs ServerDisplayInstance(); without one, ServerOwned is refused.
 
 #pragma once
 

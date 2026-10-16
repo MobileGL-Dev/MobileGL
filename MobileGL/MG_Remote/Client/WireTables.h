@@ -6,31 +6,14 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// THE CLIENT ARM OF R-17's ROUTING: the encode twin of `gMGPipeWireRecordApply`. Owner: c1.
-//
-// Thirty-eight thin emitters over `ClientSession::EmitAndWait`, installed over the two
-// generated tables and the escape table that `MG_Pipe/PipeRoute.h` declares, so that under
-// split every resource, CSO, texture and program record leaves the GL thread as a WIRE RECORD
-// instead of executing synchronously against a context the apply thread now owns.
-//
-// WHAT ARMS `integration-split`. The 21 `DirectGLES.Split.*` entries skip on
-// `ClientSession::Active() == nullptr`. `Install()` below is called from the END of a
-// successful `ClientSession::Start()`, on the GL thread (the thread that called
-// `MG_Backend::Init()`), AFTER the Hello/Welcome handshake, after the first CapsSnapshot has
-// been adopted, and after the in-process server role's apply thread has been started. That
-// order is not a preference:
-//   - after the handshake, because an emitter that published before Welcome would be writing
-//     into a ring the peer has not mapped;
-//   - after the first snapshot, because R-8's liveness gates read the caps mirror and a
-//     placeholder mirror consumes nothing, so a record emitted before it would be emitted to a
-//     server this client has not yet been told consumes that family;
-//   - after the apply thread exists, because `EmitAndWait` BLOCKS on `appliedSeq` and nothing
-//     would advance it - a barrier wait with no applier is the 30-second Fatal, not a hang;
-//   - on the GL thread, because that is the only thread that may touch `gPipeInputs` while the
-//     barrier holds (table 3), and installing from the apply thread would publish the table to
-//     the GL thread with no synchronisation at all.
-// `Uninstall()` runs at the TOP of `Stop()`, before the rings go away, so the last thing any
-// straggling GL-thread call reaches is a named refusal rather than a dangling session.
+// The client arm of MGPipe routing, the encode twin of gMGPipeWireRecordApply: thin emitters over
+// ClientSession::EmitAndWait, installed into the generated tables and the escape table that
+// MG_Pipe/PipeRoute.h declares, so every resource, CSO, texture and program record leaves the GL
+// thread as a wire record instead of running against a context the apply thread owns.
+// InstallClientWireTables() runs last in ClientSession::Start, on the GL thread: after the
+// handshake (the peer has mapped the rings), after the first caps snapshot (consumer gates read
+// it) and after the apply thread starts (EmitAndWait blocks on appliedSeq). Uninstall runs first
+// in Stop, so a straggling routed call is refused by name instead of reaching freed rings.
 
 #pragma once
 #include <Includes.h>
@@ -130,23 +113,14 @@ namespace MobileGL::MG_Remote::Client {
     // ForgetEndedSession).
     void ForgetWireTablesOfEndedSession();
 
-    // ---- P14 S1: the EGL context lifecycle's control-plane half -----------------------------
+    // ---- the EGL context lifecycle's control-plane half -------------------------------------
     //
-    // NOT ring records and NOT routed rows: eglCreateContext/eglDestroyContext are the EGL
-    // lifecycle, which the catalogue deliberately keeps off the record plane (PipeCalls.def's
-    // "the eight EGL lifecycle entry points stay virtual functions on pActiveBackendObject"),
-    // so they cross as two SurfaceOp kinds through the same blocking frame channel the nine
-    // surface forwarders use. Called by MG_Impl's EGLImpl on the app thread, in the same order
-    // as the EGL calls themselves - which is the ordering the server's context table needs.
-    //
-    // THREE ANSWERS, NOT TWO, for the reason ObjectDeathEmit below has three: "the server said
-    // no" and "there is no wire for the question to cross" are different facts and the caller's
-    // answer to each is different. NoWire is the bring-up window before ClientSession::Start and
-    // the server role's own thread - in both, the pre-S1 shape (the client keeps its own EGL
-    // books and no server table exists) is the correct one and the context must be KEPT; Refused
-    // is a server that answered, and eglCreateContext turns it into EGL_NO_CONTEXT, because a
-    // context whose token the server did not table is one the first bind_context after it would
-    // be refused for.
+    // eglCreateContext / eglDestroyContext are not ring records: they cross as SurfaceOp frames
+    // on the blocking control channel the surface forwarders use, sent by EGLImpl on the app
+    // thread in EGL call order, which is the order the server's context table needs. NoWire
+    // (before ClientSession::Start, or on the server role's own thread) means keep the context on
+    // the client's books alone. Refused is a server answer: eglCreateContext then returns
+    // EGL_NO_CONTEXT, because the server would refuse that context's first bind_context.
     enum class ContextFrameEmit : Uint8 { Sent, NoWire, Refused };
     ContextFrameEmit SendCreateContextFrame(Uint64 clientContextToken, Uint64 shareGroupToken, Uint32 flags);
     // A destroy has the same three answers; the client's EGL book is dropped either way (that is

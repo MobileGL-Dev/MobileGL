@@ -233,27 +233,12 @@ namespace MobileGL::MG_Remote::Transport {
     } // namespace
 
     namespace {
-        // A filesystem AF_UNIX path, bounded by sun_path. Refused BY NAME when it
-        // does not fit rather than silently truncated - a truncated path is a
-        // different socket, and both sides would then "succeed" onto two
-        // different names.
-        // A LEADING '@' MEANS THE ABSTRACT NAMESPACE, which is the convention systemd and D-Bus
-        // use and the only rendezvous that works on Android.
-        //
-        // A filesystem AF_UNIX endpoint needs a writable directory, and an Android app has no
-        // /tmp - measured, not assumed: the first device run of the spawn arm launched its server
-        // fine and then died on `could not connect to "/tmp/mgl-15731-...sock" ... No such file or
-        // directory`, because bind() in the child had nowhere to put the node. The app's own cache
-        // dir would work, but only if every integrator remembered to say where it is, and the
-        // library has no way to ask.
-        //
-        // An abstract name has no filesystem presence at all: no directory, no mode bits, no stale
-        // node to unlink after a crash - which is the bind() failure `Listen` currently works
-        // around. It is scoped to the network namespace, so the two processes of ONE app find each
-        // other and nothing else can, which is exactly the reach this needs.
-        //
-        // Linux-only by construction. A path without '@' still works everywhere, and that is what
-        // an explicit endpoint (P12's "connect to something somebody else is listening on") uses.
+        // An AF_UNIX endpoint, bounded by sun_path: a path that does not fit is refused by name,
+        // never truncated (a truncated path is a different socket). A leading '@' selects the
+        // abstract namespace (Linux and Android only): no filesystem node, so no writable directory
+        // is needed (an Android app has no /tmp) and no stale node survives a crash; the name is
+        // scoped to the network namespace instead of a directory. A path without '@' is a
+        // filesystem socket and works everywhere.
         bool IsAbstractEndpoint(const std::string& path) {
             return !path.empty() && path[0] == '@';
         }

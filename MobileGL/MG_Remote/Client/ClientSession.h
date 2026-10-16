@@ -6,31 +6,14 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// The client half of a session: the rings, the handshake, the verb barrier. Owner: package s1
-// (construction and handshake) with c1 (the barrier and the reply read). Signatures by c0.
-//
-// INPROC USES ShmSegment AND THE RING, NOT new[] AND NOT InProcessTransport's deques. That is
-// half of what "inproc runs the same G3 codec as spawn" means: InProcessTransport
-// (InProcessTransport.cpp:38-97) is two deque<vector<uint8_t>> plus two condvar doorbells, it
-// touches neither a ring nor a codec, and building the session on top of it instead of on top
-// of the ring would make the whole phase unfalsifiable. The transport supplies the two
-// DOORBELLS and the control plane; the records go through SEG_CMD.
-//
-// THE VERB BARRIER (R-1). After emitting a verb the client blocks until
-// RingControl::appliedSeq >= the seq it just got back from the encoder. It is not caution: 31
-// of the 63 PipeInputs fields are still filled by the client's residual pass out of a live
-// GLContext, so an unbarriered queue lets the server read a FUTURE value of them. Two
-// consequences that must be stated because both are load-bearing:
-//   - while the barrier holds, at most one of {GL thread, apply thread} is runnable, which is
-//     what makes a single process-wide gPipeInputs legal (table 3);
-//   - the barrier is a RETIRING object, not a design. It opens family by family as table 2's
-//     BARRIER-PULLED column empties, and each later package reports how many rows it left.
-//
-// THE BARRIER'S WAIT IS ALSO THE REPLY'S WAIT (R-3/R-5). The reply slot id IS the record seq,
-// so "wait for appliedSeq >= mySeq" and "wait for my answer" are one wait and the four Bool
-// acceptance returns, ReadPixels' pixels and MapPersistent's decline cost ZERO extra round
-// trips. The client MUST NOT re-derive any of those four answers locally - that is the c0f/c0g
-// defect P4a paid two contract corrections for, and "always accept" is ID-39's 66 lost uploads.
+// The client half of a session: the rings, the handshake and the record wait rule
+// (ARCHITECTURE.md §11.6). Inproc uses the same shared segments, ring and codec as spawn;
+// InProcessTransport supplies only the two doorbells and the control plane, so the inproc lane
+// exercises the real data path. The reply slot id is the record seq, so waiting for
+// appliedSeq >= seq is also the wait for the answer and a reply costs no extra round trip.
+// An answer the server may decline is read from its reply, never assumed: a client that assumed
+// "accepted" would clear its dirty flags for records the server dropped. Rows that skip the
+// answer (willReadReply=false) do so only where the client already knows it or nobody uses it.
 
 #pragma once
 #include "../Transport/ILink.h"
@@ -73,26 +56,14 @@ namespace MobileGL::MG_Remote::Client {
         // Null until Start() succeeds; MG_Backend::Init() is the only caller of Start().
         static ClientSession* Active();
 
-        // P6 `dl` (CONTRACT-P6 5.3). THE DEVICE-LOST LATCH, and the two words that matter are
-        // SESSION-SCOPED and LATCH: it is set at most once per session and never cleared while
-        // that session lives. What recovers is the PROCESS, not the session: the application's
-        // next eglCreateContext / eglCreate*Surface / eglInitialize ends the lost session and
-        // dials a fresh one (RecoverAfterDeviceLoss), and every context built before stays lost.
-        //
-        // SET FROM Doorbell::PeerHungUp() OR THE SERVER'S OWN SessionFault, NEVER FROM A
-        // TIMEOUT. 5.4's whole point is that slow and dead are different states and must be told
-        // apart without a threshold: under P5e run-ahead a server one frame behind is the
-        // INTENDED steady state, so a latch armed by a deadline would fire on a healthy session
-        // under load. The descriptor (or the server, naming its fault) answers instead.
-        //
-        // WHAT THE CALLING THREAD SEES, which is more than the latch: the thread's GL state may
-        // belong to a session that has already been replaced (a context from before a recovered
-        // loss, still current on some thread), and for that thread the device is lost for good -
-        // nothing it does may reach the new session. ScopedWireMute below answers true as well;
-        // ScopedCurrentSessionWork lifts the thread's own staleness (not the latch).
-        //
-        // The static form answers false whenever no session is active, so monolith and the pull
-        // build get the honest answer with no branch of their own.
+        // Whether the device is lost for the calling thread. The latch is per session: set at
+        // most once, never cleared while that session lives. Recovery replaces the session
+        // (RecoverAfterDeviceLoss) and every context built before stays lost (ARCHITECTURE.md
+        // §15.3). It is set only when the peer hangs up or the server sends a SessionFault, never
+        // from a timeout: under run-ahead a server a frame behind is healthy. Also true inside
+        // ScopedWireMute and on a thread whose context belongs to a replaced session;
+        // ScopedCurrentSessionWork lifts the thread's staleness, not the latch. Otherwise false
+        // when no session is active (monolith).
         static Bool DeviceLost();
         // The latch alone: is the ACTIVE session lost. What the EGL layer asks before recovering.
         static Bool SessionLatchedLost();
@@ -184,32 +155,13 @@ namespace MobileGL::MG_Remote::Client {
         // ran monolith and went green" failure, and it must be loud.
         MobileGLResult Start(MG_Config::TransportMode mode, const String& endpoint);
 
-        // Start()'s second half: the handshake and everything after it, over a transport pair
-        // the CALLER made with InProcessTransport::CreatePair. Start() refuses every mode but
-        // `inproc`, makes the pair, and calls this; it is public for exactly one reason. The
-        // Welcome guard below (envelope->msg_as_Welcome() == nullptr, ID-46 finding 7) can only
-        // be reached by a frame that arrives on the server->client direction BEFORE the
-        // server's own Welcome, and Start() builds that pair itself, so no control could put
-        // one there. SessionHandshakeTest does it through here, and the null-union Welcome must
-        // come back as MOBILEGL_ERR_PROTOCOL_MISMATCH with the guard's own line. Not a second
-        // way to start a session: MG_Backend::Init() calls Start(), and nothing else may call
-        // this with a pair it did not just create.
-        // P6 `sm`: the spawn client's half. `transport` is this process's end of
-        // the control socket to an already-running server process; the two bell
-        // fds are this side's ends of the two bell pairs (ServerSpawn.h).
-        //
-        // It is the SAME handshake StartOverTransportPair runs, with three
-        // differences and no others: the server half happens in another process
-        // so there is no local Accept to call, the four segments arrive as
-        // descriptors over SCM_RIGHTS instead of being dup'ed from a local
-        // owner, and the bells are sockets rather than condvars. Everything
-        // below the attach - producer, reply pool, event ring, segment table,
-        // encoder - is byte for byte the inproc path, which is the property
-        // that makes "P6 is a transport swap" true of THIS function even though
-        // it is not true of the phase.
-        // `cp`: the remote control sink ServerLoop calls when the server is
-        // another process. Encode, send, wait for the SurfaceReply that carries
-        // OUR seq back.
+        // The sink ServerLoop calls when the server is another process: it encodes the frame,
+        // sends it and waits for the SurfaceReply carrying its seq.
+        // StartOverTransportPair (below) is Start()'s second half, over a pair the caller just
+        // made with InProcessTransport::CreatePair. It is public only so SessionHandshakeTest can
+        // put a frame ahead of the server's Welcome; production reaches it only through Start().
+        // StartSpawned and StartOverSocket run the same handshake against a server in another
+        // process.
         static MobileGLResult RemoteControlSinkThunk(void* user, Server::SurfaceControlFrame& frame);
         MobileGLResult RunRemoteSurfaceControlFrame(Server::SurfaceControlFrame& frame);
 
@@ -321,23 +273,14 @@ namespace MobileGL::MG_Remote::Client {
         // DECLINED rather than a hang.
         static void SetT0OfferFaultForTest(Int32 delayMs);
 
-        // `willReadReply` (P12) and `wantReply` ARE TWO QUESTIONS AND MUST STAY TWO.
-        //
-        //   wantReply      does THIS CALL read the answer (it blocks on the barrier and takes the
-        //                  reply slot before returning);
-        //   willReadReply  will the answer be read AT ALL - now, or later by somebody else.
-        //
-        // The create window is the case that makes the difference load-bearing: it emits with
-        // wantReply=false and its answers are read afterwards by the window's drain, so a record
-        // it emits must still be ANSWERED. Only willReadReply=false tells the server it may skip
-        // the answer (Transport::kRecNoReply), and only three sites may say it: the parameter row
-        // for a confirmed object, the respecify row's fire-and-forget half, and the sub-data row
-        // - each of which answers its own caller locally and reads nothing from the wire.
-        //
-        // THE TWO ILLEGAL COMBINATIONS ARE FATAL BY NAME rather than ignored, because both would
-        // fail silently in opposite directions: wantReply && !willReadReply is a caller blocking
-        // on an answer it has just told the server not to send, and !willReadReply on a row with
-        // no reply slot is a caller discarding an answer that never existed.
+        // EmitAndWaitTails' `wantReply` and `willReadReply` are separate questions:
+        //   wantReply      this call blocks and reads the answer before it returns;
+        //   willReadReply  someone reads the answer at all, now or later (the create window emits
+        //                  with wantReply=false and its drain reads the answers afterwards).
+        // Only willReadReply=false lets the server skip the answer (Transport::kRecNoReply); the
+        // rows in WireTables.cpp that pass it each answer their caller locally. wantReply with
+        // !willReadReply, and !willReadReply on a row with no reply slot, are Fatal by name: the
+        // first would wait for an answer never sent, the second discards one never posted.
 
         // MOBILEGL_IPC_VERB_BARRIER. False is the R-1 negative control and is EXPECTED to be
         // red; it must be run once and the way it goes red recorded.
@@ -431,34 +374,13 @@ namespace MobileGL::MG_Remote::Client {
         static Bool InBarrierWait();
         static Bool ApplyThreadIsInsideApplier();
 
-        // P5c (gt, CONTRACT-P5C §6 layer 2 / audit A1): the sentence above's second half,
-        // wired. A GL-thread touch of gPipeInputs while the apply thread is inside the
-        // applier and THIS thread is not in a barrier wait is Fatal{RoleViolation,
-        // "gPipeInputs"} - the barrier is the only thing that makes one process-wide
-        // gPipeInputs legal (CONTRACT-P5 table 3), and a touch in that window races the
-        // applier's own reads of it. The residual fill and the verify harness are legal by
-        // timing, not by exemption: they run before the record is published, which under an
-        // armed barrier is a moment the flag is provably down (the applier drops it before
-        // appliedSeq advances past the record the client last waited on). No-op when no armed
-        // split session is live, when the caller IS the apply thread, and when the barrier is
-        // disarmed - MOBILEGL_IPC_VERB_BARRIER=0 is R-1's negative control and its red belongs
-        // to Fatal{BarrierViolation}, not to this check.
-        //
-        // P5e (ra, CONTRACT-P5E §3.5) RE-DERIVES IT UNDER RUN-AHEAD, and `isBarrieredFill` is
-        // what the caller says about ITSELF: "this touch is the residual fill of a record this
-        // thread is about to park behind". With run-ahead armed the block is server-role
-        // memory for every other touch. The MOBILEGL_IPC_BATCH_WAITS early return goes with
-        // it: batching is about how many round trips a lockstep client pays, and it says
-        // nothing about a client that pays none.
-        //
-        // P5e (ra2) KEEPS THE ARGUMENT AND STOPS TAKING IT ON TRUST. "About to park behind it"
-        // is a claim about the future; the write is now. Between the fill and the park the
-        // apply thread is still draining the unbarriered records the client ran ahead of, so an
-        // unconditional exemption made this guard unfireable on exactly the class it was
-        // written for - measured as the apply thread aborting on a field whose stamp the GL
-        // thread had just withdrawn. So the rule is "not while the applier is inside" again,
-        // for barriered fills too; what changed is that the fill sites MAKE it true first, with
-        // §2.5's forced wait (PipeFill.cpp's QuiesceApplierBeforeFill), instead of asserting it.
+        // Fatal{RoleViolation, "gPipeInputs"} when a GL-thread touch of gPipeInputs could race the
+        // applier's reads (ARCHITECTURE.md §9.2.2). Under run-ahead only a barriered fill
+        // (`isBarrieredFill`) made while the applier is not inside a record is legal, so fill
+        // sites wait first (QuiesceApplierBeforeFill); with distinct client and server blocks a
+        // barriered fill is always legal. Under lockstep it checks only with
+        // MOBILEGL_IPC_BATCH_WAITS=0 and an armed barrier, and fires when the applier is inside
+        // and this thread is not in a barrier wait. Never fires on the apply thread.
         static void RefusePipeInputsTouchWhileApplierOwnsIt(const char* surface,
                                                             Bool isBarrieredFill = false);
 

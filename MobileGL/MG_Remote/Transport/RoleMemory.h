@@ -6,31 +6,13 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// Peak-RSS accounting for the two roles. Owner: package s1; CONSUMER: package t1,
-// which puts the numbers in MEASUREMENTS.
-//
-// WHY BOTH HALVES ARE NEEDED, AND WHY NEITHER ALONE IS THE ANSWER.
-//
-//   VmHWM is the kernel's own high-water mark of resident set size, in
-//   /proc/self/status. It is the only number that cannot be argued with - it
-//   counts what the process actually touched, including the pages the allocator
-//   never gave back. But under `inproc` BOTH ROLES ARE ONE PROCESS, so a single
-//   VmHWM cannot be split between them and reporting it as "the client's" would
-//   be a lie that only becomes visible in P6.
-//
-//   The segment ledger is the other half: every ShmSegment this process mapped,
-//   by kind and by role. It is exact, it IS separable by role, and under `spawn`
-//   it is the part that appears in both processes at once (one mapping, two
-//   address spaces, one set of physical pages) - which is precisely the number a
-//   naive "sum the two VmHWMs" double-counts.
-//
-// So the pair is the measurement: VmHWM for what the process really cost, the
-// ledger for how much of it is shared mapping that a second process will not pay
-// for again. t1 reports both, per role, and the split's memory claim is
-// (client VmHWM + server VmHWM - shared ledger), never either half on its own.
-//
-// A SAMPLE IS A SYSCALL AND A PARSE. Take it at phase boundaries - after the
-// handshake, after the first frame, at teardown - never per record.
+// Peak-RSS accounting for the two roles, logged per role at phase boundaries. It needs two
+// halves: VmHWM (/proc/self/status) is what the process really touched, but under inproc both
+// roles are one process and it cannot be split between them; the segment ledger is exact and
+// per role, and under spawn its pages are mapped in both processes at once. The split's memory
+// cost is client VmHWM + server VmHWM - the shared ledger, never either half alone.
+// A sample is a syscall and a parse: take it after the handshake, after the first frame and at
+// teardown, never per record.
 
 #pragma once
 

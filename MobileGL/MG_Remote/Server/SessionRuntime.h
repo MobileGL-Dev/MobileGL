@@ -6,30 +6,14 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// P14 S2 (docs/Disaggregated/design/11-state-ownership.md): ONE SERVED SESSION'S PROCESS-LOCAL
-// STATE, and the routing that lets the rest of the tree keep spelling the singletons.
-//
-// WHAT THE SINGLETONS WERE. ServerSessionInstance()/ServerLoopInstance() were the session, so one
-// session per process was a property of every file that named them. This slice gives each served
-// session its own {ServerSession, ServerLoop, PipeInputs} triple, held here, and resolves the two
-// singleton accessors through the CALLING THREAD's session - which is what makes the ~900 sites
-// that spell gPipeInputs, gPipeInputs, ServerSession::Active() or ServerLoopInstance() find the right
-// one without one line of any of them moving.
-//
-// WHO IS A SESSION THREAD. Two threads per session, both created by the session itself:
-//   * the CONTROL thread - ServerMain::RunSession's own thread, which reads the Hello, drives the
-//     blocking control pump and ends the session (a std::thread per session in the supervisors, a
-//     forked process in the `--serve` worker shape);
-//   * the APPLY thread - ServerLoop's mgl-srv-apply, which applies the ring and owns the backend.
-// ThreadSessionScope is installed on both, first thing. A thread with no scope resolves to the
-// process-wide defaults, which is exactly the old behaviour and is what the CLIENT process, the
-// inproc one-process client+server shape and every unit case keep getting.
-//
-// THE INPROC CLIENT+SERVER SHAPE IS DELIBERATELY UNTOUCHED. ClientSession::Start calls
-// ServerLoopInstance().Start(ServerSessionInstance()) and never opens a scope, so its applier and
-// its app thread still share the one process-wide PipeInputs block - the verb barrier's premise
-// (one block two roles alternate on) is a property of that shape and this file must not break it.
-// Only ServerMain::RunSession, which serves a session with its own transport, opens a scope.
+// One served session's process-local state ({ServerSession, ServerLoop, PipeInputs}) and the
+// per-thread routing behind the singletons: on a thread inside a ThreadSessionScope,
+// ServerSessionInstance(), ServerLoopInstance() and gPipeInputs resolve to that thread's session;
+// elsewhere they resolve to the process-wide defaults. ServerMain::RunSession opens the scope on
+// its control thread and ServerLoop on the session's apply thread. The in-process client+server
+// shape (ClientSession::Start) opens none, so its app thread and applier keep sharing the one
+// PipeInputs block the verb barrier relies on; keep it that way.
+// See docs/Disaggregated/design/11-state-ownership.md.
 
 #pragma once
 #include <Includes.h>

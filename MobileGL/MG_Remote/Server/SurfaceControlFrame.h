@@ -6,34 +6,14 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// P5f, package fc: the EGL/surface control plane, framed.
-//
-// WHAT THIS REPLACES. The twelve Server* forwarders used to cross to the apply thread through a
-// one-slot mailbox carrying a raw FUNCTION POINTER plus a void* to a stack-local Args struct
-// (P5c audit row G4). Both halves are meaningless across a process boundary, which is the whole
-// reason P5f exists. The frame below is the seam f0-egl's census prescribed: every forwarder's
-// arguments converge into one pure-value struct; inproc the struct crosses the (retained,
-// blocking, one-slot) channel by value; under spawn the SAME struct is what SurfaceOpCodec
-// encodes into a Wire::SurfaceOp. The thread model does not move - only the payload's shape.
-//
-// THE FRAME CARRIES NO POINTERS, and that is enforced by the exhaustive member check below:
-// adding a member requires updating its structured binding; pointer types fail the assertion.
-// The three places the old Args structs held client addresses map onto values:
-//
-//   ServerInitializeEGLDisplay's major/minor out-pointers -> the reply fields eglMajor/eglMinor;
-//   ServerCreateEGLWindowSurface / ServerSetWindowHandle's const WindowHandle* -> windowBackend +
-//     nativeToken + width/height (WindowHandle::Handle as an integer);
-//   every EGL handle (display/surface/context) -> a Uint64 token. Inproc the token IS the handle
-//     value bit-cast (same process, same driver, and the N-3 tuple bookkeeping compares them);
-//     under spawn the client mints dense tokens instead (P6-CONTRACT-DRAFT table 0) - the field
-//     width is already the token's, so nothing here changes shape on that day.
-//
-// PROCESS-LOCAL WINDOW OBJECTS ARE REFUSED BY NAME on the wire: ANativeWindow* and
-// CAMetalLayer* mean nothing in the server process. SurfaceOpCodec names their refusals
-// AndroidNativeWindow:use-MOBILEGL_IPC_SURFACE=server and MetalLayer:use-MOBILEGL_IPC_SURFACE=server,
-// and they are permanent (Rule H): a client's window never crosses, a windowed client uses
-// MOBILEGL_IPC_SURFACE=server, which gives the SERVER a window of its own (kServerOwnedWindowBackend
-// below, WindowKind::ServerOwned on the wire).
+// The EGL/surface control plane as a value frame. Every Server* forwarder packs its arguments
+// into one SurfaceControlFrame: inproc it crosses the blocking one-slot channel to the apply
+// thread by value, and under spawn SurfaceOpCodec encodes the same struct as a Wire::SurfaceOp.
+// The frame holds no pointers (the exhaustive member check below enforces it): out-pointers
+// become reply fields, a WindowHandle becomes windowBackend + nativeToken + size, and EGL
+// handles travel as Uint64 tokens (inproc, the handle value itself). Process-local windows
+// (ANativeWindow*, CAMetalLayer*) never cross: SurfaceOpCodec refuses them by name, and a
+// windowed client uses MOBILEGL_IPC_SURFACE=server (kServerOwnedWindowBackend).
 
 #pragma once
 #include <Includes.h>

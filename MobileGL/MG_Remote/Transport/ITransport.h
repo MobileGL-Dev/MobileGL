@@ -6,27 +6,14 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// The control-plane transport interface.
-//
-// It is deliberately dumb: complete messages in, complete messages out, plus
-// the one thing shared memory cannot do without help - handing a file
-// descriptor to the peer. No session routing, no seq accounting, no
-// serialization; those live above, in the protocol layer.
-//
-// Everything on the hot path bypasses this interface entirely: records go into
-// the SEG_CMD ring (Ring.h) and the peer is woken through a Doorbell
-// (Doorbell.h). ITransport carries the handshake, surface ops, resync, aux
-// requests and fatals - the rare, variable-length, must-evolve traffic that
-// plan section 7.1 assigns to FlatBuffers tables.
-//
-// This header stays dependency-light on purpose (mg_protocol_base.h plus the
-// standard library): it is included by both roles and by the eventual
-// server-side binary, and nothing about a byte pipe needs the GL frontend's
-// umbrella header.
-//
-// Threading: one instance is not internally synchronized for send; callers
-// serialize sends. ReceiveFrame/ReceiveFd may be called from one dedicated
-// reader thread concurrently with sends from another.
+// The control-plane transport interface: complete messages in, complete messages out, plus
+// handing a file descriptor to the peer. No session routing, seq accounting or serialization;
+// those live in the protocol layer. Hot-path records bypass it (Ring.h, Doorbell.h); it carries
+// the handshake, surface ops, aux requests and fatals (ARCHITECTURE.md §11.4).
+// Dependency-light (mg_protocol_base.h and the standard library): both roles include it, and a
+// byte pipe needs nothing from the GL frontend's umbrella header.
+// Threading: callers serialize sends; one reader thread may call ReceiveFrame/ReceiveFd
+// concurrently with sends from another.
 
 #pragma once
 
@@ -60,23 +47,12 @@ namespace MobileGL::MG_Remote::Transport {
 
         // Receives the next complete message.
         //
-        //   MOBILEGL_OK                   - copied into `buffer`, *outSize is
-        //                                   the message size, message consumed.
-        //   MOBILEGL_ERR_BUFFER_TOO_SMALL - `buffer` is too small. *outSize is
-        //                                   the size required and THE MESSAGE
-        //                                   STAYS QUEUED: call again with a
-        //                                   buffer of at least that size and it
-        //                                   is still there.
-        //   MOBILEGL_ERR_TIMEOUT          - nothing arrived within timeoutMs
-        //                                   (0 = non-blocking poll).
-        //   MOBILEGL_ERR_TRANSPORT_CLOSED - peer gone, nothing left buffered.
-        //   MOBILEGL_ERR_PROTOCOL_MISMATCH- framing violated; the transport is
-        //                                   latched failed and never recovers.
-        //
-        // The buffer-too-small half of that contract is the whole point of
-        // having one: the earlier branch's transport failed the call AND
-        // dropped the message, which wedges the stream permanently the first
-        // time a message is bigger than the reader's guess.
+        //   MOBILEGL_OK                    - copied into `buffer`, *outSize is its size, consumed.
+        //   MOBILEGL_ERR_BUFFER_TOO_SMALL  - *outSize is the size required; the message stays
+        //                                    queued for a call with a large enough buffer.
+        //   MOBILEGL_ERR_TIMEOUT           - nothing arrived within timeoutMs (0 = poll).
+        //   MOBILEGL_ERR_TRANSPORT_CLOSED  - peer gone, nothing left buffered.
+        //   MOBILEGL_ERR_PROTOCOL_MISMATCH - framing violated; the transport stays failed.
         virtual MobileGLResult ReceiveFrame(MobileGLMutableByteSpan buffer, std::uint64_t* outSize,
                                             std::uint32_t timeoutMs) = 0;
 

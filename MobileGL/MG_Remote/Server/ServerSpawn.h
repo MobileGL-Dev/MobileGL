@@ -6,35 +6,14 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// LAUNCHING a server process, and the process discipline around it.
-// Package `sm` (CONTRACT-P6.md §3).
-//
-// IT LAUNCHES; IT DOES NOT COUPLE. The two processes are independent: this
-// hands the child an endpoint NAME and nothing else - no inherited descriptors,
-// no shared memory, no handshake. The child listens on that name and the client
-// connects to it, exactly as it would to a server someone started by hand or
-// that an Android Service started minutes earlier.
-//
-// An earlier shape of this file forked the server and handed it fds 3..6.
-// Inheritance works and is less code, but it can only ever produce a server
-// that is a CHILD OF ITS CLIENT - which the end state cannot use, because there
-// the server is a standing application and the client is elsewhere, possibly on
-// another kernel. So fork/execve survives here only as A WAY TO START A
-// PROCESS, which is all it ever needed to be, and every fd it used to carry is
-// gone.
-//
-// ANTI-RECURSION IS STILL TWO INDEPENDENT CATCHES, and CONTRACT-P6 §3.1 is why
-// neither is the original ARCHITECTURE.md §15.1 rule. That rule says the child hard-sets
-// Transport to Monolith; a6 measured that 226 live lines test
-// `Transport != Monolith` to select the SERVER arm, 148 of them in MG_Backend,
-// so obeying it flips the whole backend to frontend glue in the one process
-// with no frontend. Instead:
-//    (a) STRUCTURAL: MOBILEGL_IPC_DIAL=no, a separate axis from which role the
-//        process plays;
-//    (b) ENVIRONMENTAL: MOBILEGL_TRANSPORT and every MOBILEGL_IPC_* removed
-//        from the child's envp.
-// The child refuses with exit 64 for (a) and 65 for (b), so the two safeties
-// are distinguishable - two that cannot be told apart are one.
+// Launches a server process. The child gets an endpoint name and nothing else (no inherited
+// descriptors, no shared memory) and listens on it like a server started by hand or by an Android
+// Service, so a spawned server never depends on being its client's child.
+// Anti-recursion is two independent catches (ARCHITECTURE.md §15.1), not forcing Transport to
+// Monolith, which would turn off the server arms selected by `Transport != Monolith`:
+// (a) MOBILEGL_IPC_DIAL=no, separate from the process's role; (b) MOBILEGL_TRANSPORT and the
+// MOBILEGL_IPC_* knobs scrubbed from the child's environment. The child exits 64 for (a) and 65
+// for (b), so the two are distinguishable.
 
 #pragma once
 

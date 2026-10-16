@@ -20,9 +20,27 @@
 
 一页 4 KiB，每个争用组一条 cache line，按写者分组（P6 lk）：producer 线 `cmdHead` / `submittedSeq`；consumer 线两个 tail；四个 consumer 写的水位收成 `Progress`（`appliedSeq` / `retiredSeq` / `completedFrameSerial` / `presentAckSerial`）；最后是 epoch、generation、park 标志与 `eventRingFull` / `eventDropped`。游标是单调字节计数、2 的幂掩码、永不重置；pad 记录处理 wrap；不可能的头 → `Fatal{ProtocolCorruption}`。
 
+#### 11.2.1 五个水位
+
+| 水位 | 由谁推进 | 含义 |
+|---|---|---|
+| `submittedSeq` | producer，发布之后 | 诊断量（client 领先 server 多少），没有人等它；放在 producer 的 cache line 上，`LinkProgress` 因此单写者 |
+| `appliedSeq` | consumer，每 apply 一条记录 +1 | verb barrier 与每个 reply 等待读它，所以不得批量：批量会让等待方卡在已完成的工作上，或在未完成的工作上醒来 |
+| `retiredSeq` | consumer，记录引用的 `SEG_STAGE` 字节用完后 | staging 分配器只在它之后回收；不超过 `appliedSeq` |
+| `completedFrameSerial` | server，present 完成时 | 回收与老化等它；比 `appliedSeq` 落后一个 GPU 深度，不得混用 |
+| `presentAckSerial` | server，归还 present credit 时 | present 节流等它；唯一限制延迟而非字节的背压 |
+
+规则（`SessionRings.h` 的 `Watermark` 是唯一实现）：所有等待用 `>=`，两侧都可能一次前进多步，`==` 会错过唤醒。水位只许晚发布、不许早发布：晚只是多等，早会让等待方静默使用尚未发生的工作，环上没有校验能发现；除 `appliedSeq` 外都可惰性发布，回退是 `Fatal{ProtocolCorruption}`。wrap 填充（`kRecPad`）不推进 seq：seq 就是 reply slot 的 id，只有一侧计数填充时两侧序号每次 wrap 偏一、静默读到别的调用的答案，所以两侧都在计数前跳过它（`RingConsumer::Pop`）。
+
 ### 11.3 双向 doorbell（`Doorbell.h`）
 
 两个方向都是"先自旋、再置 parked、再阻塞"，发布方仅当对端 parked 时敲；丢失唤醒由两个 `seq_cst` fence 关闭。`CondVarDoorbell`（同进程，带 `Kill()`）与 `SocketDoorbell`（跨进程，对端关闭即死亡检测）。stream 数据面上门铃是本地条件变量，由读线程敲。
+
+#### 11.3.1 丢失唤醒为什么靠两道 fence
+
+等待方：置 park 标志 → `std::atomic_thread_fence(seq_cst)` → 重测条件（`Doorbell::Wait`）；通知方：发布水位 → 同样的 fence → 读 park 标志（`NotifyIfParked`）。两道 fence 都在 seq_cst 全序里、必有先后，按 [atomics.order] 至少一侧看得见另一侧的写，所以标志自身的读写可以是 relaxed。
+
+只把标志的 store / load 改成 seq_cst 不够：Dekker 论证要求四个访问都在全序里，而水位发布是 release store（`RingProducer::Publish`）、条件重测是 acquire load。x86 上 release store 是普通 MOV，还停在 store buffer 里时，对标志的普通 MOV 读就可能读到 0，通知方于是不敲门铃，等待方在旧水位上永久 park；ARMv8 上 STLR→LDAR 是 RCsc，只是碰巧没事。所以两道 fence 都不可删，且 `NotifyIfParked` 必须在水位发布之后调用：fence 只约束它之前的访问。
 
 ### 11.4 控制面（`protocol.fbs`、`Framing.h`、`ITransport.h`）
 

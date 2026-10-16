@@ -6,25 +6,14 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// One shared-memory segment: SEG_CMD, SEG_STAGE, SEG_REPLY, SEG_EVENT, a
-// per-object SEG_SHADOW or a SEG_ADOPT store (inherited segment layout, plan
-// section 8.1).
-//
-// Creation matrix (earlier plan section 6.1):
-//   - Android:      ASharedMemory_create (API 26; libc's memfd_create wrapper
-//                   only appears at API 30, which is above our floor)
-//   - desktop Linux: syscall(SYS_memfd_create, ...) directly, for the same
-//                   reason - the glibc wrapper is recent and this file has to
-//                   build against old sysroots
-//   - other POSIX:  shm_open + immediate shm_unlink, the fd keeps it alive
-//   - Windows:      CreateFileMappingW in the Local\ namespace
-//
-// Transfer is NOT done here. On POSIX the fd travels by SCM_RIGHTS
-// (FdPassing.h / ITransport::ShareFd) and the name is only a debugging label;
-// on Windows the section name travels inside the SegmentRef table.
-//
-// The Windows implementation is compile-guarded and untested at the time it
-// was written: no Windows machine is a correctness gate for this project.
+// One shared-memory segment: SEG_CMD, SEG_STAGE, SEG_REPLY, SEG_EVENT, a per-object SEG_SHADOW
+// or a SEG_ADOPT store (ARCHITECTURE.md §11.1). Created with ASharedMemory_create on Android
+// (libc's memfd_create wrapper needs API 30, above the API 26 floor), syscall(SYS_memfd_create)
+// on desktop Linux (old sysroots lack the glibc wrapper), shm_open plus immediate shm_unlink on
+// other POSIX, and CreateFileMappingW in Local\ on Windows (compile-guarded, untested: Windows
+// is not a correctness gate). Transfer happens elsewhere: on POSIX the fd travels by SCM_RIGHTS
+// (FdPassing.h, ITransport::ShareFd) and the name is a debug label; on Windows the section name
+// travels in the SegmentRef table.
 
 #pragma once
 

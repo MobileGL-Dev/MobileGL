@@ -6,61 +6,14 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// The ring-owning half of a session: the four segments, the two ring endpoints,
-// and the five watermarks. Owner: package s1.
-//
-// This is the object the P5 gate is really about. ARCHITECTURE.md §10.1 asks that
-// `inproc` run THE SAME G3 codec as `spawn`, and InProcessTransport cannot
-// deliver that no matter how it is edited: it is two deque<vector<uint8_t>> plus
-// two condvar doorbells (InProcessTransport.cpp:38-97), it owns THE BELLS BUT
-// NOT THE RING, and it runs no codec at all. So the rings live here, above
-// ITransport, in one implementation both delivery modes use - and the transport
-// supplies the control plane and the two bells, which is exactly what its own
-// header says it is for (ITransport.h:16-20: "everything on the hot path
-// bypasses this interface entirely").
-//
-// INPROC USES ShmSegment TOO, NOT new[]. In one address space a heap allocation
-// would work and would be faster to write. It is refused deliberately: it is half
-// of what makes "the same code path" true rather than nominal. A `new` here means
-// the mapping, the alignment, the size rounding, the read-only peer view and the
-// lifetime are all exercised for the first time in P6, on the day the second
-// process appears - which is the shape of every "it was green in CI" failure this
-// phase is trying not to repeat.
-//
-// ---------------------------------------------------------------------------
-// THE KNOB NAMES THE RING; THE SEGMENT IS THE RING PLUS ONE CONTROL PAGE.
-//
-// Ring.h:11-13 puts RingControl at the HEAD of SEG_CMD and RingProducer requires
-// a POWER-OF-TWO capacity (Ring.cpp:89-103 - the mask IS the indexing). Those two
-// facts together mean a segment and its ring cannot both be 8 MiB, and one of the
-// two numbers has to give.
-//
-// The one that gives is the SEGMENT: SEG_CMD is `MOBILEGL_IPC_RING_MB` MiB PLUS
-// 4096, so the ring inside it is exactly MOBILEGL_IPC_RING_MB MiB and
-// RingProducer::MaxRecordBytes() is exactly half of that. CONTRACT-P5 §5 and
-// Config.h's MOBILEGL_IPC_RING_MB comment - "A RECORD MAY BE AT MOST HALF OF
-// THIS, so 8 MiB caps one record at 4 MiB" - are then TRUE AS WRITTEN, which
-// matters because that sentence is what every other package sizes against.
-//
-// The first version of this file did the opposite: an 8 MiB segment with a 4 MiB
-// ring and a 2 MiB record cap, on the grounds that ProtocolSmokeTest.cpp:72 pinned
-// the four announced sizes. That was wrong on the facts - that test builds four
-// SegmentRefs from its own literals and round-trips them through the schema; it
-// says nothing about what a session announces, and it never mentions
-// SessionSegments at all. So the alternative was available at no cost, and the
-// version that made two live documents false and left half of SEG_CMD mapped and
-// unreachable was the worse of the two.
-//
-// SegmentRef.sizeBytes therefore announces the MAPPING size (ring + page), which
-// is what a spawn peer must mmap. The four numbers a reader recognises - 8 MiB /
-// 32 MiB / 16 MiB / 256 KiB (ID-47) - are the RING sizes, which is what the
-// knobs name.
-//
-// SEG_STAGE has no control page of its own: RingControl carries TWO cursor
-// triples (Ring.h:101-109) and the stage triple is the second. So SEG_STAGE is
-// exactly its ring, and 32 MiB is already a power of two. SEG_REPLY is not a ring
-// at all.
-// ---------------------------------------------------------------------------
+// The ring-owning half of a session: the four segments, the two ring endpoints, the five
+// watermarks. The rings live above ITransport (control plane only), so every delivery mode runs
+// the same ring and codec code, and `inproc` maps real ShmSegments rather than heap memory so the
+// mapping, sizing and peer-view paths are exercised on every run.
+// Sizes name the ring: SEG_CMD and SEG_EVENT are a power-of-two ring plus one RingControl page at
+// the head, so MOBILEGL_IPC_RING_MB (rounded down to a power of two) is the command ring itself
+// and MaxRecordBytes() is half of it; SegmentRef.sizeBytes announces the whole mapping. SEG_STAGE
+// (a linear allocator) and SEG_REPLY (a slot pool) have no control page.
 
 #pragma once
 
@@ -142,24 +95,12 @@ namespace MobileGL::MG_Remote::Transport {
         // Private, identically addressed mirrors for the stream data plane.
         MobileGLResult CreatePrivate(const SessionSegmentSizes& sizes, MemoryRole role);
 
-        // The inproc peer's view of the owner's four segments, booked under the
-        // OTHER role. It does NOT re-init the control pages - there is one shared
-        // page per ring and re-initialising it would zero the owner's cursors out
-        // from under whoever is already using them.
-        //
-        // ON POSIX THIS IS A REAL SECOND MAPPING, NOT AN ALIAS: each descriptor is
-        // dup()ed and adopted through ShmSegment::Adopt + Map, so the peer gets
-        // its own virtual addresses over the same memfd. That is the same reason
-        // inproc uses ShmSegment at all (see the header block): the ATTACH half is
-        // the half P6 replaces with an SCM_RIGHTS Adopt, and aliasing the owner's
-        // ShmSegment objects would leave it first exercised on the day the second
-        // process appears - which is exactly the criticism this file levels at
-        // new[]. It also removes a raw lifetime coupling: an aliased view holds
-        // pointers into the owner's members with no ownership, so the two Closes
-        // have to be ordered by hand.
-        //
-        // Windows has no Adopt (ShmSegment::Adopt is POSIX-only; the section name
-        // travels in SegmentRef instead), so there it still aliases and says so.
+        // The inproc peer's view of the owner's four segments, booked under the other role. It
+        // does not re-initialise the control pages: they are shared, and that would zero the
+        // owner's cursors. On POSIX each descriptor is dup()ed and adopted (ShmSegment::Adopt +
+        // Map), a real second mapping, so the inproc attach runs the same path as the cross-process
+        // one (AdoptFromDescriptors) and the two views close independently. Windows has no Adopt
+        // (the section name travels in SegmentRef), so there the view aliases the owner's.
         MobileGLResult AttachInProcess(SessionSegments& owner, MemoryRole role);
 
         // P6 `sm`: the spawn client's half. The four descriptors arrived over
@@ -239,26 +180,13 @@ namespace MobileGL::MG_Remote::Transport {
     };
 
     // -----------------------------------------------------------------------
-    // The five watermarks (R-9). Every write and every wait goes through here,
-    // so the rules in Ring.h's header have exactly one implementation.
+    // The five watermarks. Every write and every wait goes through here, so the rules in
+    // Ring.h's header have exactly one implementation.
     // -----------------------------------------------------------------------
-    //
-    // THE ONE RULE THAT MATTERS: a watermark may be published LATE but NEVER
-    // EARLY. Late costs a waiter some latency; early makes every waiter a silent
-    // use of work that has not happened, and there is no checksum anywhere on
-    // this ring that would catch it. The callers are responsible for never
-    // calling an advance before the work is done - that is the half only a
-    // call-site review and R-9's unit cases can enforce.
-    //
-    // THE HALF THAT IS MECHANICALLY DETECTABLE - a watermark moving BACKWARDS -
-    // IS FATAL, not logged-and-ignored. Logging it and returning was the first
-    // version of this file and it was worse than useless: SessionConsumer keeps
-    // its own counter, so once the shared appliedSeq is behind, every later
-    // advance is a no-op for ever and every WaitForApplied(seq, kWaitForever) -
-    // the verb barrier and every reply wait - blocks permanently. The user sees a
-    // hang and the only evidence is one ERROR line. This is the same class as
-    // RingCursorsValid returning false, and Ring.h:181-185 already calls that "a
-    // Fatal{ProtocolCorruption}, never a retry".
+    // A watermark may be published late but never early: early lets waiters use work that has not
+    // happened, and nothing on the ring would catch it, so callers advance only after the work is
+    // done. A watermark moving backwards is Fatal{ProtocolCorruption}: a stale shared appliedSeq
+    // would make every later advance a no-op and every WaitForApplied(kWaitForever) hang.
     namespace Watermark {
 
         // Producer, after Publish. Nobody waits on it - it is the answer to "how
@@ -379,26 +307,12 @@ namespace MobileGL::MG_Remote::Transport {
         Doorbell* SelfDoorbell() const { return m_selfBell; }
         std::uint32_t SpinUs() const { return m_spinUs; }
 
-        // THE WAIT LEDGER'S CLIENT HALF (P5d round 3, package T item 4), and it is a PAIR
-        // because one number without the other says nothing. `Waits()` is every entry into
-        // Park - the R-1 barrier's wait, the present throttle and the ring-space wait, which
-        // simpleperf at head 56a77348 measured as WaitForApplied 27.9% self on the GL thread;
-        // `Parks()` is how many of them ran out of spin budget and actually blocked. A high
-        // wait count with near-zero parks is a thread spinning on a server that is nearly
-        // there; a high park count is a server that is not. The two readings are what tell
-        // those apart, and the split's whole frame budget turns on which one it is.
-        //
-        // Both counters are OURS, and the park one deliberately is not the bell's own
-        // ParkEntries(). Doorbell::Wait is the only code that knows whether its spin budget
-        // ran out, so it does the counting - but a bell belongs to an ENDPOINT, not to a wait
-        // path, and this one is shared: ClientSession hands the very same object to the
-        // encoder as its SEG_STAGE retirement bell (ClientSession::Start ->
-        // PipeWireCodec::SetStageRetirementDoorbell), whose waits never pass through
-        // SessionProducer::Park and so never reach m_waits. Reading ParkEntries() here would
-        // fold that second subsystem's parks into a number this header, PipeStats and the
-        // summary line all describe as the subset of OUR waits - and with the retirement
-        // wait's spinUs of 0 it parks every time, so the subset could print larger than the
-        // set it is a subset of. Wait's `parkTally` out-parameter exists for exactly this.
+        // The client half of the wait ledger. Waits() counts every entry into Park (the verb
+        // barrier, the present throttle, the ring-space wait); Parks() counts those that ran out of
+        // spin budget and really blocked. Many waits with few parks means the server nearly keeps
+        // up; many parks means it does not. Parks is fed through Wait's `parkTally`, not read from
+        // the self bell's ParkEntries(): that bell also carries the encoder's SEG_STAGE retirement
+        // wait (spinUs 0, so it always parks), which would let parks exceed waits.
         std::uint64_t Waits() const { return m_waits.load(std::memory_order_relaxed); }
         std::uint64_t Parks() const { return m_parks.load(std::memory_order_relaxed); }
 

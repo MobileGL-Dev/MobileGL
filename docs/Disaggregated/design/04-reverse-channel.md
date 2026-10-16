@@ -31,6 +31,16 @@
 - **唯一允许同步 ack 的入口是 `glBufferStorage`**：`ResourceRespecify` 的 `kNeedsAck` 由逐记录谓词收窄到"不可变 **buffer**"（D-A2），纹理 OOM 在 monolith 里本来就推迟到 sync 时刻。respecify 带逐 level 作用域与"只换元数据"的形式，不误丢已接受的待上传。
 - 其余错误一律晚到，走有序的 `OnGlError`。
 
+#### 8.3.1 server 日志的转发队列
+
+`MG_Remote/Transport/LogForward.h` 的 `LogForwardChannel`：`Offer` 只在通道互斥锁下拷贝一行入队，唯一的发送线程按入队顺序写帧，写 socket 时不持锁，所以 FATAL 以下的行花在转发上的只是一次加锁加一次拷贝（`LogForwardCounters::maxOfferNs`），与对端是否在读无关。server 自己的日志文件在转发之前写（`Log.cpp`），总有全部行。
+- DEBUG / INFO / WARN 有损：使有损字节超过 `lossyQueueBytes` 的行丢弃并计数；缺口闭合时（下一条放得下的 ≤WARN 行、`LogFlush` ack 或 `Close`）通道自己插一条 WARN `LogForward{Dropped}`，写明条数、字节与起始时间。
+- ERROR 无损、限速：令牌桶（`errorBurstLines` 起步、`errorLinesPerSecond` 补充），超速的行按序排队延迟、不丢；排队的错误字节超过 `errorQueueBytes`（有损上限的 8 倍）时不再入队，由排在下一个能入队条目之前的一条 ERROR `LogForward{Coalesced}` 代替。
+- FATAL = ERROR + 等待：最多等 `fatalFlushMs`，直到发送线程写出它及之前的一切；一次等待超时后，在发送线程写出任何东西之前，后续 FATAL 不再等（`MGLOG_F` 也标记可存活的情形，可能连发）。`Log.cpp` 在日志锁外交出 FATAL 行。
+- `LogFlush` ack（`OfferControlFrame`）排在之前提交的每一行之后，`MGPipeSyncPeerLog` 的「ack 到达时之前的行都已在文件里」因此成立；它排队期间发送线程不限速。
+- `Close()` 不再收行，给队列 `closeDrainMs` 不限速发完；发送线程仍卡在写里时调用属主提供的 `unblock`（`ServerMain`：对控制 socket `shutdown(2)`），以便 join 而不是泄漏线程，剩余条目计为 abandoned。
+- 只有 TCP server 形态转发（`ServerMain.cpp`，`MOBILEGL_IPC_LOG_FORWARD`）；unix spawn server 与 inproc apply 线程自己写 `<base>.server.log`。
+
 ### 8.4 纹理重铸：字节全在 server 手里，没有拉取（P9 W2 撤销原「唯一的新停顿类」D-B6）
 
 原设计假设 server 不保留纹素、重铸要把 level 从 client 拉回来。P5c 之后 server 有 `StagedTextureStore`，GPU 写过的层本来就在 GPU 图像里——**两个后端的重铸都不需要 client 的任何字节**：

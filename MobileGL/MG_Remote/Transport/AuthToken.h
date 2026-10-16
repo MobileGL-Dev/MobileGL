@@ -6,36 +6,12 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// PH-7 (1)(2)(3), ID-P7-3. THE ONE PLACE THAT KNOWS WHAT `MOBILEGL_IPC_TOKEN` MEANS.
-//
-// It was three places, and the three did not agree:
-//
-//   SocketTransport.cpp's ListenTcp asked only "is it non-empty", and a one-byte token
-//     therefore unlocked a `tcp://0.0.0.0` listen.
-//   ServerSession.cpp compared with `std::strcmp` under "the role is not InProcess AND a token
-//     is configured".
-//   ServerMain.cpp compared with `std::string::operator==` under "the control connection is
-//     TCP", which additionally demanded that a peer present an EMPTY token to a server that had
-//     configured none - a rule the other site did not have and no document states.
-//
-// Two of the three compared byte-at-a-time and returned at the first differing byte. That is the
-// textbook remote timing oracle: an attacker who can retry learns the token one byte at a time
-// instead of guessing 2^128. Whether it is exploitable over a LAN at these timings is beside the
-// point; the comparison costs the same either way, and a security property nobody has to
-// re-derive is worth more than a measurement.
-//
-// WHY A MINIMUM LENGTH IS A LISTEN-TIME REFUSAL AND NOT A WARNING. Ph's threat model (ID-P7-3)
-// is "anybody who can reach the port has a remote code path". The answer to it is the token, so
-// a token an attacker can enumerate is not an answer - it is the appearance of one, which is
-// worse than no token at all, because `no token` is already handled: it confines the listener to
-// loopback. A four-byte token, before this file, did not confine anything. 16 bytes is the
-// floor, it is checked where the listener is opened, and a short token FAILS THE LISTEN rather
-// than silently degrading to loopback-only: an operator who set a token and got a loopback
-// server would have no way to tell that from success, which is the exact silence Ph exists to
-// remove.
-//
-// The token is never logged, at any level, on any path. The refusals name the policy, not the
-// secret (CONTRACT-P65: "错令牌返回 Refuse，不打印令牌值").
+// The one definition of what MOBILEGL_IPC_TOKEN means; listeners and handshake checks use these
+// helpers (ARCHITECTURE.md §15.1). No token confines the listener to loopback. A configured
+// token shorter than kMinimumAuthTokenBytes fails the listen rather than falling back to
+// loopback, since an operator who set a token could not tell that fallback from success.
+// Comparisons are constant time: a byte-at-a-time compare lets a peer that can retry learn the
+// token one byte at a time. The token is never logged; refusals name the policy, not the secret.
 
 #pragma once
 

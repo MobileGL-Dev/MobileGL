@@ -6,26 +6,13 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// Control-channel wire framing: [u32 magic 'MGLF'][u32 payloadLength][payload].
-// Length excludes the 8-byte header and is capped at 64 MiB.
-//
-// Two defects of the earlier branch's codec are fixed here, and both are the
-// reason this file is not a copy of it:
-//
-//  1. Its Feed() unconditionally returned OK and its header peek merely
-//     returned false on a bad magic or an oversized length. A corrupt or
-//     desynchronized stream therefore turned into a silent, permanent hang -
-//     the reader kept waiting for a message that could never be parsed, with
-//     no error anywhere. Here a violation latches a failed state, is logged at
-//     ERROR, and every later call returns MOBILEGL_ERR_PROTOCOL_MISMATCH.
-//
-//  2. Its receive path failed the call and consumed the message when the
-//     caller's buffer was too small, wedging the stream. Here
-//     MOBILEGL_ERR_BUFFER_TOO_SMALL reports the required size and KEEPS the
-//     message queued.
-//
-// The reader is a plain byte-stream reassembler: it never assumes a read()
-// returned a whole frame.
+// Control-channel wire framing: [u32 magic 'MGLF'][u32 payloadLength][payload]. The length
+// excludes the 8-byte header and is capped at 64 MiB.
+// A bad magic or an oversized length latches the reader failed, is logged at ERROR, and makes
+// every later call return MOBILEGL_ERR_PROTOCOL_MISMATCH, so a desynchronized stream fails rather
+// than hangs. A buffer too small for the next message gets MOBILEGL_ERR_BUFFER_TOO_SMALL with the
+// required size and the message stays queued. The reader is a byte-stream reassembler: it never
+// assumes a read() returned a whole frame.
 
 #pragma once
 

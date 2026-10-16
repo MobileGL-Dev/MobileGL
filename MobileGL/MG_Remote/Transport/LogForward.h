@@ -6,65 +6,13 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// P9 W3. THE SERVER'S LOG LINES ON THE CONTROL PLANE, GRADED, AND NEVER A REASON TO STOP APPLYING.
-//
-// On TCP the server forwards every line it logs to its client as a LogLine control frame, and the
-// client files it under `<base>.server.log` (ControlInbox.cpp). Until this file the forward was a
-// blocking SocketTransport::SendFrame made by the LOGGING THREAD, inside the logger: a client that
-// stopped reading its control connection - a GL thread parked in a debugger, a ControlInbox whose
-// bounded queue filled, a peer that simply stopped - filled the socket, and the next MGLOG on the
-// apply thread never returned. Every record behind it waited; a forfeit that would have ended the
-// session by name (ServerSession::ForfeitReverseChannel) was itself a log line and never finished
-// being said. Design/04 §8.1 had written the policy down from the start (<= WARN lossy, >= ERROR
-// lossless and rate limited), and LogLine.level has been on the wire for it since P6; nothing
-// used either, and every line went out as Info.
-//
-// THE SHAPE. A LogForwardChannel owns a queue and ONE sender thread; the forwarder the logger
-// calls (Offer) only enqueues, so the logging thread never touches the socket. The sender is the
-// only thread that writes log frames, and it writes them in the order they were offered.
-//
-// THE POLICY, per severity (MOBILEGL_LOG_LEVEL_*):
-//   * DEBUG / INFO / WARN are LOSSY. A line that would take the queue's lossy bytes past
-//     LogForwardLimits::lossyQueueBytes is dropped and COUNTED. The drop is not silent to the
-//     client either: when the gap closes - the next line at or below WARN that fits, a LogFlush
-//     ack, or Close - the channel puts a WARN line of its own in the stream, `LogForward{Dropped} -
-//     N line(s) at or below WARN (B bytes) were not forwarded, from <time> until here`, so the gap
-//     in `<base>.server.log` is marked and counted. (ERROR lines that got through in the middle of
-//     the gap sit before that line; the time says where the gap began.)
-//   * ERROR is LOSSLESS, and PACED rather than dropped: at most errorLinesPerSecond leave per
-//     second after a burst of errorBurstLines, and a line over that budget WAITS in the queue, in
-//     order (it is delayed, never discarded). Memory still has to be bounded, so the error bytes
-//     queued are capped too (errorQueueBytes, eight times the lossy cap): a line past it - a peer
-//     that has not read for that long, or a flood well past the pace for that long - is not
-//     queued, and is replaced in the stream by one ERROR line `LogForward{Coalesced} - N ERROR
-//     line(s) were not forwarded here` (queued before the next item that does get in), never by
-//     nothing. The server's own log file (written before any forward, Log.cpp) has every line
-//     either way.
-//   * FATAL is ERROR plus a wait: the logging thread is about to abort, and a line still in the
-//     queue when it does is a line the client never gets - the one it most needs. So a FATAL
-//     Offer waits until the sender has written everything up to and including it, for at most
-//     fatalFlushMs, and then returns whether or not the peer took it - and once such a wait has run
-//     out, later FATAL lines do not wait again until the sender has written something (MGLOG_F also
-//     marks survivable conditions, several in a row). (Log.cpp hands a FATAL line over outside the
-//     log mutex, so that wait holds nobody else's line.)
-//   * A LogFlush acknowledgement (OfferControlFrame) is queued BEHIND every line offered before
-//     it, which is what makes MGPipeSyncPeerLog's promise ("every line before the flush is in the
-//     file when the ack arrives") still true now that a line is not on the wire when MGLOG returns.
-//     While one is queued the sender does not pace: the client is waiting for it.
-//
-// THE BOUND. An Offer below FATAL takes the channel's mutex, copies the line and returns; the
-// sender never holds that mutex across a socket write. So the time a logging thread spends
-// forwarding is a lock and a copy, whatever the peer does - LogForwardCounters::maxOfferNs is that
-// time measured, and the F2 fault injection (EventForfeitPeerTest) asserts on it.
-//
-// CLOSE. Close() stops taking lines, gives the queue closeDrainMs to go out UNPACED, and then stops
-// the sender. A sender still inside a write when that budget runs out is blocked on a peer that is
-// not reading; Close() then calls the `unblock` hook the owner supplied (ServerMain: shutdown(2) of
-// the control socket - the session is over by then) so the thread can be joined rather than
-// leaked. What was still queued is counted as abandoned.
-//
-// SCOPE. Only the TCP server shapes forward (ServerMain.cpp, MOBILEGL_IPC_LOG_FORWARD): a unix spawn
-// server and an inproc apply thread write `<base>.server.log` themselves.
+// Forwards the server's log lines to its client as LogLine control frames, graded by severity,
+// so that logging below FATAL never waits on the peer: Offer() copies the line into a queue, and
+// one sender thread writes frames in offer order without holding the queue's mutex. DEBUG to
+// WARN are lossy, ERROR is paced but not dropped (coalesced only past errorQueueBytes), FATAL
+// also waits up to fatalFlushMs, and a LogFlush ack follows every line offered before it.
+// Policy, counters and Close(): ARCHITECTURE.md §8.3.1. Only TCP server shapes forward; other
+// servers write `<base>.server.log` themselves.
 
 #pragma once
 

@@ -6,30 +6,13 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// SEG_EVENT: the server -> client reverse channel. Owner: package s1.
-//
-// WHAT P5 OWES HERE AND NOTHING MORE (BRIEF R-12, and s1's brief): it must be
-// able to CARRY OnBufferWriteback, OnGpuWritten and OnSurfaceChanged. The other
-// seven MGPipeCallbacks members are off P5's reduced path, and THE OVERFLOW
-// POLICY IS P9's - what is here is the mechanism (a full ring latches
-// eventRingFull, a lossy post that is dropped counts in eventDropped) and not a
-// policy that decides between them.
-//
-// IT IS A SECOND RingControl, NOT A THIRD CURSOR SET. RingControl carries two
-// cursor triples (SEG_CMD and SEG_STAGE) and adding a third would resize the
-// shared page that Ring.h static_asserts at exactly 4096 bytes. So SEG_EVENT
-// gets its OWN control page at its own head and drives it with the Cmd cursor
-// set - the same RingProducer/RingConsumer code, in the opposite direction. The
-// two EVENT FLAGS still live in the SEG_CMD page, because that is where Ring.h
-// declares them and where the client's own waits already look.
-//
-// THE PAYLOAD SHAPES ARE FIXED-WIDTH AND LIVE HERE, not in MG_Pipe's headers.
-// Nothing under Transport/ may reach MobileGL/Includes.h (WireLog.h:9-24, and
-// the purity gate's `wire-header` probe), so MGPipeHandle / MGPRange /
-// MGPSurfaceInfo cannot be named in this file. The wire shapes below mirror them
-// field for field and the SESSIONS assert the two agree, which is the same
-// discipline the rest of the wire is held to: a wire struct is fixed-width, and
-// the conversion happens where the frontend types are legal.
+// SEG_EVENT: the server-to-client reverse channel for MGPipeCallbacks events; the overflow rules
+// (eventRingFull, eventDropped) are ARCHITECTURE.md §11.7. It has its own RingControl page,
+// driven with the Cmd cursor set by the same producer/consumer code in the opposite direction,
+// because a third cursor set would grow RingControl past its fixed 4 KiB page. The two event
+// flags stay in the SEG_CMD page, where Ring.h declares them. Nothing under Transport/ may
+// include MobileGL/Includes.h, so the payloads below are fixed-width mirrors of MGPipeHandle,
+// MGPRange and MGPSurfaceInfo, converted by the sessions where the frontend types are legal.
 
 #pragma once
 
