@@ -8,7 +8,9 @@
 # End of Source File Header
 
 """Executable negative controls for TCP lane accounting and supervisor lifecycle."""
+import contextlib
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -28,6 +30,16 @@ def module(name):
     loaded = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(loaded)
     return loaded
+
+
+def quiet_main(main):
+    """A gate's main() with its output captured, as (exit status, text). A red control prints the
+    gate's real ::error:: line, which a runner would turn into a failure annotation on a passing
+    step."""
+    captured = io.StringIO()
+    with contextlib.redirect_stdout(captured), contextlib.redirect_stderr(captured):
+        status = main()
+    return status, captured.getvalue()
 
 
 class Accounting(unittest.TestCase):
@@ -134,12 +146,14 @@ class Accounting(unittest.TestCase):
                 patch.object(parity, 'lane_names', return_value=set()), \
                 patch.object(parity, 'whole_build_discovery', return_value={'tests': []}), \
                 patch.object(sys, 'argv', ['spawn_lane_parity.py', 'unused']):
-            self.assertEqual(parity.main(), 1)
+            status, text = quiet_main(parity.main)
+        self.assertEqual(status, 1)
+        self.assertIn(f"integration-tcp: missing=['{a}'], extra=['{b}']", text)
         with patch.object(parity, 'lane_cases', return_value={a}), \
                 patch.object(parity, 'lane_names', return_value=set()), \
                 patch.object(parity, 'whole_build_discovery', return_value={'tests': []}), \
                 patch.object(sys, 'argv', ['spawn_lane_parity.py', 'unused']):
-            self.assertEqual(parity.main(), 0)
+            self.assertEqual(quiet_main(parity.main)[0], 0)
 
     @staticmethod
     def discovered(name, **properties):
@@ -190,17 +204,21 @@ class Accounting(unittest.TestCase):
             root = Path(directory)
             junit, discovery = root / 'junit.xml', root / 'lane.json'
             junit.write_text('<testsuite><testcase name="TcpLane.SupervisorProtocolControls" /></testsuite>')
-            for tests, rc in ((broken, 1), (sound, 0)):
+            for tests, rc, said in ((broken, 1, tus), (sound, 0, '')):
                 discovery.write_text(json.dumps({'tests': tests}))
                 with patch.object(sys, 'argv', ['junit_tally.py', str(junit), '--discovery', str(discovery),
                                                 '--require-entry-passed', 'TcpLane.SupervisorProtocolControls']):
-                    self.assertEqual(tally.main(), rc)
-        for tests, rc in ((broken, 1), (sound, 0)):
+                    status, text = quiet_main(tally.main)
+                self.assertEqual(status, rc)
+                self.assertIn(said, text)
+        for tests, rc, said in ((broken, 1, 'must hold RESOURCE_LOCK mobilegl-tcp'), (sound, 0, '')):
             with patch.object(parity, 'lane_cases', return_value={'TriangleScenario.Draw'}), \
                     patch.object(parity, 'lane_names', return_value=set()), \
                     patch.object(parity, 'whole_build_discovery', return_value={'tests': tests}), \
                     patch.object(sys, 'argv', ['spawn_lane_parity.py', 'unused']):
-                self.assertEqual(parity.main(), rc)
+                status, text = quiet_main(parity.main)
+            self.assertEqual(status, rc)
+            self.assertIn(said, text)
 
 
 class DeviceIdleExemption(unittest.TestCase):
