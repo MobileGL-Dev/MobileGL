@@ -38,4 +38,10 @@ runs:
             echo 'VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json'
             echo 'VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.json'
           } >> "$GITHUB_ENV"
+          # A stalled mirror must fail a request and retry it, not hold the install step until
+          # its timeout.
+          if [ -d /etc/apt/apt.conf.d ] && command -v sudo > /dev/null; then
+            printf 'Acquire::Retries "3";\nAcquire::http::Timeout "30";\nAcquire::https::Timeout "30";\n' |
+              sudo tee /etc/apt/apt.conf.d/80-mobilegl-ci-network > /dev/null
+          fi
         fi

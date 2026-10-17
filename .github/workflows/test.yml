@@ -101,7 +101,7 @@ jobs:
         run: python3 update_glslang_sources.py
 
       - name: Install build dependencies
-        timeout-minutes: 45
+        timeout-minutes: 15
         if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         run: |
           sudo apt-get update
@@ -158,22 +158,18 @@ jobs:
         if: ${{ always() }}
         run: ccache --show-stats
 
-      # Rewrite one rolling entry per job on the default branch. The upload stays
-      # cumulative - it carries every object restored at the top of this run plus
-      # the few TUs that actually changed - but Actions cache keys are immutable,
-      # so the superseded blob has to be released before the same key can be
-      # re-uploaded. Running after the build means a failed build leaves the
-      # existing entry untouched. The other trigger branches restore this entry
-      # rather than each writing one of their own.
+      # Rewrite one rolling entry per job and branch. The upload stays cumulative - it
+      # carries every object restored at the top of this run plus the few TUs that
+      # changed - but Actions cache keys are immutable, so this branch's superseded
+      # blob is released first; --ref keeps the delete off other branches' entries.
+      # Running after the build means a failed build leaves the entry untouched.
       - name: Release superseded ccache entry
-        if: github.ref_name == github.event.repository.default_branch
         env:
           GH_TOKEN: ${{ github.token }}
           CACHE_KEY: ${{ runner.os }}-ubuntu24-cpu-test-${{ github.job }}-ccache-v1
-        run: gh cache delete "${CACHE_KEY}" || true
+        run: gh cache delete "${CACHE_KEY}" --ref "${GITHUB_REF}" || true
 
       - name: Save ccache
-        if: github.ref_name == github.event.repository.default_branch
         continue-on-error: true
         uses: actions/cache/save@v5
         with:
@@ -207,6 +203,21 @@ jobs:
         with:
           name: mobilegl-linux-runtime
           path: ci-artifacts/mobilegl-linux-runtime.tgz
+          if-no-files-found: error
+
+      # The retrace legs load only the library, and the server image on the spawn arm, so they
+      # take this instead of the whole test runtime.
+      - name: Package retrace library
+        run: |
+          files=("${BUILD_DIR}/.ci-source-root" "${BUILD_DIR}/libMobileGL.so")
+          if [ -f "${BUILD_DIR}/libMobileGLServer.so" ]; then files+=("${BUILD_DIR}/libMobileGLServer.so"); fi
+          tar -czf ci-artifacts/mobilegl-linux-lib.tgz "${files[@]}"
+
+      - name: Upload retrace library
+        uses: actions/upload-artifact@v7
+        with:
+          name: mobilegl-linux-lib
+          path: ci-artifacts/mobilegl-linux-lib.tgz
           if-no-files-found: error
 
   # The pull-library negative control must not consume the primary artifact:
@@ -266,7 +277,7 @@ jobs:
         working-directory: 3rdparty/glslang
         run: python3 update_glslang_sources.py
       - name: Install build dependencies
-        timeout-minutes: 45
+        timeout-minutes: 15
         if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         run: |
           sudo apt-get update
@@ -324,7 +335,7 @@ jobs:
           cmakeVersion: 3.31.10
 
       - name: Install runtime dependencies
-        timeout-minutes: 45
+        timeout-minutes: 15
         if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         run: |
           sudo apt-get update
@@ -351,9 +362,9 @@ jobs:
           ulimit -c unlimited
           if [ "$MOBILEGL_CI_NATIVE_GPU" != 1 ] && [ ! -f /.dockerenv ]; then sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'; fi
           if [ "${{ secrets.ACTIONS_STEP_DEBUG }}" = "true" ]; then
-            ctest -V -L unit --no-tests=error --output-junit "${RUNNER_TEMP}/unit.xml"
+            ctest -V -L unit --no-tests=error -j "$(nproc)" --output-junit "${RUNNER_TEMP}/unit.xml"
           else
-            ctest --output-on-failure -L unit --no-tests=error --output-junit "${RUNNER_TEMP}/unit.xml"
+            ctest --output-on-failure -L unit --no-tests=error -j "$(nproc)" --output-junit "${RUNNER_TEMP}/unit.xml"
           fi
 
       # P13 W1: every JUnit this job wrote, for the skip census (scripts/ci/skip_census.py).
@@ -403,7 +414,7 @@ jobs:
           cmakeVersion: 3.31.10
 
       - name: Install runtime dependencies
-        timeout-minutes: 45
+        timeout-minutes: 15
         if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         # Same set as the benchmark job, for the same reason: the scenarios bring
         # up real headless EGL (llvmpipe) and Vulkan (lavapipe) contexts, and
@@ -456,12 +467,12 @@ jobs:
           # coverage. The flag is NOT baked into the ctest ENVIRONMENT properties,
           # so an inline env reaches the test processes (unlike the ICD pin above).
           if [ "${{ secrets.ACTIONS_STEP_DEBUG }}" = "true" ]; then
-            ctest -V -L integration-gpu --no-tests=error --output-junit "${RUNNER_TEMP}/integration.xml"
-            MOBILEGL_ESPRYT_DISABLE_INVALIDATE_FLUSH=1 ctest -V -L integration-gpu \
+            ctest -V -L integration-gpu --no-tests=error -j "$(nproc)" --output-junit "${RUNNER_TEMP}/integration.xml"
+            MOBILEGL_ESPRYT_DISABLE_INVALIDATE_FLUSH=1 ctest -V -L integration-gpu -j "$(nproc)" \
               -R 'Buffer|Readback|Atomic|Ssbo|Arena' --no-tests=error --output-junit "${RUNNER_TEMP}/integration-staged-copy.xml"
           else
-            ctest --output-on-failure -L integration-gpu --no-tests=error --output-junit "${RUNNER_TEMP}/integration.xml"
-            MOBILEGL_ESPRYT_DISABLE_INVALIDATE_FLUSH=1 ctest --output-on-failure -L integration-gpu \
+            ctest --output-on-failure -L integration-gpu --no-tests=error -j "$(nproc)" --output-junit "${RUNNER_TEMP}/integration.xml"
+            MOBILEGL_ESPRYT_DISABLE_INVALIDATE_FLUSH=1 ctest --output-on-failure -L integration-gpu -j "$(nproc)" \
               -R 'Buffer|Readback|Atomic|Ssbo|Arena' --no-tests=error --output-junit "${RUNNER_TEMP}/integration-staged-copy.xml"
           fi
 
@@ -584,7 +595,7 @@ jobs:
         run: python3 update_glslang_sources.py
 
       - name: Install build dependencies
-        timeout-minutes: 45
+        timeout-minutes: 15
         if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         run: |
           sudo apt-get update
@@ -666,14 +677,12 @@ jobs:
         run: ccache --show-stats
 
       - name: Release superseded ccache entry
-        if: github.ref_name == github.event.repository.default_branch
         env:
           GH_TOKEN: ${{ github.token }}
           CACHE_KEY: ${{ runner.os }}-ubuntu24-cpu-test-${{ github.job }}-ccache-v1
-        run: gh cache delete "${CACHE_KEY}" || true
+        run: gh cache delete "${CACHE_KEY}" --ref "${GITHUB_REF}" || true
 
       - name: Save ccache
-        if: github.ref_name == github.event.repository.default_branch
         continue-on-error: true
         uses: actions/cache/save@v5
         with:
@@ -707,6 +716,21 @@ jobs:
           path: ci-artifacts/mobilegl-linux-runtime-verify.tgz
           if-no-files-found: error
 
+      # The retrace legs load only the library, and the server image on the spawn arm, so they
+      # take this instead of the whole test runtime.
+      - name: Package retrace library
+        run: |
+          files=("${BUILD_DIR}/.ci-source-root" "${BUILD_DIR}/libMobileGL.so")
+          if [ -f "${BUILD_DIR}/libMobileGLServer.so" ]; then files+=("${BUILD_DIR}/libMobileGLServer.so"); fi
+          tar -czf ci-artifacts/mobilegl-linux-lib-verify.tgz "${files[@]}"
+
+      - name: Upload retrace library
+        uses: actions/upload-artifact@v7
+        with:
+          name: mobilegl-linux-lib-verify
+          path: ci-artifacts/mobilegl-linux-lib-verify.tgz
+          if-no-files-found: error
+
   # The verify lane itself, plus the two negative controls that keep it falsifiable. The controls
   # are ALWAYS-ON steps, not a manual exercise: a gate that can only be shown to work by someone
   # remembering to break it on purpose is a gate that has already stopped working.
@@ -731,7 +755,7 @@ jobs:
           cmakeVersion: 3.31.10
 
       - name: Install runtime dependencies
-        timeout-minutes: 45
+        timeout-minutes: 15
         if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         run: |
           sudo apt-get update
@@ -775,9 +799,9 @@ jobs:
           ulimit -c unlimited
           if [ "$MOBILEGL_CI_NATIVE_GPU" != 1 ] && [ ! -f /.dockerenv ]; then sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'; fi
           if [ "${{ secrets.ACTIONS_STEP_DEBUG }}" = "true" ]; then
-            ctest -V -L integration-verify --no-tests=error --output-junit "${RUNNER_TEMP}/verify.xml"
+            ctest -V -L integration-verify --no-tests=error -j "$(nproc)" --output-junit "${RUNNER_TEMP}/verify.xml"
           else
-            ctest --output-on-failure -L integration-verify --no-tests=error --output-junit "${RUNNER_TEMP}/verify.xml"
+            ctest --output-on-failure -L integration-verify --no-tests=error -j "$(nproc)" --output-junit "${RUNNER_TEMP}/verify.xml"
           fi
 
       # The unit suite again, on the verify library: cases compiled only under MOBILEGL_PIPE_VERIFY
@@ -975,7 +999,7 @@ jobs:
         with:
           cmakeVersion: 3.31.10
       - name: Install runtime dependencies
-        timeout-minutes: 45
+        timeout-minutes: 15
         if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         run: |
           sudo apt-get update
@@ -1266,7 +1290,7 @@ jobs:
         run: python3 update_glslang_sources.py
 
       - name: Install build dependencies
-        timeout-minutes: 45
+        timeout-minutes: 15
         if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         run: |
           sudo apt-get update
@@ -1366,14 +1390,12 @@ jobs:
         run: ccache --show-stats
 
       - name: Release superseded ccache entry
-        if: github.ref_name == github.event.repository.default_branch
         env:
           GH_TOKEN: ${{ github.token }}
           CACHE_KEY: ${{ runner.os }}-ubuntu24-cpu-test-${{ github.job }}-ccache-v1
-        run: gh cache delete "${CACHE_KEY}" || true
+        run: gh cache delete "${CACHE_KEY}" --ref "${GITHUB_REF}" || true
 
       - name: Save ccache
-        if: github.ref_name == github.event.repository.default_branch
         continue-on-error: true
         uses: actions/cache/save@v5
         with:
@@ -1407,6 +1429,21 @@ jobs:
           path: ci-artifacts/mobilegl-linux-runtime-split.tgz
           if-no-files-found: error
 
+      # The retrace legs load only the library, and the server image on the spawn arm, so they
+      # take this instead of the whole test runtime.
+      - name: Package retrace library
+        run: |
+          files=("${BUILD_DIR}/.ci-source-root" "${BUILD_DIR}/libMobileGL.so")
+          if [ -f "${BUILD_DIR}/libMobileGLServer.so" ]; then files+=("${BUILD_DIR}/libMobileGLServer.so"); fi
+          tar -czf ci-artifacts/mobilegl-linux-lib-split.tgz "${files[@]}"
+
+      - name: Upload retrace library
+        uses: actions/upload-artifact@v7
+        with:
+          name: mobilegl-linux-lib-split
+          path: ci-artifacts/mobilegl-linux-lib-split.tgz
+          if-no-files-found: error
+
   # The split lane itself: the three-arm shape ARCHITECTURE.md §13.2 asks for verbatim, plus the
   # first real run of the five MG_Test/Wire suites, plus P5's two exit-gate negative controls.
   integration-split:
@@ -1430,7 +1467,7 @@ jobs:
           cmakeVersion: 3.31.10
 
       - name: Install runtime dependencies
-        timeout-minutes: 45
+        timeout-minutes: 15
         if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         run: |
           sudo apt-get update
@@ -1666,7 +1703,7 @@ jobs:
           cmakeVersion: 3.31.10
 
       - name: Install runtime dependencies
-        timeout-minutes: 45
+        timeout-minutes: 15
         if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         run: |
           sudo apt-get update
@@ -2254,7 +2291,7 @@ jobs:
         run: git submodule update --init include/ska 3rdparty/xxHash 3rdparty/Vulkan-Headers
 
       - name: Install clang and X11 headers
-        timeout-minutes: 45
+        timeout-minutes: 15
         if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         # Includes.h defines VK_USE_PLATFORM_XLIB_KHR before <vulkan/vulkan.h>, which then
         # includes <X11/Xlib.h>; without libx11-dev every clang-mode probe dies in the
@@ -2290,7 +2327,7 @@ jobs:
           cmakeVersion: 3.31.10
 
       - name: Install runtime dependencies
-        timeout-minutes: 45
+        timeout-minutes: 15
         if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         # libegl-mesa0 is the EGL vendor library itself: DriverBench brings up a
         # real GL context, and libegl1 is only glvnd's dispatch. It normally
@@ -2332,8 +2369,6 @@ jobs:
 
   build-retrace:
     runs-on: ubuntu-latest
-    needs:
-      - build-linux
     permissions:
       actions: write
       contents: read
@@ -2399,7 +2434,7 @@ jobs:
         run: python3 update_glslang_sources.py
 
       - name: Install dependencies
-        timeout-minutes: 45
+        timeout-minutes: 15
         if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         run: |
           sudo apt-get update
@@ -2412,17 +2447,6 @@ jobs:
           "${MOBILEGL_CI_CXX}" --version
           "${MOBILEGL_CI_LLD}" --version
           dpkg -l 'libc++*' 'libegl*' 'libgles*' 'mesa*' 'vulkan*' || true
-
-      - name: Download Linux runtime
-        uses: actions/download-artifact@v8
-        with:
-          name: mobilegl-linux-runtime
-          path: .
-
-      - name: Unpack Linux runtime
-        run: |
-          tar -xzf mobilegl-linux-runtime.tgz
-          test -f "${MOBILEGL_LIBRARY}"
 
       - name: Prepare downloaded test metadata
         run: |
@@ -2460,14 +2484,12 @@ jobs:
         run: ccache --show-stats
 
       - name: Release superseded ccache entry
-        if: github.ref_name == github.event.repository.default_branch
         env:
           GH_TOKEN: ${{ github.token }}
           CACHE_KEY: ${{ runner.os }}-ubuntu24-cpu-test-${{ github.job }}-ccache-v1
-        run: gh cache delete "${CACHE_KEY}" || true
+        run: gh cache delete "${CACHE_KEY}" --ref "${GITHUB_REF}" || true
 
       - name: Save ccache
-        if: github.ref_name == github.event.repository.default_branch
         continue-on-error: true
         uses: actions/cache/save@v5
         with:
@@ -2635,10 +2657,10 @@ jobs:
       - build-retrace
       - trace-cases
       - trace-fixtures
-    if: ${{ always() && needs.build-linux.result == 'success' && needs.build-retrace.result == 'success' && needs.trace-cases.result == 'success' }}
+    if: ${{ !cancelled() && needs.build-linux.result == 'success' && needs.build-retrace.result == 'success' && needs.trace-cases.result == 'success' }}
     strategy:
       fail-fast: false
-      max-parallel: 4
+      max-parallel: 8
       matrix: ${{ fromJSON(needs.trace-cases.outputs.matrix) }}
 
     steps:
@@ -2674,7 +2696,7 @@ jobs:
           cmakeVersion: 3.31.10
 
       - name: Install runtime dependencies
-        timeout-minutes: 45
+        timeout-minutes: 15
         if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         run: |
           sudo apt-get update
@@ -2682,10 +2704,10 @@ jobs:
           test -e /usr/lib/x86_64-linux-gnu/libEGL.so
           test -e /usr/lib/x86_64-linux-gnu/libGLESv2.so
 
-      - name: Download Linux runtime
+      - name: Download Linux library
         uses: actions/download-artifact@v8
         with:
-          name: mobilegl-linux-runtime
+          name: mobilegl-linux-lib
           path: .
 
       - name: Download trace replay
@@ -2696,7 +2718,7 @@ jobs:
 
       - name: Unpack retrace runtime
         run: |
-          tar -xzf mobilegl-linux-runtime.tgz
+          tar -xzf mobilegl-linux-lib.tgz
           tar -xzf mobilegl-trace-replay.tgz
           test -f build-linux/libMobileGL.so
           test -f build-retrace/tools/trace_replay/mobilegl_trace_replay
@@ -2756,7 +2778,7 @@ jobs:
     name: retrace summary
     runs-on: ubuntu-latest
     needs: [retrace]
-    if: ${{ always() && needs.retrace.result != 'skipped' }}
+    if: ${{ !cancelled() && needs.retrace.result != 'skipped' }}
     env:
       MOBILEGL_CI_DISAGGREGATED: ${{ (github.ref_name == 'feat/disaggregated' || github.ref_name == 'codex/fix-github-ci' || github.ref_name == 'cleanup') && 'ON' || 'OFF' }}
 
@@ -2839,7 +2861,7 @@ jobs:
       - build-retrace
       - trace-cases
       - trace-fixtures
-    if: ${{ always() && needs.build-linux-verify.result == 'success' && needs.build-retrace.result == 'success' && needs.trace-cases.result == 'success' }}
+    if: ${{ !cancelled() && needs.build-linux-verify.result == 'success' && needs.build-retrace.result == 'success' && needs.trace-cases.result == 'success' }}
     strategy:
       fail-fast: false
       max-parallel: 4
@@ -2878,7 +2900,7 @@ jobs:
           cmakeVersion: 3.31.10
 
       - name: Install runtime dependencies
-        timeout-minutes: 45
+        timeout-minutes: 15
         if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         run: |
           sudo apt-get update
@@ -2886,10 +2908,10 @@ jobs:
           test -e /usr/lib/x86_64-linux-gnu/libEGL.so
           test -e /usr/lib/x86_64-linux-gnu/libGLESv2.so
 
-      - name: Download Linux verify runtime
+      - name: Download Linux verify library
         uses: actions/download-artifact@v8
         with:
-          name: mobilegl-linux-runtime-verify
+          name: mobilegl-linux-lib-verify
           path: .
 
       - name: Download trace replay
@@ -2908,7 +2930,7 @@ jobs:
         # `nm`, not `nm -D`, for the reason spelled out in build-linux-verify: everything MGPipe is
         # hidden-visibility in a Release build and the dynamic table has none of it.
         run: |
-          tar -xzf mobilegl-linux-runtime-verify.tgz
+          tar -xzf mobilegl-linux-lib-verify.tgz
           tar -xzf mobilegl-trace-replay.tgz
           test -f build-verify/libMobileGL.so
           test -f build-retrace/tools/trace_replay/mobilegl_trace_replay
@@ -3024,10 +3046,10 @@ jobs:
     # legs no longer require that build to have SUCCEEDED - gating on it skipped the whole split
     # matrix (grey, not red) whenever the control build failed (PLAN-P13 §0-7). The control steps
     # below download its artifact, and a missing one is a red step on every leg instead.
-    if: ${{ always() && needs.build-linux-split.result == 'success' && needs.build-retrace.result == 'success' && needs.trace-cases.result == 'success' }}
+    if: ${{ !cancelled() && needs.build-linux-split.result == 'success' && needs.build-retrace.result == 'success' && needs.trace-cases.result == 'success' }}
     strategy:
       fail-fast: false
-      max-parallel: 4
+      max-parallel: 8
       matrix: ${{ fromJSON(needs.trace-cases.outputs.split-matrix) }}
 
     steps:
@@ -3063,7 +3085,7 @@ jobs:
           cmakeVersion: 3.31.10
 
       - name: Install runtime dependencies
-        timeout-minutes: 45
+        timeout-minutes: 15
         if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         run: |
           sudo apt-get update
@@ -3071,10 +3093,10 @@ jobs:
           test -e /usr/lib/x86_64-linux-gnu/libEGL.so
           test -e /usr/lib/x86_64-linux-gnu/libGLESv2.so
 
-      - name: Download Linux split runtime
+      - name: Download Linux split library
         uses: actions/download-artifact@v8
         with:
-          name: mobilegl-linux-runtime-split
+          name: mobilegl-linux-lib-split
           path: .
 
       - name: Download trace replay
@@ -3096,18 +3118,12 @@ jobs:
           tar -xzf control-runtime/mobilegl-linux-monolith-control.tgz -C control-runtime
           test -f control-runtime/build-push-control/libMobileGL.so
 
-      - name: Prepare downloaded test metadata
-        run: |
-          for root in build-linux build-verify build-split build-verify-split build-retrace control-runtime/build-push-control; do
-            if [ -d "$root" ]; then python3 scripts/ci/prepare_test_runtime.py "$root"; fi
-          done
-
       - name: Unpack split runtime (library under test)
         # build-retrace's CTestTestfile.cmake has the absolute path
         # <workspace>/build-linux/libMobileGL.so frozen into every case, so the swap happens here
         # rather than through a variable, exactly as in retrace-verify. `nm`, not `nm -D`.
         run: |
-          tar -xzf mobilegl-linux-runtime-split.tgz
+          tar -xzf mobilegl-linux-lib-split.tgz
           tar -xzf mobilegl-trace-replay.tgz
           test -f build-split/libMobileGL.so
           test -f build-retrace/tools/trace_replay/mobilegl_trace_replay
@@ -3119,18 +3135,18 @@ jobs:
           fi
           echo "the library at build-linux/libMobileGL.so is the split build"
 
-      # THE SPAWN ARM NEEDS A SECOND BINARY and the inproc arm needs none, which is the whole
-      # difference between the two at this level: inproc's server role is a thread in the replay
-      # process, spawn's is a PROCESS the client launches from this image. It is packaged by
-      # build-linux-split's `find -name '*.so'` sweep - libMobileGLServer.so is an executable that
-      # wears a .so name so an APK will install it somewhere exec-able - and a missing one must be
-      # a NAMED failure here rather than a LaunchServer refusal 78 jobs deep.
       - name: Prepare downloaded test metadata
         run: |
           for root in build-linux build-verify build-split build-verify-split build-retrace control-runtime/build-push-control; do
             if [ -d "$root" ]; then python3 scripts/ci/prepare_test_runtime.py "$root"; fi
           done
 
+      # THE SPAWN ARM NEEDS A SECOND BINARY and the inproc arm needs none, which is the whole
+      # difference between the two at this level: inproc's server role is a thread in the replay
+      # process, spawn's is a PROCESS the client launches from this image. It ships in
+      # build-linux-split's retrace library - libMobileGLServer.so is an executable that wears a
+      # .so name so an APK will install it somewhere exec-able - and a missing one must be a NAMED
+      # failure here rather than a LaunchServer refusal 78 jobs deep.
       - name: Place the server image (spawn arm only)
         if: ${{ matrix.transport == 'spawn' }}
         run: |
@@ -3555,7 +3571,7 @@ jobs:
         run: python3 update_glslang_sources.py
 
       - name: Install build and runtime dependencies
-        timeout-minutes: 45
+        timeout-minutes: 15
         if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         run: |
           sudo apt-get update
@@ -3612,14 +3628,12 @@ jobs:
         run: ccache --show-stats
 
       - name: Release superseded ccache entry
-        if: github.ref_name == github.event.repository.default_branch
         env:
           GH_TOKEN: ${{ github.token }}
           CACHE_KEY: ${{ runner.os }}-ubuntu24-cpu-test-${{ github.job }}-ccache-v1
-        run: gh cache delete "${CACHE_KEY}" || true
+        run: gh cache delete "${CACHE_KEY}" --ref "${GITHUB_REF}" || true
 
       - name: Save ccache
-        if: github.ref_name == github.event.repository.default_branch
         continue-on-error: true
         uses: actions/cache/save@v5
         with:
@@ -3661,7 +3675,7 @@ jobs:
       - integration-verify-split
       - integration-split
       - integration-split-strict
-    if: ${{ always() }}
+    if: ${{ !cancelled() }}
     steps:
       - name: Checkout repo
         uses: actions/checkout@v6
