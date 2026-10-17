@@ -498,11 +498,16 @@ jobs:
           ulimit -c unlimited
           # An entry whose own ENVIRONMENT sets MOBILEGL_TRANSPORT overrides the one variable the two
           # legs differ in, so it runs identically in both; the inproc leg leaves those entries (and
-          # the fixtures only they need) to the monolith-control leg, which every branch runs.
-          # transport_pinned.py proves the trimmed selection lost exactly them, or this leg runs
-          # them all as before; the monolith-control leg proves it ran every one of them.
-          ctest -L integration-gpu --show-only=json-v1 > "${RUNNER_TEMP}/all.json"
+          # the fixtures only they need) to the monolith-control leg, which every branch runs, and
+          # that leg proves it ran every one of them. When transport_pinned.py cannot prove the
+          # trimmed selection lost exactly them, this leg runs every entry and writes its JUnits
+          # under -all stems, which the skip census holds to the full name lists.
           EXCLUDE=()
+          MAIN_JUNIT=integration
+          STAGED_JUNIT=integration-staged-copy
+          if [ "${MOBILEGL_CI_DISAGGREGATED}" = ON ]; then
+            ctest -L integration-gpu --show-only=json-v1 > "${RUNNER_TEMP}/all.json"
+          fi
           if [ "${MOBILEGL_TRANSPORT}" = inproc ]; then
             if python3 ../scripts/ci/transport_pinned.py select "${RUNNER_TEMP}/all.json" --out "${RUNNER_TEMP}/transport-pinned.txt" \
                && ctest -L integration-gpu --exclude-from-file "${RUNNER_TEMP}/transport-pinned.txt" --show-only=json-v1 \
@@ -511,7 +516,9 @@ jobs:
                     "${RUNNER_TEMP}/trimmed.json" --out "${RUNNER_TEMP}/transport-pinned.json"; then
               EXCLUDE=(--exclude-from-file "${RUNNER_TEMP}/transport-pinned.txt")
             else
-              echo "::warning::the transport-pinned exclusion did not prove itself, so this leg runs every integration-gpu entry"
+              echo "::warning::the transport-pinned exclusion did not prove itself, so this leg runs every integration-gpu entry (integration-all.xml, integration-staged-copy-all.xml)"
+              MAIN_JUNIT=integration-all
+              STAGED_JUNIT=integration-staged-copy-all
             fi
           fi
           # Second, filtered pass: with the range-invalidating map flush disabled,
@@ -521,16 +528,16 @@ jobs:
           # coverage. The flag is NOT baked into the ctest ENVIRONMENT properties,
           # so an inline env reaches the test processes (unlike the ICD pin above).
           if [ "${{ secrets.ACTIONS_STEP_DEBUG }}" = "true" ]; then
-            ctest -V -L integration-gpu "${EXCLUDE[@]}" --no-tests=error -j "$(nproc)" --output-junit "${RUNNER_TEMP}/integration.xml"
+            ctest -V -L integration-gpu "${EXCLUDE[@]}" --no-tests=error -j "$(nproc)" --output-junit "${RUNNER_TEMP}/${MAIN_JUNIT}.xml"
             MOBILEGL_ESPRYT_DISABLE_INVALIDATE_FLUSH=1 ctest -V -L integration-gpu "${EXCLUDE[@]}" -j "$(nproc)" \
-              -R 'Buffer|Readback|Atomic|Ssbo|Arena' --no-tests=error --output-junit "${RUNNER_TEMP}/integration-staged-copy.xml"
+              -R 'Buffer|Readback|Atomic|Ssbo|Arena' --no-tests=error --output-junit "${RUNNER_TEMP}/${STAGED_JUNIT}.xml"
           else
-            ctest --output-on-failure -L integration-gpu "${EXCLUDE[@]}" --no-tests=error -j "$(nproc)" --output-junit "${RUNNER_TEMP}/integration.xml"
+            ctest --output-on-failure -L integration-gpu "${EXCLUDE[@]}" --no-tests=error -j "$(nproc)" --output-junit "${RUNNER_TEMP}/${MAIN_JUNIT}.xml"
             MOBILEGL_ESPRYT_DISABLE_INVALIDATE_FLUSH=1 ctest --output-on-failure -L integration-gpu "${EXCLUDE[@]}" -j "$(nproc)" \
-              -R 'Buffer|Readback|Atomic|Ssbo|Arena' --no-tests=error --output-junit "${RUNNER_TEMP}/integration-staged-copy.xml"
+              -R 'Buffer|Readback|Atomic|Ssbo|Arena' --no-tests=error --output-junit "${RUNNER_TEMP}/${STAGED_JUNIT}.xml"
           fi
           if [ "${MOBILEGL_TRANSPORT}" = monolith ] && [ "${MOBILEGL_CI_DISAGGREGATED}" = ON ]; then
-            python3 ../scripts/ci/transport_pinned.py require-ran "${RUNNER_TEMP}/all.json" "${RUNNER_TEMP}/integration.xml"
+            python3 ../scripts/ci/transport_pinned.py require-ran "${RUNNER_TEMP}/all.json" "${RUNNER_TEMP}/${MAIN_JUNIT}.xml"
           fi
 
       # Both backend roles must execute inproc in the primary artifact.

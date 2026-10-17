@@ -24,7 +24,9 @@ into the tree (scripts/data/skip_census_baseline.json):
   * new lanes and new names are reported, never red;
   * a lane whose row carries "optional": "<reason>" runs only on some paths (for example only when
     a build-equality guard falls back); its absence is a note, and when it runs it is checked
-    like any other lane.
+    like any other lane;
+  * an optional row that also carries "instead_of": "<lane>" is that lane's whole-run fallback:
+    when it ran, the lane it stands in for may be absent (a note), and is required otherwise.
 
 A deliberate retirement edits the baseline in the same commit and names the cases in the commit
 message (PLAN-P13 §4.2).
@@ -113,31 +115,45 @@ def resolve_baseline(baseline):
         names = row['names'] if 'names' in row else baseline[row['names_from']]['names']
         resolved[lane] = {'names': sorted({normalize_name(n) for n in names}),
                           'skipped': sorted({normalize_name(n) for n in row['skipped']})}
-        if row.get('optional'):
-            resolved[lane]['optional'] = row['optional']
+        for key in ('optional', 'instead_of'):
+            if row.get(key):
+                resolved[lane][key] = row[key]
     return resolved
 
 
 def keep_optional_rows(written, previous):
     """`write` from a run that did not run an optional lane keeps that lane's row, with its names
-    resolved, and every optional row keeps its reason."""
+    resolved, and every optional row keeps its reason. A run where an `instead_of` row stood in
+    did not run the lane it replaces, so that lane keeps its previous row too."""
     resolved = resolve_baseline(previous)
+
+    def keep(lane):
+        written[lane] = {'skipped': resolved[lane]['skipped'], 'names': resolved[lane]['names']}
     for lane, row in previous.items():
         if not row.get('optional'):
             continue
-        if lane in written:
-            written[lane]['optional'] = row['optional']
-        else:
-            written[lane] = {'skipped': resolved[lane]['skipped'], 'names': resolved[lane]['names'],
-                             'optional': row['optional']}
+        if lane not in written:
+            keep(lane)
+        for key in ('optional', 'instead_of'):
+            if row.get(key):
+                written[lane][key] = row[key]
+    for lane, row in list(written.items()):
+        stood_in = row.get('instead_of')
+        if stood_in and stood_in not in written and stood_in in previous:
+            keep(stood_in)
     return dict(sorted(written.items()))
 
 
 def compare(lanes, baseline):
     red, info = [], []
+    stood_in = {row['instead_of']: lane for lane, row in baseline.items()
+                if row.get('optional') and row.get('instead_of') and lane in lanes}
     for lane, known in sorted(baseline.items()):
         current = lanes.get(lane)
         if current is None:
+            if lane in stood_in:
+                info.append(f'lane {lane}: not run ({stood_in[lane]} ran instead)')
+                continue
             if known.get('optional'):
                 info.append(f"lane {lane}: not run (optional: {known['optional']})")
                 continue
@@ -254,6 +270,49 @@ def self_test():
         assert quiet(['check', str(lost), '--baseline', str(optional)]) == 1, 'a plain lane is still required'
         kept = keep_optional_rows(to_baseline(collect(good)), rows)
         assert kept['junit-other/other'] == rows['junit-other/other'], 'write keeps an absent optional row'
+        # A whole-run fallback lane stands in for a trimmed one: the leg ran everything under its
+        # own stem, so the trimmed lane is absent and the full one is held to the full names.
+        trimmed = tmp / 'trimmed.json'
+        rows = json.loads(base.read_text())
+        rows['junit-leg/full'] = {'skipped': ['B'], 'names_from': 'junit-unit/unit'}
+        rows['junit-leg/trimmed'] = {'skipped': [], 'names': ['A']}
+        rows['junit-leg/trimmed-all'] = {'skipped': ['B'], 'names_from': 'junit-unit/unit',
+                                         'optional': 'the fallback', 'instead_of': 'junit-leg/trimmed'}
+        trimmed.write_text(json.dumps(rows))
+
+        def leg(name, trimmed_cases=None, all_cases=None):
+            d = tmp / name
+            junit(d / 'junit-unit' / 'unit.xml', [('A', 'pass'), ('B', 'skip'), ('C', 'pass')])
+            junit(d / 'junit-leg' / 'full.xml', [('A', 'pass'), ('B', 'skip'), ('C', 'pass')])
+            if trimmed_cases is not None:
+                junit(d / 'junit-leg' / 'trimmed.xml', trimmed_cases)
+            if all_cases is not None:
+                junit(d / 'junit-leg' / 'trimmed-all.xml', all_cases)
+            return str(d)
+        full_run = [('A', 'pass'), ('B', 'skip'), ('C', 'pass')]
+        assert quiet(['check', leg('trim-ok', [('A', 'pass')]), '--baseline', str(trimmed)]) == 0, \
+            'the trimmed lane alone is green'
+        assert quiet(['check', leg('fallback-ok', None, full_run), '--baseline', str(trimmed)]) == 0, \
+            'the fallback lane in place of the trimmed one is green'
+        assert quiet(['check', leg('fallback-lost', None, full_run[:2]), '--baseline', str(trimmed)]) == 1, \
+            'a name that disappeared from the fallback lane is red'
+        assert quiet(['check', leg('fallback-skip', None, [('A', 'skip')] + full_run[1:]),
+                      '--baseline', str(trimmed)]) == 1, 'a new skip in the fallback lane is red'
+        assert quiet(['check', leg('neither'), '--baseline', str(trimmed)]) == 1, \
+            'with neither lane the trimmed one is still required'
+        assert keep_optional_rows({}, rows)['junit-leg/trimmed-all']['instead_of'] == 'junit-leg/trimmed', \
+            'write keeps instead_of'
+        rewritten = tmp / 'rewritten.json'
+        rewritten.write_text(trimmed.read_text())
+        assert quiet(['write', leg('rewrite-fallback', None, full_run), '--baseline', str(rewritten)]) == 0
+        kept = json.loads(rewritten.read_text())
+        assert kept.get('junit-leg/trimmed') == {'skipped': [], 'names': ['A']}, \
+            'write from a fallback run keeps the row of the lane the fallback stood in for'
+        assert kept['junit-leg/trimmed-all']['instead_of'] == 'junit-leg/trimmed'
+        assert quiet(['check', leg('rewrite-trim-ok', [('A', 'pass')]), '--baseline', str(rewritten)]) == 0, \
+            'the rewritten baseline still passes a normal run'
+        assert quiet(['check', leg('rewrite-trim-lost', [('B', 'skip')]), '--baseline', str(rewritten)]) == 1, \
+            'the rewritten baseline still reds a name gone from the trimmed lane'
         assert quiet(['check', str(good), '--baseline', str(tmp / 'none.json')]) == 1, 'no baseline must be red'
     assert normalize_name('S/T.Case/Leaf  # GetParam() = 64-byte object <46-CA 08-EB>') == 'S/T.Case/Leaf'
     assert normalize_name('T.Plain') == 'T.Plain'
