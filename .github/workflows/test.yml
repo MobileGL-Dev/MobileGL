@@ -440,6 +440,7 @@ jobs:
       MOBILEGL_IPC_ROLE_SPLIT_STATE: "1"
       MOBILEGL_IPC_STRICT_ERRORS: "1"
       MOBILEGL_IPC_RUN_AHEAD: "1"
+      MOBILEGL_CI_DISAGGREGATED: ${{ (github.ref_name == 'feat/disaggregated' || github.ref_name == 'codex/fix-github-ci' || github.ref_name == 'cleanup') && 'ON' || 'OFF' }}
 
     steps:
       - name: Checkout repo
@@ -502,6 +503,24 @@ jobs:
           MOBILEGL_ITRP_FIX: "ForceOn"
         run: |
           ulimit -c unlimited
+          # An entry whose own ENVIRONMENT sets MOBILEGL_TRANSPORT overrides the one variable the two
+          # legs differ in, so it runs identically in both; the inproc leg leaves those entries (and
+          # the fixtures only they need) to the monolith-control leg, which every branch runs.
+          # transport_pinned.py proves the trimmed selection lost exactly them, or this leg runs
+          # them all as before; the monolith-control leg proves it ran every one of them.
+          ctest -L integration-gpu --show-only=json-v1 > "${RUNNER_TEMP}/all.json"
+          EXCLUDE=()
+          if [ "${MOBILEGL_TRANSPORT}" = inproc ]; then
+            if python3 ../scripts/ci/transport_pinned.py select "${RUNNER_TEMP}/all.json" --out "${RUNNER_TEMP}/transport-pinned.txt" \
+               && ctest -L integration-gpu --exclude-from-file "${RUNNER_TEMP}/transport-pinned.txt" --show-only=json-v1 \
+                    > "${RUNNER_TEMP}/trimmed.json" \
+               && python3 ../scripts/ci/transport_pinned.py assert-exclusion "${RUNNER_TEMP}/all.json" \
+                    "${RUNNER_TEMP}/trimmed.json" --out "${RUNNER_TEMP}/transport-pinned.json"; then
+              EXCLUDE=(--exclude-from-file "${RUNNER_TEMP}/transport-pinned.txt")
+            else
+              echo "::warning::the transport-pinned exclusion did not prove itself, so this leg runs every integration-gpu entry"
+            fi
+          fi
           # Second, filtered pass: with the range-invalidating map flush disabled,
           # the buffer scenarios run on the upload ring's staged-copy tier - which
           # the default pass never reaches (the map tier absorbs every flush on
@@ -509,13 +528,16 @@ jobs:
           # coverage. The flag is NOT baked into the ctest ENVIRONMENT properties,
           # so an inline env reaches the test processes (unlike the ICD pin above).
           if [ "${{ secrets.ACTIONS_STEP_DEBUG }}" = "true" ]; then
-            ctest -V -L integration-gpu --no-tests=error -j "$(nproc)" --output-junit "${RUNNER_TEMP}/integration.xml"
-            MOBILEGL_ESPRYT_DISABLE_INVALIDATE_FLUSH=1 ctest -V -L integration-gpu -j "$(nproc)" \
+            ctest -V -L integration-gpu "${EXCLUDE[@]}" --no-tests=error -j "$(nproc)" --output-junit "${RUNNER_TEMP}/integration.xml"
+            MOBILEGL_ESPRYT_DISABLE_INVALIDATE_FLUSH=1 ctest -V -L integration-gpu "${EXCLUDE[@]}" -j "$(nproc)" \
               -R 'Buffer|Readback|Atomic|Ssbo|Arena' --no-tests=error --output-junit "${RUNNER_TEMP}/integration-staged-copy.xml"
           else
-            ctest --output-on-failure -L integration-gpu --no-tests=error -j "$(nproc)" --output-junit "${RUNNER_TEMP}/integration.xml"
-            MOBILEGL_ESPRYT_DISABLE_INVALIDATE_FLUSH=1 ctest --output-on-failure -L integration-gpu -j "$(nproc)" \
+            ctest --output-on-failure -L integration-gpu "${EXCLUDE[@]}" --no-tests=error -j "$(nproc)" --output-junit "${RUNNER_TEMP}/integration.xml"
+            MOBILEGL_ESPRYT_DISABLE_INVALIDATE_FLUSH=1 ctest --output-on-failure -L integration-gpu "${EXCLUDE[@]}" -j "$(nproc)" \
               -R 'Buffer|Readback|Atomic|Ssbo|Arena' --no-tests=error --output-junit "${RUNNER_TEMP}/integration-staged-copy.xml"
+          fi
+          if [ "${MOBILEGL_TRANSPORT}" = monolith ] && [ "${MOBILEGL_CI_DISAGGREGATED}" = ON ]; then
+            python3 ../scripts/ci/transport_pinned.py require-ran "${RUNNER_TEMP}/all.json" "${RUNNER_TEMP}/integration.xml"
           fi
 
       # Both backend roles must execute inproc in the primary artifact.
@@ -544,6 +566,9 @@ jobs:
           path: |
             ${{ runner.temp }}/integration*.xml
             ${{ runner.temp }}/primary-inproc*
+            ${{ runner.temp }}/transport-pinned*
+            ${{ runner.temp }}/all.json
+            ${{ runner.temp }}/trimmed.json
             build-linux/runtime-mode.json
             build-linux/MobileGL/MG_IntegrationTest/p5f-rsp-*.log
           if-no-files-found: warn
@@ -3630,6 +3655,7 @@ jobs:
           python3 tools/trace_replay/test_run_trace_case.py
           python3 scripts/ci/build_fingerprint.py --self-test
           python3 MobileGL/MG_IntegrationTest/Harness/test_split_log_paths.py
+          python3 scripts/ci/transport_pinned.py --self-test
 
       # Warning only for now: the disaggregation documents are still being written, and a
       # lint that fails a rewrite in progress teaches people to ignore it. It becomes
