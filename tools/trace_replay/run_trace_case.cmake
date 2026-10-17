@@ -67,6 +67,25 @@ if(DEFINED TRACE_IPC_CONTROL AND NOT "${TRACE_IPC_CONTROL}" STREQUAL "")
     set(ENV{MOBILEGL_IPC_LOG_FORWARD} 1)
 endif()
 
+# Wire-volume evidence, only on the legs that ask for it. MGTRACE_WIRE_EVIDENCE is a harness name
+# the library never reads. On a split transport it turns on the library's own per-frame counters,
+# so the checks after the replay can count the draw records the client put on the wire and the
+# draws the server role's backend ran. Both knobs are set outright: a longer summary period from
+# the caller would leave the server's counter line missing on a short trace. It stays off unless
+# asked for, because the counters are part of the configuration under test.
+set(trace_wire_evidence OFF)
+if(NOT "$ENV{MGTRACE_WIRE_EVIDENCE}" STREQUAL "" AND NOT "$ENV{MGTRACE_WIRE_EVIDENCE}" STREQUAL "0")
+    if("$ENV{MOBILEGL_TRANSPORT}" STREQUAL "" OR "$ENV{MOBILEGL_TRANSPORT}" STREQUAL "monolith")
+        message(FATAL_ERROR
+                "MGTRACE_WIRE_EVIDENCE is set for ${TRACE_CASE_NAME} ${TRACE_BACKEND} but "
+                "MOBILEGL_TRANSPORT is '$ENV{MOBILEGL_TRANSPORT}': a run with no wire has no wire "
+                "volume to count, so the request cannot be met.")
+    endif()
+    set(trace_wire_evidence ON)
+    set(ENV{MOBILEGL_PIPE_STATS} 1)
+    set(ENV{MOBILEGL_PIPE_STATS_PERIOD} 1)
+endif()
+
 if(EXISTS "${TRACE_OUTPUT_DIR}")
     file(REMOVE_RECURSE "${TRACE_OUTPUT_DIR}")
 endif()
@@ -478,5 +497,83 @@ if(DEFINED ENV{MOBILEGL_TRANSPORT} AND NOT "$ENV{MOBILEGL_TRANSPORT}" STREQUAL "
                     "(magma-b3.md §2). The clamp in VulkanRenderer::OnSubmitsCompletedUpTo is what makes "
                     "this unreachable; a line here means it was removed or bypassed.")
         endif()
+        # The wire volume, on the legs that asked for it (MGTRACE_WIRE_EVIDENCE above). The client
+        # counts each record at the codec commit and prints one frame-sent line per Present, keyed
+        # by raw opcode; the server role's backend counts its draws and prints one stats line per
+        # Present. Under inproc and spawn the client has no backend of its own, so draws on both
+        # sides mean the picture was drawn from records that crossed the wire. A tcp server is
+        # launched outside this script with an environment that is not ours, so its count is
+        # not required.
+        set(split_draw_opcode "-")
+        set(split_wire_records "-")
+        set(split_server_draws "-")
+        if(trace_wire_evidence)
+            set(split_wire_table "${CMAKE_CURRENT_LIST_DIR}/../../MobileGL/MG_Pipe/generated/PipeWire.inc")
+            set(split_draw_op_line "")
+            if(EXISTS "${split_wire_table}")
+                file(STRINGS "${split_wire_table}" split_draw_op_line REGEX "^[ \t]*DrawVbo = [0-9]+,")
+            endif()
+            if(NOT split_draw_op_line MATCHES "DrawVbo = ([0-9]+),")
+                message(FATAL_ERROR "${split_case}: cannot find the DrawVbo opcode in ${split_wire_table}, "
+                                    "so the wire's draw records cannot be counted.")
+            endif()
+            set(split_draw_opcode "${CMAKE_MATCH_1}")
+            set(split_wire_records 0)
+            file(STRINGS "${mobilegl_log}" split_sent_lines REGEX "P65LinkMetrics kind=frame-sent ")
+            foreach(line IN LISTS split_sent_lines)
+                if(line MATCHES "by_op=([0-9=,]+)")
+                    if(",${CMAKE_MATCH_1}" MATCHES ",${split_draw_opcode}=([0-9]+)")
+                        math(EXPR split_wire_records "${split_wire_records} + ${CMAKE_MATCH_1}")
+                    endif()
+                endif()
+            endforeach()
+            if(split_wire_records EQUAL 0)
+                message(FATAL_ERROR
+                        "${split_case}: MOBILEGL_TRANSPORT=$ENV{MOBILEGL_TRANSPORT} committed no DrawVbo "
+                        "record to the wire: ${mobilegl_log} carries no frame-sent line counting opcode "
+                        "${split_draw_opcode}. Either the transport resolved and the emit table did not put "
+                        "a draw on it, or MOBILEGL_PIPE_STATS did not reach the client.")
+            endif()
+            if("$ENV{MOBILEGL_IPC_CONTROL}" MATCHES "^tcp://")
+                set(split_server_draws "n/a")
+            else()
+                set(split_server_draws 0)
+                file(STRINGS "${mobilegl_server_log}" split_stats_lines REGEX "MGPipe stats:.* draws=[0-9]+ ")
+                foreach(line IN LISTS split_stats_lines)
+                    if(line MATCHES " draws=([0-9]+) ")
+                        math(EXPR split_server_draws "${split_server_draws} + ${CMAKE_MATCH_1}")
+                    endif()
+                endforeach()
+                if(split_server_draws EQUAL 0)
+                    message(FATAL_ERROR
+                            "${split_case}: MOBILEGL_TRANSPORT=$ENV{MOBILEGL_TRANSPORT}: the server role's "
+                            "backend executed no draw - ${mobilegl_server_log} carries no MGPipe stats line "
+                            "with draws above zero, so nothing shows the records were drawn on that side.")
+                endif()
+            endif()
+        endif()
+        # The per-leg evidence that every assertion above ran and found what it needed. It is
+        # written only here, after the last of them, into an output directory wiped at the top of
+        # this script, so a file that exists is this run's; CI reads it back after ctest.
+        if("${split_expected_second}" STREQUAL "")
+            set(split_second_found "-")
+        else()
+            set(split_second_found "${split_expected_second}")
+        endif()
+        if("$ENV{MOBILEGL_IPC_CONTROL}" STREQUAL "")
+            set(split_control "-")
+        else()
+            set(split_control "$ENV{MOBILEGL_IPC_CONTROL}")
+        endif()
+        string(CONCAT split_evidence
+                "case=${TRACE_CASE_NAME}\nbackend=${TRACE_BACKEND}\ntransport=$ENV{MOBILEGL_TRANSPORT}\n"
+                "control=${split_control}\nmarker=${split_expected_marker}\nsecond=${split_second_found}\n"
+                "server_log=1\nfatal_lines=${split_fatal_count}\nfloor_lines=${split_floor_count}\n"
+                "wire=${trace_wire_evidence}\ndraw_opcode=${split_draw_opcode}\n"
+                "wire_draw_records=${split_wire_records}\nserver_draws=${split_server_draws}\n")
+        file(WRITE "${TRACE_OUTPUT_DIR}/output/split-evidence.txt" "${split_evidence}")
+        message(STATUS "MGPipe split evidence: ${split_case} transport=$ENV{MOBILEGL_TRANSPORT} "
+                       "marker found, second='${split_second_found}', wire=${trace_wire_evidence}, "
+                       "wire_draw_records=${split_wire_records}, server_draws=${split_server_draws}")
     endif()
 endif()

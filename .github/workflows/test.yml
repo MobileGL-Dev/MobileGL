@@ -2771,6 +2771,12 @@ jobs:
             export MOBILEGL_MAGMA_DISABLE_BLENDED_DEPTH_WRITE=1
           fi
           ctest -V --no-tests=error -R '^MobileGLTraceReplay\.${{ matrix.case }}\.${{ matrix.backend }}$'             --output-junit "${RUNNER_TEMP}/retrace.xml"
+          # A split row's transport assertions ran on this leg and found their evidence.
+          if [ "${MOBILEGL_TRANSPORT}" != monolith ]; then
+            python3 "${GITHUB_WORKSPACE}/scripts/ci/retrace_split_evidence.py" \
+              '${{ matrix.case }}/${{ matrix.backend }}/output/split-evidence.txt' \
+              --transport "${MOBILEGL_TRANSPORT}" --case '${{ matrix.case }}' --backend '${{ matrix.backend }}'
+          fi
 
       - name: Annotate failed entries
         if: failure()
@@ -3226,8 +3232,20 @@ jobs:
           # resolves the image relative to nothing. Harmless on the inproc arm, which reads it
           # only to decide it does not need it.
           export MOBILEGL_IPC_SERVER_PATH="${GITHUB_WORKSPACE}/build-linux/libMobileGLServer.so"
+          # OpenRA's legs also count the wire's draw records and the server's draws; that turns on
+          # the library's per-frame counters, so the other cases keep the plain configuration.
+          wire=()
+          if [ '${{ matrix.case }}' = 'OpenRA' ]; then
+            export MGTRACE_WIRE_EVIDENCE=1
+            wire=(--require-wire)
+          fi
           ctest -V --no-tests=error --timeout 10800 \
             -R '^MobileGLTraceReplay\.${{ matrix.case }}\.${{ matrix.backend }}$'
+          # The transport assertions ran on this leg and found their evidence.
+          python3 "${GITHUB_WORKSPACE}/scripts/ci/retrace_split_evidence.py" \
+            '${{ matrix.case }}/${{ matrix.backend }}/output/split-evidence.txt' \
+            --transport '${{ matrix.transport }}' --case '${{ matrix.case }}' \
+            --backend '${{ matrix.backend }}' "${wire[@]}"
 
       # Negative control: copy a library without MG_Remote (the push monolith FCL embeds) over the
       # frozen path and require the same replay to fail. OpenRA scores ssim 1.000 either way, so
@@ -3283,6 +3301,7 @@ jobs:
           # half it cannot see.
           log="${{ matrix.case }}/${{ matrix.backend }}/output/mobilegl.client.log"
           server_log="${{ matrix.case }}/${{ matrix.backend }}/output/mobilegl.server.log"
+          cat "${{ matrix.case }}/${{ matrix.backend }}/output/split-evidence.txt" 2>/dev/null || echo "no split-evidence.txt"
           if [ ! -f "${log}" ]; then
             echo "no ${log} - the replay wrote no library log"
             exit 0
@@ -3507,6 +3526,7 @@ jobs:
           python3 scripts/ci/tcp_lane_tools_test.py
           python3 tools/trace_replay/test_run_tcp_matrix.py
           python3 tools/trace_replay/test_compare_actuals.py
+          python3 tools/trace_replay/test_run_trace_case.py
 
       # Warning only for now: the disaggregation documents are still being written, and a
       # lint that fails a rewrite in progress teaches people to ignore it. It becomes
