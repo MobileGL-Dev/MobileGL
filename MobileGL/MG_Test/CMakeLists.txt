@@ -117,6 +117,12 @@ add_executable(GpuHangWatchTest Backend/GpuHangWatchTest.cpp)
 target_include_directories(GpuHangWatchTest PRIVATE ${MGL_ROOT}/include ${MGL_ROOT}/MobileGL)
 target_link_libraries(GpuHangWatchTest PRIVATE MobileGLTestMain ${LINK_LIBRARIES})
 gtest_discover_tests(GpuHangWatchTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
+# The base class's EGL surface and current-context bookkeeping driven through a test double: no
+# device, no EGL driver, no window.
+add_executable(BackendObjectEglStateTest Backend/BackendObjectEglStateTest.cpp)
+target_include_directories(BackendObjectEglStateTest PRIVATE ${MGL_ROOT}/include ${MGL_ROOT}/MobileGL)
+target_link_libraries(BackendObjectEglStateTest PRIVATE MobileGLTestMain ${LINK_LIBRARIES})
+gtest_discover_tests(BackendObjectEglStateTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
 if (ENABLE_INTEGRATION_TESTS)
     add_subdirectory(Backend/DirectVulkan)
 endif()
