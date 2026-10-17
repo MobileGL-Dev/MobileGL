@@ -21,7 +21,10 @@ into the tree (scripts/data/skip_census_baseline.json):
     the lane is missing entirely, which is reported on its own line;
   * a skip that turned into a pass is reported, never red - rewrite the baseline in the commit
     that earns it so the improvement is locked in;
-  * new lanes and new names are reported, never red.
+  * new lanes and new names are reported, never red;
+  * a lane whose row carries "optional": "<reason>" runs only on some paths (for example only when
+    a build-equality guard falls back); its absence is a note, and when it runs it is checked
+    like any other lane.
 
 A deliberate retirement edits the baseline in the same commit and names the cases in the commit
 message (PLAN-P13 §4.2).
@@ -110,7 +113,24 @@ def resolve_baseline(baseline):
         names = row['names'] if 'names' in row else baseline[row['names_from']]['names']
         resolved[lane] = {'names': sorted({normalize_name(n) for n in names}),
                           'skipped': sorted({normalize_name(n) for n in row['skipped']})}
+        if row.get('optional'):
+            resolved[lane]['optional'] = row['optional']
     return resolved
+
+
+def keep_optional_rows(written, previous):
+    """`write` from a run that did not run an optional lane keeps that lane's row, with its names
+    resolved, and every optional row keeps its reason."""
+    resolved = resolve_baseline(previous)
+    for lane, row in previous.items():
+        if not row.get('optional'):
+            continue
+        if lane in written:
+            written[lane]['optional'] = row['optional']
+        else:
+            written[lane] = {'skipped': resolved[lane]['skipped'], 'names': resolved[lane]['names'],
+                             'optional': row['optional']}
+    return dict(sorted(written.items()))
 
 
 def compare(lanes, baseline):
@@ -118,6 +138,9 @@ def compare(lanes, baseline):
     for lane, known in sorted(baseline.items()):
         current = lanes.get(lane)
         if current is None:
+            if known.get('optional'):
+                info.append(f"lane {lane}: not run (optional: {known['optional']})")
+                continue
             red.append(f'lane {lane}: no JUnit at all in this run (the job did not run or did not upload)')
             continue
         allowed = set(known['skipped'])
@@ -158,8 +181,11 @@ def run(argv):
     if args.report:
         args.report.write_text(json.dumps(to_baseline(lanes), indent=1) + '\n')
     if args.command == 'write':
+        written = to_baseline(lanes)
+        if args.baseline.exists():
+            written = keep_optional_rows(written, json.loads(args.baseline.read_text()))
         args.baseline.parent.mkdir(parents=True, exist_ok=True)
-        args.baseline.write_text(json.dumps(to_baseline(lanes), indent=1) + '\n')
+        args.baseline.write_text(json.dumps(written, indent=1) + '\n')
         print(f'wrote {args.baseline}')
         return 0
     if not args.baseline.exists():
@@ -215,6 +241,19 @@ def self_test():
         junit(lost / 'junit-other' / 'other.xml', [('A', 'pass')])
         assert quiet(['check', str(lost), '--baseline', str(base)]) == 1, 'a lane that vanished must be red'
         assert quiet(['check', str(tmp / 'empty'), '--baseline', str(base)]) == 1, 'no JUnit must be red'
+        # An optional lane: absent is a note, present is checked, and a plain lane stays required.
+        optional = tmp / 'optional.json'
+        rows = json.loads(base.read_text())
+        rows['junit-other/other'] = {'skipped': [], 'names': ['A'], 'optional': 'runs on the fallback only'}
+        optional.write_text(json.dumps(rows))
+        assert quiet(['check', str(good), '--baseline', str(optional)]) == 0, 'an absent optional lane is a note'
+        both = tmp / 'both'
+        junit(both / 'junit-unit' / 'unit.xml', [('A', 'pass'), ('B', 'skip'), ('C', 'pass')])
+        junit(both / 'junit-other' / 'other.xml', [('A', 'skip')])
+        assert quiet(['check', str(both), '--baseline', str(optional)]) == 1, 'a present optional lane is checked'
+        assert quiet(['check', str(lost), '--baseline', str(optional)]) == 1, 'a plain lane is still required'
+        kept = keep_optional_rows(to_baseline(collect(good)), rows)
+        assert kept['junit-other/other'] == rows['junit-other/other'], 'write keeps an absent optional row'
         assert quiet(['check', str(good), '--baseline', str(tmp / 'none.json')]) == 1, 'no baseline must be red'
     assert normalize_name('S/T.Case/Leaf  # GetParam() = 64-byte object <46-CA 08-EB>') == 'S/T.Case/Leaf'
     assert normalize_name('T.Plain') == 'T.Plain'
