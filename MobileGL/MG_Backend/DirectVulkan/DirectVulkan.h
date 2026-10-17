@@ -8,7 +8,7 @@
 
 #pragma once
 #include <Includes.h>
-#include <MG_Backend/BackendObject.h>
+#include <MG_Backend/BackendFunctions.h>
 #include "MagmaSession.h"
 #include "Renderer/VulkanRenderer.h"
 

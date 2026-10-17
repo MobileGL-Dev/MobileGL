@@ -30,7 +30,7 @@
 //    the pixels the draw produced or the case fails.
 //
 // 3. THE FIRST CASE ENDS WITH EndFrame(), DELIBERATELY. `Present` has ZERO call sites in
-//    MG_Impl - it is reached only through EGLImpl.cpp:178 -> BackendObject.cpp:396 - so a
+//    MG_Impl - it is reached only through eglSwapBuffers -> BackendObject::SwapEGLBuffers - so a
 //    scenario that never swaps never touches it, and B would then exercise a STRICT SUBSET of
 //    what ClearThenReadPixelsScenario already covers. BRIEF-P5 4.B lists Present(67) among the
 //    catalogue rows this target needs, so the frame boundary is here on purpose: B is A's slot

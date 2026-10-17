@@ -15,7 +15,7 @@
 
 #include "Includes.h"
 #include "Init.h"
-#include <MG_Backend/BackendObjects.h>
+#include <MG_Backend/BackendFunctions.h>
 #include <MG_Impl/GLImpl/Framebuffer/GL_Framebuffer.h>
 #include <MG_Impl/GLImpl/Getter/GL_Getter.h>
 #include <MG_Impl/GLImpl/Texture/GL_Texture.h>

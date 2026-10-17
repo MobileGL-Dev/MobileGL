@@ -15,7 +15,7 @@
 #pragma once
 #include <Includes.h>
 
-#include <MG_Backend/BackendObject.h>
+#include <MG_Backend/BackendFunctions.h>
 #include <MG_Pipe/MGPipeTypes.h>
 #include <MG_Pipe/MGPipeValueTypes.h>
 #include <MG_Pipe/PipeVerbSink.h>

@@ -45,7 +45,7 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PIPE_DIR = os.path.join(REPO_ROOT, "MobileGL", "MG_Pipe")
 GENERATED_DIR = os.path.join(PIPE_DIR, "generated")
 INVENTORY = os.path.join(REPO_ROOT, "scripts", "data", "backend_read_inventory.md")
-FUNCTION_TABLE_HEADER = os.path.join(REPO_ROOT, "MobileGL", "MG_Backend", "BackendObject.h")
+FUNCTION_TABLE_HEADER = os.path.join(REPO_ROOT, "MobileGL", "MG_Backend", "BackendFunctions.h")
 
 GENERATED_BANNER = """// MobileGL - MobileGL/MG_Pipe/generated/{name}
 // Copyright (c) 2025-2026 MobileGL-Dev
@@ -227,7 +227,7 @@ MEMCMP_FALLBACK_TYPES = set()
 
 # Where the structs named in PipeFields.def are declared: the payload header, the value
 # header, the host-span header, the backend capability header (DynamicBackendParameters, the
-# caps block) and the backend object header.
+# caps block) and the backend function table header.
 FIELD_LIST_STRUCT_HEADERS = [
     os.path.join(PIPE_DIR, "MGPipeTypes.h"),
     os.path.join(PIPE_DIR, "MGPipeValueTypes.h"),
@@ -1344,7 +1344,7 @@ def gen_fill_points(accessors, sticky, verbs, classes, fields):
     words = max(2, (len(accessors) + 63) // 64)
     sticky_names = [name for name, _ in sticky]
     out = [banner("PipeFillPoints.inc", "G5b: the verb enum, the verb classes and their may-read field masks.",
-                  "FillPoints.def, Coverage.def and MG_Backend/BackendObject.h")]
+                  "FillPoints.def, Coverage.def and MG_Backend/BackendFunctions.h")]
     out.append("""// One verb per function-pointer member of MG_Backend::GLFunctionsTable, in declaration
 // order, so the enum IS the table's member list. MG_Impl spells MGP_FILL(Verb) before every
 // call through the table; MGPipeFillForVerb fills exactly the fields of the verb's class

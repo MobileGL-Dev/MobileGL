@@ -19,7 +19,7 @@
 #include <Includes.h>
 
 #include <Config.h>
-#include <MG_Backend/BackendObject.h>
+#include <MG_Backend/BackendFunctions.h>
 
 #if MOBILEGL_BUILD_DISAGGREGATED
 #include <MG_Pipe/MGPipeTypes.h>

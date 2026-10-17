@@ -18,7 +18,7 @@
 #pragma once
 #include <Includes.h>
 
-#include <MG_Backend/BackendObject.h>
+#include <MG_Backend/BackendFunctions.h>
 // P5b: the clear discriminants below alias MGPipeTypes.h's (CONTRACT-P5B.md f1). The header
 // was already in this file's closure through BackendObject.h's neighbours; naming it makes
 // the dependency the aliases have explicit.

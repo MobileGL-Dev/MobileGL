@@ -17,7 +17,7 @@
 #include "Init.h"
 #include <Config.h>
 
-#include <MG_Backend/BackendObjects.h>
+#include <MG_Backend/BackendFunctions.h>
 #include <MG_Impl/GLImpl/Getter/GL_Getter.h>
 #include <MG_Impl/GLImpl/Query/GL_Query.h>
 #include <MG_State/GLState/Core.h>

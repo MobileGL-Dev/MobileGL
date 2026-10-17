@@ -436,7 +436,7 @@ namespace MobileGL::MG_Remote::Client {
 
     Bool BackendObject_Remote::SwapEGLBuffers(EGLDisplay dpy, EGLSurface draw) {
         // NOT FORWARDED, and this is the one that must not be. The base implementation's last
-        // act is GetBackendFunctions().Present() (BackendObject.cpp:396) - which is this
+        // act is GetBackendFunctions().Present() - which is this
         // client's class-B Present EMITTER, the only route by which Present is reached at all
         // (it has zero MG_Impl call sites). Calling Server::ServerSwapEGLBuffers would present
         // on the server directly and put no record on the wire, which is the shape every gate

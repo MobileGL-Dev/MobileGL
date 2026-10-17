@@ -7,7 +7,7 @@
 // End of Source File Header
 
 #include "GL_Sync.h"
-#include <MG_Backend/BackendObjects.h>
+#include <MG_Backend/BackendFunctions.h>
 #include <MG_State/GLState/Core.h>
 #include <MG_State/GLState/BufferState/BufferObject.h>
 #include <MG_Impl/Pipe/PipeFill.h>
