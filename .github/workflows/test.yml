@@ -40,8 +40,10 @@ jobs:
       actions: write
       contents: read
     outputs:
-      split-identical: ${{ steps.split-guard.outputs.identical }}
       link-ratchet: ${{ steps.ratchet.outcome }}
+      image: ${{ steps.toolchain.outputs.image }}
+      compiler: ${{ steps.toolchain.outputs.compiler }}
+      build-type: ${{ steps.configure.outputs.build-type }}
     env:
       BUILD_DIR: build-linux
       MOBILEGL_CI_DISAGGREGATED: ${{ (github.ref_name == 'feat/disaggregated' || github.ref_name == 'codex/fix-github-ci' || github.ref_name == 'cleanup') && 'ON' || 'OFF' }}
@@ -110,38 +112,28 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ccache clang-20 clang++-20 lld-20 libc++-20-dev libc++abi-20-dev libvulkan-dev libegl1-mesa-dev libgles2-mesa-dev libgl1-mesa-dri mesa-vulkan-drivers ninja-build
 
+      # The image and compiler are job outputs: integration-split prints them beside build-guard's.
       - name: Show installed toolchain
+        id: toolchain
         run: |
           ccache --version
           "${MOBILEGL_CI_CC}" --version
           "${MOBILEGL_CI_CXX}" --version
           "${MOBILEGL_CI_LLD}" --version
           dpkg -l 'libc++*' 'libegl*' 'libgles*' 'mesa*' 'vulkan*' || true
+          echo "image=${ImageOS:-} ${ImageVersion:-}" >> "${GITHUB_OUTPUT}"
+          echo "compiler=$("${MOBILEGL_CI_CXX}" --version | head -n 1)" >> "${GITHUB_OUTPUT}"
 
-      # The configure line lives in scripts/ci/configure_build.sh, shared with build-linux-split.
+      # The configure line lives in scripts/ci/configure_build.sh, shared with build-linux-split
+      # and build-guard. The build type is a job output: the split consumers reuse this build only
+      # when it is Release, the only type build-guard can find identical to the split line.
       - name: Configure CMake
+        id: configure
         env:
           CI_BUILD_TYPE: ${{ secrets.ACTIONS_STEP_DEBUG == 'true' && 'Debug' || 'Release' }}
-        run: bash scripts/ci/configure_build.sh primary "${BUILD_DIR}"
-
-      # On the disaggregation branches build-linux-split configures the same sources with only the
-      # benchmarks left out. This configures its line here as a probe, on this runner, and compares
-      # the two trees (scripts/ci/build_fingerprint.py). Equal means the split consumers take this
-      # job's artifacts; a difference, or a guard that cannot decide, means false, and
-      # build-linux-split builds its own as before. It never reds this job.
-      - name: Split configuration guard
-        id: split-guard
-        if: env.MOBILEGL_CI_DISAGGREGATED == 'ON'
         run: |
-          if python3 scripts/ci/build_fingerprint.py --self-test > "${RUNNER_TEMP}/fingerprint-self-test.txt"; then
-            python3 scripts/ci/build_fingerprint.py guard --built "${BUILD_DIR}" --probe split \
-              --probe-dir build-guard-split --github-output identical || echo "identical=false" >> "${GITHUB_OUTPUT}"
-          else
-            cat "${RUNNER_TEMP}/fingerprint-self-test.txt"
-            echo "::warning::build_fingerprint.py's self-test failed, so the split build is not reused"
-            echo "identical=false" >> "${GITHUB_OUTPUT}"
-          fi
-          rm -rf build-guard-split
+          echo "build-type=${CI_BUILD_TYPE}" >> "${GITHUB_OUTPUT}"
+          bash scripts/ci/configure_build.sh primary "${BUILD_DIR}"
 
       - name: Build
         run: cmake --build "${BUILD_DIR}" --parallel "$(nproc)"
@@ -154,12 +146,14 @@ jobs:
           python3 scripts/ci/runtime_mode_proof.py build --build-dir "${BUILD_DIR}" \
             --mode "${mode}" --output "${BUILD_DIR}/runtime-mode.json"
 
-      # build-linux-split's server link-closure ratchet, run on this build when that job reuses it.
-      # continue-on-error keeps a ratchet red from skipping this job's consumers; integration-split
-      # turns it into a red of its own instead (Split runtime agreement).
+      # build-linux-split's server link-closure ratchet, on this build, which the split consumers
+      # take when build-guard proves the two configurations identical. This job does not wait for
+      # that verdict, so it runs on every disaggregation build. continue-on-error keeps a ratchet
+      # red from skipping this job's consumers; integration-split reds on it when it takes this
+      # build. The artifact has its own name, so it never replaces build-linux-split's.
       - name: Server link-closure ratchet
         id: ratchet
-        if: steps.split-guard.outputs.identical == 'true'
+        if: env.MOBILEGL_CI_DISAGGREGATED == 'ON'
         continue-on-error: true
         run: |
           mkdir -p ci-artifacts
@@ -169,16 +163,15 @@ jobs:
             --baseline scripts/data/link_ratchet_baseline.txt \
             --assert-monotone \
             --bucket \
-            --json ci-artifacts/link-ratchet.json
+            --json ci-artifacts/link-ratchet-primary.json
 
       - name: Upload link ratchet
-        if: ${{ always() && steps.split-guard.outputs.identical == 'true' }}
+        if: ${{ always() && env.MOBILEGL_CI_DISAGGREGATED == 'ON' }}
         uses: actions/upload-artifact@v7
         with:
-          name: link-ratchet
-          path: ci-artifacts/link-ratchet.json
+          name: link-ratchet-primary
+          path: ci-artifacts/link-ratchet-primary.json
           if-no-files-found: warn
-          overwrite: true
 
       - name: Show ccache stats
         if: ${{ always() }}
@@ -1192,55 +1185,54 @@ jobs:
           path: /tmp/core.*
           if-no-files-found: ignore
 
-  # The split build: the same sources with the transport and its in-process arm always on, which the
-  # split integration and retrace lanes consume. On the disaggregation branches build-linux has the
-  # same configuration apart from the benchmarks; the guard below proves that on this runner, and
-  # when it holds this job skips its compile and the consumers take build-linux's artifacts
-  # (build-linux runs the same guard, and the consumers require both). On dev it builds as before.
-  #
-  # The `nm` step is the point of a build of its own. In a build without the option, MG_Remote is
-  # not compiled and MOBILEGL_TRANSPORT's parser does not exist, so the variable is accepted and
-  # ignored and every downstream lane would run monolith under a name that says split. CMake does
-  # not complain about a typo'd -D, so the build-level assertion is the guard; in reuse mode
-  # build-linux's runtime_mode_proof (--mode disaggregated) is the same assertion and more.
-  build-linux-split:
+  # Whether build-linux-split may skip its compile. On the disaggregation branches its configure
+  # line and build-linux's differ only in the benchmarks; this job configures both on one runner
+  # (configure only) and compares the trees (scripts/ci/build_fingerprint.py). Its verdict is
+  # identical, different or unknown, and its failure never fails the run: only 'identical' makes
+  # build-linux-split skip its compile and the split consumers take build-linux's artifacts,
+  # while 'different' and 'unknown' keep both builds. The builds run on the same runner image as
+  # this job, which records the image and compiler it saw; integration-split prints both sides.
+  # MOBILEGL_CI_DISAGGREGATED is build-linux's own expression, so a branch list that drifts
+  # between the two jobs configures an OFF primary here and gives 'different'.
+  build-guard:
+    name: build guard (split reuse)
     runs-on: ubuntu-26.04
-    timeout-minutes: 120
-    permissions:
-      actions: write
-      contents: read
+    timeout-minutes: 150
+    if: ${{ github.ref_name == 'feat/disaggregated' || github.ref_name == 'codex/fix-github-ci' || github.ref_name == 'cleanup' }}
+    # Consumers read only its outputs, and any verdict but 'identical' (none at all included)
+    # keeps both builds.
+    continue-on-error: true
     outputs:
-      reuse-primary: ${{ steps.guard.outputs.identical == 'true' && 'true' || 'false' }}
+      verdict: ${{ steps.guard.outputs.verdict || 'unknown' }}
+      image: ${{ steps.guard.outputs.image }}
+      compiler: ${{ steps.guard.outputs.compiler }}
     env:
-      BUILD_DIR: build-split
       MOBILEGL_CI_DISAGGREGATED: ${{ (github.ref_name == 'feat/disaggregated' || github.ref_name == 'codex/fix-github-ci' || github.ref_name == 'cleanup') && 'ON' || 'OFF' }}
-      CCACHE_BASEDIR: ${{ github.workspace }}
-      CCACHE_COMPRESS: "true"
-      CCACHE_DIR: ${{ github.workspace }}/.ccache
-      CCACHE_MAXSIZE: 4G
-      CCACHE_NOHASHDIR: "true"
 
+    # Every step may fail without failing the job: a setup step that failed leaves a configure
+    # that fails, which the guard reports as 'unknown'.
     steps:
       - name: Checkout repo
+        continue-on-error: true
+        timeout-minutes: 15
         uses: actions/checkout@v6
         with:
-          # recursive, and load-bearing here beyond the usual: MOBILEGL_BUILD_DISAGGREGATED
-          # shadows itself back to OFF when 3rdparty/flatbuffers/include is missing (a normal
-          # variable rather than a cache force, deliberately). A shallow checkout would therefore
-          # configure cleanly, build a monolith library, and be caught only by the nm step below.
           submodules: recursive
 
       - name: Configure runner environment
+        continue-on-error: true
+        timeout-minutes: 15
         uses: ./.github/actions/setup-test-runner
 
       - name: Get CMake
+        continue-on-error: true
         timeout-minutes: 15
         uses: lukka/get-cmake@v4.3.3
         with:
           cmakeVersion: 3.31.10
 
       - name: Prepare Vulkan SDK
-        id: netsetup1274
+        id: vulkan
         continue-on-error: true
         timeout-minutes: 15
         if: env.MOBILEGL_CI_NATIVE_GPU != '1'
@@ -1251,8 +1243,9 @@ jobs:
           vulkan-use-cache: true
 
       - name: Prepare Vulkan SDK (retry)
+        continue-on-error: true
         timeout-minutes: 15
-        if: ${{ (env.MOBILEGL_CI_NATIVE_GPU != '1') && steps.netsetup1274.outcome == 'failure' }}
+        if: ${{ (env.MOBILEGL_CI_NATIVE_GPU != '1') && steps.vulkan.outcome == 'failure' }}
         uses: humbletim/setup-vulkan-sdk@v1.2.1
         with:
           vulkan-query-version: 1.4.304.1
@@ -1260,17 +1253,143 @@ jobs:
           vulkan-use-cache: true
 
       - name: Update glslang external sources
+        continue-on-error: true
+        timeout-minutes: 15
         working-directory: 3rdparty/glslang
-        run: python3 update_glslang_sources.py
+        run: python3 update_glslang_sources.py || python3 update_glslang_sources.py
 
       - name: Install build dependencies
+        continue-on-error: true
         timeout-minutes: 15
         if: env.MOBILEGL_CI_NATIVE_GPU != '1'
         run: |
           sudo apt-get update
           sudo apt-get install -y ccache clang-20 clang++-20 lld-20 libc++-20-dev libc++abi-20-dev libvulkan-dev libegl1-mesa-dev libgles2-mesa-dev libgl1-mesa-dri mesa-vulkan-drivers ninja-build
 
+      # The self-test first: a guard whose canned cases fail decides nothing. The two configures
+      # share one FetchContent directory, so only the first fetches; each attempt is killed after
+      # 10 minutes and retried once, which this step's timeout leaves room for.
+      - name: Configure both lines and compare
+        id: guard
+        continue-on-error: true
+        timeout-minutes: 45
+        env:
+          CI_BUILD_TYPE: ${{ secrets.ACTIONS_STEP_DEBUG == 'true' && 'Debug' || 'Release' }}
+        run: |
+          if python3 scripts/ci/build_fingerprint.py --self-test > "${RUNNER_TEMP}/fingerprint-self-test.txt"; then
+            python3 scripts/ci/build_fingerprint.py guard --primary-dir build-guard-primary \
+              --split-dir build-guard-split --deps-dir build-guard-deps \
+              --github-output verdict --report "${RUNNER_TEMP}/build-guard.json"
+          else
+            cat "${RUNNER_TEMP}/fingerprint-self-test.txt"
+            echo "::warning::build_fingerprint.py's self-test failed, so the guard decides nothing"
+            echo "verdict=unknown" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - name: Upload guard report
+        if: ${{ always() }}
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: build-guard
+          path: ${{ runner.temp }}/build-guard.json
+          if-no-files-found: warn
+
+  # The split build: the same sources with the transport and its in-process arm always on, which the
+  # split integration and retrace lanes consume. When build-guard proves its configuration
+  # identical to build-linux's (the disaggregation branches, benchmarks apart), this job builds
+  # nothing and the consumers take build-linux's artifacts; on any other verdict, and where
+  # build-guard does not run, it builds.
+  #
+  # The `nm` step is the point of a build of its own. In a build without the option, MG_Remote is
+  # not compiled and MOBILEGL_TRANSPORT's parser does not exist, so the variable is accepted and
+  # ignored and every downstream lane would run monolith under a name that says split. CMake does
+  # not complain about a typo'd -D, so the build-level assertion is the guard; in reuse mode
+  # build-linux's runtime_mode_proof (--mode disaggregated) is the same assertion and more.
+  build-linux-split:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 120
+    needs: [build-guard]
+    # A build-guard that was skipped, failed or undecided means this job builds.
+    if: ${{ !cancelled() }}
+    permissions:
+      actions: write
+      contents: read
+    env:
+      BUILD_DIR: build-split
+      SPLIT_REUSE: ${{ needs.build-guard.outputs.verdict == 'identical' && 'true' || 'false' }}
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_COMPRESS: "true"
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 4G
+      CCACHE_NOHASHDIR: "true"
+
+    steps:
+      - name: Reuse decision
+        env:
+          GUARD_VERDICT: ${{ needs.build-guard.outputs.verdict }}
+        run: |
+          if [ "${SPLIT_REUSE}" = true ]; then
+            echo "build-guard found the two configurations identical: this job builds nothing and the split consumers take build-linux's artifacts"
+          else
+            echo "build-guard verdict '${GUARD_VERDICT:-none}': this job builds the split library"
+          fi
+
+      - name: Checkout repo
+        if: env.SPLIT_REUSE != 'true'
+        uses: actions/checkout@v6
+        with:
+          # recursive, and load-bearing here beyond the usual: MOBILEGL_BUILD_DISAGGREGATED
+          # shadows itself back to OFF when 3rdparty/flatbuffers/include is missing (a normal
+          # variable rather than a cache force, deliberately). A shallow checkout would therefore
+          # configure cleanly, build a monolith library, and be caught only by the nm step below.
+          submodules: recursive
+
+      - name: Configure runner environment
+        if: env.SPLIT_REUSE != 'true'
+        uses: ./.github/actions/setup-test-runner
+
+      - name: Get CMake
+        if: env.SPLIT_REUSE != 'true'
+        timeout-minutes: 15
+        uses: lukka/get-cmake@v4.3.3
+        with:
+          cmakeVersion: 3.31.10
+
+      - name: Prepare Vulkan SDK
+        id: netsetup1274
+        continue-on-error: true
+        timeout-minutes: 15
+        if: ${{ env.SPLIT_REUSE != 'true' && (env.MOBILEGL_CI_NATIVE_GPU != '1') }}
+        uses: humbletim/setup-vulkan-sdk@v1.2.1
+        with:
+          vulkan-query-version: 1.4.304.1
+          vulkan-components: Vulkan-Headers, Vulkan-Loader
+          vulkan-use-cache: true
+
+      - name: Prepare Vulkan SDK (retry)
+        timeout-minutes: 15
+        if: ${{ env.SPLIT_REUSE != 'true' && ((env.MOBILEGL_CI_NATIVE_GPU != '1') && steps.netsetup1274.outcome == 'failure') }}
+        uses: humbletim/setup-vulkan-sdk@v1.2.1
+        with:
+          vulkan-query-version: 1.4.304.1
+          vulkan-components: Vulkan-Headers, Vulkan-Loader
+          vulkan-use-cache: true
+
+      - name: Update glslang external sources
+        if: env.SPLIT_REUSE != 'true'
+        working-directory: 3rdparty/glslang
+        run: python3 update_glslang_sources.py
+
+      - name: Install build dependencies
+        timeout-minutes: 15
+        if: ${{ env.SPLIT_REUSE != 'true' && (env.MOBILEGL_CI_NATIVE_GPU != '1') }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ccache clang-20 clang++-20 lld-20 libc++-20-dev libc++abi-20-dev libvulkan-dev libegl1-mesa-dev libgles2-mesa-dev libgl1-mesa-dri mesa-vulkan-drivers ninja-build
+
       - name: Show installed toolchain
+        if: env.SPLIT_REUSE != 'true'
         run: |
           ccache --version
           "${MOBILEGL_CI_CC}" --version
@@ -1280,35 +1399,17 @@ jobs:
       # Release/INFO like the shipped build; the line and the reasons are in
       # scripts/ci/configure_build.sh, shared with build-linux.
       - name: Configure CMake
+        if: env.SPLIT_REUSE != 'true'
         run: bash scripts/ci/configure_build.sh split "${BUILD_DIR}"
 
-      # build-linux's configuration, probed on this runner and compared with this tree. Equal
-      # means this job builds nothing and ends green; the consumers then take build-linux's
-      # artifacts, and red if build-linux's own guard disagrees. It never reds this job.
-      - name: Primary configuration guard
-        id: guard
-        if: env.MOBILEGL_CI_DISAGGREGATED == 'ON'
-        env:
-          CI_BUILD_TYPE: ${{ secrets.ACTIONS_STEP_DEBUG == 'true' && 'Debug' || 'Release' }}
-        run: |
-          if python3 scripts/ci/build_fingerprint.py --self-test > "${RUNNER_TEMP}/fingerprint-self-test.txt"; then
-            python3 scripts/ci/build_fingerprint.py guard --built "${BUILD_DIR}" --probe primary \
-              --probe-dir build-guard-primary --github-output identical || echo "identical=false" >> "${GITHUB_OUTPUT}"
-          else
-            cat "${RUNNER_TEMP}/fingerprint-self-test.txt"
-            echo "::warning::build_fingerprint.py's self-test failed, so this job builds its own library"
-            echo "identical=false" >> "${GITHUB_OUTPUT}"
-          fi
-          rm -rf build-guard-primary
-
       - name: Set swap space
-        if: steps.guard.outputs.identical != 'true'
+        if: env.SPLIT_REUSE != 'true'
         uses: pierotofy/set-swap-space@v1.0
         with:
           swap-size-gb: 32
 
       - name: Restore ccache
-        if: steps.guard.outputs.identical != 'true'
+        if: env.SPLIT_REUSE != 'true'
         uses: actions/cache/restore@v5
         with:
           path: .ccache
@@ -1317,7 +1418,7 @@ jobs:
             ${{ runner.os }}-ubuntu26-cpu-test-${{ github.job }}-ccache-
 
       - name: Build
-        if: steps.guard.outputs.identical != 'true'
+        if: env.SPLIT_REUSE != 'true'
         run: cmake --build "${BUILD_DIR}" --parallel "$(nproc)"
 
       # `nm` and NOT `nm -D`, for the reason build-linux-verify spells out: everything under
@@ -1326,7 +1427,7 @@ jobs:
       # stripped library would make the grep fail for a third, silent reason.
       #
       - name: MG_Remote symbols in split library
-        if: steps.guard.outputs.identical != 'true'
+        if: env.SPLIT_REUSE != 'true'
         run: |
           test -f "${BUILD_DIR}/libMobileGL.so"
           defined=$(nm --defined-only "${BUILD_DIR}/libMobileGL.so" | wc -l)
@@ -1354,7 +1455,7 @@ jobs:
       # script re-checks CMakeCache.txt) and before anything deletes the *.o files it reads: here,
       # or in build-linux when this job reuses that build.
       - name: Server link-closure ratchet
-        if: steps.guard.outputs.identical != 'true'
+        if: env.SPLIT_REUSE != 'true'
         run: |
           mkdir -p ci-artifacts
           python3 scripts/link_ratchet.py --self-test
@@ -1368,28 +1469,27 @@ jobs:
       # Uploaded even when the gate fired: a red ratchet is exactly the moment someone needs the
       # per-symbol definer/referrer attribution the JSON carries.
       - name: Upload link ratchet
-        if: ${{ always() && steps.guard.outputs.identical != 'true' }}
+        if: ${{ always() && env.SPLIT_REUSE != 'true' }}
         uses: actions/upload-artifact@v7
         with:
           name: link-ratchet
           path: ci-artifacts/link-ratchet.json
           if-no-files-found: warn
-          overwrite: true
 
       - name: Show ccache stats
-        if: ${{ always() && steps.guard.outputs.identical != 'true' }}
+        if: ${{ always() && env.SPLIT_REUSE != 'true' }}
         run: ccache --show-stats
 
       # Only after a build: with nothing built, deleting would drop this branch's entry for good.
       - name: Release superseded ccache entry
-        if: steps.guard.outputs.identical != 'true'
+        if: env.SPLIT_REUSE != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           CACHE_KEY: ${{ runner.os }}-ubuntu26-cpu-test-${{ github.job }}-ccache-v1
         run: gh cache delete "${CACHE_KEY}" --ref "${GITHUB_REF}" || true
 
       - name: Save ccache
-        if: steps.guard.outputs.identical != 'true'
+        if: env.SPLIT_REUSE != 'true'
         continue-on-error: true
         uses: actions/cache/save@v5
         with:
@@ -1397,11 +1497,11 @@ jobs:
           key: ${{ runner.os }}-ubuntu26-cpu-test-${{ github.job }}-ccache-v1
 
       - name: Prepare packaged test metadata
-        if: steps.guard.outputs.identical != 'true'
+        if: env.SPLIT_REUSE != 'true'
         run: python3 scripts/ci/prepare_test_runtime.py "${BUILD_DIR}"
 
       - name: Package Linux split runtime
-        if: steps.guard.outputs.identical != 'true'
+        if: env.SPLIT_REUSE != 'true'
         run: |
           mkdir -p ci-artifacts
           mapfile -t SHARED_LIBS < <(find "${BUILD_DIR}" -type f \( -name '*.so' -o -name '*.so.*' \) -print | sort)
@@ -1419,7 +1519,7 @@ jobs:
             "${SHARED_LIBS[@]}"
 
       - name: Upload Linux split runtime
-        if: steps.guard.outputs.identical != 'true'
+        if: env.SPLIT_REUSE != 'true'
         uses: actions/upload-artifact@v7
         with:
           name: mobilegl-linux-runtime-split
@@ -1429,14 +1529,14 @@ jobs:
       # The retrace legs load only the library, and the server image on the spawn arm, so they
       # take this instead of the whole test runtime.
       - name: Package retrace library
-        if: steps.guard.outputs.identical != 'true'
+        if: env.SPLIT_REUSE != 'true'
         run: |
           files=("${BUILD_DIR}/.ci-source-root" "${BUILD_DIR}/libMobileGL.so")
           if [ -f "${BUILD_DIR}/libMobileGLServer.so" ]; then files+=("${BUILD_DIR}/libMobileGLServer.so"); fi
           tar -czf ci-artifacts/mobilegl-linux-lib-split.tgz "${files[@]}"
 
       - name: Upload retrace library
-        if: steps.guard.outputs.identical != 'true'
+        if: env.SPLIT_REUSE != 'true'
         uses: actions/upload-artifact@v7
         with:
           name: mobilegl-linux-lib-split
@@ -1448,38 +1548,41 @@ jobs:
   integration-split:
     runs-on: ubuntu-26.04
     timeout-minutes: 120
-    needs: [build-linux-split, build-linux]
-    if: ${{ !cancelled() && needs.build-linux-split.result == 'success' && (needs.build-linux-split.outputs.reuse-primary != 'true' || needs.build-linux.result == 'success') }}
+    needs: [build-guard, build-linux-split, build-linux]
+    if: ${{ !cancelled() && needs.build-linux-split.result == 'success' && (needs.build-guard.outputs.verdict != 'identical' || needs.build-linux.result == 'success') }}
 
     # Short-lived test processes skip the glslang prewarm, as in the test job.
     env:
       MOBILEGL_DISABLE_SHADER_PREWARM: "1"
-      SPLIT_REUSE: ${{ needs.build-linux-split.outputs.reuse-primary }}
-      SPLIT_BUILD_DIR: ${{ needs.build-linux-split.outputs.reuse-primary == 'true' && 'build-linux' || 'build-split' }}
-      SPLIT_RUNTIME: ${{ needs.build-linux-split.outputs.reuse-primary == 'true' && 'mobilegl-linux-runtime' || 'mobilegl-linux-runtime-split' }}
+      SPLIT_REUSE: ${{ needs.build-guard.outputs.verdict == 'identical' && 'true' || 'false' }}
+      SPLIT_BUILD_DIR: ${{ needs.build-guard.outputs.verdict == 'identical' && 'build-linux' || 'build-split' }}
+      SPLIT_RUNTIME: ${{ needs.build-guard.outputs.verdict == 'identical' && 'mobilegl-linux-runtime' || 'mobilegl-linux-runtime-split' }}
       MOBILEGL_CI_DISAGGREGATED: ${{ (github.ref_name == 'feat/disaggregated' || github.ref_name == 'codex/fix-github-ci' || github.ref_name == 'cleanup') && 'ON' || 'OFF' }}
 
     steps:
       - name: Checkout repo
         uses: actions/checkout@v6
 
-      # The two build guards must agree. build-linux-split skips its compile on its own guard's
-      # word; the artifacts these lanes then take are build-linux's, so build-linux's guard must
-      # have proved the same equality on the runner that built them.
-      - name: Split runtime agreement
+      # Which build these lanes take: build-linux's when build-guard proved the two configurations
+      # identical, build-linux-split's otherwise. build-guard compared them on its own runner, so
+      # the image and compiler it saw are printed beside build-linux's. It reds only when it would
+      # reuse a build-linux that is not Release (see scripts/ci/split_reuse_build_type.sh).
+      - name: Split runtime
         env:
-          PRIMARY_IDENTICAL: ${{ needs.build-linux.outputs.split-identical }}
-          PRIMARY_RATCHET: ${{ needs.build-linux.outputs.link-ratchet }}
+          GUARD_VERDICT: ${{ needs.build-guard.outputs.verdict }}
+          GUARD_IMAGE: ${{ needs.build-guard.outputs.image }}
+          GUARD_COMPILER: ${{ needs.build-guard.outputs.compiler }}
+          PRIMARY_IMAGE: ${{ needs.build-linux.outputs.image }}
+          PRIMARY_COMPILER: ${{ needs.build-linux.outputs.compiler }}
+          PRIMARY_BUILD_TYPE: ${{ needs.build-linux.outputs.build-type }}
         run: |
-          if [ "${SPLIT_REUSE}" = "true" ] && [ "${PRIMARY_IDENTICAL}" != "true" ]; then
-            echo "::error::build-linux-split skipped its build, but build-linux's guard did not prove the two configurations equal (split-identical='${PRIMARY_IDENTICAL}'): the runners disagree, so these lanes have no split runtime they can trust"
-            exit 1
+          echo "split runtime: ${SPLIT_BUILD_DIR} (build-guard verdict '${GUARD_VERDICT:-none}')"
+          bash scripts/ci/split_reuse_build_type.sh
+          echo "build-guard ran on '${GUARD_IMAGE}' with '${GUARD_COMPILER}'"
+          echo "build-linux ran on '${PRIMARY_IMAGE}' with '${PRIMARY_COMPILER}'"
+          if [ "${SPLIT_REUSE}" = true ] && { [ "${GUARD_IMAGE}" != "${PRIMARY_IMAGE}" ] || [ "${GUARD_COMPILER}" != "${PRIMARY_COMPILER}" ]; }; then
+            echo "::notice::build-guard and build-linux saw different runner images or compilers; the reused build is the one build-linux configured"
           fi
-          if [ "${SPLIT_REUSE}" = "true" ] && [ "${PRIMARY_RATCHET}" != "success" ]; then
-            echo "::error::the server link-closure ratchet ran in build-linux for this reused build and did not pass (outcome '${PRIMARY_RATCHET}'); its link-ratchet artifact names the symbols"
-            exit 1
-          fi
-          echo "split runtime: ${SPLIT_BUILD_DIR} (reuse of build-linux: ${SPLIT_REUSE})"
 
       - name: Configure runner environment
         uses: ./.github/actions/setup-test-runner
@@ -1684,6 +1787,19 @@ jobs:
           SPLIT_BASELINE_JUNIT: ${{ runner.temp }}/split-baseline.xml
         run: bash "${GITHUB_WORKSPACE}/scripts/ci/split_negative_controls.sh"
 
+      # build-linux ran the server link-closure ratchet on the build these lanes took, with
+      # continue-on-error so that a red there does not skip build-linux's own consumers.
+      - name: Server link-closure ratchet of the reused build
+        if: ${{ !cancelled() && env.SPLIT_REUSE == 'true' }}
+        env:
+          PRIMARY_RATCHET: ${{ needs.build-linux.outputs.link-ratchet }}
+        run: |
+          if [ "${PRIMARY_RATCHET}" != success ]; then
+            echo "::error::the server link-closure ratchet of the build-linux build these lanes took did not pass (outcome '${PRIMARY_RATCHET}'); build-linux's link-ratchet-primary artifact names the symbols"
+            exit 1
+          fi
+          echo "the server link-closure ratchet passed on the build-linux build these lanes took"
+
       # The run log needs a signed-in reader; annotations do not. Name every failed ctest entry,
       # with the lines of its output that say why, where anyone reading the run can see them.
       - name: Annotate failed entries
@@ -1727,34 +1843,31 @@ jobs:
   integration-split-strict:
     runs-on: ubuntu-26.04
     timeout-minutes: 60
-    needs: [build-linux-split, build-linux]
-    if: ${{ !cancelled() && needs.build-linux-split.result == 'success' && (needs.build-linux-split.outputs.reuse-primary != 'true' || needs.build-linux.result == 'success') }}
+    needs: [build-guard, build-linux-split, build-linux]
+    if: ${{ !cancelled() && needs.build-linux-split.result == 'success' && (needs.build-guard.outputs.verdict != 'identical' || needs.build-linux.result == 'success') }}
 
     # Short-lived test processes skip the glslang prewarm, as in the test job.
     env:
       MOBILEGL_DISABLE_SHADER_PREWARM: "1"
-      SPLIT_REUSE: ${{ needs.build-linux-split.outputs.reuse-primary }}
-      SPLIT_BUILD_DIR: ${{ needs.build-linux-split.outputs.reuse-primary == 'true' && 'build-linux' || 'build-split' }}
-      SPLIT_RUNTIME: ${{ needs.build-linux-split.outputs.reuse-primary == 'true' && 'mobilegl-linux-runtime' || 'mobilegl-linux-runtime-split' }}
+      SPLIT_REUSE: ${{ needs.build-guard.outputs.verdict == 'identical' && 'true' || 'false' }}
+      SPLIT_BUILD_DIR: ${{ needs.build-guard.outputs.verdict == 'identical' && 'build-linux' || 'build-split' }}
+      SPLIT_RUNTIME: ${{ needs.build-guard.outputs.verdict == 'identical' && 'mobilegl-linux-runtime' || 'mobilegl-linux-runtime-split' }}
       MOBILEGL_CI_DISAGGREGATED: ${{ (github.ref_name == 'feat/disaggregated' || github.ref_name == 'codex/fix-github-ci' || github.ref_name == 'cleanup') && 'ON' || 'OFF' }}
 
     steps:
       - name: Checkout repo
         uses: actions/checkout@v6
 
-      # The two build guards must agree. build-linux-split skips its compile on its own guard's
-      # word; the artifacts these lanes then take are build-linux's, so build-linux's guard must
-      # have proved the same equality on the runner that built them.
-      - name: Split runtime agreement
+      # build-linux's build when build-guard proved the two configurations identical,
+      # build-linux-split's otherwise; integration-split prints the guard's evidence. A build-linux
+      # that is not Release is never reused (scripts/ci/split_reuse_build_type.sh).
+      - name: Split runtime
         env:
-          PRIMARY_IDENTICAL: ${{ needs.build-linux.outputs.split-identical }}
-          PRIMARY_RATCHET: ${{ needs.build-linux.outputs.link-ratchet }}
+          GUARD_VERDICT: ${{ needs.build-guard.outputs.verdict }}
+          PRIMARY_BUILD_TYPE: ${{ needs.build-linux.outputs.build-type }}
         run: |
-          if [ "${SPLIT_REUSE}" = "true" ] && [ "${PRIMARY_IDENTICAL}" != "true" ]; then
-            echo "::error::build-linux-split skipped its build, but build-linux's guard did not prove the two configurations equal (split-identical='${PRIMARY_IDENTICAL}'): the runners disagree, so these lanes have no split runtime they can trust"
-            exit 1
-          fi
-          echo "split runtime: ${SPLIT_BUILD_DIR} (reuse of build-linux: ${SPLIT_REUSE})"
+          echo "split runtime: ${SPLIT_BUILD_DIR} (build-guard verdict '${GUARD_VERDICT:-none}')"
+          bash scripts/ci/split_reuse_build_type.sh
 
       - name: Configure runner environment
         uses: ./.github/actions/setup-test-runner
@@ -3204,24 +3317,25 @@ jobs:
     timeout-minutes: 240
     # The setup action selects lavapipe on GitHub-hosted runners.
     needs:
+      - build-guard
       - build-linux-split
       - build-linux
       - build-retrace
       - trace-cases
       - trace-fixtures
-    if: ${{ !cancelled() && needs.build-linux-split.result == 'success' && needs.build-retrace.result == 'success' && needs.trace-cases.result == 'success' && (needs.build-linux-split.outputs.reuse-primary != 'true' || needs.build-linux.result == 'success') }}
+    if: ${{ !cancelled() && needs.build-linux-split.result == 'success' && needs.build-retrace.result == 'success' && needs.trace-cases.result == 'success' && (needs.build-guard.outputs.verdict != 'identical' || needs.build-linux.result == 'success') }}
     env:
-      SPLIT_REUSE: ${{ needs.build-linux-split.outputs.reuse-primary }}
-      SPLIT_LIB: ${{ needs.build-linux-split.outputs.reuse-primary == 'true' && 'mobilegl-linux-lib' || 'mobilegl-linux-lib-split' }}
-      SPLIT_LIB_DIR: ${{ needs.build-linux-split.outputs.reuse-primary == 'true' && 'build-linux' || 'build-split' }}
-      SPLIT_BUILD_DIR: ${{ needs.build-linux-split.outputs.reuse-primary == 'true' && 'build-linux' || 'build-split' }}
+      SPLIT_REUSE: ${{ needs.build-guard.outputs.verdict == 'identical' && 'true' || 'false' }}
+      SPLIT_LIB: ${{ needs.build-guard.outputs.verdict == 'identical' && 'mobilegl-linux-lib' || 'mobilegl-linux-lib-split' }}
+      SPLIT_LIB_DIR: ${{ needs.build-guard.outputs.verdict == 'identical' && 'build-linux' || 'build-split' }}
+      SPLIT_BUILD_DIR: ${{ needs.build-guard.outputs.verdict == 'identical' && 'build-linux' || 'build-split' }}
     strategy:
       fail-fast: false
       max-parallel: 8
       # With build-linux reused, the inproc rows (except OpenRA's) are replayed by the retrace job's
       # inproc-acceptance rows on the same library, strict and with the dual block and run-ahead
       # on; the spawn rows below prove per leg that those are also the defaults they run with.
-      matrix: ${{ fromJSON(needs.build-linux-split.outputs.reuse-primary == 'true' && needs.trace-cases.outputs.split-spawn-matrix || needs.trace-cases.outputs.split-matrix) }}
+      matrix: ${{ fromJSON(needs.build-guard.outputs.verdict == 'identical' && needs.trace-cases.outputs.split-spawn-matrix || needs.trace-cases.outputs.split-matrix) }}
 
     steps:
       - name: Set swap space
@@ -3233,19 +3347,16 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v6
 
-      # The two build guards must agree. build-linux-split skips its compile on its own guard's
-      # word; the artifacts these lanes then take are build-linux's, so build-linux's guard must
-      # have proved the same equality on the runner that built them.
-      - name: Split runtime agreement
+      # build-linux's build when build-guard proved the two configurations identical,
+      # build-linux-split's otherwise; integration-split prints the guard's evidence. A build-linux
+      # that is not Release is never reused (scripts/ci/split_reuse_build_type.sh).
+      - name: Split runtime
         env:
-          PRIMARY_IDENTICAL: ${{ needs.build-linux.outputs.split-identical }}
-          PRIMARY_RATCHET: ${{ needs.build-linux.outputs.link-ratchet }}
+          GUARD_VERDICT: ${{ needs.build-guard.outputs.verdict }}
+          PRIMARY_BUILD_TYPE: ${{ needs.build-linux.outputs.build-type }}
         run: |
-          if [ "${SPLIT_REUSE}" = "true" ] && [ "${PRIMARY_IDENTICAL}" != "true" ]; then
-            echo "::error::build-linux-split skipped its build, but build-linux's guard did not prove the two configurations equal (split-identical='${PRIMARY_IDENTICAL}'): the runners disagree, so these lanes have no split runtime they can trust"
-            exit 1
-          fi
-          echo "split runtime: ${SPLIT_BUILD_DIR} (reuse of build-linux: ${SPLIT_REUSE})"
+          echo "split runtime: ${SPLIT_BUILD_DIR} (build-guard verdict '${GUARD_VERDICT:-none}')"
+          bash scripts/ci/split_reuse_build_type.sh
 
       - name: Configure runner environment
         uses: ./.github/actions/setup-test-runner
@@ -3766,6 +3877,7 @@ jobs:
           python3 tools/trace_replay/test_compare_actuals.py
           python3 tools/trace_replay/test_run_trace_case.py
           python3 scripts/ci/build_fingerprint.py --self-test
+          bash scripts/ci/split_reuse_build_type.sh --self-test
           python3 MobileGL/MG_IntegrationTest/Harness/test_split_log_paths.py
           python3 scripts/ci/transport_pinned.py --self-test
 

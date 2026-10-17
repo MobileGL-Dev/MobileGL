@@ -7,51 +7,63 @@
 # SPDX-License-Identifier: LGPL-3.0-only
 # End of Source File Header
 
-"""Prove that two CMake build trees were configured identically, apart from the benchmarks.
+"""Decide whether the two Linux library configurations are identical apart from the benchmarks.
 
 build-linux and build-linux-split configure the same sources twice. On the disaggregation
 branches the only intended difference is MOBILEGL_BUILD_BENCHMARK, which adds MG_Benchmark and the
-google benchmark dependency and touches nothing else. When the two configurations are equal, the
-split consumers can take build-linux's artifacts and build-linux-split need not compile again.
+google benchmark dependency and touches nothing else. When the two configurations are identical,
+the split consumers can take build-linux's artifacts and build-linux-split need not compile again.
 
 The fingerprint is read from what configure writes, so it can be taken before the build:
   cache      MOBILEGL_* entries (except MOBILEGL_BUILD_BENCHMARK), the build type, compilers,
              launchers, flags and the link tools from CMakeCache.txt;
   compile    every compile_commands.json entry: file, output and arguments;
   link       every link statement of build.ninja: outputs, rule, inputs and variables;
-  tests      the text of every CTestTestfile.cmake and gtest *_include.cmake;
-  toolchain  compiler, linker, cmake, ninja and package versions on this runner;
-  image      the runner image, recorded and never compared.
-The build directory's own path is replaced by @BUILD@, and everything under MobileGL/MG_Benchmark
-or the benchmark dependency is left out. A fingerprint with fewer than 200 compile entries, 3 link
-statements (libMobileGL.so among them) or 2 CTest files proves nothing and never counts as equal.
+  tests      the text of every CTestTestfile.cmake and gtest *_include.cmake.
+The build directory's path becomes @BUILD@ and a shared FetchContent directory @DEPS@; everything
+under MobileGL/MG_Benchmark or the benchmark dependency is left out. Both fingerprints come from
+one runner, so its toolchain and image are recorded beside the verdict and never compared.
 
-  build_fingerprint.py fingerprint --build-dir D [--out F]
+  build_fingerprint.py fingerprint --build-dir D [--deps-dir F] [--out F]
   build_fingerprint.py compare A.json B.json
-  build_fingerprint.py guard --built D --probe primary|split --probe-dir P [--github-output KEY]
+  build_fingerprint.py guard --primary-dir P --split-dir S --deps-dir F [--github-output KEY] [--report R]
   build_fingerprint.py --self-test
 
-guard configures the probe with scripts/ci/configure_build.sh (configure only), compares it with
-the built tree and writes KEY=true|false to $GITHUB_OUTPUT. Any error makes it false, and it always
-exits 0: a difference sends the workflow down the path that builds both, it is not a red.
+guard configures both lines with scripts/ci/configure_build.sh (configure only) into P and S, with
+F as their one FetchContent directory, so only the first configure fetches anything; a configure
+that fails, or runs past 10 minutes and is killed, is retried once. It writes
+KEY=identical|different|unknown, image= and compiler= to $GITHUB_OUTPUT and always exits 0.
+'different' is a proven difference. A configure that failed twice, any error, or a tree with fewer
+than 200 compile entries, 3 link statements (libMobileGL.so among them) or 2 CTest files is
+'unknown': only 'identical' lets the workflow reuse a build. Any other verdict is annotated with
+its first reasons, a warning for 'different' and a notice for 'unknown'.
 """
 import argparse
+import contextlib
+import io
 import json
 import os
 from pathlib import Path
 import re
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
+import time
 
 ROOT = Path(__file__).resolve().parents[2]
 CONFIGURE = ROOT / 'scripts' / 'ci' / 'configure_build.sh'
+# Each configure attempt is killed after CONFIGURE_TIMEOUT seconds. GUARD_STEP_MINUTES must equal the
+# guard step's timeout-minutes in test.yml, and leave room for four killed attempts.
+CONFIGURE_TIMEOUT = 600
+GUARD_STEP_MINUTES = 45
 
 MIN_COMPILE = 200
 MIN_LINK = 3
 MIN_TESTS = 2
+VERDICTS = ('identical', 'different', 'unknown')
 
 CACHE_KEY = re.compile(
     r'^(MOBILEGL_\w+'
@@ -64,18 +76,22 @@ CACHE_KEY = re.compile(
 CACHE_SKIP = {'MOBILEGL_BUILD_BENCHMARK'}
 CACHE_LINE = re.compile(r'^([A-Za-z0-9_.+-]+):([A-Z]+)=(.*)$')
 LINK_RULE = re.compile(r'^(C|CXX)_(SHARED_LIBRARY|EXECUTABLE|MODULE|STATIC_LIBRARY)_LINKER__')
-BENCHMARK_PATH = re.compile(r'(^|/)(MobileGL/MG_Benchmark|_deps/benchmark-[a-z]+)(/|$)')
-BENCHMARK_SUBDIRS = re.compile(r'^\s*subdirs\("[^"]*(MobileGL/MG_Benchmark|_deps/benchmark-build)"\)\s*$')
+BENCHMARK_PATH = re.compile(r'(^|/)(MobileGL/MG_Benchmark|(_deps|@DEPS@)/benchmark-[a-z]+)(/|$)')
+BENCHMARK_SUBDIRS = re.compile(
+    r'^\s*subdirs\("[^"]*(MobileGL/MG_Benchmark|(_deps|@DEPS@)/benchmark-build)"\)\s*$')
 PACKAGES = ('clang-20', 'lld-20', 'libc++-20-dev', 'libc++abi-20-dev', 'libvulkan-dev',
             'libegl1-mesa-dev', 'libgles2-mesa-dev')
 
 
-def normaliser(build_dir):
-    roots = sorted({str(Path(build_dir)), str(Path(build_dir).resolve())}, key=len, reverse=True)
+def normaliser(build_dir, deps_dir=None):
+    roots = [(str(Path(build_dir)), '@BUILD@'), (str(Path(build_dir).resolve()), '@BUILD@')]
+    if deps_dir:
+        roots += [(str(Path(deps_dir)), '@DEPS@'), (str(Path(deps_dir).resolve()), '@DEPS@')]
+    roots = sorted(set(roots), key=lambda pair: len(pair[0]), reverse=True)
 
     def norm(text):
-        for root in roots:
-            text = text.replace(root, '@BUILD@')
+        for root, token in roots:
+            text = text.replace(root, token)
         return text
     return norm
 
@@ -197,9 +213,8 @@ def read_tests(build, norm):
             continue
         if is_benchmark(rel) or '/CMakeFiles/' in '/' + rel:
             continue
-        text = path.read_text(errors='replace')
-        kept = [norm(line) for line in text.splitlines()
-                if not BENCHMARK_SUBDIRS.match(line) and not line.startswith('# ')]
+        lines = [norm(line) for line in path.read_text(errors='replace').splitlines()]
+        kept = [line for line in lines if not BENCHMARK_SUBDIRS.match(line) and not line.startswith('# ')]
         tests[rel] = '\n'.join(kept)
     return tests
 
@@ -223,22 +238,21 @@ def read_toolchain():
     return tools
 
 
-def fingerprint(build_dir, toolchain=None):
+def read_image():
+    return {key: os.environ.get(key, '') for key in ('ImageOS', 'ImageVersion', 'RUNNER_NAME')}
+
+
+def fingerprint(build_dir, deps_dir=None):
     build = Path(build_dir)
-    norm = normaliser(build)
-    print_counts = {}
+    norm = normaliser(build, deps_dir)
     result = {
         'cache': read_cache(build, norm),
         'compile': read_compile(build, norm),
         'link': read_links(build, norm),
         'tests': read_tests(build, norm),
-        'toolchain': read_toolchain() if toolchain is None else toolchain,
-        'image': {key: os.environ.get(key, '') for key in ('ImageOS', 'ImageVersion', 'RUNNER_NAME')},
     }
-    print_counts['compile'] = len(result['compile'])
-    print_counts['link'] = len(result['link'])
-    print_counts['tests'] = len(result['tests'])
-    result['counts'] = print_counts
+    result['counts'] = {'compile': len(result['compile']), 'link': len(result['link']),
+                        'tests': len(result['tests'])}
     return result
 
 
@@ -293,62 +307,119 @@ def compare(a, b, limit=8):
              if a['tests'].get(name) != b['tests'].get(name)]
     if tests:
         diffs['tests'] = tests
-    toolchain = [k for k in sorted(set(a['toolchain']) | set(b['toolchain']))
-                 if a['toolchain'].get(k) != b['toolchain'].get(k)]
-    if toolchain:
-        diffs['toolchain'] = [f'{k} differs' for k in toolchain]
     return {field: rows[:limit] + ([f'... {len(rows) - limit} more'] if len(rows) > limit else [])
             for field, rows in diffs.items()}
 
 
 def verdict(a, b):
-    """(identical, reasons). Unproven evidence on either side is never 'identical'."""
-    reasons = [f'first: {p}' for p in unproven(a)] + [f'second: {p}' for p in unproven(b)]
-    diffs = compare(a, b)
-    for field, rows in diffs.items():
-        reasons += [f'{field}: {row}' for row in rows]
-    return not reasons, reasons
+    """(verdict, reasons). Too little evidence on either side is 'unknown', never 'identical'."""
+    thin = [f'first: {p}' for p in unproven(a)] + [f'second: {p}' for p in unproven(b)]
+    if thin:
+        return 'unknown', thin
+    reasons = [f'{field}: {row}' for field, rows in compare(a, b).items() for row in rows]
+    return ('different' if reasons else 'identical'), reasons
 
 
-def write_output(key, identical):
+def run_attempt(argv, label, timeout=CONFIGURE_TIMEOUT):
+    """One configure attempt; True on success. One that runs past the timeout (a stalled fetch) is
+    killed with its whole process group, cmake and its git clones included, and counts as failed."""
+    proc = subprocess.Popen(argv, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                            start_new_session=True)
+    try:
+        output, _ = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        os.killpg(proc.pid, signal.SIGKILL)
+        try:
+            output, _ = proc.communicate(timeout=60)
+        except subprocess.TimeoutExpired:
+            output = ''
+        print(output[-6000:])
+        print(f'build_fingerprint: {label} ran past {timeout} s and was killed')
+        return False
+    if proc.returncode != 0:
+        print(output[-6000:])
+        print(f'build_fingerprint: {label} failed with exit {proc.returncode}')
+    return proc.returncode == 0
+
+
+def run_configure(variant, build_dir, deps_dir, timeout=None):
+    """configure_build.sh, configure only, with the shared FetchContent directory; True on success."""
+    return run_attempt(['bash', str(CONFIGURE), variant, str(build_dir), f'-DFETCHCONTENT_BASE_DIR={deps_dir}'],
+                       f'configure_build.sh {variant}', CONFIGURE_TIMEOUT if timeout is None else timeout)
+
+
+def configure_twice(configure, variant, build_dir, deps_dir):
+    """One retry: a transient fetch failure must not decide anything. Returns the attempts used."""
+    for attempt in (1, 2):
+        if build_dir.exists():
+            shutil.rmtree(build_dir)
+        if configure(variant, build_dir, deps_dir):
+            return attempt
+    return 0
+
+
+def decide(primary_dir, split_dir, deps_dir, configure=run_configure):
+    """(verdict, reasons, counts). The primary line runs first: it alone fetches the benchmark."""
+    primary_dir, split_dir, deps_dir = Path(primary_dir), Path(split_dir), Path(deps_dir)
+    counts = {}
+    for variant, build_dir in (('primary', primary_dir), ('split', split_dir)):
+        attempts = configure_twice(configure, variant, build_dir, deps_dir)
+        if not attempts:
+            return 'unknown', [f'the {variant} configure failed twice'], counts
+        counts[f'{variant}_attempts'] = attempts
+    primary = fingerprint(primary_dir, deps_dir)
+    split = fingerprint(split_dir, deps_dir)
+    counts.update(primary=primary['counts'], split=split['counts'])
+    result, reasons = verdict(primary, split)
+    return result, reasons, counts
+
+
+def one_line(text, limit=200):
+    return ' '.join(str(text).split())[:limit]
+
+
+def annotation(result, reasons):
+    """The workflow annotation for a verdict other than 'identical': a 'different' that persists is
+    configuration drift that brings the second build back on every run, so it is a warning."""
+    if result == 'identical':
+        return None
+    level = 'warning' if result == 'different' else 'notice'
+    text = one_line('; '.join(reasons[:3]) or 'no reason recorded', 600).replace('%', '%25')
+    return f'::{level}::build-guard verdict {result}, so build-linux-split builds: {text}'
+
+
+def write_outputs(key, result, image, compiler):
+    lines = [f'{key}={result}', f'image={one_line(image)}', f'compiler={one_line(compiler)}']
+    for line in lines:
+        print(line)
     path = os.environ.get('GITHUB_OUTPUT')
-    line = f"{key}={'true' if identical else 'false'}"
-    print(line)
     if path:
         with open(path, 'a') as out:
-            out.write(line + '\n')
+            out.write(''.join(line + '\n' for line in lines))
 
 
-def guard(args):
-    identical = False
+def guard(args, configure=run_configure, toolchain_reader=read_toolchain):
+    result, reasons, counts = 'unknown', [], {}
+    image = read_image()
+    toolchain = {}
     try:
-        probe = Path(args.probe_dir)
-        if probe.exists():
-            shutil.rmtree(probe)
-        configured = subprocess.run(['bash', str(CONFIGURE), args.probe, str(probe)], cwd=ROOT,
-                                    capture_output=True, text=True)
-        if configured.returncode != 0:
-            print(configured.stdout[-4000:] + configured.stderr[-4000:])
-            raise RuntimeError(f'configure_build.sh {args.probe} failed with exit {configured.returncode}')
-        toolchain = read_toolchain()
-        built = fingerprint(args.built, toolchain)
-        probed = fingerprint(probe, toolchain)
-        print(f"build_fingerprint: built {args.built}: {built['counts']}; probe {args.probe} at {probe}: "
-              f"{probed['counts']}")
-        print(f"build_fingerprint: compiler {toolchain.get('MOBILEGL_CI_CXX', '').splitlines()[:1]}, "
-              f"image {built['image']}")
-        identical, reasons = verdict(built, probed)
-        for reason in reasons:
-            print(f'build_fingerprint: {reason}')
-        if args.report:
-            Path(args.report).write_text(json.dumps({'identical': identical, 'reasons': reasons,
-                                                     'built': built['counts'], 'probe': probed['counts'],
-                                                     'toolchain': toolchain, 'image': built['image']},
-                                                    indent=1) + '\n')
-    except Exception as error:  # a guard that cannot decide must not reuse anything
-        print(f'build_fingerprint: guard could not compare the configurations: {error}')
-        identical = False
-    write_output(args.github_output, identical)
+        toolchain = toolchain_reader()
+        result, reasons, counts = decide(args.primary_dir, args.split_dir, args.deps_dir, configure)
+    except Exception as error:  # a guard that cannot decide says so, and nothing is reused
+        result, reasons = 'unknown', [f'the guard could not compare the configurations: {error!r}']
+    compiler = (toolchain.get('MOBILEGL_CI_CXX') or 'unset').splitlines()[0] if toolchain else 'unread'
+    image_text = f"{image['ImageOS']} {image['ImageVersion']}".strip() or 'unknown image'
+    print(f'build_fingerprint: {counts}')
+    print(f'build_fingerprint: this runner: {image_text}, {compiler}')
+    for reason in reasons:
+        print(f'build_fingerprint: {reason}')
+    note = annotation(result, reasons)
+    if note:
+        print(note)
+    if args.report:
+        Path(args.report).write_text(json.dumps({'verdict': result, 'reasons': reasons, 'counts': counts,
+                                                 'toolchain': toolchain, 'image': image}, indent=1) + '\n')
+    write_outputs(args.github_output, result, image_text, compiler)
     return 0
 
 
@@ -356,12 +427,13 @@ def guard(args):
 
 def canned_tree(root, *, name='build', mobilegl_flag='ON', build_type='Release', define='-DMG=1',
                 link_flag='-Wl,--as-needed', test_env='VK_ICD_FILENAMES=/icd.json', benchmark=False,
-                empty=False):
+                empty=False, compile_count=MIN_COMPILE + 5, deps=None, library='libMobileGL.so'):
     build = root / name
     build.mkdir(parents=True)
     if empty:
         return build
     abs_build = str(build)
+    deps = str(deps) if deps else abs_build + '/_deps'
     (build / 'CMakeCache.txt').write_text(
         f'CMAKE_BUILD_TYPE:STRING={build_type}\n'
         'CMAKE_CXX_COMPILER:FILEPATH=/usr/bin/clang++-20\n'
@@ -369,24 +441,33 @@ def canned_tree(root, *, name='build', mobilegl_flag='ON', build_type='Release',
         'CMAKE_CXX_FLAGS:STRING=\n'
         f'MOBILEGL_BUILD_DISAGGREGATED:BOOL={mobilegl_flag}\n'
         f"MOBILEGL_BUILD_BENCHMARK:BOOL={'ON' if benchmark else 'OFF'}\n"
+        f'FETCHCONTENT_BASE_DIR:PATH={deps}\n'
         f'CMAKE_CACHEFILE_DIR:INTERNAL={abs_build}\n')
     entries = [{'directory': abs_build, 'file': f'/src/MobileGL/f{i}.cpp',
                 'output': f'CMakeFiles/MobileGL.dir/f{i}.cpp.o',
                 'command': f'ccache clang++ {define if i == 7 else "-DMG=1"} -I{abs_build}/gen '
+                           f'-I{deps}/googletest-src/googletest/include '
                            f'-o CMakeFiles/MobileGL.dir/f{i}.cpp.o -c /src/MobileGL/f{i}.cpp'}
-               for i in range(MIN_COMPILE + 5)]
+               for i in range(compile_count)]
+    entries.append({'directory': deps + '/googletest-build/googletest',
+                    'file': deps + '/googletest-src/googletest/src/gtest-all.cc',
+                    'output': 'CMakeFiles/gtest.dir/src/gtest-all.cc.o', 'command': 'clang++ -c gtest-all.cc'})
     if benchmark:
         entries.append({'directory': abs_build + '/MobileGL/MG_Benchmark', 'file': '/src/MobileGL/MG_Benchmark/b.cpp',
                         'output': 'CMakeFiles/SanityBench.dir/b.cpp.o', 'command': 'clang++ -c b.cpp'})
+        entries.append({'directory': deps + '/benchmark-build/src', 'file': deps + '/benchmark-src/src/benchmark.cc',
+                        'output': 'CMakeFiles/benchmark.dir/benchmark.cc.o', 'command': 'clang++ -c benchmark.cc'})
     (build / 'compile_commands.json').write_text(json.dumps(entries))
     links = [
-        ('libMobileGL.so', 'CXX_SHARED_LIBRARY_LINKER__MobileGL_Release', 'CMakeFiles/MobileGL.dir/f1.cpp.o'),
+        (library, 'CXX_SHARED_LIBRARY_LINKER__MobileGL_Release', 'CMakeFiles/MobileGL.dir/f1.cpp.o'),
         ('libMobileGL_s.a', 'CXX_STATIC_LIBRARY_LINKER__MobileGL_s_Release', 'CMakeFiles/MobileGL.dir/f2.cpp.o'),
         ('MobileGL/MG_Test/SanityTest', 'CXX_EXECUTABLE_LINKER__SanityTest_Release', 'libMobileGL_s.a'),
     ]
     if benchmark:
         links.append(('MobileGL/MG_Benchmark/SanityBench', 'CXX_EXECUTABLE_LINKER__SanityBench_Release',
                       'libMobileGL_s.a'))
+        links.append((deps + '/benchmark-build/src/libbenchmark.a', 'CXX_STATIC_LIBRARY_LINKER__benchmark_Release',
+                      deps + '/benchmark-build/src/CMakeFiles/benchmark.dir/benchmark.cc.o'))
     ninja = ['ninja_required_version = 1.5', '']
     for out, rule, inp in links:
         ninja += [f'build {out}: {rule} {inp} | /usr/lib/libc.so || cmake_object_order_depends_target_x',
@@ -394,7 +475,8 @@ def canned_tree(root, *, name='build', mobilegl_flag='ON', build_type='Release',
                   f'  POST_BUILD = cd {abs_build}/MobileGL && :', '']
     ninja.append('build CMakeFiles/x.o: CXX_COMPILER__MobileGL_Release /src/x.cpp')
     (build / 'build.ninja').write_text('\n'.join(ninja) + '\n')
-    subdirs = 'subdirs("MobileGL/MG_Test")\n' + ('subdirs("MobileGL/MG_Benchmark")\n' if benchmark else '')
+    subdirs = (f'subdirs("MobileGL/MG_Test")\nsubdirs("{deps}/googletest-build")\n'
+               + (f'subdirs("MobileGL/MG_Benchmark")\nsubdirs("{deps}/benchmark-build")\n' if benchmark else ''))
     (build / 'CTestTestfile.cmake').write_text(f'# CMake generated Testfile for {abs_build}\n{subdirs}')
     (build / 'MobileGL' / 'MG_Test').mkdir(parents=True)
     (build / 'MobileGL' / 'MG_Test' / 'CTestTestfile.cmake').write_text(
@@ -408,51 +490,144 @@ def canned_tree(root, *, name='build', mobilegl_flag='ON', build_type='Release',
 
 
 def self_test():
-    toolchain = {'MOBILEGL_CI_CXX': 'clang version 20.1.8', 'cmake': 'cmake version 3.31.10'}
-    other_compiler = dict(toolchain, MOBILEGL_CI_CXX='clang version 20.1.2')
     cases = [
-        ('none', {}, toolchain, True),
-        ('a MOBILEGL_* cache line', {'mobilegl_flag': 'OFF'}, toolchain, False),
-        ("one TU's -D", {'define': '-DMG=2'}, toolchain, False),
-        ('the build type', {'build_type': 'Debug'}, toolchain, False),
-        ("the compiler's --version text", {}, other_compiler, False),
-        ('a link flag', {'link_flag': '-Wl,--no-as-needed'}, toolchain, False),
-        ('a test ENVIRONMENT', {'test_env': 'VK_ICD_FILENAMES=/other.json'}, toolchain, False),
-        ('only the benchmark TUs, link lines and subdirs line', {'benchmark': True}, toolchain, True),
-        ('only the build directory name', {'name': 'build-other'}, toolchain, True),
-        ('an empty directory', {'empty': True}, toolchain, False),
+        ('none', {}, 'identical'),
+        ('a MOBILEGL_* cache line', {'mobilegl_flag': 'OFF'}, 'different'),
+        ("one TU's -D", {'define': '-DMG=2'}, 'different'),
+        ('the build type', {'build_type': 'Debug'}, 'different'),
+        ('a link flag', {'link_flag': '-Wl,--no-as-needed'}, 'different'),
+        ('a test ENVIRONMENT', {'test_env': 'VK_ICD_FILENAMES=/other.json'}, 'different'),
+        ('only the benchmark TUs, link lines, subdirs lines and dependency', {'benchmark': True}, 'identical'),
+        ('only the build directory name', {'name': 'build-other'}, 'identical'),
+        ('only where the shared FetchContent directory is', {'deps_name': 'deps-elsewhere'}, 'identical'),
+        ('an empty directory', {'empty': True}, 'unknown'),
     ]
     failures = 0
-    with tempfile.TemporaryDirectory() as tmp:
-        base = fingerprint(canned_tree(Path(tmp) / 'base'), toolchain)
-        assert not unproven(base), unproven(base)
-        for label, change, chain, expected in cases:
-            other = fingerprint(canned_tree(Path(tmp) / label.replace(' ', '_').replace("'", ''), **change),
-                                chain)
-            identical, reasons = verdict(base, other)
-            ok = identical == expected
-            failures += not ok
-            print(f"{'ok' if ok else 'NOT OK':7} {label}: identical={identical}"
-                  + ('' if ok or identical else f' ({reasons[:2]})'))
-        # The guard itself: a probe that cannot be configured is never 'identical'.
-        output = Path(tmp) / 'github_output'
-        old = os.environ.get('GITHUB_OUTPUT')
-        os.environ['GITHUB_OUTPUT'] = str(output)
-        try:
-            args = argparse.Namespace(built=str(Path(tmp) / 'base' / 'build'), probe='no-such-variant',
-                                      probe_dir=str(Path(tmp) / 'probe'), github_output='identical', report=None)
-            import contextlib
-            import io
-            with contextlib.redirect_stdout(io.StringIO()):
-                guard(args)
-        finally:
-            if old is None:
-                os.environ.pop('GITHUB_OUTPUT', None)
-            else:
-                os.environ['GITHUB_OUTPUT'] = old
-        ok = output.read_text().strip() == 'identical=false'
+
+    def report(ok, label, got):
+        nonlocal failures
         failures += not ok
-        print(f"{'ok' if ok else 'NOT OK':7} a probe that fails to configure: {output.read_text().strip()}")
+        print(f"{'ok' if ok else 'NOT OK':7} {label}: {got}")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        base_deps = tmp / 'deps'
+        base = fingerprint(canned_tree(tmp / 'base', deps=base_deps), base_deps)
+        assert not unproven(base), unproven(base)
+        for label, change, expected in cases:
+            change = dict(change)
+            deps = tmp / change.pop('deps_name', 'deps')
+            root = tmp / re.sub(r'\W+', '_', label)
+            other = fingerprint(canned_tree(root, deps=deps, **change), deps)
+            got, reasons = verdict(base, other)
+            report(got == expected, label, got + ('' if got == expected or not reasons else f' ({reasons[:2]})'))
+        # Two trees that agree on everything but are too thin to prove anything are never identical.
+        thin_a = fingerprint(canned_tree(tmp / 'thin-a', compile_count=10, deps=base_deps), base_deps)
+        thin_b = fingerprint(canned_tree(tmp / 'thin-b', compile_count=10, deps=base_deps), base_deps)
+        report(verdict(thin_a, thin_b)[0] == 'unknown', 'both sides thin', verdict(thin_a, thin_b)[0])
+        empty = verdict(fingerprint(canned_tree(tmp / 'empty-a', empty=True)),
+                        fingerprint(canned_tree(tmp / 'empty-b', empty=True)))[0]
+        report(empty == 'unknown', 'both sides empty', empty)
+        # Full-sized trees that agree but link no libMobileGL.so prove nothing about the library.
+        no_lib = [fingerprint(canned_tree(tmp / f'no-lib-{side}', deps=base_deps, library='libMobileGLServer.so'),
+                              base_deps) for side in 'ab']
+        report(verdict(*no_lib)[0] == 'unknown', 'both sides without a libMobileGL.so link', verdict(*no_lib)[0])
+
+        # A configure attempt that hangs is killed with its children, so it cannot hold the step.
+        started = time.monotonic()
+        with contextlib.redirect_stdout(io.StringIO()):
+            hung = run_attempt(['bash', '-c', 'sleep 60 & wait'], 'a hung configure', timeout=1)
+        elapsed = time.monotonic() - started
+        report(not hung and elapsed < 30, 'a hung configure is killed and fails', f'{hung} after {elapsed:.1f} s')
+        # The production path carries the timeout too, and four killed attempts fit the step.
+        stub = tmp / 'hanging-configure.sh'
+        stub.write_text('sleep 60 & wait\n')
+        real_configure = CONFIGURE
+        globals()['CONFIGURE'] = stub
+        try:
+            started = time.monotonic()
+            with contextlib.redirect_stdout(io.StringIO()):
+                hung = run_configure('primary', tmp / 'hung-build', tmp / 'hung-deps', timeout=1)
+            elapsed = time.monotonic() - started
+        finally:
+            globals()['CONFIGURE'] = real_configure
+        report(not hung and elapsed < 30, 'run_configure passes its timeout on', f'{hung} after {elapsed:.1f} s')
+        report(isinstance(CONFIGURE_TIMEOUT, int) and CONFIGURE_TIMEOUT > 0
+               and 4 * (CONFIGURE_TIMEOUT + 60) <= GUARD_STEP_MINUTES * 60,
+               'four killed configure attempts fit the guard step', CONFIGURE_TIMEOUT)
+        escaped = annotation('different', ['100% of the flags'])
+        report(escaped is not None and escaped.endswith('100%25 of the flags'), "an annotation escapes '%'", escaped)
+
+        # The guard itself, with a stand-in for configure_build.sh.
+        def run_guard(configure, label):
+            output = tmp / f'github_output-{label}'
+            old = os.environ.get('GITHUB_OUTPUT')
+            os.environ['GITHUB_OUTPUT'] = str(output)
+            try:
+                args = argparse.Namespace(primary_dir=str(tmp / f'{label}-primary'),
+                                          split_dir=str(tmp / f'{label}-split'),
+                                          deps_dir=str(tmp / f'{label}-deps'), github_output='verdict', report=None)
+                printed = io.StringIO()
+                with contextlib.redirect_stdout(printed):
+                    guard(args, configure, lambda: {'MOBILEGL_CI_CXX': 'clang version 20.1.8'})
+            finally:
+                if old is None:
+                    os.environ.pop('GITHUB_OUTPUT', None)
+                else:
+                    os.environ['GITHUB_OUTPUT'] = old
+            outputs = dict(line.split('=', 1) for line in output.read_text().splitlines())
+            outputs['annotations'] = [line for line in printed.getvalue().splitlines() if line.startswith('::')]
+            return outputs
+
+        calls = []
+
+        def flaky(variant, build_dir, deps_dir):
+            calls.append(variant)
+            if variant == 'primary' and calls.count('primary') == 1:
+                return False
+            canned_tree(build_dir.parent, name=build_dir.name, benchmark=variant == 'primary', deps=deps_dir)
+            return True
+        out = run_guard(flaky, 'flaky')
+        report(out.get('verdict') == 'identical' and calls == ['primary', 'primary', 'split'],
+               'a configure that fails once is retried', f"{out.get('verdict')} after {calls}")
+        report(set(out) == {'verdict', 'image', 'compiler', 'annotations'},
+               'the guard writes verdict, image and compiler', sorted(out))
+        report(out['annotations'] == [], "'identical' is not annotated", out['annotations'])
+
+        hangs = []
+
+        def hangs_once(variant, build_dir, deps_dir):
+            hangs.append(variant)
+            if len(hangs) == 1:
+                return run_attempt(['bash', '-c', 'sleep 60 & wait'], 'a hung configure', timeout=1)
+            canned_tree(build_dir.parent, name=build_dir.name, benchmark=variant == 'primary', deps=deps_dir)
+            return True
+        out = run_guard(hangs_once, 'hangs')
+        report(out.get('verdict') == 'identical' and hangs == ['primary', 'primary', 'split'],
+               'a configure killed on its timeout is retried', f"{out.get('verdict')} after {hangs}")
+
+        def broken(variant, build_dir, deps_dir):
+            return variant != 'split'
+        out = run_guard(broken, 'broken')
+        report(out.get('verdict') == 'unknown', 'a configure that fails twice', out.get('verdict'))
+        report(len(out['annotations']) == 1 and out['annotations'][0].startswith('::notice::')
+               and 'failed twice' in out['annotations'][0], "'unknown' is a notice with its reason",
+               out['annotations'])
+
+        def debug_split(variant, build_dir, deps_dir):
+            canned_tree(build_dir.parent, name=build_dir.name, deps=deps_dir,
+                        build_type='Debug' if variant == 'split' else 'Release')
+            return True
+        out = run_guard(debug_split, 'differ')
+        report(out.get('verdict') == 'different', 'a proven difference', out.get('verdict'))
+        report(len(out['annotations']) == 1 and out['annotations'][0].startswith('::warning::')
+               and 'CMAKE_BUILD_TYPE' in out['annotations'][0], "'different' is a warning with its reason",
+               out['annotations'])
+
+        def raising(variant, build_dir, deps_dir):
+            raise OSError('no bash')
+        out = run_guard(raising, 'raising')
+        report(out.get('verdict') == 'unknown', 'an error inside the guard', out.get('verdict'))
     print(f'build_fingerprint self-test: {"FAILED" if failures else "ok"}')
     return 1 if failures else 0
 
@@ -466,19 +641,20 @@ def main(argv=None):
     sub = parser.add_subparsers(dest='command', required=True)
     p = sub.add_parser('fingerprint')
     p.add_argument('--build-dir', required=True)
+    p.add_argument('--deps-dir')
     p.add_argument('--out')
     p = sub.add_parser('compare')
     p.add_argument('first')
     p.add_argument('second')
     p = sub.add_parser('guard')
-    p.add_argument('--built', required=True)
-    p.add_argument('--probe', required=True, choices=('primary', 'split'))
-    p.add_argument('--probe-dir', required=True)
-    p.add_argument('--github-output', default='identical')
+    p.add_argument('--primary-dir', required=True)
+    p.add_argument('--split-dir', required=True)
+    p.add_argument('--deps-dir', required=True)
+    p.add_argument('--github-output', default='verdict')
     p.add_argument('--report')
     args = parser.parse_args(argv)
     if args.command == 'fingerprint':
-        fp = fingerprint(args.build_dir)
+        fp = fingerprint(args.build_dir, args.deps_dir)
         text = json.dumps(fp, indent=1, sort_keys=True) + '\n'
         if args.out:
             Path(args.out).write_text(text)
@@ -487,11 +663,11 @@ def main(argv=None):
     if args.command == 'compare':
         a = json.loads(Path(args.first).read_text())
         b = json.loads(Path(args.second).read_text())
-        identical, reasons = verdict(a, b)
+        result, reasons = verdict(a, b)
         for reason in reasons:
             print(reason)
-        print(f"identical={'true' if identical else 'false'}")
-        return 0 if identical else 1
+        print(f'verdict={result}')
+        return 0 if result == 'identical' else 1
     return guard(args)
 
 

@@ -16,12 +16,14 @@
 # library logs the resolved transport at INFO, and run_trace_case.cmake and the split lanes read
 # that line back as proof the transport resolved in the process under test.
 #
-# usage: configure_build.sh <primary|split> <build dir>
-#   with MOBILEGL_CI_CC, MOBILEGL_CI_CXX and VK_ICD_FILENAMES from setup-test-runner.
+# usage: configure_build.sh <primary|split> <build dir> [extra cmake arguments...]
+#   with MOBILEGL_CI_CC, MOBILEGL_CI_CXX and VK_ICD_FILENAMES from setup-test-runner. The builds pass
+#   no extra arguments; build_fingerprint.py's guard passes its shared FetchContent directory.
 set -euo pipefail
 
 variant="${1:?usage: configure_build.sh <primary|split> <build dir>}"
 build_dir="${2:?usage: configure_build.sh <primary|split> <build dir>}"
+shift 2
 
 common=(
   -S . -B "${build_dir}" -G Ninja
@@ -72,4 +74,4 @@ case "${variant}" in
     ;;
 esac
 
-cmake "${common[@]}" "${flags[@]}"
+cmake "${common[@]}" "${flags[@]}" "$@"
