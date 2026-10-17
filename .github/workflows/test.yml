@@ -741,9 +741,10 @@ jobs:
           path: ci-artifacts/mobilegl-linux-lib-verify.tgz
           if-no-files-found: error
 
-  # The verify lane itself, plus the two negative controls that keep it falsifiable. The controls
-  # are ALWAYS-ON steps, not a manual exercise: a gate that can only be shown to work by someone
-  # remembering to break it on purpose is a gate that has already stopped working.
+  # The verify lane itself, plus the controls that keep it falsifiable: its own control entries,
+  # checked by name, and the two corrupted-snapshot steps. They are always on, not a manual
+  # exercise: a gate that can only be shown to work by someone remembering to break it on purpose
+  # is a gate that has already stopped working.
   integration-verify:
     runs-on: ubuntu-26.04
     timeout-minutes: 180
@@ -844,35 +845,19 @@ jobs:
             -R 'HandleRecycle|CsoContentAddressing|ResourceSubsystem|MapPersistentRoundtrip|ObjectSubsystem|TextureParamsWithoutASamplerView|TextureUploadShape' \
             --no-tests=error -j 4
 
-      # The arming lanes' logs, and ONLY those. Each lane shares one MOBILEGL_LOG_FILE_PATH and the
-      # library opens it fopen(path, "w"), so after an ambient lane of 400-odd processes the file
-      # holds the LAST one - grepping it would say nothing about the other 405 and would red a
-      # healthy lane whenever the last entry happened not to issue a verb (which is what the
-      # PoisonOmissionScenario parent, the last ambient entry, does by construction: it forks,
-      # execve()s and reads files). The DirectGLES.VerifyArming. / DirectVulkan.VerifyArming.
-      # entries are one process each on a log path nothing else writes, so this grep means exactly
-      # what it says.
-      #
-      # What it proves: arming is a property of (this library, this environment), and these two
-      # processes ran the same library with the same MOBILEGL_PIPE_VERIFY=1 as their ~400 ambient
-      # siblings. It is not, and cannot be, a per-process census - the shared log cannot support one.
-      # It catches the case ctest cannot: an arming entry that SKIPPED still reports green.
-      - name: Verify lane arming check
-        working-directory: build-verify
+      # The lane's own control entries, by name: each must have run and passed, and a skip is a
+      # failure here although ctest reports it green. VerifyArming asserts in-test that the
+      # comparator printed its armed line, VerifyCorrupted that a corrupted field is reported by
+      # name, and PoisonOmitted that an omitted stamp kills a forked child with its own Fatal.
+      - name: Verify lane control entries
         run: |
-          shopt -s nullglob
-          logs=(MobileGL/MG_IntegrationTest/pipe-verify-arming-*.log)
-          if [ ${#logs[@]} -lt 2 ]; then
-            echo "::error::found ${#logs[@]} pipe-verify-arming-*.log (expected one per backend). The VerifyArming. entries did not run, so nothing in this job establishes that the comparator was ever armed."
-            exit 1
-          fi
-          for log in "${logs[@]}"; do
-            if ! grep -q "MGPipe: verify armed" "${log}"; then
-              echo "::error::${log} carries no arming line: that lane's process ran the whole scenario without the comparator, so every green entry beside it is green for no reason"
-              exit 1
-            fi
-          done
-          echo "arming line present in all ${#logs[@]} arming-lane log(s)"
+          python3 scripts/ci/junit_tally.py "${RUNNER_TEMP}/verify.xml" \
+            --require-entry-passed DirectGLES.VerifyArming.PipeVerifyArmingScenario.Armed \
+            --require-entry-passed DirectVulkan.VerifyArming.PipeVerifyArmingScenario.Armed \
+            --require-entry-passed DirectGLES.VerifyCorrupted.PipeVerifyArmingScenario.CorruptedFieldIsReported \
+            --require-entry-passed DirectVulkan.VerifyCorrupted.PipeVerifyArmingScenario.CorruptedFieldIsReported \
+            --require-entry-passed DirectGLES.PoisonOmitted.PoisonOmissionScenario.OmittedFieldAbortsOnThatVerb \
+            --require-entry-passed DirectVulkan.PoisonOmitted.PoisonOmissionScenario.OmittedFieldAbortsOnThatVerb
 
       # NEGATIVE CONTROL A (gate G4). The knob perturbs one field in the snapshot arm before the
       # entry compare, so a working comparator must abort the run. This step passes when ctest
@@ -927,34 +912,6 @@ jobs:
           fi
           echo "the corrupted capability field turned ${matched} selected entries red, as it must"
 
-      # NEGATIVE CONTROL B (gate G5). The omission skips the STAMP of one field for one verb while
-      # still copying its value - indistinguishable from a fill row nobody wrote - so the poison
-      # must abort that verb. Again: this step passes when ctest fails.
-      #
-      # The entry it targets is PoisonOmissionScenario.WithoutOmissionCompletes, which is green in
-      # the ambient lane above and deliberately does not skip itself when the knob is set, exactly
-      # so that this control has something to turn red. P13 W5: the pair is the pack state at
-      # ReadPixels (the split step's pair below). Monolith now runs the record arm, whose
-      # generate_mipmap resolves its texture by the verb's handle and never reads the active unit,
-      # so GenerateMipmap:GetActiveTextureUnit left this lane green (Test 37515697754).
-      - name: Negative control B (omitted fill point)
-        working-directory: build-verify
-        env:
-          MOBILEGL_ITEST_REQUIRE_GPU: "1"
-          MOBILEGL_PIPE_POISON_OMIT: ReadPixels:GetPixelStoreParameters
-        run: |
-          FILTER='DirectGLES\.Verify\.PoisonOmissionScenario\.WithoutOmissionCompletes'
-          matched=$(ctest -N -L integration-verify -R "${FILTER}" | grep -cE '^ *Test *#[0-9]+:')
-          if [ "${matched}" -lt 1 ]; then
-            echo "::error::negative control B selected ${matched} tests; its filter no longer matches anything"
-            exit 1
-          fi
-          if ctest --output-on-failure -L integration-verify -R "${FILTER}" --no-tests=error; then
-            echo "::error::MOBILEGL_PIPE_POISON_OMIT=ReadPixels:GetPixelStoreParameters left the verify lane GREEN. The per-verb poison is not armed, so a forgotten fill row would ship silently."
-            exit 1
-          fi
-          echo "the omitted fill point turned the lane red, as it must"
-
       - name: Upload verify lane logs
         if: ${{ always() }}
         uses: actions/upload-artifact@v7
@@ -980,8 +937,8 @@ jobs:
           path: /tmp/core.*
           if-no-files-found: ignore
 
-  # P7 WAVE 3 (V1), CONTRACT-P7 §6 - EXIT GATE 2's SECOND COLUMN: the comparator on the split
-  # (inproc) arm, both backends, and the two negative controls red on that arm.
+  # The comparator on the split (inproc) arm, both backends, with its control entries checked by
+  # name and the corrupted-snapshot control red on that arm.
   #
   # ITS OWN BUILD, because neither existing one can carry it: build-linux-verify configures
   # without MOBILEGL_BUILD_DISAGGREGATED (so MG_Remote and the transport parser do not exist and
@@ -1087,10 +1044,24 @@ jobs:
             verify-split-arming verify-split-logs "${RUNNER_TEMP}/verify-split.xml" \
             "${GITHUB_WORKSPACE}/MobileGL/MG_IntegrationTest/Harness/verify-split-unarmed-expected.txt"
 
-      # THE GREEN LANE'S LOGS, KEPT BEFORE THE CONTROLS OVERWRITE THEM. Each control step below
+      # The lane's own control entries, by name, as in integration-verify: VerifySplitReadCorrupted
+      # asserts in-test the two where=read reports in the server half, and VerifySplitPoisonOmitted
+      # reads both role halves of the forked child's log for its own Fatal.
+      - name: Verify-split control entries
+        run: |
+          args=()
+          for backend in DirectGLES DirectVulkan; do
+            args+=(--require-entry-passed "${backend}.VerifySplitArming.PipeVerifyArmingScenario.Armed")
+            args+=(--require-entry-passed "${backend}.VerifySplitCorrupted.PipeVerifyArmingScenario.CorruptedFieldIsReported")
+            args+=(--require-entry-passed "${backend}.VerifySplitReadCorrupted.PipeVerifyArmingScenario.CorruptedFieldIsReportedOnTheServerRead")
+            args+=(--require-entry-passed "${backend}.VerifySplitPoisonOmitted.PoisonOmissionScenario.OmittedFieldAbortsOnThatVerb")
+          done
+          python3 scripts/ci/junit_tally.py "${RUNNER_TEMP}/verify-split.xml" "${args[@]}"
+
+      # THE GREEN LANE'S LOGS, KEPT BEFORE THE CONTROLS OVERWRITE THEM. The control step below
       # re-runs ambient VerifySplit. entries with a knob exported, and an ambient entry writes to
       # ITS OWN per-entry path under verify-split-logs/ - which the library opens "w". So by the
-      # time the upload step at the end of this job runs, twelve of those files are the CONTROL
+      # time the upload step at the end of this job runs, the selected files are the CONTROL
       # runs' logs sitting under the LANE's names: an artifact showing deliberate divergences,
       # with the green run they were meant to be evidence of already gone. `if: always()` on the
       # upload made that worse rather than better, because a failure investigation is exactly
@@ -1127,64 +1098,9 @@ jobs:
           fi
           echo "the corrupted field turned ${matched} selected split entries red, as it must"
 
-      # Negative control for the compare-at-read hook, which the server's apply thread runs at each
-      # backend read; the step above covers only the client's entry compare. The entries pin
-      # MOBILEGL_PIPE_VERIFY_FATAL=0, or the client's entry compare would abort at the ReadPixels
-      # boundary before the server reads. This step re-reads each server log and needs two
-      # `where=read` reports per backend: the server reads the pack field twice in the ReadPixels
-      # window (the saved pack, then the backend's read under the neutral pack), and each read must
-      # catch its own perturbation. PipeVerifyArmingScenario.CorruptedFieldIsReportedOnTheServerRead
-      # has the details, including why both backends are needed.
-      - name: Negative control A (server-side read)
-        working-directory: build-verify-split
-        env:
-          MOBILEGL_ITEST_REQUIRE_GPU: "1"
-        run: |
-          FILTER='(DirectGLES|DirectVulkan)\.VerifySplitReadCorrupted\.'
-          matched=$(ctest -N -L '^integration-verify-split$' -R "${FILTER}" | grep -cE '^ *Test *#[0-9]+:')
-          if [ "${matched}" -lt 2 ]; then
-            echo "::error::split read-side control A selected ${matched} tests; its filter no longer matches both backends"
-            exit 1
-          fi
-          ctest --output-on-failure -L '^integration-verify-split$' -R "${FILTER}" --no-tests=error
-          for backend in DirectGLES DirectVulkan; do
-            log="MobileGL/MG_IntegrationTest/pipe-verify-split-read-corrupt-${backend}.server.log"
-            reads=$(grep -c 'Fatal{PipeVerifyDiffer, "GetPixelStoreParameters@ReadPixels".*where=read}' "${log}" 2>/dev/null || true)
-            reads=${reads:-0}
-            if [ "${reads}" -lt 2 ]; then
-              echo "::error::${log} carries ${reads} compare-at-read report(s) for the corrupted pack field, fewer than the two reads the server makes inside the ReadPixels window (the applier's saved-pack read and the backend's post-install read): the hook is not comparing on the server's apply thread, or one of its two perturbations no longer reaches its read because the ID-49 neutral-pack overwrite swallowed it"
-              exit 1
-            fi
-          done
-          echo "both backends reported GetPixelStoreParameters@ReadPixels where=read at least twice in the SERVER half, as they must"
-
-      # NEGATIVE CONTROL B ON THE SPLIT ARM, WITH THE SAME PAIR. GenerateMipmap:GetActiveTextureUnit
-      # (the pre-P13 monolith pair) is inert here - the split backend's generate_mipmap
-      # resolves its texture by the verb's handle and never reads the active unit - so this step
-      # withholds ReadPixels:GetPixelStoreParameters, which the server reads under its own stamp.
-      # Measured at landing: 2 of 2 red, each child dying with
-      # Fatal{UnmigratedPipeInput, "GetPixelStoreParameters@ReadPixels"} on mgl-srv-apply.
-      - name: Negative control B (omitted stamp)
-        working-directory: build-verify-split
-        env:
-          MOBILEGL_ITEST_REQUIRE_GPU: "1"
-          MOBILEGL_PIPE_POISON_OMIT: ReadPixels:GetPixelStoreParameters
-        run: |
-          FILTER='(DirectGLES|DirectVulkan)\.VerifySplit\.PoisonOmissionScenario\.WithoutOmissionCompletes'
-          matched=$(ctest -N -L '^integration-verify-split$' -R "${FILTER}" | grep -cE '^ *Test *#[0-9]+:')
-          if [ "${matched}" -lt 2 ]; then
-            echo "::error::split negative control B selected ${matched} tests; its filter no longer matches both backends"
-            exit 1
-          fi
-          if ctest --output-on-failure -L '^integration-verify-split$' -R "${FILTER}" --no-tests=error; then
-            echo "::error::MOBILEGL_PIPE_POISON_OMIT=ReadPixels:GetPixelStoreParameters left the verify-split lane GREEN. The server-side poison is not armed on the split arm."
-            exit 1
-          fi
-          echo "the omitted stamp turned the split lane red, as it must"
-
       # BOTH SETS, AND THEY ARE DIFFERENT EVIDENCE. verify-split-logs-lane/ is the green run the
-      # arm proof read; verify-split-logs/ is whatever the control steps left behind, which for
-      # twelve entries is a deliberately red re-run under the same name. Uploading only the
+      # arm proof read; verify-split-logs/ is whatever the control step left behind, which for
+      # its entries is a deliberately red re-run under the same name. Uploading only the
       # second - which is what this step did before the copy above existed - loses the first.
       # The run log needs a signed-in reader; annotations do not. Name every failed ctest entry,
       # with the lines of its output that say why, where anyone reading the run can see them.
@@ -3020,8 +2936,8 @@ jobs:
           fi
           set +e
           ctest -V --no-tests=error --timeout 10800 \
-            -R '^MobileGLTraceReplay\.OpenRA\.DirectGLES$'
-          control_rc=$?
+            -R '^MobileGLTraceReplay\.OpenRA\.DirectGLES$' 2>&1 | tee "${RUNNER_TEMP}/verify-control.txt"
+          control_rc=${PIPESTATUS[0]}
           set -e
           if [ -d "${GOOD_OUTPUT}" ]; then
             rm -rf OpenRA
@@ -3030,6 +2946,12 @@ jobs:
           fi
           if [ "${control_rc}" -eq 0 ]; then
             echo "::error::MOBILEGL_PIPE_VERIFY_CORRUPT=GetRenderStateParameters left the OpenRA retrace GREEN, so the comparator is not comparing and the whole verify retrace lane proves nothing."
+            exit 1
+          fi
+          # Its own red: ctest -V prefixes every line with the test number, and CMake re-wraps text.
+          if ! sed -E 's/^[0-9]+: //' "${RUNNER_TEMP}/verify-control.txt" | tr -s '[:space:]' ' ' \
+               | grep -qF 'Fatal{PipeVerifyDiffer, "GetRenderStateParameters@'; then
+            echo "::error::the corrupted-snapshot retrace went red without Fatal{PipeVerifyDiffer, \"GetRenderStateParameters@...\"}: something other than the comparator failed it"
             exit 1
           fi
           echo "the corrupted field turned the retrace red, as it must (ctest exit ${control_rc})"

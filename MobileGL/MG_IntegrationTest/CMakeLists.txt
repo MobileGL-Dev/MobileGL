@@ -3632,9 +3632,9 @@ if (MOBILEGL_BUILD_DISAGGREGATED AND MOBILEGL_PIPE_VERIFY)
         # THE TWO NEGATIVE CONTROLS ON THIS ARM (CONTRACT-P7 §6), the monolith verify block's
         # four entries with the split environment underneath and nothing else changed: each is
         # green when its control REPORTS, so each goes red the day the comparator or the poison
-        # stops reaching the split arm. Their CI halves - the same knob exported against the
-        # ambient VerifySplit. entries, where ctest has to FAIL - live in test.yml's
-        # integration-verify-split job.
+        # stops reaching the split arm. test.yml's integration-verify-split job requires each of
+        # them to pass by name, and control A's CI half - the same knob exported against the
+        # ambient VerifySplit. entries, where ctest has to FAIL - runs there too.
         #
         # A (G4): the corruption perturbs the snapshot arm at the CLIENT's entry compare, so the
         # report lands in the client role's log, which is the half LibraryLog() reads.
@@ -3667,11 +3667,10 @@ if (MOBILEGL_BUILD_DISAGGREGATED AND MOBILEGL_PIPE_VERIFY)
         # ServerPoisonOmission). PoisonOmissionScenario.cpp's kOmittedPairs carries both.
         mgl_itest_lane("${mglItestVerifyBackend}.VerifySplitPoisonOmitted." "PoisonOmissionScenario.OmittedFieldAbortsOnThatVerb"
             LABELS "integration-verify-split" TIMEOUT ${MGL_ITEST_VERIFY_TIMEOUT} LOCK "pipe-poison-omit-split-${mglItestVerifyBackend}.log" ENV "${mglItestVerifyArmEnv}\;MOBILEGL_PIPE_POISON_OMIT=ReadPixels:GetPixelStoreParameters\;MOBILEGL_LOG_FILE_PATH=${CMAKE_CURRENT_BINARY_DIR}/pipe-poison-omit-split-${mglItestVerifyBackend}.log")
-        # B's AMBIENT TARGET. The monolith verify lane's control-B step aims its knob at
-        # `Verify.PoisonOmissionScenario.WithoutOmissionCompletes`, the one integration entry that
-        # calls glGenerateMipmap at all - and the mechanism filter took that entry out of the
-        # ambient set above along with the rest of the scenario. Registered back by hand, with no
-        # knob, so the CI step has an entry on THIS arm to turn red.
+        # B's AMBIENT HALF. `Verify.PoisonOmissionScenario.WithoutOmissionCompletes` runs the
+        # scenario with nothing withheld, and the mechanism filter took it out of the ambient set
+        # above along with the rest of the scenario. Registered back by hand, with no knob, so
+        # this arm's ambient lane still runs it.
         mgl_itest_lane("${mglItestVerifyBackend}.VerifySplit." "PoisonOmissionScenario.WithoutOmissionCompletes"
             LABELS "integration-verify-split" TIMEOUT ${MGL_ITEST_VERIFY_TIMEOUT} TEST_LIST "MGL_VERIFY_SPLIT_TESTS_POISON_${mglItestVerifyBackend}" ENV "${mglItestVerifyArmEnv}")
         list(APPEND MGL_VERIFY_SPLIT_TEST_LISTS "MGL_VERIFY_SPLIT_TESTS_POISON_${mglItestVerifyBackend}")

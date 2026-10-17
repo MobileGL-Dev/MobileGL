@@ -26,7 +26,7 @@
 //                                  about WHY: a poison that fired on every verb would look just as red.
 //
 // The knob is process-wide, so the two cases cannot share a lane: the first runs in the PoisonOmitted.
-// entries, the second in the ambient Verify. entries (it skips when the knob IS set).
+// entries, the second in the ambient Verify. entries (the first skips when the knob is unset).
 //
 // WHY THE SEQUENCE RUNS IN A SEPARATE PROCESS, AND WHY THAT PROCESS IS fork()+execve() AND NOT fork()
 // ALONE. The poison reports with MGLOG_F and then std::abort(), in the middle of a GL command - so the
@@ -81,7 +81,7 @@ extern char** environ;
 namespace MGITest {
     namespace {
 
-        // What the PoisonOmitted. ctest entries and the CI negative-control steps name. Each pair is
+        // What the PoisonOmitted. ctest entries name, which CI requires to pass by name. Each pair is
         // spelled here so the assertion below is about the exact string the poison contracts to
         // print (ARCHITECTURE.md 9.2: Fatal{UnmigratedPipeInput, "<Field>@<Verb>"}).
         //
@@ -480,14 +480,12 @@ void main() { o_color = vec4(0.25, 0.5, 0.75, 1.0); }
             }
         }
 
-        // The sibling control, in the ambient Verify. lanes: the same sequence with the knob UNSET
-        // must run to completion and log no Fatal at all.
+        // The ambient half of the pair, in the ambient Verify. lanes: the same sequence with the
+        // knob UNSET must run to completion and log no Fatal at all. The PoisonOmitted. entries are
+        // the armed half (knob set, the verb must abort), and CI requires those entries by name.
         //
-        // It deliberately does NOT skip when MOBILEGL_PIPE_POISON_OMIT is set. This is the entry
-        // CI's always-on negative control B exports the knob at: a green entry that the omission
-        // turns red is the whole proof that the poison is armed, and an entry that politely skipped
-        // itself would report that green either way. Nothing else in the integration suite calls
-        // glGenerateMipmap, so this case is also the only possible target for that control.
+        // It does not skip when MOBILEGL_PIPE_POISON_OMIT is set: run by hand with the knob
+        // exported, it goes red, and the note in its failure says that is the poison firing.
         TEST_F(PoisonOmissionScenario, WithoutOmissionCompletes) {
             if (!Ready()) return;
 
@@ -505,8 +503,7 @@ void main() { o_color = vec4(0.25, 0.5, 0.75, 1.0); }
             const std::string note =
                 omissionArmed
                     ? std::string(" NOTE: MOBILEGL_PIPE_POISON_OMIT is set in this process, so this failure is "
-                                  "what CI's negative control B is asking for - the poison IS armed, and this "
-                                  "entry going red is the proof.")
+                                  "expected: the poison IS armed, and this entry going red is the proof.")
                     : std::string();
             ASSERT_TRUE(WIFEXITED(status))
                 << "with no omission armed, a draw followed by glGenerateMipmap must complete; the child "

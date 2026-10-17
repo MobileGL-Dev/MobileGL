@@ -54,9 +54,15 @@ if canned:
         shutil.copy(os.path.join(canned, name), os.path.join(out, name))
 with open(os.path.join(out, 'retrace.log'), 'w') as log:
     log.write('stub replay\n')
+if os.environ.get('STUB_ABORT'):
+    sys.exit(134)
 with open(os.path.join(out, 'result.json'), 'w') as result:
     json.dump({'passed': True, 'ssim': 1.0}, result)
 '''
+
+# The retrace-verify control's reason check, as the workflow runs it on the tee'd ctest -V output.
+VERIFY_CONTROL_REASON = ("sed -E 's/^[0-9]+: //' \"$1\" | tr -s '[:space:]' ' ' "
+                         "| grep -qF 'Fatal{PipeVerifyDiffer, \"GetRenderStateParameters@'")
 
 PREFIX = '[12:00:00] [Linux mobilegl_trace_/INFO]: '
 MARKER = {
@@ -117,7 +123,7 @@ class RunTraceCaseTests(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
-    def run_case(self, env, logs, tcp=False):
+    def run_case(self, env, logs, tcp=False, squashed=True):
         canned = self.root / 'canned'
         shutil.rmtree(canned, ignore_errors=True)
         canned.mkdir()
@@ -136,7 +142,8 @@ class RunTraceCaseTests(unittest.TestCase):
             command += ['-DTRACE_IPC_CONTROL=tcp://127.0.0.1:1', '-DTRACE_IPC_TOKEN=x']
         command += ['-P', str(SCRIPT)]
         result = subprocess.run(command, env=environment, capture_output=True, text=True)
-        return result.returncode, squash(result.stdout + result.stderr)
+        output = result.stdout + result.stderr
+        return result.returncode, squash(output) if squashed else output
 
     def split_env(self, transport, wire=False):
         env = {'MOBILEGL_TRANSPORT': 'spawn' if transport == 'tcp' else transport,
@@ -263,6 +270,20 @@ class RunTraceCaseTests(unittest.TestCase):
         logs = {'mobilegl.log': lines('MGPipe: verify armed',
                                       'MGPipe: Fatal{PipeVerifyDiffer, "GetRenderStateParameters@Clear"}')}
         self.expect_red({'MOBILEGL_PIPE_VERIFY': '1'}, logs, 'MGPipe Fatal(s) under MOBILEGL_PIPE_VERIFY')
+
+    def test_v4_an_aborted_verify_run_names_its_divergence(self):
+        # The comparator aborts the replay before result.json, so the script dumps the library log;
+        # the retrace-verify control requires that dump to carry the divergence it caused.
+        fatal = 'MGPipe: Fatal{PipeVerifyDiffer, "GetRenderStateParameters@Clear"} field=3 where=entry'
+        env = {'MOBILEGL_PIPE_VERIFY': '1', 'STUB_ABORT': '1'}
+        rc, output = self.run_case(env, {'mobilegl.log': lines('MGPipe: verify armed', fatal)})
+        self.assertNotEqual(rc, 0, output)
+        transcript = self.root / 'control.txt'
+        for log, expected in ((lines('MGPipe: verify armed', fatal), 0), (lines('MGPipe: verify armed'), 1)):
+            _, raw = self.run_case(env, {'mobilegl.log': log}, squashed=False)
+            transcript.write_text(''.join('1: ' + row + '\n' for row in raw.splitlines()))
+            check = subprocess.run(['bash', '-c', VERIFY_CONTROL_REASON, 'reason', str(transcript)])
+            self.assertEqual(check.returncode, expected, raw)
 
     def test_v3_verify_green(self):
         rc, output = self.run_case({'MOBILEGL_PIPE_VERIFY': '1'}, {'mobilegl.log': lines('MGPipe: verify armed')})
