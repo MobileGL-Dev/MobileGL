@@ -2017,19 +2017,14 @@ namespace {
         return g_fakeResetStatus.exchange(GL_NO_ERROR);
     }
 
-    // THE WINDOW, HELD OPEN. The server acknowledges a record before it looks for the next one, so
-    // a record the client publishes right after that acknowledgement can be popped by the SAME
-    // drain, without passing the apply loop's per-wake fault poll. That used to happen only under
-    // CPU load (one CI failure in this case); the between-records hook makes it happen every time:
-    // armed, it holds the drain after the record it follows until the GUILTY record is in the ring.
-    // The client does not wait for anything while the drain is held (the applied notification may
-    // only reach a parked client after the hook): it waits for the hold to be ENTERED, which says the
-    // healthy record has been applied, publishes the GUILTY record, and only then waits.
-    // ARMED BY SEQ, NOT BY "THE NEXT RECORD". The client's wait for the record BEFORE the healthy one
-    // returns the instant that record's appliedSeq is published - inside the apply callback, before
-    // that drain reaches this hook. Armed with a bare flag, that drain could take the hold for the
-    // previous record; the healthy record then arrived unpolled after GUILTY was set, the drain
-    // polled first and latched, and the healthy record was never applied (bit 8, every CI failure).
+    // THE WINDOW, HELD OPEN. The server acknowledges a record before it looks for the next one, so a
+    // record published right after that acknowledgement can be popped by the SAME drain, past the
+    // apply loop's per-wake fault poll. The between-records hook makes that happen every time: it
+    // holds the drain after the healthy record until GUILTY is in the ring, and the client publishes
+    // GUILTY once the hold is entered. The hold is armed by the healthy record's seq: the wait for the
+    // record before it returns inside that record's apply callback, before its drain reaches this
+    // hook, so a bare "next record" flag let that drain take the hold.
+    constexpr Uint32 kResetStepMs = 10000; // every wait ends on its event; only a failing run waits this long
     std::atomic<Uint64> g_holdAfterSeq{0};
     std::atomic<const std::atomic<std::uint64_t>*> g_holdAppliedSeq{nullptr};
     std::atomic<bool> g_holdEntered{false};
@@ -2040,7 +2035,7 @@ namespace {
         if (after == 0 || appliedSeq == nullptr || !Transport::Watermark::Reached(*appliedSeq, after)) return;
         g_holdAfterSeq.store(0, std::memory_order_release); // once; only the apply thread runs this hook
         g_holdEntered.store(true, std::memory_order_release);
-        const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+        const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(kResetStepMs);
         while (!g_guiltyPublished.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < until)
             std::this_thread::yield();
     }
@@ -2077,7 +2072,7 @@ namespace {
         };
         const auto publish = [&] { return send(encode()); };
         const auto applied = [&](Uint64 seq) {
-            return fixture.producer.WaitForApplied(seq, 2000) == Transport::SessionWait::Reached;
+            return fixture.producer.WaitForApplied(seq, kResetStepMs) == Transport::SessionWait::Reached;
         };
         // Another context hung the GPU; this one only waited behind it.
         g_fakeResetStatus = GL_INNOCENT_CONTEXT_RESET;
@@ -2092,7 +2087,7 @@ namespace {
         const Uint64 healthy = encode();
         g_holdAfterSeq.store(healthy, std::memory_order_release);
         send(healthy);
-        const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+        const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(kResetStepMs);
         while (!g_holdEntered.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < until)
             std::this_thread::yield();
         if (!g_holdEntered.load(std::memory_order_acquire)) failed |= kResetHealthyNotApplied;
@@ -2101,14 +2096,19 @@ namespace {
         const Uint64 guilty = publish();
         g_guiltyPublished.store(true, std::memory_order_release);
         if (!applied(healthy)) failed |= kResetHealthyNotApplied;
-        if (applied(guilty)) failed |= kResetGuiltyApplied;
-        Server::ServerLoopInstance().SetBetweenRecordsHookForTesting(nullptr);
+        // GUILTY latches the session: its apply thread leaves the loop without applying the record.
+        const auto stopped = std::chrono::steady_clock::now() + std::chrono::milliseconds(kResetStepMs);
+        while (Server::ServerLoopInstance().Running() && std::chrono::steady_clock::now() < stopped)
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
         if (!MG_Remote::SessionLatched() ||
             MG_Remote::SessionLatchedFamily() != MG_Remote::MGFatalFamily::BackendDeviceLost ||
             std::strstr(MG_Remote::SessionLatchedLine(), "Espryt:apply") == nullptr)
             failed |= kResetGuiltyNotLatched;
         std::fprintf(stderr, "[reset] latched=%d line=%s\n", MG_Remote::SessionLatched() ? 1 : 0,
                      MG_Remote::SessionLatchedLine());
+        Server::ServerLoopInstance().Stop(); // joined: nothing can apply the GUILTY record after this
+        if (Transport::Watermark::Reached(fixture.producer.Progress()->appliedSeq, guilty))
+            failed |= kResetGuiltyApplied;
         ::_exit(failed);
     }
 } // namespace
