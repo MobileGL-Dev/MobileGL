@@ -1557,6 +1557,9 @@ jobs:
     timeout-minutes: 120
     needs: [build-guard, build-linux-split, build-linux]
     if: ${{ !cancelled() && needs.build-linux-split.result == 'success' && (needs.build-guard.outputs.verdict != 'identical' || needs.build-linux.result == 'success') }}
+    # The skip census reads whether 'Default-knob resolution check' proved the IPC defaults.
+    outputs:
+      defaults-on: ${{ steps.resolution.outputs.defaults-on }}
 
     # Short-lived test processes skip the glslang prewarm, as in the test job.
     env:
@@ -4067,6 +4070,7 @@ jobs:
     name: skip census
     runs-on: ubuntu-26.04
     needs:
+      - build-guard
       - test
       - integration
       - integration-verify
@@ -4084,10 +4088,25 @@ jobs:
         with:
           pattern: junit-*
           path: junit
+      # The optional rows run on some paths only, and on the path this run took they are required:
+      # without a reused build (any build-guard verdict but identical) integration-split runs its
+      # unit lane and Transport A/B, and with one A/B still runs when the IPC defaults were not
+      # proven.
       - name: Skip census
+        env:
+          GUARD_VERDICT: ${{ needs.build-guard.outputs.verdict }}
+          SPLIT_DEFAULTS_ON: ${{ needs.integration-split.outputs.defaults-on }}
         run: |
+          required=()
+          if [ "${GUARD_VERDICT}" != identical ]; then
+            required+=(--require junit-integration-split/unit-split)
+          fi
+          if [ "${GUARD_VERDICT}" != identical ] || [ "${SPLIT_DEFAULTS_ON}" != true ]; then
+            required+=(--require junit-integration-split/arm-inproc --require junit-integration-split/arm-monolith)
+          fi
+          echo "build-guard verdict '${GUARD_VERDICT:-none}', split IPC defaults proven '${SPLIT_DEFAULTS_ON:-no}': ${required[*]:-no optional row required}"
           python3 scripts/ci/skip_census.py check junit \
-            --baseline scripts/data/skip_census_baseline.json --report skip-census.json
+            --baseline scripts/data/skip_census_baseline.json --report skip-census.json "${required[@]}"
       - name: Upload census
         if: ${{ always() }}
         uses: actions/upload-artifact@v7

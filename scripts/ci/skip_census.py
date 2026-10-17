@@ -26,13 +26,15 @@ into the tree (scripts/data/skip_census_baseline.json):
     a build-equality guard falls back); its absence is a note, and when it runs it is checked
     like any other lane;
   * an optional row that also carries "instead_of": "<lane>" is that lane's whole-run fallback:
-    when it ran, the lane it stands in for may be absent (a note), and is required otherwise.
+    when it ran, the lane it stands in for may be absent (a note), and is required otherwise;
+  * `check --require LANE` names an optional lane that the run took the path for, so its
+    absence is red in that run.
 
 A deliberate retirement edits the baseline in the same commit and names the cases in the commit
 message (PLAN-P13 §4.2).
 
 Usage:
-  skip_census.py check  <junit-dir> --baseline <json> [--report <json>]
+  skip_census.py check  <junit-dir> --baseline <json> [--report <json>] [--require LANE]...
   skip_census.py write  <junit-dir> --baseline <json>
   skip_census.py --self-test
 <junit-dir> holds one sub-directory per lane (actions/download-artifact with a pattern lays
@@ -144,8 +146,10 @@ def keep_optional_rows(written, previous):
     return dict(sorted(written.items()))
 
 
-def compare(lanes, baseline):
+def compare(lanes, baseline, required=()):
     red, info = [], []
+    for lane in sorted(set(required) - set(baseline)):
+        red.append(f'lane {lane}: required by this run, but the baseline has no such row')
     stood_in = {row['instead_of']: lane for lane, row in baseline.items()
                 if row.get('optional') and row.get('instead_of') and lane in lanes}
     for lane, known in sorted(baseline.items()):
@@ -154,8 +158,12 @@ def compare(lanes, baseline):
             if lane in stood_in:
                 info.append(f'lane {lane}: not run ({stood_in[lane]} ran instead)')
                 continue
-            if known.get('optional'):
+            if known.get('optional') and lane not in required:
                 info.append(f"lane {lane}: not run (optional: {known['optional']})")
+                continue
+            if known.get('optional'):
+                red.append(f"lane {lane}: no JUnit in this run, which took the path that runs it "
+                           f"({known['optional']})")
                 continue
             red.append(f'lane {lane}: no JUnit at all in this run (the job did not run or did not upload)')
             continue
@@ -188,6 +196,8 @@ def run(argv):
     parser.add_argument('junit_dir')
     parser.add_argument('--baseline', required=True, type=pathlib.Path)
     parser.add_argument('--report', type=pathlib.Path)
+    parser.add_argument('--require', action='append', default=[], metavar='LANE',
+                        help='check: an optional lane this run took the path for, so it must be present')
     args = parser.parse_args(argv)
     lanes = collect(args.junit_dir)
     if not lanes:
@@ -207,7 +217,7 @@ def run(argv):
     if not args.baseline.exists():
         print(f'::error::skip census: no baseline at {args.baseline}; write one from a full run')
         return 1
-    red, info = compare(lanes, resolve_baseline(json.loads(args.baseline.read_text())))
+    red, info = compare(lanes, resolve_baseline(json.loads(args.baseline.read_text())), args.require)
     for line in info:
         print(f'note: {line}')
     for line in red:
@@ -268,6 +278,15 @@ def self_test():
         junit(both / 'junit-other' / 'other.xml', [('A', 'skip')])
         assert quiet(['check', str(both), '--baseline', str(optional)]) == 1, 'a present optional lane is checked'
         assert quiet(['check', str(lost), '--baseline', str(optional)]) == 1, 'a plain lane is still required'
+        assert quiet(['check', str(good), '--baseline', str(optional), '--require', 'junit-other/other']) == 1, \
+            'an optional lane the run took the path for is required'
+        present = tmp / 'present'
+        junit(present / 'junit-unit' / 'unit.xml', [('A', 'pass'), ('B', 'skip'), ('C', 'pass')])
+        junit(present / 'junit-other' / 'other.xml', [('A', 'pass')])
+        assert quiet(['check', str(present), '--baseline', str(optional), '--require', 'junit-other/other']) == 0, \
+            'a required optional lane that ran is checked like any other'
+        assert quiet(['check', str(good), '--baseline', str(optional), '--require', 'junit-no/such']) == 1, \
+            'a required lane the baseline does not know is red'
         kept = keep_optional_rows(to_baseline(collect(good)), rows)
         assert kept['junit-other/other'] == rows['junit-other/other'], 'write keeps an absent optional row'
         # A whole-run fallback lane stands in for a trimmed one: the leg ran everything under its
