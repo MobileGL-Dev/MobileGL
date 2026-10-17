@@ -190,7 +190,7 @@ jobs:
             --exclude='*.ninja*' \
             --exclude='build.ninja' \
             --exclude='cmake_install.cmake' \
-            -czf ci-artifacts/mobilegl-linux-runtime.tgz \
+            --zstd -cf ci-artifacts/mobilegl-linux-runtime.tar.zst \
             "${BUILD_DIR}/runtime-mode.json" \
             "${BUILD_DIR}/.ci-source-root" "${BUILD_DIR}/CTestTestfile.cmake" \
             "${BUILD_DIR}/MobileGL/MG_Test" \
@@ -202,7 +202,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: mobilegl-linux-runtime
-          path: ci-artifacts/mobilegl-linux-runtime.tgz
+          path: ci-artifacts/mobilegl-linux-runtime.tar.zst
           if-no-files-found: error
 
       # The retrace legs load only the library, and the server image on the spawn arm, so they
@@ -348,7 +348,7 @@ jobs:
           path: .
 
       - name: Unpack Linux runtime
-        run: tar -xzf mobilegl-linux-runtime.tgz
+        run: tar --zstd -xf mobilegl-linux-runtime.tar.zst
 
       - name: Prepare downloaded test metadata
         run: |
@@ -431,7 +431,7 @@ jobs:
           path: .
 
       - name: Unpack Linux runtime
-        run: tar -xzf mobilegl-linux-runtime.tgz
+        run: tar --zstd -xf mobilegl-linux-runtime.tar.zst
 
       - name: Prepare downloaded test metadata
         run: |
@@ -703,7 +703,7 @@ jobs:
             --exclude='*.ninja*' \
             --exclude='build.ninja' \
             --exclude='cmake_install.cmake' \
-            -czf ci-artifacts/mobilegl-linux-runtime-verify.tgz \
+            --zstd -cf ci-artifacts/mobilegl-linux-runtime-verify.tar.zst \
             "${BUILD_DIR}/.ci-source-root" "${BUILD_DIR}/CTestTestfile.cmake" \
             "${BUILD_DIR}/MobileGL/MG_Test" \
             "${BUILD_DIR}/MobileGL/MG_IntegrationTest" \
@@ -713,7 +713,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: mobilegl-linux-runtime-verify
-          path: ci-artifacts/mobilegl-linux-runtime-verify.tgz
+          path: ci-artifacts/mobilegl-linux-runtime-verify.tar.zst
           if-no-files-found: error
 
       # The retrace legs load only the library, and the server image on the spawn arm, so they
@@ -769,7 +769,7 @@ jobs:
 
       - name: Unpack Linux verify runtime
         run: |
-          tar -xzf mobilegl-linux-runtime-verify.tgz
+          tar --zstd -xf mobilegl-linux-runtime-verify.tar.zst
           test -f build-verify/libMobileGL.so
 
       - name: Prepare downloaded test metadata
@@ -1010,7 +1010,7 @@ jobs:
           name: mobilegl-linux-runtime-verify-split
           path: .
       - name: Unpack verify-split runtime
-        run: tar -xzf mobilegl-linux-runtime-verify-split.tgz
+        run: tar --zstd -xf mobilegl-linux-runtime-verify-split.tar.zst
 
       # The lane. `^...$` because ctest -L is a regex (ID-131) and `integration-verify` would
       # otherwise also match this label and the monolith one would match both.
@@ -1416,7 +1416,7 @@ jobs:
             --exclude='*.ninja*' \
             --exclude='build.ninja' \
             --exclude='cmake_install.cmake' \
-            -czf ci-artifacts/mobilegl-linux-runtime-split.tgz \
+            --zstd -cf ci-artifacts/mobilegl-linux-runtime-split.tar.zst \
             "${BUILD_DIR}/.ci-source-root" "${BUILD_DIR}/CTestTestfile.cmake" \
             "${BUILD_DIR}/MobileGL/MG_Test" \
             "${BUILD_DIR}/MobileGL/MG_IntegrationTest" \
@@ -1426,7 +1426,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: mobilegl-linux-runtime-split
-          path: ci-artifacts/mobilegl-linux-runtime-split.tgz
+          path: ci-artifacts/mobilegl-linux-runtime-split.tar.zst
           if-no-files-found: error
 
       # The retrace legs load only the library, and the server image on the spawn arm, so they
@@ -1481,7 +1481,7 @@ jobs:
 
       - name: Unpack Linux split runtime
         run: |
-          tar -xzf mobilegl-linux-runtime-split.tgz
+          tar --zstd -xf mobilegl-linux-runtime-split.tar.zst
           test -f build-split/libMobileGL.so
 
       - name: Prepare downloaded test metadata
@@ -1717,7 +1717,7 @@ jobs:
 
       - name: Unpack Linux split runtime
         run: |
-          tar -xzf mobilegl-linux-runtime-split.tgz
+          tar --zstd -xf mobilegl-linux-runtime-split.tar.zst
           test -f build-split/libMobileGL.so
 
       - name: Prepare downloaded test metadata
@@ -2344,7 +2344,7 @@ jobs:
           path: .
 
       - name: Unpack Linux runtime
-        run: tar -xzf mobilegl-linux-runtime.tgz
+        run: tar --zstd -xf mobilegl-linux-runtime.tar.zst
 
       - name: Prepare downloaded test metadata
         run: |
@@ -3649,14 +3649,14 @@ jobs:
           mapfile -t SHARED_LIBS < <(find "${BUILD_DIR}" -type f \( -name '*.so' -o -name '*.so.*' \) -print | sort)
           tar --exclude='*/CMakeFiles' --exclude='*.o' --exclude='*.a' --exclude='*.ninja*' \
             --exclude='build.ninja' --exclude='cmake_install.cmake' \
-            -czf ci-artifacts/mobilegl-linux-runtime-verify-split.tgz \
+            --zstd -cf ci-artifacts/mobilegl-linux-runtime-verify-split.tar.zst \
             "${BUILD_DIR}/.ci-source-root" "${BUILD_DIR}/CTestTestfile.cmake" "${BUILD_DIR}/MobileGL/MG_Test" \
             "${BUILD_DIR}/MobileGL/MG_IntegrationTest" "${SHARED_LIBS[@]}"
       - name: Upload verify-split runtime
         uses: actions/upload-artifact@v7
         with:
           name: mobilegl-linux-runtime-verify-split
-          path: ci-artifacts/mobilegl-linux-runtime-verify-split.tgz
+          path: ci-artifacts/mobilegl-linux-runtime-verify-split.tar.zst
           if-no-files-found: error
 
   # P13 W1 (PLAN-P13 §4.2): THE SKIP CENSUS. Deleting a compile-time macro before the GTEST_SKIP
