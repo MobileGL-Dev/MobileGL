@@ -53,11 +53,6 @@ namespace MobileGL::MG_Record {
     // persistent-map push and the deferred destroys, before its record.
     void BeforeReadOnlyVerb();
 
-    // Arms the E2 negative controls from their environment knobs (once, at table build).
-    void ArmVerbControlKnobs();
-    // The E2 control's per-frame evidence line, emitted only while a control is armed.
-    void LogE2ControlLine(Uint64 frameOrdinal);
-
 #if MOBILEGL_PIPE_VERIFY
     // True while the monolith verb port applies a record on this thread. The verify read hook
     // answers a pack-state read inside that window from the applied pack payload, as it does for a
@@ -80,17 +75,6 @@ namespace MobileGL::MG_Record {
     // resolver instead of the in-process sink, so a recorder sees the records the port would apply.
     // Returns the previous routing.
     Bool SetMonolithVerbPortRoutingForTesting(Bool viaPort);
-
-    // Negative controls for the retrace lanes. When set, the named emitter skips its record but
-    // still runs the pre-verb hooks, so a replay that really goes through the wire loses the
-    // verb while one that fell through to the driver does not. Functions rather than Config.h
-    // knobs: a running test process sets them, and no operator may. The counts let a control
-    // assert that it fired. The OpenRA retrace uses the draw drop: OpenRA overdraws every pixel
-    // it clears, so dropping the clear leaves SSIM at 1.0 (see ArmControlKnobs in VerbPort.cpp).
-    void SetDropClearEmissionForNegativeControl(Bool drop);
-    Uint64 DroppedClearEmissions();
-    void SetDropDrawEmissionForNegativeControl(Bool drop);
-    Uint64 DroppedDrawEmissions();
 
     // ID-47. The CLIENT refuses a readback whose answer would not fit a reply slot, BEFORE it
     // emits the record, and names the read. THE REFUSAL ITSELF IS s1's -
@@ -177,7 +161,7 @@ namespace MobileGL::MG_Record {
     // over a snapshot of the bindings the emitter read from the GL context, so a unit case can
     // drive the PRODUCTION derivation with synthetic bindings (R-16) while the integration lane
     // proves the bindings are read from the right slots. The emitters compose these and add
-    // nothing but the hooks, the E2 draw-drop control and the staging of a client index array.
+    // nothing but the hooks and the staging of a client index array.
 
     // What the emitter reads from the GL context before it plans a draw.
     struct RemoteDrawBindings {

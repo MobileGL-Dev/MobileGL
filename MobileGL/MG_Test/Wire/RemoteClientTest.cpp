@@ -899,10 +899,6 @@ TEST(CapsMirrorTest, TheConsumerBlockDoesNotCollideWithTheFeatureBits) {
 }
 
 // =====================================================================================
-// E2's emitter-drop control: the switch itself, driven through the real emitter's own counter
-// =====================================================================================
-
-// =====================================================================================
 // P5b d1: the draw family's record plan (docs/archive/contracts/CONTRACT-P5B.md §2 d1). These drive the
 // PRODUCTION derivation the nineteen emitters call - PlanDrawInfo / PlanDrawRange /
 // PlanDrawIndirect over a RemoteDrawBindings snapshot - so the fields on the wire are pinned
@@ -1071,17 +1067,6 @@ TEST(RemoteEmitTable, TheNineteenDrawSlotsAreEmittersDistinctFromEveryStub) {
         EXPECT_NE(draws[i], nullptr) << "draw slot " << i;
         EXPECT_NE(draws[i], stub) << "draw slot " << i << " is a class-C thunk";
     }
-}
-
-TEST(RemoteEmitTable, TheE2DropSwitchStartsDisarmed) {
-    // The half a unit case can state. E2's statement - "drop one Clear emission and OpenRA's
-    // SSIM falls below 0.99" - is a TRACE LANE's, because the picture is the thing it is about;
-    // what belongs here is that the control is off unless someone armed it, so a lane that
-    // forgot to disarm cannot look like a lane that was never armed.
-    EXPECT_EQ(DroppedClearEmissions(), 0u);
-    SetDropClearEmissionForNegativeControl(true);
-    SetDropClearEmissionForNegativeControl(false);
-    EXPECT_EQ(DroppedClearEmissions(), 0u) << "arming and disarming the control must not, by itself, drop anything";
 }
 
 // =====================================================================================

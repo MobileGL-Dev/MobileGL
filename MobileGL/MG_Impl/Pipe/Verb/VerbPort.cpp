@@ -45,7 +45,6 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
-#include <cstdlib>
 #include <cstring>
 #include <limits>
 
@@ -68,52 +67,6 @@ namespace MobileGL::MG_Record {
     }
 
     namespace {
-
-        Bool g_dropClearEmission = false;
-        Uint64 g_droppedClearEmissions = 0;
-        Bool g_dropDrawEmission = false;
-        Uint64 g_droppedDrawEmissions = 0;
-
-        // E2's control has to be armable from OUTSIDE the process that runs the replay, because
-        // the statement it makes is about a trace lane and not about a unit case: "drop an
-        // emission and OpenRA's SSIM falls below 0.99". A recompile would make the control
-        // arm against source text, which is ID-22(a)'s defect.
-        //
-        // READ WITH getenv RATHER THAN THROUGH MG_Config, DELIBERATELY AND TEMPORARILY. Config.h
-        // is c0's and a new MOBILEGL_IPC_* knob goes through the integrator; these are
-        // NEGATIVE-CONTROL switches no operator may ever set, and they announce themselves at
-        // warning level every time they arm so they cannot be on by accident. Flagged for
-        // adoption into IpcTable if the integrator wants them there.
-        Bool ReadControlKnob(const char* name) {
-            const char* value = std::getenv(name);
-            return value != nullptr && value[0] == '1' && value[1] == '\0';
-        }
-
-        // Two negative controls. MOBILEGL_IPC_E2_DROP_DRAW drops every DrawVbo record, so a
-        // frame that really crosses the wire can show only the clear colour; it is the OpenRA
-        // retrace's control. MOBILEGL_IPC_E2_DROP_CLEAR cannot be: OpenRA's last frame clears,
-        // then covers the whole 640x480 surface four times before the snapshot, so dropping the
-        // clear leaves SSIM at 1.0 (measured). It stays for scenarios whose picture depends on
-        // the clear, such as ClearThenReadPixelsScenario.
-        void ArmControlKnobs() {
-            g_dropClearEmission = ReadControlKnob("MOBILEGL_IPC_E2_DROP_CLEAR");
-            g_dropDrawEmission = ReadControlKnob("MOBILEGL_IPC_E2_DROP_DRAW");
-            if (g_dropClearEmission) {
-                MGLOG_W("MG_Remote client: MOBILEGL_IPC_E2_DROP_CLEAR=1 - a NEGATIVE CONTROL is "
-                        "armed and every glClear will be DROPPED on the wire. It is observable "
-                        "only where the picture depends on the clear: OpenRA overdraws its whole "
-                        "surface every frame, so this knob does NOT redden the E2 retrace "
-                        "(measured, joint-v1.md 3) - MOBILEGL_IPC_E2_DROP_DRAW is the one that "
-                        "does. The dropped count is published on the 'E2 control armed' line");
-            }
-            if (g_dropDrawEmission) {
-                MGLOG_W("MG_Remote client: MOBILEGL_IPC_E2_DROP_DRAW=1 - E2's NEGATIVE CONTROL is "
-                        "armed and every DrawVbo record will be DROPPED on the wire. The surface "
-                        "can then only carry the clear colour, so this arm is expected to fail its "
-                        "SSIM threshold; a lane that stays green with it set is not going through "
-                        "the wire at all");
-            }
-        }
 
         // ID-49's two halves, in one place so the emitter and its control read the same
         // arithmetic.
@@ -376,16 +329,6 @@ namespace MobileGL::MG_Record {
             VerbChannel session = ChannelFor("Clear");
             BeforeReadOnlyVerb();
 
-            if (g_dropClearEmission) {
-                // A negative control. Everything above still ran, so the only difference
-                // between this arm and the live one is the record - which is exactly the
-                // statement "the picture comes from the wire" that E2 exists to prove. Its
-                // OBSERVABILITY is a property of the workload, not of this branch: see
-                // ArmControlKnobs for the measurement that took E2's retrace off this knob.
-                ++g_droppedClearEmissions;
-                return;
-            }
-
             MG_Pipe::MGPClear record{};
             // The DRAW framebuffer is whatever the server's own SyncRenderState resolves from
             // gPipeInputs, which the client's MGP_FILL(Clear) at GL_Drawing.cpp:534 has just
@@ -592,8 +535,8 @@ namespace MobileGL::MG_Record {
         // All nineteen slots emit one draw_vbo record, the GL call verbatim beside the handles,
         // which the server's sink turns into the backend call the monolith makes. Each entry
         // point reads the bindings, plans the head and ranges, then calls EmitDrawRecord: the
-        // pre-verb hooks in EmitDrawArrays' order (push, mark walk, record), the drop-draw
-        // control, client arrays and indices as owned buffers. Refused by name: +CLIENT_COMMANDS
+        // pre-verb hooks in EmitDrawArrays' order (push, mark walk, record), then client arrays
+        // and indices as owned buffers. Refused by name: +CLIENT_COMMANDS
         // (no indirect buffer), +UNBOUND_PARAMETER (no parameter buffer; the sink dereferences
         // it) and +INDEX_OFFSET (a byte offset that is not whole indices; Start counts indices).
 
@@ -675,14 +618,6 @@ namespace MobileGL::MG_Record {
                 }
             }
             MarkGpuWritesForDraw();
-
-            if (g_dropDrawEmission) {
-                // E2's negative control covers EVERY draw record, not only DrawArrays: the
-                // Minecraft traces are DrawElements frames, and a control that dropped only the
-                // one P5 entry point would leave those lanes green with the wire disarmed.
-                ++g_droppedDrawEmissions;
-                return;
-            }
 
             info.NumDraws = numDraws;
             MG_Pipe::MGPipeVerbTail tails[2] = {{ranges, static_cast<Uint64>(numDraws) * sizeof(MG_Pipe::MGPDrawRange)},
@@ -1582,27 +1517,6 @@ namespace MobileGL::MG_Record {
 
     } // namespace
 
-    // THE CONTROL'S OWN EVIDENCE LINE, and it is emitted per frame rather than at teardown
-    // on purpose: a retrace that is killed by its own timeout, or whose library never runs
-    // MobileGL::Destroy, would leave a teardown-only line absent and the control would then
-    // have to accept a bare threshold failure - which is the thing R-16 forbids. One line
-    // per Present, only while a knob is armed, is bounded by the frame count and present
-    // whatever happens afterwards.
-    void LogE2ControlLine(Uint64 frameOrdinal) {
-        if (!g_dropClearEmission && !g_dropDrawEmission) return;
-        MGLOG_W("MGPipe: E2 control armed - drop-draw=%d drop-clear=%d, %llu records dropped "
-                "on the wire (draw=%llu clear=%llu), frame %llu",
-                g_dropDrawEmission ? 1 : 0, g_dropClearEmission ? 1 : 0,
-                static_cast<unsigned long long>(g_droppedDrawEmissions + g_droppedClearEmissions),
-                static_cast<unsigned long long>(g_droppedDrawEmissions),
-                static_cast<unsigned long long>(g_droppedClearEmissions),
-                static_cast<unsigned long long>(frameOrdinal));
-    }
-
-    void ArmVerbControlKnobs() {
-        ArmControlKnobs();
-    }
-
 #if MOBILEGL_PIPE_VERIFY
     Bool MonolithPortApplyingForVerify() {
         return t_portApplying;
@@ -1740,20 +1654,6 @@ namespace MobileGL::MG_Record {
         const Bool previous = g_monolithVerbPort;
         g_monolithVerbPort = viaPort;
         return previous;
-    }
-
-    void SetDropClearEmissionForNegativeControl(Bool drop) {
-        g_dropClearEmission = drop;
-    }
-    Uint64 DroppedClearEmissions() {
-        return g_droppedClearEmissions;
-    }
-
-    void SetDropDrawEmissionForNegativeControl(Bool drop) {
-        g_dropDrawEmission = drop;
-    }
-    Uint64 DroppedDrawEmissions() {
-        return g_droppedDrawEmissions;
     }
 
     Bool ReadbackPackStateIsTightForTest(GLsizei width, Uint64 bytesPerPixel, const PixelStoreParameters& pack) {

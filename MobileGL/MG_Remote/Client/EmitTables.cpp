@@ -62,9 +62,8 @@
 
 namespace MobileGL::MG_Remote::Client {
 
-    // P13 W5: the pre-verb hook and the E2 evidence line are the verb port's (VerbPort.h).
+    // The pre-verb hook is the verb port's (VerbPort.h).
     using MG_Record::BeforeReadOnlyVerb;
-    using MG_Record::LogE2ControlLine;
 
     // The slot arithmetic, asserted rather than commented. GlobalBackendFunctionsTable is
     // GLFunctionsTable plus Present plus SetSwapInterval; GLFunctionsTable is 71 function
@@ -80,7 +79,6 @@ namespace MobileGL::MG_Remote::Client {
 
     namespace {
 
-        Uint64 g_presentOrdinal = 0;
         Uint64 g_publishedMaxRecordBytes = 0;
 
         // ---- the session, demanded rather than assumed --------------------------------
@@ -216,9 +214,6 @@ namespace MobileGL::MG_Remote::Client {
             // keyed on pActiveBackendObject.get() (Core.cpp:34) and that pointer never changes
             // under split.
             session.PumpControlPlane();
-
-            ++g_presentOrdinal;
-            LogE2ControlLine(g_presentOrdinal);
         }
 
         // =============================================================================
@@ -583,7 +578,6 @@ namespace MobileGL::MG_Remote::Client {
                       "the three classes no longer partition the 73 slots");
 
         MG_Backend::GlobalBackendFunctionsTable BuildRemoteEmitTable() {
-            MG_Record::ArmVerbControlKnobs();
             MG_Backend::GlobalBackendFunctionsTable table{};
 
             // ---- class C first, so that a slot forgotten below stays Fatal rather than null.

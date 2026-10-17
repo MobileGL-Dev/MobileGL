@@ -43,12 +43,10 @@ namespace MobileGL::MG_Remote::Client {
     // A reference to a never-destroyed block, like every other MG_Remote singleton (ID-8).
     const MG_Backend::GlobalBackendFunctionsTable& RemoteEmitTable();
 
-    // P13 W5: the verb emitters, the monolith verb port, the E2 controls and the readback / draw
-    // planners are MG_Record's (MG_Impl/Pipe/Verb/VerbPort.h) - the record arm runs them in a
+    // The verb emitters, the monolith verb port and the readback / draw planners are
+    // MG_Record's (MG_Impl/Pipe/Verb/VerbPort.h) - the record arm runs them in a
     // library without a transport. Re-exported here under the names the remote table's users
     // and its unit cases already spell.
-    using MG_Record::DroppedClearEmissions;
-    using MG_Record::DroppedDrawEmissions;
     using MG_Record::ForEachReadbackBand;
     using MG_Record::InstallMonolithVerbPort;
     using MG_Record::MonolithVerbPortInstalled;
@@ -64,8 +62,6 @@ namespace MobileGL::MG_Remote::Client {
     using MG_Record::RemoteIndexSizeFor;
     using MG_Record::ScatterReadbackBandIntoPackState;
     using MG_Record::ScatterTightReadbackIntoPackState;
-    using MG_Record::SetDropClearEmissionForNegativeControl;
-    using MG_Record::SetDropDrawEmissionForNegativeControl;
     using MG_Record::TightReadbackByteCount;
     using MG_Record::UnmigratedVerbFatal;
 
