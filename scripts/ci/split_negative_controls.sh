@@ -9,14 +9,9 @@
 
 # EXIT GATE E1's NEGATIVE CONTROL and EXIT GATE E3(a)'s.
 #
-# This file is the body of .github/workflows/test.yml's "Negative controls (barrier, map push)"
-# step, which requires the verb barrier and the persistent-map push to be load-bearing. It lives in
-# the repository rather than inline in the workflow for one reason: a workflow `run:` block cannot
-# be executed anywhere except on a runner, so the logic below was unreviewable and untestable until
-# it ran in CI - and when the wave-1 cross-family review claimed it was broken, confirming the
-# claim needed a hand-made copy of these lines with their inputs stubbed (wave1-codex-verify.md 8).
-# A copy is not the thing. The smoke test at scripts/ci/control_smoke_test.sh now runs THIS file,
-# so the lines CI executes and the lines the smoke test proves are the same lines.
+# The body of test.yml's "Negative controls (barrier, map push)" step, which requires the verb
+# barrier and the persistent-map push to be load-bearing. It is a file, not an inline `run:` block,
+# so scripts/ci/control_smoke_test.sh runs these same lines off a runner against a stubbed ctest.
 #
 # WHAT THE REVIEW FOUND (ID-46 finding 8, CONFIRMED by execution; ID-48 assigns it here).
 # The previous version accepted ANY non-zero ctest exit as "the knob is load-bearing". A timeout, a
@@ -37,7 +32,7 @@
 #      carries none of them.
 #
 # WHY THE EVIDENCE IS THE SCENARIO'S ASSERTION TEXT AND NOT THE KNOB'S OWN LOG LINE.
-# ConfigLoader logs a named line for both knobs (ConfigLoader.cpp:385-393, "is the R-1 NEGATIVE
+# ConfigLoader logs a named line for both knobs ("is the R-1 NEGATIVE
 # CONTROL", "is the E3(a) NEGATIVE CONTROL"), and it is tempting to grep for that. It is not
 # evidence: it is written at config load, by every process in the run, whatever happens next. A
 # setup abort would carry it too. It proves the knob was READ, never that the knob caused the red.
@@ -47,8 +42,11 @@
 # overlap Fatal cannot fire with the default BATCH_WAITS=1. Pixel failures are not E1 evidence.
 #
 # Usage:  split_negative_controls.sh [--self-test]
-#   CTEST          ctest binary                       (default: ctest)
-#   CONTROL_TMPDIR scratch dir for the junit + output  (default: ${RUNNER_TEMP:-/tmp})
+#   CTEST                ctest binary                       (default: ctest)
+#   CONTROL_TMPDIR       scratch dir for the junit + output  (default: ${RUNNER_TEMP:-/tmp})
+#   SPLIT_BASELINE_JUNIT the JUnit an earlier `ctest -L integration-split` wrote; its exit code is
+#                        read from the file of the same name ending in .rc. When both exist the
+#                        baseline is tallied from them instead of re-run.
 set -u
 
 if [ "${1:-}" = "--self-test" ]; then
@@ -60,8 +58,6 @@ CTEST="${CTEST:-ctest}"
 CONTROL_TMPDIR="${CONTROL_TMPDIR:-${RUNNER_TEMP:-/tmp}}"
 mkdir -p "${CONTROL_TMPDIR}"
 
-junit="${CONTROL_TMPDIR}/isplit.xml"
-rm -f "${junit}"
 log_helper="$(dirname "$0")/../../MobileGL/MG_IntegrationTest/Harness/split_log_paths.py"
 
 # Check ownership even while the runtime lane is disarmed and will skip.
@@ -76,15 +72,35 @@ python3 "${log_helper}" check "${CTEST}" "$PWD" || exit 1
 # ImplementedVerbCount(), read by Harness/SplitRuntimePeek), so the only honest way to ask it from a
 # shell is to look at what the entries DID.
 # The metadata ownership test shares the label but cannot arm runtime controls.
-"${CTEST}" -L integration-split -R '^DirectGLES\.Split\.' -j 4 --no-tests=error --output-junit "${junit}"
-baseline_rc=$?
+#
+# The lane step before this one already ran every integration-split entry on this runner and
+# library, and left its JUnit and exit code. Both are read when they exist; only the
+# DirectGLES.Split. entries count, as in the rerun. The rerun stays for a job whose lane step
+# never ran (an earlier gate failed), where this baseline is the only run of those entries.
+baseline_rc_file="${SPLIT_BASELINE_JUNIT:-}"
+baseline_rc_file="${baseline_rc_file%.xml}.rc"
+if [ -n "${SPLIT_BASELINE_JUNIT:-}" ] && [ -f "${SPLIT_BASELINE_JUNIT}" ] && [ -f "${baseline_rc_file}" ]; then
+  junit="${SPLIT_BASELINE_JUNIT}"
+  baseline_rc=$(tr -dc '0-9' < "${baseline_rc_file}")
+  baseline_rc="${baseline_rc:-1}"
+  echo "baseline tallied from ${junit} (the lane step's own run, ctest exit ${baseline_rc}); no rerun"
+else
+  # A directory of its own: the job uploads CONTROL_TMPDIR/*.xml for the skip census, which has
+  # no row for this rerun.
+  mkdir -p "${CONTROL_TMPDIR}/split-controls"
+  junit="${CONTROL_TMPDIR}/split-controls/isplit.xml"
+  rm -f "${junit}"
+  echo "::notice::no baseline JUnit and exit code from the lane step (SPLIT_BASELINE_JUNIT='${SPLIT_BASELINE_JUNIT:-}'), so the controls reran the DirectGLES.Split. baseline"
+  "${CTEST}" -L integration-split -R '^DirectGLES\.Split\.' -j 4 --no-tests=error --output-junit "${junit}"
+  baseline_rc=$?
+fi
 
 if [ ! -f "${junit}" ]; then
   echo "::error::the baseline run wrote no ${junit} (ctest exit ${baseline_rc}), so nothing below can tell an armed lane from a broken one"
   exit 1
 fi
 
-tally=$(python3 "$(dirname "$0")/junit_tally.py" "${junit}")
+tally=$(python3 "$(dirname "$0")/junit_tally.py" "${junit}" --require-split-ran)
 if [ -z "${tally}" ]; then
   echo "::error::could not tally ${junit}; a run whose result cannot be read is not an arming signal"
   exit 1

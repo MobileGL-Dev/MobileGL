@@ -1562,7 +1562,11 @@ jobs:
           ulimit -c unlimited
           export MOBILEGL_FLATC_EXECUTABLE="${RUNNER_TEMP}/flatc-build/flatc"
           test -x "${MOBILEGL_FLATC_EXECUTABLE}"
-          ctest --output-on-failure -L integration-split --no-tests=error -j 4 --output-junit "${RUNNER_TEMP}/split-baseline.xml"
+          # The exit code is kept beside the JUnit: the controls step tallies this run as its baseline.
+          rc=0
+          ctest --output-on-failure -L integration-split --no-tests=error -j 4 --output-junit "${RUNNER_TEMP}/split-baseline.xml" || rc=$?
+          echo "${rc}" > "${RUNNER_TEMP}/split-baseline.rc"
+          [ "${rc}" -eq 0 ] || exit "${rc}"
           python3 ../scripts/ci/junit_tally.py "${RUNNER_TEMP}/split-baseline.xml" --require-split-ran
           # Exit gate 9.3: the spawn arm green at the same count. It runs the same cases through a
           # SECOND PROCESS, so a failure here that the line above did not see is a transport fact
@@ -1650,14 +1654,15 @@ jobs:
       # push (MOBILEGL_IPC_PERSISTENT_BLOCK_KB=0): each knob must turn its selected entries red.
       # The body is scripts/ci/split_negative_controls.sh, so scripts/ci/control_smoke_test.sh can
       # run the same lines off a runner. It needs a green baseline with at least one passed entry,
-      # and accepts a red only when it carries the control's own diagnostic, so a timeout, a setup
-      # abort or an unrelated failure never counts.
+      # tallied from the lane step's JUnit and exit code (re-run only when that step never ran),
+      # and accepts a red only when it carries the control's own diagnostic.
       - name: Negative controls (barrier, map push)
         if: ${{ !cancelled() }}
         working-directory: build-split
         env:
           MOBILEGL_ITEST_REQUIRE_GPU: "1"
           CONTROL_TMPDIR: ${{ runner.temp }}
+          SPLIT_BASELINE_JUNIT: ${{ runner.temp }}/split-baseline.xml
         run: bash "${GITHUB_WORKSPACE}/scripts/ci/split_negative_controls.sh"
 
       # The run log needs a signed-in reader; annotations do not. Name every failed ctest entry,
