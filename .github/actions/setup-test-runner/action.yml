@@ -44,4 +44,14 @@ runs:
             printf 'Acquire::Retries "3";\nAcquire::http::Timeout "30";\nAcquire::https::Timeout "30";\n' |
               sudo tee /etc/apt/apt.conf.d/80-mobilegl-ci-network > /dev/null
           fi
+          # Cores go through zstd: a unit run's intentional aborts (death tests) left hundreds
+          # of raw cores in /tmp and filled the disk. The handler keeps honouring each
+          # process's RLIMIT_CORE (%c), so only steps that raise it with ulimit -c get cores;
+          # read one with 'zstd -d core.<exe>.<pid>.zst' first.
+          if [ ! -f /.dockerenv ] && command -v sudo > /dev/null && command -v zstd > /dev/null; then
+            printf '#!/bin/sh\n[ "$3" = 0 ] && exec cat > /dev/null\nexec %s -q -1 -o "/tmp/core.$1.$2.zst"\n' \
+              "$(command -v zstd)" | sudo tee /usr/local/bin/mobilegl-core-handler > /dev/null
+            sudo chmod 755 /usr/local/bin/mobilegl-core-handler
+            sudo sysctl -q -w kernel.core_pattern='|/usr/local/bin/mobilegl-core-handler %e %p %c'
+          fi
         fi

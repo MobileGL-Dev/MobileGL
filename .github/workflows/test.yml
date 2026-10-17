@@ -365,12 +365,17 @@ jobs:
         working-directory: build-linux
         run: |
           ulimit -c unlimited
-          if [ "$MOBILEGL_CI_NATIVE_GPU" != 1 ] && [ ! -f /.dockerenv ]; then sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'; fi
           if [ "${{ secrets.ACTIONS_STEP_DEBUG }}" = "true" ]; then
             ctest -V -L unit --no-tests=error -j "$(nproc)" --output-junit "${RUNNER_TEMP}/unit.xml"
           else
             ctest --output-on-failure -L unit --no-tests=error -j "$(nproc)" --output-junit "${RUNNER_TEMP}/unit.xml"
           fi
+
+      - name: Disk and cores after the unit run
+        if: ${{ always() }}
+        run: |
+          df -h / /tmp
+          echo "cores: $(ls /tmp/core.* 2> /dev/null | wc -l), $(du -ch /tmp/core.* 2> /dev/null | tail -n 1)"
 
       # P13 W1: every JUnit this job wrote, for the skip census (scripts/ci/skip_census.py).
       - name: Upload JUnit for the skip census
@@ -457,8 +462,8 @@ jobs:
         # property takes precedence over ambient job variables.
         #
         # Cores are armed so that any crash - the harness pre-flight child's
-        # included - leaves /tmp/core.*, which the failure-only step below ships
-        # as an artifact. Analyzing a downloaded core against the runtime
+        # included - leaves /tmp/core.*.zst, which the failure-only step below ships
+        # as an artifact. Analyzing a downloaded core (zstd -d) against the runtime
         # artifact's binary in an ubuntu-26.04 userspace reproduces the exact
         # crash stack without burning a CI round on an in-workflow debugger.
         env:
@@ -466,7 +471,6 @@ jobs:
           MOBILEGL_ITRP_FIX: "ForceOn"
         run: |
           ulimit -c unlimited
-          if [ "$MOBILEGL_CI_NATIVE_GPU" != 1 ] && [ ! -f /.dockerenv ]; then sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'; fi
           # Second, filtered pass: with the range-invalidating map flush disabled,
           # the buffer scenarios run on the upload ring's staged-copy tier - which
           # the default pass never reaches (the map tier absorbs every flush on
@@ -808,7 +812,6 @@ jobs:
           MOBILEGL_ITRP_FIX: "ForceOn"
         run: |
           ulimit -c unlimited
-          if [ "$MOBILEGL_CI_NATIVE_GPU" != 1 ] && [ ! -f /.dockerenv ]; then sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'; fi
           if [ "${{ secrets.ACTIONS_STEP_DEBUG }}" = "true" ]; then
             ctest -V -L integration-verify --no-tests=error -j "$(nproc)" --output-junit "${RUNNER_TEMP}/verify.xml"
           else
@@ -838,7 +841,6 @@ jobs:
           MOBILEGL_ITRP_FIX: "ForceOn"
         run: |
           ulimit -c unlimited
-          if [ "$MOBILEGL_CI_NATIVE_GPU" != 1 ] && [ ! -f /.dockerenv ]; then sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'; fi
           ctest --output-on-failure -L integration-gpu \
             -R 'HandleRecycle|CsoContentAddressing|ResourceSubsystem|MapPersistentRoundtrip|ObjectSubsystem|TextureParamsWithoutASamplerView|TextureUploadShape' \
             --no-tests=error -j 4
@@ -1042,7 +1044,6 @@ jobs:
           MOBILEGL_ITEST_REQUIRE_GPU: "1"
         run: |
           ulimit -c unlimited
-          if [ "$MOBILEGL_CI_NATIVE_GPU" != 1 ] && [ ! -f /.dockerenv ]; then sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'; fi
           # --output-junit, because the arm proof below has to tell a gtest SKIP from a pass: an
           # entry that skipped reached no verb honestly, and the skip set moves with the driver.
           ctest --output-on-failure -L '^integration-verify-split$' --no-tests=error -j 4 \
@@ -1560,7 +1561,6 @@ jobs:
           MOBILEGL_ITEST_REQUIRE_GPU: "1"
         run: |
           ulimit -c unlimited
-          if [ "$MOBILEGL_CI_NATIVE_GPU" != 1 ] && [ ! -f /.dockerenv ]; then sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'; fi
           export MOBILEGL_FLATC_EXECUTABLE="${RUNNER_TEMP}/flatc-build/flatc"
           test -x "${MOBILEGL_FLATC_EXECUTABLE}"
           ctest --output-on-failure -L integration-split --no-tests=error -j 4 --output-junit "${RUNNER_TEMP}/split-baseline.xml"
@@ -1589,7 +1589,6 @@ jobs:
           MOBILEGL_ITRP_FIX: "ForceOn"
         run: |
           ulimit -c unlimited
-          if [ "$MOBILEGL_CI_NATIVE_GPU" != 1 ] && [ ! -f /.dockerenv ]; then sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'; fi
           count=$(ctest -N -L integration-gpu | grep -cE '^ *Test *#[0-9]+:')
           if [ "${count}" -lt 1 ]; then
             echo "::error::the split runtime registers ${count} integration-gpu entries"
@@ -1991,7 +1990,6 @@ jobs:
           MOBILEGL_IPC_ROLE_SPLIT_STATE: "1"
         run: |
           ulimit -c unlimited
-          if [ "$MOBILEGL_CI_NATIVE_GPU" != 1 ] && [ ! -f /.dockerenv ]; then sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'; fi
           ctest -L '^integration-magma-spawn$' --no-tests=error -j 2 --output-on-failure
           ctest -L '^integration-magma-tcp$' --no-tests=error -j 2 --output-on-failure
 
@@ -2380,7 +2378,6 @@ jobs:
         working-directory: build-linux
         run: |
           ulimit -c unlimited
-          if [ "$MOBILEGL_CI_NATIVE_GPU" != 1 ] && [ ! -f /.dockerenv ]; then sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'; fi
           ctest -V -C Release -L benchmark --no-tests=error
 
       - name: Upload core dumps
@@ -2757,7 +2754,6 @@ jobs:
         working-directory: build-retrace/tools/trace_replay
         run: |
           ulimit -c unlimited
-          if [ "$MOBILEGL_CI_NATIVE_GPU" != 1 ] && [ ! -f /.dockerenv ]; then sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'; fi
           if [ '${{ matrix.backend }}' = 'DirectVulkan' ]; then
             export MOBILEGL_MAGMA_R11G11B10F_FALLBACK=1
           fi
@@ -2981,7 +2977,6 @@ jobs:
         # is well past ctest's 1500s default.
         run: |
           ulimit -c unlimited
-          if [ "$MOBILEGL_CI_NATIVE_GPU" != 1 ] && [ ! -f /.dockerenv ]; then sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'; fi
           export MOBILEGL_PIPE_VERIFY=1
           if [ '${{ matrix.backend }}' = 'DirectVulkan' ]; then
             export MOBILEGL_MAGMA_R11G11B10F_FALLBACK=1
@@ -3226,7 +3221,6 @@ jobs:
         # configuration, so a `ctest -V` transcript reports a false zero for Fatal{ lines.
         run: |
           ulimit -c unlimited
-          if [ "$MOBILEGL_CI_NATIVE_GPU" != 1 ] && [ ! -f /.dockerenv ]; then sudo sysctl -w kernel.core_pattern='/tmp/core.%e.%p'; fi
           export MOBILEGL_TRANSPORT='${{ matrix.transport }}'
           # Absolute, because the replay's working directory is not this one and LaunchServer
           # resolves the image relative to nothing. Harmless on the inproc arm, which reads it
