@@ -214,7 +214,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             void* getAhbProperties = nullptr; // PFN_vkGetAndroidHardwareBufferPropertiesANDROID
         };
         Bool GetWireAhbImport(WireAhbImport& out) const;
-        // SHARED IMAGES (BackendObject::BlitDefaultFramebufferToSharedImage): the active surface
+        // SHARED IMAGES (ServerHooks::BlitDefaultFramebufferToSharedImage): the active surface
         // target's default framebuffer, copied into `image` top row first and scaled to its
         // extent. Returns once the copy is submitted, with its fence published to the image
         // (SharedImages::PublishWrite); waits for it on the CPU only on a device without sync_file
@@ -225,12 +225,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // renderer has written before - the rest of it is left as it is; a first write, a scaled
         // or turned copy copies all of it.
         Bool BlitDefaultFramebufferToSharedImage(const SharedImageView& image, const MG_Util::Damage::Region& region);
-        // IMPLICIT SYNC BY FLUSH (BackendObject::PublishSharedImageAccesses): every image acquired
+        // IMPLICIT SYNC BY FLUSH (ServerHooks::PublishSharedImageAccesses): every image acquired
         // since the last boundary goes back to the foreign family, the recording is submitted with
         // the exportable semaphore, and its sync_file is published to each as a write and a read.
         // From then on an image's first acquire per frame also waits for its pending reads.
         Bool PublishSharedImageAccesses();
-        // EGL_ANDROID_native_fence_sync's fence command (BackendObject::ExportNativeFence): the
+        // EGL_ANDROID_native_fence_sync's fence command (ServerHooks::ExportNativeFence): the
         // submission's sync_file in `*fence` (-1: none, and the work is waited out here), and - for
         // a session that writes images - the boundary PublishSharedImageAccesses makes.
         Bool ExportNativeFence(int* fence);

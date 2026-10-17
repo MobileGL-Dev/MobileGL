@@ -86,8 +86,9 @@ MOBILEGL_EXPORT int mobilegl_shared_image_allocate(uint32_t width, uint32_t heig
     const std::lock_guard<std::mutex> lock(g_apiMutex);
     BackendObject* backend = ActiveBackend(true);
     if (backend == nullptr) return -EIO;
+    MobileGL::MG_Backend::ClientHooks* client = backend->AsClient();
     MobileGL::MG_Backend::SharedImageExport image{};
-    if (!backend->AllocateSharedImage(width, height, fourcc, &image) || image.Fd < 0) {
+    if (client == nullptr || !client->AllocateSharedImage(width, height, fourcc, &image) || image.Fd < 0) {
         if (image.Fd >= 0) ::close(image.Fd);
         return -EIO;
     }
@@ -115,8 +116,9 @@ MOBILEGL_EXPORT int mobilegl_shared_image_import(int fd, uint32_t width, uint32_
     const std::lock_guard<std::mutex> lock(g_apiMutex);
     BackendObject* backend = ActiveBackend(true);
     if (backend == nullptr) return -EIO;
+    MobileGL::MG_Backend::ClientHooks* client = backend->AsClient();
     uint64_t id = 0;
-    if (!backend->ImportSharedImage(fd, width, height, fourcc, &id)) return -EIO;
+    if (client == nullptr || !client->ImportSharedImage(fd, width, height, fourcc, &id)) return -EIO;
     *out_id = id;
     return 0;
 }
@@ -130,6 +132,7 @@ MOBILEGL_EXPORT int mobilegl_shared_image_import_planes(int fd, uint32_t width, 
     const std::lock_guard<std::mutex> lock(g_apiMutex);
     BackendObject* backend = ActiveBackend(true);
     if (backend == nullptr) return -EIO;
+    MobileGL::MG_Backend::ClientHooks* client = backend->AsClient();
     MobileGL::MG_Backend::SharedImageImportLayout layout;
     layout.PlaneCount = 2;
     for (int i = 0; i < 2; ++i) {
@@ -140,7 +143,7 @@ MOBILEGL_EXPORT int mobilegl_shared_image_import_planes(int fd, uint32_t width, 
     layout.HasModifier = planes->modifier != kModifierInvalid;
     layout.Modifier = planes->modifier;
     uint64_t id = 0;
-    if (!backend->ImportSharedImagePlanes(fd, width, height, fourcc, layout, &id)) return -EIO;
+    if (client == nullptr || !client->ImportSharedImagePlanes(fd, width, height, fourcc, layout, &id)) return -EIO;
     *out_id = id;
     return 0;
 }
@@ -153,5 +156,6 @@ MOBILEGL_EXPORT int mobilegl_shared_image_release(uint64_t id) {
     const std::lock_guard<std::mutex> lock(g_apiMutex);
     BackendObject* backend = ActiveBackend(false);
     if (backend == nullptr) return -ENODEV;
-    return backend->ReleaseSharedImage(id) ? 0 : -EIO;
+    MobileGL::MG_Backend::ClientHooks* client = backend->AsClient();
+    return client != nullptr && client->ReleaseSharedImage(id) ? 0 : -EIO;
 }

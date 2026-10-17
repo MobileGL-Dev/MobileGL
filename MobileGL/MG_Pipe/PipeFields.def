@@ -13,7 +13,7 @@
 // (DirectGLES.cpp documents that behaviour where it does the same comparison itself).
 //
 // Hand maintained alongside MGPipeTypes.h, MGPipeValueTypes.h, MGPipeHostSpan.h and
-// MG_Backend/BackendObject.h. Adding a member to one of these structs without adding it here
+// MG_Backend/BackendFunctions.h. Adding a member to one of these structs without adding it here
 // would make the comparator blind to it, so gen_pipe.py asserts - in both modes, hence in
 // pipe-gates - that every list below names exactly the direct data members of its struct
 // (P1 brief D8; a member named Pad<n> is padding and is not listed).

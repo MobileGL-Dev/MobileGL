@@ -150,7 +150,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
     // `debugKnob` false: the knob is not consulted here (the on-screen Present, so an injected loss
     // lands on an offscreen client's shared-image present or readback, never on the compositor's).
     Bool LatchIfDeviceLost(const char* site, Bool debugKnob = true);
-    // The apply loop's form of it (BackendObject::LatchIfGpuFaulted), asked each time the apply thread
+    // The apply loop's form of it (ServerHooks::LatchIfGpuFaulted), asked each time the apply thread
     // wakes: the driver's report only, no debug knob, and no EGL ground-truth verification spent.
     Bool LatchIfGuiltyBeforeApply();
 #endif
@@ -536,7 +536,7 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, image) on what the active unit has bound to
         // GL_TEXTURE_2D. False when the driver refused it (its GL error is consumed).
         Bool TargetBoundTexture2D(const EglImageRef& image);
-        // BackendObject::BlitDefaultFramebufferToSharedImage, for the calling thread's context.
+        // ServerHooks::BlitDefaultFramebufferToSharedImage, for the calling thread's context.
         Bool BlitDefaultFramebufferTo(const SharedImageView& image, const MG_Util::Damage::Region& region);
 
         // THE READER'S HALF of the image's sync state (SharedImageRegistry.h). Called on every use
@@ -556,12 +556,12 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // at Present and wherever the current native context stops being current (its reads can
         // only be fenced from it). Nothing noted = nothing done.
         void PublishPendingReads();
-        // IMPLICIT SYNC BY FLUSH (BackendObject::PublishSharedImageAccesses): everything the
+        // IMPLICIT SYNC BY FLUSH (ServerHooks::PublishSharedImageAccesses): everything the
         // calling session used since its last boundary is published as written and read by one
         // fence, and the session's first use of an image in each frame from now on also waits for
         // the image's pending reads.
         Bool PublishPendingAccesses();
-        // EGL_ANDROID_native_fence_sync's fence command (BackendObject::ExportNativeFence): a
+        // EGL_ANDROID_native_fence_sync's fence command (ServerHooks::ExportNativeFence): a
         // sync_file of everything the current context submitted in `*fence` (-1: none, and the work
         // is waited out here), and - for a session that writes images - the boundary
         // PublishPendingAccesses makes.

@@ -111,6 +111,9 @@ namespace MobileGL::MG_Remote::Server {
         // lookups - take the format cache as a parameter instead. That is six functions across
         // two files, and it is why no thread-keyed shim is needed for MOBILEGL_BUILD_DISAGGREGATED_INPROC.
         MG_Backend::BackendObject* Backend();
+        // Its server hooks (BackendRoles.h); null with no backend. Asked at each use, never kept: a
+        // test may swap the backend under a running apply thread.
+        MG_Backend::ServerHooks* BackendHooks();
 
         // Runs one blocking control request on the apply thread and waits for it; every Server*
         // EGL forwarder funnels through here. Blocking rather than async, because each caller

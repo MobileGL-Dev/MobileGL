@@ -20,10 +20,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                     PFN_vkGetPhysicalDeviceFormatProperties getFormatProperties,
                                     const MG_External::VulkanCapabilities& capabilities, FormatCapabilityCache& cache);
 
-    class BackendObject_DirectVulkan : public BackendObject {
+    class BackendObject_DirectVulkan : public BackendObject, public ServerHooks {
     public:
         BackendObject_DirectVulkan();
         ~BackendObject_DirectVulkan() override;
+
+        ServerHooks* AsServer() override { return this; }
 
         void Initialize() override;
         void BindSessionStateToThisThread() override;

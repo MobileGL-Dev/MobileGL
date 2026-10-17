@@ -64,7 +64,7 @@ namespace MobileGL::MG_Impl::EGLImpl {
     EGLBoolean QueryDmaBufFormats(EGLDisplay dpy, EGLint max_formats, EGLint* formats, EGLint* num_formats);
     EGLBoolean QueryDmaBufModifiers(EGLDisplay dpy, EGLint format, EGLint max_modifiers, EGLuint64KHR* modifiers,
                                     EGLBoolean* external_only, EGLint* num_modifiers);
-    // Whether the active backend has shared images (MG_Backend::BackendObject::AllocateSharedImage):
+    // Whether the active backend has shared images (MG_Backend::ClientHooks::AllocateSharedImage):
     // a split client's does, a monolith's does not. Decides the dma-buf EGL extensions, the
     // Wayland linux-dmabuf presentation and GL_OES_EGL_image.
     Bool SharedImagesAvailable();

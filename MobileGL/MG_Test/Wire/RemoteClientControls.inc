@@ -131,8 +131,9 @@ struct ErrorPeer : Codec::ReplySink {
     }
 };
 
-struct CapsPeer : MG_Backend::BackendObject {
+struct CapsPeer : MG_Backend::BackendObject, MG_Backend::ServerHooks {
     MG_Backend::DynamicBackendParameters dynamic{};
+    ServerHooks* AsServer() override { return this; }
     MG_Backend::GlobalBackendFunctionsTable table{};
     RendererInfo renderer{};
     void Initialize() override {}

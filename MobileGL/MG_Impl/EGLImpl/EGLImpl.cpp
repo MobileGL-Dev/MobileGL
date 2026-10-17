@@ -1194,8 +1194,9 @@ namespace MobileGL::MG_Impl::EGLImpl {
         }
         if (auto* backendObject = MG_Backend::pActiveBackendObject.get()) {
             // The display's dma-buf EGLImages went with it; so do their shared-image references.
+            MG_Backend::ClientHooks* client = backendObject->AsClient();
             for (const Uint64 sharedImageId : state->TakeOrphanedSharedImages()) {
-                (void)backendObject->ReleaseSharedImage(sharedImageId);
+                if (client != nullptr) (void)client->ReleaseSharedImage(sharedImageId);
             }
             backendObject->ReleaseEGLResources();
         }
@@ -1305,9 +1306,9 @@ namespace MobileGL::MG_Impl::EGLImpl {
             if (StreamGateActive()) StreamBindCallingThreadLocked();
 #endif
             EGLint age = 0;
-            auto* backendObject = MG_Backend::pActiveBackendObject.get();
+            MG_Backend::ClientHooks* client = MG_Backend::ClientHooksOf(MG_Backend::pActiveBackendObject.get());
             const Bool regionFollows = DamageRegionSurfaces().count(surface) != 0;
-            if (backendObject == nullptr || !backendObject->QueryBufferAge(regionFollows, &age)) age = 0;
+            if (client == nullptr || !client->QueryBufferAge(regionFollows, &age)) age = 0;
             *value = age;
             return EGL_TRUE;
         }
@@ -1315,8 +1316,8 @@ namespace MobileGL::MG_Impl::EGLImpl {
         // backend: let it bring the surface's record up to date first, so a caller that polls the size
         // while it draws nothing still sees the change.
         if (attribute == EGL_WIDTH || attribute == EGL_HEIGHT) {
-            if (auto* backendObject = MG_Backend::pActiveBackendObject.get())
-                backendObject->RefreshSurfaceExtent(surface);
+            if (auto* client = MG_Backend::ClientHooksOf(MG_Backend::pActiveBackendObject.get()))
+                client->RefreshSurfaceExtent(surface);
         }
         return state->QuerySurface(display, surface, attribute, value) ? EGL_TRUE : EGL_FALSE;
     }
@@ -1358,7 +1359,8 @@ namespace MobileGL::MG_Impl::EGLImpl {
         if (StreamGateActive()) StreamBindCallingThreadLocked();
 #endif
         DamageRegionSurfaces().insert(surface);
-        if (auto* backendObject = MG_Backend::pActiveBackendObject.get()) (void)backendObject->SetDamageRegion(region);
+        if (auto* client = MG_Backend::ClientHooksOf(MG_Backend::pActiveBackendObject.get()))
+            (void)client->SetDamageRegion(region);
         return EGL_TRUE;
     }
 
@@ -1618,8 +1620,8 @@ namespace MobileGL::MG_Impl::EGLImpl {
                 {
                     const GLStreamScope stream;
                     MG_Pipe::MGPipeClientDrainTextureUploads();
-                    auto* backendObject = MG_Backend::pActiveBackendObject.get();
-                    if (backendObject == nullptr || !backendObject->CreateNativeFence(&fence)) {
+                    auto* client = MG_Backend::ClientHooksOf(MG_Backend::pActiveBackendObject.get());
+                    if (client == nullptr || !client->CreateNativeFence(&fence)) {
                         MGLOG_E_ONCE("eglCreateSync: the server did not answer a native fence; none is created");
                         state->SetError(EGL_BAD_ALLOC);
                         return EGL_NO_SYNC;
@@ -1690,13 +1692,14 @@ namespace MobileGL::MG_Impl::EGLImpl {
         if (known >= 0) return known != 0;
         auto* backendObject = MG_Backend::pActiveBackendObject.get();
         if (backendObject == nullptr) return false;
+        MG_Backend::ClientHooks* client = backendObject->AsClient();
         MG_Backend::SharedImageExport probe{};
-        const Bool allocated =
-            backendObject->AllocateSharedImage(16, 16, MG_State::EGLState::EGLContext::kDrmFourccNv12, &probe);
+        const Bool allocated = client != nullptr && client->AllocateSharedImage(
+                                                        16, 16, MG_State::EGLState::EGLContext::kDrmFourccNv12, &probe);
 #if !defined(_WIN32)
         if (probe.Fd >= 0) ::close(probe.Fd);
 #endif
-        if (allocated && probe.Id != 0) (void)backendObject->ReleaseSharedImage(probe.Id);
+        if (allocated && probe.Id != 0) (void)client->ReleaseSharedImage(probe.Id);
         answer.store(allocated ? 1 : 0, std::memory_order_release);
         MGLOG_I("Shared images: the server %s YUV (NV12) images", allocated ? "holds" : "has no");
         return allocated;
@@ -1751,7 +1754,8 @@ namespace MobileGL::MG_Impl::EGLImpl {
         // Uploads still waiting for a validate point go first: they are part of what is published.
         MG_Pipe::MGPipeClientDrainTextureUploads();
 #endif
-        if (backendObject != nullptr && !backendObject->FlushSharedImageAccesses()) {
+        MG_Backend::ClientHooks* client = MG_Backend::ClientHooksOf(backendObject);
+        if (backendObject != nullptr && (client == nullptr || !client->FlushSharedImageAccesses())) {
             MGLOG_E_ONCE("glFlush: this session's shared-image accesses could not be published; another session may "
                          "read them early");
         }
@@ -1778,7 +1782,9 @@ namespace MobileGL::MG_Impl::EGLImpl {
         if (!state->PrepareDmaBufImport(dpy, ctx, buffer, attrib_list, &request)) {
             return EGL_NO_IMAGE;
         }
-        auto* backendObject = GetBackendObject(state);
+        // GetBackendObject reports the missing backend; a backend that is no remote server's client
+        // imports nothing.
+        MG_Backend::ClientHooks* client = MG_Backend::ClientHooksOf(GetBackendObject(state));
         Uint64 sharedImageId = 0;
         Bool imported = false;
         if (MG_State::EGLState::EGLContext::IsDmaBufFourccYuv(request.Fourcc)) {
@@ -1804,14 +1810,13 @@ namespace MobileGL::MG_Impl::EGLImpl {
             layout.SitingY = request.SitingY;
             layout.HasModifier = request.HasModifier;
             layout.Modifier = request.Modifier;
-            imported = backendObject != nullptr &&
-                       backendObject->ImportSharedImagePlanes(request.Fd, static_cast<Uint32>(request.Width),
-                                                              static_cast<Uint32>(request.Height), request.Fourcc,
-                                                              layout, &sharedImageId);
-        } else {
             imported =
-                backendObject != nullptr &&
-                backendObject->ImportSharedImage(request.Fd, static_cast<Uint32>(request.Width),
+                client != nullptr && client->ImportSharedImagePlanes(request.Fd, static_cast<Uint32>(request.Width),
+                                                                     static_cast<Uint32>(request.Height),
+                                                                     request.Fourcc, layout, &sharedImageId);
+        } else {
+            imported = client != nullptr &&
+                       client->ImportSharedImage(request.Fd, static_cast<Uint32>(request.Width),
                                                  static_cast<Uint32>(request.Height), request.Fourcc, &sharedImageId);
         }
         if (!imported || sharedImageId == 0) {
@@ -1831,7 +1836,7 @@ namespace MobileGL::MG_Impl::EGLImpl {
                                                               .Height = request.Height,
                                                               .Fourcc = request.Fourcc,
                                                               .WireEpoch = wireEpoch});
-        if (image == EGL_NO_IMAGE) (void)backendObject->ReleaseSharedImage(sharedImageId);
+        if (image == EGL_NO_IMAGE) (void)client->ReleaseSharedImage(sharedImageId);
         return image;
     }
 
@@ -1857,8 +1862,8 @@ namespace MobileGL::MG_Impl::EGLImpl {
         // A texture the image was bound to keeps its own reference on the server (EGLImage
         // siblings outlive the image), so only this handle's goes.
         if (sharedImageId != 0) {
-            if (auto* backendObject = MG_Backend::pActiveBackendObject.get()) {
-                (void)backendObject->ReleaseSharedImage(sharedImageId);
+            if (auto* client = MG_Backend::ClientHooksOf(MG_Backend::pActiveBackendObject.get())) {
+                (void)client->ReleaseSharedImage(sharedImageId);
             }
         }
         return EGL_TRUE;

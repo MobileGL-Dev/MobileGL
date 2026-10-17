@@ -314,9 +314,9 @@ namespace {
             return Note(r, "the owner's context did not go current");
         r.initialized = 1;
 
-        auto* backend = MG_Backend::pActiveBackendObject.get();
+        auto* client = MG_Backend::ClientHooksOf(MG_Backend::pActiveBackendObject.get());
         MG_Backend::SharedImageExport image;
-        if (backend == nullptr || !backend->AllocateSharedImage(kImageWidth, kImageHeight, kXrgb8888, &image) ||
+        if (client == nullptr || !client->AllocateSharedImage(kImageWidth, kImageHeight, kXrgb8888, &image) ||
             image.Fd < 0)
             return Note(r, "no shared image was allocated");
         r.allocated = 1;
@@ -339,12 +339,12 @@ namespace {
         r.pixelAfter = ClearAndRead(1.0f, 0.0f, 0.0f);
         Uint64 again = 0;
         r.stillIdentified =
-            backend->ImportSharedImage(image.Fd, image.Width, image.Height, image.Fourcc, &again) && again == image.Id
+            client->ImportSharedImage(image.Fd, image.Width, image.Height, image.Fourcc, &again) && again == image.Id
                 ? 1
                 : 0;
-        if (again != 0) (void)backend->ReleaseSharedImage(again);
+        if (again != 0) (void)client->ReleaseSharedImage(again);
         ::close(image.Fd);
-        (void)backend->ReleaseSharedImage(image.Id);
+        (void)client->ReleaseSharedImage(image.Id);
         (void)EGL::MakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
         (void)EGL::DestroyContext(dpy, context);
         (void)EGL::DestroySurface(dpy, surface);

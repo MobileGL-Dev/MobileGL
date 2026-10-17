@@ -509,45 +509,45 @@ namespace MobileGL::MG_Remote::Server {
             return holder.Release(op.ImageId);
         case MG_Pipe::kMGPSharedImagePresent: {
             SI::ImageRef image = holder.Get(op.ImageId);
-            MG_Backend::BackendObject* backend = ServerLoopInstance().Backend();
-            if (image == nullptr || backend == nullptr) return false;
+            MG_Backend::ServerHooks* server = ServerLoopInstance().BackendHooks();
+            if (image == nullptr || server == nullptr) return false;
             MG_Backend::SharedImageView view;
             view.Id = image->Id;
             view.Width = image->Width;
             view.Height = image->Height;
             view.Fourcc = image->Fourcc;
             view.NativeBuffer = image->Native;
-            if (!backend->BlitDefaultFramebufferToSharedImage(view, DamageOfRecord(op.DamageCount, op.Damage)))
+            if (!server->BlitDefaultFramebufferToSharedImage(view, DamageOfRecord(op.DamageCount, op.Damage)))
                 return false;
             fill(*image);
             return true;
         }
         case MG_Pipe::kMGPSharedImageQueryBufferAge: {
-            MG_Backend::BackendObject* backend = ServerLoopInstance().Backend();
-            if (backend == nullptr) return false;
+            MG_Backend::ServerHooks* server = ServerLoopInstance().BackendHooks();
+            if (server == nullptr) return false;
             reply.BufferAge =
-                backend->QueryCurrentBufferAge((op.Format & MG_Pipe::kMGPBufferAgeDamageRegionFollows) != 0);
+                server->QueryCurrentBufferAge((op.Format & MG_Pipe::kMGPBufferAgeDamageRegionFollows) != 0);
             return true;
         }
         case MG_Pipe::kMGPSharedImageSetDamageRegion: {
-            MG_Backend::BackendObject* backend = ServerLoopInstance().Backend();
-            if (backend == nullptr) return false;
-            return backend->SetCurrentDamageRegion(DamageOfRecord(op.DamageCount, op.Damage));
+            MG_Backend::ServerHooks* server = ServerLoopInstance().BackendHooks();
+            if (server == nullptr) return false;
+            return server->SetCurrentDamageRegion(DamageOfRecord(op.DamageCount, op.Damage));
         }
         case MG_Pipe::kMGPSharedImageFlush: {
             // The answer is posted after the fence is published: the client commits the buffer to
             // its compositor only after this returns, so the compositor's session finds the write.
-            MG_Backend::BackendObject* backend = ServerLoopInstance().Backend();
-            if (backend == nullptr) return false;
-            return backend->PublishSharedImageAccesses();
+            MG_Backend::ServerHooks* server = ServerLoopInstance().BackendHooks();
+            if (server == nullptr) return false;
+            return server->PublishSharedImageAccesses();
         }
         case MG_Pipe::kMGPSharedImageNativeFence: {
             // A descriptor of the session's work, and an image writer's flush (MGPipeTypes.h). Like
             // an Allocate's, the descriptor goes out BEFORE the reply is posted.
-            MG_Backend::BackendObject* backend = ServerLoopInstance().Backend();
-            if (backend == nullptr) return false;
+            MG_Backend::ServerHooks* server = ServerLoopInstance().BackendHooks();
+            if (server == nullptr) return false;
             int fence = -1;
-            if (!backend->ExportNativeFence(&fence)) return false;
+            if (!server->ExportNativeFence(&fence)) return false;
 #if !defined(_WIN32)
             if (fence >= 0) {
                 m_lastNativeFence.Reset(::dup(fence));
@@ -626,8 +626,8 @@ namespace MobileGL::MG_Remote::Server {
         if (MG_Config::Transport != MG_Config::TransportMode::Monolith) {
             (void)MG_Backend::DirectGLES::MakeNativeContextCurrentForBoundToken();
             // The backend half for one that keeps a single native surface binding (Magma).
-            if (MG_Backend::BackendObject* backend = ServerLoopInstance().Backend()) {
-                backend->OnClientContextBound(bind.ClientContextToken);
+            if (MG_Backend::ServerHooks* server = ServerLoopInstance().BackendHooks()) {
+                server->OnClientContextBound(bind.ClientContextToken);
             }
         }
 #endif
@@ -767,7 +767,7 @@ namespace MobileGL::MG_Remote::Server {
     // Clear -> Clear, DrawVbo -> DrawArrays, ReadPixels -> ReadPixels, Blit -> BlitFramebuffer.
     //
     // PRESENT IS DELIBERATELY NOT ONE, although contract 7 puts it in class B: Present and
-    // SetSwapInterval sit outside GLFunctionsTable (BackendObject.h) and read no frontend state,
+    // SetSwapInterval sit outside GLFunctionsTable (BackendFunctions.h) and read no frontend state,
     // so FillPoints.def's MGP_FILL_VERB_LIST has no row for them. There is no MGPipeVerb::Present,
     // and stamping there would retire the previous verb's answers with nothing to put in their place.
     void PipeApplier::StampVerbBoundary(MG_Pipe::MGPWireOp op) {

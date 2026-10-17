@@ -27,9 +27,11 @@ namespace MobileGL::MG_Backend::DirectGLES {
     Int ClampSamplesToBackendSupport(SizeT targetIndex, TextureInternalFormat logicalFormat, GLenum imageFormat,
                                      Int samples);
 
-    class BackendObject_DirectGLES : public BackendObject {
+    class BackendObject_DirectGLES : public BackendObject, public ServerHooks {
     public:
         ~BackendObject_DirectGLES() override;
+
+        ServerHooks* AsServer() override { return this; }
 
         // The driver's verdict on this session's context (DirectGLES::LatchIfDeviceLost).
         Bool LatchIfGpuFaulted() override;

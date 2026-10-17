@@ -26,10 +26,12 @@
 
 namespace MobileGL::MG_Remote::Client {
 
-    class BackendObject_Remote final : public MG_Backend::BackendObject {
+    class BackendObject_Remote final : public MG_Backend::BackendObject, public MG_Backend::ClientHooks {
     public:
         BackendObject_Remote();
         ~BackendObject_Remote() override;
+
+        MG_Backend::ClientHooks* AsClient() override { return this; }
 
         // ---- the eight pure virtuals ------------------------------------------------------
         void Initialize() override;

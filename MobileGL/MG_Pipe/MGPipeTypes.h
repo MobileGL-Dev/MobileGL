@@ -1602,7 +1602,7 @@ namespace MobileGL::MG_Pipe {
     MGP_ASSERT_POD(MGPStreamOutputBind, 16);
 
     // set_storage_block_binding = glShaderStorageBlockBinding (P5b i1). The block is named,
-    // not indexed: BackendObject.h says why - the application's index is the frontend
+    // not indexed: BackendFunctions.h says why - the application's index is the frontend
     // interface-query enumeration's and no backend shares that index space, the NAME is the
     // one coordinate all three agree on. The name is bytes of unbounded length, so it rides
     // the ONE client -> server byte carrier, SEG_STAGE, as a kHasBlob blob: Name.Size is

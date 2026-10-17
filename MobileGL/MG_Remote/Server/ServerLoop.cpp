@@ -393,6 +393,10 @@ namespace MobileGL::MG_Remote::Server {
         return m_backend.get();
     }
 
+    MG_Backend::ServerHooks* ServerLoop::BackendHooks() {
+        return MG_Backend::ServerHooksOf(m_backend.get());
+    }
+
     MobileGLResult ServerLoop::InstallBackendForTesting(UniquePtr<MG_Backend::BackendObject> backend) {
         if (m_backend != nullptr || backend == nullptr || m_running.load(std::memory_order_acquire)) {
             return MOBILEGL_ERR_INVALID_ARGUMENT;
@@ -644,9 +648,9 @@ namespace MobileGL::MG_Remote::Server {
                 session.PeerSharedSegments() ? "shared segments" : "stream", policy.rule);
 
         // A served session shares its process with other sessions: its backend's own native state
-        // is bound to this thread before anything can apply a record (BackendObject.h). The inproc
+        // is bound to this thread before anything can apply a record (BackendRoles.h). The inproc
         // one-process shape has no runtime and keeps the process-wide state.
-        if (m_runtime != nullptr && m_backend != nullptr) m_backend->BindSessionStateToThisThread();
+        if (m_runtime != nullptr && BackendHooks() != nullptr) BackendHooks()->BindSessionStateToThisThread();
 
         // The decoder is built HERE, on this thread, because PipeWireDecoder is "not thread
         // safe: one decoder on the apply thread, by construction" and its constructor installs
@@ -722,9 +726,9 @@ namespace MobileGL::MG_Remote::Server {
             // The head is loaded BEFORE the poll, so every record below it was in the ring when the
             // poll ran and the drain need not poll for it again (DrainRing's `polledHead`).
             std::uint64_t polledHead = 0;
-            if (m_backend != nullptr && !SessionLatched()) {
+            if (BackendHooks() != nullptr && !SessionLatched()) {
                 polledHead = signals.CmdHead != nullptr ? signals.CmdHead->load(std::memory_order_acquire) : 0;
-                (void)m_backend->LatchIfGpuFaulted();
+                (void)BackendHooks()->LatchIfGpuFaulted();
             }
             if (eventRingHasRoom()) DrainRing(polledHead);
             if (stopOrForfeit()) break;
@@ -1141,7 +1145,8 @@ namespace MobileGL::MG_Remote::Server {
                             record.kind == static_cast<std::uint16_t>(MG_Pipe::MGPWireOp::Present)) {
                             if (unseen) polledHead = signals.CmdHead->load(std::memory_order_acquire);
                             recordsSinceFaultCheck = 0;
-                            if (m_backend->LatchIfGpuFaulted()) return false;
+                            MG_Backend::ServerHooks* server = BackendHooks();
+                            if (server != nullptr && server->LatchIfGpuFaulted()) return false;
                         }
                     }
                     if (SessionLatched()) return false;
@@ -2185,7 +2190,7 @@ namespace MobileGL::MG_Remote::Server {
     }
 
     void ServerLoop::PublishServerWindowResize() {
-        if (!m_holdsWindowLease || m_backend == nullptr) return;
+        if (!m_holdsWindowLease || BackendHooks() == nullptr) return;
         // THE DISPLAY'S EXTENT, READ NOW: the latest report wins over any a burst of them left queued.
         void* window = nullptr;
         Uint32 width = 0;
@@ -2197,7 +2202,7 @@ namespace MobileGL::MG_Remote::Server {
         const Uint32 previousWidth = m_publishedWindowWidth;
         const Uint32 previousHeight = m_publishedWindowHeight;
         NoteServerWindowExtent(window, width, height);
-        const Bool published = m_backend->ServerWindowResized(window, width, height);
+        const Bool published = BackendHooks()->ServerWindowResized(window, width, height);
         if (published) m_serverWindowResizes.fetch_add(1, std::memory_order_acq_rel);
         MGLOG_I("MG_Remote server: server window %p resized %ux%u -> %ux%u; %s", window, previousWidth, previousHeight,
                 width, height,
@@ -2228,7 +2233,7 @@ namespace MobileGL::MG_Remote::Server {
         // window surfaces, Magma the swapchain and VkSurfaceKHR - keeps its contexts, objects and
         // device, and the session waits for the display's next window with every record still applied.
         void* const window = m_leasedWindow;
-        if (m_backend != nullptr && m_backend->SuspendServerWindow(window)) {
+        if (BackendHooks() != nullptr && BackendHooks()->SuspendServerWindow(window)) {
             // N-3: the native binding moved off the window's surface.
             ForgetCurrentTuple();
             m_serverWindowSuspended.store(true, std::memory_order_release);
@@ -2277,7 +2282,7 @@ namespace MobileGL::MG_Remote::Server {
     Bool ServerLoop::ResumeServerWindowOnLease(const ServerWindowLease& lease) {
         // Before the backend: its republished extent is the server window's (MGPipeServerOwnedWindow).
         NoteServerWindowExtent(lease.window, lease.width, lease.height);
-        if (m_backend == nullptr || !m_backend->ResumeServerWindow(lease.window, lease.width, lease.height)) {
+        if (BackendHooks() == nullptr || !BackendHooks()->ResumeServerWindow(lease.window, lease.width, lease.height)) {
             LatchServerWindowLost("the suspended on-screen session's surfaces could not be rebuilt on the new server "
                                   "window");
             return false;

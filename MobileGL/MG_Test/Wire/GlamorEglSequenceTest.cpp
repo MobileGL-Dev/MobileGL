@@ -163,9 +163,9 @@ namespace {
 
         // A window pixmap: a shared image (what gbm_bo_create gives glamor), bound through
         // EGL_LINUX_DMA_BUF_EXT the way xwl_glamor_gbm_create_pixmap_for_bo does.
-        auto* backend = MG_Backend::pActiveBackendObject.get();
+        auto* client = MG_Backend::ClientHooksOf(MG_Backend::pActiveBackendObject.get());
         MG_Backend::SharedImageExport image;
-        if (backend != nullptr && backend->AllocateSharedImage(64, 32, kXrgb8888, &image) && image.Fd >= 0) {
+        if (client != nullptr && client->AllocateSharedImage(64, 32, kXrgb8888, &image) && image.Fd >= 0) {
             const EGLAttrib attribs[] = {EGL_WIDTH,
                                          64,
                                          EGL_HEIGHT,
@@ -183,16 +183,16 @@ namespace {
             r.imageCreated = eglImage != EGL_NO_IMAGE ? 1 : 0;
             if (eglImage != EGL_NO_IMAGE) (void)EGL::DestroyImage(dpy, eglImage);
             ::close(image.Fd);
-            (void)backend->ReleaseSharedImage(image.Id);
+            (void)client->ReleaseSharedImage(image.Id);
         }
 
         // glamor's block handler: glFlush, which in an X server is where its renders become visible
         // to the compositor. The verb must be answered (an unknown verb is refused).
         using ClearFn = void (*)(unsigned);
         if (const auto clear = reinterpret_cast<ClearFn>(EGL::GetProcAddress("glClear"))) clear(0x4000);
-        r.flushAnswered = backend != nullptr && backend->FlushSharedImageAccesses() ? 1 : 0;
+        r.flushAnswered = client != nullptr && client->FlushSharedImageAccesses() ? 1 : 0;
         // Nothing reached the stream since: no round trip, still a success.
-        r.flushAgainAnswered = backend != nullptr && backend->FlushSharedImageAccesses() ? 1 : 0;
+        r.flushAgainAnswered = client != nullptr && client->FlushSharedImageAccesses() ? 1 : 0;
 
         (void)EGL::MakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
         (void)EGL::DestroyContext(dpy, ctx);
@@ -272,7 +272,7 @@ namespace {
 
         // A GBM scanout buffer (a shared image), bound as a texture and rendered into through a
         // framebuffer - and then no glFlush, as Chrome does when it has native fences.
-        auto* backend = MG_Backend::pActiveBackendObject.get();
+        auto* client = MG_Backend::ClientHooksOf(MG_Backend::pActiveBackendObject.get());
         MG_Backend::SharedImageExport image;
         EGLImage eglImage = EGL_NO_IMAGE;
         using GenFn = void (*)(int, unsigned*);
@@ -291,7 +291,7 @@ namespace {
         const auto checkStatus = reinterpret_cast<StatusFn>(EGL::GetProcAddress("glCheckFramebufferStatus"));
         const auto clearColor = reinterpret_cast<ClearColorFn>(EGL::GetProcAddress("glClearColor"));
         const auto clear = reinterpret_cast<ClearFn>(EGL::GetProcAddress("glClear"));
-        if (backend != nullptr && backend->AllocateSharedImage(64, 32, kArgb8888, &image) && image.Fd >= 0) {
+        if (client != nullptr && client->AllocateSharedImage(64, 32, kArgb8888, &image) && image.Fd >= 0) {
             const EGLAttrib attribs[] = {EGL_WIDTH,
                                          64,
                                          EGL_HEIGHT,
@@ -354,7 +354,7 @@ namespace {
 
         if (eglImage != EGL_NO_IMAGE) (void)EGL::DestroyImage(dpy, eglImage);
         if (image.Fd >= 0) ::close(image.Fd);
-        if (backend != nullptr && image.Id != 0) (void)backend->ReleaseSharedImage(image.Id);
+        if (client != nullptr && image.Id != 0) (void)client->ReleaseSharedImage(image.Id);
         (void)EGL::MakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
         (void)EGL::DestroyContext(dpy, ctx);
         (void)EGL::Terminate(dpy);
@@ -399,12 +399,12 @@ namespace {
         // The GL extension list is where a split client asks the server whether it holds YUV images.
         r.externalImage = HasGlExtension("GL_OES_EGL_image_external") ? 1 : 0;
         // Asked anyway (a C-ABI or GLX caller does not look at the extensions first): refused.
-        auto* backend = MG_Backend::pActiveBackendObject.get();
+        auto* client = MG_Backend::ClientHooksOf(MG_Backend::pActiveBackendObject.get());
         MG_Backend::SharedImageExport image;
-        if (backend != nullptr && backend->AllocateSharedImage(64, 32, kXrgb8888, &image)) {
+        if (client != nullptr && client->AllocateSharedImage(64, 32, kXrgb8888, &image)) {
             r.allocated = 1;
             if (image.Fd >= 0) ::close(image.Fd);
-            (void)backend->ReleaseSharedImage(image.Id);
+            (void)client->ReleaseSharedImage(image.Id);
         }
         (void)EGL::MakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
         (void)EGL::DestroyContext(dpy, ctx);

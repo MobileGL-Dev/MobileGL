@@ -249,9 +249,9 @@ namespace MobileGL::MG_Impl::GLXImpl {
         class BackendImageSource final : public X11Present::ImageSource {
         public:
             Bool Allocate(Uint32 width, Uint32 height, Uint32 fourcc, X11Present::Image* out) override {
-                auto* backend = MG_Backend::pActiveBackendObject.get();
+                auto* client = MG_Backend::ClientHooksOf(MG_Backend::pActiveBackendObject.get());
                 MG_Backend::SharedImageExport image;
-                if (backend == nullptr || !backend->AllocateSharedImage(width, height, fourcc, &image)) return false;
+                if (client == nullptr || !client->AllocateSharedImage(width, height, fourcc, &image)) return false;
                 out->Id = image.Id;
                 out->Fd = image.Fd;
                 out->Width = image.Width;
@@ -263,11 +263,12 @@ namespace MobileGL::MG_Impl::GLXImpl {
                 return true;
             }
             void Release(Uint64 id) override {
-                if (auto* backend = MG_Backend::pActiveBackendObject.get()) (void)backend->ReleaseSharedImage(id);
+                if (auto* client = MG_Backend::ClientHooksOf(MG_Backend::pActiveBackendObject.get()))
+                    (void)client->ReleaseSharedImage(id);
             }
             Bool CopyFrame(Uint64 id, const MG_Util::Damage::Region& region) override {
-                auto* backend = MG_Backend::pActiveBackendObject.get();
-                return backend != nullptr && backend->PresentToSharedImage(id, region);
+                auto* client = MG_Backend::ClientHooksOf(MG_Backend::pActiveBackendObject.get());
+                return client != nullptr && client->PresentToSharedImage(id, region);
             }
         };
 

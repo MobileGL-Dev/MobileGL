@@ -6219,9 +6219,8 @@ namespace MobileGL::MG_Impl::GLImpl {
             if (unpackBuffer != 0) BindBuffer(GL_PIXEL_UNPACK_BUFFER, static_cast<GLuint>(unpackBuffer));
         }
 
-        auto* backendObject = MG_Backend::pActiveBackendObject.get();
-        if (backendObject == nullptr ||
-            !backendObject->AttachSharedImageToTexture(textureObject->GetLifetimeId(), sharedImageId)) {
+        auto* client = MG_Backend::ClientHooksOf(MG_Backend::pActiveBackendObject.get());
+        if (client == nullptr || !client->AttachSharedImageToTexture(textureObject->GetLifetimeId(), sharedImageId)) {
             MGLOG_E_ONCE("glEGLImageTargetTexture2DOES: shared image %llu could not be bound to texture %u",
                          static_cast<unsigned long long>(sharedImageId), textureObject->GetExternalIndex());
             MG_State::pGLContext->RecordError(

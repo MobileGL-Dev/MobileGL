@@ -470,8 +470,8 @@ namespace MobileGL::MG_Impl::EGLImpl::Wayland {
                 api.marshalFlags(buffer.buffer, kBufferDestroy, nullptr, api.getVersion(buffer.buffer),
                                  kMarshalFlagDestroy);
             if (buffer.imageId != 0) {
-                if (auto* backendObject = MG_Backend::pActiveBackendObject.get()) {
-                    (void)backendObject->ReleaseSharedImage(buffer.imageId);
+                if (auto* client = MG_Backend::ClientHooksOf(MG_Backend::pActiveBackendObject.get())) {
+                    (void)client->ReleaseSharedImage(buffer.imageId);
                 }
             }
             buffer = DmabufBuffer{};
@@ -487,15 +487,16 @@ namespace MobileGL::MG_Impl::EGLImpl::Wayland {
             Release(buffer);
             auto* backendObject = MG_Backend::pActiveBackendObject.get();
             if (protocol == nullptr || dmabuf == nullptr || backendObject == nullptr) return false;
+            MG_Backend::ClientHooks* client = backendObject->AsClient();
             MG_Backend::SharedImageExport image;
-            if (!backendObject->AllocateSharedImage(static_cast<Uint32>(width), static_cast<Uint32>(height), fourcc,
-                                                    &image)) {
+            if (client == nullptr ||
+                !client->AllocateSharedImage(static_cast<Uint32>(width), static_cast<Uint32>(height), fourcc, &image)) {
                 MGLOG_E("Wayland: the server allocated no %dx%d shared image", width, height);
                 return false;
             }
             const auto dropImage = [&] {
                 if (image.Fd >= 0) close(image.Fd);
-                (void)backendObject->ReleaseSharedImage(image.Id);
+                (void)client->ReleaseSharedImage(image.Id);
             };
             if (image.Fd < 0 || image.Width != static_cast<Uint32>(width) ||
                 image.Height != static_cast<Uint32>(height)) {
@@ -871,7 +872,8 @@ namespace MobileGL::MG_Impl::EGLImpl::Wayland {
                 const SizeT index = static_cast<SizeT>(buffer - impl.dmabufBuffers);
                 const MG_Util::Damage::Region copy =
                     impl.dmabufDamage.TakeForWrite(index, damage, impl.width, impl.height);
-                if (backendObject->PresentToSharedImage(buffer->imageId, copy)) {
+                MG_Backend::ClientHooks* client = backendObject->AsClient();
+                if (client != nullptr && client->PresentToSharedImage(buffer->imageId, copy)) {
                     impl.Commit(buffer->buffer, damage);
                     buffer->busy = true;
                     return PresentResult::kPresented;

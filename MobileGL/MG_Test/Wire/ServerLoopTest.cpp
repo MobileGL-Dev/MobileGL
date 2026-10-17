@@ -3634,7 +3634,7 @@ TEST(ServerLoopLatchTest, ALostServerWindowIsReleasedMidBatchWhileTheClientStrea
 }
 
 // =====================================================================================
-// A SESSION WHOSE OWN GPU WORK HUNG THE GPU APPLIES NOTHING MORE (BackendObject::LatchIfGpuFaulted)
+// A SESSION WHOSE OWN GPU WORK HUNG THE GPU APPLIES NOTHING MORE (ServerHooks::LatchIfGpuFaulted)
 // =====================================================================================
 
 namespace {
@@ -3642,9 +3642,10 @@ namespace {
     // watch's thread (Magma) - while the session's next frame is already queued. The double counts
     // the frames that reach it and, once `faulted` is set, latches its session from the apply thread
     // as both real backends do.
-    class GpuFaultBackendDouble final : public MG_Backend::BackendObject {
+    class GpuFaultBackendDouble final : public MG_Backend::BackendObject, public MG_Backend::ServerHooks {
     public:
         GpuFaultBackendDouble() { m_functions.Present = &Present; }
+        ServerHooks* AsServer() override { return this; }
         Bool LatchIfGpuFaulted() override {
             asked.fetch_add(1, std::memory_order_acq_rel);
             if (!faulted.load(std::memory_order_acquire)) return false;
@@ -3758,10 +3759,10 @@ namespace {
     // window - presents from then on reach no window - and by taking the new one. Its Present counts
     // the frames and the ones that came while no window was held. Statics, because the loop owns
     // (and destroys) the object and each case runs in its own death-test child.
-    class WindowBackendDouble final : public MG_Backend::BackendObject {
+    class WindowBackendDouble final : public MG_Backend::BackendObject, public MG_Backend::ServerHooks {
     public:
         explicit WindowBackendDouble(Bool canSuspend) : m_canSuspend(canSuspend) { m_functions.Present = &Present; }
-
+        ServerHooks* AsServer() override { return this; }
         void Initialize() override {}
         Bool InitCapabilities() override { return true; }
         Bool InitWindowSurface() override { return true; }

@@ -15,7 +15,7 @@
 // gen_pipe.py's block regexes end at a blank line: keep the empty line after each macro.
 // clang-format off
 
-// X(Verb, Class) - one row per function-pointer member of MG_Backend::GLFunctionsTable (BackendObject.h),
+// X(Verb, Class) - one row per function-pointer member of MG_Backend::GLFunctionsTable (BackendFunctions.h),
 // in declaration order. gen_pipe.py parses that struct and refuses a row set that is not exactly its member set.
 #define MGP_FILL_VERB_LIST(X)                                          \
     X(DrawArrays,                                     kDraw)           \

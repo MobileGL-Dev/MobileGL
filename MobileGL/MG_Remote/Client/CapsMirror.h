@@ -58,7 +58,7 @@ namespace MobileGL::MG_Remote::Client {
         // F1 (P7 wave 2): IT NEVER ANSWERS FROM A PLACEHOLDER ANY MORE. See RequireFirstSnapshot.
         Bool ServerConsumes(Uint64 subsystemBit) const;
 
-        // GLFunctionsTable::PrefersCpuXfbPrimitiveAccounting (BackendObject.h) does NOT
+        // GLFunctionsTable::PrefersCpuXfbPrimitiveAccounting (BackendFunctions.h) does NOT
         // ride in MGPCaps::Dynamic - it is a member of the function table, which is precisely
         // the thing a split client never receives. Its only non-test client reader is
         // GL_Query.cpp:221, and under split it must be answered from kCapCpuXfbPrimitiveAccounting.
