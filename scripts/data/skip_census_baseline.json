@@ -11274,6 +11274,7 @@
    "SplitBufferSet.TheLastBlockIsTheRemainderAndNotAWholeBlock",
    "SplitBufferSet.ThePushCutsTheMappedSpanIntoBlocksAndMovesPmap",
    "SplitBufferSet.UnderSplitTheWritebackClearsThePendingFlagAndNotTheRequest",
+   "SplitLaneHarness.TransportClaimRule",
    "SplitLogPaths.ResultAccountingControls",
    "SplitReadWriteImageUniformsTest.ADeclarationQualifiedBothWaysIsLeftCompletelyAlone",
    "SplitReadWriteImageUniformsTest.ANameThatIsAPrefixOfAnotherIsNotClobbered",

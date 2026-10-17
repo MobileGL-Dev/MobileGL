@@ -158,11 +158,21 @@ namespace MGITest {
                 // entries had no runtime evidence of anything, and their green meant only "the
                 // same GL workload passed").
                 const SplitRuntimeState state = PeekSplitRuntime();
+                // The transport the registration claims must be the one this process resolved,
+                // served where it says: a thread here for inproc, a process of its own for spawn
+                // and tcp. A lane that ran some other transport fails here, by name.
+                const std::string claimMismatch = SplitLane::TransportClaimMismatch(
+                    SplitLane::MarkerValue("MOBILEGL_TRANSPORT"), SplitLane::MarkerValue("MOBILEGL_IPC_CONTROL"),
+                    state.transportName, state.peerServerPid, state.selfPid);
+                if (!claimMismatch.empty()) {
+                    FAIL() << claimMismatch;
+                }
                 m_splitAssertionsArmed = true;
                 m_emitSeqAtSetUp = state.emitSeq;
                 RecordProperty("split_transport", state.transportName);
                 RecordProperty("split_implemented_verbs", static_cast<int>(state.implementedVerbs));
                 RecordProperty("split_emit_seq_at_setup", static_cast<int>(state.emitSeq));
+                RecordProperty("split_peer_server_pid", std::to_string(state.peerServerPid));
 #if defined(__linux__)
                 if (std::getenv("MGITEST_TCP_LANE")) {
                     // Connect must never silently launch a local server. The

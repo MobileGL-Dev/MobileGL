@@ -25,6 +25,11 @@
 #include <chrono>
 #include <atomic>
 #include <thread>
+#if defined(_WIN32)
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
 #define MGITEST_SPLIT_RUNTIME_PEEK_LIVE 1
 #endif
 // P13 W5: THE RECORD-ARM HALF OF THE PEEK, which needs no transport. A library built with the
@@ -141,6 +146,9 @@ namespace MGITest {
         case TransportMode::InProcess:
             state.transportName = "inproc";
             break;
+        case TransportMode::Spawn:
+            state.transportName = "spawn";
+            break;
         default:
             state.transportName = "non-monolith";
             break;
@@ -154,11 +162,17 @@ namespace MGITest {
         MobileGL::MG_Remote::Client::ClientSession* session = MobileGL::MG_Remote::Client::ClientSession::Active();
         state.sessionActive = session != nullptr;
         state.implementedVerbs = MobileGL::MG_Remote::Client::ImplementedVerbCount();
+#if defined(_WIN32)
+        state.selfPid = static_cast<unsigned long long>(::_getpid());
+#else
+        state.selfPid = static_cast<unsigned long long>(::getpid());
+#endif
         if (session != nullptr) {
             // Encoder() returns the member; EmitSeq() returns m_emitSeq. Neither is a stub, and
             // neither emits anything - this is a read.
             const MobileGL::MG_Remote::Wire::PipeWireEncoder& encoder = session->Encoder();
             state.emitSeq = encoder.EmitSeq();
+            state.peerServerPid = session->PeerServerPid();
             state.runAheadArmed = session->RunAheadArmed();
             // P7 wave 2 package C, OQ-10: read through the SAME accessor the frontend's own
             // MGPipeResourceOpsHaveSubDataResident reads (MG_Impl/Pipe/PipeFill.cpp), so a

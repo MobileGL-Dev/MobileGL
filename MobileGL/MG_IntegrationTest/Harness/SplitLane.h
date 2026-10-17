@@ -84,6 +84,36 @@ namespace MGITest::SplitLane {
         return SplitRuntimeSkipReason();
     }
 
+    // The transport a registration claims, against what this process resolved and which process
+    // serves it; empty when they agree. claimedTransport and claimedControl are the entry's own
+    // MOBILEGL_TRANSPORT and MOBILEGL_IPC_CONTROL; the rest comes from PeekSplitRuntime(). In
+    // process, the server role is a thread here and states this process's pid; spawn and tcp
+    // need a server process of their own. A registration that claims no transport is not judged,
+    // and an unknown own pid (0) leaves only the comparison with it unjudged.
+    inline std::string TransportClaimMismatch(const std::string& claimedTransport, const std::string& claimedControl,
+                                              const std::string& resolvedName, unsigned long long peerPid,
+                                              unsigned long long selfPid) {
+        const bool tcp = claimedControl.rfind("tcp://", 0) == 0;
+        const bool selfKnown = selfPid != 0;
+        const std::string pids =
+            " (server pid " + std::to_string(peerPid) + ", this process " + std::to_string(selfPid) + ")";
+        if (claimedTransport == "inproc" && !tcp) {
+            if (resolvedName != "inproc" || peerPid == 0 || (selfKnown && peerPid != selfPid)) {
+                return "this registration claims MOBILEGL_TRANSPORT=inproc, but the process resolved '" + resolvedName +
+                       "' with its server role in another process or none" + pids;
+            }
+            return {};
+        }
+        if (claimedTransport == "spawn" || tcp) {
+            const std::string claim = tcp ? "tcp (MOBILEGL_IPC_CONTROL=" + claimedControl + ")" : "spawn";
+            if (resolvedName != "spawn" || peerPid == 0 || (selfKnown && peerPid == selfPid)) {
+                return "this registration claims " + claim + ", but the process resolved '" + resolvedName +
+                       "' without a server process of its own" + pids;
+            }
+        }
+        return {};
+    }
+
     // "adopted", "emulated", or empty when the lane declared nothing.
     inline std::string DeclaredPersistentMapArm() {
         return MarkerValue("MGITEST_PERSISTENT_MAP_ARM");

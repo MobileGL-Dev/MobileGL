@@ -74,6 +74,11 @@ namespace MGITest {
         unsigned int totalVerbSlots = 0;
         // The encoder's highest produced record ordinal, or 0 when there is no session.
         unsigned long long emitSeq = 0;
+        // ClientSession::PeerServerPid(), the pid the server stated in its Welcome (0 without a
+        // session), and this process's own (0 when unknown), so a lane can tell a server thread
+        // here from a server process elsewhere.
+        unsigned long long peerServerPid = 0;
+        unsigned long long selfPid = 0;
         // Real session state/watermarks. Only the client thread reads this snapshot;
         // the scheduling observer below reads producerParked separately.
         bool runAheadArmed = false;

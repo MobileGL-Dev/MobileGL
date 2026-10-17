@@ -3697,4 +3697,11 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
     add_test(NAME SplitLogPaths.ResultAccountingControls
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/Harness/test_split_log_paths.py)
     set_tests_properties(SplitLogPaths.ResultAccountingControls PROPERTIES LABELS "unit")
+
+    # The split fixture's transport-claim rule on canned inputs, so the rule itself can go red
+    # off a GPU: no GL, no library, just the pure function the fixture calls.
+    add_executable(SplitLaneHarnessTest Harness/SplitLaneHarnessTest.cpp)
+    target_link_libraries(SplitLaneHarnessTest PRIVATE GTest::gtest_main)
+    add_test(NAME SplitLaneHarness.TransportClaimRule COMMAND SplitLaneHarnessTest)
+    set_tests_properties(SplitLaneHarness.TransportClaimRule PROPERTIES LABELS "unit")
 endif()
