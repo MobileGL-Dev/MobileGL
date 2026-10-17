@@ -321,6 +321,11 @@ jobs:
     runs-on: ubuntu-latest
     needs: [build-linux]
 
+    # Every ctest entry is its own short-lived process, and none compiles enough to repay
+    # Initialize()'s glslang table prewarm. The retrace legs keep it: they replay real apps.
+    env:
+      MOBILEGL_DISABLE_SHADER_PREWARM: "1"
+
     steps:
       - name: Checkout repo
         uses: actions/checkout@v6
@@ -393,6 +398,8 @@ jobs:
       matrix:
         include: ${{ fromJSON((github.ref_name == 'feat/disaggregated' || github.ref_name == 'codex/fix-github-ci' || github.ref_name == 'cleanup') && '[{"lane":"monolith-control","transport":"monolith"},{"lane":"inproc-acceptance","transport":"inproc"}]' || '[{"lane":"monolith-control","transport":"monolith"}]') }}
     env:
+      # Short-lived test processes skip the glslang prewarm, as in the test job.
+      MOBILEGL_DISABLE_SHADER_PREWARM: "1"
       MOBILEGL_TRANSPORT: ${{ matrix.transport }}
       MOBILEGL_IPC_ROLE_SPLIT_STATE: "1"
       MOBILEGL_IPC_STRICT_ERRORS: "1"
@@ -739,6 +746,10 @@ jobs:
     timeout-minutes: 180
     needs: [build-linux-verify]
 
+    # Short-lived test processes skip the glslang prewarm, as in the test job.
+    env:
+      MOBILEGL_DISABLE_SHADER_PREWARM: "1"
+
     steps:
       - name: Checkout repo
         uses: actions/checkout@v6
@@ -986,6 +997,11 @@ jobs:
     runs-on: ubuntu-latest
     needs: [build-linux-verify-split]
     timeout-minutes: 180
+
+    # Short-lived test processes skip the glslang prewarm, as in the test job.
+    env:
+      MOBILEGL_DISABLE_SHADER_PREWARM: "1"
+
     steps:
       - name: Checkout repo
         uses: actions/checkout@v6
@@ -1451,6 +1467,10 @@ jobs:
     timeout-minutes: 120
     needs: [build-linux-split]
 
+    # Short-lived test processes skip the glslang prewarm, as in the test job.
+    env:
+      MOBILEGL_DISABLE_SHADER_PREWARM: "1"
+
     steps:
       - name: Checkout repo
         uses: actions/checkout@v6
@@ -1686,6 +1706,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     needs: [build-linux-split]
+
+    # Short-lived test processes skip the glslang prewarm, as in the test job.
+    env:
+      MOBILEGL_DISABLE_SHADER_PREWARM: "1"
 
     steps:
       - name: Checkout repo
