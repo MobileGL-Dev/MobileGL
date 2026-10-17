@@ -510,9 +510,9 @@ namespace MobileGL {
                 // caught: past it the words reach SPIRV-Cross, which is not a validator.
                 static Result<void> ValidateSpirvModule(const Vector<Uint32>& spirv);
 
-                // Parses one trivial shader in each configuration the production path can
-                // reach, on the calling thread, so the built-in symbol tables those
-                // configurations need are already cached before any worker asks for one.
+                // Parses trivial #version 460 and #version 330 core shaders on the calling
+                // thread, so those two built-in symbol tables are already cached before any
+                // worker asks for one. Every other declared version builds its own on first use.
                 //
                 // Why it matters: glslang builds a built-in TSymbolTable per distinct
                 // (version, spvVersion, profile, source) combination, and does it under a
@@ -533,6 +533,8 @@ namespace MobileGL {
                 // it, the second eglInitialize of a process comes back up unwarmed and with
                 // no way left to warm it.
                 static void ResetPrewarmLatch();
+                // Whether PrewarmBuiltins has run since the last ResetPrewarmLatch.
+                static Bool BuiltinsPrewarmed();
 
                 // Validation is an explicit immutable option of each compiler operation. The
                 // program-link task snapshots MOBILEGL_ENABLE_SPIRV_VALIDATION before it can run

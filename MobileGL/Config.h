@@ -323,6 +323,11 @@ namespace MobileGL::MG_Config {
         // MOBILEGL_ASYNC_SHADER_COMPILE_THREADS: shader-compile worker count. 0 (unset) means
         // auto, which is min(4, big cores); an explicit value is honoured as given.
         Uint32 AsyncShaderCompileThreads = 0;
+        // MOBILEGL_DISABLE_SHADER_PREWARM: skip the glslang built-in table prewarm in
+        // Initialize(), which moves ~20-100 ms of table building from the first shader compiles
+        // into eglInitialize. For short-lived processes that would never repay it, such as the
+        // CI test runners; applications keep the default.
+        Bool DisableShaderPrewarm = false;
         // MOBILEGL_ASYNC_OPTIMISTIC_SHADER_STATUS: while a compile job is still in flight,
         // glGetShaderiv(GL_COMPILE_STATUS) answers GL_TRUE and the shader info log reads
         // empty, WITHOUT joining the job (latched per compile - see

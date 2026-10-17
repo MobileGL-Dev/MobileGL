@@ -456,16 +456,20 @@ namespace MobileGL {
                 g_builtinsPrewarmed = false;
             }
 
+            Bool ShaderCompiler::BuiltinsPrewarmed() {
+                return g_builtinsPrewarmed;
+            }
+
             void ShaderCompiler::PrewarmBuiltins() {
                 if (g_builtinsPrewarmed) return;
                 g_builtinsPrewarmed = true;
 
-                // One vertex and one fragment shader is enough: the built-in table is cached
-                // per (version, spvVersion, profile, source), not per stage language, and
-                // both configurations CompileShader can reach - the declared-460 path and
-                // the retargeted-legacy path - resolve to the same combination here because
-                // ParseShaderSource always passes 460/ECoreProfile as the default. Parsing
-                // both anyway costs microseconds and keeps this honest if that ever changes.
+                // glslang caches one table per (version, spvVersion, profile, source), shared
+                // by every stage, and picks it from each shader's own #version: the 460 /
+                // ECoreProfile that ParseShaderSource passes is only the default for a source
+                // without one. So these parses build two tables, 460 core and 330 core, which
+                // the legacy #version 110-150 shaders normalise to; a shader declaring any
+                // other version builds its own on first use.
                 static constexpr const char* kPrewarmVertexSource =
                     "#version 460\nvoid main() { gl_Position = vec4(0.0); }\n";
                 static constexpr const char* kPrewarmFragmentSource =

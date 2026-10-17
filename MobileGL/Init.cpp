@@ -205,7 +205,8 @@ namespace MobileGL {
         // three throwaway parses buy nothing - they just add to every eglInitialize. Read the
         // flag here rather than inside PrewarmBuiltins so ShaderCompiler keeps no dependency
         // on the async subsystem (ProgramUtilTest compiles that file without it).
-        if (MG_Util::Async::AsyncShaderCompileEnabled()) {
+        // MOBILEGL_DISABLE_SHADER_PREWARM skips it for processes too short-lived to repay it.
+        if (MG_Util::Async::AsyncShaderCompileEnabled() && !MG_Config::Features.DisableShaderPrewarm) {
             MG_Util::ShaderTranspiler::ShaderCompiler::PrewarmBuiltins();
         }
         MGLOG_D("glslang initialized");

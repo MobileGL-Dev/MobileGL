@@ -183,6 +183,23 @@ target_link_libraries(
         ${LINK_LIBRARIES}
 )
 
+# Its own binary for the same reason: every case Initialize()s and Destroy()s the library.
+add_executable(
+        ShaderPrewarmTest
+        ShaderPrewarmTest.cpp
+)
+
+target_include_directories(ShaderPrewarmTest PRIVATE
+        ${MGL_ROOT}/include
+        ${MGL_ROOT}/MobileGL
+)
+
+target_link_libraries(
+        ShaderPrewarmTest PRIVATE
+        MobileGLTestMain
+        ${LINK_LIBRARIES}
+)
+
 add_executable(
         XfbBlockVaryingTest
         XfbBlockVaryingTest.cpp
@@ -281,6 +298,7 @@ gtest_discover_tests(ParallelShaderCompileTest DISCOVERY_TIMEOUT 60 PROPERTIES L
 # in-flight compile, and the two-phase replay links 48 programs across both flag states.
 gtest_discover_tests(OptimisticStatusTest DISCOVERY_TIMEOUT 60 PROPERTIES LABELS unit TIMEOUT 300)
 gtest_discover_tests(AsyncTeardownTest DISCOVERY_TIMEOUT 60 PROPERTIES LABELS unit TIMEOUT 300)
+gtest_discover_tests(ShaderPrewarmTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
 # Same reason again: several cases leave A links outstanding while B compiles and links.
 gtest_discover_tests(XfbFrontendOrderInvarianceTest DISCOVERY_TIMEOUT 60 PROPERTIES LABELS unit TIMEOUT 300)
 
