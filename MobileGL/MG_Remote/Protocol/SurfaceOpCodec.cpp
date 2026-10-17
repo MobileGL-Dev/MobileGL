@@ -82,7 +82,7 @@ namespace MobileGL::MG_Remote {
         static_assert(static_cast<Uint8>(SurfaceRefusalCode::ServerOwnedOnSetWindowHandle) ==
                       static_cast<Uint8>(::MobileGL::Wire::SurfaceRefusal::ServerOwnedOnSetWindowHandle));
         // The frame-local ServerOwned tag names no WindowBackend, by construction (D2: no
-        // BackendObject.h enumerator for it - that header is in the pull build, gate G1).
+        // EGLSurfaceRegistry.h enumerator for it - that header is in the pull build, gate G1).
         static_assert(Server::kServerOwnedWindowBackend >=
                           static_cast<Int>(MG_Backend::WindowBackend::WindowBackendCount),
                       "kServerOwnedWindowBackend collides with a real WindowBackend");

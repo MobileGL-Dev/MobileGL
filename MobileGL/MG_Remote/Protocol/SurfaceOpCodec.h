@@ -27,7 +27,7 @@
 #include <MG_Remote/Server/SurfaceControlFrame.h>
 
 namespace MobileGL::MG_Backend {
-    enum class WindowBackend; // BackendObject.h; opaque-declared so this header stays light
+    enum class WindowBackend; // EGLSurfaceRegistry.h; opaque-declared so this header stays light
 } // namespace MobileGL::MG_Backend
 
 namespace MobileGL::MG_Remote {

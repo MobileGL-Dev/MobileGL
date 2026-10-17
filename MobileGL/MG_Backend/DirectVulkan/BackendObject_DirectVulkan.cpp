@@ -362,26 +362,28 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     BackendObject_DirectVulkan::BackendObject_DirectVulkan() : m_rendererInfo{GetRendererIdentity()} {}
 
     Bool BackendObject_DirectVulkan::InitWindowSurface() {
+        const EGLSurface activating = EGLRegistry().ActivatingSurface();
         // A suspended surface activates its placeholder - never the window, which is gone.
-        const auto suspended = m_suspendedWindowSurfaces.find(m_activatingSurface);
+        const auto suspended = m_suspendedWindowSurfaces.find(activating);
         if (suspended != m_suspendedWindowSurfaces.end()) {
             if (UsesSurfaceTargets() && pVulkanRenderer) {
-                return ActivateSuspendedPlaceholder(m_activatingSurface, suspended->second);
+                return ActivateSuspendedPlaceholder(activating, suspended->second);
             }
             return InitPbufferSurface(static_cast<EGLint>(suspended->second.Width),
                                       static_cast<EGLint>(suspended->second.Height));
         }
-        if (!m_windowHandle.Handle) {
+        const WindowHandle window = EGLRegistry().CurrentWindowHandle();
+        if (!window.Handle) {
             MGLOG_E("Cannot initialize DirectVulkan window surface: native window handle is null");
             return false;
         }
 
-        auto nativeWindow = reinterpret_cast<NativeWindowType>(m_windowHandle.Handle);
+        auto nativeWindow = reinterpret_cast<NativeWindowType>(window.Handle);
 
         VulkanRendererConfig config;
         config.SwapInterval = GetRequestedSwapInterval();
         if (UsesSurfaceTargets() && pVulkanRenderer) {
-            return pVulkanRenderer->ActivateSurfaceTarget(SurfaceTargetKey(m_activatingSurface), nativeWindow, config);
+            return pVulkanRenderer->ActivateSurfaceTarget(SurfaceTargetKey(activating), nativeWindow, config);
         }
         // Any renderer instance this assignment replaces is destroyed here;
         // fence/timer-query handles stamped with the old generation go stale.
@@ -389,17 +391,17 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         pVulkanRenderer = MakeUnique<MG_Backend::DirectVulkan::VulkanRenderer>(nativeWindow, config);
         MOBILEGL_ASSERT(pVulkanRenderer != nullptr, "InitWindowSurface: VulkanRenderer creation failed");
         pVulkanRenderer->Initialize();
-        pVulkanRenderer->SetActiveSurfaceTargetKey(SurfaceTargetKey(m_activatingSurface));
+        pVulkanRenderer->SetActiveSurfaceTargetKey(SurfaceTargetKey(activating));
         return true;
     }
 
     Bool BackendObject_DirectVulkan::InitPbufferSurface(EGLint width, EGLint height) {
+        const EGLSurface activating = EGLRegistry().ActivatingSurface();
         VulkanRendererConfig config;
         config.SurfaceWidth = static_cast<Uint32>(std::max<EGLint>(width, 1));
         config.SurfaceHeight = static_cast<Uint32>(std::max<EGLint>(height, 1));
         if (UsesSurfaceTargets() && pVulkanRenderer) {
-            return pVulkanRenderer->ActivateSurfaceTarget(SurfaceTargetKey(m_activatingSurface), NativeWindowType{},
-                                                          config);
+            return pVulkanRenderer->ActivateSurfaceTarget(SurfaceTargetKey(activating), NativeWindowType{}, config);
         }
         // Any renderer instance this assignment replaces is destroyed here;
         // fence/timer-query handles stamped with the old generation go stale.
@@ -407,7 +409,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         pVulkanRenderer = MakeUnique<MG_Backend::DirectVulkan::VulkanRenderer>(NativeWindowType{}, config);
         MOBILEGL_ASSERT(pVulkanRenderer != nullptr, "InitPbufferSurface: VulkanRenderer creation failed");
         pVulkanRenderer->Initialize();
-        pVulkanRenderer->SetActiveSurfaceTargetKey(SurfaceTargetKey(m_activatingSurface));
+        pVulkanRenderer->SetActiveSurfaceTargetKey(SurfaceTargetKey(activating));
         return true;
     }
 
@@ -470,7 +472,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     Bool BackendObject_DirectVulkan::CreateEGLWindowSurface(EGLSurface surface, const WindowHandle& handle) {
-        const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
+        const auto lock = EGLRegistry().Lock();
         if (!m_initialized) {
             MGLOG_E("DirectVulkan backend not initialized");
             return false;
@@ -481,11 +483,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return false;
         }
 
-        return RegisterEGLWindowSurface(surface, handle);
+        return EGLRegistry().RegisterWindowSurface(surface, handle);
     }
 
     Bool BackendObject_DirectVulkan::ResizeEGLWindowSurface(EGLSurface surface, Uint32 width, Uint32 height) {
-        const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
+        const auto lock = EGLRegistry().Lock();
         if (!m_initialized) {
             MGLOG_E("DirectVulkan backend not initialized");
             return false;
@@ -493,13 +495,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (!BackendObject::ResizeEGLWindowSurface(surface, width, height)) {
             return false;
         }
-        const EGLSurfaceState* state = GetRegisteredEGLSurface(surface);
-        if (UsesSurfaceTargets() && pVulkanRenderer && state != nullptr && state->Kind == SurfaceKind::Pbuffer) {
+        const auto state = EGLRegistry().Find(surface);
+        if (UsesSurfaceTargets() && pVulkanRenderer && state &&
+            state->Kind == EGLSurfaceRegistry::SurfaceKind::Pbuffer) {
             // A pbuffer-backed window (a Wayland window presented through wl_shm) whose target is an
             // image reader of FIXED size: a swapchain rebuild cannot follow the resize, so the target
             // is rebuilt at the new size - as DirectGLES replaces its native pbuffer. A parked one is
             // rebuilt when it is next activated, from the size registered above.
-            const Bool active = m_eglSurfaceInitialized && m_eglSurface == surface;
+            const Bool active = EGLRegistry().HasActiveSurface() && EGLRegistry().ActiveSurface() == surface;
             pVulkanRenderer->DestroySurfaceTarget(SurfaceTargetKey(surface));
             if (active) {
                 VulkanRendererConfig config;
@@ -509,54 +512,54 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             }
             return true;
         }
-        if (pVulkanRenderer && m_eglSurface == surface) {
+        if (pVulkanRenderer && EGLRegistry().ActiveSurface() == surface) {
             pVulkanRenderer->RequestSwapchainResize(width, height);
         }
         return true;
     }
 
     Bool BackendObject_DirectVulkan::CreateEGLPbufferSurface(EGLSurface surface, EGLint width, EGLint height) {
-        const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
+        const auto lock = EGLRegistry().Lock();
         if (!m_initialized) {
             MGLOG_E("DirectVulkan backend not initialized");
             return false;
         }
-        return RegisterEGLPbufferSurface(surface, width, height);
+        return EGLRegistry().RegisterPbufferSurface(surface, width, height);
     }
 
     Bool BackendObject_DirectVulkan::MakeEGLCurrent(EGLDisplay dpy, EGLSurface draw, EGLSurface read, EGLContext ctx) {
-        const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
+        const auto lock = EGLRegistry().Lock();
         const Bool ok = BackendObject::MakeEGLCurrent(dpy, draw, read, ctx);
         if (ok && UsesSurfaceTargets() && ctx != EGL_NO_CONTEXT && draw != EGL_NO_SURFACE) {
-            m_contextBindings[ctx] =
-                EGLCurrentState{.Display = dpy, .DrawSurface = draw, .ReadSurface = read, .Context = ctx};
+            m_contextBindings[ctx] = EGLSurfaceRegistry::CurrentState{
+                .Display = dpy, .DrawSurface = draw, .ReadSurface = read, .Context = ctx};
         }
         return ok;
     }
 
     void BackendObject_DirectVulkan::OnClientContextBound(Uint64 token) {
-        const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
+        const auto lock = EGLRegistry().Lock();
         if (!UsesSurfaceTargets() || token == 0) return;
         // Each of a multi-window client's contexts draws to the surface IT was made current with
         // (Qt renders every window on its own thread and context); the ring interleaves them with
         // a bind_context between, and no make-current. Follow the context back to its surface.
         const auto found = m_contextBindings.find(reinterpret_cast<EGLContext>(token));
         if (found == m_contextBindings.end()) return;
-        const EGLCurrentState binding = found->second;
-        if (!GetRegisteredEGLSurface(binding.DrawSurface)) {
+        const EGLSurfaceRegistry::CurrentState binding = found->second;
+        if (!EGLRegistry().IsRegistered(binding.DrawSurface)) {
             m_contextBindings.erase(found);
             return;
         }
-        const auto current = m_eglCurrentThreads.find(std::this_thread::get_id());
-        if (current != m_eglCurrentThreads.end() && current->second.Context == binding.Context &&
-            current->second.DrawSurface == binding.DrawSurface && m_eglSurface == binding.DrawSurface) {
+        const auto current = EGLRegistry().CurrentOn(std::this_thread::get_id());
+        if (current && current->Context == binding.Context && current->DrawSurface == binding.DrawSurface &&
+            EGLRegistry().ActiveSurface() == binding.DrawSurface) {
             return;
         }
         (void)BackendObject::MakeEGLCurrent(binding.Display, binding.DrawSurface, binding.ReadSurface, binding.Context);
     }
 
     Bool BackendObject_DirectVulkan::SwapEGLBuffers(EGLDisplay dpy, EGLSurface draw) {
-        const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
+        const auto lock = EGLRegistry().Lock();
         if (!pVulkanRenderer) {
             MGLOG_E("DirectVulkan renderer is not initialized");
             return false;
@@ -568,7 +571,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                                                          const MG_Util::Damage::Region& region) {
 #if MOBILEGL_BUILD_DISAGGREGATED
         // Same lock as SwapEGLBuffers: the copy reads the current surface target's image.
-        const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
+        const auto lock = EGLRegistry().Lock();
         if (!pVulkanRenderer) {
             MGLOG_E("DirectVulkan: shared image %llu: the renderer is not initialized",
                     static_cast<unsigned long long>(image.Id));
@@ -583,7 +586,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     Bool BackendObject_DirectVulkan::PublishSharedImageAccesses() {
 #if MOBILEGL_BUILD_DISAGGREGATED
-        const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
+        const auto lock = EGLRegistry().Lock();
         return pVulkanRenderer ? pVulkanRenderer->PublishSharedImageAccesses() : true;
 #else
         return true;
@@ -593,7 +596,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     Bool BackendObject_DirectVulkan::ExportNativeFence(int* fence) {
         *fence = -1;
 #if MOBILEGL_BUILD_DISAGGREGATED
-        const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
+        const auto lock = EGLRegistry().Lock();
         return pVulkanRenderer ? pVulkanRenderer->ExportNativeFence(fence) : true;
 #else
         return true;
@@ -604,23 +607,23 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     // damage region the client may declare is not needed here.
     Int32 BackendObject_DirectVulkan::QueryCurrentBufferAge(Bool damageRegionFollows) {
         (void)damageRegionFollows;
-        const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
+        const auto lock = EGLRegistry().Lock();
         return pVulkanRenderer ? pVulkanRenderer->CurrentDrawBufferAge() : 0;
     }
 
     void BackendObject_DirectVulkan::SetEGLSwapInterval(Int interval) {
         // Same lock as SwapEGLBuffers: the renderer reads the request in Present.
-        const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
+        const auto lock = EGLRegistry().Lock();
         BackendObject::SetEGLSwapInterval(interval);
     }
 
     void BackendObject_DirectVulkan::ReleaseEGLSurface(EGLSurface surface) {
-        const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
+        const auto lock = EGLRegistry().Lock();
         BackendObject::ReleaseEGLSurface(surface);
     }
 
     void BackendObject_DirectVulkan::ReleaseEGLResources() {
-        const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
+        const auto lock = EGLRegistry().Lock();
         // Outstanding fence/timer-query handles now refer to a dead renderer;
         // treat them as signaled/available with zero results from here on.
         BumpRendererGeneration();
@@ -644,20 +647,19 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     Bool BackendObject_DirectVulkan::SuspendServerWindow(void* window) {
-        const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
+        const auto lock = EGLRegistry().Lock();
         // The monolith's one renderer IS its window; only surface targets can be swapped under it.
         if (window == nullptr || !UsesSurfaceTargets()) return false;
         Vector<EGLSurface> onWindow;
-        for (const auto& [client, state] : m_eglSurfaces) {
-            if (state.Kind != SurfaceKind::Window || state.Window.Handle != window) continue;
+        for (const EGLSurface client : EGLRegistry().WindowSurfacesOn(window)) {
             if (m_suspendedWindowSurfaces.find(client) != m_suspendedWindowSurfaces.end()) continue;
             onWindow.push_back(client);
         }
         for (const EGLSurface client : onWindow) {
-            const auto state = m_eglSurfaces.find(client);
+            const auto state = EGLRegistry().Find(client);
             SuspendedWindowSurface extent;
-            extent.Width = static_cast<Uint32>(std::max<EGLint>(state->second.Width, 1));
-            extent.Height = static_cast<Uint32>(std::max<EGLint>(state->second.Height, 1));
+            extent.Width = static_cast<Uint32>(std::max<EGLint>(state->Width, 1));
+            extent.Height = static_cast<Uint32>(std::max<EGLint>(state->Height, 1));
             if (pVulkanRenderer) {
                 const Uint64 key = SurfaceTargetKey(client);
                 const VkExtent2D built = pVulkanRenderer->SurfaceTargetExtent(key);
@@ -684,20 +686,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     Bool BackendObject_DirectVulkan::ResumeServerWindow(void* window, Uint32 width, Uint32 height) {
-        const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
+        const auto lock = EGLRegistry().Lock();
         if (window == nullptr || !UsesSurfaceTargets()) return false;
         UnorderedMap<EGLSurface, SuspendedWindowSurface> suspended;
         suspended.swap(m_suspendedWindowSurfaces);
         for (const auto& [client, extent] : suspended) {
             (void)extent;
-            const auto state = m_eglSurfaces.find(client);
-            if (state == m_eglSurfaces.end()) continue; // released while suspended
-            state->second.Window.Handle = window;
-            state->second.Window.Width = width;
-            state->second.Window.Height = height;
-            state->second.Width = static_cast<EGLint>(std::max<Uint32>(width, 1));
-            state->second.Height = static_cast<EGLint>(std::max<Uint32>(height, 1));
-            if (m_eglSurface == client) m_windowHandle = state->second.Window;
+            if (!EGLRegistry().SetWindowSurfaceExtent(client, width, height, window))
+                continue; // released while suspended
             if (!pVulkanRenderer) continue;
             const Uint64 key = SurfaceTargetKey(client);
             const Bool active = pVulkanRenderer->IsActiveSurfaceTarget(key);
@@ -720,17 +716,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     }
 
     Bool BackendObject_DirectVulkan::ServerWindowResized(void* window, Uint32 width, Uint32 height) {
-        const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
+        const auto lock = EGLRegistry().Lock();
         if (window == nullptr || !UsesSurfaceTargets()) return false;
         Bool followed = false;
-        for (auto& [client, state] : m_eglSurfaces) {
-            if (state.Kind != SurfaceKind::Window || state.Window.Handle != window) continue;
+        for (const EGLSurface client : EGLRegistry().WindowSurfacesOn(window)) {
             if (m_suspendedWindowSurfaces.find(client) != m_suspendedWindowSurfaces.end()) continue;
-            state.Window.Width = width;
-            state.Window.Height = height;
-            state.Width = static_cast<EGLint>(std::max<Uint32>(width, 1));
-            state.Height = static_cast<EGLint>(std::max<Uint32>(height, 1));
-            if (m_eglSurface == client) m_windowHandle = state.Window;
+            (void)EGLRegistry().SetWindowSurfaceExtent(client, width, height);
             // Magma's extent is its swapchain's, published when it is built: the active target follows
             // the window now (or at the half-recorded frame's present); a parked one at its next present.
             if (pVulkanRenderer && pVulkanRenderer->IsActiveSurfaceTarget(SurfaceTargetKey(client))) {

@@ -91,7 +91,7 @@ namespace MobileGL::MG_Remote::Client {
 
     Bool BackendObject_Remote::InitCapabilities() {
         // Reached from the base class's MakeEGLCurrent, lazily, once per surface lifetime
-        // (BackendObject.cpp:341-347). By this point MakeEGLCurrent below has already run the
+        // (EGLSurfaceRegistry::MakeCurrent). By this point MakeEGLCurrent below has already run the
         // SERVER's MakeEGLCurrent on the apply thread, whose own base class ran the server
         // backend's InitCapabilities and whose ServerSession re-published the snapshot - so
         // the client's job here is to pick that snapshot up. R-12: re-arrival IS the
@@ -129,7 +129,7 @@ namespace MobileGL::MG_Remote::Client {
 
     Bool BackendObject_Remote::InitWindowSurface() {
         // The real surface work happened on the apply thread inside the server backend's own
-        // ActivateEGLSurface; this is the client's half of the base state machine and has
+        // activation; this is the client's half of the base state machine and has
         // nothing of its own to do.
         return true;
     }
@@ -220,8 +220,8 @@ namespace MobileGL::MG_Remote::Client {
         // A surface with no server side on this session (its session was lost) takes the size
         // into its registration only; it is re-created at that size when it is next used.
         {
-            const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
-            if (GetRegisteredEGLSurface(surface) != nullptr && m_homedSurfaces.count(surface) == 0) {
+            const auto lock = EGLRegistry().Lock();
+            if (EGLRegistry().IsRegistered(surface) && m_homedSurfaces.count(surface) == 0) {
                 // A server-owned one asks the fresh session's window for this size, as a resize would.
                 if (ClientSession::IsServerOwnedWindowSurface(surface))
                     m_serverOwnedRequests[surface] = {width, height};
@@ -283,7 +283,7 @@ namespace MobileGL::MG_Remote::Client {
 
     Bool BackendObject_Remote::CreateEGLSurfacelessStandIn(EGLSurface surface, EGLint width, EGLint height) {
         if (!CreatePbufferOnServer(surface, width, height, /*standIn=*/true)) return false;
-        const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
+        const auto lock = EGLRegistry().Lock();
         m_standInSurfaces.insert(surface);
         return true;
     }
@@ -313,8 +313,8 @@ namespace MobileGL::MG_Remote::Client {
 
     namespace {
         // THE CLIENT'S OWN RECORD OF A SERVER-OWNED WINDOW NEEDS A NON-NULL HANDLE, and a headless
-        // client has none: BackendObject::RegisterEGLWindowSurface refuses a null handle, and that
-        // base class is in the pull build (G1). This address stands in for it. It is never
+        // client has none: EGLSurfaceRegistry::RegisterWindowSurface refuses a null handle, and that
+        // class is in the pull build (G1). This address stands in for it. It is never
         // dereferenced - the client's InitWindowSurface is a no-op - and never crosses the wire
         // (the ServerOwned frame carries token 0).
         char g_serverOwnedWindowPlaceholder = 0;
@@ -414,7 +414,7 @@ namespace MobileGL::MG_Remote::Client {
         // R-12 ARM (a) ON EVERY SUCCESSFUL MAKE-CURRENT (codex 12). ServerMakeEGLCurrent above
         // republishes the caps snapshot on every call (ServerLoop.cpp:613-628), but the base
         // class only runs InitCapabilities - the one place that pumps and refreshes - on the
-        // FIRST make-current per surface (BackendObject.cpp:341-347). A repeated make-current
+        // FIRST make-current per surface (EGLSurfaceRegistry::MakeCurrent). A repeated make-current
         // onto an already-initialised surface therefore left the client mirror one generation
         // behind while unpumped snapshots accumulated, so a cap getter or a shader compile before
         // the next Present read the prior mirror. Adopting here closes that: "a second snapshot
@@ -467,7 +467,7 @@ namespace MobileGL::MG_Remote::Client {
         // Only a surface the current session's server has: one a lost session had is gone with it.
         Bool homed = false;
         {
-            const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
+            const auto lock = EGLRegistry().Lock();
             homed = m_homedSurfaces.erase(surface) != 0;
             m_standInSurfaces.erase(surface);
             m_serverOwnedRequests.erase(surface);
@@ -482,7 +482,7 @@ namespace MobileGL::MG_Remote::Client {
         // the context until the apply thread has run it. A lost session's server holds nothing.
         if (!ClientSession::SessionLatchedLost()) Server::ServerReleaseEGLResources();
         {
-            const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
+            const auto lock = EGLRegistry().Lock();
             m_homedSurfaces.clear();
             m_standInSurfaces.clear();
         }
@@ -490,18 +490,18 @@ namespace MobileGL::MG_Remote::Client {
     }
 
     void BackendObject_Remote::OnSessionReplaced() {
-        const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
-        ResetEGLRuntimeState();
+        const auto lock = EGLRegistry().Lock();
+        EGLRegistry().ResetRuntimeState();
         m_homedSurfaces.clear();
         for (const auto& [id, references] : m_sessionSharedImages)
             m_lostSessionSharedImages.insert(id);
         m_sessionSharedImages.clear();
         // The display the application initialized is initialized on the new server too: its
         // surfaces and contexts are created against it from here on.
-        if (m_eglDisplayInitialized) {
+        if (EGLRegistry().DisplayInitialized()) {
             EGLint major = 0;
             EGLint minor = 0;
-            if (!Server::ServerInitializeEGLDisplay(m_eglDisplay, &major, &minor)) {
+            if (!Server::ServerInitializeEGLDisplay(EGLRegistry().Display(), &major, &minor)) {
                 MGLOG_E("MG_Remote client: the fresh session's server did not initialize the display; "
                         "surfaces and contexts on it will fail");
             }
@@ -512,15 +512,15 @@ namespace MobileGL::MG_Remote::Client {
 
     Bool BackendObject_Remote::EnsureSurfaceHomed(EGLSurface surface) {
         if (surface == EGL_NO_SURFACE) return true;
-        const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
+        const auto lock = EGLRegistry().Lock();
         if (m_homedSurfaces.count(surface) != 0) return true;
-        const EGLSurfaceState* registered = GetRegisteredEGLSurface(surface);
+        const auto registered = EGLRegistry().Find(surface);
         // Unknown to this object: the base class's own checks answer for it.
-        if (registered == nullptr) return true;
-        const EGLSurfaceState state = *registered;
+        if (!registered) return true;
+        const MG_Backend::EGLSurfaceRegistry::SurfaceState state = *registered;
         Bool recreated = false;
         const char* kind = "pbuffer";
-        if (state.Kind == SurfaceKind::Pbuffer) {
+        if (state.Kind == MG_Backend::EGLSurfaceRegistry::SurfaceKind::Pbuffer) {
             const Uint32 flags = m_standInSurfaces.count(surface) != 0 ? Server::kPbufferFlagSurfacelessStandIn : 0u;
             recreated = Server::ServerCreateEGLPbufferSurface(surface, state.Width, state.Height, nullptr, flags);
         } else if (ClientSession::IsServerOwnedWindowSurface(surface)) {
@@ -591,7 +591,7 @@ namespace MobileGL::MG_Remote::Client {
         out->Plane1Stride = reply.Plane1Stride;
         out->Plane1Offset = reply.Plane1Offset;
         {
-            const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
+            const auto lock = EGLRegistry().Lock();
             ++m_sessionSharedImages[reply.ImageId];
         }
         return true;
@@ -610,7 +610,7 @@ namespace MobileGL::MG_Remote::Client {
         if (!session->EmitSharedImage(op, fd, &reply, nullptr)) return false;
         if (outId != nullptr) *outId = reply.ImageId;
         {
-            const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
+            const auto lock = EGLRegistry().Lock();
             ++m_sessionSharedImages[reply.ImageId];
         }
         return true;
@@ -645,7 +645,7 @@ namespace MobileGL::MG_Remote::Client {
         if (!session->EmitSharedImage(op, fd, &reply, nullptr)) return false;
         if (outId != nullptr) *outId = reply.ImageId;
         {
-            const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
+            const auto lock = EGLRegistry().Lock();
             ++m_sessionSharedImages[reply.ImageId];
         }
         return true;
@@ -656,7 +656,7 @@ namespace MobileGL::MG_Remote::Client {
         if (session == nullptr || !session->Started()) return false;
         // An image of a lost session is gone with its server; the fresh one never issued its id.
         {
-            const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
+            const auto lock = EGLRegistry().Lock();
             const auto held = m_sessionSharedImages.find(id);
             // Nothing to release on the new server, and nothing that failed: the reference died with
             // its session.

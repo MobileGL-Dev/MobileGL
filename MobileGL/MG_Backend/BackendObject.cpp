@@ -7,278 +7,42 @@
 // End of Source File Header
 
 #include "BackendObject.h"
-#include <algorithm>
 
 namespace MobileGL::MG_Backend {
-    namespace {
-        Bool IsReleaseCurrentRequest(EGLDisplay dpy, EGLSurface draw, EGLSurface read, EGLContext ctx) {
-            (void)dpy;
-            return draw == EGL_NO_SURFACE && read == EGL_NO_SURFACE && ctx == EGL_NO_CONTEXT;
-        }
-
-        std::thread::id CurrentThreadKey() {
-            return std::this_thread::get_id();
-        }
-    } // namespace
-
     Bool BackendObject::InitializeEGLDisplay(EGLDisplay dpy, EGLint* major, EGLint* minor) {
-        const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
-        if (dpy == EGL_NO_DISPLAY) {
-            MGLOG_E("InitializeEGLDisplay failed: invalid EGLDisplay");
-            return false;
-        }
-
-        // A DISPLAY IS A CONNECTION, NOT A RESOURCE THIS BACKEND OWNS, and refusing the second one
-        // refused a caller for a reason that is not there: the surface and context tables are keyed
-        // by the display each was created on, every operation carries its own display handle, and
-        // this field has no reader anywhere - it was the whole of the rule.
-        //
-        // What the rule cost was a compositor.  One asks for the display it will draw into AFTER
-        // probing another, so the second eglInitialize is the one that matters, and a refusal there
-        // is reported one layer up as "no usable DRM render device" - the probe having succeeded
-        // and the real display having failed, with nothing in between that says which was refused.
-        m_eglDisplay = dpy;
-        m_eglDisplayInitialized = true;
-        if (major) {
-            *major = 1;
-        }
-        if (minor) {
-            *minor = 5;
-        }
-        return true;
+        return m_egl.InitializeDisplay(dpy, major, minor);
     }
 
     Bool BackendObject::CreateEGLWindowSurface(EGLSurface surface, const WindowHandle& handle) {
-        const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
-        return RegisterEGLWindowSurface(surface, handle) && ActivateEGLSurface(surface);
+        return m_egl.CreateWindowSurface(surface, handle);
     }
 
     Bool BackendObject::ResizeEGLWindowSurface(EGLSurface surface, Uint32 width, Uint32 height) {
-        const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
-        auto surfaceIt = m_eglSurfaces.find(surface);
-        if (surfaceIt == m_eglSurfaces.end() || surfaceIt->second.Kind == SurfaceKind::None) {
-            MGLOG_E("ResizeEGLWindowSurface failed: no window surface is initialized");
-            return false;
-        }
-        // A pbuffer-backed window (a Wayland window presented through wl_shm) resizes too.
-        surfaceIt->second.Window.Width = width;
-        surfaceIt->second.Window.Height = height;
-        surfaceIt->second.Width = static_cast<EGLint>(std::max<Uint32>(width, 1));
-        surfaceIt->second.Height = static_cast<EGLint>(std::max<Uint32>(height, 1));
-        if (m_eglSurface == surface) {
-            m_windowHandle.Width = width;
-            m_windowHandle.Height = height;
-        }
-        return true;
+        return m_egl.ResizeSurface(surface, width, height);
     }
 
     Bool BackendObject::CreateEGLPbufferSurface(EGLSurface surface, EGLint width, EGLint height) {
-        const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
-        return RegisterEGLPbufferSurface(surface, width, height) && ActivateEGLSurface(surface);
-    }
-
-    Bool BackendObject::RegisterEGLWindowSurface(EGLSurface surface, const WindowHandle& handle) {
-        const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
-        if (!m_eglDisplayInitialized) {
-            MGLOG_E("RegisterEGLWindowSurface failed: EGL display is not initialized");
-            return false;
-        }
-        if (surface == EGL_NO_SURFACE) {
-            MGLOG_E("RegisterEGLWindowSurface failed: invalid EGLSurface");
-            return false;
-        }
-        if (handle.Backend == WindowBackend::Unknown || !handle.Handle) {
-            MGLOG_E("RegisterEGLWindowSurface failed: invalid native window handle");
-            return false;
-        }
-
-        auto& state = m_eglSurfaces[surface];
-        state = EGLSurfaceState{
-            .Kind = SurfaceKind::Window,
-            .Window = handle,
-            .Width = static_cast<EGLint>(std::max<Uint32>(handle.Width, 1)),
-            .Height = static_cast<EGLint>(std::max<Uint32>(handle.Height, 1)),
-        };
-        return true;
-    }
-
-    Bool BackendObject::RegisterEGLPbufferSurface(EGLSurface surface, EGLint width, EGLint height) {
-        const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
-        if (!m_eglDisplayInitialized) {
-            MGLOG_E("RegisterEGLPbufferSurface failed: EGL display is not initialized");
-            return false;
-        }
-        if (surface == EGL_NO_SURFACE) {
-            MGLOG_E("RegisterEGLPbufferSurface failed: invalid EGLSurface");
-            return false;
-        }
-        if (width <= 0 || height <= 0) {
-            MGLOG_E("RegisterEGLPbufferSurface failed: invalid size %dx%d", width, height);
-            return false;
-        }
-
-        m_eglSurfaces[surface] = EGLSurfaceState{
-            .Kind = SurfaceKind::Pbuffer,
-            .Width = width,
-            .Height = height,
-        };
-        return true;
-    }
-
-    const BackendObject::EGLSurfaceState* BackendObject::GetRegisteredEGLSurface(EGLSurface surface) const {
-        const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
-        auto surfaceIt = m_eglSurfaces.find(surface);
-        return surfaceIt == m_eglSurfaces.end() ? nullptr : &surfaceIt->second;
-    }
-
-    Bool BackendObject::ActivateEGLSurface(EGLSurface surface) {
-        const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
-        const auto* surfaceState = GetRegisteredEGLSurface(surface);
-        if (!surfaceState) {
-            MGLOG_E("ActivateEGLSurface failed: EGL surface is not registered");
-            return false;
-        }
-        if (m_eglSurfaceInitialized && m_eglSurface == surface) {
-            return true;
-        }
-
-        m_activatingSurface = surface;
-        if (surfaceState->Kind == SurfaceKind::Window) {
-            SetWindowHandle(surfaceState->Window);
-            if (!InitWindowSurface()) {
-                MGLOG_E("ActivateEGLSurface failed: backend InitWindowSurface failed");
-                return false;
-            }
-        } else if (surfaceState->Kind == SurfaceKind::Pbuffer) {
-            if (!InitPbufferSurface(surfaceState->Width, surfaceState->Height)) {
-                MGLOG_E("ActivateEGLSurface failed: backend InitPbufferSurface failed");
-                return false;
-            }
-        } else {
-            MGLOG_E("ActivateEGLSurface failed: unsupported surface kind");
-            return false;
-        }
-
-        m_eglSurface = surface;
-        m_eglSurfaceInitialized = true;
-        m_eglSurfaceKind = surfaceState->Kind;
-        // NOT m_eglCurrentThreads.clear(): another thread's current context and surface are its
-        // own (a multi-window client renders each window on its own thread), and wiping them made
-        // that thread's next eglSwapBuffers fail with "no current context attached".
-        auto activatedIt = m_eglSurfaces.find(surface);
-        if (activatedIt != m_eglSurfaces.end() && !activatedIt->second.Activated) {
-            activatedIt->second.Activated = true;
-            m_backendCapabilitiesInitialized = false;
-        }
-        return true;
+        return m_egl.CreatePbufferSurface(surface, width, height);
     }
 
     Bool BackendObject::MakeEGLCurrent(EGLDisplay dpy, EGLSurface draw, EGLSurface read, EGLContext ctx) {
-        const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
-        const auto threadKey = CurrentThreadKey();
-        if (IsReleaseCurrentRequest(dpy, draw, read, ctx)) {
-            ReleaseEGLCurrentThread(threadKey);
-            return true;
-        }
-
-        if (!m_eglDisplayInitialized || m_eglDisplay != dpy) {
-            MGLOG_E("MakeEGLCurrent failed: EGL display mismatch or not initialized");
-            return false;
-        }
-        if (!m_eglSurfaceInitialized) {
-            if (draw != read || !ActivateEGLSurface(draw)) {
-                MGLOG_E("MakeEGLCurrent failed: EGL surface is not initialized");
-                return false;
-            }
-        }
-        if (!GetRegisteredEGLSurface(draw) || !GetRegisteredEGLSurface(read)) {
-            MGLOG_E("MakeEGLCurrent failed: EGL surface is not registered");
-            return false;
-        }
-        if (draw != read) {
-            MGLOG_E("MakeEGLCurrent failed: separate draw/read surfaces are not supported");
-            return false;
-        }
-        if (draw != m_eglSurface && !ActivateEGLSurface(draw)) {
-            MGLOG_E("MakeEGLCurrent failed: EGL surface is not backed by this backend");
-            return false;
-        }
-        if (draw == EGL_NO_SURFACE || read == EGL_NO_SURFACE || ctx == EGL_NO_CONTEXT) {
-            MGLOG_E("MakeEGLCurrent failed: draw/read/context is invalid");
-            return false;
-        }
-
-        if (!m_backendCapabilitiesInitialized) {
-            if (!InitCapabilities()) {
-                MGLOG_E("MakeEGLCurrent failed: InitCapabilities failed");
-                return false;
-            }
-            m_backendCapabilitiesInitialized = true;
-        }
-
-        ReleaseEGLCurrentThread(threadKey);
-        m_eglCurrentThreads[threadKey] = EGLCurrentState{
-            .Display = dpy,
-            .DrawSurface = draw,
-            .ReadSurface = read,
-            .Context = ctx,
-        };
-        return true;
-    }
-
-    void BackendObject::ResetEGLRuntimeState() {
-        const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
-        m_eglSurfaceInitialized = false;
-        m_backendCapabilitiesInitialized = false;
-        m_eglSurfaceKind = SurfaceKind::None;
-        m_eglSurface = EGL_NO_SURFACE;
-        m_windowHandle = {};
-        m_eglCurrentThreads.clear();
-    }
-
-    void BackendObject::ForgetActiveEGLSurface() {
-        const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
-        m_eglSurfaceInitialized = false;
-        m_eglSurfaceKind = SurfaceKind::None;
-        m_eglSurface = EGL_NO_SURFACE;
-        m_windowHandle = {};
+        return m_egl.MakeCurrent(dpy, draw, read, ctx);
     }
 
     Bool BackendObject::SwapEGLBuffers(EGLDisplay dpy, EGLSurface draw) {
-        const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
-        if (!m_eglDisplayInitialized || m_eglDisplay != dpy) {
-            MGLOG_E("SwapEGLBuffers failed: EGL display mismatch or not initialized");
-            return false;
-        }
-        const auto currentIt = m_eglCurrentThreads.find(CurrentThreadKey());
-        if (currentIt == m_eglCurrentThreads.end()) {
-            MGLOG_E("SwapEGLBuffers failed: no current context attached");
-            return false;
-        }
-        if (currentIt->second.Display != dpy || currentIt->second.DrawSurface != draw ||
-            currentIt->second.Context == EGL_NO_CONTEXT) {
-            MGLOG_E("SwapEGLBuffers failed: draw surface is not current on this thread");
-            return false;
-        }
-        if (draw == EGL_NO_SURFACE || !GetRegisteredEGLSurface(draw)) {
-            MGLOG_E("SwapEGLBuffers failed: invalid draw surface");
-            return false;
-        }
-        // The calling thread's surface, which another thread's make-current may have moved the
-        // backend off: bring it back before presenting it.
-        if ((!m_eglSurfaceInitialized || draw != m_eglSurface) && !ActivateEGLSurface(draw)) {
-            MGLOG_E("SwapEGLBuffers failed: the draw surface could not be re-activated");
-            return false;
-        }
+        return m_egl.Swap(dpy, draw);
+    }
 
-        const auto& backendFunctions = GetBackendFunctions();
-        if (!backendFunctions.Present) {
-            MGLOG_E("SwapEGLBuffers failed: backend Present function is null");
-            return false;
-        }
+    void BackendObject::ReleaseEGLSurface(EGLSurface surface) {
+        m_egl.ReleaseSurface(surface);
+    }
 
-        backendFunctions.Present();
-        return true;
+    void BackendObject::ReleaseEGLResources() {
+        m_egl.ReleaseAll();
+    }
+
+    void BackendObject::SetWindowHandle(const WindowHandle& handle) {
+        m_egl.SetWindowHandle(handle);
     }
 
     void BackendObject::SetEGLSwapInterval(Int interval) {
@@ -286,78 +50,6 @@ namespace MobileGL::MG_Backend {
         if (backendFunctions.SetSwapInterval) {
             backendFunctions.SetSwapInterval(interval);
         }
-    }
-
-    Bool BackendObject::IsEGLSurfaceCurrent(EGLSurface surface) const {
-        if (surface == EGL_NO_SURFACE) {
-            return false;
-        }
-        for (const auto& current : m_eglCurrentThreads) {
-            if (current.second.DrawSurface == surface || current.second.ReadSurface == surface) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    void BackendObject::DestroyPendingEGLSurfaceIfUnused(EGLSurface surface) {
-        auto surfaceIt = m_eglSurfaces.find(surface);
-        if (surfaceIt == m_eglSurfaces.end() || !surfaceIt->second.DestroyPending || IsEGLSurfaceCurrent(surface)) {
-            return;
-        }
-
-        m_eglSurfaces.erase(surfaceIt);
-        if (m_eglSurface == surface) {
-            OnEGLSurfaceReleased(surface);
-            ForgetActiveEGLSurface();
-        }
-        OnEGLSurfaceForgotten(surface);
-    }
-
-    void BackendObject::ReleaseEGLCurrentThread(const std::thread::id& threadKey) {
-        auto currentIt = m_eglCurrentThreads.find(threadKey);
-        if (currentIt == m_eglCurrentThreads.end()) {
-            return;
-        }
-
-        const EGLSurface drawSurface = currentIt->second.DrawSurface;
-        const EGLSurface readSurface = currentIt->second.ReadSurface;
-        m_eglCurrentThreads.erase(currentIt);
-        DestroyPendingEGLSurfaceIfUnused(drawSurface);
-        DestroyPendingEGLSurfaceIfUnused(readSurface);
-    }
-
-    void BackendObject::ReleaseEGLSurface(EGLSurface surface) {
-        const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
-        auto surfaceIt = m_eglSurfaces.find(surface);
-        if (surfaceIt == m_eglSurfaces.end()) {
-            return;
-        }
-
-        if (IsEGLSurfaceCurrent(surface)) {
-            surfaceIt->second.DestroyPending = true;
-            return;
-        }
-
-        m_eglSurfaces.erase(surfaceIt);
-        if (m_eglSurface == surface) {
-            OnEGLSurfaceReleased(surface);
-            ForgetActiveEGLSurface();
-        }
-        OnEGLSurfaceForgotten(surface);
-    }
-
-    void BackendObject::ReleaseEGLResources() {
-        const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
-        ResetEGLRuntimeState();
-        m_eglSurfaces.clear();
-        m_eglDisplay = EGL_NO_DISPLAY;
-        m_eglDisplayInitialized = false;
-    }
-
-    void BackendObject::SetWindowHandle(const WindowHandle& handle) {
-        const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
-        m_windowHandle = handle;
     }
 
     const FormatCapabilityCache& BackendObject::GetFormatCapabilities() const {

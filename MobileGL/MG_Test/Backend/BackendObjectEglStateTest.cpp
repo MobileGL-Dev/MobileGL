@@ -6,7 +6,7 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // End of Source File Header
 
-// The base class's EGL bookkeeping (MG_Backend/BackendObject.cpp): the display, the surface
+// The EGL bookkeeping a backend owns (MG_Backend/EGLSurfaceRegistry.h): the display, the surface
 // records, the active surface, each thread's current binding, the capability-probe flag and the
 // deferred destroy of a surface that is still current, driven through a test double with no
 // device, no EGL driver and no window.
@@ -202,17 +202,21 @@ namespace {
     // function pointers with no user data, so they reach the live double through a static.
     class EglDouble final : public MG_Backend::BackendObject {
     public:
-        // The protected building blocks the backends drive, made public. If the move takes them out
-        // of BackendObject, each line becomes a forwarding member here. ForgetActiveEGLSurface is
-        // called only by the cases that test it.
-        using BackendObject::ActivateEGLSurface;
-        using BackendObject::EGLCurrentState;
-        using BackendObject::EGLSurfaceState;
-        using BackendObject::ForgetActiveEGLSurface;
-        using BackendObject::RegisterEGLPbufferSurface;
-        using BackendObject::RegisterEGLWindowSurface;
-        using BackendObject::ResetEGLRuntimeState;
-        using BackendObject::SurfaceKind;
+        using EGLCurrentState = MG_Backend::EGLSurfaceRegistry::CurrentState;
+        using EGLSurfaceState = MG_Backend::EGLSurfaceRegistry::SurfaceState;
+        using SurfaceKind = MG_Backend::EGLSurfaceRegistry::SurfaceKind;
+
+        // The building blocks the backends drive, under the names the cases call them by.
+        // ForgetActiveEGLSurface is called only by the cases that test it.
+        Bool ActivateEGLSurface(EGLSurface surface) { return EGLRegistry().Activate(surface); }
+        void ForgetActiveEGLSurface() { EGLRegistry().ForgetActiveSurface(); }
+        Bool RegisterEGLPbufferSurface(EGLSurface surface, EGLint width, EGLint height) {
+            return EGLRegistry().RegisterPbufferSurface(surface, width, height);
+        }
+        Bool RegisterEGLWindowSurface(EGLSurface surface, const WindowHandle& window) {
+            return EGLRegistry().RegisterWindowSurface(surface, window);
+        }
+        void ResetEGLRuntimeState() { EGLRegistry().ResetRuntimeState(); }
 
         // The observable state as a hook saw it.
         struct View {
@@ -285,54 +289,50 @@ namespace {
         // hooks take their state snapshots through these accessors from inside it.
         Bool HasActiveSurface() const {
             const auto lock = Guard();
-            return m_eglSurfaceInitialized;
+            return EGLRegistry().HasActiveSurface();
         }
         EGLSurface ActiveSurface() const {
             const auto lock = Guard();
-            return m_eglSurface;
+            return EGLRegistry().ActiveSurface();
         }
         SurfaceKind ActiveKind() const {
             const auto lock = Guard();
-            return m_eglSurfaceKind;
+            return EGLRegistry().ActiveSurfaceKind();
         }
         EGLSurface ActivatingSurface() const {
             const auto lock = Guard();
-            return m_activatingSurface;
+            return EGLRegistry().ActivatingSurface();
         }
         WindowHandle WindowHandleNow() const {
             const auto lock = Guard();
-            return m_windowHandle;
+            return EGLRegistry().CurrentWindowHandle();
         }
         Bool CapsProbed() const {
             const auto lock = Guard();
-            return m_backendCapabilitiesInitialized;
+            return EGLRegistry().CapabilitiesInitialized();
         }
         Bool DisplayInitialized() const {
             const auto lock = Guard();
-            return m_eglDisplayInitialized;
+            return EGLRegistry().DisplayInitialized();
         }
         EGLDisplay DisplayNow() const {
             const auto lock = Guard();
-            return m_eglDisplay;
+            return EGLRegistry().Display();
         }
         Optional<EGLSurfaceState> Record(EGLSurface surface) const {
             const auto lock = Guard();
-            const EGLSurfaceState* record = GetRegisteredEGLSurface(surface);
-            if (!record) return Nullopt;
-            return *record;
+            return EGLRegistry().Find(surface);
         }
         // The base lookup with no lock of the double's own, so a probe of it meets only the
         // lookup's own locking.
-        Bool IsRegistered(EGLSurface surface) const { return GetRegisteredEGLSurface(surface) != nullptr; }
+        Bool IsRegistered(EGLSurface surface) const { return EGLRegistry().IsRegistered(surface); }
         Optional<EGLCurrentState> CurrentHere() const {
             const auto lock = Guard();
-            const auto found = m_eglCurrentThreads.find(std::this_thread::get_id());
-            if (found == m_eglCurrentThreads.end()) return Nullopt;
-            return found->second;
+            return EGLRegistry().CurrentOn(std::this_thread::get_id());
         }
         SizeT CurrentCount() const {
             const auto lock = Guard();
-            return m_eglCurrentThreads.size();
+            return EGLRegistry().CurrentThreadCount();
         }
         // A mark in the format-capability cache, which the EGL bookkeeping never touches.
         void MarkFormatCapabilities() { MutableFormatCapabilities().SampleCounts[0][0] = {4}; }
@@ -384,9 +384,7 @@ namespace {
             Note({.What = Hook::Forgotten, .Surface = surface}, true);
         }
 
-        std::unique_lock<std::recursive_mutex> Guard() const {
-            return std::unique_lock<std::recursive_mutex>(m_eglStateMutex);
-        }
+        std::unique_lock<std::recursive_mutex> Guard() const { return EGLRegistry().Lock(); }
 
         // The state view locks, so the calls that run without the lock (the function table read
         // and SetSwapInterval) are logged without one.

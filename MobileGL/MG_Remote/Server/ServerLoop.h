@@ -569,7 +569,7 @@ namespace MobileGL::MG_Remote::Server {
     // resizes its WINDOW (a geometry request) and replies with the window's real extent.
     ServerOwnedWindowReply ServerResizeServerOwnedWindowSurface(EGLSurface surface, Uint32 width, Uint32 height);
     // Also RE-PUBLISHES THE CAPS SNAPSHOT on success (R-12). BackendObject::MakeEGLCurrent runs
-    // InitCapabilities() on the first make-current per surface (BackendObject.cpp:341-347), so
+    // InitCapabilities() on the first make-current per surface (EGLSurfaceRegistry::MakeCurrent), so
     // this is the moment the server's answers stop being the empty ones Accept() published -
     // and a SECOND arrival IS the invalidation signal, which is how DirectGLES, which has no
     // OnCapsInvalidated producer at all, tells the client without a dev-shaped backend edit.

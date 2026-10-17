@@ -112,11 +112,11 @@ namespace MobileGL::MG_Remote::Client {
         Bool EnsureSurfaceHomed(EGLSurface surface);
         Bool CreatePbufferOnServer(EGLSurface surface, EGLint width, EGLint height, Bool standIn);
         void NoteHomed(EGLSurface surface) {
-            const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
+            const auto lock = EGLRegistry().Lock();
             m_homedSurfaces.insert(surface);
         }
         Bool HoldsSharedImage(Uint64 id) const {
-            const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
+            const auto lock = EGLRegistry().Lock();
             return m_sessionSharedImages.count(id) != 0;
         }
 
@@ -124,20 +124,20 @@ namespace MobileGL::MG_Remote::Client {
         // from the first is one a lost session had (EnsureSurfaceHomed); an image id missing from
         // the second (counted per reference taken) is a lost session's, and is neither released
         // nor presented to nor attached on the new server, which never issued it. Guarded by the
-        // base's m_eglStateMutex.
+        // EGL registry's lock.
         std::unordered_set<EGLSurface> m_homedSurfaces;
-        // The surfaceless stand-ins among this object's pbuffers. Guarded by m_eglStateMutex.
+        // The surfaceless stand-ins among this object's pbuffers. Guarded by the EGL registry's lock.
         std::unordered_set<EGLSurface> m_standInSurfaces;
         std::unordered_map<Uint64, Uint32> m_sessionSharedImages; // id -> references taken
         // The ids a replaced session held: releasing one is a success with nothing sent.
         std::unordered_set<Uint64> m_lostSessionSharedImages;
         // The size each server-owned window surface ASKED for (0x0: the window's own), which is what a
         // fresh session is asked for again when the surface is re-created there - not the extent the
-        // window happened to have, which would fix the window's size for good. Guarded by
-        // m_eglStateMutex.
+        // window happened to have, which would fix the window's size for good. Guarded by the EGL
+        // registry's lock.
         std::unordered_map<EGLSurface, std::pair<Uint32, Uint32>> m_serverOwnedRequests;
         void NoteServerOwnedRequest(EGLSurface surface, Uint32 width, Uint32 height) {
-            const std::lock_guard<std::recursive_mutex> lock(m_eglStateMutex);
+            const auto lock = EGLRegistry().Lock();
             m_serverOwnedRequests[surface] = {width, height};
         }
     };

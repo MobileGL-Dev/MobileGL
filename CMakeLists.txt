@@ -496,6 +496,7 @@ set(SOURCE_FILES
 
     MobileGL/MG_Backend/Init.cpp
     MobileGL/MG_Backend/BackendObject.cpp
+    MobileGL/MG_Backend/EGLSurfaceRegistry.cpp
     MobileGL/MG_Backend/BackendFunctions.cpp
     MobileGL/MG_Backend/FormatCapabilities.cpp
     MobileGL/MG_Backend/ClientReadback.cpp

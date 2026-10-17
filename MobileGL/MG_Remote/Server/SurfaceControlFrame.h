@@ -73,7 +73,7 @@ namespace MobileGL::MG_Remote::Server {
     // have none at all), so its CreateWindowSurface names the SERVER's window instead: the wire's
     // WindowKind::ServerOwned with nativeToken 0. Inside a process the request travels in the
     // frame's `windowBackend` slot as this value - deliberately NOT a MG_Backend::WindowBackend
-    // enumerator (BackendObject.h is in the pull build, gate G1), and deliberately outside every
+    // enumerator (EGLSurfaceRegistry.h is in the pull build, gate G1), and deliberately outside every
     // range a WindowBackend could grow to, so a frame carrying it that ever reached
     // UnpackWindowHandle would be refused by WindowBackendFromFrameValue's range check rather than
     // cast. The server's ServerOwned arm (ServerLoop.cpp) consumes it before that point and

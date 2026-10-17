@@ -83,7 +83,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // apply thread. Null in the monolith and every other single-session shape.
         UniquePtr<MagmaSession> m_magmaSession;
         // The binding each client context was last made current with, for OnClientContextBound.
-        UnorderedMap<EGLContext, EGLCurrentState> m_contextBindings;
+        UnorderedMap<EGLContext, EGLSurfaceRegistry::CurrentState> m_contextBindings;
         // Window surfaces whose window is gone (SuspendServerWindow), with the extent their
         // placeholder pbuffer target is built at - the window's, so the default framebuffer the
         // client knows keeps its size.
