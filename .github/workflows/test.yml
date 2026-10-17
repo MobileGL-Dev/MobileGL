@@ -2648,6 +2648,7 @@ jobs:
       names: ${{ steps.trace-cases.outputs.names }}
       verify-matrix: ${{ steps.trace-cases.outputs.verify-matrix }}
       split-matrix: ${{ steps.trace-cases.outputs.split-matrix }}
+      split-spawn-matrix: ${{ steps.trace-cases.outputs.split-spawn-matrix }}
     steps:
       - name: Checkout repo
         uses: actions/checkout@v6
@@ -2699,6 +2700,22 @@ jobs:
             exit 1
           fi
           echo "split-matrix=${SPLIT_MATRIX}" >> "$GITHUB_OUTPUT"
+          # On the disaggregation branches, the same subset without the inproc rows the
+          # inproc-acceptance retrace rows replay on the same library, which retrace-split uses when
+          # it reuses build-linux's library. OpenRA keeps its inproc rows: they carry the
+          # wire-volume evidence. Its self-test proves every dropped row is an acceptance row. It is
+          # only a saving, so it never fails this job: on a failed self-test or an empty subset it
+          # is not written, and retrace-split takes the full subset, as it does elsewhere.
+          if [ "${MOBILEGL_CI_DISAGGREGATED}" = "ON" ]; then
+            if python3 tools/trace_replay/trace_cases.py --self-test-split-matrix \
+               && SPLIT_SPAWN_MATRIX=$(python3 tools/trace_replay/trace_cases.py --ci --format github-split-matrix \
+                    --transports spawn --keep-inproc OpenRA) \
+               && [ "$(printf '%s' "${SPLIT_SPAWN_MATRIX}" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)["include"]))' || echo 0)" -ge 1 ]; then
+              echo "split-spawn-matrix=${SPLIT_SPAWN_MATRIX}" >> "$GITHUB_OUTPUT"
+            else
+              echo "::warning::the spawn-only split retrace subset failed its self-test or is empty, so retrace-split replays the full split subset"
+            fi
+          fi
 
   trace-fixtures:
     name: trace fixture (${{ matrix.case }})
@@ -2873,6 +2890,11 @@ jobs:
              && [ '${{ matrix.case }}' = 'improved-transparency-minecraft-26.3' ]; then
             export MOBILEGL_MAGMA_DISABLE_BLENDED_DEPTH_WRITE=1
           fi
+          # The inproc rows stand in for retrace-split's dropped inproc rows, so they prove the
+          # configuration they run with from the client's own log.
+          if [ "${MOBILEGL_TRANSPORT}" = inproc ]; then
+            export MGTRACE_EXPECT_IPC='strict=1 role-split-state=1 run-ahead=1'
+          fi
           ctest -V --no-tests=error -R '^MobileGLTraceReplay\.${{ matrix.case }}\.${{ matrix.backend }}$'             --output-junit "${RUNNER_TEMP}/retrace.xml"
           # A split row's transport assertions ran on this leg and found their evidence.
           if [ "${MOBILEGL_TRANSPORT}" != monolith ]; then
@@ -2880,6 +2902,33 @@ jobs:
               '${{ matrix.case }}/${{ matrix.backend }}/output/split-evidence.txt' \
               --transport "${MOBILEGL_TRANSPORT}" --case '${{ matrix.case }}' --backend '${{ matrix.backend }}'
           fi
+
+      # The refusal census, recorded rather than gated. run_trace_case.cmake already REDS the case
+      # on any Fatal{, so reaching here means the count is zero - but the number and the distinct
+      # slot names are what MEASUREMENTS wants from every split run, and reading them out of the
+      # library's own log is the only way to get them (ctest -V's transcript is a false zero).
+      - name: Refusal census from the library log
+        if: ${{ always() && matrix.transport == 'inproc' }}
+        working-directory: build-retrace/tools/trace_replay
+        run: |
+          # BOTH ROLES, because under spawn every applier refusal is raised in the SERVER's
+          # process and a census reading only the client's file reports a confident zero for the
+          # half it cannot see.
+          log="${{ matrix.case }}/${{ matrix.backend }}/output/mobilegl.client.log"
+          server_log="${{ matrix.case }}/${{ matrix.backend }}/output/mobilegl.server.log"
+          cat "${{ matrix.case }}/${{ matrix.backend }}/output/split-evidence.txt" 2>/dev/null || echo "no split-evidence.txt"
+          if [ ! -f "${log}" ]; then
+            echo "no ${log} - the replay wrote no library log"
+            exit 0
+          fi
+          census_files="${log}"
+          if [ -f "${server_log}" ]; then census_files="${census_files} ${server_log}"; fi
+          echo "census over: ${census_files}"
+          echo "Fatal{ lines: $(cat ${census_files} | grep -c 'Fatal{' || true)"
+          cat ${census_files} | grep -o 'Fatal{[A-Za-z]*, "[^"]*"' | sort | uniq -c | sort -rn | head -20 || true
+          # The transport line is the CLIENT's: ConfigLoader resolves it there, and under spawn
+          # the server states its own separately.
+          grep -m1 "MOBILEGL_TRANSPORT=" "${log}" || echo "no transport line in ${log}"
 
       - name: Annotate failed entries
         if: failure()
@@ -3185,7 +3234,10 @@ jobs:
     strategy:
       fail-fast: false
       max-parallel: 8
-      matrix: ${{ fromJSON(needs.trace-cases.outputs.split-matrix) }}
+      # With build-linux reused, the inproc rows (except OpenRA's) are replayed by the retrace job's
+      # inproc-acceptance rows on the same library, strict and with the dual block and run-ahead
+      # on; the spawn rows below prove per leg that those are also the defaults they run with.
+      matrix: ${{ fromJSON(needs.build-linux-split.outputs.reuse-primary == 'true' && needs.trace-cases.outputs.split-spawn-matrix || needs.trace-cases.outputs.split-matrix) }}
 
     steps:
       - name: Set swap space
@@ -3349,6 +3401,10 @@ jobs:
           if [ '${{ matrix.case }}' = 'OpenRA' ]; then
             export MGTRACE_WIRE_EVIDENCE=1
             wire=(--require-wire)
+          fi
+          if [ "${SPLIT_REUSE}" = "true" ]; then
+            export MGTRACE_EXPECT_IPC='strict=0 role-split-state=1 run-ahead=1'
+            export MGTRACE_EXPECT_IPC_REASON="retrace-split dropped its inproc rows because the inproc-acceptance retrace rows replay the same library with strict=1 role-split-state=1 run-ahead=1, which differs from this leg's defaults only in strict while these hold. A default changed: restore the inproc rows (the trace-cases job's split-spawn-matrix without --transports spawn) or update the expectation."
           fi
           ctest -V --no-tests=error --timeout 10800 \
             -R '^MobileGLTraceReplay\.${{ matrix.case }}\.${{ matrix.backend }}$'

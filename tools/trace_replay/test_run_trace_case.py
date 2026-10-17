@@ -261,6 +261,40 @@ class RunTraceCaseTests(unittest.TestCase):
         self.assertNotEqual(quiet_check([str(self.evidence), '--transport', 'inproc']), 0,
                             'a leg whose transport block was skipped must fail the checker')
 
+    # MGTRACE_EXPECT_IPC: the client's IPC line must carry every token, whole.
+    IPC = 'Config: IPC ring=8MiB verb-barrier=1 run-ahead={ra} present-credit=1 strict={st} audit=0 role-split-state={rs} x'
+
+    def ipc_logs(self, ra='1', st='0', rs='1', line=True):
+        logs = good_logs('spawn')
+        if line:
+            logs['mobilegl.client.log'] += lines(self.IPC.format(ra=ra, st=st, rs=rs))
+        return logs
+
+    def ipc_env(self, expect='strict=0 role-split-state=1 run-ahead=1'):
+        env = self.split_env('spawn')
+        env.update({'MGTRACE_EXPECT_IPC': expect, 'MGTRACE_EXPECT_IPC_REASON': 'restore the inproc rows'})
+        return env
+
+    def test_i1_the_expected_defaults_are_met(self):
+        output = self.expect_green(self.ipc_env(), self.ipc_logs(), 'spawn')
+        self.assertIn('IPC expectation met', output)
+        self.assertEqual(checker.parse(self.evidence.read_text())['ipc_expected'],
+                         'strict=0 role-split-state=1 run-ahead=1')
+
+    def test_i2_a_changed_default_names_the_reason(self):
+        self.expect_red(self.ipc_env(), self.ipc_logs(rs='0'), 'lacks role-split-state=1')
+        self.expect_red(self.ipc_env(), self.ipc_logs(rs='0'), 'restore the inproc rows')
+
+    def test_i3_no_ipc_line(self):
+        self.expect_red(self.ipc_env(), self.ipc_logs(line=False), "carries no 'Config: IPC' line")
+
+    def test_i4_a_token_is_matched_whole(self):
+        self.expect_red(self.ipc_env(), self.ipc_logs(ra='10'), 'lacks run-ahead=1')
+
+    def test_i5_an_expectation_on_a_monolith_run(self):
+        self.expect_red({'MOBILEGL_TRANSPORT': 'monolith', 'MGTRACE_EXPECT_IPC': 'strict=1'}, {},
+                        'a monolith run logs no IPC configuration to check')
+
     # The verify block, which shares the script.
     def test_v1_verify_without_the_armed_line(self):
         self.expect_red({'MOBILEGL_PIPE_VERIFY': '1'}, {'mobilegl.log': lines('Config: loaded')},

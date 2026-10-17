@@ -351,7 +351,7 @@ def github_verify_matrix(cases):
 SPLIT_TRANSPORTS = ("inproc", "spawn")
 
 
-def github_split_matrix(cases):
+def github_split_matrix(cases, transports=SPLIT_TRANSPORTS, keep_inproc=()):
     """{backend, case, transport} for the split arm.
 
     THREE DIMENSIONS, NOT TWO. The job used to take {backend, case} and hard-code
@@ -359,15 +359,31 @@ def github_split_matrix(cases):
     backend list is the case's own ci_backends - the same list the monolith matrix uses - so a
     case restricted to one backend stays restricted here instead of being registered with a
     backend it does not run.
+
+    `transports` narrows the arms (test.yml drops inproc when the inproc-acceptance retrace rows
+    already replay the same library); `keep_inproc` names split cases whose inproc rows stay
+    anyway - OpenRA's, which carry the wire-volume evidence. A narrowed matrix that comes out
+    empty is an error; the full one is returned empty, and test.yml names that error itself.
     """
-    return {
-        "include": [
-            {"backend": backend, "case": case["name"], "transport": transport}
-            for case in split_trace_cases(cases)
-            for backend in ci_backends(case)
-            for transport in SPLIT_TRANSPORTS
-        ]
-    }
+    unknown = [t for t in transports if t not in SPLIT_TRANSPORTS]
+    if unknown or not transports:
+        raise ValueError(f"split transports must be a non-empty subset of {SPLIT_TRANSPORTS}: {transports}")
+    split_cases = split_trace_cases(cases)
+    split_names = {case["name"] for case in split_cases}
+    missing = [name for name in keep_inproc if name not in split_names]
+    if missing:
+        raise ValueError(f"--keep-inproc names cases that are not split CI cases: {missing}")
+    rows = [
+        {"backend": backend, "case": case["name"], "transport": transport}
+        for case in split_cases
+        for backend in ci_backends(case)
+        for transport in SPLIT_TRANSPORTS
+        if transport in transports or (transport == "inproc" and case["name"] in keep_inproc)
+    ]
+    narrowed = tuple(transports) != SPLIT_TRANSPORTS or bool(keep_inproc)
+    if not rows and narrowed:
+        raise ValueError("the narrowed split matrix is empty")
+    return {"include": rows}
 
 
 def github_apk_matrix(cases):
@@ -393,9 +409,10 @@ def github_transport_matrix(cases, *, apk=False):
 
     THE SPAWN LANE IS APK-ONLY, and that is a statement about where the evidence is missing
     rather than about what spawn can do. On Linux the spawn arm already has a job of its own -
-    test.yml's `retrace-split`, which is {backend, case, transport} over inproc AND spawn and
-    whose legs prove in-test that the transport resolved and, on OpenRA, that draw records
-    crossed the wire (run_trace_case.cmake's evidence). Adding spawn to THIS matrix would pay
+    test.yml's `retrace-split`, which is {backend, case, transport} over spawn (and inproc too
+    when it cannot reuse this matrix's inproc rows' library) and whose legs prove in-test that
+    the transport resolved and, on OpenRA, that draw records crossed the wire
+    (run_trace_case.cmake's evidence). Adding spawn to THIS matrix would pay
     for a second full Linux sweep that proves nothing the first one does not, and test.yml's
     `retrace` job has neither the server image staged nor MOBILEGL_IPC_SERVER_PATH set - so the
     lane would not merely be redundant, it would be red.
@@ -466,6 +483,41 @@ def self_test_transport_matrices():
               f"entries; exact metadata and negative controls OK")
 
 
+def self_test_split_matrix(cases=None):
+    """retrace-split may drop its inproc rows only because the inproc-acceptance rows replay them."""
+    if cases is None:
+        cases = ci_trace_cases(load_trace_cases())
+    full = github_split_matrix(cases)["include"]
+    spawn_only = github_split_matrix(cases, transports=("spawn",), keep_inproc=("OpenRA",))["include"]
+    assert [r for r in spawn_only if r["transport"] == "spawn"] == [r for r in full if r["transport"] == "spawn"], \
+        "the spawn-only matrix lost or changed a spawn row"
+    assert any(r["transport"] == "spawn" for r in spawn_only), "the spawn-only matrix has no spawn row"
+    kept = [r for r in spawn_only if r["transport"] == "inproc"]
+    assert kept and all(r["case"] == "OpenRA" for r in kept), "the kept inproc rows are not OpenRA's"
+    assert all(r in full for r in kept), "a kept inproc row is not a row of the full matrix"
+    acceptance = {(r["backend"], r["case"]) for r in github_transport_matrix(cases)["include"]
+                  if r["lane"] == "inproc-acceptance"}
+    dropped = [(r["backend"], r["case"]) for r in full if r["transport"] == "inproc" and r not in kept]
+    uncovered = [row for row in dropped if row not in acceptance]
+    assert not uncovered, f"inproc rows dropped from retrace-split that no acceptance row replays: {uncovered}"
+    for bad in ({"transports": ("unix",)}, {"transports": ()}, {"keep_inproc": ("no-such-case",)}):
+        try:
+            github_split_matrix(cases, **bad)
+        except ValueError:
+            continue
+        raise AssertionError(f"github_split_matrix accepted {bad}")
+    try:
+        github_split_matrix([], transports=("spawn",))
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("an empty narrowed split matrix silently passed")
+    assert github_split_matrix([]) == {"include": []}, \
+        "the full split matrix must come back empty, for the workflow's named error"
+    print(f"split matrix: {len(full)} rows, {len(spawn_only)} with inproc dropped ({len(kept)} OpenRA inproc "
+          f"kept); all {len(dropped)} dropped inproc rows are inproc-acceptance rows")
+
+
 def cmake_quote(value):
     return '"' + str(value).replace("\\", "/").replace('"', '\\"') + '"'
 
@@ -516,7 +568,13 @@ def parse_args():
     parser.add_argument("--case", dest="case_name", help="Trace case name.")
     parser.add_argument("--ci", action="store_true", help="Only include cases enabled for CI.")
     parser.add_argument("--self-test-transport-matrices", action="store_true")
+    parser.add_argument("--self-test-split-matrix", action="store_true",
+                        help="prove the spawn-only split matrix drops only inproc-acceptance rows")
     parser.add_argument("--fixture-root", default="tools/trace_replay/fixtures")
+    parser.add_argument("--transports", default=",".join(SPLIT_TRANSPORTS),
+                        help="github-split-matrix: the comma-separated split transports to emit")
+    parser.add_argument("--keep-inproc", default="",
+                        help="github-split-matrix: comma-separated split cases whose inproc rows stay")
     parser.add_argument(
         "--format",
         choices=(
@@ -541,6 +599,9 @@ def main():
     if args.self_test_transport_matrices:
         self_test_transport_matrices()
         return 0
+    if args.self_test_split_matrix:
+        self_test_split_matrix()
+        return 0
     cases = load_trace_cases()
     if args.ci:
         cases = ci_trace_cases(cases)
@@ -553,7 +614,9 @@ def main():
     elif args.format == "github-verify-matrix":
         print(json.dumps(github_verify_matrix(cases), separators=(",", ":")))
     elif args.format == "github-split-matrix":
-        print(json.dumps(github_split_matrix(cases), separators=(",", ":")))
+        transports = tuple(t for t in args.transports.split(",") if t)
+        keep = tuple(c for c in args.keep_inproc.split(",") if c)
+        print(json.dumps(github_split_matrix(cases, transports, keep), separators=(",", ":")))
     elif args.format == "github-apk":
         print(json.dumps([github_apk_case(case) for case in cases], separators=(",", ":")))
     elif args.format == "github-apk-matrix":

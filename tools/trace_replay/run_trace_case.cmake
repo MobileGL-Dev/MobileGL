@@ -85,6 +85,15 @@ if(NOT "$ENV{MGTRACE_WIRE_EVIDENCE}" STREQUAL "" AND NOT "$ENV{MGTRACE_WIRE_EVID
     set(ENV{MOBILEGL_PIPE_STATS} 1)
     set(ENV{MOBILEGL_PIPE_STATS_PERIOD} 1)
 endif()
+# MGTRACE_EXPECT_IPC, another harness name, lists key=value tokens the client's one-line IPC
+# configuration must carry (checked in the transport block below); a leg that leaves knobs at their
+# defaults uses it to prove what those defaults resolved to. A monolith run has no such line.
+if(NOT "$ENV{MGTRACE_EXPECT_IPC}" STREQUAL ""
+   AND ("$ENV{MOBILEGL_TRANSPORT}" STREQUAL "" OR "$ENV{MOBILEGL_TRANSPORT}" STREQUAL "monolith"))
+    message(FATAL_ERROR
+            "MGTRACE_EXPECT_IPC is set for ${TRACE_CASE_NAME} ${TRACE_BACKEND} but MOBILEGL_TRANSPORT is "
+            "'$ENV{MOBILEGL_TRANSPORT}': a monolith run logs no IPC configuration to check.")
+endif()
 
 if(EXISTS "${TRACE_OUTPUT_DIR}")
     file(REMOVE_RECURSE "${TRACE_OUTPUT_DIR}")
@@ -497,6 +506,37 @@ if(DEFINED ENV{MOBILEGL_TRANSPORT} AND NOT "$ENV{MOBILEGL_TRANSPORT}" STREQUAL "
                     "(magma-b3.md §2). The clamp in VulkanRenderer::OnSubmitsCompletedUpTo is what makes "
                     "this unreachable; a line here means it was removed or bypassed.")
         endif()
+        # The IPC configuration the client resolved, against MGTRACE_EXPECT_IPC's tokens. Each token
+        # must appear whole on the last "Config: IPC" line, so run-ahead=1 never matches
+        # run-ahead=10. MGTRACE_EXPECT_IPC_REASON, when set, says why the leg relies on them.
+        set(split_ipc_expected "-")
+        if(NOT "$ENV{MGTRACE_EXPECT_IPC}" STREQUAL "")
+            set(split_ipc_expected "$ENV{MGTRACE_EXPECT_IPC}")
+            file(STRINGS "${mobilegl_log}" split_ipc_lines REGEX "Config: IPC ")
+            if(NOT split_ipc_lines)
+                message(FATAL_ERROR "${split_case}: ${mobilegl_log} carries no 'Config: IPC' line, so the "
+                                    "configuration MGTRACE_EXPECT_IPC names cannot be checked.")
+            endif()
+            list(GET split_ipc_lines -1 split_ipc_line)
+            string(REPLACE " " ";" split_ipc_tokens "$ENV{MGTRACE_EXPECT_IPC}")
+            set(split_ipc_missing "")
+            foreach(token IN LISTS split_ipc_tokens)
+                if(NOT "${token}" STREQUAL "")
+                    string(FIND " ${split_ipc_line} " " ${token} " split_ipc_at)
+                    if(split_ipc_at EQUAL -1)
+                        list(APPEND split_ipc_missing "${token}")
+                    endif()
+                endif()
+            endforeach()
+            if(split_ipc_missing)
+                string(REPLACE ";" " " split_ipc_missing "${split_ipc_missing}")
+                message(FATAL_ERROR
+                        "${split_case}: the client resolved '${split_ipc_line}', which lacks "
+                        "${split_ipc_missing} (MGTRACE_EXPECT_IPC='$ENV{MGTRACE_EXPECT_IPC}'). "
+                        "$ENV{MGTRACE_EXPECT_IPC_REASON}")
+            endif()
+            message(STATUS "MGPipe split: ${split_case} IPC expectation met ($ENV{MGTRACE_EXPECT_IPC})")
+        endif()
         # The wire volume, on the legs that asked for it (MGTRACE_WIRE_EVIDENCE above). The client
         # counts each record at the codec commit and prints one frame-sent line per Present, keyed
         # by raw opcode; the server role's backend counts its draws and prints one stats line per
@@ -569,6 +609,7 @@ if(DEFINED ENV{MOBILEGL_TRANSPORT} AND NOT "$ENV{MOBILEGL_TRANSPORT}" STREQUAL "
                 "case=${TRACE_CASE_NAME}\nbackend=${TRACE_BACKEND}\ntransport=$ENV{MOBILEGL_TRANSPORT}\n"
                 "control=${split_control}\nmarker=${split_expected_marker}\nsecond=${split_second_found}\n"
                 "server_log=1\nfatal_lines=${split_fatal_count}\nfloor_lines=${split_floor_count}\n"
+                "ipc_expected=${split_ipc_expected}\n"
                 "wire=${trace_wire_evidence}\ndraw_opcode=${split_draw_opcode}\n"
                 "wire_draw_records=${split_wire_records}\nserver_draws=${split_server_draws}\n")
         file(WRITE "${TRACE_OUTPUT_DIR}/output/split-evidence.txt" "${split_evidence}")
