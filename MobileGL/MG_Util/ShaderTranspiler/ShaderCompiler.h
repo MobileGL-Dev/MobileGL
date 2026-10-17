@@ -533,8 +533,6 @@ namespace MobileGL {
                 // it, the second eglInitialize of a process comes back up unwarmed and with
                 // no way left to warm it.
                 static void ResetPrewarmLatch();
-                // Whether PrewarmBuiltins has run since the last ResetPrewarmLatch.
-                static Bool BuiltinsPrewarmed();
 
                 // Validation is an explicit immutable option of each compiler operation. The
                 // program-link task snapshots MOBILEGL_ENABLE_SPIRV_VALIDATION before it can run

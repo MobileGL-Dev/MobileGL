@@ -7,14 +7,18 @@
 // End of Source File Header
 
 // MOBILEGL_DISABLE_SHADER_PREWARM. Initialize() builds glslang's built-in tables ahead of the
-// first compile unless the variable is truthy; the CI test lanes set it, so these cases set or
-// clear it themselves. MG_ConfigLoader::Init() rereads the environment on every Initialize(),
-// so the variable, not the feature block, is the input. Its own binary: every case calls
-// Destroy(), and ShaderCompilePool's stop is a one-way latch (see AsyncTeardownTest).
+// first compile unless the variable is truthy, and logs which way it went; these cases read that
+// line back. The CI test lanes set the variable, so every case sets or clears it itself:
+// MG_ConfigLoader::Init() rereads the environment on every Initialize(). The log file is
+// truncated by each Initialize() and closed by Destroy(), so each case reads it after Destroy().
+// Its own binary: every case calls Destroy(), and ShaderCompilePool's stop is a one-way latch.
 
 #include <gtest/gtest.h>
 
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <sstream>
 #include <string>
 
 #include "Config.h"
@@ -22,15 +26,22 @@
 #include "Init.h"
 #include "MG_Impl/GLImpl/Getter/GL_Getter.h"
 #include "MG_Impl/GLImpl/Program/GL_Program.h"
-#include "MG_Util/ShaderTranspiler/ShaderCompiler.h"
+#include "MG_Util/Debug/Log.h"
+
+#if defined(_WIN32)
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
 
 using namespace MobileGL;
 using namespace MobileGL::MG_Impl::GLImpl;
-using MobileGL::MG_Util::ShaderTranspiler::ShaderCompiler;
 
 namespace {
     constexpr const char* kPrewarmKnob = "MOBILEGL_DISABLE_SHADER_PREWARM";
     constexpr const char* kAsyncKnob = "MOBILEGL_ASYNC_SHADER_COMPILE";
+    constexpr const char* kPrewarmedLine = "prewarmed the glslang built-in tables";
+    constexpr const char* kSkippedLine = "built-in table prewarm skipped";
 
     // Sets (or, with nullptr, clears) one environment variable for a scope.
     class ScopedEnv {
@@ -62,6 +73,54 @@ namespace {
         bool m_had = false;
     };
 
+    int ProcessId() {
+#if defined(_WIN32)
+        return _getpid();
+#else
+        return static_cast<int>(getpid());
+#endif
+    }
+
+    // Points the library's log at a private file for the case; Log() reads what the client role
+    // wrote, by the library's own naming rule.
+    class PrivateLog {
+    public:
+        PrivateLog()
+            : m_base((std::filesystem::temp_directory_path() /
+                      ("mobilegl-shaderprewarm-test-" + std::to_string(ProcessId()) + ".log"))
+                         .string()),
+              m_env("MOBILEGL_LOG_FILE_PATH", m_base.c_str()) {}
+        ~PrivateLog() {
+            std::error_code ignored;
+            std::filesystem::remove(Path(), ignored);
+            std::filesystem::remove(m_base, ignored);
+        }
+        PrivateLog(const PrivateLog&) = delete;
+        PrivateLog& operator=(const PrivateLog&) = delete;
+
+        std::string Path() const {
+            return MG_Util::Debug::RoleLogPath(m_base.c_str(), MG_Util::Debug::LogRole::Client);
+        }
+
+        std::string Log() const {
+            std::ifstream in(Path());
+            std::stringstream text;
+            text << in.rdbuf();
+            return text.str();
+        }
+
+    private:
+        std::string m_base;
+        ScopedEnv m_env;
+    };
+
+    int Count(const std::string& text, const char* line) {
+        int count = 0;
+        for (auto at = text.find(line); at != std::string::npos; at = text.find(line, at + 1))
+            ++count;
+        return count;
+    }
+
     GLint CompileStatusOf(const GLenum type, const char* source) {
         const GLuint shader = CreateShader(type);
         ShaderSource(shader, 1, &source, nullptr);
@@ -77,35 +136,37 @@ namespace {
 } // namespace
 
 TEST(ShaderPrewarm, InitializePrewarmsByDefaultAndAgainAfterDestroy) {
+    const PrivateLog log;
     const ScopedEnv knob(kPrewarmKnob, nullptr);
     const ScopedEnv async(kAsyncKnob, "1");
     MobileGL::Initialize();
-    EXPECT_FALSE(MG_Config::Features.DisableShaderPrewarm);
-    EXPECT_TRUE(ShaderCompiler::BuiltinsPrewarmed());
     MobileGL::Destroy();
-    // Destroy finalizes glslang, which frees the tables the latch stands for.
-    EXPECT_FALSE(ShaderCompiler::BuiltinsPrewarmed());
+    EXPECT_EQ(Count(log.Log(), kPrewarmedLine), 1) << log.Log();
+    // Destroy finalizes glslang, which frees the tables, so the next Initialize warms again.
     MobileGL::Initialize();
-    EXPECT_TRUE(ShaderCompiler::BuiltinsPrewarmed());
     MobileGL::Destroy();
+    EXPECT_EQ(Count(log.Log(), kPrewarmedLine), 1) << log.Log();
 }
 
 TEST(ShaderPrewarm, ATruthyKnobSkipsThePrewarmAndCompilesStillWork) {
+    const PrivateLog log;
     const ScopedEnv knob(kPrewarmKnob, "1");
     const ScopedEnv async(kAsyncKnob, "1");
     MobileGL::Initialize();
-    EXPECT_TRUE(MG_Config::Features.DisableShaderPrewarm);
-    EXPECT_FALSE(ShaderCompiler::BuiltinsPrewarmed());
     EXPECT_EQ(CompileStatusOf(GL_FRAGMENT_SHADER, kFragment460), GL_TRUE);
-    EXPECT_FALSE(ShaderCompiler::BuiltinsPrewarmed());
     MobileGL::Destroy();
+    const std::string text = log.Log();
+    EXPECT_EQ(Count(text, kPrewarmedLine), 0) << text;
+    EXPECT_EQ(Count(text, kSkippedLine), 1) << text;
 }
 
 TEST(ShaderPrewarm, AFalsyKnobKeepsThePrewarm) {
+    const PrivateLog log;
     const ScopedEnv knob(kPrewarmKnob, "0");
     const ScopedEnv async(kAsyncKnob, "1");
     MobileGL::Initialize();
-    EXPECT_FALSE(MG_Config::Features.DisableShaderPrewarm);
-    EXPECT_TRUE(ShaderCompiler::BuiltinsPrewarmed());
     MobileGL::Destroy();
+    const std::string text = log.Log();
+    EXPECT_EQ(Count(text, kPrewarmedLine), 1) << text;
+    EXPECT_EQ(Count(text, kSkippedLine), 0) << text;
 }

@@ -206,8 +206,12 @@ namespace MobileGL {
         // flag here rather than inside PrewarmBuiltins so ShaderCompiler keeps no dependency
         // on the async subsystem (ProgramUtilTest compiles that file without it).
         // MOBILEGL_DISABLE_SHADER_PREWARM skips it for processes too short-lived to repay it.
-        if (MG_Util::Async::AsyncShaderCompileEnabled() && !MG_Config::Features.DisableShaderPrewarm) {
-            MG_Util::ShaderTranspiler::ShaderCompiler::PrewarmBuiltins();
+        if (MG_Util::Async::AsyncShaderCompileEnabled()) {
+            if (MG_Config::Features.DisableShaderPrewarm) {
+                MGLOG_I("glslang built-in table prewarm skipped: MOBILEGL_DISABLE_SHADER_PREWARM is set");
+            } else {
+                MG_Util::ShaderTranspiler::ShaderCompiler::PrewarmBuiltins();
+            }
         }
         MGLOG_D("glslang initialized");
         g_isInitialized = true;

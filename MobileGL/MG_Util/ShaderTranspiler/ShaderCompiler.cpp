@@ -456,10 +456,6 @@ namespace MobileGL {
                 g_builtinsPrewarmed = false;
             }
 
-            Bool ShaderCompiler::BuiltinsPrewarmed() {
-                return g_builtinsPrewarmed;
-            }
-
             void ShaderCompiler::PrewarmBuiltins() {
                 if (g_builtinsPrewarmed) return;
                 g_builtinsPrewarmed = true;
@@ -491,6 +487,7 @@ namespace MobileGL {
                 // The parses above left this thread's glslang allocator pointing at the last
                 // TShader's pool, and that TShader is about to be destroyed with it.
                 glslang::SetThreadPoolAllocator(nullptr);
+                MGLOG_I("ShaderCompiler: prewarmed the glslang built-in tables for #version 460 and 330 core");
             }
 
             namespace {
