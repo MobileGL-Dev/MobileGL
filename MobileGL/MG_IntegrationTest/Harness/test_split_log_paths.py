@@ -262,5 +262,79 @@ class VerifySplitArmProofTest(unittest.TestCase):
             self.proof()
 
 
+class IpcConfigProofTest(unittest.TestCase):
+    """ipc-config reads each passed entry's own client log for the knobs the run resolved."""
+
+    LINE = "Config: IPC ring=8MiB run-ahead={ra} present-credit=2 strict={st} audit=0 role-split-state={rs} surface=x"
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name)
+        self.xml = self.root / "run.xml"
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def lane(self, rows):
+        """rows: (name, status, pins, log line or None)."""
+        tests, suite = [], ET.Element("testsuite")
+        for i, (name, status, pins, line) in enumerate(rows):
+            base = self.root / f"{i}.log"
+            if line is not None:
+                (self.root / f"{i}.client.log").write_text("Config: MOBILEGL_TRANSPORT=inproc\n" + line + "\n")
+            env = ["MOBILEGL_LOG_FILE_PATH=" + str(base)] + pins
+            tests.append({"name": name, "properties": [{"name": "ENVIRONMENT", "value": env}]})
+            case = ET.SubElement(suite, "testcase", name=name, status="run")
+            if status == "skip":
+                ET.SubElement(case, "skipped")
+            if status == "fail":
+                ET.SubElement(case, "failure")
+        ET.ElementTree(suite).write(self.xml)
+        return {"tests": tests}
+
+    def check(self, rows, expected=None, assumed=("role-split-state", "run-ahead")):
+        expected = expected or {"strict": "0", "role-split-state": "1", "run-ahead": "1"}
+        with contextlib.redirect_stdout(io.StringIO()):
+            return helper.ipc_config(self.lane(rows), self.xml, expected, set(assumed))[0]
+
+    def inproc(self, ra="1", st="0", rs="1"):
+        return ["MOBILEGL_TRANSPORT=inproc"], self.LINE.format(ra=ra, st=st, rs=rs)
+
+    def test_the_defaults_are_proven(self):
+        pins, line = self.inproc()
+        self.assertEqual(self.check([("A", "pass", pins, line), ("B", "skip", pins, None)]), 0)
+
+    def test_a_changed_default_is_exit_three(self):
+        pins, line = self.inproc(rs="0")
+        self.assertEqual(self.check([("A", "pass", pins, line)]), 3)
+
+    def test_an_unassumed_key_that_differs_is_red(self):
+        pins, line = self.inproc(st="1")
+        self.assertEqual(self.check([("A", "pass", pins, line)]), 1)
+
+    def test_a_passed_inproc_entry_without_the_line_is_red(self):
+        pins, line = self.inproc()
+        self.assertEqual(self.check([("A", "pass", pins, line), ("B", "pass", pins, None)]), 1)
+
+    def test_no_evidence_is_red(self):
+        pins, _ = self.inproc()
+        self.assertEqual(self.check([("A", "skip", pins, None)]), 1)
+
+    def test_an_entry_pin_overrides_the_expectation(self):
+        pins, line = self.inproc(ra="0")
+        self.assertEqual(self.check([("A", "pass", pins + ["MOBILEGL_IPC_RUN_AHEAD=0"], line)]), 0)
+        self.assertEqual(self.check([("A", "pass", pins + ["MOBILEGL_IPC_RUN_AHEAD=1"], line)]), 1,
+                         "a pinned value the run did not honour is red, not a changed default")
+
+    def test_the_value_is_matched_whole(self):
+        pins, line = self.inproc(ra="10")
+        self.assertEqual(self.check([("A", "pass", pins, line)]), 3)
+
+    def test_monolith_pinned_entries_are_left_out(self):
+        pins, line = self.inproc()
+        rows = [("A", "pass", pins, line), ("M", "pass", ["MOBILEGL_TRANSPORT=monolith"], None)]
+        self.assertEqual(self.check(rows), 0)
+
+
 if __name__ == "__main__":
     unittest.main()

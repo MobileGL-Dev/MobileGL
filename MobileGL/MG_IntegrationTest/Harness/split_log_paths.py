@@ -306,6 +306,72 @@ def require_green(document, junit_path, required):
     print(f"SplitLogPaths require-green: {len(by_name)} PASS, 0 skip, 0 failed, complete discovery")
 
 
+# The client's one-line IPC configuration (ConfigLoader, every non-monolith transport, INFO) and
+# the knobs an entry may pin in its own ENVIRONMENT instead of inheriting the lane's.
+IPC_LINE = "Config: IPC "
+IPC_PINS = {"strict": "MOBILEGL_IPC_STRICT_ERRORS", "role-split-state": "MOBILEGL_IPC_ROLE_SPLIT_STATE",
+            "run-ahead": "MOBILEGL_IPC_RUN_AHEAD"}
+
+
+def entry_environment(test):
+    env = {}
+    for prop in test.get("properties", []):
+        if prop.get("name") == "ENVIRONMENT":
+            for item in prop.get("value") or []:
+                key, _, value = item.partition("=")
+                env[key] = value
+    return env
+
+
+def ipc_config(document, junit_path, expected, assumed=()):
+    """Prove, from each passed entry's own client log, the IPC knobs the run resolved.
+
+    Every entry that passed and has a private log must show `key=value` on its last "Config: IPC"
+    line, where value is the entry's own ENVIRONMENT pin when it has one and the expected value
+    otherwise; monolith-pinned entries have no such line and are left out. Returns (code, summary):
+    0 proven; 3 when the only mismatches are on `assumed` keys of entries that do not pin them (a
+    default that changed); 1 for anything else, including no evidence at all."""
+    passed = set()
+    for case in ET.parse(junit_path).getroot().iter("testcase"):
+        failed = case.find("failure") is not None or case.find("error") is not None
+        skipped = case.find("skipped") is not None or case.get("status") in ("notrun", "disabled")
+        if not failed and not skipped:
+            passed.add(case.get("name"))
+    problems, defaults, checked = [], [], []
+    for test in document.get("tests", []):
+        name = test["name"]
+        env = entry_environment(test)
+        transport = env.get("MOBILEGL_TRANSPORT", "")
+        base = env.get("MOBILEGL_LOG_FILE_PATH", "")
+        if name not in passed or transport == "monolith" or not base:
+            continue
+        client = Path(role_paths(base)[0])
+        lines = [line for line in (client.read_text(errors="replace") if client.is_file() else "").splitlines()
+                 if IPC_LINE in line]
+        if not lines:
+            if transport == "inproc":
+                problems.append(f"{name}: passed under inproc but {client} carries no '{IPC_LINE.strip()}' line")
+            continue
+        checked.append(name)
+        for key, value in expected.items():
+            want = env.get(IPC_PINS.get(key, ""), value)
+            found = re.search(r"(?:^| )" + re.escape(key) + r"=(\S*)", lines[-1])
+            got = found.group(1) if found else "<absent>"
+            if got == want:
+                continue
+            row = f"{name}: {key}={got}, expected {want}"
+            if key in assumed and IPC_PINS.get(key) not in env:
+                defaults.append(row)
+            else:
+                problems.append(row)
+    if not checked:
+        problems.append("no passed entry left a 'Config: IPC' line, so nothing proves the configuration")
+    summary = {"checked": len(checked), "expected": expected, "assumed": sorted(assumed),
+               "problems": problems, "default_mismatches": defaults}
+    code = 1 if problems else 3 if defaults else 0
+    return code, summary
+
+
 VERIFY_ARMED_LINE = "MGPipe: verify armed"
 
 
@@ -616,6 +682,23 @@ def main():
     if mode == "require-green":
         require_green(json.loads(Path(sys.argv[2]).read_text()), sys.argv[3], sys.argv[4:])
         return
+    if mode == "ipc-config":
+        # <lane.json> <junit> <summary.json> key=value... [--assumed k1,k2]
+        args = sys.argv[5:]
+        assumed = set()
+        if "--assumed" in args:
+            at = args.index("--assumed")
+            assumed = {key for key in args[at + 1].split(",") if key}
+            args = args[:at] + args[at + 2:]
+        expected = dict(arg.split("=", 1) for arg in args)
+        code, summary = ipc_config(json.loads(Path(sys.argv[2]).read_text()), sys.argv[3], expected, assumed)
+        Path(sys.argv[4]).write_text(json.dumps(summary, indent=1) + "\n")
+        for row in summary["problems"] + summary["default_mismatches"]:
+            print(f"SplitLogPaths ipc-config: {row}")
+        print(f"SplitLogPaths ipc-config: {summary['checked']} entr(ies) checked against "
+              f"{' '.join(f'{k}={v}' for k, v in expected.items())}: "
+              f"{['proven', '', '', 'a default differs'][code] if code != 1 else 'FAILED'}")
+        sys.exit(code)
     selected = paths(json.loads(Path(sys.argv[2]).read_text()))
     selected = {name: path for name, path in selected.items() if re.search(sys.argv[3], name)}
     # The SAME exclusion run_control hands ctest -E. Without it this helper and ctest disagree

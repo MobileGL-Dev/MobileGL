@@ -10544,7 +10544,8 @@
    "DirectVulkan.ViewportArrayScenario.WithoutTheEmulationEveryIndexCollapsesOntoViewportZero",
    "DirectVulkan.WireMipShapeScenario.Depth1DChainWithoutANativeBlitDeclinesByName"
   ],
-  "names_from": "junit-integration-inproc-acceptance-inproc/integration"
+  "names_from": "junit-integration-inproc-acceptance-inproc/integration",
+  "optional": "runs only when build-linux-split builds its own library, or the split lane's logs do not prove the IPC defaults"
  },
  "junit-integration-split/arm-monolith": {
   "skipped": [
@@ -10972,7 +10973,8 @@
    "DirectVulkan.WireIndirectDrawScenario.ShaderWrittenCommandsWithoutAnApplicationBarrierAreOrdered",
    "DirectVulkan.WireMipShapeScenario.Depth1DChainWithoutANativeBlitDeclinesByName"
   ],
-  "names_from": "junit-integration-inproc-acceptance-inproc/integration"
+  "names_from": "junit-integration-inproc-acceptance-inproc/integration",
+  "optional": "runs only when build-linux-split builds its own library, or the split lane's logs do not prove the IPC defaults"
  },
  "junit-integration-split/control": {
   "skipped": [],
@@ -12378,7 +12380,8 @@
    "ResourceEmit.TheLiveHostWritesWireFiresOnTheCallAPersistentMapProducerWouldSetItOn",
    "XfbFrontendOrderInvarianceTest.DumpBSpirvForDisassembly"
   ],
-  "names_from": "junit-integration-split-strict/unit-strict"
+  "names_from": "junit-integration-split-strict/unit-strict",
+  "optional": "runs only when build-linux-split builds its own library; the test job runs the same unit lane on the reused build"
  },
  "junit-integration-verify-split/verify-split": {
   "skipped": [
