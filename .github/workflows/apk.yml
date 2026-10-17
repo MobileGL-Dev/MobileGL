@@ -31,7 +31,7 @@ concurrency:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     permissions:
       actions: write
       contents: read
@@ -249,7 +249,7 @@ jobs:
 
   trace-cases:
     name: trace case matrix
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     env:
       MOBILEGL_CI_DISAGGREGATED: ${{ (github.ref_name == 'feat/disaggregated' || github.ref_name == 'codex/fix-github-ci' || github.ref_name == 'cleanup') && 'ON' || 'OFF' }}
     outputs:
@@ -272,7 +272,7 @@ jobs:
 
   trace-fixtures:
     name: trace fixture (${{ matrix.case }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: trace-cases
     strategy:
       fail-fast: false
@@ -337,7 +337,7 @@ jobs:
 
   android-avd:
     name: android avd image
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     env:
       AVD_NAME: mobilegl-ci
       ANDROID_AVD_HOME: ${{ github.workspace }}/.android/avd
@@ -393,7 +393,7 @@ jobs:
 
   retrace:
     name: retrace (${{ matrix.backend.name }} / ${{ matrix.transport || 'monolith' }}, ${{ matrix.case.name }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs:
       - build
       - android-avd
@@ -668,7 +668,7 @@ jobs:
 
   retrace-summary:
     name: retrace summary
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: retrace
     if: ${{ !cancelled() }}
     env:
@@ -759,7 +759,7 @@ jobs:
 
   remove-artifact-clutter:
     name: remove artifact clutter
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: retrace-summary
     if: always()
     permissions:

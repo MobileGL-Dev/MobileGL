@@ -15,7 +15,7 @@ permissions:
 jobs:
   text-hygiene:
     name: Commit messages and source text
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
     env:
       TEXT_HYGIENE_BASE_BRANCH: feat/disaggregated

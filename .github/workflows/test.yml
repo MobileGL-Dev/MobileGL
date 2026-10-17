@@ -35,7 +35,7 @@ defaults:
 jobs:
   # Temporarily keep all CI on GitHub-hosted runners while WSL D3D12 readback hangs are investigated.
   build-linux:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     permissions:
       actions: write
       contents: read
@@ -72,9 +72,9 @@ jobs:
         uses: actions/cache/restore@v5
         with:
           path: .ccache
-          key: ${{ runner.os }}-ubuntu24-cpu-test-${{ github.job }}-ccache-v1
+          key: ${{ runner.os }}-ubuntu26-cpu-test-${{ github.job }}-ccache-v1
           restore-keys: |
-            ${{ runner.os }}-ubuntu24-cpu-test-${{ github.job }}-ccache-
+            ${{ runner.os }}-ubuntu26-cpu-test-${{ github.job }}-ccache-
 
       - name: Prepare Vulkan SDK
         id: netsetup77
@@ -166,7 +166,7 @@ jobs:
       - name: Release superseded ccache entry
         env:
           GH_TOKEN: ${{ github.token }}
-          CACHE_KEY: ${{ runner.os }}-ubuntu24-cpu-test-${{ github.job }}-ccache-v1
+          CACHE_KEY: ${{ runner.os }}-ubuntu26-cpu-test-${{ github.job }}-ccache-v1
         run: gh cache delete "${CACHE_KEY}" --ref "${GITHUB_REF}" || true
 
       - name: Save ccache
@@ -174,7 +174,7 @@ jobs:
         uses: actions/cache/save@v5
         with:
           path: .ccache
-          key: ${{ runner.os }}-ubuntu24-cpu-test-${{ github.job }}-ccache-v1
+          key: ${{ runner.os }}-ubuntu26-cpu-test-${{ github.job }}-ccache-v1
 
       - name: Prepare packaged test metadata
         run: python3 scripts/ci/prepare_test_runtime.py "${BUILD_DIR}"
@@ -224,7 +224,7 @@ jobs:
   # on disaggregation branches that artifact now contains the real transport.
   build-linux-monolith-control:
     name: build push monolith control (no MG_Remote)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     env:
       BUILD_DIR: build-push-control
       CCACHE_BASEDIR: ${{ github.workspace }}
@@ -253,7 +253,7 @@ jobs:
         uses: actions/cache/restore@v5
         with:
           path: .ccache
-          key: ${{ runner.os }}-ubuntu24-cpu-test-build-linux-ccache-v1
+          key: ${{ runner.os }}-ubuntu26-cpu-test-build-linux-ccache-v1
       - name: Prepare Vulkan SDK
         id: netsetup230
         continue-on-error: true
@@ -318,7 +318,7 @@ jobs:
           if-no-files-found: error
 
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: [build-linux]
 
     # Every ctest entry is its own short-lived process, and none compiles enough to repay
@@ -391,7 +391,7 @@ jobs:
 
   integration:
     name: integration (${{ matrix.transport }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: [build-linux]
     strategy:
       fail-fast: false
@@ -459,7 +459,7 @@ jobs:
         # Cores are armed so that any crash - the harness pre-flight child's
         # included - leaves /tmp/core.*, which the failure-only step below ships
         # as an artifact. Analyzing a downloaded core against the runtime
-        # artifact's binary in an ubuntu-24.04 userspace reproduces the exact
+        # artifact's binary in an ubuntu-26.04 userspace reproduces the exact
         # crash stack without burning a CI round on an in-workflow debugger.
         env:
           MOBILEGL_ITEST_REQUIRE_GPU: "1"
@@ -536,7 +536,7 @@ jobs:
   # MOBILEGL_PIPE_VERIFY is a compile-time option - the snapshot, the entry compare and the
   # compare-at-read hook do not exist in the shipped library, and are never meant to.
   build-linux-verify:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 120
     permissions:
       actions: write
@@ -573,9 +573,9 @@ jobs:
         uses: actions/cache/restore@v5
         with:
           path: .ccache
-          key: ${{ runner.os }}-ubuntu24-cpu-test-${{ github.job }}-ccache-v1
+          key: ${{ runner.os }}-ubuntu26-cpu-test-${{ github.job }}-ccache-v1
           restore-keys: |
-            ${{ runner.os }}-ubuntu24-cpu-test-${{ github.job }}-ccache-
+            ${{ runner.os }}-ubuntu26-cpu-test-${{ github.job }}-ccache-
 
       - name: Prepare Vulkan SDK
         id: netsetup530
@@ -686,7 +686,7 @@ jobs:
       - name: Release superseded ccache entry
         env:
           GH_TOKEN: ${{ github.token }}
-          CACHE_KEY: ${{ runner.os }}-ubuntu24-cpu-test-${{ github.job }}-ccache-v1
+          CACHE_KEY: ${{ runner.os }}-ubuntu26-cpu-test-${{ github.job }}-ccache-v1
         run: gh cache delete "${CACHE_KEY}" --ref "${GITHUB_REF}" || true
 
       - name: Save ccache
@@ -694,7 +694,7 @@ jobs:
         uses: actions/cache/save@v5
         with:
           path: .ccache
-          key: ${{ runner.os }}-ubuntu24-cpu-test-${{ github.job }}-ccache-v1
+          key: ${{ runner.os }}-ubuntu26-cpu-test-${{ github.job }}-ccache-v1
 
       - name: Prepare packaged test metadata
         run: python3 scripts/ci/prepare_test_runtime.py "${BUILD_DIR}"
@@ -742,7 +742,7 @@ jobs:
   # are ALWAYS-ON steps, not a manual exercise: a gate that can only be shown to work by someone
   # remembering to break it on purpose is a gate that has already stopped working.
   integration-verify:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 180
     needs: [build-linux-verify]
 
@@ -994,7 +994,7 @@ jobs:
   # gPipeInputs and the frontend GLContext) are co-resident only when both roles share a process.
   # MG_IntegrationTest/CMakeLists.txt's verify-split block records the spawn measurement.
   integration-verify-split:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: [build-linux-verify-split]
     timeout-minutes: 180
 
@@ -1235,7 +1235,7 @@ jobs:
   # so the build-level assertion is the only guard, and its absence is precisely what would make
   # the whole split arm meaningless.
   build-linux-split:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 120
     permissions:
       actions: write
@@ -1277,9 +1277,9 @@ jobs:
         uses: actions/cache/restore@v5
         with:
           path: .ccache
-          key: ${{ runner.os }}-ubuntu24-cpu-test-${{ github.job }}-ccache-v1
+          key: ${{ runner.os }}-ubuntu26-cpu-test-${{ github.job }}-ccache-v1
           restore-keys: |
-            ${{ runner.os }}-ubuntu24-cpu-test-${{ github.job }}-ccache-
+            ${{ runner.os }}-ubuntu26-cpu-test-${{ github.job }}-ccache-
 
       - name: Prepare Vulkan SDK
         id: netsetup1274
@@ -1408,7 +1408,7 @@ jobs:
       - name: Release superseded ccache entry
         env:
           GH_TOKEN: ${{ github.token }}
-          CACHE_KEY: ${{ runner.os }}-ubuntu24-cpu-test-${{ github.job }}-ccache-v1
+          CACHE_KEY: ${{ runner.os }}-ubuntu26-cpu-test-${{ github.job }}-ccache-v1
         run: gh cache delete "${CACHE_KEY}" --ref "${GITHUB_REF}" || true
 
       - name: Save ccache
@@ -1416,7 +1416,7 @@ jobs:
         uses: actions/cache/save@v5
         with:
           path: .ccache
-          key: ${{ runner.os }}-ubuntu24-cpu-test-${{ github.job }}-ccache-v1
+          key: ${{ runner.os }}-ubuntu26-cpu-test-${{ github.job }}-ccache-v1
 
       - name: Prepare packaged test metadata
         run: python3 scripts/ci/prepare_test_runtime.py "${BUILD_DIR}"
@@ -1463,7 +1463,7 @@ jobs:
   # The split lane itself: the three-arm shape ARCHITECTURE.md §13.2 asks for verbatim, plus the
   # first real run of the five MG_Test/Wire suites, plus P5's two exit-gate negative controls.
   integration-split:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 120
     needs: [build-linux-split]
 
@@ -1703,7 +1703,7 @@ jobs:
   # Configured controls must pass without skips. Capability gaps and known
   # limitations are reported separately and accepted only by exact name/reason.
   integration-split-strict:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 60
     needs: [build-linux-split]
 
@@ -2255,7 +2255,7 @@ jobs:
   # header honest: build the pinned flatc, regenerate, and fail on any diff.
   # It needs no MobileGL build, so it does not depend on build-linux.
   flatc-check:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
 
     steps:
       - name: Checkout repo
@@ -2300,7 +2300,7 @@ jobs:
   # job, because a gate that cannot go red is not a gate (ARCHITECTURE.md §13.2).
   include-graph-check:
     name: Include-closure purity gate
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
 
     steps:
       - name: Checkout repo
@@ -2332,7 +2332,7 @@ jobs:
         run: python3 scripts/check_include_closure.py --mode both --compiler "${MOBILEGL_CI_CXX}" --self-test --require-all --expect-probes 5
 
   benchmark:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: [build-linux]
 
     steps:
@@ -2392,7 +2392,7 @@ jobs:
           if-no-files-found: ignore
 
   build-retrace:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     permissions:
       actions: write
       contents: read
@@ -2429,9 +2429,9 @@ jobs:
         uses: actions/cache/restore@v5
         with:
           path: .ccache
-          key: ${{ runner.os }}-ubuntu24-cpu-test-${{ github.job }}-ccache-v1
+          key: ${{ runner.os }}-ubuntu26-cpu-test-${{ github.job }}-ccache-v1
           restore-keys: |
-            ${{ runner.os }}-ubuntu24-cpu-test-${{ github.job }}-ccache-
+            ${{ runner.os }}-ubuntu26-cpu-test-${{ github.job }}-ccache-
 
       - name: Prepare Vulkan SDK
         id: netsetup2500
@@ -2510,7 +2510,7 @@ jobs:
       - name: Release superseded ccache entry
         env:
           GH_TOKEN: ${{ github.token }}
-          CACHE_KEY: ${{ runner.os }}-ubuntu24-cpu-test-${{ github.job }}-ccache-v1
+          CACHE_KEY: ${{ runner.os }}-ubuntu26-cpu-test-${{ github.job }}-ccache-v1
         run: gh cache delete "${CACHE_KEY}" --ref "${GITHUB_REF}" || true
 
       - name: Save ccache
@@ -2518,7 +2518,7 @@ jobs:
         uses: actions/cache/save@v5
         with:
           path: .ccache
-          key: ${{ runner.os }}-ubuntu24-cpu-test-${{ github.job }}-ccache-v1
+          key: ${{ runner.os }}-ubuntu26-cpu-test-${{ github.job }}-ccache-v1
 
       - name: Prepare packaged test metadata
         run: python3 scripts/ci/prepare_test_runtime.py "${BUILD_DIR}"
@@ -2540,7 +2540,7 @@ jobs:
 
   trace-cases:
     name: trace case matrix
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     env:
       MOBILEGL_CI_DISAGGREGATED: ${{ (github.ref_name == 'feat/disaggregated' || github.ref_name == 'codex/fix-github-ci' || github.ref_name == 'cleanup') && 'ON' || 'OFF' }}
     outputs:
@@ -2602,7 +2602,7 @@ jobs:
 
   trace-fixtures:
     name: trace fixture (${{ matrix.case }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: [trace-cases]
     strategy:
       fail-fast: false
@@ -2670,7 +2670,7 @@ jobs:
 
   retrace:
     name: retrace (${{ matrix.backend }} / ${{ matrix.transport || 'monolith' }}, ${{ matrix.case }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     env:
       MOBILEGL_TRANSPORT: ${{ matrix.transport || 'monolith' }}
       MOBILEGL_IPC_ROLE_SPLIT_STATE: "1"
@@ -2800,7 +2800,7 @@ jobs:
 
   retrace-summary:
     name: retrace summary
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs: [retrace]
     if: ${{ !cancelled() && needs.retrace.result != 'skipped' }}
     env:
@@ -2878,7 +2878,7 @@ jobs:
   # is budgeted at 5-10x, and the full sweep is a phase-exit / workflow_dispatch run.
   retrace-verify:
     name: retrace verify (${{ matrix.backend }}, ${{ matrix.case }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 240
     needs:
       - build-linux-verify
@@ -3056,7 +3056,7 @@ jobs:
   # guards are the nm check for MG_Remote and run_trace_case.cmake's transport-resolution check.
   retrace-split:
     name: retrace split (${{ matrix.backend }} / ${{ matrix.transport }}, ${{ matrix.case }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 240
     # The setup action selects lavapipe on GitHub-hosted runners.
     needs:
@@ -3322,7 +3322,7 @@ jobs:
 
   remove-artifact-clutter:
     name: remove artifact clutter
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # Every retrace arm downloads the shared fixtures, including split controls.
     needs:
       - retrace-summary
@@ -3396,7 +3396,7 @@ jobs:
 
   pipe-gates:
     name: MGPipe generators and hygiene gates
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     # Deliberately independent of build-linux: these are source-level gates, they take
     # seconds, and a broken build must not hide a drifted interface.
 
@@ -3527,7 +3527,7 @@ jobs:
           fi
           python3 scripts/check_doc_citations.py "${documents[@]}" || true
   build-linux-verify-split:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     timeout-minutes: 180
     permissions:
       actions: write
@@ -3566,9 +3566,9 @@ jobs:
         uses: actions/cache/restore@v5
         with:
           path: .ccache
-          key: ${{ runner.os }}-ubuntu24-cpu-test-${{ github.job }}-ccache-v1
+          key: ${{ runner.os }}-ubuntu26-cpu-test-${{ github.job }}-ccache-v1
           restore-keys: |
-            ${{ runner.os }}-ubuntu24-cpu-test-${{ github.job }}-ccache-
+            ${{ runner.os }}-ubuntu26-cpu-test-${{ github.job }}-ccache-
 
       - name: Prepare Vulkan SDK
         id: netsetup3726
@@ -3654,7 +3654,7 @@ jobs:
       - name: Release superseded ccache entry
         env:
           GH_TOKEN: ${{ github.token }}
-          CACHE_KEY: ${{ runner.os }}-ubuntu24-cpu-test-${{ github.job }}-ccache-v1
+          CACHE_KEY: ${{ runner.os }}-ubuntu26-cpu-test-${{ github.job }}-ccache-v1
         run: gh cache delete "${CACHE_KEY}" --ref "${GITHUB_REF}" || true
 
       - name: Save ccache
@@ -3662,7 +3662,7 @@ jobs:
         uses: actions/cache/save@v5
         with:
           path: .ccache
-          key: ${{ runner.os }}-ubuntu24-cpu-test-${{ github.job }}-ccache-v1
+          key: ${{ runner.os }}-ubuntu26-cpu-test-${{ github.job }}-ccache-v1
 
       - name: Prepare packaged test metadata
         run: python3 scripts/ci/prepare_test_runtime.py "${BUILD_DIR}"
@@ -3691,7 +3691,7 @@ jobs:
   # A deliberate retirement edits the baseline in the same commit and names the cases.
   skip-census:
     name: skip census
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     needs:
       - test
       - integration
