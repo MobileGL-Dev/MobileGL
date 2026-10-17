@@ -648,6 +648,7 @@ list(APPEND SOURCE_FILES
     # pull build gains no symbol from P2 (G1) - a declaration emits nothing.
     MobileGL/MG_Pipe/MGPipeRenderStateSpans.cpp
     MobileGL/MG_Pipe/PipeApply.cpp
+    MobileGL/MG_Pipe/PipeDeviceLossKnobs.cpp
     MobileGL/MG_Impl/Pipe/SlotAllocator.cpp
     # P4a's contract: the reflection-archive serializer over ProgramArtifacts.h's
     # VisitFields tables. Push-only for the same G1 reason as the three above - in
