@@ -29,6 +29,7 @@ import unittest
 HERE = Path(__file__).resolve().parent
 SCRIPT = HERE / 'run_trace_case.cmake'
 CHECKER = HERE.parents[1] / 'scripts' / 'ci' / 'retrace_split_evidence.py'
+VERIFY_REASON = HERE.parents[1] / 'scripts' / 'ci' / 'retrace_verify_reason.py'
 sys.path.insert(0, str(CHECKER.parent))
 import retrace_split_evidence as checker  # noqa: E402
 
@@ -59,10 +60,6 @@ if os.environ.get('STUB_ABORT'):
 with open(os.path.join(out, 'result.json'), 'w') as result:
     json.dump({'passed': True, 'ssim': 1.0}, result)
 '''
-
-# The retrace-verify control's reason check, as the workflow runs it on the tee'd ctest -V output.
-VERIFY_CONTROL_REASON = ("sed -E 's/^[0-9]+: //' \"$1\" | tr -s '[:space:]' ' ' "
-                         "| grep -qF 'Fatal{PipeVerifyDiffer, \"GetRenderStateParameters@'")
 
 PREFIX = '[12:00:00] [Linux mobilegl_trace_/INFO]: '
 MARKER = {
@@ -307,17 +304,24 @@ class RunTraceCaseTests(unittest.TestCase):
 
     def test_v4_an_aborted_verify_run_names_its_divergence(self):
         # The comparator aborts the replay before result.json, so the script dumps the library log;
-        # the retrace-verify control requires that dump to carry the divergence it caused.
+        # the retrace-verify control requires that dump to carry the divergence it caused, through
+        # the same scripts/ci/retrace_verify_reason.py the workflow runs. Another Fatal is not it,
+        # and neither is the comparator's divergence on a field the control did not corrupt.
         fatal = 'MGPipe: Fatal{PipeVerifyDiffer, "GetRenderStateParameters@Clear"} field=3 where=entry'
+        other = 'MGPipe: Fatal{UnmigratedPipeInput, "GetPixelStoreParameters@ReadPixels"}'
+        other_field = 'MGPipe: Fatal{PipeVerifyDiffer, "GetPixelStoreParameters@ReadPixels"} field=1 where=entry'
         env = {'MOBILEGL_PIPE_VERIFY': '1', 'STUB_ABORT': '1'}
         rc, output = self.run_case(env, {'mobilegl.log': lines('MGPipe: verify armed', fatal)})
         self.assertNotEqual(rc, 0, output)
         transcript = self.root / 'control.txt'
-        for log, expected in ((lines('MGPipe: verify armed', fatal), 0), (lines('MGPipe: verify armed'), 1)):
+        for log, expected in ((lines('MGPipe: verify armed', fatal), 0), (lines('MGPipe: verify armed'), 1),
+                              (lines('MGPipe: verify armed', other), 1),
+                              (lines('MGPipe: verify armed', other_field), 1)):
             _, raw = self.run_case(env, {'mobilegl.log': log}, squashed=False)
             transcript.write_text(''.join('1: ' + row + '\n' for row in raw.splitlines()))
-            check = subprocess.run(['bash', '-c', VERIFY_CONTROL_REASON, 'reason', str(transcript)])
-            self.assertEqual(check.returncode, expected, raw)
+            check = subprocess.run([sys.executable, str(VERIFY_REASON), str(transcript)],
+                                   capture_output=True, text=True)
+            self.assertEqual(check.returncode, expected, raw + check.stdout)
 
     def test_v3_verify_green(self):
         rc, output = self.run_case({'MOBILEGL_PIPE_VERIFY': '1'}, {'mobilegl.log': lines('MGPipe: verify armed')})

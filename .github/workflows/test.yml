@@ -3287,12 +3287,9 @@ jobs:
             echo "::error::MOBILEGL_PIPE_VERIFY_CORRUPT=GetRenderStateParameters left the OpenRA retrace GREEN, so the comparator is not comparing and the whole verify retrace lane proves nothing."
             exit 1
           fi
-          # Its own red: ctest -V prefixes every line with the test number, and CMake re-wraps text.
-          if ! sed -E 's/^[0-9]+: //' "${RUNNER_TEMP}/verify-control.txt" | tr -s '[:space:]' ' ' \
-               | grep -qF 'Fatal{PipeVerifyDiffer, "GetRenderStateParameters@'; then
-            echo "::error::the corrupted-snapshot retrace went red without Fatal{PipeVerifyDiffer, \"GetRenderStateParameters@...\"}: something other than the comparator failed it"
-            exit 1
-          fi
+          # Its red must carry the comparator's divergence on the corrupted field
+          # (scripts/ci/retrace_verify_reason.py, which test_run_trace_case.py runs on canned output).
+          python3 "${GITHUB_WORKSPACE}/scripts/ci/retrace_verify_reason.py" "${RUNNER_TEMP}/verify-control.txt"
           echo "the corrupted field turned the retrace red, as it must (ctest exit ${control_rc})"
 
       - name: Upload core dumps
