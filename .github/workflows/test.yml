@@ -220,8 +220,9 @@ jobs:
           path: ci-artifacts/mobilegl-linux-lib.tgz
           if-no-files-found: error
 
-  # The pull-library negative control must not consume the primary artifact:
-  # on disaggregation branches that artifact now contains the real transport.
+  # The shipped shape: a library with no MG_Remote, which FCL embeds. On the disaggregation
+  # branches the primary artifact carries the transport, so this is the only build of that shape
+  # there; retrace-shipped replays it.
   build-linux-monolith-control:
     name: build push monolith control (no MG_Remote)
     runs-on: ubuntu-26.04
@@ -282,11 +283,9 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y ccache clang-20 clang++-20 lld-20 libc++-20-dev libc++abi-20-dev libvulkan-dev libegl1-mesa-dev libgles2-mesa-dev libgl1-mesa-dri mesa-vulkan-drivers ninja-build
-      # THE PUSH MONOLITH WITHOUT MG_Remote - the shape FCL embeds (PLAN-P13 §4.1, §4.3; ID-P13-1).
-      # Two jobs in one: it is the transport-negative control retrace-split swaps in (P13 W2 retired
-      # the pull library that used to play that part), and its runtime_mode_proof is the
-      # zero-MG_Remote-symbol check, one of G1's successors (ID-P13-4): a push library that links
-      # any MG_Remote symbol is red here.
+      # The push monolith without MG_Remote, the shape FCL embeds. Its runtime_mode_proof is the
+      # zero-MG_Remote-symbol check: a push library that links any MG_Remote symbol is red here.
+      # Its library is uploaded for retrace-shipped, a positive replay of that shape.
       - name: Configure push control without MG_Remote
         run: |
           cmake -S . -B "${BUILD_DIR}" -G Ninja \
@@ -357,7 +356,7 @@ jobs:
 
       - name: Prepare downloaded test metadata
         run: |
-          for root in build-linux build-verify build-split build-verify-split build-retrace control-runtime/build-push-control; do
+          for root in build-linux build-verify build-split build-verify-split build-retrace; do
             if [ -d "$root" ]; then python3 scripts/ci/prepare_test_runtime.py "$root"; fi
           done
 
@@ -447,7 +446,7 @@ jobs:
 
       - name: Prepare downloaded test metadata
         run: |
-          for root in build-linux build-verify build-split build-verify-split build-retrace control-runtime/build-push-control; do
+          for root in build-linux build-verify build-split build-verify-split build-retrace; do
             if [ -d "$root" ]; then python3 scripts/ci/prepare_test_runtime.py "$root"; fi
           done
 
@@ -789,7 +788,7 @@ jobs:
 
       - name: Prepare downloaded test metadata
         run: |
-          for root in build-linux build-verify build-split build-verify-split build-retrace control-runtime/build-push-control; do
+          for root in build-linux build-verify build-split build-verify-split build-retrace; do
             if [ -d "$root" ]; then python3 scripts/ci/prepare_test_runtime.py "$root"; fi
           done
 
@@ -1034,7 +1033,7 @@ jobs:
       # otherwise also match this label and the monolith one would match both.
       - name: Prepare downloaded test metadata
         run: |
-          for root in build-linux build-verify build-split build-verify-split build-retrace control-runtime/build-push-control; do
+          for root in build-linux build-verify build-split build-verify-split build-retrace; do
             if [ -d "$root" ]; then python3 scripts/ci/prepare_test_runtime.py "$root"; fi
           done
 
@@ -1507,7 +1506,7 @@ jobs:
 
       - name: Prepare downloaded test metadata
         run: |
-          for root in build-linux build-verify build-split build-verify-split build-retrace control-runtime/build-push-control; do
+          for root in build-linux build-verify build-split build-verify-split build-retrace; do
             if [ -d "$root" ]; then python3 scripts/ci/prepare_test_runtime.py "$root"; fi
           done
 
@@ -1745,7 +1744,7 @@ jobs:
 
       - name: Prepare downloaded test metadata
         run: |
-          for root in build-linux build-verify build-split build-verify-split build-retrace control-runtime/build-push-control; do
+          for root in build-linux build-verify build-split build-verify-split build-retrace; do
             if [ -d "$root" ]; then python3 scripts/ci/prepare_test_runtime.py "$root"; fi
           done
 
@@ -2370,7 +2369,7 @@ jobs:
 
       - name: Prepare downloaded test metadata
         run: |
-          for root in build-linux build-verify build-split build-verify-split build-retrace control-runtime/build-push-control; do
+          for root in build-linux build-verify build-split build-verify-split build-retrace; do
             if [ -d "$root" ]; then python3 scripts/ci/prepare_test_runtime.py "$root"; fi
           done
 
@@ -2471,7 +2470,7 @@ jobs:
 
       - name: Prepare downloaded test metadata
         run: |
-          for root in build-linux build-verify build-split build-verify-split build-retrace control-runtime/build-push-control; do
+          for root in build-linux build-verify build-split build-verify-split build-retrace; do
             if [ -d "$root" ]; then python3 scripts/ci/prepare_test_runtime.py "$root"; fi
           done
 
@@ -2746,7 +2745,7 @@ jobs:
 
       - name: Prepare downloaded test metadata
         run: |
-          for root in build-linux build-verify build-split build-verify-split build-retrace control-runtime/build-push-control; do
+          for root in build-linux build-verify build-split build-verify-split build-retrace; do
             if [ -d "$root" ]; then python3 scripts/ci/prepare_test_runtime.py "$root"; fi
           done
 
@@ -2970,7 +2969,7 @@ jobs:
 
       - name: Prepare downloaded test metadata
         run: |
-          for root in build-linux build-verify build-split build-verify-split build-retrace control-runtime/build-push-control; do
+          for root in build-linux build-verify build-split build-verify-split build-retrace; do
             if [ -d "$root" ]; then python3 scripts/ci/prepare_test_runtime.py "$root"; fi
           done
 
@@ -3054,23 +3053,18 @@ jobs:
   # process differs, so a spawn-only failure is a transport fact. It runs the unchanged ctest
   # names with MOBILEGL_TRANSPORT exported around ctest, since build-retrace does not register the
   # split variant entries. SSIM cannot catch a monolith run (OpenRA scores 1.000 either way); the
-  # guards are the nm check for MG_Remote and run_trace_case.cmake's transport-resolution check.
+  # guards are the nm check for MG_Remote, run_trace_case.cmake's transport assertions (and, on
+  # OpenRA, its wire-volume assertion), and the per-leg check of the evidence file they leave.
   retrace-split:
     name: retrace split (${{ matrix.backend }} / ${{ matrix.transport }}, ${{ matrix.case }})
     runs-on: ubuntu-26.04
     timeout-minutes: 240
     # The setup action selects lavapipe on GitHub-hosted runners.
     needs:
-      - build-linux-monolith-control
       - build-linux-split
       - build-retrace
       - trace-cases
       - trace-fixtures
-    # The monolith-control artifact is for the negative controls ONLY: its libraries are what the
-    # controls swap in to prove the transport-resolution assertion is load-bearing. P13 W1: the
-    # legs no longer require that build to have SUCCEEDED - gating on it skipped the whole split
-    # matrix (grey, not red) whenever the control build failed (PLAN-P13 §0-7). The control steps
-    # below download its artifact, and a missing one is a red step on every leg instead.
     if: ${{ !cancelled() && needs.build-linux-split.result == 'success' && needs.build-retrace.result == 'success' && needs.trace-cases.result == 'success' }}
     strategy:
       fail-fast: false
@@ -3130,19 +3124,6 @@ jobs:
           name: mobilegl-trace-replay
           path: .
 
-      # The push monolith without MG_Remote, for the negative control at the end of this job and for
-      # nothing else.
-      - name: Download control runtime (negative control)
-        uses: actions/download-artifact@v8
-        with:
-          name: mobilegl-linux-monolith-control
-          path: control-runtime
-
-      - name: Unpack the control runtime (negative control)
-        run: |
-          tar -xzf control-runtime/mobilegl-linux-monolith-control.tgz -C control-runtime
-          test -f control-runtime/build-push-control/libMobileGL.so
-
       - name: Unpack split runtime (library under test)
         # build-retrace's CTestTestfile.cmake has the absolute path
         # <workspace>/build-linux/libMobileGL.so frozen into every case, so the swap happens here
@@ -3162,7 +3143,7 @@ jobs:
 
       - name: Prepare downloaded test metadata
         run: |
-          for root in build-linux build-verify build-split build-verify-split build-retrace control-runtime/build-push-control; do
+          for root in build-linux build-verify build-split build-verify-split build-retrace; do
             if [ -d "$root" ]; then python3 scripts/ci/prepare_test_runtime.py "$root"; fi
           done
 
@@ -3183,12 +3164,8 @@ jobs:
           chmod +x build-linux/libMobileGLServer.so
           echo "server image: $(readlink -f build-linux/libMobileGLServer.so)"
 
-      # THE MAGMA KNOBS GO TO $GITHUB_ENV, NOT TO ONE STEP'S SHELL: the replay below AND both
-      # negative controls after it must run the same repair set. Exported inside "Retrace and
-      # validate" only, they never reached the pull-library control, which replayed
-      # iterationrp x DirectVulkan unrepaired (ssim 0.028 < 0.98), reddened at
-      # run_trace_case.cmake:173 before the transport assertion, and failed as "the failure never
-      # says the library did not resolve the transport" - a red that is not the control's own.
+      # The Magma knobs go to $GITHUB_ENV rather than to one step's shell, so every later step of
+      # this leg runs the same repair set as the replay.
       - name: Magma repair knobs (all later steps)
         run: |
           # P7 package L: THE SAME MAGMA KNOBS THE MONOLITH RETRACE JOB EXPORTS, ALL OF THEM.
@@ -3247,47 +3224,6 @@ jobs:
             --transport '${{ matrix.transport }}' --case '${{ matrix.case }}' \
             --backend '${{ matrix.backend }}' "${wire[@]}"
 
-      # Negative control: copy a library without MG_Remote (the push monolith FCL embeds) over the
-      # frozen path and require the same replay to fail. OpenRA scores ssim 1.000 either way, so
-      # the picture cannot catch the swap; this proves that run_trace_case.cmake's
-      # transport-resolution check still does. The body is scripts/ci/retrace_transport_control.sh,
-      # which control_smoke_test.sh runs off a runner. It counts the selection first, requires the
-      # red to carry run_trace_case.cmake's own sentence, and restores the split library and the
-      # good run's images, since "Upload actual image" runs `if: always()`.
-      - name: Negative control (library without a transport)
-        working-directory: build-retrace/tools/trace_replay
-        env:
-          CONTROL_TMPDIR: ${{ runner.temp }}
-          CONTROL_LIBRARY: ${{ github.workspace }}/control-runtime/build-push-control/libMobileGL.so
-          FROZEN_LIBRARY: ${{ github.workspace }}/build-linux/libMobileGL.so
-          # The control has to run the arm it is a control FOR. Hard-coded inproc, it would go on
-          # proving something about the other arm while spawn ran unguarded.
-          SPLIT_TRANSPORT: ${{ matrix.transport }}
-          MOBILEGL_IPC_SERVER_PATH: ${{ github.workspace }}/build-linux/libMobileGLServer.so
-        run: >-
-          bash "${GITHUB_WORKSPACE}/scripts/ci/retrace_transport_control.sh"
-          '${{ matrix.case }}' '${{ matrix.backend }}'
-
-      # Negative control for the picture: the step above cannot show that the image came through
-      # the wire, because OpenRA also scores ssim 1.000 on a monolith library. This drops the
-      # DrawVbo records and requires the SSIM to fall. Dropping clears does not work: OpenRA
-      # overdraws every pixel it clears (retrace_drop_draw_control.sh's header has the census).
-      # The body is a script so control_smoke_test.sh can run it against a stubbed ctest, including
-      # a red whose SSIM never fell and a knob that armed but dropped nothing.
-      - name: Negative control (dropped draws)
-        working-directory: build-retrace/tools/trace_replay
-        env:
-          CONTROL_TMPDIR: ${{ runner.temp }}
-          LIBRARY_LOG: ${{ matrix.case }}/${{ matrix.backend }}/output/mobilegl.client.log
-          FROZEN_LIBRARY: ${{ github.workspace }}/build-linux/libMobileGL.so
-          # The control has to run the arm it is a control FOR. Hard-coded inproc, it would go on
-          # proving something about the other arm while spawn ran unguarded.
-          SPLIT_TRANSPORT: ${{ matrix.transport }}
-          MOBILEGL_IPC_SERVER_PATH: ${{ github.workspace }}/build-linux/libMobileGLServer.so
-        run: >-
-          bash "${GITHUB_WORKSPACE}/scripts/ci/retrace_drop_draw_control.sh"
-          '${{ matrix.case }}' '${{ matrix.backend }}'
-
       # The refusal census, recorded rather than gated. run_trace_case.cmake already REDS the case
       # on any Fatal{, so reaching here means the count is zero - but the number and the distinct
       # slot names are what MEASUREMENTS wants from every split run, and reading them out of the
@@ -3333,14 +3269,141 @@ jobs:
             build-retrace/tools/trace_replay/${{ matrix.case }}/${{ matrix.backend }}/output/**
           if-no-files-found: warn
 
+  # The shipped library, replayed. build-linux-monolith-control's library has no MG_Remote, the
+  # shape FCL embeds; on the disaggregation branches nothing else replays that shape, so it runs
+  # there only (elsewhere the retrace job's library is that shape). One short case on both
+  # backends, with no transport set, must match its golden like any monolith row.
+  retrace-shipped:
+    name: retrace shipped library (${{ matrix.backend }}, ${{ matrix.case }})
+    runs-on: ubuntu-26.04
+    timeout-minutes: 60
+    needs:
+      - build-linux-monolith-control
+      - build-retrace
+      - trace-fixtures
+    if: ${{ !cancelled() && (github.ref_name == 'feat/disaggregated' || github.ref_name == 'codex/fix-github-ci' || github.ref_name == 'cleanup') && needs.build-linux-monolith-control.result == 'success' && needs.build-retrace.result == 'success' && needs.trace-fixtures.result != 'skipped' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [DirectGLES, DirectVulkan]
+        case: [OpenRA]
+
+    steps:
+      - name: Set swap space
+        if: runner.environment != 'self-hosted'
+        uses: pierotofy/set-swap-space@v1.0
+        with:
+          swap-size-gb: 16
+
+      - name: Checkout repo
+        uses: actions/checkout@v6
+
+      - name: Configure runner environment
+        uses: ./.github/actions/setup-test-runner
+        with:
+          gpu: "true"
+
+      - name: Download trace fixture
+        uses: actions/download-artifact@v8
+        with:
+          name: trace-fixture-${{ matrix.case }}
+          path: trace-fixture-download
+
+      - name: Install trace fixture
+        run: |
+          mkdir -p tools/trace_replay/fixtures
+          find trace-fixture-download -type f -exec cp {} tools/trace_replay/fixtures/ \;
+
+      - name: Get CMake
+        timeout-minutes: 15
+        uses: lukka/get-cmake@v4.3.3
+        with:
+          cmakeVersion: 3.31.10
+
+      - name: Install runtime dependencies
+        timeout-minutes: 15
+        if: env.MOBILEGL_CI_NATIVE_GPU != '1'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libvulkan1 libegl1-mesa-dev libgles2-mesa-dev libgl1-mesa-dri mesa-vulkan-drivers
+          test -e /usr/lib/x86_64-linux-gnu/libEGL.so
+          test -e /usr/lib/x86_64-linux-gnu/libGLESv2.so
+
+      - name: Download shipped library
+        uses: actions/download-artifact@v8
+        with:
+          name: mobilegl-linux-monolith-control
+          path: .
+
+      - name: Download trace replay
+        uses: actions/download-artifact@v8
+        with:
+          name: mobilegl-trace-replay
+          path: .
+
+      # build-retrace froze <workspace>/build-linux/libMobileGL.so into every case, so the library
+      # is put where that path points, as retrace-verify does. `nm`, not `nm -D`: the MG_Remote
+      # symbols are hidden in a Release build and only the static table lists them.
+      - name: Unpack shipped library (library under test)
+        run: |
+          tar -xzf mobilegl-linux-monolith-control.tgz
+          tar -xzf mobilegl-trace-replay.tgz
+          test -f build-push-control/libMobileGL.so
+          test -f build-retrace/tools/trace_replay/mobilegl_trace_replay
+          mkdir -p build-linux
+          cp build-push-control/libMobileGL.so build-linux/libMobileGL.so
+          defined=$(nm --defined-only build-linux/libMobileGL.so | wc -l)
+          remote=$(nm --defined-only build-linux/libMobileGL.so | grep -c -i MG_Remote || true)
+          if [ "${defined}" -lt 1000 ] || [ "${remote}" -ne 0 ]; then
+            echo "::error::build-linux/libMobileGL.so defines ${defined} symbols and ${remote} MG_Remote symbol(s): it is not the shipped shape (no MG_Remote, not stripped)"
+            exit 1
+          fi
+          echo "the library at build-linux/libMobileGL.so is the shipped shape (${defined} defined symbols, no MG_Remote)"
+
+      - name: Prepare downloaded test metadata
+        run: python3 scripts/ci/prepare_test_runtime.py build-retrace
+
+      - name: Retrace and validate
+        working-directory: build-retrace/tools/trace_replay
+        run: |
+          ulimit -c unlimited
+          if [ '${{ matrix.backend }}' = 'DirectVulkan' ]; then
+            export MOBILEGL_MAGMA_R11G11B10F_FALLBACK=1
+          fi
+          ctest -V --no-tests=error -R '^MobileGLTraceReplay\.${{ matrix.case }}\.${{ matrix.backend }}$' \
+            --output-junit "${RUNNER_TEMP}/retrace.xml"
+
+      - name: Annotate failed entries
+        if: failure()
+        run: python3 scripts/ci/junit_annotate.py --excerpts 1 "${RUNNER_TEMP}"
+
+      - name: Upload core dumps
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: retrace-shipped-core-dumps-${{ matrix.backend }}-${{ matrix.case }}
+          path: /tmp/core.*
+          if-no-files-found: ignore
+
+      - name: Upload actual image
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: retrace-shipped-result-${{ matrix.backend }}-${{ matrix.case }}
+          path: |
+            build-retrace/tools/trace_replay/${{ matrix.case }}/actual-images/**
+            build-retrace/tools/trace_replay/${{ matrix.case }}/${{ matrix.backend }}/output/**
+          if-no-files-found: warn
+
   remove-artifact-clutter:
     name: remove artifact clutter
     runs-on: ubuntu-26.04
-    # Every retrace arm downloads the shared fixtures, including split controls.
+    # Every retrace job downloads the shared fixtures, so this waits for all of them.
     needs:
       - retrace-summary
       - retrace-verify
       - retrace-split
+      - retrace-shipped
     if: ${{ always() }}
     permissions:
       actions: write
@@ -3359,14 +3422,15 @@ jobs:
           # an unchecked process substitution.
           # 50 rows per page: the jobs endpoint answers HTTP 502 for 90+ rows on a re-run attempt of a run this size.
           gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs?per_page=50" \
-            --jq '.jobs[] | select((.name | startswith("retrace (")) or (.name | startswith("retrace verify (")) or (.name | startswith("retrace split ("))) | select(.conclusion == "failure" or .conclusion == "cancelled" or .conclusion == "timed_out" or .conclusion == "action_required") | .name' \
+            --jq '.jobs[] | select((.name | startswith("retrace (")) or (.name | startswith("retrace verify (")) or (.name | startswith("retrace split (")) or (.name | startswith("retrace shipped library ("))) | select(.conclusion == "failure" or .conclusion == "cancelled" or .conclusion == "timed_out" or .conclusion == "action_required") | .name' \
             > "${RUNNER_TEMP}/cleanup-jobs.txt"
           gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts?per_page=100" \
-            --jq '.artifacts[] | select(.name | startswith("trace-fixture-") or startswith("retrace-result-") or startswith("retrace-split-result-")) | [.id, .name] | @tsv' \
+            --jq '.artifacts[] | select(.name | startswith("trace-fixture-") or startswith("retrace-result-") or startswith("retrace-split-result-") or startswith("retrace-shipped-result-")) | [.id, .name] | @tsv' \
             > "${RUNNER_TEMP}/cleanup-artifacts.txt"
           declare -A failed_cases=()
           while IFS= read -r job_name; do
             case_name="${job_name#retrace split (*, }"
+            case_name="${case_name#retrace shipped library (*, }"
             case_name="${case_name#retrace verify (*, }"
             case_name="${case_name#retrace (*, }"
             case_name="${case_name%)}"
@@ -3515,10 +3579,11 @@ jobs:
           python3 scripts/gen_pipe_field_ownership.py --self-test
 
       # Negative controls must themselves be able to go red (ARCHITECTURE.md §13.2).
-      # control_smoke_test.sh runs the split and retrace control scripts against a stubbed ctest:
-      # an unrelated failure or an empty selection must make each report FAILED, and the
-      # scenarios' real diagnostics must make it report PASSED. The Python tests run the trace and
-      # TCP lane tooling on stubs and synthetic data. No branch guard; no build, GPU or device.
+      # control_smoke_test.sh runs the split control script against a stubbed ctest: an unrelated
+      # failure or an empty selection must make it report FAILED, and the scenarios' real
+      # diagnostics must make it report PASSED. The Python tests run the trace and TCP lane tooling
+      # on stubs and synthetic data; test_run_trace_case.py feeds run_trace_case.cmake canned logs.
+      # No branch guard; no build, GPU or device.
       - name: Control and trace-tool smoke tests (R-16)
         run: |
           bash scripts/ci/control_smoke_test.sh

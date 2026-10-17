@@ -33,28 +33,6 @@
 #   green              baseline green; the control's own run PASSES (the knob is not load-bearing)
 #   red-baseline       the baseline itself has a failed entry
 #   all-skipped        the baseline is entirely skipped (lost implementation, a hard failure)
-#   retrace-noselect   `ctest -N` matches nothing; the run exits 8 the way --no-tests=error does
-#   retrace-unrelated  one match; the run fails without naming the transport
-#   retrace-evidence   one match; the run fails with run_trace_case.cmake's own sentence
-#   retrace-evidence-nolog
-#                      one match; the run fails one check earlier, with the runner's "wrote no
-#                      <client log> ... no evidence the transport ever resolved" - the shape a
-#                      PULL library produces since P6's per-role log rename
-#   retrace-evidence-prefixed, retrace-evidence-nolog-prefixed
-#                      the two above with `ctest -V`'s "1: " prefix on every line
-#   retrace-green      one match; the run PASSES
-#
-# EXIT GATE E2's DRAW-DROP CONTROL (scripts/ci/retrace_drop_draw_control.sh). The library's own
-# log is modelled as a separate sink from ctest stdout, exactly as it is for the split lane: the
-# console sink is compiled out of the configurations these lanes run, so the dropped-record count
-# can only ever arrive through ${LIBRARY_LOG}.
-#   dropdraw-noselect  `ctest -N` matches nothing
-#   dropdraw-green     the retrace PASSES with the draws dropped
-#   dropdraw-nossim    red, but no ssim summary at all (loader failure / timeout shape)
-#   dropdraw-ssimhigh  red, and the ssim is ABOVE the threshold: something else reddened it
-#   dropdraw-nolog     red with a low ssim, but the library never said the knob armed
-#   dropdraw-zero      red with a low ssim, the knob armed, and it dropped NOTHING
-#   dropdraw-evidence  red with a low ssim and N > 0 records dropped: the real thing
 set -u
 
 mode="${STUB_MODE:?STUB_MODE must be set}"
@@ -142,10 +120,6 @@ fi
 
 emit_listing() {
   echo "Test project /stub"
-  if [ "${mode}" = "retrace-noselect" ] || [ "${mode}" = "dropdraw-noselect" ]; then
-    echo "Total Tests: 0"
-    return
-  fi
   echo "  Test #1: DirectGLES.Split.ClearThenReadPixelsScenario.ClearWithNoDrawIsVisibleToDefaultFramebufferReadPixels"
   if [ "${mode}" = partial-fatal ]; then
     echo "  Test #2: DirectGLES.Split.TriangleScenario.SecondEntry"
@@ -287,86 +261,6 @@ case "${mode}" in
   green)
     echo "100% tests passed, 0 tests failed out of 1"
     exit 0
-    ;;
-  retrace-noselect)
-    echo "No tests were found!!!"
-    exit 8
-    ;;
-  retrace-unrelated)
-    echo "1/1 Test #1: MobileGLTraceReplay.OpenRA.DirectGLES ...***Failed"
-    echo "CMake Error: the fixture could not be unpacked"
-    exit 8
-    ;;
-  retrace-evidence)
-    echo "1/1 Test #1: MobileGLTraceReplay.OpenRA.DirectGLES ...***Failed"
-    echo "CMake Error at run_trace_case.cmake:279 (message):"
-    echo "  MOBILEGL_TRANSPORT=inproc is set for OpenRA DirectGLES and the library never"
-    echo "  reported resolving it: mobilegl.log carries no"
-    echo '  "MOBILEGL_TRANSPORT=inproc - the MGPipe record stream".'
-    exit 8
-    ;;
-  retrace-evidence-nolog)
-    # What a pull library gets since P6: it wrote output/mobilegl.log (one role, no suffix), the
-    # runner reads output/mobilegl.client.log and stops at the no-log check BEFORE the marker
-    # search. CMake-wrapped like the mode above, with the clause split across lines.
-    echo "1/1 Test #1: MobileGLTraceReplay.OpenRA.DirectGLES ...***Failed"
-    echo "CMake Error at run_trace_case.cmake:270 (message):"
-    echo "  MOBILEGL_TRANSPORT=inproc is set for OpenRA DirectGLES but the run wrote no"
-    echo "  OpenRA/DirectGLES/output/mobilegl.client.log, so there is no evidence the"
-    echo "  transport ever resolved.  A split retrace with no library log cannot be"
-    echo "  counted as a split retrace."
-    exit 8
-    ;;
-  retrace-evidence-prefixed|retrace-evidence-nolog-prefixed)
-    # The two modes above as `ctest -V` really prints them: EVERY line of a test's output carries
-    # a "<test number>: " prefix, continuation lines included, so after whitespace folding the
-    # wrapped sentence reads "never 1: reported resolving it" / "no evidence the 1: transport ever
-    # resolved". A short case directory breaks the sentence at exactly those words; CI's long
-    # paths happened not to (retrace-split, run 35671704873: 5 false reds from this shape).
-    STUB_MODE="${mode%-prefixed}" bash "$0" "$@" | sed 's/^/1: /'
-    exit "${PIPESTATUS[0]}"
-    ;;
-  retrace-green)
-    echo "100% tests passed, 0 tests failed out of 1"
-    exit 0
-    ;;
-  dropdraw-*)
-    # The library's own log, written by the replay the way the real one is. The control removes
-    # it before the run, so anything here is this run's.
-    armed=""
-    case "${mode}" in
-      dropdraw-zero)
-        armed='MGPipe: E2 control armed - drop-draw=1 drop-clear=0, 0 records dropped on the wire (draw=0 clear=0), frame 29' ;;
-      dropdraw-nolog) armed="" ;;
-      *)
-        armed='MGPipe: E2 control armed - drop-draw=1 drop-clear=0, 758 records dropped on the wire (draw=758 clear=0), frame 29' ;;
-    esac
-    if [ -n "${LIBRARY_LOG:-}" ] && [ -n "${armed}" ]; then
-      mkdir -p "$(dirname "${LIBRARY_LOG}")"
-      printf '%s\n' "[10:38:30] [Linux mobilegl_trace_/WARN]: ${armed}" > "${LIBRARY_LOG}"
-    fi
-    case "${mode}" in
-      dropdraw-green)
-        echo "100% tests passed, 0 tests failed out of 1"
-        exit 0
-        ;;
-      dropdraw-nossim)
-        echo "1/1 Test #1: MobileGLTraceReplay.OpenRA.DirectGLES ...***Failed"
-        echo "CMake Error: the replay could not load the library"
-        exit 8
-        ;;
-      dropdraw-ssimhigh)
-        echo "1/1 Test #1: MobileGLTraceReplay.OpenRA.DirectGLES ...***Failed"
-        echo "-- retrace completed; ssim=1.000000, ssimThreshold=0.990000, mismatchPixels=0"
-        echo "CMake Error at run_trace_case.cmake:301 (message): 3 MGPipe Fatal(s)"
-        exit 8
-        ;;
-      *)
-        echo "1/1 Test #1: MobileGLTraceReplay.OpenRA.DirectGLES ...***Failed"
-        echo "-- retrace completed; ssim=0.000036, ssimThreshold=0.990000, mismatchPixels=295296"
-        exit 8
-        ;;
-    esac
     ;;
   *)
     echo "stub_ctest: unknown STUB_MODE '${mode}'" >&2

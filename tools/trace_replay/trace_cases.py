@@ -394,11 +394,11 @@ def github_transport_matrix(cases, *, apk=False):
     THE SPAWN LANE IS APK-ONLY, and that is a statement about where the evidence is missing
     rather than about what spawn can do. On Linux the spawn arm already has a job of its own -
     test.yml's `retrace-split`, which is {backend, case, transport} over inproc AND spawn and
-    carries the two negative controls that make it mean anything (the pull library must red it,
-    dropping the draws must red it). Adding spawn to THIS matrix as well would pay for a second
-    full Linux sweep that proves nothing the first one does not, and test.yml's `retrace` job
-    has neither the server image staged nor MOBILEGL_IPC_SERVER_PATH set - so the lane would
-    not merely be redundant, it would be red.
+    whose legs prove in-test that the transport resolved and, on OpenRA, that draw records
+    crossed the wire (run_trace_case.cmake's evidence). Adding spawn to THIS matrix would pay
+    for a second full Linux sweep that proves nothing the first one does not, and test.yml's
+    `retrace` job has neither the server image staged nor MOBILEGL_IPC_SERVER_PATH set - so the
+    lane would not merely be redundant, it would be red.
 
     On Android there is no such job. Until this lane existed, nothing in CI ever started a
     second MobileGL process on a device.
