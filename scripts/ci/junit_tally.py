@@ -143,6 +143,30 @@ def require_entries_passed(path, names):
             raise ValueError(f'{name}: required to pass, was {state}')
 
 
+class SelectionError(ValueError):
+    """The JUnit does not hold each selected name exactly once."""
+
+
+def write_selected(path, discovery, out):
+    """Write the testcases of `path` whose names a ctest --show-only=json-v1 document lists, each
+    exactly once, as a JUnit of their own: the run of one label carved out of a run of a wider one."""
+    wanted = [test['name'] for test in json.loads(Path(discovery).read_text()).get('tests', [])]
+    if not wanted or len(wanted) != len(set(wanted)):
+        raise SelectionError(f'{discovery}: the selection is empty or names an entry twice')
+    by_name = {}
+    for case in ET.parse(path).getroot().iter('testcase'):
+        by_name.setdefault(case.get('name'), []).append(case)
+    missing = [name for name in wanted if len(by_name.get(name, [])) == 0]
+    twice = [name for name in wanted if len(by_name.get(name, [])) > 1]
+    if missing or twice:
+        raise SelectionError(f'{len(missing)} selected name(s) missing from {path} (e.g. {missing[:3]}), '
+                             f'{len(twice)} reported more than once (e.g. {twice[:3]})')
+    suite = ET.Element('testsuite', name=Path(out).stem, tests=str(len(wanted)))
+    for name in wanted:
+        suite.append(by_name[name][0])
+    ET.ElementTree(suite).write(out, encoding='UTF-8', xml_declaration=True)
+
+
 def tally(path, prefix=None):
     passed = failed = skipped = 0
     for case in ET.parse(path).getroot().iter('testcase'):
@@ -170,7 +194,24 @@ def main():
                         help='Additionally prove actual run-ahead, without fallback or demotion, on each TCP case')
     parser.add_argument('--require-entry-passed', action='append', default=[], metavar='NAME',
                         help='This ctest entry must be present and passed; a SKIP fails (repeatable)')
+    parser.add_argument('--select-from', metavar='JSON',
+                        help='ctest --show-only=json-v1 output; with --write-selected, keep only its entries')
+    parser.add_argument('--write-selected', metavar='XML',
+                        help='write the selected testcases as their own JUnit and tally that; exit 3 when '
+                             'a selected name is missing or reported twice')
     args = parser.parse_args()
+    if bool(args.select_from) != bool(args.write_selected):
+        parser.error('--select-from and --write-selected go together')
+    if args.write_selected:
+        try:
+            write_selected(args.junit, args.select_from, args.write_selected)
+        except SelectionError as exc:
+            print(f'junit_tally: {exc}', file=sys.stderr)
+            return 3
+        except Exception as exc:  # a malformed file is not "zero of everything"
+            print(f"junit_tally: cannot prove {args.junit}: {exc}", file=sys.stderr)
+            return 1
+        args.junit = args.write_selected
     if args.prefix in ('DirectGLES.Tcp.', 'DirectGLES.TcpDevice.') and not args.discovery:
         parser.error('TCP arm proof requires --discovery to locate each private role log')
     if args.require_run_ahead and args.prefix not in ('DirectGLES.Tcp.', 'DirectGLES.TcpDevice.'):

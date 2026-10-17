@@ -136,6 +136,28 @@ class Accounting(unittest.TestCase):
                     tally.require_entries_passed(junit, [name])
                 self.assertIn(name, str(raised.exception))
 
+    def test_a_selection_is_carved_out_exactly_or_refused(self):
+        """--select-from/--write-selected turns a run of a wider label into the JUnit of a narrower
+        one. Every selected name must be there exactly once: missing or doubled is exit 3."""
+        tally = module('junit_tally')
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            junit, lane, out = root / 'wide.xml', root / 'lane.json', root / 'narrow.xml'
+            lane.write_text(json.dumps({'tests': [{'name': 'A'}, {'name': 'B'}]}))
+
+            def run(body):
+                junit.write_text(f'<testsuite>{body}</testsuite>')
+                argv = ['junit_tally.py', str(junit), '--select-from', str(lane), '--write-selected', str(out)]
+                with patch.object(sys, 'argv', argv):
+                    return quiet_main(tally.main)
+
+            status, text = run('<testcase name="A"/><testcase name="B"><skipped/></testcase><testcase name="C"/>')
+            self.assertEqual((status, text.strip()), (0, '1 0 1'))
+            self.assertEqual([c.get('name') for c in tally.ET.parse(out).getroot().iter('testcase')], ['A', 'B'])
+            self.assertEqual(run('<testcase name="A"/><testcase name="C"/>')[0], 3, 'a missing name')
+            self.assertEqual(run('<testcase name="A"/><testcase name="A"/><testcase name="B"/>')[0], 3,
+                             'a name reported twice')
+
     def test_equal_counts_do_not_hide_a_missing_case(self):
         parity = module('spawn_lane_parity')
         a, b = 'TriangleScenario.Draw', 'TriangleScenario.Read'
