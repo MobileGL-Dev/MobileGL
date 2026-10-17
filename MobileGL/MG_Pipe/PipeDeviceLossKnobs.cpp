@@ -61,10 +61,28 @@ namespace MobileGL::MG_Pipe {
         return true;
     }
 
+    namespace {
+        // The knob's pid: the value itself, or, for "file:<path>", the number that file holds
+        // now (none while it is missing or empty).
+        long DebugLossTargetOf(const char* value) {
+            static constexpr char kFilePrefix[] = "file:";
+            if (std::strncmp(value, kFilePrefix, sizeof(kFilePrefix) - 1) != 0) return std::strtol(value, nullptr, 10);
+            std::FILE* file = std::fopen(value + sizeof(kFilePrefix) - 1, "r");
+            if (file == nullptr) return 0;
+            char text[32] = {};
+            const SizeT read = std::fread(text, 1, sizeof(text) - 1, file);
+            std::fclose(file);
+            text[read] = '\0';
+            return std::strtol(text, nullptr, 10);
+        }
+    } // namespace
+
     bool MGPipeDebugSessionLossDue(unsigned clientPid) {
         if (clientPid == 0) return false;
         // The first call on a thread only starts the clock, so a session is first asked 100 ms
-        // after it started rendering - never in the middle of its first make-current.
+        // after its context was bound. That is a delay, not an ordering: a client still in its
+        // first make-current 100 ms later is lost in it. A test that needs the loss after a known
+        // point aims the knob through a file once its client got there.
         thread_local auto lastAsked = std::chrono::steady_clock::time_point{};
         const auto now = std::chrono::steady_clock::now();
         if (lastAsked == std::chrono::steady_clock::time_point{}) {
@@ -75,7 +93,7 @@ namespace MobileGL::MG_Pipe {
         lastAsked = now;
         long target = 0;
         if (const char* value = std::getenv("MOBILEGL_DEBUG_INJECT_DEVICE_LOST_PID")) {
-            target = std::strtol(value, nullptr, 10);
+            target = DebugLossTargetOf(value);
         }
 #if defined(__ANDROID__)
         else {

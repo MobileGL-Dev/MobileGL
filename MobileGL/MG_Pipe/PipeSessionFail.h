@@ -154,7 +154,8 @@ namespace MobileGL::MG_Pipe {
     // server's apply thread asks after every drain. It is how one application among several is
     // made to lose its device - a browser's GPU process, which renders into dma-bufs and never
     // presents, included. Asked only for a session with a context bound; asks the environment /
-    // property at most every 100 ms per thread.
+    // property at most every 100 ms per thread. P may be "file:<path>": the pid that file holds
+    // when asked (none while it is missing or empty), so a running server is aimed by writing it.
     bool MGPipeDebugSessionLossDue(unsigned clientPid);
 #else
     // P13 W5: the device-loss knobs end a SESSION; a library without a transport has none to end.

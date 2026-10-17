@@ -389,7 +389,7 @@ namespace {
         if (r.note[0] == '\0') std::snprintf(r.note, sizeof(r.note), "%s", text);
     }
 
-    void RunCompositor(int sock, CompositorReport& r) {
+    void RunCompositor(int sock, CompositorReport& r, ReadyPipe& ready) {
         int fd = -1;
         SharedImageMessage image;
         r.received = ReceiveFd(sock, &fd, &image, 30000) ? 1 : 0;
@@ -442,8 +442,10 @@ namespace {
         r.firstBindError = BindImageToNewTexture(stale);
         r.firstPixel = ClearAndRead(0.0f, 1.0f, 0.0f);
         r.firstSwap = EGL::SwapBuffers(dpy, surface);
+        // The frame before the loss is done: the test aims the knob at this pid now.
+        ready.Signal();
 
-        // Compositing until the session is lost (the knob targets this pid).
+        // Compositing until the session is lost.
         const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(10);
         while (std::chrono::steady_clock::now() < until) {
             (void)ClearAndRead(0.0f, 1.0f, 0.0f);
@@ -506,8 +508,7 @@ namespace {
         (void)EGL::Terminate(dpy);
     }
 
-    // A forked client that waits for the server's endpoint before it does anything (the knob names
-    // the compositor's pid, so the clients exist before the server starts).
+    // A forked client that waits for the server's endpoint before it does anything.
     template <class Report>
     struct HeldChild {
         pid_t pid = -1;
@@ -602,23 +603,28 @@ TEST(CompositorRecovery, ACompositorOnTheServerWindowRecoversOnAFreshSessionAndR
         SetClientEnvironment(endpoint, ownerLog.base, /*serverWindow=*/false);
         RunOwner(pair[0], r);
     }));
+    ReadyPipe compositorReady;
     HeldChild<CompositorReport> compositor;
     ASSERT_TRUE(compositor.Fork([&](const std::string& endpoint, CompositorReport& r) {
         ::close(pair[0]);
         SetClientEnvironment(endpoint, compositorLog.base, /*serverWindow=*/true);
-        RunCompositor(pair[1], r);
+        RunCompositor(pair[1], r, compositorReady);
     }));
+    compositorReady.ParentSide();
     ::close(pair[0]);
     ::close(pair[1]);
 
+    DeviceLossKnobFile knob("comprec");
     ServerProcess server;
-    ::setenv("MOBILEGL_DEBUG_INJECT_DEVICE_LOST_PID", std::to_string(compositor.pid).c_str(), 1);
+    ::setenv("MOBILEGL_DEBUG_INJECT_DEVICE_LOST_PID", knob.Value().c_str(), 1);
     const bool launched = LaunchDisplayServer(&server, "kwin");
     ::unsetenv("MOBILEGL_DEBUG_INJECT_DEVICE_LOST_PID");
     ASSERT_TRUE(launched) << server.Log();
 
     owner.Go(server.endpoint);
     compositor.Go(server.endpoint);
+    // The loss comes after the compositor's first frame, however slowly the machine gets there.
+    if (compositorReady.Wait(60000)) knob.Aim(compositor.pid);
     const CompositorReport c = compositor.Wait();
     const OwnerReport o = owner.Wait();
     const std::string diagnostics =

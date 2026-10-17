@@ -779,9 +779,9 @@ namespace {
     }
 
     // THE SESSION-TARGETED KNOB (MOBILEGL_DEBUG_INJECT_DEVICE_LOST_PID): one client of several is
-    // lost, whenever its session drains, whether or not it ever presents or reads back. Its pid
-    // has to be known before the server starts (the knob is the server's environment), so it is
-    // forked first and held until the server listens; the endpoint is handed to it then.
+    // lost, whenever its session drains, whether or not it ever presents or reads back. It is
+    // forked first and held until the server listens; the endpoint is handed to it then, and the
+    // knob is aimed at it once it is current.
     struct TargetedReport {
         Int32 initialized = 0;
         Int32 lossSeen = 0;
@@ -799,7 +799,7 @@ namespace {
 
     // Draws until its context reports the reset, recovers on a new context, then keeps drawing
     // for half a second - long enough for the knob to be asked again - and must not be lost again.
-    void RunTargetedClient(TargetedReport& r) {
+    void RunTargetedClient(TargetedReport& r, ReadyPipe& ready) {
         Egl egl;
         RecoveryReport bring{};
         if (!egl.Bring(bring)) return Note(r, bring.note);
@@ -807,6 +807,7 @@ namespace {
         if (lost == EGL_NO_CONTEXT || EGL::MakeCurrent(egl.dpy, egl.surface, egl.surface, lost) != EGL_TRUE)
             return Note(r, "the first context did not go current");
         r.initialized = 1;
+        ready.Signal(); // the test aims the knob at this pid now
         r.lossSeen = WaitFor(
                          [] {
                              (void)ClearAndRead(0.0f, 1.0f, 0.0f);
@@ -910,10 +911,19 @@ namespace {
         }
 
         Report Release(const std::string& endpoint) {
-            Report r{};
+            Go(endpoint);
+            return Wait();
+        }
+
+        void Go(const std::string& endpoint) {
             const ssize_t wrote = ::write(go, endpoint.c_str(), endpoint.size());
             (void)wrote;
             ::close(go);
+            go = -1;
+        }
+
+        Report Wait() {
+            Report r{};
             pollfd pfd{report, POLLIN, 0};
             if (::poll(&pfd, 1, 90000) > 0) {
                 if (::read(report, &r, sizeof(r)) != static_cast<ssize_t>(sizeof(r))) {
@@ -1295,13 +1305,16 @@ TEST_F(ClientRecovery, ContextsNamingALostShareContextShareOneNewGroup) {
 // of the same server draws on untouched; the target is lost although it only clears and reads
 // back - no present - recovers on a fresh session, and is not lost again by the same setting.
 TEST_F(ClientRecovery, ThePidTargetedKnobLosesOnlyThatClientAndOnlyOnce) {
-    auto targetBody = [](TargetedReport& r) { RunTargetedClient(r); };
+    ReadyPipe targetReady;
+    auto targetBody = [&targetReady](TargetedReport& r) { RunTargetedClient(r, targetReady); };
     HeldClient<TargetedReport, decltype(targetBody)> target;
     ClientLog targetLog("pid-target");
     ASSERT_TRUE(target.Fork(targetLog.base, targetBody));
+    targetReady.ParentSide();
 
+    DeviceLossKnobFile knob("pid-target");
     ServerProcess server;
-    ::setenv("MOBILEGL_DEBUG_INJECT_DEVICE_LOST_PID", std::to_string(target.pid).c_str(), 1);
+    ::setenv("MOBILEGL_DEBUG_INJECT_DEVICE_LOST_PID", knob.Value().c_str(), 1);
     const bool launched = LaunchUnixInProcessServer(&server, "pid");
     ::unsetenv("MOBILEGL_DEBUG_INJECT_DEVICE_LOST_PID");
     if (!launched) {
@@ -1311,7 +1324,10 @@ TEST_F(ClientRecovery, ThePidTargetedKnobLosesOnlyThatClientAndOnlyOnce) {
 
     ClientLog bystanderLog("pid-bystander");
     const BystanderReport bystander = RunInClient<BystanderReport>(server, bystanderLog.base, &RunBystanderClient);
-    const TargetedReport r = target.Release(server.endpoint);
+    target.Go(server.endpoint);
+    // The loss comes after the target went current, however slowly the machine gets there.
+    if (targetReady.Wait(60000)) knob.Aim(target.pid);
+    const TargetedReport r = target.Wait();
     const std::string diagnostics =
         "server:\n" + server.Log() + "\ntarget:\n" + targetLog.Text() + "\nbystander:\n" + bystanderLog.Text();
 

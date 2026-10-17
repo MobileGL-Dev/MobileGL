@@ -16,11 +16,14 @@
 #include <flatbuffers/flatbuffers.h>
 #include <gtest/gtest.h>
 
+#include <chrono>
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
+#include <fstream>
 #include <set>
 #include <string>
+#include <thread>
 
 using namespace MobileGL::MG_Remote;
 using MobileGL::Wire::FatalCode;
@@ -273,6 +276,37 @@ TEST(FatalFunnelSeam, TheDeviceLossKnobFiresOncePerValueAndReArmsOnANewOne) {
             if (checks(2) != 0) std::_Exit(3);
             ::setenv("MOBILEGL_DEBUG_INJECT_DEVICE_LOST_AT", "1", 1);
             if (checks(2) != 0b01) std::_Exit(4); // 0 then the same value again re-arms too
+            std::_Exit(0);
+        },
+        ::testing::ExitedWithCode(0), "");
+}
+#endif
+
+#if !defined(_WIN32)
+// The session-targeted knob takes a pid, or a file that holds one. It asks at most every 100 ms (a
+// thread's first ask only starts the clock) and loses the named client once per value; a "file:"
+// value is read again at every ask, so a test aims a running server by writing the file. In a
+// death-test child, so the clock and the once-per-value latch start fresh.
+TEST(FatalFunnelSeam, TheSessionLossKnobTakesAPidOrAFileThatHoldsOne) {
+    EXPECT_EXIT(
+        {
+            const auto ask = [](unsigned pid) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                return MobileGL::MG_Pipe::MGPipeDebugSessionLossDue(pid);
+            };
+            ::setenv("MOBILEGL_DEBUG_INJECT_DEVICE_LOST_PID", "4242", 1);
+            if (MobileGL::MG_Pipe::MGPipeDebugSessionLossDue(4242)) std::_Exit(1); // starts the clock
+            if (ask(4243)) std::_Exit(2);                                          // another client
+            if (!ask(4242)) std::_Exit(3);
+            if (ask(4242)) std::_Exit(4); // once per value
+            const std::string path = "/tmp/mgl-loss-knob-unit-" + std::to_string(::getpid());
+            std::remove(path.c_str());
+            ::setenv("MOBILEGL_DEBUG_INJECT_DEVICE_LOST_PID", ("file:" + path).c_str(), 1);
+            if (ask(4242)) std::_Exit(5); // no file yet: nobody, and the latch re-arms
+            std::ofstream(path) << 4242;
+            if (!ask(4242)) std::_Exit(6); // the file names it now
+            if (ask(4242)) std::_Exit(7);  // once per value
+            std::remove(path.c_str());
             std::_Exit(0);
         },
         ::testing::ExitedWithCode(0), "");

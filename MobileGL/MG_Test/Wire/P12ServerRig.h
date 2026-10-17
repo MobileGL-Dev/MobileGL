@@ -36,6 +36,7 @@
 #include <chrono>
 #include <csignal>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -170,6 +171,68 @@ namespace {
                 std::filesystem::remove(Debug::RoleLogPath(logBase.c_str(), Debug::LogRole::Client), ec);
                 std::filesystem::remove(logBase, ec);
             }
+        };
+
+        // A forked child's "I got there" to the test that forked it: the child writes one byte, the
+        // test waits for it. Made before the fork; the test drops its copy of the child's end right
+        // after it, so a child that exits without signalling ends the wait too.
+        class ReadyPipe {
+        public:
+            ReadyPipe() {
+                if (::pipe(m_fds) != 0) m_fds[0] = m_fds[1] = -1;
+            }
+            ~ReadyPipe() {
+                Close(0);
+                Close(1);
+            }
+            ReadyPipe(const ReadyPipe&) = delete;
+            ReadyPipe& operator=(const ReadyPipe&) = delete;
+
+            void Signal() {
+                const char byte = 1;
+                if (m_fds[1] >= 0 && ::write(m_fds[1], &byte, 1) != 1) std::perror("ReadyPipe::Signal");
+                Close(1);
+            }
+            void ParentSide() { Close(1); }
+            bool Wait(int timeoutMs) {
+                pollfd pfd{m_fds[0], POLLIN, 0};
+                char byte = 0;
+                return ::poll(&pfd, 1, timeoutMs) > 0 && ::read(m_fds[0], &byte, 1) == 1;
+            }
+
+        private:
+            void Close(int end) {
+                if (m_fds[end] >= 0) ::close(m_fds[end]);
+                m_fds[end] = -1;
+            }
+            int m_fds[2] = {-1, -1};
+        };
+
+        // The session-targeted device-loss knob aimed through a file (MG_Pipe/PipeSessionFail.h):
+        // a server started with Value() in MOBILEGL_DEBUG_INJECT_DEVICE_LOST_PID loses nobody until
+        // Aim writes the target's pid, so the loss comes after a point the test chose, not after a
+        // delay its target may not keep up with.
+        class DeviceLossKnobFile {
+        public:
+            explicit DeviceLossKnobFile(const std::string& label)
+                : m_path("/tmp/mgl-loss-knob-" + label + "-" + std::to_string(::getpid())) {
+                std::error_code ec;
+                std::filesystem::remove(m_path, ec);
+            }
+            ~DeviceLossKnobFile() {
+                std::error_code ec;
+                std::filesystem::remove(m_path, ec);
+            }
+            std::string Value() const { return "file:" + m_path; }
+            void Aim(pid_t target) const {
+                const std::string staging = m_path + ".new";
+                std::ofstream(staging) << target;
+                std::error_code ec;
+                std::filesystem::rename(staging, m_path, ec); // whole, never half-written
+            }
+
+        private:
+            std::string m_path;
         };
 
         // The exec'd `--serve` supervisor (the fork-per-session shape), on a fresh loopback port.
