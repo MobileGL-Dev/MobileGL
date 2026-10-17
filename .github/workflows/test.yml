@@ -115,33 +115,11 @@ jobs:
           "${MOBILEGL_CI_LLD}" --version
           dpkg -l 'libc++*' 'libegl*' 'libgles*' 'mesa*' 'vulkan*' || true
 
+      # The configure line lives in scripts/ci/configure_build.sh, shared with build-linux-split.
       - name: Configure CMake
-        run: |
-          if [ "${{ secrets.ACTIONS_STEP_DEBUG }}" = "true" ]; then
-            BUILD_TYPE=Debug
-          else
-            BUILD_TYPE=Release
-          fi
-
-          cmake -S . -B "${BUILD_DIR}" -G Ninja \
-            -DCMAKE_C_COMPILER="${MOBILEGL_CI_CC}" \
-            -DCMAKE_CXX_COMPILER="${MOBILEGL_CI_CXX}" \
-            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
-            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-            -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
-            -DMOBILEGL_LOG_ACTIVE_LEVEL=MOBILEGL_LOG_LEVEL_INFO \
-            -DMOBILEGL_BUILD_TEST=ON \
-            -DMOBILEGL_BUILD_BENCHMARK=ON \
-            -DMOBILEGL_BUILD_INTEGRATION_TEST=ON \
-            -DMOBILEGL_ITEST_VK_ICD="${VK_ICD_FILENAMES}" \
-            -DMOBILEGL_BUILD_TRACE_REPLAY=OFF \
-            -DMOBILEGL_BUILD_DISAGGREGATED="${MOBILEGL_CI_DISAGGREGATED}" \
-            -DMOBILEGL_BUILD_DISAGGREGATED_INPROC="${MOBILEGL_CI_DISAGGREGATED}" \
-            -DMOBILEGL_PIPE_VERIFY=OFF \
-            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
-            -DBENCHMARK_DOWNLOAD_DEPENDENCIES=ON \
-            -DBENCHMARK_ENABLE_TESTING=OFF \
-            -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+        env:
+          CI_BUILD_TYPE: ${{ secrets.ACTIONS_STEP_DEBUG == 'true' && 'Debug' || 'Release' }}
+        run: bash scripts/ci/configure_build.sh primary "${BUILD_DIR}"
 
       - name: Build
         run: cmake --build "${BUILD_DIR}" --parallel "$(nproc)"
@@ -1235,30 +1213,10 @@ jobs:
           "${MOBILEGL_CI_CXX}" --version
           dpkg -l 'libc++*' 'libegl*' 'libgles*' 'mesa*' 'vulkan*' || true
 
+      # Release/INFO like the shipped build; the line and the reasons are in
+      # scripts/ci/configure_build.sh, shared with build-linux.
       - name: Configure CMake
-        # Release/INFO like the shipped build, for the same reason build-linux-verify gives.
-        # INFO specifically matters here: ConfigLoader logs the resolved transport at INFO and
-        # that line is what run_trace_case.cmake and the integration-split lane read back as
-        # proof the transport resolved in THIS process.
-        #
-        # _INPROC implies _DISAGGREGATED implies _PIPE_PUSH; all three are passed anyway, because
-        # an implication that is asserted in two places is an implication nobody has to remember.
-        run: |
-          cmake -S . -B "${BUILD_DIR}" -G Ninja \
-            -DCMAKE_C_COMPILER="${MOBILEGL_CI_CC}" \
-            -DCMAKE_CXX_COMPILER="${MOBILEGL_CI_CXX}" \
-            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
-            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DMOBILEGL_LOG_ACTIVE_LEVEL=MOBILEGL_LOG_LEVEL_INFO \
-            -DMOBILEGL_BUILD_TEST=ON \
-            -DMOBILEGL_BUILD_BENCHMARK=OFF \
-            -DMOBILEGL_BUILD_INTEGRATION_TEST=ON \
-            -DMOBILEGL_ITEST_VK_ICD="${VK_ICD_FILENAMES}" \
-            -DMOBILEGL_BUILD_TRACE_REPLAY=OFF \
-            -DMOBILEGL_BUILD_DISAGGREGATED=ON \
-            -DMOBILEGL_BUILD_DISAGGREGATED_INPROC=ON \
-            -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+        run: bash scripts/ci/configure_build.sh split "${BUILD_DIR}"
 
       - name: Build
         run: cmake --build "${BUILD_DIR}" --parallel "$(nproc)"
@@ -3488,6 +3446,7 @@ jobs:
           python3 tools/trace_replay/test_run_tcp_matrix.py
           python3 tools/trace_replay/test_compare_actuals.py
           python3 tools/trace_replay/test_run_trace_case.py
+          python3 scripts/ci/build_fingerprint.py --self-test
 
       # Warning only for now: the disaggregation documents are still being written, and a
       # lint that fails a rewrite in progress teaches people to ignore it. It becomes
