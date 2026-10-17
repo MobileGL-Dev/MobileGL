@@ -1679,11 +1679,8 @@ jobs:
       # ---- Strict split lane: residual pulls under MOBILEGL_IPC_STRICT_ERRORS=1 ----
       #
       # An unbarriered pull is always fatal, and strict also stops any barriered pull that is not
-      # admitted (ARCHITECTURE.md §9.2.1). The arm comes from kMGPipeP5eRunAheadReady in
-      # MG_Backend/Init.cpp, so the expectation changes in the commit that changes the runtime. When
-      # true (run-ahead), the lane must be green and its markers must match the admitted list and
-      # strict-expected-markers.txt; when false, every record is barriered, the lane must be red
-      # (strict aborts every drawing entry), and only the marker census is checked.
+      # admitted (ARCHITECTURE.md §9.2.1). The lane must be green, and its markers must match the
+      # admitted list and strict-expected-markers.txt in both directions.
       - name: Strict split lane
         working-directory: build-split
         env:
@@ -1692,8 +1689,6 @@ jobs:
           MOBILEGL_TRANSPORT: "inproc"
         run: |
           ulimit -c unlimited
-          ready=$(grep -oE 'kMGPipeP5eRunAheadReady = (true|false)' "${GITHUB_WORKSPACE}/MobileGL/MG_Backend/Init.cpp" | head -1 | awk '{print $3}')
-          echo "kMGPipeP5eRunAheadReady = ${ready}"
           helper="${GITHUB_WORKSPACE}/MobileGL/MG_IntegrationTest/Harness/split_log_paths.py"
           expected="${GITHUB_WORKSPACE}/MobileGL/MG_IntegrationTest/Harness/strict-expected-markers.txt"
 
@@ -1731,24 +1726,7 @@ jobs:
             > "${RUNNER_TEMP}/allowed.txt"
           echo "§7 allowlist (derived): $(wc -l < "${RUNNER_TEMP}/allowed.txt") admitted pair(s)"
 
-          if [ "${ready}" != "true" ]; then
-            # ---- the pre-flip arm ----
-            if [ "${rc}" -eq 0 ]; then
-              echo "::error::integration-split under MOBILEGL_IPC_STRICT_ERRORS=1 went GREEN while kMGPipeP5eRunAheadReady is false - the object-class residual pulls (P3b/P4b/P7) are still pinned, so strict must abort every drawing scenario. If P5e has just landed, flip that constant in the same commit."
-              exit 1
-            fi
-            # The census, and the ADMITTED half of the ratchet, run in this arm too: the Fatal
-            # half is expected here (it is what "red by design" MEANS), but a debt that appeared
-            # or vanished on the admitted side is news whichever arm the tree is in.
-            python3 "${helper}" markers "${RUNNER_TEMP}/lane.json" '.' \
-              "${RUNNER_TEMP}/allowed.txt" "${expected}"
-            echo "integration-split under strict is red by design, and its marker census above is the evidence"
-            exit 0
-          fi
-
-          # ---- the post-flip arm: HARD GREEN, two-sided ----
-          #
-          # EVERY ENTRY MUST COMPLETE, and the census is what says why when one does not: an abort
+          # Every entry must complete, and the census is what says why when one does not: an abort
           # is either an unbarriered pull (§3.3's unconditional Fatal, a missed migration) or a
           # barriered pull nothing admits, and both come out of the census by field and verb.
           if [ "${rc}" -ne 0 ]; then
@@ -1806,12 +1784,7 @@ jobs:
       # machine-checked list of what still depends on the two roles sharing one object, and it
       # is ratcheted two-sided against Harness/dualblock-expected-fatals.txt: a new pair is a
       # debt somebody now owes, a vanished pair must be removed in the commit that retired it.
-      #
-      # THE STEP ALSO FAILS WHEN THE LANE IS GREEN while the expected file still has rows -
-      # "green" would mean the knob stopped arming, which is exactly the decay ID-122 assigns
-      # to a control rather than to a lane's good mood. At P5f's exit the file is empty and the
-      # green arm is the correct one; delete the red expectation in the same commit.
-      # P5f wave 2: with the census empty, this lane is a hard green gate.
+      # With the census empty, this lane is a hard green gate.
       - name: Dual-block census lane
         working-directory: build-split
         env:
@@ -1852,10 +1825,6 @@ jobs:
           if [ "${rows}" -eq 0 ] && [ "${rc}" -ne 0 ]; then
             echo "::error::empty dual-block census requires ctest success, including infrastructure/execution status"
             exit "${rc}"
-          fi
-          if [ "${rc}" -eq 0 ] && [ "${rows}" -gt 0 ]; then
-            echo "::error::the dual-block census lane went GREEN with ${rows} expected pair(s) outstanding - the knob stopped arming, or the fields retired and dualblock-expected-fatals.txt was not emptied in the same commit"
-            exit 1
           fi
           python3 "${helper}" expect-fatal "${RUNNER_TEMP}/dualblock-lane.json" \
             "${RUNNER_TEMP}/dualblock.xml" "${expected}"
