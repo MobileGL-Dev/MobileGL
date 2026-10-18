@@ -57,6 +57,11 @@ target_link_libraries(
 )
 
 include(GoogleTest)
+add_executable(CapabilityLimitsTest CapabilityLimitsTest.cpp)
+target_include_directories(CapabilityLimitsTest PRIVATE ${MGL_ROOT}/include ${MGL_ROOT}/MobileGL)
+target_link_libraries(CapabilityLimitsTest PRIVATE MobileGLTestMain ${LINK_LIBRARIES})
+gtest_discover_tests(CapabilityLimitsTest DISCOVERY_TIMEOUT 30 PROPERTIES LABELS unit)
+
 add_executable(ContextEpochTest ContextEpochTest.cpp)
 target_include_directories(ContextEpochTest PRIVATE ${MGL_ROOT}/include ${MGL_ROOT}/MobileGL)
 target_link_libraries(ContextEpochTest PRIVATE MobileGLTestMain ${LINK_LIBRARIES})

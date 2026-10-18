@@ -1832,8 +1832,15 @@ namespace MobileGL::MG_Backend::DirectGLES {
         // GL_MAX_TEXTURE_IMAGE_UNITS must never exceed host-side fixed arrays sized off it (e.g.
         // Minecraft's 128-entry Blaze3D GlStateManager.TEXTURES[], iterated by Iris), and the combined
         // limit must stay within our texture-unit state array capacity.
+        //
+        // The fragment limit is raised to the desktop value (32) even where the ES driver counts 16
+        // per stage: Iris sizes its WHOLE-PROGRAM unit budget off this query (vertex and fragment
+        // samplers share it, and it refuses the next sampler as soon as the budget is full), so 16
+        // leaves shader packs such as iterationT without a pipeline at all. Unit NUMBERS up to the
+        // driver's combined limit are legal in every stage, and a stage that really samples more
+        // textures than the driver allows still fails at link with the driver's own log.
         m_dynamicParameters.MaxTextureImageUnits =
-            std::min(m_GLESCapabilities.MaxTextureImageUnits,
+            std::min(std::max(m_GLESCapabilities.MaxTextureImageUnits, m_GLESCapabilities.MaxCombinedTextureImageUnits),
                      static_cast<Int>(MG_State::GLState::TextureState::MAX_PER_STAGE_TEXTURE_IMAGE_UNITS));
         m_dynamicParameters.MaxVertexTextureImageUnits =
             std::min(m_GLESCapabilities.MaxVertexTextureImageUnits,
