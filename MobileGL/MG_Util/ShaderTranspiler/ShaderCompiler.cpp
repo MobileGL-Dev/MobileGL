@@ -34,6 +34,7 @@
 #include "SpirvPasses/SplitArrayVertexInputsPass.h"
 #include "SpirvPasses/RebaseInstanceIndexPass.h"
 #include "SpirvPasses/ZeroBaseVertexPass.h"
+#include "SpirvPasses/ExtendNarrowIntegerVertexInputsPass.h"
 #include "SpirvPasses/LowerPixelCenterIntegerPass.h"
 #include "SpirvPasses/ZeroLayerOutputPass.h"
 #include "SpirvPasses/FullCoverageSampleMaskPass.h"
@@ -1982,6 +1983,19 @@ namespace MobileGL {
 
                 return RunOptimizerChecked("ZeroBaseVertexForVulkan", optimizer, inputBinary, outputBinary, true,
                                            enableSpirvValidation);
+            }
+
+            bool ShaderCompiler::ExtendNarrowIntegerVertexInputsForVulkan(const Vector<Uint32>& inputBinary,
+                                                                          Vector<uint32_t>& outputBinary,
+                                                                          const NarrowIntegerVertexInputs& inputs,
+                                                                          const bool enableSpirvValidation) {
+                using namespace spvtools;
+                Optimizer optimizer(SPV_ENV_VULKAN_1_1);
+                optimizer.RegisterPass(
+                    ExtendNarrowIntegerVertexInputsPass::CreateExtendNarrowIntegerVertexInputsPass(inputs));
+
+                return RunOptimizerChecked("ExtendNarrowIntegerVertexInputsForVulkan", optimizer, inputBinary,
+                                           outputBinary, true, enableSpirvValidation);
             }
 
             bool ShaderCompiler::LowerPixelCenterIntegerForVulkan(const Vector<Uint32>& inputBinary,

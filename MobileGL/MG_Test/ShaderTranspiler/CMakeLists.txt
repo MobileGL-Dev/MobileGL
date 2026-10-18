@@ -35,6 +35,7 @@ add_executable(
         PixelCenterIntegerTest.cpp
         ZeroLayerOutputTest.cpp
         FullCoverageSampleMaskTest.cpp
+        ExtendNarrowIntegerVertexInputsTest.cpp
         RelaxedOpaqueStructTest.cpp
         ShadingRateEsslTest.cpp
 )

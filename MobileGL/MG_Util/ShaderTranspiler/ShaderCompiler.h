@@ -11,6 +11,7 @@
 #include "SpvcSession.h"
 #include "glslang/TVarEntryInfo.h"
 #include "glslang/TMglGlslIoResolver.h"
+#include "NarrowIntegerVertexInputs.h"
 
 #include <map>
 #include <set>
@@ -342,6 +343,14 @@ namespace MobileGL {
                 // See ZeroBaseVertexPass.
                 static bool ZeroBaseVertexForVulkan(const Vector<Uint32>& inputBinary, Vector<uint32_t>& outputBinary,
                                                     bool enableSpirvValidation = false);
+                // Builds the vertex-shader variant that widens narrow integer attribute data the way
+                // GL does: the inputs at the listed locations are zero- or sign-extended from 8/16
+                // bits right after they are read. A module with no listed integer input comes back
+                // unchanged. See ExtendNarrowIntegerVertexInputsPass.
+                static bool ExtendNarrowIntegerVertexInputsForVulkan(const Vector<Uint32>& inputBinary,
+                                                                     Vector<uint32_t>& outputBinary,
+                                                                     const NarrowIntegerVertexInputs& inputs,
+                                                                     bool enableSpirvValidation = false);
                 // Drops `layout(pixel_center_integer)` from a fragment module, which the Vulkan
                 // environment forbids, and shifts every gl_FragCoord.xy read by -0.5 to keep its
                 // values. See LowerPixelCenterIntegerPass.
