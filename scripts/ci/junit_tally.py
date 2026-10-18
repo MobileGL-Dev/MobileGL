@@ -9,8 +9,9 @@
 
 """Tally a ctest --output-junit file as "passed failed skipped".
 
-Split out of .github/workflows/test.yml's negative-control step so that the workflow, the local
-gate and the control smoke test all count a run the same way.
+Split out of .github/workflows/test.yml's split negative-control step (since retired) so that
+every caller counts a run the same way: the split, spawn, TCP, verify and dual-block lane steps,
+the split lane's fallback, and scripts/ci/dualblock_negative_control.sh.
 
 WHY THIS EXISTS AT ALL (ID-46 finding 8, second half). The counter this replaces lived inline in
 the workflow and counted a case as having "run" when it was merely not <skipped/>:

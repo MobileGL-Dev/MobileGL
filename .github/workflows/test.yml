@@ -1551,7 +1551,9 @@ jobs:
           if-no-files-found: error
 
   # The split lane itself: the three-arm shape ARCHITECTURE.md §13.2 asks for verbatim, plus the
-  # first real run of the five MG_Test/Wire suites, plus P5's two exit-gate negative controls.
+  # first real run of the five MG_Test/Wire suites. P5's two exit-gate negative controls are in-test
+  # now (RemoteWaitBoundaryControl.AnUnwaitedPublishIsSeenAsNoWait and
+  # PersistentCoherentMapScenario.ThePushIsTheOnlyRouteAWriteTakesToTheServer).
   integration-split:
     runs-on: ubuntu-26.04
     timeout-minutes: 120
@@ -1777,6 +1779,29 @@ jobs:
           else:
               print(f"the two arms agree on all {len(a)} entries, name and status")
           PY
+
+      # The DirectGLES.Split. entries and their log-ownership check, once, in a job whose 'Split
+      # lanes' step never ran because an earlier step failed: without this, a red unit lane or
+      # flatc build would hide every split integration result of the run. When the lane step ran
+      # it left split-baseline.xml, and this step does nothing.
+      - name: Split lane fallback (lane step skipped)
+        if: ${{ !cancelled() }}
+        working-directory: ${{ env.SPLIT_BUILD_DIR }}
+        env:
+          MOBILEGL_ITEST_REQUIRE_GPU: "1"
+        run: |
+          if [ -f "${RUNNER_TEMP}/split-baseline.xml" ]; then
+            echo "the lane step ran and left split-baseline.xml; nothing to fall back to"
+            exit 0
+          fi
+          echo "::notice::the lane step left no split-baseline.xml, so the DirectGLES.Split. entries run here"
+          python3 "${GITHUB_WORKSPACE}/MobileGL/MG_IntegrationTest/Harness/split_log_paths.py" check ctest "$PWD"
+          # A directory of its own: the job uploads RUNNER_TEMP/*.xml for the skip census, which
+          # has no row for this run.
+          mkdir -p "${RUNNER_TEMP}/split-fallback"
+          ctest --output-on-failure -L integration-split -R '^DirectGLES\.Split\.' -j 4 --no-tests=error \
+            --output-junit "${RUNNER_TEMP}/split-fallback/isplit.xml"
+          python3 "${GITHUB_WORKSPACE}/scripts/ci/junit_tally.py" "${RUNNER_TEMP}/split-fallback/isplit.xml" --require-split-ran
 
       # build-linux ran the server link-closure ratchet on the build these lanes took, with
       # continue-on-error so that a red there does not skip build-linux's own consumers.
