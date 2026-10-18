@@ -288,19 +288,6 @@ namespace MobileGL::MG_Util::ShaderTranspiler {
                     static_cast<unsigned long long>(stats.duplicateInserts), EntryCount(), StoredBytes() / 1024u);
         }
 
-        // Tests only: makes the caps small enough to exercise eviction without
-        // building megabytes of shaders. Clears the cache, because shrinking the
-        // caps under live entries would otherwise leave it over budget.
-        void SetCapsForTesting(SizeT maxEntries, SizeT maxBytes) {
-            const std::lock_guard<std::mutex> lock(m_mutex);
-            m_maxEntries = maxEntries;
-            m_maxBytes = maxBytes;
-            m_index.clear();
-            m_entries.clear();
-            m_storedBytes = 0;
-            m_stats = {};
-        }
-
     private:
         struct Entry {
             TranslationCacheKey key;
