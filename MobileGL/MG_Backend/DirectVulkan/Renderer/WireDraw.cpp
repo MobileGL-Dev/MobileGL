@@ -739,6 +739,43 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             flags |= ProgramFactory::CompileOptionBit::ZeroBaseVertex;
             programObject = &m_programFactory->GetOrCreateProgram(program, flags);
         }
+        const auto vaoHandle = state.BoundVertexElements;
+        if (MG_Pipe::MGPipeHandleIsNull(vaoHandle)) MagmaWireFatal("vertex-elements-record");
+        if (vaoHandle.Slot >= state.VertexElementsCsos.size()) MagmaWireFatal("vertex-elements-record");
+        const auto& vao = state.VertexElementsCsos[vaoHandle.Slot];
+        if (!vao.Live || vao.Gen != vaoHandle.Gen) MagmaWireFatal("vertex-elements-generation");
+        // P7 wave 2 package C, CONTRACT-P7 §3.2: THE `vertex-layout` ROW IS RETIRED AND SPLIT.
+        //
+        // A false is now ONE reason and only one - `buffer-window`, an enabled attribute the
+        // program reads whose slot lies outside the window set_vertex_buffers published. That
+        // is a disagreement about what crossed, not about what this device can express, so it
+        // keeps a named Fatal through the hook (MGPipeSessionFail -> Session::Fail, which is
+        // what rule I asks of a refusal that must stay a refusal). It is the check that caught
+        // the Redmi VAO hash collision fixed in 376c04be, which is why it is not softened.
+        // The P7 marker is gone from the detail string with the abort: this is a permanent
+        // protocol error, not a shape the split path has yet to migrate, so it must not keep
+        // counting against the census of unmigrated refusals (scripts/ci/fatal_census.py
+        // counts the marker literally, which is also why no comment in this package spells it).
+        // P14: resolved through the record's own memo (ResolveWireVertexInput), except in a nested
+        // preparation, which builds into its own scratch rather than under the outer draw's feet.
+        const VertexInputStateFactory::BackendVertexInputState* resolvedInput = nullptr;
+        if (&scratch == &m_wireDrawScratch) {
+            resolvedInput = m_vertexInputStateFactory->ResolveWireVertexInput(
+                vao, state, programObject->activeVertexInputLocationMask);
+        } else if (m_vertexInputStateFactory->BuildWireVertexInput(
+                       vao, state, programObject->activeVertexInputLocationMask, scratch.input)) {
+            resolvedInput = &scratch.input;
+        }
+        if (resolvedInput == nullptr) MagmaWireFatal("vertex-layout-buffer-window");
+        const auto& input = *resolvedInput;
+        // The narrow-integer variant (NarrowIntegerVertexFormats.h), chosen from two masks cached on
+        // the program entry and on the resolved layout: a program without integer vertex inputs pays
+        // four ANDs here. Every variant reflects the same inputs, so the layout resolved above with
+        // the plain program's active mask is this variant's too.
+        const NarrowIntegerVertexInputs narrowIntegerInputs =
+            ResolveNarrowIntegerVertexInputs(programObject->integerVertexInputs, input.narrowIntegerAttributes);
+        if (narrowIntegerInputs.Any())
+            programObject = &m_programFactory->GetOrCreateProgram(program, flags, narrowIntegerInputs);
         if (programObject->invalidSpirvDeclined) {
             MGL_WIRE_DECLINE_AT(ProgramInvalidSpirv,
                                 "a module of the program fails SPIR-V validation and was never built");
@@ -776,35 +813,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 (void)ResolveWireImage(*fbo, fbo->Stencil, VK_IMAGE_ASPECT_STENCIL_BIT);
         }
         m_textureManager->FlushPendingUploads();
-        const auto vaoHandle = state.BoundVertexElements;
-        if (MG_Pipe::MGPipeHandleIsNull(vaoHandle)) MagmaWireFatal("vertex-elements-record");
-        if (vaoHandle.Slot >= state.VertexElementsCsos.size()) MagmaWireFatal("vertex-elements-record");
-        const auto& vao = state.VertexElementsCsos[vaoHandle.Slot];
-        if (!vao.Live || vao.Gen != vaoHandle.Gen) MagmaWireFatal("vertex-elements-generation");
-        // P7 wave 2 package C, CONTRACT-P7 §3.2: THE `vertex-layout` ROW IS RETIRED AND SPLIT.
-        //
-        // A false is now ONE reason and only one - `buffer-window`, an enabled attribute the
-        // program reads whose slot lies outside the window set_vertex_buffers published. That
-        // is a disagreement about what crossed, not about what this device can express, so it
-        // keeps a named Fatal through the hook (MGPipeSessionFail -> Session::Fail, which is
-        // what rule I asks of a refusal that must stay a refusal). It is the check that caught
-        // the Redmi VAO hash collision fixed in 376c04be, which is why it is not softened.
-        // The P7 marker is gone from the detail string with the abort: this is a permanent
-        // protocol error, not a shape the split path has yet to migrate, so it must not keep
-        // counting against the census of unmigrated refusals (scripts/ci/fatal_census.py
-        // counts the marker literally, which is also why no comment in this package spells it).
-        // P14: resolved through the record's own memo (ResolveWireVertexInput), except in a nested
-        // preparation, which builds into its own scratch rather than under the outer draw's feet.
-        const VertexInputStateFactory::BackendVertexInputState* resolvedInput = nullptr;
-        if (&scratch == &m_wireDrawScratch) {
-            resolvedInput =
-                m_vertexInputStateFactory->ResolveWireVertexInput(vao, state, programObj.activeVertexInputLocationMask);
-        } else if (m_vertexInputStateFactory->BuildWireVertexInput(vao, state, programObj.activeVertexInputLocationMask,
-                                                                   scratch.input)) {
-            resolvedInput = &scratch.input;
-        }
-        if (resolvedInput == nullptr) MagmaWireFatal("vertex-layout-buffer-window");
-        const auto& input = *resolvedInput;
         // The seven device/format reasons are now MASKED OUT of the vertex input state, and
         // this is the monolith arm's pre-flight for them, statement for statement
         // (VulkanRenderer.cpp's SetupDraw: "Fail loudly rather than render wrong pixels"). An

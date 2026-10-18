@@ -12,6 +12,7 @@
 #include "../MagmaSession.h"
 #include "PipelineFactory.h"
 #include "MagmaProgramSource.h"
+#include "NarrowIntegerVertexFormats.h"
 #include "MG_State/GLState/ProgramState/ShaderObject.h"
 #include "MG_State/GLState/TextureState/TextureEnum.h"
 
@@ -200,6 +201,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             Int globalUboBinding = -1;
             Uint32 activeVertexInputLocationMask = 0;
             Array<GLenum, kMaxVertexInputLocations> vertexInputTypes{};
+            // The locations of vertexInputTypes that are int / uint, for the per-draw narrow-integer
+            // variant decision (ResolveNarrowIntegerVertexInputs). Identical in every variant.
+            IntegerVertexInputMasks integerVertexInputs;
             Uint32 activeFragmentOutputLocationMask = 0;
             Array<GLenum, kMaxVertexInputLocations> fragmentOutputTypes{};
             ShaderStage rasterizationProducerStage = ShaderStage::Unknown;
@@ -328,6 +332,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 globalUboBinding = other.globalUboBinding;
                 activeVertexInputLocationMask = other.activeVertexInputLocationMask;
                 vertexInputTypes = other.vertexInputTypes;
+                integerVertexInputs = other.integerVertexInputs;
                 activeFragmentOutputLocationMask = other.activeFragmentOutputLocationMask;
                 fragmentOutputTypes = other.fragmentOutputTypes;
                 rasterizationProducerStage = other.rasterizationProducerStage;
@@ -351,6 +356,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 other.pointSizeCapabilityUnsupported = false;
                 other.globalUboBinding = -1;
                 other.activeVertexInputLocationMask = 0;
+                other.integerVertexInputs = {};
                 other.activeFragmentOutputLocationMask = 0;
                 other.rasterizationProducerStage = ShaderStage::Unknown;
                 other.producerOutputComponentCount = 0;
@@ -402,6 +408,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 globalUboBinding = other.globalUboBinding;
                 activeVertexInputLocationMask = other.activeVertexInputLocationMask;
                 vertexInputTypes = other.vertexInputTypes;
+                integerVertexInputs = other.integerVertexInputs;
                 activeFragmentOutputLocationMask = other.activeFragmentOutputLocationMask;
                 fragmentOutputTypes = other.fragmentOutputTypes;
                 rasterizationProducerStage = other.rasterizationProducerStage;
@@ -425,6 +432,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 other.pointSizeCapabilityUnsupported = false;
                 other.globalUboBinding = -1;
                 other.activeVertexInputLocationMask = 0;
+                other.integerVertexInputs = {};
                 other.activeFragmentOutputLocationMask = 0;
                 other.rasterizationProducerStage = ShaderStage::Unknown;
                 other.producerOutputComponentCount = 0;
@@ -518,7 +526,18 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         ProgramFactory(const ProgramFactory&) = delete;
 
         HashType ComputeHash(const MagmaProgramSource& program, CompileOptionFlags flags) const;
-        const VkProgramObject& GetOrCreateProgram(const MagmaProgramSource& program, CompileOptionFlags flags);
+        // `narrowIntegerInputs` selects the variant whose vertex stage widens narrow integer
+        // attribute data GL's way (ExtendNarrowIntegerVertexInputsPass). It is draw-time state like
+        // the flags, and the draw path asks for it only when ResolveNarrowIntegerVertexInputs finds
+        // a location that needs it, so every other program keeps a single entry.
+        const VkProgramObject& GetOrCreateProgram(const MagmaProgramSource& program, CompileOptionFlags flags,
+                                                  const NarrowIntegerVertexInputs& narrowIntegerInputs = {});
+        // The cache identity of a narrow-integer variant: the hash of the same program and flags
+        // without it, mixed with the corrected locations. Content in, content out, so the variant's
+        // pipelines key apart from the plain program's through programHash alone.
+        static HashType MixNarrowIntegerVertexInputs(HashType hash, const NarrowIntegerVertexInputs& inputs) {
+            return XXH64(&inputs, sizeof(inputs), hash);
+        }
 
         // The default framebuffer's current image height, baked as a literal into every
         // FragCoordYFlip variant (there is no push-constant or specialization channel here, and

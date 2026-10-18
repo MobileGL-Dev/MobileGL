@@ -14,6 +14,7 @@
 
 #include "Config.h"
 #include "MagmaPipeArms.h"
+#include "NarrowIntegerVertexFormats.h"
 #include "VertexInputStateBuilder.h"
 #include "MG_State/GLState/VertexArrayState/VertexArrayObject.h"
 #include <Includes.h>
@@ -63,6 +64,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // Bitmask of `attributes[i].location` - the draw path needs it up to
             // three times per draw, so it is baked once at build time.
             Uint32 attributeLocationMask = 0;
+            // The locations of `attributes` whose source data is 8/16-bit integer, by width and
+            // signedness - the vertex-input half of the narrow-integer program variant decision
+            // (NarrowIntegerVertexFormats.h). A pure function of `attributes`, so `layoutHash`
+            // already covers it.
+            NarrowIntegerAttributeMasks narrowIntegerAttributes;
             // Per-binding glVertexAttribDivisor values other than 1. Vulkan's instance input
             // rate advances once per instance and nothing else, so anything else has to be
             // stated through VK_EXT_vertex_attribute_divisor. Empty when every instanced

@@ -214,6 +214,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             out.bindings.push_back(
                 {binding, stride, buffer.Divisor ? VK_VERTEX_INPUT_RATE_INSTANCE : VK_VERTEX_INPUT_RATE_VERTEX});
             out.attributes.push_back({location, binding, format, 0});
+            out.narrowIntegerAttributes.Note(location, format);
             out.bindingAttributeLocations.push_back(location);
             out.bindingBaseOffsets.push_back(static_cast<SizeT>(offset));
             out.bindingConversions.push_back(conversion);

@@ -14,6 +14,7 @@ add_executable(
         PassthroughTessControlTest.cpp
         ViewportIndexReflectionTest.cpp
         DriverModuleScreenTest.cpp
+        NarrowIntegerVertexFormatsTest.cpp
 )
 
 target_include_directories(PipelineQuirkTest PRIVATE

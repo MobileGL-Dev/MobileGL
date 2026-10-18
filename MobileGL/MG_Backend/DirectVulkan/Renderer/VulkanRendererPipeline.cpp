@@ -918,6 +918,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         const Uint32 vertexInputAttribMask = vis.attributeLocationMask;
         const Uint32 activeAttribMask = programObj.activeVertexInputLocationMask;
         const Uint32 missingAttribMask = activeAttribMask & ~vertexInputAttribMask;
+        // The fetch format takes the shader input's signedness (VUID-VkGraphicsPipelineCreateInfo-
+        // Input-08733). That renames the bits of 32-bit data, but extends 8/16-bit data by the
+        // input's rule instead of the data's; the program variant SetupWireDraw picks for exactly
+        // those attributes (ResolveNarrowIntegerVertexInputs) puts GL's value back in the shader.
         auto& patchedAttributes = m_patchedAttributesScratch;
         patchedAttributes.assign(vis.attributes.begin(), vis.attributes.end());
         Bool hasPatchedVertexAttributes = false;

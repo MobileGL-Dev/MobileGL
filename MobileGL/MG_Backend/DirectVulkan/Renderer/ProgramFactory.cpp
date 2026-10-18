@@ -2736,6 +2736,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                                              VkProgramObject& entry) const {
         entry.activeVertexInputLocationMask = 0;
         entry.vertexInputTypes.fill(0);
+        entry.integerVertexInputs = {};
         entry.readsBaseVertexBuiltin = false;
 
         for (SizeT moduleIndex = 0; moduleIndex < stages.size() && moduleIndex < spirv.size(); ++moduleIndex) {
@@ -2802,6 +2803,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
                         entry.activeVertexInputLocationMask |= (1u << expandedLocation);
                         entry.vertexInputTypes[expandedLocation] = locationType;
+                        entry.integerVertexInputs.Note(expandedLocation, locationType);
                     }
                 }
             }
@@ -3553,8 +3555,80 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         ++m_cacheStructureEpoch;
     }
 
-    const ProgramFactory::VkProgramObject& ProgramFactory::GetOrCreateProgram(const MagmaProgramSource& program,
-                                                                              CompileOptionFlags flags) {
+    namespace {
+        // The vertex stage's own transforms, in the order they have to run: the ZeroBaseVertex
+        // variant, the unconditional 64-bit input packing, then the narrow-integer variant.
+        void TransformVertexStageForVulkan(Vector<Uint>& module, ProgramFactory::CompileOptionFlags flags,
+                                           const NarrowIntegerVertexInputs& narrowIntegerInputs,
+                                           Bool enableSpirvValidation, Uint programIndex) {
+            // The non-indexed variant of a vertex stage that reads gl_BaseVertex: GL wants zero
+            // there, Vulkan's builtin would hand it the draw's firstVertex. Requested per draw
+            // through CompileOptionBit::ZeroBaseVertex, so the indexed variant of the same
+            // program keeps the native builtin and stays correct for glDrawElementsBaseVertex
+            // and for the baseVertex word of an indexed indirect command.
+            if (flags & ProgramFactory::CompileOptionBit::ZeroBaseVertex) {
+                Vector<Uint> zeroedSpirv;
+                if (MG_Util::ShaderTranspiler::ShaderCompiler::ZeroBaseVertexForVulkan(module, zeroedSpirv,
+                                                                                       enableSpirvValidation)) {
+                    module = std::move(zeroedSpirv);
+                } else {
+                    // Failing open keeps the native builtin, which is the pre-fix behavior:
+                    // gl_BaseVertex reads firstVertex on a DrawArrays instead of zero.
+                    MGLOG_E("ProgramFactory: failed to zero gl_BaseVertex for program %u; non-indexed "
+                            "draws will read the draw's first vertex from it instead of zero",
+                            programIndex);
+                }
+            }
+
+            // A 64-bit vertex input has to arrive as its 32-bit word pair: VK_FORMAT_R64*_SFLOAT is
+            // optional and lavapipe advertises none of them at all. The pass is unconditional so it
+            // always agrees with the Float64 case in VertexInputStateFactory::ToVkVertexFormat, and
+            // ReflectVertexInputs then sees an ordinary uvec2/uvec4 input.
+            //
+            // Failure here is not recoverable and must not be swallowed: ToVkVertexFormat has already
+            // committed to R32G32{,B32A32}_UINT for the attribute, so a module still declaring
+            // `in double` would reconcile to Unknown and build a pipeline with a UINT format under a
+            // double input - garbage with no diagnostic anywhere.
+            {
+                Vector<Uint> packedSpirv;
+                const Bool packOk = MG_Util::ShaderTranspiler::ShaderCompiler::PackDoubleVertexInputsForVulkan(
+                    module, packedSpirv, enableSpirvValidation);
+                MOBILEGL_ASSERT(packOk,
+                                "ProgramFactory: 64-bit vertex input packing failed for program %u; the "
+                                "vertex-input format and the shader input type now disagree",
+                                programIndex);
+                if (packOk) {
+                    module = std::move(packedSpirv);
+                } else {
+                    MGLOG_E("ProgramFactory: failed to pack 64-bit vertex inputs for program %u; "
+                            "double-typed vertex attributes will be fetched as uint32 words and not "
+                            "reinterpreted",
+                            programIndex);
+                }
+            }
+
+            // The narrow-integer variant: the pipeline fetches these attributes with the format of
+            // the input's signedness, and this restores the extension rule of the data's own (see
+            // ResolveNarrowIntegerVertexInputs). After the 64-bit packing so it sees the inputs in
+            // the shape the pipeline's vertex input state and ReflectVertexInputs describe.
+            if (narrowIntegerInputs.Any()) {
+                Vector<Uint> extendedSpirv;
+                if (MG_Util::ShaderTranspiler::ShaderCompiler::ExtendNarrowIntegerVertexInputsForVulkan(
+                        module, extendedSpirv, narrowIntegerInputs, enableSpirvValidation)) {
+                    module = std::move(extendedSpirv);
+                } else {
+                    MGLOG_E("ProgramFactory: failed to extend narrow integer vertex inputs for program %u; "
+                            "8/16-bit integer attributes read through an input of the other signedness keep "
+                            "the fetch format's extension",
+                            programIndex);
+                }
+            }
+        }
+    } // namespace
+
+    const ProgramFactory::VkProgramObject& ProgramFactory::GetOrCreateProgram(
+        const MagmaProgramSource& program, CompileOptionFlags flags,
+        const NarrowIntegerVertexInputs& narrowIntegerInputs) {
         // Hashing the full SPIR-V of every stage is far too expensive to repeat per draw;
         // reuse the program's memoized hash while its backend state version is unchanged.
         // The memo keys on the flags word, which ComputeHash is no longer a pure function of:
@@ -3575,6 +3649,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             hash = ComputeHash(program, flags);
             program.SetBackendHashMemo(memoKey, hash);
         }
+        // Mixed in after the memo, which keys on the flags word alone: the memo keeps answering
+        // for the plain program, and the variant costs one 16-byte hash on top of it.
+        if (narrowIntegerInputs.Any()) hash = MixNarrowIntegerVertexInputs(hash, narrowIntegerInputs);
         auto it = m_cache.find(hash);
         if (it != m_cache.end()) {
             // Every draw/dispatch funnels through this lookup (the renderer memos only
@@ -3827,50 +3904,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 }
             }
 
-            // The non-indexed variant of a vertex stage that reads gl_BaseVertex: GL wants zero
-            // there, Vulkan's builtin would hand it the draw's firstVertex. Requested per draw
-            // through CompileOptionBit::ZeroBaseVertex, so the indexed variant of the same
-            // program keeps the native builtin and stays correct for glDrawElementsBaseVertex
-            // and for the baseVertex word of an indexed indirect command.
-            if (stages[i] == ShaderStage::Vertex && (flags & CompileOptionBit::ZeroBaseVertex)) {
-                Vector<Uint> zeroedSpirv;
-                if (MG_Util::ShaderTranspiler::ShaderCompiler::ZeroBaseVertexForVulkan(moduleSpirvs[i], zeroedSpirv,
-                                                                                       enableSpirvValidation)) {
-                    moduleSpirvs[i] = std::move(zeroedSpirv);
-                } else {
-                    // Failing open keeps the native builtin, which is the pre-fix behavior:
-                    // gl_BaseVertex reads firstVertex on a DrawArrays instead of zero.
-                    MGLOG_E("ProgramFactory: failed to zero gl_BaseVertex for program %u; non-indexed "
-                            "draws will read the draw's first vertex from it instead of zero",
-                            program.GetExternalIndex());
-                }
-            }
-
-            // A 64-bit vertex input has to arrive as its 32-bit word pair: VK_FORMAT_R64*_SFLOAT is
-            // optional and lavapipe advertises none of them at all. The pass is unconditional so it
-            // always agrees with the Float64 case in VertexInputStateFactory::ToVkVertexFormat, and
-            // ReflectVertexInputs below then sees an ordinary uvec2/uvec4 input.
-            //
-            // Failure here is not recoverable and must not be swallowed: ToVkVertexFormat has already
-            // committed to R32G32{,B32A32}_UINT for the attribute, so a module still declaring
-            // `in double` would reconcile to Unknown and build a pipeline with a UINT format under a
-            // double input - garbage with no diagnostic anywhere.
             if (stages[i] == ShaderStage::Vertex) {
-                Vector<Uint> packedSpirv;
-                const Bool packOk = MG_Util::ShaderTranspiler::ShaderCompiler::PackDoubleVertexInputsForVulkan(
-                    moduleSpirvs[i], packedSpirv, enableSpirvValidation);
-                MOBILEGL_ASSERT(packOk,
-                                "ProgramFactory: 64-bit vertex input packing failed for program %u; the "
-                                "vertex-input format and the shader input type now disagree",
-                                program.GetExternalIndex());
-                if (packOk) {
-                    moduleSpirvs[i] = std::move(packedSpirv);
-                } else {
-                    MGLOG_E("ProgramFactory: failed to pack 64-bit vertex inputs for program %u; "
-                            "double-typed vertex attributes will be fetched as uint32 words and not "
-                            "reinterpreted",
-                            program.GetExternalIndex());
-                }
+                TransformVertexStageForVulkan(moduleSpirvs[i], flags, narrowIntegerInputs, enableSpirvValidation,
+                                              program.GetExternalIndex());
             }
 
             // When Vulkan can legally access storage images without a statically declared
