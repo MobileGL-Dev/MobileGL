@@ -24,6 +24,7 @@ add_executable(
         LowerViewportIndexTest.cpp
         DeferGeometryEmitsTest.cpp
         RetainGeometryOutputsTest.cpp
+        PositionFixupSitesTest.cpp
         ClampMultisampleFetchTest.cpp
         LegalizeResourceArrayIndexTest.cpp
         FlattenAtomicCounterBlockTest.cpp

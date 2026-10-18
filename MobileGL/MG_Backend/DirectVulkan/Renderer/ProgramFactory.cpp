@@ -20,6 +20,7 @@
 #include <cstring>
 #include <format>
 #include <map>
+#include <unordered_set>
 #include <utility>
 #include <spirv-tools/libspirv.h>
 #include <spirv-tools/optimizer.hpp>
@@ -914,6 +915,36 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             return true;
         }
 
+        // Where a per-vertex fix-up of `entryPoint`'s outputs goes: in front of every emit a
+        // geometry shader can execute - EmitVertex and EmitStreamVertex alike, in the entry
+        // function or in any function it calls, since the front end does not inline helpers - and,
+        // for the other stages, in front of each return from the entry function itself, as a
+        // helper's return does not end the invocation. Collected before anything is inserted.
+        Vector<spvtools::opt::Instruction*> CollectPerVertexFixupSites(spvtools::opt::IRContext* context,
+                                                                       const spvtools::opt::Instruction& entryPoint) {
+            Vector<spvtools::opt::Instruction*> sites;
+            const Uint32 entryFunctionId = entryPoint.GetSingleWordInOperand(1);
+            if (context->GetFunction(entryFunctionId) == nullptr) return sites;
+            const auto collect = [&sites](spvtools::opt::Function& function, auto isSite) {
+                function.ForEachInst([&](spvtools::opt::Instruction* inst) {
+                    if (isSite(inst->opcode())) sites.push_back(inst);
+                });
+            };
+            if (static_cast<spv::ExecutionModel>(entryPoint.GetSingleWordInOperand(0)) !=
+                spv::ExecutionModel::Geometry) {
+                collect(*context->GetFunction(entryFunctionId), [](spv::Op op) { return op == spv::Op::OpReturn; });
+                return sites;
+            }
+            std::unordered_set<Uint32> callTree;
+            context->CollectCallTreeFromRoots(entryFunctionId, &callTree);
+            for (auto& function : *context->module()) {
+                if (callTree.count(function.result_id()) == 0) continue;
+                collect(function,
+                        [](spv::Op op) { return op == spv::Op::OpEmitVertex || op == spv::Op::OpEmitStreamVertex; });
+            }
+            return sites;
+        }
+
         // Is `pointerId` the position target itself, or an access chain rooted at it?
         Bool PointerReachesPositionTarget(spvtools::opt::IRContext* context, Uint32 pointerId,
                                           const PositionTargetInfo& target) {
@@ -1095,22 +1126,11 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                         continue;
                     }
 
-                    auto* function = context()->GetFunction(entryPoint.GetSingleWordInOperand(1));
-                    if (!function) continue;
-
                     Bool modifiedThisEntryPoint = false;
-                    for (auto& bb : *function) {
-                        for (auto instIter = bb.begin(); instIter != bb.end(); ++instIter) {
-                            auto* inst = &*instIter;
-                            const Bool needsFixup =
-                                (model == spv::ExecutionModel::Geometry && inst->opcode() == spv::Op::OpEmitVertex) ||
-                                (model != spv::ExecutionModel::Geometry && inst->opcode() == spv::Op::OpReturn);
-                            if (!needsFixup) continue;
-
-                            modifiedThisEntryPoint |=
-                                InsertPositionFixup(context(), inst, target, halfConstId, doYFlip, doZRemap,
-                                                    doSurfaceRotate90, doSurfaceRotate180, doSurfaceRotate270);
-                        }
+                    for (auto* site : CollectPerVertexFixupSites(context(), entryPoint)) {
+                        modifiedThisEntryPoint |=
+                            InsertPositionFixup(context(), site, target, halfConstId, doYFlip, doZRemap,
+                                                doSurfaceRotate90, doSurfaceRotate180, doSurfaceRotate270);
                     }
                     // Per entry point, and only for one this pass actually injected into: the
                     // injected load/store is a static use of the position variable, so the
@@ -1364,8 +1384,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // Decorates the module's captured varyings for VK_EXT_transform_feedback:
         // user outputs get XfbBuffer/XfbStride/Offset directly; a captured
         // gl_Position (a gl_PerVertex member) is mirrored into a dedicated output
-        // variable copied before every OpReturn, BEFORE the position fixup runs,
-        // so the captured value is the shader's own (pre-remap) gl_Position.
+        // variable copied at every CollectPerVertexFixupSites site, BEFORE the position
+        // fixup runs, so the captured value is the shader's own (pre-remap) gl_Position.
         class XfbCaptureDecoratePass final : public spvtools::opt::Pass {
         public:
             struct CapturedVarying {
@@ -1393,7 +1413,6 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 auto entryPointIter = get_module()->entry_points().begin();
                 if (entryPointIter == get_module()->entry_points().end()) return Status::SuccessWithoutChange;
                 spvtools::opt::Instruction* entryPoint = &*entryPointIter;
-                const Uint32 entryFunctionId = entryPoint->GetSingleWordInOperand(1);
 
                 // Name -> result id map from the debug section.
                 std::unordered_map<std::string, Uint32> idsByName;
@@ -1542,14 +1561,14 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 }
 
                 if (needsPositionMirror) {
-                    modified |= MirrorPerVertexBuiltInForCapture(entryFunctionId, *entryPoint, spv::BuiltIn::Position,
-                                                                 IsVec4Float32, "gl_Position", positionBufferIndex,
-                                                                 positionOffset, decorateForXfb);
+                    modified |= MirrorPerVertexBuiltInForCapture(*entryPoint, spv::BuiltIn::Position, IsVec4Float32,
+                                                                 "gl_Position", positionBufferIndex, positionOffset,
+                                                                 decorateForXfb);
                 }
                 if (needsPointSizeMirror) {
-                    modified |= MirrorPerVertexBuiltInForCapture(entryFunctionId, *entryPoint, spv::BuiltIn::PointSize,
-                                                                 IsFloat32Scalar, "gl_PointSize", pointSizeBufferIndex,
-                                                                 pointSizeOffset, decorateForXfb);
+                    modified |= MirrorPerVertexBuiltInForCapture(*entryPoint, spv::BuiltIn::PointSize, IsFloat32Scalar,
+                                                                 "gl_PointSize", pointSizeBufferIndex, pointSizeOffset,
+                                                                 decorateForXfb);
                 }
 
                 if (!modified) return Status::SuccessWithoutChange;
@@ -1592,11 +1611,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // built-in is looked up and what type it has, so one injector serves both. Anything
             // else in gl_PerVertex would need its own type check before it could be added here.
             template <typename DecorateFn>
-            Bool MirrorPerVertexBuiltInForCapture(Uint32 entryFunctionId, spvtools::opt::Instruction& entryPoint,
-                                                  spv::BuiltIn builtIn, BuiltInTypeCheckFn typeCheck,
-                                                  const char* glslName, Uint32 bufferIndex, Uint32 offsetBytes,
+            Bool MirrorPerVertexBuiltInForCapture(spvtools::opt::Instruction& entryPoint, spv::BuiltIn builtIn,
+                                                  BuiltInTypeCheckFn typeCheck, const char* glslName,
+                                                  Uint32 bufferIndex, Uint32 offsetBytes,
                                                   const DecorateFn& decorateForXfb) {
-                const Uint32 entryPointModel = entryPoint.GetSingleWordInOperand(0);
                 using namespace spvtools::opt;
                 PositionTargetInfo target{};
                 if (!FindBuiltInTarget(context(), builtIn, typeCheck, &target)) {
@@ -1640,27 +1658,17 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 decorateForXfb(mirrorVariableId, bufferIndex, offsetBytes);
                 entryPoint.AddOperand({SPV_OPERAND_TYPE_ID, {mirrorVariableId}});
 
-                auto* function = context()->GetFunction(entryFunctionId);
-                if (function == nullptr) return false;
-                const auto model = static_cast<spv::ExecutionModel>(entryPointModel);
+                // Geometry stages capture per emitted vertex; other stages at return.
                 Bool injected = false;
-                for (auto& block : *function) {
-                    for (auto instIter = block.begin(); instIter != block.end(); ++instIter) {
-                        // Geometry stages capture per emitted vertex; other stages at return.
-                        const Bool isInjectionSite = model == spv::ExecutionModel::Geometry
-                                                         ? instIter->opcode() == spv::Op::OpEmitVertex
-                                                         : instIter->opcode() == spv::Op::OpReturn;
-                        if (!isInjectionSite) continue;
-                        InstructionBuilder builder(context(), &*instIter, IRContext::kAnalysisNone);
-                        const Uint32 memberIndexId = builder.GetUintConstantId(target.memberIndex);
-                        auto* access =
-                            builder.AddAccessChain(target.vectorPtrTypeId, target.variableId, {memberIndexId});
-                        if (access == nullptr) return injected;
-                        auto* value = builder.AddLoad(target.vectorTypeId, access->result_id());
-                        if (value == nullptr) return injected;
-                        builder.AddStore(mirrorVariableId, value->result_id());
-                        injected = true;
-                    }
+                for (auto* site : CollectPerVertexFixupSites(context(), entryPoint)) {
+                    InstructionBuilder builder(context(), site, IRContext::kAnalysisNone);
+                    const Uint32 memberIndexId = builder.GetUintConstantId(target.memberIndex);
+                    auto* access = builder.AddAccessChain(target.vectorPtrTypeId, target.variableId, {memberIndexId});
+                    if (access == nullptr) return injected;
+                    auto* value = builder.AddLoad(target.vectorTypeId, access->result_id());
+                    if (value == nullptr) return injected;
+                    builder.AddStore(mirrorVariableId, value->result_id());
+                    injected = true;
                 }
                 // The mirror was listed on the entry point above, but the loop just added a READ
                 // of the SOURCE block through an access chain, and the interface rule covers
@@ -1951,36 +1959,37 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             }
             return success;
         }
+    } // namespace
 
-        Bool TransformSpirvForVulkanPositionFix(const Vector<Uint>& input, Vector<Uint>& output,
-                                                ProgramFactory::CompileOptionFlags transformFlags) {
-            if (input.empty()) {
-                output.clear();
-                return true;
-            }
-
-            if (!transformFlags) {
-                output = input;
-                return true;
-            }
-
-            spvtools::Optimizer optimizer(SPV_ENV_VULKAN_1_3);
-            spvtools::OptimizerOptions options;
-            options.set_run_validator(false); // see TransformSpirvForExplicitLod0Sampling
-            optimizer.SetMessageConsumer(
-                [](spv_message_level_t, const char*, const spv_position_t&, const char* message) {
-                    MGLOG_E("Vulkan: position fix pass: %s", message != nullptr ? message : "");
-                });
-            optimizer.RegisterPass(CreateGlToVulkanPositionFixPass(transformFlags));
-
-            const Bool success = optimizer.Run(input.data(), input.size(), &output, options);
-            if (!success) {
-                MGLOG_E("Vulkan: failed to run GL->Vulkan position fix pass");
-                output = input;
-            }
-            return success;
+    Bool TransformSpirvForVulkanPositionFix(const Vector<Uint>& input, Vector<Uint>& output,
+                                            ProgramFactory::CompileOptionFlags transformFlags) {
+        if (input.empty()) {
+            output.clear();
+            return true;
         }
 
+        if (!transformFlags) {
+            output = input;
+            return true;
+        }
+
+        spvtools::Optimizer optimizer(SPV_ENV_VULKAN_1_3);
+        spvtools::OptimizerOptions options;
+        options.set_run_validator(false); // see TransformSpirvForExplicitLod0Sampling
+        optimizer.SetMessageConsumer([](spv_message_level_t, const char*, const spv_position_t&, const char* message) {
+            MGLOG_E("Vulkan: position fix pass: %s", message != nullptr ? message : "");
+        });
+        optimizer.RegisterPass(CreateGlToVulkanPositionFixPass(transformFlags));
+
+        const Bool success = optimizer.Run(input.data(), input.size(), &output, options);
+        if (!success) {
+            MGLOG_E("Vulkan: failed to run GL->Vulkan position fix pass");
+            output = input;
+        }
+        return success;
+    }
+
+    namespace {
         ShaderStage PickClipFixupStage(const Vector<ShaderStage>& stages) {
             Bool hasGeometry = false;
             Bool hasTessEval = false;

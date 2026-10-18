@@ -726,4 +726,10 @@ namespace MobileGL::MG_Backend::DirectVulkan {
     // Private copy whose y is (framebufferHeight - y). Fails open (output = input, false). Exposed
     // so a unit case can validate the bytes it hands the driver.
     Bool TransformSpirvForFragCoordYFlip(const Vector<Uint>& input, Vector<Uint>& output, Uint32 framebufferHeight);
+
+    // The clip-space fix-up of the last pre-rasterization stage: gl_Position is rewritten in place
+    // per `transformFlags` before every vertex the stage produces. Fails open (output = input,
+    // false). Exposed, like the transform above, so a unit case can validate its bytes.
+    Bool TransformSpirvForVulkanPositionFix(const Vector<Uint>& input, Vector<Uint>& output,
+                                            ProgramFactory::CompileOptionFlags transformFlags);
 } // namespace MobileGL::MG_Backend::DirectVulkan
