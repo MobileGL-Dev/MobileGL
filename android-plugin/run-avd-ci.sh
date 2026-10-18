@@ -16,13 +16,11 @@ Usage:
     --gpu GPU \
     --emulator-log FILE \
     --pid-file FILE \
-    --boot-timeout SECONDS \
-    [--snapshot NAME]
+    --boot-timeout SECONDS
 
-  sh android-plugin/run-avd-ci.sh snapshot \
+  sh android-plugin/run-avd-ci.sh preboot \
     --avd-name NAME \
     --gpu GPU \
-    --name SNAPSHOT \
     --emulator-log FILE \
     --pid-file FILE \
     --boot-timeout SECONDS
@@ -127,34 +125,22 @@ create_avd() {
   echo no | "${avdmanager_bin}" create avd --force --name "${avd_name}" --package "${system_image}" --device "${profile}"
 }
 
-# The guest property a snapshot carries: `snapshot` sets it just before saving, and it lives only
-# in guest RAM, so after `start` it reads the snapshot's name exactly when that snapshot loaded.
-snapshot_marker_prop="debug.ci.boot_snapshot"
-
-# launch_emulator AVD GPU LOG PID_FILE SNAPSHOT_FLAG...: the flags a snapshot is saved and loaded
-# with must match, so both commands launch through here.
+# The retrace jobs and `preboot` launch the emulator the same way, through here.
 launch_emulator() {
-  launch_avd="$1"
-  launch_gpu="$2"
-  launch_log="$3"
-  launch_pid_file="$4"
-  shift 4
-  mkdir -p "$(dirname "${launch_log}")" "$(dirname "${launch_pid_file}")"
-  "${emulator_bin}" -avd "${launch_avd}" \
+  mkdir -p "$(dirname "${emulator_log}")" "$(dirname "${pid_file}")"
+  "${emulator_bin}" -avd "${avd_name}" \
     -no-window \
-    -gpu "${launch_gpu}" \
-    "$@" \
+    -gpu "${gpu}" \
+    -no-snapshot \
     -noaudio \
     -no-boot-anim \
     -camera-back none \
     -camera-front none \
-    > "${launch_log}" 2>&1 &
-  echo "$!" > "${launch_pid_file}"
+    > "${emulator_log}" 2>&1 &
+  echo "$!" > "${pid_file}"
 }
 
 wait_for_boot() {
-  emulator_log="$1"
-  boot_timeout="$2"
   if ! timeout "${boot_timeout}" "${adb_bin}" wait-for-device; then
     print_diagnostics "${emulator_log}"
     die "emulator did not connect to adb within ${boot_timeout}s"
@@ -180,13 +166,12 @@ wait_for_boot() {
   "${adb_bin}" shell input keyevent 82 || true
 }
 
-start_avd() {
+parse_boot_args() {
   avd_name=""
   gpu=""
   emulator_log=""
   pid_file=""
   boot_timeout=""
-  snapshot=""
 
   while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -195,9 +180,8 @@ start_avd() {
       --emulator-log) emulator_log="$(next_arg "$@")"; shift 2 ;;
       --pid-file) pid_file="$(next_arg "$@")"; shift 2 ;;
       --boot-timeout) boot_timeout="$(next_arg "$@")"; shift 2 ;;
-      --snapshot) snapshot="$(next_arg "$@")"; shift 2 ;;
       -h|--help) usage; exit 0 ;;
-      *) die "unknown start argument: $1" ;;
+      *) die "unknown argument: $1" ;;
     esac
   done
 
@@ -210,90 +194,37 @@ start_avd() {
   adb_bin="$(find_android_tool adb platform-tools/adb)"
   emulator_bin="$(find_android_tool emulator emulator/emulator)"
   ensure_android_avd_home
-
-  # A snapshot only shortens the boot: the image, the AVD and the GPU mode are the same, and the
-  # emulator cold-boots by itself when the snapshot does not load.
-  started_at="$(date +%s)"
-  if [ -n "${snapshot}" ] && [ -d "${ANDROID_AVD_HOME}/${avd_name}.avd/snapshots/${snapshot}" ]; then
-    launch_emulator "${avd_name}" "${gpu}" "${emulator_log}" "${pid_file}" -snapshot "${snapshot}" -no-snapshot-save
-  else
-    launch_emulator "${avd_name}" "${gpu}" "${emulator_log}" "${pid_file}" -no-snapshot
-  fi
-  wait_for_boot "${emulator_log}" "${boot_timeout}"
-
-  seconds="$(( $(date +%s) - started_at ))"
-  marker="$("${adb_bin}" shell getprop "${snapshot_marker_prop}" 2>/dev/null | tr -d '\r' || true)"
-  if [ -n "${snapshot}" ] && [ "${marker}" = "${snapshot}" ]; then
-    echo "run-avd-ci.sh: booted in ${seconds}s from snapshot ${snapshot}"
-  elif [ -n "${snapshot}" ]; then
-    echo "run-avd-ci.sh: booted in ${seconds}s by cold boot; snapshot ${snapshot} did not load"
-  else
-    echo "run-avd-ci.sh: booted in ${seconds}s by cold boot"
-  fi
 }
 
-# Boot the AVD cold once in GPU mode GPU and save snapshot NAME of the booted device, then shut it
-# down cleanly so the AVD can be cached. The first call also does the AVD's first-boot setup,
-# which a cold boot after a cache restore then no longer repeats.
-snapshot_avd() {
-  avd_name=""
-  gpu=""
-  snapshot_name=""
-  emulator_log=""
-  pid_file=""
-  boot_timeout=""
-
-  while [ "$#" -gt 0 ]; do
-    case "$1" in
-      --avd-name) avd_name="$(next_arg "$@")"; shift 2 ;;
-      --gpu) gpu="$(next_arg "$@")"; shift 2 ;;
-      --name) snapshot_name="$(next_arg "$@")"; shift 2 ;;
-      --emulator-log) emulator_log="$(next_arg "$@")"; shift 2 ;;
-      --pid-file) pid_file="$(next_arg "$@")"; shift 2 ;;
-      --boot-timeout) boot_timeout="$(next_arg "$@")"; shift 2 ;;
-      -h|--help) usage; exit 0 ;;
-      *) die "unknown snapshot argument: $1" ;;
-    esac
-  done
-
-  require_value "${avd_name}" "--avd-name"
-  require_value "${gpu}" "--gpu"
-  require_value "${snapshot_name}" "--name"
-  require_value "${emulator_log}" "--emulator-log"
-  require_value "${pid_file}" "--pid-file"
-  require_value "${boot_timeout}" "--boot-timeout"
-
-  adb_bin="$(find_android_tool adb platform-tools/adb)"
-  emulator_bin="$(find_android_tool emulator emulator/emulator)"
-  ensure_android_avd_home
-
+start_avd() {
+  parse_boot_args "$@"
   started_at="$(date +%s)"
-  launch_emulator "${avd_name}" "${gpu}" "${emulator_log}" "${pid_file}" -no-snapshot-load -no-snapshot-save
-  wait_for_boot "${emulator_log}" "${boot_timeout}"
+  launch_emulator
+  wait_for_boot
   echo "run-avd-ci.sh: ${gpu} cold boot took $(( $(date +%s) - started_at ))s"
+}
 
-  "${adb_bin}" shell setprop "${snapshot_marker_prop}" "${snapshot_name}"
-  saved="$("${adb_bin}" emu avd snapshot save "${snapshot_name}" 2>&1 | tr -d '\r' || true)"
-  echo "run-avd-ci.sh: snapshot save ${snapshot_name}: ${saved}"
+# Boot a freshly created AVD once and power it off, so the cached AVD is past its first-boot setup
+# and every retrace job's cold boot skips it. The guest powers off itself, so its data is flushed
+# before the emulator exits.
+preboot_avd() {
+  parse_boot_args "$@"
+  started_at="$(date +%s)"
+  launch_emulator
+  wait_for_boot
+  echo "run-avd-ci.sh: first boot took $(( $(date +%s) - started_at ))s"
 
-  "${adb_bin}" emu kill >/dev/null 2>&1 || true
+  "${adb_bin}" shell reboot -p >/dev/null 2>&1 || true
   emulator_pid="$(cat "${pid_file}")"
   for _ in $(seq 1 120); do
     kill -0 "${emulator_pid}" 2>/dev/null || break
     sleep 1
   done
   if kill -0 "${emulator_pid}" 2>/dev/null; then
+    "${adb_bin}" emu kill >/dev/null 2>&1 || true
     kill "${emulator_pid}" >/dev/null 2>&1 || true
-    die "emulator did not exit after saving snapshot ${snapshot_name}"
+    die "emulator did not exit within 120s of the guest power-off"
   fi
-
-  snapshot_dir="${ANDROID_AVD_HOME}/${avd_name}.avd/snapshots/${snapshot_name}"
-  case "${saved}" in
-    *OK*) ;;
-    *) rm -rf "${snapshot_dir}"; die "snapshot ${snapshot_name} was not saved: ${saved}" ;;
-  esac
-  [ -d "${snapshot_dir}" ] || die "snapshot ${snapshot_name} reported OK but ${snapshot_dir} does not exist"
-  du -sh "${snapshot_dir}"
 }
 
 stop_avd() {
@@ -337,7 +268,7 @@ shift
 case "${command}" in
   create) create_avd "$@" ;;
   start) start_avd "$@" ;;
-  snapshot) snapshot_avd "$@" ;;
+  preboot) preboot_avd "$@" ;;
   stop) stop_avd "$@" ;;
   -h|--help) usage; exit 0 ;;
   *) die "unknown command: ${command}" ;;

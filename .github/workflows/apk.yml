@@ -379,7 +379,7 @@ jobs:
             ${{ env.ANDROID_SDK_ROOT }}/platform-tools
             ${{ env.ANDROID_SDK_ROOT }}/platforms/android-35
             ${{ env.ANDROID_SDK_ROOT }}/system-images/android-35/google_apis/x86_64
-          key: ${{ runner.os }}-mobilegl-avd-api35-google_apis-x86_64-pixel_6-v3-${{ hashFiles('android-plugin/run-avd-ci.sh') }}
+          key: ${{ runner.os }}-mobilegl-avd-api35-google_apis-x86_64-pixel_6-v4-${{ hashFiles('android-plugin/run-avd-ci.sh') }}
 
       - name: Create AVD
         if: steps.android-avd-cache.outputs.cache-hit != 'true'
@@ -398,24 +398,24 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
-      # Boot the new AVD once per emulator GPU mode of the retrace matrix (the backends' `gpu` in
-      # tools/trace_replay/trace_cases.py) and keep a snapshot of each booted device in the cached
-      # AVD, so a retrace job loads one instead of cold-booting. A mode whose snapshot cannot be
-      # saved still leaves the AVD past its first-boot setup.
-      - name: Pre-boot AVD and save snapshots
+      # Boot the new AVD once so the cached AVD is past its first-boot setup (measured 37 s first
+      # boot, 26 s for the next cold boot). A quick-boot snapshot was tried instead: it doubled the
+      # cache restore and tripled "device offline" retries, so retrace jobs cold-boot. If the
+      # pre-boot fails, the AVD is created afresh so the cache never holds a half-booted one.
+      - name: Pre-boot AVD
         if: steps.android-avd-cache.outputs.cache-hit != 'true'
         run: |
-          for gpu in software lavapipe; do
-            log="${RUNNER_TEMP}/avd-snapshot-${gpu}.log"
-            pid="${RUNNER_TEMP}/avd-snapshot-${gpu}.pid"
-            if ! sh android-plugin/run-avd-ci.sh snapshot --avd-name "${AVD_NAME}" --gpu "${gpu}" \
-                --name "ci-${gpu}" --emulator-log "${log}" --pid-file "${pid}" --boot-timeout 300; then
-              echo "::warning::no ci-${gpu} snapshot was saved; retrace jobs in that GPU mode cold-boot"
-              tail -50 "${log}" || true
-              sh android-plugin/run-avd-ci.sh stop --avd-name "${AVD_NAME}" --emulator-log "${log}" --pid-file "${pid}"
-              timeout 60 tail --pid="$(cat "${pid}")" -f /dev/null || true
-            fi
-          done
+          log="${RUNNER_TEMP}/avd-preboot.log"
+          pid="${RUNNER_TEMP}/avd-preboot.pid"
+          if ! sh android-plugin/run-avd-ci.sh preboot --avd-name "${AVD_NAME}" --gpu software \
+              --emulator-log "${log}" --pid-file "${pid}" --boot-timeout 300; then
+            echo "::warning::the AVD pre-boot failed; caching a never-booted AVD instead"
+            tail -50 "${log}" || true
+            sh android-plugin/run-avd-ci.sh stop --avd-name "${AVD_NAME}" --emulator-log "${log}" --pid-file "${pid}"
+            timeout 60 tail --pid="$(cat "${pid}")" -f /dev/null || true
+            sh android-plugin/run-avd-ci.sh create --api-level 35 --target google_apis --arch x86_64 \
+              --profile pixel_6 --avd-name "${AVD_NAME}"
+          fi
           du -sh "${ANDROID_AVD_HOME}"
 
   retrace:
@@ -477,7 +477,7 @@ jobs:
             ${{ env.ANDROID_SDK_ROOT }}/platform-tools
             ${{ env.ANDROID_SDK_ROOT }}/platforms/android-35
             ${{ env.ANDROID_SDK_ROOT }}/system-images/android-35/google_apis/x86_64
-          key: ${{ runner.os }}-mobilegl-avd-api35-google_apis-x86_64-pixel_6-v3-${{ hashFiles('android-plugin/run-avd-ci.sh') }}
+          key: ${{ runner.os }}-mobilegl-avd-api35-google_apis-x86_64-pixel_6-v4-${{ hashFiles('android-plugin/run-avd-ci.sh') }}
 
       # The cache holds everything a retrace job runs (emulator, adb, image, AVD); the SDK manager
       # is only needed to create the AVD when the cache missed.
@@ -540,8 +540,7 @@ jobs:
             --gpu "${{ matrix.backend.gpu }}" \
             --emulator-log "${EMULATOR_LOG}" \
             --pid-file "${EMULATOR_PID_FILE}" \
-            --boot-timeout 300 \
-            --snapshot "ci-${{ matrix.backend.gpu }}"
+            --boot-timeout 300
 
       - name: Retrace and validate
         env:
@@ -648,8 +647,7 @@ jobs:
               --gpu "${{ matrix.backend.gpu }}" \
               --emulator-log "${EMULATOR_LOG}" \
               --pid-file "${EMULATOR_PID_FILE}" \
-              --boot-timeout 300 \
-              --snapshot "ci-${{ matrix.backend.gpu }}"
+              --boot-timeout 300
             run_retrace
           elif [ "${retrace_status}" -ne 0 ]; then
             exit "${retrace_status}"
