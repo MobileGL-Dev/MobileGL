@@ -601,8 +601,10 @@ namespace MobileGL::MG_ConfigLoader {
         // The verify harness compares the pushed block against the applier per verb; a
         // batched queue lets the comparer read a supplied field mid-apply, which is a
         // torn read rather than a divergence. The batch is therefore off whenever the
-        // shadow comparer is armed.
+        // shadow comparer is armed, which only a verify build compiles.
+#if MOBILEGL_PIPE_VERIFY
         if (MG_Config::Features.PipeVerify) ipc.BatchWaits = 0;
+#endif
         // UNSET is T0 with quiet fallbacks (the default since 2026-09-29); 0 asks for T0 by name, 1 is
         // refused by name, 2 is T2 - settled at the handshake from the data plane (P11 A1/B2,
         // MG_Remote/Transport/AdoptTier.h). An unparseable value is warned about and reads as unset.
@@ -615,7 +617,9 @@ namespace MobileGL::MG_ConfigLoader {
         // ... and forced OFF by the verify harness for BatchWaits' reason, one step further:
         // run-ahead's whole point is that the client stops filling gPipeInputs for an
         // unbarriered record, and the comparator has nothing left to compare when it does.
+#if MOBILEGL_PIPE_VERIFY
         if (MG_Config::Features.PipeVerify) ipc.RunAhead = 0;
+#endif
         // The present credit (ruling 4). 1 is one frame of overlap; 8 is the ceiling because a
         // deeper queue buys nothing on a CPU-bound client and pays for it in latency. 0 is NOT
         // admitted: a credit of zero would mean "publish no present at all".
@@ -645,12 +649,14 @@ namespace MobileGL::MG_ConfigLoader {
         // own and needs no applier quiesce. 0 still turns it off (the negative control does).
         ipc.RoleSplitState =
             QueryEnvQuirkOverride("MOBILEGL_IPC_ROLE_SPLIT_STATE") != MG_Config::QuirkOverride::ForceOff;
+#if MOBILEGL_PIPE_VERIFY
         if (MG_Config::Features.PipeVerify && ipc.RoleSplitState) {
             MGLOG_W("Config: MOBILEGL_IPC_ROLE_SPLIT_STATE=1 is incompatible with "
                     "MOBILEGL_PIPE_VERIFY (the comparator owns the single fill block); "
                     "the dual-block rehearsal is OFF for this run");
             ipc.RoleSplitState = false;
         }
+#endif
 
         // P6 `dl` (CONTRACT-P6 5.3): MOBILEGL_IPC_RESPAWN IS A NAMED REFUSAL, NOT A NO-OP.
         //

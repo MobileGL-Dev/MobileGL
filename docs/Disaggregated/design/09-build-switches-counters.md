@@ -67,7 +67,7 @@ CMake：`MOBILEGL_BUILD_DISAGGREGATED`（OFF）、`MOBILEGL_BUILD_DISAGGREGATED_
 | `MOBILEGL_FRAMES_IN_FLIGHT` | 3 | 1..64，两个后端共用（旧名 `MOBILEGL_MAGMA_FRAMESINFLIGHT` 为弃用别名）：Magma 的帧上下文数；Espryt 在 present S 后等待帧 S+1-N 完成；split 的 present credit 由它导出为 max(1, N-2)（P15） |
 | `MOBILEGL_IPC_PRESENT_CREDIT` | 由 `MOBILEGL_FRAMES_IN_FLIGHT` 导出（默认 1） | 1..8，§14；显式设置覆盖导出值，仅供实验 |
 | `MOBILEGL_IPC_POLL_ESCALATE` | 64 | 未报告 fence 的零超时轮询本地答"未完成"，同一 fence 连续第 N 次才往返（P10，`CONTRACT-P10.md` §1）；`0` = 每次轮询都往返，是 A/B 对照 |
-| `MOBILEGL_IPC_BATCH_WAITS` | 1 | lockstep 下值类记录发布即返回；verify 强制 0 |
+| `MOBILEGL_IPC_BATCH_WAITS` | 1 | lockstep 下值类记录发布即返回；verify 构建里 `MOBILEGL_PIPE_VERIFY=1` 强制 0（`RUN_AHEAD` 同样强制 0，`ROLE_SPLIT_STATE` 强制关；其他构建不改它们） |
 | `MOBILEGL_IPC_EVENT_WAIT_MS` | 2000 | 反向事件遇满环时 server 等 client 排空的整笔预算（§11.7） |
 | `MOBILEGL_IPC_WIRE_DEFERRED_MB` | 64 | Magma wire 臂延迟回收的水位线；`0` 是 M2 阴性对照 |
 | `MOBILEGL_IPC_PERSISTENT_HASH_SUPPRESS` | 1 | persistent-map 推送只推变化的块（粒度固定 64 KiB，`PersistentMapTracker::BlockBytes()`）；`0` 是整段推送的 A/B 对照 |
