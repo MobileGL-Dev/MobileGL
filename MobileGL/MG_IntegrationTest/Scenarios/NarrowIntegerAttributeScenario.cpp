@@ -17,8 +17,9 @@
 // shaderpacks. The values are captured with transform feedback so every bit is compared.
 //
 // The second case draws one program over two vertex arrays that differ only in the signedness
-// of the data, in both orders: the correction is chosen per draw from the data, so a pipeline or
-// program cached for one array must never be handed to the other.
+// of the data, in both orders and each twice in a row: the correction is chosen per draw from the
+// data, so a pipeline or program cached for one array, or the variant the previous draw settled
+// on, must never be handed to the other.
 
 #include <cstddef>
 #include <cstring>
@@ -281,7 +282,9 @@ void main()
             const std::vector<GLuint> asSigned = {0xFFFFFFFFu, 0xFFFFFF80u, 5u, 127u};
             const std::vector<GLuint> asUnsigned = {255u, 128u, 5u, 127u};
             EXPECT_EQ(Capture(program, signedArray, 4), asSigned) << "GL_BYTE first";
+            EXPECT_EQ(Capture(program, signedArray, 4), asSigned) << "GL_BYTE twice in a row";
             EXPECT_EQ(Capture(program, unsignedArray, 4), asUnsigned) << "then GL_UNSIGNED_BYTE";
+            EXPECT_EQ(Capture(program, unsignedArray, 4), asUnsigned) << "GL_UNSIGNED_BYTE twice in a row";
             EXPECT_EQ(Capture(program, signedArray, 4), asSigned) << "GL_BYTE again";
             EXPECT_EQ(Capture(program, unsignedArray, 4), asUnsigned) << "GL_UNSIGNED_BYTE again";
             EXPECT_EQ(glGetError(), GL_NO_ERROR);
