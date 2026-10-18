@@ -28,7 +28,8 @@ namespace MobileGL {
         void Init();
         // One setting resolved the way Init() resolves it - the environment, then the system
         // configuration files (ConfigLoader.cpp) - for the few readers that must decide something
-        // before MobileGL initializes. False when neither names it.
+        // before MobileGL initializes, and for a verify build's comparator, which reads
+        // MOBILEGL_PIPE_VERIFY_CORRUPT when it arms. False when neither names it.
         Bool LookupSetting(const char* key, String& outValue);
     } // namespace MG_ConfigLoader
 

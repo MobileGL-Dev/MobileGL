@@ -137,8 +137,9 @@ namespace MobileGL::MG_ConfigLoader {
         }
 
         // Everything the system files say, the backend file ahead of client.conf (first emplace
-        // wins). Re-read on every call: callers are few (Init, and a handful of lookups before it),
-        // and a file that changed between two processes' starts must not be served stale.
+        // wins). Re-read on every call: callers are few (Init, a handful of lookups before it, and a
+        // verify build's comparator when it arms), and a file that changed between two processes'
+        // starts must not be served stale.
         void ReadSystemConfig(UnorderedMap<String, String>& out, Bool log) {
             if (IsServerProcess()) return;
             ReadBackendFile(FilePathSetting("MOBILEGL_BACKEND_FILE", kDefaultBackendFile), out);
