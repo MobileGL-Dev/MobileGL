@@ -204,6 +204,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             // The locations of vertexInputTypes that are int / uint, for the per-draw narrow-integer
             // variant decision (ResolveNarrowIntegerVertexInputs). Identical in every variant.
             IntegerVertexInputMasks integerVertexInputs;
+            // The narrow-integer correction this entry's vertex stage was built with (none for the
+            // plain program): what a draw compares its own resolved set against.
+            NarrowIntegerVertexInputs narrowIntegerInputs;
             Uint32 activeFragmentOutputLocationMask = 0;
             Array<GLenum, kMaxVertexInputLocations> fragmentOutputTypes{};
             ShaderStage rasterizationProducerStage = ShaderStage::Unknown;
@@ -333,6 +336,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 activeVertexInputLocationMask = other.activeVertexInputLocationMask;
                 vertexInputTypes = other.vertexInputTypes;
                 integerVertexInputs = other.integerVertexInputs;
+                narrowIntegerInputs = other.narrowIntegerInputs;
                 activeFragmentOutputLocationMask = other.activeFragmentOutputLocationMask;
                 fragmentOutputTypes = other.fragmentOutputTypes;
                 rasterizationProducerStage = other.rasterizationProducerStage;
@@ -357,6 +361,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 other.globalUboBinding = -1;
                 other.activeVertexInputLocationMask = 0;
                 other.integerVertexInputs = {};
+                other.narrowIntegerInputs = {};
                 other.activeFragmentOutputLocationMask = 0;
                 other.rasterizationProducerStage = ShaderStage::Unknown;
                 other.producerOutputComponentCount = 0;
@@ -409,6 +414,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 activeVertexInputLocationMask = other.activeVertexInputLocationMask;
                 vertexInputTypes = other.vertexInputTypes;
                 integerVertexInputs = other.integerVertexInputs;
+                narrowIntegerInputs = other.narrowIntegerInputs;
                 activeFragmentOutputLocationMask = other.activeFragmentOutputLocationMask;
                 fragmentOutputTypes = other.fragmentOutputTypes;
                 rasterizationProducerStage = other.rasterizationProducerStage;
@@ -433,6 +439,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
                 other.globalUboBinding = -1;
                 other.activeVertexInputLocationMask = 0;
                 other.integerVertexInputs = {};
+                other.narrowIntegerInputs = {};
                 other.activeFragmentOutputLocationMask = 0;
                 other.rasterizationProducerStage = ShaderStage::Unknown;
                 other.producerOutputComponentCount = 0;
@@ -529,9 +536,15 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // `narrowIntegerInputs` selects the variant whose vertex stage widens narrow integer
         // attribute data GL's way (ExtendNarrowIntegerVertexInputsPass). It is draw-time state like
         // the flags, and the draw path asks for it only when ResolveNarrowIntegerVertexInputs finds
-        // a location that needs it, so every other program keeps a single entry.
+        // a location that needs it, so every other program keeps a single entry. The variant
+        // returned is remembered per flags for GetOrCreateDrawProgram.
         const VkProgramObject& GetOrCreateProgram(const MagmaProgramSource& program, CompileOptionFlags flags,
                                                   const NarrowIntegerVertexInputs& narrowIntegerInputs = {});
+        // A draw's first lookup: the variant GetOrCreateProgram last returned for these flags, plain
+        // or narrow-integer. Every variant reflects the same vertex inputs and builtins, which is all
+        // a draw reads before it knows the variant it needs, so a program whose draws keep needing
+        // one variant costs a single lookup and its plain entry, never drawn with, ages out.
+        const VkProgramObject& GetOrCreateDrawProgram(const MagmaProgramSource& program, CompileOptionFlags flags);
         // The cache identity of a narrow-integer variant: the hash of the same program and flags
         // without it, mixed with the corrected locations. Content in, content out, so the variant's
         // pipelines key apart from the plain program's through programHash alone.
@@ -672,6 +685,13 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             CompileOptionFlags flags{};
             HashType hash = 0;
         };
+
+        // The program's memo slot for `flags`, its plain hash computed on a miss.
+        MagmaProgramSource::BackendHashMemoEntry& ProgramHashMemo(const MagmaProgramSource& program,
+                                                                  CompileOptionFlags flags) const;
+        // The cache entry under `hash`, built as that variant of `program` when absent.
+        const VkProgramObject& FindOrBuildProgram(const MagmaProgramSource& program, CompileOptionFlags flags,
+                                                  const NarrowIntegerVertexInputs& narrowIntegerInputs, HashType hash);
 
         static TextureTarget UniformTypeToTextureTarget(GLenum glType);
         // `stages` is ALWAYS ProgramObject::GetLinkedShaderStages() - one entry per module of

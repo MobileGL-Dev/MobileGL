@@ -19,6 +19,7 @@
 using namespace MobileGL;
 using MobileGL::MG_Backend::DirectVulkan::ClassifyNarrowIntegerVertexFormat;
 using MobileGL::MG_Backend::DirectVulkan::IntegerVertexInputMasks;
+using MobileGL::MG_Backend::DirectVulkan::MagmaProgramSource;
 using MobileGL::MG_Backend::DirectVulkan::NarrowIntegerAttributeMasks;
 using MobileGL::MG_Backend::DirectVulkan::NarrowIntegerVertexFormat;
 using MobileGL::MG_Backend::DirectVulkan::NarrowIntegerVertexInputs;
@@ -135,23 +136,61 @@ TEST(NarrowIntegerVertexFormats, VariantHashKeysEveryCorrectionApart) {
               hash);
 }
 
-// The program half lives on the cache entry, and the cache's robin-hood insert moves entries
-// around: a mask left behind by a move would pick another program's variant.
+// The program half and the entry's own correction live on the cache entry, and the cache's
+// robin-hood insert moves entries around: a mask left behind by a move would pick another
+// program's variant, and a correction left behind would make a draw take a variant for the plain
+// program or the reverse.
 TEST(NarrowIntegerVertexFormats, IntegerInputMasksTravelWithTheProgramEntry) {
+    const NarrowIntegerVertexInputs sodium = Only(&NarrowIntegerVertexInputs::zeroExtend8, 3);
     ProgramFactory::VkProgramObject source;
     source.integerVertexInputs.signedInputs = 1u << 3;
     source.integerVertexInputs.unsignedInputs = 1u << 7;
+    source.narrowIntegerInputs = sodium;
 
     ProgramFactory::VkProgramObject moved(std::move(source));
     EXPECT_EQ(moved.integerVertexInputs.signedInputs, 1u << 3);
     EXPECT_EQ(moved.integerVertexInputs.unsignedInputs, 1u << 7);
+    EXPECT_EQ(moved.narrowIntegerInputs, sodium);
     EXPECT_EQ(source.integerVertexInputs.signedInputs, 0u);
     EXPECT_EQ(source.integerVertexInputs.unsignedInputs, 0u);
+    EXPECT_FALSE(source.narrowIntegerInputs.Any());
 
     ProgramFactory::VkProgramObject assigned;
     assigned = std::move(moved);
     EXPECT_EQ(assigned.integerVertexInputs.signedInputs, 1u << 3);
     EXPECT_EQ(assigned.integerVertexInputs.unsignedInputs, 1u << 7);
+    EXPECT_EQ(assigned.narrowIntegerInputs, sodium);
     EXPECT_EQ(moved.integerVertexInputs.signedInputs, 0u);
     EXPECT_EQ(moved.integerVertexInputs.unsignedInputs, 0u);
+    EXPECT_FALSE(moved.narrowIntegerInputs.Any());
+}
+
+// A draw starts from the variant the program's last lookup with the same flags returned, which
+// the program record keeps beside the plain hash it derives from. A fresh slot must point at the
+// plain program, and the variant must be forgotten with the hash: after a relink or a binding
+// change the same flags answer from a fresh slot.
+TEST(NarrowIntegerVertexFormats, TheLastVariantIsRememberedOnlyWithItsPlainHash) {
+    MG_Pipe::MGPipeShaderCsoRecord record{};
+    record.Archive = MakeShared<MG_State::GLState::ProgramArchive>();
+    record.Serial = 4;
+    record.BindingsSerial = 9;
+    const MagmaProgramSource source({5, 1}, record);
+    constexpr Uint kFlags = 0x21;
+
+    EXPECT_EQ(source.FindBackendHashMemo(kFlags), nullptr);
+    auto& slot = source.SetBackendHashMemo(kFlags, 0xabcull);
+    EXPECT_EQ(slot.LastVariantHash, 0xabcull) << "a fresh slot starts at the plain program";
+    slot.LastVariantHash = 0xdefull;
+    const auto* found = source.FindBackendHashMemo(kFlags);
+    ASSERT_EQ(found, &slot);
+    EXPECT_EQ(found->Hash, 0xabcull);
+    EXPECT_EQ(found->LastVariantHash, 0xdefull);
+    EXPECT_EQ(source.FindBackendHashMemo(kFlags + 1), nullptr) << "other flags have their own slot";
+
+    record.Serial = 5; // a relink
+    EXPECT_EQ(source.FindBackendHashMemo(kFlags), nullptr);
+    EXPECT_EQ(source.SetBackendHashMemo(kFlags, 0x123ull).LastVariantHash, 0x123ull);
+    ASSERT_NE(source.FindBackendHashMemo(kFlags), nullptr);
+    record.BindingsSerial = 10; // glUniformBlockBinding and friends
+    EXPECT_EQ(source.FindBackendHashMemo(kFlags), nullptr);
 }

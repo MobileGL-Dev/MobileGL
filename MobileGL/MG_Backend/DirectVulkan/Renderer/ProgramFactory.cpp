@@ -3626,9 +3626,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         }
     } // namespace
 
-    const ProgramFactory::VkProgramObject& ProgramFactory::GetOrCreateProgram(
-        const MagmaProgramSource& program, CompileOptionFlags flags,
-        const NarrowIntegerVertexInputs& narrowIntegerInputs) {
+    MagmaProgramSource::BackendHashMemoEntry& ProgramFactory::ProgramHashMemo(const MagmaProgramSource& program,
+                                                                              CompileOptionFlags flags) const {
         // Hashing the full SPIR-V of every stage is far too expensive to repeat per draw;
         // reuse the program's memoized hash while its backend state version is unchanged.
         // The memo keys on the flags word, which ComputeHash is no longer a pure function of:
@@ -3644,19 +3643,46 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         const Uint memoKey = (flags & CompileOptionBit::FragCoordYFlip)
                                  ? (flags.GetRaw() | (m_defaultFramebufferHeight << 16))
                                  : flags.GetRaw();
-        HashType hash = 0;
-        if (!program.GetBackendHashMemo(memoKey, hash)) {
-            hash = ComputeHash(program, flags);
-            program.SetBackendHashMemo(memoKey, hash);
-        }
+        if (auto* memo = program.FindBackendHashMemo(memoKey)) return *memo;
+        return program.SetBackendHashMemo(memoKey, ComputeHash(program, flags));
+    }
+
+    const ProgramFactory::VkProgramObject& ProgramFactory::GetOrCreateProgram(
+        const MagmaProgramSource& program, CompileOptionFlags flags,
+        const NarrowIntegerVertexInputs& narrowIntegerInputs) {
+        auto& memo = ProgramHashMemo(program, flags);
         // Mixed in after the memo, which keys on the flags word alone: the memo keeps answering
         // for the plain program, and the variant costs one 16-byte hash on top of it.
+        HashType hash = memo.Hash;
         if (narrowIntegerInputs.Any()) hash = MixNarrowIntegerVertexInputs(hash, narrowIntegerInputs);
+        memo.LastVariantHash = hash;
+        return FindOrBuildProgram(program, flags, narrowIntegerInputs, hash);
+    }
+
+    const ProgramFactory::VkProgramObject& ProgramFactory::GetOrCreateDrawProgram(const MagmaProgramSource& program,
+                                                                                  CompileOptionFlags flags) {
+        auto& memo = ProgramHashMemo(program, flags);
+        if (memo.LastVariantHash != memo.Hash) {
+            const auto it = m_cache.find(memo.LastVariantHash);
+            if (it != m_cache.end()) {
+                it->second.lastUsedFrame = m_frameCounter;
+                return it->second;
+            }
+            // The variant aged out, and its hash alone cannot rebuild it: start from the plain
+            // program, and the draw settles on its variant again.
+            memo.LastVariantHash = memo.Hash;
+        }
+        return FindOrBuildProgram(program, flags, {}, memo.Hash);
+    }
+
+    const ProgramFactory::VkProgramObject& ProgramFactory::FindOrBuildProgram(
+        const MagmaProgramSource& program, CompileOptionFlags flags,
+        const NarrowIntegerVertexInputs& narrowIntegerInputs, HashType hash) {
         auto it = m_cache.find(hash);
         if (it != m_cache.end()) {
-            // Every draw/dispatch funnels through this lookup (the renderer memos only
-            // skip re-hashing, never the factory lookup), so an actively-used entry is
-            // stamped at least once per frame boundary and can never be aged out while
+            // Every draw/dispatch funnels through this lookup or GetOrCreateDrawProgram's (the
+            // renderer memos only skip re-hashing, never the factory lookup), so an actively-used
+            // entry is stamped at least once per frame boundary and can never be aged out while
             // any in-flight command buffer still references it.
             it->second.lastUsedFrame = m_frameCounter;
             return it->second;
@@ -3667,6 +3693,7 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         ++m_cacheStructureEpoch;
         auto& entry = m_cache[hash];
         entry.hash = hash;
+        entry.narrowIntegerInputs = narrowIntegerInputs;
         entry.lastUsedFrame = m_frameCounter;
         // The EXECUTABLE's stage list, not GetAttachedShaders(): `spirv` is a link artifact with
         // one module per linked stage, while the attach list is live and grows on

@@ -734,10 +734,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         if (m_transformFeedbackFeatureEnabled && MG_Pipe::gPipeInputs->IsTransformFeedbackActive() &&
             program.GetTransformFeedbackVaryingCount() > 0)
             flags |= ProgramFactory::CompileOptionBit::XfbCapture;
-        const auto* programObject = &m_programFactory->GetOrCreateProgram(program, flags);
+        // The variant this program's last draw with these flags settled on: what the draw reads
+        // from it before the narrow-integer pick below is the same in every variant.
+        const auto* programObject = &m_programFactory->GetOrCreateDrawProgram(program, flags);
         if (!(aspects & DrawSetupAspect::IndexBuffer) && programObject->readsBaseVertexBuiltin) {
             flags |= ProgramFactory::CompileOptionBit::ZeroBaseVertex;
-            programObject = &m_programFactory->GetOrCreateProgram(program, flags);
+            programObject = &m_programFactory->GetOrCreateDrawProgram(program, flags);
         }
         const auto vaoHandle = state.BoundVertexElements;
         if (MG_Pipe::MGPipeHandleIsNull(vaoHandle)) MagmaWireFatal("vertex-elements-record");
@@ -770,11 +772,12 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         const auto& input = *resolvedInput;
         // The narrow-integer variant (NarrowIntegerVertexFormats.h), chosen from two masks cached on
         // the program entry and on the resolved layout: a program without integer vertex inputs pays
-        // four ANDs here. Every variant reflects the same inputs, so the layout resolved above with
-        // the plain program's active mask is this variant's too.
+        // four ANDs and a compare here. Every variant reflects the same inputs, so the layout
+        // resolved above with the entry's active mask is the chosen variant's too. A second lookup
+        // only when this draw needs another variant than the last one with these flags.
         const NarrowIntegerVertexInputs narrowIntegerInputs =
             ResolveNarrowIntegerVertexInputs(programObject->integerVertexInputs, input.narrowIntegerAttributes);
-        if (narrowIntegerInputs.Any())
+        if (narrowIntegerInputs != programObject->narrowIntegerInputs)
             programObject = &m_programFactory->GetOrCreateProgram(program, flags, narrowIntegerInputs);
         if (programObject->invalidSpirvDeclined) {
             MGL_WIRE_DECLINE_AT(ProgramInvalidSpirv,

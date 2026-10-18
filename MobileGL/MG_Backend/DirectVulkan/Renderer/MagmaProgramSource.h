@@ -53,24 +53,26 @@ namespace MobileGL::MG_Backend::DirectVulkan {
         // The view has no lifetime of its own, so the memo lives in the server record it views
         // (MGPipeShaderCsoRecord::BackendHashMemo), never in the client's program object: an entry
         // answers only while the record's Serial and BindingsSerial are the ones it was taken at.
-        Bool GetBackendHashMemo(Uint flags, Uint64& hash) const {
-            for (const auto& entry : m_record->BackendHashMemo) {
-                if (entry.Valid && entry.Key == flags && entry.Serial == m_record->Serial &&
-                    entry.BindingsSerial == m_record->BindingsSerial) {
-                    hash = entry.Hash;
-                    return true;
-                }
+        using BackendHashMemoEntry = MG_Pipe::MGPipeShaderCsoRecord::BackendHashMemoEntry;
+        BackendHashMemoEntry* FindBackendHashMemo(Uint key) const {
+            for (auto& entry : m_record->BackendHashMemo) {
+                if (entry.Valid && entry.Key == key && entry.Serial == m_record->Serial &&
+                    entry.BindingsSerial == m_record->BindingsSerial)
+                    return &entry;
             }
-            return false;
+            return nullptr;
         }
-        void SetBackendHashMemo(Uint flags, Uint64 hash) const {
+        // Takes the next slot round robin; its LastVariantHash starts as the plain `hash`.
+        BackendHashMemoEntry& SetBackendHashMemo(Uint key, Uint64 hash) const {
             auto& memo = m_record->BackendHashMemo;
             auto& entry = memo[m_record->BackendHashMemoNext++ % memo.size()];
             entry.Serial = m_record->Serial;
             entry.BindingsSerial = m_record->BindingsSerial;
             entry.Hash = hash;
-            entry.Key = flags;
+            entry.LastVariantHash = hash;
+            entry.Key = key;
             entry.Valid = true;
+            return entry;
         }
         Uint64 GetBackendStateVersion() const { return m_record->Serial; }
         Uint64 GetBlockBindingVersion() const { return m_record->BindingsSerial; }

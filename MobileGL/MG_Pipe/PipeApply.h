@@ -396,6 +396,10 @@ namespace MobileGL::MG_Pipe {
             Uint64 Serial = 0;
             Uint64 BindingsSerial = 0;
             Uint64 Hash = 0;
+            // The hash of the variant of this program the factory last handed out for this key:
+            // Hash itself, or a variant keyed on draw-time vertex data. Derived from Hash, so it
+            // is valid exactly as long.
+            Uint64 LastVariantHash = 0;
             Uint32 Key = 0;
             Bool Valid = false;
         };
