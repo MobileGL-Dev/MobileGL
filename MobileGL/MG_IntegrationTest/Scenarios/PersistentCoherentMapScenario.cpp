@@ -445,6 +445,50 @@ void main() { oColor = vec4(vColor, 1.0); }
         Gl().EndFrame();
     }
 
+    // E3(a): the push is the ONLY route a coherent write takes to the server. The cases above go
+    // green just as well if something else delivered the bytes - an unmap or flush record, a
+    // whole-buffer re-sync, the live-host-writes state record, an inproc server reading client
+    // memory - so this one takes the push away and requires the next draw to miss the write.
+    // Forget is what an unmap or a destroy calls and leaves the mapping itself alone; the
+    // re-announce is the call every map-state change makes, and the next draw must see the write.
+    TEST_F(PersistentCoherentMapScenario, ThePushIsTheOnlyRouteAWriteTakesToTheServer) {
+        if (!Ready() || IsSkipped()) return;
+        if (!SplitLane::IsSplitLane() || SplitLane::DeclaredPersistentMapArm() != "emulated") {
+            GTEST_SKIP() << "the push exists only on the emulated arm of a split transport, and this lane "
+                            "declares no such arm (MGITEST_PERSISTENT_MAP_ARM=emulated, set per entry by "
+                            "Harness/SplitLogPaths.cmake.in); monolith adopts the store and has no push";
+        }
+        if (!PersistentMapTrackerAvailable()) {
+            GTEST_SKIP() << "Harness/PersistentMapPeek cannot reach the tracker in this build, so the push "
+                            "cannot be taken away";
+        }
+        ArmTheDrawState();
+
+        WriteThroughTheMapThenDraw(m_map, 0.0f, 1.0f, 0.0f);
+        const Image pushed = ReadPixels(Gl().Width(), Gl().Height());
+        EXPECT_EQ(FirstGLError(), 0u);
+        ASSERT_TRUE(WholeSurfaceIs(pushed, "green", "the write the push carries, before it is taken away"));
+
+        ASSERT_TRUE(ForgetLivePersistentMap(m_vbo)) << "no frontend BufferObject behind GL buffer " << m_vbo;
+        WriteThroughTheMapThenDraw(m_map, 1.0f, 0.0f, 0.0f);
+        const Image unpushed = ReadPixels(Gl().Width(), Gl().Height());
+        EXPECT_EQ(FirstGLError(), 0u);
+        EXPECT_TRUE(WholeSurfaceIs(unpushed, "green",
+                                   "a write through a mapping the tracker has forgotten: red here means "
+                                   "something other than the persistent-map push delivered it, and the "
+                                   "two cases above would stay green without the push"));
+
+        ASSERT_TRUE(ReannounceLivePersistentMap(m_vbo)) << "no frontend BufferObject behind GL buffer " << m_vbo;
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+        const Image repushed = ReadPixels(Gl().Width(), Gl().Height());
+        EXPECT_EQ(FirstGLError(), 0u);
+        EXPECT_TRUE(WholeSurfaceIs(repushed, "red",
+                                   "the same write after the map is announced again: the tracker must "
+                                   "push the whole mapping once, or the green above proves nothing"));
+        AssertOrRecordArm(m_vbo, "after the push was taken away and given back");
+        Gl().EndFrame();
+    }
+
     // E3(c) and the black-box half of E3(d). ONE reading case, in a lane of its own, for the
     // reason PipeStatsWindow.h gives: the library truncates its log per process, so two readers
     // in one lane race under `ctest -j`.

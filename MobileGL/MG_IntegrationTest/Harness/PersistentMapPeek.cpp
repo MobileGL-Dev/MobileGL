@@ -103,4 +103,28 @@ namespace MGITest {
 #endif
     }
 
+    bool ForgetLivePersistentMap(unsigned int bufferName) {
+#if defined(MGITEST_PERSISTENT_MAP_TRACKER_LIVE)
+        MobileGL::MG_State::GLState::BufferObject* buffer = FrontendBuffer(bufferName);
+        if (buffer == nullptr) return false;
+        MobileGL::MG_Record::PersistentMapTracker::Instance().Forget(*buffer);
+        return true;
+#else
+        (void)bufferName;
+        return false;
+#endif
+    }
+
+    bool ReannounceLivePersistentMap(unsigned int bufferName) {
+#if defined(MGITEST_PERSISTENT_MAP_TRACKER_LIVE)
+        MobileGL::MG_State::GLState::BufferObject* buffer = FrontendBuffer(bufferName);
+        if (buffer == nullptr) return false;
+        buffer->NotePersistentMapStateChanged();
+        return true;
+#else
+        (void)bufferName;
+        return false;
+#endif
+    }
+
 } // namespace MGITest

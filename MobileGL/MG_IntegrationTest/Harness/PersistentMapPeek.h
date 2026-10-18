@@ -58,6 +58,15 @@ namespace MGITest {
     // Same contract as above: false means "could not look".
     bool PeekBufferIsLivePersistentMap(unsigned int bufferName, bool* outLive);
 
+    // The two production calls that take a buffer out of the tracker's set and put it back:
+    // PersistentMapTracker::Forget, which an unmap or a destroy reaches, and
+    // BufferObject::NotePersistentMapStateChanged, which every map-state change makes. They let
+    // a scenario show the push is the only route a coherent write takes to the server.
+    //
+    // Same contract: false means "could not reach the tracker", and nothing was changed.
+    bool ForgetLivePersistentMap(unsigned int bufferName);
+    bool ReannounceLivePersistentMap(unsigned int bufferName);
+
     // Separate-process clients own these counters; the remote Present window
     // belongs to the server and cannot report client map acquisitions or bytes.
     bool PeekSeparateClientMapStats(unsigned long long* acquisitions, unsigned long long* pushedBytes);

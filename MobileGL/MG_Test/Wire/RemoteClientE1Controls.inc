@@ -35,7 +35,13 @@ struct E1BoundaryPeer : Codec::WireVerbSink {
     }
 };
 
-void CheckE1Boundary(Bool serverCap, MGPWireOp op, Bool expectWait, const char* diagnostic) {
+// How the probe's record leaves the client. Rule is EmitAndWait, whose wait rule the cases
+// test. PublishOnly encodes through the session's own encoder and publishes with no wait at all,
+// so a case can show the probe reads a missing wait as one.
+enum class E1Emit { Rule, PublishOnly };
+
+void CheckE1Boundary(Bool serverCap, MGPWireOp op, Bool expectWait, const char* diagnostic,
+                     E1Emit emit = E1Emit::Rule) {
     const auto child = RunInChild([=] {
         ::alarm(15);
         const char* barrier = std::getenv("MOBILEGL_IPC_VERB_BARRIER");
@@ -59,10 +65,17 @@ void CheckE1Boundary(Bool serverCap, MGPWireOp op, Bool expectWait, const char* 
         producer.*PeerMember(ProducerBellTag{}) = &bell;
         const MGPApplierReset reset{};
         const MGPClear clear{};
+        const void* payload = op == MGPWireOp::ApplierReset ? static_cast<const void*>(&reset) : &clear;
+        const Uint64 payloadBytes = op == MGPWireOp::ApplierReset ? sizeof(reset) : sizeof(clear);
         // P15: applier_reset is the one kWaitApplied row left (generate_mipmap went async).
-        const Uint64 seq = op == MGPWireOp::ApplierReset
-            ? session.EmitAndWait(op, &reset, sizeof(reset), nullptr, 0, nullptr, 0, nullptr)
-            : session.EmitAndWait(op, &clear, sizeof(clear), nullptr, 0, nullptr, 0, nullptr);
+        Uint64 seq = Codec::kInvalidSeq;
+        if (emit == E1Emit::PublishOnly) {
+            seq = session.Encoder().EncodeRecord(op, payload, payloadBytes);
+            if (seq == Codec::kInvalidSeq) ::_exit(87);
+            producer.PublishAndNotify(seq);
+        } else {
+            seq = session.EmitAndWait(op, payload, payloadBytes, nullptr, 0, nullptr, 0, nullptr);
+        }
         // Observe BEFORE allowing the peer to complete a non-waiting emission.
         const Bool parked = bell.entered.load();
         const Bool appliedBeforeReturn = session.Control()->Progress.appliedSeq.load() >= seq;
@@ -92,6 +105,19 @@ TEST(RemoteWaitBoundaryControl, AppliedClassWaitsWithRunAheadCap) {
     ASSERT_EQ(MGPipeWaitClassFor(MGPWireOp::ApplierReset), kWaitApplied);
     CheckE1Boundary(true, MGPWireOp::ApplierReset, true,
                     "E1 wait boundary: ApplierReset returned before apply");
+#else
+    GTEST_SKIP() << "E1 requires POSIX child isolation";
+#endif
+}
+
+// The control for the case above: the same ApplierReset, published with no wait. The probe has
+// to read it as not parked, or a wait that never happened would pass the cases that must wait.
+TEST(RemoteWaitBoundaryControl, AnUnwaitedPublishIsSeenAsNoWait) {
+#if MGTEST_HAVE_FORK
+    ASSERT_EQ(MGPipeWaitClassFor(MGPWireOp::ApplierReset), kWaitApplied);
+    CheckE1Boundary(true, MGPWireOp::ApplierReset, false,
+                    "E1 control: an ApplierReset published without a wait was observed as a wait",
+                    E1Emit::PublishOnly);
 #else
     GTEST_SKIP() << "E1 requires POSIX child isolation";
 #endif
