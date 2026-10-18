@@ -699,12 +699,29 @@ jobs:
             --pid-file "${EMULATOR_PID_FILE}"
 
       - name: Upload Android retrace result
+        id: upload-retrace-result
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@v7
         with:
           name: MobileGL-android-retrace-result-${{ matrix.lane || 'monolith-control' }}-${{ matrix.transport || 'monolith' }}-${{ env.date_today }}-${{ github.sha }}-${{ matrix.backend.name }}-${{ matrix.case.name }}
           path: android-retrace-result/**
           if-no-files-found: warn
+
+      # The artifact service sometimes times out (ETIMEDOUT on CreateArtifact, one job in 231 on
+      # 2026-10-18), which turned a passing case red; one delayed retry absorbs that.
+      - name: Wait before retrying the upload
+        if: always() && steps.upload-retrace-result.outcome == 'failure'
+        run: sleep 30
+
+      - name: Upload Android retrace result (retry)
+        if: always() && steps.upload-retrace-result.outcome == 'failure'
+        uses: actions/upload-artifact@v7
+        with:
+          name: MobileGL-android-retrace-result-${{ matrix.lane || 'monolith-control' }}-${{ matrix.transport || 'monolith' }}-${{ env.date_today }}-${{ github.sha }}-${{ matrix.backend.name }}-${{ matrix.case.name }}
+          path: android-retrace-result/**
+          if-no-files-found: warn
+          overwrite: true
 
   retrace-summary:
     name: retrace summary
