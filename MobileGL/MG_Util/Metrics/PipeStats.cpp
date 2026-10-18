@@ -131,6 +131,8 @@
 //                        therefore a LOWER BOUND on the per-draw accessor count, and it is
 //                        the bound over exactly the six gates section 2.3.1 tabulates.
 //   texture-*            Per (target, level) emission, both backends.
+//   applier-resets       ServerVerbSink::OnApplierReset, once per record accepted.
+//   object-deaths        ServerVerbSink::OnObjectDeath, once per record dispatched.
 //
 // Gates: the six of section 2.3.1, each counted exactly once per probe.
 //
@@ -252,6 +254,8 @@ namespace MobileGL::MG_Util::PipeStats {
             "wire-host-wait-us",
             "wire-indirect-native-dispatches",
             "resource-readbacks",
+            "applier-resets",
+            "object-deaths",
         };
         const char* const kGateNames[kGateCount] = {
             "espryt-render-state", "espryt-texture-sync-list", "espryt-unit-bindings-epoch",
@@ -658,6 +662,9 @@ namespace MobileGL::MG_Util::PipeStats {
         // never ran. It is deliberately NOT rsp: rsp reaches zero when the phase SUCCEEDS, so a
         // positive control built on it would fail on the day the debt is paid.
         line += " vbs=" + std::to_string(calls[static_cast<Uint32>(CallClass::ServerVerbBoundaries)]);
+        // The control records the server applied in this window (see the CallClass enum).
+        line += " ar=" + std::to_string(calls[static_cast<Uint32>(CallClass::ApplierResets)]);
+        line += " od=" + std::to_string(calls[static_cast<Uint32>(CallClass::ObjectDeaths)]);
         // P6 GATE 8's SECOND NUMBER (CONTRACT-P6.md §9 item 8): records/frame AFTER chunking, i.e.
         // the count of records the wire encoder actually committed this window rather than the
         // number of times an emitter was asked for one. The gap between the two is the whole

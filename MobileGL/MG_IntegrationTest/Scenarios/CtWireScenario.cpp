@@ -10,9 +10,10 @@
 //
 // applier_reset (§5.1): this process's first validate primes the pipe tracker, and the
 // FreshlyPrimed edge is the record's producer (MG_Impl/Pipe/PipeFill.cpp). What the scenario
-// asserts is the SERVER sink's own counters - moved by nobody else - plus the pixels, so a
-// reset that never crossed is red by the tally and a client that fell through to the driver
-// is red by ScenarioFixture's emit-ordinal rule.
+// asserts is the server's own count of the control records it applied (`ar` and `od` on the
+// server role's PipeStats line, moved by nobody else) plus the pixels, so a reset that never
+// crossed is red by the count and a client that fell through to the driver is red by
+// ScenarioFixture's emit-ordinal rule.
 //
 // object_death (§5.2): a texture and a framebuffer die, the deaths cross, and the slots
 // recycle. The picture after recycling is the behavioural half: a stale twin answering for
@@ -31,8 +32,6 @@
 #include "../Harness/SplitRuntimePeek.h"
 
 #include <MG_Pipe/PipeApply.h>
-#include <Config.h> // `t6`: the spawn arm cannot observe the server process's counters
-#include <MG_Remote/Server/ServerSession.h>
 
 #if !defined(_WIN32)
 #include <csignal>
@@ -51,36 +50,6 @@
 
 namespace MGITest {
     namespace {
-
-        MobileGL::MG_Remote::Server::ServerVerbSink& ServerVerbs() {
-            return MobileGL::MG_Remote::Server::ServerSessionInstance().Applier().Verbs();
-        }
-
-        // Inproc reads its local sink. A separate-process session snapshots that
-        // same sink on LogFlush, after the client fences its complete command prefix.
-        // TCP forwards the server log; unix+shm reads the server's local role file.
-        struct CounterSnapshot {
-            bool valid = false;
-            MobileGL::Uint64 resets = 0, serial = 0, deaths = 0;
-        };
-
-        CounterSnapshot ServerCounters() {
-            if (MobileGL::MG_Config::Transport != MobileGL::MG_Config::TransportMode::Spawn) {
-                return {true, ServerVerbs().ApplierResets(), ServerVerbs().ExpectedApplierResetSerial(),
-                        ServerVerbs().ObjectDeaths()};
-            }
-            MGPipeSyncPeerLog();
-            const std::string log = PipeStatsWindow::ReadWholeFile(PipeStatsWindow::ServerLibraryLogPath());
-            const auto at = log.rfind("MGPipe server counters:");
-            if (at == std::string::npos) return {};
-            const PipeStatsWindow::Window window{true, log.substr(at, log.find('\n', at) - at)};
-            const auto resets = PipeStatsWindow::CounterOrAbsent(window, "resets");
-            const auto serial = PipeStatsWindow::CounterOrAbsent(window, "reset-serial");
-            const auto deaths = PipeStatsWindow::CounterOrAbsent(window, "deaths");
-            if (resets < 0 || serial < 0 || deaths < 0) return {};
-            return {true, static_cast<MobileGL::Uint64>(resets), static_cast<MobileGL::Uint64>(serial),
-                    static_cast<MobileGL::Uint64>(deaths)};
-        }
 
         class CtWireScenario : public ScenarioTest {
         protected:
@@ -109,8 +78,8 @@ namespace MGITest {
             }
 
             // The texture's level-0 content, read back through a throwaway FBO, as four bytes.
-            // The FBO is bound AND deleted here, so it never leaks a framebuffer death into the
-            // tally a case is watching.
+            // The FBO is bound AND deleted here, so its death lands in whichever window is open
+            // and a case that counts deaths reads it outside the window it counts.
             void ReadTextureLevel(GLuint texture, GLubyte out[4]) {
                 GLuint fbo = 0;
                 glGenFramebuffers(1, &fbo);
@@ -120,6 +89,47 @@ namespace MGITest {
                 glBindFramebuffer(GL_FRAMEBUFFER, 0);
                 glDeleteFramebuffers(1, &fbo);
             }
+
+            // The control records the server applied in one window: `ar` (applier_reset records
+            // accepted) and `od` (object_death records dispatched) on the server role's PipeStats
+            // line. The entries set MOBILEGL_PIPE_STATS=1 and MOBILEGL_PIPE_STATS_PERIOD=1, so every
+            // swap ends a window and writes one line: under inproc the apply thread writes it to the
+            // server role's log, under spawn and tcp the server process writes or forwards it there.
+            struct ControlRecords {
+                bool valid = false;
+                long long applierResets = -1;
+                long long objectDeaths = -1;
+            };
+
+            // Ends the current window. The records and the present that ends it are kWaitNone, so
+            // the client moves on and the server counts them when it applies them. A readback is
+            // kWaitReply on every arm, and its answer is posted only after its record and every
+            // earlier one were applied, the present and the line it writes included. The harness's
+            // applied-seq wait is not that boundary off inproc: there the client's progress page
+            // moves with frames rather than with the peer's apply.
+            void EndWindow() {
+                Gl().EndFrame();
+                GLubyte fence[4]{};
+                glReadPixels(0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, fence);
+                EXPECT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << "the window's fence readback left a GL error behind";
+            }
+
+            // Ends the setup's window, so that the next one counts only what follows the mark.
+            PipeStatsWindow::LogMark StartWindow() {
+                EndWindow();
+                return PipeStatsWindow::MarkLaneLog();
+            }
+
+            ControlRecords EndWindowAndReadControlRecords(const PipeStatsWindow::LogMark& mark) {
+                EndWindow();
+                const PipeStatsWindow::Window window = PipeStatsWindow::LastFromServerLogSince(mark);
+                if (window.found) RecordProperty("stats_line_server", window.line);
+                ControlRecords records;
+                records.applierResets = PipeStatsWindow::CounterOrAbsent(window, "ar");
+                records.objectDeaths = PipeStatsWindow::CounterOrAbsent(window, "od");
+                records.valid = records.applierResets >= 0 && records.objectDeaths >= 0;
+                return records;
+            }
         };
 
         TEST_F(CtWireScenario, ApplierResetCrossesAtThePrimedEdgeInSerialOrder) {
@@ -127,25 +137,25 @@ namespace MGITest {
             // The first verb of the process primes the tracker; the edge is the producer. The
             // clear also gives the case its pixels, so a lane that emitted nothing is red twice
             // (here and in the fixture's emit-ordinal rule).
+            const PipeStatsWindow::LogMark mark = PipeStatsWindow::MarkLaneLog();
             glClearColor(0.2f, 0.4f, 0.6f, 1.0f);
             glClear(GL_COLOR_BUFFER_BIT);
-            const auto counters = ServerCounters();
-            ASSERT_TRUE(counters.valid) << "server control-record telemetry missing";
-            EXPECT_GE(counters.resets, 1u)
-                << "the FreshlyPrimed edge emitted no applier_reset; the server's g_applier was "
-                   "never reset for this session";
-            // The serial sequence is the session's own count (§1: asserted, never dispatched
-            // on): every record the sink accepted carried the serial it expected, or the counter
-            // and the accepted tally would disagree.
-            EXPECT_EQ(counters.serial, counters.resets)
-                << "an applier_reset record was dropped or replayed on the wire";
-
             GLubyte pixel[4]{};
             glReadPixels(1, 1, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
             ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << "Ct.ApplierReset.error";
             const int expected[4] = {51, 102, 153, 255};
             for (int i = 0; i < 4; ++i)
                 EXPECT_NEAR(pixel[i], expected[i], 1) << "Ct.ApplierReset.pixels";
+
+            // No swap precedes this one in the process, so its window holds the edge wherever the
+            // first validate ran (this clear or the fixture's state reset). The serial needs no
+            // check of its own: OnApplierReset counts only a record whose serial it accepted, and
+            // any other latches Fatal{ProtocolCorruption, "ApplierReset.ContextSerial"}.
+            const ControlRecords counters = EndWindowAndReadControlRecords(mark);
+            ASSERT_TRUE(counters.valid) << "server control-record telemetry missing";
+            EXPECT_GE(counters.applierResets, 1)
+                << "the FreshlyPrimed edge emitted no applier_reset; the server's g_applier was "
+                   "never reset for this session";
         }
 
         TEST_F(CtWireScenario, TextureDeathCrossesAndTheRecycledSlotAnswersTheNewObject) {
@@ -159,7 +169,7 @@ namespace MGITest {
             // went backend-agnostic and that the INPROC arm failed here with `deaths` 0 vs 0
             // (docs/archive/notes/p7/magma-two-process-first-run.md §6); the table is what closes the inproc
             // half, and this case is the gate on it. It is also the RED-ONCE for that table: with
-            // the install site short-circuited, both cases red on the two EXPECT_GT below.
+            // the install site short-circuited, both cases red on their `od` assertions below.
             const GLubyte red[4] = {255, 0, 0, 255};
             const GLubyte green[4] = {0, 255, 0, 255};
 
@@ -176,45 +186,14 @@ namespace MGITest {
                 ASSERT_NEAR(before[i], redExpected[i], 1) << "Ct.TextureDeath.before";
 
             // The object dies unbound so the destructor - and the death record - fire at the
-            // delete, and the tally is read AFTER the EmitAndWait the delete blocked on.
+            // delete. The counted window holds the delete alone: the FBO ReadTextureLevel deleted
+            // died in the setup's window, which StartWindow ends.
             glBindTexture(GL_TEXTURE_2D, 0);
-            const auto beforeCounters = ServerCounters();
-            ASSERT_TRUE(beforeCounters.valid) << "server object-death telemetry missing";
-            const MobileGL::Uint64 deathsBefore = beforeCounters.deaths;
+            const PipeStatsWindow::LogMark mark = StartWindow();
             glDeleteTextures(1, &texture);
-            // THE FENCE, AND WHY IT IS NO LONGER A CLEAR.
-            //
-            // object_death is a kCtxObject value-class record whose wait class is kWaitNone, so
-            // under run-ahead the client publishes it and moves on, and the server-side tally below
-            // only moves at APPLY time. The clear this case used to fence on is kWaitNone TOO -
-            // PipeCalls.def's Clear row - so once the wait column governed (P5e's run-ahead), it
-            // waited for nothing and the read below raced the apply thread. Nothing had hidden that
-            // for a while except the per-record barriers the converted rows still took; P12 took
-            // those away on the wire arm (set_texture_params, respecify and the texture sub-data
-            // stop owning an answer), the client now runs further ahead, and the race stopped being
-            // a rarity. MEASURED on this entry under llvmpipe: 2 red of 5 runs (`deaths` 1 vs 1,
-            // the record applied a moment later) and 3 green of 3 with MOBILEGL_IPC_RUN_AHEAD=0. A
-            // timing race, never a lost record: the notice is emitted and applied either way.
-            //
-            // WHAT IS A REAL BOUNDARY, MEASURED ON ALL THREE ARMS RATHER THAN ASSUMED. The
-            // harness's applied-seq fence (WaitForSplitAppliedForTesting) is the right shape for
-            // inproc - and it is NOT usable here: this case is registered on the spawn and tcp arms
-            // too, the client's progress page there is advanced by frames rather than by the
-            // peer's own apply, and the wait times out. MEASURED with that fence in place: this
-            // case red at 5.0 s on DirectGLES.Tcp.Ct.
-            //
-            // A READBACK IS THE ONE BOUNDARY THAT HOLDS ON EVERY ARM. ReadPixels is
-            // kReplySlot|kWaitReply, so the client blocks on its answer, and an answer is posted
-            // only after its record has been APPLIED - and the ring applies in order, so the death
-            // published before it is applied too. (On the spawn and tcp arms the counter below
-            // comes from the peer's log, which ServerCounters() syncs before it reads - and that
-            // sync is itself a round trip the death has already crossed.)
-            GLubyte fencePixel[4]{};
-            glReadPixels(0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, fencePixel);
-            ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << "the fence readback left a GL error behind";
-            const auto afterCounters = ServerCounters();
-            ASSERT_TRUE(afterCounters.valid) << "server object-death telemetry missing";
-            EXPECT_GT(afterCounters.deaths, deathsBefore)
+            const ControlRecords counters = EndWindowAndReadControlRecords(mark);
+            ASSERT_TRUE(counters.valid) << "server object-death telemetry missing";
+            EXPECT_GE(counters.objectDeaths, 1)
                 << "the texture's death produced no object_death record; the server's twin was "
                    "never told to let go";
 
@@ -323,17 +302,15 @@ namespace MGITest {
             // Die unbound, framebuffer first so the attachment's own death is a separate record.
             glBindFramebuffer(GL_FRAMEBUFFER, 0);
             glBindRenderbuffer(GL_RENDERBUFFER, 0);
-            const auto beforeCounters = ServerCounters();
-            ASSERT_TRUE(beforeCounters.valid) << "server object-death telemetry missing";
-            const MobileGL::Uint64 deathsBefore = beforeCounters.deaths;
+            const PipeStatsWindow::LogMark mark = StartWindow();
             // THE CLIENT'S OWN ACCOUNTING, read beside the server's (P7 wave 2 package C,
             // CONTRACT-P7 §5.5's PipeSlotPeek clause). The two numbers answer DIFFERENT halves of
             // one death and neither implies the other, which is exactly why both are read here:
-            //   * `deaths` below says the SERVER was told - the half the missing Magma table
+            //   * `od` below says the SERVER was told - the half the missing Magma table
             //     broke, and the only delivery a framebuffer has (no wire delete opcode at all);
             //   * this one says the CLIENT returned the slot. That half has been backend-neutral
             //     since P4a (PipeFill.cpp's NotifyAndFree frees whatever the notice does), so it
-            //     is a CONTROL rather than the subject: if it ever regressed, a green `deaths`
+            //     is a CONTROL rather than the subject: if it ever regressed, a green `od`
             //     would be measuring an object that never let go of its handle.
             // `false` means the allocator is out of reach (a pull build, or Android's hidden
             // symbols), and the peek is then simply not asserted - "could not look" is not
@@ -341,20 +318,9 @@ namespace MGITest {
             unsigned fboSlotsBefore = 0;
             const bool slotsReadable = PeekPipeSlotLiveCount(PipeSlotKind::Framebuffer, &fboSlotsBefore);
             glDeleteFramebuffers(1, &fbo);
-            // THE FENCE, the texture case's exactly: object_death is a kCtxObject value-class
-            // record with wait class kWaitNone, so under run-ahead it is published WITHOUT waiting
-            // for its own apply (production-safe: the in-order ring applies it before any record
-            // that recycles the slot), and the server-side counter this assertion reads only moves
-            // at apply time. A clear cannot be that boundary - its own class is kWaitNone too - so
-            // this waits on a READBACK, which is kWaitReply on every arm. The texture case carries
-            // the measurements, including the boundary that is right for inproc and wrong for
-            // spawn/tcp.
-            GLubyte fencePixel[4]{};
-            glReadPixels(0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, fencePixel);
-            ASSERT_EQ(FirstGLError(), GLenum(GL_NO_ERROR)) << "the fence readback left a GL error behind";
-            const auto afterCounters = ServerCounters();
-            ASSERT_TRUE(afterCounters.valid) << "server object-death telemetry missing";
-            EXPECT_GT(afterCounters.deaths, deathsBefore)
+            const ControlRecords counters = EndWindowAndReadControlRecords(mark);
+            ASSERT_TRUE(counters.valid) << "server object-death telemetry missing";
+            EXPECT_GE(counters.objectDeaths, 1)
                 << "the framebuffer's death produced no object_death record - and no other "
                    "opcode can carry it. Backend "
                 << Gl().BackendName();

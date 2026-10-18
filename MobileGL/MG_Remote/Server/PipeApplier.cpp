@@ -28,6 +28,7 @@
 #include <MG_Pipe/PipeApply.h>
 #include <MG_Util/Converters/GLToMG/TextureEnumConverter.h>
 #include <MG_Util/Debug/Log.h>
+#include <MG_Util/Metrics/PipeStats.h>
 #include <MG_Util/Metrics/TextureMetrics.h>
 
 #include <cstdlib>
@@ -274,10 +275,10 @@ namespace MobileGL::MG_Remote::Server {
         // backend->SwapEGLBuffers -> BackendObject::SwapEGLBuffers -> eglSwapBuffers, and never
         // Present() - so the two paths do NOT both end here. The frame count staying in step with
         // the swap count rests entirely on c1 emitting exactly one present record per swap;
-        // nothing here compares Presents() to a swap count. If that drifts, the frame fence and
+        // nothing here compares the present count to a swap count. If that drifts, the frame fence and
         // TrimBufferPool's recycle watermark stop tracking frames - which is the reason the 1:1
         // was wanted, recorded here so a future swap-without-present is looked for rather than
-        // assumed impossible. Presents() is exposed for a lane that wants to make the comparison.
+        // assumed impossible.
         // The frame's damage rides to the native present for the length of this call.
         MG_Backend::SetCurrentPresentDamage(DamageOfRecord(present.DamageCount, present.Damage));
         table->Present();
@@ -302,7 +303,7 @@ namespace MobileGL::MG_Remote::Server {
                                 "waits on it for its credit (CONTRACT-P5E §2.4); returning a credit for "
                                 "serial 0 would release a wait that is asking about frame N");
         }
-        m_lastPresentSerial = present.FrameSerial != 0 ? present.FrameSerial : m_presents;
+        const Uint64 serial = present.FrameSerial != 0 ? present.FrameSerial : m_presents;
         // §2.4's other half, and the reason ServerSession::ReturnPresentCredit has had no
         // production caller since v1 wrote it: ONE CREDIT PER SWAP, returned after Present()
         // has returned rather than before it, because what the client is waiting for is the
@@ -314,7 +315,7 @@ namespace MobileGL::MG_Remote::Server {
             // or two ago at once, and a report posted only after this batch would race it. A
             // status query, no submit: the swap has just submitted.
             if (session->EventRingHasRoom()) ReportSignaledFences(/*flush=*/false);
-            session->ReturnPresentCredit(m_lastPresentSerial);
+            session->ReturnPresentCredit(serial);
         }
         return true;
     }
@@ -350,7 +351,8 @@ namespace MobileGL::MG_Remote::Server {
         // MGPipeApplierReset passes because this IS the apply thread; the GL-thread direct
         // call it replaced is the Fatal arm.
         MG_Pipe::MGPipeApplierReset();
-        ++m_applierResets;
+        if (MG_Util::PipeStats::Enabled())
+            MG_Util::PipeStats::AddCalls(MG_Util::PipeStats::CallClass::ApplierResets, 1);
         return true;
     }
 
@@ -608,7 +610,6 @@ namespace MobileGL::MG_Remote::Server {
                                 "release) is the only token that needs no entry",
                                 static_cast<unsigned long long>(bind.ClientContextToken));
         }
-        ++m_bindContexts;
 #if MOBILEGL_BUILD_DISAGGREGATED
         // P14 S4 (docs/Disaggregated/design/11-state-ownership.md). THE NATIVE HALF OF THE SWITCH.
         //
@@ -658,7 +659,7 @@ namespace MobileGL::MG_Remote::Server {
         // to nothing.
         MG_Backend::DirectGLES::ReleaseTwinsForWireObjectDeath(death.Handle,
                                                                static_cast<MG_Pipe::MGPipeKind>(death.Kind));
-        ++m_objectDeaths;
+        if (MG_Util::PipeStats::Enabled()) MG_Util::PipeStats::AddCalls(MG_Util::PipeStats::CallClass::ObjectDeaths, 1);
         return true;
     }
 

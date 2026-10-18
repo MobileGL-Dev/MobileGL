@@ -306,6 +306,9 @@ namespace {
         EXPECT_NE(line.find(" wlivepk="), String::npos) << line;
         EXPECT_NE(line.find(" wdefpk="), String::npos) << line;
         EXPECT_NE(line.find(" wdefsync="), String::npos) << line;
+        // The server's control-record counts, which CtWireScenario reads by these names.
+        EXPECT_NE(line.find(" ar="), String::npos) << line;
+        EXPECT_NE(line.find(" od="), String::npos) << line;
     }
 
     // Per-frame fields carry two decimals for the same reason acc/draw does: they are small
@@ -544,6 +547,8 @@ namespace {
         // MEASUREMENTS.md entry will quote.
         EXPECT_STREQ(PS::NameOf(PS::ByteClass::StageSegmentBytes), "stage-segment-bytes");
         EXPECT_STREQ(PS::NameOf(PS::CallClass::WireRecords), "wire-records");
+        EXPECT_STREQ(PS::NameOf(PS::CallClass::ApplierResets), "applier-resets");
+        EXPECT_STREQ(PS::NameOf(PS::CallClass::ObjectDeaths), "object-deaths");
         EXPECT_STREQ(PS::NameOf(PS::Gate::EsprytRenderState), "espryt-render-state");
         EXPECT_STREQ(PS::NameOf(PS::Gate::EsprytTextureSyncList), "espryt-texture-sync-list");
         EXPECT_STREQ(PS::NameOf(PS::Gate::EsprytUnitBindingsEpoch), "espryt-unit-bindings-epoch");

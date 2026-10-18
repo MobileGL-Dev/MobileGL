@@ -292,6 +292,12 @@ namespace MobileGL::MG_Util::PipeStats {
         // GPU write - before even asking whether the draw had a client-memory array to snapshot.
         // Not on the summary line; read through TotalCalls by the scenario that pins it.
         ResourceReadbacks,
+        // `ar` / `od` - the two control records, counted where the server applies them
+        // (ServerVerbSink::OnApplierReset after its serial check, ServerVerbSink::OnObjectDeath per
+        // record dispatched). A framebuffer has no other wire delete, so `od` is the only sign on
+        // the server that its death crossed. Server-side counts: a separate client process prints 0.
+        ApplierResets,
+        ObjectDeaths,
         Count
     };
 

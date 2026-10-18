@@ -68,7 +68,7 @@ def start(args):
     if args.state.exists():
         raise RuntimeError(f'stale fixture state; run stop first: {args.state}')
     env = dict(os.environ, MOBILEGL_IPC_ROLE='server', MOBILEGL_IPC_DIAL='no',
-               MOBILEGL_IPC_TOKEN='', MOBILEGL_IPC_LOG_FORWARD='1', MOBILEGL_TEST_SERVER_COUNTERS='1',
+               MOBILEGL_IPC_TOKEN='', MOBILEGL_IPC_LOG_FORWARD='1',
                MOBILEGL_PIPE_STATS='1', MOBILEGL_PIPE_STATS_PERIOD='1')
     for key in ('MOBILEGL_TRANSPORT', 'MOBILEGL_IPC_SERVER_PATH', 'MOBILEGL_IPC_RING_MB', 'MOBILEGL_IPC_STAGE_MB',
                 'MOBILEGL_IPC_CONTROL', 'MOBILEGL_IPC_ENDPOINT', 'MOBILEGL_BACKEND_TYPE'):

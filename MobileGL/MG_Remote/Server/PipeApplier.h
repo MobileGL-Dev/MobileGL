@@ -183,20 +183,6 @@ namespace MobileGL::MG_Remote::Server {
         Bool OnSharedImage(const MG_Pipe::MGPSharedImageOp& op, Uint64 seq,
                            MG_Pipe::MGPSharedImageReply& reply) override;
 
-        // P5c ct's tallies, for the same reason every other row's tally exists (R-16: a probe
-        // may not arm against a stub). ApplierResets counts the records ACCEPTED (serial
-        // checked, reset run); ObjectDeaths counts every record the sink dispatched.
-        Uint64 ApplierResets() const { return m_applierResets; }
-        Uint64 ObjectDeaths() const { return m_objectDeaths; }
-        Uint64 BindContexts() const { return m_bindContexts; }
-        // The ContextSerial the NEXT applier_reset record must carry. Exposed so a case can
-        // assert the sequence rather than only the count.
-        Uint64 ExpectedApplierResetSerial() const { return m_applierResetSerial; }
-
-        // The session's per-verb tallies; the record verbs' are RecordVerbSink's.
-        Uint64 Presents() const { return m_presents; }
-        Uint64 LastPresentSerial() const { return m_lastPresentSerial; }
-
     private:
         // A backend change ends every fence and query this sink holds (they are the old
         // backend's natives).
@@ -231,20 +217,10 @@ namespace MobileGL::MG_Remote::Server {
         Bool QueryGpuComplete(QueryEntry& entry, Bool wait);
         UnorderedMap<Uint32, QueryEntry> m_queries;
         Uint64 m_presents = 0;
-        Uint64 m_lastPresentSerial = 0;
-        // P5c ct. m_applierResetSerial is BOTH the expected ContextSerial of the next record
-        // and the count of accepted resets: the two are one number because the serial is the
-        // session's own count of applier_reset records (CONTRACT-P5C.md §1: asserted, never
-        // dispatched on). m_objectDeaths counts records dispatched, released twin or not -
-        // the idempotent second path answering "nothing held it" is a legal record.
+        // m_applierResetSerial is both the expected ContextSerial of the next record and the
+        // count of accepted resets: the serial is the session's own count of applier_reset
+        // records (CONTRACT-P5C.md §1: asserted, never dispatched on).
         Uint64 m_applierResetSerial = 0;
-        Uint64 m_applierResets = 0;
-        Uint64 m_objectDeaths = 0;
-        // P14 S1. BindContexts counts the records the sink dispatched and bound on the session;
-        // the token itself lives on the session (ServerSession::CurrentContextToken), which is
-        // the object the control plane's CreateContext/DestroyContext also own - one table, one
-        // owner, and the sink is only the ring's door into it.
-        Uint64 m_bindContexts = 0;
         // The newest native fence (shared_image NativeFence) this session handed out, kept so a
         // later fence with nothing left to export still answers with a descriptor: by then this
         // one has signaled (the backend waited the work out), and a signaled sync_file stays so.

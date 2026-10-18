@@ -802,11 +802,13 @@ set(MGL_ITEST_GLES_VIEW_FILTER
 set(MGL_ITEST_SPLIT_ARM_ONLY_FILTER
     "PersistentCoherentMapScenario.ThePushIsTheOnlyRouteAWriteTakesToTheServer")
 
+# The two lists are named so that SplitLogPaths.cmake.in can reach the ambient CtWireScenario
+# entries, which the integration job's inproc leg runs on the transport it exports.
 mgl_itest_lane("DirectGLES." "-${MGL_ITEST_MONOLITH_MECHANISM_FILTER}:${MGL_ITEST_GLES_VIEW_FILTER}:${MGL_ITEST_SPLIT_ARM_ONLY_FILTER}"
-    ENV "${MGL_ITEST_GLES_ENVIRONMENT}")
+    TEST_LIST MGL_AMBIENT_TESTS_GLES ENV "${MGL_ITEST_GLES_ENVIRONMENT}")
 
 mgl_itest_lane("DirectVulkan." "-${MGL_ITEST_MONOLITH_MECHANISM_FILTER}:${MGL_ITEST_SPLIT_ARM_ONLY_FILTER}"
-    ENV "${MGL_ITEST_VULKAN_ENVIRONMENT}")
+    TEST_LIST MGL_AMBIENT_TESTS_VULKAN ENV "${MGL_ITEST_VULKAN_ENVIRONMENT}")
 
 # ScenarioIsolationScenario's two cases in ONE process: the first leaves a deleted program current
 # and an error unread, the second asserts ScenarioTest::SetUp cleared both. The entries above run
@@ -3211,10 +3213,10 @@ if (MOBILEGL_BUILD_DISAGGREGATED)
 endif()
 
 # P5c ct (docs/archive/contracts/CONTRACT-P5C.md §5): the two control records, split-only source for the
-# same reason as f1's - the scenario reads the SERVER sink's tallies, which a monolith build
-# has no symbol for. One block per case with a LOG PATH OF ITS OWN, the F1 pattern:
-# SplitLogPaths.PrivateAndDistinct fails a lane whose cases share one file, and the death
-# case's child truncates whatever path it inherits.
+# same reason as f1's - the scenario reads the server's control-record counters (`ar`, `od` on the
+# server role's PipeStats line), which only a build with a server role produces. One block per case
+# with a LOG PATH OF ITS OWN, the F1 pattern: SplitLogPaths.PrivateAndDistinct fails a lane whose
+# cases share one file, and the death case's child truncates whatever path it inherits.
 if (MOBILEGL_BUILD_DISAGGREGATED)
     target_sources(MobileGLIntegrationTest PRIVATE Scenarios/CtWireScenario.cpp)
     # P7 wave 2 package C adds the fifth: the OQ-10 capability read. It belongs in THIS list

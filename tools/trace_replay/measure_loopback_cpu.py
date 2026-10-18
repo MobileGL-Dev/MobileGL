@@ -64,7 +64,7 @@ def run(args, case, transport, repeat):
                LIBGL_ALWAYS_SOFTWARE='1', EGL_PLATFORM='surfaceless',
                MESA_GL_VERSION_OVERRIDE='3.3', MESA_GLSL_VERSION_OVERRIDE='330')
     for key in ('MOBILEGL_IPC_CONTROL', 'MOBILEGL_IPC_DATA', 'MOBILEGL_IPC_TOKEN', 'MOBILEGL_IPC_DIAL',
-                'MOBILEGL_IPC_REQUIRE_SAME_BUILD', 'MOBILEGL_TEST_SERVER_COUNTERS'):
+                'MOBILEGL_IPC_REQUIRE_SAME_BUILD'):
         env.pop(key, None)
     if transport == 'tcp':
         env.update(MOBILEGL_IPC_CONTROL=args.endpoint, MOBILEGL_IPC_DATA='stream', MOBILEGL_IPC_TOKEN='',

@@ -140,7 +140,7 @@ def start_server(args, device):
     command = [sys.executable, str(script), 'start', '--serial', args.serial,
                '--package', args.package, '--listen', args.listen, '--token', args.token,
                '--allow-idle', '--state-file', str(args.server_idle_state), '--env',
-               'MOBILEGL_TEST_SERVER_COUNTERS=1;MOBILEGL_PIPE_STATS=1;MOBILEGL_PIPE_STATS_PERIOD=1;'
+               'MOBILEGL_PIPE_STATS=1;MOBILEGL_PIPE_STATS_PERIOD=1;'
                'MOBILEGL_LOG_FILE_PATH=/data/data/' + args.package + '/files/mgl.log']
     result = subprocess.run(command, check=True, capture_output=True, text=True, timeout=30)
     (args.out / 'server-start.txt').write_text(result.stdout + result.stderr, encoding='utf-8')

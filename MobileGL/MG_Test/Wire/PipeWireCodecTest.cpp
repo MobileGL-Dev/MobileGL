@@ -23,6 +23,7 @@
 
 #include <gtest/gtest.h>
 #include <MG_Util/Debug/Log.h>
+#include <MG_Util/Metrics/PipeStats.h>
 
 #include <cstdio>
 #include <cstdlib>
@@ -3290,21 +3291,27 @@ TEST(ApplierResetWireRoundTrip, TheSerialSequenceIsAssertedAndTheServerResetRuns
         EXPECT_TRUE(applied);
     };
 
-    // The reset RUNS - asserted on the applier's own state, not on the tally (R-16: a probe
-    // may not arm against a stub, and a tally a stub could also move is a stub's witness).
-    // BoundVertexElements is one of the fields MGPipeApplierReset clears (PipeApply.cpp).
+    // The reset runs - asserted on the applier's own state: BoundVertexElements is one of the
+    // fields MGPipeApplierReset clears (PipeApply.cpp). The accepted count is the sink's
+    // applier-resets PipeStats counter.
+    namespace PS = MG_Util::PipeStats;
+    PS::SetEnabledForTesting(true);
+    PS::ResetForTesting();
     MGPipeApplier().BoundVertexElements = MakeHandle(77);
     send(0); // 0 = the first make-current (CONTRACT-P5C.md §1)
     EXPECT_TRUE(MGPipeHandleIsNull(MGPipeApplier().BoundVertexElements));
-    EXPECT_EQ(sink.ApplierResets(), 1u);
-    EXPECT_EQ(sink.ExpectedApplierResetSerial(), 1u);
+    EXPECT_EQ(PS::TotalCalls(PS::CallClass::ApplierResets), 1u);
 
-    // The second edge carries the next serial and is accepted in order.
+    // Each edge carries the next serial and is accepted in order; a serial the session does not
+    // expect aborts (CtWireFatals below), so accepting 1 and then 2 shows the expected one moved.
     MGPipeApplier().BoundVertexElements = MakeHandle(78);
     send(1);
     EXPECT_TRUE(MGPipeHandleIsNull(MGPipeApplier().BoundVertexElements));
-    EXPECT_EQ(sink.ApplierResets(), 2u);
-    EXPECT_EQ(sink.ExpectedApplierResetSerial(), 2u);
+    EXPECT_EQ(PS::TotalCalls(PS::CallClass::ApplierResets), 2u);
+    send(2);
+    EXPECT_EQ(PS::TotalCalls(PS::CallClass::ApplierResets), 3u);
+    PS::ResetForTesting();
+    PS::SetEnabledForTesting(false);
 }
 
 TEST(ObjectDeathWireRoundTrip, TheTextureAndFramebufferTwinsReleaseByHandleAndNeverByAStaleGeneration) {
@@ -3323,6 +3330,12 @@ TEST(ObjectDeathWireRoundTrip, TheTextureAndFramebufferTwinsReleaseByHandleAndNe
         Uint64 bits;
         ~RestorePush() { MG_Config::Features.PipePush = bits; }
     } restore{savedPush};
+    // The deaths the sink dispatched are its object-deaths PipeStats counter.
+    namespace PS = MG_Util::PipeStats;
+    PS::SetEnabledForTesting(true);
+    struct StatsOff {
+        ~StatsOff() { PS::SetEnabledForTesting(false); }
+    } statsOff;
 
     // Texture AND Framebuffer - the two kinds R-16 names for the death-recycle path. The
     // others share the one dispatch and the one table walk, so two kinds pin the shape: one
@@ -3352,14 +3365,14 @@ TEST(ObjectDeathWireRoundTrip, TheTextureAndFramebufferTwinsReleaseByHandleAndNe
         ASSERT_EQ(liveGen(one.slot), 1u) << static_cast<Uint32>(one.kind);
 
         // The death crosses and the twin retires: the slot's live generation goes back to 0.
-        const Uint64 deathsBefore = sink.ObjectDeaths();
+        const Uint64 deathsBefore = PS::TotalCalls(PS::CallClass::ObjectDeaths);
         const MGPHandleOnly death{MakeHandle(one.slot, 1), static_cast<Uint32>(one.kind), 0};
         EXPECT_NE(wire.Encoder().EncodeRecord(MGPWireOp::ObjectDeath, &death, sizeof(death)), kInvalidSeq);
         bool applied = false;
         EXPECT_TRUE(wire.PumpOne(&applied));
         EXPECT_TRUE(applied);
         EXPECT_EQ(liveGen(one.slot), 0u) << static_cast<Uint32>(one.kind);
-        EXPECT_EQ(sink.ObjectDeaths(), deathsBefore + 1u);
+        EXPECT_EQ(PS::TotalCalls(PS::CallClass::ObjectDeaths), deathsBefore + 1u);
 
         // THE ABA HALF (LiveGenAt's semantics): the slot is recycled forward to a NEW object
         // at generation 2, and the dead object's handle - replayed, as a duplicated or

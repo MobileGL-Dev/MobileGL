@@ -765,19 +765,6 @@ namespace {
             const auto* envelope = Protocol::GetCtrlEnvelope(buffer.data());
             if (const auto* flush = envelope->msg_as_LogFlush()) {
                 if (flush->ack()) break;
-                if (const char* inspect = std::getenv("MOBILEGL_TEST_SERVER_COUNTERS");
-                    inspect && std::strcmp(inspect, "1") == 0) {
-                    // SyncPeerLog has fenced the client's complete command prefix.
-                    // Acquire the applier's publication before reading its counters;
-                    // this serial client sends no more records until this ack.
-                    const auto applied = session.DataLink()->Progress()->appliedSeq.load(std::memory_order_acquire);
-                    const auto& verbs = session.Applier().Verbs();
-                    MGLOG_I("MGPipe server counters: applied=%llu resets=%llu reset-serial=%llu deaths=%llu",
-                            static_cast<unsigned long long>(applied),
-                            static_cast<unsigned long long>(verbs.ApplierResets()),
-                            static_cast<unsigned long long>(verbs.ExpectedApplierResetSerial()),
-                            static_cast<unsigned long long>(verbs.ObjectDeaths()));
-                }
                 FlushAck ack{control.get(), logForward.get(), flush->seq()};
                 MobileGL::MG_Util::Debug::WithLogBarrier(&SendLogAck, &ack);
                 continue;
