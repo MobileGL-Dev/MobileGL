@@ -147,6 +147,7 @@ add_executable(MobileGLIntegrationTest
     Scenarios/TessellationXfbCaptureScenario.cpp
     Scenarios/PointSizeDemotionScenario.cpp
     Scenarios/VertexArrayEnableDisableScenario.cpp
+    Scenarios/NarrowIntegerAttributeScenario.cpp
     Scenarios/CopyImageLevelRangeScenario.cpp
     Scenarios/CopyImageLayeredScenario.cpp
     Scenarios/CopyImagePacked16Scenario.cpp
