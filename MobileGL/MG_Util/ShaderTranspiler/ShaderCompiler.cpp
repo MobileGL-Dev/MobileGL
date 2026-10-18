@@ -19,6 +19,7 @@
 
 #include "SpirvPasses/EliminateFloatEqualsZeroPass.h"
 #include "SpirvPasses/FlattenInterfaceStructPass.h"
+#include "SpirvPasses/StripCompatPerVertexMembersPass.h"
 #include "SpirvPasses/RenameSamplerFunctionParameterPass.h"
 #include "SpirvPasses/RenameBuiltinShadowingFunctionsPass.h"
 #include "SpirvPasses/DecomposeWorkgroupVec3Pass.h"
@@ -1358,6 +1359,9 @@ namespace MobileGL {
                 // Output (see above), so never-written outputs are trimmed from the
                 // OpEntryPoint operand list here.
                 optimizer.RegisterPass(CreateRemoveUnusedInterfaceVariablesPass());
+                // Gives a compatibility-profile gl_PerVertex its core shape. After ADCE, so a
+                // legacy member that is only read into dead code no longer counts as accessed.
+                optimizer.RegisterPass(StripCompatPerVertexMembersPass::CreateStripCompatPerVertexMembersPass());
                 // The two module-legality repairs, so the chain's output - the bytes every
                 // consumer downstream sees - is valid Vulkan SPIR-V. Rect lowering used to
                 // live only in the backends; a validating lane would flag every rectangle

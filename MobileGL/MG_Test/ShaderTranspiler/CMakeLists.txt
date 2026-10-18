@@ -20,6 +20,7 @@ add_executable(
         FlattenXfbInterfaceBlocksTest.cpp
         UniquifyIoBlockNamesTest.cpp
         StripIoBlockLocationsTest.cpp
+        StripCompatPerVertexMembersTest.cpp
         LowerViewportIndexTest.cpp
         DeferGeometryEmitsTest.cpp
         ClampMultisampleFetchTest.cpp

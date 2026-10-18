@@ -400,6 +400,7 @@ set(SOURCE_FILES
     MobileGL/MG_Util/ShaderTranspiler/TranslationCache.cpp
     MobileGL/MG_Util/ShaderTranspiler/glslang/TMglGlslIoResolver.cpp
     MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/FlattenInterfaceStructPass.cpp
+    MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/StripCompatPerVertexMembersPass.cpp
     MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/EliminateFloatEqualsZeroPass.cpp
     MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/RenameSamplerFunctionParameterPass.cpp
     MobileGL/MG_Util/ShaderTranspiler/SpirvPasses/RenameBuiltinShadowingFunctionsPass.cpp
