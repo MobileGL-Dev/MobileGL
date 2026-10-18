@@ -26,8 +26,13 @@ foreach(listName IN ITEMS @MGL_SPLIT_ARM_TEST_LISTS@)
             set_tests_properties("${entry}" PROPERTIES ENVIRONMENT
                 "MGITEST_PMAP_LANE=1;MGITEST_PERSISTENT_MAP_ARM=emulated;MOBILEGL_PIPE_STATS=1;MOBILEGL_PIPE_STATS_PERIOD=1")
         elseif(entry MATCHES "PersistentCoherentMapScenario.ThePushIsTheOnlyRouteAWriteTakesToTheServer$")
-            # The case takes the push away, which only the emulated arm has (R-6: every split arm).
+            # The case takes the push away, which only the emulated arm has. Every split arm
+            # emulates by default except Magma in process, which is granted T0 and adopts, so
+            # that entry asks for T2 by name, as the Magma buffer lanes do.
             set_tests_properties("${entry}" PROPERTIES ENVIRONMENT "MGITEST_PERSISTENT_MAP_ARM=emulated")
+            if(entry MATCHES "^DirectVulkan\\.Split\\.")
+                set_tests_properties("${entry}" PROPERTIES ENVIRONMENT "MOBILEGL_IPC_ADOPT_TIER=2")
+            endif()
         elseif(entry MATCHES "LargeArenaAdoptionScenario.TheArenaLandsInTheTierItsLaneDeclares$")
             # P11 A2: every split arm runs T2, so the arena is declared emulated.
             set_tests_properties("${entry}" PROPERTIES ENVIRONMENT "MGITEST_PERSISTENT_MAP_ARM=emulated")

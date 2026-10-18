@@ -448,9 +448,10 @@ void main() { oColor = vec4(vColor, 1.0); }
     // E3(a): the push is the ONLY route a coherent write takes to the server. The cases above go
     // green just as well if something else delivered the bytes - an unmap or flush record, a
     // whole-buffer re-sync, the live-host-writes state record, an inproc server reading client
-    // memory - so this one takes the push away and requires the next draw to miss the write.
-    // Forget is what an unmap or a destroy calls and leaves the mapping itself alone; the
-    // re-announce is the call every map-state change makes, and the next draw must see the write.
+    // memory - so this one takes the push away and requires the draws to miss the write, within
+    // one frame and across a Present (the two shapes the cases above draw). Forget is what an
+    // unmap or a destroy calls and leaves the mapping itself alone; the re-announce is the call
+    // every map-state change makes, and the next draw must see the latest write.
     TEST_F(PersistentCoherentMapScenario, ThePushIsTheOnlyRouteAWriteTakesToTheServer) {
         if (!Ready() || IsSkipped()) return;
         if (!SplitLane::IsSplitLane() || SplitLane::DeclaredPersistentMapArm() != "emulated") {
@@ -477,13 +478,23 @@ void main() { oColor = vec4(vColor, 1.0); }
                                    "a write through a mapping the tracker has forgotten: red here means "
                                    "something other than the persistent-map push delivered it, and the "
                                    "two cases above would stay green without the push"));
+        Gl().EndFrame();
+
+        ArmTheDrawState();
+        WriteThroughTheMapThenDraw(m_map, 0.0f, 0.0f, 1.0f);
+        const Image nextFrame = ReadPixels(Gl().Width(), Gl().Height());
+        EXPECT_EQ(FirstGLError(), 0u);
+        EXPECT_TRUE(WholeSurfaceIs(nextFrame, "green",
+                                   "the next frame's write through the forgotten mapping, after a Present: "
+                                   "red or blue here means the frame boundary delivered a write the push "
+                                   "did not carry"));
 
         ASSERT_TRUE(ReannounceLivePersistentMap(m_vbo)) << "no frontend BufferObject behind GL buffer " << m_vbo;
         glDrawArrays(GL_TRIANGLES, 0, 6);
         const Image repushed = ReadPixels(Gl().Width(), Gl().Height());
         EXPECT_EQ(FirstGLError(), 0u);
-        EXPECT_TRUE(WholeSurfaceIs(repushed, "red",
-                                   "the same write after the map is announced again: the tracker must "
+        EXPECT_TRUE(WholeSurfaceIs(repushed, "blue",
+                                   "the latest write after the map is announced again: the tracker must "
                                    "push the whole mapping once, or the green above proves nothing"));
         AssertOrRecordArm(m_vbo, "after the push was taken away and given back");
         Gl().EndFrame();
