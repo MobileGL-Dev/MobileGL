@@ -403,7 +403,6 @@ namespace MobileGL::MG_ConfigLoader {
         features.EsprytInvalidImagePlaceholder = QueryEnvQuirkOverride("MOBILEGL_ESPRYT_INVALID_IMAGE_PLACEHOLDER");
         features.PointSizeDemotion = QueryEnvQuirkOverride("MOBILEGL_POINT_SIZE_DEMOTION");
         features.CoherentAsFlush = QueryEnvFlag("MOBILEGL_COHERENT_AS_FLUSH");
-        features.TraceSkipAutodestroy = QueryEnvFlag("MOBILEGL_TRACE_SKIP_AUTODESTROY");
         features.EsprytDisableUboRing = QueryEnvFlag("MOBILEGL_ESPRYT_DISABLE_UBO_RING");
         features.EsprytDisableUnpackRing = QueryEnvFlag("MOBILEGL_ESPRYT_DISABLE_UNPACK_RING");
         features.EsprytDisableUploadRing = QueryEnvFlag("MOBILEGL_ESPRYT_DISABLE_UPLOAD_RING");
