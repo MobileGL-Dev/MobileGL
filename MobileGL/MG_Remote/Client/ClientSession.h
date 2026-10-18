@@ -193,7 +193,7 @@ namespace MobileGL::MG_Remote::Client {
         Wire::PipeWireEncoder& Encoder();
         CapsMirror& Caps();
 
-        // Emit one record and, if the barrier is armed, wait for it. `replyOut`/`replyBytes`
+        // Emit one record and wait for it unless the wait rule lets it go. `replyOut`/`replyBytes`
         // name where a kReplySlot answer lands; pass {nullptr, 0} for a call that has none.
         // Returns the record's seq, which is also its reply-slot id.
         //
@@ -280,18 +280,13 @@ namespace MobileGL::MG_Remote::Client {
         // !willReadReply, and !willReadReply on a row with no reply slot, are Fatal by name: the
         // first would wait for an answer never sent, the second discards one never posted.
 
-        // MOBILEGL_IPC_VERB_BARRIER. False is the R-1 negative control and is EXPECTED to be
-        // red; it must be run once and the way it goes red recorded.
-        Bool BarrierArmed() const;
-
         // ---- P5e (ra): the wait rule (CONTRACT-P5E §1, §2.3, §2.4, §2.5) -------------------
 
-        // A CONJUNCTION OF THREE, LATCHED ONCE: `m_barrierArmed && Ipc.RunAhead &&
-        // Caps().HasCap(kCapRunAheadApply)`. The third conjunct is the server's own statement
-        // that it applies an unbarriered record without reading client memory, so run-ahead is
-        // never something the client can turn on by itself - on Magma, and on Espryt until the
-        // integration commit publishes bit 10, this answers false and EmitAndWaitTails runs
-        // today's lockstep path byte for byte.
+        // A CONJUNCTION OF TWO, LATCHED ONCE: `Ipc.RunAhead && Caps().HasCap(kCapRunAheadApply)`.
+        // The second conjunct is the server's own statement that it applies an unbarriered record
+        // without reading client memory, so run-ahead is never something the client can turn on
+        // by itself - on Magma, and on Espryt until the integration commit publishes bit 10,
+        // this answers false and EmitAndWaitTails runs today's lockstep path byte for byte.
         //
         // LATCHED AT THE FIRST CAPS ADOPTION AFTER Start, AND A LATER SNAPSHOT MAY ONLY TURN IT
         // OFF. A caps re-run cannot promote a lockstep server to a run-ahead one mid-frame:
@@ -540,7 +535,6 @@ namespace MobileGL::MG_Remote::Client {
 
         Wire::PipeWireEncoder m_encoder;
         Wire::SegmentTable m_segments;
-        Bool m_barrierArmed = true;
         // P5e (ra): the latch of RunAheadArmed() and the fact that it has been taken once.
         Bool m_runAheadArmed = false;
         Bool m_runAheadLatched = false;

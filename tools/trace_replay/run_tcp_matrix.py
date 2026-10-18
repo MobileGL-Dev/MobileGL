@@ -140,7 +140,6 @@ def case_environment(test, base, args, output=None):
                MOBILEGL_IPC_PRESENT_CREDIT=str(args.credit))
     if getattr(args, "require_run_ahead", False):
         env["MOBILEGL_IPC_RUN_AHEAD"] = "1"
-        env["MOBILEGL_IPC_VERB_BARRIER"] = "1"
     if output is not None:
         env["MOBILEGL_LOG_FILE_PATH"] = str(output / "output/mobilegl.log")
     return env
@@ -406,7 +405,7 @@ def run_case(plan, args, row):
     work = Path(row["work"])
     console = work.parent / "runner.log"
     env = case_environment(plan["test"], args.base_env, args, work)
-    row["requested_arm"] = {key: env.get(key) for key in ("MOBILEGL_IPC_RUN_AHEAD", "MOBILEGL_IPC_VERB_BARRIER")}
+    row["requested_arm"] = {key: env.get(key) for key in ("MOBILEGL_IPC_RUN_AHEAD",)}
     props = properties(plan["test"])
     cwd = props.get("WORKING_DIRECTORY", str(args.source))
     def wake():
@@ -456,7 +455,7 @@ def main(argv=None):
     parser.add_argument("--credit", type=int, choices=(1, 2, 3), default=2)
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--require-run-ahead", action="store_true",
-                        help="require private-client ARMED proof, no lockstep fallback/DISARMED; force RUN_AHEAD=1 and VERB_BARRIER=1")
+                        help="require private-client ARMED proof, no lockstep fallback/DISARMED; force RUN_AHEAD=1")
     parser.add_argument("--idle-seconds", type=float, default=300)
     parser.add_argument("--max-seconds", type=float, default=7200)
     parser.add_argument("--wake-adb-serial", help="explicit opt-in: KEYCODE_WAKEUP every 15 seconds while a case runs")

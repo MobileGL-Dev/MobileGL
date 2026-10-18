@@ -267,9 +267,8 @@ namespace MobileGL::MG_Remote::Transport {
         // encourages batching the publish, so the shared watermark may lag the
         // emitter - and a drain that waits for `appliedSeq >= submittedSeq` would
         // then under-wait and free an emitter's var-tail while a record still
-        // names it. With the verb barrier armed the two are equal; with
-        // MOBILEGL_IPC_VERB_BARRIER=0, R-1's negative control which the phase has
-        // to run once, they are not.
+        // names it. Run-ahead and the batched waits publish without waiting, so
+        // at teardown the two may differ.
         std::uint64_t LastPublishedSeq() const { return m_lastPublishedSeq; }
 
         // The verb barrier's wait, AND the reply's wait: they are the same wait

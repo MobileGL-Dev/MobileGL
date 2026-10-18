@@ -460,11 +460,11 @@ stacks before treating a local result as a statement about CI.
 
 `run_tcp_matrix.py` uses a CTest JSON catalog plus the **current** `trace_cases.json`.
 It does not build, install an APK, or launch the remote server. For the formal
-P6.5 run-ahead matrix, use `--require-run-ahead`. It forces `MOBILEGL_IPC_RUN_AHEAD=1`
-and `MOBILEGL_IPC_VERB_BARRIER=1`, then requires `run-ahead ARMED` in each private
-client log and rejects any `running lockstep` / `DISARMED` marker. The checkpoint
-records `requested_arm` and `actual_arm`; strict resume cannot reuse an earlier
-lockstep image pass. Start the intended server first, then run serially:
+P6.5 run-ahead matrix, use `--require-run-ahead`. It forces `MOBILEGL_IPC_RUN_AHEAD=1`,
+then requires `run-ahead ARMED` in each private client log and rejects any
+`running lockstep` / `DISARMED` marker. The checkpoint records `requested_arm` and
+`actual_arm`; strict resume cannot reuse an earlier lockstep image pass. Start the intended
+server first, then run serially:
 
 ```bash
 ctest --test-dir /path/to/retrace-build --show-only=json-v1 > /tmp/trace-catalog.json

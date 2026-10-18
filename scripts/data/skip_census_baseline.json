@@ -11207,7 +11207,6 @@
    "RemoteRunAhead.AnEventBurstBehindAnUnwaitedSequenceFlowControlsInsteadOfAborting",
    "RemoteRunAhead.AnIndexedDrawVerbIsUnbarrieredAndTouchesPipeInputsNotAtAll",
    "RemoteRunAhead.AnUnbarrieredVerbDoesNotFillPipeInputsAndIsAllowed",
-   "RemoteRunAhead.ClearingTheVerbBarrierDisarmsRunAheadEvenWithTheCapBit",
    "RemoteRunAhead.OnlyTheTextureHalfOfResourceSubDataWantsItsReply",
    "RemoteRunAhead.TheKnobAloneDoesNotArmRunAheadWithoutTheServersCapBit",
    "RemoteWaitBoundaryControl.AnUnwaitedPublishIsSeenAsNoWait",

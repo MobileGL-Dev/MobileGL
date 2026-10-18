@@ -57,7 +57,6 @@ namespace {
             ::alarm(5);
             MG_Config::Transport = MG_Config::TransportMode::Spawn;
             MG_Config::Ipc.RunAhead = 1;
-            MG_Config::Ipc.VerbBarrier = 1;
             MG_Config::Ipc.BatchWaits = 1;
             MG_Config::Ipc.PresentCredit = 3;
             Transport::SessionSegmentSizes sizes;

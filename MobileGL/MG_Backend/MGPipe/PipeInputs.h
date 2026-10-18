@@ -965,9 +965,7 @@ namespace MobileGL::MG_Pipe {
     // PLAIN, NOT ATOMIC, AND THAT IS THE SAME RULING TABLE 3 MAKES FOR gPipeInputS ITSELF
     // (CONTRACT-P5.md section 4): the verb barrier leaves at most one of {GL thread, apply
     // thread} runnable, so there is one writer at any instant. This counter, m_serverStampedVerb
-    // and FilledGen[] all rest on that and on nothing else - so MOBILEGL_IPC_VERB_BARRIER=0,
-    // R-1's negative control, is a data race on all three as well as the correctness failure it
-    // is there to show. It is expected to be red; it is not expected to be meaningful.
+    // and FilledGen[] all rest on that and on nothing else.
     Uint64 MGPipeResidualPullCount();
     void MGPipeResetResidualPullCountForTesting();
 

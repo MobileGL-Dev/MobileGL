@@ -1244,9 +1244,8 @@ TEST(SessionTest, ABorrowedSlotIsNotHandedBackUntilItIsReleased) {
 // q-1. Teardown's drain keys on the PRODUCER's own last-published seq, not on
 // RingControl::submittedSeq: Ring.h's header comment permits that watermark to be published lazily, so a
 // drain that trusted it would under-wait and free an emitter-owned var-tail while a record
-// still names it. With the verb barrier armed the two are equal; under
-// MOBILEGL_IPC_VERB_BARRIER=0 - R-1's negative control, which the phase must run once - they
-// are not.
+// still names it. Run-ahead and the batched waits publish without waiting, so at teardown the
+// two may differ.
 TEST(SessionTest, TheProducerRemembersWhatItPublishedEvenIfTheWatermarkLags) {
     SessionFixture session;
     ASSERT_TRUE(session.Build(TestSizes()));

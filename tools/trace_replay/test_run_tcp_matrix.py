@@ -37,7 +37,7 @@ if behavior!='no-result':
  actual=work/'output/actual.png';actual.write_bytes(b'fixture-image')
  endpoint=os.environ['MOBILEGL_IPC_CONTROL'].removeprefix('tcp://')
  arm=os.environ.get('CASE_ARM','armed')
- if arm=='respect-env':arm='armed' if os.environ.get('MOBILEGL_IPC_RUN_AHEAD')=='1' and os.environ.get('MOBILEGL_IPC_VERB_BARRIER')=='1' else 'lockstep'
+ if arm=='respect-env':arm='armed' if os.environ.get('MOBILEGL_IPC_RUN_AHEAD')=='1' else 'lockstep'
  line={'armed':'run-ahead ARMED\n','lockstep':'running lockstep\n','disarmed':'run-ahead ARMED\nrun-ahead DISARMED\n','server-only':''}[arm]
  (work/'output/mobilegl.client.log').write_text('control=tcp data=stream server='+endpoint+' pid=123 dial=connect\n'+line)
  if arm=='server-only':(work/'output/mobilegl.server.log').write_text('run-ahead ARMED\n')
@@ -116,11 +116,11 @@ class MatrixTests(unittest.TestCase):
             test['properties'][0]['value'] += list(entries)
         self.catalog.write_text(json.dumps(catalog))
 
-    def test_required_arm_forces_both_environment_knobs_and_records_actual_arm(self):
-        self.set_arm('respect-env',['MOBILEGL_IPC_RUN_AHEAD=0','MOBILEGL_IPC_VERB_BARRIER=0'])
+    def test_required_arm_forces_the_run_ahead_knob_and_records_actual_arm(self):
+        self.set_arm('respect-env',['MOBILEGL_IPC_RUN_AHEAD=0'])
         self.assertEqual(self.run_main('--require-run-ahead'),0)
         row=self.checkpoint()[0]
-        self.assertEqual(row['requested_arm'],{'MOBILEGL_IPC_RUN_AHEAD':'1','MOBILEGL_IPC_VERB_BARRIER':'1'})
+        self.assertEqual(row['requested_arm'],{'MOBILEGL_IPC_RUN_AHEAD':'1'})
         self.assertEqual(row['actual_arm'],{'armed':True,'lockstep':False,'disarmed':False})
         self.assertEqual(self.run_main('--require-run-ahead','--resume'),0)
         self.assertEqual(len(self.checkpoint()),1)
@@ -337,7 +337,7 @@ class MatrixTests(unittest.TestCase):
 
     def test_directvulkan_run_ahead_proof_and_checkpoint_keys_are_per_backend(self):
         self.write_inputs(backends=('DirectGLES','DirectVulkan'))
-        self.set_arm('respect-env',['MOBILEGL_IPC_RUN_AHEAD=0','MOBILEGL_IPC_VERB_BARRIER=0'])
+        self.set_arm('respect-env',['MOBILEGL_IPC_RUN_AHEAD=0'])
         self.assertEqual(self.run_main('--backend','DirectGLES','--backend','DirectVulkan',
                                        '--require-run-ahead'),0)
         rows=self.checkpoint()

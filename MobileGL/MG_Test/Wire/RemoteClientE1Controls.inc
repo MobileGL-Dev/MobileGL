@@ -44,9 +44,6 @@ void CheckE1Boundary(Bool serverCap, MGPWireOp op, Bool expectWait, const char* 
                      E1Emit emit = E1Emit::Rule) {
     const auto child = RunInChild([=] {
         ::alarm(15);
-        const char* barrier = std::getenv("MOBILEGL_IPC_VERB_BARRIER");
-        if (barrier && std::strcmp(barrier, "0") && std::strcmp(barrier, "1")) ::_exit(80);
-        MG_Config::Ipc.VerbBarrier = barrier ? static_cast<Uint32>(barrier[0] - '0') : 1;
         MG_Config::Ipc.BatchWaits = 1;
         MG_Config::Ipc.RunAhead = 1;
         MG_Config::Ipc.SpinUs = 0;
@@ -84,9 +81,9 @@ void CheckE1Boundary(Bool serverCap, MGPWireOp op, Bool expectWait, const char* 
         if (session.WaitForApplied(seq, 2000) != Transport::SessionWait::Reached) ::_exit(85);
         if (seq <= before || peer.seen.load() != 1 || session.Control()->Progress.appliedSeq.load() < seq) ::_exit(86);
         const Bool correct = expectWait ? parked && appliedBeforeReturn : !parked && !appliedBeforeReturn;
-        std::printf("E1 observation: op=%s cap=%u barrier=%u parked=%u applied_before_return=%u emitted=1 peer_seen=1\n",
+        std::printf("E1 observation: op=%s cap=%u emit=%s parked=%u applied_before_return=%u emitted=1 peer_seen=1\n",
                     op == MGPWireOp::ApplierReset ? "ApplierReset" : "Clear",
-                    static_cast<unsigned>(serverCap), MG_Config::Ipc.VerbBarrier,
+                    static_cast<unsigned>(serverCap), emit == E1Emit::PublishOnly ? "publish-only" : "rule",
                     static_cast<unsigned>(parked), static_cast<unsigned>(appliedBeforeReturn));
         std::fflush(stdout);
         session.Stop();

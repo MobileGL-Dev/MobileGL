@@ -609,7 +609,6 @@ namespace MobileGL::MG_ConfigLoader {
         ipc.AdoptTier = QueryEnvUint32("MOBILEGL_IPC_ADOPT_TIER", MG_Config::kAdoptTierUnset, 0, 2);
         // P11 B2: the server's own T0 allow switch (Config.h).
         ipc.AllowAdoptT0 = QueryEnvUint32("MOBILEGL_IPC_ALLOW_ADOPT_T0", 1, 0, 1);
-        ipc.VerbBarrier = QueryEnvUint32("MOBILEGL_IPC_VERB_BARRIER", 1, 0, 1);
         // P5e (docs/archive/contracts/CONTRACT-P5E.md §1). The wait rule's A/B, parsed here like every
         // other IPC knob and armed only where the server publishes kCapRunAheadApply.
         ipc.RunAhead = QueryEnvUint32("MOBILEGL_IPC_RUN_AHEAD", 1, 0, 1);
@@ -716,7 +715,7 @@ namespace MobileGL::MG_ConfigLoader {
         // log that does not name it makes every run ambiguous about its own configuration.
         MGLOG_I("Config: IPC ring=%uMiB stage=%uMiB wire-deferred=%uMiB spin=%uus event-wait=%ums "
                 "persistent-block=%uKiB create-window=%u pbo-readback-sync=%u poll-escalate=%u "
-                "adopt-tier=%s allow-t0=%u verb-barrier=%u run-ahead=%u present-credit=%u control-timeout=%ums "
+                "adopt-tier=%s allow-t0=%u run-ahead=%u present-credit=%u control-timeout=%ums "
                 "cold-start=%ums strict=%d audit=%d role-split-state=%d affinity='%s' surface=%s",
                 ipc.RingMb, ipc.StageMb, MG_Config::RecordArm.WireDeferredMb, ipc.SpinUs, ipc.EventWaitMs,
                 MG_Config::RecordArm.PersistentBlockKb, ipc.CreateWindow, ipc.PboReadbackSync, ipc.PollEscalate,
@@ -724,15 +723,9 @@ namespace MobileGL::MG_ConfigLoader {
                 : ipc.AdoptTier == 1 ? "1"
                 : ipc.AdoptTier == 2 ? "2"
                                      : "unset(T0)",
-                ipc.AllowAdoptT0, ipc.VerbBarrier, ipc.RunAhead, ipc.PresentCredit, ipc.ControlTimeoutMs,
-                ipc.ColdStartMs, static_cast<int>(ipc.StrictErrors), static_cast<int>(ipc.Audit),
-                static_cast<int>(ipc.RoleSplitState), ipc.ServerAffinity.c_str(),
-                MG_Config::ServerOwnedWindowSurfaces() ? "server" : "offscreen");
-        if (ipc.VerbBarrier == 0) {
-            MGLOG_W("Config: MOBILEGL_IPC_VERB_BARRIER=0 is the R-1 NEGATIVE CONTROL and is "
-                    "expected to fail: the client still pulls 31 of 63 PipeInputs fields from a "
-                    "live GLContext, so an unbarriered queue lets the server read future values");
-        }
+                ipc.AllowAdoptT0, ipc.RunAhead, ipc.PresentCredit, ipc.ControlTimeoutMs, ipc.ColdStartMs,
+                static_cast<int>(ipc.StrictErrors), static_cast<int>(ipc.Audit), static_cast<int>(ipc.RoleSplitState),
+                ipc.ServerAffinity.c_str(), MG_Config::ServerOwnedWindowSurfaces() ? "server" : "offscreen");
     }
 #endif
 

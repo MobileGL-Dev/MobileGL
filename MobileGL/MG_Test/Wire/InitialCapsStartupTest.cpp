@@ -54,7 +54,6 @@ namespace {
             ::alarm(10);
             MG_Config::Transport = MG_Config::TransportMode::Spawn;
             MG_Config::Ipc.RunAhead = 1;
-            MG_Config::Ipc.VerbBarrier = 1;
             int reserve = ::socket(AF_INET, SOCK_STREAM, 0);
             ASSERT_GE(reserve, 0);
             sockaddr_in address{};

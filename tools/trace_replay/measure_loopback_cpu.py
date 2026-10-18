@@ -58,7 +58,7 @@ def run(args, case, transport, repeat):
     out.mkdir(parents=True)
     env = dict(os.environ, MOBILEGL_TRANSPORT='spawn', MOBILEGL_BACKEND_TYPE='DirectGLES',
                MOBILEGL_IPC_SERVER_PATH=str(args.server), MOBILEGL_PIPE_STATS='1', MOBILEGL_PIPE_STATS_PERIOD='1',
-               MOBILEGL_IPC_PRESENT_CREDIT='1', MOBILEGL_IPC_RUN_AHEAD='1', MOBILEGL_IPC_VERB_BARRIER='1',
+               MOBILEGL_IPC_PRESENT_CREDIT='1', MOBILEGL_IPC_RUN_AHEAD='1',
                MOBILEGL_IPC_BATCH_WAITS='1', MOBILEGL_IPC_SPIN_US='50', MOBILEGL_IPC_STRICT_ERRORS='0',
                MOBILEGL_IPC_ROLE_SPLIT_STATE='0', MOBILEGL_IPC_AUDIT='0',
                LIBGL_ALWAYS_SOFTWARE='1', EGL_PLATFORM='surfaceless',

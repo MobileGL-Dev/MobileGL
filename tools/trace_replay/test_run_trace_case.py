@@ -259,7 +259,7 @@ class RunTraceCaseTests(unittest.TestCase):
                             'a leg whose transport block was skipped must fail the checker')
 
     # MGTRACE_EXPECT_IPC: the client's IPC line must carry every token, whole.
-    IPC = 'Config: IPC ring=8MiB verb-barrier=1 run-ahead={ra} present-credit=1 strict={st} audit=0 role-split-state={rs} x'
+    IPC = 'Config: IPC ring=8MiB run-ahead={ra} present-credit=1 strict={st} audit=0 role-split-state={rs} x'
 
     def ipc_logs(self, ra='1', st='0', rs='1', line=True):
         logs = good_logs('spawn')

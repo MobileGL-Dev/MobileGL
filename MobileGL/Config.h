@@ -696,12 +696,6 @@ namespace MobileGL::MG_Config {
         // platform and the backend's POST self-test allow it; 0 = never grant it (the session
         // runs T2 and says so). Read by the server role only; kept through ServerSpawn.
         Uint32 AllowAdoptT0 = 1;
-        // MOBILEGL_IPC_VERB_BARRIER: 1 = the client blocks at every verb boundary until
-        // appliedSeq reaches its emitSeq (R-1). 0 is the negative control: it is EXPECTED to
-        // be red, because 31 of the 63 PipeInputs fields are still pulled from a live
-        // GLContext by the client's residual fill and a free-running queue lets the server
-        // read a FUTURE value of them.
-        Uint32 VerbBarrier = 1;
         // MOBILEGL_IPC_RUN_AHEAD (P5e, docs/archive/contracts/CONTRACT-P5E.md §1): 1 = after publishing an
         // UNBARRIERED record the client returns immediately instead of waiting for its apply.
         // It is one half of a conjunction and never a switch on its own - the client arms
@@ -712,9 +706,7 @@ namespace MobileGL::MG_Config {
         // 0 IS THE A/B CONTROL AND NOT A NEGATIVE ONE: the server code, the fill decision and
         // every record are identical on both arms, and the only difference is whether the
         // client waits. That is what makes "is the picture the same" a question about the wait
-        // rule alone. MOBILEGL_IPC_VERB_BARRIER=0 keeps its own meaning and stays the
-        // lockstep arm's negative control; under run-ahead it is the one that must go red, at
-        // the first barriered row's stale pull.
+        // rule alone.
         //
         // Forced to 0 by MOBILEGL_PIPE_VERIFY, beside BatchWaits: the comparator needs a
         // client-filled gPipeInputs block for every verb, and run-ahead is precisely the

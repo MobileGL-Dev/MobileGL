@@ -2730,29 +2730,6 @@ TEST(RemoteRunAhead, TheKnobAloneDoesNotArmRunAheadWithoutTheServersCapBit) {
     ExpectChildSuccess(child);
 }
 
-// §1 again, from the other side: MOBILEGL_IPC_VERB_BARRIER=0 is the LOCKSTEP arm's negative
-// control and it disarms run-ahead outright, because the barrier is the first term of the
-// conjunction. Under run-ahead its documented red is the first barriered row's stale pull -
-// that one is a scenario, not a unit case; what is pinned here is that the two controls do not
-// silently compose into a third mode nobody designed.
-TEST(RemoteRunAhead, ClearingTheVerbBarrierDisarmsRunAheadEvenWithTheCapBit) {
-    const auto child = RunInChild([] {
-        MG_Config::Ipc.RunAhead = 1;
-        MG_Config::Ipc.VerbBarrier = 0;
-        ::alarm(15);
-        MG_Config::Transport = MG_Config::TransportMode::InProcess;
-        Srv::ServerSessionInstance().SetCapabilityBits(static_cast<Uint64>(MG_Pipe::kCapRunAheadApply));
-        Srv::ServerSessionInstance().SetConsumedSubsystems(kMGPipeSubsystemsMigratedAtP4a);
-        Srv::ServerSessionInstance().SetBackend(ControlCapsPeer());
-        if (ClientSessionInstance().Start(MG_Config::TransportMode::InProcess, {}) != MOBILEGL_OK) {
-            ::_exit(81);
-        }
-        if (ClientSessionInstance().RunAheadArmed()) ::_exit(101);
-        ClientSessionInstance().Stop();
-    });
-    ExpectChildSuccess(child);
-}
-
 // §2.4's RED-ONCE, BY COUNT. With a credit of 1 the client may have one present in flight, so
 // the second and third presents each pay the credit before they encode - `credit-waits` is 2
 // after three presents and the present-ack watermark has reached 2. Delete the

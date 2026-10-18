@@ -236,14 +236,6 @@ namespace MobileGL::MG_Remote::Client {
 #endif
         }
 
-        Bool VerbBarrierFromConfig() {
-#if MOBILEGL_BUILD_DISAGGREGATED
-            return MG_Config::Ipc.VerbBarrier != 0;
-#else
-            return true;
-#endif
-        }
-
         // ---- c1: the barrier's two flags ------------------------------------------------
         //
         // thread_local for the client's own "am I waiting", a shared atomic for "is the apply
@@ -1810,14 +1802,6 @@ namespace MobileGL::MG_Remote::Client {
             return MOBILEGL_ERR_INVALID_ARGUMENT;
         }
 
-        m_barrierArmed = VerbBarrierFromConfig();
-        if (!m_barrierArmed) {
-            MGLOG_W("MG_Remote client: MOBILEGL_IPC_VERB_BARRIER=0 - this is R-1's NEGATIVE "
-                    "CONTROL and is EXPECTED to be red. 31 of the 63 PipeInputs fields are still "
-                    "pulled from a live GLContext by the client's residual fill, so a free-running "
-                    "queue lets the server read a FUTURE value of them");
-        }
-
         // ---- 6. the client's segment table. IT MUST NOT INSTALL THE PROCESS RESOLVER: there is
         // exactly one gMGPipeSegmentResolver per process, the SERVER role owns it (table 3), and
         // the client never resolves a span at all - it only ever writes Ptr = nullptr (R-2's
@@ -1989,9 +1973,8 @@ namespace MobileGL::MG_Remote::Client {
             // permits submittedSeq to be published lazily and RingProducer::Publish encourages batching
             // the publish, so the shared watermark is allowed to lag the emitter - and a drain
             // that waited for `appliedSeq >= submittedSeq` would then under-wait and free an
-            // emitter-owned var-tail while a record still names it. With the verb barrier armed
-            // the two are equal; under MOBILEGL_IPC_VERB_BARRIER=0, R-1's negative control that
-            // the phase has to run once, they are not.
+            // emitter-owned var-tail while a record still names it. Run-ahead and the batched
+            // waits return before the apply, so the two may differ when Stop() runs.
             const Uint64 submitted = m_producer.LastPublishedSeq();
             m_producer.PublishAndNotify(submitted);
             if (submitted != 0 &&
@@ -2338,14 +2321,6 @@ namespace MobileGL::MG_Remote::Client {
             }
         }
 
-        if (!m_barrierArmed && !ownsReplySlot) {
-            // R-1's NEGATIVE CONTROL ARM, and the only thing it turns off is the barrier. A
-            // reply-slot row still waits: the answer is not derivable here and R-5 forbids
-            // inventing one, so MOBILEGL_IPC_VERB_BARRIER=0 makes the queue free-running, not
-            // the client clairvoyant.
-            return seq;
-        }
-
         ++m_recordWaits;
         if (MG_Config::Ipc.WaitStats && RunAheadArmed()) ++g_waitCensus.recordWaits[static_cast<SizeT>(op)];
         const BarrierWaitScope waiting;
@@ -2441,10 +2416,6 @@ namespace MobileGL::MG_Remote::Client {
         return seq;
     }
 
-    Bool ClientSession::BarrierArmed() const {
-        return m_barrierArmed;
-    }
-
     // ---- P5e (ra): the run-ahead latch and the waits it leaves behind ---------------------
 
     Bool ClientSession::RunAheadArmed() const {
@@ -2465,8 +2436,8 @@ namespace MobileGL::MG_Remote::Client {
 #if MOBILEGL_BUILD_DISAGGREGATED
         // THE CONJUNCTION, IN THE CONTRACT'S OWN ORDER (§1). The caps read is last because it
         // is the only one that costs a mirror load, and because it is the only one whose answer
-        // can change: the other two are process configuration.
-        const Bool armed = m_barrierArmed && MG_Config::Ipc.RunAhead != 0 && Caps().HasCap(MG_Pipe::kCapRunAheadApply);
+        // can change: the other one is process configuration.
+        const Bool armed = MG_Config::Ipc.RunAhead != 0 && Caps().HasCap(MG_Pipe::kCapRunAheadApply);
         if (!m_runAheadLatched) {
             m_runAheadLatched = true;
             m_runAheadArmed = armed;
@@ -2475,7 +2446,7 @@ namespace MobileGL::MG_Remote::Client {
                         "kCapRunAheadApply, so an unbarriered record is published and not "
                         "waited for (CONTRACT-P5E §2.3), paced by a present credit of %u",
                         MG_Config::Ipc.PresentCredit);
-            } else if (MG_Config::Ipc.RunAhead != 0 && m_barrierArmed) {
+            } else if (MG_Config::Ipc.RunAhead != 0) {
                 // THE KNOB IS NOT A SWITCH ON ITS OWN, and an operator who set it has to be
                 // told that, or an A/B arm that measured nothing looks like an A/B arm that
                 // measured no difference (Config.h's own argument for parsing it everywhere).
@@ -2747,10 +2718,6 @@ namespace MobileGL::MG_Remote::Client {
         if (MG_Config::Ipc.BatchWaits != 0) return;
         if (Server::ServerLoop::OnApplyThread()) return; // the applier owns the block inside a verb
         if (!ClientSessionInstance().Started()) return;  // the bring-up window pre-dates the roles
-        // MOBILEGL_IPC_VERB_BARRIER=0 is R-1's NEGATIVE CONTROL: the single-writer rule is off
-        // by the operator's own hand there, and EmitAndWait's Fatal{BarrierViolation} owns the
-        // red. Firing here instead would pre-empt the control's evidence line.
-        if (!ClientSessionInstance().BarrierArmed()) return;
         if (!ApplyThreadIsInsideApplier()) return;
         // LAST, because it is the only thread_local left in the chain: an emutls call per
         // access in a shared library, and it must stay thread-local (see InBarrierWait's note
