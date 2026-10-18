@@ -19,8 +19,8 @@ namespace MobileGL::MG_Backend::DirectVulkan {
 
     // P7 wave 2 package B3: the per-site tally behind CONTRACT-P7 §0 rule I.
     //
-    // Shape is PipeApplier.h's ServerVerbSink tallies, and for the same reason (R-16: a probe may
-    // not arm against a stub). "The retrace passed" and "the retrace silently dropped nine draws"
+    // Shape is RecordVerbSink.h's per-verb tallies, and for the same reason (R-16: a probe may not
+    // arm against a stub). "The retrace passed" and "the retrace silently dropped nine draws"
     // produce the same exit code and the same log, so the lane has to assert the number that only
     // this path can move.
     //

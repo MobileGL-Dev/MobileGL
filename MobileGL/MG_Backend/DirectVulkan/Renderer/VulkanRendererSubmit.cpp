@@ -242,10 +242,9 @@ namespace MobileGL::MG_Backend::DirectVulkan {
             for (const auto& remaining : m_inFlightSubmits) {
                 if (remaining.frameSerial <= advanceTo) {
                     WireDeclineTally::CountUnsoundSerialComplete();
-                    // Logged per event, not once: this is the red-once's reading and the log is
-                    // the only place it can be read from: the renderer this trace builds is
-                    // never Shutdown() (the process exits), so a teardown dump reports the
-                    // start-up context's zero instead of the replay's count.
+                    // Logged per event, not once: this line is the red-once's reading and the only
+                    // place the count is printed. A line at teardown would not do: the renderer
+                    // this trace builds is never Shutdown() (the process exits).
                     MGLOG_W("MGWIRE-FLOOR unsound-serial-complete #%llu: advancing the completed "
                             "frame-serial floor to %llu, which submission %llu (serial %llu) still carries",
                             static_cast<unsigned long long>(WireDeclineTally::UnsoundSerialCompleteEvents()),
