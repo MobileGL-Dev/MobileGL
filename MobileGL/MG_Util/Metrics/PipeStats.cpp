@@ -79,8 +79,8 @@
 //                        per sub-draw), so this class is Espryt-only by construction.
 //   persistent-map-push  WIRED IN P5 (b1), and only a split build can ever move it. The one
 //                        site is BufferObject::PushMappedSpanBlock, i.e. the client shipping
-//                        one MOBILEGL_IPC_PERSISTENT_BLOCK_KB block of a persistently mapped
-//                        span because MGPipeApplyMapPersistent declined the adoption (R-6,
+//                        one 64 KiB block of a persistently mapped span because
+//                        MGPipeApplyMapPersistent declined the adoption (R-6,
 //                        tier T2). Zero in every monolith build, and that zero is CORRECT
 //                        rather than missing: a persistent map there is a permanent address
 //                        space donation (D4/D-B4), the application writes straight into GPU

@@ -550,10 +550,6 @@ namespace MobileGL::MG_Config {
         // by design": no forced sync, so a one-frame respecify-and-draw loop grows without bound
         // and MagmaWireReclaimScenario's watermark cases must go red.
         Uint32 WireDeferredMb = 64;
-        // MOBILEGL_IPC_PERSISTENT_BLOCK_KB: block granularity of the persistent-map push.
-        // 0 IS A NEGATIVE CONTROL, NOT "unlimited": it disables the push, and
-        // PersistentCoherentMapScenario must go RED under it (exit gate E3(a)).
-        Uint32 PersistentBlockKb = 64;
         // MOBILEGL_IPC_PERSISTENT_HASH_SUPPRESS: 1 = the persistent-map push ships only
         // blocks whose xxHash64 changed since the last push, instead of the whole mapped
         // range every verb. 0 restores the whole-range push (A/B control).

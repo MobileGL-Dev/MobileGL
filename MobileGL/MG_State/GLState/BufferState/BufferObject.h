@@ -150,7 +150,7 @@ namespace MobileGL {
             // behaviour and D-J forbids it. The pull build compiles none of it, which is also
             // how G1 holds over a file this central.
 
-            // ONE MOBILEGL_IPC_PERSISTENT_BLOCK_KB BLOCK of the mapped span, emitted through
+            // ONE BLOCK of the mapped span (PersistentMapTracker::BlockBytes), emitted through
             // the private NotifySubData - the same serial, the same defined-content flag, the
             // same record - so the split arm and the monolith arm differ in HOW the span is
             // cut and in nothing else. Called only by

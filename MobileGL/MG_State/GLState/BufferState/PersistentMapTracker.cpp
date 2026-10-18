@@ -724,10 +724,6 @@ namespace MobileGL::MG_Record {
         return *instance;
     }
 
-    Uint64 PersistentMapTracker::BlockBytes() {
-        return static_cast<Uint64>(MG_Config::RecordArm.PersistentBlockKb) * 1024ull;
-    }
-
     Bool PersistentMapTracker::PushIsArmed() {
         // P13 W4a: the record arm's buffer reads never ask the frontend object to sync a map, so
         // the client pushes the mapped span wherever that arm runs - monolith's included.
@@ -908,33 +904,7 @@ namespace MobileGL::MG_Record {
             Forget(buffer);
             return;
         }
-        const Uint64 blockBytes = BlockBytes();
-        // 0 IS THE NEGATIVE CONTROL, NOT "unlimited" (E3(a)). Pushing one whole-span block
-        // here would make the control green for the wrong reason - it has to disable the
-        // push, so that PersistentCoherentMapScenario draws the last uploaded bytes and goes
-        // red exactly the way an unpushed map does.
-        //
-        // AND IT SAYS SO, ONCE. Until now this was a silent `return`, so E3(a)'s red could
-        // only ever be the scenario's pixel assertion and the control had no way to tell "the
-        // push was disabled" apart from "the push was never armed, or never reached, or the
-        // knob never got here" (joint-v1.md §3: "There is no Fatal for block size zero";
-        // ID-65 assigns the line to x2). The control now requires BOTH: the pixel red AND
-        // this line in the entry's own private log. It is MGLOG_W and not a Fatal because 0
-        // is a legal configured value whose whole purpose is to keep running with the push
-        // off; aborting here would turn every E3(a) entry into a subprocess abort and take
-        // the pixel evidence with it.
-        if (blockBytes == 0) {
-            if (!m_blockZeroAnnounced) {
-                m_blockZeroAnnounced = true;
-                MGLOG_W("MGPipe: persistent-map push disabled - MOBILEGL_IPC_PERSISTENT_BLOCK_KB=0 "
-                        "is exit gate E3(a)'s NEGATIVE CONTROL, not 'unlimited': a live "
-                        "persistent WRITE mapping's dirty blocks are NOT being pushed, so the "
-                        "server draws whatever bytes last crossed by some other route. A lane "
-                        "that stays green with this set is not getting its pixels from the push");
-            }
-            return;
-        }
-
+        constexpr Uint64 blockBytes = BlockBytes();
         const auto range = buffer.GetMappedRange();
         const Uint64 begin = static_cast<Uint64>(range.start);
         const Uint64 end = static_cast<Uint64>(range.end);
@@ -1077,15 +1047,12 @@ namespace MobileGL::MG_Record {
             if (shadow != nullptr) {
                 state = &m_blockHashes[buffer.GetLifetimeId()];
                 const Uint64 blockCount = (end - begin + blockBytes - 1) / blockBytes;
-                // A remap, a resize or a block-size change invalidates the layout the
-                // hashes were taken against: reset, which forces one full push - the
-                // conservative answer for a new layout.
-                if (state->begin != begin || state->end != end || state->blockBytes != blockBytes ||
-                    state->hashes.size() != blockCount) {
+                // A remap or a resize invalidates the layout the hashes were taken against:
+                // reset, which forces one full push - the conservative answer for a new layout.
+                if (state->begin != begin || state->end != end || state->hashes.size() != blockCount) {
                     *state = {};
                     state->begin = begin;
                     state->end = end;
-                    state->blockBytes = blockBytes;
                     state->hashes.assign(static_cast<SizeT>(blockCount), 0);
                 }
             }

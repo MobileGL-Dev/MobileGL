@@ -714,11 +714,11 @@ namespace MobileGL::MG_ConfigLoader {
         // changes the wall clock by seconds (the P12 sweep: 28.3 s at 1 down to 10.8 s at 6) a
         // log that does not name it makes every run ambiguous about its own configuration.
         MGLOG_I("Config: IPC ring=%uMiB stage=%uMiB wire-deferred=%uMiB spin=%uus event-wait=%ums "
-                "persistent-block=%uKiB create-window=%u pbo-readback-sync=%u poll-escalate=%u "
+                "create-window=%u pbo-readback-sync=%u poll-escalate=%u "
                 "adopt-tier=%s allow-t0=%u run-ahead=%u present-credit=%u control-timeout=%ums "
                 "cold-start=%ums strict=%d audit=%d role-split-state=%d affinity='%s' surface=%s",
                 ipc.RingMb, ipc.StageMb, MG_Config::RecordArm.WireDeferredMb, ipc.SpinUs, ipc.EventWaitMs,
-                MG_Config::RecordArm.PersistentBlockKb, ipc.CreateWindow, ipc.PboReadbackSync, ipc.PollEscalate,
+                ipc.CreateWindow, ipc.PboReadbackSync, ipc.PollEscalate,
                 ipc.AdoptTier == 0   ? "0"
                 : ipc.AdoptTier == 1 ? "1"
                 : ipc.AdoptTier == 2 ? "2"
@@ -735,9 +735,6 @@ namespace MobileGL::MG_ConfigLoader {
         // P7 wave 4 M2 (Config.h has the semantics). 0 is admitted ON PURPOSE as the negative
         // control: no forced sync, and MagmaWireReclaimScenario's watermark case must go red.
         ipc.WireDeferredMb = QueryEnvUint32("MOBILEGL_IPC_WIRE_DEFERRED_MB", 64, 0, 65536);
-        // 0 is admitted ON PURPOSE and is the negative control of exit gate E3(a): it turns
-        // the persistent-map push OFF, and PersistentCoherentMapScenario must go red.
-        ipc.PersistentBlockKb = QueryEnvUint32("MOBILEGL_IPC_PERSISTENT_BLOCK_KB", 64, 0, 65536);
         // Whole-range push is the 0 arm; with it on (default) only blocks whose
         // xxHash64 changed since the last push are shipped.
         ipc.PersistentHashSuppress = QueryEnvUint32("MOBILEGL_IPC_PERSISTENT_HASH_SUPPRESS", 1, 0, 1);
@@ -750,10 +747,6 @@ namespace MobileGL::MG_ConfigLoader {
             MGLOG_W("Config: MOBILEGL_IPC_WIRE_DEFERRED_MB=0 is the M2 NEGATIVE CONTROL: the "
                     "server never forces a sync for orphaned wire buffer stores, so a long frame "
                     "that respecifies and draws holds every one of them until the frame ends");
-        }
-        if (ipc.PersistentBlockKb == 0) {
-            MGLOG_W("Config: MOBILEGL_IPC_PERSISTENT_BLOCK_KB=0 is the E3(a) NEGATIVE CONTROL: "
-                    "the persistent-map push is OFF and a coherent-map scenario must go red");
         }
     }
 

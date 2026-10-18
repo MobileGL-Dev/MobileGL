@@ -86,13 +86,11 @@ namespace {
     protected:
         void SetUp() override {
             m_transport = MG_Config::Transport;
-            m_blockKb = MG_Config::RecordArm.PersistentBlockKb;
             m_adoptTier = MG_Config::Ipc.AdoptTier;
             m_pipeStats = MG_Config::Features.PipeStats;
             m_context = MG_State::pGLContext.Take();
             MG_State::pGLContext = MakeUnique<MG_State::GLState::GLContext>();
             MG_Config::Transport = MG_Config::TransportMode::InProcess;
-            MG_Config::RecordArm.PersistentBlockKb = 64;
             MG_Config::Ipc.AdoptTier = 2;
             MG_Config::Features.PipeStats = true;
             MG_Util::PipeStats::Init();
@@ -108,7 +106,6 @@ namespace {
             PersistentMapTracker::Instance().ClearForTest();
             MG_State::pGLContext = Move(m_context);
             MG_Config::Transport = m_transport;
-            MG_Config::RecordArm.PersistentBlockKb = m_blockKb;
             MG_Config::Ipc.AdoptTier = m_adoptTier;
             MG_Config::Features.PipeStats = m_pipeStats;
             MG_Util::PipeStats::Init();
@@ -121,7 +118,6 @@ namespace {
         }
 
         MG_Config::TransportMode m_transport = MG_Config::TransportMode::Monolith;
-        Uint32 m_blockKb = 64;
         Uint32 m_adoptTier = 2;
         Bool m_pipeStats = false;
         SharedPtr<MG_State::GLState::GLContext> m_context;
@@ -461,35 +457,6 @@ TEST_F(SplitBufferSet, BothEdgesOfAWriteMapPublishOneStateRecord) {
     EXPECT_EQ(buffer->GetChangeSerial(), beforeUnmap + 2)
         << "the unmap's own NotifyFlushMappedRange plus the falling-edge state record: without "
            "the second the record stays dirty for the buffer's life";
-}
-
-// E3(a)'s NEGATIVE CONTROL: 0 disables the push, it does not mean "one unlimited block" - and
-// it disables the STATE RECORDS with it. An earlier cut skipped the blocks and still shipped a
-// whole buffer at unmap, so a scenario that unmapped before reading back went green and the
-// control was dead.
-TEST_F(SplitBufferSet, AZeroBlockSizeTurnsThePushOffRatherThanMakingItUnlimited) {
-    MG_Config::RecordArm.PersistentBlockKb = 0;
-    constexpr SizeT kSize = 128u * 1024u;
-    auto buffer = MakeBuffer(23u, kSize);
-
-    const Uint64 beforeMap = buffer->GetChangeSerial();
-    buffer->AcquireMemoryRange(Range1D{0, kSize}, BufferMappingAccessBit::Write | BufferMappingAccessBit::Persistent);
-    ASSERT_TRUE(PersistentMapTracker::IsLivePersistentMap(*buffer));
-    EXPECT_EQ(buffer->GetChangeSerial(), beforeMap) << "the rising-edge state record went out with the push disabled";
-
-    const Uint64 before = MG_Util::PipeStats::TotalBytes(MG_Util::PipeStats::ByteClass::PersistentMapPush);
-    MG_Record::PushPersistentMapsBeforeVerb();
-    EXPECT_EQ(PersistentMapTracker::Instance().BlocksPushed(), 0u);
-    EXPECT_EQ(MG_Util::PipeStats::TotalBytes(MG_Util::PipeStats::ByteClass::PersistentMapPush), before)
-        << "MOBILEGL_IPC_PERSISTENT_BLOCK_KB=0 must ship nothing, so that "
-           "PersistentCoherentMapScenario goes red under it";
-
-    const Uint64 beforeUnmap = buffer->GetChangeSerial();
-    buffer->ReleaseMemory(/*landStagedWrites=*/true);
-    EXPECT_EQ(buffer->GetChangeSerial(), beforeUnmap + 1)
-        << "with the push off the unmap must emit only its own NotifyFlushMappedRange - a "
-           "falling-edge record here delivers a whole buffer the control exists to withhold, "
-           "and a negative control that still delivers the bytes is not a control";
 }
 
 // The set does not keep a pointer to a dead buffer.
@@ -869,9 +836,6 @@ TEST(SplitBufferSet, TheLastBlockIsTheRemainderAndNotAWholeBlock) {
     MGL_SPLIT_ONLY_OR_SKIP();
 }
 TEST(SplitBufferSet, BothEdgesOfAWriteMapPublishOneStateRecord) {
-    MGL_SPLIT_ONLY_OR_SKIP();
-}
-TEST(SplitBufferSet, AZeroBlockSizeTurnsThePushOffRatherThanMakingItUnlimited) {
     MGL_SPLIT_ONLY_OR_SKIP();
 }
 TEST(SplitBufferSet, ADestroyedBufferLeavesTheSet) {

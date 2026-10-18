@@ -501,14 +501,7 @@ namespace MobileGL::MG_State::GLState {
         // carries are real, current and the cheapest honest ones there are. A zero-length
         // record would have been the alternative and it is illegal by contract rule A.
         if (m_size == 0) return;
-        const Uint64 blockBytes = MG_Record::PersistentMapTracker::BlockBytes();
-        // MOBILEGL_IPC_PERSISTENT_BLOCK_KB=0 TURNS THE WHOLE MECHANISM OFF, STATE RECORD
-        // INCLUDED (E3(a)). An earlier cut skipped the blocks and still shipped a whole buffer
-        // here, which meant an unmap delivered the bytes the control exists to withhold - and
-        // a negative control that still delivers them is not a control. With the knob at 0
-        // nothing is published and nothing is pushed, so the probe answers clean, the frame
-        // draws the last uploaded bytes, and PersistentCoherentMapScenario goes red.
-        if (blockBytes == 0) return;
+        constexpr Uint64 blockBytes = MG_Record::PersistentMapTracker::BlockBytes();
         const SizeT length = blockBytes >= static_cast<Uint64>(m_size) ? m_size : static_cast<SizeT>(blockBytes);
         NotifySubData(0, length);
     }

@@ -70,7 +70,7 @@ CMake：`MOBILEGL_BUILD_DISAGGREGATED`（OFF）、`MOBILEGL_BUILD_DISAGGREGATED_
 | `MOBILEGL_IPC_BATCH_WAITS` | 1 | lockstep 下值类记录发布即返回；verify 强制 0 |
 | `MOBILEGL_IPC_EVENT_WAIT_MS` | 2000 | 反向事件遇满环时 server 等 client 排空的整笔预算（§11.7） |
 | `MOBILEGL_IPC_WIRE_DEFERRED_MB` | 64 | Magma wire 臂延迟回收的水位线；`0` 是 M2 阴性对照 |
-| `MOBILEGL_IPC_PERSISTENT_BLOCK_KB` / `_PERSISTENT_HASH_SUPPRESS` | 64 / 1 | persistent-map 推送粒度 / 只推变化的块；`0` 是对照 |
+| `MOBILEGL_IPC_PERSISTENT_HASH_SUPPRESS` | 1 | persistent-map 推送只推变化的块（粒度固定 64 KiB，`PersistentMapTracker::BlockBytes()`）；`0` 是整段推送的 A/B 对照 |
 | `MOBILEGL_IPC_ADOPT_TIER` | 未设 = T0 | 未设（用户 2026-09-29 定为缺省）= 能用就 T0，不能用（stream、无 AHB、POST 失败、server 不允许）安静回退 T2：只 MGLOG_D、照样计数；`0` = 点名要 T0，回退有具名行（A1 的 `Refuse{AdoptTierOnStream}` 等）；`1` = T1 已关，具名拒绝后 T2；`2` = T2（P11 前的缺省）。`CONTRACT-P11.md` B2 |
 | `MOBILEGL_IPC_ALLOW_ADOPT_T0` | 1 | server 自有：`0` = 永不批准 T0（会话走 T2），经 `ServerSpawn` 保留 |
 | `MOBILEGL_IPC_STRICT_ERRORS` / `MOBILEGL_IPC_AUDIT` / `MOBILEGL_IPC_ROLE_SPLIT_STATE` | 0 / 0 / 1 | 残余输入读升级为 Fatal / 退休 staging 填 `0xDD` / 双块（P5f；P15 起默认开，`0` 关闭，阴性对照显式设 0；双块下 barriered fill 写 client 块，不再 quiesce applier） |

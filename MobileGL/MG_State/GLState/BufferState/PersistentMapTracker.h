@@ -28,14 +28,11 @@
 // pushing, and the two arms diverge with no test able to say so. IsLivePersistentMap() is the
 // single spelling; BufferObject::SyncPersistentMappedRange is held to it by a unit case.
 //
-// THE GRANULARITY. MOBILEGL_IPC_PERSISTENT_BLOCK_KB (default 64) blocks, keyed
-// {MGPipeHandle, blockIndex} - the key is implicit, because a block ships as an ORDINARY
-// resource_subdata record whose destination range is [blockIndex * blockBytes, + blockBytes).
-// NO NEW RECORD KIND: the existing record is already chunked by
-// MGPipeForEachSubDataRecordRange and already acceptance-gated, and a second way to say
-// "these bytes go there" is a second way to get it wrong. A block size of 0 is E3(a)'s
-// NEGATIVE CONTROL and means "push nothing" - not "one unlimited block" - so
-// PersistentCoherentMapScenario must go red under it.
+// THE GRANULARITY. 64 KiB blocks (BlockBytes()), keyed {MGPipeHandle, blockIndex} - the key
+// is implicit, because a block ships as an ORDINARY resource_subdata record whose destination
+// range is [blockIndex * blockBytes, + blockBytes). NO NEW RECORD KIND: the existing record is
+// already chunked by MGPipeForEachSubDataRecordRange and already acceptance-gated, and a second
+// way to say "these bytes go there" is a second way to get it wrong.
 //
 // Only changed blocks ship. At each validate point a member pushes just the blocks written
 // since its last push. A map the mprotect write-fault tracker holds (MOBILEGL_PIPE_PERSISTENT_MPROTECT;
@@ -101,8 +98,8 @@ namespace MobileGL::MG_Record {
         // client-exclusive). Leaks at exit for ID-8's reason, once per role-local singleton.
         static PersistentMapTracker& Instance();
 
-        // MOBILEGL_IPC_PERSISTENT_BLOCK_KB * 1024. Zero means the push is OFF (E3(a)).
-        static Uint64 BlockBytes();
+        // The push's block size (THE GRANULARITY above).
+        static constexpr Uint64 BlockBytes() { return 64ull * 1024ull; }
         // Transport != Monolith. The whole module is inert on the monolith path: an extra
         // resource_subdata record there would be new behaviour, which D-J forbids.
         static Bool PushIsArmed();
@@ -154,7 +151,6 @@ namespace MobileGL::MG_Record {
         void ResetCountersForTest() {
             m_blocksPushed = 0;
             m_bytesPushed = 0;
-            m_blockZeroAnnounced = false;
         }
         // Unit tests only: clears the membership, the hash cache and the mprotect tracked
         // slots (restoring every tracked page writable first), and resets the counters.
@@ -225,7 +221,6 @@ namespace MobileGL::MG_Record {
         struct BlockHashState {
             Uint64 begin = 0;
             Uint64 end = 0;
-            Uint64 blockBytes = 0;
             Vector<Uint64> hashes;
         };
         UnorderedMap<Uint64, BlockHashState> m_blockHashes;
@@ -252,11 +247,6 @@ namespace MobileGL::MG_Record {
         // ran them once (the two Members hooks) - the guard's thread-local read was a
         // measurable per-buffer-per-draw cost on the emutls path.
         void PushBlocksForChecked(MG_State::GLState::BufferObject& buffer);
-        // E3(a)'s diagnostic is emitted ONCE per process. PushBlocksFor runs at every validate
-        // point of every member, so an unlatched MGLOG_W would be one line per draw per mapping
-        // - and a control that has to grep a log cannot tell a message that fired from a
-        // message that flooded.
-        Bool m_blockZeroAnnounced = false;
     };
 
     // What the client's emit table calls immediately BEFORE emitting any verb that can read a

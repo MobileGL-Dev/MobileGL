@@ -593,11 +593,9 @@ void main() { oColor = vec4(vColor, 1.0); }
                    "a window with "
                 << kDrawsInTheWindow
                 << " writes and as many draws through a live coherent mapping cannot have pushed "
-                   "zero bytes. Zero here with MOBILEGL_IPC_PERSISTENT_BLOCK_KB at its default "
-                   "means the push is not reaching this buffer - which is a DIFFERENT defect from "
-                   "the store having been adopted, and the arm assertion above has already ruled "
-                   "that one out. Zero with the knob set to 0 is exit gate E3(a)'s negative control "
-                   "working as intended. Line: "
+                   "zero bytes. Zero here means the push is not reaching this buffer - which is a "
+                   "DIFFERENT defect from the store having been adopted, and the arm assertion "
+                   "above has already ruled that one out. Line: "
                 << window.line;
         } else {
             // Recorded, not asserted: on this arm the number is whatever the driver's adoption

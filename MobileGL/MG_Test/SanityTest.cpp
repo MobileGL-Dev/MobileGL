@@ -4326,12 +4326,10 @@ TEST(DirectGLESBufferDrawProbe, UnderSplitTheRecordAloneAnswersTheLiveHostMapQue
     // case reaches is optional.
     const Uint64 previousPush = MG_Config::Features.PipePush;
     const auto previousTransport = MG_Config::Transport;
-    const Uint32 previousBlockKb = MG_Config::RecordArm.PersistentBlockKb;
     MG_Pipe::MGPipeResourceOps ops{};
     MG_Config::Features.PipePush |= MG_Pipe::kMGPipeSubsystemResources;
     MG_Pipe::MGPipeSetResourceOps(&ops);
     MG_Config::Transport = MG_Config::TransportMode::InProcess;
-    MG_Config::RecordArm.PersistentBlockKb = 64;
     // P5 c1 / R-8: UNDER SPLIT THE OP TABLE IS NO LONGER THE ARMING CONDITION, and this case is
     // the first place that shows. `MGPipeSetResourceOps(&ops)` is the SERVER's registration; the
     // client's liveness gate now reads the caps mirror's consumer mask instead, because under a
@@ -4424,7 +4422,6 @@ TEST(DirectGLESBufferDrawProbe, UnderSplitTheRecordAloneAnswersTheLiveHostMapQue
         BufferImpl::g_backendBufferResources.ReleaseByHandle(res);
     }
 
-    MG_Config::RecordArm.PersistentBlockKb = previousBlockKb;
     MG_Config::Transport = previousTransport;
     MG_Pipe::MGPipeSetResourceOps(nullptr);
     MG_Config::Features.PipePush = previousPush;
