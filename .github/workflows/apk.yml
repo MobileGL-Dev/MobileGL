@@ -437,9 +437,10 @@ jobs:
       ANDROID_SDK_ROOT: ${{ github.workspace }}/.android/sdk
     strategy:
       fail-fast: false
-      # The account runs at most 20 jobs at once. 16 lets the ~230 emulator jobs use most of the
-      # pool once Test is done, and leaves Test some room while both workflows run.
-      max-parallel: 16
+      # The account runs at most 20 jobs at once, shared with Test. These ~230 emulator jobs are
+      # the longer of the two runs, so they may take the whole pool: what is minimised is when the
+      # later of APK and Test finishes, not Test alone.
+      max-parallel: 20
       matrix: ${{ fromJSON(needs.trace-cases.outputs.android) }}
     steps:
       - name: Set swap space
